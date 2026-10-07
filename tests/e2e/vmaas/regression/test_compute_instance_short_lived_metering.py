@@ -25,10 +25,6 @@ def test_short_lived_vm_metering(
     A resource existing for 30 seconds must appear in usage data. This validates
     sub-minute billing granularity by creating a VM and immediately deleting it
     without waiting for it to reach Running.
-
-    The deleted-event timeout is extended to 10 minutes because tearing down a VM
-    that is still actively provisioning can take significantly longer than deleting
-    one that has already reached a steady state.
     """
     uuid: str = cli.create_compute_instance(
         name=unique_name("e2e-ci"), template=vm_template, network_attachments=[{"subnet": default_subnet}]
@@ -38,7 +34,7 @@ def test_short_lived_vm_metering(
     ci_name: str = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
 
     cli.delete_compute_instance(uuid=uuid)
-    metering.expect("osac.resource.deleted.v1", resource_id=uuid, timeout=600)
+    metering.expect("osac.resource.deleted.v1", resource_id=uuid, timeout=180)
 
     wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
     wait_for_grpc_removal(grpc=grpc, uuid=uuid)

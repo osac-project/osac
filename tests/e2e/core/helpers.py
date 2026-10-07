@@ -17,7 +17,6 @@ from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import poll_until, run_unchecked
 
 _POOL_READY_STATE = "EXTERNAL_IP_POOL_STATE_READY"
-_SUBNET_READY_STATE = "SUBNET_STATE_READY"
 _BMI_RUNNING_RETRIES = 180
 _BMI_RUNNING_DELAY = 10
 _WORKLOAD_HEALTH_RETRIES = 120
@@ -253,31 +252,6 @@ def wait_for_subnet_ready(*, k8s: K8sClient, name: str) -> None:
         retries=60,
         delay=5,
         description=f"{name} Subnet Ready",
-    )
-
-
-def wait_for_grpc_subnet_ready(*, grpc: GRPCClient, subnet_id: str) -> None:
-    """Poll the gRPC API until the subnet state is READY.
-
-    The K8s CR status may report Ready before the fulfillment-service database
-    has been updated by the controller feedback loop.  Polling via gRPC closes
-    this race so that subsequent resource creation referencing the subnet does
-    not hit FailedPrecondition.
-    """
-
-    def _state() -> str:
-        try:
-            subnet = grpc.get_subnet(subnet_id=subnet_id)
-        except subprocess.CalledProcessError:
-            return ""
-        return subnet.get("object", {}).get("status", {}).get("state", "")
-
-    poll_until(
-        fn=_state,
-        until=lambda v: v == _SUBNET_READY_STATE,
-        retries=30,
-        delay=2,
-        description=f"Subnet {subnet_id} gRPC READY",
     )
 
 
@@ -635,25 +609,6 @@ def wait_for_cluster_guest_readiness(
     return node_pool
 
 
-def wait_for_cluster_deletion_without_cleanup(
-    *, k8s: K8sClient, name: str, on_poll: Callable[[], None] | None = None
-) -> None:
-    """Observe natural ClusterOrder removal without changing lifecycle gates."""
-
-    def _check_deleted() -> bool:
-        if on_poll is not None:
-            on_poll()
-        return k8s.is_absent(resource="clusterorder", name=name)
-
-    poll_until(
-        fn=_check_deleted,
-        until=lambda absent: absent is True,
-        retries=121,
-        delay=10,
-        description="ClusterOrder natural deletion",
-    )
-
-
 def wait_for_cluster_deletion(*, k8s: K8sClient, name: str) -> None:
     # HACK: HyperShift has multiple teardown bugs where controllers leave orphaned state
     # that deadlocks HostedCluster deletion. We force-clean on every poll iteration:
@@ -679,6 +634,26 @@ def wait_for_cluster_deletion(*, k8s: K8sClient, name: str) -> None:
 
     poll_until(
         fn=_check_deleted, until=lambda v: v is True, retries=120, delay=10, description=f"{name} ClusterOrder deletion"
+    )
+
+
+def wait_for_cluster_deletion_with_deadline(*, k8s: K8sClient, name: str, deadline: float) -> None:
+    """Wait for ClusterOrder deletion using the remaining time from a shared deadline."""
+    remaining = max(deadline - time.monotonic(), 0)
+    retries = max(int(remaining // 10) + 1, 1)
+
+    def _check_deleted() -> bool:
+        _force_cleanup_agentcluster_finalizers(k8s=k8s, name=name)
+        _force_cleanup_agent_labels(k8s=k8s, name=name)
+        _force_cleanup_machine_preterminate_hooks(k8s=k8s, name=name)
+        return k8s.get_cluster_order_phase(name=name, checked=False) is None
+
+    poll_until(
+        fn=_check_deleted,
+        until=lambda value: value is True,
+        retries=retries,
+        delay=10,
+        description=f"{name} ClusterOrder deletion (deadline-aware)",
     )
 
 
@@ -766,6 +741,54 @@ def _force_cleanup_machine_preterminate_hooks(*, k8s: K8sClient, name: str) -> N
         return
     for machine_name in output.strip().split():
         run_unchecked(*base_args, "annotate", f"machines.cluster.x-k8s.io/{machine_name}", "-n", cp_ns, f"{hook}-")
+
+
+def wait_for_agent_available(*, k8s: K8sClient, co_name: str, timeout: int = 600, poll: int = 10) -> None:
+    """Wait for a ClusterOrder's Agents to return to the available pool.
+
+    Agents still labeled for ``co_name`` must be in an unbound ready state and
+    have no ClusterDeployment namespace label. If the controller has already
+    removed the ClusterOrder label, there are no remaining Agents to reclaim.
+    """
+    if timeout < 0:
+        raise ValueError("timeout must be non-negative")
+    if poll <= 0:
+        raise ValueError("poll must be positive")
+
+    available_states = {"known-unbound", "known", "discovering-unbound"}
+    clusterorder_label = "osac.openshift.io/clusterorder"
+    clusterdeployment_namespace_label = "agent-install.openshift.io/clusterdeployment-namespace"
+
+    def _agents_for_cluster_order() -> list[dict[str, Any]]:
+        items = k8s.list_json(resource="agents.agent-install.openshift.io", namespace="hardware-inventory").get(
+            "items", []
+        )
+        return [
+            agent for agent in items if agent.get("metadata", {}).get("labels", {}).get(clusterorder_label) == co_name
+        ]
+
+    def _all_available(agents: list[dict[str, Any]]) -> bool:
+        for agent in agents:
+            metadata = agent.get("metadata", {})
+            labels = metadata.get("labels", {})
+            status = agent.get("status", {})
+            spec = agent.get("spec", {})
+            state = status.get("debugInfo", {}).get("state", "")
+            if (
+                state not in available_states
+                or labels.get(clusterdeployment_namespace_label)
+                or spec.get("clusterDeploymentName")
+            ):
+                return False
+        return True
+
+    poll_until(
+        fn=_agents_for_cluster_order,
+        until=_all_available,
+        retries=max(timeout // poll + 1, 1),
+        delay=poll,
+        description=f"Agents for ClusterOrder {co_name} to return to the available pool",
+    )
 
 
 def wait_for_cluster_deleting(*, k8s: K8sClient, name: str) -> None:

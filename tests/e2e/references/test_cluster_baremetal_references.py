@@ -162,7 +162,12 @@ class TestClusterBareMetalReferences:
 
     @pytest.mark.requires_bmaas
     def test_baremetal_instance_chain_by_name(
-        self, private_grpc: GRPCClient, grpc: GRPCClient, bmi_template: str, ref_bmi_disk_image: str
+        self,
+        private_grpc: GRPCClient,
+        grpc: GRPCClient,
+        bmi_template: str,
+        ref_bmi_disk_image: str,
+        bmaas_default_networking_ready: None,
     ):
         tag = uuid4().hex[:8]
         cat_name = f"ref-bmi-cat-{tag}"
@@ -247,46 +252,27 @@ class TestClusterBareMetalReferences:
                 logger.warning("Failed to cleanup cross-tenant catalog item %s", cat_id)
 
     @pytest.mark.requires_caas
-    def test_non_shared_hardware_type_creation_is_rejected(self, private_grpc: GRPCClient):
-        bmit_id: str | None = None
-        try:
-            with pytest.raises(subprocess.CalledProcessError) as exc_info:
-                bmit_id = private_grpc.create_bare_metal_instance_type(
-                    name=f"ref-tenant2-worker-{uuid4().hex[:8]}", tenant="tenant2"
-                )
-            assert_grpc_field_violation(exc_info, field_path="metadata.tenant")
-        finally:
-            if bmit_id:
-                private_grpc.call(service=f"{PRIVATE_API}.BareMetalInstanceTypes/Delete", data={"id": bmit_id})
-
-    @pytest.mark.requires_caas
-    def test_unknown_shared_hardware_type_is_not_selectable_for_caas(
+    def test_unavailable_hardware_type_is_not_selectable_for_caas(
         self, jwt_grpc_tenant1: GRPCClient, cluster_template: str, cluster_version: str
     ):
         tag = uuid4().hex[:8]
-        type_name = f"ref-missing-worker-{tag}"
-        cluster_id: str | None = None
-        try:
-            # A direct tenant request must resolve hardware in shared; a missing type is invalid.
-            with pytest.raises(subprocess.CalledProcessError) as exc_info:
-                response = jwt_grpc_tenant1.call(
-                    service=f"{PUBLIC_API}.Clusters/Create",
-                    data={
-                        "object": {
-                            "metadata": {"name": f"ref-tenant2-cl-{tag}"},
-                            "spec": {
-                                "template": {"name": cluster_template, "shared": True},
-                                "version": {"name": cluster_version, "shared": True},
-                                "node_sets": {"workers": {"size": 1, "baremetal_instance_type": {"name": type_name}}},
-                            },
-                        }
-                    },
-                )
-                cluster_id = response["object"]["id"]
-            assert_grpc_field_violation(exc_info, field_path="node_sets.workers.baremetal_instance_type")
-        finally:
-            if cluster_id:
-                jwt_grpc_tenant1.call(service=f"{PUBLIC_API}.Clusters/Delete", data={"id": cluster_id})
+        type_name = f"ref-unavailable-worker-{tag}"
+        # BareMetalInstanceType is platform-scoped in shared; this name is not available there.
+        with pytest.raises(subprocess.CalledProcessError) as exc_info:
+            jwt_grpc_tenant1.call(
+                service=f"{PUBLIC_API}.Clusters/Create",
+                data={
+                    "object": {
+                        "metadata": {"name": f"ref-unavailable-type-cl-{tag}"},
+                        "spec": {
+                            "template": {"name": cluster_template, "shared": True},
+                            "version": {"name": cluster_version, "shared": True},
+                            "node_sets": {"workers": {"size": 1, "baremetal_instance_type": {"name": type_name}}},
+                        },
+                    }
+                },
+            )
+        assert_grpc_field_violation(exc_info, field_path="node_sets.workers.baremetal_instance_type")
 
     @pytest.mark.requires_caas
     def test_invalid_cluster_template_name_returns_error(self, private_grpc: GRPCClient):

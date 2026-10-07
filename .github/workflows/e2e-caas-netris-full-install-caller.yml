@@ -1,0 +1,72 @@
+---
+name: E2E CaaS Netris Full Install
+run-name: "E2E CaaS Netris Full Install${{ (inputs.pr-number || github.event.pull_request.number) != '' && format(' / PR #{0} @ {1}', inputs.pr-number || github.event.pull_request.number, inputs.pr-sha || github.event.pull_request.head.sha) || '' }}"
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: read
+
+on:
+  pull_request_target:
+    types: [labeled]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      test-infra-repository:
+        description: "Repository containing the test-infra reusable workflow"
+        required: false
+        default: "osac-project/osac-test-infra"
+      test-infra-ref:
+        description: "Branch or tag of test-infra"
+        required: false
+        default: "main"
+      pr-number:
+        description: "PR number being tested"
+        required: false
+        default: ""
+      pr-repository:
+        description: "Repository containing the PR head, including a fork"
+        required: false
+        default: ""
+      pr-ref:
+        description: "PR head branch/ref"
+        required: false
+        default: ""
+      pr-sha:
+        description: "Expected immutable PR head SHA"
+        required: false
+        default: ""
+      fork-pr-author-association:
+        description: "PR author_association used by the fork authorization check"
+        required: false
+        default: ""
+      fork-pr-author:
+        description: "GitHub login of the PR author"
+        required: false
+        default: ""
+
+concurrency:
+  group: e2e-caas-netris-full-install-${{ inputs.pr-repository || github.event.pull_request.head.repo.full_name || github.repository }}-${{ inputs.pr-number || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ inputs.pr-number != '' || github.event_name == 'pull_request_target' }}
+
+jobs:
+  e2e-caas-netris:
+    if: >-
+      github.event_name != 'pull_request_target'
+      || github.event.label.name == 'e2e-caas-netris'
+    permissions:
+      contents: read
+      id-token: write
+      checks: write
+      pull-requests: read
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-caas-netris-full-install.yml@main
+    with:
+      osac-repo: https://github.com/${{ inputs.pr-repository || github.event.pull_request.head.repo.full_name || github.repository }}.git
+      osac-branch: ${{ inputs.pr-sha || github.event.pull_request.head.sha || inputs.pr-ref || github.ref_name }}
+      components: '[{"repo":"${{ inputs.pr-repository || github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ inputs.pr-sha || github.event.pull_request.head.sha || inputs.pr-ref || github.sha }}","containerfile":"fulfillment-service/Containerfile","context":".","imageKey":"service.images.service"},{"repo":"${{ inputs.pr-repository || github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ inputs.pr-sha || github.event.pull_request.head.sha || inputs.pr-ref || github.sha }}","containerfile":"osac-operator/Containerfile","context":".","imageKey":"operator.image.repository"},{"repo":"${{ inputs.pr-repository || github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ inputs.pr-sha || github.event.pull_request.head.sha || inputs.pr-ref || github.sha }}","containerfile":"osac-aap/execution-environment/execution-environment.yaml","context":".","imageKey":"aap.bootstrap.image","buildType":"ansible-builder"},{"repo":"${{ inputs.pr-repository || github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ inputs.pr-sha || github.event.pull_request.head.sha || inputs.pr-ref || github.sha }}","containerfile":"osac-aap/execution-environment/execution-environment.yaml","context":".","imageKey":"aap.configAsCode.eeImage","buildType":"ansible-builder"},{"repo":"${{ inputs.pr-repository || github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ inputs.pr-sha || github.event.pull_request.head.sha || inputs.pr-ref || github.sha }}","containerfile":"bare-metal-fulfillment-operator/Containerfile","context":".","imageKey":"bmf.image.repository"}]'
+      test-infra-repository: ${{ inputs.test-infra-repository || 'osac-project/osac-test-infra' }}
+      test-infra-ref: ${{ inputs.test-infra-ref || 'main' }}
+      fork-pr-author-association: ${{ inputs.fork-pr-author-association || (github.event.pull_request.head.repo.full_name != github.repository && github.event.pull_request.author_association) || '' }}
+      fork-pr-author: ${{ inputs.fork-pr-author || (github.event.pull_request.head.repo.full_name != github.repository && github.event.pull_request.user.login) || '' }}
+      pr-number: ${{ inputs.pr-number || github.event.pull_request.number || '' }}

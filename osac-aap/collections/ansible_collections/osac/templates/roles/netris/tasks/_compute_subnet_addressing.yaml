@@ -1,0 +1,10 @@
+- name: Set gateway IP (first usable address)
+  ansible.builtin.set_fact:
+    _gateway_ip: "{{ subnet_ipv4_cidr | ansible.utils.ipaddr('next_usable') }}"
+    _gateway_cidr: >-
+      {{ subnet_ipv4_cidr | ansible.utils.ipaddr('next_usable') }}/{{ subnet_ipv4_cidr | ansible.utils.ipaddr('prefix') }}
+
+- name: Compute DHCP range without reserved VIP addresses
+  ansible.builtin.set_fact:
+    _dhcp_start: "{{ (subnet_ipv4_cidr | osac.service.dhcp_range_excluding_cidr(subnet_vip_cidr)) | first }}"
+    _dhcp_end: "{{ (subnet_ipv4_cidr | osac.service.dhcp_range_excluding_cidr(subnet_vip_cidr)) | last }}"

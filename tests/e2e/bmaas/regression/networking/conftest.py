@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import subprocess
+import tempfile
 import uuid
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -55,6 +58,22 @@ def catalog_item_name() -> str:
 
 
 @pytest.fixture(scope="session")
-def net_ssh_public_key() -> str:
-    key_path = Path(env("OSAC_BMI_SSH_PUBLIC_KEY", "/root/.ssh/id_rsa.pub"))
-    return key_path.read_text().strip()
+def net_ssh_public_key() -> Generator[str, None, None]:
+    """SSH public key for BMaaS networking tests.
+
+    If ``OSAC_BMI_SSH_PUBLIC_KEY`` is set, reads the key from that path.
+    Otherwise, generates a temporary ed25519 key pair for the test session.
+    """
+    explicit = env("OSAC_BMI_SSH_PUBLIC_KEY", "")
+    if explicit:
+        yield Path(explicit).read_text().strip()
+        return
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        key_path = Path(tmpdir) / "bmi-net-test-key"
+        subprocess.run(
+            ["ssh-keygen", "-t", "ed25519", "-f", str(key_path), "-N", "", "-C", "bmi-net-e2e"],
+            capture_output=True,
+            check=True,
+        )
+        yield key_path.with_suffix(".pub").read_text().strip()

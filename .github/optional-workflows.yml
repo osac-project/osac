@@ -1,6 +1,13 @@
 version: 1
 
 workflows:
+  - command: e2e-caas-netris-full-install
+    workflow: e2e-caas-netris-full-install-caller.yml
+    name: E2E CaaS Netris Full Install
+    description: CaaS bare-metal worker provisioning with a real Netris fabric
+    trigger: label
+    label: e2e-caas-netris
+    retestable: true
   - command: e2e-bmaas-netris-full-install
     workflow: e2e-bmaas-netris-full-install-caller.yml
     name: E2E BMaaS Netris Full Install

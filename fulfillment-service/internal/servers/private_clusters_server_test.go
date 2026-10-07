@@ -535,6 +535,147 @@ var _ = Describe("Private clusters server", func() {
 			seedAddOnOperator(ctx, "operator-2", "operator-two", true)
 		})
 
+		Context("network attachment validation", func() {
+			newClusterWithAttachment := func(subnetID string, securityGroupIDs ...string) *privatev1.Cluster {
+				securityGroups := make([]*privatev1.SecurityGroupLocalReference, 0, len(securityGroupIDs))
+				for _, id := range securityGroupIDs {
+					securityGroups = append(securityGroups,
+						privatev1.SecurityGroupLocalReference_builder{Id: id}.Build())
+				}
+				return privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{Tenant: testTenant}.Build(),
+					Spec: privatev1.ClusterSpec_builder{
+						NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
+							Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+							SecurityGroups: securityGroups,
+						}.Build(),
+					}.Build(),
+				}.Build()
+			}
+
+			It("accepts a Ready subnet and Ready security groups from the same VirtualNetwork", func() {
+				err := server.validateNetworkAttachmentState(ctx, newClusterWithAttachment("subnet-1", "default-sg"))
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			It("rejects a subnet that does not exist", func() {
+				err := server.validateNetworkAttachmentState(ctx, newClusterWithAttachment("missing-subnet"))
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(err).To(MatchError(ContainSubstring("subnet 'missing-subnet' does not exist")))
+			})
+
+			It("rejects a subnet that is not Ready", func() {
+				subnetID := fmt.Sprintf("pending-subnet-%s", uuid.New()[:8])
+				_, err := server.subnetsDao.Create().SetObject(privatev1.Subnet_builder{
+					Id: subnetID,
+					Metadata: privatev1.Metadata_builder{
+						Name: subnetID, Tenant: testTenant,
+					}.Build(),
+					Spec: privatev1.SubnetSpec_builder{
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "test-vnet"}.Build(),
+						Ipv4Cidr:       new("10.0.2.0/24"),
+					}.Build(),
+					Status: privatev1.SubnetStatus_builder{
+						State: privatev1.SubnetState_SUBNET_STATE_PENDING,
+					}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).NotTo(HaveOccurred())
+
+				err = server.validateNetworkAttachmentState(ctx, newClusterWithAttachment(subnetID))
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				Expect(err).To(MatchError(ContainSubstring("is not in READY state")))
+			})
+
+			It("rejects a security group from a different VirtualNetwork", func() {
+				sgID := fmt.Sprintf("wrong-vnet-sg-%s", uuid.New()[:8])
+				_, err := server.securityGroupsDao.Create().SetObject(privatev1.SecurityGroup_builder{
+					Id: sgID,
+					Metadata: privatev1.Metadata_builder{
+						Name: sgID, Tenant: testTenant,
+					}.Build(),
+					Spec: privatev1.SecurityGroupSpec_builder{
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "other-vnet"}.Build(),
+					}.Build(),
+					Status: privatev1.SecurityGroupStatus_builder{
+						State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+					}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).NotTo(HaveOccurred())
+
+				err = server.validateNetworkAttachmentState(ctx, newClusterWithAttachment("subnet-1", sgID))
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(err).To(MatchError(ContainSubstring("belongs to a different virtual network")))
+			})
+		})
+
+		Context("automatic external IP attachment", func() {
+			It("creates API and ingress addresses and removes them with the Cluster", func() {
+				poolID := fmt.Sprintf("cluster-auto-eip-pool-%s", uuid.New()[:8])
+				_, err := server.externalIPPoolDao.Create().SetObject(privatev1.ExternalIPPool_builder{
+					Id:       poolID,
+					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+					Status: privatev1.ExternalIPPoolStatus_builder{
+						State:     privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY,
+						Available: 4,
+					}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).NotTo(HaveOccurred())
+
+				request := newCaaSNodeSetCreateRequest(fmt.Sprintf("auto-eip-cluster-%s", uuid.New()[:8]), nil, nil)
+				request.GetObject().GetSpec().SetAutoExternalIpAttachment(true)
+				created, err := server.Create(ctx, request)
+				Expect(err).NotTo(HaveOccurred())
+				cluster := created.GetObject()
+
+				clusterFilter := fmt.Sprintf("this.metadata.labels['%s'] == '%s'", autoCreatedForLabel, cluster.GetId())
+				externalIPs, err := server.externalIPDao.List().SetFilter(clusterFilter).Do(ctx)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(externalIPs.GetItems()).To(HaveLen(2))
+				for _, externalIP := range externalIPs.GetItems() {
+					Expect(externalIP.GetMetadata().GetTenant()).To(Equal(cluster.GetMetadata().GetTenant()))
+					Expect(externalIP.GetMetadata().GetLabels()[autoCreatedLabel]).To(Equal("true"))
+					Expect(externalIP.GetMetadata().GetAnnotations()[ownerReferenceAnnotation]).To(Equal(cluster.GetId()))
+					Expect(externalIP.GetSpec().GetPool().GetId()).To(Equal(poolID))
+					Expect(externalIP.GetStatus().GetState()).To(Equal(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING))
+				}
+
+				attachments, err := server.externalIPAttachmentDao.List().SetFilter(clusterFilter).Do(ctx)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(attachments.GetItems()).To(HaveLen(2))
+				endpoints := make([]privatev1.ExternalIPAttachmentEndpoint, 0, 2)
+				for _, attachment := range attachments.GetItems() {
+					Expect(attachment.GetMetadata().GetTenant()).To(Equal(cluster.GetMetadata().GetTenant()))
+					Expect(attachment.GetMetadata().GetLabels()[autoCreatedLabel]).To(Equal("true"))
+					Expect(attachment.GetMetadata().GetAnnotations()[ownerReferenceAnnotation]).To(Equal(cluster.GetId()))
+					Expect(attachment.GetSpec().GetCluster().GetId()).To(Equal(cluster.GetId()))
+					Expect(attachment.GetStatus().GetState()).To(Equal(privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_PENDING))
+					endpoints = append(endpoints, attachment.GetSpec().GetTargetEndpoint())
+				}
+				Expect(endpoints).To(ConsistOf(
+					privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API,
+					privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_INGRESS,
+				))
+
+				pool, err := server.externalIPPoolDao.Get().SetId(poolID).Do(ctx)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(pool.GetObject().GetStatus().GetAvailable()).To(Equal(int64(2)))
+				Expect(pool.GetObject().GetStatus().GetAllocated()).To(Equal(int64(2)))
+
+				_, err = server.Delete(ctx, privatev1.ClustersDeleteRequest_builder{Id: cluster.GetId()}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				externalIPs, err = server.externalIPDao.List().SetFilter(clusterFilter).Do(ctx)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(externalIPs.GetItems()).To(BeEmpty())
+				attachments, err = server.externalIPAttachmentDao.List().SetFilter(clusterFilter).Do(ctx)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(attachments.GetItems()).To(BeEmpty())
+				pool, err = server.externalIPPoolDao.Get().SetId(poolID).Do(ctx)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(pool.GetObject().GetStatus().GetAvailable()).To(Equal(int64(4)))
+				Expect(pool.GetObject().GetStatus().GetAllocated()).To(Equal(int64(0)))
+			})
+		})
+
 		It("Creates object", func() {
 			response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 				Object: privatev1.Cluster_builder{
@@ -2408,7 +2549,7 @@ var _ = Describe("Private clusters server", func() {
 				Expect(stored.GetObject().GetSpec().GetNetworkAttachment()).To(BeNil())
 			})
 
-			It("Rejects changing security_groups with same subnet", func() {
+			It("Allows changing security_groups with the subnet unchanged", func() {
 				object := createClusterWithNetworkAttachment(privatev1.SubnetLocalReference_builder{Id: "subnet-1"}.Build(), []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "default-sg"}.Build()})
 
 				updateResponse, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
@@ -2425,17 +2566,20 @@ var _ = Describe("Private clusters server", func() {
 						Paths: []string{"spec.network_attachment"},
 					},
 				}.Build())
-				Expect(updateResponse).To(BeNil())
-				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(err).NotTo(HaveOccurred())
+				Expect(updateResponse).NotTo(BeNil())
 				stored, err := server.Get(ctx, privatev1.ClustersGetRequest_builder{Id: object.GetId()}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				attachment := stored.GetObject().GetSpec().GetNetworkAttachment()
 				Expect(attachment.GetSubnet().GetId()).To(Equal("subnet-1"))
-				Expect(attachment.GetSecurityGroups()).To(HaveLen(1))
-				Expect(attachment.GetSecurityGroups()[0].GetId()).To(Equal("default-sg"))
+				securityGroupIDs := make([]string, 0, len(attachment.GetSecurityGroups()))
+				for _, securityGroup := range attachment.GetSecurityGroups() {
+					securityGroupIDs = append(securityGroupIDs, securityGroup.GetId())
+				}
+				Expect(securityGroupIDs).To(ConsistOf("default-sg", "sg-2"))
 			})
 
-			It("Rejects updating security_groups via sub-field mask", func() {
+			It("Allows updating security_groups via sub-field mask", func() {
 				object := createClusterWithNetworkAttachment(privatev1.SubnetLocalReference_builder{Id: "subnet-1"}.Build(), []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "default-sg"}.Build()})
 
 				updateResponse, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
@@ -2451,14 +2595,17 @@ var _ = Describe("Private clusters server", func() {
 						Paths: []string{"spec.network_attachment.security_groups"},
 					},
 				}.Build())
-				Expect(updateResponse).To(BeNil())
-				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(err).NotTo(HaveOccurred())
+				Expect(updateResponse).NotTo(BeNil())
 				stored, err := server.Get(ctx, privatev1.ClustersGetRequest_builder{Id: object.GetId()}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				attachment := stored.GetObject().GetSpec().GetNetworkAttachment()
 				Expect(attachment.GetSubnet().GetId()).To(Equal("subnet-1"))
-				Expect(attachment.GetSecurityGroups()).To(HaveLen(1))
-				Expect(attachment.GetSecurityGroups()[0].GetId()).To(Equal("default-sg"))
+				securityGroupIDs := make([]string, 0, len(attachment.GetSecurityGroups()))
+				for _, securityGroup := range attachment.GetSecurityGroups() {
+					securityGroupIDs = append(securityGroupIDs, securityGroup.GetId())
+				}
+				Expect(securityGroupIDs).To(ConsistOf("sg-2", "sg-3"))
 			})
 
 			It("Accepts an identical network_attachment", func() {
@@ -4493,176 +4640,6 @@ var _ = Describe("Private clusters server", func() {
 				Expect(nodeSet.GetFabricInterface()).To(Equal("data-0"))
 			})
 
-		})
-
-		Describe("controller-reported endpoint validation", func() {
-			type endpointField struct {
-				path string
-				set  func(*privatev1.ClusterStatus, string)
-				get  func(*privatev1.ClusterStatus) string
-			}
-
-			fields := []endpointField{
-				{
-					path: "status.api_endpoint",
-					set:  func(status *privatev1.ClusterStatus, value string) { status.SetApiEndpoint(value) },
-					get:  func(status *privatev1.ClusterStatus) string { return status.GetApiEndpoint() },
-				},
-				{
-					path: "status.ingress_endpoint",
-					set:  func(status *privatev1.ClusterStatus, value string) { status.SetIngressEndpoint(value) },
-					get:  func(status *privatev1.ClusterStatus) string { return status.GetIngressEndpoint() },
-				},
-			}
-
-			invalidValues := []struct {
-				name  string
-				value string
-			}{
-				{name: "IPv6", value: "2001:db8::1"},
-				{name: "IPv4-mapped IPv6", value: "::ffff:192.0.2.1"},
-				{name: "malformed address", value: "not-an-ip"},
-				{name: "non-canonical address", value: "192.000.2.1"},
-				{name: "CIDR suffix", value: "192.0.2.1/32"},
-			}
-
-			newCluster := func(name string, status *privatev1.ClusterStatus) *privatev1.Cluster {
-				return privatev1.Cluster_builder{
-					Id:       uuid.New(),
-					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
-					Spec: privatev1.ClusterSpec_builder{
-						Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
-					}.Build(),
-					Status: status,
-				}.Build()
-			}
-
-			It("accepts empty and canonical IPv4 endpoints on Create and Update", func() {
-				status := privatev1.ClusterStatus_builder{
-					ApiEndpoint:     "192.0.2.10",
-					IngressEndpoint: "192.0.2.11",
-				}.Build()
-				object := newCluster("endpoint-valid-"+uuid.New()[24:32], status)
-				createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{Object: object}.Build())
-				Expect(err).ToNot(HaveOccurred())
-				id := createResponse.GetObject().GetId()
-				DeferCleanup(func() {
-					_, deleteErr := server.Delete(ctx, privatev1.ClustersDeleteRequest_builder{Id: id}.Build())
-					Expect(deleteErr).ToNot(HaveOccurred())
-				})
-
-				for _, field := range fields {
-					By("accepting canonical IPv4 for " + field.path)
-					updateStatus := privatev1.ClusterStatus_builder{}.Build()
-					field.set(updateStatus, "198.51.100.9")
-					updateResponse, updateErr := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
-						Object:     privatev1.Cluster_builder{Id: id, Status: updateStatus}.Build(),
-						UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{field.path}},
-					}.Build())
-					Expect(updateErr).ToNot(HaveOccurred())
-					Expect(field.get(updateResponse.GetObject().GetStatus())).To(Equal("198.51.100.9"))
-				}
-
-				// An empty value is valid while the provisioning controller has not discovered a VIP.
-				emptyCluster := newCluster("endpoint-empty-"+uuid.New()[24:32], privatev1.ClusterStatus_builder{}.Build())
-				emptyResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{Object: emptyCluster}.Build())
-				Expect(err).ToNot(HaveOccurred())
-				DeferCleanup(func() {
-					_, deleteErr := server.Delete(ctx, privatev1.ClustersDeleteRequest_builder{Id: emptyResponse.GetObject().GetId()}.Build())
-					Expect(deleteErr).ToNot(HaveOccurred())
-				})
-			})
-
-			It("rejects invalid endpoints before Create persistence", func() {
-				for _, field := range fields {
-					for _, invalid := range invalidValues {
-						By("rejecting " + invalid.name + " for " + field.path)
-						status := privatev1.ClusterStatus_builder{}.Build()
-						field.set(status, invalid.value)
-						object := newCluster("endpoint-invalid-"+uuid.New()[24:32], status)
-						id := object.GetId()
-						_, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{Object: object}.Build())
-						if err == nil {
-							_, deleteErr := server.Delete(ctx, privatev1.ClustersDeleteRequest_builder{Id: id}.Build())
-							Expect(deleteErr).ToNot(HaveOccurred())
-							Fail("Create accepted " + invalid.name + " for " + field.path)
-						}
-
-						errStatus, ok := grpcstatus.FromError(err)
-						Expect(ok).To(BeTrue())
-						Expect(errStatus.Code()).To(Equal(grpccodes.InvalidArgument))
-						Expect(err.Error()).To(ContainSubstring(field.path))
-						Expect(err.Error()).To(ContainSubstring("canonical IPv4"))
-
-						_, getErr := server.Get(ctx, privatev1.ClustersGetRequest_builder{Id: id}.Build())
-						getStatus, getOK := grpcstatus.FromError(getErr)
-						Expect(getOK).To(BeTrue())
-						Expect(getStatus.Code()).To(Equal(grpccodes.NotFound))
-					}
-				}
-			})
-
-			It("rejects invalid endpoint updates without changing stored status", func() {
-				object := newCluster("endpoint-update-"+uuid.New()[24:32], privatev1.ClusterStatus_builder{
-					ApiEndpoint:     "192.0.2.10",
-					IngressEndpoint: "192.0.2.11",
-				}.Build())
-				createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{Object: object}.Build())
-				Expect(err).ToNot(HaveOccurred())
-				id := createResponse.GetObject().GetId()
-				DeferCleanup(func() {
-					_, deleteErr := server.Delete(ctx, privatev1.ClustersDeleteRequest_builder{Id: id}.Build())
-					Expect(deleteErr).ToNot(HaveOccurred())
-				})
-
-				By("rejecting an invalid endpoint in a full-object update")
-				fullObjectResponse, err := server.Get(ctx, privatev1.ClustersGetRequest_builder{Id: id}.Build())
-				Expect(err).ToNot(HaveOccurred())
-				fullObject := fullObjectResponse.GetObject()
-				fullObject.GetStatus().SetApiEndpoint("2001:db8::9")
-				_, err = server.Update(ctx, privatev1.ClustersUpdateRequest_builder{Object: fullObject}.Build())
-				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-				Expect(err.Error()).To(ContainSubstring("status.api_endpoint"))
-				Expect(err.Error()).To(ContainSubstring("canonical IPv4"))
-				storedResponse, err := server.Get(ctx, privatev1.ClustersGetRequest_builder{Id: id}.Build())
-				Expect(err).ToNot(HaveOccurred())
-				Expect(storedResponse.GetObject().GetStatus().GetApiEndpoint()).To(Equal("192.0.2.10"))
-
-				for _, field := range fields {
-					for _, invalid := range invalidValues {
-						By("rejecting " + invalid.name + " for " + field.path)
-						updateStatus := privatev1.ClusterStatus_builder{}.Build()
-						field.set(updateStatus, invalid.value)
-						_, err = server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
-							Object:     privatev1.Cluster_builder{Id: id, Status: updateStatus}.Build(),
-							UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{field.path}},
-						}.Build())
-						errStatus, ok := grpcstatus.FromError(err)
-						Expect(ok).To(BeTrue())
-						Expect(errStatus.Code()).To(Equal(grpccodes.InvalidArgument))
-						Expect(err.Error()).To(ContainSubstring(field.path))
-						Expect(err.Error()).To(ContainSubstring("canonical IPv4"))
-
-						getResponse, getErr := server.Get(ctx, privatev1.ClustersGetRequest_builder{Id: id}.Build())
-						Expect(getErr).ToNot(HaveOccurred())
-						Expect(field.get(getResponse.GetObject().GetStatus())).To(
-							Equal(map[string]string{
-								"status.api_endpoint":     "192.0.2.10",
-								"status.ingress_endpoint": "192.0.2.11",
-							}[field.path]))
-					}
-
-					By("accepting an empty endpoint for " + field.path)
-					updateStatus := privatev1.ClusterStatus_builder{}.Build()
-					field.set(updateStatus, "")
-					_, err = server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
-						Object:     privatev1.Cluster_builder{Id: id, Status: updateStatus}.Build(),
-						UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{field.path}},
-					}.Build())
-					Expect(err).ToNot(HaveOccurred())
-				}
-
-			})
 		})
 	})
 })

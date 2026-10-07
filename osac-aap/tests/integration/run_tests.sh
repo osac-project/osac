@@ -58,11 +58,13 @@ WORKFLOWS=(
 # Roles with multiple scenarios (due to set_fact persistence across plays)
 # list each scenario file separately in ROLE_SCENARIO_TESTS.
 ROLE_TESTS=(
+  "agent_reclaim"
   "config_as_code_pod_specs"
   "finalizer"
   "fulfillment_trust_sync"
   "lease"
   "agentless_net_stub"
+  "netris_dhcp_range"
 )
 
 ROLE_SCENARIO_TESTS=(

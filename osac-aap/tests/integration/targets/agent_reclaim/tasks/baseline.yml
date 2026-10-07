@@ -1,0 +1,605 @@
+---
+# Integration test for osac.service.manage_agents unbind_agents_for_reclaim.
+#
+# Validates that:
+# 1. Agents with spec.clusterDeploymentName as a ClusterReference object
+#    (name + namespace) are correctly selected by the reclaim hook.
+# 2. Agents with non-matching clusterDeploymentName.name are excluded.
+# 3. An empty selection with manage_agents_reclaim_expect_bound=true fails.
+# 4. Successful reclaim simulation with concurrent status/label transition.
+# 5. Stuck reclaim with short retry budget, assert role fails promptly.
+# 6. Retry after partial unbind: Agent found via persistent label.
+# 7. Same cluster name, different namespace — namespace collision excluded.
+
+# ── Test 1: Selection — matching clusterDeploymentName is selected (no poll) ──
+- name: "Agent Reclaim - Selection: matching agent"
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+  vars:
+    default_agent_namespace: default
+
+  tasks:
+    - name: Test matching agent selection (no poll wait)
+      block:
+        - name: Create test Agent with ClusterReference clusterDeploymentName
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: agent-install.openshift.io/v1beta1
+              kind: Agent
+              metadata:
+                name: test-agent-reclaim-match
+                namespace: default
+              spec:
+                approved: true
+                clusterDeploymentName:
+                  name: test-cluster-order
+                  namespace: clusters-test-cluster-order
+            apply: true
+            wait: true
+            wait_timeout: 30
+
+        # Only run the discovery/selection part — list agents and set_fact.
+        # Do NOT run the full role (which would poll for reclaim completion).
+        - name: List all agents in namespace
+          kubernetes.core.k8s_info:
+            kind: Agent
+            api_version: agent-install.openshift.io/v1beta1
+            namespace: default
+          register: _all_agents
+
+        - name: Find agents bound to this cluster order
+          ansible.builtin.set_fact:
+            _test_reclaim_list: >-
+              {{ _all_agents.resources
+                 | selectattr('spec.clusterDeploymentName', 'defined')
+                 | selectattr('spec.clusterDeploymentName', 'mapping')
+                 | selectattr('spec.clusterDeploymentName.name', 'defined')
+                 | selectattr('spec.clusterDeploymentName.name', 'equalto', 'test-cluster-order')
+                 | list }}
+
+        - name: Assert matching agent was found
+          ansible.builtin.assert:
+            that:
+              - _test_reclaim_list | length > 0
+              - "'test-agent-reclaim-match' in (_test_reclaim_list | map(attribute='metadata.name') | list)"
+            fail_msg: >-
+              Expected 'test-agent-reclaim-match' in selection but got:
+              {{ _test_reclaim_list | map(attribute='metadata.name') | list | default('empty') }}
+            success_msg: "Selection: matching agent found — passed"
+
+      always:
+        - name: Cleanup -- delete test Agent
+          kubernetes.core.k8s:
+            state: absent
+            api_version: agent-install.openshift.io/v1beta1
+            kind: Agent
+            namespace: default
+            name: test-agent-reclaim-match
+          failed_when: false
+
+# ── Test 2: Selection — non-matching agent is excluded (no poll) ──
+- name: "Agent Reclaim - Selection: non-matching agent excluded"
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+  vars:
+    default_agent_namespace: default
+
+  tasks:
+    - name: Test non-matching agent excluded (no poll wait)
+      block:
+        - name: Create agent bound to a different cluster
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: agent-install.openshift.io/v1beta1
+              kind: Agent
+              metadata:
+                name: test-agent-reclaim-other
+                namespace: default
+              spec:
+                approved: true
+                clusterDeploymentName:
+                  name: other-cluster-order
+                  namespace: clusters-other-cluster-order
+            apply: true
+            wait: true
+            wait_timeout: 30
+
+        - name: List all agents in namespace
+          kubernetes.core.k8s_info:
+            kind: Agent
+            api_version: agent-install.openshift.io/v1beta1
+            namespace: default
+          register: _all_agents
+
+        - name: Find agents bound to my-cluster-order
+          ansible.builtin.set_fact:
+            _test_reclaim_list: >-
+              {{ _all_agents.resources
+                 | selectattr('spec.clusterDeploymentName', 'defined')
+                 | selectattr('spec.clusterDeploymentName', 'mapping')
+                 | selectattr('spec.clusterDeploymentName.name', 'defined')
+                 | selectattr('spec.clusterDeploymentName.name', 'equalto', 'my-cluster-order')
+                 | list }}
+
+        - name: Assert non-matching agent was NOT selected
+          ansible.builtin.assert:
+            that:
+              - _test_reclaim_list | length == 0
+            fail_msg: >-
+              Expected empty selection but got:
+              {{ _test_reclaim_list | map(attribute='metadata.name') | list }}
+            success_msg: "Selection: non-matching agent excluded — passed"
+
+      always:
+        - name: Cleanup -- delete test Agent
+          kubernetes.core.k8s:
+            state: absent
+            api_version: agent-install.openshift.io/v1beta1
+            kind: Agent
+            namespace: default
+            name: test-agent-reclaim-other
+          failed_when: false
+
+# ── Test 3: Empty selection with expect_bound=true fails ──
+# NOTE: include_role with a fatal ansible.builtin.fail task stops the play.
+# register/ignore_errors does NOT catch it. Use block/rescue to trap the
+# expected failure and verify it occurred.
+- name: "Agent Reclaim - Fail on empty selection when expected"
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+  vars:
+    default_agent_namespace: default
+
+  tasks:
+    - name: Test empty selection failure via block/rescue
+      block:
+        - name: Run unbind_agents_for_reclaim expecting bound agents (should fail)
+          ansible.builtin.include_role:
+            name: osac.service.manage_agents
+            tasks_from: unbind_agents_for_reclaim
+          vars:
+            manage_agents_cluster_order_name: nonexistent-cluster
+            manage_agents_reclaim_expect_bound: true
+
+        - name: Mark unexpected success
+          ansible.builtin.set_fact:
+            _empty_selection_failed: false
+
+      rescue:
+        - name: Verify failure was the expected empty-selection error
+          ansible.builtin.assert:
+            that:
+              - "'found 0 bound agents' in ansible_failed_result.msg"
+            fail_msg: >-
+              Role failed but with unexpected error:
+              {{ ansible_failed_result.msg | default('no message') }}
+            success_msg: "Empty selection failure caught in rescue — passed"
+
+        - name: Mark expected failure
+          ansible.builtin.set_fact:
+            _empty_selection_failed: true
+
+    - name: Assert the role actually failed
+      ansible.builtin.assert:
+        that:
+          - _empty_selection_failed | default(false) | bool
+        fail_msg: "Expected failure when no agents found with expect_bound=true"
+        success_msg: "Empty selection failure: passed"
+
+# ── Test 4: Successful reclaim — concurrent status/label transition (<10s) ──
+# The simulation triggers AFTER observing unbind (spec cleared), not on
+# a fixed sleep. This makes the test deterministic.
+- name: "Agent Reclaim - Successful reclaim with concurrent simulation"
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+  vars:
+    default_agent_namespace: default
+
+  tasks:
+    - name: Test successful reclaim with concurrent transition
+      block:
+        - name: Create agent in bound state with clusterdeployment-namespace label
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: agent-install.openshift.io/v1beta1
+              kind: Agent
+              metadata:
+                name: test-agent-reclaim-success
+                namespace: default
+                labels:
+                  agent-install.openshift.io/clusterdeployment-namespace: clusters-test-cluster-success
+              spec:
+                approved: true
+                clusterDeploymentName:
+                  name: test-cluster-success
+                  namespace: clusters-test-cluster-success
+            apply: true
+            wait: true
+            wait_timeout: 30
+
+        # Start a background process that waits for the spec to be cleared
+        # (unbind observed), then simulates the controller completing reclaim
+        # by clearing the label and setting state to known-unbound.
+        # This is deterministic: the simulation triggers after observing unbind,
+        # not on a fixed sleep timer.
+        - name: Start concurrent controller simulation (triggers after unbind observed)
+          ansible.builtin.shell: |
+            for i in $(seq 1 20); do
+              spec_ref=$(kubectl get agent test-agent-reclaim-success -n default \
+                -o jsonpath='{.spec.clusterDeploymentName.name}' 2>/dev/null || echo '')
+              if [ -z "$spec_ref" ]; then
+                sleep 1
+                kubectl patch agent test-agent-reclaim-success -n default \
+                  --type merge \
+                  -p '{"metadata":{"labels":{"agent-install.openshift.io/clusterdeployment-namespace":""}},"status":{"debugInfo":{"state":"known-unbound"}}}'
+                exit 0
+              fi
+              sleep 0.5
+            done
+            echo "Timed out waiting for spec to be cleared" >&2
+            exit 1
+          async: 30
+          poll: 0
+          register: _sim_async
+
+        - name: Run unbind_agents_for_reclaim with tight poll budget
+          ansible.builtin.include_role:
+            name: osac.service.manage_agents
+            tasks_from: unbind_agents_for_reclaim
+          vars:
+            manage_agents_cluster_order_name: test-cluster-success
+            manage_agents_hosted_cluster_namespace: clusters-test-cluster-success
+            # Tight budget: 5 retries × 2s = 10s max
+            manage_agents_reclaim_poll_retries: 5
+            manage_agents_reclaim_poll_delay: 2
+
+        - name: Wait for background simulation to finish
+          ansible.builtin.async_status:
+            jid: "{{ _sim_async.ansible_job_id }}"
+          register: _sim_result
+          until: _sim_result.finished
+          retries: 10
+          delay: 1
+
+        - name: Assert agent was found and reclaim completed
+          ansible.builtin.assert:
+            that:
+              - _reclaim_agent_names is defined
+              - "'test-agent-reclaim-success' in _reclaim_agent_names"
+            success_msg: "Successful concurrent reclaim simulation: passed"
+
+      always:
+        - name: Cleanup -- delete test Agent
+          kubernetes.core.k8s:
+            state: absent
+            api_version: agent-install.openshift.io/v1beta1
+            kind: Agent
+            namespace: default
+            name: test-agent-reclaim-success
+          failed_when: false
+
+# ── Test 5: Stuck reclaim — verify role fails promptly, conditional destroy marker ──
+- name: "Agent Reclaim - Stuck reclaim fails before HostedCluster destruction"
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+  vars:
+    default_agent_namespace: default
+
+  tasks:
+    - name: Test stuck reclaim
+      block:
+        - name: Create agent stuck in unbinding-pending-user-action
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: agent-install.openshift.io/v1beta1
+              kind: Agent
+              metadata:
+                name: test-agent-reclaim-stuck
+                namespace: default
+                labels:
+                  agent-install.openshift.io/clusterdeployment-namespace: clusters-test-cluster-stuck
+              spec:
+                approved: true
+                clusterDeploymentName:
+                  name: test-cluster-stuck
+                  namespace: clusters-test-cluster-stuck
+              status:
+                debugInfo:
+                  state: unbinding-pending-user-action
+            apply: true
+            wait: true
+            wait_timeout: 30
+
+        - name: Run unbind_agents_for_reclaim with short timeout (should fail)
+          block:
+            - name: Include reclaim role
+              ansible.builtin.include_role:
+                name: osac.service.manage_agents
+                tasks_from: unbind_agents_for_reclaim
+              vars:
+                manage_agents_cluster_order_name: test-cluster-stuck
+                manage_agents_hosted_cluster_namespace: clusters-test-cluster-stuck
+                # Minimal budget so the test completes quickly
+                manage_agents_reclaim_poll_retries: 2
+                manage_agents_reclaim_poll_delay: 1
+
+            - name: Record reclaim succeeded unexpectedly
+              ansible.builtin.set_fact:
+                _reclaim_succeeded: true
+
+          rescue:
+            - name: Record reclaim failed as expected
+              ansible.builtin.set_fact:
+                _reclaim_succeeded: false
+
+        - name: Assert reclaim failed (blocks HostedCluster destruction)
+          ansible.builtin.assert:
+            that:
+              - not (_reclaim_succeeded | default(true) | bool)
+            fail_msg: >-
+              Expected reclaim to fail for stuck agent but it succeeded.
+              The role must fail BEFORE HostedCluster destruction to preserve
+              the spoke API for manual recovery.
+            success_msg: "Stuck reclaim failure: passed — role correctly blocks HostedCluster destruction"
+
+        # This marker task represents the HostedCluster destruction step.
+        # It is CONDITIONAL on reclaim success — must NOT execute if reclaim failed.
+        - name: "MARKER: destroy HostedCluster (conditional on reclaim success)"
+          ansible.builtin.debug:
+            msg: "HostedCluster destruction would execute here"
+          when: _reclaim_succeeded | default(true) | bool
+
+        - name: Assert destruction marker did NOT execute
+          ansible.builtin.assert:
+            that:
+              - not (_reclaim_succeeded | default(true) | bool)
+            success_msg: "HostedCluster destruction correctly blocked by stuck reclaim"
+
+      always:
+        - name: Cleanup -- delete stuck test Agent
+          kubernetes.core.k8s:
+            state: absent
+            api_version: agent-install.openshift.io/v1beta1
+            kind: Agent
+            namespace: default
+            name: test-agent-reclaim-stuck
+          failed_when: false
+
+# ── Test 6: Retry after partial unbind — Agent found via persistent label ──
+- name: "Agent Reclaim - Retry finds agent through persistent label"
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+  vars:
+    default_agent_namespace: default
+
+  tasks:
+    - name: Test retry-after-partial-unbind
+      block:
+        # First invocation: Agent has spec.clusterDeploymentName set.
+        # The role clears it and times out (no controller to complete reclaim).
+        - name: Create agent with spec ref and clusterdeployment-namespace label
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: agent-install.openshift.io/v1beta1
+              kind: Agent
+              metadata:
+                name: test-agent-retry-partial
+                namespace: default
+                labels:
+                  agent-install.openshift.io/clusterdeployment-namespace: clusters-test-cluster-retry
+              spec:
+                approved: true
+                clusterDeploymentName:
+                  name: test-cluster-retry
+                  namespace: clusters-test-cluster-retry
+              status:
+                debugInfo:
+                  state: unbinding-pending-user-action
+            apply: true
+            wait: true
+            wait_timeout: 30
+
+        - name: "First invocation: clear spec ref and time out"
+          block:
+            - name: Include reclaim role (first attempt)
+              ansible.builtin.include_role:
+                name: osac.service.manage_agents
+                tasks_from: unbind_agents_for_reclaim
+              vars:
+                manage_agents_cluster_order_name: test-cluster-retry
+                manage_agents_hosted_cluster_namespace: clusters-test-cluster-retry
+                manage_agents_reclaim_poll_retries: 1
+                manage_agents_reclaim_poll_delay: 1
+
+            - name: Mark unexpected success
+              ansible.builtin.set_fact:
+                _first_timed_out: false
+
+          rescue:
+            - name: Mark expected timeout
+              ansible.builtin.set_fact:
+                _first_timed_out: true
+
+        - name: Assert first invocation timed out
+          ansible.builtin.assert:
+            that:
+              - _first_timed_out | default(false) | bool
+            fail_msg: "Expected first invocation to time out"
+            success_msg: "First invocation timed out as expected"
+
+        # At this point spec.clusterDeploymentName has been cleared by the
+        # first invocation, but the persistent label still exists.
+        # Start a background simulation that triggers after observing the
+        # second unbind attempt discovering the agent via label.
+        - name: Start concurrent controller simulation for retry path
+          ansible.builtin.shell: |
+            for i in $(seq 1 20); do
+              spec_ref=$(kubectl get agent test-agent-retry-partial -n default \
+                -o jsonpath='{.spec.clusterDeploymentName.name}' 2>/dev/null || echo '')
+              if [ -z "$spec_ref" ]; then
+                sleep 1
+                kubectl patch agent test-agent-retry-partial -n default \
+                  --type merge \
+                  -p '{"metadata":{"labels":{"agent-install.openshift.io/clusterdeployment-namespace":""}},"status":{"debugInfo":{"state":"known-unbound"}}}'
+                exit 0
+              fi
+              sleep 0.5
+            done
+            echo "Timed out waiting for unbind" >&2
+            exit 1
+          async: 30
+          poll: 0
+          register: _retry_sim_async
+
+        - name: "Second invocation: find agent through persistent label, succeed"
+          ansible.builtin.include_role:
+            name: osac.service.manage_agents
+            tasks_from: unbind_agents_for_reclaim
+          vars:
+            manage_agents_cluster_order_name: test-cluster-retry
+            manage_agents_hosted_cluster_namespace: clusters-test-cluster-retry
+            manage_agents_reclaim_poll_retries: 5
+            manage_agents_reclaim_poll_delay: 2
+
+        - name: Wait for background simulation to finish
+          ansible.builtin.async_status:
+            jid: "{{ _retry_sim_async.ansible_job_id }}"
+          register: _retry_sim_result
+          until: _retry_sim_result.finished
+          retries: 10
+          delay: 1
+
+        - name: Assert agent was found via label on retry
+          ansible.builtin.assert:
+            that:
+              - _reclaim_agent_names is defined
+              - "'test-agent-retry-partial' in _reclaim_agent_names"
+            fail_msg: >-
+              Second invocation did not find 'test-agent-retry-partial'
+              through the persistent label.  _reclaim_agent_names:
+              {{ _reclaim_agent_names | default('undefined') }}
+            success_msg: "Retry after partial unbind: passed — Agent found via persistent label"
+
+      always:
+        - name: Cleanup -- delete retry test Agent
+          kubernetes.core.k8s:
+            state: absent
+            api_version: agent-install.openshift.io/v1beta1
+            kind: Agent
+            namespace: default
+            name: test-agent-retry-partial
+          failed_when: false
+
+# ── Test 7: Same name, different namespace — namespace collision excluded ──
+# Verifies that when manage_agents_hosted_cluster_namespace is provided,
+# an Agent with the same clusterDeploymentName.name but a DIFFERENT
+# namespace is NOT selected (namespace-scoped matching).
+- name: "Agent Reclaim - Namespace collision: same name, different namespace excluded"
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+  vars:
+    default_agent_namespace: default
+
+  tasks:
+    - name: Test namespace collision exclusion
+      block:
+        - name: Create agent with same cluster name but different namespace
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: agent-install.openshift.io/v1beta1
+              kind: Agent
+              metadata:
+                name: test-agent-ns-collision
+                namespace: default
+              spec:
+                approved: true
+                clusterDeploymentName:
+                  name: shared-cluster-name
+                  namespace: clusters-tenant-a
+            apply: true
+            wait: true
+            wait_timeout: 30
+
+        - name: Create agent with same cluster name AND matching namespace
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: agent-install.openshift.io/v1beta1
+              kind: Agent
+              metadata:
+                name: test-agent-ns-match
+                namespace: default
+              spec:
+                approved: true
+                clusterDeploymentName:
+                  name: shared-cluster-name
+                  namespace: clusters-tenant-b
+            apply: true
+            wait: true
+            wait_timeout: 30
+
+        - name: List all agents in namespace
+          kubernetes.core.k8s_info:
+            kind: Agent
+            api_version: agent-install.openshift.io/v1beta1
+            namespace: default
+          register: _all_agents
+
+        # Apply the same selection logic as the role — match by name AND namespace
+        - name: Find agents for cluster in tenant-b namespace
+          ansible.builtin.set_fact:
+            _ns_filtered: >-
+              {% set by_name = _all_agents.resources
+                 | selectattr('spec.clusterDeploymentName', 'defined')
+                 | selectattr('spec.clusterDeploymentName', 'mapping')
+                 | selectattr('spec.clusterDeploymentName.name', 'defined')
+                 | selectattr('spec.clusterDeploymentName.name', 'equalto', 'shared-cluster-name')
+                 | list %}
+              {{ by_name
+                 | selectattr('spec.clusterDeploymentName.namespace', 'defined')
+                 | selectattr('spec.clusterDeploymentName.namespace', 'equalto', 'clusters-tenant-b')
+                 | list }}
+
+        - name: Assert only tenant-b agent was selected (not tenant-a)
+          ansible.builtin.assert:
+            that:
+              - _ns_filtered | length == 1
+              - "'test-agent-ns-match' in (_ns_filtered | map(attribute='metadata.name') | list)"
+              - "'test-agent-ns-collision' not in (_ns_filtered | map(attribute='metadata.name') | list)"
+            fail_msg: >-
+              Namespace filtering failed. Expected only test-agent-ns-match but got:
+              {{ _ns_filtered | map(attribute='metadata.name') | list }}
+            success_msg: "Namespace collision exclusion: passed — only matching namespace selected"
+
+      always:
+        - name: Cleanup -- delete collision test Agents
+          kubernetes.core.k8s:
+            state: absent
+            api_version: agent-install.openshift.io/v1beta1
+            kind: Agent
+            namespace: default
+            name: "{{ item }}"
+          loop:
+            - test-agent-ns-collision
+            - test-agent-ns-match
+          failed_when: false

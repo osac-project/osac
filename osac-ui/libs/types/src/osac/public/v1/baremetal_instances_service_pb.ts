@@ -152,8 +152,7 @@ export type BareMetalInstancesCreateResponse = Message<"osac.public.v1.BareMetal
   object?: BareMetalInstance | undefined;
 
   /**
-   * Non-fatal validation warnings for accepted input, returned by the gRPC Create response. For example, a deprecated
-   * `disk_image` is accepted and reported here so callers can migrate to a replacement.
+   * Deprecation or validation warnings (e.g. deprecated disk_image).
    *
    * @generated from field: repeated string warnings = 2;
    */

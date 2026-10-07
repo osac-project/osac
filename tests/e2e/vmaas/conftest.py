@@ -9,11 +9,7 @@ from collections.abc import Iterator
 import pytest
 
 from tests.e2e.core.grpc_client import GRPCClient
-from tests.e2e.core.helpers import (
-    delete_instance_type_if_present,
-    wait_for_grpc_subnet_ready,
-    wait_for_tenant_condition,
-)
+from tests.e2e.core.helpers import wait_for_tenant_condition
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import env
@@ -69,17 +65,16 @@ def default_networking(grpc: GRPCClient, k8s_hub_client: K8sClient, test_run_id:
     try:
         # Create virtual network with unique name
         vn_name = f"test-vn-{test_run_id}"
-        print("\nCreating VirtualNetwork")
+        print(f"\nCreating VirtualNetwork: {vn_name}")
         vn_id, vn_cr_name = create_and_wait_for_virtual_network(grpc, k8s_hub_client, vn_name, "10.200.0.0/16")
-        print("VirtualNetwork is Ready")
+        print(f"VirtualNetwork {vn_cr_name} is Ready")
 
         # Create subnet with unique name
         print("Creating Subnet")
         subnet_id, subnet_cr_name = create_and_wait_for_subnet(
             grpc, k8s_hub_client, vn_id, "10.200.100.0/24", name_prefix=f"test-subnet-{test_run_id}"
         )
-        wait_for_grpc_subnet_ready(grpc=grpc, subnet_id=subnet_id)
-        print("Subnet is Ready")
+        print(f"Subnet {subnet_cr_name} is Ready")
 
         yield {
             "virtual_network_id": vn_id,
@@ -88,21 +83,21 @@ def default_networking(grpc: GRPCClient, k8s_hub_client: K8sClient, test_run_id:
             "subnet_cr_name": subnet_cr_name,
         }
     finally:
-        print("\nCleaning up test networking resources")
+        print(f"\nCleaning up test networking resources: {test_run_id}")
         if subnet_id and subnet_cr_name:
             try:
-                print("Deleting Subnet...")
+                print(f"Deleting Subnet {subnet_id}...")
                 delete_and_wait_for_subnet(grpc, k8s_hub_client, subnet_id, subnet_cr_name)
-                print("Subnet deleted")
-            except Exception:
-                print("WARNING: Failed to delete subnet")
+                print(f"Subnet {subnet_id} deleted")
+            except Exception as e:
+                print(f"WARNING: Failed to delete subnet {subnet_id}: {e}")
         if vn_id and vn_cr_name:
             try:
-                print("Deleting VirtualNetwork...")
+                print(f"Deleting VirtualNetwork {vn_id}...")
                 delete_and_wait_for_virtual_network(grpc, k8s_hub_client, vn_id, vn_cr_name)
-                print("VirtualNetwork deleted")
-            except Exception:
-                print("WARNING: Failed to delete virtual network")
+                print(f"VirtualNetwork {vn_id} deleted")
+            except Exception as e:
+                print(f"WARNING: Failed to delete virtual network {vn_id}: {e}")
 
 
 @pytest.fixture(scope="session")
@@ -125,7 +120,12 @@ def default_instance_type(private_grpc: GRPCClient, test_run_id: str) -> Iterato
         name=it_name, vcpus=DEFAULT_IT_VCPUS, memory_gib=DEFAULT_IT_MEMORY_GIB, description="Default E2E instance type"
     )
     yield it_name
-    delete_instance_type_if_present(grpc=private_grpc, name=it_name)
+    try:
+        private_grpc.delete_instance_type(name=it_name)
+    except subprocess.CalledProcessError as e:
+        output = ((e.stdout or "") + (e.stderr or "")).lower()
+        if "not found" not in output:
+            raise
 
 
 @pytest.fixture(scope="session")

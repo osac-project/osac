@@ -1,0 +1,35 @@
+- name: Verify Netris Subnet DHCP excludes the reserved MetalLB VIP range
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Compute subnet addressing with a reserved VIP range
+      ansible.builtin.include_role:
+        name: osac.templates.netris
+        tasks_from: _compute_subnet_addressing.yaml
+      vars:
+        subnet_ipv4_cidr: 10.0.1.0/24
+        subnet_vip_cidr: 10.0.1.240/28
+
+    - name: Verify the DHCP pool stops before MetalLB VIP addresses
+      ansible.builtin.assert:
+        that:
+          - _gateway_ip == "10.0.1.1"
+          - _gateway_cidr == "10.0.1.1/24"
+          - _dhcp_start == "10.0.1.2"
+          - _dhcp_end == "10.0.1.239"
+        fail_msg: "DHCP must stop before the reserved 10.0.1.240/28 VIP range"
+
+    - name: Compute subnet addressing without a VIP range
+      ansible.builtin.include_role:
+        name: osac.templates.netris
+        tasks_from: _compute_subnet_addressing.yaml
+      vars:
+        subnet_ipv4_cidr: 10.0.1.0/24
+        subnet_vip_cidr: ""
+
+    - name: Verify the existing DHCP pool is retained without a VIP range
+      ansible.builtin.assert:
+        that:
+          - _dhcp_start == "10.0.1.2"
+          - _dhcp_end == "10.0.1.254"

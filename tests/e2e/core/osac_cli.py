@@ -177,16 +177,6 @@ class OsacCLI:
     def delete_compute_instance(self, *, uuid: str) -> None:
         self._run("delete", "computeinstance", uuid)
 
-    def edit_compute_instance(self, *, uuid: str) -> subprocess.CompletedProcess[str]:
-        """Edit a ComputeInstance and retain stderr for warning assertions."""
-        return subprocess.run(
-            (self.binary, "--config", self._config_dir, "edit", "--output", "json", "computeinstance", uuid),
-            capture_output=True,
-            text=True,
-            timeout=300,
-            check=True,
-        )
-
     def create_instance_type(
         self,
         *,
@@ -235,6 +225,8 @@ class OsacCLI:
         node_sets: dict[str, dict[str, Any]] | list[str] | None = None,
         template_parameters: dict[str, str] | None = None,
         template_parameter_files: dict[str, str] | None = None,
+        network_attachment: str | None = None,
+        external_ip_attachment: bool = False,
     ) -> str:
         args: list[str] = ["create", "cluster", "--template", template]
         if name is not None:
@@ -263,6 +255,10 @@ class OsacCLI:
         if template_parameter_files is not None:
             for key, path in template_parameter_files.items():
                 args.extend(["-f", f"{key}={path}"])
+        if network_attachment is not None:
+            args.extend(["--network-attachment", network_attachment])
+        if external_ip_attachment:
+            args.append("--external-ip-attachment")
 
         return self._parse_uuid(self._run(*args))
 

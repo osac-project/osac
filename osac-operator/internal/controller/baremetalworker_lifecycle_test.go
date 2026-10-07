@@ -11,7 +11,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
 language governing permissions and limitations under the License.
 */
 
-package controller
+package acceptance
 
 import (
 	. "github.com/onsi/ginkgo/v2"
@@ -24,11 +24,12 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/internal/controller/baremetalworker"
+	"github.com/osac-project/osac/osac-operator/internal/controller/baremetalworker/fake"
+	"github.com/osac-project/osac/osac-operator/internal/testing/envsim"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -39,6 +40,13 @@ var (
 	agentGVK    = schema.GroupVersionKind{Group: "agent-install.openshift.io", Version: "v1beta1", Kind: "Agent"}
 )
 
+// bmiNamed builds a minimal BareMetalInstance the fake accepts (metadata.name required).
+func bmiNamed(name string) *privatev1.BareMetalInstance {
+	return privatev1.BareMetalInstance_builder{
+		Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+	}.Build()
+}
+
 func newInfraEnv(name string) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(infraEnvGVK)
@@ -47,40 +55,73 @@ func newInfraEnv(name string) *unstructured.Unstructured {
 	return u
 }
 
-// newOwnedInfraEnv builds the object the reconciler itself creates: the
-// deterministic name, controlled by the ClusterOrder. Fixtures that stand in for a
-// reconciled InfraEnv must carry that owner reference, because a same-name object
-// this ClusterOrder does not control is rejected as foreign evidence.
-func newOwnedInfraEnv(co *osacv1alpha1.ClusterOrder) *unstructured.Unstructured {
-	GinkgoHelper()
-	u := newInfraEnv(co.Name + "-infraenv")
-	Expect(controllerutil.SetControllerReference(co, u, scheme.Scheme)).To(Succeed())
-	return u
-}
-
-// Public worker lifecycle tests share the controller suite Kubernetes API.
-var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), func() {
+// The bare-metal worker acceptance suite wires the fake private API + ignition endpoint
+// (OSAC-4149) and the environment simulator (OSAC-4150) into an envtest harness.
+var _ = Describe("Bare-metal worker provisioning", func() {
 	var (
-		fc  *workerFulfillmentStub
-		ign *workerIgnitionEndpoint
+		fc  *fake.FulfillmentClient
+		sim *envsim.Simulator
+		ign *fake.IgnitionServer
 	)
 
 	BeforeEach(func() {
-		fc = newWorkerFulfillmentStub()
-		ign = newWorkerIgnitionEndpoint()
+		fc = fake.NewFulfillmentClient()
+		sim = envsim.New(k8sClient)
+		ign = fake.NewIgnitionServer()
 	})
 
 	AfterEach(func() {
 		ign.Close()
 	})
 
-	// Envtest: drives the provisioning-start arc through the public reconciler
+	// Active spec: proves the harness (envtest + fake + simulator + ignition endpoint) stands up
+	// and the pieces interoperate. This is AC-1 ("wires the fake and simulator into the harness").
+	It("wires the fake, simulator, and ignition endpoint into an envtest harness", func() {
+		co := &osacv1alpha1.ClusterOrder{
+			ObjectMeta: metav1.ObjectMeta{Name: "harness", Namespace: testNamespace},
+			Spec:       osacv1alpha1.ClusterOrderSpec{TemplateID: "test"},
+		}
+		Expect(k8sClient.Create(ctx, co)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, co) })
+
+		// Simulator: ClusterDeployment exists, then InfraEnv becomes ready with the fake ignition URL.
+		Expect(sim.EnsureClusterDeployment(ctx, "harness-cd", testNamespace)).To(Succeed())
+		ie := newInfraEnv("harness-infraenv")
+		Expect(k8sClient.Create(ctx, ie)).To(Succeed())
+		Expect(sim.MarkInfraEnvReady(ctx, "harness-infraenv", testNamespace, ign.URL())).To(Succeed())
+
+		got := newInfraEnv("harness-infraenv")
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "harness-infraenv", Namespace: testNamespace}, got)).To(Succeed())
+		url, _, _ := unstructured.NestedString(got.Object, "status", "bootArtifacts", "discoveryIgnitionURL")
+		Expect(url).To(Equal(ign.URL()))
+
+		// Simulator: an Agent registers with a MAC.
+		Expect(sim.RegisterAgent(ctx, envsim.AgentOptions{
+			Name: "harness-agent", Namespace: testNamespace, MAC: "aa:bb:cc:dd:ee:ff",
+		})).To(Succeed())
+
+		// Fake private API: a BMI create is recorded, and the real IgnitionFetcher reads the endpoint.
+		_, err := fc.CreateBareMetalInstance(ctx, bmiNamed("harness-worker-0"))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(fc.CreateCalls()).To(HaveLen(1))
+
+		body, err := baremetalworker.NewIgnitionFetcher(nil).FetchIgnition(ctx, ign.URL())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(body).ToNot(BeEmpty())
+	})
+
+	// --- Pending feature scenarios (green-with-pending until their slice lands) ---
+	// Each body sketches arrange/act/assert with existing harness helpers; the "act = reconcile"
+	// step drives the BareMetalWorkerReconciler through the fake fulfillment and Agent seams.
+
+	// Tier-1 end-to-end: drives the whole provisioning-start arc through the real reconciler
 	// (InfraEnv -> discovery ignition -> BMI creation -> WaitingForAgent -> agent registration ->
 	// Binding) and then asserts the flow STALLS at Binding, which is exactly where a real cluster
 	// blocks until the fabric/MetalLB network (OSAC-1436) lets the host install RHCOS and join the
-	// HostedCluster. It reuses the seams the test-local fulfillment responses and CR fixtures provide, so it
-	// needs no hardware, no HyperShift, and no real network. The deployed path to Ready is covered by E2E.
-	It("starts worker provisioning and stalls at Binding without networking", func() {
+	// HostedCluster. After asserting the stall, it marks both simulated Agents installed and verifies
+	// that the controller advances their workers to Ready. Real network and hardware behavior remains
+	// covered by the BMF controller and deployed CaaS E2E suites.
+	It("stalls at Binding until Agents report installed, then reaches Ready [OSAC-1436 seam]", func() {
 		const (
 			clusterUUID    = "provstart-cluster-uuid"
 			cvID           = "4.18.0"
@@ -131,7 +172,7 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 				TemplateID:   "test",
 				PullSecret:   "{\"auths\":{}}",
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
-				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
+				NodeRequests: []osacv1alpha1.NodeRequest{{
 					NumberOfNodes: 2,
 					BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "bm-standard"},
 				}},
@@ -159,7 +200,7 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 		})
 
 		runReconcile := func() (reconcile.Result, error) {
-			return driveWorkerCheckpoints(r, fc, reconcile.Request{
+			return r.Reconcile(ctx, reconcile.Request{
 				NamespacedName: types.NamespacedName{Name: coName, Namespace: testNamespace},
 			})
 		}
@@ -187,8 +228,8 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 		Expect(err).ToNot(HaveOccurred())
 		Expect(res.RequeueAfter).To(BeNumerically(">", 0))
 
-		// Fixture: the discovery ignition becomes available at the fake endpoint.
-		Expect(setWorkerIgnitionURL(ctx, coName+"-infraenv", testNamespace, ign.URL())).To(Succeed())
+		// Simulator: the discovery ignition becomes available at the fake endpoint.
+		Expect(sim.MarkInfraEnvReady(ctx, coName+"-infraenv", testNamespace, ign.URL())).To(Succeed())
 
 		// Second reconcile: ignition fetched, InfraEnvReady=True.
 		_, err = runReconcile()
@@ -206,28 +247,27 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 		for _, w := range co.Status.Workers {
 			Expect(w.Phase).To(Equal("WaitingForAgent"))
 			Expect(w.Kind).To(Equal("BareMetalInstance"))
-			Expect(w.BareMetalInstance.ID).ToNot(BeEmpty())
+			Expect(w.ResourceID).ToNot(BeEmpty())
 		}
 
-		// Two tenant-owned worker BMIs were created and carry the
-		// unresolved network attachment names — provisioning has genuinely started.
+		// Two tenant-owned worker BMIs were created with network references resolved
+		// to Fulfillment IDs — provisioning has genuinely started.
 		calls := fc.CreateCalls()
 		Expect(calls).To(HaveLen(2))
 		for _, bmi := range calls {
 			Expect(bmi.GetMetadata().GetTenant()).To(Equal("tenant1"))
 			na := bmi.GetSpec().GetNetworkAttachments()
 			Expect(na).To(HaveLen(1))
-			Expect(na[0].GetSubnet().GetName()).To(Equal("my-subnet"))
+			Expect(na[0].GetSubnet().GetId()).To(Equal("test-subnet-resource-id"))
 		}
 
 		// --- Phase B: an agent registers and binds ---
 
 		// One host boots the discovery ISO and registers as an Agent whose MAC matches worker-0's BMI.
 		co = get()
-		worker0 := co.Status.Workers[0]
-		worker1 := co.Status.Workers[1]
-		fc.SetHostMAC(worker0.BareMetalInstance.ID, "aa:bb:cc:00:00:00")
-		Expect(createWorkerAgent(ctx, workerAgentFixture{
+		worker0 := workerByName(co, coName+"-worker-0")
+		fc.SetHostMAC(worker0.ResourceID, "aa:bb:cc:00:00:00")
+		Expect(sim.RegisterAgent(ctx, envsim.AgentOptions{
 			Name: coName + "-agent-0", Namespace: testNamespace, MAC: "aa:bb:cc:00:00:00",
 		})).To(Succeed())
 
@@ -251,33 +291,98 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 		Expect(err).ToNot(HaveOccurred())
 
 		co = get()
-		Expect(workerByName(co, worker0.Name).Phase).To(Equal("Binding"))
-		Expect(workerByName(co, worker1.Name).Phase).To(Equal("WaitingForAgent"))
+		Expect(workerByName(co, coName+"-worker-0").Phase).To(Equal("Binding"))
+		Expect(workerByName(co, coName+"-worker-1").Phase).To(Equal("WaitingForAgent"))
 
 		// The controller completed late binding on the agent.
 		Expect(k8sClient.Get(ctx, types.NamespacedName{
 			Name: coName + "-agent-0", Namespace: testNamespace,
 		}, agentObj)).To(Succeed())
-		Expect(agentObj.GetLabels()).To(HaveKeyWithValue("osac.openshift.io/worker-name", worker0.Name))
+		Expect(agentObj.GetLabels()).To(HaveKeyWithValue("osac.openshift.io/worker-name", coName+"-worker-0"))
 
-		// --- Phase C: the stall (assert the boundary; do NOT cross it) ---
+		// --- Phase C: assert the install gate before reporting the simulated network outcome ---
 
-		// We deliberately DO NOT set the bound agent's status.debugInfo.state="installed". That step
-		// is the simulated stand-in for the OSAC-1436-dependent RHCOS install + node join over the
-		// fabric/MetalLB network; setting it here would falsely advance past the real-world block.
-		// So reconciling again must hold at Binding and never reach Ready.
+		// Without an installed signal, the bound worker remains at Binding and the other worker waits
+		// for its Agent. This is the point at which a real host is waiting for the network handoff,
+		// RHCOS installation, and HostedCluster join.
 		_, err = runReconcile()
 		Expect(err).ToNot(HaveOccurred())
 
 		co = get()
-		Expect(workerByName(co, worker0.Name).Phase).To(Equal("Binding"),
+		Expect(workerByName(co, coName+"-worker-0").Phase).To(Equal("Binding"),
 			"worker stalls at Binding until networking (OSAC-1436) lets the host install and join")
-		Expect(workerByName(co, worker1.Name).Phase).To(Equal("WaitingForAgent"))
+		Expect(workerByName(co, coName+"-worker-1").Phase).To(Equal("WaitingForAgent"))
 		Expect(co.Status.ReadyWorkers).ToNot(BeNil())
 		Expect(*co.Status.ReadyWorkers).To(Equal(int32(0)), "no worker reaches Ready without networking")
+
+		// Once the simulated network/install path completes, worker-0 advances to Ready while
+		// worker-1 binds but remains at Binding until its own Agent reports installed.
+		agent0 := &unstructured.Unstructured{}
+		agent0.SetGroupVersionKind(agentGVK)
+		Expect(k8sClient.Get(ctx, types.NamespacedName{
+			Name: coName + "-agent-0", Namespace: testNamespace,
+		}, agent0)).To(Succeed())
+		Expect(unstructured.SetNestedField(agent0.Object, "installed", "status", "debugInfo", "state")).To(Succeed())
+		Expect(k8sClient.Update(ctx, agent0)).To(Succeed())
+
+		co = get()
+		worker1 := workerByName(co, coName+"-worker-1")
+		fc.SetHostMAC(worker1.ResourceID, "aa:bb:cc:00:00:01")
+		Expect(sim.RegisterAgent(ctx, envsim.AgentOptions{
+			Name: coName + "-agent-1", Namespace: testNamespace, MAC: "aa:bb:cc:00:00:01",
+		})).To(Succeed())
+		agent1 := &unstructured.Unstructured{}
+		agent1.SetGroupVersionKind(agentGVK)
+		Expect(k8sClient.Get(ctx, types.NamespacedName{
+			Name: coName + "-agent-1", Namespace: testNamespace,
+		}, agent1)).To(Succeed())
+		labels := agent1.GetLabels()
+		if labels == nil {
+			labels = make(map[string]string)
+		}
+		labels["osac.openshift.io/cluster-order"] = coName
+		agent1.SetLabels(labels)
+		Expect(k8sClient.Update(ctx, agent1)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, agent1) })
+
+		_, err = runReconcile()
+		Expect(err).ToNot(HaveOccurred())
+		co = get()
+		Expect(workerByName(co, coName+"-worker-0").Phase).To(Equal("Ready"))
+		Expect(workerByName(co, coName+"-worker-1").Phase).To(Equal("Binding"))
+		Expect(co.Status.ReadyWorkers).ToNot(BeNil())
+		Expect(*co.Status.ReadyWorkers).To(Equal(int32(1)))
+
+		// After the second host completes installation, every worker reaches Ready.
+		Expect(k8sClient.Get(ctx, types.NamespacedName{
+			Name: coName + "-agent-1", Namespace: testNamespace,
+		}, agent1)).To(Succeed())
+		Expect(unstructured.SetNestedField(agent1.Object, "installed", "status", "debugInfo", "state")).To(Succeed())
+		Expect(k8sClient.Update(ctx, agent1)).To(Succeed())
+		_, err = runReconcile()
+		Expect(err).ToNot(HaveOccurred())
+
+		co = get()
+		Expect(workerByName(co, coName+"-worker-0").Phase).To(Equal("Ready"))
+		Expect(workerByName(co, coName+"-worker-1").Phase).To(Equal("Ready"))
+		Expect(co.Status.ReadyWorkers).ToNot(BeNil())
+		Expect(*co.Status.ReadyWorkers).To(Equal(int32(2)))
 	})
 
-	It("rebuilds worker state after controller restart", func() {
+	PIt("creates BMIs with correct fields and keeps them tenant-invisible [OSAC-4159]", func() {
+		// Given: a bare-metal node set + system-owned catalog item.
+		// When:  the reconciler creates BMIs via the fake private API.
+		// Then:  each recorded BMI carries instance_type, disk_image, user_data (ignition),
+		//   network_attachments, and the authoritative Cluster tenant.
+	})
+
+	PIt("cleans up all BMIs on cluster delete [OSAC-4176]", func() {
+		// Given: a Ready cluster with workers.
+		// When:  the ClusterOrder is deleted and the finalizer runs.
+		// Then:  every BMI in status.workers is deleted before the finalizer is removed.
+	})
+
+	It("rebuilds worker state after controller restart [OSAC-4167]", func() {
 		const (
 			clusterUUID    = "rebuild-cluster-uuid"
 			cvID           = "4.18.0"
@@ -323,7 +428,7 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 				TemplateID:   "test",
 				PullSecret:   "{\"auths\":{}}",
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
-				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
+				NodeRequests: []osacv1alpha1.NodeRequest{{
 					NumberOfNodes: 2,
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
 						InstanceType: "bm-standard",
@@ -354,9 +459,9 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 			_ = k8sClient.Delete(ctx, ie)
 		})
 
-		// Legacy fixture identities are explicit; generated incarnation IDs no longer equal names.
+		// Create BMIs in the fake for two workers. The fake defaults resource ID to name.
 		_, err := fc.CreateBareMetalInstance(ctx, privatev1.BareMetalInstance_builder{
-			Id: "bmw-rebuild-worker-0", Metadata: privatev1.Metadata_builder{
+			Metadata: privatev1.Metadata_builder{
 				Tenant:      "tenant1",
 				Name:        "bmw-rebuild-worker-0",
 				Labels:      map[string]string{"osac.openshift.io/cluster-order": "bmw-rebuild"},
@@ -365,7 +470,7 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		_, err = fc.CreateBareMetalInstance(ctx, privatev1.BareMetalInstance_builder{
-			Id: "bmw-rebuild-worker-1", Metadata: privatev1.Metadata_builder{
+			Metadata: privatev1.Metadata_builder{
 				Tenant:      "tenant1",
 				Name:        "bmw-rebuild-worker-1",
 				Labels:      map[string]string{"osac.openshift.io/cluster-order": "bmw-rebuild"},
@@ -383,7 +488,7 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 			{
 				Name:              "bmw-rebuild-worker-0",
 				Kind:              "BareMetalInstance",
-				BareMetalInstance: osacv1alpha1.BareMetalInstanceReference{Name: "bmw-rebuild-worker-0", ID: "bmw-rebuild-worker-0"},
+				ResourceID:        "bmw-rebuild-worker-0",
 				NodeSet:           "bm-standard",
 				Phase:             "Provisioning",
 				CreationTimestamp: now,
@@ -391,7 +496,7 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 			{
 				Name:               "bmw-rebuild-worker-1",
 				Kind:               "BareMetalInstance",
-				BareMetalInstance:  osacv1alpha1.BareMetalInstanceReference{Name: "bmw-rebuild-worker-1", ID: "bmw-rebuild-worker-1"},
+				ResourceID:         "bmw-rebuild-worker-1",
 				NodeSet:            "bm-standard",
 				Phase:              "Binding",
 				CreationTimestamp:  now,
@@ -404,7 +509,7 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 		Expect(k8sClient.Status().Update(ctx, co)).To(Succeed())
 
 		// Register an agent for worker-0 that is bound and installed (simulating Ready state).
-		Expect(createWorkerAgent(ctx, workerAgentFixture{
+		Expect(sim.RegisterAgent(ctx, envsim.AgentOptions{
 			Name: "bmw-rebuild-agent-0", Namespace: testNamespace, MAC: "aa:bb:cc:00:00:00",
 		})).To(Succeed())
 		agentObj := &unstructured.Unstructured{}
@@ -425,15 +530,14 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 
 		// No agent for worker-1 — should rebuild to WaitingForAgent.
 
-		// Set up InfraEnv so the rest of the reconcile doesn't error. It carries the
-		// same controller owner reference as a reconciled InfraEnv.
-		Expect(ensureWorkerClusterDeployment(ctx, "bmw-rebuild-cd", testNamespace)).To(Succeed())
-		ie := newOwnedInfraEnv(co)
+		// Set up InfraEnv so the rest of the reconcile doesn't error.
+		Expect(sim.EnsureClusterDeployment(ctx, "bmw-rebuild-cd", testNamespace)).To(Succeed())
+		ie := newInfraEnv("bmw-rebuild-infraenv")
 		Expect(k8sClient.Create(ctx, ie)).To(Succeed())
-		Expect(setWorkerIgnitionURL(ctx, "bmw-rebuild-infraenv", testNamespace, ign.URL())).To(Succeed())
+		Expect(sim.MarkInfraEnvReady(ctx, "bmw-rebuild-infraenv", testNamespace, ign.URL())).To(Succeed())
 
 		// Run reconcile — rebuild should re-derive phases from live state.
-		_, err = driveWorkerCheckpoints(r, fc, reconcile.Request{
+		_, err = r.Reconcile(ctx, reconcile.Request{
 			NamespacedName: types.NamespacedName{Name: "bmw-rebuild", Namespace: testNamespace},
 		})
 		Expect(err).ToNot(HaveOccurred())
@@ -460,4 +564,9 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 		Expect(fc.CreateCalls()).To(HaveLen(2))
 	})
 
+	PIt("translates worker status to tenant-visible Cluster status [OSAC-4169]", func() {
+		// Given: ClusterOrder worker conditions (WorkersFailed / InfraEnvReady / RHCOSImageNotFound).
+		// When:  the feedback controller syncs to the public Cluster via Signal.
+		// Then:  tenant-safe conditions (WORKER_PROVISIONING_FAILED/BLOCKED) appear without infra detail.
+	})
 })

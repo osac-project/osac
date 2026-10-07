@@ -5,6 +5,7 @@
 
 test:
 	uv run --group development pytest tests/unit
+	uv run ansible-playbook collections/ansible_collections/osac/service/roles/hosted_cluster/tests/test.yml
 	@echo "=== Setting up test environment ==="
 	cd tests/integration && ./setup_test_env.sh
 	@echo ""

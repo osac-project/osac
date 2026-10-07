@@ -27,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/management"
 	opv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
@@ -415,24 +416,31 @@ var _ = Describe("BareMetalInstance network/provision ordering", func() {
 	})
 
 	It("triggers provisioning and blocks networking until provision completes", func() {
-		provisionTriggered := false
-		networkingTriggered := false
+		var calls []string
+		provisionComplete := false
+		networkingStartedAfterProvision := false
 		prov = &mockProvisioningProvider{
 			triggerProvisionFunc: func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
-				provisionTriggered = true
+				calls = append(calls, "provision")
 				return &provisioning.ProvisionResult{JobID: "prov-1", InitialState: opv1alpha1.JobStatePending}, nil
 			},
 			getProvisionStatusFunc: func(_ context.Context, _ client.Object, _ string) (provisioning.ProvisionStatus, error) {
+				state := opv1alpha1.JobStatePending
+				if provisionComplete {
+					state = opv1alpha1.JobStateSucceeded
+				}
 				return provisioning.ProvisionStatus{
 					JobID:   "prov-1",
-					State:   opv1alpha1.JobStateSucceeded,
-					Message: "Provisioning completed",
+					State:   state,
+					Message: "Provisioning status",
 				}, nil
 			},
 		}
 		net = &mockProvisioningProvider{
-			triggerProvisionFunc: func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
-				networkingTriggered = true
+			triggerProvisionFunc: func(_ context.Context, obj client.Object) (*provisioning.ProvisionResult, error) {
+				calls = append(calls, "network")
+				instance := obj.(*v1alpha1.BareMetalInstance)
+				networkingStartedAfterProvision = instance.IsStatusConditionTrue(v1alpha1.HostConditionProvisionTemplateComplete)
 				return &provisioning.ProvisionResult{JobID: "net-1", InitialState: opv1alpha1.JobStatePending}, nil
 			},
 		}
@@ -444,14 +452,111 @@ var _ = Describe("BareMetalInstance network/provision ordering", func() {
 			ProvisionPollIntervalDuration: DefaultProvisionPollIntervalDuration,
 		}
 
-		// First pass triggers provisioning, NOT networking yet
-		_, err := reconciler.reconcileNetworkProvisionAndDiscovery(ctx, bmi)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(provisionTriggered).To(BeTrue(), "provisioning should be triggered first")
-		Expect(networkingTriggered).To(BeFalse(), "networking should NOT be triggered before provisioning completes")
+		// Provisioning may be polled repeatedly while it is pending; the network
+		// provider must not be called until the provisioning job succeeds.
+		for range 2 {
+			_, err := reconciler.reconcileNetworkProvisionAndDiscovery(ctx, bmi)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(calls).To(ConsistOf("provision"))
+			Expect(reconciler.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(bmi), bmi.Status)).To(Succeed())
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bmi), bmi)).To(Succeed())
+		}
+		Expect(bmi.IsStatusConditionTrue(v1alpha1.HostConditionProvisionTemplateComplete)).To(BeFalse())
 
-		// The key behavior is verified: provisioning runs first,
-		// and networking does NOT run before provisioning completes.
-		// This ensures the tenant never sees a half-built host.
+		provisionComplete = true
+		for range 5 {
+			_, err := reconciler.reconcileNetworkProvisionAndDiscovery(ctx, bmi)
+			Expect(err).NotTo(HaveOccurred())
+			if len(calls) == 2 {
+				break
+			}
+			Expect(reconciler.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(bmi), bmi.Status)).To(Succeed())
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bmi), bmi)).To(Succeed())
+		}
+		Expect(calls).To(Equal([]string{"provision", "network"}))
+		Expect(networkingStartedAfterProvision).To(BeTrue(),
+			"the tenant network move must start only after the provisioning template succeeds")
+	})
+
+	It("completes provisioning, tenant network handoff, reboot, then IP discovery", func() {
+		var calls []string
+		prov = &mockProvisioningProvider{
+			triggerProvisionFunc: func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
+				calls = append(calls, "provision")
+				return &provisioning.ProvisionResult{JobID: "prov-flow", InitialState: opv1alpha1.JobStatePending}, nil
+			},
+			getProvisionStatusFunc: func(_ context.Context, _ client.Object, _ string) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{JobID: "prov-flow", State: opv1alpha1.JobStateSucceeded}, nil
+			},
+		}
+		net = &mockProvisioningProvider{
+			triggerProvisionFunc: func(_ context.Context, obj client.Object) (*provisioning.ProvisionResult, error) {
+				instance := obj.(*v1alpha1.BareMetalInstance)
+				Expect(instance.IsStatusConditionTrue(v1alpha1.HostConditionProvisionTemplateComplete)).To(BeTrue())
+				calls = append(calls, "tenant-network-move")
+				return &provisioning.ProvisionResult{JobID: "network-flow", InitialState: opv1alpha1.JobStatePending}, nil
+			},
+			getProvisionStatusFunc: func(_ context.Context, _ client.Object, _ string) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{JobID: "network-flow", State: opv1alpha1.JobStateSucceeded}, nil
+			},
+		}
+		ipDiscovery := &mockProvisioningProvider{
+			triggerProvisionFunc: func(_ context.Context, obj client.Object) (*provisioning.ProvisionResult, error) {
+				instance := obj.(*v1alpha1.BareMetalInstance)
+				Expect(instance.IsStatusConditionTrue(v1alpha1.HostConditionNetworkAttachmentsReady)).To(BeTrue())
+				Expect(instance.IsStatusConditionTrue(v1alpha1.HostConditionNetworkHandoffComplete)).To(BeTrue())
+				calls = append(calls, "tenant-network-ip-discovery")
+				return &provisioning.ProvisionResult{JobID: "ip-discovery-flow", InitialState: opv1alpha1.JobStatePending}, nil
+			},
+			getProvisionStatusFunc: func(_ context.Context, _ client.Object, _ string) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{JobID: "ip-discovery-flow", State: opv1alpha1.JobStateSucceeded}, nil
+			},
+		}
+		managementClient := &mockManagementClient{
+			getPowerStateFunc: func(_ context.Context, _ string) (*management.PowerStatus, error) {
+				return &management.PowerStatus{State: management.PowerOn}, nil
+			},
+			triggerRestartFunc: func(_ context.Context, _ string) error {
+				calls = append(calls, "handoff-reboot")
+				return nil
+			},
+			isRestartCompleteFunc: func(_ context.Context, _ string) (bool, error) {
+				calls = append(calls, "handoff-reboot-complete")
+				return true, nil
+			},
+		}
+		reconciler := &BareMetalInstanceReconciler{
+			Client:                            k8sClient,
+			Scheme:                            k8sClient.Scheme(),
+			NetworkingProvider:                net,
+			ProvisioningProvider:              prov,
+			IPDiscoveryProvider:               ipDiscovery,
+			ManagementClient:                  managementClient,
+			ProvisionPollIntervalDuration:     DefaultProvisionPollIntervalDuration,
+			ManagementRecheckIntervalDuration: DefaultManagementRecheckIntervalDuration,
+		}
+
+		for range 12 {
+			_, err := reconciler.reconcileNetworkProvisionAndDiscovery(ctx, bmi)
+			Expect(err).NotTo(HaveOccurred())
+			ipCondition := bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
+			if ipCondition != nil && ipCondition.Status == metav1.ConditionTrue {
+				break
+			}
+			Expect(reconciler.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(bmi), bmi.Status)).To(Succeed())
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bmi), bmi)).To(Succeed())
+		}
+
+		Expect(calls).To(Equal([]string{
+			"provision",
+			"tenant-network-move",
+			"handoff-reboot",
+			"handoff-reboot-complete",
+			"tenant-network-ip-discovery",
+		}))
+		Expect(bmi.IsStatusConditionTrue(v1alpha1.HostConditionProvisionTemplateComplete)).To(BeTrue())
+		Expect(bmi.IsStatusConditionTrue(v1alpha1.HostConditionNetworkAttachmentsReady)).To(BeTrue())
+		Expect(bmi.IsStatusConditionTrue(v1alpha1.HostConditionNetworkHandoffComplete)).To(BeTrue())
+		Expect(bmi.IsStatusConditionTrue(v1alpha1.HostConditionIPDiscoveryComplete)).To(BeTrue())
 	})
 })

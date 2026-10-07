@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
@@ -129,6 +130,54 @@ var _ = Describe("SubnetReconciler", func() {
 		if err := k8sClient.Get(ctx, leaseKey, existingLease); err == nil {
 			_ = k8sClient.Delete(ctx, existingLease)
 		}
+	})
+
+	Context("MetalLB VIP address pool", func() {
+		It("creates, updates, and deletes the pool for the subnet's reserved VIP range", func() {
+			targetClient := fake.NewClientBuilder().WithScheme(k8sClient.Scheme()).Build()
+			reconciler.mgr = &mockExternalIPMulticlusterManager{targetClient: targetClient}
+			reconciler.targetCluster = "hosting-cluster"
+			subnet.Annotations = map[string]string{osacVIPCIDRAnnotation: "10.0.1.240/28"}
+
+			Expect(reconciler.ensureMetalLBIPAddressPool(ctx, subnet)).To(Succeed())
+
+			poolKey := types.NamespacedName{
+				Namespace: externalIPDefaultMetalLBNamespace,
+				Name:      ipAddressPoolName(subnet.Name),
+			}
+			pool := &unstructured.Unstructured{}
+			pool.SetGroupVersionKind(ipAddressPoolGVK)
+			Expect(targetClient.Get(ctx, poolKey, pool)).To(Succeed())
+			addresses, found, err := unstructured.NestedStringSlice(pool.Object, "spec", "addresses")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(found).To(BeTrue())
+			Expect(addresses).To(Equal([]string{"10.0.1.240/28"}))
+			autoAssign, found, err := unstructured.NestedBool(pool.Object, "spec", "autoAssign")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(found).To(BeTrue())
+			Expect(autoAssign).To(BeFalse())
+			avoidBuggyIPs, found, err := unstructured.NestedBool(pool.Object, "spec", "avoidBuggyIPs")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(found).To(BeTrue())
+			Expect(avoidBuggyIPs).To(BeTrue())
+			Expect(pool.GetLabels()).To(HaveKeyWithValue(osacPrefix+"/subnet", subnet.Name))
+
+			// A changed NetworkClass VIP prefix must update the existing pool instead
+			// of leaving MetalLB with the stale range.
+			subnet.Annotations[osacVIPCIDRAnnotation] = "10.0.1.248/29"
+			Expect(reconciler.ensureMetalLBIPAddressPool(ctx, subnet)).To(Succeed())
+			updated := &unstructured.Unstructured{}
+			updated.SetGroupVersionKind(ipAddressPoolGVK)
+			Expect(targetClient.Get(ctx, poolKey, updated)).To(Succeed())
+			addresses, found, err = unstructured.NestedStringSlice(updated.Object, "spec", "addresses")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(found).To(BeTrue())
+			Expect(addresses).To(Equal([]string{"10.0.1.248/29"}))
+
+			Expect(reconciler.deleteMetalLBIPAddressPool(ctx, subnet)).To(Succeed())
+			err = targetClient.Get(ctx, poolKey, updated)
+			Expect(errors.IsNotFound(err)).To(BeTrue())
+		})
 	})
 
 	Context("Reconcile", func() {

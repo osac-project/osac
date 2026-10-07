@@ -7,6 +7,7 @@
     subnet_name: "{{ subnet.metadata.name }}"
     subnet_ipv4_cidr: "{{ subnet.spec.ipv4Cidr | default('') }}"
     subnet_virtual_network_id: "{{ subnet.spec.virtualNetwork | default('') }}"
+    subnet_vip_cidr: "{{ (subnet.metadata.annotations | default({})).get('osac.openshift.io/vip-cidr', '') }}"
 
 - name: Look up VirtualNetwork CR by UUID label
   kubernetes.core.k8s_info:
@@ -45,20 +46,9 @@
       Ensure the VirtualNetwork has been created before creating a Subnet.
   when: _parent_vpc is none
 
-- name: Compute gateway and DHCP range from subnet CIDR
+- name: Compute gateway and DHCP range outside the reserved VIP CIDR
+  ansible.builtin.include_tasks: _compute_subnet_addressing.yaml
   when: subnet_ipv4_cidr | length > 0
-  block:
-    - name: Set gateway IP (first usable address)
-      ansible.builtin.set_fact:
-        _gateway_ip: "{{ subnet_ipv4_cidr | ansible.utils.ipaddr('next_usable') }}"
-        _gateway_cidr: >-
-          {{ subnet_ipv4_cidr | ansible.utils.ipaddr('next_usable') }}/{{ subnet_ipv4_cidr | ansible.utils.ipaddr('prefix') }}
-        _last_usable: "{{ subnet_ipv4_cidr | ansible.utils.ipaddr('last_usable') }}"
-
-    - name: Compute DHCP range (second usable to last usable)
-      ansible.builtin.set_fact:
-        _dhcp_start: "{{ subnet_ipv4_cidr | ansible.utils.ipaddr('2') | ansible.utils.ipaddr('address') }}"
-        _dhcp_end: "{{ _last_usable }}"
 
 - name: Display Subnet information
   ansible.builtin.debug:
@@ -66,6 +56,7 @@
       - "Creating Netris IPAM subnet + V-Net for Subnet '{{ subnet_name }}'"
       - "VirtualNetwork: {{ subnet_virtual_network_name }} (VPC ID: {{ _parent_vpc.id }})"
       - "IPv4 CIDR: {{ subnet_ipv4_cidr }}"
+      - "VIP CIDR: {{ subnet_vip_cidr | default('none', true) }}"
       - "Gateway: {{ _gateway_cidr | default('none') }}"
       - "DHCP range: {{ _dhcp_start | default('none') }} - {{ _dhcp_end | default('none') }}"
 

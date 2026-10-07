@@ -33,10 +33,12 @@ network_steps_collection: "{{ lookup('env', 'NETWORK_STEPS_COLLECTION', default=
 netris_controller_url: "{{ lookup('env', 'NETRIS_CONTROLLER_URL') }}"
 netris_username: "{{ lookup('env', 'NETRIS_USERNAME') }}"
 netris_password: "{{ lookup('env', 'NETRIS_PASSWORD') | trim }}"
-# Keep TLS server certificate verification enabled unless explicitly disabled
-# for a non-production Netris endpoint (for example, in CI).
+# Keep TLS server certificate verification enabled unless the value is exactly
+# "false" for a non-production Netris endpoint (for example, in CI). Blank or
+# malformed values fail closed to verification enabled.
 netris_validate_certs: >-
-  {{ lookup('env', 'NETRIS_VALIDATE_CERTS') | default('true', true) | bool }}
+  {{ (lookup('env', 'NETRIS_VALIDATE_CERTS')
+      | default('true', true) | lower | trim) != 'false' }}
 
 # Site and tenant
 netris_site_id: "{{ lookup('env', 'NETRIS_SITE_ID') | default(0, true) | int }}"

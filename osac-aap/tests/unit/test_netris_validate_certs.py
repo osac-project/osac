@@ -40,6 +40,12 @@ def test_netris_certificate_validation_can_be_disabled(monkeypatch):
     assert resolve_netris_validate_certs() is False
 
 
+def test_invalid_certificate_validation_value_fails_closed(monkeypatch):
+    monkeypatch.setenv("NETRIS_VALIDATE_CERTS", "unexpected")
+
+    assert resolve_netris_validate_certs() is True
+
+
 def test_all_netris_http_calls_use_configurable_validation_with_secure_default():
     roots = (
         AAP_ROOT / "collections/ansible_collections/netris/controller/roles",

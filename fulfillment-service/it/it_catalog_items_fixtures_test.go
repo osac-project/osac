@@ -87,6 +87,12 @@ func catalogItemFixtureMetadata(tenant, project string) *privatev1.Metadata {
 	return privatev1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: tenant, Project: project}.Build()
 }
 
+func catalogItemUnmanagedFixtureMetadata(tenant, project string) *privatev1.Metadata {
+	metadata := catalogItemFixtureMetadata(tenant, project)
+	metadata.SetAnnotations(map[string]string{"osac.openshift.io/management-state": "unmanaged"})
+	return metadata
+}
+
 func createCatalogItemProjectFixture(ctx context.Context, tenant string) string {
 	GinkgoHelper()
 	client := privatev1.NewProjectsClient(tool.InternalView().AdminConn())
@@ -224,7 +230,7 @@ func createCatalogItemSubnetInClassFixture(ctx context.Context, tenant, project,
 	networks := privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn())
 	network, err := networks.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 		Object: privatev1.VirtualNetwork_builder{
-			Metadata: catalogItemFixtureMetadata(tenant, project),
+			Metadata: catalogItemUnmanagedFixtureMetadata(tenant, project),
 			Spec: privatev1.VirtualNetworkSpec_builder{
 				NetworkClass: privatev1.NetworkClassReference_builder{Id: classID}.Build(),
 				Region:       "us-east-1",
@@ -268,7 +274,7 @@ func createCatalogItemSubnetInClassFixture(ctx context.Context, tenant, project,
 	subnets := privatev1.NewSubnetsClient(tool.InternalView().AdminConn())
 	subnet, err := subnets.Create(ctx, privatev1.SubnetsCreateRequest_builder{
 		Object: privatev1.Subnet_builder{
-			Metadata: catalogItemFixtureMetadata(tenant, project),
+			Metadata: catalogItemUnmanagedFixtureMetadata(tenant, project),
 			Spec: privatev1.SubnetSpec_builder{
 				VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: networkID}.Build(),
 				Ipv4Cidr:       new("10.100.1.0/24"),
@@ -317,7 +323,7 @@ func createCatalogItemNetworkInClassFixture(ctx context.Context, tenant, project
 	groups := privatev1.NewSecurityGroupsClient(tool.InternalView().AdminConn())
 	group, err := groups.Create(ctx, privatev1.SecurityGroupsCreateRequest_builder{
 		Object: privatev1.SecurityGroup_builder{
-			Metadata: catalogItemFixtureMetadata(tenant, project),
+			Metadata: catalogItemUnmanagedFixtureMetadata(tenant, project),
 			Spec: privatev1.SecurityGroupSpec_builder{
 				VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: network.virtualNetworkID}.Build(),
 			}.Build(),

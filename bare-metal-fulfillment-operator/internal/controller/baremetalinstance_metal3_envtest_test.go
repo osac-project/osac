@@ -132,6 +132,122 @@ var _ = Describe("BareMetalInstance Metal3 Integration", func() {
 		}
 	})
 
+	It("rejects changes to the complete network attachment value", func() {
+		cases := []struct {
+			name        string
+			attachments []v1alpha1.BareMetalNetworkAttachment
+			mutate      func(*v1alpha1.BareMetalInstance)
+		}{
+			{
+				name:        "add-security-group",
+				attachments: []v1alpha1.BareMetalNetworkAttachment{{SubnetRef: "subnet-a"}},
+				mutate: func(instance *v1alpha1.BareMetalInstance) {
+					instance.Spec.NetworkAttachments[0].SecurityGroupRefs = []string{"sg-a"}
+				},
+			},
+			{
+				name:        "change-security-group",
+				attachments: []v1alpha1.BareMetalNetworkAttachment{{SubnetRef: "subnet-a", SecurityGroupRefs: []string{"sg-a"}}},
+				mutate: func(instance *v1alpha1.BareMetalInstance) {
+					instance.Spec.NetworkAttachments[0].SecurityGroupRefs = []string{"sg-b"}
+				},
+			},
+			{
+				name:        "add-interface",
+				attachments: []v1alpha1.BareMetalNetworkAttachment{{SubnetRef: "subnet-a"}},
+				mutate: func(instance *v1alpha1.BareMetalInstance) {
+					instance.Spec.NetworkAttachments[0].Interface = "data-0"
+				},
+			},
+			{
+				name:        "add-primary",
+				attachments: []v1alpha1.BareMetalNetworkAttachment{{SubnetRef: "subnet-a"}},
+				mutate: func(instance *v1alpha1.BareMetalInstance) {
+					instance.Spec.NetworkAttachments[0].Primary = true
+				},
+			},
+			{
+				name:        "replace-subnet",
+				attachments: []v1alpha1.BareMetalNetworkAttachment{{SubnetRef: "subnet-a", Primary: true}},
+				mutate: func(instance *v1alpha1.BareMetalInstance) {
+					instance.Spec.NetworkAttachments[0].SubnetRef = "subnet-b"
+				},
+			},
+			{
+				name: "add-first-attachment",
+				mutate: func(instance *v1alpha1.BareMetalInstance) {
+					instance.Spec.NetworkAttachments = []v1alpha1.BareMetalNetworkAttachment{{SubnetRef: "subnet-a", Primary: true}}
+				},
+			},
+			{
+				name:        "remove-attachment",
+				attachments: []v1alpha1.BareMetalNetworkAttachment{{SubnetRef: "subnet-a", Primary: true}},
+				mutate: func(instance *v1alpha1.BareMetalInstance) {
+					instance.Spec.NetworkAttachments = nil
+				},
+			},
+		}
+
+		for _, testCase := range cases {
+			name := "attachment-contract-" + testCase.name
+			instance := &v1alpha1.BareMetalInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: metal3TestNS},
+				Spec: v1alpha1.BareMetalInstanceSpec{
+					Selector:           v1alpha1.HostSelectorSpec{HostSelector: map[string]string{"type": "network-contract"}},
+					TemplateID:         shared.OsacNoopTemplate,
+					NetworkAttachments: testCase.attachments,
+				},
+			}
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			DeferCleanup(func() { cleanupBMI(name) })
+
+			instance = getBMI(name)
+			testCase.mutate(instance)
+			err := k8sClient.Update(ctx, instance)
+			Expect(err).To(HaveOccurred(), testCase.name)
+			Expect(apierrors.IsInvalid(err)).To(BeTrue(), testCase.name)
+		}
+	})
+
+	It("rejects two attachments and allows lifecycle, status, and metadata updates", func() {
+		invalid := &v1alpha1.BareMetalInstance{
+			ObjectMeta: metav1.ObjectMeta{Name: "attachment-contract-two", Namespace: metal3TestNS},
+			Spec: v1alpha1.BareMetalInstanceSpec{
+				Selector:   v1alpha1.HostSelectorSpec{HostSelector: map[string]string{"type": "network-contract"}},
+				TemplateID: shared.OsacNoopTemplate,
+				NetworkAttachments: []v1alpha1.BareMetalNetworkAttachment{
+					{SubnetRef: "subnet-a", Primary: true},
+					{SubnetRef: "subnet-b"},
+				},
+			},
+		}
+		err := k8sClient.Create(ctx, invalid)
+		Expect(err).To(HaveOccurred())
+		Expect(apierrors.IsInvalid(err)).To(BeTrue())
+
+		const name = "attachment-contract-lifecycle-update"
+		instance := &v1alpha1.BareMetalInstance{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: metal3TestNS},
+			Spec: v1alpha1.BareMetalInstanceSpec{
+				Selector:           v1alpha1.HostSelectorSpec{HostSelector: map[string]string{"type": "network-contract"}},
+				TemplateID:         shared.OsacNoopTemplate,
+				NetworkAttachments: []v1alpha1.BareMetalNetworkAttachment{{SubnetRef: "subnet-a", Primary: true}},
+			},
+		}
+		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func() { cleanupBMI(name) })
+
+		instance = getBMI(name)
+		instance.Spec.RunStrategy = v1alpha1.RunStrategyAlways
+		instance.Spec.RestartTrigger = 1
+		instance.SetFinalizers([]string{"osac.openshift.io/test-finalizer"})
+		instance.SetLabels(map[string]string{"contract-test": "allowed"})
+		Expect(k8sClient.Update(ctx, instance)).To(Succeed())
+
+		instance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
+		Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+	})
+
 	Describe("Allocation flow", func() {
 		const bmiName = "alloc-test-bmi"
 		const bmhName = "alloc-test-bmh"

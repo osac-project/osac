@@ -78,8 +78,7 @@ def reserve_subnet(
     tenant_id=TENANT_ONE,
     cidr=None,
     trunk="eth1",
-    vlan_start=100,
-    vlan_end=199,
+    observed_vlan_ids=(),
     vip="",
     check_mode=False,
 ):
@@ -92,8 +91,7 @@ def reserve_subnet(
         tenant_id,
         cidr,
         trunk,
-        vlan_start,
-        vlan_end,
+        set(observed_vlan_ids),
         vip,
         check_mode=check_mode,
     )
@@ -853,7 +851,7 @@ def test_check_mode_subnet_reservation_does_not_create_a_row(tmp_path):
     cidr = available_subnet_cidr(parent, prefix=30)
 
     proposed, changed = reserve_subnet(
-        store, cidr=cidr, check_mode=True, vlan_start=321, vlan_end=321
+        store, cidr=cidr, check_mode=True, observed_vlan_ids=range(1, 321)
     )
 
     assert changed is True
@@ -881,11 +879,61 @@ def test_subnet_reservation_is_idempotent_and_vlan_ids_are_global(tmp_path):
     assert retry_changed is False
     assert retry == first
     assert peer_changed is True
-    assert first["vlan_id"] == 100
-    assert peer["vlan_id"] == 101
+    assert first["vlan_id"] == 1
+    assert peer["vlan_id"] == 2
     assert peer["virtual_network_uid"] == parent_two["uid"]
     assert first["vlan_interface"].startswith("s")
     assert len(first["vlan_interface"]) <= 15
+
+
+def test_internal_vlan_allocator_preserves_saved_ids_and_reuses_them_on_retry(tmp_path):
+    store = store_for(tmp_path)
+    parent = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    first_cidr = available_subnet_cidr(parent)
+    saved, changed = reserve_subnet(
+        store, uid=UID_TWO, cidr=first_cidr, observed_vlan_ids=range(1, 100)
+    )
+    next_subnet = reserve_subnet(
+        store,
+        uid=UID_THREE,
+        cidr=available_subnet_cidr(parent, exclude=(first_cidr,)),
+    )[0]
+    retry, retry_changed = reserve_subnet(
+        store,
+        uid=UID_TWO,
+        cidr=first_cidr,
+        observed_vlan_ids=range(1, 4095),
+    )
+
+    assert changed is True
+    assert saved["vlan_id"] == 100
+    assert next_subnet["vlan_id"] == 1
+    assert retry == saved
+    assert retry_changed is False
+
+
+@pytest.mark.parametrize("invalid_vlan", [0, 4095, True, "1"])
+def test_subnet_state_rejects_invalid_vlan_ids(tmp_path, invalid_vlan):
+    store = store_for(tmp_path)
+    ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    subnet, _ = reserve_subnet(store, uid=UID_TWO)
+
+    with pytest.raises(StateCorrupt, match="Subnet VLAN ID"):
+        store._validate_subnet_entry({**subnet, "vlan_id": invalid_vlan})
+
+
+@pytest.mark.parametrize("invalid_vlan", [0, 4095, True, "1"])
+def test_allocator_rejects_malformed_observed_vlan_ids(tmp_path, invalid_vlan):
+    store = store_for(tmp_path)
+    parent = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+
+    with pytest.raises(StateError, match="Observed Cumulus VLAN ID"):
+        reserve_subnet(
+            store,
+            uid=UID_TWO,
+            cidr=available_subnet_cidr(parent),
+            observed_vlan_ids={invalid_vlan},
+        )
 
 
 def test_subnet_retry_rejects_changed_parent_cidr_trunk_or_vip(tmp_path):
@@ -942,14 +990,15 @@ def test_subnet_reservation_validates_pool_exhaustion_and_vip_host_space(tmp_pat
     store = store_for(tmp_path)
     parent = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
     cidr = available_subnet_cidr(parent)
-    reserve_subnet(store, uid=UID_TWO, cidr=cidr, vlan_start=4094, vlan_end=4094)
-    with pytest.raises(StateError, match="VLAN pool is exhausted"):
+    reserve_subnet(
+        store, uid=UID_TWO, cidr=cidr, observed_vlan_ids=range(1, 4094)
+    )
+    with pytest.raises(StateError, match="VLAN range is exhausted"):
         reserve_subnet(
             store,
             uid=UID_THREE,
             cidr=available_subnet_cidr(parent, exclude=(cidr,)),
-            vlan_start=4094,
-            vlan_end=4094,
+            observed_vlan_ids=range(1, 4094),
         )
 
     small_cidr = available_subnet_cidr(parent, prefix=30)

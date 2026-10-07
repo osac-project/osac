@@ -109,26 +109,33 @@ data:
   AGENTLESS_NET_VN_INVENTORY: |
     all:
       children:
-    net_nodes:
-      hosts:
-        network-node:
-          ansible_host: <ssh-host>
-          ansible_user: <ssh-user>
-          ansible_port: 22
-    switches:
-      hosts:
-        leaf-1:
-          ansible_host: <cumulus-host>
-          ansible_user: cumulus
-          ansible_network_os: cumulus
-          trunk_ports: [swp1, swp3]
+        net_nodes:
+          hosts:
+            network-node:
+              ansible_host: <ssh-host>
+              ansible_user: <ssh-user>
+              ansible_port: 22
+        switches:
+          hosts:
+            leaf-1:
+              ansible_host: <cumulus-host>
+              ansible_user: cumulus
+              # Optional; omitted values default to cumulus.
+              ansible_network_os: cumulus
+              trunk_ports: [swp1, swp3]
 ```
 
 VirtualNetwork-only jobs may omit the `switches` group. Subnet jobs require at
 least one Cumulus host with a nonempty list of safe `trunk_ports`. The saved
 Subnet VLAN is converged on each declared trunk; the role does not assign host
-access ports. The default unified VLAN pool is 100–199 and the managed-node
-trunk defaults to `eth1`.
+access ports. Before reserving a new Subnet, the role reads every switch's
+`bridge -j vlan show` memberships and NVUE internal and L3-VNI reserved ranges.
+The SQLite allocator chooses the lowest available VLAN from 1–4094 after
+excluding those observed IDs and every saved allocation. Existing Subnet UIDs
+reuse their saved VLAN, including allocations from the former 100–199 range.
+The managed-node trunk defaults to `eth1`; SSH host, username, credentials,
+physical switch trunks, and the optional SSH port remain infrastructure
+configuration.
 
 Configure SSH with an AAP machine credential, a mounted private-key path, or
 `AGENTLESS_NET_SSH_PRIVATE_KEY` from the existing `network-fulfillment-ig`
@@ -137,19 +144,30 @@ temporary file on the worker and removes it after the operation, including
 failures. Missing or invalid inventory fails before provider mutation.
 Configure nonsecret values through the existing
 [AAP instance-group configuration](../osac-installer/docs/network-backend.md#agentlessnet-virtualnetwork-baseline).
+Tenant VirtualNetwork and Subnet create commands and API inputs remain
+unchanged; VLAN bounds and DHCP-manager selection are internal provider details.
 
 The managed node must be reachable by SSH and provide Python 3, `iproute2`,
 `iptables` with conntrack support, `dnsmasq`, `ss`, and privilege escalation.
-DHCP uses systemd by default. Alpine-based nodes can use the dedicated
-Supervisor path by setting `AGENTLESS_NET_DHCP_SUPERVISOR=supervisor` in the
-existing `network-fulfillment-ig` instance-group ConfigMap. The role enables
-IPv4 forwarding and a permit-all `FORWARD` policy inside the namespace. It does
-not change the host forwarding sysctl; interface-scoped host drops keep traffic
-isolated between VirtualNetworks. NAT, SecurityGroups, workload attachment,
-BGP, and full external connectivity remain unsupported. A VirtualNetwork
-without a Ready Subnet cannot make `DefaultNetworkingReady` true. Replacing a
-networking manager requires draining and replacing its resources; changing an
-existing VN's backend is unsupported.
+The role derives its DHCP manager on that node: it reuses the manager identified
+by an existing VN-owned service file, otherwise selects running systemd when
+available or the dedicated Supervisor daemon when reachable. Missing or
+conflicting service-manager state fails before switch changes. No DHCP manager
+selector is required in the ConfigMap. The role enables IPv4 forwarding and a
+permit-all `FORWARD` policy inside the namespace. It does not change the host
+forwarding sysctl; interface-scoped host drops keep traffic isolated between
+VirtualNetworks. NAT, SecurityGroups, workload attachment, BGP, and full
+external connectivity remain unsupported. A VirtualNetwork without a Ready
+Subnet cannot make `DefaultNetworkingReady` true. Replacing a networking
+manager requires draining and replacing its resources; changing an existing
+VN's backend is unsupported.
+
+The unified SQLite allocator assumes one authoritative allocator per fabric.
+Switch discovery avoids VLANs already present on configured switches, but it
+does not coordinate atomically with an independently running legacy CaaS JSON
+allocator. The legacy CaaS pool and transit-address settings remain in their
+existing workflows and do not set unified Subnet VLAN bounds. The SQLite state
+path remains available as an advanced `AGENTLESS_NET_STATE_FILE` override.
 
 The older `AGENTLESS_NET_IPAM_STATE_FILE` and
 `AGENTLESS_NET_EXTERNAL_INTERFACE` settings remain separate for embedded CaaS

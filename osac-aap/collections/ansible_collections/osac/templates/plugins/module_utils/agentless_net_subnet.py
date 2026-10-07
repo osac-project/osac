@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import json
 import os
 import re
 import shutil
@@ -35,6 +36,109 @@ SUPERVISOR_START_TIMEOUT_SECONDS = 5.0
 SUPERVISOR_POLL_INTERVAL_SECONDS = 0.2
 DHCP_INTERFACE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,15}$")
 DHCP_MAC_RE = re.compile(r"^(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
+MIN_VLAN_ID = 1
+MAX_VLAN_ID = 4094
+SYSTEMD_RUNTIME_ROOT = Path("/run/systemd/system")
+
+
+def _vlan_id(value: Any, context: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise SubnetProviderError(f"{context} must be an integer VLAN ID")
+    if not MIN_VLAN_ID <= value <= MAX_VLAN_ID:
+        raise SubnetProviderError(f"{context} is outside the supported VLAN range")
+    return value
+
+
+def _nvue_variants(value: Any, context: str) -> dict[str, Any]:
+    if isinstance(value, dict):
+        if not value or not set(value).issubset({"operational", "applied"}):
+            raise SubnetProviderError(f"Cumulus {context} JSON is malformed")
+        return value
+    return {"value": value}
+
+
+def _parse_vlan_range(value: Any, context: str) -> tuple[int, int]:
+    if isinstance(value, int) and not isinstance(value, bool):
+        first = last = _vlan_id(value, context)
+        return first, last
+    if not isinstance(value, str):
+        raise SubnetProviderError(f"Cumulus {context} range is malformed")
+    match = re.fullmatch(r"([0-9]+)-([0-9]+)", value)
+    if match is None:
+        raise SubnetProviderError(f"Cumulus {context} range is malformed")
+    first = _vlan_id(int(match.group(1)), context)
+    last = _vlan_id(int(match.group(2)), context)
+    if first > last:
+        raise SubnetProviderError(f"Cumulus {context} range is reversed")
+    return first, last
+
+
+def parse_switch_vlan_exclusions(
+    bridge_vlan_output: str, reserved_vlan_output: str
+) -> set[int]:
+    """Parse one switch's active VLAN memberships and NVUE reserved ranges."""
+    try:
+        interfaces = json.loads(bridge_vlan_output)
+        reserved = json.loads(reserved_vlan_output)
+    except (TypeError, json.JSONDecodeError) as error:
+        raise SubnetProviderError("Cumulus VLAN discovery returned invalid JSON") from error
+    if not isinstance(interfaces, list) or not interfaces:
+        raise SubnetProviderError("Cumulus VLAN discovery returned no interfaces")
+    excluded: set[int] = set()
+    seen_interfaces: set[str] = set()
+    for interface in interfaces:
+        if not isinstance(interface, dict):
+            raise SubnetProviderError("Cumulus VLAN interface entry is malformed")
+        name = interface.get("ifname")
+        memberships = interface.get("vlans")
+        if (
+            not isinstance(name, str)
+            or not name
+            or name in seen_interfaces
+            or not isinstance(memberships, list)
+        ):
+            raise SubnetProviderError("Cumulus VLAN interface entry is malformed")
+        seen_interfaces.add(name)
+        for membership in memberships:
+            if not isinstance(membership, dict):
+                raise SubnetProviderError("Cumulus VLAN membership entry is malformed")
+            first = _vlan_id(membership.get("vlan"), "Cumulus VLAN membership")
+            last = _vlan_id(membership.get("vlanEnd", first), "Cumulus VLAN range end")
+            flags = membership.get("flags", [])
+            if first > last or not isinstance(flags, list) or any(
+                not isinstance(flag, str) for flag in flags
+            ):
+                raise SubnetProviderError("Cumulus VLAN membership entry is malformed")
+            # bridge -j vlan show includes native/PVID memberships as VLAN entries.
+            excluded.update(range(first, last + 1))
+
+    if not isinstance(reserved, dict):
+        raise SubnetProviderError("Cumulus reserved VLAN JSON is malformed")
+    internal = reserved.get("internal")
+    l3_vni = reserved.get("l3-vni-vlan")
+    if not isinstance(internal, dict) or "range" not in internal:
+        raise SubnetProviderError("Cumulus internal reserved VLAN range is missing")
+    if not isinstance(l3_vni, dict) or "begin" not in l3_vni or "end" not in l3_vni:
+        raise SubnetProviderError("Cumulus L3-VNI reserved VLAN range is missing")
+
+    for value in _nvue_variants(internal["range"], "internal reserved VLAN").values():
+        first, last = _parse_vlan_range(value, "internal reserved VLAN")
+        excluded.update(range(first, last + 1))
+
+    begins = _nvue_variants(l3_vni["begin"], "L3-VNI reserved VLAN begin")
+    ends = _nvue_variants(l3_vni["end"], "L3-VNI reserved VLAN end")
+    variant_names = set(begins) | set(ends)
+    for name in variant_names:
+        begin_value = begins.get(name, begins.get("value"))
+        end_value = ends.get(name, ends.get("value"))
+        if begin_value is None or end_value is None:
+            raise SubnetProviderError("Cumulus L3-VNI reserved VLAN range is incomplete")
+        first = _vlan_id(begin_value, "Cumulus L3-VNI reserved VLAN begin")
+        last = _vlan_id(end_value, "Cumulus L3-VNI reserved VLAN end")
+        if first > last:
+            raise SubnetProviderError("Cumulus L3-VNI reserved VLAN range is reversed")
+        excluded.update(range(first, last + 1))
+    return excluded
 
 
 def _run(command: list[str], check: bool = True):
@@ -282,6 +386,71 @@ def _state_paths(uid: str) -> dict[str, Path]:
         "log_dir": DHCP_LOG_ROOT,
         "log": DHCP_LOG_ROOT / f"{uid}.log",
     }
+
+
+def _owned_service_file(path: Path) -> bool:
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        raise SubnetProviderError("could not inspect AgentlessNet DHCP service file") from error
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+        raise SubnetProviderError("AgentlessNet DHCP service file has unsafe type or owner")
+    return True
+
+
+def _systemd_available() -> bool:
+    return SYSTEMD_RUNTIME_ROOT.is_dir() and shutil.which("systemctl") is not None
+
+
+def _supervisor_available() -> bool:
+    if not SUPERVISOR_BASE_CONFIG.is_file() or shutil.which("supervisorctl") is None:
+        return False
+    result = _run(
+        ["supervisorctl", "-c", str(SUPERVISOR_BASE_CONFIG), "pid"],
+        check=False,
+    )
+    return result.returncode == 0 and result.stdout.strip().isdigit()
+
+
+def resolve_dhcp_supervisor(uid: str) -> str:
+    """Select the managed node's DHCP manager, preserving an owned existing service."""
+    if not isinstance(uid, str) or not re.fullmatch(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", uid
+    ):
+        raise SubnetProviderError("VirtualNetwork UID is invalid for DHCP manager selection")
+    paths = _state_paths(uid)
+    systemd_file = _owned_service_file(paths["systemd_unit"])
+    supervisor_file = _owned_service_file(paths["supervisor_program"])
+    if systemd_file and supervisor_file:
+        raise SubnetProviderError(
+            "AgentlessNet DHCP has both systemd and Supervisor service files"
+        )
+    if systemd_file:
+        if not _systemd_available():
+            raise SubnetProviderError(
+                "saved AgentlessNet DHCP systemd unit exists but systemd is unavailable"
+            )
+        return "systemd"
+    if supervisor_file:
+        if not _supervisor_available():
+            raise SubnetProviderError(
+                "saved AgentlessNet DHCP Supervisor program exists but Supervisor is unavailable"
+            )
+        return "supervisor"
+    if _systemd_available():
+        return "systemd"
+    if _supervisor_available():
+        return "supervisor"
+    raise SubnetProviderError(
+        "managed node has neither a running systemd manager nor a reachable AgentlessNet Supervisor"
+    )
+
+
+def preflight_dhcp_supervisor(uid: str) -> str:
+    """Resolve the DHCP manager before Subnet provisioning changes switch state."""
+    return resolve_dhcp_supervisor(uid)
 
 
 def _ensure_private_directory(path: Path) -> bool:
@@ -708,24 +877,23 @@ def _remove_dhcp_service(
 def cleanup_virtual_network_dhcp(
     uid: str,
     namespace: str,
-    dhcp_supervisor: str,
+    dhcp_supervisor: str | None = None,
     *,
     remove_leases: bool,
 ) -> bool:
     paths = _state_paths(uid)
     if not isinstance(namespace, str) or not re.fullmatch(r"n[0-9a-f]{14}", namespace):
         raise SubnetProviderError("saved VirtualNetwork namespace is invalid")
-    if dhcp_supervisor not in {"systemd", "supervisor"}:
+    systemd_file = _owned_service_file(paths["systemd_unit"])
+    supervisor_file = _owned_service_file(paths["supervisor_program"])
+    has_service_state = systemd_file or supervisor_file or _path_present(paths["config"])
+    if dhcp_supervisor is None and has_service_state:
+        dhcp_supervisor = resolve_dhcp_supervisor(uid)
+    if dhcp_supervisor is not None and dhcp_supervisor not in {"systemd", "supervisor"}:
         raise SubnetProviderError("AgentlessNet DHCP supervisor must be systemd or supervisor")
-    service_path = (
-        paths["systemd_unit"]
-        if dhcp_supervisor == "systemd"
-        else paths["supervisor_program"]
-    )
-    has_service_state = _path_present(service_path) or _path_present(paths["config"])
     changed = (
         _remove_dhcp_service(uid, dhcp_supervisor, paths)
-        if has_service_state
+        if has_service_state and dhcp_supervisor is not None
         else False
     )
     changed = _unlink_owned(paths["config"]) or changed
@@ -745,10 +913,12 @@ def cleanup_virtual_network_dhcp(
 
 
 def _reconcile_dhcp(
-    parent: dict[str, Any], entries: list[dict[str, Any]], dhcp_supervisor: str,
+    parent: dict[str, Any], entries: list[dict[str, Any]], dhcp_supervisor: str | None,
     *, interface_changed: bool,
 ) -> bool:
     uid, _ = _validate_parent(parent)
+    if dhcp_supervisor is None:
+        dhcp_supervisor = resolve_dhcp_supervisor(uid)
     paths = _state_paths(uid)
     if not entries:
         return cleanup_virtual_network_dhcp(
@@ -767,7 +937,7 @@ def _reconcile_dhcp(
 
 
 def ensure_subnet_data_plane(
-    parent: dict[str, Any], entries: list[dict[str, Any]], dhcp_supervisor: str
+    parent: dict[str, Any], entries: list[dict[str, Any]], dhcp_supervisor: str | None = None
 ) -> bool:
     changed = _ensure_subnet_interfaces(parent, entries)
     return _reconcile_dhcp(
@@ -779,7 +949,7 @@ def prepare_subnet_delete_data_plane(
     parent: dict[str, Any],
     target: dict[str, Any],
     remaining: list[dict[str, Any]],
-    dhcp_supervisor: str,
+    dhcp_supervisor: str | None = None,
 ) -> bool:
     changed = _ensure_subnet_interfaces(parent, remaining)
     changed = _reconcile_dhcp(

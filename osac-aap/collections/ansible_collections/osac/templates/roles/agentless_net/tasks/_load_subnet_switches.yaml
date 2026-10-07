@@ -36,7 +36,7 @@
       - item.value.get('ansible_host', '') | trim | length > 0
       - item.value.get('ansible_user', '') is string
       - item.value.get('ansible_user', '') | trim | length > 0
-      - item.value.get('ansible_network_os', '') == 'cumulus'
+      - item.value.get('ansible_network_os', 'cumulus') == 'cumulus'
       - >-
         (item.value.get('ansible_port', 22) | string
         | regex_search('^[0-9]{1,5}$')) is not none
@@ -58,8 +58,9 @@
         _agentless_net_inventory_switch_vars.get('ansible_ssh_common_args', '')) is string
     fail_msg: >-
       AgentlessNet Subnet switch inventory requires ansible_host, ansible_user,
-      ansible_network_os=cumulus, an optional valid SSH port, and a nonempty
-      list of safe, unique trunk_ports. Passwords are not accepted.
+      an optional valid SSH port, and a nonempty list of safe, unique
+      trunk_ports. ansible_network_os defaults to cumulus and other values are
+      rejected. Passwords are not accepted.
   loop: "{{ _agentless_net_inventory_switch_hosts | dict2items }}"
   loop_control:
     label: "{{ item.key }}"

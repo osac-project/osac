@@ -6,13 +6,6 @@
       vars:
         agentless_net_require_switches: true
 
-    - name: Validate the configured AgentlessNet DHCP supervisor
-      ansible.builtin.assert:
-        that:
-          - agentless_net_dhcp_supervisor in ['systemd', 'supervisor']
-        fail_msg: AGENTLESS_NET_DHCP_SUPERVISOR must be systemd or supervisor.
-      no_log: true
-
     - name: Read Subnet UID and tenant for saved-state deletion
       ansible.builtin.set_fact:
         _agentless_net_subnet_uid: "{{ subnet.metadata.uid | default('') }}"
@@ -36,7 +29,6 @@
         state_file: "{{ agentless_net_network_state_file }}"
         uid: "{{ _agentless_net_subnet_uid }}"
         tenant_id: "{{ _agentless_net_subnet_tenant_id }}"
-        dhcp_supervisor: "{{ agentless_net_dhcp_supervisor }}"
       delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
       become: true
       register: _agentless_net_subnet_deletion

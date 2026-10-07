@@ -118,7 +118,10 @@ YAML/JSON in `AGENTLESS_NET_VN_INVENTORY` from the existing
 under `all.children.net_nodes.hosts`, with `ansible_host`, `ansible_user`, and
 an optional `ansible_port`. Subnet jobs also require one or more Cumulus hosts
 under `all.children.switches.hosts`, each with `ansible_host`, `ansible_user`,
-`ansible_network_os: cumulus`, and a nonempty `trunk_ports` list.
+and a nonempty `trunk_ports` list. `ansible_network_os` defaults to `cumulus`;
+an explicitly different platform is rejected. `ansible_port` is optional and
+defaults to 22. Physical trunk ports and SSH access remain administrator-owned
+inventory.
 VirtualNetwork-only jobs may omit the switch group. The networking worker
 already imports this ConfigMap and its Secret through `envFrom`; no additional
 volume or Helm schema values are needed.
@@ -130,19 +133,33 @@ VirtualNetwork create/delete establishes the namespace, `/31` transit link, and
 forwarding baseline. Subnet create/delete reserves a stable VLAN ID in the same
 SQLite database as its parent, adds the VLAN to each configured switch trunk,
 creates a namespace gateway interface, and updates the per-VirtualNetwork DHCP
-service. The managed node must provide `iproute2`, `dnsmasq`, `ss`, and either
-systemd or Supervisor. `AGENTLESS_NET_DHCP_SUPERVISOR` defaults to `systemd`;
-the Alpine lab sets it to `supervisor` through the existing instance-group
-ConfigMap.
+service. Before a new reservation, the role reads `bridge -j vlan show` from
+every configured switch and `nv show system global reserved vlan --output
+json`. It excludes active memberships (including ranges and PVIDs), the NVUE
+internal reserved range, the reported L3-VNI range, and all SQLite allocations,
+then selects the lowest free VLAN in 1–4094. Retries reuse the saved VLAN even
+when it appears in switch discovery. Discovery and validation complete before
+reservation or switch changes. The managed node must provide `iproute2`,
+`dnsmasq`, `ss`, and either running systemd or a reachable dedicated Supervisor
+daemon. The role derives the service manager on the managed node and reuses the
+manager identified by an existing VN-owned service file. Conflicting owned
+service files fail closed; no DHCP manager selector is configured in the
+instance-group ConfigMap. Tenant VirtualNetwork and Subnet create commands and
+API inputs remain unchanged; VLAN bounds and DHCP-manager selection are
+internal provider details.
 
 The provider keeps the merged VirtualNetwork `/31` transit link and SQLite
 state format; it does not implement the accepted design's separate `/30` pool
-or JSON state. Its unified VLAN pool defaults to 100–199 and is separate from
-the legacy CaaS JSON allocator. Deployments sharing switches must configure
-disjoint pools. The Subnet role never assigns host access ports. SecurityGroups,
-NAT/BGP/external access, workload attachment, tenant defaults, and failover are
-outside this backend slice. Manager replacement requires draining and replacing
-resources; switching the backend of an existing VirtualNetwork is unsupported.
+or JSON state. Existing SQLite VLAN assignments remain stable, including IDs
+from the former 100–199 range. The legacy CaaS JSON allocator and its VLAN pool
+and transit-address calculations remain unchanged. Switch discovery protects
+against already configured foreign VLANs, but it cannot atomically coordinate
+with an independently running legacy allocator; use one authoritative unified
+allocator per fabric. The Subnet role never assigns host access ports.
+SecurityGroups, NAT/BGP/external access, workload attachment, tenant defaults,
+and failover are outside this backend slice. Manager replacement requires
+draining and replacing resources; switching the backend of an existing
+VirtualNetwork is unsupported.
 
 Use the existing `aap.instanceGroups.networkFulfillment.config` mapping to
 supply `AGENTLESS_NET_VN_INVENTORY`; see the

@@ -53,6 +53,97 @@ def subnet_entry(uid, cidr, vlan_id, *, vip_cidr=""):
     }
 
 
+def test_parse_switch_vlan_exclusions_includes_ranges_pvids_and_nvue_reservations():
+    bridge = json.dumps(
+        [
+            {
+                "ifname": "bridge",
+                "vlans": [{"vlan": 1, "flags": ["PVID", "Egress Untagged"]}],
+            },
+            {
+                "ifname": "swp1",
+                "vlans": [{"vlan": 100, "vlanEnd": 102}, {"vlan": 220}],
+            },
+        ]
+    )
+    reserved = json.dumps(
+        {
+            "internal": {"range": {"operational": "3700-3702", "applied": "3700-3702"}},
+            "l3-vni-vlan": {
+                "begin": {"operational": 4000, "applied": 4001},
+                "end": {"operational": 4005, "applied": 4006},
+            },
+        }
+    )
+
+    observed = agentless_net_subnet.parse_switch_vlan_exclusions(bridge, reserved)
+
+    assert observed == {1, 100, 101, 102, 220, 3700, 3701, 3702, 4000, 4001, 4002, 4003, 4004, 4005, 4006}
+
+
+@pytest.mark.parametrize(
+    ("bridge", "reserved"),
+    [
+        ("not-json", '{"internal":{"range":"10-20"},"l3-vni-vlan":{"begin":30,"end":40}}'),
+        ('[{"ifname":"swp1","vlans":[{"vlan":"10"}]}]', '{"internal":{"range":"10-20"},"l3-vni-vlan":{"begin":30,"end":40}}'),
+        ('[{"ifname":"swp1","vlans":[{"vlan":0}]}]', '{"internal":{"range":"10-20"},"l3-vni-vlan":{"begin":30,"end":40}}'),
+        ('[{"ifname":"swp1","vlans":[]}]', '{"internal":{"range":"bad"},"l3-vni-vlan":{"begin":30,"end":40}}'),
+        ('[{"ifname":"swp1","vlans":[]}]', '{"internal":{"range":"10-20"}}'),
+    ],
+)
+def test_parse_switch_vlan_exclusions_rejects_unverifiable_output(bridge, reserved):
+    with pytest.raises(agentless_net_subnet.SubnetProviderError):
+        agentless_net_subnet.parse_switch_vlan_exclusions(bridge, reserved)
+
+
+def test_resolve_dhcp_manager_reuses_existing_service_file(tmp_path, monkeypatch):
+    paths = {
+        "systemd_unit": tmp_path / "agentless-dhcp@unit.service",
+        "supervisor_program": tmp_path / "agentless-dhcp-program.ini",
+    }
+    monkeypatch.setattr(agentless_net_subnet, "_state_paths", lambda uid: paths)
+    monkeypatch.setattr(agentless_net_subnet, "_systemd_available", lambda: True)
+    monkeypatch.setattr(agentless_net_subnet, "_supervisor_available", lambda: True)
+    paths["supervisor_program"].write_text("[program:agentless-dhcp]\n")
+
+    assert agentless_net_subnet.resolve_dhcp_supervisor(VN_UID) == "supervisor"
+
+    paths["systemd_unit"].write_text("[Unit]\n")
+    with pytest.raises(agentless_net_subnet.SubnetProviderError, match="both systemd and Supervisor"):
+        agentless_net_subnet.resolve_dhcp_supervisor(VN_UID)
+
+
+@pytest.mark.parametrize(
+    ("systemd_available", "supervisor_available", "expected"),
+    [(True, True, "systemd"), (False, True, "supervisor")],
+)
+def test_resolve_dhcp_manager_selects_available_fallback(
+    tmp_path, monkeypatch, systemd_available, supervisor_available, expected
+):
+    paths = {
+        "systemd_unit": tmp_path / "agentless-dhcp@unit.service",
+        "supervisor_program": tmp_path / "agentless-dhcp-program.ini",
+    }
+    monkeypatch.setattr(agentless_net_subnet, "_state_paths", lambda uid: paths)
+    monkeypatch.setattr(agentless_net_subnet, "_systemd_available", lambda: systemd_available)
+    monkeypatch.setattr(agentless_net_subnet, "_supervisor_available", lambda: supervisor_available)
+
+    assert agentless_net_subnet.resolve_dhcp_supervisor(VN_UID) == expected
+
+
+def test_resolve_dhcp_manager_fails_when_no_manager_is_usable(tmp_path, monkeypatch):
+    paths = {
+        "systemd_unit": tmp_path / "agentless-dhcp@unit.service",
+        "supervisor_program": tmp_path / "agentless-dhcp-program.ini",
+    }
+    monkeypatch.setattr(agentless_net_subnet, "_state_paths", lambda uid: paths)
+    monkeypatch.setattr(agentless_net_subnet, "_systemd_available", lambda: False)
+    monkeypatch.setattr(agentless_net_subnet, "_supervisor_available", lambda: False)
+
+    with pytest.raises(agentless_net_subnet.SubnetProviderError, match="neither a running systemd"):
+        agentless_net_subnet.resolve_dhcp_supervisor(VN_UID)
+
+
 def provider_testbed(monkeypatch, tmp_path, *, reject_dnsmasq=False):
     paths = {
         "config": tmp_path / "etc/agentless-net/dhcp",

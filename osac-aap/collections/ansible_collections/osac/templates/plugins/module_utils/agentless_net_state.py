@@ -31,9 +31,12 @@ from ansible_collections.osac.templates.plugins.module_utils.agentless_net_netwo
     run_command,
 )
 from ansible_collections.osac.templates.plugins.module_utils.agentless_net_subnet import (
+    MAX_VLAN_ID,
+    MIN_VLAN_ID,
     SubnetProviderError,
     cleanup_virtual_network_dhcp,
     ensure_subnet_data_plane,
+    preflight_dhcp_supervisor,
     prepare_subnet_delete_data_plane,
 )
 
@@ -140,7 +143,11 @@ def _subnet_payload(
         trunk_interface
     ):
         raise StateError("Subnet trunk interface name is invalid")
-    if isinstance(vlan_id, bool) or not isinstance(vlan_id, int) or not 1 <= vlan_id <= 4094:
+    if (
+        isinstance(vlan_id, bool)
+        or not isinstance(vlan_id, int)
+        or not MIN_VLAN_ID <= vlan_id <= MAX_VLAN_ID
+    ):
         raise StateError("Subnet VLAN ID is outside the supported range")
 
     gateway = network.network_address + 1
@@ -558,7 +565,7 @@ class StateStore:
             raise StateCorrupt("Subnet IPv4 CIDR must be canonical and no smaller than /30")
         if isinstance(entry["vlan_id"], bool) or not isinstance(entry["vlan_id"], int):
             raise StateCorrupt("Subnet VLAN ID is invalid")
-        if not 1 <= entry["vlan_id"] <= 4094:
+        if not MIN_VLAN_ID <= entry["vlan_id"] <= MAX_VLAN_ID:
             raise StateCorrupt("Subnet VLAN ID is outside the supported range")
         expected_interface = f"s{hashlib.sha256(entry['uid'].encode()).hexdigest()[:12]}"
         if entry["vlan_interface"] != expected_interface:
@@ -732,18 +739,23 @@ class StateStore:
         tenant_id: str,
         subnet_cidr: str,
         trunk_interface: str,
-        vlan_pool_start: int,
-        vlan_pool_end: int,
+        observed_vlan_ids: set[int] | None = None,
         vip_cidr: str = "",
         *,
         check_mode: bool = False,
     ) -> tuple[dict[str, Any], bool]:
-        if isinstance(vlan_pool_start, bool) or not isinstance(vlan_pool_start, int):
-            raise StateError("AgentlessNet VLAN pool bounds must be integers from 1 to 4094")
-        if isinstance(vlan_pool_end, bool) or not isinstance(vlan_pool_end, int):
-            raise StateError("AgentlessNet VLAN pool bounds must be integers from 1 to 4094")
-        if not 1 <= vlan_pool_start <= vlan_pool_end <= 4094:
-            raise StateError("AgentlessNet VLAN pool bounds must be within 1 to 4094")
+        if observed_vlan_ids is None:
+            observed_vlan_ids = set()
+        if not isinstance(observed_vlan_ids, (set, list, tuple)):
+            raise StateError("Observed Cumulus VLAN IDs must be a collection of integers")
+        for vlan_id in observed_vlan_ids:
+            if (
+                isinstance(vlan_id, bool)
+                or not isinstance(vlan_id, int)
+                or not MIN_VLAN_ID <= vlan_id <= MAX_VLAN_ID
+            ):
+                raise StateError("Observed Cumulus VLAN ID is outside the supported range")
+        observed_vlan_ids = set(observed_vlan_ids)
         if not isinstance(vip_cidr, str):
             raise StateError("Subnet VIP CIDR must be text")
         # Validate all caller-controlled fields before opening state.
@@ -753,7 +765,7 @@ class StateStore:
             tenant_id,
             subnet_cidr,
             trunk_interface,
-            vlan_pool_start,
+            MIN_VLAN_ID,
             vip_cidr,
         )
         operation_lock = (
@@ -818,13 +830,14 @@ class StateStore:
                 vlan_id = next(
                     (
                         candidate
-                        for candidate in range(vlan_pool_start, vlan_pool_end + 1)
+                        for candidate in range(MIN_VLAN_ID, MAX_VLAN_ID + 1)
                         if candidate not in used_vlans
+                        and candidate not in observed_vlan_ids
                     ),
                     None,
                 )
                 if vlan_id is None:
-                    raise StateError("AgentlessNet Subnet VLAN pool is exhausted")
+                    raise StateError("AgentlessNet Subnet VLAN range is exhausted")
                 entry = _subnet_payload(
                     uid,
                     virtual_network_uid,
@@ -862,11 +875,12 @@ class StateStore:
         self,
         uid: str,
         tenant_id: str,
-        dhcp_supervisor: str,
+        dhcp_supervisor: str | None = None,
         *,
         check_mode: bool = False,
     ) -> tuple[dict[str, Any], bool, bool]:
-        _validate_dhcp_supervisor(dhcp_supervisor)
+        if dhcp_supervisor is not None:
+            _validate_dhcp_supervisor(dhcp_supervisor)
         if check_mode:
             entry = self.get_subnet(uid, tenant_id, check_mode=True)
             if entry is None:
@@ -898,6 +912,12 @@ class StateStore:
                 active_subnets = [
                     child for child in siblings if child["phase"] != "deleting"
                 ]
+
+            if dhcp_supervisor is None:
+                try:
+                    dhcp_supervisor = preflight_dhcp_supervisor(virtual_network_uid)
+                except SubnetProviderError as error:
+                    raise StateError(str(error)) from error
 
             try:
                 parent_changed = reconcile_virtual_network(
@@ -942,11 +962,12 @@ class StateStore:
         self,
         uid: str,
         tenant_id: str,
-        dhcp_supervisor: str,
+        dhcp_supervisor: str | None = None,
         *,
         check_mode: bool = False,
     ) -> tuple[dict[str, Any] | None, bool]:
-        _validate_dhcp_supervisor(dhcp_supervisor)
+        if dhcp_supervisor is not None:
+            _validate_dhcp_supervisor(dhcp_supervisor)
         virtual_network_uid = self._parent_uid_for_subnet(
             uid, tenant_id, check_mode=check_mode
         )
@@ -972,6 +993,11 @@ class StateStore:
                 parent = self._entry_for_uid(connection, virtual_network_uid)
                 if parent is None or parent["tenant_id"] != tenant_id:
                     raise StateError("AgentlessNet Subnet parent state does not match its reservation")
+                if dhcp_supervisor is None:
+                    try:
+                        dhcp_supervisor = preflight_dhcp_supervisor(virtual_network_uid)
+                    except SubnetProviderError as error:
+                        raise StateError(str(error)) from error
                 state_changed = entry["phase"] != "deleting"
                 deleting_entry = {**entry, "phase": "deleting"}
                 if state_changed:
@@ -1216,11 +1242,12 @@ class StateStore:
             return entry
 
     def delete_and_remove_virtual_network(
-        self, uid: str, tenant_id: str, dhcp_supervisor: str = "systemd"
+        self, uid: str, tenant_id: str, dhcp_supervisor: str | None = None
     ) -> bool:
         self._validate_uid(uid)
         self._validate_tenant_id(tenant_id)
-        _validate_dhcp_supervisor(dhcp_supervisor)
+        if dhcp_supervisor is not None:
+            _validate_dhcp_supervisor(dhcp_supervisor)
         with self._resource_locked(uid):
             with self._locked_database(create=False) as connection:
                 entry = (

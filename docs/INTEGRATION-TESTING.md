@@ -366,7 +366,7 @@ applicable integration tests separately to validate workflow behavior.
 ### Coverage notes
 
 - **Filters, variable transforms, and isolated plugin logic:** Include invalid input and default handling.
-- **AgentlessNet VirtualNetwork/Subnet state and command helpers:** Unit coverage proves additive migration, allocation, parent-lock serialization, retry retention, VLAN interfaces, DHCP rendering/service lifecycle, lease preservation, and diagnostics with mocked provider commands. The operator envtest verifies parent-context construction; the Kind target validates the supplied parent UUID-to-UID, Ready, and tenant fields. None of these suites proves deployed AAP/SSH networking or packet delivery.
+- **AgentlessNet VirtualNetwork/Subnet state and command helpers:** Unit coverage proves additive migration, internal allocation and exhaustion, exclusion parsing for bridge memberships and NVUE reserved ranges, parent-lock serialization, retry retention, VLAN interfaces, derived DHCP-manager selection, DHCP rendering/service lifecycle, lease preservation, and diagnostics with mocked provider commands. The operator envtest verifies parent-context construction; the Kind target validates the supplied parent UUID-to-UID, Ready, and tenant fields. AAP/Kind service-readiness checks do not prove client leases or traffic delivery.
 - **Ansible roles, workflow tasks, hooks, leases, finalizers, or Kubernetes resources:** The test must exercise the role/playbook through Ansible against Kind.
 - **Template publishing TLS:** The `test_cert_validation` play in `collections/ansible_collections/osac/service/roles/publish_templates/tests/test.yml` runs the real role against an untrusted local HTTPS endpoint and asserts certificate rejection before any authenticated HTTP request. The endpoint is a test double; it does not prove a deployed AAP or fulfillment boundary.
 - **Execution-environment definition or dependency inputs:** Image success does not prove the workflow boundary.
@@ -376,14 +376,16 @@ applicable integration tests separately to validate workflow behavior.
 
 ### Coverage gaps
 
-Subnet creation, actual DHCP leases, same-Subnet L2, retry, and peer-preserving
-cleanup require the deployed lab journey tracked by
-[DEV OSAC-5530](https://redhat.atlassian.net/browse/OSAC-5530). Local mocks and
-the Kind parent-mapping target do not cover those provider behaviors. The
-existing `e2e` branch owns the lab runner edits; no deployed run is claimed until
-it passes. AgentlessNet VN create/retry/delete through deployed AAP/SSH and
-isolation of overlapping VNs remain provider-coverage gaps. Broader provider
-coverage remains tracked under [Feature OSAC-3664](https://redhat.atlassian.net/browse/OSAC-3664)
+Subnet creation, real DHCP client leases, same-Subnet L2 traffic, service
+restart, retry recovery, `/30` addressing, lifecycle, and peer-preserving
+cleanup require the deployed lab journey owned by the `e2e` branch and tracked
+by [DEV OSAC-5530](https://redhat.atlassian.net/browse/OSAC-5530). The lab uses
+real deployed Fulfillment/database/operator/AAP/SSH/Linux/dnsmasq/Cumulus VX
+components and test client containers; it does not establish physical-hardware,
+BMaaS lease-status, NAT, or full-install CI coverage. Unit and Kind checks cover
+state logic, inventory contract, and parent mapping only. AgentlessNet VN
+create/retry/delete through deployed AAP/SSH and isolation of overlapping VNs
+remain broader provider-coverage gaps tracked under [Feature OSAC-3664](https://redhat.atlassian.net/browse/OSAC-3664)
 and [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) /
 [OSAC-4850](https://redhat.atlassian.net/browse/OSAC-4850).
 
@@ -460,6 +462,7 @@ Touched-area requirements: [component guide](../tests/e2e/AGENTS.md#touched-area
 
 | Tier | Location / command | Exercises for real | Faked or omitted |
 |---|---|---|---|
+| E2E ([DEV] OSAC-5530 lab journey) | From the repository root: `AAP_PROJECT_GIT_BRANCH=OSAC-5530-subnet-vlan-dhcp AAP_PROJECT_EXPECTED_REVISION=<runtime-sha> bash ./vlan-e2e.sh` | Deployed Fulfillment/database/operator/AAP/SSH/Linux/dnsmasq/Cumulus VX; real DHCP leases from BusyBox clients, gateway pings, same-Subnet L2 across leaves, DHCP restart/renewal, Subnet retry, `/30` single-address allocation, deletion, and cleanup | Uses client containers and virtual switches; it does not establish physical-hardware, BMaaS lease-status, NAT, or full-install CI coverage. A successful run is required to claim deployed behavior. |
 | E2E (VMaaS regression) | From the repository root: `uv run pytest tests/e2e/vmaas/regression/test_compute_instance_instance_type.py` | InstanceType resize through CLI/API, CatalogItem provisioning, and Kubernetes/KubeVirt resources | Requires a configured single-node VMaaS environment; no services are mocked. |
 | Unit ([DEV], CaaS teardown) | From the repository root: `uv run pytest -n 0 tests/unit/test_caas_teardown_order.py tests/unit/test_cluster_deletion_polling.py tests/unit/test_caas_deletion_diagnostics.py tests/unit/test_caas_worker_bmi_visibility.py tests/unit/test_caas_two_node_sets.py tests/unit/test_caas_selector_contracts.py` | Read-only wait logic, exact-resource NotFound, ordered worker/parent/dependent waits, shared single/two-node-set budgets, stage-specific safe failures, snapshot throttling and sanitization, worker ownership checks, NodeSet selectors with shared BMITs, and shared-only BMIT reference expectations | API/client responses and time are mocked. No deployed controllers, fulfillment, AAP, provider, or metering is exercised. |
 | E2E ([QE], focused bare-metal CaaS lifecycle) | From the repository root: `uv run pytest -n 0 tests/e2e/caas/sanity/test_cluster_create.py::test_cluster_create --junitxml=/tmp/test-output/caas-bm-teardown-junit.xml` | CLI/API/database, Kubernetes, OSAC operators, AAP, HyperShift/CAPI/CAP-Agent, Assisted Service, provider-backed virtual BMHs, and Kafka/metering; creation, guest readiness, scale events, natural worker/parent teardown, independent InfraEnv GC, fulfillment removal, and deleted events | Requires the compatible deployed CaaS profile; no mocked completion or workaround-enabled deletion wait. Virtual BMHs do not prove physical-hardware coverage. Guest LVMS device readiness, PVC/CSI mount, and application I/O are not established by this lifecycle test. |

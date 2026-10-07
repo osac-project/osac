@@ -60,40 +60,149 @@
           selectattr('status', 'equalto', 'True') |
           list | length > 0
 
-    - name: Start OLM readiness fixture
-      ansible.builtin.shell: |
-        set -euo pipefail
-        for _ in $(seq 1 120); do
-          if kubectl get subscription cert-manager -n openshift-operators >/dev/null 2>&1; then
-            break
-          fi
-          sleep 1
-        done
-        kubectl get subscription cert-manager -n openshift-operators >/dev/null
-        kubectl apply -f - <<'EOF'
-        apiVersion: operators.coreos.com/v1alpha1
-        kind: ClusterServiceVersion
-        metadata:
-          name: cert-manager.v1.0.0
-          namespace: openshift-operators
-        spec:
-          displayName: cert-manager
-          version: 1.0.0
-        EOF
-        kubectl patch clusterserviceversions.operators.coreos.com cert-manager.v1.0.0 \
-          -n openshift-operators --subresource=status --type=merge \
-          -p '{"status":{"phase":"Succeeded"}}'
-        kubectl patch subscription cert-manager -n openshift-operators \
-          --subresource=status --type=merge \
-          -p '{"status":{"installedCSV":"cert-manager.v1.0.0","lastUpdated":"2026-01-01T00:00:00Z"}}'
-      args:
-        executable: /bin/bash
-      changed_when: false
-      async: 180
-      poll: 0
+    - name: Create a secure extra-vars file
+      ansible.builtin.tempfile:
+        state: file
+        prefix: osac-addon-extra-vars-
+        suffix: .json
+      register: addon_extra_vars_file
+      no_log: true
 
-- name: Import add-on operator installation playbook
-  ansible.builtin.import_playbook: ../../../../../playbook_osac_install_addon_operator.yml
+    - name: Write add-on operator extra vars to the secure file
+      ansible.builtin.copy:
+        content: "{{ {'osac_job_vars': osac_job_vars} | to_json }}"
+        dest: "{{ addon_extra_vars_file.path }}"
+        mode: "0600"
+      no_log: true
+
+    - name: Start add-on operator installation playbook
+      ansible.builtin.command:
+        argv:
+          - sh
+          - -c
+          - >-
+            set -e;
+            trap 'rm -f -- "$1"' EXIT;
+            uv run ansible-playbook "$2" --extra-vars "@$1"
+          - osac-addon-install
+          - "{{ addon_extra_vars_file.path }}"
+          - "{{ playbook_dir }}/../../../../../playbook_osac_install_addon_operator.yml"
+      changed_when: false
+      async: 300
+      poll: 0
+      register: addon_install_job
+      no_log: true
+
+    - name: Wait for the installation playbook to create the Subscription
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: cert-manager
+        namespace: openshift-operators
+      register: addon_operator_subscription
+      retries: 120
+      delay: 1
+      until: addon_operator_subscription.resources | length == 1
+
+    - name: Assert the playbook is waiting for installedCSV
+      ansible.builtin.async_status:
+        jid: "{{ addon_install_job.ansible_job_id }}"
+      register: addon_install_status
+      failed_when: addon_install_status.finished | bool
+      changed_when: false
+
+    - name: Create a pending CSV for the readiness fixture
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: ClusterServiceVersion
+          metadata:
+            name: cert-manager.v1.0.0
+            namespace: openshift-operators
+          spec:
+            displayName: cert-manager
+            version: 1.0.0
+
+    - name: Set the CSV pending before publishing installedCSV
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - patch
+          - clusterserviceversions.operators.coreos.com
+          - cert-manager.v1.0.0
+          - -n
+          - openshift-operators
+          - --subresource=status
+          - --type=merge
+          - -p
+          - '{"status":{"phase":"Pending"}}'
+      changed_when: false
+      no_log: true
+
+    - name: Set the Subscription installedCSV without completing the CSV
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - patch
+          - subscription
+          - cert-manager
+          - -n
+          - openshift-operators
+          - --subresource=status
+          - --type=merge
+          - -p
+          - '{"status":{"installedCSV":"cert-manager.v1.0.0","lastUpdated":"2026-01-01T00:00:00Z"}}'
+      changed_when: false
+      no_log: true
+
+    - name: Confirm the playbook remains active while the CSV is pending
+      ansible.builtin.async_status:
+        jid: "{{ addon_install_job.ansible_job_id }}"
+      register: addon_install_pending_check
+      loop: "{{ range(0, 7) | list }}"
+      loop_control:
+        label: "pending check {{ item + 1 }}"
+        pause: 1
+      failed_when: addon_install_pending_check.finished | bool
+      changed_when: false
+
+    - name: Mark the CSV succeeded
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - patch
+          - clusterserviceversions.operators.coreos.com
+          - cert-manager.v1.0.0
+          - -n
+          - openshift-operators
+          - --subresource=status
+          - --type=merge
+          - -p
+          - '{"status":{"phase":"Succeeded"}}'
+      changed_when: false
+      no_log: true
+
+    - name: Wait for the installation playbook to finish successfully
+      ansible.builtin.async_status:
+        jid: "{{ addon_install_job.ansible_job_id }}"
+      register: addon_install_status
+      until: addon_install_status.finished | bool
+      retries: 60
+      delay: 1
+      failed_when: >-
+        addon_install_status.finished | bool and (
+          (addon_install_status.rc | default(0) | int) != 0 or
+          (addon_install_status.failed | default(false) | bool)
+        )
+      changed_when: false
+
+    - name: Clean up the installation playbook async result
+      ansible.builtin.async_status:
+        jid: "{{ addon_install_job.ansible_job_id }}"
+        mode: cleanup
+      failed_when: false
+      changed_when: false
 
 - name: Add-on operator install - verify
   hosts: localhost

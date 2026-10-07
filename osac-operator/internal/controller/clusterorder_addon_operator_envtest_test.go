@@ -22,11 +22,13 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
@@ -127,6 +129,80 @@ var _ = Describe("AddOnOperatorReconciler envtest", func() {
 		Expect(stored.Status.ProvisioningJobs).To(HaveLen(1))
 		Expect(stored.Status.ClusterStorageJobs).To(HaveLen(1))
 		Expect(apimeta.FindStatusCondition(stored.Status.Conditions, osacv1alpha1.ConditionProgressing)).NotTo(BeNil())
+	})
+
+	It("retrieves the admin kubeconfig from the HostedControlPlane reference", func() {
+		const (
+			clusterNamespace = "addon-kubeconfig"
+			hcpName          = "test-hcp"
+		)
+		hcpNamespace := clusterNamespace + "-" + hcpName
+		for _, namespace := range []string{clusterNamespace, hcpNamespace} {
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+			if err := k8sClient.Create(ctx, ns); err != nil {
+				Expect(client.IgnoreAlreadyExists(err)).To(Succeed())
+			}
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, ns) })
+		}
+
+		kubeconfig := []byte("apiVersion: v1\nclusters: []\n")
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "admin-kubeconfig", Namespace: hcpNamespace},
+			Data:       map[string][]byte{"kubeconfig": kubeconfig},
+		}
+		Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, secret) })
+
+		hcp := &hypershiftv1beta1.HostedControlPlane{
+			ObjectMeta: metav1.ObjectMeta{Name: hcpName, Namespace: hcpNamespace},
+		}
+		Expect(k8sClient.Create(ctx, hcp)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, hcp) })
+		hcp.Status.KubeConfig = &hypershiftv1beta1.KubeconfigSecretRef{Name: secret.Name, Key: "kubeconfig"}
+		Expect(k8sClient.Status().Update(ctx, hcp)).To(Succeed())
+
+		order := &osacv1alpha1.ClusterOrder{
+			ObjectMeta: metav1.ObjectMeta{Name: "addon-kubeconfig-order", Namespace: "default"},
+			Status: osacv1alpha1.ClusterOrderStatus{ClusterReference: &osacv1alpha1.ClusterOrderClusterReferenceType{
+				Namespace: clusterNamespace, HostedClusterName: hcpName,
+			}},
+		}
+		reconciler := NewAddOnOperatorReconciler(k8sClient, k8sClient, "default", newAddOnOperatorProviderStub(), time.Minute)
+
+		actual, err := reconciler.getClusterKubeconfig(ctx, order)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(actual).To(Equal(kubeconfig))
+	})
+
+	It("returns no kubeconfig when the referenced Secret is missing", func() {
+		const (
+			clusterNamespace = "addon-kubeconfig-missing"
+			hcpName          = "test-hcp"
+		)
+		hcpNamespace := clusterNamespace + "-" + hcpName
+		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: hcpNamespace}}
+		Expect(k8sClient.Create(ctx, ns)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, ns) })
+
+		hcp := &hypershiftv1beta1.HostedControlPlane{
+			ObjectMeta: metav1.ObjectMeta{Name: hcpName, Namespace: hcpNamespace},
+		}
+		Expect(k8sClient.Create(ctx, hcp)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, hcp) })
+		hcp.Status.KubeConfig = &hypershiftv1beta1.KubeconfigSecretRef{Name: "missing", Key: "kubeconfig"}
+		Expect(k8sClient.Status().Update(ctx, hcp)).To(Succeed())
+
+		order := &osacv1alpha1.ClusterOrder{
+			ObjectMeta: metav1.ObjectMeta{Name: "addon-kubeconfig-missing-order", Namespace: "default"},
+			Status: osacv1alpha1.ClusterOrderStatus{ClusterReference: &osacv1alpha1.ClusterOrderClusterReferenceType{
+				Namespace: clusterNamespace, HostedClusterName: hcpName,
+			}},
+		}
+		reconciler := NewAddOnOperatorReconciler(k8sClient, k8sClient, "default", newAddOnOperatorProviderStub(), time.Minute)
+
+		actual, err := reconciler.getClusterKubeconfig(ctx, order)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(actual).To(BeNil())
 	})
 
 	It("registers the controller and reacts when a ClusterOrder transitions to Ready", func() {

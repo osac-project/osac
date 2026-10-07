@@ -8,7 +8,7 @@
 # CODEOWNERS Self-Protection
 # Protects this file from unauthorized modification
 /CODEOWNERS @osac-project/wg-infra
-/osac-ui/ @jkilzi @lsoffer @batzionb @rawagner @elay
+/osac-ui/ @LiorSoffer @batzionb @rawagner @ElayAharoni
 
 # fullsend Configuration Protection
 # Prevents pull_request_target misconfiguration and unauthorized workflow changes

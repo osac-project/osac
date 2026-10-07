@@ -92,10 +92,7 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
         return {
             "metadata": {
                 "labels": {"osac.openshift.io/baremetalinstance-uuid": name.removesuffix("-cr")},
-                "annotations": {
-                    "osac.openshift.io/tenant": "tenant1",
-                    "osac.openshift.io/owner-reference": "ClusterOrder/order-a",
-                },
+                "annotations": {"osac.openshift.io/tenant": "tenant1"},
             }
         }
 

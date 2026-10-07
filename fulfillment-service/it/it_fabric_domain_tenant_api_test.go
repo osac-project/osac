@@ -32,7 +32,6 @@ import (
 
 var _ = Describe("FabricDomain tenant API component integration", Label("networking", "multitenancy"), func() {
 	var (
-		ctx                  context.Context
 		networkClassID       string
 		networkClasses       privatev1.NetworkClassesClient
 		virtualNetworks      privatev1.VirtualNetworksClient
@@ -41,11 +40,10 @@ var _ = Describe("FabricDomain tenant API component integration", Label("network
 		createdVirtualNetIDs []string
 	)
 
-	BeforeEach(func(testCtx context.Context) {
-		ctx = testCtx
+	BeforeEach(func(setupCtx context.Context) {
 		createdDomainIDs = nil
 		createdVirtualNetIDs = nil
-		requireFabricDomainProvisioningDisabled(ctx)
+		requireFabricDomainProvisioningDisabled(setupCtx)
 
 		adminConn := tool.InternalView().AdminConn()
 		networkClasses = privatev1.NewNetworkClassesClient(adminConn)
@@ -53,7 +51,7 @@ var _ = Describe("FabricDomain tenant API component integration", Label("network
 		adminDomains = publicv1.NewFabricDomainsClient(tool.ExternalView().AdminConn())
 
 		manager := "netris"
-		response, err := networkClasses.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
+		response, err := networkClasses.Create(setupCtx, privatev1.NetworkClassesCreateRequest_builder{
 			Object: privatev1.NetworkClass_builder{
 				Metadata:      privatev1.Metadata_builder{Name: fmt.Sprintf("fd-it-%s", uuid.New()[24:])}.Build(),
 				Title:         "FabricDomain API integration NetworkClass",
@@ -99,7 +97,7 @@ var _ = Describe("FabricDomain tenant API component integration", Label("network
 		})
 	})
 
-	createVirtualNetwork := func(tenant string) string {
+	createVirtualNetwork := func(ctx context.Context, tenant string) string {
 		response, err := virtualNetworks.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 			Object: privatev1.VirtualNetwork_builder{
 				Metadata: privatev1.Metadata_builder{
@@ -119,7 +117,7 @@ var _ = Describe("FabricDomain tenant API component integration", Label("network
 		return id
 	}
 
-	createDomain := func(tenant, name, virtualNetworkID string) string {
+	createDomain := func(ctx context.Context, tenant, name, virtualNetworkID string) string {
 		response, err := adminDomains.Create(ctx, publicv1.FabricDomainsCreateRequest_builder{
 			Object: publicv1.FabricDomain_builder{
 				Metadata: publicv1.Metadata_builder{Name: name, Tenant: tenant}.Build(),
@@ -136,7 +134,7 @@ var _ = Describe("FabricDomain tenant API component integration", Label("network
 		return id
 	}
 
-	clientForTenant := func(user, tenant string) (publicv1.FabricDomainsClient, *grpc.ClientConn) {
+	clientForTenant := func(ctx context.Context, user, tenant string) (publicv1.FabricDomainsClient, *grpc.ClientConn) {
 		tokenSource, err := tool.makeKubernetesTokenSource(ctx, user, tenant)
 		Expect(err).ToNot(HaveOccurred())
 		conn, err := tool.makeGrpcConn(externalServiceAddr, tokenSource)
@@ -144,7 +142,7 @@ var _ = Describe("FabricDomain tenant API component integration", Label("network
 		return publicv1.NewFabricDomainsClient(conn), conn
 	}
 
-	It("validates type, membership, and VirtualNetwork references through the public API", func() {
+	It("validates type, membership, and VirtualNetwork references through the public API", func(ctx context.Context) {
 		for _, testCase := range []struct {
 			name       string
 			fabricType publicv1.FabricDomainType
@@ -169,15 +167,15 @@ var _ = Describe("FabricDomain tenant API component integration", Label("network
 		}
 	})
 
-	It("limits tenant reads to owned domains while allowing platform-admin CRUD", func() {
-		vnetA := createVirtualNetwork("a")
-		vnetB := createVirtualNetwork("b")
-		domainA := createDomain("a", fmt.Sprintf("fd-a-%s", uuid.New()[24:]), vnetA)
-		domainB := createDomain("b", fmt.Sprintf("fd-b-%s", uuid.New()[24:]), vnetB)
+	It("limits tenant reads to owned domains while allowing platform-admin CRUD", func(ctx context.Context) {
+		vnetA := createVirtualNetwork(ctx, "a")
+		vnetB := createVirtualNetwork(ctx, "b")
+		domainA := createDomain(ctx, "a", fmt.Sprintf("fd-a-%s", uuid.New()[24:]), vnetA)
+		domainB := createDomain(ctx, "b", fmt.Sprintf("fd-b-%s", uuid.New()[24:]), vnetB)
 
-		clientA, connA := clientForTenant("alice", "a")
+		clientA, connA := clientForTenant(ctx, "alice", "a")
 		DeferCleanup(func() { Expect(connA.Close()).To(Succeed()) })
-		clientB, connB := clientForTenant("carol", "b")
+		clientB, connB := clientForTenant(ctx, "carol", "b")
 		DeferCleanup(func() { Expect(connB.Close()).To(Succeed()) })
 
 		updateResponse, err := adminDomains.Update(ctx, publicv1.FabricDomainsUpdateRequest_builder{
@@ -227,10 +225,10 @@ var _ = Describe("FabricDomain tenant API component integration", Label("network
 		Expect(fabricDomainIDs(listB.GetItems())).To(ContainElement(domainB))
 	})
 
-	It("denies tenant users create, update, and delete", func() {
-		vnetA := createVirtualNetwork("a")
-		domainID := createDomain("a", fmt.Sprintf("fd-protected-%s", uuid.New()[24:]), vnetA)
-		clientA, connA := clientForTenant("alice", "a")
+	It("denies tenant users create, update, and delete", func(ctx context.Context) {
+		vnetA := createVirtualNetwork(ctx, "a")
+		domainID := createDomain(ctx, "a", fmt.Sprintf("fd-protected-%s", uuid.New()[24:]), vnetA)
+		clientA, connA := clientForTenant(ctx, "alice", "a")
 		DeferCleanup(func() { Expect(connA.Close()).To(Succeed()) })
 
 		created, err := clientA.Create(ctx, publicv1.FabricDomainsCreateRequest_builder{

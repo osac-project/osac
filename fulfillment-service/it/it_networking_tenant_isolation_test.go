@@ -291,7 +291,7 @@ var _ = Describe("Networking tenant isolation", func() {
 					Template: privatev1.ClusterTemplateReference_builder{Id: templateID}.Build(),
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
 						"workers": privatev1.ClusterNodeSet_builder{
-							BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: instanceTypeName}.Build(),
+							BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: instanceTypeName, Shared: true}.Build(),
 							Size:                  new(int32(1)),
 						}.Build(),
 					},

@@ -239,7 +239,7 @@ var _ = Describe("Public clusters", func() {
 					NetworkAttachment: object.GetSpec().GetNetworkAttachment(),
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"my-node-set": {
-							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName, Shared: true}.Build(),
 							Size:                  proto.Int32(4),
 						},
 					},

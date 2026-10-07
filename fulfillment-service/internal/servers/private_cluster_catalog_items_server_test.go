@@ -150,6 +150,41 @@ var _ = Describe("Private cluster catalog items server", func() {
 			Expect(err).To(MatchError(ContainSubstring("fields.node_sets.workers.baremetal_instance_type")))
 		})
 
+		It("reports the policy field when a catalog hardware reference has been deleted", func() {
+			instanceType := privatev1.BareMetalInstanceType_builder{
+				Id: "deleted-policy-type",
+				Metadata: privatev1.Metadata_builder{
+					Name: "deleted-policy-type", Tenant: auth.SharedTenant,
+					Finalizers: []string{"test-finalizer"},
+				}.Build(),
+			}.Build()
+			_, err := server.bareMetalInstanceTypesDao.Create().SetObject(instanceType).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = server.bareMetalInstanceTypesDao.Delete().SetId(instanceType.GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			item := privatev1.ClusterCatalogItem_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: testTenant}.Build(),
+				Fields: privatev1.ClusterCatalogItemFields_builder{
+					NodeSets: privatev1.ClusterNodeSetMapPolicy_builder{
+						Locked: privatev1.ClusterNodeSetMap_builder{
+							Items: map[string]*privatev1.ClusterCatalogNodeSet{
+								"workers": privatev1.ClusterCatalogNodeSet_builder{
+									Size: 2, BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{
+										Id: instanceType.GetId(), Shared: true,
+									}.Build(),
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			err = validateClusterCatalogItemNodeSetPolicy(ctx, item, server.bareMetalInstanceTypesDao)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(grpcstatus.Convert(err).Message()).To(Equal(
+				"field 'fields.node_sets.workers.baremetal_instance_type': bare metal instance type 'deleted-policy-type' has been deleted"))
+		})
+
 		It("resolves name-only shared BMIT references for a tenant-owned catalog item", func() {
 			instanceType := privatev1.BareMetalInstanceType_builder{
 				Id:       "shared-policy-type",

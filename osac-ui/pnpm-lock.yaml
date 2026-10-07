@@ -189,7 +189,7 @@ importers:
         version: 6.6.1
       '@patternfly/react-charts':
         specifier: ^8.0.0
-        version: 8.4.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(victory-area@37.3.6(react@19.2.5))(victory-axis@37.3.6(react@19.2.5))(victory-bar@37.3.6(react@19.2.5))(victory-box-plot@37.3.6(react@19.2.5))(victory-chart@37.3.6(react@19.2.5))(victory-core@37.3.6(react@19.2.5))(victory-create-container@37.3.6(react@19.2.5))(victory-cursor-container@37.3.6(react@19.2.5))(victory-group@37.3.6(react@19.2.5))(victory-legend@37.3.6(react@19.2.5))(victory-line@37.3.6(react@19.2.5))(victory-pie@37.3.6(react@19.2.5))(victory-scatter@37.3.6(react@19.2.5))(victory-stack@37.3.6(react@19.2.5))(victory-tooltip@37.3.6(react@19.2.5))(victory-voronoi-container@37.3.6(react@19.2.5))(victory-zoom-container@37.3.6(react@19.2.5))
+        version: 8.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(victory-area@37.3.6(react@19.2.5))(victory-axis@37.3.6(react@19.2.5))(victory-bar@37.3.6(react@19.2.5))(victory-box-plot@37.3.6(react@19.2.5))(victory-chart@37.3.6(react@19.2.5))(victory-core@37.3.6(react@19.2.5))(victory-create-container@37.3.6(react@19.2.5))(victory-cursor-container@37.3.6(react@19.2.5))(victory-group@37.3.6(react@19.2.5))(victory-legend@37.3.6(react@19.2.5))(victory-line@37.3.6(react@19.2.5))(victory-pie@37.3.6(react@19.2.5))(victory-scatter@37.3.6(react@19.2.5))(victory-stack@37.3.6(react@19.2.5))(victory-tooltip@37.3.6(react@19.2.5))(victory-voronoi-container@37.3.6(react@19.2.5))(victory-zoom-container@37.3.6(react@19.2.5))
       '@patternfly/react-core':
         specifier: ^6.6.1
         version: 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -835,67 +835,6 @@ packages:
   '@patternfly/patternfly@6.6.1':
     resolution: {integrity: sha512-8P9C1TmFk5y5s2/1XVjmP9JmSyDXDiNBwPZewhPizULtqlaRu+Evljx/X1HTSFrCNY0qgI1uDKy+NXiorIniyA==}
 
-  '@patternfly/react-charts@8.4.1':
-    resolution: {integrity: sha512-kqP5TFr9F/SDTp+nXfcX8gMuZIQ6Uxl55qqiWYgR2zflo0UZWnyL/d2s1fI6Bfi5IuycNdlvJJ/i8QdOsLr5mw==}
-    peerDependencies:
-      echarts: ^5.6.0 || ^6.0.0
-      react: ^17 || ^18 || ^19
-      react-dom: ^17 || ^18 || ^19
-      victory-area: ^37.3.6
-      victory-axis: ^37.3.6
-      victory-bar: ^37.3.6
-      victory-box-plot: ^37.3.6
-      victory-chart: ^37.3.6
-      victory-core: ^37.3.6
-      victory-create-container: ^37.3.6
-      victory-cursor-container: ^37.3.6
-      victory-group: ^37.3.6
-      victory-legend: ^37.3.6
-      victory-line: ^37.3.6
-      victory-pie: ^37.3.6
-      victory-scatter: ^37.3.6
-      victory-stack: ^37.3.6
-      victory-tooltip: ^37.3.6
-      victory-voronoi-container: ^37.3.6
-      victory-zoom-container: ^37.3.6
-    peerDependenciesMeta:
-      echarts:
-        optional: true
-      victory-area:
-        optional: true
-      victory-axis:
-        optional: true
-      victory-bar:
-        optional: true
-      victory-box-plot:
-        optional: true
-      victory-chart:
-        optional: true
-      victory-core:
-        optional: true
-      victory-create-container:
-        optional: true
-      victory-cursor-container:
-        optional: true
-      victory-group:
-        optional: true
-      victory-legend:
-        optional: true
-      victory-line:
-        optional: true
-      victory-pie:
-        optional: true
-      victory-scatter:
-        optional: true
-      victory-stack:
-        optional: true
-      victory-tooltip:
-        optional: true
-      victory-voronoi-container:
-        optional: true
-      victory-zoom-container:
-        optional: true
-
   '@patternfly/react-charts@8.6.1':
     resolution: {integrity: sha512-HkYmBanA3KmP/+dw3sbCGITjCif+r1EDzYcfjzLUUshllp55zBMv4UraEpV+pSwSv3fz1SfMQm7Dt5UXL0CWzA==}
     peerDependencies:
@@ -969,9 +908,6 @@ packages:
       react: ^17 || ^18 || ^19
       react-dom: ^17 || ^18 || ^19
 
-  '@patternfly/react-styles@6.4.0':
-    resolution: {integrity: sha512-EXmHA67s5sy+Wy/0uxWoUQ52jr9lsH2wV3QcgtvVc5zxpyBX89gShpqv4jfVqaowznHGDoL6fVBBrSe9BYOliQ==}
-
   '@patternfly/react-styles@6.6.1':
     resolution: {integrity: sha512-hwByXA4wSpOIBJFtrYUdkFDIqvzHRP5yzvip/NHDlG0y/kXausOh5Z4m00SbTA6t7Hzudw5eU1lf+IOPCm5C6Q==}
 
@@ -986,9 +922,6 @@ packages:
     peerDependencies:
       react: ^17 || ^18 || ^19
       react-dom: ^17 || ^18 || ^19
-
-  '@patternfly/react-tokens@6.4.0':
-    resolution: {integrity: sha512-iZthBoXSGQ/+PfGTdPFJVulaJZI3rwE+7A/whOXPGp3Jyq3k6X52pr1+5nlO6WHasbZ9FyeZGqXf4fazUZNjbw==}
 
   '@patternfly/react-tokens@6.6.1':
     resolution: {integrity: sha512-t7dDEJMnO3QkdIKyjbyKJznVYki9ONZG27Cn/9RXwaM0lDGCrgQEJXy2XoVUCdYhIdXZu+TGSEqXeNFYUyZECg==}
@@ -4108,34 +4041,6 @@ snapshots:
 
   '@patternfly/patternfly@6.6.1': {}
 
-  '@patternfly/react-charts@8.4.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(victory-area@37.3.6(react@19.2.5))(victory-axis@37.3.6(react@19.2.5))(victory-bar@37.3.6(react@19.2.5))(victory-box-plot@37.3.6(react@19.2.5))(victory-chart@37.3.6(react@19.2.5))(victory-core@37.3.6(react@19.2.5))(victory-create-container@37.3.6(react@19.2.5))(victory-cursor-container@37.3.6(react@19.2.5))(victory-group@37.3.6(react@19.2.5))(victory-legend@37.3.6(react@19.2.5))(victory-line@37.3.6(react@19.2.5))(victory-pie@37.3.6(react@19.2.5))(victory-scatter@37.3.6(react@19.2.5))(victory-stack@37.3.6(react@19.2.5))(victory-tooltip@37.3.6(react@19.2.5))(victory-voronoi-container@37.3.6(react@19.2.5))(victory-zoom-container@37.3.6(react@19.2.5))':
-    dependencies:
-      '@patternfly/react-styles': 6.4.0
-      '@patternfly/react-tokens': 6.4.0
-      hoist-non-react-statics: 3.3.2
-      lodash: 4.18.1
-      react: 19.2.5
-      react-dom: 19.2.5(react@19.2.5)
-      tslib: 2.8.1
-    optionalDependencies:
-      victory-area: 37.3.6(react@19.2.5)
-      victory-axis: 37.3.6(react@19.2.5)
-      victory-bar: 37.3.6(react@19.2.5)
-      victory-box-plot: 37.3.6(react@19.2.5)
-      victory-chart: 37.3.6(react@19.2.5)
-      victory-core: 37.3.6(react@19.2.5)
-      victory-create-container: 37.3.6(react@19.2.5)
-      victory-cursor-container: 37.3.6(react@19.2.5)
-      victory-group: 37.3.6(react@19.2.5)
-      victory-legend: 37.3.6(react@19.2.5)
-      victory-line: 37.3.6(react@19.2.5)
-      victory-pie: 37.3.6(react@19.2.5)
-      victory-scatter: 37.3.6(react@19.2.5)
-      victory-stack: 37.3.6(react@19.2.5)
-      victory-tooltip: 37.3.6(react@19.2.5)
-      victory-voronoi-container: 37.3.6(react@19.2.5)
-      victory-zoom-container: 37.3.6(react@19.2.5)
-
   '@patternfly/react-charts@8.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(victory-area@37.3.6(react@19.2.5))(victory-axis@37.3.6(react@19.2.5))(victory-bar@37.3.6(react@19.2.5))(victory-box-plot@37.3.6(react@19.2.5))(victory-chart@37.3.6(react@19.2.5))(victory-core@37.3.6(react@19.2.5))(victory-create-container@37.3.6(react@19.2.5))(victory-cursor-container@37.3.6(react@19.2.5))(victory-group@37.3.6(react@19.2.5))(victory-legend@37.3.6(react@19.2.5))(victory-line@37.3.6(react@19.2.5))(victory-pie@37.3.6(react@19.2.5))(victory-scatter@37.3.6(react@19.2.5))(victory-stack@37.3.6(react@19.2.5))(victory-tooltip@37.3.6(react@19.2.5))(victory-voronoi-container@37.3.6(react@19.2.5))(victory-zoom-container@37.3.6(react@19.2.5))':
     dependencies:
       '@patternfly/react-styles': 6.6.1
@@ -4181,8 +4086,6 @@ snapshots:
       react-dom: 19.2.5(react@19.2.5)
       tslib: 2.8.1
 
-  '@patternfly/react-styles@6.4.0': {}
-
   '@patternfly/react-styles@6.6.1': {}
 
   '@patternfly/react-table@6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
@@ -4205,8 +4108,6 @@ snapshots:
       react: 19.2.5
       react-dom: 19.2.5(react@19.2.5)
       tslib: 2.8.1
-
-  '@patternfly/react-tokens@6.4.0': {}
 
   '@patternfly/react-tokens@6.6.1': {}
 

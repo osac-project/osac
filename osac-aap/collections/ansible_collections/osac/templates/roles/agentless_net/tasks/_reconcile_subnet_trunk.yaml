@@ -82,12 +82,16 @@
   no_log: true
 
 - name: Remove only the saved VLAN membership from the declared trunk
-  ansible.builtin.include_role:
-    name: ansible_network.network_runner.switch
-    tasks_from: delete_trunk_vlan
-    apply:
-      delegate_to: "{{ _agentless_net_switch_name }}"
-      become: true
+  ansible.builtin.raw: |
+    flock /tmp/nvue.lock -c '
+      set -e
+      nv unset interface {{ _agentless_net_subnet_port }} bridge domain br_default vlan {{ _agentless_net_subnet.vlan_id | int }}
+      if nv config diff --quiet 2>/dev/null; then
+        nv config apply -y
+      fi
+    '
+  delegate_to: "{{ _agentless_net_switch_name }}"
+  become: true
   vars:
     ansible_connection: ssh
     ansible_host: "{{ hostvars[_agentless_net_switch_name].ansible_host }}"
@@ -139,12 +143,11 @@
 - name: Confirm requested VLAN membership converged on trunk {{ _agentless_net_subnet_port }}
   ansible.builtin.assert:
     that:
-      - >-
-        (_agentless_net_subnet_action == 'create'
-        and _agentless_net_target_vlan_present | bool)
-        or (_agentless_net_subnet_action == 'delete'
-        and not _agentless_net_target_vlan_present | bool)
+      - _agentless_net_target_vlan_present | bool
     fail_msg: >-
-      AgentlessNet could not verify the requested Subnet VLAN membership on a
-      configured Cumulus trunk; the saved VLAN reservation is retained.
+      AgentlessNet could not verify the saved Subnet VLAN membership on a
+      configured Cumulus trunk.
+  # During deletion, Cumulus retains membership inherited from the global VLAN
+  # until _reconcile_subnet_switch removes that global VLAN and verifies absence.
+  when: _agentless_net_subnet_action == 'create'
   no_log: true

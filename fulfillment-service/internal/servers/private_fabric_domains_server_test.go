@@ -102,6 +102,12 @@ var _ = Describe("Private fabric domains server", func() {
 		Entry("NVLink", privatev1.FabricDomainType_FABRIC_DOMAIN_TYPE_NVLINK),
 	)
 
+	It("rejects unknown fabric domain types", func() {
+		object.GetSpec().SetType(privatev1.FabricDomainType(999))
+		_, err := server.Create(ctx, privatev1.FabricDomainsCreateRequest_builder{Object: object}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+	})
+
 	It("requires servers", func() {
 		object.GetSpec().SetServers(nil)
 		_, err := server.Create(ctx, privatev1.FabricDomainsCreateRequest_builder{Object: object}.Build())

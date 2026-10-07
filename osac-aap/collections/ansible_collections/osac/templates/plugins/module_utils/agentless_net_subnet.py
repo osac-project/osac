@@ -584,6 +584,26 @@ def _validate_lease_file(contents: bytes) -> None:
             )
 
 
+def _retain_active_subnet_leases(contents: bytes, entries: list[dict[str, Any]]) -> bytes:
+    """Keep lease records only while their addresses remain in active DHCP ranges."""
+    _validate_lease_file(contents)
+    ranges = []
+    for entry in entries:
+        _validate_subnet(entry)
+        ranges.append(
+            (
+                ipaddress.IPv4Address(entry["dhcp_range_start"]),
+                ipaddress.IPv4Address(entry["dhcp_range_end"]),
+            )
+        )
+    retained = []
+    for line in contents.splitlines(keepends=True):
+        address = ipaddress.IPv4Address(line.split()[2].decode("ascii"))
+        if any(start <= address <= end for start, end in ranges):
+            retained.append(line)
+    return b"".join(retained)
+
+
 def _render_dhcp_config(
     parent: dict[str, Any], entries: list[dict[str, Any]], paths: dict[str, Path]
 ) -> bytes:
@@ -738,17 +758,22 @@ def _ensure_dhcp_service(
     if dhcp_supervisor == "supervisor":
         _ensure_private_directory(SUPERVISOR_PROGRAM_ROOT)
     lease_bytes = _ensure_lease_file(paths)
-    del lease_bytes
 
     for entry in entries:
         verify_subnet_interface(namespace, entry)
     desired_config = _render_dhcp_config(parent, entries, paths)
+    desired_leases = _retain_active_subnet_leases(lease_bytes, entries)
     candidate, _ = _validated_candidate(paths["config"], desired_config, dnsmasq)
     config_changed = _install_validated_config(
         paths["config"], candidate, desired_config
     )
+    lease_changed = (
+        _atomic_write(paths["leases"], desired_leases)
+        if desired_leases != lease_bytes
+        else False
+    )
 
-    changed = config_changed
+    changed = config_changed or lease_changed
     if dhcp_supervisor == "systemd":
         unit = f"agentless-dhcp@{parent['uid']}.service"
         unit_content = (
@@ -768,7 +793,7 @@ def _ensure_dhcp_service(
         if unit_changed:
             _run(["systemctl", "daemon-reload"])
         active = _systemd_running(unit)
-        if active and (config_changed or interface_changed or unit_changed):
+        if active and (config_changed or interface_changed or lease_changed or unit_changed):
             _run(["systemctl", "restart", unit])
             changed = True
         elif not active:
@@ -797,7 +822,7 @@ def _ensure_dhcp_service(
             _run(["supervisorctl", "-c", str(SUPERVISOR_BASE_CONFIG), "reread"])
             _run(["supervisorctl", "-c", str(SUPERVISOR_BASE_CONFIG), "update", program])
             changed = True
-        elif running and (config_changed or interface_changed):
+        elif running and (config_changed or interface_changed or lease_changed):
             _run(["supervisorctl", "-c", str(SUPERVISOR_BASE_CONFIG), "restart", program])
             changed = True
         elif not running:

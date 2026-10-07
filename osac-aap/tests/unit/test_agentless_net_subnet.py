@@ -422,6 +422,48 @@ def test_dhcp_restart_preserves_existing_valid_lease_bytes(monkeypatch, tmp_path
     assert any(command[:2] == ["systemctl", "restart"] for command in commands)
 
 
+def test_removed_subnet_leases_are_pruned_before_range_reuse(monkeypatch, tmp_path):
+    paths, _, _, namespace_links, _, service = provider_testbed(monkeypatch, tmp_path)
+    first = subnet_entry(SUBNET_A_UID, "10.20.1.0/24", 100)
+    removed = subnet_entry(SUBNET_B_UID, "10.20.2.0/24", 101)
+    replacement = subnet_entry(
+        "44444444-4444-4444-8444-444444444444", "10.20.2.0/30", 101
+    )
+    agentless_net_subnet.ensure_subnet_data_plane(
+        parent_entry(), [first, removed], "supervisor"
+    )
+    lease_path = agentless_net_subnet._state_paths(VN_UID)["leases"]
+    active_lease = b"1798765432 aa:bb:cc:dd:ee:ff 10.20.1.22 client-a *\n"
+    removed_subnet_lease = (
+        b"1798765432 4a:83:40:2c:97:ca 10.20.2.172 client-b "
+        b"01:4a:83:40:2c:97:ca\n"
+    )
+    lease_path.write_bytes(active_lease + removed_subnet_lease)
+    lease_path.chmod(0o600)
+
+    changed = agentless_net_subnet.prepare_subnet_delete_data_plane(
+        parent_entry(), removed, [first], "supervisor"
+    )
+
+    assert changed is True
+    assert lease_path.read_bytes() == active_lease
+    assert removed["vlan_interface"] not in namespace_links[NAMESPACE]
+    assert service["supervisor_restarts"] == 1
+
+    agentless_net_subnet.ensure_subnet_data_plane(
+        parent_entry(), [first, replacement], "supervisor"
+    )
+
+    assert lease_path.read_bytes() == active_lease
+    expected_range = (
+        f"dhcp-range=set:{replacement['vlan_interface']},"
+        "10.20.2.2,10.20.2.2,255.255.255.252,12h"
+    ).encode()
+    config = paths["config"].joinpath(VN_UID, "dnsmasq.conf").read_bytes()
+    assert expected_range in config
+    assert service["supervisor_restarts"] == 2
+
+
 def test_supervisor_mode_restarts_only_the_changed_vn_program(monkeypatch, tmp_path):
     paths, commands, _, _, _, service = provider_testbed(monkeypatch, tmp_path)
     first = subnet_entry(SUBNET_A_UID, "10.20.1.0/24", 100)

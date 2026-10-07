@@ -212,8 +212,14 @@ func (s *PrivateFabricDomainsServer) validateFabricDomain(ctx context.Context, o
 	if spec.GetVirtualNetwork() == "" {
 		return grpcstatus.Error(grpccodes.InvalidArgument, "virtual_network is required")
 	}
-	if spec.GetType() != privatev1.FabricDomainType_FABRIC_DOMAIN_TYPE_ETHERNET_EW {
+	switch spec.GetType() {
+	case privatev1.FabricDomainType_FABRIC_DOMAIN_TYPE_ETHERNET_EW:
+		// Ethernet east-west is the only implemented FabricDomain type.
+	case privatev1.FabricDomainType_FABRIC_DOMAIN_TYPE_INFINIBAND_EW,
+		privatev1.FabricDomainType_FABRIC_DOMAIN_TYPE_NVLINK:
 		return grpcstatus.Error(grpccodes.Unimplemented, "type not yet supported")
+	default:
+		return grpcstatus.Error(grpccodes.InvalidArgument, "unknown or unspecified FabricDomain type")
 	}
 
 	// Hold the same VN row lock as VirtualNetworks.Delete until this request transaction

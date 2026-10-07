@@ -14,9 +14,11 @@ language governing permissions and limitations under the License.
 package computeinstance
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"time"
 
@@ -2472,6 +2474,74 @@ var _ = Describe("Kubernetes validation error handling", func() {
 		Expect(computeInstance.GetStatus().GetState()).To(
 			Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED),
 		)
+	})
+
+	It("preserves existing network attachments while patching a lifecycle update", func() {
+		mockInstanceTypesClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.InstanceTypesGetResponse_builder{
+				Object: privatev1.InstanceType_builder{
+					Spec: privatev1.InstanceTypeSpec_builder{Vcpus: 4, MemoryGib: 8}.Build(),
+				}.Build(),
+			}.Build(), nil)
+
+		existingAttachments := []osacv1alpha1.ComputeNetworkAttachment{{
+			SubnetRef:         "stored-subnet-private",
+			SecurityGroupRefs: []string{"stored-security-group-private"},
+		}}
+		existingCR := &osacv1alpha1.ComputeInstance{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace:   hubNamespace,
+				Name:        "vm-existing-network",
+				Labels:      map[string]string{labels.ComputeInstanceUuid: computeInstanceID},
+				Annotations: map[string]string{"osac.openshift.io/tenant": tenantName},
+			},
+			Spec: osacv1alpha1.ComputeInstanceSpec{NetworkAttachments: existingAttachments},
+		}
+
+		var patched *osacv1alpha1.ComputeInstance
+		f, _ := newTestHarness(interceptor.Funcs{
+			Patch: func(ctx context.Context, client clnt.WithWatch, obj clnt.Object, patch clnt.Patch, opts ...clnt.PatchOption) error {
+				if instance, ok := obj.(*osacv1alpha1.ComputeInstance); ok {
+					patched = instance.DeepCopy()
+				}
+				return client.Patch(ctx, obj, patch, opts...)
+			},
+		}, existingCR)
+		var logOutput bytes.Buffer
+		f.logger = slog.New(slog.NewTextHandler(&logOutput, nil))
+
+		computeInstance := newComputeInstance()
+		restartAt := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+		computeInstance.GetSpec().SetRestartRequestedAt(timestamppb.New(restartAt))
+		Expect(f.run(ctx, computeInstance)).To(Succeed())
+
+		Expect(patched).NotTo(BeNil())
+		Expect(patched.Spec.NetworkAttachments).To(Equal(existingAttachments))
+		Expect(patched.Spec.RestartRequestedAt).NotTo(BeNil())
+		Expect(patched.Spec.RestartRequestedAt.Time).To(Equal(restartAt))
+		Expect(logOutput.String()).To(ContainSubstring("preserving stored network attachments"))
+		Expect(logOutput.String()).NotTo(ContainSubstring("stored-subnet-private"))
+		Expect(logOutput.String()).NotTo(ContainSubstring("stored-security-group-private"))
+	})
+
+	It("copies resolved network attachments into a newly created CR", func() {
+		mockInstanceTypesClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.InstanceTypesGetResponse_builder{
+				Object: privatev1.InstanceType_builder{
+					Spec: privatev1.InstanceTypeSpec_builder{Vcpus: 4, MemoryGib: 8}.Build(),
+				}.Build(),
+			}.Build(), nil)
+
+		f, fakeClient := newTestHarness(interceptor.Funcs{})
+		Expect(f.run(ctx, newComputeInstance())).To(Succeed())
+
+		created := &osacv1alpha1.ComputeInstanceList{}
+		Expect(fakeClient.List(ctx, created)).To(Succeed())
+		Expect(created.Items).To(HaveLen(1))
+		Expect(created.Items[0].Spec.NetworkAttachments).To(HaveLen(1))
+		Expect(created.Items[0].Spec.NetworkAttachments[0].SubnetRef).To(Equal("test-sn"))
 	})
 
 	It("should still return transient errors from K8s Create", func() {

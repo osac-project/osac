@@ -25,9 +25,11 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -47,6 +49,7 @@ type addOnOperatorProviderStub struct {
 	triggerError       error
 	returnEmptyJobID   bool
 	canceledJobIDs     []string
+	cancelError        error
 	statusErrors       map[string]error
 	beforeTrigger      func(string)
 }
@@ -108,7 +111,7 @@ func (p *addOnOperatorProviderStub) GetDeprovisionStatus(_ context.Context, _ cl
 
 func (p *addOnOperatorProviderStub) CancelJob(_ context.Context, jobID string) error {
 	p.canceledJobIDs = append(p.canceledJobIDs, jobID)
-	return nil
+	return p.cancelError
 }
 
 func (p *addOnOperatorProviderStub) Name() string { return "add-on-test" }
@@ -121,6 +124,28 @@ func (p *addOnOperatorProviderStub) setJobStatus(jobID string, status provisioni
 func (p *addOnOperatorProviderStub) setStatusError(jobID string, err error) {
 	p.statusErrors[jobID] = err
 }
+
+type nonCancellingAddOnOperatorProvider struct {
+	provider *addOnOperatorProviderStub
+}
+
+func (p *nonCancellingAddOnOperatorProvider) TriggerProvision(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+	return p.provider.TriggerProvision(ctx, resource)
+}
+
+func (p *nonCancellingAddOnOperatorProvider) GetProvisionStatus(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+	return p.provider.GetProvisionStatus(ctx, resource, jobID)
+}
+
+func (p *nonCancellingAddOnOperatorProvider) TriggerDeprovision(ctx context.Context, resource client.Object, jobs []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
+	return p.provider.TriggerDeprovision(ctx, resource, jobs)
+}
+
+func (p *nonCancellingAddOnOperatorProvider) GetDeprovisionStatus(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+	return p.provider.GetDeprovisionStatus(ctx, resource, jobID)
+}
+
+func (p *nonCancellingAddOnOperatorProvider) Name() string { return p.provider.Name() }
 
 var _ = Describe("AddOnOperatorReconciler", func() {
 	const namespace = "default"
@@ -419,6 +444,91 @@ var _ = Describe("AddOnOperatorReconciler", func() {
 		Expect(stored.Status.AddOnOperatorJobs[0].State).To(Equal(osacv1alpha1.JobStateCanceled))
 	})
 
+	It("keeps the deletion finalizer when job status polling fails", func() {
+		order := newOrder("delete-status-error", osacv1alpha1.ClusterOrderPhaseReady, "cert-manager")
+		order.Finalizers = []string{osacAddOnOperatorFinalizer}
+		deletionTimestamp := metav1.Now()
+		order.DeletionTimestamp = &deletionTimestamp
+		order.Status.AddOnOperatorJobs = []osacv1alpha1.AddOnOperatorJobStatus{{
+			Name: "cert-manager", JobStatus: osacv1alpha1.JobStatus{
+				JobID: "active-addon-job", State: osacv1alpha1.JobStateRunning, Timestamp: deletionTimestamp,
+			},
+		}}
+		provider.setStatusError("active-addon-job", errors.New("AAP temporarily unavailable"))
+		Expect(k8sClient.Create(ctx, order)).To(Succeed())
+
+		result, err := reconciler.reconcileDeletion(ctx, order)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(time.Minute))
+		stored := getOrder(order.Name)
+		Expect(stored.Finalizers).To(ContainElement(osacAddOnOperatorFinalizer))
+	})
+
+	It("keeps the deletion finalizer when cancellation fails", func() {
+		order := newOrder("delete-cancel-error", osacv1alpha1.ClusterOrderPhaseReady, "cert-manager")
+		order.Finalizers = []string{osacAddOnOperatorFinalizer}
+		deletionTimestamp := metav1.Now()
+		order.DeletionTimestamp = &deletionTimestamp
+		order.Status.AddOnOperatorJobs = []osacv1alpha1.AddOnOperatorJobStatus{{
+			Name: "cert-manager", JobStatus: osacv1alpha1.JobStatus{
+				JobID: "active-addon-job", State: osacv1alpha1.JobStateRunning, Timestamp: deletionTimestamp,
+			},
+		}}
+		provider.setJobStatus("active-addon-job", provisioning.ProvisionStatus{State: osacv1alpha1.JobStateRunning})
+		provider.cancelError = errors.New("AAP cancellation failed")
+		Expect(k8sClient.Create(ctx, order)).To(Succeed())
+
+		result, err := reconciler.reconcileDeletion(ctx, order)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(time.Minute))
+		stored := getOrder(order.Name)
+		Expect(stored.Finalizers).To(ContainElement(osacAddOnOperatorFinalizer))
+	})
+
+	It("waits for active jobs when the provider cannot cancel them", func() {
+		order := newOrder("delete-no-canceler", osacv1alpha1.ClusterOrderPhaseReady, "cert-manager")
+		order.Finalizers = []string{osacAddOnOperatorFinalizer}
+		deletionTimestamp := metav1.Now()
+		order.DeletionTimestamp = &deletionTimestamp
+		order.Status.AddOnOperatorJobs = []osacv1alpha1.AddOnOperatorJobStatus{{
+			Name: "cert-manager", JobStatus: osacv1alpha1.JobStatus{
+				JobID: "active-addon-job", State: osacv1alpha1.JobStateRunning, Timestamp: deletionTimestamp,
+			},
+		}}
+		provider.setJobStatus("active-addon-job", provisioning.ProvisionStatus{State: osacv1alpha1.JobStateRunning})
+		Expect(k8sClient.Create(ctx, order)).To(Succeed())
+		nonCancellingProvider := &nonCancellingAddOnOperatorProvider{provider: provider}
+		nonCancellingReconciler := NewAddOnOperatorReconciler(k8sClient, k8sClient, namespace, nonCancellingProvider, time.Minute)
+
+		result, err := nonCancellingReconciler.reconcileDeletion(ctx, order)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(time.Minute))
+		stored := getOrder(order.Name)
+		Expect(stored.Finalizers).To(ContainElement(osacAddOnOperatorFinalizer))
+		Expect(provider.canceledJobIDs).To(BeEmpty())
+	})
+
+	It("persists purged jobs as failed before completing deletion", func() {
+		order := newOrder("delete-purged-job", osacv1alpha1.ClusterOrderPhaseReady, "cert-manager")
+		order.Finalizers = []string{osacAddOnOperatorFinalizer}
+		deletionTimestamp := metav1.Now()
+		order.DeletionTimestamp = &deletionTimestamp
+		order.Status.AddOnOperatorJobs = []osacv1alpha1.AddOnOperatorJobStatus{{
+			Name: "cert-manager", JobStatus: osacv1alpha1.JobStatus{
+				JobID: "purged-addon-job", State: osacv1alpha1.JobStateRunning, Timestamp: deletionTimestamp,
+			},
+		}}
+		provider.setStatusError("purged-addon-job", &aap.NotFoundError{Resource: "job purged-addon-job"})
+		Expect(k8sClient.Create(ctx, order)).To(Succeed())
+
+		_, err := reconciler.reconcileDeletion(ctx, order)
+		Expect(err).NotTo(HaveOccurred())
+		stored := getOrder(order.Name)
+		Expect(stored.Finalizers).NotTo(ContainElement(osacAddOnOperatorFinalizer))
+		Expect(stored.Status.AddOnOperatorJobs[0].State).To(Equal(osacv1alpha1.JobStateFailed))
+		Expect(stored.Status.AddOnOperatorJobs[0].Message).To(Equal(addOnOperatorPurgedJobMessage))
+	})
+
 	It("preserves concurrent finalizers when adding the add-on finalizer", func() {
 		order := newOrder("concurrent-add-finalizer", osacv1alpha1.ClusterOrderPhaseProgressing, "cert-manager")
 		Expect(k8sClient.Create(ctx, order)).To(Succeed())
@@ -483,6 +593,93 @@ var _ = Describe("AddOnOperatorReconciler", func() {
 		Expect(conflictClient.Get(ctx, client.ObjectKeyFromObject(order), stored)).To(Succeed())
 		Expect(stored.Finalizers).To(ContainElements("osac.openshift.io/storage", feedbackFinalizer))
 		Expect(stored.Finalizers).NotTo(ContainElement(osacAddOnOperatorFinalizer))
+	})
+
+	It("retries add-on status patches after a resource version conflict", func() {
+		order := newOrder("status-conflict", osacv1alpha1.ClusterOrderPhaseReady, "cert-manager")
+		order.Status.Conditions = []metav1.Condition{{
+			Type: osacv1alpha1.ConditionProgressing, Status: metav1.ConditionFalse,
+			Reason: "Provisioned", LastTransitionTime: metav1.Now(),
+		}}
+		baseClient := fake.NewClientBuilder().
+			WithScheme(k8sClient.Scheme()).
+			WithStatusSubresource(&osacv1alpha1.ClusterOrder{}).
+			WithObjects(order).
+			Build()
+		injected := false
+		conflictClient := interceptor.NewClient(baseClient, interceptor.Funcs{
+			SubResourcePatch: func(ctx context.Context, c client.Client, subResourceName string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+				if subResourceName == "status" && !injected {
+					injected = true
+					latest := &osacv1alpha1.ClusterOrder{}
+					Expect(c.Get(ctx, client.ObjectKeyFromObject(obj), latest)).To(Succeed())
+					latest.Status.Conditions = append(latest.Status.Conditions, metav1.Condition{
+						Type: osacv1alpha1.ConditionDeleting, Status: metav1.ConditionFalse,
+						Reason: "StillActive", LastTransitionTime: metav1.Now(),
+					})
+					Expect(c.Status().Update(ctx, latest)).To(Succeed())
+					return apierrors.NewConflict(schema.GroupResource{Group: "osac.openshift.io", Resource: "clusterorders"}, latest.Name, errors.New("injected conflict"))
+				}
+				return c.SubResource(subResourceName).Patch(ctx, obj, patch, opts...)
+			},
+		})
+		reconciler := NewAddOnOperatorReconciler(conflictClient, conflictClient, namespace, provider, time.Minute)
+		computed := order.Status
+		computed.AddOnOperatorJobs = []osacv1alpha1.AddOnOperatorJobStatus{{
+			Name: "cert-manager", JobStatus: osacv1alpha1.JobStatus{
+				JobID: "addon-job-1", State: osacv1alpha1.JobStateRunning, Timestamp: metav1.Now(),
+			},
+		}}
+		computed.Conditions = append(computed.Conditions, metav1.Condition{
+			Type: string(osacv1alpha1.ClusterOrderConditionAddOnOperatorsReady), Status: metav1.ConditionFalse,
+			Reason: addOnOperatorsReadyReason, LastTransitionTime: metav1.Now(),
+		})
+
+		Expect(reconciler.patchAddOnStatusWithRetry(ctx, client.ObjectKeyFromObject(order), nil, computed)).To(Succeed())
+		stored := &osacv1alpha1.ClusterOrder{}
+		Expect(conflictClient.Get(ctx, client.ObjectKeyFromObject(order), stored)).To(Succeed())
+		Expect(stored.Status.AddOnOperatorJobs).To(HaveLen(1))
+		Expect(apimeta.FindStatusCondition(stored.Status.Conditions, string(osacv1alpha1.ClusterOrderConditionProgressing))).NotTo(BeNil())
+		Expect(apimeta.FindStatusCondition(stored.Status.Conditions, string(osacv1alpha1.ClusterOrderConditionAddOnOperatorsReady))).NotTo(BeNil())
+	})
+
+	It("retries terminal job status persistence after a resource version conflict", func() {
+		order := newOrder("terminal-status-conflict", osacv1alpha1.ClusterOrderPhaseReady, "cert-manager")
+		order.Status.AddOnOperatorJobs = []osacv1alpha1.AddOnOperatorJobStatus{{
+			Name: "cert-manager", JobStatus: osacv1alpha1.JobStatus{
+				JobID: "addon-job-1", State: osacv1alpha1.JobStateRunning, Timestamp: metav1.Now(),
+			},
+		}}
+		baseClient := fake.NewClientBuilder().
+			WithScheme(k8sClient.Scheme()).
+			WithStatusSubresource(&osacv1alpha1.ClusterOrder{}).
+			WithObjects(order).
+			Build()
+		injected := false
+		conflictClient := interceptor.NewClient(baseClient, interceptor.Funcs{
+			SubResourcePatch: func(ctx context.Context, c client.Client, subResourceName string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+				if subResourceName == "status" && !injected {
+					injected = true
+					latest := &osacv1alpha1.ClusterOrder{}
+					Expect(c.Get(ctx, client.ObjectKeyFromObject(obj), latest)).To(Succeed())
+					latest.Status.Conditions = append(latest.Status.Conditions, metav1.Condition{
+						Type: osacv1alpha1.ConditionDeleting, Status: metav1.ConditionFalse,
+						Reason: "StillActive", LastTransitionTime: metav1.Now(),
+					})
+					Expect(c.Status().Update(ctx, latest)).To(Succeed())
+					return apierrors.NewConflict(schema.GroupResource{Group: "osac.openshift.io", Resource: "clusterorders"}, latest.Name, errors.New("injected conflict"))
+				}
+				return c.SubResource(subResourceName).Patch(ctx, obj, patch, opts...)
+			},
+		})
+		reconciler := NewAddOnOperatorReconciler(conflictClient, conflictClient, namespace, provider, time.Minute)
+
+		status := provisioning.ProvisionStatus{JobID: "addon-job-1", State: osacv1alpha1.JobStateSucceeded, Message: "installed"}
+		Expect(reconciler.persistAddOnOperatorJobStatusWithRetry(ctx, client.ObjectKeyFromObject(order), "cert-manager", "addon-job-1", status)).To(Succeed())
+		stored := &osacv1alpha1.ClusterOrder{}
+		Expect(conflictClient.Get(ctx, client.ObjectKeyFromObject(order), stored)).To(Succeed())
+		Expect(stored.Status.AddOnOperatorJobs[0].State).To(Equal(osacv1alpha1.JobStateSucceeded))
+		Expect(apimeta.FindStatusCondition(stored.Status.Conditions, string(osacv1alpha1.ConditionDeleting))).NotTo(BeNil())
 	})
 
 	It("bounds add-on history while preserving the latest attempt", func() {

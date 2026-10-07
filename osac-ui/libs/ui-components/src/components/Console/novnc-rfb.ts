@@ -26,7 +26,7 @@ export type VncRfbConstructor = new (
  * mounts) resolves instantly instead of re-fetching.
  */
 export const loadVncRfbConstructor = async (): Promise<VncRfbConstructor> => {
-  const module = (await import('@novnc/novnc/lib/rfb.js')) as {
+  const module = (await import('@novnc/novnc')) as {
     default?: VncRfbConstructor | { default?: VncRfbConstructor };
   };
   const moduleDefault = module.default;

@@ -1,4 +1,4 @@
-// @osac/ui-components imports `@novnc/novnc/lib/rfb.js` dynamically, but the
+// @osac/ui-components imports `@novnc/novnc` dynamically, but the
 // package ships no types. This mirrors the same ambient declaration ui-components
 // keeps for its own compilation in
 // libs/ui-components/src/components/Console/novnc.d.ts — TypeScript ambient
@@ -6,7 +6,7 @@
 // app-frontend consumes ui-components as source (no build/types boundary), so
 // each package's own tsconfig needs its own copy rather than app-frontend
 // reaching into ui-components' internal file layout.
-declare module '@novnc/novnc/lib/rfb.js' {
+declare module '@novnc/novnc' {
   export default class RFB {
     constructor(target: HTMLElement, urlOrChannel: string | WebSocket);
 

@@ -153,12 +153,12 @@ var _ = Describe("Catalog item views", func() {
 					publicv1.BareMetalNetworkAttachment_builder{Subnet: publicv1.SubnetLocalReference_builder{Name: "bm-subnet"}.Build(), Interface: new("eno1"), Primary: new(false)}.Build(),
 				}}.Build()}.Build(),
 				AutoExternalIpAttachment: publicv1.BoolFieldPolicy_builder{Editable: publicv1.EditableBoolField_builder{}.Build()}.Build(),
-				InstanceType:             publicv1.BareMetalInstanceTypeReferenceFieldPolicy_builder{Locked: publicv1.BareMetalInstanceTypeReference_builder{Id: "bm-type-id", Shared: true}.Build()}.Build(),
+				InstanceType:             publicv1.BareMetalInstanceTypeLocalReferenceFieldPolicy_builder{Locked: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: "bm-type-id"}.Build()}.Build(),
 				DiskImage:                publicv1.DiskImageReferenceFieldPolicy_builder{Editable: publicv1.EditableDiskImageReferenceField_builder{DefaultValue: publicv1.DiskImageReference_builder{Name: "rhel", Shared: true}.Build()}.Build()}.Build(),
 			}.Build(),
 		}.Build()
 		output := printView(bareMetalView(item), false)
-		requireContains(output, "LOCKED    \"\"", "default: #cloud-config (2 lines; see get -o yaml)", "LOCKED    HALTED", "bm-subnet; interface: eno1; primary: false", "bm-type-id (shared)", "default: rhel (shared)",
+		requireContains(output, "LOCKED    \"\"", "default: #cloud-config (2 lines; see get -o yaml)", "LOCKED    HALTED", "bm-subnet; interface: eno1; primary: false", "bm-type-id", "default: rhel (shared)",
 			"Full catalog item definition: osac get baremetalinstancecatalogitem bm -o yaml")
 		Expect(output).NotTo(ContainSubstring("--tenant shared"))
 	})

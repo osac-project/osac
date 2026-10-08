@@ -142,6 +142,15 @@ message BareMetalInstanceTypeReference {
   bool shared = 4;
 }
 
+// Tenant-local reference to a BareMetalInstanceType used inside catalog item field policies.
+// Unlike BareMetalInstanceTypeReference, this carries only `id` and `name` (no cross-tenant
+// `project` or `shared` fields) because catalog items lock a concrete instance type that has
+// already been resolved to a specific scope.
+message BareMetalInstanceTypeLocalReference {
+  string id = 1;
+  string name = 2;
+}
+
 // Describes a network port in a bare metal instance type.
 //
 // Port roles: fabric (tenant data traffic), management (control plane),

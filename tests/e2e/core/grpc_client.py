@@ -635,6 +635,30 @@ class GRPCClient:
     def delete_baremetal_instance(self, *, bmi_id: str) -> None:
         self.call(service=f"{PUBLIC_API}.BareMetalInstances/Delete", data={"id": bmi_id})
 
+    def create_baremetal_instance_type(self, *, name: str, host_type_label: str, fabric_port: str) -> str:
+        response = self.call(
+            service=f"{PRIVATE_API}.BareMetalInstanceTypes/Create",
+            data={
+                "object": {
+                    "metadata": {"name": name, "tenant": "shared"},
+                    "spec": {
+                        "hardware": {
+                            "cpu": {"cores": 4, "architecture": "x86_64", "threads_per_core": 2},
+                            "memory": {"total_gb": 8},
+                            "network_ports": [
+                                {"name": fabric_port, "role": "fabric", "type": "Ethernet", "speed": "10Gbps"}
+                            ],
+                        },
+                        "host_label_selector": {"match_labels": {"osac.openshift.io/host-type": host_type_label}},
+                    },
+                }
+            },
+        )
+        return response["object"]["id"]
+
+    def delete_baremetal_instance_type(self, *, type_id: str) -> None:
+        self.call(service=f"{PRIVATE_API}.BareMetalInstanceTypes/Delete", data={"id": type_id})
+
     # BareMetalInstanceCatalogItem operations
 
     def create_baremetal_instance_catalog_item(

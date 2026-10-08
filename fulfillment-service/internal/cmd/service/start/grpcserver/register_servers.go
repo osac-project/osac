@@ -196,34 +196,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		privatev1.RegisterClustersServer(registrar, privateClustersServer)
 	}
 
-	// Create the host types server:
-	deps.Logger.InfoContext(ctx, "Creating host types server")
-	hostTypesServer, err := servers.NewHostTypesServer().
-		SetLogger(deps.Logger).
-		SetAttributionLogic(deps.PublicAttributionLogic).
-		SetTenancyLogic(deps.TenancyLogic).
-		SetMetricsRegisterer(deps.MetricsRegisterer).
-		SetServiceFlags(deps.Services).
-		Build()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create host types server: %w", err)
-	}
-	publicv1.RegisterHostTypesServer(registrar, hostTypesServer)
-
-	// Create the private host types server:
-	deps.Logger.InfoContext(ctx, "Creating private host types server")
-	privateHostTypesServer, err := servers.NewPrivateHostTypesServer().
-		SetLogger(deps.Logger).
-		SetAttributionLogic(deps.PrivateAttributionLogic).
-		SetTenancyLogic(deps.TenancyLogic).
-		SetMetricsRegisterer(deps.MetricsRegisterer).
-		SetServiceFlags(deps.Services).
-		Build()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create private host types server: %w", err)
-	}
-	privatev1.RegisterHostTypesServer(registrar, privateHostTypesServer)
-
 	// VMaaS: compute instance templates and compute instances.
 	var privateComputeInstancesServer privatev1.ComputeInstancesServer
 	if deps.Services.VMaaS {

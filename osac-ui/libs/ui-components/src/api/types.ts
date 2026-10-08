@@ -14,7 +14,6 @@ export type ApiRoute =
   | 'v1/cluster_catalog_items'
   | 'v1/cluster_templates'
   | 'v1/cluster_versions'
-  | 'v1/host_types'
   | 'v1/instance_types'
   | 'v1/disk_images'
   | 'v1/clusters'

@@ -377,10 +377,9 @@ type BareMetalInstanceSpec struct {
 	//
 	// This can't be modified after the bare metal instance is created.
 	Template *BareMetalInstanceTemplateReference `protobuf:"bytes,10,opt,name=template,proto3" json:"template,omitempty"`
-	// Reference to a BareMetalInstanceType. Optional; immutable after creation.
-	// When set, the system resolves this to the instance type's host_label_selector and maps it
-	// to the CRD's Selector.HostSelector for host selection. When omitted, host selection falls
-	// back to the catalog item's template host_type.
+	// Reference to the BareMetalInstanceType used for hardware placement.
+	// If omitted from the create request, a catalog item or template may provide it.
+	// The resolved reference is immutable after creation.
 	InstanceType *BareMetalInstanceTypeReference `protobuf:"bytes,11,opt,name=instance_type,json=instanceType,proto3" json:"instance_type,omitempty"`
 	// Reference to a DiskImage resource, selected by ID or name. The reference is immutable after creation.
 	// Catalog items can provide a default when callers omit it. The reference must resolve to an image in the instance
@@ -728,10 +727,9 @@ type BareMetalInstanceSpec_builder struct {
 	//
 	// This can't be modified after the bare metal instance is created.
 	Template *BareMetalInstanceTemplateReference
-	// Reference to a BareMetalInstanceType. Optional; immutable after creation.
-	// When set, the system resolves this to the instance type's host_label_selector and maps it
-	// to the CRD's Selector.HostSelector for host selection. When omitted, host selection falls
-	// back to the catalog item's template host_type.
+	// Reference to the BareMetalInstanceType used for hardware placement.
+	// If omitted from the create request, a catalog item or template may provide it.
+	// The resolved reference is immutable after creation.
 	InstanceType *BareMetalInstanceTypeReference
 	// Reference to a DiskImage resource, selected by ID or name. The reference is immutable after creation.
 	// Catalog items can provide a default when callers omit it. The reference must resolve to an image in the instance

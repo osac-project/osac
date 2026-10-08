@@ -313,15 +313,47 @@ var _ = Describe("Default tenancy logic", Ordered, func() {
 				Expect(err).ToNot(HaveOccurred())
 			}
 
-			// createMembership inserts a project_membership row. The database trigger automatically populates
-			// the project_membership_subjects helper table.
-			createMembership := func(ctx context.Context, id, tenantName, project, user string) {
+			// createUser inserts a user row linking a username to its ID, mirroring the real users table that
+			// DetermineVisibility uses to resolve the subject's username to the ID stored in memberships.
+			createUser := func(ctx context.Context, tenant, id, username string) {
+				tx, err := database.TxFromContext(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				dataMap := map[string]any{
+					"spec": map[string]any{
+						"username": username,
+					},
+				}
+				dataJson, err := json.Marshal(dataMap)
+				Expect(err).ToNot(HaveOccurred())
+				_, err = tx.Exec(
+					ctx,
+					`
+					insert into users (
+						id,
+						name,
+						creator,
+						tenant,
+						data
+					)
+					values (
+						$1,
+						$2,
+						'system',
+						$3,
+						$4
+					)`,
+					id, id, tenant, dataJson,
+				)
+				Expect(err).ToNot(HaveOccurred())
+			}
+
+			createMembership := func(ctx context.Context, id, tenantName, project, userID string) {
 				tx, err := database.TxFromContext(ctx)
 				Expect(err).ToNot(HaveOccurred())
 				dataMap := map[string]any{
 					"spec": map[string]any{
 						"role":  "PROJECT_MEMBERSHIP_ROLE_VIEWER",
-						"users": []string{user},
+						"users": []map[string]any{{"id": userID}},
 					},
 				}
 				dataJson, err := json.Marshal(dataMap)
@@ -380,8 +412,9 @@ var _ = Describe("Default tenancy logic", Ordered, func() {
 				createTenant(ctx, "tenant-b")
 				createProject(ctx, "tenant-a", "alpha")
 				createProject(ctx, "tenant-b", "beta")
-				createMembership(ctx, "pm-1", "tenant-a", "alpha", "my_user")
-				createMembership(ctx, "pm-2", "tenant-b", "beta", "my_user")
+				createUser(ctx, "tenant-a", "user-1", "my_user")
+				createMembership(ctx, "pm-1", "tenant-a", "alpha", "user-1")
+				createMembership(ctx, "pm-2", "tenant-b", "beta", "user-1")
 				subject := &Subject{
 					User:    "my_user",
 					Tenants: collections.NewSet("tenant-a", "tenant-b"),
@@ -397,7 +430,8 @@ var _ = Describe("Default tenancy logic", Ordered, func() {
 			It("Does not grant access to projects that have no membership", func(ctx context.Context) {
 				createTenant(ctx, "tenant-a")
 				createProject(ctx, "tenant-a", "alpha")
-				createMembership(ctx, "pm-1", "tenant-a", "alpha", "my_user")
+				createUser(ctx, "tenant-a", "user-1", "my_user")
+				createMembership(ctx, "pm-1", "tenant-a", "alpha", "user-1")
 				subject := &Subject{
 					User:    "my_user",
 					Tenants: collections.NewSet("tenant-a"),
@@ -413,7 +447,8 @@ var _ = Describe("Default tenancy logic", Ordered, func() {
 			It("Does not include memberships belonging to other users", func(ctx context.Context) {
 				createTenant(ctx, "tenant-a")
 				createProject(ctx, "tenant-a", "alpha")
-				createMembership(ctx, "pm-1", "tenant-a", "alpha", "other_user")
+				createUser(ctx, "tenant-a", "user-1", "my_user")
+				createMembership(ctx, "pm-1", "tenant-a", "alpha", "other-user-id")
 				subject := &Subject{
 					User:    "my_user",
 					Tenants: collections.NewSet("tenant-a"),
@@ -429,7 +464,8 @@ var _ = Describe("Default tenancy logic", Ordered, func() {
 				createTenant(ctx, "tenant-a")
 				createTenant(ctx, "tenant-b")
 				createProject(ctx, "tenant-a", "alpha")
-				createMembership(ctx, "pm-1", "tenant-a", "alpha", "my_user")
+				createUser(ctx, "tenant-a", "user-1", "my_user")
+				createMembership(ctx, "pm-1", "tenant-a", "alpha", "user-1")
 				subject := &Subject{
 					User:    "my_user",
 					Tenants: collections.NewSet("tenant-a", "tenant-b"),
@@ -449,7 +485,8 @@ var _ = Describe("Default tenancy logic", Ordered, func() {
 			It("Grants visibility of descendant projects", func(ctx context.Context) {
 				createTenant(ctx, "tenant-a")
 				createProject(ctx, "tenant-a", "parent")
-				createMembership(ctx, "pm-1", "tenant-a", "parent", "my_user")
+				createUser(ctx, "tenant-a", "user-1", "my_user")
+				createMembership(ctx, "pm-1", "tenant-a", "parent", "user-1")
 				subject := &Subject{
 					User:    "my_user",
 					Tenants: collections.NewSet("tenant-a"),
@@ -460,6 +497,22 @@ var _ = Describe("Default tenancy logic", Ordered, func() {
 				Expect(result.IsProjectVisible("tenant-a", "parent")).To(BeTrue())
 				Expect(result.IsProjectVisible("tenant-a", "parent.child")).To(BeTrue())
 				Expect(result.IsProjectVisible("tenant-a", "other")).To(BeFalse())
+			})
+
+			It("Falls back to the raw subject name when there is no matching user record", func(ctx context.Context) {
+				// Subjects without a stored user record (for example, service accounts) can still have
+				// memberships keyed directly by their subject name instead of a resolved user ID.
+				createTenant(ctx, "tenant-a")
+				createProject(ctx, "tenant-a", "alpha")
+				createMembership(ctx, "pm-1", "tenant-a", "alpha", "service-account")
+				subject := &Subject{
+					User:    "service-account",
+					Tenants: collections.NewSet("tenant-a"),
+				}
+				ctx = ContextWithSubject(ctx, subject)
+				result, err := logic.DetermineVisibility(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(result.IsProjectVisible("tenant-a", "alpha")).To(BeTrue())
 			})
 		})
 	})

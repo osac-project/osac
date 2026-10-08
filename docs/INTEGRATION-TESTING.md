@@ -471,6 +471,26 @@ Resize lifecycle tests expect `RestartRequired`. Multi-node live hot-plug
 coverage is tracked under
 [OSAC-5335](https://redhat.atlassian.net/browse/OSAC-5335).
 
+### CaaS CI selection boundary
+
+The full-install callers in osac and osac-test-infra select `caas/sanity` with
+`-m sanity` for PRs and merge queue. Test-infra dispatches carrying `pr-number`
+use the same policy regardless of tier labels or suite/marker overrides.
+Periodics select all of `caas` (sanity + regression) plus reference tests marked
+`requires_caas` or `reference_common`. Manual dispatches without PR context
+default to sanity and retain suite/filter/marker overrides. The reusable runner
+never adds references to sanity; an empty requested tier fails rather than
+falling back to the whole suite. Nightly/release validation already selects
+`caas` explicitly and remains unchanged.
+
+[DEV] Unit/Contract selection checks live in
+`tests/unit/test_caas_ci_suite_policy.py`. From the repository root, run
+`OSAC_TEST_INFRA_DIR=/path/to/osac-test-infra uv run pytest -n 0 tests/unit/test_caas_ci_suite_policy.py`.
+They evaluate actual caller YAML and execute path-selection Bash against
+local temporary directories. Companion-repository checks skip when the path
+is not set. These checks and pytest collection prove selection only, not
+[QE] deployed CaaS success; the live prerequisites below still apply.
+
 ### Focused CaaS natural-teardown boundary
 
 CaaS sanity retains the single-nodepool lifecycle and fast deletion feedback

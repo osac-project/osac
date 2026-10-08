@@ -33,6 +33,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
 
 FROM registry.access.redhat.com/ubi10-minimal:10.2-1790075626
 LABEL name="cloud-extensions/osac-csi-driver-rhel10"
+LABEL cpe="cpe:/a:redhat:cloud_extensions:0.1::el10"
 COPY --from=builder /opt/app-root/src/osac-csi-driver/osac-csi-driver /usr/local/bin/
 USER 1001
 ENTRYPOINT ["/usr/local/bin/osac-csi-driver"]

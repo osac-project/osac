@@ -13,6 +13,7 @@ RUN cd adapters && CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go
 
 FROM registry.access.redhat.com/ubi10-minimal:10.2-1790075626
 LABEL name="cloud-extensions/metering-m360-adapter-rhel10"
+LABEL cpe="cpe:/a:redhat:cloud_extensions:0.1::el10"
 WORKDIR /
 COPY --from=builder /opt/app-root/src/m360-adapter .
 USER 65532:65532

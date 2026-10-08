@@ -33,6 +33,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o tr
 
 FROM registry.access.redhat.com/ubi10-minimal:10.2-1790075626
 LABEL name="cloud-extensions/osac-operator-rhel10"
+LABEL cpe="cpe:/a:redhat:cloud_extensions:0.1::el10"
 COPY --from=builder /opt/app-root/src/osac-operator/manager /usr/local/bin/
 COPY --from=builder /opt/app-root/src/osac-operator/console-proxy /usr/local/bin/
 COPY --from=builder /opt/app-root/src/osac-operator/trust-admission /usr/local/bin/

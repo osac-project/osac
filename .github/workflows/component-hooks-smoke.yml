@@ -71,5 +71,11 @@ jobs:
         with:
           persist-credentials: false
       - if: steps.should-run.outputs.run
+        name: Set up Python for sandbox regression tests
+        uses: ./.github/actions/setup-python
+      - if: steps.should-run.outputs.run
         name: Run component hook smoke tests
         run: bash tools/test/component-hooks-smoke.sh
+      - if: steps.should-run.outputs.run
+        name: Run sandbox validation regression tests
+        run: uv run --no-project --with 'pyyaml>=6.0' python tools/test/agentic-ci-validation-smoke.py

@@ -22,6 +22,16 @@ Path filter skips docs / unit-test-only PRs (`!**/tests/**` and friends). `tests
 
 Details + smoke checklist: [`.github/e2e-readiness.md`](e2e-readiness.md).
 
+## Component-hooks and sandbox regression smoke tests
+
+Run `bash tools/test/component-hooks-smoke.sh` and
+`uv run --no-project --with 'pyyaml>=6.0' python tools/test/agentic-ci-validation-smoke.py`
+from the repository root when changing their inputs. The workflow stays present
+on every PR and merge-group run, including unrelated changes that skip execution.
+Its path filter uses one brace-alternation entry because `predicate-quantifier:
+every` combines separate entries with AND. Keep overlay/helper, test, and Python
+setup paths in that entry. See the [sandbox coverage boundary](../docs/INTEGRATION-TESTING.md#agentic-ci-sandbox).
+
 ## Release safety
 
 Nightly builds use provisional `sha-*` image tags while all build, unit,

@@ -407,4 +407,4 @@ integration-tests-osac-aap:
 # itself. The workflow and filter are included so edits to the CI wiring are
 # exercised too.
 component-hooks-smoke:
-  - '{.claude/settings.json,.claude/hooks/component-*.sh,.codex/hooks.json,.codex/hooks/**,tools/test/component-hooks-smoke.sh,.github/filters/ci-filters.yml,.github/workflows/component-hooks-smoke.yml}'
+  - '{.claude/settings.json,.claude/hooks/component-*.sh,.codex/hooks.json,.codex/hooks/**,tools/test/component-hooks-smoke.sh,.agentic-ci/**,tools/test/agentic-ci-validation-smoke.py,.github/actions/setup-python/**,.github/filters/ci-filters.yml,.github/workflows/component-hooks-smoke.yml}'

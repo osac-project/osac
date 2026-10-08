@@ -38,6 +38,7 @@ sandbox:
     # the workdir: both Makefile variables are `?=`.
     LOCALBIN: "/sandbox/.local/share/osac/bin"
     GOLANGCI_LINT_BIN: "/sandbox/.local/share/osac/golangci-lint"
+    OSAC_E2E_VENV: "/sandbox/.local/share/osac/e2e-venv"
 
   setup:
     - name: go-modules
@@ -70,11 +71,19 @@ sandbox:
         set -euo pipefail
         uv tool install ruff==0.15.16  # .github/actions/setup-python
         uv tool install yamllint==1.35.1  # .pre-commit-config.yaml
-        (cd fulfillment-service && uv sync --locked)
+        (cd fulfillment-service && uv sync --locked && \
+          uv run --no-sync python -c 'import sys; print(sys.executable, sys.version)')
         # python-esiclient comes from a GitHub git source (not an egress
         # preset); ansible-lint and the unit tests do not import it.
         (cd osac-aap && uv sync --locked --all-extras --group development \
-          --no-install-package python-esiclient)
+          --no-install-package python-esiclient && \
+          uv run --no-sync python -c 'import sys; print(sys.executable, sys.version)')
+    - name: e2e-deps
+      timeout: 300
+      run: |
+        set -euo pipefail
+        uv venv --python "$(command -v python3)" "$OSAC_E2E_VENV"
+        uv pip install --python "$OSAC_E2E_VENV/bin/python" -r pyproject.toml
     - name: osac-ui-deps
       timeout: 900
       run: cd osac-ui && pnpm install --frozen-lockfile
@@ -110,16 +119,25 @@ sandbox:
       run: |
         set -euo pipefail
         base=$(git merge-base origin/HEAD HEAD 2>/dev/null || git rev-parse -q --verify origin/HEAD || true)
-        changed() { [ -z "$base" ] && return 0
-          { git diff --name-only "$base" -- "$@"; git ls-files --others --exclude-standard -- "$@"; } | grep -q .; }
+        source .agentic-ci/changed.sh
         rc=0
         # The pre-commit golangci-lint hooks, without --fix.
         if changed 'fulfillment-service/*.go' 'fulfillment-service/.golangci.yml'; then
+          echo 'fulfillment-service: lint'
           (cd fulfillment-service && uv run dev.py lint go) || rc=1
+        fi
+        if changed osac-operator/api osac-operator/.golangci.yml; then
+          echo 'osac-operator/api: lint'
+          (cd osac-operator/api && golangci-lint run --config ../.golangci.yml ./...) || rc=1
         fi
         for m in osac-operator bare-metal-fulfillment-operator osac-csi-driver \
                  osac-metering/metering-service osac-metering/adapters osac-metering/schema; do
-          if changed "$m/*.go" "$m/.golangci.yml" "$m/go.mod"; then make -C "$m" lint || rc=1; fi
+          paths=("$m/*.go" "$m/.golangci.yml" "$m/go.mod")
+          case "$m" in osac-metering/*) paths+=(osac-metering/schema) ;; esac
+          if changed "${paths[@]}"; then
+            echo "$m: lint"
+            make -C "$m" lint || rc=1
+          fi
         done
         if changed 'osac-ui/proxy/*.go' 'osac-ui/proxy/.golangci.yml'; then
           (cd osac-ui/proxy && golangci-lint run) || rc=1  # osac-ui-lint.yaml
@@ -131,35 +149,56 @@ sandbox:
       run: |
         set -euo pipefail
         base=$(git merge-base origin/HEAD HEAD 2>/dev/null || git rev-parse -q --verify origin/HEAD || true)
-        changed() { [ -z "$base" ] && return 0
-          { git diff --name-only "$base" -- "$@"; git ls-files --others --exclude-standard -- "$@"; } | grep -q .; }
+        source .agentic-ci/changed.sh
         # Unit tests as in unit-tests.yml / the component Makefiles, minus the
         # packages that need envtest assets or a podman database/Kafka and
         # one spec that needs the internet (see skips).
         rc=0
         run_tests() {
           local dir=$1; shift
-          mapfile -t pkgs < <(cd "$dir" && go list -f '{{.ImportPath}} {{.Dir}}' "$@" |
+          local listing
+          echo "$dir: unit tests"
+          # Capture discovery before filtering so a failed go list cannot be
+          # hidden by process substitution or mistaken for an empty suite.
+          if ! listing=$(cd "$dir" && go list -f '{{.ImportPath}} {{.Dir}}' "$@"); then
+            echo "$dir: package discovery failed" >&2
+            rc=1
+            return
+          fi
+          mapfile -t pkgs < <(
             while read -r pkg pdir; do
               case "$pkg" in */test/integration*|*/fulfillment-service/internal/trust) continue ;; esac
               if ! grep -qE 'envtest\.|NewContainer\(' "$pdir"/*_test.go 2>/dev/null; then echo "$pkg"; fi
-            done)
+            done <<< "$listing")
+          if [ "${#pkgs[@]}" -eq 0 ]; then
+            echo "$dir: no sandbox-supported packages"
+            return
+          fi
           (cd "$dir" && go test -count=1 "${pkgs[@]}") || rc=1
         }
         everything=false
         if changed 'proto/*' 'go.work'; then everything=true; fi
-        for spec in fulfillment-service:./internal/... osac-operator:./... \
+        for spec in fulfillment-service:./internal/... osac-operator:./... osac-operator/api:./... \
                     bare-metal-fulfillment-operator:./... osac-csi-driver:./... \
                     osac-metering/metering-service:./internal/... osac-metering/adapters:./... \
                     osac-metering/schema:./... osac-ui/proxy:./...; do
           m=${spec%%:*}
           paths=("$m/*.go" "$m/go.mod" "$m/go.sum" "$m/*testdata*")
+          case "$m" in
+            fulfillment-service|osac-operator|osac-operator/api) paths+=(osac-operator/api) ;;
+            osac-metering/*) paths+=(osac-metering/schema) ;;
+          esac
           # osac-operator pkg/ and api/ have external consumers (osac-operator/AGENTS.md).
           if [ "$m" = bare-metal-fulfillment-operator ]; then
-            paths+=('osac-operator/pkg/*.go' 'osac-operator/api/*.go')
+            paths+=('osac-operator/pkg/*.go' osac-operator/api)
           fi
           if $everything || changed "${paths[@]}"; then
-            run_tests "$m" "${spec#*:}"
+            if [ "$m" = osac-operator/api ]; then
+              echo "$m: unit tests"
+              (cd "$m" && go test -count=1 ./...) || rc=1
+            else
+              run_tests "$m" "${spec#*:}"
+            fi
             if [ "$m" = fulfillment-service ]; then
               (cd fulfillment-service && go test -count=1 ./internal/trust \
                 -ginkgo.skip='load system certificates if explicitly disabled') || rc=1
@@ -173,8 +212,7 @@ sandbox:
       run: |
         set -euo pipefail
         base=$(git merge-base origin/HEAD HEAD 2>/dev/null || git rev-parse -q --verify origin/HEAD || true)
-        changed() { [ -z "$base" ] && return 0
-          { git diff --name-only "$base" -- "$@"; git ls-files --others --exclude-standard -- "$@"; } | grep -q .; }
+        source .agentic-ci/changed.sh
         # `make manifests generate helm-crds` must leave the tree unchanged
         # (helm-lint.yaml runs check-helm-crds). Run it on a snapshot of the
         # working tree so this check never rewrites the agent's files.
@@ -207,8 +245,7 @@ sandbox:
       run: |
         set -euo pipefail
         base=$(git merge-base origin/HEAD HEAD 2>/dev/null || git rev-parse -q --verify origin/HEAD || true)
-        changed() { [ -z "$base" ] && return 0
-          { git diff --name-only "$base" -- "$@"; git ls-files --others --exclude-standard -- "$@"; } | grep -q .; }
+        source .agentic-ci/changed.sh
         # Charts from the helm-lint.yaml matrix.
         for chart in osac-operator/charts/operator-crds osac-operator/charts/operator \
                      bare-metal-fulfillment-operator/charts/operator-crds \
@@ -229,8 +266,7 @@ sandbox:
       run: |
         set -euo pipefail
         base=$(git merge-base origin/HEAD HEAD 2>/dev/null || git rev-parse -q --verify origin/HEAD || true)
-        changed() { [ -z "$base" ] && return 0
-          { git diff --name-only "$base" -- "$@"; git ls-files --others --exclude-standard -- "$@"; } | grep -q .; }
+        source .agentic-ci/changed.sh
         if changed 'fulfillment-service/*.py' 'fulfillment-service/pyproject.toml'; then
           (cd fulfillment-service && ruff check)
         fi
@@ -250,8 +286,7 @@ sandbox:
       run: |
         set -euo pipefail
         base=$(git merge-base origin/HEAD HEAD 2>/dev/null || git rev-parse -q --verify origin/HEAD || true)
-        changed() { [ -z "$base" ] && return 0
-          { git diff --name-only "$base" -- "$@"; git ls-files --others --exclude-standard -- "$@"; } | grep -q .; }
+        source .agentic-ci/changed.sh
         if changed osac-aap ':!osac-aap/vendor' ':!osac-aap/charts'; then
           cd osac-aap
           # --offline: collections are vendored and galaxy is not reachable.
@@ -265,19 +300,28 @@ sandbox:
       run: |
         set -euo pipefail
         base=$(git merge-base origin/HEAD HEAD 2>/dev/null || git rev-parse -q --verify origin/HEAD || true)
-        changed() { [ -z "$base" ] && return 0
-          { git diff --name-only "$base" -- "$@"; git ls-files --others --exclude-standard -- "$@"; } | grep -q .; }
+        source .agentic-ci/changed.sh
         if changed osac-ui ':!osac-ui/proxy' ':!osac-ui/charts'; then
           cd osac-ui
-          # AGENTS.md pre-submit sequence (each is a separate CI job). Vitest
-          # runs only the tests related to the change; CI runs them all.
+          # Refresh dependencies after agent edits, then run the complete
+          # AGENTS.md pre-submit sequence, including new untracked tests.
+          pnpm install --frozen-lockfile
           pnpm run typecheck
           pnpm lint
-          if [ -n "$base" ]; then
-            (cd apps/app-frontend && pnpm exec vitest run --changed "$base")
-          else
-            pnpm test
-          fi
+          pnpm test
+        fi
+    - name: e2e-collect
+      kind: test
+      timeout: 300
+      run: |
+        set -euo pipefail
+        base=$(git merge-base origin/HEAD HEAD 2>/dev/null || git rev-parse -q --verify origin/HEAD || true)
+        source .agentic-ci/changed.sh
+        if changed tests/e2e pyproject.toml tests/__init__.py; then
+          # The agent may have changed dependencies since setup. Keep this
+          # venv and pytest's configured logs outside the downloaded workdir.
+          uv pip install --python "$OSAC_E2E_VENV/bin/python" -r pyproject.toml
+          "$OSAC_E2E_VENV/bin/python" -m pytest --collect-only -n 0 -m 'not metering' tests/e2e/
         fi
 
   skips:
@@ -293,8 +337,10 @@ sandbox:
       reason: "buf resolves deps and remote plugins from buf.build, which is not an overlay egress preset"
     - match: "make integration-tests, fulfillment-service it/, osac-aap make test, osac-installer make test"
       reason: "Need a Kind cluster, kubectl and a deployed OSAC stack"
-    - match: "tests/e2e pytest suites"
+    - match: "tests/e2e pytest execution (collection runs in e2e-collect)"
       reason: "End-to-end journeys run against a live cluster and services"
+    - match: "metering-marked tests/e2e cases during sandbox collection"
+      reason: "The collection-finish hook requires METERING_ADAPTER_URL; collect with -m 'not metering' without fabricating an endpoint"
     - match: "image-build, kind-load-image, execution-environment-build, osac-ui container build"
       reason: "No podman or docker in the sandbox"
     - match: "osac-installer helm-validate, ct lint, fulfillment-trust-render-test"

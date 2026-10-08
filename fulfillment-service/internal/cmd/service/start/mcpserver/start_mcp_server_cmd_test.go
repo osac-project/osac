@@ -225,7 +225,7 @@ func expectComputeInstanceCreateSchema(schema any) {
 		Expect(property["type"]).To(Equal("string"), name)
 	}
 
-	// OSAC-4388: the create input is not the protobuf JSON returned by get_resource.
+	// The create input is not the protobuf JSON returned by get_resource.
 	bootDisk, ok := properties["boot_disk"].(map[string]any)
 	Expect(ok).To(BeTrue())
 	Expect(bootDisk["description"]).To(ContainSubstring("size_gib"))
@@ -247,7 +247,7 @@ func expectComputeInstanceCreateSchema(schema any) {
 	Expect(ok).To(BeTrue())
 	Expect(storageTier["type"]).To(Equal("string"))
 
-	// OSAC-4388: check the advertised item shape, not only the outer array type.
+	// Check the advertised item shape, not only the outer array type.
 	attachments, ok := properties["network_attachments"].(map[string]any)
 	Expect(ok).To(BeTrue())
 	Expect(attachments["description"]).To(ContainSubstring("maximum one"))

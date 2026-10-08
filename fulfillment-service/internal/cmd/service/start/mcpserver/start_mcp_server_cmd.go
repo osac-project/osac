@@ -406,7 +406,7 @@ func toolAnnotationBool(value bool) *bool {
 }
 
 // compatibleToolSchema converts inferred multi-type schemas to anyOf branches.
-// OSAC-4388: several MCP hosts reject JSON Schema's otherwise-valid array form
+// Several MCP hosts reject JSON Schema's otherwise-valid array form
 // of type, while accepting the equivalent anyOf representation.
 func compatibleToolSchema[T any]() json.RawMessage {
 	schema, err := jsonschema.For[T](nil)

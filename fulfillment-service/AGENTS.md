@@ -92,7 +92,7 @@ deployed public Fulfillment API with each user's API token supplied by a test
 exchanger. It covers public API authorization and persistence, while unit tests
 cover token-exchange requests and chart renders cover opt-in deployment shape.
 It does not exercise a live Keycloak exchange, deployed MCP route, or TLS
-handshake; see OSAC-5842 for the real Keycloak auth contract.
+handshake.
 
 To prepare a fresh environment, recreate the dedicated `osac-dev` Kind
 cluster. Collect useful diagnostics before deleting it.

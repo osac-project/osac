@@ -362,39 +362,6 @@ var _ = Describe("AAPProvider", func() {
 			Expect(result.Message).To(Equal("Provisioning job triggered"))
 		})
 
-		It("rejects invalid operator names before launching AAP", func() {
-			for _, name := range []string{"cert_manager", "cert-"} {
-				provider = provisioning.NewAAPProvider(aapClient, "osac-install-addon-operator", "")
-				invalidContext := provisioning.WithAddOnOperatorName(ctx, name)
-
-				order := &v1alpha1.ClusterOrder{
-					ObjectMeta: metav1.ObjectMeta{Name: "test-order", Namespace: "default"},
-				}
-				_, err := provider.TriggerProvision(invalidContext, order)
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("invalid add-on operator name"))
-			}
-		})
-
-		It("accepts a single-letter operator name", func() {
-			provider = provisioning.NewAAPProvider(aapClient, "osac-install-addon-operator", "")
-			validContext := provisioning.WithAddOnOperatorName(ctx, "a")
-			aapClient.getTemplateFunc = func(_ context.Context, templateName string) (*aap.Template, error) {
-				return &aap.Template{ID: 7, Name: templateName, Type: aap.TemplateTypeJob}, nil
-			}
-			aapClient.launchJobTemplateFunc = func(_ context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
-				jobVars := req.ExtraVars["osac_job_vars"].(map[string]any)
-				Expect(jobVars).To(HaveKeyWithValue("addon_operator_name", "a"))
-				return &aap.LaunchJobTemplateResponse{JobID: 708}, nil
-			}
-
-			order := &v1alpha1.ClusterOrder{
-				ObjectMeta: metav1.ObjectMeta{Name: "test-order", Namespace: "default"},
-			}
-			result, err := provider.TriggerProvision(validContext, order)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(result.JobID).To(Equal("708"))
-		})
 	})
 
 	Describe("GetProvisionStatus", func() {

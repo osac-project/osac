@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -25,8 +24,6 @@ type AAPClient interface {
 	GetJob(ctx context.Context, jobID string) (*aap.Job, error)
 	CancelJob(ctx context.Context, jobID string) error
 }
-
-var addOnOperatorNamePattern = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // AAPProvider implements ProvisioningProvider using direct AAP REST API integration.
 //
@@ -436,9 +433,6 @@ func extractExtraVars(ctx context.Context, resource client.Object) (map[string]a
 		vars["admin_kubeconfig"] = kc
 	}
 	if name := AddOnOperatorNameFromContext(ctx); name != "" {
-		if !addOnOperatorNamePattern.MatchString(name) {
-			return nil, fmt.Errorf("invalid add-on operator name %q", name)
-		}
 		vars["addon_operator_name"] = strings.ReplaceAll(name, "-", "_")
 	}
 

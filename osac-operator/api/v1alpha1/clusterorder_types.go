@@ -46,7 +46,7 @@ type ClusterOrderSpec struct {
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=32
 	// +kubebuilder:validation:items:MinLength=1
-	// +kubebuilder:validation:items:Pattern=`^[a-z][a-z0-9-]{0,62}$`
+	// +kubebuilder:validation:items:Pattern=`^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$`
 	AddOnOperators []string `json:"addOnOperators,omitempty"`
 
 	// PullSecret contains credentials for authenticating to container image repositories.

@@ -26,7 +26,7 @@ type AAPClient interface {
 	CancelJob(ctx context.Context, jobID string) error
 }
 
-var addOnOperatorNamePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
+var addOnOperatorNamePattern = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // AAPProvider implements ProvisioningProvider using direct AAP REST API integration.
 //

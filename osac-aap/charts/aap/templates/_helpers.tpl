@@ -68,9 +68,13 @@ shared controller connection fields.
 {{- define "osac-aap.netrisConfig" -}}
 {{- $netris := .netris | default dict -}}
 {{- $creds := $netris.credentials | default dict -}}
+{{- $validateCerts := true -}}
+{{- if hasKey $netris "validateCerts" -}}
+{{- $validateCerts = $netris.validateCerts -}}
+{{- end -}}
 {{- $derived := dict
   "NETRIS_CONTROLLER_URL" ($netris.controllerUrl | default "")
-  "NETRIS_VALIDATE_CERTS" ($netris.validateCerts | default true)
+  "NETRIS_VALIDATE_CERTS" $validateCerts
   "NETRIS_USERNAME" ($creds.username | default "")
   "NETRIS_SITE_ID" ($netris.siteId | default "" | toString)
   "NETRIS_TENANT_ID" ($netris.tenantId | default "" | toString)

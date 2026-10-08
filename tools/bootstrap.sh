@@ -531,10 +531,10 @@ install_pre_commit_hooks() {
   local dir="$1" label="$2"
   [[ -f "${dir}/.pre-commit-config.yaml" && -n "$PRE_COMMIT_INSTALLER" ]] || return 0
   if [[ "$PRE_COMMIT_INSTALLER" == "rh-multi-pre-commit" ]]; then
-    if ! rh-multi-pre-commit install --path "$dir"; then
+    if ! rh-multi-pre-commit install --force --path "$dir"; then
       echo "  ${label}: failed to install hooks. Continuing."
     fi
-  elif ! (cd "$dir" && pre-commit install); then
+  elif ! (cd "$dir" && pre-commit install --force); then
     echo "  ${label}: failed to install hooks. Continuing."
   fi
 }

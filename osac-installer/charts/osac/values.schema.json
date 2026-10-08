@@ -2675,6 +2675,24 @@
           "description": "Netris controller API URL (HTTPS only).",
           "pattern": "^$|^https://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$"
         },
+        "validateCerts": {
+          "type": "boolean",
+          "default": true,
+          "description": "Validate the Netris controller TLS certificate. Keep true for production; false is intended only for controlled test profiles."
+        },
+        "caBundle": {
+          "type": "object",
+          "description": "Optional customer-created ConfigMap containing the Netris CA chain under the fixed bundle.pem key.",
+          "properties": {
+            "configMap": {
+              "type": "string",
+              "description": "Name of the customer-created ConfigMap in the AAP namespace. It must contain bundle.pem and is mounted read-only into Netris execution pods.",
+              "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+              "maxLength": 253
+            }
+          },
+          "additionalProperties": false
+        },
         "credentials": {
           "type": "object",
           "properties": {

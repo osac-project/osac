@@ -167,6 +167,7 @@ sandbox:
           fi
           mapfile -t pkgs < <(
             while read -r pkg pdir; do
+              [ -n "$pkg" ] || continue
               case "$pkg" in */test/integration*|*/fulfillment-service/internal/trust) continue ;; esac
               if ! grep -qE 'envtest\.|NewContainer\(' "$pdir"/*_test.go 2>/dev/null; then echo "$pkg"; fi
             done <<< "$listing")

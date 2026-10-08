@@ -45,7 +45,7 @@ failure = json.loads(os.environ.get("FAIL_COMMAND", "{}"))
 if failure and all(record.get(key) == value for key, value in failure.items()):
     sys.exit(17)
 if tool == "go" and sys.argv[1] == "list":
-    for name in ("unit", "envtest", "container"):
+    for name in json.loads(os.environ["GO_LIST_PACKAGES"]):
         print(f"example.test/{cwd}/internal/{name} {Path.cwd() / 'internal' / name}")
 """
 
@@ -68,6 +68,7 @@ class SandboxValidationTests(unittest.TestCase):
             "FIXTURE_REPO": str(self.repo),
             "RECORD_LOG": str(self.log),
             "OSAC_E2E_VENV": str(self.venv),
+            "GO_LIST_PACKAGES": json.dumps(["unit", "envtest", "container"]),
             "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_CONFIG_NOSYSTEM": "1",
         }
@@ -334,6 +335,14 @@ if changed "$@"; then echo yes; else echo no; fi
         for record in self.records("go"):
             if record["args"][0] == "test":
                 self.assertTrue(all("envtest" not in arg and "container" not in arg for arg in record["args"]))
+
+    def test_empty_package_discovery_does_not_run_a_blank_package(self) -> None:
+        self.write("osac-metering/schema/go.mod")
+        self.env["GO_LIST_PACKAGES"] = "[]"
+        result = self.run_step("go-test")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.count("no sandbox-supported packages"), 3)
+        self.assertTrue(all(record["args"][0] == "list" for record in self.records("go")))
 
     def test_all_callers_source_actual_helper(self) -> None:
         callers = {"go-lint", "go-test", "crd-sync", "helm-lint", "python-lint", "ansible", "osac-ui", "e2e-collect"}

@@ -1,0 +1,659 @@
+---
+# Integration test for Pure FlashBlade Realm checkout and credential validation.
+#
+# Covers select_realm.yaml and read_realm_credentials.yaml by including them
+# directly, so provision_flashblade.yaml is never reached and no FlashBlade --
+# real or mocked -- is required. Only the hub cluster is touched.
+#
+# Requires: kind cluster with the osac-system namespace.
+#
+# Realm claim state varies per case, so the Secrets are created and deleted
+# inline rather than pre-seeded from fixtures/storage/ (which setup_test_env.sh
+# applies once for the whole suite).
+#
+# WARNING: every credential value below is a PLACEHOLDER. Never insert real
+# credentials into this file.
+
+# ── Prepare: credential Secrets and one foreign Realm claim ──
+- name: "Pure Realm Checkout - Prepare"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete Secrets left behind by an earlier run
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "{{ item }}"
+        namespace: osac-system
+      loop:
+        - pure-tenant-config-pure-checkout
+        - pure-tenant-config-pure-checkout-other
+        - pure-realm-rc-a
+        - pure-realm-rc-b
+        - pure-realm-rc-incomplete
+        - pure-realm-rc-mismatch
+      failed_when: false
+
+    - name: Create Realm credential Secrets
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ item.name }}"
+            namespace: osac-system
+          stringData: "{{ item.data }}"
+      loop:
+        - name: pure-realm-rc-a
+          data:
+            realm_name: rc-realm-a
+            api_token: PLACEHOLDER_DO_NOT_USE_token-a
+            mgmt_endpoint: PLACEHOLDER_DO_NOT_USE_fb-a.example.com
+            nfs_endpoint: PLACEHOLDER_DO_NOT_USE_192.0.2.10
+        - name: pure-realm-rc-b
+          data:
+            realm_name: rc-realm-b
+            api_token: PLACEHOLDER_DO_NOT_USE_token-b
+            mgmt_endpoint: PLACEHOLDER_DO_NOT_USE_fb-b.example.com
+            nfs_endpoint: PLACEHOLDER_DO_NOT_USE_192.0.2.11
+        # Deliberately missing mgmt_endpoint and nfs_endpoint.
+        - name: pure-realm-rc-incomplete
+          data:
+            realm_name: rc-realm-incomplete
+            api_token: PLACEHOLDER_DO_NOT_USE_token-incomplete
+        # Declares a different Realm than its pool entry will.
+        - name: pure-realm-rc-mismatch
+          data:
+            realm_name: rc-realm-elsewhere
+            api_token: PLACEHOLDER_DO_NOT_USE_token-mismatch
+            mgmt_endpoint: PLACEHOLDER_DO_NOT_USE_fb-c.example.com
+            nfs_endpoint: PLACEHOLDER_DO_NOT_USE_192.0.2.12
+      loop_control:
+        label: "{{ item.name }}"
+      no_log: true
+
+    - name: Claim rc-realm-a for a different tenant
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: pure-tenant-config-pure-checkout-other
+            namespace: osac-system
+            labels:
+              osac.openshift.io/tenant: pure-checkout-other
+              osac.openshift.io/pure-realm: rc-realm-a
+              app.kubernetes.io/managed-by: osac-aap
+          stringData:
+            storage_provider_type: pure
+            realm_name: rc-realm-a
+
+# ── Case 1: no Realm pool configured (AC-1) ──
+- name: "Pure Realm Checkout - Unconfigured pool fails with the documented message"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: pure-checkout
+    pure_storage_config_namespace: osac-system
+    pure_storage_realm_pool_json: "[]"
+
+  pre_tasks:
+    # Facts persist across plays for the same host, so each case starts from a
+    # clean slate rather than inheriting the previous case's pool or selection.
+    - name: Isolate this case from facts set by earlier cases
+      ansible.builtin.meta: clear_facts
+
+  tasks:
+    - name: Select a Realm from an empty pool
+      block:
+        - name: Include select_realm with an empty pool
+          ansible.builtin.include_role:
+            name: osac.templates.pure_storage
+            tasks_from: select_realm
+
+        - name: Fail the test if an empty pool was accepted
+          ansible.builtin.fail:
+            msg: "select_realm accepted an empty PURE_REALM_POOL"
+
+      rescue:
+        - name: Assert the empty-pool message names the ConfigMap
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('No Realm configured in PURE_REALM_POOL')
+              - ansible_failed_result.msg is search('Instance Group ConfigMap')
+            fail_msg: "Unexpected failure: {{ ansible_failed_result.msg | default('') }}"
+            success_msg: "Empty pool: correct message"
+
+# ── Case 2: pool is not JSON (AC-1) ──
+- name: "Pure Realm Checkout - Malformed pool fails with a diagnosable message"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: pure-checkout
+    pure_storage_config_namespace: osac-system
+    pure_storage_realm_pool_json: "rc-realm-a,rc-realm-b"
+
+  pre_tasks:
+    # Facts persist across plays for the same host, so each case starts from a
+    # clean slate rather than inheriting the previous case's pool or selection.
+    - name: Isolate this case from facts set by earlier cases
+      ansible.builtin.meta: clear_facts
+
+  tasks:
+    - name: Select a Realm from a malformed pool
+      block:
+        - name: Include select_realm with a malformed pool
+          ansible.builtin.include_role:
+            name: osac.templates.pure_storage
+            tasks_from: select_realm
+
+        - name: Fail the test if a malformed pool was accepted
+          ansible.builtin.fail:
+            msg: "select_realm accepted a non-JSON PURE_REALM_POOL"
+
+      rescue:
+        - name: Assert the malformed-pool message shows the expected shape
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('not a valid JSON array of Realm entries')
+              - ansible_failed_result.msg is search('realm_name')
+              - ansible_failed_result.msg is search('secret_name')
+            fail_msg: "Unexpected failure: {{ ansible_failed_result.msg | default('') }}"
+            success_msg: "Malformed pool: correct message"
+
+# ── Case 3: a pool entry names no Secret (AC-1) ──
+- name: "Pure Realm Checkout - Incomplete pool entry is rejected"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: pure-checkout
+    pure_storage_config_namespace: osac-system
+    pure_storage_realm_pool_json: '[{"realm_name": "rc-realm-b"}]'
+
+  pre_tasks:
+    # Facts persist across plays for the same host, so each case starts from a
+    # clean slate rather than inheriting the previous case's pool or selection.
+    - name: Isolate this case from facts set by earlier cases
+      ansible.builtin.meta: clear_facts
+
+  tasks:
+    - name: Select a Realm from a pool with an incomplete entry
+      block:
+        - name: Include select_realm with an incomplete entry
+          ansible.builtin.include_role:
+            name: osac.templates.pure_storage
+            tasks_from: select_realm
+
+        - name: Fail the test if an incomplete entry was accepted
+          ansible.builtin.fail:
+            msg: "select_realm accepted a pool entry with no secret_name"
+
+      rescue:
+        - name: Assert the incomplete-entry message names both required keys
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('are incomplete')
+              - ansible_failed_result.msg is search('realm_name and secret_name')
+              # The offending entry must be named. A looped assert would
+              # report only "One or more items failed" here, which is what
+              # setup.yaml's rescue passes on to the operator.
+              - ansible_failed_result.msg is search('rc-realm-b')
+            fail_msg: "Unexpected failure: {{ ansible_failed_result.msg | default('') }}"
+            success_msg: "Incomplete pool entry: correct message"
+
+# ── Case 4: selection skips a Realm another tenant holds (AC-3, AC-5) ──
+- name: "Pure Realm Checkout - Selection skips a Realm claimed by another tenant"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: pure-checkout
+    pure_storage_config_namespace: osac-system
+    pure_storage_realm_pool_json: >-
+      [{"realm_name": "rc-realm-a", "secret_name": "pure-realm-rc-a"},
+       {"realm_name": "rc-realm-b", "secret_name": "pure-realm-rc-b"}]
+
+  pre_tasks:
+    # Facts persist across plays for the same host, so each case starts from a
+    # clean slate rather than inheriting the previous case's pool or selection.
+    - name: Isolate this case from facts set by earlier cases
+      ansible.builtin.meta: clear_facts
+
+  tasks:
+    - name: Select a Realm with rc-realm-a already claimed
+      ansible.builtin.include_role:
+        name: osac.templates.pure_storage
+        tasks_from: select_realm
+
+    - name: Assert the unclaimed Realm was selected as a first onboard
+      ansible.builtin.assert:
+        that:
+          - not (_pure_secret_preexisting | bool)
+          - _pure_existing_config == {}
+          - _pure_selected_realm.realm_name == 'rc-realm-b'
+          - _pure_selected_realm.secret_name == 'pure-realm-rc-b'
+        fail_msg: >-
+          Expected rc-realm-b; got
+          {{ _pure_selected_realm | default('no selection') }}
+        success_msg: "Claimed Realm skipped, rc-realm-b selected"
+
+# ── Cases 4a/4b: the pool arrives already decoded (AC-1, AC-3) ──
+#
+# Every other case hands the pool over as a literal string, which is not what
+# production does. The role default reads PURE_REALM_POOL through a
+# whole-string template, and Ansible literal-evals a templated result that
+# looks like a list -- so a correctly configured deployment reaches
+# select_realm with a list, and an unconfigured one reaches it with []. Both
+# shapes are driven here; passing the pool as a native list reproduces exactly
+# what the default yields.
+- name: "Pure Realm Checkout - A decoded pool selects a Realm"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: pure-checkout
+    pure_storage_config_namespace: osac-system
+    pure_storage_realm_pool_json:
+      - realm_name: rc-realm-a
+        secret_name: pure-realm-rc-a
+      - realm_name: rc-realm-b
+        secret_name: pure-realm-rc-b
+
+  pre_tasks:
+    # Facts persist across plays for the same host, so each case starts from a
+    # clean slate rather than inheriting the previous case's pool or selection.
+    - name: Isolate this case from facts set by earlier cases
+      ansible.builtin.meta: clear_facts
+
+  tasks:
+    - name: Select a Realm from a pool that was never a string
+      ansible.builtin.include_role:
+        name: osac.templates.pure_storage
+        tasks_from: select_realm
+
+    - name: Assert the decoded pool was used, not rejected as malformed
+      ansible.builtin.assert:
+        that:
+          - _pure_selected_realm.realm_name == 'rc-realm-b'
+          - _pure_selected_realm.secret_name == 'pure-realm-rc-b'
+        fail_msg: >-
+          Expected rc-realm-b from a decoded pool; got
+          {{ _pure_selected_realm | default('no selection') }}
+        success_msg: "Decoded pool selected rc-realm-b"
+
+- name: "Pure Realm Checkout - A decoded empty pool reports an unconfigured pool"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: pure-checkout
+    pure_storage_config_namespace: osac-system
+    pure_storage_realm_pool_json: []
+
+  pre_tasks:
+    - name: Isolate this case from facts set by earlier cases
+      ansible.builtin.meta: clear_facts
+
+  tasks:
+    - name: Select a Realm with PURE_REALM_POOL unset
+      block:
+        - name: Include select_realm with a decoded empty pool
+          ansible.builtin.include_role:
+            name: osac.templates.pure_storage
+            tasks_from: select_realm
+
+        - name: Fail the test if a decoded empty pool was accepted
+          ansible.builtin.fail:
+            msg: "select_realm accepted an empty decoded PURE_REALM_POOL"
+
+      rescue:
+        # The operator's actual mistake is an unset variable, so that is what
+        # the message has to name -- not "PURE_REALM_POOL is not valid JSON",
+        # which would send them to inspect a value they never set.
+        - name: Assert the message names the unset pool, not a parse failure
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('No Realm configured in PURE_REALM_POOL')
+            fail_msg: "Unexpected failure: {{ ansible_failed_result.msg | default('') }}"
+            success_msg: "Decoded empty pool: correct message"
+
+# ── Case 5: every Realm in the pool is claimed (AC-4) ──
+- name: "Pure Realm Checkout - Fully claimed pool fails with the documented message"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: pure-checkout
+    pure_storage_config_namespace: osac-system
+    pure_storage_realm_pool_json: >-
+      [{"realm_name": "rc-realm-a", "secret_name": "pure-realm-rc-a"}]
+
+  pre_tasks:
+    # Facts persist across plays for the same host, so each case starts from a
+    # clean slate rather than inheriting the previous case's pool or selection.
+    - name: Isolate this case from facts set by earlier cases
+      ansible.builtin.meta: clear_facts
+
+  tasks:
+    - name: Select a Realm when the only pool entry is claimed
+      block:
+        - name: Include select_realm with a fully claimed pool
+          ansible.builtin.include_role:
+            name: osac.templates.pure_storage
+            tasks_from: select_realm
+
+        - name: Fail the test if a claimed Realm was handed out
+          ansible.builtin.fail:
+            msg: >-
+              select_realm handed out
+              {{ _pure_selected_realm.realm_name | default('?') }}, which another
+              tenant holds
+
+      rescue:
+        - name: Assert the all-claimed message suggests both remedies
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('All Realms in PURE_REALM_POOL are assigned')
+              - ansible_failed_result.msg is search('Add additional Realm entries or release existing assignments')
+            fail_msg: "Unexpected failure: {{ ansible_failed_result.msg | default('') }}"
+            success_msg: "Fully claimed pool: correct message"
+
+# ── Case 6: the Realm's credential Secret does not exist (AC-6) ──
+- name: "Pure Realm Checkout - Missing credential Secret is reported"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: pure-checkout
+    pure_storage_config_namespace: osac-system
+
+  pre_tasks:
+    # Facts persist across plays for the same host, so each case starts from a
+    # clean slate rather than inheriting the previous case's pool or selection.
+    - name: Isolate this case from facts set by earlier cases
+      ansible.builtin.meta: clear_facts
+
+  tasks:
+    - name: Read credentials for a Realm with no Secret
+      block:
+        - name: Point at a Realm whose Secret was never created
+          ansible.builtin.set_fact:
+            _pure_selected_realm:
+              realm_name: rc-realm-absent
+              secret_name: pure-realm-rc-absent
+
+        - name: Include read_realm_credentials for the absent Secret
+          ansible.builtin.include_role:
+            name: osac.templates.pure_storage
+            tasks_from: read_realm_credentials
+
+        - name: Fail the test if a missing Secret was tolerated
+          ansible.builtin.fail:
+            msg: "read_realm_credentials tolerated a missing credential Secret"
+
+      rescue:
+        - name: Assert the missing-Secret message names the Secret and namespace
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('pure-realm-rc-absent')
+              - ansible_failed_result.msg is search('not found in')
+              - ansible_failed_result.msg is search('osac-system')
+            fail_msg: "Unexpected failure: {{ ansible_failed_result.msg | default('') }}"
+            success_msg: "Missing credential Secret: correct message"
+
+# ── Case 7: the credential Secret omits required fields (AC-6) ──
+- name: "Pure Realm Checkout - Missing credential fields are named"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: pure-checkout
+    pure_storage_config_namespace: osac-system
+
+  pre_tasks:
+    # Facts persist across plays for the same host, so each case starts from a
+    # clean slate rather than inheriting the previous case's pool or selection.
+    - name: Isolate this case from facts set by earlier cases
+      ansible.builtin.meta: clear_facts
+
+  tasks:
+    - name: Read an incomplete credential Secret
+      block:
+        - name: Point at the incomplete credential Secret
+          ansible.builtin.set_fact:
+            _pure_selected_realm:
+              realm_name: rc-realm-incomplete
+              secret_name: pure-realm-rc-incomplete
+
+        - name: Include read_realm_credentials for the incomplete Secret
+          ansible.builtin.include_role:
+            name: osac.templates.pure_storage
+            tasks_from: read_realm_credentials
+
+        - name: Fail the test if an incomplete Secret was tolerated
+          ansible.builtin.fail:
+            msg: "read_realm_credentials tolerated a Secret missing required fields"
+
+      rescue:
+        # The message must name the absent fields -- the whole point of
+        # collecting names before reporting is that this stays readable despite
+        # no_log on the tasks that touch the Secret body.
+        - name: Assert the message names exactly the absent fields
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('missing')
+              - ansible_failed_result.msg is search('mgmt_endpoint, nfs_endpoint')
+            fail_msg: "Unexpected failure: {{ ansible_failed_result.msg | default('') }}"
+            success_msg: "Incomplete credential Secret: absent fields named"
+
+# ── Case 8: the Secret and its pool entry disagree (AC-6) ──
+- name: "Pure Realm Checkout - realm_name drift between pool and Secret is refused"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: pure-checkout
+    pure_storage_config_namespace: osac-system
+
+  pre_tasks:
+    # Facts persist across plays for the same host, so each case starts from a
+    # clean slate rather than inheriting the previous case's pool or selection.
+    - name: Isolate this case from facts set by earlier cases
+      ansible.builtin.meta: clear_facts
+
+  tasks:
+    - name: Read a credential Secret that names a different Realm
+      block:
+        - name: Point at the mismatched credential Secret
+          ansible.builtin.set_fact:
+            _pure_selected_realm:
+              realm_name: rc-realm-mismatch
+              secret_name: pure-realm-rc-mismatch
+
+        - name: Include read_realm_credentials for the mismatched Secret
+          ansible.builtin.include_role:
+            name: osac.templates.pure_storage
+            tasks_from: read_realm_credentials
+
+        - name: Fail the test if drift was tolerated
+          ansible.builtin.fail:
+            msg: "read_realm_credentials tolerated a Secret naming a different Realm"
+
+      rescue:
+        - name: Assert the drift message names both Realms
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('declares realm_name')
+              - ansible_failed_result.msg is search('rc-realm-elsewhere')
+              - ansible_failed_result.msg is search('rc-realm-mismatch')
+            fail_msg: "Unexpected failure: {{ ansible_failed_result.msg | default('') }}"
+            success_msg: "realm_name drift: correct message"
+
+# ── Case 9: a well-formed credential Secret resolves (AC-6) ──
+- name: "Pure Realm Checkout - Valid credentials resolve to connection facts"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: pure-checkout
+    pure_storage_config_namespace: osac-system
+
+  pre_tasks:
+    # Facts persist across plays for the same host, so each case starts from a
+    # clean slate rather than inheriting the previous case's pool or selection.
+    - name: Isolate this case from facts set by earlier cases
+      ansible.builtin.meta: clear_facts
+
+  tasks:
+    - name: Point at the rc-realm-b credential Secret
+      ansible.builtin.set_fact:
+        _pure_selected_realm:
+          realm_name: rc-realm-b
+          secret_name: pure-realm-rc-b
+
+    - name: Include read_realm_credentials for a well-formed Secret
+      ansible.builtin.include_role:
+        name: osac.templates.pure_storage
+        tasks_from: read_realm_credentials
+
+    # Asserts on length, never on the token value, so a failure here cannot
+    # print the credential.
+    - name: Assert all four connection facts were decoded
+      ansible.builtin.assert:
+        that:
+          - _realm_name == 'rc-realm-b'
+          - _mgmt_endpoint == 'PLACEHOLDER_DO_NOT_USE_fb-b.example.com'
+          - _nfs_endpoint == 'PLACEHOLDER_DO_NOT_USE_192.0.2.11'
+          - _api_token | length > 0
+          - _pure_realm_secret is none
+        fail_msg: "Credential decode did not produce the expected facts"
+        success_msg: "Valid credentials: decoded, raw Secret dropped from scope"
+
+# ── Case 10: a re-onboarded tenant reuses its Realm (AC-2) ──
+- name: "Pure Realm Checkout - Re-onboarding reuses the recorded Realm"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: pure-checkout
+    pure_storage_config_namespace: osac-system
+    pure_storage_realm_pool_json: >-
+      [{"realm_name": "rc-realm-a", "secret_name": "pure-realm-rc-a"},
+       {"realm_name": "rc-realm-b", "secret_name": "pure-realm-rc-b"}]
+
+  pre_tasks:
+    # Facts persist across plays for the same host, so each case starts from a
+    # clean slate rather than inheriting the previous case's pool or selection.
+    - name: Isolate this case from facts set by earlier cases
+      ansible.builtin.meta: clear_facts
+
+  tasks:
+    - name: Record an earlier onboard onto rc-realm-b
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: pure-tenant-config-pure-checkout
+            namespace: osac-system
+            labels:
+              osac.openshift.io/tenant: pure-checkout
+              osac.openshift.io/pure-realm: rc-realm-b
+              app.kubernetes.io/managed-by: osac-aap
+          stringData:
+            storage_provider_type: pure
+            realm_name: rc-realm-b
+            nfs_server: "rc-realm-b::nfs-server"
+            nfs_policy: "rc-realm-b::export-policy"
+
+    - name: Select a Realm for the already-onboarded tenant
+      ansible.builtin.include_role:
+        name: osac.templates.pure_storage
+        tasks_from: select_realm
+
+    # The recorded Realm wins over pool order: rc-realm-a is unclaimed and
+    # listed first, so picking it would mean the tenant's existing filesystems
+    # became unreachable.
+    - name: Assert the recorded Realm is reused and its names carried forward
+      ansible.builtin.assert:
+        that:
+          - _pure_secret_preexisting | bool
+          - _pure_selected_realm.realm_name == 'rc-realm-b'
+          - _pure_selected_realm.secret_name == 'pure-realm-rc-b'
+          - _pure_existing_config.nfs_server == 'rc-realm-b::nfs-server'
+          - _pure_existing_config.nfs_policy == 'rc-realm-b::export-policy'
+        fail_msg: >-
+          Expected reuse of rc-realm-b; got
+          {{ _pure_selected_realm | default('no selection') }}
+        success_msg: "Re-onboarding reused rc-realm-b with its recorded names"
+
+# ── Case 11: the assigned Realm has been dropped from the pool (AC-2) ──
+- name: "Pure Realm Checkout - An assigned Realm missing from the pool is reported"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: pure-checkout
+    pure_storage_config_namespace: osac-system
+    pure_storage_realm_pool_json: >-
+      [{"realm_name": "rc-realm-a", "secret_name": "pure-realm-rc-a"}]
+
+  pre_tasks:
+    # Facts persist across plays for the same host, so each case starts from a
+    # clean slate rather than inheriting the previous case's pool or selection.
+    - name: Isolate this case from facts set by earlier cases
+      ansible.builtin.meta: clear_facts
+
+  tasks:
+    - name: Select a Realm after the tenant's Realm left the pool
+      block:
+        - name: Include select_realm with the assigned Realm absent
+          ansible.builtin.include_role:
+            name: osac.templates.pure_storage
+            tasks_from: select_realm
+
+        - name: Fail the test if the tenant was silently re-homed
+          ansible.builtin.fail:
+            msg: >-
+              select_realm re-homed an onboarded tenant onto
+              {{ _pure_selected_realm.realm_name | default('?') }}
+
+      rescue:
+        - name: Assert the message explains why the pool entry must come back
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('rc-realm-b')
+              - ansible_failed_result.msg is search('no longer listed in')
+              - ansible_failed_result.msg is search('Restore the Realm')
+            fail_msg: "Unexpected failure: {{ ansible_failed_result.msg | default('') }}"
+            success_msg: "Realm dropped from pool: correct message"
+
+# ── Cleanup ──
+- name: "Pure Realm Checkout - Cleanup"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete the Secrets this target created
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "{{ item }}"
+        namespace: osac-system
+      loop:
+        - pure-tenant-config-pure-checkout
+        - pure-tenant-config-pure-checkout-other
+        - pure-realm-rc-a
+        - pure-realm-rc-b
+        - pure-realm-rc-incomplete
+        - pure-realm-rc-mismatch
+      failed_when: false

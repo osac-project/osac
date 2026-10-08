@@ -1256,9 +1256,13 @@
 # ──────────────────────────────────────────────────────────────
 # Test 29: provider "pure" dispatches to osac.templates.pure_storage (OSAC-5016)
 # Expected: the dispatcher resolves the new template role by name with no
-#   dispatcher change, runs its setup placeholder, and accumulates the
-#   placeholder's storage_provider_tenant_config under the 'pure' key. A missing
-#   or misnamed role would raise a runner-level ERROR! instead (see Test 5).
+#   dispatcher change and runs its setup action. A missing or misnamed role
+#   would raise a runner-level ERROR! instead (see Test 5).
+#   Since OSAC-5017 that setup action is real: with no Realm pool configured it
+#   fails inside pure_storage rather than returning a tenant config, so
+#   resolution is proved by the role's own diagnostic reaching the caller.
+#   The populated-tenant-config contract is asserted by the pure_storage_setup
+#   integration target, which has a mock array to provision against.
 #   Kept last in the file so it runs in the second invocation and does not shift
 #   the --start-at-task boundary.
 # ──────────────────────────────────────────────────────────────
@@ -1287,26 +1291,35 @@
             # Keeps the play self-contained; run_tests.sh also passes this as an
             # extra var for every invocation of this file.
             storage_provider_csi_backends_enabled: false
+            # Pinned, not left to the role default: that default reads
+            # PURE_REALM_POOL from the environment, so a developer who exports
+            # it would get a different failure here -- or none -- and the test
+            # would stop meaning what it says.
+            pure_storage_realm_pool_json: []
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
-        - name: Verify the pure_storage placeholder ran and reported its tenant config
-          ansible.builtin.assert:
-            that:
-              - storage_provider_tenant_configs is defined
-              - "'pure' in storage_provider_tenant_configs"
-            fail_msg: >-
-              provider 'pure' did not reach osac.templates.pure_storage setup:
-              {{ storage_provider_tenant_configs | default('unset') }}
-            success_msg: "provider 'pure' resolved to osac.templates.pure_storage"
-
-      rescue:
-        - name: Fail the test with the dispatch error
+        - name: Fail the test if setup succeeded with no Realm pool
           ansible.builtin.fail:
             msg: >-
-              Dispatching provider 'pure' failed -- the dispatcher no longer
-              resolves osac.templates.pure_storage:
-              {{ ansible_failed_result.msg | default('unknown error') }}
+              pure_storage setup returned a tenant config with no Realm pool
+              configured: {{ storage_provider_tenant_configs | default('unset') }}
+
+      rescue:
+        # The message is pure_storage's own rollback report, wrapping its
+        # empty-pool diagnostic. Only that role emits it, so seeing it here is
+        # proof the dispatcher resolved and entered the role -- an unresolved
+        # role name aborts the runner before any rescue can observe it.
+        - name: Verify the failure came from inside pure_storage
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('Pure FlashBlade setup failed for tenant')
+              - ansible_failed_result.msg is search('tenant-acme')
+              - ansible_failed_result.msg is search('No Realm configured in PURE_REALM_POOL')
+            fail_msg: >-
+              Dispatching provider 'pure' did not reach osac.templates.pure_storage
+              setup: {{ ansible_failed_result.msg | default('unknown error') }}
+            success_msg: "provider 'pure' resolved to osac.templates.pure_storage"
 
 # ──────────────────────────────────────────────────────────────
 # Test 30: dispatch clears stale per-provider output facts (OSAC-5016)

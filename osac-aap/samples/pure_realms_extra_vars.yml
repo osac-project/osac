@@ -1,0 +1,38 @@
+# To run:
+# export PUREFB_API=<array-wide admin API token>
+# KUBECONFIG=/tmp/kc.yml ansible-playbook playbook_osac_provision_pure_realms.yml \
+#   -e @samples/pure_realms_extra_vars.yml
+#
+# In AAP the same two keys come from the pure-realms-config ConfigMap mounted
+# at /var/config/pure-realms/realms.yml, and PUREFB_API from the array-admin
+# Secret attached to the osac-provision-pure-realms job template.
+#
+# WARNING: the addresses below are RFC 5737 documentation ranges and the
+# domain is reserved for examples. Replace them with the real array's values
+# locally -- never commit a production VLAN, address or API token here.
+
+---
+fb_url: "192.0.2.10"
+
+realms:
+  - name: realm-01
+    # Data-plane subnet. Also the client restriction on both NFS export
+    # policies, so it is what limits who can mount the Realm's exports.
+    subnet_prefix: "192.0.2.0/24"
+    subnet_vlan: 100
+    subnet_gateway: "192.0.2.1"
+    # Data VIP. Becomes the Realm's NFS endpoint and the common name of its
+    # self-signed certificate.
+    interface_address: "192.0.2.20"
+    dns_domain: "realm-01.example.com"
+    dns_nameservers:
+      - "192.0.2.53"
+
+  - name: realm-02
+    subnet_prefix: "198.51.100.0/24"
+    subnet_vlan: 101
+    subnet_gateway: "198.51.100.1"
+    interface_address: "198.51.100.20"
+    dns_domain: "realm-02.example.com"
+    dns_nameservers:
+      - "198.51.100.53"

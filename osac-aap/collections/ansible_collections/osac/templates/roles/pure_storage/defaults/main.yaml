@@ -14,11 +14,42 @@ pure_storage_config_namespace: "{{ lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE'
 pure_storage_csi_backends_namespace: "osac-csi-backends"
 pure_storage_csi_credential_secret_name: "pure-csi-credentials"
 
-# Realm NFS server and policy names are read from the hub Secret at runtime
-# (configured during Realm setup, not defaulted here)
+# Realm pool, supplied as JSON by the Instance Group ConfigMap.
+#
+# Not decoded here, so a malformed pool fails with a diagnosable message
+# instead of a templating error wherever the variable is first referenced.
+# Note that Ansible decodes it anyway when it can: this is a whole-string
+# template, and a templated result that looks like a list or a dict gets
+# literal-evaluated. select_realm therefore accepts both shapes and only
+# parses what is still a string.
+pure_storage_realm_pool_json: "{{ lookup('env', 'PURE_REALM_POOL') | default('[]', true) }}"
+
+# Unqualified names of the NFS server and export policy that the Realm
+# provisioning playbook creates. Setup resolves them to the Realm-qualified
+# form "<realm>::<name>" and records that in the hub Secret; later actions read
+# the qualified names back from the Secret rather than rebuilding them.
+pure_storage_nfs_server_name: "nfs-server"
+pure_storage_nfs_policy_name: "export-policy"
+
+# Size requested for each tenant filesystem
+pure_storage_fs_size: "1T"
+
+# Realm checkout is a read-modify-write across the whole pool, so every tenant
+# serializes on one lock rather than one per Realm.
+pure_storage_realm_lock_name: "pure-realm-checkout-lock"
+pure_storage_realm_lock_retries: 20
+pure_storage_realm_lock_delay: 5
 
 # Default NFS version for mount options
 pure_storage_nfs_version: "nfsvers=4.1"
 
-# TLS certificate validation for FlashBlade API
+# Intended as TLS certificate validation for the FlashBlade API, but the
+# purestorage.flashblade modules expose no validation switch -- only
+# disable_warnings, which this is wired to -- and the SDK beneath them does not
+# verify certificates. So for every call this role makes, validation is off
+# regardless of what this is set to; the variable currently only controls
+# whether urllib3's warning about that is printed. Kept so the intent is
+# recorded and so the setting is already in place when the collection grows a
+# real switch. osac.service.pure_realm's equivalent does work, because those
+# calls go through ansible.builtin.uri.
 pure_storage_validate_certs: "{{ lookup('env', 'PURE_VALIDATE_CERTS') | default('true', true) | bool }}"

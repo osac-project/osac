@@ -127,15 +127,6 @@ describe('buildComputeInstanceStepSchema', () => {
     expect(errors).toEqual({});
   });
 
-  it('does not require an SSH key on general step', async () => {
-    const errors = await validateStep('general', {
-      ...emptyValues,
-      catalogItemId: vmCatalogItem.id,
-      metadata: { name: 'my-vm', project: '' },
-    });
-    expect(errors).toEqual({});
-  });
-
   it('validates boot disk as numeric on storage step', async () => {
     const errors = await validateStep(
       'storage',

@@ -13,7 +13,6 @@ interface SecretSelectionFieldProps {
   filter: string | undefined;
   isRequired?: boolean;
   isDisabled?: boolean;
-  allowEmptySelection?: boolean;
 }
 
 const SecretSelectionField = ({
@@ -22,7 +21,6 @@ const SecretSelectionField = ({
   filter,
   isRequired,
   isDisabled,
-  allowEmptySelection = false,
 }: SecretSelectionFieldProps) => {
   const { data, isLoading, error } = useListResource(Secrets, { filter });
   const { t } = useTranslation();
@@ -39,7 +37,6 @@ const SecretSelectionField = ({
         options={
           data?.items.length
             ? [
-                ...(allowEmptySelection ? [{ value: '', label: t('None') }] : []),
                 ...(data?.items || []).map((d) => ({
                   value: d.metadata?.name || '',
                   label: d.metadata?.name || '',

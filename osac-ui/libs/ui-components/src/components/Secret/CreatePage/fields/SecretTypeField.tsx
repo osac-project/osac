@@ -30,6 +30,7 @@ const SECRET_TYPES = [
   SecretType.OPAQUE,
   SecretType.KUBECONFIG,
   SecretType.PULL_SECRET,
+  SecretType.SSH_PUBLIC_KEY,
   SecretType.USER_DATA,
   SecretType.VALUE,
 ] as const;
@@ -52,6 +53,10 @@ const getSecretTypeOptions = (
   [SecretType.VALUE]: {
     title: t('Single value'),
     description: t('One string (token, password, license key)'),
+  },
+  [SecretType.SSH_PUBLIC_KEY]: {
+    title: t('SSH public key'),
+    description: t('OpenSSH public key for VM access'),
   },
   [SecretType.USER_DATA]: {
     title: t('User data'),

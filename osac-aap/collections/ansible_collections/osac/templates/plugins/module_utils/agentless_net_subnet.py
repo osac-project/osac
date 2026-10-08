@@ -701,6 +701,24 @@ def _install_validated_config(path: Path, candidate: Path, content: bytes) -> bo
     return True
 
 
+def _managed_file_matches(
+    path: Path, content: bytes, *, mode: int | None = None
+) -> bool:
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        raise SubnetProviderError("could not inspect AgentlessNet DHCP file") from error
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+        raise SubnetProviderError("AgentlessNet DHCP file has unsafe type or owner")
+    try:
+        current = path.read_bytes()
+    except OSError as error:
+        raise SubnetProviderError("could not read AgentlessNet DHCP file") from error
+    return current == content and (mode is None or stat.S_IMODE(info.st_mode) == mode)
+
+
 def _service_socket_present(namespace: str, ip: str) -> bool:
     ss = _binary("ss")
     result = _run([ip, "netns", "exec", namespace, ss, "-H", "-lun"])
@@ -731,6 +749,17 @@ def _wait_for_supervisor_running(program: str) -> bool:
         time.sleep(min(SUPERVISOR_POLL_INTERVAL_SECONDS, remaining))
 
 
+def _stop_dhcp_service(supervisor: str, service_name: str) -> None:
+    if supervisor == "systemd":
+        _run(["systemctl", "stop", service_name])
+        if _systemd_running(service_name):
+            raise SubnetProviderError("AgentlessNet DHCP systemd unit did not stop")
+        return
+    _run(["supervisorctl", "-c", str(SUPERVISOR_BASE_CONFIG), "stop", service_name])
+    if _supervisor_running(service_name):
+        raise SubnetProviderError("AgentlessNet DHCP Supervisor program did not stop")
+
+
 def _ensure_dhcp_service(
     parent: dict[str, Any],
     entries: list[dict[str, Any]],
@@ -757,23 +786,18 @@ def _ensure_dhcp_service(
     _ensure_private_directory(AGENTLESS_NET_RUNTIME_ROOT)
     if dhcp_supervisor == "supervisor":
         _ensure_private_directory(SUPERVISOR_PROGRAM_ROOT)
-    lease_bytes = _ensure_lease_file(paths)
 
     for entry in entries:
         verify_subnet_interface(namespace, entry)
     desired_config = _render_dhcp_config(parent, entries, paths)
-    desired_leases = _retain_active_subnet_leases(lease_bytes, entries)
-    candidate, _ = _validated_candidate(paths["config"], desired_config, dnsmasq)
-    config_changed = _install_validated_config(
-        paths["config"], candidate, desired_config
-    )
-    lease_changed = (
-        _atomic_write(paths["leases"], desired_leases)
-        if desired_leases != lease_bytes
-        else False
-    )
+    config_unchanged = _managed_file_matches(paths["config"], desired_config)
+    lease_file_exists = _path_present(paths["leases"])
+    marker_exists = _path_present(paths["marker"])
+    if marker_exists and not lease_file_exists:
+        raise SubnetProviderError(
+            "initialized AgentlessNet DHCP lease file is missing; restore it before retrying"
+        )
 
-    changed = config_changed or lease_changed
     if dhcp_supervisor == "systemd":
         unit = f"agentless-dhcp@{parent['uid']}.service"
         unit_content = (
@@ -788,19 +812,10 @@ def _ensure_dhcp_service(
             "[Install]\n"
             "WantedBy=multi-user.target\n"
         ).encode("ascii")
-        unit_changed = _atomic_write(paths["systemd_unit"], unit_content)
-        changed = changed or unit_changed
-        if unit_changed:
-            _run(["systemctl", "daemon-reload"])
         active = _systemd_running(unit)
-        if active and (config_changed or interface_changed or lease_changed or unit_changed):
-            _run(["systemctl", "restart", unit])
-            changed = True
-        elif not active:
-            _run(["systemctl", "enable", "--now", unit])
-            changed = True
-        if not _systemd_running(unit):
-            raise SubnetProviderError("AgentlessNet DHCP systemd unit is not active")
+        service_file_unchanged = _managed_file_matches(
+            paths["systemd_unit"], unit_content, mode=0o600
+        )
     elif dhcp_supervisor == "supervisor":
         program = f"agentless-dhcp-{parent['uid']}"
         program_content = (
@@ -815,27 +830,81 @@ def _ensure_dhcp_service(
             f"stdout_logfile={paths['log']}\n"
             "stdout_logfile_maxbytes=0\n"
         ).encode("ascii")
-        program_changed = _atomic_write(paths["supervisor_program"], program_content)
-        changed = changed or program_changed
-        running = _supervisor_running(program)
-        if program_changed:
-            _run(["supervisorctl", "-c", str(SUPERVISOR_BASE_CONFIG), "reread"])
-            _run(["supervisorctl", "-c", str(SUPERVISOR_BASE_CONFIG), "update", program])
-            changed = True
-        elif running and (config_changed or interface_changed or lease_changed):
-            _run(["supervisorctl", "-c", str(SUPERVISOR_BASE_CONFIG), "restart", program])
-            changed = True
-        elif not running:
-            _run(["supervisorctl", "-c", str(SUPERVISOR_BASE_CONFIG), "start", program])
-            changed = True
-        if not _wait_for_supervisor_running(program):
-            raise SubnetProviderError("AgentlessNet DHCP Supervisor program is not running")
+        active = _supervisor_running(program)
+        service_file_unchanged = _managed_file_matches(
+            paths["supervisor_program"], program_content, mode=0o600
+        )
     else:
         raise SubnetProviderError("AgentlessNet DHCP supervisor must be systemd or supervisor")
 
-    if not _service_socket_present(namespace, ip):
-        raise SubnetProviderError("AgentlessNet DHCP UDP socket is absent from the VirtualNetwork namespace")
-    return changed
+    candidate, _ = _validated_candidate(paths["config"], desired_config, dnsmasq)
+    if (
+        active
+        and config_unchanged
+        and service_file_unchanged
+        and not interface_changed
+        and lease_file_exists
+    ):
+        _install_validated_config(paths["config"], candidate, desired_config)
+        _ensure_lease_file(paths)
+        if not _service_socket_present(namespace, ip):
+            raise SubnetProviderError(
+                "AgentlessNet DHCP UDP socket is absent from the VirtualNetwork namespace"
+            )
+        return False
+
+    try:
+        if active:
+            service_name = unit if dhcp_supervisor == "systemd" else program
+            _stop_dhcp_service(dhcp_supervisor, service_name)
+
+        # dnsmasq keeps this file open while it runs. Read and replace it only
+        # after stopping that process, so its final lease flush cannot land on
+        # an old inode after stale leases have been pruned.
+        lease_bytes = _ensure_lease_file(paths)
+        desired_leases = _retain_active_subnet_leases(lease_bytes, entries)
+        config_changed = _install_validated_config(
+            paths["config"], candidate, desired_config
+        )
+        lease_changed = (
+            _atomic_write(paths["leases"], desired_leases)
+            if desired_leases != lease_bytes
+            else False
+        )
+
+        changed = config_changed or lease_changed or interface_changed
+        if dhcp_supervisor == "systemd":
+            unit_changed = _atomic_write(paths["systemd_unit"], unit_content)
+            changed = changed or unit_changed
+            if unit_changed:
+                _run(["systemctl", "daemon-reload"])
+            if active:
+                _run(["systemctl", "start", unit])
+            else:
+                _run(["systemctl", "enable", "--now", unit])
+            changed = True
+            if not _systemd_running(unit):
+                raise SubnetProviderError("AgentlessNet DHCP systemd unit is not active")
+        else:
+            program_changed = _atomic_write(paths["supervisor_program"], program_content)
+            changed = changed or program_changed
+            if program_changed:
+                _run(["supervisorctl", "-c", str(SUPERVISOR_BASE_CONFIG), "reread"])
+                _run(["supervisorctl", "-c", str(SUPERVISOR_BASE_CONFIG), "update", program])
+            else:
+                _run(["supervisorctl", "-c", str(SUPERVISOR_BASE_CONFIG), "start", program])
+            changed = True
+            if not _wait_for_supervisor_running(program):
+                raise SubnetProviderError("AgentlessNet DHCP Supervisor program is not running")
+
+        if not _service_socket_present(namespace, ip):
+            raise SubnetProviderError(
+                "AgentlessNet DHCP UDP socket is absent from the VirtualNetwork namespace"
+            )
+        return changed
+    except Exception:
+        candidate.unlink(missing_ok=True)
+        raise
 
 
 def _unlink_owned(path: Path) -> bool:

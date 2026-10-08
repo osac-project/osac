@@ -1,6 +1,7 @@
 import hashlib
 import ipaddress
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -191,14 +192,26 @@ def provider_testbed(monkeypatch, tmp_path, *, reject_dnsmasq=False):
     service = {
         "active": False,
         "restarts": 0,
+        "starts": 0,
+        "stops": 0,
+        "systemd_restart_pending": False,
         "supervisor_running": False,
         "supervisor_restarts": 0,
+        "supervisor_starts": 0,
+        "supervisor_stops": 0,
+        "supervisor_restart_pending": False,
         "supervisor_starting_statuses": 0,
         "supervisor_stuck_starting": False,
+        "on_stop": None,
     }
 
     def completed(command, *, stdout="", returncode=0, stderr=""):
         return subprocess.CompletedProcess(command, returncode, stdout, stderr)
+
+    def flush_dnsmasq_lease_stream():
+        callback = service.pop("on_stop", None)
+        if callback is not None:
+            callback()
 
     def fake_run(command, check=True):
         command = list(command)
@@ -213,12 +226,23 @@ def provider_testbed(monkeypatch, tmp_path, *, reject_dnsmasq=False):
             if command[1:3] == ["is-active", "--quiet"]:
                 return completed(command, returncode=0 if service["active"] else 3)
             if command[1:3] == ["enable", "--now"]:
+                service["starts"] += 1
                 service["active"] = True
             elif command[1] == "restart":
+                flush_dnsmasq_lease_stream()
                 service["restarts"] += 1
                 service["active"] = True
             elif command[1] == "stop":
+                service["stops"] += 1
+                service["systemd_restart_pending"] = service["active"]
+                flush_dnsmasq_lease_stream()
                 service["active"] = False
+            elif command[1] == "start":
+                service["starts"] += 1
+                if service["systemd_restart_pending"]:
+                    service["restarts"] += 1
+                    service["systemd_restart_pending"] = False
+                service["active"] = True
             return completed(command)
         if Path(command[0]).name == "supervisorctl":
             assert command[1:3] == ["-c", str(agentless_net_subnet.SUPERVISOR_BASE_CONFIG)]
@@ -233,16 +257,27 @@ def provider_testbed(monkeypatch, tmp_path, *, reject_dnsmasq=False):
                     return completed(command, stdout=f"{command[4]} RUNNING pid 123\n")
                 return completed(command, returncode=1)
             if action == "start":
+                service["supervisor_starts"] += 1
+                if service["supervisor_restart_pending"]:
+                    service["supervisor_restarts"] += 1
+                    service["supervisor_restart_pending"] = False
                 service["supervisor_running"] = True
             elif action == "restart":
+                flush_dnsmasq_lease_stream()
                 service["supervisor_restarts"] += 1
                 service["supervisor_running"] = True
             elif action == "stop":
+                service["supervisor_stops"] += 1
+                service["supervisor_restart_pending"] = service["supervisor_running"]
+                flush_dnsmasq_lease_stream()
                 service["supervisor_running"] = False
             elif action == "update":
                 assert len(command) == 5
                 program_file = paths["supervisor"] / f"{command[4].removeprefix('agentless-dhcp-')}.ini"
                 service["supervisor_running"] = program_file.exists()
+                if service["supervisor_running"] and service["supervisor_restart_pending"]:
+                    service["supervisor_restarts"] += 1
+                    service["supervisor_restart_pending"] = False
             return completed(command)
 
         namespace = None
@@ -419,7 +454,90 @@ def test_dhcp_restart_preserves_existing_valid_lease_bytes(monkeypatch, tmp_path
     assert state_paths["leases"].read_bytes() == original_leases
     assert b"10.20.2.2,10.20.2.254" in state_paths["config"].read_bytes()
     assert paths["units"].joinpath(f"agentless-dhcp@{VN_UID}.service").exists()
-    assert any(command[:2] == ["systemctl", "restart"] for command in commands)
+    lifecycle = [
+        command[1]
+        for command in commands
+        if Path(command[0]).name == "systemctl"
+        and command[1] in {"stop", "start", "restart"}
+    ]
+    assert lifecycle == ["stop", "start"]
+
+
+@pytest.mark.parametrize("dhcp_supervisor", ["systemd", "supervisor"])
+def test_dhcp_prune_stops_dnsmasq_before_reading_and_replacing_open_lease_file(
+    monkeypatch, tmp_path, dhcp_supervisor
+):
+    _, _, _, _, _, service = provider_testbed(monkeypatch, tmp_path)
+    first = subnet_entry(SUBNET_A_UID, "10.20.1.0/24", 100)
+    removed = subnet_entry(SUBNET_B_UID, "10.20.2.0/24", 101)
+    agentless_net_subnet.ensure_subnet_data_plane(
+        parent_entry(), [first, removed], dhcp_supervisor
+    )
+
+    lease_path = agentless_net_subnet._state_paths(VN_UID)["leases"]
+    active_lease = b"1798765432 aa:bb:cc:dd:ee:ff 10.20.1.22 client-a *\n"
+    removed_lease = b"1798765432 4a:83:40:2c:97:ca 10.20.2.172 client-b *\n"
+    final_active_lease = b"1798765432 aa:bb:cc:dd:ee:11 10.20.1.23 client-a *\n"
+    lease_path.write_bytes(active_lease + removed_lease)
+    lease_path.chmod(0o600)
+    lease_fd = os.open(lease_path, os.O_WRONLY | os.O_APPEND)
+
+    def flush_open_lease_stream():
+        os.write(lease_fd, final_active_lease)
+        os.close(lease_fd)
+
+    service["on_stop"] = flush_open_lease_stream
+    changed = agentless_net_subnet.prepare_subnet_delete_data_plane(
+        parent_entry(), removed, [first], dhcp_supervisor
+    )
+
+    assert changed is True
+    assert lease_path.read_bytes() == active_lease + final_active_lease
+    assert service.get("on_stop") is None
+    if dhcp_supervisor == "systemd":
+        assert service["stops"] == 1
+        assert service["restarts"] == 1
+        assert service["active"] is True
+    else:
+        assert service["supervisor_stops"] == 1
+        assert service["supervisor_restarts"] == 1
+        assert service["supervisor_running"] is True
+
+
+@pytest.mark.parametrize("dhcp_supervisor", ["systemd", "supervisor"])
+def test_dhcp_service_noop_does_not_stop_or_restart_running_service(
+    monkeypatch, tmp_path, dhcp_supervisor
+):
+    _, commands, _, _, _, service = provider_testbed(monkeypatch, tmp_path)
+    first = subnet_entry(SUBNET_A_UID, "10.20.1.0/24", 100)
+    agentless_net_subnet.ensure_subnet_data_plane(
+        parent_entry(), [first], dhcp_supervisor
+    )
+    commands.clear()
+
+    changed = agentless_net_subnet.ensure_subnet_data_plane(
+        parent_entry(), [first], dhcp_supervisor
+    )
+
+    assert changed is False
+    if dhcp_supervisor == "systemd":
+        assert service["active"] is True
+        assert service["stops"] == 0
+        assert service["starts"] == 1
+        assert not any(
+            Path(command[0]).name == "systemctl"
+            and command[1] in {"stop", "start", "restart", "enable"}
+            for command in commands
+        )
+    else:
+        assert service["supervisor_running"] is True
+        assert service["supervisor_stops"] == 0
+        assert service["supervisor_starts"] == 0
+        assert not any(
+            Path(command[0]).name == "supervisorctl"
+            and command[3] in {"stop", "start", "restart", "update"}
+            for command in commands
+        )
 
 
 def test_removed_subnet_leases_are_pruned_before_range_reuse(monkeypatch, tmp_path):

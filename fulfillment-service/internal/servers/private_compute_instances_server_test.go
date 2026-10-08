@@ -4086,4 +4086,196 @@ var _ = Describe("Catalog materialized defaults", func() {
 		Entry("boot disk", false),
 		Entry("additional disk", true),
 	)
+
+	Describe("Windows user_data validation on update", func() {
+		var (
+			server   *PrivateComputeInstancesServer
+			subnetID string
+		)
+
+		BeforeEach(func() {
+			var err error
+			server, err = NewPrivateComputeInstancesServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			// Create a VirtualNetwork and Subnet for network validation.
+			vnDao, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = vnDao.Create().SetObject(privatev1.VirtualNetwork_builder{
+				Id: "win-vnet",
+				Metadata: privatev1.Metadata_builder{
+					Name:   "win-vnet",
+					Tenant: testTenant,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			snResult, err := server.subnetsDao.Create().SetObject(privatev1.Subnet_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   "win-subnet",
+					Tenant: testTenant,
+				}.Build(),
+				Spec: privatev1.SubnetSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "win-vnet"}.Build(),
+					Ipv4Cidr:       new("10.1.0.0/24"),
+				}.Build(),
+				Status: privatev1.SubnetStatus_builder{
+					State: privatev1.SubnetState_SUBNET_STATE_READY,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			subnetID = snResult.GetObject().GetId()
+
+			// Create an instance type for the template spec defaults.
+			_, err = server.instanceTypesDao.Create().SetObject(privatev1.InstanceType_builder{
+				Id: "win-it",
+				Metadata: privatev1.Metadata_builder{
+					Name:   "win-it",
+					Tenant: testTenant,
+				}.Build(),
+				Spec: privatev1.InstanceTypeSpec_builder{
+					Vcpus:     4,
+					MemoryGib: 16,
+					State:     privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Create a storage tier for boot disk.
+			_, err = server.storageTiersDao.Create().SetObject(privatev1.StorageTier_builder{
+				Id: "win-tier",
+				Metadata: privatev1.Metadata_builder{
+					Name:   "win-tier",
+					Tenant: auth.SharedTenant,
+				}.Build(),
+				Status: privatev1.StorageTierStatus_builder{
+					State: privatev1.StorageTierState_STORAGE_TIER_STATE_ACTIVE,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Create a Windows disk image.
+			_, err = server.diskImagesDao.Create().SetObject(privatev1.DiskImage_builder{
+				Id: "win-disk-image",
+				Metadata: privatev1.Metadata_builder{
+					Name:   "win-disk-image",
+					Tenant: testTenant,
+				}.Build(),
+				Spec: privatev1.DiskImageSpec_builder{
+					Lifecycle:     privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE,
+					GuestOsFamily: privatev1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Create a template that references the Windows disk image.
+			_, err = server.templatesDao.Create().SetObject(privatev1.ComputeInstanceTemplate_builder{
+				Id:          "win-template",
+				Title:       "Windows Template",
+				Description: "Template for Windows VM tests",
+				Metadata: privatev1.Metadata_builder{
+					Name:   "win-template",
+					Tenant: testTenant,
+				}.Build(),
+				SpecDefaults: privatev1.ComputeInstanceTemplateSpecDefaults_builder{
+					InstanceType: privatev1.InstanceTypeReference_builder{Id: "win-it"}.Build(),
+					DiskImage:    &privatev1.DiskImageReference{Id: "win-disk-image"},
+					BootDisk: privatev1.ComputeInstanceDisk_builder{
+						SizeGib:     proto.Int32(50),
+						StorageTier: privatev1.StorageTierReference_builder{Name: "win-tier"}.Build(),
+					}.Build(),
+					RunStrategy: privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("rejects invalid XML user_data on update for a Windows instance", func() {
+			// Create a Windows instance with valid XML user_data.
+			validXML := `<?xml version="1.0" encoding="utf-8"?><unattend><settings/></unattend>`
+			createResponse, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("win-test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "win-template"}.Build(),
+						UserData: &validXML,
+						NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+							privatev1.ComputeNetworkAttachment_builder{
+								Subnet: privatev1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := createResponse.GetObject().GetId()
+
+			// Update with invalid XML user_data — should be rejected.
+			invalidXML := "not xml at all"
+			_, err = server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Id: id,
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						UserData: &invalidXML,
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"spec.user_data"},
+				},
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			st, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(st.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(st.Message()).To(ContainSubstring("not well-formed XML"))
+		})
+
+		It("accepts valid XML user_data on update for a Windows instance", func() {
+			// Create a Windows instance with valid XML user_data.
+			validXML := `<?xml version="1.0" encoding="utf-8"?><unattend><settings/></unattend>`
+			createResponse, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("win-test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "win-template"}.Build(),
+						UserData: &validXML,
+						NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+							privatev1.ComputeNetworkAttachment_builder{
+								Subnet: privatev1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := createResponse.GetObject().GetId()
+
+			// Update with valid XML user_data — should succeed.
+			updatedXML := `<?xml version="1.0" encoding="utf-8"?><unattend><settings pass="oobeSystem"/></unattend>`
+			updateResponse, err := server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Id: id,
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						UserData: &updatedXML,
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"spec.user_data"},
+				},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updateResponse.GetObject().GetSpec().GetUserData()).To(Equal(updatedXML))
+		})
+	})
 })

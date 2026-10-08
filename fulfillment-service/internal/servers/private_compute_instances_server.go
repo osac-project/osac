@@ -434,6 +434,9 @@ func (s *PrivateComputeInstancesServer) prepareCreate(ctx context.Context, candi
 		return
 	}
 	warnings = append(warnings, diskImageWarnings...)
+	if err = s.validateWindowsUserData(ctx, candidate, diskImage); err != nil {
+		return
+	}
 	if err = s.validateSshPublicKey(ctx, candidate, diskImage); err != nil {
 		return
 	}
@@ -460,6 +463,71 @@ func (s *PrivateComputeInstancesServer) validateStorageTiers(ctx context.Context
 			return err
 		}
 		disk.SetStorageTier(canonicalStorageTierReference(tier))
+	}
+	return nil
+}
+
+// validateWindowsUserData enforces XML well-formedness on user data when the DiskImage's
+// guest OS family is Windows. For non-Windows images (or when no user data is present), this
+// is a no-op — Linux user_data is treated as opaque content (existing behavior preserved).
+//
+// Error messages for user_data_secret intentionally omit the secret content to prevent
+// leaking sensitive data (design §4.3).
+//
+// Implements IC-1 from design §5.
+func (s *PrivateComputeInstancesServer) validateWindowsUserData(
+	ctx context.Context,
+	ci *privatev1.ComputeInstance,
+	diskImage *privatev1.DiskImage,
+) error {
+	if diskImage == nil || diskImage.GetSpec().GetGuestOsFamily() != privatev1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS {
+		return nil
+	}
+
+	spec := ci.GetSpec()
+
+	// Validate inline user_data.
+	if spec.HasUserData() {
+		if err := isPureXMLNoDTD([]byte(spec.GetUserData())); err != nil {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"user_data is not well-formed XML: %s", err)
+		}
+		return nil
+	}
+
+	// Validate user_data_secret content. The reference has already been resolved and
+	// canonicalized by validateAndResolveUserDataSecret; load the secret data to check
+	// its content format.
+	ref := spec.GetUserDataSecret()
+	if ref == nil {
+		return nil
+	}
+
+	secretResponse, err := s.secretsDao.Get().SetId(ref.GetId()).Do(ctx)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to load user_data_secret for XML validation", "error", err)
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate user_data_secret content")
+	}
+	secret := secretResponse.GetObject()
+	data := secret.GetData()
+	if len(data) == 0 && secret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
+		if s.secretStore == nil {
+			s.logger.ErrorContext(ctx, "Failed to load user_data_secret for XML validation: secret store isn't configured")
+			return grpcstatus.Errorf(grpccodes.Internal, "failed to validate user_data_secret content")
+		}
+		metadata := secret.GetMetadata()
+		data, err = s.secretStore.Fetch(ctx, metadata.GetTenant(), metadata.GetProject(), metadata.GetName())
+		if err != nil {
+			s.logger.ErrorContext(ctx, "Failed to load user_data_secret value from store for XML validation", "error", err)
+			return grpcstatus.Errorf(grpccodes.Internal, "failed to validate user_data_secret content")
+		}
+	}
+
+	value := data[userDataSecretDataKey]
+	if err := isPureXMLNoDTD(value); err != nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"secret '%s' referenced by user_data_secret contains user data that is not well-formed XML",
+			refKey(ref))
 	}
 	return nil
 }
@@ -518,6 +586,15 @@ func (s *PrivateComputeInstancesServer) Update(ctx context.Context,
 			updateIncludesField(request.GetUpdateMask(), "spec.user_data_secret"),
 		); err != nil {
 			return err
+		}
+		if updateIncludesField(request.GetUpdateMask(), "spec.user_data", "spec.user_data_secret") {
+			diskImage, _, err := s.validateDiskImage(ctx, candidate)
+			if err != nil {
+				return err
+			}
+			if err := s.validateWindowsUserData(ctx, candidate, diskImage); err != nil {
+				return err
+			}
 		}
 		if updateIncludesField(request.GetUpdateMask(), "spec.network_attachments") {
 			// During deletion, keep the existing visibility check without requiring dependencies

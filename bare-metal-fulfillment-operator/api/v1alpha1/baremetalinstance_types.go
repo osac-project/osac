@@ -121,6 +121,7 @@ type BareMetalInstanceSpec struct {
 	// MaxItems is required for CEL cost budget calculation.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MaxItems=1
+	// +kubebuilder:validation:XValidation:rule="self.size() <= 1",message="at most one network attachment is supported"
 	// +listType=map
 	// +listMapKey=subnetRef
 	NetworkAttachments []BareMetalNetworkAttachment `json:"networkAttachments,omitempty"`

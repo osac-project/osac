@@ -137,6 +137,9 @@ spec:
                 x-kubernetes-list-map-keys:
                 - subnetRef
                 x-kubernetes-list-type: map
+                x-kubernetes-validations:
+                - message: at most one network attachment is supported
+                  rule: self.size() <= 1
               restartTrigger:
                 description: |-
                   RestartTrigger is used to trigger a restart of the physical machine.

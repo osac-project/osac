@@ -118,6 +118,16 @@ func (p *DefaultTenancyLogic) DetermineVisibility(ctx context.Context) (result *
 	if err != nil {
 		return
 	}
+	userID := subject.User
+	err = tx.QueryRow(
+		ctx,
+		`select id from users where data->'spec'->>'username' = $1`,
+		subject.User,
+	).Scan(&userID)
+	if err != nil {
+		userID = subject.User
+		err = nil
+	}
 	rows, err := tx.Query(
 		ctx,
 		`
@@ -131,7 +141,7 @@ func (p *DefaultTenancyLogic) DetermineVisibility(ctx context.Context) (result *
 			"user" = $2
 		`,
 		subject.Tenants.Inclusions(),
-		subject.User,
+		userID,
 	)
 	if err != nil {
 		return

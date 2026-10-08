@@ -29,6 +29,10 @@ global:
       # Verify the Netris HTTPS certificate. Set false only for trusted
       # non-production endpoints with self-signed certificates.
       validateCerts: true
+      # Optional customer-created ConfigMap in the AAP namespace. The
+      # ConfigMap must contain the Netris CA chain under bundle.pem.
+      caBundle:
+        configMap: ""
       credentials:
         username: ""
         externalSecret: true

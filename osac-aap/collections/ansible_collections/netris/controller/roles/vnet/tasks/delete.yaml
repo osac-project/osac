@@ -13,6 +13,7 @@
     return_content: true
     status_code: 200
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
   register: _vnet_list_resp
   no_log: true
 
@@ -35,6 +36,7 @@
     # the deletion target is already absent, so treat it as deleted.
     status_code: [200, 204, 404]
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
   register: _vnet_delete_resp
   no_log: true
 

@@ -149,3 +149,136 @@
         fail_msg: >-
           Storage operations must mount and export the configured remote kubeconfig
           without including compute-instance credentials.
+
+- name: Networking operations pod spec without a Netris CA
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    netris_ca_config_map_name: ""
+    netris_validate_certs: true
+    netris_ca_path: /etc/netris/ca/bundle.pem
+    remote_cluster_kubeconfig_secret_name: ""
+    _template_path: >-
+      {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/templates/networking-operations-ig.j2
+
+  tasks:
+    - name: Render networking-operations pod spec without a Netris CA
+      ansible.builtin.set_fact:
+        _networking_pod_spec: "{{ lookup('ansible.builtin.template', _template_path) }}"
+
+    - name: Parse networking-operations pod spec without a Netris CA
+      ansible.builtin.set_fact:
+        _networking_pod: "{{ _networking_pod_spec | from_yaml }}"
+
+    - name: Assert certificate validation remains explicit
+      ansible.builtin.assert:
+        that:
+          - >-
+            _networking_pod.spec.containers[0].env
+            | selectattr('name', 'equalto', 'NETRIS_VALIDATE_CERTS')
+            | selectattr('value', 'equalto', 'true')
+            | list | length == 1
+          - >-
+            _networking_pod.spec.containers[0].env
+            | selectattr('name', 'equalto', 'NETRIS_CA_PATH')
+            | list | length == 0
+          - >-
+            _networking_pod.spec.volumes
+            | selectattr('name', 'equalto', 'netris-ca-bundle')
+            | list | length == 0
+        fail_msg: >-
+          Networking jobs without a configured CA must keep validation explicit
+          but omit the CA path and volume.
+
+- name: Networking operations pod spec with a Netris CA
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    netris_ca_config_map_name: customer-netris-ca
+    netris_validate_certs: true
+    netris_ca_path: /etc/netris/ca/bundle.pem
+    remote_cluster_kubeconfig_secret_name: ""
+    _template_path: >-
+      {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/templates/networking-operations-ig.j2
+
+  tasks:
+    - name: Render networking-operations pod spec with a Netris CA
+      ansible.builtin.set_fact:
+        _networking_pod_spec_with_ca: "{{ lookup('ansible.builtin.template', _template_path) }}"
+
+    - name: Parse networking-operations pod spec with a Netris CA
+      ansible.builtin.set_fact:
+        _networking_pod_with_ca: "{{ _networking_pod_spec_with_ca | from_yaml }}"
+
+    - name: Extract the Netris CA volume
+      ansible.builtin.set_fact:
+        _netris_ca_volume: >-
+          {{ _networking_pod_with_ca.spec.volumes
+             | selectattr('name', 'equalto', 'netris-ca-bundle')
+             | list | first }}
+
+    - name: Assert the Netris CA is mounted and exported
+      ansible.builtin.assert:
+        that:
+          - >-
+            _networking_pod_with_ca.spec.containers[0].volumeMounts
+            | selectattr('name', 'equalto', 'netris-ca-bundle')
+            | selectattr('mountPath', 'equalto', '/etc/netris/ca/bundle.pem')
+            | selectattr('readOnly', 'equalto', true)
+            | list | length == 1
+          - >-
+            _netris_ca_volume.configMap.name == 'customer-netris-ca'
+          - _netris_ca_volume.configMap['items'][0].key == 'bundle.pem'
+          - _netris_ca_volume.configMap['items'][0].path == 'bundle.pem'
+          - >-
+            _networking_pod_with_ca.spec.containers[0].env
+            | selectattr('name', 'equalto', 'NETRIS_CA_PATH')
+            | selectattr('value', 'equalto', '/etc/netris/ca/bundle.pem')
+            | list | length == 1
+        fail_msg: >-
+          Networking jobs with a Netris CA must mount bundle.pem read-only and
+          export NETRIS_CA_PATH.
+
+- name: Cluster fulfillment pod spec with a Netris CA
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    netris_ca_config_map_name: customer-netris-ca
+    netris_validate_certs: false
+    netris_ca_path: /etc/netris/ca/bundle.pem
+    _template_path: >-
+      {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/templates/cluster-fulfillment-ig.j2
+
+  tasks:
+    - name: Render cluster-fulfillment pod spec with a Netris CA
+      ansible.builtin.set_fact:
+        _cluster_pod_spec_with_ca: "{{ lookup('ansible.builtin.template', _template_path) }}"
+
+    - name: Parse cluster-fulfillment pod spec with a Netris CA
+      ansible.builtin.set_fact:
+        _cluster_pod_with_ca: "{{ _cluster_pod_spec_with_ca | from_yaml }}"
+
+    - name: Assert cluster fulfillment receives the same CA contract
+      ansible.builtin.assert:
+        that:
+          - >-
+            _cluster_pod_with_ca.spec.containers[0].volumeMounts
+            | selectattr('name', 'equalto', 'netris-ca-bundle')
+            | selectattr('mountPath', 'equalto', '/etc/netris/ca/bundle.pem')
+            | list | length == 1
+          - >-
+            _cluster_pod_with_ca.spec.containers[0].env
+            | selectattr('name', 'equalto', 'NETRIS_VALIDATE_CERTS')
+            | selectattr('value', 'equalto', 'false')
+            | list | length == 1
+          - >-
+            _cluster_pod_with_ca.spec.containers[0].env
+            | selectattr('name', 'equalto', 'NETRIS_CA_PATH')
+            | selectattr('value', 'equalto', '/etc/netris/ca/bundle.pem')
+            | list | length == 1
+        fail_msg: >-
+          Cluster fulfillment must receive the same Netris CA and validation
+          settings as networking operations.

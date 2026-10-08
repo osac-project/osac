@@ -1,0 +1,3 @@
+bugfixes:
+ - purefb_fs - Fixed issue where SMB policies were applied even when smb parameter was set to false
+ - purefb_fs - Fixed issue where NFS export policies were applied even when both nfsv3 and nfsv4 were disabled

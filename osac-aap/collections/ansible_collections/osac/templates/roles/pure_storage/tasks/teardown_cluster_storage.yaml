@@ -1,0 +1,15 @@
+---
+# Placeholder. Real cluster-side cleanup lands with OSAC-5022.
+#
+# Receives from the dispatcher:
+#   _provider_tiers                — tiers with provider: pure
+#   _provider_backend_connections  — connection details for those tiers' backend_ids
+#
+# Sets no output fact — the dispatcher reads nothing back from this action.
+
+- name: Report that pure_storage teardown_cluster_storage is not yet implemented
+  ansible.builtin.debug:
+    msg: >-
+      pure_storage teardown_cluster_storage is a placeholder — cluster-side
+      cleanup is implemented by OSAC-5022.
+      Tiers: {{ _provider_tiers | default([]) | map(attribute='name') | list }}

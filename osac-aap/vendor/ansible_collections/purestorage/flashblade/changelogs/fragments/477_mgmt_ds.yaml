@@ -1,0 +1,2 @@
+bugfixes:
+ - purefb_ds - Fixed issue when creating pre-enabled management directory service

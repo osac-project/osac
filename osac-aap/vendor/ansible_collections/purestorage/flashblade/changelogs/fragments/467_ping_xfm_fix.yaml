@@ -1,0 +1,2 @@
+bugfixes:
+ - purefb_pingtrace - Fixed issue with XFM module when state is ping

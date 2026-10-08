@@ -1,0 +1,2 @@
+bugfixes:
+ - purefb_info - Fix AttributeError where the policy loop variable was overwritten with `policy.name`, breaking `gather_subset=policies` (#547)

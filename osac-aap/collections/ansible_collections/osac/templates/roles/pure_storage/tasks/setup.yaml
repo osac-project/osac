@@ -1,0 +1,25 @@
+---
+# Placeholder. Real FlashBlade provisioning lands with OSAC-5017.
+#
+# Receives from the dispatcher:
+#   _provider_tiers                — tiers with provider: pure
+#   _provider_backend_connections  — connection details for those tiers' backend_ids
+#
+# Must set before returning:
+#   storage_provider_tenant_config — mapping; the dispatcher accumulates it into
+#                                    _all_tenant_configs and storage_provider/tasks/setup.yaml
+#                                    fails the run if a dispatched provider omits it
+
+- name: Report that pure_storage setup is not yet implemented
+  ansible.builtin.debug:
+    msg: >-
+      pure_storage setup is a placeholder — Realm checkout and FlashBlade
+      provisioning are implemented by OSAC-5017.
+      Tiers: {{ _provider_tiers | default([]) | map(attribute='name') | list }}
+
+# The dispatcher nulls this fact before each dispatch, and storage_provider's
+# setup.yaml fails the run if a dispatched provider leaves it null — so even a
+# placeholder has to declare a config.
+- name: Set empty tenant config output
+  ansible.builtin.set_fact:
+    storage_provider_tenant_config: {}

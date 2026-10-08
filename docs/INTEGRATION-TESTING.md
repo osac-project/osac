@@ -163,6 +163,25 @@ the certificate. The Kind
 `SUITE=fulfillment` target exercises deployed startup and API behavior, subject
 to the profile's configured CA and enabled services.
 
+### ClusterVersion seeding
+
+`make -C osac-installer cluster-version-seed-test` (from the repository root)
+requires Helm, Python, and PyYAML. The installer Helm-lint CI job runs this same
+command in a temporary Python environment. It renders the real seed hook and JSON Schema
+in a dependency-free test chart, rejecting default versions without a DiskImage
+and invalid image parameters. These are Contract checks. Unit cases execute the
+rendered Bash with a curl double to verify shared Linux registry DiskImage
+payloads, creation before ClusterVersion, shared references, shell quoting,
+HTTP 409 retry handling, and propagation of other API failures. Both tiers
+belong to DEV work; neither starts Fulfillment or verifies database persistence.
+The dev and CI profile defaults use the 4.22.0 RHCOS example artifact.
+
+The deployed hook/API persistence boundary still requires component integration
+in a dedicated Kind environment and a seed-specific assertion; the focused
+suite does not prove it. No owning follow-up ticket has been assigned for that
+coverage gap. The reported CaaS full-install workflow must also be rerun for
+E2E evidence after delivery (QE ownership).
+
 ### OSAC-5343 deployed enablement coverage
 
 The release E2E path adds these assertions to existing user journeys. The

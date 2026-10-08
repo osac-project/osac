@@ -557,6 +557,10 @@ csi-render-test: helm-deps ## Verify CSI and storage-provider chart rendering
 			--set namespace=not-osac-csi; \
 		echo 'CSI render checks passed.'
 
+.PHONY: cluster-version-seed-test
+cluster-version-seed-test: ## Check cluster-version seed schema and hook behavior
+	python3 scripts/test-cluster-version-seed.py
+
 .PHONY: fulfillment-trust-render-test
 fulfillment-trust-render-test: helm-deps ## Check verified fulfillment transport renders
 	python3 scripts/test-fulfillment-trust-render.py
@@ -570,7 +574,7 @@ dev-full-render-test: helm-deps ## Check dev-full TLS and Helm post-rendering
 	./scripts/test-dev-full-render.sh
 
 .PHONY: helm-validate
-helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test mce-render-test dev-full-render-test ## Validate all charts (lint + template)
+helm-validate: helm-lint cluster-version-seed-test csi-render-test helm-networking-test fulfillment-trust-render-test mce-render-test dev-full-render-test ## Validate all charts (lint + template)
 	@for d in values/*/; do \
 		infra="$${d}infra.yaml"; \
 		[ -f "$$infra" ] && echo "Validating $$infra..." && \

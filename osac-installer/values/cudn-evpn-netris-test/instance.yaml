@@ -247,6 +247,9 @@ clusterVersions:
   - version: "4.22.0"
     image: "quay.io/openshift-release-dev/ocp-release:4.22.0-multi"
     default: true
+    diskImage:
+      name: rhcos-4-22
+      sourceRef: oci://quay.io/rh_ee_rpiccoli/rhcos-bmi:4.22.0
 
 # --- Hub Access ---
 hubAccess:

@@ -461,7 +461,10 @@ hubAccess:
 clusterVersions:
   enabled: false
   versions: []
-  # Example:
+  # Default versions require a diskImage; non-default versions may omit it.
+  # DiskImages are shared Linux registry images, created before the version.
+  # Existing named records are retained without updates.
+  # Example (development/CI image; use your own artifact in production):
   # enabled: true
   # versions:
   # - version: "4.20.0"
@@ -469,6 +472,10 @@ clusterVersions:
   # - version: "4.22.0"
   #   image: "quay.io/openshift-release-dev/ocp-release:4.22.0-multi"
   #   default: true
+  #   diskImage:
+  #     name: rhcos-4-22
+  #     sourceRef: oci://quay.io/rh_ee_rpiccoli/rhcos-bmi:4.22.0
+  #     architecture: [ARCHITECTURE_AMD64]
 
 lvms:
   # Register LVMS as a local StorageBackend + StorageTier in the fulfillment service

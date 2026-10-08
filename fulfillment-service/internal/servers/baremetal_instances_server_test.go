@@ -16,7 +16,6 @@ package servers
 import (
 	"fmt"
 
-
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 

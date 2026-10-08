@@ -14,6 +14,7 @@
     status_code: 200
     timeout: "{{ netris_timeout | default(30) }}"
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
   register: _sc_list_resp
   no_log: true
 
@@ -42,6 +43,7 @@
     status_code: 200
     timeout: "{{ netris_timeout | default(30) }}"
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
   register: _inv_resp
   no_log: true
 
@@ -83,6 +85,7 @@
     status_code: [200]
     timeout: "{{ netris_timeout | default(30) }}"
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
   register: _update_resp
   no_log: true
   when: _existing_server_cluster is defined and _existing_server_cluster is not none
@@ -130,6 +133,7 @@
     status_code: [200, 201]
     timeout: "{{ netris_timeout | default(30) }}"
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
   register: _create_resp
   no_log: true
   when: _existing_server_cluster is not defined or _existing_server_cluster is none
@@ -154,6 +158,7 @@
     status_code: 200
     timeout: "{{ netris_timeout | default(30) }}"
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
   register: _state_resp
   no_log: true
   until: _state_resp.json is mapping and ((_state_resp.json.data | default({}))['status'] | default({}))['label'] | default('') == 'Active'

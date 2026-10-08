@@ -384,22 +384,55 @@ bmf:
 # ---------------------
 # Bare Metal Fulfillment Operator — Metal3 Backend
 # ---------------------
-# Metal3 inventory and management backend configuration for the BMF operator.
+# Metal3 inventory and management configuration for the BMF operator.
 # When enabled, the chart creates osac-inventory-config and osac-management-config
 # Secrets with Metal3 backend type. The BMF operator mounts these at
 # /etc/osac/inventory/inventory.yaml and /etc/osac/management/management.yaml.
-# NOTE: metal3 nests under the same top-level bmf: key as bcm above — bcm and
-# metal3 are mutually exclusive backends, not separate bmf: blocks.
+# For NetBox inventory, set metal3.namespace but leave metal3.enabled false:
+# NetBox uses Metal3 for BMH management without selecting Metal3 inventory.
   metal3:
     # Set to true to create Metal3 config secrets via Helm.
-    # When false (default), secrets must be created manually.
+    # When false (default), the Metal3 inventory config is not created.
     enabled: false
-    # [REQUIRED when enabled] Namespace where BareMetalHost CRs are located.
-    # This is the namespace Metal3 uses for bare metal host management.
+    # [REQUIRED when metal3.enabled or netbox.enabled] Namespace where BareMetalHost CRs are located.
     # Example: "hardware-inventory"
     namespace: ""
     # Host class identifier written to the inventory config.
     hostClass: "metal3"
+
+# ---------------------
+# Bare Metal Fulfillment Operator — NetBox Backend
+# ---------------------
+# NetBox inventory with Metal3 BMH management. metal3.enabled must remain
+# false in this mode; set metal3.namespace to the BMH namespace above.
+# Use a dedicated namespace for BMHs and BMC Secrets: BMF can get/create/update/
+# delete all Secrets there to materialize per-host credentials. Before installing,
+# label that namespace osac.openshift.io/bmh-secret-namespace=true.
+#   kubectl label namespace <name> osac.openshift.io/bmh-secret-namespace=true
+# Override bmf.secrets.netboxToken/netboxCA if custom Secret names are needed.
+  netbox:
+    enabled: false
+    # [REQUIRED when enabled] NetBox API endpoint.
+    url: ""
+    # [REQUIRED when enabled] Stored in a dedicated Secret and mounted read-only.
+    token: ""
+    # [OPTIONAL] PEM CA certificate stored in a dedicated Secret and mounted read-only.
+    caCert: ""
+    # HTTP endpoints are disabled unless this explicit opt-in is true.
+    allowInsecureHTTP: false
+
+# ---------------------
+# Secret API connection for NetBox allocation
+# ---------------------
+  secretAPI:
+    # Secret API endpoint used to resolve opaque BMC credential references.
+    url: "https://fulfillment-internal-api:8001"
+    # The BMF ServiceAccount token is already projected read-only by Kubernetes.
+    tokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    caBundle:
+      # Cluster trust-manager ConfigMap. Set empty to omit this CA mount.
+      configMap: "ca-bundle"
+      key: "bundle.pem"
 
 # ---------------------
 # Bundled PostgreSQL (dev/test)

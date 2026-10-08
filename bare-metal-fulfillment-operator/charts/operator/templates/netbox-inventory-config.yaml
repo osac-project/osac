@@ -1,0 +1,57 @@
+{{- if .Values.netbox.enabled }}
+{{- if .Values.bcm.enabled }}
+{{- fail "netbox.enabled and bcm.enabled are mutually exclusive" }}
+{{- end }}
+{{- if .Values.metal3.enabled }}
+{{- fail "netbox.enabled and metal3.enabled are mutually exclusive" }}
+{{- end }}
+{{- if not .Values.metal3.namespace }}
+{{- fail "metal3.namespace is required" }}
+{{- end }}
+{{- if not .Values.netbox.url }}
+{{- fail "netbox.url is required when netbox.enabled is true" }}
+{{- end }}
+{{- if not .Values.netbox.token }}
+{{- fail "netbox.token is required when netbox.enabled is true" }}
+{{- end }}
+{{- if not .Values.secrets.netboxToken }}
+{{- fail "secrets.netboxToken is required when netbox.enabled is true" }}
+{{- end }}
+{{- if and .Values.netbox.caCert (not .Values.secrets.netboxCA) }}
+{{- fail "secrets.netboxCA is required when netbox.caCert is set" }}
+{{- end }}
+{{- if not .Values.secretAPI.url }}
+{{- fail "secretAPI.url is required when netbox.enabled is true" }}
+{{- end }}
+{{- if not .Values.secretAPI.tokenFile }}
+{{- fail "secretAPI.tokenFile is required when netbox.enabled is true" }}
+{{- end }}
+{{- if not (hasPrefix "https://" (lower .Values.secretAPI.url)) }}
+{{- fail "secretAPI.url must use HTTPS when NetBox is enabled" }}
+{{- end }}
+{{- $netboxURL := lower .Values.netbox.url }}
+{{- if and (hasPrefix "http://" $netboxURL) (not .Values.netbox.allowInsecureHTTP) }}
+{{- fail "netbox.url uses HTTP; set netbox.allowInsecureHTTP=true to allow HTTP" }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.secrets.inventoryConfig }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bare-metal-fulfillment-operator.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  inventory.yaml: |
+    name: netbox-inventory
+    type: netbox
+    hostClass: metal3
+    options:
+      netbox:
+        url: {{ .Values.netbox.url | quote }}
+        tokenFile: "/etc/osac/secrets/netbox/token"
+        {{- if .Values.netbox.caCert }}
+        caFile: "/etc/osac/secrets/netbox-ca/ca.crt"
+        {{- end }}
+        allowInsecureHTTP: {{ .Values.netbox.allowInsecureHTTP }}
+{{- end }}

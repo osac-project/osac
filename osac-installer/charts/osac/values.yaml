@@ -418,6 +418,8 @@ bmf:
     inventoryConfig: "osac-inventory-config"
     managementConfig: "osac-management-config"
     osClouds: "osac-os-clouds"
+    netboxToken: "osac-netbox-token"
+    netboxCA: "osac-netbox-ca"
   # Kind/IT only -- see templates/bmf-metal3-test-secrets.yaml
   testBackend:
     metal3:
@@ -444,8 +446,22 @@ bmf:
     insecureSkipVerify: false
     hostClass: "bcm"
     bmhNamespace: ""
+  secretAPI:
+    url: "https://fulfillment-internal-api:8001"
+    tokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    caBundle:
+      configMap: "ca-bundle"
+      key: "bundle.pem"
+  netbox:
+    enabled: false
+    url: ""
+    token: ""
+    caCert: ""
+    allowInsecureHTTP: false
   metal3:
     enabled: false
+    # For NetBox, dedicate this namespace to BMHs and their BMC Secrets and label it
+    # osac.openshift.io/bmh-secret-namespace=true before installing.
     namespace: ""
     hostClass: "metal3"
 

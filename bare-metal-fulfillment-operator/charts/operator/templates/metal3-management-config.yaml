@@ -5,6 +5,8 @@
 {{- if not .Values.metal3.namespace }}
 {{- fail "metal3.enabled is true but metal3.namespace is not set" }}
 {{- end }}
+{{- end }}
+{{- if or .Values.metal3.enabled .Values.netbox.enabled }}
 apiVersion: v1
 kind: Secret
 metadata:

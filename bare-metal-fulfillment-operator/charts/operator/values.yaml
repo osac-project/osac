@@ -24,6 +24,8 @@ secrets:
   managementConfig: "osac-management-config"
   osClouds: "osac-os-clouds"
   bcmCerts: "osac-bcm-certs"
+  netboxToken: "osac-netbox-token"
+  netboxCA: "osac-netbox-ca"
 
 configMaps:
   profiles: "osac-profiles"
@@ -34,6 +36,21 @@ env:
   aapTokenSecretKey: "token"
   aapInsecureSkipVerify: ""
   enableNetworkingProvisioning: "false"
+
+secretAPI:
+  url: "https://fulfillment-internal-api:8001"
+  # Kubernetes projects the ServiceAccount token read-only by default.
+  tokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+  caBundle:
+    configMap: "ca-bundle"
+    key: "bundle.pem"
+
+netbox:
+  enabled: false
+  url: ""
+  token: ""
+  caCert: ""
+  allowInsecureHTTP: false
 
 bcm:
   enabled: false
@@ -47,5 +64,7 @@ bcm:
 
 metal3:
   enabled: false
+  # For NetBox, use a namespace dedicated to BareMetalHosts and BMC Secrets.
+  # The manager can get/create/update/delete all Secrets in that namespace.
   namespace: ""
   hostClass: "metal3"

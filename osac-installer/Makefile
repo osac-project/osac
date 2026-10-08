@@ -451,18 +451,8 @@ csi-render-test: helm-deps ## Verify CSI and storage-provider chart rendering
 		infra_enabled_render="$$(mktemp)"; \
 		error_render="$$(mktemp)"; \
 		trap 'rm -f "$$caas_render" "$$vmaas_render" "$$default_operator_render" "$$csi_render" "$$full_render" "$$custom_render" "$$node_render" "$$infra_render" "$$infra_enabled_render" "$$error_render"' EXIT; \
-		assert_helm_failure() { \
-			expected="$$1"; shift; \
-			if "$$@" >/dev/null 2>"$$error_render"; then \
-				printf 'Helm unexpectedly accepted invalid values; expected error: %s\n' "$$expected" >&2; \
-				exit 1; \
-			fi; \
-			if ! rg -Fq "$$expected" "$$error_render"; then \
-				printf 'Helm failed without the expected error: %s\n' "$$expected" >&2; \
-				cat "$$error_render" >&2; \
-				exit 1; \
-			fi; \
-		}; \
+		HELM_ERROR_FILE="$$error_render"; \
+		. scripts/helm-test-helpers.sh; \
 		helm template osac $(OSAC_CHART) \
 			--values values/caas-ci/instance.yaml \
 			--set operator.networkManagers.enabled=true \
@@ -560,8 +550,12 @@ fulfillment-trust-render-test: helm-deps ## Check verified fulfillment transport
 dev-full-render-test: helm-deps ## Check dev-full TLS and Helm post-rendering
 	./scripts/test-dev-full-render.sh
 
+.PHONY: bmf-netbox-render-test
+bmf-netbox-render-test: helm-deps ## Check NetBox, Metal3 management, and Secret API Helm wiring
+	bash scripts/test-bmf-netbox-render.sh
+
 .PHONY: helm-validate
-helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test dev-full-render-test ## Validate all charts (lint + template)
+helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test dev-full-render-test bmf-netbox-render-test ## Validate all charts (lint + template)
 	@for d in values/*/; do \
 		infra="$${d}infra.yaml"; \
 		[ -f "$$infra" ] && echo "Validating $$infra..." && \

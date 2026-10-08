@@ -2047,6 +2047,16 @@
               "description": "Secret name for OpenStack clouds.yaml",
               "default": "osac-os-clouds"
             },
+            "netboxToken": {
+              "type": "string",
+              "description": "Secret name for the NetBox API token",
+              "default": "osac-netbox-token"
+            },
+            "netboxCA": {
+              "type": "string",
+              "description": "Secret name for the optional NetBox CA certificate",
+              "default": "osac-netbox-ca"
+            },
             "bcmCerts": {
               "type": "string",
               "description": "Secret name for BCM mTLS client certificates"
@@ -2175,9 +2185,75 @@
           },
           "additionalProperties": false
         },
+        "secretAPI": {
+          "type": "object",
+          "description": "Secret API connection settings used by NetBox inventory.",
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "Fulfillment Secret API endpoint.",
+              "default": "https://fulfillment-internal-api:8001"
+            },
+            "tokenFile": {
+              "type": "string",
+              "description": "Path to the projected Kubernetes ServiceAccount token used by the controller.",
+              "default": "/var/run/secrets/kubernetes.io/serviceaccount/token"
+            },
+            "caBundle": {
+              "type": "object",
+              "description": "Optional CA bundle used to verify the Secret API endpoint.",
+              "properties": {
+                "configMap": {
+                  "type": "string",
+                  "description": "ConfigMap containing the Secret API CA bundle.",
+                  "default": "ca-bundle"
+                },
+                "key": {
+                  "type": "string",
+                  "description": "Key containing the Secret API CA bundle.",
+                  "default": "bundle.pem"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "netbox": {
+          "type": "object",
+          "description": "NetBox inventory configuration. Its Metal3 management namespace is configured under bmf.metal3.namespace.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Select NetBox as the BMF inventory backend.",
+              "default": false
+            },
+            "url": {
+              "type": "string",
+              "description": "NetBox API endpoint URL.",
+              "default": ""
+            },
+            "token": {
+              "type": "string",
+              "description": "NetBox API token stored in a Kubernetes Secret and mounted as a file.",
+              "default": ""
+            },
+            "caCert": {
+              "type": "string",
+              "description": "Optional PEM CA certificate for the NetBox endpoint, stored in a separate Kubernetes Secret.",
+              "default": ""
+            },
+            "allowInsecureHTTP": {
+              "type": "boolean",
+              "description": "Allow NetBox endpoint URLs using HTTP.",
+              "default": false
+            }
+          },
+          "additionalProperties": false
+        },
         "metal3": {
           "type": "object",
-          "description": "Metal3 inventory and management backend configuration. When enabled, creates osac-inventory-config and osac-management-config Secrets.",
+          "description": "Metal3 inventory configuration. When enabled, creates inventory and management Secrets; NetBox also uses the Metal3 namespace for BMH management.",
           "properties": {
             "enabled": {
               "type": "boolean",
@@ -2186,7 +2262,7 @@
             },
             "namespace": {
               "type": "string",
-              "description": "Kubernetes namespace where BareMetalHost CRs are located"
+              "description": "Kubernetes namespace where BareMetalHost CRs are located. For NetBox, use a dedicated namespace for BMHs and BMC Secrets and label it osac.openshift.io/bmh-secret-namespace=true; the installer validates this before granting BMF Secret access."
             },
             "hostClass": {
               "type": "string",

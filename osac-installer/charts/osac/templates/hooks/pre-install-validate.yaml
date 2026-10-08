@@ -1,3 +1,6 @@
+{{- if and .Values.bmf.netbox.enabled (not .Values.validation.enabled) }}
+{{- fail "validation.enabled must be true when bmf.netbox.enabled is true; the dedicated BMH Secret namespace must be checked before installing RBAC" }}
+{{- end }}
 {{- if .Values.validation.enabled }}
 apiVersion: batch/v1
 kind: Job
@@ -21,6 +24,11 @@ spec:
       containers:
       - name: validate
         image: {{ .Values.cliImage }}
+{{ if .Values.bmf.netbox.enabled }}
+        env:
+        - name: BMF_BMH_NAMESPACE
+          value: {{ .Values.bmf.metal3.namespace | quote }}
+{{ end }}
         command:
         - /bin/sh
         - -c
@@ -48,34 +56,46 @@ spec:
             echo "Some components (PostgreSQL, Keycloak) may fail to create PVCs."
           fi
 
-          {{- if .Values.bmf.metal3.enabled }}
+          {{- if or .Values.bmf.metal3.enabled .Values.bmf.netbox.enabled }}
           # Check that Metal3 BareMetalHost CRD exists
           echo "Checking for Metal3 BareMetalHost CRD..."
           if kubectl get crd baremetalhosts.metal3.io >/dev/null; then
             echo "  BareMetalHost CRD found."
           else
             echo "ERROR: BareMetalHost CRD (baremetalhosts.metal3.io) not found."
-            echo "Metal3 backend is configured but BareMetalOperator is not installed."
-            echo "Install BareMetalOperator before deploying OSAC with Metal3 backend."
+            echo "Metal3 BMH management is configured but BareMetalOperator is not installed."
+            echo "Install BareMetalOperator before deploying OSAC with Metal3 or NetBox inventory."
             exit 1
           fi
 
-          # Check that the Provisioning CR has watchAllNamespaces enabled
-          echo "Checking Provisioning CR watchAllNamespaces setting..."
-          WATCH_ALL=$(kubectl get provisioning -o jsonpath='{.items[0].spec.watchAllNamespaces}' 2>/dev/null || true)
+          # Check the canonical provisioning-configuration has watchAllNamespaces enabled
+          echo "Checking provisioning-configuration watchAllNamespaces setting..."
+          WATCH_ALL=$(kubectl get provisioning provisioning-configuration -o jsonpath='{.spec.watchAllNamespaces}' 2>/dev/null || true)
           if [ -z "$WATCH_ALL" ]; then
-            echo "ERROR: No Provisioning CR found."
-            echo "Metal3 backend requires a Provisioning CR with watchAllNamespaces: true."
+            echo "ERROR: provisioning-configuration CR not found."
+            echo "Metal3 backend requires provisioning-configuration with watchAllNamespaces: true."
             echo "Configure BareMetalOperator to watch all namespaces for BareMetalHost resources."
             exit 1
           elif [ "$WATCH_ALL" != "true" ]; then
-            echo "ERROR: Provisioning CR has watchAllNamespaces: ${WATCH_ALL}."
-            echo "Metal3 backend requires watchAllNamespaces: true on the Provisioning CR."
+            echo "ERROR: provisioning-configuration has watchAllNamespaces: ${WATCH_ALL}."
+            echo "Metal3 backend requires watchAllNamespaces: true on provisioning-configuration."
             echo "Set spec.watchAllNamespaces to true so BMO can discover BareMetalHost resources across namespaces."
             exit 1
           else
-            echo "  Provisioning CR watchAllNamespaces: true."
+            echo "  provisioning-configuration watchAllNamespaces: true."
           fi
+          {{- if .Values.bmf.netbox.enabled }}
+          # BMF can create and manage per-host BMC Secrets in this namespace.
+          # Require an explicit marker that the namespace is dedicated to BMHs and those credentials.
+          echo "Checking that the NetBox BMH namespace is dedicated to BMH and BMC Secrets..."
+          BMH_NAMESPACE_LABEL=$(kubectl get namespace "$BMF_BMH_NAMESPACE" -o jsonpath='{.metadata.labels.osac\.openshift\.io/bmh-secret-namespace}' 2>/dev/null || true)
+          if [ "$BMH_NAMESPACE_LABEL" != "true" ]; then
+            echo "ERROR: NetBox requires the BMH namespace to be dedicated to BareMetalHosts and their BMC credential Secrets."
+            echo "Label namespace $BMF_BMH_NAMESPACE with osac.openshift.io/bmh-secret-namespace=true."
+            exit 1
+          fi
+          echo "  NetBox BMH namespace is marked as dedicated."
+          {{- end }}
           {{- end }}
 
           echo "=== Validation passed ==="
@@ -110,10 +130,17 @@ rules:
 - apiGroups: ["storage.k8s.io"]
   resources: ["storageclasses"]
   verbs: ["list"]
-{{- if .Values.bmf.metal3.enabled }}
+{{- if .Values.bmf.netbox.enabled }}
+- apiGroups: [""]
+  resources: ["namespaces"]
+  resourceNames: [{{ .Values.bmf.metal3.namespace | quote }}]
+  verbs: ["get"]
+{{- end }}
+{{- if or .Values.bmf.metal3.enabled .Values.bmf.netbox.enabled }}
 - apiGroups: ["metal3.io"]
   resources: ["provisionings"]
-  verbs: ["list"]
+  resourceNames: ["provisioning-configuration"]
+  verbs: ["get"]
 {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1

@@ -24,11 +24,11 @@ const (
 	// FabricDomainTypeEthernetEW identifies an Ethernet east-west fabric.
 	FabricDomainTypeEthernetEW FabricDomainType = "EthernetEW"
 
-// FabricDomainTypeInfiniBandEW identifies an InfiniBand east-west fabric, reserved for Phase 2.
-FabricDomainTypeInfiniBandEW FabricDomainType = "InfiniBandEW"
+	// FabricDomainTypeInfiniBandEW identifies an InfiniBand east-west fabric, reserved for Phase 2.
+	FabricDomainTypeInfiniBandEW FabricDomainType = "InfiniBandEW"
 
-// FabricDomainTypeNVLink identifies an NVIDIA NVLink fabric, reserved for Phase 3.
-FabricDomainTypeNVLink FabricDomainType = "NVLink"
+	// FabricDomainTypeNVLink identifies an NVIDIA NVLink fabric, reserved for Phase 3.
+	FabricDomainTypeNVLink FabricDomainType = "NVLink"
 )
 
 // FabricDomainSpec defines the desired state of FabricDomain.

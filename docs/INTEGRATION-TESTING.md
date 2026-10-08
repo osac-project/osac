@@ -121,6 +121,52 @@ Report behavioral coverage, execution readiness, and test execution results
 separately. A case with a proposed harness or unresolved command is planned but
 not execution-ready; static checks passing does not change that status.
 
+## Agentic CI sandbox
+
+The repository overlay provides early Autofix feedback. It does not replace
+authoritative GitHub CI, component integration, or deployed E2E gates. Its
+[touched-area map](../.agentic-ci/AGENTS.md) owns validation of the overlay itself.
+All cases below belong to [DEV]
+[OSAC-6172](https://redhat.atlassian.net/browse/OSAC-6172).
+
+| Behavior | Tier | Execution and boundary |
+|---|---|---|
+| API/schema dependency selection, large tracked/untracked streams, Git fallbacks, UI/E2E routing, and failure propagation | Unit | From the repository root, run `uv run --no-project --with 'pyyaml>=6.0' python tools/test/agentic-ci-validation-smoke.py`; real temporary Git repositories and Bash execute the actual YAML validation bodies, while expensive commands are recording doubles |
+| Production setup and API/schema/UI/E2E scenarios | Component integration | Use the production Autofix image and OpenShell runner with the candidate overlay; actual toolchains, allowed registries, lint, supported unit tests, and pytest collection run. No OSAC deployment, container services, Kubernetes API, or provider is started |
+| Deliberate API test failure | Component integration | Add a failing unit test in an isolated production scenario, verify the go-test validation record fails, and run a clean scenario afterward |
+| Dependency copy-back and optional discard | Component integration | Measure three paired trials on the same production image; add exact generated paths only for median savings of at least 10% and five seconds, then verify restoration on reuse |
+
+API-directory changes select direct API lint/tests plus fulfillment's supported
+unit tests and existing operator/bare-metal consumers. Schema-directory changes
+select lint/tests in schema, adapters, and metering-service. Selected frontend
+validation installs frozen dependencies and runs typecheck, lint, and the full
+unit suite, including untracked tests.
+
+E2E collection uses the root project dependencies in a separate venv outside the
+workdir and runs `pytest --collect-only -n 0 -m 'not metering' tests/e2e/`.
+The metering marker is excluded because the current collection-finish hook
+requires `METERING_ADAPTER_URL`, even during collection. This proves import and
+collection readiness for selected cases, not deployed journeys or metering
+coverage. Selected/deselected counts are revision-specific evidence, not fixed
+thresholds. Retained container, Envtest, network, and live-service exceptions
+are declared in the overlay's skips.
+
+Production evidence must identify the candidate/base commits, image digest,
+runner revision, effective merged profile, and selected toolchain versions.
+Verify both project-selected interpreters (fulfillment 3.14 and AAP 3.13) with
+Python downloads disabled. Use a fresh setup and select the candidate as the
+overlay source: the runner reads it before the agent runs. Local/Podman runners
+ignore profile overlays and cannot establish this acceptance boundary.
+
+Attach `_run/sandbox-setup.json`, `_run/sandbox-validation.json`, and
+`_run/toolchains.json`, along with module-selection logs, UI results, E2E counts,
+and copy-back measurements. Include `_run/sandbox-discard.json` when paths are
+added. A successful overall agent exit does not imply successful validation;
+inspect required records for failure, timeout, error, or not-run status. Label
+the intentional negative scenario separately. Missing production execution or
+profiling evidence remains an acceptance gap under
+[OSAC-6172](https://redhat.atlassian.net/browse/OSAC-6172).
+
 ## fulfillment-service
 
 Touched-area requirements: [component guide](../fulfillment-service/AGENTS.md#integration-tests).

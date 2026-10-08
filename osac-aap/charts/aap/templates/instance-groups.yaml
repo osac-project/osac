@@ -53,7 +53,7 @@ metadata:
     osac.openshift.io/project: osac-aap
 data:
   {{- range $key, $val := $cfg }}
-  {{- if and $val (ne $key "HOSTED_CLUSTER_BASE_DOMAIN") }}
+  {{- if and (or $val (kindIs "bool" $val)) (ne $key "HOSTED_CLUSTER_BASE_DOMAIN") }}
   {{ $key }}: {{ $val | quote }}
   {{- end }}
   {{- end }}
@@ -133,7 +133,7 @@ metadata:
     osac.openshift.io/project: osac-aap
 data:
   {{- range $key, $val := $cfg }}
-  {{- if $val }}
+  {{- if or $val (kindIs "bool" $val) }}
   {{ $key }}: {{ $val | quote }}
   {{- end }}
   {{- end }}

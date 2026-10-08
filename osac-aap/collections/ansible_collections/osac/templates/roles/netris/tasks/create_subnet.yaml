@@ -111,8 +111,6 @@
   ansible.builtin.include_role:
     name: netris.controller.vnet
     tasks_from: read_by_id
-  vars:
-    vnet_id: "{{ vnet_id }}"
 
 - name: Publish fabric outputs for the k8s manager
   kubernetes.core.k8s:

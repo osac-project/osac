@@ -719,6 +719,40 @@ def _managed_file_matches(
     return current == content and (mode is None or stat.S_IMODE(info.st_mode) == mode)
 
 
+def _snapshot_managed_files(
+    paths: list[Path],
+) -> dict[Path, tuple[bytes, int] | None]:
+    snapshot = {}
+    for path in paths:
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            snapshot[path] = None
+            continue
+        except OSError as error:
+            raise SubnetProviderError(
+                "could not inspect AgentlessNet DHCP file for recovery"
+            ) from error
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+            raise SubnetProviderError("AgentlessNet DHCP file has unsafe type or owner")
+        try:
+            snapshot[path] = (path.read_bytes(), stat.S_IMODE(info.st_mode))
+        except OSError as error:
+            raise SubnetProviderError(
+                "could not read AgentlessNet DHCP file for recovery"
+            ) from error
+    return snapshot
+
+
+def _restore_managed_files(snapshot: dict[Path, tuple[bytes, int] | None]) -> None:
+    for path, previous in snapshot.items():
+        if previous is None:
+            _unlink_owned(path)
+        else:
+            content, mode = previous
+            _atomic_write(path, content, mode=mode)
+
+
 def _service_socket_present(namespace: str, ip: str) -> bool:
     ss = _binary("ss")
     result = _run([ip, "netns", "exec", namespace, ss, "-H", "-lun"])
@@ -735,6 +769,17 @@ def _supervisor_running(program: str) -> bool:
         check=False,
     )
     return result.returncode == 0 and " RUNNING " in result.stdout
+
+
+def _supervisor_may_be_running(program: str) -> bool:
+    result = _run(
+        ["supervisorctl", "-c", str(SUPERVISOR_BASE_CONFIG), "status", program],
+        check=False,
+    )
+    return any(
+        f" {state} " in result.stdout
+        for state in ("RUNNING", "STARTING", "BACKOFF", "STOPPING")
+    )
 
 
 def _wait_for_supervisor_running(program: str) -> bool:
@@ -758,6 +803,52 @@ def _stop_dhcp_service(supervisor: str, service_name: str) -> None:
     _run(["supervisorctl", "-c", str(SUPERVISOR_BASE_CONFIG), "stop", service_name])
     if _supervisor_running(service_name):
         raise SubnetProviderError("AgentlessNet DHCP Supervisor program did not stop")
+
+
+def _recover_dhcp_service(
+    supervisor: str,
+    service_name: str,
+    namespace: str,
+    ip: str,
+    snapshot: dict[Path, tuple[bytes, int] | None],
+    *,
+    files_may_have_changed: bool,
+    start_attempted: bool,
+) -> None:
+    if supervisor == "systemd":
+        service_may_be_running = _systemd_running(service_name)
+    else:
+        service_may_be_running = _supervisor_may_be_running(service_name)
+    if start_attempted and service_may_be_running:
+        _stop_dhcp_service(supervisor, service_name)
+
+    if files_may_have_changed:
+        _restore_managed_files(snapshot)
+        if supervisor == "systemd":
+            _run(["systemctl", "daemon-reload"])
+        else:
+            _run(["supervisorctl", "-c", str(SUPERVISOR_BASE_CONFIG), "reread"])
+            _run(
+                ["supervisorctl", "-c", str(SUPERVISOR_BASE_CONFIG), "update", service_name]
+            )
+
+    if supervisor == "systemd":
+        if not _systemd_running(service_name):
+            _run(["systemctl", "start", service_name])
+        if not _systemd_running(service_name):
+            raise SubnetProviderError("AgentlessNet DHCP systemd unit did not recover")
+    else:
+        if not _supervisor_running(service_name):
+            _run(
+                ["supervisorctl", "-c", str(SUPERVISOR_BASE_CONFIG), "start", service_name]
+            )
+        if not _wait_for_supervisor_running(service_name):
+            raise SubnetProviderError(
+                "AgentlessNet DHCP Supervisor program did not recover"
+            )
+
+    if not _service_socket_present(namespace, ip):
+        raise SubnetProviderError("AgentlessNet DHCP socket did not recover")
 
 
 def _ensure_dhcp_service(
@@ -853,16 +944,36 @@ def _ensure_dhcp_service(
             )
         return False
 
+    service_name = unit if dhcp_supervisor == "systemd" else program
+    service_path = (
+        paths["systemd_unit"]
+        if dhcp_supervisor == "systemd"
+        else paths["supervisor_program"]
+    )
+    recovery_snapshot = None
+    recovery_required = False
+    files_may_have_changed = False
+    start_attempted = False
+
     try:
         if active:
-            service_name = unit if dhcp_supervisor == "systemd" else program
+            # Reject malformed leases before stopping DHCP, then reread after its final flush.
+            _ensure_lease_file(paths)
+            recovery_snapshot = _snapshot_managed_files(
+                [paths["config"], paths["leases"], service_path]
+            )
+            recovery_required = True
             _stop_dhcp_service(dhcp_supervisor, service_name)
 
         # dnsmasq keeps this file open while it runs. Read and replace it only
         # after stopping that process, so its final lease flush cannot land on
         # an old inode after stale leases have been pruned.
         lease_bytes = _ensure_lease_file(paths)
+        if recovery_snapshot is not None:
+            _, lease_mode = recovery_snapshot[paths["leases"]]
+            recovery_snapshot[paths["leases"]] = (lease_bytes, lease_mode)
         desired_leases = _retain_active_subnet_leases(lease_bytes, entries)
+        files_may_have_changed = recovery_required
         config_changed = _install_validated_config(
             paths["config"], candidate, desired_config
         )
@@ -878,6 +989,7 @@ def _ensure_dhcp_service(
             changed = changed or unit_changed
             if unit_changed:
                 _run(["systemctl", "daemon-reload"])
+            start_attempted = True
             if active:
                 _run(["systemctl", "start", unit])
             else:
@@ -890,8 +1002,10 @@ def _ensure_dhcp_service(
             changed = changed or program_changed
             if program_changed:
                 _run(["supervisorctl", "-c", str(SUPERVISOR_BASE_CONFIG), "reread"])
+                start_attempted = True
                 _run(["supervisorctl", "-c", str(SUPERVISOR_BASE_CONFIG), "update", program])
             else:
+                start_attempted = True
                 _run(["supervisorctl", "-c", str(SUPERVISOR_BASE_CONFIG), "start", program])
             changed = True
             if not _wait_for_supervisor_running(program):
@@ -902,8 +1016,23 @@ def _ensure_dhcp_service(
                 "AgentlessNet DHCP UDP socket is absent from the VirtualNetwork namespace"
             )
         return changed
-    except Exception:
+    except Exception as error:
         candidate.unlink(missing_ok=True)
+        if recovery_required and recovery_snapshot is not None:
+            try:
+                _recover_dhcp_service(
+                    dhcp_supervisor,
+                    service_name,
+                    namespace,
+                    ip,
+                    recovery_snapshot,
+                    files_may_have_changed=files_may_have_changed,
+                    start_attempted=start_attempted,
+                )
+            except Exception:
+                raise SubnetProviderError(
+                    "AgentlessNet DHCP update failed and service recovery did not complete"
+                ) from error
         raise
 
 

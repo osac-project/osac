@@ -482,14 +482,15 @@ def test_dhcp_prune_stops_dnsmasq_before_reading_and_replacing_open_lease_file(
     lease_path.chmod(0o600)
     lease_fd = os.open(lease_path, os.O_WRONLY | os.O_APPEND)
 
-    def flush_open_lease_stream():
-        os.write(lease_fd, final_active_lease)
-        os.close(lease_fd)
+    with os.fdopen(lease_fd, "wb", buffering=0) as lease_stream:
+        def flush_open_lease_stream():
+            os.write(lease_stream.fileno(), final_active_lease)
+            lease_stream.close()
 
-    service["on_stop"] = flush_open_lease_stream
-    changed = agentless_net_subnet.prepare_subnet_delete_data_plane(
-        parent_entry(), removed, [first], dhcp_supervisor
-    )
+        service["on_stop"] = flush_open_lease_stream
+        changed = agentless_net_subnet.prepare_subnet_delete_data_plane(
+            parent_entry(), removed, [first], dhcp_supervisor
+        )
 
     assert changed is True
     assert lease_path.read_bytes() == active_lease + final_active_lease
@@ -502,6 +503,319 @@ def test_dhcp_prune_stops_dnsmasq_before_reading_and_replacing_open_lease_file(
         assert service["supervisor_stops"] == 1
         assert service["supervisor_restarts"] == 1
         assert service["supervisor_running"] is True
+
+
+def active_dhcp_update_testbed(monkeypatch, tmp_path, dhcp_supervisor):
+    _, _, _, _, _, service = provider_testbed(monkeypatch, tmp_path)
+    first = subnet_entry(SUBNET_A_UID, "10.20.1.0/24", 100)
+    removed = subnet_entry(SUBNET_B_UID, "10.20.2.0/24", 101)
+    agentless_net_subnet.ensure_subnet_data_plane(
+        parent_entry(), [first, removed], dhcp_supervisor
+    )
+    paths = agentless_net_subnet._state_paths(VN_UID)
+    service_path = paths[
+        "systemd_unit" if dhcp_supervisor == "systemd" else "supervisor_program"
+    ]
+    return first, removed, paths, service_path, service
+
+
+def dhcp_service_is_running(service, dhcp_supervisor):
+    return (
+        service["active"]
+        if dhcp_supervisor == "systemd"
+        else service["supervisor_running"]
+    )
+
+
+@pytest.mark.parametrize("dhcp_supervisor", ["systemd", "supervisor"])
+def test_dhcp_update_rejects_malformed_leases_before_stopping_service(
+    monkeypatch, tmp_path, dhcp_supervisor
+):
+    first, _, paths, _, service = active_dhcp_update_testbed(
+        monkeypatch, tmp_path, dhcp_supervisor
+    )
+    paths["leases"].write_bytes(b"malformed lease state\n")
+    paths["leases"].chmod(0o600)
+    original_config = paths["config"].read_bytes()
+
+    with pytest.raises(agentless_net_subnet.SubnetProviderError, match="malformed"):
+        agentless_net_subnet.ensure_subnet_data_plane(
+            parent_entry(), [first], dhcp_supervisor
+        )
+
+    assert dhcp_service_is_running(service, dhcp_supervisor) is True
+    if dhcp_supervisor == "systemd":
+        assert service["stops"] == 0
+    else:
+        assert service["supervisor_stops"] == 0
+    assert paths["config"].read_bytes() == original_config
+
+
+@pytest.mark.parametrize("dhcp_supervisor", ["systemd", "supervisor"])
+def test_dhcp_update_recovers_if_final_lease_read_fails_after_stop(
+    monkeypatch, tmp_path, dhcp_supervisor
+):
+    first, _, paths, service_path, service = active_dhcp_update_testbed(
+        monkeypatch, tmp_path, dhcp_supervisor
+    )
+    lease_path = paths["leases"]
+    active_lease = b"1798765432 aa:bb:cc:dd:ee:ff 10.20.1.22 client-a *\n"
+    final_lease = b"1798765432 aa:bb:cc:dd:ee:11 10.20.1.23 client-a *\n"
+    lease_path.write_bytes(active_lease)
+    lease_path.chmod(0o600)
+    original_config = paths["config"].read_bytes()
+    original_service = service_path.read_bytes()
+
+    def flush_open_lease_stream():
+        with lease_path.open("ab") as stream:
+            stream.write(final_lease)
+
+    service["on_stop"] = flush_open_lease_stream
+    ensure_lease_file = agentless_net_subnet._ensure_lease_file
+    injected = False
+
+    def fail_after_stop(lease_paths):
+        nonlocal injected
+        if not dhcp_service_is_running(service, dhcp_supervisor) and not injected:
+            injected = True
+            raise agentless_net_subnet.SubnetProviderError(
+                "injected final lease read failure"
+            )
+        return ensure_lease_file(lease_paths)
+
+    monkeypatch.setattr(agentless_net_subnet, "_ensure_lease_file", fail_after_stop)
+    with pytest.raises(
+        agentless_net_subnet.SubnetProviderError, match="injected final lease"
+    ):
+        agentless_net_subnet.ensure_subnet_data_plane(
+            parent_entry(), [first], dhcp_supervisor
+        )
+
+    assert injected is True
+    assert dhcp_service_is_running(service, dhcp_supervisor) is True
+    assert lease_path.read_bytes() == active_lease + final_lease
+    assert paths["config"].read_bytes() == original_config
+    assert service_path.read_bytes() == original_service
+
+
+@pytest.mark.parametrize("dhcp_supervisor", ["systemd", "supervisor"])
+def test_dhcp_update_recovers_if_stop_raises_after_stopping_service(
+    monkeypatch, tmp_path, dhcp_supervisor
+):
+    first, _, paths, _, service = active_dhcp_update_testbed(
+        monkeypatch, tmp_path, dhcp_supervisor
+    )
+    lease_path = paths["leases"]
+    active_lease = b"1798765432 aa:bb:cc:dd:ee:ff 10.20.1.22 client-a *\n"
+    final_lease = b"1798765432 aa:bb:cc:dd:ee:11 10.20.1.23 client-a *\n"
+    lease_path.write_bytes(active_lease)
+    lease_path.chmod(0o600)
+    stop_service = agentless_net_subnet._stop_dhcp_service
+
+    def flush_open_lease_stream():
+        with lease_path.open("ab") as stream:
+            stream.write(final_lease)
+
+    service["on_stop"] = flush_open_lease_stream
+
+    def stop_then_raise(supervisor, service_name):
+        stop_service(supervisor, service_name)
+        raise agentless_net_subnet.SubnetProviderError("injected stop failure")
+
+    monkeypatch.setattr(agentless_net_subnet, "_stop_dhcp_service", stop_then_raise)
+    with pytest.raises(agentless_net_subnet.SubnetProviderError, match="injected stop"):
+        agentless_net_subnet.ensure_subnet_data_plane(
+            parent_entry(), [first], dhcp_supervisor
+        )
+
+    assert dhcp_service_is_running(service, dhcp_supervisor) is True
+    assert lease_path.read_bytes() == active_lease + final_lease
+
+
+@pytest.mark.parametrize("dhcp_supervisor", ["systemd", "supervisor"])
+def test_dhcp_update_restores_snapshot_if_service_definition_write_fails(
+    monkeypatch, tmp_path, dhcp_supervisor
+):
+    first, _, paths, service_path, service = active_dhcp_update_testbed(
+        monkeypatch, tmp_path, dhcp_supervisor
+    )
+    lease_path = paths["leases"]
+    active_lease = b"1798765432 aa:bb:cc:dd:ee:ff 10.20.1.22 client-a *\n"
+    removed_lease = b"1798765432 4a:83:40:2c:97:ca 10.20.2.172 client-b *\n"
+    final_lease = b"1798765432 aa:bb:cc:dd:ee:11 10.20.1.23 client-a *\n"
+    lease_path.write_bytes(active_lease + removed_lease)
+    lease_path.chmod(0o600)
+    paths["config"].chmod(0o640)
+    service_path.chmod(0o640)
+    original_files = {
+        path: (path.read_bytes(), path.stat().st_mode & 0o777)
+        for path in (paths["config"], lease_path, service_path)
+    }
+    # dnsmasq flushes this valid lease to the open file during shutdown.
+    original_files[lease_path] = (active_lease + removed_lease + final_lease, 0o600)
+
+    def flush_open_lease_stream():
+        with lease_path.open("ab") as stream:
+            stream.write(final_lease)
+
+    service["on_stop"] = flush_open_lease_stream
+    atomic_write = agentless_net_subnet._atomic_write
+    injected = False
+
+    def fail_after_service_file_write(path, content, *, mode=0o600):
+        nonlocal injected
+        if path == service_path and not injected:
+            injected = True
+            atomic_write(path, b"partially installed service definition\n", mode=mode)
+            raise agentless_net_subnet.SubnetProviderError(
+                "injected service file write failure"
+            )
+        return atomic_write(path, content, mode=mode)
+
+    monkeypatch.setattr(
+        agentless_net_subnet, "_atomic_write", fail_after_service_file_write
+    )
+    with pytest.raises(
+        agentless_net_subnet.SubnetProviderError, match="injected service file"
+    ):
+        agentless_net_subnet.ensure_subnet_data_plane(
+            parent_entry(), [first], dhcp_supervisor
+        )
+
+    assert injected is True
+    assert dhcp_service_is_running(service, dhcp_supervisor) is True
+    assert {
+        path: (path.read_bytes(), path.stat().st_mode & 0o777)
+        for path in original_files
+    } == original_files
+    assert lease_path.read_bytes().endswith(final_lease)
+
+
+@pytest.mark.parametrize("dhcp_supervisor", ["systemd", "supervisor"])
+def test_dhcp_update_restores_snapshot_if_start_fails_after_taking_effect(
+    monkeypatch, tmp_path, dhcp_supervisor
+):
+    first, _, paths, service_path, service = active_dhcp_update_testbed(
+        monkeypatch, tmp_path, dhcp_supervisor
+    )
+    lease_path = paths["leases"]
+    lease_path.write_bytes(b"1798765432 aa:bb:cc:dd:ee:ff 10.20.1.22 client-a *\n")
+    lease_path.chmod(0o600)
+    original_files = {
+        path: (path.read_bytes(), path.stat().st_mode & 0o777)
+        for path in (paths["config"], lease_path, service_path)
+    }
+    run = agentless_net_subnet._run
+    injected = False
+
+    def fail_after_start(command, check=True):
+        nonlocal injected
+        result = run(command, check=check)
+        starts_service = (
+            Path(command[0]).name == "systemctl" and command[1] == "start"
+        ) or (
+            Path(command[0]).name == "supervisorctl" and command[3] == "start"
+        )
+        if starts_service and not injected:
+            injected = True
+            raise agentless_net_subnet.SubnetProviderError(
+                "injected service start failure"
+            )
+        return result
+
+    monkeypatch.setattr(agentless_net_subnet, "_run", fail_after_start)
+    with pytest.raises(
+        agentless_net_subnet.SubnetProviderError, match="injected service start"
+    ):
+        agentless_net_subnet._ensure_dhcp_service(
+            parent_entry(),
+            [first],
+            dhcp_supervisor,
+            paths,
+            interface_changed=True,
+        )
+
+    assert injected is True
+    assert dhcp_service_is_running(service, dhcp_supervisor) is True
+    assert {
+        path: (path.read_bytes(), path.stat().st_mode & 0o777)
+        for path in original_files
+    } == original_files
+
+
+@pytest.mark.parametrize("dhcp_supervisor", ["systemd", "supervisor"])
+def test_dhcp_update_does_not_start_service_if_snapshot_restore_fails(
+    monkeypatch, tmp_path, dhcp_supervisor
+):
+    first, _, paths, service_path, service = active_dhcp_update_testbed(
+        monkeypatch, tmp_path, dhcp_supervisor
+    )
+    atomic_write = agentless_net_subnet._atomic_write
+    writes = 0
+
+    def fail_service_writes(path, content, *, mode=0o600):
+        nonlocal writes
+        if path == service_path:
+            writes += 1
+            if writes == 1:
+                atomic_write(
+                    path, b"partially installed service definition\n", mode=mode
+                )
+                raise agentless_net_subnet.SubnetProviderError("injected update failure")
+            raise agentless_net_subnet.SubnetProviderError("injected restore failure")
+        return atomic_write(path, content, mode=mode)
+
+    monkeypatch.setattr(agentless_net_subnet, "_atomic_write", fail_service_writes)
+    with pytest.raises(
+        agentless_net_subnet.SubnetProviderError,
+        match="service recovery did not complete",
+    ):
+        agentless_net_subnet.ensure_subnet_data_plane(
+            parent_entry(), [first], dhcp_supervisor
+        )
+
+    assert writes == 2
+    assert dhcp_service_is_running(service, dhcp_supervisor) is False
+
+
+def test_dhcp_prune_closes_lease_stream_if_provider_raises_before_stop_callback(
+    monkeypatch, tmp_path
+):
+    first, removed, paths, _, service = active_dhcp_update_testbed(
+        monkeypatch, tmp_path, "systemd"
+    )
+    lease_path = paths["leases"]
+    lease_path.write_bytes(b"1798765432 aa:bb:cc:dd:ee:ff 10.20.1.22 client-a *\n")
+    lease_path.chmod(0o600)
+    lease_fd = os.open(lease_path, os.O_WRONLY | os.O_APPEND)
+
+    def fail_before_stop(parent, target, remaining, supervisor):
+        raise agentless_net_subnet.SubnetProviderError("injected provider failure")
+
+    monkeypatch.setattr(
+        agentless_net_subnet,
+        "prepare_subnet_delete_data_plane",
+        fail_before_stop,
+    )
+    with os.fdopen(lease_fd, "wb", buffering=0) as lease_stream:
+
+        def flush_open_lease_stream():
+            os.write(
+                lease_stream.fileno(),
+                b"1798765432 aa:bb:cc:dd:ee:11 10.20.1.23 client-a *\n",
+            )
+            lease_stream.close()
+
+        service["on_stop"] = flush_open_lease_stream
+        with pytest.raises(
+            agentless_net_subnet.SubnetProviderError, match="injected provider"
+        ):
+            agentless_net_subnet.prepare_subnet_delete_data_plane(
+                parent_entry(), removed, [first], "systemd"
+            )
+
+    assert lease_stream.closed is True
+    assert service["on_stop"] is not None
 
 
 @pytest.mark.parametrize("dhcp_supervisor", ["systemd", "supervisor"])

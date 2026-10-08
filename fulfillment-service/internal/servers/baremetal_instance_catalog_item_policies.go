@@ -325,8 +325,9 @@ func decodeBareMetalInstanceTypeLocalReferenceAsSpecPolicy(
 			return nil
 		}
 		return privatev1.BareMetalInstanceTypeReference_builder{
-			Id:   local.GetId(),
-			Name: local.GetName(),
+			Id:     local.GetId(),
+			Name:   local.GetName(),
+			Shared: true,
 		}.Build()
 	}
 	return policyState[*privatev1.BareMetalInstanceTypeReference]{

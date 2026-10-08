@@ -678,12 +678,17 @@ func (s *PrivateBareMetalInstancesServer) findDefaultSecurityGroup(
 // network port with role "fabric".
 func (s *PrivateBareMetalInstancesServer) resolveDefaultInterface(
 	ctx context.Context, bmi *privatev1.BareMetalInstance) (string, error) {
-	bmitRef := refKey(bmi.GetSpec().GetInstanceType())
+	bmitRefObj := bmi.GetSpec().GetInstanceType()
+	bmitRef := refKey(bmitRefObj)
 	if bmitRef == "" {
 		return "", nil
 	}
+	filter := fmt.Sprintf("this.metadata.name == %s", strconv.Quote(bmitRef))
+	if bmitRefObj.GetId() != "" {
+		filter = fmt.Sprintf("this.id == %s", strconv.Quote(bmitRefObj.GetId()))
+	}
 	response, err := s.instanceTypesDao.List().
-		SetFilter(fmt.Sprintf("this.id == %[1]s || this.metadata.name == %[1]s", strconv.Quote(bmitRef))).
+		SetFilter(filter).
 		SetLimit(1).
 		Do(ctx)
 	if err != nil {

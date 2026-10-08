@@ -283,7 +283,7 @@ class TestClusterBareMetalReferences:
                     },
                 )
                 cluster_id = response["object"]["id"]
-            assert_grpc_field_violation(exc_info, field_path="node_sets.workers.baremetal_instance_type")
+            assert_grpc_field_violation(exc_info, field_path='object.spec.node_sets["workers"].baremetal_instance_type')
         finally:
             if cluster_id:
                 jwt_grpc_tenant1.call(service=f"{PUBLIC_API}.Clusters/Delete", data={"id": cluster_id})

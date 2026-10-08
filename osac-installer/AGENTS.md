@@ -49,6 +49,7 @@ respective areas.
 | Fulfillment hook commands, CA mounts, or gate rendering | Helm contract | `make fulfillment-trust-render-test` |
 | Fulfillment token helper or dev-full hook credential wiring | Unit and Helm contract | `make fulfillment-auth-test` and `make dev-full-render-test` |
 | Deployed dev-full hook authentication | Component integration | Coverage gap tracked by [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843); local `install-devstack` invokes the hooks but does not assert token acceptance. |
+| ClusterVersion seed schema, DiskImage payloads, or retry handling | Helm contract + simulated hook Unit | `make cluster-version-seed-test` (Helm, Python, PyYAML; no deployed API) |
 | Deployed hooks or cross-component startup | Component integration | `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment` with a deployed Kind environment; see [suite boundaries](../docs/INTEGRATION-TESTING.md#osac-installer) |
 
 ## Validation
@@ -61,6 +62,7 @@ make helm-validate
 pre-commit run --all-files
 make mce-render-test
 make fulfillment-trust-render-test
+make cluster-version-seed-test
 ```
 
 `pre-commit run --all-files` does not constitute a full repository secret scan;

@@ -225,6 +225,15 @@ jobs:
       working-directory: osac-installer
       run: helm dependency build charts/osac/
 
+    - name: Test cluster-version seeding
+      if: steps.should-run.outputs.run
+      working-directory: osac-installer
+      run: |
+        set -euo pipefail
+        python3 -m venv "${RUNNER_TEMP}/cluster-version-seed"
+        "${RUNNER_TEMP}/cluster-version-seed/bin/pip" install 'PyYAML>=6.0,<7'
+        PATH="${RUNNER_TEMP}/cluster-version-seed/bin:${PATH}" make cluster-version-seed-test
+
     - name: Test networking values
       if: steps.should-run.outputs.run
       working-directory: osac-installer

@@ -26,6 +26,11 @@ global:
     k8sManager: k8s_only
     netris:
       controllerUrl: ""
+      validateCerts: true
+      # Optional customer-created ConfigMap in the AAP namespace. The
+      # ConfigMap must contain the Netris CA chain under bundle.pem.
+      caBundle:
+        configMap: ""
       credentials:
         username: ""
         externalSecret: true

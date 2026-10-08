@@ -37,9 +37,17 @@ where applicable):
 | `REMOTE_CLUSTER_KUBECONFIG_SECRET_NAME` | Name of the secret holding the kubeconfig for the remote cluster (compute, networking, and storage operations) | — |
 | `REMOTE_CLUSTER_KUBECONFIG_SECRET_KEY` | Key within that secret for the kubeconfig file | `kubeconfig` |
 | `OSAC_PUBLISH_TEMPLATES_ENABLED` | Whether the periodic **publish-templates** schedule is enabled in Controller (`true`/`false`) | `true` |
+| `NETRIS_VALIDATE_CERTS` | Whether Netris TLS certificates are validated by managed jobs | `true` |
+| `NETRIS_CA_CONFIGMAP` | Optional customer-created ConfigMap name containing `bundle.pem` in the AAP namespace | — |
 
 These variables must be defined in a secret named `config-as-code-ig` in the
 namespace where AAP is deployed.
+
+When `NETRIS_CA_CONFIGMAP` is configured, config-as-code adds a required,
+read-only `bundle.pem` mount to the OSAC-managed Netris container groups and
+sets `NETRIS_CA_PATH`. The installer supplies these values from
+`global.networking.netris`; customers create the ConfigMap and the installer
+does not copy certificate contents into the execution-environment image.
 
 The content of license manifest file must be set in a secret named
 `config-as-code-manifest-ig` as `license.zip` in the namespace where AAP is

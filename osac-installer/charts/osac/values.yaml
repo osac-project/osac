@@ -51,6 +51,13 @@ global:
     k8sManager: k8s_only
     netris:
       controllerUrl: ""
+      # Validate the Netris controller certificate. Keep enabled for production;
+      # set false only in a separately managed test profile.
+      validateCerts: true
+      # Optional customer-created ConfigMap in the AAP namespace. It must
+      # contain the PEM bundle under the fixed key bundle.pem.
+      caBundle:
+        configMap: ""
       credentials:
         username: ""
       siteId: ""

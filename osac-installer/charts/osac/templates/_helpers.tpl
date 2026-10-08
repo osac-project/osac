@@ -172,6 +172,7 @@ its two instance-group manifests.
 {{- $creds := $netris.credentials | default dict -}}
 {{- $derived := dict
   "NETRIS_CONTROLLER_URL" ($netris.controllerUrl | default "")
+  "NETRIS_VALIDATE_CERTS" ($netris.validateCerts | default true)
   "NETRIS_USERNAME" ($creds.username | default "")
   "NETRIS_SITE_ID" ($netris.siteId | default "" | toString)
   "NETRIS_TENANT_ID" ($netris.tenantId | default "" | toString)
@@ -228,6 +229,7 @@ facade vs low-level surface mismatches).
 {{- end }}
 {{- $netrisConfigFields := list
   "NETRIS_CONTROLLER_URL"
+  "NETRIS_VALIDATE_CERTS"
   "NETRIS_USERNAME"
   "NETRIS_SITE_ID"
   "NETRIS_TENANT_ID"

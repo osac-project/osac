@@ -20,12 +20,14 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 var _ = Describe("handleCreateComputeInstance", func() {
-	It("Builds a compute instance from the catalog item and forwards the caller token", func() {
+	It("Builds a compute instance from the catalog item and uses the exchanged API token", func() {
 		var capturedToken string
 		var capturedObject *publicv1.ComputeInstance
 		instances := &mockComputeInstancesClient{
@@ -55,7 +57,7 @@ var _ = Describe("handleCreateComputeInstance", func() {
 			ID:    "instance-1",
 			State: "COMPUTE_INSTANCE_STATE_STARTING",
 		}))
-		Expect(capturedToken).To(Equal("Bearer raw-bearer-value"))
+		Expect(capturedToken).To(Equal("Bearer api-for-raw-bearer-value"))
 		Expect(capturedObject.GetMetadata().GetName()).To(Equal("demo-vm"))
 		Expect(capturedObject.GetMetadata().GetTenant()).To(BeEmpty())
 		Expect(capturedObject.GetSpec().GetCatalogItem().GetId()).To(Equal("catalog-item-1"))
@@ -139,12 +141,12 @@ var _ = Describe("handleCreateComputeInstance", func() {
 		}, "network_attachments[0].security_group_ids[0] is required"),
 	)
 
-	It("Propagates a ComputeInstance Create error", func() {
+	It("Hides a ComputeInstance Create error description", func() {
 		instances := &mockComputeInstancesClient{
 			createFunc: func(
 				ctx context.Context, request *publicv1.ComputeInstancesCreateRequest, options ...grpc.CallOption,
 			) (*publicv1.ComputeInstancesCreateResponse, error) {
-				return nil, errors.New("boom")
+				return nil, status.Error(codes.InvalidArgument, "private SQL host and customer data")
 			},
 		}
 
@@ -153,7 +155,7 @@ var _ = Describe("handleCreateComputeInstance", func() {
 			Name:        "demo-vm",
 			CatalogItem: "catalog-item-1",
 		})
-		Expect(err).To(MatchError(ContainSubstring("boom")))
+		Expect(err).To(MatchError("public API rejected the request"))
 	})
 })
 
@@ -162,7 +164,7 @@ func int32Pointer(value int32) *int32 {
 }
 
 var _ = Describe("handleDeleteComputeInstance", func() {
-	It("Deletes the requested compute instance and forwards the caller token", func() {
+	It("Deletes the requested compute instance and uses the exchanged API token", func() {
 		var capturedToken string
 		instances := &mockComputeInstancesClient{
 			deleteFunc: func(
@@ -178,20 +180,20 @@ var _ = Describe("handleDeleteComputeInstance", func() {
 		_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), DeleteComputeInstanceInput{ID: "instance-1"})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(output).To(Equal(DeleteComputeInstanceOutput{ID: "instance-1"}))
-		Expect(capturedToken).To(Equal("Bearer raw-bearer-value"))
+		Expect(capturedToken).To(Equal("Bearer api-for-raw-bearer-value"))
 	})
 
-	It("Propagates a ComputeInstance Delete error", func() {
+	It("Hides a ComputeInstance Delete error description", func() {
 		instances := &mockComputeInstancesClient{
 			deleteFunc: func(
 				ctx context.Context, request *publicv1.ComputeInstancesDeleteRequest, options ...grpc.CallOption,
 			) (*publicv1.ComputeInstancesDeleteResponse, error) {
-				return nil, errors.New("boom")
+				return nil, status.Error(codes.Unavailable, "private SQL host and customer data")
 			},
 		}
 
 		handler := handleDeleteComputeInstance(instances)
 		_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), DeleteComputeInstanceInput{ID: "instance-1"})
-		Expect(err).To(MatchError(ContainSubstring("boom")))
+		Expect(err).To(MatchError("public API is unavailable"))
 	})
 })

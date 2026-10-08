@@ -15,14 +15,16 @@ package mcpserver
 
 import (
 	"context"
-	"errors"
+	"time"
 
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -118,7 +120,9 @@ func requestWithToken(rawToken string) *mcp.CallToolRequest {
 	return &mcp.CallToolRequest{
 		Extra: &mcp.RequestExtra{
 			TokenInfo: &sdkauth.TokenInfo{
-				Extra: map[string]any{rawTokenExtraKey: rawToken},
+				Extra: map[string]any{exchangeTokenExtraKey: apiTokenSource(func(context.Context) (string, error) {
+					return "api-for-" + rawToken, nil
+				})},
 			},
 		},
 	}
@@ -137,13 +141,17 @@ func forwardedToken(ctx context.Context) string {
 }
 
 var _ = Describe("handleListResources", func() {
-	It("Lists compute instance catalog items and forwards the caller token", func() {
+	It("Lists compute instance catalog items and uses the exchanged API token", func() {
 		var capturedToken string
 		var capturedOffset, capturedLimit int32
 		catalogItems := &mockComputeInstanceCatalogItemsClient{
 			listFunc: func(
 				ctx context.Context, request *publicv1.ComputeInstanceCatalogItemsListRequest, options ...grpc.CallOption,
 			) (*publicv1.ComputeInstanceCatalogItemsListResponse, error) {
+				deadline, ok := ctx.Deadline()
+				Expect(ok).To(BeTrue())
+				Expect(time.Until(deadline)).To(BeNumerically(">", 0))
+				Expect(time.Until(deadline)).To(BeNumerically("<=", toolCallTimeout))
 				capturedToken = forwardedToken(ctx)
 				capturedOffset = request.GetOffset()
 				capturedLimit = request.GetLimit()
@@ -176,7 +184,7 @@ var _ = Describe("handleListResources", func() {
 		Expect(output.Offset).To(Equal(int32(2)))
 		Expect(output.Size).To(Equal(int32(1)))
 		Expect(output.Total).To(Equal(int32(4)))
-		Expect(capturedToken).To(Equal("Bearer raw-bearer-value"))
+		Expect(capturedToken).To(Equal("Bearer api-for-raw-bearer-value"))
 		Expect(capturedOffset).To(Equal(int32(2)))
 		Expect(capturedLimit).To(Equal(int32(20)))
 	})
@@ -218,7 +226,7 @@ var _ = Describe("handleListResources", func() {
 			State: "COMPUTE_INSTANCE_STATE_RUNNING",
 		}))
 		Expect(capturedFilter).To(Equal("this.metadata.name.startsWith(\"demo\")"))
-		Expect(capturedToken).To(Equal("Bearer raw-bearer-value"))
+		Expect(capturedToken).To(Equal("Bearer api-for-raw-bearer-value"))
 		Expect(capturedLimit).To(Equal(int32(50)))
 	})
 
@@ -293,8 +301,8 @@ var _ = Describe("handleListResources", func() {
 			Description: "Local block storage",
 			State:       "STORAGE_TIER_STATE_ACTIVE",
 		}))
-		Expect(capturedTemplateToken).To(Equal("Bearer raw-bearer-value"))
-		Expect(capturedStorageToken).To(Equal("Bearer raw-bearer-value"))
+		Expect(capturedTemplateToken).To(Equal("Bearer api-for-raw-bearer-value"))
+		Expect(capturedStorageToken).To(Equal("Bearer api-for-raw-bearer-value"))
 	})
 
 	It("Rejects an unsupported resource type without calling a downstream client", func() {
@@ -314,12 +322,12 @@ var _ = Describe("handleListResources", func() {
 		Expect(err).To(MatchError(ContainSubstring("page_size")))
 	})
 
-	It("Propagates a catalog item list error", func() {
+	It("Hides a catalog item list error description", func() {
 		catalogItems := &mockComputeInstanceCatalogItemsClient{
 			listFunc: func(
 				ctx context.Context, request *publicv1.ComputeInstanceCatalogItemsListRequest, options ...grpc.CallOption,
 			) (*publicv1.ComputeInstanceCatalogItemsListResponse, error) {
-				return nil, errors.New("boom")
+				return nil, status.Error(codes.Internal, "private SQL host and customer data")
 			},
 		}
 
@@ -327,7 +335,7 @@ var _ = Describe("handleListResources", func() {
 		_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), ListResourcesInput{
 			ResourceType: ResourceTypeComputeInstanceCatalogItem,
 		})
-		Expect(err).To(MatchError(ContainSubstring("boom")))
+		Expect(err).To(MatchError("public API request failed"))
 	})
 })
 
@@ -363,7 +371,7 @@ var _ = Describe("handleGetResource", func() {
 		fields, ok := output.Resource["fields"].(map[string]any)
 		Expect(ok).To(BeTrue())
 		Expect(fields).ToNot(HaveKey("userData"))
-		Expect(capturedToken).To(Equal("Bearer raw-bearer-value"))
+		Expect(capturedToken).To(Equal("Bearer api-for-raw-bearer-value"))
 	})
 
 	It("Gets a compute instance and returns its API representation", func() {
@@ -401,7 +409,7 @@ var _ = Describe("handleGetResource", func() {
 		Expect(ok).To(BeTrue())
 		Expect(spec).ToNot(HaveKey("userData"))
 		Expect(spec).To(HaveKey("instanceType"))
-		Expect(capturedToken).To(Equal("Bearer raw-bearer-value"))
+		Expect(capturedToken).To(Equal("Bearer api-for-raw-bearer-value"))
 	})
 
 	It("Gets a compute instance template including the boot disk storage tier", func() {
@@ -441,7 +449,7 @@ var _ = Describe("handleGetResource", func() {
 		storageTier, ok := bootDisk["storageTier"].(map[string]any)
 		Expect(ok).To(BeTrue())
 		Expect(storageTier).To(HaveKeyWithValue("name", "local"))
-		Expect(capturedToken).To(Equal("Bearer raw-bearer-value"))
+		Expect(capturedToken).To(Equal("Bearer api-for-raw-bearer-value"))
 	})
 
 	It("Rejects an unsupported resource type", func() {
@@ -453,12 +461,12 @@ var _ = Describe("handleGetResource", func() {
 		Expect(err).To(MatchError(ContainSubstring("unsupported resource type")))
 	})
 
-	It("Propagates a compute instance Get error", func() {
+	It("Preserves a safe Get error category without its description", func() {
 		instances := &mockComputeInstancesClient{
 			getFunc: func(
 				ctx context.Context, request *publicv1.ComputeInstancesGetRequest, options ...grpc.CallOption,
 			) (*publicv1.ComputeInstancesGetResponse, error) {
-				return nil, errors.New("boom")
+				return nil, status.Error(codes.NotFound, "private SQL host and customer data")
 			},
 		}
 
@@ -467,7 +475,7 @@ var _ = Describe("handleGetResource", func() {
 			ResourceType: ResourceTypeComputeInstance,
 			ID:           "instance-1",
 		})
-		Expect(err).To(MatchError(ContainSubstring("boom")))
+		Expect(err).To(MatchError("resource not found"))
 	})
 })
 

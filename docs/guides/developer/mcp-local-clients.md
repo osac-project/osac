@@ -29,6 +29,25 @@ resources. The smaller `PROFILE=dev` profile installs the control plane but
 does not seed a tenant or any of the nine MCP resource types, so empty lists
 are expected on a fresh installation.
 
+The Kind infrastructure step registers a dedicated confidential MCP resource
+client in Keycloak and puts its generated exchange secret in the `osac`
+namespace. The Kind instance profile supplies the client ID and Secret name to
+the MCP deployment. If you enabled MCP on a cluster installed before this
+token-exchange setup, rerun the infrastructure step before `install-osac`:
+
+```bash
+make -C osac-installer install-infra PLATFORM=kind PROFILE="$PROFILE" NS=osac
+```
+
+The MCP client's access token is scoped to the MCP URL; the server exchanges
+it for a separate API token for the same user when a tool runs.
+If you change the MCP host or port, set
+`keycloak.devFixtures.mcpResourceURL` on `install-infra` and
+`service.mcp.exchangeClientId` on `install-osac` to the same external HTTPS
+URL, including its nonstandard port and a trailing `/`. The connection URL
+used by Codex or Inspector may omit that slash; the OAuth resource identifier
+must be identical in Keycloak, the MCP metadata, and the exchange client ID.
+
 MCP runs from the **Fulfillment service image**; it has no separate image to
 build or push. To update an existing `dev-full` Kind installation with current
 MCP source, run these commands from the repository root. Use the same container
@@ -52,6 +71,9 @@ On a fresh cluster, run
 before `image-build`, and run
 `make -C osac-installer install-devstack PLATFORM=kind PROFILE=dev-full NS=osac`
 after `install-osac`.
+In a new worktree, first run
+`helm dependency build osac-installer/charts/osac-devstack` so the local
+`awx-operator` chart dependency is available.
 Passing `PROFILE=dev-full` to `install-osac` applies the dev-full OSAC values
 but does **not** install the `osac-devstack` Helm release or seed `tenant1` and
 the catalog. If that release is missing from `helm list -n osac`, run the
@@ -104,7 +126,8 @@ kubectl -n osac get configmap ca-bundle \
 export OSAC_CA_CERTIFICATE="$HOME/.config/osac/ca-bundle.pem"
 openssl x509 -in "$OSAC_CA_CERTIFICATE" -noout -subject
 curl --fail --show-error --cacert "$OSAC_CA_CERTIFICATE" \
-  "$OSAC_MCP_URL/.well-known/oauth-protected-resource"
+  "$OSAC_MCP_URL/.well-known/oauth-protected-resource" | \
+  jq -e --arg resource "$OSAC_MCP_URL/" '.resource == $resource'
 curl --fail --show-error --cacert "$OSAC_CA_CERTIFICATE" \
   "$OSAC_ISSUER_URL/.well-known/openid-configuration"
 ```
@@ -308,6 +331,17 @@ issuer, while `PROFILE=dev` uses `keycloak.keycloak.svc.cluster.local`.
   `.mcpServers.osac.url` in the temporary config. An empty value means
   `OSAC_MCP_URL` was unset when `jq` created it; rerun the complete Inspector
   block above.
+- If Inspector reports `The requested resource is invalid, missing, unknown,
+  or malformed`, compare its OAuth request's `resource` parameter with the
+  protected-resource metadata `resource`,
+  `keycloak.devFixtures.mcpResourceURL`, and `service.mcp.exchangeClientId`.
+  For the Kind example all three must be
+  `https://mcp.osac.localhost:8443/`, including the trailing slash. Inspector
+  sends the slash for a root URL. From this worktree, rerun `install-infra`,
+  rebuild and load the Fulfillment image, and rerun `install-osac` with the
+  values above; then use a fresh `MCP_STORAGE_DIR` for a new Inspector login.
+  Reauthorize Codex too: an access token issued for the earlier slashless
+  audience will fail the updated server's audience check.
 - An `Invalid parameter: redirect_uri` page means Keycloak rejected the
   callback Codex sent. The Kind development client already allows
   `http://localhost:8091/callback`; configure both `callback_url` and

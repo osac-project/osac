@@ -15,6 +15,8 @@ specific language governing permissions and limitations under the License.
 {{- $caBundleConfigMap := required "certs.caBundle.configMap is required" .Values.certs.caBundle.configMap }}
 {{- $hostname := include "fulfillment-mcp-server.hostname" . }}
 {{- $externalPort := include "fulfillment-mcp-server.externalPort" . | int }}
+{{- $exchangeClientId := required "mcp.exchangeClientId is required when mcp.enabled=true" .Values.mcp.exchangeClientId }}
+{{- $exchangeSecret := required "mcp.exchangeCredentialsSecret is required when mcp.enabled=true" .Values.mcp.exchangeCredentialsSecret }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -44,6 +46,9 @@ spec:
       - name: tls
         secret:
           secretName: fulfillment-mcp-server-tls
+      - name: exchange-credentials
+        secret:
+          secretName: {{ $exchangeSecret }}
       containers:
       - name: mcp-server
         image: {{ .Values.images.service.repository }}:{{ .Values.images.service.tag }}
@@ -61,12 +66,15 @@ spec:
           mountPath: /etc/fulfillment-mcp-server/tls/cas
         - name: tls
           mountPath: /etc/fulfillment-mcp-server/tls
+        - name: exchange-credentials
+          mountPath: /etc/fulfillment-mcp-server/oauth
+          readOnly: true
         command:
         - /usr/local/bin/fulfillment-service
         - start
         - mcp-server
         - --log-level={{ .Values.log.level }}
-        # MCP forwards caller tokens and tenant resource data to Fulfillment.
+        # OAuth bearer tokens and tenant resource data must not be logged.
         - --log-headers=false
         - --log-bodies=false
         - --ca-file=/etc/fulfillment-mcp-server/tls/cas
@@ -74,10 +82,13 @@ spec:
         - --http-listener-tls-crt=/etc/fulfillment-mcp-server/tls/tls.crt
         - --http-listener-tls-key=/etc/fulfillment-mcp-server/tls/tls.key
         - --http-cors-allowed-origins=https://{{ $hostname }}{{ if ne $externalPort 443 }}:{{ $externalPort }}{{ end }}
-        - --grpc-server-address=fulfillment-internal-api:8001
+        - --grpc-server-address=fulfillment-api:8000
         - --grpc-authn-trusted-token-issuers={{ tpl (required "auth.issuerUrl is required" .Values.auth.issuerUrl) . }}
         - --oauth-authorization-server={{ tpl (required "auth.issuerUrl is required" .Values.auth.issuerUrl) . }}
-        - --oauth-resource-url=https://{{ $hostname }}{{ if ne $externalPort 443 }}:{{ $externalPort }}{{ end }}
+        - --oauth-resource-url=https://{{ $hostname }}{{ if ne $externalPort 443 }}:{{ $externalPort }}{{ end }}/
+        - --oauth-token-endpoint={{ trimSuffix "/" (tpl (required "auth.issuerUrl is required" .Values.auth.issuerUrl) .) }}/protocol/openid-connect/token
+        - --oauth-exchange-client-id={{ $exchangeClientId }}
+        - --oauth-exchange-client-secret-file=/etc/fulfillment-mcp-server/oauth/client-secret
         ports:
         - name: mcp
           containerPort: 8000

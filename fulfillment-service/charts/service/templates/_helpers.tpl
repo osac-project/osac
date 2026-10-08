@@ -40,7 +40,14 @@ Return the hostname for the fulfillment internal API. Fails if 'internalHostname
 {{- end -}}
 
 {{- define "fulfillment-mcp-server.hostname" -}}
-{{- required "mcp.externalHostname is required when mcp.enabled=true" .Values.mcp.externalHostname -}}
+{{- $hostname := required "mcp.externalHostname is required when mcp.enabled=true" .Values.mcp.externalHostname -}}
+{{- if eq .Values.variant "kind" -}}
+{{- $expected := printf "mcp.%s.localhost" .Release.Namespace -}}
+{{- if ne $hostname $expected -}}
+{{- fail (printf "mcp.externalHostname must be %s for the kind variant" $expected) -}}
+{{- end -}}
+{{- end -}}
+{{- $hostname -}}
 {{- end -}}
 
 {{- define "fulfillment-mcp-server.externalPort" -}}

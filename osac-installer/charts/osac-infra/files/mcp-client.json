@@ -1,6 +1,6 @@
 {
   "clientId": "osac-mcp-client",
-  "name": "OSAC MCP PoC client",
+  "name": "OSAC MCP development client",
   "description": "Development client for the fulfillment MCP endpoint",
   "baseUrl": "http://localhost:8091",
   "enabled": true,
@@ -20,7 +20,7 @@
   },
   "fullScopeAllowed": true,
   "defaultClientScopes": [
-    "groups", "basic", "username", "organization", "roles", "osac-api"
+    "groups", "basic", "username", "organization", "roles"
   ],
   "optionalClientScopes": ["offline_access"]
 }

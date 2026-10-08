@@ -88,9 +88,11 @@ release image written by Fulfillment are checked in `it/`. Keep cross-component
 provisioning journeys under `tests/e2e/`.
 
 The MCP SDK spec in `it/` starts its HTTP handler in-process and calls the
-deployed public Fulfillment API with each user's token. It covers public API
-authorization and persistence, while chart renders cover opt-in deployment
-shape. It does not exercise a deployed MCP route or TLS handshake.
+deployed public Fulfillment API with each user's API token supplied by a test
+exchanger. It covers public API authorization and persistence, while unit tests
+cover token-exchange requests and chart renders cover opt-in deployment shape.
+It does not exercise a live Keycloak exchange, deployed MCP route, or TLS
+handshake; see OSAC-5842 for the real Keycloak auth contract.
 
 To prepare a fresh environment, recreate the dedicated `osac-dev` Kind
 cluster. Collect useful diagnostics before deleting it.

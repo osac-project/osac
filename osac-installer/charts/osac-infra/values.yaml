@@ -67,6 +67,7 @@ keycloak:
   # outside Kind/CI -- this chart is also used for real installs.
   devFixtures:
     enabled: false
+    mcpResourceURL: "https://mcp.osac.localhost:8443/"
   images:
     keycloak: quay.io/keycloak/keycloak:26.6.4
     postgres: quay.io/sclorg/postgresql-18-c10s@sha256:6be2c9d855f06fb665257a6b0911676a38d740be7022cc61acee1c99a832b1b2

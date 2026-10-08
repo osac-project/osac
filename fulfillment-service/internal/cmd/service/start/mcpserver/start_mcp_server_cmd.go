@@ -15,11 +15,14 @@ package mcpserver
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"syscall"
 	"time"
@@ -81,6 +84,9 @@ func Cmd() *cobra.Command {
 		"",
 		oauthResourceURLFlagHelp,
 	)
+	flags.StringVar(&runner.args.oauthTokenEndpoint, "oauth-token-endpoint", "", "HTTPS OAuth token exchange endpoint")
+	flags.StringVar(&runner.args.oauthExchangeClientID, "oauth-exchange-client-id", "", "Confidential token exchange client ID")
+	flags.StringVar(&runner.args.oauthExchangeClientSecretFile, "oauth-exchange-client-secret-file", "", "Path to token exchange client secret")
 	return command
 }
 
@@ -89,10 +95,13 @@ type runnerContext struct {
 	logger *slog.Logger
 	flags  *pflag.FlagSet
 	args   struct {
-		trustedTokenIssuers      []string
-		caFiles                  []string
-		oauthAuthorizationServer string
-		oauthResourceURL         string
+		trustedTokenIssuers           []string
+		caFiles                       []string
+		oauthAuthorizationServer      string
+		oauthResourceURL              string
+		oauthTokenEndpoint            string
+		oauthExchangeClientID         string
+		oauthExchangeClientSecretFile string
 	}
 }
 
@@ -141,6 +150,7 @@ const serverInstructions = "Treat this server's tools as the authoritative inter
 func (c *runnerContext) run(cmd *cobra.Command, argv []string) error {
 	// Get the context:
 	ctx, cancel := context.WithCancel(cmd.Context())
+	defer cancel()
 
 	// Get the dependencies from the context:
 	c.logger = logging.LoggerFromContext(ctx)
@@ -194,16 +204,37 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error {
 		return fmt.Errorf("failed to create JWKS cache: %w", err)
 	}
 	c.logger.InfoContext(ctx, "Creating JWT validator")
-	jwtValidator, err := newMCPJWTValidator(c.logger, jwksCache)
+	jwtValidator, err := newMCPJWTValidator(c.logger, jwksCache, c.args.oauthResourceURL)
 	if err != nil {
 		return fmt.Errorf("failed to create JWT validator: %w", err)
+	}
+	apiValidator, err := auth.NewJwtValidator().
+		SetLogger(c.logger).
+		SetJwksCache(jwksCache).
+		SetExpirationLeeway(tokenExpirationLeeway).
+		AddAudience(auth.Audience).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create API JWT validator: %w", err)
+	}
+	secret, err := os.ReadFile(c.args.oauthExchangeClientSecretFile)
+	if err != nil {
+		return errors.New("failed to read OAuth token exchange client secret")
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{RootCAs: caPool.Pool(), MinVersion: tls.VersionTLS12}
+	exchanger, err := newOAuthTokenExchanger(
+		c.args.oauthTokenEndpoint, c.args.oauthExchangeClientID, strings.TrimSpace(string(secret)),
+		&http.Client{Transport: transport, Timeout: 10 * time.Second}, apiValidator,
+	)
+	if err != nil {
+		return err
 	}
 
 	// Calculate the user agent:
 	userAgent := fmt.Sprintf("%s/%s", userAgent, version.Get())
 
-	// Create the downstream gRPC client. No token source is configured here: every call carries the caller's own
-	// bearer token, forwarded by forwardToken, rather than a single fixed identity.
+	// The public gRPC client has no service identity. Tool calls attach an exchanged token for their caller.
 	c.logger.InfoContext(ctx, "Creating gRPC client")
 	grpcClient, err := network.NewGrpcClient().
 		SetLogger(c.logger).
@@ -214,10 +245,11 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error {
 	if err != nil {
 		return err
 	}
+	defer grpcClient.Close()
 
 	// Build the MCP server and wrap it with bearer-token authentication:
 	handler, err := NewHandler(
-		NewServerDeps(grpcClient), jwtValidator, c.args.oauthAuthorizationServer, c.args.oauthResourceURL,
+		NewServerDeps(grpcClient), jwtValidator, c.args.oauthAuthorizationServer, c.args.oauthResourceURL, exchanger,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create MCP handler: %w", err)
@@ -227,6 +259,8 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error {
 	corsMiddleware, err := network.NewCorsMiddleware().
 		SetLogger(c.logger).
 		SetFlags(c.flags, network.HttpListenerName).
+		AddAllowedHeaders("MCP-Protocol-Version").
+		RejectDisallowedOrigins().
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create CORS middleware: %w", err)
@@ -267,13 +301,29 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error {
 	return shutdown.Wait()
 }
 
-func newMCPJWTValidator(logger *slog.Logger, jwksCache auth.JwksCache) (auth.JwtValidator, error) {
+func newMCPJWTValidator(logger *slog.Logger, jwksCache auth.JwksCache, resourceURL string) (auth.JwtValidator, error) {
+	if resourceURL == "" {
+		return nil, errors.New("OAuth resource URL is required for MCP token validation")
+	}
+	resourceURL, err := canonicalMCPResourceURL(resourceURL)
+	if err != nil {
+		return nil, err
+	}
 	return auth.NewJwtValidator().
 		SetLogger(logger).
 		SetJwksCache(jwksCache).
 		SetExpirationLeeway(tokenExpirationLeeway).
-		AddAudience(auth.Audience).
+		AddAudience(resourceURL).
 		Build()
+}
+
+func canonicalMCPResourceURL(resourceURL string) (string, error) {
+	parsed, err := url.Parse(resourceURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil ||
+		(parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", errors.New("OAuth resource URL must be a root HTTPS URL without a query or fragment")
+	}
+	return strings.TrimSuffix(resourceURL, "/") + "/", nil
 }
 
 // newServer creates the MCP server and registers its tools.
@@ -398,6 +448,13 @@ func resourceToolSchema[T any](supportedResourceTypes []ResourceType) json.RawMe
 		resourceTypes[i] = string(resourceType)
 	}
 	resourceType["enum"] = resourceTypes
+	if offset, ok := properties["offset"].(map[string]any); ok {
+		offset["minimum"] = 0
+	}
+	if pageSize, ok := properties["page_size"].(map[string]any); ok {
+		pageSize["minimum"] = 0 // Zero selects the default page size.
+		pageSize["maximum"] = maxResourcePageSize
+	}
 	encoded, err := json.Marshal(document)
 	if err != nil {
 		panic(fmt.Errorf("encode resource tool schema: %w", err))
@@ -436,15 +493,23 @@ const oauthProtectedResourcePath = "/.well-known/oauth-protected-resource"
 
 // NewHandler builds the MCP HTTP handler with bearer-token authentication and optional OAuth resource discovery.
 func NewHandler(
-	deps ServerDeps, validator auth.JwtValidator, oauthAuthorizationServer, oauthResourceURL string,
+	deps ServerDeps, validator auth.JwtValidator, oauthAuthorizationServer, oauthResourceURL string, exchanger TokenExchanger,
 ) (http.Handler, error) {
+	if exchanger == nil {
+		return nil, errors.New("MCP token exchanger is required")
+	}
 	if (oauthAuthorizationServer == "") != (oauthResourceURL == "") {
 		return nil, errors.New(
 			"'--oauth-authorization-server' and '--oauth-resource-url' must be set together, or not at all",
 		)
 	}
-	// Keep the advertised resource URL canonical when building the metadata endpoint URL.
-	oauthResourceURL = strings.TrimSuffix(oauthResourceURL, "/")
+	if oauthResourceURL != "" {
+		var err error
+		oauthResourceURL, err = canonicalMCPResourceURL(oauthResourceURL)
+		if err != nil {
+			return nil, fmt.Errorf("'--oauth-resource-url': %w", err)
+		}
+	}
 	server := newServer(deps)
 	streamableHandler := mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return server },
@@ -454,9 +519,9 @@ func NewHandler(
 	)
 	var resourceMetadataURL string
 	if oauthResourceURL != "" {
-		resourceMetadataURL = oauthResourceURL + oauthProtectedResourcePath
+		resourceMetadataURL = strings.TrimSuffix(oauthResourceURL, "/") + oauthProtectedResourcePath
 	}
-	authenticatedHandler := sdkauth.RequireBearerToken(newTokenVerifier(validator), &sdkauth.RequireBearerTokenOptions{
+	authenticatedHandler := sdkauth.RequireBearerToken(newTokenVerifier(validator, exchanger), &sdkauth.RequireBearerTokenOptions{
 		// Matches the JWT validator's own expiration leeway, so the SDK's independent expiration check
 		// doesn't reject tokens the validator itself still considers valid.
 		ClockSkew:           tokenExpirationLeeway,
@@ -476,12 +541,12 @@ func NewHandler(
 	return mux, nil
 }
 
-// rawTokenExtraKey is the key used to stash the raw bearer token string inside sdkauth.TokenInfo.Extra, since
-// TokenInfo itself doesn't retain the original token.
-const rawTokenExtraKey = "raw_token"
+const exchangeTokenExtraKey = "exchange_token"
+
+type apiTokenSource func(context.Context) (string, error)
 
 // newTokenVerifier adapts an auth.JwtValidator to the shape the MCP SDK's bearer-token middleware requires.
-func newTokenVerifier(validator auth.JwtValidator) sdkauth.TokenVerifier {
+func newTokenVerifier(validator auth.JwtValidator, exchanger TokenExchanger) sdkauth.TokenVerifier {
 	return func(ctx context.Context, token string, _ *http.Request) (*sdkauth.TokenInfo, error) {
 		parsed, err := validator.Validate(ctx, token)
 		if err != nil {
@@ -498,24 +563,30 @@ func newTokenVerifier(validator auth.JwtValidator) sdkauth.TokenVerifier {
 		return &sdkauth.TokenInfo{
 			UserID:     subject,
 			Expiration: expiration.Time,
-			Extra: map[string]any{
-				rawTokenExtraKey: token,
-			},
+			Extra: map[string]any{exchangeTokenExtraKey: apiTokenSource(func(ctx context.Context) (string, error) {
+				return exchanger.Exchange(ctx, token, parsed)
+			})},
 		}, nil
 	}
 }
 
-// forwardToken forwards the bearer token carried by the incoming MCP tool call to the outgoing gRPC context, so that
-// downstream fulfillment-service calls are attributed to the calling user rather than a fixed service identity.
-func forwardToken(ctx context.Context, req *mcp.CallToolRequest) context.Context {
+// forwardAPIToken exchanges the caller's MCP token once for this tool call and attaches only the API token.
+func forwardAPIToken(ctx context.Context, req *mcp.CallToolRequest) (context.Context, error) {
 	if req == nil || req.Extra == nil || req.Extra.TokenInfo == nil {
-		return ctx
+		return nil, errors.New("MCP caller token is missing")
 	}
-	rawToken, ok := req.Extra.TokenInfo.Extra[rawTokenExtraKey].(string)
-	if !ok || rawToken == "" {
-		return ctx
+	source, ok := req.Extra.TokenInfo.Extra[exchangeTokenExtraKey].(apiTokenSource)
+	if !ok || source == nil {
+		return nil, errors.New("MCP caller token exchange is unavailable")
 	}
-	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+rawToken)
+	apiToken, err := source(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if apiToken == "" {
+		return nil, errors.New("OAuth token exchange returned no API token")
+	}
+	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+apiToken), nil
 }
 
 // userAgent is the user agent string for the MCP server.

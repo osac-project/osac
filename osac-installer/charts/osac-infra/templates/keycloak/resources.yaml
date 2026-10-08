@@ -438,6 +438,10 @@ spec:
           value: "false"
         - name: KC_HTTPS_ENABLED
           value: "true"
+        {{- if .Values.keycloak.devFixtures.enabled }}
+        - name: KC_FEATURES
+          value: resource-indicators
+        {{- end }}
         - name: KC_HTTPS_PORT
           value: "8001"
         - name: KC_HTTPS_CERTIFICATE_FILE
@@ -558,7 +562,7 @@ data:
       client_uuid="$(curl -k -sf 'https://keycloak:443/admin/realms/osac/clients?clientId=osac-mcp-client' \
         -H "Authorization: Bearer ${token}" | \
         python3 -c "import sys,json; print(next((x['id'] for x in json.load(sys.stdin) if x['clientId']=='osac-mcp-client'), ''))")"
-      payload="$(cat /mcp-client/client.json)"
+      payload="$(python3 -c 'import json,os; p=json.load(open("/mcp-client/client.json")); p["protocolMappers"]=[{"name":"mcp-resource-audience","protocol":"openid-connect","protocolMapper":"oidc-audience-mapper","consentRequired":False,"config":{"included.client.audience":os.environ["MCP_RESOURCE_URL"],"id.token.claim":"false","access.token.claim":"true"}}]; print(json.dumps(p))')"
       if [[ -n "${client_uuid}" ]]; then
         curl -k -sf -X PUT "https://keycloak:443/admin/realms/osac/clients/${client_uuid}" \
           -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' -d "${payload}"
@@ -577,6 +581,27 @@ data:
       curl -k -sf -X PUT \
         "https://keycloak:443/admin/realms/osac/clients/${client_uuid}/optional-client-scopes/${scope_uuid}" \
         -H "Authorization: Bearer ${token}"
+    }
+
+    ensure_mcp_exchange_client() {
+      local token client_uuid payload
+      token="$(curl -k -sf -X POST https://keycloak:443/realms/master/protocol/openid-connect/token \
+        -H 'Content-Type: application/x-www-form-urlencoded' \
+        -d 'grant_type=password' -d 'client_id=admin-cli' \
+        --data-urlencode "username=${ADMIN_USERNAME}" \
+        --data-urlencode "password=${ADMIN_PASSWORD}" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")"
+      client_uuid="$(curl -k -sfG 'https://keycloak:443/admin/realms/osac/clients' \
+        --data-urlencode "clientId=${MCP_RESOURCE_URL}" \
+        -H "Authorization: Bearer ${token}" | \
+        python3 -c 'import sys,json,os; print(next((x["id"] for x in json.load(sys.stdin) if x["clientId"]==os.environ["MCP_RESOURCE_URL"]), ""))')"
+      payload="$(python3 -c 'import json,os; print(json.dumps({"clientId":os.environ["MCP_RESOURCE_URL"],"name":"OSAC MCP resource and exchange client","enabled":True,"protocol":"openid-connect","publicClient":False,"secret":os.environ["MCP_EXCHANGE_SECRET"],"standardFlowEnabled":False,"directAccessGrantsEnabled":False,"serviceAccountsEnabled":False,"fullScopeAllowed":True,"defaultClientScopes":["groups","basic","username","organization","roles","osac-api"],"attributes":{"standard.token.exchange.enabled":"true","resource_url":os.environ["MCP_RESOURCE_URL"]}}))')"
+      if [[ -n "${client_uuid}" ]]; then
+        printf '%s' "${payload}" | curl -k -sf -X PUT "https://keycloak:443/admin/realms/osac/clients/${client_uuid}" \
+          -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' --data-binary @-
+      else
+        printf '%s' "${payload}" | curl -k -sf -X POST https://keycloak:443/admin/realms/osac/clients \
+          -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' --data-binary @-
+      fi
     }
 
     set_password() {
@@ -608,8 +633,6 @@ data:
       echo "Set password for $username"
     }
 
-    ensure_mcp_client
-
     # Set all passwords
     echo "Setting passwords for all tenant users..."
     set_password "admin" "${DEFAULT_USER_PASSWORD}"
@@ -623,6 +646,8 @@ data:
     set_password "your_user" "${DEFAULT_USER_PASSWORD}"
 
     echo "All demo-user passwords set"
+    ensure_mcp_exchange_client
+    ensure_mcp_client
 ---
 apiVersion: batch/v1
 kind: Job
@@ -666,6 +691,13 @@ spec:
             secretKeyRef:
               name: keycloak-admin-credentials
               key: default-user-password
+        - name: MCP_RESOURCE_URL
+          value: {{ .Values.keycloak.devFixtures.mcpResourceURL | quote }}
+        - name: MCP_EXCHANGE_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: keycloak-client-secrets
+              key: osac-mcp-exchange
         resources:
           requests:
             cpu: 50m

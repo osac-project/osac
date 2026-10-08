@@ -68,8 +68,13 @@ func handleCreateComputeInstance(
 	return func(
 		ctx context.Context, req *mcp.CallToolRequest, input CreateComputeInstanceInput,
 	) (*mcp.CallToolResult, CreateComputeInstanceOutput, error) {
-		ctx = forwardToken(ctx, req)
 		spec, err := computeInstanceSpecFromInput(input)
+		if err != nil {
+			return nil, CreateComputeInstanceOutput{}, err
+		}
+		ctx, cancel := toolCallContext(ctx)
+		defer cancel()
+		ctx, err = forwardAPIToken(ctx, req)
 		if err != nil {
 			return nil, CreateComputeInstanceOutput{}, err
 		}
@@ -80,7 +85,7 @@ func handleCreateComputeInstance(
 			}.Build(),
 		}.Build())
 		if err != nil {
-			return nil, CreateComputeInstanceOutput{}, fmt.Errorf("failed to create compute instance: %w", err)
+			return nil, CreateComputeInstanceOutput{}, safePublicAPIError(err)
 		}
 		created := response.GetObject()
 		return nil, CreateComputeInstanceOutput{
@@ -164,10 +169,16 @@ func handleDeleteComputeInstance(
 	return func(
 		ctx context.Context, req *mcp.CallToolRequest, input DeleteComputeInstanceInput,
 	) (*mcp.CallToolResult, DeleteComputeInstanceOutput, error) {
-		ctx = forwardToken(ctx, req)
-		_, err := client.Delete(ctx, publicv1.ComputeInstancesDeleteRequest_builder{Id: input.ID}.Build())
+		var err error
+		ctx, cancel := toolCallContext(ctx)
+		defer cancel()
+		ctx, err = forwardAPIToken(ctx, req)
 		if err != nil {
-			return nil, DeleteComputeInstanceOutput{}, fmt.Errorf("failed to delete compute instance %q: %w", input.ID, err)
+			return nil, DeleteComputeInstanceOutput{}, err
+		}
+		_, err = client.Delete(ctx, publicv1.ComputeInstancesDeleteRequest_builder{Id: input.ID}.Build())
+		if err != nil {
+			return nil, DeleteComputeInstanceOutput{}, safePublicAPIError(err)
 		}
 		return nil, DeleteComputeInstanceOutput(input), nil
 	}

@@ -21,6 +21,7 @@ import (
 	"net/http/httptest"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
@@ -356,7 +357,14 @@ var _ = Describe("MCP server", func() {
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func() { Expect(mcpGrpcConn.Close()).To(Succeed()) })
-		handler, err := mcpserver.NewHandler(mcpserver.NewServerDeps(mcpGrpcConn), jwtValidator, "", "")
+		// This test exercises MCP tool behavior against the deployed public API. The
+		// OAuth exchange protocol is covered separately by the exchange contract tests.
+		handler, err := mcpserver.NewHandler(
+			mcpserver.NewServerDeps(mcpGrpcConn), jwtValidator, "", "",
+			mcpserver.TokenExchangerFunc(func(_ context.Context, subjectToken string, _ *jwt.Token) (string, error) {
+				return subjectToken, nil
+			}),
+		)
 		Expect(err).ToNot(HaveOccurred())
 		mcpHTTPServer = httptest.NewServer(handler)
 		DeferCleanup(mcpHTTPServer.Close)
@@ -545,11 +553,7 @@ var _ = Describe("MCP server", func() {
 				}},
 			},
 		)
-		Expect(err).To(MatchError(And(
-			ContainSubstring("network_attachments[0].subnet: Subnet"),
-			ContainSubstring("network_attachments[0].security_groups[0]: SecurityGroup"),
-			ContainSubstring("not found"),
-		)))
+		Expect(err).To(MatchError(ContainSubstring("public API rejected the request")))
 		adminInstances := privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn())
 		for _, name := range []string{invalidName, deniedName} {
 			invalidList, e := adminInstances.List(ctx, privatev1.ComputeInstancesListRequest_builder{

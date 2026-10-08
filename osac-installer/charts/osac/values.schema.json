@@ -680,7 +680,7 @@
             },
             "externalHostname": {
               "type": "string",
-              "description": "DNS hostname advertised by the MCP server"
+              "description": "DNS hostname advertised by the MCP server; Kind requires mcp.<namespace>.localhost"
             },
             "externalPort": {
               "type": "integer",
@@ -688,6 +688,14 @@
               "minimum": 1,
               "maximum": 65535,
               "default": 443
+            },
+            "exchangeClientId": {
+              "type": "string",
+              "description": "Confidential OAuth token exchange client ID; use the MCP resource URL ending in / for Keycloak audience validation"
+            },
+            "exchangeCredentialsSecret": {
+              "type": "string",
+              "description": "Secret containing client-secret for the MCP token exchange client"
             },
             "resources": {
               "type": "object",
@@ -719,8 +727,12 @@
           "allOf": [{
             "if": {"properties": {"enabled": {"const": true}}},
             "then": {
-              "required": ["externalHostname"],
-              "properties": {"externalHostname": {"minLength": 1}}
+              "required": ["externalHostname", "exchangeClientId", "exchangeCredentialsSecret"],
+              "properties": {
+                "externalHostname": {"minLength": 1},
+                "exchangeClientId": {"minLength": 1},
+                "exchangeCredentialsSecret": {"minLength": 1}
+              }
             }
           }],
           "additionalProperties": false

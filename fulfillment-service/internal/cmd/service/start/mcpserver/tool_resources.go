@@ -81,9 +81,15 @@ func handleListResources(resources resourceRegistry) mcp.ToolHandlerFor[ListReso
 		if !ok {
 			return nil, ListResourcesOutput{}, unsupportedResourceTypeError(input.ResourceType)
 		}
-		output, err := operations.list(forwardToken(ctx, req), input.Filter, page)
+		ctx, cancel := toolCallContext(ctx)
+		defer cancel()
+		ctx, err = forwardAPIToken(ctx, req)
 		if err != nil {
 			return nil, ListResourcesOutput{}, err
+		}
+		output, err := operations.list(ctx, input.Filter, page)
+		if err != nil {
+			return nil, ListResourcesOutput{}, safePublicAPIError(err)
 		}
 		return nil, output, nil
 	}
@@ -97,9 +103,15 @@ func handleGetResource(resources resourceRegistry) mcp.ToolHandlerFor[GetResourc
 		if !ok {
 			return nil, GetResourceOutput{}, unsupportedResourceTypeError(input.ResourceType)
 		}
-		message, err := operations.get(forwardToken(ctx, req), input.ID)
+		ctx, cancel := toolCallContext(ctx)
+		defer cancel()
+		ctx, err := forwardAPIToken(ctx, req)
 		if err != nil {
 			return nil, GetResourceOutput{}, err
+		}
+		message, err := operations.get(ctx, input.ID)
+		if err != nil {
+			return nil, GetResourceOutput{}, safePublicAPIError(err)
 		}
 		resource, err := messageToMap(message)
 		if err != nil {

@@ -160,6 +160,9 @@ service:
     externalHostname: ""
     # OpenShift Routes use HTTPS port 443; custom external ports are supported on Kind.
     externalPort: 443
+    # The OAuth resource URL is the MCP HTTPS root URL ending in /.
+    exchangeClientId: ""
+    exchangeCredentialsSecret: ""
     resources:
       requests:
         cpu: 50m

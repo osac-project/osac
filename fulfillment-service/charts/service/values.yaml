@@ -61,6 +61,10 @@ mcp:
   enabled: false
   externalHostname: ""
   externalPort: 443
+  # Dedicated confidential OAuth client registered for token exchange. Its
+  # credentials Secret must contain client-secret and live in this namespace.
+  exchangeClientId: ""
+  exchangeCredentialsSecret: ""
   resources:
     requests:
       cpu: 50m

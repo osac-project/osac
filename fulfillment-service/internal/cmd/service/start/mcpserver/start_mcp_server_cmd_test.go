@@ -130,6 +130,7 @@ var _ = Describe("newServer", func() {
 		expectComputeInstanceCreateSchema(tools["create_compute_instance"].InputSchema)
 		expectNullableArraySchema(tools["list_resources"].OutputSchema, "items")
 		expectResourceTypeSchema(tools["list_resources"].InputSchema)
+		expectResourcePaginationSchema(tools["list_resources"].InputSchema)
 		expectResourceTypeSchema(tools["get_resource"].InputSchema)
 	})
 })
@@ -192,6 +193,20 @@ func expectResourceTypeSchema(schema any) {
 		string(ResourceTypeSecurityGroup),
 		string(ResourceTypeComputeInstance),
 	))
+}
+
+func expectResourcePaginationSchema(schema any) {
+	document, ok := schema.(map[string]any)
+	Expect(ok).To(BeTrue())
+	properties, ok := document["properties"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	offset, ok := properties["offset"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(offset["minimum"]).To(BeNumerically("==", 0))
+	pageSize, ok := properties["page_size"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(pageSize["minimum"]).To(BeNumerically("==", 0))
+	Expect(pageSize["maximum"]).To(BeNumerically("==", maxResourcePageSize))
 }
 
 func expectComputeInstanceCreateSchema(schema any) {
@@ -274,7 +289,7 @@ var _ = Describe("newTokenVerifier", func() {
 		DeferCleanup(ctrl.Finish)
 	})
 
-	It("Maps a validated token to TokenInfo carrying the raw token", func() {
+	It("Maps a validated token to a caller-specific API token source", func() {
 		expiration := time.Now().Add(time.Hour)
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 			"sub": "alice",
@@ -283,19 +298,23 @@ var _ = Describe("newTokenVerifier", func() {
 		validator := auth.NewMockJwtValidator(ctrl)
 		validator.EXPECT().Validate(gomock.Any(), "raw-bearer-value").Return(token, nil)
 
-		verifier := newTokenVerifier(validator)
+		verifier := newTokenVerifier(validator, testExchanger)
 		info, err := verifier(context.Background(), "raw-bearer-value", nil)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(info.UserID).To(Equal("alice"))
 		Expect(info.Expiration.Unix()).To(Equal(expiration.Unix()))
-		Expect(info.Extra[rawTokenExtraKey]).To(Equal("raw-bearer-value"))
+		source, ok := info.Extra[exchangeTokenExtraKey].(apiTokenSource)
+		Expect(ok).To(BeTrue())
+		apiToken, err := source(context.Background())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(apiToken).To(Equal("api-bearer-value"))
 	})
 
 	It("Wraps a validation failure with sdkauth.ErrInvalidToken", func() {
 		validator := auth.NewMockJwtValidator(ctrl)
 		validator.EXPECT().Validate(gomock.Any(), gomock.Any()).Return(nil, errors.New("token signature is not valid"))
 
-		verifier := newTokenVerifier(validator)
+		verifier := newTokenVerifier(validator, testExchanger)
 		_, err := verifier(context.Background(), "bad-token", nil)
 		Expect(err).To(HaveOccurred())
 		Expect(errors.Is(err, sdkauth.ErrInvalidToken)).To(BeTrue())
@@ -308,7 +327,7 @@ var _ = Describe("newTokenVerifier", func() {
 		validator := auth.NewMockJwtValidator(ctrl)
 		validator.EXPECT().Validate(gomock.Any(), gomock.Any()).Return(token, nil)
 
-		verifier := newTokenVerifier(validator)
+		verifier := newTokenVerifier(validator, testExchanger)
 		_, err := verifier(context.Background(), "raw-bearer-value", nil)
 		Expect(err).To(HaveOccurred())
 		Expect(errors.Is(err, sdkauth.ErrInvalidToken)).To(BeTrue())
@@ -321,54 +340,61 @@ var _ = Describe("newTokenVerifier", func() {
 		validator := auth.NewMockJwtValidator(ctrl)
 		validator.EXPECT().Validate(gomock.Any(), gomock.Any()).Return(token, nil)
 
-		verifier := newTokenVerifier(validator)
+		verifier := newTokenVerifier(validator, testExchanger)
 		_, err := verifier(context.Background(), "raw-bearer-value", nil)
 		Expect(err).To(HaveOccurred())
 		Expect(errors.Is(err, sdkauth.ErrInvalidToken)).To(BeTrue())
 	})
 })
 
-var _ = Describe("forwardToken", func() {
-	It("Adds the forwarded bearer token to the outgoing gRPC metadata", func() {
+var testExchanger = TokenExchangerFunc(func(_ context.Context, _ string, _ *jwt.Token) (string, error) {
+	return "api-bearer-value", nil
+})
+
+var _ = Describe("forwardAPIToken", func() {
+	It("Adds only the exchanged API bearer token to outgoing gRPC metadata", func() {
 		ctx := context.Background()
 		req := &mcp.CallToolRequest{
 			Extra: &mcp.RequestExtra{
 				TokenInfo: &sdkauth.TokenInfo{
 					Extra: map[string]any{
-						rawTokenExtraKey: "raw-bearer-value",
+						exchangeTokenExtraKey: apiTokenSource(func(context.Context) (string, error) {
+							return "api-bearer-value", nil
+						}),
 					},
 				},
 			},
 		}
 
-		result := forwardToken(ctx, req)
+		result, err := forwardAPIToken(ctx, req)
+		Expect(err).ToNot(HaveOccurred())
 		md, ok := metadata.FromOutgoingContext(result)
 		Expect(ok).To(BeTrue())
-		Expect(md.Get("authorization")).To(Equal([]string{"Bearer raw-bearer-value"}))
+		Expect(md.Get("authorization")).To(Equal([]string{"Bearer api-bearer-value"}))
 	})
 
-	It("Returns the context unchanged when the request has no Extra", func() {
+	It("Fails closed when the request has no Extra", func() {
 		ctx := context.Background()
-		result := forwardToken(ctx, &mcp.CallToolRequest{})
-		Expect(result).To(Equal(ctx))
+		_, err := forwardAPIToken(ctx, &mcp.CallToolRequest{})
+		Expect(err).To(HaveOccurred())
 	})
 
-	It("Returns the context unchanged when Extra has no TokenInfo", func() {
+	It("Fails closed when Extra has no TokenInfo", func() {
 		ctx := context.Background()
 		req := &mcp.CallToolRequest{Extra: &mcp.RequestExtra{}}
-		result := forwardToken(ctx, req)
-		Expect(result).To(Equal(ctx))
+		_, err := forwardAPIToken(ctx, req)
+		Expect(err).To(HaveOccurred())
 	})
 
-	It("Returns the context unchanged when TokenInfo has no raw token", func() {
+	It("Fails closed when TokenInfo has no exchange source", func() {
 		ctx := context.Background()
 		req := &mcp.CallToolRequest{
 			Extra: &mcp.RequestExtra{
 				TokenInfo: &sdkauth.TokenInfo{},
 			},
 		}
-		result := forwardToken(ctx, req)
-		Expect(result).To(Equal(ctx))
+		_, err := forwardAPIToken(ctx, req)
+		Expect(err).To(HaveOccurred())
 	})
 })
 
@@ -380,21 +406,22 @@ var _ = Describe("NewHandler", func() {
 		DeferCleanup(ctrl.Finish)
 	})
 
-	It("accepts API-audience tokens and rejects tokens for another resource at HTTP ingress", func() {
+	It("accepts MCP-audience tokens and rejects API tokens at HTTP ingress", func() {
 		const issuer = "https://issuer.example.com"
 		jwksCache := auth.NewMockJwksCache(ctrl)
 		jwksCache.EXPECT().Get(gomock.Any(), issuer, "123").Return(testutils.JwtPublicKey(), nil).AnyTimes()
-		validator, err := newMCPJWTValidator(slog.Default(), jwksCache)
+		validator, err := newMCPJWTValidator(slog.Default(), jwksCache, "https://mcp.example.com")
 		Expect(err).ToNot(HaveOccurred())
-		handler, err := NewHandler(ServerDeps{}, validator, "", "")
+		handler, err := NewHandler(ServerDeps{}, validator, "", "", testExchanger)
 		Expect(err).ToNot(HaveOccurred())
 
 		for _, tc := range []struct {
 			audience string
 			accepted bool
 		}{
-			{audience: auth.Audience, accepted: true},
-			{audience: "another-resource", accepted: false},
+			{audience: "https://mcp.example.com/", accepted: true},
+			{audience: "https://mcp.example.com", accepted: false},
+			{audience: auth.Audience, accepted: false},
 		} {
 			token := testutils.MakeTokenObject(nil, jwt.MapClaims{"iss": issuer, "aud": tc.audience})
 			request := httptest.NewRequest(http.MethodPost, "/", nil)
@@ -411,7 +438,7 @@ var _ = Describe("NewHandler", func() {
 
 	It("Rejects an unauthenticated request with no resource_metadata hint when OAuth discovery is unconfigured", func() {
 		validator := auth.NewMockJwtValidator(ctrl)
-		handler, err := NewHandler(ServerDeps{}, validator, "", "")
+		handler, err := NewHandler(ServerDeps{}, validator, "", "", testExchanger)
 		Expect(err).ToNot(HaveOccurred())
 
 		recorder := httptest.NewRecorder()
@@ -424,17 +451,30 @@ var _ = Describe("NewHandler", func() {
 
 	It("Rejects configuration with only one of the two OAuth discovery flags set", func() {
 		validator := auth.NewMockJwtValidator(ctrl)
-		_, err := NewHandler(ServerDeps{}, validator, "https://keycloak.example.com/realms/osac", "")
+		_, err := NewHandler(ServerDeps{}, validator, "https://keycloak.example.com/realms/osac", "", testExchanger)
 		Expect(err).To(HaveOccurred())
 
-		_, err = NewHandler(ServerDeps{}, validator, "", "https://mcp.example.com")
+		_, err = NewHandler(ServerDeps{}, validator, "", "https://mcp.example.com", testExchanger)
 		Expect(err).To(HaveOccurred())
+	})
+
+	It("Rejects path-prefixed and noncanonical OAuth resource URLs", func() {
+		validator := auth.NewMockJwtValidator(ctrl)
+		for _, resourceURL := range []string{
+			"https://mcp.example.com/mcp",
+			"https://mcp.example.com/?tenant=one",
+			"https://mcp.example.com/#fragment",
+			"http://mcp.example.com",
+		} {
+			_, err := NewHandler(ServerDeps{}, validator, "https://keycloak.example.com/realms/osac", resourceURL, testExchanger)
+			Expect(err).To(MatchError(ContainSubstring("root HTTPS URL")), resourceURL)
+		}
 	})
 
 	It("Adds a resource_metadata hint to 401s and serves the metadata document, unauthenticated, when both flags are set", func() {
 		validator := auth.NewMockJwtValidator(ctrl)
 		handler, err := NewHandler(
-			ServerDeps{}, validator, "https://keycloak.example.com/realms/osac", "https://mcp.example.com",
+			ServerDeps{}, validator, "https://keycloak.example.com/realms/osac", "https://mcp.example.com", testExchanger,
 		)
 		Expect(err).ToNot(HaveOccurred())
 
@@ -457,14 +497,14 @@ var _ = Describe("NewHandler", func() {
 			AuthorizationServers []string `json:"authorization_servers"`
 		}
 		Expect(json.Unmarshal(recorder.Body.Bytes(), &metadata)).ToNot(HaveOccurred())
-		Expect(metadata.Resource).To(Equal("https://mcp.example.com"))
+		Expect(metadata.Resource).To(Equal("https://mcp.example.com/"))
 		Expect(metadata.AuthorizationServers).To(Equal([]string{"https://keycloak.example.com/realms/osac"}))
 	})
 
-	It("Trims a trailing slash from the resource URL before using it in the hint and metadata document", func() {
+	It("Keeps the canonical trailing slash in resource metadata while using the root well-known hint", func() {
 		validator := auth.NewMockJwtValidator(ctrl)
 		handler, err := NewHandler(
-			ServerDeps{}, validator, "https://keycloak.example.com/realms/osac", "https://mcp.example.com/",
+			ServerDeps{}, validator, "https://keycloak.example.com/realms/osac", "https://mcp.example.com/", testExchanger,
 		)
 		Expect(err).ToNot(HaveOccurred())
 
@@ -482,7 +522,7 @@ var _ = Describe("NewHandler", func() {
 			Resource string `json:"resource"`
 		}
 		Expect(json.Unmarshal(recorder.Body.Bytes(), &metadata)).ToNot(HaveOccurred())
-		Expect(metadata.Resource).To(Equal("https://mcp.example.com"))
+		Expect(metadata.Resource).To(Equal("https://mcp.example.com/"))
 	})
 
 	It("Still routes an authenticated request through to the streamable transport when both flags are set", func() {
@@ -494,7 +534,7 @@ var _ = Describe("NewHandler", func() {
 		validator := auth.NewMockJwtValidator(ctrl)
 		validator.EXPECT().Validate(gomock.Any(), "valid-token").Return(token, nil)
 		handler, err := NewHandler(
-			ServerDeps{}, validator, "https://keycloak.example.com/realms/osac", "https://mcp.example.com",
+			ServerDeps{}, validator, "https://keycloak.example.com/realms/osac", "https://mcp.example.com", testExchanger,
 		)
 		Expect(err).ToNot(HaveOccurred())
 

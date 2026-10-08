@@ -47,6 +47,9 @@ service:
     disabled: false
   externalHostname: fulfillment-api.osac.svc.cluster.local
   internalHostname: fulfillment-internal-api.osac.svc.cluster.local
+  mcp:
+    exchangeClientId: https://mcp.osac.localhost:8443/
+    exchangeCredentialsSecret: osac-mcp-exchange-credentials
   images:
     service:
       repository: ghcr.io/osac-project/fulfillment-service

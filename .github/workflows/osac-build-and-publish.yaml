@@ -1835,9 +1835,21 @@ jobs:
     # only pushed in release mode (see "Create release-only marker tag"
     # above). Needs tag specifically (not e.g. promote-and-publish) because
     # that's the job that actually pushes the tag Konflux reacts to --
-    # nothing to wait for here until that's landed.
+    # nothing to wait for here until that's landed. always() is required
+    # even though this job only wants to act on real success -- without it,
+    # GitHub skip-cascades this job whenever a job further back in the
+    # transitive dependency graph (e.g. the e2e-*-test jobs under
+    # skip_e2e=true) is skipped, regardless of this custom if:. Confirmed
+    # live: every skip_e2e=true release dispatch (rerun or fresh) skipped
+    # this job even though prepare and tag both succeeded. Same bug class
+    # already documented and fixed on cleanup's own if: below. !cancelled()
+    # is required alongside it -- always() alone would also let this job
+    # fire off a real external Konflux Release if someone cancels the
+    # workflow run *after* tag already succeeded (e.g. during e2e/promote/
+    # notify), since needs.tag.result would still read 'success'. A skipped
+    # dependency is not the same as an operator-initiated cancellation.
     needs: [prepare, tag]
-    if: inputs.mode == 'release' && needs.tag.result == 'success'
+    if: always() && !cancelled() && inputs.mode == 'release' && needs.tag.result == 'success'
     runs-on: osac-ci
     # Must exceed the sum of the script's own three poll phases (build
     # poll + override-snapshot-test poll + Release-completion poll, each

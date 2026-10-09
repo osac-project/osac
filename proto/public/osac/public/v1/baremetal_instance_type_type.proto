@@ -140,6 +140,7 @@ message BareMetalInstanceTypeReference {
   string name = 2;
   string project = 3;
   bool shared = 4;
+  string tenant = 5;
 }
 
 // Describes a network port in a bare metal instance type.

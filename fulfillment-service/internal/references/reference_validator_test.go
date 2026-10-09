@@ -978,6 +978,88 @@ var _ = Describe("Reference validator", func() {
 
 			Expect(err).ToNot(HaveOccurred())
 			Expect(capturedTenant).To(Equal("shared"))
+			Expect(request.GetObject().GetSpec().GetTarget().GetTenant()).To(Equal("shared"))
+		})
+
+		It("Uses explicit tenant when tenant is set on full reference", func() {
+			var capturedTenant string
+			validator.Register("osac.tests.v1.TestTargetReference", func(
+				ctx context.Context, tenant, project, id, name string,
+			) (*ResolvedRef, error) {
+				capturedTenant = tenant
+				return &ResolvedRef{ID: "id-1", Tenant: tenant, Project: project, Name: name}, nil
+			})
+
+			request := testsv1.CreateTestResourceWithRefsRequest_builder{
+				Object: testsv1.TestResourceWithRefs_builder{
+					Id: "resource-1",
+					Metadata: testsv1.Metadata_builder{
+						Tenant:  "tenant-a",
+						Project: "default",
+					}.Build(),
+					Spec: testsv1.TestRefSpec_builder{
+						Target: testsv1.TestTargetReference_builder{
+							Name:   "tenant-target",
+							Tenant: "tenant-b",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			mockHandler := func(ctx context.Context, req any) (any, error) {
+				return "response", nil
+			}
+
+			_, err := validator.UnaryServer(
+				context.Background(),
+				request,
+				&grpc.UnaryServerInfo{FullMethod: "/osac.tests.v1.TestService/Create"},
+				mockHandler,
+			)
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(capturedTenant).To(Equal("tenant-b"))
+		})
+
+		It("Prefers explicit tenant over the legacy shared selector", func() {
+			var capturedTenant string
+			validator.Register("osac.tests.v1.TestTargetReference", func(
+				ctx context.Context, tenant, project, id, name string,
+			) (*ResolvedRef, error) {
+				capturedTenant = tenant
+				return &ResolvedRef{ID: "id-1", Tenant: tenant, Project: project, Name: name}, nil
+			})
+
+			request := testsv1.CreateTestResourceWithRefsRequest_builder{
+				Object: testsv1.TestResourceWithRefs_builder{
+					Id: "resource-1",
+					Metadata: testsv1.Metadata_builder{
+						Tenant:  "tenant-a",
+						Project: "default",
+					}.Build(),
+					Spec: testsv1.TestRefSpec_builder{
+						Target: testsv1.TestTargetReference_builder{
+							Name:   "tenant-target",
+							Shared: true,
+							Tenant: "tenant-b",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			mockHandler := func(ctx context.Context, req any) (any, error) {
+				return "response", nil
+			}
+
+			_, err := validator.UnaryServer(
+				context.Background(),
+				request,
+				&grpc.UnaryServerInfo{FullMethod: "/osac.tests.v1.TestService/Create"},
+				mockHandler,
+			)
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(capturedTenant).To(Equal("tenant-b"))
 		})
 	})
 

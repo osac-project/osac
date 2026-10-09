@@ -286,6 +286,9 @@ func (s *PrivateBareMetalInstanceCatalogItemsServer) validateAndCanonicalizeTemp
 	if err := validateResourceNotDeleted("bare metal instance template", refKey(ref), " in template", resolved.GetMetadata()); err != nil {
 		return nil, err
 	}
+	if err := validateDependencyOwnerScope(catalogItemScope(candidate), resolved.GetMetadata(), "bare metal instance template", " in template"); err != nil {
+		return nil, err
+	}
 	if current != nil {
 		currentRef := current.GetTemplate()
 		if currentRef == nil || currentRef.GetId() == "" {

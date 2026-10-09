@@ -16,6 +16,7 @@ package testing
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"net"
 	"strings"
 
@@ -74,7 +75,11 @@ func (s *Server) Start() {
 	go func() {
 		defer GinkgoRecover()
 		err := s.server.Serve(s.listener)
-		Expect(err).ToNot(HaveOccurred())
+		// Stop intentionally makes Serve return ErrServerStopped; that is the
+		// normal cleanup path for this test server, not a test failure.
+		if !errors.Is(err, grpc.ErrServerStopped) {
+			Expect(err).ToNot(HaveOccurred())
+		}
 	}()
 }
 

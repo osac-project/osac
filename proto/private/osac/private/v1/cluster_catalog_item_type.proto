@@ -121,4 +121,5 @@ message ClusterCatalogItemReference {
   string name = 2;
   string project = 3;
   bool shared = 4;
+  string tenant = 5;
 }

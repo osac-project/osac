@@ -271,6 +271,9 @@ func (s *PrivateComputeInstanceCatalogItemsServer) validateAndCanonicalizeTempla
 	if err := validateResourceNotDeleted("compute instance template", refKey(ref), " in template", resolved.GetMetadata()); err != nil {
 		return err
 	}
+	if err := validateDependencyOwnerScope(catalogItemScope(candidate), resolved.GetMetadata(), "compute instance template", " in template"); err != nil {
+		return err
+	}
 	if current != nil {
 		currentRef := current.GetTemplate()
 		if currentRef == nil || currentRef.GetId() == "" {

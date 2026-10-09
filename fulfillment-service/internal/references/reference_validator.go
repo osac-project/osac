@@ -512,6 +512,10 @@ func (v *ReferenceValidator) resolveAndMutate(ctx context.Context, refMsg protor
 	if name == "" && resolved.Name != "" {
 		refMsg.Set(nameField, protoreflect.ValueOfString(resolved.Name))
 	}
+	tenantField := refMsg.Descriptor().Fields().ByName("tenant")
+	if tenantField != nil && tenantField.Kind() == protoreflect.StringKind && resolved.Tenant != "" {
+		refMsg.Set(tenantField, protoreflect.ValueOfString(resolved.Tenant))
+	}
 
 	if id != "" && name != "" && (resolved.ID != id || resolved.Name != name) {
 		desc := fmt.Sprintf("id %q and name %q do not refer to the same resource", id, name)
@@ -567,8 +571,10 @@ func resolveTenantProject(refMsg protoreflect.Message, fullName protoreflect.Ful
 	tenant := callerTenant
 	project := callerProject
 
-	sharedField := refMsg.Descriptor().Fields().ByName("shared")
-	if sharedField != nil && refMsg.Get(sharedField).Bool() {
+	tenantField := refMsg.Descriptor().Fields().ByName("tenant")
+	if tenantField != nil && tenantField.Kind() == protoreflect.StringKind && refMsg.Get(tenantField).String() != "" {
+		tenant = refMsg.Get(tenantField).String()
+	} else if sharedField := refMsg.Descriptor().Fields().ByName("shared"); sharedField != nil && sharedField.Kind() == protoreflect.BoolKind && refMsg.Get(sharedField).Bool() {
 		tenant = "shared"
 	}
 

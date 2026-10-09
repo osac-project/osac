@@ -1386,7 +1386,7 @@ func resolveCaaSBareMetalInstanceType(
 
 	// Cluster NodeSets and Catalog Item policies select hardware only; callers cannot
 	// select a tenant-scoped BMIT by omitting or changing the reference scope.
-	ref.SetShared(true)
+	ref.SetTenant(auth.SharedTenant)
 	var (
 		resolved *privatev1.BareMetalInstanceType
 		err      error

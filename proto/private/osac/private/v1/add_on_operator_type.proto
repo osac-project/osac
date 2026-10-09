@@ -65,6 +65,7 @@ message AddOnOperatorReference {
   string name = 2;
   string project = 3;
   bool shared = 4;
+  string tenant = 5;
 }
 
 // Local reference to an AddOnOperator (used within the AddOnOperator message for exclusions and dependencies).

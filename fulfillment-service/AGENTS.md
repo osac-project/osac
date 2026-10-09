@@ -89,10 +89,11 @@ provisioning journeys under `tests/e2e/`.
 
 The MCP SDK spec in `it/` starts its HTTP handler in-process and calls the
 deployed public Fulfillment API with each user's API token supplied by a test
-exchanger. It covers public API authorization and persistence, while unit tests
-cover token-exchange requests and chart renders cover opt-in deployment shape.
-It does not exercise a live Keycloak exchange, deployed MCP route, or TLS
-handshake.
+exchanger. It covers public API authorization and persistence. The focused
+deployed MCP spec runs in the Fulfillment Kind CI job: it uses the public MCP
+client's PKCE flow, calls the deployed HTTPS listener, and checks that a
+Fulfillment API token is rejected. Unit tests cover exchange edge cases; chart
+renders cover the opt-in deployment shape.
 
 To prepare a fresh environment, recreate the dedicated `osac-dev` Kind
 cluster. Collect useful diagnostics before deleting it.

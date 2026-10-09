@@ -16,6 +16,7 @@ package it
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -280,6 +281,11 @@ func (t *Tool) Setup(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if endpoint := os.Getenv("IT_MCP_DEPLOYED_URL"); endpoint != "" {
+		if err := t.waitForMCPReady(ctx, endpoint); err != nil {
+			return err
+		}
+	}
 
 	// Ensure Keycloak trusts the cluster CA so that the OIDC broker can complete
 	// back-channel token exchanges with intra-cluster realm endpoints over TLS.
@@ -367,6 +373,69 @@ func (t *Tool) checkAddress(ctx context.Context, addr string) error {
 				"'/etc/hosts' file: %[2]w",
 			host, err,
 		)
+	}
+	return nil
+}
+
+// waitForMCPReady checks the deployed TLS route before the suite creates test
+// users and resource fixtures. A missing TLSRoute can otherwise go unnoticed
+// until the MCP spec runs after the expensive BeforeSuite setup.
+func (t *Tool) waitForMCPReady(ctx context.Context, rawURL string) error {
+	endpoint := strings.TrimSuffix(rawURL, "/")
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil ||
+		parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return errors.New("IT_MCP_DEPLOYED_URL must be an HTTPS root URL")
+	}
+	t.logger.DebugContext(ctx, "Checking MCP endpoint", "url", endpoint)
+	transport := &http.Transport{TLSClientConfig: &tls.Config{
+		RootCAs: t.caPool.Pool(), MinVersion: tls.VersionTLS12,
+	}}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   5 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	var lastErr error
+	for {
+		lastErr = probeMCPMetadata(probeCtx, client, endpoint)
+		if lastErr == nil {
+			return nil
+		}
+		select {
+		case <-probeCtx.Done():
+			return fmt.Errorf("MCP endpoint %s is not ready: %w; check its deployment, route, and TLS certificate in the selected cluster", endpoint, lastErr)
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+func probeMCPMetadata(ctx context.Context, client *http.Client, endpoint string) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"/.well-known/oauth-protected-resource", nil)
+	if err != nil {
+		return err
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("OAuth metadata returned HTTP %d", response.StatusCode)
+	}
+	var metadata struct {
+		Resource string `json:"resource"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&metadata); err != nil {
+		return fmt.Errorf("invalid OAuth metadata: %w", err)
+	}
+	if metadata.Resource != endpoint+"/" {
+		return fmt.Errorf("OAuth metadata resource %q does not match %q", metadata.Resource, endpoint+"/")
 	}
 	return nil
 }

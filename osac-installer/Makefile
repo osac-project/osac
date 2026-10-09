@@ -30,6 +30,12 @@ SHELL := /usr/bin/env bash -o pipefail
 # Extra helm --set/--set-string args appended to install commands.
 EXTRA_HELM_ARGS ?=
 FULFILLMENT_GINKGO_ARGS ?=
+MCP_TEST_ENABLED ?= false
+
+ifeq ($(MCP_TEST_ENABLED),true)
+MCP_TEST_HELM_ARGS := --set service.mcp.enabled=true --set-string service.mcp.externalHostname=mcp.osac.localhost --set service.mcp.externalPort=8443
+MCP_TEST_URL := https://mcp.osac.localhost:8443
+endif
 
 # Work around HTTP/2 stream resets from proxy.golang.org during container
 # builds (see osac-test-infra#543).  Override with `make test GODEBUG=` to
@@ -390,9 +396,9 @@ ifeq ($(SUITE),fulfillment)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/osac-operator:it -f ../osac-operator/Containerfile ..)
 	$(call kind-load-image,localhost/osac-operator:it)
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
-		EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set operator.enabled=false --set operator.networkManagers.enabled=true --set global.networking.networkClass.enabled=false"
+		EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set operator.enabled=false --set operator.networkManagers.enabled=true --set global.networking.networkClass.enabled=false $(MCP_TEST_HELM_ARGS)"
 	@for f in ../fulfillment-service/it/crds/*.yaml; do kubectl apply --server-side --field-manager=helm --force-conflicts -f "$$f"; done
-	cd ../fulfillment-service && ginkgo run --timeout 1h -v --skip 'NetworkClass manager (capability discovery|readiness)' $(FULFILLMENT_GINKGO_ARGS) it
+	cd ../fulfillment-service && IT_MCP_DEPLOYED_URL="$(MCP_TEST_URL)" ginkgo run --timeout 1h -v --skip 'NetworkClass manager (capability discovery|readiness)' $(FULFILLMENT_GINKGO_ARGS) it
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set operator.enabled=true --set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.networkManagers.enabled=true --set global.networking.networkClass.enabled=false"
 	cd ../fulfillment-service && ginkgo run --timeout 1h -v --focus 'NetworkClass manager capability discovery' it

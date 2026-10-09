@@ -235,6 +235,13 @@ type AddOnOperatorJobStatus struct {
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
 
+	// AttemptID is the controller-generated identity for this launch attempt.
+	// It remains stable when the external provider response is lost, allowing
+	// the provider to recover the original job instead of launching a duplicate.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MinLength=1
+	AttemptID string `json:"attemptID,omitempty"`
+
 	JobStatus `json:",inline"`
 }
 
@@ -267,8 +274,9 @@ type ClusterOrderStatus struct {
 	// +kubebuilder:validation:Optional
 	ClusterStorageJobs []JobStatus `json:"clusterStorageJobs,omitempty"`
 
-	// AddOnOperatorJobs holds the per-operator installation job history.
-	// One entry is recorded for each operator attempt.
+	// AddOnOperatorJobs holds per-operator installation attempts. Active attempts
+	// and the retry state needed for each operator may exceed the configured
+	// display-history limit.
 	// +kubebuilder:validation:Optional
 	AddOnOperatorJobs []AddOnOperatorJobStatus `json:"addOnOperatorJobs,omitempty"`
 	// FulfillmentTrustBundleHash is the hash of the last synchronized fulfillment trust bundle.

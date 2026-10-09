@@ -224,6 +224,15 @@
           osac_job_vars:
             resource: "{{ lookup('file', '../../../fixtures/clusterorder-test.yaml') | from_yaml }}"
         expected_error: "addon_operator_name, osac_job_vars.resource, and admin_kubeconfig are required"
+      - name: invalid_operator_role_name
+        extra_vars:
+          addon_operator_name: "../invalid-role"
+          admin_kubeconfig: |
+            apiVersion: v1
+            kind: Config
+          osac_job_vars:
+            resource: "{{ lookup('file', '../../../fixtures/clusterorder-test.yaml') | from_yaml }}"
+        expected_error: "addon_operator_name must be a valid role name"
 
   tasks:
     - name: Read operator namespace

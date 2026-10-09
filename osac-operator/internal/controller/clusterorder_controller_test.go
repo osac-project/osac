@@ -487,6 +487,39 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(condition.Status).To(Equal(metav1.ConditionTrue))
 			Expect(updated.Status.AddOnOperatorJobs).To(HaveLen(1))
 		})
+
+		It("uses an optimistic lock for main status patches", func() {
+			instance := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{Name: "status-optimistic-lock", Namespace: "default"},
+				Spec:       v1alpha1.ClusterOrderSpec{TemplateID: "test.template"},
+			}
+			Expect(k8sClient.Create(context.Background(), instance)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(context.Background(), instance) })
+
+			baseClient := fake.NewClientBuilder().
+				WithScheme(k8sClient.Scheme()).
+				WithStatusSubresource(&v1alpha1.ClusterOrder{}).
+				WithObjects(instance).
+				Build()
+			lockedClient := interceptor.NewClient(baseClient, interceptor.Funcs{
+				SubResourcePatch: func(ctx context.Context, c client.Client, subResourceName string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+					if subResourceName == "status" {
+						data, err := patch.Data(obj)
+						Expect(err).NotTo(HaveOccurred())
+						Expect(string(data)).To(ContainSubstring("resourceVersion"))
+					}
+					return c.SubResource(subResourceName).Patch(ctx, obj, patch, opts...)
+				},
+			})
+			reconciler := &ClusterOrderReconciler{Client: lockedClient, apiReader: lockedClient}
+			computed := instance.Status
+			computed.ProvisioningJobs = []v1alpha1.JobStatus{{
+				JobID: "main-job", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateRunning, Timestamp: metav1.Now(),
+			}}
+
+			_, err := reconciler.patchStatusWithRetry(context.Background(), client.ObjectKeyFromObject(instance), computed)
+			Expect(err).NotTo(HaveOccurred())
+		})
 	})
 
 	Context("handleDesiredConfigVersion", func() {
@@ -562,14 +595,14 @@ var _ = Describe("ClusterOrder Controller", func() {
 			}, 5*time.Second, 100*time.Millisecond).Should(BeTrue())
 		})
 
-		It("waits for add-on jobs before starting cluster teardown", func() {
+		It("does not wait for non-terminal add-on jobs before starting cluster teardown", func() {
 			deletionTimestamp := metav1.Now()
 			instance := &v1alpha1.ClusterOrder{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:              "delete-with-addon-job",
 					Namespace:         "default",
 					DeletionTimestamp: &deletionTimestamp,
-					Finalizers:        []string{osacFinalizer, osacAddOnOperatorFinalizer},
+					Finalizers:        nil,
 				},
 				Status: v1alpha1.ClusterOrderStatus{
 					AddOnOperatorJobs: []v1alpha1.AddOnOperatorJobStatus{{
@@ -581,11 +614,15 @@ var _ = Describe("ClusterOrder Controller", func() {
 					}},
 				},
 			}
-			reconciler := &ClusterOrderReconciler{StatusPollInterval: time.Minute}
+			reconciler := &ClusterOrderReconciler{
+				Client:             k8sClient,
+				apiReader:          k8sClient,
+				StatusPollInterval: time.Minute,
+			}
 
 			result, err := reconciler.handleDelete(context.Background(), reconcile.Request{}, instance)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(Equal(time.Minute))
+			Expect(result.RequeueAfter).To(BeZero())
 			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseDeleting))
 		})
 	})

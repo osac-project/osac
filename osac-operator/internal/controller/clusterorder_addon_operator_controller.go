@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -52,6 +53,11 @@ const (
 
 // AddOnOperatorReconciler reconciles per-operator installation jobs for ready
 // ClusterOrders without owning the main ClusterOrder provisioning lifecycle.
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders,verbs=get;list;watch;patch
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders/finalizers,verbs=update
+// +kubebuilder:rbac:groups=hypershift.openshift.io,resources=hostedcontrolplanes,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 type AddOnOperatorReconciler struct {
 	client.Client
 	apiReader             client.Reader
@@ -141,42 +147,24 @@ func (r *AddOnOperatorReconciler) Reconcile(ctx context.Context, request ctrl.Re
 }
 
 func (r *AddOnOperatorReconciler) reconcileDeletion(ctx context.Context, instance *v1alpha1.ClusterOrder) (ctrl.Result, error) {
-	for _, operatorName := range instance.Spec.AddOnOperators {
-		latest := latestAddOnOperatorJob(instance.Status.AddOnOperatorJobs, operatorName)
-		if latest == nil || latest.JobID == "" || latest.State.IsTerminal() {
+	log := ctrllog.FromContext(ctx)
+	canceled := make(map[string]struct{})
+	canceler, canCancel := r.ProvisioningProvider.(provisioning.ProvisioningJobCanceler)
+	for _, job := range instance.Status.AddOnOperatorJobs {
+		if job.JobID == "" || job.State.IsTerminal() {
 			continue
 		}
-
-		status, err := r.ProvisioningProvider.GetProvisionStatus(ctx, instance, latest.JobID)
-		if err != nil {
-			var notFoundErr *aap.NotFoundError
-			if errors.As(err, &notFoundErr) {
-				status = provisioning.ProvisionStatus{
-					JobID:   latest.JobID,
-					State:   v1alpha1.JobStateFailed,
-					Message: addOnOperatorPurgedJobMessage,
-				}
-			} else {
-				ctrllog.FromContext(ctx).Error(err, "failed to get add-on operator job during deletion", "jobID", latest.JobID, "operator", operatorName)
-				return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-			}
-		}
-		if status.State.IsTerminal() {
-			if err := r.persistAddOnOperatorJobStatusWithRetry(ctx, client.ObjectKeyFromObject(instance), latest.Name, latest.JobID, status); err != nil {
-				return ctrl.Result{}, err
-			}
+		if _, seen := canceled[job.JobID]; seen {
 			continue
 		}
-
-		canceler, ok := r.ProvisioningProvider.(provisioning.ProvisioningJobCanceler)
-		if ok {
-			if err := canceler.CancelJob(ctx, latest.JobID); err != nil {
-				ctrllog.FromContext(ctx).Error(err, "failed to cancel add-on operator job during deletion", "jobID", latest.JobID, "operator", operatorName)
-			}
-		} else {
-			ctrllog.FromContext(ctx).Info("waiting for add-on operator job to finish during deletion", "jobID", latest.JobID, "operator", operatorName)
+		canceled[job.JobID] = struct{}{}
+		if !canCancel {
+			log.Info("add-on operator job cannot be cancelled during deletion", "jobID", job.JobID, "operator", job.Name)
+			continue
 		}
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+		if err := canceler.CancelJob(ctx, job.JobID); err != nil {
+			log.Error(err, "failed to cancel add-on operator job during deletion; continuing", "jobID", job.JobID, "operator", job.Name)
+		}
 	}
 
 	if !controllerutil.ContainsFinalizer(instance, osacAddOnOperatorFinalizer) {
@@ -233,6 +221,34 @@ func (r *AddOnOperatorReconciler) persistAddOnOperatorJobStatusWithRetry(
 			return nil
 		}
 		base := latest.DeepCopy()
+		job.State = status.State
+		job.Message = message
+		return r.Status().Patch(ctx, latest, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
+	})
+}
+
+func (r *AddOnOperatorReconciler) persistAddOnOperatorAttemptStatusWithRetry(
+	ctx context.Context,
+	key client.ObjectKey,
+	attemptID string,
+	status provisioning.ProvisionStatus,
+) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest := &v1alpha1.ClusterOrder{}
+		if err := r.apiReader.Get(ctx, key, latest); err != nil {
+			return err
+		}
+		job := addOnOperatorJobByAttemptID(latest.Status.AddOnOperatorJobs, attemptID)
+		if job == nil {
+			return nil
+		}
+
+		message := addOnOperatorStatusMessage(status)
+		if job.JobID == status.JobID && job.State == status.State && job.Message == message {
+			return nil
+		}
+		base := latest.DeepCopy()
+		job.JobID = status.JobID
 		job.State = status.State
 		job.Message = message
 		return r.Status().Patch(ctx, latest, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
@@ -312,12 +328,25 @@ func (r *AddOnOperatorReconciler) reconcileOperator(
 
 		provisioningContext, available, err := loadProvisioningContext()
 		if err != nil {
-			return r.recordAddOnOperatorFailure(instance, operatorName, err.Error()), true, nil
+			ctrllog.FromContext(ctx).Error(err, "failed to load add-on operator provisioning context", "operator", operatorName)
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, false, nil
 		}
 		if !available {
-			return r.recordAddOnOperatorFailure(instance, operatorName, "admin kubeconfig is not available"), true, nil
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, false, nil
 		}
-		return r.triggerAddOnOperator(ctx, instance, operatorName, provisioningContext)
+		return r.triggerAddOnOperator(ctx, instance, operatorName, "", provisioningContext)
+	}
+
+	if latest.AttemptID != "" && latest.JobID == "" && !latest.State.IsTerminal() {
+		provisioningContext, available, err := loadProvisioningContext()
+		if err != nil {
+			ctrllog.FromContext(ctx).Error(err, "failed to load add-on operator provisioning context", "operator", operatorName, "attemptID", latest.AttemptID)
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, false, nil
+		}
+		if !available {
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, false, nil
+		}
+		return r.triggerAddOnOperator(ctx, instance, operatorName, latest.AttemptID, provisioningContext)
 	}
 
 	if latest.State.IsSuccessful() {
@@ -335,51 +364,77 @@ func (r *AddOnOperatorReconciler) reconcileOperator(
 
 	provisioningContext, available, err := loadProvisioningContext()
 	if err != nil {
-		return r.recordAddOnOperatorFailure(instance, operatorName, err.Error()), true, nil
+		ctrllog.FromContext(ctx).Error(err, "failed to load add-on operator provisioning context", "operator", operatorName)
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, false, nil
 	}
 	if !available {
-		return r.recordAddOnOperatorFailure(instance, operatorName, "admin kubeconfig is not available"), true, nil
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, false, nil
 	}
-	return r.triggerAddOnOperator(ctx, instance, operatorName, provisioningContext)
+	return r.triggerAddOnOperator(ctx, instance, operatorName, "", provisioningContext)
 }
 
-func (r *AddOnOperatorReconciler) triggerAddOnOperator(ctx context.Context, instance *v1alpha1.ClusterOrder, operatorName string, provisioningContext context.Context) (ctrl.Result, bool, error) {
+func (r *AddOnOperatorReconciler) triggerAddOnOperator(
+	ctx context.Context,
+	instance *v1alpha1.ClusterOrder,
+	operatorName, attemptID string,
+	provisioningContext context.Context,
+) (ctrl.Result, bool, error) {
+	if attemptID == "" {
+		attemptID = uuid.NewString()
+		originalJobs := append([]v1alpha1.AddOnOperatorJobStatus(nil), instance.Status.AddOnOperatorJobs...)
+		instance.Status.AddOnOperatorJobs = trimAddOnOperatorJobs(append(instance.Status.AddOnOperatorJobs, v1alpha1.AddOnOperatorJobStatus{
+			Name:      operatorName,
+			AttemptID: attemptID,
+			JobStatus: v1alpha1.JobStatus{
+				Type:          v1alpha1.JobTypeProvision,
+				State:         v1alpha1.JobStateWaiting,
+				Message:       "AAP launch pending",
+				Timestamp:     metav1.Now(),
+				ConfigVersion: instance.Status.DesiredConfigVersion,
+			},
+		}), r.MaxJobHistory)
+		updateAddOnOperatorsReadyCondition(instance)
+		if err := r.patchAddOnStatusWithRetry(ctx, client.ObjectKeyFromObject(instance), originalJobs, instance.Status); err != nil {
+			return ctrl.Result{}, false, err
+		}
+	}
+
+	provider, ok := r.ProvisioningProvider.(provisioning.ProvisioningProviderWithAttemptID)
+	if !ok {
+		providerName := "<nil>"
+		if r.ProvisioningProvider != nil {
+			providerName = r.ProvisioningProvider.Name()
+		}
+		return ctrl.Result{}, false, fmt.Errorf("provisioning provider %q does not support durable add-on operator attempts", providerName)
+	}
 	operatorContext := provisioning.WithAddOnOperatorName(provisioningContext, operatorName)
-	result, err := r.ProvisioningProvider.TriggerProvision(operatorContext, instance)
+	result, err := provider.TriggerProvisionWithAttemptID(operatorContext, instance, attemptID)
 	if err != nil {
-		return r.recordAddOnOperatorFailure(instance, operatorName, fmt.Sprintf("failed to trigger add-on operator %q: %v", operatorName, err)), true, nil
+		ctrllog.FromContext(ctx).Error(err, "failed to start or recover add-on operator job", "operator", operatorName, "attemptID", attemptID)
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, false, nil
 	}
 	if result == nil || result.JobID == "" {
-		return r.recordAddOnOperatorFailure(instance, operatorName, "add-on operator provider returned no job ID"), true, nil
+		ctrllog.FromContext(ctx).Error(errors.New("provider returned no job ID"), "failed to start or recover add-on operator job", "operator", operatorName, "attemptID", attemptID)
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, false, nil
 	}
 
-	instance.Status.AddOnOperatorJobs = trimAddOnOperatorJobs(append(instance.Status.AddOnOperatorJobs, v1alpha1.AddOnOperatorJobStatus{
-		Name: operatorName,
-		JobStatus: v1alpha1.JobStatus{
-			JobID:         result.JobID,
-			Type:          v1alpha1.JobTypeProvision,
-			State:         result.InitialState,
-			Message:       truncateAddOnOperatorMessage(result.Message),
-			Timestamp:     metav1.Now(),
-			ConfigVersion: instance.Status.DesiredConfigVersion,
-		},
-	}), r.MaxJobHistory)
+	status := provisioning.ProvisionStatus{
+		JobID:   result.JobID,
+		State:   result.InitialState,
+		Message: result.Message,
+	}
+	if status.State == "" {
+		status.State = v1alpha1.JobStatePending
+	}
+	if err := r.persistAddOnOperatorAttemptStatusWithRetry(ctx, client.ObjectKeyFromObject(instance), attemptID, status); err != nil {
+		return ctrl.Result{}, false, err
+	}
+	if job := addOnOperatorJobByAttemptID(instance.Status.AddOnOperatorJobs, attemptID); job != nil {
+		job.JobID = result.JobID
+		job.State = status.State
+		job.Message = truncateAddOnOperatorMessage(result.Message)
+	}
 	return ctrl.Result{RequeueAfter: r.StatusPollInterval}, true, nil
-}
-
-func (r *AddOnOperatorReconciler) recordAddOnOperatorFailure(instance *v1alpha1.ClusterOrder, operatorName, message string) ctrl.Result {
-	instance.Status.AddOnOperatorJobs = trimAddOnOperatorJobs(append(instance.Status.AddOnOperatorJobs, v1alpha1.AddOnOperatorJobStatus{
-		Name: operatorName,
-		JobStatus: v1alpha1.JobStatus{
-			Type:          v1alpha1.JobTypeProvision,
-			State:         v1alpha1.JobStateFailed,
-			Message:       truncateAddOnOperatorMessage(message),
-			Timestamp:     metav1.Now(),
-			ConfigVersion: instance.Status.DesiredConfigVersion,
-		},
-	}), r.MaxJobHistory)
-	latest := latestAddOnOperatorJob(instance.Status.AddOnOperatorJobs, operatorName)
-	return ctrl.Result{RequeueAfter: addOnOperatorBackoffRemaining(instance, operatorName, latest)}
 }
 
 func (r *AddOnOperatorReconciler) pollOperator(ctx context.Context, instance *v1alpha1.ClusterOrder, latest *v1alpha1.AddOnOperatorJobStatus) (ctrl.Result, bool, error) {
@@ -546,11 +601,23 @@ func latestAddOnOperatorJob(jobs []v1alpha1.AddOnOperatorJobStatus, operatorName
 		if job.Name != operatorName {
 			continue
 		}
-		if latest == nil || job.Timestamp.Time.After(latest.Timestamp.Time) {
+		if latest == nil || !job.Timestamp.Time.Before(latest.Timestamp.Time) {
 			latest = job
 		}
 	}
 	return latest
+}
+
+func addOnOperatorJobByAttemptID(jobs []v1alpha1.AddOnOperatorJobStatus, attemptID string) *v1alpha1.AddOnOperatorJobStatus {
+	if attemptID == "" {
+		return nil
+	}
+	for index := range jobs {
+		if jobs[index].AttemptID == attemptID {
+			return &jobs[index]
+		}
+	}
+	return nil
 }
 
 func addOnOperatorJobs(jobs []v1alpha1.AddOnOperatorJobStatus, operatorName string) []v1alpha1.JobStatus {
@@ -595,25 +662,40 @@ func mergeAddOnOperatorJobs(original, computed, latest []v1alpha1.AddOnOperatorJ
 }
 
 func trimAddOnOperatorJobs(jobs []v1alpha1.AddOnOperatorJobStatus, maxHistory int) []v1alpha1.AddOnOperatorJobStatus {
+	// maxHistory limits additional terminal history. Active attempts and the two
+	// newest failures per operator are retained because they drive cancellation,
+	// failure conditions, and exponential retry backoff.
 	if maxHistory <= 0 || len(jobs) <= maxHistory {
 		return append([]v1alpha1.AddOnOperatorJobStatus(nil), jobs...)
 	}
 
 	latestByOperator := make(map[string]int)
+	failedByOperator := make(map[string]int)
+	keep := make(map[int]struct{})
 	for index, job := range jobs {
 		latestIndex, ok := latestByOperator[job.Name]
-		if !ok || job.Timestamp.Time.After(jobs[latestIndex].Timestamp.Time) {
+		if !ok || !job.Timestamp.Time.Before(jobs[latestIndex].Timestamp.Time) {
 			latestByOperator[job.Name] = index
+		}
+		if !job.State.IsTerminal() && (job.JobID != "" || job.AttemptID != "") {
+			keep[index] = struct{}{}
 		}
 	}
 
 	keepCount := maxHistory
-	if keepCount < len(latestByOperator) {
-		keepCount = len(latestByOperator)
-	}
-	keep := make(map[int]struct{}, keepCount)
 	for _, index := range latestByOperator {
 		keep[index] = struct{}{}
+	}
+	for index := len(jobs) - 1; index >= 0; index-- {
+		job := jobs[index]
+		if job.State != v1alpha1.JobStateFailed || failedByOperator[job.Name] >= 2 {
+			continue
+		}
+		failedByOperator[job.Name]++
+		keep[index] = struct{}{}
+	}
+	if keepCount < len(keep) {
+		keepCount = len(keep)
 	}
 
 	for len(keep) < keepCount {
@@ -641,19 +723,13 @@ func trimAddOnOperatorJobs(jobs []v1alpha1.AddOnOperatorJobStatus, maxHistory in
 	return trimmed
 }
 
-func hasNonTerminalAddOnOperatorJob(jobs []v1alpha1.AddOnOperatorJobStatus) bool {
-	for _, job := range jobs {
-		if job.JobID != "" && !job.State.IsTerminal() {
-			return true
-		}
-	}
-	return false
-}
-
 func findAddOnOperatorJobIndex(jobs []v1alpha1.AddOnOperatorJobStatus, target v1alpha1.AddOnOperatorJobStatus) int {
 	for index, job := range jobs {
 		if job.Name != target.Name {
 			continue
+		}
+		if target.AttemptID != "" && job.AttemptID == target.AttemptID {
+			return index
 		}
 		if target.JobID != "" && job.JobID == target.JobID {
 			return index

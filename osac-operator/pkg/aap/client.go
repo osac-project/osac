@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -45,6 +46,7 @@ const (
 	// AAP template endpoint paths
 	JobTemplatesEndpoint         = "job_templates"
 	WorkflowJobTemplatesEndpoint = "workflow_job_templates"
+	WorkflowJobsEndpoint         = "workflow_jobs"
 )
 
 // Client provides an HTTP client for interacting with AAP (Ansible Automation Platform) REST API.
@@ -196,6 +198,75 @@ func (c *Client) GetJob(ctx context.Context, jobID string) (*Job, error) {
 	}
 
 	return &job, nil
+}
+
+// FindJobByAttemptID finds an AAP job carrying the controller's durable launch
+// identity in osac_job_vars. AAP's search endpoint narrows the response before
+// the client verifies the structured extra-vars value.
+func (c *Client) FindJobByAttemptID(ctx context.Context, attemptID string) (*Job, error) {
+	if attemptID == "" {
+		return nil, fmt.Errorf("attempt ID is required")
+	}
+	var match *Job
+	for _, endpoint := range []string{"jobs", WorkflowJobsEndpoint} {
+		candidate, err := c.findJobByAttemptIDInEndpoint(ctx, endpoint, attemptID)
+		if err != nil {
+			return nil, err
+		}
+		if candidate == nil {
+			continue
+		}
+		if match != nil {
+			return nil, fmt.Errorf("multiple AAP jobs found for attempt ID %q", attemptID)
+		}
+		match = candidate
+	}
+	return match, nil
+}
+
+func (c *Client) findJobByAttemptIDInEndpoint(ctx context.Context, endpoint, attemptID string) (*Job, error) {
+	query := url.Values{}
+	query.Set("search", attemptID)
+	requestURL := fmt.Sprintf("%s/%s/%s/?%s", c.baseURL, APIVersion, endpoint, query.Encode())
+	resp, err := c.doRequest(ctx, http.MethodGet, requestURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find job by attempt ID: %w", err)
+	}
+
+	var result struct {
+		Results []Job `json:"results"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse job search response: %w", err)
+	}
+
+	for index := range result.Results {
+		job := &result.Results[index]
+		if !jobHasAttemptID(job.ExtraVars, attemptID) {
+			continue
+		}
+		return job, nil
+	}
+	return nil, nil
+}
+
+func jobHasAttemptID(rawExtraVars, attemptID string) bool {
+	var extraVars map[string]any
+	if rawExtraVars == "" || json.Unmarshal([]byte(rawExtraVars), &extraVars) != nil {
+		return false
+	}
+	if fmt.Sprint(extraVars["addon_operator_attempt_id"]) == attemptID {
+		return true
+	}
+	jobVars, ok := extraVars["osac_job_vars"].(map[string]any)
+	if !ok {
+		encodedJobVars, encoded := extraVars["osac_job_vars"].(string)
+		if !encoded || json.Unmarshal([]byte(encodedJobVars), &jobVars) != nil {
+			return false
+		}
+		ok = true
+	}
+	return ok && fmt.Sprint(jobVars["addon_operator_attempt_id"]) == attemptID
 }
 
 // CanCancelJobResponse contains the response from checking if a job can be canceled.

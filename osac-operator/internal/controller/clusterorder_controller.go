@@ -358,7 +358,7 @@ func (r *ClusterOrderReconciler) patchStatusWithRetry(ctx context.Context, key c
 		if equality.Semantic.DeepEqual(base.Status, latest.Status) {
 			return nil
 		}
-		if err := r.Status().Patch(ctx, latest, client.MergeFrom(base)); err != nil {
+		if err := r.Status().Patch(ctx, latest, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
 			return err
 		}
 		transition = &statusTransition{oldStatus: base.Status, newStatus: latest.Status}
@@ -1036,9 +1036,9 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 	instance.SetStatusCondition(v1alpha1.ConditionDeleting, metav1.ConditionTrue,
 		"ClusterOrder is being deleted", v1alpha1.ReasonDeleting)
 
-	// Add-on AAP jobs use the hosted cluster kubeconfig. Do not tear down the
-	// cluster while the add-on controller is canceling or polling those jobs.
-	if controllerutil.ContainsFinalizer(instance, osacAddOnOperatorFinalizer) || hasNonTerminalAddOnOperatorJob(instance.Status.AddOnOperatorJobs) {
+	// The add-on controller gets one deletion pass through its finalizer to
+	// cancel active jobs. Job state itself must not block ClusterOrder teardown.
+	if controllerutil.ContainsFinalizer(instance, osacAddOnOperatorFinalizer) {
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 

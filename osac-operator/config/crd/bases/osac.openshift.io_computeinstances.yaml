@@ -199,7 +199,7 @@ spec:
                   required:
                   - subnetRef
                   type: object
-                maxItems: 1
+                maxItems: 8
                 type: array
                 x-kubernetes-list-map-keys:
                 - subnetRef

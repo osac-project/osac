@@ -25,12 +25,14 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -152,9 +154,10 @@ var _ = Describe("AddOnOperatorReconciler", func() {
 	ctx := context.Background()
 
 	var (
-		k8sClient  client.Client
-		provider   *addOnOperatorProviderStub
-		reconciler *AddOnOperatorReconciler
+		k8sClient     client.Client
+		provider      *addOnOperatorProviderStub
+		reconciler    *AddOnOperatorReconciler
+		eventRecorder *events.FakeRecorder
 	)
 
 	BeforeEach(func() {
@@ -165,7 +168,9 @@ var _ = Describe("AddOnOperatorReconciler", func() {
 			WithStatusSubresource(&osacv1alpha1.ClusterOrder{}).
 			Build()
 		provider = newAddOnOperatorProviderStub()
+		eventRecorder = events.NewFakeRecorder(20)
 		reconciler = NewAddOnOperatorReconciler(k8sClient, k8sClient, namespace, provider, time.Minute)
+		reconciler.Recorder = eventRecorder
 		reconciler.getAdminKubeconfig = func(context.Context, *osacv1alpha1.ClusterOrder) ([]byte, error) {
 			return []byte("test-kubeconfig"), nil
 		}
@@ -371,6 +376,21 @@ var _ = Describe("AddOnOperatorReconciler", func() {
 		Expect(provider.triggeredOperators).To(BeEmpty())
 	})
 
+	It("records a warning event when the admin kubeconfig is unavailable", func() {
+		order := newOrder("missing-kubeconfig-event", osacv1alpha1.ClusterOrderPhaseReady, "cert-manager")
+		reconciler.getAdminKubeconfig = func(context.Context, *osacv1alpha1.ClusterOrder) ([]byte, error) {
+			return nil, nil
+		}
+		Expect(k8sClient.Create(ctx, order)).To(Succeed())
+
+		_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: order.Name, Namespace: namespace}})
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(eventRecorder.Events).Should(Receive(And(
+			ContainSubstring(corev1.EventTypeWarning),
+			ContainSubstring("AddOnOperatorKubeconfigUnavailable"),
+		)))
+	})
+
 	It("records an empty provider job ID as a failed attempt", func() {
 		order := newOrder("empty-job-id", osacv1alpha1.ClusterOrderPhaseReady, "cert-manager")
 		provider.returnEmptyJobID = true
@@ -488,6 +508,10 @@ var _ = Describe("AddOnOperatorReconciler", func() {
 		Expect(result.RequeueAfter).To(BeZero())
 		stored := getOrder(order.Name)
 		Expect(stored.Finalizers).NotTo(ContainElement(osacAddOnOperatorFinalizer))
+		Eventually(eventRecorder.Events).Should(Receive(And(
+			ContainSubstring(corev1.EventTypeWarning),
+			ContainSubstring("AddOnOperatorCancellationFailed"),
+		)))
 	})
 
 	It("removes the deletion finalizer when the provider cannot cancel jobs", func() {
@@ -504,6 +528,7 @@ var _ = Describe("AddOnOperatorReconciler", func() {
 		Expect(k8sClient.Create(ctx, order)).To(Succeed())
 		nonCancellingProvider := &nonCancellingAddOnOperatorProvider{provider: provider}
 		nonCancellingReconciler := NewAddOnOperatorReconciler(k8sClient, k8sClient, namespace, nonCancellingProvider, time.Minute)
+		nonCancellingReconciler.Recorder = eventRecorder
 
 		result, err := nonCancellingReconciler.reconcileDeletion(ctx, order)
 		Expect(err).NotTo(HaveOccurred())
@@ -511,6 +536,10 @@ var _ = Describe("AddOnOperatorReconciler", func() {
 		stored := getOrder(order.Name)
 		Expect(stored.Finalizers).NotTo(ContainElement(osacAddOnOperatorFinalizer))
 		Expect(provider.canceledJobIDs).To(BeEmpty())
+		Eventually(eventRecorder.Events).Should(Receive(And(
+			ContainSubstring(corev1.EventTypeWarning),
+			ContainSubstring("AddOnOperatorCancellationUnavailable"),
+		)))
 	})
 
 	It("does not poll or rewrite job status before completing deletion", func() {
@@ -738,6 +767,37 @@ var _ = Describe("AddOnOperatorReconciler", func() {
 		}
 
 		Expect(latestAddOnOperatorJob(jobs, "cert-manager").JobID).To(Equal("second-job"))
+	})
+
+	It("canonicalizes JobID-less failure timestamps for API round trips", func() {
+		order := newOrder("canonical-failure-timestamp", osacv1alpha1.ClusterOrderPhaseReady, "cert-manager")
+		result := reconciler.recordAddOnOperatorFailure(order, "cert-manager", "AAP unavailable")
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+		computed := order.Status.AddOnOperatorJobs[0]
+		Expect(computed.Timestamp.Time.Nanosecond()).To(BeZero())
+
+		persisted := computed
+		persisted.Timestamp = metav1.NewTime(computed.Timestamp.Time.UTC().Truncate(time.Second))
+
+		Expect(findAddOnOperatorJobIndex([]osacv1alpha1.AddOnOperatorJobStatus{persisted}, computed)).To(Equal(0))
+	})
+
+	It("uses the same later-tie rule when computing readiness", func() {
+		order := newOrder("condition-timestamp-tie", osacv1alpha1.ClusterOrderPhaseReady, "cert-manager")
+		timestamp := metav1.Now().Rfc3339Copy()
+		order.Status.AddOnOperatorJobs = []osacv1alpha1.AddOnOperatorJobStatus{
+			{Name: "cert-manager", JobStatus: osacv1alpha1.JobStatus{
+				JobID: "failed-job", State: osacv1alpha1.JobStateFailed, Timestamp: timestamp,
+			}},
+			{Name: "cert-manager", JobStatus: osacv1alpha1.JobStatus{
+				JobID: "successful-job", State: osacv1alpha1.JobStateSucceeded, Timestamp: timestamp,
+			}},
+		}
+
+		Expect(updateAddOnOperatorsReadyCondition(order)).To(BeTrue())
+		condition := findAddOnOperatorCondition(order)
+		Expect(condition).NotTo(BeNil())
+		Expect(condition.Status).To(Equal(metav1.ConditionTrue))
 	})
 })
 

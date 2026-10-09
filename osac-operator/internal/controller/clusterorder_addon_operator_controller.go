@@ -30,6 +30,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -44,10 +45,13 @@ import (
 )
 
 const (
-	maxAddOnOperatorJobMessageLength = 4096
-	addOnOperatorsReadyReason        = "AddOnOperatorsReady"
-	addOnOperatorsFailedReason       = "AddOnOperatorsFailed"
-	addOnOperatorPurgedJobMessage    = "AAP job was purged before completion"
+	maxAddOnOperatorJobMessageLength     = 4096
+	addOnOperatorsReadyReason            = "AddOnOperatorsReady"
+	addOnOperatorsFailedReason           = "AddOnOperatorsFailed"
+	addOnOperatorPurgedJobMessage        = "AAP job was purged before completion"
+	addOnOperatorKubeconfigReason        = "AddOnOperatorKubeconfigUnavailable"
+	addOnOperatorCancelFailedReason      = "AddOnOperatorCancellationFailed"
+	addOnOperatorCancelUnavailableReason = "AddOnOperatorCancellationUnavailable"
 )
 
 // AddOnOperatorReconciler reconciles per-operator installation jobs for ready
@@ -64,6 +68,7 @@ type AddOnOperatorReconciler struct {
 	ProvisioningProvider  provisioning.ProvisioningProvider
 	StatusPollInterval    time.Duration
 	MaxJobHistory         int
+	Recorder              events.EventRecorder
 	getAdminKubeconfig    func(context.Context, *v1alpha1.ClusterOrder) ([]byte, error)
 }
 
@@ -98,6 +103,9 @@ func (r *AddOnOperatorReconciler) SetupWithManager(mgr mcmanager.Manager) error 
 	localMgr := mgr.GetLocalManager()
 	if localMgr == nil {
 		return fmt.Errorf("local manager is nil")
+	}
+	if r.Recorder == nil {
+		r.Recorder = localMgr.GetEventRecorder("clusterorder-addon-operators")
 	}
 
 	return ctrl.NewControllerManagedBy(localMgr).
@@ -159,10 +167,12 @@ func (r *AddOnOperatorReconciler) reconcileDeletion(ctx context.Context, instanc
 		canceled[job.JobID] = struct{}{}
 		if !canCancel {
 			log.Info("add-on operator job cannot be cancelled during deletion", "jobID", job.JobID, "operator", job.Name)
+			r.recordWarningEvent(instance, addOnOperatorCancelUnavailableReason, "CancelAddOnOperator", fmt.Sprintf("No cancellation mechanism is available for add-on operator job %s", job.JobID))
 			continue
 		}
 		if err := canceler.CancelJob(ctx, job.JobID); err != nil {
 			log.Error(err, "failed to cancel add-on operator job during deletion; continuing", "jobID", job.JobID, "operator", job.Name)
+			r.recordWarningEvent(instance, addOnOperatorCancelFailedReason, "CancelAddOnOperator", fmt.Sprintf("Failed to cancel add-on operator job %s: %v", job.JobID, err))
 		}
 	}
 
@@ -173,6 +183,12 @@ func (r *AddOnOperatorReconciler) reconcileDeletion(ctx context.Context, instanc
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
+}
+
+func (r *AddOnOperatorReconciler) recordWarningEvent(instance *v1alpha1.ClusterOrder, reason, action, message string) {
+	if r.Recorder != nil {
+		r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, reason, action, "%s", message)
+	}
 }
 
 func (r *AddOnOperatorReconciler) patchAddOnOperatorFinalizerWithRetry(ctx context.Context, key client.ObjectKey, add bool) error {
@@ -235,16 +251,18 @@ func (r *AddOnOperatorReconciler) reconcileOperators(ctx context.Context, instan
 	var provisioningContext context.Context
 	var provisioningContextLoaded bool
 	var provisioningContextAvailable bool
+	var provisioningContextErr error
 	loadProvisioningContext := func() (context.Context, bool, error) {
 		if !provisioningContextLoaded {
-			var err error
-			provisioningContext, provisioningContextAvailable, err = r.addOnProvisioningContext(ctx, instance)
-			if err != nil {
-				return nil, false, err
-			}
 			provisioningContextLoaded = true
+			provisioningContext, provisioningContextAvailable, provisioningContextErr = r.addOnProvisioningContext(ctx, instance)
+			if provisioningContextErr != nil {
+				r.recordWarningEvent(instance, addOnOperatorKubeconfigReason, "ProvisionAddOnOperator", fmt.Sprintf("Add-on operators are waiting for a usable hosted-cluster kubeconfig: %v", provisioningContextErr))
+			} else if !provisioningContextAvailable {
+				r.recordWarningEvent(instance, addOnOperatorKubeconfigReason, "ProvisionAddOnOperator", "Add-on operators are waiting for a hosted-cluster kubeconfig")
+			}
 		}
-		return provisioningContext, provisioningContextAvailable, nil
+		return provisioningContext, provisioningContextAvailable, provisioningContextErr
 	}
 
 	for _, operatorName := range instance.Spec.AddOnOperators {
@@ -334,6 +352,8 @@ func (r *AddOnOperatorReconciler) reconcileOperator(
 
 func (r *AddOnOperatorReconciler) triggerAddOnOperator(ctx context.Context, instance *v1alpha1.ClusterOrder, operatorName string, provisioningContext context.Context) (ctrl.Result, bool, error) {
 	operatorContext := provisioning.WithAddOnOperatorName(provisioningContext, operatorName)
+	// Generic launch recovery and idempotency are intentionally deferred to the
+	// shared provisioning design; this controller records the provider result.
 	result, err := r.ProvisioningProvider.TriggerProvision(operatorContext, instance)
 	if err != nil {
 		return r.recordAddOnOperatorFailure(instance, operatorName, fmt.Sprintf("failed to trigger add-on operator %q: %v", operatorName, err)), true, nil
@@ -349,7 +369,7 @@ func (r *AddOnOperatorReconciler) triggerAddOnOperator(ctx context.Context, inst
 			Type:          v1alpha1.JobTypeProvision,
 			State:         result.InitialState,
 			Message:       truncateAddOnOperatorMessage(result.Message),
-			Timestamp:     metav1.Now(),
+			Timestamp:     addOnOperatorTimestamp(),
 			ConfigVersion: instance.Status.DesiredConfigVersion,
 		},
 	}), r.MaxJobHistory)
@@ -363,7 +383,7 @@ func (r *AddOnOperatorReconciler) recordAddOnOperatorFailure(instance *v1alpha1.
 			Type:          v1alpha1.JobTypeProvision,
 			State:         v1alpha1.JobStateFailed,
 			Message:       truncateAddOnOperatorMessage(message),
-			Timestamp:     metav1.Now(),
+			Timestamp:     addOnOperatorTimestamp(),
 			ConfigVersion: instance.Status.DesiredConfigVersion,
 		},
 	}), r.MaxJobHistory)
@@ -484,19 +504,16 @@ func (r *AddOnOperatorReconciler) patchAddOnStatusWithRetry(ctx context.Context,
 }
 
 func updateAddOnOperatorsReadyCondition(instance *v1alpha1.ClusterOrder) bool {
-	latestJobs := make(map[string]*v1alpha1.AddOnOperatorJobStatus, len(instance.Status.AddOnOperatorJobs))
-	for i := range instance.Status.AddOnOperatorJobs {
-		job := &instance.Status.AddOnOperatorJobs[i]
-		latest := latestJobs[job.Name]
-		if latest == nil || job.Timestamp.Time.After(latest.Timestamp.Time) {
-			latestJobs[job.Name] = job
-		}
-	}
+	latestIndices := latestAddOnOperatorJobIndices(instance.Status.AddOnOperatorJobs)
 
 	failed := make([]string, 0)
 	allInstalled := true
 	for _, operatorName := range instance.Spec.AddOnOperators {
-		job := latestJobs[operatorName]
+		jobIndex, ok := latestIndices[operatorName]
+		var job *v1alpha1.AddOnOperatorJobStatus
+		if ok {
+			job = &instance.Status.AddOnOperatorJobs[jobIndex]
+		}
 		if job == nil || !job.State.IsSuccessful() {
 			allInstalled = false
 		}
@@ -529,14 +546,19 @@ func setAddOnOperatorsCondition(instance *v1alpha1.ClusterOrder, status metav1.C
 }
 
 func latestAddOnOperatorJob(jobs []v1alpha1.AddOnOperatorJobStatus, operatorName string) *v1alpha1.AddOnOperatorJobStatus {
-	var latest *v1alpha1.AddOnOperatorJobStatus
-	for i := range jobs {
-		job := &jobs[i]
-		if job.Name != operatorName {
-			continue
-		}
-		if latest == nil || !job.Timestamp.Time.Before(latest.Timestamp.Time) {
-			latest = job
+	index, ok := latestAddOnOperatorJobIndices(jobs)[operatorName]
+	if !ok {
+		return nil
+	}
+	return &jobs[index]
+}
+
+func latestAddOnOperatorJobIndices(jobs []v1alpha1.AddOnOperatorJobStatus) map[string]int {
+	latest := make(map[string]int)
+	for index, job := range jobs {
+		latestIndex, ok := latest[job.Name]
+		if !ok || !job.Timestamp.Time.Before(jobs[latestIndex].Timestamp.Time) {
+			latest[job.Name] = index
 		}
 	}
 	return latest
@@ -591,14 +613,10 @@ func trimAddOnOperatorJobs(jobs []v1alpha1.AddOnOperatorJobStatus, maxHistory in
 		return append([]v1alpha1.AddOnOperatorJobStatus(nil), jobs...)
 	}
 
-	latestByOperator := make(map[string]int)
+	latestByOperator := latestAddOnOperatorJobIndices(jobs)
 	failedByOperator := make(map[string]int)
 	keep := make(map[int]struct{})
 	for index, job := range jobs {
-		latestIndex, ok := latestByOperator[job.Name]
-		if !ok || !job.Timestamp.Time.Before(jobs[latestIndex].Timestamp.Time) {
-			latestByOperator[job.Name] = index
-		}
 		if !job.State.IsTerminal() && job.JobID != "" {
 			keep[index] = struct{}{}
 		}
@@ -678,6 +696,10 @@ func truncateAddOnOperatorMessage(message string) string {
 		return message
 	}
 	return message[:maxAddOnOperatorJobMessageLength]
+}
+
+func addOnOperatorTimestamp() metav1.Time {
+	return metav1.NewTime(time.Now().UTC().Truncate(time.Second))
 }
 
 func earlierRequeue(current, candidate ctrl.Result) ctrl.Result {

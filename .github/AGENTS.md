@@ -22,6 +22,20 @@ Path filter skips docs / unit-test-only PRs (`!**/tests/**` and friends). `tests
 
 Details + smoke checklist: [`.github/e2e-readiness.md`](e2e-readiness.md).
 
+## CaaS suite selection and coverage
+
+The CaaS full-install caller runs only `caas/sanity` with `-m sanity` for PRs
+and merge queue. Periodics run `caas` (sanity + regression) and applicable
+reference tests with `-m 'sanity or regression or requires_caas or reference_common'`.
+Manual dispatch defaults to sanity and permits suite/filter/marker overrides.
+The test-infra reusable runner must not append references to sanity or widen
+an empty requested tier to the full suite. Readiness and fork authorization
+are independent of suite selection.
+
+| Area | Required coverage | Command (repository root) | Boundary |
+|---|---|---|---|
+| CaaS CI suite policy | [DEV] Unit/Contract selection checks | `OSAC_TEST_INFRA_DIR=/path/to/osac-test-infra uv run pytest -n 0 tests/unit/test_caas_ci_suite_policy.py` | Evaluates caller YAML and executes reusable path-selection Bash locally. No deployed services; companion checks skip if the checkout is not specified. |
+
 ## Release safety
 
 Nightly builds use provisional `sha-*` image tags while all build, unit,

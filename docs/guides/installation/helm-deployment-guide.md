@@ -166,6 +166,7 @@ and `osac-infra`. Keys a chart doesn't recognize are ignored.
 | `keycloak.adminPassword` | Keycloak bootstrap admin password. Change this value. | `admin` |
 | `keycloak.defaultUserPassword` | Password seeded for the built-in realm users. | `foobar` |
 | `keycloak.devFixtures.enabled` | Seeds fixed, known passwords for the built-in test users. Must be `false` outside of evaluation. | `false` |
+| `keycloak.uiUrl` | Browser-facing base URL of the OSAC UI (`scheme://host[:port]`, no path), substituted into the `osac-ui` client's redirect URIs. Set it to your UI route. See [Keycloak osac-ui redirect URIs](#keycloak-osac-ui-redirect-uris). | `http://ui.osac.localhost:8080` |
 | `keycloak.route.hostname` | External route host name for Keycloak. The installation sets it. | `""` |
 | `keycloak.route.publicIngress` | Changes the Keycloak route from `passthrough` to `reencrypt` for clusters with publicly trusted ingress certificates. See [Infrastructure Configuration](#infrastructure-configuration). | `false` |
 | `keycloak.realmOverwrite` | Re-imports the realm definition on upgrade. | `true` |
@@ -295,6 +296,38 @@ keycloak:
 **When to use:**
 - Production clusters where browser cert warnings are unacceptable
 - Environments with corporate CA or Let's Encrypt ingress certs
+
+### Keycloak osac-ui redirect URIs
+
+Keycloak validates the browser's `redirect_uri` against the `osac-ui` client's
+`redirectUris` and does **not** resolve relative entries against the Route
+hostname, so the UI's real URL has to be known at realm-import time:
+
+```yaml
+# my-infra-values.yaml
+keycloak:
+  uiUrl: https://osac-ui-osac.apps.example.com  # scheme://host[:port], no path
+```
+
+The scheme must be `https`. Plain `http` is accepted only for the
+local-development hosts `localhost`, `*.localhost` and `127.0.0.1` (the chart
+default is the kind `dev-full` UI, `http://ui.osac.localhost:8080`); for any
+other host the `resolve-realm-secrets` initContainer fails the install rather
+than register a redirect URI that would return the authorization code
+unencrypted.
+
+`keycloak.uiUrl` is substituted into the `osac-ui` client's `rootUrl`,
+`redirectUris` (`/callback` and `/*`) and `webOrigins` by the
+`resolve-realm-secrets` initContainer. `make install-infra` sets it
+automatically on OpenShift from the cluster ingress domain
+(`https://osac-ui-<NS>.<DOMAIN>`), and `make install-osac` pins
+`ui.externalHostname` to the same host so the Route matches. The chart default
+targets the kind `dev-full` UI HTTPRoute.
+
+If the value does not match the URL the browser actually uses, login fails at
+Keycloak with `Invalid parameter: redirect_uri`. `make helm-validate` runs
+`scripts/validate-keycloak-ui-redirect-uris.py`, which fails if the client ever
+regains relative redirect URIs.
 
 ## Updating Hub CSI Fulfillment Configuration
 

@@ -22,7 +22,6 @@ type AAPClient interface {
 	LaunchJobTemplate(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error)
 	LaunchWorkflowTemplate(ctx context.Context, req aap.LaunchWorkflowTemplateRequest) (*aap.LaunchWorkflowTemplateResponse, error)
 	GetJob(ctx context.Context, jobID string) (*aap.Job, error)
-	FindJobByAttemptID(ctx context.Context, attemptID string) (*aap.Job, error)
 	CancelJob(ctx context.Context, jobID string) error
 }
 
@@ -104,29 +103,11 @@ func (p *AAPProvider) TriggerProvision(ctx context.Context, resource client.Obje
 
 // TriggerProvisionWithExtraVars triggers provisioning with additional variables.
 func (p *AAPProvider) TriggerProvisionWithExtraVars(ctx context.Context, resource client.Object, extraVars map[string]any) (*ProvisionResult, error) {
-	jobID, err := p.launchProvisionJob(ctx, resource, extraVars, "")
+	jobID, err := p.launchProvisionJob(ctx, resource, extraVars)
 	if err != nil {
 		return nil, err
 	}
 
-	return &ProvisionResult{
-		JobID:        jobID,
-		InitialState: v1alpha1.JobStatePending,
-		Message:      "Provisioning job triggered",
-	}, nil
-}
-
-// TriggerProvisionWithAttemptID starts or recovers an add-on launch identified
-// by attemptID. The AAP extra-vars correlation is persisted with the job so a
-// lost launch response can be recovered on the next reconciliation.
-func (p *AAPProvider) TriggerProvisionWithAttemptID(ctx context.Context, resource client.Object, attemptID string) (*ProvisionResult, error) {
-	if attemptID == "" {
-		return nil, fmt.Errorf("add-on operator attempt ID is required")
-	}
-	jobID, err := p.launchProvisionJob(ctx, resource, nil, attemptID)
-	if err != nil {
-		return nil, err
-	}
 	return &ProvisionResult{
 		JobID:        jobID,
 		InitialState: v1alpha1.JobStatePending,
@@ -135,12 +116,12 @@ func (p *AAPProvider) TriggerProvisionWithAttemptID(ctx context.Context, resourc
 }
 
 // launchProvisionJob launches the provision template and returns the job ID.
-func (p *AAPProvider) launchProvisionJob(ctx context.Context, resource client.Object, extraVars map[string]any, attemptID string) (string, error) {
+func (p *AAPProvider) launchProvisionJob(ctx context.Context, resource client.Object, extraVars map[string]any) (string, error) {
 	templateName, err := p.resolveTemplateName("create", resource)
 	if err != nil {
 		return "", err
 	}
-	return p.launchTemplate(ctx, templateName, resource, extraVars, attemptID)
+	return p.launchTemplate(ctx, templateName, resource, extraVars)
 }
 
 // GetProvisionStatus checks provisioning job status via AAP API.
@@ -279,21 +260,11 @@ func (p *AAPProvider) launchDeprovisionJob(ctx context.Context, resource client.
 	if err != nil {
 		return "", err
 	}
-	return p.launchTemplate(ctx, templateName, resource, nil, "")
+	return p.launchTemplate(ctx, templateName, resource, nil)
 }
 
 // launchTemplate launches the named template (job or workflow) and returns the job ID.
-func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, resource client.Object, inheritedExtraVars map[string]any, attemptID string) (string, error) {
-	if attemptID != "" {
-		existing, err := p.client.FindJobByAttemptID(ctx, attemptID)
-		if err != nil {
-			return "", fmt.Errorf("failed to recover add-on operator attempt %q: %w", attemptID, err)
-		}
-		if existing != nil {
-			return strconv.Itoa(existing.ID), nil
-		}
-	}
-
+func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, resource client.Object, inheritedExtraVars map[string]any) (string, error) {
 	template, err := p.client.GetTemplate(ctx, templateName)
 	if err != nil {
 		return "", fmt.Errorf("failed to get template: %w", err)
@@ -304,13 +275,6 @@ func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, r
 		return "", fmt.Errorf("failed to extract extra vars: %w", err)
 	}
 	extraVars = mergeExtraVars(extraVars, inheritedExtraVars)
-	if attemptID != "" {
-		jobVars, ok := extraVars["osac_job_vars"].(map[string]any)
-		if !ok {
-			return "", fmt.Errorf("add-on operator launch variables are malformed")
-		}
-		jobVars["addon_operator_attempt_id"] = attemptID
-	}
 	sensitive := adminKubeconfigInExtraVars(extraVars)
 
 	var jobID int
@@ -323,11 +287,6 @@ func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, r
 			Sensitive:    sensitive,
 		})
 		if err != nil {
-			if recovered, recoveryErr := p.recoverAttempt(ctx, attemptID); recoveryErr != nil {
-				return "", errors.Join(err, recoveryErr)
-			} else if recovered != "" {
-				return recovered, nil
-			}
 			return "", fmt.Errorf("failed to launch job template: %w", err)
 		}
 		jobID = resp.JobID
@@ -339,11 +298,6 @@ func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, r
 			Sensitive:    sensitive,
 		})
 		if err != nil {
-			if recovered, recoveryErr := p.recoverAttempt(ctx, attemptID); recoveryErr != nil {
-				return "", errors.Join(err, recoveryErr)
-			} else if recovered != "" {
-				return recovered, nil
-			}
 			return "", fmt.Errorf("failed to launch workflow template: %w", err)
 		}
 		jobID = resp.JobID
@@ -352,20 +306,6 @@ func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, r
 	}
 
 	return strconv.Itoa(jobID), nil
-}
-
-func (p *AAPProvider) recoverAttempt(ctx context.Context, attemptID string) (string, error) {
-	if attemptID == "" {
-		return "", nil
-	}
-	job, err := p.client.FindJobByAttemptID(ctx, attemptID)
-	if err != nil {
-		return "", fmt.Errorf("failed to look up add-on operator attempt %q: %w", attemptID, err)
-	}
-	if job == nil {
-		return "", nil
-	}
-	return strconv.Itoa(job.ID), nil
 }
 
 func adminKubeconfigInExtraVars(extraVars map[string]any) bool {

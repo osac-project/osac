@@ -88,13 +88,6 @@ type ProvisioningProviderWithExtraVars interface {
 	TriggerProvisionWithExtraVars(ctx context.Context, resource client.Object, extraVars map[string]any) (*ProvisionResult, error)
 }
 
-// ProvisioningProviderWithAttemptID starts or recovers a provisioning launch
-// identified by attemptID. Providers must make repeated calls with the same ID
-// converge on one external job.
-type ProvisioningProviderWithAttemptID interface {
-	TriggerProvisionWithAttemptID(ctx context.Context, resource client.Object, attemptID string) (*ProvisionResult, error)
-}
-
 // ProvisioningProviderWithProvisionOutputs can retrieve output variables from a provisioning job.
 type ProvisioningProviderWithProvisionOutputs interface {
 	GetProvisionStatusWithExtraVars(ctx context.Context, resource client.Object, jobID string) (ProvisionStatusWithExtraVars, error)

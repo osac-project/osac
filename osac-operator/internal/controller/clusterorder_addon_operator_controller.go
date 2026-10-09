@@ -23,7 +23,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -227,34 +226,6 @@ func (r *AddOnOperatorReconciler) persistAddOnOperatorJobStatusWithRetry(
 	})
 }
 
-func (r *AddOnOperatorReconciler) persistAddOnOperatorAttemptStatusWithRetry(
-	ctx context.Context,
-	key client.ObjectKey,
-	attemptID string,
-	status provisioning.ProvisionStatus,
-) error {
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		latest := &v1alpha1.ClusterOrder{}
-		if err := r.apiReader.Get(ctx, key, latest); err != nil {
-			return err
-		}
-		job := addOnOperatorJobByAttemptID(latest.Status.AddOnOperatorJobs, attemptID)
-		if job == nil {
-			return nil
-		}
-
-		message := addOnOperatorStatusMessage(status)
-		if job.JobID == status.JobID && job.State == status.State && job.Message == message {
-			return nil
-		}
-		base := latest.DeepCopy()
-		job.JobID = status.JobID
-		job.State = status.State
-		job.Message = message
-		return r.Status().Patch(ctx, latest, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
-	})
-}
-
 func (r *AddOnOperatorReconciler) reconcileOperators(ctx context.Context, instance *v1alpha1.ClusterOrder) (ctrl.Result, error) {
 	var result ctrl.Result
 	trimmedJobs := trimAddOnOperatorJobs(instance.Status.AddOnOperatorJobs, r.MaxJobHistory)
@@ -334,19 +305,7 @@ func (r *AddOnOperatorReconciler) reconcileOperator(
 		if !available {
 			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, false, nil
 		}
-		return r.triggerAddOnOperator(ctx, instance, operatorName, "", provisioningContext)
-	}
-
-	if latest.AttemptID != "" && latest.JobID == "" && !latest.State.IsTerminal() {
-		provisioningContext, available, err := loadProvisioningContext()
-		if err != nil {
-			ctrllog.FromContext(ctx).Error(err, "failed to load add-on operator provisioning context", "operator", operatorName, "attemptID", latest.AttemptID)
-			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, false, nil
-		}
-		if !available {
-			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, false, nil
-		}
-		return r.triggerAddOnOperator(ctx, instance, operatorName, latest.AttemptID, provisioningContext)
+		return r.triggerAddOnOperator(ctx, instance, operatorName, provisioningContext)
 	}
 
 	if latest.State.IsSuccessful() {
@@ -370,71 +329,46 @@ func (r *AddOnOperatorReconciler) reconcileOperator(
 	if !available {
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, false, nil
 	}
-	return r.triggerAddOnOperator(ctx, instance, operatorName, "", provisioningContext)
+	return r.triggerAddOnOperator(ctx, instance, operatorName, provisioningContext)
 }
 
-func (r *AddOnOperatorReconciler) triggerAddOnOperator(
-	ctx context.Context,
-	instance *v1alpha1.ClusterOrder,
-	operatorName, attemptID string,
-	provisioningContext context.Context,
-) (ctrl.Result, bool, error) {
-	if attemptID == "" {
-		attemptID = uuid.NewString()
-		originalJobs := append([]v1alpha1.AddOnOperatorJobStatus(nil), instance.Status.AddOnOperatorJobs...)
-		instance.Status.AddOnOperatorJobs = trimAddOnOperatorJobs(append(instance.Status.AddOnOperatorJobs, v1alpha1.AddOnOperatorJobStatus{
-			Name:      operatorName,
-			AttemptID: attemptID,
-			JobStatus: v1alpha1.JobStatus{
-				Type:          v1alpha1.JobTypeProvision,
-				State:         v1alpha1.JobStateWaiting,
-				Message:       "AAP launch pending",
-				Timestamp:     metav1.Now(),
-				ConfigVersion: instance.Status.DesiredConfigVersion,
-			},
-		}), r.MaxJobHistory)
-		updateAddOnOperatorsReadyCondition(instance)
-		if err := r.patchAddOnStatusWithRetry(ctx, client.ObjectKeyFromObject(instance), originalJobs, instance.Status); err != nil {
-			return ctrl.Result{}, false, err
-		}
-	}
-
-	provider, ok := r.ProvisioningProvider.(provisioning.ProvisioningProviderWithAttemptID)
-	if !ok {
-		providerName := "<nil>"
-		if r.ProvisioningProvider != nil {
-			providerName = r.ProvisioningProvider.Name()
-		}
-		return ctrl.Result{}, false, fmt.Errorf("provisioning provider %q does not support durable add-on operator attempts", providerName)
-	}
+func (r *AddOnOperatorReconciler) triggerAddOnOperator(ctx context.Context, instance *v1alpha1.ClusterOrder, operatorName string, provisioningContext context.Context) (ctrl.Result, bool, error) {
 	operatorContext := provisioning.WithAddOnOperatorName(provisioningContext, operatorName)
-	result, err := provider.TriggerProvisionWithAttemptID(operatorContext, instance, attemptID)
+	result, err := r.ProvisioningProvider.TriggerProvision(operatorContext, instance)
 	if err != nil {
-		ctrllog.FromContext(ctx).Error(err, "failed to start or recover add-on operator job", "operator", operatorName, "attemptID", attemptID)
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, false, nil
+		return r.recordAddOnOperatorFailure(instance, operatorName, fmt.Sprintf("failed to trigger add-on operator %q: %v", operatorName, err)), true, nil
 	}
 	if result == nil || result.JobID == "" {
-		ctrllog.FromContext(ctx).Error(errors.New("provider returned no job ID"), "failed to start or recover add-on operator job", "operator", operatorName, "attemptID", attemptID)
-		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, false, nil
+		return r.recordAddOnOperatorFailure(instance, operatorName, "add-on operator provider returned no job ID"), true, nil
 	}
 
-	status := provisioning.ProvisionStatus{
-		JobID:   result.JobID,
-		State:   result.InitialState,
-		Message: result.Message,
-	}
-	if status.State == "" {
-		status.State = v1alpha1.JobStatePending
-	}
-	if err := r.persistAddOnOperatorAttemptStatusWithRetry(ctx, client.ObjectKeyFromObject(instance), attemptID, status); err != nil {
-		return ctrl.Result{}, false, err
-	}
-	if job := addOnOperatorJobByAttemptID(instance.Status.AddOnOperatorJobs, attemptID); job != nil {
-		job.JobID = result.JobID
-		job.State = status.State
-		job.Message = truncateAddOnOperatorMessage(result.Message)
-	}
+	instance.Status.AddOnOperatorJobs = trimAddOnOperatorJobs(append(instance.Status.AddOnOperatorJobs, v1alpha1.AddOnOperatorJobStatus{
+		Name: operatorName,
+		JobStatus: v1alpha1.JobStatus{
+			JobID:         result.JobID,
+			Type:          v1alpha1.JobTypeProvision,
+			State:         result.InitialState,
+			Message:       truncateAddOnOperatorMessage(result.Message),
+			Timestamp:     metav1.Now(),
+			ConfigVersion: instance.Status.DesiredConfigVersion,
+		},
+	}), r.MaxJobHistory)
 	return ctrl.Result{RequeueAfter: r.StatusPollInterval}, true, nil
+}
+
+func (r *AddOnOperatorReconciler) recordAddOnOperatorFailure(instance *v1alpha1.ClusterOrder, operatorName, message string) ctrl.Result {
+	instance.Status.AddOnOperatorJobs = trimAddOnOperatorJobs(append(instance.Status.AddOnOperatorJobs, v1alpha1.AddOnOperatorJobStatus{
+		Name: operatorName,
+		JobStatus: v1alpha1.JobStatus{
+			Type:          v1alpha1.JobTypeProvision,
+			State:         v1alpha1.JobStateFailed,
+			Message:       truncateAddOnOperatorMessage(message),
+			Timestamp:     metav1.Now(),
+			ConfigVersion: instance.Status.DesiredConfigVersion,
+		},
+	}), r.MaxJobHistory)
+	latest := latestAddOnOperatorJob(instance.Status.AddOnOperatorJobs, operatorName)
+	return ctrl.Result{RequeueAfter: addOnOperatorBackoffRemaining(instance, operatorName, latest)}
 }
 
 func (r *AddOnOperatorReconciler) pollOperator(ctx context.Context, instance *v1alpha1.ClusterOrder, latest *v1alpha1.AddOnOperatorJobStatus) (ctrl.Result, bool, error) {
@@ -608,18 +542,6 @@ func latestAddOnOperatorJob(jobs []v1alpha1.AddOnOperatorJobStatus, operatorName
 	return latest
 }
 
-func addOnOperatorJobByAttemptID(jobs []v1alpha1.AddOnOperatorJobStatus, attemptID string) *v1alpha1.AddOnOperatorJobStatus {
-	if attemptID == "" {
-		return nil
-	}
-	for index := range jobs {
-		if jobs[index].AttemptID == attemptID {
-			return &jobs[index]
-		}
-	}
-	return nil
-}
-
 func addOnOperatorJobs(jobs []v1alpha1.AddOnOperatorJobStatus, operatorName string) []v1alpha1.JobStatus {
 	filtered := make([]v1alpha1.JobStatus, 0)
 	for _, job := range jobs {
@@ -677,7 +599,7 @@ func trimAddOnOperatorJobs(jobs []v1alpha1.AddOnOperatorJobStatus, maxHistory in
 		if !ok || !job.Timestamp.Time.Before(jobs[latestIndex].Timestamp.Time) {
 			latestByOperator[job.Name] = index
 		}
-		if !job.State.IsTerminal() && (job.JobID != "" || job.AttemptID != "") {
+		if !job.State.IsTerminal() && job.JobID != "" {
 			keep[index] = struct{}{}
 		}
 	}
@@ -727,9 +649,6 @@ func findAddOnOperatorJobIndex(jobs []v1alpha1.AddOnOperatorJobStatus, target v1
 	for index, job := range jobs {
 		if job.Name != target.Name {
 			continue
-		}
-		if target.AttemptID != "" && job.AttemptID == target.AttemptID {
-			return index
 		}
 		if target.JobID != "" && job.JobID == target.JobID {
 			return index

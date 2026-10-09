@@ -5,7 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  '@bufbuild/protobuf': 2.12.0
+  '@bufbuild/protobuf': 2.16.0
 
 importers:
 
@@ -48,11 +48,11 @@ importers:
   apps/app-frontend:
     dependencies:
       '@bufbuild/protobuf':
-        specifier: 2.12.0
-        version: 2.12.0
+        specifier: 2.16.0
+        version: 2.16.0
       '@connectrpc/connect-web':
         specifier: ^2.1.2
-        version: 2.2.0(@bufbuild/protobuf@2.12.0)(@connectrpc/connect@2.2.0(@bufbuild/protobuf@2.12.0))
+        version: 2.2.0(@bufbuild/protobuf@2.16.0)(@connectrpc/connect@2.2.0(@bufbuild/protobuf@2.16.0))
       '@osac/types':
         specifier: workspace:*
         version: link:../../libs/types
@@ -184,8 +184,8 @@ importers:
   libs/types:
     dependencies:
       '@bufbuild/protobuf':
-        specifier: 2.12.0
-        version: 2.12.0
+        specifier: 2.16.0
+        version: 2.16.0
     devDependencies:
       '@bufbuild/buf':
         specifier: 1.73.0
@@ -194,14 +194,14 @@ importers:
   libs/ui-components:
     dependencies:
       '@bufbuild/protobuf':
-        specifier: 2.12.0
-        version: 2.12.0
+        specifier: 2.16.0
+        version: 2.16.0
       '@connectrpc/connect':
         specifier: ^2.1.2
-        version: 2.2.0(@bufbuild/protobuf@2.12.0)
+        version: 2.2.0(@bufbuild/protobuf@2.16.0)
       '@connectrpc/connect-web':
         specifier: ^2.1.2
-        version: 2.2.0(@bufbuild/protobuf@2.12.0)(@connectrpc/connect@2.2.0(@bufbuild/protobuf@2.12.0))
+        version: 2.2.0(@bufbuild/protobuf@2.16.0)(@connectrpc/connect@2.2.0(@bufbuild/protobuf@2.16.0))
       '@novnc/novnc':
         specifier: 1.7.0
         version: 1.7.0
@@ -427,19 +427,19 @@ packages:
     engines: {node: '>=12'}
     hasBin: true
 
-  '@bufbuild/protobuf@2.12.0':
-    resolution: {integrity: sha512-B/XlCaFIP8LOwzo+bz5uFzATYokcwCKQcghqnlfwSmM5eX/qTkvDBnDPs+gXtX/RyjxJ4DRikECcPJbyALA8FA==}
+  '@bufbuild/protobuf@2.16.0':
+    resolution: {integrity: sha512-FWa0sPlqYGJgpTs6OxBRcL/AW4JT0OIO+W1ajerluoTVh8CV0B7XM1qsNCRgnkSCkRCgOICKHRQlY17jrsm0+Q==}
 
   '@connectrpc/connect-web@2.2.0':
     resolution: {integrity: sha512-uuBUcBTYfb/r1o98LzCCZk1H90yx0vmZ5m21dpw/q4EUwsKwkCDGI8H0aEdjcZld+Q2jJ5A5ADvPqfb6lzQ/sg==}
     peerDependencies:
-      '@bufbuild/protobuf': 2.12.0
+      '@bufbuild/protobuf': 2.16.0
       '@connectrpc/connect': 2.2.0
 
   '@connectrpc/connect@2.2.0':
     resolution: {integrity: sha512-M63OQ1ZFcPUm85CuewJ9G9CMV8LjzGR9935xOnXNQGSazAbwMb3x2W7vXBYM1zqrP7XFD8uxp/dUAhirclgwnQ==}
     peerDependencies:
-      '@bufbuild/protobuf': 2.12.0
+      '@bufbuild/protobuf': 2.16.0
 
   '@croct/json5-parser@0.2.2':
     resolution: {integrity: sha512-0NJMLrbeLbQ0eCVj3UoH/kG2QckUgOASfwmfDTjyW1xAYPyTNJXcWVT/dssJdTJd0pRchW+qF0VFWQHcxs1OVw==}
@@ -3725,16 +3725,16 @@ snapshots:
       '@bufbuild/buf-win32-arm64': 1.73.0
       '@bufbuild/buf-win32-x64': 1.73.0
 
-  '@bufbuild/protobuf@2.12.0': {}
+  '@bufbuild/protobuf@2.16.0': {}
 
-  '@connectrpc/connect-web@2.2.0(@bufbuild/protobuf@2.12.0)(@connectrpc/connect@2.2.0(@bufbuild/protobuf@2.12.0))':
+  '@connectrpc/connect-web@2.2.0(@bufbuild/protobuf@2.16.0)(@connectrpc/connect@2.2.0(@bufbuild/protobuf@2.16.0))':
     dependencies:
-      '@bufbuild/protobuf': 2.12.0
-      '@connectrpc/connect': 2.2.0(@bufbuild/protobuf@2.12.0)
+      '@bufbuild/protobuf': 2.16.0
+      '@connectrpc/connect': 2.2.0(@bufbuild/protobuf@2.16.0)
 
-  '@connectrpc/connect@2.2.0(@bufbuild/protobuf@2.12.0)':
+  '@connectrpc/connect@2.2.0(@bufbuild/protobuf@2.16.0)':
     dependencies:
-      '@bufbuild/protobuf': 2.12.0
+      '@bufbuild/protobuf': 2.16.0
 
   '@croct/json5-parser@0.2.2':
     dependencies:

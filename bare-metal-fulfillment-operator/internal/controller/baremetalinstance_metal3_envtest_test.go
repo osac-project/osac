@@ -211,6 +211,25 @@ var _ = Describe("BareMetalInstance Metal3 Integration", func() {
 		}
 	})
 
+	It("rejects removing spec to bypass network attachment immutability", func() {
+		const name = "attachment-contract-remove-spec"
+		instance := &v1alpha1.BareMetalInstance{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: metal3TestNS},
+			Spec: v1alpha1.BareMetalInstanceSpec{
+				Selector:           v1alpha1.HostSelectorSpec{HostSelector: map[string]string{"type": "network-contract"}},
+				TemplateID:         shared.OsacNoopTemplate,
+				NetworkAttachments: []v1alpha1.BareMetalNetworkAttachment{{SubnetRef: "subnet-a", Primary: true}},
+			},
+		}
+		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func() { cleanupBMI(name) })
+
+		instance = getBMI(name)
+		err := k8sClient.Patch(ctx, instance, client.RawPatch(types.JSONPatchType, []byte(`[{"op":"remove","path":"/spec"}]`)))
+		Expect(apierrors.IsInvalid(err)).To(BeTrue())
+		Expect(err).To(MatchError(ContainSubstring("spec presence is immutable after creation")))
+	})
+
 	It("rejects two attachments and allows lifecycle, status, and metadata updates", func() {
 		invalid := &v1alpha1.BareMetalInstance{
 			ObjectMeta: metav1.ObjectMeta{Name: "attachment-contract-two", Namespace: metal3TestNS},

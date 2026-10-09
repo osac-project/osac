@@ -49,8 +49,8 @@ message SecurityGroup {
   // hierarchy for garbage collection.
   Metadata metadata = 2;
 
-  // Desired configuration of the security group (user-modifiable).
-  SecurityGroupSpec spec = 3;
+  // Desired configuration of the security group, immutable after creation.
+  SecurityGroupSpec spec = 3 [(google.api.field_behavior) = IMMUTABLE];
 
   // Current state of the security group (system-provided, read-only).
   SecurityGroupStatus status = 4;

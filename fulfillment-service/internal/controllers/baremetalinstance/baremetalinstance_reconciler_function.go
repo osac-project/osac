@@ -229,7 +229,8 @@ func (t *task) update(ctx context.Context) error {
 		}
 		if existingObject {
 			if !equalNetworkAttachments(storedNetworkAttachments, object.Spec.NetworkAttachments) {
-				t.r.logger.WarnContext(ctx, "Private and stored network attachments differ; preserving stored network attachments on existing BareMetalInstance")
+				t.r.logger.WarnContext(ctx, "Private and stored network attachments differ; preserving stored network attachments on existing BareMetalInstance",
+					slog.String("namespace", object.GetNamespace()), slog.String("name", object.GetName()))
 			}
 			object.Spec.NetworkAttachments = storedNetworkAttachments
 		}

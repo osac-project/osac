@@ -127,6 +127,19 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 		Expect(err.Error()).To(ContainSubstring("networkAttachment is immutable after creation"))
 	})
 
+	It("rejects removing spec to bypass network attachment immutability", func() {
+		const name = "cluster-order-remove-spec"
+		instance := newTestClusterOrder(name)
+		instance.Spec.NetworkAttachment = &osacv1alpha1.ClusterNetworkAttachment{SubnetRef: "subnet-a"}
+		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, instance)).To(Succeed()) })
+
+		instance = getClusterOrder(name)
+		err := k8sClient.Patch(ctx, instance, client.RawPatch(types.JSONPatchType, []byte(`[{"op":"remove","path":"/spec"}]`)))
+		Expect(apierrors.IsInvalid(err)).To(BeTrue())
+		Expect(err).To(MatchError(ContainSubstring("spec presence is immutable after creation")))
+	})
+
 	It("allows unrelated worker and status updates with an unchanged network attachment", func() {
 		const name = "cluster-order-network-attachment-lifecycle-update"
 		instance := newTestClusterOrder(name)

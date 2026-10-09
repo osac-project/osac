@@ -301,7 +301,8 @@ func (t *task) update(ctx context.Context) error {
 		)
 	} else {
 		if !equalNetworkAttachment(object.Spec.NetworkAttachment, spec.NetworkAttachment) {
-			t.r.logger.WarnContext(ctx, "Private and stored network attachments differ; preserving stored network attachment on existing ClusterOrder")
+			t.r.logger.WarnContext(ctx, "Private and stored network attachments differ; preserving stored network attachment on existing ClusterOrder",
+				slog.String("namespace", object.GetNamespace()), slog.String("name", object.GetName()))
 		}
 		spec.NetworkAttachment = object.Spec.NetworkAttachment
 		update := object.DeepCopy()

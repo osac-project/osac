@@ -1311,6 +1311,7 @@ func main() {
 	var remoteScheme *runtime.Scheme
 	var remoteProvider multicluster.Provider
 	var remoteCluster cluster.Cluster
+	var remoteKubeconfigDigest string
 	if remoteClusterKubeconfig == "" {
 		localScheme = runtime.NewScheme()
 		addSchemesForLocalControllers(localScheme,
@@ -1321,6 +1322,11 @@ func main() {
 			ctrlFlags.BareMetalInstance,
 		)
 	} else {
+		remoteKubeconfigDigest, err = readRemoteKubeconfigDigest(remoteClusterKubeconfig)
+		if err != nil {
+			setupLog.Error(err, "unable to read remote cluster kubeconfig")
+			os.Exit(1)
+		}
 		remoteScheme = runtime.NewScheme()
 		addSchemesForRemoteControllers(localScheme, remoteScheme,
 			ctrlFlags.ComputeInstance,
@@ -1449,7 +1455,10 @@ func main() {
 	}
 
 	setupLog.Info("starting manager")
-	if err := startComponents(ctrl.SetupSignalHandler(), remoteCluster, remoteProvider, mgr); err != nil {
+	if err := startComponentsWithRemoteKubeconfigWatch(
+		ctrl.SetupSignalHandler(), remoteCluster, remoteProvider, mgr,
+		remoteClusterKubeconfig, remoteKubeconfigDigest,
+	); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
@@ -1480,6 +1489,26 @@ func startComponents(
 		return ignoreCanceled(mgr.Start(ctx))
 	})
 	return g.Wait()
+}
+
+func startComponentsWithRemoteKubeconfigWatch(
+	ctx context.Context,
+	remoteCluster cluster.Cluster,
+	remoteProvider multicluster.Provider,
+	mgr mcmanager.Manager,
+	remoteKubeconfigPath string,
+	initialDigest string,
+) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	if remoteKubeconfigPath != "" {
+		go func() {
+			if watchRemoteKubeconfig(ctx, remoteKubeconfigPath, initialDigest, remoteKubeconfigWatchInterval) {
+				cancel()
+			}
+		}()
+	}
+	return startComponents(ctx, remoteCluster, remoteProvider, mgr)
 }
 
 // ignoreCanceled returns nil if the error is exactly context.Canceled,

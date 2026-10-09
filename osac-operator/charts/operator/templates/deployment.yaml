@@ -197,8 +197,7 @@ spec:
             readOnly: true
         {{- if .Values.remoteClusterKubeconfigSecretName }}
           - name: remote-kubeconfig
-            mountPath: {{ .Values.remoteClusterKubeconfig | quote }}
-            subPath: {{ .Values.remoteClusterKubeconfigSecretKey | default "kubeconfig" | quote }}
+            mountPath: {{ dir .Values.remoteClusterKubeconfig | quote }}
             readOnly: true
         {{- end }}
       volumes:
@@ -213,6 +212,9 @@ spec:
         - name: remote-kubeconfig
           secret:
             secretName: {{ .Values.remoteClusterKubeconfigSecretName }}
+            items:
+              - key: {{ .Values.remoteClusterKubeconfigSecretKey | default "kubeconfig" | quote }}
+                path: {{ base .Values.remoteClusterKubeconfig | quote }}
       {{- end }}
       serviceAccountName: {{ include "osac-operator.serviceAccountName" . }}
       terminationGracePeriodSeconds: 10

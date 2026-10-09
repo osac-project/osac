@@ -1299,6 +1299,62 @@ var _ = Describe("Storage Controller", func() {
 			Expect(gotTiers[0].Name).To(Equal("fast"))
 		})
 
+		It("should pass ONTAP QoS and encryption through reconciliation with one protected backend connection", func() {
+			name := "storage-test-ontap-config-handoff"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			var gotTiers []provisioning.TierDefinition
+			var gotConnections map[string]provisioning.BackendConnection
+			provider := &mockProvisioningProvider{
+				triggerProvisionFunc: func(ctx context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
+					gotTiers = provisioning.StorageTierDefinitionsFromContext(ctx)
+					gotConnections = provisioning.StorageBackendConnectionsFromContext(ctx)
+					return &provisioning.ProvisionResult{JobID: "mock-job-id", InitialState: v1alpha1.JobStatePending}, nil
+				},
+			}
+			r := NewStorageReconciler(testMcManager, testNamespace, mcmanager.LocalCluster,
+				provider, nil, pollInterval, provisioning.DefaultMaxJobHistory)
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					tiers := make([]*privatev1.StorageTier, 0, 2)
+					for _, tierName := range []string{"fast", "standard"} {
+						assoc := privatev1.BackendAssociation_builder{BackendId: "backend-1", EncryptionEnabled: tierName == "fast"}.Build()
+						if tierName == "fast" {
+							assoc.SetOntap(privatev1.OntapAssociationConfig_builder{MaxIops: 5000}.Build())
+						}
+						tiers = append(tiers, privatev1.StorageTier_builder{
+							Metadata: privatev1.Metadata_builder{Name: tierName}.Build(),
+							Spec:     privatev1.StorageTierSpec_builder{Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK, Backends: []*privatev1.BackendAssociation{assoc}}.Build(),
+						}.Build())
+					}
+					return privatev1.StorageTiersListResponse_builder{Items: tiers}.Build(), nil
+				},
+			}
+			backends := registeredBackendsClient(1)
+			backends.getFunc = func(context.Context, *privatev1.StorageBackendsGetRequest, ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+				return newTestStorageBackendGetResponseWithSecret("ontap", "discovery-secret"), nil
+			}
+			r.BackendsClient = backends
+			secrets := &mockSecretsClient{
+				getFunc: func(context.Context, *privatev1.SecretsGetRequest, ...grpc.CallOption) (*privatev1.SecretsGetResponse, error) {
+					return privatev1.SecretsGetResponse_builder{Object: privatev1.Secret_builder{
+						Type: privatev1.SecretType_SECRET_TYPE_VALUE, Data: map[string][]byte{"value": []byte(testSecretPassword)},
+					}.Build()}.Build(), nil
+				},
+			}
+			r.SecretsClient = secrets
+			_, err := r.Reconcile(ctx, storageReconcileRequest(types.NamespacedName{Name: name, Namespace: testNamespace}))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(gotTiers).To(HaveLen(2))
+			Expect(gotTiers[0].QosLimits.ProviderConfig).To(Equal(map[string]any{"max_iops": int64(5000)}))
+			Expect(gotTiers[0].EncryptionEnabled).To(Equal(new(true)))
+			Expect(gotTiers[1].QosLimits.ProviderConfig).To(BeNil())
+			Expect(gotTiers[1].EncryptionEnabled).To(Equal(new(false)))
+			Expect(gotConnections).To(HaveLen(1))
+			Expect(gotConnections["backend-1"].Password).To(Equal(testSecretPassword))
+			Expect(backends.getCallCount).To(Equal(1))
+			Expect(secrets.getCallCount).To(Equal(1))
+		})
+
 		It("should inject storage_tier_definitions into context before handleClusterStorageProvisioning (Stage 2)", func() {
 			name := "storage-test-tier-ctx-cluster-provisioning"
 			createReadyTenantForStorage(ctx, name, testNamespace)

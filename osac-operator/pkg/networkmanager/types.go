@@ -72,9 +72,6 @@ const (
 // validCapabilities is the fixed set of capability values the system recognizes.
 var validCapabilities = map[Capability]struct{}{
 	CapabilityIPv4:             {},
-	CapabilityIPv6:             {},
-	CapabilityDualStack:        {},
-	CapabilityDPUSupport:       {},
 	CapabilityEastWestEthernet: {},
 }
 

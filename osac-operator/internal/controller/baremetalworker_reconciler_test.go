@@ -261,7 +261,7 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", Label("baremetalwor
 		Expect(events).To(ContainElement(ContainSubstring("DiscoveryIgnitionSizeWarning")))
 	})
 
-	It("R07-E1 reports pending evidence when boot artifacts disappear and records a recreated UID without a Ready transition", func() {
+	It("reports pending evidence when boot artifacts disappear and records a recreated UID without a Ready transition", func() {
 		preloadDiskImageChain()
 		co := newBareMetalClusterOrder("bmw-r07-e1")
 		create(co)
@@ -1587,7 +1587,7 @@ var _ = Describe("BareMetalWorkerReconciler reconcileAgent", Label("baremetalwor
 		Entry("Agent disappeared", "disappeared", "WaitingForAgent"),
 	)
 
-	It("R09-E4 restarts the healthy interval after a demotion and re-entry", func() {
+	It("restarts the healthy interval after a demotion and re-entry", func() {
 		preloadDiskImageChain()
 		name := "bmw-r09-e4"
 		create(newBareMetalClusterOrder(name, 1))
@@ -1984,7 +1984,7 @@ var _ = Describe("BareMetalWorkerReconciler reconcileAgent", Label("baremetalwor
 		return agent
 	}
 
-	It("R06-E1 unions both Agent selectors and deduplicates a shared object", func() {
+	It("unions both Agent selectors and deduplicates a shared object", func() {
 		preloadDiskImageChain()
 		const name = "bmw-r06-e1"
 		create(newBareMetalClusterOrder(name, 1))
@@ -2018,7 +2018,7 @@ var _ = Describe("BareMetalWorkerReconciler reconcileAgent", Label("baremetalwor
 		Expect(fc.DeleteCalls()).To(BeEmpty())
 	})
 
-	It("R06-E2 refuses readiness and mutation under ambiguous Agent evidence", func() {
+	It("refuses readiness and mutation under ambiguous Agent evidence", func() {
 		preloadDiskImageChain()
 		const name = "bmw-r06-e2"
 		const finalizer = "osac.openshift.io/baremetalworker-finalizer"
@@ -2910,7 +2910,7 @@ var _ = Describe("BareMetalWorkerReconciler stale ignition", Label("baremetalwor
 		DeferCleanup(func() { _ = k8sClient.Delete(ctx, agentObj) })
 	})
 
-	It("R04-E2 persists stale-ignition failures while the image lookup is blocked", func() {
+	It("persists stale-ignition failures while the image lookup is blocked", func() {
 		preloadDiskImageChain()
 		co := newBareMetalClusterOrder("bmw-stale-blocked")
 		create(co)

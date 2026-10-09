@@ -65,12 +65,15 @@ Envtest assertions consume them, not an environment bootstrap.
 
 Worker coverage is owned by **osac-operator [DEV]**:
 
-- Unit tests under `internal/controller/baremetalworker/` cover reservation and
-  identity recovery, one observation per invocation, optimistic status writes,
+- Ginkgo Unit specs under `internal/controller/baremetalworker/` use descriptive
+  behavior names and cover reservation and identity recovery, one observation per invocation, optimistic status writes,
   authoritative destructive checks, per-NodeSet capacity, retry/cleanup,
   InfraEnv evidence, strict Agent association and CAP-Agent handoff, per-call
   availability classification, fixed attempt/continuous-ready clocks and
-  intent-derived counts. `metrics_test.go` checks the exact two-instance-type
+  intent-derived counts. `reservation_cleanup_test.go` covers explicit Reserved
+  cancellation, both optimistic Create-intent race orderings, attempted/legacy
+  empty-List retention, lost acknowledgement recovery and retry-state reset.
+  `metrics_test.go` checks the exact two-instance-type
   desired/zero-ready series before reservations without creating missing series
   through metric accessors.
 - `baremetalworker_reconciler_test.go` and `baremetalworker_lifecycle_test.go`
@@ -82,7 +85,10 @@ Worker coverage is owned by **osac-operator [DEV]**:
   delayed cleanup and real Agent Delete UID-precondition rejection, selector
   union/ambiguity, stale-ignition classification before UID recording, separate
   order availability, attempt-clock/backfill and continuous readiness, and
-  NodeSet-partitioned counts. Each case uses explicit calls; legacy fixture
+  NodeSet-partitioned counts. Reservation cleanup specs add pre-Create
+  cancellation/finalization, real create-intent resourceVersion races, restart after persisted intent but
+  before the API call, legacy conservatism and lost-ack delayed-List cleanup.
+  Each case uses explicit calls; legacy fixture
   convergence is bounded by `16 + 8*N`, not a latency SLA or fallback polling.
 - `baremetalworker_tenant_safety_test.go` preserves tenant/owner rejection and
   immutable ownership assertions. The fixture client models scoped-name

@@ -80,7 +80,7 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 	// blocks until the fabric/MetalLB network (OSAC-1436) lets the host install RHCOS and join the
 	// HostedCluster. It reuses the seams the test-local fulfillment responses and CR fixtures provide, so it
 	// needs no hardware, no HyperShift, and no real network. The deployed path to Ready is covered by E2E.
-	It("starts worker provisioning and stalls at Binding without networking [OSAC-1436 seam]", func() {
+	It("starts worker provisioning and stalls at Binding without networking", func() {
 		const (
 			clusterUUID    = "provstart-cluster-uuid"
 			cvID           = "4.18.0"
@@ -277,7 +277,7 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 		Expect(*co.Status.ReadyWorkers).To(Equal(int32(0)), "no worker reaches Ready without networking")
 	})
 
-	It("rebuilds worker state after controller restart [OSAC-4167]", func() {
+	It("rebuilds worker state after controller restart", func() {
 		const (
 			clusterUUID    = "rebuild-cluster-uuid"
 			cvID           = "4.18.0"

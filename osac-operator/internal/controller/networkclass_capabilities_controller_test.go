@@ -61,7 +61,7 @@ var _ = Describe("computeCapabilities", func() {
 	}
 
 	It("uses the fabric manager's capabilities as-is when no k8s manager is configured", func() {
-		caps := computeCapabilities(&dispatcher.ResolvedManagers{FabricManager: &fabricDualStack})
+		caps := computeCapabilities(&dispatcher.ResolvedManagers{FabricManager: &fabricDualStack}, nil)
 		Expect(caps.GetSupportsIpv4()).To(BeTrue())
 		Expect(caps.GetSupportsIpv6()).To(BeTrue())
 		Expect(caps.GetSupportsDualStack()).To(BeTrue())
@@ -70,7 +70,7 @@ var _ = Describe("computeCapabilities", func() {
 
 	It("intersects fabric and k8s capabilities, dropping what the k8s manager lacks", func() {
 		k8s := k8sIPv4Only
-		caps := computeCapabilities(&dispatcher.ResolvedManagers{FabricManager: &fabricDualStack, K8sManager: &k8s})
+		caps := computeCapabilities(&dispatcher.ResolvedManagers{FabricManager: &fabricDualStack, K8sManager: &k8s}, nil)
 		Expect(caps.GetSupportsIpv4()).To(BeTrue())
 		Expect(caps.GetSupportsIpv6()).To(BeFalse())
 		Expect(caps.GetSupportsDualStack()).To(BeFalse())
@@ -79,9 +79,22 @@ var _ = Describe("computeCapabilities", func() {
 
 	It("drops capabilities the fabric manager doesn't declare even when the k8s manager does", func() {
 		k8s := k8sIPv4AndDPU
-		caps := computeCapabilities(&dispatcher.ResolvedManagers{FabricManager: &fabricIPv4Only, K8sManager: &k8s})
+		caps := computeCapabilities(&dispatcher.ResolvedManagers{FabricManager: &fabricIPv4Only, K8sManager: &k8s}, nil)
 		Expect(caps.GetSupportsIpv4()).To(BeTrue())
 		Expect(caps.GetDpuSupport()).To(BeFalse())
+	})
+
+	It("clears disabled capabilities without enabling unsupported families", func() {
+		disabled := &privatev1.NetworkClassCapabilities{
+			SupportsIpv6:      true,
+			SupportsDualStack: true,
+		}
+
+		caps := computeCapabilities(&dispatcher.ResolvedManagers{FabricManager: &fabricDualStack}, disabled)
+
+		Expect(caps.GetSupportsIpv4()).To(BeTrue())
+		Expect(caps.GetSupportsIpv6()).To(BeFalse())
+		Expect(caps.GetSupportsDualStack()).To(BeFalse())
 	})
 })
 
@@ -181,6 +194,37 @@ var _ = Describe("NetworkClassCapabilitiesReconciler", func() {
 			privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY))
 		Expect(updates[0].GetStatus().GetState()).To(Equal(
 			privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING))
+	})
+
+	It("applies NetworkClass disable capabilities before persisting the result", func() {
+		fabricCM := newFabricManagerConfigMap("fm-caps-disabled", namespace, "fabric-caps-disabled")
+		Expect(k8sClient.Create(ctx, fabricCM)).To(Succeed())
+		defer func() { _ = k8sClient.Delete(ctx, fabricCM) }()
+
+		nc := &privatev1.NetworkClass{
+			Id:            "nc-caps-disabled",
+			FabricManager: ptr.To("fabric-caps-disabled"),
+			Capabilities:  &privatev1.NetworkClassCapabilities{SupportsIpv4: true},
+			Spec: &privatev1.NetworkClassSpec{
+				DisableCapabilities: &privatev1.NetworkClassCapabilities{SupportsIpv4: true},
+			},
+			Status: &privatev1.NetworkClassStatus{
+				ManagerState: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+			},
+		}
+		var updates []*privatev1.NetworkClass
+		stubClient := newListingNetworkClassClient([]*privatev1.NetworkClass{nc}, &updates)
+		disc, err := networkmanager.NewDiscovery(k8sClient, namespace)
+		Expect(err).NotTo(HaveOccurred())
+		resolver := dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(stubClient), disc)
+		reconciler := NewNetworkClassCapabilitiesReconciler(stubClient, resolver, namespace)
+
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(updates).To(HaveLen(1))
+		Expect(updates[0].GetCapabilities().GetSupportsIpv4()).To(BeFalse())
+		Expect(updates[0].GetCapabilities().GetSupportsIpv6()).To(BeFalse())
+		Expect(updates[0].GetCapabilities().GetSupportsDualStack()).To(BeFalse())
 	})
 
 	It("does not update the NetworkClass when computed capabilities already match", func() {

@@ -20,6 +20,8 @@ import (
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
@@ -33,6 +35,7 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 		ctx                            context.Context
 		fixtureClients                 computeInstanceFixtureClients
 		subnetsClient                  privatev1.SubnetsClient
+		securityGroupsClient           privatev1.SecurityGroupsClient
 		virtualNetworksClient          privatev1.VirtualNetworksClient
 		networkClassesClient           privatev1.NetworkClassesClient
 		computeInstancesClient         publicv1.ComputeInstancesClient
@@ -45,6 +48,7 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 		networkClassId            string
 		virtualNetworkId          string
 		subnetId                  string
+		securityGroupId           string
 		computeInstanceId         string
 		computeInstanceTemplateId string
 		instanceTypeId            string
@@ -60,6 +64,7 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 
 		fixtureClients = newComputeInstanceFixtureClients()
 		subnetsClient = fixtureClients.subnets
+		securityGroupsClient = fixtureClients.securityGroups
 		virtualNetworksClient = fixtureClients.virtualNetworks
 		networkClassesClient = fixtureClients.networkClasses
 		computeInstancesClient = fixtureClients.computeInstances
@@ -236,11 +241,13 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		securityGroupId = createComputeInstanceFixtureSecurityGroup(ctx, securityGroupsClient,
+			fmt.Sprintf("test-sg-%s", uuid.New()), virtualNetworkId)
 	})
 
 	AfterEach(func() {
 		cleanupComputeInstanceFixture(ctx, fixtureClients, computeInstanceId, "", instanceTypeId,
-			subnetId, virtualNetworkId, networkClassId, computeInstanceTemplateId, diskImageId, storageTierId, storageBackendId)
+			securityGroupId, subnetId, virtualNetworkId, networkClassId, computeInstanceTemplateId, diskImageId, storageTierId, storageBackendId)
 	})
 
 	It("creates ComputeInstance with network attachments", func() {
@@ -264,6 +271,9 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 					NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
 						publicv1.ComputeNetworkAttachment_builder{
 							Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),
+							SecurityGroups: []*publicv1.SecurityGroupLocalReference{
+								publicv1.SecurityGroupLocalReference_builder{Id: securityGroupId}.Build(),
+							},
 						}.Build(),
 					},
 				}.Build(),
@@ -280,6 +290,91 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 		Expect(getResp.GetObject().GetSpec().GetNetworkAttachments()).To(HaveLen(1))
 		Expect(getResp.GetObject().GetSpec().GetNetworkAttachments()[0].GetSubnet().GetId()).To(Equal(subnetId),
 			"ComputeInstance should persist network attachment with subnet reference")
+		Expect(getResp.GetObject().GetSpec().GetNetworkAttachments()[0].GetSecurityGroups()).To(HaveLen(1))
+		Expect(getResp.GetObject().GetSpec().GetNetworkAttachments()[0].GetSecurityGroups()[0].GetId()).To(Equal(securityGroupId),
+			"ComputeInstance should preserve the explicitly specified SecurityGroup")
+	})
+
+	It("rejects ComputeInstance without attachments when the tenant has no default subnet", func() {
+		computeInstanceId = fmt.Sprintf("test-ci-%s", uuid.New())
+		_, err := computeInstancesClient.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
+			Object: publicv1.ComputeInstance_builder{
+				Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("test-ci-%s", uuid.New()[24:32])}.Build(),
+				Id:       computeInstanceId,
+				Spec: publicv1.ComputeInstanceSpec_builder{
+					Template:     publicv1.ComputeInstanceTemplateReference_builder{Id: computeInstanceTemplateId}.Build(),
+					InstanceType: publicv1.InstanceTypeReference_builder{Name: instanceTypeId}.Build(),
+					RunStrategy:  publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
+					BootDisk: publicv1.ComputeInstanceDisk_builder{
+						SizeGib:     proto.Int32(20),
+						StorageTier: publicv1.StorageTierReference_builder{Id: storageTierId}.Build(),
+					}.Build(),
+					DiskImage: &publicv1.DiskImageReference{Id: diskImageId},
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(err.Error()).To(ContainSubstring("default subnet is required"))
+		_, getErr := computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: computeInstanceId}.Build())
+		Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
+	})
+
+	It("rejects an attachment without SecurityGroups for a non-default VirtualNetwork", func() {
+		computeInstanceId = fmt.Sprintf("test-ci-%s", uuid.New())
+		_, err := computeInstancesClient.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
+			Object: publicv1.ComputeInstance_builder{
+				Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("test-ci-%s", uuid.New()[24:32])}.Build(),
+				Id:       computeInstanceId,
+				Spec: publicv1.ComputeInstanceSpec_builder{
+					Template:     publicv1.ComputeInstanceTemplateReference_builder{Id: computeInstanceTemplateId}.Build(),
+					InstanceType: publicv1.InstanceTypeReference_builder{Name: instanceTypeId}.Build(),
+					RunStrategy:  publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
+					BootDisk: publicv1.ComputeInstanceDisk_builder{
+						SizeGib:     proto.Int32(20),
+						StorageTier: publicv1.StorageTierReference_builder{Id: storageTierId}.Build(),
+					}.Build(),
+					DiskImage: &publicv1.DiskImageReference{Id: diskImageId},
+					NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+						publicv1.ComputeNetworkAttachment_builder{
+							Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),
+						}.Build(),
+					},
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(err.Error()).To(ContainSubstring("security group is required"))
+
+		_, getErr := computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: computeInstanceId}.Build())
+		Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
+	})
+
+	It("rejects multiple ComputeInstance network attachments without persisting the instance", func() {
+		computeInstanceId = fmt.Sprintf("test-ci-%s", uuid.New())
+		_, err := computeInstancesClient.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
+			Object: publicv1.ComputeInstance_builder{
+				Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("test-ci-%s", uuid.New()[24:32])}.Build(),
+				Id:       computeInstanceId,
+				Spec: publicv1.ComputeInstanceSpec_builder{
+					Template:     publicv1.ComputeInstanceTemplateReference_builder{Id: computeInstanceTemplateId}.Build(),
+					InstanceType: publicv1.InstanceTypeReference_builder{Name: instanceTypeId}.Build(),
+					RunStrategy:  publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
+					BootDisk: publicv1.ComputeInstanceDisk_builder{
+						SizeGib:     proto.Int32(20),
+						StorageTier: publicv1.StorageTierReference_builder{Id: storageTierId}.Build(),
+					}.Build(),
+					DiskImage: &publicv1.DiskImageReference{Id: diskImageId},
+					NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+						publicv1.ComputeNetworkAttachment_builder{Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build()}.Build(),
+						publicv1.ComputeNetworkAttachment_builder{Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build()}.Build(),
+					},
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+
+		_, getErr := computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: computeInstanceId}.Build())
+		Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
 	})
 
 	It("rejects ComputeInstance with non-existent subnet in network attachments", func() {

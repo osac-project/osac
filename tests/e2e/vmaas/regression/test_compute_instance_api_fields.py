@@ -19,13 +19,13 @@ def test_compute_instance_api_fields(
     grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     k8s_virt_client: K8sClient,
-    default_subnet: str,
+    default_network_attachment: dict[str, object],
     vm_template: str,
 ) -> None:
     ci_uuid: str = cli.create_compute_instance(
         template=vm_template,
         name=unique_name("e2e-api"),
-        network_attachments=[{"subnet": default_subnet}],
+        network_attachments=[default_network_attachment],
         boot_disk_size=TEST_BOOT_DISK_SIZE,
         run_strategy=TEST_RUN_STRATEGY,
     )

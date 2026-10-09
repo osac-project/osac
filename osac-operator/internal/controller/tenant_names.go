@@ -44,6 +44,13 @@ const (
 )
 
 var (
+	// osacTenantFeedbackFinalizer keeps a Tenant CR available while its deletion
+	// signal is delivered to the fulfillment service.
+	osacTenantFeedbackFinalizer string = fmt.Sprintf("%s/tenant-feedback", osacPrefix)
+
+	// osacTenantIDLabel stores the immutable fulfillment-service identifier of the tenant.
+	osacTenantIDLabel string = fmt.Sprintf("%s/tenant-id", osacPrefix)
+
 	// osacTenantRefLabel the label used to reference the tenant object
 	osacTenantRefLabel string = fmt.Sprintf("%s/tenant-ref", osacPrefix)
 

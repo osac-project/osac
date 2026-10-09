@@ -1213,7 +1213,7 @@ func selectClusterFabricInterface(instanceType *privatev1.BareMetalInstanceType)
 // autoProvisionExternalIPs creates two ExternalIPs and two ExternalIPAttachments
 // (one for API, one for ingress) from the best available pool.
 func (s *PrivateClustersServer) autoProvisionExternalIPs(ctx context.Context, cluster *privatev1.Cluster) error {
-	pool, err := SelectExternalIPPool(ctx, s.externalIPPoolDao, privatev1.IPFamily_IP_FAMILY_UNSPECIFIED)
+	pool, err := SelectExternalIPPool(ctx, s.externalIPPoolDao, privatev1.IPFamily_IP_FAMILY_IPV4)
 	if err != nil {
 		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "auto_external_ip_attachment: %s", err)
 	}

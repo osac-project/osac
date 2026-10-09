@@ -330,6 +330,11 @@ type BareMetalInstanceReference struct {
 	ID string `json:"id,omitempty"`
 }
 
+const (
+	WorkerBMICreateStateReserved  = "Reserved"
+	WorkerBMICreateStateAttempted = "Attempted"
+)
+
 // WorkerStatus holds the lifecycle state of a single CaaS-managed worker resource.
 type WorkerStatus struct {
 	// NodeSet is the Fulfillment spec.node_sets map key identifying this worker's
@@ -356,6 +361,16 @@ type WorkerStatus struct {
 	// BareMetalInstance records the reserved name and fulfillment ID of the backing BMI.
 	// +kubebuilder:validation:Optional
 	BareMetalInstance BareMetalInstanceReference `json:"bareMetalInstance,omitempty"`
+
+	// BMICreateState distinguishes a never-attempted reservation from a BMI Create
+	// that may have reached fulfillment. Reserved is initialized only for a new
+	// reservation or after confirmed incarnation cleanup. Attempted is persisted
+	// with optimistic locking before calling Create and retained on unknown outcomes.
+	// An omitted value is legacy/unknown and must not authorize cancellation.
+	// A recorded BMI ID takes precedence over this field.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=Reserved;Attempted
+	BMICreateState string `json:"bmiCreateState,omitempty"`
 
 	// Phase of the worker lifecycle.
 	// +kubebuilder:validation:Required

@@ -177,6 +177,7 @@ var reservedExtraValueKeys = map[string]bool{
 	bcmclient.ExtraValueInstanceID:     true,
 	bcmclient.ExtraValueBMCAddress:     true,
 	bcmclient.ExtraValueBMCCredentials: true,
+	bcmclient.ExtraValueInterfaceMACs:  true,
 }
 
 // FindFreeHost returns a randomly selected free LiteNode whose extra_values
@@ -760,4 +761,40 @@ func (c *BCMClient) GetHostNICs(ctx context.Context, inventoryHostID string) ([]
 		nics = append(nics, HostNIC{MAC: mac})
 	}
 	return nics, nil
+}
+
+// GetHostLogicalPortMACs reads the administrator mapping from BCM extra_values.
+func (c *BCMClient) GetHostLogicalPortMACs(ctx context.Context, inventoryHostID string) (map[string]string, error) {
+	_, hostname, err := ParseHostID(inventoryHostID)
+	if err != nil {
+		return nil, err
+	}
+	device, err := c.client.GetDevice(ctx, hostname)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get BCM device %s: %w", hostname, err)
+	}
+	if device == nil {
+		return nil, fmt.Errorf("BCM device %s not found", hostname)
+	}
+
+	// ExtraValues already preserves arbitrary JSON values. Accept an object or
+	// a JSON string so string-valued BCM metadata can carry the same mapping.
+	value := device.ExtraValues[bcmclient.ExtraValueInterfaceMACs]
+	var raw []byte
+	if text, ok := value.(string); ok {
+		raw = []byte(text)
+	} else if value != nil {
+		raw, err = json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("host %s: failed to marshal %s extra value: %w", inventoryHostID, bcmclient.ExtraValueInterfaceMACs, err)
+		}
+	}
+	if len(raw) == 0 {
+		return map[string]string{}, nil
+	}
+	macs := map[string]string{}
+	if err := json.Unmarshal(raw, &macs); err != nil {
+		return nil, fmt.Errorf("host %s: failed to parse %s mapping: %w", inventoryHostID, bcmclient.ExtraValueInterfaceMACs, err)
+	}
+	return macs, nil
 }

@@ -40,7 +40,7 @@ import (
 )
 
 func hasFinalizer(tenant *privatev1.Tenant) bool {
-	return slices.Contains(tenant.GetMetadata().GetFinalizers(), finalizers.Controller)
+	return slices.Contains(tenant.GetMetadata().GetFinalizers(), finalizers.TenantOnboarding)
 }
 
 func newTenantCR(tenantID, namespace, name string, deletionTimestamp *metav1.Time) *osacv1alpha1.Tenant {
@@ -49,7 +49,8 @@ func newTenantCR(tenantID, namespace, name string, deletionTimestamp *metav1.Tim
 			Namespace: namespace,
 			Name:      name,
 			Labels: map[string]string{
-				labels.TenantUuid: tenantID,
+				labels.TenantUuid: name,
+				labels.TenantID:   tenantID,
 			},
 		},
 	}
@@ -118,7 +119,7 @@ var _ = Describe("addFinalizer", func() {
 		t := &task{
 			tenant: privatev1.Tenant_builder{
 				Metadata: privatev1.Metadata_builder{
-					Finalizers: []string{finalizers.Controller},
+					Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				}.Build(),
 			}.Build(),
 		}
@@ -127,8 +128,8 @@ var _ = Describe("addFinalizer", func() {
 
 		Expect(added).To(BeFalse())
 		finalizerList := t.tenant.GetMetadata().GetFinalizers()
-		Expect(finalizerList).To(HaveLen(1))
-		Expect(finalizerList[0]).To(Equal(finalizers.Controller))
+		Expect(finalizerList).To(HaveLen(2))
+		Expect(finalizerList).To(ContainElement(finalizers.TenantOnboarding))
 	})
 })
 
@@ -137,7 +138,7 @@ var _ = Describe("removeFinalizer", func() {
 		t := &task{
 			tenant: privatev1.Tenant_builder{
 				Metadata: privatev1.Metadata_builder{
-					Finalizers: []string{finalizers.Controller, "other-finalizer"},
+					Finalizers: []string{finalizers.TenantOnboarding, "other-finalizer"},
 				}.Build(),
 			}.Build(),
 		}
@@ -267,8 +268,8 @@ var _ = Describe("run", func() {
 				tenant := privatev1.Tenant_builder{
 					Id: tenantID,
 					Metadata: privatev1.Metadata_builder{
-						Name:       tenantID,
-						Finalizers: []string{finalizers.Controller},
+						Name:       tenantName,
+						Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 						Tenant:     tenantName,
 					}.Build(),
 				}.Build()
@@ -281,23 +282,27 @@ var _ = Describe("run", func() {
 				list1 := &osacv1alpha1.TenantList{}
 				Expect(fakeClient1.List(ctx, list1)).To(Succeed())
 				Expect(list1.Items).To(HaveLen(1))
-				Expect(list1.Items[0].Labels[labels.TenantUuid]).To(Equal(tenantID))
+				Expect(list1.Items[0].Name).To(Equal(tenantName))
+				Expect(list1.Items[0].Labels[labels.TenantUuid]).To(Equal(tenantName))
+				Expect(list1.Items[0].Labels[labels.TenantID]).To(Equal(tenantID))
 				Expect(list1.Items[0].Namespace).To(Equal(namespace1))
 
 				list2 := &osacv1alpha1.TenantList{}
 				Expect(fakeClient2.List(ctx, list2)).To(Succeed())
 				Expect(list2.Items).To(HaveLen(1))
-				Expect(list2.Items[0].Labels[labels.TenantUuid]).To(Equal(tenantID))
+				Expect(list2.Items[0].Name).To(Equal(tenantName))
+				Expect(list2.Items[0].Labels[labels.TenantUuid]).To(Equal(tenantName))
+				Expect(list2.Items[0].Labels[labels.TenantID]).To(Equal(tenantID))
 				Expect(list2.Items[0].Namespace).To(Equal(namespace2))
 
 				ns1 := &corev1.Namespace{}
-				Expect(fakeClient1.Get(ctx, clnt.ObjectKey{Name: tenantID}, ns1)).To(Succeed())
-				Expect(ns1.Labels[labels.TenantRef]).To(Equal(tenantID))
+				Expect(fakeClient1.Get(ctx, clnt.ObjectKey{Name: tenantName}, ns1)).To(Succeed())
+				Expect(ns1.Labels[labels.TenantRef]).To(Equal(tenantName))
 				Expect(ns1.Labels[labels.Project]).To(Equal(namespace1))
 
 				ns2 := &corev1.Namespace{}
-				Expect(fakeClient2.Get(ctx, clnt.ObjectKey{Name: tenantID}, ns2)).To(Succeed())
-				Expect(ns2.Labels[labels.TenantRef]).To(Equal(tenantID))
+				Expect(fakeClient2.Get(ctx, clnt.ObjectKey{Name: tenantName}, ns2)).To(Succeed())
+				Expect(ns2.Labels[labels.TenantRef]).To(Equal(tenantName))
 				Expect(ns2.Labels[labels.Project]).To(Equal(namespace2))
 			})
 		})
@@ -334,7 +339,7 @@ var _ = Describe("run", func() {
 					Id: tenantID,
 					Metadata: privatev1.Metadata_builder{
 						Name:       tenantID,
-						Finalizers: []string{finalizers.Controller},
+						Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 						Tenant:     tenantName,
 					}.Build(),
 				}.Build()
@@ -391,7 +396,7 @@ var _ = Describe("run", func() {
 					Id: tenantID,
 					Metadata: privatev1.Metadata_builder{
 						Name:       tenantID,
-						Finalizers: []string{finalizers.Controller},
+						Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 						Tenant:     tenantName,
 					}.Build(),
 				}.Build()
@@ -407,6 +412,7 @@ var _ = Describe("run", func() {
 					Name:      tenantID,
 				}, patched)).To(Succeed())
 				Expect(patched.Labels).To(HaveKeyWithValue(labels.TenantUuid, tenantID))
+				Expect(patched.Labels).To(HaveKeyWithValue(labels.TenantID, tenantID))
 			})
 		})
 
@@ -450,7 +456,7 @@ var _ = Describe("run", func() {
 					Id: tenantID,
 					Metadata: privatev1.Metadata_builder{
 						Name:       tenantID,
-						Finalizers: []string{finalizers.Controller},
+						Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 						Tenant:     tenantName,
 					}.Build(),
 				}.Build()
@@ -506,7 +512,7 @@ var _ = Describe("run", func() {
 					Id: tenantID,
 					Metadata: privatev1.Metadata_builder{
 						Name:       tenantID,
-						Finalizers: []string{finalizers.Controller},
+						Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 						Tenant:     tenantName,
 					}.Build(),
 				}.Build()
@@ -533,7 +539,7 @@ var _ = Describe("run", func() {
 				tenant := privatev1.Tenant_builder{
 					Id: tenantID,
 					Metadata: privatev1.Metadata_builder{
-						Finalizers: []string{finalizers.Controller},
+						Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 						Tenant:     tenantName,
 					}.Build(),
 				}.Build()
@@ -567,7 +573,7 @@ var _ = Describe("run", func() {
 					Id: tenantID,
 					Metadata: privatev1.Metadata_builder{
 						Name:       tenantID,
-						Finalizers: []string{finalizers.Controller},
+						Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 						Tenant:     tenantName,
 					}.Build(),
 				}.Build()
@@ -611,7 +617,7 @@ var _ = Describe("run", func() {
 					Id: tenantID,
 					Metadata: privatev1.Metadata_builder{
 						Name:       tenantID,
-						Finalizers: []string{finalizers.Controller},
+						Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 						Tenant:     tenantName,
 					}.Build(),
 				}.Build()
@@ -625,6 +631,7 @@ var _ = Describe("run", func() {
 				Expect(fakeClient.List(ctx, list)).To(Succeed())
 				Expect(list.Items).To(HaveLen(1))
 				Expect(list.Items[0].Labels[labels.TenantUuid]).To(Equal(tenantID))
+				Expect(list.Items[0].Labels[labels.TenantID]).To(Equal(tenantID))
 
 				ns := &corev1.Namespace{}
 				Expect(fakeClient.Get(ctx, clnt.ObjectKey{Name: tenantID}, ns)).To(Succeed())
@@ -668,7 +675,7 @@ var _ = Describe("run", func() {
 					Id: tenantID,
 					Metadata: privatev1.Metadata_builder{
 						Name:       tenantID,
-						Finalizers: []string{finalizers.Controller},
+						Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 						Tenant:     tenantName,
 					}.Build(),
 				}.Build()
@@ -730,7 +737,7 @@ var _ = Describe("run", func() {
 					Id: tenantID,
 					Metadata: privatev1.Metadata_builder{
 						Name:       tenantID,
-						Finalizers: []string{finalizers.Controller},
+						Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 						Tenant:     tenantName,
 					}.Build(),
 				}.Build()
@@ -781,7 +788,7 @@ var _ = Describe("run", func() {
 					Id: tenantID,
 					Metadata: privatev1.Metadata_builder{
 						Name:       tenantID,
-						Finalizers: []string{finalizers.Controller},
+						Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 						Tenant:     tenantName,
 					}.Build(),
 					Status: privatev1.TenantStatus_builder{
@@ -830,7 +837,7 @@ var _ = Describe("run", func() {
 					Id: tenantID,
 					Metadata: privatev1.Metadata_builder{
 						Name:       tenantID,
-						Finalizers: []string{finalizers.Controller},
+						Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 						Tenant:     tenantName,
 					}.Build(),
 					Status: privatev1.TenantStatus_builder{
@@ -886,7 +893,7 @@ var _ = Describe("run", func() {
 					Id: tenantID,
 					Metadata: privatev1.Metadata_builder{
 						Name:              tenantID,
-						Finalizers:        []string{finalizers.Controller},
+						Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 						DeletionTimestamp: timestamppb.Now(),
 						Tenant:            tenantName,
 					}.Build(),
@@ -933,7 +940,7 @@ var _ = Describe("run", func() {
 					Id: tenantID,
 					Metadata: privatev1.Metadata_builder{
 						Name:              tenantID,
-						Finalizers:        []string{finalizers.Controller},
+						Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 						DeletionTimestamp: timestamppb.Now(),
 						Tenant:            tenantName,
 					}.Build(),
@@ -971,7 +978,7 @@ var _ = Describe("run", func() {
 					Id: tenantID,
 					Metadata: privatev1.Metadata_builder{
 						Name:              tenantID,
-						Finalizers:        []string{finalizers.Controller},
+						Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 						DeletionTimestamp: timestamppb.Now(),
 						Tenant:            tenantName,
 					}.Build(),
@@ -1011,7 +1018,7 @@ var _ = Describe("run", func() {
 					Id: tenantID,
 					Metadata: privatev1.Metadata_builder{
 						Name:              tenantID,
-						Finalizers:        []string{finalizers.Controller},
+						Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 						DeletionTimestamp: timestamppb.Now(),
 						Tenant:            tenantName,
 					}.Build(),
@@ -1047,7 +1054,7 @@ var _ = Describe("run", func() {
 					Id: tenantID,
 					Metadata: privatev1.Metadata_builder{
 						Name:              tenantID,
-						Finalizers:        []string{finalizers.Controller},
+						Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 						DeletionTimestamp: timestamppb.Now(),
 						Tenant:            tenantName,
 					}.Build(),
@@ -1071,7 +1078,7 @@ var _ = Describe("run", func() {
 				tenant := privatev1.Tenant_builder{
 					Id: tenantID,
 					Metadata: privatev1.Metadata_builder{
-						Finalizers:        []string{finalizers.Controller},
+						Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 						DeletionTimestamp: timestamppb.Now(),
 						Tenant:            tenantName,
 					}.Build(),
@@ -1115,7 +1122,7 @@ var _ = Describe("run", func() {
 					Id: tenantID,
 					Metadata: privatev1.Metadata_builder{
 						Name:              tenantID,
-						Finalizers:        []string{finalizers.Controller},
+						Finalizers:        []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 						DeletionTimestamp: timestamppb.Now(),
 						Tenant:            tenantName,
 					}.Build(),

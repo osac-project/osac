@@ -33,9 +33,9 @@ on:
         required: false
         default: ""
       test-infra-ref:
-        description: "Branch/ref of the CaaS test-infra fork"
+        description: "Branch/ref of osac-test-infra"
         required: false
-        default: "feat/caas-metal3-provisioning"
+        default: "main"
 
 concurrency:
   # pull_request: one run per PR; a newer push cancels the older run.
@@ -212,7 +212,7 @@ jobs:
       contents: read
       # See e2e-vmaas-full-install.yml's identical grant for why this is needed.
       id-token: write
-    uses: rccrdpccl/osac-test-infra/.github/workflows/e2e-caas-full-install.yml@feat/caas-metal3-provisioning
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-caas-full-install.yml@main
     with:
       # test-source=osac prefixes tests/e2e/. PR/merge_group: full caas suite
       # (sanity + regression). Schedule: regression. workflow_dispatch: honor
@@ -243,15 +243,24 @@ jobs:
       # override mechanism keys strictly off imageKey, one build per key, so this
       # is the only way to get both fields covered without changing that mechanism
       # (which lives in osac-test-infra, not here). See OSAC-3546.
-      components: '[{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.sha }}","containerfile":"fulfillment-service/Containerfile","context":".","imageKey":"service.images.service.repository"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.sha }}","containerfile":"osac-operator/Containerfile","context":".","imageKey":"operator.image.repository"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.sha }}","containerfile":"osac-aap/execution-environment/execution-environment.yaml","imageKey":"aap.bootstrap.image","buildType":"ansible-builder"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.sha }}","containerfile":"osac-aap/execution-environment/execution-environment.yaml","imageKey":"aap.configAsCode.eeImage","buildType":"ansible-builder"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.sha }}","containerfile":"bare-metal-fulfillment-operator/Containerfile","context":".","imageKey":"bmf.image.repository"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.sha }}","containerfile":"osac-metering/metering-service/Containerfile","context":".","imageKey":"metering.image.repository"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.sha }}","containerfile":"osac-metering/adapters/Containerfile.echo-adapter","context":"osac-metering","imageKey":"metering.echoAdapter.image.repository"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.sha }}","containerfile":"osac-csi-driver/Containerfile","context":".","imageKey":"csiDriver.image.repository"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.sha }}","containerfile":"osac-ui/Containerfile","context":"osac-ui","imageKey":"ui.images.ui"}]'
+      components: >-
+        [
+        { "repo": "${{ github.event.pull_request.head.repo.full_name || github.repository }}", "ref": "${{ github.event.pull_request.head.ref || github.sha }}", "containerfile": "fulfillment-service/Containerfile", "context": ".", "imageKey": "service.images.service.repository" },
+        { "repo": "${{ github.event.pull_request.head.repo.full_name || github.repository }}", "ref": "${{ github.event.pull_request.head.ref || github.sha }}", "containerfile": "osac-operator/Containerfile", "context": ".", "imageKey": "operator.image.repository" },
+        { "repo": "${{ github.event.pull_request.head.repo.full_name || github.repository }}", "ref": "${{ github.event.pull_request.head.ref || github.sha }}", "containerfile": "osac-aap/execution-environment/execution-environment.yaml", "imageKey": "aap.bootstrap.image", "buildType": "ansible-builder" },
+        { "repo": "${{ github.event.pull_request.head.repo.full_name || github.repository }}", "ref": "${{ github.event.pull_request.head.ref || github.sha }}", "containerfile": "osac-aap/execution-environment/execution-environment.yaml", "imageKey": "aap.configAsCode.eeImage", "buildType": "ansible-builder" },
+        { "repo": "${{ github.event.pull_request.head.repo.full_name || github.repository }}", "ref": "${{ github.event.pull_request.head.ref || github.sha }}", "containerfile": "bare-metal-fulfillment-operator/Containerfile", "context": ".", "imageKey": "bmf.image.repository" },
+        { "repo": "${{ github.event.pull_request.head.repo.full_name || github.repository }}", "ref": "${{ github.event.pull_request.head.ref || github.sha }}", "containerfile": "osac-metering/metering-service/Containerfile", "context": ".", "imageKey": "metering.image.repository" },
+        { "repo": "${{ github.event.pull_request.head.repo.full_name || github.repository }}", "ref": "${{ github.event.pull_request.head.ref || github.sha }}", "containerfile": "osac-metering/adapters/Containerfile.echo-adapter", "context": "osac-metering", "imageKey": "metering.echoAdapter.image.repository" },
+        { "repo": "${{ github.event.pull_request.head.repo.full_name || github.repository }}", "ref": "${{ github.event.pull_request.head.ref || github.sha }}", "containerfile": "osac-csi-driver/Containerfile", "context": ".", "imageKey": "csiDriver.image.repository" }
+        ]
       # Pass author_association for fork PR authorization (empty for non-fork PRs)
       fork-pr-author-association: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.author_association || '' }}
       fork-pr-author: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.user.login || '' }}
       pr-number: ${{ github.event.pull_request.number }}
-      # Checkout the same test-infra fork branch as the reusable workflow, including
-      # the 150G virtual BMH disks needed by the CaaS bare-metal worker flow.
-      test-infra-repository: rccrdpccl/osac-test-infra
-      test-infra-ref: ${{ inputs.test-infra-ref || 'feat/caas-metal3-provisioning' }}
+      # Checkout upstream test-infra, defaulting to the reusable workflow's main branch.
+      test-infra-repository: osac-project/osac-test-infra
+      test-infra-ref: ${{ inputs.test-infra-ref || 'main' }}
       test-repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
       test-ref: ${{ github.event.pull_request.head.sha || github.sha }}
       notify-on-failure: ${{ github.event_name == 'schedule' }}

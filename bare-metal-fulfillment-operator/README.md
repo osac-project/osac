@@ -46,6 +46,34 @@ networkClass: openstack
 - `hostClass` — host management class to use
 - `networkClass` — network class to use
 
+### Logical port MAC mappings
+
+IP discovery asks the inventory client for an administrator-supplied mapping
+from OSAC logical port names to physical MAC addresses. Each key must match the
+network attachment's `interface` and the catalog port name, as defined by the
+[BMaaS networking design](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1437-bmaas-networking/design.md).
+Inventory backends provide these sources:
+
+| Backend | Source | Value format |
+|---------|--------|--------------|
+| Metal3 | BareMetalHost annotation `osac.openshift.io/interface-macs` | JSON string |
+| BCM | Device `extra_values["osac_interface_macs"]` | JSON object or JSON string |
+| OpenStack | Ironic node `extra["osac_interface_macs"]` | JSON object |
+
+For example, an object mapping is `{"data-0":"52:54:00:16:04:83"}`. For
+string-valued BCM metadata, the equivalent device field is:
+
+```json
+{"extra_values":{"osac_interface_macs":"{\"data-0\":\"52:54:00:16:04:83\"}"}}
+```
+
+BCM returns an empty mapping when its extra value is absent, null, or an empty
+string, or when an explicit empty object is configured.
+Backends return an empty mapping when none is configured, and an error for
+malformed data or backend failures. IP discovery retains its server-name lease
+matching fallback when the requested logical port has no MAC or lookup fails.
+Physical interface names and NIC ordering do not supply a logical mapping.
+
 ### Management
 
 The operator reads management configuration to connect to backend management

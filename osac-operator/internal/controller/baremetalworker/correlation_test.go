@@ -16,7 +16,6 @@ package baremetalworker
 import (
 	"context"
 	"errors"
-	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -98,7 +97,7 @@ func (c *transientAgentConflictClient) Patch(
 	return c.Client.Patch(ctx, obj, patch, opts...)
 }
 
-func TestMACCorrelationMatchesAndSkips(t *testing.T) {
+var _ = It("matches compatible Agents by MAC and skips incompatible evidence", func() {
 	makeAgent := func(name string, macs ...string) *unstructured.Unstructured {
 		interfaces := make([]interface{}, 0, len(macs))
 		for _, mac := range macs {
@@ -142,7 +141,8 @@ func TestMACCorrelationMatchesAndSkips(t *testing.T) {
 		{"multiple interfaces, one matches", []string{"ff:ff:ff:ff:ff:ff", "aa:bb:cc:dd:ee:00"}, "w-0"},
 		{"matches a BMI's secondary NIC", []string{"aa:bb:cc:dd:ee:1f"}, "w-1"},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		By(tt.name)
+		func() {
 			agent := makeAgent("agent", tt.agentMACs...)
 			got := matchUnboundAgents(context.Background(), co, []unstructured.Unstructured{*agent}, workers, resolver)
 			var established []string
@@ -152,17 +152,14 @@ func TestMACCorrelationMatchesAndSkips(t *testing.T) {
 				}
 			}
 			if tt.wantWorker == "" {
-				if len(established) != 0 {
-					t.Fatalf("established %v, want no association", established)
-				}
+				Expect(established).To(BeEmpty(), "established %v, want no association", established)
 				return
 			}
-			if len(established) != 1 || established[0] != tt.wantWorker {
-				t.Fatalf("established %v, want %s", established, tt.wantWorker)
-			}
-		})
+			Expect(established).To(HaveLen(1), "established %v, want %s", established, tt.wantWorker)
+			Expect(established[0]).To(Equal(tt.wantWorker), "established %v, want %s", established, tt.wantWorker)
+		}()
 	}
-}
+})
 
 var _ = Describe("extractAgentMACs", func() {
 	DescribeTable("extracts MAC addresses from agent inventory",
@@ -363,11 +360,9 @@ var _ = Describe("reconcileNodePoolReplicas", func() {
 	})
 })
 
-func TestR06SelectorUnion(t *testing.T) {
+var _ = It("unions Agent selectors and deduplicates shared objects", func() {
 	s := runtime.NewScheme()
-	if err := v1alpha1.AddToScheme(s); err != nil {
-		t.Fatal(err)
-	}
+	Expect(v1alpha1.AddToScheme(s)).To(Succeed())
 	s.AddKnownTypeWithName(agentGVK, &unstructured.Unstructured{})
 	agentListGVK := agentGVK
 	agentListGVK.Kind = "AgentList"
@@ -404,26 +399,20 @@ func TestR06SelectorUnion(t *testing.T) {
 	r := &Reconciler{Client: c, apiReader: c}
 
 	agents, err := r.listAgents(context.Background(), co)
-	if err != nil {
-		t.Fatal(err)
-	}
+	Expect(err).NotTo(HaveOccurred())
 	// One observation stage queries both supported selectors and deduplicates by
 	// UID, so a mixed population is never silently truncated to one selector.
-	if len(agents.Items) != 3 {
-		t.Fatalf("selector union observed %d Agents, want 3", len(agents.Items))
-	}
+	Expect(agents.Items).To(HaveLen(3), "selector union observed %d Agents, want 3", len(agents.Items))
 	counts := map[types.UID]int{}
 	for i := range agents.Items {
 		counts[agents.Items[i].GetUID()]++
 	}
 	for uid, count := range counts {
-		if count != 1 {
-			t.Fatalf("Agent %s observed %d times, want exactly once", uid, count)
-		}
+		Expect(count).To(Equal(1), "Agent %s observed %d times, want exactly once", uid, count)
 	}
-}
+})
 
-func TestR06DuplicateWorkerLabelFailsClosed(t *testing.T) {
+var _ = It("rejects ambiguous Agents with duplicate worker labels", func() {
 	first := agentPhaseFixture("worker", true)
 	first.SetUID("uid-first")
 	second := agentPhaseFixture("worker", true)
@@ -436,17 +425,13 @@ func TestR06DuplicateWorkerLabelFailsClosed(t *testing.T) {
 
 	co := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: "order", Namespace: "osac"}}
 	got, err := projectAgentWorkerPhases(co, workers, agents)
-	if err != nil {
-		t.Fatalf("duplicate worker labels returned an error instead of failing closed: %v", err)
-	}
+	Expect(err).ToNot(HaveOccurred(), "duplicate worker labels returned an error instead of failing closed: %v", err)
 	// A shared worker-name label is not authorization: readiness needs exactly one
 	// distinct compatible UID, so two claimants must fail closed.
-	if got[0].Phase != workerPhaseWaitingForAgent {
-		t.Fatalf("duplicate worker labels selected a phase %q, want %q", got[0].Phase, workerPhaseWaitingForAgent)
-	}
-}
+	Expect(got[0].Phase).To(Equal(workerPhaseWaitingForAgent), "duplicate worker labels selected a phase %q, want %q", got[0].Phase, workerPhaseWaitingForAgent)
+})
 
-func TestR06IncompatibleMACMatchFailsClosed(t *testing.T) {
+var _ = It("rejects incompatible MAC matches without binding an Agent", func() {
 	ctx := context.Background()
 	buildReconciler := func(agent *unstructured.Unstructured) (*Reconciler, client.Client) {
 		c := clientfake.NewClientBuilder().WithObjects(agent).Build()
@@ -458,7 +443,8 @@ func TestR06IncompatibleMACMatchFailsClosed(t *testing.T) {
 	co := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: "order", Namespace: "osac"}}
 	worker := newWorkerStatus("standard", "standard", "worker", "bmi-0", workerPhaseWaitingForAgent)
 
-	t.Run("foreign cluster deployment", func(t *testing.T) {
+	By("foreign cluster deployment")
+	func() {
 		agent := agentPhaseFixture("", false)
 		agent.SetUID("uid-foreign")
 		_ = unstructured.SetNestedSlice(agent.Object, []interface{}{
@@ -470,23 +456,16 @@ func TestR06IncompatibleMACMatchFailsClosed(t *testing.T) {
 		r, c := buildReconciler(agent)
 		workers := []v1alpha1.WorkerStatus{worker}
 		bound, err := r.matchAndBindAgents(ctx, co, &unstructured.UnstructuredList{Items: []unstructured.Unstructured{*agent}}, workers, r.macResolver)
-		if err == nil {
-			t.Fatal("a conflicting cluster binding must fail closed, not correlate")
-		}
-		if bound != 0 {
-			t.Fatalf("bound %d workers despite a conflicting binding", bound)
-		}
+		Expect(err).To(HaveOccurred(), "a conflicting cluster binding must fail closed, not correlate")
+		Expect(bound).To(BeZero(), "bound %d workers despite a conflicting binding", bound)
 		got := &unstructured.Unstructured{}
 		got.SetGroupVersionKind(agentGVK)
-		if err := c.Get(ctx, client.ObjectKeyFromObject(agent), got); err != nil {
-			t.Fatal(err)
-		}
-		if got.GetLabels()[workerNameLabel] != "" {
-			t.Fatal("a conflicting Agent was taken over")
-		}
-	})
+		Expect(c.Get(ctx, client.ObjectKeyFromObject(agent), got)).To(Succeed())
+		Expect(got.GetLabels()[workerNameLabel]).To(Equal(""), "a conflicting Agent was taken over")
+	}()
 
-	t.Run("malformed inventory is not a match", func(t *testing.T) {
+	By("malformed inventory is not a match")
+	func() {
 		agent := agentPhaseFixture("", false)
 		agent.SetUID("uid-malformed")
 		_ = unstructured.SetNestedSlice(agent.Object, []interface{}{
@@ -495,15 +474,12 @@ func TestR06IncompatibleMACMatchFailsClosed(t *testing.T) {
 		r, _ := buildReconciler(agent)
 		workers := []v1alpha1.WorkerStatus{worker}
 		bound, err := r.matchAndBindAgents(ctx, co, &unstructured.UnstructuredList{Items: []unstructured.Unstructured{*agent}}, workers, r.macResolver)
-		if err != nil {
-			t.Fatalf("uninterpretable inventory is unknown, not invalid: %v", err)
-		}
+		Expect(err).ToNot(HaveOccurred(), "uninterpretable inventory is unknown, not invalid: %v", err)
 		// A MAC that cannot be read is unknown association, never a match.
-		if bound != 0 || workers[0].Phase != workerPhaseWaitingForAgent {
-			t.Fatalf("malformed inventory correlated: bound=%d phase=%s", bound, workers[0].Phase)
-		}
-	})
-}
+		Expect(bound).To(Equal(0), "malformed inventory correlated: bound=%d phase=%s", bound, workers[0].Phase)
+		Expect(workers[0].Phase).To(Equal(workerPhaseWaitingForAgent), "malformed inventory correlated: bound=%d phase=%s", bound, workers[0].Phase)
+	}()
+})
 
 var _ = Describe("reconcileAgent with transient Agent conflicts", func() {
 	It("labels correlated Agents with their instance type and preserves the binding contract", func() {

@@ -35,6 +35,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/defaultnetworking"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/idp"
@@ -45,6 +46,7 @@ import (
 
 // FunctionBuilder contains the data needed to build instances of the reconciler function.
 type FunctionBuilder struct {
+	hubCache       controllers.HubCache
 	logger         *slog.Logger
 	connection     *grpc.ClientConn
 	idpManager     *idp.TenantManager
@@ -82,6 +84,12 @@ func (b *FunctionBuilder) SetVaultLifecycle(value vault.LifecycleClient) *Functi
 	return b
 }
 
+// SetHubCache sets the connections used to observe tenant infrastructure.
+func (b *FunctionBuilder) SetHubCache(value controllers.HubCache) *FunctionBuilder {
+	b.hubCache = value
+	return b
+}
+
 // SetDefaultNetworking sets the controller-owned manager for tenant default
 // networking. This is optional for focused controller tests and reserved
 // tenants, but is configured by the production controller process.
@@ -109,7 +117,14 @@ func (b *FunctionBuilder) Build() (result *function, err error) {
 		return
 	}
 
+	if b.hubCache == nil {
+		err = errors.New("hub cache is mandatory")
+		return
+	}
+
 	result = &function{
+		hubCache:              b.hubCache,
+		hubsClient:            privatev1.NewHubsClient(b.connection),
 		logger:                b.logger,
 		tenantsClient:         privatev1.NewTenantsClient(b.connection),
 		projectsClient:        privatev1.NewProjectsClient(b.connection),
@@ -128,6 +143,8 @@ func (b *FunctionBuilder) Build() (result *function, err error) {
 
 // function is the implementation of the reconciler function.
 type function struct {
+	hubCache              controllers.HubCache
+	hubsClient            privatev1.HubsClient
 	logger                *slog.Logger
 	tenantsClient         privatev1.TenantsClient
 	projectsClient        privatev1.ProjectsClient
@@ -151,26 +168,28 @@ func (r *function) Run(ctx context.Context, tenant *privatev1.Tenant) error {
 		tenant: tenant,
 	}
 
-	var err error
-	if tenant.HasMetadata() && tenant.GetMetadata().HasDeletionTimestamp() {
-		err = task.delete(ctx)
+	var reconcileErr error
+	if task.addFinalizer() {
+		// Persist both barriers before doing any external work.
+	} else if tenant.HasMetadata() && tenant.GetMetadata().HasDeletionTimestamp() {
+		if err := task.delete(ctx); err != nil {
+			return err
+		}
 	} else {
-		err = task.update(ctx)
-	}
-	if err != nil {
-		return err
+		reconcileErr = task.update(ctx)
+		tenant = task.tenant
 	}
 
 	updateMask := r.maskCalculator.Calculate(oldTenant, tenant)
-
-	if len(updateMask.GetPaths()) > 0 {
-		_, err = r.tenantsClient.Update(ctx, privatev1.TenantsUpdateRequest_builder{
-			Object:     tenant,
-			UpdateMask: updateMask,
-		}.Build())
+	if len(updateMask.GetPaths()) == 0 {
+		return reconcileErr
 	}
-
-	return err
+	_, updateErr := r.tenantsClient.Update(ctx, privatev1.TenantsUpdateRequest_builder{
+		Object:     tenant,
+		UpdateMask: updateMask,
+		Lock:       true,
+	}.Build())
+	return errors.Join(reconcileErr, updateErr)
 }
 
 // task contains the data needed to reconcile a single tenant.
@@ -179,12 +198,23 @@ type task struct {
 	tenant *privatev1.Tenant
 }
 
-// update performs the reconciliation logic for creating or updating a tenant.
+// update performs the reconciliation logic for creating or updating a tenant,
+// then refreshes compute readiness independently of lifecycle errors.
 func (t *task) update(ctx context.Context) error {
-	if t.addFinalizer() {
-		return nil
+	oldTenant := proto.Clone(t.tenant).(*privatev1.Tenant)
+	reconcileErr := t.updateLifecycle(ctx)
+	if reconcileErr != nil {
+		// Failed lifecycle work must not leak partial mutations into the status update.
+		t.tenant = oldTenant
 	}
+	if t.r != nil && t.r.hubsClient != nil && t.r.hubCache != nil {
+		t.checkComputeInfrastructureReadiness(ctx)
+	}
+	return reconcileErr
+}
 
+// updateLifecycle performs the normal tenant lifecycle reconciliation.
+func (t *task) updateLifecycle(ctx context.Context) error {
 	t.setDefaults()
 	t.setConditionDefaults()
 
@@ -427,19 +457,10 @@ func (t *task) validateTenant() error {
 	return nil
 }
 
-// addFinalizer adds the controller finalizer to the tenant if not already present.
-// Returns true if the finalizer was added (indicating the update should be saved immediately).
+// addFinalizer prepares both cleanup barriers.
+// Returns true if the finalizers changed and must be saved immediately.
 func (t *task) addFinalizer() bool {
-	if !t.tenant.HasMetadata() {
-		t.tenant.SetMetadata(&privatev1.Metadata{})
-	}
-	list := t.tenant.GetMetadata().GetFinalizers()
-	if !slices.Contains(list, finalizers.Controller) {
-		list = append(list, finalizers.Controller)
-		t.tenant.GetMetadata().SetFinalizers(list)
-		return true
-	}
-	return false
+	return finalizers.PrepareTenant(t.tenant)
 }
 
 // removeFinalizer removes the controller finalizer from the tenant.
@@ -448,9 +469,9 @@ func (t *task) removeFinalizer() {
 		return
 	}
 	list := t.tenant.GetMetadata().GetFinalizers()
-	if slices.Contains(list, finalizers.Controller) {
+	if slices.Contains(list, finalizers.TenantLifecycle) {
 		list = slices.DeleteFunc(list, func(item string) bool {
-			return item == finalizers.Controller
+			return item == finalizers.TenantLifecycle
 		})
 		t.tenant.GetMetadata().SetFinalizers(list)
 	}
@@ -465,6 +486,10 @@ func (t *task) isBuiltin() bool {
 
 // delete performs the deletion cleanup for a tenant.
 func (t *task) delete(ctx context.Context) error {
+	if !slices.Contains(t.tenant.GetMetadata().GetFinalizers(), finalizers.TenantLifecycle) {
+		return nil
+	}
+
 	// Remove the break-glass secret first so its project FK does not block
 	// administrators from deleting the default project. Clear the spec ref
 	// afterwards so the follow-up Tenants/Update (finalizer removal) is not
@@ -774,6 +799,8 @@ func (t *task) checkDefaultNetworkingReadiness(ctx context.Context) error {
 	}
 
 	filter := fmt.Sprintf("%s && this.metadata.tenant == %q", defaultLabelFilter, tenantName)
+	subnetFilter := fmt.Sprintf("%s && this.metadata.tenant == %q && this.metadata.name == %q",
+		defaultLabelFilter, tenantName, "default-ipv4")
 
 	var pending, failed []string
 
@@ -794,7 +821,7 @@ func (t *task) checkDefaultNetworkingReadiness(ctx context.Context) error {
 	}
 
 	subnets, err := t.r.subnetsClient.List(ctx, privatev1.SubnetsListRequest_builder{
-		Filter: new(filter),
+		Filter: new(subnetFilter),
 	}.Build())
 	if err != nil {
 		return fmt.Errorf("failed to list default subnets: %w", err)

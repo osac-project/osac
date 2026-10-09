@@ -60,7 +60,7 @@ var _ = Describe("Tenant onboarding to hub", func() {
 		Eventually(
 			func(g Gomega) {
 				err := kubeClient.List(ctx, tenantList, crclient.MatchingLabels{
-					labels.TenantUuid: name,
+					labels.TenantID: id,
 				}, crclient.InNamespace(hubNamespace))
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(tenantList.Items).To(HaveLen(1))
@@ -72,6 +72,7 @@ var _ = Describe("Tenant onboarding to hub", func() {
 		Expect(tenantCR.GetName()).To(Equal(name))
 		Expect(tenantCR.GetNamespace()).To(Equal(hubNamespace))
 		Expect(tenantCR.Labels[labels.TenantUuid]).To(Equal(name))
+		Expect(tenantCR.Labels[labels.TenantID]).To(Equal(id))
 
 		By("Verifying namespace exists on the hub cluster")
 		ns := &corev1.Namespace{}
@@ -102,7 +103,7 @@ var _ = Describe("Tenant onboarding to hub", func() {
 		Eventually(
 			func(g Gomega) {
 				err := kubeClient.List(ctx, tenantList, crclient.MatchingLabels{
-					labels.TenantUuid: name,
+					labels.TenantID: id,
 				}, crclient.InNamespace(hubNamespace))
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(tenantList.Items).To(HaveLen(1))
@@ -118,7 +119,7 @@ var _ = Describe("Tenant onboarding to hub", func() {
 		Eventually(
 			func(g Gomega) {
 				err := kubeClient.List(ctx, tenantList, crclient.MatchingLabels{
-					labels.TenantUuid: name,
+					labels.TenantID: id,
 				}, crclient.InNamespace(hubNamespace))
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(tenantList.Items).To(BeEmpty())
@@ -154,7 +155,7 @@ var _ = Describe("Tenant onboarding to hub", func() {
 		Eventually(
 			func(g Gomega) {
 				err := kubeClient.List(ctx, tenantList, crclient.MatchingLabels{
-					labels.TenantUuid: name,
+					labels.TenantID: id,
 				}, crclient.InNamespace(hubNamespace))
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(tenantList.Items).To(HaveLen(1))
@@ -164,8 +165,9 @@ var _ = Describe("Tenant onboarding to hub", func() {
 		).Should(Succeed())
 		tenantCR := &tenantList.Items[0]
 
-		By("Removing the TenantUuid label from the Tenant CR")
+		By("Removing the tenant identity labels from the Tenant CR")
 		delete(tenantCR.Labels, labels.TenantUuid)
+		delete(tenantCR.Labels, labels.TenantID)
 		err := kubeClient.Update(ctx, tenantCR)
 		Expect(err).ToNot(HaveOccurred())
 
@@ -184,14 +186,16 @@ var _ = Describe("Tenant onboarding to hub", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 
-		By("Verifying TenantUuid label is restored on the Tenant CR")
+		By("Verifying tenant identity labels are restored on the Tenant CR")
 		Eventually(
 			func(g Gomega) {
 				err := kubeClient.List(ctx, tenantList, crclient.MatchingLabels{
-					labels.TenantUuid: name,
+					labels.TenantID: id,
 				}, crclient.InNamespace(hubNamespace))
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(tenantList.Items).To(HaveLen(1))
+				g.Expect(tenantList.Items[0].Labels).To(HaveKeyWithValue(labels.TenantUuid, name))
+				g.Expect(tenantList.Items[0].Labels).To(HaveKeyWithValue(labels.TenantID, id))
 			},
 			time.Minute,
 			time.Second,

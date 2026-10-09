@@ -477,15 +477,15 @@ var _ = Describe("FulfillmentClient wrapper", func() {
 		})
 	})
 
-	Context("R08 transport classification", func() {
-		It("R08-U1 classifies the first transport failure immediately", func() {
+	Context("Transport failure classification", func() {
+		It("classifies the first transport failure immediately", func() {
 			bmi.err = status.Error(codes.Unavailable, "backend down")
 			_, err := fc.GetBareMetalInstance(ctx, "id")
 			Expect(errors.Is(err, ErrFulfillmentServiceUnavailable)).To(BeTrue())
 			Expect(status.Code(err)).To(Equal(codes.Unavailable))
 		})
 
-		It("R08-U2 keeps semantic failures semantic and never marks them unavailable", func() {
+		It("keeps semantic failures semantic and never marks them unavailable", func() {
 			for _, code := range []codes.Code{
 				codes.NotFound, codes.AlreadyExists, codes.InvalidArgument,
 				codes.FailedPrecondition, codes.ResourceExhausted, codes.PermissionDenied,
@@ -498,7 +498,7 @@ var _ = Describe("FulfillmentClient wrapper", func() {
 			}
 		})
 
-		It("R08-U2 does not let an unrelated success suppress a transport failure", func() {
+		It("does not let an unrelated success suppress a transport failure", func() {
 			bmi.err = status.Error(codes.Unavailable, "backend down")
 			_, first := fc.GetBareMetalInstance(ctx, "id")
 			Expect(errors.Is(first, ErrFulfillmentServiceUnavailable)).To(BeTrue())
@@ -510,7 +510,7 @@ var _ = Describe("FulfillmentClient wrapper", func() {
 			Expect(errors.Is(second, ErrFulfillmentServiceUnavailable)).To(BeTrue())
 		})
 
-		It("R08-U3 preserves the sentinel and original code through repeated wrapping", func() {
+		It("preserves the sentinel and original code through repeated wrapping", func() {
 			bmi.err = status.Error(codes.Unavailable, "backend down")
 			_, err := fc.GetBareMetalInstance(ctx, "id")
 			wrapped := fmt.Errorf("outer: %w", fmt.Errorf("inner: %w", err))
@@ -518,7 +518,7 @@ var _ = Describe("FulfillmentClient wrapper", func() {
 			Expect(status.Code(wrapped)).To(Equal(codes.Unavailable))
 		})
 
-		It("R08-U3 does not misreport parent cancellation as unavailability", func() {
+		It("does not misreport parent cancellation as unavailability", func() {
 			parent, cancel := context.WithCancel(ctx)
 			cancel()
 			bmi.err = status.Error(codes.Canceled, "caller canceled")
@@ -527,7 +527,7 @@ var _ = Describe("FulfillmentClient wrapper", func() {
 			Expect(status.Code(err)).To(Equal(codes.Canceled))
 		})
 
-		It("R08-U3 classifies a call-local deadline while the parent is active", func() {
+		It("classifies a call-local deadline while the parent is active", func() {
 			bmi.err = status.Error(codes.DeadlineExceeded, "call deadline")
 			_, err := fc.GetBareMetalInstance(ctx, "id")
 			Expect(errors.Is(err, ErrFulfillmentServiceUnavailable)).To(BeTrue())

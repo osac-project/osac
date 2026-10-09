@@ -119,6 +119,9 @@ func (r *Reconciler) handleFailedWorkers(
 		retryTime := metav1.NewTime(now.Add(backoff))
 		w.NextRetryTime = &retryTime
 		w.BareMetalInstance.ID = ""
+		// Only confirmed old-incarnation absence makes a new reservation safe to
+		// cancel. Unknown Create outcomes never pass this cleanup checkpoint.
+		w.BMICreateState = v1alpha1.WorkerBMICreateStateReserved
 		w.ReadySince = nil
 		// The attempt origin belongs to the attempt that just ended. A fresh one
 		// is persisted before the replacement Create, so retry backoff is never

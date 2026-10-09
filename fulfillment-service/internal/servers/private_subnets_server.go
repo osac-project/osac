@@ -309,10 +309,7 @@ func (s *PrivateSubnetsServer) validateVirtualNetworkReference(ctx context.Conte
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"parent VirtualNetwork '%s' does not exist", virtualNetworkID)
 		}
-		s.logger.ErrorContext(ctx, "Failed to query VirtualNetwork",
-			slog.String("virtual_network_id", refKey(virtualNetworkID)),
-			slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate virtual_network")
+		return ConvertDAOErrorToGRPC(err, "get", refKey(virtualNetworkID))
 	}
 
 	virtualNetwork := getResponse.GetObject()

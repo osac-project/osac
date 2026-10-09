@@ -7,9 +7,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
-	"testing"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -58,13 +59,13 @@ func fulfillmentConditionRecorded(co *v1alpha1.ClusterOrder) bool {
 	return false
 }
 
-// TestR08OrderScopedClassification drives the public reconciler: it is the single
+// The public reconciler is the single
 // boundary that persists availability evidence and applies the bounded delay.
-func TestR08OrderScopedClassification(t *testing.T) {
+var _ = Describe("Order-scoped fulfillment failure classification", func() {
 	for _, outcome := range []string{"ordinary error", "unavailable", "condition persistence error"} {
-		t.Run(outcome, func(t *testing.T) {
+		It(outcome, func() {
 			ctx := context.Background()
-			r, fc, co := workerReadHarness(t)
+			r, fc, co := workerReadHarness()
 			before := co.DeepCopy()
 			ordinary := errors.New("ordinary provider failure")
 			persistence := errors.New("unavailable condition persistence failed")
@@ -80,36 +81,28 @@ func TestR08OrderScopedClassification(t *testing.T) {
 			res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)})
 			switch outcome {
 			case "ordinary error":
-				if !errors.Is(err, ordinary) || !res.IsZero() {
-					t.Fatalf("ordinary error not passed through: result=%v err=%v", res, err)
-				}
+				Expect(errors.Is(err, ordinary)).To(BeTrue(), "ordinary error not passed through: result=%v err=%v", res, err)
+				Expect(res.IsZero()).To(BeTrue(), "ordinary error not passed through: result=%v err=%v", res, err)
 			case "unavailable":
-				if err != nil || res.RequeueAfter != unavailableBackoff {
-					t.Fatalf("unavailable result=%v err=%v, want bounded backoff", res, err)
-				}
+				Expect(err).NotTo(HaveOccurred(), "unavailable result=%v err=%v, want bounded backoff", res, err)
+				Expect(res.RequeueAfter).To(Equal(unavailableBackoff), "unavailable result=%v err=%v, want bounded backoff", res, err)
 			case "condition persistence error":
-				if !errors.Is(err, persistence) {
-					t.Fatalf("error=%v, want condition persistence error", err)
-				}
+				Expect(errors.Is(err, persistence)).To(BeTrue(), "error=%v, want condition persistence error", err)
 			}
 
-			if err := r.apiReader.Get(ctx, client.ObjectKeyFromObject(co), co); err != nil {
-				t.Fatal(err)
-			}
-			if !reflect.DeepEqual(co.Status.Workers, before.Status.Workers) {
-				t.Fatal("provider error changed workers")
-			}
+			Expect(r.apiReader.Get(ctx, client.ObjectKeyFromObject(co), co)).To(Succeed())
+			Expect(co.Status.Workers).To(Equal(before.Status.Workers), "provider error changed workers")
 			if got, want := fulfillmentConditionRecorded(co), outcome == "unavailable"; got != want {
-				t.Fatalf("unavailable condition persisted=%v, want %v", got, want)
+				Fail(fmt.Sprintf("unavailable condition persisted=%v, want %v", got, want))
 			}
 		})
 	}
-}
+})
 
-// TestR08AuthoritativeClusterTransportIsNotOwnershipMismatch keeps fail-closed
-// ownership while reporting the real transport blocker instead of an ownership
+// Cluster transport failures keep ownership fail-closed while reporting
+// the real transport blocker instead of an ownership
 // event.
-func TestR08AuthoritativeClusterTransportIsNotOwnershipMismatch(t *testing.T) {
+var _ = Describe("Cluster lookup transport failures are not ownership mismatches", func() {
 	for _, tt := range []struct {
 		name           string
 		err            error
@@ -119,30 +112,28 @@ func TestR08AuthoritativeClusterTransportIsNotOwnershipMismatch(t *testing.T) {
 		{name: "transport", err: fmt.Errorf("rpc: %w", ErrFulfillmentServiceUnavailable), wantUnavailRes: true},
 		{name: "semantic", err: status.Error(codes.NotFound, "cluster missing"), wantEvent: true},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		It(tt.name, func() {
 			ctx := context.Background()
-			r, fc, co := workerReadHarness(t)
+			r, fc, co := workerReadHarness()
 			r.fulfillment = &workerClusterErrorClient{workerReadClient: fc, clusterErr: tt.err}
 			res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)})
 			if tt.wantUnavailRes {
-				if err != nil || res.RequeueAfter != unavailableBackoff {
-					t.Fatalf("transport cluster lookup result=%v err=%v, want bounded backoff", res, err)
-				}
-			} else if err == nil || !strings.Contains(err.Error(), tt.err.Error()) {
-				t.Fatalf("error=%v, want real blocker %v", err, tt.err)
+				Expect(err).NotTo(HaveOccurred(), "transport cluster lookup result=%v err=%v, want bounded backoff", res, err)
+				Expect(res.RequeueAfter).To(Equal(unavailableBackoff), "transport cluster lookup result=%v err=%v, want bounded backoff", res, err)
+			} else {
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring(tt.err.Error()))
 			}
 			if got := recordedEvent(r.recorder, "WorkerOwnershipMismatch"); got != tt.wantEvent {
-				t.Fatalf("ownership event recorded=%v, want %v", got, tt.wantEvent)
+				Fail(fmt.Sprintf("ownership event recorded=%v, want %v", got, tt.wantEvent))
 			}
-			if err := r.apiReader.Get(ctx, client.ObjectKeyFromObject(co), co); err != nil {
-				t.Fatal(err)
-			}
+			Expect(r.apiReader.Get(ctx, client.ObjectKeyFromObject(co), co)).To(Succeed())
 			if got, want := fulfillmentConditionRecorded(co), tt.wantUnavailRes; got != want {
-				t.Fatalf("unavailable condition persisted=%v, want %v", got, want)
+				Fail(fmt.Sprintf("unavailable condition persisted=%v, want %v", got, want))
 			}
 		})
 	}
-}
+})
 
 func recordedEvent(recorder events.EventRecorder, reason string) bool {
 	fake, ok := recorder.(*events.FakeRecorder)
@@ -207,43 +198,35 @@ func r08CallCases(err error) []struct {
 	}
 }
 
-func TestR08FirstTransportFailureClassified(t *testing.T) {
+var _ = Describe("Classification of the first transport failure", func() {
 	for _, code := range []codes.Code{codes.Unavailable, codes.DeadlineExceeded} {
 		for _, tc := range r08CallCases(status.Error(code, "transport")) {
-			t.Run(code.String()+"/"+tc.name, func(t *testing.T) {
+			It(code.String()+"/"+tc.name, func() {
 				err := tc.invoke()
-				if !errors.Is(err, ErrFulfillmentServiceUnavailable) {
-					t.Fatalf("first %s failure not classified: %v", code, err)
-				}
-				if status.Code(err) != code {
-					t.Fatalf("code=%v, want %v", status.Code(err), code)
-				}
+				Expect(errors.Is(err, ErrFulfillmentServiceUnavailable)).To(BeTrue(), "first %s failure not classified: %v", code, err)
+				Expect(status.Code(err)).To(Equal(code), "code=%v, want %v", status.Code(err), code)
 			})
 		}
 	}
-}
+})
 
-func TestR08SemanticFailuresNeverUnavailable(t *testing.T) {
+var _ = Describe("Semantic failures are never classified as service unavailability", func() {
 	for _, code := range []codes.Code{
 		codes.NotFound, codes.AlreadyExists, codes.InvalidArgument,
 		codes.FailedPrecondition, codes.ResourceExhausted, codes.PermissionDenied,
 		codes.Unauthenticated, codes.Internal, codes.Unknown,
 	} {
 		for _, tc := range r08CallCases(status.Error(code, "semantic")) {
-			t.Run(code.String()+"/"+tc.name, func(t *testing.T) {
+			It(code.String()+"/"+tc.name, func() {
 				err := tc.invoke()
-				if errors.Is(err, ErrFulfillmentServiceUnavailable) {
-					t.Fatalf("%s misclassified as service unavailability", code)
-				}
-				if status.Code(err) != code {
-					t.Fatalf("code=%v, want %v", status.Code(err), code)
-				}
+				Expect(errors.Is(err, ErrFulfillmentServiceUnavailable)).To(BeFalse(), "%s misclassified as service unavailability", code)
+				Expect(status.Code(err)).To(Equal(code), "code=%v, want %v", status.Code(err), code)
 			})
 		}
 	}
-}
+})
 
-func TestR08UnrelatedSuccessDoesNotResetFailureEvidence(t *testing.T) {
+var _ = It("preserves failure evidence across an unrelated successful call", func() {
 	bmi := &fakeBMIClient{err: status.Error(codes.Unavailable, "down"), object: &privatev1.BareMetalInstance{}}
 	clusters := &fakeClustersClient{object: &privatev1.Cluster{}}
 	c := NewFulfillmentClient(bmi, &fakeCVClient{object: &privatev1.ClusterVersion{}}, clusters,
@@ -252,27 +235,23 @@ func TestR08UnrelatedSuccessDoesNotResetFailureEvidence(t *testing.T) {
 		&fakeBMITypesClient{object: &privatev1.BareMetalInstanceType{}})
 	ctx := context.Background()
 	if _, err := c.GetBareMetalInstance(ctx, "id"); !errors.Is(err, ErrFulfillmentServiceUnavailable) {
-		t.Fatalf("first failure not classified: %v", err)
+		Fail(fmt.Sprintf("first failure not classified: %v", err))
 	}
 	if _, err := c.GetCluster(ctx, "cluster"); err != nil {
-		t.Fatalf("unrelated success: %v", err)
+		Fail(fmt.Sprintf("unrelated success: %v", err))
 	}
 	if _, err := c.GetBareMetalInstance(ctx, "id"); !errors.Is(err, ErrFulfillmentServiceUnavailable) {
-		t.Fatalf("unrelated success changed failure evidence: %v", err)
+		Fail(fmt.Sprintf("unrelated success changed failure evidence: %v", err))
 	}
-}
+})
 
-func TestR08PlainErrorPassesThrough(t *testing.T) {
+var _ = Describe("Plain provider errors pass through unchanged", func() {
 	plain := errors.New("ordinary provider failure")
 	for _, tc := range r08CallCases(plain) {
-		t.Run(tc.name, func(t *testing.T) {
+		It(tc.name, func() {
 			err := tc.invoke()
-			if err != plain {
-				t.Fatalf("error=%v, want the original plain error", err)
-			}
-			if errors.Is(err, ErrFulfillmentServiceUnavailable) {
-				t.Fatal("plain error misclassified as service unavailability")
-			}
+			Expect(err).To(BeIdenticalTo(plain), "error=%v, want the original plain error", err)
+			Expect(errors.Is(err, ErrFulfillmentServiceUnavailable)).To(BeFalse(), "plain error misclassified as service unavailability")
 		})
 	}
-}
+})

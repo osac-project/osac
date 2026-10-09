@@ -5,7 +5,9 @@ package baremetalworker
 
 import (
 	"context"
-	"testing"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -34,10 +36,11 @@ func (f *teardownReadClient) DeleteBareMetalInstance(context.Context, string) er
 	f.deletes++
 	return nil
 }
-func TestTeardownUsesOneFreshOwnedReadWithoutInventingAbsence(t *testing.T) {
+
+var _ = Describe("teardown uses one fresh owned read without inventing absence", func() {
 	for _, state := range []string{"present", "absent", "error", "foreign", "wrong-id"} {
-		t.Run(state, func(t *testing.T) {
-			r, fc, co := workerReadHarness(t)
+		It(state, func() {
+			r, fc, co := workerReadHarness()
 			provider := &teardownReadClient{workerReadClient: fc}
 			r.fulfillment = provider
 			w := co.Status.Workers[0]
@@ -62,15 +65,12 @@ func TestTeardownUsesOneFreshOwnedReadWithoutInventingAbsence(t *testing.T) {
 			if state == "present" {
 				wantDeletes = 1
 			}
-			if provider.gets != 1 || provider.deletes != wantDeletes {
-				t.Fatalf("gets=%d deletes=%d, want 1/%d", provider.gets, provider.deletes, wantDeletes)
-			}
-			if (len(kept) == 0) != (state == "absent") {
-				t.Fatalf("worker removal without confirmed NotFound: %v", kept)
-			}
+			Expect(provider.gets).To(Equal(1), "gets=%d deletes=%d, want 1/%d", provider.gets, provider.deletes, wantDeletes)
+			Expect(provider.deletes).To(Equal(wantDeletes), "gets=%d deletes=%d, want 1/%d", provider.gets, provider.deletes, wantDeletes)
+			Expect((len(kept) == 0)).To(Equal((state == "absent")), "worker removal without confirmed NotFound: %v", kept)
 		})
 	}
-}
+})
 
 type agentListCountingClient struct {
 	client.Client
@@ -83,64 +83,54 @@ func (c *agentListCountingClient) List(ctx context.Context, list client.ObjectLi
 	}
 	return c.Client.List(ctx, list, opts...)
 }
-func TestFinalizationRetainsFinalizerForConcurrentAppendedWorker(t *testing.T) {
-	r, fc, co := workerReadHarness(t)
+
+var _ = It("retains the finalizer when another writer appends a worker", func() {
+	r, fc, co := workerReadHarness()
 	fc.getErr = status.Error(codes.NotFound, "confirmed deleted")
 	co.Finalizers = []string{bmWorkerFinalizer}
-	if err := r.Update(context.Background(), co); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
-		t.Fatal(err)
-	}
+	Expect(r.Update(context.Background(), co)).To(Succeed())
+	Expect(r.Get(context.Background(), client.ObjectKeyFromObject(co), co)).To(Succeed())
 	kube := r.Client
 	appended := newWorkerStatus("standard", "standard", "concurrent", "", workerPhaseProvisioning)
 	c := &bmiConflictClient{Client: kube, beforePatch: func() {
 		latest := co.DeepCopy()
-		if err := kube.Get(context.Background(), client.ObjectKeyFromObject(co), latest); err != nil {
-			t.Fatal(err)
-		}
+		Expect(kube.Get(context.Background(), client.ObjectKeyFromObject(co), latest)).To(Succeed())
 		latest.Status.Workers = append(latest.Status.Workers, appended)
-		if err := kube.Status().Update(context.Background(), latest); err != nil {
-			t.Fatal(err)
-		}
+		Expect(kube.Status().Update(context.Background(), latest)).To(Succeed())
 	}}
 	r.Client = c
 	o := indexWorkerBMIs(nil)
 	o.agents = &unstructured.UnstructuredList{}
 	res, err := r.handleClusterDeletion(context.Background(), co)
-	if !apierrors.IsConflict(err) || !res.IsZero() {
-		t.Fatalf("result=%+v err=%v, want one-shot conflict", res, err)
-	}
+	Expect(apierrors.IsConflict(err)).To(BeTrue(), "result=%+v err=%v, want one-shot conflict", res, err)
+	Expect(res.IsZero()).To(BeTrue(), "result=%+v err=%v, want one-shot conflict", res, err)
 	latest := co.DeepCopy()
-	if err := kube.Get(context.Background(), client.ObjectKeyFromObject(co), latest); err != nil {
-		t.Fatal(err)
-	}
-	if len(latest.Finalizers) != 1 || latest.Finalizers[0] != bmWorkerFinalizer || !res.IsZero() {
-		t.Fatalf("removed finalizer with appended worker: finalizers=%v result=%v", latest.Finalizers, res)
-	}
-	if len(latest.Status.Workers) != 2 || latest.Status.Workers[1].Name != appended.Name {
-		t.Fatalf("workers=%v", latest.Status.Workers)
-	}
-}
+	Expect(kube.Get(context.Background(), client.ObjectKeyFromObject(co), latest)).To(Succeed())
+	Expect(latest.Finalizers).To(HaveLen(1), "removed finalizer with appended worker: finalizers=%v result=%v", latest.Finalizers, res)
+	Expect(latest.Finalizers[0]).To(Equal(bmWorkerFinalizer), "removed finalizer with appended worker: finalizers=%v result=%v", latest.Finalizers, res)
+	Expect(res.IsZero()).To(BeTrue(), "removed finalizer with appended worker: finalizers=%v result=%v", latest.Finalizers, res)
+	Expect(latest.Status.Workers).To(HaveLen(2), "workers=%v", latest.Status.Workers)
+	Expect(latest.Status.Workers[1].Name).To(Equal(appended.Name), "workers=%v", latest.Status.Workers)
+})
 
-func TestR03FailedScaleDownKeepsSlot(t *testing.T) {
-	r, base, co := workerReadHarness(t)
+var _ = It("retains a failed worker slot during scale-down", func() {
+	r, base, co := workerReadHarness()
 	fc := &teardownReadClient{workerReadClient: base}
 	r.fulfillment = fc
 	w := co.Status.Workers[0]
 	w.Phase = workerPhaseFailed
 	fc.returned = ownedBMIFixture(co, w.BareMetalInstance.Name, w.BareMetalInstance.ID)
 	kept := r.handleScaleDown(context.Background(), co, nil, []v1alpha1.WorkerStatus{w})
-	if len(kept) != 1 || kept[0].BareMetalInstance != w.BareMetalInstance || kept[0].Phase != workerPhaseUnbinding || fc.deletes != 0 {
-		t.Fatalf("retirement must precede external cleanup: workers=%+v deletes=%d", kept, fc.deletes)
-	}
-}
+	Expect(kept).To(HaveLen(1), "retirement must precede external cleanup: workers=%+v deletes=%d", kept, fc.deletes)
+	Expect(kept[0].BareMetalInstance).To(Equal(w.BareMetalInstance), "retirement must precede external cleanup: workers=%+v deletes=%d", kept, fc.deletes)
+	Expect(kept[0].Phase).To(Equal(workerPhaseUnbinding), "retirement must precede external cleanup: workers=%+v deletes=%d", kept, fc.deletes)
+	Expect(fc.deletes).To(Equal(0), "retirement must precede external cleanup: workers=%+v deletes=%d", kept, fc.deletes)
+})
 
-func TestR03UnknownCleanupDoesNotRelease(t *testing.T) {
+var _ = Describe("Worker retention when cleanup evidence is unknown", func() {
 	for _, scenario := range []string{"outage", "denied", "foreign-tenant", "foreign-owner", "idless"} {
-		t.Run(scenario, func(t *testing.T) {
-			r, base, co := workerReadHarness(t)
+		It(scenario, func() {
+			r, base, co := workerReadHarness()
 			fc := &teardownReadClient{workerReadClient: base}
 			r.fulfillment = fc
 			w := co.Status.Workers[0]
@@ -163,22 +153,18 @@ func TestR03UnknownCleanupDoesNotRelease(t *testing.T) {
 			o := indexWorkerBMIs(nil)
 			o.agents = &unstructured.UnstructuredList{}
 			kept := r.reconcileTeardownWorkers(context.Background(), co, []v1alpha1.WorkerStatus{w})
-			if len(kept) != 1 || kept[0].BareMetalInstance != w.BareMetalInstance || fc.deletes != 0 {
-				t.Fatalf("unknown released: workers=%+v deletes=%d", kept, fc.deletes)
-			}
+			Expect(kept).To(HaveLen(1), "unknown released: workers=%+v deletes=%d", kept, fc.deletes)
+			Expect(kept[0].BareMetalInstance).To(Equal(w.BareMetalInstance), "unknown released: workers=%+v deletes=%d", kept, fc.deletes)
+			Expect(fc.deletes).To(Equal(0), "unknown released: workers=%+v deletes=%d", kept, fc.deletes)
 		})
 	}
-}
+})
 
-func TestStableConvergenceDoesNotRelistAgentsForTeardown(t *testing.T) {
-	r, _, co := workerReadHarness(t)
+var _ = It("avoids another Agent List for teardown during stable convergence", func() {
+	r, _, co := workerReadHarness()
 	c := &agentListCountingClient{Client: r.Client}
 	r.Client = c
 	_, err := r.reconcileWorkerTeardown(context.Background(), co)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.agentLists != 0 {
-		t.Fatalf("unnecessary teardown Agent lists=%d", c.agentLists)
-	}
-}
+	Expect(err).NotTo(HaveOccurred())
+	Expect(c.agentLists).To(BeZero(), "unnecessary teardown Agent lists=%d", c.agentLists)
+})

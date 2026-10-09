@@ -103,6 +103,7 @@ var _ = Describe("Compute instances server", func() {
 				Metadata: privatev1.Metadata_builder{
 					Name:   "test-vnet",
 					Tenant: testTenant,
+					Labels: map[string]string{defaultLabel: "true"},
 				}.Build(),
 			}.Build()
 
@@ -131,6 +132,27 @@ var _ = Describe("Compute instances server", func() {
 			}.Build()
 
 			_, err = subnetsDao.Create().SetObject(subnet).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			securityGroupsDao, err := dao.NewGenericDAO[*privatev1.SecurityGroup]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = securityGroupsDao.Create().SetObject(privatev1.SecurityGroup_builder{
+				Id: "test-sg-default",
+				Metadata: privatev1.Metadata_builder{
+					Name:   "test-sg-default",
+					Tenant: testTenant,
+					Labels: map[string]string{defaultLabel: "true"},
+				}.Build(),
+				Spec: privatev1.SecurityGroupSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "test-vnet"}.Build(),
+				}.Build(),
+				Status: privatev1.SecurityGroupStatus_builder{
+					State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+				}.Build(),
+			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 
 			// Create a default InstanceType for tests that need it:

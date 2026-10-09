@@ -5,8 +5,10 @@ package baremetalworker
 
 import (
 	"context"
-	"reflect"
-	"testing"
+	"fmt"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -16,8 +18,8 @@ import (
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
-func handoffFixture(t *testing.T) (*v1alpha1.ClusterOrder, *unstructured.Unstructured) {
-	t.Helper()
+func handoffFixture() (*v1alpha1.ClusterOrder, *unstructured.Unstructured) {
+	GinkgoHelper()
 	co := &v1alpha1.ClusterOrder{
 		ObjectMeta: metav1.ObjectMeta{Name: "order", Namespace: "osac"},
 		Status: v1alpha1.ClusterOrderStatus{ClusterReference: &v1alpha1.ClusterOrderClusterReferenceType{
@@ -25,44 +27,35 @@ func handoffFixture(t *testing.T) (*v1alpha1.ClusterOrder, *unstructured.Unstruc
 		}},
 	}
 	a := agentPhaseFixture("worker", false)
-	if err := unstructured.SetNestedMap(a.Object, map[string]interface{}{
+	Expect(unstructured.SetNestedMap(a.Object, map[string]interface{}{
 		"name": "hosted", "namespace": "osac-order-hosted",
-	}, "spec", "clusterDeploymentName"); err != nil {
-		t.Fatal(err)
-	}
+	}, "spec", "clusterDeploymentName")).To(Succeed())
 	return co, a
 }
 
-func TestCAPAgentHandoffProjection(t *testing.T) {
+var _ = Describe("CAP-Agent handoff phase projection", func() {
 	for _, installed := range []bool{false, true} {
 		want := workerPhaseBinding
 		if installed {
 			want = workerPhaseReady
 		}
-		t.Run(want, func(t *testing.T) {
-			co, a := handoffFixture(t)
+		It(want, func() {
+			co, a := handoffFixture()
 			if installed {
-				if err := unstructured.SetNestedField(a.Object, "installed", "status", "debugInfo", "state"); err != nil {
-					t.Fatal(err)
-				}
+				Expect(unstructured.SetNestedField(a.Object, "installed", "status", "debugInfo", "state")).To(Succeed())
 			}
 			before := a.DeepCopy()
 			worker := newWorkerStatus("standard", "workers", "worker", "bmi-id", workerPhaseBinding)
 			got, err := projectAgentWorkerPhases(co, []v1alpha1.WorkerStatus{worker}, &unstructured.UnstructuredList{Items: []unstructured.Unstructured{*a}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got[0].Phase != want || got[0].BareMetalInstance != worker.BareMetalInstance {
-				t.Fatalf("handoff projection = %+v, want phase %s with original BMI", got[0], want)
-			}
-			if !reflect.DeepEqual(a, before) {
-				t.Fatal("projection changed CAP-Agent's binding")
-			}
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got[0].Phase).To(Equal(want), "handoff projection = %+v, want phase %s with original BMI", got[0], want)
+			Expect(got[0].BareMetalInstance).To(Equal(worker.BareMetalInstance), "handoff projection = %+v, want phase %s with original BMI", got[0], want)
+			Expect(a).To(Equal(before), "projection changed CAP-Agent's binding")
 		})
 	}
-}
+})
 
-func TestCAPAgentHandoffScope(t *testing.T) {
+var _ = It("limits CAP-Agent handoff to the expected cluster and NodePool", func() {
 	type scopeCase struct {
 		name    string
 		change  func(*v1alpha1.ClusterOrder, *unstructured.Unstructured)
@@ -101,47 +94,38 @@ func TestCAPAgentHandoffScope(t *testing.T) {
 	for _, field := range []string{"name", "namespace"} {
 		for _, value := range []string{"foreign", "", "osac-order"} {
 			tests = append(tests, scopeCase{name: "deployment " + field + "=" + value, wantErr: true, change: func(_ *v1alpha1.ClusterOrder, a *unstructured.Unstructured) {
-				if err := unstructured.SetNestedField(a.Object, value, "spec", "clusterDeploymentName", field); err != nil {
-					t.Fatal(err)
-				}
+				Expect(unstructured.SetNestedField(a.Object, value, "spec", "clusterDeploymentName", field)).To(Succeed())
 			}})
 		}
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			co, a := handoffFixture(t)
+		By(tt.name)
+		func() {
+			co, a := handoffFixture()
 			if tt.change != nil {
 				tt.change(co, a)
 			}
 			if err := agentBindingConflict(a, co, "worker"); (err != nil) != tt.wantErr {
-				t.Fatalf("binding conflict = %v, want error %t", err, tt.wantErr)
+				Fail(fmt.Sprintf("binding conflict = %v, want error %t", err, tt.wantErr))
 			}
-		})
+		}()
 	}
-}
+})
 
-func TestCAPAgentHandoffPreservesAuthoritativeBinding(t *testing.T) {
-	co, live := handoffFixture(t)
+var _ = It("preserves authoritative binding during CAP-Agent handoff", func() {
+	co, live := handoffFixture()
 	c := clientfake.NewClientBuilder().WithObjects(live).Build()
 	r := &Reconciler{Client: c, apiReader: c}
 	before := &unstructured.Unstructured{}
 	before.SetGroupVersionKind(agentGVK)
 	key := client.ObjectKeyFromObject(live)
-	if err := c.Get(context.Background(), key, before); err != nil {
-		t.Fatal(err)
-	}
+	Expect(c.Get(context.Background(), key, before)).To(Succeed())
 	// Initial discovery snapshot predates CAP-Agent claiming the labelled worker.
 	stale := agentPhaseFixture("", false)
 	worker := newWorkerStatus("standard", "workers", "worker", "bmi-id", workerPhaseWaitingForAgent)
-	if err := r.bindAgent(context.Background(), co, stale, &worker); err != nil {
-		t.Fatal(err)
-	}
+	Expect(r.bindAgent(context.Background(), co, stale, &worker)).To(Succeed())
 	got := &unstructured.Unstructured{}
 	got.SetGroupVersionKind(agentGVK)
-	if err := c.Get(context.Background(), key, got); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(got, before) {
-		t.Fatal("stale discovery rewrote CAP-Agent's authoritative binding")
-	}
-}
+	Expect(c.Get(context.Background(), key, got)).To(Succeed())
+	Expect(got).To(Equal(before), "stale discovery rewrote CAP-Agent's authoritative binding")
+})

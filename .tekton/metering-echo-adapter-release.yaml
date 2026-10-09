@@ -26,6 +26,8 @@ spec:
     value: adapters/Containerfile.echo-adapter
   - name: path-context
     value: osac-metering
+  - name: build-source-image
+    value: "true"
   pipelineSpec:
     description: |
       This pipeline is ideal for building container images from a Containerfile while maintaining trust after pipeline customization.

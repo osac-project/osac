@@ -33,7 +33,7 @@ kafka:
   enabled: true
 
 # --- Bundled PostgreSQL ---
-# Single-pod ephemeral database for testing.
+# Bundled PostgreSQL for testing only; not intended for production.
 bundledPostgres:
   enabled: true
   database:

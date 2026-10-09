@@ -589,6 +589,18 @@ spec:
                           minLength: 1
                           type: string
                       type: object
+                    bmiCreateState:
+                      description: |-
+                        BMICreateState distinguishes a never-attempted reservation from a BMI Create
+                        that may have reached fulfillment. Reserved is initialized only for a new
+                        reservation or after confirmed incarnation cleanup. Attempted is persisted
+                        with optimistic locking before calling Create and retained on unknown outcomes.
+                        An omitted value is legacy/unknown and must not authorize cancellation.
+                        A recorded BMI ID takes precedence over this field.
+                      enum:
+                      - Reserved
+                      - Attempted
+                      type: string
                     creationTimestamp:
                       description: CreationTimestamp is when this worker entry was
                         first created.

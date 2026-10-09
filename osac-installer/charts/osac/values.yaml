@@ -206,6 +206,8 @@ service:
     endpoint: "https://openbao.osac-infra.svc.cluster.local:8200"
     namespace: osac
     kvMountPath: secret
+    # Transit engine mount path within ordinary tenant namespaces.
+    transitMountPath: transit
     lifecycleRole: ""
     lifecycleMountPath: "jwt"
     keycloakClientId: ""

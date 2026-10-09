@@ -6,7 +6,11 @@ package baremetalworker
 import (
 	"context"
 	"errors"
-	"testing"
+	"fmt"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -38,140 +42,107 @@ func (f *capacityMutationClient) CreateBareMetalInstance(ctx context.Context, bm
 	}
 	return created, err
 }
-func mutateCapacityOrder(t *testing.T, r *Reconciler, co *v1alpha1.ClusterOrder, mutate func(*v1alpha1.ClusterOrder)) {
-	t.Helper()
+func mutateCapacityOrder(r *Reconciler, co *v1alpha1.ClusterOrder, mutate func(*v1alpha1.ClusterOrder)) {
+	GinkgoHelper()
 	latest := &v1alpha1.ClusterOrder{}
 	ctx := context.Background()
-	if err := r.apiReader.Get(ctx, client.ObjectKeyFromObject(co), latest); err != nil {
-		t.Fatal(err)
-	}
+	Expect(r.apiReader.Get(ctx, client.ObjectKeyFromObject(co), latest)).To(Succeed())
 	mutate(latest)
 	desiredStatus := latest.Status
-	if err := r.Update(ctx, latest); err != nil {
-		t.Fatal(err)
-	}
+	Expect(r.Update(ctx, latest)).To(Succeed())
 	latest.Status = desiredStatus
-	if err := r.Status().Update(ctx, latest); err != nil {
-		t.Fatal(err)
-	}
+	Expect(r.Status().Update(ctx, latest)).To(Succeed())
 }
-func TestR09ClockSurvivesLostAcknowledgement(t *testing.T) {
-	r, fc, co := nodeSetHarness(t, "r09-lost-ack", nodeRequest("standard", 1))
+
+var _ = It("preserves the attempt clock after a lost Create acknowledgement", func() {
+	r, fc, co := nodeSetHarness("r09-lost-ack", nodeRequest("standard", 1))
 	fc.failCreate = true
-	if _, err := runWorkerCapacityStage(t, r, co); err != nil {
-		t.Fatal(err)
+	if _, err := runWorkerCapacityStage(r, co); err != nil {
+		Expect(err).NotTo(HaveOccurred())
 	}
-	if err := r.apiReader.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
-		t.Fatal(err)
-	}
-	if len(co.Status.Workers) != 1 {
-		t.Fatalf("workers=%+v", co.Status.Workers)
-	}
+	Expect(r.apiReader.Get(context.Background(), client.ObjectKeyFromObject(co), co)).To(Succeed())
+	Expect(co.Status.Workers).To(HaveLen(1), "workers=%+v", co.Status.Workers)
 	origin := co.Status.Workers[0].AttemptStartedAt
-	if origin == nil {
-		t.Fatal("attempt origin was not persisted before the first Create")
-	}
+	Expect(origin).ToNot(BeNil(), "attempt origin was not persisted before the first Create")
 	// A lost Create acknowledgement retries the same reservation and must not
 	// move the durable attempt origin.
 	for range 2 {
-		if _, err := runWorkerCapacityStage(t, r, co); err == nil {
-			t.Fatal("expected interrupted create")
+		if _, err := runWorkerCapacityStage(r, co); err == nil {
+			Fail("expected interrupted create")
 		}
-		if err := r.apiReader.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
-			t.Fatal(err)
-		}
+		Expect(r.apiReader.Get(context.Background(), client.ObjectKeyFromObject(co), co)).To(Succeed())
 		if got := co.Status.Workers[0].AttemptStartedAt; got == nil || !got.Equal(origin) {
-			t.Fatalf("lost acknowledgement moved the attempt origin: %+v want %+v", got, origin)
+			Fail(fmt.Sprintf("lost acknowledgement moved the attempt origin: %+v want %+v", got, origin))
 		}
 	}
-}
+})
 
-func TestR01ReservationReturnsBeforeCreate(t *testing.T) {
-	r, fc, co := nodeSetHarness(t, "r01-reserve", nodeRequest("standard", 2))
-	res, err := runWorkerCapacityStage(t, r, co)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := r.apiReader.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
-		t.Fatal(err)
-	}
-	if len(co.Status.Workers) != 2 || len(fc.names) != 0 || res.IsZero() {
-		t.Fatalf("reservation boundary: workers=%+v creates=%v result=%+v", co.Status.Workers, fc.names, res)
-	}
+var _ = It("returns after persisting reservations before issuing Create", func() {
+	r, fc, co := nodeSetHarness("r01-reserve", nodeRequest("standard", 2))
+	res, err := runWorkerCapacityStage(r, co)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(r.apiReader.Get(context.Background(), client.ObjectKeyFromObject(co), co)).To(Succeed())
+	Expect(co.Status.Workers).To(HaveLen(2), "reservation boundary: workers=%+v creates=%v result=%+v", co.Status.Workers, fc.names, res)
+	Expect(fc.names).To(BeEmpty(), "reservation boundary: workers=%+v creates=%v result=%+v", co.Status.Workers, fc.names, res)
+	Expect(res.IsZero()).To(BeFalse(), "reservation boundary: workers=%+v creates=%v result=%+v", co.Status.Workers, fc.names, res)
 	for _, w := range co.Status.Workers {
-		if w.BareMetalInstance.Name == "" || w.BareMetalInstance.ID != "" {
-			t.Fatalf("invalid reservation: %+v", w)
-		}
+		Expect(w.BareMetalInstance.Name).NotTo(Equal(""), "invalid reservation: %+v", w)
+		Expect(w.BareMetalInstance.ID).To(Equal(""), "invalid reservation: %+v", w)
 	}
-}
+})
 
-func TestR01SingleCreateBoundary(t *testing.T) {
-	r, fc, co := nodeSetHarness(t, "r01-create", nodeRequest("standard", 2))
+var _ = It("issues at most one Create per invocation", func() {
+	r, fc, co := nodeSetHarness("r01-create", nodeRequest("standard", 2))
 	if _, err := r.reserveWorkerSlots(context.Background(), co); err != nil {
-		t.Fatal(err)
+		Expect(err).NotTo(HaveOccurred())
 	}
 	// Capacity consumes the same durable snapshot the observation was built from.
-	if err := r.apiReader.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
-		t.Fatal(err)
-	}
-	res, err := runWorkerCapacityStage(t, r, co)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := r.apiReader.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
-		t.Fatal(err)
-	}
-	if len(fc.names) != 1 || res.IsZero() {
-		t.Fatalf("create boundary: creates=%v result=%+v", fc.names, res)
-	}
+	Expect(r.apiReader.Get(context.Background(), client.ObjectKeyFromObject(co), co)).To(Succeed())
+	res, err := runWorkerCapacityStage(r, co)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(r.apiReader.Get(context.Background(), client.ObjectKeyFromObject(co), co)).To(Succeed())
+	Expect(fc.names).To(HaveLen(1), "create boundary: creates=%v result=%+v", fc.names, res)
+	Expect(res.IsZero()).To(BeFalse(), "create boundary: creates=%v result=%+v", fc.names, res)
 	if w := workerByName(co.Status.Workers, fc.names[0]); w == nil || w.BareMetalInstance.ID == "" {
-		t.Fatalf("successful create identity not persisted: %+v", co.Status.Workers)
+		Fail(fmt.Sprintf("successful create identity not persisted: %+v", co.Status.Workers))
 	}
-}
+})
 
-func TestR01StaleCachedOrderIsRejectedInsteadOfDuplicating(t *testing.T) {
-	r, fc, co := nodeSetHarness(t, "r01-stale", nodeRequest("standard", 2))
+var _ = It("rejects a stale cached order instead of creating duplicate workers", func() {
+	r, fc, co := nodeSetHarness("r01-stale", nodeRequest("standard", 2))
 	stale := co.DeepCopy()
 	if _, err := r.reserveWorkerSlots(context.Background(), co); err != nil {
-		t.Fatal(err)
+		Expect(err).NotTo(HaveOccurred())
 	}
-	if err := r.apiReader.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
-		t.Fatal(err)
-	}
+	Expect(r.apiReader.Get(context.Background(), client.ObjectKeyFromObject(co), co)).To(Succeed())
 	names := []string{co.Status.Workers[0].Name, co.Status.Workers[1].Name}
 	// A caller whose snapshot predates the reservation must return to a fresh
 	// invocation rather than refreshing and duplicating allocation.
-	if _, err := runWorkerCapacityStage(t, r, stale); !errors.Is(err, errWorkerObservationChanged) {
-		t.Fatalf("error=%v, want stale-observation rejection", err)
+	if _, err := runWorkerCapacityStage(r, stale); !errors.Is(err, errWorkerObservationChanged) {
+		Fail(fmt.Sprintf("error=%v, want stale-observation rejection", err))
 	}
-	if len(fc.names) != 0 {
-		t.Fatalf("stale snapshot created BMIs: %v", fc.names)
-	}
-	if err := r.apiReader.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
-		t.Fatal(err)
-	}
-	if len(co.Status.Workers) != 2 || co.Status.Workers[0].Name != names[0] || co.Status.Workers[1].Name != names[1] || len(fc.bmis) != 0 {
-		t.Fatalf("stale snapshot changed reservations or duplicated allocation: %+v", co.Status.Workers)
-	}
-}
+	Expect(fc.names).To(BeEmpty(), "stale snapshot created BMIs: %v", fc.names)
+	Expect(r.apiReader.Get(context.Background(), client.ObjectKeyFromObject(co), co)).To(Succeed())
+	Expect(co.Status.Workers).To(HaveLen(2), "stale snapshot changed reservations or duplicated allocation: %+v", co.Status.Workers)
+	Expect(co.Status.Workers[0].Name).To(Equal(names[0]), "stale snapshot changed reservations or duplicated allocation: %+v", co.Status.Workers)
+	Expect(co.Status.Workers[1].Name).To(Equal(names[1]), "stale snapshot changed reservations or duplicated allocation: %+v", co.Status.Workers)
+	Expect(fc.bmis).To(BeEmpty(), "stale snapshot changed reservations or duplicated allocation: %+v", co.Status.Workers)
+})
 
-func TestR01NoOpCapacityDoesNotRequeueForRetentionOrdering(t *testing.T) {
-	r, _, co := nodeSetHarness(t, "r01-noop", nodeRequest("standard", 2))
+var _ = It("does not requeue unchanged capacity for retention ordering", func() {
+	r, _, co := nodeSetHarness("r01-noop", nodeRequest("standard", 2))
 	co.Status.Workers = []v1alpha1.WorkerStatus{
 		newWorkerStatus("standard", "standard", "pending", "pending-id", workerPhaseWaitingForAgent),
 		newWorkerStatus("standard", "standard", "ready", "ready-id", workerPhaseReady),
 	}
-	if err := r.Status().Update(context.Background(), co); err != nil {
-		t.Fatal(err)
-	}
-	res, err := runWorkerCapacityStage(t, r, co)
-	if err != nil || !res.IsZero() {
-		t.Fatalf("unchanged capacity requeued solely for sorted plan: result=%+v err=%v", res, err)
-	}
-}
+	Expect(r.Status().Update(context.Background(), co)).To(Succeed())
+	res, err := runWorkerCapacityStage(r, co)
+	Expect(err).NotTo(HaveOccurred(), "unchanged capacity requeued solely for sorted plan: result=%+v err=%v", res, err)
+	Expect(res.IsZero()).To(BeTrue(), "unchanged capacity requeued solely for sorted plan: result=%+v err=%v", res, err)
+})
 
-func TestR01WaitingRetryDoesNotBlockAnotherReservation(t *testing.T) {
-	r, fc, co := nodeSetHarness(t, "r01-retry", nodeRequest("standard", 2))
+var _ = It("reserves another worker while an existing retry waits", func() {
+	r, fc, co := nodeSetHarness("r01-retry", nodeRequest("standard", 2))
 	future := metav1.NewTime(time.Now().Add(time.Hour))
 	co.Status.Workers = []v1alpha1.WorkerStatus{
 		newWorkerStatus("standard", "standard", "waiting", "", workerPhaseFailed),
@@ -180,14 +151,13 @@ func TestR01WaitingRetryDoesNotBlockAnotherReservation(t *testing.T) {
 	co.Status.Workers[0].NextRetryTime = &future
 	past := metav1.NewTime(time.Now().Add(-time.Minute))
 	co.Status.Workers[1].NextRetryTime = &past // Persisted cleanup-complete retry checkpoint.
-	if err := r.Status().Update(context.Background(), co); err != nil {
-		t.Fatal(err)
-	}
-	res, err := runWorkerCapacityStage(t, r, co)
-	if err != nil || res.IsZero() || len(fc.names) != 1 || fc.names[0] != "actionable" {
-		t.Fatalf("waiting slot blocked progress: result=%+v err=%v creates=%v", res, err, fc.names)
-	}
-}
+	Expect(r.Status().Update(context.Background(), co)).To(Succeed())
+	res, err := runWorkerCapacityStage(r, co)
+	Expect(err).NotTo(HaveOccurred(), "waiting slot blocked progress: result=%+v err=%v creates=%v", res, err, fc.names)
+	Expect(res.IsZero()).To(BeFalse(), "waiting slot blocked progress: result=%+v err=%v creates=%v", res, err, fc.names)
+	Expect(fc.names).To(HaveLen(1), "waiting slot blocked progress: result=%+v err=%v creates=%v", res, err, fc.names)
+	Expect(fc.names[0]).To(Equal("actionable"), "waiting slot blocked progress: result=%+v err=%v creates=%v", res, err, fc.names)
+})
 
 type capacityRetryClient struct {
 	*workerReadClient
@@ -200,60 +170,54 @@ func (f *capacityRetryClient) DeleteBareMetalInstance(_ context.Context, id stri
 	return f.deleteErr
 }
 
-func TestR01FailedCapacityReturnsAfterOneRetryDelete(t *testing.T) {
+var _ = Describe("Failed-worker capacity cleanup stops after one retry Delete", func() {
 	for _, tc := range []struct {
 		name string
 		err  error
 	}{{"success", nil}, {"error", errors.New("provider deletion pending")}} {
-		t.Run(tc.name, func(t *testing.T) {
+		It(tc.name, func() {
 			deleteErr := tc.err
-			r, base, co := workerReadHarness(t)
+			r, base, co := workerReadHarness()
 			fc := &capacityRetryClient{workerReadClient: base, deleteErr: deleteErr}
 			r.fulfillment = fc
 			co.Spec.NodeRequests[0].NumberOfNodes = 2
-			if err := r.Update(context.Background(), co); err != nil {
-				t.Fatal(err)
-			}
+			Expect(r.Update(context.Background(), co)).To(Succeed())
 			co.Status.Workers[0].Phase = workerPhaseFailed
 			co.Status.Workers = append(co.Status.Workers, newWorkerStatus("standard", "standard", "second", "second-id", workerPhaseFailed))
-			if err := r.Status().Update(context.Background(), co); err != nil {
-				t.Fatal(err)
-			}
+			Expect(r.Status().Update(context.Background(), co)).To(Succeed())
 			fc.bmis = []*privatev1.BareMetalInstance{ownedBMIFixture(co, "recorded-bmi", "recorded-id"), ownedBMIFixture(co, "second", "second-id")}
-			res, err := runWorkerCapacityStage(t, r, co)
-			if !errors.Is(err, deleteErr) || !res.IsZero() || len(fc.deletes) != 1 || len(fc.names) != 0 {
-				t.Fatalf("retry-delete boundary: result=%+v err=%v deletes=%v creates=%v", res, err, fc.deletes, fc.names)
-			}
+			res, err := runWorkerCapacityStage(r, co)
+			Expect(errors.Is(err, deleteErr)).To(BeTrue(), "retry-delete boundary: result=%+v err=%v deletes=%v creates=%v", res, err, fc.deletes, fc.names)
+			Expect(res.IsZero()).To(BeTrue(), "retry-delete boundary: result=%+v err=%v deletes=%v creates=%v", res, err, fc.deletes, fc.names)
+			Expect(fc.deletes).To(HaveLen(1), "retry-delete boundary: result=%+v err=%v deletes=%v creates=%v", res, err, fc.deletes, fc.names)
+			Expect(fc.names).To(BeEmpty(), "retry-delete boundary: result=%+v err=%v deletes=%v creates=%v", res, err, fc.deletes, fc.names)
 			if deleteErr == nil {
 				// A pending provider cleanup is a bounded recheck, not a global gate.
 				if deadline := r.workerRecheckDeadline(co.Status.Workers, time.Now()); deadline.RequeueAfter <= 0 {
-					t.Fatalf("pending cleanup did not schedule a recheck: %+v", deadline)
+					Fail(fmt.Sprintf("pending cleanup did not schedule a recheck: %+v", deadline))
 				}
 			}
-			if err := r.apiReader.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
-				t.Fatal(err)
-			}
+			Expect(r.apiReader.Get(context.Background(), client.ObjectKeyFromObject(co), co)).To(Succeed())
 			// Accepted deletion is not completed deletion, including the default
 			// immediate-delete fixture. Completion requires another fresh Get.
 			wantID := "recorded-id"
-			if co.Status.Workers[0].BareMetalInstance.ID != wantID || co.Status.Workers[1].BareMetalInstance.ID != "second-id" {
-				t.Fatalf("retry changed wrong slots: %+v", co.Status.Workers)
-			}
+			Expect(co.Status.Workers[0].BareMetalInstance.ID).To(Equal(wantID), "retry changed wrong slots: %+v", co.Status.Workers)
+			Expect(co.Status.Workers[1].BareMetalInstance.ID).To(Equal("second-id"), "retry changed wrong slots: %+v", co.Status.Workers)
 		})
 	}
-}
+})
 
-func TestCapacityActionRejectsChangedSpecOrSlot(t *testing.T) {
+var _ = Describe("Capacity actions reject concurrent spec or slot changes", func() {
 	for _, mutation := range []string{"spec", "deletion", "reference", "failed", "appended", "tenant", "replacement"} {
-		t.Run(mutation, func(t *testing.T) {
-			r, fc, co := nodeSetHarness(t, "guard-capacity", nodeRequest("standard", 1))
+		It(mutation, func() {
+			r, fc, co := nodeSetHarness("guard-capacity", nodeRequest("standard", 1))
 			if _, err := r.reserveWorkerSlots(context.Background(), co); err != nil {
-				t.Fatal(err)
+				Expect(err).NotTo(HaveOccurred())
 			}
 			provider := &capacityMutationClient{nodeSetClient: fc}
 			r.fulfillment = provider
 			provider.beforeType = func() {
-				mutateCapacityOrder(t, r, co, func(latest *v1alpha1.ClusterOrder) {
+				mutateCapacityOrder(r, co, func(latest *v1alpha1.ClusterOrder) {
 					switch mutation {
 					case "spec":
 						latest.Spec.NodeRequests[0].NumberOfNodes = 0
@@ -276,92 +240,68 @@ func TestCapacityActionRejectsChangedSpecOrSlot(t *testing.T) {
 				})
 				if mutation == "deletion" {
 					latest := &v1alpha1.ClusterOrder{}
-					if err := r.Get(context.Background(), client.ObjectKeyFromObject(co), latest); err != nil {
-						t.Fatal(err)
-					}
-					if err := r.Delete(context.Background(), latest); err != nil {
-						t.Fatal(err)
-					}
+					Expect(r.Get(context.Background(), client.ObjectKeyFromObject(co), latest)).To(Succeed())
+					Expect(r.Delete(context.Background(), latest)).To(Succeed())
 				}
 			}
-			res, err := runWorkerCapacityStage(t, r, co)
-			if err == nil && res.IsZero() {
-				t.Fatal("capacity action accepted stale plan")
-			}
-			if len(fc.names) != 0 {
-				t.Fatalf("created from stale plan: %v", fc.names)
-			}
+			res, err := runWorkerCapacityStage(r, co)
+			Expect(err == nil && res.IsZero()).To(BeFalse(), "capacity action accepted stale plan")
+			Expect(fc.names).To(BeEmpty(), "created from stale plan: %v", fc.names)
 		})
 	}
-}
-func TestCreatePersistencePreservesAppendedSlotAndStopsNextAction(t *testing.T) {
-	r, fc, co := nodeSetHarness(t, "append-after-create", nodeRequest("standard", 2))
+})
+var _ = It("preserves an appended slot while persisting Create and stops the next action", func() {
+	r, fc, co := nodeSetHarness("append-after-create", nodeRequest("standard", 2))
 	if _, err := r.reserveWorkerSlots(context.Background(), co); err != nil {
-		t.Fatal(err)
+		Expect(err).NotTo(HaveOccurred())
 	}
-	if err := r.apiReader.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
-		t.Fatal(err)
-	}
+	Expect(r.apiReader.Get(context.Background(), client.ObjectKeyFromObject(co), co)).To(Succeed())
 	provider := &capacityMutationClient{nodeSetClient: fc}
 	r.fulfillment = provider
 	provider.afterCreate = func() {
-		mutateCapacityOrder(t, r, co, func(latest *v1alpha1.ClusterOrder) {
+		mutateCapacityOrder(r, co, func(latest *v1alpha1.ClusterOrder) {
 			latest.Status.Workers = append(latest.Status.Workers, newWorkerStatus("standard", "standard", "appended", "appended-id", workerPhaseReady))
 		})
 	}
-	res, err := runWorkerCapacityStage(t, r, co)
-	if !apierrors.IsConflict(err) || !res.IsZero() {
-		t.Fatalf("result=%+v err=%v, want one-shot conflict", res, err)
-	}
-	if len(fc.names) != 1 {
-		t.Fatalf("creates=%v, want only first action", fc.names)
-	}
-	if err := r.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
-		t.Fatal(err)
-	}
-	if len(co.Status.Workers) != 3 {
-		t.Fatalf("lost appended slot: %+v", co.Status.Workers)
-	}
+	res, err := runWorkerCapacityStage(r, co)
+	Expect(apierrors.IsConflict(err)).To(BeTrue(), "result=%+v err=%v, want one-shot conflict", res, err)
+	Expect(res.IsZero()).To(BeTrue(), "result=%+v err=%v, want one-shot conflict", res, err)
+	Expect(fc.names).To(HaveLen(1), "creates=%v, want only first action", fc.names)
+	Expect(r.Get(context.Background(), client.ObjectKeyFromObject(co), co)).To(Succeed())
+	Expect(co.Status.Workers).To(HaveLen(3), "lost appended slot: %+v", co.Status.Workers)
 	w := workerByName(co.Status.Workers, fc.names[0])
-	if w == nil || w.BareMetalInstance.Name != fc.names[0] || w.BareMetalInstance.ID != "" {
-		t.Fatalf("lost reserved create identity: %+v", w)
-	}
-}
-func TestReservationRejectsReplacementOrder(t *testing.T) {
-	r, _, co := nodeSetHarness(t, "replacement-order", nodeRequest("standard", 1))
+	Expect(w).NotTo(BeNil(), "lost reserved create identity: %+v", w)
+	Expect(w.BareMetalInstance.Name).To(Equal(fc.names[0]), "lost reserved create identity: %+v", w)
+	Expect(w.BareMetalInstance.ID).To(Equal(""), "lost reserved create identity: %+v", w)
+})
+var _ = It("rejects reservations for a replacement ClusterOrder", func() {
+	r, _, co := nodeSetHarness("replacement-order", nodeRequest("standard", 1))
 	stale := co.DeepCopy()
 	stale.UID = "old-uid"
 	if _, err := r.reserveWorkerSlots(context.Background(), stale); !errors.Is(err, errWorkerObservationChanged) {
-		t.Fatalf("error=%v, want identity guard", err)
+		Fail(fmt.Sprintf("error=%v, want identity guard", err))
 	}
-	if err := r.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
-		t.Fatal(err)
-	}
-	if len(co.Status.Workers) != 0 {
-		t.Fatal("reserved capacity on replacement order")
-	}
-}
-func TestConcurrentForeignReferenceStopsCapacity(t *testing.T) {
-	r, fc, co := workerReadHarness(t)
+	Expect(r.Get(context.Background(), client.ObjectKeyFromObject(co), co)).To(Succeed())
+	Expect(co.Status.Workers).To(BeEmpty(), "reserved capacity on replacement order")
+})
+var _ = It("stops capacity actions after a foreign reference is added concurrently", func() {
+	r, fc, co := workerReadHarness()
 	initial := co.DeepCopy()
 	fc.listed = []*privatev1.BareMetalInstance{ownedBMIFixture(co, "recorded-bmi", "recorded-id")}
 	observed, res, err := r.observeWorkerResources(context.Background(), co)
-	if err != nil || !res.IsZero() {
-		t.Fatalf("observe=%+v %v", res, err)
-	}
+	Expect(err).NotTo(HaveOccurred(), "observe=%+v %v", res, err)
+	Expect(res.IsZero()).To(BeTrue(), "observe=%+v %v", res, err)
 	if _, err := r.observeExistingWorkers(context.Background(), co, "tenant", observed); err != nil {
-		t.Fatal(err)
+		Expect(err).NotTo(HaveOccurred())
 	}
 	foreign := ownedBMIFixture(co, "foreign-bmi", "foreign-id")
 	foreign.GetMetadata().SetTenant("foreign")
 	fc.bmis = append(fc.bmis, foreign)
-	mutateCapacityOrder(t, r, co, func(latest *v1alpha1.ClusterOrder) {
+	mutateCapacityOrder(r, co, func(latest *v1alpha1.ClusterOrder) {
 		latest.Status.Workers = append(latest.Status.Workers, v1alpha1.WorkerStatus{Name: "foreign", Kind: workerKindBMI, NodeSet: "standard", Phase: workerPhaseReady, BareMetalInstance: v1alpha1.BareMetalInstanceReference{Name: "foreign-bmi", ID: "foreign-id"}, CreationTimestamp: metav1.Now()})
 	})
 	if _, err := r.reconcileDueWorkerCreation(context.Background(), initial, "tenant", workerCreationInputs{}, observed); err == nil {
-		t.Fatal("unverified refreshed reference permitted capacity actions")
+		Fail("unverified refreshed reference permitted capacity actions")
 	}
-	if len(fc.names) != 0 {
-		t.Fatal("provisioned after foreign reference refresh")
-	}
-}
+	Expect(fc.names).To(BeEmpty(), "provisioned after foreign reference refresh")
+})

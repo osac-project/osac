@@ -428,10 +428,7 @@ func (s *PrivateExternalIPAttachmentsServer) validateExternalIPReference(
 			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"ExternalIP '%s' does not exist", externalIPID)
 		}
-		s.logger.ErrorContext(ctx, "Failed to query ExternalIP",
-			slog.String("external_ip_id", externalIPID),
-			slog.Any("error", err))
-		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to validate external_ip")
+		return nil, ConvertDAOErrorToGRPC(err, "get", externalIPID)
 	}
 
 	externalIP := getResponse.GetObject()
@@ -473,10 +470,7 @@ func (s *PrivateExternalIPAttachmentsServer) validateComputeInstanceReference(
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"ComputeInstance '%s' does not exist", key)
 		}
-		s.logger.ErrorContext(ctx, "Failed to query ComputeInstance",
-			slog.String("compute_instance_id", key),
-			slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate compute_instance")
+		return ConvertDAOErrorToGRPC(err, "get", key)
 	}
 	return nil
 }
@@ -494,10 +488,7 @@ func (s *PrivateExternalIPAttachmentsServer) validateClusterReference(
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"Cluster '%s' does not exist", key)
 		}
-		s.logger.ErrorContext(ctx, "Failed to query Cluster",
-			slog.String("cluster_id", key),
-			slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate cluster")
+		return ConvertDAOErrorToGRPC(err, "get", key)
 	}
 	return nil
 }
@@ -515,10 +506,7 @@ func (s *PrivateExternalIPAttachmentsServer) validateBareMetalInstanceReference(
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"BareMetalInstance '%s' does not exist", key)
 		}
-		s.logger.ErrorContext(ctx, "Failed to query BareMetalInstance",
-			slog.String("baremetal_instance_id", key),
-			slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate baremetal_instance")
+		return ConvertDAOErrorToGRPC(err, "get", key)
 	}
 	return nil
 }
@@ -545,10 +533,7 @@ func (s *PrivateExternalIPAttachmentsServer) validateUniqueness(
 		SetLimit(1).
 		Do(ctx)
 	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to list attachments for uniqueness check",
-			slog.String("external_ip_id", externalIPID),
-			slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate uniqueness")
+		return ConvertDAOErrorToGRPC(err, "list", externalIPID)
 	}
 	if eipResp.GetTotal() > 0 {
 		return grpcstatus.Errorf(grpccodes.AlreadyExists,

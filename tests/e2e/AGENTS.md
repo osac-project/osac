@@ -29,7 +29,11 @@ share natural teardown assertions without the legacy helper's forced cleanup.
 The two-node-set scenario verifies ready worker aggregates, installed Agents,
 and per-NodeSet NodePool isolation before deleting; it uses the same
 source-pinned environment prerequisites as the focused lifecycle. Run it with
-`uv run pytest -n 0 tests/e2e/caas/sanity/test_cluster_create.py::test_cluster_create_with_two_node_sets`.
+`uv run pytest -n 0 tests/e2e/caas/regression/test_cluster_node_sets.py::test_cluster_create_with_two_node_sets`.
+CaaS sanity contains only the single-nodepool lifecycle and the fast deletion
+feedback test. Two-node-set isolation and explicit/invalid version cases belong
+in CaaS regression; version cases are consolidated in
+`regression/test_cluster_version.py` rather than duplicated in sanity.
 Other CaaS scenarios still using `wait_for_cluster_deletion` do not establish
 that boundary. Both scenarios verify tenant/owner annotations on their worker
 BMIs and wait for all verified workers to disappear (480 attempts at five-second

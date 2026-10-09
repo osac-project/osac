@@ -5,6 +5,7 @@ import subprocess
 
 import pytest
 
+from tests.e2e.caas.sanity.test_cluster_create import RHCOS_IMAGE, TEST_RELEASE_IMAGE
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
     unique_name,
@@ -16,13 +17,9 @@ from tests.e2e.core.helpers import (
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
-from tests.e2e.core.runner import env, poll_until
+from tests.e2e.core.runner import poll_until
 
 pytestmark = pytest.mark.regression
-
-# Fixed so repeated runs reuse the same ClusterVersion on the shared cluster.
-TEST_RELEASE_IMAGE = "quay.io/openshift-release-dev/ocp-release:4.20.0-multi"
-RHCOS_IMAGE = env("OSAC_RHCOS_BMI_IMAGE", "oci://quay.io/rh_ee_rpiccoli/rhcos-bmi:4.22.0")
 
 
 def test_cluster_create_with_version(
@@ -114,7 +111,9 @@ def test_cluster_create_rejected_for_invalid_version(
                     "spec": {
                         "template": {"name": cluster_template, "shared": True},
                         "version": {"name": version_name, "shared": True},
-                        "nodeSets": {"workers": {"size": 1, "baremetalInstanceType": {"name": "ci-worker-bm"}}},
+                        "nodeSets": {
+                            "workers": {"size": 1, "baremetalInstanceType": {"name": "ci-worker-bm", "shared": True}}
+                        },
                     },
                 }
             },

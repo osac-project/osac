@@ -5,8 +5,11 @@ package baremetalworker
 
 import (
 	"context"
-	"reflect"
-	"testing"
+	"fmt"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -27,8 +30,8 @@ type absentProjectionClient struct{ FulfillmentClient }
 func (absentProjectionClient) GetBareMetalInstance(context.Context, string) (*privatev1.BareMetalInstance, error) {
 	return nil, status.Error(codes.NotFound, "confirmed missing")
 }
-func observeWorkerFixture(t *testing.T, workers []v1alpha1.WorkerStatus, agents *unstructured.UnstructuredList, exists func(string) bool) ([]v1alpha1.WorkerStatus, []string) {
-	t.Helper()
+func observeWorkerFixture(workers []v1alpha1.WorkerStatus, agents *unstructured.UnstructuredList, exists func(string) bool) ([]v1alpha1.WorkerStatus, []string) {
+	GinkgoHelper()
 	// Match the Agent fixture (namespace osac, cluster-order label "order").
 	co := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: "order", Namespace: "osac"}, Status: v1alpha1.ClusterOrderStatus{Workers: append([]v1alpha1.WorkerStatus(nil), workers...)}}
 	var bmis []*privatev1.BareMetalInstance
@@ -41,9 +44,7 @@ func observeWorkerFixture(t *testing.T, workers []v1alpha1.WorkerStatus, agents 
 	observed.agents = agents
 	r := &Reconciler{fulfillment: absentProjectionClient{}, recorder: events.NewFakeRecorder(10)}
 	workers, err := r.observeExistingWorkers(context.Background(), co, "tenant", observed)
-	if err != nil {
-		t.Fatal(err)
-	}
+	Expect(err).NotTo(HaveOccurred())
 	var removed []string
 	for _, before := range co.Status.Workers {
 		if workerByName(workers, before.Name) == nil {
@@ -52,7 +53,8 @@ func observeWorkerFixture(t *testing.T, workers []v1alpha1.WorkerStatus, agents 
 	}
 	return workers, removed
 }
-func TestEstablishedLabelPrecedesMACFallback(t *testing.T) {
+
+var _ = It("prefers an established worker label over MAC fallback", func() {
 	co := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: "order", Namespace: "osac"}}
 	worker := newWorkerStatus("standard", "standard", "worker", "bmi-0", workerPhaseWaitingForAgent)
 	resolver := func(context.Context, string) []string { return []string{"aa"} }
@@ -64,9 +66,8 @@ func TestEstablishedLabelPrecedesMACFallback(t *testing.T) {
 		map[string]interface{}{"macAddress": "ff"},
 	}, "status", "inventory", "interfaces")
 	association := associateEstablishedAgent([]unstructured.Unstructured{*labeled}, co, "worker")
-	if association.state != agentEstablished || association.agent.GetUID() != "uid-labeled" {
-		t.Fatalf("established label not preferred: %+v", association)
-	}
+	Expect(association.state).To(Equal(agentEstablished), "established label not preferred: %+v", association)
+	Expect(string(association.agent.GetUID())).To(Equal("uid-labeled"), "established label not preferred: %+v", association)
 
 	// An unbound Agent is not an established binding; MAC correlation is only
 	// initial-discovery evidence and must never override another worker's label.
@@ -76,7 +77,7 @@ func TestEstablishedLabelPrecedesMACFallback(t *testing.T) {
 		map[string]interface{}{"macAddress": "aa"},
 	}, "status", "inventory", "interfaces")
 	if association := associateEstablishedAgent([]unstructured.Unstructured{*unbound}, co, "worker"); association.state != agentAbsent {
-		t.Fatalf("MAC fallback authorized an established binding: %+v", association)
+		Fail(fmt.Sprintf("MAC fallback authorized an established binding: %+v", association))
 	}
 	other := agentPhaseFixture("other-worker", false)
 	other.SetUID("uid-other")
@@ -85,16 +86,16 @@ func TestEstablishedLabelPrecedesMACFallback(t *testing.T) {
 	}, "status", "inventory", "interfaces")
 	associations := matchUnboundAgents(context.Background(), co, []unstructured.Unstructured{*other}, []v1alpha1.WorkerStatus{worker}, resolver)
 	if association, ok := associations["worker"]; ok {
-		t.Fatalf("used another worker's Agent as a MAC fallback: %+v", association)
+		Fail(fmt.Sprintf("used another worker's Agent as a MAC fallback: %+v", association))
 	}
-}
-func TestWorkerPhaseMapping(t *testing.T) {
+})
+var _ = Describe("worker phase mapping", func() {
 	for _, tt := range []struct {
 		name, label, condition string
 		installed              bool
 		want                   string
 	}{{"nil", "", "", false, workerPhaseWaitingForAgent}, {"bound debug installed", "worker", "", true, workerPhaseReady}, {"bound condition installed", "worker", "True", false, workerPhaseReady}, {"bound installing", "worker", "", false, workerPhaseBinding}, {"False overrides debug", "worker", "False", true, workerPhaseBinding}, {"Unknown overrides debug", "worker", "Unknown", true, workerPhaseBinding}, {"unbound installed", "", "True", true, workerPhaseWaitingForAgent}} {
-		t.Run(tt.name, func(t *testing.T) {
+		It(tt.name, func() {
 			var a *unstructured.Unstructured
 			if tt.name != "nil" {
 				a = agentPhaseFixture(tt.label, tt.installed)
@@ -103,12 +104,12 @@ func TestWorkerPhaseMapping(t *testing.T) {
 				}
 			}
 			if got := deriveWorkerPhase(a, "worker"); got != tt.want {
-				t.Fatalf("phase=%s, want %s", got, tt.want)
+				Fail(fmt.Sprintf("phase=%s, want %s", got, tt.want))
 			}
 		})
 	}
-}
-func TestCombinedObservationMigratedPhaseAndHistoryCases(t *testing.T) {
+})
+var _ = Describe("Worker phase and history preservation", func() {
 	for _, tt := range []struct {
 		name, phase, condition    string
 		present, agent, installed bool
@@ -126,7 +127,7 @@ func TestCombinedObservationMigratedPhaseAndHistoryCases(t *testing.T) {
 		{"Failed protected", workerPhaseFailed, "True", true, true, true, workerPhaseFailed},
 		{"Ready clock preserved", workerPhaseReady, "True", true, true, true, workerPhaseReady},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		It(tt.name, func() {
 			stamp := metav1.NewTime(time.Unix(100, 0))
 			w := newWorkerStatus("standard", "standard", "worker", "id", tt.phase)
 			w.AttemptCount = 3
@@ -144,67 +145,57 @@ func TestCombinedObservationMigratedPhaseAndHistoryCases(t *testing.T) {
 				}
 				agents.Items = append(agents.Items, *a)
 			}
-			got, removed := observeWorkerFixture(t, []v1alpha1.WorkerStatus{w}, agents, func(string) bool { return tt.present })
+			got, removed := observeWorkerFixture([]v1alpha1.WorkerStatus{w}, agents, func(string) bool { return tt.present })
 			if tt.want == "" {
-				if len(got) != 0 || !reflect.DeepEqual(removed, []string{"worker"}) {
-					t.Fatalf("absence result=%v removed=%v", got, removed)
-				}
+				Expect(got).To(BeEmpty(), "absence result=%v removed=%v", got, removed)
+				Expect(removed).To(Equal([]string{"worker"}), "absence result=%v removed=%v", got, removed)
 				return
 			}
-			if len(got) != 1 || got[0].Phase != tt.want || len(removed) != 0 {
-				t.Fatalf("result=%v removed=%v", got, removed)
-			}
+			Expect(got).To(HaveLen(1), "result=%v removed=%v", got, removed)
+			Expect(got[0].Phase).To(Equal(tt.want), "result=%v removed=%v", got, removed)
+			Expect(removed).To(BeEmpty(), "result=%v removed=%v", got, removed)
 			got[0].Phase = w.Phase
-			// AttemptStartedAt is a separate attempt clock owned by R09 and covered by
-			// TestR09LegacyAttemptBackfill; normalize it so the identity/history and
+			// AttemptStartedAt is covered by the legacy attempt backfill spec;
+			// normalize it so the identity/history and
 			// ReadySince assertions below stay focused.
 			w.AttemptStartedAt = nil
 			got[0].AttemptStartedAt = nil
 			// ReadySince describes a continuous interval: it is cleared on any demotion
 			// and only compared when the observed phase is still Ready.
 			if tt.want != workerPhaseReady {
-				if got[0].ReadySince != nil {
-					t.Fatalf("demoted worker retained the healthy interval: %+v", got[0].ReadySince)
-				}
+				Expect(got[0].ReadySince).To(BeNil(), "demoted worker retained the healthy interval: %+v", got[0].ReadySince)
 				w.ReadySince = nil
 			} else if w.ReadySince == nil {
 				got[0].ReadySince = nil
 			}
-			if !reflect.DeepEqual(got[0], w) {
-				t.Fatalf("lost identity/history/clock: %+v", got[0])
-			}
+			Expect(got[0]).To(Equal(w), "lost identity/history/clock: %+v", got[0])
 		})
 	}
-}
+})
 
-// TestR09ContinuousHealthyInterval proves a Ready demotion clears ReadySince, so
+// A Ready demotion clears ReadySince, so
 // disjoint healthy intervals cannot accumulate into the healthy-reset threshold.
-func TestR09ContinuousHealthyInterval(t *testing.T) {
+var _ = It("starts a new continuous healthy interval after a Ready demotion", func() {
 	stale := metav1.NewTime(time.Now().Add(-2 * time.Hour).Truncate(time.Second))
 	ready := newWorkerStatus("standard", "standard", "worker", "id", workerPhaseReady)
 	ready.ReadySince = &stale
-	got, _ := observeWorkerFixture(t, []v1alpha1.WorkerStatus{ready}, &unstructured.UnstructuredList{}, func(string) bool { return true })
-	if len(got) != 1 || got[0].Phase != workerPhaseWaitingForAgent {
-		t.Fatalf("expected a Ready demotion: %+v", got)
-	}
-	if got[0].ReadySince != nil {
-		t.Fatalf("demotion retained the previous healthy interval: %+v", got[0].ReadySince)
-	}
+	got, _ := observeWorkerFixture([]v1alpha1.WorkerStatus{ready}, &unstructured.UnstructuredList{}, func(string) bool { return true })
+	Expect(got).To(HaveLen(1), "expected a Ready demotion: %+v", got)
+	Expect(got[0].Phase).To(Equal(workerPhaseWaitingForAgent), "expected a Ready demotion: %+v", got)
+	Expect(got[0].ReadySince).To(BeNil(), "demotion retained the previous healthy interval: %+v", got[0].ReadySince)
 	// Re-entering Ready starts a new interval instead of inheriting the stale one.
 	agents := &unstructured.UnstructuredList{Items: []unstructured.Unstructured{*agentPhaseFixture("worker", true)}}
-	got, _ = observeWorkerFixture(t, []v1alpha1.WorkerStatus{got[0]}, agents, func(string) bool { return true })
-	if len(got) != 1 || got[0].Phase != workerPhaseReady || got[0].ReadySince == nil {
-		t.Fatalf("re-entry did not start a fresh healthy interval: %+v", got)
-	}
-	if !got[0].ReadySince.Time.After(stale.Time) {
-		t.Fatalf("re-entry reused a disconnected interval: %+v", got[0].ReadySince)
-	}
-}
+	got, _ = observeWorkerFixture([]v1alpha1.WorkerStatus{got[0]}, agents, func(string) bool { return true })
+	Expect(got).To(HaveLen(1), "re-entry did not start a fresh healthy interval: %+v", got)
+	Expect(got[0].Phase).To(Equal(workerPhaseReady), "re-entry did not start a fresh healthy interval: %+v", got)
+	Expect(got[0].ReadySince).NotTo(BeNil(), "re-entry did not start a fresh healthy interval: %+v", got)
+	Expect(got[0].ReadySince.Time.After(stale.Time)).To(BeTrue(), "re-entry reused a disconnected interval: %+v", got[0].ReadySince)
+})
 
-// TestR09LegacyAttemptBackfill proves the one-time legacy migration: a pre-existing
+// Legacy attempt clocks are migrated once: a pre-existing
 // attempt inherits the backing BMI's creation time when usable, otherwise a single
 // observation-time origin. Neither is refreshed by later reconciles.
-func TestR09LegacyAttemptBackfill(t *testing.T) {
+var _ = It("backfills a legacy attempt clock once without extending its deadline", func() {
 	ctx := context.Background()
 	r := &Reconciler{recorder: events.NewFakeRecorder(10)}
 	created := time.Date(2024, 5, 1, 10, 0, 0, 0, time.UTC)
@@ -218,24 +209,18 @@ func TestR09LegacyAttemptBackfill(t *testing.T) {
 	observed := indexWorkerBMIs([]*privatev1.BareMetalInstance{bmi})
 	observed.agents = &unstructured.UnstructuredList{}
 	got, err := r.observeExistingWorkers(ctx, co, "tenant", observed)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got[0].AttemptStartedAt == nil || !got[0].AttemptStartedAt.Time.Equal(created) {
-		t.Fatalf("legacy worker did not inherit the BMI creation time: %+v", got[0].AttemptStartedAt)
-	}
+	Expect(err).NotTo(HaveOccurred())
+	Expect(got[0].AttemptStartedAt).NotTo(BeNil(), "legacy worker did not inherit the BMI creation time: %+v", got[0].AttemptStartedAt)
+	Expect(got[0].AttemptStartedAt.Time.Equal(created)).To(BeTrue(), "legacy worker did not inherit the BMI creation time: %+v", got[0].AttemptStartedAt)
 
 	// Persisted once: another observation with the field already set must keep it.
 	co.Status.Workers = got
 	observed = indexWorkerBMIs([]*privatev1.BareMetalInstance{bmi})
 	observed.agents = &unstructured.UnstructuredList{}
 	again, err := r.observeExistingWorkers(ctx, co, "tenant", observed)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if again[0].AttemptStartedAt == nil || !again[0].AttemptStartedAt.Equal(got[0].AttemptStartedAt) {
-		t.Fatal("backfill refreshed an already persisted attempt origin")
-	}
+	Expect(err).NotTo(HaveOccurred())
+	Expect(again[0].AttemptStartedAt).NotTo(BeNil(), "backfill refreshed an already persisted attempt origin")
+	Expect(again[0].AttemptStartedAt.Equal(got[0].AttemptStartedAt)).To(BeTrue(), "backfill refreshed an already persisted attempt origin")
 
 	// No usable BMI clock: one observation-time origin is still durable.
 	noclock := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: "order", Namespace: "osac"}}
@@ -245,23 +230,20 @@ func TestR09LegacyAttemptBackfill(t *testing.T) {
 	fallbackObs := indexWorkerBMIs([]*privatev1.BareMetalInstance{ownedBMIFixture(noclock, "worker", "id")})
 	fallbackObs.agents = &unstructured.UnstructuredList{}
 	fallback, err := r.observeExistingWorkers(ctx, noclock, "tenant", fallbackObs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fallback[0].AttemptStartedAt == nil {
-		t.Fatal("missing-clock legacy worker was not given a one-time origin")
-	}
-}
+	Expect(err).NotTo(HaveOccurred())
+	Expect(fallback[0].AttemptStartedAt).ToNot(BeNil(), "missing-clock legacy worker was not given a one-time origin")
+})
 
-func TestCombinedObservationMixedAndEmptyWorkers(t *testing.T) {
+var _ = It("observes mixed worker kinds and leaves empty input unchanged", func() {
 	workers := []v1alpha1.WorkerStatus{newWorkerStatus("standard", "standard", "waiting", "id-0", workerPhaseProvisioning), newWorkerStatus("standard", "standard", "installed", "id-1", workerPhaseProvisioning), newWorkerStatus("standard", "standard", "missing", "id-2", workerPhaseReady), {Name: "vm", Kind: "VirtualMachine", Phase: "Running"}}
 	agents := &unstructured.UnstructuredList{Items: []unstructured.Unstructured{*agentPhaseFixture("installed", true)}}
-	got, removed := observeWorkerFixture(t, workers, agents, func(id string) bool { return id != "id-2" })
-	if len(got) != 3 || got[0].Phase != workerPhaseWaitingForAgent || got[1].Phase != workerPhaseReady || !reflect.DeepEqual(got[2], workers[3]) || !reflect.DeepEqual(removed, []string{"missing"}) {
-		t.Fatalf("mixed workers=%v removed=%v", got, removed)
-	}
-	got, removed = observeWorkerFixture(t, nil, agents, func(string) bool { return true })
-	if got != nil || len(removed) != 0 {
-		t.Fatal("empty input changed")
-	}
-}
+	got, removed := observeWorkerFixture(workers, agents, func(id string) bool { return id != "id-2" })
+	Expect(got).To(HaveLen(3), "mixed workers=%v removed=%v", got, removed)
+	Expect(got[0].Phase).To(Equal(workerPhaseWaitingForAgent), "mixed workers=%v removed=%v", got, removed)
+	Expect(got[1].Phase).To(Equal(workerPhaseReady), "mixed workers=%v removed=%v", got, removed)
+	Expect(got[2]).To(Equal(workers[3]), "mixed workers=%v removed=%v", got, removed)
+	Expect(removed).To(Equal([]string{"missing"}), "mixed workers=%v removed=%v", got, removed)
+	got, removed = observeWorkerFixture(nil, agents, func(string) bool { return true })
+	Expect(got).To(BeNil(), "empty input changed")
+	Expect(removed).To(BeEmpty(), "empty input changed")
+})

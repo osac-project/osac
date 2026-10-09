@@ -54,6 +54,44 @@ func (w *workerStatusFaultWriter) Patch(ctx context.Context, obj client.Object, 
 	return w.SubResourceWriter.Patch(ctx, obj, p, opts...)
 }
 
+// workerAttemptRaceClient places interruption/competing writes around the real
+// apiserver's optimistic create-intent patch. It never intercepts provider calls.
+type workerAttemptRaceClient struct {
+	client.Client
+	before func()
+	after  func() error
+}
+
+func (c *workerAttemptRaceClient) Status() client.SubResourceWriter {
+	return &workerAttemptRaceWriter{SubResourceWriter: c.Client.Status(), c: c}
+}
+
+type workerAttemptRaceWriter struct {
+	client.SubResourceWriter
+	c *workerAttemptRaceClient
+}
+
+func (w *workerAttemptRaceWriter) Patch(ctx context.Context, obj client.Object, p client.Patch, opts ...client.SubResourcePatchOption) error {
+	order, ok := obj.(*api.ClusterOrder)
+	if !ok || len(order.Status.Workers) != 1 || order.Status.Workers[0].BMICreateState != api.WorkerBMICreateStateAttempted {
+		return w.SubResourceWriter.Patch(ctx, obj, p, opts...)
+	}
+	if w.c.before != nil {
+		hook := w.c.before
+		w.c.before = nil
+		hook()
+	}
+	if err := w.SubResourceWriter.Patch(ctx, obj, p, opts...); err != nil {
+		return err
+	}
+	if w.c.after != nil {
+		hook := w.c.after
+		w.c.after = nil
+		return hook()
+	}
+	return nil
+}
+
 // agentPatchFaultClient runs beforeAgentPatch immediately before an Agent patch
 // reaches the real apiserver. It lets a test inject a competing writer after the
 // reconciler's fresh Agent read but before its optimistic Patch, without any
@@ -201,7 +239,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		return agent
 	}
 
-	It("R03-E1 retains a failed incarnation until absence and schedules one distinct replacement", func() {
+	It("retains a failed incarnation until absence and schedules one distinct replacement", func() {
 		old := provision()
 		fc.SetPendingDeletion(true)
 		markFailed()
@@ -241,7 +279,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(fc.CreateCalls()).To(HaveLen(2))
 	})
 
-	DescribeTable("R03-E2 retains retirement references and the finalizer through delay and outages", func(parentDeleting bool) {
+	DescribeTable("retains retirement references and the finalizer through delay and outages", func(parentDeleting bool) {
 		latest := getOrder()
 		latest.Spec.NodeRequests[0].NumberOfNodes = 2
 		Expect(k8sClient.Update(ctx, latest)).To(Succeed())
@@ -308,7 +346,145 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(fc.CreateCalls()).To(HaveLen(2))
 	}, Entry("failed scale-down", false), Entry("parent deletion", true))
 
-	It("R03-E3 recovers an interrupted provisioning ID during deletion without creating", func() {
+	It("cancels a Reserved worker after restart before any Create and clears the finalizer", func() {
+		ready()
+		step() // Durable reservation, no external Create.
+		reserved := getOrder().Status.Workers[0]
+		Expect(reserved.BMICreateState).To(Equal(api.WorkerBMICreateStateReserved))
+		Expect(reserved.BareMetalInstance.ID).To(BeEmpty())
+		Expect(fc.CreateCalls()).To(BeEmpty())
+		Expect(k8sClient.Delete(ctx, getOrder())).To(Succeed())
+		Expect(k8sClient.Delete(ctx, newInfraEnv(co.Name+"-infraenv"))).To(Succeed())
+		r = buildReconciler(k8sClient)
+		step() // Persist retirement.
+		Expect(getOrder().Status.Workers[0].BMICreateState).To(Equal(api.WorkerBMICreateStateReserved))
+		r = buildReconciler(k8sClient)
+		step() // Cancel and finalize without creation prerequisites.
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), &api.ClusterOrder{}))).To(BeTrue())
+		Expect(fc.CreateCalls()).To(BeEmpty())
+		Expect(fc.DeleteCalls()).To(BeEmpty())
+	})
+
+	It("rejects a stale Create when cancellation wins the intent patch race", func() {
+		ready()
+		step()
+		latest := getOrder()
+		latest.Finalizers = append(latest.Finalizers, "test.osac.openshift.io/hold")
+		Expect(k8sClient.Update(ctx, latest)).To(Succeed())
+		cancel := buildReconciler(k8sClient)
+		r = buildReconciler(&workerAttemptRaceClient{Client: k8sClient, before: func() {
+			Expect(k8sClient.Delete(ctx, getOrder())).To(Succeed())
+			for range 2 {
+				_, err := cancel.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(co)})
+				Expect(err).NotTo(HaveOccurred())
+			}
+			Expect(getOrder().Status.Workers).To(BeEmpty())
+			Expect(getOrder().Finalizers).NotTo(ContainElement("osac.openshift.io/baremetalworker-finalizer"))
+		}})
+		_, err := run()
+		Expect(apierrors.IsConflict(err)).To(BeTrue(), "real resourceVersion must fence stale Create")
+		Expect(fc.CreateCalls()).To(BeEmpty())
+		Expect(getOrder().Status.Workers).To(BeEmpty())
+	})
+
+	It("retains a winning intent through deletion racing before the external Create", func() {
+		ready()
+		step()
+		cancel := buildReconciler(k8sClient)
+		r = buildReconciler(&workerAttemptRaceClient{Client: k8sClient, after: func() error {
+			Expect(getOrder().Status.Workers[0].BMICreateState).To(Equal(api.WorkerBMICreateStateAttempted))
+			Expect(fc.CreateCalls()).To(BeEmpty())
+			Expect(k8sClient.Delete(ctx, getOrder())).To(Succeed())
+			for range 2 {
+				_, err := cancel.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(co)})
+				Expect(err).NotTo(HaveOccurred())
+			}
+			Expect(getOrder().Status.Workers).To(HaveLen(1))
+			Expect(getOrder().Finalizers).To(ContainElement("osac.openshift.io/baremetalworker-finalizer"))
+			return nil
+		}})
+		_, err := run()
+		Expect(apierrors.IsConflict(err)).To(BeTrue(), "retirement must reject the delayed identity write")
+		Expect(fc.CreateCalls()).To(HaveLen(1))
+		r = buildReconciler(k8sClient)
+		step() // Owned name recovery.
+		Expect(getOrder().Status.Workers[0].BareMetalInstance.ID).NotTo(BeEmpty())
+		step() // Request BMI deletion.
+		step() // Confirm absence and finalize.
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), &api.ClusterOrder{}))).To(BeTrue())
+		Expect(fc.CreateCalls()).To(HaveLen(1))
+		Expect(fc.DeleteCalls()).To(HaveLen(1))
+	})
+
+	It("retains persisted intent interrupted before the API call across restart", func() {
+		ready()
+		step()
+		interrupted := errors.New("interrupted after intent persistence")
+		r = buildReconciler(&workerAttemptRaceClient{Client: k8sClient, after: func() error { return interrupted }})
+		_, err := run()
+		Expect(err).To(MatchError(interrupted))
+		Expect(getOrder().Status.Workers[0].BMICreateState).To(Equal(api.WorkerBMICreateStateAttempted))
+		Expect(fc.CreateCalls()).To(BeEmpty())
+		Expect(k8sClient.Delete(ctx, getOrder())).To(Succeed())
+		for range 3 {
+			r = buildReconciler(k8sClient)
+			step()
+			Expect(getOrder().Status.Workers).To(HaveLen(1))
+			Expect(getOrder().Finalizers).To(ContainElement("osac.openshift.io/baremetalworker-finalizer"))
+		}
+		Expect(fc.CreateCalls()).To(BeEmpty())
+		Expect(fc.DeleteCalls()).To(BeEmpty())
+	})
+
+	It("retains legacy ID-less state without inferring safety from its timestamp", func() {
+		ready()
+		step()
+		latest := getOrder()
+		latest.Status.Workers[0].BMICreateState = ""
+		Expect(latest.Status.Workers[0].AttemptStartedAt).NotTo(BeNil())
+		Expect(k8sClient.Status().Update(ctx, latest)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, getOrder())).To(Succeed())
+		for range 3 {
+			r = buildReconciler(k8sClient)
+			step()
+			Expect(getOrder().Status.Workers).To(HaveLen(1))
+			Expect(getOrder().Status.Workers[0].BMICreateState).To(BeEmpty())
+			Expect(getOrder().Finalizers).To(ContainElement("osac.openshift.io/baremetalworker-finalizer"))
+		}
+		Expect(fc.CreateCalls()).To(BeEmpty())
+	})
+
+	It("recovers a lost Create acknowledgement during deletion only after delayed visibility", func() {
+		ready()
+		step()
+		provider = &lostWorkerResponseClient{FulfillmentClient: fc}
+		r = buildReconciler(k8sClient)
+		_, err := run()
+		Expect(err).To(MatchError(ContainSubstring("lost successful Create acknowledgement")))
+		attempted := getOrder().Status.Workers[0]
+		Expect(attempted.BMICreateState).To(Equal(api.WorkerBMICreateStateAttempted))
+		Expect(attempted.BareMetalInstance.ID).To(BeEmpty())
+		Expect(k8sClient.Delete(ctx, getOrder())).To(Succeed())
+		fc.SetListEmptyCalls(10) // Both observation and fresh cleanup may list.
+		r = buildReconciler(k8sClient)
+		for range 3 {
+			step()
+			Expect(getOrder().Status.Workers[0].BareMetalInstance.ID).To(BeEmpty())
+			Expect(getOrder().Finalizers).To(ContainElement("osac.openshift.io/baremetalworker-finalizer"))
+		}
+		Expect(fc.DeleteCalls()).To(BeEmpty())
+		fc.SetListEmptyCalls(0)
+		step() // Recover the same owned BMI.
+		Expect(getOrder().Status.Workers[0].BareMetalInstance.Name).To(Equal(attempted.BareMetalInstance.Name))
+		Expect(getOrder().Status.Workers[0].BareMetalInstance.ID).NotTo(BeEmpty())
+		step() // Delete request.
+		step() // Authoritative absence.
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), &api.ClusterOrder{}))).To(BeTrue())
+		Expect(fc.CreateCalls()).To(HaveLen(1))
+		Expect(fc.DeleteCalls()).To(HaveLen(1))
+	})
+
+	It("recovers an interrupted provisioning ID during deletion without creating", func() {
 		ready()
 		step() // Reserve.
 		interrupted := errors.New("lost ID persistence")
@@ -340,7 +516,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(fc.CreateCalls()).To(HaveLen(1))
 	})
 
-	It("R03-E4 waits for authoritative old Agent removal despite cached omission", func() {
+	It("waits for authoritative old Agent removal despite cached omission", func() {
 		old := provision()
 		markFailed()
 		agent := cleanupAgent(old, "known-unbound")
@@ -366,7 +542,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(getOrder().Status.Workers[0].NextRetryTime).NotTo(BeNil())
 	})
 
-	It("R03-E4 real API UID preconditions reject deletion of a recreated Agent", func() {
+	It("rejects deletion of a recreated Agent using real API UID preconditions", func() {
 		old := provision()
 		markFailed()
 		step() // R09: persist the failed demotion before Agent deletion preconditions.
@@ -394,7 +570,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(getOrder().Status.Workers[0].BareMetalInstance.ID).To(Equal(old.BareMetalInstance.ID))
 	})
 
-	It("R03-E5 blocks bound Failed cleanup and excludes old readiness from its replacement", func() {
+	It("blocks bound Failed cleanup and excludes old readiness from its replacement", func() {
 		old := provision()
 		markFailed()
 		step() // R09: persist the failed demotion, clearing the old healthy interval.
@@ -437,7 +613,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(fc.CreateCalls()).To(HaveLen(2))
 	})
 
-	It("R09-E1 measures the registration timeout from the persisted attempt origin", func() {
+	It("measures the registration timeout from the persisted attempt origin", func() {
 		provision()
 		// The order is fresh; only the persisted attempt origin may drive the clock.
 		latest := getOrder()
@@ -459,7 +635,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(failed.LastFailureReason).To(Equal("AgentRegistrationTimeout"))
 	})
 
-	It("R09-E2 keeps one attempt origin across a lost Create acknowledgement and restart", func() {
+	It("keeps one attempt origin across a lost Create acknowledgement and restart", func() {
 		ready()
 		step() // Reserve only; the origin is part of the reservation write.
 		reserved := getOrder().Status.Workers[0]
@@ -486,7 +662,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(recovered.AttemptStartedAt).To(Equal(reserved.AttemptStartedAt))
 	})
 
-	It("R09-E3 backfills a legacy attempt once without extending its deadline", func() {
+	It("backfills a legacy attempt once without extending its deadline", func() {
 		provision()
 		latest := getOrder()
 		latest.Status.Workers[0].AttemptStartedAt = nil
@@ -506,7 +682,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(getOrder().Status.Workers[0].Phase).To(Equal("Failed"))
 	})
 
-	It("R01-E1 persists reserve -> one create -> observe checkpoints for NodeSets sharing a type", func() {
+	It("persists reserve -> one create -> observe checkpoints for NodeSets sharing a type", func() {
 		latest := getOrder()
 		latest.Spec.NodeRequests = []api.NodeRequest{
 			{NodeSet: "compute", NumberOfNodes: 1, BareMetal: &api.BareMetalNodeSpec{InstanceType: "standard"}},
@@ -548,7 +724,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(fc.CreateCalls()).To(HaveLen(2))
 	})
 
-	It("R01-E2 recovers a lost Create acknowledgement after restart and delayed List visibility", func() {
+	It("recovers a lost Create acknowledgement after restart and delayed List visibility", func() {
 		latest := getOrder()
 		latest.Spec.NodeRequests[0].NumberOfNodes = 2
 		Expect(k8sClient.Update(ctx, latest)).To(Succeed())
@@ -562,6 +738,9 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		r = buildReconciler(k8sClient)
 		_, err = run()
 		Expect(err).To(MatchError(ContainSubstring("lost successful Create acknowledgement")))
+		// Only the selected slot advances to durable Create intent; its identity
+		// and attempt clock remain unchanged across the lost response.
+		reserved[0].BMICreateState = api.WorkerBMICreateStateAttempted
 		Expect(getOrder().Status.Workers).To(Equal(reserved))
 		Expect(fault.successful).To(Equal(1))
 		stored, err := fc.ListBareMetalInstances(ctx, "")
@@ -599,7 +778,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		}
 	})
 
-	DescribeTable("R01-E2 refuses unsafe recovery candidates without changing reservations", func(kind string, visibleInitially bool) {
+	DescribeTable("refuses unsafe recovery candidates without adopting identities", func(kind string, visibleInitially bool) {
 		ready()
 		_, err := run()
 		Expect(err).NotTo(HaveOccurred())
@@ -635,6 +814,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		} else {
 			Expect(fault.creates).To(Equal(1))
 			Expect(fault.lists).To(Equal(2), "must exercise the AlreadyExists re-list")
+			reserved[0].BMICreateState = api.WorkerBMICreateStateAttempted
 		}
 		Expect(getOrder().Status.Workers).To(Equal(reserved))
 		Expect(fc.DeleteCalls()).To(BeEmpty())
@@ -642,7 +822,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Entry("ambiguous", "ambiguous", false), Entry("deletion timestamp", "deletion timestamp", false), Entry("deleting state", "deleting state", false),
 		Entry("initially visible deletion timestamp", "deletion timestamp", true), Entry("initially visible deleting state", "deleting state", true))
 
-	It("W-E1 recovers a successful create after its ID status write fails without another Create", func() {
+	It("recovers a successful create after its ID status write fails without another Create", func() {
 		ready()
 		latest := getOrder()
 		latest.Spec.NodeRequests[0].NumberOfNodes = 2
@@ -677,7 +857,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(fc.ListCalls()).To(HaveLen(beforeLists + 2)) // Includes the assertion's List.
 		Expect(fc.GetCalls()).To(HaveLen(beforeGets))
 	})
-	It("W-E2 replaces an authoritative NotFound slot across prune, reserve and create checkpoints", func() {
+	It("replaces an authoritative NotFound slot across prune, reserve and create checkpoints", func() {
 		old := provision()
 		Expect(fc.DeleteBareMetalInstance(ctx, old.BareMetalInstance.ID)).To(Succeed())
 		createsBefore := len(fc.CreateCalls())
@@ -692,7 +872,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(workers[0].BareMetalInstance.ID).NotTo(BeEmpty())
 		Expect(fc.CreateCalls()).To(HaveLen(createsBefore + 1))
 	})
-	It("W-E2 keeps an omitted listed ID using exactly one authoritative fallback Get", func() {
+	It("keeps an omitted listed ID using exactly one authoritative fallback Get", func() {
 		old := provision()
 		fc.SetListEmptyOnce()
 		getsBefore, listsBefore, createsBefore := len(fc.GetCalls()), len(fc.ListCalls()), len(fc.CreateCalls())
@@ -703,7 +883,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(fc.ListCalls()).To(HaveLen(listsBefore + 1))
 		Expect(fc.CreateCalls()).To(HaveLen(createsBefore))
 	})
-	DescribeTable("W-E2 does not prune or replace workers from unknown provider evidence", func(failure string) {
+	DescribeTable("does not prune or replace workers from unknown provider evidence", func(failure string) {
 		old := provision()
 		createsBefore := len(fc.CreateCalls())
 		switch failure {
@@ -726,7 +906,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(getOrder().Status.Workers).To(ConsistOf(old))
 		Expect(fc.CreateCalls()).To(HaveLen(createsBefore))
 	}, Entry("Get error", "Get"), Entry("List error", "List"), Entry("service unavailable", "Unavailable"))
-	It("R08-E1 keeps unavailability and semantic outcomes independent across orders", func() {
+	It("keeps unavailability and semantic outcomes independent across orders", func() {
 		// Order A (the shared fixture) owns one provisioned worker.
 		workerA := provision()
 
@@ -804,7 +984,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(apimeta.IsStatusConditionTrue(recovered.Status.Conditions, api.ConditionFulfillmentServiceUnavailable)).To(BeFalse())
 		Expect(recovered.Status.Workers).To(ConsistOf(workerA))
 	})
-	It("W-E3 repairs identity and early Ready phase before the InfraEnv gate", func() {
+	It("repairs identity and early Ready phase before the InfraEnv gate", func() {
 		ready()
 		reserveExistingWorker(co, "recorded")
 		bmi, err := fc.CreateBareMetalInstance(ctx, privatev1.BareMetalInstance_builder{Id: "owned-id", Metadata: privatev1.Metadata_builder{Name: "recorded", Tenant: tenant, Labels: map[string]string{"osac.openshift.io/cluster-order": co.Name}, Annotations: map[string]string{"osac.openshift.io/owner-reference": "ClusterOrder/" + co.Name}}.Build()}.Build())
@@ -835,7 +1015,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(fc.GetCalls()).To(HaveLen(getsBefore))
 		Expect(fc.CreateCalls()).To(HaveLen(createsBefore))
 	})
-	It("W-E3 does not record a recreated InfraEnv UID when stale-failure status persistence fails", func() {
+	It("does not record a recreated InfraEnv UID when stale-failure status persistence fails", func() {
 		old := provision()
 		latest := getOrder()
 		storedUID := latest.Annotations["osac.openshift.io/infraenv-uid"]
@@ -860,7 +1040,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(fc.CreateCalls()).To(HaveLen(1))
 		Expect(fc.DeleteCalls()).To(BeEmpty())
 	})
-	It("R02-E1 restarts after a real status conflict without overwriting another writer", func() {
+	It("restarts after a real status conflict without overwriting another writer", func() {
 		old := provision()
 		fc.SetHostMAC(old.BareMetalInstance.ID, "aa:bb:cc:dd:ee:44")
 		agent := &unstructured.Unstructured{}
@@ -914,7 +1094,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(fc.CreateCalls()).To(HaveLen(1))
 	})
 
-	It("R02-E2 propagates a real Agent binding conflict without takeover", func() {
+	It("propagates a real Agent binding conflict without takeover", func() {
 		old := provision()
 		const mac = "aa:bb:cc:dd:ee:55"
 		fc.SetHostMAC(old.BareMetalInstance.ID, mac)
@@ -1002,7 +1182,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(boundName).To(Equal(co.Name))
 	})
 
-	It("W-E5 recovers a Failed ID-less reference during deletion without history reset or allocation", func() {
+	It("recovers a Failed ID-less reference during deletion without history reset or allocation", func() {
 		ready()
 		reserveExistingWorker(co, "failed-reservation")
 		latest := getOrder()
@@ -1060,7 +1240,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		return getAgent(name)
 	}
 
-	It("R05-E1 recovers interrupted binding from the Agent without a second patch or Create", func() {
+	It("recovers interrupted binding from the Agent without a second patch or Create", func() {
 		old := provision()
 		const mac = "aa:bb:cc:dd:ee:71"
 		fc.SetHostMAC(old.BareMetalInstance.ID, mac)
@@ -1101,7 +1281,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(getAgent(agent.GetName()).GetResourceVersion()).To(Equal(version))
 	})
 
-	It("R05-E2 keeps demotion and protected history independent of blocked prerequisites", func() {
+	It("keeps demotion and protected history independent of blocked prerequisites", func() {
 		old := provision()
 		const mac = "aa:bb:cc:dd:ee:72"
 		fc.SetHostMAC(old.BareMetalInstance.ID, mac)
@@ -1153,7 +1333,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(fc.CreateCalls()).To(HaveLen(createsBefore))
 	})
 
-	It("R07-E2 fails only the stale waiting worker and records the replacement UID afterwards", func() {
+	It("fails only the stale waiting worker and records the replacement UID afterwards", func() {
 		old := provision()
 		const mac = "aa:bb:cc:dd:ee:81"
 		fc.SetHostMAC(old.BareMetalInstance.ID, mac)
@@ -1235,7 +1415,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(latest.Status.Workers[1].Phase).To(Equal("Failed"))
 		Expect(fc.CreateCalls()).To(HaveLen(creates))
 	})
-	It("R05-E3 makes no Ready decision from the pre-bind snapshot", func() {
+	It("makes no Ready decision from the pre-bind snapshot", func() {
 		old := provision()
 		const mac = "aa:bb:cc:dd:ee:73"
 		fc.SetHostMAC(old.BareMetalInstance.ID, mac)
@@ -1260,7 +1440,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(getAgent(agent.GetName()).GetResourceVersion()).To(Equal(version))
 	})
 
-	It("R06-E3 does not take over a same-name Agent recreated under stale evidence", func() {
+	It("does not take over a same-name Agent recreated under stale evidence", func() {
 		old := provision()
 		const mac = "aa:bb:cc:dd:ee:76"
 		fc.SetHostMAC(old.BareMetalInstance.ID, mac)
@@ -1302,7 +1482,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(getAgent(agent.GetName()).GetLabels()).To(HaveKeyWithValue("osac.openshift.io/worker-name", old.Name))
 	})
 
-	It("R06-E4 reconstructs binding from durable Agent evidence after a restart", func() {
+	It("reconstructs binding from durable Agent evidence after a restart", func() {
 		old := provision()
 		const mac = "aa:bb:cc:dd:ee:77"
 		fc.SetHostMAC(old.BareMetalInstance.ID, mac)
@@ -1331,7 +1511,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(getAgent(agent.GetName()).GetResourceVersion()).To(Equal(patchedVersion), "restart must not rebind the Agent")
 	})
 
-	It("R04-E1a retires and cleans up while InfraEnv, image and pull-secret prerequisites are unavailable", func() {
+	It("retires and cleans up while InfraEnv, image and pull-secret prerequisites are unavailable", func() {
 		provision()
 		latest := getOrder()
 		latest.Spec.NodeRequests[0].NumberOfNodes = 2
@@ -1388,7 +1568,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(fc.CreateCalls()).To(HaveLen(creates))
 	})
 
-	It("R04-E1b converges Agent binding while another worker waits for its retry", func() {
+	It("converges Agent binding while another worker waits for its retry", func() {
 		first := provision()
 		latest := getOrder()
 		latest.Spec.NodeRequests[0].NumberOfNodes = 2
@@ -1437,7 +1617,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(reached.Phase).To(Equal("Ready"))
 	})
 
-	It("R04-E3 rechecks pending states without Agent or NodePool watch events", func() {
+	It("rechecks pending states without Agent or NodePool watch events", func() {
 		old := provision()
 		const mac = "aa:bb:cc:dd:ee:75"
 		fc.SetHostMAC(old.BareMetalInstance.ID, mac)
@@ -1465,7 +1645,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(res.RequeueAfter).To(BeZero())
 	})
 
-	It("R04-E1c persists the worker summary while the image lookup is blocked", func() {
+	It("persists the worker summary while the image lookup is blocked", func() {
 		old := provision()
 		// A stale summary: the worker waits for its Agent while Ready is still 1.
 		stale := getOrder()
@@ -1494,7 +1674,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(fc.DeleteCalls()).To(HaveLen(deletes))
 	})
 
-	It("R10-E1 reports intent before reservation and advances current/ready with evidence", func() {
+	It("reports intent before reservation and advances current/ready with evidence", func() {
 		latest := getOrder()
 		latest.Spec.NodeRequests[0].NumberOfNodes = 2
 		Expect(k8sClient.Update(ctx, latest)).To(Succeed())
@@ -1561,7 +1741,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(converged.Status.ReadyWorkers).To(HaveValue(Equal(int32(1))))
 	})
 
-	It("R10-E2 drops desired immediately on scale-down and keeps retiring references until cleanup", func() {
+	It("drops desired immediately on scale-down and keeps retiring references until cleanup", func() {
 		latest := getOrder()
 		latest.Spec.NodeRequests[0].NumberOfNodes = 2
 		Expect(k8sClient.Update(ctx, latest)).To(Succeed())
@@ -1595,7 +1775,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(unbinding).To(Equal(1))
 	})
 
-	It("R10-E3 partitions capacity per NodeSet so surplus cannot mask a missing set", func() {
+	It("partitions capacity per NodeSet so surplus cannot mask a missing set", func() {
 		latest := getOrder()
 		latest.Spec.NodeRequests = []api.NodeRequest{
 			{NodeSet: "compute", NumberOfNodes: 1, BareMetal: &api.BareMetalNodeSpec{InstanceType: "standard"}},
@@ -1625,7 +1805,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(got.Status.ReadyWorkers).To(HaveValue(Equal(int32(0))))
 	})
 
-	It("R10-E4 retains the last summary across a provider outage and recovers explicitly", func() {
+	It("retains the last summary across a provider outage and recovers explicitly", func() {
 		provision()
 		step()
 		before := getOrder()

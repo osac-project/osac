@@ -16,8 +16,11 @@ package baremetalworker
 import (
 	"context"
 	"errors"
-	"reflect"
-	"testing"
+	"fmt"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -28,11 +31,11 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-func TestBMIRecoveryRejectsForeignIdentity(t *testing.T) {
+var _ = Describe("BMI recovery rejects foreign identities", func() {
 	for _, deletion := range []bool{false, true} {
 		for _, field := range []string{"tenant", "owner", "label", "empty ID", "unrecorded name"} {
-			t.Run(map[bool]string{true: "deletion", false: "normal"}[deletion]+"/"+field, func(t *testing.T) {
-				r, fc, co := bmiStageHarness(t, workerPhaseProvisioning, "")
+			It(map[bool]string{true: "deletion", false: "normal"}[deletion]+"/"+field, func() {
+				r, fc, co := bmiStageHarness(workerPhaseProvisioning, "")
 				bmi := ownedBMIFixture(co, "recorded-bmi", "owned-id")
 				switch field {
 				case "tenant":
@@ -55,66 +58,53 @@ func TestBMIRecoveryRejectsForeignIdentity(t *testing.T) {
 					_, _, err = runBMIStage(context.Background(), r, co)
 				}
 				if field == "unrecorded name" {
-					if err != nil {
-						t.Fatal(err)
-					}
-				} else if err == nil {
-					t.Fatal("adopted an invalid BMI")
+					Expect(err).NotTo(HaveOccurred())
+				} else {
+					Expect(err).To(HaveOccurred(), "adopted an invalid BMI")
 				}
-				if err := r.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
-					t.Fatal(err)
-				}
-				if !reflect.DeepEqual(before.Status.Workers, co.Status.Workers) || len(fc.names) != 0 {
-					t.Fatalf("invalid recovery mutated workers: %+v", co.Status.Workers)
-				}
+				Expect(r.Get(context.Background(), client.ObjectKeyFromObject(co), co)).To(Succeed())
+				Expect(before.Status.Workers).To(Equal(co.Status.Workers), "invalid recovery mutated workers: %+v", co.Status.Workers)
+				Expect(fc.names).To(BeEmpty(), "invalid recovery mutated workers: %+v", co.Status.Workers)
 			})
 		}
 	}
-}
+})
 
-func TestBMIDeletionRecoveryPreservesPhaseAndHistory(t *testing.T) {
+var _ = Describe("BMI deletion recovery preserves phase and history", func() {
 	for _, phase := range []string{workerPhaseProvisioning, workerPhaseFailed, workerPhaseUnbinding, workerPhaseDeleting} {
-		t.Run(phase, func(t *testing.T) {
-			r, fc, co := bmiStageHarness(t, phase, "")
+		It(phase, func() {
+			r, fc, co := bmiStageHarness(phase, "")
 			next := metav1.NewTime(time.Now().Add(time.Hour))
 			co.Status.Workers[0].NextRetryTime = &next
 			co.Status.Workers[0].AttemptCount = 4
 			co.Status.Workers[0].LastFailureReason = "previous"
-			if err := r.Status().Update(context.Background(), co); err != nil {
-				t.Fatal(err)
-			}
+			Expect(r.Status().Update(context.Background(), co)).To(Succeed())
 			want := co.Status.Workers[0]
 			want.BareMetalInstance.ID = "owned-id"
 			fc.bmis = []*privatev1.BareMetalInstance{ownedBMIFixture(co, "recorded-bmi", "owned-id")}
 			if err := runDeletionBMIStage(context.Background(), r, co); !errors.Is(err, errWorkerObservationChanged) {
-				t.Fatalf("first deletion observation error=%v, want boundary", err)
+				Fail(fmt.Sprintf("first deletion observation error=%v, want boundary", err))
 			}
-			if err := r.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
-				t.Fatal(err)
-			}
-			if err := runDeletionBMIStage(context.Background(), r, co); err != nil {
-				t.Fatal(err)
-			}
-			if !reflect.DeepEqual(co.Status.Workers[0], want) || len(fc.names) != 0 || fc.gets != 0 {
-				t.Fatalf("deletion recovery changed history/phase or provisioned: %+v", co.Status.Workers)
-			}
+			Expect(r.Get(context.Background(), client.ObjectKeyFromObject(co), co)).To(Succeed())
+			Expect(runDeletionBMIStage(context.Background(), r, co)).To(Succeed())
+			Expect(co.Status.Workers[0]).To(Equal(want), "deletion recovery changed history/phase or provisioned: %+v", co.Status.Workers)
+			Expect(fc.names).To(BeEmpty(), "deletion recovery changed history/phase or provisioned: %+v", co.Status.Workers)
+			Expect(fc.gets).To(Equal(0), "deletion recovery changed history/phase or provisioned: %+v", co.Status.Workers)
 		})
 	}
-}
+})
 
-func TestBMIRecoveryDoesNotOverwriteNewerReservation(t *testing.T) {
+var _ = Describe("BMI recovery does not overwrite newer reservation", func() {
 	for _, deletion := range []bool{false, true} {
 		for _, field := range []string{"ID", "name", "phase", "retry", "kind"} {
-			t.Run(map[bool]string{true: "deletion", false: "normal"}[deletion]+"/"+field, func(t *testing.T) {
-				r, fc, co := bmiStageHarness(t, workerPhaseProvisioning, "")
+			It(map[bool]string{true: "deletion", false: "normal"}[deletion]+"/"+field, func() {
+				r, fc, co := bmiStageHarness(workerPhaseProvisioning, "")
 				kube := r.Client
 				fc.bmis = []*privatev1.BareMetalInstance{ownedBMIFixture(co, "recorded-bmi", "observed-id")}
 				var latest *v1alpha1.ClusterOrder
 				r.Client = &bmiConflictClient{Client: kube, beforePatch: func() {
 					latest = co.DeepCopy()
-					if err := kube.Get(context.Background(), client.ObjectKeyFromObject(co), latest); err != nil {
-						t.Fatal(err)
-					}
+					Expect(kube.Get(context.Background(), client.ObjectKeyFromObject(co), latest)).To(Succeed())
 					w := &latest.Status.Workers[0]
 					switch field {
 					case "ID":
@@ -129,77 +119,59 @@ func TestBMIRecoveryDoesNotOverwriteNewerReservation(t *testing.T) {
 					case "kind":
 						w.Kind = "Other"
 					}
-					if err := kube.Status().Update(context.Background(), latest); err != nil {
-						t.Fatal(err)
-					}
+					Expect(kube.Status().Update(context.Background(), latest)).To(Succeed())
 				}}
 				if deletion {
 					if err := runDeletionBMIStage(context.Background(), r, co); !apierrors.IsConflict(err) {
-						t.Fatalf("error=%v, want one-shot conflict", err)
+						Fail(fmt.Sprintf("error=%v, want one-shot conflict", err))
 					}
 				} else {
 					_, res, err := runBMIStage(context.Background(), r, co)
-					if !apierrors.IsConflict(err) || !res.IsZero() {
-						t.Fatalf("result=%+v err=%v, want one-shot conflict", res, err)
-					}
+					Expect(apierrors.IsConflict(err)).To(BeTrue(), "result=%+v err=%v, want one-shot conflict", res, err)
+					Expect(res.IsZero()).To(BeTrue(), "result=%+v err=%v, want one-shot conflict", res, err)
 				}
-				if err := kube.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
-					t.Fatal(err)
-				}
-				if !reflect.DeepEqual(co.Status.Workers, latest.Status.Workers) {
-					t.Fatalf("overwrote newer reservation: %+v", co.Status.Workers)
-				}
-				if len(fc.names) != 0 {
-					t.Fatal("created during recovery")
-				}
+				Expect(kube.Get(context.Background(), client.ObjectKeyFromObject(co), co)).To(Succeed())
+				Expect(co.Status.Workers).To(Equal(latest.Status.Workers), "overwrote newer reservation: %+v", co.Status.Workers)
+				Expect(fc.names).To(BeEmpty(), "created during recovery")
 			})
 		}
 	}
-}
+})
 
-func TestBMIProvisioningRecoversAuthoritativeReservation(t *testing.T) {
-	r, fc, co := bmiStageHarness(t, workerPhaseProvisioning, "")
+var _ = It("recovers an authoritative reservation before provisioning a BMI", func() {
+	r, fc, co := bmiStageHarness(workerPhaseProvisioning, "")
 	fc.bmis = []*privatev1.BareMetalInstance{ownedBMIFixture(co, "recorded-bmi", "created-id")}
-	if _, err := runWorkerCapacityStage(t, r, co); err != nil {
-		t.Fatal(err)
+	if _, err := runWorkerCapacityStage(r, co); err != nil {
+		Expect(err).NotTo(HaveOccurred())
 	}
-	if err := r.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
-		t.Fatal(err)
-	}
-	if len(co.Status.Workers) != 1 || co.Status.Workers[0].BareMetalInstance.ID != "created-id" || len(fc.names) != 0 {
-		t.Fatalf("did not recover authoritative reservation: %+v creates=%v", co.Status.Workers, fc.names)
-	}
-}
+	Expect(r.Get(context.Background(), client.ObjectKeyFromObject(co), co)).To(Succeed())
+	Expect(co.Status.Workers).To(HaveLen(1), "did not recover authoritative reservation: %+v creates=%v", co.Status.Workers, fc.names)
+	Expect(co.Status.Workers[0].BareMetalInstance.ID).To(Equal("created-id"), "did not recover authoritative reservation: %+v creates=%v", co.Status.Workers, fc.names)
+	Expect(fc.names).To(BeEmpty(), "did not recover authoritative reservation: %+v creates=%v", co.Status.Workers, fc.names)
+})
 
-func TestBMIMissingSlotIsReplacedWithANewReservation(t *testing.T) {
-	r, fc, co := bmiStageHarness(t, workerPhaseWaitingForAgent, "gone-id")
+var _ = It("replaces a confirmed-missing BMI slot with a new reservation", func() {
+	r, fc, co := bmiStageHarness(workerPhaseWaitingForAgent, "gone-id")
 	old := co.Status.Workers[0]
 	if _, _, err := runBMIStage(context.Background(), r, co); err != nil {
-		t.Fatal(err)
+		Expect(err).NotTo(HaveOccurred())
 	}
-	if err := r.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
-		t.Fatal(err)
+	Expect(r.Get(context.Background(), client.ObjectKeyFromObject(co), co)).To(Succeed())
+	if _, err := runWorkerCapacityStage(r, co); err != nil {
+		Expect(err).NotTo(HaveOccurred())
 	}
-	if _, err := runWorkerCapacityStage(t, r, co); err != nil {
-		t.Fatal(err)
+	Expect(r.Get(context.Background(), client.ObjectKeyFromObject(co), co)).To(Succeed())
+	Expect(co.Status.Workers).To(HaveLen(1), "workers=%+v", co.Status.Workers)
+	Expect(co.Status.Workers[0].BareMetalInstance.ID).To(Equal(""), "reservation did not return before create")
+	Expect(fc.names).To(BeEmpty(), "reservation did not return before create")
+	if _, err := runWorkerCapacityStage(r, co); err != nil {
+		Expect(err).NotTo(HaveOccurred())
 	}
-	if err := r.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
-		t.Fatal(err)
-	}
-	if len(co.Status.Workers) != 1 {
-		t.Fatalf("workers=%+v", co.Status.Workers)
-	}
-	if co.Status.Workers[0].BareMetalInstance.ID != "" || len(fc.names) != 0 {
-		t.Fatal("reservation did not return before create")
-	}
-	if _, err := runWorkerCapacityStage(t, r, co); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
-		t.Fatal(err)
-	}
+	Expect(r.Get(context.Background(), client.ObjectKeyFromObject(co), co)).To(Succeed())
 	w := co.Status.Workers[0]
-	if w.Name == old.Name || w.BareMetalInstance.Name == old.BareMetalInstance.Name || w.BareMetalInstance.ID == "" || len(fc.names) != 1 || fc.reservationMissing {
-		t.Fatalf("replacement lost durable identity boundary: %+v creates=%v", w, fc.names)
-	}
-}
+	Expect(w.Name).NotTo(Equal(old.Name), "replacement lost durable identity boundary: %+v creates=%v", w, fc.names)
+	Expect(w.BareMetalInstance.Name).NotTo(Equal(old.BareMetalInstance.Name), "replacement lost durable identity boundary: %+v creates=%v", w, fc.names)
+	Expect(w.BareMetalInstance.ID).NotTo(Equal(""), "replacement lost durable identity boundary: %+v creates=%v", w, fc.names)
+	Expect(fc.names).To(HaveLen(1), "replacement lost durable identity boundary: %+v creates=%v", w, fc.names)
+	Expect(fc.reservationMissing).To(BeFalse(), "replacement lost durable identity boundary: %+v creates=%v", w, fc.names)
+})

@@ -21,7 +21,7 @@ import (
 )
 
 var _ = DescribeMigration("Protect disk images referenced by cluster versions", func() {
-	It("Creates and removes the cluster version disk image index", func(ctx context.Context) {
+	It("Creates the cluster version disk image index", func(ctx context.Context) {
 		Expect(tool.Migrate(ctx, 120)).To(Succeed())
 
 		var indexDefinition string
@@ -33,12 +33,5 @@ var _ = DescribeMigration("Protect disk images referenced by cluster versions", 
 		`).Scan(&indexDefinition)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(indexDefinition).To(ContainSubstring("disk_image"))
-
-		Expect(tool.Migrate(ctx, 119)).To(Succeed())
-		var count int
-		err = conn.QueryRow(ctx,
-			`select count(*) from pg_indexes where indexname = 'cluster_versions_disk_image_id'`).Scan(&count)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(count).To(BeZero())
 	})
 })

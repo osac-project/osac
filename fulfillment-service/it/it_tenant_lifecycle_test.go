@@ -473,7 +473,7 @@ var _ = Describe("Tenant lifecycle", func() {
 				}.Build())
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(getResponse.GetObject().GetMetadata().GetFinalizers()).To(
-					ContainElement(finalizers.Controller),
+					ContainElements(finalizers.TenantLifecycle, finalizers.TenantOnboarding),
 				)
 				g.Expect(getResponse.GetObject().GetStatus().GetState()).To(
 					Equal(privatev1.TenantState_TENANT_STATE_SYNCED),

@@ -49,7 +49,8 @@ var _ = Describe("Catalog Item CLI", Label("catalog-items", "cli"), func() {
 		}
 		name := catalogItemFixtureName()
 		_, stderr, code = tool.RunCLI(ctx, home, "create", "computeinstance", sourceFlag, sourceID,
-			"--name", name, "--network-attachment", "subnet="+network.subnetID)
+			"--name", name, "--network-attachment",
+			"subnet="+network.subnetID+",security-groups="+network.securityGroupID)
 		Expect(code).To(Equal(0), stderr)
 		client := publicv1.NewComputeInstancesClient(tool.ExternalView().UserConn())
 		listed, err := client.List(ctx, publicv1.ComputeInstancesListRequest_builder{Filter: new("this.metadata.name == '" + name + "'")}.Build())

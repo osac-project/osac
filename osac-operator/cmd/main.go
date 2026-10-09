@@ -534,8 +534,8 @@ func setupComputeInstanceControllers(
 	return nil
 }
 
-// setupTenantController registers the Tenant lifecycle controller.
-func setupTenantController(mgr mcmanager.Manager) error {
+// setupTenantController registers the Tenant lifecycle and feedback controllers.
+func setupTenantController(mgr mcmanager.Manager, grpcConn grpc.ClientConnInterface) error {
 	tenantNamespace := os.Getenv(envTenantNamespace)
 
 	if err := (controller.NewTenantReconciler(
@@ -543,6 +543,15 @@ func setupTenantController(mgr mcmanager.Manager) error {
 		tenantNamespace,
 	)).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("tenant controller: %w", err)
+	}
+	if grpcConn != nil {
+		if err := controller.NewTenantFeedbackReconciler(
+			mgr.GetLocalManager().GetClient(),
+			grpcConn,
+			tenantNamespace,
+		).SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("tenant feedback controller: %w", err)
+		}
 	}
 	return nil
 }
@@ -659,7 +668,7 @@ func setupControllers(
 		}
 	}
 	if flags.Tenant {
-		if err := setupTenantController(mgr); err != nil {
+		if err := setupTenantController(mgr, grpcConn); err != nil {
 			return fmt.Errorf("tenant controller: %w", err)
 		}
 	}

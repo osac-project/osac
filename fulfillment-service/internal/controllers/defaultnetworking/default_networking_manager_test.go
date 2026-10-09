@@ -220,6 +220,8 @@ var _ = Describe("default networking manager", func() {
 					Defaults: privatev1.NetworkDefaults_builder{
 						VirtualNetworkIpv4Cidr: "10.0.0.0/16",
 						SubnetIpv4Cidr:         "10.0.1.0/24",
+						VirtualNetworkIpv6Cidr: "2001:db8::/32",
+						SubnetIpv6Cidr:         "2001:db8:1::/64",
 					}.Build(),
 				}.Build(),
 				Status: privatev1.NetworkClassStatus_builder{
@@ -238,8 +240,10 @@ var _ = Describe("default networking manager", func() {
 		Expect(vns.creates).To(HaveLen(1))
 		Expect(vns.creates[0].GetMetadata().GetLabels()).To(HaveKeyWithValue(defaultLabel, "true"))
 		Expect(vns.creates[0].GetSpec().GetNetworkClass().GetId()).To(Equal("nc-1"))
+		Expect(vns.creates[0].GetSpec().GetIpv6Cidr()).To(BeEmpty())
 		Expect(subnets.creates).To(HaveLen(1))
 		Expect(subnets.creates[0].GetMetadata().GetAnnotations()).To(HaveKeyWithValue(ownerReferenceAnnotation, "vn-default"))
+		Expect(subnets.creates[0].GetSpec().GetIpv6Cidr()).To(BeEmpty())
 		Expect(securityGroups.creates).To(HaveLen(1))
 	})
 
@@ -259,6 +263,9 @@ var _ = Describe("default networking manager", func() {
 		m.externalIPPools = &fakeExternalIPPools{items: []*privatev1.ExternalIPPool{
 			privatev1.ExternalIPPool_builder{
 				Id: "pool-b",
+				Spec: privatev1.ExternalIPPoolSpec_builder{
+					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
+				}.Build(),
 				Status: privatev1.ExternalIPPoolStatus_builder{
 					State:     privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY,
 					Available: 10,
@@ -266,6 +273,9 @@ var _ = Describe("default networking manager", func() {
 			}.Build(),
 			privatev1.ExternalIPPool_builder{
 				Id: "pool-a",
+				Spec: privatev1.ExternalIPPoolSpec_builder{
+					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
+				}.Build(),
 				Status: privatev1.ExternalIPPoolStatus_builder{
 					State:     privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY,
 					Available: 1,
@@ -281,6 +291,32 @@ var _ = Describe("default networking manager", func() {
 		Expect(externalIPs.items[0].GetSpec().GetPool().GetId()).To(Equal("pool-a"))
 		Expect(natGateways.creates).To(HaveLen(1))
 		Expect(natGateways.creates[0].GetSpec().GetExternalIp().GetId()).To(Equal("eip-default"))
+	})
+
+	It("does not allocate a default NAT ExternalIP from an IPv6-only pool", func() {
+		m.networkClasses = &fakeNetworkClasses{items: []*privatev1.NetworkClass{
+			privatev1.NetworkClass_builder{
+				Id: "nc-1",
+				Spec: privatev1.NetworkClassSpec_builder{
+					Defaults: privatev1.NetworkDefaults_builder{EnableNatGateway: true}.Build(),
+				}.Build(),
+			}.Build(),
+		}}
+		m.externalIPPools = &fakeExternalIPPools{items: []*privatev1.ExternalIPPool{
+			privatev1.ExternalIPPool_builder{
+				Id: "pool-ipv6",
+				Spec: privatev1.ExternalIPPoolSpec_builder{
+					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV6,
+				}.Build(),
+				Status: privatev1.ExternalIPPoolStatus_builder{
+					State:     privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY,
+					Available: 10,
+				}.Build(),
+			}.Build(),
+		}}
+
+		Expect(m.Ensure(ctx, "tenant-a")).To(MatchError("failed to ensure default NATGateway: no ready ExternalIPPool has available capacity"))
+		Expect(m.externalIPs.(*fakeExternalIPs).items).To(BeEmpty())
 	})
 
 	It("does not create resources for reserved tenants", func() {

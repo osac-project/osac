@@ -16,9 +16,11 @@ package baremetalworker
 import (
 	"context"
 	"errors"
-	"reflect"
+	"fmt"
 
-	"testing"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -71,7 +73,7 @@ func agentPhaseFixture(worker string, installed bool) *unstructured.Unstructured
 	return a
 }
 
-func TestAgentConvergence(t *testing.T) {
+var _ = Describe("Agent convergence", func() {
 	tests := []struct {
 		name, phase, kind, id string
 		agent, installed      bool
@@ -90,7 +92,7 @@ func TestAgentConvergence(t *testing.T) {
 		{"non BMI protected", workerPhaseBinding, "Other", "id", true, true, workerPhaseBinding},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		It(tt.name, func() {
 			co := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: "order", Namespace: "osac", CreationTimestamp: metav1.Now()}}
 			readySince := metav1.NewTime(time.Unix(100, 0))
 			workers := []v1alpha1.WorkerStatus{{Name: "worker", Kind: tt.kind, Phase: tt.phase, BareMetalInstance: v1alpha1.BareMetalInstanceReference{Name: "bmi", ID: tt.id}, AttemptCount: 2, LastFailureReason: "previous", ReadySince: &readySince}}
@@ -102,16 +104,10 @@ func TestAgentConvergence(t *testing.T) {
 			}
 			r := &Reconciler{Client: c.Build(), recorder: events.NewFakeRecorder(10), macResolver: func(context.Context, string) []string { return nil }}
 			agents, err := r.listAgents(context.Background(), co)
-			if err != nil {
-				t.Fatal(err)
-			}
+			Expect(err).NotTo(HaveOccurred())
 			got, result, err := reconcileAgentStage(r, co, workers, agents)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got[0].Phase != tt.want {
-				t.Errorf("phase = %s, want %s", got[0].Phase, tt.want)
-			}
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got[0].Phase).To(Equal(tt.want), "phase = %s, want %s", got[0].Phase, tt.want)
 			got[0].Phase = before.Phase
 			if tt.want != workerPhaseReady {
 				// A demotion clears the healthy interval; only a still-Ready worker
@@ -119,19 +115,15 @@ func TestAgentConvergence(t *testing.T) {
 				got[0].ReadySince = nil
 				before.ReadySince = nil
 			}
-			if !reflect.DeepEqual(got[0], before) {
-				t.Errorf("observation changed worker identity/history: %+v", got[0])
-			}
-			if tt.want == workerPhaseWaitingForAgent && result.RequeueAfter != agentRequeueInterval {
-				t.Errorf("requeue = %v, want %v", result.RequeueAfter, agentRequeueInterval)
-			}
+			Expect(got[0]).To(Equal(before), "observation changed worker identity/history: %+v", got[0])
+			Expect(tt.want == workerPhaseWaitingForAgent && result.RequeueAfter != agentRequeueInterval).To(BeFalse(), "requeue = %v, want %v", result.RequeueAfter, agentRequeueInterval)
 		})
 	}
-}
+})
 
-func TestAgentBindingRefusesExistingAssignment(t *testing.T) {
+var _ = Describe("Agent binding refuses existing assignments", func() {
 	for _, assignment := range []string{"cluster", "namespace", "worker", "label"} {
-		t.Run(assignment, func(t *testing.T) {
+		It(assignment, func() {
 			a := agentPhaseFixture("", false)
 			labels := a.GetLabels()
 			delete(labels, workerNameLabel)
@@ -159,18 +151,14 @@ func TestAgentBindingRefusesExistingAssignment(t *testing.T) {
 			stale := agentPhaseFixture("", false)
 			before := a.DeepCopy()
 			if err := r.bindAgent(context.Background(), co, stale, &w); err == nil {
-				t.Error("bound an Agent assigned elsewhere")
+				Fail("bound an Agent assigned elsewhere")
 			}
 			got := agentPhaseFixture("", false)
-			if err := c.Get(context.Background(), client.ObjectKeyFromObject(a), got); err != nil {
-				t.Fatal(err)
-			}
-			if !reflect.DeepEqual(before, got) {
-				t.Error("modified an Agent assigned elsewhere")
-			}
+			Expect(c.Get(context.Background(), client.ObjectKeyFromObject(a), got)).To(Succeed())
+			Expect(before).To(Equal(got), "modified an Agent assigned elsewhere")
 		})
 	}
-}
+})
 
 type failingAgentPatchClient struct {
 	client.Client
@@ -190,12 +178,13 @@ func (c *failingAgentPatchClient) Patch(ctx context.Context, obj client.Object, 
 	return errors.New("test patch failure")
 }
 
-func TestAgentMatchingAndTimeoutProtectNonBMIAndReservations(t *testing.T) {
+var _ = It("protects non-BMI workers and reservations from Agent matching and timeouts", func() {
 	ctx := context.Background()
 	r := &Reconciler{recorder: events.NewFakeRecorder(10)}
 	co := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: "order", Namespace: "osac", CreationTimestamp: metav1.NewTime(time.Unix(100, 0))}}
 	for _, kind := range []string{"Other", workerKindBMI} {
-		t.Run(kind, func(t *testing.T) {
+		By(kind)
+		func() {
 			id := "id"
 			if kind == workerKindBMI {
 				id = ""
@@ -204,23 +193,21 @@ func TestAgentMatchingAndTimeoutProtectNonBMIAndReservations(t *testing.T) {
 			w.Kind = kind
 			co.Status.Workers = []v1alpha1.WorkerStatus{w}
 			got := r.checkAgentRegistrationTimeout(ctx, co, []v1alpha1.WorkerStatus{w}, time.Now())
-			if !reflect.DeepEqual(got[0], w) {
-				t.Error("timeout changed a protected worker")
-			}
+			Expect(got[0]).To(Equal(w), "timeout changed a protected worker")
 			a := agentPhaseFixture("", false)
 			_ = unstructured.SetNestedSlice(a.Object, []interface{}{map[string]interface{}{"macAddress": "aa"}}, "status", "inventory", "interfaces")
 			associations := matchUnboundAgents(ctx, co, []unstructured.Unstructured{*a}, []v1alpha1.WorkerStatus{w},
 				func(context.Context, string) []string { return []string{"aa"} })
 			if association, ok := associations[w.Name]; ok {
-				t.Errorf("associated a protected worker: %+v", association)
+				Fail(fmt.Sprintf("associated a protected worker: %+v", association))
 			}
-		})
+		}()
 	}
-}
+})
 
-func TestAgentReconcileBindingFailure(t *testing.T) {
+var _ = Describe("Agent binding failure handling", func() {
 	for _, conflict := range []bool{false, true} {
-		t.Run(map[bool]string{false: "patch failure", true: "exhausted conflicts"}[conflict], func(t *testing.T) {
+		It(map[bool]string{false: "patch failure", true: "exhausted conflicts"}[conflict], func() {
 			a := agentPhaseFixture("", false)
 			_ = unstructured.SetNestedSlice(a.Object, []interface{}{map[string]interface{}{"macAddress": "aa:bb:cc:dd:ee:ff"}}, "status", "inventory", "interfaces")
 			c := &failingAgentPatchClient{Client: clientfake.NewClientBuilder().WithObjects(a).Build(), conflict: conflict}
@@ -229,23 +216,16 @@ func TestAgentReconcileBindingFailure(t *testing.T) {
 			co := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: "order", Namespace: "osac", CreationTimestamp: metav1.Now()}}
 			w := newWorkerStatus("standard", "standard", "worker", "id", workerPhaseWaitingForAgent)
 			got, res, err := reconcileAgentStage(r, co, []v1alpha1.WorkerStatus{w}, &unstructured.UnstructuredList{Items: []unstructured.Unstructured{*a}})
-			if err == nil {
-				t.Fatal("binding failure was hidden")
-			}
-			if len(got) != 0 || !res.IsZero() {
-				t.Fatalf("failed bind returned stale worker state: %+v, %+v", got, res)
-			}
-			if c.patches != 1 {
-				t.Fatalf("bind patches=%d, want one", c.patches)
-			}
-			if len(recorder.Events) != 0 {
-				t.Fatalf("failed bind emitted %d events", len(recorder.Events))
-			}
+			Expect(err).To(HaveOccurred(), "binding failure was hidden")
+			Expect(got).To(BeEmpty(), "failed bind returned stale worker state: %+v, %+v", got, res)
+			Expect(res.IsZero()).To(BeTrue(), "failed bind returned stale worker state: %+v, %+v", got, res)
+			Expect(c.patches).To(Equal(1), "bind patches=%d, want one", c.patches)
+			Expect(recorder.Events).To(BeEmpty(), "failed bind emitted %d events", len(recorder.Events))
 		})
 	}
-}
+})
 
-func TestR02AgentConflictRestarts(t *testing.T) {
+var _ = It("restarts Agent reconciliation after an optimistic binding conflict", func() {
 	ctx := context.Background()
 	a := agentPhaseFixture("", false)
 	a.SetUID("agent-v1")
@@ -258,33 +238,26 @@ func TestR02AgentConflictRestarts(t *testing.T) {
 	observed := &unstructured.UnstructuredList{Items: []unstructured.Unstructured{*a}}
 
 	workers, result, err := reconcileAgentStage(r, co, []v1alpha1.WorkerStatus{w}, observed)
-	if !apierrors.IsConflict(err) || !result.IsZero() || workers != nil {
-		t.Fatalf("first invocation: workers=%+v result=%+v err=%v", workers, result, err)
-	}
-	if patchClient.patches != 1 {
-		t.Fatalf("agent patches=%d, want 1", patchClient.patches)
-	}
+	Expect(apierrors.IsConflict(err)).To(BeTrue(), "first invocation: workers=%+v result=%+v err=%v", workers, result, err)
+	Expect(result.IsZero()).To(BeTrue(), "first invocation: workers=%+v result=%+v err=%v", workers, result, err)
+	Expect(workers).To(BeNil(), "first invocation: workers=%+v result=%+v err=%v", workers, result, err)
+	Expect(patchClient.patches).To(Equal(1), "agent patches=%d, want 1", patchClient.patches)
 	current := &unstructured.Unstructured{}
 	current.SetGroupVersionKind(agentGVK)
-	if err := base.Get(ctx, client.ObjectKeyFromObject(a), current); err != nil {
-		t.Fatal(err)
-	}
-	if current.GetLabels()[workerNameLabel] != "" {
-		t.Fatal("conflicted invocation took over the Agent")
-	}
+	Expect(base.Get(ctx, client.ObjectKeyFromObject(a), current)).To(Succeed())
+	Expect(current.GetLabels()[workerNameLabel]).To(Equal(""), "conflicted invocation took over the Agent")
 
 	patchClient.conflict = false
 	patchClient.succeed = true
 	workers, result, err = reconcileAgentStage(r, co, []v1alpha1.WorkerStatus{w}, &unstructured.UnstructuredList{Items: []unstructured.Unstructured{*current}})
-	if err != nil || !result.IsZero() || len(workers) != 1 || workers[0].Phase != workerPhaseBinding {
-		t.Fatalf("fresh invocation: workers=%+v result=%+v err=%v", workers, result, err)
-	}
-	if patchClient.patches != 2 {
-		t.Fatalf("agent patches=%d after restart, want 2", patchClient.patches)
-	}
-}
+	Expect(err).NotTo(HaveOccurred(), "fresh invocation: workers=%+v result=%+v err=%v", workers, result, err)
+	Expect(result.IsZero()).To(BeTrue(), "fresh invocation: workers=%+v result=%+v err=%v", workers, result, err)
+	Expect(workers).To(HaveLen(1), "fresh invocation: workers=%+v result=%+v err=%v", workers, result, err)
+	Expect(workers[0].Phase).To(Equal(workerPhaseBinding), "fresh invocation: workers=%+v result=%+v err=%v", workers, result, err)
+	Expect(patchClient.patches).To(Equal(2), "agent patches=%d after restart, want 2", patchClient.patches)
+})
 
-func TestR06MACAmbiguityBothDirections(t *testing.T) {
+var _ = It("rejects ambiguous MAC associations in both directions", func() {
 	ctx := context.Background()
 	makeAgent := func(name, mac, assigned string) *unstructured.Unstructured {
 		agent := agentPhaseFixture(assigned, false)
@@ -323,7 +296,8 @@ func TestR06MACAmbiguityBothDirections(t *testing.T) {
 			macs:    map[string][]string{"bmi-0": {"aa"}},
 		},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		By(tc.name)
+		func() {
 			objects := make([]client.Object, 0, len(tc.agents))
 			for _, agent := range tc.agents {
 				objects = append(objects, agent)
@@ -341,32 +315,24 @@ func TestR06MACAmbiguityBothDirections(t *testing.T) {
 			workers := append([]v1alpha1.WorkerStatus(nil), tc.workers...)
 
 			bound, err := r.matchAndBindAgents(ctx, co, observed, workers, r.macResolver)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if bound != 0 {
-				t.Fatalf("ambiguous MAC evidence bound %d workers, want none", bound)
-			}
+			Expect(err).ToNot(HaveOccurred(), "unexpected error: %v", err)
+			Expect(bound).To(BeZero(), "ambiguous MAC evidence bound %d workers, want none", bound)
 			for _, w := range workers {
-				if w.Phase != workerPhaseWaitingForAgent {
-					t.Fatalf("worker %s advanced to %s under ambiguous evidence", w.Name, w.Phase)
-				}
+				Expect(w.Phase).To(Equal(workerPhaseWaitingForAgent), "worker %s advanced to %s under ambiguous evidence", w.Name, w.Phase)
 			}
 			for _, agent := range tc.agents {
 				got := &unstructured.Unstructured{}
 				got.SetGroupVersionKind(agentGVK)
-				if err := c.Get(ctx, client.ObjectKeyFromObject(agent), got); err != nil {
-					t.Fatal(err)
-				}
+				Expect(c.Get(ctx, client.ObjectKeyFromObject(agent), got)).To(Succeed())
 				if assigned := got.GetLabels()[workerNameLabel]; assigned != agent.GetLabels()[workerNameLabel] {
-					t.Fatalf("Agent %s was reassigned to %q", agent.GetName(), assigned)
+					Fail(fmt.Sprintf("Agent %s was reassigned to %q", agent.GetName(), assigned))
 				}
 			}
-		})
+		}()
 	}
-}
+})
 
-func TestAgentBindingCrashRecovery(t *testing.T) {
+var _ = It("recovers Agent binding after an interrupted status write", func() {
 	ctx := context.Background()
 	a := agentPhaseFixture("", false)
 	_ = unstructured.SetNestedSlice(a.Object, []interface{}{map[string]interface{}{"macAddress": "aa"}}, "status", "inventory", "interfaces")
@@ -377,39 +343,29 @@ func TestAgentBindingCrashRecovery(t *testing.T) {
 	co := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: "order", Namespace: "osac"}, Status: v1alpha1.ClusterOrderStatus{Workers: []v1alpha1.WorkerStatus{w}}}
 	histogram := workerCorrelationDuration.WithLabelValues(tenantOf(co), workerTypeBareMetal, w.InstanceType)
 	before := &dto.Metric{}
-	if err := histogram.(interface{ Write(*dto.Metric) error }).Write(before); err != nil {
-		t.Fatal(err)
-	}
+	Expect(histogram.(interface{ Write(*dto.Metric) error }).Write(before)).To(Succeed())
 	agents := &unstructured.UnstructuredList{Items: []unstructured.Unstructured{*a}}
 	bound, res, err := reconcileAgentStage(r, co, co.Status.Workers, agents)
-	if err != nil || bound[0].Phase != workerPhaseBinding || !res.IsZero() {
-		t.Fatalf("binding: %+v %+v %v", bound, res, err)
-	}
+	Expect(err).NotTo(HaveOccurred(), "binding: %+v %+v %v", bound, res, err)
+	Expect(bound[0].Phase).To(Equal(workerPhaseBinding), "binding: %+v %+v %v", bound, res, err)
+	Expect(res.IsZero()).To(BeTrue(), "binding: %+v %+v %v", bound, res, err)
 	// Simulate a crash: discard bound worker status, retaining only the Agent patch.
-	if err := c.Get(ctx, client.ObjectKeyFromObject(a), a); err != nil {
-		t.Fatal(err)
-	}
+	Expect(c.Get(ctx, client.ObjectKeyFromObject(a), a)).To(Succeed())
 	agents.Items = []unstructured.Unstructured{*a}
 	recovered, res, err := reconcileAgentStage(r, co, co.Status.Workers, agents)
-	if err != nil || recovered[0].Phase != workerPhaseBinding || !res.IsZero() {
-		t.Fatalf("status repair: %+v %+v %v", recovered, res, err)
-	}
-	if recovered[0].BareMetalInstance != w.BareMetalInstance {
-		t.Fatal("status repair changed BMI identity")
-	}
+	Expect(err).NotTo(HaveOccurred(), "status repair: %+v %+v %v", recovered, res, err)
+	Expect(recovered[0].Phase).To(Equal(workerPhaseBinding), "status repair: %+v %+v %v", recovered, res, err)
+	Expect(res.IsZero()).To(BeTrue(), "status repair: %+v %+v %v", recovered, res, err)
+	Expect(recovered[0].BareMetalInstance).To(Equal(w.BareMetalInstance), "status repair changed BMI identity")
 	after := &dto.Metric{}
-	if err := histogram.(interface{ Write(*dto.Metric) error }).Write(after); err != nil {
-		t.Fatal(err)
-	}
+	Expect(histogram.(interface{ Write(*dto.Metric) error }).Write(after)).To(Succeed())
 	if delta := after.GetHistogram().GetSampleCount() - before.GetHistogram().GetSampleCount(); delta != 1 {
-		t.Fatalf("correlation observations = %d, want 1", delta)
+		Fail(fmt.Sprintf("correlation observations = %d, want 1", delta))
 	}
-	if len(recorder.Events) != 1 {
-		t.Fatalf("binding events = %d, want 1", len(recorder.Events))
-	}
-}
+	Expect(recorder.Events).To(HaveLen(1), "binding events = %d, want 1", len(recorder.Events))
+})
 
-func TestR09NewWorkerOnOldOrder(t *testing.T) {
+var _ = It("starts a new worker's timeout independently of the parent order's age", func() {
 	oldOrder := metav1.NewTime(time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC))
 	recent := metav1.NewTime(time.Now().Add(-time.Minute).Truncate(time.Second))
 	w := newWorkerStatus("standard", "standard", "worker", "id", workerPhaseWaitingForAgent)
@@ -420,18 +376,15 @@ func TestR09NewWorkerOnOldOrder(t *testing.T) {
 	}
 	r := &Reconciler{recorder: events.NewFakeRecorder(10), macResolver: func(context.Context, string) []string { return nil }}
 	got, res, err := reconcileAgentStage(r, co, co.Status.Workers, &unstructured.UnstructuredList{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got[0].Phase != workerPhaseWaitingForAgent || res.RequeueAfter != agentRequeueInterval {
-		t.Fatalf("new worker on old order inherited parent age: %+v result=%+v", got[0], res)
-	}
-}
+	Expect(err).NotTo(HaveOccurred())
+	Expect(got[0].Phase).To(Equal(workerPhaseWaitingForAgent), "new worker on old order inherited parent age: %+v result=%+v", got[0], res)
+	Expect(res.RequeueAfter).To(Equal(agentRequeueInterval), "new worker on old order inherited parent age: %+v result=%+v", got[0], res)
+})
 
-// TestR09RetryClockExcludesBackoff proves an old failure timestamp is not reused
+// An old failure timestamp is not reused
 // as the next attempt's registration origin, so retry backoff is not counted
 // against the fresh attempt.
-func TestR09RetryClockExcludesBackoff(t *testing.T) {
+var _ = It("excludes retry backoff from the attempt timeout", func() {
 	oldFailure := metav1.NewTime(time.Now().Add(-2 * time.Hour).Truncate(time.Second))
 	recent := metav1.NewTime(time.Now().Add(-time.Minute).Truncate(time.Second))
 	w := newWorkerStatus("standard", "standard", "worker", "id", workerPhaseWaitingForAgent)
@@ -444,17 +397,14 @@ func TestR09RetryClockExcludesBackoff(t *testing.T) {
 	}
 	r := &Reconciler{recorder: events.NewFakeRecorder(10), macResolver: func(context.Context, string) []string { return nil }}
 	got, res, err := reconcileAgentStage(r, co, co.Status.Workers, &unstructured.UnstructuredList{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got[0].Phase != workerPhaseWaitingForAgent || res.RequeueAfter != agentRequeueInterval {
-		t.Fatalf("retry attempt inherited backoff failure age: %+v result=%+v", got[0], res)
-	}
-}
+	Expect(err).NotTo(HaveOccurred())
+	Expect(got[0].Phase).To(Equal(workerPhaseWaitingForAgent), "retry attempt inherited backoff failure age: %+v result=%+v", got[0], res)
+	Expect(res.RequeueAfter).To(Equal(agentRequeueInterval), "retry attempt inherited backoff failure age: %+v result=%+v", got[0], res)
+})
 
-// TestR09PolicyClockBoundaries fixes the policy clock so exact, just-before and
+// A fixed policy clock makes exact, just-before and
 // just-after boundaries are evaluated without sleeps.
-func TestR09PolicyClockBoundaries(t *testing.T) {
+var _ = It("applies inclusive timeout, retry and healthy-reset clock boundaries", func() {
 	base := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	origin := metav1.NewTime(base)
 	co := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: "order", Namespace: "osac"}}
@@ -472,23 +422,20 @@ func TestR09PolicyClockBoundaries(t *testing.T) {
 		{"exact timeout", base.Add(agentRegistrationTimeout), workerPhaseFailed},
 		{"just after timeout", base.Add(agentRegistrationTimeout + time.Second), workerPhaseFailed},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		By(tt.name)
+		func() {
 			r := &Reconciler{recorder: events.NewFakeRecorder(10)}
 			got := r.checkAgentRegistrationTimeout(context.Background(), co, []v1alpha1.WorkerStatus{timeoutWorker()}, tt.now)
-			if got[0].Phase != tt.want {
-				t.Fatalf("phase=%s want %s", got[0].Phase, tt.want)
-			}
-		})
+			Expect(got[0].Phase).To(Equal(tt.want), "phase=%s want %s", got[0].Phase, tt.want)
+		}()
 	}
 
 	due := metav1.NewTime(base.Add(time.Minute))
 	retry := v1alpha1.WorkerStatus{Phase: workerPhaseFailed, NextRetryTime: &due}
-	if isRetryDue(retry, base) || !isRetryDue(retry, due.Time) || !isRetryDue(retry, due.Time.Add(time.Second)) {
-		t.Fatal("retry due boundary is not inclusive of the deadline")
-	}
-	if !isRetryDue(v1alpha1.WorkerStatus{Phase: workerPhaseFailed}, base) {
-		t.Fatal("nil retry deadline must be due")
-	}
+	Expect(isRetryDue(retry, base)).To(BeFalse(), "retry due boundary is not inclusive of the deadline")
+	Expect(isRetryDue(retry, due.Time)).To(BeTrue(), "retry due boundary is not inclusive of the deadline")
+	Expect(isRetryDue(retry, due.Time.Add(time.Second))).To(BeTrue(), "retry due boundary is not inclusive of the deadline")
+	Expect(isRetryDue(v1alpha1.WorkerStatus{Phase: workerPhaseFailed}, base)).To(BeTrue(), "nil retry deadline must be due")
 
 	ready := newWorkerStatus("standard", "standard", "ready", "ready-id", workerPhaseReady)
 	ready.AttemptCount = 1
@@ -502,17 +449,16 @@ func TestR09PolicyClockBoundaries(t *testing.T) {
 		{"exact healthy threshold", base.Add(minHealthyDuration), 0},
 		{"just after healthy threshold", base.Add(minHealthyDuration + time.Second), 0},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		By(tt.name)
+		func() {
 			workers := []v1alpha1.WorkerStatus{ready}
 			resetHealthyWorkers(ctrllog.FromContext(context.Background()), co, workers, tt.now)
-			if workers[0].AttemptCount != tt.want {
-				t.Fatalf("attemptCount=%d want %d", workers[0].AttemptCount, tt.want)
-			}
-		})
+			Expect(workers[0].AttemptCount).To(Equal(tt.want), "attemptCount=%d want %d", workers[0].AttemptCount, tt.want)
+		}()
 	}
-}
+})
 
-func TestAgentTimeoutAndReadinessObservations(t *testing.T) {
+var _ = It("records Agent timeout and readiness observations once", func() {
 	recorder := events.NewFakeRecorder(10)
 	r := &Reconciler{recorder: recorder, macResolver: func(context.Context, string) []string { return nil }}
 	fixed := metav1.NewTime(time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC))
@@ -522,25 +468,17 @@ func TestAgentTimeoutAndReadinessObservations(t *testing.T) {
 	failures := workerProvisioningFailures.WithLabelValues(tenantOf(co), workerTypeBareMetal, w.InstanceType)
 	beforeFailures := testutil.ToFloat64(failures)
 	got, res, err := reconcileAgentStage(r, co, co.Status.Workers, &unstructured.UnstructuredList{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got[0].Phase != workerPhaseFailed || got[0].LastFailureReason != eventReasonAgentRegistrationTimeout || !res.IsZero() {
-		t.Fatalf("incorrect timeout: %+v, %+v", got, res)
-	}
+	Expect(err).NotTo(HaveOccurred())
+	Expect(got[0].Phase).To(Equal(workerPhaseFailed), "incorrect timeout: %+v, %+v", got, res)
+	Expect(got[0].LastFailureReason).To(Equal(eventReasonAgentRegistrationTimeout), "incorrect timeout: %+v, %+v", got, res)
+	Expect(res.IsZero()).To(BeTrue(), "incorrect timeout: %+v, %+v", got, res)
 	co.Status.Workers = got
 	got, _, err = reconcileAgentStage(r, co, got, &unstructured.UnstructuredList{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got[0].Phase != workerPhaseFailed {
-		t.Fatal("repeated observation resurrected failed worker")
-	}
-	if len(recorder.Events) != 1 {
-		t.Fatalf("timeout events = %d, want 1", len(recorder.Events))
-	}
+	Expect(err).NotTo(HaveOccurred())
+	Expect(got[0].Phase).To(Equal(workerPhaseFailed), "repeated observation resurrected failed worker")
+	Expect(recorder.Events).To(HaveLen(1), "timeout events = %d, want 1", len(recorder.Events))
 	if delta := testutil.ToFloat64(failures) - beforeFailures; delta != 1 {
-		t.Fatalf("failure metric delta = %v, want 1", delta)
+		Fail(fmt.Sprintf("failure metric delta = %v, want 1", delta))
 	}
 	// A recent attempt origin must not time out even with stale failure history:
 	// the failure timestamp is not the registration clock.
@@ -549,37 +487,32 @@ func TestAgentTimeoutAndReadinessObservations(t *testing.T) {
 	w.LastFailureTime = &fixed
 	co.Status.Workers = []v1alpha1.WorkerStatus{w}
 	got, res, err = reconcileAgentStage(r, co, co.Status.Workers, &unstructured.UnstructuredList{})
-	if err != nil || got[0].Phase != workerPhaseWaitingForAgent || res.RequeueAfter != agentRequeueInterval {
-		t.Fatalf("recent retry timed out: %+v, %+v, %v", got, res, err)
-	}
+	Expect(err).NotTo(HaveOccurred(), "recent retry timed out: %+v, %+v, %v", got, res, err)
+	Expect(got[0].Phase).To(Equal(workerPhaseWaitingForAgent), "recent retry timed out: %+v, %+v, %v", got, res, err)
+	Expect(res.RequeueAfter).To(Equal(agentRequeueInterval), "recent retry timed out: %+v, %+v, %v", got, res, err)
 	// Newly installed Binding workers emit readiness once; ReadySince is initialized.
 	w.Phase = workerPhaseBinding
 	beforeMetric := &dto.Metric{}
 	histogram := workerProvisioningDuration.WithLabelValues(tenantOf(co), workerTypeBareMetal, w.InstanceType)
-	if err := histogram.(interface{ Write(*dto.Metric) error }).Write(beforeMetric); err != nil {
-		t.Fatal(err)
-	}
+	Expect(histogram.(interface{ Write(*dto.Metric) error }).Write(beforeMetric)).To(Succeed())
 	agents := &unstructured.UnstructuredList{Items: []unstructured.Unstructured{*agentPhaseFixture(w.Name, true)}}
 	got, _, err = reconcileAgentStage(r, co, []v1alpha1.WorkerStatus{w}, agents)
-	if err != nil || got[0].ReadySince == nil {
-		t.Fatalf("missing readiness: %+v, %v", got, err)
-	}
+	Expect(err).NotTo(HaveOccurred(), "missing readiness: %+v, %v", got, err)
+	Expect(got[0].ReadySince).NotTo(BeNil(), "missing readiness: %+v, %v", got, err)
 	since := got[0].ReadySince.DeepCopy()
 	got, _, err = reconcileAgentStage(r, co, got, agents)
-	if err != nil || !got[0].ReadySince.Equal(since) || len(recorder.Events) != 2 {
-		t.Fatalf("duplicate readiness or timestamp reset: %+v, %v, events=%d", got, err, len(recorder.Events))
-	}
+	Expect(err).NotTo(HaveOccurred(), "duplicate readiness or timestamp reset: %+v, %v, events=%d", got, err, len(recorder.Events))
+	Expect(got[0].ReadySince.Equal(since)).To(BeTrue(), "duplicate readiness or timestamp reset: %+v, %v, events=%d", got, err, len(recorder.Events))
+	Expect(recorder.Events).To(HaveLen(2), "duplicate readiness or timestamp reset: %+v, %v, events=%d", got, err, len(recorder.Events))
 	afterMetric := &dto.Metric{}
-	if err := histogram.(interface{ Write(*dto.Metric) error }).Write(afterMetric); err != nil {
-		t.Fatal(err)
-	}
+	Expect(histogram.(interface{ Write(*dto.Metric) error }).Write(afterMetric)).To(Succeed())
 	if delta := afterMetric.GetHistogram().GetSampleCount() - beforeMetric.GetHistogram().GetSampleCount(); delta != 1 {
-		t.Fatalf("readiness observations = %d, want 1", delta)
+		Fail(fmt.Sprintf("readiness observations = %d, want 1", delta))
 	}
-}
+})
 
-func TestAgentObservationBeforeSlotSelectionAndStaleIgnition(t *testing.T) {
-	_, _, co := nodeSetHarness(t, "order", nodeRequest("standard", 1))
+var _ = It("observes Agents before selecting slots and classifying stale ignition", func() {
+	_, _, co := nodeSetHarness("order", nodeRequest("standard", 1))
 	co.Annotations = map[string]string{infraEnvUIDAnnotation: "old"}
 	co.Status.Workers = []v1alpha1.WorkerStatus{
 		newWorkerStatus("standard", "standard", "installed", "id-1", workerPhaseWaitingForAgent),
@@ -590,16 +523,12 @@ func TestAgentObservationBeforeSlotSelectionAndStaleIgnition(t *testing.T) {
 		agents.Items[i].SetNamespace(co.Namespace)
 	}
 	projected, err := projectAgentWorkerPhases(co, co.Status.Workers, agents)
-	if err != nil {
-		t.Fatal(err)
-	}
+	Expect(err).NotTo(HaveOccurred())
 	co.Status.Workers = projected
 	plan := planWorkerSlots(co)
-	if len(plan.selected) != 1 || plan.selected[0].Name != "installed" {
-		t.Fatalf("incorrect early retention: %+v", plan)
-	}
+	Expect(plan.selected).To(HaveLen(1), "incorrect early retention: %+v", plan)
+	Expect(plan.selected[0].Name).To(Equal("installed"), "incorrect early retention: %+v", plan)
 	co.Status.Workers = classifyStaleIgnition(co, "new")
-	if co.Status.Workers[0].Phase != workerPhaseReady || co.Status.Workers[1].Phase != workerPhaseFailed {
-		t.Fatalf("incorrect stale ignition classification: %+v", co.Status.Workers)
-	}
-}
+	Expect(co.Status.Workers[0].Phase).To(Equal(workerPhaseReady), "incorrect stale ignition classification: %+v", co.Status.Workers)
+	Expect(co.Status.Workers[1].Phase).To(Equal(workerPhaseFailed), "incorrect stale ignition classification: %+v", co.Status.Workers)
+})

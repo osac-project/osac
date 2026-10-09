@@ -6,6 +6,21 @@ cliImage: quay.io/openshift/origin-cli:4.20.0
 #   runAsNonRoot: true
 #   runAsUser: 1000
 #   fsGroup: 1000
+# Resources for every cliImage hook Job. These all shell out to `oc`, which
+# performs full API discovery and caches every API group and resource in
+# memory, so peak usage scales with the cluster's CRD count rather than with
+# what the hook itself does -- an `oc` baseline of ~150Mi plus the discovery
+# cache. 256Mi OOMKills on clusters carrying CNV, MCE, MetalLB, Kafka, ACM and
+# ODF CRDs, so the limit is shared across all hooks instead of being raised per
+# hook as each one is observed to fail. Raise it on clusters with unusually
+# large CRD counts.
+hookResources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 200m
+    memory: 1Gi
 osacNamespace: osac
 # Gates creation of the shared CSI credential Secret during infra install.
 csiDriver:
@@ -79,12 +94,33 @@ cnv:
   channel: "stable"
 
 mce:
+  # Opt in only when this installation owns the multicluster engine lifecycle.
   enabled: false
   channel: "stable-2.17"
   imageService:
+    # Keep enabled until the Assisted discovery-artifact fix is released and
+    # verified.
     enabled: true
   osImages: []
-  imageOverrides: []
+  # Temporary MCE 5.0 operand bridge until a stable MCE 5.0 catalog is
+  # available. These overrides render only when mce.enabled is true.
+  imageOverrides:
+    - image-name: assisted-service
+      image-remote: quay.io/edge-infrastructure
+      image-digest: sha256:c007ecc530f4bb0a43814f4373bdec6e27d1fa3698554b0935a07c086802e479
+      image-key: assisted_service_9
+    - image-name: assisted-installer-agent
+      image-remote: quay.io/edge-infrastructure
+      image-digest: sha256:0f4f6041821d1a03da280090cf8a857e6b081487301de7e37553b0398925b391
+      image-key: assisted_installer_agent
+    - image-name: assisted-installer
+      image-remote: quay.io/edge-infrastructure
+      image-digest: sha256:04fe09dddf10be4fa7dfd91bde7b4c6addb60b3d1291596a9399fe057f5f1f3b
+      image-key: assisted_installer
+    - image-name: assisted-installer-controller
+      image-remote: quay.io/edge-infrastructure
+      image-digest: sha256:54c095c08defc738558948ef1be52dd980642bf0020570435a68384d1d5177a3
+      image-key: assisted_installer_controller
 
 kafka:
   enabled: false

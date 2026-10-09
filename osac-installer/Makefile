@@ -360,6 +360,7 @@ endif
 		--set osacNamespace=$(NS) \
 		--set kindClusterName=$(KIND_CLUSTER_NAME) \
 		--post-renderer $(DEV_FULL_HELM_POST_RENDERER) \
+		$(OSAC_HELM_FORCE_CONFLICTS) \
 		--wait --timeout 30m
 
 ##@ Composite

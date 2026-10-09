@@ -636,10 +636,6 @@
             "minLength": 1
           }
         },
-        "remoteClusterKubeconfig": {
-          "type": "string",
-          "description": "Path to kubeconfig for remote cluster access (subchart default)"
-        },
         "global": {
           "type": "object",
           "description": "Helm-injected global values (passed automatically to subcharts)"

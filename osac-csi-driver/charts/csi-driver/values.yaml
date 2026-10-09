@@ -1,7 +1,6 @@
 # Leave empty to use the Helm release namespace. The umbrella chart sets this
 # explicitly for its shared hub deployment.
 namespace: ""
-
 global:
   fulfillmentTrust:
     enabled: false
@@ -29,14 +28,11 @@ global:
         limits:
           cpu: 500m
           memory: 256Mi
-
 driverName: csi.osac.openshift.io
-
 image:
   repository: ghcr.io/osac-project/osac-csi-driver
-  tag: main  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+  tag: sha-ffc34b4 # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
   pullPolicy: Always
-
 controller:
   replicas: 1
   clusterID: ""
@@ -58,8 +54,8 @@ controller:
   # Connection to the OSAC fulfillment-service (runs on the hub / control plane cluster).
   # The CSI driver runs on tenant clusters and authenticates to the
   # fulfillment-service using OAuth2 client_credentials via Keycloak. The
-    # credentials Secret must be provisioned in the CSI namespace before the
-    # chart is installed.
+  # credentials Secret must be provisioned in the CSI namespace before the
+  # chart is installed.
   fulfillment:
     # gRPC endpoint of the fulfillment-service (e.g. "fulfillment-api.osac.svc:8000").
     # Leave empty to use in-memory stubs.
@@ -104,7 +100,6 @@ controller:
       cpu: 100m
       memory: 128Mi
   leaderElection: true
-
 node:
   privileged: true
   vendorSockets: ""
@@ -124,7 +119,6 @@ node:
     requests:
       cpu: 100m
       memory: 128Mi
-
 sidecars:
   provisioner:
     image:
@@ -138,7 +132,6 @@ sidecars:
     image:
       repository: registry.k8s.io/sig-storage/csi-node-driver-registrar
       tag: v2.12.0
-
 serviceAccount:
   controller:
     create: true
@@ -146,7 +139,6 @@ serviceAccount:
   node:
     create: true
     name: ""
-
 vendors:
   trident:
     enabled: false
@@ -157,7 +149,6 @@ vendors:
       certsSecret: ""
     node:
       socketPath: /var/lib/kubelet/plugins/csi.trident.netapp.io
-
   vast:
     enabled: false
     image:
@@ -179,7 +170,6 @@ vendors:
       credentialsSecret: ""
     node:
       socketPath: /var/lib/kubelet/plugins/csi.vast.vastdata.com
-
   pure:
     enabled: false
     image:

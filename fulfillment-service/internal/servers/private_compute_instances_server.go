@@ -588,7 +588,11 @@ func (s *PrivateComputeInstancesServer) Update(ctx context.Context,
 			return err
 		}
 		if updateIncludesField(request.GetUpdateMask(), "spec.user_data", "spec.user_data_secret") {
-			diskImage, _, err := s.validateDiskImage(ctx, candidate)
+			// Resolve the disk image without lifecycle checks: disk_image is
+			// immutable, so the image may have become OBSOLETE after instance
+			// creation. Blocking user_data updates in that case would
+			// permanently lock out the user.
+			diskImage, err := s.lookupDiskImageForUpdate(ctx, candidate)
 			if err != nil {
 				return err
 			}
@@ -810,6 +814,29 @@ func (s *PrivateComputeInstancesServer) validateDiskImage(
 	spec.SetDiskImage(canonicalDiskImageReference(diskImage))
 
 	return diskImage, warnings, nil
+}
+
+// lookupDiskImageForUpdate resolves the instance's disk image without lifecycle
+// validation. disk_image is immutable, so on the update path we only need the
+// image's metadata (e.g. guest OS family) for user-data validation; the image
+// may have transitioned to OBSOLETE after the instance was created and that must
+// not block subsequent user_data changes.
+func (s *PrivateComputeInstancesServer) lookupDiskImageForUpdate(
+	ctx context.Context,
+	ci *privatev1.ComputeInstance,
+) (*privatev1.DiskImage, error) {
+	ref := ci.GetSpec().GetDiskImage()
+	if ref == nil {
+		return nil, nil
+	}
+	key := refKey(ref)
+	if key == "" {
+		return nil, nil
+	}
+	return resolveDiskImageReference(ctx, s.diskImagesDao, referenceScope{
+		tenant:  ci.GetMetadata().GetTenant(),
+		project: ci.GetMetadata().GetProject(),
+	}, ref, "")
 }
 
 // validateSshPublicKey resolves the tenant-scoped Secret reference and checks that the

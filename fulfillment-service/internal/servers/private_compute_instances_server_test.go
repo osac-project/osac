@@ -4113,6 +4113,7 @@ var _ = Describe("Catalog materialized defaults", func() {
 				Metadata: privatev1.Metadata_builder{
 					Name:   "win-vnet",
 					Tenant: testTenant,
+					Labels: map[string]string{defaultLabel: "true"},
 				}.Build(),
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
@@ -4132,6 +4133,28 @@ var _ = Describe("Catalog materialized defaults", func() {
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			subnetID = snResult.GetObject().GetId()
+
+			// Create a default SecurityGroup for the Windows VirtualNetwork.
+			sgDao, err := dao.NewGenericDAO[*privatev1.SecurityGroup]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = sgDao.Create().SetObject(privatev1.SecurityGroup_builder{
+				Id: "win-sg-default",
+				Metadata: privatev1.Metadata_builder{
+					Name:   "win-sg-default",
+					Tenant: testTenant,
+					Labels: map[string]string{defaultLabel: "true"},
+				}.Build(),
+				Spec: privatev1.SecurityGroupSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "win-vnet"}.Build(),
+				}.Build(),
+				Status: privatev1.SecurityGroupStatus_builder{
+					State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
 
 			// Create an instance type for the template spec defaults.
 			_, err = server.instanceTypesDao.Create().SetObject(privatev1.InstanceType_builder{
@@ -4276,6 +4299,82 @@ var _ = Describe("Catalog materialized defaults", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(updateResponse.GetObject().GetSpec().GetUserData()).To(Equal(updatedXML))
+		})
+
+		It("allows user_data update when the Windows disk image becomes OBSOLETE", func() {
+			// Create a Windows instance with valid XML user_data while the image is AVAILABLE.
+			validXML := `<?xml version="1.0" encoding="utf-8"?><unattend><settings/></unattend>`
+			createResponse, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("win-test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "win-template"}.Build(),
+						UserData: &validXML,
+						NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+							privatev1.ComputeNetworkAttachment_builder{
+								Subnet: privatev1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := createResponse.GetObject().GetId()
+
+			// Transition the disk image to OBSOLETE after the instance was created.
+			getResponse, err := server.diskImagesDao.Get().SetId("win-disk-image").Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			diskImage := getResponse.GetObject()
+			diskImage.GetSpec().SetLifecycle(privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_OBSOLETE)
+			_, err = server.diskImagesDao.Update().SetObject(diskImage).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Updating user_data should succeed despite the OBSOLETE image; the
+			// update path resolves the image without lifecycle checks because
+			// disk_image is immutable.
+			updatedXML := `<?xml version="1.0" encoding="utf-8"?><unattend><settings pass="oobeSystem"/></unattend>`
+			updateResponse, err := server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Id: id,
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						UserData: &updatedXML,
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"spec.user_data"},
+				},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updateResponse.GetObject().GetSpec().GetUserData()).To(Equal(updatedXML))
+
+			// XML validation still applies: invalid XML must still be rejected.
+			invalidXML := "this is not xml"
+			_, err = server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Id: id,
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						UserData: &invalidXML,
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"spec.user_data"},
+				},
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			st, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(st.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(st.Message()).To(ContainSubstring("not well-formed XML"))
+
+			// Restore the image lifecycle so BeforeEach-created state is not polluted.
+			getResponse, err = server.diskImagesDao.Get().SetId("win-disk-image").Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			diskImage = getResponse.GetObject()
+			diskImage.GetSpec().SetLifecycle(privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE)
+			_, err = server.diskImagesDao.Update().SetObject(diskImage).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
 		})
 	})
 })

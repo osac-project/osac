@@ -299,10 +299,10 @@ func (r *networkingHubResolver) findNetworkClass(ctx context.Context) (*privatev
 		Limit:  &limit,
 	}.Build())
 	if err != nil {
-		return nil, fmt.Errorf("failed to list network classes: %w", err)
+		return nil, fmt.Errorf("%w: failed to list network classes: %w", ErrCanonicalHubUnavailable, err)
 	}
 	if response == nil {
-		return nil, errors.New("network classes list returned an empty response")
+		return nil, fmt.Errorf("%w: network classes list returned an empty response", ErrCanonicalHubUnavailable)
 	}
 
 	return findOnlyActive(
@@ -324,10 +324,10 @@ func (r *networkingHubResolver) findOnlyHub(ctx context.Context) (*privatev1.Hub
 		Limit:  &limit,
 	}.Build())
 	if err != nil {
-		return nil, fmt.Errorf("failed to list networking hubs: %w", err)
+		return nil, fmt.Errorf("%w: failed to list networking hubs: %w", ErrCanonicalHubUnavailable, err)
 	}
 	if response == nil {
-		return nil, errors.New("networking hubs list returned an empty response")
+		return nil, fmt.Errorf("%w: networking hubs list returned an empty response", ErrCanonicalHubUnavailable)
 	}
 
 	hub, err := findOnlyActive(
@@ -419,6 +419,8 @@ func (r *networkingHubResolver) canonicalHubFailure(
 
 func canonicalHubErrorMessage(err error) string {
 	switch {
+	case errors.Is(err, ErrCanonicalHubUnavailable):
+		return "canonical networking hub is temporarily unavailable"
 	case errors.Is(err, ErrNoNetworkingHubs):
 		return canonicalHubNoCandidatesMessage
 	case errors.Is(err, ErrMultipleNetworkingHubs):

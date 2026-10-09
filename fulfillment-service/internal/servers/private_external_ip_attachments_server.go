@@ -47,6 +47,7 @@ type PrivateExternalIPAttachmentsServer struct {
 	logger                  *slog.Logger
 	tenancyLogic            auth.TenancyLogic
 	generic                 *GenericServer[*privatev1.ExternalIPAttachment]
+	networkClassesDao       *dao.GenericDAO[*privatev1.NetworkClass]
 	externalIPDao           *dao.GenericDAO[*privatev1.ExternalIP]
 	computeInstanceDao      *dao.GenericDAO[*privatev1.ComputeInstance]
 	clusterDao              *dao.GenericDAO[*privatev1.Cluster]
@@ -130,6 +131,11 @@ func (b *PrivateExternalIPAttachmentsServerBuilder) Build() (*PrivateExternalIPA
 		return nil, err
 	}
 
+	networkClassesDao, err := newNetworkClassesDAO(b.logger, b.tenancyLogic, b.metricsRegisterer)
+	if err != nil {
+		return nil, err
+	}
+
 	externalIPAttachmentDaoBuilder := dao.NewGenericDAO[*privatev1.ExternalIPAttachment]().
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
@@ -163,6 +169,7 @@ func (b *PrivateExternalIPAttachmentsServerBuilder) Build() (*PrivateExternalIPA
 		logger:                  b.logger,
 		tenancyLogic:            b.tenancyLogic,
 		generic:                 generic,
+		networkClassesDao:       networkClassesDao,
 		externalIPDao:           externalIPDao,
 		computeInstanceDao:      computeInstanceDao,
 		clusterDao:              clusterDao,
@@ -223,8 +230,20 @@ func (s *PrivateExternalIPAttachmentsServer) Create(ctx context.Context,
 		return
 	}
 
-	err = s.validateTargetReference(ctx, spec)
+	var targetHubReference networkingHubReference
+	targetHubReference, err = s.validateTargetReference(ctx, spec)
 	if err != nil {
+		return
+	}
+	canonicalHubID, err := canonicalNetworkingHubID(ctx, s.logger, s.networkClassesDao)
+	if err != nil {
+		return
+	}
+	if err = validateNetworkingHubReferences(canonicalHubID, networkingHubReference{
+		resourceType: "ExternalIP",
+		id:           externalIP.GetId(),
+		hubID:        externalIP.GetStatus().GetHub(),
+	}, targetHubReference); err != nil {
 		return
 	}
 
@@ -443,7 +462,7 @@ func (s *PrivateExternalIPAttachmentsServer) validateExternalIPReference(
 }
 
 func (s *PrivateExternalIPAttachmentsServer) validateTargetReference(
-	ctx context.Context, spec *privatev1.ExternalIPAttachmentSpec) error {
+	ctx context.Context, spec *privatev1.ExternalIPAttachmentSpec) (networkingHubReference, error) {
 	switch {
 	case spec.HasComputeInstance():
 		return s.validateComputeInstanceReference(ctx, spec.GetComputeInstance())
@@ -452,63 +471,63 @@ func (s *PrivateExternalIPAttachmentsServer) validateTargetReference(
 	case spec.HasBaremetalInstance():
 		return s.validateBareMetalInstanceReference(ctx, spec.GetBaremetalInstance())
 	default:
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+		return networkingHubReference{}, grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"exactly one target must be set (compute_instance, cluster, or baremetal_instance)")
 	}
 }
 
 func (s *PrivateExternalIPAttachmentsServer) validateComputeInstanceReference(
-	ctx context.Context, ref *privatev1.ComputeInstanceLocalReference) error {
+	ctx context.Context, ref *privatev1.ComputeInstanceLocalReference) (networkingHubReference, error) {
 	key := refKey(ref)
-	_, err := s.computeInstanceDao.Get().
+	response, err := s.computeInstanceDao.Get().
 		SetId(key).
 		SetLock(true).
 		Do(ctx)
 	if err != nil {
 		var notFoundErr *dao.ErrNotFound
 		if errors.As(err, &notFoundErr) {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			return networkingHubReference{}, grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"ComputeInstance '%s' does not exist", key)
 		}
-		return ConvertDAOErrorToGRPC(err, "get", key)
+		return networkingHubReference{}, ConvertDAOErrorToGRPC(err, "get", key)
 	}
-	return nil
+	return networkingHubReference{resourceType: "ComputeInstance", id: key, hubID: response.GetObject().GetStatus().GetHub()}, nil
 }
 
 func (s *PrivateExternalIPAttachmentsServer) validateClusterReference(
-	ctx context.Context, ref *privatev1.ClusterLocalReference) error {
+	ctx context.Context, ref *privatev1.ClusterLocalReference) (networkingHubReference, error) {
 	key := refKey(ref)
-	_, err := s.clusterDao.Get().
+	response, err := s.clusterDao.Get().
 		SetId(key).
 		SetLock(true).
 		Do(ctx)
 	if err != nil {
 		var notFoundErr *dao.ErrNotFound
 		if errors.As(err, &notFoundErr) {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			return networkingHubReference{}, grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"Cluster '%s' does not exist", key)
 		}
-		return ConvertDAOErrorToGRPC(err, "get", key)
+		return networkingHubReference{}, ConvertDAOErrorToGRPC(err, "get", key)
 	}
-	return nil
+	return networkingHubReference{resourceType: "Cluster", id: key, hubID: response.GetObject().GetStatus().GetHub()}, nil
 }
 
 func (s *PrivateExternalIPAttachmentsServer) validateBareMetalInstanceReference(
-	ctx context.Context, ref *privatev1.BareMetalInstanceLocalReference) error {
+	ctx context.Context, ref *privatev1.BareMetalInstanceLocalReference) (networkingHubReference, error) {
 	key := refKey(ref)
-	_, err := s.bareMetalInstanceDao.Get().
+	response, err := s.bareMetalInstanceDao.Get().
 		SetId(key).
 		SetLock(true).
 		Do(ctx)
 	if err != nil {
 		var notFoundErr *dao.ErrNotFound
 		if errors.As(err, &notFoundErr) {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			return networkingHubReference{}, grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"BareMetalInstance '%s' does not exist", key)
 		}
-		return ConvertDAOErrorToGRPC(err, "get", key)
+		return networkingHubReference{}, ConvertDAOErrorToGRPC(err, "get", key)
 	}
-	return nil
+	return networkingHubReference{resourceType: "BareMetalInstance", id: key, hubID: response.GetObject().GetStatus().GetHub()}, nil
 }
 
 func (s *PrivateExternalIPAttachmentsServer) getTargetID(

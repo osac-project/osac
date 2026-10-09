@@ -118,23 +118,27 @@ func waitForComputeInstanceFixtureResource(ctx context.Context, get func(context
 }
 
 func setComputeInstanceFixtureVirtualNetworkReady(ctx context.Context, client privatev1.VirtualNetworksClient, id string) {
-	Eventually(func(g Gomega) {
-		probeCtx, cancel := context.WithTimeout(ctx, computeInstanceFixtureProbeTimeout)
-		defer cancel()
-		resp, err := client.Get(probeCtx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
-		g.Expect(err).ToNot(HaveOccurred())
-		g.Expect(resp.GetObject().GetStatus().GetState()).To(
-			Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING))
-	}, time.Minute, time.Second).Should(Succeed())
+	waitForComputeInstanceFixtureResource(ctx, func(probeCtx context.Context) error {
+		_, err := client.Get(probeCtx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
+		return err
+	})
+	expectNetworkingResourceHub(ctx, hubId, func(getCtx context.Context) (string, error) {
+		resp, err := client.Get(getCtx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
+		if err != nil {
+			return "", err
+		}
+		return resp.GetObject().GetStatus().GetHub(), nil
+	})
 
 	getCtx, cancel := context.WithTimeout(ctx, computeInstanceFixtureProbeTimeout)
 	resp, err := client.Get(getCtx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
 	cancel()
 	Expect(err).ToNot(HaveOccurred())
 	virtualNetwork := resp.GetObject()
-	virtualNetwork.SetStatus(privatev1.VirtualNetworkStatus_builder{
-		State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
-	}.Build())
+	if !virtualNetwork.HasStatus() {
+		virtualNetwork.SetStatus(&privatev1.VirtualNetworkStatus{})
+	}
+	virtualNetwork.GetStatus().SetState(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY)
 	updateCtx, cancel := context.WithTimeout(ctx, computeInstanceFixtureProbeTimeout)
 	_, err = client.Update(updateCtx, privatev1.VirtualNetworksUpdateRequest_builder{
 		Object:     virtualNetwork,
@@ -142,6 +146,14 @@ func setComputeInstanceFixtureVirtualNetworkReady(ctx context.Context, client pr
 	}.Build())
 	cancel()
 	Expect(err).ToNot(HaveOccurred())
+	Eventually(func(g Gomega) {
+		probeCtx, cancel := context.WithTimeout(ctx, computeInstanceFixtureProbeTimeout)
+		defer cancel()
+		resp, err := client.Get(probeCtx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(resp.GetObject().GetStatus().GetState()).To(
+			Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY))
+	}, time.Minute, time.Second).Should(Succeed())
 }
 
 func cleanupComputeInstanceFixture(

@@ -57,6 +57,7 @@ type PrivateClustersServer struct {
 	templatesDao              *dao.GenericDAO[*privatev1.ClusterTemplate]
 	catalogItemsDao           *dao.GenericDAO[*privatev1.ClusterCatalogItem]
 	clusterVersionsDao        *dao.GenericDAO[*privatev1.ClusterVersion]
+	networkClassesDao         *dao.GenericDAO[*privatev1.NetworkClass]
 	subnetsDao                *dao.GenericDAO[*privatev1.Subnet]
 	securityGroupsDao         *dao.GenericDAO[*privatev1.SecurityGroup]
 	externalIPPoolDao         *dao.GenericDAO[*privatev1.ExternalIPPool]
@@ -118,6 +119,10 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 	}
 	if b.tenancyLogic == nil {
 		err = errors.New("tenancy logic is mandatory")
+		return
+	}
+	networkClassesDao, err := newNetworkClassesDAO(b.logger, b.tenancyLogic, b.metricsRegisterer)
+	if err != nil {
 		return
 	}
 	// Create the templates DAO:
@@ -260,6 +265,7 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		catalogItemsDao:           catalogItemsDao,
 		bareMetalInstanceTypesDao: bareMetalInstanceTypesDao,
 		clusterVersionsDao:        clusterVersionsDao,
+		networkClassesDao:         networkClassesDao,
 		subnetsDao:                subnetsDao,
 		securityGroupsDao:         securityGroupsDao,
 		externalIPPoolDao:         externalIPPoolDao,
@@ -1123,6 +1129,11 @@ func (s *PrivateClustersServer) validateNetworkAttachmentState(ctx context.Conte
 	if err := validateResolvedSubnetReady(subnet, subnetKey, " in spec.network_attachment"); err != nil {
 		return err
 	}
+	hubReferences := []networkingHubReference{{
+		resourceType: "Subnet",
+		id:           subnet.GetId(),
+		hubID:        subnet.GetStatus().GetHub(),
+	}}
 
 	virtualNetworkID := refKey(subnet.GetSpec().GetVirtualNetwork())
 	if virtualNetworkID == "" {
@@ -1151,9 +1162,18 @@ func (s *PrivateClustersServer) validateNetworkAttachmentState(ctx context.Conte
 			fmt.Sprintf(" in spec.network_attachment.security_groups[%d]", i), virtualNetworkID); err != nil {
 			return err
 		}
+		hubReferences = append(hubReferences, networkingHubReference{
+			resourceType: "SecurityGroup",
+			id:           sg.GetId(),
+			hubID:        sg.GetStatus().GetHub(),
+		})
 	}
 
-	return nil
+	canonicalHubID, err := canonicalNetworkingHubID(ctx, s.logger, s.networkClassesDao)
+	if err != nil {
+		return err
+	}
+	return validateNetworkingHubReferences(canonicalHubID, hubReferences...)
 }
 
 // validateAutoExternalIPImmutability prevents changing auto_external_ip_attachment after creation.

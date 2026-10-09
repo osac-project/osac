@@ -28,6 +28,7 @@ import (
 
 type fakeNetworkClassesClient struct {
 	objects      []*privatev1.NetworkClass
+	listErr      error
 	listRequests []*privatev1.NetworkClassesListRequest
 	updates      []*privatev1.NetworkClassesUpdateRequest
 	listCalls    int
@@ -42,6 +43,9 @@ func (f *fakeNetworkClassesClient) List(
 ) (*privatev1.NetworkClassesListResponse, error) {
 	f.listCalls++
 	f.listRequests = append(f.listRequests, proto.Clone(request).(*privatev1.NetworkClassesListRequest))
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	return privatev1.NetworkClassesListResponse_builder{
 		Items: f.objects,
 		Size:  int32(len(f.objects)),
@@ -300,6 +304,48 @@ var _ = Describe("NetworkingHubResolver", func() {
 		Expect(hubs.listCall).To(Equal(0))
 		Expect(cache.calls).To(Equal([]string{"hub-a"}))
 		Expect(result.HubID).To(Equal("hub-a"))
+		Expect(result.State).To(Equal(privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING))
+		Expect(networkClasses.updates).To(BeEmpty())
+	})
+
+	It("classifies NetworkClass lookup failures as retryable unavailable errors", func() {
+		listErr := errors.New("database connection reset")
+		networkClasses := &fakeNetworkClassesClient{listErr: listErr}
+		cache := &fakeNetworkingHubCache{}
+		reader, err := NewNetworkingHubReader().
+			SetNetworkClassesClient(networkClasses).
+			SetHubCache(cache).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = reader.Resolve(ctx)
+
+		Expect(errors.Is(err, ErrCanonicalHubUnavailable)).To(BeTrue())
+		Expect(errors.Is(err, listErr)).To(BeTrue())
+		var pendingErr, failedErr error
+		handled, retry := HandleResourceNetworkingHubResolutionError(
+			err,
+			func(err error) { pendingErr = err },
+			func(err error) { failedErr = err },
+		)
+		Expect(handled).To(BeTrue())
+		Expect(retry).To(BeTrue())
+		Expect(pendingErr).To(Equal(ErrCanonicalHubUnavailable))
+		Expect(failedErr).ToNot(HaveOccurred())
+	})
+
+	It("classifies Hub discovery failures as retryable unavailable errors", func() {
+		networkClass := testNetworkClass("nc-a", "", privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING, "")
+		networkClasses := &fakeNetworkClassesClient{objects: []*privatev1.NetworkClass{networkClass}}
+		listErr := errors.New("Hub service unavailable")
+		hubs := &fakeHubsListClient{listErr: listErr}
+		cache := &fakeNetworkingHubCache{}
+		resolver := mustBuildNetworkingHubResolver(networkClasses, hubs, cache)
+
+		result, err := resolver.Resolve(ctx)
+
+		Expect(errors.Is(err, ErrCanonicalHubUnavailable)).To(BeTrue())
+		Expect(errors.Is(err, listErr)).To(BeTrue())
 		Expect(result.State).To(Equal(privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING))
 		Expect(networkClasses.updates).To(BeEmpty())
 	})

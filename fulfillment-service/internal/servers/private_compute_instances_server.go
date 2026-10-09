@@ -58,6 +58,7 @@ type PrivateComputeInstancesServer struct {
 	generic                 *GenericServer[*privatev1.ComputeInstance]
 	templatesDao            *dao.GenericDAO[*privatev1.ComputeInstanceTemplate]
 	catalogItemsDao         *dao.GenericDAO[*privatev1.ComputeInstanceCatalogItem]
+	networkClassesDao       *dao.GenericDAO[*privatev1.NetworkClass]
 	subnetsDao              *dao.GenericDAO[*privatev1.Subnet]
 	virtualNetworksDao      *dao.GenericDAO[*privatev1.VirtualNetwork]
 	securityGroupsDao       *dao.GenericDAO[*privatev1.SecurityGroup]
@@ -239,6 +240,10 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 	}
 
 	// Create and populate the object:
+	networkClassesDao, err := newNetworkClassesDAO(b.logger, b.tenancyLogic, b.metricsRegisterer)
+	if err != nil {
+		return
+	}
 	storageTiersDao, err := dao.NewGenericDAO[*privatev1.StorageTier]().SetLogger(b.logger).SetTenancyLogic(b.tenancyLogic).SetMetricsRegisterer(b.metricsRegisterer).Build()
 	if err != nil {
 		return
@@ -250,6 +255,7 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 		generic:                 generic,
 		templatesDao:            templatesDao,
 		catalogItemsDao:         catalogItemsDao,
+		networkClassesDao:       networkClassesDao,
 		subnetsDao:              subnetsDao,
 		virtualNetworksDao:      virtualNetworksDao,
 		securityGroupsDao:       securityGroupsDao,
@@ -1178,6 +1184,7 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesState(
 		return nil
 	}
 
+	hubReferences := make([]networkingHubReference, 0, len(attachments)*2)
 	for i, att := range attachments {
 		subnetRef := att.GetSubnet()
 		securityGroupRefs := att.GetSecurityGroups()
@@ -1198,6 +1205,11 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesState(
 		if err := validateResolvedSubnetReady(subnet, subnetKey, source); err != nil {
 			return err
 		}
+		hubReferences = append(hubReferences, networkingHubReference{
+			resourceType: "Subnet",
+			id:           subnet.GetId(),
+			hubID:        subnet.GetStatus().GetHub(),
+		})
 
 		virtualNetworkID := refKey(subnet.GetSpec().GetVirtualNetwork())
 
@@ -1223,10 +1235,19 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesState(
 			if err := validateResolvedSecurityGroup(sg, sgKey, source, virtualNetworkID); err != nil {
 				return err
 			}
+			hubReferences = append(hubReferences, networkingHubReference{
+				resourceType: "SecurityGroup",
+				id:           sg.GetId(),
+				hubID:        sg.GetStatus().GetHub(),
+			})
 		}
 	}
 
-	return nil
+	canonicalHubID, err := canonicalNetworkingHubID(ctx, s.logger, s.networkClassesDao)
+	if err != nil {
+		return err
+	}
+	return validateNetworkingHubReferences(canonicalHubID, hubReferences...)
 }
 
 // resolveCatalogItem finds the VM's published Catalog Item in the VM's selected tenant/project

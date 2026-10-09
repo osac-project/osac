@@ -36,8 +36,26 @@ import (
 )
 
 var _ = Describe("Private compute instances server", func() {
+	var defaultTestNetworkClass *privatev1.NetworkClass
+
 	BeforeEach(func() {
 		var err error
+		networkClassesDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
+			SetLogger(logger).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+		fabricManager := "test-strategy"
+		class, err := networkClassesDao.Create().SetObject(privatev1.NetworkClass_builder{
+			FabricManager: &fabricManager,
+			Metadata:      privatev1.Metadata_builder{Name: "test-network-class", Tenant: testTenant}.Build(),
+			Status: privatev1.NetworkClassStatus_builder{
+				State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+				Hub:   "network-hub-a",
+			}.Build(),
+		}.Build()).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		defaultTestNetworkClass = class.GetObject()
 
 		// Create a default test virtual network and subnet for tests that don't explicitly create one:
 		vnDao, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
@@ -52,6 +70,9 @@ var _ = Describe("Private compute instances server", func() {
 				Name:   "test-vnet",
 				Tenant: testTenant,
 				Labels: map[string]string{defaultLabel: "true"},
+			}.Build(),
+			Spec: privatev1.VirtualNetworkSpec_builder{
+				NetworkClass: privatev1.NetworkClassReference_builder{Id: defaultTestNetworkClass.GetId()}.Build(),
 			}.Build(),
 		}.Build()
 
@@ -76,6 +97,7 @@ var _ = Describe("Private compute instances server", func() {
 			}.Build(),
 			Status: privatev1.SubnetStatus_builder{
 				State: privatev1.SubnetState_SUBNET_STATE_READY,
+				Hub:   "network-hub-a",
 			}.Build(),
 		}.Build()
 
@@ -125,34 +147,9 @@ var _ = Describe("Private compute instances server", func() {
 		Expect(err).ToNot(HaveOccurred())
 	})
 
-	// Helper function to create a NetworkClass for test setup
-	createTestNetworkClass := func(ctx context.Context) *privatev1.NetworkClass {
-		ncDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
-			SetLogger(logger).
-			SetTenancyLogic(tenancy).
-			Build()
-		Expect(err).ToNot(HaveOccurred())
-
-		fabricManager := "test-strategy"
-		nc := privatev1.NetworkClass_builder{
-			FabricManager: &fabricManager,
-			Metadata: privatev1.Metadata_builder{
-				Name:   "test-network-class",
-				Tenant: testTenant,
-			}.Build(),
-			Capabilities: privatev1.NetworkClassCapabilities_builder{
-				SupportsIpv4:      true,
-				SupportsIpv6:      true,
-				SupportsDualStack: true,
-			}.Build(),
-			Status: privatev1.NetworkClassStatus_builder{
-				State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
-			}.Build(),
-		}.Build()
-
-		response, err := ncDao.Create().SetObject(nc).Do(ctx)
-		Expect(err).ToNot(HaveOccurred())
-		return response.GetObject()
+	// Helper function to use the NetworkClass created with the default test fixtures.
+	createTestNetworkClass := func(_ context.Context) *privatev1.NetworkClass {
+		return defaultTestNetworkClass
 	}
 
 	// Helper function to create a VirtualNetwork for test setup
@@ -191,7 +188,7 @@ var _ = Describe("Private compute instances server", func() {
 
 	// Helper function to create a Subnet with specified state
 	var subnetNameSeq int
-	createTestSubnet := func(ctx context.Context, vnID string, state privatev1.SubnetState, isDefault ...bool) *privatev1.Subnet {
+	createTestSubnetWithHub := func(ctx context.Context, vnID string, state privatev1.SubnetState, hubID string, isDefault ...bool) *privatev1.Subnet {
 		subnetNameSeq++
 		subnetDao, err := dao.NewGenericDAO[*privatev1.Subnet]().
 			SetLogger(logger).
@@ -215,6 +212,7 @@ var _ = Describe("Private compute instances server", func() {
 			}.Build(),
 			Status: privatev1.SubnetStatus_builder{
 				State: state,
+				Hub:   hubID,
 			}.Build(),
 		}.Build()
 
@@ -222,10 +220,13 @@ var _ = Describe("Private compute instances server", func() {
 		Expect(err).ToNot(HaveOccurred())
 		return response.GetObject()
 	}
+	createTestSubnet := func(ctx context.Context, vnID string, state privatev1.SubnetState, isDefault ...bool) *privatev1.Subnet {
+		return createTestSubnetWithHub(ctx, vnID, state, "network-hub-a", isDefault...)
+	}
 
 	// Helper function to create a SecurityGroup with specified state
 	var sgNameSeq int
-	createTestSecurityGroup := func(ctx context.Context, vnID string, state privatev1.SecurityGroupState, isDefault ...bool) *privatev1.SecurityGroup {
+	createTestSecurityGroupWithHub := func(ctx context.Context, vnID string, state privatev1.SecurityGroupState, hubID string, isDefault ...bool) *privatev1.SecurityGroup {
 		sgNameSeq++
 		sgDao, err := dao.NewGenericDAO[*privatev1.SecurityGroup]().
 			SetLogger(logger).
@@ -248,12 +249,16 @@ var _ = Describe("Private compute instances server", func() {
 			}.Build(),
 			Status: privatev1.SecurityGroupStatus_builder{
 				State: state,
+				Hub:   hubID,
 			}.Build(),
 		}.Build()
 
 		response, err := sgDao.Create().SetObject(sg).Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
 		return response.GetObject()
+	}
+	createTestSecurityGroup := func(ctx context.Context, vnID string, state privatev1.SecurityGroupState, isDefault ...bool) *privatev1.SecurityGroup {
+		return createTestSecurityGroupWithHub(ctx, vnID, state, "network-hub-a", isDefault...)
 	}
 
 	Describe("Builder", func() {
@@ -2134,6 +2139,7 @@ var _ = Describe("Private compute instances server", func() {
 					}.Build(),
 					Status: privatev1.SubnetStatus_builder{
 						State: privatev1.SubnetState_SUBNET_STATE_READY,
+						Hub:   "network-hub-a",
 					}.Build(),
 				}.Build()
 
@@ -2388,6 +2394,97 @@ var _ = Describe("Private compute instances server", func() {
 		})
 
 		Context("NetworkAttachments validation", func() {
+			It("rejects a subnet assigned to a different Hub than the canonical NetworkClass even without a SecurityGroup", func() {
+				const canonicalHub = "network-hub-a"
+				const subnetHub = "network-hub-b"
+				subnet := createTestSubnetWithHub(ctx, virtualNetwork.GetId(), privatev1.SubnetState_SUBNET_STATE_READY, subnetHub)
+				name := fmt.Sprintf("test-%s", uuid.NewString()[:8])
+
+				response, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							Template: privatev1.ComputeInstanceTemplateReference_builder{Id: template.GetId()}.Build(),
+							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+								privatev1.ComputeNetworkAttachment_builder{
+									Subnet: privatev1.SubnetLocalReference_builder{Id: subnet.GetId()}.Build(),
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build())
+
+				Expect(response).To(BeNil())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				Expect(err.Error()).To(ContainSubstring("Subnet"))
+				Expect(err.Error()).To(ContainSubstring("different Hub than the canonical networking Hub"))
+				Expect(err.Error()).ToNot(ContainSubstring(subnetHub))
+				Expect(err.Error()).ToNot(ContainSubstring(canonicalHub))
+
+				stored, err := server.generic.dao.List().SetFilter(fmt.Sprintf("this.metadata.name == %q", name)).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(stored.GetItems()).To(BeEmpty())
+			})
+
+			It("rejects a ready subnet that has no Hub assignment", func() {
+				subnet := createTestSubnetWithHub(ctx, virtualNetwork.GetId(), privatev1.SubnetState_SUBNET_STATE_READY, "")
+
+				_, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							Template: privatev1.ComputeInstanceTemplateReference_builder{Id: template.GetId()}.Build(),
+							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+								privatev1.ComputeNetworkAttachment_builder{
+									Subnet: privatev1.SubnetLocalReference_builder{Id: subnet.GetId()}.Build(),
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				Expect(err.Error()).To(ContainSubstring("Subnet"))
+				Expect(err.Error()).To(ContainSubstring("Hub assignment"))
+			})
+
+			It("rejects an attachment whose subnet and security group are assigned to different Hubs", func() {
+				const expectedHub = "network-hub-a"
+				const actualHub = "network-hub-b"
+				subnet := createTestSubnetWithHub(ctx, virtualNetwork.GetId(), privatev1.SubnetState_SUBNET_STATE_READY, expectedHub)
+				group := createTestSecurityGroupWithHub(ctx, virtualNetwork.GetId(), privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY, actualHub)
+				name := fmt.Sprintf("test-%s", uuid.NewString()[:8])
+
+				response, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							Template: privatev1.ComputeInstanceTemplateReference_builder{Id: template.GetId()}.Build(),
+							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+								privatev1.ComputeNetworkAttachment_builder{
+									Subnet:         privatev1.SubnetLocalReference_builder{Id: subnet.GetId()}.Build(),
+									SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: group.GetId()}.Build()},
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build())
+
+				Expect(response).To(BeNil())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				Expect(err.Error()).To(ContainSubstring("different Hub than the canonical networking Hub"))
+				Expect(err.Error()).ToNot(ContainSubstring(expectedHub))
+				Expect(err.Error()).ToNot(ContainSubstring(actualHub))
+
+				instancesDao, daoErr := dao.NewGenericDAO[*privatev1.ComputeInstance]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(daoErr).ToNot(HaveOccurred())
+				stored, daoErr := instancesDao.List().SetFilter(fmt.Sprintf("this.metadata.name == %q", name)).Do(ctx)
+				Expect(daoErr).ToNot(HaveOccurred())
+				Expect(stored.GetItems()).To(BeEmpty())
+			})
+
 			It("Should reject when subnet not found in network_attachments", func() {
 				vm := privatev1.ComputeInstance_builder{
 					Metadata: privatev1.Metadata_builder{

@@ -210,6 +210,15 @@ func createCatalogItemNetworkClassFixture(ctx context.Context) string {
 		return err
 	}, nil)
 	waitForNetworkClassReady(ctx, classes, classID)
+	setNetworkClassCanonicalHub(ctx, classes, classID, hubId)
+	expectNetworkClassStatus(
+		ctx,
+		classes,
+		classID,
+		privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+		hubId,
+		"",
+	)
 	return classID
 }
 
@@ -253,17 +262,18 @@ func createCatalogItemSubnetInClassFixture(ctx context.Context, tenant, project,
 		return false, nil
 	})
 
-	Eventually(func() privatev1.VirtualNetworkState {
-		r, e := networks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: networkID}.Build())
-		Expect(e).NotTo(HaveOccurred())
-		return r.GetObject().GetStatus().GetState()
-	}, time.Minute, time.Second).Should(Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING))
-	// Catalog provisioning needs a ready network, so advance this fixture from Pending to Ready.
-	currentVirtualNetwork, err := networks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: networkID}.Build())
-	Expect(err).NotTo(HaveOccurred())
-	currentVirtualNetwork.GetObject().SetStatus(privatev1.VirtualNetworkStatus_builder{State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY}.Build())
-	_, err = networks.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{Object: currentVirtualNetwork.GetObject(), UpdateMask: catalogItemUpdateMask("status.state")}.Build())
-	Expect(err).NotTo(HaveOccurred())
+	waitForNetworkingFixtureResource(ctx, func(probeCtx context.Context) error {
+		_, err := networks.Get(probeCtx, privatev1.VirtualNetworksGetRequest_builder{Id: networkID}.Build())
+		return err
+	})
+	expectNetworkingResourceHub(ctx, hubId, func(getCtx context.Context) (string, error) {
+		response, getErr := networks.Get(getCtx, privatev1.VirtualNetworksGetRequest_builder{Id: networkID}.Build())
+		if getErr != nil {
+			return "", getErr
+		}
+		return response.GetObject().GetStatus().GetHub(), nil
+	})
+	setRoutingVirtualNetworkReady(ctx, networks, networkID)
 
 	subnets := privatev1.NewSubnetsClient(tool.InternalView().AdminConn())
 	subnet, err := subnets.Create(ctx, privatev1.SubnetsCreateRequest_builder{
@@ -296,17 +306,18 @@ func createCatalogItemSubnetInClassFixture(ctx context.Context, tenant, project,
 		return false, nil
 	})
 
-	Eventually(func() privatev1.SubnetState {
-		r, e := subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetID}.Build())
-		Expect(e).NotTo(HaveOccurred())
-		return r.GetObject().GetStatus().GetState()
-	}, time.Minute, time.Second).Should(Equal(privatev1.SubnetState_SUBNET_STATE_PENDING))
-	// Catalog provisioning needs a ready Subnet, so advance this fixture from Pending to Ready.
-	currentSubnet, err := subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetID}.Build())
-	Expect(err).NotTo(HaveOccurred())
-	currentSubnet.GetObject().SetStatus(privatev1.SubnetStatus_builder{State: privatev1.SubnetState_SUBNET_STATE_READY}.Build())
-	_, err = subnets.Update(ctx, privatev1.SubnetsUpdateRequest_builder{Object: currentSubnet.GetObject(), UpdateMask: catalogItemUpdateMask("status.state")}.Build())
-	Expect(err).NotTo(HaveOccurred())
+	waitForNetworkingFixtureResource(ctx, func(probeCtx context.Context) error {
+		_, err := subnets.Get(probeCtx, privatev1.SubnetsGetRequest_builder{Id: subnetID}.Build())
+		return err
+	})
+	expectNetworkingResourceHub(ctx, hubId, func(getCtx context.Context) (string, error) {
+		response, getErr := subnets.Get(getCtx, privatev1.SubnetsGetRequest_builder{Id: subnetID}.Build())
+		if getErr != nil {
+			return "", getErr
+		}
+		return response.GetObject().GetStatus().GetHub(), nil
+	})
+	setRoutingSubnetReady(ctx, subnets, subnetID)
 	return catalogItemNetworkFixture{subnetID: subnetID, virtualNetworkID: networkID, networkClassID: classID}
 }
 
@@ -344,16 +355,23 @@ func createCatalogItemNetworkInClassFixture(ctx context.Context, tenant, project
 		return false, nil
 	})
 
-	Eventually(func() privatev1.SecurityGroupState {
-		r, e := groups.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: groupID}.Build())
-		Expect(e).NotTo(HaveOccurred())
-		return r.GetObject().GetStatus().GetState()
-	}, time.Minute, time.Second).Should(Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING))
-	// The Security Group must be ready before it can join a resource attachment.
+	waitForNetworkingFixtureResource(ctx, func(probeCtx context.Context) error {
+		_, err := groups.Get(probeCtx, privatev1.SecurityGroupsGetRequest_builder{Id: groupID}.Build())
+		return err
+	})
+	expectNetworkingResourceHub(ctx, hubId, func(getCtx context.Context) (string, error) {
+		response, getErr := groups.Get(getCtx, privatev1.SecurityGroupsGetRequest_builder{Id: groupID}.Build())
+		if getErr != nil {
+			return "", getErr
+		}
+		return response.GetObject().GetStatus().GetHub(), nil
+	})
 	currentSecurityGroup, err := groups.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: groupID}.Build())
 	Expect(err).NotTo(HaveOccurred())
-	currentSecurityGroup.GetObject().SetStatus(privatev1.SecurityGroupStatus_builder{State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY}.Build())
-	_, err = groups.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{Object: currentSecurityGroup.GetObject(), UpdateMask: catalogItemUpdateMask("status.state")}.Build())
+	currentSecurityGroup.GetObject().GetStatus().SetState(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY)
+	_, err = groups.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{
+		Object: currentSecurityGroup.GetObject(), UpdateMask: catalogItemUpdateMask("status.state"),
+	}.Build())
 	Expect(err).NotTo(HaveOccurred())
 	network.securityGroupID = groupID
 	return network
@@ -483,6 +501,8 @@ func createCatalogItemTenantAdminFixture(ctx context.Context) (string, *grpc.Cli
 		deleteTenant(ctx, tenants, privatev1.NewProjectsClient(tool.InternalView().AdminConn()), id, name)
 	})
 
+	_, err = tenants.Signal(ctx, privatev1.TenantsSignalRequest_builder{Id: id}.Build())
+	Expect(err).NotTo(HaveOccurred())
 	waitForTenantSynced(ctx, tenants, id)
 	tenant, err := tenants.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
 	Expect(err).NotTo(HaveOccurred())

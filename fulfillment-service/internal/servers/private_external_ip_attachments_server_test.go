@@ -38,7 +38,12 @@ func createExternalIPInState(
 	poolID string,
 	state privatev1.ExternalIPState,
 	attached bool,
+	hubIDs ...string,
 ) *privatev1.ExternalIP {
+	hubID := "network-hub-a"
+	if len(hubIDs) > 0 {
+		hubID = hubIDs[0]
+	}
 	resp, err := externalIPDao.Create().SetObject(
 		privatev1.ExternalIP_builder{
 			Metadata: privatev1.Metadata_builder{
@@ -52,6 +57,7 @@ func createExternalIPInState(
 				State:    state,
 				Address:  "203.0.113.1",
 				Attached: attached,
+				Hub:      hubID,
 			}.Build(),
 		}.Build(),
 	).Do(ctx)
@@ -72,6 +78,7 @@ func createClusterInState(
 			Spec: privatev1.ClusterSpec_builder{
 				Template: privatev1.ClusterTemplateReference_builder{Id: "ocp_small"}.Build(),
 			}.Build(),
+			Status: privatev1.ClusterStatus_builder{Hub: "network-hub-a"}.Build(),
 		}.Build(),
 	).Do(ctx)
 	ExpectWithOffset(1, err).ToNot(HaveOccurred())
@@ -91,6 +98,7 @@ func createBareMetalInstanceInState(
 			Spec: privatev1.BareMetalInstanceSpec_builder{
 				CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "bcm_h100"}.Build(),
 			}.Build(),
+			Status: privatev1.BareMetalInstanceStatus_builder{Hub: "network-hub-a"}.Build(),
 		}.Build(),
 	).Do(ctx)
 	ExpectWithOffset(1, err).ToNot(HaveOccurred())
@@ -110,6 +118,20 @@ var _ = Describe("Private external IP attachments server", func() {
 
 	BeforeEach(func() {
 		var err error
+
+		networkClassesDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
+			SetLogger(logger).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+		_, err = networkClassesDao.Create().SetObject(privatev1.NetworkClass_builder{
+			Metadata: privatev1.Metadata_builder{Tenant: testTenant, Name: "test-network-class"}.Build(),
+			Status: privatev1.NetworkClassStatus_builder{
+				State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+				Hub:   "network-hub-a",
+			}.Build(),
+		}.Build()).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
 
 		externalIPPoolDao, err = dao.NewGenericDAO[*privatev1.ExternalIPPool]().
 			SetLogger(logger).
@@ -452,6 +474,34 @@ var _ = Describe("Private external IP attachments server", func() {
 			Expect(response.GetObject().GetSpec().GetComputeInstance().GetId()).To(Equal(ci.GetId()))
 			Expect(response.GetObject().GetStatus().GetState()).To(
 				Equal(privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_PENDING))
+		})
+
+		It("rejects an attachment when the ExternalIP and ComputeInstance belong to different Hubs", func() {
+			eip := createExternalIPInState(ctx, externalIPDao, sharedPool.GetId(),
+				privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false, "network-hub-a")
+			ci := createComputeInstanceInState(ctx, computeInstanceDao,
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING, "workload-hub-b")
+			name := fmt.Sprintf("test-%s", uuid.NewString()[:8])
+
+			response, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
+				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+					Spec: privatev1.ExternalIPAttachmentSpec_builder{
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(response).To(BeNil())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(err.Error()).To(ContainSubstring("different Hub than the canonical networking Hub"))
+			Expect(err.Error()).ToNot(ContainSubstring("network-hub-a"))
+			Expect(err.Error()).ToNot(ContainSubstring("workload-hub-b"))
+
+			stored, err := server.externalIPAttachmentDao.List().
+				SetFilter(fmt.Sprintf("this.metadata.name == %q", name)).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(stored.GetItems()).To(BeEmpty())
 		})
 
 		It("Creates an attachment with a Cluster target and API endpoint", func() {

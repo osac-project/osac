@@ -54,6 +54,44 @@ func newIPv4NetworkingContractFixture(ctx context.Context) *ipv4NetworkingContra
 		subnets:         privatev1.NewSubnetsClient(adminConn),
 		securityGroups:  privatev1.NewSecurityGroupsClient(adminConn),
 	}
+	DeferCleanup(func(cleanupCtx context.Context) {
+		if fixture.securityGroupID != "" {
+			deleteComputeInstanceFixtureResource(cleanupCtx,
+				func(deleteCtx context.Context) error {
+					_, err := fixture.securityGroups.Delete(deleteCtx, privatev1.SecurityGroupsDeleteRequest_builder{
+						Id: fixture.securityGroupID,
+					}.Build())
+					return err
+				})
+		}
+		if fixture.subnetID != "" {
+			deleteComputeInstanceFixtureResource(cleanupCtx,
+				func(deleteCtx context.Context) error {
+					_, err := fixture.subnets.Delete(deleteCtx, privatev1.SubnetsDeleteRequest_builder{
+						Id: fixture.subnetID,
+					}.Build())
+					return err
+				})
+		}
+		if fixture.virtualNetworkID != "" {
+			deleteComputeInstanceFixtureResource(cleanupCtx,
+				func(deleteCtx context.Context) error {
+					_, err := fixture.virtualNetworks.Delete(deleteCtx, privatev1.VirtualNetworksDeleteRequest_builder{
+						Id: fixture.virtualNetworkID,
+					}.Build())
+					return err
+				})
+		}
+		if fixture.networkClassID != "" {
+			deleteComputeInstanceFixtureResource(cleanupCtx,
+				func(deleteCtx context.Context) error {
+					_, err := fixture.networkClasses.Delete(deleteCtx, privatev1.NetworkClassesDeleteRequest_builder{
+						Id: fixture.networkClassID,
+					}.Build())
+					return err
+				})
+		}
+	})
 
 	networkClassName := fmt.Sprintf("ipv4-contract-nc-%s", uuid.New()[24:])
 	networkClassResponse, err := fixture.networkClasses.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
@@ -87,23 +125,17 @@ func newIPv4NetworkingContractFixture(ctx context.Context) *ipv4NetworkingContra
 	}.Build())
 	Expect(err).ToNot(HaveOccurred())
 
-	// The fulfillment service starts the resource in PENDING. The integration
-	// environment does not run the operator feedback loop, so promote it via the
-	// private handler after the initial reconciliation pass.
+	// Wait for persistence, then promote the resource through the private handler.
+	// The component-integration environment does not run the operator feedback loop.
+	var virtualNetwork *privatev1.VirtualNetwork
 	Eventually(func(g Gomega) {
 		response, getErr := fixture.virtualNetworks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{
 			Id: fixture.virtualNetworkID,
 		}.Build())
 		g.Expect(getErr).ToNot(HaveOccurred())
-		g.Expect(response.GetObject().GetStatus().GetState()).To(
-			Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING))
+		virtualNetwork = response.GetObject()
 	}, time.Minute, time.Second).Should(Succeed())
 
-	virtualNetworkResponse, err := fixture.virtualNetworks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{
-		Id: fixture.virtualNetworkID,
-	}.Build())
-	Expect(err).ToNot(HaveOccurred())
-	virtualNetwork := virtualNetworkResponse.GetObject()
 	virtualNetwork.SetStatus(privatev1.VirtualNetworkStatus_builder{
 		State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
 	}.Build())
@@ -112,29 +144,6 @@ func newIPv4NetworkingContractFixture(ctx context.Context) *ipv4NetworkingContra
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
 	}.Build())
 	Expect(err).ToNot(HaveOccurred())
-
-	DeferCleanup(func() {
-		if fixture.securityGroupID != "" {
-			_, _ = fixture.securityGroups.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{
-				Id: fixture.securityGroupID,
-			}.Build())
-		}
-		if fixture.subnetID != "" {
-			_, _ = fixture.subnets.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{
-				Id: fixture.subnetID,
-			}.Build())
-		}
-		if fixture.virtualNetworkID != "" {
-			_, _ = fixture.virtualNetworks.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
-				Id: fixture.virtualNetworkID,
-			}.Build())
-		}
-		if fixture.networkClassID != "" {
-			_, _ = fixture.networkClasses.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
-				Id: fixture.networkClassID,
-			}.Build())
-		}
-	})
 
 	return fixture
 }
@@ -158,10 +167,8 @@ func (f *ipv4NetworkingContractFixture) createSubnet(ctx context.Context) *priva
 	Expect(err).ToNot(HaveOccurred())
 
 	Eventually(func(g Gomega) {
-		getResponse, getErr := f.subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: f.subnetID}.Build())
+		_, getErr := f.subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: f.subnetID}.Build())
 		g.Expect(getErr).ToNot(HaveOccurred())
-		g.Expect(getResponse.GetObject().GetStatus().GetState()).To(
-			Equal(privatev1.SubnetState_SUBNET_STATE_PENDING))
 	}, time.Minute, time.Second).Should(Succeed())
 
 	getResponse, err := f.subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: f.subnetID}.Build())

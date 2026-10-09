@@ -23,6 +23,13 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
+func waitForNetworkingFixtureResource(ctx context.Context, get func(context.Context) error) {
+	GinkgoHelper()
+	Eventually(func(g Gomega) {
+		g.Expect(get(ctx)).ToNot(HaveOccurred())
+	}, time.Minute, time.Second).Should(Succeed())
+}
+
 func waitForNetworkClassReady(
 	ctx context.Context,
 	client privatev1.NetworkClassesClient,

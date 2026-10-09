@@ -120,6 +120,23 @@ var _ = Describe("Private virtual networks server", func() {
 		})
 	})
 
+	Describe("Canonical networking Hub resolution", func() {
+		It("does not expose the NetworkClass ID while Hub assignment is pending", func() {
+			networkClass := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
+			networkClassesDAO, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			hubID, err := canonicalNetworkingHubID(ctx, logger, networkClassesDAO)
+			Expect(hubID).To(BeEmpty())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(err.Error()).To(ContainSubstring("canonical networking Hub assignment is pending"))
+			Expect(err.Error()).ToNot(ContainSubstring(networkClass.GetId()))
+		})
+	})
+
 	Describe("Validation tests", func() {
 		var server *PrivateVirtualNetworksServer
 

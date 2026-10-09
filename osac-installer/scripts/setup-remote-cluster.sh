@@ -160,42 +160,14 @@ if [[ "${MODE}" == "prepare" ]]; then
     exit 0
 fi
 
-REMOTE_TOKEN=$(oc "${remote_args[@]}" create token osac-remote-access -n "${INSTALLER_NAMESPACE}" --duration=8760h)
-
-REMOTE_KUBECONFIG_FILE=$(mktemp)
-chmod 600 "${REMOTE_KUBECONFIG_FILE}"
-trap 'rm -f "${REMOTE_KUBECONFIG_FILE}"' EXIT
-cat > "${REMOTE_KUBECONFIG_FILE}" <<EOF
-apiVersion: v1
-kind: Config
-clusters:
-- cluster:
-    insecure-skip-tls-verify: true
-    server: ${REMOTE_API_ADDRESS}
-  name: remote
-contexts:
-- context:
-    cluster: remote
-    user: osac-remote-access
-    namespace: ${INSTALLER_NAMESPACE}
-  name: remote
-current-context: remote
-users:
-- name: osac-remote-access
-  user:
-    token: ${REMOTE_TOKEN}
-EOF
-
-# Legacy post-install mode: update credentials in the already-installed
-# management namespace. Workload preparation does not create management objects.
-oc "${hub_args[@]}" get namespace "${INSTALLER_NAMESPACE}" >/dev/null
-
-oc "${hub_args[@]}" create secret generic "${REMOTE_KUBECONFIG_SECRET_NAME}" \
-    --from-file="${REMOTE_KUBECONFIG_SECRET_KEY}=${REMOTE_KUBECONFIG_FILE}" \
-    -n "${INSTALLER_NAMESPACE}" --dry-run=client -o yaml | oc "${hub_args[@]}" apply -f -
-oc "${hub_args[@]}" label secret "${REMOTE_KUBECONFIG_SECRET_NAME}" \
-    osac.openshift.io/remote-cluster-kubeconfig=true \
-    -n "${INSTALLER_NAMESPACE}" --overwrite
+# Keep kubeconfig generation and Secret staging in one implementation.
+HUB_KUBECONFIG="${HUB_KUBECONFIG}" \
+REMOTE_KUBECONFIG="${REMOTE_KUBECONFIG}" \
+REMOTE_API_ADDRESS="${REMOTE_API_ADDRESS}" \
+INSTALLER_NAMESPACE="${INSTALLER_NAMESPACE}" \
+REMOTE_KUBECONFIG_SECRET_NAME="${REMOTE_KUBECONFIG_SECRET_NAME}" \
+REMOTE_KUBECONFIG_SECRET_KEY="${REMOTE_KUBECONFIG_SECRET_KEY}" \
+bash "${SCRIPT_DIR}/stage-remote-cluster-secret.sh"
 
 # Legacy post-install mode: configure an already-installed management cluster.
 

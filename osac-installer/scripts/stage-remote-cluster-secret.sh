@@ -34,6 +34,12 @@ if [[ -z "${management_api}" || -z "${workload_api}" || "${management_api}" == "
     echo "ERROR: management and workload kubeconfigs must specify different API server endpoints" >&2
     exit 1
 fi
+workload_ca_data=$(oc "${remote_args[@]}" config view --minify --raw --flatten \
+    -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')
+if [[ -z "${workload_ca_data}" ]]; then
+    echo "ERROR: REMOTE_KUBECONFIG must provide trusted certificate authority data" >&2
+    exit 1
+fi
 
 hub_oc get namespace "${INSTALLER_NAMESPACE}" >/dev/null || {
     echo "ERROR: management namespace ${INSTALLER_NAMESPACE} does not exist; install infrastructure before staging remote access" >&2
@@ -56,8 +62,8 @@ apiVersion: v1
 kind: Config
 clusters:
 - cluster:
-    insecure-skip-tls-verify: true
-    server: ${REMOTE_API_ADDRESS}
+    certificate-authority-data: ${workload_ca_data}
+    server: "${REMOTE_API_ADDRESS}"
   name: remote
 contexts:
 - context:

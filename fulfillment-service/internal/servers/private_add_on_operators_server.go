@@ -137,6 +137,11 @@ func (s *PrivateAddOnOperatorsServer) Get(ctx context.Context,
 func (s *PrivateAddOnOperatorsServer) Create(ctx context.Context,
 	request *privatev1.AddOnOperatorsCreateRequest) (response *privatev1.AddOnOperatorsCreateResponse, err error) {
 	if object := request.GetObject(); object != nil {
+		if metadata := object.GetMetadata(); metadata != nil {
+			if err = validateAddOnOperatorClusterOrderName(metadata.GetName()); err != nil {
+				return
+			}
+		}
 		if err = ensureSharedOwnership(object); err != nil {
 			return
 		}
@@ -154,6 +159,11 @@ func (s *PrivateAddOnOperatorsServer) Create(ctx context.Context,
 func (s *PrivateAddOnOperatorsServer) Update(ctx context.Context,
 	request *privatev1.AddOnOperatorsUpdateRequest) (response *privatev1.AddOnOperatorsUpdateResponse, err error) {
 	if object := request.GetObject(); object != nil {
+		if metadata := object.GetMetadata(); metadata != nil && updateIncludesField(request.GetUpdateMask(), "metadata.name") {
+			if err = validateAddOnOperatorClusterOrderName(metadata.GetName()); err != nil {
+				return
+			}
+		}
 		if updateIncludesField(request.GetUpdateMask(), "metadata.tenant") {
 			if err = validateSharedOwnership(object); err != nil {
 				return

@@ -52,6 +52,7 @@ type addOnOperatorProviderStub struct {
 	cancelError        error
 	statusErrors       map[string]error
 	beforeTrigger      func(string)
+	attemptIDs         []string
 }
 
 func newAddOnOperatorProviderStub() *addOnOperatorProviderStub {
@@ -92,6 +93,11 @@ func (p *addOnOperatorProviderStub) TriggerProvision(ctx context.Context, _ clie
 		InitialState: osacv1alpha1.JobStatePending,
 		Message:      "queued",
 	}, nil
+}
+
+func (p *addOnOperatorProviderStub) TriggerProvisionWithAttemptID(ctx context.Context, resource client.Object, attemptID string) (*provisioning.ProvisionResult, error) {
+	p.attemptIDs = append(p.attemptIDs, attemptID)
+	return p.TriggerProvision(ctx, resource)
 }
 
 func (p *addOnOperatorProviderStub) GetProvisionStatus(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
@@ -218,8 +224,11 @@ var _ = Describe("AddOnOperatorReconciler", func() {
 				return
 			}
 			stored := getOrder(order.Name)
-			Expect(stored.Status.AddOnOperatorJobs).To(HaveLen(1))
+			Expect(stored.Status.AddOnOperatorJobs).To(HaveLen(2))
 			Expect(stored.Status.AddOnOperatorJobs[0].Name).To(Equal("cert-manager"))
+			Expect(stored.Status.AddOnOperatorJobs[0].JobID).NotTo(BeEmpty())
+			Expect(stored.Status.AddOnOperatorJobs[1].Name).To(Equal("gpu-operator"))
+			Expect(stored.Status.AddOnOperatorJobs[1].JobID).To(BeEmpty())
 		}
 		Expect(k8sClient.Create(ctx, order)).To(Succeed())
 
@@ -320,7 +329,7 @@ var _ = Describe("AddOnOperatorReconciler", func() {
 		Expect(findAddOnOperatorCondition(stored).Status).To(Equal(metav1.ConditionTrue))
 	})
 
-	It("records provider trigger failures as failed attempts", func() {
+	It("keeps a durable attempt when the provider launch response is uncertain", func() {
 		order := newOrder("trigger-failure", osacv1alpha1.ClusterOrderPhaseReady, "cert-manager")
 		provider.triggerError = errors.New("AAP unavailable")
 		Expect(k8sClient.Create(ctx, order)).To(Succeed())
@@ -332,12 +341,12 @@ var _ = Describe("AddOnOperatorReconciler", func() {
 		stored := getOrder(order.Name)
 		Expect(stored.Status.AddOnOperatorJobs).To(HaveLen(1))
 		Expect(stored.Status.AddOnOperatorJobs[0].JobID).To(BeEmpty())
-		Expect(stored.Status.AddOnOperatorJobs[0].State).To(Equal(osacv1alpha1.JobStateFailed))
-		Expect(stored.Status.AddOnOperatorJobs[0].Message).To(ContainSubstring("AAP unavailable"))
-		Expect(findAddOnOperatorCondition(stored).Status).To(Equal(metav1.ConditionFalse))
+		Expect(stored.Status.AddOnOperatorJobs[0].State).To(Equal(osacv1alpha1.JobStateWaiting))
+		Expect(stored.Status.AddOnOperatorJobs[0].Message).To(Equal("AAP launch pending"))
+		Expect(findAddOnOperatorCondition(stored)).To(BeNil())
 	})
 
-	It("records an admin kubeconfig error as a failed attempt", func() {
+	It("requeues an admin kubeconfig error without recording an attempt", func() {
 		order := newOrder("kubeconfig-failure", osacv1alpha1.ClusterOrderPhaseReady, "cert-manager")
 		reconciler.getAdminKubeconfig = func(context.Context, *osacv1alpha1.ClusterOrder) ([]byte, error) {
 			return nil, errors.New("kubeconfig secret unavailable")
@@ -349,13 +358,12 @@ var _ = Describe("AddOnOperatorReconciler", func() {
 		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
 
 		stored := getOrder(order.Name)
-		Expect(stored.Status.AddOnOperatorJobs).To(HaveLen(1))
-		Expect(stored.Status.AddOnOperatorJobs[0].State).To(Equal(osacv1alpha1.JobStateFailed))
-		Expect(stored.Status.AddOnOperatorJobs[0].Message).To(ContainSubstring("kubeconfig secret unavailable"))
+		Expect(stored.Status.AddOnOperatorJobs).To(BeEmpty())
+		Expect(findAddOnOperatorCondition(stored)).To(BeNil())
 		Expect(provider.triggeredOperators).To(BeEmpty())
 	})
 
-	It("records an unavailable admin kubeconfig as a failed attempt", func() {
+	It("requeues when the admin kubeconfig is unavailable without recording an attempt", func() {
 		order := newOrder("missing-kubeconfig", osacv1alpha1.ClusterOrderPhaseReady, "cert-manager")
 		reconciler.getAdminKubeconfig = func(context.Context, *osacv1alpha1.ClusterOrder) ([]byte, error) {
 			return nil, nil
@@ -367,13 +375,12 @@ var _ = Describe("AddOnOperatorReconciler", func() {
 		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
 
 		stored := getOrder(order.Name)
-		Expect(stored.Status.AddOnOperatorJobs).To(HaveLen(1))
-		Expect(stored.Status.AddOnOperatorJobs[0].State).To(Equal(osacv1alpha1.JobStateFailed))
-		Expect(stored.Status.AddOnOperatorJobs[0].Message).To(Equal("admin kubeconfig is not available"))
+		Expect(stored.Status.AddOnOperatorJobs).To(BeEmpty())
+		Expect(findAddOnOperatorCondition(stored)).To(BeNil())
 		Expect(provider.triggeredOperators).To(BeEmpty())
 	})
 
-	It("records an empty provider job ID as a failed attempt", func() {
+	It("keeps a durable attempt when the provider returns no job ID", func() {
 		order := newOrder("empty-job-id", osacv1alpha1.ClusterOrderPhaseReady, "cert-manager")
 		provider.returnEmptyJobID = true
 		Expect(k8sClient.Create(ctx, order)).To(Succeed())
@@ -385,7 +392,8 @@ var _ = Describe("AddOnOperatorReconciler", func() {
 		stored := getOrder(order.Name)
 		Expect(stored.Status.AddOnOperatorJobs).To(HaveLen(1))
 		Expect(stored.Status.AddOnOperatorJobs[0].JobID).To(BeEmpty())
-		Expect(stored.Status.AddOnOperatorJobs[0].State).To(Equal(osacv1alpha1.JobStateFailed))
+		Expect(stored.Status.AddOnOperatorJobs[0].State).To(Equal(osacv1alpha1.JobStateWaiting))
+		Expect(stored.Status.AddOnOperatorJobs[0].Message).To(Equal("AAP launch pending"))
 	})
 
 	It("marks purged AAP jobs failed so the operator can retry", func() {
@@ -406,45 +414,51 @@ var _ = Describe("AddOnOperatorReconciler", func() {
 		Expect(stored.Status.AddOnOperatorJobs[0].Message).To(Equal("AAP job was purged before completion"))
 	})
 
-	It("cancels active add-on jobs before removing its deletion finalizer", func() {
+	It("cancels every active add-on job and removes its deletion finalizer immediately", func() {
 		order := newOrder("delete-active-addon", osacv1alpha1.ClusterOrderPhaseReady, "cert-manager")
 		order.Finalizers = []string{osacPrefix + "/addon-operator"}
 		deletionTimestamp := metav1.Now()
 		order.Status.AddOnOperatorJobs = []osacv1alpha1.AddOnOperatorJobStatus{{
 			Name: "cert-manager",
 			JobStatus: osacv1alpha1.JobStatus{
-				JobID:     "active-addon-job",
+				JobID:     "older-active-addon-job",
+				Type:      osacv1alpha1.JobTypeProvision,
+				State:     osacv1alpha1.JobStateRunning,
+				Timestamp: deletionTimestamp,
+			},
+		}, {
+			Name: "cert-manager",
+			JobStatus: osacv1alpha1.JobStatus{
+				JobID:     "newer-active-addon-job",
+				Type:      osacv1alpha1.JobTypeProvision,
+				State:     osacv1alpha1.JobStatePending,
+				Timestamp: metav1.NewTime(deletionTimestamp.Add(time.Second)),
+			},
+		}, {
+			Name: "removed-from-spec",
+			JobStatus: osacv1alpha1.JobStatus{
+				JobID:     "removed-active-addon-job",
 				Type:      osacv1alpha1.JobTypeProvision,
 				State:     osacv1alpha1.JobStateRunning,
 				Timestamp: deletionTimestamp,
 			},
 		}}
-		provider.setJobStatus("active-addon-job", provisioning.ProvisionStatus{
-			JobID: "active-addon-job",
-			State: osacv1alpha1.JobStateRunning,
-		})
 		Expect(k8sClient.Create(ctx, order)).To(Succeed())
 		order.DeletionTimestamp = &deletionTimestamp
 
 		result, err := reconciler.reconcileDeletion(ctx, order)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+		Expect(result.RequeueAfter).To(BeZero())
 		stored := getOrder(order.Name)
-		Expect(stored.Finalizers).To(ContainElement(osacPrefix + "/addon-operator"))
-		Expect(provider.canceledJobIDs).To(Equal([]string{"active-addon-job"}))
-
-		provider.setJobStatus("active-addon-job", provisioning.ProvisionStatus{
-			JobID: "active-addon-job",
-			State: osacv1alpha1.JobStateCanceled,
-		})
-		_, err = reconciler.reconcileDeletion(ctx, order)
-		Expect(err).NotTo(HaveOccurred())
-		stored = getOrder(order.Name)
 		Expect(stored.Finalizers).NotTo(ContainElement(osacPrefix + "/addon-operator"))
-		Expect(stored.Status.AddOnOperatorJobs[0].State).To(Equal(osacv1alpha1.JobStateCanceled))
+		Expect(provider.canceledJobIDs).To(ConsistOf(
+			"older-active-addon-job",
+			"newer-active-addon-job",
+			"removed-active-addon-job",
+		))
 	})
 
-	It("keeps the deletion finalizer when job status polling fails", func() {
+	It("does not poll active jobs during deletion", func() {
 		order := newOrder("delete-status-error", osacv1alpha1.ClusterOrderPhaseReady, "cert-manager")
 		order.Finalizers = []string{osacAddOnOperatorFinalizer}
 		deletionTimestamp := metav1.Now()
@@ -459,12 +473,13 @@ var _ = Describe("AddOnOperatorReconciler", func() {
 
 		result, err := reconciler.reconcileDeletion(ctx, order)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(result.RequeueAfter).To(Equal(time.Minute))
+		Expect(result.RequeueAfter).To(BeZero())
 		stored := getOrder(order.Name)
-		Expect(stored.Finalizers).To(ContainElement(osacAddOnOperatorFinalizer))
+		Expect(stored.Finalizers).NotTo(ContainElement(osacAddOnOperatorFinalizer))
+		Expect(provider.canceledJobIDs).To(Equal([]string{"active-addon-job"}))
 	})
 
-	It("keeps the deletion finalizer when cancellation fails", func() {
+	It("removes the deletion finalizer when cancellation fails", func() {
 		order := newOrder("delete-cancel-error", osacv1alpha1.ClusterOrderPhaseReady, "cert-manager")
 		order.Finalizers = []string{osacAddOnOperatorFinalizer}
 		deletionTimestamp := metav1.Now()
@@ -480,12 +495,12 @@ var _ = Describe("AddOnOperatorReconciler", func() {
 
 		result, err := reconciler.reconcileDeletion(ctx, order)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(result.RequeueAfter).To(Equal(time.Minute))
+		Expect(result.RequeueAfter).To(BeZero())
 		stored := getOrder(order.Name)
-		Expect(stored.Finalizers).To(ContainElement(osacAddOnOperatorFinalizer))
+		Expect(stored.Finalizers).NotTo(ContainElement(osacAddOnOperatorFinalizer))
 	})
 
-	It("waits for active jobs when the provider cannot cancel them", func() {
+	It("removes the deletion finalizer when the provider cannot cancel jobs", func() {
 		order := newOrder("delete-no-canceler", osacv1alpha1.ClusterOrderPhaseReady, "cert-manager")
 		order.Finalizers = []string{osacAddOnOperatorFinalizer}
 		deletionTimestamp := metav1.Now()
@@ -502,13 +517,13 @@ var _ = Describe("AddOnOperatorReconciler", func() {
 
 		result, err := nonCancellingReconciler.reconcileDeletion(ctx, order)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(result.RequeueAfter).To(Equal(time.Minute))
+		Expect(result.RequeueAfter).To(BeZero())
 		stored := getOrder(order.Name)
-		Expect(stored.Finalizers).To(ContainElement(osacAddOnOperatorFinalizer))
+		Expect(stored.Finalizers).NotTo(ContainElement(osacAddOnOperatorFinalizer))
 		Expect(provider.canceledJobIDs).To(BeEmpty())
 	})
 
-	It("persists purged jobs as failed before completing deletion", func() {
+	It("does not poll or rewrite job status before completing deletion", func() {
 		order := newOrder("delete-purged-job", osacv1alpha1.ClusterOrderPhaseReady, "cert-manager")
 		order.Finalizers = []string{osacAddOnOperatorFinalizer}
 		deletionTimestamp := metav1.Now()
@@ -518,15 +533,15 @@ var _ = Describe("AddOnOperatorReconciler", func() {
 				JobID: "purged-addon-job", State: osacv1alpha1.JobStateRunning, Timestamp: deletionTimestamp,
 			},
 		}}
-		provider.setStatusError("purged-addon-job", &aap.NotFoundError{Resource: "job purged-addon-job"})
 		Expect(k8sClient.Create(ctx, order)).To(Succeed())
 
-		_, err := reconciler.reconcileDeletion(ctx, order)
+		result, err := reconciler.reconcileDeletion(ctx, order)
 		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(BeZero())
 		stored := getOrder(order.Name)
 		Expect(stored.Finalizers).NotTo(ContainElement(osacAddOnOperatorFinalizer))
-		Expect(stored.Status.AddOnOperatorJobs[0].State).To(Equal(osacv1alpha1.JobStateFailed))
-		Expect(stored.Status.AddOnOperatorJobs[0].Message).To(Equal(addOnOperatorPurgedJobMessage))
+		Expect(stored.Status.AddOnOperatorJobs[0].State).To(Equal(osacv1alpha1.JobStateRunning))
+		Expect(provider.canceledJobIDs).To(Equal([]string{"purged-addon-job"}))
 	})
 
 	It("preserves concurrent finalizers when adding the add-on finalizer", func() {
@@ -697,9 +712,42 @@ var _ = Describe("AddOnOperatorReconciler", func() {
 		_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: order.Name, Namespace: namespace}})
 		Expect(err).NotTo(HaveOccurred())
 		stored := getOrder(order.Name)
-		Expect(stored.Status.AddOnOperatorJobs).To(HaveLen(2))
-		Expect(stored.Status.AddOnOperatorJobs[0].JobID).To(Equal("old-2"))
-		Expect(stored.Status.AddOnOperatorJobs[1].JobID).To(Equal("addon-job-1"))
+		Expect(stored.Status.AddOnOperatorJobs).To(HaveLen(3))
+		Expect(stored.Status.AddOnOperatorJobs).To(ContainElement(HaveField("JobID", Equal("old-1"))))
+		Expect(stored.Status.AddOnOperatorJobs).To(ContainElement(HaveField("JobID", Equal("old-2"))))
+		Expect(stored.Status.AddOnOperatorJobs).To(ContainElement(HaveField("JobID", Equal("addon-job-1"))))
+	})
+
+	It("preserves active add-on jobs when trimming history", func() {
+		active := metav1.Now()
+		jobs := []osacv1alpha1.AddOnOperatorJobStatus{
+			{Name: "cert-manager", JobStatus: osacv1alpha1.JobStatus{
+				JobID: "active-job", Type: osacv1alpha1.JobTypeProvision,
+				State: osacv1alpha1.JobStateRunning, Timestamp: active,
+			}},
+			{Name: "cert-manager", JobStatus: osacv1alpha1.JobStatus{
+				JobID: "newer-terminal-job", Type: osacv1alpha1.JobTypeProvision,
+				State: osacv1alpha1.JobStateSucceeded, Timestamp: metav1.NewTime(active.Add(time.Second)),
+			}},
+		}
+
+		trimmed := trimAddOnOperatorJobs(jobs, 1)
+
+		Expect(trimmed).To(ConsistOf(jobs[0], jobs[1]))
+	})
+
+	It("uses the later record when add-on job timestamps tie", func() {
+		timestamp := metav1.Now()
+		jobs := []osacv1alpha1.AddOnOperatorJobStatus{
+			{Name: "cert-manager", JobStatus: osacv1alpha1.JobStatus{
+				JobID: "first-job", State: osacv1alpha1.JobStateFailed, Timestamp: timestamp,
+			}},
+			{Name: "cert-manager", JobStatus: osacv1alpha1.JobStatus{
+				JobID: "second-job", State: osacv1alpha1.JobStateSucceeded, Timestamp: timestamp,
+			}},
+		}
+
+		Expect(latestAddOnOperatorJob(jobs, "cert-manager").JobID).To(Equal("second-job"))
 	})
 })
 

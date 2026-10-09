@@ -21,17 +21,35 @@
           - addon_operator_kubeconfig | length > 0
         fail_msg: "addon_operator_name, osac_job_vars.resource, and admin_kubeconfig are required"
 
-    - name: Materialize target cluster kubeconfig
-      ansible.builtin.set_fact:
-        _addon_operator_kubeconfig: >-
-          {{ addon_operator_kubeconfig | osac.service.to_temp_file(suffix=".kubeconfig") }}
+    - name: Validate add-on operator role name
+      ansible.builtin.assert:
+        that:
+          - addon_operator_role_name is match('^[a-z][a-z0-9_]{0,62}$')
+        fail_msg: "addon_operator_name must be a valid role name"
 
   tasks:
-    - name: Install requested add-on operator
-      ansible.builtin.include_role:
-        name: "osac.templates.{{ addon_operator_role_name }}"
-        tasks_from: install
-        apply:
-          environment:
-            KUBECONFIG: "{{ _addon_operator_kubeconfig }}"
-            K8S_AUTH_KUBECONFIG: "{{ _addon_operator_kubeconfig }}"
+    - name: Run add-on operator installation with an ephemeral kubeconfig
+      block:
+        - name: Materialize target cluster kubeconfig
+          ansible.builtin.set_fact:
+            _addon_operator_kubeconfig: >-
+              {{ addon_operator_kubeconfig | osac.service.to_temp_file(suffix=".kubeconfig") }}
+          no_log: true
+
+        - name: Install requested add-on operator
+          ansible.builtin.include_role:
+            name: "osac.templates.{{ addon_operator_role_name }}"
+            tasks_from: install
+            apply:
+              environment:
+                KUBECONFIG: "{{ _addon_operator_kubeconfig }}"
+                K8S_AUTH_KUBECONFIG: "{{ _addon_operator_kubeconfig }}"
+      always:
+        - name: Remove ephemeral add-on operator kubeconfig
+          ansible.builtin.file:
+            path: "{{ _addon_operator_kubeconfig }}"
+            state: absent
+          when:
+            - _addon_operator_kubeconfig is defined
+            - _addon_operator_kubeconfig | length > 0
+          no_log: true

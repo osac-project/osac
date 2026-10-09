@@ -261,6 +261,7 @@ var clusterOrderUnsurfacedConditions = map[string]struct{}{
 
 func syncClusterOrderConditions(ctx context.Context, clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
 	log := ctrllog.FromContext(ctx)
+	addOnConditionSeen := false
 
 	for i := range clusterOrder.Status.Conditions {
 		condition := clusterOrder.Status.Conditions[i]
@@ -279,6 +280,7 @@ func syncClusterOrderConditions(ctx context.Context, clusterOrder *ckv1alpha1.Cl
 			continue
 		}
 		if _, ok := clusterOrderDegradedConditionSources[condition.Type]; ok {
+			addOnConditionSeen = true
 			syncClusterOrderAddOnDegraded(remote, condition)
 			continue
 		}
@@ -288,6 +290,11 @@ func syncClusterOrderConditions(ctx context.Context, clusterOrder *ckv1alpha1.Cl
 		// A condition we do not recognise: log it so a newly added ClusterOrder condition
 		// is noticed instead of being silently ignored.
 		log.Info("Unmapped ClusterOrder condition, will ignore it", "condition", condition.Type)
+	}
+	if !addOnConditionSeen {
+		// An absent add-on condition means the add-on controller has no current
+		// failure to report. Clear only degradation owned by that controller.
+		syncClusterOrderAddOnDegraded(remote, metav1.Condition{Status: metav1.ConditionTrue})
 	}
 
 	applyProgressingStageDetail(clusterOrder, remote)

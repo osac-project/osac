@@ -21,6 +21,7 @@ type mockAAPClient struct {
 	launchJobTemplateFunc      func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error)
 	launchWorkflowTemplateFunc func(ctx context.Context, req aap.LaunchWorkflowTemplateRequest) (*aap.LaunchWorkflowTemplateResponse, error)
 	getJobFunc                 func(ctx context.Context, jobID string) (*aap.Job, error)
+	findJobByAttemptIDFunc     func(ctx context.Context, attemptID string) (*aap.Job, error)
 	cancelJobFunc              func(ctx context.Context, jobID string) error
 }
 
@@ -60,6 +61,13 @@ func (m *mockAAPClient) GetJob(ctx context.Context, jobID string) (*aap.Job, err
 		Started:  time.Now().UTC(),
 		Finished: time.Now().UTC().Add(time.Minute),
 	}, nil
+}
+
+func (m *mockAAPClient) FindJobByAttemptID(ctx context.Context, attemptID string) (*aap.Job, error) {
+	if m.findJobByAttemptIDFunc != nil {
+		return m.findJobByAttemptIDFunc(ctx, attemptID)
+	}
+	return nil, nil
 }
 
 func (m *mockAAPClient) CancelJob(ctx context.Context, jobID string) error {
@@ -360,6 +368,23 @@ var _ = Describe("AAPProvider", func() {
 			Expect(result.JobID).To(Equal("707"))
 			Expect(result.InitialState).To(Equal(v1alpha1.JobStatePending))
 			Expect(result.Message).To(Equal("Provisioning job triggered"))
+		})
+
+		It("recovers an existing job by attempt ID without relaunching", func() {
+			provider = provisioning.NewAAPProvider(aapClient, "osac-install-addon-operator", "")
+			aapClient.findJobByAttemptIDFunc = func(_ context.Context, attemptID string) (*aap.Job, error) {
+				Expect(attemptID).To(Equal("attempt-123"))
+				return &aap.Job{ID: 909, Status: "running"}, nil
+			}
+			aapClient.launchJobTemplateFunc = func(_ context.Context, _ aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				Fail("recovered attempts must not relaunch")
+				return nil, nil
+			}
+
+			order := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: "test-order", Namespace: "default"}}
+			result, err := provider.TriggerProvisionWithAttemptID(ctx, order, "attempt-123")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.JobID).To(Equal("909"))
 		})
 
 	})

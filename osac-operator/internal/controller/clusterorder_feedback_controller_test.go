@@ -1247,6 +1247,23 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			Expect(degraded.GetReason()).To(Equal("HyperShiftDegraded"))
 		})
 
+		It("should clear add-on-owned degradation when the add-on condition is absent", func() {
+			degraded := &privatev1.ClusterCondition{
+				Type:   privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_DEGRADED,
+				Status: privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+			}
+			degraded.SetReason("AddOnOperatorsFailed")
+			degraded.SetMessage("stale add-on failure")
+			mockClient.getResponse.GetObject().GetStatus().SetConditions([]*privatev1.ClusterCondition{degraded})
+
+			reconcileOnce()
+
+			degraded = findRemoteCondition(privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_DEGRADED)
+			Expect(degraded).NotTo(BeNil())
+			Expect(degraded.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+			Expect(degraded.GetReason()).To(Equal("AddOnOperatorsRecovered"))
+		})
+
 		It("should fill PROGRESSING from Progressing regardless of condition order and not invert once the cluster is available", func() {
 			// A finished cluster: Progressing is False, every installation step is True, and
 			// the cluster is Available. PROGRESSING must follow Progressing (False) - a

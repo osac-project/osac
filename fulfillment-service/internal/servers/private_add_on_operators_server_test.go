@@ -107,6 +107,18 @@ var _ = Describe("Private add-on operators server", func() {
 			Expect(response.GetObject().GetMaxOcpVersion()).To(Equal("4.17.0"))
 		})
 
+		It("Rejects names that cannot be used by a ClusterOrder", func() {
+			_, err := server.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
+				Object: privatev1.AddOnOperator_builder{
+					Metadata: privatev1.Metadata_builder{Name: "cert-manager-"}.Build(),
+					Title:    "GPU Operator",
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring("cert-manager-"))
+		})
+
 		It("Accepts OCP shorthand versions", func() {
 			response, err := server.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
 				Object: privatev1.AddOnOperator_builder{

@@ -240,6 +240,32 @@ var _ = Describe("Client", func() {
 		})
 	})
 
+	Describe("FindJobByAttemptID", func() {
+		It("returns the uniquely correlated job", func() {
+			attemptID := "attempt-123"
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.URL.Query().Get("search")).To(Equal(attemptID))
+				if r.URL.Path != fmt.Sprintf("/%s/jobs/", aap.APIVersion) {
+					_ = json.NewEncoder(w).Encode(map[string]any{"count": 0, "results": []any{}})
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"count": 1,
+					"results": []map[string]any{{
+						"id":         909,
+						"status":     "running",
+						"extra_vars": fmt.Sprintf(`{"osac_job_vars":{"addon_operator_attempt_id":%q}}`, attemptID),
+					}},
+				})
+			}))
+			client = aap.NewClient(server.URL, "test-token", false)
+
+			job, err := client.FindJobByAttemptID(ctx, attemptID)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(job.ID).To(Equal(909))
+		})
+	})
+
 	Describe("GetTemplateByName", func() {
 		Context("when template is a job_template", func() {
 			BeforeEach(func() {

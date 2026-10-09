@@ -176,7 +176,7 @@ type ComputeInstanceSpec struct {
 	// NetworkAttachments optionally connects the instance to a Subnet and SecurityGroups.
 	// The complete value is immutable after creation; change it by recreating the instance.
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:MaxItems=1
+	// +kubebuilder:validation:MaxItems=8
 	// +listType=map
 	// +listMapKey=subnetRef
 	NetworkAttachments []ComputeNetworkAttachment `json:"networkAttachments,omitempty"`

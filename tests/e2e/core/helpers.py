@@ -443,7 +443,7 @@ def wait_for_cluster_progressing(*, k8s: K8sClient, name: str) -> None:
     poll_until(
         fn=lambda: k8s.get_cluster_order_phase(name=name, checked=False),
         until=lambda v: v == "Progressing",
-        retries=30,
+        retries=60,
         delay=2,
         description=f"{name} ClusterOrder Progressing phase",
     )

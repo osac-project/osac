@@ -186,7 +186,40 @@ func (s *PrivateStorageBackendsServer) Update(ctx context.Context,
 		return
 	}
 
-	err = s.generic.UpdateWithValidation(ctx, request, &response, s.validateStorageBackendUpdate)
+	// Prepare the effective request without locking the row. Slow Secret retrieval
+	// and ONTAP discovery must not block another administrator updating/deleting it.
+	current, candidate, err := s.generic.prepareUpdateCandidate(ctx, request,
+		func(ctx context.Context, current, candidate *privatev1.StorageBackend) error {
+			return s.validateStorageBackendUpdate(ctx, candidate, current)
+		}, true, false)
+	if err != nil {
+		return nil, err
+	}
+	if current.GetSpec().GetProvider() != "ontap" {
+		err = s.generic.UpdateWithValidation(ctx, request, &response, s.validateStorageBackendUpdate)
+		return
+	}
+	if !proto.Equal(candidate.GetSpec().GetCredentials(), current.GetSpec().GetCredentials()) {
+		if err = s.probeOntapBackend(ctx, candidate); err != nil {
+			return nil, err
+		}
+	}
+
+	// Reuse the normal locked merge, rejecting concurrent changes even when the
+	// caller did not request optimistic locking. Never save unprobed credentials.
+	err = s.generic.UpdateWithValidation(ctx, request, &response,
+		func(ctx context.Context, updated, stored *privatev1.StorageBackend) error {
+			if stored.GetMetadata().GetVersion() != current.GetMetadata().GetVersion() {
+				return grpcstatus.Error(grpccodes.Aborted, "storage backend changed during validation; retry the update")
+			}
+			if err := s.validateStorageBackendUpdate(ctx, updated, stored); err != nil {
+				return err
+			}
+			if !proto.Equal(updated.GetSpec(), candidate.GetSpec()) {
+				return grpcstatus.Error(grpccodes.Aborted, "storage backend configuration changed during validation; retry the update")
+			}
+			return nil
+		})
 	return
 }
 
@@ -196,11 +229,7 @@ func (s *PrivateStorageBackendsServer) Delete(ctx context.Context,
 	return
 }
 
-const (
-	passwordField       = "spec.credentials.password"
-	passwordSecretField = "spec.credentials.password_secret"
-	passwordExclusive   = "password and password_secret are mutually exclusive"
-)
+const passwordExclusive = "password and password_secret are mutually exclusive"
 
 func (s *PrivateStorageBackendsServer) validateStorageBackendCreate(ctx context.Context,
 	sb *privatev1.StorageBackend) error {
@@ -251,7 +280,6 @@ func (s *PrivateStorageBackendsServer) validateStorageBackendUpdate(ctx context.
 		if err := s.generic.validator.Validate(newSB); err != nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument, "validation failed: %s", err)
 		}
-		return s.probeOntapBackend(ctx, newSB)
 	}
 	return nil
 }

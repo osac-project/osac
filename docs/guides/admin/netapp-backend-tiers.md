@@ -174,6 +174,8 @@ registration behavior and do not receive the ONTAP probe requirement.
 
 Credential updates probe the stored configuration after applying the update
 mask. Failed validation/probing leaves the saved object and version unchanged.
+Discovery runs before taking the backend update lock. If another request changes
+the backend during discovery, the update returns `Aborted`; retry with fresh state.
 Description-only and no-op updates do not perform another probe. To switch
 from inline password to a reference, explicitly include both
 `spec.credentials.password` and `spec.credentials.password_secret` in the

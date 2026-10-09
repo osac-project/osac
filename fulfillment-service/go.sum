@@ -1,11 +1,11 @@
-buf.build/gen/go/bufbuild/bufplugin/protocolbuffers/go v1.36.12-20260722160903-4d94f3df3a7b.2 h1:z5+rVknD0AvorY/QV9cb3ohUXw4E7HvxU4+2JUH6EHU=
-buf.build/gen/go/bufbuild/bufplugin/protocolbuffers/go v1.36.12-20260722160903-4d94f3df3a7b.2/go.mod h1:Owcuj2phVyvThVYCD74iSV8ki0dAXw/uxkdcdZScdCc=
+buf.build/gen/go/bufbuild/bufplugin/protocolbuffers/go v1.36.12-20261002170247-538130002972.2 h1:nNNsSGs3l9F8q4NfHaIa8RdGfucw957dlFuNf9Z3H/w=
+buf.build/gen/go/bufbuild/bufplugin/protocolbuffers/go v1.36.12-20261002170247-538130002972.2/go.mod h1:Owcuj2phVyvThVYCD74iSV8ki0dAXw/uxkdcdZScdCc=
 buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.12-20260825204119-511051f7f437.2 h1:NbnlmV26O7oZ1iM5tsCI+GEx+3ZSdrhvnKQ/eWSrLiY=
 buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.12-20260825204119-511051f7f437.2/go.mod h1:TCt1lluMFnctISJXvkIQ4x3ABrPuUKCWKyjKdkJNBpw=
 buf.build/gen/go/pluginrpc/pluginrpc/protocolbuffers/go v1.36.12-20241007202033-cf42259fcbfc.2 h1:9xw8g8Q6zHLC7CO/jtpl2UK0kQticxIG+mI6N86f2/M=
 buf.build/gen/go/pluginrpc/pluginrpc/protocolbuffers/go v1.36.12-20241007202033-cf42259fcbfc.2/go.mod h1:+0bw+k8FY5MU3tojFh33HeA5xMfGWjAUQpr+maW5Z3o=
-buf.build/go/bufplugin v0.10.0 h1:vZBX0mq9as5UIBug8U+/DkGRaHNlM/HVOw59O8fvOIU=
-buf.build/go/bufplugin v0.10.0/go.mod h1:ax7obVurKDH1I2nR4pFTS+TE6K3kZhTmwDCN2YgdV8I=
+buf.build/go/bufplugin v0.11.1 h1:fegT6xiiGVwyNiLlxBz07ochKTX/DAtIKe/oPdrqrCs=
+buf.build/go/bufplugin v0.11.1/go.mod h1:0xoAhb/CPqXwS/FUup9vwIRBYxDcXYXeOhYXHca5uuc=
 buf.build/go/protovalidate v1.2.0 h1:DQVrUWkmGTBij+kOYv/x2LLxwcLaGKMdzShj1/6/3H0=
 buf.build/go/protovalidate v1.2.0/go.mod h1:7rYiQEhqvAipoazpVNBBH2S2f8bjG4huMVy1V2Yofn4=
 buf.build/go/spdx v0.2.0 h1:IItqM0/cMxvFJJumcBuP8NrsIzMs/UYjp/6WSpq8LTw=
@@ -48,6 +48,8 @@ github.com/bits-and-blooms/bitset v1.24.6 h1:qcrftZUVBIwfs+m+nhoCBAPT+ZPZZjti8Sb
 github.com/bits-and-blooms/bitset v1.24.6/go.mod h1:7hO7Gc7Pp1vODcmWvKMRA9BNmbv6a/7QIWpPxHddWR8=
 github.com/brianvoe/gofakeit/v6 v6.28.0 h1:Xib46XXuQfmlLS2EXRuJpqcw8St6qSZz75OUo0tgAW4=
 github.com/brianvoe/gofakeit/v6 v6.28.0/go.mod h1:Xj58BMSnFqcn/fAQeSK+/PLtC5kSb7FJIq4JyGa8vEs=
+github.com/bufbuild/protocompile v0.14.1 h1:iA73zAf/fyljNjQKwYzUHD6AD4R8KMasmwa/FBatYVw=
+github.com/bufbuild/protocompile v0.14.1/go.mod h1:ppVdAIhbr2H8asPk6k4pY7t9zB1OU5DoEw9xY/FUi1c=
 github.com/bytecodealliance/wasmtime-go/v44 v44.0.0 h1:WRZXnLPIer/TWs5aYPaMlmVcOlzmR6Ur6wjLRIQOhTQ=
 github.com/bytecodealliance/wasmtime-go/v44 v44.0.0/go.mod h1:GP93piU+39CoFVCQ5xfHrPOUtL0APlMnkbblJ2d3YY0=
 github.com/cenkalti/backoff/v4 v4.3.0 h1:MyRJ/UdXutAwSAT+s3wNd7MfTIcy71VQueUuFK343L8=
@@ -557,8 +559,8 @@ k8s.io/kube-openapi v0.0.0-20260821135717-be32def86098 h1:z5+pcu1jTyKK5mNTe2/+x+
 k8s.io/kube-openapi v0.0.0-20260821135717-be32def86098/go.mod h1:0/mqHCVhlumdJ3BhCfnjSZQE037nAhNodh1/hK0T8/I=
 k8s.io/utils v0.0.0-20260707023825-cf1189d6abe3 h1:jVkFFVfXdXP74B/zbO3hM3hpSFD0xvhQ5U686DPurkE=
 k8s.io/utils v0.0.0-20260707023825-cf1189d6abe3/go.mod h1:M2s5JB1lIYP3jzZdorPLHXIPJzt9vv2muW5a6L9DtNM=
-pluginrpc.com/pluginrpc v0.5.0 h1:tOQj2D35hOmvHyPu8e7ohW2/QvAnEtKscy2IJYWQ2yo=
-pluginrpc.com/pluginrpc v0.5.0/go.mod h1:UNWZ941hcVAoOZUn8YZsMmOZBzbUjQa3XMns8RQLp9o=
+pluginrpc.com/pluginrpc v0.5.1-0.20260825152034-473fc805d0d1 h1:ijwXS090rZ+N13Rpwwz5Ku/+49aNUE73Jof1Pw/fCaw=
+pluginrpc.com/pluginrpc v0.5.1-0.20260825152034-473fc805d0d1/go.mod h1:ro2Em10qmKefBGOLc9HMAjRlJwJpfBS33pqfLtLj+JI=
 sigs.k8s.io/controller-runtime v0.24.1 h1:miPEwrmirImAvgME1L9qebGHrOnGJoVmVdtOU9fRfo4=
 sigs.k8s.io/controller-runtime v0.24.1/go.mod h1:vFkfY5fGt5xAC/sKb8IBFKgWPNKG9OUG29dR8Y2wImw=
 sigs.k8s.io/json v0.0.0-20260909141634-11ed52e25bc5 h1:k9jo7ED/fsfOcz3L1P20P5tjTNtsdQNwMOG2aKzHrl8=

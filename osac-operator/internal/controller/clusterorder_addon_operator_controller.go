@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	corev1 "k8s.io/api/core/v1"
@@ -644,7 +645,7 @@ func trimAddOnOperatorJobs(jobs []v1alpha1.AddOnOperatorJobStatus, maxHistory in
 			if _, exists := keep[index]; exists {
 				continue
 			}
-			if newestIndex == -1 || job.Timestamp.Time.After(jobs[newestIndex].Timestamp.Time) {
+			if newestIndex == -1 || !job.Timestamp.Time.Before(jobs[newestIndex].Timestamp.Time) {
 				newestIndex = index
 			}
 		}
@@ -695,7 +696,11 @@ func truncateAddOnOperatorMessage(message string) string {
 	if len(message) <= maxAddOnOperatorJobMessageLength {
 		return message
 	}
-	return message[:maxAddOnOperatorJobMessageLength]
+	truncated := message[:maxAddOnOperatorJobMessageLength]
+	for !utf8.ValidString(truncated) {
+		truncated = truncated[:len(truncated)-1]
+	}
+	return truncated
 }
 
 func addOnOperatorTimestamp() metav1.Time {

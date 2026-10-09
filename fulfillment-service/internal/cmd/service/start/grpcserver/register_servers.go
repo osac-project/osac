@@ -618,19 +618,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		privatev1.RegisterClusterVersionsServer(registrar, privateClusterVersionsServer)
 	}
 
-	// Create the private storage backends server:
-	deps.Logger.InfoContext(ctx, "Creating private storage backends server")
-	privateStorageBackendsServer, err := servers.NewPrivateStorageBackendsServer().
-		SetLogger(deps.Logger).
-		SetAttributionLogic(deps.PrivateAttributionLogic).
-		SetTenancyLogic(deps.TenancyLogic).
-		SetMetricsRegisterer(deps.MetricsRegisterer).
-		Build()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create private storage backends server: %w", err)
-	}
-	privatev1.RegisterStorageBackendsServer(registrar, privateStorageBackendsServer)
-
 	// Create the private secrets server:
 	deps.Logger.InfoContext(ctx, "Creating private secrets server")
 	privateSecretsServer, err := servers.NewPrivateSecretsServer().
@@ -645,6 +632,20 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		return nil, fmt.Errorf("failed to create private secrets server: %w", err)
 	}
 	privatev1.RegisterSecretsServer(registrar, privateSecretsServer)
+
+	// Create the private storage backends server:
+	deps.Logger.InfoContext(ctx, "Creating private storage backends server")
+	privateStorageBackendsServer, err := servers.NewPrivateStorageBackendsServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PrivateAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetSecretsServer(privateSecretsServer).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create private storage backends server: %w", err)
+	}
+	privatev1.RegisterStorageBackendsServer(registrar, privateStorageBackendsServer)
 
 	// Create the public secrets server:
 	deps.Logger.InfoContext(ctx, "Creating public secrets server")

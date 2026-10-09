@@ -14,10 +14,13 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -29,9 +32,16 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
+
+type ontapBackendProbeFunc func(context.Context, string, string, string) error
+
+func (f ontapBackendProbeFunc) Probe(ctx context.Context, endpoint, username, password string) error {
+	return f(ctx, endpoint, username, password)
+}
 
 var _ = Describe("ONTAP backend registration", func() {
 	var backendServer *PrivateStorageBackendsServer
@@ -261,4 +271,83 @@ var _ = Describe("ONTAP backend registration", func() {
 		Expect(status.Code(err)).To(Equal(codes.Aborted))
 		Expect(calls.Load()).To(Equal(int32(7)))
 	})
+	DescribeTable("allows concurrent requests while discovery is stalled and rejects stale persistence",
+		func(operation string, expectedCode codes.Code) {
+			created, err := create(object())
+			Expect(err).NotTo(HaveOccurred())
+			saved := created.GetObject()
+			// Commit preparation so each public handler can run in its own request
+			// transaction, matching the gRPC interceptor's real concurrency boundary.
+			Expect(suiteTx.End(ctx)).To(Succeed())
+			suiteTx, err = tm.Begin(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			ctx = database.TxIntoContext(ctx, suiteTx)
+
+			started := make(chan struct{})
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			unblock := func() { releaseOnce.Do(func() { close(release) }) }
+			DeferCleanup(unblock)
+			backendServer.registrationProbe = ontapBackendProbeFunc(
+				func(probeCtx context.Context, _, _, _ string) error {
+					close(started)
+					select {
+					case <-release:
+						return nil
+					case <-probeCtx.Done():
+						return probeCtx.Err()
+					}
+				})
+			partial := privatev1.StorageBackend_builder{Id: saved.GetId(),
+				Spec: privatev1.StorageBackendSpec_builder{
+					Credentials: privatev1.StorageBackendCredentials_builder{Password: testNewPassword}.Build(),
+				}.Build(),
+			}.Build()
+			request := privatev1.StorageBackendsUpdateRequest_builder{Object: partial,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.credentials.password"}},
+				Lock:       false,
+			}.Build()
+			finished := make(chan error, 1)
+			go func() {
+				defer GinkgoRecover()
+				finished <- tm.Run(ctx, func(requestCtx context.Context) error {
+					_, updateErr := backendServer.Update(requestCtx, request)
+					return updateErr
+				})
+			}()
+			Eventually(started).Should(BeClosed())
+
+			concurrentCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			defer cancel()
+			err = tm.Run(concurrentCtx, func(requestCtx context.Context) error {
+				if operation == "delete" {
+					_, deleteErr := backendServer.Delete(requestCtx,
+						privatev1.StorageBackendsDeleteRequest_builder{Id: saved.GetId()}.Build())
+					return deleteErr
+				}
+				_, updateErr := backendServer.Update(requestCtx, privatev1.StorageBackendsUpdateRequest_builder{
+					Object: privatev1.StorageBackend_builder{Id: saved.GetId(),
+						Spec: privatev1.StorageBackendSpec_builder{Description: "Concurrent update"}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.description"}},
+				}.Build())
+				return updateErr
+			})
+			Expect(err).NotTo(HaveOccurred())
+			unblock()
+			var updateErr error
+			Eventually(finished).Should(Receive(&updateErr))
+			Expect(status.Code(updateErr)).To(Equal(expectedCode))
+			current, err := backendServer.Get(ctx, privatev1.StorageBackendsGetRequest_builder{Id: saved.GetId()}.Build())
+			if operation == "delete" {
+				Expect(status.Code(err)).To(Equal(codes.NotFound))
+			} else {
+				Expect(err).NotTo(HaveOccurred())
+				Expect(current.GetObject().GetSpec().GetCredentials().GetPassword()).To(Equal(testPassword))
+				Expect(current.GetObject().GetSpec().GetDescription()).To(Equal("Concurrent update"))
+			}
+		},
+		Entry("description update", "update", codes.Aborted),
+		Entry("delete", "delete", codes.NotFound),
+	)
 })

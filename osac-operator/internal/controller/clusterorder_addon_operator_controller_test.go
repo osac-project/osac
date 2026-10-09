@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -798,6 +799,38 @@ var _ = Describe("AddOnOperatorReconciler", func() {
 		condition := findAddOnOperatorCondition(order)
 		Expect(condition).NotTo(BeNil())
 		Expect(condition.Status).To(Equal(metav1.ConditionTrue))
+	})
+
+	It("uses the later tie rule when retaining additional history", func() {
+		timestamp := metav1.Now().Rfc3339Copy()
+		jobs := []osacv1alpha1.AddOnOperatorJobStatus{
+			{Name: "cert-manager", JobStatus: osacv1alpha1.JobStatus{
+				JobID: "first-job", State: osacv1alpha1.JobStateSucceeded, Timestamp: timestamp,
+			}},
+			{Name: "cert-manager", JobStatus: osacv1alpha1.JobStatus{
+				JobID: "second-job", State: osacv1alpha1.JobStateSucceeded, Timestamp: timestamp,
+			}},
+			{Name: "cert-manager", JobStatus: osacv1alpha1.JobStatus{
+				JobID: "latest-job", State: osacv1alpha1.JobStateSucceeded, Timestamp: timestamp,
+			}},
+		}
+
+		trimmed := trimAddOnOperatorJobs(jobs, 2)
+
+		Expect(trimmed).To(ConsistOf(
+			HaveField("JobID", Equal("second-job")),
+			HaveField("JobID", Equal("latest-job")),
+		))
+	})
+
+	It("truncates messages without splitting UTF-8 characters", func() {
+		message := strings.Repeat("a", maxAddOnOperatorJobMessageLength-1) + "\u00e9"
+
+		truncated := truncateAddOnOperatorMessage(message)
+
+		Expect(len(truncated)).To(BeNumerically("<=", maxAddOnOperatorJobMessageLength))
+		Expect(utf8.ValidString(truncated)).To(BeTrue())
+		Expect(truncated).To(HaveLen(maxAddOnOperatorJobMessageLength - 1))
 	})
 })
 

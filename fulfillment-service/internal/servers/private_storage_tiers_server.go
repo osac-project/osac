@@ -21,8 +21,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -164,22 +164,7 @@ func (s *PrivateStorageTiersServer) Update(ctx context.Context,
 		return
 	}
 
-	getRequest := &privatev1.StorageTiersGetRequest{}
-	getRequest.SetId(id)
-	var getResponse *privatev1.StorageTiersGetResponse
-	err = s.generic.Get(ctx, getRequest, &getResponse)
-	if err != nil {
-		return
-	}
-
-	existingST := getResponse.GetObject()
-
-	err = s.validateStorageTierUpdate(ctx, request.GetObject(), existingST, request.GetUpdateMask())
-	if err != nil {
-		return
-	}
-
-	err = s.generic.Update(ctx, request, &response)
+	err = s.generic.UpdateWithValidation(ctx, request, &response, s.validateStorageTierUpdate)
 	return
 }
 
@@ -204,63 +189,74 @@ func (s *PrivateStorageTiersServer) validateStorageTierCreate(ctx context.Contex
 	if st.GetMetadata() == nil || st.GetMetadata().GetName() == "" {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'metadata.name' is required")
 	}
-	backends := st.GetSpec().GetBackends()
-	if len(backends) == 0 {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.backends' is required and must not be empty")
+	if err := s.generic.validator.Validate(st); err != nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "validation failed: %s", err)
 	}
-	return s.validateBackends(ctx, backends)
+	_, err := s.validateBackends(ctx, st.GetSpec())
+	return err
 }
 
 func (s *PrivateStorageTiersServer) validateStorageTierUpdate(ctx context.Context,
-	newST *privatev1.StorageTier, existingST *privatev1.StorageTier,
-	updateMask *fieldmaskpb.FieldMask) error {
-
-	if newST.GetMetadata() != nil && newST.GetMetadata().GetName() != "" &&
-		newST.GetMetadata().GetName() != existingST.GetMetadata().GetName() {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"field 'metadata.name' is immutable and cannot be changed from '%s' to '%s'",
-			existingST.GetMetadata().GetName(), newST.GetMetadata().GetName())
+	candidate, current *privatev1.StorageTier) error {
+	if len(candidate.GetSpec().GetBackends()) == 0 {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.backends' is required and must not be empty")
 	}
-	backends := newST.GetSpec().GetBackends()
-	if updateMask != nil {
-		for _, path := range updateMask.GetPaths() {
-			if path == "spec.backends" && len(backends) == 0 {
-				return grpcstatus.Errorf(grpccodes.InvalidArgument,
-					"field 'spec.backends' is required and must not be empty")
-			}
-		}
-	} else if len(backends) == 0 {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"field 'spec.backends' is required and must not be empty")
+	if candidate.GetMetadata().GetName() != current.GetMetadata().GetName() {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "field 'metadata.name' is immutable")
 	}
-	if len(backends) > 0 {
-		if err := s.validateBackends(ctx, backends); err != nil {
-			return err
-		}
+	binding := proto.Clone(candidate.GetSpec()).(*privatev1.StorageTierSpec)
+	binding.SetDescription(current.GetSpec().GetDescription())
+	if proto.Equal(binding, current.GetSpec()) {
+		return nil
+	}
+	candidateOntap, err := s.validateBackends(ctx, candidate.GetSpec())
+	if err != nil {
+		return err
+	}
+	currentOntap, err := s.validateBackends(ctx, current.GetSpec())
+	if err != nil {
+		return err
+	}
+	if currentOntap || candidateOntap {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "ONTAP tier backend, protocol, QoS and encryption settings are immutable; create a replacement tier")
 	}
 	return nil
 }
 
 func (s *PrivateStorageTiersServer) validateBackends(ctx context.Context,
-	backends []*privatev1.BackendAssociation) error {
+	spec *privatev1.StorageTierSpec) (bool, error) {
+	backends := spec.GetBackends()
+	if len(backends) == 0 {
+		return false, grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.backends' is required and must not be empty")
+	}
 	if len(backends) > 1 {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+		return false, grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"only one backend association is supported in v0.1, but %d were provided", len(backends))
 	}
-	for _, ba := range backends {
-		if ba.GetBackendId() == "" {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'backends[].backend_id' is required")
+	association := backends[0]
+	if association.GetBackendId() == "" {
+		return false, grpcstatus.Error(grpccodes.InvalidArgument, "field 'backends[].backend_id' is required")
+	}
+	response, err := s.storageBackendsDAO.Get().SetId(association.GetBackendId()).Do(ctx)
+	if err != nil {
+		var notFoundErr *dao.ErrNotFound
+		if errors.As(err, &notFoundErr) {
+			return false, grpcstatus.Errorf(grpccodes.NotFound,
+				"storage backend with identifier '%s' not found", association.GetBackendId())
 		}
-		_, err := s.storageBackendsDAO.Get().SetId(ba.GetBackendId()).Do(ctx)
-		if err != nil {
-			var notFoundErr *dao.ErrNotFound
-			if errors.As(err, &notFoundErr) {
-				return grpcstatus.Errorf(grpccodes.NotFound,
-					"storage backend with identifier '%s' not found", ba.GetBackendId())
-			}
-			return grpcstatus.Errorf(grpccodes.Internal,
-				"failed to validate storage backend '%s'", ba.GetBackendId())
+		return false, ConvertDAOErrorToGRPC(err, "get", association.GetBackendId())
+	}
+	ontap := response.GetObject().GetSpec().GetProvider() == "ontap"
+	if !ontap && association.GetOntap() != nil {
+		return false, grpcstatus.Error(grpccodes.InvalidArgument, "ONTAP QoS configuration requires an ONTAP backend")
+	}
+	if ontap {
+		if spec.GetProtocol() != privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK {
+			return false, grpcstatus.Error(grpccodes.InvalidArgument, "ONTAP tiers require BLOCK protocol")
+		}
+		if association.GetMaxReadBandwidthMbs() != 0 || association.GetMaxWriteBandwidthMbs() != 0 {
+			return false, grpcstatus.Error(grpccodes.InvalidArgument, "ONTAP tiers use native IOPS configuration; generic bandwidth limits must be zero")
 		}
 	}
-	return nil
+	return ontap, nil
 }

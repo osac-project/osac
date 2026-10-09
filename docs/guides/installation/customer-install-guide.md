@@ -182,9 +182,18 @@ Notes on individual components:
   `mce.enabled=true` when this installation owns standalone MCE; the `caas-ci`
   infrastructure profile does so explicitly. Leave it `false` when Red Hat
   Advanced Cluster Management for Kubernetes (RHACM) or another MCE
-  installation already owns it. The disabled state also prevents the phase-1
-  chart from applying its temporary Assisted image override `ConfigMap` and
-  compatibility RBAC.
+  installation already owns it. ISO-less provisioning requires the Assisted
+  components introduced with MCE 5.0; this change was not backported to MCE
+  2.x. Until a stable MCE 5.0 catalog is available, the chart remains on
+  `stable-2.17` and temporarily overrides the `assisted-service`,
+  `assisted-installer-agent`, `assisted-installer`, and
+  `assisted-installer-controller` images with MCE 5.0 images, which are
+  compatible with MCE 2.x. The override bridge is rendered only when
+  `mce.enabled=true`; when RHACM or another external MCE owns the lifecycle,
+  ensure it provides compatible Assisted 5.0 images. Once MCE 5.0 is available,
+  update the chart's MCE channel/version and retire the temporary overrides.
+  See the [MCE dependency values](../../../osac-installer/charts/osac-deps/values.yaml)
+  and [Assisted image override values](../../../osac-installer/charts/osac-infra/values.yaml).
 
 ### 2.4 Credentials and external services
 
@@ -676,7 +685,9 @@ variable reference, see
 
 **Prerequisites**
 
-- Multicluster engine is installed (standalone, or provided by RHACM).
+- MCE is installed (standalone, or provided by RHACM). ISO-less CaaS requires
+  the Assisted 5.0 components; see the compatibility and transition guidance
+  in [Section 2.3](#23-platform-operators-and-components).
 - MetalLB (or another `LoadBalancer`-class implementation) and LVM Storage
   (or another dynamic storage class) are installed.
 - BMaaS is enabled and configured with a usable provider backend, worker

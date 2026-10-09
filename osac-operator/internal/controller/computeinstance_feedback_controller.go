@@ -95,7 +95,7 @@ func newComputeInstanceFeedbackBridge(hubClient clnt.Client, ciClient privatev1.
 			_, err := ciClient.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
 				Object: remote,
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
-					"status.conditions", feedbackStatusStatePath, "status.external_ip_address", "status.internal_ip_address", "status.last_restarted_at",
+					feedbackStatusConditionsPath, feedbackStatusStatePath, "status.external_ip_address", "status.internal_ip_address", "status.last_restarted_at",
 				}},
 			}.Build())
 			return err

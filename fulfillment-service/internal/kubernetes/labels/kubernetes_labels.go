@@ -36,6 +36,9 @@ var SubnetUuid = fmt.Sprintf("%s/%s", group, "subnet-uuid")
 // VirtualNetworkUuid is the label where the fulfillment API will write the identifier of the virtual network.
 var VirtualNetworkUuid = fmt.Sprintf("%s/%s", group, "virtualnetwork-uuid")
 
+// FabricDomainUuid is the label where the fulfillment API writes the fabric domain identifier.
+var FabricDomainUuid = fmt.Sprintf("%s/%s", group, "fabricdomain-uuid")
+
 // NetworkClassUuid is the label where the fulfillment API will write the identifier of the network class.
 var NetworkClassUuid = fmt.Sprintf("%s/%s", group, "networkclass-uuid")
 

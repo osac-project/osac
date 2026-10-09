@@ -135,7 +135,7 @@ func (p *AAPProvider) GetProvisionStatusWithExtraVars(ctx context.Context, resou
 		return ProvisionStatusWithExtraVars{}, fmt.Errorf("failed to get job: %w", err)
 	}
 
-	status := ProvisionStatusWithExtraVars{ProvisionStatus: provisionStatusFromAAPJob(jobID, job)}
+	status := ProvisionStatusWithExtraVars{ProvisionStatus: provisionStatusFromAAPJob(ctx, jobID, job)}
 	if status.State != v1alpha1.JobStateSucceeded || len(job.Artifacts) == 0 {
 		return status, nil
 	}
@@ -321,6 +321,12 @@ func (p *AAPProvider) extractExtraVars(ctx context.Context, resource client.Obje
 	if err != nil {
 		return nil, err
 	}
+	for key, value := range AAPExtraVarsFromContext(ctx) {
+		if key == "osac_job_vars" {
+			continue
+		}
+		extraVars[key] = value
+	}
 	if p.fulfillmentEndpoint == "" {
 		return extraVars, nil
 	}
@@ -348,16 +354,21 @@ func (p *AAPProvider) getJobStatus(ctx context.Context, jobID string) (Provision
 		return ProvisionStatus{}, fmt.Errorf("failed to get job: %w", err)
 	}
 
-	return provisionStatusFromAAPJob(jobID, job), nil
+	return provisionStatusFromAAPJob(ctx, jobID, job), nil
 }
 
-func provisionStatusFromAAPJob(jobID string, job *aap.Job) ProvisionStatus {
+func provisionStatusFromAAPJob(ctx context.Context, jobID string, job *aap.Job) ProvisionStatus {
 	status := ProvisionStatus{
 		JobID:     jobID,
 		State:     mapAAPStatusToJobState(job.Status),
 		Message:   job.Status,
 		StartTime: job.Started,
 		EndTime:   job.Finished,
+	}
+	if len(job.Artifacts) > 0 {
+		if err := json.Unmarshal(job.Artifacts, &status.Outputs); err != nil {
+			ctrllog.FromContext(ctx).Error(err, "AAP job returned non-object artifacts", "jobID", jobID)
+		}
 	}
 
 	// Populate error details if job failed

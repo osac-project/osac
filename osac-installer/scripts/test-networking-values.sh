@@ -336,4 +336,6 @@ render_operator_success \
   --set global.networking.fabricManager=agentless_net \
   --set global.networking.k8sManager=
 
+HELM_BIN="${HELM_BIN}" python3 "${SCRIPT_DIR}/test-fabric-domain-values.py"
+
 echo "networking values validation passed"

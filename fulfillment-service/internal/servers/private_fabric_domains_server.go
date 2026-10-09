@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
@@ -120,17 +121,20 @@ func (s *PrivateFabricDomainsServer) Get(ctx context.Context, request *privatev1
 }
 
 func (s *PrivateFabricDomainsServer) Create(ctx context.Context, request *privatev1.FabricDomainsCreateRequest) (*privatev1.FabricDomainsCreateResponse, error) {
-	if err := s.validateFabricDomain(ctx, request.GetObject()); err != nil {
-		return nil, err
-	}
-	object := request.GetObject()
-	object.SetStatus(&privatev1.FabricDomainStatus{Conditions: []*privatev1.FabricDomainCondition{{
-		Type:               privatev1.FabricDomainConditionType_FABRIC_DOMAIN_CONDITION_TYPE_PROGRESSING,
-		Status:             privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
-		LastTransitionTime: timestamppb.Now(),
-	}}})
 	var response *privatev1.FabricDomainsCreateResponse
-	err := s.generic.Create(ctx, request, &response)
+	err := s.generic.CreateWithCandidatePreparation(ctx, request, &response,
+		func(ctx context.Context, _ *privatev1.FabricDomain, object *privatev1.FabricDomain) error {
+			// Tenant assignment precedes relationship validation, including for administrators.
+			if err := s.validateFabricDomain(ctx, object); err != nil {
+				return err
+			}
+			object.SetStatus(&privatev1.FabricDomainStatus{Conditions: []*privatev1.FabricDomainCondition{{
+				Type:               privatev1.FabricDomainConditionType_FABRIC_DOMAIN_CONDITION_TYPE_PROGRESSING,
+				Status:             privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+				LastTransitionTime: timestamppb.Now(),
+			}}})
+			return nil
+		})
 	return response, err
 }
 
@@ -140,7 +144,24 @@ func (s *PrivateFabricDomainsServer) Update(ctx context.Context, request *privat
 	}
 	mask := request.GetUpdateMask()
 	if mask != nil && len(mask.GetPaths()) > 0 && updateIncludesField(mask, "status") {
-		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "status output fields cannot be updated")
+		if !auth.IsControllerServiceAccount(ctx) && !auth.IsServiceAccount(ctx, "osac-operator") {
+			return nil, grpcstatus.Error(grpccodes.InvalidArgument, "status output fields can only be updated by an authorized controller")
+		}
+		controllerStatusFields := map[string]struct{}{
+			"status.backend_id": {},
+			"status.vpc_id":     {},
+			"status.members":    {},
+			"status.hub":        {},
+			"status.conditions": {},
+		}
+		for _, path := range mask.GetPaths() {
+			if path == "status" || strings.HasPrefix(path, "status.") {
+				if _, allowed := controllerStatusFields[path]; allowed {
+					continue
+				}
+				return nil, grpcstatus.Error(grpccodes.InvalidArgument, "status field is not writable by the fulfillment controller")
+			}
+		}
 	}
 	getRequest := &privatev1.FabricDomainsGetRequest{}
 	getRequest.SetId(request.GetObject().GetId())
@@ -191,15 +212,29 @@ func (s *PrivateFabricDomainsServer) validateFabricDomain(ctx context.Context, o
 	if spec.GetVirtualNetwork() == "" {
 		return grpcstatus.Error(grpccodes.InvalidArgument, "virtual_network is required")
 	}
-	if spec.GetType() != privatev1.FabricDomainType_FABRIC_DOMAIN_TYPE_ETHERNET_EW {
+	switch spec.GetType() {
+	case privatev1.FabricDomainType_FABRIC_DOMAIN_TYPE_ETHERNET_EW:
+		// Ethernet east-west is the only implemented FabricDomain type.
+	case privatev1.FabricDomainType_FABRIC_DOMAIN_TYPE_INFINIBAND_EW,
+		privatev1.FabricDomainType_FABRIC_DOMAIN_TYPE_NVLINK:
 		return grpcstatus.Error(grpccodes.Unimplemented, "type not yet supported")
+	default:
+		return grpcstatus.Error(grpccodes.InvalidArgument, "unknown or unspecified FabricDomain type")
 	}
 
-	vnResponse, err := s.virtualNetworkDao.Get().SetId(spec.GetVirtualNetwork()).Do(ctx)
+	// Hold the same VN row lock as VirtualNetworks.Delete until this request transaction
+	// finishes. This closes the window before the reconciler materializes a domain CR.
+	vnResponse, err := s.virtualNetworkDao.Get().SetId(spec.GetVirtualNetwork()).SetLock(true).Do(ctx)
 	if err != nil {
-		return err
+		return translateLifecycleError(err)
 	}
 	vn := vnResponse.GetObject()
+	if vn.GetMetadata().GetTenant() != object.GetMetadata().GetTenant() {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "VirtualNetwork must belong to the same tenant as the FabricDomain")
+	}
+	if vn.GetMetadata().HasDeletionTimestamp() {
+		return grpcstatus.Error(grpccodes.FailedPrecondition, "VirtualNetwork is being deleted")
+	}
 	networkClassID := vn.GetSpec().GetNetworkClass().GetId()
 	if networkClassID == "" {
 		return grpcstatus.Error(grpccodes.FailedPrecondition, "VirtualNetwork has no NetworkClass")
@@ -212,8 +247,8 @@ func (s *PrivateFabricDomainsServer) validateFabricDomain(ctx context.Context, o
 	if !nc.GetCapabilities().GetSupportsEastWestEthernet() {
 		return grpcstatus.Error(grpccodes.InvalidArgument, "type does not match NetworkClass capability")
 	}
-	if nc.GetSpec().GetEastWestConfig().GetEthernetEw().GetTemplateId() == "" {
-		return grpcstatus.Error(grpccodes.FailedPrecondition, "NetworkClass missing template_id for ethernet_ew")
+	if nc.GetFabricManager() != "netris" {
+		return grpcstatus.Error(grpccodes.FailedPrecondition, "ethernet_ew requires the netris fabric manager")
 	}
 	return nil
 }

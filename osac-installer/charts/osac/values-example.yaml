@@ -50,6 +50,16 @@ operatorCrds:
 # OSAC Operator
 # ---------------------
 operator:
+  # Admin onboarding inventory for Phase 1 Netris Ethernet east-west domains.
+  # Keys must exactly match Netris hostnames; values are BareMetalInstanceType
+  # IDs from the private API. Empty means no inventory ConfigMap is created.
+  # Configure spec.fabric_bindings.ethernet_ew on each referenced type through
+  # the private API (for example, netris: "42" for a Netris template ID).
+  fabricDomainInventory: {}
+  # fabricDomainInventory:
+  #   gpu-01.example.com: "gpu-bmit-id"
+  #   gpu-02.example.com: "gpu-bmit-id"
+
   image:
     repository: ghcr.io/osac-project/osac-operator
     # Production: pin to a specific SHA or release tag.

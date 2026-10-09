@@ -352,6 +352,48 @@ from this block. Do not set those by hand unless using expert overrides.
 See [docs/network-backend.md](docs/network-backend.md) for profiles,
 credentials, and the advanced/manual path.
 
+#### FabricDomain admin onboarding (Phase 1)
+
+For Netris Ethernet east-west networking, first register each
+BareMetalInstanceType through the fulfillment **private API** and author its
+backend binding there. This fragment belongs to the instance type, not Helm:
+
+```yaml
+spec:
+  fabric_bindings:
+    ethernet_ew:
+      netris: "42" # opaque Ethernet profile reference; Netris uses a Server Cluster Template ID
+```
+
+Then map every participating server's **exact Netris hostname** to its
+BareMetalInstanceType ID in the umbrella values:
+
+```yaml
+operator:
+  fabricDomainInventory:
+    gpu-01.example.com: "gpu-bmit-id"
+    gpu-02.example.com: "gpu-bmit-id"
+```
+
+The umbrella's `operator` dependency alias forwards this to the standalone
+`osac-operator` chart's `fabricDomainInventory` value. A nonempty map creates
+the fixed ConfigMap `osac-fabric-domain-inventory` in the Helm release namespace,
+which is also the operator's networking namespace. Its `data` is exactly the
+hostname-to-ID map; hostname spelling and case are preserved. The default `{}`
+does not create the ConfigMap. Keep this inventory current during onboarding
+and update it through your Helm values.
+
+The NetworkClass of the domain's VirtualNetwork selects the fabric manager; the
+manager name must have a corresponding entry in the instance type's
+`fabric_bindings.ethernet_ew` map. For Netris, that entry is the Server Cluster
+Template ID. The profile belongs to the hardware type and is not scoped to a
+NetworkClass. NetworkClass no longer accepts `template_id`, and FabricDomain
+has no `instance_type` field: the operator resolves the manager-specific profile
+through the server inventory and instance types. Keep Netris credentials in
+the existing AAP Secret configuration; the inventory contains only hostnames
+and catalog IDs.
+The FabricDomain CRD is included when `operatorCrds.install` is enabled.
+
 #### DNS Backend Configuration (CaaS)
 
 DNS record management uses a pluggable backend. The default is **AWS Route 53**.

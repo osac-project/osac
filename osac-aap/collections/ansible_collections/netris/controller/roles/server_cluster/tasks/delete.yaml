@@ -4,22 +4,11 @@
     name: netris.controller.auth
   when: netris_session_cookie is not defined
 
-- name: Get existing server clusters
-  ansible.builtin.uri:
-    url: "{{ netris_controller_url }}/api/v2/server-cluster"
-    method: GET
-    headers:
-      Cookie: "connect.sid={{ netris_session_cookie }}"
-    return_content: true
-    status_code: 200
-    validate_certs: "{{ netris_validate_certs | default(true) }}"
-  register: server_cluster_list_resp
-  no_log: true
-
-- name: Find existing server cluster by name
-  ansible.builtin.set_fact:
-    _existing_server_cluster: "{{ (server_cluster_list_resp.json.data | default([])) | selectattr('name', 'equalto', server_cluster_name) | list | first | default(none) }}"
-  when: server_cluster_list_resp.json is mapping
+- name: Resolve existing ServerCluster by stable identity
+  ansible.builtin.include_tasks: lookup_server_cluster.yaml
+  vars:
+    _server_cluster_lookup_require_scope: true
+    _server_cluster_lookup_missing_backend_id_is_error: false
 
 - name: Delete server cluster
   when: _existing_server_cluster is defined and _existing_server_cluster is not none

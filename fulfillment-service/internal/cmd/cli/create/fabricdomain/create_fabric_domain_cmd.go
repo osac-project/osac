@@ -104,8 +104,12 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) (runErr error) {
 		}
 	}()
 
+	tenant := config.TenantFromContext(ctx)
 	vnClient := publicv1.NewVirtualNetworksClient(conn)
 	virtualNetwork, err := lookup.Find(c.args.virtualNetwork, "virtual network", func(filter string, limit int32) ([]*publicv1.VirtualNetwork, error) {
+		if tenant != "" {
+			filter = fmt.Sprintf("(%s) && this.metadata.tenant == %q", filter, tenant)
+		}
 		response, err := vnClient.List(ctx, publicv1.VirtualNetworksListRequest_builder{
 			Filter: proto.String(filter),
 			Limit:  proto.Int32(limit),
@@ -122,7 +126,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) (runErr error) {
 	object := publicv1.FabricDomain_builder{
 		Metadata: publicv1.Metadata_builder{
 			Name:   c.args.name,
-			Tenant: c.settings.Tenant(),
+			Tenant: tenant,
 		}.Build(),
 		Spec: publicv1.FabricDomainSpec_builder{
 			Type:           domainType,

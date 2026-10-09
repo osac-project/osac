@@ -105,6 +105,7 @@ func NewVirtualNetworkReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=subnets,verbs=list
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=securitygroups,verbs=list
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=natgateways,verbs=list
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=fabricdomains,verbs=list
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -237,9 +238,21 @@ func (r *VirtualNetworkReconciler) handleProvisioning(ctx context.Context, vnet 
 		&provisioning.PollCallbacks{
 			OnFailed:      onProvisioningFailure,
 			OnOutputError: onProvisioningFailure,
-			OnSuccess: func(_ provisioning.ProvisionStatus) {
+			OnSuccess: func(status provisioning.ProvisionStatus) {
 				if vnet.Annotations[osacImplementationStrategyAnnotation] == "agentless_net" {
 					vnet.Status.BackendNetworkID = string(vnet.UID)
+				} else if backendID := outputString(status.Outputs, "vpc_id", "backend_network_id", "backendNetworkId"); backendID != "" {
+					vnet.Status.BackendNetworkID = backendID
+				} else if vnet.Status.BackendNetworkID == "" && vnet.Annotations[osacImplementationStrategyAnnotation] == netrisFabricManager {
+					message := "AAP job succeeded but returned no vpc_id artifact for the Netris VirtualNetwork"
+					vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseFailed
+					if job := provisioning.FindLatestJobByType(vnet.Status.ProvisioningJobs, v1alpha1.JobTypeProvision); job != nil {
+						job.State = v1alpha1.JobStateFailed
+						job.Message = message
+						job.ConfigVersion = vnet.Status.DesiredConfigVersion
+					}
+					setReadyConditionFailed(&vnet.Status.Conditions, message)
+					return
 				}
 				vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseReady
 				setReadyConditionTrue(&vnet.Status.Conditions)
@@ -268,13 +281,39 @@ func (r *VirtualNetworkReconciler) handleDelete(ctx context.Context, vnet *v1alp
 		return ctrl.Result{}, nil
 	}
 
+	// FabricDomains depend on this VPC. The protection finalizer is the normal
+	// guard; listing references also closes the race where a FabricDomain is
+	// created immediately before this VirtualNetwork starts deletion.
+	vnetUUID := vnet.Labels[osacVirtualNetworkIDLabel]
+	if controllerutil.ContainsFinalizer(vnet, osacFabricDomainProtectionFinalizer) && vnetUUID == "" {
+		log.Info("waiting for VirtualNetwork UUID before checking FabricDomain references", "virtualNetwork", vnet.Name)
+		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+	if vnetUUID != "" {
+		fabricDomains := &v1alpha1.FabricDomainList{}
+		if err := r.List(ctx, fabricDomains, client.InNamespace(vnet.Namespace)); err != nil {
+			return ctrl.Result{}, fmt.Errorf("listing FabricDomains: %w", err)
+		}
+		for i := range fabricDomains.Items {
+			if fabricDomains.Items[i].Spec.VirtualNetwork == vnetUUID {
+				log.Info("waiting for referencing FabricDomain to be deleted before deprovisioning VirtualNetwork",
+					"fabricDomain", fabricDomains.Items[i].Name)
+				return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+			}
+		}
+		if controllerutil.RemoveFinalizer(vnet, osacFabricDomainProtectionFinalizer) {
+			if err := r.Update(ctx, vnet); err != nil {
+				return ctrl.Result{}, fmt.Errorf("releasing stale FabricDomain protection from VirtualNetwork %q: %w", vnet.Name, err)
+			}
+		}
+	}
+
 	// Gate: wait for all child resources referencing this VNet to be fully removed
 	// before triggering the AAP deprovision job. Without this gate, the infrastructure
 	// backend rejects the VNet deletion because children still exist, causing unnecessary
 	// failed jobs and backoff delays.
 	// Child resources reference the parent VN by its fulfillment-service UUID
 	// (stored in the osac.openshift.io/virtualnetwork-uuid label), not by K8s name.
-	vnetUUID := vnet.Labels[osacVirtualNetworkIDLabel]
 	ns := vnet.Namespace
 
 	subnetList := &v1alpha1.SubnetList{}

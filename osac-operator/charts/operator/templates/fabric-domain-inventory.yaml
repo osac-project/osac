@@ -1,0 +1,23 @@
+{{- $inventory := .Values.fabricDomainInventory -}}
+{{- if not (kindIs "map" $inventory) -}}
+{{- fail "fabricDomainInventory must be a map of exact Netris hostnames to BareMetalInstanceType ID strings" -}}
+{{- end -}}
+{{- if $inventory }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: osac-fabric-domain-inventory
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-operator.labels" . | nindent 4 }}
+data:
+  {{- range $hostname, $instanceTypeID := $inventory }}
+  {{- if or (gt (len $hostname) 253) (not (regexMatch "^[A-Za-z0-9._-]+$" $hostname)) }}
+  {{- fail "fabricDomainInventory hostnames must be valid ConfigMap data keys (1-253 letters, digits, dots, underscores or hyphens)" }}
+  {{- end }}
+  {{- if or (not (kindIs "string" $instanceTypeID)) (not (regexMatch "\\S" $instanceTypeID)) }}
+  {{- fail "fabricDomainInventory values must be nonempty BareMetalInstanceType ID strings" }}
+  {{- end }}
+  {{ $hostname | quote }}: {{ $instanceTypeID | quote }}
+  {{- end }}
+{{- end }}

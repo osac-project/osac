@@ -100,6 +100,15 @@ hubAccess:
 
 tenants: []
 
+# Admin-managed FabricDomain inventory: exact Netris hostname -> private API
+# BareMetalInstanceType ID. Rendered as osac-fabric-domain-inventory in the
+# release/networking namespace only when nonempty. Contains no credentials.
+# Example:
+# fabricDomainInventory:
+#   gpu-01.example.com: "gpu-bmit-id"
+#   gpu-02.example.com: "gpu-bmit-id"
+fabricDomainInventory: {}
+
 # --- Network Manager Registration ---
 # ConfigMaps that register networking managers for the two-manager model.
 # The operator discovers managers by selecting ConfigMaps with labels
@@ -110,16 +119,20 @@ networkManagers:
   # capabilities from the fabric/k8s manager ConfigMaps (in addition to reacting
   # immediately to ConfigMap changes).
   capabilitiesSyncInterval: "5m"
-  # Manager capability tokens are IPv4-only for the current release.
+  # IP capabilities are IPv4-only for the current release. The fabric-only token
+  # eastWestEthernet publishes NetworkClass.capabilities.supports_east_west_ethernet;
+  # the k8s manager need not advertise it. Set the corresponding
+  # NetworkClass.spec.disable_capabilities field to true to suppress publication.
   fabricManagers:
     netris:
       enabled: false
       description: >-
         Netris SDN controller for physical fabric management.
         Manages VLAN/VxLAN segments, ACLs, public IP allocation, and NAT gateways.
-        Capabilities: ipv4 only.
+        Capabilities: ipv4 and Ethernet east-west via Netris Server Clusters.
       capabilities:
       - ipv4
+      - eastWestEthernet
     cudn_net:
       enabled: true
       description: >-

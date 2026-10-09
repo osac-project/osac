@@ -87,4 +87,19 @@ var _ = Describe("ExtraVarsContext", func() {
 			Expect(result).To(BeNil())
 		})
 	})
+
+	Describe("AAPExtraVars", func() {
+		It("should round-trip additional top-level AAP variables", func() {
+			vars := map[string]any{
+				"ansible_eda": map[string]any{"event": map[string]any{"payload": map[string]any{"kind": "ServerCluster"}}},
+			}
+			ctx := provisioning.WithAAPExtraVars(context.Background(), vars)
+
+			Expect(provisioning.AAPExtraVarsFromContext(ctx)).To(Equal(vars))
+		})
+
+		It("should return nil when no extra variables are set", func() {
+			Expect(provisioning.AAPExtraVarsFromContext(context.Background())).To(BeNil())
+		})
+	})
 })

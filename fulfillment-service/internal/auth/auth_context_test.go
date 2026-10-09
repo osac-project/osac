@@ -51,6 +51,18 @@ var _ = Describe("Subject inside context", func() {
 			Expect(IsControllerServiceAccount(ctx)).To(BeTrue())
 		})
 
+		It("recognizes the operator only when authenticated as its Kubernetes service account", func() {
+			ctx := ContextWithSubject(context.Background(), &Subject{User: "osac-operator"})
+			ctx = ContextWithAuthenticationMethod(ctx, "serviceaccount")
+			Expect(IsServiceAccount(ctx, "osac-operator")).To(BeTrue())
+		})
+
+		It("does not treat a JWT user with the operator name as a service account", func() {
+			ctx := ContextWithSubject(context.Background(), &Subject{User: "osac-operator"})
+			ctx = ContextWithAuthenticationMethod(ctx, "jwt")
+			Expect(IsServiceAccount(ctx, "osac-operator")).To(BeFalse())
+		})
+
 		It("does not grant controller lifecycle access to other callers", func() {
 			Expect(IsControllerServiceAccount(context.Background())).To(BeFalse())
 			ctx := ContextWithSubject(context.Background(), &Subject{User: "service-account-osac-admin"})

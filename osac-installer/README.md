@@ -168,8 +168,7 @@ cluster controller in the same operator instance.
 make install-multicluster \
   PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
   KUBECONFIG=/path/to/management.kubeconfig \
-  REMOTE_KUBECONFIG=/path/to/workload.kubeconfig \
-  REMOTE_API_ADDRESS=https://workload-api.example.com:6443
+  REMOTE_KUBECONFIG=/path/to/workload.kubeconfig
 ```
 
 `KUBECONFIG` selects the management cluster and is forwarded to the regular
@@ -180,7 +179,11 @@ the AAP license at
 `values/vmaas-ci/license.zip`. `REMOTE_STORAGE_CLASS` defaults to `lvms-vg1`;
 `REMOTE_KUBECONFIG_SECRET_NAME` and `REMOTE_KUBECONFIG_SECRET_KEY` default to
 `osac-remote-kubeconfig` and `kubeconfig`. Management skips the LVMS and CNV
-installations; those operators are installed on the workload cluster.
+installations; those operators are installed on the workload cluster. The
+staged kubeconfig uses the API server from `REMOTE_KUBECONFIG` by default.
+Set `REMOTE_API_ADDRESS` only when management-cluster workloads need a different
+reachable endpoint; the installer verifies the generated kubeconfig can
+authenticate before staging it.
 
 Prepare the workload cluster independently when you want to separate that work
 from the management installation:
@@ -195,8 +198,7 @@ make install-infra PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
 
 make install-osac PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
   KUBECONFIG=/path/to/management.kubeconfig \
-  REMOTE_KUBECONFIG=/path/to/workload.kubeconfig \
-  REMOTE_API_ADDRESS=https://workload-api.example.com:6443
+  REMOTE_KUBECONFIG=/path/to/workload.kubeconfig
 ```
 
 `prepare-remote-cluster` only changes the workload cluster and needs no

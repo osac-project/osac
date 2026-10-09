@@ -5,15 +5,11 @@ set -euo pipefail
 
 HUB_KUBECONFIG=${HUB_KUBECONFIG:-${KUBECONFIG:-}}
 REMOTE_KUBECONFIG=${REMOTE_KUBECONFIG:?REMOTE_KUBECONFIG must be set}
-REMOTE_API_ADDRESS=${REMOTE_API_ADDRESS:?REMOTE_API_ADDRESS must be set}
+REMOTE_API_ADDRESS=${REMOTE_API_ADDRESS:-}
 INSTALLER_NAMESPACE=${INSTALLER_NAMESPACE:-osac}
 REMOTE_KUBECONFIG_SECRET_NAME=${REMOTE_KUBECONFIG_SECRET_NAME:-osac-remote-kubeconfig}
 REMOTE_KUBECONFIG_SECRET_KEY=${REMOTE_KUBECONFIG_SECRET_KEY:-kubeconfig}
 
-if [[ "${REMOTE_API_ADDRESS}" != https://* ]]; then
-    echo "ERROR: REMOTE_API_ADDRESS must use https://" >&2
-    exit 2
-fi
 [[ -r "${REMOTE_KUBECONFIG}" ]] || {
     echo "ERROR: REMOTE_KUBECONFIG is not readable: ${REMOTE_KUBECONFIG}" >&2
     exit 2
@@ -33,6 +29,11 @@ workload_api=$(oc "${remote_args[@]}" config view --minify -o jsonpath='{.cluste
 if [[ -z "${management_api}" || -z "${workload_api}" || "${management_api}" == "${workload_api}" ]]; then
     echo "ERROR: management and workload kubeconfigs must specify different API server endpoints" >&2
     exit 1
+fi
+REMOTE_API_ADDRESS=${REMOTE_API_ADDRESS:-${workload_api}}
+if [[ "${REMOTE_API_ADDRESS}" != https://* ]]; then
+    echo "ERROR: REMOTE_API_ADDRESS must use https://" >&2
+    exit 2
 fi
 workload_ca_data=$(oc "${remote_args[@]}" config view --minify --raw --flatten \
     -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')
@@ -77,6 +78,13 @@ users:
   user:
     token: ${REMOTE_TOKEN}
 EOF
+
+if ! oc --kubeconfig "${REMOTE_KUBECONFIG_FILE}" --request-timeout=30s \
+    get serviceaccount osac-remote-access \
+    -n "${INSTALLER_NAMESPACE}" >/dev/null; then
+    echo "ERROR: generated remote kubeconfig cannot authenticate to the workload cluster at ${REMOTE_API_ADDRESS}" >&2
+    exit 1
+fi
 
 hub_oc create secret generic "${REMOTE_KUBECONFIG_SECRET_NAME}" \
     --from-file="${REMOTE_KUBECONFIG_SECRET_KEY}=${REMOTE_KUBECONFIG_FILE}" \

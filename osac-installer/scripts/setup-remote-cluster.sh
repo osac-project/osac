@@ -24,7 +24,6 @@ if [[ "${MODE}" != "prepare" && "${MODE}" != "configure" ]]; then
 fi
 if [[ "${MODE}" == "configure" ]]; then
     HUB_KUBECONFIG=${HUB_KUBECONFIG:?"HUB_KUBECONFIG must be set"}
-    REMOTE_API_ADDRESS=${REMOTE_API_ADDRESS:?"REMOTE_API_ADDRESS must be set (e.g. https://192.168.128.10:6443)"}
 fi
 if [[ -n "${REMOTE_API_ADDRESS}" && "${REMOTE_API_ADDRESS}" != https://* ]]; then
     echo "ERROR: REMOTE_API_ADDRESS must use https://" >&2
@@ -156,7 +155,7 @@ oc "${remote_args[@]}" adm policy add-cluster-role-to-user cluster-admin \
     "system:serviceaccount:${INSTALLER_NAMESPACE}:osac-remote-access"
 
 if [[ "${MODE}" == "prepare" ]]; then
-    echo "Workload cluster prepared; run install-osac with REMOTE_KUBECONFIG and REMOTE_API_ADDRESS to install OSAC in remote-cluster mode"
+    echo "Workload cluster prepared; run install-osac with REMOTE_KUBECONFIG to install OSAC in remote-cluster mode (REMOTE_API_ADDRESS is an optional override)"
     exit 0
 fi
 

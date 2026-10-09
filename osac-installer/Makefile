@@ -6,7 +6,7 @@
 # Usage:
 # Every deployment target requires PLATFORM, PROFILE, and NS. No exceptions.
 #   make install         PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
-#   make install-multicluster PLATFORM=openshift PROFILE=vmaas-ci NS=osac KUBECONFIG=... REMOTE_KUBECONFIG=... REMOTE_API_ADDRESS=...
+#   make install-multicluster PLATFORM=openshift PROFILE=vmaas-ci NS=osac KUBECONFIG=... REMOTE_KUBECONFIG=...
 #   make prepare-remote-cluster NS=osac REMOTE_KUBECONFIG=...
 #   make uninstall       PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
 #   make install-infra   PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
@@ -88,9 +88,6 @@ endif
 ifndef REMOTE_KUBECONFIG
 $(error REMOTE_KUBECONFIG is required (workload cluster kubeconfig))
 endif
-ifndef REMOTE_API_ADDRESS
-$(error REMOTE_API_ADDRESS is required (workload cluster API URL))
-endif
 endif
 ifneq ($(filter install-osac,$(MAKECMDGOALS)),)
 ifneq ($(strip $(REMOTE_KUBECONFIG)$(REMOTE_API_ADDRESS)),)
@@ -102,9 +99,6 @@ $(error remote-cluster installation requires PROFILE=vmaas-ci)
 endif
 ifeq ($(strip $(REMOTE_KUBECONFIG)),)
 $(error REMOTE_KUBECONFIG is required when REMOTE_API_ADDRESS is set)
-endif
-ifeq ($(strip $(REMOTE_API_ADDRESS)),)
-$(error REMOTE_API_ADDRESS is required when REMOTE_KUBECONFIG is set)
 endif
 endif
 endif
@@ -391,7 +385,7 @@ ifneq ($(PLATFORM),kind)
 	oc create namespace $(NS) --dry-run=client -o yaml | oc apply -f -
 	if [ -n "$(REMOTE_KUBECONFIG)" ]; then \
 		test -r "$(REMOTE_KUBECONFIG)" || { echo "ERROR: REMOTE_KUBECONFIG is not readable: $(REMOTE_KUBECONFIG)" >&2; exit 1; }; \
-		case "$(REMOTE_API_ADDRESS)" in https://*) ;; *) echo "ERROR: REMOTE_API_ADDRESS must use https://" >&2; exit 1 ;; esac; \
+		if [ -n "$(REMOTE_API_ADDRESS)" ]; then case "$(REMOTE_API_ADDRESS)" in https://*) ;; *) echo "ERROR: REMOTE_API_ADDRESS must use https://" >&2; exit 1 ;; esac; fi; \
 		HUB_KUBECONFIG="$(KUBECONFIG)" \
 		REMOTE_KUBECONFIG="$(REMOTE_KUBECONFIG)" \
 		REMOTE_API_ADDRESS="$(REMOTE_API_ADDRESS)" \
@@ -460,7 +454,7 @@ install-multicluster: ## Prepare a VMaaS workload cluster, then install OSAC on 
 	@test -r "$(KUBECONFIG)" || { echo "ERROR: KUBECONFIG is not readable: $(KUBECONFIG)" >&2; exit 1; }
 	@test -r "$(REMOTE_KUBECONFIG)" || { echo "ERROR: REMOTE_KUBECONFIG is not readable: $(REMOTE_KUBECONFIG)" >&2; exit 1; }
 	@test -f "$(AAP_LICENSE_FILE)" || { echo "ERROR: AAP_LICENSE_FILE not found at $(AAP_LICENSE_FILE)" >&2; exit 1; }
-	@case "$(REMOTE_API_ADDRESS)" in https://*) ;; *) echo "ERROR: REMOTE_API_ADDRESS must use https://" >&2; exit 1 ;; esac
+	@if [ -n "$(REMOTE_API_ADDRESS)" ]; then case "$(REMOTE_API_ADDRESS)" in https://*) ;; *) echo "ERROR: REMOTE_API_ADDRESS must use https://" >&2; exit 1 ;; esac; fi
 	@oc --kubeconfig "$(KUBECONFIG)" get clusterversion version >/dev/null
 	@oc --kubeconfig "$(REMOTE_KUBECONFIG)" get clusterversion version >/dev/null
 	@for kubeconfig in "$(KUBECONFIG)" "$(REMOTE_KUBECONFIG)"; do \

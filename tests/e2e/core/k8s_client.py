@@ -99,6 +99,14 @@ class K8sClient:
             "https://127.0.0.1:8443/metrics",
         )
 
+    def get_cluster_json(self, *, resource: str, name: str) -> dict[str, Any]:
+        """Return a cluster-scoped resource as JSON (no namespace)."""
+        return json.loads(run(*self._base(), "get", resource, name, "-o", "json"))
+
+    def patch_cluster(self, *, resource: str, name: str, patch: str, patch_type: str = "json") -> str:
+        """Apply a JSON patch to a cluster-scoped resource and return kubectl stdout."""
+        return run(*self._base(), "patch", resource, name, f"--type={patch_type}", "-p", patch)
+
     def get_jsonpath(self, *, resource: str, name: str, jsonpath: str) -> str:
         return run(*self._base(), "get", resource, name, "-n", self.namespace, "-o", f"jsonpath={jsonpath}")
 

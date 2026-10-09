@@ -1,0 +1,13 @@
+---
+# Replace backendId with the ID returned by backend registration.
+# Verify encryption feasibility with the prepared SVM before onboarding.
+'@type': type.googleapis.com/osac.private.v1.StorageTier
+metadata:
+  name: netapp-block-5000
+spec:
+  protocol: STORAGE_PROTOCOL_BLOCK
+  backends:
+    - backendId: registered-backend-id
+      encryptionEnabled: true
+      ontap:
+        maxIops: '5000'

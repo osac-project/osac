@@ -18,15 +18,51 @@ steps; a READY backend does not certify those prerequisites.
   Go's `SSL_CERT_FILE` or `SSL_CERT_DIR` environment setting. Preserve the
   required existing trust roots. Backend registration has no certificate
   bypass or certificate-pin field.
-- An authorized Fulfillment VALUE Secret containing non-empty `data["value"]`
-  for the discovery password. A Kubernetes Secret name is not a Fulfillment
-  Secret ID. Shared/system Secrets retain the Secrets API's platform admin
-  read restrictions. Inline passwords are also accepted by the existing API.
+- The discovery password, either stored in a Fulfillment Secret that the
+  registering administrator can read, or supplied inline in the request.
 
 The cluster endpoint/account provides discovery only. It does not assign a
 tenant SVM or provide that SVM's runtime credentials.
 
 ## Register a backend
+
+### 1. Prepare the password
+
+For the Secret reference used below, first create a Secret through the
+Fulfillment Secrets API with type `SECRET_TYPE_VALUE`. This type stores a
+single value: put the discovery password in its `data` map under the key
+`value`. The password must be non-empty. In ProtoJSON, this binary value is
+base64-encoded; base64 is an encoding, not encryption.
+
+Take the returned Fulfillment Secret ID and use it as `passwordSecret.id`
+in the backend request. The administrator registering the backend must be
+allowed to read that Secret; reading shared/system Secrets requires the
+Secrets API's platform administrator permissions.
+
+A Kubernetes Secret is a different resource. Creating a Kubernetes Secret
+for a lab connection test does not create a Fulfillment Secret, and its
+Kubernetes name cannot be used as `passwordSecret.id`.
+
+```text
+Discovery password -> Fulfillment VALUE Secret -> returned Secret ID
+                                               -> credentials.passwordSecret.id
+```
+
+Alternatively, use `"password": "<discovery-password>"` in `credentials`
+instead of `passwordSecret`. Supply exactly one password source.
+
+The existing CLI can read the password from a protected file or stdin, keeping
+it out of command arguments. After logging in to the private API, for example:
+
+```bash
+osac --tenant shared create secret --name netapp-discovery --type value \
+  --from-file=value=- < /path/to/protected/discovery-password
+```
+
+The input must contain the exact password bytes; avoid an unintended trailing
+newline. Record the returned Fulfillment Secret ID.
+
+### 2. Submit the backend request
 
 Example ProtoJSON request for `osac.private.v1.StorageBackends/Create`:
 
@@ -44,6 +80,17 @@ Example ProtoJSON request for `osac.private.v1.StorageBackends/Create`:
     }
   }
 }
+```
+
+Replace `discovery-value-secret-id` with the Fulfillment Secret ID from step 1.
+
+For `osac create -f`, use the downloadable
+[backend YAML example](examples/netapp-backend.yaml). It contains the object's
+`@type` and fields directly; omit the RPC request's `object` wrapper:
+
+```bash
+osac create -f netapp-backend.yaml
+osac get storagebackend netapp-primary -o json
 ```
 
 `password` and `passwordSecret` are mutually exclusive. Secret references are
@@ -103,6 +150,20 @@ The cap and encryption boolean describe the requested tier configuration.
 Registration does not create or validate native QoS/encryption resources;
 onboarding must validate the prepared SVM's configuration before exposing it.
 The public tenant tier API omits backend associations and provider details.
+
+The [tier YAML example](examples/netapp-tier.yaml) uses the same CLI input format:
+
+```bash
+osac create -f netapp-tier.yaml
+osac get osac.private.v1.StorageTier netapp-block-5000 -o json
+```
+
+The fully qualified type selects the generic private API command, which shows
+the association settings. The dedicated `osac get storagetier` command displays
+the public tier view and does not accept `-o json`.
+
+See the [onboarding interface contract](../developer/netapp-onboarding-contract.md)
+for the operator/AAP payload and the separate prepared-SVM credential handoff.
 
 ## Updates and failures
 

@@ -1,4 +1,4 @@
-{{- if .Values.mce.imageOverrides }}
+{{- if and .Values.mce.enabled .Values.mce.imageOverrides }}
 # MCE 2.17 omits this permission from its generated Assisted Service role,
 # while the MCE 5.0 infrastructure-operator image reads the API server config.
 # Keep the compatibility grant separate from MCE-managed RBAC resources.

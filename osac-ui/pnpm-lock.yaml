@@ -49,10 +49,10 @@ importers:
     dependencies:
       '@bufbuild/protobuf':
         specifier: 2.12.0
-        version: 2.16.0
+        version: 2.12.0
       '@connectrpc/connect-web':
         specifier: ^2.1.2
-        version: 2.2.0(@bufbuild/protobuf@2.16.0)(@connectrpc/connect@2.2.0(@bufbuild/protobuf@2.16.0))
+        version: 2.2.0(@bufbuild/protobuf@2.12.0)(@connectrpc/connect@2.2.0(@bufbuild/protobuf@2.12.0))
       '@osac/types':
         specifier: workspace:*
         version: link:../../libs/types
@@ -122,7 +122,7 @@ importers:
         version: 19.3.0(@types/react@19.3.0)
       '@vitejs/plugin-react':
         specifier: ^6.0.1
-        version: 6.1.1(vite@8.0.8(@types/node@24.12.2)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.21.0)(yaml@2.9.0))
+        version: 6.1.2(vite@8.0.8(@types/node@24.12.2)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.21.0)(yaml@2.9.0))
       jsdom:
         specifier: ^26.0.0
         version: 26.1.0
@@ -139,10 +139,22 @@ importers:
         specifier: ^4.1.9
         version: 4.1.11(@types/node@24.12.2)(jsdom@26.1.0)(vite@8.0.8(@types/node@24.12.2)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.21.0)(yaml@2.9.0))
 
+  apps/e2e-tests:
+    devDependencies:
+      '@playwright/test':
+        specifier: 1.63.0
+        version: 1.63.0
+      '@types/node':
+        specifier: ^20.19.41
+        version: 20.19.43
+      typescript:
+        specifier: ~5.9.3
+        version: 5.9.3
+
   apps/playwright:
     devDependencies:
       '@playwright/test':
-        specifier: ^1.62.0
+        specifier: 1.63.0
         version: 1.63.0
       '@types/node':
         specifier: ^20.19.41
@@ -157,11 +169,23 @@ importers:
         specifier: 1.64.1
         version: 1.64.1(@types/node@24.12.2)(typescript@5.9.3)
 
+  libs/locators:
+    devDependencies:
+      '@playwright/test':
+        specifier: 1.63.0
+        version: 1.63.0
+
+  libs/test-utils:
+    devDependencies:
+      '@playwright/test':
+        specifier: 1.63.0
+        version: 1.63.0
+
   libs/types:
     dependencies:
       '@bufbuild/protobuf':
         specifier: 2.12.0
-        version: 2.16.0
+        version: 2.12.0
     devDependencies:
       '@bufbuild/buf':
         specifier: 1.73.0
@@ -171,13 +195,13 @@ importers:
     dependencies:
       '@bufbuild/protobuf':
         specifier: 2.12.0
-        version: 2.16.0
+        version: 2.12.0
       '@connectrpc/connect':
         specifier: ^2.1.2
-        version: 2.2.0(@bufbuild/protobuf@2.16.0)
+        version: 2.2.0(@bufbuild/protobuf@2.12.0)
       '@connectrpc/connect-web':
         specifier: ^2.1.2
-        version: 2.2.0(@bufbuild/protobuf@2.16.0)(@connectrpc/connect@2.2.0(@bufbuild/protobuf@2.16.0))
+        version: 2.2.0(@bufbuild/protobuf@2.12.0)(@connectrpc/connect@2.2.0(@bufbuild/protobuf@2.12.0))
       '@novnc/novnc':
         specifier: 1.7.0
         version: 1.7.0
@@ -403,8 +427,8 @@ packages:
     engines: {node: '>=12'}
     hasBin: true
 
-  '@bufbuild/protobuf@2.16.0':
-    resolution: {integrity: sha512-FWa0sPlqYGJgpTs6OxBRcL/AW4JT0OIO+W1ajerluoTVh8CV0B7XM1qsNCRgnkSCkRCgOICKHRQlY17jrsm0+Q==}
+  '@bufbuild/protobuf@2.12.0':
+    resolution: {integrity: sha512-B/XlCaFIP8LOwzo+bz5uFzATYokcwCKQcghqnlfwSmM5eX/qTkvDBnDPs+gXtX/RyjxJ4DRikECcPJbyALA8FA==}
 
   '@connectrpc/connect-web@2.2.0':
     resolution: {integrity: sha512-uuBUcBTYfb/r1o98LzCCZk1H90yx0vmZ5m21dpw/q4EUwsKwkCDGI8H0aEdjcZld+Q2jJ5A5ADvPqfb6lzQ/sg==}
@@ -1299,13 +1323,13 @@ packages:
     resolution: {integrity: sha512-f1WO2Lx8a9t8DARmcWAUPJbu0G20bJlj8L4z72K00TMeJAoyLr/tHhI/pzYBLrR4dXWkcxO1cWYZEOX8DKHTqA==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
 
-  '@vitejs/plugin-react@6.1.1':
-    resolution: {integrity: sha512-yxLaQV9gkhS8ezJqCM6+ndU7mDY6gqAg75NQ+0IjwEI8IYOmQCgkRwHKVSfWXW076DsqMo0Dk+0FK1U+M5RgFw==}
+  '@vitejs/plugin-react@6.1.2':
+    resolution: {integrity: sha512-fhJNGUdscQa4HkI0xFxwonWyhnVReCPDbXI7FH7jmzpnVCrFQI7PRrhWecO263610vOrs9tr2Y4xcf8uAdFxbw==}
     engines: {node: ^20.19.0 || >=22.12.0}
     peerDependencies:
       '@rolldown/plugin-babel': ^0.1.7 || ^0.2.0
       babel-plugin-react-compiler: ^1.0.0
-      oxc-transform-react: ^0.145.0
+      oxc-transform-react: ^0.152.0
       vite: ^8.0.0
     peerDependenciesMeta:
       '@rolldown/plugin-babel':
@@ -3701,16 +3725,16 @@ snapshots:
       '@bufbuild/buf-win32-arm64': 1.73.0
       '@bufbuild/buf-win32-x64': 1.73.0
 
-  '@bufbuild/protobuf@2.16.0': {}
+  '@bufbuild/protobuf@2.12.0': {}
 
-  '@connectrpc/connect-web@2.2.0(@bufbuild/protobuf@2.16.0)(@connectrpc/connect@2.2.0(@bufbuild/protobuf@2.16.0))':
+  '@connectrpc/connect-web@2.2.0(@bufbuild/protobuf@2.12.0)(@connectrpc/connect@2.2.0(@bufbuild/protobuf@2.12.0))':
     dependencies:
-      '@bufbuild/protobuf': 2.16.0
-      '@connectrpc/connect': 2.2.0(@bufbuild/protobuf@2.16.0)
+      '@bufbuild/protobuf': 2.12.0
+      '@connectrpc/connect': 2.2.0(@bufbuild/protobuf@2.12.0)
 
-  '@connectrpc/connect@2.2.0(@bufbuild/protobuf@2.16.0)':
+  '@connectrpc/connect@2.2.0(@bufbuild/protobuf@2.12.0)':
     dependencies:
-      '@bufbuild/protobuf': 2.16.0
+      '@bufbuild/protobuf': 2.12.0
 
   '@croct/json5-parser@0.2.2':
     dependencies:
@@ -4446,7 +4470,7 @@ snapshots:
       '@typescript-eslint/types': 8.58.2
       eslint-visitor-keys: 5.0.1
 
-  '@vitejs/plugin-react@6.1.1(vite@8.0.8(@types/node@24.12.2)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.21.0)(yaml@2.9.0))':
+  '@vitejs/plugin-react@6.1.2(vite@8.0.8(@types/node@24.12.2)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.21.0)(yaml@2.9.0))':
     dependencies:
       '@rolldown/pluginutils': 1.0.1
       vite: 8.0.8(@types/node@24.12.2)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.21.0)(yaml@2.9.0)

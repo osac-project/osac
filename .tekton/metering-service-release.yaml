@@ -29,6 +29,8 @@ spec:
     # reachable (matches build-metering-service-image.yaml and
     # resolve-e2e-components/action.yaml's context: .).
     value: .
+  - name: build-source-image
+    value: "true"
   pipelineSpec:
     description: |
       This pipeline is ideal for building container images from a Containerfile while maintaining trust after pipeline customization.

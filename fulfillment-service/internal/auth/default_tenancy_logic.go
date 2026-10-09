@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
@@ -113,6 +114,11 @@ func (p *DefaultTenancyLogic) DetermineVisibility(ctx context.Context) (result *
 	builder.AddVisibleTenant(SharedTenant)
 	builder.AddVisibleTenants(subject.Tenants.Inclusions()...)
 
+	// Add the projects that the user has access to according to the Keycloak groups in the JWT token.
+	// This ensures that users who are added to project manager/viewer groups via the project reconciler
+	// can see those projects even if no ProjectMembership object exists yet.
+	p.addProjectsFromToken(ctx, builder)
+
 	// Add the projects that the user has access to according to the project membership table:
 	tx, err := database.TxFromContext(ctx)
 	if err != nil {
@@ -153,4 +159,71 @@ func (p *DefaultTenancyLogic) DetermineVisibility(ctx context.Context) (result *
 	// Build and return the visibility:
 	result, err = builder.Build()
 	return
+}
+
+// addProjectsFromToken extracts project visibility from Keycloak groups in the JWT token.
+func (p *DefaultTenancyLogic) addProjectsFromToken(ctx context.Context, builder *VisibilityBuilder) {
+	token := TokenFromContext(ctx)
+	if token == nil {
+		return
+	}
+
+	authContext, err := ExtractAuthContext(token)
+	if err != nil {
+		return
+	}
+
+	// The organization claim can be an object mapping tenant names to group arrays
+	orgMap, ok := authContext.Organization.(map[string]any)
+	if !ok {
+		return
+	}
+
+	for tenant, value := range orgMap {
+		p.addProjectsFromTenantGroups(tenant, value, builder)
+	}
+}
+
+// addProjectsFromTenantGroups processes groups for a single tenant and adds visible projects.
+func (p *DefaultTenancyLogic) addProjectsFromTenantGroups(tenant string, tenantValue any, builder *VisibilityBuilder) {
+	tenantData, ok := tenantValue.(map[string]any)
+	if !ok {
+		return
+	}
+
+	groups, ok := tenantData["groups"].([]any)
+	if !ok {
+		return
+	}
+
+	for _, group := range groups {
+		groupStr, ok := group.(string)
+		if !ok {
+			continue
+		}
+
+		projectPath := extractProjectPathFromGroup(groupStr)
+		if projectPath != "" {
+			builder.AddVisibleProject(tenant, projectPath)
+		}
+	}
+}
+
+// extractProjectPathFromGroup extracts a project path from a Keycloak group name.
+// Group names look like "/{project-path}/system:managers" or "/{project-path}/system:viewers".
+// Returns empty string if the group doesn't match the expected format.
+func extractProjectPathFromGroup(groupStr string) string {
+	if !strings.HasPrefix(groupStr, "/") {
+		return ""
+	}
+
+	parts := strings.Split(groupStr, "/")
+	// parts[0] is empty, parts[1..n-1] are the project path segments,
+	// parts[n] is "system:managers" or "system:viewers"
+	if len(parts) < 3 {
+		return ""
+	}
+
+	// Convert slash-separated path to dot-separated (e.g., "/bens-project/prj1" -> "bens-project.prj1")
+	return strings.Join(parts[1:len(parts)-1], ".")
 }

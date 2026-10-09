@@ -19,6 +19,10 @@ specific language governing permissions and limitations under the License.
 {{- $vaultEndpoint := tpl (required "vault.endpoint is required" .Values.vault.endpoint) . }}
 {{- $vaultNamespace := required "vault.namespace is required" .Values.vault.namespace }}
 {{- $vaultKVMountPath := required "vault.kvMountPath is required" .Values.vault.kvMountPath }}
+{{- $vaultTransitMountPath := required "vault.transitMountPath is required" .Values.vault.transitMountPath }}
+{{- if eq $vaultTransitMountPath $vaultKVMountPath }}
+{{- fail "vault.transitMountPath must differ from vault.kvMountPath" }}
+{{- end }}
 {{- $vaultCredentials := required "vault.credentials is required" .Values.vault.credentials }}
 {{- $vaultIssuerURL := tpl (required "vault.keycloakIssuerUrl is required" .Values.vault.keycloakIssuerUrl) . }}
 {{- $vaultClientID := required "vault.keycloakClientId is required" .Values.vault.keycloakClientId }}
@@ -182,6 +186,7 @@ spec:
         - --vault-endpoint={{ $vaultEndpoint }}
         - --vault-namespace={{ $vaultNamespace }}
         - --vault-kv-mount-path={{ $vaultKVMountPath }}
+        - --vault-transit-mount-path={{ $vaultTransitMountPath }}
         - --vault-lifecycle-role={{ $vaultLifecycleRole }}
         - --vault-lifecycle-mount-path={{ .Values.vault.lifecycleMountPath }}
         - --vault-keycloak-client-id={{ $vaultClientID }}

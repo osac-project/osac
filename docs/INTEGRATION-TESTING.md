@@ -136,6 +136,7 @@ Touched-area requirements: [component guide](../fulfillment-service/AGENTS.md#in
 ### Coverage notes
 
 - **CLI commands that only call Fulfillment APIs:** Cover them in `fulfillment-service/it/`.
+- **VMaaS ComputeInstance network-attachment Create contract ([OSAC-5562](https://redhat.atlassian.net/browse/OSAC-5562), [OSAC-5563](https://redhat.atlassian.net/browse/OSAC-5563), DEV):** `fulfillment-service/it/it_compute_subnet_test.go` exercises the public API's one-attachment limit, no-persistence errors for missing tenant defaults and missing SecurityGroups on a non-default VirtualNetwork, and persistence of an explicitly specified attachment. `internal/servers/private_compute_instances_server_test.go` covers successful field-by-field tenant-default completion. This is Fulfillment Service and database coverage; provider provisioning remains E2E coverage.
 - **Canonical networking Hub routing:** [`fulfillment-service/it/it_networking_hub_placement_test.go`](../fulfillment-service/it/it_networking_hub_placement_test.go) covers VirtualNetwork, Subnet, SecurityGroup, ExternalIPPool, ExternalIP, ExternalIPAttachment, and NATGateway CR placement on the NetworkClass canonical Hub and absence on a valid alternate Hub. It also verifies that SecurityGroup retains its stored Hub assignment and does not create a duplicate CR when the canonical Hub changes. The fixture uses distinct Hub entries and namespaces on the service Kind cluster; it tests Hub entry and namespace routing, not isolation across separate Kubernetes clusters. The unavailable-canonical/no-fallback case remains controller unit coverage because this deployed-service harness cannot isolate or reset the reconcilers' cached Hub resolution between cases.
 - **NetworkClass manager registration and capability propagation:** `it_networkclass_manager_capabilities_test.go` creates the NetworkClass first, then adds fabric and Kubernetes manager registrations and verifies the deployed operator persists their capability intersection. The installer target runs this spec separately with the local operator image so the rest of the service-only suite remains isolated from operator reconciliation.
 - **NetworkClass manager readiness:** `it_networkclass_manager_readiness_test.go` covers `PENDING → FAILED` while a manager is missing, recovery to `READY` after its ConfigMap registration appears, and the persisted capability intersection.
@@ -145,6 +146,13 @@ Touched-area requirements: [component guide](../fulfillment-service/AGENTS.md#in
 ## osac-installer
 
 Touched-area requirements: [component guide](../osac-installer/AGENTS.md#integration-testing).
+
+The `make mce-render-test` Helm contract renders the prerequisite charts from
+local sources. It asserts disabled defaults, explicit standalone MCE
+enablement, configuration, Assisted image overrides, compatibility RBAC,
+explicit disabled-state suppression, enabled empty-override behavior, and the
+CaaS profile's explicit enablement with inherited defaults. It does not install
+MCE or call an Operator catalog or cluster API.
 
 The `make fulfillment-trust-render-test` Helm contract renders the production
 umbrella chart with trust enabled and disabled. It asserts the operator trust

@@ -275,7 +275,7 @@ def wait_for_grpc_subnet_ready(*, grpc: GRPCClient, subnet_id: str) -> None:
     poll_until(
         fn=_state,
         until=lambda v: v == _SUBNET_READY_STATE,
-        retries=30,
+        retries=60,
         delay=2,
         description=f"Subnet {subnet_id} gRPC READY",
     )

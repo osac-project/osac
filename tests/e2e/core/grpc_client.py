@@ -723,11 +723,15 @@ class GRPCClient:
         template: str,
         disk_image_name: str,
         subnet_ids: list[str],
+        security_group_ids: list[str] | None = None,
         instance_type: str | None = None,
         name: str | None = None,
         boot_disk_storage_tier: str | None = None,
     ) -> dict[str, Any]:
         attachments = [{"subnet": {"id": sid}} for sid in subnet_ids]
+        if security_group_ids:
+            for attachment in attachments:
+                attachment["security_groups"] = [{"id": sg_id} for sg_id in security_group_ids]
         spec: dict[str, Any] = {
             "template": {"name": template, "shared": True},
             "disk_image": {"name": disk_image_name},

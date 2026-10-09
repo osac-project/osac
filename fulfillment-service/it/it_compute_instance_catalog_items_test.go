@@ -503,7 +503,10 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				"spec": map[string]any{
 					"catalog_item": map[string]any{"id": item.GetId()},
 					"network_attachments": []any{
-						map[string]any{"subnet": map[string]any{"id": network.subnetID}},
+						map[string]any{
+							"subnet":          map[string]any{"id": network.subnetID},
+							"security_groups": []any{map[string]any{"id": network.securityGroupID}},
+						},
 					},
 				},
 			})

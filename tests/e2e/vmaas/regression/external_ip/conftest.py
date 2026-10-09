@@ -137,7 +137,7 @@ def external_ip(
 
 @pytest.fixture(scope="class")
 def make_compute_instances(
-    cli: OsacCLI, k8s_hub_client: K8sClient, vm_template: str, default_subnet: str
+    cli: OsacCLI, k8s_hub_client: K8sClient, vm_template: str, default_network_attachment: dict[str, object]
 ) -> Generator[Callable[..., tuple[tuple[str, str], ...]], None, None]:
     created: list[tuple[str, str]] = []
 
@@ -146,7 +146,7 @@ def make_compute_instances(
         for _ in range(count):
             name = unique_name("e2e-ci")
             uuid = cli.create_compute_instance(
-                name=name, template=vm_template, network_attachments=[{"subnet": default_subnet}]
+                name=name, template=vm_template, network_attachments=[default_network_attachment]
             )
             name = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
             created.append((uuid, name))

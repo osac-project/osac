@@ -38,8 +38,8 @@ OSAC installs as three ordered Helm releases. Each release is a plain
 
 **Phase 1a: `osac-deps`.** Installs Operator Lifecycle Manager (OLM)
 `Subscription` resources for the platform Operators in their own namespaces:
-cert-manager and Ansible Automation Platform (AAP) by default, and LVM
-Storage, MetalLB, OpenShift Virtualization, multicluster engine, and Streams
+cert-manager and Ansible Automation Platform (AAP) by default, and standalone
+multicluster engine, LVM Storage, MetalLB, OpenShift Virtualization, and Streams
 for Apache Kafka when enabled. Every Operator is gated by a toggle — see
 [Table 2.1](#table-21-platform-operators-and-components). Post-installation hooks wait for the cert-manager and AAP
 `ClusterServiceVersion` (CSV) resources to reach `Succeeded`.
@@ -175,9 +175,13 @@ Notes on individual components:
 - **MetalLB Operator** provides a `LoadBalancer`-class implementation. Any
   solution that provides one works if you disable `metallb.enabled`.
 - **multicluster engine for Kubernetes Operator** is required for
-  agent-based cluster provisioning. If Red Hat Advanced Cluster Management for
-  Kubernetes (RHACM) is installed, leave `mce.enabled=false`; RHACM manages its
-  own multicluster engine.
+  agent-based cluster provisioning but is disabled by default. Set
+  `mce.enabled=true` when this installation owns standalone MCE; the `caas-ci`
+  infrastructure profile does so explicitly. Leave it `false` when Red Hat
+  Advanced Cluster Management for Kubernetes (RHACM) or another MCE
+  installation already owns it. The disabled state also prevents the phase-1
+  chart from applying its temporary Assisted image override `ConfigMap` and
+  compatibility RBAC.
 
 ### 2.4 Credentials and external services
 
@@ -435,6 +439,11 @@ Use this procedure when the cluster already meets the prerequisites.
   Use `--version 0.0.9-nightly.<build>` only to test unreleased fixes. The AAP
   bootstrap job takes 10 to 40 minutes. Helm does not return until it and, for
   CaaS, the `osac-publish-templates` hook have finished.
+
+  On Helm 4, later `helm upgrade` (or re-running `helm upgrade --install`)
+  must include `--force-conflicts`. The AAP operator takes field ownership of
+  `app.kubernetes.io/managed-by` on the `osac-aap` custom resource, and Helm
+  4 server-side apply fails without that flag. Helm 3 does not accept it.
 
 **Verification**
 
@@ -1303,6 +1312,11 @@ $ oc get csr | grep -c Pending
   ```console
   $ oc label aap osac-aap -n <namespace> app.kubernetes.io/managed-by=Helm --overwrite
   ```
+
+- a field-ownership conflict on `app.kubernetes.io/managed-by` owned by the
+  AAP operator (Helm 4): add `--force-conflicts` to the `helm upgrade`
+  command. The operator takes ownership of that field on the `osac-aap`
+  custom resource after install.
 
 ### 11.8 The `osac-aap-bootstrap` job fails
 

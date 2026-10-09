@@ -2321,7 +2321,7 @@ var _ = Describe("Vault namespace provisioning", func() {
 		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
 	})
 
-	It("provisions a vault namespace for the shared tenant", func() {
+	DescribeTable("provisions a vault namespace for built-in tenants", func(tenantName string) {
 		reconciler := &function{
 			logger:         logger,
 			idpManager:     idpManager,
@@ -2331,21 +2331,21 @@ var _ = Describe("Vault namespace provisioning", func() {
 		tenant := privatev1.Tenant_builder{
 			Id: "org-shared",
 			Metadata: privatev1.Metadata_builder{
-				Name:       auth.SharedTenant,
+				Name:       tenantName,
 				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				Tenant:     "tenant-1",
 			}.Build(),
 			Status: privatev1.TenantStatus_builder{
 				State:         privatev1.TenantState_TENANT_STATE_SYNCED,
-				IdpTenantName: auth.SharedTenant,
+				IdpTenantName: tenantName,
 			}.Build(),
 		}.Build()
 
 		mockIDPClient.EXPECT().
-			GetTenant(gomock.Any(), auth.SharedTenant).
-			Return(&idp.Tenant{Name: auth.SharedTenant}, nil)
+			GetTenant(gomock.Any(), tenantName).
+			Return(&idp.Tenant{Name: tenantName}, nil)
 		mockVaultClient.EXPECT().
-			EnsureTenantNamespace(gomock.Any(), auth.SharedTenant).
+			EnsureTenantNamespace(gomock.Any(), tenantName).
 			Return(nil)
 
 		t := &task{r: reconciler, tenant: tenant}
@@ -2354,6 +2354,42 @@ var _ = Describe("Vault namespace provisioning", func() {
 		cond := findCondition(tenant)
 		Expect(cond).ToNot(BeNil())
 		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+	}, Entry("shared", auth.SharedTenant), Entry("system", auth.SystemTenant))
+
+	It("keeps VAULT_READY false after Transit setup fails and retries provisioning", func() {
+		reconciler := &function{
+			logger: logger, idpManager: idpManager, vaultLifecycle: mockVaultClient,
+		}
+		tenant := privatev1.Tenant_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name: "retry-transit", Finalizers: []string{finalizers.Controller}, Tenant: "tenant-1",
+			}.Build(),
+			Status: privatev1.TenantStatus_builder{
+				State: privatev1.TenantState_TENANT_STATE_SYNCED, IdpTenantName: "retry-transit",
+				Conditions: []*privatev1.TenantCondition{
+					privatev1.TenantCondition_builder{
+						Type:   condType,
+						Status: privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+					}.Build(),
+				},
+			}.Build(),
+		}.Build()
+		mockIDPClient.EXPECT().GetTenant(gomock.Any(), "retry-transit").
+			Return(&idp.Tenant{Name: "retry-transit"}, nil).Times(2)
+		gomock.InOrder(
+			mockVaultClient.EXPECT().EnsureTenantNamespace(gomock.Any(), "retry-transit").
+				Return(fmt.Errorf("failed to mount Transit: permission denied")),
+			mockVaultClient.EXPECT().EnsureTenantNamespace(gomock.Any(), "retry-transit").Return(nil),
+		)
+		t := &task{r: reconciler, tenant: tenant}
+		Expect(t.update(ctx)).To(MatchError(ContainSubstring("failed to mount Transit")))
+		// Failed reconciliation restores a snapshot, so inspect the task's current tenant.
+		Expect(findCondition(t.tenant)).ToNot(BeNil())
+		Expect(findCondition(t.tenant).GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(t.update(ctx)).To(Succeed())
+		Expect(findCondition(t.tenant)).ToNot(BeNil())
+		Expect(findCondition(t.tenant).GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+		Expect(findCondition(t.tenant).GetReason()).To(Equal("NamespaceReady"))
 	})
 
 })

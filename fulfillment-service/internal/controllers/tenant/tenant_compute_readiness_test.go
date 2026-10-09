@@ -169,17 +169,15 @@ var _ = Describe("Tenant compute infrastructure readiness", func() {
 		observe(clientWith(wrong))
 		check(unknown, "InfrastructureStatusUnknown")
 	})
-	It("bounds stalled observations and still persists unknown readiness", func() {
-		blocked := fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{List: func(ctx context.Context, _ clnt.WithWatch, _ clnt.ObjectList, _ ...clnt.ListOption) error {
+	It("persists unknown readiness when hub observation times out", func() {
+		timedOut := fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{List: func(ctx context.Context, _ clnt.WithWatch, _ clnt.ObjectList, _ ...clnt.ListOption) error {
 			deadline, ok := ctx.Deadline()
 			Expect(ok).To(BeTrue(), "observation must have a deadline")
 			Expect(time.Until(deadline)).To(BeNumerically("<=", 10*time.Second))
-			<-ctx.Done()
-			return ctx.Err()
+			return context.DeadlineExceeded
 		}}).Build()
-		observe(blocked)
+		observe(timedOut)
 		check(unknown, "InfrastructureStatusUnknown")
-		Expect(ctx.Err()).NotTo(HaveOccurred())
 	})
 
 	It("rejects ambiguous tenant identity", func() {

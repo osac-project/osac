@@ -501,8 +501,9 @@ var _ = Describe("Bare Metal Instance Catalog Item policy application", func() {
 		Expect(spec.GetNetworkAttachments()[0]).To(BeNil())
 		Expect(spec.GetNetworkAttachments()[1]).NotTo(BeIdenticalTo(attachment))
 		Expect(spec.GetAutoExternalIpAttachment()).To(BeFalse())
-		Expect(spec.GetInstanceType()).NotTo(BeIdenticalTo(instanceType))
+		Expect(spec.GetInstanceType().GetId()).To(Equal(instanceType.GetId()))
 		Expect(spec.GetInstanceType().GetName()).To(Equal(instanceType.GetName()))
+		Expect(spec.GetInstanceType().GetShared()).To(BeTrue())
 		Expect(spec.GetDiskImage()).NotTo(BeIdenticalTo(diskImage))
 
 		spec.GetNetworkAttachments()[1].GetSubnet().SetName("changed")

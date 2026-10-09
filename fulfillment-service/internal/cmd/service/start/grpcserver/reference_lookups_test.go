@@ -146,6 +146,38 @@ var _ = Describe("RegisterReferenceLookups", func() {
 		Expect(called).To(BeTrue())
 	})
 
+	It("leaves Catalog Item instance_type LocalReference for the handler to resolve", func() {
+		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+		tenancy, err := auth.NewGuestTenancyLogic().SetLogger(logger).Build()
+		Expect(err).NotTo(HaveOccurred())
+		v, err := newReferenceValidator(logger, tenancy, prometheus.NewRegistry())
+		Expect(err).NotTo(HaveOccurred())
+
+		request := privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceCatalogItem_builder{
+				Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{
+					InstanceType: privatev1.BareMetalInstanceTypeLocalReferenceFieldPolicy_builder{
+						Locked: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "my-bmit"}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build()
+
+		called := false
+		_, err = v.UnaryServer(context.Background(), request,
+			&grpc.UnaryServerInfo{FullMethod: privatev1.BareMetalInstanceCatalogItems_Create_FullMethodName},
+			func(_ context.Context, actual any) (any, error) {
+				called = true
+				fields := actual.(*privatev1.BareMetalInstanceCatalogItemsCreateRequest).GetObject().GetFields()
+				ref := fields.GetInstanceType().GetLocked()
+				Expect(ref.GetId()).To(BeEmpty(), "interceptor must not resolve catalog item instance type")
+				Expect(ref.GetName()).To(Equal("my-bmit"))
+				return "ok", nil
+			})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(called).To(BeTrue(), "instance type local reference must reach handler unresolved")
+	})
+
 	It("does not reject identity provider client_secret_secret as unregistered", func() {
 		request := privatev1.IdentityProvidersCreateRequest_builder{
 			Object: privatev1.IdentityProvider_builder{
@@ -174,8 +206,14 @@ var _ = Describe("RegisterReferenceLookups", func() {
 })
 
 func isHandlerOwnedReferenceType(name protoreflect.FullName) bool {
-	return name == "osac.private.v1.AddOnOperatorReference" ||
-		name == "osac.public.v1.AddOnOperatorReference"
+	switch name {
+	case "osac.private.v1.AddOnOperatorReference",
+		"osac.public.v1.AddOnOperatorReference",
+		"osac.private.v1.BareMetalInstanceTypeLocalReference",
+		"osac.public.v1.BareMetalInstanceTypeLocalReference":
+		return true
+	}
+	return false
 }
 
 func newTestReferenceValidator() *references.ReferenceValidator {

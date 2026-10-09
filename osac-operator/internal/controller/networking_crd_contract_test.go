@@ -98,7 +98,20 @@ var _ = Describe("IPv4-only networking CRD contracts", func() {
 			By("rejecting spec updates for " + testCase.kind)
 			object := networkingContractObject(testCase.kind, networkingContractName("immutable"), testCase.spec)
 			Expect(k8sClient.Create(ctx, object)).To(Succeed())
-			DeferCleanup(func() { _ = k8sClient.Delete(ctx, object) })
+			DeferCleanup(func() {
+				current := networkingContractObject(testCase.kind, object.GetName(), nil)
+				err := k8sClient.Get(ctx, client.ObjectKeyFromObject(object), current)
+				if apierrors.IsNotFound(err) {
+					return
+				}
+				Expect(err).ToNot(HaveOccurred())
+				current.SetFinalizers(nil)
+				Expect(k8sClient.Update(ctx, current)).To(Succeed())
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, current))).To(Succeed())
+				Eventually(func() bool {
+					return apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(object), current))
+				}, 5*time.Second, 50*time.Millisecond).Should(BeTrue())
+			})
 
 			stored := networkingContractObject(testCase.kind, object.GetName(), nil)
 			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(object), stored)).To(Succeed())

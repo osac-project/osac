@@ -47,18 +47,21 @@ hub_oc get namespace "${INSTALLER_NAMESPACE}" >/dev/null || {
     exit 1
 }
 
-REMOTE_TOKEN=$(oc "${remote_args[@]}" create token osac-remote-access \
-    -n "${INSTALLER_NAMESPACE}" --duration=8760h)
-if [[ -z "${REMOTE_TOKEN}" ]]; then
+umask 077
+REMOTE_TOKEN_FILE=$(mktemp)
+REMOTE_KUBECONFIG_FILE=$(mktemp)
+REMOTE_KUBECONFIG_TEMPLATE=$(mktemp)
+chmod 600 "${REMOTE_TOKEN_FILE}" "${REMOTE_KUBECONFIG_FILE}" "${REMOTE_KUBECONFIG_TEMPLATE}"
+trap 'rm -f "${REMOTE_TOKEN_FILE}" "${REMOTE_KUBECONFIG_FILE}" "${REMOTE_KUBECONFIG_TEMPLATE}"' EXIT
+
+oc "${remote_args[@]}" create token osac-remote-access \
+    -n "${INSTALLER_NAMESPACE}" --duration=8760h >"${REMOTE_TOKEN_FILE}"
+[[ -s "${REMOTE_TOKEN_FILE}" ]] || {
     echo "ERROR: failed to create token for ${INSTALLER_NAMESPACE}/osac-remote-access on the workload cluster" >&2
     exit 1
-fi
+}
 
-umask 077
-REMOTE_KUBECONFIG_FILE=$(mktemp)
-chmod 600 "${REMOTE_KUBECONFIG_FILE}"
-trap 'rm -f "${REMOTE_KUBECONFIG_FILE}"' EXIT
-cat >"${REMOTE_KUBECONFIG_FILE}" <<EOF
+cat >"${REMOTE_KUBECONFIG_TEMPLATE}" <<EOF
 apiVersion: v1
 kind: Config
 clusters:
@@ -76,8 +79,14 @@ current-context: remote
 users:
 - name: osac-remote-access
   user:
-    token: ${REMOTE_TOKEN}
+    token: __REMOTE_TOKEN__
 EOF
+
+# Stream the credential from its restricted file into the final kubeconfig.
+# Keeping it out of shell variables also keeps it out of shell tracing output.
+awk 'FNR == NR { token = $0; next }
+     $0 == "    token: __REMOTE_TOKEN__" { print "    token: " token; next }
+     { print }' "${REMOTE_TOKEN_FILE}" "${REMOTE_KUBECONFIG_TEMPLATE}" >"${REMOTE_KUBECONFIG_FILE}"
 
 if ! oc --kubeconfig "${REMOTE_KUBECONFIG_FILE}" --request-timeout=30s \
     get serviceaccount osac-remote-access \

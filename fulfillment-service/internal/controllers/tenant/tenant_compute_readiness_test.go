@@ -122,7 +122,7 @@ var _ = Describe("Tenant compute infrastructure readiness", func() {
 		Expect(c.GetStatus()).To(Equal(want))
 		Expect(c.GetReason()).To(Equal(reason))
 		Expect(c.GetLastTransitionTime()).NotTo(BeNil())
-		Expect(req.GetObject().GetStatus().GetConditions()).To(HaveLen(3))
+		Expect(req.GetObject().GetStatus().GetConditions()).To(HaveLen(5))
 		Expect(req.GetObject().GetStatus().GetConditions()[0].GetStatus()).To(Equal(ready))
 		Expect(req.GetObject().GetStatus().GetConditions()[1].GetStatus()).To(Equal(ready))
 	}
@@ -137,6 +137,104 @@ var _ = Describe("Tenant compute infrastructure readiness", func() {
 		Entry("empty", osacv1alpha1.TenantPhaseType(""), notReady, "InfrastructurePending"),
 		Entry("unrecognized", osacv1alpha1.TenantPhaseType("future"), notReady, "InfrastructurePending"),
 	)
+
+	Context("storage status projection", func() {
+		storageCondition := func(object *privatev1.Tenant, kind privatev1.TenantConditionType) *privatev1.TenantCondition {
+			for _, c := range object.GetStatus().GetConditions() {
+				if c.GetType() == kind {
+					return c
+				}
+			}
+			return nil
+		}
+		storageObject := func(backend, classes metav1.ConditionStatus) *osacv1alpha1.Tenant {
+			cr := object(osacv1alpha1.TenantPhaseReady)
+			cr.Generation = 2
+			cr.Status.Conditions = []metav1.Condition{
+				{Type: string(osacv1alpha1.TenantConditionStorageBackendReady), Status: backend, ObservedGeneration: 2, Reason: "PreparedSVMValidated", Message: "Prepared storage configuration validated"},
+				{Type: string(osacv1alpha1.TenantConditionClusterStorageReady), Status: classes, ObservedGeneration: 2, Reason: "WaitingForTrident", Message: "Native backend is not ready yet"},
+			}
+			return cr
+		}
+		DescribeTable("preserves provider storage status and explanations", func(observed metav1.ConditionStatus, want privatev1.ConditionStatus) {
+			observe(clientWith(storageObject(observed, metav1.ConditionFalse)))
+			Expect(reconciler.Run(ctx, tenant)).To(Succeed())
+			saved := tenants.updates[0].GetObject()
+			backend := storageCondition(saved, privatev1.TenantConditionType_TENANT_CONDITION_TYPE_STORAGE_BACKEND_READY)
+			Expect(backend.GetStatus()).To(Equal(want))
+			Expect(backend.GetReason()).To(Equal("PreparedSVMValidated"))
+			Expect(backend.GetMessage()).To(Equal("Prepared storage configuration validated"))
+			classes := storageCondition(saved, privatev1.TenantConditionType_TENANT_CONDITION_TYPE_CLUSTER_STORAGE_READY)
+			Expect(classes.GetStatus()).To(Equal(notReady))
+			Expect(classes.GetReason()).To(Equal("WaitingForTrident"))
+			Expect(classes.GetMessage()).To(Equal("Native backend is not ready yet"))
+			Expect(condition(saved).GetStatus()).To(Equal(ready))
+		}, Entry("ready", metav1.ConditionTrue, ready), Entry("not ready", metav1.ConditionFalse, notReady), Entry("unknown", metav1.ConditionUnknown, unknown))
+		It("does not infer storage readiness from a Ready tenant phase", func() {
+			observe(clientWith(object(osacv1alpha1.TenantPhaseReady)))
+			Expect(reconciler.Run(ctx, tenant)).To(Succeed())
+			for _, kind := range []privatev1.TenantConditionType{privatev1.TenantConditionType_TENANT_CONDITION_TYPE_STORAGE_BACKEND_READY, privatev1.TenantConditionType_TENANT_CONDITION_TYPE_CLUSTER_STORAGE_READY} {
+				c := storageCondition(tenants.updates[0].GetObject(), kind)
+				Expect(c.GetStatus()).To(Equal(unknown))
+				Expect(c.GetReason()).To(Equal("StorageStatusUnknown"))
+			}
+		})
+		It("does not publish stale storage readiness", func() {
+			cr := storageObject(metav1.ConditionTrue, metav1.ConditionTrue)
+			cr.Status.Conditions[0].ObservedGeneration = 1
+			observe(clientWith(cr))
+			Expect(reconciler.Run(ctx, tenant)).To(Succeed())
+			Expect(storageCondition(tenants.updates[0].GetObject(), privatev1.TenantConditionType_TENANT_CONDITION_TYPE_STORAGE_BACKEND_READY).GetStatus()).To(Equal(unknown))
+		})
+		DescribeTable("a ready hub cannot hide another hub's storage status", func(other metav1.ConditionStatus, want privatev1.ConditionStatus) {
+			observe(clientWith(storageObject(metav1.ConditionTrue, metav1.ConditionTrue)), clientWith(storageObject(other, other)))
+			Expect(reconciler.Run(ctx, tenant)).To(Succeed())
+			saved := tenants.updates[0].GetObject()
+			Expect(storageCondition(saved, privatev1.TenantConditionType_TENANT_CONDITION_TYPE_STORAGE_BACKEND_READY).GetStatus()).To(Equal(want))
+			Expect(storageCondition(saved, privatev1.TenantConditionType_TENANT_CONDITION_TYPE_CLUSTER_STORAGE_READY).GetStatus()).To(Equal(want))
+		}, Entry("not ready", metav1.ConditionFalse, notReady), Entry("unknown", metav1.ConditionUnknown, unknown))
+		It("does not publish ready storage from a deleting tenant", func() {
+			cr := storageObject(metav1.ConditionTrue, metav1.ConditionTrue)
+			now := metav1.Now()
+			cr.DeletionTimestamp, cr.Finalizers = &now, []string{"test/hold"}
+			observe(clientWith(cr))
+			Expect(reconciler.Run(ctx, tenant)).To(Succeed())
+			Expect(storageCondition(tenants.updates[0].GetObject(), privatev1.TenantConditionType_TENANT_CONDITION_TYPE_STORAGE_BACKEND_READY).GetStatus()).To(Equal(notReady))
+		})
+		It("does not hide a known storage failure behind an unavailable hub", func() {
+			hubs.EXPECT().List(gomock.Any(), gomock.Any()).Return(privatev1.HubsListResponse_builder{
+				Items: []*privatev1.Hub{privatev1.Hub_builder{Id: "a"}.Build(), privatev1.Hub_builder{Id: "b"}.Build()}, Size: 2, Total: 2,
+			}.Build(), nil)
+			cache.EXPECT().Get(gomock.Any(), "a").Return(&controllers.HubEntry{Namespace: "hub-ns", Client: clientWith(storageObject(metav1.ConditionFalse, metav1.ConditionFalse))}, nil)
+			cache.EXPECT().Get(gomock.Any(), "b").Return(nil, errors.New("offline"))
+			Expect(reconciler.Run(ctx, tenant)).To(Succeed())
+			Expect(storageCondition(tenants.updates[0].GetObject(), privatev1.TenantConditionType_TENANT_CONDITION_TYPE_STORAGE_BACKEND_READY).GetStatus()).To(Equal(notReady))
+		})
+		It("replaces previously ready storage when hub observation fails", func() {
+			before := timestamppb.New(time.Now().Add(-time.Hour))
+			kind := privatev1.TenantConditionType_TENANT_CONDITION_TYPE_STORAGE_BACKEND_READY
+			tenant.GetStatus().SetConditions(append(tenant.GetStatus().GetConditions(), privatev1.TenantCondition_builder{
+				Type: kind, Status: ready, LastTransitionTime: before,
+			}.Build()))
+			hubs.EXPECT().List(gomock.Any(), gomock.Any()).Return(nil, errors.New("offline"))
+			Expect(reconciler.Run(ctx, tenant)).To(Succeed())
+			c := storageCondition(tenants.updates[0].GetObject(), kind)
+			Expect(c.GetStatus()).To(Equal(unknown))
+			Expect(c.GetLastTransitionTime().AsTime()).To(BeTemporally(">", before.AsTime()))
+		})
+		It("preserves storage transition time when only the explanation changes", func() {
+			before := timestamppb.New(time.Now().Add(-time.Hour))
+			kind := privatev1.TenantConditionType_TENANT_CONDITION_TYPE_STORAGE_BACKEND_READY
+			tenant.GetStatus().SetConditions(append(tenant.GetStatus().GetConditions(), privatev1.TenantCondition_builder{
+				Type: kind, Status: notReady, Reason: new("WaitingForCredentials"), LastTransitionTime: before,
+			}.Build()))
+			observe(clientWith(storageObject(metav1.ConditionFalse, metav1.ConditionTrue)))
+			Expect(reconciler.Run(ctx, tenant)).To(Succeed())
+			c := storageCondition(tenants.updates[0].GetObject(), kind)
+			Expect(c.GetReason()).To(Equal("PreparedSVMValidated"))
+			Expect(proto.Equal(c.GetLastTransitionTime(), before)).To(BeTrue())
+		})
+	})
 	It("does not treat a deleting Ready CR as ready", func() {
 		cr := object(osacv1alpha1.TenantPhaseReady)
 		now := metav1.Now()

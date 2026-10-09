@@ -134,7 +134,7 @@ func resolveTierDefinitions(
 				"tier", tierName, "protocol", tier.GetSpec().GetProtocol())
 		}
 
-		definitions = append(definitions, provisioning.TierDefinition{
+		definition := provisioning.TierDefinition{
 			Name:      tierName,
 			Protocol:  protocol,
 			Provider:  resolution.provider,
@@ -143,7 +143,14 @@ func resolveTierDefinitions(
 				MaxReadBandwidthMBs:  assoc.GetMaxReadBandwidthMbs(),
 				MaxWriteBandwidthMBs: assoc.GetMaxWriteBandwidthMbs(),
 			},
-		})
+		}
+		if resolution.provider == "ontap" {
+			definition.EncryptionEnabled = ptr.To(assoc.GetEncryptionEnabled())
+			if config := assoc.GetOntap(); config != nil {
+				definition.QosLimits.ProviderConfig = map[string]any{"max_iops": config.GetMaxIops()}
+			}
+		}
+		definitions = append(definitions, definition)
 	}
 
 	return definitions, connections, nil

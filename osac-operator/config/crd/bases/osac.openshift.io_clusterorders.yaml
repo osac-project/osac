@@ -197,21 +197,13 @@ spec:
             properties:
               addOnOperatorJobs:
                 description: |-
-                  AddOnOperatorJobs holds per-operator installation attempts. Active attempts
-                  and the retry state needed for each operator may exceed the configured
-                  display-history limit.
+                  AddOnOperatorJobs holds the per-operator installation job history.
+                  One entry is recorded for each operator attempt.
                 items:
                   description: |-
                     AddOnOperatorJobStatus tracks one add-on operator installation attempt.
                     Name is the stable Ansible role name for the operator.
                   properties:
-                    attemptID:
-                      description: |-
-                        AttemptID is the controller-generated identity for this launch attempt.
-                        It remains stable when the external provider response is lost, allowing
-                        the provider to recover the original job instead of launching a duplicate.
-                      minLength: 1
-                      type: string
                     blockDeletionOnFailure:
                       description: |-
                         BlockDeletionOnFailure indicates whether CR deletion should be blocked if this job fails.

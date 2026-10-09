@@ -52,7 +52,6 @@ type addOnOperatorProviderStub struct {
 	cancelError        error
 	statusErrors       map[string]error
 	beforeTrigger      func(string)
-	attemptIDs         []string
 }
 
 func newAddOnOperatorProviderStub() *addOnOperatorProviderStub {
@@ -93,11 +92,6 @@ func (p *addOnOperatorProviderStub) TriggerProvision(ctx context.Context, _ clie
 		InitialState: osacv1alpha1.JobStatePending,
 		Message:      "queued",
 	}, nil
-}
-
-func (p *addOnOperatorProviderStub) TriggerProvisionWithAttemptID(ctx context.Context, resource client.Object, attemptID string) (*provisioning.ProvisionResult, error) {
-	p.attemptIDs = append(p.attemptIDs, attemptID)
-	return p.TriggerProvision(ctx, resource)
 }
 
 func (p *addOnOperatorProviderStub) GetProvisionStatus(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
@@ -224,11 +218,8 @@ var _ = Describe("AddOnOperatorReconciler", func() {
 				return
 			}
 			stored := getOrder(order.Name)
-			Expect(stored.Status.AddOnOperatorJobs).To(HaveLen(2))
+			Expect(stored.Status.AddOnOperatorJobs).To(HaveLen(1))
 			Expect(stored.Status.AddOnOperatorJobs[0].Name).To(Equal("cert-manager"))
-			Expect(stored.Status.AddOnOperatorJobs[0].JobID).NotTo(BeEmpty())
-			Expect(stored.Status.AddOnOperatorJobs[1].Name).To(Equal("gpu-operator"))
-			Expect(stored.Status.AddOnOperatorJobs[1].JobID).To(BeEmpty())
 		}
 		Expect(k8sClient.Create(ctx, order)).To(Succeed())
 
@@ -329,7 +320,7 @@ var _ = Describe("AddOnOperatorReconciler", func() {
 		Expect(findAddOnOperatorCondition(stored).Status).To(Equal(metav1.ConditionTrue))
 	})
 
-	It("keeps a durable attempt when the provider launch response is uncertain", func() {
+	It("records provider trigger failures as failed attempts", func() {
 		order := newOrder("trigger-failure", osacv1alpha1.ClusterOrderPhaseReady, "cert-manager")
 		provider.triggerError = errors.New("AAP unavailable")
 		Expect(k8sClient.Create(ctx, order)).To(Succeed())
@@ -341,9 +332,9 @@ var _ = Describe("AddOnOperatorReconciler", func() {
 		stored := getOrder(order.Name)
 		Expect(stored.Status.AddOnOperatorJobs).To(HaveLen(1))
 		Expect(stored.Status.AddOnOperatorJobs[0].JobID).To(BeEmpty())
-		Expect(stored.Status.AddOnOperatorJobs[0].State).To(Equal(osacv1alpha1.JobStateWaiting))
-		Expect(stored.Status.AddOnOperatorJobs[0].Message).To(Equal("AAP launch pending"))
-		Expect(findAddOnOperatorCondition(stored)).To(BeNil())
+		Expect(stored.Status.AddOnOperatorJobs[0].State).To(Equal(osacv1alpha1.JobStateFailed))
+		Expect(stored.Status.AddOnOperatorJobs[0].Message).To(ContainSubstring("AAP unavailable"))
+		Expect(findAddOnOperatorCondition(stored).Status).To(Equal(metav1.ConditionFalse))
 	})
 
 	It("requeues an admin kubeconfig error without recording an attempt", func() {
@@ -380,7 +371,7 @@ var _ = Describe("AddOnOperatorReconciler", func() {
 		Expect(provider.triggeredOperators).To(BeEmpty())
 	})
 
-	It("keeps a durable attempt when the provider returns no job ID", func() {
+	It("records an empty provider job ID as a failed attempt", func() {
 		order := newOrder("empty-job-id", osacv1alpha1.ClusterOrderPhaseReady, "cert-manager")
 		provider.returnEmptyJobID = true
 		Expect(k8sClient.Create(ctx, order)).To(Succeed())
@@ -392,8 +383,7 @@ var _ = Describe("AddOnOperatorReconciler", func() {
 		stored := getOrder(order.Name)
 		Expect(stored.Status.AddOnOperatorJobs).To(HaveLen(1))
 		Expect(stored.Status.AddOnOperatorJobs[0].JobID).To(BeEmpty())
-		Expect(stored.Status.AddOnOperatorJobs[0].State).To(Equal(osacv1alpha1.JobStateWaiting))
-		Expect(stored.Status.AddOnOperatorJobs[0].Message).To(Equal("AAP launch pending"))
+		Expect(stored.Status.AddOnOperatorJobs[0].State).To(Equal(osacv1alpha1.JobStateFailed))
 	})
 
 	It("marks purged AAP jobs failed so the operator can retry", func() {

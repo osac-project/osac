@@ -67,10 +67,10 @@ endif
 SUITE_TARGETS := test
 ifneq ($(filter $(SUITE_TARGETS),$(MAKECMDGOALS)),)
 ifndef SUITE
-$(error SUITE is required (all|fulfillment|operator|bmf))
+$(error SUITE is required (all|fulfillment|operator|operator-multicluster|bmf))
 endif
-ifeq ($(filter $(SUITE),all fulfillment operator bmf),)
-$(error SUITE=$(SUITE) is invalid; must be all, fulfillment, operator, or bmf)
+ifeq ($(filter $(SUITE),all fulfillment operator operator-multicluster bmf),)
+$(error SUITE=$(SUITE) is invalid; must be all, fulfillment, operator, operator-multicluster, or bmf)
 endif
 endif
 
@@ -409,6 +409,13 @@ ifeq ($(SUITE),operator)
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.fulfillmentTrust.enabled=false --set global.networking.networkClass.enabled=false"
 	cd ../osac-operator && ginkgo run --timeout 30m -v test/integration
+endif
+ifeq ($(SUITE),operator-multicluster)
+	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/osac-operator:it -f ../osac-operator/Containerfile ..)
+	$(call kind-load-image,localhost/osac-operator:it)
+	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
+		EXTRA_HELM_ARGS="--set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.fulfillmentTrust.enabled=false --set global.networking.networkClass.enabled=false"
+	cd ../osac-operator && ginkgo run --timeout 30m -v test/integration/multicluster
 endif
 ifeq ($(SUITE),bmf)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/bmf-operator:it -f ../bare-metal-fulfillment-operator/Containerfile ..)

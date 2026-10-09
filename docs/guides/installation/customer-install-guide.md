@@ -682,8 +682,9 @@ variable reference, see
 - BMaaS is enabled and configured with a usable provider backend, worker
   inventory, and BMC/network reachability. Define the worker
   `BareMetalInstanceType` used by the cluster.
-- Register the RHCOS `DiskImage` and associate it with the selected
-  `ClusterVersion` before provisioning the first cluster.
+- Publish the worker RHCOS QCOW2 image as an OCI artifact, register it as a
+  `DiskImage`, and associate it with the selected `ClusterVersion` before
+  provisioning the first cluster.
 - The Netris controller, site, tenant, management VPC, and resource-class
   mapping are available. This guide's Netris CaaS path assumes connected IPv4
   networking and one provider-owned networking hub.
@@ -694,6 +695,41 @@ variable reference, see
 - SSH private keys for the servers and bastion host are still required by the
   current CaaS AAP workflow; this is separate from the removed static worker
   pool.
+
+#### Publish the worker RHCOS image
+
+Publish the bootable, whole-disk QCOW2 image to an OCI-compliant registry
+reachable from the BMaaS provisioning environment. For a private registry,
+authenticate for the push and configure read credentials for the provisioning
+environment. Registering a `DiskImage` stores its reference only; it does not
+fetch the artifact or verify registry access. Replace the example registry,
+repository, tag, and file path with your values. For a private registry, set
+`REGISTRY_USER` and `REGISTRY_PASSWORD` through a secure mechanism rather than
+putting passwords in shell history; omit the login command for a public
+registry.
+
+```console
+$ export REGISTRY="registry.example.com"
+$ export REPOSITORY="osac/rhcos"
+$ export TAG="4.22.0"
+$ export QCOW2="/path/to/rhcos-4.22.0-x86_64.qcow2"
+$ printf '%s' "$REGISTRY_PASSWORD" | oras login \
+    --username "$REGISTRY_USER" --password-stdin "$REGISTRY"
+$ oras push -a disktype=qcow2 --artifact-platform linux/amd64 \
+    "$REGISTRY/$REPOSITORY:$TAG" "$QCOW2"
+```
+
+The annotation marks the artifact as QCOW2 and the platform metadata identifies
+this example as Linux/AMD64; use the platform matching your image and worker
+architecture. `--artifact-platform` is experimental in ORAS 1.3; check the
+[ORAS `push` documentation](https://oras.land/docs/commands/oras_push/) for
+version-specific behavior. Use the published reference as the `DiskImage`
+`source_ref`, for example
+`oci://$REGISTRY/$REPOSITORY:$TAG`. Prefer the manifest digest printed by
+`oras push` for an immutable reference:
+`oci://$REGISTRY/$REPOSITORY@sha256:<digest>`. For the OSAC `DiskImage`
+registration steps, see the
+[Bare Metal Instance DiskImage guide](../developer/baremetalinstance-guide.md).
 
 **Procedure**
 

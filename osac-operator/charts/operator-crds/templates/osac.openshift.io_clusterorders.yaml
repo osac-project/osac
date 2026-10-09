@@ -677,6 +677,9 @@ spec:
                 x-kubernetes-list-type: map
             type: object
         type: object
+        x-kubernetes-validations:
+        - message: spec presence is immutable after creation
+          rule: has(self.spec) == has(oldSelf.spec)
     served: true
     storage: true
     subresources:

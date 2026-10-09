@@ -290,9 +290,12 @@ func (t *task) update(ctx context.Context) error {
 		)
 	} else {
 		var desiredNetworkSpec osacv1alpha1.ComputeInstanceSpec
-		if networkErr := t.buildSpecNetworkAttachments(ctx, &desiredNetworkSpec); networkErr != nil ||
-			!equalNetworkAttachments(object.Spec.NetworkAttachments, desiredNetworkSpec.NetworkAttachments) {
-			t.r.logger.WarnContext(ctx, "Private and stored network attachments differ; preserving stored network attachments on existing ComputeInstance")
+		if networkErr := t.buildSpecNetworkAttachments(ctx, &desiredNetworkSpec); networkErr != nil {
+			t.r.logger.WarnContext(ctx, "Failed to resolve private network attachments; preserving stored network attachments on existing ComputeInstance",
+				slog.String("namespace", object.GetNamespace()), slog.String("name", object.GetName()), slog.Any("error", networkErr))
+		} else if !equalNetworkAttachments(object.Spec.NetworkAttachments, desiredNetworkSpec.NetworkAttachments) {
+			t.r.logger.WarnContext(ctx, "Private and stored network attachments differ; preserving stored network attachments on existing ComputeInstance",
+				slog.String("namespace", object.GetNamespace()), slog.String("name", object.GetName()))
 		}
 		spec.NetworkAttachments = object.Spec.NetworkAttachments
 		update := object.DeepCopy()

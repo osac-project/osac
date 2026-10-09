@@ -418,6 +418,7 @@ type WorkerStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:validation:XValidation:rule="has(self.spec) == has(oldSelf.spec)",message="spec presence is immutable after creation"
 // +kubebuilder:resource:shortName=cord
 // +kubebuilder:printcolumn:name="Template",type=string,JSONPath=`.spec.templateID`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`

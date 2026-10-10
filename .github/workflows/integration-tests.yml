@@ -229,6 +229,60 @@ jobs:
           echo "=== Events ==="
           kubectl get events -n osac --sort-by='.lastTimestamp' | tail -50
 
+  osac-operator-multicluster:
+    name: Run integration test (osac-operator multicluster)
+    needs: changes
+    if: needs.changes.outputs.should-run == 'true' && needs.changes.outputs.osac-operator-relevant == 'true'
+    concurrency:
+      group: integration-osac-operator-multicluster-${{ needs.changes.outputs.concurrency-key }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45  # ginkgo --timeout 30m (Makefile) + ~15m for install/setup/log-collection
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: ./.github/actions/setup-go
+        with:
+          working-directory: osac-operator
+
+      - name: Install Kind
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc  # v1
+        with:
+          install_only: true
+
+      - name: Install Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+
+      - name: Install infrastructure on Kind
+        env:
+          CONTAINER_TOOL: docker
+        run: make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
+
+      - name: Run multicluster integration tests
+        env:
+          CONTAINER_TOOL: docker
+        run: make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=operator-multicluster
+
+      - name: Collect diagnostic logs
+        if: always()
+        run: |
+          export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
+          echo "=== Pods ==="
+          kubectl get pods -n osac -o wide
+          echo "=== Deployments ==="
+          kubectl get deployments -n osac
+          echo "=== Operator logs ==="
+          kubectl logs -n osac -l control-plane=controller-manager --tail=200
+          echo "=== Events ==="
+          kubectl get events -n osac --sort-by='.lastTimestamp' | tail -50
+          echo "=== Workload cluster (if exists) ==="
+          kind get kubeconfig --name osac-workload > /tmp/wl.kubeconfig 2>/dev/null && \
+            kubectl --kubeconfig /tmp/wl.kubeconfig get pods -A || echo "Workload cluster not available"
+
   bare-metal-fulfillment-operator:
     name: Run integration test (bare-metal-fulfillment-operator)
     needs: changes

@@ -166,6 +166,7 @@ func BMaaSEffectEventType(effect string, everStarted bool) (string, error) {
 type BMaaSMeterIntervals struct {
 	AllocationSince  *time.Time
 	ConsumptionSince *time.Time
+	LastHeartbeatAt  *time.Time
 }
 
 type BMaaSEventBuildRequest struct {
@@ -188,17 +189,20 @@ func DecomposeBMIEvents(
 	consumptionType string,
 ) ([]cloudevents.Event, error) {
 	requests := make([]BMaaSEventBuildRequest, 0, 2)
-	appendRequest := func(meterType, eventType, suffix string, since *time.Time) {
+	appendRequest := func(meterType, eventType, suffix string, since *time.Time) error {
 		if eventType == "" {
-			return
+			return nil
 		}
 		if eventType == EventSuspended && since == nil {
-			return
+			return nil
 		}
 		var duration *float64
-		if since != nil && eventType == EventSuspended {
-			seconds := transitionTime.Sub(*since).Seconds()
-			duration = &seconds
+		if eventType == EventHeartbeat || eventType == EventSuspended {
+			var err error
+			duration, err = DurationSeconds(transitionTime, intervals.LastHeartbeatAt, since)
+			if err != nil {
+				return fmt.Errorf("calculating %s meter duration: %w", meterType, err)
+			}
 		}
 		dims := maps.Clone(billingDims)
 		if dims == nil {
@@ -212,9 +216,14 @@ func DecomposeBMIEvents(
 			BillingDims:     dims,
 			DurationSeconds: duration,
 		})
+		return nil
 	}
-	appendRequest(BMaaSMeterAllocation, allocationType, "allocation", intervals.AllocationSince)
-	appendRequest(BMaaSMeterConsumption, consumptionType, "consumption", intervals.ConsumptionSince)
+	if err := appendRequest(BMaaSMeterAllocation, allocationType, "allocation", intervals.AllocationSince); err != nil {
+		return nil, err
+	}
+	if err := appendRequest(BMaaSMeterConsumption, consumptionType, "consumption", intervals.ConsumptionSince); err != nil {
+		return nil, err
+	}
 
 	result := make([]cloudevents.Event, 0, len(requests))
 	for _, request := range requests {

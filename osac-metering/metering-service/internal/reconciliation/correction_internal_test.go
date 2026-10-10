@@ -74,9 +74,11 @@ func TestCorrectionDescriptionUnknownReason(t *testing.T) {
 
 func TestBuildSyntheticHeartbeatsStableIDAcrossRetryOfSameGap(t *testing.T) {
 	lastHeartbeat := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	billableSince := lastHeartbeat.Add(-time.Hour)
 	ps := projection.ResourceState{
 		ResourceID:        "res-1",
 		ResourceType:      events.ResourceTypeComputeInstance,
+		BillableSince:     &billableSince,
 		LastHeartbeatAt:   &lastHeartbeat,
 		BillingDimensions: map[string]any{"instance_type": "m5.large"},
 	}
@@ -123,20 +125,23 @@ func TestBuildSyntheticHeartbeatsBMaaSUsesIndependentMeters(t *testing.T) {
 		t.Fatalf("expected allocation and consumption heartbeats, got %d", len(got))
 	}
 
-	for i, meterType := range []string{
-		events.BMaaSMeterAllocation,
-		events.BMaaSMeterConsumption,
+	for i, test := range []struct {
+		meterType string
+		duration  float64
+	}{
+		{meterType: events.BMaaSMeterAllocation, duration: 3600},
+		{meterType: events.BMaaSMeterConsumption, duration: 1800},
 	} {
 		var data map[string]any
 		if err := json.Unmarshal(got[i].Data(), &data); err != nil {
 			t.Fatalf("heartbeat %d data: %v", i, err)
 		}
 		dims := data["billing_dimensions"].(map[string]any)
-		if dims["meter_type"] != meterType {
-			t.Errorf("heartbeat %d meter_type = %v, want %q", i, dims["meter_type"], meterType)
+		if dims["meter_type"] != test.meterType {
+			t.Errorf("heartbeat %d meter_type = %v, want %q", i, dims["meter_type"], test.meterType)
 		}
-		if _, ok := data["duration_seconds"]; ok {
-			t.Errorf("heartbeat %d unexpectedly includes duration_seconds: %v", i, data["duration_seconds"])
+		if got := data["duration_seconds"]; got != test.duration {
+			t.Errorf("heartbeat %d duration_seconds = %v, want %v", i, got, test.duration)
 		}
 	}
 }
@@ -226,8 +231,8 @@ func TestBuildSyntheticHeartbeatsBMaaSUsesConsumptionBoundaryWithoutAllocationCh
 	if err := json.Unmarshal(first[0].Data(), &data); err != nil {
 		t.Fatalf("heartbeat data: %v", err)
 	}
-	if _, ok := data["duration_seconds"]; ok {
-		t.Errorf("consumption-only heartbeat unexpectedly includes duration_seconds: %v", data["duration_seconds"])
+	if got := data["duration_seconds"]; got != float64(1800) {
+		t.Errorf("consumption-only duration_seconds = %v, want 1800", got)
 	}
 }
 
@@ -427,10 +432,12 @@ func TestBuildSyntheticHeartbeatsNewIDOnceGapResolves(t *testing.T) {
 	now := time.Date(2026, 1, 1, 15, 0, 0, 0, time.UTC)
 	firstGap := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	secondGap := time.Date(2026, 1, 1, 14, 0, 0, 0, time.UTC)
+	billableSince := firstGap.Add(-time.Hour)
 
 	psBefore := projection.ResourceState{
 		ResourceID:        "res-1",
 		ResourceType:      events.ResourceTypeComputeInstance,
+		BillableSince:     &billableSince,
 		LastHeartbeatAt:   &firstGap,
 		BillingDimensions: map[string]any{"instance_type": "m5.large"},
 	}

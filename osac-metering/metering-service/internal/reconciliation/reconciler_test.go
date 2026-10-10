@@ -505,6 +505,7 @@ var _ = Describe("Reconciler", func() {
 
 		It("emits synthetic heartbeat for stale billable resources", func() {
 			staleTime := time.Now().Add(-5 * time.Minute)
+			billableSince := staleTime.Add(-time.Hour)
 			client := &mockComputeClient{
 				items: []*privatev1.ComputeInstance{
 					makeCI("res-stale", "tenant-1", "RUNNING", 1),
@@ -517,6 +518,7 @@ var _ = Describe("Reconciler", func() {
 				TenantID:           "tenant-1",
 				CurrentState:       "RUNNING",
 				IsBillable:         true,
+				BillableSince:      &billableSince,
 				FulfillmentVersion: 1,
 				LastHeartbeatAt:    &staleTime,
 			}
@@ -1737,6 +1739,53 @@ var _ = Describe("Reconciler", func() {
 			Expect(store.states["cl-drift"].IsBillable).To(BeFalse())
 		})
 
+		It("updates component billable starts on billing-dimensions drift", func() {
+			oldStart := time.Date(2026, 9, 27, 8, 0, 0, 0, time.UTC)
+			store := newMockStore()
+			store.states["cl-component-drift"] = projection.ResourceState{
+				ResourceID:         "cl-component-drift",
+				ResourceType:       events.ResourceTypeClusterOrder,
+				TenantID:           "tenant-1",
+				CurrentState:       "READY",
+				IsBillable:         true,
+				BillableSince:      &oldStart,
+				LastHeartbeatAt:    &oldStart,
+				FulfillmentVersion: 1,
+				BillingDimensions: map[string]any{
+					"cluster_template": "ocp-ci-small",
+					"release_image":    "4.17.0",
+					"components": []any{
+						map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
+						map[string]any{"node_set": "cpu-workers", "component": "worker", "host_type": "cpu-only", "node_count": int32(2)},
+						map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+					},
+				},
+				ComponentBillableSince: map[string]time.Time{
+					"_control_plane": oldStart,
+					"cpu-workers":    oldStart.Add(time.Minute),
+					"gpu-workers":    oldStart.Add(2 * time.Minute),
+				},
+			}
+
+			cluster := makeClusterProto("cl-component-drift", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_READY, 2)
+			cluster.Spec.NodeSets = map[string]*privatev1.ClusterNodeSet{
+				"cpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "cpu-only"}, Size: proto.Int32(2)},
+				"gpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "gpu-h100"}, Size: proto.Int32(4)},
+				"tpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "tpu-v5"}, Size: proto.Int32(1)},
+			}
+			clusterClient := &mockClusterClient{items: []*privatev1.Cluster{cluster}}
+			pub := &mockPublisher{}
+			recon := newTestReconciler(&mockComputeClient{}, clusterClient, store, pub, 60*time.Second)
+
+			Expect(recon.Reconcile(ctx)).To(Succeed())
+
+			updated := store.states["cl-component-drift"]
+			Expect(updated.ComponentBillableSince).To(HaveKeyWithValue("_control_plane", oldStart))
+			Expect(updated.ComponentBillableSince).To(HaveKeyWithValue("cpu-workers", oldStart.Add(time.Minute)))
+			Expect(updated.ComponentBillableSince["gpu-workers"]).To(Equal(updated.TransitionTime))
+			Expect(updated.ComponentBillableSince["tpu-workers"]).To(Equal(updated.TransitionTime))
+		})
+
 		It("detects missed_deletion for cluster and emits N+1 correction events", func() {
 			computeClient := &mockComputeClient{}
 			clusterClient := &mockClusterClient{}
@@ -1861,6 +1910,10 @@ var _ = Describe("Reconciler", func() {
 						map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": float64(1)},
 						map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": float64(2)},
 					},
+				},
+				ComponentBillableSince: map[string]time.Time{
+					"_control_plane": now,
+					"gpu-workers":    now,
 				},
 			}
 

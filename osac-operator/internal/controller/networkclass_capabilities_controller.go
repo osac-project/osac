@@ -176,7 +176,8 @@ func (r *NetworkClassCapabilitiesReconciler) syncOne(ctx context.Context, nc *pr
 
 	newStatus := desiredNetworkClassManagerStatus(nil)
 	newCaps := nc.GetCapabilities()
-	if resolved.FabricManager != nil {
+	managerConfigured := resolved.FabricManager != nil || resolved.K8sManager != nil
+	if managerConfigured {
 		var disabled *privatev1.NetworkClassCapabilities
 		if spec := nc.GetSpec(); spec != nil {
 			disabled = spec.GetDisableCapabilities()
@@ -187,7 +188,7 @@ func (r *NetworkClassCapabilitiesReconciler) syncOne(ctx context.Context, nc *pr
 		return nil
 	}
 
-	if resolved.FabricManager != nil {
+	if managerConfigured {
 		nc.SetCapabilities(newCaps)
 	}
 	setNetworkClassManagerStatus(nc, newStatus)
@@ -256,7 +257,10 @@ func computeCapabilities(
 	k8s := resolved.K8sManager
 
 	supports := func(capability networkmanager.Capability) bool {
-		if !fabric.HasCapability(capability) {
+		if fabric == nil && k8s == nil {
+			return false
+		}
+		if fabric != nil && !fabric.HasCapability(capability) {
 			return false
 		}
 		return k8s == nil || k8s.HasCapability(capability)

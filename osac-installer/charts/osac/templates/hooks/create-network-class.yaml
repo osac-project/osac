@@ -13,7 +13,6 @@
 {{- range $networkClass.defaults.egressRules }}
 {{- $rule := dict "protocol" .protocol -}}
 {{- if .ipv4Cidr }}{{ $_ := set $rule "ipv4_cidr" .ipv4Cidr }}{{ end -}}
-{{- if .ipv6Cidr }}{{ $_ := set $rule "ipv6_cidr" .ipv6Cidr }}{{ end -}}
 {{- if .portFrom }}{{ $_ := set $rule "port_from" .portFrom }}{{ end -}}
 {{- if .portTo }}{{ $_ := set $rule "port_to" .portTo }}{{ end -}}
 {{- $egressRules = append $egressRules $rule -}}

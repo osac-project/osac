@@ -29,6 +29,46 @@ render_success() {
   fi
 }
 
+render_ipv4_only_manager_success() {
+  local name=$1
+  shift
+
+  local output="${TMP_DIR}/${name}.yaml"
+  echo "checking ${name} (expected IPv4-only manager declarations)"
+  "${HELM_BIN}" "${COMMON_ARGS[@]}" "$@" >"${output}"
+  if ! grep -Fq -- 'capabilities: "ipv4"' "${output}"; then
+    echo "ERROR: ${name} rendered, but did not contain the IPv4 manager capability" >&2
+    exit 1
+  fi
+  if grep -Ein -- 'capabilities: "[^"]*(ipv6|dual[_-]?stack)' "${output}"; then
+    echo "ERROR: ${name} rendered an IPv6 or dual-stack manager capability" >&2
+    exit 1
+  else
+    search_status=$?
+    if [[ ${search_status} -ne 1 ]]; then
+      echo "ERROR: failed to check ${name} for IPv6 or dual-stack manager capabilities" >&2
+      exit 1
+    fi
+  fi
+}
+
+render_ipv4_only_network_class_success() {
+  local name=$1
+  shift
+
+  local output="${TMP_DIR}/${name}.yaml"
+  echo "checking ${name} (expected IPv4-only NetworkClass defaults)"
+  "${HELM_BIN}" "${COMMON_ARGS[@]}" "$@" >"${output}"
+  if ! grep -Fq -- '\"ipv4_cidr\":\"0.0.0.0/0\"' "${output}"; then
+    echo "ERROR: ${name} rendered, but did not contain the IPv4 egress default" >&2
+    exit 1
+  fi
+  if grep -Fq -- '\"ipv6_cidr\"' "${output}"; then
+    echo "ERROR: ${name} rendered an IPv6 egress field" >&2
+    exit 1
+  fi
+}
+
 render_failure() {
   local name=$1
   shift
@@ -73,9 +113,8 @@ render_success \
   --set global.networking.k8sManager=k8s_only
 
 # Default operator values advertise ipv4-only capabilities on manager ConfigMaps.
-render_success \
+render_ipv4_only_manager_success \
   agentless-manager-capabilities \
-  'capabilities: "ipv4"' \
   --set global.networking.fabricManager= \
   --set global.networking.k8sManager=k8s_only
 
@@ -165,6 +204,35 @@ render_success \
   --set global.networking.fabricManager= \
   --set global.networking.k8sManager=k8s_only \
   --set-string global.networking.networkClass.title=Custom\ network
+
+render_ipv4_only_network_class_success \
+  network-class-ipv4-egress \
+  --set global.networking.fabricManager= \
+  --set global.networking.k8sManager=k8s_only
+
+# IPv6 egress declarations are no longer part of either installer values path.
+render_failure \
+  ipv6-egress-global \
+  --set global.networking.fabricManager= \
+  --set global.networking.k8sManager=k8s_only \
+  --set global.networking.networkClass.defaults.egressRules[0].protocol=PROTOCOL_ALL \
+  --set-string global.networking.networkClass.defaults.egressRules[0].ipv6Cidr=2001:db8::/32
+
+render_failure \
+  ipv6-egress-expert \
+  --set global.expertOverrides.networkClass=true \
+  --set networkClass.enabled=true \
+  --set-string networkClass.title=Custom\ network \
+  --set networkClass.k8sManager=k8s_only \
+  --set networkClass.defaults.egressRules[0].protocol=PROTOCOL_ALL \
+  --set-string networkClass.defaults.egressRules[0].ipv6Cidr=2001:db8::/32
+
+# Manager capability declarations are IPv4-only at the installer schema boundary.
+render_failure \
+  ipv6-manager-capability \
+  --set networkManagers.enabled=true \
+  --set networkManagers.k8sManagers.k8s_only.enabled=true \
+  --set networkManagers.k8sManagers.k8s_only.capabilities[0]=ipv6
 
 # Port ranges are meaningful only for TCP and UDP rules.
 render_failure \

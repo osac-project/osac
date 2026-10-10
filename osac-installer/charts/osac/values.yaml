@@ -501,7 +501,6 @@ networkClass:
     egressRules:
     - protocol: PROTOCOL_ALL
       ipv4Cidr: "0.0.0.0/0"
-      # ipv6Cidr is optional and forwarded by the create-network-class hook.
   # Example expert override (k8s-only):
   # enabled: true
   # title: "K8s-only networking"

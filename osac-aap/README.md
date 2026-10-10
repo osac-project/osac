@@ -198,8 +198,8 @@ template_type: network
 fabric_manager: cudn_net
 capabilities:
   supports_ipv4: true
-  supports_ipv6: true
-  supports_dual_stack: true
+  supports_ipv6: false
+  supports_dual_stack: false
 ```
 
 Network roles declare their dispatcher identity for the operator. The installer

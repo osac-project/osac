@@ -2360,11 +2360,6 @@
                     "description": "IPv4 CIDR for this rule (e.g. 0.0.0.0/0)",
                     "pattern": "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/(3[0-2]|[12]?[0-9])$"
                   },
-                  "ipv6Cidr": {
-                    "type": "string",
-                    "description": "Optional IPv6 CIDR for this rule. The create-network-class hook forwards it when set. Netris fabric is IPv4-only; CUDN/k8s_only may use IPv6.",
-                    "pattern": "^$|^[0-9a-fA-F:]+/(12[0-8]|1[01][0-9]|[1-9]?[0-9])$"
-                  },
                   "portFrom": {
                     "type": "integer",
                     "description": "Starting port (tcp/udp only)",
@@ -2786,11 +2781,6 @@
                     "type": "string",
                     "description": "IPv4 CIDR for this rule.",
                     "pattern": "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/(3[0-2]|[12]?[0-9])$"
-                  },
-                  "ipv6Cidr": {
-                    "type": "string",
-                    "description": "Optional IPv6 CIDR for this rule. Netris fabric is IPv4-only; CUDN/k8s_only may use IPv6.",
-                    "pattern": "^$|^[0-9a-fA-F:]+/(12[0-8]|1[01][0-9]|[1-9]?[0-9])$"
                   },
                   "portFrom": {
                     "type": "integer",

@@ -199,12 +199,46 @@ var _ = Describe("NetworkClassCapabilitiesReconciler", func() {
 	It("applies NetworkClass disable capabilities before persisting the result", func() {
 		fabricCM := newFabricManagerConfigMap("fm-caps-disabled", namespace, "fabric-caps-disabled")
 		Expect(k8sClient.Create(ctx, fabricCM)).To(Succeed())
-		defer func() { _ = k8sClient.Delete(ctx, fabricCM) }()
+		defer func() { Expect(k8sClient.Delete(ctx, fabricCM)).To(Succeed()) }()
 
 		nc := &privatev1.NetworkClass{
 			Id:            "nc-caps-disabled",
 			FabricManager: ptr.To("fabric-caps-disabled"),
 			Capabilities:  &privatev1.NetworkClassCapabilities{SupportsIpv4: true},
+			Spec: &privatev1.NetworkClassSpec{
+				DisableCapabilities: &privatev1.NetworkClassCapabilities{SupportsIpv4: true},
+			},
+			Status: &privatev1.NetworkClassStatus{
+				ManagerState: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+			},
+		}
+		var updates []*privatev1.NetworkClass
+		stubClient := newListingNetworkClassClient([]*privatev1.NetworkClass{nc}, &updates)
+		disc, err := networkmanager.NewDiscovery(k8sClient, namespace)
+		Expect(err).NotTo(HaveOccurred())
+		resolver := dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(stubClient), disc)
+		reconciler := NewNetworkClassCapabilitiesReconciler(stubClient, resolver, namespace)
+
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(updates).To(HaveLen(1))
+		Expect(updates[0].GetCapabilities().GetSupportsIpv4()).To(BeFalse())
+		Expect(updates[0].GetCapabilities().GetSupportsIpv6()).To(BeFalse())
+		Expect(updates[0].GetCapabilities().GetSupportsDualStack()).To(BeFalse())
+	})
+
+	It("computes capabilities for a Kubernetes-only NetworkClass", func() {
+		k8sCM := newK8sManagerConfigMap("km-caps-k8s-only", namespace, "cudn-caps-k8s-only", "ipv4")
+		Expect(k8sClient.Create(ctx, k8sCM)).To(Succeed())
+		defer func() { Expect(k8sClient.Delete(ctx, k8sCM)).To(Succeed()) }()
+
+		k8sManagerName := "cudn-caps-k8s-only"
+		nc := &privatev1.NetworkClass{
+			Id:         "nc-caps-k8s-only",
+			K8SManager: &k8sManagerName,
+			Capabilities: &privatev1.NetworkClassCapabilities{
+				SupportsIpv4: true,
+			},
 			Spec: &privatev1.NetworkClassSpec{
 				DisableCapabilities: &privatev1.NetworkClassCapabilities{SupportsIpv4: true},
 			},

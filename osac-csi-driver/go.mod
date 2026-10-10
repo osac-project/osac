@@ -8,7 +8,7 @@ require (
 	github.com/osac-project/osac/proto v0.0.0-00010101000000-000000000000
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/oauth2 v0.37.0
-	google.golang.org/grpc v1.83.2
+	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12
 	k8s.io/klog/v2 v2.140.0
 )

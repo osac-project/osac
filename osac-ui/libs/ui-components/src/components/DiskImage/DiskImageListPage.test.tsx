@@ -64,7 +64,6 @@ describe('DiskImageListPage', () => {
     renderPage();
 
     expect(screen.getByRole('heading', { name: 'Disk images' })).toBeInTheDocument();
-    expect(screen.getByText('Infrastructure').closest('.pf-v6-c-label')).not.toBeNull();
     expect(screen.getByRole('link', { name: 'disk-image-a' })).toBeInTheDocument();
   });
 

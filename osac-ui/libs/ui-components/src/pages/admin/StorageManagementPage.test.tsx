@@ -26,7 +26,6 @@ describe('StorageManagementPage', () => {
 
     expect(screen.getByRole('tab', { name: 'Backends' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Tiers' })).toBeInTheDocument();
-    expect(screen.getByText('Infrastructure').closest('.pf-v6-c-label')).not.toBeNull();
   });
 
   it('shows the storage backends list when activeTab is backends', async () => {

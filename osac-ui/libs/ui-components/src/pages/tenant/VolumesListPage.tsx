@@ -125,7 +125,6 @@ export const VolumesListPage = () => {
   return (
     <ListPage
       title={t('Volumes')}
-      label={t('Storage')}
       description={t('View and manage your storage volumes.')}
       error={error}
       actions={<CreateButton to="/storage/volumes/create">{t('Create volume')}</CreateButton>}

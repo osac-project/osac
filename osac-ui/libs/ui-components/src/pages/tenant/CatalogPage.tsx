@@ -297,7 +297,7 @@ const CatalogPage = () => {
   );
 
   return (
-    <ListPage label={t('Global marketplace')} title={t('Catalog')} description={pageDescription}>
+    <ListPage title={t('Catalog')} description={pageDescription}>
       <Stack hasGutter>
         <StackItem>
           <Toolbar>

@@ -75,7 +75,6 @@ describe('SecurityGroupsListPage', () => {
     );
 
     expect(screen.getByText('Security groups')).toBeInTheDocument();
-    expect(screen.getByText('Networking').closest('.pf-v6-c-label')).not.toBeNull();
     expect(screen.getByRole('button', { name: /Create security group/i })).toBeInTheDocument();
   });
 

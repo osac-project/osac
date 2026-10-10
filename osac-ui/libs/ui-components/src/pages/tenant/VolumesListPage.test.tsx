@@ -65,11 +65,10 @@ describe('VolumesListPage', () => {
     );
   });
 
-  it('renders the page title and label', async () => {
+  it('renders the page title', async () => {
     renderPage();
 
     expect(await screen.findByRole('heading', { name: 'Volumes' })).toBeInTheDocument();
-    expect(screen.getByText('Storage').closest('.pf-v6-c-label')).not.toBeNull();
   });
 
   it('renders the volume table with data', async () => {

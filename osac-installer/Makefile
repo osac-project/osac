@@ -5,13 +5,13 @@
 #
 # Usage:
 # Every deployment target requires PLATFORM, PROFILE, and NS. No exceptions.
-#   make install         PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
-#   make uninstall       PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
-#   make install-infra   PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
-#   make install-osac    PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
-#   make uninstall-osac  PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
-#   make uninstall-infra PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
-#   make test            PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac  SUITE=all|fulfillment|operator|bmf
+#   make install         PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
+#   make uninstall       PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
+#   make install-infra   PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
+#   make install-osac    PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
+#   make uninstall-osac  PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
+#   make uninstall-infra PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
+#   make test            PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac  SUITE=all|fulfillment|operator|bmf
 #
 # PROFILE=dev-full (kind only) is a superset of dev: it runs the same chart-based
 # control plane, then layers on the full local dev stack (KubeVirt/CDI/Multus, AWX,
@@ -49,10 +49,10 @@ ifeq ($(filter $(PLATFORM),kind openshift),)
 $(error PLATFORM=$(PLATFORM) is invalid; must be kind or openshift)
 endif
 ifndef PROFILE
-$(error PROFILE is required (dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test))
+$(error PROFILE is required (dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|cudn-evpn-netris-test))
 endif
-ifeq ($(filter $(PROFILE),dev dev-full vmaas-ci bmaas-ci caas-ci full-ci cudn-evpn-netris-test),)
-$(error PROFILE=$(PROFILE) is invalid; must be dev, dev-full, vmaas-ci, bmaas-ci, caas-ci, full-ci, or cudn-evpn-netris-test)
+ifeq ($(filter $(PROFILE),dev dev-full vmaas-ci bmaas-ci bmaas-netbox-ci caas-ci full-ci cudn-evpn-netris-test),)
+$(error PROFILE=$(PROFILE) is invalid; must be dev, dev-full, vmaas-ci, bmaas-ci, bmaas-netbox-ci, caas-ci, full-ci, or cudn-evpn-netris-test)
 endif
 ifndef NS
 $(error NS is required (namespace for OSAC instance, e.g. NS=osac))
@@ -96,6 +96,11 @@ ifeq ($(PROFILE),dev-full)
 INSTANCE_VALUES_EXTRA := -f values/dev/kind-instance-devfull.yaml
 INFRA_VALUES_EXTRA := -f values/dev/kind-infra-devfull.yaml
 endif
+else ifeq ($(PROFILE),bmaas-netbox-ci)
+INFRA_VALUES         := values/bmaas-ci/infra.yaml
+INFRA_VALUES_EXTRA   := -f values/bmaas-netbox-ci/infra.yaml
+INSTANCE_VALUES      := values/bmaas-ci/instance.yaml
+INSTANCE_VALUES_EXTRA := -f values/bmaas-netbox-ci/instance.yaml
 else ifdef PROFILE
 INFRA_VALUES    := values/$(PROFILE)/infra.yaml
 INSTANCE_VALUES := values/$(PROFILE)/instance.yaml
@@ -215,6 +220,7 @@ kind-load-images: ## Load previously built dev-full images into Kind (PLATFORM=k
 
 .PHONY: install-infra
 install-infra: ## Install infrastructure (PLATFORM= PROFILE= NS= required)
+	helm dependency build $(INFRA_CHART)
 ifeq ($(PLATFORM),kind)
 ifeq ($(HOST_IS_MAC_ARM),true)
 	@$(KIND_RUNTIME_CMD) check
@@ -274,7 +280,7 @@ else
 	@[ -n "$(DOMAIN)" ] || { echo "ERROR: could not determine cluster domain" >&2; exit 1; }
 	helm upgrade --install osac-infra $(INFRA_CHART) \
 		--namespace osac-infra --create-namespace \
-		--values $(INFRA_VALUES) \
+		--values $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
 		--set osacNamespace=$(NS) \
 		--set lvms.channel=stable-$(OCP_VERSION) \
 		--set keycloak.hostname=https://keycloak-keycloak.$(DOMAIN) \
@@ -429,6 +435,7 @@ helm-deps: ## Build Helm chart dependencies
 	rm -rf $(OSAC_CHART)/charts
 	helm dependency build $(OSAC_CHART)
 	helm dependency build charts/osac-devstack
+	helm dependency build $(INFRA_CHART)
 
 .PHONY: helm-lint
 helm-lint: helm-deps ## Lint all charts

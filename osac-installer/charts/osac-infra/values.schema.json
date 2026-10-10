@@ -67,6 +67,21 @@
         }
       }
     },
+    "netbox": {
+      "type": "object",
+      "description": "NetBox deployment for the bmaas_netbox E2E test flavor (dev/CI only; not for production).",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Deploy NetBox via the netbox-community subchart.",
+          "default": false
+        },
+        "apiTokenSecret": {
+          "type": "string",
+          "description": "Name of the Secret written into osacNamespace by the post-install seed Job (default: netbox-api-token). Contains the API token for the bare-metal-fulfillment-operator."
+        }
+      }
+    },
     "bundledVault": {
       "type": "object",
       "description": "Bundled OpenBao (Vault-compatible) secret store for testing and CI. Not intended for production.",

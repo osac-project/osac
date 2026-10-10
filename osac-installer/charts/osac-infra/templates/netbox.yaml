@@ -1,0 +1,186 @@
+{{- if .Values.netbox.enabled }}
+---
+# Custom SCC for the NetBox subchart (Bitnami).
+# Bitnami hardcodes UID 1000, fsGroup 1000, and sets seccomp RuntimeDefault
+# annotations that the built-in anyuid SCC rejects. This SCC allows RunAsAny
+# for user/group/fsGroup and permits seccomp so the chart runs unmodified.
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: {{ .Release.Name }}-netbox
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+  annotations:
+    kubernetes.io/description: "SCC for NetBox subchart — allows Bitnami hardcoded UID 1000 and seccomp"
+allowPrivilegedContainer: false
+allowHostDirVolumePlugin: false
+allowHostIPC: false
+allowHostNetwork: false
+allowHostPID: false
+allowHostPorts: false
+readOnlyRootFilesystem: false
+allowedCapabilities: []
+defaultAddCapabilities: []
+requiredDropCapabilities:
+- KILL
+- MKNOD
+- SETUID
+- SETGID
+seccompProfiles:
+- runtime/default
+- docker/default
+allowedUnsafeSysctls: []
+fsGroup:
+  type: RunAsAny
+runAsUser:
+  type: RunAsAny
+seLinuxContext:
+  type: RunAsAny
+supplementalGroups:
+  type: RunAsAny
+volumes:
+- configMap
+- downwardAPI
+- emptyDir
+- persistentVolumeClaim
+- projected
+- secret
+users:
+- system:serviceaccount:{{ .Release.Namespace }}:{{ .Release.Name }}-netbox
+groups: []
+---
+# Post-install Job: waits for NetBox, provisions an API token via
+# POST /api/users/tokens/provision/ (no prior auth required), and writes
+# nbt_{key}.{token} to apiTokenSecret in osacNamespace for the
+# bare-metal-fulfillment-operator to mount as its inventory credential.
+# Idempotent: skips token creation if apiTokenSecret already exists.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-netbox-token-seed
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "10"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 5
+  activeDeadlineSeconds: 600
+  template:
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+      containers:
+      - name: seed
+        image: {{ .Values.cliImage }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        resources: {{- toYaml .Values.hookResources | nindent 10 }}
+        env:
+        - name: NETBOX_USERNAME
+          value: {{ default "admin" .Values.netbox.superuser.name | quote }}
+        command:
+        - /bin/sh
+        - -ec
+        - |
+          OPERATOR_NS="{{ .Values.osacNamespace }}"
+          SECRET_NAME="{{ default "netbox-api-token" .Values.netbox.apiTokenSecret }}"
+          SVC="http://{{ .Release.Name }}-netbox.{{ .Release.Namespace }}.svc.cluster.local"
+          PASS="$(cat /credentials/password)"
+
+          if oc -n "${OPERATOR_NS}" get secret "${SECRET_NAME}" > /dev/null 2>&1; then
+            echo "Secret ${SECRET_NAME} already exists — skipping."
+            exit 0
+          fi
+
+          until curl -sf "${SVC}/login/" > /dev/null; do
+            echo "Waiting for NetBox..."
+            sleep 5
+          done
+
+          # Build JSON payload with python3 to safely handle special characters in credentials.
+          PAYLOAD=$(python3 -c "import json,sys; print(json.dumps({'username':sys.argv[1],'password':sys.argv[2]}))" "${NETBOX_USERNAME}" "${PASS}")
+
+          RESP=$(curl -sf -X POST "${SVC}/api/users/tokens/provision/" \
+            -H "Content-Type: application/json" \
+            --data-raw "${PAYLOAD}")
+
+          KEY=$(echo "${RESP}" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['key'])")
+          TOK=$(echo "${RESP}" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['token'])")
+          TOKEN="nbt_${KEY}.${TOK}"
+
+          oc -n "${OPERATOR_NS}" create secret generic "${SECRET_NAME}" \
+            --from-literal=token="${TOKEN}"
+
+          echo "Secret ${SECRET_NAME} written to namespace ${OPERATOR_NS}."
+        volumeMounts:
+        - name: superuser
+          mountPath: /credentials
+          readOnly: true
+      volumes:
+      - name: superuser
+        secret:
+          secretName: {{ .Release.Name }}-netbox-superuser
+          items:
+          - key: password
+            path: password
+      serviceAccountName: {{ .Release.Name }}-netbox-token-seed
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-netbox-token-seed
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "5"
+    helm.sh/hook-delete-policy: before-hook-creation
+---
+# ClusterRole: write apiTokenSecret into osacNamespace (differs from Release.Namespace).
+# get/patch are scoped to the specific Secret; create cannot be name-scoped.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-netbox-token-seed
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "5"
+    helm.sh/hook-delete-policy: before-hook-creation
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["{{ default "netbox-api-token" .Values.netbox.apiTokenSecret }}"]
+  verbs: ["get", "patch"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-netbox-token-seed
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "5"
+    helm.sh/hook-delete-policy: before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Name }}-netbox-token-seed
+subjects:
+- kind: ServiceAccount
+  name: {{ .Release.Name }}-netbox-token-seed
+  namespace: {{ .Release.Namespace }}
+{{- end }}

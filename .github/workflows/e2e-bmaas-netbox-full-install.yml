@@ -1,0 +1,69 @@
+---
+# BMaaS NetBox E2E full-install workflow.
+#
+# Intentionally workflow_dispatch ONLY — no pull_request, schedule, or
+# merge_group triggers. This job is NOT a required check and must not run
+# automatically while the NetBox inventory backend (OSAC-4346) is still being
+# built out (T1–T5 / OSAC-6196 epic).
+#
+# Enable automatic triggers (pull_request, schedule) once:
+#   - T1 (OSAC-6197): osac-installer NetBox chart ✓ (this PR)
+#   - T3 (OSAC-6198): operator Helm config for NetBox inventory
+#   - T4 (OSAC-6199): NetBox device fixture helper
+#   - T5 (OSAC-6200): bmaas_netbox E2E test flavor
+name: E2E BMaaS NetBox Full Install
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      test-suite:
+        description: "Suite relative to tests/e2e (e.g. bmaas_netbox/sanity, bmaas_netbox/serial, or bmaas_netbox for all)"
+        required: false
+        default: "bmaas_netbox/sanity"
+      test-filter:
+        description: "pytest -k filter"
+        required: false
+        default: ""
+      test-marker:
+        description: "pytest -m marker expression"
+        required: false
+        default: ""
+      test-infra-ref:
+        description: "Branch/ref of osac-test-infra"
+        required: false
+        default: "main"
+
+concurrency:
+  group: e2e-bmaas-netbox-full-install-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  e2e-bmaas-netbox-full-install:
+    permissions:
+      contents: read
+      id-token: write
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-full-install.yml@main
+    with:
+      test-suite: ${{ inputs.test-suite || 'bmaas_netbox/sanity' }}
+      test-filter: ${{ inputs.test-filter || '' }}
+      test-marker: ${{ inputs.test-marker || 'sanity or regression or serial or requires_bmaas or reference_common' }}
+      installer-repo: ${{ github.repository }}
+      installer-ref: ${{ github.sha }}
+      installer-profile: bmaas-netbox-ci
+      components: >-
+        [
+        { "repo": "${{ github.repository }}", "ref": "${{ github.sha }}", "containerfile": "fulfillment-service/Containerfile", "context": ".", "imageKey": "service.images.service.repository" },
+        { "repo": "${{ github.repository }}", "ref": "${{ github.sha }}", "containerfile": "osac-operator/Containerfile", "context": ".", "imageKey": "operator.image.repository" },
+        { "repo": "${{ github.repository }}", "ref": "${{ github.sha }}", "containerfile": "osac-aap/execution-environment/execution-environment.yaml", "imageKey": "aap.bootstrap.image", "buildType": "ansible-builder" },
+        { "repo": "${{ github.repository }}", "ref": "${{ github.sha }}", "containerfile": "osac-aap/execution-environment/execution-environment.yaml", "imageKey": "aap.configAsCode.eeImage", "buildType": "ansible-builder" },
+        { "repo": "${{ github.repository }}", "ref": "${{ github.sha }}", "containerfile": "bare-metal-fulfillment-operator/Containerfile", "context": ".", "imageKey": "bmf.image.repository" }
+        ]
+      test-infra-repository: osac-project/osac-test-infra
+      test-infra-ref: ${{ inputs.test-infra-ref || 'main' }}
+      test-repository: ${{ github.repository }}
+      test-ref: ${{ github.sha }}
+      notify-on-failure: false
+      enable-ai-diagnostic: false

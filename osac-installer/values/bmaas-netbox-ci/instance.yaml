@@ -1,0 +1,34 @@
+# BMaaS-NetBox CI overlay — applied on top of bmaas-ci/instance.yaml.
+# Contains only the values that differ from the bmaas-ci base profile.
+#
+# Disables Metal3 and enables the NetBox inventory backend.
+# bmf.netbox wiring takes effect once OSAC-6198 (T3) adds bmf.netbox support
+# to the osac chart.
+#
+# The NetBox inventory client (bare-metal-fulfillment-operator/internal/inventory/netbox.go)
+# reads its config from an inventory.yaml file with this shape:
+#
+#   name: netbox-inventory
+#   type: netbox
+#   options:
+#     netbox:
+#       url: <bmf.netbox.url>
+#       tokenFile: <path where bmf.netbox.tokenSecret is mounted>
+#       allowInsecureHTTP: <bmf.netbox.allowInsecureHTTP>
+#   hostClass: metal3   # hardcoded requirement in NewNetBoxClient
+
+bmf:
+  metal3:
+    enabled: false
+  # NetBox inventory — requires OSAC-6198 (T3)
+  netbox:
+    enabled: true
+    # URL of the NetBox service deployed by osac-infra in the osac-infra namespace.
+    url: "http://osac-infra-netbox.osac-infra.svc.cluster.local"
+    # Secret containing the API token (key: token), written by the osac-infra
+    # post-install seed Job into the osac namespace.
+    tokenSecret: "netbox-api-token"
+    # No TLS for the internal CI service endpoint.
+    allowInsecureHTTP: true
+    # hostClass MUST be "metal3" — required by NewNetBoxClient.
+    hostClass: "metal3"

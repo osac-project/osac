@@ -176,6 +176,13 @@ bundledVault:
   # and configures JWT auth and policies within it.
   vaultNamespace: "osac"
 
+# --- NetBox (dev/CI only) ---
+# Deploys NetBox via the netbox-community Helm chart as a bare-metal inventory
+# backend for the bmaas_netbox E2E test flavor. Not intended for production.
+# All other netbox.* values are supplied by the profile overlay.
+netbox:
+  enabled: false
+
 # --- TLS certificate configuration for shared infrastructure ---
 certs:
   issuerRef:

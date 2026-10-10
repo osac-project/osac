@@ -1,0 +1,48 @@
+# BMaaS-NetBox CI overlay — applied on top of bmaas-ci/infra.yaml.
+# Contains only the values that differ from the bmaas-ci base profile.
+#
+# The NetBox subchart manages its own credential secrets (secret_key,
+# superuser_password, db_password) automatically. No manual bootstrap required.
+# apiTokenPeppers is configured here so NetBox 4.7 can create v2 HMAC tokens.
+# The post-install seed Job creates the API token via manage.py shell and writes
+# it to "netbox-api-token" in the osac namespace for the operator.
+
+netbox:
+  enabled: true
+  superuser:
+    enabled: true
+    name: admin
+    email: admin@osac.local
+  # Required by NetBox 4.7 for v2 HMAC token operations.
+  # A fixed CI pepper is acceptable here; this is a test-only deployment.
+  apiTokenPeppers:
+    1: "osac-bmaas-netbox-ci-pepper-for-testing-only-do-not-use-in-production"
+  postgresql:
+    enabled: true
+    primary:
+      resources:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 50m
+          memory: 128Mi
+  valkey:
+    enabled: true
+    resources:
+      limits:
+        cpu: 250m
+        memory: 256Mi
+      requests:
+        cpu: 25m
+        memory: 64Mi
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+    requests:
+      cpu: 100m
+      memory: 512Mi
+  persistence:
+    enabled: true
+    size: 5Gi

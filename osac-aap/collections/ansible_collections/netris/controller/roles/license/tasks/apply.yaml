@@ -11,6 +11,7 @@
     headers:
       Cookie: "connect.sid={{ netris_session_cookie }}"
     validate_certs: "{{ netris_validate_certs }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
     timeout: "{{ netris_timeout }}"
     status_code: [200, 400, 404]
   register: _license_check
@@ -35,6 +36,7 @@
     body:
       key: "{{ _license_key_raw.content | b64decode | trim }}"
     validate_certs: "{{ netris_validate_certs }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
     timeout: "{{ netris_timeout }}"
     status_code: [200, 400]
   register: _license_apply_resp

@@ -31,6 +31,8 @@ network_steps_collection: "{{ lookup('env', 'NETWORK_STEPS_COLLECTION', default=
 
 # Netris controller connection
 netris_controller_url: "{{ lookup('env', 'NETRIS_CONTROLLER_URL') }}"
+netris_validate_certs: "{{ lookup('env', 'NETRIS_VALIDATE_CERTS', default='true') | bool }}"
+netris_ca_path: "{{ lookup('env', 'NETRIS_CA_PATH', default='') }}"
 netris_username: "{{ lookup('env', 'NETRIS_USERNAME') }}"
 netris_password: "{{ lookup('env', 'NETRIS_PASSWORD') | trim }}"
 

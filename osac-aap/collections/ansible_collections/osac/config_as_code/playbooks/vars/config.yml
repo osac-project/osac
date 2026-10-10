@@ -33,3 +33,6 @@ osac_publish_templates_enabled: "{{ lookup('env', 'OSAC_PUBLISH_TEMPLATES_ENABLE
 osac_import_agents_enabled: "{{ lookup('env', 'OSAC_IMPORT_AGENTS_ENABLED', default='false') | bool }}"
 osac_import_bcm_agents_enabled: "{{ lookup('env', 'OSAC_IMPORT_BCM_AGENTS_ENABLED', default='false') | bool }}"
 addon_operator_max_concurrent_jobs: "{{ lookup('env', 'AAP_ADDON_OPERATOR_MAX_CONCURRENT_JOBS', default='50') | int }}"
+netris_validate_certs: "{{ lookup('env', 'NETRIS_VALIDATE_CERTS', default='true') | bool }}"
+netris_ca_config_map_name: "{{ lookup('env', 'NETRIS_CA_CONFIGMAP', default='') }}"
+netris_ca_path: /etc/netris/ca/bundle.pem

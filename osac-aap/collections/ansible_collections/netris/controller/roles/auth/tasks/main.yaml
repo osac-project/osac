@@ -9,6 +9,7 @@
       password: "{{ netris_password }}"
       auth_scheme_id: 1
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
     timeout: "{{ netris_timeout | default(30) }}"
     status_code: 200
   register: _netris_auth_resp

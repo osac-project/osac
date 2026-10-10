@@ -29,6 +29,9 @@ what happens next. It is informational and not a required check. The program, it
 state descriptions live in [osac-project/osac-ci](https://github.com/osac-project/osac-ci); the workflow calls its
 `publish` action pinned to a full commit SHA, so the code and policy only change by bumping that pin in a reviewed PR.
 
+- `workflows/osac-ci-review.yml` does nothing but finish. It runs on a review, and `osac-ci.yml` lists it in its
+  `workflow_run` trigger, so a review refreshes the verdict at once (a review on a fork pull request cannot write a
+  check itself). Its name must match the entry in that list.
 - `workflow_run` lists workflows by exact name. When a workflow that reports a required check is added, renamed or
   removed, update the list in `osac-ci.yml`. A missing name only delays an update until the next event or the 10-minute
   sweep.

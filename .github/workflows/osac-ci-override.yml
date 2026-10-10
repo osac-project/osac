@@ -43,7 +43,7 @@ jobs:
           private-key: ${{ secrets.OSAC_CI_READER_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           permission-members: read
-      - uses: osac-project/osac-ci/.github/actions/override@5a267e85443909b79899ea25de89bdada670928f  # osac-ci main, with OWNERS approvers and the override
+      - uses: osac-project/osac-ci/.github/actions/override@7686d78d47d0959dd86e121461379bc37916e153  # osac-ci main
         with:
           github-token: ${{ github.token }}
           org-token: ${{ steps.org-token.outputs.token }}

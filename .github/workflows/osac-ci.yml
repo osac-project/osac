@@ -30,6 +30,7 @@ on:  # zizmor: ignore[dangerous-triggers] -- no pull request code is checked out
       - "Helm Lint"
       - "Integration Tests"
       - "label-gate"
+      - "OSAC CI review"
       - "pre-commit"
       - "Unit Tests"
     types: [completed]
@@ -61,7 +62,8 @@ jobs:
       github.repository == 'osac-project/osac' &&
       (github.event_name != 'workflow_run' ||
        github.event.workflow_run.event == 'pull_request' ||
-       github.event.workflow_run.event == 'pull_request_target')
+       github.event.workflow_run.event == 'pull_request_target' ||
+       github.event.workflow_run.event == 'pull_request_review')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -81,7 +83,7 @@ jobs:
           private-key: ${{ secrets.OSAC_CI_READER_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           permission-members: read
-      - uses: osac-project/osac-ci/.github/actions/publish@5a267e85443909b79899ea25de89bdada670928f  # osac-ci main, with OWNERS approvers and the override
+      - uses: osac-project/osac-ci/.github/actions/publish@7686d78d47d0959dd86e121461379bc37916e153  # osac-ci main, finds a run's pull request by its head commit
         with:
           github-token: ${{ github.token }}
           org-token: ${{ steps.org-token.outputs.token }}
@@ -89,8 +91,7 @@ jobs:
           repo: ${{ github.repository }}
           policy: policy/osac.yml
           number: ${{ github.event.pull_request.number || inputs.number }}
-          head-owner: ${{ github.event.workflow_run.head_repository.owner.login }}
-          head-branch: ${{ github.event.workflow_run.head_branch }}
+          head-sha: ${{ github.event.workflow_run.head_sha }}
           sweep: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.number == '') }}
           stale-only: "true"
           stale-after: "1800"

@@ -32,6 +32,7 @@ type SubnetsServerBuilder struct {
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
+	hubClientProvider HubClientProvider
 }
 
 var _ publicv1.SubnetsServer = (*SubnetsServer)(nil)
@@ -74,6 +75,13 @@ func (b *SubnetsServerBuilder) SetMetricsRegisterer(value prometheus.Registerer)
 	return b
 }
 
+// SetHubClientProvider sets the provider used by the delegated private server to
+// inspect VirtualMachines in a Subnet's hub namespace.
+func (b *SubnetsServerBuilder) SetHubClientProvider(value HubClientProvider) *SubnetsServerBuilder {
+	b.hubClientProvider = value
+	return b
+}
+
 func (b *SubnetsServerBuilder) Build() (result *SubnetsServer, err error) {
 	// Check parameters:
 	if b.logger == nil {
@@ -107,6 +115,7 @@ func (b *SubnetsServerBuilder) Build() (result *SubnetsServer, err error) {
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetHubClientProvider(b.hubClientProvider).
 		SetFilterDesc((*publicv1.Subnet)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {

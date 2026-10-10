@@ -1,14 +1,13 @@
 import type {
+  BareMetalInstanceType,
+  BareMetalInstanceTypeReference,
   ClusterCatalogItem,
   ClusterCatalogItemFields,
+  ClusterCatalogNodeSet,
   ClusterNodeSetMapPolicy,
-  ClusterTemplateNodeSet,
   ClusterVersion,
   ClusterVersionReference,
-  HostType,
-  HostTypeReference,
 } from '@osac/types';
-import { hostTypeDisplayName } from '@osac/ui-components/api/v1/host-types';
 
 import {
   catalogFieldPolicyIsConfigured,
@@ -38,7 +37,7 @@ export const clusterVersionReference = (
 
 export const clusterNodeSetItemsFromPolicy = (
   policy: ClusterNodeSetMapPolicy | undefined,
-): Record<string, ClusterTemplateNodeSet> | undefined => {
+): Record<string, ClusterCatalogNodeSet> | undefined => {
   if (policy?.behavior.case === 'locked') {
     return policy.behavior.value.items;
   }
@@ -49,8 +48,8 @@ export const clusterNodeSetItemsFromPolicy = (
 };
 
 export const primaryClusterCatalogNodeSet = (
-  items: Record<string, ClusterTemplateNodeSet> | undefined,
-): { key: string; nodeSet: ClusterTemplateNodeSet } | undefined => {
+  items: Record<string, ClusterCatalogNodeSet> | undefined,
+): { key: string; nodeSet: ClusterCatalogNodeSet } | undefined => {
   if (!items) {
     return undefined;
   }
@@ -103,38 +102,35 @@ export const formatClusterCatalogVersionLabel = (
   return `OpenShift ${raw}`;
 };
 
-export const findHostTypeForReference = (
-  hostTypes: HostType[],
-  reference: HostTypeReference | undefined,
-): HostType | undefined => {
+export const findBareMetalInstanceTypeForReference = (
+  instanceTypes: BareMetalInstanceType[],
+  reference: BareMetalInstanceTypeReference | undefined,
+): BareMetalInstanceType | undefined => {
   if (!reference) {
     return undefined;
   }
   if (reference.id) {
-    const byId = hostTypes.find((hostType) => hostType.id === reference.id);
+    const byId = instanceTypes.find((instanceType) => instanceType.id === reference.id);
     if (byId) {
       return byId;
     }
   }
   if (reference.name) {
-    return hostTypes.find(
-      (hostType) =>
-        hostType.metadata?.name === reference.name &&
-        hostType.metadata?.project === reference.project,
+    return instanceTypes.find(
+      (instanceType) =>
+        instanceType.metadata?.name === reference.name &&
+        instanceType.metadata?.project === reference.project,
     );
   }
   return undefined;
 };
 
-export const formatClusterCatalogHostTypeLabel = (
-  hostType: HostType | undefined,
-  reference: HostTypeReference | undefined,
+export const formatClusterCatalogBareMetalInstanceTypeLabel = (
+  instanceType: BareMetalInstanceType | undefined,
+  reference: BareMetalInstanceTypeReference | undefined,
 ): string => {
-  if (hostType?.title?.trim()) {
-    return hostType.title.trim();
-  }
-  if (hostType?.metadata?.name) {
-    return hostType.metadata.name;
+  if (instanceType?.metadata?.name) {
+    return instanceType.metadata.name;
   }
   if (reference?.name) {
     return reference.name;
@@ -162,7 +158,7 @@ export const formatClusterCatalogVersionRow = (
 
 export const formatClusterCatalogNodeSetRow = (
   nodeSetsPolicy: ClusterNodeSetMapPolicy | undefined,
-  primaryNodeSet: { key: string; nodeSet: ClusterTemplateNodeSet } | undefined,
+  primaryNodeSet: { key: string; nodeSet: ClusterCatalogNodeSet } | undefined,
 ): string | undefined => {
   if (!catalogFieldPolicyIsConfigured(nodeSetsPolicy)) {
     return undefined;
@@ -173,10 +169,10 @@ export const formatClusterCatalogNodeSetRow = (
   return formatClusterCatalogNodeSetName(primaryNodeSet.key);
 };
 
-export const formatClusterCatalogHostTypeRow = (
+export const formatClusterCatalogBareMetalInstanceTypeRow = (
   nodeSetsPolicy: ClusterNodeSetMapPolicy | undefined,
-  primaryNodeSet: { key: string; nodeSet: ClusterTemplateNodeSet } | undefined,
-  hostType: HostType | undefined,
+  primaryNodeSet: { key: string; nodeSet: ClusterCatalogNodeSet } | undefined,
+  instanceType: BareMetalInstanceType | undefined,
 ): string | undefined => {
   if (!catalogFieldPolicyIsConfigured(nodeSetsPolicy)) {
     return undefined;
@@ -184,9 +180,10 @@ export const formatClusterCatalogHostTypeRow = (
   if (!primaryNodeSet) {
     return undefined;
   }
-  const label = hostType
-    ? hostTypeDisplayName(hostType)
-    : formatClusterCatalogHostTypeLabel(hostType, primaryNodeSet.nodeSet.hostType);
+  const label = formatClusterCatalogBareMetalInstanceTypeLabel(
+    instanceType,
+    primaryNodeSet.nodeSet.baremetalInstanceType,
+  );
   if (!catalogResourceHasDisplayValue(label)) {
     return undefined;
   }

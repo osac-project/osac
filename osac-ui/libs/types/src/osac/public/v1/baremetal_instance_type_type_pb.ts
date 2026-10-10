@@ -73,7 +73,7 @@ export const BareMetalInstanceTypeSchema: GenMessage<BareMetalInstanceType> = /*
   messageDesc(file_osac_public_v1_baremetal_instance_type_type, 0);
 
 /**
- * Defines the hardware specifications for a BareMetalInstanceType.
+ * Defines the hardware specifications and description for a BareMetalInstanceType.
  *
  * @generated from message osac.public.v1.BareMetalInstanceTypeSpec
  */

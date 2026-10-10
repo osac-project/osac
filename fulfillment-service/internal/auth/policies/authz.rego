@@ -239,8 +239,6 @@ allow if {
     "/osac.public.v1.DiskImages/Update",
     "/osac.public.v1.ConsoleSessions/Create",
     "/osac.public.v1.Events/Watch",
-    "/osac.public.v1.HostTypes/Get",
-    "/osac.public.v1.HostTypes/List",
     "/osac.public.v1.InstanceTypes/Get",
     "/osac.public.v1.InstanceTypes/List",
     "/osac.public.v1.SelfSubjectAccessReviews/Create",

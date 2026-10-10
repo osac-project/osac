@@ -216,7 +216,7 @@ jobs:
       # Networking is Netris-lab only (eth9, virsh, 3 BMIs). GHA never ran it
       # (test-infra tree has lifecycle+inventory only). Overlay of tests/e2e
       # would collect it from regression/; deselect so GHA matches that set.
-      test-filter: ${{ inputs.test-filter && format('({0}) and not TestBmaasNetworking', inputs.test-filter) || 'not TestBmaasNetworking' }}
+      test-filter: ${{ inputs.test-filter && format('({0}) and not TestBmaasNetworking and not TestCrossTenantBmaasNetworking', inputs.test-filter) || 'not TestBmaasNetworking and not TestCrossTenantBmaasNetworking' }}
       test-marker: ${{ inputs.test-marker || 'sanity or regression or serial or requires_bmaas or reference_common or reference_networking' }}
       # osac-installer now lives as a subdirectory of this same monorepo checkout
       # (its Chart.yaml deps resolve fulfillment-service/osac-operator/osac-aap/BMF

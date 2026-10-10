@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
+from tests.e2e.core.helpers import bmi_instance_type_for_tests
 from tests.e2e.core.runner import env
 
 BMI_DISK_IMAGE_SOURCE_REF = "oci://quay.io/osac-project/fedora-cloud-bmi:44"
@@ -17,6 +18,13 @@ BMI_DISK_IMAGE_SOURCE_REF = "oci://quay.io/osac-project/fedora-cloud-bmi:44"
 @pytest.fixture(scope="session")
 def bmi_template() -> str:
     return env("OSAC_BMI_TEMPLATE", "bm-host-provisioning")
+
+
+@pytest.fixture(scope="session")
+def bmi_instance_type(private_grpc: GRPCClient, bmi_template: str) -> Generator[str, None, None]:
+    yield from bmi_instance_type_for_tests(
+        private_grpc, template_name=bmi_template, configured=env("OSAC_BMI_INSTANCE_TYPE", "").strip()
+    )
 
 
 @pytest.fixture(scope="session")
@@ -57,7 +65,7 @@ def bmi_disk_image(private_grpc: GRPCClient, test_run_id: str) -> Generator[str,
 
 @pytest.fixture(scope="session")
 def catalog_item(
-    grpc: GRPCClient, bmi_template: str, test_run_id: str, bmi_disk_image: str
+    grpc: GRPCClient, bmi_template: str, bmi_instance_type: str, test_run_id: str, bmi_disk_image: str
 ) -> Generator[str, None, None]:
     name = f"e2e-bmaas-{test_run_id}"
     print(f"\nCreating BareMetalInstanceCatalogItem: {name}")
@@ -69,6 +77,7 @@ def catalog_item(
         fields={
             "ssh_public_key": {"editable": {}},
             "disk_image": {"editable": {"default_value": {"name": bmi_disk_image}}},
+            "instance_type": {"editable": {"default_value": {"name": bmi_instance_type, "shared": True}}},
         },
     )
     print(f"CatalogItem created: {item_id}")

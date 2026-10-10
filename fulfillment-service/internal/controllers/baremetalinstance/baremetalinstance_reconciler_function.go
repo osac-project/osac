@@ -51,9 +51,6 @@ const objectPrefix = "bmi-"
 
 const ownerReferenceAnnotation = "osac.openshift.io/owner-reference"
 
-// defaultHostType is a placeholder until host type is modeled in the template proto.
-const defaultHostType = "default"
-
 const userDataSecretSuffix = "-user-data"
 
 const userDataSecretKey = "userdata"
@@ -87,15 +84,14 @@ type FunctionBuilder struct {
 }
 
 type function struct {
-	logger                           *slog.Logger
-	hubCache                         controllers.HubCache
-	bareMetalInstancesClient         privatev1.BareMetalInstancesClient
-	bareMetalInstanceTypesClient     privatev1.BareMetalInstanceTypesClient
-	bareMetalInstanceTemplatesClient privatev1.BareMetalInstanceTemplatesClient
-	hubsClient                       privatev1.HubsClient
-	secretsClient                    privatev1.SecretsClient
-	diskImagesClient                 privatev1.DiskImagesClient
-	maskCalculator                   *masks.Calculator
+	logger                       *slog.Logger
+	hubCache                     controllers.HubCache
+	bareMetalInstancesClient     privatev1.BareMetalInstancesClient
+	bareMetalInstanceTypesClient privatev1.BareMetalInstanceTypesClient
+	hubsClient                   privatev1.HubsClient
+	secretsClient                privatev1.SecretsClient
+	diskImagesClient             privatev1.DiskImagesClient
+	maskCalculator               *masks.Calculator
 }
 
 type task struct {
@@ -146,15 +142,14 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 	}
 
 	object := &function{
-		logger:                           b.logger,
-		bareMetalInstancesClient:         privatev1.NewBareMetalInstancesClient(b.connection),
-		bareMetalInstanceTypesClient:     privatev1.NewBareMetalInstanceTypesClient(b.connection),
-		bareMetalInstanceTemplatesClient: privatev1.NewBareMetalInstanceTemplatesClient(b.connection),
-		hubsClient:                       privatev1.NewHubsClient(b.connection),
-		secretsClient:                    privatev1.NewSecretsClient(b.connection),
-		diskImagesClient:                 privatev1.NewDiskImagesClient(b.connection),
-		hubCache:                         b.hubCache,
-		maskCalculator:                   masks.NewCalculator().Build(),
+		logger:                       b.logger,
+		bareMetalInstancesClient:     privatev1.NewBareMetalInstancesClient(b.connection),
+		bareMetalInstanceTypesClient: privatev1.NewBareMetalInstanceTypesClient(b.connection),
+		hubsClient:                   privatev1.NewHubsClient(b.connection),
+		secretsClient:                privatev1.NewSecretsClient(b.connection),
+		diskImagesClient:             privatev1.NewDiskImagesClient(b.connection),
+		hubCache:                     b.hubCache,
+		maskCalculator:               masks.NewCalculator().Build(),
 	}
 	result = object.run
 	return
@@ -747,53 +742,35 @@ func (t *task) mutateBMI(ctx context.Context, object *bmfov1alpha1.BareMetalInst
 		return fmt.Errorf("BareMetalInstance must have a materialized template")
 	}
 
-	// Resolve host selection labels for the CRD's Selector.HostSelector. When an instance type is
-	// specified, map its host_label_selector. Otherwise fall back to the template's host_type
-	// (legacy path), which the backends map to the osac.openshift.io/host-type label.
-	if object.Spec.Selector.HostSelector == nil {
-		object.Spec.Selector.HostSelector = make(map[string]string)
+	instanceTypeRef := t.bareMetalInstance.GetSpec().GetInstanceType()
+	if instanceTypeRef == nil {
+		return fmt.Errorf("BareMetalInstance '%s' has no instance_type", t.bareMetalInstance.GetId())
 	}
-	if t.bareMetalInstance.GetSpec().HasInstanceType() {
-		instanceTypeRef := t.bareMetalInstance.GetSpec().GetInstanceType()
-		instanceTypeResp, err := t.r.bareMetalInstanceTypesClient.Get(ctx, privatev1.BareMetalInstanceTypesGetRequest_builder{
-			Id: instanceTypeRef.GetId(),
-		}.Build())
-		if err != nil {
-			return fmt.Errorf("failed to get instance type '%s': %w", instanceTypeRef.GetId(), err)
-		}
 
-		instanceType := instanceTypeResp.GetObject()
-		if instanceType.GetSpec().HasHostLabelSelector() {
-			for key, value := range instanceType.GetSpec().GetHostLabelSelector().GetMatchLabels() {
-				object.Spec.Selector.HostSelector[key] = value
-			}
+	// Replace any prior selector so updates cannot retain legacy placement labels.
+	object.Spec.Selector.HostSelector = make(map[string]string)
+	instanceTypeResp, err := t.r.bareMetalInstanceTypesClient.Get(ctx, privatev1.BareMetalInstanceTypesGetRequest_builder{
+		Id: instanceTypeRef.GetId(),
+	}.Build())
+	if err != nil {
+		return fmt.Errorf("failed to get instance type '%s': %w", instanceTypeRef.GetId(), err)
+	}
+
+	instanceType := instanceTypeResp.GetObject()
+	if instanceType.GetSpec().HasHostLabelSelector() {
+		for key, value := range instanceType.GetSpec().GetHostLabelSelector().GetMatchLabels() {
+			object.Spec.Selector.HostSelector[key] = value
 		}
-	} else {
-		// Fall back to template host_type when no instance type is specified.
-		templateResp, err := t.r.bareMetalInstanceTemplatesClient.Get(ctx, privatev1.BareMetalInstanceTemplatesGetRequest_builder{
-			Id: templateID,
-		}.Build())
-		if err != nil {
-			return fmt.Errorf("failed to get instance template '%s': %w", templateID, err)
-		}
-		hostType := templateResp.GetObject().GetHostType()
-		if hostType == "" {
-			hostType = defaultHostType
-		}
-		object.Spec.Selector.HostSelector["hostType"] = hostType
 	}
 
 	// Validate that HostSelector is non-empty after resolving from instance type or template.
 	// The CRD requires MinProperties=1, so an empty selector would fail K8s admission.
 	// Return an explicit error here rather than letting K8s reject with a generic validation error.
 	if len(object.Spec.Selector.HostSelector) == 0 {
-		if t.bareMetalInstance.GetSpec().HasInstanceType() {
-			return fmt.Errorf(
-				"instance type '%s' has no host_label_selector - cannot determine host selection",
-				t.bareMetalInstance.GetSpec().GetInstanceType().GetId(),
-			)
-		}
-		return fmt.Errorf("cannot determine host selection: no instance_type and no template host_type")
+		return fmt.Errorf(
+			"instance type '%s' has no host_label_selector - cannot determine host selection",
+			instanceTypeRef.GetId(),
+		)
 	}
 
 	object.Spec.TemplateID = templateID

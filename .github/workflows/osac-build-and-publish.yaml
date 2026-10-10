@@ -857,7 +857,7 @@ jobs:
     uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-full-install.yml@main
     with:
       test-suite: bmaas
-      test-filter: 'not TestBmaasNetworking'
+      test-filter: 'not TestBmaasNetworking and not TestCrossTenantBmaasNetworking'
       installer-repo: ${{ github.repository }}
       installer-ref: ${{ needs.prepare.outputs.temp-branch }}
       test-infra-repository: osac-project/osac-test-infra

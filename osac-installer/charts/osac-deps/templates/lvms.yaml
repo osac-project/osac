@@ -28,7 +28,7 @@ metadata:
 spec:
   channel: {{ .Values.lvms.channel }}
   name: lvms-operator
-  source: redhat-operators
-  sourceNamespace: openshift-marketplace
+  source: {{ .Values.catalogSource }}
+  sourceNamespace: {{ .Values.catalogSourceNamespace }}
   installPlanApproval: Automatic
 {{- end }}

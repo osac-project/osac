@@ -35,6 +35,6 @@ metadata:
 spec:
   channel: {{ .Values.certManager.channel }}
   name: openshift-cert-manager-operator
-  source: redhat-operators
-  sourceNamespace: openshift-marketplace
+  source: {{ .Values.catalogSource }}
+  sourceNamespace: {{ .Values.catalogSourceNamespace }}
 {{- end }}

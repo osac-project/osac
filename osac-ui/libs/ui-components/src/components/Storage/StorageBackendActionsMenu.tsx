@@ -4,6 +4,7 @@ import { Dropdown, DropdownItem, DropdownList, MenuToggle } from '@patternfly/re
 import { EllipsisVIcon } from '@patternfly/react-icons/dist/esm/icons/ellipsis-v-icon';
 
 import type { StorageBackend } from '@osac/types/private';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import StorageBackendDeleteConfirmModal from './StorageBackendDeleteConfirmModal';
 import { useTranslation } from '../../hooks/useTranslation';
@@ -51,15 +52,13 @@ const StorageBackendActionsMenu = ({ backend }: StorageBackendActionsMenuProps) 
           >
             {t('Edit')}
           </DropdownItem>
-          <DropdownItem
-            value="delete"
+          <DeleteResourceButton
+            isDropdown
             onClick={() => {
               setDeleteOpen(true);
               setOpen(false);
             }}
-          >
-            {t('Delete')}
-          </DropdownItem>
+          />
         </DropdownList>
       </Dropdown>
     </>

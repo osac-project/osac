@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Alert, Button, Flex, Stack, StackItem } from '@patternfly/react-core';
-import DumpsterIcon from '@patternfly/react-icons/dist/esm/icons/dumpster-icon';
 import GlobeIcon from '@patternfly/react-icons/dist/esm/icons/globe-icon';
 import PlayIcon from '@patternfly/react-icons/dist/esm/icons/play-icon';
 import StopIcon from '@patternfly/react-icons/dist/esm/icons/stop-icon';
@@ -9,6 +8,7 @@ import SyncAltIcon from '@patternfly/react-icons/dist/esm/icons/sync-alt-icon';
 
 import type { ComputeInstance } from '@osac/types';
 import { ComputeInstanceState, ExternalIPAttachmentState } from '@osac/types';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import AttachExternalIpModal from './AttachExternalIpModal';
 import DetachExternalIpModal from './DetachExternalIpModal';
@@ -198,18 +198,15 @@ const VmDetailsActionButtons = ({ vm }: VmDetailsActionButtonsProps) => {
                 {t(isDetachingExternalIp ? 'Detaching external IP' : 'Detach external IP')}
               </Button>
             )}
-            <Button
-              variant="danger"
-              icon={<DumpsterIcon />}
-              isDisabled={!canDelete}
+            <DeleteResourceButton
+              showIcon
+              canDelete={canDelete}
               onClick={() => {
                 if (canDelete) {
                   setDeleteOpen(true);
                 }
               }}
-            >
-              Delete
-            </Button>
+            />
           </Flex>
         </StackItem>
       </Stack>

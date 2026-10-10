@@ -1,8 +1,7 @@
-import { MenuToggle } from '@patternfly/react-core';
-import { EllipsisVIcon } from '@patternfly/react-icons/dist/esm/icons/ellipsis-v-icon';
-import { ActionsColumn, Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
+import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
 import { Secret, SecretType } from '@osac/types';
+import SecretActionsMenu from '@osac/ui-components/components/Secret/SecretActionsMenu';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
 import { getSecretType } from './utils.ts';
@@ -49,22 +48,10 @@ const SecretTable = ({ items, onEdit, onDelete }: SecretTableProps) => {
               <Timestamp value={secret.metadata?.creationTimestamp} />
             </Td>
             <Td dataLabel={actionsLabel} isActionCell>
-              <ActionsColumn
-                items={[
-                  { title: t('Edit'), onClick: () => onEdit(secret) },
-                  { title: t('Delete'), onClick: () => onDelete(secret) },
-                ]}
-                actionsToggle={({ onToggle, isOpen, toggleRef }) => (
-                  <MenuToggle
-                    ref={toggleRef}
-                    variant="plain"
-                    isExpanded={isOpen}
-                    onClick={onToggle}
-                    aria-label={t('Actions for {{name}}', { name: secret.metadata?.name })}
-                  >
-                    <EllipsisVIcon />
-                  </MenuToggle>
-                )}
+              <SecretActionsMenu
+                secret={secret}
+                onEdit={() => onEdit(secret)}
+                onDelete={() => onDelete(secret)}
               />
             </Td>
           </Tr>

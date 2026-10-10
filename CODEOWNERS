@@ -9,6 +9,22 @@
 # Protects this file from unauthorized modification
 /CODEOWNERS @osac-project/wg-infra
 
+# CI pipeline definition
+# A pull request can change the workflows and scripts that produce the checks it is judged by, and then a passing
+# check proves little. A change to them needs review from the infrastructure team. The OSAC CI check applies the same
+# rule from its own policy (osac-project/osac-ci, policy/osac.yml): keep the two lists in step.
+/.github/workflows/ @osac-project/wg-infra
+/.github/actions/ @osac-project/wg-infra
+/.github/scripts/ @osac-project/wg-infra
+/.github/filters/ @osac-project/wg-infra
+/.pre-commit-config.yaml @osac-project/wg-infra
+# The osac-ui lint and typecheck workflows run on pull_request, use no secret and report no required check, so the osac-ui
+# maintainers (approvers in osac-ui/OWNERS) may approve them as well. The OSAC CI policy reads that file; keep this in step.
+/.github/workflows/osac-ui-lint.yaml @osac-project/wg-infra @eliorerz @rawagner @ElayAharoni @batzionb @eranco74 @rccrdpccl
+/.github/workflows/osac-ui-typecheck.yaml @osac-project/wg-infra @eliorerz @rawagner @ElayAharoni @batzionb @eranco74 @rccrdpccl
+# Markdown inside those folders (a README) cannot change a check: a rule with no owner clears ownership.
+/.github/**/*.md
+
 # fullsend Configuration Protection
 # Prevents pull_request_target misconfiguration and unauthorized workflow changes
 # per ADR-0033 security requirements.

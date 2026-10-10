@@ -69,17 +69,12 @@
     },
     "bundledVault": {
       "type": "object",
-      "description": "Bundled OpenBao (Vault-compatible) secret store for dev/CI environments. When enabled, deploys a single-replica OpenBao instance in dev mode with emptyDir storage.",
+      "description": "Bundled OpenBao (Vault-compatible) secret store for testing and CI. Not intended for production.",
       "properties": {
         "enabled": {
           "type": "boolean",
           "description": "Deploy a bundled OpenBao instance. Enabled by default — set to false only when pointing at an external Vault/OpenBao instance.",
           "default": true
-        },
-        "devRootToken": {
-          "type": "string",
-          "description": "Root token for OpenBao dev mode (required when enabled)",
-          "default": "dev-root-token"
         },
         "image": {
           "type": "string",

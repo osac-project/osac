@@ -13,7 +13,6 @@ import {
   DescriptionListTerm,
   Divider,
   Dropdown,
-  DropdownItem,
   DropdownList,
   MenuToggle,
   Spinner,
@@ -22,6 +21,7 @@ import { EllipsisVIcon } from '@patternfly/react-icons/dist/esm/icons/ellipsis-v
 import { PlusCircleIcon } from '@patternfly/react-icons/dist/esm/icons/plus-circle-icon';
 
 import { type NATGateway, NATGatewayState } from '@osac/types';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import { NatGatewayStatusLabel } from './NatGatewayStatusLabel';
 import { useTranslation } from '../../hooks/useTranslation';
@@ -71,17 +71,14 @@ const NatGatewayCard = ({
               popperProps={{ position: 'right' }}
             >
               <DropdownList>
-                <DropdownItem
-                  value="delete"
-                  isDanger
-                  isDisabled={isDeleting}
+                <DeleteResourceButton
+                  isDropdown
+                  canDelete={!isDeleting}
                   onClick={() => {
                     onDetach(natGateway);
                     setIsMenuOpen(false);
                   }}
-                >
-                  {t('Delete')}
-                </DropdownItem>
+                />
               </DropdownList>
             </Dropdown>
           ) : !isLoading && !error ? (

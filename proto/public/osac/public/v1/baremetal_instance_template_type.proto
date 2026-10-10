@@ -17,9 +17,10 @@ package osac.public.v1;
 
 import "buf/validate/validate.proto";
 import "google/protobuf/any.proto";
+import "osac/public/v1/baremetal_instance_type_type.proto";
 import "osac/public/v1/metadata_type.proto";
 
-// A bare metal instance template defines a hardware profile (host type, OS image, network configuration)
+// A bare metal instance template defines an instance type, OS image, and network configuration
 // that can be used to create bare metal instances via a catalog item.
 //
 // buf:lint:ignore OSAC_OBJECT_SHAPE
@@ -44,8 +45,11 @@ message BareMetalInstanceTemplate {
 
   repeated BareMetalInstanceTemplateParameterDefinition parameters = 6;
 
-  // Identifier of the HostType that defines the hardware profile for instances created from this template.
-  string host_type = 7;
+  reserved 7;
+  reserved "host_type";
+
+  // BareMetalInstanceType used for hardware placement when the caller does not provide one.
+  BareMetalInstanceTypeReference instance_type = 8;
 }
 
 // Contains type and documentation of a template parameter.

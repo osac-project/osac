@@ -939,6 +939,7 @@ var _ = Describe("mutateBMI", func() {
 		}
 
 		var obj bmfov1alpha1.BareMetalInstance
+		obj.Spec.Selector.HostSelector = map[string]string{"stale": "old-value"}
 		err := t.mutateBMI(ctx, &obj)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(obj.Spec.Selector.HostSelector).To(HaveLen(2))
@@ -1038,21 +1039,11 @@ var _ = Describe("mutateBMI", func() {
 		Expect(err.Error()).To(ContainSubstring("has no host_label_selector"))
 	})
 
-	It("should fall back to the template host_type when instance_type is absent", func() {
-		templatesClient := &fakeBareMetalInstanceTemplatesClient{
-			getResponse: privatev1.BareMetalInstanceTemplatesGetResponse_builder{
-				Object: privatev1.BareMetalInstanceTemplate_builder{
-					Id:       "osac.templates.default",
-					HostType: "gpu_host",
-				}.Build(),
-			}.Build(),
-		}
-
+	It("returns an error when the materialized instance has no instance_type", func() {
 		t := &task{
 			r: &function{
-				logger:                           logger,
-				bareMetalInstanceTypesClient:     defaultFakeBareMetalInstanceTypesClient(),
-				bareMetalInstanceTemplatesClient: templatesClient,
+				logger:                       logger,
+				bareMetalInstanceTypesClient: defaultFakeBareMetalInstanceTypesClient(),
 			},
 			bareMetalInstance: privatev1.BareMetalInstance_builder{
 				Id: "bmi-test",
@@ -1065,38 +1056,8 @@ var _ = Describe("mutateBMI", func() {
 
 		var obj bmfov1alpha1.BareMetalInstance
 		err := t.mutateBMI(ctx, &obj)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(obj.Spec.Selector.HostSelector).To(HaveLen(1))
-		Expect(obj.Spec.Selector.HostSelector["hostType"]).To(Equal("gpu_host"))
-	})
-
-	It("should not error when instance_type is absent and the template has no host_type", func() {
-		templatesClient := &fakeBareMetalInstanceTemplatesClient{
-			getResponse: privatev1.BareMetalInstanceTemplatesGetResponse_builder{
-				Object: privatev1.BareMetalInstanceTemplate_builder{
-					Id: "osac.templates.default",
-				}.Build(),
-			}.Build(),
-		}
-
-		t := &task{
-			r: &function{
-				logger:                           logger,
-				bareMetalInstanceTypesClient:     defaultFakeBareMetalInstanceTypesClient(),
-				bareMetalInstanceTemplatesClient: templatesClient,
-			},
-			bareMetalInstance: privatev1.BareMetalInstance_builder{
-				Id: "bmi-test",
-				Spec: privatev1.BareMetalInstanceSpec_builder{
-					CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "catalog-1"}.Build(),
-					Template:    privatev1.BareMetalInstanceTemplateReference_builder{Id: "osac.templates.default"}.Build(),
-				}.Build(),
-			}.Build(),
-		}
-
-		var obj bmfov1alpha1.BareMetalInstance
-		err := t.mutateBMI(ctx, &obj)
-		Expect(err).ToNot(HaveOccurred())
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("instance_type"))
 	})
 })
 
@@ -2837,7 +2798,7 @@ func defaultFakeBareMetalInstanceTypesClient() *fakeBareMetalInstanceTypesClient
 				Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 					HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
 						MatchLabels: map[string]string{
-							"hostType": "compute",
+							"resourceClass": "compute",
 						},
 					}.Build(),
 				}.Build(),
@@ -2854,16 +2815,5 @@ type fakeBareMetalInstanceTypesClient struct {
 }
 
 func (c *fakeBareMetalInstanceTypesClient) Get(ctx context.Context, req *privatev1.BareMetalInstanceTypesGetRequest, opts ...grpc.CallOption) (*privatev1.BareMetalInstanceTypesGetResponse, error) {
-	return c.getResponse, c.getError
-}
-
-// fakeBareMetalInstanceTemplatesClient is a test double for the BareMetalInstanceTemplatesClient.
-type fakeBareMetalInstanceTemplatesClient struct {
-	privatev1.BareMetalInstanceTemplatesClient
-	getResponse *privatev1.BareMetalInstanceTemplatesGetResponse
-	getError    error
-}
-
-func (c *fakeBareMetalInstanceTemplatesClient) Get(ctx context.Context, req *privatev1.BareMetalInstanceTemplatesGetRequest, opts ...grpc.CallOption) (*privatev1.BareMetalInstanceTemplatesGetResponse, error) {
 	return c.getResponse, c.getError
 }

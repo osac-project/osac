@@ -110,6 +110,7 @@ def test_baremetal_instance_lifecycle(
     jwt_grpc_tenant1: GRPCClient,
     k8s_hub_client: K8sClient,
     catalog_item: str,
+    bmi_instance_type: str,
     bmi_disk_image: str,
     bmh_namespace: str,
     test_run_id: str,
@@ -128,8 +129,14 @@ def test_baremetal_instance_lifecycle(
 
     try:
         assert bmi_id in jwt_grpc_tenant1.list_baremetal_instance_ids()
-
         bmi_cr_name: str = wait_for_bmi_cr(k8s=k8s_hub_client, uuid=bmi_id)
+        spec = jwt_grpc_tenant1.get_baremetal_instance(bmi_id=bmi_id).get("object", {}).get("spec", {})
+        instance_type = spec.get("instance_type", spec.get("instanceType", {}))
+        assert instance_type.get("name") == bmi_instance_type, (
+            f"BareMetalInstance instance_type {instance_type.get('name')!r} does not match catalog default "
+            f"{bmi_instance_type!r}"
+        )
+
         wait_for_bmi_running(grpc=jwt_grpc_tenant1, bmi_id=bmi_id)
         if os.environ.get("OSAC_FULFILLMENT_TRUST_E2E") == "true":
             assert_management_tls(k8s_hub_client)

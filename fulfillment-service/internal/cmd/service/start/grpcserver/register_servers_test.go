@@ -515,7 +515,6 @@ var _ = Describe("Conditional service registration", func() {
 
 	// Shared infrastructure services (always registered regardless of flags)
 	sharedServices := []string{
-		"osac.public.v1.HostTypes",
 		"osac.public.v1.VirtualNetworks",
 		"osac.public.v1.Subnets",
 		"osac.public.v1.SecurityGroups",
@@ -532,7 +531,6 @@ var _ = Describe("Conditional service registration", func() {
 		"osac.public.v1.Users",
 		"osac.public.v1.Secrets",
 		"osac.public.v1.StorageTiers",
-		"osac.private.v1.HostTypes",
 		"osac.private.v1.Hubs",
 		"osac.private.v1.VirtualNetworks",
 		"osac.private.v1.Subnets",

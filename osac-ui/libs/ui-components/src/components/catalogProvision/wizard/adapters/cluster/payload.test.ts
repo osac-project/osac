@@ -49,7 +49,7 @@ describe('buildClusterCreatePayload', () => {
           {
             ...row,
             name: 'production',
-            hostType: 'acme_1tb',
+            bareMetalInstanceType: 'acme_1tb',
             size: '3',
           },
         ],
@@ -68,7 +68,7 @@ describe('buildClusterCreatePayload', () => {
         pullSecretSecret: { name: 'pull-secret' },
         version: { name: '4-17-0' },
         nodeSets: {
-          production: { hostType: { id: 'acme_1tb' }, size: 3 },
+          production: { baremetalInstanceType: { id: 'acme_1tb' }, size: 3 },
         },
         network: {
           podCidr: '10.128.0.0/14',
@@ -112,11 +112,11 @@ describe('buildClusterCreatePayload', () => {
         pullSecretSecret: { name: 'secret' },
         versionName: '4-17-0',
         nodeSetRows: [
-          { ...row, name: 'empty-host-type', hostType: '', size: '3' },
-          { ...row, name: 'zero-size', hostType: 'acme_1tb', size: '0' },
-          { ...row, name: 'invalid-size', hostType: 'acme_2tb', size: 'not-a-number' },
-          { ...row, name: 'production', hostType: 'acme_1tb', size: '3' },
-          { ...row, name: 'development', hostType: 'acme_1tb', size: '2' },
+          { ...row, name: 'empty-host-type', bareMetalInstanceType: '', size: '3' },
+          { ...row, name: 'zero-size', bareMetalInstanceType: 'acme_1tb', size: '0' },
+          { ...row, name: 'invalid-size', bareMetalInstanceType: 'acme_2tb', size: 'not-a-number' },
+          { ...row, name: 'production', bareMetalInstanceType: 'acme_1tb', size: '3' },
+          { ...row, name: 'development', bareMetalInstanceType: 'acme_1tb', size: '2' },
         ],
         network: { podCidr: '', serviceCidr: '' },
       },
@@ -124,8 +124,8 @@ describe('buildClusterCreatePayload', () => {
 
     const payload = buildClusterCreatePayload(values, clusterCatalogItem);
     expect(payload.spec?.nodeSets).toEqual({
-      production: { hostType: { id: 'acme_1tb' }, size: 3 },
-      development: { hostType: { id: 'acme_1tb' }, size: 2 },
+      production: { baremetalInstanceType: { id: 'acme_1tb' }, size: 3 },
+      development: { baremetalInstanceType: { id: 'acme_1tb' }, size: 2 },
     });
   });
 
@@ -139,7 +139,12 @@ describe('buildClusterCreatePayload', () => {
         pullSecretSecret: { name: 'secret' },
         versionName: '4-17-0',
         nodeSetRows: [
-          { ...createEmptyNodeSetRow(), name: '__proto__', hostType: 'acme_1tb', size: '3' },
+          {
+            ...createEmptyNodeSetRow(),
+            name: '__proto__',
+            bareMetalInstanceType: 'acme_1tb',
+            size: '3',
+          },
         ],
         network: { podCidr: '', serviceCidr: '' },
       },
@@ -147,7 +152,7 @@ describe('buildClusterCreatePayload', () => {
 
     const nodeSets = buildClusterCreatePayload(values, clusterCatalogItem).spec?.nodeSets;
     expect(Object.keys(nodeSets ?? {})).toContain('__proto__');
-    expect(nodeSets?.['__proto__']).toEqual({ hostType: { id: 'acme_1tb' }, size: 3 });
+    expect(nodeSets?.['__proto__']).toEqual({ baremetalInstanceType: { id: 'acme_1tb' }, size: 3 });
   });
 
   it('omits networkAttachment when useDefaultNetwork is true', () => {

@@ -54,8 +54,9 @@ type BareMetalNetworkAttachment struct {
 	// +kubebuilder:validation:Optional
 	SecurityGroupRefs []string `json:"securityGroupRefs,omitempty"`
 
-	// Interface is the physical interface name from the HostType's NetworkInterface list.
-	// When omitted on a single-attachment instance, the system selects the first fabric-role interface.
+	// Interface is the physical network port name bound to this attachment.
+	// Fulfillment sets this from the selected BareMetalInstanceType's first fabric-role port
+	// when it materializes a default network attachment; otherwise an omitted value remains unset.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="interface is immutable"
 	Interface string `json:"interface,omitempty"`

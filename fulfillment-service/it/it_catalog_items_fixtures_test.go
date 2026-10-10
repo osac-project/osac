@@ -568,17 +568,24 @@ func createCatalogItemClusterTemplateFixture(ctx context.Context, defaults *priv
 	return id
 }
 
-func createCatalogItemBareMetalInstanceTemplateFixture(ctx context.Context, defaults *privatev1.BareMetalInstanceTemplateSpecDefaults, parameters []*privatev1.BareMetalInstanceTemplateParameterDefinition) string {
+func createCatalogItemBareMetalInstanceTemplateFixture(ctx context.Context, defaults *privatev1.BareMetalInstanceTemplateSpecDefaults, parameters []*privatev1.BareMetalInstanceTemplateParameterDefinition, instanceType ...string) string {
 	GinkgoHelper()
 	client := privatev1.NewBareMetalInstanceTemplatesClient(tool.InternalView().AdminConn())
+	object := privatev1.BareMetalInstanceTemplate_builder{
+		Id:           "catalog_item_bare_metal_instance_" + uuid.New()[24:],
+		Metadata:     catalogItemFixtureMetadata("shared", ""),
+		Title:        "Catalog item integration Template",
+		SpecDefaults: defaults,
+		Parameters:   parameters,
+	}
+	if len(instanceType) > 0 && instanceType[0] != "" {
+		object.InstanceType = privatev1.BareMetalInstanceTypeReference_builder{
+			Id:     instanceType[0],
+			Shared: true,
+		}.Build()
+	}
 	response, err := client.Create(ctx, privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
-		Object: privatev1.BareMetalInstanceTemplate_builder{
-			Id:           "catalog_item_bare_metal_instance_" + uuid.New()[24:],
-			Metadata:     catalogItemFixtureMetadata("shared", ""),
-			Title:        "Catalog item integration Template",
-			SpecDefaults: defaults,
-			Parameters:   parameters,
-		}.Build(),
+		Object: object.Build(),
 	}.Build())
 	Expect(err).NotTo(HaveOccurred())
 	id := response.GetObject().GetId()

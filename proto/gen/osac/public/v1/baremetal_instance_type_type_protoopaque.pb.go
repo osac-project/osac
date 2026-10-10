@@ -178,7 +178,7 @@ func (b0 BareMetalInstanceType_builder) Build() *BareMetalInstanceType {
 	return m0
 }
 
-// Defines the hardware specifications and host label selector for a BareMetalInstanceType.
+// Defines the hardware specifications and description for a BareMetalInstanceType.
 type BareMetalInstanceTypeSpec struct {
 	state                  protoimpl.MessageState `protogen:"opaque.v1"`
 	xxx_hidden_Hardware    *BareMetalHardwareSpec `protobuf:"bytes,1,opt,name=hardware,proto3"`

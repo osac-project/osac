@@ -193,6 +193,9 @@ stamp_component_image_refs() {
             ;;
         osac-ui)
             # osac-ui/charts/ui/templates/deployment.yaml reads .Values.images.ui.
+            # Image tags are bare SemVer (same as other components). Mono-repo
+            # promote-and-publish retags sha-* -> ${SUB_VERSION} with no v
+            # prefix (OSAC-6089). Do not reintroduce a v-prefix special case.
             IMAGE_REF="ghcr.io/osac-project/osac-ui:${tag_value}" \
                 yq -i '.images.ui = strenv(IMAGE_REF)' "osac-ui/charts/ui/values.yaml"
             stamp_umbrella_nested_field "${umbrella_values}" ui images ui "ghcr.io/osac-project/osac-ui:${tag_value}"

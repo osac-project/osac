@@ -179,6 +179,28 @@ jobs:
           pr-number: ${{ github.event.pull_request.number }}
           head-sha: ${{ github.event.pull_request.head.sha }}
 
+  # Phase 3a of the CI-gating rollout plan: a dead-end, informational-only
+  # preview of what a synchronous Gemini call inside merge_group would say
+  # about this suite (proving the Vertex AI/WIF pipeline works there at
+  # all, now that the WIF pool's condition trusts
+  # refs/heads/gh-readonly-queue/* -- previously refs/heads/main only, so
+  # this was flatly impossible before). Deliberately NOT a `needs:` of
+  # e2e-bmaas-full-install, e2e-bmaas-gate, or anything else below -- its
+  # result can never affect whether this suite runs or what tier it runs
+  # at. A future phase MAY read needs.e2e-suite-preview.outputs.* to
+  # actually influence scope; today nothing does. Never runs on
+  # pull_request: a fork PR's pull_request run gets no OIDC token
+  # regardless of the WIF change (see vertex-ai-auth's own header).
+  e2e-suite-preview:
+    name: e2e-suite-preview (bmaas)
+    needs: changes
+    if: github.event_name == 'merge_group'
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-suite-preview.yml@main
+
   # Builds fulfillment-service, osac-operator, osac-aap's execution
   # environment (twice -- once each for aap.bootstrap.image and
   # aap.configAsCode.eeImage, see OSAC-3546), and bare-metal-fulfillment-operator

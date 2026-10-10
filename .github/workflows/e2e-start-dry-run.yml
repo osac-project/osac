@@ -1,0 +1,76 @@
+---
+# Dry run of the planned single "start the full-install E2E" decision. For every pull request whose cheap workflows or
+# review just finished it works out whether the E2E should start now (approved by a person with write access or
+# CodeRabbit on the head commit, the cheap checks passed, the change affects an E2E suite) and writes the answer and the
+# reason to the job summary and a JSON artifact. It starts nothing and posts nothing: the label-based flow
+# (e2e-readiness.md) still decides. The decision lives in osac-project/osac-ci (docs: its README, "Deciding when the E2E
+# starts"); the pin below changes it only through a reviewed change here.
+#
+# workflow_run runs the workflow file from the default branch with the base repository's token, so a fork pull request
+# is read the same way as any other, and nothing here checks out or runs pull request code. It takes exact workflow
+# names, no wildcards: list the workflows whose result the decision reads (the cheap checks) plus the review relay. A
+# workflow that is missing only delays the answer until the next one finishes.
+name: E2E start (dry run)
+on:  # zizmor: ignore[dangerous-triggers] -- no pull request code is checked out or run
+  workflow_run:
+    workflows:
+      - "Ansible Lint"
+      - "Build bare-metal-fulfillment-operator image"
+      - "Build container image"
+      - "Check generated code"
+      - "Check pull request"
+      - "Darwin Keychain Tests"
+      - "Dependency Review"
+      - "Helm Lint"
+      - "Integration Tests"
+      - "OSAC CI review"
+      - "pre-commit"
+      - "Unit Tests"
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      number:
+        description: Pull request number
+        required: true
+
+permissions:
+  contents: read
+
+# One answer at a time per head commit (or per pull request when started by hand). GitHub keeps one waiting run per
+# group, so a burst of finished workflows costs one extra evaluation, not one each.
+concurrency:
+  group: e2e-start-dry-run-${{ github.event.workflow_run.head_sha || inputs.number }}
+  cancel-in-progress: false
+
+jobs:
+  decide:
+    # A finished run only matters when it belongs to a pull request (not to a push to main, a merge queue or a schedule).
+    if: >-
+      github.repository == 'osac-project/osac' &&
+      (github.event_name != 'workflow_run' ||
+       github.event.workflow_run.event == 'pull_request' ||
+       github.event.workflow_run.event == 'pull_request_target' ||
+       github.event.workflow_run.event == 'pull_request_review')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read  # the action is fetched from osac-ci by the runner; nothing of this repository is checked out
+      pull-requests: read  # read the pull request, its reviews and files
+      checks: read  # read the check runs of the head commit
+    steps:
+      - uses: osac-project/osac-ci/.github/actions/e2e-decide@80ac381518db412d6ecb9c1dd46b752e5abdebf6  # osac-ci main
+        id: decide
+        with:
+          github-token: ${{ github.token }}
+          repo: ${{ github.repository }}
+          policy: policy/osac.yml
+          number: ${{ inputs.number }}
+          head-sha: ${{ github.event.workflow_run.head_sha }}
+      - name: Keep the decision
+        if: steps.decide.outputs.json-file != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: e2e-decision-${{ github.run_id }}
+          path: ${{ steps.decide.outputs.json-file }}
+          retention-days: 14
+          if-no-files-found: ignore

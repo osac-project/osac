@@ -12,8 +12,10 @@ const buildValues = (project: string) => ({
 });
 
 describe('buildBareMetalInstanceCreatePayload', () => {
-  it('builds a catalog-item create payload', () => {
-    expect(buildBareMetalInstanceCreatePayload(buildValues(''))).toEqual({
+  it('leaves the type unset in a catalog payload so the template default can apply', () => {
+    const payload = buildBareMetalInstanceCreatePayload(buildValues(''));
+    expect(payload.spec?.instanceType).toBeUndefined();
+    expect(payload).toEqual({
       metadata: { name: 'my-bmi', project: '' },
       spec: {
         catalogItem: { id: 'catalog-bm-1' },

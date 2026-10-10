@@ -21,6 +21,7 @@
 #
 # Helm chart management (no parameters required):
 #   make helm-lint
+#   make mce-render-test
 #   make helm-validate
 
 SHELL := /usr/bin/env bash -o pipefail
@@ -120,10 +121,14 @@ KIND_RUNTIME_REQUIRED := $(if $(filter true,$(HOST_IS_MAC_ARM)),true,$(if $(filt
 HELM_MAJOR := $(shell version=$$(helm version --short 2>/dev/null) || exit; printf '%s\n' "$$version" | sed -nE 's/^v([0-9]+).*/\1/p')
 ifeq ($(HELM_MAJOR),4)
 DEV_FULL_HELM_POST_RENDERER := osac-dev-full-awx-image
+# Helm 4 SSA: AAP operator owns app.kubernetes.io/managed-by on the osac-aap CR.
+OSAC_HELM_FORCE_CONFLICTS := --force-conflicts
 else ifeq ($(HELM_MAJOR),3)
 DEV_FULL_HELM_POST_RENDERER := scripts/dev-full/helm-post-renderer/helm-post-render.sh
+OSAC_HELM_FORCE_CONFLICTS :=
 else
 DEV_FULL_HELM_POST_RENDERER :=
+OSAC_HELM_FORCE_CONFLICTS :=
 endif
 
 # Container tool and Kind cluster config.
@@ -326,7 +331,7 @@ endif
 		--namespace $(NS) --create-namespace \
 		--set-string global.osacDeploymentId=$(NS)/osac \
 		$(if $(DOMAIN),--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) --set global.clusterDomain=$(DOMAIN) --set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DOMAIN)/realms/osac) \
-		$(EXTRA_HELM_ARGS) \
+		$(EXTRA_HELM_ARGS) $(OSAC_HELM_FORCE_CONFLICTS) \
 		--wait --timeout 40m
 
 .PHONY: uninstall-osac
@@ -556,12 +561,16 @@ csi-render-test: helm-deps ## Verify CSI and storage-provider chart rendering
 fulfillment-trust-render-test: helm-deps ## Check verified fulfillment transport renders
 	python3 scripts/test-fulfillment-trust-render.py
 
+.PHONY: mce-render-test
+mce-render-test: ## Check disabled MCE defaults, explicit enablement, and CaaS inheritance
+	uv run --project .. python scripts/test-mce-render.py
+
 .PHONY: dev-full-render-test
 dev-full-render-test: helm-deps ## Check dev-full TLS and Helm post-rendering
 	./scripts/test-dev-full-render.sh
 
 .PHONY: helm-validate
-helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test dev-full-render-test ## Validate all charts (lint + template)
+helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test mce-render-test dev-full-render-test ## Validate all charts (lint + template)
 	@for d in values/*/; do \
 		infra="$${d}infra.yaml"; \
 		[ -f "$$infra" ] && echo "Validating $$infra..." && \

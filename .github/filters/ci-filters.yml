@@ -305,7 +305,7 @@ helm-osac-csi-driver:
 helm-osac-metering:
   - '{osac-metering/charts/**,.github/workflows/helm-lint.yaml}'
 helm-osac-installer:
-  - '{osac-installer/charts/**,osac-installer/values/**,osac-installer/ct.yaml,.github/workflows/helm-lint.yaml}'
+  - '{osac-installer/charts/**,osac-installer/values/**,osac-installer/ct.yaml,osac-installer/Makefile,osac-installer/scripts/test-mce-render.py,.github/workflows/helm-lint.yaml}'
 
 # Exact copy of check-generated-code.yaml's own `proto` filter.
 proto-check:

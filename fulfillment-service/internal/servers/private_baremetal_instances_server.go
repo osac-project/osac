@@ -65,7 +65,6 @@ type PrivateBareMetalInstancesServer struct {
 	generic                 *GenericServer[*privatev1.BareMetalInstance]
 	catalogItemsDao         *dao.GenericDAO[*privatev1.BareMetalInstanceCatalogItem]
 	templatesDao            *dao.GenericDAO[*privatev1.BareMetalInstanceTemplate]
-	hostTypesDao            *dao.GenericDAO[*privatev1.HostType]
 	instanceTypesDao        *dao.GenericDAO[*privatev1.BareMetalInstanceType]
 	subnetsDao              *dao.GenericDAO[*privatev1.Subnet]
 	virtualNetworksDao      *dao.GenericDAO[*privatev1.VirtualNetwork]
@@ -149,15 +148,6 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 	}
 
 	instanceTypesDao, err := dao.NewGenericDAO[*privatev1.BareMetalInstanceType]().SetLogger(b.logger).SetTenancyLogic(b.tenancyLogic).SetMetricsRegisterer(b.metricsRegisterer).Build()
-	if err != nil {
-		return
-	}
-
-	hostTypesDao, err := dao.NewGenericDAO[*privatev1.HostType]().
-		SetLogger(b.logger).
-		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
-		Build()
 	if err != nil {
 		return
 	}
@@ -261,7 +251,6 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 		generic:                 generic,
 		catalogItemsDao:         catalogItemsDao,
 		templatesDao:            templatesDao,
-		hostTypesDao:            hostTypesDao,
 		instanceTypesDao:        instanceTypesDao,
 		subnetsDao:              subnetsDao,
 		virtualNetworksDao:      virtualNetworksDao,
@@ -339,21 +328,26 @@ func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, can
 	if err = s.validateSpec(candidate); err != nil {
 		return
 	}
-	if err = s.applyDefaultNetworkAttachments(ctx, candidate); err != nil {
+	ref := candidate.GetSpec().GetInstanceType()
+	if ref == nil {
+		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "spec.instance_type is mandatory")
 		return
 	}
-	if err = s.validateNetworkAttachments(ctx, candidate); err != nil {
+	if err = validatePlatformReference(ref, "bare metal instance type", " in spec.instance_type"); err != nil {
+		return
+	}
+	instanceType, err := resolveAndCanonicalizeReference(ctx, s.instanceTypesDao, candidate.GetMetadata(), ref,
+		"bare metal instance type", grpccodes.NotFound)
+	if err != nil {
+		return
+	}
+	if err = s.applyDefaultNetworkAttachments(ctx, candidate, instanceType); err != nil {
+		return
+	}
+	if err = s.validateNetworkAttachments(candidate, instanceType); err != nil {
 		return
 	}
 	normalizeSoleBareMetalAttachmentPrimary(candidate.GetSpec().GetNetworkAttachments())
-	if ref := candidate.GetSpec().GetInstanceType(); ref != nil {
-		if err = validatePlatformReference(ref, "bare metal instance type", " in spec.instance_type"); err != nil {
-			return
-		}
-		if _, err = resolveAndCanonicalizeReference(ctx, s.instanceTypesDao, candidate.GetMetadata(), ref, "bare metal instance type", grpccodes.NotFound); err != nil {
-			return
-		}
-	}
 	for i, attachment := range candidate.GetSpec().GetNetworkAttachments() {
 		source := fmt.Sprintf(" in spec.network_attachments[%d]", i)
 		subnet, resolveErr := resolveAndCanonicalizeReference(ctx, s.subnetsDao, candidate.GetMetadata(), attachment.GetSubnet(), "subnet", grpccodes.InvalidArgument)
@@ -568,10 +562,10 @@ func (s *PrivateBareMetalInstancesServer) validateSpec(bmi *privatev1.BareMetalI
 }
 
 // applyDefaultNetworkAttachments populates network_attachments with tenant defaults when
-// omitted at create time: default IPv4 Subnet, default SecurityGroup, first fabric-role
-// interface from the HostType.
+// omitted at create time: default IPv4 Subnet, default SecurityGroup, and the first fabric-role
+// port from the selected BareMetalInstanceType.
 func (s *PrivateBareMetalInstancesServer) applyDefaultNetworkAttachments(
-	ctx context.Context, bmi *privatev1.BareMetalInstance) error {
+	ctx context.Context, bmi *privatev1.BareMetalInstance, instanceType *privatev1.BareMetalInstanceType) error {
 	if len(bmi.GetSpec().GetNetworkAttachments()) > 0 {
 		return nil
 	}
@@ -603,7 +597,7 @@ func (s *PrivateBareMetalInstancesServer) applyDefaultNetworkAttachments(
 		return nil
 	}
 
-	ifaceName, err := s.resolveDefaultInterface(ctx, bmi)
+	ifaceName, err := s.resolveDefaultInterface(instanceType)
 	if err != nil {
 		return err
 	}
@@ -671,47 +665,15 @@ func (s *PrivateBareMetalInstancesServer) findDefaultSecurityGroup(
 	return nil, nil
 }
 
-// resolveDefaultInterface returns the first fabric-role interface name from the HostType
-// resolved via the spec.template → host_type chain. Returns ("", nil) if the chain cannot
-// be resolved (no template or no host_type). Returns an error if a HostType is found but
-// has no fabric-role interface.
-func (s *PrivateBareMetalInstancesServer) resolveDefaultInterface(
-	ctx context.Context, bmi *privatev1.BareMetalInstance) (string, error) {
-	templateID := refKey(bmi.GetSpec().GetTemplate())
-	if templateID == "" {
-		return "", nil
-	}
-	tmplResp, err := s.templatesDao.Get().SetId(templateID).Do(ctx)
-	if err != nil {
-		var notFoundErr *dao.ErrNotFound
-		if errors.As(err, &notFoundErr) {
-			return "", nil
-		}
-		s.logger.ErrorContext(ctx, "Failed to lookup template for default interface resolution",
-			slog.String("template_id", templateID), slog.Any("error", err))
-		return "", grpcstatus.Errorf(grpccodes.Internal, "failed to resolve default interface")
-	}
-	hostTypeID := tmplResp.GetObject().GetHostType()
-	if hostTypeID == "" {
-		return "", nil
-	}
-	htResp, err := s.hostTypesDao.Get().SetId(hostTypeID).Do(ctx)
-	if err != nil {
-		var notFoundErr *dao.ErrNotFound
-		if errors.As(err, &notFoundErr) {
-			return "", nil
-		}
-		s.logger.ErrorContext(ctx, "Failed to lookup host type for default interface resolution",
-			slog.String("host_type_id", hostTypeID), slog.Any("error", err))
-		return "", grpcstatus.Errorf(grpccodes.Internal, "failed to resolve default interface")
-	}
-	for _, ni := range htResp.GetObject().GetInterfaces() {
-		if strings.EqualFold(ni.GetRole(), "fabric") {
-			return ni.GetName(), nil
+// resolveDefaultInterface returns the first fabric-role port on the selected instance type.
+func (s *PrivateBareMetalInstancesServer) resolveDefaultInterface(instanceType *privatev1.BareMetalInstanceType) (string, error) {
+	for _, port := range instanceType.GetSpec().GetHardware().GetNetworkPorts() {
+		if port != nil && strings.EqualFold(port.GetRole(), "fabric") {
+			return port.GetName(), nil
 		}
 	}
 	return "", grpcstatus.Errorf(grpccodes.FailedPrecondition,
-		"host type '%s' has no fabric-role interface for default network attachment", hostTypeID)
+		"bare metal instance type '%s' has no fabric-role network port for default network attachment", instanceType.GetId())
 }
 
 // resolveCatalogItem finds the instance's published Catalog Item in the selected tenant/project
@@ -764,6 +726,10 @@ func (s *PrivateBareMetalInstancesServer) resolveCatalogItem(ctx context.Context
 // applyBareMetalTemplate validates the instance's Template parameters, fills omitted parameter
 // values from the Template, and stores the Template's actual ID, name, and scope.
 func (s *PrivateBareMetalInstancesServer) applyBareMetalTemplate(bmi *privatev1.BareMetalInstance, template *privatev1.BareMetalInstanceTemplate) error {
+	if bmi.GetSpec().GetInstanceType() == nil && template.GetInstanceType() != nil {
+		bmi.GetSpec().SetInstanceType(cloneMessage(template.GetInstanceType()))
+	}
+
 	providedParams := bmi.GetSpec().GetTemplateParameters()
 	if len(template.GetParameters()) != 0 || len(providedParams) != 0 {
 		actualParams, err := utils.ApplyTemplateParameterDefaultsAndValidate(
@@ -779,7 +745,7 @@ func (s *PrivateBareMetalInstancesServer) applyBareMetalTemplate(bmi *privatev1.
 	return nil
 }
 
-// validateBareMetalImmutability ensures template, catalog_item, disk_image, ssh_public_key, user_data, template_parameters,
+// validateBareMetalImmutability ensures template, catalog_item, instance_type, disk_image, ssh_public_key, user_data, template_parameters,
 // auto_external_ip_attachment, and network_attachments cannot be changed after creation.
 func validateBareMetalImmutability(
 	current, candidate *privatev1.BareMetalInstance,
@@ -787,6 +753,7 @@ func validateBareMetalImmutability(
 ) error {
 	updatingTemplate := updateIncludesField(mask, "spec.template")
 	updatingCatalogItem := updateIncludesField(mask, "spec.catalog_item")
+	updatingInstanceType := updateIncludesField(mask, "spec.instance_type")
 	updatingDiskImage := updateIncludesField(mask, "spec.disk_image")
 	updatingSshKey := updateIncludesField(mask, "spec.ssh_public_key")
 	updatingUserData := updateIncludesField(mask, "spec.user_data")
@@ -813,6 +780,10 @@ func validateBareMetalImmutability(
 			return err
 		}
 		newSpec.SetCatalogItem(ref)
+	}
+	if updatingInstanceType && !proto.Equal(existingSpec.GetInstanceType(), newSpec.GetInstanceType()) {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"cannot change spec.instance_type: instance type is immutable after creation")
 	}
 	if updatingDiskImage && !proto.Equal(existingSpec.GetDiskImage(), newSpec.GetDiskImage()) {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
@@ -907,8 +878,9 @@ func compareNetworkAttachmentsImmutability(existing, updated []*privatev1.BareMe
 	return nil
 }
 
-func (s *PrivateBareMetalInstancesServer) validateNetworkAttachments(ctx context.Context,
-	bmi *privatev1.BareMetalInstance) error {
+func (s *PrivateBareMetalInstancesServer) validateNetworkAttachments(
+	bmi *privatev1.BareMetalInstance, instanceType *privatev1.BareMetalInstanceType,
+) error {
 	attachments := bmi.GetSpec().GetNetworkAttachments()
 	if err := validateBareMetalNetworkAttachmentStructure("", attachments); err != nil {
 		return err
@@ -916,40 +888,7 @@ func (s *PrivateBareMetalInstancesServer) validateNetworkAttachments(ctx context
 	if len(attachments) == 0 {
 		return nil
 	}
-
-	// Interface-against-HostType validation (only when template has host_type).
-	templateID := refKey(bmi.GetSpec().GetTemplate())
-	if templateID == "" {
-		return nil
-	}
-	tmplResp, err := s.templatesDao.Get().SetId(templateID).Do(ctx)
-	if err != nil {
-		var notFoundErr *dao.ErrNotFound
-		if errors.As(err, &notFoundErr) {
-			return nil
-		}
-		s.logger.ErrorContext(ctx, "Failed to lookup template for interface validation",
-			slog.String("template_id", templateID), slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate network attachments")
-	}
-	hostTypeID := tmplResp.GetObject().GetHostType()
-	if hostTypeID == "" {
-		s.logger.WarnContext(ctx, "Template has no host_type, skipping interface validation",
-			slog.String("template_id", templateID))
-		return nil
-	}
-	htResp, err := s.hostTypesDao.Get().SetId(hostTypeID).Do(ctx)
-	if err != nil {
-		var notFoundErr *dao.ErrNotFound
-		if errors.As(err, &notFoundErr) {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"host type '%s' referenced by template '%s' not found", hostTypeID, templateID)
-		}
-		s.logger.ErrorContext(ctx, "Failed to lookup host type",
-			slog.String("host_type_id", hostTypeID), slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to lookup host type")
-	}
-	return validateBareMetalAttachmentsForHostType("", attachments, htResp.GetObject())
+	return validateBareMetalAttachmentsForInstanceType("", attachments, instanceType)
 }
 
 func validateBareMetalNetworkAttachmentStructure(source string, attachments []*privatev1.BareMetalNetworkAttachment) error {
@@ -985,30 +924,40 @@ func normalizeSoleBareMetalAttachmentPrimary(attachments []*privatev1.BareMetalN
 	attachments[0].SetPrimary(true)
 }
 
-func validateBareMetalAttachmentsForHostType(source string, attachments []*privatev1.BareMetalNetworkAttachment, hostType *privatev1.HostType) error {
+func validateBareMetalAttachmentsForInstanceType(
+	source string,
+	attachments []*privatev1.BareMetalNetworkAttachment,
+	instanceType *privatev1.BareMetalInstanceType,
+) error {
 	prefix := ""
 	if source != "" {
 		prefix = fmt.Sprintf("field '%s': ", source)
 	}
-	hostTypeID := hostType.GetId()
-	// Keep lifecycle interfaces visible for precise errors but exclude them from tenant-network capacity.
+	if instanceType == nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "%sinstance_type is mandatory", prefix)
+	}
+
+	instanceTypeID := instanceType.GetId()
 	interfaceRoles := make(map[string]string)
 	validInterfaces := make(map[string]bool)
-	for _, ni := range hostType.GetInterfaces() {
-		interfaceRoles[ni.GetName()] = ni.GetRole()
-		if !strings.EqualFold(ni.GetRole(), "lifecycle") {
-			validInterfaces[ni.GetName()] = true
+	for _, port := range instanceType.GetSpec().GetHardware().GetNetworkPorts() {
+		if port == nil {
+			continue
+		}
+		interfaceRoles[port.GetName()] = port.GetRole()
+		if !strings.EqualFold(port.GetRole(), "lifecycle") {
+			validInterfaces[port.GetName()] = true
 		}
 	}
 
 	if len(attachments) > len(validInterfaces) {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"%snumber of network attachments (%d) exceeds available interfaces (%d) on host type '%s'",
-			prefix, len(attachments), len(validInterfaces), hostTypeID)
+			"%snumber of network attachments (%d) exceeds available interfaces (%d) on instance type '%s'",
+			prefix, len(attachments), len(validInterfaces), instanceTypeID)
 	}
 
-	for i, a := range attachments {
-		iface := a.GetInterface()
+	for i, attachment := range attachments {
+		iface := attachment.GetInterface()
 		if iface == "" {
 			continue
 		}
@@ -1019,7 +968,7 @@ func validateBareMetalAttachmentsForHostType(source string, attachments []*priva
 				"%snetwork_attachments[%d]: interface '%s' has role 'lifecycle' and cannot be used for tenant networking", prefix, i, iface)
 		case !validInterfaces[iface]:
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"%snetwork_attachments[%d]: interface '%s' not found in host type '%s'", prefix, i, iface, hostTypeID)
+				"%snetwork_attachments[%d]: interface '%s' not found in instance type '%s'", prefix, i, iface, instanceTypeID)
 		}
 	}
 

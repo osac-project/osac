@@ -1,0 +1,76 @@
+---
+# Posts the "OSAC CI" check on the commit the merge queue builds, so that an OSAC CI which is required (it is not yet)
+# is reported on the commit the queue is waiting on. Without it a required OSAC CI would never appear on the queue's
+# commit and the entry would wait for its 180 minute timeout. Informational for now: the check is not required, so a
+# bug here cannot block a merge.
+#
+# The queue builds a commit on a branch named gh-readonly-queue/<base>/pr-<number>-<sha> and runs the workflows that
+# have a merge_group trigger on it. When one of them finishes, this workflow runs from the default branch (a
+# workflow_run always does) with the base repository token, reads the checks of that commit and posts the verdict on
+# it. Nothing of the pull request is checked out or run; the commit and the branch name come from the event and are
+# validated by the program (a full commit sha, a real queue branch name).
+#
+# workflow_run takes exact workflow names, no wildcards: list every workflow that reports a required check (the same
+# list as in osac-ci.yml). A workflow missing here only delays the verdict until another listed one finishes.
+#
+# Whether workflow_run fires for runs started by a merge_group has not been confirmed on a real queue yet; the first
+# queue entry after this merges answers it. workflow_dispatch posts the verdict for a given queue commit by hand.
+name: OSAC CI queue
+on:  # zizmor: ignore[dangerous-triggers] -- no pull request code is checked out or run; the event values reach the shell as env data only
+  workflow_run:
+    workflows:
+      - "Ansible Lint"
+      - "Build bare-metal-fulfillment-operator image"
+      - "Build container image"
+      - "Check generated code"
+      - "Check pull request"
+      - "Darwin Keychain Tests"
+      - "Dependency Review"
+      - "E2E BMaaS Full Install"
+      - "E2E CaaS Full Install"
+      - "E2E VMaaS Full Install"
+      - "Helm Lint"
+      - "Integration Tests"
+      - "label-gate"
+      - "pre-commit"
+      - "Unit Tests"
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Merge-queue commit to evaluate (40 hex digits)
+        required: true
+      branch:
+        description: Its queue branch, gh-readonly-queue/<base>/pr-<n>-<sha>
+        required: true
+
+permissions:
+  contents: read
+
+# One group per commit. A newer run reads newer state, so an older one may be cancelled.
+concurrency:
+  group: osac-ci-queue-${{ github.event.workflow_run.head_sha || inputs.sha }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    # Only runs of a merge group on a queue branch.
+    if: >-
+      github.repository == 'osac-project/osac' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.event == 'merge_group' &&
+        startsWith(github.event.workflow_run.head_branch, 'gh-readonly-queue/')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read  # the action is fetched from osac-ci by the runner; nothing of this repository is checked out
+      checks: write  # post the OSAC CI check run on the queue commit
+    steps:
+      - uses: osac-project/osac-ci/.github/actions/publish-queue@859a8fe2b26b2d72d654d6d627702d4d7ef5489e  # osac-ci main, with the queue action
+        with:
+          github-token: ${{ github.token }}
+          repo: ${{ github.repository }}
+          sha: ${{ github.event.workflow_run.head_sha || inputs.sha }}
+          branch: ${{ github.event.workflow_run.head_branch || inputs.branch }}
+          policy: policy/osac.yml
+          note: "Informational for now: this check is not required to merge."

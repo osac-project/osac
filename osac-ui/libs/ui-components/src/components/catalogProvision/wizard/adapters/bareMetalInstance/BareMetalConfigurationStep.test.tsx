@@ -3,6 +3,7 @@ import { screen, waitFor } from '@testing-library/react';
 import { Formik } from 'formik';
 import { describe, expect, it } from 'vitest';
 
+import type { BareMetalInstanceCatalogItem } from '@osac/types';
 import { DiskImageLifecycle, DiskImageSchema } from '@osac/types';
 
 import BareMetalConfigurationStep from './BareMetalConfigurationStep';
@@ -45,5 +46,33 @@ describe('BareMetalConfigurationStep', () => {
     await user.click(screen.getByRole('option', { name: /rhel/ }));
 
     await waitFor(() => expect(diskImageSelect).toHaveTextContent('rhel'));
+  });
+
+  it('disables instance type selection when the catalog item locks its value', async () => {
+    const catalogItem = {
+      fields: {
+        instanceType: {
+          behavior: {
+            case: 'locked',
+            value: { id: 'instance-type-id', name: 'bare-metal.large', shared: true },
+          },
+        },
+      },
+    } as unknown as BareMetalInstanceCatalogItem;
+
+    renderWithProviders(
+      <Formik initialValues={createEmptyBareMetalInstanceValues()} onSubmit={() => undefined}>
+        <BareMetalConfigurationStep catalogItem={catalogItem} />
+      </Formik>,
+      {
+        apiFixtures: { diskImages },
+        transportOverrides: {
+          onBaremetalInstanceTypeList: () => ({ items: [], size: 0, total: 0 }),
+        },
+      },
+    );
+
+    const instanceTypeSelect = await screen.findByLabelText('Instance type');
+    expect(instanceTypeSelect).toBeDisabled();
   });
 });

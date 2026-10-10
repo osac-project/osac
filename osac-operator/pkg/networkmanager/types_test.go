@@ -50,7 +50,7 @@ var _ = Describe("ParseConfigMap", func() {
 		Expect(mgr.ConfigMapRef).To(Equal(types.NamespacedName{Namespace: "osac", Name: "osac-network-fabric-manager-netris"}))
 	})
 
-	It("parses a valid k8s manager ConfigMap with multiple capabilities", func() {
+	It("parses a valid k8s manager ConfigMap with the IPv4 capability", func() {
 		cm := &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "osac-network-k8s-manager-cudn-localnet",
@@ -60,7 +60,7 @@ var _ = Describe("ParseConfigMap", func() {
 			Data: map[string]string{
 				"name":         "cudn_localnet",
 				"description":  "CUDN LocalNet bridge",
-				"capabilities": "ipv4,ipv6,dualStack",
+				"capabilities": "ipv4",
 			},
 		}
 
@@ -68,11 +68,7 @@ var _ = Describe("ParseConfigMap", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(mgr.Name).To(Equal("cudn_localnet"))
 		Expect(mgr.Type).To(Equal(networkmanager.K8sManager))
-		Expect(mgr.Capabilities).To(ConsistOf(
-			networkmanager.CapabilityIPv4,
-			networkmanager.CapabilityIPv6,
-			networkmanager.CapabilityDualStack,
-		))
+		Expect(mgr.Capabilities).To(ConsistOf(networkmanager.CapabilityIPv4))
 	})
 
 	It("returns error for nil ConfigMap", func() {
@@ -165,41 +161,43 @@ var _ = Describe("ParseConfigMap", func() {
 		Expect(err.Error()).To(ContainSubstring("capabilities field must not be empty"))
 	})
 
-	It("expands dualStack to include ipv4 and ipv6", func() {
+	It("rejects the IPv6 capability", func() {
 		cm := &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "osac"},
 			Data: map[string]string{
-				"name":         "ds-only",
+				"name":         "ipv6-only",
+				"capabilities": "ipv6",
+			},
+		}
+
+		_, err := networkmanager.ParseConfigMap(cm, networkmanager.FabricManager)
+		Expect(err).To(MatchError(ContainSubstring("ipv6")))
+	})
+
+	It("rejects the dual-stack capability", func() {
+		cm := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "osac"},
+			Data: map[string]string{
+				"name":         "dual-stack",
 				"capabilities": "dualStack",
 			},
 		}
 
-		mgr, err := networkmanager.ParseConfigMap(cm, networkmanager.FabricManager)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(mgr.Capabilities).To(ConsistOf(
-			networkmanager.CapabilityDualStack,
-			networkmanager.CapabilityIPv4,
-			networkmanager.CapabilityIPv6,
-		))
+		_, err := networkmanager.ParseConfigMap(cm, networkmanager.FabricManager)
+		Expect(err).To(MatchError(ContainSubstring("dualStack")))
 	})
 
-	It("does not duplicate ipv4/ipv6 when dualStack is listed with them", func() {
+	It("rejects unsupported capability combinations", func() {
 		cm := &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "osac"},
 			Data: map[string]string{
-				"name":         "all-three",
-				"capabilities": "ipv4,ipv6,dualStack",
+				"name":         "mixed-capabilities",
+				"capabilities": "ipv4,dpuSupport",
 			},
 		}
 
-		mgr, err := networkmanager.ParseConfigMap(cm, networkmanager.FabricManager)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(mgr.Capabilities).To(ConsistOf(
-			networkmanager.CapabilityIPv4,
-			networkmanager.CapabilityIPv6,
-			networkmanager.CapabilityDualStack,
-		))
-		Expect(mgr.Capabilities).To(HaveLen(3))
+		_, err := networkmanager.ParseConfigMap(cm, networkmanager.FabricManager)
+		Expect(err).To(MatchError(ContainSubstring("dpuSupport")))
 	})
 
 	It("deduplicates repeated capabilities", func() {
@@ -207,7 +205,7 @@ var _ = Describe("ParseConfigMap", func() {
 			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "osac"},
 			Data: map[string]string{
 				"name":         "duped",
-				"capabilities": "ipv4,ipv6,ipv4",
+				"capabilities": "ipv4,ipv4",
 			},
 		}
 
@@ -215,7 +213,6 @@ var _ = Describe("ParseConfigMap", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(mgr.Capabilities).To(Equal([]networkmanager.Capability{
 			networkmanager.CapabilityIPv4,
-			networkmanager.CapabilityIPv6,
 		}))
 	})
 
@@ -224,13 +221,13 @@ var _ = Describe("ParseConfigMap", func() {
 			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "osac"},
 			Data: map[string]string{
 				"name":         "spacey",
-				"capabilities": " ipv4 , ipv6 ",
+				"capabilities": " ipv4 ",
 			},
 		}
 
 		mgr, err := networkmanager.ParseConfigMap(cm, networkmanager.FabricManager)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(mgr.Capabilities).To(ConsistOf(networkmanager.CapabilityIPv4, networkmanager.CapabilityIPv6))
+		Expect(mgr.Capabilities).To(ConsistOf(networkmanager.CapabilityIPv4))
 	})
 
 	It("handles nil data map", func() {

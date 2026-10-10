@@ -20,8 +20,10 @@ import (
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -201,6 +203,48 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 			Id: createResp.Object.Id,
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+	})
+
+	It("archives a tenant only after both cleanup barriers are removed and rejects stale locked updates", func() {
+		created, err := tenantsServer.Create(ctx, privatev1.TenantsCreateRequest_builder{
+			Object: privatev1.Tenant_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:       "barrier-tenant",
+					Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		id := created.GetObject().GetId()
+		projects, err := projectsServer.List(ctx, privatev1.ProjectsListRequest_builder{
+			Filter: new("this.metadata.tenant == 'barrier-tenant'"),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		for _, project := range projects.GetItems() {
+			_, err = projectsServer.Delete(ctx, privatev1.ProjectsDeleteRequest_builder{Id: project.GetId()}.Build())
+			Expect(err).NotTo(HaveOccurred())
+		}
+		_, err = tenantsServer.Delete(ctx, privatev1.TenantsDeleteRequest_builder{Id: id}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		deleting, err := tenantsServer.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		stale := proto.Clone(deleting.GetObject()).(*privatev1.Tenant)
+		first := proto.Clone(stale).(*privatev1.Tenant)
+		first.GetMetadata().SetFinalizers([]string{finalizers.TenantOnboarding})
+		mask := &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}}
+		_, err = tenantsServer.Update(ctx, privatev1.TenantsUpdateRequest_builder{Object: first, UpdateMask: mask, Lock: true}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		remaining, err := tenantsServer.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(remaining.GetObject().GetMetadata().GetFinalizers()).To(ConsistOf(finalizers.TenantOnboarding))
+		stale.GetMetadata().SetFinalizers(nil)
+		_, err = tenantsServer.Update(ctx, privatev1.TenantsUpdateRequest_builder{Object: stale, UpdateMask: mask, Lock: true}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.Aborted))
+		remaining.GetObject().GetMetadata().SetFinalizers(nil)
+		_, err = tenantsServer.Update(ctx, privatev1.TenantsUpdateRequest_builder{Object: remaining.GetObject(), UpdateMask: mask, Lock: true}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		_, err = tenantsServer.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
 	})
 
 	It("Updates a tenant", func() {

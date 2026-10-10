@@ -137,6 +137,12 @@ images:
     tag: v1.37.1
     pullPolicy: IfNotPresent
 
+# Envoy ingress proxy configuration:
+ingressProxy:
+
+  # Number of Envoy worker threads. Keep this configurable for deployments with different capacity needs.
+  concurrency: 4
+
 # Database connection configuration. The service expects an external PostgreSQL database to be available. The database
 # should be created before installing this chart.
 database:

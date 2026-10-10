@@ -1,0 +1,219 @@
+---
+- name: Setup block with always cleanup
+  block:
+    - name: Compute assignment key for this backend
+      ansible.builtin.set_fact:
+        _current_backend_id: "{{ _provider_tiers[0].backend_id }}"
+        _assignment_key: >-
+          {{ ((_provider_tiers[0].backend_id ~ '|' ~ tenant_name)
+              | hash('sha256'))[:16] | lower }}
+
+    - name: Discover prepared runtime Secret
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "osac-{{ _assignment_key }}-credentials"
+        namespace: "{{ ontap_storage_config_namespace }}"
+      register: _prepared_secret_result
+      no_log: true
+
+    - name: Fail if no prepared Secret found
+      ansible.builtin.fail:
+        msg: "{{ _error | to_json }}"
+      when: _prepared_secret_result.resources | length == 0
+      vars:
+        _error:
+          code: PreparedSvmNotFound
+          message: "Prepared secret for assignment {{ _assignment_key }} not found."
+          assignment_key: "{{ _assignment_key }}"
+          retryable: false
+
+    - name: Extract prepared secret
+      ansible.builtin.set_fact:
+        _prepared_secret: "{{ _prepared_secret_result.resources[0] }}"
+      no_log: true
+
+    - name: Set expected SVM name
+      ansible.builtin.set_fact:
+        _expected_svm_name: "osac-{{ _assignment_key }}-svm"
+
+    - name: Discover SVM via ONTAP REST using discovery credentials
+      ansible.builtin.uri:
+        url: "{{ _provider_backend_connections[_current_backend_id].endpoint }}/api/svm/svms?name={{ _expected_svm_name }}"
+        method: GET
+        user: "{{ _provider_backend_connections[_current_backend_id].username }}"
+        password: "{{ _provider_backend_connections[_current_backend_id].password }}"
+        force_basic_auth: true
+        validate_certs: false
+        timeout: "{{ ontap_storage_probe_timeout | default(10) }}"
+        status_code: [200]
+        return_content: true
+      register: _svm_discovery
+      no_log: true
+      ignore_errors: true
+
+    - name: Handle invalid discovery credentials
+      ansible.builtin.fail:
+        msg: "{{ _error | to_json }}"
+      when: >-
+        _svm_discovery.failed and
+        (_svm_discovery.status | default(0) == 401 or _svm_discovery.status | default(0) == 403)
+      vars:
+        _error:
+          code: OntapPermissionDenied
+          message: "Authentication failed for ONTAP discovery endpoint for assignment {{ _assignment_key }}."
+          assignment_key: "{{ _assignment_key }}"
+          retryable: false
+
+    - name: Handle unreachable discovery endpoint
+      ansible.builtin.fail:
+        msg: "{{ _error | to_json }}"
+      when: >-
+        _svm_discovery.failed and
+        (_svm_discovery.status | default(0) != 401 and _svm_discovery.status | default(0) != 403)
+      vars:
+        _error:
+          code: OntapEndpointUnreachable
+          message: "Failed to connect to ONTAP discovery endpoint for assignment {{ _assignment_key }}."
+          assignment_key: "{{ _assignment_key }}"
+          retryable: true
+
+    - name: Parse SVM discovery response
+      ansible.builtin.set_fact:
+        _svm_info: "{{ _svm_discovery.json }}"
+      no_log: true
+
+    - name: Check if SVM exists
+      ansible.builtin.fail:
+        msg: "{{ _error | to_json }}"
+      when: _svm_info.num_records == 0
+      vars:
+        _error:
+          code: PreparedSvmConfigMismatch
+          message: "SVM {{ _expected_svm_name }} for assignment {{ _assignment_key }} does not exist in the backend."
+          assignment_key: "{{ _assignment_key }}"
+          retryable: false
+
+    - name: Extract SVM UUID
+      ansible.builtin.set_fact:
+        _svm_uuid: "{{ _svm_info.records[0].uuid }}"
+
+    - name: Verify prepared Secret annotations match discovery
+      ansible.builtin.fail:
+        msg: "{{ _error | to_json }}"
+      when: >-
+        _prepared_secret.metadata.annotations['osac.openshift.io/storage-backend'] | default('') != _current_backend_id or
+        _prepared_secret.metadata.annotations['osac.openshift.io/tenant'] | default('') != tenant_name or
+        _prepared_secret.metadata.annotations['osac.openshift.io/storage-resource-id'] | default('') != _svm_uuid
+      vars:
+        _error:
+          code: PreparedSvmConfigMismatch
+          message: "Prepared secret annotations for {{ _assignment_key }} do not match the expected backend, tenant, or discovered SVM UUID {{ _svm_uuid }}."
+          assignment_key: "{{ _assignment_key }}"
+          retryable: false
+
+    - name: Validate missing credentials in prepared secret
+      ansible.builtin.fail:
+        msg: "{{ _error | to_json }}"
+      when: >-
+        _prepared_secret.data is not defined or
+        'username' not in _prepared_secret.data or
+        'password' not in _prepared_secret.data
+      vars:
+        _error:
+          code: PreparedSvmConfigMismatch
+          message: "Prepared secret for assignment {{ _assignment_key }} is missing runtime credentials (username, password)."
+          assignment_key: "{{ _assignment_key }}"
+          retryable: false
+
+    - name: Write CA cert to temp file if provided
+      ansible.builtin.copy:
+        content: "{{ _prepared_secret.data['ca.crt'] | b64decode }}"
+        dest: "/tmp/ontap-ca-{{ _assignment_key }}.crt"
+        mode: '0600'
+      when: "'ca.crt' in _prepared_secret.data"
+      no_log: true
+      register: _ca_cert_file
+
+    - name: Verify assignment state is available or already claimed by this tenant
+      ansible.builtin.set_fact:
+        _current_state: "{{ _prepared_secret.metadata.annotations['osac.openshift.io/storage-assignment-state'] | default('unknown') }}"
+        _claimed_tenant: "{{ _prepared_secret.metadata.annotations['osac.openshift.io/storage-tenant-uid'] | default('') }}"
+
+    - name: Fail if already claimed by another tenant
+      ansible.builtin.fail:
+        msg: "{{ _error | to_json }}"
+      when: >
+        _current_state != 'available' and
+        not (_current_state == 'claimed' and _claimed_tenant == tenant_uid)
+      vars:
+        _error:
+          code: PreparedSvmClaimConflict
+          message: "Assignment {{ _assignment_key }} is in state {{ _current_state }} and claimed by another tenant."
+          assignment_key: "{{ _assignment_key }}"
+          retryable: false
+
+    - name: Claim prepared Secret (atomic patch)
+      kubernetes.core.k8s:
+        state: patched
+        api_version: v1
+        kind: Secret
+        name: "{{ _prepared_secret.metadata.name }}"
+        namespace: "{{ ontap_storage_config_namespace }}"
+        resource_definition:
+          metadata:
+            resourceVersion: "{{ _prepared_secret.metadata.resourceVersion | string }}"
+            annotations:
+              osac.openshift.io/storage-assignment-state: claimed
+              osac.openshift.io/storage-tenant-uid: "{{ tenant_uid }}"
+              osac.openshift.io/storage-claimed-at: "{{ now(utc=true) | string }}"
+      when: _current_state == 'available'
+      no_log: true
+
+    - name: Create Hub Lifecycle Secret
+      kubernetes.core.k8s:
+        state: present
+        api_version: v1
+        kind: Secret
+        name: "ontap-tenant-{{ _assignment_key }}"
+        namespace: "{{ ontap_storage_config_namespace }}"
+        resource_definition:
+          metadata:
+            labels:
+              osac.openshift.io/tenant: "{{ tenant_name }}"
+              osac.openshift.io/storage-provider: ontap
+              backend-id: "{{ _current_backend_id }}"
+          data:
+            assignment_key: "{{ _assignment_key | b64encode }}"
+            tenant_uid: "{{ tenant_uid | b64encode }}"
+            svm_uuid: "{{ _svm_uuid | b64encode }}"
+            svm_name: "{{ _expected_svm_name | b64encode }}"
+            management_lif: "{{ (_provider_backend_connections[_current_backend_id].endpoint | regex_replace('^https?://', '')) | b64encode }}"
+            prepared_secret_name: "{{ _prepared_secret.metadata.name | b64encode }}"
+            prepared_secret_uid: "{{ _prepared_secret.metadata.uid | b64encode }}"
+            cluster_name: "{{ _cluster_name | default('unknown') | b64encode }}"
+            tenant_namespace_ref: "{{ tenant_namespace | b64encode }}"
+            lifecycle_stage: "{{ 'claimed' | b64encode }}"
+      no_log: true
+
+    - name: Clean up temporary CA file
+      ansible.builtin.file:
+        path: "/tmp/ontap-ca-{{ _assignment_key }}.crt"
+        state: absent
+      when: "'ca.crt' in _prepared_secret.data"
+      no_log: true
+
+    - name: Set tenant config output fact
+      ansible.builtin.set_fact:
+        storage_provider_tenant_config:
+          assignment_key: "{{ _assignment_key }}"
+          status: "claimed"
+
+  always:
+    - name: Clear credential-bearing facts
+      ansible.builtin.set_fact:
+        _prepared_secret_result: {}
+        _prepared_secret: {}
+        _svm_discovery: {}
+        _svm_info: {}
+      no_log: true

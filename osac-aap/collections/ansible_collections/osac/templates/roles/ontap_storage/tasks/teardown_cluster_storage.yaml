@@ -1,0 +1,59 @@
+---
+- name: Teardown cluster storage block with always cleanup
+  block:
+    - name: Compute assignment key for this backend
+      ansible.builtin.set_fact:
+        _current_backend_id: "{{ _provider_tiers[0].backend_id }}"
+        _assignment_key: >-
+          {{ ((_provider_tiers[0].backend_id ~ '|' ~ tenant_name)
+              | hash('sha256'))[:16] | lower }}
+
+    - name: Delete StorageClasses for this tenant
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        label_selectors:
+          - "osac.openshift.io/tenant={{ tenant_name }}"
+          - "osac.openshift.io/storage-provider=ontap"
+        delete_all: true
+
+    - name: Compute unique protocols
+      ansible.builtin.set_fact:
+        _ontap_protocols: "{{ _provider_tiers | map(attribute='protocol') | unique | list }}"
+
+    - name: Delete TridentBackendConfig
+      kubernetes.core.k8s:
+        state: absent
+        api_version: trident.netapp.io/v1
+        kind: TridentBackendConfig
+        name: "ontap-{{ item }}-{{ _assignment_key }}"
+        namespace: trident
+      loop: "{{ _ontap_protocols }}"
+
+    - name: Wait for TridentBackendConfig to be removed
+      kubernetes.core.k8s_info:
+        api_version: trident.netapp.io/v1
+        kind: TridentBackendConfig
+        name: "ontap-{{ item }}-{{ _assignment_key }}"
+        namespace: trident
+      register: _tbc_check
+      until: _tbc_check.resources | length == 0
+      retries: 12
+      delay: 5
+      loop: "{{ _ontap_protocols }}"
+
+    - name: Delete CSI Secret
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "ontap-csi-{{ _assignment_key }}"
+        namespace: trident
+      no_log: true
+
+  always:
+    - name: Clear credential-bearing facts
+      ansible.builtin.set_fact:
+        _tbc_check: {}
+      no_log: true

@@ -1,0 +1,122 @@
+name: Nightly UI Buf compatibility
+
+on:
+  schedule:
+    # Run after the repository's nightly build has started, avoiding a runner
+    # burst at the exact same minute while still checking every night.
+    - cron: '30 3 * * *'
+
+concurrency:
+  group: nightly-ui-buf-compatibility
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  ui-buf-compatibility:
+    name: Test newest UI Buf release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read  # checkout only; a separate app token pushes the tested branch
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1  # v4.3.0
+        with:
+          run_install: false
+          package_json_file: osac-ui/package.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version-file: osac-ui/package.json
+          cache: pnpm
+          cache-dependency-path: osac-ui/pnpm-lock.yaml
+
+      - name: Install UI dependencies
+        working-directory: osac-ui
+        run: pnpm install --frozen-lockfile
+
+      - name: Check for a newer BSR release
+        id: buf-release
+        env:
+          BUF_BIN: osac-ui/libs/types/node_modules/.bin/buf
+        run: .github/scripts/check-ui-buf-release.sh
+
+      - name: Update UI Buf module pins
+        if: steps.buf-release.outputs.update-available == 'true'
+        env:
+          UI_BUF_VERSION: ${{ steps.buf-release.outputs.latest-version }}
+        run: printf '%s\n' "$UI_BUF_VERSION" > osac-ui/libs/types/.buf-api-version
+
+      - name: Regenerate UI types
+        if: steps.buf-release.outputs.update-available == 'true'
+        working-directory: osac-ui
+        run: pnpm gen-types
+
+      - name: Run UI typecheck
+        if: steps.buf-release.outputs.update-available == 'true'
+        working-directory: osac-ui
+        run: pnpm run typecheck
+
+      - name: Run UI lint
+        if: steps.buf-release.outputs.update-available == 'true'
+        working-directory: osac-ui
+        run: pnpm lint
+
+      - name: Run UI tests
+        if: steps.buf-release.outputs.update-available == 'true'
+        working-directory: osac-ui
+        run: pnpm test
+
+      - name: Build the UI
+        if: steps.buf-release.outputs.update-available == 'true'
+        working-directory: osac-ui
+        run: pnpm build
+
+      - name: Summarize compatibility check
+        if: always()
+        env:
+          CURRENT_VERSION: ${{ steps.buf-release.outputs.current-version }}
+          LATEST_VERSION: ${{ steps.buf-release.outputs.latest-version }}
+          UPDATE_AVAILABLE: ${{ steps.buf-release.outputs.update-available }}
+        run: |
+          {
+            echo '## Nightly UI Buf compatibility'
+            echo
+            echo "- Configured release: ${CURRENT_VERSION:-unknown}"
+            echo "- Newest shared BSR release: ${LATEST_VERSION:-unknown}"
+            if [[ "${UPDATE_AVAILABLE:-false}" == 'true' ]]; then
+              echo '- Result: regenerated types and ran typecheck, lint, tests, and build.'
+              echo
+              echo '### Generated diff summary'
+              git diff --stat -- osac-ui/libs/types/.buf-api-version osac-ui/libs/types/src
+            else
+              echo '- Result: no newer shared stable BSR release was available.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Generate osac-ci app token
+        if: steps.buf-release.outputs.update-available == 'true'
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          app-id: '4966101'
+          private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
+
+      - name: Create update PR; auto-queue will merge
+        if: steps.buf-release.outputs.update-available == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
+          PUSH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          CURRENT_VERSION: ${{ steps.buf-release.outputs.current-version }}
+          VERSION: ${{ steps.buf-release.outputs.latest-version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: .github/scripts/create-ui-buf-update-pr.sh

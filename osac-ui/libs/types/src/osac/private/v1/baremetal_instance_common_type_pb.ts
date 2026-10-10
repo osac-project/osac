@@ -62,8 +62,8 @@ export type BareMetalNetworkAttachment = Message<"osac.private.v1.BareMetalNetwo
   interface?: string | undefined;
 
   /**
-   * Designates this attachment as the default gateway for multi-NIC instances.
-   * When omitted on a single-attachment instance, that attachment is implicitly primary.
+   * Designates this attachment as the default gateway.
+   * With a single attachment, omit primary or set primary: true; primary: false is rejected.
    *
    * @generated from field: optional bool primary = 4;
    */

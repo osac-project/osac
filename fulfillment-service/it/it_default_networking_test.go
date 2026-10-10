@@ -438,6 +438,8 @@ var _ = Describe("Canonical networking Hub resolution", func() {
 
 	It("keeps a multiple-Hub deployment pending without selecting a Hub", func(ctx context.Context) {
 		createTestHub(ctx, hubsClient, fmt.Sprintf("additional-hub-%s", uuid.New()))
+		By("clearing a Hub that may have been selected before the additional Hub was created")
+		setNetworkClassCanonicalHub(ctx, networkClassesClient, networkClassID, "")
 
 		expectNetworkClassStatus(
 			ctx,
@@ -454,6 +456,8 @@ var _ = Describe("Canonical networking Hub resolution", func() {
 	It("retries a pending tenant resource when the canonical Hub becomes available", func(ctx context.Context) {
 		additionalHubID := fmt.Sprintf("additional-hub-%s", uuid.New())
 		createTestHub(ctx, hubsClient, additionalHubID)
+		By("clearing a Hub that may have been selected before the additional Hub was created")
+		setNetworkClassCanonicalHub(ctx, networkClassesClient, networkClassID, "")
 
 		expectNetworkClassStatus(
 			ctx,

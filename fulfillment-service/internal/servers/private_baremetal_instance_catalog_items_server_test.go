@@ -515,4 +515,20 @@ var _ = Describe("Bare Metal Instance Catalog Item policy application", func() {
 		Expect(instanceType.GetName()).To(Equal("host"))
 		Expect(diskImage.GetName()).To(Equal("disk-image"))
 	})
+
+	It("defers attachment type validation for an editable type without a default", func() {
+		template := privatev1.BareMetalInstanceTemplate_builder{
+			InstanceType: privatev1.BareMetalInstanceTypeReference_builder{
+				Id: "template-type",
+			}.Build(),
+		}.Build()
+		policy := privatev1.BareMetalInstanceTypeReferenceFieldPolicy_builder{
+			Editable: privatev1.EditableBareMetalInstanceTypeReferenceField_builder{}.Build(),
+		}.Build()
+
+		ref, source, err := effectiveBareMetalInstanceTypeReference(template, policy)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(ref).To(BeNil())
+		Expect(source).To(BeEmpty())
+	})
 })

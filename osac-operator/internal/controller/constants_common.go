@@ -43,6 +43,11 @@ const (
 	// already be gone at delete time.
 	osacK8sImplementationStrategyAnnotation = osacPrefix + "/k8s-implementation-strategy"
 
+	// osacSkipK8sManagerAnnotation explicitly suppresses the K8s manager for a Subnet.
+	// The Subnet controller honors it only for cudn_evpn, the Phase 1 manager that
+	// supports one CUDN per VirtualNetwork.
+	osacSkipK8sManagerAnnotation = osacPrefix + "/skip-k8s-manager"
+
 	// osacExternalIPPoolNameAnnotation is the K8s resource name of the parent ExternalIPPool.
 	// set on ExternalIP CRs
 	osacExternalIPPoolNameAnnotation = osacPrefix + "/externalippool-name"

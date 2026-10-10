@@ -1,5 +1,6 @@
 wait_for_dns_retries: 180
 wait_for_dns_delay: 10
+wait_for_dns_server: ""
 wait_for_cluster_retries: 180
 wait_for_cluster_delay: 10
 # 30 min (60 * 30s) was confirmed too tight on genuinely fresh/cold EC2

@@ -18,7 +18,7 @@
         delete_step_hosted_cluster_override:
           name: osac.workflows.workflow_helpers
           tasks_from: noop.yml
-        delete_step_cluster_network_override:
+        delete_step_cluster_infra_override:
           name: osac.workflows.workflow_helpers
           tasks_from: noop.yml
         delete_step_external_access_override:
@@ -56,9 +56,15 @@
           - template_id == "osac.templates.ocp_ci_small"
         fail_msg: "CaaS template ID not extracted correctly"
 
-    - name: Verify CaaS does not dispatch the pool infrastructure phase
+    - name: Verify CaaS dispatches the CI cluster infrastructure step
       ansible.builtin.assert:
         that:
-          - delete_step_cluster_infra_default is not defined
-          - delete_step_cluster_network_default is defined
+          - delete_step_cluster_infra_default is defined
+          - delete_step_cluster_infra_default.name == "osac.templates.ocp_ci_small"
+          - delete_step_cluster_infra_default.tasks_from == "ci_cluster_infra_delete.yaml"
+          - delete_step_cluster_network_default is not defined
           - delete_step_pre_delete_hook_default.tasks_from == "noop.yaml"
+        fail_msg: >-
+          ocp_ci_small must define delete_step_cluster_infra_default pointing
+          to ci_cluster_infra_delete.yaml and must not define the old
+          delete_step_cluster_network_default (OSAC-5697).

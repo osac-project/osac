@@ -1,1 +1,7 @@
 ocp_release_image: quay.io/openshift-release-dev/ocp-release:4.17.0-multi
+
+# External access defaults (mirrored from osac.service.external_access)
+external_access_resource_wait_retries: 360
+external_access_resource_wait_delay: 5
+external_access_dns_ttl: 1800
+external_access_agent_namespace: "hardware-inventory"

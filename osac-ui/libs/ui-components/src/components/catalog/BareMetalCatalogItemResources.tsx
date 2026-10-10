@@ -76,7 +76,7 @@ const BareMetalCatalogItemResources = ({
         <DescriptionListDescription>{gpuLabel || '-'}</DescriptionListDescription>
       </DescriptionListGroup>
       <DescriptionListGroup>
-        <DescriptionListTerm>{t('Disk image')}</DescriptionListTerm>
+        <DescriptionListTerm>{t('OS image')}</DescriptionListTerm>
         <DescriptionListDescription>
           <Flex
             flexWrap={{ default: 'nowrap' }}

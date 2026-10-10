@@ -16,6 +16,7 @@ import {
 
 import {
   attachmentExternalIpIdsFilter,
+  bareMetalInstanceAttachmentsFilter,
   buildAttachedTargetsByExternalIpId,
   computeInstanceAttachmentFilter,
   natGatewayExternalIpIdsFilter,
@@ -78,6 +79,13 @@ describe('external IP list join helpers', () => {
 
   it('filters VM attachments by the compute instance', () => {
     expect(computeInstanceAttachmentFilter('vm-1')).toBe('this.spec.compute_instance.id == "vm-1"');
+  });
+
+  it('filters bare metal attachments by instance ids', () => {
+    expect(bareMetalInstanceAttachmentsFilter(['bmi-2', 'bmi-1'])).toBe(
+      'this.spec.baremetal_instance.id in ["bmi-2", "bmi-1"]',
+    );
+    expect(bareMetalInstanceAttachmentsFilter([])).toBe('false');
   });
 
   it('maps an attachment to the target resource link', () => {

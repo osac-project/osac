@@ -15,6 +15,7 @@ import {
 import { useUserPreferences } from './use-user-preferences';
 import { useTranslation } from './useTranslation';
 import { useGetResource } from '../api/use-resource';
+import { DEFAULT_PROJECT_FILTER_VALUE } from '../components/Project/utils';
 import QueryErrorState from '../components/Resource/QueryErrorState';
 
 interface SessionContextValue {
@@ -64,7 +65,11 @@ export const SessionProvider = ({ children, role, username, tenantId }: SessionP
 
   const [projects, setProjectsState] = useState<string[]>(() => {
     const initial = param ?? storedProjects;
-    return initial ? initial.split(',') : [];
+    return initial
+      ? initial
+          .split(',')
+          .map((segment) => (segment === DEFAULT_PROJECT_FILTER_VALUE ? '' : segment))
+      : [];
   });
 
   const setProjects = useCallback(

@@ -18,7 +18,7 @@ import ResourceNameField from '@osac/ui-components/components/Resource/ResourceN
 import { useSession } from '@osac/ui-components/hooks/use-session';
 
 import CatalogItemActionsMenu from './CatalogItemActionsMenu';
-import { CatalogItem, catalogItemDetailsPath } from './catalogItemDisplay';
+import { CatalogItem, catalogItemDetailsPath, getCatalogItemKind } from './catalogItemDisplay';
 import { catalogItemTypeBadgeLabel } from './catalogItemDisplay';
 import { useTranslation } from '../../hooks/useTranslation';
 import { CatalogItemIcon } from '../../icons';
@@ -90,7 +90,7 @@ const CatalogItemCard = ({ item, selection, resourceLookups }: CatalogItemCardPr
             : undefined
         }
       >
-        <CatalogItemIcon kind={item.$typeName} />
+        <CatalogItemIcon kind={getCatalogItemKind(item)} isActive />
       </CardHeader>
       <CardTitle id={titleId}>
         <ResourceNameField

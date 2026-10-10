@@ -3,6 +3,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { SessionProvider, useSession } from './use-session';
+import { DEFAULT_PROJECT_FILTER_VALUE } from '../components/Project/utils';
 import { TestProviders } from '../test-utils/TestProviders';
 
 const makeWrapper = (initialEntries: string[] = ['/']) => {
@@ -54,6 +55,15 @@ describe('useSession', () => {
 
     await waitFor(() => expect(result.current?.projects).toEqual(['a', 'b']));
     expect(result.current.projects).toEqual(['a', 'b']);
+  });
+
+  it('normalizes the default project sentinel from the URL param', async () => {
+    const { result } = renderHook(() => useSession(), {
+      wrapper: makeWrapper([`/?project=${DEFAULT_PROJECT_FILTER_VALUE}`]),
+    });
+
+    await waitFor(() => expect(result.current?.projects).toEqual(['']));
+    expect(result.current.projects).toEqual(['']);
   });
 
   it('does not re-read the URL param after mount', async () => {

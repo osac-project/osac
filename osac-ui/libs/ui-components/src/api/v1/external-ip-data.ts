@@ -36,6 +36,14 @@ export const computeInstanceAttachmentFilter = (computeInstanceId: string) =>
       `this.spec.compute_instance.id == "${escapeCelStringLiteral(computeInstanceId)}"` as CelFilter<ExternalIPAttachment>,
   );
 
+export const bareMetalInstanceAttachmentsFilter = (instanceIds: readonly string[]) => {
+  if (instanceIds.length === 0) {
+    return 'false' as CelFilter<ExternalIPAttachment>;
+  }
+  const idLiterals = instanceIds.map((id) => `"${escapeCelStringLiteral(id)}"`).join(', ');
+  return `this.spec.baremetal_instance.id in [${idLiterals}]` as CelFilter<ExternalIPAttachment>;
+};
+
 export const clusterAttachmentFilter = (clusterId: string) =>
   cel<ExternalIPAttachment>((filter) =>
     // spec.cluster is a protobuf oneof case that cannot be addressed by the typed field() builder.

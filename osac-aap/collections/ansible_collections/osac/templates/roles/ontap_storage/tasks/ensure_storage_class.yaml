@@ -1,0 +1,160 @@
+---
+- name: Ensure StorageClass block with always cleanup
+  block:
+    - name: Compute assignment key for this backend
+      ansible.builtin.set_fact:
+        _current_backend_id: "{{ _provider_tiers[0].backend_id }}"
+        _assignment_key: >-
+          {{ ((_provider_tiers[0].backend_id ~ '|' ~ tenant_name)
+              | hash('sha256'))[:16] | lower }}
+
+    - name: Retrieve Hub Lifecycle Secret
+      kubernetes.core.k8s_info:
+        kubeconfig: ~
+        api_version: v1
+        kind: Secret
+        name: "ontap-tenant-{{ _assignment_key }}"
+        namespace: "{{ ontap_storage_config_namespace }}"
+      register: _hub_secret_result
+      no_log: true
+
+    - name: Fail if Hub Lifecycle Secret is missing
+      ansible.builtin.fail:
+        msg: "Hub Lifecycle Secret ontap-tenant-{{ _assignment_key }} is missing. Cannot ensure storage classes."
+      when: _hub_secret_result.resources | length == 0
+
+    - name: Extract Prepared Secret reference
+      ansible.builtin.set_fact:
+        _prepared_secret_name: "{{ _hub_secret_result.resources[0].data.prepared_secret_name | b64decode }}"
+
+    - name: Retrieve Prepared Secret
+      kubernetes.core.k8s_info:
+        kubeconfig: ~
+        api_version: v1
+        kind: Secret
+        name: "{{ _prepared_secret_name }}"
+        namespace: "{{ ontap_storage_config_namespace }}"
+      register: _prepared_secret_result
+      no_log: true
+
+    - name: Fail if Prepared Secret is missing
+      ansible.builtin.fail:
+        msg: "Prepared Secret {{ _prepared_secret_name }} is missing. Cannot ensure storage classes."
+      when: _prepared_secret_result.resources | length == 0
+
+    - name: Extract runtime credentials from Prepared Secret
+      ansible.builtin.set_fact:
+        _runtime_creds: "{{ _prepared_secret_result.resources[0].data }}"
+      no_log: true
+
+    - name: Create CSI Secret
+      kubernetes.core.k8s:
+        state: present
+        api_version: v1
+        kind: Secret
+        name: "ontap-csi-{{ _assignment_key }}"
+        namespace: trident
+        resource_definition:
+          type: Opaque
+          stringData:
+            username: "{{ _runtime_creds.username | b64decode }}"
+            password: "{{ _runtime_creds.password | b64decode }}"
+      no_log: true
+
+    - name: Compute unique protocols
+      ansible.builtin.set_fact:
+        _ontap_protocols: "{{ _provider_tiers | map(attribute='protocol') | unique | list }}"
+
+    - name: Create TridentBackendConfig per protocol
+      kubernetes.core.k8s:
+        state: present
+        api_version: trident.netapp.io/v1
+        kind: TridentBackendConfig
+        name: "ontap-{{ item }}-{{ _assignment_key }}"
+        namespace: trident
+        resource_definition:
+          spec:
+            version: 1
+            storageDriverName: "{{ 'ontap-nas' if item == 'nfs' else 'ontap-san' }}"
+            backendName: "ontap-{{ item }}-{{ _assignment_key }}"
+            managementLIF: "{{ _runtime_creds.management_lif | b64decode }}"
+            svm: "{{ _runtime_creds.svm_name | b64decode }}"
+            useREST: true
+            sanType: "{{ 'fcp' if item == 'block' else omit }}"
+            deletionPolicy: delete
+            credentials:
+              name: "ontap-csi-{{ _assignment_key }}"
+            trustedCACertificate: "{{ _runtime_creds.get('ca.crt', '') | b64decode | default(omit, true) }}"
+            storage: >-
+              {% set _pools = [] -%}
+              {% for tier in _provider_tiers if tier.protocol == item -%}
+              {% set _pool = {
+                   'name': tier.name,
+                   'labels': {'tier': tier.name},
+                   'encryption': tier.encryption_enabled | string | lower
+                 } -%}
+              {% if tier.qos_limits is defined and tier.qos_limits.provider_config is defined and tier.qos_limits.provider_config.max_iops is defined and (tier.qos_limits.provider_config.max_iops | int) > 0 -%}
+              {% set _ = _pool.update({'qosPolicy': 'osac-' ~ _assignment_key ~ '-' ~ (tier.name | hash('sha256'))[:16] | lower ~ '-qos'}) -%}
+              {% endif -%}
+              {% set _ = _pools.append(_pool) -%}
+              {% endfor -%}
+              {{ _pools }}
+      loop: "{{ _ontap_protocols }}"
+      no_log: true
+
+    - name: Wait for TridentBackendConfig to become Bound/Success
+      kubernetes.core.k8s_info:
+        api_version: trident.netapp.io/v1
+        kind: TridentBackendConfig
+        name: "ontap-{{ item }}-{{ _assignment_key }}"
+        namespace: trident
+      register: _tbc_status
+      until: >-
+        _tbc_status.resources | length > 0 and
+        _tbc_status.resources[0].status is defined and
+        _tbc_status.resources[0].status.phase == "Bound"
+      retries: 12
+      delay: 5
+      loop: "{{ _ontap_protocols }}"
+
+    - name: Create StorageClasses
+      kubernetes.core.k8s:
+        state: present
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "ontap-{{ _assignment_key }}-{{ (item.name | hash('sha256'))[:16] | lower }}"
+        resource_definition:
+          provisioner: csi.trident.netapp.io
+          parameters:
+            backendType: "{{ 'ontap-nas' if item.protocol == 'nfs' else 'ontap-san' }}"
+            storagePools: "ontap-{{ item.protocol }}-{{ _assignment_key }}:{{ item.name }}"
+          reclaimPolicy: Delete
+          volumeBindingMode: WaitForFirstConsumer
+          metadata:
+            labels:
+              osac.openshift.io/tenant: "{{ tenant_name }}"
+              osac.openshift.io/tier: "{{ item.name }}"
+              osac.openshift.io/storage-provider: ontap
+      loop: "{{ _provider_tiers }}"
+
+    - name: Build expected StorageClass entries per tier
+      ansible.builtin.set_fact:
+        _ontap_expected_sc_entries: >-
+          {% set entries = [] -%}
+          {% for tier in _provider_tiers -%}
+          {% set _ = entries.append({'name': 'ontap-' ~ _assignment_key ~ '-' ~ (tier.name | hash('sha256'))[:16] | lower, 'tier': tier.name}) -%}
+          {% endfor -%}
+          {{ entries }}
+
+    - name: Set StorageClass names output (list)
+      ansible.builtin.set_fact:
+        storage_provider_storage_class_names: "{{ _ontap_expected_sc_entries }}"
+
+  always:
+    - name: Clear credential-bearing facts
+      ansible.builtin.set_fact:
+        _hub_secret_result: {}
+        _prepared_secret_result: {}
+        _runtime_creds: {}
+        _tbc_status: {}
+      no_log: true

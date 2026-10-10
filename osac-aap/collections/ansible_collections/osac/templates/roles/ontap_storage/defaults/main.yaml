@@ -1,0 +1,3 @@
+---
+ontap_storage_probe_timeout: 10
+ontap_storage_config_namespace: osac-system

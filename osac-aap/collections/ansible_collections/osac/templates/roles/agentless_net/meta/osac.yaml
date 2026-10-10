@@ -3,7 +3,10 @@ name: agentless_net
 title: AgentlessNet networking backend
 description: >-
   Registers AgentlessNet for unified networking. VirtualNetwork lifecycle
-  creates and removes UID-keyed Linux routing namespaces and uplinks.
+  creates UID-keyed Linux routing namespaces and uplinks; Subnet lifecycle
+  reserves Cumulus trunk VLANs, namespace gateways, and per-VirtualNetwork DHCP.
+  SecurityGroups, NAT, workload attachment, BGP, and external access remain
+  unsupported.
 
 template_type: network
 fabric_manager: agentless_net

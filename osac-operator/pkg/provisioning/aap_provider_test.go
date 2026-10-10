@@ -947,6 +947,56 @@ var _ = Describe("AAPProvider", func() {
 		})
 	})
 
+	Describe("ExtraVars Subnet parent VirtualNetwork injection", func() {
+		BeforeEach(func() {
+			provider = provisioning.NewAAPProvider(aapClient, "provision-job", "deprovision-job")
+			aapClient.getTemplateFunc = func(ctx context.Context, templateName string) (*aap.Template, error) {
+				return &aap.Template{ID: 1, Name: templateName, Type: aap.TemplateTypeJob}, nil
+			}
+		})
+
+		It("should include the resolved parent identity in the Subnet job payload", func() {
+			parent := provisioning.SubnetParentVirtualNetwork{
+				FulfillmentID: "44444444-4444-4444-8444-444444444444",
+				KubernetesUID: "55555555-5555-4555-8555-555555555555",
+				TenantID:      "tenant-a",
+				Phase:         "Ready",
+			}
+			ctx = provisioning.WithSubnetParentVirtualNetwork(ctx, parent)
+
+			aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				jobVars := req.ExtraVars["osac_job_vars"].(map[string]any)
+				Expect(jobVars["parent_virtual_network"]).To(Equal(map[string]any{
+					"fulfillment_id": parent.FulfillmentID,
+					"kubernetes_uid": parent.KubernetesUID,
+					"tenant_id":      parent.TenantID,
+					"phase":          parent.Phase,
+				}))
+				return &aap.LaunchJobTemplateResponse{JobID: 102}, nil
+			}
+
+			instance := &v1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+			}
+			_, err := provider.TriggerProvision(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("should omit the parent identity when it is not set in context", func() {
+			aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				jobVars := req.ExtraVars["osac_job_vars"].(map[string]any)
+				Expect(jobVars).NotTo(HaveKey("parent_virtual_network"))
+				return &aap.LaunchJobTemplateResponse{JobID: 103}, nil
+			}
+
+			instance := &v1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+			}
+			_, err := provider.TriggerProvision(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+		})
+	})
+
 	Describe("ExtraVars storage tier definitions injection", func() {
 		BeforeEach(func() {
 			provider = provisioning.NewAAPProvider(aapClient, "provision-job", "deprovision-job")

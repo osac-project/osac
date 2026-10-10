@@ -138,3 +138,7 @@
       {{ _agentless_net_inventory_host.value.get('ansible_ssh_common_args',
       _agentless_net_inventory_vars.get('ansible_ssh_common_args', omit)) }}
   no_log: true
+
+- name: Load validated AgentlessNet Subnet switch inventory when requested
+  ansible.builtin.include_tasks: _load_subnet_switches.yaml
+  when: agentless_net_require_switches | default(false) | bool

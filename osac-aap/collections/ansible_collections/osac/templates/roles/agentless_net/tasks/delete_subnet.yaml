@@ -1,4 +1,60 @@
 ---
-- name: Report unimplemented AgentlessNet operation
-  ansible.builtin.fail:
-    msg: "NotImplemented: agentless_net resource operations are not implemented."
+- name: Deprovision AgentlessNet Subnet VLAN and DHCP state
+  block:
+    - name: Load the AgentlessNet node and required Cumulus switch inventory
+      ansible.builtin.include_tasks: _load_network_node_inventory.yaml
+      vars:
+        agentless_net_require_switches: true
+
+    - name: Read Subnet UID and tenant for saved-state deletion
+      ansible.builtin.set_fact:
+        _agentless_net_subnet_uid: "{{ subnet.metadata.uid | default('') }}"
+        _agentless_net_subnet_tenant_id: >-
+          {{ subnet.metadata.annotations.get('osac.openshift.io/tenant', '') }}
+      no_log: true
+
+    - name: Validate AgentlessNet Subnet deletion identity
+      ansible.builtin.assert:
+        that:
+          - _agentless_net_subnet_uid is string
+          - _agentless_net_subnet_uid | length > 0
+          - _agentless_net_subnet_tenant_id is string
+          - _agentless_net_subnet_tenant_id | length > 0
+        fail_msg: AgentlessNet Subnet deletion requires its Kubernetes UID and tenant annotation.
+      no_log: true
+
+    - name: Withdraw the saved DHCP scope and local VLAN interface
+      osac.templates.agentless_net_state:
+        action: prepare_delete_subnet
+        state_file: "{{ agentless_net_network_state_file }}"
+        uid: "{{ _agentless_net_subnet_uid }}"
+        tenant_id: "{{ _agentless_net_subnet_tenant_id }}"
+      delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
+      become: true
+      register: _agentless_net_subnet_deletion
+      no_log: true
+
+    - name: Remove and verify the saved VLAN on each configured switch
+      ansible.builtin.include_tasks: _reconcile_subnet_switch.yaml
+      loop: "{{ groups['agentless_net_subnet_switches'] }}"
+      loop_control:
+        loop_var: _agentless_net_switch_name
+        label: "{{ _agentless_net_switch_name }}"
+      vars:
+        _agentless_net_subnet: "{{ _agentless_net_subnet_deletion.subnet | default({}) }}"
+        _agentless_net_subnet_action: delete
+      when: _agentless_net_subnet_deletion.found | bool
+
+    - name: Release the VLAN reservation after verified switch cleanup
+      osac.templates.agentless_net_state:
+        action: release_subnet
+        state_file: "{{ agentless_net_network_state_file }}"
+        uid: "{{ _agentless_net_subnet_uid }}"
+        tenant_id: "{{ _agentless_net_subnet_tenant_id }}"
+      delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
+      become: true
+      when: _agentless_net_subnet_deletion.found | bool
+      no_log: true
+  always:
+    - name: Remove the temporary AgentlessNet SSH key file
+      ansible.builtin.include_tasks: _cleanup_network_node_inventory.yaml

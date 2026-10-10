@@ -219,6 +219,8 @@ Touched-area requirements: [component guide](../osac-operator/AGENTS.md#integrat
   trust gate disabled. Neither proves a deployed fulfillment TLS endpoint.
 - **Controller reconciliation, finalizers, status and CRDs:** Drive the public
   reconciler against real API persistence in the existing Controller Suite.
+- **AgentlessNet Subnet prefix guard:** `internal/controller/subnet_controller_test.go` exercises the public `SubnetReconciler.Reconcile` path for `/31`, `/32`, and `/30` CIDRs and confirms rejected prefixes do not invoke the provider. It does not exercise AAP or fabric state.
+- **AgentlessNet Subnet parent context:** `internal/controller/subnet_controller_test.go` follows reconciliation through provider dispatch and verifies the parent Fulfillment UUID, Kubernetes UID, tenant, and phase are passed to AAP provisioning. It does not exercise the AAP job itself.
 - **LVMS Volume lifecycle:** `lvms_vendor_provisioner_envtest_test.go` covers
   RWO/RWOP provisioning, generated names, persisted UID resumes, terminating
   resource replacement and deletion. Stale parent snapshots and conflicts in
@@ -356,8 +358,9 @@ Touched-area requirements: [component guide](../osac-aap/AGENTS.md#integration-t
 | Unit | `tests/unit/`; `uv run pytest tests/unit` | Filter and isolated plugin behavior | Kubernetes, AAP, cloud, and storage services are mocked or fixture-driven. |
 | Unit / isolated role transform ([DEV]) | `uv run --group development ansible-playbook collections/ansible_collections/osac/service/roles/hosted_cluster/tests/test.yml` | Executable NodePool definition transforms: distinct NodeSet names and selectors for the same hardware profile, independent replica counts and scale-up | No Kubernetes resources are created. This is not component-integration or deployed AAP/provider coverage; those gaps remain owned by [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843). |
 | Component integration | `tests/integration/`; `make test` (creates Kind, runs playbooks, and tears it down) | Ansible roles/playbooks against real Kind APIs, including a second isolated API for storage target routing, plus CRDs, leases, finalizers, and test-runner pod | AAP, OpenStack, KubeVirt/RHACM, and other provider APIs are not generally real; the VMS storage target uses a mock server. |
-| Unit | `tests/unit/test_agentless_network_state.py`, `tests/unit/test_agentless_net_network.py`; included by `uv run pytest tests/unit` | UID/CIDR allocation, locked SQLite state, per-UID operations, real reconciliation/verification, and safe command/module failures | `ip`, `iptables`, the network namespace, and AAP are mocked; this does not prove provider execution. |
-| Contract | `tests/integration/targets/agentless_net_stub/tasks/baseline.yml`; from `tests/integration/` run `ansible-playbook targets/agentless_net_stub/tasks/baseline.yml -e '@common_vars.yml'` | Fresh Ansible processes run `files/validate_vn_inventory.yml`: real environment lookup, YAML parsing, password rejection, and host registration | AAP, SSH, and Linux provider operations are omitted. |
+| Unit | `tests/unit/test_agentless_network_state.py`, `tests/unit/test_agentless_net_network.py`, `tests/unit/test_agentless_net_subnet.py`; included by `uv run pytest tests/unit` | UID/CIDR allocation, additive SQLite migration, parent-locked Subnet reservations, VLAN interface/DHCP reconciliation, lease validation, and module diagnostics | `ip`, systemd/Supervisor, dnsmasq, namespaces, switches, and AAP are mocked; this does not prove provider execution. |
+| Contract | `tests/integration/targets/agentless_net_stub/tasks/baseline.yml`; from `tests/integration/` run `ansible-playbook targets/agentless_net_stub/tasks/baseline.yml -e '@common_vars.yml'` | Fresh Ansible processes run `files/validate_vn_inventory.yml`: real environment lookup, YAML parsing, Cumulus/trunk validation, password rejection, and node/switch registration | AAP, SSH, and Linux/switch provider operations are omitted. |
+| Component integration | `tests/integration/targets/agentless_net_subnet/tasks/baseline.yml`; from `tests/integration/` run `ansible-playbook targets/agentless_net_subnet/tasks/baseline.yml -e '@common_vars.yml'` | Real Kind namespace and VirtualNetwork CR, status-subresource update, and validation of the operator-supplied parent Fulfillment UUID, Kubernetes UID, Ready phase, and tenant | Operator reconciliation, AAP, managed-node SSH, Cumulus switches, Linux VLAN interfaces, and DHCP are omitted. |
 | Component integration (focused) | A target under `tests/integration/targets/`; run the corresponding playbook from `tests/integration/` | The specific role workflow and its documented fixtures | Only the dependencies declared by that target; inspect its setup and overrides before claiming a real boundary. |
 | Contract | No dedicated contract suite; use the qualifying [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) task for AAP/provider coverage | No AAP or provider endpoint is exercised as a contract | The Kind API, mock VMS server, and fixture-driven provider behavior do not prove an AAP or provider contract. |
 | E2E | Cross-component OSAC E2E suites | Complete fulfillment and provisioning flows | Depends on the deployed AAP and provider environment. |
@@ -371,7 +374,7 @@ applicable integration tests separately to validate workflow behavior.
 ### Coverage notes
 
 - **Filters, variable transforms, and isolated plugin logic:** Include invalid input and default handling.
-- **AgentlessNet provider state and command helpers:** Unit coverage proves allocation, locking, retry retention, reconciliation/verification with mocked Linux commands, and worker template rendering. The real Ansible inventory contract covers the input boundary; neither suite proves deployed AAP/SSH networking or packet isolation.
+- **AgentlessNet VirtualNetwork/Subnet state and command helpers:** Unit coverage proves additive migration, internal allocation and exhaustion, exclusion parsing for bridge memberships and NVUE reserved ranges, parent-lock serialization, retry retention, VLAN interfaces, derived DHCP-manager selection, DHCP rendering/service lifecycle, lease preservation, and diagnostics with mocked provider commands. The operator envtest verifies parent-context construction; the Kind target validates the supplied parent UUID-to-UID, Ready, and tenant fields. AAP/Kind service-readiness checks do not prove client leases or traffic delivery.
 - **Ansible roles, workflow tasks, hooks, leases, finalizers, or Kubernetes resources:** The test must exercise the role/playbook through Ansible against Kind.
 - **Template publishing TLS:** The `test_cert_validation` play in `collections/ansible_collections/osac/service/roles/publish_templates/tests/test.yml` runs the real role against an untrusted local HTTPS endpoint and asserts certificate rejection before any authenticated HTTP request. The endpoint is a test double; it does not prove a deployed AAP or fulfillment boundary.
 - **Execution-environment definition or dependency inputs:** Image success does not prove the workflow boundary.
@@ -381,13 +384,17 @@ applicable integration tests separately to validate workflow behavior.
 
 ### Coverage gaps
 
-AgentlessNet VN create/retry/delete through deployed AAP/SSH and isolation of
-overlapping VNs remain QE coverage gaps. No qualifying VN runner is committed;
-the user-run deployed checks remain deferred. Unit, Envtest, and inventory
-Contract cases belong to [DEV OSAC-5529](https://redhat.atlassian.net/browse/OSAC-5529).
-The specific VN QE owner remains unresolved under
-[Feature OSAC-3664](https://redhat.atlassian.net/browse/OSAC-3664); track provider
-coverage through [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) /
+Subnet creation, real DHCP client leases, same-Subnet L2 traffic, service
+restart, retry recovery, `/30` addressing, lifecycle, and peer-preserving
+cleanup require the deployed lab journey owned by the `e2e` branch and tracked
+by [DEV OSAC-5530](https://redhat.atlassian.net/browse/OSAC-5530). The lab uses
+real deployed Fulfillment/database/operator/AAP/SSH/Linux/dnsmasq/Cumulus VX
+components and test client containers; it does not establish physical-hardware,
+BMaaS lease-status, NAT, or full-install CI coverage. Unit and Kind checks cover
+state logic, inventory contract, and parent mapping only. AgentlessNet VN
+create/retry/delete through deployed AAP/SSH and isolation of overlapping VNs
+remain broader provider-coverage gaps tracked under [Feature OSAC-3664](https://redhat.atlassian.net/browse/OSAC-3664)
+and [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) /
 [OSAC-4850](https://redhat.atlassian.net/browse/OSAC-4850).
 
 The integration harness still has provider-dependent scenarios that cannot run
@@ -463,6 +470,7 @@ Touched-area requirements: [component guide](../tests/e2e/AGENTS.md#touched-area
 
 | Tier | Location / command | Exercises for real | Faked or omitted |
 |---|---|---|---|
+| E2E ([DEV] OSAC-5530 lab journey) | From the repository root: `AAP_PROJECT_GIT_BRANCH=OSAC-5530-subnet-vlan-dhcp AAP_PROJECT_EXPECTED_REVISION=<runtime-sha> bash ./vlan-e2e.sh` | Deployed Fulfillment/database/operator/AAP/SSH/Linux/dnsmasq/Cumulus VX; real DHCP leases from BusyBox clients, gateway pings, same-Subnet L2 across leaves, DHCP restart/renewal, Subnet retry, `/30` single-address allocation, deletion, and cleanup | Uses client containers and virtual switches; it does not establish physical-hardware, BMaaS lease-status, NAT, or full-install CI coverage. A successful run is required to claim deployed behavior. |
 | E2E (VMaaS regression) | From the repository root: `uv run pytest tests/e2e/vmaas/regression/test_compute_instance_instance_type.py` | InstanceType resize through CLI/API, CatalogItem provisioning, and Kubernetes/KubeVirt resources | Requires a configured single-node VMaaS environment; no services are mocked. |
 | Unit ([DEV], CaaS teardown) | From the repository root: `uv run pytest -n 0 tests/unit/test_caas_teardown_order.py tests/unit/test_cluster_deletion_polling.py tests/unit/test_caas_deletion_diagnostics.py tests/unit/test_caas_worker_bmi_visibility.py tests/unit/test_caas_two_node_sets.py tests/unit/test_caas_selector_contracts.py` | Read-only wait logic, exact-resource NotFound, ordered worker/parent/dependent waits, shared single/two-node-set budgets, stage-specific safe failures, snapshot throttling and sanitization, worker ownership checks, NodeSet selectors with shared BMITs, and shared-only BMIT reference expectations | API/client responses and time are mocked. No deployed controllers, fulfillment, AAP, provider, or metering is exercised. |
 | E2E ([QE], focused bare-metal CaaS lifecycle) | From the repository root: `uv run pytest -n 0 tests/e2e/caas/sanity/test_cluster_create.py::test_cluster_create --junitxml=/tmp/test-output/caas-bm-teardown-junit.xml` | CLI/API/database, Kubernetes, OSAC operators, AAP, HyperShift/CAPI/CAP-Agent, Assisted Service, provider-backed virtual BMHs, and Kafka/metering; creation, guest readiness, scale events, natural worker/parent teardown, independent InfraEnv GC, fulfillment removal, and deleted events | Requires the compatible deployed CaaS profile; no mocked completion or workaround-enabled deletion wait. Virtual BMHs do not prove physical-hardware coverage. Guest LVMS device readiness, PVC/CSI mount, and application I/O are not established by this lifecycle test. |

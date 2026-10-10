@@ -1,0 +1,54 @@
+---
+- name: Extract stable Subnet provider identity and request fields
+  ansible.builtin.set_fact:
+    _agentless_net_subnet_uid: "{{ subnet.metadata.uid | default('') }}"
+    _agentless_net_subnet_tenant_id: >-
+      {{ subnet.metadata.annotations.get('osac.openshift.io/tenant', '') }}
+    _agentless_net_subnet_cidr: "{{ subnet.spec.ipv4Cidr | default('') }}"
+    _agentless_net_subnet_parent_ref: "{{ subnet.spec.virtualNetwork | default('') }}"
+    _agentless_net_subnet_vip_cidr: >-
+      {{ subnet.metadata.annotations.get('osac.openshift.io/vip-cidr', '') }}
+  no_log: true
+
+- name: Validate AgentlessNet Subnet identity fields
+  ansible.builtin.assert:
+    that:
+      - _agentless_net_subnet_uid is string
+      - _agentless_net_subnet_uid | length > 0
+      - _agentless_net_subnet_tenant_id is string
+      - _agentless_net_subnet_tenant_id | length > 0
+      - _agentless_net_subnet_cidr is string
+      - _agentless_net_subnet_cidr | length > 0
+      - _agentless_net_subnet_parent_ref is string
+      - _agentless_net_subnet_parent_ref is match('^[0-9a-f-]{36}$')
+    fail_msg: >-
+      AgentlessNet Subnet provisioning requires its Kubernetes UID, tenant
+      annotation, canonical parent VirtualNetwork UUID, and IPv4 CIDR.
+  no_log: true
+
+- name: Read the parent VirtualNetwork context resolved by osac-operator
+  ansible.builtin.set_fact:
+    _agentless_net_parent_virtual_network: >-
+      {{ (osac_job_vars | default({})).get('parent_virtual_network', {}) }}
+  no_log: true
+
+- name: Validate the Ready parent VirtualNetwork context and tenant ownership
+  ansible.builtin.assert:
+    that:
+      - _agentless_net_parent_virtual_network is mapping
+      - _agentless_net_parent_virtual_network.fulfillment_id is string
+      - _agentless_net_parent_virtual_network.fulfillment_id == _agentless_net_subnet_parent_ref
+      - _agentless_net_parent_virtual_network.kubernetes_uid is string
+      - _agentless_net_parent_virtual_network.kubernetes_uid | length > 0
+      - _agentless_net_parent_virtual_network.tenant_id is string
+      - _agentless_net_parent_virtual_network.tenant_id == _agentless_net_subnet_tenant_id
+      - _agentless_net_parent_virtual_network.phase == 'Ready'
+    fail_msg: >-
+      AgentlessNet Subnet requires a Ready parent VirtualNetwork context from
+      osac-operator with the requested Fulfillment UUID and matching tenant.
+  no_log: true
+
+- name: Save the parent Kubernetes UID for AgentlessNet provider state
+  ansible.builtin.set_fact:
+    _agentless_net_subnet_parent_uid: "{{ _agentless_net_parent_virtual_network.kubernetes_uid }}"
+  no_log: true

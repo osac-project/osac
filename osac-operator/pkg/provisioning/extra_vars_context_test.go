@@ -18,6 +18,25 @@ const (
 )
 
 var _ = Describe("ExtraVarsContext", func() {
+	Describe("SubnetParentVirtualNetwork", func() {
+		It("should round-trip the resolved parent identity", func() {
+			ctx := context.Background()
+			parent := provisioning.SubnetParentVirtualNetwork{
+				FulfillmentID: "44444444-4444-4444-8444-444444444444",
+				KubernetesUID: "55555555-5555-4555-8555-555555555555",
+				TenantID:      "tenant-a",
+				Phase:         "Ready",
+			}
+
+			ctx = provisioning.WithSubnetParentVirtualNetwork(ctx, parent)
+			Expect(provisioning.SubnetParentVirtualNetworkFromContext(ctx)).To(Equal(parent))
+		})
+
+		It("should return the zero value when the parent identity is absent", func() {
+			Expect(provisioning.SubnetParentVirtualNetworkFromContext(context.Background())).To(BeZero())
+		})
+	})
+
 	Describe("AdminKubeconfig", func() {
 		It("should round-trip a kubeconfig value", func() {
 			ctx := context.Background()

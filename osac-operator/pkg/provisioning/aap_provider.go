@@ -427,6 +427,15 @@ func extractExtraVars(ctx context.Context, resource client.Object) (map[string]a
 		vars["network_attachment_macs"] = macs
 	}
 
+	if parent := SubnetParentVirtualNetworkFromContext(ctx); parent != (SubnetParentVirtualNetwork{}) {
+		vars["parent_virtual_network"] = map[string]any{
+			"fulfillment_id": parent.FulfillmentID,
+			"kubernetes_uid": parent.KubernetesUID,
+			"tenant_id":      parent.TenantID,
+			"phase":          parent.Phase,
+		}
+	}
+
 	return map[string]any{
 		"osac_job_vars": vars,
 	}, nil

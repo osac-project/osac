@@ -1,0 +1,171 @@
+---
+- name: Verify Subnet Fulfillment UUID maps to a Ready parent Kubernetes UID
+  hosts: localhost
+  gather_facts: false
+  vars:
+    fixture_namespace: >-
+      osac-agentless-subnet-{{ lookup('env', 'POD_UID') | default('local', true)
+      | regex_replace('[^a-z0-9]', '') | truncate(8, true, '') }}
+    tenant_id: integration-tenant
+    fulfillment_vnet_uuid: 44444444-4444-4444-8444-444444444444
+    missing_fulfillment_vnet_uuid: 55555555-5555-4555-8555-555555555555
+    vnet_name: agentless-subnet-parent
+    vnet_cidr: 10.250.0.0/16
+    subnet:
+      metadata:
+        name: agentless-subnet-child
+        namespace: "{{ fixture_namespace }}"
+        uid: 66666666-6666-4666-8666-666666666666
+        annotations:
+          osac.openshift.io/tenant: "{{ tenant_id }}"
+      spec:
+        virtualNetwork: "{{ fulfillment_vnet_uuid }}"
+        ipv4Cidr: 10.250.1.0/24
+  tasks:
+    - name: Create a dedicated fixture namespace and Ready VirtualNetwork
+      block:
+        - name: Create the fixture namespace
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "{{ fixture_namespace }}"
+            state: present
+
+        - name: Create the parent VirtualNetwork CR with distinct Fulfillment and Kubernetes IDs
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: VirtualNetwork
+              metadata:
+                name: "{{ vnet_name }}"
+                namespace: "{{ fixture_namespace }}"
+                labels:
+                  osac.openshift.io/virtualnetwork-uuid: "{{ fulfillment_vnet_uuid }}"
+                annotations:
+                  osac.openshift.io/tenant: "{{ tenant_id }}"
+              spec:
+                region: integration
+                networkClass: agentless_net
+                ipv4Cidr: "{{ vnet_cidr }}"
+
+        - name: Set the parent status through the status subresource
+          ansible.builtin.command:
+            argv:
+              - kubectl
+              - patch
+              - virtualnetwork
+              - "{{ vnet_name }}"
+              - --namespace
+              - "{{ fixture_namespace }}"
+              - --subresource=status
+              - --type=merge
+              - --patch
+              - '{"status":{"phase":"Ready"}}'
+          changed_when: true
+
+        - name: Read the persisted parent Kubernetes UID and status
+          kubernetes.core.k8s_info:
+            api_version: osac.openshift.io/v1alpha1
+            kind: VirtualNetwork
+            namespace: "{{ fixture_namespace }}"
+            name: "{{ vnet_name }}"
+          register: fixture_parent
+
+        - name: Prepare the parent context supplied by the Subnet operator
+          ansible.builtin.set_fact:
+            osac_job_vars:
+              parent_virtual_network:
+                fulfillment_id: "{{ fulfillment_vnet_uuid }}"
+                kubernetes_uid: "{{ fixture_parent.resources[0].metadata.uid }}"
+                tenant_id: "{{ fixture_parent.resources[0].metadata.annotations['osac.openshift.io/tenant'] }}"
+                phase: "{{ fixture_parent.resources[0].status.phase }}"
+
+        - name: Confirm Kubernetes assigned a UID distinct from the Fulfillment UUID
+          ansible.builtin.assert:
+            that:
+              - fixture_parent.resources | length == 1
+              - fixture_parent.resources[0].metadata.uid != fulfillment_vnet_uuid
+              - fixture_parent.resources[0].status.phase == 'Ready'
+
+        - name: Resolve the real Subnet parent lookup helper
+          ansible.builtin.include_role:
+            name: osac.templates.agentless_net
+            tasks_from: _resolve_subnet_parent
+
+        - name: Confirm the helper returns the Kubernetes UID and tenant
+          ansible.builtin.assert:
+            that:
+              - _agentless_net_subnet_parent_uid == fixture_parent.resources[0].metadata.uid
+              - _agentless_net_subnet_parent_uid != fulfillment_vnet_uuid
+              - _agentless_net_subnet_tenant_id == tenant_id
+
+        - name: Confirm the helper rejects a mismatched Fulfillment parent UUID
+          block:
+            - name: Set a missing parent UUID on the in-memory Subnet request
+              ansible.builtin.set_fact:
+                osac_job_vars: >-
+                  {{ osac_job_vars | combine(
+                    {'parent_virtual_network': {'fulfillment_id': missing_fulfillment_vnet_uuid}},
+                    recursive=true) }}
+
+            - name: Run the parent context validation for the mismatched reference
+              ansible.builtin.include_role:
+                name: osac.templates.agentless_net
+                tasks_from: _resolve_subnet_parent
+          rescue:
+            - name: Record the expected mismatched-parent rejection
+              ansible.builtin.set_fact:
+                missing_parent_rejected: true
+
+        - name: Restore the valid reference and confirm tenant mismatch rejection
+          block:
+            - name: Restore the Fulfillment UUID and change the parent tenant
+              ansible.builtin.set_fact:
+                osac_job_vars: >-
+                  {{ osac_job_vars | combine(
+                    {'parent_virtual_network': {'fulfillment_id': fulfillment_vnet_uuid,
+                                                'tenant_id': 'wrong-tenant'}},
+                    recursive=true) }}
+
+            - name: Run the parent context validation for the wrong tenant
+              ansible.builtin.include_role:
+                name: osac.templates.agentless_net
+                tasks_from: _resolve_subnet_parent
+          rescue:
+            - name: Record the expected tenant mismatch rejection
+              ansible.builtin.set_fact:
+                wrong_tenant_rejected: true
+
+        - name: Restore tenant context and confirm non-Ready parent rejection
+          block:
+            - name: Mark the parent context Progressing
+              ansible.builtin.set_fact:
+                osac_job_vars: >-
+                  {{ osac_job_vars | combine(
+                    {'parent_virtual_network': {'tenant_id': tenant_id, 'phase': 'Progressing'}},
+                    recursive=true) }}
+
+            - name: Run the parent context validation for a non-Ready parent
+              ansible.builtin.include_role:
+                name: osac.templates.agentless_net
+                tasks_from: _resolve_subnet_parent
+          rescue:
+            - name: Record the expected non-Ready parent rejection
+              ansible.builtin.set_fact:
+                non_ready_parent_rejected: true
+
+        - name: Verify invalid parent contexts were rejected
+          ansible.builtin.assert:
+            that:
+              - missing_parent_rejected | default(false)
+              - wrong_tenant_rejected | default(false)
+              - non_ready_parent_rejected | default(false)
+      always:
+        - name: Delete only the dedicated fixture namespace
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "{{ fixture_namespace }}"
+            state: absent
+            wait: true

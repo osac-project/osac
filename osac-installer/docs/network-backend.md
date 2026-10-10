@@ -16,7 +16,7 @@ NetworkClass manager names and select the AAP backend:
 | `fabricManager` | `k8sManager` | Derived AAP backend | Status |
 |-----------------|--------------|---------------------|--------|
 | `netris` | `""` | `netris` / `netris.steps` | Supported |
-| `agentless_net` | `""` | `agentless_net` / `agentless_net.steps` | VirtualNetwork namespace, /31 uplink, and forwarding baseline |
+| `agentless_net` | `""` | `agentless_net` / `agentless_net.steps` | VirtualNetwork namespace plus Subnet VLAN, gateway, and DHCP |
 | `""` | `k8s_only` | `agentless_net` / `agentless_net.steps` | Supported (default) |
 | `""` | `""` | Must set managers via `global.networking.networkClass` or expert overrides | Expert only |
 | `cudn_net` | `""` | `ci` / `ci.steps` (explicit AAP override) | Virtual-BMH CaaS only |
@@ -42,9 +42,11 @@ When `fabricManager` is `agentless_net`, Helm enables the AgentlessNet fabric
 manager, selects the AgentlessNet AAP collection, and points the NetworkClass
 at `fabricManager: agentless_net`. VirtualNetwork create/delete provisions a
 UID-keyed Linux namespace, `/31` transit uplink, and namespace forwarding
-baseline on the single configured network node. Subnet, SecurityGroup,
-ExternalIPPool, ExternalIP, ExternalIPAttachment, and NATGateway operations
-remain fail-fast until their provider work is implemented. This is separate
+baseline on the single configured network node. Subnet create/delete adds a
+Cumulus VLAN to configured trunks, creates a namespace gateway interface, and
+reconciles one supervised DHCP service per VirtualNetwork. SecurityGroup,
+ExternalIPPool, ExternalIP, ExternalIPAttachment, NATGateway, workload
+attachment, and external routing remain unsupported. This is separate
 from the default `k8s_only` profile, which provisions Kubernetes-native
 networking.
 
@@ -98,40 +100,72 @@ When Netris is selected, the schema requires `controllerUrl` (HTTPS), credential
 password or `externalSecret: true` when the `netris-credentials` Secret is
 managed outside Helm.
 
-## AgentlessNet VirtualNetwork baseline
+## AgentlessNet VirtualNetwork and Subnet baseline
 
 ```yaml
 global:
   networking:
-    fabricManager: ""
-    k8sManager: k8s_only
+    fabricManager: agentless_net
+    k8sManager: ""
 ```
 
 Use `fabricManager: agentless_net` and `k8sManager: ""` to select the
 AgentlessNet fabric manager. The `values/agentless-net-stub.yaml` installer overlay
 sets this profile and clears AAP expert overrides so the selected backend
-reaches the fulfillment instance group. An AgentlessNet VirtualNetwork job
-reads serialized YAML/JSON in `AGENTLESS_NET_VN_INVENTORY` from the existing
+reaches the fulfillment instance group. AgentlessNet jobs read serialized
+YAML/JSON in `AGENTLESS_NET_VN_INVENTORY` from the existing
 `network-fulfillment-ig` ConfigMap. It describes exactly one authoritative host
 under `all.children.net_nodes.hosts`, with `ansible_host`, `ansible_user`, and
-an optional `ansible_port`. The networking worker already imports this
-ConfigMap and its Secret through `envFrom`; no additional VN volume is needed.
+an optional `ansible_port`. Subnet jobs also require one or more Cumulus hosts
+under `all.children.switches.hosts`, each with `ansible_host`, `ansible_user`,
+and a nonempty `trunk_ports` list. `ansible_network_os` defaults to `cumulus`;
+an explicitly different platform is rejected. `ansible_port` is optional and
+defaults to 22. Physical trunk ports and SSH access remain administrator-owned
+inventory.
+VirtualNetwork-only jobs may omit the switch group. The networking worker
+already imports this ConfigMap and its Secret through `envFrom`; no additional
+volume or Helm schema values are needed.
 Configure SSH access through an AAP machine
 credential or the `AGENTLESS_NET_SSH_PRIVATE_KEY` value supplied by the
 `network-fulfillment-ig` Secret. Credentials are not stored in the inventory.
 
-The VirtualNetwork job establishes only the namespace, transit link, and
-forwarding baseline. Its Ready state does not claim Subnet, VLAN, DHCP, BGP,
-NAT, workload attachment, or external connectivity, and does not satisfy tenant
-`DefaultNetworkingReady`. Manager replacement requires draining and replacing
-resources; switching the backend of an existing VN is unsupported.
+VirtualNetwork create/delete establishes the namespace, `/31` transit link, and
+forwarding baseline. Subnet create/delete reserves a stable VLAN ID in the same
+SQLite database as its parent, adds the VLAN to each configured switch trunk,
+creates a namespace gateway interface, and updates the per-VirtualNetwork DHCP
+service. Before a new reservation, the role reads `bridge -j vlan show` from
+every configured switch and `nv show system global reserved vlan --output
+json`. It excludes active memberships (including ranges and PVIDs), the NVUE
+internal reserved range, the reported L3-VNI range, and all SQLite allocations,
+then selects the lowest free VLAN in 1–4094. Retries reuse the saved VLAN even
+when it appears in switch discovery. Discovery and validation complete before
+reservation or switch changes. The managed node must provide `iproute2`,
+`dnsmasq`, `ss`, and either running systemd or a reachable dedicated Supervisor
+daemon. The role derives the service manager on the managed node and reuses the
+manager identified by an existing VN-owned service file. Conflicting owned
+service files fail closed; no DHCP manager selector is configured in the
+instance-group ConfigMap. Tenant VirtualNetwork and Subnet create commands and
+API inputs remain unchanged; VLAN bounds and DHCP-manager selection are
+internal provider details.
+
+The provider keeps the merged VirtualNetwork `/31` transit link and SQLite
+state format; it does not implement the accepted design's separate `/30` pool
+or JSON state. Existing SQLite VLAN assignments remain stable, including IDs
+from the former 100–199 range. The legacy CaaS JSON allocator and its VLAN pool
+and transit-address calculations remain unchanged. Switch discovery protects
+against already configured foreign VLANs, but it cannot atomically coordinate
+with an independently running legacy allocator; use one authoritative unified
+allocator per fabric. The Subnet role never assigns host access ports.
+SecurityGroups, NAT/BGP/external access, workload attachment, tenant defaults,
+and failover are outside this backend slice. Manager replacement requires
+draining and replacing resources; switching the backend of an existing
+VirtualNetwork is unsupported.
 
 Use the existing `aap.instanceGroups.networkFulfillment.config` mapping to
 supply `AGENTLESS_NET_VN_INVENTORY`; see the
 [inventory shape](../../osac-aap/README.md#networking). Keep credentials in the
-existing Secret or AAP machine credential. The VN path retains `/31` transit
-links from the CR CIDR and SQLite state; future Subnet work must reconcile these
-with the accepted provider-pool `/30` and JSON-state design.
+existing Secret or AAP machine credential. The VN and Subnet paths retain `/31`
+transit links from the parent CR CIDR and SQLite state, as described above.
 
 ## Expert overrides
 

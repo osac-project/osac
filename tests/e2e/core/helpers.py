@@ -934,6 +934,59 @@ def wait_for_tenant_condition(*, k8s: K8sClient, name: str, condition_type: str,
     )
 
 
+def wait_for_tenant_default_networking_ready(*, grpc: GRPCClient, tenant_name: str) -> None:
+    """Wait for configured tenant defaults, not merely the Tenant's ready flag.
+
+    A tenant with no NetworkClass defaults can report DefaultNetworkingReady=True
+    with reason NoDefaultNetworking. Workload creation that omits an attachment
+    still requires the actual defaults to be READY, so accept only
+    AllResourcesReady and fail immediately for known terminal setup states.
+    Fulfillment owns this condition, so read it from the private Tenant API
+    rather than the Kubernetes Tenant CR.
+    """
+    condition_type = "TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY"
+    expected_status = "CONDITION_STATUS_TRUE"
+    expected_reason = "AllResourcesReady"
+    terminal_reasons = {"NoDefaultNetworking", "ResourceFailed", "ReservedTenant"}
+    last_condition: dict[str, Any] = {}
+
+    def _read_condition() -> dict[str, Any] | None:
+        nonlocal last_condition
+        tenant = grpc.get_tenant_by_name(name=tenant_name)
+        conditions = tenant.get("status", {}).get("conditions", []) if tenant else []
+        last_condition = next((condition for condition in conditions if condition.get("type") == condition_type), {})
+        reason = last_condition.get("reason", "")
+        if reason in terminal_reasons:
+            status = last_condition.get("status", "") or "<missing>"
+            message = last_condition.get("message", "") or "<no message>"
+            raise RuntimeError(
+                f"Tenant {tenant_name} default networking is unavailable "
+                f"(condition status={status}, reason={reason}): {message}"
+            )
+        return last_condition
+
+    try:
+        poll_until(
+            fn=_read_condition,
+            until=lambda condition: (
+                condition is not None
+                and condition.get("status") == expected_status
+                and condition.get("reason") == expected_reason
+            ),
+            retries=120,
+            delay=5,
+            description=f"Tenant {tenant_name} {condition_type}={expected_status}/{expected_reason}",
+        )
+    except TimeoutError:
+        status = last_condition.get("status", "") or "<missing>"
+        reason = last_condition.get("reason", "") or "<missing>"
+        message = last_condition.get("message", "") or "<no message>"
+        raise TimeoutError(
+            f"Tenant {tenant_name} did not reach {condition_type}={expected_status}/{expected_reason} "
+            f"(last status={status}, reason={reason}, message={message})"
+        ) from None
+
+
 def wait_for_tenant_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
         fn=lambda: not k8s.is_present(resource="tenant", name=name),

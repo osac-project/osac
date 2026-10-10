@@ -40,7 +40,7 @@ func uniqueCIDR() string {
 	return fmt.Sprintf("10.%d.%d.0/28", 20+(n/256)%200, n%256)
 }
 
-func createReadyExternalIPNetworkClass(ctx context.Context, client privatev1.NetworkClassesClient) {
+func createReadyExternalIPNetworkClass(ctx context.Context, client privatev1.NetworkClassesClient) string {
 	id := createDefaultNetworkClass(
 		ctx,
 		client,
@@ -68,6 +68,7 @@ func createReadyExternalIPNetworkClass(ctx context.Context, client privatev1.Net
 		g.Expect(response.GetObject().GetStatus().GetState()).To(
 			Equal(privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY))
 	}, time.Minute, time.Second).Should(Succeed())
+	return id
 }
 
 var _ = Describe("Private ExternalIPPool CRUD", func() {
@@ -620,6 +621,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		clusterId    string
 		bmitName     string
 		templateId   string
+		network      catalogItemNetworkFixture
 	)
 
 	BeforeEach(func() {
@@ -633,7 +635,8 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
 		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
 		clusterTemplatesClient = privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
-		createReadyExternalIPNetworkClass(ctx, networkClassesClient)
+		networkClassID := createReadyExternalIPNetworkClass(ctx, networkClassesClient)
+		network = createCatalogItemNetworkInClassFixture(ctx, usersGroup, "", networkClassID)
 
 		poolId = fmt.Sprintf("test-pool-%s", uuid.New())
 		_, err := poolsClient.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
@@ -760,7 +763,8 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NetworkAttachment: network.clusterAttachment(),
 					NodeSets: map[string]*publicv1.ClusterNodeSet{"workers": publicv1.ClusterNodeSet_builder{
 						Size: new(int32(1)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
 					}.Build()},

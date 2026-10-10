@@ -208,7 +208,13 @@ func createCatalogItemNetworkClassFixture(ctx context.Context) string {
 	deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
 		_, err := classes.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: classID}.Build())
 		return err
-	}, nil)
+	}, func(ctx context.Context) (bool, error) {
+		_, err := classes.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: classID}.Build())
+		if status.Code(err) == codes.NotFound {
+			return true, nil
+		}
+		return false, err
+	})
 	waitForNetworkClassReady(ctx, classes, classID)
 	return classID
 }
@@ -390,6 +396,18 @@ func (f catalogItemNetworkFixture) clusterAttachment() *publicv1.ClusterNetworkA
 	if f.securityGroupID != "" {
 		attachment.SetSecurityGroups([]*publicv1.SecurityGroupLocalReference{
 			publicv1.SecurityGroupLocalReference_builder{Id: f.securityGroupID}.Build(),
+		})
+	}
+	return attachment
+}
+
+func (f catalogItemNetworkFixture) privateClusterAttachment() *privatev1.ClusterNetworkAttachment {
+	attachment := privatev1.ClusterNetworkAttachment_builder{
+		Subnet: privatev1.SubnetLocalReference_builder{Id: f.subnetID}.Build(),
+	}.Build()
+	if f.securityGroupID != "" {
+		attachment.SetSecurityGroups([]*privatev1.SecurityGroupLocalReference{
+			privatev1.SecurityGroupLocalReference_builder{Id: f.securityGroupID}.Build(),
 		})
 	}
 	return attachment

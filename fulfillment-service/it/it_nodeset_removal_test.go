@@ -19,6 +19,8 @@ import (
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
@@ -35,6 +37,7 @@ var _ = Describe("Node set removal", func() {
 		workerBmitName      string
 		storageBmitName     string
 		templateId          string
+		network             catalogItemNetworkFixture
 	)
 
 	BeforeEach(func() {
@@ -43,6 +46,7 @@ var _ = Describe("Node set removal", func() {
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
 		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
 		templatesClient = privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
+		network = createCatalogItemNetworkFixture(ctx, usersGroup, "")
 
 		// Create worker bare metal instance type:
 		workerBmitName = fmt.Sprintf("worker-bmit-%s", uuid.New()[24:32])
@@ -123,7 +127,8 @@ var _ = Describe("Node set removal", func() {
 					Name: fmt.Sprintf("nodeset-rm-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NetworkAttachment: network.clusterAttachment(),
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"workers": publicv1.ClusterNodeSet_builder{Size: new(int32(3)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: workerBmitName}.Build()}.Build(),
 						"storage": publicv1.ClusterNodeSet_builder{Size: new(int32(2)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: storageBmitName}.Build()}.Build(),
@@ -133,6 +138,20 @@ var _ = Describe("Node set removal", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		clusterId := createResponse.Object.Id
+		deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
+			_, err := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{
+				Id: clusterId,
+			}.Build())
+			return err
+		}, func(ctx context.Context) (bool, error) {
+			_, err := clustersClient.Get(ctx, publicv1.ClustersGetRequest_builder{
+				Id: clusterId,
+			}.Build())
+			if grpcstatus.Code(err) == grpccodes.NotFound {
+				return true, nil
+			}
+			return false, err
+		})
 
 		// Step 2: Verify cluster has 2 node sets
 		getResponse, err := clustersClient.Get(ctx, publicv1.ClustersGetRequest_builder{

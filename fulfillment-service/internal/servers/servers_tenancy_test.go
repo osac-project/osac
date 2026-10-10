@@ -20,6 +20,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
@@ -53,6 +54,10 @@ var _ = Describe("Tenancy logic", func() {
 		}
 		createTenant("my-tenant")
 		createTenant("your-tenant")
+		// Cluster Create completes omitted network_attachment from tenant defaults.
+		seedTenantDefaultNetworking(ctx, "my-tenant", "")
+		seedTenantDefaultNetworking(ctx, "your-tenant", "")
+		seedTenantDefaultNetworking(ctx, auth.SharedTenant, "")
 
 		// Create a default cluster version for version resolution:
 		seedClusterVersion(ctx, privatev1.ClusterVersion_builder{
@@ -73,7 +78,15 @@ var _ = Describe("Tenancy logic", func() {
 			SetLogger(logger).SetTenancyLogic(tenancy).Build()
 		Expect(err).ToNot(HaveOccurred())
 		_, err = instanceTypesDao.Create().SetObject(privatev1.BareMetalInstanceType_builder{
-			Id: "worker-bmit", Metadata: privatev1.Metadata_builder{Name: "worker-bmit", Tenant: auth.SharedTenant}.Build(),
+			Id:       "worker-bmit",
+			Metadata: privatev1.Metadata_builder{Name: "worker-bmit", Tenant: auth.SharedTenant}.Build(),
+			Spec: privatev1.BareMetalInstanceTypeSpec_builder{
+				Hardware: privatev1.BareMetalHardwareSpec_builder{
+					NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+						privatev1.BareMetalNetworkPortSpec_builder{Name: "data-0", Role: "fabric"}.Build(),
+					},
+				}.Build(),
+			}.Build(),
 		}.Build()).Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
 	})
@@ -497,6 +510,7 @@ var _ = Describe("Tenancy logic", func() {
 					},
 				}.Build(),
 			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.node_sets"}},
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(updateResponse.GetObject().GetMetadata().GetTenant()).To(Equal("my-tenant"))

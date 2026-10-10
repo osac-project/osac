@@ -85,9 +85,12 @@ superseded or extended design explicitly.
 | BaremetalInstance | `network_attachments`, BareMetalNetworkAttachment: subnet, security groups, interface, optional primary | Maximum one entry; primary omitted or true accepted, false rejected |
 
 An omitted attachment requests tenant defaults; a supplied attachment resolves
-missing fields individually. Consult the unified/default designs for validation
-of tenant ownership, subnet/security-group VirtualNetwork alignment, readiness,
-and BMaaS interface selection. Do not interchange these message types.
+missing fields individually. When required defaults are unavailable, Create
+returns `InvalidArgument` rather than persisting without an attachment (Cluster
+`network_attachment`, BareMetalInstance/ComputeInstance `network_attachments`).
+Consult the unified/default designs for validation of tenant ownership,
+subnet/security-group VirtualNetwork alignment, readiness, and BMaaS interface
+selection. Do not interchange these message types.
 
 ## Auto-created resource deletion
 

@@ -113,12 +113,7 @@ class GRPCClient:
     def create_virtual_network(self, *, name: str, ipv4_cidr: str, tenant: str | None = None) -> str:
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.VirtualNetworks/Create",
-            data={
-                "object": {
-                    "metadata": _metadata(name=name, tenant=tenant),
-                    "spec": {"ipv4_cidr": ipv4_cidr},
-                }
-            },
+            data={"object": {"metadata": _metadata(name=name, tenant=tenant), "spec": {"ipv4_cidr": ipv4_cidr}}},
         )
         return response["object"]["id"]
 
@@ -216,11 +211,7 @@ class GRPCClient:
         return response["object"]["id"]
 
     def update_security_group_rules(
-        self,
-        *,
-        sg_id: str,
-        ingress: list[dict[str, Any]] | None = None,
-        egress: list[dict[str, Any]] | None = None,
+        self, *, sg_id: str, ingress: list[dict[str, Any]] | None = None, egress: list[dict[str, Any]] | None = None
     ) -> dict[str, Any]:
         spec: dict[str, Any] = {}
         paths: list[str] = []
@@ -273,6 +264,27 @@ class GRPCClient:
                     continue
                 raise RuntimeError(f"Failed to create tenant '{name}': {output}") from e
 
+    def get_tenant_by_name(self, *, name: str) -> dict[str, Any] | None:
+        """Get a private Tenant by its exact metadata name.
+
+        List supports CEL filtering but does not provide a direct name lookup;
+        resolve the ID first, then use Get for the full status conditions.
+        """
+        response: dict[str, Any] = self.call(
+            service=f"{PRIVATE_API}.Tenants/List", data={"filter": f"this.metadata.name == {json.dumps(name)}"}
+        )
+        matches = [tenant for tenant in response.get("items", []) if tenant.get("metadata", {}).get("name") == name]
+        if not matches:
+            return None
+        if len(matches) > 1:
+            raise RuntimeError(f"Found multiple Fulfillment tenants named '{name}'")
+
+        tenant_id = matches[0].get("id")
+        if not tenant_id:
+            raise RuntimeError(f"Fulfillment tenant '{name}' has no ID")
+        tenant_response: dict[str, Any] = self.call(service=f"{PRIVATE_API}.Tenants/Get", data={"id": tenant_id})
+        return tenant_response.get("object")
+
     def find_tenant_id(self, *, name: str) -> str:
         """Return the tenant UUID for ``name``, or empty string if it is missing."""
         items = self.list_with_filter(
@@ -283,8 +295,7 @@ class GRPCClient:
             offset = 0
             while True:
                 response: dict[str, Any] = self.call(
-                    service=f"{PRIVATE_API}.Tenants/List",
-                    data={"offset": offset, "limit": 100},
+                    service=f"{PRIVATE_API}.Tenants/List", data={"offset": offset, "limit": 100}
                 )
                 page = response.get("items", [])
                 items.extend(item for item in page if item.get("metadata", {}).get("name") == name)
@@ -328,12 +339,7 @@ class GRPCClient:
     def create_external_ip(self, *, name: str, pool: str, tenant: str | None = None) -> str:
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.ExternalIPs/Create",
-            data={
-                "object": {
-                    "metadata": _metadata(name=name, tenant=tenant),
-                    "spec": {"pool": {"id": pool}},
-                }
-            },
+            data={"object": {"metadata": _metadata(name=name, tenant=tenant), "spec": {"pool": {"id": pool}}}},
         )
         return response["object"]["id"]
 

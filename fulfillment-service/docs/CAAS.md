@@ -130,6 +130,12 @@ Optional flags:
 - `--node-set name=<group>,size=<positive-integer>,baremetal-instance-type=<name>` - Repeat for
   multiple worker groups. Omit only when the catalog item supplies a locked or default node-set map.
 
+If `spec.network_attachment` is omitted or only partially set, Create fills missing
+subnet and security-group fields from the tenant's labeled default networking. Create
+fails with `InvalidArgument` when those defaults are missing or when security groups
+are omitted for a subnet that is not on the tenant default VirtualNetwork. Explicit
+subnet and security-group references must resolve in the cluster's tenant/project.
+
 The command outputs the cluster ID upon successful creation.
 
 ## Check Cluster Status

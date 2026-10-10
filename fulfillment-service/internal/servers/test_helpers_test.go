@@ -121,6 +121,83 @@ func createDiskImageWithLifecycle(
 	ExpectWithOffset(1, err).ToNot(HaveOccurred())
 }
 
+// seedTenantDefaultNetworking seeds a labeled default VirtualNetwork, Subnet (with IPv4 CIDR,
+// READY), and SecurityGroup (READY) for the given tenant/project so Cluster Create can complete
+// omitted/partial network_attachment from tenant defaults. Project may be empty.
+func seedTenantDefaultNetworking(ctx context.Context, tenant, project string) {
+	suffix := tenant
+	if project != "" {
+		suffix = tenant + "-" + project
+	}
+	vnID := "tenant-default-vn-" + suffix
+	subnetID := "tenant-default-subnet-" + suffix
+	sgID := "tenant-default-sg-" + suffix
+
+	vnDao, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
+		SetLogger(logger).
+		SetTenancyLogic(tenancy).
+		Build()
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+	_, err = vnDao.Create().SetObject(privatev1.VirtualNetwork_builder{
+		Id: vnID,
+		Metadata: privatev1.Metadata_builder{
+			Name:    vnID,
+			Tenant:  tenant,
+			Project: project,
+			Labels:  map[string]string{defaultLabel: "true"},
+		}.Build(),
+		Status: privatev1.VirtualNetworkStatus_builder{
+			State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
+		}.Build(),
+	}.Build()).Do(ctx)
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+
+	subnetsDao, err := dao.NewGenericDAO[*privatev1.Subnet]().
+		SetLogger(logger).
+		SetTenancyLogic(tenancy).
+		Build()
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+	_, err = subnetsDao.Create().SetObject(privatev1.Subnet_builder{
+		Id: subnetID,
+		Metadata: privatev1.Metadata_builder{
+			Name:    subnetID,
+			Tenant:  tenant,
+			Project: project,
+			Labels:  map[string]string{defaultLabel: "true"},
+		}.Build(),
+		Spec: privatev1.SubnetSpec_builder{
+			VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+			Ipv4Cidr:       new("10.200.0.0/24"),
+		}.Build(),
+		Status: privatev1.SubnetStatus_builder{
+			State: privatev1.SubnetState_SUBNET_STATE_READY,
+		}.Build(),
+	}.Build()).Do(ctx)
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+
+	sgDao, err := dao.NewGenericDAO[*privatev1.SecurityGroup]().
+		SetLogger(logger).
+		SetTenancyLogic(tenancy).
+		Build()
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+	_, err = sgDao.Create().SetObject(privatev1.SecurityGroup_builder{
+		Id: sgID,
+		Metadata: privatev1.Metadata_builder{
+			Name:    sgID,
+			Tenant:  tenant,
+			Project: project,
+			Labels:  map[string]string{defaultLabel: "true"},
+		}.Build(),
+		Spec: privatev1.SecurityGroupSpec_builder{
+			VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+		}.Build(),
+		Status: privatev1.SecurityGroupStatus_builder{
+			State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+		}.Build(),
+	}.Build()).Do(ctx)
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+}
+
 // createTenant seeds a Tenant row through the universal suite DAO. Non-shared tenants must exist
 // before a DiskImage can reference them: the reverse-reference trigger rejects a disk image whose
 // tenant is unknown.

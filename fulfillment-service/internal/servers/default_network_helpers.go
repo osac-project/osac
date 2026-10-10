@@ -23,6 +23,59 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
+// findDefaultVirtualNetwork returns the newest READY virtual network labeled as
+// a tenant default, scoped to the given tenant and project. Returns nil if none found.
+func findDefaultVirtualNetwork(
+	ctx context.Context,
+	logger *slog.Logger,
+	virtualNetworksDao *dao.GenericDAO[*privatev1.VirtualNetwork],
+	tenant, project string,
+) (*privatev1.VirtualNetwork, error) {
+	filter := fmt.Sprintf(
+		"this.metadata.labels[%q] == \"true\" && this.metadata.tenant == %q && this.metadata.project == %q",
+		defaultLabel, tenant, project,
+	)
+	var items []*privatev1.VirtualNetwork
+	const pageSize int32 = 1000
+	for offset := int32(0); ; {
+		listResponse, err := virtualNetworksDao.List().
+			SetFilter(filter).
+			SetOffset(offset).
+			SetLimit(pageSize).
+			Do(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, virtualNetwork := range listResponse.GetItems() {
+			if virtualNetwork.GetMetadata().HasDeletionTimestamp() {
+				continue
+			}
+			if virtualNetwork.GetStatus().GetState() != privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY {
+				continue
+			}
+			items = append(items, virtualNetwork)
+		}
+		if listResponse.GetSize() == 0 || offset+listResponse.GetSize() >= listResponse.GetTotal() {
+			break
+		}
+		offset += listResponse.GetSize()
+	}
+	if len(items) == 0 {
+		return nil, nil
+	}
+	sort.Slice(items, func(i, j int) bool {
+		ti := items[i].GetMetadata().GetCreationTimestamp().AsTime()
+		tj := items[j].GetMetadata().GetCreationTimestamp().AsTime()
+		return ti.After(tj)
+	})
+	if len(items) > 1 {
+		logger.WarnContext(ctx, "multiple default VirtualNetworks found, using newest",
+			slog.Int("count", len(items)),
+		)
+	}
+	return items[0], nil
+}
+
 // findDefaultSubnet returns the newest READY subnet labeled as a tenant default
 // with an IPv4 CIDR, scoped to the given tenant and project. Returns nil if none found.
 func findDefaultSubnet(

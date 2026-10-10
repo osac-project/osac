@@ -29,6 +29,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 var _ = Describe("Default networking provisioning", func() {
@@ -234,6 +235,63 @@ var _ = Describe("Default networking provisioning", func() {
 			g.Expect(cond.HasReason()).To(BeTrue())
 			g.Expect(cond.GetReason()).To(Equal("AllResourcesReady"))
 		}, time.Minute, time.Second).Should(Succeed())
+
+		By("creating a Cluster with omitted networking and verifying its stored tenant defaults")
+		templateID := createCatalogItemClusterTemplateFixture(ctx, nil, nil)
+		instanceTypeID := createCatalogItemBareMetalInstanceTypeFixture(ctx, "shared")
+		clustersClient := publicv1.NewClustersClient(tool.ExternalView().AdminConn())
+		createCluster := func(attachment *publicv1.ClusterNetworkAttachment) *publicv1.Cluster {
+			response, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
+				Object: publicv1.Cluster_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name:   fmt.Sprintf("default-network-cluster-%s", uuid.New()[24:32]),
+						Tenant: tenantName,
+					}.Build(),
+					Spec: publicv1.ClusterSpec_builder{
+						Template: publicv1.ClusterTemplateReference_builder{Id: templateID}.Build(),
+						NodeSets: map[string]*publicv1.ClusterNodeSet{
+							"workers": publicv1.ClusterNodeSet_builder{
+								Size:                  new(int32(1)),
+								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeID}.Build(),
+							}.Build(),
+						},
+						NetworkAttachment: attachment,
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			clusterID := response.GetObject().GetId()
+			deferCatalogItemFixtureDeletion(func(deleteCtx context.Context) error {
+				_, err := clustersClient.Delete(deleteCtx, publicv1.ClustersDeleteRequest_builder{Id: clusterID}.Build())
+				return err
+			}, func(getCtx context.Context) (bool, error) {
+				_, err := clustersClient.Get(getCtx, publicv1.ClustersGetRequest_builder{Id: clusterID}.Build())
+				if grpcstatus.Code(err) == grpccodes.NotFound {
+					return true, nil
+				}
+				return false, err
+			})
+			return response.GetObject()
+		}
+
+		clusterWithoutAttachment := createCluster(nil)
+		storedCluster, err := clustersClient.Get(ctx, publicv1.ClustersGetRequest_builder{Id: clusterWithoutAttachment.GetId()}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		attachment := storedCluster.GetObject().GetSpec().GetNetworkAttachment()
+		Expect(attachment.GetSubnet().GetId()).To(Equal(subnetId))
+		Expect(attachment.GetSecurityGroups()).To(HaveLen(1))
+		Expect(attachment.GetSecurityGroups()[0].GetId()).To(Equal(sgId))
+
+		By("filling a missing security group when the caller specifies the default subnet")
+		clusterWithPartialAttachment := createCluster(publicv1.ClusterNetworkAttachment_builder{
+			Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),
+		}.Build())
+		storedCluster, err = clustersClient.Get(ctx, publicv1.ClustersGetRequest_builder{Id: clusterWithPartialAttachment.GetId()}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		attachment = storedCluster.GetObject().GetSpec().GetNetworkAttachment()
+		Expect(attachment.GetSubnet().GetId()).To(Equal(subnetId))
+		Expect(attachment.GetSecurityGroups()).To(HaveLen(1))
+		Expect(attachment.GetSecurityGroups()[0].GetId()).To(Equal(sgId))
 	})
 
 	It("sets DefaultNetworkingReady=True/NoDefaultNetworking when no default NetworkClass has defaults", func(ctx context.Context) {

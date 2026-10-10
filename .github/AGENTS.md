@@ -48,6 +48,9 @@ state descriptions live in [osac-project/osac-ci](https://github.com/osac-projec
   never accept a check run as proof (any workflow can write one). Only the osac-ui lint and typecheck workflows are
   also approvable by the osac-ui maintainers (`osac-ui/OWNERS`); every other workflow reports a required check, uses
   secrets or publishes an image, so it stays with wg-infra.
+- `workflows/osac-ci-refresh.yml` answers `/osac-ci refresh` from the pull request's author or an owner, member or
+  collaborator: it recomputes the verdict from live state and posts it, for when a verdict is out of date. The comment
+  only decides whether the job runs; keep it out of every script and keep the per-comment concurrency group.
 - Changes to the files that define the checks (`.github/workflows`, `actions`, `scripts`, `filters`, `CODEOWNERS`,
   `.pre-commit-config.yaml`; Markdown in them excepted) need an approval from `@osac-project/wg-infra`. `CODEOWNERS` lists them and the OSAC CI
   policy applies the same list; keep both in step.

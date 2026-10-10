@@ -108,6 +108,12 @@ func Cmd() *cobra.Command {
 		nil,
 		setFlagHelp,
 	)
+	flags.StringVar(
+		&runner.args.instanceType,
+		"instance-type",
+		"",
+		instanceTypeFlagHelp,
+	)
 
 	if err := result.MarkFlagRequired("catalog-item"); err != nil {
 		panic(fmt.Sprintf("failed to mark catalog-item flag as required: %v", err))
@@ -127,6 +133,7 @@ type runnerContext struct {
 		userDataSecret       string
 		runStrategy          string
 		diskImage            string
+		instanceType         string
 		externalIPAttachment bool
 	}
 	logger *slog.Logger
@@ -204,6 +211,9 @@ func (c *runnerContext) buildSpec(catalogItemID string, externalIPAttachmentSet 
 	if c.args.diskImage != "" {
 		spec.DiskImage = &publicv1.DiskImageReference{Name: c.args.diskImage}
 	}
+	if c.args.instanceType != "" {
+		spec.InstanceType = &publicv1.BareMetalInstanceTypeReference{Name: c.args.instanceType, Shared: true}
+	}
 	if c.args.runStrategy != "" {
 		rs, err := fieldutil.ParseEnum(c.args.runStrategy, runStrategyMap, "run-strategy")
 		if err != nil {
@@ -267,6 +277,11 @@ _STRATEGY_ - Run strategy controlling the power state. Valid values are
 
 const diskImageFlagHelp = `
 _NAME_ - DiskImage resource name to use for this bare metal instance. When
+omitted, the catalog item must provide a default.
+`
+
+const instanceTypeFlagHelp = `
+_NAME_ - InstanceType resource name to use for this bare metal instance. When
 omitted, the catalog item must provide a default.
 `
 

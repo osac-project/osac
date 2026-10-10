@@ -41,8 +41,8 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
 			template := createCatalogItemBareMetalInstanceTemplateFixture(ctx, nil, bareMetalInstanceCatalogItemParameterDefinitions())
 			fields := publicv1.BareMetalInstanceCatalogItemFields_builder{
-				InstanceType: publicv1.BareMetalInstanceTypeReferenceFieldPolicy_builder{
-					Locked: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceType, Shared: true}.Build(),
+				InstanceType: publicv1.BareMetalInstanceTypeLocalReferenceFieldPolicy_builder{
+					Locked: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceType}.Build(),
 				}.Build(),
 				DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{
 					Locked: publicv1.DiskImageReference_builder{Id: image.GetId()}.Build(),
@@ -173,8 +173,8 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 				Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: template}.Build(),
 				Published: true,
 				Fields: publicv1.BareMetalInstanceCatalogItemFields_builder{
-					InstanceType: publicv1.BareMetalInstanceTypeReferenceFieldPolicy_builder{
-						Locked: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceType, Shared: true}.Build(),
+					InstanceType: publicv1.BareMetalInstanceTypeLocalReferenceFieldPolicy_builder{
+						Locked: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceType}.Build(),
 					}.Build(),
 					DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{
 						Locked: publicv1.DiskImageReference_builder{Id: image.GetId()}.Build(),
@@ -710,8 +710,8 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 				Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: template}.Build(),
 				Published: true,
 				Fields: publicv1.BareMetalInstanceCatalogItemFields_builder{
-					InstanceType: publicv1.BareMetalInstanceTypeReferenceFieldPolicy_builder{
-						Locked: publicv1.BareMetalInstanceTypeReference_builder{Id: id, Shared: true}.Build(),
+					InstanceType: publicv1.BareMetalInstanceTypeLocalReferenceFieldPolicy_builder{
+						Locked: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: id}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -726,9 +726,9 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 					Id:        item.GetId(),
 					Published: false,
 					Fields: publicv1.BareMetalInstanceCatalogItemFields_builder{
-						InstanceType: publicv1.BareMetalInstanceTypeReferenceFieldPolicy_builder{
-							Editable: publicv1.EditableBareMetalInstanceTypeReferenceField_builder{
-								DefaultValue: publicv1.BareMetalInstanceTypeReference_builder{Id: id, Shared: true}.Build(),
+						InstanceType: publicv1.BareMetalInstanceTypeLocalReferenceFieldPolicy_builder{
+							Editable: publicv1.EditableBareMetalInstanceTypeLocalReferenceField_builder{
+								DefaultValue: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: id}.Build(),
 							}.Build(),
 						}.Build(),
 					}.Build(),

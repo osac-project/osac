@@ -70,7 +70,7 @@ func bareMetalView(item *publicv1.BareMetalInstanceCatalogItem) view {
 	addBool(&v.fields, "Auto external IP attachment", fields.GetAutoExternalIpAttachment())
 	if p := fields.GetInstanceType(); p != nil {
 		appendPolicyRow(&v.fields, "Instance type", p.HasLocked(), p.GetEditable().GetDefaultValue() != nil,
-			formatFullRef(p.GetLocked()), formatFullRef(p.GetEditable().GetDefaultValue()))
+			formatRef(p.GetLocked()), formatRef(p.GetEditable().GetDefaultValue()))
 	}
 	addDiskImage(&v.fields, fields.GetDiskImage())
 	addParameters(&v.parameters, item.GetTemplateParameters())

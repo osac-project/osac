@@ -25,6 +25,8 @@ import (
 
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -389,6 +391,96 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetObject().GetId()).ToNot(BeEmpty())
 			Expect(response.GetObject().GetSpec().GetCatalogItem().GetId()).To(Equal(catalogItemID))
+		})
+
+		Describe("Instance type reference scope", func() {
+			var types *dao.GenericDAO[*privatev1.BareMetalInstanceType]
+			BeforeEach(func() {
+				var err error
+				types, err = dao.NewGenericDAO[*privatev1.BareMetalInstanceType]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+				Expect(err).ToNot(HaveOccurred())
+				createTenant("other-bmi-tenant")
+				for _, item := range []struct{ id, tenant string }{
+					{"shared-bmi-type", auth.SharedTenant},
+					{"foreign-bmi-type", "other-bmi-tenant"},
+				} {
+					_, err := types.Create().SetObject(privatev1.BareMetalInstanceType_builder{
+						Id: item.id, Metadata: privatev1.Metadata_builder{Name: item.id, Tenant: item.tenant}.Build(),
+						Spec: privatev1.BareMetalInstanceTypeSpec_builder{}.Build(),
+					}.Build()).Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+				}
+			})
+
+			createWithReference := func(refJSON string) (*privatev1.BareMetalInstance, error) {
+				spec := &privatev1.BareMetalInstanceSpec{}
+				if err := protojson.Unmarshal([]byte(fmt.Sprintf(`{"catalogItem":{"id":%q},"diskImage":{"id":"default-bmi-disk-image"},"sshPublicKey":%q,"instanceType":%s}`, catalogItemID, testSSHPublicKey, refJSON)), spec); err != nil {
+					return nil, err
+				}
+				response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+					Object: privatev1.BareMetalInstance_builder{
+						Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]), Tenant: testTenant}.Build(),
+						Spec:     spec,
+					}.Build(),
+				}.Build())
+				if err != nil {
+					return nil, err
+				}
+				return response.GetObject(), nil
+			}
+
+			It("decodes persisted local BMI references in JSON and protobuf wire", func() {
+				legacy := privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "default-type", Name: "default-type"}.Build()
+				wire, err := proto.Marshal(legacy)
+				Expect(err).ToNot(HaveOccurred())
+				oldSpecWire := protowire.AppendBytes(protowire.AppendTag(nil, 11, protowire.BytesType), wire)
+				decoded := &privatev1.BareMetalInstanceSpec{}
+				Expect(proto.Unmarshal(oldSpecWire, decoded)).To(Succeed())
+				Expect(decoded.GetInstanceType().GetId()).To(Equal("default-type"))
+				Expect(decoded.GetInstanceType().GetName()).To(Equal("default-type"))
+				Expect(decoded.GetInstanceType().GetShared()).To(BeFalse())
+				Expect(decoded.GetInstanceType().GetProject()).To(BeEmpty())
+				decoded = &privatev1.BareMetalInstanceSpec{}
+				Expect(protojson.Unmarshal([]byte(`{"instance_type":{"id":"default-type","name":"default-type"}}`), decoded)).To(Succeed())
+				Expect(decoded.GetInstanceType().GetId()).To(Equal("default-type"))
+				Expect(decoded.GetInstanceType().GetShared()).To(BeFalse())
+			})
+
+			It("resolves shared BMI hardware for a tenant-owned instance", func() {
+				object, err := createWithReference(`{"name":"shared-bmi-type","shared":true}`)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(object.GetMetadata().GetTenant()).To(Equal(testTenant))
+				ref := object.GetSpec().GetInstanceType()
+				Expect(ref.GetId()).To(Equal("shared-bmi-type"))
+				Expect(ref.GetName()).To(Equal("shared-bmi-type"))
+				Expect(ref.GetShared()).To(BeTrue())
+				stored, err := server.Get(ctx, privatev1.BareMetalInstancesGetRequest_builder{Id: object.GetId()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(proto.Equal(stored.GetObject().GetSpec().GetInstanceType(), ref)).To(BeTrue())
+			})
+
+			It("retains local BMI hardware resolution by default", func() {
+				object, err := createWithReference(`{"name":"default-type","shared":true}`)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(object.GetSpec().GetInstanceType().GetId()).To(Equal("default-type"))
+				Expect(object.GetSpec().GetInstanceType().GetName()).To(Equal("default-type"))
+			})
+
+			It("rejects another tenant's BMI hardware by ID even with shared scope", func() {
+				for _, ref := range []string{`{"id":"foreign-bmi-type"}`, `{"id":"foreign-bmi-type","shared":true}`} {
+					_, err := createWithReference(ref)
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				}
+			})
+
+			It("rejects mismatched ID and name and deleted BMI hardware", func() {
+				_, err := createWithReference(`{"id":"default-type","name":"shared-bmi-type","shared":true}`)
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				_, err = types.Delete().SetId("shared-bmi-type").Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				_, err = createWithReference(`{"name":"shared-bmi-type","shared":true}`)
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+			})
 		})
 
 		It("Creates object with valid SSH key", func() {
@@ -2877,8 +2969,8 @@ var _ = Describe("Private bare metal instances server", func() {
 		var (
 			server         *PrivateBareMetalInstancesServer
 			catalogServer  *PrivateBareMetalInstanceCatalogItemsServer
-			catIDWithHT    string
-			catIDNoHT      string
+			catID          string
+			defaultBMITID  string
 			defaultSubnet  *privatev1.Subnet
 			defaultSG      *privatev1.SecurityGroup
 			customSubnetID string
@@ -2903,38 +2995,40 @@ var _ = Describe("Private bare metal instances server", func() {
 			createDiskImageWithLifecycle("default-bmi-disk-image",
 				privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE, nil)
 
-			// Create a HostType with fabric + management + lifecycle interfaces.
-			hostTypesDao, err := dao.NewGenericDAO[*privatev1.HostType]().
+			// Create a BareMetalInstanceType with fabric + management + lifecycle network ports.
+			bmitDao, err := dao.NewGenericDAO[*privatev1.BareMetalInstanceType]().
 				SetLogger(logger).
 				SetTenancyLogic(tenancy).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
-			_, err = hostTypesDao.Create().SetObject(privatev1.HostType_builder{
-				Id:    "default-test-host-type",
-				Title: "Default Test Host Type",
+			bmitResp, err := bmitDao.Create().SetObject(privatev1.BareMetalInstanceType_builder{
 				Metadata: privatev1.Metadata_builder{
-					Tenant: testTenant,
+					Tenant: auth.SharedTenant,
 					Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 				}.Build(),
-				Interfaces: []*privatev1.NetworkInterface{
-					privatev1.NetworkInterface_builder{Name: "data-0", Role: "fabric"}.Build(),
-					privatev1.NetworkInterface_builder{Name: "data-1", Role: "fabric"}.Build(),
-					privatev1.NetworkInterface_builder{Name: "mgmt-0", Role: "management"}.Build(),
-					privatev1.NetworkInterface_builder{Name: "bmc-0", Role: "lifecycle"}.Build(),
-				},
+				Spec: privatev1.BareMetalInstanceTypeSpec_builder{
+					Hardware: privatev1.BareMetalHardwareSpec_builder{
+						NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+							privatev1.BareMetalNetworkPortSpec_builder{Name: "mgmt-0", Role: "management"}.Build(),
+							privatev1.BareMetalNetworkPortSpec_builder{Name: "bmc-0", Role: "lifecycle"}.Build(),
+							privatev1.BareMetalNetworkPortSpec_builder{Name: "data-0", Role: "fabric"}.Build(),
+							privatev1.BareMetalNetworkPortSpec_builder{Name: "data-1", Role: "fabric"}.Build(),
+						},
+					}.Build(),
+				}.Build(),
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
+			defaultBMITID = bmitResp.GetObject().GetId()
 
-			// Create templates.
+			// Create template and catalog item for BMI creation.
 			templatesDao, err := dao.NewGenericDAO[*privatev1.BareMetalInstanceTemplate]().
 				SetLogger(logger).
 				SetTenancyLogic(tenancy).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 			_, err = templatesDao.Create().SetObject(privatev1.BareMetalInstanceTemplate_builder{
-				Id:       "default-template-with-ht",
-				Title:    "Template with HostType",
-				HostType: "default-test-host-type",
+				Id:    "default-template",
+				Title: "Default Template",
 				Metadata: privatev1.Metadata_builder{
 					Tenant: testTenant,
 					Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
@@ -2942,42 +3036,18 @@ var _ = Describe("Private bare metal instances server", func() {
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 
-			_, err = templatesDao.Create().SetObject(privatev1.BareMetalInstanceTemplate_builder{
-				Id:    "default-template-no-ht",
-				Title: "Template without HostType",
-				Metadata: privatev1.Metadata_builder{
-					Tenant: testTenant,
-					Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-				}.Build(),
-			}.Build()).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-
-			// Create catalog items.
 			catResp, err := catalogServer.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
-					Title:     "Catalog with HT for defaults",
-					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "default-template-with-ht"}.Build(),
+					Title:     "Catalog for defaults",
+					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "default-template"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			catIDWithHT = catResp.GetObject().GetId()
-
-			catResp2, err := catalogServer.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
-				Object: privatev1.BareMetalInstanceCatalogItem_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Title:     "Catalog no HT for defaults",
-					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "default-template-no-ht"}.Build(),
-					Published: true,
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			catIDNoHT = catResp2.GetObject().GetId()
+			catID = catResp.GetObject().GetId()
 
 			// Create a NetworkClass with fabric_manager for the fabric manager validation.
 			ncDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
@@ -3092,7 +3162,8 @@ var _ = Describe("Private bare metal instances server", func() {
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithHT}.Build(),
+						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
+						InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: defaultBMITID, Shared: true}.Build(),
 						SshPublicKey: new(testSSHPublicKey),
 					}.Build(),
 				}.Build(),
@@ -3115,7 +3186,7 @@ var _ = Describe("Private bare metal instances server", func() {
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithHT}.Build(),
+						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
 						SshPublicKey: new(testSSHPublicKey),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
@@ -3132,7 +3203,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(attachments[0].GetSubnet().GetId()).To(Equal(customSubnetID))
 		})
 
-		It("Omits interface when template has no HostType", func() {
+		It("Omits interface when no instance_type is set", func() {
 			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -3140,7 +3211,7 @@ var _ = Describe("Private bare metal instances server", func() {
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDNoHT}.Build(),
+						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
 						SshPublicKey: new(testSSHPublicKey),
 					}.Build(),
 				}.Build(),
@@ -3179,7 +3250,7 @@ var _ = Describe("Private bare metal instances server", func() {
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithHT}.Build(),
+						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
 						SshPublicKey: new(testSSHPublicKey),
 					}.Build(),
 				}.Build(),
@@ -3205,7 +3276,7 @@ var _ = Describe("Private bare metal instances server", func() {
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithHT}.Build(),
+						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
 						SshPublicKey: new(testSSHPublicKey),
 					}.Build(),
 				}.Build(),
@@ -3214,53 +3285,28 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(response.GetObject().GetSpec().GetNetworkAttachments()).To(BeEmpty())
 		})
 
-		It("Fails when HostType has no fabric interface", func() {
-			// Create a HostType with only management and lifecycle interfaces.
-			htDao, htErr := dao.NewGenericDAO[*privatev1.HostType]().
+		It("Fails when BareMetalInstanceType has no fabric network port", func() {
+			// Create a BareMetalInstanceType with only management and lifecycle ports.
+			bmitDao, bmitErr := dao.NewGenericDAO[*privatev1.BareMetalInstanceType]().
 				SetLogger(logger).
 				SetTenancyLogic(tenancy).
 				Build()
-			Expect(htErr).ToNot(HaveOccurred())
-			_, htErr = htDao.Create().SetObject(privatev1.HostType_builder{
-				Id:    "no-fabric-host-type",
-				Title: "No Fabric Host Type",
+			Expect(bmitErr).ToNot(HaveOccurred())
+			noFabricResp, bmitErr := bmitDao.Create().SetObject(privatev1.BareMetalInstanceType_builder{
 				Metadata: privatev1.Metadata_builder{
-					Tenant: testTenant,
+					Tenant: auth.SharedTenant,
+					Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 				}.Build(),
-				Interfaces: []*privatev1.NetworkInterface{
-					privatev1.NetworkInterface_builder{Name: "mgmt-0", Role: "management"}.Build(),
-					privatev1.NetworkInterface_builder{Name: "bmc-0", Role: "lifecycle"}.Build(),
-				},
-			}.Build()).Do(ctx)
-			Expect(htErr).ToNot(HaveOccurred())
-
-			// Create template and catalog item referencing this host type.
-			tmplDao, tmplErr := dao.NewGenericDAO[*privatev1.BareMetalInstanceTemplate]().
-				SetLogger(logger).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(tmplErr).ToNot(HaveOccurred())
-			_, tmplErr = tmplDao.Create().SetObject(privatev1.BareMetalInstanceTemplate_builder{
-				Id:       "no-fabric-template",
-				Title:    "No Fabric Template",
-				HostType: "no-fabric-host-type",
-				Metadata: privatev1.Metadata_builder{
-					Tenant: testTenant,
-				}.Build(),
-			}.Build()).Do(ctx)
-			Expect(tmplErr).ToNot(HaveOccurred())
-
-			catResp, catErr := catalogServer.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
-				Object: privatev1.BareMetalInstanceCatalogItem_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+				Spec: privatev1.BareMetalInstanceTypeSpec_builder{
+					Hardware: privatev1.BareMetalHardwareSpec_builder{
+						NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+							privatev1.BareMetalNetworkPortSpec_builder{Name: "mgmt-0", Role: "management"}.Build(),
+							privatev1.BareMetalNetworkPortSpec_builder{Name: "bmc-0", Role: "lifecycle"}.Build(),
+						},
 					}.Build(),
-					Title:     "Catalog no fabric",
-					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "no-fabric-template"}.Build(),
-					Published: true,
 				}.Build(),
-			}.Build())
-			Expect(catErr).ToNot(HaveOccurred())
+			}.Build()).Do(ctx)
+			Expect(bmitErr).ToNot(HaveOccurred())
 
 			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
@@ -3268,7 +3314,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catResp.GetObject().GetId()}.Build(),
+						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
+						InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: noFabricResp.GetObject().GetId(), Shared: true}.Build(),
 						SshPublicKey: new(testSSHPublicKey),
 					}.Build(),
 				}.Build(),

@@ -14,6 +14,9 @@
 columns:
 
 - header: NAME
+  value: "has(this.metadata.name) && this.metadata.name != '' ? this.metadata.name : this.id"
+
+- header: ID
   value: this.id
 
 - header: SOURCE_REF

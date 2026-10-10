@@ -820,15 +820,15 @@ func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.Compute
 			StorageTier: ciSpec.GetBootDisk().GetStorageTier().GetName(),
 		}
 	}
-	if len(ciSpec.GetAdditionalDisks()) > 0 {
-		disks := make([]osacv1alpha1.DiskSpec, 0, len(ciSpec.GetAdditionalDisks()))
-		for _, disk := range ciSpec.GetAdditionalDisks() {
-			disks = append(disks, osacv1alpha1.DiskSpec{
+	if disks := ciSpec.GetAdditionalDisks().GetItems(); len(disks) > 0 {
+		operatorDisks := make([]osacv1alpha1.DiskSpec, 0, len(disks))
+		for _, disk := range disks {
+			operatorDisks = append(operatorDisks, osacv1alpha1.DiskSpec{
 				SizeGiB:     disk.GetSizeGib(),
 				StorageTier: disk.GetStorageTier().GetName(),
 			})
 		}
-		spec.AdditionalDisks = disks
+		spec.AdditionalDisks = operatorDisks
 	}
 
 	return nil

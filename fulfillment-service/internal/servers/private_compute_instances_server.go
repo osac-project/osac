@@ -449,7 +449,7 @@ func (s *PrivateComputeInstancesServer) prepareCreate(ctx context.Context, candi
 // tiers; volume provisioning chooses the backend later.
 func (s *PrivateComputeInstancesServer) validateStorageTiers(ctx context.Context, instance *privatev1.ComputeInstance) error {
 	spec := instance.GetSpec()
-	disks := append([]*privatev1.ComputeInstanceDisk{spec.GetBootDisk()}, spec.GetAdditionalDisks()...)
+	disks := append([]*privatev1.ComputeInstanceDisk{spec.GetBootDisk()}, spec.GetAdditionalDisks().GetItems()...)
 	for _, disk := range disks {
 		ref := disk.GetStorageTier()
 		if ref == nil {
@@ -1122,13 +1122,13 @@ func validateComputeDiskImmutability(
 
 	// Validate additional_disks immutability
 	if updatingAdditionalDisks {
-		existingDisks := existingSpec.GetAdditionalDisks()
-		newDisks := newSpec.GetAdditionalDisks()
+		existingDisks := existingSpec.GetAdditionalDisks().GetItems()
+		newDisks := newSpec.GetAdditionalDisks().GetItems()
 
 		if len(existingDisks) != len(newDisks) {
 			return grpcstatus.Errorf(
 				grpccodes.InvalidArgument,
-				"cannot change spec.additional_disks array length from %d to %d: additional disks are immutable",
+				"cannot change spec.additional_disks list length from %d to %d: additional disks are immutable",
 				len(existingDisks), len(newDisks),
 			)
 		}

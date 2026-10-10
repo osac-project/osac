@@ -500,12 +500,12 @@ var _ = Describe("Private compute instances server", func() {
 					}.Build(),
 					Spec: privatev1.ComputeInstanceSpec_builder{
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
-						AdditionalDisks: []*privatev1.ComputeInstanceDisk{
+						AdditionalDisks: privatev1.ComputeInstanceDiskList_builder{Items: []*privatev1.ComputeInstanceDisk{
 							privatev1.ComputeInstanceDisk_builder{
 								SizeGib:     proto.Int32(100),
 								StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
 							}.Build(),
-						},
+						}}.Build(),
 						NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
 							privatev1.ComputeNetworkAttachment_builder{
 								Subnet: privatev1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
@@ -518,9 +518,9 @@ var _ = Describe("Private compute instances server", func() {
 			Expect(response).ToNot(BeNil())
 			object := response.GetObject()
 			Expect(object).ToNot(BeNil())
-			Expect(object.GetSpec().GetAdditionalDisks()).To(HaveLen(1))
-			Expect(object.GetSpec().GetAdditionalDisks()[0].GetSizeGib()).To(Equal(int32(100)))
-			Expect(object.GetSpec().GetAdditionalDisks()[0].GetStorageTier().GetName()).To(Equal("standard"))
+			Expect(object.GetSpec().GetAdditionalDisks().GetItems()).To(HaveLen(1))
+			Expect(object.GetSpec().GetAdditionalDisks().GetItems()[0].GetSizeGib()).To(Equal(int32(100)))
+			Expect(object.GetSpec().GetAdditionalDisks().GetItems()[0].GetStorageTier().GetName()).To(Equal("standard"))
 		})
 
 		It("List objects", func() {
@@ -1093,7 +1093,7 @@ var _ = Describe("Private compute instances server", func() {
 				_, err = server.templatesDao.Update().SetObject(template.GetObject()).Do(ctx)
 				Expect(err).NotTo(HaveOccurred())
 			} else if additional {
-				spec.SetAdditionalDisks([]*privatev1.ComputeInstanceDisk{disk})
+				spec.SetAdditionalDisks(privatev1.ComputeInstanceDiskList_builder{Items: []*privatev1.ComputeInstanceDisk{disk}}.Build())
 			} else {
 				spec.SetBootDisk(disk)
 			}
@@ -1267,9 +1267,9 @@ var _ = Describe("Private compute instances server", func() {
 						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 						Spec: privatev1.ComputeInstanceSpec_builder{
 							Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "additional-tier-template"}.Build(),
-							AdditionalDisks: []*privatev1.ComputeInstanceDisk{
+							AdditionalDisks: privatev1.ComputeInstanceDiskList_builder{Items: []*privatev1.ComputeInstanceDisk{
 								additionalDisk.Build(),
-							},
+							}}.Build(),
 							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
 								privatev1.ComputeNetworkAttachment_builder{
 									Subnet: privatev1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
@@ -3075,12 +3075,12 @@ var _ = Describe("Private compute instances server", func() {
 								SizeGib:     proto.Int32(100),
 								StorageTier: privatev1.StorageTierReference_builder{Name: "tier1"}.Build(),
 							}.Build(),
-							AdditionalDisks: []*privatev1.ComputeInstanceDisk{
+							AdditionalDisks: privatev1.ComputeInstanceDiskList_builder{Items: []*privatev1.ComputeInstanceDisk{
 								privatev1.ComputeInstanceDisk_builder{
 									SizeGib:     proto.Int32(200),
 									StorageTier: privatev1.StorageTierReference_builder{Name: "tier1"}.Build(),
 								}.Build(),
-							},
+							}}.Build(),
 							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
 								privatev1.ComputeNetworkAttachment_builder{
 									Subnet: privatev1.SubnetLocalReference_builder{Id: subnet.GetId()}.Build(),
@@ -3099,12 +3099,12 @@ var _ = Describe("Private compute instances server", func() {
 					Object: privatev1.ComputeInstance_builder{
 						Id: id,
 						Spec: privatev1.ComputeInstanceSpec_builder{
-							AdditionalDisks: []*privatev1.ComputeInstanceDisk{
+							AdditionalDisks: privatev1.ComputeInstanceDiskList_builder{Items: []*privatev1.ComputeInstanceDisk{
 								privatev1.ComputeInstanceDisk_builder{
 									SizeGib:     proto.Int32(200),
 									StorageTier: privatev1.StorageTierReference_builder{Name: "tier2"}.Build(),
 								}.Build(),
-							},
+							}}.Build(),
 						}.Build(),
 					}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{
@@ -3132,12 +3132,12 @@ var _ = Describe("Private compute instances server", func() {
 								SizeGib:     proto.Int32(100),
 								StorageTier: privatev1.StorageTierReference_builder{Name: "tier1"}.Build(),
 							}.Build(),
-							AdditionalDisks: []*privatev1.ComputeInstanceDisk{
+							AdditionalDisks: privatev1.ComputeInstanceDiskList_builder{Items: []*privatev1.ComputeInstanceDisk{
 								privatev1.ComputeInstanceDisk_builder{
 									SizeGib:     proto.Int32(200),
 									StorageTier: privatev1.StorageTierReference_builder{Name: "tier1"}.Build(),
 								}.Build(),
-							},
+							}}.Build(),
 							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
 								privatev1.ComputeNetworkAttachment_builder{
 									Subnet: privatev1.SubnetLocalReference_builder{Id: subnet.GetId()}.Build(),
@@ -3156,12 +3156,12 @@ var _ = Describe("Private compute instances server", func() {
 					Object: privatev1.ComputeInstance_builder{
 						Id: id,
 						Spec: privatev1.ComputeInstanceSpec_builder{
-							AdditionalDisks: []*privatev1.ComputeInstanceDisk{
+							AdditionalDisks: privatev1.ComputeInstanceDiskList_builder{Items: []*privatev1.ComputeInstanceDisk{
 								privatev1.ComputeInstanceDisk_builder{
 									SizeGib:     proto.Int32(300),
 									StorageTier: privatev1.StorageTierReference_builder{Name: "tier1"}.Build(),
 								}.Build(),
-							},
+							}}.Build(),
 						}.Build(),
 					}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{
@@ -4070,7 +4070,7 @@ var _ = Describe("Catalog materialized defaults", func() {
 		instance := privatev1.ComputeInstance_builder{Spec: &privatev1.ComputeInstanceSpec{}}.Build()
 		disk := privatev1.ComputeInstanceDisk_builder{StorageTier: privatev1.StorageTierReference_builder{Id: tier.GetId()}.Build()}.Build()
 		if additional {
-			instance.GetSpec().SetAdditionalDisks([]*privatev1.ComputeInstanceDisk{disk})
+			instance.GetSpec().SetAdditionalDisks(privatev1.ComputeInstanceDiskList_builder{Items: []*privatev1.ComputeInstanceDisk{disk}}.Build())
 		} else {
 			instance.GetSpec().SetBootDisk(disk)
 		}

@@ -129,7 +129,7 @@ func validateComputeInstanceCatalogItemSSHKeyPolicy(
 // applyComputeInstanceCatalogItemPolicies merges the offering's field rules into a new VM spec.
 // It rejects caller values for locked fields, keeps caller values for editable fields, and copies
 // locked/default values into omitted fields. Explicit zero, false, and empty strings count as
-// supplied; empty collections follow their existing omitted-input behavior. The caller discards
+// supplied; empty additional disk lists are present when their wrapper is set. The caller discards
 // this spec on error and resolves copied references and Template defaults afterward.
 func applyComputeInstanceCatalogItemPolicies(spec *privatev1.ComputeInstanceSpec, fields *privatev1.ComputeInstanceCatalogItemFields) error {
 	if spec == nil || fields == nil {
@@ -156,7 +156,7 @@ func applyComputeInstanceCatalogItemPolicies(spec *privatev1.ComputeInstanceSpec
 	if err := applyPolicy(fields.GetNetworkAttachments(), len(spec.GetNetworkAttachments()) > 0, spec.SetNetworkAttachments, decodeComputeInstanceNetworkAttachmentListPolicy, cloneComputeInstanceNetworkAttachments); err != nil {
 		return fmt.Errorf("network_attachments: %w", err)
 	}
-	if err := applyPolicy(fields.GetAdditionalDisks(), len(spec.GetAdditionalDisks()) > 0, spec.SetAdditionalDisks, decodeComputeInstanceDiskListPolicy, cloneComputeInstanceDisks); err != nil {
+	if err := applyPolicy(fields.GetAdditionalDisks(), spec.GetAdditionalDisks() != nil, spec.SetAdditionalDisks, decodeComputeInstanceDiskListPolicy, cloneComputeInstanceDiskList); err != nil {
 		return fmt.Errorf("additional_disks: %w", err)
 	}
 	return applyComputeInstanceCatalogItemBootDiskPolicies(spec, fields.GetBootDisk())
@@ -317,12 +317,12 @@ func validateComputeInstanceCatalogItemAdditionalDisksPolicy(
 		return nil
 	}
 	if state.hasLocked {
-		if err := resolveDisks(state.lockedValue); err != nil {
+		if err := resolveDisks(state.lockedValue.GetItems()); err != nil {
 			return err
 		}
 	}
 	if state.hasDefault {
-		if err := resolveDisks(state.defaultValue); err != nil {
+		if err := resolveDisks(state.defaultValue.GetItems()); err != nil {
 			return err
 		}
 	}
@@ -490,29 +490,29 @@ func decodeInstanceTypeReferencePolicy(
 // Returned message/list values may alias the policy and must be copied before resource assignment.
 func decodeComputeInstanceDiskListPolicy(
 	policy *privatev1.ComputeInstanceDiskListFieldPolicy,
-) (policyState[[]*privatev1.ComputeInstanceDisk], error) {
+) (policyState[*privatev1.ComputeInstanceDiskList], error) {
 	if policy == nil {
-		return policyState[[]*privatev1.ComputeInstanceDisk]{}, nil
+		return policyState[*privatev1.ComputeInstanceDiskList]{}, nil
 	}
 	if policy.HasLocked() {
 		locked := policy.GetLocked()
 		if locked == nil {
-			return policyState[[]*privatev1.ComputeInstanceDisk]{}, fmt.Errorf("locked additional disks policy is empty")
+			return policyState[*privatev1.ComputeInstanceDiskList]{}, fmt.Errorf("locked additional disks policy is empty")
 		}
-		return policyState[[]*privatev1.ComputeInstanceDisk]{hasLocked: true, lockedValue: locked.GetItems()}, nil
+		return policyState[*privatev1.ComputeInstanceDiskList]{hasLocked: true, lockedValue: locked}, nil
 	}
 	if policy.HasEditable() {
 		editable := policy.GetEditable()
 		if editable == nil {
-			return policyState[[]*privatev1.ComputeInstanceDisk]{}, fmt.Errorf("editable additional disks policy is empty")
+			return policyState[*privatev1.ComputeInstanceDiskList]{}, fmt.Errorf("editable additional disks policy is empty")
 		}
 		defaultValue := editable.GetDefaultValue()
 		if defaultValue == nil {
-			return policyState[[]*privatev1.ComputeInstanceDisk]{}, nil
+			return policyState[*privatev1.ComputeInstanceDiskList]{}, nil
 		}
-		return policyState[[]*privatev1.ComputeInstanceDisk]{hasDefault: true, defaultValue: defaultValue.GetItems()}, nil
+		return policyState[*privatev1.ComputeInstanceDiskList]{hasDefault: true, defaultValue: defaultValue}, nil
 	}
-	return policyState[[]*privatev1.ComputeInstanceDisk]{}, fmt.Errorf("additional disks policy has no behavior")
+	return policyState[*privatev1.ComputeInstanceDiskList]{}, fmt.Errorf("additional disks policy has no behavior")
 }
 
 // decodeComputeInstanceNetworkAttachmentListPolicy decodes the selected locked/default policy value without mutating the policy.
@@ -545,21 +545,6 @@ func decodeComputeInstanceNetworkAttachmentListPolicy(
 	return policyState[[]*privatev1.ComputeNetworkAttachment]{}, fmt.Errorf("network attachments policy has no behavior")
 }
 
-// cloneComputeInstanceDisks copies the collection and its protobuf values, retaining nil entries.
-// The result can be modified without changing the source policy.
-func cloneComputeInstanceDisks(value []*privatev1.ComputeInstanceDisk) []*privatev1.ComputeInstanceDisk {
-	if value == nil {
-		return nil
-	}
-	result := make([]*privatev1.ComputeInstanceDisk, len(value))
-	for i, disk := range value {
-		if disk != nil {
-			result[i] = cloneMessage(disk)
-		}
-	}
-	return result
-}
-
 // cloneComputeInstanceNetworkAttachments copies the collection and its protobuf values, retaining nil entries.
 // The result can be modified without changing the source policy.
 func cloneComputeInstanceNetworkAttachments(value []*privatev1.ComputeNetworkAttachment) []*privatev1.ComputeNetworkAttachment {
@@ -573,4 +558,20 @@ func cloneComputeInstanceNetworkAttachments(value []*privatev1.ComputeNetworkAtt
 		}
 	}
 	return result
+}
+
+// cloneComputeInstanceDiskList copies the wrapper and its protobuf values, retaining nil entries.
+// The result can be modified without changing the source policy.
+func cloneComputeInstanceDiskList(value *privatev1.ComputeInstanceDiskList) *privatev1.ComputeInstanceDiskList {
+	if value == nil {
+		return nil
+	}
+	items := value.GetItems()
+	clonedItems := make([]*privatev1.ComputeInstanceDisk, len(items))
+	for i, disk := range items {
+		if disk != nil {
+			clonedItems[i] = cloneMessage(disk)
+		}
+	}
+	return privatev1.ComputeInstanceDiskList_builder{Items: clonedItems}.Build()
 }

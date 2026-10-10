@@ -117,6 +117,8 @@ class OsacCLI:
 
         # Add additional disks
         if additional_disks is not None:
+            if not additional_disks:
+                args.extend(["--additional-disk", ""])
             for idx, disk in enumerate(additional_disks):
                 if not isinstance(disk, dict):
                     raise ValueError(f"additional_disks[{idx}]: must be a dict, got {type(disk).__name__}")

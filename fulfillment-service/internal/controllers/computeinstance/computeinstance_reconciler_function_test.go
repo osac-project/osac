@@ -207,7 +207,7 @@ var _ = Describe("buildSpec", func() {
 							SizeGib:     proto.Int32(20),
 							StorageTier: privatev1.StorageTierReference_builder{Name: "fast"}.Build(),
 						}.Build(),
-						AdditionalDisks: []*privatev1.ComputeInstanceDisk{
+						AdditionalDisks: privatev1.ComputeInstanceDiskList_builder{Items: []*privatev1.ComputeInstanceDisk{
 							privatev1.ComputeInstanceDisk_builder{
 								SizeGib:     proto.Int32(100),
 								StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
@@ -216,7 +216,7 @@ var _ = Describe("buildSpec", func() {
 								SizeGib:     proto.Int32(50),
 								StorageTier: privatev1.StorageTierReference_builder{Name: "archive"}.Build(),
 							}.Build(),
-						},
+						}}.Build(),
 						NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
 							privatev1.ComputeNetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: subnetID}}.Build(),
 						},

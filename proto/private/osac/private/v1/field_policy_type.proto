@@ -233,11 +233,6 @@ message EditableComputeNetworkAttachmentList {
   ComputeNetworkAttachmentList default_value = 1;
 }
 
-// Wraps compute instance disks for use in a field policy.
-message ComputeInstanceDiskList {
-  repeated ComputeInstanceDisk items = 1;
-}
-
 // Defines whether compute instance additional disks are locked or editable.
 message ComputeInstanceDiskListFieldPolicy {
   oneof behavior {

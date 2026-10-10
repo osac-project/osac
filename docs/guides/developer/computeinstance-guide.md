@@ -81,7 +81,11 @@ The fulfillment service resolves each disk independently using this order:
 
 An explicit user value takes precedence over a catalog or template default.
 Catalog item policies still apply: a non-editable field rejects a user value,
-while an editable field with a default accepts an override.
+while an editable field with a default accepts an override. For
+`additional_disks`, omit the field to use the Catalog Item default. If the
+Catalog Item has an editable default and you want no additional disks, set
+`additional_disks` to `{"items": []}` to opt out. See the [CLI and API examples
+below](#select-tiers-when-creating-a-vm) for these request shapes.
 
 Template defaults apply when the user omits a value and the CatalogItem has not
 already supplied one. However, an editable CatalogItem field without a default
@@ -133,13 +137,18 @@ osac create computeinstance \
 ```
 
 Repeat `--additional-disk` for more disks. The CLI requires
-`storage-tier=<name>` in every `--additional-disk` specification. The boot
-disk tier may be omitted when the applicable catalog-item policy does not
-require a user value and a catalog-item or template default supplies it. A
-template default does not satisfy an editable catalog field without a catalog
-default.
+`storage-tier=<name>` in every disk specification. CatalogItems can define a
+default list for `additional_disks`. If the CatalogItem used to create the
+ComputeInstance has this default, pass `--additional-disk ""` to opt out and
+create the instance without additional disks. The field must be editable for
+this override to be accepted.
+The boot disk tier may be omitted when the applicable Catalog Item policy does
+not require a user value and a Catalog Item or Template default supplies it. A
+template default does not satisfy an editable CatalogItem field without a
+CatalogItem default.
 
-The equivalent API shape is:
+The equivalent API shape is shown below. To opt out of a Catalog Item disk
+default, send `"additional_disks": {"items": []}`.
 
 ```json
 {
@@ -148,12 +157,14 @@ The equivalent API shape is:
       "size_gib": 20,
       "storage_tier": {"name": "fast"}
     },
-    "additional_disks": [
-      {
-        "size_gib": 200,
-        "storage_tier": {"name": "archive"}
-      }
-    ]
+    "additional_disks": {
+      "items": [
+        {
+          "size_gib": 200,
+          "storage_tier": {"name": "archive"}
+        }
+      ]
+    }
   }
 }
 ```
@@ -402,9 +413,9 @@ grpcurl $GRPCURL_FLAGS -H "Authorization: Bearer $TOKEN" -d '{
         "size_gib": 10,
         "storage_tier": {"name": "<boot-tier>"}
       },
-      "additional_disks": [
-        {"size_gib": 50, "storage_tier": {"name": "<data-tier>"}}
-      ],
+      "additional_disks": {
+        "items": [{"size_gib": 50, "storage_tier": {"name": "<data-tier>"}}]
+      },
       "network_attachments": [
         {"subnet": "<subnet-id>"}
       ],
@@ -435,9 +446,9 @@ curl -fsS $CURL_FLAGS -X POST -H "Authorization: Bearer $TOKEN" \
       "size_gib": 10,
       "storage_tier": {"name": "<boot-tier>"}
     },
-    "additional_disks": [
-      {"size_gib": 50, "storage_tier": {"name": "<data-tier>"}}
-    ],
+    "additional_disks": {
+      "items": [{"size_gib": 50, "storage_tier": {"name": "<data-tier>"}}]
+    },
     "network_attachments": [
       {"subnet": "<subnet-id>"}
     ],
@@ -493,9 +504,10 @@ spec:
     storage_tier:
       name: <boot-tier>
   additional_disks:
-    - size_gib: 50
-      storage_tier:
-        name: <data-tier>
+    items:
+      - size_gib: 50
+        storage_tier:
+          name: <data-tier>
   network_attachments:
     - subnet: <subnet-id>
   run_strategy: Always

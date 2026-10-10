@@ -26,6 +26,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -66,10 +67,11 @@ var _ = Describe("Private cluster versions server", func() {
 
 		// Shared test helpers:
 		var (
-			createCV              func(name, version string) *privatev1.ClusterVersion
-			createWithState       func(name, version string, state privatev1.ClusterVersionState) *privatev1.ClusterVersion
-			transitionTo          func(id string, state privatev1.ClusterVersionState)
-			expectInvalidArgument func(err error, substring string)
+			createCV                 func(name, version string) *privatev1.ClusterVersion
+			createAvailableDiskImage func(name string) *privatev1.DiskImage
+			createWithState          func(name, version string, state privatev1.ClusterVersionState) *privatev1.ClusterVersion
+			transitionTo             func(id string, state privatev1.ClusterVersionState)
+			expectInvalidArgument    func(err error, substring string)
 		)
 
 		BeforeEach(func() {
@@ -82,6 +84,22 @@ var _ = Describe("Private cluster versions server", func() {
 				SetTenancyLogic(tenancy).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
+
+			createAvailableDiskImage = func(name string) *privatev1.DiskImage {
+				diskImagesDao, err := dao.NewGenericDAO[*privatev1.DiskImage]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				response, err := diskImagesDao.Create().SetObject(privatev1.DiskImage_builder{
+					Metadata: privatev1.Metadata_builder{Name: name, Tenant: testTenant}.Build(),
+					Spec: privatev1.DiskImageSpec_builder{
+						Lifecycle: privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE,
+					}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				return response.GetObject()
+			}
 
 			// Helper to create a cluster version with default image derived from version.
 			createCV = func(name, version string) *privatev1.ClusterVersion {
@@ -944,6 +962,7 @@ var _ = Describe("Private cluster versions server", func() {
 						Spec: privatev1.ClusterVersionSpec_builder{
 							Version:   "4.17.0",
 							Image:     "quay.io/ocp:4.17.0",
+							DiskImage: privatev1.DiskImageReference_builder{Id: createAvailableDiskImage("default-first-image").GetId()}.Build(),
 							IsDefault: new(true),
 						}.Build(),
 					}.Build(),
@@ -958,6 +977,7 @@ var _ = Describe("Private cluster versions server", func() {
 						Spec: privatev1.ClusterVersionSpec_builder{
 							Version:   "4.18.0",
 							Image:     "quay.io/ocp:4.18.0",
+							DiskImage: privatev1.DiskImageReference_builder{Id: createAvailableDiskImage("default-second-image").GetId()}.Build(),
 							IsDefault: new(true),
 						}.Build(),
 					}.Build(),
@@ -981,6 +1001,7 @@ var _ = Describe("Private cluster versions server", func() {
 						Spec: privatev1.ClusterVersionSpec_builder{
 							Version:   "4.17.0",
 							Image:     "quay.io/ocp:4.17.0",
+							DiskImage: privatev1.DiskImageReference_builder{Id: createAvailableDiskImage("swap-first-image").GetId()}.Build(),
 							IsDefault: new(true),
 						}.Build(),
 					}.Build(),
@@ -989,16 +1010,18 @@ var _ = Describe("Private cluster versions server", func() {
 
 				// Create second version (not default):
 				second := createCV("swap-second", "4.18.0")
+				di := createAvailableDiskImage("swap-second-image")
 
 				// Update second to become default:
 				_, err = server.Update(ctx, privatev1.ClusterVersionsUpdateRequest_builder{
 					Object: privatev1.ClusterVersion_builder{
 						Id: second.GetId(),
 						Spec: privatev1.ClusterVersionSpec_builder{
+							DiskImage: privatev1.DiskImageReference_builder{Id: di.GetId()}.Build(),
 							IsDefault: new(true),
 						}.Build(),
 					}.Build(),
-					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.is_default"}},
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.disk_image", "spec.is_default"}},
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 
@@ -1024,6 +1047,7 @@ var _ = Describe("Private cluster versions server", func() {
 						Spec: privatev1.ClusterVersionSpec_builder{
 							Version:   "4.17.0",
 							Image:     "quay.io/ocp:4.17.0",
+							DiskImage: privatev1.DiskImageReference_builder{Id: createAvailableDiskImage("keep-default-image").GetId()}.Build(),
 							IsDefault: new(true),
 						}.Build(),
 					}.Build(),
@@ -1062,6 +1086,7 @@ var _ = Describe("Private cluster versions server", func() {
 						Spec: privatev1.ClusterVersionSpec_builder{
 							Version:   "4.17.0",
 							Image:     "quay.io/ocp:4.17.0",
+							DiskImage: privatev1.DiskImageReference_builder{Id: createAvailableDiskImage("auto-clear-obsolete-image").GetId()}.Build(),
 							IsDefault: new(true),
 						}.Build(),
 					}.Build(),
@@ -1087,6 +1112,7 @@ var _ = Describe("Private cluster versions server", func() {
 						Spec: privatev1.ClusterVersionSpec_builder{
 							Version:   "4.17.0",
 							Image:     "quay.io/ocp:4.17.0",
+							DiskImage: privatev1.DiskImageReference_builder{Id: createAvailableDiskImage("auto-clear-disabled-image").GetId()}.Build(),
 							IsDefault: new(true),
 						}.Build(),
 					}.Build(),
@@ -1160,6 +1186,7 @@ var _ = Describe("Private cluster versions server", func() {
 						Spec: privatev1.ClusterVersionSpec_builder{
 							Version:   "4.17.0",
 							Image:     "quay.io/ocp:4.17.0",
+							DiskImage: privatev1.DiskImageReference_builder{Id: createAvailableDiskImage("combo-obsolete-image").GetId()}.Build(),
 							IsDefault: new(true),
 						}.Build(),
 					}.Build(),
@@ -1229,7 +1256,7 @@ var _ = Describe("Private cluster versions server", func() {
 					privatev1.DiskImage_builder{
 						Metadata: privatev1.Metadata_builder{
 							Name:   name,
-							Tenant: "system",
+							Tenant: testTenant,
 						}.Build(),
 						Spec: privatev1.DiskImageSpec_builder{
 							Lifecycle: lifecycle,
@@ -1238,6 +1265,97 @@ var _ = Describe("Private cluster versions server", func() {
 				).Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
 				return response.GetObject()
+			}
+
+			for _, operation := range []string{"Create", "Update"} {
+				DescribeTable(operation+" resolves scoped disk image references",
+					func(ref *privatev1.DiskImageReference, expectedID string, expectedCode grpccodes.Code) {
+						createTenant("other-tenant")
+						projectsDao, err := dao.NewGenericDAO[*privatev1.Project]().
+							SetLogger(logger).
+							SetTenancyLogic(tenancy).
+							Build()
+						Expect(err).ToNot(HaveOccurred())
+						for _, tenant := range []string{testTenant, auth.SharedTenant} {
+							_, err = projectsDao.Create().SetObject(privatev1.Project_builder{
+								Metadata: privatev1.Metadata_builder{Name: "images", Tenant: tenant}.Build(),
+							}.Build()).Do(ctx)
+							Expect(err).ToNot(HaveOccurred())
+						}
+
+						images := map[string]*privatev1.DiskImage{}
+						for _, fixture := range []struct {
+							id, tenant, project string
+						}{
+							{"local-image", testTenant, ""},
+							{"shared-image", auth.SharedTenant, ""},
+							{"local-project-image", testTenant, "images"},
+							{"shared-project-image", auth.SharedTenant, "images"},
+							{"foreign-image", "other-tenant", ""},
+						} {
+							response, err := diskImagesDao.Create().SetObject(privatev1.DiskImage_builder{
+								Id: fixture.id,
+								Metadata: privatev1.Metadata_builder{
+									Name: "rhcos", Tenant: fixture.tenant, Project: fixture.project,
+								}.Build(),
+								Spec: privatev1.DiskImageSpec_builder{
+									Lifecycle: privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE,
+								}.Build(),
+							}.Build()).Do(ctx)
+							Expect(err).ToNot(HaveOccurred())
+							images[fixture.id] = response.GetObject()
+						}
+
+						var object *privatev1.ClusterVersion
+						if operation == "Create" {
+							response, createErr := server.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
+								Object: privatev1.ClusterVersion_builder{
+									Metadata: privatev1.Metadata_builder{Name: "scoped-version"}.Build(),
+									Spec: privatev1.ClusterVersionSpec_builder{
+										Version: "4.17.0", Image: "quay.io/ocp:4.17.0", DiskImage: proto.Clone(ref).(*privatev1.DiskImageReference),
+									}.Build(),
+								}.Build(),
+							}.Build())
+							err = createErr
+							object = response.GetObject()
+						} else {
+							cv := createCV("scoped-version", "4.17.0")
+							response, updateErr := server.Update(ctx, privatev1.ClusterVersionsUpdateRequest_builder{
+								Object: privatev1.ClusterVersion_builder{
+									Id: cv.GetId(),
+									Spec: privatev1.ClusterVersionSpec_builder{
+										DiskImage: proto.Clone(ref).(*privatev1.DiskImageReference),
+									}.Build(),
+								}.Build(),
+								UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.disk_image"}},
+							}.Build())
+							err = updateErr
+							object = response.GetObject()
+						}
+						Expect(grpcstatus.Code(err)).To(Equal(expectedCode))
+						if expectedCode != grpccodes.OK {
+							return
+						}
+						image := images[expectedID]
+						assertReference := func(reference *privatev1.DiskImageReference) {
+							Expect(reference.GetId()).To(Equal(image.GetId()))
+							Expect(reference.GetName()).To(Equal(image.GetMetadata().GetName()))
+							Expect(reference.GetShared()).To(Equal(image.GetMetadata().GetTenant() == auth.SharedTenant))
+							Expect(reference.GetProject()).To(Equal(image.GetMetadata().GetProject()))
+						}
+						assertReference(object.GetSpec().GetDiskImage())
+						stored, err := server.Get(ctx, &privatev1.ClusterVersionsGetRequest{Id: object.GetId()})
+						Expect(err).ToNot(HaveOccurred())
+						assertReference(stored.GetObject().GetSpec().GetDiskImage())
+					},
+					Entry("prefers the assigned tenant by name", &privatev1.DiskImageReference{Name: "rhcos"}, "local-image", grpccodes.OK),
+					Entry("honors shared by name", &privatev1.DiskImageReference{Name: "rhcos", Shared: true}, "shared-image", grpccodes.OK),
+					Entry("honors project by name", &privatev1.DiskImageReference{Name: "rhcos", Project: "images"}, "local-project-image", grpccodes.OK),
+					Entry("honors shared and project by name", &privatev1.DiskImageReference{Name: "rhcos", Shared: true, Project: "images"}, "shared-project-image", grpccodes.OK),
+					Entry("canonicalizes project and shared from an ID", &privatev1.DiskImageReference{Id: "shared-project-image"}, "shared-project-image", grpccodes.OK),
+					Entry("rejects a foreign tenant even when visible", &privatev1.DiskImageReference{Id: "foreign-image"}, "", grpccodes.InvalidArgument),
+					Entry("rejects mismatched ID and name", &privatev1.DiskImageReference{Id: "local-image", Name: "wrong-name"}, "", grpccodes.InvalidArgument),
+				)
 			}
 
 			It("Create with valid disk_image persists and returns the reference", func() {
@@ -1301,6 +1419,45 @@ var _ = Describe("Private cluster versions server", func() {
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+			})
+
+			It("Rejects a default ClusterVersion without a disk image", func() {
+				_, err := server.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
+					Object: privatev1.ClusterVersion_builder{
+						Metadata: privatev1.Metadata_builder{Name: "default-no-di"}.Build(),
+						Spec: privatev1.ClusterVersionSpec_builder{
+							Version:   "4.17.0",
+							Image:     "quay.io/ocp:4.17.0",
+							IsDefault: new(true),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				expectInvalidArgument(err, "disk image")
+			})
+
+			It("Rejects clearing disk_image from a default ClusterVersion", func() {
+				di := createDiskImage("rhcos-default", privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE)
+				response, err := server.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
+					Object: privatev1.ClusterVersion_builder{
+						Metadata: privatev1.Metadata_builder{Name: "default-clear-di"}.Build(),
+						Spec: privatev1.ClusterVersionSpec_builder{
+							Version:   "4.17.0",
+							Image:     "quay.io/ocp:4.17.0",
+							DiskImage: privatev1.DiskImageReference_builder{Id: di.GetId()}.Build(),
+							IsDefault: new(true),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = server.Update(ctx, privatev1.ClusterVersionsUpdateRequest_builder{
+					Object: privatev1.ClusterVersion_builder{
+						Id:   response.GetObject().GetId(),
+						Spec: privatev1.ClusterVersionSpec_builder{}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.disk_image"}},
+				}.Build())
+				expectInvalidArgument(err, "disk image")
 			})
 
 			It("Create without disk_image succeeds", func() {

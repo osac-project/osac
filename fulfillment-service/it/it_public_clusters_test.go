@@ -238,7 +238,7 @@ var _ = Describe("Public clusters", func() {
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"my-node-set": {
-							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName, Shared: true}.Build(),
 							Size:                  proto.Int32(4),
 						},
 					},

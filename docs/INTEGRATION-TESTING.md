@@ -163,6 +163,25 @@ the certificate. The Kind
 `SUITE=fulfillment` target exercises deployed startup and API behavior, subject
 to the profile's configured CA and enabled services.
 
+### ClusterVersion seeding
+
+`make -C osac-installer cluster-version-seed-test` (from the repository root)
+requires Helm, Python, and PyYAML. The installer Helm-lint CI job runs this same
+command in a temporary Python environment. It renders the real seed hook and JSON Schema
+in a dependency-free test chart, rejecting default versions without a DiskImage
+and invalid image parameters. These are Contract checks. Unit cases execute the
+rendered Bash with a curl double to verify shared Linux registry DiskImage
+payloads, creation before ClusterVersion, shared references, shell quoting,
+HTTP 409 retry handling, and propagation of other API failures. Both tiers
+belong to DEV work; neither starts Fulfillment or verifies database persistence.
+The dev and CI profile defaults use the 4.22.0 RHCOS example artifact.
+
+The deployed hook/API persistence boundary still requires component integration
+in a dedicated Kind environment and a seed-specific assertion; the focused
+suite does not prove it. No owning follow-up ticket has been assigned for that
+coverage gap. The reported CaaS full-install workflow must also be rerun for
+E2E evidence after delivery (QE ownership).
+
 ### OSAC-5343 deployed enablement coverage
 
 The release E2E path adds these assertions to existing user journeys. The
@@ -464,6 +483,8 @@ Touched-area requirements: [component guide](../tests/e2e/AGENTS.md#touched-area
 | Tier | Location / command | Exercises for real | Faked or omitted |
 |---|---|---|---|
 | E2E (VMaaS regression) | From the repository root: `uv run pytest tests/e2e/vmaas/regression/test_compute_instance_instance_type.py` | InstanceType resize through CLI/API, CatalogItem provisioning, and Kubernetes/KubeVirt resources | Requires a configured single-node VMaaS environment; no services are mocked. |
+| Unit ([DEV], CaaS missing-DiskImage contract) | From the repository root: `uv run pytest -n 0 tests/unit/test_caas_disk_image_contract.py` | The existing E2E scenario's assertions, unbacked version fixture, and version cleanup | Public/private gRPC clients are mocked; does not establish deployed API behavior. |
+| E2E ([QE], CaaS missing-DiskImage rejection) | From the repository root: `uv run pytest -n 0 tests/e2e/caas/regression/test_cluster_version_disk_image.py` | Public/private Fulfillment APIs and database; deliberately unbacked shared ClusterVersion is rejected with FailedPrecondition and the shared missing-image reason | Requires deployed Fulfillment, tenant authentication, and a shared cluster template. No successful cluster provisioning or provider lifecycle is exercised. |
 | Unit ([DEV], CaaS teardown) | From the repository root: `uv run pytest -n 0 tests/unit/test_caas_teardown_order.py tests/unit/test_cluster_deletion_polling.py tests/unit/test_caas_deletion_diagnostics.py tests/unit/test_caas_worker_bmi_visibility.py tests/unit/test_caas_two_node_sets.py tests/unit/test_caas_selector_contracts.py` | Read-only wait logic, exact-resource NotFound, ordered worker/parent/dependent waits, shared single/two-node-set budgets, stage-specific safe failures, snapshot throttling and sanitization, worker ownership checks, NodeSet selectors with shared BMITs, and shared-only BMIT reference expectations | API/client responses and time are mocked. No deployed controllers, fulfillment, AAP, provider, or metering is exercised. |
 | E2E ([QE], focused bare-metal CaaS lifecycle) | From the repository root: `uv run pytest -n 0 tests/e2e/caas/sanity/test_cluster_create.py::test_cluster_create --junitxml=/tmp/test-output/caas-bm-teardown-junit.xml` | CLI/API/database, Kubernetes, OSAC operators, AAP, HyperShift/CAPI/CAP-Agent, Assisted Service, provider-backed virtual BMHs, and Kafka/metering; creation, guest readiness, scale events, natural worker/parent teardown, independent InfraEnv GC, fulfillment removal, and deleted events | Requires the compatible deployed CaaS profile; no mocked completion or workaround-enabled deletion wait. Virtual BMHs do not prove physical-hardware coverage. Guest LVMS device readiness, PVC/CSI mount, and application I/O are not established by this lifecycle test. |
 
@@ -490,9 +511,11 @@ it requires the same source-pinned environment described below and enough
 available BMHs for both worker sets.
 
 The deletion request triggers the test-owned worker BMI wait (480 attempts at
-five-second intervals). Worker ownership is verified through both fulfillment
-and Kubernetes tenant/owner annotations before those IDs enter the deletion
-assertions. Only after all verified BMIs disappear does the
+five-second intervals). Worker ownership is verified through the fulfillment
+BMI's tenant, cluster-order label and owner-reference annotation, plus the
+Kubernetes CR's tenant annotation and BMI UUID label, before those IDs enter
+the deletion assertions. The API owner-reference annotation is not copied to
+the CR. Only after all verified BMIs disappear does the
 read-only parent wait observe the exact ClusterOrder NotFound (121 attempts at
 ten-second intervals); only after parent removal does the separate InfraEnv GC
 wait observe that exact InfraEnv NotFound in the same namespace (60 attempts at

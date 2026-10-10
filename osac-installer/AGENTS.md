@@ -47,6 +47,7 @@ respective areas.
 |---|---|---|
 | MCE defaults, lifecycle gate, image overrides, or compatibility RBAC | Helm contract | `make mce-render-test` |
 | Fulfillment hook commands, CA mounts, or gate rendering | Helm contract | `make fulfillment-trust-render-test` |
+| ClusterVersion seed schema, DiskImage payloads, or retry handling | Helm contract + simulated hook Unit | `make cluster-version-seed-test` (Helm, Python, PyYAML; no deployed API) |
 | Deployed hooks or cross-component startup | Component integration | `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment` with a deployed Kind environment; see [suite boundaries](../docs/INTEGRATION-TESTING.md#osac-installer) |
 
 ## Validation
@@ -59,6 +60,7 @@ make helm-validate
 pre-commit run --all-files
 make mce-render-test
 make fulfillment-trust-render-test
+make cluster-version-seed-test
 ```
 
 `pre-commit run --all-files` does not constitute a full repository secret scan;

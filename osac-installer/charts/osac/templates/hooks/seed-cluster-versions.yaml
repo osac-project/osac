@@ -35,12 +35,13 @@ spec:
           - -c
           - |
             AUTH_TOKEN=$(< /var/run/secrets/kubernetes.io/serviceaccount/token)
-            API="https://fulfillment-internal-api:8001/api/private/v1/cluster_versions"
+            API="https://fulfillment-internal-api:8001/api/private/v1"
 
-            create_version() {
-              local version="$1"
-              local payload="$2"
-              local response="/tmp/cv-response.json"
+            create_resource() {
+              local collection="$1"
+              local name="$2"
+              local payload="$3"
+              local response="/tmp/seed-response.json"
               local code
 
               code=$(curl -sS {{ include "osac.fulfillmentCurlTLS" . }} \
@@ -52,17 +53,17 @@ spec:
                 -H "Authorization: Bearer ${AUTH_TOKEN}" \
                 -H "Content-Type: application/json" \
                 --data-binary "${payload}" \
-                "${API}")
+                "${API}/${collection}")
 
               case "${code}" in
                 2??)
-                  echo "Created ClusterVersion ${version}."
+                  printf 'Created %s %s.\n' "${collection}" "${name}"
                   ;;
                 409)
-                  echo "ClusterVersion ${version} already exists, skipping."
+                  printf '%s %s already exists, skipping.\n' "${collection}" "${name}"
                   ;;
                 *)
-                  echo "ERROR: Failed to create ${version} (HTTP ${code})" >&2
+                  printf 'ERROR: Failed to create %s %s (HTTP %s)\n' "${collection}" "${name}" "${code}" >&2
                   cat "${response}" >&2
                   return 1
                   ;;
@@ -70,14 +71,22 @@ spec:
             }
 
             {{- range .Values.clusterVersions.versions }}
-            create_version \
-              {{ .version | quote }} \
-              {{ dict "metadata" (dict "name" (.version | replace "." "-")) "spec" (dict
-                  "version" .version
-                  "image" .image
-                  "enabled" true
-                  "is_default" (.default | default false)
-                ) | toJson | quote }}
+            {{- $spec := dict "version" .version "image" .image "enabled" true "is_default" (.default | default false) }}
+            {{- if .diskImage }}
+            create_resource disk_images \
+              {{ .diskImage.name | replace "'" "'\"'\"'" | squote }} \
+              {{ dict "metadata" (dict "name" .diskImage.name "tenant" "shared") "spec" (dict
+                  "source_type" "SOURCE_TYPE_REGISTRY"
+                  "source_ref" .diskImage.sourceRef
+                  "guest_os_family" "GUEST_OS_FAMILY_LINUX"
+                  "architecture" (.diskImage.architecture | default (list "ARCHITECTURE_AMD64"))
+                ) | toJson | replace "'" "'\"'\"'" | squote }}
+            {{- $_ := set $spec "disk_image" (dict "name" .diskImage.name "shared" true) }}
+            {{- end }}
+            create_resource cluster_versions \
+              {{ .version | replace "'" "'\"'\"'" | squote }} \
+              {{ dict "metadata" (dict "name" (.version | replace "." "-")) "spec" $spec
+                | toJson | replace "'" "'\"'\"'" | squote }}
             {{- end }}
         env:
         - name: HOME

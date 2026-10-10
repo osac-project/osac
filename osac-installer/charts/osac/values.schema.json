@@ -2264,12 +2264,70 @@
                 "type": "string",
                 "description": "OCI release image pullspec"
               },
+              "diskImage": {
+                "type": "object",
+                "description": "Seed a shared Linux registry DiskImage before this ClusterVersion. Required for default versions; existing named records are retained without updates.",
+                "required": [
+                  "name",
+                  "sourceRef"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Name of the shared DiskImage to create and reference",
+                    "minLength": 1,
+                    "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+                  },
+                  "sourceRef": {
+                    "type": "string",
+                    "description": "OCI disk image artifact URL (oci://registry/repository:tag or @digest), not the OpenShift release image",
+                    "pattern": "^oci://\\S+$"
+                  },
+                  "architecture": {
+                    "type": "array",
+                    "description": "CPU architectures supported by the disk image",
+                    "minItems": 1,
+                    "uniqueItems": true,
+                    "default": [
+                      "ARCHITECTURE_AMD64"
+                    ],
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "ARCHITECTURE_AMD64",
+                        "ARCHITECTURE_ARM64",
+                        "ARCHITECTURE_S390X"
+                      ]
+                    }
+                  }
+                },
+                "additionalProperties": false
+              },
               "default": {
                 "type": "boolean",
-                "description": "Mark as the default cluster version",
+                "description": "Mark as the default cluster version; requires a diskImage",
                 "default": false
               }
             },
+            "allOf": [
+              {
+                "if": {
+                  "required": [
+                    "default"
+                  ],
+                  "properties": {
+                    "default": {
+                      "const": true
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "diskImage"
+                  ]
+                }
+              }
+            ],
             "additionalProperties": false
           }
         }

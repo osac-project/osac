@@ -301,6 +301,18 @@ func resolveLockedResourceInScope[O referenceResource](
 	return resolveResourceInScopeWithGet(ctx, resourceDao, scope, id, name, kind, source, notFoundCode, getLockedReferenceResource[O])
 }
 
+// resolvePlatformResource resolves a reference to a platform-scoped resource in the shared
+// tenant without locking the target. Like resolveResourceInScope, it does not modify the
+// caller's reference or check deletion/readiness.
+func resolvePlatformResource[O referenceResource](
+	ctx context.Context,
+	resourceDao *dao.GenericDAO[O],
+	id, name, kind, source string,
+	notFoundCode grpccodes.Code,
+) (O, error) {
+	return resolveResourceInScope(ctx, resourceDao, referenceScope{tenant: auth.SharedTenant}, id, name, kind, source, notFoundCode)
+}
+
 // resolveLockedPlatformResource resolves a reference to a platform-scoped resource, i.e. one that
 // always lives in the shared tenant. The shared scope is fixed here so callers cannot accidentally
 // resolve a platform resource in a tenant scope. Like resolveLockedResourceInScope it holds an

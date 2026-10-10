@@ -414,17 +414,14 @@ func setWorkerCondition(remote *privatev1.Cluster, condType privatev1.ClusterCon
 }
 
 func buildWorkerFailedMessage(workers []ckv1alpha1.WorkerStatus, desired int32) string {
-	var failed, retrying int32
+	var failed int32
 	for i := range workers {
 		if workers[i].Phase == "Failed" {
 			failed++
-			if workers[i].NextRetryTime != nil {
-				retrying++
-			}
 		}
 	}
 	msg := fmt.Sprintf("%d of %d worker nodes failed to provision", failed, desired)
-	if retrying > 0 {
+	if failed > 0 {
 		msg += "; " + baremetalworker.FormatWorkersFailed(workers)
 	}
 	return msg

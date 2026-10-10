@@ -110,7 +110,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 						Locked: privatev1.ClusterNodeSetMap_builder{
 							Items: map[string]*privatev1.ClusterCatalogNodeSet{
 								"workers": privatev1.ClusterCatalogNodeSet_builder{
-									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: instanceType.GetId()}.Build(), Size: 1,
+									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: instanceType.GetId(), Shared: true}.Build(), Size: 1,
 								}.Build(),
 							},
 						}.Build(),
@@ -150,14 +150,49 @@ var _ = Describe("Private cluster catalog items server", func() {
 			Expect(err).To(MatchError(ContainSubstring("fields.node_sets.workers.baremetal_instance_type")))
 		})
 
-		It("resolves name-only BMIT references to shared for a tenant-owned catalog item", func() {
+		It("reports the policy field when a catalog hardware reference has been deleted", func() {
+			instanceType := privatev1.BareMetalInstanceType_builder{
+				Id: "deleted-policy-type",
+				Metadata: privatev1.Metadata_builder{
+					Name: "deleted-policy-type", Tenant: auth.SharedTenant,
+					Finalizers: []string{"test-finalizer"},
+				}.Build(),
+			}.Build()
+			_, err := server.bareMetalInstanceTypesDao.Create().SetObject(instanceType).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = server.bareMetalInstanceTypesDao.Delete().SetId(instanceType.GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			item := privatev1.ClusterCatalogItem_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: testTenant}.Build(),
+				Fields: privatev1.ClusterCatalogItemFields_builder{
+					NodeSets: privatev1.ClusterNodeSetMapPolicy_builder{
+						Locked: privatev1.ClusterNodeSetMap_builder{
+							Items: map[string]*privatev1.ClusterCatalogNodeSet{
+								"workers": privatev1.ClusterCatalogNodeSet_builder{
+									Size: 2, BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{
+										Id: instanceType.GetId(), Shared: true,
+									}.Build(),
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			err = validateClusterCatalogItemNodeSetPolicy(ctx, item, server.bareMetalInstanceTypesDao)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(grpcstatus.Convert(err).Message()).To(Equal(
+				"bare metal instance type 'deleted-policy-type' in fields.node_sets.workers.baremetal_instance_type has been deleted"))
+		})
+
+		It("resolves name-only shared BMIT references for a tenant-owned catalog item", func() {
 			instanceType := privatev1.BareMetalInstanceType_builder{
 				Id:       "shared-policy-type",
 				Metadata: privatev1.Metadata_builder{Name: "shared-policy-type", Tenant: auth.SharedTenant}.Build(),
 			}.Build()
 			_, err := server.bareMetalInstanceTypesDao.Create().SetObject(instanceType).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			ref := privatev1.BareMetalInstanceTypeReference_builder{Name: "shared-policy-type", Shared: false}.Build()
+			ref := privatev1.BareMetalInstanceTypeReference_builder{Name: "shared-policy-type", Shared: true}.Build()
 			item := privatev1.ClusterCatalogItem_builder{
 				Metadata: privatev1.Metadata_builder{Tenant: testTenant}.Build(),
 				Fields: privatev1.ClusterCatalogItemFields_builder{
@@ -183,7 +218,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 			}.Build()
 			_, err := server.bareMetalInstanceTypesDao.Create().SetObject(instanceType).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			ref := privatev1.BareMetalInstanceTypeReference_builder{Name: "shared-default-policy-type", Shared: false}.Build()
+			ref := privatev1.BareMetalInstanceTypeReference_builder{Name: "shared-default-policy-type", Shared: true}.Build()
 			item := privatev1.ClusterCatalogItem_builder{
 				Metadata: privatev1.Metadata_builder{Tenant: testTenant}.Build(),
 				Fields: privatev1.ClusterCatalogItemFields_builder{
@@ -199,30 +234,6 @@ var _ = Describe("Private cluster catalog items server", func() {
 			Expect(validateClusterCatalogItemNodeSetPolicy(ctx, item, server.bareMetalInstanceTypesDao)).To(Succeed())
 			Expect(ref.GetId()).To(Equal("shared-default-policy-type"))
 			Expect(ref.GetShared()).To(BeTrue())
-		})
-
-		It("rejects tenant-only hardware types in tenant-owned catalog item policies", func() {
-			instanceType := privatev1.BareMetalInstanceType_builder{
-				Id:       "tenant-policy-type-id",
-				Metadata: privatev1.Metadata_builder{Name: "tenant-policy-type", Tenant: testTenant}.Build(),
-			}.Build()
-			_, err := server.bareMetalInstanceTypesDao.Create().SetObject(instanceType).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			item := privatev1.ClusterCatalogItem_builder{
-				Metadata: privatev1.Metadata_builder{Tenant: testTenant}.Build(),
-				Fields: privatev1.ClusterCatalogItemFields_builder{
-					NodeSets: privatev1.ClusterNodeSetMapPolicy_builder{
-						Locked: privatev1.ClusterNodeSetMap_builder{Items: map[string]*privatev1.ClusterCatalogNodeSet{
-							"workers": privatev1.ClusterCatalogNodeSet_builder{
-								Size: 2, BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Name: "tenant-policy-type", Shared: false}.Build(),
-							}.Build(),
-						}}.Build(),
-					}.Build(),
-				}.Build(),
-			}.Build()
-			err = validateClusterCatalogItemNodeSetPolicy(ctx, item, server.bareMetalInstanceTypesDao)
-			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-			Expect(err).To(MatchError(ContainSubstring("fields.node_sets.workers.baremetal_instance_type")))
 		})
 
 		It("does not take node sets from the referenced template", func() {
@@ -838,6 +849,30 @@ var _ = Describe("Private cluster catalog items server", func() {
 					SetTenancyLogic(tenancy).
 					Build()
 				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("Rejects create with a version default without a disk image", func() {
+				seedClusterVersionWithoutDiskImage(ctx, privatev1.ClusterVersion_builder{
+					Metadata: privatev1.Metadata_builder{Name: "version-without-disk-image", Tenant: testTenant}.Build(),
+					Spec:     privatev1.ClusterVersionSpec_builder{Version: "4.20.0", Image: "quay.io/ocp:4.20.0", Enabled: proto.Bool(true)}.Build(),
+				}.Build())
+				_, err := validatedServer.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
+					Object: privatev1.ClusterCatalogItem_builder{
+						Metadata: privatev1.Metadata_builder{Name: "catalog-without-disk-image"}.Build(),
+						Title:    "Catalog item without a disk image",
+						Template: &privatev1.ClusterTemplateReference{Id: "my-template-id"},
+						Fields: privatev1.ClusterCatalogItemFields_builder{
+							Version: privatev1.ClusterVersionReferenceFieldPolicy_builder{
+								Editable: privatev1.EditableClusterVersionReferenceField_builder{
+									DefaultValue: &privatev1.ClusterVersionReference{Name: "version-without-disk-image"},
+								}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring(" in fields.version"))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("disk image"))
 			})
 
 			It("Rejects create with non-existent version default in fields", func() {

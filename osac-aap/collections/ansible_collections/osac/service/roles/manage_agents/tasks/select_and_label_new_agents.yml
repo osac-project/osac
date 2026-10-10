@@ -67,6 +67,9 @@
           - op: add
             path: /spec/approved
             value: false
+          - op: add
+            path: /spec/role
+            value: "worker"
       loop: "{{ manage_agents_add_to_cluster | default([]) }}"
       loop_control:
         loop_var: agent

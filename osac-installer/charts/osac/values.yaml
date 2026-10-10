@@ -326,7 +326,6 @@ aap:
       enabled: false
       config:
         STORAGE_SNAPSHOTS_ENABLED: ""
-      secret: {}
     publishTemplates:
       enabled: true
       config:

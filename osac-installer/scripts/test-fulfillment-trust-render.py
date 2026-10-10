@@ -129,10 +129,7 @@ def check_trust_gate(enabled: bool) -> None:
     docs = render(enabled)
     controller = select(docs, "osac/charts/service/templates/controller/deployment.yaml")
     operator = select(docs, "osac/charts/operator/templates/deployment.yaml")
-    fulfillment_configs = [
-        doc for doc in docs if "# Source: osac/templates/fulfillment-runtime-config.yaml\n" in doc
-    ]
-    assert len(fulfillment_configs) == 1
+    select(docs, "osac/templates/fulfillment-runtime-config.yaml")
     assert "--fulfillment-trust-enabled" not in controller
     assert "--metrics-bind-address=:8443" in operator
     metrics_reader_binding = "kind: ClusterRoleBinding\nmetadata:\n  name: osac-operator-metrics-reader\n"

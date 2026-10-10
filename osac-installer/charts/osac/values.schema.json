@@ -1403,7 +1403,6 @@
                 "secret": {
                   "type": "object",
                   "description": "Secret values for the storage-operations instance group",
-                  "properties": {},
                   "additionalProperties": false
                 }
               },

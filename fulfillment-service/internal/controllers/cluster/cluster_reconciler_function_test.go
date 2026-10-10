@@ -88,6 +88,52 @@ var _ = Describe("validateTenant", func() {
 	})
 })
 
+var _ = Describe("prepareNodeRequest", func() {
+	It("uses BareMetalInstanceType name as BareMetal instance type when present", func() {
+		t := &task{}
+		nodeSet := privatev1.ClusterNodeSet_builder{
+			BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Name: "gpu.gb200"}.Build(),
+			Size:                  proto.Int32(3),
+		}.Build()
+		nr := t.prepareNodeRequest("workers", nodeSet)
+		Expect(nr.NodeSet).To(Equal("workers"))
+		Expect(nr.BareMetal.InstanceType).To(Equal("gpu.gb200"))
+		Expect(nr.NumberOfNodes).To(Equal(3))
+	})
+
+	It("leaves the instance type empty when BareMetalInstanceType is absent", func() {
+		t := &task{}
+		nodeSet := privatev1.ClusterNodeSet_builder{
+			Size: proto.Int32(5),
+		}.Build()
+		nr := t.prepareNodeRequest("workers", nodeSet)
+		Expect(nr.BareMetal.InstanceType).To(BeEmpty())
+		Expect(nr.NumberOfNodes).To(Equal(5))
+	})
+
+	It("copies fabric_interface onto NodeRequest", func() {
+		t := &task{}
+		nodeSet := privatev1.ClusterNodeSet_builder{
+			BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Name: "gpu.gb200"}.Build(),
+			Size:                  proto.Int32(3),
+			FabricInterface:       "data-0",
+		}.Build()
+		nr := t.prepareNodeRequest("workers", nodeSet)
+		Expect(nr.BareMetal.InstanceType).To(Equal("gpu.gb200"))
+		Expect(nr.FabricInterface).To(Equal("data-0"))
+	})
+
+	It("leaves FabricInterface empty when fabric_interface is unset", func() {
+		t := &task{}
+		nodeSet := privatev1.ClusterNodeSet_builder{
+			BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Name: "gpu.gb200"}.Build(),
+			Size:                  proto.Int32(2),
+		}.Build()
+		nr := t.prepareNodeRequest("workers", nodeSet)
+		Expect(nr.FabricInterface).To(BeEmpty())
+	})
+})
+
 var _ = Describe("update tenant annotation", func() {
 	const (
 		clusterID    = "test-cluster-id"

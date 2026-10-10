@@ -319,6 +319,21 @@ var _ = Describe("Default networking provisioning", func() {
 			sgId = sgResp.GetItems()[0].GetId()
 		}, time.Minute, time.Second).Should(Succeed())
 
+		// Default-resource reconciliation advances UNSPECIFIED to PENDING independently of Delete.
+		// Wait for that transition before taking snapshots so the assertions isolate Delete behavior.
+		By("Waiting for default Subnet and SecurityGroup to reach PENDING")
+		Eventually(func(g Gomega) {
+			subnetResp, err := subnetsClient.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetId}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(subnetResp.GetObject().GetStatus().GetState()).To(
+				Equal(privatev1.SubnetState_SUBNET_STATE_PENDING))
+
+			sgResp, err := securityGroupsClient.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: sgId}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(sgResp.GetObject().GetStatus().GetState()).To(
+				Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING))
+		}, time.Minute, time.Second).Should(Succeed())
+
 		vnBefore, err := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: vnId}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		subnetBefore, err := subnetsClient.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetId}.Build())
@@ -326,7 +341,7 @@ var _ = Describe("Default networking provisioning", func() {
 		sgBefore, err := securityGroupsClient.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: sgId}.Build())
 		Expect(err).ToNot(HaveOccurred())
 
-		By("Rejecting Delete of default VirtualNetwork without entering PENDING/deletion")
+		By("Rejecting Delete of default VirtualNetwork without changing status or setting a deletion timestamp")
 		_, err = virtualNetworksClient.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{Id: vnId}.Build())
 		Expect(err).To(HaveOccurred())
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
@@ -336,7 +351,7 @@ var _ = Describe("Default networking provisioning", func() {
 		Expect(vnAfter.GetObject().GetMetadata().GetDeletionTimestamp()).To(BeNil())
 		Expect(vnAfter.GetObject().GetStatus().GetState()).To(Equal(vnBefore.GetObject().GetStatus().GetState()))
 
-		By("Rejecting Delete of default Subnet without entering PENDING/deletion")
+		By("Rejecting Delete of default Subnet without changing status or setting a deletion timestamp")
 		_, err = subnetsClient.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{Id: subnetId}.Build())
 		Expect(err).To(HaveOccurred())
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
@@ -346,7 +361,7 @@ var _ = Describe("Default networking provisioning", func() {
 		Expect(subnetAfter.GetObject().GetMetadata().GetDeletionTimestamp()).To(BeNil())
 		Expect(subnetAfter.GetObject().GetStatus().GetState()).To(Equal(subnetBefore.GetObject().GetStatus().GetState()))
 
-		By("Rejecting Delete of default SecurityGroup without entering PENDING/deletion")
+		By("Rejecting Delete of default SecurityGroup without changing status or setting a deletion timestamp")
 		_, err = securityGroupsClient.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{Id: sgId}.Build())
 		Expect(err).To(HaveOccurred())
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))

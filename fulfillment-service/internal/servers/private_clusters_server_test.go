@@ -4438,6 +4438,61 @@ var _ = Describe("Private clusters server", func() {
 				Expect(nodeSet.GetFabricInterface()).To(Equal("data-0"))
 			})
 
+			It("Keeps fabric_interface when BMIT fabric ports change after Create", func() {
+				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "fabric-immutable"}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+							NodeSets: map[string]*privatev1.ClusterNodeSet{
+								"compute": privatev1.ClusterNodeSet_builder{
+									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{
+										Id: "bmit-fabric-id",
+									}.Build(),
+									Size: proto.Int32(3),
+								}.Build(),
+							},
+							NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: "subnet-1"}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "default-sg"}.Build()},
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetNodeSets()["compute"].GetFabricInterface()).To(Equal("data-0"))
+
+				// Reorder BMIT ports so the first fabric port would now be data-1.
+				bmitDao, err := dao.NewGenericDAO[*privatev1.BareMetalInstanceType]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				getResp, err := bmitDao.Get().SetId("bmit-fabric-id").Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				bmit := getResp.GetObject()
+				bmit.GetSpec().GetHardware().SetNetworkPorts([]*privatev1.BareMetalNetworkPortSpec{
+					privatev1.BareMetalNetworkPortSpec_builder{
+						Name: "mgmt-0", Role: "management", Type: "Ethernet", Speed: "1Gbps",
+					}.Build(),
+					privatev1.BareMetalNetworkPortSpec_builder{
+						Name: "data-1", Role: "fabric", Type: "Ethernet", Speed: "100Gbps",
+					}.Build(),
+					privatev1.BareMetalNetworkPortSpec_builder{
+						Name: "data-0", Role: "fabric", Type: "Ethernet", Speed: "100Gbps",
+					}.Build(),
+				})
+				_, err = bmitDao.Update().SetObject(bmit).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				getCluster, err := server.Get(ctx, privatev1.ClustersGetRequest_builder{
+					Id: response.GetObject().GetId(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(getCluster.GetObject().GetSpec().GetNodeSets()["compute"].GetFabricInterface()).
+					To(Equal("data-0"), "stored fabric_interface must not track later BMIT changes")
+			})
+
 			It("Returns FailedPrecondition when BMIT has no fabric port", func() {
 				_, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{

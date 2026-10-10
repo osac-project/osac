@@ -1,0 +1,55 @@
+---
+# "/override <full commit sha> <reason>" from an infrastructure approver waives the protected-path approval of the OSAC CI
+# check for that exact commit (see osac-project/osac-ci, README, "Overriding it"). The comment is the authority: osac-ci
+# reads it back from the pull request each time it computes a verdict. This workflow answers it and records the waiver as
+# a check run on the commit, which is the audit trail, and then refreshes the verdict.
+#
+# issue_comment always runs the workflow file from the default branch, and nothing of the pull request is checked out or
+# run. The comment text is user input: it reaches the program only through an environment variable. Nothing happens for a
+# commenter who may not override, so any comment starting with /override is safe to start this job.
+name: OSAC CI override
+on:  # zizmor: ignore[dangerous-triggers] -- no pull request code is checked out or run; the comment reaches the shell as env data only
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+# One group per comment, never per pull request: a shared group would let any other comment cancel a pending override.
+concurrency:
+  group: osac-ci-override-${{ github.event.comment.id }}
+  cancel-in-progress: false
+
+jobs:
+  override:
+    if: >-
+      github.repository == 'osac-project/osac' &&
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/override')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read  # the action is fetched from osac-ci by the runner; nothing of this repository is checked out
+      checks: write  # record the waiver on the commit and refresh the OSAC CI check
+      pull-requests: write  # answer the comment
+    steps:
+      # Needed to know who may override (a team). Without it nothing is waived, so unlike the check workflow this step
+      # is not allowed to fail quietly.
+      - name: Create a token that can read organization membership
+        id: org-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ secrets.OSAC_CI_READER_APP_ID }}
+          private-key: ${{ secrets.OSAC_CI_READER_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-members: read
+      - uses: osac-project/osac-ci/.github/actions/override@5a267e85443909b79899ea25de89bdada670928f  # osac-ci main, with OWNERS approvers and the override
+        with:
+          github-token: ${{ github.token }}
+          org-token: ${{ steps.org-token.outputs.token }}
+          repo: ${{ github.repository }}
+          number: ${{ github.event.issue.number }}
+          commenter: ${{ github.event.comment.user.login }}
+          comment: ${{ github.event.comment.body }}
+          policy: policy/osac.yml
+          note: "Informational for now: this check is not required to merge."

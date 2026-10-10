@@ -59,6 +59,11 @@ instead of the local one.
 The kubeconfig is typically provided to the operator pod as a mounted
 Kubernetes Secret volume.
 
+The operator Helm chart renders this configuration when both
+`remoteClusterKubeconfig` (the in-container file path) and
+`remoteClusterKubeconfigSecretName` are set. The Secret key defaults to
+`kubeconfig` and can be changed with `remoteClusterKubeconfigSecretKey`.
+
 #### Example: operator deployment with remote cluster
 
 ```yaml

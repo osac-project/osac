@@ -6,6 +6,8 @@
 # Usage:
 # Every deployment target requires PLATFORM, PROFILE, and NS. No exceptions.
 #   make install         PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
+#   make install-multicluster PLATFORM=openshift PROFILE=vmaas-ci NS=osac KUBECONFIG=... REMOTE_KUBECONFIG=...
+#   make prepare-remote-cluster NS=osac REMOTE_KUBECONFIG=...
 #   make uninstall       PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
 #   make install-infra   PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
 #   make install-osac    PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
@@ -30,6 +32,19 @@ SHELL := /usr/bin/env bash -o pipefail
 # Extra helm --set/--set-string args appended to install commands.
 EXTRA_HELM_ARGS ?=
 FULFILLMENT_GINKGO_ARGS ?=
+REMOTE_STORAGE_CLASS ?= lvms-vg1
+REMOTE_KUBECONFIG_SECRET_NAME ?= osac-remote-kubeconfig
+REMOTE_KUBECONFIG_SECRET_KEY ?= kubeconfig
+
+REMOTE_CLUSTER_HELM_ARGS :=
+ifneq ($(strip $(REMOTE_KUBECONFIG)),)
+REMOTE_CLUSTER_HELM_ARGS := \
+	--set-string operator.remoteClusterKubeconfig=/var/run/secrets/remote/$(REMOTE_KUBECONFIG_SECRET_KEY) \
+	--set-string operator.remoteClusterKubeconfigSecretName=$(REMOTE_KUBECONFIG_SECRET_NAME) \
+	--set-string operator.remoteClusterKubeconfigSecretKey=$(REMOTE_KUBECONFIG_SECRET_KEY) \
+	--set-string aap.configAsCode.remoteClusterKubeconfigSecretName=$(REMOTE_KUBECONFIG_SECRET_NAME) \
+	--set-string aap.configAsCode.remoteClusterKubeconfigSecretKey=$(REMOTE_KUBECONFIG_SECRET_KEY)
+endif
 
 # Work around HTTP/2 stream resets from proxy.golang.org during container
 # builds (see osac-test-infra#543).  Override with `make test GODEBUG=` to
@@ -39,7 +54,7 @@ GODEBUG ?= http2client=0
 # -- Fail-fast parameter validation ------------------------------------
 # Guards fire at parse time, gated by MAKECMDGOALS so `make help` works.
 
-ALL_TARGETS := install uninstall install-infra uninstall-infra install-osac uninstall-osac install-devstack kind-load-images test
+ALL_TARGETS := install install-multicluster uninstall install-infra uninstall-infra install-osac uninstall-osac install-devstack kind-load-images test
 
 ifneq ($(filter $(ALL_TARGETS),$(MAKECMDGOALS)),)
 ifndef PLATFORM
@@ -61,6 +76,45 @@ ifeq ($(PLATFORM),kind)
 ifeq ($(filter $(PROFILE),dev dev-full),)
 $(error PLATFORM=kind only supports PROFILE=dev or PROFILE=dev-full)
 endif
+endif
+
+ifneq ($(filter install-multicluster,$(MAKECMDGOALS)),)
+ifneq ($(PLATFORM),openshift)
+$(error install-multicluster requires PLATFORM=openshift)
+endif
+ifneq ($(PROFILE),vmaas-ci)
+$(error install-multicluster requires PROFILE=vmaas-ci)
+endif
+ifndef REMOTE_KUBECONFIG
+$(error REMOTE_KUBECONFIG is required (workload cluster kubeconfig))
+endif
+endif
+ifneq ($(filter install-osac,$(MAKECMDGOALS)),)
+ifneq ($(strip $(REMOTE_KUBECONFIG)$(REMOTE_API_ADDRESS)),)
+ifneq ($(PLATFORM),openshift)
+$(error remote-cluster installation requires PLATFORM=openshift)
+endif
+ifneq ($(PROFILE),vmaas-ci)
+$(error remote-cluster installation requires PROFILE=vmaas-ci)
+endif
+ifeq ($(strip $(REMOTE_KUBECONFIG)),)
+$(error REMOTE_KUBECONFIG is required when REMOTE_API_ADDRESS is set)
+endif
+endif
+endif
+ifneq ($(filter install,$(MAKECMDGOALS)),)
+ifneq ($(strip $(REMOTE_KUBECONFIG)$(REMOTE_API_ADDRESS)),)
+$(error install does not configure the multicluster infrastructure overlay; use install-multicluster or run install-infra and install-osac separately)
+endif
+endif
+endif
+
+ifneq ($(filter prepare-remote-cluster,$(MAKECMDGOALS)),)
+ifndef NS
+$(error NS is required (namespace for remote workload access, e.g. NS=osac))
+endif
+ifeq ($(strip $(REMOTE_KUBECONFIG)),)
+$(error REMOTE_KUBECONFIG is required (workload cluster kubeconfig))
 endif
 endif
 
@@ -266,7 +320,7 @@ else
 		done'
 	helm upgrade --install osac-deps $(DEPS_CHART) \
 		--namespace osac-deps --create-namespace \
-		--values $(INFRA_VALUES) \
+		--values $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
 		--set lvms.channel=stable-$(OCP_VERSION) \
 		--timeout 30m --wait
 	@bash -c 'source scripts/lib.sh && wait_for_namespace_cleanup keycloak'
@@ -274,14 +328,27 @@ else
 	@[ -n "$(DOMAIN)" ] || { echo "ERROR: could not determine cluster domain" >&2; exit 1; }
 	helm upgrade --install osac-infra $(INFRA_CHART) \
 		--namespace osac-infra --create-namespace \
-		--values $(INFRA_VALUES) \
+		--values $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
 		--set osacNamespace=$(NS) \
 		--set lvms.channel=stable-$(OCP_VERSION) \
 		--set keycloak.hostname=https://keycloak-keycloak.$(DOMAIN) \
 		--set keycloak.route.hostname=keycloak-keycloak.$(DOMAIN) \
 		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DOMAIN)/realms/osac" \
 		--timeout 30m --wait-for-jobs \
-	|| { echo "=== osac-infra hook jobs ==="; oc get jobs,pods,cm -n osac-infra || true; oc logs -n osac-infra -l job-name=osac-infra-apply-ca-bundle --tail=200 || true; oc get deploy,endpoints,certificate -n cert-manager || true; exit 1; }
+	|| { \
+		echo "=== osac-infra release status ==="; \
+		helm status osac-infra -n osac-infra --show-desc || true; \
+		echo "=== osac-infra hook jobs ==="; \
+		oc get jobs,pods,cm -n osac-infra || true; \
+		oc logs -n osac-infra -l job-name=osac-infra-apply-ca-bundle --tail=200 || true; \
+		echo "=== ca-bundle resources ==="; \
+		oc get bundle.trust.cert-manager.io ca-bundle -o yaml || true; \
+		oc get configmap ca-bundle -n osac-infra -o yaml || true; \
+		echo "=== cert-manager and trust-manager ==="; \
+		oc get deploy,endpoints,certificate -n cert-manager || true; \
+		oc logs deploy/trust-manager -n cert-manager --tail=100 || true; \
+		exit 1; \
+	}
 endif
 
 .PHONY: uninstall-infra
@@ -316,6 +383,17 @@ ifneq ($(PLATFORM),kind)
 	@[ -n "$(AAP_LICENSE_FILE)" ] || { echo "ERROR: AAP_LICENSE_FILE is required for PLATFORM=openshift" >&2; exit 1; }
 	@[ -f "$(AAP_LICENSE_FILE)" ] || { echo "ERROR: AAP_LICENSE_FILE not found at $(AAP_LICENSE_FILE)" >&2; exit 1; }
 	oc create namespace $(NS) --dry-run=client -o yaml | oc apply -f -
+	if [ -n "$(REMOTE_KUBECONFIG)" ]; then \
+		test -r "$(REMOTE_KUBECONFIG)" || { echo "ERROR: REMOTE_KUBECONFIG is not readable: $(REMOTE_KUBECONFIG)" >&2; exit 1; }; \
+		if [ -n "$(REMOTE_API_ADDRESS)" ]; then case "$(REMOTE_API_ADDRESS)" in https://*) ;; *) echo "ERROR: REMOTE_API_ADDRESS must use https://" >&2; exit 1 ;; esac; fi; \
+		HUB_KUBECONFIG="$(KUBECONFIG)" \
+		REMOTE_KUBECONFIG="$(REMOTE_KUBECONFIG)" \
+		REMOTE_API_ADDRESS="$(REMOTE_API_ADDRESS)" \
+		REMOTE_KUBECONFIG_SECRET_NAME="$(REMOTE_KUBECONFIG_SECRET_NAME)" \
+		REMOTE_KUBECONFIG_SECRET_KEY="$(REMOTE_KUBECONFIG_SECRET_KEY)" \
+		INSTALLER_NAMESPACE="$(NS)" \
+		bash scripts/stage-remote-cluster-secret.sh; \
+	fi
 	oc create secret generic config-as-code-manifest-ig \
 		--from-file=license.zip="$(AAP_LICENSE_FILE)" \
 		-n $(NS) --dry-run=client -o yaml | oc apply --server-side -f -
@@ -331,7 +409,7 @@ endif
 		--namespace $(NS) --create-namespace \
 		--set-string global.osacDeploymentId=$(NS)/osac \
 		$(if $(DOMAIN),--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) --set global.clusterDomain=$(DOMAIN) --set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DOMAIN)/realms/osac) \
-		$(EXTRA_HELM_ARGS) $(OSAC_HELM_FORCE_CONFLICTS) \
+		$(EXTRA_HELM_ARGS) $(OSAC_HELM_FORCE_CONFLICTS) $(REMOTE_CLUSTER_HELM_ARGS) \
 		--wait --timeout 40m
 
 .PHONY: uninstall-osac
@@ -370,6 +448,47 @@ install: install-infra install-osac install-devstack ## Full install: infra + os
 else
 install: install-infra install-osac ## Full install: infra + osac (PLATFORM= PROFILE= required)
 endif
+
+.PHONY: install-multicluster
+install-multicluster: ## Prepare a VMaaS workload cluster, then install OSAC on management in remote mode
+	@test -r "$(KUBECONFIG)" || { echo "ERROR: KUBECONFIG is not readable: $(KUBECONFIG)" >&2; exit 1; }
+	@test -r "$(REMOTE_KUBECONFIG)" || { echo "ERROR: REMOTE_KUBECONFIG is not readable: $(REMOTE_KUBECONFIG)" >&2; exit 1; }
+	@test -f "$(AAP_LICENSE_FILE)" || { echo "ERROR: AAP_LICENSE_FILE not found at $(AAP_LICENSE_FILE)" >&2; exit 1; }
+	@if [ -n "$(REMOTE_API_ADDRESS)" ]; then case "$(REMOTE_API_ADDRESS)" in https://*) ;; *) echo "ERROR: REMOTE_API_ADDRESS must use https://" >&2; exit 1 ;; esac; fi
+	@oc --kubeconfig "$(KUBECONFIG)" get clusterversion version >/dev/null
+	@oc --kubeconfig "$(REMOTE_KUBECONFIG)" get clusterversion version >/dev/null
+	@for kubeconfig in "$(KUBECONFIG)" "$(REMOTE_KUBECONFIG)"; do \
+		if [ "$$(oc --kubeconfig "$$kubeconfig" auth can-i '*' '*')" != yes ]; then \
+			echo "ERROR: cluster-admin access is required for $$kubeconfig" >&2; exit 1; \
+		fi; \
+	done
+	@hub_api="$$(oc --kubeconfig "$(KUBECONFIG)" config view --minify -o jsonpath='{.clusters[0].cluster.server}')"; \
+	remote_api="$$(oc --kubeconfig "$(REMOTE_KUBECONFIG)" config view --minify -o jsonpath='{.clusters[0].cluster.server}')"; \
+	if [ -z "$$hub_api" ] || [ -z "$$remote_api" ] || [ "$$hub_api" = "$$remote_api" ]; then \
+		echo "ERROR: KUBECONFIG and REMOTE_KUBECONFIG must specify different API server endpoints" >&2; exit 1; \
+	fi
+	$(MAKE) prepare-remote-cluster NS=$(NS) \
+		REMOTE_KUBECONFIG="$(REMOTE_KUBECONFIG)" \
+		REMOTE_STORAGE_CLASS="$(REMOTE_STORAGE_CLASS)"
+	$(MAKE) install-infra PLATFORM=openshift PROFILE=vmaas-ci NS=$(NS) \
+		KUBECONFIG="$(KUBECONFIG)" \
+		INFRA_VALUES_EXTRA="-f values/vmaas-ci/multicluster-infra.yaml"
+	$(MAKE) install-osac PLATFORM=openshift PROFILE=vmaas-ci NS=$(NS) \
+		KUBECONFIG="$(KUBECONFIG)" \
+		REMOTE_KUBECONFIG="$(REMOTE_KUBECONFIG)" \
+		REMOTE_API_ADDRESS="$(REMOTE_API_ADDRESS)" \
+		REMOTE_KUBECONFIG_SECRET_NAME="$(REMOTE_KUBECONFIG_SECRET_NAME)" \
+		REMOTE_KUBECONFIG_SECRET_KEY="$(REMOTE_KUBECONFIG_SECRET_KEY)" \
+		EXTRA_HELM_ARGS="$(EXTRA_HELM_ARGS)"
+
+.PHONY: prepare-remote-cluster
+prepare-remote-cluster: ## Prepare the remote VMaaS workload cluster without changing management
+	@test -r "$(REMOTE_KUBECONFIG)" || { echo "ERROR: REMOTE_KUBECONFIG is not readable: $(REMOTE_KUBECONFIG)" >&2; exit 1; }
+	@oc --kubeconfig "$(REMOTE_KUBECONFIG)" get clusterversion version >/dev/null
+	REMOTE_KUBECONFIG="$(REMOTE_KUBECONFIG)" \
+	REMOTE_STORAGE_CLASS="$(REMOTE_STORAGE_CLASS)" \
+	INSTALLER_NAMESPACE="$(NS)" \
+	bash scripts/setup-remote-cluster.sh prepare
 
 .PHONY: uninstall
 uninstall: uninstall-osac uninstall-infra ## Full uninstall: osac + infra (PLATFORM= PROFILE= required)

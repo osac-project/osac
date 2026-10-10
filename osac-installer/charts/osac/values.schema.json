@@ -425,6 +425,21 @@
           },
           "additionalProperties": false
         },
+        "remoteClusterKubeconfig": {
+          "type": "string",
+          "description": "File path for the remote VMaaS cluster kubeconfig. Set together with remoteClusterKubeconfigSecretName.",
+          "default": ""
+        },
+        "remoteClusterKubeconfigSecretName": {
+          "type": "string",
+          "description": "Secret on the management cluster containing the remote VMaaS cluster kubeconfig.",
+          "default": ""
+        },
+        "remoteClusterKubeconfigSecretKey": {
+          "type": "string",
+          "description": "Secret key containing the remote VMaaS cluster kubeconfig.",
+          "default": "kubeconfig"
+        },
         "hubAccess": {
           "type": "object",
           "description": "Hub access ClusterRole for the operator subchart",
@@ -620,10 +635,6 @@
             "type": "string",
             "minLength": 1
           }
-        },
-        "remoteClusterKubeconfig": {
-          "type": "string",
-          "description": "Path to kubeconfig for remote cluster access (subchart default)"
         },
         "global": {
           "type": "object",
@@ -1141,6 +1152,16 @@
             "projectGitBranch": {
               "type": "string",
               "description": "Git branch for config-as-code project"
+            },
+            "remoteClusterKubeconfigSecretName": {
+              "type": "string",
+              "description": "Secret name provided to AAP config-as-code for VM operations on a remote cluster.",
+              "default": ""
+            },
+            "remoteClusterKubeconfigSecretKey": {
+              "type": "string",
+              "description": "Secret key containing the remote cluster kubeconfig.",
+              "default": "kubeconfig"
             },
             "eeImagePull": {
               "type": "string",

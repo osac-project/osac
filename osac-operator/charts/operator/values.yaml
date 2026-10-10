@@ -93,7 +93,11 @@ certs:
     kind: ClusterIssuer
     name: default-ca
 
+# Path and Secret used to connect controllers to a remote VMaaS cluster.
+# Set both values to enable remote-cluster mode; leave both empty for local mode.
 remoteClusterKubeconfig: ""
+remoteClusterKubeconfigSecretName: ""
+remoteClusterKubeconfigSecretKey: kubeconfig
 
 hubAccess:
   enabled: false

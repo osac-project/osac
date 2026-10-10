@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
@@ -34,8 +35,8 @@ const (
 	reasonInfrastructureNotProvisioned = "InfrastructureNotProvisioned"
 )
 
-// checkComputeInfrastructureReadiness updates the tenant condition from hub Tenant CRs.
-func (t *task) checkComputeInfrastructureReadiness(ctx context.Context) {
+// checkInfrastructureReadiness observes compute and storage readiness on the hubs.
+func (t *task) checkInfrastructureReadiness(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	const conditionType = privatev1.TenantConditionType_TENANT_CONDITION_TYPE_COMPUTE_INFRASTRUCTURE_READY
@@ -45,6 +46,8 @@ func (t *task) checkComputeInfrastructureReadiness(ctx context.Context) {
 	tenantID := t.tenant.GetId()
 	tenantName := t.tenant.GetMetadata().GetName()
 	var observed, incomplete, pending, failed, deleting bool
+	backendStorage := storageReadiness{sourceType: osacv1alpha1.TenantConditionStorageBackendReady}
+	clusterStorage := storageReadiness{sourceType: osacv1alpha1.TenantConditionClusterStorageReady}
 	reportError := func(_ error) {
 		incomplete = true
 		t.r.logger.ErrorContext(ctx, "Failed to observe tenant compute infrastructure")
@@ -69,6 +72,8 @@ func (t *task) checkComputeInfrastructureReadiness(ctx context.Context) {
 					continue
 				}
 				observed = true
+				backendStorage.observe(object)
+				clusterStorage.observe(object)
 				if !object.DeletionTimestamp.IsZero() {
 					deleting = true
 					continue
@@ -117,6 +122,59 @@ func (t *task) checkComputeInfrastructureReadiness(ctx context.Context) {
 		reason, message = reasonInfrastructureNotProvisioned, "Tenant compute infrastructure has not been provisioned"
 	}
 	t.updateCondition(conditionType, conditionStatus, reason, message)
+	backendStorage.project(t, privatev1.TenantConditionType_TENANT_CONDITION_TYPE_STORAGE_BACKEND_READY, incomplete)
+	clusterStorage.project(t, privatev1.TenantConditionType_TENANT_CONDITION_TYPE_CLUSTER_STORAGE_READY, incomplete)
+}
+
+type storageReadiness struct {
+	sourceType osacv1alpha1.TenantConditionType
+	ready      *metav1.Condition
+	failed     *metav1.Condition
+	unknown    *metav1.Condition
+	incomplete bool
+}
+
+func (s *storageReadiness) observe(object *osacv1alpha1.Tenant) {
+	if !object.DeletionTimestamp.IsZero() || object.Status.Phase == osacv1alpha1.TenantPhaseDeleting {
+		s.failed = &metav1.Condition{Reason: "StorageDeleting", Message: "Tenant storage configuration is being removed"}
+		return
+	}
+	condition := object.GetStatusCondition(s.sourceType)
+	if condition == nil || condition.ObservedGeneration != object.Generation {
+		s.incomplete = true
+		return
+	}
+	switch condition.Status {
+	case metav1.ConditionTrue:
+		if s.ready == nil {
+			s.ready = condition
+		}
+	case metav1.ConditionFalse:
+		if s.failed == nil {
+			s.failed = condition
+		}
+	default:
+		if s.unknown == nil {
+			s.unknown = condition
+		}
+	}
+}
+
+func (s *storageReadiness) project(t *task, kind privatev1.TenantConditionType, observationIncomplete bool) {
+	status := privatev1.ConditionStatus_CONDITION_STATUS_UNSPECIFIED
+	reason, message := "StorageStatusUnknown", "Tenant storage readiness could not be determined"
+	switch {
+	case s.failed != nil:
+		status = privatev1.ConditionStatus_CONDITION_STATUS_FALSE
+		reason, message = s.failed.Reason, s.failed.Message
+	case observationIncomplete || s.incomplete:
+	case s.unknown != nil:
+		reason, message = s.unknown.Reason, s.unknown.Message
+	case s.ready != nil:
+		status = privatev1.ConditionStatus_CONDITION_STATUS_TRUE
+		reason, message = s.ready.Reason, s.ready.Message
+	}
+	t.updateCondition(kind, status, reason, message)
 }
 
 // readTenantInfrastructure finds the Tenant CR for a fulfillment tenant on one hub.

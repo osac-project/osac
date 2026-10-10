@@ -17,6 +17,11 @@ To get started with tenant and provider credentials, see
 For Kafka broker requirements, connection settings, and a Strimzi example,
 see [Configuring an external Kafka cluster](guides/installation/kafka-configuration.md).
 
+For NetApp catalog setup, see
+[Backend and tier registration](guides/admin/netapp-backend-tiers.md).
+The [onboarding contract](guides/developer/netapp-onboarding-contract.md)
+describes the operator/AAP handoff and prepared-SVM prerequisites.
+
 This directory also contains concise, hand-maintained guidance for
 architecture and conventions that span component or repository boundaries
 within this mono-repo. Component `AGENTS.md` files own component-scoped agent

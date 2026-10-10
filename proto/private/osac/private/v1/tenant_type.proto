@@ -178,6 +178,14 @@ enum TenantConditionType {
   // - False: Infrastructure is not provisioned, or at least one hub reports it is not ready
   // - Unspecified: Readiness cannot be determined and no hub is known to be not ready
   TENANT_CONDITION_TYPE_COMPUTE_INFRASTRUCTURE_READY = 3;
+
+  // Indicates whether tenant storage backends are ready on every participating hub.
+  // Missing, stale, or incomplete observations have Unspecified status.
+  TENANT_CONDITION_TYPE_STORAGE_BACKEND_READY = 4;
+
+  // Indicates whether tenant storage classes are ready on every participating hub.
+  // Missing, stale, or incomplete observations have Unspecified status.
+  TENANT_CONDITION_TYPE_CLUSTER_STORAGE_READY = 5;
 }
 
 // Lifecycle states for Tenant resources.

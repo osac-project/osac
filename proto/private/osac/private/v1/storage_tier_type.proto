@@ -47,6 +47,20 @@ message BackendAssociation {
 
   // Whether data at rest is encrypted on this backend.
   bool encryption_enabled = 4;
+
+  // Provider-specific QoS. The selected configuration must match the backend provider.
+  oneof provider_qos {
+    // ONTAP per-volume IOPS ceiling.
+    OntapAssociationConfig ontap = 5;
+  }
+}
+
+// ONTAP service limits applied to each provisioned volume.
+message OntapAssociationConfig {
+  option (cleanapi.message).private = true;
+
+  // Maximum IOPS per volume; zero adds no OSAC tier limit.
+  int64 max_iops = 1 [(buf.validate.field).int64 = {gte: 0, lte: 2147483647}];
 }
 
 // Describes a class of storage service that can be referenced by name when provisioning

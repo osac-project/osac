@@ -1,0 +1,13 @@
+---
+# CLI input: osac create -f netapp-backend.yaml after private API login.
+# Replace the endpoint, username and Fulfillment Secret ID before use.
+'@type': type.googleapis.com/osac.private.v1.StorageBackend
+metadata:
+  name: netapp-primary
+spec:
+  provider: ontap
+  endpoint: https://cluster-mgmt.example.com
+  credentials:
+    username: osac-discovery
+    passwordSecret:
+      id: discovery-value-secret-id

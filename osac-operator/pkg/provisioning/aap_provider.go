@@ -453,6 +453,12 @@ func tierDefinitionsToExtraVars(tiers []TierDefinition) []map[string]any {
 				},
 			},
 		}
+		if len(tier.QosLimits.ProviderConfig) > 0 {
+			result[i]["qos_limits"].(map[string]any)["provider_config"] = tier.QosLimits.ProviderConfig
+		}
+		if tier.EncryptionEnabled != nil {
+			result[i]["encryption_enabled"] = *tier.EncryptionEnabled
+		}
 	}
 	return result
 }

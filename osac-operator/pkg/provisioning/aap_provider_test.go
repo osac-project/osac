@@ -955,6 +955,38 @@ var _ = Describe("AAPProvider", func() {
 			}
 		})
 
+		DescribeTable("should preserve ONTAP tier requirements in the AAP request", func(encrypted bool, maxIOPS *int64) {
+			var providerConfig map[string]any
+			if maxIOPS != nil {
+				providerConfig = map[string]any{"max_iops": *maxIOPS}
+			}
+			ctx = provisioning.WithStorageTierDefinitions(ctx, []provisioning.TierDefinition{{
+				Name: "fast", Protocol: "block", Provider: "ontap", BackendID: "backend-1",
+				EncryptionEnabled: &encrypted,
+				QosLimits:         provisioning.TierQosLimits{ProviderConfig: providerConfig},
+			}})
+			aapClient.launchJobTemplateFunc = func(_ context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				vars := req.ExtraVars["osac_job_vars"].(map[string]any)
+				tiers := vars["storage_tier_definitions"].([]map[string]any)
+				Expect(tiers).To(HaveLen(1))
+				Expect(tiers[0]).To(HaveKeyWithValue("encryption_enabled", encrypted))
+				qos := tiers[0]["qos_limits"].(map[string]any)
+				if maxIOPS == nil {
+					Expect(qos).NotTo(HaveKey("provider_config"))
+				} else {
+					Expect(qos).To(HaveKeyWithValue("provider_config", map[string]any{"max_iops": *maxIOPS}))
+				}
+				return &aap.LaunchJobTemplateResponse{JobID: 111}, nil
+			}
+			_, err := provider.TriggerProvision(ctx, &v1alpha1.Tenant{ObjectMeta: metav1.ObjectMeta{Name: "tenant", Namespace: "default"}})
+			Expect(err).NotTo(HaveOccurred())
+		},
+			Entry("unencrypted with a numeric cap", false, new(int64(5000))),
+			Entry("encrypted with the largest cap", true, new(int64(2147483647))),
+			Entry("explicit zero cap", false, new(int64(0))),
+			Entry("no provider QoS extension", true, (*int64)(nil)),
+		)
+
 		It("should shape storage_tier_definitions per the storage_provider role's argument_specs", func() {
 			ctx = provisioning.WithStorageTierDefinitions(ctx, []provisioning.TierDefinition{
 				{

@@ -41,14 +41,16 @@ type TierDefinition struct {
 	Provider string
 	// BackendID is the join key into a map of BackendConnection values keyed by
 	// backend_id — not the connection itself.
-	BackendID string
-	QosLimits TierQosLimits
+	BackendID         string
+	QosLimits         TierQosLimits
+	EncryptionEnabled *bool
 }
 
-// TierQosLimits carries the bandwidth limits for a TierDefinition's backend association.
+// TierQosLimits carries the QoS requirements for a backend association.
 type TierQosLimits struct {
 	MaxReadBandwidthMBs  int32
 	MaxWriteBandwidthMBs int32
+	ProviderConfig       map[string]any
 }
 
 // BackendConnection carries one storage backend's management-endpoint connection

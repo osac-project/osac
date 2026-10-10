@@ -320,12 +320,30 @@
           "properties": {
             "serverAddress": {
               "type": "string",
-              "description": "Fulfillment service gRPC address",
+              "description": "Fulfillment service gRPC address; leave empty to disable the operator Fulfillment client",
               "default": "fulfillment-internal-api:8001"
             },
-            "tokenFile": {
-              "type": "string",
-              "description": "Path to service account token file"
+            "credentials": {
+              "type": "object",
+              "description": "Reference to the existing osac-controller Keycloak service-account credentials; osac-infra provisions this for bundled Keycloak, while external Keycloak deployments must provide an equivalent Secret",
+              "properties": {
+                "secretName": {
+                  "type": "string",
+                  "description": "Secret name",
+                  "default": "fulfillment-controller-credentials"
+                },
+                "clientIdKey": {
+                  "type": "string",
+                  "description": "Key within the Secret containing the OAuth client ID",
+                  "default": "client-id"
+                },
+                "clientSecretKey": {
+                  "type": "string",
+                  "description": "Key within the Secret containing the OAuth client secret",
+                  "default": "client-secret"
+                }
+              },
+              "additionalProperties": false
             },
             "tls": {
               "type": "object",
@@ -360,8 +378,8 @@
                 },
                 "optional": {
                   "type": "boolean",
-                  "description": "Allow the ConfigMap to be absent when external CSI configuration is disabled",
-                  "default": true
+                  "description": "Allow the ConfigMap to be absent when external fulfillment configuration is disabled",
+                  "default": false
                 }
               },
               "additionalProperties": false

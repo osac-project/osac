@@ -17,7 +17,9 @@ HOOKS = {
 }
 
 
-def render(enabled: bool | None = None, *, csi: bool = False) -> list[str]:
+def render(
+    enabled: bool | None = None, *, csi: bool = False, server_address: str | None = None
+) -> list[str]:
     cmd = [
         "helm",
         "template",
@@ -42,6 +44,8 @@ def render(enabled: bool | None = None, *, csi: bool = False) -> list[str]:
         cmd.extend(("--set", f"global.fulfillmentTrust.enabled={str(enabled).lower()}"))
     if csi:
         cmd.extend(("--set", "csiDriver.enabled=true"))
+    if server_address is not None:
+        cmd.extend(("--set", f"operator.fulfillment.serverAddress={server_address}"))
     manifest = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
     return [doc for doc in manifest.split("\n---\n") if doc.strip()]
 
@@ -74,7 +78,16 @@ def check_main_container_tls(job: str, name: str) -> None:
 def check(enabled: bool) -> None:
     docs = render(enabled)
     operator = select(docs, "osac/charts/operator/templates/deployment.yaml")
+    runtime_config = select(docs, "osac/templates/fulfillment-runtime-config.yaml")
     metering = select(docs, "osac/charts/metering/templates/deployment.yaml")
+    assert 'name: "osac-fulfillment-config"' in runtime_config
+    assert "OSAC_FULFILLMENT_ISSUER_URL:" in runtime_config
+    assert "OSAC_FULFILLMENT_TOKEN_FILE" not in operator
+    assert "OSAC_FULFILLMENT_CLIENT_ID" in operator
+    assert "OSAC_FULFILLMENT_CLIENT_SECRET" in operator
+    assert "name: fulfillment-controller-credentials" in operator
+    assert "key: client-id" in operator
+    assert "key: client-secret" in operator
     assert "mountPath: /etc/ca-bundle" in metering
     assert "readOnly: true" in metering
     assert "key: bundle.pem" in metering
@@ -127,6 +140,14 @@ def check_production_default() -> None:
             check_main_container_tls(job, name)
 
 
+def check_operator_fulfillment_can_be_disabled() -> None:
+    docs = render(False, server_address="")
+    operator = select(docs, "osac/charts/operator/templates/deployment.yaml")
+    assert "OSAC_FULFILLMENT_SERVER_ADDRESS" not in operator
+    assert "OSAC_FULFILLMENT_CLIENT_ID" not in operator
+    assert "OSAC_FULFILLMENT_CLIENT_SECRET" not in operator
+
+
 def check_trust_gate(enabled: bool) -> None:
     docs = render(enabled, csi=True)
     controller = select(docs, "osac/charts/service/templates/controller/deployment.yaml")
@@ -152,6 +173,7 @@ if __name__ == "__main__":
     check(False)
     check(True)
     check_production_default()
+    check_operator_fulfillment_can_be_disabled()
     check_trust_gate(False)
     check_trust_gate(True)
     check_infra_ca_bundle_targets_csi()

@@ -98,8 +98,12 @@ operator:
     # Internal gRPC address — must use the internal Envoy listener that
     # routes both public and private API methods.
     serverAddress: "fulfillment-internal-api:8001"
-    # Path to the ServiceAccount token file used for authentication.
-    tokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    # osac-infra provisions this for bundled Keycloak; external Keycloak setups
+    # must provide a matching Secret.
+    credentials:
+      secretName: fulfillment-controller-credentials
+      clientIdKey: client-id
+      clientSecretKey: client-secret
 
   # Enable/disable individual controllers. When all are true (default),
   # the operator manages all resource types. Set to false to disable

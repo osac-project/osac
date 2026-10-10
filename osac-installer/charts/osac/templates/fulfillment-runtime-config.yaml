@@ -1,8 +1,26 @@
 {{/*
-This ConfigMap bridges Helm-time service values to the operator's runtime
-environment. Endpoint and issuer are intentionally non-secret; CSI credentials
-remain in the separate credential Secret.
+The operator always needs the non-secret issuer URL for its own OAuth client,
+even when the hub CSI driver is disabled. Endpoint is optional here because
+operator-only installations may not expose fulfillment outside the cluster.
 */}}
+{{- if .Values.operator.enabled }}
+{{- $operatorConfigMapName := required "operator.fulfillment.configMap.name is required when operator.enabled is true" .Values.operator.fulfillment.configMap.name }}
+{{- $operatorIssuer := tpl (required "service.auth.issuerUrl is required when operator.enabled is true" .Values.service.auth.issuerUrl) . }}
+{{- $operatorEndpoint := .Values.global.fulfillment.endpoint }}
+{{- if and (not $operatorEndpoint) .Values.service.externalHostname }}
+{{- $operatorEndpoint = printf "%s:443" .Values.service.externalHostname }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $operatorConfigMapName | quote }}
+  namespace: {{ .Release.Namespace }}
+data:
+  OSAC_FULFILLMENT_ISSUER_URL: {{ $operatorIssuer | quote }}
+  {{- if $operatorEndpoint }}
+  OSAC_FULFILLMENT_ENDPOINT: {{ $operatorEndpoint | quote }}
+  {{- end }}
+{{- end }}
 {{- if .Values.csiDriver.enabled }}
 {{- $endpoint := .Values.global.fulfillment.endpoint }}
 {{- if not $endpoint }}
@@ -14,33 +32,17 @@ remain in the separate credential Secret.
 {{- $csiConfigMapName := required "csiDriver.controller.fulfillment.configMap.name is required when csiDriver.enabled is true" .Values.csiDriver.controller.fulfillment.configMap.name }}
 {{- $csiEndpointKey := required "csiDriver.controller.fulfillment.configMap.endpointKey is required when csiDriver.enabled is true" .Values.csiDriver.controller.fulfillment.configMap.endpointKey }}
 {{- $csiIssuerKey := required "csiDriver.controller.fulfillment.configMap.issuerUrlKey is required when csiDriver.enabled is true" .Values.csiDriver.controller.fulfillment.configMap.issuerUrlKey }}
-{{- $operatorConfigMapName := "" }}
-{{- if .Values.operator.enabled }}
-{{- $operatorConfigMapName = required "operator.fulfillment.configMap.name is required when operator.enabled and csiDriver.enabled are true" .Values.operator.fulfillment.configMap.name }}
-{{- end }}
-{{- if and .Values.operator.enabled (eq $csiNamespace .Release.Namespace) (eq $csiConfigMapName $operatorConfigMapName) }}
+{{- if and .Values.operator.enabled (eq $csiNamespace .Release.Namespace) (eq $csiConfigMapName .Values.operator.fulfillment.configMap.name) }}
 {{- fail "operator and CSI ConfigMaps must use different names when they share a namespace" }}
 {{- end }}
-{{- if .Values.operator.enabled }}
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ $operatorConfigMapName }}
-  namespace: {{ .Release.Namespace }}
-data:
-  OSAC_FULFILLMENT_ENDPOINT: {{ $endpoint | quote }}
-  OSAC_FULFILLMENT_ISSUER_URL: {{ $issuer | quote }}
-{{- end }}
-{{- if or (not .Values.operator.enabled) (ne $csiNamespace .Release.Namespace) (ne $csiConfigMapName $operatorConfigMapName) }}
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ $csiConfigMapName }}
+  name: {{ $csiConfigMapName | quote }}
   namespace: {{ $csiNamespace }}
 immutable: true
 data:
   {{ $csiEndpointKey }}: {{ $endpoint | quote }}
   {{ $csiIssuerKey }}: {{ $issuer | quote }}
-{{- end }}
 {{- end }}

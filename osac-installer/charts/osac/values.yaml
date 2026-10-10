@@ -115,14 +115,17 @@ operator:
     workersJoiningByInstanceType: {}
   fulfillment:
     serverAddress: "fulfillment-internal-api:8001"
-    tokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    credentials:
+      secretName: fulfillment-controller-credentials
+      clientIdKey: client-id
+      clientSecretKey: client-secret
     tls:
       caBundle:
         configMap: ca-bundle
         key: bundle.pem
     configMap:
       name: "osac-fulfillment-config"
-      optional: true
+      optional: false
   controllers:
     tenant: true
     networking: true

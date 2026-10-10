@@ -38,7 +38,10 @@ ignition:
 
 fulfillment:
   serverAddress: ""
-  tokenFile: ""
+  credentials:
+    secretName: fulfillment-controller-credentials
+    clientIdKey: client-id
+    clientSecretKey: client-secret
   tls:
     caBundle:
       configMap: ca-bundle

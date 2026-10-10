@@ -30,7 +30,10 @@ operator:
       key: token
   fulfillment:
     serverAddress: "fulfillment-internal-api:8001"
-    tokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    credentials:
+      secretName: fulfillment-controller-credentials
+      clientIdKey: client-id
+      clientSecretKey: client-secret
   controllers:
     tenant: true
     networking: true
@@ -62,8 +65,6 @@ service:
     issuerUrl: https://keycloak.keycloak.svc.cluster.local:8443/realms/osac
     emergencyServiceAccounts:
       - admin
-      - osac-operator
-      - osac-operator-controller-manager
     controllerCredentials:
       - secret:
           name: fulfillment-controller-credentials

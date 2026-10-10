@@ -217,6 +217,21 @@ Touched-area requirements: [component guide](../osac-operator/AGENTS.md#integrat
   valid/invalid CA and hostname cases, bundle rotation and last-client retention.
   The production render contract covers mounts/arguments; Kind runs with the
   trust gate disabled. Neither proves a deployed fulfillment TLS endpoint.
+- **Fulfillment OAuth:** `cmd/verified_fulfillment_test.go` uses local TLS OIDC
+  and gRPC endpoints to verify client-credentials token acquisition and
+  authenticated calls in both connection modes. The installer render contract
+  checks the Secret references and issuer ConfigMap.
+- **Cross-cluster fulfillment OAuth:** No deployed suite currently covers this
+  boundary. With bundled Keycloak, the dev installer provisions the existing
+  `osac-controller` credentials through `osac-infra`, but the local
+  `kind-osac-dev` cluster is not a multi-cluster test environment. Add a
+  deployed cross-cluster exercise in a supported environment; track this gap
+  under [OSAC-5939](https://redhat.atlassian.net/browse/OSAC-5939).
+- **Installer schema consumption:** The installer schema exposes the operator
+  credential Secret name and key references. Verify that the Enclave plugin
+  and Wizard consume the updated schema before treating those controls as
+  available there; that pipeline is outside this repository's chart-render
+  tests.
 - **Controller reconciliation, finalizers, status and CRDs:** Drive the public
   reconciler against real API persistence in the existing Controller Suite.
 - **LVMS Volume lifecycle:** `lvms_vendor_provisioner_envtest_test.go` covers

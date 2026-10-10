@@ -8,13 +8,17 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"math/big"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,8 +27,255 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
+
+func TestFulfillmentOAuthTokenSourceAuthenticatesVerifiedGrpcRequest(t *testing.T) {
+	const clientID = "operator-test-client"
+	const clientSecret = "test-secret-value"
+	const accessToken = "test-access-token"
+
+	var issuerURL string
+	var tokenRequests atomic.Int32
+	issuerServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/realms/osac/.well-known/openid-configuration":
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"issuer":         issuerURL,
+				"token_endpoint": issuerServerURL(r) + "/token",
+			})
+		case "/token":
+			tokenRequests.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			username, password, ok := r.BasicAuth()
+			if !ok || username != clientID || password != clientSecret {
+				t.Errorf("token endpoint received unexpected client authentication")
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			if err := r.ParseForm(); err != nil || r.Form.Get("grant_type") != "client_credentials" {
+				t.Errorf("token endpoint request was not client_credentials")
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token": accessToken,
+				"token_type":   "Bearer",
+				"expires_in":   60,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer issuerServer.Close()
+	issuerURL = issuerServer.URL + "/realms/osac"
+	caFile := writeOAuthTestCA(t, issuerServer)
+
+	tokenSource, err := newFulfillmentTokenSource(fulfillmentOAuthConfig{
+		IssuerURL: issuerURL, ClientID: clientID, ClientSecret: clientSecret, CAFile: caFile,
+	})
+	if err != nil {
+		t.Fatalf("construct token source: %v", err)
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverCert := issuerServer.TLS.Certificates[0]
+	server := grpc.NewServer(
+		grpc.Creds(credentials.NewTLS(&tls.Config{Certificates: []tls.Certificate{serverCert}})),
+		grpc.UnaryInterceptor(
+			func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+				md, ok := metadata.FromIncomingContext(ctx)
+				if !ok || strings.Join(md.Get("authorization"), ",") != "Bearer "+accessToken {
+					return nil, status.Error(codes.Unauthenticated, "missing expected bearer token")
+				}
+				return handler(ctx, req)
+			},
+		),
+	)
+	healthpb.RegisterHealthServer(server, health.NewServer())
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(server.Stop)
+
+	client := &verifiedFulfillmentConn{
+		address: listener.Addr().String(), caFile: caFile, tokenSource: tokenSource,
+	}
+	probeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := client.reload(probeCtx); err != nil {
+		t.Fatalf("create verified fulfillment client: %v", err)
+	}
+	t.Cleanup(client.close)
+	if _, err := healthpb.NewHealthClient(client).Check(probeCtx, &healthpb.HealthCheckRequest{}); err != nil {
+		t.Fatalf("authenticated fulfillment request failed: %v", err)
+	}
+	legacy, err := createGrpcConn(false, false, tokenSource, listener.Addr().String(), caFile)
+	if err != nil {
+		t.Fatalf("create authenticated legacy fulfillment client: %v", err)
+	}
+	t.Cleanup(func() { _ = legacy.Close() })
+	if _, err := healthpb.NewHealthClient(legacy).Check(probeCtx, &healthpb.HealthCheckRequest{}); err != nil {
+		t.Fatalf("authenticated legacy fulfillment request failed: %v", err)
+	}
+	if got := tokenRequests.Load(); got != 1 {
+		t.Fatalf("token endpoint received %d requests, want 1 cached token", got)
+	}
+}
+
+func TestFulfillmentOAuthTokenSourceRetriesIssuerDiscovery(t *testing.T) {
+	var issuerURL string
+	var discoveryRequests atomic.Int32
+	var tokenRequests atomic.Int32
+	issuerServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/realms/osac/.well-known/openid-configuration":
+			if discoveryRequests.Add(1) == 1 {
+				http.Error(w, "issuer unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"issuer": issuerURL, "token_endpoint": issuerServerURL(r) + "/token",
+			})
+		case "/token":
+			tokenRequests.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token": "test-access-token", "token_type": "Bearer", "expires_in": 60,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer issuerServer.Close()
+	issuerURL = issuerServer.URL + "/realms/osac"
+	tokenSource, err := newFulfillmentTokenSource(fulfillmentOAuthConfig{
+		IssuerURL: issuerURL, ClientID: "operator-test-client", ClientSecret: "test-secret-value",
+		CAFile: writeOAuthTestCA(t, issuerServer),
+	})
+	if err != nil {
+		t.Fatalf("construct token source: %v", err)
+	}
+	if _, err := tokenSource.Token(); err == nil {
+		t.Fatal("first token request succeeded while issuer discovery was unavailable")
+	}
+	token, err := tokenSource.Token()
+	if err != nil {
+		t.Fatalf("token source did not retry issuer discovery: %v", err)
+	}
+	if token.AccessToken != "test-access-token" || discoveryRequests.Load() != 2 || tokenRequests.Load() != 1 {
+		t.Fatalf("unexpected retry result: token=%q discovery=%d token_requests=%d",
+			token.AccessToken, discoveryRequests.Load(), tokenRequests.Load())
+	}
+}
+
+func TestFulfillmentOAuthTokenSourceDoesNotFollowTokenRedirect(t *testing.T) {
+	const clientSecret = "redirect-secret"
+	var issuerURL string
+	var redirectTargetRequests atomic.Int32
+	issuerServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/realms/osac/.well-known/openid-configuration":
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"issuer": issuerURL, "token_endpoint": issuerServerURL(r) + "/redirect",
+			})
+		case "/redirect":
+			http.Redirect(w, r, "/redirect-target", http.StatusTemporaryRedirect)
+		case "/redirect-target":
+			redirectTargetRequests.Add(1)
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer issuerServer.Close()
+	issuerURL = issuerServer.URL + "/realms/osac"
+	tokenSource, err := newFulfillmentTokenSource(fulfillmentOAuthConfig{
+		IssuerURL: issuerURL, ClientID: "operator-test-client", ClientSecret: clientSecret,
+		CAFile: writeOAuthTestCA(t, issuerServer),
+	})
+	if err != nil {
+		t.Fatalf("construct token source: %v", err)
+	}
+	if _, err := tokenSource.Token(); err == nil {
+		t.Fatal("redirected token request unexpectedly succeeded")
+	}
+	if got := redirectTargetRequests.Load(); got != 0 {
+		t.Fatalf("redirect target received %d requests, want 0", got)
+	}
+}
+
+func TestFulfillmentOAuthTokenSourceDoesNotExposeTokenEndpointErrorBody(t *testing.T) {
+	const clientSecret = "credential-that-must-not-be-logged"
+	var issuerURL string
+	issuerServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/realms/osac/.well-known/openid-configuration":
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"issuer": issuerURL, "token_endpoint": issuerServerURL(r) + "/token",
+			})
+		case "/token":
+			http.Error(w, clientSecret, http.StatusUnauthorized)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer issuerServer.Close()
+	issuerURL = issuerServer.URL + "/realms/osac"
+	tokenSource, err := newFulfillmentTokenSource(fulfillmentOAuthConfig{
+		IssuerURL: issuerURL, ClientID: "operator-test-client", ClientSecret: clientSecret,
+		CAFile: writeOAuthTestCA(t, issuerServer),
+	})
+	if err != nil {
+		t.Fatalf("construct token source: %v", err)
+	}
+	if _, err := tokenSource.Token(); err == nil || strings.Contains(err.Error(), clientSecret) {
+		t.Fatalf("token endpoint error leaked credentials or unexpectedly succeeded: %v", err)
+	}
+}
+
+func TestNewFulfillmentTokenSourceRejectsIncompleteOrInsecureConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  fulfillmentOAuthConfig
+	}{
+		{name: "missing issuer", cfg: fulfillmentOAuthConfig{ClientID: "client", ClientSecret: "secret"}},
+		{
+			name: "insecure issuer",
+			cfg:  fulfillmentOAuthConfig{IssuerURL: "http://issuer.example/realm", ClientID: "client", ClientSecret: "secret"},
+		},
+		{
+			name: "missing client ID",
+			cfg:  fulfillmentOAuthConfig{IssuerURL: "https://issuer.example/realm", ClientSecret: "secret"},
+		},
+		{
+			name: "missing client secret",
+			cfg:  fulfillmentOAuthConfig{IssuerURL: "https://issuer.example/realm", ClientID: "client"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := newFulfillmentTokenSource(tc.cfg); err == nil {
+				t.Fatal("invalid OAuth configuration was accepted")
+			}
+		})
+	}
+}
+
+func writeOAuthTestCA(t *testing.T, server *httptest.Server) string {
+	t.Helper()
+	caFile := filepath.Join(t.TempDir(), "oauth-ca.pem")
+	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	if err := os.WriteFile(caFile, ca, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return caFile
+}
+
+func issuerServerURL(r *http.Request) string {
+	return "https://" + r.Host
+}
 
 func TestVerifiedFulfillmentBundleRotation(t *testing.T) {
 	fixture := httptest.NewTLSServer(nil)

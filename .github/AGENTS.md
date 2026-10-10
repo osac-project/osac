@@ -29,6 +29,12 @@ what happens next. It is informational and not a required check. The program, it
 state descriptions live in [osac-project/osac-ci](https://github.com/osac-project/osac-ci); the workflow calls its
 `publish` action pinned to a full commit SHA, so the code and policy only change by bumping that pin in a reviewed PR.
 
+- `workflows/osac-ci-review.yml` does nothing but finish. It runs on a review, and `osac-ci.yml` lists it in its
+  `workflow_run` trigger, so a review refreshes the verdict at once (a review on a fork pull request cannot write a
+  check itself). Its name must match the entry in that list.
+- `workflows/osac-ci-queue.yml` posts the same check on the commit the merge queue builds, so a required OSAC CI would
+  be reported there too. It lists the same workflows as `osac-ci.yml` (minus the review relay): keep the two lists in
+  step. It is informational until OSAC CI is required.
 - `workflow_run` lists workflows by exact name. When a workflow that reports a required check is added, renamed or
   removed, update the list in `osac-ci.yml`. A missing name only delays an update until the next event or the 10-minute
   sweep.
@@ -37,6 +43,14 @@ state descriptions live in [osac-project/osac-ci](https://github.com/osac-projec
 - The sweep re-evaluates only the pull requests whose posted verdict is missing, errored, out of date, stuck or old
   (`stale-only`), so it is cheap. The built-in token allows 1,000 requests an hour; see the osac-ci README before
   changing it.
+- `workflows/osac-ci-override.yml` answers `/override <full commit sha> <reason>` from a wg-infra member: it waives the
+  protected-path approval for that exact commit and records who and why as a check run. The comment is the authority;
+  never accept a check run as proof (any workflow can write one). Only the osac-ui lint and typecheck workflows are
+  also approvable by the osac-ui maintainers (`osac-ui/OWNERS`); every other workflow reports a required check, uses
+  secrets or publishes an image, so it stays with wg-infra.
+- `workflows/osac-ci-refresh.yml` answers `/osac-ci refresh` from the pull request's author or an owner, member or
+  collaborator: it recomputes the verdict from live state and posts it, for when a verdict is out of date. The comment
+  only decides whether the job runs; keep it out of every script and keep the per-comment concurrency group.
 - Changes to the files that define the checks (`.github/workflows`, `actions`, `scripts`, `filters`, `CODEOWNERS`,
   `.pre-commit-config.yaml`; Markdown in them excepted) need an approval from `@osac-project/wg-infra`. `CODEOWNERS` lists them and the OSAC CI
   policy applies the same list; keep both in step.

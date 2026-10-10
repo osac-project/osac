@@ -31,7 +31,18 @@ export const attachmentExternalIpIdsFilter = (ids: readonly string[]) =>
   cel<ExternalIPAttachment>((filter) => filter.field('spec.externalIp.id').isIn(ids));
 
 export const computeInstanceAttachmentFilter = (computeInstanceId: string) =>
-  `this.spec.compute_instance.id == "${escapeCelStringLiteral(computeInstanceId)}"` as CelFilter;
+  cel<ExternalIPAttachment>(
+    () =>
+      `this.spec.compute_instance.id == "${escapeCelStringLiteral(computeInstanceId)}"` as CelFilter<ExternalIPAttachment>,
+  );
+
+export const clusterAttachmentFilter = (clusterId: string) =>
+  cel<ExternalIPAttachment>((filter) =>
+    // spec.cluster is a protobuf oneof case that cannot be addressed by the typed field() builder.
+    filter.and(
+      `this.spec.cluster.id == "${escapeCelStringLiteral(clusterId)}"` as CelFilter<ExternalIPAttachment>,
+    ),
+  );
 
 export const natGatewayExternalIpIdsFilter = (ids: readonly string[]) =>
   cel<NATGateway>((filter) => filter.field('spec.externalIp.id').isIn(ids));

@@ -158,6 +158,7 @@ e2e-code:
   - '!**/it/**'
   - '!**/conftest.py'
   - '!**/fixtures/**'
+  - '!osac-ui/**'
   - '!tools/pr-notify/**'
 e2e-suite:
   - 'tests/e2e/**'
@@ -304,7 +305,7 @@ helm-osac-csi-driver:
 helm-osac-metering:
   - '{osac-metering/charts/**,.github/workflows/helm-lint.yaml}'
 helm-osac-installer:
-  - '{osac-installer/charts/**,osac-installer/values/**,osac-installer/ct.yaml,.github/workflows/helm-lint.yaml}'
+  - '{osac-installer/charts/**,osac-installer/values/**,osac-installer/ct.yaml,osac-installer/Makefile,osac-installer/scripts/test-mce-render.py,.github/workflows/helm-lint.yaml}'
 
 # Exact copy of check-generated-code.yaml's own `proto` filter.
 proto-check:
@@ -384,13 +385,16 @@ unit-tests-osac-metering-schema:
 # first three: their jobs all run setup/tests via `make -C osac-installer
 # install-infra`/`make -C osac-installer test`, so an osac-installer-only
 # change (Makefile, infra chart) can break them despite touching none of
-# their own directories. osac-aap (pure Python/Ansible) has no Go/
-# osac-installer coupling, so it's the only one narrowed to just its own
-# directory. integration-tests.yml's own `osac-installer` job (the umbrella
-# smoke test) is deliberately left unscoped in the workflow itself -- it
-# deploys the full stack by design -- so no filter for it exists here.
+# their own directories. The fulfillment-service job also builds and runs
+# the current osac-operator image for its focused NetworkClass capability
+# integration spec, so changes anywhere under osac-operator/** must rerun
+# that job. osac-aap (pure Python/Ansible) has no Go/osac-installer coupling,
+# so it's the only one narrowed to just its own directory.
+# integration-tests.yml's own `osac-installer` job (the umbrella smoke test)
+# is deliberately left unscoped in the workflow itself -- it deploys the
+# full stack by design -- so no filter for it exists here.
 integration-tests-fulfillment-service:
-  - '{fulfillment-service/**,bare-metal-fulfillment-operator/**,osac-operator/api/**,proto/**,osac-installer/**,go.work,go.work.sum,.github/workflows/integration-tests.yml}'
+  - '{fulfillment-service/**,bare-metal-fulfillment-operator/**,osac-operator/**,proto/**,osac-installer/**,go.work,go.work.sum,.github/workflows/integration-tests.yml}'
 integration-tests-osac-operator:
   - '{osac-operator/**,bare-metal-fulfillment-operator/**,proto/**,osac-installer/**,go.work,go.work.sum,.github/workflows/integration-tests.yml}'
 integration-tests-bare-metal-fulfillment-operator:

@@ -39,7 +39,6 @@ type PrivateTenantsServerBuilder struct {
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
-	defaultNetworking *DefaultNetworkingProvisioner
 	filterDesc        protoreflect.MessageDescriptor
 }
 
@@ -47,11 +46,10 @@ var _ privatev1.TenantsServer = (*PrivateTenantsServer)(nil)
 
 type PrivateTenantsServer struct {
 	privatev1.UnimplementedTenantsServer
-	logger            *slog.Logger
-	generic           *GenericServer[*privatev1.Tenant]
-	dao               *dao.GenericDAO[*privatev1.Tenant]
-	secretsDao        *dao.GenericDAO[*privatev1.Secret]
-	defaultNetworking *DefaultNetworkingProvisioner
+	logger     *slog.Logger
+	generic    *GenericServer[*privatev1.Tenant]
+	dao        *dao.GenericDAO[*privatev1.Tenant]
+	secretsDao *dao.GenericDAO[*privatev1.Secret]
 }
 
 func NewPrivateTenantsServer() *PrivateTenantsServerBuilder {
@@ -77,11 +75,6 @@ func (b *PrivateTenantsServerBuilder) SetTenancyLogic(value auth.TenancyLogic) *
 // access objects. This is optional. If not set, no metrics will be recorded.
 func (b *PrivateTenantsServerBuilder) SetMetricsRegisterer(value prometheus.Registerer) *PrivateTenantsServerBuilder {
 	b.metricsRegisterer = value
-	return b
-}
-
-func (b *PrivateTenantsServerBuilder) SetDefaultNetworkingProvisioner(value *DefaultNetworkingProvisioner) *PrivateTenantsServerBuilder {
-	b.defaultNetworking = value
 	return b
 }
 
@@ -139,11 +132,10 @@ func (b *PrivateTenantsServerBuilder) Build() (result *PrivateTenantsServer, err
 
 	// Create and populate the object:
 	result = &PrivateTenantsServer{
-		logger:            b.logger,
-		generic:           generic,
-		dao:               tenantsDao,
-		secretsDao:        secretsDao,
-		defaultNetworking: b.defaultNetworking,
+		logger:     b.logger,
+		generic:    generic,
+		dao:        tenantsDao,
+		secretsDao: secretsDao,
 	}
 	return
 }
@@ -228,17 +220,6 @@ func (s *PrivateTenantsServer) Create(ctx context.Context,
 	err = s.generic.Create(ctx, request, &response)
 	if err != nil {
 		return
-	}
-
-	if s.defaultNetworking != nil {
-		if provisionErr := s.defaultNetworking.Provision(ctx, name); provisionErr != nil {
-			s.logger.ErrorContext(ctx, "Failed to provision default networking",
-				slog.String("tenant", name),
-				slog.Any("error", provisionErr))
-			err = grpcstatus.Errorf(grpccodes.Internal,
-				"failed to provision default networking resources")
-			return
-		}
 	}
 
 	return

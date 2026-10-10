@@ -18,6 +18,7 @@ Scenarios:
 """
 
 import json
+import ssl
 import sys
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -172,6 +173,11 @@ if __name__ == "__main__":
     SCENARIO = sys.argv[2] if len(sys.argv) > 2 else "empty"
     HTTPServer.allow_reuse_address = True
     server = HTTPServer(("127.0.0.1", port), MockHandler)
+    if len(sys.argv) > 4:
+        tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        tls_context.minimum_version = ssl.TLSVersion.TLSv1_2
+        tls_context.load_cert_chain(sys.argv[3], sys.argv[4])
+        server.socket = tls_context.wrap_socket(server.socket, server_side=True)
     print(f"Mock API server running on port {port} (scenario: {SCENARIO})")
     sys.stdout.flush()
     server.serve_forever()

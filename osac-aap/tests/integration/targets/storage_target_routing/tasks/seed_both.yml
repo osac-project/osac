@@ -1,0 +1,42 @@
+---
+- name: Seed matching test StorageClasses on management and workload APIs
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Seed management StorageClass
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: "{{ routing_test_storage_class_name }}"
+            labels:
+              osac.openshift.io/tenant: "{{ routing_test_tenant_name }}"
+              osac.openshift.io/storage-tier: fast
+              app.kubernetes.io/managed-by: osac-aap
+          provisioner: topolvm.io
+          parameters:
+            topolvm.io/device-class: vg1
+          reclaimPolicy: Delete
+          volumeBindingMode: WaitForFirstConsumer
+
+    - name: Seed workload StorageClass
+      kubernetes.core.k8s:
+        kubeconfig: "{{ routing_test_kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: "{{ routing_test_storage_class_name }}"
+            labels:
+              osac.openshift.io/tenant: "{{ routing_test_tenant_name }}"
+              osac.openshift.io/storage-tier: fast
+              app.kubernetes.io/managed-by: osac-aap
+          provisioner: topolvm.io
+          parameters:
+            topolvm.io/device-class: vg1
+          reclaimPolicy: Delete
+          volumeBindingMode: WaitForFirstConsumer

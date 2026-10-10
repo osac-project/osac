@@ -29,10 +29,13 @@
 
 # Phase 2: Create resources using resolved StorageClasses.
 
+# Root disk DV is created without `apply` because CDI mutates registry-source DVs
+# (adds pullMethod, binding annotations) after creation. Using apply on day-2 would
+# try to remove those CDI-managed fields, triggering "Cannot update DataVolume Spec"
+# (OSAC-3403). Additional disks use source.blank which CDI does not mutate.
 - name: Create DataVolume for VM root disk
   kubernetes.core.k8s:
     kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
-    apply: true
     definition:
       apiVersion: cdi.kubevirt.io/v1beta1
       kind: DataVolume

@@ -55,9 +55,11 @@ const buildValues = (project: string) => ({
     ...createEmptyComputeInstanceValues().spec,
     instanceType: 'standard-4-8',
     networking: {
-      virtualNetwork: 'vnet-1',
-      subnet: 'subnet-1',
-      securityGroups: ['sg-1'],
+      useDefaultNetwork: false,
+      virtualNetwork: { id: 'vnet-1', name: 'vnet-1' },
+      subnet: { id: 'subnet-1', name: 'subnet-1' },
+      securityGroups: [{ id: 'sg-1', name: 'sg-1' }],
+      autoExternalIpAttachment: false,
     },
   },
 });
@@ -71,7 +73,13 @@ const baseValues = () => {
     spec: {
       ...values.spec,
       instanceType: 'standard-4-8',
-      networking: { virtualNetwork: 'vnet', subnet: 'subnet-1', securityGroups: ['sg-1'] },
+      networking: {
+        useDefaultNetwork: false,
+        virtualNetwork: { id: 'vnet', name: 'vnet' },
+        subnet: { id: 'subnet-1', name: 'subnet-1' },
+        securityGroups: [{ id: 'sg-1', name: 'sg-1' }],
+        autoExternalIpAttachment: false,
+      },
     },
   };
 };
@@ -199,5 +207,79 @@ describe('buildComputeInstanceCreatePayload — disk storage tiers', () => {
     expect(payload.spec?.additionalDisks).toEqual([
       { sizeGib: 100, storageTier: { id: 'id-bulk', name: 'bulk' } },
     ]);
+  });
+});
+
+describe('buildComputeInstanceCreatePayload — useDefaultNetwork', () => {
+  it('omits networkAttachments when useDefaultNetwork is true', () => {
+    const values = baseValues();
+    values.spec.networking.useDefaultNetwork = true;
+
+    const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
+
+    expect(payload.spec).not.toHaveProperty('networkAttachments');
+  });
+
+  it('includes networkAttachments when useDefaultNetwork is false and subnet is set', () => {
+    const values = baseValues();
+    values.spec.networking.useDefaultNetwork = false;
+
+    const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
+
+    expect(payload.spec?.networkAttachments).toEqual([
+      {
+        subnet: { id: 'subnet-1' },
+        securityGroups: [{ id: 'sg-1' }],
+      },
+    ]);
+  });
+
+  it('omits networkAttachments when useDefaultNetwork is false but subnet is empty', () => {
+    const values = baseValues();
+    values.spec.networking.useDefaultNetwork = false;
+    values.spec.networking.subnet = emptyResourceSelectValue();
+
+    const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
+
+    expect(payload.spec).not.toHaveProperty('networkAttachments');
+  });
+
+  it('filters out security groups with empty IDs', () => {
+    const values = baseValues();
+    values.spec.networking.useDefaultNetwork = false;
+    values.spec.networking.securityGroups = [
+      { id: 'sg-1', name: 'sg-1' },
+      { id: '', name: '' },
+      { id: 'sg-2', name: 'sg-2' },
+    ];
+
+    const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
+
+    expect(payload.spec?.networkAttachments).toEqual([
+      {
+        subnet: { id: 'subnet-1' },
+        securityGroups: [{ id: 'sg-1' }, { id: 'sg-2' }],
+      },
+    ]);
+  });
+});
+
+describe('buildComputeInstanceCreatePayload — autoExternalIpAttachment', () => {
+  it('omits autoExternalIpAttachment when disabled', () => {
+    const values = baseValues();
+    values.spec.networking.autoExternalIpAttachment = false;
+
+    const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
+
+    expect(payload.spec).not.toHaveProperty('autoExternalIpAttachment');
+  });
+
+  it('sets autoExternalIpAttachment when enabled', () => {
+    const values = baseValues();
+    values.spec.networking.autoExternalIpAttachment = true;
+
+    const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
+
+    expect(payload.spec?.autoExternalIpAttachment).toBe(true);
   });
 });

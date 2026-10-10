@@ -71,21 +71,11 @@ func TestKeychainAvailable_NoDefaultKeychain(t *testing.T) {
 }
 
 func TestKeychainAvailable_RealKeychainPresent(t *testing.T) {
-	t.Skip("disabled pending investigation of macOS 26.6 keychain behavior")
-
-	setupDefaultKeychain(t, "test-only-password")
-
-	// This verifies the full keychainAvailable() plumbing (stage-1 default-keychain detection under sandboxed
-	// HOME, stage-2 unlock-keychain subprocess execution and exit-code interpretation) using the keychain's real
-	// password, since securityd's session-trust no-op shortcut doesn't transfer through HOME overrides in
-	// sandboxed test keychains. The production empty-string probe's no-op behavior is verified manually in Task 4
-	// against a real, unsandboxed login session.
-	originalKeychainProbePassword := keychainProbePassword
-	keychainProbePassword = "test-only-password"
-	t.Cleanup(func() { keychainProbePassword = originalKeychainProbePassword })
-
+	// Probe the runner's real login keychain rather than creating a throwaway one. This sidesteps an ARM64 CI
+	// runner bug (actions/runner-images#13476) where create-keychain -p mis-handles passwords on macOS 26.6.2,
+	// and mirrors exactly what the production code does on a developer Mac.
 	if !keychainAvailable() {
-		t.Error("keychainAvailable() = false, want true with a default keychain configured")
+		t.Error("keychainAvailable() = false, want true — no unlocked default keychain found")
 	}
 }
 

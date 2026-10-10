@@ -1,3 +1,25 @@
+{{- $fulfillment := .Values.controller.fulfillment -}}
+{{- $endpoint := $fulfillment.endpoint | default "" -}}
+{{- $issuerURL := $fulfillment.issuerUrl | default "" -}}
+{{- $configMapName := $fulfillment.configMap.name | default "" -}}
+{{- $configured := or $configMapName (and $endpoint $issuerURL) -}}
+{{- $trustEnabled := .Values.global.fulfillmentTrust.enabled | default false -}}
+{{- $trustNamespace := .Values.global.fulfillmentTrust.tenantNamespace | default "" -}}
+{{- $caBundle := $fulfillment.tls.caBundle -}}
+{{- $caBundleConfigMap := $caBundle.configMap | default "" -}}
+{{- $caBundleKey := $caBundle.key | default "" -}}
+{{- if and $trustEnabled (not $configured) -}}
+{{- fail "fulfillment configuration is required when global.fulfillmentTrust.enabled is true" -}}
+{{- end -}}
+{{- if and $trustEnabled $fulfillment.tls.insecureSkipVerify -}}
+{{- fail "controller.fulfillment.tls.insecureSkipVerify cannot be true when global.fulfillmentTrust.enabled is true" -}}
+{{- end -}}
+{{- if and $trustEnabled (not (and $caBundleConfigMap $caBundleKey)) -}}
+{{- fail "controller.fulfillment.tls.caBundle.configMap and key are required when global.fulfillmentTrust.enabled is true" -}}
+{{- end -}}
+{{- if and $trustEnabled (ne $trustNamespace (include "csi-driver.namespace" .)) -}}
+{{- fail "global.fulfillmentTrust.tenantNamespace must equal the CSI driver namespace when fulfillment trust is enabled" -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -25,21 +47,85 @@ spec:
           args:
             - "--csi-endpoint=unix:///csi/osac/csi.sock"
             - "--node-id=$(KUBE_NODE_NAME)"
+            {{- if $configMapName }}
+            - "--fulfillment-endpoint=$(OSAC_FULFILLMENT_ENDPOINT)"
+            - "--fulfillment-issuer-url=$(OSAC_FULFILLMENT_ISSUER_URL)"
+            {{- else if and $endpoint $issuerURL }}
+            - "--fulfillment-endpoint={{ $endpoint }}"
+            - "--fulfillment-issuer-url={{ $issuerURL }}"
+            {{- end }}
+            {{- if $configured }}
+            - "--fulfillment-client-id=$(FULFILLMENT_CLIENT_ID)"
+            - "--fulfillment-client-secret-file=/etc/osac-csi/credentials/client-secret"
+            {{- if $trustEnabled }}
+            - "--fulfillment-ca-file=/etc/osac-csi/fulfillment-ca/bundle.pem"
+            {{- end }}
+            {{- if $fulfillment.tls.insecureSkipVerify }}
+            - "--grpc-insecure"
+            {{- end }}
+            {{- end }}
+            {{- if and $fulfillment.allowStub (not $trustEnabled) }}
+            - "--allow-stub"
+            {{- end }}
             {{- if .Values.node.vendorSockets }}
             - "--vendor-sockets={{ .Values.node.vendorSockets }}"
             {{- end }}
             - "--v=2"
           env:
+            # KUBE_NODE_NAME preserves the upstream node-id argument; NodeGetInfo
+            # reads NODE_NAME. Both are sourced from the Kubernetes node name.
             - name: KUBE_NODE_NAME
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            {{- if .Values.node.lvmsNodeSocket }}
+            - name: OSAC_LVMS_NODE_SOCKET
+              value: {{ .Values.node.lvmsNodeSocket | quote }}
+            {{- end }}
+            {{- if $configured }}
+            {{- if $configMapName }}
+            - name: OSAC_FULFILLMENT_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ $configMapName }}
+                  key: {{ $fulfillment.configMap.endpointKey }}
+                  optional: false
+            - name: OSAC_FULFILLMENT_ISSUER_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ $configMapName }}
+                  key: {{ $fulfillment.configMap.issuerUrlKey }}
+                  optional: false
+            {{- end }}
+            - name: FULFILLMENT_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $fulfillment.credentials.secretName }}
+                  key: {{ $fulfillment.credentials.clientIdKey }}
+            {{- end }}
           volumeMounts:
             - name: osac-socket-dir
               mountPath: /csi/osac
             - name: kubelet-dir
               mountPath: /var/lib/kubelet
               mountPropagation: Bidirectional
+            - name: lvms-socket-dir
+              mountPath: {{ .Values.node.lvmsNodeSocketDir }}
+              readOnly: true
+            {{- if $configured }}
+            - name: fulfillment-credentials
+              mountPath: /etc/osac-csi/credentials
+              readOnly: true
+            {{- if $trustEnabled }}
+            - name: fulfillment-ca
+              mountPath: /etc/osac-csi/fulfillment-ca
+              readOnly: true
+            {{- end }}
+            {{- end }}
           resources:
             {{- toYaml .Values.node.resources | nindent 12 }}
           securityContext:
@@ -76,3 +162,23 @@ spec:
           hostPath:
             path: /var/lib/kubelet/plugins_registry
             type: Directory
+        - name: lvms-socket-dir
+          hostPath:
+            path: {{ .Values.node.lvmsNodeSocketHostPath }}
+            type: DirectoryOrCreate
+        {{- if $configured }}
+        - name: fulfillment-credentials
+          secret:
+            secretName: {{ $fulfillment.credentials.secretName }}
+            items:
+              - key: {{ $fulfillment.credentials.clientSecretKey }}
+                path: client-secret
+        {{- end }}
+        {{- if $trustEnabled }}
+        - name: fulfillment-ca
+          configMap:
+            name: {{ required "controller.fulfillment.tls.caBundle.configMap is required when trust is enabled" $caBundle.configMap }}
+            items:
+              - key: {{ required "controller.fulfillment.tls.caBundle.key is required when trust is enabled" $caBundle.key }}
+                path: bundle.pem
+        {{- end }}

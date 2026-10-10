@@ -39,6 +39,17 @@ spec:
         envFrom:
         - configMapRef:
             name: osac-ui
+        env:
+        - name: OIDC_SERVICE_CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.auth.serviceAccount.credentialsSecret }}
+              key: client-id
+        - name: OIDC_SERVICE_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.auth.serviceAccount.credentialsSecret }}
+              key: client-secret
         readinessProbe:
           httpGet:
             path: /health

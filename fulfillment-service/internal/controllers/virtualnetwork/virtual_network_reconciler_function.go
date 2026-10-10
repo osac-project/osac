@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand/v2"
 	"slices"
 
 	"google.golang.org/grpc"
@@ -52,7 +51,7 @@ type function struct {
 	logger                *slog.Logger
 	hubCache              controllers.HubCache
 	virtualNetworksClient privatev1.VirtualNetworksClient
-	hubsClient            privatev1.HubsClient
+	networkingHubReader   controllers.NetworkingHubReader
 	maskCalculator        *masks.Calculator
 }
 
@@ -103,12 +102,22 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 		return
 	}
 
+	// Create the read-only canonical networking Hub reader. NetworkClass status is owned by the
+	// NetworkClass reconciler; VirtualNetwork reconciliation only consumes the persisted binding.
+	networkingHubReader, err := controllers.NewNetworkingHubReader().
+		SetNetworkClassesClient(privatev1.NewNetworkClassesClient(b.connection)).
+		SetHubCache(b.hubCache).
+		Build()
+	if err != nil {
+		return nil, err
+	}
+
 	// Create and populate the object:
 	object := &function{
 		logger:                b.logger,
 		virtualNetworksClient: privatev1.NewVirtualNetworksClient(b.connection),
-		hubsClient:            privatev1.NewHubsClient(b.connection),
 		hubCache:              b.hubCache,
+		networkingHubReader:   networkingHubReader,
 		maskCalculator:        masks.NewCalculator().Build(),
 	}
 	result = object.run
@@ -135,6 +144,16 @@ func (r *function) run(ctx context.Context, virtualNetwork *privatev1.VirtualNet
 	} else {
 		err = t.update(ctx)
 	}
+	var hubResolutionRetryErr error
+	if err != nil {
+		handled, retry := controllers.HandleResourceNetworkingHubResolutionError(err, t.setPending, t.setFailed)
+		if handled {
+			if retry {
+				hubResolutionRetryErr = err
+			}
+			err = nil
+		}
+	}
 	if err != nil {
 		r.logger.ErrorContext(ctx, "VN run: update/delete returned error",
 			slog.String("id", id),
@@ -150,7 +169,7 @@ func (r *function) run(ctx context.Context, virtualNetwork *privatev1.VirtualNet
 			slog.String("id", id),
 			slog.Bool("is_default", isDefault),
 		)
-		return nil
+		return hubResolutionRetryErr
 	}
 
 	r.logger.DebugContext(ctx, "VN run: calling virtualNetworksClient.Update",
@@ -174,7 +193,10 @@ func (r *function) run(ctx context.Context, virtualNetwork *privatev1.VirtualNet
 			slog.Bool("is_default", isDefault),
 		)
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	return hubResolutionRetryErr
 }
 
 func (t *task) update(ctx context.Context) error {
@@ -354,28 +376,22 @@ func (t *task) delete(ctx context.Context) (err error) {
 }
 
 func (t *task) selectHub(ctx context.Context) error {
-	t.hubId = t.virtualNetwork.GetStatus().GetHub()
-	if t.hubId == "" {
-		response, err := t.r.hubsClient.List(ctx, privatev1.HubsListRequest_builder{}.Build())
-		if err != nil {
-			return err
-		}
-		if len(response.Items) == 0 {
-			return errors.New("there are no hubs")
-		}
-		t.hubId = response.Items[rand.IntN(len(response.Items))].GetId()
-	}
-	t.r.logger.DebugContext(
+	resolution, err := controllers.ResolveResourceNetworkingHub(
 		ctx,
-		"Selected hub",
-		slog.String("id", t.hubId),
+		t.r.networkingHubReader,
+		t.virtualNetwork.GetStatus().GetHub(),
 	)
-	hubEntry, err := t.r.hubCache.Get(ctx, t.hubId)
 	if err != nil {
 		return err
 	}
-	t.hubNamespace = hubEntry.Namespace
-	t.hubClient = hubEntry.Client
+	t.hubId = resolution.HubID
+	t.r.logger.DebugContext(
+		ctx,
+		"Resolved canonical networking hub",
+		slog.String("id", t.hubId),
+	)
+	t.hubNamespace = resolution.Namespace
+	t.hubClient = resolution.Client
 	return nil
 }
 
@@ -450,6 +466,14 @@ func (t *task) setFailed(err error) {
 		t.virtualNetwork.SetStatus(&privatev1.VirtualNetworkStatus{})
 	}
 	t.virtualNetwork.GetStatus().SetState(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_FAILED)
+	t.virtualNetwork.GetStatus().SetMessage(err.Error())
+}
+
+func (t *task) setPending(err error) {
+	if !t.virtualNetwork.HasStatus() {
+		t.virtualNetwork.SetStatus(&privatev1.VirtualNetworkStatus{})
+	}
+	t.virtualNetwork.GetStatus().SetState(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING)
 	t.virtualNetwork.GetStatus().SetMessage(err.Error())
 }
 

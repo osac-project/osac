@@ -16,9 +16,10 @@ NetworkClass manager names and select the AAP backend:
 | `fabricManager` | `k8sManager` | Derived AAP backend | Status |
 |-----------------|--------------|---------------------|--------|
 | `netris` | `""` | `netris` / `netris.steps` | Supported |
+| `agentless_net` | `""` | `agentless_net` / `agentless_net.steps` | VirtualNetwork namespace, /31 uplink, and forwarding baseline |
 | `""` | `k8s_only` | `agentless_net` / `agentless_net.steps` | Supported (default) |
 | `""` | `""` | Must set managers via `global.networking.networkClass` or expert overrides | Expert only |
-| `cudn_net` | * | — | Reserved; Helm render fails |
+| `cudn_net` | `""` | `ci` / `ci.steps` (explicit AAP override) | Virtual-BMH CaaS only |
 | `vlan` | * | — | Reserved; Helm render fails |
 
 Setting both managers non-empty fails during render. The removed
@@ -36,6 +37,30 @@ When `global.networking.fabricManager` is `netris`, Helm automatically:
 When `fabricManager` is empty and `k8sManager` is `k8s_only`, Helm enables
 `operator.networkManagers.k8sManagers.k8s_only`, sets the agentless AAP backend,
 and points the NetworkClass at `k8sManager: k8s_only`.
+
+When `fabricManager` is `agentless_net`, Helm enables the AgentlessNet fabric
+manager, selects the AgentlessNet AAP collection, and points the NetworkClass
+at `fabricManager: agentless_net`. VirtualNetwork create/delete provisions a
+UID-keyed Linux namespace, `/31` transit uplink, and namespace forwarding
+baseline on the single configured network node. Subnet, SecurityGroup,
+ExternalIPPool, ExternalIP, ExternalIPAttachment, and NATGateway operations
+remain fail-fast until their provider work is implemented. This is separate
+from the default `k8s_only` profile, which provisions Kubernetes-native
+networking.
+
+For virtual-BMH CaaS, `values/caas-ci/instance.yaml` selects `cudn_net`, no
+k8s manager, explicitly registers the existing operator CUDN fabric-manager
+ConfigMap, and retains `global.expertOverrides.aap: true` with
+`NETWORK_CLASS=ci` / `NETWORK_STEPS_COLLECTION=ci.steps`. Rendering fails if
+CaaS/BMaaS is disabled, the default NetworkClass conflicts, the CUDN manager
+is not registered, the operator is disabled, or the operator lacks the two
+enabled AAP groups and matching `ci.steps` keys.
+
+The CUDN operator manager handles VN/Subnet overlay provisioning on OpenShift. The `ci.steps` cluster roles still wait for
+operator-bound Agents and read Agent IPs for external-access ingress DNS. They
+have not been disabled or replaced: verify these steps in fresh full-install CI
+before choosing any new ingress address source. This path does not claim
+physical fabric provisioning by Netris.
 
 The facade does **not** enable the AAP instance groups themselves. Set both
 `aap.instanceGroups.clusterFulfillment.enabled` and
@@ -73,7 +98,7 @@ When Netris is selected, the schema requires `controllerUrl` (HTTPS), credential
 password or `externalSecret: true` when the `netris-credentials` Secret is
 managed outside Helm.
 
-## Agentless example
+## AgentlessNet VirtualNetwork baseline
 
 ```yaml
 global:
@@ -81,6 +106,32 @@ global:
     fabricManager: ""
     k8sManager: k8s_only
 ```
+
+Use `fabricManager: agentless_net` and `k8sManager: ""` to select the
+AgentlessNet fabric manager. The `values/agentless-net-stub.yaml` installer overlay
+sets this profile and clears AAP expert overrides so the selected backend
+reaches the fulfillment instance group. An AgentlessNet VirtualNetwork job
+reads serialized YAML/JSON in `AGENTLESS_NET_VN_INVENTORY` from the existing
+`network-fulfillment-ig` ConfigMap. It describes exactly one authoritative host
+under `all.children.net_nodes.hosts`, with `ansible_host`, `ansible_user`, and
+an optional `ansible_port`. The networking worker already imports this
+ConfigMap and its Secret through `envFrom`; no additional VN volume is needed.
+Configure SSH access through an AAP machine
+credential or the `AGENTLESS_NET_SSH_PRIVATE_KEY` value supplied by the
+`network-fulfillment-ig` Secret. Credentials are not stored in the inventory.
+
+The VirtualNetwork job establishes only the namespace, transit link, and
+forwarding baseline. Its Ready state does not claim Subnet, VLAN, DHCP, BGP,
+NAT, workload attachment, or external connectivity, and does not satisfy tenant
+`DefaultNetworkingReady`. Manager replacement requires draining and replacing
+resources; switching the backend of an existing VN is unsupported.
+
+Use the existing `aap.instanceGroups.networkFulfillment.config` mapping to
+supply `AGENTLESS_NET_VN_INVENTORY`; see the
+[inventory shape](../../osac-aap/README.md#networking). Keep credentials in the
+existing Secret or AAP machine credential. The VN path retains `/31` transit
+links from the CR CIDR and SQLite state; future Subnet work must reconcile these
+with the accepted provider-pool `/30` and JSON-state design.
 
 ## Expert overrides
 

@@ -1,8 +1,9 @@
 ---
 # OSAC CSI driver Helm chart install — defaults use this role's own name
 # prefix, matching every sibling osac.service role's convention.
-# Gated by csi_driver_install_enabled (default false). When disabled, the
-# role skips all cluster reads, lease acquisition, and Helm actions. Standard
+# Helm installation is gated by csi_driver_install_enabled (default false).
+# When disabled, it skips vendor discovery, lease acquisition, and Helm actions.
+# Local StorageClass creation has its own independent opt-in below. Standard
 # clusters rely on the osac-installer umbrella chart for CSI driver
 # deployment; AAP does not install it during tenant onboarding or VM creation
 # to avoid Helm ownership conflicts and lease contention.
@@ -32,3 +33,14 @@ csi_driver_install_supported_vendors:
 # socketPath ever changes there; the role appends '/csi.sock' to each.
 csi_driver_install_vendor_node_socket_paths:
   vast: /var/lib/kubelet/plugins/csi.vast.vastdata.com
+
+# Local-tier StorageClass creation is independent of Helm installation and
+# network-vendor enablement: LVMS has no vendor controller Service.
+csi_driver_install_lvms_storage_class_enabled: false
+# Internal Stage 1 guard: backend setup must defer local StorageClass creation
+# until Stage 2 confirms the tenant's storage backend is ready.
+csi_driver_install_skip_lvms_storage_class: false
+csi_driver_install_local_provider: lvms
+csi_driver_install_storage_class_provisioner: csi.osac.openshift.io
+csi_driver_install_storage_class_reclaim_policy: Delete
+csi_driver_install_storage_class_volume_binding_mode: WaitForFirstConsumer

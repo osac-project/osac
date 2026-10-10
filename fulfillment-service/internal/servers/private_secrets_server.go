@@ -104,6 +104,10 @@ func (b *PrivateSecretsServerBuilder) Build() (result *PrivateSecretsServer, err
 		err = errors.New("tenancy logic is mandatory")
 		return
 	}
+	if b.secretStore == nil {
+		err = errors.New("secret store is mandatory")
+		return
+	}
 
 	s := &PrivateSecretsServer{
 		logger:           b.logger,
@@ -149,7 +153,7 @@ func (s *PrivateSecretsServer) Get(ctx context.Context,
 	if err = s.authorizePlatformSecretManagement(ctx, obj); err != nil {
 		return
 	}
-	if s.secretStore != nil && obj.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
+	if obj.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
 		tenant := obj.GetMetadata().GetTenant()
 		project := obj.GetMetadata().GetProject()
 		name := obj.GetMetadata().GetName()
@@ -202,7 +206,7 @@ func (s *PrivateSecretsServer) Create(ctx context.Context,
 		secret.SetBackend(privatev1.SecretBackend_SECRET_BACKEND_VAULT)
 	}
 
-	persistInVault := s.secretStore != nil && secret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT
+	persistInVault := secret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT
 	var data map[string][]byte
 	if persistInVault {
 		data = secret.GetData()
@@ -220,10 +224,6 @@ func (s *PrivateSecretsServer) Create(ctx context.Context,
 		if tenant := created.GetMetadata().GetTenant(); tenant == auth.SharedTenant || tenant == auth.SystemTenant {
 			if created.GetBackend() != privatev1.SecretBackend_SECRET_BACKEND_VAULT {
 				return grpcstatus.Errorf(grpccodes.InvalidArgument, "%s Secrets must use the Vault backend", tenant)
-			}
-			if s.secretStore == nil {
-				return grpcstatus.Errorf(grpccodes.FailedPrecondition,
-					"%s Secrets require a configured Vault backend", tenant)
 			}
 		}
 		if !persistInVault || isDryRun(opCtx) {
@@ -272,8 +272,7 @@ func (s *PrivateSecretsServer) Update(ctx context.Context,
 		return
 	}
 
-	persistInVault := s.secretStore != nil &&
-		existingSecret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT &&
+	persistInVault := existingSecret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT &&
 		len(request.GetObject().GetData()) > 0
 	var data map[string][]byte
 	if persistInVault {
@@ -330,7 +329,7 @@ func (s *PrivateSecretsServer) Delete(ctx context.Context,
 		return
 	}
 
-	if s.secretStore != nil && obj != nil && obj.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
+	if obj != nil && obj.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
 		tenant := obj.GetMetadata().GetTenant()
 		project := obj.GetMetadata().GetProject()
 		name := obj.GetMetadata().GetName()

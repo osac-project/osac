@@ -7,6 +7,7 @@ import type { ClusterWizardValues } from './fields';
 import { createEmptyNodeSetRow } from './fields';
 import { buildClusterStepSchema } from './schemas';
 import { tIdentity as t } from '../../../../../test-utils/i18n';
+import { emptyResourceSelectValue } from '../../../../Form/resourceSelectValue';
 
 const clusterCatalogItem: ClusterCatalogItem = {
   $typeName: 'osac.public.v1.ClusterCatalogItem',
@@ -50,6 +51,13 @@ const emptyValues: ClusterWizardValues = {
       podCidr: '',
       serviceCidr: '',
     },
+    useDefaultNetwork: true,
+    networkAttachment: {
+      virtualNetwork: emptyResourceSelectValue(),
+      subnet: emptyResourceSelectValue(),
+      securityGroups: [],
+    },
+    autoExternalIpAttachment: false,
   },
 };
 
@@ -181,7 +189,7 @@ describe('buildClusterStepSchema', () => {
             name: 'foo',
           },
           versionName: '',
-          nodeSetRows: [{ ...row, name: 'workers', hostType: 'acme_1tb', size: '3' }],
+          nodeSetRows: [{ ...row, name: 'workers', bareMetalInstanceType: 'acme_1tb', size: '3' }],
         },
       },
       clusterCatalogItem,
@@ -232,7 +240,7 @@ describe('buildClusterStepSchema', () => {
             {
               ...row,
               name: 'workers',
-              hostType: 'acme_1tb',
+              bareMetalInstanceType: 'acme_1tb',
               size: '0',
             },
           ],
@@ -247,7 +255,7 @@ describe('buildClusterStepSchema', () => {
     });
   });
 
-  it('allows duplicate host types when node set IDs are distinct', async () => {
+  it('allows duplicate bare-metal instance types when node set IDs are distinct', async () => {
     const row = createEmptyNodeSetRow();
     const errors = await validateStep(
       'configuration',
@@ -266,14 +274,14 @@ describe('buildClusterStepSchema', () => {
               ...row,
               rowId: 'row-1',
               name: 'production',
-              hostType: 'acme_1tb',
+              bareMetalInstanceType: 'acme_1tb',
               size: '3',
             },
             {
               ...row,
               rowId: 'row-2',
               name: 'development',
-              hostType: 'acme_1tb',
+              bareMetalInstanceType: 'acme_1tb',
               size: '2',
             },
           ],
@@ -297,8 +305,20 @@ describe('buildClusterStepSchema', () => {
           pullSecretSecret: { name: 'foo' },
           versionName: '4-17-0',
           nodeSetRows: [
-            { ...row, rowId: 'row-1', name: 'production', hostType: 'acme_1tb', size: '3' },
-            { ...row, rowId: 'row-2', name: 'production', hostType: 'acme_1tb', size: '2' },
+            {
+              ...row,
+              rowId: 'row-1',
+              name: 'production',
+              bareMetalInstanceType: 'acme_1tb',
+              size: '3',
+            },
+            {
+              ...row,
+              rowId: 'row-2',
+              name: 'production',
+              bareMetalInstanceType: 'acme_1tb',
+              size: '2',
+            },
           ],
         },
       },
@@ -324,7 +344,7 @@ describe('buildClusterStepSchema', () => {
           ...emptyValues.spec,
           pullSecretSecret: { name: 'foo' },
           versionName: '4-17-0',
-          nodeSetRows: [{ ...row, name: '', hostType: 'acme_1tb', size: '3' }],
+          nodeSetRows: [{ ...row, name: '', bareMetalInstanceType: 'acme_1tb', size: '3' }],
         },
       },
       clusterCatalogItem,
@@ -349,7 +369,9 @@ describe('buildClusterStepSchema', () => {
           ...emptyValues.spec,
           pullSecretSecret: { name: 'foo' },
           versionName: '4-17-0',
-          nodeSetRows: [{ ...row, name: 'Workers_1', hostType: 'acme_1tb', size: '3' }],
+          nodeSetRows: [
+            { ...row, name: 'Workers_1', bareMetalInstanceType: 'acme_1tb', size: '3' },
+          ],
         },
       },
       clusterCatalogItem,
@@ -438,6 +460,92 @@ describe('buildClusterStepSchema', () => {
         },
       },
     });
+  });
+
+  it('validates networking step when useDefaultNetwork is true', async () => {
+    const errors = await validateStep(
+      'networking',
+      {
+        ...emptyValues,
+        catalogItemId: clusterCatalogItem.id,
+        spec: {
+          ...emptyValues.spec,
+          useDefaultNetwork: true,
+          networkAttachment: {
+            virtualNetwork: emptyResourceSelectValue(),
+            subnet: emptyResourceSelectValue(),
+            securityGroups: [],
+          },
+        },
+      },
+      clusterCatalogItem,
+    );
+    expect(errors).toEqual({});
+  });
+
+  it('requires virtual network and subnet when useDefaultNetwork is false', async () => {
+    const errors = await validateStep(
+      'networking',
+      {
+        ...emptyValues,
+        catalogItemId: clusterCatalogItem.id,
+        spec: {
+          ...emptyValues.spec,
+          useDefaultNetwork: false,
+          networkAttachment: {
+            virtualNetwork: emptyResourceSelectValue(),
+            subnet: emptyResourceSelectValue(),
+            securityGroups: [],
+          },
+        },
+      },
+      clusterCatalogItem,
+    );
+    expect(errors).toEqual({
+      spec: {
+        networkAttachment: {
+          virtualNetwork: { id: 'Virtual network is required' },
+          subnet: { id: 'Subnet is required' },
+        },
+      },
+    });
+  });
+
+  it('accepts valid custom networking when useDefaultNetwork is false', async () => {
+    const errors = await validateStep(
+      'networking',
+      {
+        ...emptyValues,
+        catalogItemId: clusterCatalogItem.id,
+        spec: {
+          ...emptyValues.spec,
+          useDefaultNetwork: false,
+          networkAttachment: {
+            virtualNetwork: { id: 'vn-1', name: 'vn-1' },
+            subnet: { id: 'subnet-1', name: 'subnet-1' },
+            securityGroups: [],
+          },
+        },
+      },
+      clusterCatalogItem,
+    );
+    expect(errors).toEqual({});
+  });
+
+  it('validates networking step with autoExternalIpAttachment set to true', async () => {
+    const errors = await validateStep(
+      'networking',
+      {
+        ...emptyValues,
+        catalogItemId: clusterCatalogItem.id,
+        spec: {
+          ...emptyValues.spec,
+          autoExternalIpAttachment: true,
+        },
+      },
+      clusterCatalogItem,
+    );
+    expect(errors).toEqual({});
   });
 
   it('returns undefined for review step', () => {

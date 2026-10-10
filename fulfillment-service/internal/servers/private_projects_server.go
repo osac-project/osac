@@ -25,7 +25,6 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -36,7 +35,6 @@ type PrivateProjectsServerBuilder struct {
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
 	filterDesc        protoreflect.MessageDescriptor
-	defaultNetworking *DefaultNetworkingProvisioner
 }
 
 var _ privatev1.ProjectsServer = (*PrivateProjectsServer)(nil)
@@ -44,9 +42,8 @@ var _ privatev1.ProjectsServer = (*PrivateProjectsServer)(nil)
 // PrivateProjectsServer is the implementation of the private projects gRPC service.
 type PrivateProjectsServer struct {
 	privatev1.UnimplementedProjectsServer
-	logger            *slog.Logger
-	generic           *GenericServer[*privatev1.Project]
-	defaultNetworking *DefaultNetworkingProvisioner
+	logger  *slog.Logger
+	generic *GenericServer[*privatev1.Project]
 }
 
 // NewPrivateProjectsServer creates a new builder for the private projects server.
@@ -86,16 +83,6 @@ func (b *PrivateProjectsServerBuilder) SetFilterDesc(value protoreflect.MessageD
 	return b
 }
 
-// SetDefaultNetworkingProvisioner sets the provisioner used to deprovision a tenant's default
-// networking resources when its root project is deleted. This is optional; if unset, root project
-// deletion will fail whenever default networking resources still exist for the tenant.
-func (b *PrivateProjectsServerBuilder) SetDefaultNetworkingProvisioner(
-	value *DefaultNetworkingProvisioner,
-) *PrivateProjectsServerBuilder {
-	b.defaultNetworking = value
-	return b
-}
-
 // Build creates the private projects server.
 func (b *PrivateProjectsServerBuilder) Build() (result *PrivateProjectsServer, err error) {
 	// Check parameters:
@@ -110,8 +97,7 @@ func (b *PrivateProjectsServerBuilder) Build() (result *PrivateProjectsServer, e
 
 	// Create the server early, so that we can use its methods:
 	s := &PrivateProjectsServer{
-		logger:            b.logger,
-		defaultNetworking: b.defaultNetworking,
+		logger: b.logger,
 	}
 
 	// Create the generic server:
@@ -202,46 +188,8 @@ func (s *PrivateProjectsServer) Update(ctx context.Context,
 
 func (s *PrivateProjectsServer) Delete(ctx context.Context,
 	request *privatev1.ProjectsDeleteRequest) (response *privatev1.ProjectsDeleteResponse, err error) {
-	// The root project (empty name) owns whatever default networking resources Provision created
-	// for the tenant. Those are protected from direct deletion via the API (see
-	// validateNotDefault), so nothing else ever removes them — deprovision them here, before the
-	// root project's own deletion is attempted, or that deletion will fail with a foreign key
-	// violation.
-	if s.defaultNetworking != nil {
-		getRequest := &privatev1.ProjectsGetRequest{}
-		getRequest.SetId(request.GetId())
-		var getResponse *privatev1.ProjectsGetResponse
-		if err = s.generic.Get(ctx, getRequest, &getResponse); err != nil {
-			return
-		}
-		project := getResponse.GetObject()
-		if project.GetMetadata().GetName() == "" {
-			tenantName := project.GetMetadata().GetTenant()
-			if deprovisionErr := s.defaultNetworking.Deprovision(ctx, tenantName); deprovisionErr != nil {
-				err = s.translateDeprovisionError(ctx, tenantName, deprovisionErr)
-				return
-			}
-		}
-	}
 	err = s.generic.Delete(ctx, request, &response)
 	return
-}
-
-// translateDeprovisionError translates an error from deprovisioning default networking resources
-// into a gRPC status. It mirrors GenericServer.Delete's translation so that, for example, a
-// Subnet still in use by a live ComputeInstance surfaces as an actionable FailedPrecondition
-// instead of an opaque Internal error.
-func (s *PrivateProjectsServer) translateDeprovisionError(ctx context.Context, tenantName string, err error) error {
-	if inUseErr, ok := errors.AsType[*dao.ErrInUse](err); ok {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "%s", inUseErr.Error())
-	}
-	if _, ok := errors.AsType[*dao.ErrDeadlock](err); ok {
-		return grpcstatus.Errorf(grpccodes.Aborted, "concurrent modification detected, please retry")
-	}
-	s.logger.ErrorContext(ctx, "Failed to deprovision default networking",
-		slog.String("tenant", tenantName),
-		slog.Any("error", err))
-	return grpcstatus.Errorf(grpccodes.Internal, "failed to deprovision default networking resources")
 }
 
 func (s *PrivateProjectsServer) Signal(ctx context.Context,

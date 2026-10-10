@@ -34,6 +34,38 @@ jobs:
             github.event.label.name) }}
           skip-if-all-green: "true"
         continue-on-error: true
+      - name: Check blocking labels
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          for i in 1 2 3; do
+            LABELS=$(gh pr view "${PR_NUMBER}" --repo "${REPO}" --json labels --jq '[.labels[].name]') && break
+            if [ "$i" -lt 3 ]; then
+              echo "::warning::gh pr view attempt $i/3 failed, retrying in 3s..."
+              sleep 3
+            else
+              echo "::error::gh pr view failed after 3 attempts"
+              exit 1
+            fi
+          done
+          blocking=()
+          for label in do-not-merge/hold do-not-merge/work-in-progress; do
+            if echo "$LABELS" | jq -e "index(\"$label\")" > /dev/null 2>&1; then
+              blocking+=("$label")
+            fi
+          done
+          if [[ ${#blocking[@]} -gt 0 ]]; then
+            echo "::error::Blocking labels found: ${blocking[*]}"
+            echo ""
+            echo "The following labels prevent merge:"
+            echo "  do-not-merge/hold              - remove with /unhold"
+            echo "  do-not-merge/work-in-progress  - remove with /unhold or mark PR ready"
+            exit 1
+          fi
+          echo "No blocking labels found"
       - name: Check required Prow labels
         if: github.event_name == 'pull_request'
         env:

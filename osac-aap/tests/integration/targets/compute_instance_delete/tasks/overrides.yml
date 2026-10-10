@@ -24,7 +24,6 @@
       ansible.builtin.set_fact:
         osac_job_vars:
           resource: "{{ test_compute_instance }}"
-        tenant_target_namespace: "computeinstance-test-vm-work"
 
         # Override 3 workflow extension points
         hook_workflow_start:
@@ -79,6 +78,7 @@
     - name: Verify all overrides executed
       ansible.builtin.assert:
         that:
+          - compute_instance_target_namespace == 'test-subnet'
           - "'workflow_start' in override_log"
           - "'workflow_complete' in override_log"
           - "'vm_delete_pre_delete_hook' in override_log"

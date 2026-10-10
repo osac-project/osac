@@ -14,8 +14,7 @@ language governing permissions and limitations under the License.
 package updatable
 
 import (
-	"testing"
-
+	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -23,23 +22,21 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
 )
 
-func TestEnsure(t *testing.T) {
-	t.Parallel()
-
-	t.Run("accepts update-capable objects", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
+var _ = Describe("Ensure", func() {
+	It("accepts update-capable objects", func() {
+		ctrl := gomock.NewController(GinkgoT())
 		helper := reflection.NewMockObjectHelper(ctrl)
 		helper.EXPECT().IsUpdatable().Return(true)
 
-		NewWithT(t).Expect(Ensure(helper)).To(Succeed())
+		Expect(Ensure(helper)).To(Succeed())
 	})
 
-	t.Run("rejects immutable objects", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
+	It("rejects immutable objects", func() {
+		ctrl := gomock.NewController(GinkgoT())
 		helper := reflection.NewMockObjectHelper(ctrl)
 		helper.EXPECT().IsUpdatable().Return(false)
 		helper.EXPECT().FullName().Return(protoreflect.FullName("osac.public.v1.Subnet"))
 
-		NewWithT(t).Expect(Ensure(helper)).To(MatchError(`object type "osac.public.v1.Subnet" is immutable; updates are not supported`))
+		Expect(Ensure(helper)).To(MatchError(`object type "osac.public.v1.Subnet" is immutable; updates are not supported`))
 	})
-}
+})

@@ -171,7 +171,8 @@ func (c *runnerContext) run(cmd *cobra.Command, _ []string) error {
 
 	bmi := publicv1.BareMetalInstance_builder{
 		Metadata: publicv1.Metadata_builder{
-			Name: c.args.name,
+			Name:   c.args.name,
+			Tenant: config.TenantFromContext(ctx),
 		}.Build(),
 		Spec: builtSpec,
 	}.Build()
@@ -184,6 +185,9 @@ func (c *runnerContext) run(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("failed to create bare metal instance: %w", err)
 	}
 
+	for _, warning := range response.GetWarnings() {
+		console.Errorf(ctx, "Warning: %s\n", warning)
+	}
 	console.Infof(ctx, "Created bare metal instance '%s'.\n", response.GetObject().GetId())
 	return nil
 }
@@ -292,6 +296,9 @@ multiple times.
 func (c *runnerContext) applyNetworkingFlags(spec *publicv1.BareMetalInstanceSpec_builder) error {
 	if len(c.args.networkAttachments) == 0 {
 		return nil
+	}
+	if len(c.args.networkAttachments) > 1 {
+		return fmt.Errorf("at most one --network-attachment is supported")
 	}
 	attachments := make([]*publicv1.BareMetalNetworkAttachment, 0, len(c.args.networkAttachments))
 	for _, raw := range c.args.networkAttachments {

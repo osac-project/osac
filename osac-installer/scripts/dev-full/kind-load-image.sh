@@ -18,10 +18,10 @@ if [[ -z "${KUBECONFIG:-}" ]]; then
 fi
 
 "${KIND_RUNTIME}" check
-"${KIND_RUNTIME}" get clusters | grep -q "^${KIND_CLUSTER_NAME}$" || {
+if ! nodes="$("${KIND_RUNTIME}" get nodes --name "${KIND_CLUSTER_NAME}" 2>/dev/null)" || [[ -z "${nodes}" ]]; then
   echo "ERROR: Kind cluster '${KIND_CLUSTER_NAME}' does not exist; run make install-infra first" >&2
   exit 1
-}
+fi
 
 tmpfile="$(mktemp /tmp/kind-image-XXXXXX.tar)"
 trap 'rm -f "${tmpfile}"' EXIT

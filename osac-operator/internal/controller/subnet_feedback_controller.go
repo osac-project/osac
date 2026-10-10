@@ -39,7 +39,7 @@ type SubnetFeedbackReconciler struct {
 }
 
 // NewSubnetFeedbackReconciler creates a reconciler that sends to the fulfillment service updates about subnets.
-func NewSubnetFeedbackReconciler(hubClient clnt.Client, grpcConn *grpc.ClientConn, networkingNamespace string) *SubnetFeedbackReconciler {
+func NewSubnetFeedbackReconciler(hubClient clnt.Client, grpcConn grpc.ClientConnInterface, networkingNamespace string) *SubnetFeedbackReconciler {
 	subnetsClient := privatev1.NewSubnetsClient(grpcConn)
 	r := &SubnetFeedbackReconciler{networkingNamespace: networkingNamespace}
 	r.bridge = &feedback.Bridge[*v1alpha1.Subnet, *privatev1.Subnet]{

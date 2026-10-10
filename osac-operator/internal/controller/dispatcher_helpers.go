@@ -133,19 +133,14 @@ func listAllNetworkClasses(
 	}
 }
 
-// lookupDefaultNetworkClassID returns the ID of the default NetworkClass for this
-// deployment, used by ExternalIP-family controllers that have no parent VirtualNetwork
+// lookupDefaultNetworkClassID returns the ID of the deployment NetworkClass singleton,
+// used by ExternalIP-family controllers that have no parent VirtualNetwork
 // to inherit a NetworkClass from.
 //
 // Returns ("", nil) when the dispatcher path is not available (nil client, no live
-// NetworkClass, or more than one live NetworkClass with none marked default) so the
-// caller falls through to its legacy implementation-strategy. List errors are returned
-// as real reconcile errors.
-//
-// Selection order: a non-deleted NetworkClass with is_default=true (the first match in
-// list order if multiple are marked default — fulfillment-service enforces at most one
-// active default via a unique partial index, so this should not occur in normal
-// operation), else the single live NetworkClass if exactly one exists (one-per-deployment).
+// NetworkClass, or more than one live NetworkClass) so the caller falls through to its
+// legacy implementation-strategy. List errors are returned as real reconcile errors.
+// Fulfillment-service enforces the one-per-deployment invariant with a unique index.
 func lookupDefaultNetworkClassID(
 	ctx context.Context, ncClient privatev1.NetworkClassesClient,
 ) (string, error) {
@@ -158,25 +153,18 @@ func lookupDefaultNetworkClassID(
 		return "", fmt.Errorf("listing NetworkClasses: %w", err)
 	}
 
-	var live, defaults []*privatev1.NetworkClass
+	var live []*privatev1.NetworkClass
 	for _, nc := range items {
 		if nc.GetMetadata().HasDeletionTimestamp() {
 			continue
 		}
 		live = append(live, nc)
-		if nc.GetIsDefault() {
-			defaults = append(defaults, nc)
-		}
 	}
 
-	switch {
-	case len(defaults) >= 1:
-		return defaults[0].GetId(), nil
-	case len(live) == 1:
+	if len(live) == 1 {
 		return live[0].GetId(), nil
-	default:
-		return "", nil
 	}
+	return "", nil
 }
 
 // dispatchTargetProvider decorates a shared provisioning.ProvisioningProvider so that
@@ -193,6 +181,8 @@ type dispatchTargetProvider struct {
 }
 
 var _ provisioning.ProvisioningProvider = (*dispatchTargetProvider)(nil)
+var _ provisioning.ProvisioningProviderWithExtraVars = (*dispatchTargetProvider)(nil)
+var _ provisioning.ProvisioningProviderWithProvisionOutputs = (*dispatchTargetProvider)(nil)
 
 // newDispatchTargetProvider creates a dispatchTargetProvider that routes jobs for
 // managerName through base.
@@ -204,8 +194,24 @@ func (p *dispatchTargetProvider) TriggerProvision(ctx context.Context, resource 
 	return p.base.TriggerProvision(ctx, p.withOverriddenStrategy(resource))
 }
 
+func (p *dispatchTargetProvider) TriggerProvisionWithExtraVars(ctx context.Context, resource client.Object, extraVars map[string]any) (*provisioning.ProvisionResult, error) {
+	provider, ok := p.base.(provisioning.ProvisioningProviderWithExtraVars)
+	if !ok {
+		return nil, fmt.Errorf("provider %q does not support inherited extra vars", p.base.Name())
+	}
+	return provider.TriggerProvisionWithExtraVars(ctx, p.withOverriddenStrategy(resource), extraVars)
+}
+
 func (p *dispatchTargetProvider) GetProvisionStatus(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error) {
 	return p.base.GetProvisionStatus(ctx, resource, jobID)
+}
+
+func (p *dispatchTargetProvider) GetProvisionStatusWithExtraVars(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {
+	provider, ok := p.base.(provisioning.ProvisioningProviderWithProvisionOutputs)
+	if !ok {
+		return provisioning.ProvisionStatusWithExtraVars{}, fmt.Errorf("provider %q does not expose provisioning outputs", p.base.Name())
+	}
+	return provider.GetProvisionStatusWithExtraVars(ctx, resource, jobID)
 }
 
 func (p *dispatchTargetProvider) TriggerDeprovision(

@@ -1,0 +1,7 @@
+---
+# The trust admission controller only permits this object and field manager.
+fulfillment_trust_sync_config_map_name: osac-fulfillment-ca
+fulfillment_trust_sync_bundle_data_key: bundle.pem
+fulfillment_trust_sync_field_manager: osac-aap-fulfillment-trust
+fulfillment_trust_sync_rollout_retries: 60
+fulfillment_trust_sync_rollout_delay: 2

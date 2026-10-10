@@ -9,8 +9,11 @@ import {
   type BareMetalInstanceWizardValues,
   applyBmCatalogDefaults,
   createEmptyBareMetalInstanceValues,
+  createEmptyNetworkAttachmentRow,
+  getBareMetalInstanceTypeCatalogPolicy,
 } from './fields';
 import { buildBareMetalInstanceStepSchema } from './schemas';
+import { emptyResourceSelectValue } from '../../../../Form/resourceSelectValue';
 
 const authenticationError =
   'Provide either an SSH public key or user data containing access credentials.';
@@ -96,5 +99,155 @@ describe('Bare Metal review validation', () => {
     );
 
     await expect(validateReview(appliedValues)).resolves.toBeUndefined();
+  });
+
+  it('applies the typed catalog instance type default to the wizard', () => {
+    const values = createEmptyBareMetalInstanceValues();
+    const catalogItem = {
+      fields: {
+        instanceType: {
+          behavior: {
+            case: 'editable',
+            value: {
+              defaultValue: { id: 'instance-type-id', name: 'bare-metal.large', shared: true },
+            },
+          },
+        },
+      },
+    } as unknown as BareMetalInstanceCatalogItem;
+    const helpers = {
+      setFieldValue: (path: string, value: unknown) => {
+        if (path === 'spec.instanceType.name') {
+          values.spec.instanceType.name = value as string;
+        }
+      },
+    };
+
+    applyBmCatalogDefaults(
+      catalogItem,
+      helpers as unknown as FormikHelpers<BareMetalInstanceWizardValues>,
+      tIdentity,
+    );
+
+    expect(values.spec.instanceType.name).toBe('bare-metal.large');
+    expect(getBareMetalInstanceTypeCatalogPolicy(catalogItem)).toEqual({
+      editable: true,
+      defaultName: 'bare-metal.large',
+    });
+  });
+
+  it('applies a locked catalog instance type default to the wizard', () => {
+    const values = createEmptyBareMetalInstanceValues();
+    const catalogItem = {
+      fields: {
+        instanceType: {
+          behavior: {
+            case: 'locked',
+            value: { id: 'instance-type-id', name: 'bare-metal.large', shared: true },
+          },
+        },
+      },
+    } as unknown as BareMetalInstanceCatalogItem;
+    const helpers = {
+      setFieldValue: (path: string, value: unknown) => {
+        if (path === 'spec.instanceType.name') {
+          values.spec.instanceType.name = value as string;
+        }
+      },
+    };
+
+    applyBmCatalogDefaults(
+      catalogItem,
+      helpers as unknown as FormikHelpers<BareMetalInstanceWizardValues>,
+      tIdentity,
+    );
+
+    expect(values.spec.instanceType.name).toBe('bare-metal.large');
+    expect(getBareMetalInstanceTypeCatalogPolicy(catalogItem)).toEqual({
+      editable: false,
+      defaultName: 'bare-metal.large',
+    });
+  });
+});
+
+const validateNetworking = async (values: BareMetalInstanceWizardValues) => {
+  const schema = buildBareMetalInstanceStepSchema(null, 'networking', tIdentity);
+  if (!schema) {
+    throw new Error('Networking schema is required');
+  }
+
+  try {
+    await schema.validate(values, { abortEarly: false });
+    return {};
+  } catch (error) {
+    if (!(error instanceof ValidationError)) {
+      throw error;
+    }
+    const errors: Record<string, unknown> = {};
+    for (const inner of error.inner.length > 0 ? error.inner : [error]) {
+      if (!inner.path) {
+        continue;
+      }
+      const parts = inner.path.split('.');
+      let current: Record<string, unknown> = errors;
+      for (let index = 0; index < parts.length - 1; index += 1) {
+        const key = parts[index];
+        if (!current[key] || typeof current[key] !== 'object') {
+          current[key] = {};
+        }
+        current = current[key] as Record<string, unknown>;
+      }
+      current[parts[parts.length - 1]] = inner.message;
+    }
+    return errors;
+  }
+};
+
+describe('Bare Metal networking validation', () => {
+  it('does not require attachments when useDefaults is true', async () => {
+    const values = createEmptyBareMetalInstanceValues();
+    values.spec.networking.useDefaults = true;
+
+    const errors = await validateNetworking(values);
+    expect(errors).toEqual({});
+  });
+
+  it('requires virtual network and subnet when useDefaults is false', async () => {
+    const values = createEmptyBareMetalInstanceValues();
+    values.spec.networking.useDefaults = false;
+    values.spec.networking.attachments = [
+      {
+        ...createEmptyNetworkAttachmentRow(),
+        virtualNetwork: emptyResourceSelectValue(),
+        subnet: emptyResourceSelectValue(),
+      },
+    ];
+
+    const errors = await validateNetworking(values);
+    expect(errors).toEqual({
+      spec: {
+        networking: {
+          'attachments[0]': {
+            virtualNetwork: { id: 'Virtual network is required' },
+            subnet: { id: 'Subnet is required' },
+          },
+        },
+      },
+    });
+  });
+
+  it('accepts valid custom networking when useDefaults is false', async () => {
+    const values = createEmptyBareMetalInstanceValues();
+    values.spec.networking.useDefaults = false;
+    values.spec.networking.attachments = [
+      {
+        ...createEmptyNetworkAttachmentRow(),
+        virtualNetwork: { id: 'vn-1', name: 'vn-1' },
+        subnet: { id: 'subnet-1', name: 'subnet-1' },
+      },
+    ];
+
+    const errors = await validateNetworking(values);
+    expect(errors).toEqual({});
   });
 });

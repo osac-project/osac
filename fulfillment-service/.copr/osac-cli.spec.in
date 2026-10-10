@@ -17,17 +17,18 @@ CLI for the Open Sovereign AI Cloud platform
 %setup
 
 %build
+cd fulfillment-service
 go build \
--ldflags="-X github.com/osac-project/fulfillment-service/internal/version.id=%{version}" \
+-ldflags="-X github.com/osac-project/osac/fulfillment-service/internal/version.id=%{version}" \
 ./cmd/osac
 
 %install
 install -m 0755 -d %{buildroot}%{_bindir}
-install -m 0755 osac %{buildroot}%{_bindir}
+install -m 0755 fulfillment-service/osac %{buildroot}%{_bindir}
 
 %files
 %license LICENSE
-%doc README.md
+%doc fulfillment-service/README.md
 %{_bindir}/*
 
 %changelog

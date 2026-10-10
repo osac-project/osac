@@ -16,9 +16,72 @@ tests:
           path: spec.template.spec.containers[0].args
           content: "--fulfillment-client-id=$(FULFILLMENT_CLIENT_ID)"
         any: true
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: "--fulfillment-ca-file=/etc/osac-csi/fulfillment-ca/bundle.pem"
+        any: true
+      - notExists:
+          path: 'metadata.labels["osac.openshift.io/fulfillment-trust-client"]'
       - contains:
           path: spec.template.spec.containers[0].args
           content: "--allow-stub"
+
+  - it: should mount the tenant CA and enable the trust-client label only when fulfillment trust is enabled
+    set:
+      namespace: osac-csi
+      global.fulfillmentTrust.enabled: true
+      controller.fulfillment.endpoint: "fulfillment-api.osac.svc:8000"
+      controller.fulfillment.issuerUrl: "https://keycloak.example.com/realms/myrealm"
+      controller.fulfillment.credentials.secretName: "osac-csi-credentials"
+      controller.fulfillment.tls.caBundle.configMap: "osac-fulfillment-ca"
+      controller.fulfillment.tls.caBundle.key: "bundle.pem"
+    asserts:
+      - equal:
+          path: 'metadata.labels["osac.openshift.io/fulfillment-trust-client"]'
+          value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--fulfillment-ca-file=/etc/osac-csi/fulfillment-ca/bundle.pem"
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: "--allow-stub"
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: fulfillment-ca
+            mountPath: /etc/osac-csi/fulfillment-ca
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: fulfillment-ca
+            configMap:
+              name: osac-fulfillment-ca
+              items:
+                - key: bundle.pem
+                  path: bundle.pem
+
+  - it: should reject enabled trust without a CA ConfigMap contract
+    set:
+      global.fulfillmentTrust.enabled: true
+      controller.fulfillment.endpoint: "fulfillment-api.osac.svc:8000"
+      controller.fulfillment.issuerUrl: "https://keycloak.example.com/realms/myrealm"
+      controller.fulfillment.credentials.secretName: "osac-csi-credentials"
+      controller.fulfillment.tls.caBundle.configMap: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "controller.fulfillment.tls.caBundle.configMap and key are required when global.fulfillmentTrust.enabled is true"
+
+  - it: should reject enabled trust with grpc-insecure
+    set:
+      global.fulfillmentTrust.enabled: true
+      controller.fulfillment.endpoint: "fulfillment-api.osac.svc:8000"
+      controller.fulfillment.issuerUrl: "https://keycloak.example.com/realms/myrealm"
+      controller.fulfillment.credentials.secretName: "osac-csi-credentials"
+      controller.fulfillment.tls.insecureSkipVerify: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "controller.fulfillment.tls.insecureSkipVerify cannot be true when global.fulfillmentTrust.enabled is true"
 
   - it: should include fulfillment args when endpoint is set
     set:

@@ -14,6 +14,13 @@ api:
 # Authentication and authorization configuration:
 auth:
   oidcClientId: osac-ui
+  # OIDC issuer URL (e.g. https://keycloak.example.com/realms/osac). Required.
+  # In osac deployments set this to match service.auth.issuerUrl in the osac-installer
+  oidcIssuerURL: ""
+  # Name of the Secret containing the osac-ui-backend Keycloak client secret
+  # (key: client-secret). Created automatically by the osac-infra Helm chart
+  serviceAccount:
+    credentialsSecret: "osac-ui-backend-credentials"
   # Certificate configuration for Auth
   certs:
     # This defines the trusted CA certificates bundle. It must be the name of a configmap in the release namespace

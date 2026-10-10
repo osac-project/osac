@@ -1,0 +1,8 @@
+{
+  "name": "@osac/test-utils",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  }
+}

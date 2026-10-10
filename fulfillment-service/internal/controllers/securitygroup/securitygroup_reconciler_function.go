@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand/v2"
 	"slices"
 	"strings"
 
@@ -51,9 +50,9 @@ type FunctionBuilder struct {
 
 type function struct {
 	logger               *slog.Logger
-	hubCache             controllers.HubCache
 	securityGroupsClient privatev1.SecurityGroupsClient
-	hubsClient           privatev1.HubsClient
+	networkingHubReader  controllers.NetworkingHubReader
+	hubCache             controllers.HubCache
 	maskCalculator       *masks.Calculator
 }
 
@@ -104,11 +103,19 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 		return
 	}
 
+	networkingHubReader, err := controllers.NewNetworkingHubReader().
+		SetNetworkClassesClient(privatev1.NewNetworkClassesClient(b.connection)).
+		SetHubCache(b.hubCache).
+		Build()
+	if err != nil {
+		return nil, err
+	}
+
 	// Create and populate the object:
 	object := &function{
 		logger:               b.logger,
 		securityGroupsClient: privatev1.NewSecurityGroupsClient(b.connection),
-		hubsClient:           privatev1.NewHubsClient(b.connection),
+		networkingHubReader:  networkingHubReader,
 		hubCache:             b.hubCache,
 		maskCalculator:       masks.NewCalculator().Build(),
 	}
@@ -128,6 +135,16 @@ func (r *function) run(ctx context.Context, securityGroup *privatev1.SecurityGro
 	} else {
 		err = t.update(ctx)
 	}
+	var hubResolutionRetryErr error
+	if err != nil {
+		handled, retry := controllers.HandleResourceNetworkingHubResolutionError(err, t.setPending, t.setFailed)
+		if handled {
+			if retry {
+				hubResolutionRetryErr = err
+			}
+			err = nil
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -141,7 +158,10 @@ func (r *function) run(ctx context.Context, securityGroup *privatev1.SecurityGro
 		UpdateMask: updateMask,
 	}.Build())
 
-	return err
+	if err != nil {
+		return err
+	}
+	return hubResolutionRetryErr
 }
 
 func (t *task) update(ctx context.Context) error {
@@ -159,10 +179,13 @@ func (t *task) update(ctx context.Context) error {
 		return err
 	}
 
-	// Select a hub:
+	// Select a hub and return immediately if it was just selected. This ensures the hub is
+	// persisted before any Kubernetes objects are created.
+	hubJustSelected := t.securityGroup.GetStatus().GetHub() == ""
 	if err := t.selectHub(ctx); err != nil {
 		return err
 	}
+	t.securityGroup.GetStatus().SetHub(t.hubId)
 
 	// Prepare the changes to the spec:
 	// Stored objects may predate the IPv4-only contract. Reject any legacy or incomplete
@@ -171,6 +194,9 @@ func (t *task) update(ctx context.Context) error {
 	spec, err := t.buildSpec()
 	if err != nil {
 		t.setFailed(err)
+		return nil
+	}
+	if hubJustSelected {
 		return nil
 	}
 
@@ -240,12 +266,25 @@ func (t *task) validateTenant() error {
 }
 
 func (t *task) delete(ctx context.Context) (err error) {
-	if err = t.selectHub(ctx); err != nil {
-		if errors.Is(err, controllers.ErrHubNotFound) {
-			controllers.RemoveFinalizerOnDecommissionedHub(ctx, t.r.logger, t.hubId, "security_group_id", t.securityGroup.GetId(), t.removeFinalizer)
-			return nil
+	// Delete from the Hub where this resource was created. Older security groups do not
+	// have a stored Hub assignment, so use the canonical Hub as a best-effort fallback.
+	t.hubId = t.securityGroup.GetStatus().GetHub()
+	if t.hubId == "" {
+		if err = t.selectHub(ctx); err != nil {
+			if errors.Is(err, controllers.ErrHubNotFound) || errors.Is(err, controllers.ErrCanonicalHubNotFound) {
+				controllers.RemoveFinalizerOnDecommissionedHub(ctx, t.r.logger, t.hubId, "security_group_id", t.securityGroup.GetId(), t.removeFinalizer)
+				return nil
+			}
+			return
 		}
-		return
+	} else {
+		if err = t.getHub(ctx); err != nil {
+			if errors.Is(err, controllers.ErrHubNotFound) {
+				controllers.RemoveFinalizerOnDecommissionedHub(ctx, t.r.logger, t.hubId, "security_group_id", t.securityGroup.GetId(), t.removeFinalizer)
+				return nil
+			}
+			return
+		}
 	}
 
 	// Check if the K8S object still exists:
@@ -291,19 +330,23 @@ func (t *task) delete(ctx context.Context) (err error) {
 }
 
 func (t *task) selectHub(ctx context.Context) error {
-	response, err := t.r.hubsClient.List(ctx, privatev1.HubsListRequest_builder{}.Build())
+	resolution, err := controllers.ResolveResourceNetworkingHub(ctx, t.r.networkingHubReader, t.securityGroup.GetStatus().GetHub())
+	t.hubId = resolution.HubID
 	if err != nil {
 		return err
 	}
-	if len(response.Items) == 0 {
-		return errors.New("there are no hubs")
-	}
-	t.hubId = response.Items[rand.IntN(len(response.Items))].GetId()
 	t.r.logger.DebugContext(
 		ctx,
-		"Selected hub",
+		"Resolved canonical networking hub",
 		slog.String("id", t.hubId),
 	)
+	t.hubNamespace = resolution.Namespace
+	t.hubClient = resolution.Client
+	return nil
+}
+
+func (t *task) getHub(ctx context.Context) error {
+	t.hubId = t.securityGroup.GetStatus().GetHub()
 	hubEntry, err := t.r.hubCache.Get(ctx, t.hubId)
 	if err != nil {
 		return err
@@ -366,6 +409,14 @@ func (t *task) removeFinalizer() {
 		})
 		t.securityGroup.GetMetadata().SetFinalizers(list)
 	}
+}
+
+func (t *task) setPending(err error) {
+	if !t.securityGroup.HasStatus() {
+		t.securityGroup.SetStatus(&privatev1.SecurityGroupStatus{})
+	}
+	t.securityGroup.GetStatus().SetState(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING)
+	t.securityGroup.GetStatus().SetMessage(err.Error())
 }
 
 func (t *task) setFailed(err error) {

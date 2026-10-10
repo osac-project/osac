@@ -34,7 +34,7 @@ func NewLifecycleClientFromConfig(
 	lifecycle LifecycleConfig,
 	caPool *trust.CertPool,
 ) (LifecycleClient, error) {
-	if err := ValidateBaseKeycloakConfig(base); err != nil {
+	if err := ValidateBaseConfig(base); err != nil {
 		return nil, err
 	}
 	if err := ValidateLifecycleConfig(lifecycle); err != nil {
@@ -83,6 +83,7 @@ func NewLifecycleClientFromConfig(
 		SetTokenSource(authenticator).
 		SetParentNamespace(base.Namespace).
 		SetKVMountPath(base.KVMountPath).
+		SetTransitMountPath(lifecycle.TransitMountPath).
 		SetKeycloakIssuerURL(base.KeycloakIssuerURL).
 		SetKeycloakAudience(base.KeycloakAudience).
 		SetServiceClientID(base.KeycloakClientID).

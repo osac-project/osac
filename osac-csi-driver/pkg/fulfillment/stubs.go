@@ -53,6 +53,7 @@ func (s *VolumeStub) CreateVolume(_ context.Context, params CreateVolumeParams) 
 		ID:             id,
 		Name:           params.PVCRef,
 		State:          VolumeStateAvailable,
+		Provider:       s.DefaultBackend,
 		Backend:        s.DefaultBackend,
 		VendorVolumeID: id,
 		Protocol:       s.DefaultProtocol,

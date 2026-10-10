@@ -67,6 +67,7 @@ var _ = Describe("NATGateway lifecycle", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		networkClassId = ncResp.GetObject().GetId()
+		waitForNetworkClassReady(ctx, networkClassesClient, networkClassId)
 
 		// Create VirtualNetwork
 		virtualNetworkId = fmt.Sprintf("test-vnet-%s", uuid.New())
@@ -413,6 +414,7 @@ var _ = Describe("NATGateway lifecycle", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 		})
+		waitForNetworkClassReady(ctx, networkClassesClient, k8sOnlyNC.GetObject().GetId())
 
 		k8sOnlyVNId := fmt.Sprintf("test-vnet-%s", uuid.New())
 		_, err = virtualNetworksClient.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{

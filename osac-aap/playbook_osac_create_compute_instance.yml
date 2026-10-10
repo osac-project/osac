@@ -22,12 +22,6 @@
       ansible.builtin.debug:
         var: osac_job_vars.resource.metadata
 
-    - name: Determine tenant target namespace
-      # Brings in variables:
-      # tenant_target_namespace
-      ansible.builtin.include_role:
-        name: osac.service.tenant_target_namespace
-
     - name: Set tenant identity from ComputeInstance tenant reference
       ansible.builtin.set_fact:
         tenant_name: "{{ compute_instance.status.tenantReference.name }}"
@@ -114,7 +108,6 @@
       ansible.builtin.debug:
         msg:
           - "Compute instance name: {{ compute_instance_name }}"
-          - "Tenant target namespace: {{ tenant_target_namespace }}"
           - "Template ID: {{ template_id }}"
           - "Template parameters: {{ template_parameters }}"
 

@@ -2,7 +2,8 @@
 {{/*
 Strimzi KafkaUser. Creates SCRAM-SHA-512 credentials and a Secret with the same
 name as the user in the Kafka cluster namespace. ACLs grant produce and consume
-access to osac.events.* topics used by the fulfillment service.
+access to osac.events.* topics and osac.system.* consumer groups used by the
+fulfillment service.
 */}}
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaUser
@@ -25,6 +26,14 @@ spec:
         operations:
           - Create
           - Write
+          - Read
+          - Describe
+        host: "*"
+      - resource:
+          type: group
+          name: osac.system.
+          patternType: prefix
+        operations:
           - Read
           - Describe
         host: "*"

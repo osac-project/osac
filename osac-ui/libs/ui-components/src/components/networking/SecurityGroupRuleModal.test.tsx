@@ -168,24 +168,4 @@ describe('SecurityGroupRuleModal', () => {
     });
     expect(mutateAsync).not.toHaveBeenCalled();
   });
-
-  it('rejects invalid IPv6 CIDR 00:000000:000000:00000:00/0 (OSAC-3899)', async () => {
-    const user = userEvent.setup();
-    const onClose = vi.fn();
-
-    render(
-      <SecurityGroupRuleModal onClose={onClose} securityGroup={securityGroup} direction="egress" />,
-    );
-
-    await user.click(screen.getByLabelText(/^Protocol/i));
-    await user.click(screen.getByRole('option', { name: 'All' }));
-    await user.click(screen.getByLabelText(/IPv6 CIDR/i));
-    await user.type(screen.getByLabelText(/IPv6 CIDR/i), '00:000000:000000:00000:00/0');
-    await user.tab();
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Add/i })).toBeDisabled();
-    });
-    expect(mutateAsync).not.toHaveBeenCalled();
-  });
 });

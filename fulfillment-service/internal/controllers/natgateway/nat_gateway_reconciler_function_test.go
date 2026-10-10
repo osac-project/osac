@@ -39,19 +39,23 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-// fakeHubsClient implements the HubsClient interface for testing selectHub.
-type fakeHubsClient struct {
-	privatev1.HubsClient
-	listResponse *privatev1.HubsListResponse
-	listErr      error
+type fakeNetworkingHubReader struct {
+	result controllers.NetworkingHubResolution
+	err    error
+	calls  int
 }
 
-func (f *fakeHubsClient) List(
-	_ context.Context,
-	_ *privatev1.HubsListRequest,
-	_ ...grpc.CallOption,
-) (*privatev1.HubsListResponse, error) {
-	return f.listResponse, f.listErr
+func (f *fakeNetworkingHubReader) Resolve(context.Context) (controllers.NetworkingHubResolution, error) {
+	f.calls++
+	return f.result, f.err
+}
+
+func readyNetworkingHubReader(id, namespace string, client clnt.Client) *fakeNetworkingHubReader {
+	return &fakeNetworkingHubReader{result: controllers.NetworkingHubResolution{
+		NetworkingHub: controllers.NetworkingHub{ID: id, Namespace: namespace, Client: client},
+		HubID:         id,
+		State:         privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+	}}
 }
 
 // newNATGatewayCR creates a typed NATGateway CR for use with the fake client.
@@ -496,118 +500,44 @@ var _ = Describe("removeFinalizer", func() {
 })
 
 var _ = Describe("selectHub", func() {
-	var (
-		ctx  context.Context
-		ctrl *gomock.Controller
-	)
-
-	BeforeEach(func() {
-		ctx = context.Background()
-		ctrl = gomock.NewController(GinkgoT())
-		DeferCleanup(ctrl.Finish)
-	})
-
-	It("should use existing hub from status", func() {
-		hubCache := controllers.NewMockHubCache(ctrl)
-		hubCache.EXPECT().
-			Get(gomock.Any(), "hub-1").
-			Return(&controllers.HubEntry{
-				Namespace: "hub-ns",
-				Client:    fake.NewClientBuilder().Build(),
-			}, nil)
-
-		t := &task{
-			r: &function{
-				logger:   logger,
-				hubCache: hubCache,
-			},
-			natGateway: privatev1.NATGateway_builder{
-				Id: "natgw-uuid-existing-hub",
+	It("uses the canonical Hub for empty and sticky assignments and never falls back", func() {
+		ctx := context.Background()
+		kubeClient := fake.NewClientBuilder().Build()
+		resolver := readyNetworkingHubReader("hub-a", "hub-a-ns", kubeClient)
+		f := &function{logger: logger, networkingHubReader: resolver}
+		newNATGateway := func(hubID string) *privatev1.NATGateway {
+			return privatev1.NATGateway_builder{
+				Id: "natgw-canonical-hub",
 				Spec: privatev1.NATGatewaySpec_builder{
 					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "vn-uuid-1"}.Build(),
 				}.Build(),
-				Status: privatev1.NATGatewayStatus_builder{
-					Hub: "hub-1",
-				}.Build(),
-			}.Build(),
+				Status: privatev1.NATGatewayStatus_builder{Hub: hubID}.Build(),
+			}.Build()
 		}
 
-		err := t.selectHub(ctx)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(t.hubId).To(Equal("hub-1"))
-		Expect(t.hubNamespace).To(Equal("hub-ns"))
-	})
-
-	It("should select hub randomly when status hub is empty", func() {
-		hubsClient := &fakeHubsClient{
-			listResponse: &privatev1.HubsListResponse{
-				Items: []*privatev1.Hub{privatev1.Hub_builder{Id: "hub-random-1"}.Build()},
-			},
+		for _, assignedHubID := range []string{"", "hub-a"} {
+			t := &task{r: f, natGateway: newNATGateway(assignedHubID)}
+			Expect(t.selectHub(ctx)).To(Succeed())
+			Expect(t.hubId).To(Equal("hub-a"))
+			Expect(t.hubNamespace).To(Equal("hub-a-ns"))
+			Expect(t.hubClient).To(BeIdenticalTo(kubeClient))
 		}
+		Expect(resolver.calls).To(Equal(2))
 
-		hubCache := controllers.NewMockHubCache(ctrl)
-		hubCache.EXPECT().
-			Get(gomock.Any(), "hub-random-1").
-			Return(&controllers.HubEntry{
-				Namespace: "hub-random-ns",
-				Client:    fake.NewClientBuilder().Build(),
-			}, nil)
+		conflict := &task{r: f, natGateway: newNATGateway("hub-b")}
+		Expect(conflict.selectHub(ctx)).To(MatchError(ContainSubstring(controllers.ErrResourceHubConflict.Error())))
+		Expect(conflict.hubClient).To(BeNil())
 
-		t := &task{
-			r: &function{
-				logger:     logger,
-				hubCache:   hubCache,
-				hubsClient: hubsClient,
-			},
-			natGateway: privatev1.NATGateway_builder{
-				Id: "natgw-uuid-random-hub",
-			}.Build(),
+		for _, resolutionErr := range []error{
+			controllers.ErrNoNetworkingHubs,
+			controllers.ErrMultipleNetworkingHubs,
+			controllers.ErrCanonicalHubUnavailable,
+		} {
+			resolver.err = resolutionErr
+			t := &task{r: f, natGateway: newNATGateway("hub-a")}
+			Expect(t.selectHub(ctx)).To(MatchError(resolutionErr))
+			Expect(t.hubClient).To(BeNil())
 		}
-
-		err := t.selectHub(ctx)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(t.hubId).To(Equal("hub-random-1"))
-		Expect(t.hubNamespace).To(Equal("hub-random-ns"))
-	})
-
-	It("should return error when no hubs are available", func() {
-		hubsClient := &fakeHubsClient{
-			listResponse: &privatev1.HubsListResponse{},
-		}
-
-		t := &task{
-			r: &function{
-				logger:     logger,
-				hubsClient: hubsClient,
-			},
-			natGateway: privatev1.NATGateway_builder{
-				Id: "natgw-uuid-no-hubs",
-			}.Build(),
-		}
-
-		err := t.selectHub(ctx)
-		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("there are no hubs"))
-	})
-
-	It("should return error when hub listing fails", func() {
-		hubsClient := &fakeHubsClient{
-			listErr: errors.New("hub listing failed"),
-		}
-
-		t := &task{
-			r: &function{
-				logger:     logger,
-				hubsClient: hubsClient,
-			},
-			natGateway: privatev1.NATGateway_builder{
-				Id: "natgw-uuid-hub-error",
-			}.Build(),
-		}
-
-		err := t.selectHub(ctx)
-		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("hub listing failed"))
 	})
 })
 
@@ -639,11 +569,7 @@ var _ = Describe("Kubernetes validation error handling", func() {
 			}).
 			Build()
 
-		hubCache := controllers.NewMockHubCache(ctrl)
-		hubCache.EXPECT().
-			Get(gomock.Any(), "hub-1").
-			Return(&controllers.HubEntry{Namespace: "test-ns", Client: fakeClient}, nil).
-			AnyTimes()
+		resolver := readyNetworkingHubReader("hub-1", "test-ns", fakeClient)
 
 		natGatewaysClient := NewMockNATGatewaysClient(ctrl)
 		natGatewaysClient.EXPECT().
@@ -670,10 +596,10 @@ var _ = Describe("Kubernetes validation error handling", func() {
 		}.Build()
 
 		f := &function{
-			logger:            logger,
-			hubCache:          hubCache,
-			natGatewaysClient: natGatewaysClient,
-			maskCalculator:    masks.NewCalculator().Build(),
+			logger:              logger,
+			natGatewaysClient:   natGatewaysClient,
+			networkingHubReader: resolver,
+			maskCalculator:      masks.NewCalculator().Build(),
 		}
 
 		err := f.run(ctx, natGateway)

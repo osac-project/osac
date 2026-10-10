@@ -38,6 +38,25 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
+type fakeNetworkingHubReader struct {
+	result controllers.NetworkingHubResolution
+	err    error
+	calls  int
+}
+
+func (f *fakeNetworkingHubReader) Resolve(context.Context) (controllers.NetworkingHubResolution, error) {
+	f.calls++
+	return f.result, f.err
+}
+
+func readyNetworkingHubReader(id, namespace string, client clnt.Client) *fakeNetworkingHubReader {
+	return &fakeNetworkingHubReader{result: controllers.NetworkingHubResolution{
+		NetworkingHub: controllers.NetworkingHub{ID: id, Namespace: namespace, Client: client},
+		HubID:         id,
+		State:         privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+	}}
+}
+
 var _ = Describe("buildSpec", func() {
 	It("Copies only the canonical IPv4 field when a legacy IPv6 field is present", func() {
 		ipv4 := "10.0.1.0/24"
@@ -561,18 +580,7 @@ var _ = Describe("hub persistence", func() {
 
 		fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
 
-		hubCache := controllers.NewMockHubCache(ctrl)
-		hubCache.EXPECT().
-			Get(gomock.Any(), hubID).
-			Return(&controllers.HubEntry{Namespace: hubNamespace, Client: fakeClient}, nil).
-			AnyTimes()
-
-		hubsClient := controllers.NewMockHubsClient(ctrl)
-		hubsClient.EXPECT().
-			List(gomock.Any(), gomock.Any()).
-			Return(&privatev1.HubsListResponse{
-				Items: []*privatev1.Hub{privatev1.Hub_builder{Id: hubID}.Build()},
-			}, nil)
+		resolver := readyNetworkingHubReader(hubID, hubNamespace, fakeClient)
 
 		subnetsClient := NewMockSubnetsClient(ctrl)
 		subnetsClient.EXPECT().
@@ -597,11 +605,10 @@ var _ = Describe("hub persistence", func() {
 		}.Build()
 
 		f := &function{
-			logger:         logger,
-			hubCache:       hubCache,
-			subnetsClient:  subnetsClient,
-			hubsClient:     hubsClient,
-			maskCalculator: nil,
+			logger:              logger,
+			subnetsClient:       subnetsClient,
+			networkingHubReader: resolver,
+			maskCalculator:      nil,
 		}
 
 		err := f.run(ctx, subnet)
@@ -620,16 +627,13 @@ var _ = Describe("hub persistence", func() {
 
 		fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
 
-		hubCache := controllers.NewMockHubCache(ctrl)
-
-		hubsClient := controllers.NewMockHubsClient(ctrl)
-		hubsClient.EXPECT().
-			List(gomock.Any(), gomock.Any()).
-			Return(&privatev1.HubsListResponse{
-				Items: []*privatev1.Hub{},
-			}, nil)
-
+		resolver := &fakeNetworkingHubReader{err: controllers.ErrNoNetworkingHubs}
 		subnetsClient := NewMockSubnetsClient(ctrl)
+		subnetsClient.EXPECT().
+			Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(ctx context.Context, req *privatev1.SubnetsUpdateRequest, opts ...grpc.CallOption) (*privatev1.SubnetsUpdateResponse, error) {
+				return &privatev1.SubnetsUpdateResponse{Object: req.GetObject()}, nil
+			})
 
 		subnet := privatev1.Subnet_builder{
 			Id: subnetID,
@@ -647,16 +651,17 @@ var _ = Describe("hub persistence", func() {
 		}.Build()
 
 		f := &function{
-			logger:         logger,
-			hubCache:       hubCache,
-			subnetsClient:  subnetsClient,
-			hubsClient:     hubsClient,
-			maskCalculator: nil,
+			logger:              logger,
+			subnetsClient:       subnetsClient,
+			networkingHubReader: resolver,
+			maskCalculator:      nil,
 		}
 
 		err := f.run(ctx, subnet)
-		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("there are no hubs"))
+		Expect(errors.Is(err, controllers.ErrNoNetworkingHubs)).To(BeTrue())
+		Expect(subnet.GetStatus().GetState()).To(Equal(privatev1.SubnetState_SUBNET_STATE_PENDING))
+		Expect(subnet.GetStatus().GetHub()).To(BeEmpty())
+		Expect(subnet.GetStatus().GetMessage()).To(ContainSubstring(controllers.ErrNoNetworkingHubs.Error()))
 
 		list := &osacv1alpha1.SubnetList{}
 		err = fakeClient.List(ctx, list)
@@ -670,13 +675,7 @@ var _ = Describe("hub persistence", func() {
 
 		fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
 
-		hubCache := controllers.NewMockHubCache(ctrl)
-		hubCache.EXPECT().
-			Get(gomock.Any(), hubID).
-			Return(&controllers.HubEntry{Namespace: hubNamespace, Client: fakeClient}, nil).
-			AnyTimes()
-
-		hubsClient := controllers.NewMockHubsClient(ctrl)
+		resolver := readyNetworkingHubReader(hubID, hubNamespace, fakeClient)
 
 		subnetsClient := NewMockSubnetsClient(ctrl)
 		subnetsClient.EXPECT().
@@ -702,15 +701,15 @@ var _ = Describe("hub persistence", func() {
 		}.Build()
 
 		f := &function{
-			logger:         logger,
-			hubCache:       hubCache,
-			subnetsClient:  subnetsClient,
-			hubsClient:     hubsClient,
-			maskCalculator: nil,
+			logger:              logger,
+			subnetsClient:       subnetsClient,
+			networkingHubReader: resolver,
+			maskCalculator:      nil,
 		}
 
 		err := f.run(ctx, subnet)
 		Expect(err).ToNot(HaveOccurred())
+		Expect(resolver.calls).To(Equal(1), "existing assignments must be checked against the canonical Hub")
 
 		list := &osacv1alpha1.SubnetList{}
 		err = fakeClient.List(ctx, list)
@@ -725,18 +724,7 @@ var _ = Describe("hub persistence", func() {
 
 		fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
 
-		hubCache := controllers.NewMockHubCache(ctrl)
-		hubCache.EXPECT().
-			Get(gomock.Any(), hubID).
-			Return(&controllers.HubEntry{Namespace: hubNamespace, Client: fakeClient}, nil).
-			AnyTimes()
-
-		hubsClient := controllers.NewMockHubsClient(ctrl)
-		hubsClient.EXPECT().
-			List(gomock.Any(), gomock.Any()).
-			Return(&privatev1.HubsListResponse{
-				Items: []*privatev1.Hub{privatev1.Hub_builder{Id: hubID}.Build()},
-			}, nil)
+		resolver := readyNetworkingHubReader(hubID, hubNamespace, fakeClient)
 
 		subnetsClient := NewMockSubnetsClient(ctrl)
 		subnetsClient.EXPECT().
@@ -761,11 +749,10 @@ var _ = Describe("hub persistence", func() {
 		}.Build()
 
 		f := &function{
-			logger:         logger,
-			hubCache:       hubCache,
-			subnetsClient:  subnetsClient,
-			hubsClient:     hubsClient,
-			maskCalculator: nil,
+			logger:              logger,
+			subnetsClient:       subnetsClient,
+			networkingHubReader: resolver,
+			maskCalculator:      nil,
 		}
 
 		// First reconcile: hub is empty, gets selected and persisted, but no CR created
@@ -782,11 +769,40 @@ var _ = Describe("hub persistence", func() {
 
 		err = f.run(ctx, subnet)
 		Expect(err).ToNot(HaveOccurred())
+		Expect(resolver.calls).To(Equal(2), "each reconciliation must revalidate the stored Hub assignment")
 
 		err = fakeClient.List(ctx, list)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(list.Items).To(HaveLen(1))
 		Expect(list.Items[0].Namespace).To(Equal(hubNamespace))
+	})
+})
+
+var _ = Describe("canonical networking Hub resolution", func() {
+	It("rejects conflicting assignments and never selects a fallback Hub", func() {
+		resolver := readyNetworkingHubReader("hub-a", "hub-a-ns", fake.NewClientBuilder().Build())
+		r := &function{logger: logger, networkingHubReader: resolver}
+		t := &task{
+			r: r,
+			subnet: privatev1.Subnet_builder{
+				Status: privatev1.SubnetStatus_builder{Hub: "hub-b"}.Build(),
+			}.Build(),
+		}
+		err := t.selectHub(context.Background())
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, controllers.ErrResourceHubConflict)).To(BeTrue())
+		Expect(t.hubClient).To(BeNil())
+
+		for _, resolutionErr := range []error{
+			controllers.ErrNoNetworkingHubs,
+			controllers.ErrMultipleNetworkingHubs,
+			controllers.ErrCanonicalHubUnavailable,
+		} {
+			resolver.err = resolutionErr
+			t := &task{r: r, subnet: privatev1.Subnet_builder{}.Build()}
+			Expect(t.selectHub(context.Background())).To(MatchError(resolutionErr))
+			Expect(t.hubClient).To(BeNil())
+		}
 	})
 })
 
@@ -814,11 +830,7 @@ var _ = Describe("Kubernetes validation error handling", func() {
 			}).
 			Build()
 
-		hubCache := controllers.NewMockHubCache(ctrl)
-		hubCache.EXPECT().
-			Get(gomock.Any(), "hub-validation").
-			Return(&controllers.HubEntry{Namespace: "hub-ns", Client: fakeClient}, nil).
-			AnyTimes()
+		resolver := readyNetworkingHubReader("hub-validation", "hub-ns", fakeClient)
 
 		subnetsClient := NewMockSubnetsClient(ctrl)
 		subnetsClient.EXPECT().
@@ -844,10 +856,10 @@ var _ = Describe("Kubernetes validation error handling", func() {
 		}.Build()
 
 		f := &function{
-			logger:         logger,
-			hubCache:       hubCache,
-			subnetsClient:  subnetsClient,
-			maskCalculator: nil,
+			logger:              logger,
+			subnetsClient:       subnetsClient,
+			networkingHubReader: resolver,
+			maskCalculator:      nil,
 		}
 
 		err := f.run(ctx, subnet)

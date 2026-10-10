@@ -44,7 +44,7 @@ const certBaseDir = "/etc/osac/certs"
 // Satisfied by *bcmclient.Client; defined here so tests can substitute a mock
 // without depending on the bcmclient package.
 //
-//go:generate mockgen -destination=bcm_mock_test.go -package=inventory . BCMAPI,BMHLifecycleManager,BMCDiscoverer
+//go:generate mockgen -source=$GOFILE -destination=bcm_mock_test.go -package=$GOPACKAGE BCMAPI,BMCDiscoverer
 type BCMAPI interface {
 	CertWatcher() *certwatcher.CertWatcher
 	GetDevices(ctx context.Context) ([]bcmclient.Device, error)
@@ -52,19 +52,6 @@ type BCMAPI interface {
 	GetCategories(ctx context.Context) ([]bcmclient.Category, error)
 	GetPartitions(ctx context.Context) ([]bcmclient.Partition, error)
 	UpdateDevice(ctx context.Context, deviceRaw json.RawMessage) (*bcmclient.UpdateResponse, error)
-}
-
-// BMHLifecycleManager abstracts BareMetalHost CR operations for testability.
-// Satisfied by *baremetalhost.Manager.
-type BMHLifecycleManager interface {
-	CreateBMH(ctx context.Context, params baremetalhost.CreateParams) error
-	DeleteBMH(ctx context.Context, name string) error
-	BMHExists(ctx context.Context, name string) (bool, error)
-	IsBMHReady(ctx context.Context, name string) (bool, error)
-	EnsureBMCSecret(ctx context.Context, name, username, password string) error
-	DeleteBMCSecret(ctx context.Context, name string) error
-	GetHardwareNICs(ctx context.Context, name string) ([]string, error)
-	Namespace() string
 }
 
 // BMCDiscoverer resolves BMC system paths via Redfish. Satisfied by
@@ -135,16 +122,16 @@ func ParseBCMOptions(options map[string]any) (*BCMClientConfig, error) {
 }
 
 // BCMClient implements inventory.Client by wrapping a BCMAPI
-// for BCM API communication and a BMHLifecycleManager for BMH lifecycle.
+// for BCM API communication and a baremetalhost.BMHLifecycleManager for BMH lifecycle.
 type BCMClient struct {
 	client        BCMAPI
-	bmhManager    BMHLifecycleManager
+	bmhManager    baremetalhost.BMHLifecycleManager
 	bmcDiscoverer BMCDiscoverer
 	hostClass     string
 }
 
 // NewBCMClient creates a BCM inventory client with injected dependencies.
-func NewBCMClient(client BCMAPI, bmhManager BMHLifecycleManager, hostClass string) *BCMClient {
+func NewBCMClient(client BCMAPI, bmhManager baremetalhost.BMHLifecycleManager, hostClass string) *BCMClient {
 	return &BCMClient{
 		client:     client,
 		bmhManager: bmhManager,
@@ -177,6 +164,7 @@ var reservedExtraValueKeys = map[string]bool{
 	bcmclient.ExtraValueInstanceID:     true,
 	bcmclient.ExtraValueBMCAddress:     true,
 	bcmclient.ExtraValueBMCCredentials: true,
+	bcmclient.ExtraValueInterfaceMACs:  true,
 }
 
 // FindFreeHost returns a randomly selected free LiteNode whose extra_values
@@ -760,4 +748,40 @@ func (c *BCMClient) GetHostNICs(ctx context.Context, inventoryHostID string) ([]
 		nics = append(nics, HostNIC{MAC: mac})
 	}
 	return nics, nil
+}
+
+// GetHostLogicalPortMACs reads the administrator mapping from BCM extra_values.
+func (c *BCMClient) GetHostLogicalPortMACs(ctx context.Context, inventoryHostID string) (map[string]string, error) {
+	_, hostname, err := ParseHostID(inventoryHostID)
+	if err != nil {
+		return nil, err
+	}
+	device, err := c.client.GetDevice(ctx, hostname)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get BCM device %s: %w", hostname, err)
+	}
+	if device == nil {
+		return nil, fmt.Errorf("BCM device %s not found", hostname)
+	}
+
+	// ExtraValues already preserves arbitrary JSON values. Accept an object or
+	// a JSON string so string-valued BCM metadata can carry the same mapping.
+	value := device.ExtraValues[bcmclient.ExtraValueInterfaceMACs]
+	var raw []byte
+	if text, ok := value.(string); ok {
+		raw = []byte(text)
+	} else if value != nil {
+		raw, err = json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("host %s: failed to marshal %s extra value: %w", inventoryHostID, bcmclient.ExtraValueInterfaceMACs, err)
+		}
+	}
+	if len(raw) == 0 {
+		return map[string]string{}, nil
+	}
+	macs := map[string]string{}
+	if err := json.Unmarshal(raw, &macs); err != nil {
+		return nil, fmt.Errorf("host %s: failed to parse %s mapping: %w", inventoryHostID, bcmclient.ExtraValueInterfaceMACs, err)
+	}
+	return macs, nil
 }

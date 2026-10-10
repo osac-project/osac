@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	reflectpb "google.golang.org/grpc/reflection/grpc_reflection_v1"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
@@ -45,7 +46,9 @@ import (
 // NewConnectJSONProxy creates an http.Handler that accepts Connect protocol
 // requests (JSON) and forwards them as native gRPC. Proto schemas are
 // discovered dynamically via gRPC server reflection — no generated stubs needed.
-func NewConnectJSONProxy(grpcURL string, tlsConfig *tls.Config) (http.Handler, error) {
+// bearerToken, when non-empty, is sent as an Authorization header on the reflection
+// call; required when the upstream enforces authentication on the reflection endpoint.
+func NewConnectJSONProxy(grpcURL string, tlsConfig *tls.Config, bearerToken string) (http.Handler, error) {
 	var creds credentials.TransportCredentials
 	if tlsConfig != nil {
 		creds = credentials.NewTLS(tlsConfig)
@@ -59,7 +62,7 @@ func NewConnectJSONProxy(grpcURL string, tlsConfig *tls.Config) (http.Handler, e
 	}
 	defer func() { _ = conn.Close() }()
 
-	files, err := discoverServices(conn)
+	files, err := discoverServices(conn, bearerToken)
 	if err != nil {
 		return nil, fmt.Errorf("grpc reflection: %w", err)
 	}
@@ -95,10 +98,13 @@ func NewConnectJSONProxy(grpcURL string, tlsConfig *tls.Config) (http.Handler, e
 	return transcoder, nil
 }
 
-func discoverServices(conn *grpc.ClientConn) (*protoregistry.Files, error) {
+func discoverServices(conn *grpc.ClientConn, bearerToken string) (*protoregistry.Files, error) {
 	client := reflectpb.NewServerReflectionClient(conn)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	if bearerToken != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+bearerToken)
+	}
 	stream, err := client.ServerReflectionInfo(ctx)
 	if err != nil {
 		return nil, err

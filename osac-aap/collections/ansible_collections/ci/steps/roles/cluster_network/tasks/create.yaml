@@ -1,0 +1,25 @@
+---
+- name: Wait for cluster network namespace
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Namespace
+    name: "{{ cluster_network_namespace }}-{{ cluster_network_name }}"
+  register: cp_ns
+  until: cp_ns.resources | length > 0
+  retries: 30
+  delay: 10
+
+- name: Wait for the operator to bind worker agents to this cluster
+  kubernetes.core.k8s_info:
+    kind: Agent
+    api_version: agent-install.openshift.io/v1beta1
+    namespace: "{{ default_agent_namespace }}"
+  register: _all_agents
+  until: >-
+    (_all_agents.resources | default([])
+      | selectattr('spec.clusterDeploymentName', 'defined')
+      | selectattr('spec.clusterDeploymentName.name', 'equalto', cluster_network_name)
+      | list | length) >= (cluster_network_node_requests | map(attribute='numberOfNodes') | map('int') | sum)
+  retries: 60
+  delay: 10
+  when: (cluster_network_node_requests | map(attribute='numberOfNodes') | map('int') | sum) > 0

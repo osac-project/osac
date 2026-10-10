@@ -218,7 +218,9 @@ func verifyTenantRemovedFromKeycloak(ctx context.Context, name string) {
 			g.Expect(json.Unmarshal(body, &kcTenants)).To(Succeed())
 			g.Expect(kcTenants).To(BeEmpty())
 		},
-		time.Minute,
+		// Keycloak organization deletion can complete asynchronously after the
+		// Fulfillment tenant and its finalizer have already been removed.
+		time.Minute*2,
 		time.Second,
 	).Should(Succeed())
 }
@@ -473,7 +475,7 @@ var _ = Describe("Tenant lifecycle", func() {
 				}.Build())
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(getResponse.GetObject().GetMetadata().GetFinalizers()).To(
-					ContainElement(finalizers.Controller),
+					ContainElements(finalizers.TenantLifecycle, finalizers.TenantOnboarding),
 				)
 				g.Expect(getResponse.GetObject().GetStatus().GetState()).To(
 					Equal(privatev1.TenantState_TENANT_STATE_SYNCED),
@@ -828,19 +830,22 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 		networkClassClient = privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
 
 		// The public VirtualNetworks API no longer accepts a network_class, so creation
-		// falls back to the default NetworkClass. Seed one for the duration of each test.
+		// resolves the deployment singleton. Seed one for the duration of each test.
 		ncResp, err := networkClassClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 			Object: privatev1.NetworkClass_builder{
 				Metadata: privatev1.Metadata_builder{
 					Name: fmt.Sprintf("test-default-nc-%s", uuid.New()),
 				}.Build(),
-				Title:         "Default Network Class",
+				Title:         "Deployment Network Class",
 				FabricManager: new("netris"),
-				IsDefault:     new(true),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		networkClassID := ncResp.GetObject().GetId()
+		waitForNetworkClassReady(ctx, networkClassClient, networkClassID)
+		// Use a fresh context for cleanup: the ctx from this BeforeEach is cancelled by Ginkgo as soon as this
+		// node returns, so reusing it here would make the Delete call fail with "context canceled" and leak the
+		// NetworkClass — which is fatal now that only one NetworkClass may exist per deployment (OSAC-4073).
 		DeferCleanup(func(cleanupCtx context.Context) {
 			deleteAndWaitForComputeInstanceFixtureResource(cleanupCtx,
 				func(deleteCtx context.Context) error {

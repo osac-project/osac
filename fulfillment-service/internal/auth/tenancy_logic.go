@@ -54,3 +54,88 @@ var AllTenants = collections.NewUniversalSet[string]()
 // the system and shared tenants, which are reserved for platform-level concerns. Servers that
 // manage platform-scoped resources should opt in to the shared tenant explicitly.
 var DefaultAllowedTenants = AllTenants.Difference(collections.NewSet(SystemTenant, SharedTenant))
+
+// DetermineTenantForOperation determines which tenant will be assigned to a resource based on:
+//   - requestedTenant: the tenant explicitly requested (from metadata)
+//   - currentTenant: the tenant currently assigned (for updates, empty for creates)
+//
+// Logic (mirrors GenericServer.determineAssignedTenant):
+//  1. If requestedTenant is specified → validate and return it
+//  2. Else if currentTenant exists → return it (preserves tenant on update)
+//  3. Else → determine and return the default tenant
+//
+// This shared logic is used by:
+//   - GenericServer.determineAssignedTenant() for actual resource operations
+//   - PrivateSelfSubjectAccessReviewsServer.Create() for permission checks
+//
+// Returns the determined tenant or an error.
+func DetermineTenantForOperation(ctx context.Context, tenancyLogic TenancyLogic, requestedTenant, currentTenant string) (string, error) {
+	// If a tenant was explicitly requested, validate and use it
+	if requestedTenant != "" {
+		if err := ValidateTenantAssignment(ctx, tenancyLogic, requestedTenant); err != nil {
+			return "", err
+		}
+		return requestedTenant, nil
+	}
+
+	// For updates, preserve the current tenant if no new one was requested
+	if currentTenant != "" {
+		return currentTenant, nil
+	}
+
+	// For creates with no tenant specified, use the default tenant
+	defaultTenant, err := tenancyLogic.DetermineDefaultTenant(ctx)
+	if err != nil {
+		return "", err
+	}
+	return defaultTenant, nil
+}
+
+// ValidateTenantAssignment validates whether a user can assign a specific tenant to a resource.
+// It checks both visibility (whether the tenant exists from the user's perspective) and
+// assignability (whether the user is a member of that tenant).
+//
+// Returns nil if the tenant is valid and can be assigned, or an error describing why not.
+func ValidateTenantAssignment(ctx context.Context, tenancyLogic TenancyLogic, requestedTenant string) error {
+	if requestedTenant == "" {
+		return nil
+	}
+
+	// Check if the tenant is visible to the user
+	visibility, err := tenancyLogic.DetermineVisibility(ctx)
+	if err != nil {
+		return err
+	}
+	if !visibility.IsTenantVisible(requestedTenant) {
+		return &TenantInvisibleError{Tenant: requestedTenant}
+	}
+
+	// Check if the tenant is assignable (user is a member)
+	assignableTenants, err := tenancyLogic.DetermineAssignableTenants(ctx)
+	if err != nil {
+		return err
+	}
+	if !assignableTenants.Contains(requestedTenant) {
+		return &TenantUnassignableError{Tenant: requestedTenant}
+	}
+
+	return nil
+}
+
+// TenantInvisibleError indicates that a tenant doesn't exist from the user's perspective.
+type TenantInvisibleError struct {
+	Tenant string
+}
+
+func (e *TenantInvisibleError) Error() string {
+	return "tenant '" + e.Tenant + "' doesn't exist"
+}
+
+// TenantUnassignableError indicates that a user is not a member of the requested tenant.
+type TenantUnassignableError struct {
+	Tenant string
+}
+
+func (e *TenantUnassignableError) Error() string {
+	return "tenant '" + e.Tenant + "' can't be assigned"
+}

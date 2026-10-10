@@ -35,11 +35,9 @@ bundledPostgres:
   enabled: true
 
 # --- Bundled OpenBao ---
-# Single-pod ephemeral Vault-compatible secret store for testing. Dev mode --
-# data is lost on restart. Not for production.
+# Bundled OpenBao for testing and CI. Not for production.
 bundledVault:
   enabled: true
-  devRootToken: "dev-root-token"
   keycloakIssuerUrl: "https://keycloak.keycloak.svc.cluster.local:8443/realms/osac"
 
 # origin-cli USER is 0; kind has no SCC to allocate a UID.

@@ -112,6 +112,10 @@ kafka.clusterNamespace.
 Wait-for-fulfillment init container.
 Uses .Values.cliImage for the container image.
 */}}
+{{- define "osac.fulfillmentCurlTLS" -}}
+--cacert /etc/ca-bundle/bundle.pem
+{{- end -}}
+
 {{- define "osac.waitForFulfillment" -}}
 {{- $url := "https://fulfillment-rest-gateway:8000/healthz" -}}
 - name: wait-for-fulfillment
@@ -125,7 +129,7 @@ Uses .Values.cliImage for the container image.
       echo "Waiting for fulfillment REST gateway..."
       for i in $(seq 1 60); do
         echo "Attempt ${i}: checking {{ $url }}"
-        if curl -skf --connect-timeout 5 --max-time 30 {{ $url }}; then
+        if curl -sf {{ include "osac.fulfillmentCurlTLS" . }} --connect-timeout 5 --max-time 30 {{ $url }}; then
           echo ""
           echo "Fulfillment service is ready."
           exit 0
@@ -140,6 +144,9 @@ Uses .Values.cliImage for the container image.
   volumeMounts:
   - name: tmp
     mountPath: /tmp
+  - name: ca-bundle
+    mountPath: /etc/ca-bundle
+    readOnly: true
   resources:
     requests:
       cpu: 50m
@@ -191,7 +198,9 @@ facade vs low-level surface mismatches).
 {{- $expert := .Values.global.expertOverrides | default dict -}}
 {{- $netris := $networking.netris | default dict -}}
 {{- $netrisEnabled := eq $networking.fabricManager "netris" -}}
-{{- $agentlessEnabled := eq $networking.k8sManager "k8s_only" -}}
+{{- $agentlessEnabled := or (eq $networking.k8sManager "k8s_only") (eq $networking.fabricManager "agentless_net") -}}
+{{- $agentlessStubEnabled := eq $networking.fabricManager "agentless_net" -}}
+{{- $cudnEnabled := eq $networking.fabricManager "cudn_net" -}}
 {{- $netExpertAap := $expert.aap | default false -}}
 {{- $netExpertNetworkClass := $expert.networkClass | default false -}}
 {{- $netExpertNetworkManagers := $expert.networkManagers | default false -}}
@@ -253,9 +262,31 @@ facade vs low-level surface mismatches).
 {{- $networkManagersEnabled := $nm.enabled | default false -}}
 {{- $fabricManagers := $nm.fabricManagers | default dict -}}
 {{- $k8sManagers := $nm.k8sManagers | default dict -}}
-{{- if and (not $netExpertNetworkManagers) (or $netrisEnabled $agentlessEnabled) (not $networkManagersEnabled) }}
+{{- if and (not $netExpertNetworkManagers) (or $netrisEnabled $agentlessEnabled $cudnEnabled) (not $networkManagersEnabled) }}
   {{- fail "global.networking requires operator.networkManagers.enabled=true" }}
 {{- end }}
+{{- if $cudnEnabled -}}
+  {{- if not (and .Values.global.services.caas.enabled .Values.global.services.bmaas.enabled) -}}
+    {{- fail "fabricManager=cudn_net requires CaaS and BMaaS services" -}}
+  {{- end -}}
+  {{- if or (ne $fabricManager "cudn_net") (ne $k8sManager "") (not $networkClass.enabled) (not $networkClass.isDefault) -}}
+    {{- fail "fabricManager=cudn_net requires an enabled default CUDN-only NetworkClass" -}}
+  {{- end -}}
+  {{- $cudnMgr := index $fabricManagers "cudn_net" | default dict -}}
+  {{- if not ($cudnMgr.enabled | default false) -}}
+    {{- fail "fabricManager=cudn_net requires registered operator.networkManagers.fabricManagers.cudn_net.enabled=true" -}}
+  {{- end -}}
+  {{- if .Values.operator.enabled -}}
+    {{- if not (and $netExpertAap .Values.aap.aap.instance.enabled .Values.aap.bootstrap.enabled $cf.enabled $nf.enabled) -}}
+      {{- fail "fabricManager=cudn_net requires expert ci.steps AAP with both instance groups" -}}
+    {{- end -}}
+    {{- if or (ne (index $cfCfg "NETWORK_CLASS" | default "") "ci") (ne (index $cfCfg "NETWORK_STEPS_COLLECTION" | default "") "ci.steps") -}}
+      {{- fail "fabricManager=cudn_net requires NETWORK_CLASS=ci and NETWORK_STEPS_COLLECTION=ci.steps" -}}
+    {{- end -}}
+  {{- else -}}
+    {{- fail "fabricManager=cudn_net requires an enabled operator" -}}
+  {{- end -}}
+{{- end -}}
 {{- $netClass := index $cfCfg "NETWORK_CLASS" | default "" | toString -}}
 {{- $netSteps := index $cfCfg "NETWORK_STEPS_COLLECTION" | default "" | toString -}}
 {{- if eq $netClass "netris" -}}
@@ -281,14 +312,19 @@ facade vs low-level surface mismatches).
 {{- if ne $netSteps "agentless_net.steps" }}
   {{- fail (printf "NETWORK_CLASS=agentless_net requires NETWORK_STEPS_COLLECTION=agentless_net.steps (got %q)" $netSteps) }}
 {{- end }}
-{{- if ne $fabricManager "" }}
-  {{- fail "NETWORK_CLASS=agentless_net requires networkClass.fabricManager to be empty" }}
+{{- if and $agentlessStubEnabled (ne $fabricManager "agentless_net") }}
+  {{- fail "AgentlessNet stub requires NetworkClass fabricManager=agentless_net" }}
+{{- else if and (not $agentlessStubEnabled) (ne $fabricManager "") }}
+  {{- fail "agentless_net.steps with the k8s_only manager requires networkClass.fabricManager to be empty" }}
 {{- end }}
 {{- end }}
 {{- if and $networkClass.enabled $fabricManager -}}
 {{- $mgr := index $fabricManagers $fabricManager | default dict -}}
 {{- $mgrEnabled := $mgr.enabled | default false -}}
 {{- if and (not $netExpertNetworkManagers) $netrisEnabled (eq $fabricManager "netris") }}
+{{- $mgrEnabled = true -}}
+{{- end }}
+{{- if and (not $netExpertNetworkManagers) $agentlessStubEnabled (eq $fabricManager "agentless_net") }}
 {{- $mgrEnabled = true -}}
 {{- end }}
 {{- if not $mgrEnabled }}

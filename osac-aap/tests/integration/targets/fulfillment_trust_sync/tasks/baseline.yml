@@ -1,0 +1,180 @@
+---
+- name: Validate tenant fulfillment trust synchronization
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _trust_namespace: fulfillment-trust-sync-test
+    _trust_bundle: |-
+      -----BEGIN CERTIFICATE-----
+      fixture-fulfillment-trust-bundle
+      -----END CERTIFICATE-----
+    _trust_hash: "{{ _trust_bundle | hash('sha256') }}"
+    _trust_job_vars:
+      trust_kubeconfig_credential_ref: protected://clusterorders/trust-sync-test
+      resource:
+        metadata:
+          uid: 8df00e12-2970-4785-9d1a-a2171938be98
+          annotations:
+            osac.openshift.io/tenant: trust-test-tenant
+      fulfillment_trust:
+        tenant_namespace: "{{ _trust_namespace }}"
+        config_map_name: osac-fulfillment-ca
+        bundle_pem: "{{ _trust_bundle }}"
+        bundle_sha256: "{{ _trust_hash }}"
+
+  tasks:
+    - name: Create the tenant trust test namespace
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ _trust_namespace }}"
+
+    - name: Create a trust-enabled CSI controller Deployment
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: trust-enabled-csi
+            namespace: "{{ _trust_namespace }}"
+            labels:
+              app.kubernetes.io/name: csiDriver
+              app.kubernetes.io/component: controller
+              osac.openshift.io/fulfillment-trust-client: 'true'
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: trust-enabled-csi
+            template:
+              metadata:
+                labels:
+                  app: trust-enabled-csi
+              spec:
+                containers:
+                  - name: pause
+                    image: registry.k8s.io/pause:3.9
+
+    - name: Create an unsupported legacy CSI controller Deployment
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: legacy-csi
+            namespace: "{{ _trust_namespace }}"
+            labels:
+              app.kubernetes.io/name: csi-driver
+              app.kubernetes.io/component: controller
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: legacy-csi
+            template:
+              metadata:
+                labels:
+                  app: legacy-csi
+              spec:
+                containers:
+                  - name: pause
+                    image: registry.k8s.io/pause:3.9
+
+    - name: Synchronize the approved tenant fulfillment trust bundle
+      ansible.builtin.include_role:
+        name: osac.service.fulfillment_trust_sync
+      vars:
+        osac_job_vars: "{{ _trust_job_vars }}"
+        fulfillment_trust_sync_rollout_delay: 1
+        fulfillment_trust_sync_rollout_retries: 90
+
+    - name: Read trust synchronization targets
+      kubernetes.core.k8s_info:
+        api_version: "{{ item.api_version }}"
+        kind: "{{ item.kind }}"
+        namespace: "{{ _trust_namespace }}"
+        name: "{{ item.name }}"
+      loop:
+        - api_version: v1
+          kind: ConfigMap
+          name: osac-fulfillment-ca
+        - api_version: apps/v1
+          kind: Deployment
+          name: trust-enabled-csi
+        - api_version: apps/v1
+          kind: Deployment
+          name: legacy-csi
+      register: _trust_targets
+
+    - name: Assert only the approved ConfigMap and selected CSI template changed
+      vars:
+        _expected_config_map_annotations:
+          osac.openshift.io/tenant: trust-test-tenant
+          osac.openshift.io/owner-reference: 8df00e12-2970-4785-9d1a-a2171938be98
+          osac.openshift.io/fulfillment-ca-sha256: "{{ _trust_hash }}"
+      ansible.builtin.assert:
+        that:
+          - _trust_targets.results[0].resources[0].data == {'bundle.pem': _trust_bundle}
+          - _trust_targets.results[0].resources[0].metadata.annotations == _expected_config_map_annotations
+          - _trust_targets.results[1].resources[0].spec.template.metadata.annotations['osac.openshift.io/fulfillment-ca-sha256'] == _trust_hash
+          - _trust_targets.results[2].resources[0].spec.template.metadata.annotations['osac.openshift.io/fulfillment-ca-sha256'] is not defined
+
+    - name: Repeat synchronization with the same approved input
+      ansible.builtin.include_role:
+        name: osac.service.fulfillment_trust_sync
+      vars:
+        osac_job_vars: "{{ _trust_job_vars }}"
+        fulfillment_trust_sync_rollout_delay: 1
+        fulfillment_trust_sync_rollout_retries: 10
+
+    - name: Reject a non-approved ConfigMap name before mutation
+      block:
+        - name: Attempt synchronization with an unapproved ConfigMap name
+          ansible.builtin.include_role:
+            name: osac.service.fulfillment_trust_sync
+          vars:
+            osac_job_vars: >-
+              {{
+                _trust_job_vars
+                | combine(
+                    {
+                      'fulfillment_trust': _trust_job_vars.fulfillment_trust
+                      | combine({'config_map_name': 'unapproved-config-map'})
+                    },
+                    recursive=True
+                  )
+              }}
+      rescue:
+        - name: Record the rejected unapproved mutation
+          ansible.builtin.set_fact:
+            _unapproved_mutation_rejected: true
+          when: ansible_failed_task.name == 'Validate protected trust-sync launch input'
+
+    - name: Check the rejected ConfigMap was not created
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ConfigMap
+        namespace: "{{ _trust_namespace }}"
+        name: unapproved-config-map
+      register: _unapproved_config_map
+
+    - name: Assert the unapproved mutation was denied before a target change
+      ansible.builtin.assert:
+        that:
+          - _unapproved_mutation_rejected | default(false) | bool
+          - _unapproved_config_map.resources | length == 0
+
+    - name: Assert the AAP template requires a protected credential at launch
+      ansible.builtin.assert:
+        that:
+          - >-
+            lookup('ansible.builtin.file', playbook_dir ~ '/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/vars/controller.yml')
+            is search('sync-tenant-fulfillment-trust')
+          - >-
+            lookup('ansible.builtin.file', playbook_dir ~ '/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/vars/controller.yml')
+            is search('ask_credential_on_launch: true')

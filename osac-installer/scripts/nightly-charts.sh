@@ -132,9 +132,33 @@ stamp_component_image_refs() {
             stamp_umbrella_nested_field "${umbrella_values}" bmf image tag "${tag_value}"
             ;;
         fulfillment-service)
-            IMAGE_REF="ghcr.io/osac-project/fulfillment-service:${tag_value}" \
-                yq -i '.images.service = strenv(IMAGE_REF)' "fulfillment-service/charts/service/values.yaml"
-            stamp_umbrella_nested_field "${umbrella_values}" service images service "ghcr.io/osac-project/fulfillment-service:${tag_value}"
+            TAG_VALUE="${tag_value}" \
+                yq -i '.images.service.tag = strenv(TAG_VALUE)' "fulfillment-service/charts/service/values.yaml"
+            # Stamp tag in the umbrella values (4-level path: service.images.service.tag).
+            # Uses awk (same rationale as stamp_umbrella_nested_field) to preserve
+            # formatting -- yq -i reformats the file and breaks ct-lint's yamllint.
+            local _tmp; _tmp="$(mktemp)"
+            if ! awk -v val="${tag_value}" '
+                BEGIN { depth=0; stamped=0 }
+                /^service:/ { depth=1; print; next }
+                depth==1 && /^  images:/ { depth=2; print; next }
+                depth==2 && /^    service:/ { depth=3; print; next }
+                depth==3 && /^      tag:/ {
+                    match($0, /^[[:space:]]+/)
+                    pfx = substr($0, RSTART, RLENGTH)
+                    print pfx "tag: " val
+                    depth=0; stamped=1; next
+                }
+                /^[^ #\t]/ && depth > 0 { depth=0 }
+                { print }
+                END { exit(stamped ? 0 : 1) }
+            ' "${umbrella_values}" > "${_tmp}"; then
+                rm -f "${_tmp}"
+                echo "::error::service.images.service.tag not found in ${umbrella_values}" >&2
+                return 1
+            fi
+            chmod --reference="${umbrella_values}" "${_tmp}"
+            mv "${_tmp}" "${umbrella_values}"
             ;;
         osac-aap)
             IMAGE_REF="ghcr.io/osac-project/osac-aap:${tag_value}" \

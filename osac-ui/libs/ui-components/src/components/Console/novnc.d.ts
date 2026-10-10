@@ -1,4 +1,4 @@
-declare module '@novnc/novnc/lib/rfb.js' {
+declare module '@novnc/novnc' {
   export default class RFB {
     constructor(target: HTMLElement, urlOrChannel: string | WebSocket);
 

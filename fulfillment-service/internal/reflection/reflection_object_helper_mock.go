@@ -297,10 +297,10 @@ func (mr *MockObjectHelperMockRecorder) String() *gomock.Call {
 }
 
 // Update mocks base method.
-func (m *MockObjectHelper) Update(ctx context.Context, object proto.Message) (proto.Message, error) {
+func (m *MockObjectHelper) Update(ctx context.Context, object proto.Message) (UpdateResult, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Update", ctx, object)
-	ret0, _ := ret[0].(proto.Message)
+	ret0, _ := ret[0].(UpdateResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

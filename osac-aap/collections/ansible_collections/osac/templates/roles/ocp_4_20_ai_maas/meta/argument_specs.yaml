@@ -203,6 +203,18 @@ argument_specs:
           model_id:
             type: str
             required: true
+            description: >-
+              ExternalModel targetModel — the provider-side model identifier, i.e. the
+              name the upstream actually serves.
+          client_model_id:
+            type: str
+            required: false
+            description: >-
+              ExternalModel.spec.modelName — the client-facing model name sent in the
+              request body and advertised by GET /maas-api/v1/models. Defaults to
+              model_id (backward compat with RHOAI 3.5.0). On RHOAI 3.5.1+ (current
+              GA), the IPP matches the HTTPRoute on the ExternalModel CR name, so this
+              MUST be set to this entry's `name` — otherwise inference returns 404.
           token_limit:
             type: int
             required: true

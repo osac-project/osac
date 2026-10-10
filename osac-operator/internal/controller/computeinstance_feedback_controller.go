@@ -40,7 +40,7 @@ type ComputeInstanceFeedbackReconciler struct {
 }
 
 // NewComputeInstanceFeedbackReconciler creates a reconciler that sends to the fulfillment service updates about compute instances.
-func NewComputeInstanceFeedbackReconciler(hubClient clnt.Client, grpcConn *grpc.ClientConn, computeInstanceNamespace string) *ComputeInstanceFeedbackReconciler {
+func NewComputeInstanceFeedbackReconciler(hubClient clnt.Client, grpcConn grpc.ClientConnInterface, computeInstanceNamespace string) *ComputeInstanceFeedbackReconciler {
 	return &ComputeInstanceFeedbackReconciler{
 		bridge:                   newComputeInstanceFeedbackBridge(hubClient, privatev1.NewComputeInstancesClient(grpcConn)),
 		computeInstanceNamespace: computeInstanceNamespace,

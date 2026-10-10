@@ -43,7 +43,8 @@ import (
 // EventsServerBuilder contains the data and logic needed to create an EventsServer.
 type EventsServerBuilder struct {
 	logger           *slog.Logger
-	kafkaClient      sarama.Client
+	kafkaConfig      *sarama.Config
+	kafkaBrokers     []string
 	kafkaTopicPrefix string
 	tenancyLogic     auth.TenancyLogic
 }
@@ -53,25 +54,24 @@ var _ publicv1.EventsServer = (*EventsServer)(nil)
 type EventsServer struct {
 	publicv1.UnimplementedEventsServer
 
-	logger           *slog.Logger
-	kafkaClient      sarama.Client
-	kafkaTopicPrefix string
-	celEnv           *cel.Env
-	mapper           *GenericMapper[*privatev1.Event, *publicv1.Event]
-	tenancyLogic     auth.TenancyLogic
-	payloadOneof     protoreflect.OneofDescriptor
-
+	logger             *slog.Logger
+	kafkaClient        sarama.Client
+	kafkaTopicPrefix   string
+	celEnv             *cel.Env
+	mapper             *GenericMapper[*privatev1.Event, *publicv1.Event]
+	tenancyLogic       auth.TenancyLogic
+	payloadOneof       protoreflect.OneofDescriptor
 	subscriptionsMutex sync.Mutex
-	subscriptions      map[*eventsSubscription]struct{}
+	subscriptions      map[*eventsServerSubscription]struct{}
 }
 
-type eventsSubscription struct {
+type eventsServerSubscription struct {
 	server        *EventsServer
 	ctx           context.Context
 	cancel        context.CancelFunc
 	logger        *slog.Logger
 	consumer      sarama.Consumer
-	consumers     map[kafkaTopicPartition]sarama.PartitionConsumer
+	consumers     map[eventsServerTopicPartition]sarama.PartitionConsumer
 	messages      chan *sarama.ConsumerMessage
 	topics        []string
 	allowedTopics map[string]struct{}
@@ -79,6 +79,11 @@ type eventsSubscription struct {
 	filterSrc     string
 	filterPrg     cel.Program
 	stream        grpc.ServerStreamingServer[publicv1.EventsWatchResponse]
+}
+
+type eventsServerTopicPartition struct {
+	topic     string
+	partition int32
 }
 
 func NewEventsServer() *EventsServerBuilder {
@@ -92,9 +97,15 @@ func (b *EventsServerBuilder) SetLogger(value *slog.Logger) *EventsServerBuilder
 	return b
 }
 
-// SetKafkaClient sets the client used to consume events from Kafka. This is mandatory.
-func (b *EventsServerBuilder) SetKafkaClient(value sarama.Client) *EventsServerBuilder {
-	b.kafkaClient = value
+// SetKafkaConfig sets the configuration used to connect to Kafka. This is mandatory.
+func (b *EventsServerBuilder) SetKafkaConfig(value *sarama.Config) *EventsServerBuilder {
+	b.kafkaConfig = value
+	return b
+}
+
+// SetKafkaBrokers sets the Kafka bootstrap broker addresses. This is mandatory.
+func (b *EventsServerBuilder) SetKafkaBrokers(value ...string) *EventsServerBuilder {
+	b.kafkaBrokers = value
 	return b
 }
 
@@ -115,8 +126,12 @@ func (b *EventsServerBuilder) Build() (result *EventsServer, err error) {
 		err = errors.New("logger is mandatory")
 		return
 	}
-	if b.kafkaClient == nil {
-		err = errors.New("kafka client is mandatory")
+	if b.kafkaConfig == nil {
+		err = errors.New("kafka configuration is mandatory")
+		return
+	}
+	if len(b.kafkaBrokers) == 0 {
+		err = errors.New("kafka brokers are mandatory")
 		return
 	}
 	if b.kafkaTopicPrefix == "" {
@@ -145,15 +160,23 @@ func (b *EventsServerBuilder) Build() (result *EventsServer, err error) {
 		return
 	}
 
+	// Each server owns its client and keeps the original configuration unchanged.
+	config := *b.kafkaConfig
+	kafkaClient, err := sarama.NewClient(b.kafkaBrokers, &config)
+	if err != nil {
+		err = fmt.Errorf("failed to create Kafka client: %w", err)
+		return
+	}
+
 	result = &EventsServer{
 		logger:           b.logger,
-		kafkaClient:      b.kafkaClient,
+		kafkaClient:      kafkaClient,
 		kafkaTopicPrefix: b.kafkaTopicPrefix,
 		celEnv:           celEnv,
 		mapper:           mapper,
 		tenancyLogic:     b.tenancyLogic,
 		payloadOneof:     payloadOneof,
-		subscriptions:    map[*eventsSubscription]struct{}{},
+		subscriptions:    map[*eventsServerSubscription]struct{}{},
 	}
 	return
 }
@@ -217,6 +240,11 @@ func (s *EventsServer) Subscriptions() int {
 	return len(s.subscriptions)
 }
 
+// Close releases the Kafka client owned by the server. Stop serving watch requests before calling it.
+func (s *EventsServer) Close() error {
+	return s.kafkaClient.Close()
+}
+
 func (s *EventsServer) Watch(request *publicv1.EventsWatchRequest,
 	stream grpc.ServerStreamingServer[publicv1.EventsWatchResponse]) error {
 	subscription, err := s.newSubscription(request, stream)
@@ -230,7 +258,7 @@ func (s *EventsServer) Watch(request *publicv1.EventsWatchRequest,
 func (s *EventsServer) newSubscription(
 	request *publicv1.EventsWatchRequest,
 	stream grpc.ServerStreamingServer[publicv1.EventsWatchResponse],
-) (result *eventsSubscription, err error) {
+) (result *eventsServerSubscription, err error) {
 	ctx, cancel := context.WithCancel(stream.Context())
 	logger := s.logger.With(slog.String("subscription", uuid.New()))
 
@@ -283,13 +311,13 @@ func (s *EventsServer) newSubscription(
 	for _, topic := range topics {
 		allowedTopics[topic] = struct{}{}
 	}
-	result = &eventsSubscription{
+	result = &eventsServerSubscription{
 		server:        s,
 		ctx:           ctx,
 		cancel:        cancel,
 		logger:        logger,
 		consumer:      consumer,
-		consumers:     map[kafkaTopicPartition]sarama.PartitionConsumer{},
+		consumers:     map[eventsServerTopicPartition]sarama.PartitionConsumer{},
 		messages:      make(chan *sarama.ConsumerMessage),
 		topics:        topics,
 		allowedTopics: allowedTopics,
@@ -302,7 +330,7 @@ func (s *EventsServer) newSubscription(
 	return
 }
 
-func (s *eventsSubscription) run() error {
+func (s *eventsServerSubscription) run() error {
 	// Existing partitions start at the newest offset, because events written before the Watch request must not be
 	// replayed. A topic or partition discovered later starts at the oldest offset so its first event isn't missed.
 	err := s.refreshPartitions(sarama.OffsetNewest)
@@ -337,19 +365,19 @@ func (s *eventsSubscription) run() error {
 	}
 }
 
-func (s *EventsServer) addSubscription(subscription *eventsSubscription) {
+func (s *EventsServer) addSubscription(subscription *eventsServerSubscription) {
 	s.subscriptionsMutex.Lock()
 	s.subscriptions[subscription] = struct{}{}
 	s.subscriptionsMutex.Unlock()
 }
 
-func (s *EventsServer) removeSubscription(subscription *eventsSubscription) {
+func (s *EventsServer) removeSubscription(subscription *eventsServerSubscription) {
 	s.subscriptionsMutex.Lock()
 	delete(s.subscriptions, subscription)
 	s.subscriptionsMutex.Unlock()
 }
 
-func (s *eventsSubscription) close() {
+func (s *eventsServerSubscription) close() {
 	s.cancel()
 	for _, consumer := range s.consumers {
 		err := consumer.Close()
@@ -368,24 +396,27 @@ func (s *eventsSubscription) close() {
 	s.logger.DebugContext(s.ctx, "Canceled subscription")
 }
 
-func (s *eventsSubscription) refreshPartitions(offset int64) error {
+func (s *eventsServerSubscription) refreshPartitions(offset int64) error {
 	for _, topic := range s.topics {
 		err := s.server.kafkaClient.RefreshMetadata(topic)
-		if isKafkaTopicUnavailable(err) {
+		if s.isKafkaTopicUnavailable(err) {
 			continue
 		}
 		if err != nil {
 			return fmt.Errorf("failed to refresh Kafka topic '%s': %w", topic, err)
 		}
 		partitions, err := s.server.kafkaClient.Partitions(topic)
-		if isKafkaTopicUnavailable(err) {
+		if s.isKafkaTopicUnavailable(err) {
 			continue
 		}
 		if err != nil {
 			return fmt.Errorf("failed to list partitions of Kafka topic '%s': %w", topic, err)
 		}
 		for _, partition := range partitions {
-			key := kafkaTopicPartition{topic: topic, partition: partition}
+			key := eventsServerTopicPartition{
+				topic:     topic,
+				partition: partition,
+			}
 			if s.consumers[key] != nil {
 				continue
 			}
@@ -407,11 +438,11 @@ func (s *eventsSubscription) refreshPartitions(offset int64) error {
 	return nil
 }
 
-func isKafkaTopicUnavailable(err error) bool {
+func (s *eventsServerSubscription) isKafkaTopicUnavailable(err error) bool {
 	return errors.Is(err, sarama.ErrUnknownTopicOrPartition) || errors.Is(err, sarama.ErrLeaderNotAvailable)
 }
 
-func (s *eventsSubscription) forwardMessages(consumer sarama.PartitionConsumer) {
+func (s *eventsServerSubscription) forwardMessages(consumer sarama.PartitionConsumer) {
 	for {
 		select {
 		case message, ok := <-consumer.Messages():
@@ -438,7 +469,7 @@ func (s *eventsSubscription) forwardMessages(consumer sarama.PartitionConsumer) 
 	}
 }
 
-func (s *eventsSubscription) processMessage(message *sarama.ConsumerMessage) error {
+func (s *eventsServerSubscription) processMessage(message *sarama.ConsumerMessage) error {
 	if message == nil {
 		return nil
 	}

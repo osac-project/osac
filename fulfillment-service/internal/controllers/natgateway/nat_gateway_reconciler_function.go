@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand/v2"
 	"slices"
 
 	"google.golang.org/grpc"
@@ -48,11 +47,11 @@ type FunctionBuilder struct {
 }
 
 type function struct {
-	logger            *slog.Logger
-	hubCache          controllers.HubCache
-	natGatewaysClient privatev1.NATGatewaysClient
-	hubsClient        privatev1.HubsClient
-	maskCalculator    *masks.Calculator
+	logger              *slog.Logger
+	hubCache            controllers.HubCache
+	natGatewaysClient   privatev1.NATGatewaysClient
+	networkingHubReader controllers.NetworkingHubReader
+	maskCalculator      *masks.Calculator
 }
 
 type task struct {
@@ -101,12 +100,20 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 		return
 	}
 
+	networkingHubReader, err := controllers.NewNetworkingHubReader().
+		SetNetworkClassesClient(privatev1.NewNetworkClassesClient(b.connection)).
+		SetHubCache(b.hubCache).
+		Build()
+	if err != nil {
+		return nil, err
+	}
+
 	object := &function{
-		logger:            b.logger,
-		natGatewaysClient: privatev1.NewNATGatewaysClient(b.connection),
-		hubsClient:        privatev1.NewHubsClient(b.connection),
-		hubCache:          b.hubCache,
-		maskCalculator:    masks.NewCalculator().Build(),
+		logger:              b.logger,
+		natGatewaysClient:   privatev1.NewNATGatewaysClient(b.connection),
+		networkingHubReader: networkingHubReader,
+		hubCache:            b.hubCache,
+		maskCalculator:      masks.NewCalculator().Build(),
 	}
 	result = object.run
 	return
@@ -124,12 +131,22 @@ func (r *function) run(ctx context.Context, natGateway *privatev1.NATGateway) er
 	} else {
 		err = t.update(ctx)
 	}
+	var hubResolutionRetryErr error
+	if err != nil {
+		handled, retry := controllers.HandleResourceNetworkingHubResolutionError(err, t.setPending, t.setFailed)
+		if handled {
+			if retry {
+				hubResolutionRetryErr = err
+			}
+			err = nil
+		}
+	}
 	if err != nil {
 		return err
 	}
 	updateMask := r.maskCalculator.Calculate(oldGateway, natGateway)
 	if len(updateMask.GetPaths()) == 0 {
-		return nil
+		return hubResolutionRetryErr
 	}
 
 	_, err = r.natGatewaysClient.Update(ctx, privatev1.NATGatewaysUpdateRequest_builder{
@@ -137,7 +154,10 @@ func (r *function) run(ctx context.Context, natGateway *privatev1.NATGateway) er
 		UpdateMask: updateMask,
 	}.Build())
 
-	return err
+	if err != nil {
+		return err
+	}
+	return hubResolutionRetryErr
 }
 
 func (t *task) update(ctx context.Context) error {
@@ -275,28 +295,18 @@ func (t *task) delete(ctx context.Context) (err error) {
 }
 
 func (t *task) selectHub(ctx context.Context) error {
-	t.hubId = t.natGateway.GetStatus().GetHub()
-	if t.hubId == "" {
-		response, err := t.r.hubsClient.List(ctx, privatev1.HubsListRequest_builder{}.Build())
-		if err != nil {
-			return err
-		}
-		if len(response.Items) == 0 {
-			return errors.New("there are no hubs")
-		}
-		t.hubId = response.Items[rand.IntN(len(response.Items))].GetId()
-	}
-	t.r.logger.DebugContext(
-		ctx,
-		"Selected hub",
-		slog.String("id", t.hubId),
-	)
-	hubEntry, err := t.r.hubCache.Get(ctx, t.hubId)
+	resolution, err := controllers.ResolveResourceNetworkingHub(ctx, t.r.networkingHubReader, t.natGateway.GetStatus().GetHub())
 	if err != nil {
 		return err
 	}
-	t.hubNamespace = hubEntry.Namespace
-	t.hubClient = hubEntry.Client
+	t.hubId = resolution.HubID
+	t.r.logger.DebugContext(
+		ctx,
+		"Resolved canonical networking hub",
+		slog.String("id", t.hubId),
+	)
+	t.hubNamespace = resolution.Namespace
+	t.hubClient = resolution.Client
 	return nil
 }
 
@@ -362,6 +372,14 @@ func (t *task) removeFinalizer() {
 		})
 		t.natGateway.GetMetadata().SetFinalizers(list)
 	}
+}
+
+func (t *task) setPending(err error) {
+	if !t.natGateway.HasStatus() {
+		t.natGateway.SetStatus(&privatev1.NATGatewayStatus{})
+	}
+	t.natGateway.GetStatus().SetState(privatev1.NATGatewayState_NAT_GATEWAY_STATE_PENDING)
+	t.natGateway.GetStatus().SetMessage(err.Error())
 }
 
 func (t *task) setFailed(err error) {

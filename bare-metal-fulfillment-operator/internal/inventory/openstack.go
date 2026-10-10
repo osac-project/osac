@@ -45,6 +45,10 @@ const (
 	// Label keys within osac_labels map
 	BareMetalInstanceIDLabel = "bareMetalInstanceId"
 	ManagedByLabel           = "managedBy"
+
+	// OpenStackInterfaceMACsKey stores an administrator-supplied map of OSAC
+	// logical port names to physical MAC addresses in an Ironic node's extra.
+	OpenStackInterfaceMACsKey = OSACPrefix + "interface_macs"
 )
 
 func init() {
@@ -436,4 +440,26 @@ func nodeMatchesLabels(node *nodes.Node, matchExpressions map[string]string) boo
 		}
 	}
 	return true
+}
+
+// GetHostLogicalPortMACs reads the logical port mapping used for DHCP lease matching.
+func (c *OpenStackClient) GetHostLogicalPortMACs(ctx context.Context, inventoryHostID string) (map[string]string, error) {
+	node, err := nodes.Get(ctx, c.client, inventoryHostID).Extract()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get Ironic node %s: %w", inventoryHostID, err)
+	}
+
+	value, ok := node.Extra[OpenStackInterfaceMACsKey]
+	if !ok || value == nil {
+		return map[string]string{}, nil
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("host %s: failed to marshal %s extra: %w", inventoryHostID, OpenStackInterfaceMACsKey, err)
+	}
+	macs := map[string]string{}
+	if err := json.Unmarshal(raw, &macs); err != nil {
+		return nil, fmt.Errorf("host %s: failed to parse %s extra: %w", inventoryHostID, OpenStackInterfaceMACsKey, err)
+	}
+	return macs, nil
 }

@@ -182,7 +182,7 @@ func (s *PrivateSecurityGroupsServer) Delete(ctx context.Context,
 	if err != nil {
 		return
 	}
-	if err = validateNotDefault(getResponse.GetObject().GetMetadata().GetLabels(), "security group"); err != nil {
+	if err = validateNotDefault(ctx, getResponse.GetObject().GetMetadata().GetLabels(), "security group"); err != nil {
 		return
 	}
 	err = s.generic.Delete(ctx, request, &response)
@@ -201,6 +201,17 @@ func (s *PrivateSecurityGroupsServer) validateSecurityGroup(ctx context.Context,
 
 	if newSecurityGroup == nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "security group is mandatory")
+	}
+
+	if existingSecurityGroup != nil {
+		if err := validateDefaultLabelUpdate(
+			existingSecurityGroup.GetMetadata().GetLabels(),
+			newSecurityGroup.GetMetadata().GetLabels(),
+			nil,
+			"security group",
+		); err != nil {
+			return err
+		}
 	}
 
 	spec := newSecurityGroup.GetSpec()

@@ -16,12 +16,12 @@ package it
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -209,6 +209,7 @@ func createCatalogItemNetworkClassFixture(ctx context.Context) string {
 		_, err := classes.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: classID}.Build())
 		return err
 	}, nil)
+	waitForNetworkClassReady(ctx, classes, classID)
 	return classID
 }
 
@@ -446,27 +447,6 @@ func catalogItemParameterPolicies() map[string]*publicv1.TemplateParameterPolicy
 	}
 }
 
-func createCatalogItemHostTypeFixture(ctx context.Context) string {
-	GinkgoHelper()
-	client := privatev1.NewHostTypesClient(tool.InternalView().AdminConn())
-	response, err := client.Create(ctx, privatev1.HostTypesCreateRequest_builder{
-		Object: privatev1.HostType_builder{
-			Metadata: catalogItemFixtureMetadata("shared", ""),
-			Id:       fmt.Sprintf("catalog_item_host_%s", uuid.New()[24:]),
-			Interfaces: []*privatev1.NetworkInterface{
-				privatev1.NetworkInterface_builder{Name: "data-0", Role: "fabric"}.Build(),
-			},
-		}.Build(),
-	}.Build())
-	Expect(err).NotTo(HaveOccurred())
-	id := response.GetObject().GetId()
-	deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
-		_, err := client.Delete(ctx, privatev1.HostTypesDeleteRequest_builder{Id: id}.Build())
-		return err
-	}, nil)
-	return id
-}
-
 // Keycloak break-glass administration does not imply OSAC tenant-admin permissions.
 // Grant that realm role before logging in so the public API exercises genuine tenant scope.
 func createCatalogItemTenantAdminFixture(ctx context.Context) (string, *grpc.ClientConn) {
@@ -567,16 +547,9 @@ func createCatalogItemComputeInstanceTemplateFixture(ctx context.Context, defaul
 	return id
 }
 
-func createCatalogItemClusterTemplateFixture(ctx context.Context, host string, defaults *privatev1.ClusterTemplateSpecDefaults, parameters []*privatev1.ClusterTemplateParameterDefinition) string {
+func createCatalogItemClusterTemplateFixture(ctx context.Context, defaults *privatev1.ClusterTemplateSpecDefaults, parameters []*privatev1.ClusterTemplateParameterDefinition) string {
 	GinkgoHelper()
 	client := privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
-	nodes := map[string]*privatev1.ClusterTemplateNodeSet{}
-	if host != "" {
-		nodes["workers"] = privatev1.ClusterTemplateNodeSet_builder{
-			HostType: privatev1.HostTypeReference_builder{Id: host}.Build(),
-			Size:     2,
-		}.Build()
-	}
 	response, err := client.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 		Object: privatev1.ClusterTemplate_builder{
 			Id:           "catalog_item_cluster_" + uuid.New()[24:],
@@ -584,7 +557,6 @@ func createCatalogItemClusterTemplateFixture(ctx context.Context, host string, d
 			Title:        "Catalog item integration Template",
 			SpecDefaults: defaults,
 			Parameters:   parameters,
-			NodeSets:     nodes,
 		}.Build(),
 	}.Build())
 	Expect(err).NotTo(HaveOccurred())
@@ -596,17 +568,24 @@ func createCatalogItemClusterTemplateFixture(ctx context.Context, host string, d
 	return id
 }
 
-func createCatalogItemBareMetalInstanceTemplateFixture(ctx context.Context, defaults *privatev1.BareMetalInstanceTemplateSpecDefaults, parameters []*privatev1.BareMetalInstanceTemplateParameterDefinition) string {
+func createCatalogItemBareMetalInstanceTemplateFixture(ctx context.Context, defaults *privatev1.BareMetalInstanceTemplateSpecDefaults, parameters []*privatev1.BareMetalInstanceTemplateParameterDefinition, instanceType ...string) string {
 	GinkgoHelper()
 	client := privatev1.NewBareMetalInstanceTemplatesClient(tool.InternalView().AdminConn())
+	object := privatev1.BareMetalInstanceTemplate_builder{
+		Id:           "catalog_item_bare_metal_instance_" + uuid.New()[24:],
+		Metadata:     catalogItemFixtureMetadata("shared", ""),
+		Title:        "Catalog item integration Template",
+		SpecDefaults: defaults,
+		Parameters:   parameters,
+	}
+	if len(instanceType) > 0 && instanceType[0] != "" {
+		object.InstanceType = privatev1.BareMetalInstanceTypeReference_builder{
+			Id:     instanceType[0],
+			Shared: true,
+		}.Build()
+	}
 	response, err := client.Create(ctx, privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
-		Object: privatev1.BareMetalInstanceTemplate_builder{
-			Id:           "catalog_item_bare_metal_instance_" + uuid.New()[24:],
-			Metadata:     catalogItemFixtureMetadata("shared", ""),
-			Title:        "Catalog item integration Template",
-			SpecDefaults: defaults,
-			Parameters:   parameters,
-		}.Build(),
+		Object: object.Build(),
 	}.Build())
 	Expect(err).NotTo(HaveOccurred())
 	id := response.GetObject().GetId()
@@ -617,12 +596,12 @@ func createCatalogItemBareMetalInstanceTemplateFixture(ctx context.Context, defa
 	return id
 }
 
-func createCatalogItemBareMetalInstanceTypeFixture(ctx context.Context, tenant string) string {
+func createCatalogItemBareMetalInstanceTypeFixture(ctx context.Context, _ string) string {
 	GinkgoHelper()
 	client := privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
 	response, err := client.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
 		Object: privatev1.BareMetalInstanceType_builder{
-			Metadata: catalogItemFixtureMetadata(tenant, ""),
+			Metadata: catalogItemFixtureMetadata(auth.SharedTenant, ""),
 			Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 				Hardware: privatev1.BareMetalHardwareSpec_builder{
 					Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 4, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
@@ -652,11 +631,15 @@ func createCatalogItemBareMetalInstanceTypeFixture(ctx context.Context, tenant s
 
 func createCatalogItemClusterVersionFixture(ctx context.Context, version string) string {
 	GinkgoHelper()
+	image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
 	client := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())
 	response, err := client.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
 		Object: privatev1.ClusterVersion_builder{
 			Metadata: catalogItemFixtureMetadata("shared", ""),
-			Spec:     privatev1.ClusterVersionSpec_builder{Version: version, Image: "quay.io/openshift-release-dev/ocp-release:" + version + "-multi"}.Build(),
+			Spec: privatev1.ClusterVersionSpec_builder{
+				Version: version, Image: "quay.io/openshift-release-dev/ocp-release:" + version + "-multi",
+				DiskImage: privatev1.DiskImageReference_builder{Id: image.GetId()}.Build(),
+			}.Build(),
 		}.Build(),
 	}.Build())
 	Expect(err).NotTo(HaveOccurred())
@@ -720,24 +703,30 @@ func createComputeInstanceFixture(ctx context.Context, conn *grpc.ClientConn, sp
 		return nil, err
 	}
 	result := response.GetObject()
+	deferComputeInstanceDeletion(result.GetId(), conn)
+	return result, nil
+}
+
+func deferComputeInstanceDeletion(id string, conn *grpc.ClientConn) {
+	GinkgoHelper()
+	client := publicv1.NewComputeInstancesClient(conn)
 	deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
-		_, err := client.Delete(ctx, publicv1.ComputeInstancesDeleteRequest_builder{Id: result.GetId()}.Build())
+		_, err := client.Delete(ctx, publicv1.ComputeInstancesDeleteRequest_builder{Id: id}.Build())
 		return err
 	}, func(ctx context.Context) (bool, error) {
-		_, err := client.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: result.GetId()}.Build())
+		_, err := client.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: id}.Build())
 		if status.Code(err) == codes.NotFound {
 			return true, nil
 		}
 		if err != nil {
 			return false, err
 		}
-		_, err = privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn()).Signal(ctx, privatev1.ComputeInstancesSignalRequest_builder{Id: result.GetId()}.Build())
+		_, err = privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn()).Signal(ctx, privatev1.ComputeInstancesSignalRequest_builder{Id: id}.Build())
 		if status.Code(err) == codes.NotFound {
 			return true, nil
 		}
 		return false, err
 	})
-	return result, nil
 }
 
 func createClusterFixture(ctx context.Context, conn *grpc.ClientConn, spec *publicv1.ClusterSpec) (*publicv1.Cluster, error) {
@@ -753,24 +742,30 @@ func createClusterFixture(ctx context.Context, conn *grpc.ClientConn, spec *publ
 		return nil, err
 	}
 	result := response.GetObject()
+	deferClusterDeletion(result.GetId(), conn)
+	return result, nil
+}
+
+func deferClusterDeletion(id string, conn *grpc.ClientConn) {
+	GinkgoHelper()
+	client := publicv1.NewClustersClient(conn)
 	deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
-		_, err := client.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: result.GetId()}.Build())
+		_, err := client.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: id}.Build())
 		return err
 	}, func(ctx context.Context) (bool, error) {
-		_, err := client.Get(ctx, publicv1.ClustersGetRequest_builder{Id: result.GetId()}.Build())
+		_, err := client.Get(ctx, publicv1.ClustersGetRequest_builder{Id: id}.Build())
 		if status.Code(err) == codes.NotFound {
 			return true, nil
 		}
 		if err != nil {
 			return false, err
 		}
-		_, err = privatev1.NewClustersClient(tool.InternalView().AdminConn()).Signal(ctx, privatev1.ClustersSignalRequest_builder{Id: result.GetId()}.Build())
+		_, err = privatev1.NewClustersClient(tool.InternalView().AdminConn()).Signal(ctx, privatev1.ClustersSignalRequest_builder{Id: id}.Build())
 		if status.Code(err) == codes.NotFound {
 			return true, nil
 		}
 		return false, err
 	})
-	return result, nil
 }
 
 func createBareMetalInstanceFixture(ctx context.Context, conn *grpc.ClientConn, spec *publicv1.BareMetalInstanceSpec) (*publicv1.BareMetalInstance, error) {

@@ -57,8 +57,11 @@ var ExternalIPAttachmentUuid = fmt.Sprintf("%s/%s", group, "externalipattachment
 // NATGatewayUuid is the label where the fulfillment API will write the identifier of the NAT gateway.
 var NATGatewayUuid = fmt.Sprintf("%s/%s", group, "natgateway-uuid")
 
-// TenantUuid is the label where the fulfillment API will write the identifier of the tenant.
+// TenantUuid is the legacy label where the fulfillment API writes the tenant name.
 var TenantUuid = fmt.Sprintf("%s/%s", group, "tenant-uuid")
+
+// TenantID is the label where the fulfillment API writes the immutable tenant identifier.
+var TenantID = fmt.Sprintf("%s/%s", group, "tenant-id")
 
 // VolumeUuid is the label where the fulfillment API will write the identifier of the volume.
 var VolumeUuid = fmt.Sprintf("%s/%s", group, "volume-uuid")

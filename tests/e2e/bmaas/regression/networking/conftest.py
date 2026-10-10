@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
 import uuid
 from pathlib import Path
 
 import pytest
 
 from tests.e2e.bmaas.regression.networking import bmi_ssh
+from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.runner import env
 
 
@@ -55,6 +57,45 @@ def catalog_item_name() -> str:
 
 
 @pytest.fixture(scope="session")
+def bmi_instance_type(private_grpc: GRPCClient) -> str:
+    """Send spec.instance_type only when that BareMetalInstanceType exists.
+
+    Labs often export OSAC_BMI_INSTANCE_TYPE=default even when no types are cataloged.
+    """
+    requested = (
+        os.environ.get("OSAC_BMI_INSTANCE_TYPE", "").strip() or os.environ.get("OSAC_BM_HOST_TYPE", "").strip()
+    )
+    if not requested:
+        return ""
+    items = private_grpc.call(service="osac.private.v1.BareMetalInstanceTypes/List").get("items") or []
+    names = {str((item.get("metadata") or {}).get("name") or "") for item in items}
+    return requested if requested in names else ""
+
+
+@pytest.fixture(scope="session")
+def bmi_user_data() -> str:
+    path = os.environ.get("OSAC_BMI_USER_DATA_FILE", "").strip()
+    if path:
+        return Path(path).read_text()
+    inline = os.environ.get("OSAC_BMI_USER_DATA", "").strip()
+    if inline:
+        return inline
+    return "#cloud-config\nmanage_etc_hosts: false\n"
+
+
+@pytest.fixture(scope="session")
 def net_ssh_public_key() -> str:
-    key_path = Path(env("OSAC_BMI_SSH_PUBLIC_KEY", "/root/.ssh/id_rsa.pub"))
-    return key_path.read_text().strip()
+    """Pubkey injected into the BMI must match OSAC_BMI_SSH_IDENTITY used by guest_ssh.
+
+    OSAC_BMI_SSH_PUBLIC_KEY may be a file path or the key material (ssh-ed25519 …).
+    """
+    explicit = os.environ.get("OSAC_BMI_SSH_PUBLIC_KEY", "").strip()
+    if explicit:
+        if explicit.startswith(("ssh-", "ecdsa-", "sk-")):
+            return explicit
+        return Path(explicit).read_text().strip()
+    identity = os.environ.get("OSAC_BMI_SSH_IDENTITY", "/root/.ssh/id_rsa")
+    pub = Path(identity + ".pub")
+    if pub.is_file():
+        return pub.read_text().strip()
+    return Path(env("OSAC_BMI_SSH_PUBLIC_KEY", "/root/.ssh/id_rsa.pub")).read_text().strip()

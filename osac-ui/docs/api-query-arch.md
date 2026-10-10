@@ -165,20 +165,17 @@ export type ApiQueryClient = {
 
 ## Adding a new resource
 
-### 1. Generate types
+### 1. Update generated types deliberately
 
-Define the protobuf service and messages in the proto schema, then run:
+The UI's generated types are tied to its selected API baseline. Regenerate
+them only when the UI deliberately advances that baseline, not merely because
+the monorepo's proto sources changed:
 
 ```bash
 pnpm gen-types
 ```
 
 This generates the service descriptor and TypeScript types in `@osac/types`.
-To generate against a specific `osac` commit instead of `main`, pass its commit SHA:
-
-```bash
-pnpm gen-types <commit-sha>
-```
 
 ### 2. Register the route
 

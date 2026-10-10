@@ -170,6 +170,14 @@ enum TenantConditionType {
   // - True: Vault namespace is provisioned and ready
   // - False: Vault namespace provisioning is pending, has not yet succeeded, or is not applicable
   TENANT_CONDITION_TYPE_VAULT_READY = 2;
+
+  // Indicates whether the tenant's compute infrastructure is ready for workloads.
+  //
+  // Status meanings:
+  // - True: Infrastructure exists and is ready on every hub where it is provisioned
+  // - False: Infrastructure is not provisioned, or at least one hub reports it is not ready
+  // - Unspecified: Readiness cannot be determined and no hub is known to be not ready
+  TENANT_CONDITION_TYPE_COMPUTE_INFRASTRUCTURE_READY = 3;
 }
 
 // Lifecycle states for Tenant resources.
@@ -191,13 +199,15 @@ enum TenantState {
   // Users cannot be added to tenants in PENDING state.
   TENANT_STATE_PENDING = 1;
 
-  // The tenant has been successfully synchronized to the identity provider and is fully operational.
+  // The tenant has been successfully synchronized to the identity provider.
   //
   // In this state:
   // - IDP tenant exists and is configured
   // - Break-glass account is created and has proper permissions
   // - Users can be added to the tenant
-  // - The tenant is ready for use
+  //
+  // This state does not imply that compute infrastructure is ready. Check the
+  // COMPUTE_INFRASTRUCTURE_READY condition before expecting workloads to be provisioned.
   TENANT_STATE_SYNCED = 2;
 
   // The tenant synchronization to the IDP has failed and the tenant is unusable.

@@ -307,7 +307,7 @@ func (s *PrivateExternalIPsServer) Delete(ctx context.Context,
 
 	existingExternalIP := getResponse.GetObject()
 
-	if err = validateNotDefault(existingExternalIP.GetMetadata().GetLabels(), "external IP"); err != nil {
+	if err = validateNotDefault(ctx, existingExternalIP.GetMetadata().GetLabels(), "external IP"); err != nil {
 		return
 	}
 	if existingExternalIP.GetMetadata().GetDeletionTimestamp() != nil {

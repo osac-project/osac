@@ -11,6 +11,15 @@ map load without extra configuration. Start there — this guide only covers
 Codex-specific setup. Graphify is optional; when `graphify-out/graph.json`
 exists, follow the root `AGENTS.md` guidance for code-structure discovery.
 
+When launched at the repository root, Codex does not preload every nested
+component instruction file or the documents linked from it. Follow the root
+instruction to read all applicable component `AGENTS.md` files and their
+required references before changing files. Shared project knowledge lives in
+[`docs/agent-context/`](agent-context/README.md), available in a fresh clone
+without bootstrap or a skill invocation. The bootstrap-managed
+`.design/context/*.md` paths forward workflows to these canonical documents;
+follow those references instead of treating the forwarding file as the full context.
+
 ## Prerequisites
 
 - A standard OSAC checkout with `tools/bootstrap.sh` already run (see the root

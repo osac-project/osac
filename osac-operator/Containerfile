@@ -1,6 +1,6 @@
 # Build context: mono-repo root (not osac-operator/ alone).
 # Invoke with: podman build -f osac-operator/Containerfile .
-FROM registry.access.redhat.com/ubi10/go-toolset:1.26.7-1788946935 AS builder
+FROM registry.access.redhat.com/ubi10/go-toolset:1.26.7-1791275880 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
@@ -19,18 +19,22 @@ COPY --chown=1001:1001 osac-metering/schema/go.mod osac-metering/schema/go.sum o
 COPY --chown=1001:1001 osac-metering/metering-service/go.mod osac-metering/metering-service/go.sum osac-metering/metering-service/
 COPY --chown=1001:1001 osac-metering/adapters/go.mod osac-metering/adapters/go.sum osac-metering/adapters/
 COPY --chown=1001:1001 osac-ui/proxy/go.mod osac-ui/proxy/go.sum osac-ui/proxy/
-RUN cd osac-operator && go mod download
+RUN cd osac-operator && GODEBUG=http2client=0 go mod download
 
 COPY --chown=1001:1001 proto/ proto/
 COPY --chown=1001:1001 osac-operator/ osac-operator/
 COPY --chown=1001:1001 bare-metal-fulfillment-operator/ bare-metal-fulfillment-operator/
 
 WORKDIR /opt/app-root/src/osac-operator
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o manager cmd/main.go
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o manager ./cmd
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o console-proxy cmd/console-proxy/main.go
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o trust-admission cmd/trust-admission/main.go
 
 FROM registry.access.redhat.com/ubi10-minimal:10.2-1790075626
+LABEL name="cloud-extensions/osac-operator-rhel10"
+LABEL cpe="cpe:/a:redhat:cloud_extensions:0.1::el10"
 COPY --from=builder /opt/app-root/src/osac-operator/manager /usr/local/bin/
 COPY --from=builder /opt/app-root/src/osac-operator/console-proxy /usr/local/bin/
+COPY --from=builder /opt/app-root/src/osac-operator/trust-admission /usr/local/bin/
 USER 1001
 ENTRYPOINT ["/usr/local/bin/manager"]

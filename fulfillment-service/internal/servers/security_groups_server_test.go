@@ -411,7 +411,14 @@ var _ = Describe("SecurityGroups server", func() {
 			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
 			Expect(err.Error()).To(ContainSubstring("default"))
 			Expect(err.Error()).To(ContainSubstring("system-managed"))
+
+			getResponse, err := server.Get(ctx, publicv1.SecurityGroupsGetRequest_builder{
+				Id: createResponse.GetObject().GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResponse.GetObject().GetMetadata().GetDeletionTimestamp()).To(BeNil())
 		})
+
 	})
 
 	Describe("Tenant isolation", func() {
@@ -425,6 +432,40 @@ var _ = Describe("SecurityGroups server", func() {
 				SetTenancyLogic(tenancy).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("blocks deletion after an update omits the default label", func() {
+			createResp, err := privateServer.Create(ctx, privatev1.SecurityGroupsCreateRequest_builder{
+				Object: privatev1.SecurityGroup_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   "default-security-group-update",
+						Tenant: testTenant,
+						Labels: map[string]string{"osac.openshift.io/default": "true"},
+					}.Build(),
+					Spec: privatev1.SecurityGroupSpec_builder{
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			object := createResp.GetObject()
+			object.GetMetadata().SetLabels(map[string]string{"env": "test"})
+			_, err = privateServer.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{Object: object}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+
+			_, err = privateServer.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{Id: object.GetId()}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok = grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+
+			getResponse, err := privateServer.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: object.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResponse.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("osac.openshift.io/default", "true"))
 		})
 
 		It("rejects security group with different tenant than parent VirtualNetwork", func() {

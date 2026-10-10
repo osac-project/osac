@@ -74,9 +74,11 @@ func NewClient(baseURL, token string, insecureSkipVerify bool) *Client {
 
 // LaunchJobTemplateRequest contains parameters for launching a job template.
 type LaunchJobTemplateRequest struct {
-	TemplateID   int
-	TemplateName string
-	ExtraVars    map[string]any
+	TemplateID    int
+	TemplateName  string
+	ExtraVars     map[string]any
+	CredentialIDs []int
+	Sensitive     bool
 }
 
 // LaunchJobTemplateResponse contains the response from launching a job template.
@@ -133,8 +135,14 @@ func (c *Client) LaunchJobTemplate(ctx context.Context, req LaunchJobTemplateReq
 	payload := map[string]any{
 		"extra_vars": req.ExtraVars,
 	}
+	if len(req.CredentialIDs) > 0 {
+		payload["credentials"] = req.CredentialIDs
+	}
 
-	resp, err := c.doTemplateRequest(ctx, http.MethodPost, url, payload, req.TemplateName)
+	// Credential-bearing launches may receive an AAP error response that echoes
+	// request data. Treat them as sensitive even when callers omit the flag.
+	sensitive := req.Sensitive || len(req.CredentialIDs) > 0
+	resp, err := c.doTemplateRequest(ctx, http.MethodPost, url, payload, req.TemplateName, sensitive)
 	if err != nil {
 		return nil, fmt.Errorf("failed to launch job template: %w", err)
 	}
@@ -159,7 +167,7 @@ func (c *Client) LaunchWorkflowTemplate(ctx context.Context, req LaunchWorkflowT
 		"extra_vars": req.ExtraVars,
 	}
 
-	resp, err := c.doTemplateRequest(ctx, http.MethodPost, url, payload, req.TemplateName)
+	resp, err := c.doTemplateRequest(ctx, http.MethodPost, url, payload, req.TemplateName, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to launch workflow template: %w", err)
 	}
@@ -309,8 +317,8 @@ func (c *Client) ClearTemplateCache() {
 
 // doTemplateRequest performs an HTTP request for template operations with cache invalidation on 404.
 // If the template is not found (404), it invalidates the cache to ensure fresh lookup on retry.
-func (c *Client) doTemplateRequest(ctx context.Context, method, url string, payload any, templateName string) ([]byte, error) {
-	resp, err := c.doRequest(ctx, method, url, payload)
+func (c *Client) doTemplateRequest(ctx context.Context, method, url string, payload any, templateName string, sensitive bool) ([]byte, error) {
+	resp, err := c.doRequestWithRedaction(ctx, method, url, payload, sensitive)
 	if err != nil {
 		// If template not found (404), invalidate cache to ensure fresh lookup on retry
 		var notFoundErr *NotFoundError
@@ -324,6 +332,10 @@ func (c *Client) doTemplateRequest(ctx context.Context, method, url string, payl
 
 // doRequest performs an HTTP request with authentication and returns the response body.
 func (c *Client) doRequest(ctx context.Context, method, url string, payload any) ([]byte, error) {
+	return c.doRequestWithRedaction(ctx, method, url, payload, false)
+}
+
+func (c *Client) doRequestWithRedaction(ctx context.Context, method, url string, payload any, sensitive bool) ([]byte, error) {
 	log := ctrllog.FromContext(ctx)
 
 	log.V(1).Info("AAP request starting", "method", method, "url", url)
@@ -363,6 +375,16 @@ func (c *Client) doRequest(ctx context.Context, method, url string, payload any)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if sensitive {
+			log.Info("AAP request returned non-success status", "method", method, "url", url, "status", resp.StatusCode)
+			if resp.StatusCode == http.StatusNotFound {
+				return nil, &NotFoundError{Resource: url, URL: url}
+			}
+			if resp.StatusCode == http.StatusMethodNotAllowed {
+				return nil, &MethodNotAllowedError{Operation: fmt.Sprintf("%s %s", method, url), URL: url}
+			}
+			return nil, fmt.Errorf("received non-success status code %d", resp.StatusCode)
+		}
 		bodyPreview := string(respBody)
 		if len(bodyPreview) > 500 {
 			bodyPreview = bodyPreview[:500] + "..."

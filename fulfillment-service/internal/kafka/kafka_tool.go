@@ -41,11 +41,10 @@ var validProperties = map[string]struct{}{
 	passwordProperty: {},
 }
 
-// Tool centralizes Kafka connection configuration and client construction that are needed during the startup of a
-// process that uses Kafka.
+// Tool centralizes Kafka connection configuration needed during process startup.
 type Tool interface {
-	// Brokers returns the comma separated list of Kafka bootstrap servers.
-	Brokers() string
+	// Brokers returns the addresses of the Kafka bootstrap servers.
+	Brokers() []string
 
 	// User returns the SASL user name. It is empty when insecure mode is enabled and SASL is not configured.
 	User() string
@@ -53,11 +52,9 @@ type Tool interface {
 	// Password returns the SASL password. It is empty when insecure mode is enabled and SASL is not configured.
 	Password() string
 
-	// Client creates a Sarama client using the loaded configuration. The client manages connections
-	// to the Kafka brokers and can be used to create producers and consumers with
-	// sarama.NewSyncProducerFromClient, sarama.NewConsumerFromClient and
-	// sarama.NewConsumerGroupFromClient. The caller must close the client.
-	Client() (sarama.Client, error)
+	// Config returns the Sarama configuration. Components use it to create their own clients.
+	// Copy the configuration before changing component-specific settings.
+	Config() *sarama.Config
 }
 
 // ToolBuilder contains the data and logic needed to create a Kafka tool. Don't create instances of this type directly,
@@ -308,8 +305,8 @@ func (b *ToolBuilder) configureSASL(sc *sarama.Config, user, password string) er
 	return nil
 }
 
-func (t *tool) Brokers() string {
-	return t.properties[brokersProperty]
+func (t *tool) Brokers() []string {
+	return splitAndTrim(t.properties[brokersProperty], ",")
 }
 
 func (t *tool) User() string {
@@ -320,26 +317,8 @@ func (t *tool) Password() string {
 	return t.properties[passwordProperty]
 }
 
-func (t *tool) brokerAddrs() ([]string, error) {
-	brokers := splitAndTrim(t.Brokers(), ",")
-	if len(brokers) == 0 {
-		return nil, fmt.Errorf("the '%s' property is mandatory", brokersProperty)
-	}
-	return brokers, nil
-}
-
-// Client creates a Sarama client using the loaded configuration. The client manages connections to the Kafka brokers
-// and can be used to create producers and consumers. The caller must close the client.
-func (t *tool) Client() (sarama.Client, error) {
-	brokers, err := t.brokerAddrs()
-	if err != nil {
-		return nil, err
-	}
-	client, err := sarama.NewClient(brokers, t.config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Kafka client: %w", err)
-	}
-	return client, nil
+func (t *tool) Config() *sarama.Config {
+	return t.config
 }
 
 func splitAndTrim(s, sep string) []string {

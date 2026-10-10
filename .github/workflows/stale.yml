@@ -20,7 +20,7 @@ jobs:
       issues: write
       pull-requests: write
     steps:
-      - uses: actions/stale@5bef64f19d7facfb25b37b414482c7164d639639  # v9.1.0
+      - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93  # v11.0.0
         with:
           days-before-stale: 30
           days-before-close: -1
@@ -68,7 +68,7 @@ jobs:
       issues: write
       pull-requests: write
     steps:
-      - uses: actions/stale@5bef64f19d7facfb25b37b414482c7164d639639  # v9.1.0
+      - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93  # v11.0.0
         with:
           only-issue-labels: 'lifecycle/stale'
           only-pr-labels: 'lifecycle/stale'
@@ -115,7 +115,7 @@ jobs:
       issues: write
       pull-requests: write
     steps:
-      - uses: actions/stale@5bef64f19d7facfb25b37b414482c7164d639639  # v9.1.0
+      - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93  # v11.0.0
         with:
           only-issue-labels: 'lifecycle/rotten'
           only-pr-labels: 'lifecycle/rotten'

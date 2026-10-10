@@ -11,16 +11,15 @@ Unless required by applicable law or agreed to in writing, software distributed 
 language governing permissions and limitations under the License.
 */
 
-package serial
+package controllers
 
 import (
-	"testing"
+	"log/slog"
 
 	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
 )
 
-func TestSerial(t *testing.T) {
-	RegisterFailHandler(Fail)
-	RunSpecs(t, "Console serial command")
-}
+// Logger shared by controller tests.
+var logger = slog.New(slog.NewTextHandler(GinkgoWriter, &slog.HandlerOptions{
+	Level: slog.LevelDebug,
+}))

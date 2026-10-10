@@ -16,7 +16,6 @@ package user
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -48,7 +47,7 @@ var _ = Describe("User Reconciler", func() {
 
 		var err error
 		function, err = NewFunction().
-			SetLogger(slog.Default()).
+			SetLogger(logger).
 			SetConnection(conn).
 			SetIdpClient(mockClient).
 			Build()
@@ -72,7 +71,7 @@ var _ = Describe("User Reconciler", func() {
 
 		It("should require connection", func() {
 			_, err := NewFunction().
-				SetLogger(slog.Default()).
+				SetLogger(logger).
 				SetIdpClient(mockClient).
 				Build()
 			Expect(err).To(HaveOccurred())
@@ -82,7 +81,7 @@ var _ = Describe("User Reconciler", func() {
 		It("should require IDP client", func() {
 			conn := &grpc.ClientConn{}
 			_, err := NewFunction().
-				SetLogger(slog.Default()).
+				SetLogger(logger).
 				SetConnection(conn).
 				Build()
 			Expect(err).To(HaveOccurred())

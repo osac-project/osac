@@ -25,7 +25,7 @@ import (
 
 func TestNetworkClass(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "NetworkClass controller")
+	RunSpecs(t, "Network class controller")
 }
 
 var logger *slog.Logger

@@ -22,5 +22,5 @@ import (
 
 func TestServices(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Services")
+	RunSpecs(t, "Services package")
 }

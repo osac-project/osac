@@ -14,13 +14,29 @@ language governing permissions and limitations under the License.
 package rolebinding
 
 import (
+	"log/slog"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 )
 
 func TestRoleBinding(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "RoleBinding Controller Suite")
+	RunSpecs(t, "Role binding controller")
 }
+
+var logger *slog.Logger
+
+var _ = BeforeSuite(func() {
+	var err error
+
+	// Capture test logs so they are shown on failure or in verbose runs:
+	logger, err = logging.NewLogger().
+		SetLevel(slog.LevelDebug.String()).
+		SetWriter(GinkgoWriter).
+		Build()
+	Expect(err).ToNot(HaveOccurred())
+})

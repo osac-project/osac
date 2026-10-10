@@ -27,7 +27,7 @@ var logger *slog.Logger
 
 func TestTenant(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Onboarding Controller Suite")
+	RunSpecs(t, "Onboarding controller")
 }
 
 var _ = BeforeSuite(func() {

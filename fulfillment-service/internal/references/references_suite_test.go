@@ -15,22 +15,28 @@ package references
 
 import (
 	"log/slog"
-	"os"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 )
 
 var logger *slog.Logger
 
 func TestReferences(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "References Suite")
+	RunSpecs(t, "References package")
 }
 
 var _ = BeforeSuite(func() {
-	logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-	}))
+	var err error
+
+	// Capture test logs so they are shown on failure or in verbose runs:
+	logger, err = logging.NewLogger().
+		SetLevel(slog.LevelDebug.String()).
+		SetWriter(GinkgoWriter).
+		Build()
+	Expect(err).ToNot(HaveOccurred())
 })

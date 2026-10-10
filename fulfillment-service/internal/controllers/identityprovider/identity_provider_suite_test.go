@@ -16,11 +16,12 @@ package identityprovider
 import (
 	"context"
 	"log/slog"
-	"os"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 )
 
 var (
@@ -30,12 +31,17 @@ var (
 
 func TestIdentityProvider(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Identity Provider Suite")
+	RunSpecs(t, "Identity provider controller")
 }
 
 var _ = BeforeSuite(func() {
+	var err error
+
 	ctx = context.Background()
-	logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-	}))
+	// Capture test logs so they are shown on failure or in verbose runs:
+	logger, err = logging.NewLogger().
+		SetLevel(slog.LevelDebug.String()).
+		SetWriter(GinkgoWriter).
+		Build()
+	Expect(err).ToNot(HaveOccurred())
 })

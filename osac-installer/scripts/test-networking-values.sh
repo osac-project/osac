@@ -145,6 +145,21 @@ render_success \
   --set-string global.networking.netris.tenantId=1 \
   --set-string global.networking.netris.tenantName=test
 
+# Explicit false must survive Helm's default handling and reach the AAP
+# config-as-code Secret and both Netris instance-group ConfigMaps.
+render_success \
+  netris-validate-certs-false \
+  'NETRIS_VALIDATE_CERTS: "false"' \
+  --set global.networking.fabricManager=netris \
+  --set global.networking.k8sManager= \
+  --set-string global.networking.netris.controllerUrl=https://netris.example.com \
+  --set-string global.networking.netris.credentials.username=test-user \
+  --set global.networking.netris.credentials.externalSecret=true \
+  --set-string global.networking.netris.siteId=1 \
+  --set-string global.networking.netris.tenantId=1 \
+  --set-string global.networking.netris.tenantName=test \
+  --set global.networking.netris.validateCerts=false
+
 # Inline passwords and externalSecret are mutually exclusive.
 render_failure \
   netris-both-password-sources \

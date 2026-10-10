@@ -11,6 +11,7 @@
     headers:
       Cookie: "connect.sid={{ netris_session_cookie }}"
     validate_certs: "{{ netris_validate_certs }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
     timeout: "{{ netris_timeout }}"
     status_code: 200
   register: _general_resp

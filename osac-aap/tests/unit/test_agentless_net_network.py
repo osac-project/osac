@@ -268,6 +268,9 @@ def test_network_worker_reuses_config_and_secret_environment(remote_secret):
         aap_ee_image="example.invalid/osac-ee:test",
         remote_cluster_kubeconfig_secret_name=remote_secret,
         remote_cluster_kubeconfig_secret_key="kubeconfig",
+        netris_ca_config_map_name="",
+        netris_ca_path="/etc/netris/ca/bundle.pem",
+        netris_validate_certs=True,
     ))
     worker = pod["spec"]["containers"][0]
     assert {"configMapRef": {"name": "network-fulfillment-ig", "optional": True}} in worker["envFrom"]

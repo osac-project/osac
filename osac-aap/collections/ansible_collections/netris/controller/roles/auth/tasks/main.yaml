@@ -1,4 +1,13 @@
 ---
+- name: Resolve Netris TLS settings from the worker environment
+  ansible.builtin.set_fact:
+    netris_validate_certs: >-
+      {{ netris_validate_certs
+         | default(lookup('ansible.builtin.env', 'NETRIS_VALIDATE_CERTS', default='true') | bool) }}
+    netris_ca_path: >-
+      {{ netris_ca_path
+         | default(lookup('ansible.builtin.env', 'NETRIS_CA_PATH', default=''), true) }}
+
 - name: Login to Netris controller
   ansible.builtin.uri:
     url: "{{ netris_controller_url }}/api/auth"
@@ -9,6 +18,7 @@
       password: "{{ netris_password }}"
       auth_scheme_id: 1
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
     timeout: "{{ netris_timeout | default(30) }}"
     status_code: 200
   register: _netris_auth_resp

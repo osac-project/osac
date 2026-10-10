@@ -14,6 +14,7 @@
     status_code: [200]
     timeout: "{{ netris_timeout | default(30) }}"
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
   register: _ipam_subnets_resp
   no_log: true
 
@@ -35,6 +36,7 @@
     status_code: [200, 204, 400]
     timeout: "{{ netris_timeout | default(30) }}"
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
   register: _ipam_subnet_delete_resp
   no_log: true
 

@@ -8,6 +8,7 @@
     return_content: true
     status_code: [200]
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
   register: _ipam_hosts_resp
   no_log: true
 

@@ -312,7 +312,6 @@ func buildHandlerList() []handlerRegistrar {
 	return []handlerRegistrar{
 		// Shared public API:
 		publicv1.RegisterCapabilitiesHandler,
-		publicv1.RegisterHostTypesHandler,
 		publicv1.RegisterVirtualNetworksHandler,
 		publicv1.RegisterSubnetsHandler,
 		publicv1.RegisterSecurityGroupsHandler,
@@ -330,7 +329,6 @@ func buildHandlerList() []handlerRegistrar {
 		// Shared private API:
 		privatev1.RegisterCapabilitiesHandler,
 		privatev1.RegisterEventsHandler,
-		privatev1.RegisterHostTypesHandler,
 		privatev1.RegisterHubsHandler,
 		privatev1.RegisterNetworkClassesHandler,
 		privatev1.RegisterFabricDomainsHandler,

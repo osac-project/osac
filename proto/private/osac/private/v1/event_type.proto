@@ -32,7 +32,6 @@ import "osac/private/v1/disk_image_type.proto";
 import "osac/private/v1/external_ip_attachment_type.proto";
 import "osac/private/v1/external_ip_pool_type.proto";
 import "osac/private/v1/external_ip_type.proto";
-import "osac/private/v1/host_type_type.proto";
 import "osac/private/v1/hub_type.proto";
 import "osac/private/v1/identity_provider_type.proto";
 import "osac/private/v1/instance_type_type.proto";
@@ -78,7 +77,6 @@ message Event {
     ComputeInstance compute_instance = 7;
     ComputeInstanceTemplate compute_instance_template = 8;
     DiskImage disk_image = 9;
-    HostType host_type = 10;
     InstanceType instance_type = 11;
     Project project = 12;
     Role role = 13;
@@ -107,6 +105,8 @@ message Event {
     AddOnOperator add_on_operator = 37 [(cleanapi.field).private = true];
   }
 
+  reserved 10;
+  reserved "host_type";
 }
 
 enum EventType {

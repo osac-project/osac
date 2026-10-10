@@ -148,7 +148,7 @@ bundledPostgres:
 # Vault-compatible secret store for testing and CI. Not for production.
 bundledVault:
   enabled: true
-  image: "ghcr.io/openbao/openbao:2.6.2"
+  image: "ghcr.io/openbao/openbao:2.7.1"
   # podSecurityContext: {}
   # Leave absent (nil) to use the template's built-in standard-Kubernetes defaults
   # (runAsNonRoot: true, runAsUser: 100, runAsGroup: 1000, fsGroup: 1000).

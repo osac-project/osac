@@ -870,7 +870,6 @@ var platformScopedTypes = map[protoreflect.Name]bool{
 	"ClusterVersion":   true,
 	"ConsoleSession":   true,
 	"ExternalIPPool":   true,
-	"HostType":         true,
 	"Hub":              true,
 	"IdentityProvider": true,
 	"InstanceType":     true,

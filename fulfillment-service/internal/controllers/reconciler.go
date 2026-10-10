@@ -23,7 +23,9 @@ import (
 
 	"github.com/spf13/pflag"
 	"google.golang.org/grpc"
+	grpccodes "google.golang.org/grpc/codes"
 	healthv1 "google.golang.org/grpc/health/grpc_health_v1"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
@@ -472,6 +474,9 @@ func (c *Reconciler[O]) Start(ctx context.Context) error {
 			return context.Canceled
 		case object := <-c.objectChannel:
 			fresh, err := c.getObject(ctx, object.GetId())
+			if grpcstatus.Code(err) == grpccodes.NotFound {
+				continue
+			}
 			if err != nil {
 				c.logger.ErrorContext(
 					ctx,

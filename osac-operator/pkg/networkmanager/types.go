@@ -69,10 +69,7 @@ const (
 
 // validCapabilities is the fixed set of capability values the system recognizes.
 var validCapabilities = map[Capability]struct{}{
-	CapabilityIPv4:       {},
-	CapabilityIPv6:       {},
-	CapabilityDualStack:  {},
-	CapabilityDPUSupport: {},
+	CapabilityIPv4: {},
 }
 
 // Manager is the parsed representation of a network manager registration ConfigMap.
@@ -162,15 +159,6 @@ func parseCapabilities(raw string) ([]Capability, error) {
 
 	if len(caps) == 0 {
 		return nil, fmt.Errorf("capabilities field must not be empty")
-	}
-
-	if seen[CapabilityDualStack] {
-		for _, implied := range []Capability{CapabilityIPv4, CapabilityIPv6} {
-			if !seen[implied] {
-				seen[implied] = true
-				caps = append(caps, implied)
-			}
-		}
 	}
 
 	return caps, nil

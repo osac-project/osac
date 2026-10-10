@@ -880,6 +880,12 @@
               "type": "string",
               "description": "Vault role name for JWT authentication during lifecycle operations"
             },
+            "transitMountPath": {
+              "type": "string",
+              "description": "Transit engine mount path within ordinary tenant and system namespaces; must differ from kvMountPath",
+              "default": "transit",
+              "pattern": "^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?$"
+            },
             "lifecycleMountPath": {
               "type": "string",
               "description": "Auth method mount path in the Vault parent namespace for lifecycle JWT authentication",

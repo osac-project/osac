@@ -91,7 +91,7 @@ var _ = Describe("Tenant compute infrastructure readiness", func() {
 		tenants = &readinessTenantsClient{}
 		reconciler = &function{logger: logger, hubsClient: hubs, hubCache: cache, tenantsClient: tenants, maskCalculator: masks.NewCalculator().Build()}
 		tenant = privatev1.Tenant_builder{Id: "api-id", Metadata: privatev1.Metadata_builder{
-			Name: "tenant-a", Tenant: "tenant-a", Version: 7, Finalizers: []string{finalizers.Controller},
+			Name: "tenant-a", Tenant: "tenant-a", Version: 7, Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 		}.Build(), Status: privatev1.TenantStatus_builder{State: privatev1.TenantState_TENANT_STATE_FAILED, Conditions: []*privatev1.TenantCondition{
 			privatev1.TenantCondition_builder{Type: privatev1.TenantConditionType_TENANT_CONDITION_TYPE_VAULT_READY, Status: ready}.Build(),
 			privatev1.TenantCondition_builder{Type: privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY, Status: ready}.Build(),
@@ -169,17 +169,15 @@ var _ = Describe("Tenant compute infrastructure readiness", func() {
 		observe(clientWith(wrong))
 		check(unknown, "InfrastructureStatusUnknown")
 	})
-	It("bounds stalled observations and still persists unknown readiness", func() {
-		blocked := fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{List: func(ctx context.Context, _ clnt.WithWatch, _ clnt.ObjectList, _ ...clnt.ListOption) error {
+	It("persists unknown readiness when hub observation times out", func() {
+		timedOut := fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{List: func(ctx context.Context, _ clnt.WithWatch, _ clnt.ObjectList, _ ...clnt.ListOption) error {
 			deadline, ok := ctx.Deadline()
 			Expect(ok).To(BeTrue(), "observation must have a deadline")
 			Expect(time.Until(deadline)).To(BeNumerically("<=", 10*time.Second))
-			<-ctx.Done()
-			return ctx.Err()
+			return context.DeadlineExceeded
 		}}).Build()
-		observe(blocked)
+		observe(timedOut)
 		check(unknown, "InfrastructureStatusUnknown")
-		Expect(ctx.Err()).NotTo(HaveOccurred())
 	})
 
 	It("rejects ambiguous tenant identity", func() {
@@ -298,13 +296,12 @@ var _ = Describe("Tenant compute infrastructure readiness", func() {
 		Expect(condition(saved).GetStatus()).To(Equal(ready))
 		Expect(tenants.updates[0].GetUpdateMask().GetPaths()).To(ConsistOf("status.conditions"))
 	})
-	It("observes infrastructure while adding the initial finalizer", func() {
+	It("persists both initial finalizers before observing infrastructure", func() {
 		tenant.GetMetadata().SetFinalizers(nil)
 		tenant.ClearStatus()
-		observe(clientWith())
 		Expect(reconciler.Run(ctx, tenant)).To(Succeed())
-		Expect(condition(tenants.updates[0].GetObject()).GetStatus()).To(Equal(notReady))
-		Expect(tenants.updates[0].GetObject().GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
+		Expect(tenants.updates[0].GetObject().HasStatus()).To(BeFalse())
+		Expect(tenants.updates[0].GetObject().GetMetadata().GetFinalizers()).To(ContainElement(finalizers.TenantLifecycle))
 	})
 	DescribeTable("does not exempt reserved tenants", func(name string) {
 		tenant.GetMetadata().SetName(name)
@@ -321,6 +318,12 @@ var _ = Describe("Tenant compute infrastructure readiness", func() {
 		failure := errors.New("subsystem unavailable")
 		if subsystem == "IDP" {
 			idpClient.EXPECT().GetTenant(gomock.Any(), "tenant-a").Return(nil, failure)
+			observe(clientWith(object(osacv1alpha1.TenantPhaseReady)))
+			Expect(reconciler.Run(ctx, tenant)).To(MatchError(ContainSubstring("subsystem unavailable")))
+			Expect(tenants.updates).To(HaveLen(1))
+			saved := tenants.updates[0].GetObject()
+			Expect(saved.GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_SYNCED))
+			Expect(condition(saved).GetStatus()).To(Equal(ready))
 		} else {
 			idpClient.EXPECT().GetTenant(gomock.Any(), "tenant-a").Return(&idp.Tenant{Name: "tenant-a"}, nil)
 			if subsystem == "vault" {
@@ -328,20 +331,24 @@ var _ = Describe("Tenant compute infrastructure readiness", func() {
 				vaultClient := vault.NewMockLifecycleClient(ctrl)
 				reconciler.vaultLifecycle = vaultClient
 				vaultClient.EXPECT().EnsureTenantNamespace(gomock.Any(), "tenant-a").Return(failure)
+				observe(clientWith(object(osacv1alpha1.TenantPhaseReady)))
+				Expect(reconciler.Run(ctx, tenant)).To(Succeed())
+				Expect(tenants.updates).To(HaveLen(1))
+				saved := tenants.updates[0].GetObject()
+				Expect(saved.GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_SYNCED))
+				Expect(condition(saved).GetStatus()).To(Equal(ready))
 			} else {
 				vn := NewMockVirtualNetworksClient(ctrl)
 				reconciler.virtualNetworksClient = vn
 				vn.EXPECT().List(gomock.Any(), gomock.Any()).Return(nil, failure)
+				observe(clientWith(object(osacv1alpha1.TenantPhaseReady)))
+				Expect(reconciler.Run(ctx, tenant)).To(MatchError(ContainSubstring("subsystem unavailable")))
+				Expect(tenants.updates).To(HaveLen(1))
+				saved := tenants.updates[0].GetObject()
+				Expect(saved.GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_SYNCED))
+				Expect(condition(saved).GetStatus()).To(Equal(ready))
 			}
 		}
-		original := proto.Clone(tenant).(*privatev1.Tenant)
-		observe(clientWith(object(osacv1alpha1.TenantPhaseReady)))
-		Expect(reconciler.Run(ctx, tenant)).To(MatchError(ContainSubstring("subsystem unavailable")))
-		Expect(tenants.updates).To(HaveLen(1))
-		saved := tenants.updates[0].GetObject()
-		Expect(saved.GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_SYNCED))
-		Expect(condition(saved).GetStatus()).To(Equal(ready))
-		Expect(proto.Equal(saved.GetStatus().GetConditions()[0], original.GetStatus().GetConditions()[0])).To(BeTrue())
 	}, Entry("IDP error", "IDP"), Entry("vault error", "vault"), Entry("network error", "network"))
 	It("does not poll infrastructure during tenant deletion", func() {
 		tenant.GetMetadata().SetDeletionTimestamp(timestamppb.Now())

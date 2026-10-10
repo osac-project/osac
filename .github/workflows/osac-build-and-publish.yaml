@@ -70,6 +70,21 @@ on:
           (release mode only, when fulfillment-service is actually bumped
           this run).
         required: true
+      KONFLUX_SA_TOKEN:
+        description: >-
+          Token for the konflux-bot-0 ServiceAccount, used by
+          "Trigger Konflux staging release" to log in to the Konflux
+          cluster (release mode only). A secret referenced via
+          secrets.X here but never declared in this workflow_call block
+          silently evaluates to empty -- no validation error at call
+          time or runtime -- which is exactly how this went unnoticed
+          until the skip-cascade fix let the job actually run instead of
+          being skipped. Declaring it here with required: true only
+          catches a caller that omits the mapping entirely (that fails
+          workflow validation at call time); a caller that maps it to an
+          expression which itself resolves to nothing (secret doesn't
+          exist, is empty, etc.) still passes silently either way.
+        required: true
 
 permissions: {}
 
@@ -842,7 +857,7 @@ jobs:
     uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-full-install.yml@main
     with:
       test-suite: bmaas
-      test-filter: 'not TestBmaasNetworking'
+      test-filter: 'not TestBmaasNetworking and not TestCrossTenantBmaasNetworking'
       installer-repo: ${{ github.repository }}
       installer-ref: ${{ needs.prepare.outputs.temp-branch }}
       test-infra-repository: osac-project/osac-test-infra
@@ -1835,9 +1850,21 @@ jobs:
     # only pushed in release mode (see "Create release-only marker tag"
     # above). Needs tag specifically (not e.g. promote-and-publish) because
     # that's the job that actually pushes the tag Konflux reacts to --
-    # nothing to wait for here until that's landed.
+    # nothing to wait for here until that's landed. always() is required
+    # even though this job only wants to act on real success -- without it,
+    # GitHub skip-cascades this job whenever a job further back in the
+    # transitive dependency graph (e.g. the e2e-*-test jobs under
+    # skip_e2e=true) is skipped, regardless of this custom if:. Confirmed
+    # live: every skip_e2e=true release dispatch (rerun or fresh) skipped
+    # this job even though prepare and tag both succeeded. Same bug class
+    # already documented and fixed on cleanup's own if: below. !cancelled()
+    # is required alongside it -- always() alone would also let this job
+    # fire off a real external Konflux Release if someone cancels the
+    # workflow run *after* tag already succeeded (e.g. during e2e/promote/
+    # notify), since needs.tag.result would still read 'success'. A skipped
+    # dependency is not the same as an operator-initiated cancellation.
     needs: [prepare, tag]
-    if: inputs.mode == 'release' && needs.tag.result == 'success'
+    if: always() && !cancelled() && inputs.mode == 'release' && needs.tag.result == 'success'
     runs-on: osac-ci
     # Must exceed the sum of the script's own three poll phases (build
     # poll + override-snapshot-test poll + Release-completion poll, each

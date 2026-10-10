@@ -68,6 +68,16 @@
     - name: "*.{{ external_access_ingress_domain }}"
       addr: "{{ external_access_ingress_ip }}"
 
+- name: Resolve authoritative nameserver for DNS zone
+  ansible.builtin.command: >-
+    dig +short NS {{ external_access_base_domain }}
+  register: _external_access_zone_ns
+  changed_when: false
+  failed_when: false
+  no_log: true
+  when: >-
+    external_access_base_domain in external_access_supported_base_domains | default([])
+
 - name: Wait for DNS records
   when: >-
     external_access_base_domain in external_access_supported_base_domains | default([])
@@ -76,6 +86,7 @@
     tasks_from: wait_for_dns
   vars:
     wait_for_dns_record: "{{ item }}"
+    wait_for_dns_server: "{{ (_external_access_zone_ns.stdout_lines | default([])) | first | default('') | regex_replace('\\.$', '') }}"
   loop:
     - "{{ external_access_api_domain }}"
     - "{{ external_access_api_int_domain }}"

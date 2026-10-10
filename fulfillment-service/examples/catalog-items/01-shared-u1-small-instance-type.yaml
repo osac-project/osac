@@ -4,5 +4,5 @@ metadata:
   name: u1-small
   tenant: shared
 spec:
-  cores: 2
+  vcpus: 2
   memory_gib: 2

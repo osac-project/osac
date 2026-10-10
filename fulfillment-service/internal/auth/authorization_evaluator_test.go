@@ -15,12 +15,17 @@ package auth
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
+	k8sfiles "github.com/osac-project/osac/fulfillment-service/internal/kubernetes/files"
 )
 
 var _ = Describe("OPA Authorization Evaluator", func() {
@@ -81,6 +86,23 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 	Describe("Evaluate", func() {
 		var evaluator *OPAAuthorizationEvaluator
 
+		// Determine the namespace the evaluator will use, following the same logic as
+		// buildEmergencyServiceAccounts: read from the Kubernetes namespace file,
+		// falling back to the default. This mirrors the approach in
+		// grpc_authz_interceptor_test.go so tests construct usernames that match the
+		// emergency service accounts registered in the evaluator.
+		testNamespace := grpcAuthzDefaultNamespace
+		nsBytes, err := os.ReadFile(k8sfiles.ServiceAccountNamespace)
+		if errors.Is(err, os.ErrNotExist) {
+			// Keep default namespace
+		} else if err != nil {
+			Fail(fmt.Sprintf("unexpected error reading namespace file: %v", err))
+		} else {
+			if ns := strings.TrimSpace(string(nsBytes)); ns != "" {
+				testNamespace = ns
+			}
+		}
+
 		BeforeEach(func() {
 			var err error
 			evaluator, err = NewEvaluator().
@@ -92,8 +114,8 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 		Context("With Kubernetes service account", func() {
 			It("Allows admin service account with all tenants", func(ctx context.Context) {
 				authContext := &AuthContext{
-					Username:   "system:serviceaccount:osac:admin",
-					Groups:     []any{"system:serviceaccounts", "system:serviceaccounts:osac"},
+					Username:   fmt.Sprintf("system:serviceaccount:%s:admin", testNamespace),
+					Groups:     []any{"system:serviceaccounts", fmt.Sprintf("system:serviceaccounts:%s", testNamespace)},
 					AuthMethod: "serviceaccount",
 				}
 
@@ -112,8 +134,8 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 
 			It("Allows emergency backup service account", func(ctx context.Context) {
 				authContext := &AuthContext{
-					Username:   "system:serviceaccount:osac:emergency-backup",
-					Groups:     []any{"system:serviceaccounts:osac"},
+					Username:   fmt.Sprintf("system:serviceaccount:%s:emergency-backup", testNamespace),
+					Groups:     []any{fmt.Sprintf("system:serviceaccounts:%s", testNamespace)},
 					AuthMethod: "serviceaccount",
 				}
 
@@ -131,8 +153,8 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 
 			It("Denies non-emergency service account on private API", func(ctx context.Context) {
 				authContext := &AuthContext{
-					Username:   "system:serviceaccount:osac:random-service",
-					Groups:     []any{"system:serviceaccounts:osac"},
+					Username:   fmt.Sprintf("system:serviceaccount:%s:random-service", testNamespace),
+					Groups:     []any{fmt.Sprintf("system:serviceaccounts:%s", testNamespace)},
 					AuthMethod: "serviceaccount",
 				}
 
@@ -266,8 +288,8 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 		Context("Subject tenant extraction", func() {
 			It("Extracts universal tenant marker", func(ctx context.Context) {
 				authContext := &AuthContext{
-					Username:   "system:serviceaccount:osac:admin",
-					Groups:     []any{"system:serviceaccounts:osac"},
+					Username:   fmt.Sprintf("system:serviceaccount:%s:admin", testNamespace),
+					Groups:     []any{fmt.Sprintf("system:serviceaccounts:%s", testNamespace)},
 					AuthMethod: "serviceaccount",
 				}
 

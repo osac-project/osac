@@ -294,6 +294,16 @@ var _ = Describe("buildSpec", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(spec.HasDiskImage()).To(BeFalse())
 	})
+
+	It("should apply an instance type reference through the set flag", func() {
+		c := &runnerContext{}
+		c.args.setFields = []string{"instance_type.name=bare-metal.large", "instance_type.shared=true"}
+
+		spec, err := c.buildSpec("catalog-item-id", false)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(spec.GetInstanceType().GetName()).To(Equal("bare-metal.large"))
+		Expect(spec.GetInstanceType().GetShared()).To(BeTrue())
+	})
 })
 
 func strPtr(s string) *string {

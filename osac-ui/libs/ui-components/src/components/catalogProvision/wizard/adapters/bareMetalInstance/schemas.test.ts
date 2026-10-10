@@ -10,6 +10,7 @@ import {
   applyBmCatalogDefaults,
   createEmptyBareMetalInstanceValues,
   createEmptyNetworkAttachmentRow,
+  getBareMetalInstanceTypeCatalogPolicy,
 } from './fields';
 import { buildBareMetalInstanceStepSchema } from './schemas';
 import { emptyResourceSelectValue } from '../../../../Form/resourceSelectValue';
@@ -98,6 +99,74 @@ describe('Bare Metal review validation', () => {
     );
 
     await expect(validateReview(appliedValues)).resolves.toBeUndefined();
+  });
+
+  it('applies the typed catalog instance type default to the wizard', () => {
+    const values = createEmptyBareMetalInstanceValues();
+    const catalogItem = {
+      fields: {
+        instanceType: {
+          behavior: {
+            case: 'editable',
+            value: {
+              defaultValue: { id: 'instance-type-id', name: 'bare-metal.large', shared: true },
+            },
+          },
+        },
+      },
+    } as unknown as BareMetalInstanceCatalogItem;
+    const helpers = {
+      setFieldValue: (path: string, value: unknown) => {
+        if (path === 'spec.instanceType.name') {
+          values.spec.instanceType.name = value as string;
+        }
+      },
+    };
+
+    applyBmCatalogDefaults(
+      catalogItem,
+      helpers as unknown as FormikHelpers<BareMetalInstanceWizardValues>,
+      tIdentity,
+    );
+
+    expect(values.spec.instanceType.name).toBe('bare-metal.large');
+    expect(getBareMetalInstanceTypeCatalogPolicy(catalogItem)).toEqual({
+      editable: true,
+      defaultName: 'bare-metal.large',
+    });
+  });
+
+  it('applies a locked catalog instance type default to the wizard', () => {
+    const values = createEmptyBareMetalInstanceValues();
+    const catalogItem = {
+      fields: {
+        instanceType: {
+          behavior: {
+            case: 'locked',
+            value: { id: 'instance-type-id', name: 'bare-metal.large', shared: true },
+          },
+        },
+      },
+    } as unknown as BareMetalInstanceCatalogItem;
+    const helpers = {
+      setFieldValue: (path: string, value: unknown) => {
+        if (path === 'spec.instanceType.name') {
+          values.spec.instanceType.name = value as string;
+        }
+      },
+    };
+
+    applyBmCatalogDefaults(
+      catalogItem,
+      helpers as unknown as FormikHelpers<BareMetalInstanceWizardValues>,
+      tIdentity,
+    );
+
+    expect(values.spec.instanceType.name).toBe('bare-metal.large');
+    expect(getBareMetalInstanceTypeCatalogPolicy(catalogItem)).toEqual({
+      editable: false,
+      defaultName: 'bare-metal.large',
+    });
   });
 });
 

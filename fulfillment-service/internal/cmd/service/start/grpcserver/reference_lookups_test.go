@@ -25,13 +25,16 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
+	"google.golang.org/protobuf/types/descriptorpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/references"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
+	testsv1 "github.com/osac-project/osac/proto/gen/osac/tests/v1"
 )
 
 var _ = Describe("RegisterReferenceLookups", func() {
@@ -64,6 +67,24 @@ var _ = Describe("RegisterReferenceLookups", func() {
 		Expect(missing).To(BeEmpty(),
 			"no lookup registered for Create/Update reference types:\n  %s",
 			strings.Join(missing, "\n  "))
+	})
+
+	It("discovers reference types through direct and nested map values", func() {
+		file := protodesc.ToFileDescriptorProto(testsv1.File_osac_tests_v1_reference_test_types_proto)
+		for _, message := range file.GetMessageType() {
+			if message.GetName() == "TestRefSpec" {
+				message.Field = slices.DeleteFunc(message.Field, func(field *descriptorpb.FieldDescriptorProto) bool {
+					return field.GetName() != "targets" && field.GetName() != "attachments"
+				})
+			}
+		}
+		descriptor, err := protodesc.NewFile(file, protoregistry.GlobalFiles)
+		Expect(err).ToNot(HaveOccurred())
+		refs := map[protoreflect.FullName]struct{}{}
+		collectReferenceTypes(descriptor.Messages().ByName("TestRefSpec"), map[protoreflect.FullName]struct{}{}, refs)
+		Expect(refs).To(HaveKey(protoreflect.FullName("osac.tests.v1.TestTargetReference")))
+		Expect(refs).To(HaveKey(protoreflect.FullName("osac.tests.v1.TestTargetLocalReference")))
+		Expect(refs).To(HaveKey(protoreflect.FullName("osac.tests.v1.TestOtherTargetLocalReference")))
 	})
 
 	It("leaves BMI Create network references for the tenant-scoped handler to resolve", func() {
@@ -215,10 +236,16 @@ func collectReferenceTypes(
 	fields := md.Fields()
 	for i := 0; i < fields.Len(); i++ {
 		fd := fields.Get(i)
-		if fd.Kind() != protoreflect.MessageKind || fd.IsMap() {
+		if fd.Kind() != protoreflect.MessageKind {
 			continue
 		}
 		msg := fd.Message()
+		if fd.IsMap() {
+			msg = fd.MapValue().Message()
+			if msg == nil {
+				continue
+			}
+		}
 		if strings.HasSuffix(string(msg.FullName()), "Reference") {
 			refs[msg.FullName()] = struct{}{}
 			continue

@@ -345,6 +345,7 @@ func buildHandlerList() []handlerRegistrar {
 		privatev1.RegisterExternalIPAttachmentsHandler,
 		privatev1.RegisterRolesHandler,
 		privatev1.RegisterRoleBindingsHandler,
+		privatev1.RegisterTenantsHandler,
 		privatev1.RegisterVolumesHandler,
 		// CaaS:
 		publicv1.RegisterClusterTemplatesHandler,

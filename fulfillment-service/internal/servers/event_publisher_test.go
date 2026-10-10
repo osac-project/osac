@@ -1318,6 +1318,20 @@ var _ = Describe("Event publisher", Ordered, func() {
 			badTopic := DefaultEventTopicPrefix + badTenant
 			tenant := "keep-" + uuid.New()
 			topic := DefaultEventTopicPrefix + tenant
+			admin, err := sarama.NewClusterAdmin([]string{kafkaBroker.Brokers()}, client.Config())
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(admin.Close)
+			Expect(admin.CreateTopic(topic, &sarama.TopicDetail{
+				NumPartitions:     1,
+				ReplicationFactor: 1,
+			}, false)).To(Succeed())
+			Eventually(func() error {
+				if err := client.RefreshMetadata(topic); err != nil {
+					return err
+				}
+				_, err := client.Partitions(topic)
+				return err
+			}).WithTimeout(5 * time.Second).WithPolling(50 * time.Millisecond).Should(Succeed())
 			insertChange(badTenant, "obj-1", "TRUNCATE")
 			insertChange(tenant, "obj-1", "INSERT")
 

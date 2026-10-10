@@ -146,7 +146,7 @@ describe('ClusterConfigurationStep', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Node set 1')).toBeInTheDocument();
-      expect(screen.getByText('Select bare-metal instance type')).toBeInTheDocument();
+      expect(screen.getByText('Select instance type')).toBeInTheDocument();
       expect(screen.getByRole('spinbutton', { name: /^Nodes/ })).toBeInTheDocument();
     });
     expect(screen.queryByRole('button', { name: 'Remove node set' })).not.toBeInTheDocument();
@@ -183,7 +183,7 @@ describe('ClusterConfigurationStep', () => {
               nodeSetRows: [
                 {
                   ...row,
-                  bareMetalInstanceType: 'acme_1tb',
+                  baremetalInstanceType: { id: 'acme_1tb', name: '' },
                   size: '3',
                 },
               ],
@@ -227,13 +227,13 @@ describe('ClusterConfigurationStep', () => {
                 {
                   ...createEmptyNodeSetRow(),
                   name: 'workers',
-                  bareMetalInstanceType: 'acme_1tb',
+                  baremetalInstanceType: { id: 'acme_1tb', name: '' },
                   size: '3',
                 },
                 {
                   ...createEmptyNodeSetRow(),
                   name: 'workers',
-                  bareMetalInstanceType: 'acme_1tb',
+                  baremetalInstanceType: { id: 'acme_1tb', name: '' },
                   size: '2',
                 },
               ],

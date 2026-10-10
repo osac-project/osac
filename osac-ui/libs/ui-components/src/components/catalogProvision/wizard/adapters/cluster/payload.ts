@@ -58,12 +58,12 @@ export const buildClusterCreatePayload = (
   >;
   for (const row of values.spec.nodeSetRows) {
     const nodeSetId = row.name.trim();
-    const instanceTypeId = row.bareMetalInstanceType;
+    const bmitId = row.baremetalInstanceType.id;
     const size = Number(row.size);
-    if (!nodeSetId || !instanceTypeId || !Number.isFinite(size) || size <= 0) {
+    if (!nodeSetId || !bmitId || !Number.isFinite(size) || size <= 0) {
       continue;
     }
-    nodeSets[nodeSetId] = { baremetalInstanceType: { id: instanceTypeId }, size };
+    nodeSets[nodeSetId] = { baremetalInstanceType: { id: bmitId }, size };
   }
   if (Object.keys(nodeSets).length > 0) {
     spec.nodeSets = nodeSets;

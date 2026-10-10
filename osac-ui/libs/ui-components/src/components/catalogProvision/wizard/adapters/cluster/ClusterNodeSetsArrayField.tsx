@@ -1,6 +1,5 @@
 import {
   ActionGroup,
-  Alert,
   Button,
   FormFieldGroup,
   FormFieldGroupHeader,
@@ -15,28 +14,14 @@ import { BareMetalInstanceTypes } from '@osac/types';
 
 import type { ClusterWizardValues } from './fields';
 import { createEmptyNodeSetRow } from './fields';
-import { useListResource } from '../../../../../api/use-resource';
 import { useTranslation } from '../../../../../hooks/useTranslation';
-import { getErrorMessage } from '../../../../../utils/error';
-import { SelectField } from '../../../../Form/SelectField';
+import { ResourceSelectField } from '../../../../Form/ResourceSelectField';
 import ClusterPoolSizeField from '../../fields/ClusterPoolSizeField';
 import NameField from '../../fields/NameField';
 
 const ClusterNodeSetsArrayField = () => {
   const { t } = useTranslation();
   const { values, setFieldValue } = useFormikContext<ClusterWizardValues>();
-  const {
-    data: bareMetalInstanceTypesResponse,
-    isLoading: bareMetalInstanceTypesLoading,
-    error: bareMetalInstanceTypesError,
-    refetch: refetchBareMetalInstanceTypes,
-  } = useListResource(BareMetalInstanceTypes);
-  const bareMetalInstanceTypes = bareMetalInstanceTypesResponse?.items ?? [];
-
-  const bareMetalInstanceTypeOptions = bareMetalInstanceTypes.map((instanceType) => ({
-    value: instanceType.id,
-    label: instanceType.metadata?.name || instanceType.id,
-  }));
 
   const addRow = () => {
     void setFieldValue('spec.nodeSetRows', [...values.spec.nodeSetRows, createEmptyNodeSetRow()]);
@@ -51,16 +36,6 @@ const ClusterNodeSetsArrayField = () => {
 
   return (
     <Stack hasGutter>
-      {bareMetalInstanceTypesError ? (
-        <StackItem>
-          <Alert variant="danger" isInline title={t('Could not load bare-metal instance types')}>
-            {getErrorMessage(bareMetalInstanceTypesError)}
-            <Button variant="link" isInline onClick={() => void refetchBareMetalInstanceTypes()}>
-              {t('catalogProvision.actions.retry')}
-            </Button>
-          </Alert>
-        </StackItem>
-      ) : null}
       {values.spec.nodeSetRows.length === 0 ? (
         <StackItem>{t('No node sets added yet.')}</StackItem>
       ) : null}
@@ -90,14 +65,14 @@ const ClusterNodeSetsArrayField = () => {
               name={`spec.nodeSetRows.${rowIndex}.name`}
               fieldId={`cluster-node-set-name-${row.rowId}`}
             />
-            <SelectField
-              name={`spec.nodeSetRows.${rowIndex}.bareMetalInstanceType`}
-              label={t('Bare-metal instance type')}
-              fieldId={`cluster-bare-metal-instance-type-${row.rowId}`}
-              options={bareMetalInstanceTypeOptions}
+            <ResourceSelectField
+              name={`spec.nodeSetRows.${rowIndex}.baremetalInstanceType`}
+              label={t('Instance type')}
+              fieldId={`cluster-instance-type-${row.rowId}`}
+              service={BareMetalInstanceTypes}
               isRequired
-              isLoading={bareMetalInstanceTypesLoading}
-              placeholder={t('Select bare-metal instance type')}
+              placeholder={t('Select instance type')}
+              loadErrorTitle={t('Could not load instance types')}
             />
             <ClusterPoolSizeField rowIndex={rowIndex} isRequired />
           </FormFieldGroup>
@@ -105,12 +80,7 @@ const ClusterNodeSetsArrayField = () => {
       ))}
       <StackItem>
         <ActionGroup>
-          <Button
-            variant="link"
-            icon={<PlusCircleIcon />}
-            onClick={addRow}
-            isDisabled={bareMetalInstanceTypesLoading}
-          >
+          <Button variant="link" icon={<PlusCircleIcon />} onClick={addRow}>
             {t('Add node set')}
           </Button>
         </ActionGroup>

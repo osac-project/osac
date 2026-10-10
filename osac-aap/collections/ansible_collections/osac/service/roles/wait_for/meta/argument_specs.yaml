@@ -4,6 +4,12 @@ argument_specs:
       wait_for_dns_record:
         type: str
         required: true
+      wait_for_dns_server:
+        type: str
+        description: >-
+          DNS server to query directly (e.g. an authoritative nameserver).
+          Bypasses the local resolver's negative cache. Empty string (default)
+          uses the system resolver.
       wait_for_dns_retries:
         type: int
       wait_for_dns_delay:

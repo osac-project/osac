@@ -21,8 +21,8 @@ an option because it provides the Vault-compatible API that OSAC needs.
 OSAC creates one child namespace per tenant under a parent namespace (normally `osac`).
 These are Vault namespaces, not Kubernetes namespaces.
 
-The `osac-infra` chart can deploy a single-pod OpenBao for development and CI.
-It uses in-memory storage, so its data is lost on restart. For production, set
+The `osac-infra` chart can deploy OpenBao for testing and CI. This bundled
+instance is not intended for production. For production, set
 `bundledVault.enabled: false` in the `osac-infra` values file and configure
 `service.vault` in the separate `osac` values file to point at your existing
 Vault. See the [Helm deployment guide](helm-deployment-guide.md) for the install

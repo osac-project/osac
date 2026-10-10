@@ -147,7 +147,9 @@ def test_reference_scenario_checks_missing_shared_type_without_creating_one() ->
     public.call.side_effect = subprocess.CalledProcessError(
         67,
         ["grpcurl"],
-        stderr="Code: InvalidArgument\nMessage: node_sets.workers.baremetal_instance_type: object not found",
+        stderr=(
+            'Code: InvalidArgument\nMessage: object.spec.node_sets["workers"].baremetal_instance_type: object not found'
+        ),
     )
     references.TestClusterBareMetalReferences().test_unknown_shared_hardware_type_is_not_selectable_for_caas(
         jwt_grpc_tenant1=public, cluster_template="template", cluster_version="version"

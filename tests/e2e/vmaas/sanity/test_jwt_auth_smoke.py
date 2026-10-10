@@ -14,7 +14,6 @@ pytestmark = pytest.mark.sanity
 CLIENT_LISTABLE_RESOURCES = [
     "computeinstancetemplates",
     "computeinstances",
-    "hosttypes",
     "externalips",
     "rolebindings",
     "roles",

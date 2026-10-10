@@ -40,9 +40,8 @@ bundledPostgres:
     name: service
 
 # --- Bundled OpenBao ---
-# Single-pod ephemeral Vault-compatible store for testing.
+# Bundled OpenBao for testing and CI. Not for production.
 bundledVault:
   enabled: true
-  devRootToken: "dev-root-token"
   podSecurityContext:
     runAsNonRoot: true

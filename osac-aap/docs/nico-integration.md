@@ -2,9 +2,9 @@
 
 ## Overview
 
-The OSAC NICo integration enables cluster-as-a-service provisioning on bare metal infrastructure managed by NVIDIA NICo (Bare Metal Manager). NICo is a pluggable backend — no separate template is required. Existing cluster templates work with NICo by setting `NETWORK_STEPS_COLLECTION=nico.steps` in the AAP environment.
+The OSAC NICo integration enables cluster-as-a-service provisioning on bare metal infrastructure managed by NVIDIA NICo (Bare Metal Manager). NICo is a pluggable backend — no separate template is required. Existing cluster templates work with NICo when the NICo environment variables are configured in AAP.
 
-The integration uses the pluggable backend architecture via the `network_steps_collection` variable, which routes `cluster_infra` and `external_access` operations to the NICo backend collection (`nico.steps`).
+The integration provides `cluster_infra` and `external_access` roles in the `nico.steps` collection.
 
 ## Environment Variables
 
@@ -14,7 +14,6 @@ All NICo configuration is provided via environment variables injected into AAP f
 
 | Variable | Description |
 |----------|-------------|
-| `NETWORK_STEPS_COLLECTION` | Set to `nico.steps` to select the NICo backend |
 | `NVIDIA_BMM_API_URL` | NICo API endpoint (e.g., `https://nico.example.com`) |
 | `NVIDIA_BMM_CLIENT_ID` | OAuth2 client ID for authentication |
 | `NVIDIA_BMM_CLIENT_SECRET` | OAuth2 client secret for authentication |
@@ -49,7 +48,6 @@ metadata:
   namespace: aap
 type: Opaque
 stringData:
-  NETWORK_STEPS_COLLECTION: "nico.steps"
   NVIDIA_BMM_API_URL: "https://nico.example.com"
   NVIDIA_BMM_CLIENT_ID: "my-client-id"
   NVIDIA_BMM_CLIENT_SECRET: "my-client-secret"
@@ -82,10 +80,9 @@ ClusterOrder resources provide these in `spec.templateParameters`. The same temp
 
 Before submitting a ClusterOrder, ensure:
 
-1. `NETWORK_STEPS_COLLECTION=nico.steps` is set in the AAP environment
-2. A **Tenant CR** exists with the `osac.openshift.io/bgp-asn` annotation set to the local BGP ASN
-3. The ClusterOrder has the `osac.openshift.io/tenant` annotation pointing to the Tenant name
-4. An **InfraEnv** resource named `hardware-inventory` exists in the `hardware-inventory` namespace
+1. A **Tenant CR** exists with the `osac.openshift.io/bgp-asn` annotation set to the local BGP ASN
+2. The ClusterOrder has the `osac.openshift.io/tenant` annotation pointing to the Tenant name
+3. An **InfraEnv** resource named `hardware-inventory` exists in the `hardware-inventory` namespace
 
 ### Example ClusterOrder
 
@@ -279,15 +276,10 @@ The `nico-infra` ConfigMap is written immediately after VPC/prefix creation (bef
 
 ### Backend Routing
 
-The NICo backend is selected by setting the `NETWORK_STEPS_COLLECTION` environment variable to `nico.steps`. No template changes are needed. The shared orchestration layer delegates to the backend via:
-
-```yaml
-ansible.builtin.include_role:
-  name: "{{ network_steps_collection }}.cluster_infra"
-  tasks_from: create.yaml
-```
-
-This pattern allows multiple backends to coexist (ESI via `osac.steps`, NICo via `nico.steps`, Netris via `netris.steps`).
+CaaS networking now goes through the OSAC Networking API and dispatcher.
+The NICo backend is selected by the network class configuration; no
+template changes are required. Multiple backends coexist (ESI via
+`osac.steps`, NICo via `nico.steps`, Netris via `netris.steps`).
 
 ### Collection Structure
 

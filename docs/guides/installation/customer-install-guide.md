@@ -698,7 +698,6 @@ backend. For the full variable reference, see
          enabled: true
          config:
            NETWORK_CLASS: "netris"
-           NETWORK_STEPS_COLLECTION: "netris.steps"
            DNS_CLASS: "dns.route53.dns"
            NETRIS_CONTROLLER_URL: "https://netris.example.com"
            NETRIS_USERNAME: "netris"

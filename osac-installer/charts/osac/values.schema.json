@@ -1203,16 +1203,6 @@
                         "ci"
                       ]
                     },
-                    "NETWORK_STEPS_COLLECTION": {
-                      "type": "string",
-                      "description": "Supported values: netris.steps, ci.steps, agentless_net.steps. Legacy collections (nico.steps, osac.steps) are removed from the standard schema; direct AAP configuration via expertOverrides.aap accepts any free-form string.",
-                      "enum": [
-                        "",
-                        "netris.steps",
-                        "ci.steps",
-                        "agentless_net.steps"
-                      ]
-                    },
                     "DNS_CLASS": {
                       "type": "string",
                       "description": "Fully-qualified Ansible role name of the DNS driver. Only dns.route53.dns is shipped today; leave empty to use that default.",

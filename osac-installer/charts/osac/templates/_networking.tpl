@@ -2,7 +2,7 @@
 Expand global.networking into the effective NetworkClass fields and AAP knobs.
 
 Public API is manager-first:
-  fabricManager: "" | netris | agentless_net | cudn_net (CaaS/ci.steps only; vlan reserved)
+  fabricManager: "" | netris | agentless_net | cudn_net (reserved; vlan reserved)
   k8sManager: "" | k8s_only
 
 Defaults when keys are omitted: fabricManager "" + k8sManager k8s_only (agentless).
@@ -11,7 +11,7 @@ Setting fabricManager to netris without an explicit k8sManager leaves k8sManager
 Validated combinations:
   - fabricManager=netris + k8sManager="" → netris AAP + NetworkClass fabricManager=netris
   - fabricManager=agentless_net + k8sManager="" → AgentlessNet stub + NetworkClass fabricManager=agentless_net
-  - fabricManager=cudn_net + k8sManager="" → CaaS ci.steps + CUDN NetworkClass
+  - fabricManager=cudn_net + k8sManager="" → reserved (Helm render fails)
   - fabricManager="" + k8sManager=k8s_only → agentless AAP + NetworkClass k8sManager=k8s_only
   - fabricManager="" + k8sManager="" → expert empty profile; networkClass must supply a manager
 
@@ -19,7 +19,7 @@ Rejected combinations:
   - any use of removed keys provider / overlay
   - both fabricManager and k8sManager set (non-empty)
   - fabricManager netris without a netris config block
-  - fabricManager vlan (reserved); cudn_net without CaaS/ci.steps is rejected by validateValues
+  - fabricManager vlan (reserved); cudn_net (reserved) rejected by validateValues
   - unknown fabricManager / k8sManager values
   - empty profile with no manager on the effective NetworkClass
 
@@ -65,18 +65,10 @@ Returns a dict with:
 {{- $aapNetrisEnabled := eq $fabricManager "netris" -}}
 {{- $aapAgentlessEnabled := or (eq $fabricManager "agentless_net") (eq $k8sManager "k8s_only") -}}
 {{- $aapNetworkClass := "" -}}
-{{- $aapNetworkSteps := "" -}}
 {{- if $aapNetrisEnabled -}}
   {{- $aapNetworkClass = "netris" -}}
-  {{- $aapNetworkSteps = "netris.steps" -}}
 {{- else if eq $fabricManager "agentless_net" -}}
   {{- $aapNetworkClass = "agentless_net" -}}
-  {{- $aapNetworkSteps = "agentless_net.steps" -}}
-{{- else if eq $fabricManager "cudn_net" -}}
-  {{- $aapNetworkClass = "ci" -}}
-  {{- $aapNetworkSteps = "ci.steps" -}}
-{{- else if $aapAgentlessEnabled -}}
-  {{- $aapNetworkSteps = "agentless_net.steps" -}}
 {{- end -}}
 
 {{- $defaultTitle := "K8s-only networking" -}}
@@ -154,6 +146,6 @@ Returns a dict with:
       "aapAgentlessEnabled" $aapAgentlessEnabled
       "netris" $netris
       "networkClass" $effectiveNetworkClass
-      "aap" (dict "networkClass" $aapNetworkClass "networkStepsCollection" $aapNetworkSteps)
+      "aap" (dict "networkClass" $aapNetworkClass)
     | toYaml -}}
 {{- end -}}

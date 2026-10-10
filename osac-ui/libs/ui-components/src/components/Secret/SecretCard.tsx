@@ -9,13 +9,11 @@ import {
   Flex,
   FlexItem,
   Icon,
-  MenuToggle,
 } from '@patternfly/react-core';
-import { EllipsisVIcon } from '@patternfly/react-icons/dist/esm/icons/ellipsis-v-icon';
 import KeyIcon from '@patternfly/react-icons/dist/esm/icons/key-icon';
-import { ActionsColumn } from '@patternfly/react-table';
 
 import { Secret, SecretType } from '@osac/types';
+import SecretActionsMenu from '@osac/ui-components/components/Secret/SecretActionsMenu';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
 import { getSecretType, getSecretTypeDataKeys } from './utils.ts';
@@ -38,25 +36,7 @@ const SecretCard = ({ secret, onEdit, onDelete }: SecretCardProps) => {
     <Card isFullHeight>
       <CardHeader
         actions={{
-          actions: (
-            <ActionsColumn
-              items={[
-                { title: t('Edit'), onClick: onEdit },
-                { title: t('Delete'), onClick: onDelete },
-              ]}
-              actionsToggle={({ onToggle, isOpen, toggleRef }) => (
-                <MenuToggle
-                  ref={toggleRef}
-                  variant="plain"
-                  isExpanded={isOpen}
-                  onClick={onToggle}
-                  aria-label={t('Actions for {{name}}', { name: secret.metadata?.name })}
-                >
-                  <EllipsisVIcon />
-                </MenuToggle>
-              )}
-            />
-          ),
+          actions: <SecretActionsMenu secret={secret} onEdit={onEdit} onDelete={onDelete} />,
         }}
       >
         <Flex spaceItems={{ default: 'spaceItemsSm' }} alignItems={{ default: 'alignItemsCenter' }}>

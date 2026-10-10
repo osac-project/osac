@@ -3,7 +3,7 @@ import type { ResourceSelectValue } from '../../../../Form/resourceSelectValue';
 export interface ClusterNodeSetRow {
   rowId: string;
   name: string;
-  hostType: string;
+  bareMetalInstanceType: string;
   size: string;
 }
 
@@ -62,6 +62,6 @@ export const createNodeSetRowId = (): string => crypto.randomUUID();
 export const createEmptyNodeSetRow = (): ClusterNodeSetRow => ({
   rowId: createNodeSetRowId(),
   name: '',
-  hostType: '',
+  bareMetalInstanceType: '',
   size: '',
 });

@@ -1,0 +1,58 @@
+---
+# "/osac-ci refresh" on a pull request posts a fresh OSAC CI verdict for it right away, without waiting for the next
+# event or the 10-minute sweep (see osac-project/osac-ci, README, "Refreshing a verdict"). It only recomputes the verdict
+# from live state; it changes nothing else and decides nothing.
+#
+# issue_comment always runs the workflow file from the default branch, and nothing of the pull request is checked out or
+# run. The comment text only decides whether the job runs; it never reaches a command line. Only the author of the pull
+# request or someone GitHub reports as an owner, member or collaborator may ask, so an outsider cannot spend the API
+# quota of this repository by commenting in a loop.
+name: OSAC CI refresh
+on:  # zizmor: ignore[dangerous-triggers] -- no pull request code is checked out or run; the comment only gates the job
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+# One group per comment, never per pull request: another comment must not cancel a pending refresh, and a refresh must
+# not cancel a pending run of the OSAC CI workflow.
+concurrency:
+  group: osac-ci-refresh-${{ github.event.comment.id }}
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    if: >-
+      github.repository == 'osac-project/osac' &&
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/osac-ci refresh') &&
+      (contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) ||
+       github.event.comment.user.login == github.event.issue.user.login)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read  # the action is fetched from osac-ci by the runner; nothing of this repository is checked out
+      checks: write  # post the OSAC CI check run
+      pull-requests: read  # read the pull request, its reviews and files
+    steps:
+      # As in osac-ci.yml: if the token cannot be created the next step still posts, so the pull request shows a visible
+      # planner-error instead of keeping a verdict that is out of date.
+      - name: Create a token that can read organization membership
+        id: org-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ secrets.OSAC_CI_READER_APP_ID }}
+          private-key: ${{ secrets.OSAC_CI_READER_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-members: read
+      - uses: osac-project/osac-ci/.github/actions/publish@7686d78d47d0959dd86e121461379bc37916e153  # osac-ci main
+        with:
+          github-token: ${{ github.token }}
+          org-token: ${{ steps.org-token.outputs.token }}
+          lookup-membership: "true"
+          repo: ${{ github.repository }}
+          policy: policy/osac.yml
+          number: ${{ github.event.issue.number }}
+          note: "Informational for now: this check is not required to merge."

@@ -54,11 +54,9 @@ bundledPostgres:
     name: service
 
 # --- Bundled OpenBao ---
-# Single-pod ephemeral Vault-compatible secret store for testing. Dev mode --
-# data is lost on restart. Not for production.
+# Bundled OpenBao for testing and CI. Not for production.
 bundledVault:
   enabled: true
-  devRootToken: "dev-root-token"
   # Optional OpenBao JWT issuer override. It must match the issuer (iss)
   # claim in Keycloak tokens. Use the in-cluster URL when that is the issuer;
   # if Keycloak tokens use a route hostname, set that route URL in a local

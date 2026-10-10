@@ -172,6 +172,7 @@ class TestBmaasNetworking:
         k8s_hub_client: K8sClient,
         catalog_item_name: str,
         auto_eip_catalog_item_name: str,
+        bmi_instance_type: str,
         bmi_disk_image: str,
         net_ssh_public_key: str,
         bmh_namespace: str,
@@ -192,6 +193,7 @@ class TestBmaasNetworking:
             bmi_id, _ = cli.create_baremetal_instance(
                 name=bmi_name,
                 catalog_item=catalog,
+                instance_type=bmi_instance_type,
                 ssh_key=net_ssh_public_key,
                 disk_image=bmi_disk_image,
                 network_attachments=[f"subnet={subnet_id},interface=eth9,primary,security-groups={sg}"],
@@ -231,6 +233,13 @@ class TestBmaasNetworking:
         self.__class__.state["bmi1"] = bmis[0]
         self.__class__.state["bmi2"] = bmis[1]
         self.__class__.state["bmi3"] = bmis[2]
+        for bmi in bmis:
+            spec = grpc.get_baremetal_instance(bmi_id=bmi["id"]).get("object", {}).get("spec", {})
+            instance_type = spec.get("instance_type", spec.get("instanceType", {}))
+            assert instance_type.get("name") == bmi_instance_type, (
+                f"BareMetalInstance {bmi['name']} has instance_type {instance_type.get('name')!r}, "
+                f"expected {bmi_instance_type!r}"
+            )
 
     def test_05b_verify_auto_eip_on_bmi3(
         self, grpc: GRPCClient, private_grpc: GRPCClient, k8s_hub_client: K8sClient

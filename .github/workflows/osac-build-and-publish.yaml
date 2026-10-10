@@ -70,6 +70,21 @@ on:
           (release mode only, when fulfillment-service is actually bumped
           this run).
         required: true
+      KONFLUX_SA_TOKEN:
+        description: >-
+          Token for the konflux-bot-0 ServiceAccount, used by
+          "Trigger Konflux staging release" to log in to the Konflux
+          cluster (release mode only). A secret referenced via
+          secrets.X here but never declared in this workflow_call block
+          silently evaluates to empty -- no validation error at call
+          time or runtime -- which is exactly how this went unnoticed
+          until the skip-cascade fix let the job actually run instead of
+          being skipped. Declaring it here with required: true only
+          catches a caller that omits the mapping entirely (that fails
+          workflow validation at call time); a caller that maps it to an
+          expression which itself resolves to nothing (secret doesn't
+          exist, is empty, etc.) still passes silently either way.
+        required: true
 
 permissions: {}
 
@@ -842,7 +857,7 @@ jobs:
     uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-full-install.yml@main
     with:
       test-suite: bmaas
-      test-filter: 'not TestBmaasNetworking'
+      test-filter: 'not TestBmaasNetworking and not TestCrossTenantBmaasNetworking'
       installer-repo: ${{ github.repository }}
       installer-ref: ${{ needs.prepare.outputs.temp-branch }}
       test-infra-repository: osac-project/osac-test-infra

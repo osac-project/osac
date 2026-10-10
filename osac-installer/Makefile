@@ -209,7 +209,6 @@ kind-load-images: ## Load previously built dev-full images into Kind (PLATFORM=k
 	fi
 	$(MAKE) -C ../fulfillment-service kind-load-image NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
 	$(MAKE) -C ../osac-operator kind-load-image NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
-	$(MAKE) -C ../osac-csi-driver kind-load-image NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
 	$(call kind-load-ui-image,$(KIND_UI_IMAGE))
 ##@ Entity: Infra
 
@@ -448,14 +447,12 @@ csi-render-test: helm-deps ## Verify CSI and storage-provider chart rendering
 		caas_render="$$(mktemp)"; \
 		vmaas_render="$$(mktemp)"; \
 		default_operator_render="$$(mktemp)"; \
-		csi_render="$$(mktemp)"; \
 		full_render="$$(mktemp)"; \
 		custom_render="$$(mktemp)"; \
 		node_render="$$(mktemp)"; \
 		infra_render="$$(mktemp)"; \
-		infra_enabled_render="$$(mktemp)"; \
 		error_render="$$(mktemp)"; \
-		trap 'rm -f "$$caas_render" "$$vmaas_render" "$$default_operator_render" "$$csi_render" "$$full_render" "$$custom_render" "$$node_render" "$$infra_render" "$$infra_enabled_render" "$$error_render"' EXIT; \
+		trap 'rm -f "$$caas_render" "$$vmaas_render" "$$default_operator_render" "$$full_render" "$$custom_render" "$$node_render" "$$infra_render" "$$error_render"' EXIT; \
 		assert_helm_failure() { \
 			expected="$$1"; shift; \
 			if "$$@" >/dev/null 2>"$$error_render"; then \
@@ -475,7 +472,7 @@ csi-render-test: helm-deps ## Verify CSI and storage-provider chart rendering
 			--set service.internalHostname=fulfillment-internal-api.example.com \
 			--set global.clusterDomain=example.com \
 			--set ui.auth.oidcIssuerURL=https://keycloak-keycloak.example.com/realms/osac > "$$caas_render"; \
-		! rg -q '^  OSAC_FULFILLMENT_ENDPOINT:' "$$caas_render"; \
+		test "$$(rg -c '^  OSAC_FULFILLMENT_ENDPOINT:' "$$caas_render")" -eq 1; \
 		helm template osac $(OSAC_CHART) \
 			--values values/vmaas-ci/instance.yaml \
 			--set operator.networkManagers.enabled=true \
@@ -484,9 +481,11 @@ csi-render-test: helm-deps ## Verify CSI and storage-provider chart rendering
 			--set global.clusterDomain=example.com \
 			--set ui.auth.oidcIssuerURL=https://keycloak-keycloak.example.com/realms/osac > "$$vmaas_render"; \
 		rg -Uq 'name: OSAC_VENDOR_CONTROLLERS\n[[:blank:]]+value: "lvms=none"' "$$vmaas_render"; \
+		test "$$(rg -c '^  OSAC_FULFILLMENT_ENDPOINT:' "$$vmaas_render")" -eq 1; \
 		helm template osac $(OSAC_CHART) \
 			--values $(OSAC_CHART)/ci/default-values.yaml > "$$default_operator_render"; \
 		! rg -q 'name: OSAC_VENDOR_CONTROLLERS' "$$default_operator_render"; \
+		test "$$(rg -c '^  OSAC_FULFILLMENT_ENDPOINT:' "$$default_operator_render")" -eq 1; \
 		assert_helm_failure "at '/operator/vendorControllers/lvms'" \
 			helm template osac $(OSAC_CHART) \
 			--values $(OSAC_CHART)/ci/default-values.yaml \
@@ -496,28 +495,15 @@ csi-render-test: helm-deps ## Verify CSI and storage-provider chart rendering
 			--values $(OSAC_CHART)/ci/default-values.yaml \
 			--set operator.vendorControllers.lvms=42; \
 		helm template osac $(OSAC_CHART) \
-			--values charts/osac/ci/default-values.yaml \
-			--set operator.enabled=false \
-			--set operator.networkManagers.enabled=true \
-			--set csiDriver.enabled=true \
-			--set csiDriver.controller.fulfillment.credentials.secretName=osac-csi-driver-credentials \
-			--set csiDriver.controller.fulfillment.allowStub=false > "$$csi_render"; \
-		test "$$(rg -c '^  OSAC_FULFILLMENT_ENDPOINT:' "$$csi_render")" -eq 1; \
-		rg -q 'namespace: osac-csi' "$$csi_render"; \
-		rg -q '^immutable: true$$' "$$csi_render"; \
-		helm template osac $(OSAC_CHART) \
 			--values charts/osac/ci/full-values.yaml \
 			--set operator.networkManagers.enabled=true > "$$full_render"; \
-		test "$$(rg -c '^  OSAC_FULFILLMENT_ENDPOINT:' "$$full_render")" -eq 2; \
+		test "$$(rg -c '^  OSAC_FULFILLMENT_ENDPOINT:' "$$full_render")" -eq 1; \
+		! rg -q '# Source: osac/charts/(csiDriver|csiBackends)/' "$$full_render"; \
 		helm template osac $(OSAC_CHART) \
 			--values charts/osac/ci/full-values.yaml \
 			--set operator.networkManagers.enabled=true \
-			--set csiDriver.controller.fulfillment.configMap.endpointKey=CUSTOM_FULFILLMENT_ENDPOINT \
-			--set csiDriver.controller.fulfillment.configMap.issuerUrlKey=CUSTOM_FULFILLMENT_ISSUER_URL > "$$custom_render"; \
-		rg -q '^  CUSTOM_FULFILLMENT_ENDPOINT:' "$$custom_render"; \
-		rg -q '^  CUSTOM_FULFILLMENT_ISSUER_URL:' "$$custom_render"; \
-		rg -q 'key: CUSTOM_FULFILLMENT_ENDPOINT' "$$custom_render"; \
-		rg -q 'key: CUSTOM_FULFILLMENT_ISSUER_URL' "$$custom_render"; \
+			--set operator.fulfillment.configMap.name=osac-custom-fulfillment-config > "$$custom_render"; \
+		rg -q '^  name: osac-custom-fulfillment-config$$' "$$custom_render"; \
 		helm template csi-driver ../osac-csi-driver/charts/csi-driver \
 			--show-only templates/node-daemonset.yaml \
 			--set namespace=osac-csi \
@@ -531,28 +517,8 @@ csi-render-test: helm-deps ## Verify CSI and storage-provider chart rendering
 		rg -q 'secretName: osac-csi-driver-credentials' "$$node_render"; \
 		helm template osac-infra $(INFRA_CHART) \
 			--values values/caas-ci/infra.yaml > "$$infra_render"; \
-		! rg -q 'name: osac-infra-create-csi-creds' "$$infra_render"; \
-		helm template osac-infra $(INFRA_CHART) \
-			--values values/caas-ci/infra.yaml \
-			--set csiDriver.enabled=true > "$$infra_enabled_render"; \
-		rg -q 'name: osac-infra-create-csi-creds' "$$infra_enabled_render"; \
-		assert_helm_failure 'csiDriver.namespace must be one of the following: "osac-csi"' \
-			helm template osac $(OSAC_CHART) \
-			--values charts/osac/ci/full-values.yaml \
-			--set operator.networkManagers.enabled=true \
-			--set csiDriver.namespace=not-osac-csi; \
-		assert_helm_failure 'csiNamespace must be osac-csi when csiDriver.enabled is true' \
-			helm template osac-infra $(INFRA_CHART) \
-			--values values/caas-ci/infra.yaml \
-			--set csiDriver.enabled=true \
-			--set csiNamespace=not-osac-csi; \
-		assert_helm_failure 'operator and CSI ConfigMaps must use different names when they share a namespace' \
-			helm template osac $(OSAC_CHART) \
-			--values charts/osac/ci/full-values.yaml \
-			--set operator.networkManagers.enabled=true \
-			--namespace osac-csi \
-			--set csiDriver.controller.fulfillment.configMap.name=osac-fulfillment-config; \
-		assert_helm_failure 'namespace must be one of the following: "", "osac-csi"' \
+		! rg -q 'osac-infra-create-csi-creds|osac-csi-driver-credentials' "$$infra_render"; \
+		assert_helm_failure "at '/namespace': value must be one of" \
 			helm template csi-driver ../osac-csi-driver/charts/csi-driver \
 			--set namespace=not-osac-csi; \
 		echo 'CSI render checks passed.'

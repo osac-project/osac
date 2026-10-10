@@ -25,9 +25,9 @@ readonly NIGHTLY_CHART_SLACK_ORDER=(
 # Every umbrella dependency, mapped "<Chart.yaml dependency name>:<owning
 # component>" -- the owning component is what COMPONENT_VERSIONS (nightly-
 # build.yaml's per-release-cut version map) is keyed by.
-# osac-operator-crds/bare-metal-fulfillment-operator-crds/csi-backends share
-# their owning component's version with their non-crds sibling chart; they
-# have no independent release cadence of their own.
+# osac-operator-crds and bare-metal-fulfillment-operator-crds share their
+# owning component's version with their non-crds sibling chart; they have no
+# independent release cadence of their own.
 readonly MONO_REPO_UMBRELLA_DEPENDENCIES=(
     "osac-operator-crds:osac-operator"
     "osac-operator:osac-operator"
@@ -36,13 +36,11 @@ readonly MONO_REPO_UMBRELLA_DEPENDENCIES=(
     "bare-metal-fulfillment-operator-crds:bare-metal-fulfillment-operator"
     "bare-metal-fulfillment-operator:bare-metal-fulfillment-operator"
     "osac-metering:osac-metering"
-    "csi-driver:osac-csi-driver"
-    "csi-backends:osac-csi-driver"
     "osac-ui:osac-ui"
 )
 
 # CI overlay values files with their own separate floating image tag
-# overrides for mono-repo components (operator/aap/bmf/metering/csiDriver),
+# overrides for mono-repo components (operator/aap/bmf/metering),
 # on top of the umbrella chart's own values.yaml. Not every file overrides
 # every component -- see stamp_ci_overlay_if_present.
 readonly NIGHTLY_CI_OVERLAY_VALUES=(
@@ -189,7 +187,6 @@ stamp_component_image_refs() {
             ;;
         osac-csi-driver)
             TAG_VALUE="${tag_value}" yq -i '.image.tag = strenv(TAG_VALUE)' "osac-csi-driver/charts/csi-driver/values.yaml"
-            stamp_umbrella_nested_field "${umbrella_values}" csiDriver image tag "${tag_value}"
             ;;
         osac-ui)
             # osac-ui/charts/ui/templates/deployment.yaml reads .Values.images.ui.
@@ -387,7 +384,7 @@ stamp_umbrella_nested_field() {
 # exits non-zero when the path is absent/null, which we use purely as an
 # existence check (its own stdout/stderr is discarded). This avoids yq -i's
 # default auto-vivification behavior, which would otherwise silently create
-# a whole new key structure (e.g. add a `csiDriver:` block) in overlay files
+# a whole new key structure in overlay files
 # that don't already configure that component. Unlike
 # stamp_umbrella_nested_field, this uses yq -i directly (not awk): these CI
 # overlay files are not yamllint/ct-lint-checked anywhere in this pipeline,

@@ -17,7 +17,6 @@ WAIT_DEFAULT_CA="${WAIT_DEFAULT_CA:-true}"
 CA_BUNDLE_NAME="${CA_BUNDLE_NAME:-ca-bundle}"
 RELEASE_NAMESPACE="${RELEASE_NAMESPACE:-}"
 OSAC_NAMESPACE="${OSAC_NAMESPACE:-osac}"
-CSI_NAMESPACE="${CSI_NAMESPACE:-osac-csi}"
 USE_DEFAULT_CAS="${USE_DEFAULT_CAS:-false}"
 OC=(oc --request-timeout=10s)
 
@@ -167,7 +166,6 @@ EOF
         values:
         - "${RELEASE_NAMESPACE}"
         - "${OSAC_NAMESPACE}"
-        - "${CSI_NAMESPACE}"
 EOF
 } | oc_run apply -f -
 

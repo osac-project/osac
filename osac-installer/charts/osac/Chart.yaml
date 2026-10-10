@@ -42,13 +42,3 @@ dependencies:
     repository: "file://../../../osac-metering/charts/osac-metering"
     alias: metering
     condition: metering.enabled
-  - name: csi-driver
-    version: ">=0.0.0-0"
-    repository: "file://../../../osac-csi-driver/charts/csi-driver"
-    alias: csiDriver
-    condition: csiDriver.enabled
-  - name: csi-backends
-    version: ">=0.0.0-0"
-    repository: "file://../../../osac-csi-driver/charts/csi-backends"
-    alias: csiBackends
-    condition: csiDriver.enabled

@@ -22,16 +22,6 @@ hookResources:
     cpu: 200m
     memory: 1Gi
 osacNamespace: osac
-# Gates creation of the shared CSI credential Secret during infra install.
-csiDriver:
-  enabled: false
-# Fixed hub CSI namespace. The osac chart and CSI credential hook must use the
-# same namespace so the controller can read its ConfigMap and Secret.
-csiNamespace: osac-csi
-# Name of the "osac" umbrella chart's Helm release. The credential hook
-# pre-creates and labels csiNamespace with this release's identity before the
-# umbrella chart renders CSI resources there.
-csiReleaseName: osac
 
 certManager:
   enabled: true

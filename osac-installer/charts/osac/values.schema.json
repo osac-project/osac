@@ -14,11 +14,11 @@
         },
         "fulfillment": {
           "type": "object",
-          "description": "Resolved external fulfillment configuration shared with tenant-cluster CSI provisioning",
+          "description": "Resolved external fulfillment configuration shared with operator trust sync and tenant-cluster CSI provisioning",
           "properties": {
             "endpoint": {
               "type": "string",
-              "description": "External fulfillment gRPC endpoint including port. When empty, service.externalHostname:443 is used when CSI is enabled."
+              "description": "External fulfillment gRPC endpoint including port. When empty, service.externalHostname:443 is used when the operator and fulfillment service are enabled."
             }
           },
           "additionalProperties": false
@@ -360,7 +360,7 @@
                 },
                 "optional": {
                   "type": "boolean",
-                  "description": "Allow the ConfigMap to be absent when external CSI configuration is disabled",
+                  "description": "Allow the ConfigMap to be absent when the operator or fulfillment service is disabled",
                   "default": true
                 }
               },
@@ -1403,20 +1403,7 @@
                 "secret": {
                   "type": "object",
                   "description": "Secret values for the storage-operations instance group",
-                  "properties": {
-                    "VAST_ENDPOINT": {
-                      "type": "string",
-                      "description": "VAST management endpoint URL"
-                    },
-                    "VAST_USERNAME": {
-                      "type": "string",
-                      "description": "VAST management username"
-                    },
-                    "VAST_PASSWORD": {
-                      "type": "string",
-                      "description": "VAST management password"
-                    }
-                  },
+                  "properties": {},
                   "additionalProperties": false
                 }
               },
@@ -1758,197 +1745,6 @@
         }
       },
       "additionalProperties": false
-    },
-    "csiDriver": {
-      "type": "object",
-      "description": "OSAC CSI driver configuration",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "description": "Deploy the OSAC CSI driver (opt-in)",
-          "default": false
-        },
-        "namespace": {
-          "type": "string",
-          "description": "Namespace for the shared hub CSI deployment",
-          "enum": [
-            "osac-csi"
-          ],
-          "default": "osac-csi"
-        },
-        "controller": {
-          "type": "object",
-          "description": "CSI controller configuration",
-          "properties": {
-            "fulfillment": {
-              "type": "object",
-              "properties": {
-                "configMap": {
-                  "type": "object",
-                  "properties": {
-                    "name": {
-                      "type": "string",
-                      "description": "ConfigMap containing non-secret fulfillment endpoint and issuer values",
-                      "default": "osac-csi-fulfillment-config"
-                    },
-                    "endpointKey": {
-                      "type": "string",
-                      "description": "ConfigMap key containing the fulfillment endpoint",
-                      "default": "OSAC_FULFILLMENT_ENDPOINT"
-                    },
-                    "issuerUrlKey": {
-                      "type": "string",
-                      "description": "ConfigMap key containing the fulfillment issuer URL",
-                      "default": "OSAC_FULFILLMENT_ISSUER_URL"
-                    }
-                  },
-                  "additionalProperties": false
-                },
-                "credentials": {
-                  "type": "object",
-                  "properties": {
-                    "secretName": {
-                      "type": "string",
-                      "description": "Secret containing the CSI OAuth client credentials",
-                      "default": "osac-csi-driver-credentials"
-                    },
-                    "clientIdKey": {
-                      "type": "string",
-                      "description": "Key within the credentials Secret for the OAuth client ID"
-                    },
-                    "clientSecretKey": {
-                      "type": "string",
-                      "description": "Key within the credentials Secret for the OAuth client secret"
-                    }
-                  },
-                  "additionalProperties": false
-                },
-                "tls": {
-                  "type": "object",
-                  "description": "TLS configuration for fulfillment connection (subchart default)",
-                  "properties": {
-                    "insecureSkipVerify": {
-                      "type": "boolean",
-                      "description": "Skip TLS certificate verification for the fulfillment endpoint",
-                      "default": false
-                    },
-                    "caBundle": {
-                      "type": "object",
-                      "description": "ConfigMap key containing the tenant fulfillment CA bundle",
-                      "properties": {
-                        "configMap": {
-                          "type": "string",
-                          "default": "ca-bundle"
-                        },
-                        "key": {
-                          "type": "string",
-                          "default": "bundle.pem"
-                        }
-                      },
-                      "additionalProperties": false
-                    }
-                  },
-                  "additionalProperties": false
-                },
-                "allowStub": {
-                  "type": "boolean",
-                  "description": "Allow the CSI controller to use the in-memory volume stub when no fulfillment configuration is supplied",
-                  "default": false
-                },
-                "endpoint": {
-                  "type": "string",
-                  "description": "Direct fulfillment endpoint override (subchart default)"
-                },
-                "issuerUrl": {
-                  "type": "string",
-                  "description": "Direct fulfillment issuer URL override (subchart default)"
-                }
-              },
-              "additionalProperties": false
-            },
-            "leaderElection": {
-              "type": "boolean",
-              "description": "Enable leader election for the CSI controller (subchart default)"
-            },
-            "replicas": {
-              "type": "integer",
-              "description": "Number of CSI controller replicas (subchart default)"
-            },
-            "resources": {
-              "type": "object",
-              "description": "CSI controller resource requests and limits (subchart default)"
-            },
-            "vendorControllers": {
-              "type": "string",
-              "description": "Comma-separated list of vendor controllers to enable (subchart default)"
-            },
-            "vendorSockets": {
-              "type": "string",
-              "description": "Comma-separated list of vendor socket paths (subchart default)"
-            },
-            "clusterID": {
-              "type": "string",
-              "description": "Cluster identifier for CSI volume topology (subchart default)"
-            }
-          },
-          "additionalProperties": false
-        },
-        "image": {
-          "type": "object",
-          "properties": {
-            "repository": {
-              "type": "string",
-              "description": "CSI driver container image repository",
-              "default": "ghcr.io/osac-project/osac-csi-driver"
-            },
-            "tag": {
-              "type": "string",
-              "description": "CSI driver container image tag",
-              "default": "latest"
-            },
-            "pullPolicy": {
-              "type": "string",
-              "description": "Image pull policy",
-              "enum": [
-                "Always",
-                "IfNotPresent",
-                "Never"
-              ],
-              "default": "Always"
-            }
-          },
-          "additionalProperties": false
-        },
-        "serviceAccount": {
-          "type": "object",
-          "description": "CSI driver ServiceAccount configuration (subchart default)"
-        },
-        "sidecars": {
-          "type": "object",
-          "description": "CSI sidecar container images (subchart default)"
-        },
-        "node": {
-          "type": "object",
-          "description": "CSI node plugin configuration (subchart default)"
-        },
-        "vendors": {
-          "type": "object",
-          "description": "Vendor-specific CSI backend configuration (subchart default)"
-        },
-        "driverName": {
-          "type": "string",
-          "description": "CSI driver name (subchart default)"
-        },
-        "global": {
-          "type": "object",
-          "description": "Helm-injected global values (passed automatically to subcharts)"
-        }
-      },
-      "additionalProperties": false
-    },
-    "csiBackends": {
-      "type": "object",
-      "description": "Vendor CSI backend configuration (deployed with csiDriver)"
     },
     "bmfCrds": {
       "type": "object",

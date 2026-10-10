@@ -36,10 +36,6 @@ global:
     maas:
       enabled: false
 
-# --- CSI Driver ---
-csiDriver:
-  enabled: true
-
 # --- Operator ---
 operator:
   image:

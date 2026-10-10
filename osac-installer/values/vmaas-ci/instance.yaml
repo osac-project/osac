@@ -23,10 +23,6 @@ global:
         VMaaS overlay without a physical fabric. VirtualNetwork/Subnet use CUDN,
         SecurityGroup uses NetworkPolicy, ExternalIP uses MetalLB L2.
 
-# --- CSI Driver ---
-csiDriver:
-  enabled: true
-
 # --- Operator ---
 operator:
   image:

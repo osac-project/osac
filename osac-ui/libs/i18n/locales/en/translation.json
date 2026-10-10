@@ -916,6 +916,7 @@
   "UDP": "UDP",
   "Unable to resolve backend names": "Unable to resolve backend names",
   "Unauthorized": "Unauthorized",
+  "Unexpected error occurred": "Unexpected error occurred",
   "Unknown": "Unknown",
   "Unpublished": "Unpublished",
   "Unspecified": "Unspecified",

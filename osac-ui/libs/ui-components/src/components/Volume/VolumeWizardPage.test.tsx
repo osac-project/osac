@@ -1,7 +1,7 @@
 import { Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { create } from '@bufbuild/protobuf';
 import { Code, ConnectError } from '@connectrpc/connect';
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -10,6 +10,7 @@ import {
   StorageTierState,
   VolumeAccessMode,
   type VolumesCreateRequest,
+  type VolumesCreateResponse,
   VolumesCreateResponseSchema,
 } from '@osac/types';
 
@@ -28,6 +29,29 @@ const storageTier = create(StorageTierSchema, {
   spec: { description: 'Block storage', protocol: StorageProtocol.BLOCK },
   status: { state: StorageTierState.ACTIVE },
 });
+
+const createErrorCases = [
+  {
+    label: 'InvalidArgument',
+    code: Code.InvalidArgument,
+    backendMessage: 'Volume size must be greater than zero',
+  },
+  {
+    label: 'AlreadyExists',
+    code: Code.AlreadyExists,
+    backendMessage: 'A volume with this name already exists',
+  },
+  {
+    label: 'PermissionDenied',
+    code: Code.PermissionDenied,
+    backendMessage: 'permission details from the backend',
+  },
+  {
+    label: 'Internal',
+    code: Code.Internal,
+    backendMessage: 'internal stack details',
+  },
+] as const;
 
 const VolumeDetailProbe = () => {
   const { id } = useParams();
@@ -125,5 +149,74 @@ describe('VolumeWizardPage', () => {
     expect(await screen.findByText('Failed to create resource')).toBeInTheDocument();
     expect(screen.getByText('backend unavailable')).toBeInTheDocument();
     expect(screen.queryByText(/Volume detail:/)).not.toBeInTheDocument();
+  });
+
+  it.each(createErrorCases)(
+    'maps a $label create error and keeps the form populated for retry',
+    async ({ code, backendMessage }) => {
+      const { user } = renderAt('/storage/volumes/create', {
+        apiFixtures: { publicStorageTiers: [storageTier] },
+        transportOverrides: {
+          onVolumeCreate: () => {
+            throw new ConnectError(backendMessage, code);
+          },
+        },
+      });
+
+      await fillValidWizard(user);
+      await user.click(screen.getByRole('button', { name: 'Create volume' }));
+
+      const alert = (
+        await screen.findByRole('heading', { name: 'Danger alert: Failed to create resource' })
+      ).closest('.pf-v6-c-alert');
+      expect(alert).toHaveClass('pf-m-danger');
+      expect(screen.queryByText(/Volume detail:/)).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Create volume' })).toBeEnabled();
+
+      await user.click(screen.getByRole('button', { name: 'Back' }));
+      expect(await screen.findByRole('heading', { name: 'Configuration' })).toBeInTheDocument();
+      expect(screen.getByRole('spinbutton', { name: 'Size (GiB)' })).toHaveValue(64);
+
+      await user.click(screen.getByRole('button', { name: 'Back' }));
+      expect(await screen.findByRole('heading', { name: 'General' })).toBeInTheDocument();
+      expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('new-volume');
+    },
+  );
+
+  it('disables submission while creating and enables retry after a rejected request', async () => {
+    let attempts = 0;
+    let rejectFirstAttempt!: (reason?: unknown) => void;
+    const firstAttempt = new Promise<VolumesCreateResponse>((_, reject) => {
+      rejectFirstAttempt = reject;
+    });
+    const { user } = renderAt('/storage/volumes/create', {
+      apiFixtures: { publicStorageTiers: [storageTier] },
+      transportOverrides: {
+        onVolumeCreate: () => {
+          attempts += 1;
+          if (attempts === 1) {
+            return firstAttempt;
+          }
+          return create(VolumesCreateResponseSchema, { object: { id: 'retried-volume' } });
+        },
+      },
+    });
+
+    await fillValidWizard(user);
+    const submitButton = screen.getByRole('button', { name: 'Create volume' });
+    await user.click(submitButton);
+
+    await waitFor(() => {
+      expect(attempts).toBe(1);
+      expect(submitButton).toBeDisabled();
+    });
+
+    rejectFirstAttempt(new ConnectError('temporary failure', Code.Internal));
+    expect(await screen.findByText('Unexpected error occurred')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create volume' })).toBeEnabled();
+
+    await user.click(screen.getByRole('button', { name: 'Create volume' }));
+    expect(await screen.findByText('Volume detail: retried-volume')).toBeInTheDocument();
+    expect(attempts).toBe(2);
   });
 });

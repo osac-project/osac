@@ -450,7 +450,9 @@ export type MockTransportOverrides = {
     req: ExternalIPAttachmentsCreateRequest,
   ) => ExternalIPAttachmentsCreateResponse | Promise<ExternalIPAttachmentsCreateResponse>;
   onVolumeGet?: (req: VolumesGetRequest) => VolumesGetResponse | Promise<VolumesGetResponse>;
-  onVolumeCreate?: (req: VolumesCreateRequest) => VolumesCreateResponse;
+  onVolumeCreate?: (
+    req: VolumesCreateRequest,
+  ) => VolumesCreateResponse | Promise<VolumesCreateResponse>;
   onVolumeDelete?: (req: VolumesDeleteRequest) => VolumesDeleteResponse;
 };
 

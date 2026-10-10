@@ -1,0 +1,11 @@
+bugfixes:
+  - purefb_ad - Fix unsafe res.errors[0].message access that could cause IndexError (#497)
+  - purefb_admin - Fix unsafe res.errors[0].message access that could cause IndexError (#497)
+  - purefb_alert - Fix unsafe res.errors[0].message access that could cause IndexError (#497)
+  - purefb_apiclient - Fix unsafe res.errors[0].message access that could cause IndexError (#497)
+  - purefb_banner - Fix unsafe res.errors[0].message access that could cause IndexError (#497)
+  - purefb_bladename - Fix unsafe res.errors[0].message access that could cause IndexError (#497)
+  - purefb_bucket - Fix unsafe res.errors[0].message access that could cause IndexError (#497)
+  - purefb_bucket_access - Fix unsafe res.errors[0].message access that could cause IndexError (#497)
+  - purefb_bucket_replica - Fix unsafe res.errors[0].message access that could cause IndexError (#497)
+  - purefb_certgrp - Fix unsafe res.errors[0].message access that could cause IndexError (#497)

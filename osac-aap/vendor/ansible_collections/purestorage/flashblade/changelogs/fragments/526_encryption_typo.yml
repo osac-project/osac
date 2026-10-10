@@ -1,0 +1,2 @@
+bugfixes:
+ - purefb_ad - Correct encryption type from ``arcfour-hma`` to ``arcfour-hmac``

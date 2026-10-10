@@ -1,0 +1,5 @@
+bugfixes:
+  - purefb_fs - Consolidated duplicate get_fs() function and fixed unsafe list access (#493)
+  - purefb_groupquota - Consolidated duplicate get_fs() function and fixed unsafe list access (#493)
+  - purefb_snap - Consolidated duplicate get_fs() function and fixed unsafe list access (#493)
+  - purefb_userquota - Consolidated duplicate get_fs() function and fixed unsafe list access (#493)

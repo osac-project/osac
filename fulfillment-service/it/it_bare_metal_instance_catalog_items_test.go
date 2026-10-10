@@ -206,6 +206,9 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 
 		It("applies editable DiskImage and Template defaults and validates dry-run authentication", func(ctx context.Context) {
 			By("creating a shared catalog item with image and external-IP defaults")
+			// Shared catalog items cannot default tenant-local network attachments; Create
+			// without attachments requires tenant-default Subnet/SG on the caller's tenant.
+			ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
 			instanceType := createCatalogItemBareMetalInstanceTypeFixture(ctx, usersGroup)
 			defaultImage := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
 			overrideImage := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
@@ -362,6 +365,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			Entry("catalog item default: subnet is no longer ready", false, codes.FailedPrecondition),
 		)
 		It("checks user-data Secret conflicts after defaults and releases the conflict when the policy is cleared", func(ctx context.Context) {
+			ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
 			secret := createCatalogItemUserDataSecretFixture(ctx, usersGroup)
 			image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
 			template := createCatalogItemBareMetalInstanceTemplateFixture(ctx, nil, nil)
@@ -755,6 +759,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 	Context("Lifecycle independence", func() {
 		It("keeps resolved inputs independent of policy edits and reconciles a restart after catalog item deletion", func(ctx context.Context) {
 			By("creating an instance from the original catalog policy")
+			ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
 			image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
 			instanceType := createCatalogItemBareMetalInstanceTypeFixture(ctx, usersGroup)
 			template := createCatalogItemBareMetalInstanceTemplateFixture(ctx, nil, nil)

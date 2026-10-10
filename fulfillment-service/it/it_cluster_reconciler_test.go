@@ -24,6 +24,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 	corev1 "k8s.io/api/core/v1"
 	kubeerrors "k8s.io/apimachinery/pkg/api/errors"
@@ -398,6 +399,9 @@ var _ = Describe("Cluster reconciler", func() {
 					},
 				}.Build(),
 			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+				"spec.node_sets",
+			}},
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 

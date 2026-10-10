@@ -297,10 +297,14 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 
 	It("rejects ComputeInstance without attachments when the tenant has no default subnet", func() {
 		computeInstanceId = fmt.Sprintf("test-ci-%s", uuid.New())
+		project := createCatalogItemProjectFixture(ctx, usersGroup)
 		_, err := computeInstancesClient.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
 			Object: publicv1.ComputeInstance_builder{
-				Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("test-ci-%s", uuid.New()[24:32])}.Build(),
-				Id:       computeInstanceId,
+				Metadata: publicv1.Metadata_builder{
+					Name:    fmt.Sprintf("test-ci-%s", uuid.New()[24:32]),
+					Project: project,
+				}.Build(),
+				Id: computeInstanceId,
 				Spec: publicv1.ComputeInstanceSpec_builder{
 					Template:     publicv1.ComputeInstanceTemplateReference_builder{Id: computeInstanceTemplateId}.Build(),
 					InstanceType: publicv1.InstanceTypeReference_builder{Name: instanceTypeId}.Build(),

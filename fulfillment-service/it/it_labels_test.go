@@ -21,6 +21,7 @@ import (
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -172,6 +173,7 @@ var _ = Describe("Labels", func() {
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
 			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		metadata := updateResponse.GetObject().GetMetadata()
@@ -242,6 +244,7 @@ var _ = Describe("Labels", func() {
 						Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 					}.Build(),
 				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
 			}.Build())
 			Expect(err).To(HaveOccurred())
 			status, ok = grpcstatus.FromError(err)

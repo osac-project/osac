@@ -23,6 +23,7 @@ import (
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -173,6 +174,7 @@ var _ = Describe("Version", func() {
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
 			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels", "spec.template"}},
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		object = updateResponse.GetObject()
@@ -197,6 +199,7 @@ var _ = Describe("Version", func() {
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
 			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels", "spec.template"}},
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		object = updateResponse.GetObject()
@@ -242,7 +245,8 @@ var _ = Describe("Version", func() {
 								},
 							}.Build(),
 						}.Build(),
-						Lock: true,
+						UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.annotations"}},
+						Lock:       true,
 					}.Build())
 					g.Expect(err).ToNot(HaveOccurred())
 					object = updateResponse.GetObject()
@@ -272,7 +276,8 @@ var _ = Describe("Version", func() {
 						Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 					}.Build(),
 				}.Build(),
-				Lock: true,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels", "spec.template"}},
+				Lock:       true,
 			}.Build())
 			Expect(err).To(HaveOccurred())
 			status, ok := grpcstatus.FromError(err)
@@ -309,6 +314,7 @@ var _ = Describe("Version", func() {
 						Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 					}.Build(),
 				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels", "spec.template"}},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			object = updateResponse.GetObject()

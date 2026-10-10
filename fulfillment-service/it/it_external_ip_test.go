@@ -293,6 +293,11 @@ var _ = Describe("Private ExternalIPPool CRUD", func() {
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		Eventually(func(g Gomega) {
+			resp, err := client.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: poolId}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(resp.GetObject().GetStatus().GetState()).To(Equal(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY))
+		}, time.Minute, time.Second).Should(Succeed())
 
 		Eventually(func(g Gomega) {
 			resp, err := client.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{

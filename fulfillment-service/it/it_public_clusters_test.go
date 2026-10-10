@@ -235,7 +235,8 @@ var _ = Describe("Public clusters", func() {
 					Name: object.GetMetadata().GetName(),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NetworkAttachment: object.GetSpec().GetNetworkAttachment(),
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"my-node-set": {
 							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),

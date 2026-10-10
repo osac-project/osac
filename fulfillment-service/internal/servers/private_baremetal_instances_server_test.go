@@ -156,6 +156,7 @@ var _ = Describe("Private bare metal instances server", func() {
 
 			createDiskImageWithLifecycle("default-bmi-disk-image",
 				privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE, nil)
+			seedTenantDefaultNetworking(testTenant, "", new("netris"))
 
 			// Create a published catalog item for use in tests.
 			Expect(seedBareMetalCatalogItemTemplate(ctx, testTenant, "", "test-template", bareMetalInstanceTypeReference("default-type"))).To(Succeed())
@@ -171,6 +172,9 @@ var _ = Describe("Private bare metal instances server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			catalogItemID = catalogResp.GetObject().GetId()
+
+			// Tenant defaults so Creates that omit network_attachments can inject them.
+			seedTenantDefaultNetworking(testTenant, "", new("netris"))
 
 			// Create an ExternalIPPool so auto_external_ip_attachment tests can allocate.
 			externalIPPoolDao, err := dao.NewGenericDAO[*privatev1.ExternalIPPool]().
@@ -1333,11 +1337,12 @@ var _ = Describe("Private bare metal instances server", func() {
 					Id:       object.GetId(),
 					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						Template:     privatev1.BareMetalInstanceTemplateReference_builder{Id: "test-template"}.Build(),
-						InstanceType: object.GetSpec().GetInstanceType(),
-						DiskImage:    object.GetSpec().GetDiskImage(),
-						SshPublicKey: new(testSSHPublicKey),
+						CatalogItem:        privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						Template:           privatev1.BareMetalInstanceTemplateReference_builder{Id: "test-template"}.Build(),
+						InstanceType:       object.GetSpec().GetInstanceType(),
+						DiskImage:          object.GetSpec().GetDiskImage(),
+						SshPublicKey:       new(testSSHPublicKey),
+						NetworkAttachments: object.GetSpec().GetNetworkAttachments(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -2057,6 +2062,9 @@ var _ = Describe("Private bare metal instances server", func() {
 			vnResp, err := vnDao.Create().SetObject(privatev1.VirtualNetwork_builder{
 				Metadata: privatev1.Metadata_builder{
 					Tenant: testTenant,
+					Labels: map[string]string{
+						"osac.openshift.io/default": "true",
+					},
 				}.Build(),
 				Spec: privatev1.VirtualNetworkSpec_builder{
 					NetworkClass: privatev1.NetworkClassReference_builder{Id: ncResp.GetObject().GetId()}.Build(),
@@ -2067,8 +2075,12 @@ var _ = Describe("Private bare metal instances server", func() {
 			groups, err := dao.NewGenericDAO[*privatev1.SecurityGroup]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
 			Expect(err).ToNot(HaveOccurred())
 			for _, id := range []string{"sg-1", "sg-2"} {
+				labels := map[string]string{}
+				if id == "sg-1" {
+					labels["osac.openshift.io/default"] = "true"
+				}
 				_, err = groups.Create().SetObject(privatev1.SecurityGroup_builder{
-					Id: id, Metadata: privatev1.Metadata_builder{Name: id, Tenant: testTenant}.Build(),
+					Id: id, Metadata: privatev1.Metadata_builder{Name: id, Tenant: testTenant, Labels: labels}.Build(),
 					Spec:   privatev1.SecurityGroupSpec_builder{VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnResp.GetObject().GetId()}.Build()}.Build(),
 					Status: privatev1.SecurityGroupStatus_builder{State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY}.Build(),
 				}.Build()).Do(ctx)
@@ -2081,10 +2093,15 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			for i, idPtr := range []*string{&subnetID1, &subnetID2} {
 				cidr := fmt.Sprintf("10.0.%d.0/24", i+1)
+				labels := map[string]string{}
+				if i == 0 {
+					labels["osac.openshift.io/default"] = "true"
+				}
 				resp, createErr := subnetDao.Create().SetObject(privatev1.Subnet_builder{
 					Metadata: privatev1.Metadata_builder{
 						Tenant: testTenant,
 						Name:   fmt.Sprintf("test-subnet-%d-%s", i+1, uuid.NewString()[:8]),
+						Labels: labels,
 					}.Build(),
 					Spec: privatev1.SubnetSpec_builder{
 						Ipv4Cidr:       &cidr,
@@ -2429,6 +2446,7 @@ var _ = Describe("Private bare metal instances server", func() {
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
 								Interface: strPtr("data-0"),
+								Primary:   boolPtr(true),
 								SecurityGroups: []*privatev1.SecurityGroupLocalReference{
 									privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build(),
 								},
@@ -2868,8 +2886,8 @@ var _ = Describe("Private bare metal instances server", func() {
 		})
 
 		// createSubnet creates a NetworkClass with the given managers, a VirtualNetwork referencing
-		// it, and a Subnet referencing that VirtualNetwork, via the DAOs directly.
-		createSubnet := func(fabricManager, k8sManager *string) string {
+		// it, a Subnet referencing that VirtualNetwork, and a READY SecurityGroup on that VN.
+		createSubnet := func(fabricManager, k8sManager *string) (subnetID, sgID string) {
 			ncResp, err := networkClassDao.Create().SetObject(
 				privatev1.NetworkClass_builder{
 					FabricManager: fabricManager,
@@ -2909,11 +2927,30 @@ var _ = Describe("Private bare metal instances server", func() {
 			).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 
-			return subnetResp.GetObject().GetId()
+			sgDao, sgErr := dao.NewGenericDAO[*privatev1.SecurityGroup]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(sgErr).ToNot(HaveOccurred())
+			sgResp, sgErr := sgDao.Create().SetObject(privatev1.SecurityGroup_builder{
+				Metadata: privatev1.Metadata_builder{
+					Tenant: testTenant,
+					Name:   uuid.NewString(),
+				}.Build(),
+				Spec: privatev1.SecurityGroupSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnResp.GetObject().GetId()}.Build(),
+				}.Build(),
+				Status: privatev1.SecurityGroupStatus_builder{
+					State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(sgErr).ToNot(HaveOccurred())
+
+			return subnetResp.GetObject().GetId(), sgResp.GetObject().GetId()
 		}
 
 		It("rejects Create when the attachment's NetworkClass has no fabric_manager", func() {
-			subnetID := createSubnet(nil, new("cudn_localnet"))
+			subnetID, sgID := createSubnet(nil, new("cudn_localnet"))
 			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{Name: "missing-fabric-manager"}.Build(),
@@ -2923,6 +2960,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet: privatev1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+									privatev1.SecurityGroupLocalReference_builder{Id: sgID}.Build(),
+								},
 							}.Build(),
 						},
 					}.Build(),
@@ -2934,7 +2974,7 @@ var _ = Describe("Private bare metal instances server", func() {
 		})
 
 		It("allows Create when the attachment's NetworkClass has a fabric_manager", func() {
-			subnetID := createSubnet(new("netris"), nil)
+			subnetID, sgID := createSubnet(new("netris"), nil)
 			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -2947,6 +2987,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet: privatev1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+									privatev1.SecurityGroupLocalReference_builder{Id: sgID}.Build(),
+								},
 							}.Build(),
 						},
 					}.Build(),
@@ -2983,7 +3026,7 @@ var _ = Describe("Private bare metal instances server", func() {
 		})
 
 		DescribeTable("validates resolved attachment dependencies", func(subnetReady, groupReady, sameNetwork bool, code grpccodes.Code, message string) {
-			subnetID := createSubnet(new("netris"), nil)
+			subnetID, _ := createSubnet(new("netris"), nil)
 			subnet, err := subnetDao.Get().SetId(subnetID).Do(ctx)
 			Expect(err).NotTo(HaveOccurred())
 			networkID := subnet.GetObject().GetSpec().GetVirtualNetwork().GetId()
@@ -3036,6 +3079,7 @@ var _ = Describe("Private bare metal instances server", func() {
 		)
 
 		It("allows Create with no network_attachments regardless of fabric manager availability", func() {
+			seedTenantDefaultNetworking(testTenant, "", new("netris"))
 			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -3054,13 +3098,16 @@ var _ = Describe("Private bare metal instances server", func() {
 
 	Describe("Default network_attachments population", func() {
 		var (
-			server         *PrivateBareMetalInstancesServer
-			catalogServer  *PrivateBareMetalInstanceCatalogItemsServer
-			catIDWithType  string
-			catIDNoType    string
-			defaultSubnet  *privatev1.Subnet
-			defaultSG      *privatev1.SecurityGroup
-			customSubnetID string
+			server          *PrivateBareMetalInstancesServer
+			catalogServer   *PrivateBareMetalInstanceCatalogItemsServer
+			catIDWithType   string
+			catIDNoType     string
+			defaultSubnet   *privatev1.Subnet
+			defaultSG       *privatev1.SecurityGroup
+			customSubnetID  string
+			otherSubnetID   string
+			customSGID      string
+			otherSubnetSGID string
 		)
 
 		BeforeEach(func() {
@@ -3143,68 +3190,14 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			catIDNoType = catResp2.GetObject().GetId()
 
-			// Create a NetworkClass with fabric_manager for the fabric manager validation.
-			ncDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
-				SetLogger(logger).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-			fabricMgr := "netris"
-			ncResp, err := ncDao.Create().SetObject(privatev1.NetworkClass_builder{
-				Metadata: privatev1.Metadata_builder{
-					Name:   "default-nc",
-					Tenant: "system",
-				}.Build(),
-				FabricManager: &fabricMgr,
-			}.Build()).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			ncID := ncResp.GetObject().GetId()
+			subnetID, sgID, vnID := seedTenantDefaultNetworking(testTenant, "", new("netris"))
 
-			// Create a VirtualNetwork.
-			vnDao, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
-				SetLogger(logger).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-			vnResp, err := vnDao.Create().SetObject(privatev1.VirtualNetwork_builder{
-				Metadata: privatev1.Metadata_builder{
-					Name:   "default",
-					Tenant: testTenant,
-					Labels: map[string]string{
-						"osac.openshift.io/default": "true",
-					},
-				}.Build(),
-				Spec: privatev1.VirtualNetworkSpec_builder{
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: ncID}.Build(),
-				}.Build(),
-			}.Build()).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			vnID := vnResp.GetObject().GetId()
-
-			// Create default subnet with proper VN reference.
 			subnetDao, err := dao.NewGenericDAO[*privatev1.Subnet]().
 				SetLogger(logger).
 				SetTenancyLogic(tenancy).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
-
-			ipv4Cidr := "10.0.1.0/24"
-			subnetResp, err := subnetDao.Create().SetObject(privatev1.Subnet_builder{
-				Metadata: privatev1.Metadata_builder{
-					Name:   "default-ipv4",
-					Tenant: testTenant,
-					Labels: map[string]string{
-						"osac.openshift.io/default": "true",
-					},
-				}.Build(),
-				Spec: privatev1.SubnetSpec_builder{
-					Ipv4Cidr:       &ipv4Cidr,
-					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
-				}.Build(),
-				Status: privatev1.SubnetStatus_builder{
-					State: privatev1.SubnetState_SUBNET_STATE_READY,
-				}.Build(),
-			}.Build()).Do(ctx)
+			subnetResp, err := subnetDao.Get().SetId(subnetID).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			defaultSubnet = subnetResp.GetObject()
 
@@ -3213,14 +3206,41 @@ var _ = Describe("Private bare metal instances server", func() {
 				SetTenancyLogic(tenancy).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
+			sgResp, err := sgDao.Get().SetId(sgID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			defaultSG = sgResp.GetObject()
 
-			sgResp, err := sgDao.Create().SetObject(privatev1.SecurityGroup_builder{
+			vnDao, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			vnResp, err := vnDao.Get().SetId(vnID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			ncID := refKey(vnResp.GetObject().GetSpec().GetNetworkClass())
+
+			// Custom subnet on the default VN (for partial fill / no-overwrite cases).
+			customCidr := "10.100.2.0/24"
+			customSubnetResp, err := subnetDao.Create().SetObject(privatev1.Subnet_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name:   "default",
+					Name:   fmt.Sprintf("custom-%s", uuid.NewString()[:8]),
 					Tenant: testTenant,
-					Labels: map[string]string{
-						"osac.openshift.io/default": "true",
-					},
+				}.Build(),
+				Spec: privatev1.SubnetSpec_builder{
+					Ipv4Cidr:       &customCidr,
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+				}.Build(),
+				Status: privatev1.SubnetStatus_builder{
+					State: privatev1.SubnetState_SUBNET_STATE_READY,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			customSubnetID = customSubnetResp.GetObject().GetId()
+
+			customSGResp, err := sgDao.Create().SetObject(privatev1.SecurityGroup_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   fmt.Sprintf("custom-sg-%s", uuid.NewString()[:8]),
+					Tenant: testTenant,
 				}.Build(),
 				Spec: privatev1.SecurityGroupSpec_builder{
 					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
@@ -3230,22 +3250,52 @@ var _ = Describe("Private bare metal instances server", func() {
 				}.Build(),
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			defaultSG = sgResp.GetObject()
+			customSGID = customSGResp.GetObject().GetId()
 
-			// Create custom-subnet for the "Does not override" test case.
-			customSubnetResp, err := subnetDao.Create().SetObject(privatev1.Subnet_builder{
+			// Non-default VN + subnet (+ SG) for the non-default partial reject/accept cases.
+			otherVNResp, err := vnDao.Create().SetObject(privatev1.VirtualNetwork_builder{
 				Metadata: privatev1.Metadata_builder{
+					Name:   fmt.Sprintf("other-vn-%s", uuid.NewString()[:8]),
+					Tenant: testTenant,
+				}.Build(),
+				Spec: privatev1.VirtualNetworkSpec_builder{
+					NetworkClass: privatev1.NetworkClassReference_builder{Id: ncID}.Build(),
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			otherVNID := otherVNResp.GetObject().GetId()
+
+			otherCidr := "10.200.1.0/24"
+			otherSubnetResp, err := subnetDao.Create().SetObject(privatev1.Subnet_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   fmt.Sprintf("other-subnet-%s", uuid.NewString()[:8]),
 					Tenant: testTenant,
 				}.Build(),
 				Spec: privatev1.SubnetSpec_builder{
-					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+					Ipv4Cidr:       &otherCidr,
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: otherVNID}.Build(),
 				}.Build(),
 				Status: privatev1.SubnetStatus_builder{
 					State: privatev1.SubnetState_SUBNET_STATE_READY,
 				}.Build(),
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			customSubnetID = customSubnetResp.GetObject().GetId()
+			otherSubnetID = otherSubnetResp.GetObject().GetId()
+
+			otherSGResp, err := sgDao.Create().SetObject(privatev1.SecurityGroup_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   fmt.Sprintf("other-sg-%s", uuid.NewString()[:8]),
+					Tenant: testTenant,
+				}.Build(),
+				Spec: privatev1.SecurityGroupSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: otherVNID}.Build(),
+				}.Build(),
+				Status: privatev1.SecurityGroupStatus_builder{
+					State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			otherSubnetSGID = otherSGResp.GetObject().GetId()
 		})
 
 		It("Populates default network_attachments when omitted", func() {
@@ -3271,7 +3321,56 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(attachments[0].GetInterface()).To(Equal("data-0"))
 		})
 
-		It("Does not override explicitly provided network_attachments", func() {
+		It("Populates default network_attachments when the list is empty", func() {
+			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						DiskImage:          privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:        privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						SshPublicKey:       new(testSSHPublicKey),
+						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			attachments := response.GetObject().GetSpec().GetNetworkAttachments()
+			Expect(attachments).To(HaveLen(1))
+			Expect(attachments[0].GetSubnet().GetId()).To(Equal(defaultSubnet.GetId()))
+			Expect(attachments[0].GetSecurityGroups()[0].GetId()).To(Equal(defaultSG.GetId()))
+			Expect(attachments[0].GetInterface()).To(Equal("data-0"))
+		})
+
+		It("Fills missing subnet, empty security groups, and interface on a partial attachment", func() {
+			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
+						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
+							privatev1.BareMetalNetworkAttachment_builder{}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			attachments := response.GetObject().GetSpec().GetNetworkAttachments()
+			Expect(attachments).To(HaveLen(1))
+			Expect(attachments[0].GetSubnet().GetId()).To(Equal(defaultSubnet.GetId()))
+			Expect(attachments[0].GetSecurityGroups()).To(HaveLen(1))
+			Expect(attachments[0].GetSecurityGroups()[0].GetId()).To(Equal(defaultSG.GetId()))
+			Expect(attachments[0].GetInterface()).To(Equal("data-0"))
+		})
+
+		It("Fills default security group when subnet is on the default VirtualNetwork", func() {
 			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -3294,6 +3393,94 @@ var _ = Describe("Private bare metal instances server", func() {
 			attachments := response.GetObject().GetSpec().GetNetworkAttachments()
 			Expect(attachments).To(HaveLen(1))
 			Expect(attachments[0].GetSubnet().GetId()).To(Equal(customSubnetID))
+			Expect(attachments[0].GetSecurityGroups()).To(HaveLen(1))
+			Expect(attachments[0].GetSecurityGroups()[0].GetId()).To(Equal(defaultSG.GetId()))
+			Expect(attachments[0].GetInterface()).To(Equal("data-0"))
+		})
+
+		It("Does not overwrite fully specified network_attachments", func() {
+			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
+						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
+							privatev1.BareMetalNetworkAttachment_builder{
+								Subnet:    privatev1.SubnetLocalReference_builder{Id: customSubnetID}.Build(),
+								Interface: new("data-1"),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+									privatev1.SecurityGroupLocalReference_builder{Id: customSGID}.Build(),
+								},
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			attachments := response.GetObject().GetSpec().GetNetworkAttachments()
+			Expect(attachments).To(HaveLen(1))
+			Expect(attachments[0].GetSubnet().GetId()).To(Equal(customSubnetID))
+			Expect(attachments[0].GetInterface()).To(Equal("data-1"))
+			Expect(attachments[0].GetSecurityGroups()).To(HaveLen(1))
+			Expect(attachments[0].GetSecurityGroups()[0].GetId()).To(Equal(customSGID))
+		})
+
+		It("Rejects empty security groups when subnet is on a non-default VirtualNetwork", func() {
+			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
+						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
+							privatev1.BareMetalNetworkAttachment_builder{
+								Subnet: privatev1.SubnetLocalReference_builder{Id: otherSubnetID}.Build(),
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("security_groups are required"))
+		})
+
+		It("Accepts a fully specified attachment on a non-default VirtualNetwork", func() {
+			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
+						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
+							privatev1.BareMetalNetworkAttachment_builder{
+								Subnet: privatev1.SubnetLocalReference_builder{Id: otherSubnetID}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+									privatev1.SecurityGroupLocalReference_builder{Id: otherSubnetSGID}.Build(),
+								},
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			attachments := response.GetObject().GetSpec().GetNetworkAttachments()
+			Expect(attachments).To(HaveLen(1))
+			Expect(attachments[0].GetSubnet().GetId()).To(Equal(otherSubnetID))
+			Expect(attachments[0].GetSecurityGroups()[0].GetId()).To(Equal(otherSubnetSGID))
 		})
 
 		It("defaults interface from the selected instance type when the template has no default", func() {
@@ -3318,7 +3505,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(attachments[0].GetInterface()).To(Equal("data-0"))
 		})
 
-		It("Skips defaults when no default subnet exists", func() {
+		It("Rejects Create when no default subnet exists", func() {
 			// Delete the default SG first (migration 103 blocks subnet deletion while SGs
 			// reference the same VN), then delete the default subnet.
 			sgDao, sgErr := dao.NewGenericDAO[*privatev1.SecurityGroup]().
@@ -3327,6 +3514,10 @@ var _ = Describe("Private bare metal instances server", func() {
 				Build()
 			Expect(sgErr).ToNot(HaveOccurred())
 			_, sgErr = sgDao.Delete().SetId(defaultSG.GetId()).Do(ctx)
+			Expect(sgErr).ToNot(HaveOccurred())
+			_, sgErr = sgDao.Delete().SetId(customSGID).Do(ctx)
+			Expect(sgErr).ToNot(HaveOccurred())
+			_, sgErr = sgDao.Delete().SetId(otherSubnetSGID).Do(ctx)
 			Expect(sgErr).ToNot(HaveOccurred())
 
 			subnetDao, sdErr := dao.NewGenericDAO[*privatev1.Subnet]().
@@ -3337,7 +3528,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			_, sdErr = subnetDao.Delete().SetId(defaultSubnet.GetId()).Do(ctx)
 			Expect(sdErr).ToNot(HaveOccurred())
 
-			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
@@ -3349,12 +3540,14 @@ var _ = Describe("Private bare metal instances server", func() {
 					}.Build(),
 				}.Build(),
 			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(response.GetObject().GetSpec().GetNetworkAttachments()).To(BeEmpty())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("no tenant default subnet"))
 		})
 
-		It("Skips defaults when no default security group exists", func() {
-			// Delete the default security group — Create should succeed with no network_attachments.
+		It("Rejects Create when no default security group exists", func() {
 			sgDao, sgErr := dao.NewGenericDAO[*privatev1.SecurityGroup]().
 				SetLogger(logger).
 				SetTenancyLogic(tenancy).
@@ -3363,7 +3556,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			_, sgErr = sgDao.Delete().SetId(defaultSG.GetId()).Do(ctx)
 			Expect(sgErr).ToNot(HaveOccurred())
 
-			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
@@ -3375,8 +3568,11 @@ var _ = Describe("Private bare metal instances server", func() {
 					}.Build(),
 				}.Build(),
 			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(response.GetObject().GetSpec().GetNetworkAttachments()).To(BeEmpty())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("no tenant default security group"))
 		})
 
 		It("Fails when the instance type has no fabric network port", func() {

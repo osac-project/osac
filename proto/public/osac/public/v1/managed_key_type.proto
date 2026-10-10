@@ -1,0 +1,92 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/timestamp.proto";
+import "osac/public/v1/metadata_type.proto";
+
+// A stable logical key identity whose material generations remain attributable to its tenant and project.
+// Key material is generated and stored by the assigned backend.
+//
+// buf:lint:ignore OSAC_OBJECT_SHAPE
+message ManagedKey {
+  // Unique identifier, retained across material generations.
+  string id = 1;
+
+  // Ownership and descriptive metadata. Tenant and project are immutable after creation.
+  // The system tenant identifies provider-owned keys; shared is invalid.
+  // An empty project uses the tenant's default project; a named project uses existing project visibility rules.
+  Metadata metadata = 2;
+
+  // Immutable intended use. An unspecified usage defaults to encrypt/decrypt on creation.
+  ManagedKeyUsage usage = 3 [(buf.validate.field).enum.defined_only = true];
+
+  // Server-owned last confirmed access state. Creation confirms ACTIVE.
+  // Callers must omit this field on creation and cannot change it through Update.
+  ManagedKeyState state = 4 [(buf.validate.field).enum.defined_only = true];
+
+  // Server-owned confirmed material generations in strictly ascending order. The final element is current.
+  // A committed key has at least one generation. Callers must omit this field on creation.
+  repeated ManagedKeyVersion versions = 5;
+
+  // Server-owned time of the last OSAC-confirmed revocation. Present when the key is revoked.
+  google.protobuf.Timestamp revocation_timestamp = 6;
+
+  // Server-owned time of the most recent OSAC-confirmed rotation, retained across revocation and recovery.
+  google.protobuf.Timestamp last_rotation_timestamp = 7;
+
+}
+
+// A backend-neutral material generation of a logical key.
+message ManagedKeyVersion {
+  // Monotonically increasing generation number, independent of backend version identifiers.
+  uint64 generation = 1 [(buf.validate.field).uint64.gt = 0];
+
+  // Time when creation of this generation was confirmed.
+  google.protobuf.Timestamp creation_timestamp = 2 [(buf.validate.field).required = true];
+
+}
+
+// Intended cryptographic use of a managed key.
+enum ManagedKeyUsage {
+  // Usage has not been specified.
+  MANAGED_KEY_USAGE_UNSPECIFIED = 0;
+
+  // Symmetric encryption and decryption.
+  MANAGED_KEY_USAGE_ENCRYPT_DECRYPT = 1;
+}
+
+// Last confirmed access state of a managed key.
+enum ManagedKeyState {
+  // No access state has been confirmed.
+  MANAGED_KEY_STATE_UNSPECIFIED = 0;
+
+  // The key is available for its intended use.
+  MANAGED_KEY_STATE_ACTIVE = 1;
+
+  // Access is revoked for all retained generations.
+  MANAGED_KEY_STATE_REVOKED = 2;
+}
+
+// Local reference to a logical key, without selecting a material generation.
+message ManagedKeyLocalReference {
+  // Canonical logical key identifier, retained across material generations.
+  string id = 1;
+
+  // Key name, resolved within the consuming object's authorized tenant and project.
+  string name = 2;
+}

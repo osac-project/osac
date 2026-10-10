@@ -25,6 +25,7 @@ import "osac/public/v1/compute_instance_type.proto";
 import "osac/public/v1/disk_image_type.proto";
 import "osac/public/v1/host_type_type.proto";
 import "osac/public/v1/instance_type_type.proto";
+import "osac/public/v1/managed_key_type.proto";
 import "osac/public/v1/project_type.proto";
 import "osac/public/v1/tenant_type.proto";
 import "osac/public/v1/role_binding_type.proto";
@@ -62,6 +63,7 @@ message Event {
     RoleBinding role_binding = 14;
     Secret secret = 15;
     Tenant tenant = 16;
+    ManagedKey managed_key = 38;
   }
 }
 

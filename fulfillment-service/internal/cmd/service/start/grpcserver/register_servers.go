@@ -196,6 +196,30 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		privatev1.RegisterClustersServer(registrar, privateClustersServer)
 	}
 
+	deps.Logger.InfoContext(ctx, "Creating managed keys server")
+	managedKeysServer, err := servers.NewManagedKeysServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PublicAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create managed keys server: %w", err)
+	}
+	publicv1.RegisterManagedKeysServer(registrar, managedKeysServer)
+
+	deps.Logger.InfoContext(ctx, "Creating private managed keys server")
+	privateManagedKeysServer, err := servers.NewPrivateManagedKeysServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PrivateAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create private managed keys server: %w", err)
+	}
+	privatev1.RegisterManagedKeysServer(registrar, privateManagedKeysServer)
+
 	// Create the host types server:
 	deps.Logger.InfoContext(ctx, "Creating host types server")
 	hostTypesServer, err := servers.NewHostTypesServer().

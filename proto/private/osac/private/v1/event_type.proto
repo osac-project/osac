@@ -36,6 +36,7 @@ import "osac/private/v1/host_type_type.proto";
 import "osac/private/v1/hub_type.proto";
 import "osac/private/v1/identity_provider_type.proto";
 import "osac/private/v1/instance_type_type.proto";
+import "osac/private/v1/managed_key_type.proto";
 import "osac/private/v1/nat_gateway_type.proto";
 import "osac/private/v1/network_class_type.proto";
 import "osac/private/v1/project_membership_type.proto";
@@ -105,6 +106,7 @@ message Event {
     StorageTier storage_tier = 34 [(cleanapi.field).private = true];
     Volume volume = 35 [(cleanapi.field).private = true];
     AddOnOperator add_on_operator = 37 [(cleanapi.field).private = true];
+    ManagedKey managed_key = 38;
   }
 
 }

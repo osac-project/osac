@@ -211,17 +211,6 @@ func (l *externalIPLifecycle) lockNewBareMetalAttachmentReferences(ctx context.C
 	return err
 }
 
-func (l *externalIPLifecycle) lockNewNATGatewayReferences(ctx context.Context, externalIPID, virtualNetworkID string) error {
-	if _, err := l.externalIPDao.Get().SetId(externalIPID).SetLock(true).Do(ctx); err != nil {
-		return err
-	}
-	if l.virtualNetworkDao == nil {
-		return errors.New("virtual network DAO is not configured")
-	}
-	_, err := l.virtualNetworkDao.Get().SetId(virtualNetworkID).SetLock(true).Do(ctx)
-	return err
-}
-
 func (l *externalIPLifecycle) lockNATGateway(ctx context.Context, id string) (*privatev1.ExternalIP, *privatev1.NATGateway, error) {
 	initialResponse, err := l.natGatewayDao.Get().SetId(id).Do(ctx)
 	if err != nil {
@@ -504,26 +493,7 @@ func (l *externalIPLifecycle) deleteLockedExternalIP(ctx context.Context, extern
 	return UpdatePoolCapacity(ctx, l.externalIPPoolDao, poolID, -1)
 }
 
-func (l *externalIPLifecycle) deleteNATGateway(ctx context.Context, id string) error {
-	_, natGateway, err := l.lockNATGateway(ctx, id)
-	if err != nil {
-		return err
-	}
-	return l.deleteLockedNATGateway(ctx, natGateway)
-}
-
 func (l *externalIPLifecycle) deleteLockedNATGateway(ctx context.Context, natGateway *privatev1.NATGateway) error {
 	_, err := l.natGatewayDao.Delete().SetId(natGateway.GetId()).Do(ctx)
 	return err
-}
-
-func (l *externalIPLifecycle) deleteNATGatewayAndExternalIP(ctx context.Context, id string) error {
-	parent, natGateway, err := l.lockNATGateway(ctx, id)
-	if err != nil {
-		return err
-	}
-	if _, err = l.natGatewayDao.Delete().SetId(natGateway.GetId()).Do(ctx); err != nil {
-		return err
-	}
-	return l.deleteLockedExternalIP(ctx, parent)
 }

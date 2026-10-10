@@ -1,0 +1,22 @@
+---
+# Refreshes the OSAC CI verdict as soon as a review is submitted or dismissed, instead of at the next scheduled sweep.
+#
+# A review on a pull request from a fork cannot write a check: its token is read-only and the workflow file is the pull
+# request's own. So this workflow does nothing at all. It only has to finish. When it does, osac-ci.yml runs from the
+# default branch with a write token (its workflow_run trigger lists this workflow by name), finds the pull request by the
+# exact head commit this run reports, and computes the verdict from live state. Keep the name below in step with that list.
+#
+# No secret, no permission and no checkout: nothing here can leak or run pull request code.
+name: OSAC CI review
+on:
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions: {}
+
+jobs:
+  relay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - run: echo "A review changed this pull request; OSAC CI refreshes its verdict when this run completes."

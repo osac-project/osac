@@ -135,4 +135,12 @@ var _ = Describe("ExternalIP pool selector", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("IP_FAMILY_IPV6"))
 	})
+
+	It("returns an IPv4 family error when only IPv6 pools have capacity", func() {
+		createPool("ipv6-pool", privatev1.IPFamily_IP_FAMILY_IPV6, privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY, 10)
+
+		_, err := SelectExternalIPPool(ctx, poolDao, privatev1.IPFamily_IP_FAMILY_IPV4)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("IP_FAMILY_IPV4"))
+	})
 })

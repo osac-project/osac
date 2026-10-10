@@ -88,10 +88,10 @@ export const BareMetalCreatePage = () => {
                 {t('Bare Metal')}
               </Button>
             </BreadcrumbItem>
-            <BreadcrumbItem isActive>{t('Provision bare metal')}</BreadcrumbItem>
+            <BreadcrumbItem isActive>{t('Launch instance for bare metal')}</BreadcrumbItem>
           </Breadcrumb>
           <Title headingLevel="h1" size="3xl">
-            {t('Provision bare metal')}
+            {t('Launch instance for bare metal')}
           </Title>
           <Content component="p">
             {t('Provision a bare metal instance from a catalog item.')}

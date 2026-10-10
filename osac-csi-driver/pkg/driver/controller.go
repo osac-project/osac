@@ -16,6 +16,10 @@ import (
 const (
 	defaultPollInitialInterval = 1 * time.Second
 	defaultPollMaxInterval     = 30 * time.Second
+	volumeProvisioningError    = "volume provisioning failed"
+	volumeNodeTopologyKey      = "osac.io/node"
+	lvmsProvider               = "lvms"
+	topolvmVolumeIDContextKey  = "osac.topolvm-volume-id"
 
 	// noAttachEndpoint is the sentinel vendor-controller endpoint for backends
 	// that need no controller-side attach/detach — node-local storage such as
@@ -66,9 +70,14 @@ func (c *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 		return nil, status.Error(codes.InvalidArgument, "volume capabilities are required")
 	}
 
-	tier := req.GetParameters()["tier"]
+	tier := req.GetParameters()["osac.tier"]
 	if tier == "" {
-		return nil, status.Error(codes.InvalidArgument, "parameter 'tier' is required")
+		// Keep accepting the pre-OSAC-4361 parameter while StorageClasses
+		// transition to the namespaced osac.tier key.
+		tier = req.GetParameters()["tier"]
+	}
+	if tier == "" {
+		return nil, status.Error(codes.InvalidArgument, "parameter 'osac.tier' is required")
 	}
 
 	tenant := req.GetParameters()["tenant"]
@@ -100,6 +109,7 @@ func (c *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 		AccessMode: accessMode,
 		ClusterID:  c.clusterID,
 		PVCRef:     req.GetName(),
+		Topology:   preferredVolumeTopology(req),
 	}
 
 	vol, err := c.volumes.CreateVolume(ctx, params)
@@ -117,7 +127,7 @@ func (c *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 			}
 		} else {
 			klog.Errorf("Failed to create volume: %v", err)
-			return nil, err
+			return nil, safeVolumeProvisioningError(err)
 		}
 	}
 	if vol == nil {
@@ -133,7 +143,25 @@ func (c *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 		}
 	}
 
-	klog.Infof("CreateVolume succeeded: volumeId=%s backend=%s", vol.ID, vol.Backend)
+	provider := resolvedVolumeProvider(vol)
+	backend := vol.Backend
+	if backend == "" {
+		backend = provider
+	}
+
+	var accessibleTopology []*csi.Topology
+	if provider == lvmsProvider {
+		node, ok := volumeNodeFromTopology(params.Topology)
+		if !ok {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"provider %q requires topology segment %q", lvmsProvider, volumeNodeTopologyKey)
+		}
+		accessibleTopology = []*csi.Topology{{
+			Segments: map[string]string{volumeNodeTopologyKey: node},
+		}}
+	}
+
+	klog.Infof("CreateVolume succeeded: volumeId=%s backend=%s provider=%s", vol.ID, backend, provider)
 
 	// vol.VendorContext carries opaque, backend-specific attach parameters (e.g. VAST's
 	// "subsystem" and "vip_pool_name"). Kubernetes caches this VolumeContext and replays it
@@ -143,15 +171,19 @@ func (c *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 	for k, v := range vol.VendorContext {
 		volumeContext[k] = v
 	}
-	volumeContext["osac.backend"] = vol.Backend
+	volumeContext["osac.backend"] = backend
 	volumeContext["osac.volume-id"] = vol.VendorVolumeID
 	volumeContext["osac.protocol"] = vol.Protocol
+	if provider == lvmsProvider {
+		volumeContext[topolvmVolumeIDContextKey] = vol.VendorVolumeID
+	}
 
 	return &csi.CreateVolumeResponse{
 		Volume: &csi.Volume{
-			VolumeId:      vol.ID,
-			CapacityBytes: vol.CapacityBytes,
-			VolumeContext: volumeContext,
+			VolumeId:           vol.ID,
+			CapacityBytes:      vol.CapacityBytes,
+			VolumeContext:      volumeContext,
+			AccessibleTopology: accessibleTopology,
 		},
 	}, nil
 }
@@ -432,23 +464,58 @@ func capacityCompatible(volBytes int64, cr *csi.CapacityRange) bool {
 	return true
 }
 
+func preferredVolumeTopology(req *csi.CreateVolumeRequest) *fulfillment.VolumeTopology {
+	requirements := req.GetAccessibilityRequirements()
+	preferred := requirements.GetPreferred()
+	if len(preferred) == 0 {
+		return nil
+	}
+
+	segments := preferred[0].GetSegments()
+	cloned := make(map[string]string, len(segments))
+	for key, value := range segments {
+		cloned[key] = value
+	}
+	return &fulfillment.VolumeTopology{Segments: cloned}
+}
+
+func volumeNodeFromTopology(topology *fulfillment.VolumeTopology) (string, bool) {
+	if topology == nil {
+		return "", false
+	}
+	node := topology.Segments[volumeNodeTopologyKey]
+	return node, node != ""
+}
+
+func resolvedVolumeProvider(vol *fulfillment.VolumeInfo) string {
+	if vol.Provider != "" {
+		return vol.Provider
+	}
+	return vol.Backend
+}
+
 func (c *ControllerServer) pollVolumeUntilAvailable(ctx context.Context, volumeID string) (*fulfillment.VolumeInfo, error) {
 	interval := c.pollInitialInterval
 	for {
 		vol, err := c.volumes.GetVolume(ctx, volumeID)
 		if err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to get volume %s: %v", volumeID, err)
+			klog.Errorf("Failed to get volume %s while waiting for provisioning: %v", volumeID, err)
+			return nil, safeVolumeProvisioningError(err)
 		}
 
 		switch vol.State {
 		case fulfillment.VolumeStateAvailable:
 			return vol, nil
 		case fulfillment.VolumeStateError:
-			return nil, status.Errorf(codes.Internal, "volume %s entered error state", volumeID)
+			// Keep detailed provisioning diagnostics in the control plane; the
+			// message may contain backend-specific information.
+			klog.Errorf("Volume %s entered error state", volumeID)
+			return nil, status.Error(codes.Internal, volumeProvisioningError)
 		case fulfillment.VolumeStateCreating:
 			// continue polling
 		default:
-			return nil, status.Errorf(codes.Internal, "volume %s in unexpected state %s", volumeID, vol.State)
+			klog.Errorf("Volume %s entered unexpected state %s", volumeID, vol.State)
+			return nil, status.Error(codes.Internal, volumeProvisioningError)
 		}
 
 		select {
@@ -460,4 +527,12 @@ func (c *ControllerServer) pollVolumeUntilAvailable(ctx context.Context, volumeI
 
 		interval = min(interval*2, c.pollMaxInterval)
 	}
+}
+
+func safeVolumeProvisioningError(err error) error {
+	code := codes.Internal
+	if st, ok := status.FromError(err); ok && st.Code() != codes.OK {
+		code = st.Code()
+	}
+	return status.Error(code, volumeProvisioningError)
 }

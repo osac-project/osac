@@ -18,11 +18,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"time"
 
 	"github.com/spf13/pflag"
 	"google.golang.org/grpc"
+	grpccodes "google.golang.org/grpc/codes"
 	healthv1 "google.golang.org/grpc/health/grpc_health_v1"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
@@ -45,6 +48,7 @@ type ReconcilerBuilder[O dao.Object] struct {
 	function       ReconcilerFunction[O]
 	eventFilter    string
 	objectFilter   string
+	sync           bool
 	syncInterval   time.Duration
 	watchInterval  time.Duration
 	grpcClient     *grpc.ClientConn
@@ -77,6 +81,7 @@ type Reconciler[O dao.Object] struct {
 // NewReconciler creates a builder that can then be used to configure and create a controller.
 func NewReconciler[O dao.Object]() *ReconcilerBuilder[O] {
 	return &ReconcilerBuilder[O]{
+		sync:          true,
 		syncInterval:  1 * time.Hour,
 		watchInterval: 10 * time.Second,
 	}
@@ -88,7 +93,9 @@ func (b *ReconcilerBuilder[O]) SetLogger(value *slog.Logger) *ReconcilerBuilder[
 	return b
 }
 
-// SetName sets the name of the reconciler. This is used for health reporting and logging.
+// SetName sets the name of the reconciler. This is used for health reporting, logging and the event consumer group.
+// It must be an RFC 1123 DNS label with at most 52 characters, leaving room for the event group's -reconciler suffix.
+// Replicas of the same reconciler must use the same name; reconcilers with different filters must use different names.
 func (b *ReconcilerBuilder[O]) SetName(value string) *ReconcilerBuilder[O] {
 	b.name = value
 	return b
@@ -121,8 +128,15 @@ func (b *ReconcilerBuilder[O]) SetObjectFilter(value string) *ReconcilerBuilder[
 	return b
 }
 
-// SetSyncInterval sets how often the reconciler will fetch and reconcile again all the objects. This is optional, and
-// the default is one hour.
+// SetSync enables or disables startup, periodic and watch-restart synchronization. This is optional, and the default
+// is true. Event-driven reconciliation remains enabled, including full scans triggered by related-resource events.
+func (b *ReconcilerBuilder[O]) SetSync(value bool) *ReconcilerBuilder[O] {
+	b.sync = value
+	return b
+}
+
+// SetSyncInterval sets how often the reconciler will fetch and reconcile again all the objects when sync is enabled.
+// This is optional, and the default is one hour.
 func (b *ReconcilerBuilder[O]) SetSyncInterval(value time.Duration) *ReconcilerBuilder[O] {
 	b.syncInterval = value
 	return b
@@ -159,6 +173,17 @@ func (b *ReconcilerBuilder[O]) Build() (result *Reconciler[O], err error) {
 		err = errors.New("name is mandatory")
 		return
 	}
+	if !reconcilerNameRE.MatchString(b.name) {
+		err = errors.New("name must be a valid RFC 1123 DNS label")
+		return
+	}
+	maxNameLength := 63 - len(reconcilerGroupSuffix)
+	if len(b.name) > maxNameLength {
+		err = fmt.Errorf(
+			"name must be at most %d characters to allow the '%s' group suffix",
+			maxNameLength, reconcilerGroupSuffix)
+		return
+	}
 	if b.grpcClient == nil {
 		err = errors.New("gRPC client is mandatory")
 		return
@@ -167,7 +192,7 @@ func (b *ReconcilerBuilder[O]) Build() (result *Reconciler[O], err error) {
 		err = errors.New("function is mandatory")
 		return
 	}
-	if b.syncInterval <= 0 {
+	if b.sync && b.syncInterval <= 0 {
 		err = fmt.Errorf("sync interval should be positive, but it is %s", b.syncInterval)
 		return
 	}
@@ -232,16 +257,18 @@ func (b *ReconcilerBuilder[O]) Build() (result *Reconciler[O], err error) {
 		eventsClient:   eventsClient,
 	}
 
-	// Create the sync loop:
-	reconciler.syncLoop, err = work.NewLoop().
-		SetLogger(b.logger).
-		SetName("sync").
-		SetInterval(b.syncInterval).
-		SetWorkFunc(reconciler.syncObjects).
-		Build()
-	if err != nil {
-		err = fmt.Errorf("failed to create sync loop: %w", err)
-		return
+	// Create the sync loop if enabled:
+	if b.sync {
+		reconciler.syncLoop, err = work.NewLoop().
+			SetLogger(b.logger).
+			SetName("sync").
+			SetInterval(b.syncInterval).
+			SetWorkFunc(reconciler.syncObjects).
+			Build()
+		if err != nil {
+			err = fmt.Errorf("failed to create sync loop: %w", err)
+			return
+		}
 	}
 
 	// Create the watch loop:
@@ -432,11 +459,13 @@ func (c *Reconciler[O]) Start(ctx context.Context) error {
 			c.logger.ErrorContext(ctx, "Watch loop failed", slog.Any("error", err))
 		}
 	}()
-	go func() {
-		if err := c.syncLoop.Run(ctx); err != nil {
-			c.logger.ErrorContext(ctx, "Sync loop failed", slog.Any("error", err))
-		}
-	}()
+	if c.syncLoop != nil {
+		go func() {
+			if err := c.syncLoop.Run(ctx); err != nil {
+				c.logger.ErrorContext(ctx, "Sync loop failed", slog.Any("error", err))
+			}
+		}()
+	}
 
 	// Run the reconcile loop:
 	for {
@@ -445,6 +474,9 @@ func (c *Reconciler[O]) Start(ctx context.Context) error {
 			return context.Canceled
 		case object := <-c.objectChannel:
 			fresh, err := c.getObject(ctx, object.GetId())
+			if grpcstatus.Code(err) == grpccodes.NotFound {
+				continue
+			}
 			if err != nil {
 				c.logger.ErrorContext(
 					ctx,
@@ -471,9 +503,13 @@ func (c *Reconciler[O]) Start(ctx context.Context) error {
 }
 
 func (c *Reconciler[O]) watchEvents(ctx context.Context) error {
-	c.syncLoop.Kick()
+	if c.syncLoop != nil {
+		c.syncLoop.Kick()
+	}
+	group := c.name + reconcilerGroupSuffix
 	stream, err := c.eventsClient.Watch(ctx, &privatev1.EventsWatchRequest{
 		Filter: &c.eventFilter,
+		Group:  &group,
 	})
 	if err != nil {
 		c.reportHealth(ctx, healthv1.HealthCheckResponse_NOT_SERVING)
@@ -496,6 +532,8 @@ func (c *Reconciler[O]) watchEvents(ctx context.Context) error {
 			object := event.Get(c.payloadField).Message().Interface().(O)
 			c.objectChannel <- object
 		} else {
+			// A related resource changed. Reconcilers subscribe to these events to retry dependent objects, so
+			// they must still be processed when the background sync loop is disabled.
 			c.logger.DebugContext(
 				ctx,
 				"Received event without the expected payload, will trigger a full sync",
@@ -532,3 +570,10 @@ func (c *Reconciler[O]) reportHealth(ctx context.Context, status healthv1.Health
 		c.healthReporter.Report(ctx, c.healthName, status)
 	}
 }
+
+// reconcilerGroupSuffix is the suffix added to the reconciler names to build the 'group' parameter passed to the
+// events watch operation.
+const reconcilerGroupSuffix = "-reconciler"
+
+// reconcilerNameRE is the regular expression used to validate names of reconcilers, which must be valid DNS labels.
+var reconcilerNameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)

@@ -74,7 +74,7 @@ type ObjectHelper interface {
 	GetMetadata(object proto.Message) Metadata
 	Create(ctx context.Context, object proto.Message) (proto.Message, error)
 	IsUpdatable() bool
-	Update(ctx context.Context, object proto.Message) (proto.Message, error)
+	Update(ctx context.Context, object proto.Message) (UpdateResult, error)
 	Delete(ctx context.Context, id string) error
 	FindObject(ctx context.Context, ref string, console Renderer) (proto.Message, error)
 	SetTenant(object proto.Message, tenant string)
@@ -684,6 +684,11 @@ type ListResult struct {
 	Total int32
 }
 
+type UpdateResult struct {
+	Object   proto.Message
+	Warnings []string
+}
+
 func (h *objectHelper) List(ctx context.Context, options ListOptions) (result ListResult, err error) {
 	filter := options.Filter
 
@@ -769,9 +774,10 @@ func (h *objectHelper) IsUpdatable() bool {
 	return h.update.path != ""
 }
 
-func (h *objectHelper) Update(ctx context.Context, object proto.Message) (result proto.Message, err error) {
+func (h *objectHelper) Update(ctx context.Context, object proto.Message) (result UpdateResult, err error) {
 	if !h.IsUpdatable() {
-		return nil, grpcstatus.Errorf(codes.FailedPrecondition, "object type %q is immutable; updates are not supported", h.FullName())
+		err = grpcstatus.Errorf(codes.FailedPrecondition, "object type %q is immutable; updates are not supported", h.FullName())
+		return
 	}
 	request := proto.Clone(h.update.request)
 	h.setObject(request, h.update.in, object)
@@ -779,8 +785,12 @@ func (h *objectHelper) Update(ctx context.Context, object proto.Message) (result
 	err = h.parent.connection.Invoke(ctx, h.update.path, request, response)
 	if err != nil {
 		err = fmt.Errorf("failed to update object: %w", err)
+		return
 	}
-	result = h.getObject(response, h.update.out)
+	result.Object = h.getObject(response, h.update.out)
+	if warningResponse, ok := response.(interface{ GetWarnings() []string }); ok {
+		result.Warnings = warningResponse.GetWarnings()
+	}
 	return
 }
 
@@ -860,7 +870,6 @@ var platformScopedTypes = map[protoreflect.Name]bool{
 	"ClusterVersion":   true,
 	"ConsoleSession":   true,
 	"ExternalIPPool":   true,
-	"HostType":         true,
 	"Hub":              true,
 	"IdentityProvider": true,
 	"InstanceType":     true,

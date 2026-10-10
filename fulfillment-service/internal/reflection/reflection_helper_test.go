@@ -161,7 +161,6 @@ var _ = Describe("Reflection helper", func() {
 				"externalip",
 				"externalipattachment",
 				"fabricdomain",
-				"hosttype",
 				"identityprovider",
 				"instancetype",
 				"natgateway",
@@ -195,7 +194,6 @@ var _ = Describe("Reflection helper", func() {
 				"externalipattachments",
 				"externalips",
 				"fabricdomains",
-				"hosttypes",
 				"identityproviders",
 				"instancetypes",
 				"natgateways",
@@ -285,11 +283,6 @@ var _ = Describe("Reflection helper", func() {
 				"osac.public.v1.Cluster",
 			),
 			Entry(
-				"Host type in plural",
-				"hosttypes",
-				"osac.public.v1.HostType",
-			),
-			Entry(
 				"Tenant in singular",
 				"tenant",
 				"osac.public.v1.Tenant",
@@ -326,11 +319,6 @@ var _ = Describe("Reflection helper", func() {
 				"osac.public.v1.ClusterTemplate",
 			),
 			Entry(
-				"Host type",
-				"hosttype",
-				"osac.public.v1.HostType",
-			),
-			Entry(
 				"Compute instance template",
 				"computeinstancetemplate",
 				"osac.public.v1.ComputeInstanceTemplate",
@@ -359,11 +347,6 @@ var _ = Describe("Reflection helper", func() {
 				"Cluster template",
 				"clustertemplate",
 				&publicv1.ClusterTemplate{},
-			),
-			Entry(
-				"Host type",
-				"hosttype",
-				&publicv1.HostType{},
 			),
 		)
 
@@ -459,7 +442,8 @@ var _ = Describe("Reflection helper", func() {
 							Spec: publicv1.ClusterSpec_builder{
 								NodeSets: map[string]*publicv1.ClusterNodeSet{
 									"xyz": publicv1.ClusterNodeSet_builder{
-										Size: proto.Int32(3),
+										BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "acme_1tib"}.Build(),
+										Size:                  proto.Int32(3),
 									}.Build(),
 								},
 							}.Build(),
@@ -471,7 +455,8 @@ var _ = Describe("Reflection helper", func() {
 							Spec: publicv1.ClusterSpec_builder{
 								NodeSets: map[string]*publicv1.ClusterNodeSet{
 									"xyz": publicv1.ClusterNodeSet_builder{
-										Size: proto.Int32(3),
+										BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "acme_1tib"}.Build(),
+										Size:                  proto.Int32(3),
 									}.Build(),
 								},
 							}.Build(),
@@ -491,7 +476,8 @@ var _ = Describe("Reflection helper", func() {
 				Spec: publicv1.ClusterSpec_builder{
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"xyz": publicv1.ClusterNodeSet_builder{
-							Size: proto.Int32(3),
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "acme_1tib"}.Build(),
+							Size:                  proto.Int32(3),
 						}.Build(),
 					},
 				}.Build(),
@@ -504,7 +490,8 @@ var _ = Describe("Reflection helper", func() {
 					Spec: publicv1.ClusterSpec_builder{
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"xyz": publicv1.ClusterNodeSet_builder{
-								Size: proto.Int32(3),
+								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "acme_1tib"}.Build(),
+								Size:                  proto.Int32(3),
 							}.Build(),
 						},
 					}.Build(),
@@ -537,7 +524,8 @@ var _ = Describe("Reflection helper", func() {
 							Spec: publicv1.ClusterSpec_builder{
 								NodeSets: map[string]*publicv1.ClusterNodeSet{
 									"xyz": publicv1.ClusterNodeSet_builder{
-										Size: proto.Int32(3),
+										BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "acme_1tib"}.Build(),
+										Size:                  proto.Int32(3),
 									}.Build(),
 								},
 							}.Build(),
@@ -553,7 +541,7 @@ var _ = Describe("Reflection helper", func() {
 			// Use the helper to send the request, and verify the response:
 			objectHelper := helper.Lookup("cluster")
 			Expect(objectHelper).ToNot(BeNil())
-			object, err := objectHelper.Update(ctx, publicv1.Cluster_builder{
+			result, err := objectHelper.Update(ctx, publicv1.Cluster_builder{
 				Id: "123",
 				Spec: publicv1.ClusterSpec_builder{
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
@@ -564,14 +552,16 @@ var _ = Describe("Reflection helper", func() {
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
+			Expect(result.Warnings).To(BeEmpty())
 			Expect(proto.Equal(
-				object,
+				result.Object,
 				publicv1.Cluster_builder{
 					Id: "123",
 					Spec: publicv1.ClusterSpec_builder{
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"xyz": publicv1.ClusterNodeSet_builder{
-								Size: proto.Int32(3),
+								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "acme_1tib"}.Build(),
+								Size:                  proto.Int32(3),
 							}.Build(),
 						},
 					}.Build(),
@@ -796,7 +786,6 @@ var _ = Describe("Reflection helper", func() {
 		})
 
 		It("Reports platform-scoped types correctly", func() {
-			Expect(helper.Lookup("hosttype").IsTenantScoped()).To(BeFalse())
 			Expect(helper.Lookup("tenant").IsTenantScoped()).To(BeFalse())
 			Expect(helper.Lookup("role").IsTenantScoped()).To(BeFalse())
 		})

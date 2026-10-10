@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand/v2"
 	"slices"
 
 	"google.golang.org/grpc"
@@ -49,11 +48,11 @@ type FunctionBuilder struct {
 }
 
 type function struct {
-	logger         *slog.Logger
-	hubCache       controllers.HubCache
-	subnetsClient  privatev1.SubnetsClient
-	hubsClient     privatev1.HubsClient
-	maskCalculator *masks.Calculator
+	logger              *slog.Logger
+	hubCache            controllers.HubCache
+	subnetsClient       privatev1.SubnetsClient
+	networkingHubReader controllers.NetworkingHubReader
+	maskCalculator      *masks.Calculator
 }
 
 type task struct {
@@ -103,13 +102,21 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 		return
 	}
 
+	networkingHubReader, err := controllers.NewNetworkingHubReader().
+		SetNetworkClassesClient(privatev1.NewNetworkClassesClient(b.connection)).
+		SetHubCache(b.hubCache).
+		Build()
+	if err != nil {
+		return nil, err
+	}
+
 	// Create and populate the object:
 	object := &function{
-		logger:         b.logger,
-		subnetsClient:  privatev1.NewSubnetsClient(b.connection),
-		hubsClient:     privatev1.NewHubsClient(b.connection),
-		hubCache:       b.hubCache,
-		maskCalculator: masks.NewCalculator().Build(),
+		logger:              b.logger,
+		subnetsClient:       privatev1.NewSubnetsClient(b.connection),
+		networkingHubReader: networkingHubReader,
+		hubCache:            b.hubCache,
+		maskCalculator:      masks.NewCalculator().Build(),
 	}
 	result = object.run
 	return
@@ -127,6 +134,16 @@ func (r *function) run(ctx context.Context, subnet *privatev1.Subnet) error {
 	} else {
 		err = t.update(ctx)
 	}
+	var hubResolutionRetryErr error
+	if err != nil {
+		handled, retry := controllers.HandleResourceNetworkingHubResolutionError(err, t.setPending, t.setFailed)
+		if handled {
+			if retry {
+				hubResolutionRetryErr = err
+			}
+			err = nil
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -140,7 +157,10 @@ func (r *function) run(ctx context.Context, subnet *privatev1.Subnet) error {
 		UpdateMask: updateMask,
 	}.Build())
 
-	return err
+	if err != nil {
+		return err
+	}
+	return hubResolutionRetryErr
 }
 
 func (t *task) update(ctx context.Context) error {
@@ -299,28 +319,18 @@ func (t *task) delete(ctx context.Context) (err error) {
 }
 
 func (t *task) selectHub(ctx context.Context) error {
-	t.hubId = t.subnet.GetStatus().GetHub()
-	if t.hubId == "" {
-		response, err := t.r.hubsClient.List(ctx, privatev1.HubsListRequest_builder{}.Build())
-		if err != nil {
-			return err
-		}
-		if len(response.Items) == 0 {
-			return errors.New("there are no hubs")
-		}
-		t.hubId = response.Items[rand.IntN(len(response.Items))].GetId()
-	}
-	t.r.logger.DebugContext(
-		ctx,
-		"Selected hub",
-		slog.String("id", t.hubId),
-	)
-	hubEntry, err := t.r.hubCache.Get(ctx, t.hubId)
+	resolution, err := controllers.ResolveResourceNetworkingHub(ctx, t.r.networkingHubReader, t.subnet.GetStatus().GetHub())
 	if err != nil {
 		return err
 	}
-	t.hubNamespace = hubEntry.Namespace
-	t.hubClient = hubEntry.Client
+	t.hubId = resolution.HubID
+	t.r.logger.DebugContext(
+		ctx,
+		"Resolved canonical networking hub",
+		slog.String("id", t.hubId),
+	)
+	t.hubNamespace = resolution.Namespace
+	t.hubClient = resolution.Client
 	return nil
 }
 
@@ -388,6 +398,14 @@ func (t *task) removeFinalizer() {
 		})
 		t.subnet.GetMetadata().SetFinalizers(list)
 	}
+}
+
+func (t *task) setPending(err error) {
+	if !t.subnet.HasStatus() {
+		t.subnet.SetStatus(&privatev1.SubnetStatus{})
+	}
+	t.subnet.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_PENDING)
+	t.subnet.GetStatus().SetMessage(err.Error())
 }
 
 func (t *task) setFailed(err error) {

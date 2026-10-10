@@ -88,6 +88,7 @@ target Hub cluster.
 | **Container Registry Access** | `registry.redhat.io` and `quay.io` | Verify credentials and pull secrets are valid in the target cluster namespace. |
 | **Network / DNS** | Ingress route configured for OSAC services | Required for external access to fulfillment API and AAP UI. |
 | **Authentication / IDM** | Organization Identity Provider (e.g., Keycloak, LDAP, RH-SSO) | Used for tenant and user identity mapping. |
+| **Kafka** | Broker access for fulfillment events, even when metering is disabled | See [external Kafka configuration](../docs/guides/installation/kafka-configuration.md) for connection settings, credentials, ACLs, TLS trust, and a Strimzi example. |
 | **Storage** | Dynamic storage class available (e.g., `ocs-storagecluster-cephfs`, `lvms-storage`) | Required for persistence of operator and AAP components. |
 | **Permissions** | Cluster-admin access to deploy operators and create CRDs | Limited access users can only deploy into namespaces configured by the admin. |
 | **License Files** | `license.zip` (AAP subscription) | Must be placed in your values directory (e.g., `values/<env>/license.zip`). |
@@ -148,7 +149,7 @@ make install-osac  PLATFORM=openshift PROFILE=<profile> NS=<namespace>   # OSAC 
 | Variable | Description |
 | ---------- | ------------- |
 | `PLATFORM` | `kind` or `openshift` (required) |
-| `PROFILE` | `dev`, `dev-full`, `vmaas-ci`, `bmaas-ci`, `caas-ci`, or `full-ci` (required; `dev-full` is kind only) |
+| `PROFILE` | `dev`, `dev-full`, `vmaas-ci`, `bmaas-ci`, `caas-ci`, `full-ci`, or `cudn-evpn-netris-test` (required; `dev-full` is kind only) |
 | `NS` | Target namespace (required) |
 | `EXTRA_HELM_ARGS` | Extra `--set`/`--set-string` args appended to helm commands |
 
@@ -183,7 +184,7 @@ make -C ../osac-csi-driver image-build \
   IMG=ghcr.io/osac-project/osac-csi-driver:latest \
   CONTAINER_TOOL="$CONTAINER_TOOL"
 "$CONTAINER_TOOL" build -t ghcr.io/osac-project/osac-ui:latest \
-  -f ../../osac-ui/Containerfile ../../osac-ui
+  -f ../osac-ui/Containerfile ../osac-ui
 
 make kind-load-images PLATFORM=kind PROFILE=dev-full NS=osac \
   CONTAINER_TOOL="$CONTAINER_TOOL"
@@ -196,6 +197,32 @@ After changing source code, rerun the relevant component `image-build` target
 and then `kind-load-images`. Loaded images are restarted only for workloads that
 use one of the local image references. Each Go component also exposes a
 single-image `kind-load-image` target when loading only that component is useful.
+
+#### CUDN EVPN/Netris E2E environment
+
+`PROFILE=cudn-evpn-netris-test` is an explicit OpenShift-only profile. It
+contains the normal VMaaS + BMaaS instance and infrastructure values, registers
+both `netris` (fabric) and `cudn_evpn` (k8s) through the operator's nested
+`networkManagers` map, and selects them on the default NetworkClass. It does
+not install the FRR operator, create the Phase 1 EVPN
+`FRRConfiguration`, create the external EVPN/BGP/VTEP fabric, or provide the
+`cudn_evpn` implementation; those prerequisites must be prepared before
+installation.
+
+Install it with:
+
+```bash
+make install PLATFORM=openshift PROFILE=cudn-evpn-netris-test NS=osac
+```
+
+The profile includes the non-secret Netris controller/site/tenant settings.
+Supply the controller password and any site-specific Netris or SSH values in
+a private values file and pass it through `INSTANCE_VALUES_EXTRA`, for example:
+
+```bash
+make install PLATFORM=openshift PROFILE=cudn-evpn-netris-test NS=osac \
+  INSTANCE_VALUES_EXTRA="-f cudn-evpn-netris-test-secrets.local.yaml"
+```
 
 On top of `dev`, `dev-full` adds (via `scripts/dev-full/`, orchestrated by the
 `install-devstack` target):
@@ -284,6 +311,12 @@ automatically by Phase 1. Each is gated by a values toggle (e.g.,
 `certManager.enabled: true`). See [prerequisites/README.md](prerequisites/README.md)
 for details on what each prerequisite provides.
 
+Standalone MCE is disabled by default. Set `mce.enabled: true` in the
+infrastructure values when this installation owns its lifecycle; the `caas-ci`
+profile does so explicitly. Leave it `false` when RHACM or an existing MCE
+installation owns the lifecycle. The disabled state also suppresses the
+temporary Assisted image override resources.
+
 #### AAP Configuration
 
 AAP instance groups carry backend credentials for provisioning jobs.
@@ -346,9 +379,14 @@ oc logs -f job/osac-aap-bootstrap -n <project-name>
 helm upgrade osac charts/osac/ \
   --namespace <project-name> \
   --values values/<project-name>/values.yaml \
+  --force-conflicts \
   --timeout 40m \
   --wait
 ```
+
+On Helm 4, `--force-conflicts` is required: the AAP operator takes field
+ownership of `app.kubernetes.io/managed-by` on the `osac-aap` CR. Omit the
+flag on Helm 3.
 
 The post-upgrade hook re-publishes cluster templates automatically. This is
 idempotent - existing templates are updated via PATCH while new templates
@@ -375,6 +413,7 @@ make uninstall     PLATFORM=... PROFILE=... NS=...  # Full uninstall
 make test          PLATFORM=... PROFILE=... NS=... SUITE=...  # Integration tests
 make helm-lint                                       # Lint all charts
 make helm-template       # Dry-run render all templates
+make mce-render-test                                  # Verify disabled MCE defaults and CaaS enablement
 make helm-validate                                   # Lint + template (full validation)
 make sync-charts         # Rebuild chart dependencies (legacy alias; runs helm dependency build)
 ```

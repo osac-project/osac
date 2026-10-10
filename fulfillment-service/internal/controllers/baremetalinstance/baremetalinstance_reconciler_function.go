@@ -49,8 +49,7 @@ import (
 
 const objectPrefix = "bmi-"
 
-// defaultHostType is a placeholder until host type is modeled in the template proto.
-const defaultHostType = "default"
+const ownerReferenceAnnotation = "osac.openshift.io/owner-reference"
 
 const userDataSecretSuffix = "-user-data"
 
@@ -66,6 +65,15 @@ const (
 	messageStepNetworkSetupHandoff     = "Network handoff is in progress."
 	messageStepNetworkSetupIPDiscovery = "IP address discovery is in progress."
 	messageStepReadyPowerSync          = "Power synchronization is in progress."
+
+	// Curated failure messages — exact strings, one per FailureClassification.
+	messageFailureNoMatchingHosts   = "No bare metal host matched the requested profile."
+	messageFailureHostAllocation    = "Host allocation failed."
+	messageFailureProvisionJob      = "OS installation and configuration did not complete; the provisioning job failed."
+	messageFailureNetworkAttachment = "Network attachment did not complete."
+	messageFailureNetworkHandoff    = "Network handoff (reboot) did not complete."
+	messageFailureIPDiscovery       = "IP address discovery did not complete."
+	messageFailureReadyTimeout      = "The instance did not reach its powered-on ready state."
 )
 
 // FunctionBuilder contains the data and logic needed to build a function that reconciles bare metal instances.
@@ -76,15 +84,14 @@ type FunctionBuilder struct {
 }
 
 type function struct {
-	logger                           *slog.Logger
-	hubCache                         controllers.HubCache
-	bareMetalInstancesClient         privatev1.BareMetalInstancesClient
-	bareMetalInstanceTypesClient     privatev1.BareMetalInstanceTypesClient
-	bareMetalInstanceTemplatesClient privatev1.BareMetalInstanceTemplatesClient
-	hubsClient                       privatev1.HubsClient
-	secretsClient                    privatev1.SecretsClient
-	diskImagesClient                 privatev1.DiskImagesClient
-	maskCalculator                   *masks.Calculator
+	logger                       *slog.Logger
+	hubCache                     controllers.HubCache
+	bareMetalInstancesClient     privatev1.BareMetalInstancesClient
+	bareMetalInstanceTypesClient privatev1.BareMetalInstanceTypesClient
+	hubsClient                   privatev1.HubsClient
+	secretsClient                privatev1.SecretsClient
+	diskImagesClient             privatev1.DiskImagesClient
+	maskCalculator               *masks.Calculator
 }
 
 type task struct {
@@ -135,15 +142,14 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 	}
 
 	object := &function{
-		logger:                           b.logger,
-		bareMetalInstancesClient:         privatev1.NewBareMetalInstancesClient(b.connection),
-		bareMetalInstanceTypesClient:     privatev1.NewBareMetalInstanceTypesClient(b.connection),
-		bareMetalInstanceTemplatesClient: privatev1.NewBareMetalInstanceTemplatesClient(b.connection),
-		hubsClient:                       privatev1.NewHubsClient(b.connection),
-		secretsClient:                    privatev1.NewSecretsClient(b.connection),
-		diskImagesClient:                 privatev1.NewDiskImagesClient(b.connection),
-		hubCache:                         b.hubCache,
-		maskCalculator:                   masks.NewCalculator().Build(),
+		logger:                       b.logger,
+		bareMetalInstancesClient:     privatev1.NewBareMetalInstancesClient(b.connection),
+		bareMetalInstanceTypesClient: privatev1.NewBareMetalInstanceTypesClient(b.connection),
+		hubsClient:                   privatev1.NewHubsClient(b.connection),
+		secretsClient:                privatev1.NewSecretsClient(b.connection),
+		diskImagesClient:             privatev1.NewDiskImagesClient(b.connection),
+		hubCache:                     b.hubCache,
+		maskCalculator:               masks.NewCalculator().Build(),
 	}
 	result = object.run
 	return
@@ -506,14 +512,14 @@ func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 				t.updateCondition(
 					privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
 					privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
-					string(progress.Failure), "")
+					string(progress.Failure), failureMessage(progress.Failure))
 			} else {
 				// Provisioning-axis failure. PROVISIONED carries the failure reason;
 				// READY is False (provisioning never completed).
 				t.updateCondition(
 					privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
 					privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
-					string(progress.Failure), "")
+					string(progress.Failure), failureMessage(progress.Failure))
 				t.updateCondition(
 					privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
 					privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
@@ -701,17 +707,34 @@ func stepMessage(step bmfov1alpha1.ProvisioningStep) string {
 	}
 }
 
+// failureMessage returns the curated tenant-facing message for the given
+// failure classification. Returns "" for an unrecognized classification so
+// callers never panic on future additions before this switch is updated.
+func failureMessage(failure bmfov1alpha1.FailureClassification) string {
+	switch failure {
+	case bmfov1alpha1.FailureNoMatchingHosts:
+		return messageFailureNoMatchingHosts
+	case bmfov1alpha1.FailureHostAllocation:
+		return messageFailureHostAllocation
+	case bmfov1alpha1.FailureProvisionJob:
+		return messageFailureProvisionJob
+	case bmfov1alpha1.FailureNetworkAttachment:
+		return messageFailureNetworkAttachment
+	case bmfov1alpha1.FailureNetworkHandoff:
+		return messageFailureNetworkHandoff
+	case bmfov1alpha1.FailureIPDiscovery:
+		return messageFailureIPDiscovery
+	case bmfov1alpha1.FailureReadyTimeout:
+		return messageFailureReadyTimeout
+	default:
+		return ""
+	}
+}
+
 // mutateBMI sets the fulfillment-service-owned metadata and spec fields, leaving
 // operator-managed fields (ExternalHostID, HostClass, etc.) untouched.
 func (t *task) mutateBMI(ctx context.Context, object *bmfov1alpha1.BareMetalInstance) error {
-	if object.Labels == nil {
-		object.Labels = make(map[string]string)
-	}
-	object.Labels[labels.BareMetalInstanceUuid] = t.bareMetalInstance.GetId()
-	if object.Annotations == nil {
-		object.Annotations = make(map[string]string)
-	}
-	object.Annotations[annotations.Tenant] = t.bareMetalInstance.GetMetadata().GetTenant()
+	t.mutateBMIMetadata(object)
 
 	// The API materializes the Template; the catalog reference is provenance only.
 	templateID := t.bareMetalInstance.GetSpec().GetTemplate().GetId()
@@ -719,53 +742,35 @@ func (t *task) mutateBMI(ctx context.Context, object *bmfov1alpha1.BareMetalInst
 		return fmt.Errorf("BareMetalInstance must have a materialized template")
 	}
 
-	// Resolve host selection labels for the CRD's Selector.HostSelector. When an instance type is
-	// specified, map its host_label_selector. Otherwise fall back to the template's host_type
-	// (legacy path), which the backends map to the osac.openshift.io/host-type label.
-	if object.Spec.Selector.HostSelector == nil {
-		object.Spec.Selector.HostSelector = make(map[string]string)
+	instanceTypeRef := t.bareMetalInstance.GetSpec().GetInstanceType()
+	if instanceTypeRef == nil {
+		return fmt.Errorf("BareMetalInstance '%s' has no instance_type", t.bareMetalInstance.GetId())
 	}
-	if t.bareMetalInstance.GetSpec().HasInstanceType() {
-		instanceTypeRef := t.bareMetalInstance.GetSpec().GetInstanceType()
-		instanceTypeResp, err := t.r.bareMetalInstanceTypesClient.Get(ctx, privatev1.BareMetalInstanceTypesGetRequest_builder{
-			Id: instanceTypeRef.GetId(),
-		}.Build())
-		if err != nil {
-			return fmt.Errorf("failed to get instance type '%s': %w", instanceTypeRef.GetId(), err)
-		}
 
-		instanceType := instanceTypeResp.GetObject()
-		if instanceType.GetSpec().HasHostLabelSelector() {
-			for key, value := range instanceType.GetSpec().GetHostLabelSelector().GetMatchLabels() {
-				object.Spec.Selector.HostSelector[key] = value
-			}
+	// Replace any prior selector so updates cannot retain legacy placement labels.
+	object.Spec.Selector.HostSelector = make(map[string]string)
+	instanceTypeResp, err := t.r.bareMetalInstanceTypesClient.Get(ctx, privatev1.BareMetalInstanceTypesGetRequest_builder{
+		Id: instanceTypeRef.GetId(),
+	}.Build())
+	if err != nil {
+		return fmt.Errorf("failed to get instance type '%s': %w", instanceTypeRef.GetId(), err)
+	}
+
+	instanceType := instanceTypeResp.GetObject()
+	if instanceType.GetSpec().HasHostLabelSelector() {
+		for key, value := range instanceType.GetSpec().GetHostLabelSelector().GetMatchLabels() {
+			object.Spec.Selector.HostSelector[key] = value
 		}
-	} else {
-		// Fall back to template host_type when no instance type is specified.
-		templateResp, err := t.r.bareMetalInstanceTemplatesClient.Get(ctx, privatev1.BareMetalInstanceTemplatesGetRequest_builder{
-			Id: templateID,
-		}.Build())
-		if err != nil {
-			return fmt.Errorf("failed to get instance template '%s': %w", templateID, err)
-		}
-		hostType := templateResp.GetObject().GetHostType()
-		if hostType == "" {
-			hostType = defaultHostType
-		}
-		object.Spec.Selector.HostSelector["hostType"] = hostType
 	}
 
 	// Validate that HostSelector is non-empty after resolving from instance type or template.
 	// The CRD requires MinProperties=1, so an empty selector would fail K8s admission.
 	// Return an explicit error here rather than letting K8s reject with a generic validation error.
 	if len(object.Spec.Selector.HostSelector) == 0 {
-		if t.bareMetalInstance.GetSpec().HasInstanceType() {
-			return fmt.Errorf(
-				"instance type '%s' has no host_label_selector - cannot determine host selection",
-				t.bareMetalInstance.GetSpec().GetInstanceType().GetId(),
-			)
-		}
-		return fmt.Errorf("cannot determine host selection: no instance_type and no template host_type")
+		return fmt.Errorf(
+			"instance type '%s' has no host_label_selector - cannot determine host selection",
+			instanceTypeRef.GetId(),
+		)
 	}
 
 	object.Spec.TemplateID = templateID
@@ -827,17 +832,35 @@ func (t *task) mutateBMI(ctx context.Context, object *bmfov1alpha1.BareMetalInst
 			for _, sg := range att.GetSecurityGroups() {
 				secGroupRefs = append(secGroupRefs, controllers.RefKeyStr(sg))
 			}
+			primary := att.GetPrimary()
+			if len(protoAttachments) == 1 {
+				primary = true
+			}
 			networkAttachments = append(networkAttachments, bmfov1alpha1.BareMetalNetworkAttachment{
 				SubnetRef:         controllers.RefKeyStr(att.GetSubnet()),
 				SecurityGroupRefs: secGroupRefs,
 				Interface:         att.GetInterface(),
-				Primary:           att.GetPrimary(),
+				Primary:           primary,
 			})
 		}
 		object.Spec.NetworkAttachments = networkAttachments
 	}
 
 	return nil
+}
+
+func (t *task) mutateBMIMetadata(object *bmfov1alpha1.BareMetalInstance) {
+	if object.Labels == nil {
+		object.Labels = make(map[string]string)
+	}
+	object.Labels[labels.BareMetalInstanceUuid] = t.bareMetalInstance.GetId()
+	if object.Annotations == nil {
+		object.Annotations = make(map[string]string)
+	}
+	object.Annotations[annotations.Tenant] = t.bareMetalInstance.GetMetadata().GetTenant()
+	if owner := t.bareMetalInstance.GetMetadata().GetAnnotations()[ownerReferenceAnnotation]; owner != "" {
+		object.Annotations[ownerReferenceAnnotation] = owner
+	}
 }
 
 // ensureUserDataSecret creates a Kubernetes Secret containing the cloud-init user data

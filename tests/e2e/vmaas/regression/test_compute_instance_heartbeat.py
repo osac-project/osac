@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from tests.e2e.catalog.conftest import unique_name
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
+    unique_name,
     wait_for_cr,
     wait_for_deletion,
     wait_for_grpc_removal,
@@ -25,7 +25,7 @@ def test_compute_instance_heartbeat(
     k8s_hub_client: K8sClient,
     k8s_virt_client: K8sClient,
     vm_template: str,
-    default_subnet: str,
+    default_network_attachment: dict[str, object],
     metering: MeteringCollector,
 ) -> None:
     """Verify heartbeat events appear for a billable RUNNING VM.
@@ -37,7 +37,7 @@ def test_compute_instance_heartbeat(
     """
     name = unique_name("e2e-ci")
     uuid: str = cli.create_compute_instance(
-        name=name, template=vm_template, network_attachments=[{"subnet": default_subnet}]
+        name=name, template=vm_template, network_attachments=[default_network_attachment]
     )
 
     ci_name: str = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)

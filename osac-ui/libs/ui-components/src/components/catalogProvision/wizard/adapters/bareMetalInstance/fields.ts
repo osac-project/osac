@@ -3,6 +3,9 @@ import { TFunction } from 'i18next';
 
 import { BareMetalInstanceCatalogItem } from '@osac/types';
 
+import { bareMetalInstanceTypeReferenceFromPolicy } from '../../../../catalog/bareMetalCatalogItemResourceDisplay';
+import type { ResourceSelectValue } from '../../../../Form/resourceSelectValue';
+import { emptyResourceSelectValue } from '../../../../Form/resourceSelectValue';
 import {
   getCatalogFieldOverlay,
   overlayDefaultToFormValue,
@@ -15,7 +18,6 @@ export const BM_SSH_KEY_FORM_PATH = 'spec.sshKey';
 export const BM_USER_DATA_WIRE_PATH = 'user_data';
 export const BM_USER_DATA_FORM_PATH = 'spec.userData';
 
-export const BM_INSTANCE_TYPE_WIRE_PATH = 'instance_type.name';
 export const BM_INSTANCE_TYPE_FORM_PATH = 'spec.instanceType.name';
 
 export const BM_NETWORK_ATTACHMENTS_WIRE_PATH = 'network_attachments';
@@ -23,9 +25,9 @@ export const BM_AUTO_EXTERNAL_IP_WIRE_PATH = 'auto_external_ip_attachment';
 
 export interface BareMetalNetworkAttachmentRow {
   id: string;
-  virtualNetwork: string;
-  subnet: string;
-  securityGroups: string[];
+  virtualNetwork: ResourceSelectValue;
+  subnet: ResourceSelectValue;
+  securityGroups: ResourceSelectValue[];
 }
 
 export interface BareMetalNetworkingFormValues {
@@ -46,6 +48,7 @@ export interface BareMetalInstanceWizardValues {
     instanceType: {
       name: string;
     };
+    diskImage: ResourceSelectValue;
     networking: BareMetalNetworkingFormValues;
   };
 }
@@ -63,8 +66,8 @@ export const createNetworkAttachmentRowId = (): string => {
 
 export const createEmptyNetworkAttachmentRow = (): BareMetalNetworkAttachmentRow => ({
   id: createNetworkAttachmentRowId(),
-  virtualNetwork: '',
-  subnet: '',
+  virtualNetwork: emptyResourceSelectValue(),
+  subnet: emptyResourceSelectValue(),
   securityGroups: [],
 });
 
@@ -83,9 +86,21 @@ export const createEmptyBareMetalInstanceValues = (): BareMetalInstanceWizardVal
     instanceType: {
       name: '',
     },
+    diskImage: emptyResourceSelectValue(),
     networking: createEmptyBareMetalNetworkingValues(),
   },
 });
+
+export const getBareMetalInstanceTypeCatalogPolicy = (
+  catalogItem: BareMetalInstanceCatalogItem | null,
+): { editable: boolean; defaultName?: string } => {
+  const policy = catalogItem?.fields?.instanceType;
+  const defaultName = bareMetalInstanceTypeReferenceFromPolicy(policy)?.name;
+  return {
+    editable: policy?.behavior.case !== 'locked',
+    ...(defaultName ? { defaultName } : {}),
+  };
+};
 
 export const applyBmCatalogDefaults = (
   catalogItem: BareMetalInstanceCatalogItem,
@@ -105,11 +120,7 @@ export const applyBmCatalogDefaults = (
     t('User data'),
   );
 
-  const instanceTypeOverlay = getCatalogFieldOverlay(
-    BM_INSTANCE_TYPE_WIRE_PATH,
-    definitions,
-    t('Instance type'),
-  );
+  const instanceTypePolicy = getBareMetalInstanceTypeCatalogPolicy(catalogItem);
 
   const sshDefault = overlayDefaultToFormValue(sshKeyOverlay);
   if (sshDefault !== undefined) {
@@ -121,8 +132,7 @@ export const applyBmCatalogDefaults = (
     void helpers.setFieldValue(BM_USER_DATA_FORM_PATH, userDataDefault);
   }
 
-  const instanceTypeDefault = overlayDefaultToFormValue(instanceTypeOverlay);
-  if (instanceTypeDefault !== undefined) {
-    void helpers.setFieldValue(BM_INSTANCE_TYPE_FORM_PATH, instanceTypeDefault);
+  if (instanceTypePolicy.defaultName) {
+    void helpers.setFieldValue(BM_INSTANCE_TYPE_FORM_PATH, instanceTypePolicy.defaultName);
   }
 };

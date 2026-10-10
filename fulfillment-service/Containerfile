@@ -1,6 +1,6 @@
 # Build context: mono-repo root (not fulfillment-service/ alone).
 # Invoke with: podman build -f fulfillment-service/Containerfile .
-FROM registry.access.redhat.com/ubi10/go-toolset:1.26.7-1788946935 AS builder
+FROM registry.access.redhat.com/ubi10/go-toolset:1.26.7-1791275880 AS builder
 
 ARG DEBUG=false
 
@@ -22,7 +22,7 @@ COPY --chown=1001:1001 osac-metering/adapters/go.mod osac-metering/adapters/go.s
 COPY --chown=1001:1001 osac-ui/proxy/go.mod osac-ui/proxy/go.sum osac-ui/proxy/
 RUN \
   set -e; \
-  cd fulfillment-service && go mod download
+  cd fulfillment-service && GODEBUG=http2client=0 go mod download
 
 ARG VERSION=""
 
@@ -55,7 +55,7 @@ RUN go install github.com/go-delve/delve/cmd/dlv@latest
 # alongside it -- one image, one build, always version-matched to the
 # service it was built with; no separate release mechanism to keep in
 # sync (see docs/RELEASING.md).
-FROM registry.access.redhat.com/ubi10-minimal:10.2-1789456728 AS runtime-base
+FROM registry.access.redhat.com/ubi10-minimal:10.2-1790075626 AS runtime-base
 COPY --from=builder /opt/app-root/src/fulfillment-service/fulfillment-service /usr/local/bin
 COPY --from=builder /opt/app-root/src/fulfillment-service/osac /usr/local/bin
 USER 1001
@@ -66,3 +66,5 @@ COPY --from=dlv-builder /opt/app-root/src/go/bin/dlv /usr/local/bin
 
 # Default (non-debug) runtime — must stay last so plain `podman build .` targets it.
 FROM runtime-base AS runtime
+LABEL name="cloud-extensions/fulfillment-service-rhel10"
+LABEL cpe="cpe:/a:redhat:cloud_extensions:0.1::el10"

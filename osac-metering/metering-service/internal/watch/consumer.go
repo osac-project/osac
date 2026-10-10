@@ -158,7 +158,7 @@ func (c *Consumer) handleEvent(ctx context.Context, event *privatev1.Event) erro
 	if c.skipStaleEvent(prepared) {
 		return nil
 	}
-	if transitionTimeIsStale(prepared.existing, prepared.event.GetType(), prepared.currentState, prepared.version, prepared.transitionTime) {
+	if transitionTimeIsStale(prepared.existing, prepared.event.GetType(), prepared.version, prepared.transitionTime) {
 		c.logger.Info("skipping Watch event with stale transition time",
 			"resource_id", prepared.resourceID,
 			"event_version", prepared.version,
@@ -262,6 +262,9 @@ func projectionIsAhead(existing *projection.ResourceState, version int32, curren
 	if existing == nil {
 		return false
 	}
+	if existing.Deleted {
+		return true
+	}
 	if existing.FulfillmentVersion > version {
 		return true
 	}
@@ -273,13 +276,16 @@ func projectionIsAhead(existing *projection.ResourceState, version int32, curren
 }
 
 // transitionTimeIsStale prevents a newer fulfillment snapshot from moving the
-// authoritative transition time backwards. State changes and deletes require a
-// strictly newer timestamp because their durations are calculated from it.
-// Metadata-only updates may reuse the same timestamp, but not an earlier one.
+// authoritative transition time backwards. Deletes require a strictly newer
+// timestamp because their durations are calculated from it. All other updates
+// (state changes and metadata-only) allow equal timestamps because
+// handleTransientState may advance TransitionTime within the same second
+// (Kubernetes lastTransitionTime has second precision, so a transient state
+// like STARTING and the final state like RUNNING often share the same
+// timestamp).
 func transitionTimeIsStale(
 	existing *projection.ResourceState,
 	eventType privatev1.EventType,
-	currentState string,
 	version int32,
 	transitionTime time.Time,
 ) bool {
@@ -287,8 +293,7 @@ func transitionTimeIsStale(
 		return false
 	}
 
-	stateChanging := existing.CurrentState != currentState
-	if eventType == privatev1.EventType_EVENT_TYPE_OBJECT_DELETED || stateChanging {
+	if eventType == privatev1.EventType_EVENT_TYPE_OBJECT_DELETED {
 		return !transitionTime.After(existing.TransitionTime)
 	}
 	return transitionTime.Before(existing.TransitionTime)
@@ -448,6 +453,9 @@ func (c *Consumer) handleBareMetalDeletion(
 	dims map[string]any,
 	transitionTime time.Time,
 ) error {
+	if existing != nil && existing.Deleted {
+		return nil
+	}
 	previousState := ""
 	if existing != nil {
 		previousState = existing.CurrentState
@@ -483,8 +491,13 @@ func (c *Consumer) handleBareMetalDeletion(
 		return err
 	}
 	if existing != nil {
-		if err := c.store.Delete(ctx, mapper.ResourceID()); err != nil {
+		deleted, err := c.store.DeleteIfVersion(ctx, mapper.ResourceID(), mapper.FulfillmentVersion())
+		if err != nil {
 			return fmt.Errorf("deleting projection for %s: %w", mapper.ResourceID(), err)
+		}
+		if !deleted {
+			c.logger.Info("skipping stale BMaaS delete after projection changed",
+				"resource_id", mapper.ResourceID(), "event_version", mapper.FulfillmentVersion())
 		}
 	}
 	return nil

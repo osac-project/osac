@@ -105,7 +105,24 @@ func main() {
 	}
 
 	if grpcTarget != "" {
-		connectHandler, err := bridge.NewConnectJSONProxy(grpcTarget, tlsConfig)
+		var reflectionToken string
+		if config.OIDCServiceClientID != "" && config.OIDCServiceClientSecret != "" {
+			if config.OIDCIssuerURL == "" {
+				log.Fatal("OIDC_ISSUER_URL is required when OIDC_SERVICE_CLIENT_ID and OIDC_SERVICE_CLIENT_SECRET are set")
+			}
+			tr, err := auth.ClientCredentialsToken(
+				config.OIDCIssuerURL,
+				config.OIDCServiceClientID,
+				config.OIDCServiceClientSecret,
+				newHTTPClient(oidcTLSConfig),
+			)
+			if err != nil {
+				log.WithError(err).Fatal("Failed to fetch service account token for gRPC reflection")
+			}
+			reflectionToken = tr.AccessToken
+		}
+
+		connectHandler, err := bridge.NewConnectJSONProxy(grpcTarget, tlsConfig, reflectionToken)
 		if err != nil {
 			log.WithError(err).Fatal("Failed to create Connect JSON proxy")
 		}

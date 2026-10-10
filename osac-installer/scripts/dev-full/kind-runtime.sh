@@ -198,7 +198,12 @@ create_cluster() {
     detect_podman_mode
   fi
 
-  if kind_cmd get clusters 2>/dev/null | grep -q "^${name}$"; then
+  # `kind get clusters` is broken with current Podman releases: kind 0.32
+  # treats Podman's JSON Labels array as a map while listing clusters. Listing
+  # the nodes for one cluster still works and is enough to make this
+  # idempotent.
+  local nodes
+  if nodes="$(kind_cmd get nodes --name "${name}" 2>/dev/null)" && [[ -n "${nodes}" ]]; then
     log "Kind cluster '${name}' already exists, reusing it"
   else
     log "Creating kind cluster '${name}' (${KIND_PROVIDER})..."
@@ -215,11 +220,23 @@ create_cluster() {
     fi
   fi
 
-  # Write kubeconfig via redirect so it is owned by the invoking user (not root,
-  # even when kind ran under sudo).
+  # Keep the previous kubeconfig intact if Kind finds a node container whose
+  # Kubernetes bootstrap never completed. Write the new config as the invoking
+  # user (not root, even when kind ran under sudo), then replace it atomically.
   mkdir -p "$(dirname "${kubeconfig}")"
-  kind_cmd get kubeconfig --name "${name}" > "${kubeconfig}"
-  chmod 600 "${kubeconfig}"
+  local kubeconfig_tmp
+  kubeconfig_tmp="$(mktemp "${kubeconfig}.tmp.XXXXXX")"
+  if ! kind_cmd get kubeconfig --name "${name}" > "${kubeconfig_tmp}" || [[ ! -s "${kubeconfig_tmp}" ]]; then
+    rm -f "${kubeconfig_tmp}"
+    local runtime_script delete_command
+    runtime_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+    printf -v delete_command '%q delete-cluster %q' "${runtime_script}" "${name}"
+    err "Kind cluster '${name}' has no usable kubeconfig; its control plane may be incomplete."
+    err "If this cluster has no data to keep, remove it with: ${delete_command}"
+    return 1
+  fi
+  chmod 600 "${kubeconfig_tmp}"
+  mv -f "${kubeconfig_tmp}" "${kubeconfig}"
   log "Kubeconfig written to ${kubeconfig}"
 }
 

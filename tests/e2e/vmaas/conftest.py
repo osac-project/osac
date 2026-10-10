@@ -10,17 +10,22 @@ import pytest
 
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
-    wait_for_subnet_cr,
-    wait_for_subnet_deletion,
-    wait_for_subnet_ready,
+    delete_instance_type_if_present,
+    wait_for_grpc_subnet_ready,
+    wait_for_security_group_cr,
+    wait_for_security_group_ready,
     wait_for_tenant_condition,
-    wait_for_virtual_network_cr,
-    wait_for_virtual_network_deletion,
-    wait_for_virtual_network_ready,
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import env
+from tests.e2e.vmaas.networking_lifecycle_helpers import (
+    create_and_wait_for_subnet,
+    create_and_wait_for_virtual_network,
+    delete_and_wait_for_security_group,
+    delete_and_wait_for_subnet,
+    delete_and_wait_for_virtual_network,
+)
 
 DEFAULT_IT_VCPUS: int = 2
 DEFAULT_IT_MEMORY_GIB: int = 4
@@ -61,52 +66,68 @@ def default_networking(grpc: GRPCClient, k8s_hub_client: K8sClient, test_run_id:
     # Track created resources for cleanup on setup failure
     vn_id: str | None = None
     vn_cr_name: str | None = None
+    security_group_id: str | None = None
+    security_group_cr_name: str | None = None
     subnet_id: str | None = None
     subnet_cr_name: str | None = None
 
     try:
         # Create virtual network with unique name
         vn_name = f"test-vn-{test_run_id}"
-        print(f"\nCreating VirtualNetwork: {vn_name}")
-        vn_id = grpc.create_virtual_network(name=vn_name, ipv4_cidr="10.200.0.0/16")
-        vn_cr_name = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)
-        print(f"Waiting for VirtualNetwork {vn_cr_name} to become Ready...")
-        wait_for_virtual_network_ready(k8s=k8s_hub_client, name=vn_cr_name)
-        print(f"VirtualNetwork {vn_cr_name} is Ready")
+        print("\nCreating VirtualNetwork")
+        vn_id, vn_cr_name = create_and_wait_for_virtual_network(grpc, k8s_hub_client, vn_name, "10.200.0.0/16")
+        print("VirtualNetwork is Ready")
 
         # Create subnet with unique name
-        subnet_name = f"test-subnet-{test_run_id}"
-        print(f"Creating Subnet: {subnet_name}")
-        subnet_id = grpc.create_subnet(name=subnet_name, virtual_network=vn_id, ipv4_cidr="10.200.100.0/24")
-        subnet_cr_name = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_id)
-        print(f"Waiting for Subnet {subnet_cr_name} to become Ready...")
-        wait_for_subnet_ready(k8s=k8s_hub_client, name=subnet_cr_name)
-        print(f"Subnet {subnet_cr_name} is Ready")
+        print("Creating Subnet")
+        subnet_id, subnet_cr_name = create_and_wait_for_subnet(
+            grpc, k8s_hub_client, vn_id, "10.200.100.0/24", name_prefix=f"test-subnet-{test_run_id}"
+        )
+        wait_for_grpc_subnet_ready(grpc=grpc, subnet_id=subnet_id)
+        print("Subnet is Ready")
+
+        # Keep the shared test network permissive like the pre-SecurityGroup setup.
+        security_group_id = grpc.create_security_group_with_rules(
+            name=f"test-sg-{test_run_id}",
+            virtual_network=vn_id,
+            ingress=[{"protocol": "PROTOCOL_ALL", "ipv4_cidr": "0.0.0.0/0"}],
+            egress=[{"protocol": "PROTOCOL_ALL", "ipv4_cidr": "0.0.0.0/0"}],
+        )
+        security_group_cr_name = wait_for_security_group_cr(k8s=k8s_hub_client, uuid=security_group_id)
+        wait_for_security_group_ready(k8s=k8s_hub_client, name=security_group_cr_name)
+        print("SecurityGroup is Ready")
 
         yield {
             "virtual_network_id": vn_id,
             "virtual_network_cr_name": vn_cr_name,
+            "security_group_id": security_group_id,
+            "security_group_cr_name": security_group_cr_name,
             "subnet_id": subnet_id,
             "subnet_cr_name": subnet_cr_name,
         }
     finally:
-        print(f"\nCleaning up test networking resources: {test_run_id}")
+        print("\nCleaning up test networking resources")
+        if security_group_id:
+            try:
+                print("Deleting SecurityGroup...")
+                delete_and_wait_for_security_group(grpc, k8s_hub_client, security_group_id, security_group_cr_name)
+                print("SecurityGroup deleted")
+            except Exception:
+                print("WARNING: Failed to delete security group")
         if subnet_id and subnet_cr_name:
             try:
-                print(f"Deleting Subnet {subnet_id}...")
-                grpc.delete_subnet(subnet_id=subnet_id)
-                wait_for_subnet_deletion(k8s=k8s_hub_client, name=subnet_cr_name)
-                print(f"Subnet {subnet_id} deleted")
-            except Exception as e:
-                print(f"WARNING: Failed to delete subnet {subnet_id}: {e}")
+                print("Deleting Subnet...")
+                delete_and_wait_for_subnet(grpc, k8s_hub_client, subnet_id, subnet_cr_name)
+                print("Subnet deleted")
+            except Exception:
+                print("WARNING: Failed to delete subnet")
         if vn_id and vn_cr_name:
             try:
-                print(f"Deleting VirtualNetwork {vn_id}...")
-                grpc.delete_virtual_network(vn_id=vn_id)
-                wait_for_virtual_network_deletion(k8s=k8s_hub_client, name=vn_cr_name)
-                print(f"VirtualNetwork {vn_id} deleted")
-            except Exception as e:
-                print(f"WARNING: Failed to delete virtual network {vn_id}: {e}")
+                print("Deleting VirtualNetwork...")
+                delete_and_wait_for_virtual_network(grpc, k8s_hub_client, vn_id, vn_cr_name)
+                print("VirtualNetwork deleted")
+            except Exception:
+                print("WARNING: Failed to delete virtual network")
 
 
 @pytest.fixture(scope="session")
@@ -122,6 +143,18 @@ def default_subnet_ref(default_networking: dict[str, str]) -> str:
 
 
 @pytest.fixture(scope="session")
+def default_security_group(default_networking: dict[str, str]) -> str:
+    """Convenience fixture that returns the shared VM test SecurityGroup ID."""
+    return default_networking["security_group_id"]
+
+
+@pytest.fixture(scope="session")
+def default_network_attachment(default_subnet: str, default_security_group: str) -> dict[str, object]:
+    """Return a permissive explicit network attachment for VM creation tests."""
+    return {"subnet": default_subnet, "security_groups": [default_security_group]}
+
+
+@pytest.fixture(scope="session")
 def default_instance_type(private_grpc: GRPCClient, test_run_id: str) -> Iterator[str]:
     """Create a default ACTIVE instance type for VM tests; clean up after."""
     it_name = f"e2e-default-it-{test_run_id}"
@@ -129,12 +162,7 @@ def default_instance_type(private_grpc: GRPCClient, test_run_id: str) -> Iterato
         name=it_name, vcpus=DEFAULT_IT_VCPUS, memory_gib=DEFAULT_IT_MEMORY_GIB, description="Default E2E instance type"
     )
     yield it_name
-    try:
-        private_grpc.delete_instance_type(name=it_name)
-    except subprocess.CalledProcessError as e:
-        output = ((e.stdout or "") + (e.stderr or "")).lower()
-        if "not found" not in output:
-            raise
+    delete_instance_type_if_present(grpc=private_grpc, name=it_name)
 
 
 @pytest.fixture(scope="session")

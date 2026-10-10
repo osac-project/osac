@@ -210,8 +210,13 @@ func (c *Consumer) commitMappedEvent(ctx context.Context, prepared preparedEvent
 			return err
 		}
 		if prepared.existing != nil {
-			if err := c.store.Delete(ctx, prepared.resourceID); err != nil {
+			deleted, err := c.store.DeleteIfVersion(ctx, prepared.resourceID, prepared.version)
+			if err != nil {
 				return fmt.Errorf("deleting projection for %s: %w", prepared.resourceID, err)
+			}
+			if !deleted {
+				c.logger.Info("skipping stale delete after projection changed",
+					"resource_id", prepared.resourceID, "event_version", prepared.version)
 			}
 		}
 		return nil

@@ -19,9 +19,11 @@ package inventory
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
@@ -39,6 +41,64 @@ import (
 func TestBCMInventoryAdapter(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "BCM Inventory Adapter Suite")
+}
+
+func TestGetHostLogicalPortMACs_BCM(t *testing.T) {
+	const mapping = `{"data-0":"52:54:00:16:04:83","data-1":"52:54:00:AA:BB:CC"}`
+	wantMapping := map[string]string{"data-0": "52:54:00:16:04:83", "data-1": "52:54:00:AA:BB:CC"}
+	tests := []struct {
+		name          string
+		extra         string
+		hostID        string
+		missingDevice bool
+		apiErr        error
+		want          map[string]string
+		wantErr       bool
+	}{
+		{name: "object mapping", extra: `{"osac_interface_macs":` + mapping + `}`, want: wantMapping},
+		{name: "JSON string mapping", extra: `{"osac_interface_macs":"{\"data-0\":\"52:54:00:16:04:83\"}"}`, want: map[string]string{"data-0": "52:54:00:16:04:83"}},
+		{name: "absent mapping", extra: `{}`, want: map[string]string{}},
+		{name: "null extra", extra: `null`, want: map[string]string{}},
+		{name: "null value", extra: `{"osac_interface_macs":null}`, want: map[string]string{}},
+		{name: "empty string", extra: `{"osac_interface_macs":""}`, want: map[string]string{}},
+		{name: "empty mapping", extra: `{"osac_interface_macs":{}}`, want: map[string]string{}},
+		{name: "malformed JSON", extra: `{"osac_interface_macs":"not-json"}`, wantErr: true},
+		{name: "wrong shape", extra: `{"osac_interface_macs":[]}`, wantErr: true},
+		{name: "non-string MAC", extra: `{"osac_interface_macs":{"data-0":42}}`, wantErr: true},
+		{name: "missing device", extra: `{}`, missingDevice: true, wantErr: true},
+		{name: "provider error", extra: `{}`, apiErr: errors.New("BCM unavailable"), wantErr: true},
+		{name: "invalid host ID", extra: `{}`, hostID: "bad-id", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			mockAPI := NewMockBCMAPI(gomock.NewController(t))
+			var device *bcmclient.Device
+			if !tt.missingDevice {
+				device = &bcmclient.Device{Hostname: "host-macs"}
+				if err := json.Unmarshal([]byte(tt.extra), &device.ExtraValues); err != nil {
+					t.Fatal(err)
+				}
+			}
+			hostID := tt.hostID
+			if hostID == "" {
+				hostID = testNamespace + "/host-macs"
+				mockAPI.EXPECT().GetDevice(ctx, "host-macs").Return(device, tt.apiErr)
+			}
+			// Logical mappings come entirely from BCM, even when no BMH exists.
+			c := NewBCMClient(mockAPI, nil, "metal3")
+			got, err := c.GetHostLogicalPortMACs(ctx, hostID)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("GetHostLogicalPortMACs error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.apiErr != nil && !errors.Is(err, tt.apiErr) {
+				t.Fatalf("provider error was not preserved: %v", err)
+			}
+			if !tt.wantErr && !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("GetHostLogicalPortMACs = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }
 
 func makeDevice(jsonStr string) *bcmclient.Device {
@@ -122,13 +182,13 @@ var _ = Describe("BCM Inventory Adapter", func() {
 		var (
 			ctrl    *gomock.Controller
 			mockAPI *MockBCMAPI
-			bmhMgr  *MockBMHLifecycleManager
+			bmhMgr  *baremetalhost.MockBMHLifecycleManager
 		)
 
 		BeforeEach(func() {
 			ctrl = gomock.NewController(GinkgoT())
 			mockAPI = NewMockBCMAPI(ctrl)
-			bmhMgr = NewMockBMHLifecycleManager(ctrl)
+			bmhMgr = baremetalhost.NewMockBMHLifecycleManager(ctrl)
 			bmhMgr.EXPECT().Namespace().Return(bmhNamespace).AnyTimes()
 		})
 
@@ -252,13 +312,13 @@ var _ = Describe("BCM Inventory Adapter", func() {
 		var (
 			ctrl    *gomock.Controller
 			mockAPI *MockBCMAPI
-			bmhMgr  *MockBMHLifecycleManager
+			bmhMgr  *baremetalhost.MockBMHLifecycleManager
 		)
 
 		BeforeEach(func() {
 			ctrl = gomock.NewController(GinkgoT())
 			mockAPI = NewMockBCMAPI(ctrl)
-			bmhMgr = NewMockBMHLifecycleManager(ctrl)
+			bmhMgr = baremetalhost.NewMockBMHLifecycleManager(ctrl)
 			bmhMgr.EXPECT().Namespace().Return(bmhNamespace).AnyTimes()
 		})
 
@@ -663,13 +723,13 @@ var _ = Describe("BCM Inventory Adapter", func() {
 		var (
 			ctrl    *gomock.Controller
 			mockAPI *MockBCMAPI
-			bmhMgr  *MockBMHLifecycleManager
+			bmhMgr  *baremetalhost.MockBMHLifecycleManager
 		)
 
 		BeforeEach(func() {
 			ctrl = gomock.NewController(GinkgoT())
 			mockAPI = NewMockBCMAPI(ctrl)
-			bmhMgr = NewMockBMHLifecycleManager(ctrl)
+			bmhMgr = baremetalhost.NewMockBMHLifecycleManager(ctrl)
 			bmhMgr.EXPECT().Namespace().Return(bmhNamespace).AnyTimes()
 		})
 
@@ -787,7 +847,7 @@ var _ = Describe("BCM Inventory Adapter", func() {
 	Describe("FindFreeHost", func() {
 		var (
 			ctx        context.Context
-			bmhMgr     *MockBMHLifecycleManager
+			bmhMgr     *baremetalhost.MockBMHLifecycleManager
 			bcmDevices func(w http.ResponseWriter, r *http.Request)
 		)
 
@@ -812,7 +872,7 @@ var _ = Describe("BCM Inventory Adapter", func() {
 		BeforeEach(func() {
 			ctx = context.Background()
 			ctrl := gomock.NewController(GinkgoT())
-			bmhMgr = NewMockBMHLifecycleManager(ctrl)
+			bmhMgr = baremetalhost.NewMockBMHLifecycleManager(ctrl)
 			bmhMgr.EXPECT().Namespace().Return("osac-baremetal").AnyTimes()
 		})
 
@@ -945,6 +1005,7 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			Entry("reserved key osac_instance_id", map[string]string{"osac_instance_id": "x"}),
 			Entry("reserved key osac_bmc_address", map[string]string{"osac_bmc_address": "x"}),
 			Entry("reserved key osac_bmc_credentials_secret", map[string]string{"osac_bmc_credentials_secret": "x"}),
+			Entry("reserved key osac_interface_macs", map[string]string{"osac_interface_macs": "x"}),
 		)
 
 		It("should skip devices with missing MAC address", func() {

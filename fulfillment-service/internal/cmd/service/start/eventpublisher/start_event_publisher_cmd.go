@@ -129,7 +129,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) (err error) {
 		return fmt.Errorf("failed to load trusted CA certificates: %w", err)
 	}
 
-	c.logger.InfoContext(ctx, "Creating Kafka client")
+	c.logger.InfoContext(ctx, "Creating Kafka configuration")
 	kafkaTool, err := kafka.NewTool().
 		SetLogger(c.logger).
 		SetFlags(c.flags).
@@ -138,19 +138,15 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) (err error) {
 	if err != nil {
 		return err
 	}
-	kafkaClient, err := kafkaTool.Client()
-	if err != nil {
-		return err
-	}
-	shutdown.AddFunction("kafka", 0, func(context.Context) error {
-		return kafkaClient.Close()
-	})
+	kafkaConfig := kafkaTool.Config()
+	kafkaBrokers := kafkaTool.Brokers()
 
 	c.logger.InfoContext(ctx, "Creating event publisher")
 	eventPublisher, err := servers.NewEventPublisher().
 		SetLogger(c.logger).
 		SetDatabasePool(dbPool).
-		SetKafkaClient(kafkaClient).
+		SetKafkaConfig(kafkaConfig).
+		SetKafkaBrokers(kafkaBrokers...).
 		SetKafkaTopicPrefix(c.args.topicPrefix).
 		SetMetricsRegisterer(metricsRegisterer).
 		Build()

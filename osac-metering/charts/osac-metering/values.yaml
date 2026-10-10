@@ -7,6 +7,8 @@ image:
 # identity at startup when this chart is installed standalone.
 global:
   osacDeploymentId: ""
+  fulfillmentTrust:
+    enabled: false
 
 # Fulfillment address is auto-derived from release namespace.
 # Override fulfillment.address for cross-namespace/cross-cluster (OSAC-3537).

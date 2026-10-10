@@ -35,8 +35,9 @@ type BaseConfig struct {
 // LifecycleConfig holds the additional settings needed for tenant
 // namespace lifecycle management in Vault.
 type LifecycleConfig struct {
-	Role      string
-	MountPath string
+	Role             string
+	MountPath        string
+	TransitMountPath string
 }
 
 func getString(flags *pflag.FlagSet, name string) (string, error) {
@@ -94,6 +95,7 @@ func AddBaseFlags(flags *pflag.FlagSet) {
 // AddLifecycleFlags registers the vault flags needed for tenant namespace
 // lifecycle management. Call AddBaseFlags first; these extend the base set.
 func AddLifecycleFlags(flags *pflag.FlagSet) {
+	_ = flags.String(transitMountPathFlagName, "transit", transitMountPathFlagHelp)
 	_ = flags.String(
 		lifecycleRoleFlagName,
 		"",
@@ -162,10 +164,15 @@ func LifecycleConfigFromFlags(flags *pflag.FlagSet) (LifecycleConfig, error) {
 	if err != nil {
 		return LifecycleConfig{}, err
 	}
+	transitMountPath, err := getString(flags, transitMountPathFlagName)
+	if err != nil {
+		return LifecycleConfig{}, err
+	}
 
 	return LifecycleConfig{
-		Role:      role,
-		MountPath: mountPath,
+		Role:             role,
+		MountPath:        mountPath,
+		TransitMountPath: transitMountPath,
 	}, nil
 }
 
@@ -193,6 +200,20 @@ func ValidateBaseKeycloakConfig(cfg BaseConfig) error {
 	return nil
 }
 
+// ValidateBaseConfig checks that all Vault settings required by the service are set.
+func ValidateBaseConfig(cfg BaseConfig) error {
+	if cfg.Endpoint == "" {
+		return fmt.Errorf("flag '--%s' is required", endpointFlagName)
+	}
+	if cfg.Namespace == "" {
+		return fmt.Errorf("flag '--%s' is required", namespaceFlagName)
+	}
+	if cfg.KVMountPath == "" {
+		return fmt.Errorf("flag '--%s' is required", kvMountPathFlagName)
+	}
+	return ValidateBaseKeycloakConfig(cfg)
+}
+
 func ValidateLifecycleConfig(cfg LifecycleConfig) error {
 	if cfg.Role == "" {
 		return fmt.Errorf(
@@ -200,7 +221,7 @@ func ValidateLifecycleConfig(cfg LifecycleConfig) error {
 			lifecycleRoleFlagName, endpointFlagName,
 		)
 	}
-	return nil
+	return validatePathComponent(cfg.TransitMountPath, "Transit mount path")
 }
 
 const (
@@ -210,6 +231,7 @@ const (
 
 	lifecycleRoleFlagName            = "vault-lifecycle-role"
 	lifecycleMountPathFlagName       = "vault-lifecycle-mount-path"
+	transitMountPathFlagName         = "vault-transit-mount-path"
 	keycloakIssuerURLFlagName        = "vault-keycloak-issuer-url"
 	keycloakAudienceFlagName         = "vault-keycloak-audience"
 	keycloakClientIDFlagName         = "vault-keycloak-client-id"
@@ -233,6 +255,10 @@ _PATH_ - KV v2 secret engine mount path within a tenant namespaces.
 const lifecycleRoleFlagHelp = `
 _ROLE_ - Vault role name used when authenticating with JWT for
 lifecycle operations.
+`
+
+const transitMountPathFlagHelp = `
+_PATH_ - Transit engine mount path within tenant namespaces.
 `
 
 const lifecycleMountPathFlagHelp = `

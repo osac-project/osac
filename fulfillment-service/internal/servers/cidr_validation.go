@@ -62,6 +62,19 @@ func parseAndValidateCanonicalCIDR(cidrStr string, ipVersion string) (string, er
 	return canonical, nil
 }
 
+func validateCanonicalIPv4Address(fieldPath, address string) error {
+	if address == "" {
+		return nil
+	}
+
+	parsed, err := netip.ParseAddr(address)
+	if err != nil || !parsed.Is4() || parsed.String() != address {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field '%s' must be a canonical IPv4 address without a CIDR prefix; got '%s'", fieldPath, address)
+	}
+	return nil
+}
+
 // cidrPrefixesEqual reports whether two CIDR strings denote the same network prefix.
 func cidrPrefixesEqual(a, b string) (bool, error) {
 	if a == b {

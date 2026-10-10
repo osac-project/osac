@@ -71,7 +71,7 @@ describe('VmListPage', () => {
     } as ReturnType<typeof useInstanceTypes>);
   });
 
-  it('shows an alert and still renders the table when instance types fail to load', () => {
+  it('shows an alert and still renders the table when instance types fail to load', async () => {
     vi.mocked(useInstanceTypes).mockReturnValue(
       mockQueryResult({
         data: [],
@@ -82,7 +82,7 @@ describe('VmListPage', () => {
 
     renderPage();
 
-    expect(screen.getByText('Could not load instance types')).toBeInTheDocument();
+    expect(await screen.findByText('Could not load instance types')).toBeInTheDocument();
     expect(screen.getByText('Instance types unavailable')).toBeInTheDocument();
     expect(screen.getByText('Services').closest('.pf-v6-c-label')).not.toBeNull();
     expect(screen.getByRole('link', { name: 'Create virtual machine' })).toHaveAttribute(
@@ -93,7 +93,7 @@ describe('VmListPage', () => {
     expect(screen.getByText('standard-4-8')).toBeInTheDocument();
   });
 
-  it('keeps compute instance failures on the page-level error path', () => {
+  it('keeps compute instance failures on the page-level error path', async () => {
     vi.mocked(useComputeInstances).mockReturnValue(
       mockQueryResult({
         data: [],
@@ -104,7 +104,7 @@ describe('VmListPage', () => {
 
     renderPage();
 
-    expect(screen.getByText('An error occurred')).toBeInTheDocument();
+    expect(await screen.findByText('An error occurred')).toBeInTheDocument();
     expect(screen.getByText('VMs unavailable')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'web-01' })).not.toBeInTheDocument();
   });

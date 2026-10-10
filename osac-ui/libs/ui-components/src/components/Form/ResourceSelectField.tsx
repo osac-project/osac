@@ -44,6 +44,8 @@ export interface ResourceSelectFieldProps {
   loadErrorTitle?: string;
   emptyTitle?: string;
   emptyDescription?: string;
+  /** Called after a new resource is selected. Use to trigger cascade resets. */
+  onSelectResource?: (value: ResourceSelectValue) => void;
 }
 
 const resourceFromItem = (item: ResourceListItem): ResourceSelectValue => ({
@@ -66,6 +68,7 @@ export const ResourceSelectField = ({
   loadErrorTitle,
   emptyTitle,
   emptyDescription,
+  onSelectResource,
 }: ResourceSelectFieldProps) => {
   const [field, meta, helpers] = useField<ResourceSelectValue>(name);
   const [isOpen, setIsOpen] = useState(false);
@@ -106,9 +109,11 @@ export const ResourceSelectField = ({
     if (!item) {
       return;
     }
-    void helpers.setValue(resourceFromItem(item), true);
+    const resourceValue = resourceFromItem(item);
+    void helpers.setValue(resourceValue, true);
     void helpers.setTouched(true, false);
     setIsOpen(false);
+    onSelectResource?.(resourceValue);
   };
 
   const toggle = (toggleRef: Ref<MenuToggleElement>) => (

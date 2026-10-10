@@ -22,6 +22,7 @@ import type { Cluster } from '@osac/types';
 
 import ClusterDetailsActionButtons from './ClusterDetailsActionButtons';
 import ClusterDetailsSummary from './ClusterDetailsSummary';
+import { ClusterNetworkingDetailsTab } from './ClusterNetworkingDetailsTab';
 import ClusterNodeSetsTab from './ClusterNetworkingTab';
 import { ClusterOverviewTab } from './ClusterOverviewTab';
 import { useTranslation } from '../../../hooks/useTranslation';
@@ -34,6 +35,7 @@ interface ClusterDetailViewProps {
 }
 
 const CLUSTER_DETAIL_OVERVIEW_TAB_ID = 'cluster-detail-overview';
+const CLUSTER_DETAIL_NETWORKING_TAB_ID = 'cluster-detail-networking';
 const CLUSTER_DETAIL_NODE_SETS_TAB_ID = 'cluster-detail-node-sets';
 
 const ClusterDetailsPageContent = ({ cluster }: ClusterDetailViewProps) => {
@@ -83,6 +85,11 @@ const ClusterDetailsPageContent = ({ cluster }: ClusterDetailViewProps) => {
               />
               <Tab
                 eventKey={1}
+                title={<TabTitleText>{t('Networking')}</TabTitleText>}
+                tabContentId={CLUSTER_DETAIL_NETWORKING_TAB_ID}
+              />
+              <Tab
+                eventKey={2}
                 title={<TabTitleText>{t('Node sets')}</TabTitleText>}
                 tabContentId={CLUSTER_DETAIL_NODE_SETS_TAB_ID}
               />
@@ -106,9 +113,19 @@ const ClusterDetailsPageContent = ({ cluster }: ClusterDetailViewProps) => {
             </TabContent>
             <TabContent
               eventKey={1}
-              id={CLUSTER_DETAIL_NODE_SETS_TAB_ID}
+              id={CLUSTER_DETAIL_NETWORKING_TAB_ID}
               activeKey={activeTabKey}
               hidden={1 !== activeTabKey}
+            >
+              <TabContentBody>
+                <ClusterNetworkingDetailsTab cluster={cluster} />
+              </TabContentBody>
+            </TabContent>
+            <TabContent
+              eventKey={2}
+              id={CLUSTER_DETAIL_NODE_SETS_TAB_ID}
+              activeKey={activeTabKey}
+              hidden={2 !== activeTabKey}
             >
               <TabContentBody>
                 <ClusterNodeSetsTab cluster={cluster} />

@@ -1,7 +1,8 @@
 import type { TFunction } from 'i18next';
 import * as yup from 'yup';
 
-import { BareMetalInstanceCatalogItem } from '@osac/types';
+import type { BareMetalInstanceCatalogItem } from '@osac/types';
+import { buildNetworkAttachmentSchemas } from '@osac/ui-components/validation/network-attachment';
 import { resourceNameSchema } from '@osac/ui-components/validation/resource-name';
 import { userDataSchema } from '@osac/ui-components/validation/user-data';
 
@@ -115,7 +116,10 @@ export const buildBareMetalInstanceStepSchema = (
         spec: yup.object({
           userData: fields.specUserData,
           instanceType: yup.object({
-            name: yup.string().required(t('Instance type is required')),
+            name: yup.string(),
+          }),
+          diskImage: yup.object({
+            id: yup.string().required(t('Disk image is required')),
           }),
         }),
       });
@@ -126,16 +130,15 @@ export const buildBareMetalInstanceStepSchema = (
   }
 };
 
-const buildAttachmentRowSchema = (t: TFunction) =>
-  yup.object({
+const buildAttachmentRowSchema = (t: TFunction) => {
+  const na = buildNetworkAttachmentSchemas(t);
+  return yup.object({
     id: yup.string().required(),
-    virtualNetwork: yup.string().required(t('Virtual network is required')),
-    subnet: yup.string().required(t('Subnet is required')),
-    securityGroups: yup
-      .array()
-      .of(yup.string().required())
-      .min(1, t('At least one security group is required')),
+    virtualNetwork: na.requiredVirtualNetwork,
+    subnet: na.requiredSubnet,
+    securityGroups: na.securityGroupsSchema,
   });
+};
 
 const buildCustomAttachmentsSchema = (t: TFunction) =>
   yup

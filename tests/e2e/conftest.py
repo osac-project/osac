@@ -9,7 +9,9 @@ from pathlib import Path
 
 import pytest
 
+from tests.e2e.core.caas_versions import ensure_caas_disk_image_version
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
+from tests.e2e.core.helpers import unique_name, wait_for_grpc_subnet_ready
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.keycloak import get_jwt
 from tests.e2e.core.keycloak_admin import (
@@ -22,7 +24,7 @@ from tests.e2e.core.keycloak_admin import (
 )
 from tests.e2e.core.metering import MeteringCollector
 from tests.e2e.core.osac_cli import OsacCLI
-from tests.e2e.core.runner import env, run
+from tests.e2e.core.runner import env, poll_until, run
 
 
 @pytest.fixture(scope="session")
@@ -30,7 +32,7 @@ def default_storage_tier() -> str:
     """Reference installer-provided storage tier.
 
     Defaults to "local" tier created by osac-installer when lvms.enabled=true.
-    Available to all suites that create ComputeInstances (vmaas, catalog, references).
+    Available to all suites that create ComputeInstances (VMaaS and references).
     """
     return env("OSAC_STORAGE_TIER", "local")
 
@@ -38,7 +40,7 @@ def default_storage_tier() -> str:
 def _requires_serial_xdist(args: list[str]) -> bool:
     """True when CLI targets a suite that must run sequentially.
 
-    BMaaS serial/full and enablement suites require ``-n 0``.
+    CaaS, BMaaS serial/full, and enablement suites require ``-n 0``.
     Broader invocations like ``pytest tests/`` are not detected.
     """
     normalized = [str(a).replace("\\", "/").rstrip("/") for a in args]
@@ -50,6 +52,8 @@ def _requires_serial_xdist(args: list[str]) -> bool:
         or a.endswith("tests/e2e/bmaas")
         or a.endswith("/e2e/bmaas")
         or a == "e2e/bmaas"
+        or a.endswith("e2e/caas")
+        or "/e2e/caas/" in (a + "/")
         or a.endswith("e2e/enablement")
         or "/e2e/enablement/" in (a + "/")
         for a in normalized
@@ -83,6 +87,7 @@ def pytest_configure(config: pytest.Config) -> None:
     e2e.log artifact.
     """
     config.addinivalue_line("markers", "metering: test verifies metering events via the test adapter HTTP API")
+    config.addinivalue_line("markers", "caas_cluster_create_focus: temporarily isolate the primary CaaS PR E2E")
     config.addinivalue_line("markers", "requires_caas: test requires the CaaS service to be enabled")
     config.addinivalue_line("markers", "requires_bmaas: test requires the BMaaS service to be enabled")
     config.addinivalue_line("markers", "requires_vmaas: test requires the VMaaS service to be enabled")
@@ -169,10 +174,54 @@ def private_grpc(fulfillment_private_address: str, namespace: str, service_accou
     return GRPCClient(address=fulfillment_private_address, token=token)
 
 
+@pytest.fixture(scope="session")
+def caas_disk_image_version(private_grpc: GRPCClient) -> str:
+    """Explicit backed version for positive bare-metal CaaS scenarios."""
+    return ensure_caas_disk_image_version(private_grpc)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def ensure_tenants(ensure_k8s_only_network_class: None, private_grpc: GRPCClient) -> None:
     for name in ("tenant1", "tenant2"):
         private_grpc.ensure_tenant(name=name)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _wait_for_default_subnets_ready(
+    ensure_jwt_users: None, setup_organization_memberships: None, grpc: GRPCClient
+) -> None:
+    """Wait for tenant-default subnets to reach READY in the fulfillment database.
+
+    Tenant creation triggers the DefaultNetworkingProvisioner which creates a
+    default VirtualNetwork, Subnet, and SecurityGroup in SUBNET_STATE_PENDING.
+    The osac-operator marks the K8s CRs Ready, then the subnet feedback
+    controller syncs that state back to PostgreSQL.  Tests that implicitly
+    reference these subnets (e.g. BareMetalInstance creation inherits the
+    tenant's default subnet) hit FailedPrecondition if the DB update hasn't
+    landed yet.
+
+    Depends on ``ensure_jwt_users`` (which itself depends on ``ensure_tenants``)
+    so that the ``grpc`` client's first call does not trigger JIT user
+    provisioning before ``ensure_jwt_users`` creates the RoleBinding.
+
+    Depends on ``setup_organization_memberships`` so that the Keycloak
+    organization membership is in place before the first JWT is obtained;
+    without it the token may lack the tenant claim and
+    ``list_subnet_ids()`` returns an empty list (``WHERE tenant = $1``
+    receives an empty string).
+    """
+    # Timeout must exceed 2x the operator's statusPollInterval (30s) to
+    # accommodate two sequential polling cycles (VirtualNetwork -> Subnet).
+    subnet_ids: list[str] = poll_until(
+        fn=lambda: grpc.list_subnet_ids(),
+        until=lambda ids: len(ids) > 0,
+        retries=60,
+        delay=2,
+        description="at least one subnet to appear in gRPC",
+        retry_on_error=True,
+    )
+    for subnet_id in subnet_ids:
+        wait_for_grpc_subnet_ready(grpc=grpc, subnet_id=subnet_id)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -216,8 +265,10 @@ def setup_organization_memberships(ensure_tenants: None, keycloak_url: str, keyc
     org_users = {"tenant1": ["tenant1_user", "tenant1_admin"], "tenant2": ["tenant2_user", "tenant2_admin"]}
 
     for org_name, usernames in org_users.items():
+        admin_token = get_admin_token(keycloak_url=keycloak_url, username="admin", password=keycloak_admin_password)
         # Wait for the organization to be synced to Keycloak by the tenant controller
         org_id = wait_for_organization(keycloak_url=keycloak_url, admin_token=admin_token, org_name=org_name)
+        admin_token = get_admin_token(keycloak_url=keycloak_url, username="admin", password=keycloak_admin_password)
 
         # Add each user to the organization
         for username in usernames:
@@ -266,7 +317,7 @@ _K8S_ONLY_NETWORK_MANAGER_CONFIGMAP = textwrap.dedent("""\
     data:
       name: k8s_only
       description: "Composite k8s-only manager (CUDN + NetworkPolicy + MetalLB), no separate physical fabric"
-      capabilities: "ipv4,ipv6,dualStack"
+      capabilities: "ipv4"
 """)
 
 
@@ -303,6 +354,17 @@ def cli(
     )
     yield instance
     instance.close()
+
+
+@pytest.fixture
+def pull_secret_name(cli: OsacCLI, pull_secret_path: str) -> Iterator[str]:
+    """Create a tenant-scoped pull Secret for a CaaS cluster, then remove it."""
+    name = unique_name("e2e-pull-secret")
+    cli.create_secret(name=name, from_files={".dockerconfigjson": pull_secret_path}, secret_type="pull-secret")
+    try:
+        yield name
+    finally:
+        cli.delete_secret(name=name)
 
 
 @pytest.fixture(scope="session")

@@ -88,6 +88,7 @@ kubectl create namespace osac-workflows-test || true
 kubectl create namespace cluster-test-cluster-work || true
 kubectl create namespace computeinstance-test-vm-work || true
 kubectl create namespace computeinstance-test-vm-gpu-work || true
+kubectl create namespace test-subnet || true
 kubectl create namespace openshift-cnv || true
 
 # 4. Create minimal HyperConverged CR for GPU passthrough tests
@@ -246,7 +247,7 @@ ENVEOF
       -v "${SCRIPT_DIR}/certs:/certs:ro" \
       -e REGISTRY_HTTP_TLS_CERTIFICATE=/certs/registry.pem \
       -e REGISTRY_HTTP_TLS_KEY=/certs/registry.key \
-      registry:2 > /dev/null
+      ghcr.io/distribution/distribution:3 > /dev/null
 
     echo "Waiting for local OCI registry to be ready..."
     CSI_DRIVER_TEST_REGISTRY_READY="false"

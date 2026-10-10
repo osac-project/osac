@@ -16,8 +16,11 @@ package edit
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"sync/atomic"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/ginkgo/v2/dsl/table"
@@ -25,7 +28,9 @@ import (
 	"github.com/spf13/cobra"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
@@ -38,13 +43,15 @@ import (
 
 var _ = Describe("Edit command", func() {
 	var (
-		ctx     context.Context
-		logger  *slog.Logger
-		server  *testing.Server
-		conn    *grpc.ClientConn
-		console *terminal.Console
-		output  *bytes.Buffer
-		helper  reflection.ObjectHelper
+		ctx              context.Context
+		logger           *slog.Logger
+		server           *testing.Server
+		conn             *grpc.ClientConn
+		console          *terminal.Console
+		output           *bytes.Buffer
+		stderr           *bytes.Buffer
+		helper           reflection.ObjectHelper
+		reflectionHelper reflection.Helper
 	)
 
 	BeforeEach(func() {
@@ -57,11 +64,12 @@ var _ = Describe("Edit command", func() {
 		}))
 
 		output = &bytes.Buffer{}
+		stderr = &bytes.Buffer{}
 
 		console, err = terminal.NewConsole().
 			SetLogger(logger).
 			SetStdout(output).
-			SetStderr(GinkgoWriter).
+			SetStderr(stderr).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
@@ -70,7 +78,6 @@ var _ = Describe("Edit command", func() {
 
 		server = testing.NewServer()
 		DeferCleanup(server.Stop)
-		server.Start()
 
 		conn, err = grpc.NewClient(
 			server.Address(),
@@ -79,7 +86,7 @@ var _ = Describe("Edit command", func() {
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(conn.Close)
 
-		reflectionHelper, err := reflection.NewHelper().
+		reflectionHelper, err = reflection.NewHelper().
 			SetLogger(logger).
 			SetConnection(conn).
 			AddPackage("osac.public.v1", 0).
@@ -88,6 +95,100 @@ var _ = Describe("Edit command", func() {
 
 		helper = reflectionHelper.Lookup("cluster")
 		Expect(helper).ToNot(BeNil())
+	})
+
+	JustBeforeEach(func() {
+		server.Start()
+	})
+
+	Describe("update", func() {
+		var (
+			warnings    []string
+			updateErr   error
+			updateCalls atomic.Int32
+		)
+
+		BeforeEach(func() {
+			warnings = nil
+			updateErr = nil
+			updateCalls.Store(0)
+			publicv1.RegisterComputeInstancesServer(server.Registrar(), &testing.ComputeInstancesServerFuncs{
+				UpdateFunc: func(ctx context.Context, request *publicv1.ComputeInstancesUpdateRequest,
+				) (*publicv1.ComputeInstancesUpdateResponse, error) {
+					updateCalls.Add(1)
+					if updateErr != nil {
+						return nil, updateErr
+					}
+					return publicv1.ComputeInstancesUpdateResponse_builder{
+						Object:   request.Object,
+						Warnings: warnings,
+					}.Build(), nil
+				},
+			})
+			helper = reflectionHelper.Lookup("computeinstance")
+			Expect(helper).ToNot(BeNil())
+		})
+
+		DescribeTable("prints server warnings to stderr after a successful update",
+			func(serverWarnings []string, expectedOutput string) {
+				warnings = serverWarnings
+				object := &publicv1.ComputeInstance{Id: "test-vm"}
+				runner := &runnerContext{helper: helper, console: console}
+
+				updated, err := runner.update(ctx, object)
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(proto.Equal(updated, object)).To(BeTrue())
+				Expect(stderr.String()).To(Equal(expectedOutput))
+				Expect(output.String()).To(BeEmpty())
+			},
+			Entry("no warnings", nil, ""),
+			Entry("deprecated instance type",
+				[]string{"Instance type is deprecated; use replacement-type before 2030-01-01."},
+				"Warning: Instance type is deprecated; use replacement-type before 2030-01-01.\n",
+			),
+			Entry("multiple warnings", []string{"First warning", "Second warning"},
+				"Warning: First warning\nWarning: Second warning\n",
+			),
+		)
+
+		It("reports warning output failures after a successful update without retrying", func() {
+			reader, writer := io.Pipe()
+			Expect(reader.Close()).To(Succeed())
+			DeferCleanup(writer.Close)
+			console, err := terminal.NewConsole().
+				SetLogger(logger).
+				SetStdout(output).
+				SetStderr(writer).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			warnings = []string{"Instance type is deprecated."}
+			object := &publicv1.ComputeInstance{Id: "test-vm"}
+			runner := &runnerContext{helper: helper, console: console}
+
+			updated, err := runner.update(ctx, object)
+
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("update succeeded, but failed to write warning to stderr"))
+			Expect(errors.Is(err, io.ErrClosedPipe)).To(BeTrue())
+			Expect(proto.Equal(updated, object)).To(BeTrue())
+			Expect(updateCalls.Load()).To(Equal(int32(1)))
+			Expect(output.String()).To(BeEmpty())
+		})
+
+		It("preserves update failures without printing warnings", func() {
+			updateErr = grpcstatus.Error(codes.FailedPrecondition, "instance type is obsolete")
+			runner := &runnerContext{helper: helper, console: console}
+
+			_, err := runner.update(ctx, &publicv1.ComputeInstance{Id: "test-vm"})
+
+			Expect(err).To(HaveOccurred())
+			Expect(grpcstatus.Code(err)).To(Equal(codes.FailedPrecondition))
+			Expect(err.Error()).To(ContainSubstring("instance type is obsolete"))
+			Expect(stderr.String()).To(BeEmpty())
+			Expect(output.String()).To(BeEmpty())
+		})
 	})
 
 	DescribeTable("isWatchable",

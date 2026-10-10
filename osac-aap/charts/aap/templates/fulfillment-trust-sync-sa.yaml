@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: osac-fulfillment-trust-sync
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-aap.labels" . | nindent 4 }}

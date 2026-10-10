@@ -93,7 +93,7 @@ var _ = Describe("ExternalIPPoolReconciler", func() {
 		mockProvider = &mockProvisioningProvider{name: "mock-aap"}
 
 		resolver, ncClient := wireExternalIPDispatcher(fakeClient, "test-namespace", []*privatev1.NetworkClass{{
-			Id: "nc-default", FabricManager: ptr.To("metallb-l2"), IsDefault: ptr.To(true),
+			Id: "nc-default", FabricManager: ptr.To("metallb-l2"),
 		}})
 
 		reconciler = &ExternalIPPoolReconciler{
@@ -427,6 +427,33 @@ var _ = Describe("ExternalIPPoolReconciler", func() {
 			Expect(latestJob.JobID).To(Equal("deprovision-job-123"))
 		})
 
+		It("should skip deprovisioning when networking provisioning is disabled", func() {
+			key := types.NamespacedName{Name: pool.Name, Namespace: pool.Namespace}
+			reconciler.NetworkProvisioningEnabled = false
+
+			deprovisionCalled := false
+			mockProvider.triggerDeprovisionFunc = func(
+				ctx context.Context, resource client.Object, _ []osacv1alpha1.JobStatus,
+			) (*provisioning.DeprovisionResult, error) {
+				deprovisionCalled = true
+				return nil, nil
+			}
+
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			toDelete := &osacv1alpha1.ExternalIPPool{}
+			Expect(fakeClient.Get(testCtx, key, toDelete)).To(Succeed())
+			now := metav1.Now()
+			toDelete.DeletionTimestamp = &now
+
+			// The fake client rejects an Update after we set DeletionTimestamp in memory,
+			// but handleDelete has already removed the finalizer before that update.
+			_, _ = reconciler.handleDelete(testCtx, toDelete)
+			Expect(deprovisionCalled).To(BeFalse())
+			Expect(toDelete.Finalizers).NotTo(ContainElement(osacExternalIPPoolFinalizer))
+		})
+
 		It("should remove finalizer after successful deprovision", func() {
 			key := types.NamespacedName{Name: pool.Name, Namespace: pool.Namespace}
 
@@ -568,10 +595,10 @@ var _ = Describe("ExternalIPPoolReconciler", func() {
 	Context("dispatcher path", func() {
 		const ns = "test-namespace"
 
-		It("uses the resolved fabric manager name from the default NetworkClass", func() {
+		It("uses the resolved fabric manager name from the deployment NetworkClass", func() {
 			Expect(fakeClient.Create(testCtx, newFabricManagerConfigMap("fm-netris", ns, "netris"))).To(Succeed())
 			resolver, ncClient := wireExternalIPDispatcher(fakeClient, ns, []*privatev1.NetworkClass{{
-				Id: "nc-dispatch", FabricManager: ptr.To("netris"), IsDefault: ptr.To(true),
+				Id: "nc-dispatch", FabricManager: ptr.To("netris"),
 			}})
 			reconciler.Resolver = resolver
 			reconciler.networkClassesClient = ncClient
@@ -588,7 +615,7 @@ var _ = Describe("ExternalIPPoolReconciler", func() {
 		It("uses the k8s manager name when the NetworkClass has no fabricManager", func() {
 			Expect(fakeClient.Create(testCtx, newK8sManagerConfigMap("km-k8s-only", ns, "k8s_only", "ipv4"))).To(Succeed())
 			resolver, ncClient := wireExternalIPDispatcher(fakeClient, ns, []*privatev1.NetworkClass{{
-				Id: "nc-k8s", K8SManager: ptr.To("k8s_only"), IsDefault: ptr.To(true),
+				Id: "nc-k8s", K8SManager: ptr.To("k8s_only"),
 			}})
 			reconciler.Resolver = resolver
 			reconciler.networkClassesClient = ncClient
@@ -604,7 +631,7 @@ var _ = Describe("ExternalIPPoolReconciler", func() {
 
 		It("blocks with ReasonNoManagerConfigured when the NetworkClass has no managers", func() {
 			resolver, ncClient := wireExternalIPDispatcher(fakeClient, ns, []*privatev1.NetworkClass{{
-				Id: "nc-empty", IsDefault: ptr.To(true),
+				Id: "nc-empty",
 			}})
 			reconciler.Resolver = resolver
 			reconciler.networkClassesClient = ncClient
@@ -642,7 +669,7 @@ var _ = Describe("ExternalIPPoolReconciler", func() {
 
 		It("returns a reconcile error when the NetworkClass references an unregistered manager", func() {
 			resolver, ncClient := wireExternalIPDispatcher(fakeClient, ns, []*privatev1.NetworkClass{{
-				Id: "nc-broken", FabricManager: ptr.To("does-not-exist"), IsDefault: ptr.To(true),
+				Id: "nc-broken", FabricManager: ptr.To("does-not-exist"),
 			}})
 			reconciler.Resolver = resolver
 			reconciler.networkClassesClient = ncClient

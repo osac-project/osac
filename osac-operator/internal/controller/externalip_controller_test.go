@@ -148,7 +148,7 @@ var _ = Describe("ExternalIPReconciler", func() {
 		emptyTargetClient := fake.NewClientBuilder().WithScheme(testScheme).Build()
 
 		resolver, ncClient := wireExternalIPDispatcher(fakeClient, testNamespace, []*privatev1.NetworkClass{{
-			Id: "nc-default", FabricManager: ptr.To("metallb-l2"), IsDefault: ptr.To(true),
+			Id: "nc-default", FabricManager: ptr.To("metallb-l2"),
 		}})
 
 		reconciler = &ExternalIPReconciler{
@@ -796,10 +796,10 @@ var _ = Describe("ExternalIPReconciler", func() {
 	})
 
 	Context("dispatcher path", func() {
-		It("uses the resolved fabric manager name from the default NetworkClass", func() {
+		It("uses the resolved fabric manager name from the deployment NetworkClass", func() {
 			Expect(fakeClient.Create(testCtx, newFabricManagerConfigMap("fm-netris", testNamespace, "netris"))).To(Succeed())
 			resolver, ncClient := wireExternalIPDispatcher(fakeClient, testNamespace, []*privatev1.NetworkClass{{
-				Id: "nc-dispatch", FabricManager: ptr.To("netris"), IsDefault: ptr.To(true),
+				Id: "nc-dispatch", FabricManager: ptr.To("netris"),
 			}})
 			reconciler.Resolver = resolver
 			reconciler.networkClassesClient = ncClient
@@ -818,7 +818,7 @@ var _ = Describe("ExternalIPReconciler", func() {
 		It("uses the k8s manager name when the NetworkClass has no fabricManager", func() {
 			Expect(fakeClient.Create(testCtx, newK8sManagerConfigMap("km-k8s-only", testNamespace, "k8s_only", "ipv4"))).To(Succeed())
 			resolver, ncClient := wireExternalIPDispatcher(fakeClient, testNamespace, []*privatev1.NetworkClass{{
-				Id: "nc-k8s", K8SManager: ptr.To("k8s_only"), IsDefault: ptr.To(true),
+				Id: "nc-k8s", K8SManager: ptr.To("k8s_only"),
 			}})
 			reconciler.Resolver = resolver
 			reconciler.networkClassesClient = ncClient
@@ -836,7 +836,7 @@ var _ = Describe("ExternalIPReconciler", func() {
 
 		It("blocks with ReasonNoManagerConfigured when the NetworkClass has no managers", func() {
 			resolver, ncClient := wireExternalIPDispatcher(fakeClient, testNamespace, []*privatev1.NetworkClass{{
-				Id: "nc-empty", IsDefault: ptr.To(true),
+				Id: "nc-empty",
 			}})
 			reconciler.Resolver = resolver
 			reconciler.networkClassesClient = ncClient
@@ -874,7 +874,7 @@ var _ = Describe("ExternalIPReconciler", func() {
 
 		It("returns a reconcile error when the NetworkClass references an unregistered manager", func() {
 			resolver, ncClient := wireExternalIPDispatcher(fakeClient, testNamespace, []*privatev1.NetworkClass{{
-				Id: "nc-broken", FabricManager: ptr.To("does-not-exist"), IsDefault: ptr.To(true),
+				Id: "nc-broken", FabricManager: ptr.To("does-not-exist"),
 			}})
 			reconciler.Resolver = resolver
 			reconciler.networkClassesClient = ncClient

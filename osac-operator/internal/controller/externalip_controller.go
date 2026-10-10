@@ -50,7 +50,7 @@ const (
 //
 // Each ExternalIP belongs to a parent ExternalIPPool (referenced by UUID in spec.pool).
 // The controller adds a finalizer, resolves the implementation strategy exclusively
-// from the default NetworkClass via the dispatcher, then delegates to the shared
+// from the deployment NetworkClass singleton via the dispatcher, then delegates to the shared
 // provisioning lifecycle to trigger AAP jobs for allocation and deallocation.
 // When no manager is configured the controller blocks with ReasonNoManagerConfigured
 // rather than falling back to a hardcoded default.
@@ -72,7 +72,7 @@ type ExternalIPReconciler struct {
 	// two-manager model isn't configured (no gRPC connection / networking namespace),
 	// in which case the controller always uses the legacy implementation-strategy path.
 	Resolver *dispatcher.Resolver
-	// networkClassesClient lists NetworkClasses to find the default/singleton used
+	// networkClassesClient lists NetworkClasses to find the deployment singleton used
 	// as the dispatcher input. Nil when gRPC is not configured.
 	networkClassesClient privatev1.NetworkClassesClient
 	// NetworkProvisioningEnabled controls whether the controller dispatches AAP

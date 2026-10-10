@@ -3,6 +3,8 @@
 # --- Service Enablement ---
 global:
   osacDeploymentId: "ci/osac"
+  fulfillmentTrust:
+    enabled: false
   services:
     caas:
       enabled: false
@@ -59,8 +61,14 @@ service:
   internalHostname: ""  # Set dynamically by make install-osac
   variant: openshift
   images:
-    service: ghcr.io/osac-project/fulfillment-service:main
-    envoy: ghcr.io/osac-project/envoy:v1.33.0
+    service:
+      repository: ghcr.io/osac-project/fulfillment-service
+      tag: latest
+      pullPolicy: Always
+    envoy:
+      repository: ghcr.io/osac-project/envoy
+      tag: v1.33.0
+      pullPolicy: IfNotPresent
   certs:
     issuerRef:
       kind: ClusterIssuer
@@ -145,6 +153,8 @@ ui:
         caBundle:
           configMap: ca-bundle
   auth:
+    # oidcIssuerURL defaults to match service.auth.issuerUrl -- set automatically
+    # by install-osac via --set ui.auth.oidcIssuerURL when global.clusterDomain is set.
     certs:
       caBundle:
         configMap: ca-bundle
@@ -204,7 +214,6 @@ hubAccess:
 lvms:
   enabled: true
 
-# Bundled PostgreSQL: single-pod ephemeral database for testing.
-# Uses fsync=off — data is lost on restart. Not for production.
+# Bundled PostgreSQL for testing only; not intended for production.
 bundledPostgres:
   enabled: true

@@ -11,7 +11,9 @@ metadata:
 data:
   LOG_LEVEL: {{ .Values.ui.config.logLevel | quote }}
   FULFILLMENT_API_URL: {{ .Values.ui.config.fulfillmentApiUrl | quote }}
+  FULFILLMENT_TLS_CA_FILE: "/etc/ca-bundle/bundle.pem"
   FULFILLMENT_TLS_INSECURE: {{ .Values.ui.config.tlsInsecure | quote }}
+  OIDC_TLS_CA_FILE: "/etc/ca-bundle/bundle.pem"
   OIDC_TLS_INSECURE: {{ .Values.ui.config.tlsInsecure | quote }}
   OIDC_CLIENT_ID: {{ .Values.ui.config.oidcClientId | quote }}
   OIDC_ISSUER_URL: {{ .Values.ui.config.oidcIssuerUrl | quote }}
@@ -39,6 +41,12 @@ spec:
       - name: ui-backend-credentials
         secret:
           secretName: osac-ui-backend-credentials
+      - name: ca-bundle
+        configMap:
+          name: ca-bundle
+          items:
+          - key: bundle.pem
+            path: bundle.pem
       - name: tmp
         emptyDir: {}
       initContainers:
@@ -92,6 +100,10 @@ spec:
             secretKeyRef:
               name: osac-ui-backend-credentials
               key: client-secret
+        volumeMounts:
+        - name: ca-bundle
+          mountPath: /etc/ca-bundle
+          readOnly: true
         readinessProbe:
           httpGet:
             path: /health

@@ -116,14 +116,6 @@ export const VirtualNetworkDetailPage = () => {
                           {vn?.spec?.ipv4Cidr ?? '—'}
                         </DescriptionListDescription>
                       </DescriptionListGroup>
-                      {vn?.spec?.ipv6Cidr && (
-                        <DescriptionListGroup>
-                          <DescriptionListTerm>{t('IPv6 CIDR')}</DescriptionListTerm>
-                          <DescriptionListDescription>
-                            {vn.spec.ipv6Cidr}
-                          </DescriptionListDescription>
-                        </DescriptionListGroup>
-                      )}
                       <DescriptionListGroup>
                         <DescriptionListTerm>{t('Status')}</DescriptionListTerm>
                         <DescriptionListDescription>

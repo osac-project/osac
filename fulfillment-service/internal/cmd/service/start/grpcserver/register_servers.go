@@ -196,34 +196,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		privatev1.RegisterClustersServer(registrar, privateClustersServer)
 	}
 
-	// Create the host types server:
-	deps.Logger.InfoContext(ctx, "Creating host types server")
-	hostTypesServer, err := servers.NewHostTypesServer().
-		SetLogger(deps.Logger).
-		SetAttributionLogic(deps.PublicAttributionLogic).
-		SetTenancyLogic(deps.TenancyLogic).
-		SetMetricsRegisterer(deps.MetricsRegisterer).
-		SetServiceFlags(deps.Services).
-		Build()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create host types server: %w", err)
-	}
-	publicv1.RegisterHostTypesServer(registrar, hostTypesServer)
-
-	// Create the private host types server:
-	deps.Logger.InfoContext(ctx, "Creating private host types server")
-	privateHostTypesServer, err := servers.NewPrivateHostTypesServer().
-		SetLogger(deps.Logger).
-		SetAttributionLogic(deps.PrivateAttributionLogic).
-		SetTenancyLogic(deps.TenancyLogic).
-		SetMetricsRegisterer(deps.MetricsRegisterer).
-		SetServiceFlags(deps.Services).
-		Build()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create private host types server: %w", err)
-	}
-	privatev1.RegisterHostTypesServer(registrar, privateHostTypesServer)
-
 	// VMaaS: compute instance templates and compute instances.
 	var privateComputeInstancesServer privatev1.ComputeInstancesServer
 	if deps.Services.VMaaS {
@@ -454,6 +426,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetHubClientProvider(hubClientProvider).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create subnets server: %w", err)
@@ -466,6 +439,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetLogger(deps.Logger).
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
+		SetHubClientProvider(hubClientProvider).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
 		Build()
 	if err != nil {
@@ -892,18 +866,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		return nil, fmt.Errorf("failed to create public tenants server: %w", err)
 	}
 	publicv1.RegisterTenantsServer(registrar, publicTenantsServer)
-
-	// Create the default networking provisioner:
-	deps.Logger.InfoContext(ctx, "Creating default networking provisioner")
-	defaultNetworkingProvisioner, err := servers.NewDefaultNetworkingProvisioner().
-		SetLogger(deps.Logger).
-		SetTenancyLogic(deps.TenancyLogic).
-		SetMetricsRegisterer(deps.MetricsRegisterer).
-		Build()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create default networking provisioner: %w", err)
-	}
-
 	// Create the private tenants server:
 	deps.Logger.InfoContext(ctx, "Creating private tenants server")
 	privateTenantsServer, err := servers.NewPrivateTenantsServer().
@@ -911,7 +873,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
-		SetDefaultNetworkingProvisioner(defaultNetworkingProvisioner).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create private tenants server: %w", err)
@@ -965,7 +926,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
-		SetDefaultNetworkingProvisioner(defaultNetworkingProvisioner).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create private projects server: %w", err)

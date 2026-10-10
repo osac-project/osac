@@ -429,7 +429,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 					Title:    "CI catalog item with fields",
 					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 					Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
-						SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
+						UserData: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
 						RunStrategy: privatev1.ComputeInstanceRunStrategyFieldPolicy_builder{Locked: func() *privatev1.ComputeInstanceRunStrategy {
 							v := privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS
 							return &v
@@ -451,7 +451,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			fetched := getResponse.GetObject()
-			Expect(fetched.GetFields().GetSshPublicKey().GetEditable()).ToNot(BeNil())
+			Expect(fetched.GetFields().GetUserData().GetEditable()).ToNot(BeNil())
 			Expect(fetched.GetFields().GetRunStrategy().GetLocked()).To(Equal(privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS))
 		})
 
@@ -490,9 +490,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 					Title:     "Referenced CI catalog item",
 					Template:  privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 					Published: true,
-					Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
-						SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
-					}.Build(),
+					Fields:    privatev1.ComputeInstanceCatalogItemFields_builder{}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -577,43 +575,6 @@ var _ = Describe("Private compute instance catalog items server", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		DescribeTable("validates SSH public key policy on Create", func(policy *privatev1.StringFieldPolicy, invalid bool) {
-			response, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
-				Object: privatev1.ComputeInstanceCatalogItem_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Title:    "SSH key policy",
-					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-					Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
-						SshPublicKey: policy,
-					}.Build(),
-				}.Build(),
-			}.Build())
-			if invalid {
-				Expect(err).To(HaveOccurred())
-				status, ok := grpcstatus.FromError(err)
-				Expect(ok).To(BeTrue())
-				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(status.Message()).To(ContainSubstring("ssh_public_key"))
-				Expect(status.Message()).To(ContainSubstring("no behavior"))
-				return
-			}
-			Expect(err).ToNot(HaveOccurred())
-			object := response.GetObject()
-			Expect(object).ToNot(BeNil())
-			DeferCleanup(func() {
-				_, err := server.Delete(ctx, privatev1.ComputeInstanceCatalogItemsDeleteRequest_builder{
-					Id: object.GetId(),
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-			})
-		},
-			Entry("rejects a policy without behavior", privatev1.StringFieldPolicy_builder{}.Build(), true),
-			Entry("accepts a locked value", privatev1.StringFieldPolicy_builder{Locked: proto.String(testSSHPublicKey)}.Build(), false),
-			Entry("accepts editable input without a default", privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(), false),
-		)
-
 		It("Rejects update that introduces non-editable field without default", func() {
 			createResponse, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.ComputeInstanceCatalogItem_builder{
@@ -637,7 +598,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				Object: privatev1.ComputeInstanceCatalogItem_builder{
 					Id: id,
 					Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
-						SshPublicKey: privatev1.StringFieldPolicy_builder{}.Build(),
+						RunStrategy: privatev1.ComputeInstanceRunStrategyFieldPolicy_builder{}.Build(),
 					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{
@@ -648,7 +609,6 @@ var _ = Describe("Private compute instance catalog items server", func() {
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("ssh_public_key"))
 			Expect(status.Message()).To(ContainSubstring("oneof"))
 		})
 
@@ -675,8 +635,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				Object: privatev1.ComputeInstanceCatalogItem_builder{
 					Id: id,
 					Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
-						SshPublicKey: privatev1.StringFieldPolicy_builder{Locked: proto.String(testSSHPublicKey)}.Build(),
-						UserData:     privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
+						UserData: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
 					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{
@@ -893,7 +852,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Title:    "Catalog item without instance type field",
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 						Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
-							SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
+							UserData: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -1298,7 +1257,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Title:    "Catalog item without disk image field",
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 						Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
-							SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
+							UserData: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -1336,7 +1295,6 @@ var _ = Describe("Compute Instance Catalog Item policy application", func() {
 			SizeGib:     policyTestInt32(20),
 			StorageTier: storageTier,
 		}.Build()
-		sshKey := "ssh-ed25519 catalog"
 		userData := "user-data"
 		runStrategy := privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS
 		autoExternalIP := false
@@ -1345,7 +1303,6 @@ var _ = Describe("Compute Instance Catalog Item policy application", func() {
 		fields := privatev1.ComputeInstanceCatalogItemFields_builder{
 			DiskImage:    privatev1.DiskImageReferenceFieldPolicy_builder{Locked: diskImage}.Build(),
 			InstanceType: privatev1.InstanceTypeReferenceFieldPolicy_builder{Locked: instanceType}.Build(),
-			SshPublicKey: privatev1.StringFieldPolicy_builder{Locked: &sshKey}.Build(),
 			BootDisk: privatev1.ComputeInstanceBootDiskFieldPolicies_builder{
 				SizeGib:     privatev1.Int32FieldPolicy_builder{Locked: &bootSize}.Build(),
 				StorageTier: privatev1.StorageTierReferenceFieldPolicy_builder{Locked: storageTier}.Build(),
@@ -1371,7 +1328,6 @@ var _ = Describe("Compute Instance Catalog Item policy application", func() {
 		Expect(spec.GetDiskImage()).NotTo(BeIdenticalTo(diskImage))
 		Expect(spec.GetDiskImage().GetId()).To(Equal("image-id"))
 		Expect(spec.GetInstanceType().GetName()).To(Equal("type"))
-		Expect(spec.GetSshPublicKey()).To(Equal(sshKey))
 		Expect(spec.GetBootDisk().GetSizeGib()).To(Equal(bootSize))
 		Expect(spec.GetBootDisk().GetStorageTier()).NotTo(BeIdenticalTo(storageTier))
 		Expect(spec.GetRunStrategy()).To(Equal(runStrategy))

@@ -16,7 +16,6 @@ language governing permissions and limitations under the License.
 //go:generate mockgen -destination=subnets_client_mock.go -package=tenant github.com/osac-project/osac/proto/gen/osac/private/v1 SubnetsClient
 //go:generate mockgen -destination=security_groups_client_mock.go -package=tenant github.com/osac-project/osac/proto/gen/osac/private/v1 SecurityGroupsClient
 //go:generate mockgen -destination=nat_gateways_client_mock.go -package=tenant github.com/osac-project/osac/proto/gen/osac/private/v1 NATGatewaysClient
-//go:generate mockgen -destination=network_classes_client_mock.go -package=tenant github.com/osac-project/osac/proto/gen/osac/private/v1 NetworkClassesClient
 
 package tenant
 
@@ -36,6 +35,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/defaultnetworking"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/idp"
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
@@ -45,10 +46,12 @@ import (
 
 // FunctionBuilder contains the data needed to build instances of the reconciler function.
 type FunctionBuilder struct {
+	hubCache       controllers.HubCache
 	logger         *slog.Logger
 	connection     *grpc.ClientConn
 	idpManager     *idp.TenantManager
 	vaultLifecycle vault.LifecycleClient
+	defaultNetwork defaultnetworking.Manager
 }
 
 // NewFunction creates a builder that can be used to configure and create reconciler functions.
@@ -81,6 +84,20 @@ func (b *FunctionBuilder) SetVaultLifecycle(value vault.LifecycleClient) *Functi
 	return b
 }
 
+// SetHubCache sets the connections used to observe tenant infrastructure.
+func (b *FunctionBuilder) SetHubCache(value controllers.HubCache) *FunctionBuilder {
+	b.hubCache = value
+	return b
+}
+
+// SetDefaultNetworking sets the controller-owned manager for tenant default
+// networking. This is optional for focused controller tests and reserved
+// tenants, but is configured by the production controller process.
+func (b *FunctionBuilder) SetDefaultNetworking(value defaultnetworking.Manager) *FunctionBuilder {
+	b.defaultNetwork = value
+	return b
+}
+
 // Build uses the data stored in the builder to create and configure a new reconciler function.
 func (b *FunctionBuilder) Build() (result *function, err error) {
 	if b.logger == nil {
@@ -95,8 +112,19 @@ func (b *FunctionBuilder) Build() (result *function, err error) {
 		err = errors.New("IDP manager is mandatory")
 		return
 	}
+	if b.vaultLifecycle == nil {
+		err = errors.New("vault lifecycle client is mandatory")
+		return
+	}
+
+	if b.hubCache == nil {
+		err = errors.New("hub cache is mandatory")
+		return
+	}
 
 	result = &function{
+		hubCache:              b.hubCache,
+		hubsClient:            privatev1.NewHubsClient(b.connection),
 		logger:                b.logger,
 		tenantsClient:         privatev1.NewTenantsClient(b.connection),
 		projectsClient:        privatev1.NewProjectsClient(b.connection),
@@ -104,10 +132,10 @@ func (b *FunctionBuilder) Build() (result *function, err error) {
 		subnetsClient:         privatev1.NewSubnetsClient(b.connection),
 		securityGroupsClient:  privatev1.NewSecurityGroupsClient(b.connection),
 		natGatewaysClient:     privatev1.NewNATGatewaysClient(b.connection),
-		networkClassesClient:  privatev1.NewNetworkClassesClient(b.connection),
 		secretsClient:         privatev1.NewSecretsClient(b.connection),
 		idpManager:            b.idpManager,
 		vaultLifecycle:        b.vaultLifecycle,
+		defaultNetwork:        b.defaultNetwork,
 		maskCalculator:        masks.NewCalculator().Build(),
 	}
 	return
@@ -115,6 +143,8 @@ func (b *FunctionBuilder) Build() (result *function, err error) {
 
 // function is the implementation of the reconciler function.
 type function struct {
+	hubCache              controllers.HubCache
+	hubsClient            privatev1.HubsClient
 	logger                *slog.Logger
 	tenantsClient         privatev1.TenantsClient
 	projectsClient        privatev1.ProjectsClient
@@ -122,8 +152,8 @@ type function struct {
 	subnetsClient         privatev1.SubnetsClient
 	securityGroupsClient  privatev1.SecurityGroupsClient
 	natGatewaysClient     privatev1.NATGatewaysClient
-	networkClassesClient  privatev1.NetworkClassesClient
 	secretsClient         privatev1.SecretsClient
+	defaultNetwork        defaultnetworking.Manager
 	idpManager            *idp.TenantManager
 	vaultLifecycle        vault.LifecycleClient
 	maskCalculator        *masks.Calculator
@@ -138,26 +168,28 @@ func (r *function) Run(ctx context.Context, tenant *privatev1.Tenant) error {
 		tenant: tenant,
 	}
 
-	var err error
-	if tenant.HasMetadata() && tenant.GetMetadata().HasDeletionTimestamp() {
-		err = task.delete(ctx)
+	var reconcileErr error
+	if task.addFinalizer() {
+		// Persist both barriers before doing any external work.
+	} else if tenant.HasMetadata() && tenant.GetMetadata().HasDeletionTimestamp() {
+		if err := task.delete(ctx); err != nil {
+			return err
+		}
 	} else {
-		err = task.update(ctx)
-	}
-	if err != nil {
-		return err
+		reconcileErr = task.update(ctx)
+		tenant = task.tenant
 	}
 
 	updateMask := r.maskCalculator.Calculate(oldTenant, tenant)
-
-	if len(updateMask.GetPaths()) > 0 {
-		_, err = r.tenantsClient.Update(ctx, privatev1.TenantsUpdateRequest_builder{
-			Object:     tenant,
-			UpdateMask: updateMask,
-		}.Build())
+	if len(updateMask.GetPaths()) == 0 {
+		return reconcileErr
 	}
-
-	return err
+	_, updateErr := r.tenantsClient.Update(ctx, privatev1.TenantsUpdateRequest_builder{
+		Object:     tenant,
+		UpdateMask: updateMask,
+		Lock:       true,
+	}.Build())
+	return errors.Join(reconcileErr, updateErr)
 }
 
 // task contains the data needed to reconcile a single tenant.
@@ -166,12 +198,23 @@ type task struct {
 	tenant *privatev1.Tenant
 }
 
-// update performs the reconciliation logic for creating or updating a tenant.
+// update performs the reconciliation logic for creating or updating a tenant,
+// then refreshes compute readiness independently of lifecycle errors.
 func (t *task) update(ctx context.Context) error {
-	if t.addFinalizer() {
-		return nil
+	oldTenant := proto.Clone(t.tenant).(*privatev1.Tenant)
+	reconcileErr := t.updateLifecycle(ctx)
+	if reconcileErr != nil {
+		// Failed lifecycle work must not leak partial mutations into the status update.
+		t.tenant = oldTenant
 	}
+	if t.r != nil && t.r.hubsClient != nil && t.r.hubCache != nil {
+		t.checkComputeInfrastructureReadiness(ctx)
+	}
+	return reconcileErr
+}
 
+// updateLifecycle performs the normal tenant lifecycle reconciliation.
+func (t *task) updateLifecycle(ctx context.Context) error {
 	t.setDefaults()
 	t.setConditionDefaults()
 
@@ -196,6 +239,12 @@ func (t *task) update(ctx context.Context) error {
 			return nil
 		}
 		if err := t.ensureVaultNamespace(ctx); err != nil {
+			return err
+		}
+		if t.tenant.GetStatus().GetState() == privatev1.TenantState_TENANT_STATE_FAILED {
+			return nil
+		}
+		if err := t.ensureDefaultNetworking(ctx); err != nil {
 			return err
 		}
 		return t.checkDefaultNetworkingReadiness(ctx)
@@ -240,6 +289,11 @@ func (t *task) syncToIDP(ctx context.Context) error {
 	// must be provisioned first.
 	if err := t.ensureVaultNamespace(ctx); err != nil {
 		return err
+	}
+	// If vault is enabled and provisioning failed, the condition is FALSE and status will be persisted.
+	// Skip break-glass secret persistence since it requires vault.
+	if t.r.vaultLifecycle != nil && !t.isConditionTrue(privatev1.TenantConditionType_TENANT_CONDITION_TYPE_VAULT_READY) {
+		return nil
 	}
 
 	if err := t.persistBreakGlassSecret(ctx); err != nil {
@@ -411,19 +465,10 @@ func (t *task) validateTenant() error {
 	return nil
 }
 
-// addFinalizer adds the controller finalizer to the tenant if not already present.
-// Returns true if the finalizer was added (indicating the update should be saved immediately).
+// addFinalizer prepares both cleanup barriers.
+// Returns true if the finalizers changed and must be saved immediately.
 func (t *task) addFinalizer() bool {
-	if !t.tenant.HasMetadata() {
-		t.tenant.SetMetadata(&privatev1.Metadata{})
-	}
-	list := t.tenant.GetMetadata().GetFinalizers()
-	if !slices.Contains(list, finalizers.Controller) {
-		list = append(list, finalizers.Controller)
-		t.tenant.GetMetadata().SetFinalizers(list)
-		return true
-	}
-	return false
+	return finalizers.PrepareTenant(t.tenant)
 }
 
 // removeFinalizer removes the controller finalizer from the tenant.
@@ -432,9 +477,9 @@ func (t *task) removeFinalizer() {
 		return
 	}
 	list := t.tenant.GetMetadata().GetFinalizers()
-	if slices.Contains(list, finalizers.Controller) {
+	if slices.Contains(list, finalizers.TenantLifecycle) {
 		list = slices.DeleteFunc(list, func(item string) bool {
-			return item == finalizers.Controller
+			return item == finalizers.TenantLifecycle
 		})
 		t.tenant.GetMetadata().SetFinalizers(list)
 	}
@@ -449,6 +494,10 @@ func (t *task) isBuiltin() bool {
 
 // delete performs the deletion cleanup for a tenant.
 func (t *task) delete(ctx context.Context) error {
+	if !slices.Contains(t.tenant.GetMetadata().GetFinalizers(), finalizers.TenantLifecycle) {
+		return nil
+	}
+
 	// Remove the break-glass secret first so its project FK does not block
 	// administrators from deleting the default project. Clear the spec ref
 	// afterwards so the follow-up Tenants/Update (finalizer removal) is not
@@ -693,7 +742,10 @@ func (t *task) ensureVaultNamespace(ctx context.Context) error {
 			slog.String("tenant_name", tenantName),
 			slog.Any("error", err),
 		)
-		return fmt.Errorf("failed to provision vault namespace: %w", err)
+
+		t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+			"ProvisionFailed", fmt.Sprintf("Failed to provision vault namespace: %v", err))
+		return nil
 	}
 
 	t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
@@ -733,10 +785,15 @@ func (t *task) deleteVaultNamespace(ctx context.Context) error {
 }
 
 const (
-	defaultLabelFilter          = "this.metadata.labels['osac.openshift.io/default'] == 'true'"
-	defaultLabelKey             = "osac.openshift.io/default"
-	ownerReferenceAnnotationKey = "osac.openshift.io/owner-reference"
+	defaultLabelFilter = "this.metadata.labels['osac.openshift.io/default'] == 'true'"
 )
+
+func (t *task) ensureDefaultNetworking(ctx context.Context) error {
+	if t.r.defaultNetwork == nil {
+		return nil
+	}
+	return t.r.defaultNetwork.Ensure(ctx, t.tenant.GetMetadata().GetName())
+}
 
 func (t *task) checkDefaultNetworkingReadiness(ctx context.Context) error {
 	tenantName := t.tenant.GetMetadata().GetName()
@@ -753,6 +810,8 @@ func (t *task) checkDefaultNetworkingReadiness(ctx context.Context) error {
 	}
 
 	filter := fmt.Sprintf("%s && this.metadata.tenant == %q", defaultLabelFilter, tenantName)
+	subnetFilter := fmt.Sprintf("%s && this.metadata.tenant == %q && this.metadata.name == %q",
+		defaultLabelFilter, tenantName, "default-ipv4")
 
 	var pending, failed []string
 
@@ -773,7 +832,7 @@ func (t *task) checkDefaultNetworkingReadiness(ctx context.Context) error {
 	}
 
 	subnets, err := t.r.subnetsClient.List(ctx, privatev1.SubnetsListRequest_builder{
-		Filter: new(filter),
+		Filter: new(subnetFilter),
 	}.Build())
 	if err != nil {
 		return fmt.Errorf("failed to list default subnets: %w", err)
@@ -820,22 +879,14 @@ func (t *task) checkDefaultNetworkingReadiness(ctx context.Context) error {
 		}
 	}
 
-	// When any core resources are absent, check whether a default NetworkClass with defaults
-	// is configured. Resources are provisioned server-side by the DefaultNetworkingProvisioner
-	// at tenant-creation time; this check only determines the condition outcome.
-	coreResourcesMissing := len(vns.GetItems()) == 0 || len(subnets.GetItems()) == 0 || len(sgs.GetItems()) == 0
+	// The default-networking manager has already attempted idempotent creation
+	// for this reconciliation. Subnets are optional in NetworkDefaults, so the
+	// presence of the default VirtualNetwork and SecurityGroup determines
+	// whether default networking is configured.
+	coreResourcesMissing := len(vns.GetItems()) == 0 || len(sgs.GetItems()) == 0
 	if coreResourcesMissing {
-		nc, err := t.findDefaultNetworkClass(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to find default network class: %w", err)
-		}
-		if nc == nil {
-			t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
-				"NoDefaultNetworking", "No default networking resources configured")
-			return nil
-		}
-		t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
-			"ResourcesPending", "Provisioning default networking resources")
+		t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+			"NoDefaultNetworking", "No default networking resources configured")
 		return nil
 	}
 
@@ -853,23 +904,4 @@ func (t *task) checkDefaultNetworkingReadiness(ctx context.Context) error {
 	t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
 		"AllResourcesReady", "All default networking resources are ready")
 	return nil
-}
-
-func (t *task) findDefaultNetworkClass(ctx context.Context) (*privatev1.NetworkClass, error) {
-	if t.r.networkClassesClient == nil {
-		return nil, nil
-	}
-	filter := "this.is_default == true"
-	resp, err := t.r.networkClassesClient.List(ctx, privatev1.NetworkClassesListRequest_builder{
-		Filter: &filter,
-	}.Build())
-	if err != nil {
-		return nil, fmt.Errorf("failed to list network classes: %w", err)
-	}
-	for _, nc := range resp.GetItems() {
-		if nc.GetSpec().GetDefaults() != nil {
-			return nc, nil
-		}
-	}
-	return nil, nil
 }

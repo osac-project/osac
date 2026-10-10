@@ -17,7 +17,6 @@ import * as Yup from 'yup';
 import type { Subnet, VirtualNetwork } from '@osac/types';
 import { useCreateSubnet } from '@osac/ui-components/api/v1/networking';
 
-import { CidrDisplay } from './CidrDisplay';
 import {
   FormFieldHelper,
   getFormFieldHelperDescribedBy,
@@ -47,9 +46,7 @@ export const SubnetCreateModal = ({
   const { t } = useTranslation();
 
   const parentIPv4CIDR = parentVN.spec?.ipv4Cidr ?? '';
-  const parentIPv6CIDR = parentVN.spec?.ipv6Cidr ?? '';
   const hasIPv4 = Boolean(parentIPv4CIDR);
-  const hasIPv6 = Boolean(parentIPv6CIDR);
 
   const validationSchema = useMemo(
     () =>
@@ -87,43 +84,13 @@ export const SubnetCreateModal = ({
                 return true;
               })
           : Yup.string(),
-        ipv6Cidr: hasIPv6
-          ? buildCidrSchema(t, 'ipv6')
-              .required(t('IPv6 CIDR is required'))
-              .test('within-vn', t('CIDR must be within parent virtual network range'), (value) => {
-                if (!value || !parentIPv6CIDR) {
-                  return true;
-                }
-                return isSubnetWithinVN(value, parentIPv6CIDR);
-              })
-              .test('no-overlap', function (value) {
-                if (!value) {
-                  return true;
-                }
-                const overlappingSubnet = existingSubnets.find((s) => {
-                  const existingCidr = s.spec?.ipv6Cidr;
-                  return existingCidr && hasSubnetOverlap(value, [existingCidr]);
-                });
-                if (overlappingSubnet) {
-                  const subnetName = overlappingSubnet.metadata?.name || overlappingSubnet.id;
-                  const subnetCidr = overlappingSubnet.spec?.ipv6Cidr;
-                  return this.createError({
-                    message: t('CIDR overlaps with existing subnet "{{name}}" ({{cidr}})', {
-                      name: subnetName,
-                      cidr: subnetCidr,
-                    }),
-                  });
-                }
-                return true;
-              })
-          : Yup.string(),
       }),
-    [t, hasIPv4, hasIPv6, parentIPv4CIDR, parentIPv6CIDR, existingSubnets],
+    [t, hasIPv4, parentIPv4CIDR, existingSubnets],
   );
 
   return (
     <Formik
-      initialValues={{ metadata: { name: '' }, ipv4Cidr: '', ipv6Cidr: '' }}
+      initialValues={{ metadata: { name: '' }, ipv4Cidr: '' }}
       validationSchema={validationSchema}
       onSubmit={async (values) => {
         try {
@@ -134,7 +101,6 @@ export const SubnetCreateModal = ({
                 name: parentVN.metadata?.name,
               },
               ...(values.ipv4Cidr && { ipv4Cidr: values.ipv4Cidr }),
-              ...(values.ipv6Cidr && { ipv6Cidr: values.ipv6Cidr }),
             },
           });
           onClose();
@@ -158,7 +124,9 @@ export const SubnetCreateModal = ({
                   <p>
                     {t('Parent virtual network')}: <strong>{parentVN.metadata?.name}</strong>
                   </p>
-                  <CidrDisplay ipv4Cidr={parentIPv4CIDR} ipv6Cidr={parentIPv6CIDR} />
+                  <p>
+                    {t('Parent virtual network CIDR')}: {parentIPv4CIDR || '—'}
+                  </p>
                   <NameField />
                   {hasIPv4 && (
                     <FormGroup label={t('IPv4 CIDR')} isRequired fieldId="subnet-ipv4-cidr">
@@ -166,6 +134,7 @@ export const SubnetCreateModal = ({
                         id="subnet-ipv4-cidr"
                         name="ipv4Cidr"
                         value={values.ipv4Cidr}
+                        placeholder="10.0.1.0/24"
                         onChange={(_, value) =>
                           handleChange({ target: { name: 'ipv4Cidr', value } })
                         }
@@ -174,37 +143,11 @@ export const SubnetCreateModal = ({
                         aria-describedby={getFormFieldHelperDescribedBy(
                           'subnet-ipv4-cidr',
                           touched.ipv4Cidr ? errors.ipv4Cidr : undefined,
-                          t('Example: 10.0.1.0/24'),
                         )}
                       />
                       <FormFieldHelper
                         fieldId="subnet-ipv4-cidr"
                         error={touched.ipv4Cidr ? errors.ipv4Cidr : undefined}
-                        description={t('Example: 10.0.1.0/24')}
-                      />
-                    </FormGroup>
-                  )}
-                  {hasIPv6 && (
-                    <FormGroup label={t('IPv6 CIDR')} isRequired fieldId="subnet-ipv6-cidr">
-                      <TextInput
-                        id="subnet-ipv6-cidr"
-                        name="ipv6Cidr"
-                        value={values.ipv6Cidr}
-                        onChange={(_, value) =>
-                          handleChange({ target: { name: 'ipv6Cidr', value } })
-                        }
-                        onBlur={handleBlur}
-                        validated={touched.ipv6Cidr && errors.ipv6Cidr ? 'error' : 'default'}
-                        aria-describedby={getFormFieldHelperDescribedBy(
-                          'subnet-ipv6-cidr',
-                          touched.ipv6Cidr ? errors.ipv6Cidr : undefined,
-                          t('Example: 2001:db8::/64'),
-                        )}
-                      />
-                      <FormFieldHelper
-                        fieldId="subnet-ipv6-cidr"
-                        error={touched.ipv6Cidr ? errors.ipv6Cidr : undefined}
-                        description={t('Example: 2001:db8::/64')}
                       />
                     </FormGroup>
                   )}

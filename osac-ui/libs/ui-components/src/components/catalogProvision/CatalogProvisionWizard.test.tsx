@@ -12,9 +12,9 @@ import {
   SecretType,
 } from '@osac/types';
 import {
+  BareMetalInstanceTypeSchema,
   ClusterTemplateReferenceSchema,
   ComputeInstanceTemplateReferenceSchema,
-  HostTypeReferenceSchema,
   InstanceTypeState,
   SecurityGroupState,
   StorageTierSchema,
@@ -27,6 +27,7 @@ import {
 import type { CatalogProvisionKind } from './catalogFieldDefinition';
 import type { CatalogProvisionPayload } from './catalogProvisionTypes';
 import { CatalogProvisionWizard } from './CatalogProvisionWizard';
+import { SessionProvider } from '../../hooks/use-session';
 import type {
   MockApiFixtures,
   MockTransportOverrides,
@@ -144,33 +145,29 @@ const advanceToNetworkingStep = async (user: UserEvent, catalogItemTitle: string
   await fillStorageStep(user);
   await clickWizardNext(user);
   await waitFor(() => {
+    expect(screen.getByLabelText(/Use tenant default network/)).toBeInTheDocument();
+  });
+};
+
+const enableCustomNetworking = async (user: UserEvent) => {
+  await user.click(screen.getByLabelText(/Use tenant default network/));
+  await waitFor(() => {
     expect(screen.getByLabelText(/^Virtual network/)).toBeInTheDocument();
   });
 };
 
-const selectNetworkingPickers = async (user: UserEvent) => {
+const selectNetworkingPickers = async (_user: UserEvent) => {
+  // Wait for VN and Subnet to be auto-selected (single-option auto-select)
   await waitFor(() => {
     expect(screen.getByLabelText(/^Virtual network/)).not.toBeDisabled();
     expect(screen.getByLabelText(/^Virtual network/)).toHaveTextContent('tenant-vn');
     expect(screen.getByLabelText(/^Subnet/)).toHaveTextContent('tenant-subnet');
-    expect(screen.getByText('default-sg')).toBeInTheDocument();
-  });
-
-  const sgToggle = screen.getByLabelText(/^Security groups/);
-  if (sgToggle.textContent === 'Select security groups') {
-    await user.click(sgToggle);
-    await user.click(screen.getByRole('menuitemcheckbox', { name: /default-sg/ }));
-  }
-
-  await waitFor(() => {
-    expect(screen.getByLabelText(/^Security groups/)).not.toHaveTextContent(
-      'Select security groups',
-    );
   });
 };
 
 const advanceToReviewStep = async (user: UserEvent, catalogItemTitle: string) => {
   await advanceToNetworkingStep(user, catalogItemTitle);
+  await enableCustomNetworking(user);
   await selectNetworkingPickers(user);
   await clickWizardNext(user);
   await waitFor(() => {
@@ -277,21 +274,14 @@ const apiFixtures: MockApiFixtures = {
         tenant: 'foo',
         version: 1,
       },
-      nodeSets: {
-        compute: {
-          $typeName: 'osac.public.v1.ClusterTemplateNodeSet',
-          hostType: create(HostTypeReferenceSchema, { id: 'acme_1tb' }),
-          size: 3,
-        },
-      },
       description: '',
       parameters: [],
       title: '',
     },
   ],
-  hostTypes: [
+  bareMetalInstanceTypes: [
     {
-      $typeName: 'osac.public.v1.HostType',
+      $typeName: 'osac.public.v1.BareMetalInstanceType',
       id: 'acme_1tb',
       metadata: {
         $typeName: 'osac.public.v1.Metadata',
@@ -305,12 +295,10 @@ const apiFixtures: MockApiFixtures = {
         tenant: 'foo',
         version: 1,
       },
-      title: 'ACME 1TB',
-      description: '',
-      interfaces: [],
+      spec: create(BareMetalInstanceTypeSchema, { id: 'acme_1tb' }).spec,
     },
     {
-      $typeName: 'osac.public.v1.HostType',
+      $typeName: 'osac.public.v1.BareMetalInstanceType',
       id: 'acme_1tb_h100',
       metadata: {
         $typeName: 'osac.public.v1.Metadata',
@@ -324,9 +312,7 @@ const apiFixtures: MockApiFixtures = {
         tenant: 'foo',
         version: 1,
       },
-      title: 'ACME 1TB H100',
-      description: '',
-      interfaces: [],
+      spec: create(BareMetalInstanceTypeSchema, { id: 'acme_1tb_h100' }).spec,
     },
   ],
   virtualNetworks: [
@@ -454,12 +440,14 @@ const renderWizard = (options: RenderWizardOptions = {}) => {
   const onClosed = options.onClosed ?? vi.fn();
 
   const result = renderWithProviders(
-    <CatalogProvisionWizard
-      kind={options.kind || 'compute_instance'}
-      initialCatalogItemId={options.initialCatalogItemId}
-      onProvision={onProvision}
-      onClosed={onClosed}
-    />,
+    <SessionProvider role="tenant-user" username="test-user" tenantId="test-tenant">
+      <CatalogProvisionWizard
+        kind={options.kind || 'compute_instance'}
+        initialCatalogItemId={options.initialCatalogItemId}
+        onProvision={onProvision}
+        onClosed={onClosed}
+      />
+    </SessionProvider>,
     {
       apiFixtures: options.apiFixtures ?? apiFixtures,
       transport: options.transport,
@@ -480,18 +468,18 @@ describe('CatalogProvisionWizard', () => {
   it('blocks Next on catalog step when no catalog item is selected', async () => {
     const { user } = renderWizard();
 
-    await expectCatalogItemVisible('RHEL 9 catalog');
+    await expectCatalogItemVisible('catalog-rhel-9');
 
     await clickWizardNext(user);
     await expectValidationAlert();
     expect(screen.getByText('Select a catalog item')).toBeInTheDocument();
-    await expectCatalogItemVisible('RHEL 9 catalog');
+    await expectCatalogItemVisible('catalog-rhel-9');
   });
 
   it('blocks Next on general step when name is empty', async () => {
     const { user } = renderWizard();
 
-    await selectCatalogItem(user, vmCatalogItem.title);
+    await selectCatalogItem(user, vmCatalogItem.metadata?.name ?? '');
     await clickWizardNext(user);
     await waitFor(() => {
       expect(screen.getByLabelText(/^Name/)).toBeInTheDocument();
@@ -507,7 +495,7 @@ describe('CatalogProvisionWizard', () => {
       apiFixtures: { ...apiFixtures, catalogItems: [catalogItemWithDistinctDefaults] },
     });
 
-    await selectCatalogItem(user, vmCatalogItem.title);
+    await selectCatalogItem(user, vmCatalogItem.metadata?.name ?? '');
     await clickWizardNext(user);
     await fillGeneralStep(user, 'web-01');
     await clickWizardNext(user);
@@ -542,6 +530,10 @@ describe('CatalogProvisionWizard', () => {
       transport: gatedTransport,
     });
 
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: 'Next' }).length).toBeGreaterThan(0);
+    });
+
     await clickWizardNext(user);
     await fillGeneralStep(user, 'web-01');
     await clickWizardNext(user);
@@ -554,7 +546,7 @@ describe('CatalogProvisionWizard', () => {
   it('highlights the Name field with a required error when Next is clicked without entering a name', async () => {
     const { user } = renderWizard();
 
-    await selectCatalogItem(user, vmCatalogItem.title);
+    await selectCatalogItem(user, vmCatalogItem.metadata?.name ?? '');
     await clickWizardNext(user);
 
     const nameInput = await screen.findByLabelText(/^Name/);
@@ -592,7 +584,7 @@ describe('CatalogProvisionWizard', () => {
     const onClosed = vi.fn();
     const { user } = renderWizard({ onClosed });
 
-    await selectCatalogItem(user, vmCatalogItem.title);
+    await selectCatalogItem(user, vmCatalogItem.metadata?.name ?? '');
     await clickWizardCancel(user);
 
     const modal = getCancelModal();
@@ -604,7 +596,7 @@ describe('CatalogProvisionWizard', () => {
     const onClosed = vi.fn();
     const { user } = renderWizard({ onClosed });
 
-    await selectCatalogItem(user, vmCatalogItem.title);
+    await selectCatalogItem(user, vmCatalogItem.metadata?.name ?? '');
     await clickWizardCancel(user);
 
     const modal = getCancelModal();
@@ -614,14 +606,14 @@ describe('CatalogProvisionWizard', () => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
     expect(onClosed).not.toHaveBeenCalled();
-    expectCatalogItemSelected('RHEL 9 catalog');
+    expectCatalogItemSelected('catalog-rhel-9');
   });
 
   it('discards and closes when Discard is confirmed', async () => {
     const onClosed = vi.fn();
     const { user } = renderWizard({ onClosed });
 
-    await selectCatalogItem(user, vmCatalogItem.title);
+    await selectCatalogItem(user, vmCatalogItem.metadata?.name ?? '');
     await clickWizardCancel(user);
 
     const modal = getCancelModal();
@@ -633,7 +625,7 @@ describe('CatalogProvisionWizard', () => {
   it('preserves general step values after navigating back from configuration', async () => {
     const { user } = renderWizard();
 
-    await advanceToConfigurationStep(user, 'persisted-vm', vmCatalogItem.title);
+    await advanceToConfigurationStep(user, 'persisted-vm', vmCatalogItem.metadata?.name ?? '');
     await clickWizardBack(user);
 
     await waitFor(() => {
@@ -644,7 +636,7 @@ describe('CatalogProvisionWizard', () => {
   it('preserves configuration values after navigating back from networking', async () => {
     const { user } = renderWizard();
 
-    await advanceToNetworkingStep(user, vmCatalogItem.title);
+    await advanceToNetworkingStep(user, vmCatalogItem.metadata?.name ?? '');
     await clickWizardBack(user);
     await waitFor(() => {
       expect(screen.getByLabelText(/Boot disk/)).toBeInTheDocument();
@@ -710,7 +702,7 @@ describe('CatalogProvisionWizard', () => {
         ],
       },
     });
-    await advanceToConfigurationStep(user, 'web-01', vmCatalogItem.title);
+    await advanceToConfigurationStep(user, 'web-01', vmCatalogItem.metadata?.name ?? '');
 
     await waitFor(() => {
       expect(screen.getByLabelText(/^Instance type/)).not.toBeDisabled();
@@ -827,7 +819,8 @@ describe('CatalogProvisionWizard', () => {
         ],
       },
     });
-    await advanceToNetworkingStep(user, vmCatalogItem.title);
+    await advanceToNetworkingStep(user, vmCatalogItem.metadata?.name ?? '');
+    await enableCustomNetworking(user);
 
     await waitFor(() => {
       expect(screen.getByLabelText(/^Virtual network/)).toHaveTextContent('tenant-vn');
@@ -845,7 +838,7 @@ describe('CatalogProvisionWizard', () => {
   it('shows virtual network and subnet names on the review step', async () => {
     const { user } = renderWizard();
 
-    await advanceToReviewStep(user, vmCatalogItem.title);
+    await advanceToReviewStep(user, vmCatalogItem.metadata?.name ?? '');
 
     await waitFor(() => {
       expect(screen.getByText('tenant-vn')).toBeInTheDocument();
@@ -853,20 +846,19 @@ describe('CatalogProvisionWizard', () => {
     });
   });
 
-  it('shows security group names on the review step', async () => {
+  it('shows empty security groups on the review step when none are selected', async () => {
     const { user } = renderWizard();
 
-    await advanceToReviewStep(user, vmCatalogItem.title);
+    await advanceToReviewStep(user, vmCatalogItem.metadata?.name ?? '');
 
-    await waitFor(() => {
-      expect(screen.getByText('default-sg')).toBeInTheDocument();
-    });
+    expect(screen.getByText('Security groups')).toBeInTheDocument();
+    expect(screen.queryByText('default-sg')).not.toBeInTheDocument();
   });
 
   it('shows instance type on the review step', async () => {
     const { user } = renderWizard();
 
-    await advanceToReviewStep(user, vmCatalogItem.title);
+    await advanceToReviewStep(user, vmCatalogItem.metadata?.name ?? '');
 
     await waitFor(() => {
       expect(screen.getByText('standard-4-8 — 4 vCPUs, 8 GiB')).toBeInTheDocument();
@@ -877,7 +869,7 @@ describe('CatalogProvisionWizard', () => {
     const onProvision = vi.fn().mockResolvedValue(undefined);
     const { user } = renderWizard({ onProvision });
 
-    await advanceToReviewStep(user, vmCatalogItem.title);
+    await advanceToReviewStep(user, vmCatalogItem.metadata?.name ?? '');
 
     await user.click(screen.getByRole('button', { name: 'Create' }));
 
@@ -894,7 +886,7 @@ describe('CatalogProvisionWizard', () => {
     expect(onProvision.mock.calls[0][0]).not.toHaveProperty('spec.vcpus');
     expect(onProvision.mock.calls[0][0]).not.toHaveProperty('spec.memoryGib');
     expect(onProvision.mock.calls[0][0]).toHaveProperty('spec.networkAttachments', [
-      { subnet: { id: 'subnet-1' }, securityGroups: [{ id: 'sg-1' }] },
+      { subnet: { id: 'subnet-1' }, securityGroups: [] },
     ]);
   });
 
@@ -902,7 +894,7 @@ describe('CatalogProvisionWizard', () => {
     const onProvision = vi.fn().mockRejectedValue(new Error('provision failed'));
     const { user } = renderWizard({ onProvision });
 
-    await advanceToReviewStep(user, vmCatalogItem.title);
+    await advanceToReviewStep(user, vmCatalogItem.metadata?.name ?? '');
 
     await user.click(screen.getByRole('button', { name: 'Create' }));
 
@@ -914,19 +906,19 @@ describe('CatalogProvisionWizard', () => {
 
   it('includes a Storage step in the compute instance wizard and omits it for clusters', async () => {
     const { unmount } = renderWizard();
-    await expectCatalogItemVisible('RHEL 9 catalog');
-    expect(screen.getByText('Storage')).toBeInTheDocument();
+    await expectCatalogItemVisible('catalog-rhel-9');
+    expect(screen.getByRole('button', { name: 'Storage' })).toBeInTheDocument();
     unmount();
 
     renderWizard({ kind: 'cluster' });
-    await expectCatalogItemVisible('OpenShift 4 cluster');
-    expect(screen.queryByText('Storage')).not.toBeInTheDocument();
+    await expectCatalogItemVisible('catalog-openshift-4');
+    expect(screen.queryByRole('button', { name: 'Storage' })).not.toBeInTheDocument();
   });
 
   it('moves boot disk controls off Configuration and onto the Storage step', async () => {
     const { user } = renderWizard();
 
-    await advanceToConfigurationStep(user, 'web-01', vmCatalogItem.title);
+    await advanceToConfigurationStep(user, 'web-01', vmCatalogItem.metadata?.name ?? '');
     expect(screen.getByLabelText(/^Instance type/)).toBeInTheDocument();
     expect(screen.queryByLabelText(/Boot disk/)).not.toBeInTheDocument();
 
@@ -943,7 +935,7 @@ describe('CatalogProvisionWizard', () => {
   it('blocks Next on the Storage step until the boot disk size is valid', async () => {
     const { user } = renderWizard();
 
-    await advanceToStorageStep(user, vmCatalogItem.title);
+    await advanceToStorageStep(user, vmCatalogItem.metadata?.name ?? '');
     const bootDisk = screen.getByLabelText<HTMLInputElement>(/Boot disk/);
     await user.clear(bootDisk);
     await clickWizardNext(user);
@@ -956,7 +948,7 @@ describe('CatalogProvisionWizard', () => {
   it('blocks Next on cluster general step when name is invalid', async () => {
     const { user } = renderWizard({ kind: 'cluster' });
 
-    await selectCatalogItem(user, clusterCatalogItem.title);
+    await selectCatalogItem(user, clusterCatalogItem.metadata?.name ?? '');
     await clickWizardNext(user);
     await fillClusterGeneralStep(user, 'MyCluster');
     await clickWizardNext(user);

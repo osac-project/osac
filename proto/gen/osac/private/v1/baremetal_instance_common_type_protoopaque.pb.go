@@ -217,11 +217,11 @@ type BareMetalNetworkAttachment_builder struct {
 	// References to the SecurityGroups applied on this NIC.
 	// Each must be READY and belong to the same VirtualNetwork as the subnet.
 	SecurityGroups []*SecurityGroupLocalReference
-	// Physical interface name from the HostType's NetworkInterface list.
+	// Physical interface name from the BareMetalInstanceType's network ports.
 	// When omitted on a single-attachment instance, the system selects the first fabric-role interface.
 	Interface *string
-	// Designates this attachment as the default gateway for multi-NIC instances.
-	// When omitted on a single-attachment instance, that attachment is implicitly primary.
+	// Designates this attachment as the default gateway.
+	// With a single attachment, omit primary or set primary: true; primary: false is rejected.
 	Primary *bool
 }
 

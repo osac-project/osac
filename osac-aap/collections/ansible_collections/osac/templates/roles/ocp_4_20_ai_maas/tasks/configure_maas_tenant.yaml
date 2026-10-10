@@ -2,7 +2,8 @@
 # Per-tenant onboarding — included once per descriptor (loop_var: _t).
 # For custom tenants: create AITenant (gateway/oidc/rbac.admins) then governance.
 # For the default tenant (_t.is_default): the AITenant is operator-owned and
-# already Active; only governance (model + policies + subscriptions) is added.
+# already Active; OIDC is merge-patched when configured, then governance
+# (model + policies + subscriptions) is added.
 
 - name: "{{ _t.name }} | Set per-tenant facts"
   ansible.builtin.set_fact:
@@ -27,6 +28,29 @@
   delay: 10
   until: _r is not failed
   when: not _t_is_default | bool
+
+- name: "{{ _t.name }} | Patch default AITenant with OIDC"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    merge_type: merge
+    definition:
+      apiVersion: maas.opendatahub.io/v1alpha1
+      kind: AITenant
+      metadata:
+        name: "{{ _t_name }}"
+        namespace: ai-tenants
+      spec:
+        oidc:
+          issuerUrl: "{{ ocp_4_20_ai_maas_oidc_issuer }}"
+          clientId: "{{ ocp_4_20_ai_maas_oidc_client_id }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+  when:
+    - _t_is_default | bool
+    - ocp_4_20_ai_maas_oidc_issuer | default('', true) | length > 0
 
 - name: "{{ _t.name }} | Wait for AITenant Active"
   kubernetes.core.k8s_info:

@@ -12,7 +12,6 @@ export interface RuleFormValues {
   portFrom: string;
   portTo: string;
   ipv4Cidr: string;
-  ipv6Cidr: string;
 }
 
 export const SecurityGroupRuleForm = () => {
@@ -61,13 +60,7 @@ export const SecurityGroupRuleForm = () => {
         name="ipv4Cidr"
         label={t('IPv4 CIDR')}
         fieldId="rule-ipv4-cidr"
-        helperText={t('Example: 192.168.1.0/24 or 0.0.0.0/0 for all')}
-      />
-      <InputField
-        name="ipv6Cidr"
-        label={t('IPv6 CIDR (Optional)')}
-        fieldId="rule-ipv6-cidr"
-        helperText={t('Example: 2001:db8::/32 or ::/0 for all')}
+        placeholder="192.168.1.0/24 or 0.0.0.0/0"
       />
     </>
   );

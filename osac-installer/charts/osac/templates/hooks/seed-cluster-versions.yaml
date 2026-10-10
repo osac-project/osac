@@ -43,7 +43,7 @@ spec:
               local response="/tmp/cv-response.json"
               local code
 
-              code=$(curl -skS \
+              code=$(curl -sS {{ include "osac.fulfillmentCurlTLS" . }} \
                 --connect-timeout 5 \
                 --max-time 30 \
                 -o "${response}" \
@@ -85,6 +85,9 @@ spec:
         volumeMounts:
         - name: tmp
           mountPath: /tmp
+        - name: ca-bundle
+          mountPath: /etc/ca-bundle
+          readOnly: true
         resources:
           requests:
             cpu: 50m
@@ -100,5 +103,11 @@ spec:
       volumes:
       - name: tmp
         emptyDir: {}
+      - name: ca-bundle
+        configMap:
+          name: {{ .Values.service.certs.caBundle.configMap | required "service.certs.caBundle.configMap is required" }}
+          items:
+          - key: bundle.pem
+            path: bundle.pem
       restartPolicy: OnFailure
 {{- end }}

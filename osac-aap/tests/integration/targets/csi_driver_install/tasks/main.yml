@@ -312,11 +312,17 @@
         that:
           - _driver_release_info.status['values'].vendors.vast.enabled | bool
           - >-
-            ('vast=vast-csi-controller.osac-csi-backends.svc.cluster.local:' ~ (_vast_service_fixture.resources[0].spec.ports[0].port | string))
-            in (_driver_release_info.status['values'].controller.vendorControllers | default(_driver_release_info.status['values'].controller.vendorSockets | default('')))
+            ('vast=vast-csi-controller.osac-csi-backends.svc.cluster.local:' ~
+            (_vast_service_fixture.resources[0].spec.ports[0].port | string))
+            in (
+            _driver_release_info.status['values'].controller.vendorControllers |
+            default(_driver_release_info.status['values'].controller.vendorSockets | default(''))
+            )
           # Test 1 dispatches only vast, so node.vendorSockets is exactly the chart-default socketPath + '/csi.sock'.
           - _driver_release_info.status['values'].node.vendorSockets == 'vast=/var/lib/kubelet/plugins/csi.vast.vastdata.com/csi.sock'
-        fail_msg: "csi-driver release values did not reflect the dispatched vast vendor with live controller and node sockets"
+        fail_msg: >-
+          csi-driver release values did not reflect the dispatched vast vendor with live controller and
+          node sockets
         success_msg: "csi-driver release correctly enables vast with the live-resolved controller socket and node socket populated"
 
 # ── Test 2: Second, identical dispatch is idempotent ──
@@ -718,3 +724,7 @@
       loop_control:
         label: "{{ item.item }}"
       when: "'Timed out waiting' in (item.msg | default(''))"
+
+# Verify the LVMS overlay independently of the network-vendor Helm release.
+- name: Verify local-tier StorageClass behavior
+  import_playbook: local_storage_class.yml

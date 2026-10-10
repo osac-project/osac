@@ -96,11 +96,10 @@ which must be called (typically via `defer`) by any code path that can produce a
 transaction. If a handler forgets it, its error will not trigger a rollback — this is not enforced
 by the type system.
 
-### Event delivery is a hint, not a guarantee — and that's by design
+### Event delivery and reconciliation recovery
 
-It's tempting to read the event path as a durable change feed, but a dropped gRPC `Watch` stream
-still loses whatever was sent while it was disconnected. In this system that's fine, because Watch
-is a **low-latency hint that something changed**, never the source of truth for *what* changed:
+Watch events notify controllers that an object may need reconciliation. Controllers read the
+current state from the database, which remains the source of truth:
 
 - Public and private Watch events are captured in the transactional `changes` table, published by
   the separate event-publisher process to tenant topics named `osac.events.<tenant>`, and consumed
@@ -109,6 +108,10 @@ is a **low-latency hint that something changed**, never the source of truth for 
   marks its no-op update with a transaction-local PostgreSQL setting, so the same row trigger adds an
   `OBJECT_SIGNALED` change in the request transaction. Public Watch filters those private-only
   signal events.
+- Private Watch requests can specify a consumer group. Reconcilers use stable groups named
+  `<controller-name>-reconciler`, allowing them to resume from committed Kafka offsets after
+  disconnecting. Requests without a group watch new events independently. Grouped delivery can
+  repeat events, and delivery to the gRPC stream does not acknowledge successful reconciliation.
 - Every `controllers.Reconciler[O]`
   ([`internal/controllers/reconciler.go`](https://github.com/osac-project/osac/blob/main/fulfillment-service/internal/controllers/reconciler.go))
   also runs a periodic full `List()` (`syncObjects`, `syncInterval`, default one hour) independently
@@ -117,11 +120,22 @@ is a **low-latency hint that something changed**, never the source of truth for 
   it, just later. The `Watch` stream is the fast path; the periodic sync is the correctness
   fallback that makes the fast path safe to lose.
 
+Full synchronization is enabled by default. Configuring the reconciler builder with
+`SetSync(false)` disables startup, periodic, and watch-restart full syncs.
+Object events still trigger reconciliation. Events for related resources still trigger a full scan
+so dependent objects can make progress, but missed events no longer have the background sync fallback.
+The `fulfillment-service start controller --sync=false` command applies this setting to all
+reconcilers. The `--sync` flag defaults to `true`.
+The service Helm chart sets `controller.sync: true` by default and passes that value through
+`--sync`. The installer's fulfillment integration test target explicitly sets
+`service.controller.sync=false` for all test phases so they rely on event-driven reconciliation.
+This includes the controller downtime recovery test, which exercises grouped event delivery.
+
 This is the same design principle Kubernetes controllers use: informer watches are an optimization
 for latency, but every controller is written to tolerate a missed or replayed watch event because a
 relist will eventually re-deliver the same state. Here it means the interesting failure mode isn't
 "lost update" (the periodic sync heals that) but "stale until the next sync", bounded by
-`syncInterval`.
+`syncInterval` when synchronization is enabled.
 
 ## End-to-end flow: `Create` for a `BareMetalInstance`
 

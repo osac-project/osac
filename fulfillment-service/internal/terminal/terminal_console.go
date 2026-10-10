@@ -40,20 +40,22 @@ import (
 // ConsoleBuilder contains the data and logic needed to create a console. Don't create objects of this type directly,
 // use the NewConsole function instead.
 type ConsoleBuilder struct {
-	logger *slog.Logger
-	stdout io.Writer
-	stderr io.Writer
-	helper reflection.Helper
+	logger        *slog.Logger
+	stdout        io.Writer
+	stderr        io.Writer
+	helper        reflection.Helper
+	colorOverride *bool
 }
 
 // Console is helps writing messages to the console. Don't create objects of this type directly, use the NewConsole
 // function instead.
 type Console struct {
-	logger *slog.Logger
-	stdout io.Writer
-	stderr io.Writer
-	engine *templating.Engine
-	helper reflection.Helper
+	logger        *slog.Logger
+	stdout        io.Writer
+	stderr        io.Writer
+	engine        *templating.Engine
+	helper        reflection.Helper
+	colorOverride *bool
 }
 
 // NewConsole creates a builder that can the be used to create a template engine.
@@ -88,6 +90,12 @@ func (b *ConsoleBuilder) SetHelper(value reflection.Helper) *ConsoleBuilder {
 	return b
 }
 
+// SetColorEnabled controls JSON and YAML syntax highlighting. Without it, color follows the output terminal.
+func (b *ConsoleBuilder) SetColorEnabled(value bool) *ConsoleBuilder {
+	b.colorOverride = &value
+	return b
+}
+
 // Build uses the configuration stored in the builder to create a new console.
 func (b *ConsoleBuilder) Build() (result *Console, err error) {
 	// Check parameters:
@@ -108,10 +116,11 @@ func (b *ConsoleBuilder) Build() (result *Console, err error) {
 
 	// Create the console object first so we can reference its methods when building the template engine:
 	console := &Console{
-		logger: b.logger,
-		stdout: stdout,
-		stderr: stderr,
-		helper: b.helper,
+		logger:        b.logger,
+		stdout:        stdout,
+		stderr:        stderr,
+		helper:        b.helper,
+		colorOverride: b.colorOverride,
 	}
 
 	// Create the template engine:
@@ -240,8 +249,7 @@ func (c *Console) Render(ctx context.Context, template string, data any) {
 	}
 }
 
-// RenderJson renders the given data as JSON to stdout. If the terminal supports color, the output will be colorized
-// using the chroma syntax highlighter.
+// RenderJson writes JSON to stdout, using syntax highlighting when color is enabled.
 func (c *Console) RenderJson(ctx context.Context, data any) {
 	bytes, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
@@ -258,8 +266,7 @@ func (c *Console) RenderJson(ctx context.Context, data any) {
 	}
 }
 
-// RenderYaml renders the given data as YAML to stdout. If the terminal supports color, the output will be colorized
-// using the chroma syntax highlighter.
+// RenderYaml writes YAML to stdout, using syntax highlighting when color is enabled.
 func (c *Console) RenderYaml(ctx context.Context, data any) {
 	buffer := &bytes.Buffer{}
 	encoder := yaml.NewEncoder(buffer)
@@ -279,24 +286,19 @@ func (c *Console) RenderYaml(ctx context.Context, data any) {
 	}
 }
 
-// renderColored renders the given text to stdout with syntax highlighting using the specified lexer. If the terminal
-// doesn't support color or an error occurs, it falls back to plain text output.
+// renderColored renders the given text to stdout with syntax highlighting when color is enabled.
 func (c *Console) renderColored(ctx context.Context, text string, format string) error {
-	// If the writer isn't a file then we can't decide if it supports color, so we just print the text:
-	file, ok := c.stdout.(*os.File)
-	if !ok {
+	colorEnabled := false
+	if c.colorOverride != nil {
+		colorEnabled = *c.colorOverride
+	} else if file, ok := c.stdout.(*os.File); ok {
+		colorEnabled = isatty.IsTerminal(file.Fd())
+	}
+	if !colorEnabled {
 		_, err := c.stdout.Write([]byte(text))
 		return err
 	}
 
-	// If the file isn't a terminal, then we don't want to use color to not interfere with other tools
-	// thayt may want to process the output.
-	if !isatty.IsTerminal(file.Fd()) {
-		_, err := file.Write([]byte(text))
-		return err
-	}
-
-	// If we are here then we can use color:
 	lexer := lexers.Get(format)
 	if lexer == nil {
 		lexer = lexers.Fallback
@@ -317,10 +319,14 @@ func (c *Console) renderColored(ctx context.Context, text string, format string)
 			slog.String("format", format),
 			slog.Any("error", err),
 		)
-		_, err := file.Write([]byte(text))
+		_, err := c.stdout.Write([]byte(text))
 		return err
 	}
-	return formatter.Format(colorable.NewColorable(file), style, iterator)
+	writer := c.stdout
+	if file, ok := writer.(*os.File); ok && isatty.IsTerminal(file.Fd()) {
+		writer = colorable.NewColorable(file)
+	}
+	return formatter.Format(writer, style, iterator)
 }
 
 // Write is an implementation of the io.Write interface that allows the console to be used as a writer if needed.

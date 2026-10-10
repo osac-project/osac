@@ -42,7 +42,7 @@ var _ = Describe("Virtual networks server", func() {
 			},
 		)
 
-		// Create a default NetworkClass for tests:
+		// Create the singleton NetworkClass for tests:
 		ncDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
 			SetLogger(logger).
 			SetTenancyLogic(tenancy).
@@ -55,7 +55,6 @@ var _ = Describe("Virtual networks server", func() {
 			Metadata: privatev1.Metadata_builder{
 				Tenant: testTenant,
 			}.Build(),
-			IsDefault: new(true),
 			Capabilities: privatev1.NetworkClassCapabilities_builder{
 				SupportsIpv4:      true,
 				SupportsIpv6:      true,
@@ -291,9 +290,9 @@ var _ = Describe("Virtual networks server", func() {
 			Expect(object.GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
 		})
 
-		It("Public Create without network_class auto-populates from default NC", func() {
+		It("Public Create without network_class resolves the singleton NetworkClass", func() {
 			// Create VN via public server (network_class is not exposed publicly; the
-			// private server auto-populates it from the default NC):
+			// private server resolves it from the deployment singleton):
 			createResponse, err := publicServer.Create(ctx, publicv1.VirtualNetworksCreateRequest_builder{
 				Object: publicv1.VirtualNetwork_builder{
 					Metadata: publicv1.Metadata_builder{
@@ -306,7 +305,7 @@ var _ = Describe("Virtual networks server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 
-			// Verify via the private server that network_class is the default NC's ID:
+			// Verify via the private server that network_class is the singleton's ID:
 			privateGetResponse, err := privateServer.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{
 				Id: createResponse.GetObject().GetId(),
 			}.Build())
@@ -314,8 +313,8 @@ var _ = Describe("Virtual networks server", func() {
 			Expect(privateGetResponse.GetObject().GetSpec().GetNetworkClass().GetId()).To(Equal("default"))
 		})
 
-		It("Public Create without network_class when no default exists returns InvalidArgument", func() {
-			// Remove the default NC that BeforeEach created:
+		It("Public Create without network_class when no singleton exists returns InvalidArgument", func() {
+			// Remove the singleton NC that BeforeEach created:
 			ncDao, ncErr := dao.NewGenericDAO[*privatev1.NetworkClass]().
 				SetLogger(logger).
 				SetTenancyLogic(tenancy).
@@ -324,7 +323,7 @@ var _ = Describe("Virtual networks server", func() {
 			_, ncErr = ncDao.Delete().SetId("default").Do(ctx)
 			Expect(ncErr).ToNot(HaveOccurred())
 
-			// Attempt public Create without network_class (no default is configured):
+			// Attempt public Create without network_class (no singleton is configured):
 			_, err := publicServer.Create(ctx, publicv1.VirtualNetworksCreateRequest_builder{
 				Object: publicv1.VirtualNetwork_builder{
 					Metadata: publicv1.Metadata_builder{
@@ -339,7 +338,7 @@ var _ = Describe("Virtual networks server", func() {
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(err.Error()).To(ContainSubstring("no default NetworkClass is configured"))
+			Expect(err.Error()).To(ContainSubstring("no NetworkClass is configured"))
 		})
 	})
 })

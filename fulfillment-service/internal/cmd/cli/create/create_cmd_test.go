@@ -29,6 +29,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/computeinstancecatalogitem"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/externalip"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/externalipattachment"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/fabricdomain"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/hub"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/natgateway"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/secret"
@@ -55,6 +56,7 @@ var _ = Describe("Create command", func() {
 		Entry("computeinstancecatalogitem", computeinstancecatalogitem.Cmd, (*publicv1.ComputeInstanceCatalogItem)(nil)),
 		Entry("externalip", externalip.Cmd, (*publicv1.ExternalIP)(nil)),
 		Entry("externalipattachment", externalipattachment.Cmd, (*publicv1.ExternalIPAttachment)(nil)),
+		Entry("fabricdomain", fabricdomain.Cmd, (*publicv1.FabricDomain)(nil)),
 		Entry("hub", hub.Cmd, (*privatev1.Hub)(nil)),
 		Entry("natgateway", natgateway.Cmd, (*publicv1.NATGateway)(nil)),
 		Entry("virtualnetwork", virtualnetwork.Cmd, (*publicv1.VirtualNetwork)(nil)),
@@ -83,6 +85,7 @@ var _ = Describe("Create command", func() {
 				"computeinstancecatalogitem",
 				"externalip",
 				"externalipattachment",
+				"fabricdomain",
 				"hub",
 				"natgateway",
 				"virtualnetwork",

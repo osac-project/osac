@@ -1,0 +1,14 @@
+global:
+  expertOverrides:
+    # Profiles such as caas-ci preserve their AAP settings unless this facade
+    # is explicitly allowed to derive the AgentlessNet backend.
+    aap: false
+  networking:
+    fabricManager: agentless_net
+    k8sManager: ""
+    networkClass:
+      title: AgentlessNet VirtualNetwork baseline
+      description: >-
+        Implements UID-keyed VirtualNetwork namespaces, /31 transit links,
+        and the namespace forwarding baseline. Other networking resource
+        operations remain NotImplemented.

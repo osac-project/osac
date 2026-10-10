@@ -38,7 +38,7 @@ type VirtualNetworkFeedbackReconciler struct {
 }
 
 // NewVirtualNetworkFeedbackReconciler creates a reconciler that sends to the fulfillment service updates about virtual networks.
-func NewVirtualNetworkFeedbackReconciler(hubClient clnt.Client, grpcConn *grpc.ClientConn, networkingNamespace string) *VirtualNetworkFeedbackReconciler {
+func NewVirtualNetworkFeedbackReconciler(hubClient clnt.Client, grpcConn grpc.ClientConnInterface, networkingNamespace string) *VirtualNetworkFeedbackReconciler {
 	vnClient := privatev1.NewVirtualNetworksClient(grpcConn)
 	r := &VirtualNetworkFeedbackReconciler{networkingNamespace: networkingNamespace}
 	r.bridge = &feedback.Bridge[*v1alpha1.VirtualNetwork, *privatev1.VirtualNetwork]{

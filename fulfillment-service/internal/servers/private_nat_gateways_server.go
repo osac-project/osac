@@ -259,6 +259,14 @@ func (s *PrivateNATGatewaysServer) Update(ctx context.Context,
 		err = translateLifecycleError(lockErr)
 		return
 	}
+	if err = validateDefaultLabelUpdate(
+		existingGateway.GetMetadata().GetLabels(),
+		request.GetObject().GetMetadata().GetLabels(),
+		mask,
+		"NAT gateway",
+	); err != nil {
+		return
+	}
 	if updateIncludesField(mask, "spec.virtual_network", "spec.external_ip") {
 		err = validateImmutableFieldsNATGateway(request.GetObject(), existingGateway)
 		if err != nil {
@@ -283,7 +291,7 @@ func (s *PrivateNATGatewaysServer) Delete(ctx context.Context,
 		err = translateLifecycleError(err)
 		return
 	}
-	if err = validateNotDefault(natGateway.GetMetadata().GetLabels(), "NAT gateway"); err != nil {
+	if err = validateNotDefault(ctx, natGateway.GetMetadata().GetLabels(), "NAT gateway"); err != nil {
 		return
 	}
 	if natGateway.GetMetadata().GetDeletionTimestamp() != nil {

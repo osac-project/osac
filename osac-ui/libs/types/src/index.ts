@@ -39,6 +39,7 @@ export * from './osac/public/v1/external_ip_type_pb.js'
 export * from './osac/public/v1/external_ips_service_pb.js'
 export * from './osac/public/v1/external_ip_attachment_type_pb.js'
 export * from './osac/public/v1/external_ip_attachments_service_pb.js'
+export * from './osac/public/v1/external_ip_attribution_type_pb.js'
 
 export * from './osac/public/v1/nat_gateway_type_pb.js'
 export * from './osac/public/v1/nat_gateways_service_pb.js'
@@ -59,8 +60,6 @@ export * from './osac/public/v1/cluster_template_type_pb.js'
 export * from './osac/public/v1/cluster_templates_service_pb.js'
 export * from './osac/public/v1/cluster_version_type_pb.js'
 export * from './osac/public/v1/cluster_versions_service_pb.js'
-export * from './osac/public/v1/host_type_type_pb.js'
-export * from './osac/public/v1/host_types_service_pb.js'
 export * from './osac/public/v1/field_definition_type_pb.js'
 
 export * from './osac/public/v1/baremetal_instance_type_pb.js';

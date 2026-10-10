@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import subprocess
 from typing import Any
@@ -8,6 +9,7 @@ from typing import Any
 import pytest
 
 from tests.e2e.bmaas.conftest import BMI_DISK_IMAGE_SOURCE_REF
+from tests.e2e.core.fulfillment_trust import assert_management_tls
 from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
 from tests.e2e.core.helpers import (
     wait_for_bmh_available,
@@ -27,6 +29,13 @@ logger = logging.getLogger(__name__)
 
 _RESTART_IN_PROGRESS: str = "BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS"
 _RESTART_FAILED: str = "BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_FAILED"
+_READY: str = "BARE_METAL_INSTANCE_CONDITION_TYPE_READY"
+_PROVISIONED: str = "BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED"
+_CONDITION_STATUS_TRUE: str = "CONDITION_STATUS_TRUE"
+# Terminal condition reasons stamped by the fulfillment reconciler at the Ready state:
+# the READY axis carries the "Ready" state, the PROVISIONED axis the "Provisioned" state.
+_READY_REASON: str = "Ready"
+_PROVISIONED_REASON: str = "Provisioned"
 _MAC_PATTERN: re.Pattern[str] = re.compile(r"^([0-9a-f]{2}:){5}[0-9a-f]{2}$")
 
 
@@ -73,12 +82,22 @@ def _assert_nic_metadata(
         assert mac in ni_section, f"osac describe baremetalinstance 'Network Interfaces:' section missing MAC '{mac}'"
 
 
-def _get_condition_status(grpc: GRPCClient, bmi_id: str, condition_type: str) -> str:
-    response: dict[str, Any] = grpc.get_baremetal_instance(bmi_id=bmi_id)
+def _find_condition(response: dict[str, Any], condition_type: str) -> dict[str, Any]:
+    """Return the status condition of the given type from a BMI API response, or {} if absent."""
     for condition in response.get("object", {}).get("status", {}).get("conditions", []):
         if condition.get("type") == condition_type:
-            return condition.get("status", "")
-    return ""
+            return condition
+    return {}
+
+
+def _get_condition(grpc: GRPCClient, bmi_id: str, condition_type: str) -> dict[str, Any]:
+    """Fetch the BMI via the API and return its condition of the given type, or {} if absent."""
+    return _find_condition(grpc.get_baremetal_instance(bmi_id=bmi_id), condition_type)
+
+
+def _get_condition_status(grpc: GRPCClient, bmi_id: str, condition_type: str) -> str:
+    """Return the status string of the BMI's condition of the given type, or "" if absent."""
+    return _get_condition(grpc, bmi_id, condition_type).get("status", "")
 
 
 def _get_status_restart_trigger(grpc: GRPCClient, bmi_id: str) -> int:
@@ -91,16 +110,18 @@ def test_baremetal_instance_lifecycle(
     jwt_grpc_tenant1: GRPCClient,
     k8s_hub_client: K8sClient,
     catalog_item: str,
+    bmi_instance_type: str,
     bmi_disk_image: str,
     bmh_namespace: str,
     test_run_id: str,
     ssh_public_key: str,
 ) -> None:
+    """Provision a BMI end-to-end and assert its terminal stage, NIC metadata, power cycle, and deprovision."""
     name = f"e2e-bmi-{test_run_id}"
     disk_images: dict[str, Any] = jwt_grpc_tenant1.call(service=f"{PUBLIC_API}.DiskImages/List")
     assert bmi_disk_image in {item["metadata"]["name"] for item in disk_images.get("items", [])}
 
-    bmi_id: str = jwt_cli_user.create_baremetal_instance(
+    bmi_id, _ = jwt_cli_user.create_baremetal_instance(
         name=name, catalog_item=catalog_item, ssh_key=ssh_public_key, disk_image=bmi_disk_image
     )
     bmh_ns = ""
@@ -108,9 +129,46 @@ def test_baremetal_instance_lifecycle(
 
     try:
         assert bmi_id in jwt_grpc_tenant1.list_baremetal_instance_ids()
-
         bmi_cr_name: str = wait_for_bmi_cr(k8s=k8s_hub_client, uuid=bmi_id)
+        spec = jwt_grpc_tenant1.get_baremetal_instance(bmi_id=bmi_id).get("object", {}).get("spec", {})
+        instance_type = spec.get("instance_type", spec.get("instanceType", {}))
+        assert instance_type.get("name") == bmi_instance_type, (
+            f"BareMetalInstance instance_type {instance_type.get('name')!r} does not match catalog default "
+            f"{bmi_instance_type!r}"
+        )
+
         wait_for_bmi_running(grpc=jwt_grpc_tenant1, bmi_id=bmi_id)
+        if os.environ.get("OSAC_FULFILLMENT_TRUST_E2E") == "true":
+            assert_management_tls(k8s_hub_client)
+
+        # OSAC-5349: once the instance is RUNNING, the terminal provisioning stage must be
+        # observable through the public API: the READY condition True (reason "Ready") with
+        # the PROVISIONED axis coherent (True, reason "Provisioned"). Poll on the lightweight
+        # READY status string (not the whole response) so the runner's progress/timeout
+        # logging never dumps the full API payload, which can carry tenant data. Once READY
+        # is True, read both axes from one fresh snapshot so they are asserted consistently.
+        poll_until(
+            fn=lambda: _get_condition_status(jwt_grpc_tenant1, bmi_id, _READY),
+            until=lambda s: s == _CONDITION_STATUS_TRUE,
+            retries=30,
+            delay=2,
+            description=f"{bmi_id} READY condition True",
+        )
+        instance: dict[str, Any] = jwt_grpc_tenant1.get_baremetal_instance(bmi_id=bmi_id)
+        ready_condition: dict[str, Any] = _find_condition(instance, _READY)
+        assert ready_condition.get("status") == _CONDITION_STATUS_TRUE, (
+            f"READY condition should be True at the terminal stage, got {ready_condition.get('status')!r}"
+        )
+        assert ready_condition.get("reason") == _READY_REASON, (
+            f"READY condition reason {ready_condition.get('reason')!r}, expected {_READY_REASON!r}"
+        )
+        provisioned_condition: dict[str, Any] = _find_condition(instance, _PROVISIONED)
+        assert provisioned_condition.get("status") == _CONDITION_STATUS_TRUE, (
+            f"PROVISIONED condition should be True at the terminal stage, got {provisioned_condition.get('status')!r}"
+        )
+        assert provisioned_condition.get("reason") == _PROVISIONED_REASON, (
+            f"PROVISIONED condition reason {provisioned_condition.get('reason')!r}, expected {_PROVISIONED_REASON!r}"
+        )
 
         external_host_id: str = k8s_hub_client.get_baremetal_instance_external_host_id(name=bmi_cr_name)
         assert "/" in external_host_id, f"Expected namespace/name format, got: {external_host_id}"
@@ -217,22 +275,11 @@ def test_baremetal_instance_restart(
         private_grpc.update_disk_image_lifecycle(
             disk_image_id=deprecated_disk_image_id, lifecycle="DISK_IMAGE_LIFECYCLE_DEPRECATED", api=PRIVATE_API
         )
-        response = jwt_grpc_tenant1.call(
-            service=f"{PUBLIC_API}.BareMetalInstances/Create",
-            data={
-                "object": {
-                    "metadata": {"name": name},
-                    "spec": {
-                        "catalog_item": {"id": catalog_item},
-                        "disk_image": {"name": deprecated_disk_image_name},
-                        "ssh_public_key": ssh_public_key,
-                    },
-                }
-            },
+        bmi_id, warnings = jwt_cli_user.create_baremetal_instance(
+            name=name, catalog_item=catalog_item, disk_image=deprecated_disk_image_name, ssh_key=ssh_public_key
         )
-        bmi_id = response["object"]["id"]
-        assert any("deprecated" in warning.lower() for warning in response.get("warnings", [])), (
-            f"Expected a deprecated DiskImage warning, got: {response.get('warnings', [])}"
+        assert any("deprecated" in warning.lower() for warning in warnings), (
+            f"Expected a deprecated DiskImage warning, got: {warnings}"
         )
         assert bmi_id in jwt_grpc_tenant1.list_baremetal_instance_ids()
 

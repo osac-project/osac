@@ -7,28 +7,17 @@ from uuid import uuid4
 
 import pytest
 
-from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
-from tests.e2e.core.helpers import assert_grpc_field_violation
+from tests.e2e.core.grpc_client import PUBLIC_API, GRPCClient
+from tests.e2e.core.helpers import (
+    assert_grpc_field_violation,
+    poll_until,
+    wait_for_external_ip_allocated,
+    wait_for_external_ip_cr,
+    wait_for_external_ip_deletion,
+)
+from tests.e2e.core.k8s_client import K8sClient
 
 logger = logging.getLogger(__name__)
-
-
-@pytest.fixture(scope="module")
-def ref_eip_pool(private_grpc: GRPCClient) -> str:
-    response: dict[str, Any] = private_grpc.call(service=f"{PRIVATE_API}.ExternalIPPools/List")
-    items = response.get("items", [])
-    if not items:
-        pytest.skip("No ExternalIPPools found; deploy at least one pool")
-    return items[0]["metadata"]["name"]
-
-
-@pytest.fixture(scope="module")
-def ref_eip_pool_id(private_grpc: GRPCClient, ref_eip_pool: str) -> str:
-    items = private_grpc.list_with_filter(
-        service=f"{PRIVATE_API}.ExternalIPPools/List", filter_expr=f'this.metadata.name == "{ref_eip_pool}"'
-    )
-    assert items, f"ExternalIPPool '{ref_eip_pool}' not found"
-    return items[0]["id"]
 
 
 class TestIPManagementReferences:
@@ -36,37 +25,47 @@ class TestIPManagementReferences:
 
     @pytest.mark.requires_bmaas
     @pytest.mark.requires_vmaas
-    def test_external_ip_from_pool_by_name(self, grpc: GRPCClient, ref_eip_pool: str, ref_eip_pool_id: str):
+    def test_external_ip_from_pool_by_name(
+        self, grpc: GRPCClient, k8s_hub_client: K8sClient, ref_eip_pool: dict[str, str]
+    ):
         tag = uuid4().hex[:8]
         eip_name = f"ref-eip-{tag}"
 
         response: dict[str, Any] = grpc.call(
             service=f"{PUBLIC_API}.ExternalIPs/Create",
-            data={"object": {"metadata": {"name": eip_name}, "spec": {"pool": {"name": ref_eip_pool}}}},
+            data={"object": {"metadata": {"name": eip_name}, "spec": {"pool": {"name": ref_eip_pool["name"]}}}},
         )
         eip_id = response["object"]["id"]
+        eip_cr_name = wait_for_external_ip_cr(k8s=k8s_hub_client, uuid=eip_id)
         try:
             pool_ref = response["object"]["spec"]["pool"]
-            assert pool_ref.get("name") == ref_eip_pool
-            assert pool_ref.get("id") == ref_eip_pool_id
+            assert pool_ref.get("name") == ref_eip_pool["name"]
+            assert pool_ref.get("id") == ref_eip_pool["id"]
         finally:
             grpc.delete_external_ip(external_ip_id=eip_id)
+            wait_for_external_ip_deletion(k8s=k8s_hub_client, name=eip_cr_name)
 
     @pytest.mark.requires_bmaas
-    @pytest.mark.requires_vmaas
     def test_nat_gateway_by_name(
-        self, grpc: GRPCClient, ref_virtual_network: dict[str, str], ref_eip_pool: str, ref_test_run_id: str
+        self,
+        grpc: GRPCClient,
+        k8s_hub_client: K8sClient,
+        ref_virtual_network: dict[str, str],
+        ref_eip_pool: dict[str, str],
+        ref_test_run_id: str,
     ):
         tag = uuid4().hex[:8]
         eip_name = f"ref-nat-eip-{tag}"
 
         eip_response: dict[str, Any] = grpc.call(
             service=f"{PUBLIC_API}.ExternalIPs/Create",
-            data={"object": {"metadata": {"name": eip_name}, "spec": {"pool": {"name": ref_eip_pool}}}},
+            data={"object": {"metadata": {"name": eip_name}, "spec": {"pool": {"name": ref_eip_pool["name"]}}}},
         )
         eip_id = eip_response["object"]["id"]
+        eip_cr_name = wait_for_external_ip_cr(k8s=k8s_hub_client, uuid=eip_id)
         nat_id: str | None = None
         try:
+            wait_for_external_ip_allocated(k8s=k8s_hub_client, name=eip_cr_name)
             nat_name = f"ref-nat-{tag}"
             nat_id = grpc.create_nat_gateway(
                 name=nat_name, virtual_network_name=ref_virtual_network["name"], external_ip_name=eip_name
@@ -75,31 +74,48 @@ class TestIPManagementReferences:
             nat_response = grpc.call(service=f"{PUBLIC_API}.NATGateways/Get", data={"id": nat_id})
             spec = nat_response["object"]["spec"]
 
-            vn_ref = spec["virtual_network"]
+            vn_ref = spec.get("virtual_network", spec.get("virtualNetwork", {}))
             assert vn_ref.get("name") == ref_virtual_network["name"]
             assert vn_ref.get("id") == ref_virtual_network["id"]
 
-            eip_ref = spec["external_ip"]
+            eip_ref = spec.get("external_ip", spec.get("externalIp", {}))
             assert eip_ref.get("name") == eip_name
             assert eip_ref.get("id") == eip_id
         finally:
             if nat_id:
                 try:
                     grpc.delete_nat_gateway(nat_gateway_id=nat_id)
+                    poll_until(
+                        fn=lambda: (
+                            nat_id
+                            not in [
+                                item["id"]
+                                for item in grpc.call(service=f"{PUBLIC_API}.NATGateways/List").get("items", [])
+                            ]
+                        ),
+                        until=lambda gone: gone is True,
+                        retries=60,
+                        delay=5,
+                        description=f"NATGateway {nat_id} deletion",
+                    )
                 except subprocess.CalledProcessError:
                     logger.warning("Failed to cleanup NATGateway %s", nat_id)
             grpc.delete_external_ip(external_ip_id=eip_id)
+            wait_for_external_ip_deletion(k8s=k8s_hub_client, name=eip_cr_name)
 
     @pytest.mark.requires_vmaas
-    def test_invalid_attachment_target_returns_field_path(self, grpc: GRPCClient, ref_eip_pool: str):
+    def test_invalid_attachment_target_returns_field_path(
+        self, grpc: GRPCClient, k8s_hub_client: K8sClient, ref_eip_pool: dict[str, str]
+    ):
         tag = uuid4().hex[:8]
         eip_name = f"ref-att-eip-{tag}"
 
         eip_response: dict[str, Any] = grpc.call(
             service=f"{PUBLIC_API}.ExternalIPs/Create",
-            data={"object": {"metadata": {"name": eip_name}, "spec": {"pool": {"name": ref_eip_pool}}}},
+            data={"object": {"metadata": {"name": eip_name}, "spec": {"pool": {"name": ref_eip_pool["name"]}}}},
         )
         eip_id = eip_response["object"]["id"]
+        eip_cr_name = wait_for_external_ip_cr(k8s=k8s_hub_client, uuid=eip_id)
         try:
             with pytest.raises(subprocess.CalledProcessError) as exc_info:
                 grpc.call(
@@ -111,24 +127,29 @@ class TestIPManagementReferences:
                         }
                     },
                 )
-            assert_grpc_field_violation(exc_info, field_path="compute_instance")
+            assert_grpc_field_violation(exc_info, field_path="object.spec")
         finally:
             grpc.delete_external_ip(external_ip_id=eip_id)
+            wait_for_external_ip_deletion(k8s=k8s_hub_client, name=eip_cr_name)
 
     @pytest.mark.requires_bmaas
     @pytest.mark.requires_vmaas
-    def test_cross_tenant_pool_reference(self, jwt_grpc_tenant1: GRPCClient, ref_eip_pool: str, ref_eip_pool_id: str):
+    def test_cross_tenant_pool_reference(
+        self, jwt_grpc_tenant1: GRPCClient, k8s_hub_client: K8sClient, ref_eip_pool: dict[str, str]
+    ):
         tag = uuid4().hex[:8]
         eip_name = f"ref-xt-eip-{tag}"
 
         response: dict[str, Any] = jwt_grpc_tenant1.call(
             service=f"{PUBLIC_API}.ExternalIPs/Create",
-            data={"object": {"metadata": {"name": eip_name}, "spec": {"pool": {"name": ref_eip_pool}}}},
+            data={"object": {"metadata": {"name": eip_name}, "spec": {"pool": {"name": ref_eip_pool["name"]}}}},
         )
         eip_id = response["object"]["id"]
+        eip_cr_name = wait_for_external_ip_cr(k8s=k8s_hub_client, uuid=eip_id)
         try:
             pool_ref = response["object"]["spec"]["pool"]
-            assert pool_ref.get("name") == ref_eip_pool
-            assert pool_ref.get("id") == ref_eip_pool_id
+            assert pool_ref.get("name") == ref_eip_pool["name"]
+            assert pool_ref.get("id") == ref_eip_pool["id"]
         finally:
             jwt_grpc_tenant1.delete_external_ip(external_ip_id=eip_id)
+            wait_for_external_ip_deletion(k8s=k8s_hub_client, name=eip_cr_name)

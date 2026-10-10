@@ -48,15 +48,16 @@ import (
 )
 
 type config struct {
-	fulfillmentAddr        string
-	fulfillmentToken       string
-	tlsCACert              string
-	healthAddr             string
-	kafka                  kafkapub.ConnectionConfig
-	dbURLFile              string
-	heartbeatInterval      time.Duration
-	reconciliationInterval time.Duration
-	deploymentID           string
+	fulfillmentAddr         string
+	fulfillmentToken        string
+	tlsCACert               string
+	fulfillmentTrustEnabled bool
+	healthAddr              string
+	kafka                   kafkapub.ConnectionConfig
+	dbURLFile               string
+	heartbeatInterval       time.Duration
+	reconciliationInterval  time.Duration
+	deploymentID            string
 }
 
 func main() {
@@ -79,10 +80,11 @@ func main() {
 
 func configFromEnv() *config {
 	return &config{
-		fulfillmentAddr:  os.Getenv("FULFILLMENT_SERVER_ADDRESS"),
-		fulfillmentToken: envOrDefault("FULFILLMENT_TOKEN_FILE", "/var/run/secrets/kubernetes.io/serviceaccount/token"),
-		tlsCACert:        os.Getenv("TLS_CA_CERT"),
-		healthAddr:       envOrDefault("HEALTH_ADDR", ":8080"),
+		fulfillmentAddr:         os.Getenv("FULFILLMENT_SERVER_ADDRESS"),
+		fulfillmentToken:        envOrDefault("FULFILLMENT_TOKEN_FILE", "/var/run/secrets/kubernetes.io/serviceaccount/token"),
+		tlsCACert:               os.Getenv("TLS_CA_CERT"),
+		fulfillmentTrustEnabled: os.Getenv("FULFILLMENT_TRUST_ENABLED") == "true",
+		healthAddr:              envOrDefault("HEALTH_ADDR", ":8080"),
 		kafka: kafkapub.ConnectionConfig{
 			Brokers:      os.Getenv("KAFKA_BROKERS"),
 			TLSCACert:    os.Getenv("KAFKA_TLS_CA_CERT"),
@@ -135,7 +137,7 @@ func readDBURL(dir string) (string, error) {
 
 type serviceHealth struct {
 	ready atomic.Bool
-	conn  *grpc.ClientConn
+	conn  interface{ GetState() connectivity.State }
 }
 
 func run(ctx context.Context, logger logr.Logger, cfg *config) error {
@@ -150,23 +152,40 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 	}
 	go serveHealth(healthListener, health, logger, runCancel)
 
-	grpcConn, err := dialFulfillment(cfg.fulfillmentAddr, cfg.tlsCACert, cfg.fulfillmentToken)
-	if err != nil {
-		return fmt.Errorf("connecting to fulfillment service: %w", err)
-	}
-	defer func() { _ = grpcConn.Close() }()
-
-	connectCtx, connectCancel := context.WithTimeout(ctx, 30*time.Second)
-	defer connectCancel()
-	grpcConn.Connect()
-	for {
-		state := grpcConn.GetState()
-		if state == connectivity.Ready {
-			break
+	var grpcConn grpc.ClientConnInterface
+	if cfg.fulfillmentTrustEnabled {
+		if cfg.tlsCACert == "" {
+			return fmt.Errorf("TLS_CA_CERT is required for verified fulfillment trust")
 		}
-		if !grpcConn.WaitForStateChange(connectCtx, state) {
-			return fmt.Errorf("fulfillment service at %s is unreachable (state: %s)", cfg.fulfillmentAddr, grpcConn.GetState())
+		verified := &verifiedFulfillmentConn{address: cfg.fulfillmentAddr, caFile: cfg.tlsCACert, tokenFile: cfg.fulfillmentToken}
+		if err := waitForVerifiedFulfillment(ctx, verified.reload); err != nil {
+			return fmt.Errorf("verifying fulfillment service: %w", err)
 		}
+		logger.Info("verified fulfillment CA bundle", "sha256", verified.observedHash())
+		defer verified.close()
+		go verified.watch(ctx, logger)
+		grpcConn = verified
+		health.conn = verified
+	} else {
+		legacy, dialErr := dialFulfillment(cfg.fulfillmentAddr, cfg.tlsCACert, cfg.fulfillmentToken)
+		if dialErr != nil {
+			return fmt.Errorf("connecting to fulfillment service: %w", dialErr)
+		}
+		defer func() { _ = legacy.Close() }()
+		connectCtx, connectCancel := context.WithTimeout(ctx, 30*time.Second)
+		defer connectCancel()
+		legacy.Connect()
+		for {
+			state := legacy.GetState()
+			if state == connectivity.Ready {
+				break
+			}
+			if !legacy.WaitForStateChange(connectCtx, state) {
+				return fmt.Errorf("fulfillment service at %s is unreachable (state: %s)", cfg.fulfillmentAddr, legacy.GetState())
+			}
+		}
+		grpcConn = legacy
+		health.conn = legacy
 	}
 	logger.Info("connected to fulfillment service", "address", cfg.fulfillmentAddr)
 
@@ -215,6 +234,8 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 	natGatewayClient := privatev1.NewNATGatewaysClient(grpcConn)
 	externalIPPoolClient := privatev1.NewExternalIPPoolsClient(grpcConn)
 	volumeClient := privatev1.NewVolumesClient(grpcConn)
+	bareMetalClient := privatev1.NewBareMetalInstancesClient(grpcConn)
+	bmaasPresence := heartbeat.NewBMaaSPresence()
 	reconciler := reconciliation.NewReconciler(
 		computeClient,
 		clusterClient,
@@ -222,11 +243,13 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 		natGatewayClient,
 		externalIPPoolClient,
 		volumeClient,
+		bareMetalClient,
 		store,
 		publisher,
 		logger,
 		cfg.heartbeatInterval,
 		cfg.deploymentID,
+		bmaasPresence,
 	)
 	pools, err := reconciliation.LoadExternalIPPools(ctx, externalIPPoolClient)
 	if err != nil {
@@ -243,11 +266,10 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 	}
 	logger.Info("startup reconciliation completed")
 
-	health.conn = grpcConn
 	health.ready.Store(true)
 	logger.Info("service ready")
 
-	hbGen := heartbeat.NewGenerator(store, publisher, logger, cfg.heartbeatInterval)
+	hbGen := heartbeat.NewGenerator(store, publisher, logger, cfg.heartbeatInterval, bmaasPresence)
 
 	var wg sync.WaitGroup
 

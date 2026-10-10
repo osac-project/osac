@@ -25,9 +25,7 @@ class TestVirtualNetworkCrudOnly:
                     service=f"{PUBLIC_API}.VirtualNetworks/Update",
                     data={"object": {"id": vn_id, "metadata": {"name": f"renamed-{vn_name}"}}},
                 )
-            assert_grpc_method_unavailable(
-                exc_info, service=f"{PUBLIC_API}.VirtualNetworks", method="Update"
-            )
+            assert_grpc_method_unavailable(exc_info, service=f"{PUBLIC_API}.VirtualNetworks", method="Update")
         finally:
             if vn_id:
                 jwt_grpc_tenant1.delete_virtual_network(vn_id=vn_id)

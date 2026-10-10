@@ -70,7 +70,7 @@ type ExternalIPPoolReconciler struct {
 	// two-manager model isn't configured (no gRPC connection / networking namespace),
 	// in which case the controller always uses the legacy implementation-strategy path.
 	Resolver *dispatcher.Resolver
-	// networkClassesClient lists NetworkClasses to find the default/singleton used
+	// networkClassesClient lists NetworkClasses to find the deployment singleton used
 	// as the dispatcher input. Nil when gRPC is not configured.
 	networkClassesClient privatev1.NetworkClassesClient
 	// NetworkProvisioningEnabled controls whether the controller dispatches AAP
@@ -334,6 +334,11 @@ func (r *ExternalIPPoolReconciler) handleProvisioning(ctx context.Context, pool 
 // and polls its status. On failure, it either blocks deletion (to prevent orphaned
 // resources) or allows the process to continue, depending on provider policy.
 func (r *ExternalIPPoolReconciler) handleDeprovisioning(ctx context.Context, pool *v1alpha1.ExternalIPPool) (ctrl.Result, error) {
+	if !r.NetworkProvisioningEnabled {
+		ctrllog.FromContext(ctx).Info("network provisioning disabled, skipping deprovisioning")
+		return ctrl.Result{}, nil
+	}
+
 	if r.ProvisioningProvider == nil {
 		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping deprovisioning")
 		return ctrl.Result{}, nil

@@ -112,6 +112,12 @@ message SecurityGroupStatus {
   // For READY state, this is typically empty or contains confirmation like "Security group active, rules
   // enforced".
   optional string message = 2;
+
+  // Identifier of the hub cluster that this security group is deployed to.
+  //
+  // The fulfillment-service controller sets this field before creating the Kubernetes object so the
+  // security group remains assigned to the same hub throughout its lifecycle.
+  string hub = 3 [(cleanapi.field).private = true, (google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Lifecycle states for SecurityGroup resources.

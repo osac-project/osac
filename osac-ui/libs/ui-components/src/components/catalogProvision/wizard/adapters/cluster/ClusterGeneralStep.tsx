@@ -1,6 +1,6 @@
 import { useFormikContext } from 'formik';
 
-import { type ClusterCatalogItem, Secret } from '@osac/types';
+import { type ClusterCatalogItem, Secret, SecretType } from '@osac/types';
 import { cel } from '@osac/ui-components/api/cel';
 import ProjectField from '@osac/ui-components/components/Form/ProjectField';
 import SecretSelectionField from '@osac/ui-components/components/Form/SecretSelectionField';
@@ -34,7 +34,10 @@ const ClusterGeneralStep = ({ catalogItem }: ClusterGeneralStepProps) => {
       />
       <SecretSelectionField
         filter={cel<Secret>((filter) =>
-          filter.field('metadata.project').equals(values.metadata.project),
+          filter.and(
+            filter.field('metadata.project').equals(values.metadata.project),
+            filter.field('type').equals(SecretType.PULL_SECRET),
+          ),
         )}
         label={t('Pull secret secret')}
         name="spec.pullSecretSecret.name"

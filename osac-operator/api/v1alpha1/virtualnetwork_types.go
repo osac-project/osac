@@ -46,7 +46,7 @@ type VirtualNetworkSpec struct {
 	IPv6CIDR string `json:"ipv6Cidr,omitempty"`
 
 	// NetworkClass is the name of the NetworkClass that defines implementation strategy.
-	// When omitted, the platform default NetworkClass is used.
+	// When omitted, the deployment NetworkClass singleton is used.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="networkClass is immutable"
@@ -91,7 +91,6 @@ type VirtualNetworkStatus struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
 	BackendNetworkID string `json:"backendNetworkId,omitempty"`
-
 	// Conditions holds an array of metav1.Condition that describe the state of the VirtualNetwork
 	// +kubebuilder:validation:Optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`

@@ -1,5 +1,7 @@
 package auth
 
+//go:generate mockgen -destination=authorization_evaluator_mock.go -package=auth . AuthorizationEvaluator
+
 import (
 	"context"
 	_ "embed"

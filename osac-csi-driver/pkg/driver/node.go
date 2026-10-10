@@ -2,15 +2,23 @@ package driver
 
 import (
 	"context"
+	"os"
 	"strings"
 	"sync"
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"k8s.io/klog/v2"
 
 	"github.com/osac-project/osac/osac-csi-driver/pkg/proxy"
+)
+
+const (
+	nodeNameEnv           = "NODE_NAME"
+	lvmsNodeSocketEnv     = "OSAC_LVMS_NODE_SOCKET"
+	defaultLVMSNodeSocket = "/run/topolvm/csi-topolvm.sock"
 )
 
 // NodeServer implements the CSI Node service.
@@ -22,17 +30,19 @@ type NodeServer struct {
 	proxyMgr      *proxy.Manager
 	vendorSockets map[string]string
 
-	mu             sync.Mutex
-	volumeBackends map[string]string // volumeID -> provider
+	mu              sync.Mutex
+	volumeBackends  map[string]string // volumeID -> provider
+	volumeVendorIDs map[string]string // volumeID -> vendor volume ID
 }
 
 // NewNodeServer creates a new CSI node server.
 func NewNodeServer(nodeID string, proxyMgr *proxy.Manager, vendorSockets map[string]string) *NodeServer {
 	return &NodeServer{
-		nodeID:         nodeID,
-		proxyMgr:       proxyMgr,
-		vendorSockets:  vendorSockets,
-		volumeBackends: make(map[string]string),
+		nodeID:          nodeID,
+		proxyMgr:        proxyMgr,
+		vendorSockets:   normalizeVendorSockets(vendorSockets),
+		volumeBackends:  make(map[string]string),
+		volumeVendorIDs: make(map[string]string),
 	}
 }
 
@@ -63,7 +73,9 @@ func (n *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolu
 	}
 
 	vendorClient := csi.NewNodeClient(vendorConn)
-	resp, err := vendorClient.NodeStageVolume(ctx, req)
+	vendorReq := proto.Clone(req).(*csi.NodeStageVolumeRequest)
+	vendorReq.VolumeId = resolveVendorVolumeID(req.GetVolumeId(), req.GetVolumeContext())
+	resp, err := vendorClient.NodeStageVolume(ctx, vendorReq)
 	if err != nil {
 		if isUnimplemented(err) {
 			klog.Infof("Vendor does not implement NodeStageVolume, treating as no-op: volumeId=%s",
@@ -105,7 +117,9 @@ func (n *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstage
 	}
 
 	vendorClient := csi.NewNodeClient(vendorConn)
-	resp, err := vendorClient.NodeUnstageVolume(ctx, req)
+	vendorReq := proto.Clone(req).(*csi.NodeUnstageVolumeRequest)
+	vendorReq.VolumeId = n.lookupVendorVolumeID(req.GetVolumeId())
+	resp, err := vendorClient.NodeUnstageVolume(ctx, vendorReq)
 	if err != nil {
 		if isUnimplemented(err) {
 			klog.Infof("Vendor does not implement NodeUnstageVolume, treating as no-op: volumeId=%s",
@@ -149,7 +163,9 @@ func (n *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 	}
 
 	vendorClient := csi.NewNodeClient(vendorConn)
-	resp, err := vendorClient.NodePublishVolume(ctx, req)
+	vendorReq := proto.Clone(req).(*csi.NodePublishVolumeRequest)
+	vendorReq.VolumeId = resolveVendorVolumeID(req.GetVolumeId(), req.GetVolumeContext())
+	resp, err := vendorClient.NodePublishVolume(ctx, vendorReq)
 	if err != nil {
 		klog.Errorf("Vendor NodePublishVolume failed: %v", err)
 		return nil, err
@@ -185,7 +201,9 @@ func (n *NodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpub
 	}
 
 	vendorClient := csi.NewNodeClient(vendorConn)
-	resp, err := vendorClient.NodeUnpublishVolume(ctx, req)
+	vendorReq := proto.Clone(req).(*csi.NodeUnpublishVolumeRequest)
+	vendorReq.VolumeId = n.lookupVendorVolumeID(req.GetVolumeId())
+	resp, err := vendorClient.NodeUnpublishVolume(ctx, vendorReq)
 	if err != nil {
 		klog.Errorf("Vendor NodeUnpublishVolume failed: %v", err)
 		return nil, err
@@ -213,10 +231,36 @@ func (n *NodeServer) NodeGetCapabilities(_ context.Context, _ *csi.NodeGetCapabi
 
 // NodeGetInfo returns information about this node.
 func (n *NodeServer) NodeGetInfo(_ context.Context, _ *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {
-	klog.Infof("NodeGetInfo called: nodeId=%s", n.nodeID)
+	nodeName := strings.TrimSpace(os.Getenv(nodeNameEnv))
+	if nodeName == "" {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"%s environment variable is required", nodeNameEnv)
+	}
+
+	klog.Infof("NodeGetInfo called: nodeId=%s", nodeName)
 	return &csi.NodeGetInfoResponse{
-		NodeId: n.nodeID,
+		NodeId: nodeName,
+		AccessibleTopology: &csi.Topology{
+			Segments: map[string]string{volumeNodeTopologyKey: nodeName},
+		},
 	}, nil
+}
+
+func normalizeVendorSockets(vendorSockets map[string]string) map[string]string {
+	normalized := make(map[string]string, len(vendorSockets)+1)
+	for backend, socketPath := range vendorSockets {
+		normalized[backend] = socketPath
+	}
+
+	lvmsSocket := strings.TrimSpace(os.Getenv(lvmsNodeSocketEnv))
+	if lvmsSocket == "" {
+		lvmsSocket = normalized[lvmsProvider]
+	}
+	if lvmsSocket == "" {
+		lvmsSocket = defaultLVMSNodeSocket
+	}
+	normalized[lvmsProvider] = lvmsSocket
+	return normalized
 }
 
 // NodeGetVolumeStats proxies the call to the vendor CSI driver for the given volume.
@@ -236,7 +280,9 @@ func (n *NodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVol
 	}
 
 	vendorClient := csi.NewNodeClient(vendorConn)
-	return vendorClient.NodeGetVolumeStats(ctx, req)
+	vendorReq := proto.Clone(req).(*csi.NodeGetVolumeStatsRequest)
+	vendorReq.VolumeId = n.lookupVendorVolumeID(req.GetVolumeId())
+	return vendorClient.NodeGetVolumeStats(ctx, vendorReq)
 }
 
 func (n *NodeServer) resolveVendorSocket(volumeContext map[string]string) (string, error) {
@@ -269,14 +315,42 @@ func (n *NodeServer) recordBackend(volumeID string, volumeContext map[string]str
 		return
 	}
 	n.mu.Lock()
+	if n.volumeVendorIDs == nil {
+		n.volumeVendorIDs = make(map[string]string)
+	}
 	n.volumeBackends[volumeID] = backend
+	n.volumeVendorIDs[volumeID] = resolveVendorVolumeID(volumeID, volumeContext)
 	n.mu.Unlock()
 }
 
 func (n *NodeServer) forgetBackend(volumeID string) {
 	n.mu.Lock()
 	delete(n.volumeBackends, volumeID)
+	delete(n.volumeVendorIDs, volumeID)
 	n.mu.Unlock()
+}
+
+func resolveVendorVolumeID(volumeID string, volumeContext map[string]string) string {
+	if volumeContext != nil {
+		if vendorVolumeID := strings.TrimSpace(volumeContext[topolvmVolumeIDContextKey]); vendorVolumeID != "" {
+			return vendorVolumeID
+		}
+		if vendorVolumeID := strings.TrimSpace(volumeContext["osac.volume-id"]); vendorVolumeID != "" {
+			return vendorVolumeID
+		}
+	}
+	return volumeID
+}
+
+func (n *NodeServer) lookupVendorVolumeID(volumeID string) string {
+	n.mu.Lock()
+	vendorVolumeID := n.volumeVendorIDs[volumeID]
+	n.mu.Unlock()
+
+	if vendorVolumeID == "" {
+		return volumeID
+	}
+	return vendorVolumeID
 }
 
 // lookupBackendSocket returns the vendor socket for a previously recorded volume.

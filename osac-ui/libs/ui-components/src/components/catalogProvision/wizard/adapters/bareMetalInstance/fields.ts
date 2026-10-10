@@ -16,6 +16,8 @@ export const BM_SSH_KEY_FORM_PATH = 'spec.sshKey';
 
 export const BM_USER_DATA_WIRE_PATH = 'user_data';
 export const BM_USER_DATA_FORM_PATH = 'spec.userData';
+export const BM_USER_DATA_SOURCE_FORM_PATH = 'spec.userDataSource';
+export const BM_USER_DATA_SECRET_FORM_PATH = 'spec.userDataSecret.name';
 
 export const BM_INSTANCE_TYPE_WIRE_PATH = 'instance_type.name';
 export const BM_INSTANCE_TYPE_FORM_PATH = 'spec.instanceType.name';
@@ -44,7 +46,11 @@ export interface BareMetalInstanceWizardValues {
   };
   spec: {
     sshKey: string;
+    userDataSource: 'inline' | 'secret';
     userData: string;
+    userDataSecret: {
+      name: string;
+    };
     instanceType: {
       name: string;
     };
@@ -56,7 +62,8 @@ export interface BareMetalInstanceWizardValues {
 export const hasBareMetalAuthentication = (
   sshKey: string | undefined,
   userData: string | undefined,
-): boolean => Boolean(sshKey?.trim() || userData?.trim());
+  userDataSecretName?: string,
+): boolean => Boolean(sshKey?.trim() || userData?.trim() || userDataSecretName?.trim());
 
 let nextAttachmentId = 1;
 
@@ -82,7 +89,9 @@ export const createEmptyBareMetalInstanceValues = (): BareMetalInstanceWizardVal
   metadata: { name: '', project: '' },
   spec: {
     sshKey: '',
+    userDataSource: 'inline',
     userData: '',
+    userDataSecret: { name: '' },
     instanceType: {
       name: '',
     },

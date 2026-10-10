@@ -1,9 +1,16 @@
 import { useMemo } from 'react';
 import { Alert, Button, Stack, StackItem } from '@patternfly/react-core';
+import { useFormikContext } from 'formik';
 
-import { type ComputeInstanceCatalogItem } from '@osac/types';
+import { ComputeInstanceCatalogItem } from '@osac/types';
 import { formatInstanceTypeOptionLabel } from '@osac/ui-components/components/vm/utils';
 
+import {
+  ComputeInstanceWizardValues,
+  VM_USER_DATA_FORM_PATH,
+  VM_USER_DATA_SECRET_FORM_PATH,
+  VM_USER_DATA_SOURCE_FORM_PATH,
+} from './fields';
 import {
   INSTANCE_TYPE_ACTIVE_LIST_FILTER,
   useInstanceTypes,
@@ -19,6 +26,7 @@ interface Props {
 
 export const VmConfigurationStep = ({ catalogItem }: Props) => {
   const { t } = useTranslation();
+  const { values } = useFormikContext<ComputeInstanceWizardValues>();
 
   const {
     data: instanceTypes = [],
@@ -66,7 +74,13 @@ export const VmConfigurationStep = ({ catalogItem }: Props) => {
             placeholder={t('catalogProvision.vm.placeholders.selectInstanceType')}
             options={instanceTypeOptions}
           />
-          <UserDataField catalogItem={catalogItem} name="spec.userData" wirePath="spec.user_data" />
+          <UserDataField
+            sourceName={VM_USER_DATA_SOURCE_FORM_PATH}
+            secretRefName={VM_USER_DATA_SECRET_FORM_PATH}
+            currentSource={values.spec.userDataSource}
+            inlineName={VM_USER_DATA_FORM_PATH}
+            projectName={values.metadata.project}
+          />
         </OsacForm>
       </StackItem>
     </Stack>

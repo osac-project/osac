@@ -22,10 +22,11 @@ import (
 
 // KafkaConfig configures TLS and SASL for Kafka consumer and producer connections.
 type KafkaConfig struct {
-	TLSEnabled   bool   // Enable TLS for broker connections
-	TLSCACert    string // Path to CA certificate file (empty = system CAs)
-	SASLUser     string // SASL/SCRAM username
-	SASLPassFile string // Path to file containing SASL password
+	TLSEnabled    bool   // Enable TLS for broker connections
+	TLSCACert     string // Path to CA certificate file (empty = system CAs)
+	SASLUser      string // SASL/SCRAM username
+	SASLPassFile  string // Path to file containing SASL password
+	InitialOffset string // Initial consumer offset: oldest (default) or newest
 }
 
 // NewConsumerConfig creates a Sarama config for the adapter consumer group.
@@ -33,7 +34,14 @@ func NewConsumerConfig(cfg KafkaConfig) (*sarama.Config, error) {
 	sc := sarama.NewConfig()
 	sc.Version = sarama.V3_9_0_0
 	sc.Consumer.Return.Errors = true
-	sc.Consumer.Offsets.Initial = sarama.OffsetOldest
+	switch strings.ToLower(strings.TrimSpace(cfg.InitialOffset)) {
+	case "", "oldest":
+		sc.Consumer.Offsets.Initial = sarama.OffsetOldest
+	case "newest":
+		sc.Consumer.Offsets.Initial = sarama.OffsetNewest
+	default:
+		return nil, fmt.Errorf("invalid Kafka initial offset %q: must be oldest or newest", cfg.InitialOffset)
+	}
 	sc.Consumer.Offsets.AutoCommit.Enable = false
 	sc.Consumer.Group.Rebalance.GroupStrategies = []sarama.BalanceStrategy{
 		sarama.NewBalanceStrategyRange(),

@@ -1,0 +1,18 @@
+FROM registry.access.redhat.com/ubi10/go-toolset:1.26 AS builder
+ARG TARGETOS
+ARG TARGETARCH
+
+WORKDIR /opt/app-root/src
+COPY --chown=1001:0 schema/ schema/
+COPY --chown=1001:0 adapters/go.mod adapters/go.sum adapters/
+RUN cd adapters && go mod download
+
+COPY --chown=1001:0 adapters/ adapters/
+
+RUN cd adapters && CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -buildvcs=false -a -o /opt/app-root/src/cost-management-adapter ./cmd/cost-management-adapter
+
+FROM registry.access.redhat.com/ubi10-minimal:10.2
+WORKDIR /
+COPY --from=builder /opt/app-root/src/cost-management-adapter .
+USER 65532:65532
+ENTRYPOINT ["/cost-management-adapter"]

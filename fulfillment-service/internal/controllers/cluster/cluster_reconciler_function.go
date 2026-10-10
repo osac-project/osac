@@ -274,6 +274,9 @@ func (t *task) update(ctx context.Context) error {
 
 	// Create or update the Kubernetes object:
 	if object == nil {
+		orderAnnotations := map[string]string{
+			annotations.Tenant: t.cluster.GetMetadata().GetTenant(),
+		}
 		object := &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace:    t.hubNamespace,
@@ -281,9 +284,7 @@ func (t *task) update(ctx context.Context) error {
 				Labels: map[string]string{
 					labels.ClusterOrderUuid: t.cluster.GetId(),
 				},
-				Annotations: map[string]string{
-					annotations.Tenant: t.cluster.GetMetadata().GetTenant(),
-				},
+				Annotations: orderAnnotations,
 			},
 			Spec: spec,
 		}
@@ -371,10 +372,15 @@ func (t *task) buildSpec(ctx context.Context) (osacv1alpha1.ClusterOrderSpec, er
 	if err != nil {
 		return osacv1alpha1.ClusterOrderSpec{}, err
 	}
+	operatorNames := make([]string, 0, len(t.cluster.GetSpec().GetAddOnOperators()))
+	for _, operator := range t.cluster.GetSpec().GetAddOnOperators() {
+		operatorNames = append(operatorNames, operator.GetName())
+	}
 	spec := osacv1alpha1.ClusterOrderSpec{
 		TemplateID:         controllers.RefKeyStr(t.cluster.GetSpec().GetTemplate()),
 		TemplateParameters: templateParameters,
 		NodeRequests:       t.prepareNodeRequests(),
+		AddOnOperators:     operatorNames,
 	}
 
 	// Add explicit spec fields if present:
@@ -418,6 +424,19 @@ func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.Cluster
 		}
 		if hasFields {
 			spec.Network = network
+		}
+	}
+	if clusterSpec.HasNetworkAttachment() {
+		na := clusterSpec.GetNetworkAttachment()
+		cna := &osacv1alpha1.ClusterNetworkAttachment{}
+		if subnet := na.GetSubnet(); subnet != nil {
+			cna.SubnetRef = subnet.GetName()
+		}
+		for _, sg := range na.GetSecurityGroups() {
+			cna.SecurityGroupRefs = append(cna.SecurityGroupRefs, sg.GetName())
+		}
+		if cna.SubnetRef != "" {
+			spec.NetworkAttachment = cna
 		}
 	}
 	return nil
@@ -498,27 +517,26 @@ func (t *task) prepareNodeRequests() []osacv1alpha1.NodeRequest {
 
 	nodeRequests := make([]osacv1alpha1.NodeRequest, 0, len(keys))
 	for _, key := range keys {
-		nodeRequests = append(nodeRequests, t.prepareNodeRequest(nodeSets[key]))
+		nodeRequests = append(nodeRequests, t.prepareNodeRequest(key, nodeSets[key]))
 	}
 	return nodeRequests
 }
 
-func (t *task) prepareNodeRequest(nodeSet *privatev1.ClusterNodeSet) osacv1alpha1.NodeRequest {
+func (t *task) prepareNodeRequest(key string, nodeSet *privatev1.ClusterNodeSet) osacv1alpha1.NodeRequest {
+	bmitName := nodeSet.GetBaremetalInstanceType().GetName()
 	return osacv1alpha1.NodeRequest{
-		ResourceClass: controllers.RefKeyStr(nodeSet.GetHostType()),
-		NumberOfNodes: int(nodeSet.GetSize()),
+		NodeSet:         key,
+		NumberOfNodes:   int(nodeSet.GetSize()),
+		BareMetal:       &osacv1alpha1.BareMetalNodeSpec{InstanceType: bmitName},
+		FabricInterface: nodeSet.GetFabricInterface(),
 	}
 }
 
 func (t *task) delete(ctx context.Context) (err error) {
-	// Do nothing if we don't know the hub yet:
+	// No hub was assigned, so no ClusterOrder or hub secrets could have been created.
 	t.hubId = t.cluster.GetStatus().GetHub()
 	if t.hubId == "" {
-		return
-	}
-
-	err = t.deleteClusterSecrets(ctx)
-	if err != nil {
+		t.removeFinalizer()
 		return
 	}
 
@@ -526,6 +544,9 @@ func (t *task) delete(ctx context.Context) (err error) {
 	if err != nil {
 		// Check if the hub has been decommissioned (deleted from database)
 		if errors.Is(err, controllers.ErrHubNotFound) {
+			if err = t.deleteClusterSecrets(ctx); err != nil {
+				return err
+			}
 			controllers.RemoveFinalizerOnDecommissionedHub(ctx, t.r.logger, t.hubId, "cluster_id", t.cluster.GetId(), t.removeFinalizer)
 			return nil
 		}
@@ -544,6 +565,9 @@ func (t *task) delete(ctx context.Context) (err error) {
 			"Cluster order doesn't exist",
 			slog.String("id", t.cluster.GetId()),
 		)
+		if err = t.deleteClusterSecrets(ctx); err != nil {
+			return err
+		}
 		t.removeFinalizer()
 		return
 	}
@@ -551,13 +575,24 @@ func (t *task) delete(ctx context.Context) (err error) {
 	if err != nil {
 		return
 	}
-	t.r.logger.DebugContext(
-		ctx,
-		"Deleted cluster order",
-		slog.String("namespace", object.GetNamespace()),
-		slog.String("name", object.GetName()),
-	)
+	// Kubernetes deletion is asynchronous when the ClusterOrder has finalizers. Keep
+	// the authoritative Cluster record until the baremetalworker has verified
+	// ownership and removed its workers. The ClusterOrder feedback controller
+	// signals us when its last finalizer is removed; a periodic sync also retries.
+	remaining, err := t.getKubeObject(ctx)
+	if err != nil {
+		return err
+	}
+	if remaining != nil {
+		t.r.logger.DebugContext(ctx, "Waiting for cluster order deletion",
+			slog.String("namespace", object.GetNamespace()),
+			slog.String("name", object.GetName()))
+		return nil
+	}
 
+	if err = t.deleteClusterSecrets(ctx); err != nil {
+		return err
+	}
 	t.removeFinalizer()
 	return
 }

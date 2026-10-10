@@ -3,6 +3,7 @@ import { Dropdown, DropdownItem, DropdownList, MenuToggle } from '@patternfly/re
 import { EllipsisVIcon } from '@patternfly/react-icons/dist/esm/icons/ellipsis-v-icon';
 
 import { InstanceTypeState, type InstanceType as PrivateInstanceType } from '@osac/types/private';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import InstanceTypeDeleteConfirmModal from './InstanceTypeDeleteConfirmModal';
 import {
@@ -86,15 +87,13 @@ const AdminInstanceTypeActionsMenu = ({ instanceType }: AdminInstanceTypeActions
             </DropdownItem>
           )}
           {canDelete && (
-            <DropdownItem
-              value="delete"
+            <DeleteResourceButton
+              isDropdown
               onClick={() => {
                 setDeleteOpen(true);
                 setOpen(false);
               }}
-            >
-              {t('Delete')}
-            </DropdownItem>
+            />
           )}
         </DropdownList>
       </Dropdown>

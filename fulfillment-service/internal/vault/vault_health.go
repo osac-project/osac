@@ -15,19 +15,20 @@ package vault
 
 import (
 	"context"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 
 	vaultapi "github.com/hashicorp/vault/api"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 )
 
 type HealthCheckerBuilder struct {
 	logger  *slog.Logger
 	address string
-	caPool  *x509.CertPool
+	caPool  *trust.CertPool
 }
 
 type HealthChecker struct {
@@ -49,7 +50,7 @@ func (b *HealthCheckerBuilder) SetAddress(value string) *HealthCheckerBuilder {
 	return b
 }
 
-func (b *HealthCheckerBuilder) SetCaPool(value *x509.CertPool) *HealthCheckerBuilder {
+func (b *HealthCheckerBuilder) SetCaPool(value *trust.CertPool) *HealthCheckerBuilder {
 	b.caPool = value
 	return b
 }
@@ -73,7 +74,7 @@ func (b *HealthCheckerBuilder) Build() (result *HealthChecker, err error) {
 			return
 		}
 		cloned := transport.Clone()
-		cloned.TLSClientConfig.RootCAs = b.caPool
+		cloned.TLSClientConfig.RootCAs = b.caPool.Pool()
 		config.HttpClient.Transport = cloned
 	}
 

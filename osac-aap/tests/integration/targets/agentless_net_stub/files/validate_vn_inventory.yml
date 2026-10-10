@@ -1,0 +1,26 @@
+---
+- name: Validate the VirtualNetwork inventory without contacting the network node
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Load and validate the real provider inventory
+      block:
+        - name: Load the VirtualNetwork inventory
+          ansible.builtin.include_role:
+            name: osac.templates.agentless_net
+            tasks_from: _load_network_node_inventory
+
+        - name: Verify the registered node and its connection fields
+          ansible.builtin.assert:
+            that:
+              - groups['agentless_net_vn_network_node'] == ['network-node']
+              - hostvars['network-node'].ansible_host == '192.0.2.10'
+              - hostvars['network-node'].ansible_user == 'example-user'
+              - hostvars['network-node'].ansible_port | int == expected_port | default(22) | int
+          no_log: true
+      always:
+        - name: Clean up any temporary SSH key
+          ansible.builtin.include_role:
+            name: osac.templates.agentless_net
+            tasks_from: _cleanup_network_node_inventory

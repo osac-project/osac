@@ -10,7 +10,9 @@ Automated test suite for all 11 workflows in the osac.workflows collection.
 make test
 ```
 
-This creates a kind cluster, installs CRDs, runs all tests, and cleans up.
+This creates a Kind cluster, installs CRDs, runs all tests, and cleans up. The
+storage target-routing test also creates an isolated second Kind cluster and
+removes it at the end of the test.
 
 ## Current Status: 10/14 Tests Passing
 

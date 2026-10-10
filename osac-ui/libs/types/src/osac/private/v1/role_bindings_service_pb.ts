@@ -417,3 +417,4 @@ export const RoleBindings: GenService<{
   },
 }> = /*@__PURE__*/
   serviceDesc(file_osac_private_v1_role_bindings_service, 0);
+

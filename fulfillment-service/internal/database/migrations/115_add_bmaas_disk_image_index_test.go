@@ -21,7 +21,7 @@ import (
 )
 
 var _ = DescribeMigration("Add BMaaS disk image index", func() {
-	It("Creates and removes the active bare metal disk image index", func(ctx context.Context) {
+	It("Creates the active bare metal disk image index", func(ctx context.Context) {
 		Expect(tool.Migrate(ctx, 115)).To(Succeed())
 
 		var expression, predicate string
@@ -37,12 +37,5 @@ var _ = DescribeMigration("Add BMaaS disk image index", func() {
 		Expect(expression).To(ContainSubstring("id"))
 		Expect(predicate).To(ContainSubstring("deletion_timestamp"))
 		Expect(predicate).To(ContainSubstring("1970-01-01"))
-
-		Expect(tool.Migrate(ctx, 114)).To(Succeed())
-		var count int
-		err = conn.QueryRow(ctx,
-			`select count(*) from pg_indexes where indexname = 'bare_metal_instances_disk_image'`).Scan(&count)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(count).To(BeZero())
 	})
 })

@@ -37,15 +37,23 @@ var _ = Describe("CORS middleware", func() {
 			Expect(err.Error()).To(ContainSubstring("mandatory"))
 		})
 
-		It("Uses default allowed origins", func() {
-			// Create the middleware with the default allowed origins:
-			middleware, err := NewCorsMiddleware().
+		It("Fails if no allowed origins are set", func() {
+			// Build requires at least one explicit origin. A wildcard default would pair
+			// AllowCredentials with '*', violating RFC 6454 §7.2.
+			_, err := NewCorsMiddleware().
 				SetLogger(logger).
 				Build()
-			Expect(err).ToNot(HaveOccurred())
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("allowed origins"))
+		})
 
-			// Verify the result:
-			verifyAllowedOrigin(middleware, "http://my.com", "*")
+		It("Fails if a wildcard origin is set", func() {
+			_, err := NewCorsMiddleware().
+				SetLogger(logger).
+				AddAllowedOrigins("*").
+				Build()
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("wildcard"))
 		})
 
 		It("Uses custom allowed origin", func() {
@@ -97,20 +105,32 @@ var _ = Describe("CORS middleware", func() {
 			AddCorsFlags(flags, "my")
 		})
 
-		It("Uses default allowed origins", func() {
-			// Prepare the flags:
+		It("Fails if the flag is not set", func() {
+			// Prepare the flags without setting the allowed-origins flag:
 			err := flags.Parse([]string{})
 			Expect(err).ToNot(HaveOccurred())
 
-			// Create the middleware with the default allowed origins:
-			middleware, err := NewCorsMiddleware().
+			// Build must fail if allowed origins are not set.
+			_, err = NewCorsMiddleware().
 				SetLogger(logger).
 				SetFlags(flags, "my").
 				Build()
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("allowed origins"))
+		})
+
+		It("Fails if a wildcard origin is passed via flag", func() {
+			err := flags.Parse([]string{
+				"--my-cors-allowed-origins=*",
+			})
 			Expect(err).ToNot(HaveOccurred())
 
-			// Verify the result:
-			verifyAllowedOrigin(middleware, "http://my.com", "*")
+			_, err = NewCorsMiddleware().
+				SetLogger(logger).
+				SetFlags(flags, "my").
+				Build()
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("wildcard"))
 		})
 
 		It("Uses custom allowed origins", func() {

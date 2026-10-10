@@ -14,7 +14,6 @@ pytestmark = pytest.mark.sanity
 CLIENT_LISTABLE_RESOURCES = [
     "computeinstancetemplates",
     "computeinstances",
-    "hosttypes",
     "externalips",
     "rolebindings",
     "roles",
@@ -65,6 +64,7 @@ def test_invalid_token_rejected(fulfillment_address: str) -> None:
         "osac.public.v1.ComputeInstances/List",
     )
     assert rc != 0, f"Invalid token should be rejected, got: {output}"
+    assert "unauthenticated" in output.lower(), f"Expected Unauthenticated error, got: {output}"
 
 
 # JWT CRUD lifecycle

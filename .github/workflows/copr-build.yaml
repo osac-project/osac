@@ -1,0 +1,144 @@
+#
+# Copyright (c) 2025 Red Hat, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+# in compliance with the License. You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software distributed under the License
+# is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+# or implied. See the License for the specific language governing permissions and limitations under
+# the License.
+#
+
+# Ask Copr to rebuild the osac-cli SCM package when fulfillment-service changes
+# land on main or a component release tag is pushed. Main uses the package's
+# custom webhook to rebuild the configured main source. Release tags use Copr's
+# GitHub integration webhook so Copr checks out the tag itself.
+#
+# Required repository secrets:
+#   COPR_CUSTOM_WEBHOOK_URL  -- the package-specific Copr custom webhook URL,
+#       e.g. https://copr.fedorainfracloud.org/webhooks/custom/<id>/<uuid>/osac-cli/
+#   COPR_GITHUB_WEBHOOK_URL  -- the Copr GitHub integration webhook URL with the
+#       osac-cli package suffix, e.g.
+#       https://copr.fedorainfracloud.org/webhooks/github/<id>/<uuid>/osac-cli/
+#
+# The Copr project's SCM source settings must point at osac-project/osac
+# (the monorepo), with subdirectory fulfillment-service and spec file
+# .copr/osac-cli.spec. The GitHub integration URL must come from the project's
+# Settings / Integrations page; the package suffix is needed because release
+# tags use the component name rather than Copr's package name.
+
+name: Trigger Copr RPM build
+
+on:
+  push:
+    branches:
+      - main
+    # paths is evaluated only for branch pushes, not tag pushes -- so tag
+    # events matching the tags filter below always fire regardless of which
+    # files changed, which is the correct behavior (a release tag should
+    # always trigger an RPM build).
+    paths:
+      - 'fulfillment-service/**'
+      - '.copr/**'
+    tags:
+      - 'fulfillment-service/v*'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  trigger-copr:
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/fulfillment-service/v')
+    name: Trigger Copr build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # No checkout needed -- the workflow only sends an HTTP request.
+    steps:
+      - name: Notify Copr
+        if: github.ref == 'refs/heads/main'
+        env:
+          COPR_CUSTOM_WEBHOOK_URL: ${{ secrets.COPR_CUSTOM_WEBHOOK_URL }}
+        run: |
+          if [[ -z "${COPR_CUSTOM_WEBHOOK_URL}" ]]; then
+            echo "::error::COPR_CUSTOM_WEBHOOK_URL secret is not set"
+            exit 1
+          fi
+
+          if [[ "${COPR_CUSTOM_WEBHOOK_URL}" != https://copr.fedorainfracloud.org/webhooks/custom/*/osac-cli/ ]]; then
+            echo "::error::COPR_CUSTOM_WEBHOOK_URL must be the osac-cli custom webhook URL from Copr"
+            exit 1
+          fi
+
+          # The custom webhook requires POST. It selects osac-cli from the URL
+          # and triggers a rebuild using the SCM source configured in Copr.
+          response=$(curl --silent --show-error --max-time 30 \
+            --output response.txt \
+            --write-out "%{http_code}" \
+            --request POST \
+            "${COPR_CUSTOM_WEBHOOK_URL}")
+
+          echo "Copr responded with HTTP ${response}"
+
+          if [[ "${response}" -lt 200 ]] || [[ "${response}" -ge 300 ]]; then
+            echo "::error::Copr webhook returned HTTP ${response}"
+            exit 1
+          fi
+
+          response_body=$(cat response.txt)
+          if [[ ! "${response_body}" =~ ^[0-9]+$ ]]; then
+            echo "::error::Copr returned HTTP ${response} without a numeric build ID"
+            exit 1
+          fi
+
+          echo "Copr accepted the osac-cli rebuild request; verify the build in the Copr project"
+
+      - name: Notify Copr about release tag
+        if: startsWith(github.ref, 'refs/tags/fulfillment-service/v')
+        env:
+          COPR_GITHUB_WEBHOOK_URL: ${{ secrets.COPR_GITHUB_WEBHOOK_URL }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          if [[ -z "${COPR_GITHUB_WEBHOOK_URL}" ]]; then
+            echo "::error::COPR_GITHUB_WEBHOOK_URL secret is not set"
+            exit 1
+          fi
+
+          if [[ "${COPR_GITHUB_WEBHOOK_URL}" != https://copr.fedorainfracloud.org/webhooks/github/*/osac-cli/ ]]; then
+            echo "::error::COPR_GITHUB_WEBHOOK_URL must be the osac-cli GitHub integration URL from Copr"
+            exit 1
+          fi
+
+          # Copr's GitHub integration uses the push ref and after SHA to build
+          # the pushed tag. The explicit package suffix maps the component tag
+          # name to the osac-cli package.
+          payload=$(jq -n \
+            --arg ref "${GITHUB_REF}" \
+            --arg after "${GITHUB_SHA}" \
+            --arg clone_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" \
+            --arg full_name "${GITHUB_REPOSITORY}" \
+            --arg html_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            '{ref: $ref, before: "0000000000000000000000000000000000000000", after: $after, created: true, deleted: false, forced: false, commits: [], repository: {clone_url: $clone_url, full_name: $full_name, html_url: $html_url}}')
+
+          response=$(curl --silent --show-error --max-time 30 \
+            --output response.txt \
+            --write-out "%{http_code}" \
+            --request POST \
+            --header "Content-Type: application/json" \
+            --header "X-GitHub-Event: push" \
+            --data "${payload}" \
+            "${COPR_GITHUB_WEBHOOK_URL}")
+
+          echo "Copr responded with HTTP ${response}"
+
+          if [[ "${response}" -lt 200 ]] || [[ "${response}" -ge 300 ]]; then
+            echo "::error::Copr GitHub webhook returned HTTP ${response}"
+            exit 1
+          fi
+
+          echo "Copr accepted the osac-cli release-tag build request; verify the build in the Copr project"

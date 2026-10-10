@@ -71,7 +71,7 @@
       block:
         - name: Query OpenShift infrastructure object for cluster name
           kubernetes.core.k8s_info:
-            kubeconfig: "{{ _remote_kubeconfig | default(omit) }}"
+            kubeconfig: "{{ storage_provider_target_kubeconfig | default(omit) }}"
             api_version: config.openshift.io/v1
             kind: Infrastructure
             name: cluster

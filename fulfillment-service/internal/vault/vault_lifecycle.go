@@ -15,7 +15,6 @@ package vault
 
 import (
 	"context"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -24,6 +23,9 @@ import (
 	"strings"
 
 	vaultapi "github.com/hashicorp/vault/api"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 )
 
 const (
@@ -34,11 +36,11 @@ const (
 
 // LifecycleClient manages tenant namespace lifecycle in a Vault-compatible secret store.
 // Implementations handle creating and configuring per-tenant namespaces with KV v2
-// secret engines, JWT auth methods, policies, and roles.
+// and Transit secret engines, JWT auth methods, policies, and roles.
 //
 //go:generate mockgen -destination=vault_lifecycle_mock.go -package=vault . LifecycleClient
 type LifecycleClient interface {
-	// EnsureTenantNamespace creates a tenant namespace with KV v2, JWT auth, policy, and role.
+	// EnsureTenantNamespace creates a tenant namespace with KV v2, Transit, JWT auth, policy, and role.
 	// Each step is idempotent — "already exists" errors are tolerated.
 	EnsureTenantNamespace(ctx context.Context, tenantName string) error
 
@@ -53,10 +55,11 @@ type VaultLifecycleClientBuilder struct {
 	tokenSource       TokenSource
 	parentNamespace   string
 	kvMountPath       string
+	transitMountPath  string
 	keycloakIssuerURL string
 	keycloakAudience  string
 	serviceClientID   string
-	caPool            *x509.CertPool
+	caPool            *trust.CertPool
 	caPEM             string
 }
 
@@ -66,6 +69,7 @@ type VaultLifecycleClient struct {
 	tokenSource       TokenSource
 	parentNamespace   string
 	kvMountPath       string
+	transitMountPath  string
 	keycloakIssuerURL string
 	keycloakAudience  string
 	serviceClientID   string
@@ -75,6 +79,7 @@ type VaultLifecycleClient struct {
 func NewVaultLifecycleClient() *VaultLifecycleClientBuilder {
 	return &VaultLifecycleClientBuilder{
 		kvMountPath:      "secret",
+		transitMountPath: "transit",
 		keycloakAudience: "osac-api",
 	}
 }
@@ -104,6 +109,11 @@ func (b *VaultLifecycleClientBuilder) SetKVMountPath(value string) *VaultLifecyc
 	return b
 }
 
+func (b *VaultLifecycleClientBuilder) SetTransitMountPath(value string) *VaultLifecycleClientBuilder {
+	b.transitMountPath = value
+	return b
+}
+
 func (b *VaultLifecycleClientBuilder) SetKeycloakIssuerURL(value string) *VaultLifecycleClientBuilder {
 	b.keycloakIssuerURL = value
 	return b
@@ -114,7 +124,7 @@ func (b *VaultLifecycleClientBuilder) SetKeycloakAudience(value string) *VaultLi
 	return b
 }
 
-func (b *VaultLifecycleClientBuilder) SetCaPool(value *x509.CertPool) *VaultLifecycleClientBuilder {
+func (b *VaultLifecycleClientBuilder) SetCaPool(value *trust.CertPool) *VaultLifecycleClientBuilder {
 	b.caPool = value
 	return b
 }
@@ -157,6 +167,13 @@ func (b *VaultLifecycleClientBuilder) Build() (result *VaultLifecycleClient, err
 	if err = validatePathComponent(b.kvMountPath, "KV mount path"); err != nil {
 		return
 	}
+	if err = validatePathComponent(b.transitMountPath, "Transit mount path"); err != nil {
+		return
+	}
+	if b.transitMountPath == b.kvMountPath {
+		err = errors.New("transit mount path must differ from KV mount path")
+		return
+	}
 
 	config := vaultapi.DefaultConfig()
 	config.Address = b.address
@@ -168,7 +185,7 @@ func (b *VaultLifecycleClientBuilder) Build() (result *VaultLifecycleClient, err
 			return
 		}
 		cloned := transport.Clone()
-		cloned.TLSClientConfig.RootCAs = b.caPool
+		cloned.TLSClientConfig.RootCAs = b.caPool.Pool()
 		config.HttpClient.Transport = cloned
 	}
 
@@ -184,6 +201,7 @@ func (b *VaultLifecycleClientBuilder) Build() (result *VaultLifecycleClient, err
 		tokenSource:       b.tokenSource,
 		parentNamespace:   b.parentNamespace,
 		kvMountPath:       b.kvMountPath,
+		transitMountPath:  b.transitMountPath,
 		keycloakIssuerURL: b.keycloakIssuerURL,
 		keycloakAudience:  b.keycloakAudience,
 		serviceClientID:   b.serviceClientID,
@@ -212,6 +230,11 @@ func (c *VaultLifecycleClient) EnsureTenantNamespace(ctx context.Context, tenant
 	}
 	if err := c.mountKV(ctx, tenantClient, tenantName); err != nil {
 		return err
+	}
+	if tenantName != auth.SharedTenant {
+		if err := c.mountTransit(ctx, tenantClient, tenantName); err != nil {
+			return err
+		}
 	}
 	if err := c.enableJWTAuth(ctx, tenantClient, tenantName); err != nil {
 		return err
@@ -268,14 +291,52 @@ func (c *VaultLifecycleClient) createNamespace(ctx context.Context, client *vaul
 
 func (c *VaultLifecycleClient) mountKV(ctx context.Context, client *vaultapi.Client,
 	tenantName string) error {
-	err := client.Sys().MountWithContext(ctx, c.kvMountPath, &vaultapi.MountInput{
+	return c.mountEngine(ctx, client, tenantName, c.kvMountPath, &vaultapi.MountInput{
 		Type:    "kv",
 		Options: map[string]string{"version": "2"},
 	})
-	if err != nil && !isAlreadyExistsError(err) {
-		return fmt.Errorf("failed to mount KV v2 for tenant %q: %w", tenantName, err)
+}
+
+func (c *VaultLifecycleClient) mountTransit(ctx context.Context, client *vaultapi.Client,
+	tenantName string) error {
+	return c.mountEngine(ctx, client, tenantName, c.transitMountPath, &vaultapi.MountInput{Type: "transit"})
+}
+
+func (c *VaultLifecycleClient) mountEngine(ctx context.Context, client *vaultapi.Client,
+	tenantName, mountPath string, input *vaultapi.MountInput) error {
+	err := client.Sys().MountWithContext(ctx, mountPath, input)
+	if err == nil {
+		return nil
+	}
+	if !isAlreadyExistsError(err) {
+		return mountProvisioningError("mount", input.Type, tenantName, err)
+	}
+
+	// Reuse an occupied path only when its engine and required options match.
+	mounts, err := client.Sys().ListMountsWithContext(ctx)
+	if err != nil {
+		return mountProvisioningError("inspect mount", input.Type, tenantName, err)
+	}
+	mount := mounts[mountPath+"/"]
+	if mount == nil || mount.Type != input.Type {
+		return fmt.Errorf("%s mount path %q for tenant %q is occupied by another engine; configure a different %s mount path", input.Type, mountPath, tenantName, input.Type)
+	}
+	for key, value := range input.Options {
+		if mount.Options[key] != value {
+			return fmt.Errorf("%s mount path %q for tenant %q has incompatible options; configure a different %s mount path", input.Type, mountPath, tenantName, input.Type)
+		}
 	}
 	return nil
+}
+
+// Provider response bodies can contain sensitive data. Report the operation and
+// HTTP status without including the body or request credentials.
+func mountProvisioningError(operation, engine, tenantName string, err error) error {
+	var response *vaultapi.ResponseError
+	if errors.As(err, &response) {
+		return fmt.Errorf("failed to %s %s for tenant %q (HTTP %d); verify lifecycle mount permissions and backend availability", operation, engine, tenantName, response.StatusCode)
+	}
+	return fmt.Errorf("failed to %s %s for tenant %q; verify backend connectivity and TLS configuration", operation, engine, tenantName)
 }
 
 func (c *VaultLifecycleClient) enableJWTAuth(ctx context.Context, client *vaultapi.Client,

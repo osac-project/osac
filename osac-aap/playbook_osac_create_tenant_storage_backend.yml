@@ -65,3 +65,5 @@
         tasks_from: "{{ (csi_driver_install_override | default(csi_driver_install_default)).tasks_from }}"
       vars:
         csi_driver_install_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
+        # StorageClasses belong to Stage 2, after backend readiness is confirmed.
+        csi_driver_install_skip_lvms_storage_class: true

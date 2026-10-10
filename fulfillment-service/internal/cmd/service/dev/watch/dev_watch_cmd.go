@@ -28,6 +28,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/network"
+	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 	"github.com/osac-project/osac/fulfillment-service/internal/version"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -90,7 +91,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error {
 	c.flags = cmd.Flags()
 
 	// Load the trusted CA certificates:
-	caPool, err := network.NewCertPool().
+	caPool, err := trust.NewCertPool().
 		SetLogger(c.logger).
 		AddFiles(c.args.caFiles...).
 		Build()

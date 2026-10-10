@@ -34,6 +34,7 @@ if (parsedBaseURL.username || parsedBaseURL.password) {
 // package, instead of relying on everyone remembering src/*.spec.ts is ignored.
 const scratchDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'scratch');
 fs.mkdirSync(scratchDir, { recursive: true });
+const vmaasDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '../e2e-tests/vmaas');
 
 // Video recording is opt-in via PW_VIDEO=on (default off) — handy for debugging
 // a flow by watching the recording afterwards. PW_SLOW_MO adds a per-action
@@ -71,7 +72,7 @@ export default defineConfig({
       testMatch: /auth\.setup\.ts/,
       // Traces record fill() arguments — never trace the project that types the
       // real Keycloak password, even if a future CI run retries it.
-      use: { ...devices['Desktop Chrome'], trace: 'off' },
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
     {
       name: 'smoke',
@@ -85,6 +86,12 @@ export default defineConfig({
       testDir: scratchDir,
       use: { ...devices['Desktop Chrome'], storageState: AUTH_FILE },
       dependencies: ['setup'],
+    },
+    {
+      name: 'vmaas',
+      testDir: vmaasDir,
+      testMatch: /.*\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
   ],
 });

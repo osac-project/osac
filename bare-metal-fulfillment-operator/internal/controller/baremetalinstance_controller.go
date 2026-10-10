@@ -978,11 +978,26 @@ func (r *BareMetalInstanceReconciler) triggerRestart(ctx context.Context, bareMe
 	// Trigger restart through management backend
 	if err := r.ManagementClient.TriggerRestart(ctx, hostID); err != nil {
 		if errors.Is(err, management.ErrTransitioning) {
+			// The host is busy transitioning; the restart was NOT triggered. This is
+			// benign backpressure, not a failure — we swallow the error and requeue to
+			// retry once the host is idle. Two things must hold for the reason we stamp:
+			//   1. It must not be a hard-failure reason (PowerSyncFailed), which would be
+			//      surfaced to users as a power-sync failure while we are still retrying.
+			//   2. It must NOT be Progressing: reconcileRestartTrigger treats
+			//      PowerSynced=False/Progressing as "a restart I already triggered is in
+			//      flight — poll IsRestartComplete instead of re-triggering". Nothing was
+			//      triggered here, so using Progressing would make the next reconcile poll
+			//      for a completion that will never come from us, and on backends where
+			//      ErrTransitioning reflects an unrelated power transition it could adopt
+			//      that transition as "the restart" and report success with no reboot.
+			// PowerSyncRequired satisfies both: it is in the derivation's benign denylist
+			// (reported as non-failure) and leaves the in-progress guard false, so the
+			// next reconcile re-triggers until a real restart is actually initiated.
 			log.Info("Host is already transitioning, will retry restart when host becomes idle", "hostID", hostID)
 			bareMetalInstance.SetStatusCondition(
 				v1alpha1.HostConditionPowerSynced,
 				metav1.ConditionFalse,
-				v1alpha1.HostConditionReasonPowerSyncFailed,
+				v1alpha1.HostConditionReasonPowerSyncRequired,
 				"Host is transitioning, will retry restart when host becomes idle",
 			)
 			return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil

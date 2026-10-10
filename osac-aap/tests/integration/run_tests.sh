@@ -43,11 +43,14 @@ PASSED=()
 WORKFLOWS=(
   "cluster_create"
   "cluster_delete"
+  "cluster_create_caas"
+  "cluster_delete_caas"
   "cluster_post_install"
   "compute_instance_create"
   "compute_instance_with_gpu_create"
   "compute_instance_delete"
   "cluster_status_reporting"
+  "addon_operator_install"
 )
 
 # Role-level integration tests.
@@ -57,16 +60,15 @@ WORKFLOWS=(
 ROLE_TESTS=(
   "config_as_code_pod_specs"
   "finalizer"
+  "fulfillment_trust_sync"
   "lease"
+  "agentless_net_stub"
 )
 
 ROLE_SCENARIO_TESTS=(
   "cluster_working_namespace:test_not_found"
   "cluster_working_namespace:test_predefined"
   "cluster_working_namespace:test_found"
-  "tenant_target_namespace:test_not_found"
-  "tenant_target_namespace:test_predefined"
-  "tenant_target_namespace:test_found"
 )
 
 echo "=== Running Workflow Integration Tests ==="
@@ -185,7 +187,7 @@ for scenario in test_discover_all test_nonexistent_collection test_invalid_colle
   fi
 done
 
-for scenario in test_empty test_populated test_no_items_key test_disabled test_not_found; do
+for scenario in test_empty test_populated test_no_items_key test_disabled test_not_found test_cert_validation; do
   echo "Testing publish_templates: ${scenario}"
   if run_config_as_code_playbook "${PUBLISH_TEMPLATES_TEST}" -e "${scenario}=true"; then
     PASSED+=("publish_templates:${scenario}")
@@ -225,6 +227,22 @@ else
   FAILED+=("storage_provider_unit_tests:part2")
 fi
 
+echo ""
+
+# Storage target routing is independent of the mock VMS provider suite. The target
+# creates and removes its own second Kind cluster, then exercises the real Tenant
+# create/delete playbooks with and without OSAC_REMOTE_CLUSTER_KUBECONFIG and the
+# ClusterOrder teardown path with a job-provided admin_kubeconfig.
+STORAGE_TARGET_ROUTING_LOG="${SCRIPT_DIR}/.storage_target_routing.log"
+echo "=== Running Tenant Storage Target Routing Integration Test ==="
+if bash "${SCRIPT_DIR}/run_storage_target_routing_tests.sh" > "${STORAGE_TARGET_ROUTING_LOG}" 2>&1; then
+  echo "  ✓ storage target routing passed"
+  PASSED+=("storage_target_routing:baseline")
+else
+  echo "  ✗ storage target routing failed (see ${STORAGE_TARGET_ROUTING_LOG})"
+  tail -80 "${STORAGE_TARGET_ROUTING_LOG}" 2>/dev/null || true
+  FAILED+=("storage_target_routing:baseline")
+fi
 echo ""
 
 # Storage provider tests (conditional)

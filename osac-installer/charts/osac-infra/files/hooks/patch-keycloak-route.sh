@@ -4,10 +4,20 @@ set -euo pipefail
 # Reconciliation loop: watch for changes to default-ca Secret and update Route destinationCACertificate
 LAST_CA_CERT=""
 
+# Idempotency guard: skip if the route already has the correct CA cert.
+# Uses || true so a re-run with broken RBAC does not fail when the cert
+# is already correct — it simply falls through to the reconciliation loop.
+CURRENT_DEST_CA=$(oc get route keycloak -n keycloak -o jsonpath='{.spec.tls.destinationCACertificate}' 2>/dev/null || true)
+EXPECTED_CA=$(oc get secret default-ca -n cert-manager -o jsonpath='{.data.ca\.crt}' 2>/dev/null | base64 -d 2>/dev/null || true)
+if [[ -n "$CURRENT_DEST_CA" && -n "$EXPECTED_CA" && "$CURRENT_DEST_CA" == "$EXPECTED_CA" ]]; then
+  echo "Route already has correct CA cert, nothing to do."
+  exit 0
+fi
+
 reconcile() {
   # Check if Secret exists
-  if ! oc get secret default-ca -n cert-manager &>/dev/null; then
-    echo "default-ca secret not found, waiting..."
+  if ! err=$(oc get secret default-ca -n cert-manager 2>&1 >/dev/null); then
+    echo "default-ca secret not found (${err}), waiting..."
     return 1
   fi
 
@@ -22,8 +32,8 @@ reconcile() {
   echo "CA certificate changed, patching keycloak Route..."
 
   # Check if Route exists
-  if ! oc get route keycloak -n keycloak &>/dev/null; then
-    echo "keycloak Route not found, waiting..."
+  if ! err=$(oc get route keycloak -n keycloak 2>&1 >/dev/null); then
+    echo "keycloak Route not found (${err}), waiting..."
     return 1
   fi
 
@@ -38,26 +48,35 @@ reconcile() {
 
   # Patch Route with new CA cert (use python3 for JSON escaping, available in all hook images)
   CA_CERT_JSON=$(python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))" <<< "$CA_CERT")
-  if oc patch route keycloak -n keycloak --type=json -p "[{
+  if patch_err=$(oc patch route keycloak -n keycloak --type=json -p "[{
     \"op\": \"replace\",
     \"path\": \"/spec/tls/destinationCACertificate\",
     \"value\": $CA_CERT_JSON
-  }]" 2>/dev/null; then
+  }]" 2>&1); then
     echo "Successfully patched keycloak Route with updated destinationCACertificate"
-    LAST_CA_CERT="$CA_CERT"
   else
     # If replace fails, try add (first time)
-    if oc patch route keycloak -n keycloak --type=json -p "[{
+    echo "Replace failed (${patch_err}), trying add..."
+    if patch_err=$(oc patch route keycloak -n keycloak --type=json -p "[{
       \"op\": \"add\",
       \"path\": \"/spec/tls/destinationCACertificate\",
       \"value\": $CA_CERT_JSON
-    }]"; then
+    }]" 2>&1); then
       echo "Added destinationCACertificate to keycloak Route"
-      LAST_CA_CERT="$CA_CERT"
     else
-      echo "ERROR: Failed to patch keycloak Route"
+      echo "ERROR: Failed to patch keycloak Route (${patch_err})"
       return 1
     fi
+  fi
+
+  # Post-patch verification: read back the route and confirm the cert matches
+  ACTUAL_CA=$(oc get route keycloak -n keycloak -o jsonpath='{.spec.tls.destinationCACertificate}')
+  if [[ "$ACTUAL_CA" == "$CA_CERT" ]]; then
+    echo "Verified: Route destinationCACertificate matches expected CA cert"
+    LAST_CA_CERT="$CA_CERT"
+  else
+    echo "ERROR: Post-patch verification failed — destinationCACertificate does not match expected CA cert"
+    return 1
   fi
 }
 

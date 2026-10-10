@@ -1,8 +1,8 @@
 import type { TFunction } from 'i18next';
 
-import { InstanceTypeState } from '@osac/types/private';
+import { InstanceTypeState, InstanceTypes } from '@osac/types/private';
+import { useUpdateResource } from '@osac/ui-components/api/use-resource';
 
-import { useUpdateInstanceType } from '../../api/v1/private/instance-type';
 import { useTranslation } from '../../hooks/useTranslation';
 import { getErrorMessage } from '../../utils/error';
 import { getResourceLifecycleActions } from '../Resource/getResourceLifecycleActions';
@@ -52,11 +52,11 @@ const getLifecycleErrorTitle = (t: TFunction, action: InstanceTypeLifecycleActio
 export const useInstanceTypeLifecycleAction = () => {
   const { t } = useTranslation();
   const { addToast } = useToast();
-  const updateInstanceType = useUpdateInstanceType();
+  const updateInstanceType = useUpdateResource(InstanceTypes);
 
   const runLifecycleAction = (instanceTypeId: string, action: InstanceTypeLifecycleAction) => {
     updateInstanceType.mutate(
-      { id: instanceTypeId, body: { spec: { state: action } } },
+      { object: { id: instanceTypeId, spec: { state: action } } },
       {
         onError: (error) => {
           addToast({

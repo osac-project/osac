@@ -5,12 +5,11 @@ from typing import Any
 
 import pytest
 
-from tests.e2e.catalog.conftest import unique_name
 from tests.e2e.core.grpc_client import GRPCClient
-from tests.e2e.core.helpers import wait_for_cr, wait_for_deletion, wait_for_provision, wait_for_running
+from tests.e2e.core.helpers import unique_name, wait_for_cr, wait_for_deletion, wait_for_provision, wait_for_running
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
-from tests.e2e.vmaas.conftest import DEFAULT_IT_VCPUS, DEFAULT_IT_MEMORY_GIB
+from tests.e2e.vmaas.conftest import DEFAULT_IT_MEMORY_GIB, DEFAULT_IT_VCPUS
 
 pytestmark = pytest.mark.sanity
 
@@ -20,13 +19,17 @@ TEST_USER_DATA: str = "#cloud-config\npackages:\n  - vim\n"
 
 
 def test_compute_instance_cli_explicit_fields(
-    cli: OsacCLI, grpc: GRPCClient, k8s_hub_client: K8sClient, default_subnet: str, vm_template: str
+    cli: OsacCLI,
+    grpc: GRPCClient,
+    k8s_hub_client: K8sClient,
+    default_network_attachment: dict[str, object],
+    vm_template: str,
 ) -> None:
     name = unique_name("e2e-ci")
     uuid: str = cli.create_compute_instance(
         template=vm_template,
         name=name,
-        network_attachments=[{"subnet": default_subnet}],
+        network_attachments=[default_network_attachment],
         boot_disk_size=TEST_BOOT_DISK_SIZE,
         run_strategy=TEST_RUN_STRATEGY,
         user_data_secret_ref=TEST_USER_DATA,

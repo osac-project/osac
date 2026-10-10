@@ -27,6 +27,21 @@
             "type": "command",
             "command": "command -v graphify >/dev/null 2>&1 || exit 0; graphify hook-guard search",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.claude/hooks/component-pre-tool-use.sh\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "apply_patch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.codex/hooks/component-post-tool-use.sh\""
           }
         ]
       }

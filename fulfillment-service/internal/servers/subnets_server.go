@@ -23,17 +23,16 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 type SubnetsServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
+	hubClientProvider HubClientProvider
 }
 
 var _ publicv1.SubnetsServer = (*SubnetsServer)(nil)
@@ -57,12 +56,6 @@ func (b *SubnetsServerBuilder) SetLogger(value *slog.Logger) *SubnetsServerBuild
 	return b
 }
 
-// SetNotifier sets the notifier to use. This is optional.
-func (b *SubnetsServerBuilder) SetNotifier(value events.Notifier) *SubnetsServerBuilder {
-	b.notifier = value
-	return b
-}
-
 // SetAttributionLogic sets the attribution logic to use. This is optional.
 func (b *SubnetsServerBuilder) SetAttributionLogic(value auth.AttributionLogic) *SubnetsServerBuilder {
 	b.attributionLogic = value
@@ -79,6 +72,13 @@ func (b *SubnetsServerBuilder) SetTenancyLogic(value auth.TenancyLogic) *Subnets
 // access objects. This is optional. If not set, no metrics will be recorded.
 func (b *SubnetsServerBuilder) SetMetricsRegisterer(value prometheus.Registerer) *SubnetsServerBuilder {
 	b.metricsRegisterer = value
+	return b
+}
+
+// SetHubClientProvider sets the provider used by the delegated private server to
+// inspect VirtualMachines in a Subnet's hub namespace.
+func (b *SubnetsServerBuilder) SetHubClientProvider(value HubClientProvider) *SubnetsServerBuilder {
+	b.hubClientProvider = value
 	return b
 }
 
@@ -112,10 +112,10 @@ func (b *SubnetsServerBuilder) Build() (result *SubnetsServer, err error) {
 	// Create the private server to delegate to:
 	delegate, err := NewPrivateSubnetsServer().
 		SetLogger(b.logger).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetHubClientProvider(b.hubClientProvider).
 		SetFilterDesc((*publicv1.Subnet)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {
@@ -250,70 +250,6 @@ func (s *SubnetsServer) Create(ctx context.Context,
 	// Create the public response:
 	response = &publicv1.SubnetsCreateResponse{}
 	response.SetObject(createdPublicSubnet)
-	return
-}
-
-func (s *SubnetsServer) Update(ctx context.Context,
-	request *publicv1.SubnetsUpdateRequest) (response *publicv1.SubnetsUpdateResponse, err error) {
-	// Validate the request:
-	publicSubnet := request.GetObject()
-	if publicSubnet == nil {
-		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
-		return
-	}
-	id := publicSubnet.GetId()
-	if id == "" {
-		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
-		return
-	}
-
-	// Get the existing object from the private server:
-	getRequest := &privatev1.SubnetsGetRequest{}
-	getRequest.SetId(id)
-	getResponse, err := s.delegate.Get(ctx, getRequest)
-	if err != nil {
-		return nil, err
-	}
-	existingPrivateSubnet := getResponse.GetObject()
-
-	// Map the public changes to the existing private object (preserving private data):
-	err = s.inMapper.Copy(ctx, publicSubnet, existingPrivateSubnet)
-	if err != nil {
-		s.logger.ErrorContext(
-			ctx,
-			"Failed to map public subnet to private",
-			slog.Any("error", err),
-		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process subnet")
-		return
-	}
-
-	// Delegate to the private server with the merged object:
-	privateRequest := &privatev1.SubnetsUpdateRequest{}
-	privateRequest.SetObject(existingPrivateSubnet)
-	privateRequest.SetLock(request.GetLock())
-	privateResponse, err := s.delegate.Update(ctx, privateRequest)
-	if err != nil {
-		return nil, err
-	}
-
-	// Map the private response back to public format:
-	updatedPrivateSubnet := privateResponse.GetObject()
-	updatedPublicSubnet := &publicv1.Subnet{}
-	err = s.outMapper.Copy(ctx, updatedPrivateSubnet, updatedPublicSubnet)
-	if err != nil {
-		s.logger.ErrorContext(
-			ctx,
-			"Failed to map private subnet to public",
-			slog.Any("error", err),
-		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process subnet")
-		return
-	}
-
-	// Create the public response:
-	response = &publicv1.SubnetsUpdateResponse{}
-	response.SetObject(updatedPublicSubnet)
 	return
 }
 

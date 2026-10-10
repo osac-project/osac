@@ -57,6 +57,14 @@ var _ = Describe("Public bare metal instance types", func() {
 						Memory: privatev1.BareMetalMemorySpec_builder{
 							TotalGb: memoryGb,
 						}.Build(),
+						NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+							privatev1.BareMetalNetworkPortSpec_builder{
+								Name:  "data-0",
+								Role:  "fabric",
+								Type:  "Ethernet",
+								Speed: "25Gbps",
+							}.Build(),
+						},
 					}.Build(),
 					HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
 						MatchLabels: map[string]string{

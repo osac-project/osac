@@ -315,8 +315,8 @@ var _ = Describe("SecurityGroups server", func() {
 			Expect(proto.Equal(createResponse.GetObject(), getResponse.GetObject())).To(BeTrue())
 		})
 
-		It("Canonicalizes non-canonical rule CIDRs on Create", func() {
-			response, err := server.Create(ctx, publicv1.SecurityGroupsCreateRequest_builder{
+		It("Rejects non-canonical rule CIDRs on Create", func() {
+			_, err := server.Create(ctx, publicv1.SecurityGroupsCreateRequest_builder{
 				Object: publicv1.SecurityGroup_builder{
 					Metadata: publicv1.Metadata_builder{
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
@@ -340,108 +340,8 @@ var _ = Describe("SecurityGroups server", func() {
 					}.Build(),
 				}.Build(),
 			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(response.GetObject().GetSpec().GetIngress()[0].GetIpv4Cidr()).To(Equal("10.0.1.0/24"))
-		})
-
-		It("Canonicalizes rule CIDRs on Update", func() {
-			createResponse, err := server.Create(ctx, publicv1.SecurityGroupsCreateRequest_builder{
-				Object: publicv1.SecurityGroup_builder{
-					Metadata: publicv1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Spec: publicv1.SecurityGroupSpec_builder{
-						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
-						Ingress: []*publicv1.SecurityRule{
-							{
-								Protocol: publicv1.Protocol_PROTOCOL_TCP,
-								PortFrom: new(int32(443)),
-								PortTo:   new(int32(443)),
-								Ipv4Cidr: new("0.0.0.0/0"),
-							},
-						},
-						Egress: []*publicv1.SecurityRule{
-							{
-								Protocol: publicv1.Protocol_PROTOCOL_ALL,
-								Ipv4Cidr: new("0.0.0.0/0"),
-							},
-						},
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			object := createResponse.GetObject()
-			name := object.GetMetadata().GetName()
-			updateResponse, err := server.Update(ctx, publicv1.SecurityGroupsUpdateRequest_builder{
-				Object: publicv1.SecurityGroup_builder{
-					Id:       object.GetId(),
-					Metadata: publicv1.Metadata_builder{Name: name}.Build(),
-					Spec: publicv1.SecurityGroupSpec_builder{
-						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
-						Ingress: []*publicv1.SecurityRule{
-							{
-								Protocol: publicv1.Protocol_PROTOCOL_TCP,
-								PortFrom: new(int32(8080)),
-								PortTo:   new(int32(8080)),
-								Ipv4Cidr: new("10.0.2.5/24"),
-							},
-						},
-						Egress: []*publicv1.SecurityRule{
-							{
-								Protocol: publicv1.Protocol_PROTOCOL_ALL,
-								Ipv4Cidr: new("0.0.0.0/0"),
-							},
-						},
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(updateResponse.GetObject().GetSpec().GetIngress()[0].GetIpv4Cidr()).To(Equal("10.0.2.0/24"))
-		})
-
-		It("Update object", func() {
-			// Create the object:
-			createResponse, err := server.Create(ctx, publicv1.SecurityGroupsCreateRequest_builder{
-				Object: publicv1.SecurityGroup_builder{
-					Metadata: publicv1.Metadata_builder{
-						Name: "original-name",
-					}.Build(),
-					Spec: publicv1.SecurityGroupSpec_builder{
-						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			object := createResponse.GetObject()
-			name := object.GetMetadata().GetName()
-			// Update the object:
-			updateResponse, err := server.Update(ctx, publicv1.SecurityGroupsUpdateRequest_builder{
-				Object: publicv1.SecurityGroup_builder{
-					Id:       object.GetId(),
-					Metadata: publicv1.Metadata_builder{Name: name}.Build(),
-					Spec: publicv1.SecurityGroupSpec_builder{
-						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
-						Ingress: []*publicv1.SecurityRule{
-							{
-								Protocol: publicv1.Protocol_PROTOCOL_UDP,
-								PortFrom: new(int32(53)),
-								PortTo:   new(int32(53)),
-								Ipv4Cidr: new("0.0.0.0/0"),
-							},
-						},
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(updateResponse.GetObject().GetMetadata().GetName()).To(Equal("original-name"))
-			Expect(updateResponse.GetObject().GetSpec().GetIngress()).To(HaveLen(1))
-
-			// Get and verify:
-			getResponse, err := server.Get(ctx, publicv1.SecurityGroupsGetRequest_builder{
-				Id: object.GetId(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(getResponse.GetObject().GetMetadata().GetName()).To(Equal("original-name"))
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("canonical"))
 		})
 
 		It("Delete object", func() {
@@ -511,6 +411,74 @@ var _ = Describe("SecurityGroups server", func() {
 			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
 			Expect(err.Error()).To(ContainSubstring("default"))
 			Expect(err.Error()).To(ContainSubstring("system-managed"))
+
+			getResponse, err := server.Get(ctx, publicv1.SecurityGroupsGetRequest_builder{
+				Id: createResponse.GetObject().GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResponse.GetObject().GetMetadata().GetDeletionTimestamp()).To(BeNil())
+		})
+
+	})
+
+	Describe("Tenant isolation", func() {
+		var privateServer *PrivateSecurityGroupsServer
+
+		BeforeEach(func() {
+			var err error
+			privateServer, err = NewPrivateSecurityGroupsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("blocks deletion after an update omits the default label", func() {
+			createResp, err := privateServer.Create(ctx, privatev1.SecurityGroupsCreateRequest_builder{
+				Object: privatev1.SecurityGroup_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   "default-security-group-update",
+						Tenant: testTenant,
+						Labels: map[string]string{"osac.openshift.io/default": "true"},
+					}.Build(),
+					Spec: privatev1.SecurityGroupSpec_builder{
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			object := createResp.GetObject()
+			object.GetMetadata().SetLabels(map[string]string{"env": "test"})
+			_, err = privateServer.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{Object: object}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+
+			_, err = privateServer.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{Id: object.GetId()}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok = grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+
+			getResponse, err := privateServer.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: object.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResponse.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("osac.openshift.io/default", "true"))
+		})
+
+		It("rejects security group with different tenant than parent VirtualNetwork", func() {
+			securityGroup := privatev1.SecurityGroup_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: "different-tenant"}.Build(),
+				Spec: privatev1.SecurityGroupSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
+				}.Build(),
+			}.Build()
+
+			err := privateServer.validateSecurityGroup(ctx, securityGroup, nil)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err).To(MatchError(ContainSubstring("belongs to tenant")))
 		})
 	})
 })

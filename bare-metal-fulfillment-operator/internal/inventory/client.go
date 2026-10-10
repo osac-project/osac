@@ -71,6 +71,12 @@ type Client interface {
 	// Returns nil, nil when the backend does not support NIC discovery for this host class.
 	// Returns an error when NIC data is expected but unavailable (backend failure or unexpected missing data on a supported backend).
 	GetHostNICs(ctx context.Context, inventoryHostID string) ([]HostNIC, error)
+
+	// GetHostLogicalPortMACs returns an administrator-supplied mapping from OSAC
+	// logical port names to physical MAC addresses, used for DHCP lease matching.
+	// Returns an empty map when no mapping is configured, and an error for
+	// malformed mapping data or backend failures.
+	GetHostLogicalPortMACs(ctx context.Context, inventoryHostID string) (map[string]string, error)
 }
 
 // NewClientFunc is a function that creates a new inventory client from config

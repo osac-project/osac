@@ -20,8 +20,10 @@ import (
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -43,7 +45,7 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
-		// Create server (without notifier for testing):
+		// Create server:
 		tenantsServer, err = NewPrivateTenantsServer().
 			SetLogger(logger).
 			SetAttributionLogic(attribution).
@@ -201,6 +203,48 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 			Id: createResp.Object.Id,
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+	})
+
+	It("archives a tenant only after both cleanup barriers are removed and rejects stale locked updates", func() {
+		created, err := tenantsServer.Create(ctx, privatev1.TenantsCreateRequest_builder{
+			Object: privatev1.Tenant_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:       "barrier-tenant",
+					Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		id := created.GetObject().GetId()
+		projects, err := projectsServer.List(ctx, privatev1.ProjectsListRequest_builder{
+			Filter: new("this.metadata.tenant == 'barrier-tenant'"),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		for _, project := range projects.GetItems() {
+			_, err = projectsServer.Delete(ctx, privatev1.ProjectsDeleteRequest_builder{Id: project.GetId()}.Build())
+			Expect(err).NotTo(HaveOccurred())
+		}
+		_, err = tenantsServer.Delete(ctx, privatev1.TenantsDeleteRequest_builder{Id: id}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		deleting, err := tenantsServer.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		stale := proto.Clone(deleting.GetObject()).(*privatev1.Tenant)
+		first := proto.Clone(stale).(*privatev1.Tenant)
+		first.GetMetadata().SetFinalizers([]string{finalizers.TenantOnboarding})
+		mask := &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}}
+		_, err = tenantsServer.Update(ctx, privatev1.TenantsUpdateRequest_builder{Object: first, UpdateMask: mask, Lock: true}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		remaining, err := tenantsServer.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(remaining.GetObject().GetMetadata().GetFinalizers()).To(ConsistOf(finalizers.TenantOnboarding))
+		stale.GetMetadata().SetFinalizers(nil)
+		_, err = tenantsServer.Update(ctx, privatev1.TenantsUpdateRequest_builder{Object: stale, UpdateMask: mask, Lock: true}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.Aborted))
+		remaining.GetObject().GetMetadata().SetFinalizers(nil)
+		_, err = tenantsServer.Update(ctx, privatev1.TenantsUpdateRequest_builder{Object: remaining.GetObject(), UpdateMask: mask, Lock: true}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		_, err = tenantsServer.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
 	})
 
 	It("Updates a tenant", func() {
@@ -484,92 +528,6 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		Expect(err).ToNot(HaveOccurred())
 	})
 
-	Context("with default networking provisioner", func() {
-		var (
-			provisionerServer *PrivateTenantsServer
-			provisioner       *DefaultNetworkingProvisioner
-		)
-
-		BeforeEach(func() {
-			var err error
-			provisioner, err = NewDefaultNetworkingProvisioner().
-				SetLogger(logger).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-
-			provisionerServer, err = NewPrivateTenantsServer().
-				SetLogger(logger).
-				SetAttributionLogic(attribution).
-				SetTenancyLogic(tenancy).
-				SetDefaultNetworkingProvisioner(provisioner).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-		})
-
-		It("creates default networking resources when NetworkClass defaults exist", func() {
-			ncDao := provisioner.networkClassDao
-			nc := privatev1.NetworkClass_builder{
-				Metadata: privatev1.Metadata_builder{
-					Name:   "test-nc",
-					Tenant: "system",
-				}.Build(),
-				IsDefault:     new(true),
-				FabricManager: new("netris"),
-				Spec: privatev1.NetworkClassSpec_builder{
-					Defaults: privatev1.NetworkDefaults_builder{
-						VirtualNetworkIpv4Cidr: "10.0.0.0/16",
-						SubnetIpv4Cidr:         "10.0.1.0/24",
-					}.Build(),
-				}.Build(),
-				Status: privatev1.NetworkClassStatus_builder{
-					State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
-				}.Build(),
-			}.Build()
-			_, err := ncDao.Create().SetObject(nc).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-
-			request := privatev1.TenantsCreateRequest_builder{
-				Object: privatev1.Tenant_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: "net-tenant",
-					}.Build(),
-				}.Build(),
-			}.Build()
-
-			response, err := provisionerServer.Create(ctx, request)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(response).ToNot(BeNil())
-
-			vnList, err := provisioner.virtualNetworkDao.List().
-				SetFilter("this.metadata.tenant == 'net-tenant'").
-				Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(vnList.GetItems()).To(HaveLen(1))
-			Expect(vnList.GetItems()[0].GetMetadata().GetLabels()).To(
-				HaveKeyWithValue("osac.openshift.io/default", "true"))
-		})
-
-		It("creates tenant without default networking when no NetworkClass exists", func() {
-			request := privatev1.TenantsCreateRequest_builder{
-				Object: privatev1.Tenant_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: "plain-tenant",
-					}.Build(),
-				}.Build(),
-			}.Build()
-
-			response, err := provisionerServer.Create(ctx, request)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(response).ToNot(BeNil())
-
-			vnList, err := provisioner.virtualNetworkDao.List().
-				SetFilter("this.metadata.tenant == 'plain-tenant'").
-				Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(vnList.GetItems()).To(BeEmpty())
-		})
-	})
 })
 
 var _ = Describe("Break-glass credentials secret reference", func() {

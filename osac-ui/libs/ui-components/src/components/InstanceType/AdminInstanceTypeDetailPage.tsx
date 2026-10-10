@@ -18,7 +18,13 @@ import {
   StackItem,
 } from '@patternfly/react-core';
 
-import { InstanceTypeState, type InstanceType as PrivateInstanceType } from '@osac/types/private';
+import {
+  InstanceTypeState,
+  InstanceTypes,
+  type InstanceType as PrivateInstanceType,
+} from '@osac/types/private';
+import { useGetResource } from '@osac/ui-components/api/use-resource';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import InstanceTypeDeleteConfirmModal from './InstanceTypeDeleteConfirmModal';
 import InstanceTypeLifecycleLabel from './InstanceTypeLifecycleLabel';
@@ -26,7 +32,6 @@ import {
   getInstanceTypeLifecycleActions,
   useInstanceTypeLifecycleAction,
 } from './useInstanceTypeLifecycleAction';
-import { useAdminInstanceType } from '../../api/v1/private/instance-type';
 import { useTranslation } from '../../hooks/useTranslation';
 import ListPage from '../Page/ListPage';
 import ListPageBody from '../Page/ListPageBody';
@@ -85,9 +90,7 @@ const InstanceTypeDetailActions = ({ instanceType, onDeleted }: InstanceTypeDeta
           )}
           {canDelete && (
             <ActionListItem>
-              <Button variant="danger" onClick={() => setDeleteOpen(true)}>
-                {t('Delete')}
-              </Button>
+              <DeleteResourceButton onClick={() => setDeleteOpen(true)} />
             </ActionListItem>
           )}
         </ActionListGroup>
@@ -109,7 +112,9 @@ const AdminInstanceTypeDetailPage = () => {
   const navigate = useNavigate();
   const { id = '' } = useParams<{ id: string }>();
 
-  const { data: instanceType, isLoading, error } = useAdminInstanceType(id);
+  const { data, isLoading, error } = useGetResource(InstanceTypes, { id });
+
+  const instanceType = data?.object;
 
   const name = instanceType?.metadata?.name ?? id;
   const gpu = instanceType?.spec?.gpu;
@@ -152,9 +157,9 @@ const AdminInstanceTypeDetailPage = () => {
                   </DescriptionListGroup>
 
                   <DescriptionListGroup>
-                    <DescriptionListTerm>{t('CPU cores')}</DescriptionListTerm>
+                    <DescriptionListTerm>{t('vCPUs')}</DescriptionListTerm>
                     <DescriptionListDescription>
-                      {instanceType?.spec?.cores ?? '—'}
+                      {instanceType?.spec?.vcpus ?? '—'}
                     </DescriptionListDescription>
                   </DescriptionListGroup>
 

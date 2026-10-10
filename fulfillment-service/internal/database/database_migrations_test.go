@@ -29,12 +29,12 @@ import (
 )
 
 var _ = Describe("Migrations", func() {
-	It("All migrations have the '.up.sql' or '.down.sql' suffix", func() {
+	It("All migrations have the '.up.sql' suffix", func() {
 		files, err := filepath.Glob("migrations/*.sql")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(files).ToNot(BeEmpty())
 		for _, file := range files {
-			Expect(file).To(MatchRegexp(`\.(up|down)\.sql$`))
+			Expect(file).To(HaveSuffix(".up.sql"))
 		}
 	})
 
@@ -43,7 +43,7 @@ var _ = Describe("Migrations", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(files).ToNot(BeEmpty())
 
-		seen := map[string][]string{}
+		seen := map[int][]string{}
 		for _, file := range files {
 			base := filepath.Base(file)
 			parts := strings.SplitN(base, "_", 2)
@@ -52,28 +52,18 @@ var _ = Describe("Migrations", func() {
 			}
 			n, err := strconv.Atoi(parts[0])
 			Expect(err).ToNot(HaveOccurred(), "failed to parse migration number from %s", base)
-			var direction string
-			switch {
-			case strings.HasSuffix(base, ".up.sql"):
-				direction = "up"
-			case strings.HasSuffix(base, ".down.sql"):
-				direction = "down"
-			default:
-				continue
-			}
-			key := fmt.Sprintf("%d_%s", n, direction)
-			seen[key] = append(seen[key], base)
+			seen[n] = append(seen[n], base)
 		}
 
 		var duplicates []string
-		keys := make([]string, 0, len(seen))
+		keys := make([]int, 0, len(seen))
 		for k := range seen {
 			keys = append(keys, k)
 		}
-		sort.Strings(keys)
+		sort.Ints(keys)
 		for _, key := range keys {
 			if len(seen[key]) > 1 {
-				duplicates = append(duplicates, fmt.Sprintf("%s: %v", key, seen[key]))
+				duplicates = append(duplicates, fmt.Sprintf("%d: %v", key, seen[key]))
 			}
 		}
 		Expect(duplicates).To(BeEmpty(), "found duplicate migration numbers: %v", duplicates)
@@ -84,7 +74,7 @@ var _ = Describe("Migrations", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(files).ToNot(BeEmpty())
 
-		pattern := regexp.MustCompile(`^(\d+)_[a-z][a-z0-9_]*[a-z0-9]\.(up|down)\.sql$`)
+		pattern := regexp.MustCompile(`^(\d+)_[a-z][a-z0-9_]*[a-z0-9]\.up\.sql$`)
 		var violations []string
 		for _, file := range files {
 			base := filepath.Base(file)

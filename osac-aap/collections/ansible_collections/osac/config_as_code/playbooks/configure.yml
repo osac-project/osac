@@ -8,6 +8,12 @@
     - vars/config.yml
 
   tasks:
+    - name: Validate add-on operator concurrency
+      ansible.builtin.assert:
+        that:
+          - addon_operator_max_concurrent_jobs > 0
+        fail_msg: AAP_ADDON_OPERATOR_MAX_CONCURRENT_JOBS must be a positive integer
+
     - name: Configure AAP
       ansible.builtin.include_role:
         name: osac.config_as_code.aap

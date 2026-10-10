@@ -27,7 +27,7 @@ argument_specs:
       manage_agents_desired_count:
         type: int
         required: true
-      manage_agents_resource_class:
+      manage_agents_instance_type:
         type: str
         required: true
       manage_agents_cluster_order_name:
@@ -38,7 +38,7 @@ argument_specs:
       manage_agents_desired_count:
         type: int
         required: true
-      manage_agents_resource_class:
+      manage_agents_instance_type:
         type: str
         required: true
       manage_agents_cluster_order_name:
@@ -48,19 +48,4 @@ argument_specs:
     options:
       manage_agents_cluster_order_name:
         type: str
-        required: true
-  import_agents:
-    options:
-      manage_agents_node_names:
-        type: list
-        elements: str
-        required: true
-      manage_agents_idle_agents_network:
-        type: str
-        required: true
-  remove_agents:
-    options:
-      manage_agents_node_names:
-        type: list
-        elements: str
         required: true

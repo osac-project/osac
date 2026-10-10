@@ -24,6 +24,8 @@ bootstrap:
 configAsCode:
   manifestSecret: "config-as-code-manifest-ig"
   secret: "config-as-code-ig"
+  # Maximum number of add-on operator jobs allowed to run concurrently.
+  addonOperatorMaxConcurrentJobs: 50
   eeImage: ""
   # Controller's own execution_environment.pull field (always / missing /
   # never). Left empty by default (config-as-code-secret.yaml omits the env
@@ -34,18 +36,9 @@ configAsCode:
   eeImagePull: ""
   projectGitUri: ""
   projectGitBranch: ""
-  importAgentsEnabled: false
-  importBcmAgentsEnabled: false
   manifest:
     create: false
     data: {}
-
-importAgents:
-  servers: []
-
-importBcmAgents:
-  cert: ""
-  key: ""
 
 serviceAccounts:
   osacSa: "osac-sa"

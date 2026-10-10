@@ -36,7 +36,7 @@ message BareMetalInstanceType {
   BareMetalInstanceTypeStatus status = 4;
 }
 
-// Defines the hardware specifications for a BareMetalInstanceType.
+// Defines the hardware specifications and description for a BareMetalInstanceType.
 message BareMetalInstanceTypeSpec {
   // Hardware specifications for this bare metal instance type.
   BareMetalHardwareSpec hardware = 1 [(buf.validate.field).required = true];
@@ -54,6 +54,11 @@ message BareMetalHardwareSpec {
     id: "hardware_spec.network_ports_unique_names"
     message: "network port names must be unique"
     expression: "this.network_ports.map(p, p.name).unique()"
+  };
+  option (buf.validate.message).cel = {
+    id: "hardware_spec.at_least_one_fabric_port"
+    message: "at least one network port with role 'fabric' is required"
+    expression: "this.network_ports.exists(p, p.role == 'fabric')"
   };
 
   // CPU specifications.
@@ -126,10 +131,15 @@ message BareMetalAcceleratorSpec {
   optional int32 memory_gb = 4 [(buf.validate.field).int32.gt = 0];
 }
 
-// Local reference to a BareMetalInstanceType resource.
-message BareMetalInstanceTypeLocalReference {
+// Reference to a BareMetalInstanceType resource.
+//
+// BareMetalInstanceType is platform-scoped and always lives in the shared tenant, so callers
+// must set shared = true and must not set project; the server rejects any other combination.
+message BareMetalInstanceTypeReference {
   string id = 1;
   string name = 2;
+  string project = 3;
+  bool shared = 4;
 }
 
 // Describes a network port in a bare metal instance type.

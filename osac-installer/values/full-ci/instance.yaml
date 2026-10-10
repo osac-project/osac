@@ -3,6 +3,13 @@
 # --- Service Enablement ---
 global:
   osacDeploymentId: "ci/osac"
+  fulfillmentTrust:
+    enabled: false
+  # Keep clusterFulfillment NETWORK_STEPS_COLLECTION=ci.steps authoritative.
+  # Without this, the agentless networking facade overwrites it with
+  # agentless_net.steps (see docs/aap-configuration.md).
+  expertOverrides:
+    aap: true
   services:
     caas:
       enabled: true
@@ -45,8 +52,14 @@ service:
   internalHostname: ""  # set dynamically by make install-osac
   variant: openshift
   images:
-    service: ghcr.io/osac-project/fulfillment-service:main
-    envoy: ghcr.io/osac-project/envoy:v1.33.0
+    service:
+      repository: ghcr.io/osac-project/fulfillment-service
+      tag: latest
+      pullPolicy: Always
+    envoy:
+      repository: ghcr.io/osac-project/envoy
+      tag: v1.33.0
+      pullPolicy: IfNotPresent
   certs:
     issuerRef:
       kind: ClusterIssuer
@@ -131,6 +144,8 @@ ui:
         caBundle:
           configMap: ca-bundle
   auth:
+    # oidcIssuerURL defaults to match service.auth.issuerUrl -- set automatically
+    # by install-osac via --set ui.auth.oidcIssuerURL when global.clusterDomain is set.
     certs:
       caBundle:
         configMap: ca-bundle

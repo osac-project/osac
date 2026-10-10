@@ -100,8 +100,9 @@ metadata:
 spec:
   templateName: ocp_4_20_small_nico
   nodeRequests:
-    - resourceClass: my-instance-type
-      numberOfNodes: 2
+    - numberOfNodes: 2
+      bareMetal:
+        instanceType: my-instance-type
   templateParameters:
     pull_secret:
       auths:
@@ -115,7 +116,8 @@ spec:
     ip_block_id: "ip-block-uuid-here"
 ```
 
-Note: `resourceClass` values must match NICo instance type names at the configured site exactly. No manual mapping is needed.
+The requested `bareMetal.instanceType` must match a NICo instance type name
+at the configured site exactly. No manual mapping is needed.
 
 ## Cluster Lifecycle Flows
 
@@ -337,7 +339,8 @@ Protection mechanisms:
 ```
 NICo instance type 'X' not found at site 'Y'
 ```
-The `resourceClass` in `nodeRequests` must exactly match a NICo instance type name at the configured site.
+The `bareMetal.instanceType` in `nodeRequests` must exactly match a NICo
+instance type name at the configured site.
 
 ### Agent Registration Timeout
 Agents not registering after instance boot:
@@ -367,7 +370,7 @@ oc get cm -n hardware-inventory nico-infra-<cluster> -o yaml
 oc get cm -n hardware-inventory nico-ip-registry -o yaml
 
 # List agents for a cluster
-oc get agent -n hardware-inventory -l osac.openshift.io/resource_class -o wide
+oc get agent -n hardware-inventory -l osac.openshift.io/instance_type -o wide
 
 # Check agent binding status
 oc get agent -n hardware-inventory <agent-name> -o json | \
@@ -383,5 +386,5 @@ oc --kubeconfig=<kubeconfig> get ipaddresspool,bgpadvertisement,bgppeer -n metal
 oc --kubeconfig=<kubeconfig> get svc -n openshift-ingress external-ingress
 
 # List NICo instances for a cluster (via API)
-# Instances are labeled with cluster=<name> and resource_class=<class>
+# NICo provider instances retain cluster=<name> and resource_class=<BMIT name>
 ```

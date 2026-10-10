@@ -12,6 +12,25 @@ import (
 )
 
 var _ = Describe("BMaaS meter transition contracts", func() {
+	DescribeTable("maps meter effects to lifecycle event types",
+		func(effect string, everStarted bool, expected string) {
+			eventType, err := events.BMaaSEffectEventType(effect, everStarted)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(eventType).To(Equal(expected))
+		},
+		Entry("first start", events.BMaaSEffectStart, false, events.EventStarted),
+		Entry("subsequent start", events.BMaaSEffectStart, true, events.EventResumed),
+		Entry("explicit resume before first allocation", events.BMaaSEffectResume, false, events.EventStarted),
+		Entry("explicit resume after allocation", events.BMaaSEffectResume, true, events.EventResumed),
+		Entry("suspend", events.BMaaSEffectSuspend, true, events.EventSuspended),
+		Entry("skip", events.BMaaSEffectSkip, false, ""),
+	)
+
+	It("rejects unknown transition effects", func() {
+		_, err := events.BMaaSEffectEventType("start_typo", false)
+		Expect(errors.Is(err, events.ErrUnknownBMaaSEffect)).To(BeTrue())
+	})
+
 	It("classifies allocation and consumption billable states independently", func() {
 		for _, state := range []string{"RUNNING", "STOPPED", "STARTING", "STOPPING", "DELETING"} {
 			Expect(events.IsAllocationBillableState(state)).To(BeTrue(), state)
@@ -168,7 +187,49 @@ var _ = Describe("DecomposeBMIEvents", func() {
 		Expect(eventsOut[1].DataAs(&consumptionRequest)).To(Succeed())
 		Expect(allocationRequest.MeterType).To(Equal(events.BMaaSMeterAllocation))
 		Expect(consumptionRequest.MeterType).To(Equal(events.BMaaSMeterConsumption))
+		Expect(allocationRequest.DurationSeconds).To(BeNil())
+		Expect(consumptionRequest.DurationSeconds).To(BeNil())
+	})
+
+	It("does not assign state duration to heartbeat events", func() {
+		eventsOut, err := events.DecomposeBMIEvents(
+			map[string]any{"bm_instance_type": "bm.large"},
+			"evt-heartbeat",
+			transitionTime,
+			events.BMaaSMeterIntervals{AllocationSince: &allocationSince, ConsumptionSince: &consumptionSince},
+			build,
+			events.EventHeartbeat,
+			events.EventHeartbeat,
+		)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(eventsOut).To(HaveLen(2))
+
+		var allocationRequest, consumptionRequest events.BMaaSEventBuildRequest
+		Expect(eventsOut[0].DataAs(&allocationRequest)).To(Succeed())
+		Expect(eventsOut[1].DataAs(&consumptionRequest)).To(Succeed())
+		Expect(allocationRequest.DurationSeconds).To(BeNil())
+		Expect(consumptionRequest.DurationSeconds).To(BeNil())
+	})
+
+	It("reports full time spent in each previous state when closing meters", func() {
+		eventsOut, err := events.DecomposeBMIEvents(
+			map[string]any{"bm_instance_type": "bm.large"},
+			"evt-suspend",
+			transitionTime,
+			events.BMaaSMeterIntervals{AllocationSince: &allocationSince, ConsumptionSince: &consumptionSince},
+			build,
+			events.EventSuspended,
+			events.EventSuspended,
+		)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(eventsOut).To(HaveLen(2))
+
+		var allocationRequest, consumptionRequest events.BMaaSEventBuildRequest
+		Expect(eventsOut[0].DataAs(&allocationRequest)).To(Succeed())
+		Expect(eventsOut[1].DataAs(&consumptionRequest)).To(Succeed())
+		Expect(allocationRequest.DurationSeconds).NotTo(BeNil())
 		Expect(*allocationRequest.DurationSeconds).To(Equal(3600.0))
+		Expect(consumptionRequest.DurationSeconds).NotTo(BeNil())
 		Expect(*consumptionRequest.DurationSeconds).To(Equal(1800.0))
 	})
 

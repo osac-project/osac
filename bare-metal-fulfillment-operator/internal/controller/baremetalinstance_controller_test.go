@@ -40,11 +40,12 @@ import (
 
 // mockInventoryClient implements inventory.Client for testing
 type mockInventoryClient struct {
-	findFreeHostFunc  func(ctx context.Context, matchExpressions map[string]string) (*inventory.Host, error)
-	assignHostFunc    func(ctx context.Context, inventoryHostID string, bareMetalInstanceID string, labels map[string]string) (*inventory.Host, error)
-	unassignHostFunc  func(ctx context.Context, inventoryHostID string, labels []string) error
-	getHostNICsFunc   func(ctx context.Context, inventoryHostID string) ([]inventory.HostNIC, error)
-	getHostNICsCalled int
+	findFreeHostFunc           func(ctx context.Context, matchExpressions map[string]string) (*inventory.Host, error)
+	assignHostFunc             func(ctx context.Context, inventoryHostID string, bareMetalInstanceID string, labels map[string]string) (*inventory.Host, error)
+	unassignHostFunc           func(ctx context.Context, inventoryHostID string, labels []string) error
+	getHostNICsFunc            func(ctx context.Context, inventoryHostID string) ([]inventory.HostNIC, error)
+	getHostNICsCalled          int
+	getHostLogicalPortMACsFunc func(ctx context.Context, inventoryHostID string) (map[string]string, error)
 }
 
 func (m *mockInventoryClient) FindFreeHost(ctx context.Context, matchExpressions map[string]string) (*inventory.Host, error) {
@@ -76,13 +77,19 @@ func (m *mockInventoryClient) GetHostNICs(ctx context.Context, inventoryHostID s
 	return nil, nil
 }
 
+func (m *mockInventoryClient) GetHostLogicalPortMACs(ctx context.Context, inventoryHostID string) (map[string]string, error) {
+	if m.getHostLogicalPortMACsFunc != nil {
+		return m.getHostLogicalPortMACsFunc(ctx, inventoryHostID)
+	}
+	return map[string]string{}, nil
+}
+
 // mockManagementClient implements management.Client for testing
 type mockManagementClient struct {
-	getPowerStateFunc        func(ctx context.Context, hostID string) (*management.PowerStatus, error)
-	setPowerStateFunc        func(ctx context.Context, hostID string, target management.PowerState) error
-	triggerRestartFunc       func(ctx context.Context, hostID string) error
-	isRestartCompleteFunc    func(ctx context.Context, hostID string) (bool, error)
-	getHostInterfaceMACsFunc func(ctx context.Context, hostID string) (map[string]string, error)
+	getPowerStateFunc     func(ctx context.Context, hostID string) (*management.PowerStatus, error)
+	setPowerStateFunc     func(ctx context.Context, hostID string, target management.PowerState) error
+	triggerRestartFunc    func(ctx context.Context, hostID string) error
+	isRestartCompleteFunc func(ctx context.Context, hostID string) (bool, error)
 }
 
 func (m *mockManagementClient) GetPowerState(ctx context.Context, hostID string) (*management.PowerStatus, error) {
@@ -111,13 +118,6 @@ func (m *mockManagementClient) IsRestartComplete(ctx context.Context, hostID str
 		return m.isRestartCompleteFunc(ctx, hostID)
 	}
 	return true, nil
-}
-
-func (m *mockManagementClient) GetHostInterfaceMACs(ctx context.Context, hostID string) (map[string]string, error) {
-	if m.getHostInterfaceMACsFunc != nil {
-		return m.getHostInterfaceMACsFunc(ctx, hostID)
-	}
-	return map[string]string{}, nil
 }
 
 // mockProvisioningProvider implements provisioning.ProvisioningProvider for testing
@@ -1631,10 +1631,54 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					Expect(err).NotTo(HaveOccurred())
 					Expect(result.RequeueAfter).To(Equal(reconciler.ManagementRecheckIntervalDuration))
 
+					// Benign backpressure (host busy, nothing triggered yet): the condition
+					// reports PowerSyncRequired — a benign in-progress reason that is NOT a
+					// failure and, unlike Progressing, does not mark a restart as already in
+					// flight (so the next reconcile re-triggers rather than polling).
 					condition := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionPowerSynced)
 					Expect(condition).NotTo(BeNil())
 					Expect(condition.Status).To(Equal(metav1.ConditionFalse))
-					Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonPowerSyncFailed))
+					Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonPowerSyncRequired))
+				})
+
+				It("should re-trigger (not poll) on the reconcile after transitioning backpressure", func() {
+					// Regression guard for the benign-backpressure state machine: after a
+					// transitioning error stamps PowerSyncRequired, the *next* reconcile must
+					// re-enter the trigger path (guard keys on Progressing, not
+					// PowerSyncRequired) rather than adopting a possibly-unrelated transition
+					// via IsRestartComplete. A mistaken switch back to Progressing here would
+					// route reconcile #2 into the poll branch and silently skip the restart.
+					triggerCalls := 0
+					mockMgmtClient.triggerRestartFunc = func(ctx context.Context, hostID string) error {
+						triggerCalls++
+						if triggerCalls == 1 {
+							return management.ErrTransitioning // host busy, nothing triggered
+						}
+						return nil // host idle now, restart actually initiated
+					}
+					pollCalled := false
+					mockMgmtClient.isRestartCompleteFunc = func(ctx context.Context, hostID string) (bool, error) {
+						pollCalled = true
+						return true, nil
+					}
+
+					// Reconcile #1: transitioning backpressure.
+					_, err := reconciler.reconcileRestartTrigger(ctx, bareMetalInstance)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionPowerSynced).Reason).
+						To(Equal(v1alpha1.HostConditionReasonPowerSyncRequired))
+
+					// Reconcile #2: must re-trigger (not poll for completion).
+					result, err := reconciler.reconcileRestartTrigger(ctx, bareMetalInstance)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(result.RequeueAfter).To(Equal(reconciler.ManagementRecheckIntervalDuration))
+					Expect(triggerCalls).To(Equal(2), "reconcile #2 should re-trigger the restart")
+					Expect(pollCalled).To(BeFalse(), "reconcile #2 must not poll IsRestartComplete")
+
+					// The restart is now genuinely in flight → Progressing.
+					condition := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionPowerSynced)
+					Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+					Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonProgressing))
 				})
 			})
 

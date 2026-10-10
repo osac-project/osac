@@ -23,14 +23,12 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 type VirtualNetworksServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -54,12 +52,6 @@ func NewVirtualNetworksServer() *VirtualNetworksServerBuilder {
 // SetLogger sets the logger to use. This is mandatory.
 func (b *VirtualNetworksServerBuilder) SetLogger(value *slog.Logger) *VirtualNetworksServerBuilder {
 	b.logger = value
-	return b
-}
-
-// SetNotifier sets the notifier to use. This is optional.
-func (b *VirtualNetworksServerBuilder) SetNotifier(value events.Notifier) *VirtualNetworksServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -112,7 +104,6 @@ func (b *VirtualNetworksServerBuilder) Build() (result *VirtualNetworksServer, e
 	// Create the private server to delegate to:
 	delegate, err := NewPrivateVirtualNetworksServer().
 		SetLogger(b.logger).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
@@ -255,70 +246,6 @@ func (s *VirtualNetworksServer) Create(ctx context.Context,
 	// Create the public response:
 	response = &publicv1.VirtualNetworksCreateResponse{}
 	response.SetObject(createdPublicVirtualNetwork)
-	return
-}
-
-func (s *VirtualNetworksServer) Update(ctx context.Context,
-	request *publicv1.VirtualNetworksUpdateRequest) (response *publicv1.VirtualNetworksUpdateResponse, err error) {
-	// Validate the request:
-	publicVirtualNetwork := request.GetObject()
-	if publicVirtualNetwork == nil {
-		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
-		return
-	}
-	id := publicVirtualNetwork.GetId()
-	if id == "" {
-		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
-		return
-	}
-
-	// Get the existing object from the private server:
-	getRequest := &privatev1.VirtualNetworksGetRequest{}
-	getRequest.SetId(id)
-	getResponse, err := s.delegate.Get(ctx, getRequest)
-	if err != nil {
-		return nil, err
-	}
-	existingPrivateVirtualNetwork := getResponse.GetObject()
-
-	// Map the public changes to the existing private object (preserving private data):
-	err = s.inMapper.Copy(ctx, publicVirtualNetwork, existingPrivateVirtualNetwork)
-	if err != nil {
-		s.logger.ErrorContext(
-			ctx,
-			"Failed to map public virtual network to private",
-			slog.Any("error", err),
-		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process virtual network")
-		return
-	}
-
-	// Delegate to the private server with the merged object:
-	privateRequest := &privatev1.VirtualNetworksUpdateRequest{}
-	privateRequest.SetObject(existingPrivateVirtualNetwork)
-	privateRequest.SetLock(request.GetLock())
-	privateResponse, err := s.delegate.Update(ctx, privateRequest)
-	if err != nil {
-		return nil, err
-	}
-
-	// Map the private response back to public format:
-	updatedPrivateVirtualNetwork := privateResponse.GetObject()
-	updatedPublicVirtualNetwork := &publicv1.VirtualNetwork{}
-	err = s.outMapper.Copy(ctx, updatedPrivateVirtualNetwork, updatedPublicVirtualNetwork)
-	if err != nil {
-		s.logger.ErrorContext(
-			ctx,
-			"Failed to map private virtual network to public",
-			slog.Any("error", err),
-		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process virtual network")
-		return
-	}
-
-	// Create the public response:
-	response = &publicv1.VirtualNetworksUpdateResponse{}
-	response.SetObject(updatedPublicVirtualNetwork)
 	return
 }
 

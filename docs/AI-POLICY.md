@@ -26,7 +26,10 @@ This (evolving) document establishes the policy for how all contributors, whethe
 ### How we keep OSAC accessible
 
 - **No AI-specific dependencies in CI/CD.** The build, test, and lint pipelines use standard open-source tooling. No step requires an AI tool to complete.
-- **CLAUDE.md is documentation, not a gate.** The CLAUDE.md files in our repos serve as developer documentation that happens to also configure AI agents. They document architecture, conventions, and commands that benefit all contributors.
+- **AGENTS.md is the canonical instruction surface.** Root and component
+  `AGENTS.md` files route coding agents to maintained project documentation.
+  Tool-specific entry points should point to that guidance. Project context in
+  `docs/agent-context/` is tracked and available without installing AI tooling.
 - **Enhancement proposals are human-readable.** Design documents in `enhancement-proposals/` are written for human review and discussion, regardless of how the initial draft was produced.
 
 
@@ -67,7 +70,7 @@ The `Generated-By:` / `Assisted-By:` trailers are informational. They:
 Every PR must meet the same quality bar:
 
 1. **Passes CI** - all linting, unit tests, integration tests, and end-to-end tests pass. QE-driven feature testing adds an additional layer of intent and side-effect validation.
-2. **Follows conventions** - naming, patterns, and architecture documented in CLAUDE.md and codebase conventions
+2. **Follows conventions** - naming, patterns, and architecture documented in AGENTS.md and its referenced project documentation
 3. **Has adequate test coverage** - new functionality includes tests; bug fixes include regression tests
 4. **Is reviewable** - reasonable PR size, clear commit messages, focused scope
 

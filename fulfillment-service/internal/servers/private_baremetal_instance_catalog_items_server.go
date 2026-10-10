@@ -16,7 +16,6 @@ package servers
 import (
 	"context"
 	"errors"
-	"google.golang.org/protobuf/proto"
 	"log/slog"
 	"maps"
 
@@ -24,18 +23,17 @@ import (
 
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateBareMetalInstanceCatalogItemsServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -51,6 +49,8 @@ type PrivateBareMetalInstanceCatalogItemsServer struct {
 	bareMetalInstanceTypesDao *dao.GenericDAO[*privatev1.BareMetalInstanceType]
 	diskImagesDao             *dao.GenericDAO[*privatev1.DiskImage]
 	subnetsDao                *dao.GenericDAO[*privatev1.Subnet]
+	virtualNetworksDao        *dao.GenericDAO[*privatev1.VirtualNetwork]
+	networkClassesDao         *dao.GenericDAO[*privatev1.NetworkClass]
 	securityGroupsDao         *dao.GenericDAO[*privatev1.SecurityGroup]
 }
 
@@ -60,11 +60,6 @@ func NewPrivateBareMetalInstanceCatalogItemsServer() *PrivateBareMetalInstanceCa
 
 func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) SetLogger(value *slog.Logger) *PrivateBareMetalInstanceCatalogItemsServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) SetNotifier(value events.Notifier) *PrivateBareMetalInstanceCatalogItemsServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -130,8 +125,23 @@ func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) Build() (result *Pri
 	if err != nil {
 		return
 	}
-
 	subnetsDao, err := dao.NewGenericDAO[*privatev1.Subnet]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+	virtualNetworksDao, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+	networkClassesDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
@@ -152,7 +162,6 @@ func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) Build() (result *Pri
 	generic, err := NewGenericServer[*privatev1.BareMetalInstanceCatalogItem]().
 		SetLogger(b.logger).
 		SetService(privatev1.BareMetalInstanceCatalogItems_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
@@ -169,6 +178,8 @@ func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) Build() (result *Pri
 		bareMetalInstanceTypesDao: bareMetalInstanceTypesDao,
 		diskImagesDao:             diskImagesDao,
 		subnetsDao:                subnetsDao,
+		virtualNetworksDao:        virtualNetworksDao,
+		networkClassesDao:         networkClassesDao,
 		securityGroupsDao:         securityGroupsDao,
 	}
 	return
@@ -236,10 +247,13 @@ func (s *PrivateBareMetalInstanceCatalogItemsServer) prepareCatalogItemCandidate
 			return nil, nil
 		}
 	}
-	if err := s.validateAndCanonicalizeTemplate(ctx, current, candidate); err != nil {
+	template, err := s.validateAndCanonicalizeTemplate(ctx, current, candidate)
+	if err != nil {
 		return nil, err
 	}
-	return validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(ctx, candidate, s.bareMetalInstanceTypesDao, s.diskImagesDao, s.subnetsDao, s.securityGroupsDao)
+	return validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(ctx, s.generic.logger, candidate, template,
+		s.bareMetalInstanceTypesDao, s.diskImagesDao, s.subnetsDao,
+		s.virtualNetworksDao, s.networkClassesDao, s.securityGroupsDao)
 }
 
 // validateAndCanonicalizeTemplate finds the Template named by this Catalog Item. A name lookup
@@ -248,33 +262,33 @@ func (s *PrivateBareMetalInstanceCatalogItemsServer) prepareCatalogItemCandidate
 // Template, and forbids changing the Template on Update.
 func (s *PrivateBareMetalInstanceCatalogItemsServer) validateAndCanonicalizeTemplate(
 	ctx context.Context, current *privatev1.BareMetalInstanceCatalogItem, candidate *privatev1.BareMetalInstanceCatalogItem,
-) error {
+) (*privatev1.BareMetalInstanceTemplate, error) {
 	ref := candidate.GetTemplate()
 	if ref == nil || (ref.GetId() == "" && ref.GetName() == "") {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'template' must specify id or name")
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'template' must specify id or name")
 	}
 	resolved, err := resolveLockedFullResourceReference(ctx, s.templatesDao, catalogItemScope(candidate), ref,
 		"bare metal instance template", " in template", grpccodes.InvalidArgument)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := validateResourceNotDeleted("bare metal instance template", refKey(ref), " in template", resolved.GetMetadata()); err != nil {
-		return err
+		return nil, err
 	}
 	if current != nil {
 		currentRef := current.GetTemplate()
 		if currentRef == nil || currentRef.GetId() == "" {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument, "existing catalog item has no valid template reference")
+			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "existing catalog item has no valid template reference")
 		}
 		if currentRef.GetId() != resolved.GetId() {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument, "cannot change template from '%s' to '%s': template is immutable", currentRef.GetName(), resolved.GetMetadata().GetName())
+			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "cannot change template from '%s' to '%s': template is immutable", currentRef.GetName(), resolved.GetMetadata().GetName())
 		}
 	}
 	if err := validateCatalogItemTemplateParameterPolicies(utils.BareMetalInstanceTemplateAdapter{BareMetalInstanceTemplate: resolved}, candidate.GetTemplateParameters()); err != nil {
-		return err
+		return nil, err
 	}
 	candidate.SetTemplate(canonicalBareMetalInstanceTemplateReference(resolved))
-	return nil
+	return resolved, nil
 }
 
 func (s *PrivateBareMetalInstanceCatalogItemsServer) Delete(ctx context.Context,

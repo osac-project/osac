@@ -273,6 +273,46 @@ var _ = Describe("AAPProvider", func() {
 		})
 	})
 
+	Describe("TriggerProvisionWithExtraVars", func() {
+		BeforeEach(func() {
+			provider = provisioning.NewAAPProvider(aapClient, "provision-job", "deprovision-job")
+		})
+
+		It("merges inherited outputs into the AAP request without replacing resource vars", func() {
+			var launchedExtraVars map[string]any
+			aapClient.launchJobTemplateFunc = func(_ context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				launchedExtraVars = req.ExtraVars
+				return &aap.LaunchJobTemplateResponse{JobID: 123}, nil
+			}
+
+			resource := &v1alpha1.ComputeInstance{ObjectMeta: metav1.ObjectMeta{Name: "vm", Namespace: "tenant"}}
+			inherited := map[string]any{"l2_vni": 14, "l3_vni": 11}
+			result, err := provider.TriggerProvisionWithExtraVars(ctx, resource, inherited)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.JobID).To(Equal("123"))
+			Expect(launchedExtraVars).To(HaveKeyWithValue("l2_vni", 14))
+			Expect(launchedExtraVars).To(HaveKeyWithValue("l3_vni", 11))
+			Expect(launchedExtraVars).To(HaveKey("osac_job_vars"))
+			Expect(inherited).To(Equal(map[string]any{"l2_vni": 14, "l3_vni": 11}))
+		})
+
+		It("prefers inherited outputs when a key conflicts with generated vars", func() {
+			var launchedExtraVars map[string]any
+			aapClient.launchJobTemplateFunc = func(_ context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				launchedExtraVars = req.ExtraVars
+				return &aap.LaunchJobTemplateResponse{JobID: 123}, nil
+			}
+
+			resource := &v1alpha1.ComputeInstance{ObjectMeta: metav1.ObjectMeta{Name: "vm", Namespace: "tenant"}}
+			inherited := map[string]any{"osac_job_vars": map[string]any{"source": "fabric"}}
+			_, err := provider.TriggerProvisionWithExtraVars(ctx, resource, inherited)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(launchedExtraVars).To(HaveKeyWithValue("osac_job_vars", inherited["osac_job_vars"]))
+		})
+	})
+
 	Describe("GetProvisionStatus", func() {
 		BeforeEach(func() {
 			provider = provisioning.NewAAPProvider(aapClient, "provision-job", "deprovision-job")
@@ -301,6 +341,20 @@ var _ = Describe("AAPProvider", func() {
 				Expect(status.JobID).To(Equal("789"))
 				Expect(status.State).To(Equal(v1alpha1.JobStateSucceeded))
 				Expect(status.Message).To(Equal("successful"))
+			})
+
+			It("does not treat launch extra vars as job output", func() {
+				aapClient.getJobFunc = func(_ context.Context, jobID string) (*aap.Job, error) {
+					return &aap.Job{
+						ID:        789,
+						Status:    "successful",
+						ExtraVars: "{",
+					}, nil
+				}
+
+				status, err := provider.GetProvisionStatus(ctx, &v1alpha1.ComputeInstance{}, "789")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(status.State).To(Equal(v1alpha1.JobStateSucceeded))
 			})
 		})
 
@@ -499,6 +553,64 @@ var _ = Describe("AAPProvider", func() {
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("failed to get job"))
 			})
+		})
+	})
+
+	Describe("GetProvisionStatusWithExtraVars", func() {
+		BeforeEach(func() {
+			provider = provisioning.NewAAPProvider(aapClient, "provision-job", "deprovision-job")
+		})
+
+		It("returns the successful job artifacts as normalized extra vars", func() {
+			aapClient.getJobFunc = func(_ context.Context, jobID string) (*aap.Job, error) {
+				Expect(jobID).To(Equal("789"))
+				return &aap.Job{ID: 789, Status: "successful", Artifacts: []byte(`{"l2_vni":14,"l3_vni":11}`)}, nil
+			}
+
+			status, err := provider.GetProvisionStatusWithExtraVars(ctx, &v1alpha1.Subnet{}, "789")
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(status.State).To(Equal(v1alpha1.JobStateSucceeded))
+			Expect(status.ExtraVars).To(HaveKeyWithValue("l2_vni", float64(14)))
+			Expect(status.ExtraVars).To(HaveKeyWithValue("l3_vni", float64(11)))
+
+			vnis, err := provisioning.ParseFabricVNIs(status.ExtraVars)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(*vnis.L2VNI).To(Equal(int32(14)))
+			Expect(*vnis.L3VNI).To(Equal(int32(11)))
+		})
+
+		It("returns no output vars when the job has no artifacts", func() {
+			aapClient.getJobFunc = func(_ context.Context, _ string) (*aap.Job, error) {
+				return &aap.Job{Status: "successful"}, nil
+			}
+
+			status, err := provider.GetProvisionStatusWithExtraVars(ctx, &v1alpha1.Subnet{}, "789")
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(status.ExtraVars).To(BeNil())
+		})
+
+		It("returns an error when the AAP client cannot fetch the job", func() {
+			aapClient.getJobFunc = func(_ context.Context, _ string) (*aap.Job, error) {
+				return nil, errors.New("AAP connection error")
+			}
+
+			_, err := provider.GetProvisionStatusWithExtraVars(ctx, &v1alpha1.Subnet{}, "789")
+
+			Expect(err).To(MatchError(ContainSubstring("failed to get job")))
+		})
+
+		It("returns a job-specific error for malformed artifacts", func() {
+			aapClient.getJobFunc = func(_ context.Context, _ string) (*aap.Job, error) {
+				return &aap.Job{Status: "successful", Artifacts: []byte(`{"l2_vni":`)}, nil
+			}
+
+			status, err := provider.GetProvisionStatusWithExtraVars(ctx, &v1alpha1.Subnet{}, "789")
+
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("job 789"))
+			Expect(status.State).To(Equal(v1alpha1.JobStateSucceeded))
 		})
 	})
 

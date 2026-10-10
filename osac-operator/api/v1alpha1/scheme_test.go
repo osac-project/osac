@@ -61,6 +61,7 @@ var _ = Describe("Scheme Registration", func() {
 			{"ExternalIP", "ExternalIPList", &v1alpha1.ExternalIP{}, &v1alpha1.ExternalIPList{}},
 			{"ExternalIPAttachment", "ExternalIPAttachmentList", &v1alpha1.ExternalIPAttachment{}, &v1alpha1.ExternalIPAttachmentList{}},
 			{"NATGateway", "NATGatewayList", &v1alpha1.NATGateway{}, &v1alpha1.NATGatewayList{}},
+			{"FabricDomain", "FabricDomainList", &v1alpha1.FabricDomain{}, &v1alpha1.FabricDomainList{}},
 		}
 
 		for _, e := range entries {
@@ -81,8 +82,8 @@ var _ = Describe("Scheme Registration", func() {
 			})
 		}
 
-		It("should have exactly 20 registered types plus internal types", func() {
-			// Verify all 20 expected GVKs are known
+		It("should have all expected registered types", func() {
+			// Verify all expected GVKs are known
 			expectedKinds := []string{
 				"ClusterOrder", "ClusterOrderList",
 				"ComputeInstance", "ComputeInstanceList",
@@ -94,6 +95,7 @@ var _ = Describe("Scheme Registration", func() {
 				"ExternalIP", "ExternalIPList",
 				"ExternalIPAttachment", "ExternalIPAttachmentList",
 				"NATGateway", "NATGatewayList",
+				"FabricDomain", "FabricDomainList",
 			}
 			for _, kind := range expectedKinds {
 				gvk := v1alpha1.GroupVersion.WithKind(kind)

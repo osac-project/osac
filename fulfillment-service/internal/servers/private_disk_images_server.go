@@ -27,13 +27,11 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateDiskImagesServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -55,11 +53,6 @@ func NewPrivateDiskImagesServer() *PrivateDiskImagesServerBuilder {
 
 func (b *PrivateDiskImagesServerBuilder) SetLogger(value *slog.Logger) *PrivateDiskImagesServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateDiskImagesServerBuilder) SetNotifier(value events.Notifier) *PrivateDiskImagesServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -98,7 +91,6 @@ func (b *PrivateDiskImagesServerBuilder) Build() (result *PrivateDiskImagesServe
 	generic, err := NewGenericServer[*privatev1.DiskImage]().
 		SetLogger(b.logger).
 		SetService(privatev1.DiskImages_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).

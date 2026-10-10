@@ -2,6 +2,8 @@
 
 # --- Service Enablement ---
 global:
+  fulfillmentTrust:
+    enabled: false
   services:
     caas:
       enabled: true
@@ -46,7 +48,10 @@ service:
   externalHostname: fulfillment-api.osac.svc.cluster.local
   internalHostname: fulfillment-internal-api.osac.svc.cluster.local
   images:
-    service: ghcr.io/osac-project/fulfillment-service:latest
+    service:
+      repository: ghcr.io/osac-project/fulfillment-service
+      tag: latest
+      pullPolicy: IfNotPresent
   certs:
     issuerRef:
       kind: ClusterIssuer
@@ -148,24 +153,8 @@ validation:
 dbMigrate:
   enabled: false
 
-# --- Instance Groups (disabled) ---
-instanceGroups:
-  enabled: false
-
-# --- Cluster/Network/Storage Fulfillment (disabled) ---
-clusterFulfillment:
-  enabled: false
-networkFulfillment:
-  enabled: false
-storageFulfillment:
-  enabled: false
-
 # --- UI (disabled -- uses OpenShift Route, run via pnpm dev instead) ---
 ui:
-  enabled: false
-
-# --- MetalLB (disabled) ---
-metallb:
   enabled: false
 
 # --- CAPI Provider (disabled) ---

@@ -44,15 +44,6 @@ const clusterCatalogItem: ClusterCatalogItem = {
     shared: false,
   },
   published: true,
-  fieldDefinitions: [
-    {
-      $typeName: 'osac.public.v1.FieldDefinition',
-      path: 'version',
-      displayName: 'Version',
-      editable: true,
-      validationSchema: '',
-    },
-  ],
   templateParameters: {},
 };
 
@@ -155,7 +146,7 @@ describe('ClusterConfigurationStep', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Node set 1')).toBeInTheDocument();
-      expect(screen.getByText('Select host type')).toBeInTheDocument();
+      expect(screen.getByText('Select bare-metal instance type')).toBeInTheDocument();
       expect(screen.getByRole('spinbutton', { name: /^Nodes/ })).toBeInTheDocument();
     });
     expect(screen.queryByRole('button', { name: 'Remove node set' })).not.toBeInTheDocument();
@@ -192,7 +183,7 @@ describe('ClusterConfigurationStep', () => {
               nodeSetRows: [
                 {
                   ...row,
-                  hostType: 'acme_1tb',
+                  bareMetalInstanceType: 'acme_1tb',
                   size: '3',
                 },
               ],
@@ -233,8 +224,18 @@ describe('ClusterConfigurationStep', () => {
               ...emptyValues.spec,
               versionName: '4-17-0',
               nodeSetRows: [
-                { ...createEmptyNodeSetRow(), name: 'workers', hostType: 'acme_1tb', size: '3' },
-                { ...createEmptyNodeSetRow(), name: 'workers', hostType: 'acme_1tb', size: '2' },
+                {
+                  ...createEmptyNodeSetRow(),
+                  name: 'workers',
+                  bareMetalInstanceType: 'acme_1tb',
+                  size: '3',
+                },
+                {
+                  ...createEmptyNodeSetRow(),
+                  name: 'workers',
+                  bareMetalInstanceType: 'acme_1tb',
+                  size: '2',
+                },
               ],
             },
           }}

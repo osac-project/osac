@@ -3,12 +3,20 @@
 import unittest
 from unittest.mock import patch
 
-from github import GitHubFetchError, _fetch_repo_prs, _parse_pr_nodes, fetch_open_prs
+from github import (
+    GitHubFetchError,
+    _fetch_connection_pages,
+    _fetch_repo_prs,
+    _new_connection_state,
+    _parse_pr_nodes,
+    fetch_open_prs,
+)
 
 
 def _make_graphql_pr_node(**overrides) -> dict:
     """Build a minimal GraphQL PR node dict with sensible defaults."""
     defaults = {
+        "number": 1,
         "title": "Test PR",
         "body": "",
         "url": "https://github.com/osac-project/osac/pull/1",
@@ -16,9 +24,9 @@ def _make_graphql_pr_node(**overrides) -> dict:
         "createdAt": "2026-04-20T10:00:00Z",
         "isDraft": False,
         "mergeable": "MERGEABLE",
-        "labels": {"nodes": []},
+        "labels": {"pageInfo": {"hasNextPage": False}, "nodes": []},
         "reviews": {"pageInfo": {"hasPreviousPage": False}, "nodes": []},
-        "reviewRequests": {"nodes": []},
+        "reviewRequests": {"pageInfo": {"hasNextPage": False}, "nodes": []},
         "commits": {
             "nodes": [
                 {
@@ -52,7 +60,7 @@ class TestFetchFailures(unittest.TestCase):
             _fetch_repo_prs("osac-project/osac")
 
     @patch("github._run_graphql_query")
-    def test_open_pr_pagination_fails(self, mock_query):
+    def test_open_pr_pagination_without_cursor_fails(self, mock_query):
         mock_query.return_value = {
             "data": {
                 "repo_0": {
@@ -68,6 +76,44 @@ class TestFetchFailures(unittest.TestCase):
 
         with self.assertRaises(GitHubFetchError):
             _fetch_repo_prs("osac-project/osac")
+
+    @patch("github.time.sleep")
+    @patch("github._run_graphql_query")
+    def test_open_pr_pagination_is_collected(self, mock_query, mock_sleep):
+        mock_query.side_effect = [
+            {
+                "data": {
+                    "repo_0": {
+                        "nameWithOwner": "osac-project/osac",
+                        "pullRequests": {
+                            "pageInfo": {
+                                "hasNextPage": True,
+                                "endCursor": "cursor-1",
+                            },
+                            "nodes": [_make_graphql_pr_node(number=1)],
+                        },
+                    }
+                }
+            },
+            {
+                "data": {
+                    "repo_0": {
+                        "nameWithOwner": "osac-project/osac",
+                        "pullRequests": {
+                            "pageInfo": {"hasNextPage": False},
+                            "nodes": [_make_graphql_pr_node(number=2)],
+                        },
+                    }
+                }
+            },
+        ]
+
+        prs = _fetch_repo_prs("osac-project/osac")
+
+        self.assertEqual(len(prs), 2)
+        self.assertEqual(mock_query.call_count, 2)
+        self.assertIn('after: "cursor-1"', mock_query.call_args_list[1].args[0])
+        mock_sleep.assert_called_once()
 
     @patch("github._run_graphql_query")
     def test_check_context_pagination_fails(self, mock_query):
@@ -132,6 +178,81 @@ class TestFetchFailures(unittest.TestCase):
 
         with self.assertRaises(GitHubFetchError):
             _fetch_repo_prs("osac-project/osac")
+
+    @patch("github._run_graphql_query")
+    def test_nested_connection_pagination_is_collected(self, mock_query):
+        for connection in ("labels", "reviews", "reviewRequests", "contexts"):
+            with self.subTest(connection=connection):
+                mock_query.reset_mock()
+                if connection == "contexts":
+                    pull_request = {
+                        "commits": {
+                            "nodes": [
+                                {
+                                    "commit": {
+                                        "statusCheckRollup": {
+                                            "contexts": {
+                                                "pageInfo": {
+                                                    "hasPreviousPage": False,
+                                                    "hasNextPage": False,
+                                                },
+                                                "nodes": [{"name": "older"}],
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                else:
+                    pull_request = {
+                        connection: {
+                            "pageInfo": {
+                                "hasPreviousPage": False,
+                                "hasNextPage": False,
+                            },
+                            "nodes": [{"name": "older"}],
+                        }
+                    }
+                mock_query.return_value = {
+                    "data": {
+                        "repository": {
+                            f"page_1_{connection}": pull_request
+                        }
+                    }
+                }
+                initial = {
+                    "pageInfo": (
+                        {"hasPreviousPage": True, "startCursor": "cursor"}
+                        if connection == "reviews"
+                        else {"hasNextPage": True, "endCursor": "cursor"}
+                    ),
+                    "nodes": [{"name": "current"}],
+                }
+                state = _new_connection_state(
+                    "osac-project/osac", 1, connection, initial
+                )
+                states = {(1, connection): state}
+                _fetch_connection_pages("osac-project/osac", states)
+
+                self.assertEqual(len(state["result"]["nodes"]), 2)
+
+    def test_nested_connection_without_cursor_fails(self):
+        for connection in ("labels", "reviews", "reviewRequests", "contexts"):
+            with self.subTest(connection=connection):
+                initial = {
+                    "pageInfo": (
+                        {"hasPreviousPage": True}
+                        if connection == "reviews"
+                        else {"hasNextPage": True}
+                    ),
+                    "nodes": [],
+                }
+                with self.assertRaises(GitHubFetchError):
+                    state = _new_connection_state(
+                        "osac-project/osac", 1, connection, initial
+                    )
+                    _fetch_connection_pages("osac-project/osac", {(1, connection): state})
 
     @patch("github._fetch_repo_prs")
     def test_one_repository_failure_stops_collection(self, mock_fetch_repo):

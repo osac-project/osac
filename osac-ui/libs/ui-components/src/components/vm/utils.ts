@@ -11,12 +11,12 @@ export const instanceTypeName = (instanceType: InstanceType): string =>
   resourceDisplayName(instanceType.metadata, instanceType.id);
 
 export const formatInstanceTypeSizing = (instanceType: InstanceType): string => {
-  const cores = instanceType.spec?.cores;
+  const vCpus = instanceType.spec?.vcpus;
   const memoryGib = instanceType.spec?.memoryGib;
-  if (cores == null || memoryGib == null) {
+  if (vCpus == null || memoryGib == null) {
     return '—';
   }
-  return `${cores} vCPU, ${memoryGib} GiB`;
+  return `${vCpus} vCPUs, ${memoryGib} GiB`;
 };
 
 export const formatInstanceTypeOptionLabel = (

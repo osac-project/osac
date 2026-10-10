@@ -23,9 +23,6 @@ const tier: StorageTier = {
   spec: {
     description: 'Fast tier for latency-sensitive workloads',
     protocol: StorageProtocol.NFS,
-    maxReadBandwidthMbs: 100,
-    maxWriteBandwidthMbs: 80,
-    encryptionEnabled: true,
     backends: [
       {
         backendId: 'backend-a',
@@ -91,9 +88,6 @@ describe('StorageTierDetailsPage', () => {
       expect(screen.getByText('Fast NVMe')).toBeInTheDocument();
     });
     expect(screen.getByText('NFS')).toBeInTheDocument();
-    expect(screen.getByText('100 MB/s')).toBeInTheDocument();
-    expect(screen.getByText('80 MB/s')).toBeInTheDocument();
-    expect(screen.getByText('Yes')).toBeInTheDocument();
     expect(screen.getByText('90 MB/s')).toBeInTheDocument();
     expect(screen.getByText('70 MB/s')).toBeInTheDocument();
     expect(screen.getByText('No')).toBeInTheDocument();

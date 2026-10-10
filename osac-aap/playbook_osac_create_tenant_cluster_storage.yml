@@ -75,6 +75,27 @@
         # serving cert doesn't match the CA bundled in the admin kubeconfig.
         _remote_kubeconfig_insecure: true
 
+    - name: Use the ClusterOrder admin kubeconfig for storage class operations
+      ansible.builtin.set_fact:
+        _storage_target_kubeconfig: "{{ _remote_kubeconfig }}"
+        _storage_target_kubeconfig_insecure: true
+      when:
+        - osac_job_vars.resource.kind == 'ClusterOrder'
+        - _remote_kubeconfig is defined
+
+    - name: Get configured remote cluster kubeconfig for Tenant storage
+      ansible.builtin.include_role:
+        name: osac.service.common
+        tasks_from: get_remote_cluster_kubeconfig.yaml
+      when: osac_job_vars.resource.kind == 'Tenant'
+
+    - name: Set Tenant storage target kubeconfig when configured
+      ansible.builtin.set_fact:
+        _storage_target_kubeconfig: "{{ remote_cluster_kubeconfig }}"
+      when:
+        - osac_job_vars.resource.kind == 'Tenant'
+        - remote_cluster_kubeconfig is defined
+
     - name: Fail when guest-cluster storage is requested without admin_kubeconfig
       ansible.builtin.fail:
         msg: >-
@@ -115,10 +136,14 @@
     # internal/controller/storage_controller_test.go ("Stage 1: Backend
     # provisioning" and "Stage 2: Cluster storage provisioning" contexts),
     # which drive handleBackendReadiness against a real envtest control plane.
-    # Gated by csi_driver_install_enabled (default false).
-    - name: Install OSAC CSI driver on the hub (once per dispatch, regardless of provider count)
+    # The role may install the CSI Helm release, create an opt-in local-tier
+    # StorageClass, or both. Each operation has an independent flag; the CSI
+    # role remains limited to Tenant (hub) dispatches.
+    - name: Install OSAC CSI driver or create local-tier StorageClasses on the hub
       when:
-        - csi_driver_install_enabled | default(false) | bool
+        - >-
+          (csi_driver_install_enabled | default(false) | bool) or
+          (csi_driver_install_lvms_storage_class_enabled | default(false) | bool)
         - osac_job_vars.resource.kind == 'Tenant'
       ansible.builtin.include_role:
         name: "{{ (csi_driver_install_override | default(csi_driver_install_default)).name }}"
@@ -126,6 +151,10 @@
       vars:
         csi_driver_install_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
 
+    # Keep the provider dispatch even when the CSI role created the LVMS class:
+    # it provisions network classes and publishes the common class-name output.
+    # The LVMS ensure task checks the tenant-managed class name and creates only
+    # missing classes, so it leaves the CSI provisioner intact for an opted-in tier.
     - name: Provision StorageClasses for all configured tiers
       block:
         - name: Create StorageClasses on target cluster
@@ -136,6 +165,8 @@
             storage_provider_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
             storage_provider_backend_connections: "{{ osac_job_vars.storage_backend_connections | default({}) }}"
             storage_provider_block_encryption_passphrase: "{{ osac_job_vars.resource.spec.blockEncryptionPassphrase | default('') }}"
+            storage_provider_target_kubeconfig: "{{ _storage_target_kubeconfig | default(omit) }}"
+            storage_provider_target_kubeconfig_insecure: "{{ _storage_target_kubeconfig_insecure | default(false) }}"
       rescue:
         - name: Warn about StorageClass creation failure
           ansible.builtin.debug:
@@ -151,3 +182,5 @@
             storage_provider_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
             storage_provider_backend_connections: "{{ osac_job_vars.storage_backend_connections | default({}) }}"
             storage_provider_block_encryption_passphrase: "{{ osac_job_vars.resource.spec.blockEncryptionPassphrase | default('') }}"
+            storage_provider_target_kubeconfig: "{{ _storage_target_kubeconfig | default(omit) }}"
+            storage_provider_target_kubeconfig_insecure: "{{ _storage_target_kubeconfig_insecure | default(false) }}"

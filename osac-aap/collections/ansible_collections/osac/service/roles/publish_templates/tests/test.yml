@@ -595,3 +595,103 @@
       ansible.builtin.shell: "fuser -k {{ test_mock_port }}/tcp 2>/dev/null || true"
       changed_when: false
       when: test_disabled | default(false) | bool
+
+- name: "Test publish_templates -- reject an untrusted HTTPS certificate"
+  hosts: localhost
+  gather_facts: false
+  vars:
+    test_mock_port: 18082
+  tasks:
+    - name: Exercise certificate validation
+      when: test_cert_validation | default(false) | bool
+      block:
+        - name: Create temporary TLS fixture directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: osac-publish-tls-
+          register: tls_fixture_dir
+
+        - name: Generate an untrusted localhost certificate
+          ansible.builtin.command:
+            argv:
+              - openssl
+              - req
+              - -x509
+              - -newkey
+              - rsa:2048
+              - -nodes
+              - -keyout
+              - "{{ tls_fixture_dir.path }}/server.key"
+              - -out
+              - "{{ tls_fixture_dir.path }}/server.crt"
+              - -subj
+              - /CN=localhost
+              - -addext
+              - subjectAltName=DNS:localhost
+              - -days
+              - "1"
+          changed_when: false
+          no_log: true
+
+        - name: Start HTTPS mock API server
+          ansible.builtin.command:
+            argv:
+              - python3
+              - "{{ playbook_dir }}/mock_api_server.py"
+              - "{{ test_mock_port }}"
+              - empty
+              - "{{ tls_fixture_dir.path }}/server.crt"
+              - "{{ tls_fixture_dir.path }}/server.key"
+          async: 30
+          poll: 0
+          changed_when: false
+
+        - name: Wait for HTTPS mock server
+          ansible.builtin.wait_for:
+            port: "{{ test_mock_port }}"
+            timeout: 5
+
+        - name: Assert untrusted certificate stops template publishing
+          block:
+            - name: Run publish_templates with default certificate validation
+              ansible.builtin.include_role:
+                name: osac.service.publish_templates
+              vars:
+                osac_fulfillment_service_uri: "https://localhost:{{ test_mock_port }}"
+                osac_fulfillment_service_token: mock_fulfillment_service_token
+                osac_cluster_templates: []
+                osac_compute_instance_templates: []
+                osac_bare_metal_instance_templates: []
+                osac_addon_operator_templates: []
+
+            - name: Fail if the untrusted certificate was accepted
+              ansible.builtin.fail:
+                msg: Template publishing accepted an untrusted certificate
+          rescue:
+            - name: Verify failure was certificate validation
+              ansible.builtin.assert:
+                that:
+                  - ansible_failed_task.name == 'Get list of existing cluster templates'
+                  - ansible_failed_result.msg is search('certificate verify failed', ignorecase=True)
+
+        - name: Read HTTPS mock request log with fixture-only bypass
+          ansible.builtin.uri:
+            url: "https://localhost:{{ test_mock_port }}/_calls"
+            validate_certs: false
+            return_content: true
+          register: tls_call_log
+
+        - name: Verify no authenticated request reached the mock server
+          ansible.builtin.assert:
+            that:
+              - tls_call_log.json | length == 0
+      always:
+        - name: Stop HTTPS mock API server
+          ansible.builtin.shell: "fuser -k {{ test_mock_port }}/tcp 2>/dev/null || true"
+          changed_when: false
+
+        - name: Remove temporary TLS fixture
+          ansible.builtin.file:
+            path: "{{ tls_fixture_dir.path }}"
+            state: absent
+          when: tls_fixture_dir is defined and tls_fixture_dir.path is defined

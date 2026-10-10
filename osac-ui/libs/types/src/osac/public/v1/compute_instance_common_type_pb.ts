@@ -160,3 +160,4 @@ export enum ComputeInstanceRunStrategy {
  */
 export const ComputeInstanceRunStrategySchema: GenEnum<ComputeInstanceRunStrategy> = /*@__PURE__*/
   enumDesc(file_osac_public_v1_compute_instance_common_type, 0);
+

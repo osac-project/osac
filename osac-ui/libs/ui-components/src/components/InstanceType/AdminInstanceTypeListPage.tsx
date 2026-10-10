@@ -1,14 +1,15 @@
+import { InstanceTypes } from '@osac/types/private';
+import { useListResource } from '@osac/ui-components/api/use-resource';
 import CreateButton from '@osac/ui-components/components/Primitives/CreateButton.tsx';
 
 import AdminInstanceTypeTable from './AdminInstanceTypeTable';
-import { useAdminInstanceTypes } from '../../api/v1/private/instance-type';
 import { useTranslation } from '../../hooks/useTranslation';
 import ListPage from '../Page/ListPage';
 import ListPageBody from '../Page/ListPageBody';
 
 const AdminInstanceTypeListPage = () => {
   const { t } = useTranslation();
-  const { data: instanceTypes = [], isLoading, error } = useAdminInstanceTypes();
+  const { data, isLoading, error } = useListResource(InstanceTypes);
 
   return (
     <ListPage
@@ -23,7 +24,7 @@ const AdminInstanceTypeListPage = () => {
       }
     >
       <ListPageBody isLoading={isLoading} error={error}>
-        <AdminInstanceTypeTable instanceTypes={instanceTypes} />
+        <AdminInstanceTypeTable instanceTypes={data?.items || []} />
       </ListPageBody>
     </ListPage>
   );

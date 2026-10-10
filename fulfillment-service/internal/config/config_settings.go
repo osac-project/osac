@@ -15,7 +15,6 @@ package config
 
 import (
 	"context"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,6 +31,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/network"
 	"github.com/osac-project/osac/fulfillment-service/internal/oauth"
 	"github.com/osac-project/osac/fulfillment-service/internal/packages"
+	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 	"github.com/osac-project/osac/fulfillment-service/internal/version"
 )
 
@@ -50,7 +50,7 @@ type Settings struct {
 	dir                string
 	general            generalSettings
 	secret             secretSettings
-	caPool             *x509.CertPool
+	caPool             *trust.CertPool
 	secretStoreBackend string
 }
 
@@ -429,7 +429,7 @@ func (c *Settings) TokenSource(ctx context.Context) (result auth.TokenSource, er
 
 	// If an OAuth flow has been configured, then use it to create a non interactive OAuth token source:
 	if c.general.Flow != "" {
-		var caPool *x509.CertPool
+		var caPool *trust.CertPool
 		caPool, err = c.CaPool(ctx)
 		if err != nil {
 			err = fmt.Errorf("failed to get CA pool: %w", err)
@@ -565,6 +565,16 @@ func (c *Settings) Packages() map[string]int {
 	return result
 }
 
+// PackageNames returns the active package names as a flat slice.
+func (c *Settings) PackageNames() []string {
+	pkgs := c.Packages()
+	names := make([]string, 0, len(pkgs))
+	for name := range pkgs {
+		names = append(names, name)
+	}
+	return names
+}
+
 // TokenStore returns an implementation of the auth.TokenStore interface that loads and saves tokens from/to
 // the configuration.
 func (c *Settings) TokenStore() auth.TokenStore {
@@ -575,7 +585,7 @@ func (c *Settings) TokenStore() auth.TokenStore {
 }
 
 // CaPool returns the CA pool from the configuration. If the CA pool is not set, it will be created and cached.
-func (c *Settings) CaPool(ctx context.Context) (result *x509.CertPool, err error) {
+func (c *Settings) CaPool(ctx context.Context) (result *trust.CertPool, err error) {
 	c.lock.RLock()
 	defer c.lock.RUnlock()
 	if c.caPool == nil {
@@ -644,15 +654,18 @@ func (c *Settings) createCaPool(ctx context.Context) error {
 	}
 
 	// Create the CA pool:
-	var err error
-	c.caPool, err = network.NewCertPool().
+	loadedCaPool, err := trust.NewCertPool().
 		SetLogger(c.logger).
 		AddSystemFiles(true).
 		AddKubernetesFiles(true).
 		AddCertificates(caCerts...).
 		AddFiles(caFiles...).
 		Build()
-	return err
+	if err != nil {
+		return err
+	}
+	c.caPool = loadedCaPool
+	return nil
 }
 
 // settingsTokenStore is a token source that loads and saves tokens from/to the secret settings.

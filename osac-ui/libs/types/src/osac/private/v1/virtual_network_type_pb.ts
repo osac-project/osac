@@ -18,6 +18,7 @@
 import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import { file_cleanapi_cleanapi } from "../../../cleanapi/cleanapi_pb";
+import { file_buf_validate_validate } from "../../../buf/validate/validate_pb";
 import { file_google_api_field_behavior } from "../../../google/api/field_behavior_pb";
 import type { Metadata } from "./metadata_type_pb";
 import { file_osac_private_v1_metadata_type } from "./metadata_type_pb";
@@ -29,7 +30,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/virtual_network_type.proto.
  */
 export const file_osac_private_v1_virtual_network_type: GenFile = /*@__PURE__*/
-  fileDesc("Cipvc2FjL3ByaXZhdGUvdjEvdmlydHVhbF9uZXR3b3JrX3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSKzAQoOVmlydHVhbE5ldHdvcmsSCgoCaWQYASABKAkSKwoIbWV0YWRhdGEYAiABKAsyGS5vc2FjLnByaXZhdGUudjEuTWV0YWRhdGESMQoEc3BlYxgDIAEoCzIjLm9zYWMucHJpdmF0ZS52MS5WaXJ0dWFsTmV0d29ya1NwZWMSNQoGc3RhdHVzGAQgASgLMiUub3NhYy5wcml2YXRlLnYxLlZpcnR1YWxOZXR3b3JrU3RhdHVzItUBChJWaXJ0dWFsTmV0d29ya1NwZWMSGwoJaXB2NF9jaWRyGAEgASgJQgPgQQVIAIgBARIbCglpcHY2X2NpZHIYAiABKAlCA+BBBUgBiAEBEhwKBnJlZ2lvbhgDIAEoCUIM4EEC4EEFirUYAggBEksKDW5ldHdvcmtfY2xhc3MYBCABKAsyJi5vc2FjLnByaXZhdGUudjEuTmV0d29ya0NsYXNzUmVmZXJlbmNlQgzgQQHgQQWKtRgCCAFCDAoKX2lwdjRfY2lkckIMCgpfaXB2Nl9jaWRyIoIBChRWaXJ0dWFsTmV0d29ya1N0YXR1cxIzCgVzdGF0ZRgBIAEoDjIkLm9zYWMucHJpdmF0ZS52MS5WaXJ0dWFsTmV0d29ya1N0YXRlEhQKB21lc3NhZ2UYAiABKAlIAIgBARITCgNodWIYAyABKAlCBoq1GAIIAUIKCghfbWVzc2FnZSI4ChxWaXJ0dWFsTmV0d29ya0xvY2FsUmVmZXJlbmNlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkqogEKE1ZpcnR1YWxOZXR3b3JrU3RhdGUSJQohVklSVFVBTF9ORVRXT1JLX1NUQVRFX1VOU1BFQ0lGSUVEEAASIQodVklSVFVBTF9ORVRXT1JLX1NUQVRFX1BFTkRJTkcQARIfChtWSVJUVUFMX05FVFdPUktfU1RBVEVfUkVBRFkQAhIgChxWSVJUVUFMX05FVFdPUktfU1RBVEVfRkFJTEVEEANCFIq1GBASDm9zYWMucHVibGljLnYxYgZwcm90bzM", [file_cleanapi_cleanapi, file_google_api_field_behavior, file_osac_private_v1_metadata_type, file_osac_private_v1_network_class_type]);
+  fileDesc("Cipvc2FjL3ByaXZhdGUvdjEvdmlydHVhbF9uZXR3b3JrX3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSKzAQoOVmlydHVhbE5ldHdvcmsSCgoCaWQYASABKAkSKwoIbWV0YWRhdGEYAiABKAsyGS5vc2FjLnByaXZhdGUudjEuTWV0YWRhdGESMQoEc3BlYxgDIAEoCzIjLm9zYWMucHJpdmF0ZS52MS5WaXJ0dWFsTmV0d29ya1NwZWMSNQoGc3RhdHVzGAQgASgLMiUub3NhYy5wcml2YXRlLnYxLlZpcnR1YWxOZXR3b3JrU3RhdHVzIo0DChJWaXJ0dWFsTmV0d29ya1NwZWMSdgoJaXB2NF9jaWRyGAEgASgJQl7gQQW6SFi6AU4KE2Nhbm9uaWNhbF9pcHY0X2NpZHISHW11c3QgYmUgYSBjYW5vbmljYWwgSVB2NCBDSURSGhh0aGlzLmlzSXBQcmVmaXgoNCwgdHJ1ZSnIAQFyAhABSACIAQESeAoJaXB2Nl9jaWRyGAIgASgJQmDgQQW6SFq6AVcKF2lwdjZfY2lkcl9ub3Rfc3VwcG9ydGVkEjBJUHY2IGFuZCBkdWFsLXN0YWNrIG5ldHdvcmtpbmcgYXJlIG5vdCBzdXBwb3J0ZWQaCnRoaXMgPT0gJydIAYgBARIcCgZyZWdpb24YAyABKAlCDOBBAuBBBYq1GAIIARJLCg1uZXR3b3JrX2NsYXNzGAQgASgLMiYub3NhYy5wcml2YXRlLnYxLk5ldHdvcmtDbGFzc1JlZmVyZW5jZUIM4EEB4EEFirUYAggBQgwKCl9pcHY0X2NpZHJCDAoKX2lwdjZfY2lkciKCAQoUVmlydHVhbE5ldHdvcmtTdGF0dXMSMwoFc3RhdGUYASABKA4yJC5vc2FjLnByaXZhdGUudjEuVmlydHVhbE5ldHdvcmtTdGF0ZRIUCgdtZXNzYWdlGAIgASgJSACIAQESEwoDaHViGAMgASgJQgaKtRgCCAFCCgoIX21lc3NhZ2UiOAocVmlydHVhbE5ldHdvcmtMb2NhbFJlZmVyZW5jZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJKqIBChNWaXJ0dWFsTmV0d29ya1N0YXRlEiUKIVZJUlRVQUxfTkVUV09SS19TVEFURV9VTlNQRUNJRklFRBAAEiEKHVZJUlRVQUxfTkVUV09SS19TVEFURV9QRU5ESU5HEAESHwobVklSVFVBTF9ORVRXT1JLX1NUQVRFX1JFQURZEAISIAocVklSVFVBTF9ORVRXT1JLX1NUQVRFX0ZBSUxFRBADQhSKtRgQEg5vc2FjLnB1YmxpYy52MWIGcHJvdG8z", [file_cleanapi_cleanapi, file_buf_validate_validate, file_google_api_field_behavior, file_osac_private_v1_metadata_type, file_osac_private_v1_network_class_type]);
 
 /**
  * Represents a tenant-isolated virtual network.
@@ -38,12 +39,8 @@ export const file_osac_private_v1_virtual_network_type: GenFile = /*@__PURE__*/
  * by a specific NetworkClass implementation strategy (e.g., "udn-net" for User-Defined Networks, "phys-net" for
  * physical network infrastructure).
  *
- * VirtualNetworks support flexible IP addressing:
- * - IPv4-only: Set ipv4_cidr, leave ipv6_cidr empty
- * - IPv6-only: Set ipv6_cidr, leave ipv4_cidr empty
- * - Dual-stack: Set both ipv4_cidr and ipv6_cidr
- *
- * The selected NetworkClass must support the requested IP addressing mode via its capabilities.
+ * VirtualNetworks currently support canonical IPv4 addressing only. The legacy ipv6_cidr field remains in the
+ * wire contract for compatibility, but non-empty IPv6 and dual-stack requests are rejected.
  *
  * Tenant isolation is enforced via the standard Metadata tenant field. VirtualNetworks are scoped to
  * a single region and cannot span multiple regions.
@@ -97,28 +94,21 @@ export const VirtualNetworkSchema: GenMessage<VirtualNetwork> = /*@__PURE__*/
  */
 export type VirtualNetworkSpec = Message<"osac.private.v1.VirtualNetworkSpec"> & {
   /**
-   * IPv4 CIDR block for this network. Optional for IPv6-only networks. Immutable after creation.
+   * Canonical IPv4 CIDR block for this network. Required and immutable after creation.
    *
-   * Must be valid CIDR notation. Validation enforced at service layer.
+   * Must be canonical IPv4 CIDR notation with no host bits set.
    * The CIDR block should be appropriately sized for the expected number of compute instances.
    *
    * Example: "10.0.0.0/16", "192.168.0.0/24"
    *
-   * Leave empty when creating an IPv6-only network.
    *
    * @generated from field: optional string ipv4_cidr = 1;
    */
   ipv4Cidr?: string | undefined;
 
   /**
-   * IPv6 CIDR block for this network. Optional for IPv4-only networks. Immutable after creation.
+   * Legacy IPv6 CIDR field. IPv6 and dual-stack networking are not supported; non-empty values are rejected.
    *
-   * Must be valid CIDR notation. Validation enforced at service layer.
-   * IPv6 addresses should follow standard allocation practices for tenant networks.
-   *
-   * Example: "2001:db8::/48", "fd00::/64"
-   *
-   * Leave empty when creating an IPv4-only network.
    *
    * @generated from field: optional string ipv6_cidr = 2;
    */
@@ -294,3 +284,4 @@ export enum VirtualNetworkState {
  */
 export const VirtualNetworkStateSchema: GenEnum<VirtualNetworkState> = /*@__PURE__*/
   enumDesc(file_osac_private_v1_virtual_network_type, 0);
+

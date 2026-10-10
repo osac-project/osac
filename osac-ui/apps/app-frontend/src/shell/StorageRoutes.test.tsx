@@ -105,9 +105,6 @@ describe('StorageRoutes', () => {
       spec: {
         description: '',
         protocol: StorageProtocol.NFS,
-        maxReadBandwidthMbs: 100,
-        maxWriteBandwidthMbs: 100,
-        encryptionEnabled: false,
         backends: [
           {
             backendId: 'backend-1',
@@ -134,9 +131,6 @@ describe('StorageRoutes', () => {
       spec: {
         description: '',
         protocol: StorageProtocol.NFS,
-        maxReadBandwidthMbs: 100,
-        maxWriteBandwidthMbs: 100,
-        encryptionEnabled: false,
         backends: [
           {
             backendId: 'backend-1',

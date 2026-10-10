@@ -42,9 +42,9 @@ import (
 //
 // Key concepts for understanding these tests:
 //
-//   - Implementation strategy is resolved from the default NetworkClass via the dispatcher.
-//     pool spec.implementationStrategy (then metallb-l2) is a backward-compat fallback used
-//     when the dispatcher path is not active.
+//   - Implementation strategy is resolved exclusively from the default NetworkClass via
+//     the dispatcher. When the dispatcher path is not active (no resolver, no NetworkClass,
+//     or no manager configured) the controller blocks with ReasonNoManagerConfigured.
 //
 //   - The reconcile loop requires multiple passes because each pass does one thing and
 //     returns: first pass adds the finalizer (metadata write), second pass processes the
@@ -86,11 +86,15 @@ var _ = Describe("ExternalIPPoolReconciler", func() {
 
 		fakeClient = fake.NewClientBuilder().
 			WithScheme(testScheme).
-			WithObjects(pool).
+			WithObjects(pool, newFabricManagerConfigMap("fm-metallb", "test-namespace", "metallb-l2")).
 			WithStatusSubresource(&osacv1alpha1.ExternalIPPool{}).
 			Build()
 
 		mockProvider = &mockProvisioningProvider{name: "mock-aap"}
+
+		resolver, ncClient := wireExternalIPDispatcher(fakeClient, "test-namespace", []*privatev1.NetworkClass{{
+			Id: "nc-default", FabricManager: ptr.To("metallb-l2"),
+		}})
 
 		reconciler = &ExternalIPPoolReconciler{
 			Client:                     fakeClient,
@@ -101,6 +105,8 @@ var _ = Describe("ExternalIPPoolReconciler", func() {
 			StatusPollInterval:         1 * time.Second,
 			MaxJobHistory:              10,
 			NetworkProvisioningEnabled: true,
+			Resolver:                   resolver,
+			networkClassesClient:       ncClient,
 		}
 	})
 
@@ -217,35 +223,25 @@ var _ = Describe("ExternalIPPoolReconciler", func() {
 			Expect(provisionCalled).To(BeTrue(), "AAP provisioning must be triggered after annotation is stamped")
 		})
 
-		It("should not stamp annotation when no strategy is resolved and spec.implementationStrategy is empty", func() {
-			// Create a pool that omits ImplementationStrategy. With no resolver configured
-			// and no spec.implementationStrategy, no annotation is set (dispatcher must be
-			// configured for a real strategy).
-			poolNoStrategy := &osacv1alpha1.ExternalIPPool{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "pool-no-strategy",
-					Namespace: "test-namespace",
-				},
-				Spec: osacv1alpha1.ExternalIPPoolSpec{
-					CIDRs:    []string{"10.10.0.0/24"},
-					IPFamily: "IPv4",
-					// ImplementationStrategy intentionally omitted
-				},
-			}
-			Expect(fakeClient.Create(testCtx, poolNoStrategy)).To(Succeed())
+		It("should block with ReasonNoManagerConfigured when no resolver is configured", func() {
+			// Without a resolver the implementation strategy is "", and the controller
+			// blocks rather than silently proceeding with a hardcoded default.
+			reconciler.Resolver = nil
+			reconciler.networkClassesClient = nil
 
-			key := types.NamespacedName{Name: poolNoStrategy.Name, Namespace: poolNoStrategy.Namespace}
+			key := types.NamespacedName{Name: pool.Name, Namespace: pool.Namespace}
 
-			// Pass 1: finalizer. With no resolver and no spec.implementationStrategy,
-			// the resolved strategy is "" and no annotation update occurs (nil != "" is false
-			// because accessing a nil map returns the zero value).
-			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			// Pass 1: adds finalizer, then resolves strategy to "" and blocks.
+			result, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
 
-			annotated := &osacv1alpha1.ExternalIPPool{}
-			Expect(fakeClient.Get(testCtx, key, annotated)).To(Succeed())
-			// Annotation is not set when the resolved strategy is empty
-			Expect(annotated.Annotations[osacImplementationStrategyAnnotation]).To(Equal(""))
+			updated := &osacv1alpha1.ExternalIPPool{}
+			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
+			cond := apimeta.FindStatusCondition(updated.Status.Conditions, osacv1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonNoManagerConfigured))
 		})
 
 		It("should set ConfigurationApplied condition to True", func() {
@@ -431,6 +427,33 @@ var _ = Describe("ExternalIPPoolReconciler", func() {
 			Expect(latestJob.JobID).To(Equal("deprovision-job-123"))
 		})
 
+		It("should skip deprovisioning when networking provisioning is disabled", func() {
+			key := types.NamespacedName{Name: pool.Name, Namespace: pool.Namespace}
+			reconciler.NetworkProvisioningEnabled = false
+
+			deprovisionCalled := false
+			mockProvider.triggerDeprovisionFunc = func(
+				ctx context.Context, resource client.Object, _ []osacv1alpha1.JobStatus,
+			) (*provisioning.DeprovisionResult, error) {
+				deprovisionCalled = true
+				return nil, nil
+			}
+
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			toDelete := &osacv1alpha1.ExternalIPPool{}
+			Expect(fakeClient.Get(testCtx, key, toDelete)).To(Succeed())
+			now := metav1.Now()
+			toDelete.DeletionTimestamp = &now
+
+			// The fake client rejects an Update after we set DeletionTimestamp in memory,
+			// but handleDelete has already removed the finalizer before that update.
+			_, _ = reconciler.handleDelete(testCtx, toDelete)
+			Expect(deprovisionCalled).To(BeFalse())
+			Expect(toDelete.Finalizers).NotTo(ContainElement(osacExternalIPPoolFinalizer))
+		})
+
 		It("should remove finalizer after successful deprovision", func() {
 			key := types.NamespacedName{Name: pool.Name, Namespace: pool.Namespace}
 
@@ -572,10 +595,10 @@ var _ = Describe("ExternalIPPoolReconciler", func() {
 	Context("dispatcher path", func() {
 		const ns = "test-namespace"
 
-		It("uses the resolved fabric manager name from the default NetworkClass", func() {
+		It("uses the resolved fabric manager name from the deployment NetworkClass", func() {
 			Expect(fakeClient.Create(testCtx, newFabricManagerConfigMap("fm-netris", ns, "netris"))).To(Succeed())
 			resolver, ncClient := wireExternalIPDispatcher(fakeClient, ns, []*privatev1.NetworkClass{{
-				Id: "nc-dispatch", FabricManager: ptr.To("netris"), IsDefault: ptr.To(true),
+				Id: "nc-dispatch", FabricManager: ptr.To("netris"),
 			}})
 			reconciler.Resolver = resolver
 			reconciler.networkClassesClient = ncClient
@@ -592,7 +615,7 @@ var _ = Describe("ExternalIPPoolReconciler", func() {
 		It("uses the k8s manager name when the NetworkClass has no fabricManager", func() {
 			Expect(fakeClient.Create(testCtx, newK8sManagerConfigMap("km-k8s-only", ns, "k8s_only", "ipv4"))).To(Succeed())
 			resolver, ncClient := wireExternalIPDispatcher(fakeClient, ns, []*privatev1.NetworkClass{{
-				Id: "nc-k8s", K8SManager: ptr.To("k8s_only"), IsDefault: ptr.To(true),
+				Id: "nc-k8s", K8SManager: ptr.To("k8s_only"),
 			}})
 			reconciler.Resolver = resolver
 			reconciler.networkClassesClient = ncClient
@@ -606,39 +629,47 @@ var _ = Describe("ExternalIPPoolReconciler", func() {
 			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("k8s_only"))
 		})
 
-		It("falls back to spec.implementationStrategy when the NetworkClass has no managers", func() {
+		It("blocks with ReasonNoManagerConfigured when the NetworkClass has no managers", func() {
 			resolver, ncClient := wireExternalIPDispatcher(fakeClient, ns, []*privatev1.NetworkClass{{
-				Id: "nc-empty", IsDefault: ptr.To(true),
+				Id: "nc-empty",
 			}})
 			reconciler.Resolver = resolver
 			reconciler.networkClassesClient = ncClient
 
 			key := types.NamespacedName{Name: pool.Name, Namespace: pool.Namespace}
-			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			result, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
 
 			updated := &osacv1alpha1.ExternalIPPool{}
 			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
-			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("metallb-l2"))
+			cond := apimeta.FindStatusCondition(updated.Status.Conditions, osacv1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonNoManagerConfigured))
 		})
 
-		It("falls back to spec.implementationStrategy when no NetworkClass is listed", func() {
+		It("blocks with ReasonNoManagerConfigured when no NetworkClass is listed", func() {
 			resolver, ncClient := wireExternalIPDispatcher(fakeClient, ns, nil)
 			reconciler.Resolver = resolver
 			reconciler.networkClassesClient = ncClient
 
 			key := types.NamespacedName{Name: pool.Name, Namespace: pool.Namespace}
-			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			result, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
 
 			updated := &osacv1alpha1.ExternalIPPool{}
 			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
-			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("metallb-l2"))
+			cond := apimeta.FindStatusCondition(updated.Status.Conditions, osacv1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonNoManagerConfigured))
 		})
 
 		It("returns a reconcile error when the NetworkClass references an unregistered manager", func() {
 			resolver, ncClient := wireExternalIPDispatcher(fakeClient, ns, []*privatev1.NetworkClass{{
-				Id: "nc-broken", FabricManager: ptr.To("does-not-exist"), IsDefault: ptr.To(true),
+				Id: "nc-broken", FabricManager: ptr.To("does-not-exist"),
 			}})
 			reconciler.Resolver = resolver
 			reconciler.networkClassesClient = ncClient

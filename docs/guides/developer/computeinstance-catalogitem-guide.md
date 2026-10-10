@@ -230,12 +230,12 @@ metadata:
 title: Standard Linux VM
 description: |
   General-purpose Linux virtual machine with sensible defaults.
-  Users can choose their SSH key, instance type, and boot disk size.
+  Users can choose a registered SSH key, instance type, and boot disk size.
 template: "osac.templates.ocp_virt_vm"
 published: false
 field_definitions:
-  - path: ssh_public_key
-    display_name: SSH Public Key
+  - path: ssh_key
+    display_name: SSH Key
     editable: true
   - path: instance_type
     display_name: Instance Type
@@ -290,11 +290,11 @@ grpcurl $GRPCURL_FLAGS -H "Authorization: Bearer $TOKEN" -d '{
       "name": "standard-linux-vm"
     },
     "title": "Standard Linux VM",
-    "description": "General-purpose Linux virtual machine with sensible defaults.\nUsers can choose their SSH key, instance type, and boot disk size.",
+    "description": "General-purpose Linux virtual machine with sensible defaults.\nUsers can choose a registered SSH key, instance type, and boot disk size.",
     "template": "osac.templates.ocp_virt_vm",
     "published": false,
     "field_definitions": [
-      {"path": "ssh_public_key", "display_name": "SSH Public Key", "editable": true},
+      {"path": "ssh_key", "display_name": "SSH Key", "editable": true},
       {"path": "instance_type", "display_name": "Instance Type", "editable": true, "default": "standard-4-16"},
       {"path": "image.source_type", "display_name": "Image Source Type", "editable": false, "default": "registry"},
       {"path": "image.source_ref", "display_name": "Image", "editable": true, "default": "quay.io/containerdisks/fedora:latest"},
@@ -317,11 +317,11 @@ curl -fsS $CURL_FLAGS -X POST -H "Authorization: Bearer $TOKEN" \
     "name": "standard-linux-vm"
   },
   "title": "Standard Linux VM",
-  "description": "General-purpose Linux virtual machine with sensible defaults.\nUsers can choose their SSH key, instance type, and boot disk size.",
+  "description": "General-purpose Linux virtual machine with sensible defaults.\nUsers can choose a registered SSH key, instance type, and boot disk size.",
   "template": "osac.templates.ocp_virt_vm",
   "published": false,
   "field_definitions": [
-    {"path": "ssh_public_key", "display_name": "SSH Public Key", "editable": true},
+    {"path": "ssh_key", "display_name": "SSH Key", "editable": true},
     {"path": "instance_type", "display_name": "Instance Type", "editable": true, "default": "standard-4-16"},
     {"path": "image.source_type", "display_name": "Image Source Type", "editable": false, "default": "registry"},
     {"path": "image.source_ref", "display_name": "Image", "editable": true, "default": "quay.io/containerdisks/fedora:latest"},
@@ -505,13 +505,13 @@ defaults apply, and what validation constraints exist.
 ### Available paths
 
 The following paths can be used in `field_definitions`. These correspond
-to fields in the ComputeInstance spec. Any path not in this list is silently
-ignored.
+to fields in the ComputeInstance spec. Any path not in this list is ignored
+when applying `field_definitions`.
 
 | Path | CLI flag | API field | Description |
 |------|----------|-----------|-------------|
-| `ssh_public_key` | `--ssh-public-key` | `spec.ssh_public_key` | SSH public key installed on the VM |
 | `instance_type` | `--instance-type` | `spec.instance_type` | Named instance type (e.g., `standard-4-16`) |
+| `ssh_key` | `--ssh-key` | `spec.ssh_key` | Tenant-scoped SSH public key Secret reference |
 | `run_strategy` | `--run-strategy` | `spec.run_strategy` | VM run strategy (`Always`, `Halted`, etc.) |
 | `user_data` | `--user-data` | `spec.user_data` | Cloud-init or ignition user data |
 | `image.source_type` | (part of `--image`) | `spec.image.source_type` | Image source type (e.g., `registry`) |
@@ -520,6 +520,14 @@ ignored.
 | `boot_disk.storage_tier` | `--boot-disk-storage-tier` | `spec.boot_disk.storage_tier` | Boot disk storage tier reference |
 | `additional_disks` | `--additional-disk` | `spec.additional_disks` | Complete list of additional disk configurations, including each disk's storage tier |
 | `network_attachments` | `--network-attachment` | `spec.network_attachments` | Network attachments (subnet + security groups per NIC) |
+
+The optional `ssh_key` is a tenant-scoped Secret reference, not inline
+public-key data. A shared catalog item must not lock or default a tenant's key.
+List `ssh_key` as editable without a default so each tenant user can choose
+a key from their own scope. If they omit it, the optional field remains unset.
+A tenant-scoped catalog item may lock or default only a key from its own tenant
+and project. Users provide the key with `--ssh-key` or `spec.ssh_key`; see
+[Register an SSH key](computeinstance-guide.md#register-an-ssh-key).
 
 These paths use dot notation for nested fields. For example,
 `boot_disk.size_gib` refers to the `size_gib` field inside the `boot_disk`
@@ -537,23 +545,23 @@ can provide their own value:
 | `false` | Yes (via CLI flag or API field) | Request is rejected with `field '<path>' is not editable` |
 | `false` | No | Catalog item default is applied |
 | `true` | Yes | User's value is accepted (validated against `validation_schema` if present) |
-| `true` | No | Catalog item default is applied (error if no default is defined) |
+| `true` | No | Default is applied if set; otherwise the field stays unset if optional, or required-field validation fails |
 
 Non-editable fields enforce consistency. For example, locking `run_strategy`
 to `Always` ensures all VMs from this catalog item are always running,
 regardless of what the user passes on the CLI or in the API request.
 
-Editable fields give users flexibility. For example, making `ssh_public_key`
-editable lets each user provide their own public key.
+Editable fields give users flexibility. For example, making `instance_type`
+editable lets each user choose a compute configuration.
 
 ---
 
 ### Defaults and validation
 
-**Defaults**: Every non-editable field must have a `default`. Editable fields
-should also have a `default` unless the field is required and must always be
-provided by the user (like `ssh_public_key`). If an editable field has no default
-and the user does not provide a value, the request fails.
+**Defaults**: Every non-editable field must have a `default`. Editable
+fields may also have a default. If an editable optional field has no default
+and the user omits it, it remains unset. Required fields fail validation when
+omitted. The ComputeInstance `ssh_key` is optional.
 
 **Validation**: Editable fields can include a `validation_schema` — a JSON
 Schema (draft 2020-12) string. The server validates the user's value against
@@ -686,7 +694,7 @@ osac create computeinstance \
   --name my-vm \
   --catalog-item standard-linux-vm \
   --instance-type standard-4-16 \
-  --ssh-public-key "$(cat ~/.ssh/id_ed25519.pub)" \
+  --ssh-key <ssh-key-name> \
   --boot-disk-size 40 \
   --network-attachment subnet=<subnet-id> \
   --user-data '#cloud-config
@@ -707,7 +715,7 @@ grpcurl $GRPCURL_FLAGS -H "Authorization: Bearer $TOKEN" -d '{
     "spec": {
       "catalog_item": "standard-linux-vm",
       "instance_type": "standard-4-16",
-      "ssh_public_key": "<ssh-public-key>",
+      "ssh_key": {"name": "<ssh-key-name>"},
       "boot_disk": {"size_gib": 40},
       "network_attachments": [{"subnet": "<subnet-id>"}],
       "user_data": "#cloud-config\nuser: myuser\npassword: <password>\nchpasswd:\n  expire: false"
@@ -727,7 +735,7 @@ curl -fsS $CURL_FLAGS -X POST -H "Authorization: Bearer $TOKEN" \
   "spec": {
     "catalog_item": "standard-linux-vm",
     "instance_type": "standard-4-16",
-    "ssh_public_key": "<ssh-public-key>",
+    "ssh_key": {"name": "<ssh-key-name>"},
     "boot_disk": {"size_gib": 40},
     "network_attachments": [{"subnet": "<subnet-id>"}],
     "user_data": "#cloud-config\nuser: myuser\npassword: <password>\nchpasswd:\n  expire: false"
@@ -788,13 +796,10 @@ understand the allowed values.
 
 ### Required field missing
 
-```text
-Error: field 'ssh_public_key' is required but no value was provided and no default is defined
-```
-
-The catalog item has an editable field with no default, and you did not
-provide a value. Add the corresponding CLI flag (e.g., `--ssh-public-key`) or
-API field (e.g., `spec.ssh_public_key`) to your request.
+If a required ComputeInstance field has no default and is omitted, creation
+fails. `ssh_key` is optional, so an editable `ssh_key` policy without a default
+leaves it unset when the user omits it. To use an SSH key, supply
+`--ssh-key <ssh-key-name>` or `spec.ssh_key`.
 
 ### Storage tier missing or unavailable
 

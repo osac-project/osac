@@ -1,7 +1,8 @@
 import type { MessageInitShape } from '@bufbuild/protobuf';
 import { Code, ConnectError, type Transport, createRouterTransport } from '@connectrpc/connect';
 
-import type {
+import {
+  BareMetalInstanceType,
   Cluster,
   ClusterCatalogItem,
   ClusterTemplate,
@@ -20,8 +21,12 @@ import type {
   DiskImagesUpdateRequest,
   DiskImagesUpdateResponse,
   ExternalIP,
+  ExternalIPAttachment,
+  ExternalIPAttachmentsCreateRequest,
+  ExternalIPAttachmentsCreateResponse,
+  ExternalIPsCreateRequest,
+  ExternalIPsCreateResponse,
   ExternalIPsListRequest,
-  HostType,
   IdentityProvider,
   IdentityProvidersCreateRequest,
   IdentityProvidersCreateResponse,
@@ -37,6 +42,7 @@ import type {
   NATGatewaysListResponse,
   Project,
   ProjectMembership,
+  ExternalIPPool as PublicExternalIPPool,
   StorageTier as PublicStorageTier,
   StorageTiersGetRequest as PublicStorageTiersGetRequest,
   StorageTiersListRequest as PublicStorageTiersListRequest,
@@ -44,11 +50,20 @@ import type {
   RoleBinding,
   Secret,
   SecurityGroup,
+  ServiceTier,
   Subnet,
   User,
   VirtualNetwork,
+  Volume,
+  VolumesCreateRequest,
+  VolumesCreateResponse,
+  VolumesDeleteRequest,
+  VolumesDeleteResponse,
+  VolumesGetRequest,
+  VolumesGetResponse,
 } from '@osac/types';
 import {
+  Capabilities,
   ClusterCatalogItems,
   ClusterTemplates,
   ClusterVersionState,
@@ -60,15 +75,17 @@ import {
   DiskImages,
   DiskImagesGetResponseSchema,
   DiskImagesListResponseSchema,
+  ExternalIPAttachments,
   ExternalIPState,
   ExternalIPs,
-  HostTypes,
   IdentityProviders,
   InstanceTypeState,
   InstanceTypes,
   NATGateways,
   ProjectMemberships,
   Projects,
+  BareMetalInstanceTypes as PublicBareMetalInstanceTypes,
+  ExternalIPPools as PublicExternalIPPools,
   StorageTiers as PublicStorageTiers,
   StorageTiersGetResponseSchema as PublicStorageTiersGetResponseSchema,
   StorageTiersListResponseSchema as PublicStorageTiersListResponseSchema,
@@ -80,6 +97,7 @@ import {
   Users,
   VirtualNetworkState,
   VirtualNetworks,
+  Volumes,
 } from '@osac/types';
 import type {
   BareMetalInstanceTypesCreateRequest,
@@ -147,12 +165,13 @@ import {
 import { UnauthorizedError } from '../utils/unauthorizedError';
 
 export type MockApiFixtures = {
+  enabledServices?: ServiceTier[];
   catalogItems?: ComputeInstanceCatalogItem[];
   clusters?: Cluster[];
   clusterCatalogItems?: ClusterCatalogItem[];
   clusterTemplates?: ClusterTemplate[];
   clusterVersions?: ClusterVersion[];
-  hostTypes?: HostType[];
+  bareMetalInstanceTypes?: BareMetalInstanceType[];
   tenants?: PrivateTenant[];
   virtualNetworks?: VirtualNetwork[];
   subnets?: Subnet[];
@@ -166,6 +185,7 @@ export type MockApiFixtures = {
   privateBaremetalInstanceTypes?: PrivateBareMetalInstanceType[];
   storageBackends?: StorageBackend[];
   privateExternalIpPools?: ExternalIPPool[];
+  externalIpPools?: PublicExternalIPPool[];
   storageTiers?: StorageTier[];
   publicStorageTiers?: PublicStorageTier[];
   roles?: Role[];
@@ -174,6 +194,8 @@ export type MockApiFixtures = {
   users?: User[];
   natGateways?: NATGateway[];
   externalIps?: ExternalIP[];
+  externalIpAttachments?: ExternalIPAttachment[];
+  volumes?: Volume[];
 };
 
 export const wrapWithAuthInterceptor = (transport: Transport): Transport => {
@@ -240,15 +262,24 @@ const matchesUnallocatedExternalIpFilter = (
   return true;
 };
 
-const matchesExternalIpIdsFilter = (
-  filter: string | undefined,
-  id: string | undefined,
-): boolean => {
+const matchesIdInFilter = (filter: string | undefined, id: string | undefined): boolean => {
   if (!filter?.startsWith('this.id in ')) {
     return true;
   }
   const ids = JSON.parse(filter.slice('this.id in '.length)) as string[];
   return id !== undefined && ids.includes(id);
+};
+
+const matchesSpecExternalIpIdInFilter = (
+  filter: string | undefined,
+  externalIpId: string | undefined,
+): boolean => {
+  const prefix = 'this.spec.external_ip.id in ';
+  if (!filter?.startsWith(prefix)) {
+    return true;
+  }
+  const ids = JSON.parse(filter.slice(prefix.length)) as string[];
+  return externalIpId !== undefined && ids.includes(externalIpId);
 };
 
 const matchesInstanceTypeActiveFilter = (
@@ -311,11 +342,13 @@ const matchesStorageBackendReadyFilter = (
 const matchesStorageTierActiveFilter = (
   filter: string | undefined,
   state: number | undefined,
+  protocol: number | undefined,
 ): boolean => {
-  if (!filter?.includes('this.status.state ==')) {
-    return true;
+  if (filter?.includes('this.status.state ==') && state !== StorageTierState.ACTIVE) {
+    return false;
   }
-  return state === StorageTierState.ACTIVE;
+  const protocolMatch = filter?.match(/this\.spec\.protocol == (\d+)/);
+  return !protocolMatch || protocol === Number(protocolMatch[1]);
 };
 
 export type MockTransportOverrides = {
@@ -410,18 +443,32 @@ export type MockTransportOverrides = {
     req: NATGatewaysDeleteRequest,
   ) => NATGatewaysDeleteResponse | Promise<NATGatewaysDeleteResponse>;
   onExternalIpList?: (req: ExternalIPsListRequest) => void;
+  onExternalIpCreate?: (
+    req: ExternalIPsCreateRequest,
+  ) => ExternalIPsCreateResponse | Promise<ExternalIPsCreateResponse>;
+  onExternalIpAttachmentCreate?: (
+    req: ExternalIPAttachmentsCreateRequest,
+  ) => ExternalIPAttachmentsCreateResponse | Promise<ExternalIPAttachmentsCreateResponse>;
+  onVolumeGet?: (req: VolumesGetRequest) => VolumesGetResponse | Promise<VolumesGetResponse>;
+  onVolumeCreate?: (req: VolumesCreateRequest) => VolumesCreateResponse;
+  onVolumeDelete?: (req: VolumesDeleteRequest) => VolumesDeleteResponse;
 };
 
 export const createMockConnectTransport = (
   fixtures: MockApiFixtures = {},
   overrides: MockTransportOverrides = {},
 ) => {
+  const enabledServices = fixtures.enabledServices ?? [
+    ServiceTier.CAAS,
+    ServiceTier.VMAAS,
+    ServiceTier.BMAAS,
+  ];
   const catalogItems = fixtures.catalogItems ?? [];
   const clusters = fixtures.clusters ?? [];
   const clusterCatalogItems = fixtures.clusterCatalogItems ?? [];
   const clusterTemplates = fixtures.clusterTemplates ?? [];
   const clusterVersions = fixtures.clusterVersions ?? [];
-  const hostTypes = fixtures.hostTypes ?? [];
+  const bareMetalInstanceTypes = fixtures.bareMetalInstanceTypes ?? [];
   const tenants = fixtures.tenants ?? [];
   const identityProviders = fixtures.identityProviders ?? [];
   const projects = fixtures.projects ?? [];
@@ -435,6 +482,7 @@ export const createMockConnectTransport = (
   const privateBaremetalInstanceTypes = fixtures.privateBaremetalInstanceTypes ?? [];
   const storageBackends = [...(fixtures.storageBackends ?? [])];
   const privateExternalIpPools = [...(fixtures.privateExternalIpPools ?? [])];
+  const externalIpPools = [...(fixtures.externalIpPools ?? [])];
   const storageTiers = fixtures.storageTiers ?? [];
   const publicStorageTiers = fixtures.publicStorageTiers ?? [];
   const roles = fixtures.roles ?? [];
@@ -443,9 +491,15 @@ export const createMockConnectTransport = (
   const usersFixtures = fixtures.users ?? [];
   const natGateways = [...(fixtures.natGateways ?? [])];
   const externalIps = [...(fixtures.externalIps ?? [])];
+  const externalIpAttachments = [...(fixtures.externalIpAttachments ?? [])];
+  const volumes = [...(fixtures.volumes ?? [])];
 
   return wrapWithAuthInterceptor(
     createRouterTransport((router) => {
+      router.service(Capabilities, {
+        get: () => ({ enabledServices }),
+      });
+
       router.service(ComputeInstanceCatalogItems, {
         list: () => ({ items: catalogItems }),
         get: (req) => ({
@@ -493,23 +547,6 @@ export const createMockConnectTransport = (
         get: (req) => ({
           object: clusterVersions.find((i) => i.id === req.id),
         }),
-      });
-
-      router.service(HostTypes, {
-        list: () => ({
-          items: hostTypes,
-          size: hostTypes.length,
-          total: hostTypes.length,
-        }),
-        get: (req) => {
-          const hostType = hostTypes.find((i) => i.id === req.id);
-          if (!hostType) {
-            throw new ConnectError(`Host type not found in test: ${req.id}`, Code.NotFound);
-          }
-          return {
-            object: hostType,
-          };
-        },
       });
 
       router.service(VirtualNetworks, {
@@ -664,6 +701,20 @@ export const createMockConnectTransport = (
         },
       });
 
+      router.service(PublicExternalIPPools, {
+        list: (req) => {
+          const items = externalIpPools.filter((pool) => matchesIdInFilter(req.filter, pool.id));
+          return {
+            items,
+            size: items.length,
+            total: items.length,
+          };
+        },
+        get: (req) => ({
+          object: externalIpPools.find((pool) => pool.id === req.id),
+        }),
+      });
+
       router.service(ExternalIPPools, {
         list: (req) => {
           if (overrides.onExternalIPPoolList) {
@@ -712,7 +763,7 @@ export const createMockConnectTransport = (
             return overrides.onStorageTierList(req);
           }
           const items = storageTiers.filter((item) =>
-            matchesStorageTierActiveFilter(req.filter, item.status?.state),
+            matchesStorageTierActiveFilter(req.filter, item.status?.state, item.spec?.protocol),
           );
           return {
             items,
@@ -759,7 +810,7 @@ export const createMockConnectTransport = (
             return overrides.onPublicStorageTierList(req);
           }
           const items = publicStorageTiers.filter((item) =>
-            matchesStorageTierActiveFilter(req.filter, item.status?.state),
+            matchesStorageTierActiveFilter(req.filter, item.status?.state, item.spec?.protocol),
           );
           return {
             items,
@@ -807,6 +858,15 @@ export const createMockConnectTransport = (
           }
           return {};
         },
+      });
+
+      router.service(PublicBareMetalInstanceTypes, {
+        list: () => ({
+          items: bareMetalInstanceTypes,
+          size: bareMetalInstanceTypes.length,
+          total: bareMetalInstanceTypes.length,
+        }),
+        get: (req) => ({ object: bareMetalInstanceTypes.find((item) => item.id === req.id) }),
       });
 
       router.service(PrivateBareMetalInstanceTypes, {
@@ -954,8 +1014,10 @@ export const createMockConnectTransport = (
         list: (req) => {
           overrides.onNatGatewayList?.(req);
           return {
-            items: natGateways.filter((item) =>
-              matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id),
+            items: natGateways.filter(
+              (item) =>
+                matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id) &&
+                matchesSpecExternalIpIdInFilter(req.filter, item.spec?.externalIp?.id),
             ),
           } satisfies Pick<NATGatewaysListResponse, 'items'>;
         },
@@ -991,7 +1053,7 @@ export const createMockConnectTransport = (
           return {
             items: externalIps.filter(
               (item) =>
-                matchesExternalIpIdsFilter(req.filter, item.id) &&
+                matchesIdInFilter(req.filter, item.id) &&
                 matchesUnallocatedExternalIpFilter(
                   req.filter,
                   item.status?.state,
@@ -1004,6 +1066,9 @@ export const createMockConnectTransport = (
           object: externalIps.find((item) => item.id === req.id),
         }),
         create: (req) => {
+          if (overrides.onExternalIpCreate) {
+            return overrides.onExternalIpCreate(req);
+          }
           const created = {
             ...req.object,
             id: req.object?.id || `eip-${externalIps.length + 1}`,
@@ -1020,6 +1085,33 @@ export const createMockConnectTransport = (
         },
       });
 
+      router.service(ExternalIPAttachments, {
+        list: (req) => {
+          const items = externalIpAttachments.filter((item) =>
+            matchesSpecExternalIpIdInFilter(req.filter, item.spec?.externalIp?.id),
+          );
+          return {
+            items,
+            size: items.length,
+            total: items.length,
+          };
+        },
+        get: (req) => ({
+          object: externalIpAttachments.find((item) => item.id === req.id),
+        }),
+        create: async (req) => {
+          if (overrides.onExternalIpAttachmentCreate) {
+            return overrides.onExternalIpAttachmentCreate(req);
+          }
+          const created = {
+            ...req.object,
+            id: req.object?.id || `attachment-${externalIpAttachments.length + 1}`,
+          } as ExternalIPAttachment;
+          externalIpAttachments.push(created);
+          return { object: created };
+        },
+      });
+
       router.service(Users, {
         list: () => ({
           items: usersFixtures,
@@ -1029,6 +1121,35 @@ export const createMockConnectTransport = (
         get: (req) => ({
           object: usersFixtures.find((u) => u.id === req.id),
         }),
+      });
+
+      router.service(Volumes, {
+        list: () => ({
+          items: volumes,
+          size: volumes.length,
+          total: volumes.length,
+        }),
+        get: (req) => {
+          if (overrides.onVolumeGet) {
+            return overrides.onVolumeGet(req);
+          }
+          return { object: volumes.find((v) => v.id === req.id) };
+        },
+        create: (req) =>
+          overrides.onVolumeCreate?.(req) ?? {
+            object: { id: 'new-volume-1', ...req.object },
+          },
+        update: (req) => ({ object: req.object }),
+        delete: (req) => {
+          if (overrides.onVolumeDelete) {
+            return overrides.onVolumeDelete(req);
+          }
+          const index = volumes.findIndex((v) => v.id === req.id);
+          if (index !== -1) {
+            volumes.splice(index, 1);
+          }
+          return {};
+        },
       });
     }),
   );

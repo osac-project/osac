@@ -23,6 +23,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -191,29 +192,22 @@ func validateCatalogItemStringPolicy(policy *privatev1.StringFieldPolicy, field 
 	return nil
 }
 
-// canonicalizeCatalogItemCIDRPolicy validates and replaces locked/default IPv4 CIDRs with their canonical form.
+// canonicalizeCatalogItemCIDRPolicy validates and replaces locked/default cluster CIDRs with their canonical form.
 // It mutates the detached policy and returns a field-qualified error for invalid CIDRs.
 func canonicalizeCatalogItemCIDRPolicy(policy *privatev1.StringFieldPolicy, field string) error {
 	state, err := decodeStringPolicy(policy)
 	if err != nil {
 		return catalogItemPolicyError(field, err.Error())
 	}
-	canonicalize := func(value string) (string, error) {
-		canonical, parseErr := parseAndValidateCIDR(value, cidrIPv4)
-		if parseErr != nil {
-			return "", parseErr
-		}
-		return canonical, nil
-	}
 	if state.hasLocked {
-		canonical, canonicalErr := canonicalize(state.lockedValue)
+		canonical, canonicalErr := utils.CanonicalizeCIDR(state.lockedValue)
 		if canonicalErr != nil {
 			return catalogItemPolicyError(field, canonicalErr.Error())
 		}
 		policy.SetLocked(canonical)
 	}
 	if state.hasDefault {
-		canonical, canonicalErr := canonicalize(state.defaultValue)
+		canonical, canonicalErr := utils.CanonicalizeCIDR(state.defaultValue)
 		if canonicalErr != nil {
 			return catalogItemPolicyError(field, canonicalErr.Error())
 		}

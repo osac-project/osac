@@ -90,15 +90,33 @@ func (b *CapabilitiesServerBuilder) Build() (result *CapabilitiesServer, err err
 // Get is the implementation of the method that returns the capabilities of the server.
 func (s *CapabilitiesServer) Get(ctx context.Context,
 	request *publicv1.CapabilitiesGetRequest) (response *publicv1.CapabilitiesGetResponse, err error) {
-	var enabledServices []string
-	if s.serviceFlags != nil {
-		enabledServices = s.serviceFlags.EnabledServices()
-	}
 	response = publicv1.CapabilitiesGetResponse_builder{
 		Authn: &publicv1.AuthnCapabilities{
 			TrustedTokenIssuers: s.authnTrustedTokenIssuers,
 		},
-		EnabledServices: enabledServices,
+		EnabledServices: enabledPublicServiceTiers(s.serviceFlags),
 	}.Build()
 	return response, nil
+}
+
+func enabledPublicServiceTiers(flags *services.Flags) []publicv1.ServiceTier {
+	if flags == nil {
+		return nil
+	}
+
+	serviceNames := flags.EnabledServices()
+	result := make([]publicv1.ServiceTier, 0, len(serviceNames))
+	for _, serviceName := range serviceNames {
+		switch serviceName {
+		case "caas":
+			result = append(result, publicv1.ServiceTier_SERVICE_TIER_CAAS)
+		case "vmaas":
+			result = append(result, publicv1.ServiceTier_SERVICE_TIER_VMAAS)
+		case "bmaas":
+			result = append(result, publicv1.ServiceTier_SERVICE_TIER_BMAAS)
+		case "maas":
+			result = append(result, publicv1.ServiceTier_SERVICE_TIER_MAAS)
+		}
+	}
+	return result
 }

@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
@@ -29,7 +30,9 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protopath"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
 )
@@ -178,12 +181,15 @@ func (v *ReferenceValidator) UnaryServer(ctx context.Context, request any, info 
 	if !isCreateOrUpdate(info.FullMethod) {
 		return handler(ctx, request)
 	}
-
-	if isObjectBeingDeleted(request) {
+	if err := validateCanonicalUpdateMask(request); err != nil {
+		return nil, err
+	}
+	if strings.HasSuffix(info.FullMethod, "/Update") && isMetadataOnlyUpdate(request) {
 		return handler(ctx, request)
 	}
 
-	err = v.validate(ctx, request, v.excludedReferencePathsByMethod[info.FullMethod])
+	excluded := v.excludedReferencePathsByMethod[info.FullMethod]
+	err = v.validate(ctx, request, excluded)
 	if err != nil {
 		return
 	}
@@ -236,81 +242,172 @@ func (v *ReferenceValidator) validate(ctx context.Context, request any, excluded
 	return nil
 }
 
+func validateCanonicalUpdateMask(request any) error {
+	message, ok := request.(proto.Message)
+	if !ok {
+		return nil
+	}
+	mask, ok := updateMaskFromMessage(message)
+	if !ok {
+		return nil
+	}
+	if !isCanonicalUpdateMask(mask, updateObjectDescriptor(message.ProtoReflect().Descriptor())) {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "update mask contains a non-canonical path")
+	}
+	return nil
+}
+
+func updateMaskFromMessage(message proto.Message) (*fieldmaskpb.FieldMask, bool) {
+	request := message.ProtoReflect()
+	field := request.Descriptor().Fields().ByName("update_mask")
+	if field == nil || !request.Has(field) || field.Kind() != protoreflect.MessageKind {
+		return nil, false
+	}
+	mask, ok := request.Get(field).Message().Interface().(*fieldmaskpb.FieldMask)
+	return mask, ok
+}
+
+func updateObjectDescriptor(request protoreflect.MessageDescriptor) protoreflect.MessageDescriptor {
+	field := request.Fields().ByName("object")
+	if field == nil || field.Kind() != protoreflect.MessageKind {
+		return nil
+	}
+	return field.Message()
+}
+
+func isCanonicalFieldMaskPath(path string, descriptor protoreflect.MessageDescriptor) bool {
+	if path == "" || path != strings.TrimSpace(path) || strings.IndexFunc(path, unicode.IsSpace) >= 0 {
+		return false
+	}
+	mapKey := false
+	terminal := false
+	for _, segment := range strings.Split(path, ".") {
+		if segment == "" {
+			return false
+		}
+		if terminal {
+			return false
+		}
+		if mapKey {
+			mapKey = false
+			terminal = descriptor == nil
+			continue
+		}
+		if !isCanonicalFieldMaskSegment(segment) {
+			return false
+		}
+		if descriptor == nil {
+			continue
+		}
+		field := descriptor.Fields().ByName(protoreflect.Name(segment))
+		if field == nil {
+			descriptor = nil
+			continue
+		}
+		if field.IsMap() {
+			mapKey = true
+			if field.MapValue().Kind() == protoreflect.MessageKind {
+				descriptor = field.MapValue().Message()
+			} else {
+				descriptor = nil
+			}
+		} else if field.IsList() {
+			descriptor = nil
+			terminal = true
+		} else if field.Kind() == protoreflect.MessageKind {
+			descriptor = field.Message()
+		} else {
+			descriptor = nil
+			terminal = true
+		}
+	}
+	return true
+}
+
+func isCanonicalFieldMaskSegment(segment string) bool {
+	for i, character := range segment {
+		validStart := unicode.IsLetter(character) || character == '_'
+		validPart := validStart || unicode.IsDigit(character)
+		if (i == 0 && !validStart) || (i > 0 && !validPart) {
+			return false
+		}
+	}
+	return true
+}
+
+func isCanonicalUpdateMask(mask *fieldmaskpb.FieldMask, descriptor protoreflect.MessageDescriptor) bool {
+	if mask == nil {
+		return true
+	}
+	for _, path := range mask.GetPaths() {
+		if !isCanonicalFieldMaskPath(path, descriptor) {
+			return false
+		}
+	}
+	return true
+}
+
 // walkMessage recursively walks a protoreflect.Message, discovering and validating reference-typed
 // fields. Appends FieldViolation entries for invalid references. Mutates the message to fill in
 // missing reference fields.
 func (v *ReferenceValidator) walkMessage(ctx context.Context, msg protoreflect.Message, path []string,
 	violations *[]*errdetails.BadRequest_FieldViolation, tenant, project string,
 	excluded map[string]struct{}) error {
-	var internalErr error
+	if isExcludedReferencePath(path, excluded) {
+		return nil
+	}
 
+	fullName := msg.Descriptor().FullName()
+	if isReferenceType(fullName) {
+		return v.resolveAndMutate(ctx, msg, fullName, path, violations, tenant, project)
+	}
+
+	var internalErr error
 	msg.Range(func(fd protoreflect.FieldDescriptor, val protoreflect.Value) bool {
 		if fd.Kind() != protoreflect.MessageKind {
 			return true
 		}
 
 		fieldPath := append(append([]string{}, path...), string(fd.Name()))
-		if _, ok := excluded[strings.Join(fieldPath, ".")]; ok {
+		if (fd.IsMap() || fd.IsList()) && isExcludedReferencePath(fieldPath, excluded) {
 			return true
 		}
 
 		if fd.IsMap() {
-			if fd.MapValue().Kind() == protoreflect.MessageKind {
-				v.logger.WarnContext(ctx, "Skipping map field with message values — map reference validation not yet supported",
-					"field_path", strings.Join(fieldPath, "."),
-				)
+			if fd.MapValue().Kind() != protoreflect.MessageKind {
+				return true
 			}
-			return true
+			val.Map().Range(func(key protoreflect.MapKey, value protoreflect.Value) bool {
+				keyedField := string(fd.Name()) + protopath.MapIndex(key).String()
+				keyedPath := append(append([]string{}, path...), keyedField)
+				internalErr = v.walkMessage(ctx, value.Message(), keyedPath, violations, tenant, project, excluded)
+				return internalErr == nil
+			})
+			return internalErr == nil
 		}
 
 		if fd.IsList() {
 			list := val.List()
 			for i := 0; i < list.Len(); i++ {
-				elemMsg := list.Get(i).Message()
-				fullName := elemMsg.Descriptor().FullName()
-				indexedPath := append(append([]string{}, fieldPath[:len(fieldPath)-1]...),
-					fmt.Sprintf("%s[%d]", fd.Name(), i))
-
-				if isReferenceType(fullName) {
-					err := v.resolveAndMutate(ctx, elemMsg, fullName, indexedPath,
-						violations, tenant, project)
-					if err != nil {
-						internalErr = err
-						return false
-					}
-					continue
-				}
-				err := v.walkMessage(ctx, elemMsg, indexedPath, violations, tenant, project, excluded)
-				if err != nil {
-					internalErr = err
+				indexedPath := append(append([]string{}, path...), fmt.Sprintf("%s[%d]", fd.Name(), i))
+				internalErr = v.walkMessage(ctx, list.Get(i).Message(), indexedPath, violations, tenant, project, excluded)
+				if internalErr != nil {
 					return false
 				}
 			}
 			return true
 		}
 
-		subMsg := val.Message()
-		fullName := subMsg.Descriptor().FullName()
-
-		if isReferenceType(fullName) {
-			err := v.resolveAndMutate(ctx, subMsg, fullName, fieldPath,
-				violations, tenant, project)
-			if err != nil {
-				internalErr = err
-				return false
-			}
-			return true
-		}
-		err := v.walkMessage(ctx, subMsg, fieldPath, violations, tenant, project, excluded)
-		if err != nil {
-			internalErr = err
-			return false
-		}
-
-		return true
+		internalErr = v.walkMessage(ctx, val.Message(), fieldPath, violations, tenant, project, excluded)
+		return internalErr == nil
 	})
 
 	return internalErr
+}
+
+func isExcludedReferencePath(path []string, excluded map[string]struct{}) bool {
+	_, ok := excluded[strings.Join(path, ".")]
+	return ok
 }
 
 // resolveAndMutate validates a single reference field against its registered lookup function and
@@ -496,24 +593,25 @@ func isCreateOrUpdate(method string) bool {
 	return strings.HasSuffix(method, "/Create") || strings.HasSuffix(method, "/Update")
 }
 
-func isObjectBeingDeleted(request any) bool {
+func isMetadataOnlyUpdate(request any) bool {
 	message, ok := request.(proto.Message)
 	if !ok {
 		return false
 	}
-	msg := message.ProtoReflect()
-	for _, name := range []protoreflect.Name{"object", "metadata"} {
-		fd := msg.Descriptor().Fields().ByName(name)
-		if fd == nil || fd.Kind() != protoreflect.MessageKind {
-			return false
-		}
-		msg = msg.Get(fd).Message()
-	}
-	fd := msg.Descriptor().Fields().ByName("deletion_timestamp")
-	if fd == nil {
+	mask, ok := updateMaskFromMessage(message)
+	if !ok {
 		return false
 	}
-	return msg.Has(fd)
+	paths := mask.GetPaths()
+	if len(paths) == 0 {
+		return false
+	}
+	for _, path := range paths {
+		if path != "metadata" && !strings.HasPrefix(path, "metadata.") {
+			return false
+		}
+	}
+	return true
 }
 
 // isNotFoundErr checks whether an error represents a "not found" condition.

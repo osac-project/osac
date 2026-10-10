@@ -1,9 +1,11 @@
 import type { ResourceSelectValue } from '../../../../Form/resourceSelectValue';
 
 export interface ComputeInstanceNetworkingValues {
-  virtualNetwork: string;
-  subnet: string;
-  securityGroups: string[];
+  useDefaultNetwork: boolean;
+  virtualNetwork: ResourceSelectValue;
+  subnet: ResourceSelectValue;
+  securityGroups: ResourceSelectValue[];
+  autoExternalIpAttachment: boolean;
 }
 
 export interface ComputeInstanceDiskValues {
@@ -18,7 +20,9 @@ export interface ComputeInstanceWizardValues {
     project: string;
   };
   spec: {
-    sshPublicKey: string;
+    sshKey: {
+      name: string;
+    };
     instanceType: string;
     userData: string;
     bootDisk: ComputeInstanceDiskValues;
@@ -27,9 +31,7 @@ export interface ComputeInstanceWizardValues {
   };
 }
 
-export const VM_SSH_KEY_WIRE_PATH = 'ssh_public_key';
-export const VM_SSH_KEY_FORM_PATH = 'spec.sshPublicKey';
-export const vmSshPublicKeyWirePath = VM_SSH_KEY_WIRE_PATH;
+export const VM_SSH_KEY_FORM_PATH = 'spec.sshKey.name';
 
 export const CONFIGURATION_CATALOG_PATHS = [
   'spec.user_data',

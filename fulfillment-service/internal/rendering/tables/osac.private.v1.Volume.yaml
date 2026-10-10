@@ -28,8 +28,8 @@ columns:
 - header: SIZE (GIB)
   value: "has(this.spec.size_gib)? string(this.spec.size_gib): '-'"
 
-- header: BACKEND
-  value: "has(this.status.backend) && this.status.backend != ''? this.status.backend: '-'"
+- header: PROVIDER
+  value: "has(this.status.provider) && this.status.provider != ''? this.status.provider: '-'"
 
 - header: STATE
   value: this.status.state

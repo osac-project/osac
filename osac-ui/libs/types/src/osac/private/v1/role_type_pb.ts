@@ -209,3 +209,4 @@ export enum RoleState {
  */
 export const RoleStateSchema: GenEnum<RoleState> = /*@__PURE__*/
   enumDesc(file_osac_private_v1_role_type, 0);
+

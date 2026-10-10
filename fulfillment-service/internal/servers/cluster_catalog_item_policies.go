@@ -25,15 +25,14 @@ import (
 )
 
 // validateAndCanonicalizeClusterCatalogItemPolicies checks the locked values and editable defaults
-// of the Cluster Catalog Item being saved. It resolves version, secret, network, and HostType
+// of the Cluster Catalog Item being saved. It resolves version, secret, network, and bare metal instance type
 // references using each field's full or local reference rules, then stores target IDs and names
 // in the policy. The request transaction holds dependency locks until the save ends.
 // On error, the caller discards this copy of the item; Template parameters are checked separately.
 func validateAndCanonicalizeClusterCatalogItemPolicies(
 	ctx context.Context,
 	item *privatev1.ClusterCatalogItem,
-	template *privatev1.ClusterTemplate,
-	hostTypesDao *dao.GenericDAO[*privatev1.HostType],
+	instanceTypesDao *dao.GenericDAO[*privatev1.BareMetalInstanceType],
 	clusterVersionsDao *dao.GenericDAO[*privatev1.ClusterVersion],
 	secretsDao *dao.GenericDAO[*privatev1.Secret],
 	subnetsDao *dao.GenericDAO[*privatev1.Subnet],
@@ -64,14 +63,10 @@ func validateAndCanonicalizeClusterCatalogItemPolicies(
 		return err
 	}
 
-	if err := validateClusterCatalogItemNodeSetValues(fields); err != nil {
-		return err
-	}
-
 	if err := validateClusterCatalogItemNetworkAttachmentPolicy(ctx, scope, fields.GetNetworkAttachment(), subnetsDao, securityGroupsDao); err != nil {
 		return err
 	}
-	return validateClusterCatalogItemNodeSetPolicy(ctx, item, template, hostTypesDao)
+	return validateClusterCatalogItemNodeSetPolicy(ctx, item, instanceTypesDao)
 }
 
 // applyClusterCatalogItemPolicies merges the offering's field rules into a new Cluster spec.
@@ -201,13 +196,9 @@ func validateClusterCatalogItemPullSecretPolicy(
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
-		if err := validateResourceNotDeleted("secret", refKey(ref), " in fields.pull_secret_secret", resolved.GetMetadata()); err != nil {
+		if err := validateResolvedSecretLifecycleAndType(resolved, refKey(ref), "fields.pull_secret_secret",
+			privatev1.SecretType_SECRET_TYPE_PULL_SECRET); err != nil {
 			return nil, err
-		}
-		if resolved.GetType() != privatev1.SecretType_SECRET_TYPE_PULL_SECRET {
-			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"secret '%s' referenced by fields.pull_secret_secret has type %s; expected %s",
-				refKey(ref), resolved.GetType(), privatev1.SecretType_SECRET_TYPE_PULL_SECRET)
 		}
 		return canonicalSecretLocalReference(resolved), nil
 	}
@@ -241,12 +232,7 @@ func validateClusterCatalogItemNetworkCIDRPolicies(network *privatev1.ClusterNet
 
 // validateClusterCatalogItemScalarPolicies checks SSH-key and automatic-external-IP policies without changing them.
 func validateClusterCatalogItemScalarPolicies(fields *privatev1.ClusterCatalogItemFields) error {
-	if err := validateCatalogItemStringPolicy(fields.GetSshPublicKey(), "fields.ssh_public_key", func(value string) error {
-		if value == "" {
-			return nil
-		}
-		return validateOpenSSHPublicKey(value)
-	}); err != nil {
+	if err := validateCatalogItemStringPolicy(fields.GetSshPublicKey(), "fields.ssh_public_key", validateOpenSSHPublicKey); err != nil {
 		return err
 	}
 	if err := validateCatalogItemBoolPolicy(fields.GetAutoExternalIpAttachment(), "fields.auto_external_ip_attachment"); err != nil {
@@ -314,94 +300,74 @@ func validateClusterCatalogItemNetworkAttachmentPolicy(
 	return nil
 }
 
-// validateClusterCatalogItemNodeSetValues checks the policy branch and node-set sizes without resolving references.
-func validateClusterCatalogItemNodeSetValues(fields *privatev1.ClusterCatalogItemFields) error {
-	state, err := decodeClusterNodeSetMapPolicy(fields.GetNodeSets())
-	if err != nil {
-		return catalogItemPolicyError("fields.node_sets", err.Error())
-	}
-	if state.hasLocked {
-		if err := validateClusterCatalogItemNodeSetMap("fields.node_sets", state.lockedValue); err != nil {
-			return err
-		}
-	}
-	if state.hasDefault {
-		if err := validateClusterCatalogItemNodeSetMap("fields.node_sets", state.defaultValue); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// validateClusterCatalogItemNodeSetMap checks nonempty node-set values and positive sizes, returning the first invalid entry.
-func validateClusterCatalogItemNodeSetMap(field string, nodeSets map[string]*privatev1.ClusterNodeSet) error {
-	if len(nodeSets) == 0 {
-		return catalogItemPolicyError(field, "locked/default node sets must not be empty")
-	}
-	for name, nodeSet := range nodeSets {
-		if nodeSet == nil {
-			return catalogItemPolicyError(field, fmt.Sprintf("node set '%s' must not be null", name))
-		}
-		if !nodeSet.HasSize() || nodeSet.GetSize() <= 0 {
-			return catalogItemPolicyError(field, fmt.Sprintf("node set '%s' size must be greater than zero", name))
-		}
-	}
-	return nil
-}
-
-// validateClusterCatalogItemNodeSetPolicy checks HostType references in each governed node set.
-// A supplied name is looked up from the Catalog Item's tenant/project or explicit shared scope;
-// an omitted HostType inherits the corresponding Template node set's reference. The resolved ID
-// must match the Template's HostType. The item receives the resolved references, while the
-// Template stays unchanged; dependency locks last through the request transaction.
+// validateClusterCatalogItemNodeSetPolicy checks hardware selections in a Catalog Item's
+// locked or default NodeSets. A concrete network policy requires each selected type to
+// provide a fabric port. Dependency locks are held until the transaction finishes.
 func validateClusterCatalogItemNodeSetPolicy(
 	ctx context.Context,
 	item *privatev1.ClusterCatalogItem,
-	template *privatev1.ClusterTemplate,
-	hostTypes *dao.GenericDAO[*privatev1.HostType],
+	instanceTypes *dao.GenericDAO[*privatev1.BareMetalInstanceType],
 ) error {
 	policy := item.GetFields().GetNodeSets()
-	if policy == nil {
+	state, err := decodeClusterNodeSetMapPolicy(policy)
+	if err != nil {
+		return catalogItemPolicyError("fields.node_sets", err.Error())
+	}
+	networkState, err := decodeClusterNetworkAttachmentPolicy(item.GetFields().GetNetworkAttachment())
+	if err != nil {
+		return catalogItemPolicyError("fields.network_attachment", err.Error())
+	}
+	// Defer fabric validation when callers must supply the editable network attachment themselves.
+	requiresFabricInterface := networkState.hasLocked || networkState.hasDefault
+	var nodeMap *privatev1.ClusterNodeSetMap
+	// Only the Catalog Item may supply NodeSets; a caller can supply its own if no policy does.
+	switch {
+	case state.hasLocked:
+		nodeMap = policy.GetLocked()
+	case state.hasDefault:
+		nodeMap = policy.GetEditable().GetDefaultValue()
+	default:
 		return nil
 	}
-	var nodeMap *privatev1.ClusterNodeSetMap
-	if policy.HasLocked() {
-		nodeMap = policy.GetLocked()
-	} else {
-		nodeMap = policy.GetEditable().GetDefaultValue()
+	if err := validateClusterNodeSetMap(convertCatalogNodeSets(nodeMap.GetItems())); err != nil {
+		return catalogItemPolicyError("fields.node_sets", err.Error())
 	}
 	for name, node := range nodeMap.GetItems() {
-		if node == nil {
-			return catalogItemPolicyError("fields.node_sets", "node set is required")
-		}
-		ref := node.GetHostType()
-		templateNode := template.GetNodeSets()[name]
-		if ref == nil && templateNode != nil {
-			ref = cloneMessage(templateNode.GetHostType())
-			if ref != nil {
-				inheritReferenceScope(ref, template.GetMetadata())
-			}
-		}
-		if ref == nil {
-			return catalogItemPolicyError("fields.node_sets."+name, "host type is required")
-		}
-		resolved, err := resolveAndCanonicalizeLockedReference(ctx, hostTypes, item.GetMetadata(), ref, "host type", grpccodes.InvalidArgument)
+		ref := node.GetBaremetalInstanceType()
+		resolved, err := resolveCaaSBareMetalInstanceType(ctx, instanceTypes, item.GetMetadata(), ref, "bare metal instance type", true)
 		if err != nil {
-			return err
-		}
-		if templateNode != nil && templateNode.GetHostType() != nil {
-			expected := cloneMessage(templateNode.GetHostType())
-			templateHost, err := resolveAndCanonicalizeLockedReference(ctx, hostTypes, template.GetMetadata(), expected, "host type", grpccodes.InvalidArgument)
-			if err != nil {
+			if grpcstatus.Code(err) != grpccodes.InvalidArgument {
 				return err
 			}
-			if templateHost.GetId() != resolved.GetId() {
-				return catalogItemPolicyError("fields.node_sets."+name, "host type conflicts with the template")
+			return catalogItemPolicyError("fields.node_sets."+name+".baremetal_instance_type", grpcstatus.Convert(err).Message())
+		}
+		if requiresFabricInterface {
+			if _, err := selectClusterFabricInterface(resolved); err != nil {
+				return catalogItemPolicyError("fields.node_sets."+name, err.Error())
 			}
 		}
-		node.SetHostType(ref)
+		node.SetBaremetalInstanceType(ref)
 	}
 	return nil
+}
+
+// convertCatalogNodeSets copies catalog-policy values into Cluster NodeSets without aliasing.
+func convertCatalogNodeSets(value map[string]*privatev1.ClusterCatalogNodeSet) map[string]*privatev1.ClusterNodeSet {
+	if value == nil {
+		return nil
+	}
+	result := make(map[string]*privatev1.ClusterNodeSet, len(value))
+	for name, node := range value {
+		if node == nil {
+			result[name] = nil
+			continue
+		}
+		size := node.GetSize()
+		result[name] = privatev1.ClusterNodeSet_builder{
+			Size: &size, BaremetalInstanceType: cloneMessage(node.GetBaremetalInstanceType()),
+		}.Build()
+	}
+	return result
 }
 
 // decodeSecretReferencePolicy decodes the selected locked/default policy value without mutating the policy.
@@ -491,7 +457,7 @@ func decodeClusterNetworkAttachmentPolicy(
 
 // decodeClusterNodeSetMapPolicy decodes the selected locked/default policy value without mutating the policy.
 // An absent policy yields no governed value; malformed behavior returns an error.
-// Node sets are converted to resource values with copied HostType references and explicit sizes.
+// Node sets are converted to resource values with copied BareMetalInstanceType references and explicit sizes.
 func decodeClusterNodeSetMapPolicy(policy *privatev1.ClusterNodeSetMapPolicy) (policyState[map[string]*privatev1.ClusterNodeSet], error) {
 	if policy == nil {
 		return policyState[map[string]*privatev1.ClusterNodeSet]{}, nil
@@ -501,7 +467,7 @@ func decodeClusterNodeSetMapPolicy(policy *privatev1.ClusterNodeSetMapPolicy) (p
 		if locked == nil {
 			return policyState[map[string]*privatev1.ClusterNodeSet]{}, fmt.Errorf("locked node sets policy is empty")
 		}
-		return policyState[map[string]*privatev1.ClusterNodeSet]{hasLocked: true, lockedValue: convertTemplateNodeSets(locked.GetItems())}, nil
+		return policyState[map[string]*privatev1.ClusterNodeSet]{hasLocked: true, lockedValue: convertCatalogNodeSets(locked.GetItems())}, nil
 	}
 	if policy.HasEditable() {
 		editable := policy.GetEditable()
@@ -512,7 +478,7 @@ func decodeClusterNodeSetMapPolicy(policy *privatev1.ClusterNodeSetMapPolicy) (p
 		if defaultValue == nil {
 			return policyState[map[string]*privatev1.ClusterNodeSet]{}, nil
 		}
-		return policyState[map[string]*privatev1.ClusterNodeSet]{hasDefault: true, defaultValue: convertTemplateNodeSets(defaultValue.GetItems())}, nil
+		return policyState[map[string]*privatev1.ClusterNodeSet]{hasDefault: true, defaultValue: convertCatalogNodeSets(defaultValue.GetItems())}, nil
 	}
 	return policyState[map[string]*privatev1.ClusterNodeSet]{}, fmt.Errorf("node sets policy has no behavior")
 }

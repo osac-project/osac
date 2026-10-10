@@ -44,6 +44,7 @@
         vast_storage_vip_pool_subnet_cidr: "24"
         vast_storage_config_namespace: "osac-system"
         csi_driver_install_enabled: true
+        csi_driver_install_lvms_storage_class_enabled: true
     - name: Delete any pre-existing hub Secret (clean slate)
       kubernetes.core.k8s:
         state: absent
@@ -61,6 +62,7 @@
       ansible.builtin.file:
         path: /tmp/osac_test_overrides.log
         state: touch
+        mode: "0600"
 
     - name: Set test variables (Tenant dispatch, csi_driver_install stubbed)
       ansible.builtin.set_fact:
@@ -118,6 +120,7 @@
           - "'csi_driver_install' in _override_log"
           - >-
             'providers=' ~ (osac_job_vars.storage_tier_definitions | map(attribute='provider') | sort | list | to_json) in _override_log
+          - "'local-storage-class=False' in _override_log"
         fail_msg: "csi_driver_install override did not fire with the expected providers from the playbook's vars: mapping"
         success_msg: "csi_driver_install override fired with the correct providers from the playbook's vars: mapping"
     # Proves the rest of the playbook (the pre-existing osac.service.storage_provider

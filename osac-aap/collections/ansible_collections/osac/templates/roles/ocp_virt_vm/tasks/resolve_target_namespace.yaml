@@ -1,0 +1,26 @@
+---
+- name: Resolve subnet target namespace from ComputeInstance annotation
+  ansible.builtin.set_fact:
+    compute_instance_target_namespace: "{{ (compute_instance.metadata.annotations | default({}, true)).get('osac.openshift.io/subnet-target-namespace', '') }}"
+
+- name: Resolve legacy tenant target namespace when subnet annotation is absent
+  when: not compute_instance_target_namespace
+  block:
+    - name: Retrieve tenant for legacy ComputeInstance placement
+      kubernetes.core.k8s_info:
+        api_version: osac.openshift.io/v1alpha1
+        kind: Tenant
+        name: "{{ compute_instance.status.tenantReference.name }}"
+        namespace: "{{ compute_instance.status.tenantReference.namespace }}"
+      register: legacy_tenant
+
+    - name: Require exactly one tenant for legacy ComputeInstance placement
+      ansible.builtin.assert:
+        that: legacy_tenant.resources | length == 1
+        fail_msg: "Tenant CR lookup returned {{ legacy_tenant.resources | length }} match(es); exactly 1 was expected."
+
+    - name: Use legacy tenant namespace for VM resources
+      ansible.builtin.set_fact:
+        compute_instance_target_namespace: >-
+          {{ legacy_tenant.resources[0].get('status', {}).get('namespace')
+             | default(legacy_tenant.resources[0].metadata.name, true) }}

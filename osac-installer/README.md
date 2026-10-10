@@ -18,6 +18,7 @@ For detailed architecture, workflows, and design documentation, please refer to
 [`docs/`](../docs/README.md) at the root of this repository.
 
 The OSAC platform provides:
+
 - **Self-service provisioning** for clusters and virtual machines through a governed API
 - **Template-based automation** using Red Hat Ansible Automation Platform
 - **Multi-hub support** allowing multiple infrastructure hubs to be managed by a single fulfillment service
@@ -60,10 +61,12 @@ The OSAC platform relies on five core components to deliver governed self-servic
 
 > **System Requirements** This solution requires the following platforms to be installed
 > and operational:
-> * Red Hat OpenShift Advanced Cluster Management (RHACM)
-> * Red Hat OpenShift Virtualization (OCP-Virt) - **Optional**: Only required for VM as a Service (VMaaS) support
-> * Red Hat Ansible Automation Platform (AAP)
-> * A network backend for bare metal provisioning: either **ESI** (Elastic System Infrastructure) or **Netris** (see [Network Backend Configuration](#network-backend-configuration-caas))
+>
+> - Red Hat OpenShift Advanced Cluster Management (RHACM)
+> - Red Hat OpenShift Virtualization (OCP-Virt) - **Optional**: Only required for VM as a Service (VMaaS) support
+> - Red Hat Ansible Automation Platform (AAP)
+> - A network backend for bare metal provisioning: **Netris** or agentless
+>   (`global.networking` — see [Network Backend Configuration](#network-backend-configuration-caas))
 
 **Configuration Manifests**
 
@@ -75,22 +78,21 @@ target Hub cluster.
 > files modify cluster-wide settings. Please coordinate with the appropriate cluster
 > administrators before proceeding.
 
-
 ### Prerequisites Summary
 
 | **Category** | **Requirement** | **Notes / Details** |
-|---------------|-----------------|----------------------|
+| --------------- | ----------------- | ---------------------- |
 | **Platform** | Red Hat OpenShift Container Platform (OCP) 4.17 or later | Must have cluster admin access to the hub cluster. |
 | **Operators** | Red Hat Advanced Cluster Management (RHACM) 2.18+<br>Red Hat OpenShift Virtualization (OCP-Virt) 4.17+<br>Red Hat Ansible Automation Platform (AAP) 2.5+ | These must be installed and running prior to OSAC installation. |
 | **CLI Tools** | `oc` (OpenShift CLI) v4.17+<br>`helm` v3.x<br>`git` | Ensure all CLIs are available in your `PATH`. |
 | **Container Registry Access** | `registry.redhat.io` and `quay.io` | Verify credentials and pull secrets are valid in the target cluster namespace. |
 | **Network / DNS** | Ingress route configured for OSAC services | Required for external access to fulfillment API and AAP UI. |
 | **Authentication / IDM** | Organization Identity Provider (e.g., Keycloak, LDAP, RH-SSO) | Used for tenant and user identity mapping. |
+| **Kafka** | Broker access for fulfillment events, even when metering is disabled | See [external Kafka configuration](../docs/guides/installation/kafka-configuration.md) for connection settings, credentials, ACLs, TLS trust, and a Strimzi example. |
 | **Storage** | Dynamic storage class available (e.g., `ocs-storagecluster-cephfs`, `lvms-storage`) | Required for persistence of operator and AAP components. |
 | **Permissions** | Cluster-admin access to deploy operators and create CRDs | Limited access users can only deploy into namespaces configured by the admin. |
 | **License Files** | `license.zip` (AAP subscription) | Must be placed in your values directory (e.g., `values/<env>/license.zip`). |
 | **Internet Access** | Outbound access to GitHub and `ghcr.io` (for fetching chart dependencies, OCI charts, and releases) | Required during installation and updates. |
-
 
 ## Installation
 
@@ -145,9 +147,9 @@ make install-osac  PLATFORM=openshift PROFILE=<profile> NS=<namespace>   # OSAC 
 ```
 
 | Variable | Description |
-|----------|-------------|
+| ---------- | ------------- |
 | `PLATFORM` | `kind` or `openshift` (required) |
-| `PROFILE` | `dev`, `dev-full`, `vmaas-ci`, `bmaas-ci`, `caas-ci`, or `full-ci` (required; `dev-full` is kind only) |
+| `PROFILE` | `dev`, `dev-full`, `vmaas-ci`, `bmaas-ci`, `caas-ci`, `full-ci`, or `cudn-evpn-netris-test` (required; `dev-full` is kind only) |
 | `NS` | Target namespace (required) |
 | `EXTRA_HELM_ARGS` | Extra `--set`/`--set-string` args appended to helm commands |
 
@@ -161,6 +163,65 @@ the end-to-end "create a VM from the UI" experience:
 
 ```bash
 make install PLATFORM=kind PROFILE=dev-full NS=osac
+```
+
+To use source-built images, use the existing component build targets and then
+load the resulting image tags into Kind. Use the same `CONTAINER_TOOL` value for
+building and loading; the image names must remain registry-qualified so they
+match the dev-full Helm values:
+
+```bash
+make install-infra PLATFORM=kind PROFILE=dev-full NS=osac
+
+export CONTAINER_TOOL=podman  # Use docker consistently instead if preferred.
+make -C ../fulfillment-service image-build \
+  IMG=ghcr.io/osac-project/fulfillment-service:latest \
+  CONTAINER_TOOL="$CONTAINER_TOOL"
+make -C ../osac-operator image-build \
+  IMG=ghcr.io/osac-project/osac-operator:latest \
+  CONTAINER_TOOL="$CONTAINER_TOOL"
+make -C ../osac-csi-driver image-build \
+  IMG=ghcr.io/osac-project/osac-csi-driver:latest \
+  CONTAINER_TOOL="$CONTAINER_TOOL"
+"$CONTAINER_TOOL" build -t ghcr.io/osac-project/osac-ui:latest \
+  -f ../osac-ui/Containerfile ../osac-ui
+
+make kind-load-images PLATFORM=kind PROFILE=dev-full NS=osac \
+  CONTAINER_TOOL="$CONTAINER_TOOL"
+make install-osac PLATFORM=kind PROFILE=dev-full NS=osac
+make install-devstack PLATFORM=kind PROFILE=dev-full NS=osac
+```
+
+`kind-load-images` only loads already-built images; it does not rebuild them.
+After changing source code, rerun the relevant component `image-build` target
+and then `kind-load-images`. Loaded images are restarted only for workloads that
+use one of the local image references. Each Go component also exposes a
+single-image `kind-load-image` target when loading only that component is useful.
+
+#### CUDN EVPN/Netris E2E environment
+
+`PROFILE=cudn-evpn-netris-test` is an explicit OpenShift-only profile. It
+contains the normal VMaaS + BMaaS instance and infrastructure values, registers
+both `netris` (fabric) and `cudn_evpn` (k8s) through the operator's nested
+`networkManagers` map, and selects them on the default NetworkClass. It does
+not install the FRR operator, create the Phase 1 EVPN
+`FRRConfiguration`, create the external EVPN/BGP/VTEP fabric, or provide the
+`cudn_evpn` implementation; those prerequisites must be prepared before
+installation.
+
+Install it with:
+
+```bash
+make install PLATFORM=openshift PROFILE=cudn-evpn-netris-test NS=osac
+```
+
+The profile includes the non-secret Netris controller/site/tenant settings.
+Supply the controller password and any site-specific Netris or SSH values in
+a private values file and pass it through `INSTANCE_VALUES_EXTRA`, for example:
+
+```bash
+make install PLATFORM=openshift PROFILE=cudn-evpn-netris-test NS=osac \
+  INSTANCE_VALUES_EXTRA="-f cudn-evpn-netris-test-secrets.local.yaml"
 ```
 
 On top of `dev`, `dev-full` adds (via `scripts/dev-full/`, orchestrated by the
@@ -193,15 +254,25 @@ so networking resources reconcile to READY without a real fabric (kind has none)
   - **Linux host** — rootful podman (invoked via `sudo`) or Docker
   - **Linux + Distrobox** — the rootful podman host socket (`/run/podman/podman.sock`);
     install the drop-in at `scripts/dev-full/manifests/podman-socket-rootful.conf`
-  - **macOS** — Docker Desktop (auto-detected)
+  - **macOS** — Docker Desktop or Podman Desktop. For Podman, start its machine and
+    verify `podman info` succeeds before installing.
 - **`/dev/kvm`** present (Linux), **`fs.inotify.max_user_instances >= 256`**, and
   `kind`, `helm`, `kubectl`, `jq`, `curl`, `openssl`, `python3` on `PATH`
-- Override runtime detection with `KIND_EXPERIMENTAL_PROVIDER=docker|podman`
+- Override runtime detection with `KIND_EXPERIMENTAL_PROVIDER=docker|podman`.
+  On Apple Silicon, an explicit `CONTAINER_TOOL=docker|podman` selects the same
+  runtime for installer operations when `KIND_EXPERIMENTAL_PROVIDER` is unset;
+  the latter takes precedence when both are provided.
 
-On an Apple Silicon Mac, the install target automatically builds an arm64
-replacement for `quay.io/openshift/origin-cli:4.20.0` with Docker and loads it
-into the kind cluster before installing Helm charts. Docker Desktop must be
-running; no manual image setup is required.
+On an Apple Silicon Mac, either Kind profile automatically builds an arm64
+replacement for `quay.io/openshift/origin-cli:4.20.0` with the selected
+container runtime and loads it into the kind cluster before installing Helm
+charts. No manual image setup is required.
+
+`dev-full` uses the normal `ghcr.io/osac-project/...:latest` image references, so
+the rendered deployment does not need a development-only registry name. The
+profile uses `IfNotPresent`: Kubernetes uses an image loaded in the node and does
+not pull it again, while still allowing a partial deployment to pull an image
+that has not been built locally.
 
 **Endpoints** (via the kind port mappings; every `*.localhost` name resolves to
 127.0.0.1 automatically, so no `/etc/hosts` editing is needed):
@@ -240,6 +311,12 @@ automatically by Phase 1. Each is gated by a values toggle (e.g.,
 `certManager.enabled: true`). See [prerequisites/README.md](prerequisites/README.md)
 for details on what each prerequisite provides.
 
+Standalone MCE is disabled by default. Set `mce.enabled: true` in the
+infrastructure values when this installation owns its lifecycle; the `caas-ci`
+profile does so explicitly. Leave it `false` when RHACM or an existing MCE
+installation owns the lifecycle. The disabled state also suppresses the
+temporary Assisted image override resources.
+
 #### AAP Configuration
 
 AAP instance groups carry backend credentials for provisioning jobs.
@@ -249,11 +326,37 @@ See [docs/aap-configuration.md](docs/aap-configuration.md) for details.
 
 #### Network Backend Configuration (CaaS)
 
-By default the network backend is **ESI**. To switch to **Netris**, set
-the Netris-specific values in your values file under `aap.instanceGroups.clusterFulfillment`.
+Default networking is agentless (`global.networking.fabricManager: ""`,
+`k8sManager: k8s_only`). For **Netris**, set the facade and enable both AAP
+instance groups:
 
-See [docs/network-backend.md](docs/network-backend.md) for Netris-specific
-variables and the `NETRIS_RESOURCE_CLASS_MAP` format.
+```yaml
+global:
+  networking:
+    fabricManager: netris
+    k8sManager: ""
+    netris:
+      controllerUrl: "https://redhat-ctl.netris.io"
+      credentials:
+        username: "netris"
+        externalSecret: true
+      siteId: "5"
+      tenantId: "1"
+      tenantName: "Admin"
+
+aap:
+  instanceGroups:
+    clusterFulfillment:
+      enabled: true
+    networkFulfillment:
+      enabled: true
+```
+
+Helm derives `NETWORK_CLASS`, manager ConfigMaps, and the default NetworkClass
+from this block. Do not set those by hand unless using expert overrides.
+
+See [docs/network-backend.md](docs/network-backend.md) for profiles,
+credentials, and the advanced/manual path.
 
 #### DNS Backend Configuration (CaaS)
 
@@ -276,9 +379,14 @@ oc logs -f job/osac-aap-bootstrap -n <project-name>
 helm upgrade osac charts/osac/ \
   --namespace <project-name> \
   --values values/<project-name>/values.yaml \
+  --force-conflicts \
   --timeout 40m \
   --wait
 ```
+
+On Helm 4, `--force-conflicts` is required: the AAP operator takes field
+ownership of `app.kubernetes.io/managed-by` on the `osac-aap` CR. Omit the
+flag on Helm 3.
 
 The post-upgrade hook re-publishes cluster templates automatically. This is
 idempotent - existing templates are updated via PATCH while new templates
@@ -300,10 +408,12 @@ make uninstall
 make install       PLATFORM=... PROFILE=... NS=...  # Full install (infra + osac)
 make install-infra PLATFORM=... PROFILE=... NS=...  # Infrastructure only
 make install-osac  PLATFORM=... PROFILE=... NS=...  # OSAC application only
+make kind-load-images PLATFORM=kind PROFILE=dev-full NS=... # Load existing images
 make uninstall     PLATFORM=... PROFILE=... NS=...  # Full uninstall
 make test          PLATFORM=... PROFILE=... NS=... SUITE=...  # Integration tests
 make helm-lint                                       # Lint all charts
 make helm-template       # Dry-run render all templates
+make mce-render-test                                  # Verify disabled MCE defaults and CaaS enablement
 make helm-validate                                   # Lint + template (full validation)
 make sync-charts         # Rebuild chart dependencies (legacy alias; runs helm dependency build)
 ```
@@ -383,7 +493,7 @@ After deployment, you can access the AAP web interface to monitor jobs and manag
 ### Get the AAP URL
 
 ```bash
-$ oc get route -n <project-name> | grep osac-aap
+oc get route -n <project-name> | grep osac-aap
 ```
 
 > **Note:** The main AAP URL will be something like: `https://osac-aap-<project-name>.apps.your-cluster.com`
@@ -423,6 +533,7 @@ $ EXTRA_SERVICES=true INSTALLER_NAMESPACE=<project-name> ./scripts/teardown.sh
 ```
 
 The script removes resources in reverse order:
+
 1. OSAC CRs (while operator is running for finalizer processing)
 2. Helm release and project namespace
 3. Keycloak
@@ -437,9 +548,10 @@ The script removes resources in reverse order:
 > **Warning:** This removes **all** prerequisite operators and their namespaces. If other
 > workloads on the cluster depend on these operators (e.g., cert-manager, MetalLB), do not
 > run this script. Instead, manually uninstall:
+>
 > ```bash
-> $ helm uninstall osac -n <project-name>
-> $ oc delete namespace <project-name>
+> helm uninstall osac -n <project-name>
+> oc delete namespace <project-name>
 > ```
 
 ## Troubleshooting
@@ -479,6 +591,7 @@ $ oc get events -n <project-name> --sort-by=.metadata.creationTimestamp
 ## Support
 
 For issues and questions:
+
 - Check the troubleshooting section above
 - Review component logs for error messages
 - Verify prerequisites are properly installed

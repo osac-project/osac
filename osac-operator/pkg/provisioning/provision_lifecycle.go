@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"strings"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -110,17 +111,29 @@ func CheckAPIServerForNonTerminalProvisionJobAndTarget(ctx context.Context, apiR
 
 // TriggerJob triggers a new provision job and updates the jobs slice in place via State.
 func TriggerJob(ctx context.Context, provider ProvisioningProvider, resource client.Object, provState *State, maxHistory int, pollInterval time.Duration) (ctrl.Result, error) {
-	return triggerJobForTarget(ctx, provider, resource, provState, "", maxHistory, pollInterval)
+	return triggerJobForTarget(ctx, provider, resource, provState, "", maxHistory, pollInterval, nil)
 }
 
 // triggerJobForTarget is TriggerJob scoped to a single job target: the
 // appended JobStatus is tagged with target so it can be found again via
 // FindLatestJobByTypeAndTarget.
-func triggerJobForTarget(ctx context.Context, provider ProvisioningProvider, resource client.Object, provState *State, target string, maxHistory int, pollInterval time.Duration) (ctrl.Result, error) {
+func triggerJobForTarget(ctx context.Context, provider ProvisioningProvider, resource client.Object, provState *State, target string, maxHistory int, pollInterval time.Duration, inheritedExtraVars map[string]any) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 	log.Info("triggering provision job", "target", target)
 
-	result, err := provider.TriggerProvision(ctx, resource)
+	var (
+		result *ProvisionResult
+		err    error
+	)
+	if len(inheritedExtraVars) > 0 {
+		providerWithExtraVars, ok := provider.(ProvisioningProviderWithExtraVars)
+		if !ok {
+			return ctrl.Result{}, fmt.Errorf("provider %q does not support inherited extra vars", provider.Name())
+		}
+		result, err = providerWithExtraVars.TriggerProvisionWithExtraVars(ctx, resource, inheritedExtraVars)
+	} else {
+		result, err = provider.TriggerProvision(ctx, resource)
+	}
 	if err != nil {
 		if rateLimitErr, ok := AsRateLimitError(err); ok {
 			log.Info("provision request rate-limited, requeueing", "target", target, "retryAfter", rateLimitErr.RetryAfter)
@@ -148,8 +161,15 @@ func triggerJobForTarget(ctx context.Context, provider ProvisioningProvider, res
 type PollCallbacks struct {
 	// OnFailed is called when the job transitions to Failed state.
 	OnFailed func(message string)
+	// OnOutputError is called when a successful job's outputs cannot be processed.
+	OnOutputError func(message string)
 	// OnSuccess is called when the job succeeds.
 	OnSuccess func(status ProvisionStatus)
+	// OnSuccessWithExtraVars is called when the job succeeds and receives its output variables.
+	// When set, the provider's output-aware status method is used and this callback runs
+	// before OnSuccess. Errors without a confirmed successful status are retried; output
+	// errors accompanying a successful status are reported through OnOutputError.
+	OnSuccessWithExtraVars func(status ProvisionStatusWithExtraVars) error
 }
 
 // PollJob checks the status of an existing provision job and updates the jobs slice in place.
@@ -157,8 +177,35 @@ func PollJob(ctx context.Context, provider ProvisioningProvider, resource client
 	log := ctrllog.FromContext(ctx)
 	log.Info("polling provision job status", "jobID", latestJob.JobID, "currentState", latestJob.State)
 
-	status, err := provider.GetProvisionStatus(ctx, resource, latestJob.JobID)
+	var status ProvisionStatus
+	var statusWithExtraVars ProvisionStatusWithExtraVars
+	var err error
+	if callbacks != nil && callbacks.OnSuccessWithExtraVars != nil {
+		if outputProvider, ok := provider.(ProvisioningProviderWithProvisionOutputs); ok {
+			statusWithExtraVars, err = outputProvider.GetProvisionStatusWithExtraVars(ctx, resource, latestJob.JobID)
+			status = statusWithExtraVars.ProvisionStatus
+		} else {
+			status, err = provider.GetProvisionStatus(ctx, resource, latestJob.JobID)
+			statusWithExtraVars.ProvisionStatus = status
+		}
+	} else {
+		status, err = provider.GetProvisionStatus(ctx, resource, latestJob.JobID)
+	}
 	if err != nil {
+		if callbacks != nil && callbacks.OnSuccessWithExtraVars != nil && status.State.IsSuccessful() {
+			updatedJob := *latestJob
+			updatedJob.State = status.State
+			updatedJob.Message = status.MessageWithDetails()
+			UpdateJob(*provState.Jobs, updatedJob)
+
+			outputErr := fmt.Errorf("failed to retrieve provision outputs: %w", err)
+			log.Error(err, "failed to retrieve provision outputs", "jobID", latestJob.JobID)
+			if callbacks.OnOutputError != nil {
+				callbacks.OnOutputError(outputErr.Error())
+				return ctrl.Result{}, nil
+			}
+			return ctrl.Result{}, outputErr
+		}
 		log.Error(err, "failed to get provision status", "jobID", latestJob.JobID)
 		updatedJob := *latestJob
 		updatedJob.Message = fmt.Sprintf("Failed to get job status: %v", err)
@@ -185,8 +232,21 @@ func PollJob(ctx context.Context, provider ProvisioningProvider, resource client
 		return ctrl.Result{RequeueAfter: pollInterval}, nil
 	}
 
-	if status.State.IsSuccessful() && callbacks != nil && callbacks.OnSuccess != nil {
-		callbacks.OnSuccess(status)
+	if status.State.IsSuccessful() && callbacks != nil {
+		if callbacks.OnSuccessWithExtraVars != nil {
+			if err := callbacks.OnSuccessWithExtraVars(statusWithExtraVars); err != nil {
+				outputErr := fmt.Errorf("failed to process provision outputs: %w", err)
+				log.Error(err, "failed to process provision outputs", "jobID", latestJob.JobID)
+				if callbacks.OnOutputError != nil {
+					callbacks.OnOutputError(outputErr.Error())
+					return ctrl.Result{}, nil
+				}
+				return ctrl.Result{}, outputErr
+			}
+		}
+		if callbacks.OnSuccess != nil {
+			callbacks.OnSuccess(status)
+		}
 	}
 	return ctrl.Result{}, nil
 }
@@ -209,7 +269,7 @@ func RunProvisioningLifecycle(
 	checkAPIServer func() bool,
 	statusFlush func() error,
 ) (ctrl.Result, error) {
-	result, triggered, err := runLifecycleCore(ctx, provider, resource, provState, "", maxHistory, pollInterval, callbacks, checkAPIServer)
+	result, triggered, err := runLifecycleCore(ctx, provider, resource, provState, "", maxHistory, pollInterval, callbacks, checkAPIServer, nil)
 	if err != nil {
 		return result, err
 	}
@@ -237,6 +297,7 @@ func runLifecycleCore(
 	pollInterval time.Duration,
 	callbacks *PollCallbacks,
 	checkAPIServer func() bool,
+	prepareTrigger func() (map[string]any, bool, time.Duration),
 ) (ctrl.Result, bool, error) {
 	action, latestJob := evaluateActionForTarget(provState, target, checkAPIServer)
 
@@ -247,7 +308,16 @@ func runLifecycleCore(
 		if prevJob != nil {
 			prevJobID = prevJob.JobID
 		}
-		res, err := triggerJobForTarget(ctx, provider, resource, provState, target, maxHistory, pollInterval)
+		var inheritedExtraVars map[string]any
+		if prepareTrigger != nil {
+			var ready bool
+			var requeueAfter time.Duration
+			inheritedExtraVars, ready, requeueAfter = prepareTrigger()
+			if !ready {
+				return ctrl.Result{RequeueAfter: requeueAfter}, nil
+			}
+		}
+		res, err := triggerJobForTarget(ctx, provider, resource, provState, target, maxHistory, pollInterval, inheritedExtraVars)
 		if err != nil {
 			return res, err
 		}
@@ -278,8 +348,8 @@ func runLifecycleCore(
 // JobTarget scopes one manager target (e.g. "fabric" or "k8s") within a
 // multi-target provisioning lifecycle run by RunMultiTargetProvisioningLifecycle.
 // Each target tracks its own job history (jobs tagged with a matching
-// JobStatus.Target) and is driven independently: one target backing off or
-// still running does not block or cancel another.
+// JobStatus.Target). Dependency metadata is supplied separately to
+// RunMultiTargetProvisioningLifecycleWithDependencies.
 type JobTarget struct {
 	// Name tags jobs triggered for this target (JobStatus.Target) and scopes
 	// this target's own PollCallbacks. Must be non-empty and unique within a
@@ -289,7 +359,9 @@ type JobTarget struct {
 	// Provider triggers/polls jobs for this target only.
 	Provider ProvisioningProvider
 
-	// Callbacks fire on this target's own success/failure. Optional.
+	// Callbacks fire on this target's own success/failure. Optional for
+	// independent targets; dependent targets require OnFailed to surface
+	// prerequisite failures.
 	Callbacks *PollCallbacks
 
 	// CheckAPIServer detects a non-terminal job for this target via a fresh
@@ -310,6 +382,17 @@ type JobTarget struct {
 	// sole target (see backfillLegacyJobTargets) — at most one target per
 	// call may set it.
 	AbsorbsLegacyHistory bool
+}
+
+// JobTargetDependency declares the prerequisite target and required outputs for a target.
+type JobTargetDependency struct {
+	// DependsOn names the target that must have a successful provision job
+	// before this target may trigger or retry provisioning.
+	DependsOn string
+
+	// RequiredExtraVars lists prerequisite output keys passed to this target.
+	// Output keys not listed here are not inherited.
+	RequiredExtraVars []string
 }
 
 // RunMultiTargetProvisioningLifecycle runs the same evaluate/trigger/poll/
@@ -340,10 +423,44 @@ func RunMultiTargetProvisioningLifecycle(
 	pollInterval time.Duration,
 	statusFlush func() error,
 ) (ctrl.Result, error) {
-	if err := validateJobTargets(targets); err != nil {
+	return runMultiTargetProvisioningLifecycle(ctx, targets, nil, resource, provState, maxHistory, pollInterval, statusFlush)
+}
+
+// RunMultiTargetProvisioningLifecycleWithDependencies runs a multi-target
+// provisioning lifecycle with prerequisite relationships keyed by target name.
+// Targets omitted from dependencies run independently.
+func RunMultiTargetProvisioningLifecycleWithDependencies(
+	ctx context.Context,
+	targets []JobTarget,
+	dependencies map[string]JobTargetDependency,
+	resource client.Object,
+	provState *State,
+	maxHistory int,
+	pollInterval time.Duration,
+	statusFlush func() error,
+) (ctrl.Result, error) {
+	return runMultiTargetProvisioningLifecycle(ctx, targets, dependencies, resource, provState, maxHistory, pollInterval, statusFlush)
+}
+
+func runMultiTargetProvisioningLifecycle(
+	ctx context.Context,
+	targets []JobTarget,
+	dependencies map[string]JobTargetDependency,
+	resource client.Object,
+	provState *State,
+	maxHistory int,
+	pollInterval time.Duration,
+	statusFlush func() error,
+) (ctrl.Result, error) {
+	if err := validateJobTargets(targets, dependencies); err != nil {
 		return ctrl.Result{}, err
 	}
 	backfillLegacyJobTargets(provState.Jobs, legacyHistoryOwnerForProvision(targets))
+	targetsByName := make(map[string]JobTarget, len(targets))
+	for _, target := range targets {
+		targetsByName[target.Name] = target
+	}
+	orderedTargets := orderJobTargets(targets, dependencies)
 
 	var (
 		errs         []error
@@ -351,8 +468,17 @@ func RunMultiTargetProvisioningLifecycle(
 		result       ctrl.Result
 	)
 
-	for _, t := range targets {
-		res, triggered, err := runLifecycleCore(ctx, t.Provider, resource, provState, t.Name, maxHistory, pollInterval, t.Callbacks, t.CheckAPIServer)
+	for _, t := range orderedTargets {
+		target := t
+		dependency := dependencies[target.Name]
+		var prepareTrigger func() (map[string]any, bool, time.Duration)
+		if dependency.DependsOn != "" {
+			prerequisite := targetsByName[dependency.DependsOn]
+			prepareTrigger = func() (map[string]any, bool, time.Duration) {
+				return prepareDependentTarget(ctx, target, dependency, prerequisite, resource, provState, pollInterval)
+			}
+		}
+		res, triggered, err := runLifecycleCore(ctx, t.Provider, resource, provState, t.Name, maxHistory, pollInterval, t.Callbacks, t.CheckAPIServer, prepareTrigger)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("target %q: %w", t.Name, err))
 		}
@@ -373,13 +499,12 @@ func RunMultiTargetProvisioningLifecycle(
 	return result, errors.Join(errs...)
 }
 
-// validateJobTargets rejects target lists that would make
+// validateJobTargets rejects target lists or dependency maps that would make
 // RunMultiTargetProvisioningLifecycle's per-target dispatch ambiguous or
 // impossible: at least one target, every target with a non-empty and unique
-// Name, a non-nil Provider and CheckAPIServer for each (both are
-// unconditionally invoked while evaluating that target's action), and at
-// most one target with AbsorbsLegacyHistory set (see legacyHistoryOwnerForProvision).
-func validateJobTargets(targets []JobTarget) error {
+// Name, a non-nil Provider and CheckAPIServer for each, valid dependency
+// references without cycles, and at most one target with AbsorbsLegacyHistory.
+func validateJobTargets(targets []JobTarget, dependencies map[string]JobTargetDependency) error {
 	if len(targets) == 0 {
 		return errors.New("at least one JobTarget is required")
 	}
@@ -399,6 +524,20 @@ func validateJobTargets(targets []JobTarget) error {
 		if t.CheckAPIServer == nil {
 			return fmt.Errorf("JobTarget %q: CheckAPIServer must not be nil", t.Name)
 		}
+		dependency := dependencies[t.Name]
+		if len(dependency.RequiredExtraVars) > 0 && dependency.DependsOn == "" {
+			return fmt.Errorf("JobTarget %q: RequiredExtraVars require DependsOn", t.Name)
+		}
+		seenKeys := make(map[string]struct{}, len(dependency.RequiredExtraVars))
+		for _, key := range dependency.RequiredExtraVars {
+			if key == "" {
+				return fmt.Errorf("JobTarget %q: RequiredExtraVars must not contain an empty key", t.Name)
+			}
+			if _, dup := seenKeys[key]; dup {
+				return fmt.Errorf("JobTarget %q: duplicate required extra var %q", t.Name, key)
+			}
+			seenKeys[key] = struct{}{}
+		}
 		if t.AbsorbsLegacyHistory {
 			if legacyOwnerSeen {
 				return errors.New("at most one JobTarget may set AbsorbsLegacyHistory")
@@ -406,7 +545,177 @@ func validateJobTargets(targets []JobTarget) error {
 			legacyOwnerSeen = true
 		}
 	}
+	for _, t := range targets {
+		dependency := dependencies[t.Name]
+		if dependency.DependsOn == "" {
+			continue
+		}
+		if dependency.DependsOn == t.Name {
+			return fmt.Errorf("JobTarget %q cannot depend on itself", t.Name)
+		}
+		if _, ok := seen[dependency.DependsOn]; !ok {
+			return fmt.Errorf("JobTarget %q has unknown dependency %q", t.Name, dependency.DependsOn)
+		}
+	}
+	for targetName := range dependencies {
+		if _, ok := seen[targetName]; !ok {
+			return fmt.Errorf("dependency references unknown JobTarget %q", targetName)
+		}
+	}
+	if _, err := orderJobTargetsChecked(targets, dependencies); err != nil {
+		return err
+	}
+	for _, target := range targets {
+		if dependencies[target.Name].DependsOn == "" {
+			continue
+		}
+		if target.Callbacks == nil || target.Callbacks.OnFailed == nil {
+			return fmt.Errorf("JobTarget %q requires an OnFailed callback when it depends on another target", target.Name)
+		}
+	}
 	return nil
+}
+
+func orderJobTargets(targets []JobTarget, dependencies map[string]JobTargetDependency) []JobTarget {
+	ordered, _ := orderJobTargetsChecked(targets, dependencies)
+	return ordered
+}
+
+func orderJobTargetsChecked(targets []JobTarget, dependencies map[string]JobTargetDependency) ([]JobTarget, error) {
+	targetsByName := make(map[string]JobTarget, len(targets))
+	for _, target := range targets {
+		targetsByName[target.Name] = target
+	}
+	ordered := make([]JobTarget, 0, len(targets))
+	states := make(map[string]uint8, len(targets))
+	var visit func(string) error
+	visit = func(name string) error {
+		switch states[name] {
+		case 1:
+			return fmt.Errorf("JobTarget dependency cycle includes %q", name)
+		case 2:
+			return nil
+		}
+		states[name] = 1
+		target := targetsByName[name]
+		if dependency := dependencies[target.Name]; dependency.DependsOn != "" {
+			if err := visit(dependency.DependsOn); err != nil {
+				return err
+			}
+		}
+		states[name] = 2
+		ordered = append(ordered, target)
+		return nil
+	}
+	for _, target := range targets {
+		if err := visit(target.Name); err != nil {
+			return nil, err
+		}
+	}
+	return ordered, nil
+}
+
+func prepareDependentTarget(
+	ctx context.Context,
+	target JobTarget,
+	dependency JobTargetDependency,
+	prerequisite JobTarget,
+	resource client.Object,
+	provState *State,
+	pollInterval time.Duration,
+) (map[string]any, bool, time.Duration) {
+	dependencyJob := FindLatestJobByTypeAndTarget(*provState.Jobs, v1alpha1.JobTypeProvision, prerequisite.Name)
+	if !HasJobID(dependencyJob) || !dependencyJob.State.IsTerminal() {
+		return nil, false, pollInterval
+	}
+	if dependencyJob.State != v1alpha1.JobStateSucceeded {
+		message := fmt.Sprintf("dependency %q job %q did not succeed: %s", prerequisite.Name, dependencyJob.JobID, dependencyJob.Message)
+		if target.Callbacks != nil && target.Callbacks.OnFailed != nil {
+			target.Callbacks.OnFailed(message)
+		}
+		return nil, false, pollInterval
+	}
+	if dependencyJob.ConfigVersion != "" && dependencyJob.ConfigVersion != provState.DesiredConfigVersion {
+		return nil, false, 0
+	}
+	if len(dependency.RequiredExtraVars) == 0 {
+		return nil, true, 0
+	}
+	return prepareDependentTargetOutputVars(ctx, target, dependency, prerequisite, resource, dependencyJob, provState, pollInterval)
+}
+
+func prepareDependentTargetOutputVars(
+	ctx context.Context,
+	target JobTarget,
+	dependency JobTargetDependency,
+	prerequisite JobTarget,
+	resource client.Object,
+	dependencyJob *v1alpha1.JobStatus,
+	provState *State,
+	pollInterval time.Duration,
+) (map[string]any, bool, time.Duration) {
+	log := ctrllog.FromContext(ctx)
+	outputProvider, ok := prerequisite.Provider.(ProvisioningProviderWithProvisionOutputs)
+	if !ok {
+		message := fmt.Sprintf("dependency %q provider does not expose provisioning outputs", prerequisite.Name)
+		if target.Callbacks != nil && target.Callbacks.OnFailed != nil {
+			target.Callbacks.OnFailed(message)
+		}
+		return nil, false, pollInterval
+	}
+	status, err := outputProvider.GetProvisionStatusWithExtraVars(ctx, resource, dependencyJob.JobID)
+	if err != nil {
+		log.Error(err, "failed to read prerequisite job outputs", "target", target.Name, "dependency", prerequisite.Name, "jobID", dependencyJob.JobID)
+		if target.Callbacks != nil && target.Callbacks.OnFailed != nil {
+			target.Callbacks.OnFailed(fmt.Sprintf("failed to read outputs from dependency %q job %q: %v", prerequisite.Name, dependencyJob.JobID, err))
+		}
+		return nil, false, pollInterval
+	}
+	if status.State != dependencyJob.State || status.MessageWithDetails() != dependencyJob.Message {
+		updatedJob := *dependencyJob
+		updatedJob.State = status.State
+		updatedJob.Message = status.MessageWithDetails()
+		UpdateJob(*provState.Jobs, updatedJob)
+	}
+	if status.State != v1alpha1.JobStateSucceeded {
+		if !status.State.IsTerminal() {
+			return nil, false, pollInterval
+		}
+		message := fmt.Sprintf("dependency %q job %q did not succeed: %s", prerequisite.Name, dependencyJob.JobID, status.MessageWithDetails())
+		if prerequisite.Callbacks != nil && prerequisite.Callbacks.OnFailed != nil {
+			prerequisite.Callbacks.OnFailed(status.MessageWithDetails())
+		}
+		if target.Callbacks != nil && target.Callbacks.OnFailed != nil {
+			target.Callbacks.OnFailed(message)
+		}
+		return nil, false, pollInterval
+	}
+
+	var missing []string
+	inheritedExtraVars := make(map[string]any, len(dependency.RequiredExtraVars))
+	for _, key := range dependency.RequiredExtraVars {
+		value, found := status.ExtraVars[key]
+		if !found || value == nil {
+			missing = append(missing, key)
+			continue
+		}
+		inheritedExtraVars[key] = value
+	}
+	if len(missing) > 0 {
+		message := fmt.Sprintf("dependency %q is missing required output variables: %s", prerequisite.Name, strings.Join(missing, ", "))
+		if target.Callbacks != nil && target.Callbacks.OnFailed != nil {
+			target.Callbacks.OnFailed(message)
+		}
+		return nil, false, pollInterval
+	}
+	if _, ok := target.Provider.(ProvisioningProviderWithExtraVars); !ok {
+		message := fmt.Sprintf("target provider does not support inherited extra vars from dependency %q", prerequisite.Name)
+		if target.Callbacks != nil && target.Callbacks.OnFailed != nil {
+			target.Callbacks.OnFailed(message)
+		}
+		return nil, false, pollInterval
+	}
+	return inheritedExtraVars, true, 0
 }
 
 // legacyHistoryOwnerForProvision returns the Name of the target that set

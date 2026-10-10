@@ -3,13 +3,7 @@
     var: cluster_infra_node_requests
 
 - name: Build BareMetalPool hostSets
-  ansible.builtin.set_fact:
-    baremetalpool_host_sets: >-
-      {{ baremetalpool_host_sets | default([]) + [{
-        'hostType': item.resourceClass,
-        'replicas': item.numberOfNodes | int
-      }] }}
-  loop: "{{ cluster_infra_node_requests }}"
+  ansible.builtin.include_tasks: build_host_sets.yaml
 
 # For now, we create the BareMetalPool in the POD_NAMESPACE, but
 # in the future, we hope to have it created in the cluster_working_namespace.
@@ -100,8 +94,8 @@
   vars:
     manage_agents_cluster_order_name: "{{ cluster_infra_name }}"
     manage_agents_desired_count: "{{ item.replicas }}"
-    manage_agents_resource_class: "{{ item.hostType }}"
-  loop: "{{ baremetalpool_host_sets }}"
+    manage_agents_instance_type: "{{ item.bareMetal.instanceType }}"
+  loop: "{{ cluster_infra_node_requests }}"
 
 - name: Detach agents from cluster
   ansible.builtin.include_role:

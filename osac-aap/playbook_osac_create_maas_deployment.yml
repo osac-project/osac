@@ -1,15 +1,18 @@
 ---
-# Playbook: deploy MaaS on RHOAI 3.4 via ocp_4_20_ai_maas template role.
-# Runs the role's task files directly against a live cluster.
+# Playbook: deploy MaaS on RHOAI 3.5 GA (OCP 4.21.x) via the ocp_4_20_ai_maas
+# template role. Runs the role's task files directly against a live cluster.
 #
-# Usage:
+# Deploy only (verification is a SEPARATE playbook — see
+# playbook_osac_verify_maas_deployment.yml):
 #   ansible-playbook playbook_osac_create_maas_deployment.yml --tags full -v
 #   ansible-playbook playbook_osac_create_maas_deployment.yml --tags operators
 #   ansible-playbook playbook_osac_create_maas_deployment.yml --tags maas
-#   ansible-playbook playbook_osac_create_maas_deployment.yml --tags verify
 #   ansible-playbook playbook_osac_create_maas_deployment.yml --tags cleanup
+#
+# The `verify` tag still runs verification inline if explicitly requested
+# (--tags verify), but it is NOT part of `full`.
 
-- name: Deploy MaaS on RHOAI 3.4
+- name: Deploy MaaS on RHOAI 3.5 GA
   hosts: localhost
   gather_facts: false
   connection: local
@@ -19,12 +22,6 @@
     admin_kubeconfig: "{{ lookup('env', 'KUBECONFIG') | default('~/.kube/config', true) }}"
 
   pre_tasks:
-    - name: Force enable_keycloak=false when enable_maas=false
-      ansible.builtin.set_fact:
-        ocp_4_20_ai_maas_enable_keycloak: false
-      when: not (ocp_4_20_ai_maas_enable_maas | default(true) | bool)
-      tags: [always]
-
     - name: Clean up leftover external subscriptions from prior runs
       kubernetes.core.k8s:
         kubeconfig: "{{ admin_kubeconfig }}"
@@ -56,7 +53,7 @@
       tags: [always]
 
   tasks:
-    # --- Install Operators (BOM Phase 2 + 3) ---
+    # --- Install Operators (BOM) ---
     - name: Install platform operators
       ansible.builtin.include_role:
         name: osac.templates.ocp_4_20_ai_maas
@@ -69,7 +66,7 @@
         - operators
         - full
 
-    # --- Configure cluster (gateway, observability) ---
+    # --- Configure cluster (domain, observability, hardware profiles) ---
     - name: Configure cluster
       ansible.builtin.include_role:
         name: osac.templates.ocp_4_20_ai_maas
@@ -84,7 +81,7 @@
         - maas
         - full
 
-    # --- Configure MaaS (Phases 1-5) ---
+    # --- Configure MaaS (0..n tenants) ---
     - name: Configure MaaS platform
       ansible.builtin.include_role:
         name: osac.templates.ocp_4_20_ai_maas
@@ -98,20 +95,7 @@
         - full
       when: ocp_4_20_ai_maas_enable_maas | default(true) | bool
 
-    # --- Verification ---
-    - name: Run verification tests
-      ansible.builtin.include_role:
-        name: osac.templates.ocp_4_20_ai_maas
-        tasks_from: verify.yaml
-        apply:
-          tags:
-            - verify
-            - full
-      tags:
-        - verify
-        - full
-
-    # --- Configure External Models (Phase 6 — after verify) ---
+    # --- Configure External Models (optional) ---
     - name: Configure external models
       ansible.builtin.include_role:
         name: osac.templates.ocp_4_20_ai_maas
@@ -126,6 +110,22 @@
       when:
         - ocp_4_20_ai_maas_enable_maas | default(true) | bool
         - ocp_4_20_ai_maas_external_models | default([]) | length > 0
+
+    # --- Verification (opt-in only; NOT part of `full`) ---
+    # Prefer the standalone playbook_osac_verify_maas_deployment.yml. This inline
+    # hook runs only when --tags verify is passed explicitly.
+    - name: Run verification tests
+      ansible.builtin.include_role:
+        name: osac.templates.ocp_4_20_ai_maas
+        tasks_from: verify.yaml
+        apply:
+          tags:
+            - verify
+            - never
+      tags:
+        - verify
+        - never
+      when: ocp_4_20_ai_maas_run_verify | default(true) | bool
 
     # --- Cleanup ---
     - name: Undeploy everything

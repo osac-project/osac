@@ -46,6 +46,7 @@ var _ = Describe("DiskImage lifecycle", func() {
 		networkClassesClient           privatev1.NetworkClassesClient
 		virtualNetworksClient          privatev1.VirtualNetworksClient
 		subnetsClient                  privatev1.SubnetsClient
+		securityGroupsClient           privatev1.SecurityGroupsClient
 
 		storageBackendId          string
 		storageTierId             string
@@ -56,6 +57,7 @@ var _ = Describe("DiskImage lifecycle", func() {
 		networkClassId            string
 		virtualNetworkId          string
 		subnetId                  string
+		securityGroupId           string
 	)
 
 	BeforeEach(func() {
@@ -72,6 +74,7 @@ var _ = Describe("DiskImage lifecycle", func() {
 		networkClassesClient = privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
 		virtualNetworksClient = privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn())
 		subnetsClient = privatev1.NewSubnetsClient(tool.InternalView().AdminConn())
+		securityGroupsClient = privatev1.NewSecurityGroupsClient(tool.InternalView().AdminConn())
 
 		// Create StorageBackend
 		sbResp, err := storageBackendsClient.Create(ctx, privatev1.StorageBackendsCreateRequest_builder{
@@ -154,6 +157,7 @@ var _ = Describe("DiskImage lifecycle", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		networkClassId = ncResp.GetObject().GetId()
+		waitForNetworkClassReady(ctx, networkClassesClient, networkClassId)
 
 		// Create VirtualNetwork
 		virtualNetworkId = fmt.Sprintf("test-vnet-%s", uuid.New())
@@ -242,6 +246,8 @@ var _ = Describe("DiskImage lifecycle", func() {
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		securityGroupId = createComputeInstanceFixtureSecurityGroup(ctx, securityGroupsClient,
+			fmt.Sprintf("test-di-sg-%s", uuid.New()), virtualNetworkId)
 	})
 
 	AfterEach(func() {
@@ -254,6 +260,16 @@ var _ = Describe("DiskImage lifecycle", func() {
 				GinkgoT().Logf("cleanup: failed to delete ComputeInstance %s: %v", computeInstanceId, err)
 			}
 			computeInstanceId = ""
+		}
+		if securityGroupId != "" {
+			delCtx, delCancel := context.WithTimeout(context.Background(), time.Minute)
+			defer delCancel()
+			if _, err := securityGroupsClient.Delete(delCtx, privatev1.SecurityGroupsDeleteRequest_builder{
+				Id: securityGroupId,
+			}.Build()); err != nil {
+				GinkgoT().Logf("cleanup: failed to delete SecurityGroup %s: %v", securityGroupId, err)
+			}
+			securityGroupId = ""
 		}
 		if diskImageId != "" {
 			delCtx, delCancel := context.WithTimeout(context.Background(), time.Minute)
@@ -398,6 +414,9 @@ var _ = Describe("DiskImage lifecycle", func() {
 					NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
 						publicv1.ComputeNetworkAttachment_builder{
 							Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),
+							SecurityGroups: []*publicv1.SecurityGroupLocalReference{
+								publicv1.SecurityGroupLocalReference_builder{Id: securityGroupId}.Build(),
+							},
 						}.Build(),
 					},
 				}.Build(),

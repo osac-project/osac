@@ -53,6 +53,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/servers"
 	"github.com/osac-project/osac/fulfillment-service/internal/services"
 	itesting "github.com/osac-project/osac/fulfillment-service/internal/testing"
+	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -66,7 +67,6 @@ var (
 	ctrl         *gomock.Controller
 	logger       *slog.Logger
 	dbContainer  *database.Container
-	dbNotifier   *database.Notifier
 	attribution  *auth.MockAttributionLogic
 	tenancy      *auth.MockTenancyLogic
 	conn         *grpc.ClientConn
@@ -151,18 +151,6 @@ var _ = BeforeSuite(func() {
 		Build()
 	Expect(err).ToNot(HaveOccurred())
 
-	// Create the notifier. ExternalIPPoolsServerBuilder, ProjectsServerBuilder, and PrivateProjectsServerBuilder
-	// require a concrete *database.Notifier (see register_servers.go), so this can't be nil or a different
-	// events.Notifier implementation.
-	dbNotifier, err = database.NewNotifier().
-		SetLogger(logger).
-		SetChannel("events").
-		SetPool(pool).
-		Build()
-	Expect(err).ToNot(HaveOccurred())
-	err = dbNotifier.Start(ctx)
-	Expect(err).ToNot(HaveOccurred())
-
 	hubScheme, err = hubscheme.NewHub()
 	Expect(err).ToNot(HaveOccurred())
 	metricsRegisterer := prometheus.NewRegistry()
@@ -186,7 +174,6 @@ var _ = BeforeSuite(func() {
 	// the interceptor chain is built — see ResourceServerDeps.PrivateUsersServer's doc comment.
 	privateUsersServer, err := servers.NewPrivateUsersServer().
 		SetLogger(logger).
-		SetNotifier(dbNotifier).
 		SetAttributionLogic(attribution).
 		SetTenancyLogic(tenancy).
 		SetMetricsRegisterer(metricsRegisterer).
@@ -205,12 +192,12 @@ var _ = BeforeSuite(func() {
 	DeferCleanup(server.Stop)
 	_, err = RegisterResourceServers(ctx, server.Registrar(), ResourceServerDeps{
 		Logger:                  logger,
-		Notifier:                dbNotifier,
 		PrivateAttributionLogic: attribution,
 		PublicAttributionLogic:  attribution,
 		TenancyLogic:            tenancy,
 		MetricsRegisterer:       metricsRegisterer,
 		HubScheme:               hubScheme,
+		SecretStore:             vault.NewMockSecretStore(ctrl),
 		TierResolver:            tierResolver,
 		PrivateUsersServer:      privateUsersServer,
 		Services:                &services.Flags{CaaS: true, VMaaS: true, BMaaS: true, MaaS: true},
@@ -468,12 +455,12 @@ func registerWithFlags(svcFlags *services.Flags) (map[string]grpc.ServiceInfo, *
 	srv := grpc.NewServer()
 	rs, err := RegisterResourceServers(ctx, srv, ResourceServerDeps{
 		Logger:                  logger,
-		Notifier:                dbNotifier,
 		PrivateAttributionLogic: attribution,
 		PublicAttributionLogic:  attribution,
 		TenancyLogic:            tenancy,
 		MetricsRegisterer:       prometheus.NewRegistry(),
 		HubScheme:               hubScheme,
+		SecretStore:             vault.NewMockSecretStore(ctrl),
 		TierResolver:            tierResolver,
 		PrivateUsersServer:      nil,
 		Services:                svcFlags,
@@ -528,7 +515,6 @@ var _ = Describe("Conditional service registration", func() {
 
 	// Shared infrastructure services (always registered regardless of flags)
 	sharedServices := []string{
-		"osac.public.v1.HostTypes",
 		"osac.public.v1.VirtualNetworks",
 		"osac.public.v1.Subnets",
 		"osac.public.v1.SecurityGroups",
@@ -545,7 +531,6 @@ var _ = Describe("Conditional service registration", func() {
 		"osac.public.v1.Users",
 		"osac.public.v1.Secrets",
 		"osac.public.v1.StorageTiers",
-		"osac.private.v1.HostTypes",
 		"osac.private.v1.Hubs",
 		"osac.private.v1.VirtualNetworks",
 		"osac.private.v1.Subnets",

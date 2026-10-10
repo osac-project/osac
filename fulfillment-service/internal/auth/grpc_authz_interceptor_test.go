@@ -17,6 +17,8 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -28,6 +30,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	k8sfiles "github.com/osac-project/osac/fulfillment-service/internal/kubernetes/files"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -36,69 +39,45 @@ import (
 var _ = Describe("Rego authorization interceptor", func() {
 	Describe("Creation", func() {
 		It("Can be built if all the required parameters are set", func() {
+			evaluator, err := NewEvaluator().
+				AddEmergencyServiceAccounts([]string{"admin"}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
 			interceptor, err := NewGrpcAuthzInterceptor().
 				SetLogger(logger).
+				SetEvaluator(evaluator).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(interceptor).ToNot(BeNil())
 		})
 
 		It("Can't be built without a logger", func() {
+			evaluator, err := NewEvaluator().
+				AddEmergencyServiceAccounts([]string{"admin"}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
 			interceptor, err := NewGrpcAuthzInterceptor().
+				SetEvaluator(evaluator).
 				Build()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("logger is mandatory"))
 			Expect(interceptor).To(BeNil())
 		})
-
-		It("Rejects empty emergency service account name", func() {
-			_, err := NewGrpcAuthzInterceptor().
-				SetLogger(logger).
-				AddEmergencyServiceAccounts("").
-				Build()
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("not a valid Kubernetes service account name"))
-		})
-
-		It("Rejects whitespace-only emergency service account name", func() {
-			_, err := NewGrpcAuthzInterceptor().
-				SetLogger(logger).
-				AddEmergencyServiceAccounts("  ").
-				Build()
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("not a valid Kubernetes service account name"))
-		})
-
-		It("Rejects emergency service account name with colon", func() {
-			_, err := NewGrpcAuthzInterceptor().
-				SetLogger(logger).
-				AddEmergencyServiceAccounts("system:admin").
-				Build()
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("not a valid Kubernetes service account name"))
-		})
-
-		It("Rejects emergency service account name with uppercase", func() {
-			_, err := NewGrpcAuthzInterceptor().
-				SetLogger(logger).
-				AddEmergencyServiceAccounts("Admin").
-				Build()
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("not a valid Kubernetes service account name"))
-		})
-
-		It("Rejects emergency service account name starting with hyphen", func() {
-			_, err := NewGrpcAuthzInterceptor().
-				SetLogger(logger).
-				AddEmergencyServiceAccounts("-admin").
-				Build()
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("not a valid Kubernetes service account name"))
-		})
 	})
 
 	Describe("Permission checks", func() {
 		var interceptor *GrpcAuthzInterceptor
+
+		// Determine the namespace the interceptor will use, following the same logic as Build():
+		// read from the Kubernetes namespace file, falling back to the default.
+		testNamespace := grpcAuthzDefaultNamespace
+		if nsBytes, err := os.ReadFile(k8sfiles.ServiceAccountNamespace); err == nil {
+			if ns := strings.TrimSpace(string(nsBytes)); ns != "" {
+				testNamespace = ns
+			}
+		}
 
 		// createKubernetesToken creates a token resembling the ones issued by the Kubernetes service account
 		// token issuer.
@@ -173,18 +152,24 @@ var _ = Describe("Rego authorization interceptor", func() {
 		BeforeEach(func() {
 			var err error
 
+			// Create the authorization evaluator with emergency service accounts:
+			evaluator, err := NewEvaluator().
+				AddEmergencyServiceAccounts([]string{
+					"admin",
+					"template-publisher",
+					"osac-operator",
+					"osac-operator-controller-manager",
+				}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
 			// Create the interceptor:
 			interceptor, err = NewGrpcAuthzInterceptor().
 				SetLogger(logger).
+				SetEvaluator(evaluator).
 				AddAnonymousMethodRegex(`^/grpc\.health\.v1\.Health/.*$`).
 				AddAnonymousMethodRegex(`^/grpc\.reflection\.v1\.ServerReflection/.*$`).
 				AddAnonymousMethodRegex(`^/osac\.public\.v1\.Capabilities/.*$`).
-				AddEmergencyServiceAccounts(
-					"admin",
-					"osac-operator",
-					"osac-operator-controller-manager",
-					"template-publisher",
-				).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 		})
@@ -294,19 +279,19 @@ var _ = Describe("Rego authorization interceptor", func() {
 			},
 			Entry(
 				"Administrator",
-				"osac", "admin",
+				testNamespace, "admin",
 			),
 			Entry(
 				"Template publisher",
-				"osac", "template-publisher",
+				testNamespace, "template-publisher",
 			),
 			Entry(
 				"Controller manager",
-				"osac", "osac-operator",
+				testNamespace, "osac-operator",
 			),
 			Entry(
 				"Alternative controller manager",
-				"osac", "osac-operator-controller-manager",
+				testNamespace, "osac-operator-controller-manager",
 			),
 		)
 
@@ -335,15 +320,15 @@ var _ = Describe("Rego authorization interceptor", func() {
 			},
 			Entry(
 				"Administrator",
-				"osac", "admin",
+				testNamespace, "admin",
 			),
 			Entry(
 				"Template publisher",
-				"osac", "template-publisher",
+				testNamespace, "template-publisher",
 			),
 			Entry(
 				"Controller manager",
-				"osac", "osac-operator-controller-manager",
+				testNamespace, "osac-operator-controller-manager",
 			),
 		)
 
@@ -385,7 +370,7 @@ var _ = Describe("Rego authorization interceptor", func() {
 			),
 			Entry(
 				"Right namespace, but wrong name",
-				"osac", "junk",
+				testNamespace, "junk",
 			),
 		)
 
@@ -694,6 +679,80 @@ var _ = Describe("Rego authorization interceptor", func() {
 				"Random user",
 				"my-tenant", "my-user",
 			),
+		)
+
+		DescribeTable(
+			"Allows Keycloak users on public networking CRUD APIs",
+			func(ctx context.Context, method string) {
+				token := createKeycloakUserToken("my-tenant", "my-user", nil)
+				ctx = ContextWithToken(ctx, token)
+				handled := false
+				_, err := interceptor.UnaryServer(
+					ctx,
+					nil,
+					&grpc.UnaryServerInfo{FullMethod: method},
+					func(ctx context.Context, req any) (any, error) {
+						handled = true
+						return nil, nil
+					},
+				)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(handled).To(BeTrue())
+			},
+			Entry("VirtualNetworks Create", "/osac.public.v1.VirtualNetworks/Create"),
+			Entry("VirtualNetworks Get", "/osac.public.v1.VirtualNetworks/Get"),
+			Entry("VirtualNetworks List", "/osac.public.v1.VirtualNetworks/List"),
+			Entry("VirtualNetworks Delete", "/osac.public.v1.VirtualNetworks/Delete"),
+			Entry("Subnets Create", "/osac.public.v1.Subnets/Create"),
+			Entry("Subnets Get", "/osac.public.v1.Subnets/Get"),
+			Entry("Subnets List", "/osac.public.v1.Subnets/List"),
+			Entry("Subnets Delete", "/osac.public.v1.Subnets/Delete"),
+			Entry("SecurityGroups Create", "/osac.public.v1.SecurityGroups/Create"),
+			Entry("SecurityGroups Get", "/osac.public.v1.SecurityGroups/Get"),
+			Entry("SecurityGroups List", "/osac.public.v1.SecurityGroups/List"),
+			Entry("SecurityGroups Delete", "/osac.public.v1.SecurityGroups/Delete"),
+			Entry("ExternalIPs Create", "/osac.public.v1.ExternalIPs/Create"),
+			Entry("ExternalIPs Get", "/osac.public.v1.ExternalIPs/Get"),
+			Entry("ExternalIPs List", "/osac.public.v1.ExternalIPs/List"),
+			Entry("ExternalIPs Delete", "/osac.public.v1.ExternalIPs/Delete"),
+			Entry("ExternalIPAttachments Create", "/osac.public.v1.ExternalIPAttachments/Create"),
+			Entry("ExternalIPAttachments Get", "/osac.public.v1.ExternalIPAttachments/Get"),
+			Entry("ExternalIPAttachments List", "/osac.public.v1.ExternalIPAttachments/List"),
+			Entry("ExternalIPAttachments Delete", "/osac.public.v1.ExternalIPAttachments/Delete"),
+			Entry("NATGateways Create", "/osac.public.v1.NATGateways/Create"),
+			Entry("NATGateways Get", "/osac.public.v1.NATGateways/Get"),
+			Entry("NATGateways List", "/osac.public.v1.NATGateways/List"),
+			Entry("NATGateways Delete", "/osac.public.v1.NATGateways/Delete"),
+		)
+
+		DescribeTable(
+			"Denies Keycloak users on public networking Update APIs",
+			func(ctx context.Context, method string) {
+				token := createKeycloakUserToken("my-tenant", "my-user", nil)
+				ctx = ContextWithToken(ctx, token)
+				handled := false
+				_, err := interceptor.UnaryServer(
+					ctx,
+					nil,
+					&grpc.UnaryServerInfo{FullMethod: method},
+					func(ctx context.Context, req any) (any, error) {
+						handled = true
+						return nil, nil
+					},
+				)
+				Expect(err).To(HaveOccurred())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.PermissionDenied))
+				Expect(status.Message()).To(Equal("permission denied"))
+				Expect(handled).To(BeFalse())
+			},
+			Entry("VirtualNetworks Update", "/osac.public.v1.VirtualNetworks/Update"),
+			Entry("Subnets Update", "/osac.public.v1.Subnets/Update"),
+			Entry("SecurityGroups Update", "/osac.public.v1.SecurityGroups/Update"),
+			Entry("ExternalIPs Update", "/osac.public.v1.ExternalIPs/Update"),
+			Entry("ExternalIPAttachments Update", "/osac.public.v1.ExternalIPAttachments/Update"),
+			Entry("NATGateways Update", "/osac.public.v1.NATGateways/Update"),
 		)
 
 		It("Allows regular users to browse add-on operators", func(ctx context.Context) {
@@ -1032,8 +1091,14 @@ var _ = Describe("Rego authorization interceptor", func() {
 		})
 
 		It("Allows project manager to get project memberships", func(ctx context.Context) {
+			evaluator, err := NewEvaluator().
+				AddEmergencyServiceAccounts([]string{"admin"}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
 			pmInterceptor, err := NewGrpcAuthzInterceptor().
 				SetLogger(logger).
+				SetEvaluator(evaluator).
 				SetProjectMembershipMetadataFetcher(func(ctx context.Context, id string) *ObjectMetadata {
 					Expect(id).To(Equal("pm-100"))
 					return &ObjectMetadata{Tenant: "my-tenant", Project: "my-project"}
@@ -1070,8 +1135,14 @@ var _ = Describe("Rego authorization interceptor", func() {
 		})
 
 		It("Allows project manager to update project memberships", func(ctx context.Context) {
+			evaluator, err := NewEvaluator().
+				AddEmergencyServiceAccounts([]string{"admin"}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
 			pmInterceptor, err := NewGrpcAuthzInterceptor().
 				SetLogger(logger).
+				SetEvaluator(evaluator).
 				SetProjectMembershipMetadataFetcher(func(ctx context.Context, id string) *ObjectMetadata {
 					Expect(id).To(Equal("pm-200"))
 					return &ObjectMetadata{Tenant: "my-tenant", Project: "my-project"}
@@ -1111,8 +1182,14 @@ var _ = Describe("Rego authorization interceptor", func() {
 		})
 
 		It("Allows project manager to delete project memberships", func(ctx context.Context) {
+			evaluator, err := NewEvaluator().
+				AddEmergencyServiceAccounts([]string{"admin"}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
 			pmInterceptor, err := NewGrpcAuthzInterceptor().
 				SetLogger(logger).
+				SetEvaluator(evaluator).
 				SetProjectMembershipMetadataFetcher(func(ctx context.Context, id string) *ObjectMetadata {
 					Expect(id).To(Equal("pm-300"))
 					return &ObjectMetadata{Tenant: "my-tenant", Project: "my-project"}

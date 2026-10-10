@@ -21,13 +21,11 @@ import (
 	"go.uber.org/mock/gomock"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -538,70 +536,6 @@ var _ = Describe("Private identity providers server", func() {
 				Expect(status.Code()).To(Equal(grpccodes.PermissionDenied))
 				Expect(status.Message()).To(ContainSubstring("cannot be placed in the 'system' tenant"))
 			})
-		})
-	})
-
-	Describe("Redacts event payload", func() {
-		var (
-			event  *privatev1.Event
-			server *PrivateIdentityProvidersServer
-		)
-
-		BeforeEach(func() {
-			var err error
-
-			// Create a mock notifier that captures the event:
-			notifier := events.NewMockNotifier(ctrl)
-			notifier.EXPECT().
-				Notify(gomock.Any(), gomock.Any()).
-				DoAndReturn(
-					func(ctx context.Context, payload proto.Message) error {
-						event = payload.(*privatev1.Event)
-						return nil
-					},
-				)
-
-			// Create the server configured with the mock notifier:
-			server, err = NewPrivateIdentityProvidersServer().
-				SetLogger(logger).
-				SetAttributionLogic(attribution).
-				SetTenancyLogic(tenancy).
-				SetNotifier(notifier).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-
-		})
-
-		It("OIDC", func() {
-			// Create the object:
-			_, err := server.Create(
-				ctx,
-				privatev1.IdentityProvidersCreateRequest_builder{
-					Object: privatev1.IdentityProvider_builder{
-						Metadata: privatev1.Metadata_builder{
-							Tenant: "my-tenant",
-							Name:   "my-oidc",
-						}.Build(),
-						Spec: privatev1.IdentityProviderSpec_builder{
-							Title:   "My OIDC",
-							Enabled: true,
-							Oidc: privatev1.OidcConfig_builder{
-								AuthorizationUrl: "https://accounts.google.com/o/oauth2/v2/auth",
-								TokenUrl:         "https://oauth2.googleapis.com/token",
-								ClientId:         "my-client-id",
-								Issuer:           "https://accounts.google.com",
-							}.Build(),
-						}.Build(),
-					}.Build(),
-				}.Build(),
-			)
-			Expect(err).ToNot(HaveOccurred())
-
-			// Verify the event:
-			Expect(event).ToNot(BeNil())
-			Expect(event.GetType()).To(Equal(privatev1.EventType_EVENT_TYPE_OBJECT_CREATED))
-			object := event.GetIdentityProvider()
-			Expect(object).ToNot(BeNil())
 		})
 	})
 

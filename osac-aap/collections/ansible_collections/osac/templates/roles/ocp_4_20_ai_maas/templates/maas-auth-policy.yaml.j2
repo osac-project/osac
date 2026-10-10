@@ -1,14 +1,22 @@
 apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSAuthPolicy
 metadata:
-  name: keycloak-model-access
-  namespace: models-as-a-service
+  name: model-access
+  namespace: "{{ _t_govns }}"
 spec:
   modelRefs:
-  - name: "{{ ocp_4_20_ai_maas_model_name }}"
+  - name: "{{ _t_model }}"
     namespace: "{{ ocp_4_20_ai_maas_model_namespace }}"
   subjects:
     groups:
-{% for tier in ocp_4_20_ai_maas_tiers %}
+{% for tier in _t_tiers %}
+{% if tier.group | default('', true) | length > 0 %}
     - name: "{{ tier.group }}"
+{% endif %}
 {% endfor %}
+{% if ocp_4_20_ai_maas_provision_test_identities | bool %}
+    users:
+{% for tier in _t_tiers %}
+    - "system:serviceaccount:{{ _t_govns }}:testuser-{{ tier.name | regex_replace('-subscription$', '') }}"
+{% endfor %}
+{% endif %}

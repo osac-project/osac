@@ -45,6 +45,11 @@ var (
 		Help: "Corrections emitted by reconciliation",
 	}, []string{"reason", "resource_type"})
 
+	bmaasReconciliationHolds = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "osac_metering_bmaas_reconciliation_holds_total",
+		Help: "BMaaS reconciliation passes held by reason",
+	}, []string{"reason"})
+
 	reconLastCompleted = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "osac_metering_reconciliation_last_completed_at",
 		Help: "Unix timestamp of last completed reconciliation",
@@ -73,62 +78,91 @@ type ExternalIPPoolsClient interface {
 	List(ctx context.Context, in *privatev1.ExternalIPPoolsListRequest, opts ...grpc.CallOption) (*privatev1.ExternalIPPoolsListResponse, error)
 }
 
+type VolumesClient interface {
+	List(ctx context.Context, in *privatev1.VolumesListRequest, opts ...grpc.CallOption) (*privatev1.VolumesListResponse, error)
+	Get(ctx context.Context, in *privatev1.VolumesGetRequest, opts ...grpc.CallOption) (*privatev1.VolumesGetResponse, error)
+}
+
+type BareMetalInstancesClient interface {
+	List(ctx context.Context, in *privatev1.BareMetalInstancesListRequest, opts ...grpc.CallOption) (*privatev1.BareMetalInstancesListResponse, error)
+}
+
 type Reconciler struct {
 	computeClient        ComputeInstancesClient
 	clusterClient        ClustersClient
 	externalIPClient     ExternalIPsClient
 	natGatewayClient     NATGatewaysClient
 	externalIPPoolClient ExternalIPPoolsClient
+	volumeClient         VolumesClient
 	deploymentID         string
+	bareMetalClient      BareMetalInstancesClient
 	store                projection.Store
 	publisher            kafkapub.EventPublisher
 	logger               logr.Logger
 	heartbeatInterval    time.Duration
+	unavailableTypes     map[string]struct{}
+	bmaasHolds           map[string]struct{}
+	bmaasHoldMetrics     map[string]struct{}
+	bmaasSkipped         map[string]struct{}
+	bmaasPresence        *heartbeat.BMaaSPresence
 }
 
 var correctionResourceTypes = map[string]struct{}{
-	events.ResourceTypeComputeInstance: {},
-	events.ResourceTypeClusterOrder:    {},
-	events.ResourceTypeExternalIP:      {},
-	events.ResourceTypeNATGateway:      {},
+	events.ResourceTypeComputeInstance:   {},
+	events.ResourceTypeClusterOrder:      {},
+	events.ResourceTypeExternalIP:        {},
+	events.ResourceTypeNATGateway:        {},
+	events.ResourceTypeVolume:            {},
+	events.ResourceTypeBareMetalInstance: {},
 }
 
-// SetNetworkingClients configures the networking List clients and the
-// deployment identity used by networking billing dimensions.
-func (r *Reconciler) SetNetworkingClients(
-	externalIPClient ExternalIPsClient,
-	natGatewayClient NATGatewaysClient,
-	externalIPPoolClient ExternalIPPoolsClient,
-	deploymentID string,
-) {
-	r.externalIPClient = externalIPClient
-	r.natGatewayClient = natGatewayClient
-	r.externalIPPoolClient = externalIPPoolClient
-	r.deploymentID = deploymentID
+func isUnavailable(err error) bool {
+	return status.Code(err) == codes.Unavailable
 }
 
 func NewReconciler(
 	computeClient ComputeInstancesClient,
 	clusterClient ClustersClient,
+	externalIPClient ExternalIPsClient,
+	natGatewayClient NATGatewaysClient,
+	externalIPPoolClient ExternalIPPoolsClient,
+	volumeClient VolumesClient,
+	bareMetalClient BareMetalInstancesClient,
 	store projection.Store,
 	publisher kafkapub.EventPublisher,
 	logger logr.Logger,
 	heartbeatInterval time.Duration,
+	deploymentID string,
+	bmaasPresence *heartbeat.BMaaSPresence,
 ) *Reconciler {
 	return &Reconciler{
-		computeClient:     computeClient,
-		clusterClient:     clusterClient,
-		store:             store,
-		publisher:         publisher,
-		logger:            logger,
-		heartbeatInterval: heartbeatInterval,
+		computeClient:        computeClient,
+		clusterClient:        clusterClient,
+		externalIPClient:     externalIPClient,
+		natGatewayClient:     natGatewayClient,
+		externalIPPoolClient: externalIPPoolClient,
+		volumeClient:         volumeClient,
+		bareMetalClient:      bareMetalClient,
+		store:                store,
+		publisher:            publisher,
+		logger:               logger,
+		heartbeatInterval:    heartbeatInterval,
+		deploymentID:         deploymentID,
+		unavailableTypes:     make(map[string]struct{}),
+		bmaasHolds:           make(map[string]struct{}),
+		bmaasHoldMetrics:     make(map[string]struct{}),
+		bmaasPresence:        bmaasPresence,
 	}
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context) error {
 	start := time.Now()
 	now := start.UTC()
+	r.unavailableTypes = make(map[string]struct{})
 	r.logger.Info("starting reconciliation")
+	r.bmaasHolds = make(map[string]struct{})
+	r.bmaasHoldMetrics = make(map[string]struct{})
+	r.bmaasSkipped = make(map[string]struct{})
 
 	fulfillmentState, err := r.loadFulfillmentState(ctx)
 	if err != nil {
@@ -158,7 +192,7 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 		return err
 	}
 
-	n, err = r.reconcileStaleHeartbeats(ctx, now)
+	n, err = r.reconcileStaleHeartbeats(ctx, fulfillmentState, now)
 	corrections += n
 	if err != nil {
 		return err
@@ -196,20 +230,60 @@ func (r *Reconciler) publishCorrections(ctx context.Context, id, resourceType, t
 	return nil
 }
 
+func (r *Reconciler) publishBMaaSCorrections(
+	ctx context.Context,
+	id, tenantID, projectID string,
+	reason CorrectionReason,
+	projectionState, sourceState string,
+	dims map[string]any,
+	intervals events.BMaaSMeterIntervals,
+	allocationEffect, consumptionEffect string,
+	allocationEverStarted, consumptionEverStarted bool,
+	transitionTime time.Time,
+) (bool, error) {
+	ces, err := buildBMaaSCorrectionEvents(
+		id, tenantID, projectID, reason, projectionState, sourceState, dims, intervals,
+		allocationEffect, consumptionEffect, allocationEverStarted, consumptionEverStarted, transitionTime,
+	)
+	if err != nil {
+		return false, fmt.Errorf("building %s events for %s: %w", reason, id, err)
+	}
+	for _, ce := range ces {
+		if err := r.publisher.Publish(ctx, ce); err != nil {
+			return false, fmt.Errorf("publishing %s for %s: %w", reason, id, err)
+		}
+	}
+	if len(ces) == 0 {
+		return false, nil
+	}
+	reconCorrections.WithLabelValues(string(reason), events.ResourceTypeBareMetalInstance).Inc()
+	return true, nil
+}
+
 func (r *Reconciler) reconcileFulfillmentResources(ctx context.Context, fulfillmentState map[string]fulfillmentResource, projMap map[string]projection.ResourceState, now time.Time) (int, error) {
 	corrections := 0
 
 	for id, fs := range fulfillmentState {
+		if fs.resourceType == events.ResourceTypeBareMetalInstance {
+			ps, exists := projMap[id]
+			n, err := r.reconcileBareMetalFulfillmentResource(ctx, id, fs, ps, exists)
+			corrections += n
+			if err != nil {
+				return corrections, err
+			}
+			continue
+		}
+
 		ps, exists := projMap[id]
-		if events.IsNetworkingResourceType(fs.resourceType) && fs.transitionTime.IsZero() {
-			sourceBillable, billErr := isBillableForType(fs.resourceType, fs.state)
+		if (events.IsNetworkingResourceType(fs.resourceType) || events.IsVolumeResourceType(fs.resourceType)) && fs.transitionTime.IsZero() {
+			sourceBillable, billErr := fulfillmentResourceBillable(fs)
 			if billErr != nil {
 				return corrections, fmt.Errorf("checking billability for %s: %w", id, billErr)
 			}
 			if sourceBillable || (exists && ps.IsBillable) {
-				return corrections, fmt.Errorf("networking resource %s has no authoritative transition time", id)
+				return corrections, fmt.Errorf("resource %s (%s) has no authoritative transition time", id, fs.resourceType)
 			}
-			r.logger.Info("skipping non-billable networking resource without authoritative transition time",
+			r.logger.Info("skipping non-billable resource without authoritative transition time",
 				"resource_id", id,
 				"resource_type", fs.resourceType,
 				"state", fs.state)
@@ -236,7 +310,7 @@ func (r *Reconciler) reconcileFulfillmentResources(ctx context.Context, fulfillm
 			}
 			corrections++
 
-			isBillable, billErr := isBillableForType(fs.resourceType, fs.state)
+			isBillable, billErr := fulfillmentResourceBillable(fs)
 			if billErr != nil {
 				return corrections, fmt.Errorf("checking billability for %s: %w", id, billErr)
 			}
@@ -277,6 +351,9 @@ func (r *Reconciler) reconcileFulfillmentResources(ctx context.Context, fulfillm
 		if fs.version > ps.FulfillmentVersion &&
 			ps.CurrentState == fs.state &&
 			events.DimensionsEqual(ps.BillingDimensions, fs.billingDimensions) {
+			if events.IsVolumeResourceType(fs.resourceType) && ps.IsBillable != fs.isBillable {
+				return corrections, fmt.Errorf("volume %s changed billability without an authoritative transition", id)
+			}
 			ps.FulfillmentVersion = fs.version
 			if err := r.store.Upsert(ctx, ps); err != nil && !errors.Is(err, projection.ErrStaleVersion) {
 				return corrections, fmt.Errorf("advancing fulfillment version for %s: %w", id, err)
@@ -305,7 +382,7 @@ func (r *Reconciler) reconcileFulfillmentResources(ctx context.Context, fulfillm
 			}
 			corrections++
 
-			isBillable, billErr := isBillableForType(fs.resourceType, fs.state)
+			isBillable, billErr := fulfillmentResourceBillable(fs)
 			if billErr != nil {
 				return corrections, fmt.Errorf("checking billability for %s: %w", id, billErr)
 			}
@@ -336,6 +413,9 @@ func (r *Reconciler) reconcileFulfillmentResources(ctx context.Context, fulfillm
 				}
 			}
 		} else if !events.DimensionsEqual(ps.BillingDimensions, fs.billingDimensions) {
+			if events.IsVolumeResourceType(fs.resourceType) {
+				return corrections, fmt.Errorf("volume %s has an unobserved billing-dimension change; refusing to emit a correction without an authoritative capacity boundary", id)
+			}
 			if err := r.publishCorrections(ctx, id, fs.resourceType, fs.tenantID, fs.projectID,
 				BillingDimensionsDrift, ps.CurrentState, fs.state, fs.billingDimensions, now); err != nil {
 				return corrections, err
@@ -361,6 +441,237 @@ func (r *Reconciler) reconcileFulfillmentResources(ctx context.Context, fulfillm
 	return corrections, nil
 }
 
+func (r *Reconciler) reconcileBareMetalFulfillmentResource(ctx context.Context, id string, fs fulfillmentResource, ps projection.ResourceState, exists bool) (int, error) {
+	if fs.transitionTime.IsZero() {
+		r.holdBMaaS(id, "missing_transition_time")
+		r.logger.Info("holding bare metal instance reconciliation without source transition timestamp", "resource_id", id)
+		return 0, nil
+	}
+	transitionTime := fs.transitionTime.UTC()
+	if !exists {
+		r.holdBMaaS(id, "history_unavailable")
+		r.logger.Info("holding bare metal instance reconciliation until reliable history is available", "resource_id", id)
+		return 0, nil
+	}
+
+	if fs.version < ps.FulfillmentVersion {
+		r.logger.V(1).Info("projection ahead of fulfillment, skipping", "resource_id", id,
+			"fulfillment_version", fs.version, "projection_version", ps.FulfillmentVersion)
+		return 0, nil
+	}
+	if fs.version > ps.FulfillmentVersion+1 ||
+		(fs.version > ps.FulfillmentVersion && ps.CurrentState == fs.state && events.DimensionsEqual(ps.BillingDimensions, fs.billingDimensions)) ||
+		(ps.CurrentState == "RUNNING" && fs.state == "STOPPED") {
+		r.holdBMaaS(id, "history_unavailable")
+		r.logger.Info("holding bare metal instance reconciliation until reliable history is available", "resource_id", id)
+		return 0, nil
+	}
+	reason := StateDrift
+	dimensionDrift := false
+	allocationEffect, err := events.ResolveAllocationTransition(ps.CurrentState, fs.state)
+	if err != nil {
+		r.holdBMaaS(id, "unobserved_transition")
+		r.logger.Info("holding bare metal instance reconciliation with an unobserved state transition", "resource_id", id, "error", err)
+		return 0, nil
+	}
+	consumptionEffect, err := events.ResolveConsumptionTransition(ps.CurrentState, fs.state)
+	if err != nil {
+		r.holdBMaaS(id, "unobserved_transition")
+		r.logger.Info("holding bare metal instance reconciliation with an unobserved state transition", "resource_id", id, "error", err)
+		return 0, nil
+	}
+	if ps.CurrentState == fs.state {
+		if events.DimensionsEqual(ps.BillingDimensions, fs.billingDimensions) {
+			return 0, nil
+		}
+		if bmaasInstanceTypeDrift(ps.BillingDimensions, fs.billingDimensions) {
+			r.holdBMaaS(id, "immutable_instance_type")
+			r.logger.Info("holding bare metal instance reconciliation with immutable instance type drift", "resource_id", id)
+			return 0, nil
+		}
+		reason = BillingDimensionsDrift
+		dimensionDrift = true
+		consumptionActive := ps.BMaaSMeterState.Consumption.ActiveSince != nil
+		consumptionEffect = bmaasActiveCorrectionEffect(consumptionActive)
+	}
+
+	intervals := bmaasIntervals(ps)
+	if events.IsAllocationBillableState(fs.state) && intervals.AllocationSince == nil {
+		r.holdBMaaS(id, "incomplete_history")
+		r.logger.Info("holding bare metal instance reconciliation without an allocation boundary", "resource_id", id)
+		return 0, nil
+	}
+	if dimensionDrift {
+		// Catalog metadata may change while the immutable instance type and
+		// lifecycle state remain stable. Update the projection without inventing
+		// a lifecycle event or reopening an already active meter interval.
+		allocationEffect = events.BMaaSEffectSkip
+		consumptionEffect = events.BMaaSEffectSkip
+	}
+	if bmaasHasClosure(allocationEffect, consumptionEffect) {
+		directSnapshotClosure := ps.CurrentState == "RUNNING" && fs.version == ps.FulfillmentVersion+1 &&
+			(fs.state == "STARTING" || fs.state == "STOPPING" || fs.state == "FAILED" || fs.state == "DELETING")
+		if directSnapshotClosure {
+			if !bmaasClosureIntervalsComplete(intervals, allocationEffect, consumptionEffect) {
+				r.holdBMaaS(id, "incomplete_closure_intervals")
+				return 0, nil
+			}
+		} else {
+			r.holdBMaaS(id, "history_unavailable")
+			r.logger.Info("holding bare metal instance closure until reliable history is available", "resource_id", id)
+			return 0, nil
+		}
+	}
+	published, err := r.publishBMaaSCorrections(ctx, id, fs.tenantID, fs.projectID, reason, ps.CurrentState, fs.state,
+		fs.billingDimensions, intervals, allocationEffect, consumptionEffect,
+		ps.BMaaSMeterState.Allocation.FirstStartedAt != nil,
+		ps.BMaaSMeterState.Consumption.FirstStartedAt != nil, transitionTime)
+	if err != nil {
+		return 0, err
+	}
+	state := reconciledBMaaSState(id, ps, fs, intervals, allocationEffect, consumptionEffect, transitionTime)
+	if err := r.store.Upsert(ctx, state); err != nil {
+		if errors.Is(err, projection.ErrStaleVersion) {
+			r.logger.Info("stale version during reconciliation, skipping", "resource_id", id)
+			return 0, nil
+		}
+		return 0, fmt.Errorf("upserting %s for %s: %w", reason, id, err)
+	}
+	return boolToInt(published), nil
+}
+
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func bmaasIntervals(state projection.ResourceState) events.BMaaSMeterIntervals {
+	return events.BMaaSMeterIntervals{
+		AllocationSince:  state.BMaaSMeterState.Allocation.ActiveSince,
+		ConsumptionSince: state.BMaaSMeterState.Consumption.ActiveSince,
+	}
+}
+
+func bmaasHasClosure(allocationEffect, consumptionEffect string) bool {
+	return allocationEffect == events.BMaaSEffectSuspend || consumptionEffect == events.BMaaSEffectSuspend
+}
+
+func bmaasClosureIntervalsComplete(intervals events.BMaaSMeterIntervals, allocationEffect, consumptionEffect string) bool {
+	if allocationEffect == events.BMaaSEffectSuspend && intervals.AllocationSince == nil {
+		return false
+	}
+	return consumptionEffect != events.BMaaSEffectSuspend || intervals.ConsumptionSince != nil
+}
+
+func bmaasActiveCorrectionEffect(active bool) string {
+	if active {
+		return events.BMaaSEffectStart
+	}
+	return events.BMaaSEffectSkip
+}
+
+func bmaasInstanceTypeDrift(existing, current map[string]any) bool {
+	currentType, ok := current["bm_instance_type"].(string)
+	if !ok || currentType == "" {
+		return false
+	}
+	existingType, ok := existing["bm_instance_type"].(string)
+	return !ok || existingType != currentType
+}
+
+func (r *Reconciler) holdBMaaS(id string, reasons ...string) {
+	reason := "unspecified"
+	if len(reasons) > 0 && reasons[0] != "" {
+		reason = reasons[0]
+	}
+	if r.bmaasHolds == nil {
+		r.bmaasHolds = make(map[string]struct{})
+	}
+	r.bmaasHolds[id] = struct{}{}
+	r.logger.Info("holding bare metal instance reconciliation", "resource_id", id, "reason", reason)
+	if r.bmaasHoldMetrics == nil {
+		r.bmaasHoldMetrics = make(map[string]struct{})
+	}
+	key := id + "\x00" + reason
+	if _, exists := r.bmaasHoldMetrics[key]; !exists {
+		r.bmaasHoldMetrics[key] = struct{}{}
+		bmaasReconciliationHolds.WithLabelValues(reason).Inc()
+	}
+}
+
+func reconciledBMaaSState(resourceID string, existing projection.ResourceState, fs fulfillmentResource, intervals events.BMaaSMeterIntervals, allocationEffect, consumptionEffect string, transitionTime time.Time) projection.ResourceState {
+	state := projection.ResourceState{
+		ResourceID:         resourceID,
+		ResourceType:       events.ResourceTypeBareMetalInstance,
+		TenantID:           fs.tenantID,
+		ProjectID:          fs.projectID,
+		CurrentState:       fs.state,
+		PreviousState:      existing.CurrentState,
+		EverBillable:       existing.EverBillable,
+		LastHeartbeatAt:    existing.LastHeartbeatAt,
+		TransitionTime:     transitionTime,
+		FulfillmentVersion: fs.version,
+		BillingDimensions:  fs.billingDimensions,
+		BMaaSMeterState:    existing.BMaaSMeterState,
+	}
+	if events.IsAllocationBillableState(fs.state) {
+		if state.BMaaSMeterState.Allocation.ActiveSince == nil {
+			state.BMaaSMeterState.Allocation.ActiveSince = intervals.AllocationSince
+		}
+		if state.BMaaSMeterState.Allocation.ActiveSince == nil {
+			since := transitionTime.UTC()
+			state.BMaaSMeterState.Allocation.ActiveSince = &since
+		}
+		state.BillableSince = state.BMaaSMeterState.Allocation.ActiveSince
+	} else {
+		state.BMaaSMeterState.Allocation.ActiveSince = nil
+		state.BillableSince = nil
+	}
+	switch allocationEffect {
+	case events.BMaaSEffectStart, events.BMaaSEffectResume:
+		if state.BMaaSMeterState.Allocation.ActiveSince == nil {
+			since := transitionTime.UTC()
+			state.BMaaSMeterState.Allocation.ActiveSince = &since
+		}
+		if state.BMaaSMeterState.Allocation.FirstStartedAt == nil {
+			firstStartedAt := transitionTime.UTC()
+			state.BMaaSMeterState.Allocation.FirstStartedAt = &firstStartedAt
+		}
+	case events.BMaaSEffectSuspend:
+		state.BMaaSMeterState.Allocation.ActiveSince = nil
+	}
+
+	if events.IsConsumptionBillableState(fs.state) {
+		if state.BMaaSMeterState.Consumption.ActiveSince == nil {
+			state.BMaaSMeterState.Consumption.ActiveSince = intervals.ConsumptionSince
+		}
+		if state.BMaaSMeterState.Consumption.ActiveSince == nil {
+			since := transitionTime.UTC()
+			state.BMaaSMeterState.Consumption.ActiveSince = &since
+		}
+	} else {
+		state.BMaaSMeterState.Consumption.ActiveSince = nil
+	}
+	switch consumptionEffect {
+	case events.BMaaSEffectStart, events.BMaaSEffectResume:
+		if state.BMaaSMeterState.Consumption.ActiveSince == nil {
+			since := transitionTime.UTC()
+			state.BMaaSMeterState.Consumption.ActiveSince = &since
+		}
+		if state.BMaaSMeterState.Consumption.FirstStartedAt == nil {
+			firstStartedAt := transitionTime.UTC()
+			state.BMaaSMeterState.Consumption.FirstStartedAt = &firstStartedAt
+		}
+	case events.BMaaSEffectSuspend:
+		state.BMaaSMeterState.Consumption.ActiveSince = nil
+	}
+	state.IsBillable = state.BillableSince != nil
+	state.EverBillable = state.EverBillable || state.IsBillable
+	return state
+}
+
 func (r *Reconciler) reconcileMissedDeletions(ctx context.Context, fulfillmentState map[string]fulfillmentResource, projMap map[string]projection.ResourceState, now time.Time) (int, error) {
 	corrections := 0
 	computeSkipLogged := false
@@ -369,6 +680,9 @@ func (r *Reconciler) reconcileMissedDeletions(ctx context.Context, fulfillmentSt
 
 	for id, ps := range projMap {
 		if _, exists := fulfillmentState[id]; !exists {
+			if _, unavailable := r.unavailableTypes[ps.ResourceType]; unavailable {
+				continue
+			}
 			if ps.ResourceType == events.ResourceTypeComputeInstance && r.computeClient == nil {
 				if !computeSkipLogged {
 					r.logger.Info("skipping compute_instance missed deletion checks, no compute client configured")
@@ -384,10 +698,19 @@ func (r *Reconciler) reconcileMissedDeletions(ctx context.Context, fulfillmentSt
 				continue
 			}
 			if ps.ResourceType == events.ResourceTypeBareMetalInstance {
-				if !bmaasSkipLogged {
-					r.logger.Info("skipping bare_metal_instance missed deletion checks, no BMI client configured")
-					bmaasSkipLogged = true
+				if _, skipped := r.bmaasSkipped[id]; skipped {
+					r.logger.Info("holding bare metal instance missed deletion after source row was skipped", "resource_id", id)
+					continue
 				}
+				if r.bareMetalClient == nil {
+					if !bmaasSkipLogged {
+						r.logger.Info("skipping bare_metal_instance missed deletion checks, no BMI client configured")
+						bmaasSkipLogged = true
+					}
+					continue
+				}
+				r.holdBMaaS(id, "history_unavailable")
+				r.logger.Info("holding bare metal instance deletion until reliable history is available", "resource_id", id)
 				continue
 			}
 			if ps.ResourceType == events.ResourceTypeExternalIP && r.externalIPClient == nil {
@@ -398,9 +721,16 @@ func (r *Reconciler) reconcileMissedDeletions(ctx context.Context, fulfillmentSt
 				r.logger.Info("skipping nat_gateway missed deletion checks, no NAT gateway client configured")
 				continue
 			}
+			if ps.ResourceType == events.ResourceTypeVolume && r.volumeClient == nil {
+				r.logger.Info("skipping volume missed deletion checks, no volume client configured")
+				continue
+			}
 			if ps.ResourceType == events.ResourceTypeExternalIP {
 				response, err := r.externalIPClient.Get(ctx, &privatev1.ExternalIPsGetRequest{Id: id})
 				if err == nil && response.GetObject() != nil {
+					continue
+				}
+				if isUnavailable(err) {
 					continue
 				}
 				if status.Code(err) != codes.NotFound {
@@ -412,8 +742,23 @@ func (r *Reconciler) reconcileMissedDeletions(ctx context.Context, fulfillmentSt
 				if err == nil && response.GetObject() != nil {
 					continue
 				}
+				if isUnavailable(err) {
+					continue
+				}
 				if status.Code(err) != codes.NotFound {
 					return corrections, fmt.Errorf("confirming NATGateway %s absence: %w", id, err)
+				}
+			}
+			if ps.ResourceType == events.ResourceTypeVolume {
+				response, err := r.volumeClient.Get(ctx, &privatev1.VolumesGetRequest{Id: id})
+				if err == nil && response.GetObject() != nil {
+					continue
+				}
+				if isUnavailable(err) {
+					continue
+				}
+				if status.Code(err) != codes.NotFound {
+					return corrections, fmt.Errorf("confirming Volume %s absence: %w", id, err)
 				}
 			}
 			if err := r.publishCorrections(ctx, id, ps.ResourceType, ps.TenantID, ps.ProjectID,
@@ -422,8 +767,13 @@ func (r *Reconciler) reconcileMissedDeletions(ctx context.Context, fulfillmentSt
 			}
 			corrections++
 
-			if err := r.store.Delete(ctx, id); err != nil {
+			deleted, err := r.store.DeleteIfVersion(ctx, id, ps.FulfillmentVersion)
+			if err != nil {
 				return corrections, fmt.Errorf("deleting missed deletion for %s: %w", id, err)
+			}
+			if !deleted {
+				r.logger.Info("skipping stale missed deletion after projection changed",
+					"resource_id", id, "projection_version", ps.FulfillmentVersion)
 			}
 		}
 	}
@@ -431,7 +781,7 @@ func (r *Reconciler) reconcileMissedDeletions(ctx context.Context, fulfillmentSt
 	return corrections, nil
 }
 
-func (r *Reconciler) reconcileStaleHeartbeats(ctx context.Context, now time.Time) (int, error) {
+func (r *Reconciler) reconcileStaleHeartbeats(ctx context.Context, fulfillmentState map[string]fulfillmentResource, now time.Time) (int, error) {
 	// Stale heartbeat detection: reload projection from DB so we see the
 	// corrected state after drift/creation/deletion upserts above. Using
 	// projMap here would read stale IsBillable values for corrected resources.
@@ -443,10 +793,31 @@ func (r *Reconciler) reconcileStaleHeartbeats(ctx context.Context, now time.Time
 	var heartbeatIDs []string
 	for i := range freshProjection {
 		ps := &freshProjection[i]
+		if ps.ResourceType == events.ResourceTypeBareMetalInstance {
+			if r.bareMetalClient == nil {
+				r.logger.V(1).Info("skipping stale bare metal instance heartbeat, no bare metal client configured", "resource_id", ps.ResourceID)
+				continue
+			}
+			if _, present := fulfillmentState[ps.ResourceID]; !present {
+				sourcePresent := r.bmaasPresence != nil && r.bmaasPresence.Contains(ps.ResourceID)
+				if !sourcePresent {
+					r.logger.Info("holding stale bare metal instance heartbeat until source presence is confirmed", "resource_id", ps.ResourceID)
+					continue
+				}
+			}
+		}
 		if ps.LastHeartbeatAt == nil || now.Sub(*ps.LastHeartbeatAt) > 2*r.heartbeatInterval {
-			hbEvents, hbErr := buildSyntheticHeartbeats(*ps, now)
+			mute := heartbeat.BMaaSMeterMute{}
+			if ps.ResourceType == events.ResourceTypeBareMetalInstance && r.bmaasPresence != nil {
+				mute = r.bmaasPresence.MeterMute(ps.ResourceID)
+			}
+			hbEvents, hbErr := buildSyntheticHeartbeatsWithMutes(*ps, now, mute)
 			if hbErr != nil {
 				r.logger.Error(hbErr, "building synthetic heartbeat", "resource_id", ps.ResourceID)
+				continue
+			}
+			if ps.ResourceType == events.ResourceTypeBareMetalInstance && len(hbEvents) == 0 {
+				r.logger.V(1).Info("skipping stale bare metal instance heartbeat without a meter boundary", "resource_id", ps.ResourceID)
 				continue
 			}
 			published := true
@@ -496,6 +867,7 @@ func (r *Reconciler) RunPeriodic(ctx context.Context, interval time.Duration) {
 type fulfillmentResource struct {
 	resourceType        string
 	state               string
+	isBillable          bool
 	version             int32
 	tenantID            string
 	projectID           string
@@ -505,18 +877,21 @@ type fulfillmentResource struct {
 }
 
 var billabilityCheckers = map[string]func(string) bool{
-	events.ResourceTypeComputeInstance: events.IsBillableState,
-	events.ResourceTypeClusterOrder:    events.IsClusterBillableState,
-	events.ResourceTypeExternalIP:      events.IsExternalIPBillableState,
-	events.ResourceTypeNATGateway:      events.IsNATGatewayBillableState,
+	events.ResourceTypeComputeInstance:   events.IsBillableState,
+	events.ResourceTypeClusterOrder:      events.IsClusterBillableState,
+	events.ResourceTypeExternalIP:        events.IsExternalIPBillableState,
+	events.ResourceTypeNATGateway:        events.IsNATGatewayBillableState,
+	events.ResourceTypeVolume:            events.IsVolumeBillableState,
+	events.ResourceTypeBareMetalInstance: events.IsAllocationBillableState,
 }
 
 var transientCheckers = map[string]func(string) bool{
-	events.ResourceTypeComputeInstance: events.IsTransientState,
-	events.ResourceTypeClusterOrder:    events.IsClusterTransientState,
-	events.ResourceTypeExternalIP:      events.IsExternalIPTransientState,
-	events.ResourceTypeNATGateway:      events.IsNATGatewayTransientState,
-}
+	events.ResourceTypeComputeInstance:   events.IsTransientState,
+	events.ResourceTypeClusterOrder:      events.IsClusterTransientState,
+	events.ResourceTypeExternalIP:        events.IsExternalIPTransientState,
+	events.ResourceTypeNATGateway:        events.IsNATGatewayTransientState,
+	events.ResourceTypeVolume:            events.IsVolumeTransientState,
+	events.ResourceTypeBareMetalInstance: func(string) bool { return false }}
 
 // isTransientForType reports whether the given state is transient for the
 // resource type. The map lookup is intentionally strict for resource types
@@ -531,6 +906,13 @@ func isBillableForType(resourceType, state string) (bool, error) {
 		return false, fmt.Errorf("unknown resource type: %s", resourceType)
 	}
 	return checker(state), nil
+}
+
+func fulfillmentResourceBillable(resource fulfillmentResource) (bool, error) {
+	if events.IsVolumeResourceType(resource.resourceType) {
+		return resource.isBillable, nil
+	}
+	return isBillableForType(resource.resourceType, resource.state)
 }
 
 func (r *Reconciler) loadFulfillmentState(ctx context.Context) (map[string]fulfillmentResource, error) {
@@ -563,7 +945,16 @@ func (r *Reconciler) loadFulfillmentState(ctx context.Context) (map[string]fulfi
 			return nil, err
 		}
 	}
-
+	if r.volumeClient != nil {
+		if err := r.loadVolumes(ctx, result); err != nil {
+			return nil, err
+		}
+	}
+	if r.bareMetalClient != nil {
+		if err := r.loadBareMetalInstances(ctx, result); err != nil {
+			return nil, err
+		}
+	}
 	return result, nil
 }
 
@@ -577,6 +968,9 @@ func LoadExternalIPPools(ctx context.Context, client ExternalIPPoolsClient) (map
 			Limit:  &limit,
 		})
 		if err != nil {
+			if isUnavailable(err) {
+				return map[string]string{}, nil
+			}
 			return nil, fmt.Errorf("listing external IP pools (offset=%d): %w", offset, err)
 		}
 		total := resp.GetTotal()
@@ -608,6 +1002,10 @@ func (r *Reconciler) loadComputeInstances(ctx context.Context, result map[string
 			Limit:  &limit,
 		})
 		if err != nil {
+			if isUnavailable(err) {
+				r.unavailableTypes[events.ResourceTypeComputeInstance] = struct{}{}
+				return nil
+			}
 			return fmt.Errorf("listing compute instances (offset=%d): %w", offset, err)
 		}
 
@@ -652,6 +1050,10 @@ func (r *Reconciler) loadClusters(ctx context.Context, result map[string]fulfill
 			Limit:  &limit,
 		})
 		if err != nil {
+			if isUnavailable(err) {
+				r.unavailableTypes[events.ResourceTypeClusterOrder] = struct{}{}
+				return nil
+			}
 			return fmt.Errorf("listing clusters (offset=%d): %w", offset, err)
 		}
 
@@ -696,6 +1098,10 @@ func (r *Reconciler) loadExternalIPs(ctx context.Context, result map[string]fulf
 			Limit:  &limit,
 		})
 		if err != nil {
+			if isUnavailable(err) {
+				r.unavailableTypes[events.ResourceTypeExternalIP] = struct{}{}
+				return nil
+			}
 			return fmt.Errorf("listing external IPs (offset=%d): %w", offset, err)
 		}
 		items := resp.GetItems()
@@ -747,6 +1153,10 @@ func (r *Reconciler) loadNATGateways(ctx context.Context, result map[string]fulf
 			Limit:  &limit,
 		})
 		if err != nil {
+			if isUnavailable(err) {
+				r.unavailableTypes[events.ResourceTypeNATGateway] = struct{}{}
+				return nil
+			}
 			return fmt.Errorf("listing NAT gateways (offset=%d): %w", offset, err)
 		}
 		items := resp.GetItems()
@@ -789,23 +1199,160 @@ func (r *Reconciler) loadNATGateways(ctx context.Context, result map[string]fulf
 	return nil
 }
 
+func (r *Reconciler) loadVolumes(ctx context.Context, result map[string]fulfillmentResource) error {
+	var offset int32
+	for {
+		limit := int32(defaultPageSize)
+		resp, err := r.volumeClient.List(ctx, &privatev1.VolumesListRequest{Offset: &offset, Limit: &limit})
+		if err != nil {
+			if isUnavailable(err) {
+				r.unavailableTypes[events.ResourceTypeVolume] = struct{}{}
+				return nil
+			}
+			return fmt.Errorf("listing volumes (offset=%d): %w", offset, err)
+		}
+		items := resp.GetItems()
+		for _, volume := range items {
+			dimensions, dimErr := events.VolumeBillingDimensions(volume)
+			if dimErr != nil {
+				return fmt.Errorf("mapping volume %s: %w", volume.GetId(), dimErr)
+			}
+			transitionTime := time.Time{}
+			stateTransitionTime := time.Time{}
+			if volume.GetMetadata().GetDeletionTimestamp() != nil {
+				transitionTime = volume.GetMetadata().GetDeletionTimestamp().AsTime()
+			} else if volume.GetStatus().GetStateTransitionTime() != nil {
+				transitionTime = volume.GetStatus().GetStateTransitionTime().AsTime()
+			}
+			if volume.GetStatus().GetStateTransitionTime() != nil {
+				stateTransitionTime = volume.GetStatus().GetStateTransitionTime().AsTime()
+			}
+			result[volume.GetId()] = fulfillmentResource{
+				resourceType:        events.ResourceTypeVolume,
+				state:               events.VolumeCurrentState(volume),
+				isBillable:          events.IsVolumeBillable(volume),
+				version:             volume.GetMetadata().GetVersion(),
+				tenantID:            volume.GetMetadata().GetTenant(),
+				projectID:           volume.GetMetadata().GetProject(),
+				transitionTime:      transitionTime,
+				stateTransitionTime: stateTransitionTime,
+				billingDimensions:   dimensions,
+			}
+		}
+		if offset >= resp.GetTotal() {
+			break
+		}
+		if len(items) == 0 {
+			return fmt.Errorf("listing volumes made no progress at offset %d", offset)
+		}
+		offset += int32(len(items))
+	}
+	return nil
+}
+
+func (r *Reconciler) loadBareMetalInstances(ctx context.Context, result map[string]fulfillmentResource) error {
+	var offset int32
+	var listedIDs []string
+	var mutes map[string]heartbeat.BMaaSMeterMute
+	for {
+		limit := int32(defaultPageSize)
+		resp, err := r.bareMetalClient.List(ctx, &privatev1.BareMetalInstancesListRequest{
+			Offset: &offset,
+			Limit:  &limit,
+		})
+		if err != nil {
+			if isUnavailable(err) {
+				r.unavailableTypes[events.ResourceTypeBareMetalInstance] = struct{}{}
+				return nil
+			}
+			return fmt.Errorf("listing bare metal instances (offset=%d): %w", offset, err)
+		}
+
+		items := resp.GetItems()
+		for _, bmi := range items {
+			state := "UNSPECIFIED"
+			var transitionTime time.Time
+			if status := bmi.GetStatus(); status != nil {
+				state = strings.TrimPrefix(status.GetState().String(), events.BareMetalInstanceStatePrefix)
+				if timestamp := status.GetStateTransitionTime(); timestamp != nil {
+					transitionTime = timestamp.AsTime().UTC()
+				}
+			}
+			tenantID := ""
+			projectID := ""
+			var version int32
+			if md := bmi.GetMetadata(); md != nil {
+				tenantID = md.GetTenant()
+				projectID = md.GetProject()
+				version = md.GetVersion()
+			}
+			// Keep source presence and meter state independent of dimension conversion.
+			// Existing billable projections can still heartbeat using their last valid
+			// dimensions while the source row is repaired.
+			listedIDs = append(listedIDs, bmi.GetId())
+			if r.bmaasPresence != nil {
+				if mutes == nil {
+					mutes = make(map[string]heartbeat.BMaaSMeterMute)
+				}
+				mutes[bmi.GetId()] = heartbeat.BMaaSMeterMute{
+					Allocation:  !events.IsAllocationBillableState(state),
+					Consumption: !events.IsConsumptionBillableState(state),
+				}
+			}
+			dimensions, err := events.BareMetalInstanceBillingDimensions(bmi)
+			if err != nil {
+				if r.bmaasSkipped == nil {
+					r.bmaasSkipped = make(map[string]struct{})
+				}
+				r.bmaasSkipped[bmi.GetId()] = struct{}{}
+				r.holdBMaaS(bmi.GetId(), "missing_instance_type")
+				r.logger.Error(err, "skipping bare metal instance with invalid billing dimensions", "resource_id", bmi.GetId())
+				continue
+			}
+			result[bmi.GetId()] = fulfillmentResource{
+				resourceType:      events.ResourceTypeBareMetalInstance,
+				state:             state,
+				version:           version,
+				tenantID:          tenantID,
+				projectID:         projectID,
+				billingDimensions: dimensions,
+				transitionTime:    transitionTime,
+			}
+		}
+
+		if len(items) < defaultPageSize {
+			break
+		}
+		offset += int32(len(items))
+	}
+	if r.bmaasPresence != nil {
+		r.bmaasPresence.Replace(listedIDs)
+		r.bmaasPresence.SetMeterMutes(mutes)
+	}
+	return nil
+}
+
 func buildSyntheticHeartbeats(ps projection.ResourceState, now time.Time) ([]cloudevents.Event, error) {
+	return buildSyntheticHeartbeatsWithMutes(ps, now, heartbeat.BMaaSMeterMute{})
+}
+
+func buildSyntheticHeartbeatsWithMutes(ps projection.ResourceState, now time.Time, mute heartbeat.BMaaSMeterMute) ([]cloudevents.Event, error) {
 	if err := events.ValidateBillingDimensions(ps.ResourceType, ps.BillingDimensions); err != nil {
 		return nil, err
 	}
 	baseID := fmt.Sprintf("synthetic-hb/%s/%d", ps.ResourceID, staleReferencePoint(ps, now).Unix())
-	if events.IsNetworkingResourceType(ps.ResourceType) {
+	if events.IsNetworkingResourceType(ps.ResourceType) || events.IsVolumeResourceType(ps.ResourceType) {
 		identity, err := events.HeartbeatIdentity(ps.ResourceType, ps.BillingDimensions, ps.BillableSince)
 		if err != nil {
 			return nil, err
 		}
 		baseID = fmt.Sprintf("%s/%s", baseID, identity)
 	}
-	return heartbeat.BuildHeartbeatEvents(&ps, baseID, now, "osac-metering/reconciler")
+	return heartbeat.BuildHeartbeatEventsWithMutes(&ps, baseID, now, "osac-metering/reconciler", mute)
 }
 
 func reconciliationTransitionTime(resource fulfillmentResource, now time.Time) (time.Time, error) {
-	if events.IsNetworkingResourceType(resource.resourceType) {
+	if events.IsNetworkingResourceType(resource.resourceType) || events.IsVolumeResourceType(resource.resourceType) {
 		if resource.transitionTime.IsZero() {
 			return time.Time{}, fmt.Errorf("networking resource %s has no authoritative transition time", resource.resourceType)
 		}
@@ -815,7 +1362,7 @@ func reconciliationTransitionTime(resource fulfillmentResource, now time.Time) (
 }
 
 func reconciliationStateEntryTime(resource fulfillmentResource, current time.Time) (time.Time, error) {
-	billable, err := isBillableForType(resource.resourceType, resource.state)
+	billable, err := fulfillmentResourceBillable(resource)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("checking billability for %s: %w", resource.resourceType, err)
 	}
@@ -834,6 +1381,15 @@ func reconciliationStateEntryTime(resource fulfillmentResource, current time.Tim
 func staleReferencePoint(ps projection.ResourceState, now time.Time) time.Time {
 	if ps.LastHeartbeatAt != nil {
 		return *ps.LastHeartbeatAt
+	}
+	if ps.ResourceType == events.ResourceTypeBareMetalInstance {
+		if ps.BMaaSMeterState.Allocation.ActiveSince != nil {
+			return *ps.BMaaSMeterState.Allocation.ActiveSince
+		}
+		if ps.BMaaSMeterState.Consumption.ActiveSince != nil {
+			return *ps.BMaaSMeterState.Consumption.ActiveSince
+		}
+		return now
 	}
 	if ps.BillableSince != nil {
 		return *ps.BillableSince

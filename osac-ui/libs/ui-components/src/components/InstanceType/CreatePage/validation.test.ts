@@ -5,7 +5,7 @@ import { tIdentity as t } from '../../../test-utils/i18n';
 
 const validValues = {
   metadata: { name: 'gp-small' },
-  spec: { description: '', cores: '4', memoryGib: '16' },
+  spec: { description: '', vcpus: '4', memoryGib: '16' },
 };
 
 describe('getInstanceTypeCreateSchema', () => {
@@ -34,9 +34,9 @@ describe('getInstanceTypeCreateSchema', () => {
     ['zero', '0'],
     ['negative', '-1'],
     ['non-numeric', 'abc'],
-  ])('rejects %s cores', async (_label, cores) => {
+  ])('rejects %s vcpus', async (_label, vcpus) => {
     await expect(
-      schema.isValid({ ...validValues, spec: { ...validValues.spec, cores } }),
+      schema.isValid({ ...validValues, spec: { ...validValues.spec, vcpus } }),
     ).resolves.toBe(false);
   });
 
@@ -52,26 +52,26 @@ describe('getInstanceTypeCreateSchema', () => {
     ).resolves.toBe(false);
   });
 
-  it('accepts positive integer cores and memoryGib at the boundary of 1', async () => {
+  it('accepts positive integer vcpus and memoryGib at the boundary of 1', async () => {
     await expect(
-      schema.isValid({ ...validValues, spec: { ...validValues.spec, cores: '1', memoryGib: '1' } }),
+      schema.isValid({ ...validValues, spec: { ...validValues.spec, vcpus: '1', memoryGib: '1' } }),
     ).resolves.toBe(true);
   });
 
-  it('accepts cores and memoryGib at the int32 max boundary', async () => {
+  it('accepts vcpus and memoryGib at the int32 max boundary', async () => {
     await expect(
       schema.isValid({
         ...validValues,
-        spec: { ...validValues.spec, cores: '2147483647', memoryGib: '2147483647' },
+        spec: { ...validValues.spec, vcpus: '2147483647', memoryGib: '2147483647' },
       }),
     ).resolves.toBe(true);
   });
 
-  it('rejects cores and memoryGib exceeding the int32 max', async () => {
+  it('rejects vcpus and memoryGib exceeding the int32 max', async () => {
     await expect(
       schema.isValid({
         ...validValues,
-        spec: { ...validValues.spec, cores: '2147483648', memoryGib: '2147483648' },
+        spec: { ...validValues.spec, vcpus: '2147483648', memoryGib: '2147483648' },
       }),
     ).resolves.toBe(false);
   });
@@ -107,7 +107,8 @@ describe('getInstanceTypeCreateSchema', () => {
       ['zero', '0'],
       ['negative', '-1'],
       ['decimal', '1.5'],
-    ])('rejects an out-of-range gpu count of %s', async (_label, count) => {
+      ['non-numeric', 'abc'],
+    ])('rejects an invalid gpu count of %s', async (_label, count) => {
       await expect(
         schema.isValid({
           ...validValues,

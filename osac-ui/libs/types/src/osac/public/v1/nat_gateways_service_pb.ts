@@ -18,8 +18,6 @@
 import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
 import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
 import { file_google_api_annotations } from "../../../google/api/annotations_pb";
-import type { FieldMask } from "../../../google/protobuf/field_mask_pb";
-import { file_google_protobuf_field_mask } from "../../../google/protobuf/field_mask_pb";
 import type { NATGateway } from "./nat_gateway_type_pb";
 import { file_osac_public_v1_nat_gateway_type } from "./nat_gateway_type_pb";
 import type { Message } from "@bufbuild/protobuf";
@@ -28,7 +26,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/nat_gateways_service.proto.
  */
 export const file_osac_public_v1_nat_gateways_service: GenFile = /*@__PURE__*/
-  fileDesc("Cilvc2FjL3B1YmxpYy92MS9uYXRfZ2F0ZXdheXNfc2VydmljZS5wcm90bxIOb3NhYy5wdWJsaWMudjEilAEKFk5BVEdhdGV3YXlzTGlzdFJlcXVlc3QSEwoGb2Zmc2V0GAEgASgFSACIAQESEgoFbGltaXQYAiABKAVIAYgBARITCgZmaWx0ZXIYAyABKAlIAogBARISCgVvcmRlchgEIAEoCUgDiAEBQgkKB19vZmZzZXRCCAoGX2xpbWl0QgkKB19maWx0ZXJCCAoGX29yZGVyImEKF05BVEdhdGV3YXlzTGlzdFJlc3BvbnNlEgwKBHNpemUYASABKAUSDQoFdG90YWwYAiABKAUSKQoFaXRlbXMYAyADKAsyGi5vc2FjLnB1YmxpYy52MS5OQVRHYXRld2F5IiMKFU5BVEdhdGV3YXlzR2V0UmVxdWVzdBIKCgJpZBgBIAEoCSJEChZOQVRHYXRld2F5c0dldFJlc3BvbnNlEioKBm9iamVjdBgBIAEoCzIaLm9zYWMucHVibGljLnYxLk5BVEdhdGV3YXkiRgoYTkFUR2F0ZXdheXNDcmVhdGVSZXF1ZXN0EioKBm9iamVjdBgBIAEoCzIaLm9zYWMucHVibGljLnYxLk5BVEdhdGV3YXkiRwoZTkFUR2F0ZXdheXNDcmVhdGVSZXNwb25zZRIqCgZvYmplY3QYASABKAsyGi5vc2FjLnB1YmxpYy52MS5OQVRHYXRld2F5IoUBChhOQVRHYXRld2F5c1VwZGF0ZVJlcXVlc3QSKgoGb2JqZWN0GAEgASgLMhoub3NhYy5wdWJsaWMudjEuTkFUR2F0ZXdheRIvCgt1cGRhdGVfbWFzaxgCIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5GaWVsZE1hc2sSDAoEbG9jaxgDIAEoCCJHChlOQVRHYXRld2F5c1VwZGF0ZVJlc3BvbnNlEioKBm9iamVjdBgBIAEoCzIaLm9zYWMucHVibGljLnYxLk5BVEdhdGV3YXkiJgoYTkFUR2F0ZXdheXNEZWxldGVSZXF1ZXN0EgoKAmlkGAEgASgJIhsKGU5BVEdhdGV3YXlzRGVsZXRlUmVzcG9uc2Uy7gUKC05BVEdhdGV3YXlzEoEBCgRMaXN0EiYub3NhYy5wdWJsaWMudjEuTkFUR2F0ZXdheXNMaXN0UmVxdWVzdBonLm9zYWMucHVibGljLnYxLk5BVEdhdGV3YXlzTGlzdFJlc3BvbnNlIiiC0+STAiISIC9hcGkvZnVsZmlsbG1lbnQvdjEvbmF0X2dhdGV3YXlzEosBCgNHZXQSJS5vc2FjLnB1YmxpYy52MS5OQVRHYXRld2F5c0dldFJlcXVlc3QaJi5vc2FjLnB1YmxpYy52MS5OQVRHYXRld2F5c0dldFJlc3BvbnNlIjWC0+STAi9iBm9iamVjdBIlL2FwaS9mdWxmaWxsbWVudC92MS9uYXRfZ2F0ZXdheXMve2lkfRKXAQoGQ3JlYXRlEigub3NhYy5wdWJsaWMudjEuTkFUR2F0ZXdheXNDcmVhdGVSZXF1ZXN0Gikub3NhYy5wdWJsaWMudjEuTkFUR2F0ZXdheXNDcmVhdGVSZXNwb25zZSI4gtPkkwIyOgZvYmplY3RiBm9iamVjdCIgL2FwaS9mdWxmaWxsbWVudC92MS9uYXRfZ2F0ZXdheXMSowEKBlVwZGF0ZRIoLm9zYWMucHVibGljLnYxLk5BVEdhdGV3YXlzVXBkYXRlUmVxdWVzdBopLm9zYWMucHVibGljLnYxLk5BVEdhdGV3YXlzVXBkYXRlUmVzcG9uc2UiRILT5JMCPjoGb2JqZWN0YgZvYmplY3QyLC9hcGkvZnVsZmlsbG1lbnQvdjEvbmF0X2dhdGV3YXlzL3tvYmplY3QuaWR9EowBCgZEZWxldGUSKC5vc2FjLnB1YmxpYy52MS5OQVRHYXRld2F5c0RlbGV0ZVJlcXVlc3QaKS5vc2FjLnB1YmxpYy52MS5OQVRHYXRld2F5c0RlbGV0ZVJlc3BvbnNlIi2C0+STAicqJS9hcGkvZnVsZmlsbG1lbnQvdjEvbmF0X2dhdGV3YXlzL3tpZH1iBnByb3RvMw", [file_google_api_annotations, file_google_protobuf_field_mask, file_osac_public_v1_nat_gateway_type]);
+  fileDesc("Cilvc2FjL3B1YmxpYy92MS9uYXRfZ2F0ZXdheXNfc2VydmljZS5wcm90bxIOb3NhYy5wdWJsaWMudjEilAEKFk5BVEdhdGV3YXlzTGlzdFJlcXVlc3QSEwoGb2Zmc2V0GAEgASgFSACIAQESEgoFbGltaXQYAiABKAVIAYgBARITCgZmaWx0ZXIYAyABKAlIAogBARISCgVvcmRlchgEIAEoCUgDiAEBQgkKB19vZmZzZXRCCAoGX2xpbWl0QgkKB19maWx0ZXJCCAoGX29yZGVyImEKF05BVEdhdGV3YXlzTGlzdFJlc3BvbnNlEgwKBHNpemUYASABKAUSDQoFdG90YWwYAiABKAUSKQoFaXRlbXMYAyADKAsyGi5vc2FjLnB1YmxpYy52MS5OQVRHYXRld2F5IiMKFU5BVEdhdGV3YXlzR2V0UmVxdWVzdBIKCgJpZBgBIAEoCSJEChZOQVRHYXRld2F5c0dldFJlc3BvbnNlEioKBm9iamVjdBgBIAEoCzIaLm9zYWMucHVibGljLnYxLk5BVEdhdGV3YXkiRgoYTkFUR2F0ZXdheXNDcmVhdGVSZXF1ZXN0EioKBm9iamVjdBgBIAEoCzIaLm9zYWMucHVibGljLnYxLk5BVEdhdGV3YXkiRwoZTkFUR2F0ZXdheXNDcmVhdGVSZXNwb25zZRIqCgZvYmplY3QYASABKAsyGi5vc2FjLnB1YmxpYy52MS5OQVRHYXRld2F5IiYKGE5BVEdhdGV3YXlzRGVsZXRlUmVxdWVzdBIKCgJpZBgBIAEoCSIbChlOQVRHYXRld2F5c0RlbGV0ZVJlc3BvbnNlMsgECgtOQVRHYXRld2F5cxKBAQoETGlzdBImLm9zYWMucHVibGljLnYxLk5BVEdhdGV3YXlzTGlzdFJlcXVlc3QaJy5vc2FjLnB1YmxpYy52MS5OQVRHYXRld2F5c0xpc3RSZXNwb25zZSIogtPkkwIiEiAvYXBpL2Z1bGZpbGxtZW50L3YxL25hdF9nYXRld2F5cxKLAQoDR2V0EiUub3NhYy5wdWJsaWMudjEuTkFUR2F0ZXdheXNHZXRSZXF1ZXN0GiYub3NhYy5wdWJsaWMudjEuTkFUR2F0ZXdheXNHZXRSZXNwb25zZSI1gtPkkwIvYgZvYmplY3QSJS9hcGkvZnVsZmlsbG1lbnQvdjEvbmF0X2dhdGV3YXlzL3tpZH0SlwEKBkNyZWF0ZRIoLm9zYWMucHVibGljLnYxLk5BVEdhdGV3YXlzQ3JlYXRlUmVxdWVzdBopLm9zYWMucHVibGljLnYxLk5BVEdhdGV3YXlzQ3JlYXRlUmVzcG9uc2UiOILT5JMCMjoGb2JqZWN0YgZvYmplY3QiIC9hcGkvZnVsZmlsbG1lbnQvdjEvbmF0X2dhdGV3YXlzEowBCgZEZWxldGUSKC5vc2FjLnB1YmxpYy52MS5OQVRHYXRld2F5c0RlbGV0ZVJlcXVlc3QaKS5vc2FjLnB1YmxpYy52MS5OQVRHYXRld2F5c0RlbGV0ZVJlc3BvbnNlIi2C0+STAicqJS9hcGkvZnVsZmlsbG1lbnQvdjEvbmF0X2dhdGV3YXlzL3tpZH1iBnByb3RvMw", [file_google_api_annotations, file_osac_public_v1_nat_gateway_type]);
 
 /**
  * @generated from message osac.public.v1.NATGatewaysListRequest
@@ -196,54 +194,6 @@ export const NATGatewaysCreateResponseSchema: GenMessage<NATGatewaysCreateRespon
   messageDesc(file_osac_public_v1_nat_gateways_service, 5);
 
 /**
- * @generated from message osac.public.v1.NATGatewaysUpdateRequest
- */
-export type NATGatewaysUpdateRequest = Message<"osac.public.v1.NATGatewaysUpdateRequest"> & {
-  /**
-   * @generated from field: osac.public.v1.NATGateway object = 1;
-   */
-  object?: NATGateway | undefined;
-
-  /**
-   * @generated from field: google.protobuf.FieldMask update_mask = 2;
-   */
-  updateMask?: FieldMask | undefined;
-
-  /**
-   * Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
-   * matches the value of the metadata.version field of the submitted object. If they differ the update will be
-   * rejected. This is useful to prevent lost updates when multiple clients are modifying the same object concurrently.
-   *
-   * @generated from field: bool lock = 3;
-   */
-  lock: boolean;
-};
-
-/**
- * Describes the message osac.public.v1.NATGatewaysUpdateRequest.
- * Use `create(NATGatewaysUpdateRequestSchema)` to create a new message.
- */
-export const NATGatewaysUpdateRequestSchema: GenMessage<NATGatewaysUpdateRequest> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_nat_gateways_service, 6);
-
-/**
- * @generated from message osac.public.v1.NATGatewaysUpdateResponse
- */
-export type NATGatewaysUpdateResponse = Message<"osac.public.v1.NATGatewaysUpdateResponse"> & {
-  /**
-   * @generated from field: osac.public.v1.NATGateway object = 1;
-   */
-  object?: NATGateway | undefined;
-};
-
-/**
- * Describes the message osac.public.v1.NATGatewaysUpdateResponse.
- * Use `create(NATGatewaysUpdateResponseSchema)` to create a new message.
- */
-export const NATGatewaysUpdateResponseSchema: GenMessage<NATGatewaysUpdateResponse> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_nat_gateways_service, 7);
-
-/**
  * @generated from message osac.public.v1.NATGatewaysDeleteRequest
  */
 export type NATGatewaysDeleteRequest = Message<"osac.public.v1.NATGatewaysDeleteRequest"> & {
@@ -258,7 +208,7 @@ export type NATGatewaysDeleteRequest = Message<"osac.public.v1.NATGatewaysDelete
  * Use `create(NATGatewaysDeleteRequestSchema)` to create a new message.
  */
 export const NATGatewaysDeleteRequestSchema: GenMessage<NATGatewaysDeleteRequest> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_nat_gateways_service, 8);
+  messageDesc(file_osac_public_v1_nat_gateways_service, 6);
 
 /**
  * @generated from message osac.public.v1.NATGatewaysDeleteResponse
@@ -271,7 +221,7 @@ export type NATGatewaysDeleteResponse = Message<"osac.public.v1.NATGatewaysDelet
  * Use `create(NATGatewaysDeleteResponseSchema)` to create a new message.
  */
 export const NATGatewaysDeleteResponseSchema: GenMessage<NATGatewaysDeleteResponse> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_nat_gateways_service, 9);
+  messageDesc(file_osac_public_v1_nat_gateways_service, 7);
 
 /**
  * @generated from service osac.public.v1.NATGateways
@@ -308,16 +258,6 @@ export const NATGateways: GenService<{
     output: typeof NATGatewaysCreateResponseSchema;
   },
   /**
-   * Updates an existing NAT gateway. The spec fields are immutable; only metadata (labels, annotations) can be changed.
-   *
-   * @generated from rpc osac.public.v1.NATGateways.Update
-   */
-  update: {
-    methodKind: "unary";
-    input: typeof NATGatewaysUpdateRequestSchema;
-    output: typeof NATGatewaysUpdateResponseSchema;
-  },
-  /**
    * Deletes a NAT gateway. The SNAT rule is removed and the ExternalIP is released for other use.
    *
    * @generated from rpc osac.public.v1.NATGateways.Delete
@@ -329,3 +269,4 @@ export const NATGateways: GenService<{
   },
 }> = /*@__PURE__*/
   serviceDesc(file_osac_public_v1_nat_gateways_service, 0);
+

@@ -159,7 +159,7 @@ export type ComputeInstanceCatalogItemsCreateResponse = Message<"osac.private.v1
   object?: ComputeInstanceCatalogItem | undefined;
 
   /**
-   * Deprecation or validation warnings (e.g. deprecated instance type in field_definitions).
+   * Deprecation or validation warnings for typed catalog policies.
    *
    * @generated from field: repeated string warnings = 2;
    */
@@ -214,7 +214,7 @@ export type ComputeInstanceCatalogItemsUpdateResponse = Message<"osac.private.v1
   object?: ComputeInstanceCatalogItem | undefined;
 
   /**
-   * Deprecation or validation warnings (e.g. deprecated instance type in field_definitions).
+   * Deprecation or validation warnings for typed catalog policies.
    *
    * @generated from field: repeated string warnings = 2;
    */
@@ -354,3 +354,4 @@ export const ComputeInstanceCatalogItems: GenService<{
   },
 }> = /*@__PURE__*/
   serviceDesc(file_osac_private_v1_compute_instance_catalog_items_service, 0);
+

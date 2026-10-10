@@ -26,29 +26,28 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // TierResolution holds the result of resolving a StorageTier name to a
-// concrete backend, provider, and protocol. Backend is the StorageBackend's provider
-// (e.g. "vast"), matching Volume.status.backend's documented contract and the
-// vendor routing keys ("vast", "pure", "ontap", ...) that osac-csi-driver's
-// Helm-templated --vendor-controllers/--vendor-sockets maps use -- those maps
-// can't be keyed by the StorageBackend's server-generated id, since that id
-// doesn't exist yet when the chart values are authored.
+// provider and protocol. Provider is the StorageBackend's provider (e.g. "vast"),
+// matching the vendor routing keys ("vast", "pure", "ontap", ...) that
+// osac-csi-driver's Helm-templated --vendor-controllers/--vendor-sockets maps use.
 type TierResolution struct {
-	Backend  string
 	Provider string
 	Protocol privatev1.StorageProtocol
 }
 
-// TierResolverFunc resolves a StorageTier name to a backend and protocol.
+const (
+	lvmsProvider        = "lvms"
+	nodeTopologySegment = "osac.io/node"
+)
+
+// TierResolverFunc resolves a StorageTier name to a provider and protocol.
 type TierResolverFunc func(ctx context.Context, tierName string) (*TierResolution, error)
 
 type PrivateVolumesServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -72,11 +71,6 @@ func NewPrivateVolumesServer() *PrivateVolumesServerBuilder {
 
 func (b *PrivateVolumesServerBuilder) SetLogger(value *slog.Logger) *PrivateVolumesServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateVolumesServerBuilder) SetNotifier(value events.Notifier) *PrivateVolumesServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -124,7 +118,6 @@ func (b *PrivateVolumesServerBuilder) Build() (result *PrivateVolumesServer, err
 	generic, err := NewGenericServer[*privatev1.Volume]().
 		SetLogger(b.logger).
 		SetService(privatev1.Volumes_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
@@ -172,6 +165,14 @@ func (s *PrivateVolumesServer) Create(ctx context.Context,
 	if err != nil {
 		return
 	}
+	if resolved.Provider == lvmsProvider {
+		topology := vol.GetSpec().GetTopology()
+		if topology == nil || topology.GetSegments()[nodeTopologySegment] == "" {
+			err = grpcstatus.Errorf(grpccodes.FailedPrecondition,
+				`node-local volume requires topology.segments["%s"]`, nodeTopologySegment)
+			return
+		}
+	}
 
 	if vol.GetStatus() == nil {
 		vol.SetStatus(&privatev1.VolumeStatus{})
@@ -180,12 +181,7 @@ func (s *PrivateVolumesServer) Create(ctx context.Context,
 	// populated only by the operator feedback path after vendor provisioning.
 	vol.GetStatus().SetVendorContext(nil)
 	vol.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_CREATING)
-	vol.GetStatus().SetBackend(resolved.Backend)
-	provider := resolved.Provider
-	if provider == "" {
-		provider = resolved.Backend
-	}
-	vol.GetStatus().SetProvider(provider)
+	vol.GetStatus().SetProvider(resolved.Provider)
 	vol.GetStatus().SetProtocol(resolved.Protocol)
 
 	vol.SetId("")
@@ -291,6 +287,8 @@ func applyVolumeUpdate(base, update *privatev1.Volume, mask *fieldmaskpb.FieldMa
 				dst[k] = v
 			}
 			base.GetSpec().GetTopology().SetSegments(dst)
+		case "status.provider":
+			base.GetStatus().SetProvider(update.GetStatus().GetProvider())
 		case "status.protocol":
 			base.GetStatus().SetProtocol(update.GetStatus().GetProtocol())
 		default:
@@ -300,7 +298,7 @@ func applyVolumeUpdate(base, update *privatev1.Volume, mask *fieldmaskpb.FieldMa
 }
 
 // validateVolumeImmutability checks that immutable volume fields have not been changed.
-// storage_tier, size_gib, access_mode, and protocol are immutable after creation because
+// storage_tier, size_gib, access_mode, provider, and protocol are immutable after creation because
 // they are provisioned directly into the vendor CSI call and cannot be modified post-creation.
 func validateVolumeImmutability(merged, existing *privatev1.Volume) error {
 	if merged.GetSpec().GetStorageTier() != existing.GetSpec().GetStorageTier() {
@@ -318,6 +316,11 @@ func validateVolumeImmutability(merged, existing *privatev1.Volume) error {
 	if !proto.Equal(merged.GetSpec().GetTopology(), existing.GetSpec().GetTopology()) {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.topology' is immutable and cannot be changed after creation")
+	}
+	if existing.GetStatus().GetProvider() != "" &&
+		merged.GetStatus().GetProvider() != existing.GetStatus().GetProvider() {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'status.provider' is immutable and cannot be changed after creation")
 	}
 	if existing.GetStatus().GetProtocol() != privatev1.StorageProtocol_STORAGE_PROTOCOL_UNSPECIFIED &&
 		merged.GetStatus().GetProtocol() != existing.GetStatus().GetProtocol() {

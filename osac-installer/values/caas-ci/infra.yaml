@@ -1,4 +1,6 @@
 # CaaS CI environment -- infrastructure values for osac-deps + osac-infra charts.
+# Keep the hub CSI credential hook disabled. Tenant CSI installation is handled
+# by the AAP storage-provider workflow on each remote tenant cluster.
 
 # --- OLM Subscriptions (osac-deps) ---
 certManager:
@@ -14,18 +16,29 @@ metallb:
 cnv:
   enabled: false
 mce:
+  # The CaaS CI profile owns and configures its standalone MCE installation.
   enabled: true
-  osImages:
-    - openshiftVersion: "4.22"
-      version: "9.8.20260428-0"
-      url: "https://mirror.openshift.com/pub/openshift-v4/x86_64/dependencies/rhcos/4.22/4.22.0/rhcos-4.22.0-x86_64-live-iso.x86_64.iso"
-      cpuArchitecture: "x86_64"
 
 # --- Infrastructure (osac-infra) ---
 caIssuer:
   enabled: true
 keycloak:
   enabled: true
+  route:
+    publicIngress: true
+  # Optional local credentials override; keep credentials out of Git:
+  # adminUsername: ${KC_ADMIN_USER}
+  # adminPassword: ${KC_ADMIN_PASSWORD}
+  # devFixtures:
+  #   enabled: false
+  # Helm does not expand shell variables in YAML. If enabling these keys,
+  # generate a git-ignored local file with expanded values before Helm reads it:
+  # envsubst < values/caas-ci/infra.yaml > my-infra-values.yaml
+  # Optional hostname override. Set these in a local values overlay when
+  # needed; do not commit environment-specific hostnames here:
+  # hostname: keycloak-keycloak.apps.<cluster-domain>
+  # route:
+  #   hostname: keycloak-keycloak.apps.<cluster-domain>
   # Seed known passwords for the realm's built-in test users -- the e2e
   # suite logs in as these accounts by password.
   devFixtures:
@@ -34,19 +47,22 @@ kafka:
   enabled: true
 
 # --- Bundled PostgreSQL ---
-# Single-pod ephemeral database for testing.
-# Uses fsync=off -- data is lost on restart. Not for production.
+# Bundled PostgreSQL for testing only; not intended for production.
 bundledPostgres:
   enabled: true
   database:
     name: service
 
 # --- Bundled OpenBao ---
-# Single-pod ephemeral Vault-compatible secret store for testing. Dev mode --
-# data is lost on restart. Not for production.
+# Bundled OpenBao for testing and CI. Not for production.
 bundledVault:
   enabled: true
-  devRootToken: "dev-root-token"
+  # Optional OpenBao JWT issuer override. It must match the issuer (iss)
+  # claim in Keycloak tokens. Use the in-cluster URL when that is the issuer;
+  # if Keycloak tokens use a route hostname, set that route URL in a local
+  # values overlay instead. The chart/service defaults may already provide
+  # the issuer.
+  # keycloakIssuerUrl: "https://keycloak-keycloak.apps.<cluster-domain>/realms/osac"
   # Override podSecurityContext for OpenShift restricted-v2 SCC: omit numeric
   # runAsUser/runAsGroup/fsGroup — the SCC allocates UIDs from the namespace UID
   # range and resolves the named user automatically.

@@ -1,47 +1,83 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  MenuToggle,
+  Gallery,
+  GalleryItem,
   SearchInput,
   Toolbar,
   ToolbarContent,
   ToolbarGroup,
   ToolbarItem,
 } from '@patternfly/react-core';
-import { EllipsisVIcon } from '@patternfly/react-icons/dist/esm/icons/ellipsis-v-icon';
-import { ActionsColumn, Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
 import { Secret, Secrets } from '@osac/types';
 import { cel } from '@osac/ui-components/api/cel';
 import { useListResource } from '@osac/ui-components/api/use-resource';
-import { SEARCH_PARAM, usePageFilter } from '@osac/ui-components/hooks/use-page-filter';
+import {
+  DEFAULT_VIEW_TYPE,
+  ViewType,
+  getViewTypePrefKey,
+  isViewType,
+} from '@osac/ui-components/components/Primitives/ViewSwitcher';
+import {
+  SEARCH_PARAM,
+  useArrayPageFilter,
+  usePageFilter,
+} from '@osac/ui-components/hooks/use-page-filter';
 import { useProjectFilterQuery } from '@osac/ui-components/hooks/use-project-filter-query';
+import { useUserPreferences } from '@osac/ui-components/hooks/use-user-preferences';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
+import SecretCard from './SecretCard.tsx';
 import SecretDeleteModal from './SecretDeleteModal.tsx';
-import { getSecretType } from './utils.ts';
+import SecretTable from './SecretTable.tsx';
+import TypeFilter from './TypeFilter.tsx';
+import {
+  TYPE_FILTER_TO_ENUM,
+  TYPE_PARAM,
+  type TypeFilterValue,
+  isTypeFilterValue,
+} from './utils.ts';
 import ListPage from '../Page/ListPage';
 import ListPageBody from '../Page/ListPageBody';
 import ProjectFilter from '../Page/ProjectFilter';
 import CreateButton from '../Primitives/CreateButton.tsx';
-import { Timestamp } from '../Primitives/Timestamp';
-import ResourceNameField from '../Resource/ResourceNameField';
+import ViewSwitcher from '../Primitives/ViewSwitcher.tsx';
 import { SubtleContent } from '../SubtleContent/SubtleContent';
+
+const SECRETS_VIEW_KEY = 'secrets';
 
 const SecretListPage = () => {
   const navigate = useNavigate();
   const { t } = useTranslation();
   const [deleteTarget, setDeleteTarget] = useState<Secret>();
   const [search, setSearch] = usePageFilter(SEARCH_PARAM);
+  const [type, setType, clearTypeFilter] = useArrayPageFilter<TypeFilterValue>(
+    TYPE_PARAM,
+    isTypeFilterValue,
+  );
   const projectFilter = useProjectFilterQuery<Secret>();
+  const [viewTypePref] = useUserPreferences(getViewTypePrefKey(SECRETS_VIEW_KEY));
+  const viewType: ViewType = isViewType(viewTypePref) ? viewTypePref : DEFAULT_VIEW_TYPE;
+
+  const typeFilter = type.map((t) => TYPE_FILTER_TO_ENUM[t]);
+
   const { data, isLoading, error } = useListResource(Secrets, {
     filter: cel<Secret>((filter) =>
       filter.and(
         projectFilter,
         search ? filter.field('metadata.name').contains(search) : undefined,
+        type.length
+          ? filter.or(...typeFilter.map((f) => filter.field('type').equals(f)))
+          : undefined,
       ),
     ),
   });
+
+  const items = data?.items ?? [];
+
+  const handleEdit = (secret: Secret) => navigate(`/secrets/${secret.id}/edit`);
+  const handleDelete = (secret: Secret) => setDeleteTarget(secret);
 
   return (
     <>
@@ -68,6 +104,9 @@ const SecretListPage = () => {
                   <ProjectFilter />
                 </ToolbarItem>
                 <ToolbarItem>
+                  <TypeFilter type={type} onClear={clearTypeFilter} onToggle={setType} />
+                </ToolbarItem>
+                <ToolbarItem>
                   <SearchInput
                     placeholder={t('Search secrets')}
                     value={search}
@@ -77,65 +116,40 @@ const SecretListPage = () => {
                   />
                 </ToolbarItem>
               </ToolbarGroup>
+              <ToolbarGroup align={{ default: 'alignEnd' }}>
+                <ToolbarItem>
+                  <ViewSwitcher pageKey={SECRETS_VIEW_KEY} />
+                </ToolbarItem>
+              </ToolbarGroup>
             </ToolbarContent>
           </Toolbar>
-          {!data?.items.length ? (
+          {!items.length ? (
             <SubtleContent component="p">
-              {search
+              {search || projectFilter || type.length
                 ? t('No secrets match your search.')
                 : t('No secrets yet. Create one to get started.')}
             </SubtleContent>
           ) : (
-            <Table aria-label={t('Secrets')} variant="compact">
-              <Thead>
-                <Tr>
-                  <Th>{t('Name')}</Th>
-                  <Th>{t('Project')}</Th>
-                  <Th>{t('Type')}</Th>
-                  <Th>{t('Created')}</Th>
-                  <Th aria-label={t('Actions')} />
-                </Tr>
-              </Thead>
-              <Tbody>
-                {data.items.map((secret) => (
-                  <Tr key={secret.id}>
-                    <Td dataLabel={t('Name')}>
-                      <ResourceNameField resource={secret} detailsUrl={`/secrets/${secret.id}`} />
-                    </Td>
-                    <Td dataLabel={t('Project')}>{secret.metadata?.project || t('Default')}</Td>
-                    <Td dataLabel={t('Type')}>{getSecretType(secret, t)}</Td>
-                    <Td dataLabel={t('Created')}>
-                      <Timestamp value={secret.metadata?.creationTimestamp} />
-                    </Td>
-                    <Td dataLabel={t('Actions')} isActionCell>
-                      <ActionsColumn
-                        items={[
-                          {
-                            title: t('Edit'),
-                            onClick: () => navigate(`/secrets/${secret.id}/edit`),
-                          },
-                          {
-                            title: t('Delete'),
-                            onClick: () => setDeleteTarget(secret),
-                          },
-                        ]}
-                        actionsToggle={({ onToggle, isOpen, toggleRef }) => (
-                          <MenuToggle
-                            ref={toggleRef}
-                            variant="plain"
-                            isExpanded={isOpen}
-                            onClick={onToggle}
-                            aria-label={t('Actions for {{name}}', { name: secret.metadata?.name })}
-                          >
-                            <EllipsisVIcon />
-                          </MenuToggle>
-                        )}
+            <>
+              <SubtleContent component="p">
+                {t('{{count}} secret', { count: items.length })}
+              </SubtleContent>
+              {viewType === 'cards' ? (
+                <Gallery hasGutter minWidths={{ default: '300px' }} maxWidths={{ default: '1fr' }}>
+                  {items.map((secret) => (
+                    <GalleryItem key={secret.id}>
+                      <SecretCard
+                        secret={secret}
+                        onEdit={() => handleEdit(secret)}
+                        onDelete={() => handleDelete(secret)}
                       />
-                    </Td>
-                  </Tr>
-                ))}
-              </Tbody>
-            </Table>
+                    </GalleryItem>
+                  ))}
+                </Gallery>
+              ) : (
+                <SecretTable items={items} onEdit={handleEdit} onDelete={handleDelete} />
+              )}
+            </>
           )}
         </ListPageBody>
       </ListPage>

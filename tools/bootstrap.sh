@@ -11,7 +11,7 @@
 #      writes workflow links into those paths)
 #   4. Installs workflows (bugfix, implement, prd, design, e2e)
 #   5. Clones skill-relative sibling repos under this checkout
-#      (enhancement-proposals, osac-ux, osac-ui). osac-project/docs was
+#      (enhancement-proposals, osac-ux). osac-project/docs was
 #      merged into this repo's in-tree docs/ and is no longer cloned as a
 #      sibling. E2E suites live in-tree at tests/e2e/; osac-test-infra is
 #      not cloned.
@@ -295,7 +295,6 @@ fork_repo_for() {
 SIBLINGS=(
   "enhancement-proposals"
   "osac-ux"
-  "osac-ui"
 )
 
 # True when $url is a path or SSH remote for $suffix (e.g. osac-project/docs).
@@ -532,10 +531,10 @@ install_pre_commit_hooks() {
   local dir="$1" label="$2"
   [[ -f "${dir}/.pre-commit-config.yaml" && -n "$PRE_COMMIT_INSTALLER" ]] || return 0
   if [[ "$PRE_COMMIT_INSTALLER" == "rh-multi-pre-commit" ]]; then
-    if ! rh-multi-pre-commit install --path "$dir"; then
+    if ! rh-multi-pre-commit install --force --path "$dir"; then
       echo "  ${label}: failed to install hooks. Continuing."
     fi
-  elif ! (cd "$dir" && pre-commit install); then
+  elif ! (cd "$dir" && pre-commit install --force); then
     echo "  ${label}: failed to install hooks. Continuing."
   fi
 }

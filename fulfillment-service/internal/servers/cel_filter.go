@@ -70,24 +70,6 @@ func fieldMatchesPrefix(field, prefix string) bool {
 	return field == prefix || strings.HasPrefix(field, prefix+".")
 }
 
-// filterReferencesAnyField reports whether the CEL filter expression references a field whose dotted
-// path starts with any of the given prefixes (e.g. "this.spec.state"). Returns an error if
-// the filter has invalid syntax.
-func filterReferencesAnyField(filter string, prefixes ...string) (bool, error) {
-	fields, err := filterReferencedFields(filter)
-	if err != nil {
-		return false, err
-	}
-	for field := range fields {
-		for _, prefix := range prefixes {
-			if fieldMatchesPrefix(field, prefix) {
-				return true, nil
-			}
-		}
-	}
-	return false, nil
-}
-
 // filterDefault pairs a field prefix with the CEL predicate to apply when the user's filter does
 // not reference that field. Used with composeFilterDefaults for per-field default composition.
 type filterDefault struct {

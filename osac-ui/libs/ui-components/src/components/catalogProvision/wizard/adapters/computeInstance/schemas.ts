@@ -1,6 +1,7 @@
 import type { TFunction } from 'i18next';
 import * as yup from 'yup';
 
+import { buildNetworkAttachmentSchemas } from '@osac/ui-components/validation/network-attachment';
 import { resourceNameSchema } from '@osac/ui-components/validation/resource-name';
 import { userDataSchema } from '@osac/ui-components/validation/user-data';
 
@@ -10,7 +11,6 @@ import {
   mergeCatalogValidation,
   readCatalogFieldDefinitions,
 } from '../../catalogOverlay';
-import { isValidSshPublicKey } from '../../fields/credentialValidation';
 import type { WizardStepId } from '../../stepIds';
 
 const storageTierSchema = (t: TFunction) =>
@@ -38,27 +38,11 @@ const buildComputeInstanceFieldDefinitions = (catalogItem: unknown, t: TFunction
     definitions,
     t('catalogProvision.vm.fields.bootDisk'),
   );
-  const sshKeyOverlay = getCatalogFieldOverlay('ssh_public_key', definitions, t('SSH public key'));
-  const sshKeyRequired = hasCatalogFieldDefinition('ssh_public_key', definitions);
   const userDataRequired = hasCatalogFieldDefinition('spec.user_data', definitions);
 
   return {
     catalogItemId: yup.string().required(t('catalogProvision.validation.catalogItemRequired')),
     metadataName: resourceNameSchema(t),
-    specSshKey: mergeCatalogValidation(
-      yup
-        .string()
-        .test(
-          'ssh-public-key',
-          t(
-            'SSH public key must be in the form "[TYPE] key [[EMAIL]]". Supported types are ssh-rsa, ssh-ed25519, and ecdsa-sha2-nistp256/384/521.',
-          ),
-          (value) => isValidSshPublicKey(value),
-        ),
-      sshKeyOverlay,
-      sshKeyRequired,
-      t('catalogProvision.validation.required'),
-    ),
     specInstanceType: yup.string().required(t('catalogProvision.validation.instanceTypeRequired')),
     specUserData: mergeCatalogValidation(
       userDataSchema(t),
@@ -92,13 +76,24 @@ const buildComputeInstanceFieldDefinitions = (catalogItem: unknown, t: TFunction
         storageTier: storageTierSchema(t),
       }),
     ),
-    specNetworking: yup.object({
-      virtualNetwork: yup
-        .string()
-        .required(t('catalogProvision.validation.virtualNetworkRequired')),
-      subnet: yup.string().required(t('catalogProvision.validation.subnetRequired')),
-      securityGroups: yup.array().min(1, t('catalogProvision.validation.securityGroupRequired')),
-    }),
+    specNetworking: (() => {
+      const na = buildNetworkAttachmentSchemas(t);
+      return yup.object({
+        useDefaultNetwork: yup.boolean(),
+        virtualNetwork: yup.object().when('useDefaultNetwork', {
+          is: false,
+          then: () => na.requiredVirtualNetwork,
+          otherwise: () => na.optionalResourceSelect,
+        }),
+        subnet: yup.object().when('useDefaultNetwork', {
+          is: false,
+          then: () => na.requiredSubnet,
+          otherwise: () => na.optionalResourceSelect,
+        }),
+        securityGroups: na.securityGroupsSchema,
+        autoExternalIpAttachment: yup.boolean(),
+      });
+    })(),
   };
 };
 
@@ -133,7 +128,7 @@ export const buildComputeInstanceStepSchema = (
           name: fields.metadataName,
         }),
         spec: yup.object({
-          sshPublicKey: fields.specSshKey,
+          sshKey: yup.object({ name: yup.string() }),
         }),
       });
     case 'configuration':

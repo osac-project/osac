@@ -1,9 +1,12 @@
 apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSModelRef
 metadata:
-  name: "{{ ocp_4_20_ai_maas_model_name }}"
+  name: "{{ _t_model }}"
   namespace: "{{ ocp_4_20_ai_maas_model_namespace }}"
 spec:
   modelRef:
     kind: LLMInferenceService
-    name: "{{ ocp_4_20_ai_maas_model_name }}"
+    name: "{{ _t_model }}"
+{% if not (_t_is_default | bool) %}
+  tenantRef: "{{ _t_name }}"
+{% endif %}

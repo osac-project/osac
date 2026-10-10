@@ -37,6 +37,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/servers"
 	"github.com/osac-project/osac/fulfillment-service/internal/services"
 	shtdwn "github.com/osac-project/osac/fulfillment-service/internal/shutdown"
+	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 	"github.com/osac-project/osac/fulfillment-service/internal/version"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -128,7 +129,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error {
 
 	// Load the trusted CA certificates:
 	c.logger.InfoContext(ctx, "Loading trusted CA certificates")
-	caPool, err := network.NewCertPool().
+	caPool, err := trust.NewCertPool().
 		SetLogger(c.logger).
 		AddSystemFiles(true).
 		AddKubernetesFiles(true).
@@ -311,10 +312,10 @@ func buildHandlerList() []handlerRegistrar {
 	return []handlerRegistrar{
 		// Shared public API:
 		publicv1.RegisterCapabilitiesHandler,
-		publicv1.RegisterHostTypesHandler,
 		publicv1.RegisterVirtualNetworksHandler,
 		publicv1.RegisterSubnetsHandler,
 		publicv1.RegisterSecurityGroupsHandler,
+		publicv1.RegisterFabricDomainsHandler,
 		publicv1.RegisterNATGatewaysHandler,
 		publicv1.RegisterExternalIPPoolsHandler,
 		publicv1.RegisterExternalIPsHandler,
@@ -324,12 +325,13 @@ func buildHandlerList() []handlerRegistrar {
 		publicv1.RegisterJsonWebKeySetHandler,
 		publicv1.RegisterStorageTiersHandler,
 		publicv1.RegisterVolumesHandler,
+		publicv1.RegisterSelfSubjectAccessReviewsHandler,
 		// Shared private API:
 		privatev1.RegisterCapabilitiesHandler,
 		privatev1.RegisterEventsHandler,
-		privatev1.RegisterHostTypesHandler,
 		privatev1.RegisterHubsHandler,
 		privatev1.RegisterNetworkClassesHandler,
+		privatev1.RegisterFabricDomainsHandler,
 		privatev1.RegisterSecretsHandler,
 		privatev1.RegisterStorageBackendsHandler,
 		privatev1.RegisterStorageTiersHandler,
@@ -343,6 +345,7 @@ func buildHandlerList() []handlerRegistrar {
 		privatev1.RegisterRolesHandler,
 		privatev1.RegisterRoleBindingsHandler,
 		privatev1.RegisterVolumesHandler,
+		privatev1.RegisterSelfSubjectAccessReviewsHandler,
 		// CaaS:
 		publicv1.RegisterClusterTemplatesHandler,
 		publicv1.RegisterAddOnOperatorsHandler,

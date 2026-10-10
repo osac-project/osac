@@ -48,9 +48,10 @@ const (
 // ExternalIPPoolReconciler reconciles ExternalIPPool CRs created by the fulfillment-service.
 //
 // A ExternalIPPool defines a range of external IP addresses (CIDRs) that can be allocated
-// as individual ExternalIP resources. Implementation strategy is resolved from the default
-// NetworkClass via the dispatcher; pool spec.implementationStrategy is a backward-compat
-// fallback (along with defaultExternalIPPoolImplementationStrategy).
+// as individual ExternalIP resources. Implementation strategy is resolved exclusively
+// from the default NetworkClass via the dispatcher. When no manager is configured the
+// controller blocks with ReasonNoManagerConfigured rather than falling back to a
+// hardcoded default.
 //
 // The controller adds a finalizer, triggers AAP provisioning/deprovisioning jobs via
 // the shared provisioning lifecycle, and transitions phases:
@@ -69,7 +70,7 @@ type ExternalIPPoolReconciler struct {
 	// two-manager model isn't configured (no gRPC connection / networking namespace),
 	// in which case the controller always uses the legacy implementation-strategy path.
 	Resolver *dispatcher.Resolver
-	// networkClassesClient lists NetworkClasses to find the default/singleton used
+	// networkClassesClient lists NetworkClasses to find the deployment singleton used
 	// as the dispatcher input. Nil when gRPC is not configured.
 	networkClassesClient privatev1.NetworkClassesClient
 	// NetworkProvisioningEnabled controls whether the controller dispatches AAP
@@ -186,17 +187,23 @@ func (r *ExternalIPPoolReconciler) handleUpdate(ctx context.Context, pool *v1alp
 		return ctrl.Result{}, nil
 	}
 
-	// Resolve implementation strategy from the default NetworkClass via the
-	// dispatcher. pool spec.implementationStrategy is only used as a fallback
-	// when the dispatcher path is not active.
+	// Resolve implementation strategy exclusively from the default NetworkClass
+	// via the dispatcher. When no manager is configured the controller blocks
+	// with ReasonNoManagerConfigured instead of falling back to a spec field.
 	networkClassID, err := lookupDefaultNetworkClassID(ctx, r.networkClassesClient)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	implementationStrategy, err := resolveImplementationStrategy(
-		ctx, r.Resolver, "ExternalIPPool", networkClassID, pool.Spec.ImplementationStrategy)
+		ctx, r.Resolver, "ExternalIPPool", networkClassID, "")
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+	if implementationStrategy == "" {
+		msg := fmt.Sprintf("no fabric_manager or k8s_manager configured for ExternalIPPool (default NetworkClass %q)", networkClassID)
+		setReadyConditionBlocked(&pool.Status.Conditions, v1alpha1.ReasonNoManagerConfigured, msg)
+		log.Info("implementation strategy not set, requeueing", "externalIPPool", pool.Name)
+		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
 
 	// Stamp the implementation-strategy annotation so AAP playbooks can read it
@@ -327,6 +334,11 @@ func (r *ExternalIPPoolReconciler) handleProvisioning(ctx context.Context, pool 
 // and polls its status. On failure, it either blocks deletion (to prevent orphaned
 // resources) or allows the process to continue, depending on provider policy.
 func (r *ExternalIPPoolReconciler) handleDeprovisioning(ctx context.Context, pool *v1alpha1.ExternalIPPool) (ctrl.Result, error) {
+	if !r.NetworkProvisioningEnabled {
+		ctrllog.FromContext(ctx).Info("network provisioning disabled, skipping deprovisioning")
+		return ctrl.Result{}, nil
+	}
+
 	if r.ProvisioningProvider == nil {
 		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping deprovisioning")
 		return ctrl.Result{}, nil

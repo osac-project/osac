@@ -166,8 +166,8 @@ var _ = Describe("Storage tiers server", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		// defaultBackend returns a BackendAssociation with distinct, non-zero values for every field,
-		// so tests can assert each one survived the flatten without ambiguity.
+		// defaultBackend returns a valid BackendAssociation with deterministic values for private
+		// creation and filter-rejection tests.
 		defaultBackend := func() *privatev1.BackendAssociation {
 			return privatev1.BackendAssociation_builder{
 				BackendId:            backendID,
@@ -178,7 +178,7 @@ var _ = Describe("Storage tiers server", func() {
 		}
 
 		// createTier creates a StorageTier via the private server (which enforces exactly one backend
-		// association) so tests exercise the public server's delegation and flattening.
+		// association) so tests exercise the public server's delegation and tier-level projection.
 		createTier := func(name string, backend *privatev1.BackendAssociation) *privatev1.StorageTier {
 			response, err := privateServer.Create(ctx, privatev1.StorageTiersCreateRequest_builder{
 				Object: privatev1.StorageTier_builder{
@@ -220,7 +220,7 @@ var _ = Describe("Storage tiers server", func() {
 			return response.GetObject().GetId()
 		}
 
-		It("Get flattens the backend association into the public spec", func() {
+		It("Get maps tier-level fields into the public spec", func() {
 			created := createTier("test-tier", defaultBackend())
 
 			response, err := publicServer.Get(ctx, publicv1.StorageTiersGetRequest_builder{
@@ -232,9 +232,6 @@ var _ = Describe("Storage tiers server", func() {
 			Expect(obj.GetMetadata().GetName()).To(Equal("test-tier"))
 			Expect(obj.GetSpec().GetDescription()).To(Equal("A test storage tier"))
 			Expect(obj.GetSpec().GetProtocol()).To(Equal(publicv1.StorageProtocol_STORAGE_PROTOCOL_NFS))
-			Expect(obj.GetSpec().GetMaxReadBandwidthMbs()).To(Equal(int32(1000)))
-			Expect(obj.GetSpec().GetMaxWriteBandwidthMbs()).To(Equal(int32(500)))
-			Expect(obj.GetSpec().GetEncryptionEnabled()).To(BeTrue())
 			Expect(obj.GetStatus().GetState()).To(Equal(publicv1.StorageTierState_STORAGE_TIER_STATE_ACTIVE))
 		})
 
@@ -248,7 +245,7 @@ var _ = Describe("Storage tiers server", func() {
 			Expect(st.Code()).To(Equal(codes.NotFound))
 		})
 
-		It("List flattens the backend association for every item", func() {
+		It("List maps tier-level fields for every item", func() {
 			const count = 3
 			for i := range count {
 				createTier(fmt.Sprintf("tier-%d", i), defaultBackend())
@@ -316,26 +313,20 @@ var _ = Describe("Storage tiers server", func() {
 			Expect(response).To(BeNil())
 		})
 
-		DescribeTable("List rejects filters on fields that exist publicly but at a different path privately",
-			func(filter string) {
-				// Seed a tier whose values would match these filters if forwarded, so a
-				// delegated-but-empty result can't masquerade as rejection:
-				createTier("test-tier", defaultBackend())
+		It("List rejects a filter on a field removed from the public schema", func() {
+			// Seed a tier whose values would match if the filter were forwarded, so a
+			// delegated-but-empty result can't masquerade as rejection:
+			createTier("test-tier", defaultBackend())
 
-				response, err := publicServer.List(ctx, publicv1.StorageTiersListRequest_builder{
-					Filter: new(filter),
-				}.Build())
-				Expect(err).To(HaveOccurred())
-				st, ok := status.FromError(err)
-				Expect(ok).To(BeTrue())
-				Expect(st.Code()).To(Equal(codes.InvalidArgument))
-				Expect(st.Message()).To(ContainSubstring("not yet supported"))
-				Expect(response).To(BeNil())
-			},
-			Entry("max_read_bandwidth_mbs", "this.spec.max_read_bandwidth_mbs == 1000"),
-			Entry("max_write_bandwidth_mbs", "this.spec.max_write_bandwidth_mbs == 500"),
-			Entry("encryption_enabled", "this.spec.encryption_enabled == true"),
-		)
+			response, err := publicServer.List(ctx, publicv1.StorageTiersListRequest_builder{
+				Filter: new("this.spec.max_read_bandwidth_mbs == 1000"),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			st, ok := status.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(st.Code()).To(Equal(codes.InvalidArgument))
+			Expect(response).To(BeNil())
+		})
 
 		It("List forwards a filter on this.spec.protocol now that the path is shared with the private schema", func() {
 			nfsTier := createTier("nfs-tier", defaultBackend())
@@ -449,7 +440,7 @@ var _ = Describe("Storage tiers server", func() {
 			Expect(listResponse.GetTotal()).To(Equal(int32(3)))
 		})
 
-		It("Get returns Internal for a tier with more than one backend association", func() {
+		It("Get returns a tier with more than one backend association", func() {
 			tierDAO, err := dao.NewGenericDAO[*privatev1.StorageTier]().
 				SetLogger(logger).
 				SetTenancyLogic(tenancy).
@@ -481,13 +472,14 @@ var _ = Describe("Storage tiers server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			multiID := createResponse.GetObject().GetId()
 
-			_, err = publicServer.Get(ctx, publicv1.StorageTiersGetRequest_builder{
+			response, err := publicServer.Get(ctx, publicv1.StorageTiersGetRequest_builder{
 				Id: multiID,
 			}.Build())
-			Expect(err).To(HaveOccurred())
-			st, ok := status.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(st.Code()).To(Equal(codes.Internal))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetId()).To(Equal(multiID))
+			Expect(response.GetObject().GetSpec().GetDescription()).To(Equal("two backends"))
+			Expect(response.GetObject().GetSpec().GetProtocol()).To(
+				Equal(publicv1.StorageProtocol_STORAGE_PROTOCOL_NFS))
 		})
 
 		It("toPublicStorageProtocol maps an out-of-range private value to UNSPECIFIED", func() {
@@ -499,26 +491,21 @@ var _ = Describe("Storage tiers server", func() {
 	})
 
 	Describe("Schema drift regression", func() {
-		It("Every StorageTierSpec field except description and protocol is covered by the Layer 2 rejection list", func() {
+		It("Public StorageTierSpec has only description and protocol fields", func() {
 			descriptor := (&publicv1.StorageTierSpec{}).ProtoReflect().Descriptor()
 			fields := descriptor.Fields()
 
-			rejected := make(map[string]bool, len(storageTierUnforwardableFilterFields))
-			for _, field := range storageTierUnforwardableFilterFields {
-				rejected[field] = true
+			allowed := map[string]bool{
+				"description": true,
+				"protocol":    true,
 			}
 
 			for i := range fields.Len() {
 				field := fields.Get(i)
-				// description/protocol share the same path publicly and privately, so they're forwardable.
-				if field.Name() == "description" || field.Name() == "protocol" {
-					continue
-				}
-				path := fmt.Sprintf("this.spec.%s", field.Name())
-				Expect(rejected[path]).To(BeTrue(),
+				Expect(allowed[string(field.Name())]).To(BeTrue(),
 					fmt.Sprintf(
-						"field %q is not covered by storageTierUnforwardableFilterFields — update the "+
-							"rejection list in storage_tiers_server.go",
+						"unexpected field %q on public StorageTierSpec — QoS and encryption "+
+							"fields belong exclusively on BackendAssociation",
 						field.Name(),
 					))
 			}

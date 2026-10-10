@@ -118,13 +118,13 @@ var _ = Describe("Generic mapper", func() {
 			privatev1.Cluster_builder{
 				Spec: privatev1.ClusterSpec_builder{
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
-						"my_node_set": privatev1.ClusterNodeSet_builder{
-							HostType: privatev1.HostTypeReference_builder{Id: "my_host_type"}.Build(),
-							Size:     proto.Int32(123),
+						"my-node-set": privatev1.ClusterNodeSet_builder{
+							BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "my_bmit"}.Build(),
+							Size:                  proto.Int32(123),
 						}.Build(),
-						"your_node_set": privatev1.ClusterNodeSet_builder{
-							HostType: privatev1.HostTypeReference_builder{Id: "your_host_type"}.Build(),
-							Size:     proto.Int32(456),
+						"your-node-set": privatev1.ClusterNodeSet_builder{
+							BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "your_bmit"}.Build(),
+							Size:                  proto.Int32(456),
 						}.Build(),
 					},
 				}.Build(),
@@ -133,13 +133,13 @@ var _ = Describe("Generic mapper", func() {
 			publicv1.Cluster_builder{
 				Spec: publicv1.ClusterSpec_builder{
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
-						"my_node_set": publicv1.ClusterNodeSet_builder{
-							HostType: publicv1.HostTypeReference_builder{Id: "my_host_type"}.Build(),
-							Size:     proto.Int32(123),
+						"my-node-set": publicv1.ClusterNodeSet_builder{
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "my_bmit"}.Build(),
+							Size:                  proto.Int32(123),
 						}.Build(),
-						"your_node_set": publicv1.ClusterNodeSet_builder{
-							HostType: publicv1.HostTypeReference_builder{Id: "your_host_type"}.Build(),
-							Size:     proto.Int32(456),
+						"your-node-set": publicv1.ClusterNodeSet_builder{
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "your_bmit"}.Build(),
+							Size:                  proto.Int32(456),
 						}.Build(),
 					},
 				}.Build(),
@@ -316,9 +316,9 @@ var _ = Describe("Generic mapper", func() {
 			privatev1.Cluster_builder{
 				Spec: privatev1.ClusterSpec_builder{
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
-						"new_node_set": privatev1.ClusterNodeSet_builder{
-							HostType: privatev1.HostTypeReference_builder{Id: "new_host_type"}.Build(),
-							Size:     proto.Int32(789),
+						"new-node-set": privatev1.ClusterNodeSet_builder{
+							BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "new_bmit"}.Build(),
+							Size:                  proto.Int32(789),
 						}.Build(),
 					},
 				}.Build(),
@@ -326,9 +326,9 @@ var _ = Describe("Generic mapper", func() {
 			publicv1.Cluster_builder{
 				Spec: publicv1.ClusterSpec_builder{
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
-						"existing_node_set": publicv1.ClusterNodeSet_builder{
-							HostType: publicv1.HostTypeReference_builder{Id: "existing_host_type"}.Build(),
-							Size:     proto.Int32(456),
+						"existing-node-set": publicv1.ClusterNodeSet_builder{
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "existing_bmit"}.Build(),
+							Size:                  proto.Int32(456),
 						}.Build(),
 					},
 				}.Build(),
@@ -336,13 +336,13 @@ var _ = Describe("Generic mapper", func() {
 			publicv1.Cluster_builder{
 				Spec: publicv1.ClusterSpec_builder{
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
-						"existing_node_set": publicv1.ClusterNodeSet_builder{
-							HostType: publicv1.HostTypeReference_builder{Id: "existing_host_type"}.Build(),
-							Size:     proto.Int32(456),
+						"existing-node-set": publicv1.ClusterNodeSet_builder{
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "existing_bmit"}.Build(),
+							Size:                  proto.Int32(456),
 						}.Build(),
-						"new_node_set": publicv1.ClusterNodeSet_builder{
-							HostType: publicv1.HostTypeReference_builder{Id: "new_host_type"}.Build(),
-							Size:     proto.Int32(789),
+						"new-node-set": publicv1.ClusterNodeSet_builder{
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "new_bmit"}.Build(),
+							Size:                  proto.Int32(789),
 						}.Build(),
 					},
 				}.Build(),
@@ -353,9 +353,9 @@ var _ = Describe("Generic mapper", func() {
 			privatev1.Cluster_builder{
 				Spec: privatev1.ClusterSpec_builder{
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
-						"node_set": privatev1.ClusterNodeSet_builder{
-							HostType: privatev1.HostTypeReference_builder{Id: "updated_host_type"}.Build(),
-							Size:     proto.Int32(999),
+						"node-set": privatev1.ClusterNodeSet_builder{
+							BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "updated_bmit"}.Build(),
+							Size:                  proto.Int32(999),
 						}.Build(),
 					},
 				}.Build(),
@@ -363,9 +363,9 @@ var _ = Describe("Generic mapper", func() {
 			publicv1.Cluster_builder{
 				Spec: publicv1.ClusterSpec_builder{
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
-						"node_set": publicv1.ClusterNodeSet_builder{
-							HostType: publicv1.HostTypeReference_builder{Id: "original_host_type"}.Build(),
-							Size:     proto.Int32(123),
+						"node-set": publicv1.ClusterNodeSet_builder{
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "original_bmit"}.Build(),
+							Size:                  proto.Int32(123),
 						}.Build(),
 					},
 				}.Build(),
@@ -373,9 +373,9 @@ var _ = Describe("Generic mapper", func() {
 			publicv1.Cluster_builder{
 				Spec: publicv1.ClusterSpec_builder{
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
-						"node_set": publicv1.ClusterNodeSet_builder{
-							HostType: publicv1.HostTypeReference_builder{Id: "updated_host_type"}.Build(),
-							Size:     proto.Int32(999),
+						"node-set": publicv1.ClusterNodeSet_builder{
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "updated_bmit"}.Build(),
+							Size:                  proto.Int32(999),
 						}.Build(),
 					},
 				}.Build(),

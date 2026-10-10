@@ -23,9 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	"github.com/osac-project/osac/fulfillment-service/internal/servers"
 	"github.com/osac-project/osac/fulfillment-service/internal/services"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
@@ -37,7 +35,6 @@ import (
 // server pair.
 type ResourceServerDeps struct {
 	Logger                  *slog.Logger
-	Notifier                events.Notifier
 	PrivateAttributionLogic auth.AttributionLogic
 	PublicAttributionLogic  auth.AttributionLogic
 	TenancyLogic            auth.TenancyLogic
@@ -68,19 +65,11 @@ type ResourceServers struct {
 // same code path.
 func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistrar, //nolint:gocyclo
 	deps ResourceServerDeps) (*ResourceServers, error) {
-	// ExternalIPPoolsServerBuilder, ProjectsServerBuilder, and PrivateProjectsServerBuilder take the concrete
-	// *database.Notifier, unlike every other builder here, which takes the events.Notifier interface.
-	dbNotifier, ok := deps.Notifier.(*database.Notifier)
-	if !ok {
-		return nil, fmt.Errorf("notifier must be a *database.Notifier, got %T", deps.Notifier)
-	}
-
 	// CaaS: public cluster templates and catalog items
 	if deps.Services.CaaS {
 		deps.Logger.InfoContext(ctx, "Creating cluster templates server")
 		clusterTemplatesServer, err := servers.NewClusterTemplatesServer().
 			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
 			SetAttributionLogic(deps.PublicAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -93,7 +82,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		deps.Logger.InfoContext(ctx, "Creating add-on operators server")
 		addOnOperatorsServer, err := servers.NewAddOnOperatorsServer().
 			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
 			SetAttributionLogic(deps.PublicAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -106,7 +94,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		deps.Logger.InfoContext(ctx, "Creating cluster catalog items server")
 		clusterCatalogItemsServer, err := servers.NewClusterCatalogItemsServer().
 			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
 			SetAttributionLogic(deps.PublicAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -121,7 +108,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		deps.Logger.InfoContext(ctx, "Creating compute instance catalog items server")
 		computeInstanceCatalogItemsServer, err := servers.NewComputeInstanceCatalogItemsServer().
 			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
 			SetAttributionLogic(deps.PublicAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -136,7 +122,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		deps.Logger.InfoContext(ctx, "Creating private cluster templates server")
 		privateClusterTemplatesServer, err := servers.NewPrivateClusterTemplatesServer().
 			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
 			SetAttributionLogic(deps.PrivateAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -149,7 +134,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		deps.Logger.InfoContext(ctx, "Creating private add-on operators server")
 		privateAddOnOperatorsServer, err := servers.NewPrivateAddOnOperatorsServer().
 			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
 			SetAttributionLogic(deps.PrivateAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -162,7 +146,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		deps.Logger.InfoContext(ctx, "Creating private cluster catalog items server")
 		privateClusterCatalogItemsServer, err := servers.NewPrivateClusterCatalogItemsServer().
 			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
 			SetAttributionLogic(deps.PrivateAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -177,7 +160,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		deps.Logger.InfoContext(ctx, "Creating private compute instance catalog items server")
 		privateComputeInstanceCatalogItemsServer, err := servers.NewPrivateComputeInstanceCatalogItemsServer().
 			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
 			SetAttributionLogic(deps.PrivateAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -192,7 +174,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		deps.Logger.InfoContext(ctx, "Creating clusters server")
 		clustersServer, err := servers.NewClustersServer().
 			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
 			SetAttributionLogic(deps.PublicAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -205,7 +186,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		deps.Logger.InfoContext(ctx, "Creating private clusters server")
 		privateClustersServer, err := servers.NewPrivateClustersServer().
 			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
 			SetAttributionLogic(deps.PrivateAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -216,43 +196,12 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		privatev1.RegisterClustersServer(registrar, privateClustersServer)
 	}
 
-	// Create the host types server:
-	deps.Logger.InfoContext(ctx, "Creating host types server")
-	hostTypesServer, err := servers.NewHostTypesServer().
-		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
-		SetAttributionLogic(deps.PublicAttributionLogic).
-		SetTenancyLogic(deps.TenancyLogic).
-		SetMetricsRegisterer(deps.MetricsRegisterer).
-		SetServiceFlags(deps.Services).
-		Build()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create host types server: %w", err)
-	}
-	publicv1.RegisterHostTypesServer(registrar, hostTypesServer)
-
-	// Create the private host types server:
-	deps.Logger.InfoContext(ctx, "Creating private host types server")
-	privateHostTypesServer, err := servers.NewPrivateHostTypesServer().
-		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
-		SetAttributionLogic(deps.PrivateAttributionLogic).
-		SetTenancyLogic(deps.TenancyLogic).
-		SetMetricsRegisterer(deps.MetricsRegisterer).
-		SetServiceFlags(deps.Services).
-		Build()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create private host types server: %w", err)
-	}
-	privatev1.RegisterHostTypesServer(registrar, privateHostTypesServer)
-
 	// VMaaS: compute instance templates and compute instances.
 	var privateComputeInstancesServer privatev1.ComputeInstancesServer
 	if deps.Services.VMaaS {
 		deps.Logger.InfoContext(ctx, "Creating compute instance templates server")
 		computeInstanceTemplatesServer, err := servers.NewComputeInstanceTemplatesServer().
 			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
 			SetAttributionLogic(deps.PublicAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -265,7 +214,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		deps.Logger.InfoContext(ctx, "Creating private compute instance templates server")
 		privateComputeInstanceTemplatesServer, err := servers.NewPrivateComputeInstanceTemplatesServer().
 			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
 			SetAttributionLogic(deps.PrivateAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -278,7 +226,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		deps.Logger.InfoContext(ctx, "Creating compute instances server")
 		computeInstancesServer, err := servers.NewComputeInstancesServer().
 			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
 			SetAttributionLogic(deps.PublicAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -292,7 +239,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		deps.Logger.InfoContext(ctx, "Creating private compute instances server")
 		privateComputeInstancesServer, err = servers.NewPrivateComputeInstancesServer().
 			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
 			SetAttributionLogic(deps.PrivateAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -309,7 +255,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		deps.Logger.InfoContext(ctx, "Creating disk images server")
 		diskImagesServer, err := servers.NewDiskImagesServer().
 			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
 			SetAttributionLogic(deps.PublicAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -322,7 +267,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		deps.Logger.InfoContext(ctx, "Creating private disk images server")
 		privateDiskImagesServer, err := servers.NewPrivateDiskImagesServer().
 			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
 			SetAttributionLogic(deps.PrivateAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -337,7 +281,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		deps.Logger.InfoContext(ctx, "Creating bare metal instance templates server")
 		bareMetalInstanceTemplatesServer, err := servers.NewBareMetalInstanceTemplatesServer().
 			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
 			SetAttributionLogic(deps.PublicAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -350,7 +293,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		deps.Logger.InfoContext(ctx, "Creating bare metal instance catalog items server")
 		bareMetalInstanceCatalogItemsServer, err := servers.NewBareMetalInstanceCatalogItemsServer().
 			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
 			SetAttributionLogic(deps.PublicAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -363,7 +305,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		deps.Logger.InfoContext(ctx, "Creating bare metal instances server")
 		bareMetalInstancesServer, err := servers.NewBareMetalInstancesServer().
 			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
 			SetAttributionLogic(deps.PublicAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -377,7 +318,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		deps.Logger.InfoContext(ctx, "Creating private bare metal instance templates server")
 		privateBareMetalInstanceTemplatesServer, err := servers.NewPrivateBareMetalInstanceTemplatesServer().
 			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
 			SetAttributionLogic(deps.PrivateAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -390,7 +330,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		deps.Logger.InfoContext(ctx, "Creating private bare metal instance catalog items server")
 		privateBareMetalInstanceCatalogItemsServer, err := servers.NewPrivateBareMetalInstanceCatalogItemsServer().
 			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
 			SetAttributionLogic(deps.PrivateAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -403,7 +342,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		deps.Logger.InfoContext(ctx, "Creating private bare metal instances server")
 		privateBareMetalInstancesServer, err := servers.NewPrivateBareMetalInstancesServer().
 			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
 			SetAttributionLogic(deps.PrivateAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -419,7 +357,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating private hubs server")
 	privateHubsServer, err := servers.NewPrivateHubsServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -460,7 +397,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating virtual networks server")
 	virtualNetworksServer, err := servers.NewVirtualNetworksServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -474,7 +410,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating private virtual networks server")
 	privateVirtualNetworksServer, err := servers.NewPrivateVirtualNetworksServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -488,10 +423,10 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating subnets server")
 	subnetsServer, err := servers.NewSubnetsServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetHubClientProvider(hubClientProvider).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create subnets server: %w", err)
@@ -502,9 +437,9 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating private subnets server")
 	privateSubnetsServer, err := servers.NewPrivateSubnetsServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
+		SetHubClientProvider(hubClientProvider).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
 		Build()
 	if err != nil {
@@ -516,7 +451,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating security groups server")
 	securityGroupsServer, err := servers.NewSecurityGroupsServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -530,7 +464,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating private security groups server")
 	privateSecurityGroupsServer, err := servers.NewPrivateSecurityGroupsServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -544,7 +477,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating private network classes server")
 	privateNetworkClassesServer, err := servers.NewPrivateNetworkClassesServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -554,12 +486,37 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	}
 	privatev1.RegisterNetworkClassesServer(registrar, privateNetworkClassesServer)
 
+	// Create the fabric domains server:
+	deps.Logger.InfoContext(ctx, "Creating fabric domains server")
+	fabricDomainsServer, err := servers.NewFabricDomainsServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PublicAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create fabric domains server: %w", err)
+	}
+	publicv1.RegisterFabricDomainsServer(registrar, fabricDomainsServer)
+
+	// Create the private fabric domains server:
+	deps.Logger.InfoContext(ctx, "Creating private fabric domains server")
+	privateFabricDomainsServer, err := servers.NewPrivateFabricDomainsServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PrivateAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create private fabric domains server: %w", err)
+	}
+	privatev1.RegisterFabricDomainsServer(registrar, privateFabricDomainsServer)
+
 	// VMaaS: instance types
 	if deps.Services.VMaaS {
 		deps.Logger.InfoContext(ctx, "Creating instance types server")
 		instanceTypesServer, err := servers.NewInstanceTypesServer().
 			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
 			SetAttributionLogic(deps.PublicAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -572,7 +529,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		deps.Logger.InfoContext(ctx, "Creating private instance types server")
 		privateInstanceTypesServer, err := servers.NewPrivateInstanceTypesServer().
 			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
 			SetAttributionLogic(deps.PrivateAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -588,7 +544,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		deps.Logger.InfoContext(ctx, "Creating bare metal instance types server")
 		bareMetalInstanceTypesServer, err := servers.NewBareMetalInstanceTypesServer().
 			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
 			SetAttributionLogic(deps.PublicAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -601,7 +556,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		deps.Logger.InfoContext(ctx, "Creating private bare metal instance types server")
 		privateBareMetalInstanceTypesServer, err := servers.NewPrivateBareMetalInstanceTypesServer().
 			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
 			SetAttributionLogic(deps.PrivateAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -616,7 +570,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		deps.Logger.InfoContext(ctx, "Creating cluster versions server")
 		clusterVersionsServer, err := servers.NewClusterVersionsServer().
 			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
 			SetAttributionLogic(deps.PublicAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -629,7 +582,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		deps.Logger.InfoContext(ctx, "Creating private cluster versions server")
 		privateClusterVersionsServer, err := servers.NewPrivateClusterVersionsServer().
 			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
 			SetAttributionLogic(deps.PrivateAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -644,7 +596,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating private storage backends server")
 	privateStorageBackendsServer, err := servers.NewPrivateStorageBackendsServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -658,7 +609,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating private secrets server")
 	privateSecretsServer, err := servers.NewPrivateSecretsServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -674,7 +624,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating public secrets server")
 	publicSecretsServer, err := servers.NewSecretsServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -699,7 +648,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating private storage tiers server")
 	privateStorageTiersServer, err := servers.NewPrivateStorageTiersServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -714,7 +662,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating storage tiers server")
 	storageTiersServer, err := servers.NewStorageTiersServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -729,7 +676,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating roles server")
 	rolesServer, err := servers.NewRolesServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -743,7 +689,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating private roles server")
 	privateRolesServer, err := servers.NewPrivateRolesServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -757,7 +702,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating role bindings server")
 	roleBindingsServer, err := servers.NewRoleBindingsServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -771,7 +715,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating private role bindings server")
 	privateRoleBindingsServer, err := servers.NewPrivateRoleBindingsServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -785,7 +728,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating project memberships server")
 	projectMembershipsServer, err := servers.NewProjectMembershipsServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -799,7 +741,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating private project memberships server")
 	privateProjectMembershipsServer, err := servers.NewPrivateProjectMembershipsServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -813,7 +754,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating external IP pools server")
 	externalIPPoolsServer, err := servers.NewExternalIPPoolsServer().
 		SetLogger(deps.Logger).
-		SetNotifier(dbNotifier).
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -827,7 +767,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating private external IP pools server")
 	privateExternalIPPoolsServer, err := servers.NewPrivateExternalIPPoolsServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -841,7 +780,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating external IPs server")
 	externalIPsServer, err := servers.NewExternalIPsServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -855,7 +793,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating private external IPs server")
 	privateExternalIPsServer, err := servers.NewPrivateExternalIPsServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -869,7 +806,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating external IP attachments server")
 	externalIPAttachmentsServer, err := servers.NewExternalIPAttachmentsServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -883,7 +819,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating private external IP attachments server")
 	privateExternalIPAttachmentsServer, err := servers.NewPrivateExternalIPAttachmentsServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -897,7 +832,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating NAT gateways server")
 	natGatewaysServer, err := servers.NewNATGatewaysServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -911,7 +845,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating private NAT gateways server")
 	privateNATGatewaysServer, err := servers.NewPrivateNATGatewaysServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -925,7 +858,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating public tenants server")
 	publicTenantsServer, err := servers.NewTenantsServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -934,28 +866,13 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		return nil, fmt.Errorf("failed to create public tenants server: %w", err)
 	}
 	publicv1.RegisterTenantsServer(registrar, publicTenantsServer)
-
-	// Create the default networking provisioner:
-	deps.Logger.InfoContext(ctx, "Creating default networking provisioner")
-	defaultNetworkingProvisioner, err := servers.NewDefaultNetworkingProvisioner().
-		SetLogger(deps.Logger).
-		SetTenancyLogic(deps.TenancyLogic).
-		SetMetricsRegisterer(deps.MetricsRegisterer).
-		SetNotifier(deps.Notifier).
-		Build()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create default networking provisioner: %w", err)
-	}
-
 	// Create the private tenants server:
 	deps.Logger.InfoContext(ctx, "Creating private tenants server")
 	privateTenantsServer, err := servers.NewPrivateTenantsServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
-		SetDefaultNetworkingProvisioner(defaultNetworkingProvisioner).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create private tenants server: %w", err)
@@ -966,7 +883,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating public identity providers server")
 	publicIdentityProvidersServer, err := servers.NewIdentityProvidersServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -980,7 +896,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating private identity providers server")
 	privateIdentityProvidersServer, err := servers.NewPrivateIdentityProvidersServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -995,7 +910,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating public projects server")
 	publicProjectsServer, err := servers.NewProjectsServer().
 		SetLogger(deps.Logger).
-		SetNotifier(dbNotifier).
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -1009,11 +923,9 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating private projects server")
 	privateProjectsServer, err := servers.NewPrivateProjectsServer().
 		SetLogger(deps.Logger).
-		SetNotifier(dbNotifier).
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
-		SetDefaultNetworkingProvisioner(defaultNetworkingProvisioner).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create private projects server: %w", err)
@@ -1024,7 +936,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating volumes server")
 	volumesServer, err := servers.NewVolumesServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -1039,7 +950,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating private volumes server")
 	privateVolumesServer, err := servers.NewPrivateVolumesServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -1054,7 +964,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	deps.Logger.InfoContext(ctx, "Creating public users server")
 	publicUsersServer, err := servers.NewUsersServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).

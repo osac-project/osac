@@ -12,4 +12,4 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: {{ include "csi-driver.nodeServiceAccountName" . }}
-    namespace: {{ .Release.Namespace }}
+    namespace: {{ include "csi-driver.namespace" . }}

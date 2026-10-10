@@ -220,13 +220,23 @@ curl --cacert <ca-bundle.pem> \
   https://<public-api-host>/api/fulfillment/v1/capabilities | jq .
 ```
 
+The `enabled_services` field is a repeated `ServiceTier` enum. Its REST/JSON
+representation uses these generated enum values:
+
+| Enum value | Service tier |
+| --- | --- |
+| `SERVICE_TIER_CAAS` | CaaS |
+| `SERVICE_TIER_VMAAS` | VMaaS |
+| `SERVICE_TIER_BMAAS` | BMaaS |
+| `SERVICE_TIER_MAAS` | MaaS |
+
 For the partial configuration in this guide, the response includes:
 
 ```json
 {
   "enabled_services": [
-    "caas",
-    "vmaas"
+    "SERVICE_TIER_CAAS",
+    "SERVICE_TIER_VMAAS"
   ]
 }
 ```
@@ -242,10 +252,16 @@ grpcurl \
   osac.private.v1.Capabilities/Get
 ```
 
-With all four services enabled, `enabled_services` contains `caas`, `vmaas`,
-`bmaas`, and `maas`. The list is generated from the process startup
+With all four services enabled, `enabled_services` contains
+`SERVICE_TIER_CAAS`, `SERVICE_TIER_VMAAS`, `SERVICE_TIER_BMAAS`, and
+`SERVICE_TIER_MAAS`. Generated gRPC clients expose the same values as typed
+`ServiceTier` constants. The list is generated from the process startup
 configuration and does not change until the workload is restarted after a
 Helm upgrade.
+
+The public and private Capabilities responses use the same enum values and
+ordering. UI behavior based on these generated types is handled by the UI
+team in a follow-up change.
 
 The Capabilities endpoint is intentionally anonymous on the public API. This
 allows clients to discover the available service tiers before authenticating

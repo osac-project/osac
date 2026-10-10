@@ -781,6 +781,71 @@ var _ = Describe("Private NAT gateways server", func() {
 			Expect(getResp.GetObject().GetStatus().GetAttached()).To(BeFalse())
 		})
 
+		It("rejects NATGateway referencing VirtualNetwork from a different tenant", func() {
+			vnID := createVirtualNetwork()
+			eip := createAllocatedExternalIP()
+			_, err := natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
+				Object: privatev1.NATGateway_builder{
+					Metadata: privatev1.Metadata_builder{Name: "cross-tenant-vn-nat", Tenant: "other-tenant"}.Build(),
+					Spec: privatev1.NATGatewaySpec_builder{
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err).To(MatchError(ContainSubstring("belongs to tenant")))
+		})
+
+		It("rejects NATGateway referencing ExternalIP from a different tenant", func() {
+			tenantsDao, err := dao.NewGenericDAO[*privatev1.Tenant]().
+				SetLogger(logger).
+				SetTableName("tenants").
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = tenantsDao.Create().
+				SetObject(privatev1.Tenant_builder{
+					Id: "tenant-b",
+					Metadata: privatev1.Metadata_builder{
+						Name:   "tenant-b",
+						Tenant: "tenant-b",
+					}.Build(),
+				}.Build()).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			vnID := createVirtualNetwork()
+			eipResp, err := externalIPDao.Create().SetObject(
+				privatev1.ExternalIP_builder{
+					Metadata: privatev1.Metadata_builder{
+						Tenant: "tenant-b",
+						Name:   fmt.Sprintf("tenant-b-eip-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.ExternalIPSpec_builder{
+						Pool: privatev1.ExternalIPPoolReference_builder{Id: sharedPool.GetId()}.Build(),
+					}.Build(),
+					Status: privatev1.ExternalIPStatus_builder{
+						State:   privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
+						Address: "203.0.113.50",
+					}.Build(),
+				}.Build(),
+			).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
+				Object: privatev1.NATGateway_builder{
+					Metadata: privatev1.Metadata_builder{Name: "cross-tenant-eip-nat", Tenant: testTenant}.Build(),
+					Spec: privatev1.NATGatewaySpec_builder{
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eipResp.GetObject().GetId()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err).To(MatchError(ContainSubstring("belongs to tenant")))
+		})
+
 		It("blocks deletion of default-labeled NATGateway", func() {
 			vnID := createVirtualNetwork()
 			eip := createAllocatedExternalIP()
@@ -801,6 +866,7 @@ var _ = Describe("Private NAT gateways server", func() {
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
+			stateBeforeDelete := createResponse.GetObject().GetStatus().GetState()
 
 			_, err = natGatewaysServer.Delete(ctx, privatev1.NATGatewaysDeleteRequest_builder{
 				Id: createResponse.GetObject().GetId(),
@@ -811,6 +877,52 @@ var _ = Describe("Private NAT gateways server", func() {
 			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
 			Expect(err.Error()).To(ContainSubstring("default"))
 			Expect(err.Error()).To(ContainSubstring("system-managed"))
+			getResponse, err := natGatewaysServer.Get(ctx, privatev1.NATGatewaysGetRequest_builder{
+				Id: createResponse.GetObject().GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResponse.GetObject().GetMetadata().GetDeletionTimestamp()).To(BeNil())
+			Expect(getResponse.GetObject().GetStatus().GetState()).To(Equal(stateBeforeDelete))
+		})
+
+		It("blocks deletion after an update omits the default label", func() {
+			vnID := createVirtualNetwork()
+			eip := createAllocatedExternalIP()
+			createResp, err := natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
+				Object: privatev1.NATGateway_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   "default-nat-gateway-update",
+						Tenant: testTenant,
+						Labels: map[string]string{"osac.openshift.io/default": "true"},
+					}.Build(),
+					Spec: privatev1.NATGatewaySpec_builder{
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			object := createResp.GetObject()
+			object.GetMetadata().SetLabels(map[string]string{"env": "test"})
+			_, err = natGatewaysServer.Update(ctx, privatev1.NATGatewaysUpdateRequest_builder{
+				Object:     object,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+
+			_, err = natGatewaysServer.Delete(ctx, privatev1.NATGatewaysDeleteRequest_builder{Id: object.GetId()}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok = grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+
+			getResp, err := natGatewaysServer.Get(ctx, privatev1.NATGatewaysGetRequest_builder{Id: object.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResp.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("osac.openshift.io/default", "true"))
 		})
 	})
 })

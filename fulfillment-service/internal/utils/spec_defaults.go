@@ -18,11 +18,10 @@ import (
 	"sort"
 	"strings"
 
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-
-	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // ApplySpecDefaults applies default values from a template's spec_defaults to a compute instance spec.
@@ -100,11 +99,11 @@ func ValidateRequiredSpecFields(spec *privatev1.ComputeInstanceSpec) error {
 	if err := validateRunStrategy(spec.GetRunStrategy()); err != nil {
 		return err
 	}
-	if err := validateDisk(spec.GetBootDisk()); err != nil {
+	if err := ValidateCompleteComputeInstanceDisk(spec.GetBootDisk()); err != nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "boot_disk.%s", err)
 	}
 	for i, disk := range spec.GetAdditionalDisks() {
-		if err := validateDisk(disk); err != nil {
+		if err := ValidateCompleteComputeInstanceDisk(disk); err != nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument, "additional_disks[%d].%s", i, err)
 		}
 	}
@@ -126,9 +125,11 @@ func validateRunStrategy(value privatev1.ComputeInstanceRunStrategy) error {
 	}
 }
 
-func validateDisk(disk *privatev1.ComputeInstanceDisk) error {
+// ValidateCompleteComputeInstanceDisk checks the fields required after catalog,
+// template, and system defaults have been applied to a compute disk.
+func ValidateCompleteComputeInstanceDisk(disk *privatev1.ComputeInstanceDisk) error {
 	if disk == nil {
-		return nil
+		return fmt.Errorf("disk is required")
 	}
 	if !disk.HasSizeGib() {
 		return fmt.Errorf("size_gib is required")

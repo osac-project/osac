@@ -43,7 +43,7 @@ type ExternalIPFeedbackReconciler struct {
 }
 
 // NewExternalIPFeedbackReconciler creates a reconciler that sends to the fulfillment service updates about external IPs.
-func NewExternalIPFeedbackReconciler(hubClient clnt.Client, grpcConn *grpc.ClientConn, networkingNamespace string) *ExternalIPFeedbackReconciler {
+func NewExternalIPFeedbackReconciler(hubClient clnt.Client, grpcConn grpc.ClientConnInterface, networkingNamespace string) *ExternalIPFeedbackReconciler {
 	eipClient := privatev1.NewExternalIPsClient(grpcConn)
 	r := &ExternalIPFeedbackReconciler{networkingNamespace: networkingNamespace}
 	r.bridge = &feedback.Bridge[*v1alpha1.ExternalIP, *privatev1.ExternalIP]{

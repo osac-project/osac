@@ -8,16 +8,17 @@ import {
   Spinner,
   Stack,
   StackItem,
+  Title,
 } from '@patternfly/react-core';
 import { useFormikContext } from 'formik';
 
-import { type HostType } from '@osac/types';
+import { type BareMetalInstanceType, BareMetalInstanceTypes } from '@osac/types';
 import { cel } from '@osac/ui-components/api/cel';
+import { useListResource } from '@osac/ui-components/api/use-resource';
 import {
   CLUSTER_VERSION_ACTIVE_LIST_FILTER,
   useClusterVersions,
 } from '@osac/ui-components/api/v1/cluster-versions';
-import { useHostTypes } from '@osac/ui-components/api/v1/host-types';
 import { useProjects } from '@osac/ui-components/api/v1/project';
 import { CatalogItem } from '@osac/ui-components/components/catalog/catalogItemDisplay';
 import {
@@ -30,9 +31,10 @@ import { ClusterWizardValues } from './fields';
 import { findVersionByName, versionDisplayName } from './versionUtils';
 import { useTranslation } from '../../../../../hooks/useTranslation';
 import { formatReviewScalar } from '../../catalogOverlay';
+import { NetworkAttachmentReviewFields } from '../NetworkAttachmentReviewFields';
 
 const formatNodeSetsForReview = (
-  hostTypes: HostType[],
+  instanceTypes: BareMetalInstanceType[],
   nodeSetRows: ClusterWizardValues['spec']['nodeSetRows'],
 ): string => {
   if (nodeSetRows.length === 0) {
@@ -40,9 +42,9 @@ const formatNodeSetsForReview = (
   }
   return nodeSetRows
     .map((row) => {
-      const hostType = hostTypes.find((h) => h.id === row.hostType);
+      const instanceType = instanceTypes.find((item) => item.id === row.bareMetalInstanceType);
 
-      return `${hostType?.title || hostType?.metadata?.name || row.hostType}: ${row.size}`;
+      return `${instanceType?.metadata?.name || row.bareMetalInstanceType}: ${row.size}`;
     })
     .join(', ');
 };
@@ -56,14 +58,17 @@ export const ClusterReviewStep = ({ catalogItem }: Props) => {
   const { values } = useFormikContext<ClusterWizardValues>();
 
   const {
-    data = [],
+    data: instanceTypesResponse,
     isLoading,
     error,
-  } = useHostTypes({
-    filter: cel<HostType>((filter) =>
-      filter.field('id').isIn(values.spec.nodeSetRows.map(({ hostType }) => hostType)),
+  } = useListResource(BareMetalInstanceTypes, {
+    filter: cel<BareMetalInstanceType>((filter) =>
+      filter
+        .field('id')
+        .isIn(values.spec.nodeSetRows.map(({ bareMetalInstanceType }) => bareMetalInstanceType)),
     ),
   });
+  const instanceTypes = instanceTypesResponse?.items ?? [];
 
   const { data: versions = [] } = useClusterVersions({
     filter: CLUSTER_VERSION_ACTIVE_LIST_FILTER,
@@ -74,6 +79,8 @@ export const ClusterReviewStep = ({ catalogItem }: Props) => {
     isLoading: projectsLoading,
     error: projectsError,
   } = useProjects({ filter: fullProjectPathToQueryFilter(values.metadata.project) });
+
+  const isCustomNetwork = !values.spec.useDefaultNetwork;
 
   const versionDisplay = versionDisplayName(
     findVersionByName(versions, values.spec.versionName),
@@ -92,7 +99,7 @@ export const ClusterReviewStep = ({ catalogItem }: Props) => {
     <Stack hasGutter>
       {!!error && (
         <StackItem>
-          <Alert variant="warning" isInline title={t('Failed to fetch host types')}>
+          <Alert variant="warning" isInline title={t('Failed to fetch bare-metal instance types')}>
             {getErrorMessage(error)}
           </Alert>
         </StackItem>
@@ -151,10 +158,46 @@ export const ClusterReviewStep = ({ catalogItem }: Props) => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Node sets')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatNodeSetsForReview(data, values.spec.nodeSetRows)}
+              {formatNodeSetsForReview(instanceTypes, values.spec.nodeSetRows)}
+            </DescriptionListDescription>
+          </DescriptionListGroup>
+        </DescriptionList>
+      </StackItem>
+
+      <StackItem>
+        <Title headingLevel="h3">{t('Infrastructure Networking')}</Title>
+      </StackItem>
+      <StackItem>
+        <DescriptionList isHorizontal isCompact>
+          <DescriptionListGroup>
+            <DescriptionListTerm>{t('Network')}</DescriptionListTerm>
+            <DescriptionListDescription>
+              {isCustomNetwork ? t('Custom') : t('Tenant default')}
             </DescriptionListDescription>
           </DescriptionListGroup>
 
+          {isCustomNetwork && (
+            <NetworkAttachmentReviewFields
+              virtualNetwork={values.spec.networkAttachment.virtualNetwork}
+              subnet={values.spec.networkAttachment.subnet}
+              securityGroups={values.spec.networkAttachment.securityGroups}
+            />
+          )}
+
+          <DescriptionListGroup>
+            <DescriptionListTerm>{t('Auto attach external IP')}</DescriptionListTerm>
+            <DescriptionListDescription>
+              {values.spec.autoExternalIpAttachment ? t('Yes') : t('No')}
+            </DescriptionListDescription>
+          </DescriptionListGroup>
+        </DescriptionList>
+      </StackItem>
+
+      <StackItem>
+        <Title headingLevel="h3">{t('Cluster Networking')}</Title>
+      </StackItem>
+      <StackItem>
+        <DescriptionList isHorizontal isCompact>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Pod CIDR')}</DescriptionListTerm>
             <DescriptionListDescription>

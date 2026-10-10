@@ -26,6 +26,7 @@ type ResourceMapper interface {
 	FulfillmentVersion() int32
 	IsBillable() bool
 	BillingDimensionsMap() (map[string]any, error)
+	Usage(eventType string, billableSince *time.Time, transitionTime time.Time, dimensions map[string]any) (*schema.Usage, error)
 	TransitionTime(event *privatev1.Event, previousState string) (time.Time, error)
 	CloudEventType(eventType privatev1.EventType, previousState string) (string, error)
 }
@@ -62,13 +63,9 @@ func MapWatchEvent(event *privatev1.Event, mapper ResourceMapper, stateCtx *Stat
 		ceType = ResolveLifecycleStartEvent(stateCtx.EverBillable)
 	}
 
-	if err := ValidateLifecycleResource(mapper, event.GetId()); err != nil {
+	if err := ValidateResourceIdentity(mapper, event.GetId()); err != nil {
 		return nil, err
 	}
-	if err := ValidateBillingDimensions(mapper.ResourceType(), billingDims); err != nil {
-		return nil, err
-	}
-
 	transitionTime, err := mapper.TransitionTime(event, previousState)
 	if err != nil {
 		return nil, err
@@ -81,6 +78,7 @@ func MapWatchEvent(event *privatev1.Event, mapper ResourceMapper, stateCtx *Stat
 		billingDims,
 		stateCtx.PreviousState,
 		stateCtx.DurationSeconds,
+		stateCtx.BillableSince,
 		transitionTime,
 	)
 	if err != nil {
@@ -98,18 +96,6 @@ func ResolveLifecycleStartEvent(everBillable bool) string {
 	return EventStarted
 }
 
-// ValidateLifecycleResource validates the identifiers required on lifecycle
-// events before constructing their CloudEvents metadata.
-func ValidateLifecycleResource(mapper ResourceMapper, eventID string) error {
-	if mapper.ResourceID() == "" {
-		return fmt.Errorf("%w: event %s has no resource_id", ErrDataQuality, eventID)
-	}
-	if mapper.TenantID() == "" {
-		return fmt.Errorf("%w: resource %s has no tenant_id", ErrDataQuality, mapper.ResourceID())
-	}
-	return nil
-}
-
 // BuildLifecycleEvent constructs a CloudEvents lifecycle event from resolved
 // metering data. It is shared by the regular watch mapper and BMaaS meter
 // decomposition so all lifecycle events use the same metadata and payload.
@@ -120,6 +106,7 @@ func BuildLifecycleEvent(
 	billingDims map[string]any,
 	previousState string,
 	durationSeconds *float64,
+	billableSince *time.Time,
 	transitionTime time.Time,
 ) (cloudevents.Event, error) {
 	ce := cloudevents.NewEvent()
@@ -132,44 +119,54 @@ func BuildLifecycleEvent(
 	if p := mapper.ProjectID(); p != nil {
 		projectID = *p
 	}
-	if err := ValidateLifecycleResource(mapper, eventID); err != nil {
+	if err := ValidateResourceIdentity(mapper, eventID); err != nil {
 		return ce, err
 	}
 	SetOSACExtensions(&ce, mapper.ResourceID(), mapper.ResourceType(), mapper.TenantID(), projectID)
 
 	data := BuildLifecycleData(mapper, billingDims, previousState, durationSeconds, transitionTime)
+	usage, err := mapper.Usage(eventType, billableSince, transitionTime, billingDims)
+	if err != nil {
+		return ce, err
+	}
+	data.Usage = usage
 	if err := ce.SetData(cloudevents.ApplicationJSON, data); err != nil {
 		return ce, fmt.Errorf("setting CloudEvent data: %w", err)
 	}
 	return ce, nil
 }
 
+func ValidateResourceIdentity(mapper ResourceMapper, eventID string) error {
+	if mapper.ResourceID() == "" {
+		return fmt.Errorf("%w: event %s has no resource_id", ErrDataQuality, eventID)
+	}
+	if mapper.TenantID() == "" {
+		return fmt.Errorf("%w: resource %s has no tenant_id", ErrDataQuality, mapper.ResourceID())
+	}
+	return nil
+}
+
 // MapperForEvent returns the ResourceMapper for the event's payload type.
 // Exported for use by the Watch Consumer to inspect resource state before mapping.
 func MapperForEvent(event *privatev1.Event) (ResourceMapper, error) {
-	return MapperForEventWithContext(event, MapperContext{})
-}
-
-// MapperForEventWithContext returns a mapper enriched with deployment and
-// immutable ExternalIP pool metadata needed by networking billing.
-func MapperForEventWithContext(event *privatev1.Event, context MapperContext) (ResourceMapper, error) {
-	return mapperForEvent(event, context)
+	return mapperForEvent(event)
 }
 
 // mapperForEvent returns the ResourceMapper for the event's payload type.
 // Adding a new resource type = one case here + one mapper file.
-func mapperForEvent(event *privatev1.Event, context MapperContext) (ResourceMapper, error) {
+func mapperForEvent(event *privatev1.Event) (ResourceMapper, error) {
+	// Can we convert it to a map..?
 	if ci := event.GetComputeInstance(); ci != nil {
 		return &computeInstanceMapper{ci: ci}, nil
 	}
 	if cl := event.GetCluster(); cl != nil {
 		return &clusterMapper{cl: cl}, nil
 	}
-	if ip := event.GetExternalIp(); ip != nil {
-		return &externalIPMapper{ip: ip, context: context}, nil
+	if volume := event.GetVolume(); volume != nil {
+		return &volumeMapper{volume: volume}, nil
 	}
-	if gateway := event.GetNatGateway(); gateway != nil {
-		return &natGatewayMapper{gateway: gateway, deployment: context.DeploymentID}, nil
+	if event.GetExternalIp() != nil || event.GetNatGateway() != nil {
+		return nil, fmt.Errorf("networking mapper requires resource-specific enrichment for event %s", event.GetId())
 	}
 	if bmi := event.GetBareMetalInstance(); bmi != nil {
 		return &bareMetalInstanceMapper{instance: bmi}, nil

@@ -7,9 +7,8 @@
 # dispatcher, so that storage_provider/tests/test.yml's zero-live-I/O
 # validation guarantee stays intact. Never invoked for the CaaS/guest-cluster
 # call site, since this role always targets the hub's default kubeconfig
-# context. Installed alongside, not instead of, each provider's existing
-# CSI-operator install (e.g. vast_storage's ensure_csi_operator.yaml) until a
-# follow-up story cuts StorageClasses over to this driver.
+# context. The Helm release remains alongside provider-specific CSI operators;
+# local LVMS StorageClasses are created only by the explicit opt-in below.
 #
 # csi-driver is a cluster-wide, shared Helm release (not tenant-scoped) — a
 # later dispatch for a different tenant/provider must never drop an earlier
@@ -393,3 +392,11 @@
         lease_state: absent
         lease_name: "csi-driver-install-lock"
         lease_holder: "{{ _csi_driver_install_lock_holder }}"
+
+# Local-tier StorageClasses are independent of the Helm install and supported
+# network-vendor list.
+- name: Create StorageClasses for local CSI tiers
+  ansible.builtin.include_tasks: storage_classes.yaml
+  when:
+    - csi_driver_install_lvms_storage_class_enabled | default(false) | bool
+    - not (csi_driver_install_skip_lvms_storage_class | default(false) | bool)

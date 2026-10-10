@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+import subprocess
 from typing import Any
 
 import pytest
 
-from tests.e2e.core.grpc_client import GRPCClient
+from tests.e2e.bmaas.conftest import BMI_DISK_IMAGE_SOURCE_REF
+from tests.e2e.core.fulfillment_trust import assert_management_tls
+from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
 from tests.e2e.core.helpers import (
     wait_for_bmh_available,
     wait_for_bmh_provisioned,
@@ -25,6 +29,13 @@ logger = logging.getLogger(__name__)
 
 _RESTART_IN_PROGRESS: str = "BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS"
 _RESTART_FAILED: str = "BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_FAILED"
+_READY: str = "BARE_METAL_INSTANCE_CONDITION_TYPE_READY"
+_PROVISIONED: str = "BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED"
+_CONDITION_STATUS_TRUE: str = "CONDITION_STATUS_TRUE"
+# Terminal condition reasons stamped by the fulfillment reconciler at the Ready state:
+# the READY axis carries the "Ready" state, the PROVISIONED axis the "Provisioned" state.
+_READY_REASON: str = "Ready"
+_PROVISIONED_REASON: str = "Provisioned"
 _MAC_PATTERN: re.Pattern[str] = re.compile(r"^([0-9a-f]{2}:){5}[0-9a-f]{2}$")
 
 
@@ -71,12 +82,22 @@ def _assert_nic_metadata(
         assert mac in ni_section, f"osac describe baremetalinstance 'Network Interfaces:' section missing MAC '{mac}'"
 
 
-def _get_condition_status(grpc: GRPCClient, bmi_id: str, condition_type: str) -> str:
-    response: dict[str, Any] = grpc.get_baremetal_instance(bmi_id=bmi_id)
+def _find_condition(response: dict[str, Any], condition_type: str) -> dict[str, Any]:
+    """Return the status condition of the given type from a BMI API response, or {} if absent."""
     for condition in response.get("object", {}).get("status", {}).get("conditions", []):
         if condition.get("type") == condition_type:
-            return condition.get("status", "")
-    return ""
+            return condition
+    return {}
+
+
+def _get_condition(grpc: GRPCClient, bmi_id: str, condition_type: str) -> dict[str, Any]:
+    """Fetch the BMI via the API and return its condition of the given type, or {} if absent."""
+    return _find_condition(grpc.get_baremetal_instance(bmi_id=bmi_id), condition_type)
+
+
+def _get_condition_status(grpc: GRPCClient, bmi_id: str, condition_type: str) -> str:
+    """Return the status string of the BMI's condition of the given type, or "" if absent."""
+    return _get_condition(grpc, bmi_id, condition_type).get("status", "")
 
 
 def _get_status_restart_trigger(grpc: GRPCClient, bmi_id: str) -> int:
@@ -85,27 +106,69 @@ def _get_status_restart_trigger(grpc: GRPCClient, bmi_id: str) -> int:
 
 
 def test_baremetal_instance_lifecycle(
-    cli: OsacCLI,
-    grpc: GRPCClient,
+    jwt_cli_user: OsacCLI,
+    jwt_grpc_tenant1: GRPCClient,
     k8s_hub_client: K8sClient,
     catalog_item: str,
+    bmi_instance_type: str,
     bmi_disk_image: str,
     bmh_namespace: str,
     test_run_id: str,
     ssh_public_key: str,
 ) -> None:
+    """Provision a BMI end-to-end and assert its terminal stage, NIC metadata, power cycle, and deprovision."""
     name = f"e2e-bmi-{test_run_id}"
-    bmi_id: str = cli.create_baremetal_instance(
+    disk_images: dict[str, Any] = jwt_grpc_tenant1.call(service=f"{PUBLIC_API}.DiskImages/List")
+    assert bmi_disk_image in {item["metadata"]["name"] for item in disk_images.get("items", [])}
+
+    bmi_id, _ = jwt_cli_user.create_baremetal_instance(
         name=name, catalog_item=catalog_item, ssh_key=ssh_public_key, disk_image=bmi_disk_image
     )
     bmh_ns = ""
     bmh_name = ""
 
     try:
-        assert bmi_id in grpc.list_baremetal_instance_ids()
-
+        assert bmi_id in jwt_grpc_tenant1.list_baremetal_instance_ids()
         bmi_cr_name: str = wait_for_bmi_cr(k8s=k8s_hub_client, uuid=bmi_id)
-        wait_for_bmi_running(grpc=grpc, bmi_id=bmi_id)
+        spec = jwt_grpc_tenant1.get_baremetal_instance(bmi_id=bmi_id).get("object", {}).get("spec", {})
+        instance_type = spec.get("instance_type", spec.get("instanceType", {}))
+        assert instance_type.get("name") == bmi_instance_type, (
+            f"BareMetalInstance instance_type {instance_type.get('name')!r} does not match catalog default "
+            f"{bmi_instance_type!r}"
+        )
+
+        wait_for_bmi_running(grpc=jwt_grpc_tenant1, bmi_id=bmi_id)
+        if os.environ.get("OSAC_FULFILLMENT_TRUST_E2E") == "true":
+            assert_management_tls(k8s_hub_client)
+
+        # OSAC-5349: once the instance is RUNNING, the terminal provisioning stage must be
+        # observable through the public API: the READY condition True (reason "Ready") with
+        # the PROVISIONED axis coherent (True, reason "Provisioned"). Poll on the lightweight
+        # READY status string (not the whole response) so the runner's progress/timeout
+        # logging never dumps the full API payload, which can carry tenant data. Once READY
+        # is True, read both axes from one fresh snapshot so they are asserted consistently.
+        poll_until(
+            fn=lambda: _get_condition_status(jwt_grpc_tenant1, bmi_id, _READY),
+            until=lambda s: s == _CONDITION_STATUS_TRUE,
+            retries=30,
+            delay=2,
+            description=f"{bmi_id} READY condition True",
+        )
+        instance: dict[str, Any] = jwt_grpc_tenant1.get_baremetal_instance(bmi_id=bmi_id)
+        ready_condition: dict[str, Any] = _find_condition(instance, _READY)
+        assert ready_condition.get("status") == _CONDITION_STATUS_TRUE, (
+            f"READY condition should be True at the terminal stage, got {ready_condition.get('status')!r}"
+        )
+        assert ready_condition.get("reason") == _READY_REASON, (
+            f"READY condition reason {ready_condition.get('reason')!r}, expected {_READY_REASON!r}"
+        )
+        provisioned_condition: dict[str, Any] = _find_condition(instance, _PROVISIONED)
+        assert provisioned_condition.get("status") == _CONDITION_STATUS_TRUE, (
+            f"PROVISIONED condition should be True at the terminal stage, got {provisioned_condition.get('status')!r}"
+        )
+        assert provisioned_condition.get("reason") == _PROVISIONED_REASON, (
+            f"PROVISIONED condition reason {provisioned_condition.get('reason')!r}, expected {_PROVISIONED_REASON!r}"
+        )
 
         external_host_id: str = k8s_hub_client.get_baremetal_instance_external_host_id(name=bmi_cr_name)
         assert "/" in external_host_id, f"Expected namespace/name format, got: {external_host_id}"
@@ -114,9 +177,9 @@ def test_baremetal_instance_lifecycle(
 
         # Verify NIC metadata matches the BMH hardware inventory (OSAC-3254)
         _assert_nic_metadata(
-            grpc=grpc,
+            grpc=jwt_grpc_tenant1,
             bmi_id=bmi_id,
-            cli=cli,
+            cli=jwt_cli_user,
             bmi_name=name,
             bmi_cr_name=bmi_cr_name,
             k8s=k8s_hub_client,
@@ -128,7 +191,9 @@ def test_baremetal_instance_lifecycle(
         wait_for_bmh_provisioned(k8s=k8s_hub_client, name=bmh_name, bmh_namespace=bmh_ns)
 
         image_url: str = k8s_hub_client.get_bmh_image_url(name=bmh_name, bmh_namespace=bmh_ns)
-        assert image_url != "", f"BMH {bmh_name} has no image URL after provisioning"
+        assert image_url == BMI_DISK_IMAGE_SOURCE_REF, (
+            f"BMH {bmh_name} image URL {image_url!r} does not match the selected DiskImage"
+        )
 
         consumer_ref: str = k8s_hub_client.get_bmh_consumer_ref(name=bmh_name, bmh_namespace=bmh_ns)
         assert consumer_ref != "", f"BMH {bmh_name} has no consumerRef after allocation"
@@ -138,7 +203,7 @@ def test_baremetal_instance_lifecycle(
 
         # Power off
         halted = "BARE_METAL_INSTANCE_RUN_STRATEGY_HALTED"
-        grpc.update_baremetal_instance_run_strategy(bmi_id=bmi_id, run_strategy=halted)
+        jwt_grpc_tenant1.update_baremetal_instance_run_strategy(bmi_id=bmi_id, run_strategy=halted)
 
         poll_until(
             fn=lambda: k8s_hub_client.get_bmh_powered_on(name=bmh_name, bmh_namespace=bmh_ns),
@@ -149,7 +214,7 @@ def test_baremetal_instance_lifecycle(
         )
 
         # Power on
-        grpc.update_baremetal_instance_run_strategy(
+        jwt_grpc_tenant1.update_baremetal_instance_run_strategy(
             bmi_id=bmi_id, run_strategy="BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS"
         )
 
@@ -162,9 +227,9 @@ def test_baremetal_instance_lifecycle(
         )
 
         # Deprovision
-        cli.delete_baremetal_instance(uuid=bmi_id)
+        jwt_cli_user.delete_baremetal_instance(uuid=bmi_id)
         wait_for_bmi_deletion(k8s=k8s_hub_client, name=bmi_cr_name)
-        wait_for_bmi_grpc_removal(grpc=grpc, uuid=bmi_id)
+        wait_for_bmi_grpc_removal(grpc=jwt_grpc_tenant1, uuid=bmi_id)
 
         wait_for_bmh_available(k8s=k8s_hub_client, name=bmh_name, bmh_namespace=bmh_ns)
 
@@ -177,50 +242,63 @@ def test_baremetal_instance_lifecycle(
         bmi_cr: str = k8s_hub_client.get_baremetal_instance_name(uuid=bmi_id, checked=False)
         if bmi_cr:
             try:
-                cli.delete_baremetal_instance(uuid=bmi_id)
+                jwt_cli_user.delete_baremetal_instance(uuid=bmi_id)
                 wait_for_bmi_deletion(k8s=k8s_hub_client, name=bmi_cr)
-                wait_for_bmi_grpc_removal(grpc=grpc, uuid=bmi_id)
+                wait_for_bmi_grpc_removal(grpc=jwt_grpc_tenant1, uuid=bmi_id)
                 if bmh_name:
                     wait_for_bmh_available(k8s=k8s_hub_client, name=bmh_name, bmh_namespace=bmh_ns)
             except Exception:
-                pass
+                logger.exception("Failed to clean up BMI %s during error handling", bmi_id)
         raise
 
 
 def test_baremetal_instance_restart(
-    cli: OsacCLI,
-    grpc: GRPCClient,
+    jwt_cli_user: OsacCLI,
+    jwt_grpc_tenant1: GRPCClient,
     k8s_hub_client: K8sClient,
     catalog_item: str,
-    bmi_disk_image: str,
     bmh_namespace: str,
+    private_grpc: GRPCClient,
     test_run_id: str,
     ssh_public_key: str,
 ) -> None:
     name: str = f"e2e-bmi-restart-{test_run_id}"
-    bmi_id: str = cli.create_baremetal_instance(
-        name=name, catalog_item=catalog_item, ssh_key=ssh_public_key, disk_image=bmi_disk_image
+    deprecated_disk_image_name = f"e2e-bmi-deprecated-di-{test_run_id}"
+    deprecated_disk_image_id = private_grpc.create_disk_image(
+        name=deprecated_disk_image_name, source_ref=BMI_DISK_IMAGE_SOURCE_REF, api=PRIVATE_API
     )
+    bmi_id: str | None = None
+    bmh_ns = ""
+    bmh_name = ""
 
     try:
-        assert bmi_id in grpc.list_baremetal_instance_ids()
+        private_grpc.update_disk_image_lifecycle(
+            disk_image_id=deprecated_disk_image_id, lifecycle="DISK_IMAGE_LIFECYCLE_DEPRECATED", api=PRIVATE_API
+        )
+        bmi_id, warnings = jwt_cli_user.create_baremetal_instance(
+            name=name, catalog_item=catalog_item, disk_image=deprecated_disk_image_name, ssh_key=ssh_public_key
+        )
+        assert any("deprecated" in warning.lower() for warning in warnings), (
+            f"Expected a deprecated DiskImage warning, got: {warnings}"
+        )
+        assert bmi_id in jwt_grpc_tenant1.list_baremetal_instance_ids()
 
         bmi_cr_name: str = wait_for_bmi_cr(k8s=k8s_hub_client, uuid=bmi_id)
-        wait_for_bmi_running(grpc=grpc, bmi_id=bmi_id)
+        wait_for_bmi_running(grpc=jwt_grpc_tenant1, bmi_id=bmi_id)
 
         external_host_id: str = k8s_hub_client.get_baremetal_instance_external_host_id(name=bmi_cr_name)
         assert "/" in external_host_id, f"Expected namespace/name format, got: {external_host_id}"
         bmh_ns, bmh_name = external_host_id.split("/", 1)
         assert bmh_ns == bmh_namespace, f"BMH landed in {bmh_ns}, expected {bmh_namespace}"
 
-        initial_trigger: int = _get_status_restart_trigger(grpc, bmi_id)
+        initial_trigger: int = _get_status_restart_trigger(jwt_grpc_tenant1, bmi_id)
         new_trigger: int = initial_trigger + 1
         logger.info("Incrementing restart_trigger from %d to %d", initial_trigger, new_trigger)
 
-        grpc.update_baremetal_instance_restart_trigger(bmi_id=bmi_id, restart_trigger=new_trigger)
+        jwt_grpc_tenant1.update_baremetal_instance_restart_trigger(bmi_id=bmi_id, restart_trigger=new_trigger)
 
         poll_until(
-            fn=lambda: _get_condition_status(grpc, bmi_id, _RESTART_IN_PROGRESS),
+            fn=lambda: _get_condition_status(jwt_grpc_tenant1, bmi_id, _RESTART_IN_PROGRESS),
             until=lambda v: v == "CONDITION_STATUS_TRUE",
             retries=60,
             delay=2,
@@ -228,7 +306,7 @@ def test_baremetal_instance_restart(
         )
 
         poll_until(
-            fn=lambda: _get_status_restart_trigger(grpc, bmi_id),
+            fn=lambda: _get_status_restart_trigger(jwt_grpc_tenant1, bmi_id),
             until=lambda v: v == new_trigger,
             retries=120,
             delay=10,
@@ -243,30 +321,80 @@ def test_baremetal_instance_restart(
             description=f"{bmh_name} powered on after restart",
         )
 
-        wait_for_bmi_running(grpc=grpc, bmi_id=bmi_id)
+        wait_for_bmi_running(grpc=jwt_grpc_tenant1, bmi_id=bmi_id)
 
-        restart_in_progress: str = _get_condition_status(grpc, bmi_id, _RESTART_IN_PROGRESS)
+        restart_in_progress: str = _get_condition_status(jwt_grpc_tenant1, bmi_id, _RESTART_IN_PROGRESS)
         assert restart_in_progress in ("", "CONDITION_STATUS_FALSE"), (
             f"RESTART_IN_PROGRESS should have cleared after restart, got: {restart_in_progress}"
         )
 
-        restart_failed: str = _get_condition_status(grpc, bmi_id, _RESTART_FAILED)
+        restart_failed: str = _get_condition_status(jwt_grpc_tenant1, bmi_id, _RESTART_FAILED)
         assert restart_failed in ("", "CONDITION_STATUS_FALSE"), (
             f"Unexpected RESTART_FAILED condition: {restart_failed}"
         )
 
         # Deprovision
-        cli.delete_baremetal_instance(uuid=bmi_id)
+        jwt_cli_user.delete_baremetal_instance(uuid=bmi_id)
         wait_for_bmi_deletion(k8s=k8s_hub_client, name=bmi_cr_name)
-        wait_for_bmi_grpc_removal(grpc=grpc, uuid=bmi_id)
+        wait_for_bmi_grpc_removal(grpc=jwt_grpc_tenant1, uuid=bmi_id)
         wait_for_bmh_available(k8s=k8s_hub_client, name=bmh_name, bmh_namespace=bmh_ns)
+        bmi_id = None
     except BaseException:
-        bmi_cr: str = k8s_hub_client.get_baremetal_instance_name(uuid=bmi_id, checked=False)
-        if bmi_cr:
+        bmi_cr: str = k8s_hub_client.get_baremetal_instance_name(uuid=bmi_id, checked=False) if bmi_id else ""
+        if bmi_cr and bmi_id:
             try:
-                cli.delete_baremetal_instance(uuid=bmi_id)
+                jwt_cli_user.delete_baremetal_instance(uuid=bmi_id)
                 wait_for_bmi_deletion(k8s=k8s_hub_client, name=bmi_cr)
-                wait_for_bmi_grpc_removal(grpc=grpc, uuid=bmi_id)
+                wait_for_bmi_grpc_removal(grpc=jwt_grpc_tenant1, uuid=bmi_id)
+                if bmh_name:
+                    wait_for_bmh_available(k8s=k8s_hub_client, name=bmh_name, bmh_namespace=bmh_ns)
             except Exception:
                 logger.exception("Failed to delete BMI %s during cleanup", bmi_id)
         raise
+    finally:
+        try:
+            private_grpc.delete_disk_image(disk_image_id=deprecated_disk_image_id, api=PRIVATE_API)
+        except Exception:
+            logger.exception("Failed to delete deprecated DiskImage %s during cleanup", deprecated_disk_image_id)
+
+
+def test_bmi_catalog_item_rejects_cross_tenant_disk_image(
+    bmi_template: str, jwt_grpc_tenant1_admin: GRPCClient, jwt_grpc_tenant2: GRPCClient, test_run_id: str
+) -> None:
+    """A tenant cannot create a BMI CatalogItem that references another tenant's DiskImage."""
+    disk_image_id: str | None = None
+    catalog_item_id: str | None = None
+    disk_image_name = f"e2e-bmi-tenant2-di-{test_run_id}"
+    catalog_item_name = f"e2e-bmi-cross-tenant-{test_run_id}"
+
+    try:
+        disk_image_id = jwt_grpc_tenant2.create_disk_image(name=disk_image_name, source_ref=BMI_DISK_IMAGE_SOURCE_REF)
+
+        try:
+            response = jwt_grpc_tenant1_admin.call(
+                service=f"{PUBLIC_API}.BareMetalInstanceCatalogItems/Create",
+                data={
+                    "object": {
+                        "metadata": {"name": catalog_item_name},
+                        "title": "Cross-tenant DiskImage rejection test",
+                        "description": "Must not disclose another tenant's DiskImage",
+                        "template": {"name": bmi_template, "shared": True},
+                        "published": True,
+                        "fields": {"disk_image": {"editable": {"default_value": {"name": disk_image_name}}}},
+                    }
+                },
+            )
+        except subprocess.CalledProcessError as exc:
+            combined = (exc.stderr or "") + (exc.stdout or "")
+            assert re.search(r"Code:\s*NotFound", combined), f"Expected gRPC NotFound, got: {combined.strip()}"
+        else:
+            catalog_item_id = response["object"]["id"]
+            pytest.fail("Cross-tenant DiskImage reference unexpectedly created a CatalogItem")
+
+        catalog_items = jwt_grpc_tenant1_admin.call(service=f"{PUBLIC_API}.BareMetalInstanceCatalogItems/List")
+        assert catalog_item_name not in {item["metadata"]["name"] for item in catalog_items.get("items", [])}
+    finally:
+        if catalog_item_id is not None:
+            jwt_grpc_tenant1_admin.delete_baremetal_instance_catalog_item(item_id=catalog_item_id)
+        if disk_image_id is not None:
+            jwt_grpc_tenant2.delete_disk_image(disk_image_id=disk_image_id)

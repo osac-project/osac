@@ -1,3 +1,35 @@
+# Leave empty to use the Helm release namespace. The umbrella chart sets this
+# explicitly for its shared hub deployment.
+namespace: ""
+
+global:
+  fulfillmentTrust:
+    enabled: false
+    tenantNamespace: osac-csi
+    # Set both from the new tenant ClusterOrder when enabling trust.
+    clusterOrderUID: ""
+    tenant: ""
+    admission:
+      image:
+        repository: ghcr.io/osac-project/osac-operator
+        # Set to a published osac-operator version when enabling tenant trust.
+        tag: ""
+        pullPolicy: Always
+      # The tenant admission service uses the OpenShift service CA to issue
+      # and inject the serving certificate. This keeps private key material
+      # in a Kubernetes Secret instead of Helm values.
+      tlsSecretName: osac-fulfillment-trust-admission-tls
+      # The bootstrap hooks run /bin/sh and kubectl; the minimal kubectl image
+      # does not include a shell. OpenShift assigns a non-root UID via SCC.
+      bootstrapImage: quay.io/openshift/origin-cli:4.20.0
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: 500m
+          memory: 256Mi
+
 driverName: csi.osac.openshift.io
 
 image:
@@ -11,9 +43,9 @@ controller:
   vendorSockets: ""
   # Comma-separated backend=endpoint pairs for vendor CSI controllers, used to
   # proxy attach/detach (ControllerPublish/UnpublishVolume). The routing key is
-  # the "osac.backend" volume-context value, which is the StorageBackend name
+  # the "osac.backend" volume-context value, which is the StorageBackend provider
   # resolved from the volume's StorageTier — so each key MUST match a
-  # StorageBackend's metadata.name that a Cloud Provider Admin created. The names
+  # StorageBackend's spec.provider that a Cloud Provider Admin created. The values
   # below are the expected convention; align them with your actual backends.
   # Endpoints for network-attached vendors are the Services created by the
   # csi-backends chart (namespace osac-csi-backends, gRPC port 50051). Use the
@@ -22,12 +54,12 @@ controller:
   # An entry for a backend that is not deployed is harmless — it is only dialed
   # when a volume names it.
   # OSAC-4187 (0.2, temporary): direct vendor-controller proxying; reworked in 0.3.
-  vendorControllers: "local=none,vast=vast-csi-controller.osac-csi-backends.svc:50051,pure=pure-csi-controller.osac-csi-backends.svc:50051,ontap=trident-csi-controller.osac-csi-backends.svc:50051"
+  vendorControllers: "lvms=none,vast=vast-csi-controller.osac-csi-backends.svc:50051,pure=pure-csi-controller.osac-csi-backends.svc:50051,ontap=trident-csi-controller.osac-csi-backends.svc:50051"
   # Connection to the OSAC fulfillment-service (runs on the hub / control plane cluster).
   # The CSI driver runs on tenant clusters and authenticates to the
   # fulfillment-service using OAuth2 client_credentials via Keycloak. The
-  # credentials Secret must be provisioned in the release namespace before
-  # the chart is installed.
+    # credentials Secret must be provisioned in the CSI namespace before the
+    # chart is installed.
   fulfillment:
     # gRPC endpoint of the fulfillment-service (e.g. "fulfillment-api.osac.svc:8000").
     # Leave empty to use in-memory stubs.
@@ -35,9 +67,18 @@ controller:
     # OIDC issuer URL for token endpoint discovery
     # (e.g. "https://keycloak.example.com/realms/myrealm").
     issuerUrl: ""
+    # Read endpoint and issuer from a ConfigMap in the CSI namespace. This is
+    # the hub deployment path; tenant installations can continue to provide
+    # endpoint and issuer directly.
+    configMap:
+      name: ""
+      endpointKey: OSAC_FULFILLMENT_ENDPOINT
+      issuerUrlKey: OSAC_FULFILLMENT_ISSUER_URL
     # Secret containing OAuth2 client credentials for fulfillment-service
-    # authentication via the client_credentials grant. The Secret must exist
-    # in the release namespace before the chart is installed.
+    # authentication via the client_credentials grant. The shared hub Secret
+    # is created by osac-infra; tenant-cluster credentials are a separate
+    # AAP/OSAC-4197 concern. The Secret must exist in the CSI namespace before
+    # the chart is installed.
     credentials:
       # Name of the Kubernetes Secret (required when endpoint is set).
       secretName: ""
@@ -46,8 +87,15 @@ controller:
       # Key inside the Secret that holds the OAuth2 client secret.
       clientSecretKey: "client-secret"
     tls:
-      # Skip server certificate verification (use for self-signed certs).
-      insecureSkipVerify: false
+      # Tenant trust bundle supplied by the fulfillment trust reconciler when
+      # global.fulfillmentTrust.enabled is true.
+      caBundle:
+        configMap: osac-fulfillment-ca
+        key: bundle.pem
+    # The in-memory volume stub is useful for local development. Hub and
+    # production values must set this to false when real fulfillment config is
+    # required.
+    allowStub: true
   resources:
     limits:
       cpu: 500m
@@ -60,6 +108,15 @@ controller:
 node:
   privileged: true
   vendorSockets: ""
+  # Optional OSAC_LVMS_NODE_SOCKET override. When empty, the driver uses the
+  # explicit lvms entry in vendorSockets, or /run/topolvm/csi-topolvm.sock.
+  lvmsNodeSocket: ""
+  # Container path where the host's TopoLVM socket directory is mounted.
+  lvmsNodeSocketDir: /run/topolvm
+  # Host path exposed by the TopoLVM node plugin. Keep this separate from
+  # lvmsNodeSocketDir because the plugin can mount a different host path into
+  # its own container at /run/topolvm.
+  lvmsNodeSocketHostPath: /var/lib/kubelet/plugins/topolvm.io/node
   resources:
     limits:
       cpu: 500m

@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, timezone, timedelta
 
 from classifier import classify_prs, _latest_review_per_author
-from models import PRData, PRStatus
+from models import CheckRun, PRData, PRStatus
 
 
 def _make_pr(**overrides) -> PRData:
@@ -119,6 +119,62 @@ class TestClassifier(unittest.TestCase):
     def test_mergeable_pr_not_classified_as_conflicts(self):
         """7c. Mergeable PR with CI failure -> CI_FAILING (not conflicts)."""
         pr = _make_pr(mergeable="MERGEABLE", ci_status="FAILURE")
+        result = classify_prs([pr])
+        self.assertEqual(result[0].status, PRStatus.CI_FAILING)
+
+    def test_label_gate_failure_alone_is_not_ci_failure(self):
+        """A failed label policy check alone does not mean CI is failing."""
+        for check_name in (
+            "check-labels",
+            "label-gate / check-labels",
+            "label-gate / check-labels (pull_request)",
+        ):
+            with self.subTest(check_name=check_name):
+                pr = _make_pr(
+                    ci_status="FAILURE",
+                    check_runs=[
+                        CheckRun(
+                            name=check_name,
+                            conclusion="FAILURE",
+                            details_url="https://example.com/labels",
+                        )
+                    ],
+                )
+                result = classify_prs([pr])
+                self.assertEqual(result[0].status, PRStatus.NEEDS_REVIEW)
+
+    def test_label_gate_failure_does_not_hide_real_ci_failure(self):
+        """A real failed check still makes the PR CI-failing."""
+        pr = _make_pr(
+            ci_status="FAILURE",
+            check_runs=[
+                CheckRun(
+                    name="label-gate / check-labels",
+                    conclusion="FAILURE",
+                    details_url="https://example.com/labels",
+                ),
+                CheckRun(
+                    name="unit-tests",
+                    conclusion="FAILURE",
+                    details_url="https://example.com/tests",
+                ),
+            ],
+        )
+        result = classify_prs([pr])
+        self.assertEqual(result[0].status, PRStatus.CI_FAILING)
+
+    def test_failed_check_is_ci_failure_without_aggregate_status(self):
+        """A failed check is authoritative when aggregate status is absent."""
+        pr = _make_pr(
+            ci_status=None,
+            check_runs=[
+                CheckRun(
+                    name="unit-tests",
+                    conclusion="FAILURE",
+                    details_url="https://example.com/tests",
+                )
+            ],
+        )
         result = classify_prs([pr])
         self.assertEqual(result[0].status, PRStatus.CI_FAILING)
 

@@ -26,13 +26,11 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateVirtualNetworksServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -55,11 +53,6 @@ func NewPrivateVirtualNetworksServer() *PrivateVirtualNetworksServerBuilder {
 
 func (b *PrivateVirtualNetworksServerBuilder) SetLogger(value *slog.Logger) *PrivateVirtualNetworksServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateVirtualNetworksServerBuilder) SetNotifier(value events.Notifier) *PrivateVirtualNetworksServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -112,7 +105,6 @@ func (b *PrivateVirtualNetworksServerBuilder) Build() (result *PrivateVirtualNet
 	generic, err := NewGenericServer[*privatev1.VirtualNetwork]().
 		SetLogger(b.logger).
 		SetService(privatev1.VirtualNetworks_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
@@ -157,30 +149,11 @@ func (s *PrivateVirtualNetworksServer) Create(ctx context.Context,
 
 func (s *PrivateVirtualNetworksServer) Update(ctx context.Context,
 	request *privatev1.VirtualNetworksUpdateRequest) (response *privatev1.VirtualNetworksUpdateResponse, err error) {
-	// Get existing object for immutability validation:
-	id := request.GetObject().GetId()
-	if id == "" {
+	if request.GetObject().GetId() == "" {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
 		return
 	}
-
-	getRequest := &privatev1.VirtualNetworksGetRequest{}
-	getRequest.SetId(id)
-	var getResponse *privatev1.VirtualNetworksGetResponse
-	err = s.generic.Get(ctx, getRequest, &getResponse)
-	if err != nil {
-		return
-	}
-
-	existingVN := getResponse.GetObject()
-
-	// Validate with existing object context:
-	err = s.validateVirtualNetwork(ctx, request.GetObject(), existingVN)
-	if err != nil {
-		return
-	}
-
-	err = s.generic.Update(ctx, request, &response)
+	err = s.generic.UpdateWithValidation(ctx, request, &response, s.validateVirtualNetwork)
 	return
 }
 
@@ -193,7 +166,7 @@ func (s *PrivateVirtualNetworksServer) Delete(ctx context.Context,
 	if err != nil {
 		return
 	}
-	if err = validateNotDefault(getResponse.GetObject().GetMetadata().GetLabels(), "virtual network"); err != nil {
+	if err = validateNotDefault(ctx, getResponse.GetObject().GetMetadata().GetLabels(), "virtual network"); err != nil {
 		return
 	}
 	err = s.generic.Delete(ctx, request, &response)
@@ -215,6 +188,17 @@ func (s *PrivateVirtualNetworksServer) validateVirtualNetwork(ctx context.Contex
 		return
 	}
 
+	if existingVN != nil {
+		if err = validateDefaultLabelUpdate(
+			existingVN.GetMetadata().GetLabels(),
+			newVN.GetMetadata().GetLabels(),
+			nil,
+			"virtual network",
+		); err != nil {
+			return
+		}
+	}
+
 	spec := newVN.GetSpec()
 	if spec == nil {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "virtual network spec is mandatory")
@@ -227,26 +211,26 @@ func (s *PrivateVirtualNetworksServer) validateVirtualNetwork(ctx context.Contex
 		return
 	}
 
+	if spec.GetIpv6Cidr() != "" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.ipv6_cidr': IPv6 and dual-stack networking are not supported")
+	}
+
 	// VN-VAL-09, VN-VAL-10, VN-VAL-11, VN-VAL-12: Check immutable fields (only on Update).
-	// Run before VN-VAL-03 so that explicit-empty-string attempts to clear an immutable CIDR
-	// return "field is immutable" rather than "at least one CIDR required".
+	// Run after rejecting non-empty legacy IPv6 values so every attempted IPv6 or dual-stack
+	// request receives the same clear unsupported-networking error.
 	if err = validateImmutableFields(newVN, existingVN); err != nil {
 		return
 	}
 
-	// VN-VAL-03: At least one CIDR must be provided
-	if spec.GetIpv4Cidr() == "" && spec.GetIpv6Cidr() == "" {
-		err = grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"at least one of 'spec.ipv4_cidr' or 'spec.ipv6_cidr' must be provided")
-		return
+	if spec.GetIpv4Cidr() == "" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.ipv4_cidr' is required and must be a canonical IPv4 CIDR")
 	}
-
-	// VN-VAL-01, VN-VAL-02: Validate and canonicalize CIDRs
-	if err = canonicalizeDualStackCIDRs(
-		spec.GetIpv4Cidr, spec.SetIpv4Cidr,
-		spec.GetIpv6Cidr, spec.SetIpv6Cidr,
-	); err != nil {
-		return
+	if canonical, validationErr := parseAndValidateCanonicalCIDR(spec.GetIpv4Cidr(), cidrIPv4); validationErr != nil {
+		return validationErr
+	} else {
+		spec.SetIpv4Cidr(canonical)
 	}
 
 	// VN-VAL-04, VN-VAL-05, VN-VAL-06: Validate NetworkClass
@@ -316,7 +300,8 @@ func validateImmutableFields(newVN *privatev1.VirtualNetwork, existingVN *privat
 	return nil
 }
 
-// validateNetworkClassReference validates that the referenced NetworkClass exists and is in READY state.
+// validateNetworkClassReference validates that the referenced NetworkClass exists. Readiness and Hub
+// binding are controller-owned status, so asynchronous reconciliation decides when the network is usable.
 func (s *PrivateVirtualNetworksServer) validateNetworkClassReference(ctx context.Context,
 	spec *privatev1.VirtualNetworkSpec) (err error) {
 
@@ -324,23 +309,21 @@ func (s *PrivateVirtualNetworksServer) validateNetworkClassReference(ctx context
 	var networkClass *privatev1.NetworkClass
 	var networkClassKey string
 	if networkClassRef == nil {
-		var defaultNC *privatev1.NetworkClass
-		defaultNC, err = findDefaultNetworkClass(ctx, s.logger, s.networkClassDao)
+		networkClass, err = findSingletonNetworkClass(ctx, s.networkClassDao)
 		if err != nil {
-			s.logger.ErrorContext(ctx, "Failed to query default NetworkClass",
+			s.logger.ErrorContext(ctx, "Failed to query singleton NetworkClass",
 				slog.Any("error", err),
 			)
-			return grpcstatus.Errorf(grpccodes.Internal, "failed to validate network_class")
+			return grpcstatus.Errorf(grpccodes.FailedPrecondition, "failed to resolve the deployment NetworkClass: %v", err)
 		}
-		if defaultNC == nil {
+		if networkClass == nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"field 'spec.network_class' is required (no default NetworkClass is configured)")
+				"field 'spec.network_class' is required (no NetworkClass is configured)")
 		}
 		resolvedRef := &privatev1.NetworkClassReference{}
-		resolvedRef.SetId(defaultNC.GetId())
+		resolvedRef.SetId(networkClass.GetId())
 		spec.SetNetworkClass(resolvedRef)
-		networkClassKey = defaultNC.GetId()
-		networkClass = defaultNC
+		networkClassKey = networkClass.GetId()
 	} else {
 		networkClassKey = refKey(networkClassRef)
 		id := networkClassRef.GetId()
@@ -395,14 +378,7 @@ func (s *PrivateVirtualNetworksServer) validateNetworkClassReference(ctx context
 			"network_class '%s' does not exist", networkClassKey)
 	}
 
-	// VN-VAL-05: Check NetworkClass is READY
-	if networkClass.GetStatus().GetState() != privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
-			"network_class '%s' is not in READY state (current state: %s)",
-			networkClassKey, networkClass.GetStatus().GetState().String())
-	}
-
-	// VN-VAL-06: Validate the addressing mode implied by ipv4_cidr/ipv6_cidr against the
+	// VN-VAL-05/06: Validate the addressing mode implied by ipv4_cidr/ipv6_cidr against the
 	// NetworkClass's capabilities.
 	ncCaps := networkClass.GetCapabilities()
 	if ncCaps != nil {

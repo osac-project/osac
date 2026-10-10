@@ -21,14 +21,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 type UsersServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -51,11 +49,6 @@ func NewUsersServer() *UsersServerBuilder {
 
 func (b *UsersServerBuilder) SetLogger(value *slog.Logger) *UsersServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *UsersServerBuilder) SetNotifier(value events.Notifier) *UsersServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -110,7 +103,6 @@ func (b *UsersServerBuilder) Build() (result *UsersServer, err error) {
 	// Create the private server to delegate to:
 	delegate, err := NewPrivateUsersServer().
 		SetLogger(b.logger).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).

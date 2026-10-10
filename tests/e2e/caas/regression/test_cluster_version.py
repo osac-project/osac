@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import contextlib
 import subprocess
-from pathlib import Path
 
 import pytest
 
-from tests.e2e.catalog.conftest import unique_name
+from tests.e2e.caas.sanity.test_cluster_create import RHCOS_IMAGE, TEST_RELEASE_IMAGE
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
+    unique_name,
     wait_for_cluster_deleting,
     wait_for_cluster_deletion,
     wait_for_cluster_grpc_deleting_or_archived,
@@ -21,9 +21,6 @@ from tests.e2e.core.runner import poll_until
 
 pytestmark = pytest.mark.regression
 
-# Fixed so repeated runs reuse the same ClusterVersion on the shared cluster.
-TEST_RELEASE_IMAGE = "quay.io/openshift-release-dev/ocp-release:4.20.0-multi"
-
 
 def test_cluster_create_with_version(
     cli: OsacCLI,
@@ -31,11 +28,15 @@ def test_cluster_create_with_version(
     private_grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     cluster_template: str,
-    pull_secret_path: str,
+    pull_secret_name: str,
     ssh_public_key_path: str,
 ) -> None:
     """Verify explicit version resolution and reference protection."""
-    version = private_grpc.ensure_cluster_version(version="4.20.0-e2e", image=TEST_RELEASE_IMAGE)
+    disk_image = private_grpc.ensure_disk_image(name="rhcos-4-22", source_ref=RHCOS_IMAGE)
+    version = private_grpc.ensure_cluster_version(version="4.20.0-e2e", image=TEST_RELEASE_IMAGE, disk_image=disk_image)
+    private_grpc.ensure_bare_metal_instance_type(
+        name="ci-worker-bm", host_label_selector={"osac.openshift.io/host-type": "default"}
+    )
 
     uuid: str | None = None
     co_name: str | None = None
@@ -45,8 +46,9 @@ def test_cluster_create_with_version(
             name=name,
             template=cluster_template,
             version=version["name"],
-            template_parameter_files={"pull_secret": pull_secret_path},
-            template_parameters={"ssh_public_key": Path(ssh_public_key_path).read_text().strip()},
+            node_sets={"workers": {"size": 1, "baremetal_instance_type": {"name": "ci-worker-bm"}}},
+            pull_secret=pull_secret_name,
+            ssh_public_key_file=ssh_public_key_path,
         )
 
         co_name = wait_for_cluster_order_cr(k8s=k8s_hub_client, uuid=uuid)
@@ -96,6 +98,9 @@ def test_cluster_create_rejected_for_invalid_version(
     grpc: GRPCClient, private_grpc: GRPCClient, cluster_template: str
 ) -> None:
     """Verify creation is rejected for disabled, obsolete, and missing versions."""
+    private_grpc.ensure_bare_metal_instance_type(
+        name="ci-worker-bm", host_label_selector={"osac.openshift.io/host-type": "default"}
+    )
 
     def _create_with_version(version_name: str) -> tuple[str, int]:
         return grpc.call_unchecked(
@@ -106,6 +111,9 @@ def test_cluster_create_rejected_for_invalid_version(
                     "spec": {
                         "template": {"name": cluster_template, "shared": True},
                         "version": {"name": version_name, "shared": True},
+                        "nodeSets": {
+                            "workers": {"size": 1, "baremetalInstanceType": {"name": "ci-worker-bm", "shared": True}}
+                        },
                     },
                 }
             },

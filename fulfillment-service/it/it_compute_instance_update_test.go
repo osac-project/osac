@@ -33,14 +33,16 @@ const computeInstanceTestFinalizer = "integration-test"
 
 func setComputeInstanceTestFinalizer(ctx context.Context, client privatev1.ComputeInstancesClient, id string, add bool) {
 	GinkgoHelper()
-	Eventually(func() error {
+	timeout := 10 * time.Second
+	if !add {
+		timeout = 2 * time.Minute
+	}
+	Eventually(func(g Gomega) bool {
 		response, err := client.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
 		if !add && status.Code(err) == codes.NotFound {
-			return nil
+			return true
 		}
-		if err != nil {
-			return err
-		}
+		g.Expect(err).NotTo(HaveOccurred())
 		object := response.GetObject()
 		values := slices.DeleteFunc(object.GetMetadata().GetFinalizers(), func(value string) bool { return value == computeInstanceTestFinalizer })
 		if add {
@@ -48,11 +50,125 @@ func setComputeInstanceTestFinalizer(ctx context.Context, client privatev1.Compu
 		}
 		object.GetMetadata().SetFinalizers(values)
 		_, err = client.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{Object: object, UpdateMask: catalogItemUpdateMask("metadata.finalizers"), Lock: true}.Build())
-		return err
-	}, 10*time.Second, 100*time.Millisecond).Should(Succeed())
+		g.Expect(err).NotTo(HaveOccurred())
+		if add {
+			return true
+		}
+		_, err = client.Signal(ctx, privatev1.ComputeInstancesSignalRequest_builder{Id: id}.Build())
+		if status.Code(err) == codes.NotFound {
+			return true
+		}
+		g.Expect(err).NotTo(HaveOccurred())
+		return false
+	}, timeout, 100*time.Millisecond).Should(BeTrue())
 }
 
 var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
+	It("rejects public updates that change network attachments", func(ctx context.Context) {
+		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
+		instance, err := createComputeInstanceFixture(ctx, tool.ExternalView().UserConn(), publicv1.ComputeInstanceSpec_builder{
+			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+			NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+
+		client := publicv1.NewComputeInstancesClient(tool.ExternalView().UserConn())
+		originalAttachment := proto.Clone(instance.GetSpec().GetNetworkAttachments()[0]).(*publicv1.ComputeNetworkAttachment)
+		changed := proto.Clone(originalAttachment).(*publicv1.ComputeNetworkAttachment)
+		changed.SetSecurityGroups(nil)
+		candidate := proto.Clone(instance).(*publicv1.ComputeInstance)
+		candidate.GetSpec().SetNetworkAttachments([]*publicv1.ComputeNetworkAttachment{changed})
+		mask := catalogItemUpdateMask("spec.network_attachments")
+
+		_, err = client.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{Object: candidate, UpdateMask: mask}.Build())
+		expectCatalogItemStatusCode(err, codes.InvalidArgument)
+
+		persisted, err := client.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: instance.GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(proto.Equal(persisted.GetObject().GetSpec().GetNetworkAttachments()[0], originalAttachment)).To(BeTrue())
+
+		_, err = client.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+			Object:     persisted.GetObject(),
+			UpdateMask: mask,
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("allows run_strategy updates through the public API", func(ctx context.Context) {
+		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
+		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		conn := tool.ExternalView().UserConn()
+		instance, err := createComputeInstanceFixture(ctx, conn, publicv1.ComputeInstanceSpec_builder{
+			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+			NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(instance.GetSpec().GetRunStrategy()).To(Equal(publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS))
+
+		client := publicv1.NewComputeInstancesClient(conn)
+
+		By("updating run_strategy from ALWAYS to HALTED")
+		updateResponse, err := client.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+			Object: publicv1.ComputeInstance_builder{
+				Id:   instance.GetId(),
+				Spec: publicv1.ComputeInstanceSpec_builder{RunStrategy: new(publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED)}.Build(),
+			}.Build(),
+			UpdateMask: catalogItemUpdateMask("spec.run_strategy"),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(updateResponse.GetObject().GetSpec().GetRunStrategy()).To(Equal(publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED))
+
+		persisted, err := client.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: instance.GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(persisted.GetObject().GetSpec().GetRunStrategy()).To(Equal(publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED))
+
+		By("updating run_strategy back to ALWAYS")
+		updateResponse, err = client.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+			Object: publicv1.ComputeInstance_builder{
+				Id:   instance.GetId(),
+				Spec: publicv1.ComputeInstanceSpec_builder{RunStrategy: new(publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS)}.Build(),
+			}.Build(),
+			UpdateMask: catalogItemUpdateMask("spec.run_strategy"),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(updateResponse.GetObject().GetSpec().GetRunStrategy()).To(Equal(publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS))
+
+		persisted, err = client.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: instance.GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(persisted.GetObject().GetSpec().GetRunStrategy()).To(Equal(publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS))
+	})
+
+	It("allows instance_type updates through the public API", func(ctx context.Context) {
+		firstInstanceType := createCatalogItemComputeInstanceTypeFixture(ctx)
+		secondInstanceType := createCatalogItemComputeInstanceTypeFixture(ctx)
+		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
+		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		conn := tool.ExternalView().UserConn()
+		instance, err := createComputeInstanceFixture(ctx, conn, publicv1.ComputeInstanceSpec_builder{
+			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+			InstanceType:       publicv1.InstanceTypeReference_builder{Id: firstInstanceType}.Build(),
+			NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+
+		client := publicv1.NewComputeInstancesClient(conn)
+
+		By("updating instance_type to the second type")
+		candidate := proto.Clone(instance).(*publicv1.ComputeInstance)
+		candidate.GetSpec().SetInstanceType(publicv1.InstanceTypeReference_builder{Id: secondInstanceType}.Build())
+		updateResponse, err := client.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+			Object:     candidate,
+			UpdateMask: catalogItemUpdateMask("spec.instance_type"),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(updateResponse.GetObject().GetSpec().GetInstanceType().GetId()).To(Equal(secondInstanceType))
+
+		persisted, err := client.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: instance.GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(persisted.GetObject().GetSpec().GetInstanceType().GetId()).To(Equal(secondInstanceType))
+	})
+
 	DescribeTable("validates networking against persisted deletion state", func(ctx context.Context, deleteFirst, maskDeletionTimestamp bool) {
 		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
@@ -87,8 +203,14 @@ var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
 			Expect(stored.GetObject().GetMetadata().GetFinalizers()).To(ContainElement(computeInstanceTestFinalizer))
 		}
 		setCatalogItemSubnetFixtureState(ctx, network.subnetID, privatev1.SubnetState_SUBNET_STATE_PENDING)
+		DeferCleanup(func(ctx context.Context) {
+			setCatalogItemSubnetFixtureState(ctx, network.subnetID, privatev1.SubnetState_SUBNET_STATE_READY)
+		})
+		originalAttachment := proto.Clone(stored.GetObject().GetSpec().GetNetworkAttachments()[0]).(*privatev1.ComputeNetworkAttachment)
 		candidate := proto.Clone(stored.GetObject()).(*privatev1.ComputeInstance)
-		candidate.GetSpec().GetNetworkAttachments()[0].SetSecurityGroups(nil)
+		if deleteFirst {
+			candidate.GetSpec().GetNetworkAttachments()[0].SetSecurityGroups(nil)
+		}
 		if !deleteFirst {
 			By("supplying a deletion timestamp on a resource that is still live")
 			candidate.GetMetadata().SetDeletionTimestamp(timestamppb.Now())
@@ -99,21 +221,24 @@ var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
 		}
 		_, err = client.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{Object: candidate, UpdateMask: mask}.Build())
 		if deleteFirst {
-			Expect(err).NotTo(HaveOccurred())
+			expectCatalogItemStatusCode(err, codes.InvalidArgument)
 		} else {
 			expectCatalogItemStatusCode(err, codes.FailedPrecondition)
 		}
 		persisted, err := client.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: resource.GetId()}.Build())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(persisted.GetObject().GetMetadata().HasDeletionTimestamp()).To(Equal(deleteFirst))
+		Expect(proto.Equal(persisted.GetObject().GetSpec().GetNetworkAttachments()[0], originalAttachment)).To(BeTrue())
 		if deleteFirst {
-			Expect(persisted.GetObject().GetSpec().GetNetworkAttachments()[0].GetSecurityGroups()).To(BeEmpty())
-		} else {
-			Expect(persisted.GetObject().GetSpec().GetNetworkAttachments()[0].GetSecurityGroups()).To(HaveLen(1))
+			_, err = client.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+				Object:     persisted.GetObject(),
+				UpdateMask: catalogItemUpdateMask("spec.network_attachments"),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
 		}
 	},
 		Entry("live resource: an unmasked deletion timestamp cannot bypass readiness", false, false),
 		Entry("live resource: a masked deletion timestamp cannot bypass readiness", false, true),
-		Entry("deleting resource: an ordinary update can release security groups while the subnet is pending", true, false),
+		Entry("deleting resource: rejects security-group changes while the subnet is pending", true, false),
 	)
 })

@@ -21,7 +21,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -29,7 +28,6 @@ import (
 // ProjectsServerBuilder contains the data and logic needed to create a public projects server.
 type ProjectsServerBuilder struct {
 	logger            *slog.Logger
-	notifier          *database.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -56,12 +54,6 @@ func NewProjectsServer() *ProjectsServerBuilder {
 // SetLogger sets the logger. This is mandatory.
 func (b *ProjectsServerBuilder) SetLogger(value *slog.Logger) *ProjectsServerBuilder {
 	b.logger = value
-	return b
-}
-
-// SetNotifier sets the database notifier.
-func (b *ProjectsServerBuilder) SetNotifier(value *database.Notifier) *ProjectsServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -116,7 +108,6 @@ func (b *ProjectsServerBuilder) Build() (result *ProjectsServer, err error) {
 
 	delegate, err := NewPrivateProjectsServer().
 		SetLogger(b.logger).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).

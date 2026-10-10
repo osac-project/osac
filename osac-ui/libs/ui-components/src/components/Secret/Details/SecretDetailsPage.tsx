@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   Button,
@@ -9,7 +9,6 @@ import {
   Divider,
   Flex,
   FlexItem,
-  FormGroup,
   Grid,
   GridItem,
   PageSection,
@@ -24,7 +23,7 @@ import { EyeIcon } from '@patternfly/react-icons/dist/esm/icons/eye-icon';
 import { EyeSlashIcon } from '@patternfly/react-icons/dist/esm/icons/eye-slash-icon';
 import { LockIcon } from '@patternfly/react-icons/dist/esm/icons/lock-icon';
 
-import { Secret, Secrets } from '@osac/types';
+import { Secret, SecretType, Secrets } from '@osac/types';
 import { useGetResource } from '@osac/ui-components/api/use-resource';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
@@ -33,7 +32,7 @@ import { Timestamp } from '../../Primitives/Timestamp';
 import { ResourceDetailHeader } from '../../Resource/ResourceDetailHeader';
 import ResourceDetailsPage from '../../Resource/ResourceDetailsPage';
 import { SubtleContent } from '../../SubtleContent/SubtleContent';
-import { getSecretValues } from '../CreatePage/values';
+import { decodeSecretValue, getDataEntries } from '../CreatePage/values';
 import { downloadSecretBytes, getSecretType } from '../utils';
 
 interface SecretDetailsPageContentProps {
@@ -44,7 +43,9 @@ const SecretDetailsPageContent = ({ secret }: SecretDetailsPageContentProps) => 
   const { t } = useTranslation();
   const [showValues, setShowValues] = useState(false);
   const secretName = secret.metadata?.name || secret.id;
-  const dataEntries = getSecretValues(secret).dataEntries;
+  const dataEntries = getDataEntries(secret.data);
+
+  const secretTypes = getSecretType(t);
 
   return (
     <>
@@ -96,7 +97,7 @@ const SecretDetailsPageContent = ({ secret }: SecretDetailsPageContentProps) => 
                   <DescriptionListGroup>
                     <DescriptionListTerm>{t('Type')}</DescriptionListTerm>
                     <DescriptionListDescription>
-                      {getSecretType(secret, t)}
+                      {secretTypes[secret.type] || secretTypes[SecretType.UNSPECIFIED]}
                     </DescriptionListDescription>
                   </DescriptionListGroup>
                   <DescriptionListGroup>
@@ -128,44 +129,60 @@ const SecretDetailsPageContent = ({ secret }: SecretDetailsPageContentProps) => 
                 </Flex>
               </StackItem>
               <StackItem>
-                <Stack hasGutter>
+                <DescriptionList>
                   {dataEntries.map((entry) => (
-                    <StackItem key={entry.key}>
-                      <FormGroup label={entry.key} fieldId={`secret-value-${entry.key}`}>
-                        {showValues ? (
-                          entry.valueType === 'text' ? (
-                            <TextArea
-                              id={`secret-value-${entry.key}`}
-                              aria-label={t('Secret value for {{key}}', { key: entry.key })}
-                              value={entry.value}
-                              readOnly
-                              rows={4}
-                            />
+                    <React.Fragment key={entry.key}>
+                      <DescriptionListGroup>
+                        <DescriptionListTerm>{t('Key')}</DescriptionListTerm>
+                        <DescriptionListDescription>{entry.key}</DescriptionListDescription>
+                      </DescriptionListGroup>
+                      <DescriptionListGroup>
+                        <DescriptionListTerm>{t('Value')}</DescriptionListTerm>
+                        <DescriptionListDescription>
+                          {showValues ? (
+                            decodeSecretValue(entry.value) !== undefined ? (
+                              <TextArea
+                                id={`secret-value-${entry.key}`}
+                                aria-label={t('Secret value for {{key}}', { key: entry.key })}
+                                value={decodeSecretValue(entry.value)}
+                                readOnly
+                                rows={4}
+                              />
+                            ) : (
+                              <Stack>
+                                <StackItem>
+                                  {t(
+                                    'This value contains binary data and cannot be displayed as text. Download it to access the raw data.',
+                                  )}
+                                </StackItem>
+                                <StackItem>
+                                  <Button
+                                    variant="link"
+                                    icon={<DownloadIcon />}
+                                    onClick={() => {
+                                      if (entry.value) {
+                                        downloadSecretBytes(entry.value, entry.key);
+                                      }
+                                    }}
+                                  >
+                                    {t('Download value')}
+                                  </Button>
+                                </StackItem>
+                              </Stack>
+                            )
                           ) : (
-                            <Button
-                              variant="link"
-                              icon={<DownloadIcon />}
-                              onClick={() => {
-                                if (entry.value) {
-                                  downloadSecretBytes(entry.value, entry.key);
-                                }
-                              }}
-                            >
-                              {t('Download value')}
-                            </Button>
-                          )
-                        ) : (
-                          <TextInput
-                            value="********"
-                            type="text"
-                            readOnlyVariant="default"
-                            customIcon={<LockIcon />}
-                          />
-                        )}
-                      </FormGroup>
-                    </StackItem>
+                            <TextInput
+                              value="********"
+                              type="text"
+                              readOnlyVariant="default"
+                              customIcon={<LockIcon />}
+                            />
+                          )}
+                        </DescriptionListDescription>
+                      </DescriptionListGroup>
+                    </React.Fragment>
                   ))}
-                </Stack>
+                </DescriptionList>
               </StackItem>
             </Stack>
           </GridItem>

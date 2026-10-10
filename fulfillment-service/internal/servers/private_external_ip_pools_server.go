@@ -24,13 +24,11 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateExternalIPPoolsServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -52,11 +50,6 @@ func NewPrivateExternalIPPoolsServer() *PrivateExternalIPPoolsServerBuilder {
 
 func (b *PrivateExternalIPPoolsServerBuilder) SetLogger(value *slog.Logger) *PrivateExternalIPPoolsServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateExternalIPPoolsServerBuilder) SetNotifier(value events.Notifier) *PrivateExternalIPPoolsServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -95,7 +88,6 @@ func (b *PrivateExternalIPPoolsServerBuilder) Build() (result *PrivateExternalIP
 	generic, err := NewGenericServer[*privatev1.ExternalIPPool]().
 		SetLogger(b.logger).
 		SetService(privatev1.ExternalIPPools_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
@@ -181,22 +173,14 @@ func (s *PrivateExternalIPPoolsServer) validateCreate(ctx context.Context,
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "external IP pool spec is mandatory")
 	}
 
-	if spec.GetIpFamily() == privatev1.IPFamily_IP_FAMILY_UNSPECIFIED {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.ip_family' is required")
+	if spec.GetIpFamily() != privatev1.IPFamily_IP_FAMILY_IPV4 {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.ip_family' must be IP_FAMILY_IPV4; IPv6 and unspecified-family pools are not supported")
 	}
 
-	cidrs := spec.GetCidrs()
-	if len(cidrs) == 0 {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.cidrs' is required")
-	}
-
-	canonicalCIDRs := make([]string, len(cidrs))
-	for i, cidr := range cidrs {
-		canonical, err := validatePoolCIDRFormat(cidr, spec.GetIpFamily(), i)
-		if err != nil {
-			return err
-		}
-		canonicalCIDRs[i] = canonical
+	canonicalCIDRs, err := validateSingleIPv4PoolCIDR(spec.GetCidrs())
+	if err != nil {
+		return err
 	}
 	spec.SetCidrs(canonicalCIDRs)
 
@@ -218,15 +202,26 @@ func validateExternalIPPoolUpdate(newPool *privatev1.ExternalIPPool, existing *p
 	}
 
 	if spec.GetIpFamily() != privatev1.IPFamily_IP_FAMILY_UNSPECIFIED &&
+		spec.GetIpFamily() != privatev1.IPFamily_IP_FAMILY_IPV4 {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.ip_family' must be IP_FAMILY_IPV4; IPv6 and unspecified-family pools are not supported")
+	}
+
+	if spec.GetIpFamily() != privatev1.IPFamily_IP_FAMILY_UNSPECIFIED &&
 		spec.GetIpFamily() != existing.GetSpec().GetIpFamily() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.ip_family' is immutable and cannot be changed from '%s' to '%s'",
 			existing.GetSpec().GetIpFamily().String(), spec.GetIpFamily().String())
 	}
 
-	if newCIDRs := spec.GetCidrs(); len(newCIDRs) > 0 && !cidrSlicesEqual(newCIDRs, existing.GetSpec().GetCidrs()) {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"field 'spec.cidrs' is immutable and cannot be changed after creation")
+	if newCIDRs := spec.GetCidrs(); len(newCIDRs) > 0 {
+		if _, err := validateSingleIPv4PoolCIDR(newCIDRs); err != nil {
+			return err
+		}
+		if !cidrSlicesEqual(newCIDRs, existing.GetSpec().GetCidrs()) {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"field 'spec.cidrs' is immutable and cannot be changed after creation")
+		}
 	}
 
 	return nil

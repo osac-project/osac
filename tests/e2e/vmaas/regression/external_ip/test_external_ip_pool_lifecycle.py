@@ -6,8 +6,9 @@ from uuid import uuid4
 
 import pytest
 
-from tests.e2e.core.grpc_client import GRPCClient
+from tests.e2e.core.grpc_client import PUBLIC_API, GRPCClient
 from tests.e2e.core.helpers import (
+    assert_grpc_method_unavailable,
     assert_grpc_rejected,
     wait_for_external_ip_allocated,
     wait_for_external_ip_attachment_cr,
@@ -205,10 +206,10 @@ class TestExternalIPPoolLifecycle:
 
         with pytest.raises(subprocess.CalledProcessError) as exc_info:
             grpc.call(
-                service="osac.public.v1.ExternalIPs/Update",
+                service=f"{PUBLIC_API}.ExternalIPs/Update",
                 data={"object": {"id": ip_id, "status": {"attached": False}}},
             )
-        assert_grpc_rejected(exc_info, "InvalidArgument")
+        assert_grpc_method_unavailable(exc_info, service=f"{PUBLIC_API}.ExternalIPs", method="Update")
 
         grpc.delete_external_ip_attachment(attachment_id=att_id)
         wait_for_external_ip_attachment_deletion(k8s=k8s_hub_client, name=att_cr_name)

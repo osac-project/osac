@@ -14,7 +14,7 @@
 #     sudo systemctl daemon-reload && sudo systemctl restart podman.socket
 
 # Fedora 42 — pinned to digest; bump with: skopeo inspect docker://registry.fedoraproject.org/fedora:42
-FROM registry.fedoraproject.org/fedora@sha256:87f10aa0080b973a5984d98dacd5af13239fd19fb6b71141a4ac57d42d001856
+FROM registry.fedoraproject.org/fedora@sha256:86289176d4a4af5c9b9c9df225eed4489f075bb67549411da2e0d4c121854491
 
 # --- DNF packages (distrobox compat + dev tools) ---
 RUN dnf install -y \

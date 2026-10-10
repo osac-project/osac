@@ -80,3 +80,4 @@ export type FieldDefinition = Message<"osac.public.v1.FieldDefinition"> & {
  */
 export const FieldDefinitionSchema: GenMessage<FieldDefinition> = /*@__PURE__*/
   messageDesc(file_osac_public_v1_field_definition_type, 0);
+

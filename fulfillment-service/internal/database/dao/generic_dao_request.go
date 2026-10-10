@@ -235,14 +235,44 @@ func (r *request[O]) addVisibilityFilter(ctx context.Context) (result bool, err 
 		index := len(r.sql.params) + 1
 		r.sql.params = append(r.sql.params, tenant)
 		if len(named) == 0 {
-			fmt.Fprintf(&r.sql.filter, "tenant = $%d and project = ''", index)
+			// For the Projects table, match the default project by name=''.
+			// For all other tables, match resources in the default project by project=''.
+			// The distinction is necessary because:
+			// - Projects table: name column stores the project's own name
+			// - Other tables: name column stores the resource's metadata.name
+			if r.dao.table == "projects" {
+				// Only match the default project (name='') for this tenant.
+				// Without the name filter, this would incorrectly match all top-level projects
+				// (which have an empty parent project='').
+				fmt.Fprintf(&r.sql.filter, "tenant = $%d and name = ''", index)
+			} else {
+				// Match resources that belong to the default project (project='')
+				fmt.Fprintf(&r.sql.filter, "tenant = $%d and project = ''", index)
+			}
 		} else {
 			r.sql.params = append(r.sql.params, named)
-			fmt.Fprintf(
-				&r.sql.filter,
-				"tenant = $%d and (project = '' or $%d::ltree[] @> project)",
-				index, index+1,
-			)
+			// Match rows where:
+			// For Projects table:
+			//   1. name='' (the default project)
+			//   2. name is in the visible projects list (exact match)
+			//   3. project (parent) is covered by visible projects (descendant match via ltree)
+			// For other tables:
+			//   1. project='' (resources in the default project)
+			//   2. project is in the visible projects list (exact match)
+			//   3. project is a descendant of visible projects (descendant match via ltree)
+			if r.dao.table == "projects" {
+				fmt.Fprintf(
+					&r.sql.filter,
+					"tenant = $%d and (name = '' or name = any($%d) or $%d::ltree[] @> project)",
+					index, index+1, index+1,
+				)
+			} else {
+				fmt.Fprintf(
+					&r.sql.filter,
+					"tenant = $%d and (project = '' or project = any($%d) or $%d::ltree[] @> project)",
+					index, index+1, index+1,
+				)
+			}
 		}
 		filters++
 	}
@@ -324,17 +354,6 @@ func (r *request[O]) unmarshalData(data []byte, object O) error {
 	return r.dao.unmarshalOptions.Unmarshal(data, object)
 }
 
-func (r *request[O]) fireEvent(ctx context.Context, event Event) error {
-	event.Table = r.dao.table
-	for _, eventCallback := range r.dao.eventCallbacks {
-		err := eventCallback(ctx, event)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (r *request[O]) getFinalizers(metadata metadataIface) []string {
 	if metadata == nil {
 		return []string{}
@@ -385,7 +404,7 @@ func (r *request[O]) queryRow(ctx context.Context, op opType, sql string, args .
 			"Running SQL operation",
 			slog.String("type", string(op)),
 			slog.String("sql", r.cleanSQL(sql)),
-			slog.Any("parameters", args),
+			slog.Int("parameter_count", len(args)),
 		)
 	}
 	return r.tx.QueryRow(ctx, sql, args...)
@@ -400,7 +419,7 @@ func (r *request[O]) query(ctx context.Context, op opType, sql string, args ...a
 			"Running SQL operation",
 			slog.String("type", string(op)),
 			slog.String("sql", r.cleanSQL(sql)),
-			slog.Any("parameters", args),
+			slog.Int("parameter_count", len(args)),
 		)
 	}
 	rows, err = r.tx.Query(ctx, sql, args...)
@@ -416,7 +435,7 @@ func (r *request[O]) exec(ctx context.Context, op opType, sql string, args ...an
 			"Running SQL operation",
 			slog.String("type", string(op)),
 			slog.String("sql", r.cleanSQL(sql)),
-			slog.Any("parameters", args),
+			slog.Int("parameter_count", len(args)),
 		)
 	}
 	start := time.Now()

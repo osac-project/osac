@@ -41,6 +41,11 @@
       - "Ingress rules count: {{ ingress_rules | length }}"
       - "Egress rules count: {{ egress_rules | length }}"
 
+- name: Validate SecurityGroup rule CIDRs
+  ansible.builtin.include_role:
+    name: osac.templates.security_group_validation
+    tasks_from: validate_cidrs
+
 - name: Initialize ingress and egress policy rule arrays
   ansible.builtin.set_fact:
     ingress_policy_rules: []
@@ -50,7 +55,7 @@
   ansible.builtin.set_fact:
     ingress_policy_rules: "{{ ingress_policy_rules + [_rule] }}"
   vars:
-    _has_cidr: "{{ item.sourceCidr is defined and item.sourceCidr | length > 0 }}"
+    _has_cidr: "{{ item.sourceCidr is defined and item.sourceCidr | default('') | length > 0 }}"
     _has_port: "{{ item.protocol not in ['icmp', 'all'] and item.portFrom is defined }}"
     _from_part: "{{ (_has_cidr | bool) | ternary({'from': [{'ipBlock': {'cidr': item.sourceCidr}}]}, {}) }}"
     _port_base: "{{ {'protocol': item.protocol | upper, 'port': item.portFrom | default(0)} }}"
@@ -63,9 +68,9 @@
   ansible.builtin.set_fact:
     egress_policy_rules: "{{ egress_policy_rules + [_rule] }}"
   vars:
-    _has_cidr: "{{ item.sourceCidr is defined and item.sourceCidr | length > 0 }}"
+    _has_cidr: "{{ item.destinationCidr is defined and item.destinationCidr | default('') | length > 0 }}"
     _has_port: "{{ item.protocol not in ['icmp', 'all'] and item.portFrom is defined }}"
-    _to_part: "{{ (_has_cidr | bool) | ternary({'to': [{'ipBlock': {'cidr': item.sourceCidr}}]}, {}) }}"
+    _to_part: "{{ (_has_cidr | bool) | ternary({'to': [{'ipBlock': {'cidr': item.destinationCidr}}]}, {}) }}"
     _port_base: "{{ {'protocol': item.protocol | upper, 'port': item.portFrom | default(0)} }}"
     _port_range: "{{ (item.portTo is defined and item.portTo != item.portFrom | default(0)) | ternary({'endPort': item.portTo | default(0)}, {}) }}"
     _ports_part: "{{ (_has_port | bool) | ternary({'ports': [_port_base | combine(_port_range)]}, {}) }}"

@@ -20,10 +20,10 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
-	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -34,7 +34,8 @@ import (
 // VolumeFeedbackReconciler syncs Volume CR status from the hub cluster back
 // to the fulfillment-service via the private Volumes gRPC API. It maps CRD
 // phases to proto states and copies vendor-assigned fields (vendorVolumeID,
-// backend, provider, protocol) so the fulfillment-service inventory stays current.
+// provider, protocol, and a tenant-safe failure message) so the
+// fulfillment-service inventory stays current.
 type VolumeFeedbackReconciler struct {
 	bridge          *feedback.Bridge[*v1alpha1.Volume, *privatev1.Volume]
 	volumeNamespace string
@@ -43,7 +44,7 @@ type VolumeFeedbackReconciler struct {
 // NewVolumeFeedbackReconciler creates a feedback reconciler that syncs Volume
 // CR status to the fulfillment-service. The volumeNamespace controls which
 // namespace this controller watches, matching the resource controller's scope.
-func NewVolumeFeedbackReconciler(hubClient clnt.Client, grpcConn *grpc.ClientConn, volumeNamespace string) *VolumeFeedbackReconciler {
+func NewVolumeFeedbackReconciler(hubClient clnt.Client, grpcConn grpc.ClientConnInterface, volumeNamespace string) *VolumeFeedbackReconciler {
 	if volumeNamespace == "" {
 		volumeNamespace = defaultVolumeNamespace
 	}
@@ -77,7 +78,7 @@ func NewVolumeFeedbackReconciler(hubClient clnt.Client, grpcConn *grpc.ClientCon
 			_, err := volClient.Update(ctx, privatev1.VolumesUpdateRequest_builder{
 				Object: remote,
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
-					feedbackStatusStatePath, "status.vendor_volume_id", "status.backend", "status.vendor_context", "status.protocol",
+					feedbackStatusStatePath, "status.message", "status.vendor_volume_id", "status.vendor_context", "status.protocol", "status.provider", "status.state_transition_time", "status.provisioned_size_gib",
 				}},
 			}.Build())
 			return err
@@ -115,22 +116,50 @@ func (r *VolumeFeedbackReconciler) Reconcile(ctx context.Context, request ctrl.R
 }
 
 // syncVolumeUpdate maps Volume CR status to the fulfillment-service proto on
-// the non-delete path. It syncs the phase, vendor-assigned identifiers, and
-// the PVC/PV references that the operator populates after provisioning.
-func syncVolumeUpdate(ctx context.Context, obj *v1alpha1.Volume, remote *privatev1.Volume) error {
-	syncVolumePhase(ctx, obj, remote)
-	syncVolumeVendorFields(ctx, obj, remote)
+// the non-delete path, including phase, failure message, vendor fields, and
+// state transition time.
+func syncVolumeUpdate(_ context.Context, obj *v1alpha1.Volume, remote *privatev1.Volume) error {
+	if err := syncVolumePhase(obj, remote); err != nil {
+		return err
+	}
+	syncVolumeStatusMessage(obj, remote)
+	if err := syncVolumeVendorFields(obj, remote); err != nil {
+		return err
+	}
+	if err := syncVolumeStateTransitionTime(obj, remote); err != nil {
+		return err
+	}
 	return nil
 }
 
 // syncVolumeDelete maps Volume CR status during deletion. Failed volumes
 // report FAILED; all other deletion states report DELETING.
 func syncVolumeDelete(_ context.Context, obj *v1alpha1.Volume, remote *privatev1.Volume) error {
-	if obj.Status.Phase == v1alpha1.VolumePhaseFailed {
-		remote.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_FAILED)
-		return nil
+	if err := syncVolumeStateTransitionTime(obj, remote); err != nil {
+		return err
 	}
-	remote.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_DELETING)
+	switch obj.Status.Phase {
+	case v1alpha1.VolumePhaseFailed:
+		remote.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_FAILED)
+	case v1alpha1.VolumePhaseDeleting:
+		remote.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_DELETING)
+	case v1alpha1.VolumePhaseDeleted:
+		remote.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_DELETED)
+	default:
+		return fmt.Errorf("invalid volume phase %q during deletion", obj.Status.Phase)
+	}
+	syncVolumeStatusMessage(obj, remote)
+	return nil
+}
+
+func syncVolumeStateTransitionTime(obj *v1alpha1.Volume, remote *privatev1.Volume) error {
+	if obj.Status.StateTransitionTime == nil {
+		if remote.GetStatus().GetStateTransitionTime() != nil {
+			return nil
+		}
+		return fmt.Errorf("volume %s has no state transition time", remote.GetId())
+	}
+	remote.GetStatus().SetStateTransitionTime(timestamppb.New(obj.Status.StateTransitionTime.Time))
 	return nil
 }
 
@@ -141,31 +170,46 @@ func syncVolumeDelete(_ context.Context, obj *v1alpha1.Volume, remote *privatev1
 // Ready          -> AVAILABLE  (vendor provisioned, ready for use)
 // Failed         -> FAILED     (vendor provisioning failed)
 // Deleting       -> DELETING   (volume is being deprovisioned)
-func syncVolumePhase(ctx context.Context, obj *v1alpha1.Volume, remote *privatev1.Volume) {
+// Deleted        -> DELETED    (vendor cleanup completed)
+func syncVolumePhase(obj *v1alpha1.Volume, remote *privatev1.Volume) error {
 	switch obj.Status.Phase {
 	case v1alpha1.VolumePhaseProgressing:
 		remote.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_CREATING)
 	case v1alpha1.VolumePhaseReady:
+		if obj.Status.VendorVolumeID == "" {
+			return fmt.Errorf("cannot report AVAILABLE without vendor volume ID")
+		}
 		remote.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_AVAILABLE)
 	case v1alpha1.VolumePhaseFailed:
 		remote.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_FAILED)
 	case v1alpha1.VolumePhaseDeleting:
 		remote.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_DELETING)
+	case v1alpha1.VolumePhaseDeleted:
+		remote.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_DELETED)
 	default:
-		log := ctrllog.FromContext(ctx)
-		log.Info("Unknown phase, will ignore it", "phase", obj.Status.Phase)
+		return fmt.Errorf("unknown volume phase %q", obj.Status.Phase)
 	}
+	return nil
+}
+
+// syncVolumeStatusMessage exposes only a stable, tenant-safe failure message
+// through the fulfillment API. Detailed vendor errors remain in the operator
+// condition and logs, rather than being copied into a client-visible API
+// response. Clear stale messages once a volume is no longer failed.
+func syncVolumeStatusMessage(obj *v1alpha1.Volume, remote *privatev1.Volume) {
+	if obj.Status.Phase == v1alpha1.VolumePhaseFailed {
+		remote.GetStatus().SetMessage("volume provisioning failed")
+		return
+	}
+	remote.GetStatus().ClearMessage()
 }
 
 // syncVolumeVendorFields copies the vendor-assigned identifiers (and vendor
 // attach context) from the CR status to the proto status so the
 // fulfillment-service inventory reflects the actual storage array state.
-func syncVolumeVendorFields(ctx context.Context, obj *v1alpha1.Volume, remote *privatev1.Volume) {
+func syncVolumeVendorFields(obj *v1alpha1.Volume, remote *privatev1.Volume) error {
 	if obj.Status.VendorVolumeID != "" {
 		remote.GetStatus().SetVendorVolumeId(obj.Status.VendorVolumeID)
-	}
-	if obj.Status.Backend != "" {
-		remote.GetStatus().SetBackend(obj.Status.Backend)
 	}
 	if obj.Status.Provider != "" {
 		remote.GetStatus().SetProvider(obj.Status.Provider)
@@ -185,10 +229,13 @@ func syncVolumeVendorFields(ctx context.Context, obj *v1alpha1.Volume, remote *p
 		if protocol := crdProtocolToProto(obj.Status.Protocol); protocol != privatev1.StorageProtocol_STORAGE_PROTOCOL_UNSPECIFIED {
 			remote.GetStatus().SetProtocol(protocol)
 		} else {
-			log := ctrllog.FromContext(ctx)
-			log.Info("Unknown volume protocol, not syncing to fulfillment-service", "protocol", obj.Status.Protocol)
+			return fmt.Errorf("unknown volume protocol %q", obj.Status.Protocol)
 		}
 	}
+	if obj.Status.ProvisionedSizeGiB > 0 {
+		remote.GetStatus().SetProvisionedSizeGib(obj.Status.ProvisionedSizeGiB)
+	}
+	return nil
 }
 
 // crdProtocolToProto converts the CRD VolumeProtocol typed string (e.g.

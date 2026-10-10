@@ -1,0 +1,114 @@
+{{- if .Values.aapOperator.enabled }}
+# FIXME(OSAC-5621): remove this hook once the credential-type migration
+# lands and the startingCSV / Manual pins are removed from the AAP
+# Subscription.  The Job approves the single InstallPlan that OLM creates
+# for the pinned startingCSV and then exits; later upgrade InstallPlans
+# stay unapproved because installPlanApproval is Manual.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: osac-deps-approve-aap-installplan
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-deps.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation
+    "helm.sh/hook-weight": "14"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: osac-deps-approve-aap-installplan
+  namespace: ansible-aap
+  labels:
+    {{- include "osac-deps.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation
+    "helm.sh/hook-weight": "14"
+rules:
+  - apiGroups: ["operators.coreos.com"]
+    resources: ["installplans"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["operators.coreos.com"]
+    resources: ["subscriptions", "clusterserviceversions"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: osac-deps-approve-aap-installplan
+  namespace: ansible-aap
+  labels:
+    {{- include "osac-deps.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation
+    "helm.sh/hook-weight": "14"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: osac-deps-approve-aap-installplan
+subjects:
+  - kind: ServiceAccount
+    name: osac-deps-approve-aap-installplan
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: osac-deps-approve-aap-installplan
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-deps.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation
+    "helm.sh/hook-weight": "14"
+spec:
+  backoffLimit: 5
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        {{- include "osac-deps.hookLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: osac-deps-approve-aap-installplan
+      restartPolicy: OnFailure
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: scripts
+          configMap:
+            name: osac-deps-hook-scripts
+      containers:
+        - name: approve-installplan
+          image: {{ .Values.cliImage }}
+          env:
+            - name: HOME
+              value: /tmp
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: scripts
+              mountPath: /scripts
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          command:
+            - /bin/bash
+            - /scripts/approve-aap-installplan.sh
+{{- end }}

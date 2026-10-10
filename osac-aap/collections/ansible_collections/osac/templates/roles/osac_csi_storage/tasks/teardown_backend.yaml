@@ -1,0 +1,10 @@
+---
+# OSAC CSI driver teardown_backend: no hub-side backend resources to remove.
+# The tenant-scoped CSI service identity is owned by OSAC-4197 and removed
+# during tenant offboarding by that component.  This role owns only guest-cluster
+# resources (removed by teardown_cluster_storage).
+- name: OSAC CSI driver teardown_backend is a no-op (handled by OSAC-4197)
+  ansible.builtin.debug:
+    msg: >-
+      osac_csi_driver teardown_backend: tenant-scoped CSI credentials are removed by
+      OSAC-4197 during tenant offboarding.  No hub-side teardown is required here.

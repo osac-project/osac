@@ -240,15 +240,15 @@ func (r *ExternalIPReconciler) handleUpdate(ctx context.Context, externalIP *v1a
 		return ctrl.Result{}, err
 	}
 	implementationStrategy, err := resolveImplementationStrategy(
-		ctx, r.Resolver, "ExternalIP", networkClassID, "")
+		ctx, r.Resolver, "ExternalIP", networkClassID)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	if implementationStrategy == "" {
 		msg := fmt.Sprintf("no fabric_manager or k8s_manager configured for ExternalIP (default NetworkClass %q)", networkClassID)
 		setReadyConditionBlocked(&externalIP.Status.Conditions, v1alpha1.ReasonNoManagerConfigured, msg)
-		log.Info("implementation strategy not set, requeueing", "externalIP", externalIP.Name)
-		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+		log.Info("implementation strategy not set", "externalIP", externalIP.Name)
+		return ctrl.Result{}, fmt.Errorf("cannot reconcile ExternalIP %q: %s", externalIP.Name, msg)
 	}
 
 	if externalIP.Annotations == nil {

@@ -30,6 +30,12 @@ import (
 // resolution failures.
 var ErrNoManagerConfigured = errors.New("neither fabricManager nor k8sManager is set")
 
+// ErrRequiredManagerUnavailable indicates that a resource's required manager
+// role is not available on the NetworkClass. This is distinct from
+// ErrNoManagerConfigured because a NetworkClass may have a k8sManager while a
+// fabric-only resource still requires a fabricManager.
+var ErrRequiredManagerUnavailable = errors.New("required network manager is unavailable")
+
 // ResolvedManagers holds the validated fabric and k8s managers extracted from a NetworkClass.
 type ResolvedManagers struct {
 	// FabricManager is the validated fabric manager, or nil when the NetworkClass

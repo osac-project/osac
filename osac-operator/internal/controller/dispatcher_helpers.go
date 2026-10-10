@@ -43,8 +43,8 @@ const networkClassListPageSize = 1000
 //
 // Returns (nil, nil) when the dispatcher path is not active: resolver is nil,
 // networkClassID is empty, or the NetworkClass has neither a fabricManager nor a
-// k8sManager set (dispatcher.ErrNoManagerConfigured) — all cases where the caller
-// should fall back to its own legacy behavior. Any other resolution error (e.g. a
+// k8sManager set (dispatcher.ErrNoManagerConfigured) — the case where the caller
+// should block until dispatcher configuration is available. Any other resolution error (e.g. a
 // fabricManager or k8sManager referencing an unregistered manager ConfigMap) is
 // returned to the caller as a real reconcile error, since that indicates a
 // misconfiguration rather than an expected pre-migration state.
@@ -73,33 +73,30 @@ func resolveDispatchPlan(
 // write into osacImplementationStrategyAnnotation for AAP playbook selection.
 //
 // When the dispatcher path is active (see resolveDispatchPlan) it returns the resolved
-// plan's fabric manager name. Otherwise it returns legacyStrategy unchanged. Most
-// callers pass "" for legacyStrategy now that NetworkClass/VirtualNetwork no longer
-// carry a stored implementation_strategy field; the parameter remains for callers
-// that still have a caller-specific fallback (e.g. a resource-level default).
+// plan's fabric manager name. Otherwise it returns an empty string so callers can
+// block provisioning until dispatcher configuration is available.
 func resolveImplementationStrategy(
 	ctx context.Context,
 	resolver *dispatcher.Resolver,
 	kind string,
 	networkClassID string,
-	legacyStrategy string,
 ) (string, error) {
 	plan, err := resolveDispatchPlan(ctx, resolver, kind, networkClassID)
 	if err != nil {
 		return "", err
 	}
 	if plan == nil {
-		return legacyStrategy, nil
+		return "", nil
 	}
 	target := plan.FabricTarget()
 	if target == nil {
-		// A K8sFallback kind (e.g. VirtualNetwork, SecurityGroup) with no fabricManager
-		// resolves its fabric role to a k8s-role target instead (see Dispatch), so check
-		// K8sTarget before giving up and falling back to legacyStrategy.
+		// A fallback-enabled kind with no fabricManager resolves its fabric role to
+		// the explicitly allowed k8s-only target instead (see Dispatch), so check
+		// K8sTarget before giving up.
 		target = plan.K8sTarget()
 	}
 	if target == nil {
-		return legacyStrategy, nil
+		return "", nil
 	}
 	return target.Manager.Name, nil
 }
@@ -133,14 +130,14 @@ func listAllNetworkClasses(
 	}
 }
 
-// lookupDefaultNetworkClassID returns the ID of the deployment NetworkClass singleton,
-// used by ExternalIP-family controllers that have no parent VirtualNetwork
+// lookupDefaultNetworkClassID returns the ID of the default NetworkClass for this
+// deployment, used by ExternalIP-family controllers that have no parent VirtualNetwork
 // to inherit a NetworkClass from.
 //
 // Returns ("", nil) when the dispatcher path is not available (nil client, no live
-// NetworkClass, or more than one live NetworkClass) so the caller falls through to its
-// legacy implementation-strategy. List errors are returned as real reconcile errors.
-// Fulfillment-service enforces the one-per-deployment invariant with a unique index.
+// NetworkClass, or more than one live NetworkClass) so the caller can block
+// provisioning. List errors are returned as real reconcile errors. Fulfillment-service
+// enforces the one-per-deployment invariant.
 func lookupDefaultNetworkClassID(
 	ctx context.Context, ncClient privatev1.NetworkClassesClient,
 ) (string, error) {

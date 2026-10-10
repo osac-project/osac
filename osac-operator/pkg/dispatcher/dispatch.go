@@ -29,6 +29,12 @@ const (
 
 	// ManagerRoleK8s targets the k8s manager for overlay-to-fabric bridging.
 	ManagerRoleK8s ManagerRole = "k8s"
+
+	// K8sOnlyManagerName identifies the composite Kubernetes-only manager. It
+	// is the only manager allowed to satisfy a fabric-role fallback because it
+	// provides the Kubernetes-native SecurityGroup and ExternalIP family
+	// implementations used by the VMaaS-only profile.
+	K8sOnlyManagerName = "k8s_only"
 )
 
 // DispatchTarget pairs a manager role with its resolved manager details.
@@ -90,20 +96,29 @@ type ResourceDispatchConfig struct {
 	Roles []ManagerRole
 
 	// K8sFallback indicates that when no fabric manager is resolved, this kind's
-	// Fabric-role target is served by the k8s manager instead of erroring. Used
-	// for k8s-only deployments where the NetworkClass has no fabricManager.
+	// Fabric-role target may be served by an explicitly allowed k8s manager
+	// instead of erroring. Used only for the k8s-only deployment profile.
 	K8sFallback bool
+
+	// K8sFallbackManager restricts K8sFallback to a named composite manager.
+	// An empty value disables fallback even when K8sFallback is true, preventing
+	// arbitrary k8s managers from silently taking ownership of fabric operations.
+	K8sFallbackManager string
 }
 
 // dispatchTable maps Kubernetes resource kinds to the manager roles that handle
 // their provisioning operations.
+// The k8s fallback entries are restricted to the composite k8s_only manager,
+// which provides NetworkPolicy and MetalLB implementations when no physical
+// fabric is present. Other k8s managers only bridge overlays and cannot satisfy
+// the unified fabric-resource contract.
 var dispatchTable = map[string]ResourceDispatchConfig{
-	"VirtualNetwork":       {Roles: []ManagerRole{ManagerRoleFabric}, K8sFallback: true},
-	"Subnet":               {Roles: []ManagerRole{ManagerRoleFabric, ManagerRoleK8s}, K8sFallback: true},
-	"SecurityGroup":        {Roles: []ManagerRole{ManagerRoleFabric}, K8sFallback: true},
-	"ExternalIP":           {Roles: []ManagerRole{ManagerRoleFabric}, K8sFallback: true},
-	"ExternalIPPool":       {Roles: []ManagerRole{ManagerRoleFabric}, K8sFallback: true},
-	"ExternalIPAttachment": {Roles: []ManagerRole{ManagerRoleFabric}, K8sFallback: true},
+	"VirtualNetwork":       {Roles: []ManagerRole{ManagerRoleFabric}, K8sFallback: true, K8sFallbackManager: K8sOnlyManagerName},
+	"Subnet":               {Roles: []ManagerRole{ManagerRoleFabric, ManagerRoleK8s}, K8sFallback: true, K8sFallbackManager: K8sOnlyManagerName},
+	"SecurityGroup":        {Roles: []ManagerRole{ManagerRoleFabric}, K8sFallback: true, K8sFallbackManager: K8sOnlyManagerName},
+	"ExternalIP":           {Roles: []ManagerRole{ManagerRoleFabric}, K8sFallback: true, K8sFallbackManager: K8sOnlyManagerName},
+	"ExternalIPPool":       {Roles: []ManagerRole{ManagerRoleFabric}, K8sFallback: true, K8sFallbackManager: K8sOnlyManagerName},
+	"ExternalIPAttachment": {Roles: []ManagerRole{ManagerRoleFabric}, K8sFallback: true, K8sFallbackManager: K8sOnlyManagerName},
 	"NATGateway":           {Roles: []ManagerRole{ManagerRoleFabric}, K8sFallback: false},
 }
 
@@ -117,7 +132,11 @@ func LookupDispatchConfig(kind string) *ResourceDispatchConfig {
 	}
 	rolesCopy := make([]ManagerRole, len(cfg.Roles))
 	copy(rolesCopy, cfg.Roles)
-	return &ResourceDispatchConfig{Roles: rolesCopy, K8sFallback: cfg.K8sFallback}
+	return &ResourceDispatchConfig{
+		Roles:              rolesCopy,
+		K8sFallback:        cfg.K8sFallback,
+		K8sFallbackManager: cfg.K8sFallbackManager,
+	}
 }
 
 // KnownKinds returns a list of all resource kinds in the dispatch table.

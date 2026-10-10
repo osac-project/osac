@@ -250,7 +250,7 @@ var _ = Describe("ExternalIPReconciler", func() {
 			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
 		})
 
-		It("should block with ReasonNoManagerConfigured when no resolver is configured", func() {
+		It("should fail with ReasonNoManagerConfigured when no resolver is configured", func() {
 			// Without a resolver the implementation strategy is "", and the controller
 			// blocks rather than silently proceeding with a hardcoded default.
 			reconciler.Resolver = nil
@@ -260,8 +260,8 @@ var _ = Describe("ExternalIPReconciler", func() {
 
 			// Pass 1: adds finalizer, resolves parent pool, resolves strategy to "" and blocks.
 			result, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(err).To(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
 
 			updated := &osacv1alpha1.ExternalIP{}
 			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
@@ -834,7 +834,7 @@ var _ = Describe("ExternalIPReconciler", func() {
 			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("k8s_only"))
 		})
 
-		It("blocks with ReasonNoManagerConfigured when the NetworkClass has no managers", func() {
+		It("fails with ReasonNoManagerConfigured when the NetworkClass has no managers", func() {
 			resolver, ncClient := wireExternalIPDispatcher(fakeClient, testNamespace, []*privatev1.NetworkClass{{
 				Id: "nc-empty",
 			}})
@@ -843,8 +843,8 @@ var _ = Describe("ExternalIPReconciler", func() {
 
 			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
 			result, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(err).To(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
 
 			updated := &osacv1alpha1.ExternalIP{}
 			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
@@ -854,15 +854,15 @@ var _ = Describe("ExternalIPReconciler", func() {
 			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonNoManagerConfigured))
 		})
 
-		It("blocks with ReasonNoManagerConfigured when no NetworkClass is listed", func() {
+		It("fails with ReasonNoManagerConfigured when no NetworkClass is listed", func() {
 			resolver, ncClient := wireExternalIPDispatcher(fakeClient, testNamespace, nil)
 			reconciler.Resolver = resolver
 			reconciler.networkClassesClient = ncClient
 
 			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
 			result, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(err).To(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
 
 			updated := &osacv1alpha1.ExternalIP{}
 			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())

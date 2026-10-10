@@ -71,11 +71,30 @@ func createComputeInstanceInState(
 	computeInstanceDao *dao.GenericDAO[*privatev1.ComputeInstance],
 	state privatev1.ComputeInstanceState,
 ) *privatev1.ComputeInstance {
+	return createComputeInstanceInTenant(ctx, computeInstanceDao, state, testTenant)
+}
+
+func createComputeInstanceInTenant(
+	ctx context.Context,
+	computeInstanceDao *dao.GenericDAO[*privatev1.ComputeInstance],
+	state privatev1.ComputeInstanceState,
+	tenant string,
+) *privatev1.ComputeInstance {
+	return createComputeInstanceInTenantAndProject(ctx, computeInstanceDao, state, tenant, "")
+}
+
+func createComputeInstanceInTenantAndProject(
+	ctx context.Context,
+	computeInstanceDao *dao.GenericDAO[*privatev1.ComputeInstance],
+	state privatev1.ComputeInstanceState,
+	tenant, project string,
+) *privatev1.ComputeInstance {
 	resp, err := computeInstanceDao.Create().SetObject(
 		privatev1.ComputeInstance_builder{
 			Metadata: privatev1.Metadata_builder{
-				Tenant: "shared",
-				Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+				Tenant:  tenant,
+				Project: project,
+				Name:    fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 			}.Build(),
 			Spec: privatev1.ComputeInstanceSpec_builder{
 				Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),

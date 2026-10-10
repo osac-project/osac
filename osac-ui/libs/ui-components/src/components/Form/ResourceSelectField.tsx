@@ -11,6 +11,7 @@ import {
 } from '@patternfly/react-core';
 import { useField } from 'formik';
 
+import type { ListParams } from '@osac/ui-components/api/types';
 import { useListResource } from '@osac/ui-components/api/use-resource';
 import { getErrorMessage } from '@osac/ui-components/utils/error';
 
@@ -34,7 +35,7 @@ export interface ResourceSelectFieldProps {
   label: string;
   fieldId: string;
   service: ListService;
-  request?: { filter?: string };
+  request?: Pick<ListParams, 'filter' | 'limit'>;
   isRequired?: boolean;
   isDisabled?: boolean;
   labelInfo?: ReactNode;

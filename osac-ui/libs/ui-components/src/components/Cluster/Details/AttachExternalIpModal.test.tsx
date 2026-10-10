@@ -2,14 +2,16 @@ import { create } from '@bufbuild/protobuf';
 import { screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { ComputeInstance, ExternalIP, ExternalIPAttachmentsCreateRequest } from '@osac/types';
-import { ExternalIPAttachmentsCreateResponseSchema, ExternalIPState } from '@osac/types';
+import type { ExternalIP, ExternalIPAttachmentsCreateRequest } from '@osac/types';
+import {
+  ExternalIPAttachmentEndpoint,
+  ExternalIPAttachmentsCreateResponseSchema,
+  ExternalIPState,
+} from '@osac/types';
 
 import AttachExternalIpModal from './AttachExternalIpModal';
 import type { MockTransportOverrides } from '../../../test-utils/createMockConnectTransport';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
-
-const vm = { id: 'vm-1', metadata: { name: 'test-vm' } } as ComputeInstance;
 
 const eligibleIp = {
   id: 'eip-1',
@@ -22,28 +24,31 @@ const eligibleIp = {
 } as ExternalIP;
 
 const renderModal = ({
+  endpoint = ExternalIPAttachmentEndpoint.EXTERNAL_IP_ATTACHMENT_ENDPOINT_API,
   onClose = vi.fn(),
   transportOverrides,
 }: {
+  endpoint?: ExternalIPAttachmentEndpoint;
   onClose?: () => void;
   transportOverrides?: MockTransportOverrides;
 } = {}) =>
-  renderWithProviders(<AttachExternalIpModal vm={vm} onClose={onClose} />, {
-    apiFixtures: { externalIps: [eligibleIp] },
-    transportOverrides,
-  });
+  renderWithProviders(
+    <AttachExternalIpModal clusterId="cluster-1" endpoint={endpoint} onClose={onClose} />,
+    { apiFixtures: { externalIps: [eligibleIp] }, transportOverrides },
+  );
 
 describe('AttachExternalIpModal', () => {
-  it('submits an attachment for the auto-selected unattached IP', async () => {
+  it('submits a cluster endpoint attachment without exposing a name field', async () => {
     const onClose = vi.fn();
     let createRequest: ExternalIPAttachmentsCreateRequest | undefined;
     const { user } = renderModal({
+      endpoint: ExternalIPAttachmentEndpoint.EXTERNAL_IP_ATTACHMENT_ENDPOINT_INGRESS,
       onClose,
       transportOverrides: {
-        onExternalIpAttachmentCreate: (req) => {
-          createRequest = req;
+        onExternalIpAttachmentCreate: (request) => {
+          createRequest = request;
           return create(ExternalIPAttachmentsCreateResponseSchema, {
-            object: { id: 'attachment-1', spec: req.object?.spec },
+            object: { id: 'attachment-1', spec: request.object?.spec },
           });
         },
       },
@@ -57,13 +62,12 @@ describe('AttachExternalIpModal', () => {
     await waitFor(() => {
       expect(createRequest?.object?.spec?.externalIp?.id).toBe('eip-1');
     });
-    expect(createRequest?.object?.metadata?.name).toMatch(
-      /^eipa-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    expect(createRequest?.object?.spec?.target.case).toBe('cluster');
+    expect(createRequest?.object?.spec?.target.value?.id).toBe('cluster-1');
+    expect(createRequest?.object?.spec?.targetEndpoint).toBe(
+      ExternalIPAttachmentEndpoint.EXTERNAL_IP_ATTACHMENT_ENDPOINT_INGRESS,
     );
-    expect(createRequest?.object?.spec?.target.case).toBe('computeInstance');
-    expect(createRequest?.object?.spec?.target.value?.id).toBe('vm-1');
-    await waitFor(() => {
-      expect(onClose).toHaveBeenCalled();
-    });
+    expect(createRequest?.object?.metadata?.name).toMatch(/^eipa-/);
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 });

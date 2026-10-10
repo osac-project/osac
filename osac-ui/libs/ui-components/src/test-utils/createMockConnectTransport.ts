@@ -24,6 +24,8 @@ import {
   ExternalIPAttachment,
   ExternalIPAttachmentsCreateRequest,
   ExternalIPAttachmentsCreateResponse,
+  ExternalIPAttachmentsDeleteRequest,
+  ExternalIPAttachmentsDeleteResponse,
   ExternalIPsCreateRequest,
   ExternalIPsCreateResponse,
   ExternalIPsListRequest,
@@ -225,21 +227,31 @@ const matchesReadyStateFilter = (
   return state === VirtualNetworkState.READY;
 };
 
+const matchesStringEqualityFilter = (
+  filter: string | undefined,
+  field: string,
+  value: string | undefined,
+): boolean => {
+  const prefix = field + ' == "';
+  if (!filter?.startsWith(prefix)) {
+    return true;
+  }
+  if (!filter.endsWith('"')) {
+    return false;
+  }
+  const encodedValue = filter.slice(prefix.length, -1);
+  try {
+    return value === JSON.parse('"' + encodedValue + '"');
+  } catch {
+    return false;
+  }
+};
+
 const matchesVirtualNetworkScopeFilter = (
   filter: string | undefined,
   virtualNetwork: string | undefined,
 ): boolean => {
-  if (!filter) {
-    return true;
-  }
-  const match = filter.match(/this\.spec\.virtual_network\.id == "([^"]+)"/);
-  if (!match) {
-    return true;
-  }
-  if (!virtualNetwork) {
-    return false;
-  }
-  return virtualNetwork === match[1];
+  return matchesStringEqualityFilter(filter, 'this.spec.virtual_network.id', virtualNetwork);
 };
 
 const matchesUnallocatedExternalIpFilter = (
@@ -449,6 +461,9 @@ export type MockTransportOverrides = {
   onExternalIpAttachmentCreate?: (
     req: ExternalIPAttachmentsCreateRequest,
   ) => ExternalIPAttachmentsCreateResponse | Promise<ExternalIPAttachmentsCreateResponse>;
+  onExternalIpAttachmentDelete?: (
+    req: ExternalIPAttachmentsDeleteRequest,
+  ) => ExternalIPAttachmentsDeleteResponse | Promise<ExternalIPAttachmentsDeleteResponse>;
   onVolumeGet?: (req: VolumesGetRequest) => VolumesGetResponse | Promise<VolumesGetResponse>;
   onVolumeCreate?: (req: VolumesCreateRequest) => VolumesCreateResponse;
   onVolumeDelete?: (req: VolumesDeleteRequest) => VolumesDeleteResponse;
@@ -1087,9 +1102,14 @@ export const createMockConnectTransport = (
 
       router.service(ExternalIPAttachments, {
         list: (req) => {
-          const items = externalIpAttachments.filter((item) =>
-            matchesSpecExternalIpIdInFilter(req.filter, item.spec?.externalIp?.id),
-          );
+          const items = externalIpAttachments.filter((item) => {
+            const clusterId =
+              item.spec?.target?.case === 'cluster' ? item.spec.target.value.id : undefined;
+            return (
+              matchesSpecExternalIpIdInFilter(req.filter, item.spec?.externalIp?.id) &&
+              matchesStringEqualityFilter(req.filter, 'this.spec.cluster.id', clusterId)
+            );
+          });
           return {
             items,
             size: items.length,
@@ -1109,6 +1129,16 @@ export const createMockConnectTransport = (
           } as ExternalIPAttachment;
           externalIpAttachments.push(created);
           return { object: created };
+        },
+        delete: async (req) => {
+          if (overrides.onExternalIpAttachmentDelete) {
+            return overrides.onExternalIpAttachmentDelete(req);
+          }
+          const index = externalIpAttachments.findIndex((item) => item.id === req.id);
+          if (index >= 0) {
+            externalIpAttachments.splice(index, 1);
+          }
+          return {};
         },
       });
 

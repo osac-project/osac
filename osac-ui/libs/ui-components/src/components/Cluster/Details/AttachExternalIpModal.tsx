@@ -1,4 +1,4 @@
-import type { ComputeInstance } from '@osac/types';
+import { ExternalIPAttachmentEndpoint } from '@osac/types';
 
 import {
   generateExternalIpAttachmentName,
@@ -7,26 +7,32 @@ import {
 import { useTranslation } from '../../../hooks/useTranslation';
 import ExternalIpAttachModal from '../../ExternalIp/AttachExternalIpModal';
 
-interface AttachExternalIpModalProps {
-  vm: ComputeInstance;
+export interface AttachExternalIpModalProps {
+  clusterId: string;
+  endpoint: ExternalIPAttachmentEndpoint;
   onClose: () => void;
 }
 
-const AttachExternalIpModal = ({ vm, onClose }: AttachExternalIpModalProps) => {
+const AttachExternalIpModal = ({ clusterId, endpoint, onClose }: AttachExternalIpModalProps) => {
   const { t } = useTranslation();
   const createAttachment = useCreateExternalIPAttachment();
+  const title =
+    endpoint === ExternalIPAttachmentEndpoint.EXTERNAL_IP_ATTACHMENT_ENDPOINT_API
+      ? t('Attach external IP to API endpoint')
+      : t('Attach external IP to Ingress endpoint');
 
   return (
     <ExternalIpAttachModal
-      title={t('Attach external IP')}
-      emptyDescription={t('Create an external IP first, then attach it to this virtual machine.')}
+      title={title}
+      emptyDescription={t('Create an external IP first, then attach it to this cluster endpoint.')}
       onAttach={(externalIpId) =>
         createAttachment.mutateAsync({
           object: {
             metadata: { name: generateExternalIpAttachmentName() },
             spec: {
               externalIp: { id: externalIpId },
-              target: { case: 'computeInstance', value: { id: vm.id } },
+              target: { case: 'cluster', value: { id: clusterId } },
+              targetEndpoint: endpoint,
             },
           },
         })

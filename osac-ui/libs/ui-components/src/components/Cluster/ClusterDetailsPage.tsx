@@ -14,7 +14,7 @@ export const ClusterDetailsPage = () => {
       <ResourceDetailsPageLoading
         parentTo="/clusters"
         parentLabel="Clusters"
-        tabLabels={['Overview', 'Conditions']}
+        tabLabels={['Overview', 'Networking', 'Node sets']}
         tabsId="cluster-detail-tabs"
       />
     );

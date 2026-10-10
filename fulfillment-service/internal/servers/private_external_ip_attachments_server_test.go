@@ -39,11 +39,23 @@ func createExternalIPInState(
 	state privatev1.ExternalIPState,
 	attached bool,
 ) *privatev1.ExternalIP {
+	return createExternalIPInTenantAndProject(ctx, externalIPDao, poolID, state, attached, testTenant, "")
+}
+
+func createExternalIPInTenantAndProject(
+	ctx context.Context,
+	externalIPDao *dao.GenericDAO[*privatev1.ExternalIP],
+	poolID string,
+	state privatev1.ExternalIPState,
+	attached bool,
+	tenant, project string,
+) *privatev1.ExternalIP {
 	resp, err := externalIPDao.Create().SetObject(
 		privatev1.ExternalIP_builder{
 			Metadata: privatev1.Metadata_builder{
-				Tenant: testTenant,
-				Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+				Tenant:  tenant,
+				Project: project,
+				Name:    fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 			}.Build(),
 			Spec: privatev1.ExternalIPSpec_builder{
 				Pool: privatev1.ExternalIPPoolReference_builder{Id: poolID}.Build(),
@@ -63,11 +75,28 @@ func createClusterInState(
 	ctx context.Context,
 	clusterDao *dao.GenericDAO[*privatev1.Cluster],
 ) *privatev1.Cluster {
+	return createClusterInTenant(ctx, clusterDao, testTenant)
+}
+
+func createClusterInTenant(
+	ctx context.Context,
+	clusterDao *dao.GenericDAO[*privatev1.Cluster],
+	tenant string,
+) *privatev1.Cluster {
+	return createClusterInTenantAndProject(ctx, clusterDao, tenant, "")
+}
+
+func createClusterInTenantAndProject(
+	ctx context.Context,
+	clusterDao *dao.GenericDAO[*privatev1.Cluster],
+	tenant, project string,
+) *privatev1.Cluster {
 	resp, err := clusterDao.Create().SetObject(
 		privatev1.Cluster_builder{
 			Metadata: privatev1.Metadata_builder{
-				Tenant: testTenant,
-				Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+				Tenant:  tenant,
+				Project: project,
+				Name:    fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
 				Template: privatev1.ClusterTemplateReference_builder{Id: "ocp_small"}.Build(),
@@ -82,11 +111,28 @@ func createBareMetalInstanceInState(
 	ctx context.Context,
 	bareMetalInstanceDao *dao.GenericDAO[*privatev1.BareMetalInstance],
 ) *privatev1.BareMetalInstance {
+	return createBareMetalInstanceInTenant(ctx, bareMetalInstanceDao, testTenant)
+}
+
+func createBareMetalInstanceInTenant(
+	ctx context.Context,
+	bareMetalInstanceDao *dao.GenericDAO[*privatev1.BareMetalInstance],
+	tenant string,
+) *privatev1.BareMetalInstance {
+	return createBareMetalInstanceInTenantAndProject(ctx, bareMetalInstanceDao, tenant, "")
+}
+
+func createBareMetalInstanceInTenantAndProject(
+	ctx context.Context,
+	bareMetalInstanceDao *dao.GenericDAO[*privatev1.BareMetalInstance],
+	tenant, project string,
+) *privatev1.BareMetalInstance {
 	resp, err := bareMetalInstanceDao.Create().SetObject(
 		privatev1.BareMetalInstance_builder{
 			Metadata: privatev1.Metadata_builder{
-				Tenant: testTenant,
-				Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+				Tenant:  tenant,
+				Project: project,
+				Name:    fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 			}.Build(),
 			Spec: privatev1.BareMetalInstanceSpec_builder{
 				CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "bcm_h100"}.Build(),
@@ -97,15 +143,32 @@ func createBareMetalInstanceInState(
 	return resp.GetObject()
 }
 
+func createProjectInTenant(ctx context.Context, tenant, project string) {
+	projectsDao, err := dao.NewGenericDAO[*privatev1.Project]().
+		SetLogger(logger).
+		SetTenancyLogic(tenancy).
+		Build()
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+	_, err = projectsDao.Create().SetObject(privatev1.Project_builder{
+		Id: project,
+		Metadata: privatev1.Metadata_builder{
+			Name:   project,
+			Tenant: tenant,
+		}.Build(),
+	}.Build()).Do(ctx)
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+}
+
 var _ = Describe("Private external IP attachments server", func() {
 	var (
-		server               *PrivateExternalIPAttachmentsServer
-		externalIPPoolDao    *dao.GenericDAO[*privatev1.ExternalIPPool]
-		externalIPDao        *dao.GenericDAO[*privatev1.ExternalIP]
-		computeInstanceDao   *dao.GenericDAO[*privatev1.ComputeInstance]
-		clusterDao           *dao.GenericDAO[*privatev1.Cluster]
-		bareMetalInstanceDao *dao.GenericDAO[*privatev1.BareMetalInstance]
-		sharedPool           *privatev1.ExternalIPPool
+		server                  *PrivateExternalIPAttachmentsServer
+		externalIPPoolDao       *dao.GenericDAO[*privatev1.ExternalIPPool]
+		externalIPDao           *dao.GenericDAO[*privatev1.ExternalIP]
+		computeInstanceDao      *dao.GenericDAO[*privatev1.ComputeInstance]
+		clusterDao              *dao.GenericDAO[*privatev1.Cluster]
+		bareMetalInstanceDao    *dao.GenericDAO[*privatev1.BareMetalInstance]
+		externalIPAttachmentDao *dao.GenericDAO[*privatev1.ExternalIPAttachment]
+		sharedPool              *privatev1.ExternalIPPool
 	)
 
 	BeforeEach(func() {
@@ -136,6 +199,12 @@ var _ = Describe("Private external IP attachments server", func() {
 		Expect(err).ToNot(HaveOccurred())
 
 		bareMetalInstanceDao, err = dao.NewGenericDAO[*privatev1.BareMetalInstance]().
+			SetLogger(logger).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		externalIPAttachmentDao, err = dao.NewGenericDAO[*privatev1.ExternalIPAttachment]().
 			SetLogger(logger).
 			SetTenancyLogic(tenancy).
 			Build()
@@ -890,6 +959,107 @@ var _ = Describe("Private external IP attachments server", func() {
 	})
 
 	Describe("Target reference validation", func() {
+		It("Rejects Create when the target belongs to another tenant or project", func() {
+			createProjectInTenant(ctx, testTenant, "other-project")
+			targets := []struct {
+				kind         string
+				createTarget func(string, string) string
+				setTarget    func(*privatev1.ExternalIPAttachmentSpec_builder, string)
+			}{
+				{
+					kind: "ComputeInstance",
+					createTarget: func(tenant, project string) string {
+						return createComputeInstanceInTenantAndProject(ctx, computeInstanceDao,
+							privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+							tenant, project).GetId()
+					},
+					setTarget: func(spec *privatev1.ExternalIPAttachmentSpec_builder, id string) {
+						spec.ComputeInstance = privatev1.ComputeInstanceLocalReference_builder{Id: id}.Build()
+					},
+				},
+				{
+					kind: "Cluster",
+					createTarget: func(tenant, project string) string {
+						return createClusterInTenantAndProject(ctx, clusterDao, tenant, project).GetId()
+					},
+					setTarget: func(spec *privatev1.ExternalIPAttachmentSpec_builder, id string) {
+						spec.Cluster = privatev1.ClusterLocalReference_builder{Id: id}.Build()
+						spec.TargetEndpoint = privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API
+					},
+				},
+				{
+					kind: "BareMetalInstance",
+					createTarget: func(tenant, project string) string {
+						return createBareMetalInstanceInTenantAndProject(ctx, bareMetalInstanceDao, tenant, project).GetId()
+					},
+					setTarget: func(spec *privatev1.ExternalIPAttachmentSpec_builder, id string) {
+						spec.BaremetalInstance = privatev1.BareMetalInstanceLocalReference_builder{Id: id}.Build()
+					},
+				},
+			}
+
+			scopes := []struct {
+				name          string
+				tenant        string
+				project       string
+				errorContains string
+			}{
+				{name: "another tenant", tenant: auth.SharedTenant, errorContains: "belongs to tenant"},
+				{name: "another project", tenant: testTenant, project: "other-project", errorContains: "belongs to project"},
+			}
+
+			for _, scope := range scopes {
+				for _, target := range targets {
+					By("rejecting " + target.kind + " targets in " + scope.name)
+					eip := createExternalIPInState(ctx, externalIPDao, sharedPool.GetId(),
+						privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false)
+					spec := privatev1.ExternalIPAttachmentSpec_builder{
+						ExternalIp: privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+					}
+					target.setTarget(&spec, target.createTarget(scope.tenant, scope.project))
+
+					_, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
+						Object: privatev1.ExternalIPAttachment_builder{
+							Metadata: privatev1.Metadata_builder{
+								Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+								Tenant: testTenant,
+							}.Build(),
+							Spec: spec.Build(),
+						}.Build(),
+					}.Build())
+					Expect(err).To(HaveOccurred())
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+					Expect(err).To(MatchError(ContainSubstring(target.kind)))
+					Expect(err).To(MatchError(ContainSubstring(scope.errorContains)))
+				}
+			}
+		})
+
+		It("Rejects Create when ExternalIP belongs to another project", func() {
+			createProjectInTenant(ctx, testTenant, "other-project")
+			eip := createExternalIPInTenantAndProject(ctx, externalIPDao, sharedPool.GetId(),
+				privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false, testTenant, "other-project")
+			ci := createComputeInstanceInState(ctx, computeInstanceDao,
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+
+			_, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
+				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						Tenant: testTenant,
+					}.Build(),
+					Spec: privatev1.ExternalIPAttachmentSpec_builder{
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err).To(MatchError(ContainSubstring("ExternalIP")))
+			Expect(err).To(MatchError(ContainSubstring("belongs to project")))
+		})
+
 		It("Rejects Create when ComputeInstance does not exist", func() {
 			eip := createExternalIPInState(ctx, externalIPDao, sharedPool.GetId(),
 				privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false)
@@ -1187,6 +1357,34 @@ var _ = Describe("Private external IP attachments server", func() {
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(err.Error()).To(ContainSubstring("identifier is mandatory"))
+		})
+
+		It("Rejects Delete when the target belongs to another project", func() {
+			createProjectInTenant(ctx, testTenant, "other-project")
+			eip := createExternalIPInState(ctx, externalIPDao, sharedPool.GetId(),
+				privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false)
+			ci := createComputeInstanceInTenantAndProject(ctx, computeInstanceDao,
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING, testTenant, "other-project")
+			attachmentResponse, err := externalIPAttachmentDao.Create().SetObject(
+				privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   "cross-project-delete-attachment",
+						Tenant: testTenant,
+					}.Build(),
+					Spec: privatev1.ExternalIPAttachmentSpec_builder{
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build(),
+					}.Build(),
+				}.Build(),
+			).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Delete(ctx, privatev1.ExternalIPAttachmentsDeleteRequest_builder{
+				Id: attachmentResponse.GetObject().GetId(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err).To(MatchError(ContainSubstring("belongs to project")))
 		})
 	})
 

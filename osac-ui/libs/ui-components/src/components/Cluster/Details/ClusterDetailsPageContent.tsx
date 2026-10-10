@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { type SyntheticEvent, useState } from 'react';
 import {
   Card,
   CardBody,
@@ -18,13 +18,17 @@ import {
   Tabs,
 } from '@patternfly/react-core';
 
-import type { Cluster } from '@osac/types';
+import { ExternalIPAttachmentEndpoint } from '@osac/types';
+import type { Cluster, ExternalIPAttachment } from '@osac/types';
 
+import AttachExternalIpModal from './AttachExternalIpModal';
 import ClusterDetailsActionButtons from './ClusterDetailsActionButtons';
 import ClusterDetailsSummary from './ClusterDetailsSummary';
+import ClusterExternalIpCard from './ClusterExternalIpCard';
 import { ClusterNetworkingDetailsTab } from './ClusterNetworkingDetailsTab';
 import ClusterNodeSetsTab from './ClusterNetworkingTab';
 import { ClusterOverviewTab } from './ClusterOverviewTab';
+import DetachExternalIpModal from './DetachExternalIpModal';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { ResourceConditionsTable } from '../../Resource/ResourceConditionsTable';
 import { ResourceDetailHeader } from '../../Resource/ResourceDetailHeader';
@@ -41,6 +45,15 @@ const CLUSTER_DETAIL_NODE_SETS_TAB_ID = 'cluster-detail-node-sets';
 const ClusterDetailsPageContent = ({ cluster }: ClusterDetailViewProps) => {
   const { t } = useTranslation();
   const [activeTabKey, setActiveTabKey] = useState(0);
+  const [attachEndpoint, setAttachEndpoint] = useState<ExternalIPAttachmentEndpoint | undefined>();
+  const [detachAttachment, setDetachAttachment] = useState<ExternalIPAttachment>();
+  const detachEndpoint = detachAttachment?.spec?.targetEndpoint;
+
+  const handleTabSelect = (_event: SyntheticEvent, tabIndex: string | number) => {
+    setActiveTabKey(Number(tabIndex));
+    setAttachEndpoint(undefined);
+    setDetachAttachment(undefined);
+  };
 
   return (
     <>
@@ -73,11 +86,7 @@ const ClusterDetailsPageContent = ({ cluster }: ClusterDetailViewProps) => {
             <Divider />
           </StackItem>
           <StackItem>
-            <Tabs
-              activeKey={activeTabKey}
-              onSelect={(_event, tabIndex) => setActiveTabKey(Number(tabIndex))}
-              id="cluster-detail-tabs"
-            >
+            <Tabs activeKey={activeTabKey} onSelect={handleTabSelect} id="cluster-detail-tabs">
               <Tab
                 eventKey={0}
                 title={<TabTitleText>{t('Overview')}</TabTitleText>}
@@ -134,19 +143,47 @@ const ClusterDetailsPageContent = ({ cluster }: ClusterDetailViewProps) => {
           </GridItem>
 
           <GridItem md={6}>
-            <Card isFullHeight>
-              <CardTitle>{t('Conditions')}</CardTitle>
-              <CardBody>
-                <ResourceConditionsTable
-                  ariaLabel={t('Cluster conditions')}
-                  conditions={cluster.status?.conditions ?? []}
-                  conditionResourceKind="cluster"
-                />
-              </CardBody>
-            </Card>
+            {activeTabKey === 0 && (
+              <Card isFullHeight>
+                <CardTitle>{t('Conditions')}</CardTitle>
+                <CardBody>
+                  <ResourceConditionsTable
+                    ariaLabel={t('Cluster conditions')}
+                    conditions={cluster.status?.conditions ?? []}
+                    conditionResourceKind="cluster"
+                  />
+                </CardBody>
+              </Card>
+            )}
+            {activeTabKey === 1 && (
+              <ClusterExternalIpCard
+                cluster={cluster}
+                onAttach={setAttachEndpoint}
+                onDetach={setDetachAttachment}
+              />
+            )}
           </GridItem>
         </Grid>
       </PageSection>
+
+      {attachEndpoint !== undefined && (
+        <AttachExternalIpModal
+          clusterId={cluster.id}
+          endpoint={attachEndpoint}
+          onClose={() => setAttachEndpoint(undefined)}
+        />
+      )}
+      {detachAttachment &&
+        (detachEndpoint === ExternalIPAttachmentEndpoint.EXTERNAL_IP_ATTACHMENT_ENDPOINT_API ||
+          detachEndpoint ===
+            ExternalIPAttachmentEndpoint.EXTERNAL_IP_ATTACHMENT_ENDPOINT_INGRESS) && (
+          <DetachExternalIpModal
+            attachment={detachAttachment}
+            externalIpAddress={detachAttachment.status?.externalIpAddress}
+            endpoint={detachEndpoint}
+            onClose={() => setDetachAttachment(undefined)}
+          />
+        )}
     </>
   );
 };

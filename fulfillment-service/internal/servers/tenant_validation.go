@@ -59,6 +59,24 @@ func validateTenantMatch(parentTenant string, referenced tenantMetadataObject,
 	return nil
 }
 
+// validateTenantProjectMatch validates that a referenced resource belongs to the exact
+// tenant/project scope of the object that owns the reference. An empty project denotes the
+// tenant's default project and must match another empty project exactly.
+func validateTenantProjectMatch(parentTenant, parentProject string, referenced tenantMetadataObject,
+	referencedKind, referencedID string) error {
+	if err := validateTenantMatch(parentTenant, referenced, referencedKind, referencedID); err != nil {
+		return err
+	}
+
+	referencedProject := referenced.GetMetadata().GetProject()
+	if parentProject != referencedProject {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"%s '%s' belongs to project '%s', expected project '%s'",
+			referencedKind, referencedID, referencedProject, parentProject)
+	}
+	return nil
+}
+
 func validateTenantOrShared(parentTenant string, referenced tenantMetadataObject,
 	referencedKind, referencedID, sharedTenant string) error {
 	if referenced == nil {

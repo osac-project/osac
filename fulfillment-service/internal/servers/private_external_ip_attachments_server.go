@@ -213,17 +213,21 @@ func (s *PrivateExternalIPAttachmentsServer) Create(ctx context.Context,
 	if err != nil {
 		return
 	}
+	attachmentProject := ""
+	if attachment.GetMetadata() != nil {
+		attachmentProject = attachment.GetMetadata().GetProject()
+	}
 
 	var externalIP *privatev1.ExternalIP
 	externalIP, err = s.validateExternalIPReference(ctx, externalIPKey)
 	if err != nil {
 		return
 	}
-	if err = validateTenantMatch(attachmentTenant, externalIP, "ExternalIP", externalIPKey); err != nil {
+	if err = validateExternalIPScope(attachmentTenant, attachmentProject, externalIPKey, externalIP); err != nil {
 		return
 	}
 
-	err = s.validateTargetReference(ctx, spec)
+	err = s.validateTargetReference(ctx, spec, attachmentTenant, attachmentProject)
 	if err != nil {
 		return
 	}
@@ -314,6 +318,15 @@ func (s *PrivateExternalIPAttachmentsServer) Delete(ctx context.Context,
 	id := request.GetId()
 	if id == "" {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
+		return
+	}
+
+	attachmentResponse, getErr := s.externalIPAttachmentDao.Get().SetId(id).Do(ctx)
+	if getErr != nil {
+		err = translateLifecycleError(getErr)
+		return
+	}
+	if err = s.validateAttachmentReferences(ctx, attachmentResponse.GetObject()); err != nil {
 		return
 	}
 
@@ -443,14 +456,14 @@ func (s *PrivateExternalIPAttachmentsServer) validateExternalIPReference(
 }
 
 func (s *PrivateExternalIPAttachmentsServer) validateTargetReference(
-	ctx context.Context, spec *privatev1.ExternalIPAttachmentSpec) error {
+	ctx context.Context, spec *privatev1.ExternalIPAttachmentSpec, attachmentTenant, attachmentProject string) error {
 	switch {
 	case spec.HasComputeInstance():
-		return s.validateComputeInstanceReference(ctx, spec.GetComputeInstance())
+		return s.validateComputeInstanceReference(ctx, spec.GetComputeInstance(), attachmentTenant, attachmentProject)
 	case spec.HasCluster():
-		return s.validateClusterReference(ctx, spec.GetCluster())
+		return s.validateClusterReference(ctx, spec.GetCluster(), attachmentTenant, attachmentProject)
 	case spec.HasBaremetalInstance():
-		return s.validateBareMetalInstanceReference(ctx, spec.GetBaremetalInstance())
+		return s.validateBareMetalInstanceReference(ctx, spec.GetBaremetalInstance(), attachmentTenant, attachmentProject)
 	default:
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"exactly one target must be set (compute_instance, cluster, or baremetal_instance)")
@@ -458,9 +471,9 @@ func (s *PrivateExternalIPAttachmentsServer) validateTargetReference(
 }
 
 func (s *PrivateExternalIPAttachmentsServer) validateComputeInstanceReference(
-	ctx context.Context, ref *privatev1.ComputeInstanceLocalReference) error {
+	ctx context.Context, ref *privatev1.ComputeInstanceLocalReference, attachmentTenant, attachmentProject string) error {
 	key := refKey(ref)
-	_, err := s.computeInstanceDao.Get().
+	response, err := s.computeInstanceDao.Get().
 		SetId(key).
 		SetLock(true).
 		Do(ctx)
@@ -472,13 +485,13 @@ func (s *PrivateExternalIPAttachmentsServer) validateComputeInstanceReference(
 		}
 		return ConvertDAOErrorToGRPC(err, "get", key)
 	}
-	return nil
+	return validateTenantProjectMatch(attachmentTenant, attachmentProject, response.GetObject(), "ComputeInstance", key)
 }
 
 func (s *PrivateExternalIPAttachmentsServer) validateClusterReference(
-	ctx context.Context, ref *privatev1.ClusterLocalReference) error {
+	ctx context.Context, ref *privatev1.ClusterLocalReference, attachmentTenant, attachmentProject string) error {
 	key := refKey(ref)
-	_, err := s.clusterDao.Get().
+	response, err := s.clusterDao.Get().
 		SetId(key).
 		SetLock(true).
 		Do(ctx)
@@ -490,13 +503,13 @@ func (s *PrivateExternalIPAttachmentsServer) validateClusterReference(
 		}
 		return ConvertDAOErrorToGRPC(err, "get", key)
 	}
-	return nil
+	return validateTenantProjectMatch(attachmentTenant, attachmentProject, response.GetObject(), "Cluster", key)
 }
 
 func (s *PrivateExternalIPAttachmentsServer) validateBareMetalInstanceReference(
-	ctx context.Context, ref *privatev1.BareMetalInstanceLocalReference) error {
+	ctx context.Context, ref *privatev1.BareMetalInstanceLocalReference, attachmentTenant, attachmentProject string) error {
 	key := refKey(ref)
-	_, err := s.bareMetalInstanceDao.Get().
+	response, err := s.bareMetalInstanceDao.Get().
 		SetId(key).
 		SetLock(true).
 		Do(ctx)
@@ -508,7 +521,37 @@ func (s *PrivateExternalIPAttachmentsServer) validateBareMetalInstanceReference(
 		}
 		return ConvertDAOErrorToGRPC(err, "get", key)
 	}
-	return nil
+	return validateTenantProjectMatch(attachmentTenant, attachmentProject, response.GetObject(), "BareMetalInstance", key)
+}
+
+func validateExternalIPScope(attachmentTenant, attachmentProject, externalIPKey string,
+	externalIP *privatev1.ExternalIP) error {
+	return validateTenantProjectMatch(attachmentTenant, attachmentProject, externalIP, "ExternalIP", externalIPKey)
+}
+
+func (s *PrivateExternalIPAttachmentsServer) validateAttachmentReferences(
+	ctx context.Context, attachment *privatev1.ExternalIPAttachment) error {
+	metadata := attachment.GetMetadata()
+	if metadata == nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "external IP attachment has no metadata")
+	}
+	attachmentTenant, err := resolveObjectTenant(ctx, metadata, s.tenancyLogic)
+	if err != nil {
+		return err
+	}
+	attachmentProject := metadata.GetProject()
+
+	externalIPKey := refKey(attachment.GetSpec().GetExternalIp())
+	externalIPResponse, err := s.externalIPDao.Get().SetId(externalIPKey).Do(ctx)
+	if err != nil {
+		return err
+	}
+	if err = validateExternalIPScope(attachmentTenant, attachmentProject, externalIPKey,
+		externalIPResponse.GetObject()); err != nil {
+		return err
+	}
+
+	return s.validateTargetReference(ctx, attachment.GetSpec(), attachmentTenant, attachmentProject)
 }
 
 func (s *PrivateExternalIPAttachmentsServer) getTargetID(

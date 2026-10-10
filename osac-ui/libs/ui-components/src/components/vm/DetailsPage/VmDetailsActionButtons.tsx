@@ -78,11 +78,7 @@ const VmDetailsActionButtons = ({ vm }: VmDetailsActionButtonsProps) => {
         />
       )}
       {attachExternalIpOpen && (
-        <AttachExternalIpModal
-          vm={vm}
-          onClose={() => setAttachExternalIpOpen(false)}
-          onSuccess={() => setAttachExternalIpOpen(false)}
-        />
+        <AttachExternalIpModal vm={vm} onClose={() => setAttachExternalIpOpen(false)} />
       )}
       {detachExternalIpOpen && externalIpAttachment && (
         <DetachExternalIpModal

@@ -1,0 +1,30 @@
+---
+- name: Compute assignment key for this backend
+  ansible.builtin.set_fact:
+    _assignment_key: >-
+      {{ ((_current_backend_id ~ '|' ~ tenant_name)
+          | hash('sha256'))[:16] | lower }}
+
+- name: Delete CSI Secret
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: Secret
+    name: "ontap-csi-{{ _assignment_key }}"
+    namespace: trident
+
+- name: Delete TridentBackendConfig
+  kubernetes.core.k8s:
+    state: absent
+    api_version: trident.netapp.io/v1
+    kind: TridentBackendConfig
+    name: "ontap-{{ _assignment_key }}"
+    namespace: trident
+
+- name: Delete StorageClasses for this tenant
+  kubernetes.core.k8s:
+    state: absent
+    api_version: storage.k8s.io/v1
+    kind: StorageClass
+    label_selectors:
+      - "osac.openshift.io/tenant={{ tenant_name }}"

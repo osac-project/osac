@@ -1,0 +1,39 @@
+---
+- name: Compute assignment key for this backend
+  ansible.builtin.set_fact:
+    _assignment_key: >-
+      {{ ((_current_backend_id ~ '|' ~ tenant_name)
+          | hash('sha256'))[:16] | lower }}
+
+- name: Delete Hub Lifecycle Secret
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: Secret
+    name: "ontap-tenant-{{ _assignment_key }}"
+    namespace: "{{ tenant_namespace }}"
+
+- name: Discover prepared runtime Secret
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "osac-{{ _assignment_key }}-credentials"
+    namespace: "{{ ontap_storage_config_namespace }}"
+  register: _prepared_secret_result
+  no_log: true
+
+- name: Release claim (atomic patch)
+  kubernetes.core.k8s:
+    state: patched
+    api_version: v1
+    kind: Secret
+    name: "{{ _prepared_secret_result.resources[0].metadata.name }}"
+    namespace: "{{ ontap_storage_config_namespace }}"
+    resource_definition:
+      metadata:
+        resourceVersion: "{{ _prepared_secret_result.resources[0].metadata.resourceVersion | string }}"
+        annotations:
+          osac.openshift.io/storage-assignment-state: retained
+  when: 
+    - _prepared_secret_result.resources | length > 0
+    - _prepared_secret_result.resources[0].metadata.annotations['osac.openshift.io/storage-assignment-state'] | default('') == 'claimed'

@@ -1,0 +1,26 @@
+---
+error_codes:
+  PreparedSvmNotFound:
+    code: PreparedSvmNotFound
+    retryable: false
+  PreparedSvmConfigMismatch:
+    code: PreparedSvmConfigMismatch
+    retryable: false
+  PreparedSvmClaimConflict:
+    code: PreparedSvmClaimConflict
+    retryable: false
+  PreparedSvmCredentialInvalid:
+    code: PreparedSvmCredentialInvalid
+    retryable: false
+  OntapEndpointUnreachable:
+    code: OntapEndpointUnreachable
+    retryable: true
+  OntapPermissionDenied:
+    code: OntapPermissionDenied
+    retryable: false
+  TridentBackendNotBound:
+    code: TridentBackendNotBound
+    retryable: true
+  OntapReadbackFailed:
+    code: OntapReadbackFailed
+    retryable: true

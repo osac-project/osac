@@ -1,0 +1,127 @@
+---
+- name: Compute assignment key for this backend
+  ansible.builtin.set_fact:
+    _assignment_key: >-
+      {{ ((_current_backend_id ~ '|' ~ tenant_name)
+          | hash('sha256'))[:16] | lower }}
+
+- name: Discover prepared runtime Secret
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "osac-{{ _assignment_key }}-credentials"
+    namespace: "{{ ontap_storage_config_namespace }}"
+  register: _prepared_secret_result
+  no_log: true
+
+- name: Fail if no prepared Secret found
+  ansible.builtin.fail:
+    msg: "{{ _error | to_json }}"
+  when: _prepared_secret_result.resources | length == 0
+  vars:
+    _error:
+      code: PreparedSvmNotFound
+      message: "No Secret named osac-{{ _assignment_key }}-credentials found in namespace {{ ontap_storage_config_namespace }}"
+      assignment_key: "{{ _assignment_key }}"
+      retryable: false
+
+- name: Extract prepared secret
+  ansible.builtin.set_fact:
+    _prepared_secret: "{{ _prepared_secret_result.resources[0] }}"
+  no_log: true
+
+- name: Verify assignment state is available or already claimed by this tenant
+  ansible.builtin.set_fact:
+    _current_state: "{{ _prepared_secret.metadata.annotations['osac.openshift.io/storage-assignment-state'] | default('unknown') }}"
+    _claimed_tenant: "{{ _prepared_secret.metadata.annotations['osac.openshift.io/storage-tenant-uid'] | default('') }}"
+
+- name: Fail if already claimed by another tenant
+  ansible.builtin.fail:
+    msg: "{{ _error | to_json }}"
+  when: >
+    _current_state != 'available' and
+    not (_current_state == 'claimed' and _claimed_tenant == tenant_uid)
+  vars:
+    _error:
+      code: PreparedSvmClaimConflict
+      message: "Secret osac-{{ _assignment_key }}-credentials is in state {{ _current_state }} and claimed by {{ _claimed_tenant }}"
+      assignment_key: "{{ _assignment_key }}"
+      retryable: false
+
+- name: Validate SVM via ONTAP REST
+  ansible.builtin.uri:
+    url: "https://{{ _prepared_secret.data.management_lif | b64decode }}/api/svm/svms?name={{ _prepared_secret.data.svm_name | b64decode }}"
+    method: GET
+    user: "{{ _prepared_secret.data.username | b64decode }}"
+    password: "{{ _prepared_secret.data.password | b64decode }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: [200]
+    return_content: true
+  register: _svm_validation
+  no_log: true
+  ignore_errors: true
+
+- name: Handle invalid credentials or unreachable
+  ansible.builtin.fail:
+    msg: "{{ _error | to_json }}"
+  when: _svm_validation.failed
+  vars:
+    _error:
+      code: PreparedSvmCredentialInvalid
+      message: "Failed to authenticate or connect to ONTAP management LIF for SVM {{ _prepared_secret.data.svm_name | b64decode | default('unknown') }}"
+      assignment_key: "{{ _assignment_key }}"
+      retryable: false
+
+- name: Parse SVM validation response
+  ansible.builtin.set_fact:
+    _svm_info: "{{ _svm_validation.json }}"
+  no_log: true
+
+- name: Check if SVM exists
+  ansible.builtin.fail:
+    msg: "{{ _error | to_json }}"
+  when: _svm_info.num_records == 0
+  vars:
+    _error:
+      code: PreparedSvmConfigMismatch
+      message: "SVM {{ _prepared_secret.data.svm_name | b64decode }} does not exist in the cluster"
+      assignment_key: "{{ _assignment_key }}"
+      retryable: false
+
+- name: Claim prepared Secret (atomic patch)
+  kubernetes.core.k8s:
+    state: patched
+    api_version: v1
+    kind: Secret
+    name: "{{ _prepared_secret.metadata.name }}"
+    namespace: "{{ ontap_storage_config_namespace }}"
+    resource_definition:
+      metadata:
+        resourceVersion: "{{ _prepared_secret.metadata.resourceVersion | string }}"
+        annotations:
+          osac.openshift.io/storage-assignment-state: claimed
+          osac.openshift.io/storage-tenant-uid: "{{ tenant_uid }}"
+          osac.openshift.io/storage-claimed-at: "{{ now(utc=true) | string }}"
+  when: _current_state == 'available'
+
+- name: Create Hub Lifecycle Secret
+  kubernetes.core.k8s:
+    state: present
+    api_version: v1
+    kind: Secret
+    name: "ontap-tenant-{{ _assignment_key }}"
+    namespace: "{{ tenant_namespace }}"
+    resource_definition:
+      metadata:
+        labels:
+          osac.openshift.io/tenant: "{{ tenant_name }}"
+          storage-provider: ontap
+          backend-id: "{{ _current_backend_id }}"
+      data:
+        assignment_key: "{{ _assignment_key | b64encode }}"
+        svm_name: "{{ _prepared_secret.data.svm_name }}"
+        management_lif: "{{ _prepared_secret.data.management_lif }}"
+        username: "{{ _prepared_secret.data.username }}"
+        password: "{{ _prepared_secret.data.password }}"
+  no_log: true

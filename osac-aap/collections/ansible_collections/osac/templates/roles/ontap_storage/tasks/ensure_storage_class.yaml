@@ -1,0 +1,75 @@
+---
+- name: Compute assignment key for this backend
+  ansible.builtin.set_fact:
+    _assignment_key: >-
+      {{ ((_current_backend_id ~ '|' ~ tenant_name)
+          | hash('sha256'))[:16] | lower }}
+
+- name: Retrieve Hub Lifecycle Secret
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "ontap-tenant-{{ _assignment_key }}"
+    namespace: "{{ tenant_namespace }}"
+  register: _hub_secret_result
+  no_log: true
+
+- name: Extract runtime credentials from Hub Secret
+  ansible.builtin.set_fact:
+    _runtime_creds: "{{ _hub_secret_result.resources[0].data }}"
+  no_log: true
+  when: _hub_secret_result.resources | length > 0
+
+- name: Create CSI Secret
+  kubernetes.core.k8s:
+    state: present
+    api_version: v1
+    kind: Secret
+    name: "ontap-csi-{{ _assignment_key }}"
+    namespace: trident
+    resource_definition:
+      type: Opaque
+      stringData:
+        username: "{{ _runtime_creds.username | b64decode }}"
+        password: "{{ _runtime_creds.password | b64decode }}"
+  no_log: true
+  when: _hub_secret_result.resources | length > 0
+
+- name: Create TridentBackendConfig
+  kubernetes.core.k8s:
+    state: present
+    api_version: trident.netapp.io/v1
+    kind: TridentBackendConfig
+    name: "ontap-{{ _assignment_key }}"
+    namespace: trident
+    resource_definition:
+      spec:
+        version: 1
+        storageDriverName: "{{ 'ontap-nas' if _provider_tiers[0].protocol == 'nfs' else 'ontap-san' }}"
+        backendName: "ontap-{{ _assignment_key }}"
+        managementLIF: "{{ _runtime_creds.management_lif | b64decode }}"
+        svm: "{{ _runtime_creds.svm_name | b64decode }}"
+        credentials:
+          name: "ontap-csi-{{ _assignment_key }}"
+  when: 
+    - _hub_secret_result.resources | length > 0
+    - _provider_tiers | length > 0
+
+- name: Create StorageClasses
+  kubernetes.core.k8s:
+    state: present
+    api_version: storage.k8s.io/v1
+    kind: StorageClass
+    name: "ontap-{{ _assignment_key }}-{{ (item.name | hash('sha256'))[:16] | lower }}"
+    resource_definition:
+      provisioner: csi.trident.netapp.io
+      parameters:
+        backendType: "{{ 'ontap-nas' if item.protocol == 'nfs' else 'ontap-san' }}"
+      reclaimPolicy: Delete
+      volumeBindingMode: WaitForFirstConsumer
+      metadata:
+        labels:
+          osac.openshift.io/tenant: "{{ tenant_name }}"
+          osac.openshift.io/tier: "{{ item.name }}"
+  loop: "{{ _provider_tiers }}"
+  when: _hub_secret_result.resources | length > 0

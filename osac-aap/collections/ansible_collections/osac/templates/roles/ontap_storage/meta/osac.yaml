@@ -1,0 +1,11 @@
+title: NetApp ONTAP Storage Provider
+template_type: storage_provider
+implementation_strategy: ontap
+capabilities:
+  supported_protocols:
+    - nfs
+    - iscsi
+  supports_nfs: true
+  supports_block: true
+  provisioning_targets:
+    - vmaas

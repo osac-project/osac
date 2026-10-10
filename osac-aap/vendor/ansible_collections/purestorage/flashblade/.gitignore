@@ -1,0 +1,6 @@
+*.tar.gz
+*.pyc
+.pylintrc
+.*.swp
+collections/ansible_collections/purestorage/flashblade/tests/output/*
+collections/ansible_collections/purestorage/flashblade/tests/output/.*

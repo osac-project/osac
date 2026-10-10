@@ -268,6 +268,13 @@ if [ "${STORAGE_TESTS_ENABLED:-}" = "true" ]; then
     "storage_provider_ensure_sc"
     "storage_provider_onboarding"
     "storage_provider_setup_rollback"
+    # Pure FlashBlade Realm checkout and credential validation. Hub-only -- it
+    # includes select_realm/read_realm_credentials directly, so it needs no
+    # FlashBlade and does not touch the mock VMS server, but it creates and
+    # deletes Secrets in osac-system and so must not run alongside the others.
+    "pure_storage_realm_checkout"
+    # Full setup dispatch against the mock FlashBlade on port 18444.
+    "pure_storage_setup"
     # Playbook-level wiring tests for osac.service.csi_driver_install (stub the
     # real Helm install via csi_driver_install_override, run the real
     # storage_provider dispatch after it) -- share this gate/mock server since

@@ -27,6 +27,8 @@ autopage==0.6.0
     # via cliff
 babel==2.18.0
     # via python-esiclient
+bcrypt==5.0.0
+    # via py-pure-client
 boto3==1.43.56
     # via osac-aap (pyproject.toml)
 botocore==1.43.56
@@ -54,6 +56,7 @@ cryptography==46.0.7
     # via
     #   ansible-core
     #   openstacksdk
+    #   py-pure-client
     #   python-openstackclient
 debtcollector==3.0.0
     # via
@@ -231,14 +234,20 @@ psutil==7.2.2
     #   python-esiclient
 ptyprocess==0.7.0
     # via pexpect
+py-pure-client==1.94.2
+    # via osac-aap (pyproject.toml)
 pycparser==3.0
     # via cffi
 pydantic==2.12.5
-    # via osac-aap (pyproject.toml)
+    # via
+    #   osac-aap (pyproject.toml)
+    #   py-pure-client
 pydantic-core==2.41.5
     # via pydantic
 pygments==2.19.2
     # via rich
+pyjwt==2.14.0
+    # via py-pure-client
 pyparsing==3.3.2
     # via oslo-utils
 pyperclip==1.11.0
@@ -252,6 +261,7 @@ python-dateutil==2.9.0.post0
     #   aiobotocore
     #   botocore
     #   kubernetes
+    #   py-pure-client
 python-esiclient @ git+https://github.com/cci-moc/python-esiclient.git@b9c4d2971193b6b1c755e0dfdd22fb4eab07f7f7
     # via osac-aap (pyproject.toml)
 python-esileapclient==1.1.0
@@ -355,6 +365,7 @@ urllib3==2.6.3
     #   osac-aap (pyproject.toml)
     #   botocore
     #   kubernetes
+    #   py-pure-client
     #   requests
 wcwidth==0.6.0
     # via prettytable

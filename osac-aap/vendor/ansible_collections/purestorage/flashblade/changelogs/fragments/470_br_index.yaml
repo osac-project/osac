@@ -1,0 +1,2 @@
+bugfixes:
+- purefb_bucket_replica - Fixed IndexError crash in check loop

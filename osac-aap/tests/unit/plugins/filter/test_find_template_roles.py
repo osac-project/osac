@@ -291,6 +291,7 @@ class TestMetadataTemplateTypes:
             ("agentless_net", TemplateTypeEnum.network),
             ("bm_host_agent_provisioning", TemplateTypeEnum.bare_metal_instance),
             ("vast_storage", TemplateTypeEnum.storage_provider),
+            ("pure_storage", TemplateTypeEnum.storage_provider),
             ("cert_manager", TemplateTypeEnum.addon_operator),
         ],
     )

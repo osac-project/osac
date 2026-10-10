@@ -327,6 +327,22 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
+  # Operator-initiated: provisions FlashBlade Realms with the array-wide admin
+  # token so tenant onboarding never needs it. No schedule -- a Realm is
+  # created when the storage team adds one. allow_simultaneous is false
+  # because two runs would race on the same array-side resources.
+  - name: "{{ aap_prefix }}-provision-pure-realms"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_provision_pure_realms.yml"
+    inventory: "{{ aap_prefix }}-cluster-fulfillment"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-cluster-fulfillment-ig"
+    allow_simultaneous: false
+    ask_variables_on_launch: true
+    verbosity: 0
   - name: "{{ aap_prefix }}-create-bare-metal-pool"
     project: "{{ aap_prefix }}"
     organization: "{{ aap_organization_name }}"
@@ -695,6 +711,9 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
               - name: agentless-net-inventory
                 mountPath: /var/config/agentless-net
                 readOnly: true
+              - name: pure-realms-config
+                mountPath: /var/config/pure-realms
+                readOnly: true
             env:
               - name: POD_NAMESPACE
                 valueFrom:
@@ -708,6 +727,17 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
                 valueFrom:
                   fieldRef:
                     fieldPath: metadata.uid
+              # Array-wide FlashBlade admin token, read only by
+              # osac-provision-pure-realms. Kept in its own Secret rather than
+              # the shared cluster-fulfillment-ig one below, and optional so a
+              # deployment with no Pure array still schedules -- the playbook
+              # reports a missing token itself.
+              - name: PUREFB_API
+                valueFrom:
+                  secretKeyRef:
+                    name: pure-array-admin
+                    key: api_token
+                    optional: true
             envFrom:
               - configMapRef:
                   name: cluster-fulfillment-ig
@@ -746,6 +776,10 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
         - name: agentless-net-inventory
           configMap:
             name: agentless-net-inventory
+            optional: true
+        - name: pure-realms-config
+          configMap:
+            name: pure-realms-config
             optional: true
   # For config-as-code job template, we expect the configuration and the
   # credentials to be passed in (prefix)-config-as-code-ig secret

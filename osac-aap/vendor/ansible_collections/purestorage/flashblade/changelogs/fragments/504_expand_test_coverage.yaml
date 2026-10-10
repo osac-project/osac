@@ -1,0 +1,3 @@
+minor_changes:
+  - Add comprehensive unit tests for purefb.py utilities (get_system, purefb_argument_spec)
+  - Expand test coverage from 15% to improve code quality and prevent regressions

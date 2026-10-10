@@ -12,6 +12,14 @@ if [ -f "${SCRIPT_DIR}/.mock_vms_pid" ]; then
   rm -f "${SCRIPT_DIR}/.mock_vms_pid"
 fi
 
+# Stop mock FlashBlade server if running
+if [ -f "${SCRIPT_DIR}/.mock_flashblade_pid" ]; then
+  MOCK_FB_PID=$(cat "${SCRIPT_DIR}/.mock_flashblade_pid")
+  echo "Stopping mock FlashBlade server (PID: ${MOCK_FB_PID})..."
+  kill "${MOCK_FB_PID}" 2>/dev/null || true
+  rm -f "${SCRIPT_DIR}/.mock_flashblade_pid"
+fi
+
 # Stop local OCI registry for csi_driver_install tests, if running. Mirrors
 # setup_test_env.sh's own 3-way container-tool detection (KIND_EXPERIMENTAL_PROVIDER >
 # docker > podman) -- a 2-way docker/podman-only cascade here could remove the wrong

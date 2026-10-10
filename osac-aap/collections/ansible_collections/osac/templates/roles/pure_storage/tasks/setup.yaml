@@ -1,0 +1,252 @@
+---
+# Tenant storage setup on Pure Storage FlashBlade.
+#
+# Receives from the dispatcher:
+#   _provider_tiers                — tiers with provider: pure
+#   _provider_backend_connections  — connection details for those tiers' backend_ids
+#
+# Must set before returning:
+#   storage_provider_tenant_config — mapping; the dispatcher accumulates it into
+#                                    _all_tenant_configs and storage_provider/tasks/setup.yaml
+#                                    fails the run if a dispatched provider omits it
+#
+# Backend connections are unused here. Pure authenticates per Realm, with
+# credentials read from the Realm's own hub Secret rather than from the tier's
+# backend entry.
+
+- name: "Verify tiers were dispatched to pure_storage"
+  ansible.builtin.assert:
+    that:
+      - _provider_tiers | default([]) | length > 0
+    fail_msg: "pure_storage setup was dispatched with no tiers."
+    quiet: true
+
+- name: "Verify tenant_name is a DNS label"
+  ansible.builtin.assert:
+    that:
+      - tenant_name is defined
+      - tenant_name | regex_search('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
+      - tenant_name | length <= 63
+    fail_msg: >-
+      tenant_name '{{ tenant_name | default('') }}' is not a DNS label. It names both the
+      hub Secret and the tenant's filesystems.
+    quiet: true
+
+- name: "Verify tier names are unique"
+  ansible.builtin.assert:
+    that:
+      - (_provider_tiers | map(attribute='name') | list | unique | length)
+        == (_provider_tiers | length)
+    fail_msg: "Duplicate tier names dispatched to pure_storage; filesystem names would collide."
+    quiet: true
+
+# Every fact the rescue and the idempotency branch consume is reset here, not
+# just the lock. These are host facts, so they outlive both the include_role
+# iteration and a play boundary -- meta: clear_facts does not reach them. A
+# second tenant dispatched after a first would otherwise inherit its rollback
+# list, and inherit _pure_secret_preexisting: true, which would make a brand
+# new tenant skip provisioning as though it had already been onboarded.
+- name: "Reset the rollback state left by any earlier dispatch"
+  ansible.builtin.set_fact:
+    _pure_lock_acquired: false
+    _pure_secret_written: false
+    _pure_secret_preexisting: false
+    _pure_created_filesystems: []
+    _pure_existing_config: {}
+
+- name: "Provision tenant storage on the FlashBlade"
+  block:
+    # Realm selection reads the whole pool, then writes one claim. Without a
+    # mutex two tenants onboarding at once can both observe the same Realm as
+    # free. One global lock, because the contended resource is the pool itself.
+    - name: "Acquire the Realm checkout lock"
+      ansible.builtin.include_role:
+        name: osac.service.lease
+      vars:
+        lease_state: present
+        lease_name: "{{ pure_storage_realm_lock_name }}"
+        lease_holder: "pure-storage-setup-{{ tenant_name }}"
+        lease_retries: "{{ pure_storage_realm_lock_retries }}"
+        lease_delay: "{{ pure_storage_realm_lock_delay }}"
+
+    # Only now is the lock ours to release. The always block runs even when
+    # acquisition itself failed, and releasing by name in that case would tear
+    # down a lock a different, still-running dispatch holds.
+    - name: "Record that the Realm checkout lock is held"
+      ansible.builtin.set_fact:
+        _pure_lock_acquired: true
+
+    - name: "Select the tenant's Realm"
+      ansible.builtin.include_tasks: select_realm.yaml
+
+    - name: "Read the Realm's credentials"
+      ansible.builtin.include_tasks: read_realm_credentials.yaml
+
+    - name: "Create the tenant's filesystems"
+      ansible.builtin.include_tasks: provision_flashblade.yaml
+      when: not (_pure_secret_preexisting | bool)
+
+    # A re-onboarded tenant skips provisioning, so the qualified resource names
+    # come back from the Secret written by the first run. Reading them without
+    # a default would raise a bare templating error naming no tenant and no
+    # field, so the damage is reported before it is dereferenced.
+    - name: "Fail when the existing tenant config records no FlashBlade resources"
+      vars:
+        _pure_absent_config_fields: >-
+          {{ ['nfs_server', 'nfs_policy']
+             | reject('in', _pure_existing_config | dict2items
+                             | selectattr('value', 'truthy')
+                             | map(attribute='key') | list)
+             | list }}
+      ansible.builtin.fail:
+        msg: >-
+          Tenant storage config Secret
+          '{{ pure_storage_tenant_config_secret_prefix }}{{ tenant_name }}' is missing
+          required field(s): {{ _pure_absent_config_fields | join(', ') }}. Repair the
+          Secret to name the FlashBlade resources the tenant's filesystems already use,
+          or delete it to re-onboard the tenant from scratch.
+      when:
+        - _pure_secret_preexisting | bool
+        - _pure_absent_config_fields | length > 0
+
+    - name: "Reuse the FlashBlade resource names recorded on the first onboard"
+      ansible.builtin.set_fact:
+        _pure_nfs_server: "{{ _pure_existing_config.nfs_server }}"
+        _pure_nfs_policy: "{{ _pure_existing_config.nfs_policy }}"
+        _pure_created_filesystems: []
+      when: _pure_secret_preexisting | bool
+
+    - name: "Write the tenant storage config Secret"
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ pure_storage_tenant_config_secret_prefix }}{{ tenant_name }}"
+            namespace: "{{ pure_storage_config_namespace }}"
+            labels:
+              osac.openshift.io/tenant: "{{ tenant_name }}"
+              osac.openshift.io/pure-realm: "{{ _realm_name }}"
+              app.kubernetes.io/managed-by: osac-aap
+          stringData:
+            storage_provider_type: pure
+            realm_name: "{{ _realm_name }}"
+            api_token: "{{ _api_token }}"
+            mgmt_endpoint: "{{ _mgmt_endpoint }}"
+            nfs_endpoint: "{{ _nfs_endpoint }}"
+            nfs_server: "{{ _pure_nfs_server }}"
+            nfs_policy: "{{ _pure_nfs_policy }}"
+      no_log: true
+
+    # Set only once the write has returned, and only ever by this run. The
+    # rescue deletes the Secret on the strength of this fact alone -- see the
+    # rollback task for why it cannot be inferred from the Secret's absence
+    # beforehand.
+    - name: "Record that this run wrote the tenant storage config Secret"
+      ansible.builtin.set_fact:
+        _pure_secret_written: true
+
+  rescue:
+    # Reverse dependency order, and filesystems only. The NFS server and export
+    # policy belong to the Realm, not to this tenant -- deleting them would
+    # strand every other tenant sharing it.
+    - name: "Roll back filesystems created in this run"
+      purestorage.flashblade.purefb_fs:
+        name: "{{ item }}"
+        realm: "{{ _realm_name }}"
+        state: absent
+        delete_link: true
+        fb_url: "{{ _mgmt_endpoint }}"
+        api_token: "{{ _api_token }}"
+        disable_warnings: "{{ not (pure_storage_validate_certs | bool) }}"
+      loop: "{{ _pure_created_filesystems | default([]) }}"
+      # A run that failed before the credentials were read has no Realm to
+      # address and no token to address it with; the list is empty in that
+      # case, but the module's arguments are templated regardless.
+      when: _realm_name is defined and _api_token | default('') | length > 0
+      ignore_errors: true # noqa: ignore-errors
+      no_log: true
+
+    # Gated on a fact only the successful write sets, never on a belief about
+    # whether the Secret existed beforehand. _pure_secret_preexisting is set
+    # inside select_realm, which runs after lease acquisition and pool
+    # validation -- so an ordinary lease timeout or a typo in PURE_REALM_POOL
+    # would leave it unset, and a rescue reading it as "false means this run
+    # created it" would delete an already-onboarded tenant's Secret, releasing
+    # its Realm to the next tenant while its filesystems still exist.
+    - name: "Roll back the tenant storage config Secret created in this run"
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "{{ pure_storage_tenant_config_secret_prefix }}{{ tenant_name }}"
+        namespace: "{{ pure_storage_config_namespace }}"
+      when:
+        - _pure_secret_written | default(false) | bool
+        - not (_pure_secret_preexisting | default(false) | bool)
+      ignore_errors: true # noqa: ignore-errors
+
+    # A looped task -- filesystem creation is one -- sets msg to the literal
+    # "One or more items failed" and leaves the array's own error in
+    # .results[*].msg, so reporting only the top-level msg would hand the
+    # operator a rollback notice naming no cause. The per-item messages are
+    # readable even from a no_log task: no_log censors what the callback
+    # prints, not what the rescue sees, and the module has already scrubbed
+    # its api_token out of them.
+    - name: "Report the failure that triggered rollback"
+      vars:
+        _pure_item_failures: >-
+          {{ ansible_failed_result.results | default([])
+             | selectattr('failed', 'defined') | selectattr('failed')
+             | selectattr('msg', 'defined') | map(attribute='msg')
+             | select('string') | list }}
+      ansible.builtin.fail:
+        msg: >-
+          Pure FlashBlade setup failed for tenant '{{ tenant_name }}' at task
+          '{{ ansible_failed_task.name | default('unknown') }}':
+          {{ _pure_item_failures | join('; ')
+             if (_pure_item_failures | length > 0)
+             else (ansible_failed_result.msg | default('no message')) }}
+
+  always:
+    - name: "Release the Realm checkout lock"
+      ansible.builtin.include_role:
+        name: osac.service.lease
+      vars:
+        lease_state: absent
+        lease_name: "{{ pure_storage_realm_lock_name }}"
+        lease_holder: "pure-storage-setup-{{ tenant_name }}"
+      when: _pure_lock_acquired | bool
+
+    # The output fact below is built after this block, so the Realm name and the
+    # resource names it reads are deliberately left in scope. Only the
+    # credentials are cleared.
+    # Everything a credential can reach, not just the three decoded values.
+    # k8s_info has no projection: a register that was only ever read for a
+    # label or a field name still holds the entire Secret body. So
+    # _pure_realm_claims holds every onboarded tenant's api_token, not only
+    # this one's; _pure_tenant_secret and _pure_realm_secret hold one each;
+    # and _pure_existing_config is a hub Secret with every field already
+    # base64-decoded. read_realm_credentials clears its own register on the
+    # success path, but not on either of its two failure exits -- this is
+    # what covers those.
+    - name: "Clear FlashBlade credentials from play scope"
+      ansible.builtin.set_fact:
+        _api_token: ""
+        _mgmt_endpoint: ""
+        _nfs_endpoint: ""
+        _pure_existing_config: {}
+        _pure_tenant_secret: {}
+        _pure_realm_secret: {}
+        _pure_realm_claims: {}
+        _pure_realm_claim_check: {}
+        _pure_realm_info: {}
+      no_log: true
+
+- name: "Set tenant config output for the dispatcher"
+  ansible.builtin.set_fact:
+    storage_provider_tenant_config:
+      realm_name: "{{ _realm_name }}"
+      nfs_server: "{{ _pure_nfs_server }}"
+      nfs_policy: "{{ _pure_nfs_policy }}"

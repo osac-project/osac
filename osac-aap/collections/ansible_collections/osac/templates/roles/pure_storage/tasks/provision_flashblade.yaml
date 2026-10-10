@@ -1,0 +1,97 @@
+---
+# Internal helper, not one of the four dispatched actions. Creates the tenant's
+# filesystems on the FlashBlade.
+#
+# The Realm's NFS server and export policy are not created here. They are
+# provisioned once per Realm by osac.service.pure_realm, which needs an
+# array-wide token; the Realm-scoped token this role holds cannot create them.
+# Their existence is asserted so a missing Realm fails with a pointer to the
+# provisioning playbook rather than an opaque FlashBlade error.
+#
+# Receives:
+#   _realm_name, _api_token, _mgmt_endpoint — from read_realm_credentials
+#   _provider_tiers                         — tiers with provider: pure
+#
+# Sets:
+#   _pure_nfs_server, _pure_nfs_policy — Realm-qualified names for the hub Secret
+#   _pure_created_filesystems          — rollback list for setup.yaml's rescue
+
+- name: "Resolve Realm-qualified FlashBlade resource names"
+  ansible.builtin.set_fact:
+    _pure_nfs_server: "{{ _realm_name }}::{{ pure_storage_nfs_server_name }}"
+    _pure_nfs_policy: "{{ _realm_name }}::{{ pure_storage_nfs_policy_name }}"
+    _pure_created_filesystems: []
+
+- name: "Read the Realm's servers and export policies"
+  purestorage.flashblade.purefb_info:
+    gather_subset:
+      - servers
+      - policies
+      - filesystems
+    fb_url: "{{ _mgmt_endpoint }}"
+    api_token: "{{ _api_token }}"
+    disable_warnings: "{{ not (pure_storage_validate_certs | bool) }}"
+  register: _pure_realm_info
+  no_log: true
+
+- name: "Fail when the Realm has no NFS server"
+  ansible.builtin.fail:
+    msg: >-
+      NFS server '{{ _pure_nfs_server }}' does not exist on the FlashBlade at
+      {{ _mgmt_endpoint }}. Run the osac-provision-pure-realms job template for Realm
+      '{{ _realm_name }}' before onboarding tenants onto it.
+  when: _pure_nfs_server not in (_pure_realm_info.purefb_info.servers | default({}) | list)
+
+- name: "Fail when the Realm has no NFS export policy"
+  ansible.builtin.fail:
+    msg: >-
+      NFS export policy '{{ _pure_nfs_policy }}' does not exist on the FlashBlade at
+      {{ _mgmt_endpoint }}. Run the osac-provision-pure-realms job template for Realm
+      '{{ _realm_name }}' before onboarding tenants onto it.
+  # purefb_info files NFS export policies under export_policies; the policies
+  # key holds snapshot policies, which never contain this name.
+  when: _pure_nfs_policy not in (_pure_realm_info.purefb_info.export_policies | default({}) | list)
+
+# Recorded before the loop runs, not after. A loop that fails on its second
+# item never reaches a task placed below it, so the rescue would find an empty
+# rollback list in exactly the case rollback exists for -- a partially created
+# tenant.
+#
+# Tiers whose filesystem already exists are excluded, because for those
+# purefb_fs patches rather than creates and rollback would destroy data this
+# run did not put there. That is reachable: the role itself tells an operator
+# to "delete it to re-onboard the tenant from scratch", and deleting the hub
+# Secret leaves the filesystems untouched. The names the array reports are
+# Realm-qualified; the rollback addresses filesystems by bare name with the
+# Realm passed separately, so the prefix is stripped before comparing.
+- name: "Record the filesystems this run may create"
+  vars:
+    _pure_realm_filesystems: >-
+      {{ _pure_realm_info.purefb_info.filesystems | default({}) | list
+         | map('regex_replace', '^' ~ (_realm_name | regex_escape) ~ '::', '')
+         | list }}
+  ansible.builtin.set_fact:
+    _pure_created_filesystems: >-
+      {{ _provider_tiers | map(attribute='name')
+         | map('regex_replace', '^', tenant_name ~ '-')
+         | reject('in', _pure_realm_filesystems) | list }}
+
+# purefb_fs has no 'server' option; placing the filesystem in the Realm via
+# 'realm' creates it as "<realm>::<name>", which is what binds it to that
+# Realm's server. The export policy carries the client restriction.
+- name: "Create tenant filesystems within the Realm"
+  purestorage.flashblade.purefb_fs:
+    name: "{{ tenant_name }}-{{ item.name }}"
+    realm: "{{ _realm_name }}"
+    size: "{{ item.size | default(pure_storage_fs_size) }}"
+    nfsv4: true
+    nfsv3: false
+    export_policy: "{{ _pure_nfs_policy }}"
+    state: present
+    fb_url: "{{ _mgmt_endpoint }}"
+    api_token: "{{ _api_token }}"
+    disable_warnings: "{{ not (pure_storage_validate_certs | bool) }}"
+  loop: "{{ _provider_tiers }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true

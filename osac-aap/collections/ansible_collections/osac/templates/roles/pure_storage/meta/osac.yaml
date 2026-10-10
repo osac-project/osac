@@ -1,0 +1,20 @@
+---
+name: pure-storage
+title: Pure Storage FlashBlade Provider
+description: >
+  Provisions Pure Storage FlashBlade NFS storage for OSAC tenants.
+  Uses pre-created Realms with Realm-scoped API tokens for tenant isolation.
+  Integrates with osac-csi-driver for CSI provisioning. Creates K8s Secrets
+  and StorageClasses with OSAC labels. Admin credentials never enter
+  tenant-namespace Secrets.
+
+template_type: storage_provider
+implementation_strategy: pure
+capabilities:
+  supported_protocols:
+    - nfs
+  provisioning_targets:
+    - vmaas
+    - hcp_control_plane
+    - hcp_worker_root
+    - hcp_data_plane

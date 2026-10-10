@@ -1,0 +1,6 @@
+bugfixes:
+ - purefb_certs - Fixes issue where intermediate_certificate
+   was not be applied to certificates.
+ - purefb_certs - Corrects typos in the parameter name.
+ - purefb_certs - Fixes certificate_type name from array to appliance
+ - purefb_certs - Removes immutable field certificate_type for the patch operation.

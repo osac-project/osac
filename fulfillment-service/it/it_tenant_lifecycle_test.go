@@ -218,7 +218,9 @@ func verifyTenantRemovedFromKeycloak(ctx context.Context, name string) {
 			g.Expect(json.Unmarshal(body, &kcTenants)).To(Succeed())
 			g.Expect(kcTenants).To(BeEmpty())
 		},
-		time.Minute,
+		// Keycloak organization deletion can complete asynchronously after the
+		// Fulfillment tenant and its finalizer have already been removed.
+		time.Minute*2,
 		time.Second,
 	).Should(Succeed())
 }

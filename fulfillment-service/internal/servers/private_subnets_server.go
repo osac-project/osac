@@ -19,14 +19,20 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"sort"
 
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	osaclabels "github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -36,6 +42,7 @@ type PrivateSubnetsServerBuilder struct {
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
 	filterDesc        protoreflect.MessageDescriptor
+	hubClientProvider HubClientProvider
 }
 
 var _ privatev1.SubnetsServer = (*PrivateSubnetsServer)(nil)
@@ -43,10 +50,13 @@ var _ privatev1.SubnetsServer = (*PrivateSubnetsServer)(nil)
 type PrivateSubnetsServer struct {
 	privatev1.UnimplementedSubnetsServer
 
-	logger            *slog.Logger
-	tenancyLogic      auth.TenancyLogic
-	generic           *GenericServer[*privatev1.Subnet]
-	virtualNetworkDao *dao.GenericDAO[*privatev1.VirtualNetwork]
+	logger              *slog.Logger
+	tenancyLogic        auth.TenancyLogic
+	generic             *GenericServer[*privatev1.Subnet]
+	virtualNetworkDao   *dao.GenericDAO[*privatev1.VirtualNetwork]
+	networkClassDao     *dao.GenericDAO[*privatev1.NetworkClass]
+	hubClientProvider   HubClientProvider
+	listVirtualMachines func(ctx context.Context, hubID, subnetID string) (int, error)
 }
 
 func NewPrivateSubnetsServer() *PrivateSubnetsServerBuilder {
@@ -82,6 +92,14 @@ func (b *PrivateSubnetsServerBuilder) SetFilterDesc(value protoreflect.MessageDe
 	return b
 }
 
+// SetHubClientProvider sets the provider used to inspect the VirtualNetwork hub for
+// existing KubeVirt VirtualMachine objects. It is required to enforce the cudn_evpn
+// multi-Subnet API guard in production.
+func (b *PrivateSubnetsServerBuilder) SetHubClientProvider(value HubClientProvider) *PrivateSubnetsServerBuilder {
+	b.hubClientProvider = value
+	return b
+}
+
 func (b *PrivateSubnetsServerBuilder) Build() (result *PrivateSubnetsServer, err error) {
 	// Check parameters:
 	if b.logger == nil {
@@ -95,6 +113,14 @@ func (b *PrivateSubnetsServerBuilder) Build() (result *PrivateSubnetsServer, err
 
 	// Create the VirtualNetwork DAO for parent validation:
 	virtualNetworkDao, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+	networkClassDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
@@ -122,6 +148,11 @@ func (b *PrivateSubnetsServerBuilder) Build() (result *PrivateSubnetsServer, err
 		tenancyLogic:      b.tenancyLogic,
 		generic:           generic,
 		virtualNetworkDao: virtualNetworkDao,
+		networkClassDao:   networkClassDao,
+		hubClientProvider: b.hubClientProvider,
+	}
+	if b.hubClientProvider != nil {
+		result.listVirtualMachines = result.listHubVirtualMachines
 	}
 	return
 }
@@ -148,6 +179,9 @@ func (s *PrivateSubnetsServer) Create(ctx context.Context,
 	if err != nil {
 		return
 	}
+	if err = s.validateEvpnSubnetCreation(ctx, subnet); err != nil {
+		return
+	}
 
 	// SUB-VAL-10: Set owner reference annotation automatically
 	if subnet.GetMetadata() == nil {
@@ -160,6 +194,148 @@ func (s *PrivateSubnetsServer) Create(ctx context.Context,
 
 	err = s.generic.Create(ctx, request, &response)
 	return
+}
+
+// validateEvpnSubnetCreation prevents adding a Subnet to a cudn_evpn
+// VirtualNetwork after the oldest Subnet's namespace contains a VirtualMachine.
+// The lookup is deliberately only applied to Create; updates and other managers
+// retain their existing behavior.
+func (s *PrivateSubnetsServer) validateEvpnSubnetCreation(ctx context.Context, subnet *privatev1.Subnet) error {
+	virtualNetworkID := refKey(subnet.GetSpec().GetVirtualNetwork())
+	virtualNetworkResponse, err := s.virtualNetworkDao.Get().SetId(virtualNetworkID).Do(ctx)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to query VirtualNetwork for sequential Subnet validation",
+			slog.String("virtual_network_id", virtualNetworkID), slog.Any("error", err))
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate sequential Subnet provisioning")
+	}
+	virtualNetwork := virtualNetworkResponse.GetObject()
+	networkClassID := refKey(virtualNetwork.GetSpec().GetNetworkClass())
+	if networkClassID == "" {
+		return grpcstatus.Errorf(grpccodes.Internal, "VirtualNetwork %q has no NetworkClass", virtualNetworkID)
+	}
+	networkClassResponse, err := s.networkClassDao.Get().SetId(networkClassID).Do(ctx)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to query NetworkClass for sequential Subnet validation",
+			slog.String("network_class_id", networkClassID), slog.Any("error", err))
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate sequential Subnet provisioning")
+	}
+	if networkClassResponse.GetObject().GetK8SManager() != "cudn_evpn" {
+		return nil
+	}
+
+	existingSubnets, err := s.listSubnetsForVirtualNetwork(ctx, virtualNetworkID)
+	if err != nil {
+		return err
+	}
+	if len(existingSubnets) == 0 {
+		return nil
+	}
+	oldestSubnet := oldestSubnet(existingSubnets)
+	hubID := virtualNetwork.GetStatus().GetHub()
+	if hubID == "" {
+		return grpcstatus.Errorf(grpccodes.Internal,
+			"VirtualNetwork %q has no hub assigned; cannot check Subnet %q for VirtualMachines",
+			virtualNetworkID, oldestSubnet.GetMetadata().GetName())
+	}
+	if s.listVirtualMachines == nil {
+		return grpcstatus.Errorf(grpccodes.Internal,
+			"hub client provider is unavailable; cannot check Subnet %q for VirtualMachines",
+			oldestSubnet.GetMetadata().GetName())
+	}
+	vmCount, err := s.listVirtualMachines(ctx, hubID, oldestSubnet.GetId())
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to inspect oldest Subnet namespace for VirtualMachines",
+			slog.String("virtual_network_id", virtualNetworkID),
+			slog.String("subnet", oldestSubnet.GetMetadata().GetName()),
+			slog.String("hub_id", hubID), slog.Any("error", err))
+		return grpcstatus.Errorf(grpccodes.Internal,
+			"failed to check whether oldest Subnet %q contains VirtualMachines",
+			oldestSubnet.GetMetadata().GetName())
+	}
+	if vmCount > 0 {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"Phase 1 cudn_evpn provisioning allows only one Subnet when the first Subnet %q contains VirtualMachines",
+			oldestSubnet.GetMetadata().GetName())
+	}
+	return nil
+}
+
+func (s *PrivateSubnetsServer) listSubnetsForVirtualNetwork(ctx context.Context, virtualNetworkID string) ([]*privatev1.Subnet, error) {
+	filter := fmt.Sprintf("this.spec.virtual_network.id == %[1]q || this.spec.virtual_network.name == %[1]q", virtualNetworkID)
+	var items []*privatev1.Subnet
+	var offset int32
+	for {
+		request := &privatev1.SubnetsListRequest{}
+		request.SetFilter(filter)
+		request.SetOffset(offset)
+		var response *privatev1.SubnetsListResponse
+		if err := s.generic.List(ctx, request, &response); err != nil {
+			s.logger.ErrorContext(ctx, "Failed to list sibling Subnets for sequential provisioning",
+				slog.String("virtual_network_id", virtualNetworkID), slog.Any("error", err))
+			return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to validate sequential Subnet provisioning")
+		}
+		items = append(items, response.GetItems()...)
+		if offset+response.GetSize() >= response.GetTotal() {
+			break
+		}
+		offset += response.GetSize()
+	}
+	return items, nil
+}
+
+func oldestSubnet(subnets []*privatev1.Subnet) *privatev1.Subnet {
+	sort.Slice(subnets, func(i, j int) bool {
+		left, right := subnets[i].GetMetadata(), subnets[j].GetMetadata()
+		leftTime, rightTime := left.GetCreationTimestamp(), right.GetCreationTimestamp()
+		switch {
+		case leftTime == nil && rightTime != nil:
+			return true
+		case leftTime != nil && rightTime == nil:
+			return false
+		case leftTime != nil && rightTime != nil && !leftTime.AsTime().Equal(rightTime.AsTime()):
+			return leftTime.AsTime().Before(rightTime.AsTime())
+		default:
+			return left.GetName() < right.GetName()
+		}
+	})
+	return subnets[0]
+}
+
+func (s *PrivateSubnetsServer) listHubVirtualMachines(ctx context.Context, hubID, subnetID string) (int, error) {
+	info, err := s.hubClientProvider.GetClient(ctx, hubID)
+	if err != nil {
+		return 0, err
+	}
+	if info == nil || info.Config == nil {
+		return 0, fmt.Errorf("hub %q returned no Kubernetes REST config", hubID)
+	}
+	dynamicClient, err := dynamic.NewForConfig(info.Config)
+	if err != nil {
+		return 0, fmt.Errorf("create hub Kubernetes client: %w", err)
+	}
+	// The hub Subnet CR uses a generated name, which is also the Namespace and
+	// CUDN name. Resolve it by the fulfillment Subnet ID label first.
+	subnetSelector := labels.Set{osaclabels.SubnetUuid: subnetID}.AsSelector().String()
+	subnets, err := dynamicClient.Resource(schema.GroupVersionResource{
+		Group: "osac.openshift.io", Version: "v1alpha1", Resource: "subnets",
+	}).Namespace(info.Namespace).List(ctx, metav1.ListOptions{LabelSelector: subnetSelector})
+	if err != nil {
+		return 0, fmt.Errorf("list hub Subnet CR for Subnet ID %q: %w", subnetID, err)
+	}
+	if len(subnets.Items) != 1 {
+		return 0, fmt.Errorf("expected one hub Subnet CR for Subnet ID %q, found %d", subnetID, len(subnets.Items))
+	}
+	namespace := subnets.Items[0].GetName()
+	if namespace == "" {
+		return 0, fmt.Errorf("hub Subnet CR for Subnet ID %q has no name", subnetID)
+	}
+	list, err := dynamicClient.Resource(schema.GroupVersionResource{
+		Group: "kubevirt.io", Version: "v1", Resource: "virtualmachines",
+	}).Namespace(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return 0, err
+	}
+	return len(list.Items), nil
 }
 
 // SUB-SVC-04: Update updates an existing Subnet with validation

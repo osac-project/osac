@@ -161,7 +161,6 @@ var _ = Describe("Reflection helper", func() {
 				"externalip",
 				"externalipattachment",
 				"fabricdomain",
-				"hosttype",
 				"identityprovider",
 				"instancetype",
 				"natgateway",
@@ -195,7 +194,6 @@ var _ = Describe("Reflection helper", func() {
 				"externalipattachments",
 				"externalips",
 				"fabricdomains",
-				"hosttypes",
 				"identityproviders",
 				"instancetypes",
 				"natgateways",
@@ -285,11 +283,6 @@ var _ = Describe("Reflection helper", func() {
 				"osac.public.v1.Cluster",
 			),
 			Entry(
-				"Host type in plural",
-				"hosttypes",
-				"osac.public.v1.HostType",
-			),
-			Entry(
 				"Tenant in singular",
 				"tenant",
 				"osac.public.v1.Tenant",
@@ -326,11 +319,6 @@ var _ = Describe("Reflection helper", func() {
 				"osac.public.v1.ClusterTemplate",
 			),
 			Entry(
-				"Host type",
-				"hosttype",
-				"osac.public.v1.HostType",
-			),
-			Entry(
 				"Compute instance template",
 				"computeinstancetemplate",
 				"osac.public.v1.ComputeInstanceTemplate",
@@ -359,11 +347,6 @@ var _ = Describe("Reflection helper", func() {
 				"Cluster template",
 				"clustertemplate",
 				&publicv1.ClusterTemplate{},
-			),
-			Entry(
-				"Host type",
-				"hosttype",
-				&publicv1.HostType{},
 			),
 		)
 
@@ -803,7 +786,6 @@ var _ = Describe("Reflection helper", func() {
 		})
 
 		It("Reports platform-scoped types correctly", func() {
-			Expect(helper.Lookup("hosttype").IsTenantScoped()).To(BeFalse())
 			Expect(helper.Lookup("tenant").IsTenantScoped()).To(BeFalse())
 			Expect(helper.Lookup("role").IsTenantScoped()).To(BeFalse())
 		})

@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { Dropdown, DropdownItem, DropdownList, MenuToggle } from '@patternfly/react-core';
+import { Dropdown, DropdownList, MenuToggle } from '@patternfly/react-core';
 import { EllipsisVIcon } from '@patternfly/react-icons/dist/esm/icons/ellipsis-v-icon';
 
 import type { Volume } from '@osac/types';
 import { VolumeState } from '@osac/types';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import VolumeDeleteConfirmModal from './VolumeDeleteConfirmModal';
 import { useTranslation } from '../../hooks/useTranslation';
@@ -46,7 +47,9 @@ const VolumeActionsMenu = ({ volume }: VolumeActionsMenuProps) => {
         popperProps={{ position: 'right' }}
       >
         <DropdownList>
-          <DropdownItem
+          <DeleteResourceButton
+            isDropdown
+            canDelete={!isDeleting}
             value="delete"
             isDisabled={isDeleting}
             onClick={() => {
@@ -56,9 +59,7 @@ const VolumeActionsMenu = ({ volume }: VolumeActionsMenuProps) => {
               setDeleteOpen(true);
               setOpen(false);
             }}
-          >
-            {t('Delete')}
-          </DropdownItem>
+          />
         </DropdownList>
       </Dropdown>
     </>

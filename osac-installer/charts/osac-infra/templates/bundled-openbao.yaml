@@ -31,9 +31,9 @@ data:
     ui = false
     disable_mlock = true
 
-    # No storage stanza: this deployment relies on `bao server -dev`
-    # (see the Deployment command) for its in-memory storage backend.
-    # Do not add a storage stanza here without also dropping -dev.
+    storage "file" {
+      path = "/vault/data/storage"
+    }
 
     listener "tcp" {
       address     = "0.0.0.0:8200"
@@ -53,10 +53,74 @@ data:
     #!/usr/bin/env sh
     set -eu
 
-    echo "Waiting for OpenBao to become ready..."
-    until bao status >/dev/null 2>&1; do
-      sleep 1
+    # This bundled instance is for testing. Keep the unseal key and initial
+    # root token with its data so the instance can recover after a restart.
+    umask 077
+    bootstrap_file=/vault/data/bootstrap.json
+    temporary_bootstrap_file="${bootstrap_file}.tmp"
+
+    get_status() {
+      bao status -format=json 2>/dev/null || true
+    }
+
+    status_value() {
+      printf '%s\n' "$status_json" | awk -F: -v field="\"$1\"" '
+        index($1, field) {
+          gsub(/[[:space:],"]/, "", $2)
+          print $2
+          exit
+        }'
+    }
+
+    echo "Waiting for the OpenBao API..."
+    status_json=""
+    until [ -n "$status_json" ]; do
+      status_json="$(get_status)"
+      [ -n "$status_json" ] || sleep 1
     done
+
+    if [ ! -s "$bootstrap_file" ] && [ -s "$temporary_bootstrap_file" ]; then
+      mv "$temporary_bootstrap_file" "$bootstrap_file"
+    fi
+
+    initialized="$(status_value initialized)"
+    if [ "$initialized" = false ]; then
+      echo "Initializing OpenBao..."
+      bao operator init -key-shares=1 -key-threshold=1 -format=json > "$temporary_bootstrap_file"
+      mv "$temporary_bootstrap_file" "$bootstrap_file"
+      status_json="$(get_status)"
+    elif [ "$initialized" != true ]; then
+      echo "ERROR: Could not determine whether OpenBao is initialized." >&2
+      exit 1
+    fi
+
+    if [ ! -s "$bootstrap_file" ]; then
+      echo "ERROR: OpenBao is initialized but its bootstrap file is missing." >&2
+      exit 1
+    fi
+
+    unseal_key="$(awk -F '\"' '
+      /\"unseal_keys_b64\"[[:space:]]*:/ { in_keys=1; next }
+      in_keys && NF >= 3 { print $2; exit }
+    ' "$bootstrap_file")"
+    root_token="$(awk -F '\"' '/\"root_token\"[[:space:]]*:/ { print $4; exit }' "$bootstrap_file")"
+    if [ -z "$unseal_key" ] || [ -z "$root_token" ]; then
+      echo "ERROR: Could not read OpenBao bootstrap material." >&2
+      exit 1
+    fi
+
+    sealed="$(status_value sealed)"
+    if [ "$sealed" = true ]; then
+      echo "Unsealing OpenBao..."
+      bao operator unseal "$unseal_key" >/dev/null
+      status_json="$(get_status)"
+    fi
+    if [ "$(status_value sealed)" != false ]; then
+      echo "ERROR: OpenBao remains sealed after unsealing." >&2
+      exit 1
+    fi
+
+    export BAO_TOKEN="$root_token"
     echo "OpenBao is ready."
 
     echo "Creating parent namespace '{{ .Values.bundledVault.vaultNamespace | default "osac" }}'..."
@@ -128,8 +192,14 @@ data:
     {{- end }}
 
     echo "OpenBao bootstrap complete."
-    unset BAO_TOKEN
-    sleep infinity
+    while :; do
+      sleep 5
+      status_json="$(get_status)"
+      if [ "$(status_value sealed)" = true ]; then
+        echo "OpenBao is sealed; unsealing it..."
+        bao operator unseal "$unseal_key" >/dev/null
+      fi
+    done
 ---
 apiVersion: v1
 kind: Service
@@ -145,6 +215,20 @@ spec:
   - name: api
     port: 8200
     targetPort: api
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: openbao-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -202,7 +286,8 @@ spec:
           name: {{ .Values.certs.caBundle.configMap }}
       {{- end }}
       - name: data
-        emptyDir: {}
+        persistentVolumeClaim:
+          claimName: openbao-data
       - name: tmp
         emptyDir: {}
       # home-openbao: writable home dir for the openbao user.
@@ -228,10 +313,6 @@ spec:
         command:
         - bao
         - server
-        - -dev
-        - -dev-no-store-token
-        - -dev-root-token-id={{ required "bundledVault.devRootToken must be set" .Values.bundledVault.devRootToken }}
-        - -dev-listen-address=127.0.0.1:8202
         - -config=/vault/config/config.hcl
         env:
         - name: BAO_ADDR
@@ -282,6 +363,13 @@ spec:
             scheme: HTTPS
           initialDelaySeconds: 5
           periodSeconds: 5
+        startupProbe:
+          httpGet:
+            path: /v1/sys/health
+            port: api
+            scheme: HTTPS
+          periodSeconds: 5
+          failureThreshold: 30
       - name: bootstrap
         image: {{ .Values.bundledVault.image }}
         imagePullPolicy: IfNotPresent
@@ -297,8 +385,6 @@ spec:
         env:
         - name: BAO_ADDR
           value: "https://localhost:8200"
-        - name: BAO_TOKEN
-          value: {{ required "bundledVault.devRootToken must be set" .Values.bundledVault.devRootToken | quote }}
         - name: BAO_CACERT
           {{- if .Values.certs.caBundle.configMap }}
           value: "/vault/ca/bundle.pem"
@@ -318,6 +404,8 @@ spec:
           mountPath: /scripts
         - name: server-cert
           mountPath: /vault/tls
+        - name: data
+          mountPath: /vault/data
         {{- if .Values.certs.caBundle.configMap }}
         - name: ca-bundle
           mountPath: /vault/ca

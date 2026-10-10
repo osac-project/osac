@@ -210,10 +210,10 @@ Required for a production deployment:
   `osac-db-metering-client-cert` Secrets when metering is enabled. For more
   information, see
   [`fulfillment-service/docs/INSTALL.md`](https://github.com/osac-project/osac/blob/main/fulfillment-service/docs/INSTALL.md).
-- **An external secret store.** The bundled OpenBao secret store is a single
-  ephemeral pod that loses data on restart. Before installing the `osac` chart,
-  prepare Vault or OpenBao, its Keycloak client, and the Kubernetes Secret and
-  CA bundle used by OSAC. See the
+- **An external secret store.** The bundled OpenBao instance is for testing and
+  CI, not production. Before installing the `osac` chart, prepare Vault or
+  OpenBao, its Keycloak client, and the Kubernetes Secret and CA bundle used by
+  OSAC. See the
   [secrets management configuration guide](secrets-management-configuration.md).
 
 Required for CaaS:
@@ -563,7 +563,7 @@ subchart's own `values.yaml` file.
 | `metering.reconciliation.interval`, `metering.m360Adapter.enabled`, `metering.m360Adapter.m360.apiUrl`, `metering.m360Adapter.apiKeySecret` | subchart | Reconcile period and the Monetize360 billing adapter. | Not applicable |
 | `validation.enabled` | schema | Runs the pre-installation validation hook. | `true` |
 | `metallb.enabled`, `metallb.addressCIDR` | schema | In the `osac` chart, creates an `IPAddressPool` and an `L2Advertisement`. Edit the pool after installation to match your network. | `false` and `192.168.40.0/24` |
-| `bundledVault.enabled`, `bundledVault.image`, `bundledVault.devRootToken` | schema | Ephemeral in-cluster OpenBao. For evaluation only. | `true` and `openbao:2.6.2` |
+| `bundledVault.enabled`, `bundledVault.image` | schema | In-cluster OpenBao for testing and CI. Not intended for production. | `true` and `openbao:2.6.2` |
 | `hubAccess.enabled` | schema | Creates hub-access RBAC and registers the local cluster as its own hub. Single-cluster development only. | `false` |
 | `bundledPostgres.enabled` | schema | Bundled PostgreSQL for testing only; not intended for production. | `false` |
 | `dbInit.host` | schema | Host that the `db-init` pre-installation hook connects to, to create the databases. Set it to your external PostgreSQL host for a production deployment. | `postgres.osac-infra.svc.cluster.local` |
@@ -1139,8 +1139,8 @@ Reapply the patch after any infrastructure reinstall that recreates this
 
 - The bundled PostgreSQL database (`bundledPostgres.enabled: true`) is for
   testing only and is not intended for production.
-- The bundled OpenBao secret store (`bundledVault.enabled: true`). It runs in
-  development mode and loses data on restart.
+- The bundled OpenBao secret store (`bundledVault.enabled: true`). It is for
+  testing and CI, not production.
 - `keycloak.devFixtures.enabled: true` and the default `admin` Keycloak
   credentials.
 - Development or CI reference values files and `main`/`latest` image tags.
@@ -1445,4 +1445,4 @@ with the correct `global.clusterDomain`.
   loads into AAP. Its subscription manifest is stored in the
   `config-as-code-manifest-ig` Secret.
 - **Bundled compared with external** — Bundled PostgreSQL is for testing, and
-  OpenBao is for evaluation. Production deployments use external services.
+  OpenBao is for testing and CI. Production deployments use external services.

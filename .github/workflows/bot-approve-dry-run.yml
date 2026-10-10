@@ -1,0 +1,56 @@
+---
+# Dry run of the planned automatic approval of dependency-update pull requests. For a pull request opened or updated by
+# Dependabot or Konflux it works out whether a person is needed to read it, and writes the answer and the reason to the
+# job summary and a JSON artifact. It approves nothing and posts nothing; people still approve (see osac-project/osac-ci,
+# README, "Approving dependency updates without a person"). The answer is "approve" only when every commit is the bot's
+# own, plain and signed, and every changed file is a dependency file; a commit added by a person, a hand rebase, an
+# "Update branch" merge, or a change to a workflow or a script makes it refuse.
+#
+# pull_request_target runs the workflow file from the default branch with the base repository's token (read-only here),
+# and nothing here checks out or runs pull request code: the decision comes from the API.
+name: Bot approval (dry run)
+on:  # zizmor: ignore[dangerous-triggers] -- no pull request code is checked out or run
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      number:
+        description: Pull request number
+        required: true
+
+permissions:
+  contents: read
+
+# The newest push is the one that matters: an older run is cancelled.
+concurrency:
+  group: bot-approve-dry-run-${{ github.event.pull_request.number || inputs.number }}
+  cancel-in-progress: true
+
+jobs:
+  decide:
+    # Only the two update bots; everything else would be answered "skip-not-a-bot" at the cost of a runner.
+    if: >-
+      github.repository == 'osac-project/osac' &&
+      (github.event_name == 'workflow_dispatch' ||
+       contains(fromJSON('["dependabot[bot]","red-hat-konflux-kflux-prd-rh02[bot]"]'), github.event.pull_request.user.login))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read  # the action is fetched from osac-ci by the runner; nothing of this repository is checked out
+      pull-requests: read  # read the pull request, its commits and files
+    steps:
+      - uses: osac-project/osac-ci/.github/actions/bot-decide@2ebc25f0261e3f88a5e737133c9f190928396319  # osac-ci main
+        id: decide
+        with:
+          github-token: ${{ github.token }}
+          repo: ${{ github.repository }}
+          number: ${{ github.event.pull_request.number || inputs.number }}
+      - name: Keep the decision
+        if: steps.decide.outputs.json-file != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: bot-decision-${{ github.run_id }}
+          path: ${{ steps.decide.outputs.json-file }}
+          retention-days: 14
+          if-no-files-found: ignore

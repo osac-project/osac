@@ -51,6 +51,10 @@ state descriptions live in [osac-project/osac-ci](https://github.com/osac-projec
 - `workflows/osac-ci-refresh.yml` answers `/osac-ci refresh` from the pull request's author or an owner, member or
   collaborator: it recomputes the verdict from live state and posts it, for when a verdict is out of date. The comment
   only decides whether the job runs; keep it out of every script and keep the per-comment concurrency group.
+- `workflows/bot-approve-dry-run.yml` is a dry run of the planned automatic approval of Dependabot and Konflux pull requests.
+  For each one it records, in the job summary and a JSON artifact, whether a person is needed (a commit that is not the bot's
+  own, plain and signed, or a change to anything but dependency files) and why. It approves nothing. The logic is in
+  osac-project/osac-ci (`osac-ci bot-decide`), pinned to a full commit SHA.
 - Changes to the files that define the checks (`.github/workflows`, `actions`, `scripts`, `filters`, `CODEOWNERS`,
   `.pre-commit-config.yaml`; Markdown in them excepted) need an approval from `@osac-project/wg-infra`. `CODEOWNERS` lists them and the OSAC CI
   policy applies the same list; keep both in step.

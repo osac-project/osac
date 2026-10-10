@@ -19,6 +19,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -34,7 +35,102 @@ func expectCRDCreateRejected(object client.Object) {
 	Expect(k8sClient.Create(ctx, object)).To(HaveOccurred())
 }
 
+func networkingContractObject(kind, name string, spec map[string]interface{}) *unstructured.Unstructured {
+	object := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "osac.openshift.io/v1alpha1",
+		"kind":       kind,
+		"metadata":   map[string]interface{}{"name": name, "namespace": "default"},
+		"spec":       spec,
+	}}
+	object.SetGroupVersionKind(v1alpha1.GroupVersion.WithKind(kind))
+	return object
+}
+
 var _ = Describe("IPv4-only networking CRD contracts", func() {
+	It("makes every networking resource spec immutable while allowing status and metadata updates", func() {
+		cases := []struct {
+			kind   string
+			spec   map[string]interface{}
+			mutate func(map[string]interface{})
+		}{
+			{
+				kind:   "VirtualNetwork",
+				spec:   map[string]interface{}{"region": "us-east-1", "ipv4Cidr": "10.240.0.0/16"},
+				mutate: func(spec map[string]interface{}) { spec["networkClass"] = "secondary" },
+			},
+			{
+				kind:   "Subnet",
+				spec:   map[string]interface{}{"virtualNetwork": "parent-vn", "ipv4Cidr": "10.240.1.0/24"},
+				mutate: func(spec map[string]interface{}) { spec["ipv6Cidr"] = "" },
+			},
+			{
+				kind: "SecurityGroup",
+				spec: map[string]interface{}{"virtualNetwork": "parent-vn"},
+				mutate: func(spec map[string]interface{}) {
+					spec["ingressRules"] = []interface{}{map[string]interface{}{"protocol": "all", "sourceCidr": "10.240.0.0/16"}}
+				},
+			},
+			{
+				kind:   "ExternalIPPool",
+				spec:   map[string]interface{}{"cidrs": []interface{}{"10.241.0.0/28"}, "ipFamily": "IPv4"},
+				mutate: func(spec map[string]interface{}) { spec["implementationStrategy"] = "netris" },
+			},
+			{
+				kind:   "ExternalIP",
+				spec:   map[string]interface{}{"pool": "pool-a"},
+				mutate: func(spec map[string]interface{}) { spec["pool"] = "pool-b" },
+			},
+			{
+				kind: "ExternalIPAttachment",
+				spec: map[string]interface{}{"externalIP": "public-ip", "computeInstance": "vm-a"},
+				mutate: func(spec map[string]interface{}) {
+					spec["computeInstance"] = "vm-b"
+				},
+			},
+			{
+				kind:   "NATGateway",
+				spec:   map[string]interface{}{"virtualNetwork": "parent-vn", "externalIP": "public-ip"},
+				mutate: func(spec map[string]interface{}) { spec["externalIP"] = "other-public-ip" },
+			},
+		}
+
+		for _, testCase := range cases {
+			By("rejecting spec updates for " + testCase.kind)
+			object := networkingContractObject(testCase.kind, networkingContractName("immutable"), testCase.spec)
+			Expect(k8sClient.Create(ctx, object)).To(Succeed())
+			DeferCleanup(func() {
+				current := networkingContractObject(testCase.kind, object.GetName(), nil)
+				err := k8sClient.Get(ctx, client.ObjectKeyFromObject(object), current)
+				if apierrors.IsNotFound(err) {
+					return
+				}
+				Expect(err).ToNot(HaveOccurred())
+				current.SetFinalizers(nil)
+				Expect(k8sClient.Update(ctx, current)).To(Succeed())
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, current))).To(Succeed())
+				Eventually(func() bool {
+					return apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(object), current))
+				}, 5*time.Second, 50*time.Millisecond).Should(BeTrue())
+			})
+
+			stored := networkingContractObject(testCase.kind, object.GetName(), nil)
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(object), stored)).To(Succeed())
+			testCase.mutate(stored.Object["spec"].(map[string]interface{}))
+			err := k8sClient.Update(ctx, stored)
+			Expect(err).To(HaveOccurred())
+			Expect(apierrors.IsInvalid(err)).To(BeTrue())
+
+			By("allowing metadata and status updates for " + testCase.kind)
+			stored = networkingContractObject(testCase.kind, object.GetName(), nil)
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(object), stored)).To(Succeed())
+			stored.SetFinalizers([]string{"osac.openshift.io/test-finalizer"})
+			stored.SetLabels(map[string]string{"contract-test": "allowed"})
+			Expect(k8sClient.Update(ctx, stored)).To(Succeed())
+			Expect(unstructured.SetNestedField(stored.Object, "Progressing", "status", "phase")).To(Succeed())
+			Expect(k8sClient.Status().Update(ctx, stored)).To(Succeed())
+		}
+	})
+
 	It("does not persist fabric VNIs in resource status", func() {
 		virtualNetwork := &unstructured.Unstructured{Object: map[string]interface{}{
 			"apiVersion": "osac.openshift.io/v1alpha1",

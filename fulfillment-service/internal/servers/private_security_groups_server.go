@@ -21,6 +21,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
@@ -378,6 +379,10 @@ func validateImmutableFieldsSecurityGroup(newSecurityGroup *privatev1.SecurityGr
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.virtual_network' is immutable and cannot be changed from '%s' to '%s'",
 			refKey(existingSpec.GetVirtualNetwork()), refKey(newSpec.GetVirtualNetwork()))
+	}
+	if !proto.Equal(newSpec, existingSpec) {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec' is immutable and cannot be changed after creation")
 	}
 
 	return nil

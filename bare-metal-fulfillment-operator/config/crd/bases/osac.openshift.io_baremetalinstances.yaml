@@ -88,8 +88,7 @@ spec:
               networkAttachments:
                 description: |-
                   NetworkAttachments for the bare metal instance. At most one tenant attachment is supported.
-                  The list structure is immutable after creation (entries cannot be added or removed),
-                  but securityGroupRefs within each entry can be updated.
+                  The complete value is immutable after creation; change it by recreating the instance.
 
                   MaxItems is required for CEL cost budget calculation.
                 items:
@@ -117,9 +116,8 @@ spec:
                       - message: primary is immutable
                         rule: self == oldSelf
                     securityGroupRefs:
-                      description: |-
-                        SecurityGroupRefs lists fulfillment SecurityGroup IDs applied on this NIC.
-                        Mutable — can be changed to add/remove security groups.
+                      description: SecurityGroupRefs lists fulfillment SecurityGroup
+                        IDs applied on this NIC.
                       items:
                         type: string
                       type: array
@@ -141,10 +139,6 @@ spec:
                 - subnetRef
                 x-kubernetes-list-type: map
                 x-kubernetes-validations:
-                - message: cannot change or add/remove network attachments after initial
-                    assignment
-                  rule: size(oldSelf) == 0 || (size(self) == size(oldSelf) && self.all(na,
-                    oldSelf.exists(old, old.subnetRef == na.subnetRef)))
                 - message: at most one network attachment is supported
                   rule: self.size() <= 1
               restartTrigger:
@@ -209,6 +203,10 @@ spec:
             - selector
             - templateID
             type: object
+            x-kubernetes-validations:
+            - message: networkAttachments are immutable after creation
+              rule: has(self.networkAttachments) == has(oldSelf.networkAttachments)
+                && (!has(self.networkAttachments) || self.networkAttachments == oldSelf.networkAttachments)
           status:
             description: BareMetalInstanceStatus defines the observed state of BareMetalInstance.
             properties:
@@ -537,6 +535,9 @@ spec:
                 type: string
             type: object
         type: object
+        x-kubernetes-validations:
+        - message: spec presence is immutable after creation
+          rule: has(self.spec) == has(oldSelf.spec)
     served: true
     storage: true
     subresources:

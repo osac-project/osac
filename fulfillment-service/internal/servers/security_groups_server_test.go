@@ -22,6 +22,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -431,6 +432,49 @@ var _ = Describe("SecurityGroups server", func() {
 				SetAttributionLogic(attribution).
 				SetTenancyLogic(tenancy).
 				Build()
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("rejects private rule edits before persistence while allowing status updates", func() {
+			created, err := privateServer.Create(ctx, privatev1.SecurityGroupsCreateRequest_builder{
+				Object: privatev1.SecurityGroup_builder{
+					Metadata: privatev1.Metadata_builder{Name: "immutable-security-group-rules", Tenant: testTenant}.Build(),
+					Spec: privatev1.SecurityGroupSpec_builder{
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
+						Ingress:        []*privatev1.SecurityRule{{Protocol: privatev1.Protocol_PROTOCOL_TCP, Ipv4Cidr: new("0.0.0.0/0")}},
+						Egress:         []*privatev1.SecurityRule{{Protocol: privatev1.Protocol_PROTOCOL_ALL, Ipv4Cidr: new("0.0.0.0/0")}},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			for _, path := range []string{"spec.ingress", "spec.egress"} {
+				changed := proto.Clone(created.GetObject()).(*privatev1.SecurityGroup)
+				if path == "spec.ingress" {
+					changed.GetSpec().GetIngress()[0].SetIpv4Cidr("10.0.0.0/8")
+				} else {
+					changed.GetSpec().SetEgress(nil)
+				}
+				_, err = privateServer.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{
+					Object: changed, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{path}},
+				}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument), path)
+				Expect(err).To(MatchError(ContainSubstring("spec' is immutable")), path)
+
+				stored, getErr := privateServer.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: created.GetObject().GetId()}.Build())
+				Expect(getErr).ToNot(HaveOccurred())
+				Expect(proto.Equal(stored.GetObject().GetSpec(), created.GetObject().GetSpec())).To(BeTrue(), path)
+			}
+
+			_, err = privateServer.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{
+				Object: privatev1.SecurityGroup_builder{
+					Id: created.GetObject().GetId(),
+					Status: privatev1.SecurityGroupStatus_builder{
+						State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 		})
 

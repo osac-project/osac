@@ -74,6 +74,7 @@ type SecurityRule struct {
 }
 
 // SecurityGroupSpec defines the desired state of SecurityGroup
+// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec is immutable after creation"
 type SecurityGroupSpec struct {
 	// VirtualNetwork is the ID of the parent VirtualNetwork
 	// +kubebuilder:validation:Required

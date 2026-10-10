@@ -50,7 +50,6 @@ type BareMetalNetworkAttachment struct {
 	SubnetRef string `json:"subnetRef"`
 
 	// SecurityGroupRefs lists fulfillment SecurityGroup IDs applied on this NIC.
-	// Mutable — can be changed to add/remove security groups.
 	// +kubebuilder:validation:Optional
 	SecurityGroupRefs []string `json:"securityGroupRefs,omitempty"`
 
@@ -70,6 +69,7 @@ type BareMetalNetworkAttachment struct {
 }
 
 // BareMetalInstanceSpec defines the desired state of BareMetalInstance.
+// +kubebuilder:validation:XValidation:rule="has(self.networkAttachments) == has(oldSelf.networkAttachments) && (!has(self.networkAttachments) || self.networkAttachments == oldSelf.networkAttachments)",message="networkAttachments are immutable after creation"
 type BareMetalInstanceSpec struct {
 	// ExternalHostID is the host ID from external inventory (used by Host Management Operator as node identifier).
 	// +kubebuilder:validation:Required
@@ -117,13 +117,11 @@ type BareMetalInstanceSpec struct {
 	// +kubebuilder:validation:Optional
 	RestartTrigger int64 `json:"restartTrigger"`
 	// NetworkAttachments for the bare metal instance. At most one tenant attachment is supported.
-	// The list structure is immutable after creation (entries cannot be added or removed),
-	// but securityGroupRefs within each entry can be updated.
+	// The complete value is immutable after creation; change it by recreating the instance.
 	//
 	// MaxItems is required for CEL cost budget calculation.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MaxItems=1
-	// +kubebuilder:validation:XValidation:rule="size(oldSelf) == 0 || (size(self) == size(oldSelf) && self.all(na, oldSelf.exists(old, old.subnetRef == na.subnetRef)))",message="cannot change or add/remove network attachments after initial assignment"
 	// +kubebuilder:validation:XValidation:rule="self.size() <= 1",message="at most one network attachment is supported"
 	// +listType=map
 	// +listMapKey=subnetRef
@@ -345,6 +343,7 @@ func (h *BareMetalInstance) GetPoolID() (string, bool) {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:validation:XValidation:rule="has(self.spec) == has(oldSelf.spec)",message="spec presence is immutable after creation"
 // +kubebuilder:resource:shortName=bmi
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Template",type=string,JSONPath=`.spec.templateID`

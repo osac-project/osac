@@ -31,6 +31,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
@@ -201,6 +202,7 @@ func (t *task) update(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	existingObject := object != nil
 
 	if t.bareMetalInstance.GetSpec().HasUserData() || t.bareMetalInstance.GetSpec().GetUserDataSecret() != nil {
 		t.userDataSecretName = fmt.Sprintf("%s%s", t.bareMetalInstance.GetId(), userDataSecretSuffix)
@@ -214,9 +216,20 @@ func (t *task) update(ctx context.Context) error {
 			},
 		}
 	}
+	storedNetworkAttachments := slices.Clone(object.Spec.NetworkAttachments)
 
 	result, err := controllerutil.CreateOrPatch(ctx, t.hubClient, object, func() error {
-		return t.mutateBMI(ctx, object)
+		if err := t.mutateBMI(ctx, object); err != nil {
+			return err
+		}
+		if existingObject {
+			if !equalNetworkAttachments(storedNetworkAttachments, object.Spec.NetworkAttachments) {
+				t.r.logger.WarnContext(ctx, "Private and stored network attachments differ; preserving stored network attachments on existing BareMetalInstance",
+					slog.String("namespace", object.GetNamespace()), slog.String("name", object.GetName()))
+			}
+			object.Spec.NetworkAttachments = storedNetworkAttachments
+		}
+		return nil
 	})
 	if err != nil {
 		return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)
@@ -825,8 +838,9 @@ func (t *task) mutateBMI(ctx context.Context, object *bmfov1alpha1.BareMetalInst
 	}
 
 	protoAttachments := t.bareMetalInstance.GetSpec().GetNetworkAttachments()
+	var networkAttachments []bmfov1alpha1.BareMetalNetworkAttachment
 	if len(protoAttachments) > 0 {
-		networkAttachments := make([]bmfov1alpha1.BareMetalNetworkAttachment, 0, len(protoAttachments))
+		networkAttachments = make([]bmfov1alpha1.BareMetalNetworkAttachment, 0, len(protoAttachments))
 		for _, att := range protoAttachments {
 			secGroupRefs := make([]string, 0, len(att.GetSecurityGroups()))
 			for _, sg := range att.GetSecurityGroups() {
@@ -843,10 +857,17 @@ func (t *task) mutateBMI(ctx context.Context, object *bmfov1alpha1.BareMetalInst
 				Primary:           primary,
 			})
 		}
-		object.Spec.NetworkAttachments = networkAttachments
 	}
+	object.Spec.NetworkAttachments = networkAttachments
 
 	return nil
+}
+
+func equalNetworkAttachments(left, right []bmfov1alpha1.BareMetalNetworkAttachment) bool {
+	if len(left) == 0 && len(right) == 0 {
+		return true
+	}
+	return apiequality.Semantic.DeepEqual(left, right)
 }
 
 func (t *task) mutateBMIMetadata(object *bmfov1alpha1.BareMetalInstance) {

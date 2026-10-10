@@ -98,17 +98,16 @@ type ComputeNetworkAttachment struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="subnetRef is immutable"
 	SubnetRef string `json:"subnetRef"`
 
 	// SecurityGroupRefs lists SecurityGroup CR names in the same namespace as the ComputeInstance.
-	// Mutable - can be changed to add/remove security groups without recreating the VM.
 	// +kubebuilder:validation:Optional
 	SecurityGroupRefs []string `json:"securityGroupRefs,omitempty"`
 }
 
 // ComputeInstanceSpec defines the desired state of ComputeInstance
 // +kubebuilder:validation:XValidation:rule="has(self.gpu) == has(oldSelf.gpu) && (!has(self.gpu) || self.gpu == oldSelf.gpu)",message="gpu is immutable"
+// +kubebuilder:validation:XValidation:rule="has(self.networkAttachments) == has(oldSelf.networkAttachments) && (!has(self.networkAttachments) || self.networkAttachments == oldSelf.networkAttachments)",message="networkAttachments are immutable after creation"
 type ComputeInstanceSpec struct {
 	// TemplateID is the unique identifier of the compute instance template to use when creating this compute instance
 	// +kubebuilder:validation:Required
@@ -174,29 +173,10 @@ type ComputeInstanceSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="sshKey is immutable"
 	SSHKey string `json:"sshKey,omitempty"`
 
-	// NetworkAttachments defines multiple NICs when more than one subnet (and optional security groups per NIC) is required.
-	// The first entry is the primary subnet for VM placement (subnet-namespace annotation).
-	// Subnet references (per ComputeNetworkAttachment) are immutable but security groups can be changed.
-	//
-	// Why immutability is required:
-	// Currently, ComputeInstances are created with a single NIC. The VM instance must be created in the namespace
-	// of the subnet it uses (the subnet-namespace annotation determines VM placement). This architectural constraint
-	// means that changing the subnet would require recreating the VM in a different namespace, which is not supported.
-	// Similarly, the array size cannot change because adding/removing NICs would require changing the primary subnet
-	// or the VM's namespace, both of which are immutable after VM creation.
-	//
-	// Immutability enforcement:
-	// - The +listType=map with +listMapKey=subnetRef markers correlate entries by subnetRef for updates
-	// - The size check below prevents adding or removing entries
-	// - The per-item subnetRef validation (self == oldSelf) prevents changing keys of existing entries
-	// Combined, these ensure only securityGroupRefs can be modified.
-	//
-	// MaxItems is required for CEL cost budget calculation: ComputeNetworkAttachment.SubnetRef has a CEL validation
-	// rule (self == oldSelf for immutability). Without maxItems, Kubernetes cannot bound the cost of iterating
-	// over array items to validate this rule, causing CRD installation to fail with "estimated rule cost exceeds budget".
+	// NetworkAttachments optionally connects the instance to a Subnet and SecurityGroups.
+	// The complete value is immutable after creation; change it by recreating the instance.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MaxItems=8
-	// +kubebuilder:validation:XValidation:rule="size(oldSelf) == 0 || (size(self) == size(oldSelf) && self.all(na, oldSelf.exists(old, old.subnetRef == na.subnetRef)))",message="cannot change or add/remove network attachments after initial assignment"
 	// +listType=map
 	// +listMapKey=subnetRef
 	NetworkAttachments []ComputeNetworkAttachment `json:"networkAttachments,omitempty"`

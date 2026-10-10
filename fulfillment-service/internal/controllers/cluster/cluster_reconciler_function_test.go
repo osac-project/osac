@@ -14,8 +14,10 @@ language governing permissions and limitations under the License.
 package cluster
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -131,6 +133,10 @@ var _ = Describe("update tenant annotation", func() {
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
 				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
+				NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
+					Subnet:         &privatev1.SubnetLocalReference{Name: "created-subnet"},
+					SecurityGroups: []*privatev1.SecurityGroupLocalReference{{Name: "created-security-group"}},
+				}.Build(),
 				AddOnOperators: []*privatev1.AddOnOperatorReference{
 					privatev1.AddOnOperatorReference_builder{Id: "operator-1", Name: "operator-one"}.Build(),
 					privatev1.AddOnOperatorReference_builder{Id: "operator-2", Name: "operator-two"}.Build(),
@@ -165,6 +171,10 @@ var _ = Describe("update tenant annotation", func() {
 		Expect(createdCR.GetAnnotations()).NotTo(HaveKey("osac.openshift.io/fulfillment-trust-enabled"))
 		Expect(createdCR.GetLabels()).To(HaveKeyWithValue(labels.ClusterOrderUuid, clusterID))
 		Expect(createdCR.Spec.AddOnOperators).To(Equal([]string{"operator-one", "operator-two"}))
+		Expect(createdCR.Spec.NetworkAttachment).To(Equal(&osacv1alpha1.ClusterNetworkAttachment{
+			SubnetRef:         "created-subnet",
+			SecurityGroupRefs: []string{"created-security-group"},
+		}))
 	})
 
 	It("should update ClusterOrder when node set size changes on a ready cluster", func() {
@@ -251,6 +261,81 @@ var _ = Describe("update tenant annotation", func() {
 		Expect(updatedCR.Spec.NodeRequests).To(HaveLen(1))
 		Expect(updatedCR.Spec.NodeRequests[0].BareMetal.InstanceType).To(Equal("gpu.gb200"))
 		Expect(updatedCR.Spec.NodeRequests[0].NumberOfNodes).To(Equal(5))
+	})
+
+	It("preserves the existing network attachment while patching a node set update", func() {
+		storedAttachment := &osacv1alpha1.ClusterNetworkAttachment{
+			SubnetRef:         "stored-subnet-private",
+			SecurityGroupRefs: []string{"stored-security-group-private"},
+		}
+		existingOrder := &osacv1alpha1.ClusterOrder{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "order-network-immutable",
+				Namespace: hubNamespace,
+				Labels:    map[string]string{labels.ClusterOrderUuid: clusterID},
+				Annotations: map[string]string{
+					annotations.Tenant: tenantName,
+				},
+			},
+			Spec: osacv1alpha1.ClusterOrderSpec{
+				TemplateID:        "test-template",
+				NetworkAttachment: storedAttachment,
+				NodeRequests: []osacv1alpha1.NodeRequest{{
+					NodeSet:       "gpu-gb200",
+					BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "gpu.gb200"},
+					NumberOfNodes: 3,
+				}},
+			},
+		}
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existingOrder).Build()
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().Get(gomock.Any(), hubID).Return(&controllers.HubEntry{
+			Namespace: hubNamespace,
+			Client:    fakeClient,
+		}, nil)
+		var logOutput bytes.Buffer
+		t := &task{
+			r: &function{
+				logger:   slog.New(slog.NewTextHandler(&logOutput, nil)),
+				hubCache: hubCache,
+			},
+			cluster: privatev1.Cluster_builder{
+				Id: clusterID,
+				Metadata: privatev1.Metadata_builder{
+					Finalizers: []string{finalizers.Controller},
+					Tenant:     tenantName,
+				}.Build(),
+				Spec: privatev1.ClusterSpec_builder{
+					Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
+					NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
+						Subnet:         &privatev1.SubnetLocalReference{Name: "requested-subnet"},
+						SecurityGroups: []*privatev1.SecurityGroupLocalReference{{Name: "requested-security-group"}},
+					}.Build(),
+					NodeSets: map[string]*privatev1.ClusterNodeSet{
+						"gpu-gb200": privatev1.ClusterNodeSet_builder{
+							BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu.gb200"},
+							Size:                  proto.Int32(5),
+						}.Build(),
+					},
+				}.Build(),
+				Status: privatev1.ClusterStatus_builder{
+					State: privatev1.ClusterState_CLUSTER_STATE_READY,
+					Hub:   hubID,
+				}.Build(),
+			}.Build(),
+		}
+
+		Expect(t.update(ctx)).To(Succeed())
+		updatedOrder := &osacv1alpha1.ClusterOrder{}
+		Expect(fakeClient.Get(ctx, clnt.ObjectKeyFromObject(existingOrder), updatedOrder)).To(Succeed())
+		Expect(updatedOrder.Spec.NetworkAttachment).To(Equal(storedAttachment))
+		Expect(updatedOrder.Spec.NodeRequests).To(HaveLen(1))
+		Expect(updatedOrder.Spec.NodeRequests[0].NumberOfNodes).To(Equal(5))
+		Expect(logOutput.String()).To(ContainSubstring("preserving stored network attachment"))
+		Expect(logOutput.String()).NotTo(ContainSubstring("stored-subnet-private"))
+		Expect(logOutput.String()).NotTo(ContainSubstring("stored-security-group-private"))
 	})
 
 	It("should update ClusterOrder when node set size changes on a progressing cluster", func() {

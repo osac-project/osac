@@ -113,17 +113,7 @@ var _ = Describe("ComputeInstance CEL Validation", func() {
 	})
 
 	Describe("NetworkAttachment immutability", func() {
-		It("documents limitation: changing subnetRef via full replacement bypasses validation", func() {
-			// LIMITATION: With listType=map, changing the map key (subnetRef) is treated as
-			// removing the old item and adding a new item. Since the array size stays the same,
-			// the size check passes. The self==oldSelf validation on subnetRef doesn't trigger
-			// because Kubernetes sees these as different items (different keys = uncorrelated).
-			//
-			// Preventing this edge case would require a validating webhook that checks if
-			// the set of subnetRef values has changed.
-			//
-			// In practice, this is unlikely to occur accidentally since changing a VM's subnet
-			// typically requires explicit user action, and the VM would need to be recreated anyway.
+		It("should reject replacing a subnetRef", func() {
 			instance := createValidInstance("test-subnet-replacement")
 			instance.Spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{
 				{SubnetRef: "subnet-a", SecurityGroupRefs: []string{"sg-1"}},
@@ -134,17 +124,17 @@ var _ = Describe("ComputeInstance CEL Validation", func() {
 			// Fetch latest version
 			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), instance)).To(Succeed())
 
-			// Replace with different subnetRef (same size, different key)
-			// This currently is NOT prevented by CEL validations
+			// Replace with a different subnetRef while keeping the list size unchanged.
 			instance.Spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{
 				{SubnetRef: "subnet-b", SecurityGroupRefs: []string{"sg-1"}},
 			}
 			err := k8sClient.Update(ctx, instance)
-			// Currently this succeeds - documenting known limitation
-			_ = err // May or may not fail depending on future webhook implementation
+			Expect(err).To(HaveOccurred())
+			Expect(apierrors.IsInvalid(err)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("networkAttachments are immutable after creation"))
 		})
 
-		It("should allow changing securityGroupRefs without changing subnetRef", func() {
+		It("should reject changing securityGroupRefs without changing subnetRef", func() {
 			instance := createValidInstance("test-sg-mutable")
 			instance.Spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{
 				{SubnetRef: "subnet-a", SecurityGroupRefs: []string{"sg-1"}},
@@ -157,35 +147,30 @@ var _ = Describe("ComputeInstance CEL Validation", func() {
 
 			// Change only securityGroupRefs
 			instance.Spec.NetworkAttachments[0].SecurityGroupRefs = []string{"sg-2", "sg-3"}
-			Expect(k8sClient.Update(ctx, instance)).To(Succeed())
+			err := k8sClient.Update(ctx, instance)
+			Expect(err).To(HaveOccurred())
+			Expect(apierrors.IsInvalid(err)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("networkAttachments are immutable after creation"))
 		})
 
-		It("should reject adding networkAttachment entries", func() {
+		It("should reject adding the first networkAttachment after creation", func() {
 			instance := createValidInstance("test-add-attachment")
-			instance.Spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{
-				{SubnetRef: "subnet-a"},
-			}
-
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
 
 			// Fetch latest version
 			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), instance)).To(Succeed())
 
-			// Try to add another networkAttachment
-			instance.Spec.NetworkAttachments = append(instance.Spec.NetworkAttachments,
-				osacv1alpha1.ComputeNetworkAttachment{SubnetRef: "subnet-b"},
-			)
+			// Try to add the optional field after creation.
+			instance.Spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: "subnet-a"}}
 			err := k8sClient.Update(ctx, instance)
 			Expect(err).To(HaveOccurred())
 			Expect(apierrors.IsInvalid(err)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("networkAttachments are immutable after creation"))
 		})
 
-		It("should reject removing networkAttachment entries", func() {
+		It("should reject removing the networkAttachment after creation", func() {
 			instance := createValidInstance("test-remove-attachment")
-			instance.Spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{
-				{SubnetRef: "subnet-a"},
-				{SubnetRef: "subnet-b"},
-			}
+			instance.Spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: "subnet-a"}}
 
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
 
@@ -193,14 +178,12 @@ var _ = Describe("ComputeInstance CEL Validation", func() {
 			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), instance)).To(Succeed())
 
 			// Try to remove a networkAttachment
-			instance.Spec.NetworkAttachments = instance.Spec.NetworkAttachments[:1]
+			instance.Spec.NetworkAttachments = nil
 			err := k8sClient.Update(ctx, instance)
 			Expect(err).To(HaveOccurred())
 			Expect(apierrors.IsInvalid(err)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("networkAttachments are immutable after creation"))
 		})
-
-		// Removed: duplicate of "documents limitation: changing subnetRef via full replacement bypasses validation"
-		// This test was testing the same edge case - see that test for explanation.
 	})
 
 	Describe("Image immutability", func() {
@@ -415,6 +398,7 @@ var _ = Describe("ComputeInstance CEL Validation", func() {
 
 		It("should allow changing runStrategy", func() {
 			instance := createValidInstance("test-runstrategy-mutable")
+			instance.Spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: "subnet-a"}}
 			instance.Spec.RunStrategy = osacv1alpha1.RunStrategyAlways
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
 
@@ -432,6 +416,7 @@ var _ = Describe("ComputeInstance CEL Validation", func() {
 
 		It("should allow setting restartRequestedAt", func() {
 			instance := createValidInstance("test-restart-mutable")
+			instance.Spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: "subnet-a"}}
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
 
 			// Fetch latest version

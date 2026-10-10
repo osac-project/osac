@@ -531,7 +531,7 @@ var _ = Describe("IPv4-only SecurityGroup gRPC contract", func() {
 		Entry("dual-stack egress", false, privatev1.SecurityRule_builder{Protocol: privatev1.Protocol_PROTOCOL_ALL, Ipv4Cidr: new("10.246.0.0/24"), Ipv6Cidr: new("2001:db8::/64")}.Build(), "IPv6 and dual-stack"),
 	)
 
-	It("rejects an invalid field-masked ingress update without changing the stored rule", func() {
+	It("rejects a field-masked ingress change without changing the stored rule", func() {
 		fixture := newIPv4NetworkingContractFixture(ctx)
 		rule := privatev1.SecurityRule_builder{Protocol: privatev1.Protocol_PROTOCOL_ALL, Ipv4Cidr: new("0.0.0.0/0")}.Build()
 		response, err := client.Create(ctx, privatev1.SecurityGroupsCreateRequest_builder{
@@ -551,13 +551,16 @@ var _ = Describe("IPv4-only SecurityGroup gRPC contract", func() {
 				Spec: privatev1.SecurityGroupSpec_builder{
 					Ingress: []*privatev1.SecurityRule{{
 						Protocol: privatev1.Protocol_PROTOCOL_ALL,
-						Ipv4Cidr: new("10.247.0.1/24"),
+						Ipv4Cidr: new("10.247.0.0/24"),
 					}},
 				}.Build(),
 			}.Build(),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.ingress"}},
 		}.Build())
-		expectIPv4ContractError(err, "canonical")
+		expectIPv4ContractError(err, "spec' is immutable")
+		stored, err := client.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: fixture.securityGroupID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(stored.GetObject().GetSpec().GetIngress()[0].GetIpv4Cidr()).To(Equal("0.0.0.0/0"))
 	})
 })
 

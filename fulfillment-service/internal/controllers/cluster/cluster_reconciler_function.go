@@ -31,6 +31,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -299,6 +300,11 @@ func (t *task) update(ctx context.Context) error {
 			slog.String("name", object.GetName()),
 		)
 	} else {
+		if !equalNetworkAttachment(object.Spec.NetworkAttachment, spec.NetworkAttachment) {
+			t.r.logger.WarnContext(ctx, "Private and stored network attachments differ; preserving stored network attachment on existing ClusterOrder",
+				slog.String("namespace", object.GetNamespace()), slog.String("name", object.GetName()))
+		}
+		spec.NetworkAttachment = object.Spec.NetworkAttachment
 		update := object.DeepCopy()
 		update.Spec = spec
 		err = t.hubClient.Patch(ctx, update, clnt.MergeFrom(object))
@@ -389,6 +395,10 @@ func (t *task) buildSpec(ctx context.Context) (osacv1alpha1.ClusterOrderSpec, er
 	}
 
 	return spec, nil
+}
+
+func equalNetworkAttachment(left, right *osacv1alpha1.ClusterNetworkAttachment) bool {
+	return apiequality.Semantic.DeepEqual(left, right)
 }
 
 func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.ClusterOrderSpec) error {

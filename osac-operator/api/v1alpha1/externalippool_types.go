@@ -21,6 +21,7 @@ import (
 )
 
 // ExternalIPPoolSpec defines the desired state of ExternalIPPool
+// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec is immutable after creation"
 type ExternalIPPoolSpec struct {
 	// CIDRs is the list of canonical IPv4 CIDR blocks for this pool. Exactly one is supported.
 	// +kubebuilder:validation:Required

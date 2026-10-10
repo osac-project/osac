@@ -26,6 +26,7 @@ import (
 
 // ClusterOrderSpec defines the desired state of ClusterOrder
 // +kubebuilder:validation:XValidation:rule="has(self.addOnOperators) == has(oldSelf.addOnOperators) && (!has(self.addOnOperators) || self.addOnOperators == oldSelf.addOnOperators)",message="addOnOperators is immutable"
+// +kubebuilder:validation:XValidation:rule="has(self.networkAttachment) == has(oldSelf.networkAttachment) && (!has(self.networkAttachment) || self.networkAttachment == oldSelf.networkAttachment)",message="networkAttachment is immutable after creation"
 type ClusterOrderSpec struct {
 	// TemplateID is the unique identigier of the cluster template to use when creating this cluster
 	// +kubebuilder:validation:Required
@@ -101,7 +102,6 @@ type ClusterNetworkAttachment struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="subnetRef is immutable"
 	SubnetRef string `json:"subnetRef"`
 
 	// SecurityGroupRefs lists SecurityGroup CR names to apply to the cluster's
@@ -418,6 +418,7 @@ type WorkerStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:validation:XValidation:rule="has(self.spec) == has(oldSelf.spec)",message="spec presence is immutable after creation"
 // +kubebuilder:resource:shortName=cord
 // +kubebuilder:printcolumn:name="Template",type=string,JSONPath=`.spec.templateID`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`

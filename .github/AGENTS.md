@@ -22,6 +22,12 @@ Path filter skips docs / unit-test-only PRs (`!**/tests/**` and friends). `tests
 
 Details + smoke checklist: [`.github/e2e-readiness.md`](e2e-readiness.md).
 
+`workflows/e2e-start-dry-run.yml` is a dry run of the planned replacement for this gate. When the cheap workflows or a review
+finish it records, in the job summary and a JSON artifact, whether the E2E *would* start now (approved by a person with
+write access or CodeRabbit on the head commit, cheap checks passed, the change affects an E2E suite) and why not otherwise.
+It starts nothing; the label flow above still decides. The logic is in osac-project/osac-ci (`osac-ci e2e-decide`), pinned
+to a full commit SHA. Its `workflow_run` list names the cheap workflows by exact name: keep it in step when one is renamed.
+
 ## OSAC CI check
 
 `workflows/osac-ci.yml` posts one `OSAC CI` check on every pull request: what the PR is waiting for, who has to act and

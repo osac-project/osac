@@ -44,11 +44,15 @@ class K8sClient:
 
     def get_json(self, *, resource: str, name: str, namespace: str | None = None) -> dict[str, Any]:
         target_namespace = self.namespace if namespace is None else namespace
-        return json.loads(run(*self._base(), "get", resource, name, "-n", target_namespace, "-o", "json"))
+        args = [*self._base(), "get", resource, name]
+        if target_namespace:
+            args.extend(["-n", target_namespace])
+        args.extend(["-o", "json"])
+        return json.loads(run(*args))
 
     def list_json(self, *, resource: str, namespace: str | None = None) -> dict[str, Any]:
         args = [*self._base(), "get", resource]
-        if namespace is not None:
+        if namespace:
             args.extend(["-n", namespace])
         args.extend(["-o", "json"])
         return json.loads(run(*args))
@@ -112,14 +116,21 @@ class K8sClient:
         args: list[str] = [*self._base(), "apply", "-f", "-"]
         subprocess.run(args, input=manifest, capture_output=True, text=True, check=True)
 
-    def delete(self, *, resource: str, name: str, wait: bool = True) -> None:
-        args = [*self._base(), "delete", resource, name, "-n", self.namespace]
+    def delete(self, *, resource: str, name: str, wait: bool = True, namespace: str | None = None) -> None:
+        target_namespace = self.namespace if namespace is None else namespace
+        args = [*self._base(), "delete", resource, name]
+        if target_namespace:
+            args.extend(["-n", target_namespace])
         if not wait:
             args.append("--wait=false")
         run(*args, timeout=600)
 
-    def is_present(self, *, resource: str, name: str) -> bool:
-        _, rc = run_unchecked(*self._base(), "get", resource, name, "-n", self.namespace)
+    def is_present(self, *, resource: str, name: str, namespace: str | None = None) -> bool:
+        target_namespace = self.namespace if namespace is None else namespace
+        args = [*self._base(), "get", resource, name]
+        if target_namespace:
+            args.extend(["-n", target_namespace])
+        _, rc = run_unchecked(*args)
         return rc == 0
 
     def is_absent(self, *, resource: str, name: str) -> bool:

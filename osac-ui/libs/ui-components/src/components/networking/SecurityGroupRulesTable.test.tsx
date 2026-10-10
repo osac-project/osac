@@ -122,7 +122,7 @@ describe('SecurityGroupRulesTable', () => {
     expect(screen.getByText('53')).toBeInTheDocument();
   });
 
-  it('formats CIDR combining IPv4 and IPv6', () => {
+  it('formats IPv4 CIDRs', () => {
     render(
       <SecurityGroupRulesTable
         rules={mockRules}
@@ -134,7 +134,7 @@ describe('SecurityGroupRulesTable', () => {
     );
 
     expect(screen.getByText('0.0.0.0/0')).toBeInTheDocument();
-    expect(screen.getByText('::/0')).toBeInTheDocument();
+    expect(screen.queryByText('::/0')).not.toBeInTheDocument();
     expect(screen.getByText('10.0.0.0/8')).toBeInTheDocument();
   });
 

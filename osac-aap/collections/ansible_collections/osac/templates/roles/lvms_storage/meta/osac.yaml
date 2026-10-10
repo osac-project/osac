@@ -5,7 +5,7 @@ description: >
   No external backend or credentials required. Hub path: LVMS is installed on the hub by
   osac-installer when lvms.enabled=true. CaaS guest-cluster path: LVMS operator is
   installed via OLM on the guest cluster when admin_kubeconfig is provided in the event
-  (requires a raw block device on the worker node — see setup-caas-agents.sh
+  (requires a raw block device on the worker node provided by the worker environment
   AGENT_VM_DATA_DISK_SIZE).
 template_type: storage_provider
 implementation_strategy: lvms

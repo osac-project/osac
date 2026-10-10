@@ -34,8 +34,7 @@ kafka:
   enabled: true
 
 # --- Bundled PostgreSQL ---
-# Single-pod ephemeral database for testing.
-# Uses fsync=off -- data is lost on restart. Not for production.
+# Bundled PostgreSQL for testing only; not intended for production.
 bundledPostgres:
   enabled: true
   database:
@@ -43,11 +42,9 @@ bundledPostgres:
     user: service
 
 # --- Bundled OpenBao ---
-# Single-pod ephemeral Vault-compatible secret store for testing. Dev mode --
-# data is lost on restart. Not for production.
+# Bundled OpenBao for testing and CI. Not for production.
 bundledVault:
   enabled: true
-  devRootToken: "dev-root-token"
   # Override podSecurityContext for OpenShift restricted-v2 SCC: omit numeric
   # runAsUser/runAsGroup/fsGroup — the SCC allocates UIDs from the namespace UID
   # range and resolves the named user automatically.

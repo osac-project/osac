@@ -68,11 +68,7 @@ const createRuleValidationSchema = (t: TFunction) =>
           }),
       otherwise: (schema) => schema.notRequired(),
     }),
-    ipv4Cidr: buildCidrSchema(t, 'ipv4').when('ipv6Cidr', {
-      is: (ipv6: string) => !ipv6 || ipv6.trim() === '',
-      then: (schema) => schema.required(t('At least one CIDR (IPv4 or IPv6) is required')),
-    }),
-    ipv6Cidr: buildCidrSchema(t, 'ipv6'),
+    ipv4Cidr: buildCidrSchema(t, 'ipv4').required(t('IPv4 CIDR is required')),
   });
 
 interface SecurityGroupRuleModalProps {
@@ -100,7 +96,6 @@ export const SecurityGroupRuleModal = ({
     portFrom: initialValues?.portFrom?.toString() ?? '',
     portTo: initialValues?.portTo?.toString() ?? '',
     ipv4Cidr: initialValues?.ipv4Cidr ?? '',
-    ipv6Cidr: initialValues?.ipv6Cidr ?? '',
   };
 
   const handleSubmit = async (values: RuleFormValues) => {
@@ -116,7 +111,7 @@ export const SecurityGroupRuleModal = ({
             portTo: parseInt(String(values.portTo), 10),
           }),
         ...(values.ipv4Cidr.trim() !== '' && { ipv4Cidr: values.ipv4Cidr }),
-        ...(values.ipv6Cidr.trim() !== '' && { ipv6Cidr: values.ipv6Cidr }),
+        ...(initialValues?.ipv6Cidr && { ipv6Cidr: initialValues.ipv6Cidr }),
       } as SecurityRule;
 
       const newIngress = (securityGroup.spec?.ingress ?? []).map(toPlainRule);

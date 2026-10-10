@@ -35,7 +35,12 @@ MEDIUM_IT_MEMORY_GIB: int = 8
 
 
 def _build_create_ci_args(
-    cli: OsacCLI, vm_template: str, default_subnet: str, it_name: str, disk_image: str, ci_name: str | None = None
+    cli: OsacCLI,
+    vm_template: str,
+    default_network_attachment: dict[str, Any],
+    it_name: str,
+    disk_image: str,
+    ci_name: str | None = None,
 ) -> list[str]:
     args = [cli.binary, "--config", cli.config_dir, "create", "computeinstance"]
     if ci_name is not None:
@@ -47,7 +52,8 @@ def _build_create_ci_args(
         "--template",
         vm_template,
         "--network-attachment",
-        f"subnet={default_subnet}",
+        f"subnet={default_network_attachment['subnet']},security-groups="
+        f"{','.join(default_network_attachment['security_groups'])}",
         "--instance-type",
         it_name,
         "--boot-disk-size",
@@ -275,7 +281,7 @@ def compute_instance_type_editor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 def running_compute_instance_factory(
     cli: OsacCLI,
     k8s_hub_client: K8sClient,
-    default_subnet: str,
+    default_network_attachment: dict[str, Any],
     vm_template: str,
     active_instance_type: str,
     medium_instance_type: str,
@@ -291,7 +297,7 @@ def running_compute_instance_factory(
         ci_uuid = cli.create_compute_instance(
             name=unique_name("e2e-resize"),
             template=vm_template,
-            network_attachments=[{"subnet": default_subnet}],
+            network_attachments=[default_network_attachment],
             instance_type=instance_type,
             run_strategy="Always",
         )
@@ -320,7 +326,7 @@ def test_compute_instance_happy_path(
     cli: OsacCLI,
     grpc: GRPCClient,
     k8s_hub_client: K8sClient,
-    default_subnet: str,
+    default_network_attachment: dict[str, Any],
     vm_template: str,
     active_instance_type: str,
 ) -> None:
@@ -332,7 +338,7 @@ def test_compute_instance_happy_path(
         ci_uuid = cli.create_compute_instance(
             name=name,
             template=vm_template,
-            network_attachments=[{"subnet": default_subnet}],
+            network_attachments=[default_network_attachment],
             instance_type=active_instance_type,
         )
         assert ci_uuid in grpc.list_compute_instance_ids(), f"ComputeInstance {ci_uuid} not found in list after create"
@@ -366,7 +372,7 @@ def test_compute_instance_deletion_protection(
     private_cli: OsacCLI,
     grpc: GRPCClient,
     k8s_hub_client: K8sClient,
-    default_subnet: str,
+    default_network_attachment: dict[str, Any],
     vm_template: str,
     active_instance_type: str,
 ) -> None:
@@ -378,7 +384,7 @@ def test_compute_instance_deletion_protection(
         ci_uuid = cli.create_compute_instance(
             name=name,
             template=vm_template,
-            network_attachments=[{"subnet": default_subnet}],
+            network_attachments=[default_network_attachment],
             instance_type=active_instance_type,
         )
         assert ci_uuid in grpc.list_compute_instance_ids(), f"ComputeInstance {ci_uuid} not found in list after create"
@@ -403,7 +409,7 @@ def test_compute_instance_deprecated_warning(
     cli: OsacCLI,
     private_grpc: GRPCClient,
     k8s_hub_client: K8sClient,
-    default_subnet: str,
+    default_network_attachment: dict[str, Any],
     vm_template: str,
     active_instance_type: str,
     default_disk_image: str,
@@ -418,7 +424,7 @@ def test_compute_instance_deprecated_warning(
             *_build_create_ci_args(
                 cli,
                 vm_template,
-                default_subnet,
+                default_network_attachment,
                 active_instance_type,
                 default_disk_image,
                 ci_name=unique_name("e2e-ci"),
@@ -443,12 +449,18 @@ def test_compute_instance_deprecated_warning(
 
 
 def test_compute_instance_nonexistent_instance_type(
-    cli: OsacCLI, k8s_hub_client: K8sClient, default_subnet: str, vm_template: str, default_disk_image: str
+    cli: OsacCLI,
+    k8s_hub_client: K8sClient,
+    default_network_attachment: dict[str, Any],
+    vm_template: str,
+    default_disk_image: str,
 ) -> None:
     missing_it_name = f"nonexistent-it-{uuid4().hex[:8]}"
     ci_name = f"e2e-neg-{uuid4().hex[:8]}"
     output, rc = run_unchecked(
-        *_build_create_ci_args(cli, vm_template, default_subnet, missing_it_name, default_disk_image, ci_name=ci_name)
+        *_build_create_ci_args(
+            cli, vm_template, default_network_attachment, missing_it_name, default_disk_image, ci_name=ci_name
+        )
     )
     if rc == 0:
         uuid_match = re.search(r"'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})'", output)
@@ -470,7 +482,7 @@ def test_compute_instance_obsolete_instance_type(
     cli: OsacCLI,
     private_grpc: GRPCClient,
     k8s_hub_client: K8sClient,
-    default_subnet: str,
+    default_network_attachment: dict[str, Any],
     vm_template: str,
     active_instance_type: str,
     default_disk_image: str,
@@ -481,7 +493,7 @@ def test_compute_instance_obsolete_instance_type(
     ci_name = f"e2e-obs-{uuid4().hex[:8]}"
     output, rc = run_unchecked(
         *_build_create_ci_args(
-            cli, vm_template, default_subnet, active_instance_type, default_disk_image, ci_name=ci_name
+            cli, vm_template, default_network_attachment, active_instance_type, default_disk_image, ci_name=ci_name
         )
     )
     if rc == 0:
@@ -789,6 +801,7 @@ def test_compute_instance_resize_from_catalog_item(
     k8s_virt_client: K8sClient,
     vm_template: str,
     default_subnet: str,
+    default_security_group: str,
     default_storage_tier: str,
     default_disk_image: str,
     active_instance_type: str,
@@ -824,7 +837,9 @@ def test_compute_instance_resize_from_catalog_item(
                         "catalog_item": {"id": catalog_item_id},
                         "instance_type": {"name": active_instance_type},
                         "boot_disk": {"size_gib": 20, "storage_tier": {"name": default_storage_tier}},
-                        "network_attachments": [{"subnet": {"id": default_subnet}}],
+                        "network_attachments": [
+                            {"subnet": {"id": default_subnet}, "security_groups": [{"id": default_security_group}]}
+                        ],
                         "disk_image": {"name": default_disk_image},
                         "run_strategy": "Always",
                     },

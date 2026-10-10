@@ -35,6 +35,23 @@ export const getSecretType = (t: TFunction): Record<SecretType, string> => {
   };
 };
 
+export const getSecretTypeDataKeys = (type: SecretType): string | undefined => {
+  switch (type) {
+    case SecretType.PULL_SECRET:
+      return '.dockerconfigjson';
+    case SecretType.KUBECONFIG:
+      return 'kubeconfig';
+    case SecretType.USER_DATA:
+      return 'userdata';
+    case SecretType.VALUE:
+      return 'value';
+    case SecretType.SSH_PUBLIC_KEY:
+      return 'public_key';
+    default:
+      return undefined;
+  }
+};
+
 export const downloadSecretBytes = (bytes: Uint8Array, filename: string) => {
   const blobBytes = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(blobBytes).set(bytes);

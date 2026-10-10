@@ -31,7 +31,7 @@ importers:
         version: 7.1.1(eslint@9.39.5(jiti@2.7.0))
       globals:
         specifier: ^17.4.0
-        version: 17.5.0
+        version: 17.13.0
       nodemon:
         specifier: ^3.1.14
         version: 3.1.14
@@ -52,7 +52,7 @@ importers:
         version: 2.12.0
       '@connectrpc/connect-web':
         specifier: ^2.1.2
-        version: 2.2.0(@bufbuild/protobuf@2.12.0)(@connectrpc/connect@2.1.2(@bufbuild/protobuf@2.12.0))
+        version: 2.2.0(@bufbuild/protobuf@2.12.0)(@connectrpc/connect@2.2.0(@bufbuild/protobuf@2.12.0))
       '@osac/types':
         specifier: workspace:*
         version: link:../../libs/types
@@ -76,7 +76,7 @@ importers:
         version: 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@tanstack/react-query':
         specifier: ^5.0.0
-        version: 5.99.2(react@19.2.5)
+        version: 5.104.1(react@19.2.5)
       i18next:
         specifier: ^23.0.0
         version: 23.16.8
@@ -122,7 +122,7 @@ importers:
         version: 19.3.0(@types/react@19.3.0)
       '@vitejs/plugin-react':
         specifier: ^6.0.1
-        version: 6.0.1(vite@8.0.8(@types/node@24.12.2)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.21.0)(yaml@2.9.0))
+        version: 6.1.2(vite@8.0.8(@types/node@24.12.2)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.21.0)(yaml@2.9.0))
       jsdom:
         specifier: ^26.0.0
         version: 26.1.0
@@ -139,11 +139,23 @@ importers:
         specifier: ^4.1.9
         version: 4.1.11(@types/node@24.12.2)(jsdom@26.1.0)(vite@8.0.8(@types/node@24.12.2)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.21.0)(yaml@2.9.0))
 
+  apps/e2e-tests:
+    devDependencies:
+      '@playwright/test':
+        specifier: 1.63.0
+        version: 1.63.0
+      '@types/node':
+        specifier: ^20.19.41
+        version: 20.19.43
+      typescript:
+        specifier: ~5.9.3
+        version: 5.9.3
+
   apps/playwright:
     devDependencies:
       '@playwright/test':
-        specifier: ^1.62.0
-        version: 1.62.0
+        specifier: 1.63.0
+        version: 1.63.0
       '@types/node':
         specifier: ^20.19.41
         version: 20.19.43
@@ -156,6 +168,18 @@ importers:
       i18next-cli:
         specifier: 1.64.1
         version: 1.64.1(@types/node@24.12.2)(typescript@5.9.3)
+
+  libs/locators:
+    devDependencies:
+      '@playwright/test':
+        specifier: 1.63.0
+        version: 1.63.0
+
+  libs/test-utils:
+    devDependencies:
+      '@playwright/test':
+        specifier: 1.63.0
+        version: 1.63.0
 
   libs/types:
     dependencies:
@@ -174,13 +198,13 @@ importers:
         version: 2.12.0
       '@connectrpc/connect':
         specifier: ^2.1.2
-        version: 2.1.2(@bufbuild/protobuf@2.12.0)
+        version: 2.2.0(@bufbuild/protobuf@2.12.0)
       '@connectrpc/connect-web':
         specifier: ^2.1.2
-        version: 2.2.0(@bufbuild/protobuf@2.12.0)(@connectrpc/connect@2.1.2(@bufbuild/protobuf@2.12.0))
+        version: 2.2.0(@bufbuild/protobuf@2.12.0)(@connectrpc/connect@2.2.0(@bufbuild/protobuf@2.12.0))
       '@novnc/novnc':
-        specifier: 1.5.0
-        version: 1.5.0
+        specifier: 1.7.0
+        version: 1.7.0
       '@osac/types':
         specifier: workspace:*
         version: link:../types
@@ -189,7 +213,7 @@ importers:
         version: 6.6.1
       '@patternfly/react-charts':
         specifier: ^8.0.0
-        version: 8.4.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(victory-area@37.3.6(react@19.2.5))(victory-axis@37.3.6(react@19.2.5))(victory-bar@37.3.6(react@19.2.5))(victory-box-plot@37.3.6(react@19.2.5))(victory-chart@37.3.6(react@19.2.5))(victory-core@37.3.6(react@19.2.5))(victory-create-container@37.3.6(react@19.2.5))(victory-cursor-container@37.3.6(react@19.2.5))(victory-group@37.3.6(react@19.2.5))(victory-legend@37.3.6(react@19.2.5))(victory-line@37.3.6(react@19.2.5))(victory-pie@37.3.6(react@19.2.5))(victory-scatter@37.3.6(react@19.2.5))(victory-stack@37.3.6(react@19.2.5))(victory-tooltip@37.3.6(react@19.2.5))(victory-voronoi-container@37.3.6(react@19.2.5))(victory-zoom-container@37.3.6(react@19.2.5))
+        version: 8.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(victory-area@37.3.6(react@19.2.5))(victory-axis@37.3.6(react@19.2.5))(victory-bar@37.3.6(react@19.2.5))(victory-box-plot@37.3.6(react@19.2.5))(victory-chart@37.3.6(react@19.2.5))(victory-core@37.3.6(react@19.2.5))(victory-create-container@37.3.6(react@19.2.5))(victory-cursor-container@37.3.6(react@19.2.5))(victory-group@37.3.6(react@19.2.5))(victory-legend@37.3.6(react@19.2.5))(victory-line@37.3.6(react@19.2.5))(victory-pie@37.3.6(react@19.2.5))(victory-scatter@37.3.6(react@19.2.5))(victory-stack@37.3.6(react@19.2.5))(victory-tooltip@37.3.6(react@19.2.5))(victory-voronoi-container@37.3.6(react@19.2.5))(victory-zoom-container@37.3.6(react@19.2.5))
       '@patternfly/react-core':
         specifier: ^6.6.1
         version: 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -204,7 +228,7 @@ importers:
         version: 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@tanstack/react-query':
         specifier: ^5.0.0
-        version: 5.99.2(react@19.2.5)
+        version: 5.104.1(react@19.2.5)
       '@xterm/addon-clipboard':
         specifier: ^0.1.0
         version: 0.1.0(@xterm/xterm@5.5.0)
@@ -332,6 +356,10 @@ packages:
     engines: {node: '>=6.0.0'}
     hasBin: true
 
+  '@babel/runtime@7.29.10':
+    resolution: {integrity: sha512-NpugTzbKgGrNe45Ui32cN8vCFFMxVtP/9rtfwv0nP5FRDAjvYBxJcLVpYA9mr1jxP6cnIT7x9LUzuDTbWYYNRA==}
+    engines: {node: '>=6.9.0'}
+
   '@babel/runtime@7.29.2':
     resolution: {integrity: sha512-JiDShH45zKHWyGe4ZNVRrCjBz8Nh9TMmZG1kh4QTK8hCBTWBi8Da+i7s1fJw7/lYpM4ccepSNfqzZ/QvABBi5g==}
     engines: {node: '>=6.9.0'}
@@ -408,8 +436,8 @@ packages:
       '@bufbuild/protobuf': 2.12.0
       '@connectrpc/connect': 2.2.0
 
-  '@connectrpc/connect@2.1.2':
-    resolution: {integrity: sha512-MXkBijtcX09R10Eb6sFeIetc6w6746eio6xtfuyVOH7oQAacT1X0GzMIQFux6Qy8cq3W/T5qX5Bei8YbFtmRGA==}
+  '@connectrpc/connect@2.2.0':
+    resolution: {integrity: sha512-M63OQ1ZFcPUm85CuewJ9G9CMV8LjzGR9935xOnXNQGSazAbwMb3x2W7vXBYM1zqrP7XFD8uxp/dUAhirclgwnQ==}
     peerDependencies:
       '@bufbuild/protobuf': 2.12.0
 
@@ -826,75 +854,14 @@ packages:
       '@emnapi/core': ^1.7.1
       '@emnapi/runtime': ^1.7.1
 
-  '@novnc/novnc@1.5.0':
-    resolution: {integrity: sha512-4yGHOtUCnEJUCsgEt/L78eeJu00kthurLBWXFiaXfonNx0pzbs6R/3gJb1byZe6iAE8V9MF0syQb0xIL8MSOtQ==}
+  '@novnc/novnc@1.7.0':
+    resolution: {integrity: sha512-ucEJOx4T2avIRCleodk7YobZj5O2Ga2AeLfQ69A/yjG9HHba2+PDgwSkN3FttrmG+70ZGx21sElNFouK13RzyA==}
 
   '@oxc-project/types@0.124.0':
     resolution: {integrity: sha512-VBFWMTBvHxS11Z5Lvlr3IWgrwhMTXV+Md+EQF0Xf60+wAdsGFTBx7X7K/hP4pi8N7dcm1RvcHwDxZ16Qx8keUg==}
 
   '@patternfly/patternfly@6.6.1':
     resolution: {integrity: sha512-8P9C1TmFk5y5s2/1XVjmP9JmSyDXDiNBwPZewhPizULtqlaRu+Evljx/X1HTSFrCNY0qgI1uDKy+NXiorIniyA==}
-
-  '@patternfly/react-charts@8.4.1':
-    resolution: {integrity: sha512-kqP5TFr9F/SDTp+nXfcX8gMuZIQ6Uxl55qqiWYgR2zflo0UZWnyL/d2s1fI6Bfi5IuycNdlvJJ/i8QdOsLr5mw==}
-    peerDependencies:
-      echarts: ^5.6.0 || ^6.0.0
-      react: ^17 || ^18 || ^19
-      react-dom: ^17 || ^18 || ^19
-      victory-area: ^37.3.6
-      victory-axis: ^37.3.6
-      victory-bar: ^37.3.6
-      victory-box-plot: ^37.3.6
-      victory-chart: ^37.3.6
-      victory-core: ^37.3.6
-      victory-create-container: ^37.3.6
-      victory-cursor-container: ^37.3.6
-      victory-group: ^37.3.6
-      victory-legend: ^37.3.6
-      victory-line: ^37.3.6
-      victory-pie: ^37.3.6
-      victory-scatter: ^37.3.6
-      victory-stack: ^37.3.6
-      victory-tooltip: ^37.3.6
-      victory-voronoi-container: ^37.3.6
-      victory-zoom-container: ^37.3.6
-    peerDependenciesMeta:
-      echarts:
-        optional: true
-      victory-area:
-        optional: true
-      victory-axis:
-        optional: true
-      victory-bar:
-        optional: true
-      victory-box-plot:
-        optional: true
-      victory-chart:
-        optional: true
-      victory-core:
-        optional: true
-      victory-create-container:
-        optional: true
-      victory-cursor-container:
-        optional: true
-      victory-group:
-        optional: true
-      victory-legend:
-        optional: true
-      victory-line:
-        optional: true
-      victory-pie:
-        optional: true
-      victory-scatter:
-        optional: true
-      victory-stack:
-        optional: true
-      victory-tooltip:
-        optional: true
-      victory-voronoi-container:
-        optional: true
-      victory-zoom-container:
-        optional: true
 
   '@patternfly/react-charts@8.6.1':
     resolution: {integrity: sha512-HkYmBanA3KmP/+dw3sbCGITjCif+r1EDzYcfjzLUUshllp55zBMv4UraEpV+pSwSv3fz1SfMQm7Dt5UXL0CWzA==}
@@ -969,9 +936,6 @@ packages:
       react: ^17 || ^18 || ^19
       react-dom: ^17 || ^18 || ^19
 
-  '@patternfly/react-styles@6.4.0':
-    resolution: {integrity: sha512-EXmHA67s5sy+Wy/0uxWoUQ52jr9lsH2wV3QcgtvVc5zxpyBX89gShpqv4jfVqaowznHGDoL6fVBBrSe9BYOliQ==}
-
   '@patternfly/react-styles@6.6.1':
     resolution: {integrity: sha512-hwByXA4wSpOIBJFtrYUdkFDIqvzHRP5yzvip/NHDlG0y/kXausOh5Z4m00SbTA6t7Hzudw5eU1lf+IOPCm5C6Q==}
 
@@ -987,14 +951,11 @@ packages:
       react: ^17 || ^18 || ^19
       react-dom: ^17 || ^18 || ^19
 
-  '@patternfly/react-tokens@6.4.0':
-    resolution: {integrity: sha512-iZthBoXSGQ/+PfGTdPFJVulaJZI3rwE+7A/whOXPGp3Jyq3k6X52pr1+5nlO6WHasbZ9FyeZGqXf4fazUZNjbw==}
-
   '@patternfly/react-tokens@6.6.1':
     resolution: {integrity: sha512-t7dDEJMnO3QkdIKyjbyKJznVYki9ONZG27Cn/9RXwaM0lDGCrgQEJXy2XoVUCdYhIdXZu+TGSEqXeNFYUyZECg==}
 
-  '@playwright/test@1.62.0':
-    resolution: {integrity: sha512-9zOJ6ZQRAena31MpOH9VSzIz8Ou3YJ/wtY/eQm5T2uhfhG7/U3COrMS8xOtUrZrp9OgdmzEnIYODye3nY1VqzA==}
+  '@playwright/test@1.63.0':
+    resolution: {integrity: sha512-oxMK4vllB9RK5NQ2l1pq1IfOf2AvnEuj/vYGDj0H2nMtmtZpKtCwt/l00GEO6xjGfpBNAvjovvYdCm50dRQkpQ==}
     engines: {node: '>=20'}
     hasBin: true
 
@@ -1090,8 +1051,8 @@ packages:
   '@rolldown/pluginutils@1.0.0-rc.15':
     resolution: {integrity: sha512-UromN0peaE53IaBRe9W7CjrZgXl90fqGpK+mIZbA3qSTeYqg3pqpROBdIPvOG3F5ereDHNwoHBI2e50n1BDr1g==}
 
-  '@rolldown/pluginutils@1.0.0-rc.7':
-    resolution: {integrity: sha512-qujRfC8sFVInYSPPMLQByRh7zhwkGFS4+tyMQ83srV1qrxL4g8E2tyxVVyxd0+8QeBM1mIk9KbWxkegRr76XzA==}
+  '@rolldown/pluginutils@1.0.1':
+    resolution: {integrity: sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw==}
 
   '@rtsao/scc@1.1.0':
     resolution: {integrity: sha512-zt6OdqaDoOnJ1ZYsCYGt9YmWzDXl4vQdKTyJev62gFhRGKdx7mcT54V9KIjg+d2wi9EXsPvAPKe7i7WjfVWB8g==}
@@ -1196,11 +1157,11 @@ packages:
   '@tanem/svg-injector@10.1.68':
     resolution: {integrity: sha512-UkJajeR44u73ujtr5GVSbIlELDWD/mzjqWe54YMK61ljKxFcJoPd9RBSaO7xj02ISCWUqJW99GjrS+sVF0UnrA==}
 
-  '@tanstack/query-core@5.99.2':
-    resolution: {integrity: sha512-1HunU0bXVsR1ZJMZbcOPE6VtaBJxsW809RE9xPe4Gz7MlB0GWwQvuTPhMoEmQ/hIzFKJ/DWAuttIe7BOaWx0tA==}
+  '@tanstack/query-core@5.104.1':
+    resolution: {integrity: sha512-TiRghcrGkUTE+M4JBxvpPSpBhxvIzQairw+cksrHYGr+2uwC77yW1SY9nYxnYRYOppvucf8rEg6b5byoz4rTpw==}
 
-  '@tanstack/react-query@5.99.2':
-    resolution: {integrity: sha512-vM91UEe45QUS9ED6OklsVL15i8qKcRqNwpWzPTVWvRPRSEgDudDgHpvyTjcdlwHcrKNa80T+xXYcchT2noPnZA==}
+  '@tanstack/react-query@5.104.1':
+    resolution: {integrity: sha512-Zz70EgjahNI7aCz8BZxM3vUGU44ycxEAzMuCUjLeA7SVhhOkg3ZgPjPJPvHjs6Rmky/dtmnu1WzjGHNHmhCoZQ==}
     peerDependencies:
       react: ^18 || ^19
 
@@ -1362,17 +1323,20 @@ packages:
     resolution: {integrity: sha512-f1WO2Lx8a9t8DARmcWAUPJbu0G20bJlj8L4z72K00TMeJAoyLr/tHhI/pzYBLrR4dXWkcxO1cWYZEOX8DKHTqA==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
 
-  '@vitejs/plugin-react@6.0.1':
-    resolution: {integrity: sha512-l9X/E3cDb+xY3SWzlG1MOGt2usfEHGMNIaegaUGFsLkb3RCn/k8/TOXBcab+OndDI4TBtktT8/9BwwW8Vi9KUQ==}
+  '@vitejs/plugin-react@6.1.2':
+    resolution: {integrity: sha512-fhJNGUdscQa4HkI0xFxwonWyhnVReCPDbXI7FH7jmzpnVCrFQI7PRrhWecO263610vOrs9tr2Y4xcf8uAdFxbw==}
     engines: {node: ^20.19.0 || >=22.12.0}
     peerDependencies:
       '@rolldown/plugin-babel': ^0.1.7 || ^0.2.0
       babel-plugin-react-compiler: ^1.0.0
+      oxc-transform-react: ^0.152.0
       vite: ^8.0.0
     peerDependenciesMeta:
       '@rolldown/plugin-babel':
         optional: true
       babel-plugin-react-compiler:
+        optional: true
+      oxc-transform-react:
         optional: true
 
   '@vitest/expect@4.1.11':
@@ -2007,11 +1971,6 @@ packages:
     peerDependencies:
       react: '>=16.8.0'
 
-  fsevents@2.3.2:
-    resolution: {integrity: sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA==}
-    engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
-    os: [darwin]
-
   fsevents@2.3.3:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
@@ -2078,8 +2037,8 @@ packages:
     resolution: {integrity: sha512-oahGvuMGQlPw/ivIYBjVSrWAfWLBeku5tpPE2fOPLi+WHffIWbuh2tCjhyQhTBPMf5E9jDEH4FOmTYgYwbKwtQ==}
     engines: {node: '>=18'}
 
-  globals@17.5.0:
-    resolution: {integrity: sha512-qoV+HK2yFl/366t2/Cb3+xxPUo5BuMynomoDmiaZBIdbs+0pYbjfZU+twLhGKp4uCZ/+NbtpVepH5bGCxRyy2g==}
+  globals@17.13.0:
+    resolution: {integrity: sha512-RwMTC61u7hrG3ZJMkZQOK4JLJrKS8QtoTii63EmWvFXHqycY9FObBJQCbsLxSO8kjKhWE5kV1GC+Vb1g3RI0Zg==}
     engines: {node: '>=18'}
 
   globalthis@1.0.4:
@@ -2720,13 +2679,13 @@ packages:
     resolution: {integrity: sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==}
     engines: {node: '>=12'}
 
-  playwright-core@1.62.0:
-    resolution: {integrity: sha512-nsNRyq0r2zsG8AcRHWknc9QRA5XCueC7gWMrs+Gx2tlZn9hcl8zudfh00lhJPY1DE7NmZ6bDsT9g2yey8mXljA==}
+  playwright-core@1.63.0:
+    resolution: {integrity: sha512-rYCsBF/M5HjUch52bbtVONEFjv6Xu8sm8h72dNlR5bzIE1fvC/bxgspzkjSfU+MweEMmPM8KJebG6nnyxo5mCg==}
     engines: {node: '>=20'}
     hasBin: true
 
-  playwright@1.62.0:
-    resolution: {integrity: sha512-Z14dG305dgaLu6foB1TXQagFiW8JfSUIUaUuPaKQ6NtBPKF1P/qXcqfh6c6K/icPqdy37JmjbiBXf6JNg6Sylw==}
+  playwright@1.63.0:
+    resolution: {integrity: sha512-+7ziBLidS4NaNCdt57SUDT+wYmmd5fmiQejUic/kb+YsYSCPyOOE9sebzMjNmQrsnNpDJqd4WHvV/8lfKfUDUg==}
     engines: {node: '>=20'}
     hasBin: true
 
@@ -3706,6 +3665,8 @@ snapshots:
     dependencies:
       '@babel/types': 7.29.0
 
+  '@babel/runtime@7.29.10': {}
+
   '@babel/runtime@7.29.2': {}
 
   '@babel/runtime@7.29.7': {}
@@ -3766,12 +3727,12 @@ snapshots:
 
   '@bufbuild/protobuf@2.12.0': {}
 
-  '@connectrpc/connect-web@2.2.0(@bufbuild/protobuf@2.12.0)(@connectrpc/connect@2.1.2(@bufbuild/protobuf@2.12.0))':
+  '@connectrpc/connect-web@2.2.0(@bufbuild/protobuf@2.12.0)(@connectrpc/connect@2.2.0(@bufbuild/protobuf@2.12.0))':
     dependencies:
       '@bufbuild/protobuf': 2.12.0
-      '@connectrpc/connect': 2.1.2(@bufbuild/protobuf@2.12.0)
+      '@connectrpc/connect': 2.2.0(@bufbuild/protobuf@2.12.0)
 
-  '@connectrpc/connect@2.1.2(@bufbuild/protobuf@2.12.0)':
+  '@connectrpc/connect@2.2.0(@bufbuild/protobuf@2.12.0)':
     dependencies:
       '@bufbuild/protobuf': 2.12.0
 
@@ -4102,39 +4063,11 @@ snapshots:
       '@tybys/wasm-util': 0.10.1
     optional: true
 
-  '@novnc/novnc@1.5.0': {}
+  '@novnc/novnc@1.7.0': {}
 
   '@oxc-project/types@0.124.0': {}
 
   '@patternfly/patternfly@6.6.1': {}
-
-  '@patternfly/react-charts@8.4.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(victory-area@37.3.6(react@19.2.5))(victory-axis@37.3.6(react@19.2.5))(victory-bar@37.3.6(react@19.2.5))(victory-box-plot@37.3.6(react@19.2.5))(victory-chart@37.3.6(react@19.2.5))(victory-core@37.3.6(react@19.2.5))(victory-create-container@37.3.6(react@19.2.5))(victory-cursor-container@37.3.6(react@19.2.5))(victory-group@37.3.6(react@19.2.5))(victory-legend@37.3.6(react@19.2.5))(victory-line@37.3.6(react@19.2.5))(victory-pie@37.3.6(react@19.2.5))(victory-scatter@37.3.6(react@19.2.5))(victory-stack@37.3.6(react@19.2.5))(victory-tooltip@37.3.6(react@19.2.5))(victory-voronoi-container@37.3.6(react@19.2.5))(victory-zoom-container@37.3.6(react@19.2.5))':
-    dependencies:
-      '@patternfly/react-styles': 6.4.0
-      '@patternfly/react-tokens': 6.4.0
-      hoist-non-react-statics: 3.3.2
-      lodash: 4.18.1
-      react: 19.2.5
-      react-dom: 19.2.5(react@19.2.5)
-      tslib: 2.8.1
-    optionalDependencies:
-      victory-area: 37.3.6(react@19.2.5)
-      victory-axis: 37.3.6(react@19.2.5)
-      victory-bar: 37.3.6(react@19.2.5)
-      victory-box-plot: 37.3.6(react@19.2.5)
-      victory-chart: 37.3.6(react@19.2.5)
-      victory-core: 37.3.6(react@19.2.5)
-      victory-create-container: 37.3.6(react@19.2.5)
-      victory-cursor-container: 37.3.6(react@19.2.5)
-      victory-group: 37.3.6(react@19.2.5)
-      victory-legend: 37.3.6(react@19.2.5)
-      victory-line: 37.3.6(react@19.2.5)
-      victory-pie: 37.3.6(react@19.2.5)
-      victory-scatter: 37.3.6(react@19.2.5)
-      victory-stack: 37.3.6(react@19.2.5)
-      victory-tooltip: 37.3.6(react@19.2.5)
-      victory-voronoi-container: 37.3.6(react@19.2.5)
-      victory-zoom-container: 37.3.6(react@19.2.5)
 
   '@patternfly/react-charts@8.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(victory-area@37.3.6(react@19.2.5))(victory-axis@37.3.6(react@19.2.5))(victory-bar@37.3.6(react@19.2.5))(victory-box-plot@37.3.6(react@19.2.5))(victory-chart@37.3.6(react@19.2.5))(victory-core@37.3.6(react@19.2.5))(victory-create-container@37.3.6(react@19.2.5))(victory-cursor-container@37.3.6(react@19.2.5))(victory-group@37.3.6(react@19.2.5))(victory-legend@37.3.6(react@19.2.5))(victory-line@37.3.6(react@19.2.5))(victory-pie@37.3.6(react@19.2.5))(victory-scatter@37.3.6(react@19.2.5))(victory-stack@37.3.6(react@19.2.5))(victory-tooltip@37.3.6(react@19.2.5))(victory-voronoi-container@37.3.6(react@19.2.5))(victory-zoom-container@37.3.6(react@19.2.5))':
     dependencies:
@@ -4181,8 +4114,6 @@ snapshots:
       react-dom: 19.2.5(react@19.2.5)
       tslib: 2.8.1
 
-  '@patternfly/react-styles@6.4.0': {}
-
   '@patternfly/react-styles@6.6.1': {}
 
   '@patternfly/react-table@6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
@@ -4206,13 +4137,11 @@ snapshots:
       react-dom: 19.2.5(react@19.2.5)
       tslib: 2.8.1
 
-  '@patternfly/react-tokens@6.4.0': {}
-
   '@patternfly/react-tokens@6.6.1': {}
 
-  '@playwright/test@1.62.0':
+  '@playwright/test@1.63.0':
     dependencies:
-      playwright: 1.62.0
+      playwright: 1.63.0
 
   '@rolldown/binding-android-arm64@1.0.0-rc.15':
     optional: true
@@ -4265,7 +4194,7 @@ snapshots:
 
   '@rolldown/pluginutils@1.0.0-rc.15': {}
 
-  '@rolldown/pluginutils@1.0.0-rc.7': {}
+  '@rolldown/pluginutils@1.0.1': {}
 
   '@rtsao/scc@1.1.0': {}
 
@@ -4341,17 +4270,17 @@ snapshots:
       content-type: 1.0.5
       tslib: 2.8.1
 
-  '@tanstack/query-core@5.99.2': {}
+  '@tanstack/query-core@5.104.1': {}
 
-  '@tanstack/react-query@5.99.2(react@19.2.5)':
+  '@tanstack/react-query@5.104.1(react@19.2.5)':
     dependencies:
-      '@tanstack/query-core': 5.99.2
+      '@tanstack/query-core': 5.104.1
       react: 19.2.5
 
   '@testing-library/dom@10.4.0':
     dependencies:
       '@babel/code-frame': 7.29.7
-      '@babel/runtime': 7.29.7
+      '@babel/runtime': 7.29.10
       '@types/aria-query': 5.0.4
       aria-query: 5.3.0
       chalk: 4.1.2
@@ -4541,9 +4470,9 @@ snapshots:
       '@typescript-eslint/types': 8.58.2
       eslint-visitor-keys: 5.0.1
 
-  '@vitejs/plugin-react@6.0.1(vite@8.0.8(@types/node@24.12.2)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.21.0)(yaml@2.9.0))':
+  '@vitejs/plugin-react@6.1.2(vite@8.0.8(@types/node@24.12.2)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.21.0)(yaml@2.9.0))':
     dependencies:
-      '@rolldown/pluginutils': 1.0.0-rc.7
+      '@rolldown/pluginutils': 1.0.1
       vite: 8.0.8(@types/node@24.12.2)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.21.0)(yaml@2.9.0)
 
   '@vitest/expect@4.1.11':
@@ -5357,9 +5286,6 @@ snapshots:
     transitivePeerDependencies:
       - '@types/react'
 
-  fsevents@2.3.2:
-    optional: true
-
   fsevents@2.3.3:
     optional: true
 
@@ -5434,7 +5360,7 @@ snapshots:
 
   globals@14.0.0: {}
 
-  globals@17.5.0: {}
+  globals@17.13.0: {}
 
   globalthis@1.0.4:
     dependencies:
@@ -6068,13 +5994,11 @@ snapshots:
 
   picomatch@4.0.7: {}
 
-  playwright-core@1.62.0: {}
+  playwright-core@1.63.0: {}
 
-  playwright@1.62.0:
+  playwright@1.63.0:
     dependencies:
-      playwright-core: 1.62.0
-    optionalDependencies:
-      fsevents: 2.3.2
+      playwright-core: 1.63.0
 
   possible-typed-array-names@1.1.0: {}
 

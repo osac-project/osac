@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -42,10 +43,12 @@ import (
 	insecurecredentials "google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/credentials/oauth"
 	experimentalcredentials "google.golang.org/grpc/experimental/credentials"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/utils/ptr"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -64,6 +67,7 @@ import (
 	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/helpers"
 	"github.com/osac-project/osac/osac-operator/internal/controller"
+	"github.com/osac-project/osac/osac-operator/internal/controller/baremetalworker"
 	"github.com/osac-project/osac/osac-operator/internal/dispatcheradapter"
 	"github.com/osac-project/osac/osac-operator/internal/migrations"
 	"github.com/osac-project/osac/osac-operator/pkg/aap"
@@ -83,7 +87,6 @@ const (
 	envComputeInstanceNamespace   = "OSAC_COMPUTE_INSTANCE_NAMESPACE"
 	envNetworkingNamespace        = "OSAC_NETWORKING_NAMESPACE"
 	envClusterOrderNamespace      = "OSAC_CLUSTER_ORDER_NAMESPACE"
-	envAgentNamespace             = "OSAC_AGENT_NAMESPACE"
 	envBareMetalInstanceNamespace = "OSAC_BARE_METAL_INSTANCE_NAMESPACE"
 	envVolumeNamespace            = "OSAC_VOLUME_NAMESPACE"
 	// envStorageConfigNamespace is the namespace holding the per-tenant
@@ -111,6 +114,7 @@ const (
 	envFulfillmentIssuerURL = "OSAC_FULFILLMENT_ISSUER_URL"
 
 	// Cluster (ClusterOrder) AAP template overrides
+	envIgnitionTrustIngressCA                       = "OSAC_IGNITION_TRUST_INGRESS_CA"
 	envClusterAAPProvisionTemplate                  = "OSAC_CLUSTER_AAP_PROVISION_TEMPLATE"
 	envClusterAAPDeprovisionTemplate                = "OSAC_CLUSTER_AAP_DEPROVISION_TEMPLATE"
 	envClusterPreparingInfrastructureStallThreshold = "OSAC_CLUSTER_PREPARING_INFRASTRUCTURE_STALL_THRESHOLD"
@@ -366,6 +370,32 @@ func targetClusterFromManager(mgr mcmanager.Manager) multicluster.ClusterName {
 	return mcmanager.LocalCluster
 }
 
+// newDiscoveryIgnitionFetcher verifies Assisted Service URLs with system roots and,
+// when configured, the OpenShift ingress CA used for the re-encrypt Route.
+func newDiscoveryIgnitionFetcher(reader client.Reader) (baremetalworker.IgnitionFetcher, error) {
+	if !helpers.GetEnvWithDefault(envIgnitionTrustIngressCA, false) {
+		return baremetalworker.NewIgnitionFetcher(nil), nil
+	}
+
+	var bundle corev1.ConfigMap
+	key := client.ObjectKey{Name: "default-ingress-cert", Namespace: "openshift-config-managed"}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := reader.Get(ctx, key, &bundle); err != nil {
+		return nil, fmt.Errorf("reading OpenShift ingress CA bundle %s: %w", key, err)
+	}
+	roots, err := x509.SystemCertPool()
+	if err != nil {
+		return nil, fmt.Errorf("loading system certificates: %w", err)
+	}
+	if !roots.AppendCertsFromPEM([]byte(bundle.Data["ca-bundle.crt"])) {
+		return nil, fmt.Errorf("OpenShift ingress CA bundle %s has no valid certificates", key)
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{RootCAs: roots}
+	return baremetalworker.NewIgnitionFetcher(&http.Client{Transport: transport}), nil
+}
+
 // setupClusterControllers registers the ClusterOrder controller and, when grpcConn is set,
 // the cluster Feedback controller.
 func setupClusterControllers(
@@ -373,6 +403,27 @@ func setupClusterControllers(
 	maxJobHistory int,
 ) error {
 	localMgr := mgr.GetLocalManager()
+
+	// BareMetalWorkerReconciler watches the same ClusterOrders and manages bare-metal worker
+	// provisioning (currently: ensure the cluster InfraEnv + fetch discovery ignition).
+	var bmwFulfillment baremetalworker.FulfillmentClient
+	if grpcConn != nil {
+		bmwFulfillment = baremetalworker.NewFulfillmentClientFromConn(grpcConn)
+	}
+	ignitionFetcher, err := newDiscoveryIgnitionFetcher(localMgr.GetAPIReader())
+	if err != nil {
+		return err
+	}
+	if err := baremetalworker.NewReconciler(
+		localMgr.GetClient(), localMgr.GetAPIReader(), localMgr.GetScheme(),
+		bmwFulfillment,
+		ignitionFetcher,
+		localMgr.GetEventRecorder("baremetalworker"),
+		os.Getenv(envClusterOrderNamespace),
+	).SetupWithManager(mgr); err != nil {
+		return err
+	}
+
 	return setupProvisioningController(
 		envClusterAAPProvisionTemplate, envClusterAAPDeprovisionTemplate,
 		func() error {
@@ -388,13 +439,11 @@ func setupClusterControllers(
 			reconciler := controller.NewClusterOrderReconciler(
 				localMgr.GetClient(), localMgr.GetAPIReader(), localMgr.GetScheme(),
 				os.Getenv(envClusterOrderNamespace),
-				os.Getenv(envAgentNamespace),
 				os.Getenv(envNetworkingNamespace),
 				provider, pollInterval, maxJobHistory,
 			)
 			reconciler.StallThresholds = clusterOrderStallThresholdsFromEnv()
 			reconciler.Recorder = localMgr.GetEventRecorder(controller.ClusterOrderControllerName)
-			reconciler.WorkerReconciler = controller.NewBareMetalWorkerReconciler(nil, nil)
 			return reconciler.SetupWithManager(mgr)
 		},
 	)
@@ -428,14 +477,14 @@ func clusterOrderStallThresholdsFromEnv() controller.ClusterOrderStallThresholds
 			"envVar", envClusterWorkersJoiningStallThresholdOverrides)
 		return thresholds
 	}
-	for hostType, encodedDuration := range encodedOverrides {
+	for instanceType, encodedDuration := range encodedOverrides {
 		duration, err := time.ParseDuration(encodedDuration)
 		if err != nil || duration <= 0 {
 			setupLog.Info("invalid worker-join stall threshold override; ignoring",
-				"hostType", hostType, "value", encodedDuration)
+				"instanceType", instanceType, "value", encodedDuration)
 			continue
 		}
-		thresholds.WorkersJoiningByHostType[hostType] = duration
+		thresholds.WorkersJoiningByInstanceType[instanceType] = duration
 	}
 	return thresholds
 }
@@ -486,8 +535,8 @@ func setupComputeInstanceControllers(
 	return nil
 }
 
-// setupTenantController registers the Tenant lifecycle controller.
-func setupTenantController(mgr mcmanager.Manager) error {
+// setupTenantController registers the Tenant lifecycle and feedback controllers.
+func setupTenantController(mgr mcmanager.Manager, grpcConn grpc.ClientConnInterface) error {
 	tenantNamespace := os.Getenv(envTenantNamespace)
 
 	if err := (controller.NewTenantReconciler(
@@ -495,6 +544,15 @@ func setupTenantController(mgr mcmanager.Manager) error {
 		tenantNamespace,
 	)).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("tenant controller: %w", err)
+	}
+	if grpcConn != nil {
+		if err := controller.NewTenantFeedbackReconciler(
+			mgr.GetLocalManager().GetClient(),
+			grpcConn,
+			tenantNamespace,
+		).SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("tenant feedback controller: %w", err)
+		}
 	}
 	return nil
 }
@@ -611,7 +669,7 @@ func setupControllers(
 		}
 	}
 	if flags.Tenant {
-		if err := setupTenantController(mgr); err != nil {
+		if err := setupTenantController(mgr, grpcConn); err != nil {
 			return fmt.Errorf("tenant controller: %w", err)
 		}
 	}
@@ -1123,6 +1181,7 @@ func setupBareMetalInstanceControllers(
 }
 
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
+// +kubebuilder:rbac:urls=/metrics,verbs=get
 
 func main() {
 	var err error
@@ -1286,6 +1345,9 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "95f7e044.openshift.io",
+		LeaseDuration:          ptr.To(35 * time.Second),
+		RenewDeadline:          ptr.To(25 * time.Second),
+		RetryPeriod:            ptr.To(5 * time.Second),
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
 		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly

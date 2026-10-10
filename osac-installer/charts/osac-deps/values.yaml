@@ -24,6 +24,7 @@ cnv:
   channel: "stable"
 
 mce:
+  # Opt in only when this installation owns the multicluster engine lifecycle.
   enabled: false
   channel: "stable-2.17"
 

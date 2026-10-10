@@ -51,11 +51,11 @@ func makeEvent(id, eventType, source, resourceID string) adapters.MeteringEvent 
 	}
 }
 
-var _ = Describe("eventStore", func() {
-	var store *eventStore
+var _ = Describe("EventStore", func() {
+	var store *EventStore
 
 	BeforeEach(func() {
-		store = newEventStore(100)
+		store = NewEventStore(100)
 	})
 
 	Describe("add and query", func() {
@@ -163,7 +163,7 @@ var _ = Describe("eventStore", func() {
 
 	Describe("ring buffer eviction", func() {
 		It("drops oldest when at capacity", func() {
-			small := newEventStore(2)
+			small := NewEventStore(2)
 			small.add(makeEvent("old", "osac.resource.created.v1", "osac-metering", "r1"))
 			small.add(makeEvent("mid", "osac.resource.created.v1", "osac-metering", "r2"))
 			small.add(makeEvent("new", "osac.resource.created.v1", "osac-metering", "r3"))
@@ -190,7 +190,7 @@ var _ = Describe("eventStore", func() {
 		It("GET /events returns full CloudEvent array", func() {
 			req := httptest.NewRequest("GET", "/events?type=osac.resource.created.v1&resource_id=res-http", nil)
 			w := httptest.NewRecorder()
-			store.handleEvents(w, req)
+			store.HandleEvents(w, req)
 
 			Expect(w.Code).To(Equal(http.StatusOK))
 
@@ -205,7 +205,7 @@ var _ = Describe("eventStore", func() {
 		It("GET /events returns empty array when no match", func() {
 			req := httptest.NewRequest("GET", "/events?type=nope", nil)
 			w := httptest.NewRecorder()
-			store.handleEvents(w, req)
+			store.HandleEvents(w, req)
 
 			Expect(w.Code).To(Equal(http.StatusOK))
 			Expect(w.Body.String()).To(Equal("[]\n"))
@@ -214,7 +214,7 @@ var _ = Describe("eventStore", func() {
 		It("GET /events/count returns count", func() {
 			req := httptest.NewRequest("GET", "/events/count", nil)
 			w := httptest.NewRecorder()
-			store.handleCount(w, req)
+			store.HandleCount(w, req)
 
 			var result map[string]int
 			Expect(json.Unmarshal(w.Body.Bytes(), &result)).To(Succeed())
@@ -224,7 +224,7 @@ var _ = Describe("eventStore", func() {
 		It("DELETE /events clears store", func() {
 			req := httptest.NewRequest("DELETE", "/events", nil)
 			w := httptest.NewRecorder()
-			store.handleDeleteEvents(w, req)
+			store.HandleDeleteEvents(w, req)
 
 			Expect(w.Code).To(Equal(http.StatusNoContent))
 			Expect(store.count("", "", time.Time{})).To(Equal(0))

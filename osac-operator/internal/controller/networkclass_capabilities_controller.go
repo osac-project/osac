@@ -177,7 +177,11 @@ func (r *NetworkClassCapabilitiesReconciler) syncOne(ctx context.Context, nc *pr
 	newStatus := desiredNetworkClassManagerStatus(nil)
 	newCaps := nc.GetCapabilities()
 	if resolved.FabricManager != nil {
-		newCaps = computeCapabilities(resolved)
+		var disabled *privatev1.NetworkClassCapabilities
+		if spec := nc.GetSpec(); spec != nil {
+			disabled = spec.GetDisableCapabilities()
+		}
+		newCaps = computeCapabilities(resolved, disabled)
 	}
 	if capabilitiesEqual(newCaps, nc.GetCapabilities()) && networkClassManagerStatusEqual(newStatus, nc.GetStatus()) {
 		return nil
@@ -242,14 +246,12 @@ func networkClassManagerStatusEqual(a, b *privatev1.NetworkClassStatus) bool {
 		a.GetManagerMessage() == b.GetManagerMessage()
 }
 
-// computeCapabilities returns the capability intersection of the resolved fabric and
-// k8s managers: a capability is enabled only if the fabric manager declares it and,
-// when a k8s manager is configured, the k8s manager declares it too. When no k8s
-// manager is configured, the fabric manager's capabilities are used as-is.
-//
-// NOTE(OSAC-2030): once NetworkClassSpec.disable_capabilities is available in the
-// generated client, subtract those capabilities here before returning.
-func computeCapabilities(resolved *dispatcher.ResolvedManagers) *privatev1.NetworkClassCapabilities {
+// computeCapabilities returns the manager capability intersection after applying
+// the NetworkClass's disabled capabilities.
+func computeCapabilities(
+	resolved *dispatcher.ResolvedManagers,
+	disabled *privatev1.NetworkClassCapabilities,
+) *privatev1.NetworkClassCapabilities {
 	fabric := resolved.FabricManager
 	k8s := resolved.K8sManager
 
@@ -265,6 +267,22 @@ func computeCapabilities(resolved *dispatcher.ResolvedManagers) *privatev1.Netwo
 	caps.SetSupportsIpv6(supports(networkmanager.CapabilityIPv6))
 	caps.SetSupportsDualStack(supports(networkmanager.CapabilityDualStack))
 	caps.SetDpuSupport(supports(networkmanager.CapabilityDPUSupport))
+
+	if disabled != nil {
+		if disabled.GetSupportsIpv4() {
+			caps.SetSupportsIpv4(false)
+		}
+		if disabled.GetSupportsIpv6() {
+			caps.SetSupportsIpv6(false)
+		}
+		if disabled.GetSupportsDualStack() {
+			caps.SetSupportsDualStack(false)
+		}
+		if disabled.GetDpuSupport() {
+			caps.SetDpuSupport(false)
+		}
+	}
+
 	return caps
 }
 

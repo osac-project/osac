@@ -109,6 +109,42 @@ var _ = Describe("bareMetalInstanceStatusChangedPredicate", func() {
 		Expect(pred.Update(e)).To(BeTrue())
 	})
 
+	// A provisioning stage advance is carried on the live condition's reason/message,
+	// not on its status. The predicate must treat a reason-only transition as a
+	// signalable change so freshness flows through the feedback -> Signal path. The
+	// reason values below are illustrative: the predicate compares the whole Status,
+	// so only that the reason differs matters, not the specific strings.
+	It("should pass Update events when only a condition reason changes", func() {
+		old := &bmfov1alpha1.BareMetalInstance{}
+		old.Status.Conditions = []metav1.Condition{
+			{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Progressing"},
+		}
+
+		new := old.DeepCopy()
+		new.Status.Conditions[0].Reason = "Provisioned"
+
+		e := event.UpdateEvent{ObjectOld: old, ObjectNew: new}
+		Expect(pred.Update(e)).To(BeTrue())
+	})
+
+	// A step advance within a single stage keeps the same reason and condition status,
+	// differing only in the message (e.g. two steps within Network Setup). The predicate
+	// must still signal so the API tracks the step without waiting for the periodic resync.
+	// As above, the values are illustrative: the predicate compares the whole Status, so
+	// only that the message differs matters, not the specific strings.
+	It("should pass Update events when only a condition message changes", func() {
+		old := &bmfov1alpha1.BareMetalInstance{}
+		old.Status.Conditions = []metav1.Condition{
+			{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Provisioned", Message: "Provisioning"},
+		}
+
+		new := old.DeepCopy()
+		new.Status.Conditions[0].Message = "Network Setup"
+
+		e := event.UpdateEvent{ObjectOld: old, ObjectNew: new}
+		Expect(pred.Update(e)).To(BeTrue())
+	})
+
 	It("should pass Update events when deletionTimestamp is set", func() {
 		now := metav1.Now()
 		old := &bmfov1alpha1.BareMetalInstance{}

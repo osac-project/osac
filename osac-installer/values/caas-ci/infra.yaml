@@ -16,12 +16,8 @@ metallb:
 cnv:
   enabled: false
 mce:
+  # The CaaS CI profile owns and configures its standalone MCE installation.
   enabled: true
-  osImages:
-    - openshiftVersion: "4.22"
-      version: "9.8.20260428-0"
-      url: "https://mirror.openshift.com/pub/openshift-v4/x86_64/dependencies/rhcos/4.22/4.22.0/rhcos-4.22.0-x86_64-live-iso.x86_64.iso"
-      cpuArchitecture: "x86_64"
 
 # --- Infrastructure (osac-infra) ---
 caIssuer:
@@ -51,19 +47,16 @@ kafka:
   enabled: true
 
 # --- Bundled PostgreSQL ---
-# Single-pod ephemeral database for testing.
-# Uses fsync=off -- data is lost on restart. Not for production.
+# Bundled PostgreSQL for testing only; not intended for production.
 bundledPostgres:
   enabled: true
   database:
     name: service
 
 # --- Bundled OpenBao ---
-# Single-pod ephemeral Vault-compatible secret store for testing. Dev mode --
-# data is lost on restart. Not for production.
+# Bundled OpenBao for testing and CI. Not for production.
 bundledVault:
   enabled: true
-  devRootToken: "dev-root-token"
   # Optional OpenBao JWT issuer override. It must match the issuer (iss)
   # claim in Keycloak tokens. Use the in-cluster URL when that is the issuer;
   # if Keycloak tokens use a route hostname, set that route URL in a local

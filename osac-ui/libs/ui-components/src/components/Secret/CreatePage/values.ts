@@ -19,9 +19,17 @@ export interface SecretValues {
 }
 
 export interface SecretDataEntry {
+  uid: string;
   key: string;
   value: Uint8Array;
 }
+
+let nextUid = 0;
+export const createSecretDataEntry = (key: string, value: Uint8Array): SecretDataEntry => ({
+  uid: `entry-${nextUid++}`,
+  key,
+  value,
+});
 
 const emptyValue = (): Uint8Array => new Uint8Array();
 
@@ -36,20 +44,12 @@ export const decodeSecretValue = (value: Uint8Array): string | undefined => {
 export const encodeSecretValue = (value: string): Uint8Array => new TextEncoder().encode(value);
 
 export const getDataEntries = (data: Secret['data']): SecretDataEntry[] =>
-  Object.entries(data).map(([key, value]) => ({
-    key,
-    value: new Uint8Array(value),
-  }));
+  Object.entries(data).map(([key, value]) => createSecretDataEntry(key, new Uint8Array(value)));
 
 const getEntry = (data: SecretDataEntry[], key: string): SecretDataEntry => {
   const entry = data.find((d) => d.key === key);
 
-  return (
-    entry || {
-      key,
-      value: emptyValue(),
-    }
-  );
+  return entry || createSecretDataEntry(key, emptyValue());
 };
 
 const getDefaultValues = (type: SecretType): SecretValues => ({
@@ -59,11 +59,11 @@ const getDefaultValues = (type: SecretType): SecretValues => ({
     description: '',
   },
   type,
-  kubeconfig: { key: 'kubeconfig', value: emptyValue() },
-  pullsecret: { key: '.dockerconfigjson', value: emptyValue() },
-  userData: { key: 'userdata', value: emptyValue() },
-  opaque: [{ key: '', value: emptyValue() }],
-  value: { key: 'value', value: emptyValue() },
+  kubeconfig: createSecretDataEntry('kubeconfig', emptyValue()),
+  pullsecret: createSecretDataEntry('.dockerconfigjson', emptyValue()),
+  userData: createSecretDataEntry('userdata', emptyValue()),
+  opaque: [createSecretDataEntry('', emptyValue())],
+  value: createSecretDataEntry('value', emptyValue()),
 });
 
 export const getSecretValues = (

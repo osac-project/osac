@@ -18,6 +18,7 @@ package inventory
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -36,6 +37,54 @@ const (
 	testNamespace = "test-bmaas"
 	testHostClass = "metal3"
 )
+
+func TestGetHostLogicalPortMACs_Metal3(t *testing.T) {
+	tests := []struct {
+		name        string
+		annotations map[string]string
+		hostID      string
+		missingHost bool
+		want        map[string]string
+		wantErr     bool
+	}{
+		{
+			name: "logical port names and MACs are preserved",
+			annotations: map[string]string{
+				HostInterfaceMACsAnnotation: `{"data-0":"52:54:00:16:04:83","data-1":"52:54:00:AA:BB:CC"}`,
+			},
+			want: map[string]string{"data-0": "52:54:00:16:04:83", "data-1": "52:54:00:AA:BB:CC"},
+		},
+		{name: "absent annotation", want: map[string]string{}},
+		{name: "empty annotation", annotations: map[string]string{HostInterfaceMACsAnnotation: ""}, want: map[string]string{}},
+		{name: "empty mapping", annotations: map[string]string{HostInterfaceMACsAnnotation: `{}`}, want: map[string]string{}},
+		{name: "null mapping", annotations: map[string]string{HostInterfaceMACsAnnotation: `null`}},
+		{name: "malformed JSON", annotations: map[string]string{HostInterfaceMACsAnnotation: "not-json"}, wantErr: true},
+		{name: "wrong shape", annotations: map[string]string{HostInterfaceMACsAnnotation: `[]`}, wantErr: true},
+		{name: "non-string MAC", annotations: map[string]string{HostInterfaceMACsAnnotation: `{"data-0":42}`}, wantErr: true},
+		{name: "missing host", missingHost: true, wantErr: true},
+		{name: "invalid host ID", hostID: "bad-id", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var objects []client.Object
+			if !tt.missingHost {
+				objects = append(objects, newBMHBuilder("host-macs").WithAnnotations(tt.annotations).Build())
+			}
+			m := newMetal3ClientForTest(objects...)
+			hostID := tt.hostID
+			if hostID == "" {
+				hostID = testNamespace + "/host-macs"
+			}
+			got, err := m.GetHostLogicalPortMACs(context.Background(), hostID)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("GetHostLogicalPortMACs error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !tt.wantErr && !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("GetHostLogicalPortMACs = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
 
 func newTestScheme() *runtime.Scheme {
 	s := runtime.NewScheme()

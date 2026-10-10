@@ -434,25 +434,7 @@ func (s *GenericServer[O]) Get(ctx context.Context, request any, response any) e
 		SetId(requestId).
 		Do(ctx)
 	if err != nil {
-		var notFoundErr *dao.ErrNotFound
-		if errors.As(err, &notFoundErr) {
-			return grpcstatus.Errorf(grpccodes.NotFound, "object with identifier '%s' not found", requestId)
-		}
-		var deniedErr *dao.ErrDenied
-		if errors.As(err, &deniedErr) {
-			return grpcstatus.Errorf(grpccodes.PermissionDenied, "%s", deniedErr.Reason)
-		}
-		var deadlockErr *dao.ErrDeadlock
-		if errors.As(err, &deadlockErr) {
-			return grpcstatus.Errorf(grpccodes.Aborted, "%s", deadlockErr.Error())
-		}
-		s.logger.ErrorContext(
-			ctx,
-			"Failed to get",
-			slog.String("id", requestId),
-			slog.Any("error", err),
-		)
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to get object with identifier '%s'", requestId)
+		return ConvertDAOErrorToGRPC(err, "get", requestId)
 	}
 	object := daoResponse.GetObject()
 
@@ -528,37 +510,7 @@ func (s *GenericServer[O]) createPrepared(ctx context.Context, requestObject O, 
 
 	daoResponse, err := s.dao.Create().SetObject(requestObject).Do(ctx)
 	if err != nil {
-		var alreadyExistsErr *dao.ErrAlreadyExists
-		if errors.As(err, &alreadyExistsErr) {
-			// A unique partial index on a constant expression (e.g. network_classes_singleton,
-			// network_classes_single_default) models a "singleton" or "single default" invariant rather than a
-			// per-object name/ID collision. Report those as FailedPrecondition (retry may succeed once the
-			// conflicting row is gone) instead of AlreadyExists (which implies the *new* object is a duplicate).
-			if isSingletonConstraintViolation(alreadyExistsErr.ConstraintName) {
-				return grpcstatus.Errorf(grpccodes.FailedPrecondition,
-					"concurrent create violated a singleton invariant (constraint '%s'); please retry",
-					alreadyExistsErr.ConstraintName)
-			}
-			return grpcstatus.Errorf(grpccodes.AlreadyExists, "%s", alreadyExistsErr.Error())
-		}
-		var notUniqueErr *dao.ErrNotUnique
-		if errors.As(err, &notUniqueErr) {
-			return grpcstatus.Errorf(grpccodes.AlreadyExists, "%s", notUniqueErr.Error())
-		}
-		var deniedErr *dao.ErrDenied
-		if errors.As(err, &deniedErr) {
-			return grpcstatus.Errorf(grpccodes.PermissionDenied, "%s", deniedErr.Error())
-		}
-		var referenceErr *dao.ErrReference
-		if errors.As(err, &referenceErr) {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument, "%s", referenceErr.Error())
-		}
-		var deadlockErr *dao.ErrDeadlock
-		if errors.As(err, &deadlockErr) {
-			return grpcstatus.Errorf(grpccodes.Aborted, "%s", deadlockErr.Error())
-		}
-		s.logger.ErrorContext(ctx, "Failed to create", slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to create object")
+		return ConvertDAOErrorToGRPC(err, "create", requestObject.GetId())
 	}
 
 	// Create the response message:
@@ -882,49 +834,7 @@ func (s *GenericServer[O]) UpdateWithValidation(
 }
 
 func (s *GenericServer[O]) translateUpdateError(ctx context.Context, requestId string, err error) error {
-	var conflictErr *dao.ErrConflict
-	if errors.As(err, &conflictErr) {
-		return grpcstatus.Errorf(grpccodes.Aborted, "%s", conflictErr.Error())
-	}
-	var alreadyExistsErr *dao.ErrAlreadyExists
-	if errors.As(err, &alreadyExistsErr) {
-		return grpcstatus.Errorf(grpccodes.AlreadyExists, "%s", alreadyExistsErr.Error())
-	}
-	var referenceErr *dao.ErrReference
-	if errors.As(err, &referenceErr) {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "%s", referenceErr.Error())
-	}
-	var inUseErr *dao.ErrInUse
-	if errors.As(err, &inUseErr) {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "%s", inUseErr.Error())
-	}
-	var notUniqueErr *dao.ErrNotUnique
-	if errors.As(err, &notUniqueErr) {
-		return grpcstatus.Errorf(grpccodes.AlreadyExists, "%s", notUniqueErr.Error())
-	}
-	var deniedErr *dao.ErrDenied
-	if errors.As(err, &deniedErr) {
-		return grpcstatus.Errorf(grpccodes.PermissionDenied, "%s", deniedErr.Error())
-	}
-	var immutableErr *dao.ErrImmutable
-	if errors.As(err, &immutableErr) {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "%s", immutableErr.Error())
-	}
-	var deadlockErr *dao.ErrDeadlock
-	if errors.As(err, &deadlockErr) {
-		return grpcstatus.Errorf(grpccodes.Aborted, "%s", deadlockErr.Error())
-	}
-	s.logger.ErrorContext(
-		ctx,
-		"Failed to update object",
-		slog.String("id", requestId),
-		slog.Any("error", err),
-	)
-	return grpcstatus.Errorf(
-		grpccodes.Internal,
-		"failed to update object with identifier '%s'",
-		requestId,
-	)
+	return ConvertDAOErrorToGRPC(err, "update", requestId)
 }
 
 func (s *GenericServer[O]) compilePaths(paths []string) (result []*masks.Path[O], err error) {
@@ -970,36 +880,7 @@ func (s *GenericServer[O]) Delete(ctx context.Context, request any, response any
 		SetId(requestId).
 		Do(ctx)
 	if err != nil {
-		_, ok := errors.AsType[*dao.ErrNotFound](err)
-		if ok {
-			return grpcstatus.Errorf(
-				grpccodes.NotFound,
-				"object with identifier '%s' not found",
-				requestId,
-			)
-		}
-		deniedErr, ok := errors.AsType[*dao.ErrDenied](err)
-		if ok {
-			return grpcstatus.Errorf(grpccodes.PermissionDenied, "%s", deniedErr.Error())
-		}
-		inUseErr, ok := errors.AsType[*dao.ErrInUse](err)
-		if ok {
-			return grpcstatus.Errorf(grpccodes.FailedPrecondition, "%s", inUseErr.Error())
-		}
-		if _, ok := errors.AsType[*dao.ErrDeadlock](err); ok {
-			return grpcstatus.Errorf(grpccodes.Aborted, "concurrent modification detected, please retry")
-		}
-		s.logger.ErrorContext(
-			ctx,
-			"Failed to delete object",
-			slog.String("id", requestId),
-			slog.Any("error", err),
-		)
-		return grpcstatus.Errorf(
-			grpccodes.Internal,
-			"failed to delete object with identifier '%s'",
-			requestId,
-		)
+		return ConvertDAOErrorToGRPC(err, "delete", requestId)
 	}
 
 	// Create the response message:
@@ -1025,30 +906,7 @@ func (s *GenericServer[O]) Signal(ctx context.Context, request any, response any
 		SetId(requestId).
 		Do(ctx)
 	if err != nil {
-		if _, ok := errors.AsType[*dao.ErrNotFound](err); ok {
-			return grpcstatus.Errorf(
-				grpccodes.NotFound,
-				"object with identifier '%s' not found",
-				requestId,
-			)
-		}
-		if deniedErr, ok := errors.AsType[*dao.ErrDenied](err); ok {
-			return grpcstatus.Errorf(grpccodes.PermissionDenied, "%s", deniedErr.Error())
-		}
-		if deadlockErr, ok := errors.AsType[*dao.ErrDeadlock](err); ok {
-			return grpcstatus.Errorf(grpccodes.Aborted, "%s", deadlockErr.Error())
-		}
-		s.logger.ErrorContext(
-			ctx,
-			"Failed to signal object",
-			slog.String("id", requestId),
-			slog.Any("error", err),
-		)
-		return grpcstatus.Errorf(
-			grpccodes.Internal,
-			"failed to signal object with identifier '%s'",
-			requestId,
-		)
+		return ConvertDAOErrorToGRPC(err, "signal", requestId)
 	}
 
 	// Create the response:

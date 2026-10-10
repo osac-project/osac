@@ -414,7 +414,8 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 		It("distinguishes editable required input from Template defaults and invalid values", func(ctx context.Context) {
 			By("publishing a bare metal instance catalog item that requires the enabled parameter in each request")
 			image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
-			template := createCatalogItemBareMetalInstanceTemplateFixture(ctx, nil, bareMetalInstanceCatalogItemParameterDefinitions())
+			instanceType := createCatalogItemBareMetalInstanceTypeFixture(ctx, "shared")
+			template := createCatalogItemBareMetalInstanceTemplateFixture(ctx, nil, bareMetalInstanceCatalogItemParameterDefinitions(), instanceType)
 			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 			item := createBareMetalInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.BareMetalInstanceCatalogItem_builder{
 				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),

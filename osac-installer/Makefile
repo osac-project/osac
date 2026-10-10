@@ -21,6 +21,7 @@
 #
 # Helm chart management (no parameters required):
 #   make helm-lint
+#   make mce-render-test
 #   make helm-validate
 
 SHELL := /usr/bin/env bash -o pipefail
@@ -79,6 +80,9 @@ CHARTS         := charts
 DEPS_CHART     := $(CHARTS)/osac-deps
 INFRA_CHART    := $(CHARTS)/osac-infra
 OSAC_CHART     := $(CHARTS)/osac
+# Runtime supplies hostnames and credentials; use the minimal CI fixture for
+# local chart checks without loosening the required-values schema.
+HELM_VALIDATION_VALUES := $(OSAC_CHART)/ci/default-values.yaml
 
 # Values file selection: kind uses kind-specific files, OpenShift uses profile files.
 # dev-full reuses the identical dev control-plane values, plus a small overlay that
@@ -117,10 +121,14 @@ KIND_RUNTIME_REQUIRED := $(if $(filter true,$(HOST_IS_MAC_ARM)),true,$(if $(filt
 HELM_MAJOR := $(shell version=$$(helm version --short 2>/dev/null) || exit; printf '%s\n' "$$version" | sed -nE 's/^v([0-9]+).*/\1/p')
 ifeq ($(HELM_MAJOR),4)
 DEV_FULL_HELM_POST_RENDERER := osac-dev-full-awx-image
+# Helm 4 SSA: AAP operator owns app.kubernetes.io/managed-by on the osac-aap CR.
+OSAC_HELM_FORCE_CONFLICTS := --force-conflicts
 else ifeq ($(HELM_MAJOR),3)
 DEV_FULL_HELM_POST_RENDERER := scripts/dev-full/helm-post-renderer/helm-post-render.sh
+OSAC_HELM_FORCE_CONFLICTS :=
 else
 DEV_FULL_HELM_POST_RENDERER :=
+OSAC_HELM_FORCE_CONFLICTS :=
 endif
 
 # Container tool and Kind cluster config.
@@ -246,7 +254,7 @@ endif
 	|| { echo "=== osac-infra hook jobs ==="; kubectl get jobs,pods,cm -n osac-infra || true; kubectl logs -n osac-infra -l job-name=osac-infra-apply-ca-bundle --tail=200 || true; kubectl get deploy,endpoints,certificate -n cert-manager || true; exit 1; }
 	@for f in ../osac-operator/config/crd/fakes/*.yaml; do \
 		case "$$(basename "$$f")" in \
-			*osac.openshift.io*) continue ;; \
+			*osac.openshift.io*|kustomization.*) continue ;; \
 		esac; \
 		kubectl apply --server-side --force-conflicts -f "$$f"; \
 	done
@@ -302,6 +310,7 @@ AAP_LICENSE_FILE ?= values/$(PROFILE)/license.zip
 
 .PHONY: install-osac
 install-osac: ## Install OSAC instance (PLATFORM= PROFILE= NS= required)
+	rm -rf $(OSAC_CHART)/charts
 	helm dependency build $(OSAC_CHART)
 ifneq ($(PLATFORM),kind)
 	@[ -n "$(AAP_LICENSE_FILE)" ] || { echo "ERROR: AAP_LICENSE_FILE is required for PLATFORM=openshift" >&2; exit 1; }
@@ -322,7 +331,7 @@ endif
 		--namespace $(NS) --create-namespace \
 		--set-string global.osacDeploymentId=$(NS)/osac \
 		$(if $(DOMAIN),--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) --set global.clusterDomain=$(DOMAIN) --set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DOMAIN)/realms/osac) \
-		$(EXTRA_HELM_ARGS) \
+		$(EXTRA_HELM_ARGS) $(OSAC_HELM_FORCE_CONFLICTS) \
 		--wait --timeout 40m
 
 .PHONY: uninstall-osac
@@ -417,6 +426,7 @@ sync-charts: helm-deps ## Rebuild chart dependencies (alias for helm-deps)
 
 .PHONY: helm-deps
 helm-deps: ## Build Helm chart dependencies
+	rm -rf $(OSAC_CHART)/charts
 	helm dependency build $(OSAC_CHART)
 	helm dependency build charts/osac-devstack
 
@@ -424,13 +434,13 @@ helm-deps: ## Build Helm chart dependencies
 helm-lint: helm-deps ## Lint all charts
 	helm lint $(DEPS_CHART)
 	helm lint $(INFRA_CHART)
-	helm lint $(OSAC_CHART) --values $(OSAC_CHART)/ci/default-values.yaml
+	helm lint $(OSAC_CHART) --values $(HELM_VALIDATION_VALUES)
 
 .PHONY: helm-template
 helm-template: ## Dry-run render all templates
 	helm template osac-deps $(DEPS_CHART)
 	helm template osac-infra $(INFRA_CHART)
-	helm template osac $(OSAC_CHART) --values $(OSAC_CHART)/ci/default-values.yaml
+	helm template osac $(OSAC_CHART) --values $(HELM_VALIDATION_VALUES)
 
 .PHONY: csi-render-test
 csi-render-test: helm-deps ## Verify CSI and storage-provider chart rendering
@@ -526,7 +536,7 @@ csi-render-test: helm-deps ## Verify CSI and storage-provider chart rendering
 			--values values/caas-ci/infra.yaml \
 			--set csiDriver.enabled=true > "$$infra_enabled_render"; \
 		rg -q 'name: osac-infra-create-csi-creds' "$$infra_enabled_render"; \
-		assert_helm_failure "at '/csiDriver/namespace': value must be 'osac-csi'" \
+		assert_helm_failure 'csiDriver.namespace must be one of the following: "osac-csi"' \
 			helm template osac $(OSAC_CHART) \
 			--values charts/osac/ci/full-values.yaml \
 			--set operator.networkManagers.enabled=true \
@@ -542,7 +552,7 @@ csi-render-test: helm-deps ## Verify CSI and storage-provider chart rendering
 			--set operator.networkManagers.enabled=true \
 			--namespace osac-csi \
 			--set csiDriver.controller.fulfillment.configMap.name=osac-fulfillment-config; \
-		assert_helm_failure "value must be one of '', 'osac-csi'" \
+		assert_helm_failure 'namespace must be one of the following: "", "osac-csi"' \
 			helm template csi-driver ../osac-csi-driver/charts/csi-driver \
 			--set namespace=not-osac-csi; \
 		echo 'CSI render checks passed.'
@@ -551,12 +561,16 @@ csi-render-test: helm-deps ## Verify CSI and storage-provider chart rendering
 fulfillment-trust-render-test: helm-deps ## Check verified fulfillment transport renders
 	python3 scripts/test-fulfillment-trust-render.py
 
+.PHONY: mce-render-test
+mce-render-test: ## Check disabled MCE defaults, explicit enablement, and CaaS inheritance
+	uv run --project .. python scripts/test-mce-render.py
+
 .PHONY: dev-full-render-test
 dev-full-render-test: helm-deps ## Check dev-full TLS and Helm post-rendering
 	./scripts/test-dev-full-render.sh
 
 .PHONY: helm-validate
-helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test dev-full-render-test ## Validate all charts (lint + template)
+helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test mce-render-test dev-full-render-test ## Validate all charts (lint + template)
 	@for d in values/*/; do \
 		infra="$${d}infra.yaml"; \
 		[ -f "$$infra" ] && echo "Validating $$infra..." && \
@@ -566,6 +580,7 @@ helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-
 	@echo "Validating values/dev/kind-infra.yaml..."
 	helm template osac-infra $(INFRA_CHART) --values values/dev/kind-infra.yaml
 	./scripts/validate-keycloak-credentials.sh
+	./scripts/validate-hub-access-rbac.sh
 	@echo "Validation passed."
 
 .PHONY: helm-networking-test

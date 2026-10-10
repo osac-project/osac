@@ -196,12 +196,7 @@ spec:
               drop:
                 - ALL
           resources:
-            requests:
-              cpu: 50m
-              memory: 128Mi
-            limits:
-              cpu: 200m
-              memory: 512Mi
+            {{- toYaml .Values.hookResources | nindent 12 }}
           command:
             - /bin/bash
             - /scripts/apply-ca-bundle.sh
@@ -431,12 +426,7 @@ spec:
               drop:
                 - ALL
           resources:
-            requests:
-              cpu: 50m
-              memory: 128Mi
-            limits:
-              cpu: 200m
-              memory: 256Mi
+            {{- toYaml .Values.hookResources | nindent 12 }}
           command:
             - /bin/bash
             - /scripts/delete-ca-bundle.sh

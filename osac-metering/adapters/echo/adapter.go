@@ -12,32 +12,20 @@ package echo
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"sync/atomic"
 
 	"github.com/osac-project/osac-metering/adapters"
 )
 
-// Adapter is the echo provider API. It is the shared ProviderAdapter contract
-// plus the event query handlers used by the echo-adapter binary.
-type Adapter interface {
-	adapters.ProviderAdapter
-	HandleEvents(w http.ResponseWriter, r *http.Request)
-	HandleDeleteEvents(w http.ResponseWriter, r *http.Request)
-	HandleCount(w http.ResponseWriter, r *http.Request)
-	HandleEventByID(w http.ResponseWriter, r *http.Request)
-}
-
 type echoAdapter struct {
-	store     *eventStore
+	store     *EventStore
 	submitted atomic.Int64
 	flushed   atomic.Int64
 }
 
-// NewAdapter creates an echo provider adapter with a bounded event store.
-// bufferSize <= 0 uses DefaultMaxEvents.
-func NewAdapter(bufferSize int) Adapter {
-	return &echoAdapter{store: newEventStore(bufferSize)}
+// NewAdapter creates an echo provider adapter that records events in store.
+func NewAdapter(store *EventStore) adapters.ProviderAdapter {
+	return &echoAdapter{store: store}
 }
 
 func (a *echoAdapter) Name() string { return "echo" }
@@ -68,20 +56,4 @@ func (a *echoAdapter) Close() error {
 	fmt.Printf("[CLOSE]  total events submitted: %d, total flushes: %d\n",
 		a.submitted.Load(), a.flushed.Load())
 	return nil
-}
-
-func (a *echoAdapter) HandleEvents(w http.ResponseWriter, r *http.Request) {
-	a.store.handleEvents(w, r)
-}
-
-func (a *echoAdapter) HandleDeleteEvents(w http.ResponseWriter, r *http.Request) {
-	a.store.handleDeleteEvents(w, r)
-}
-
-func (a *echoAdapter) HandleCount(w http.ResponseWriter, r *http.Request) {
-	a.store.handleCount(w, r)
-}
-
-func (a *echoAdapter) HandleEventByID(w http.ResponseWriter, r *http.Request) {
-	a.store.handleEventByID(w, r)
 }

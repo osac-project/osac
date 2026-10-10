@@ -50,6 +50,10 @@ const (
 	Metal3HostTypeLabel  = metal3LabelPrefix + "host-type"
 	Metal3ManagedByLabel = metal3LabelPrefix + "managed-by"
 	Metal3PoolIDLabel    = metal3LabelPrefix + "pool-id"
+
+	// HostInterfaceMACsAnnotation stores an administrator-supplied JSON map of
+	// OSAC logical port names to physical MAC addresses on a BareMetalHost.
+	HostInterfaceMACsAnnotation = metal3LabelPrefix + "interface-macs"
 )
 
 func init() {
@@ -356,6 +360,32 @@ func (m *Metal3Client) GetHostNICs(ctx context.Context, inventoryHostID string) 
 		return nil, fmt.Errorf("BareMetalHost %s has no NIC inventory despite being allocated", inventoryHostID)
 	}
 	return nics, nil
+}
+
+// GetHostLogicalPortMACs reads the logical port mapping used for DHCP lease matching.
+func (m *Metal3Client) GetHostLogicalPortMACs(ctx context.Context, inventoryHostID string) (map[string]string, error) {
+	namespace, name, err := ParseHostID(inventoryHostID)
+	if err != nil {
+		return nil, err
+	}
+
+	key := client.ObjectKey{Namespace: namespace, Name: name}
+	bmh := &metal3api.BareMetalHost{}
+	if err := m.client.Get(ctx, key, bmh); err != nil {
+		return nil, fmt.Errorf("failed to get BareMetalHost %s: %w", inventoryHostID, err)
+	}
+
+	raw, ok := bmh.Annotations[HostInterfaceMACsAnnotation]
+	if !ok || raw == "" {
+		return map[string]string{}, nil
+	}
+
+	macs := map[string]string{}
+	if err := json.Unmarshal([]byte(raw), &macs); err != nil {
+		return nil, fmt.Errorf("host %s: failed to parse %s annotation: %w", inventoryHostID, HostInterfaceMACsAnnotation, err)
+	}
+
+	return macs, nil
 }
 
 func metal3HostNICs(details *metal3api.HardwareDetails) []HostNIC {

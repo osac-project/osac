@@ -218,7 +218,9 @@ func verifyTenantRemovedFromKeycloak(ctx context.Context, name string) {
 			g.Expect(json.Unmarshal(body, &kcTenants)).To(Succeed())
 			g.Expect(kcTenants).To(BeEmpty())
 		},
-		time.Minute,
+		// Keycloak organization deletion can complete asynchronously after the
+		// Fulfillment tenant and its finalizer have already been removed.
+		time.Minute*2,
 		time.Second,
 	).Should(Succeed())
 }
@@ -473,7 +475,7 @@ var _ = Describe("Tenant lifecycle", func() {
 				}.Build())
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(getResponse.GetObject().GetMetadata().GetFinalizers()).To(
-					ContainElement(finalizers.Controller),
+					ContainElements(finalizers.TenantLifecycle, finalizers.TenantOnboarding),
 				)
 				g.Expect(getResponse.GetObject().GetStatus().GetState()).To(
 					Equal(privatev1.TenantState_TENANT_STATE_SYNCED),

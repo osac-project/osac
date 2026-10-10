@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/ubi10/go-toolset:1.26.7-1788946935 AS builder
+FROM registry.access.redhat.com/ubi10/go-toolset:1.26.7-1791275880 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
@@ -13,6 +13,7 @@ RUN cd adapters && CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go
 
 FROM registry.access.redhat.com/ubi10-minimal:10.2-1790075626
 LABEL name="cloud-extensions/metering-echo-adapter-rhel10"
+LABEL cpe="cpe:/a:redhat:cloud_extensions:0.1::el10"
 WORKDIR /
 COPY --from=builder /opt/app-root/src/echo-adapter .
 USER 65532:65532

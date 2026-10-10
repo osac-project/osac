@@ -166,18 +166,25 @@ func (s *PrivateIdentityProvidersServer) Get(ctx context.Context,
 
 func (s *PrivateIdentityProvidersServer) Update(ctx context.Context,
 	request *privatev1.IdentityProvidersUpdateRequest) (response *privatev1.IdentityProvidersUpdateResponse, err error) {
-	if err = s.validateClientSecretSecret(ctx, request.GetObject()); err != nil {
-		return
+	// Check which fields are being updated.
+	hasClientSecretUpdate := false
+	hasSpecUpdate := false
+	for _, path := range request.GetUpdateMask().GetPaths() {
+		if path == "spec" || path == "spec.oidc" || strings.HasPrefix(path, "spec.oidc.client_secret_secret") {
+			hasClientSecretUpdate = true
+		}
+		if strings.HasPrefix(path, "spec.") || path == "spec" {
+			hasSpecUpdate = true
+		}
+	}
+	// Only validate client secret when the update actually touches it.
+	if hasClientSecretUpdate {
+		if err = s.validateClientSecretSecret(ctx, request.GetObject()); err != nil {
+			return
+		}
 	}
 	// Only reset phase when the client is changing spec fields (user-initiated intent change).
 	// Do NOT reset when the reconciler is writing status back (would cause infinite reconcile loop).
-	hasSpecUpdate := false
-	for _, path := range request.GetUpdateMask().GetPaths() {
-		if strings.HasPrefix(path, "spec.") || path == "spec" {
-			hasSpecUpdate = true
-			break
-		}
-	}
 	if hasSpecUpdate {
 		obj := request.GetObject()
 		if !obj.HasStatus() {

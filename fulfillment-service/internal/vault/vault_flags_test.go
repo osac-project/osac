@@ -14,6 +14,9 @@ language governing permissions and limitations under the License.
 package vault
 
 import (
+	"os"
+	"path/filepath"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/spf13/pflag"
@@ -54,7 +57,41 @@ var _ = Describe("Vault flags", func() {
 			cfg, err := LifecycleConfigFromFlags(flags)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(cfg.MountPath).To(Equal("jwt"))
+			Expect(cfg.TransitMountPath).To(Equal("transit"))
 			Expect(cfg.Role).To(Equal(""))
+		})
+	})
+
+	Describe("Transit flags", func() {
+		It("passes the configured mount path through the lifecycle factory", func() {
+			secretFile := filepath.Join(GinkgoT().TempDir(), "client-secret")
+			Expect(os.WriteFile(secretFile, []byte("test-client-secret"), 0o600)).To(Succeed())
+			client, err := NewLifecycleClientFromConfig(logger, BaseConfig{
+				Endpoint: "https://vault.example.com", Namespace: "osac", KVMountPath: "secret",
+				KeycloakIssuerURL: "https://kc/realms/osac", KeycloakClientID: "test-client",
+				KeycloakClientSecretFile: secretFile, KeycloakAudience: "osac-api",
+			}, LifecycleConfig{
+				Role: "lifecycle", MountPath: "jwt", TransitMountPath: "custom-transit",
+			}, nil)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(client.(*VaultLifecycleClient).transitMountPath).To(Equal("custom-transit"))
+		})
+
+		It("reads a custom lifecycle Transit mount path", func() {
+			flags := pflag.NewFlagSet("test", pflag.ContinueOnError)
+			AddLifecycleFlags(flags)
+			Expect(flags.Set("vault-transit-mount-path", "custom-transit")).To(Succeed())
+			cfg, err := LifecycleConfigFromFlags(flags)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(cfg.TransitMountPath).To(Equal("custom-transit"))
+		})
+
+		It("rejects invalid Transit mount paths", func() {
+			for _, mount := range []string{"", "../escape", "a/b", "transit/", "a b"} {
+				Expect(ValidateLifecycleConfig(LifecycleConfig{
+					Role: "lifecycle", TransitMountPath: mount,
+				})).To(MatchError(ContainSubstring("Transit mount path")))
+			}
 		})
 	})
 
@@ -125,7 +162,8 @@ var _ = Describe("Vault flags", func() {
 	Describe("ValidateLifecycleConfig", func() {
 		It("returns nil when all required fields are set", func() {
 			cfg := LifecycleConfig{
-				Role: "lifecycle",
+				Role:             "lifecycle",
+				TransitMountPath: "transit",
 			}
 			Expect(ValidateLifecycleConfig(cfg)).To(Succeed())
 		})

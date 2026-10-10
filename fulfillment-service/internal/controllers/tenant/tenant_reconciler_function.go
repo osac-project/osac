@@ -169,7 +169,9 @@ func (r *function) Run(ctx context.Context, tenant *privatev1.Tenant) error {
 	}
 
 	var reconcileErr error
-	if tenant.HasMetadata() && tenant.GetMetadata().HasDeletionTimestamp() {
+	if task.addFinalizer() {
+		// Persist both barriers before doing any external work.
+	} else if tenant.HasMetadata() && tenant.GetMetadata().HasDeletionTimestamp() {
 		if err := task.delete(ctx); err != nil {
 			return err
 		}
@@ -213,10 +215,6 @@ func (t *task) update(ctx context.Context) error {
 
 // updateLifecycle performs the normal tenant lifecycle reconciliation.
 func (t *task) updateLifecycle(ctx context.Context) error {
-	if t.addFinalizer() {
-		return nil
-	}
-
 	t.setDefaults()
 	t.setConditionDefaults()
 
@@ -242,6 +240,9 @@ func (t *task) updateLifecycle(ctx context.Context) error {
 		}
 		if err := t.ensureVaultNamespace(ctx); err != nil {
 			return err
+		}
+		if t.tenant.GetStatus().GetState() == privatev1.TenantState_TENANT_STATE_FAILED {
+			return nil
 		}
 		if err := t.ensureDefaultNetworking(ctx); err != nil {
 			return err
@@ -288,6 +289,11 @@ func (t *task) syncToIDP(ctx context.Context) error {
 	// must be provisioned first.
 	if err := t.ensureVaultNamespace(ctx); err != nil {
 		return err
+	}
+	// If vault is enabled and provisioning failed, the condition is FALSE and status will be persisted.
+	// Skip break-glass secret persistence since it requires vault.
+	if t.r.vaultLifecycle != nil && !t.isConditionTrue(privatev1.TenantConditionType_TENANT_CONDITION_TYPE_VAULT_READY) {
+		return nil
 	}
 
 	if err := t.persistBreakGlassSecret(ctx); err != nil {
@@ -459,19 +465,10 @@ func (t *task) validateTenant() error {
 	return nil
 }
 
-// addFinalizer adds the controller finalizer to the tenant if not already present.
-// Returns true if the finalizer was added (indicating the update should be saved immediately).
+// addFinalizer prepares both cleanup barriers.
+// Returns true if the finalizers changed and must be saved immediately.
 func (t *task) addFinalizer() bool {
-	if !t.tenant.HasMetadata() {
-		t.tenant.SetMetadata(&privatev1.Metadata{})
-	}
-	list := t.tenant.GetMetadata().GetFinalizers()
-	if !slices.Contains(list, finalizers.Controller) {
-		list = append(list, finalizers.Controller)
-		t.tenant.GetMetadata().SetFinalizers(list)
-		return true
-	}
-	return false
+	return finalizers.PrepareTenant(t.tenant)
 }
 
 // removeFinalizer removes the controller finalizer from the tenant.
@@ -480,9 +477,9 @@ func (t *task) removeFinalizer() {
 		return
 	}
 	list := t.tenant.GetMetadata().GetFinalizers()
-	if slices.Contains(list, finalizers.Controller) {
+	if slices.Contains(list, finalizers.TenantLifecycle) {
 		list = slices.DeleteFunc(list, func(item string) bool {
-			return item == finalizers.Controller
+			return item == finalizers.TenantLifecycle
 		})
 		t.tenant.GetMetadata().SetFinalizers(list)
 	}
@@ -497,6 +494,10 @@ func (t *task) isBuiltin() bool {
 
 // delete performs the deletion cleanup for a tenant.
 func (t *task) delete(ctx context.Context) error {
+	if !slices.Contains(t.tenant.GetMetadata().GetFinalizers(), finalizers.TenantLifecycle) {
+		return nil
+	}
+
 	// Remove the break-glass secret first so its project FK does not block
 	// administrators from deleting the default project. Clear the spec ref
 	// afterwards so the follow-up Tenants/Update (finalizer removal) is not
@@ -741,7 +742,10 @@ func (t *task) ensureVaultNamespace(ctx context.Context) error {
 			slog.String("tenant_name", tenantName),
 			slog.Any("error", err),
 		)
-		return fmt.Errorf("failed to provision vault namespace: %w", err)
+
+		t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+			"ProvisionFailed", fmt.Sprintf("Failed to provision vault namespace: %v", err))
+		return nil
 	}
 
 	t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_TRUE,

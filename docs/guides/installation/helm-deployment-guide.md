@@ -117,6 +117,8 @@ helm upgrade --install osac-infra ./charts/osac-infra \
     --wait-for-jobs --timeout 30m
 
 # Phase 2: the OSAC platform itself
+# Helm 4: --force-conflicts is required because the AAP operator takes
+# field ownership of app.kubernetes.io/managed-by on the osac-aap CR.
 helm dependency update ./charts/osac
 helm upgrade --install osac ./charts/osac \
     -n "$NS" --create-namespace \
@@ -124,6 +126,7 @@ helm upgrade --install osac ./charts/osac \
     --set global.clusterDomain="$DOMAIN" \
     --set service.externalHostname="fulfillment-api-$NS.$DOMAIN" \
     --set service.internalHostname="fulfillment-internal-api-$NS.$DOMAIN" \
+    --force-conflicts \
     --wait --timeout 40m
 ```
 
@@ -153,8 +156,10 @@ and `osac-infra`. Keys a chart doesn't recognize are ignored.
 | `lvms.channel` | Update channel for LVM Storage. Set it to `stable-<cluster_minor>` at installation. | `stable-4.22` |
 | `metallb.enabled` | Creates the MetalLB `Subscription`, the `caas-address-pool` `IPAddressPool`, and the `L2Advertisement`. | `false` |
 | `metallb.channel` | Update channel for MetalLB. | `stable` |
-| `mce.enabled` | Creates the multicluster engine `Subscription` and the agent configuration. Required for CaaS. | `false` |
+| `mce.enabled` | Creates the standalone multicluster engine `Subscription`, agent configuration, and temporary Assisted image bridge. Enable it for CaaS unless RHACM or an existing MCE installation provides it. | `false` |
 | `mce.channel` | Update channel for multicluster engine. | `stable-2.17` |
+| `mce.imageService.enabled` | Creates and runs the Assisted Image Service. Keep enabled until the Assisted discovery-artifact fix is released and verified. | `true` |
+| `mce.imageOverrides` | Temporary four-image MCE 5.0 Assisted operand bridge used until a stable MCE 5.0 catalog is available. Rendered only when `mce.enabled` is `true`. | Four pinned Assisted image entries |
 | `mce.osImages` | RHCOS live-ISO entries for agent discovery. | `[]` |
 | `kafka.enabled` | Creates the Streams for Apache Kafka `Subscription` and the Kafka custom resource. Enable when the installer should provide Kafka for fulfillment and optional metering. Keep `false` for an existing broker and follow [Kafka configuration](kafka-configuration.md). | `false` |
 | `kafka.replicas` | Kafka broker replica count. | `3` |
@@ -177,7 +182,7 @@ and `osac-infra`. Keys a chart doesn't recognize are ignored.
 | `bundledPostgres.enabled` | Deploys bundled PostgreSQL for development and CI. It is not intended for production. | `false` |
 | `bundledPostgres.database.name` | Bundled database name. | `service` |
 | `bundledPostgres.database.user` | Bundled database owner. | `service` |
-| `bundledVault.enabled` | Deploys an ephemeral in-cluster OpenBao secret store. Set it to `false` for production and configure external Vault in the `osac` values file; see the [secrets management configuration guide](secrets-management-configuration.md). | `true` |
+| `bundledVault.enabled` | Deploys an in-cluster OpenBao secret store for testing and CI. Set it to `false` for production and configure external Vault in the `osac` values file; see the [secrets management configuration guide](secrets-management-configuration.md). | `true` |
 | `cliImage` | The `oc` image that the chart hook jobs use. | `origin-cli:4.20.0` |
 
 ## When Prerequisites Already Exist
@@ -213,6 +218,12 @@ mce:          { enabled: false }
   `192.168.100.250`. If you already run the Operator, keep the toggle `false`
   and create your own operand. Edit the `IPAddressPool` after installation to
   use an address range that is valid for your network.
+- MCE is disabled by default. Set `mce.enabled: true` when the installation
+  owns standalone MCE; the `caas-ci` infrastructure profile enables it
+  explicitly. Leave it `false` when RHACM or an existing MCE installation owns
+  that lifecycle. The disabled state also suppresses the default Assisted image
+  override `ConfigMap` and its MCE 5.0 compatibility RBAC; the chart does not
+  modify the existing installation.
 - `caIssuer.enabled: false` requires you to provide a `ClusterIssuer` and set
   `service.certs.issuerRef` in the phase-2 `my-values.yaml`.
 - `keycloak.enabled: false` requires a pre-configured Keycloak with the `osac`
@@ -259,7 +270,7 @@ Disable these for any real deployment.
 | Value | Default | What it does |
 |-------|---------|-------------|
 | `bundledPostgres.enabled` | `false` | Deploys bundled PostgreSQL for development and CI. It is not intended for production. |
-| `bundledVault.enabled` | `true` | Deploys a single-pod ephemeral OpenBao secret store in the `osac-infra` namespace. Dev mode — data is lost on restart. Set to `false` for production and follow the [secrets management configuration guide](secrets-management-configuration.md). |
+| `bundledVault.enabled` | `true` | Deploys an in-cluster OpenBao secret store for testing and CI. Set to `false` for production and follow the [secrets management configuration guide](secrets-management-configuration.md). |
 
 The upgrade does not migrate data from the previous bundled PostgreSQL instance.
 Back up any data you need before upgrading.
@@ -313,7 +324,8 @@ immutable `ConfigMap`. Update it using this sequence:
    oc delete configmap osac-csi-fulfillment-config -n osac-csi
    ```
 
-3. Immediately reapply the updated values so Helm recreates the `ConfigMap`:
+3. Immediately reapply the updated values so Helm recreates the `ConfigMap`.
+   The command below is Helm 4; omit `--force-conflicts` on Helm 3.
 
    ```bash
    helm upgrade --install osac ./charts/osac \
@@ -322,6 +334,7 @@ immutable `ConfigMap`. Update it using this sequence:
        --set global.clusterDomain="$DOMAIN" \
        --set service.externalHostname="fulfillment-api-$NS.$DOMAIN" \
        --set service.internalHostname="fulfillment-internal-api-$NS.$DOMAIN" \
+       --force-conflicts \
        --wait --timeout 40m
    ```
 

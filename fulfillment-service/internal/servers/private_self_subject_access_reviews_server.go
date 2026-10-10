@@ -135,13 +135,13 @@ func (s *PrivateSelfSubjectAccessReviewsServer) Create(ctx context.Context, requ
 
 	// Extract the review object from the request
 	review := request.GetObject()
-	if review == nil {
-		return nil, status.Error(codes.InvalidArgument, "object is required")
+	if err := ValidateRequiredObject("object", review); err != nil {
+		return nil, err
 	}
 
 	spec := review.GetSpec()
-	if spec == nil {
-		return nil, status.Error(codes.InvalidArgument, "spec is required")
+	if err := ValidateRequiredObject("spec", spec); err != nil {
+		return nil, err
 	}
 
 	// Build the gRPC method path and validate service/method exist

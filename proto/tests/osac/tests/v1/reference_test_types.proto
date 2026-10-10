@@ -41,6 +41,7 @@ message TestOtherTargetLocalReference {
 message TestRefAttachment {
   TestTargetLocalReference subnet = 1;
   repeated TestOtherTargetLocalReference security_groups = 2;
+  map<string, TestTargetReference> targets = 3;
 }
 
 // Spec with various reference field patterns.
@@ -49,6 +50,12 @@ message TestRefSpec {
   TestTargetLocalReference local_target = 2;
   TestRefAttachment attachment = 3;
   repeated TestOtherTargetLocalReference other_targets = 4;
+  map<string, TestTargetReference> targets = 5;
+  map<string, TestRefAttachment> attachments = 6;
+  map<int64, TestTargetLocalReference> numbered_targets = 7;
+  map<bool, TestTargetReference> enabled_targets = 8;
+  map<string, string> labels = 9;
+  repeated TestRefAttachment other_attachments = 10;
 }
 
 // Spec with oneof containing reference fields.

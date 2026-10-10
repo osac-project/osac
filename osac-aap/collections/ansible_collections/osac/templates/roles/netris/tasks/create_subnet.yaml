@@ -111,8 +111,20 @@
   ansible.builtin.include_role:
     name: netris.controller.vnet
     tasks_from: read_by_id
-  vars:
-    vnet_id: "{{ vnet_id }}"
+
+- name: Set the Subnet CIDR as the fabric reserved range
+  ansible.builtin.set_fact:
+    _fabric_reserved_range: "{{ subnet_ipv4_cidr | default('') }}"
+
+- name: Verify required Netris fabric outputs are present
+  ansible.builtin.assert:
+    that:
+      - netris_vnet_detail.vxlanID is defined
+      - _parent_vpc.vni is defined
+      - _fabric_reserved_range | length > 0
+    fail_msg: >-
+      A required fabric output is missing: V-Net VXLAN ID, parent VPC VNI, or
+      Subnet CIDR required by the Kubernetes networking manager.
 
 - name: Publish fabric outputs for the k8s manager
   kubernetes.core.k8s:
@@ -124,6 +136,6 @@
         name: "subnet-{{ subnet_name }}-fabric-output"
         namespace: "{{ subnet.metadata.namespace }}"
       data:
-        l2_vni: "{{ netris_vnet_detail.l2_vni | string }}"
-        l3_vni: "{{ _parent_vpc.l3_vni | string }}"
-        fabric_reserved_range: "{{ netris_vnet_detail.gateway_range }}"
+        l2_vni: "{{ netris_vnet_detail.vxlanID | string }}"
+        l3_vni: "{{ _parent_vpc.vni | string }}"
+        fabric_reserved_range: "{{ _fabric_reserved_range }}"

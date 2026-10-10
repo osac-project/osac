@@ -23,6 +23,7 @@ import (
 
 	vaultapi "github.com/hashicorp/vault/api"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
 )
@@ -69,6 +70,24 @@ var _ = Describe("VaultLifecycleClient", func() {
 	}
 
 	Describe("Builder", func() {
+		DescribeTable("rejects unsafe Transit mount paths", func(mount string) {
+			_, err := NewVaultLifecycleClient().
+				SetLogger(logger).
+				SetAddress("http://localhost:8200").
+				SetTokenSource(newMockTokenSource("token")).
+				SetParentNamespace("osac").
+				SetTransitMountPath(mount).
+				SetKeycloakIssuerURL("https://keycloak/realms/osac").
+				SetServiceClientID("test-client").
+				Build()
+			Expect(err).To(MatchError(ContainSubstring("mount path")))
+		},
+			Entry("empty", ""),
+			Entry("nested", "transit/keys"),
+			Entry("traversal", "../transit"),
+			Entry("KV collision", "secret"),
+		)
+
 		It("fails without logger", func() {
 			_, err := NewVaultLifecycleClient().
 				SetAddress("http://localhost:8200").
@@ -172,12 +191,151 @@ var _ = Describe("VaultLifecycleClient", func() {
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(client.kvMountPath).To(Equal("secret"))
+			Expect(client.transitMountPath).To(Equal("transit"))
 			Expect(client.keycloakAudience).To(Equal("osac-api"))
 		})
 	})
 
 	Describe("EnsureTenantNamespace", func() {
-		It("sends all six requests with correct paths and namespaces", func() {
+		DescribeTable("provisions Transit according to ownership", func(tenantName string, expectedMounts int) {
+			mounts := 0
+			client, _ := newTestLifecycleClient(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/v1/sys/mounts/custom-transit" {
+					mounts++
+					Expect(r.Header.Get("X-Vault-Namespace")).To(Equal("osac/" + tenantName))
+					var body map[string]any
+					Expect(json.NewDecoder(r.Body).Decode(&body)).To(Succeed())
+					Expect(body["type"]).To(Equal("transit"))
+				}
+				w.Write([]byte(`{}`))
+			})
+			client.transitMountPath = "custom-transit"
+			Expect(client.EnsureTenantNamespace(ctx, tenantName)).To(Succeed())
+			Expect(mounts).To(Equal(expectedMounts))
+		},
+			Entry("ordinary tenant", "tenant-a", 1),
+			Entry("system", "system", 1),
+			Entry("shared", "shared", 0),
+		)
+
+		DescribeTable("checks an occupied mount", func(mountPath, engine, mountsJSON string, succeeds bool) {
+			client, _ := newTestLifecycleClient(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/v1/sys/mounts/" + mountPath:
+					w.WriteHeader(http.StatusBadRequest)
+					w.Write([]byte(`{"errors":["path is already in use"]}`))
+				case "/v1/sys/mounts":
+					Expect(r.Method).To(Equal(http.MethodGet))
+					Expect(r.Header.Get("X-Vault-Namespace")).To(Equal("osac/tenant-a"))
+					w.Write([]byte(mountsJSON))
+				default:
+					w.Write([]byte(`{}`))
+				}
+			})
+			err := client.EnsureTenantNamespace(ctx, "tenant-a")
+			if succeeds {
+				Expect(err).ToNot(HaveOccurred())
+			} else {
+				Expect(err).To(MatchError(ContainSubstring("configure a different " + engine + " mount path")))
+			}
+		},
+			Entry("existing Transit", "transit", "transit", `{"data":{"transit/":{"type":"transit"}}}`, true),
+			Entry("conflicting KV", "transit", "transit", `{"data":{"transit/":{"type":"kv"}}}`, false),
+			Entry("missing Transit mount", "transit", "transit", `{"data":{}}`, false),
+			Entry("existing KV v2", "secret", "kv", `{"data":{"secret/":{"type":"kv","options":{"version":"2"}}}}`, true),
+			Entry("conflicting Transit", "secret", "kv", `{"data":{"secret/":{"type":"transit"}}}`, false),
+			Entry("existing KV v1", "secret", "kv", `{"data":{"secret/":{"type":"kv","options":{"version":"1"}}}}`, false),
+			Entry("KV without version", "secret", "kv", `{"data":{"secret/":{"type":"kv"}}}`, false),
+			Entry("missing KV mount", "secret", "kv", `{"data":{}}`, false),
+		)
+
+		DescribeTable("redacts mount request failures", func(mountPath, engine string, status int, inspect bool) {
+			client, _ := newTestLifecycleClient(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/v1/sys/mounts/"+mountPath && inspect {
+					w.WriteHeader(http.StatusBadRequest)
+					w.Write([]byte(`{"errors":["existing mount"]}`))
+					return
+				}
+				if r.URL.Path == "/v1/sys/mounts/"+mountPath || r.URL.Path == "/v1/sys/mounts" {
+					w.WriteHeader(status)
+					w.Write([]byte(`{"errors":["sensitive-provider-response"]}`))
+					return
+				}
+				w.Write([]byte(`{}`))
+			})
+			// Avoid SDK retry delays in failure tests.
+			client.client.SetMaxRetries(0)
+			err := client.EnsureTenantNamespace(ctx, "tenant-a")
+			Expect(err).To(MatchError(ContainSubstring("verify lifecycle mount permissions and backend availability")))
+			Expect(err.Error()).To(ContainSubstring(engine + " for tenant \"tenant-a\""))
+			Expect(err.Error()).To(ContainSubstring("HTTP %d", status))
+			if inspect {
+				Expect(err.Error()).To(ContainSubstring("failed to inspect mount"))
+			} else {
+				Expect(err.Error()).To(ContainSubstring("failed to mount"))
+			}
+			Expect(err.Error()).ToNot(ContainSubstring("sensitive-provider-response"))
+			Expect(err.Error()).ToNot(ContainSubstring("test-token"))
+		},
+			Entry("Transit mount denied", "transit", "transit", http.StatusForbidden, false),
+			Entry("Transit mount unavailable", "transit", "transit", http.StatusServiceUnavailable, false),
+			Entry("Transit inspection denied", "transit", "transit", http.StatusForbidden, true),
+			Entry("KV mount denied", "secret", "kv", http.StatusForbidden, false),
+			Entry("KV mount unavailable", "secret", "kv", http.StatusServiceUnavailable, false),
+			Entry("KV inspection denied", "secret", "kv", http.StatusForbidden, true),
+		)
+
+		It("retries partial provisioning without replacing the existing engine", func() {
+			mounted := map[string]bool{}
+			roleAttempts := 0
+			client, _ := newTestLifecycleClient(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/v1/sys/mounts/secret", "/v1/sys/mounts/transit":
+					if mounted[r.URL.Path] {
+						w.WriteHeader(http.StatusBadRequest)
+						w.Write([]byte(`{"errors":["existing mount"]}`))
+						return
+					}
+					mounted[r.URL.Path] = true
+				case "/v1/sys/mounts":
+					w.Write([]byte(`{"data":{"secret/":{"type":"kv","options":{"version":"2"}},"transit/":{"type":"transit"}}}`))
+					return
+				case "/v1/auth/jwt/role/service-access":
+					roleAttempts++
+					if roleAttempts == 1 {
+						w.WriteHeader(http.StatusForbidden)
+						w.Write([]byte(`{"errors":["permission denied"]}`))
+						return
+					}
+				}
+				Expect(r.Method).ToNot(Equal(http.MethodDelete))
+				w.Write([]byte(`{}`))
+			})
+			Expect(client.EnsureTenantNamespace(ctx, "tenant-a")).To(HaveOccurred())
+			Expect(mounted).To(HaveLen(2))
+			Expect(client.EnsureTenantNamespace(ctx, "tenant-a")).To(Succeed())
+			Expect(roleAttempts).To(Equal(2))
+		})
+
+		DescribeTable("redacts connectivity errors", func(engine string) {
+			client, server := newTestLifecycleClient(func(w http.ResponseWriter, r *http.Request) {})
+			server.Close()
+			client.client.SetMaxRetries(0)
+			var err error
+			if engine == "transit" {
+				err = client.mountTransit(ctx, client.client, "tenant-a")
+			} else {
+				err = client.mountKV(ctx, client.client, "tenant-a")
+			}
+			Expect(err).To(MatchError(ContainSubstring("verify backend connectivity and TLS configuration")))
+			Expect(err.Error()).To(ContainSubstring(engine))
+			Expect(err.Error()).ToNot(ContainSubstring(server.URL))
+		},
+			Entry("Transit", "transit"),
+			Entry("KV", "kv"),
+		)
+
+		It("sends all seven requests with correct paths and namespaces", func() {
 			var mu sync.Mutex
 			var requests []requestRecord
 
@@ -204,7 +362,7 @@ var _ = Describe("VaultLifecycleClient", func() {
 
 			err := client.EnsureTenantNamespace(ctx, "tenant-a")
 			Expect(err).ToNot(HaveOccurred())
-			Expect(requests).To(HaveLen(6))
+			Expect(requests).To(HaveLen(7))
 
 			// 1. Create namespace
 			Expect(requests[0].method).To(Equal("PUT"))
@@ -215,28 +373,34 @@ var _ = Describe("VaultLifecycleClient", func() {
 			Expect(requests[1].path).To(Equal("/v1/sys/mounts/secret"))
 			Expect(requests[1].namespace).To(Equal("osac/tenant-a"))
 			Expect(requests[1].body["type"]).To(Equal("kv"))
+			Expect(requests[1].body["options"]).To(Equal(map[string]any{"version": "2"}))
 
-			// 3. Enable JWT auth
-			Expect(requests[2].path).To(Equal("/v1/sys/auth/jwt"))
+			// 3. Mount Transit
+			Expect(requests[2].path).To(Equal("/v1/sys/mounts/transit"))
 			Expect(requests[2].namespace).To(Equal("osac/tenant-a"))
-			Expect(requests[2].body["type"]).To(Equal("jwt"))
+			Expect(requests[2].body["type"]).To(Equal("transit"))
 
-			// 4. Configure JWT auth
-			Expect(requests[3].path).To(Equal("/v1/auth/jwt/config"))
+			// 4. Enable JWT auth
+			Expect(requests[3].path).To(Equal("/v1/sys/auth/jwt"))
 			Expect(requests[3].namespace).To(Equal("osac/tenant-a"))
-			Expect(requests[3].body["oidc_discovery_url"]).To(Equal(
-				"https://keycloak.example.com/realms/osac"))
-			Expect(requests[3].body["default_role"]).To(Equal("service-access"))
+			Expect(requests[3].body["type"]).To(Equal("jwt"))
 
-			// 5. Create policy
-			Expect(requests[4].path).To(Equal("/v1/sys/policies/acl/tenant-kv-access"))
+			// 5. Configure JWT auth
+			Expect(requests[4].path).To(Equal("/v1/auth/jwt/config"))
 			Expect(requests[4].namespace).To(Equal("osac/tenant-a"))
+			Expect(requests[4].body["oidc_discovery_url"]).To(Equal(
+				"https://keycloak.example.com/realms/osac"))
+			Expect(requests[4].body["default_role"]).To(Equal("service-access"))
 
-			// 6. Create role
-			Expect(requests[5].path).To(Equal("/v1/auth/jwt/role/service-access"))
+			// 6. Create policy
+			Expect(requests[5].path).To(Equal("/v1/sys/policies/acl/tenant-kv-access"))
 			Expect(requests[5].namespace).To(Equal("osac/tenant-a"))
-			Expect(requests[5].body["role_type"]).To(Equal("jwt"))
-			Expect(requests[5].body["user_claim"]).To(Equal("azp"))
+
+			// 7. Create role
+			Expect(requests[6].path).To(Equal("/v1/auth/jwt/role/service-access"))
+			Expect(requests[6].namespace).To(Equal("osac/tenant-a"))
+			Expect(requests[6].body["role_type"]).To(Equal("jwt"))
+			Expect(requests[6].body["user_claim"]).To(Equal("azp"))
 		})
 
 		It("tolerates already-exists errors for namespace creation", func() {
@@ -254,7 +418,7 @@ var _ = Describe("VaultLifecycleClient", func() {
 
 			err := client.EnsureTenantNamespace(ctx, "tenant-a")
 			Expect(err).ToNot(HaveOccurred())
-			Expect(callCount).To(Equal(6))
+			Expect(callCount).To(Equal(7))
 		})
 
 		It("tolerates existing-mount errors for KV mount", func() {
@@ -262,6 +426,10 @@ var _ = Describe("VaultLifecycleClient", func() {
 				if r.URL.Path == "/v1/sys/mounts/secret" {
 					w.WriteHeader(http.StatusBadRequest)
 					w.Write([]byte(`{"errors":["existing mount at secret/"]}`))
+					return
+				}
+				if r.URL.Path == "/v1/sys/mounts" {
+					w.Write([]byte(`{"data":{"secret/":{"type":"kv","options":{"version":"2"}}}}`))
 					return
 				}
 				w.WriteHeader(http.StatusOK)
@@ -316,7 +484,7 @@ var _ = Describe("VaultLifecycleClient", func() {
 
 			err := client.EnsureTenantNamespace(ctx, "tenant-a")
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("failed to mount KV"))
+			Expect(err.Error()).To(ContainSubstring("failed to mount kv"))
 		})
 
 		It("returns error when JWT auth configuration fails", func() {
@@ -425,6 +593,7 @@ var _ = Describe("VaultLifecycleClient", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(policyBody).To(ContainSubstring(`"custom-kv/data/*"`))
 			Expect(policyBody).To(ContainSubstring(`"custom-kv/metadata/*"`))
+			Expect(policyBody).ToNot(ContainSubstring("transit"))
 		})
 
 		It("creates role with correct bound claims for service client", func() {
@@ -450,6 +619,7 @@ var _ = Describe("VaultLifecycleClient", func() {
 			audiences, ok := roleBody["bound_audiences"].([]any)
 			Expect(ok).To(BeTrue())
 			Expect(audiences).To(ConsistOf("osac-api"))
+			Expect(roleBody["policies"]).To(ConsistOf("tenant-kv-access"))
 		})
 	})
 

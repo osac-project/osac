@@ -840,10 +840,21 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
                   name: publish-templates-ig
                   optional: true
             env:
-              - name: OSAC_PUBLISH_TEMPLATES_NAMESPACE_DEFAULT
+              - name: OSAC_FULFILLMENT_ISSUER_URL
                 valueFrom:
-                  fieldRef:
-                    fieldPath: metadata.namespace
+                  configMapKeyRef:
+                    name: aap-fulfillment-auth-config
+                    key: OSAC_FULFILLMENT_ISSUER_URL
+              - name: OSAC_FULFILLMENT_CLIENT_ID
+                valueFrom:
+                  secretKeyRef:
+                    name: fulfillment-controller-credentials
+                    key: client-id
+              - name: OSAC_FULFILLMENT_CLIENT_SECRET
+                valueFrom:
+                  secretKeyRef:
+                    name: fulfillment-controller-credentials
+                    key: client-secret
               - name: SSL_CERT_FILE
                 value: /certs/bundle.pem
         volumes:

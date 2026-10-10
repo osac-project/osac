@@ -16,7 +16,7 @@ argument_specs:
         required: true
       osac_fulfillment_service_token:
         type: str
-        required: true
+        description: Optional pre-issued token override; production calls use the Keycloak lookup plugin.
       publish_templates_cluster_api_endpoint:
         type: str
         description: API endpoint for cluster templates

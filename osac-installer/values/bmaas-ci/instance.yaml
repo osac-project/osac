@@ -83,7 +83,6 @@ service:
     - admin
     - osac-operator
     - osac-operator-controller-manager
-    - template-publisher
     - osac-metering
     controllerCredentials:
     - secret:

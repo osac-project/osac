@@ -132,6 +132,8 @@
           - call_log.json | selectattr('method', 'equalto', 'POST') | selectattr('path', 'contains', 'compute_instance_templates') | list | length == 1
           - call_log.json | selectattr('method', 'equalto', 'POST') | selectattr('path', 'contains', 'baremetal_instance_templates') | list | length == 1
           - call_log.json | selectattr('method', 'equalto', 'POST') | selectattr('path', 'contains', 'add_on_operators') | list | length == 1
+          - call_log.json | selectattr('authorization_present', 'equalto', false) | list | length == 0
+          - call_log.json | selectattr('authorization_scheme', 'ne', 'Bearer') | list | length == 0
         fail_msg: >-
           Expected 4 POSTs and 0 PATCHes for empty scenario.
           Calls: {{ call_log.json }}
@@ -269,6 +271,8 @@
           - call_log.json | selectattr('method', 'equalto', 'PATCH') | selectattr('path', 'contains', 'baremetal_instance_templates') | list | length == 1
           - call_log.json | selectattr('method', 'equalto', 'POST') | selectattr('path', 'contains', 'cluster_templates') | list | length == 1
           - call_log.json | selectattr('method', 'equalto', 'PATCH') | selectattr('path', 'contains', 'add_on_operators') | list | length == 1
+          - call_log.json | selectattr('authorization_present', 'equalto', false) | list | length == 0
+          - call_log.json | selectattr('authorization_scheme', 'ne', 'Bearer') | list | length == 0
         fail_msg: >-
           Expected 4 PATCHes (existing items) and 1 POST (new item).
           Calls: {{ call_log.json }}

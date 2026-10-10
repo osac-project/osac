@@ -36,7 +36,7 @@ where applicable):
 | `LICENSE_MANIFEST_PATH` | Path to the license manifest file to register the AAP instance ([Red Hat account](https://access.redhat.com/management/subscription_allocations)) | `/var/secrets/config-as-code-manifest/license.zip` |
 | `REMOTE_CLUSTER_KUBECONFIG_SECRET_NAME` | Name of the secret holding the kubeconfig for the remote cluster (compute, networking, and storage operations) | — |
 | `REMOTE_CLUSTER_KUBECONFIG_SECRET_KEY` | Key within that secret for the kubeconfig file | `kubeconfig` |
-| `OSAC_PUBLISH_TEMPLATES_ENABLED` | Whether the periodic **publish-templates** schedule is enabled in Controller (`true`/`false`) | `true` |
+| `OSAC_PUBLISH_TEMPLATES_ENABLED` | Whether the periodic **publish-templates** schedule is enabled in Controller (`true`/`false`) | Helm sets this from `instanceGroups.publishTemplates.enabled`; if unset for a manually managed deployment, `true` |
 
 These variables must be defined in a secret named `config-as-code-ig` in the
 namespace where AAP is deployed.
@@ -238,66 +238,25 @@ as AWS and OpenStack credentials:
 
     oc create secret generic cluster-fulfillment-ig --from-env-file=fufillment_creds -n fulfillment-aap
 
-#### Template publisher configuration
+#### Template publisher authentication
 
-Create the service account, role, and role bindings required by the template
-publisher to authenticate against the
-[fulfillment-service](https://github.com/osac-project/fulfillment-service/):
+The `publish-templates` execution group uses the Keycloak client-credentials
+flow to authenticate its Fulfillment REST calls. In the AAP namespace, provide
+the `fulfillment-controller-credentials` Secret with `client-id` and
+`client-secret` keys, and the `aap-fulfillment-auth-config` ConfigMap with the
+`OSAC_FULFILLMENT_ISSUER_URL` key. The installer provisions the Secret from
+Keycloak's managed client credentials and renders the ConfigMap from
+`service.auth.issuerUrl` when template publishing is enabled.
 
-    cat << EOF > template-publisher
-    apiVersion: v1
-    kind: ServiceAccount
-    metadata:
-      name: template-publisher
-      namespace: fulfillment-aap
-    ---
-    apiVersion: rbac.authorization.k8s.io/v1
-    kind: Role
-    metadata:
-      name: create-controller-token
-      namespace: osac
-    rules:
-      - apiGroups: [""]
-        resources: ["serviceaccounts/token"]
+For a separately managed AAP deployment, provision those resources through the
+deployment's secret-management process and configure the `publish-templates`
+instance group to expose them to its execution pods. Do not place the client
+secret in a ConfigMap, playbook variable, or checked-in values file.
 
-        # here is the name of the service account to authenticate against the
-        # fulfillment-service
-        resourceNames: ["controller"]
-        verbs: ["create"]
-    ---
-    apiVersion: rbac.authorization.k8s.io/v1
-    kind: RoleBinding
-    metadata:
-      name: aap-fulfillment-template-publisher-binding
-      namespace: osac
-    roleRef:-
-      apiGroup: rbac.authorization.k8s.io
-      kind: Role
-      name: create-controller-token
-    subjects:
-      - kind: ServiceAccount
-        name: template-publisher
-        namespace: fulfillment-aap
-    ---
-    apiVersion: v1
-    kind: ConfigMap
-    metadata:
-      name: my-prefix-publish-templates-ig
-      namespace: fulfillment-aap
-    data:
-      OSAC_FULFILLMENT_SERVICE_URI: https://fulfillment-service.example.uri
-      OSAC_TEMPLATE_COLLECTIONS: osac.templates,example.templates
-
-      # this is the service account used to login against fulfillment service (see
-      # RBAC above)
-      OSAC_PUBLISH_TEMPLATES_SERVICE_ACCOUNT: controller
-
-      # this is the namespace where the service account used to login against
-      # fulfillment service lives ("controller" in this example)
-      OSAC_PUBLISH_TEMPLATES_NAMESPACE: osac
-    EOF
-
-    oc apply -f template-publisher
+The `template-publisher` ServiceAccount remains the execution pod's Kubernetes
+API identity. Its projected Kubernetes token is separate from the Keycloak
+client-credentials token used for Fulfillment requests; it no longer needs
+permission to create service-account tokens.
 
 #### Bootstrap AAP configuration
 

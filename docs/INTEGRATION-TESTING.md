@@ -354,6 +354,8 @@ Touched-area requirements: [component guide](../osac-aap/AGENTS.md#integration-t
 | Tier | Location / command | Exercises for real | Faked or omitted |
 |---|---|---|---|
 | Unit | `tests/unit/`; `uv run pytest tests/unit` | Filter and isolated plugin behavior | Kubernetes, AAP, cloud, and storage services are mocked or fixture-driven. |
+| Unit | `tests/unit/plugins/lookup/test_fulfillment_token.py`; included by `uv run pytest tests/unit` | OIDC discovery validation, Keycloak client-credentials exchange, token caching/refresh, and sanitized failures | Keycloak and Fulfillment are mocked; this does not prove deployed credentials or cross-cluster reachability. |
+| Unit | `tests/unit/test_publish_templates_auth_config.py`; included by `uv run pytest tests/unit` | Parsed publisher pod spec, Kubernetes service-account projection, and OAuth Secret/ConfigMap references | No Kubernetes objects are created and no AAP API or external issuer is contacted. |
 | Unit / isolated role transform ([DEV]) | `uv run --group development ansible-playbook collections/ansible_collections/osac/service/roles/hosted_cluster/tests/test.yml` | Executable NodePool definition transforms: distinct NodeSet names and selectors for the same hardware profile, independent replica counts and scale-up | No Kubernetes resources are created. This is not component-integration or deployed AAP/provider coverage; those gaps remain owned by [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843). |
 | Component integration | `tests/integration/`; `make test` (creates Kind, runs playbooks, and tears it down) | Ansible roles/playbooks against real Kind APIs, including a second isolated API for storage target routing, plus CRDs, leases, finalizers, and test-runner pod | AAP, OpenStack, KubeVirt/RHACM, and other provider APIs are not generally real; the VMS storage target uses a mock server. |
 | Unit | `tests/unit/test_agentless_network_state.py`, `tests/unit/test_agentless_net_network.py`; included by `uv run pytest tests/unit` | UID/CIDR allocation, locked SQLite state, per-UID operations, real reconciliation/verification, and safe command/module failures | `ip`, `iptables`, the network namespace, and AAP are mocked; this does not prove provider execution. |
@@ -374,6 +376,7 @@ applicable integration tests separately to validate workflow behavior.
 - **AgentlessNet provider state and command helpers:** Unit coverage proves allocation, locking, retry retention, reconciliation/verification with mocked Linux commands, and worker template rendering. The real Ansible inventory contract covers the input boundary; neither suite proves deployed AAP/SSH networking or packet isolation.
 - **Ansible roles, workflow tasks, hooks, leases, finalizers, or Kubernetes resources:** The test must exercise the role/playbook through Ansible against Kind.
 - **Template publishing TLS:** The `test_cert_validation` play in `collections/ansible_collections/osac/service/roles/publish_templates/tests/test.yml` runs the real role against an untrusted local HTTPS endpoint and asserts certificate rejection before any authenticated HTTP request. The endpoint is a test double; it does not prove a deployed AAP or fulfillment boundary.
+- **Template publishing OAuth:** Unit and local mock-server coverage belong to DEV [OSAC-6084](https://redhat.atlassian.net/browse/OSAC-6084). The token lookup tests validate OIDC discovery, client-credentials exchange, refresh, and sanitized errors; the role fixture verifies Bearer authentication for each published resource type. Neither test proves deployed AAP secret delivery or cross-cluster Keycloak/Fulfillment reachability; QE coverage remains tracked by [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
 - **Execution-environment definition or dependency inputs:** Image success does not prove the workflow boundary.
 - **AAP, OpenStack, KubeVirt/RHACM, or provider provisioning:** Kind-only tests with mocks cannot claim provider coverage.
 - **Storage-provider behavior:** The mock VMS server validates role logic, not the provider API.
@@ -394,6 +397,11 @@ The integration harness still has provider-dependent scenarios that cannot run
 without AAP or additional infrastructure. Changes to provisioning behavior
 must identify the real or contract boundary explicitly and link any missing
 coverage to [OSAC-4850](https://redhat.atlassian.net/browse/OSAC-4850) or the relevant [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) follow-up.
+
+Template publishing OAuth has unit and local mock-server coverage, but no
+deployed test currently proves AAP worker secret delivery or connectivity across
+the Keycloak, AAP, and Fulfillment boundaries. Track that deployed journey under
+[OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
 
 ## osac-csi-driver
 

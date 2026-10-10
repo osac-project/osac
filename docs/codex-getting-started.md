@@ -128,6 +128,10 @@ may require you to sign in again. Verify the servers you rely on are connected
 at the start of a session rather than discovering missing authorization
 mid-task.
 
+For the opt-in OSAC MCP development endpoint, follow the
+[local MCP client guide](guides/developer/mcp-local-clients.md) for
+OAuth client registration, private CA trust, and write approvals.
+
 ## Per-worktree Jira context (`.ai-context/jira.md`)
 
 `osac-new-worktree` writes the current worktree's Jira ticket (key, summary,

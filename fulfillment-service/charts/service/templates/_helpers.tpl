@@ -39,6 +39,25 @@ Return the hostname for the fulfillment internal API. Fails if 'internalHostname
 {{- required "internalHostname is required" .Values.internalHostname -}}
 {{- end -}}
 
+{{- define "fulfillment-mcp-server.hostname" -}}
+{{- $hostname := required "mcp.externalHostname is required when mcp.enabled=true" .Values.mcp.externalHostname -}}
+{{- if eq .Values.variant "kind" -}}
+{{- $expected := printf "mcp.%s.localhost" .Release.Namespace -}}
+{{- if ne $hostname $expected -}}
+{{- fail (printf "mcp.externalHostname must be %s for the kind variant" $expected) -}}
+{{- end -}}
+{{- end -}}
+{{- $hostname -}}
+{{- end -}}
+
+{{- define "fulfillment-mcp-server.externalPort" -}}
+{{- $port := int .Values.mcp.externalPort -}}
+{{- if and (eq .Values.variant "openshift") (ne $port 443) -}}
+{{- fail "mcp.externalPort must be 443 for the openshift variant" -}}
+{{- end -}}
+{{- $port -}}
+{{- end -}}
+
 {{/*
 Check if a service tier is enabled via global.services.<key>.enabled.
 Args: list of [context, serviceKey]

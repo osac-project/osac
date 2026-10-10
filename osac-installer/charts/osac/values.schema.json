@@ -669,6 +669,74 @@
           "minLength": 1,
           "description": "Hostname for the internal API Route"
         },
+        "mcp": {
+          "type": "object",
+          "description": "Optional fulfillment MCP endpoint",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Deploy the fulfillment MCP server",
+              "default": false
+            },
+            "externalHostname": {
+              "type": "string",
+              "description": "DNS hostname advertised by the MCP server; Kind requires mcp.<namespace>.localhost"
+            },
+            "externalPort": {
+              "type": "integer",
+              "description": "Externally reachable TLS port for the MCP server; OpenShift Routes require 443",
+              "minimum": 1,
+              "maximum": 65535,
+              "default": 443
+            },
+            "exchangeClientId": {
+              "type": "string",
+              "description": "Confidential OAuth token exchange client ID; use the MCP resource URL ending in / for Keycloak audience validation"
+            },
+            "exchangeCredentialsSecret": {
+              "type": "string",
+              "description": "Secret containing client-secret for the MCP token exchange client"
+            },
+            "resources": {
+              "type": "object",
+              "description": "CPU and memory resources for the MCP server container",
+              "required": ["requests", "limits"],
+              "properties": {
+                "requests": {
+                  "type": "object",
+                  "required": ["cpu", "memory"],
+                  "properties": {
+                    "cpu": {"type": "string", "minLength": 1, "default": "50m"},
+                    "memory": {"type": "string", "minLength": 1, "default": "128Mi"}
+                  },
+                  "additionalProperties": false
+                },
+                "limits": {
+                  "type": "object",
+                  "required": ["cpu", "memory"],
+                  "properties": {
+                    "cpu": {"type": "string", "minLength": 1, "default": "500m"},
+                    "memory": {"type": "string", "minLength": 1, "default": "512Mi"}
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "allOf": [{
+            "if": {"properties": {"enabled": {"const": true}}},
+            "then": {
+              "required": ["externalHostname", "exchangeClientId", "exchangeCredentialsSecret"],
+              "properties": {
+                "externalHostname": {"minLength": 1},
+                "exchangeClientId": {"minLength": 1},
+                "exchangeCredentialsSecret": {"minLength": 1}
+              }
+            }
+          }],
+          "additionalProperties": false
+        },
         "variant": {
           "type": "string",
           "description": "Deployment variant",
@@ -962,6 +1030,27 @@
           "description": "Helm-injected global values (passed automatically to subcharts)"
         }
       },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "variant": {"const": "openshift"},
+              "mcp": {
+                "properties": {"enabled": {"const": true}},
+                "required": ["enabled"]
+              }
+            },
+            "required": ["variant", "mcp"]
+          },
+          "then": {
+            "properties": {
+              "mcp": {
+                "properties": {"externalPort": {"const": 443}}
+              }
+            }
+          }
+        }
+      ],
       "additionalProperties": false
     },
     "aap": {

@@ -65,6 +65,7 @@ keycloak:
   # Kind/IT only: seed known passwords for the realm's built-in test users.
   devFixtures:
     enabled: true
+    mcpResourceURL: "https://mcp.osac.localhost:8443/"
 
 # --- Fake CRDs (HyperShift, OVN-K stubs for controllers) ---
 fakeCrds:

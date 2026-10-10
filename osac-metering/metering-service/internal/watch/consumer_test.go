@@ -2459,6 +2459,59 @@ var _ = Describe("Consumer", func() {
 			store.mu.Unlock()
 		})
 
+		It("accepts a state change within the same wall-clock second despite sub-second precision mismatch", func() {
+			store := newMockStore()
+			// Projection stored with sub-second precision (e.g. from protobuf Timestamp nanos).
+			storedAt := time.Date(2026, 9, 16, 12, 0, 0, 755541000, time.UTC)
+			store.states["vm-subsecond"] = projection.ResourceState{
+				ResourceID:         "vm-subsecond",
+				ResourceType:       events.ResourceTypeComputeInstance,
+				TenantID:           "tenant-1",
+				CurrentState:       "RUNNING",
+				IsBillable:         true,
+				BillableSince:      &storedAt,
+				FulfillmentVersion: 2,
+				BillingDimensions:  map[string]any{},
+				TransitionTime:     storedAt,
+			}
+
+			ci := makeComputeInstance("vm-subsecond", "tenant-1")
+			ci.Metadata.Version = 3
+			ci.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED
+			// Kubernetes lastTransitionTime has second precision (nanos=0),
+			// same wall-clock second as storedAt.
+			ci.Status.StateTransitionTime = timestamppb.New(time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC))
+			event := &privatev1.Event{
+				Id:      "evt-subsecond",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ci},
+			}
+			client.results = []mockStreamResult{{stream: &mockWatchStream{
+				ctx:       ctx,
+				responses: []*privatev1.EventsWatchResponse{makeResponse(event)},
+			}}}
+
+			pub := &mockPublisher{published: make([]cloudevents.Event, 0, 1), cancelFunc: cancel}
+			consumer := newConsumerWithStore(pub, store)
+			done := make(chan error, 1)
+			go func() { done <- consumer.Run(ctx) }()
+			Eventually(func() int {
+				pub.mu.Lock()
+				defer pub.mu.Unlock()
+				return len(pub.published)
+			}, time.Second).Should(Equal(1))
+			Eventually(done, time.Second).Should(Receive(BeNil()))
+
+			pub.mu.Lock()
+			Expect(pub.published).To(HaveLen(1),
+				"same-second state change must not be rejected as stale")
+			pub.mu.Unlock()
+			store.mu.Lock()
+			Expect(store.states["vm-subsecond"].CurrentState).To(Equal("STOPPED"))
+			Expect(store.states["vm-subsecond"].FulfillmentVersion).To(Equal(int32(3)))
+			store.mu.Unlock()
+		})
+
 		It("rejects a higher-version BMaaS metadata update with an older transition time", func() {
 			store := newMockStore()
 			storedAt := time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)

@@ -27,3 +27,7 @@ keycloak:
     # rewrites the name to the Keycloak service). The plain dev/IT profile leaves
     # this empty, so the chart falls back to keycloak.keycloak.svc.cluster.local.
     hostname: "keycloak.osac.localhost"
+
+# OpenBao validates the issuer returned by Keycloak discovery.
+bundledVault:
+  keycloakIssuerUrl: "{{ .Values.keycloak.hostname }}/realms/osac"

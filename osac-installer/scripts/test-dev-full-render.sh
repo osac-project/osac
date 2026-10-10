@@ -3,6 +3,15 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+infra_render=$(helm template test charts/osac-infra --namespace osac-infra \
+  --values values/dev/kind-infra.yaml \
+  --values values/dev/kind-infra-devfull.yaml \
+  --show-only templates/bundled-openbao.yaml)
+if ! grep -Fq 'value: "https://keycloak.osac.localhost:8443/realms/osac"' <<<"$infra_render"; then
+  echo "dev-full OpenBao must use the advertised Keycloak issuer" >&2
+  exit 1
+fi
+
 chart_render=$(helm template test charts/osac-devstack --namespace osac)
 ui_render=$(helm template test charts/osac-devstack --namespace osac --show-only templates/ui.yaml)
 if ! grep -Fq 'FULFILLMENT_TLS_INSECURE: "0"' <<<"$ui_render" \

@@ -189,9 +189,11 @@ func (r *TableRenderer) Render(ctx context.Context, objects any) error {
 		table = r.defaultTable()
 	}
 
-	// When no tenant is selected, inject a TENANT column for tenant-scoped types so users can
-	// see which tenant each resource belongs to.
-	if config.TenantFromContext(ctx) == "" && helper.IsTenantScoped() {
+	// When no tenant is selected, or when global mode is enabled, inject a TENANT column for
+	// tenant-scoped types so users can see which tenant each resource belongs to.
+	showGlobal := config.ShowGlobalFromContext(ctx)
+	tenantSelected := config.TenantFromContext(ctx) != ""
+	if (!tenantSelected || showGlobal) && helper.IsTenantScoped() {
 		hasTenantCol := slices.ContainsFunc(table.Columns, func(c *columnLayout) bool {
 			return c.Header == "TENANT"
 		})

@@ -135,6 +135,7 @@ var _ = Describe("Watch e2e", func() {
 				format string
 				filter string
 				watch  bool
+				global bool
 			}{
 				format: outputFormatTable,
 				watch:  true,

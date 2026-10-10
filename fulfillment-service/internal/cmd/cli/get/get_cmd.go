@@ -87,6 +87,13 @@ func Cmd() *cobra.Command {
 		false,
 		watchFlagHelp,
 	)
+	flags.BoolVarP(
+		&runner.args.global,
+		"global",
+		"g",
+		false,
+		globalFlagHelp,
+	)
 	return result
 }
 
@@ -95,6 +102,7 @@ type runnerContext struct {
 		format string
 		filter string
 		watch  bool
+		global bool
 	}
 	ctx            context.Context
 	logger         *slog.Logger
@@ -198,6 +206,13 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	default:
 		render = c.renderTable
 	}
+
+	// If global mode is enabled, mark it in the context so the table renderer
+	// can show which resources are from the shared tenant.
+	if c.args.global {
+		ctx = config.ShowGlobalIntoContext(ctx, true)
+	}
+
 	return render(ctx, objects)
 }
 
@@ -238,6 +253,9 @@ func (c *runnerContext) getByKeys(ctx context.Context, keys []string) ([]proto.M
 
 func (c *runnerContext) list(ctx context.Context, keys []string) (results []proto.Message, err error) {
 	var options reflection.ListOptions
+
+	// Enable global mode if requested (includes shared tenant resources).
+	options.AllTenants = c.args.global
 
 	// If keys (identifiers or names) were provided, build a CEL filter to match them.
 	if len(keys) > 0 {
@@ -418,4 +436,8 @@ for which it returns true are included in the output.
 
 const watchFlagHelp = `
 _[BOOLEAN]_ - Watch for changes to objects and display events in real time instead of listing the current state.
+`
+
+const globalFlagHelp = `
+_[BOOLEAN]_ - Include global platform resources from the {{ bt }}shared{{ bt }} tenant in addition to the current tenant's resources.
 `

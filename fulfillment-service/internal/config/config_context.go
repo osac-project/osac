@@ -25,6 +25,7 @@ type contextKey int
 const (
 	contextSettingsKey contextKey = iota
 	contextTenantKey
+	contextShowGlobalKey
 )
 
 // SettingsFromContext returns the settings from the context. It panics if the given context doesn't contain settings.
@@ -67,4 +68,16 @@ func TenantFromContext(ctx context.Context) string {
 // TenantIntoContext creates a new context that contains the given tenant.
 func TenantIntoContext(ctx context.Context, tenant string) context.Context {
 	return context.WithValue(ctx, contextTenantKey, tenant)
+}
+
+// ShowGlobalFromContext returns whether global resources should be visually indicated.
+// This is set when the user uses the --global flag with list commands.
+func ShowGlobalFromContext(ctx context.Context) bool {
+	v, _ := ctx.Value(contextShowGlobalKey).(bool)
+	return v
+}
+
+// ShowGlobalIntoContext creates a new context that indicates global resources should be shown.
+func ShowGlobalIntoContext(ctx context.Context, showGlobal bool) context.Context {
+	return context.WithValue(ctx, contextShowGlobalKey, showGlobal)
 }

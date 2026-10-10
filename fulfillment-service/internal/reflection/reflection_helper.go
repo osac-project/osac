@@ -675,8 +675,9 @@ func (h *objectHelper) Plural() string {
 }
 
 type ListOptions struct {
-	Filter string
-	Limit  int32
+	Filter     string
+	Limit      int32
+	AllTenants bool // Include shared tenant resources (mimics kubectl -A/--all-namespaces)
 }
 
 type ListResult struct {
@@ -700,9 +701,19 @@ func (h *objectHelper) List(ctx context.Context, options ListOptions) (result Li
 			return
 		}
 		if tenant != "" {
-			tenantFilter := fmt.Sprintf("this.metadata.tenant == %q", tenant)
+			var tenantFilter string
+			// Check if all-tenants mode is enabled (includes shared tenant).
+			// This matches kubectl's --all-namespaces / -A behavior.
+			if options.AllTenants {
+				// Include both the user's tenant and the "shared" tenant (for global resources).
+				// This matches the backend's DetermineVisibility behavior in auth.DefaultTenancyLogic.
+				tenantFilter = fmt.Sprintf("this.metadata.tenant == %q || this.metadata.tenant == %q", tenant, sharedTenantName)
+			} else {
+				// Filter by exact tenant only.
+				tenantFilter = fmt.Sprintf("this.metadata.tenant == %q", tenant)
+			}
 			if filter != "" {
-				filter = fmt.Sprintf("%s && (%s)", tenantFilter, filter)
+				filter = fmt.Sprintf("(%s) && (%s)", tenantFilter, filter)
 			} else {
 				filter = tenantFilter
 			}
@@ -803,6 +814,10 @@ func (h *objectHelper) Delete(ctx context.Context, id string) error {
 
 // tenantFieldName is the name of the tenant field in the metadata message.
 const tenantFieldName = protoreflect.Name("tenant")
+
+// sharedTenantName is the name of the shared tenant, used for platform-scoped resources that are
+// visible to all tenants (e.g., storage tiers, network classes, global disk images).
+const sharedTenantName = "shared"
 
 // SetTenant sets the tenant field on the object's metadata. If the metadata submessage does not
 // exist it is created.

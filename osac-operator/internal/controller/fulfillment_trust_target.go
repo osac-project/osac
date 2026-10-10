@@ -67,8 +67,9 @@ type HostedClusterKubeconfigReader interface {
 }
 
 // HostedClusterKubeconfigResolver follows the ClusterOrder's control-plane
-// reference to the HyperShift kubeconfig Secret. Kubeconfig bytes stay in this
-// process and are never copied to a Secret, status field, log, or AAP job.
+// reference to the HyperShift kubeconfig Secret for the trust reconciler.
+// Kubeconfig bytes stay in this process and are never copied to a Secret,
+// status field, log, or AAP job by the trust path.
 type HostedClusterKubeconfigResolver struct {
 	Management client.Reader
 }

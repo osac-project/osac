@@ -38,6 +38,18 @@ var _ = Describe("ExtraVarsContext", func() {
 		})
 	})
 
+	Describe("AddOnOperatorName", func() {
+		It("should round-trip an operator name", func() {
+			ctx := provisioning.WithAddOnOperatorName(context.Background(), "cert-manager")
+
+			Expect(provisioning.AddOnOperatorNameFromContext(ctx)).To(Equal("cert-manager"))
+		})
+
+		It("should return empty string from a context without an operator name", func() {
+			Expect(provisioning.AddOnOperatorNameFromContext(context.Background())).To(BeEmpty())
+		})
+	})
+
 	Describe("StorageTierDefinitions", func() {
 		It("should round-trip tier definitions", func() {
 			ctx := context.Background()

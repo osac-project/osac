@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/stoewer/go-strcase"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -126,6 +127,11 @@ func (p *AAPProvider) launchProvisionJob(ctx context.Context, resource client.Ob
 // GetProvisionStatus checks provisioning job status via AAP API.
 func (p *AAPProvider) GetProvisionStatus(ctx context.Context, resource client.Object, jobID string) (ProvisionStatus, error) {
 	return p.getJobStatus(ctx, jobID)
+}
+
+// CancelJob cancels a running provisioning job during resource deletion.
+func (p *AAPProvider) CancelJob(ctx context.Context, jobID string) error {
+	return p.cancelProvisionJob(ctx, jobID)
 }
 
 // GetProvisionStatusWithExtraVars checks provisioning job status and returns its output variables.
@@ -269,6 +275,7 @@ func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, r
 		return "", fmt.Errorf("failed to extract extra vars: %w", err)
 	}
 	extraVars = mergeExtraVars(extraVars, inheritedExtraVars)
+	sensitive := adminKubeconfigInExtraVars(extraVars)
 
 	var jobID int
 	switch template.Type {
@@ -277,6 +284,7 @@ func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, r
 			TemplateID:   template.ID,
 			TemplateName: templateName,
 			ExtraVars:    extraVars,
+			Sensitive:    sensitive,
 		})
 		if err != nil {
 			return "", fmt.Errorf("failed to launch job template: %w", err)
@@ -287,6 +295,7 @@ func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, r
 			TemplateID:   template.ID,
 			TemplateName: templateName,
 			ExtraVars:    extraVars,
+			Sensitive:    sensitive,
 		})
 		if err != nil {
 			return "", fmt.Errorf("failed to launch workflow template: %w", err)
@@ -297,6 +306,15 @@ func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, r
 	}
 
 	return strconv.Itoa(jobID), nil
+}
+
+func adminKubeconfigInExtraVars(extraVars map[string]any) bool {
+	jobVars, ok := extraVars["osac_job_vars"].(map[string]any)
+	if !ok {
+		return false
+	}
+	_, ok = jobVars["admin_kubeconfig"]
+	return ok
 }
 
 func mergeExtraVars(extraVars, inheritedExtraVars map[string]any) map[string]any {
@@ -413,6 +431,9 @@ func extractExtraVars(ctx context.Context, resource client.Object) (map[string]a
 
 	if kc := AdminKubeconfigFromContext(ctx); kc != "" {
 		vars["admin_kubeconfig"] = kc
+	}
+	if name := AddOnOperatorNameFromContext(ctx); name != "" {
+		vars["addon_operator_name"] = strings.ReplaceAll(name, "-", "_")
 	}
 
 	if tiers := StorageTierDefinitionsFromContext(ctx); len(tiers) > 0 {

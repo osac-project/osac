@@ -16,6 +16,7 @@ package servers
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
@@ -30,6 +31,15 @@ import (
 const maxClusterAddOnOperators = 32
 
 const maxAddOnOperatorRelationshipEdges = 1024
+
+var addOnOperatorClusterOrderNamePattern = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+func validateAddOnOperatorClusterOrderName(name string) error {
+	if addOnOperatorClusterOrderNamePattern.MatchString(name) {
+		return nil
+	}
+	return addOnOperatorFieldError("metadata.name", fmt.Sprintf("add-on operator name %q is not valid for a ClusterOrder", name))
+}
 
 func addOnOperatorFieldError(field, message string) error {
 	status, err := grpcstatus.New(grpccodes.InvalidArgument, message).WithDetails(&errdetails.BadRequest{
@@ -208,6 +218,9 @@ func (s *PrivateClustersServer) validateAndExpandAddOnOperators(
 	resolvedReferences := make([]*privatev1.AddOnOperatorReference, 0, len(selectedOrder))
 	for _, operatorID := range selectedOrder {
 		operator := selected[operatorID]
+		if err := validateAddOnOperatorClusterOrderName(operator.GetMetadata().GetName()); err != nil {
+			return err
+		}
 		ref := privatev1.AddOnOperatorReference_builder{
 			Id:   operator.GetId(),
 			Name: operator.GetMetadata().GetName(),

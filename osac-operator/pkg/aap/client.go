@@ -91,6 +91,7 @@ type LaunchWorkflowTemplateRequest struct {
 	TemplateID   int
 	TemplateName string
 	ExtraVars    map[string]any
+	Sensitive    bool
 }
 
 // LaunchWorkflowTemplateResponse contains the response from launching a workflow template.
@@ -167,7 +168,7 @@ func (c *Client) LaunchWorkflowTemplate(ctx context.Context, req LaunchWorkflowT
 		"extra_vars": req.ExtraVars,
 	}
 
-	resp, err := c.doTemplateRequest(ctx, http.MethodPost, url, payload, req.TemplateName, false)
+	resp, err := c.doTemplateRequest(ctx, http.MethodPost, url, payload, req.TemplateName, req.Sensitive)
 	if err != nil {
 		return nil, fmt.Errorf("failed to launch workflow template: %w", err)
 	}

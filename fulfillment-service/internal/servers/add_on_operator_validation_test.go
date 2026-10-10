@@ -16,6 +16,7 @@ package servers
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -24,6 +25,20 @@ import (
 )
 
 var _ = Describe("Add-on operator graph", func() {
+	DescribeTable("enforces ClusterOrder-compatible add-on operator names",
+		func(name string, valid bool) {
+			Expect(addOnOperatorClusterOrderNamePattern.MatchString(name)).To(Equal(valid))
+		},
+		Entry("valid name", "cert-manager", true),
+		Entry("single letter", "a", true),
+		Entry("maximum length", "a"+strings.Repeat("b", 62), true),
+		Entry("leading digit", "1cert-manager", false),
+		Entry("uppercase letter", "Cert-manager", false),
+		Entry("underscore", "cert_manager", false),
+		Entry("trailing hyphen", "cert-manager-", false),
+		Entry("overlong name", "a"+strings.Repeat("b", 63), false),
+	)
+
 	It("expands dependencies first and deduplicates shared dependencies", func() {
 		shared := newGraphTestOperator("shared")
 		left := newGraphTestOperator("left")

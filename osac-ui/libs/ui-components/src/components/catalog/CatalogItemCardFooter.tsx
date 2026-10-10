@@ -37,62 +37,66 @@ const CatalogItemCardFooter: FC<CatalogItemCardFooterProps> = ({
 }) => {
   const { t } = useTranslation();
 
-  if (role === 'tenant-user') {
-    const configured = getConfiguredString(catalogItem, t);
-    return (
-      <CardFooter>
-        <Flex direction={{ default: 'column' }} gap={{ default: 'gapLg' }}>
+  const renderFooterText = () => {
+    if (role === 'tenant-user') {
+      const configured = getConfiguredString(catalogItem, t);
+      return (
+        <Flex flexWrap={{ default: 'nowrap' }} spaceItems={{ default: 'spaceItemsXs' }}>
           <FlexItem>
-            <Flex flexWrap={{ default: 'nowrap' }} spaceItems={{ default: 'spaceItemsXs' }}>
-              <FlexItem>
-                <RhUiLockFillIcon />
-              </FlexItem>
-              {configured ? (
-                <>
-                  <FlexItem>{getConfiguredString(catalogItem, t)}</FlexItem>
-                  <FlexItem>
-                    <FieldSeparator />
-                  </FlexItem>
-                </>
-              ) : null}
-              <FlexItem>{t('Admin-managed')}</FlexItem>
-            </Flex>
+            <RhUiLockFillIcon />
           </FlexItem>
-          {!isWizardMode ? (
-            <FlexItem>
-              <CatalogItemLaunchButton
-                isDisabled={!catalogItem.published}
-                className="pf-v6-u-w-100"
-                catalogItem={catalogItem}
-              />
-            </FlexItem>
+          {configured ? (
+            <>
+              <FlexItem>{configured}</FlexItem>
+              <FlexItem>
+                <FieldSeparator />
+              </FlexItem>
+            </>
           ) : null}
+          <FlexItem>{t('Admin-managed')}</FlexItem>
         </Flex>
-      </CardFooter>
+      );
+    }
+
+    if (role === 'tenant-admin') {
+      return (
+        <Flex flexWrap={{ default: 'nowrap' }} spaceItems={{ default: 'spaceItemsXs' }}>
+          <FlexItem>{catalogItem.metadata?.creator || '-'}</FlexItem>
+          <FlexItem>
+            <FieldSeparator />
+          </FlexItem>
+          <FlexItem>
+            <Timestamp value={catalogItem.metadata?.creationTimestamp} format="Date" />
+          </FlexItem>
+        </Flex>
+      );
+    }
+
+    return catalogItem.metadata?.tenant?.length ? (
+      <CatalogItemTenant catalogItem={catalogItem} />
+    ) : (
+      '-'
     );
-  }
+  };
 
   return (
     <CardFooter>
-      <Content component="small" className="pf-v6-u-color-text-subtle">
-        {role === 'admin' ? (
-          catalogItem.metadata?.tenant?.length ? (
-            <CatalogItemTenant catalogItem={catalogItem} />
-          ) : (
-            '-'
-          )
-        ) : (
-          <Flex flexWrap={{ default: 'nowrap' }} spaceItems={{ default: 'spaceItemsXs' }}>
-            <FlexItem>{catalogItem.metadata?.creator || '-'}</FlexItem>
-            <FlexItem>
-              <FieldSeparator />
-            </FlexItem>
-            <FlexItem>
-              <Timestamp value={catalogItem.metadata?.creationTimestamp} format="Date" />
-            </FlexItem>
-          </Flex>
-        )}
-      </Content>
+      <Flex direction={{ default: 'column' }} gap={{ default: 'gapMd' }}>
+        <FlexItem>
+          <Content component="small" className="pf-v6-u-color-text-subtle">
+            {renderFooterText()}
+          </Content>
+        </FlexItem>
+        {!isWizardMode && role !== 'admin' ? (
+          <FlexItem>
+            <CatalogItemLaunchButton
+              isDisabled={!catalogItem.published}
+              className="pf-v6-u-w-100"
+              catalogItem={catalogItem}
+            />
+          </FlexItem>
+        ) : null}
+      </Flex>
     </CardFooter>
   );
 };

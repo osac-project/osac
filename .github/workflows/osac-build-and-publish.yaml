@@ -1072,7 +1072,7 @@ jobs:
     # chart-sources.txt after this whole matrix finishes.
     - name: Upload chart source fragment
       if: steps.check.outputs.needs-build == 'true'
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
       with:
         name: chart-source-${{ matrix.component }}
         path: chart-source.txt
@@ -1335,7 +1335,7 @@ jobs:
         cat images.txt
 
     - name: Upload artifacts
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
       with:
         name: nightly-${{ needs.prepare.outputs.version }}
         path: |

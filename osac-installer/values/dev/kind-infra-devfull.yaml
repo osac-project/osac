@@ -12,8 +12,6 @@
 # fulfillment-service still reaches Keycloak's JWKS endpoint directly.
 #
 # The plain `dev`/IT profile keeps keycloak.keycloak.svc.cluster.local (kind-infra.yaml).
-csiDriver:
-  enabled: true
 
 keycloak:
   # KC_HOSTNAME / OIDC issuer (full URL with scheme + port).

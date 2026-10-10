@@ -115,20 +115,17 @@ Networking controllers derive template names from the prefix:
   address passed to tenant-cluster CSI provisioning (e.g.
   `fulfillment-api.example.com:443`).
 
-The umbrella chart renders `osac-fulfillment-config` whenever the operator is
-enabled, including installations without the hub CSI driver. It provides the
-operator's non-secret issuer URL; when an external fulfillment endpoint is
-configured, it also provides that endpoint. With hub CSI enabled, the chart
-separately copies the non-secret endpoint and issuer values into the CSI
-namespace so the CSI controller can consume them. The CSI namespace copy is
-immutable because it controls where the CSI controller sends its client
-credentials; changing it requires deliberate replacement and a rollout. CSI
-credentials and tenant-cluster credentials remain separately managed.
-
-The operator discovers Keycloak's token endpoint at runtime and uses OAuth
-client credentials for fulfillment gRPC calls. It does not read a projected
-Kubernetes service-account token for this connection. Token and issuer HTTP
-requests use verified TLS and do not follow redirects.
+When the operator is enabled, the umbrella chart renders
+`osac-fulfillment-config` in the release namespace. It contains the Keycloak
+issuer URL and, when configured, the externally reachable Fulfillment endpoint.
+It also contains names and keys, but not credential values, for the
+`fulfillment-controller-credentials` Secret used by installer AAP auth helpers.
+The operator reads that same Secret for its OAuth client-credentials calls to
+Fulfillment, and passes the non-secret endpoint and issuer to AAP provisioning
+jobs that configure tenant-cluster CSI.
+The `global.fulfillmentTrust.enabled` setting controls trust reconciliation
+separately. The OSAC chart does not deploy the CSI meta-driver or create a hub
+CSI credentials Secret; tenant CSI credentials are managed separately.
 
 ### LVMS development/CI volumes
 

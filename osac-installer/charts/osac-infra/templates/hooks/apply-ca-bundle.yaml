@@ -179,8 +179,6 @@ spec:
               value: {{ .Release.Namespace | quote }}
             - name: OSAC_NAMESPACE
               value: {{ .Values.osacNamespace | quote }}
-            - name: CSI_NAMESPACE
-              value: {{ .Values.csiNamespace | quote }}
             - name: USE_DEFAULT_CAS
               value: {{ .Values.keycloak.route.publicIngress | quote }}
           volumeMounts:

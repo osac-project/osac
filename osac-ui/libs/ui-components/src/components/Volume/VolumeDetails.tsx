@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Button,
   Card,
   CardBody,
   DescriptionList,
@@ -18,6 +17,7 @@ import {
 
 import type { Volume } from '@osac/types';
 import { VolumeState } from '@osac/types';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import { VOLUMES_LIST_PATH } from './values';
 import { VolumeAccessModeLabel } from './VolumeAccessModeLabel';
@@ -73,17 +73,14 @@ const VolumeDetails = ({ volume }: VolumeDetailsProps) => {
               <FlexItem>
                 <Flex spaceItems={{ default: 'spaceItemsSm' }} flexWrap={{ default: 'wrap' }}>
                   <FlexItem>
-                    <Button
-                      variant="danger"
-                      isDisabled={!canDelete}
+                    <DeleteResourceButton
+                      canDelete={canDelete}
                       onClick={() => {
                         if (canDelete) {
                           setDeleteOpen(true);
                         }
                       }}
-                    >
-                      {t('Delete')}
-                    </Button>
+                    />
                   </FlexItem>
                 </Flex>
               </FlexItem>

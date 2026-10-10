@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Button, Flex, FlexItem } from '@patternfly/react-core';
 
 import type { StorageTier } from '@osac/types/private';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import StorageTierDeleteConfirmModal from './StorageTierDeleteConfirmModal';
 import { useTranslation } from '../../hooks/useTranslation';
@@ -37,9 +38,7 @@ export const StorageTierDetailActionButtons = ({ tier }: StorageTierDetailAction
           </Button>
         </FlexItem>
         <FlexItem>
-          <Button variant="danger" onClick={() => setDeleteOpen(true)}>
-            {t('Delete')}
-          </Button>
+          <DeleteResourceButton onClick={() => setDeleteOpen(true)} />
         </FlexItem>
       </Flex>
     </>

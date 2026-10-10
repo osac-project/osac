@@ -45,7 +45,6 @@ var _ = Describe("Multitenancy authentication error handling", Label("multitenan
 		},
 		Entry("clusters", "/api/fulfillment/v1/clusters"),
 		Entry("Cluster templates", "/api/fulfillment/v1/cluster_templates"),
-		Entry("Host types", "/api/fulfillment/v1/host_types"),
 	)
 
 	DescribeTable(
@@ -73,7 +72,6 @@ var _ = Describe("Multitenancy authentication error handling", Label("multitenan
 		},
 		Entry("Clusters", "/api/fulfillment/v1/clusters"),
 		Entry("Cluster templates", "/api/fulfillment/v1/cluster_templates"),
-		Entry("Host types", "/api/fulfillment/v1/host_types"),
 	)
 })
 

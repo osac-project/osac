@@ -182,7 +182,7 @@ and `osac-infra`. Keys a chart doesn't recognize are ignored.
 | `bundledPostgres.enabled` | Deploys bundled PostgreSQL for development and CI. It is not intended for production. | `false` |
 | `bundledPostgres.database.name` | Bundled database name. | `service` |
 | `bundledPostgres.database.user` | Bundled database owner. | `service` |
-| `bundledVault.enabled` | Deploys an ephemeral in-cluster OpenBao secret store. Set it to `false` for production and configure external Vault in the `osac` values file; see the [secrets management configuration guide](secrets-management-configuration.md). | `true` |
+| `bundledVault.enabled` | Deploys an in-cluster OpenBao secret store for testing and CI. Set it to `false` for production and configure external Vault in the `osac` values file; see the [secrets management configuration guide](secrets-management-configuration.md). | `true` |
 | `cliImage` | The `oc` image that the chart hook jobs use. | `origin-cli:4.20.0` |
 
 ## When Prerequisites Already Exist
@@ -270,7 +270,7 @@ Disable these for any real deployment.
 | Value | Default | What it does |
 |-------|---------|-------------|
 | `bundledPostgres.enabled` | `false` | Deploys bundled PostgreSQL for development and CI. It is not intended for production. |
-| `bundledVault.enabled` | `true` | Deploys a single-pod ephemeral OpenBao secret store in the `osac-infra` namespace. Dev mode — data is lost on restart. Set to `false` for production and follow the [secrets management configuration guide](secrets-management-configuration.md). |
+| `bundledVault.enabled` | `true` | Deploys an in-cluster OpenBao secret store for testing and CI. Set to `false` for production and follow the [secrets management configuration guide](secrets-management-configuration.md). |
 
 The upgrade does not migrate data from the previous bundled PostgreSQL instance.
 Back up any data you need before upgrading.

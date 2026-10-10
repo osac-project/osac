@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button, Flex } from '@patternfly/react-core';
-import DumpsterIcon from '@patternfly/react-icons/dist/esm/icons/dumpster-icon';
 import PlayIcon from '@patternfly/react-icons/dist/esm/icons/play-icon';
 import StopIcon from '@patternfly/react-icons/dist/esm/icons/stop-icon';
 import SyncAltIcon from '@patternfly/react-icons/dist/esm/icons/sync-alt-icon';
 
 import type { BareMetalInstance } from '@osac/types';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import BareMetalDeleteConfirmModal from './BareMetalDeleteConfirmModal';
 import { useBareMetalActions } from './useBareMetalActions';
@@ -52,18 +52,15 @@ const BareMetalActionButtons = ({ instance }: BareMetalActionButtonsProps) => {
         >
           {t('Restart')}
         </Button>
-        <Button
-          variant="danger"
-          icon={<DumpsterIcon />}
-          isDisabled={!canDelete}
+        <DeleteResourceButton
+          showIcon
+          canDelete={canDelete}
           onClick={() => {
             if (canDelete) {
               setDeleteOpen(true);
             }
           }}
-        >
-          {t('Delete')}
-        </Button>
+        />
       </Flex>
     </>
   );

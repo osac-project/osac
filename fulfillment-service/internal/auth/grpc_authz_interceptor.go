@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
 	"google.golang.org/grpc"
@@ -365,7 +366,7 @@ func (i *GrpcAuthzInterceptor) buildContextExtensions(ctx context.Context, authC
 		if i.shouldFetchProjectMetadata(method, authContext.ID) && i.metadataFetcher != nil {
 			if meta := i.metadataFetcher(ctx, authContext.ID); meta != nil {
 				authContext.Tenant = meta.Tenant
-				authContext.Name = meta.Name
+				authContext.Name = strings.ReplaceAll(meta.Name, ".", "/")
 			}
 		}
 

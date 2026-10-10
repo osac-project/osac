@@ -30,6 +30,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	// This is needed to ensure that the types and services are loaded into the protocol buffers registry, otherwise
 	// they will be visible only if they are explicitly used in some part of the code.
@@ -75,6 +76,7 @@ type ObjectHelper interface {
 	Create(ctx context.Context, object proto.Message) (proto.Message, error)
 	IsUpdatable() bool
 	Update(ctx context.Context, object proto.Message) (UpdateResult, error)
+	UpdateWithMask(ctx context.Context, original, edited proto.Message) (UpdateResult, error)
 	Delete(ctx context.Context, id string) error
 	FindObject(ctx context.Context, ref string, console Renderer) (proto.Message, error)
 	SetTenant(object proto.Message, tenant string)
@@ -794,6 +796,41 @@ func (h *objectHelper) Update(ctx context.Context, object proto.Message) (result
 	return
 }
 
+func (h *objectHelper) UpdateWithMask(ctx context.Context, original, edited proto.Message) (result UpdateResult, err error) {
+	if !h.IsUpdatable() {
+		err = grpcstatus.Errorf(codes.FailedPrecondition, "object type %q is immutable; updates are not supported", h.FullName())
+		return
+	}
+
+	// Compute the diff and build the update mask
+	mask, err := computeUpdateMask(original, edited)
+	if err != nil {
+		err = fmt.Errorf("failed to compute update mask: %w", err)
+		return
+	}
+
+	request := proto.Clone(h.update.request)
+	h.setObject(request, h.update.in, edited)
+
+	// Set the update_mask field
+	maskField := request.ProtoReflect().Descriptor().Fields().ByName("update_mask")
+	if maskField != nil && maskField.Kind() == protoreflect.MessageKind {
+		request.ProtoReflect().Set(maskField, protoreflect.ValueOfMessage(mask.ProtoReflect()))
+	}
+
+	response := proto.Clone(h.update.response)
+	err = h.parent.connection.Invoke(ctx, h.update.path, request, response)
+	if err != nil {
+		err = fmt.Errorf("failed to update object: %w", err)
+		return
+	}
+	result.Object = h.getObject(response, h.update.out)
+	if warningResponse, ok := response.(interface{ GetWarnings() []string }); ok {
+		result.Warnings = warningResponse.GetWarnings()
+	}
+	return
+}
+
 func (h *objectHelper) Delete(ctx context.Context, id string) error {
 	request := proto.Clone(h.delete.request)
 	h.setId(request, h.delete.id, id)
@@ -860,6 +897,92 @@ const (
 	objectFieldName   = protoreflect.Name("object")
 	totalFieldName    = protoreflect.Name("total")
 )
+
+// computeUpdateMask compares two proto messages and returns a FieldMask containing the paths
+// of all fields that differ between them.
+func computeUpdateMask(original, edited proto.Message) (*fieldmaskpb.FieldMask, error) {
+	var paths []string
+	collectChangedPaths(original.ProtoReflect(), edited.ProtoReflect(), nil, &paths)
+	return &fieldmaskpb.FieldMask{Paths: paths}, nil
+}
+
+// collectChangedPaths recursively compares two messages and collects paths of changed fields.
+func collectChangedPaths(original, edited protoreflect.Message, pathPrefix []string, paths *[]string) {
+	edited.Range(func(fd protoreflect.FieldDescriptor, editedVal protoreflect.Value) bool {
+		fieldPath := append(pathPrefix, string(fd.Name()))
+
+		if !original.Has(fd) {
+			// Field is set in edited but not in original
+			*paths = append(*paths, strings.Join(fieldPath, "."))
+			return true
+		}
+
+		originalVal := original.Get(fd)
+
+		// Compare values based on field kind
+		if fd.IsList() {
+			if !equalLists(originalVal.List(), editedVal.List(), fd) {
+				*paths = append(*paths, strings.Join(fieldPath, "."))
+			}
+		} else if fd.IsMap() {
+			if !equalMaps(originalVal.Map(), editedVal.Map(), fd) {
+				*paths = append(*paths, strings.Join(fieldPath, "."))
+			}
+		} else if fd.Kind() == protoreflect.MessageKind {
+			// Recursively compare nested messages
+			collectChangedPaths(originalVal.Message(), editedVal.Message(), fieldPath, paths)
+		} else {
+			// Scalar field - compare values
+			if !originalVal.Equal(editedVal) {
+				*paths = append(*paths, strings.Join(fieldPath, "."))
+			}
+		}
+
+		return true
+	})
+
+	// Check for fields that were cleared (present in original but not in edited)
+	original.Range(func(fd protoreflect.FieldDescriptor, _ protoreflect.Value) bool {
+		if !edited.Has(fd) {
+			fieldPath := append(pathPrefix, string(fd.Name()))
+			*paths = append(*paths, strings.Join(fieldPath, "."))
+		}
+		return true
+	})
+}
+
+// equalLists compares two protoreflect lists for equality.
+func equalLists(a, b protoreflect.List, fd protoreflect.FieldDescriptor) bool {
+	if a.Len() != b.Len() {
+		return false
+	}
+	for i := 0; i < a.Len(); i++ {
+		if !a.Get(i).Equal(b.Get(i)) {
+			return false
+		}
+	}
+	return true
+}
+
+// equalMaps compares two protoreflect maps for equality.
+func equalMaps(a, b protoreflect.Map, fd protoreflect.FieldDescriptor) bool {
+	if a.Len() != b.Len() {
+		return false
+	}
+	equal := true
+	a.Range(func(k protoreflect.MapKey, v protoreflect.Value) bool {
+		if !b.Has(k) {
+			equal = false
+			return false
+		}
+		if !v.Equal(b.Get(k)) {
+			equal = false
+			return false
+		}
+		return true
+	})
+	return equal
+}
 
 // platformScopedTypes lists the resource types that are NOT scoped to a tenant. Types not listed
 // here default to tenant-scoped, which means they get automatic tenant filter injection on List,

@@ -135,7 +135,8 @@ var _ = Describe("Edit command", func() {
 				object := &publicv1.ComputeInstance{Id: "test-vm"}
 				runner := &runnerContext{helper: helper, console: console}
 
-				updated, err := runner.update(ctx, object)
+				// Pass the same object as both original and edited since we're testing warning handling
+				updated, err := runner.update(ctx, object, object)
 
 				Expect(err).ToNot(HaveOccurred())
 				Expect(proto.Equal(updated, object)).To(BeTrue())
@@ -167,7 +168,7 @@ var _ = Describe("Edit command", func() {
 			object := &publicv1.ComputeInstance{Id: "test-vm"}
 			runner := &runnerContext{helper: helper, console: console}
 
-			updated, err := runner.update(ctx, object)
+			updated, err := runner.update(ctx, object, object)
 
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("update succeeded, but failed to write warning to stderr"))
@@ -180,8 +181,9 @@ var _ = Describe("Edit command", func() {
 		It("preserves update failures without printing warnings", func() {
 			updateErr = grpcstatus.Error(codes.FailedPrecondition, "instance type is obsolete")
 			runner := &runnerContext{helper: helper, console: console}
+			object := &publicv1.ComputeInstance{Id: "test-vm"}
 
-			_, err := runner.update(ctx, &publicv1.ComputeInstance{Id: "test-vm"})
+			_, err := runner.update(ctx, object, object)
 
 			Expect(err).To(HaveOccurred())
 			Expect(grpcstatus.Code(err)).To(Equal(codes.FailedPrecondition))

@@ -311,6 +311,21 @@ func (mr *MockObjectHelperMockRecorder) Update(ctx, object any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Update", reflect.TypeOf((*MockObjectHelper)(nil).Update), ctx, object)
 }
 
+// UpdateWithMask mocks base method.
+func (m *MockObjectHelper) UpdateWithMask(ctx context.Context, original, edited proto.Message) (UpdateResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateWithMask", ctx, original, edited)
+	ret0, _ := ret[0].(UpdateResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// UpdateWithMask indicates an expected call of UpdateWithMask.
+func (mr *MockObjectHelperMockRecorder) UpdateWithMask(ctx, original, edited any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateWithMask", reflect.TypeOf((*MockObjectHelper)(nil).UpdateWithMask), ctx, original, edited)
+}
+
 // UseGetForStructuredOutput mocks base method.
 func (m *MockObjectHelper) UseGetForStructuredOutput() bool {
 	m.ctrl.T.Helper()

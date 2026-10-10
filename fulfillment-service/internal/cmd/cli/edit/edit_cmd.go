@@ -162,7 +162,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	key := args[1]
 
 	// Find the object by identifier or name:
-	object, err := c.fetchObject(ctx, key)
+	original, err := c.fetchObject(ctx, key)
 	if err != nil {
 		return err
 	}
@@ -175,7 +175,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	default:
 		render = c.renderYaml
 	}
-	data, err := render(object)
+	data, err := render(original)
 	if err != nil {
 		return err
 	}
@@ -196,7 +196,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 			)
 		}
 	}()
-	objectId := c.helper.GetId(object)
+	objectId := c.helper.GetId(original)
 	tmpFile := filepath.Join(tmpDir, fmt.Sprintf("%s-%s.%s", c.helper, objectId, c.format))
 	err = os.WriteFile(tmpFile, data, 0600)
 	if err != nil {
@@ -238,13 +238,13 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	default:
 		parse = c.parseYaml
 	}
-	object, err = parse(data)
+	edited, err := parse(data)
 	if err != nil {
 		return fmt.Errorf("failed to parse modified object: %w", err)
 	}
 
 	// Save the result:
-	updated, err := c.update(ctx, object)
+	updated, err := c.update(ctx, original, edited)
 	if err != nil {
 		return err
 	}
@@ -297,8 +297,8 @@ func (c *runnerContext) fetchObject(ctx context.Context, key string) (proto.Mess
 	return object, nil
 }
 
-func (c *runnerContext) update(ctx context.Context, object proto.Message) (proto.Message, error) {
-	result, err := c.helper.Update(ctx, object)
+func (c *runnerContext) update(ctx context.Context, original, edited proto.Message) (proto.Message, error) {
+	result, err := c.helper.UpdateWithMask(ctx, original, edited)
 	if err != nil {
 		return nil, err
 	}

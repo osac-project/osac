@@ -74,6 +74,12 @@ func Cmd() *cobra.Command {
 		"",
 		stateFlagHelp,
 	)
+	flags.StringVar(
+		&runner.diskImage,
+		"disk-image",
+		"",
+		diskImageFlagHelp,
+	)
 	result.MarkFlagRequired("version") //nolint:errcheck
 	result.MarkFlagRequired("image")   //nolint:errcheck
 	return result
@@ -87,6 +93,7 @@ type runnerContext struct {
 	enabled   bool
 	isDefault bool
 	state     string
+	diskImage string
 }
 
 func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
@@ -121,6 +128,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	}
 	if cmd.Flags().Changed("default") {
 		spec.IsDefault = proto.Bool(c.isDefault)
+	}
+	if c.diskImage != "" {
+		spec.DiskImage = privatev1.DiskImageReference_builder{Id: c.diskImage}.Build()
 	}
 
 	cv := privatev1.ClusterVersion_builder{
@@ -202,6 +212,10 @@ _[BOOLEAN]_ - Whether new clusters may select this version. Defaults to true if 
 const defaultFlagHelp = `
 _[BOOLEAN]_ - Whether this is the default version for new clusters. At most one active cluster
 version may be the default.
+`
+
+const diskImageFlagHelp = `
+_ID_ - Identifier or name of a DiskImage to associate with this cluster version.
 `
 
 const stateFlagHelp = `

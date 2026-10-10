@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/ubi10/go-toolset:1.26.7-1788946935 AS builder
+FROM registry.access.redhat.com/ubi10/go-toolset:1.26.7-1791275880 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
@@ -17,6 +17,8 @@ COPY --chown=1001:0 osac-metering/metering-service/ osac-metering/metering-servi
 RUN cd osac-metering/metering-service && CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -buildvcs=false -a -o /opt/app-root/src/bin/metering-service ./cmd/metering-service
 
 FROM registry.access.redhat.com/ubi10-minimal:10.2-1790075626
+LABEL name="cloud-extensions/metering-service-rhel10"
+LABEL cpe="cpe:/a:redhat:cloud_extensions:0.1::el10"
 WORKDIR /
 COPY --from=builder /opt/app-root/src/bin/metering-service .
 USER 65532:65532

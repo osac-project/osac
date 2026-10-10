@@ -6,7 +6,7 @@
 #
 # CaaS path (_remote_kubeconfig defined): targets a HCP guest cluster. Installs the
 # LVMS operator via OLM, creates an LVMCluster that auto-discovers the second data
-# disk (added to the agent VM by setup-caas-agents.sh via AGENT_VM_DATA_DISK_SIZE),
+# disk attached by the BMaaS worker provisioning environment,
 # then creates per-tenant StorageClasses on the guest cluster.
 #
 # Both paths are idempotent.

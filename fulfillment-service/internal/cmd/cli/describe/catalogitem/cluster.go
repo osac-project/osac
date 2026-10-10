@@ -80,7 +80,7 @@ func clusterView(item *publicv1.ClusterCatalogItem) view {
 	return v
 }
 
-func nodeSetDetails(items map[string]*publicv1.ClusterTemplateNodeSet) []string {
+func nodeSetDetails(items map[string]*publicv1.ClusterCatalogNodeSet) []string {
 	keys := make([]string, 0, len(items))
 	for key := range items {
 		keys = append(keys, key)
@@ -89,7 +89,7 @@ func nodeSetDetails(items map[string]*publicv1.ClusterTemplateNodeSet) []string 
 	result := make([]string, 0, len(keys))
 	for _, key := range keys {
 		set := items[key]
-		result = append(result, fmt.Sprintf("%s: %d nodes; host type: %s", key, set.GetSize(), formatFullRef(set.GetHostType())))
+		result = append(result, fmt.Sprintf("%s: %d nodes; bare metal instance type: %s", key, set.GetSize(), formatFullRef(set.GetBaremetalInstanceType())))
 	}
 	return result
 }

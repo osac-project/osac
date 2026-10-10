@@ -1,0 +1,67 @@
+---
+- name: Cluster Create CaaS - Baseline Test
+  hosts: localhost
+  gather_facts: true
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Read CaaS ClusterOrder fixture
+      ansible.builtin.set_fact:
+        test_cluster_order: "{{ lookup('file', '../../../fixtures/clusterorder-ci-test.yaml') | from_yaml }}"
+
+    - name: Set test variables for CaaS baseline workflow
+      ansible.builtin.set_fact:
+        osac_job_vars:
+          resource: "{{ test_cluster_order }}"
+        cluster_working_namespace: "cluster-test-cluster-work"
+        install_step_hosted_cluster_override:
+          name: osac.workflows.workflow_helpers
+          tasks_from: noop.yml
+        install_step_cluster_network_override:
+          name: osac.workflows.workflow_helpers
+          tasks_from: noop.yml
+        install_step_external_access_override:
+          name: osac.workflows.workflow_helpers
+          tasks_from: noop.yml
+        install_step_retrieve_kubeconfig_override:
+          name: osac.workflows.workflow_helpers
+          tasks_from: noop.yml
+        install_step_wait_for_cluster_operators_override:
+          name: osac.workflows.workflow_helpers
+          tasks_from: noop.yml
+
+- name: Import CaaS cluster create workflow (baseline)
+  ansible.builtin.import_playbook: osac.workflows.cluster.create
+
+- name: Verify CaaS baseline results
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Verify cluster order name extracted
+      ansible.builtin.assert:
+        that:
+          - cluster_order_name is defined
+          - cluster_order_name == "test-cluster"
+        fail_msg: "Cluster order name not extracted correctly"
+
+    - name: Verify cluster working namespace determined
+      ansible.builtin.assert:
+        that:
+          - cluster_working_namespace is defined
+          - cluster_working_namespace == "cluster-test-cluster-work"
+        fail_msg: "Cluster working namespace not set correctly"
+
+    - name: Verify template ID extracted
+      ansible.builtin.assert:
+        that:
+          - template_id is defined
+          - template_id == "osac.templates.ocp_ci_small"
+        fail_msg: "CaaS template ID not extracted correctly"
+
+    - name: Verify CaaS does not dispatch the pool infrastructure phase
+      ansible.builtin.assert:
+        that:
+          - install_step_cluster_infra_default is not defined
+          - install_step_cluster_network_default is defined

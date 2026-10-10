@@ -1627,6 +1627,99 @@ var _ = Describe("Consumer", func() {
 			Expect(pub.published[3].Type()).To(Equal(events.EventResumed),
 				"reactivation must be resumed.v1 once the consumer has recorded EverBillable itself")
 		})
+
+		It("emits resumed.v1 when STARTING and RUNNING have the same second-precision timestamp", func() {
+			// Regression: handleTransientState advances TransitionTime to the
+			// STARTING event's timestamp. When the subsequent RUNNING event
+			// arrives with the same second-precision timestamp (common because
+			// Kubernetes lastTransitionTime has second precision),
+			// transitionTimeIsStale used to evaluate !T.After(T) == true and
+			// incorrectly drop the RUNNING event as stale. The resumed.v1
+			// CloudEvent was never emitted.
+			store := newMockStore()
+			baseTime := time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC)
+			stoppedTime := baseTime.Add(time.Hour)
+			// STARTING and RUNNING share the exact same second-precision timestamp.
+			resumeTime := baseTime.Add(2 * time.Hour)
+
+			// Seed the store with a compute instance that was previously
+			// running and then stopped (EverBillable=true).
+			store.states["vm-same-ts"] = projection.ResourceState{
+				ResourceID:         "vm-same-ts",
+				ResourceType:       events.ResourceTypeComputeInstance,
+				TenantID:           "tenant-1",
+				CurrentState:       "RUNNING",
+				IsBillable:         true,
+				EverBillable:       true,
+				FulfillmentVersion: 1,
+				TransitionTime:     baseTime,
+				BillingDimensions:  map[string]any{"instance_type": "gpu-h100"},
+				BillableSince:      &baseTime,
+			}
+
+			// v2: STOPPED — suspends billing.
+			stoppedCI := makeComputeInstance("vm-same-ts", "tenant-1")
+			stoppedCI.Metadata.CreationTimestamp = timestamppb.New(baseTime)
+			stoppedCI.Status.StateTransitionTime = timestamppb.New(stoppedTime)
+			stoppedCI.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED
+			stoppedCI.Metadata.Version = 2
+			stoppedEvent := &privatev1.Event{
+				Id:      "evt-stop",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: stoppedCI},
+			}
+
+			// v3: STARTING at resumeTime — transient, handleTransientState
+			// advances the projection's TransitionTime to resumeTime.
+			startingCI := makeComputeInstance("vm-same-ts", "tenant-1")
+			startingCI.Metadata.CreationTimestamp = timestamppb.New(baseTime)
+			startingCI.Status.StateTransitionTime = timestamppb.New(resumeTime)
+			startingCI.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING
+			startingCI.Metadata.Version = 3
+			startingEvent := &privatev1.Event{
+				Id:      "evt-starting",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: startingCI},
+			}
+
+			// v4: RUNNING at SAME resumeTime — must not be dropped as stale.
+			runningCI := makeComputeInstance("vm-same-ts", "tenant-1")
+			runningCI.Metadata.CreationTimestamp = timestamppb.New(baseTime)
+			runningCI.Status.StateTransitionTime = timestamppb.New(resumeTime)
+			runningCI.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING
+			runningCI.Metadata.Version = 4
+			runningEvent := &privatev1.Event{
+				Id:      "evt-running-resume",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: runningCI},
+			}
+
+			stream := &mockWatchStream{
+				responses: []*privatev1.EventsWatchResponse{
+					makeResponse(stoppedEvent),
+					makeResponse(startingEvent),
+					makeResponse(runningEvent),
+				},
+			}
+			client.results = []mockStreamResult{{stream: stream}}
+
+			testCtx, testCancel := context.WithTimeout(ctx, time.Second)
+			defer testCancel()
+
+			pub := &mockPublisher{published: make([]cloudevents.Event, 0, 2), cancelFunc: cancel}
+			consumer := newConsumerWithStore(pub, store)
+
+			err := consumer.Run(testCtx)
+			Expect(err).ToNot(HaveOccurred())
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			Expect(pub.published).To(HaveLen(2),
+				"expected suspended.v1 + resumed.v1; STARTING is transient (no event)")
+			Expect(pub.published[0].Type()).To(Equal(events.EventSuspended))
+			Expect(pub.published[1].Type()).To(Equal(events.EventResumed),
+				"resumed.v1 must not be dropped when STARTING and RUNNING share the same second-precision timestamp")
+		})
 	})
 
 	Describe("CaaS Cluster events", func() {
@@ -1652,8 +1745,8 @@ var _ = Describe("Consumer", func() {
 
 		defaultNodeSets := func() map[string]*privatev1.ClusterNodeSet {
 			return map[string]*privatev1.ClusterNodeSet{
-				"gpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "gpu-h100"}, Size: proto.Int32(2)},
-				"cpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "cpu-only"}, Size: proto.Int32(3)},
+				"gpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu-h100"}, Size: proto.Int32(2)},
+				"cpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "cpu-only"}, Size: proto.Int32(3)},
 			}
 		}
 
@@ -1662,9 +1755,9 @@ var _ = Describe("Consumer", func() {
 				"cluster_template": "ocp-ci-small",
 				"release_image":    "4.17.0",
 				"components": []any{
-					map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
-					map[string]any{"node_set": "cpu-workers", "component": "worker", "host_type": "cpu-only", "node_count": int32(3)},
-					map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+					map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": int32(1)},
+					map[string]any{"node_set": "cpu-workers", "component": "worker", "baremetal_instance_type": "cpu-only", "node_count": int32(3)},
+					map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(2)},
 				},
 			}
 		}
@@ -1877,7 +1970,7 @@ var _ = Describe("Consumer", func() {
 				var data map[string]any
 				Expect(json.Unmarshal(e.Data(), &data)).To(Succeed())
 				bd := data["billing_dimensions"].(map[string]any)
-				comp := bd["component"].(string) + ":" + bd["host_type"].(string)
+				comp := bd["component"].(string) + ":" + bd["baremetal_instance_type"].(string)
 				components[comp] = true
 				Expect(bd).To(HaveKey("cluster_template"))
 				Expect(bd).To(HaveKey("node_count"))
@@ -2034,8 +2127,8 @@ var _ = Describe("Consumer", func() {
 
 			// Scale gpu-h100 from 2 to 4, cpu-only stays at 3
 			scaledNodeSets := map[string]*privatev1.ClusterNodeSet{
-				"gpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "gpu-h100"}, Size: proto.Int32(4)},
-				"cpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "cpu-only"}, Size: proto.Int32(3)},
+				"gpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu-h100"}, Size: proto.Int32(4)},
+				"cpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "cpu-only"}, Size: proto.Int32(3)},
 			}
 			cl := makeCluster("cl-scale", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_READY, scaledNodeSets)
 			event := &privatev1.Event{
@@ -2063,7 +2156,7 @@ var _ = Describe("Consumer", func() {
 			var data map[string]any
 			Expect(json.Unmarshal(pub.published[0].Data(), &data)).To(Succeed())
 			bd := data["billing_dimensions"].(map[string]any)
-			Expect(bd["host_type"]).To(Equal("gpu-h100"))
+			Expect(bd["baremetal_instance_type"]).To(Equal("gpu-h100"))
 			Expect(bd["node_count"]).To(BeNumerically("==", 4))
 			Expect(data["duration_seconds"]).ToNot(BeNil())
 		})
@@ -2083,14 +2176,14 @@ var _ = Describe("Consumer", func() {
 					"cluster_template": "ocp-ci-small",
 					"release_image":    "4.17.0",
 					"components": []any{
-						map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
+						map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": int32(1)},
 					},
 				},
 				TransitionTime: billableStart,
 			}
 
 			addedNodeSets := map[string]*privatev1.ClusterNodeSet{
-				"tpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "tpu-v5"}, Size: proto.Int32(2)},
+				"tpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "tpu-v5"}, Size: proto.Int32(2)},
 			}
 			cl := makeCluster("cl-add", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_READY, addedNodeSets)
 			event := &privatev1.Event{
@@ -2137,8 +2230,8 @@ var _ = Describe("Consumer", func() {
 					"cluster_template": "ocp-ci-small",
 					"release_image":    "4.17.0",
 					"components": []any{
-						map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
-						map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+						map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": int32(1)},
+						map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(2)},
 					},
 				},
 				ComponentBillableSince: map[string]time.Time{
@@ -2149,8 +2242,8 @@ var _ = Describe("Consumer", func() {
 			}
 
 			mixedNodeSets := map[string]*privatev1.ClusterNodeSet{
-				"gpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "gpu-h100"}, Size: proto.Int32(4)},
-				"tpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "tpu-v5"}, Size: proto.Int32(2)},
+				"gpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu-h100"}, Size: proto.Int32(4)},
+				"tpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "tpu-v5"}, Size: proto.Int32(2)},
 			}
 			cl := makeCluster("cl-mixed", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_READY, mixedNodeSets)
 			event := &privatev1.Event{
@@ -2216,8 +2309,8 @@ var _ = Describe("Consumer", func() {
 
 			// T1: cpu-workers scales 3->5, gpu-workers stays at 2 (unchanged since T0).
 			clAtT1 := makeCluster("cl-staggered", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_READY, map[string]*privatev1.ClusterNodeSet{
-				"cpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "cpu-only"}, Size: proto.Int32(5)},
-				"gpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "gpu-h100"}, Size: proto.Int32(2)},
+				"cpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "cpu-only"}, Size: proto.Int32(5)},
+				"gpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu-h100"}, Size: proto.Int32(2)},
 			})
 			clAtT1.Status.StateTransitionTime = timestamppb.New(t1)
 			eventT1 := &privatev1.Event{
@@ -2228,8 +2321,8 @@ var _ = Describe("Consumer", func() {
 
 			// T2: gpu-workers scales 2->4, cpu-workers stays at 5 (unchanged since T1).
 			clAtT2 := makeCluster("cl-staggered", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_READY, map[string]*privatev1.ClusterNodeSet{
-				"cpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "cpu-only"}, Size: proto.Int32(5)},
-				"gpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "gpu-h100"}, Size: proto.Int32(4)},
+				"cpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "cpu-only"}, Size: proto.Int32(5)},
+				"gpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu-h100"}, Size: proto.Int32(4)},
 			})
 			clAtT2.Metadata.Version = 3
 			clAtT2.Status.StateTransitionTime = timestamppb.New(t2)

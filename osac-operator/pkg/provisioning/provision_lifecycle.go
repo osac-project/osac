@@ -161,8 +161,15 @@ func triggerJobForTarget(ctx context.Context, provider ProvisioningProvider, res
 type PollCallbacks struct {
 	// OnFailed is called when the job transitions to Failed state.
 	OnFailed func(message string)
+	// OnOutputError is called when a successful job's outputs cannot be processed.
+	OnOutputError func(message string)
 	// OnSuccess is called when the job succeeds.
 	OnSuccess func(status ProvisionStatus)
+	// OnSuccessWithExtraVars is called when the job succeeds and receives its output variables.
+	// When set, the provider's output-aware status method is used and this callback runs
+	// before OnSuccess. Errors without a confirmed successful status are retried; output
+	// errors accompanying a successful status are reported through OnOutputError.
+	OnSuccessWithExtraVars func(status ProvisionStatusWithExtraVars) error
 }
 
 // PollJob checks the status of an existing provision job and updates the jobs slice in place.
@@ -170,8 +177,35 @@ func PollJob(ctx context.Context, provider ProvisioningProvider, resource client
 	log := ctrllog.FromContext(ctx)
 	log.Info("polling provision job status", "jobID", latestJob.JobID, "currentState", latestJob.State)
 
-	status, err := provider.GetProvisionStatus(ctx, resource, latestJob.JobID)
+	var status ProvisionStatus
+	var statusWithExtraVars ProvisionStatusWithExtraVars
+	var err error
+	if callbacks != nil && callbacks.OnSuccessWithExtraVars != nil {
+		if outputProvider, ok := provider.(ProvisioningProviderWithProvisionOutputs); ok {
+			statusWithExtraVars, err = outputProvider.GetProvisionStatusWithExtraVars(ctx, resource, latestJob.JobID)
+			status = statusWithExtraVars.ProvisionStatus
+		} else {
+			status, err = provider.GetProvisionStatus(ctx, resource, latestJob.JobID)
+			statusWithExtraVars.ProvisionStatus = status
+		}
+	} else {
+		status, err = provider.GetProvisionStatus(ctx, resource, latestJob.JobID)
+	}
 	if err != nil {
+		if callbacks != nil && callbacks.OnSuccessWithExtraVars != nil && status.State.IsSuccessful() {
+			updatedJob := *latestJob
+			updatedJob.State = status.State
+			updatedJob.Message = status.MessageWithDetails()
+			UpdateJob(*provState.Jobs, updatedJob)
+
+			outputErr := fmt.Errorf("failed to retrieve provision outputs: %w", err)
+			log.Error(err, "failed to retrieve provision outputs", "jobID", latestJob.JobID)
+			if callbacks.OnOutputError != nil {
+				callbacks.OnOutputError(outputErr.Error())
+				return ctrl.Result{}, nil
+			}
+			return ctrl.Result{}, outputErr
+		}
 		log.Error(err, "failed to get provision status", "jobID", latestJob.JobID)
 		updatedJob := *latestJob
 		updatedJob.Message = fmt.Sprintf("Failed to get job status: %v", err)
@@ -198,8 +232,21 @@ func PollJob(ctx context.Context, provider ProvisioningProvider, resource client
 		return ctrl.Result{RequeueAfter: pollInterval}, nil
 	}
 
-	if status.State.IsSuccessful() && callbacks != nil && callbacks.OnSuccess != nil {
-		callbacks.OnSuccess(status)
+	if status.State.IsSuccessful() && callbacks != nil {
+		if callbacks.OnSuccessWithExtraVars != nil {
+			if err := callbacks.OnSuccessWithExtraVars(statusWithExtraVars); err != nil {
+				outputErr := fmt.Errorf("failed to process provision outputs: %w", err)
+				log.Error(err, "failed to process provision outputs", "jobID", latestJob.JobID)
+				if callbacks.OnOutputError != nil {
+					callbacks.OnOutputError(outputErr.Error())
+					return ctrl.Result{}, nil
+				}
+				return ctrl.Result{}, outputErr
+			}
+		}
+		if callbacks.OnSuccess != nil {
+			callbacks.OnSuccess(status)
+		}
 	}
 	return ctrl.Result{}, nil
 }

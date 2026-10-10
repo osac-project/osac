@@ -1,6 +1,6 @@
 import { Route, Routes } from 'react-router-dom';
 
-import { VolumeWizardPage } from '@osac/ui-components/components/Volume/VolumeWizardPage';
+import VolumeWizardPage from '@osac/ui-components/components/Volume/VolumeWizardPage';
 
 import { VolumeDetailsPage } from './VolumeDetailsPage';
 import { VolumesListPage } from './VolumesListPage';
@@ -10,6 +10,5 @@ export const VolumeRoutes = () => (
     <Route index element={<VolumesListPage />} />
     <Route path="create" element={<VolumeWizardPage />} />
     <Route path=":id" element={<VolumeDetailsPage />} />
-    <Route path=":id/edit" element={<VolumeWizardPage />} />
   </Routes>
 );

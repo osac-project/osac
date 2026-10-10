@@ -69,7 +69,7 @@ class TestBmaasNetworking:
         wait_for_external_ip_pool_grpc_ready(private_grpc=private_grpc, pool_id=pool_id)
 
         self.__class__.state.update(pool_id=pool_id, pool_cr=pool_cr)
-        print(f"Created ExternalIPPool {external_ip_pool_name}: {pool_id}")
+        print("Created ExternalIPPool")
 
     # ── Phase 1: Build the Network ──────────────────────────────────────
 
@@ -172,6 +172,7 @@ class TestBmaasNetworking:
         k8s_hub_client: K8sClient,
         catalog_item_name: str,
         auto_eip_catalog_item_name: str,
+        bmi_instance_type: str,
         bmi_disk_image: str,
         net_ssh_public_key: str,
         bmh_namespace: str,
@@ -192,21 +193,22 @@ class TestBmaasNetworking:
             bmi_id, _ = cli.create_baremetal_instance(
                 name=bmi_name,
                 catalog_item=catalog,
+                instance_type=bmi_instance_type,
                 ssh_key=net_ssh_public_key,
                 disk_image=bmi_disk_image,
                 network_attachments=[f"subnet={subnet_id},interface=eth9,primary,security-groups={sg}"],
                 external_ip_attachment=is_auto_eip,
             )
-            print(f"Created BMI {bmi_name}: {bmi_id} (catalog: {catalog})")
+            print("Created BMI")
             bmis.append({"name": bmi_name, "id": bmi_id, "subnet": "a" if i < 2 else "b"})
 
         for bmi in bmis:
             bmi["cr"] = wait_for_bmi_cr(k8s=k8s_hub_client, uuid=bmi["id"])
-            print(f"BMI {bmi['name']} CR: {bmi['cr']}")
+            print("BMI custom resource found")
 
         for bmi in bmis:
             wait_for_bmi_running(grpc=grpc, bmi_id=bmi["id"], retries=_NETRIS_BMI_RUNNING_RETRIES)
-            print(f"BMI {bmi['name']} is RUNNING")
+            print("BMI is RUNNING")
 
         for bmi in bmis:
             bmi["ip"] = poll_until(
@@ -220,7 +222,7 @@ class TestBmaasNetworking:
             ext_host = k8s_hub_client.get_baremetal_instance_external_host_id(name=bmi["cr"])
             bmi["bmh"] = ext_host.split("/", 1)[1]
             bmi["ssh_host"] = bmi_ssh.get_ssh_host(bmi["bmh"], bmh_ssh_hosts)
-            print(f"BMI {bmi['name']}: tenant_ip={bmi['ip']}, bmh={bmi['bmh']}, ssh_host={bmi['ssh_host']}")
+            print("BMI tenant IP and SSH host resolved")
 
         for bmi in bmis:
             if bmi["subnet"] == "a":
@@ -231,6 +233,13 @@ class TestBmaasNetworking:
         self.__class__.state["bmi1"] = bmis[0]
         self.__class__.state["bmi2"] = bmis[1]
         self.__class__.state["bmi3"] = bmis[2]
+        for bmi in bmis:
+            spec = grpc.get_baremetal_instance(bmi_id=bmi["id"]).get("object", {}).get("spec", {})
+            instance_type = spec.get("instance_type", spec.get("instanceType", {}))
+            assert instance_type.get("name") == bmi_instance_type, (
+                f"BareMetalInstance {bmi['name']} has instance_type {instance_type.get('name')!r}, "
+                f"expected {bmi_instance_type!r}"
+            )
 
     def test_05b_verify_auto_eip_on_bmi3(
         self, grpc: GRPCClient, private_grpc: GRPCClient, k8s_hub_client: K8sClient
@@ -277,7 +286,7 @@ class TestBmaasNetworking:
         self.__class__.state.update(
             auto_attach_id=auto_attach_id, auto_eip_id=auto_eip_ref, auto_ext_addr=auto_ext_addr
         )
-        print(f"BMI3 auto EIP: {auto_ext_addr}, attachment: {auto_attach_id}")
+        print("BMI3 auto EIP and attachment resolved")
 
     # ── Phase 3: Connectivity Tests ─────────────────────────────────────
 
@@ -422,7 +431,7 @@ class TestBmaasNetworking:
             if key not in self.state:
                 continue
             bmi = self.state[key]
-            print(f"Deleting {bmi['name']}...")
+            print("Deleting BMI...")
             cli.delete_baremetal_instance(uuid=bmi["id"])
 
         for key in ("bmi1", "bmi2", "bmi3"):
@@ -432,7 +441,7 @@ class TestBmaasNetworking:
             wait_for_bmi_deletion(k8s=k8s_hub_client, name=bmi["cr"])
             wait_for_bmi_grpc_removal(grpc=grpc, uuid=bmi["id"])
             wait_for_bmh_available(k8s=k8s_hub_client, name=bmi["bmh"], bmh_namespace=bmh_namespace)
-            print(f"{bmi['name']} deprovisioned, BMH {bmi['bmh']} available")
+            print("BMI deprovisioned, BMH available")
 
     def test_14b_verify_auto_eip_garbage_collected(self, grpc: GRPCClient) -> None:
         if "auto_attach_id" not in self.state:

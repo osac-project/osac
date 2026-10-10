@@ -103,6 +103,7 @@ Thumbs.db
 *.crt
 
 # Local dev artifacts
+.worktrees/
 .artifacts
 .artifacts/
 __pycache__

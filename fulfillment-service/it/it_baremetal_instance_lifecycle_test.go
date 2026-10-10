@@ -64,6 +64,51 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		bareMetalInstanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
 		diskImagesClient = privatev1.NewDiskImagesClient(tool.InternalView().AdminConn())
 
+		// Create BareMetalInstanceType before the template so the template can
+		// provide the effective type for catalog-based instance creation.
+		instanceTypeResp, err := bareMetalInstanceTypesClient.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceType_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   fmt.Sprintf("test-instance-type-%s", uuid.New()[24:32]),
+					Tenant: auth.SharedTenant,
+				}.Build(),
+				Spec: privatev1.BareMetalInstanceTypeSpec_builder{
+					Hardware: privatev1.BareMetalHardwareSpec_builder{
+						Cpu: privatev1.BareMetalCPUSpec_builder{
+							Cores:          4,
+							Architecture:   "x86_64",
+							ThreadsPerCore: 2,
+						}.Build(),
+						Memory: privatev1.BareMetalMemorySpec_builder{
+							TotalGb: 16,
+						}.Build(),
+						NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+							privatev1.BareMetalNetworkPortSpec_builder{
+								Name:  "data-0",
+								Role:  "fabric",
+								Type:  "Ethernet",
+								Speed: "25Gbps",
+							}.Build(),
+						},
+					}.Build(),
+					HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
+						MatchLabels: map[string]string{
+							"osac.openshift.io/host-type": "compute",
+						},
+					}.Build(),
+					Description: "Test bare metal instance type for integration tests.",
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		instanceTypeId = instanceTypeResp.GetObject().GetId()
+		DeferCleanup(func(ctx context.Context) {
+			_, err := bareMetalInstanceTypesClient.Delete(ctx, privatev1.BareMetalInstanceTypesDeleteRequest_builder{
+				Id: instanceTypeId,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
+
 		// Create BareMetalInstanceTemplate with an explicit ID that matches the BMFO CRD
 		// validation pattern (^[a-zA-Z_][a-zA-Z0-9._]*$). Auto-generated UUIDs start with
 		// a digit and are rejected by the CRD when the controller creates the CR.
@@ -74,6 +119,10 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Description: "Template for bare metal instance lifecycle test.",
 				Metadata: privatev1.Metadata_builder{
 					Name: fmt.Sprintf("test-template-%s", uuid.New()[24:32]),
+				}.Build(),
+				InstanceType: privatev1.BareMetalInstanceTypeReference_builder{
+					Id:     instanceTypeId,
+					Shared: true,
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -130,49 +179,6 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		// Create BareMetalInstanceType for the tests
-		instanceTypeResp, err := bareMetalInstanceTypesClient.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
-			Object: privatev1.BareMetalInstanceType_builder{
-				Metadata: privatev1.Metadata_builder{
-					Name:   fmt.Sprintf("test-instance-type-%s", uuid.New()[24:32]),
-					Tenant: auth.SharedTenant,
-				}.Build(),
-				Spec: privatev1.BareMetalInstanceTypeSpec_builder{
-					Hardware: privatev1.BareMetalHardwareSpec_builder{
-						Cpu: privatev1.BareMetalCPUSpec_builder{
-							Cores:          4,
-							Architecture:   "x86_64",
-							ThreadsPerCore: 2,
-						}.Build(),
-						Memory: privatev1.BareMetalMemorySpec_builder{
-							TotalGb: 16,
-						}.Build(),
-						NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
-							privatev1.BareMetalNetworkPortSpec_builder{
-								Name:  "data-0",
-								Role:  "fabric",
-								Type:  "Ethernet",
-								Speed: "25Gbps",
-							}.Build(),
-						},
-					}.Build(),
-					HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
-						MatchLabels: map[string]string{
-							"osac.openshift.io/host-type": "compute",
-						},
-					}.Build(),
-					Description: "Test bare metal instance type for integration tests.",
-				}.Build(),
-			}.Build(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		instanceTypeId = instanceTypeResp.GetObject().GetId()
-		DeferCleanup(func(ctx context.Context) {
-			_, err := bareMetalInstanceTypesClient.Delete(ctx, privatev1.BareMetalInstanceTypesDeleteRequest_builder{
-				Id: instanceTypeId,
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		})
 	})
 
 	It("Creates a BareMetalInstance and verifies fields", func(ctx context.Context) {

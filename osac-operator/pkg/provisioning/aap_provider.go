@@ -140,7 +140,7 @@ func (p *AAPProvider) GetProvisionStatusWithExtraVars(ctx context.Context, resou
 		return status, nil
 	}
 	if err := json.Unmarshal(job.Artifacts, &status.ExtraVars); err != nil {
-		return ProvisionStatusWithExtraVars{}, fmt.Errorf("failed to decode AAP job artifacts for job %s: %w", jobID, err)
+		return status, fmt.Errorf("failed to decode AAP job artifacts for job %s: %w", jobID, err)
 	}
 	return status, nil
 }

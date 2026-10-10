@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@osac/ui-components/components/Volume/VolumeWizardPage', () => ({
-  VolumeWizardPage: () => <h1>Volume wizard</h1>,
+  default: () => <h1>Volume wizard</h1>,
 }));
 
 vi.mock('./VolumesListPage', () => ({
@@ -37,22 +37,15 @@ describe('VolumeRoutes', () => {
     expect(screen.getByRole('heading', { name: 'Volume wizard' })).toBeInTheDocument();
   });
 
-  it('renders VolumeWizardPage on the edit route', () => {
-    render(renderRoutes('/storage/volumes/vol-123/edit'));
-
-    expect(screen.getByRole('heading', { name: 'Volume wizard' })).toBeInTheDocument();
-  });
-
   it('renders VolumeDetailsPage on the detail route', () => {
     render(renderRoutes('/storage/volumes/vol-123'));
 
     expect(screen.getByRole('heading', { name: 'Volume details' })).toBeInTheDocument();
   });
 
-  it('does not match "create" as a volume ID for the edit route', () => {
-    render(renderRoutes('/storage/volumes/create'));
+  it('does not expose an edit route', () => {
+    render(renderRoutes('/storage/volumes/vol-123/edit'));
 
-    // The create route should match, not :id/edit — confirmed by the wizard rendering
-    expect(screen.getByRole('heading', { name: 'Volume wizard' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Volume wizard' })).not.toBeInTheDocument();
   });
 });

@@ -83,6 +83,7 @@ func NewLifecycleClientFromConfig(
 		SetTokenSource(authenticator).
 		SetParentNamespace(base.Namespace).
 		SetKVMountPath(base.KVMountPath).
+		SetTransitMountPath(lifecycle.TransitMountPath).
 		SetKeycloakIssuerURL(base.KeycloakIssuerURL).
 		SetKeycloakAudience(base.KeycloakAudience).
 		SetServiceClientID(base.KeycloakClientID).

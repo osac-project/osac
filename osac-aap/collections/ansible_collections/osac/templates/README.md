@@ -45,9 +45,9 @@ ansible-galaxy collection install osac-templates-*.tar.gz
 #### `ocp_small`
 Minimal OpenShift cluster configuration.
 
-**Default Configuration:**
-- 2 nodes
-- Resource class: fc430
+Node counts and hardware types come from the Cluster request or a Cluster
+Catalog Item NodeSet policy. Every node set selects a BareMetalInstanceType;
+this template does not provide hardware defaults.
 
 **Cluster credentials:**
 - `spec_defaults.pull_secret_secret`: Reference to a platform-managed pull Secret
@@ -102,11 +102,6 @@ validation, and lifecycle management.
 
    template_type: cluster
 
-   default_node_request:
-   - resourceClass: fc430
-     numberOfNodes: 2
-   allowed_resource_classes: []
-
    spec_defaults:
      pull_secret_secret:
        name: shared-pull-secret
@@ -119,6 +114,11 @@ validation, and lifecycle management.
        type: string
        required: true
    ```
+
+Cluster requests must include `spec.node_sets` with a positive size and a
+`baremetal_instance_type` reference, unless a Cluster Catalog Item supplies
+a locked or default NodeSet map. The resulting ClusterOrder passes each
+selected hardware type as `nodeRequests[].bareMetal.instanceType`.
 
 3. Implement provisioning tasks in `roles/my_cluster_template/tasks/install.yaml`
 4. Implement cleanup tasks in `roles/my_cluster_template/tasks/delete.yaml`

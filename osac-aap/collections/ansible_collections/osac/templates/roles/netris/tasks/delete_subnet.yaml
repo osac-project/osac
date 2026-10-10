@@ -23,6 +23,14 @@
   vars:
     ipam_name: "{{ subnet_name }}"
 
+- name: Delete fabric output ConfigMap
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: ConfigMap
+    name: "subnet-{{ subnet_name }}-fabric-output"
+    namespace: "{{ subnet.metadata.namespace }}"
+
 - name: Display deletion result
   ansible.builtin.debug:
     msg: "V-Net + IPAM subnet '{{ subnet_name }}' deletion completed"

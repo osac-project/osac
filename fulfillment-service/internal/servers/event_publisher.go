@@ -98,8 +98,10 @@ type EventPublisher struct {
 	drainLoop        *work.Loop
 	listenLoop       *work.Loop
 	metricsLoop      *work.Loop
+	kafkaAdmin       sarama.ClusterAdmin
 	kafkaProducer    sarama.SyncProducer
 	kafkaTopicPrefix string
+	publishedTopics  map[string]bool
 	batchSize        int
 	publishCallback  func(context.Context, *privatev1.Event) error
 	payloadOneof     protoreflect.OneofDescriptor
@@ -305,6 +307,21 @@ func (b *EventPublisherBuilder) Build() (result *EventPublisher, err error) {
 	existsSQL := b.calculateExistsSQL(dbTable)
 	listenSQL := b.calculateListenSQL(dbChannel)
 
+	// Create the Kafka admin, which owns its client:
+	adminConfig := *b.kafkaConfig
+	kafkaAdmin, err := sarama.NewClusterAdmin(b.kafkaBrokers, &adminConfig)
+	if err != nil {
+		err = fmt.Errorf("failed to create Kafka admin: %w", err)
+		return
+	}
+	defer func() {
+		if err != nil {
+			if closeErr := kafkaAdmin.Close(); closeErr != nil {
+				err = fmt.Errorf("%w; failed to close Kafka admin: %w", err, closeErr)
+			}
+		}
+	}()
+
 	// Create the Kafka message producer, which owns its client:
 	config := *b.kafkaConfig
 	kafkaProducer, err := sarama.NewSyncProducer(b.kafkaBrokers, &config)
@@ -345,8 +362,10 @@ func (b *EventPublisherBuilder) Build() (result *EventPublisher, err error) {
 		dbPool:           b.dbPool,
 		dbTable:          dbTable,
 		dbChannel:        dbChannel,
+		kafkaAdmin:       kafkaAdmin,
 		kafkaProducer:    kafkaProducer,
 		kafkaTopicPrefix: b.kafkaTopicPrefix,
+		publishedTopics:  map[string]bool{},
 		fetchSQL:         fetchSQL,
 		deleteSQL:        deleteSQL,
 		countSQL:         countSQL,
@@ -539,11 +558,15 @@ func (b *EventPublisherBuilder) checkName(name string) error {
 
 // Close releases all the resources used by the publisher.
 func (p *EventPublisher) Close() error {
-	if p.kafkaProducer == nil {
-		return nil
+	var err error
+	if p.kafkaProducer != nil {
+		err = p.kafkaProducer.Close()
+		p.kafkaProducer = nil
 	}
-	err := p.kafkaProducer.Close()
-	p.kafkaProducer = nil
+	if p.kafkaAdmin != nil {
+		err = errors.Join(err, p.kafkaAdmin.Close())
+		p.kafkaAdmin = nil
+	}
 	return err
 }
 
@@ -788,6 +811,11 @@ func (p *EventPublisher) processChange(ctx context.Context, tx pgx.Tx, change *e
 
 	// Calculate the Kafka topic and the message key:
 	topic := p.kafkaTopicPrefix + tenant
+	err = p.ensureTopic(ctx, topic)
+	if err != nil {
+		p.metrics.publishErrors.With(nil).Inc()
+		return fmt.Errorf("failed to prepare topic for change '%s': %w", change.id, err)
+	}
 	_, _, err = p.kafkaProducer.SendMessage(&sarama.ProducerMessage{
 		Topic: topic,
 		Key:   sarama.StringEncoder(id),
@@ -795,8 +823,9 @@ func (p *EventPublisher) processChange(ctx context.Context, tx pgx.Tx, change *e
 	})
 	if err != nil {
 		p.metrics.publishErrors.With(nil).Inc()
-		return fmt.Errorf("failed to publish change %s: %w", change.id, err)
+		return fmt.Errorf("failed to publish change '%s': %w", change.id, err)
 	}
+	p.publishedTopics[topic] = true
 	if p.logger.Enabled(ctx, slog.LevelDebug) {
 		p.logger.DebugContext(
 			ctx,
@@ -822,10 +851,72 @@ func (p *EventPublisher) processChange(ctx context.Context, tx pgx.Tx, change *e
 	return nil
 }
 
+// ensureTopic checks if a topic exists, and creates it if needed.
+func (p *EventPublisher) ensureTopic(ctx context.Context, topic string) error {
+	err := ctx.Err()
+	if err != nil {
+		return err
+	}
+	if p.publishedTopics[topic] {
+		return nil
+	}
+
+	// Sarama admin calls don't accept a context. Let the drain stop waiting on cancellation so it can release its
+	// transaction and Run can exit. Capture the admin so the worker doesn't access publisher state after shutdown;
+	// buffer the result so it can finish once Sarama's request completes or times out, even if the caller has left.
+	admin := p.kafkaAdmin
+	done := make(chan error, 1)
+	go func() {
+		done <- prepareTopic(ctx, admin, topic)
+	}()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-done:
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return err
+	}
+}
+
+func prepareTopic(ctx context.Context, admin sarama.ClusterAdmin, topic string) error {
+	descriptions, err := admin.DescribeTopics([]string{topic})
+	if err != nil {
+		return fmt.Errorf("failed to describe topic '%s': %w", topic, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(descriptions) != 1 {
+		return fmt.Errorf("expected exactly one topic description, but got %d", len(descriptions))
+	}
+	description := descriptions[0]
+	if description.Name != topic {
+		return fmt.Errorf("expected description of topic '%s', but got '%s'", topic, description.Name)
+	}
+	switch description.Err {
+	case sarama.ErrNoError:
+		return nil
+	case sarama.ErrUnknownTopicOrPartition:
+		detail := &sarama.TopicDetail{
+			NumPartitions:     1,
+			ReplicationFactor: -1,
+		}
+		err = admin.CreateTopic(topic, detail, false)
+		if err != nil && !errors.Is(err, sarama.ErrTopicAlreadyExists) {
+			return fmt.Errorf("failed to create topic '%s': %w", topic, err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("failed to describe topic '%s': %w", topic, description.Err)
+	}
+}
+
 func (p *EventPublisher) deleteChange(ctx context.Context, tx pgx.Tx, id string) error {
 	_, err := tx.Exec(ctx, p.deleteSQL, id)
 	if err != nil {
-		return fmt.Errorf("failed to delete change %s: %w", id, err)
+		return fmt.Errorf("failed to delete change '%s': %w", id, err)
 	}
 	return nil
 }

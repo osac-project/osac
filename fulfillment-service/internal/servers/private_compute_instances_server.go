@@ -59,6 +59,7 @@ type PrivateComputeInstancesServer struct {
 	templatesDao            *dao.GenericDAO[*privatev1.ComputeInstanceTemplate]
 	catalogItemsDao         *dao.GenericDAO[*privatev1.ComputeInstanceCatalogItem]
 	subnetsDao              *dao.GenericDAO[*privatev1.Subnet]
+	virtualNetworksDao      *dao.GenericDAO[*privatev1.VirtualNetwork]
 	securityGroupsDao       *dao.GenericDAO[*privatev1.SecurityGroup]
 	instanceTypesDao        *dao.GenericDAO[*privatev1.InstanceType]
 	diskImagesDao           *dao.GenericDAO[*privatev1.DiskImage]
@@ -142,6 +143,14 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 
 	// Create the Subnets DAO for network validation:
 	subnetsDao, err := dao.NewGenericDAO[*privatev1.Subnet]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+	virtualNetworksDao, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
@@ -242,6 +251,7 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 		templatesDao:            templatesDao,
 		catalogItemsDao:         catalogItemsDao,
 		subnetsDao:              subnetsDao,
+		virtualNetworksDao:      virtualNetworksDao,
 		securityGroupsDao:       securityGroupsDao,
 		instanceTypesDao:        instanceTypesDao,
 		diskImagesDao:           diskImagesDao,
@@ -276,52 +286,85 @@ func (s *PrivateComputeInstancesServer) Get(ctx context.Context,
 	return
 }
 
-func (s *PrivateComputeInstancesServer) injectDefaultNetworkAttachments(ctx context.Context,
+func (s *PrivateComputeInstancesServer) completeNetworkAttachmentDefaults(ctx context.Context,
 	vm *privatev1.ComputeInstance) error {
-	tenant := vm.GetMetadata().GetTenant()
-	if tenant == "" {
-		var tenantErr error
-		tenant, tenantErr = s.tenancyLogic.DetermineDefaultTenant(ctx)
-		if tenantErr != nil {
-			s.logger.ErrorContext(ctx, "failed to determine target tenant", slog.Any("error", tenantErr))
-			return grpcstatus.Errorf(grpccodes.Internal, "failed to determine target tenant")
-		}
-	}
-
+	metadata := vm.GetMetadata()
+	tenant := metadata.GetTenant()
 	spec := vm.GetSpec()
-	subnet, err := findDefaultSubnet(ctx, s.logger, s.subnetsDao, tenant, vm.GetMetadata().GetProject())
-	if err != nil {
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to look up default subnet: %v", err)
+	attachments := spec.GetNetworkAttachments()
+	if len(attachments) == 0 {
+		attachments = []*privatev1.ComputeNetworkAttachment{{}}
+		spec.SetNetworkAttachments(attachments)
 	}
-	if subnet == nil {
+	attachment := attachments[0]
+	if attachment == nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"spec.network_attachments: at least one network attachment is required for new compute instances")
+			"spec.network_attachments[0]: network attachment is required")
 	}
 
-	attachment := privatev1.ComputeNetworkAttachment_builder{
-		Subnet: privatev1.SubnetLocalReference_builder{Id: subnet.GetId()}.Build(),
-	}.Build()
+	if attachment.GetSubnet() == nil || refKey(attachment.GetSubnet()) == "" {
+		subnet, err := findDefaultSubnet(ctx, s.logger, s.subnetsDao, tenant, metadata.GetProject())
+		if err != nil {
+			return grpcstatus.Errorf(grpccodes.Internal, "failed to look up default subnet: %v", err)
+		}
+		if subnet == nil {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"spec.network_attachments[0].subnet: a default subnet is required when no subnet is provided")
+		}
+		attachment.SetSubnet(privatev1.SubnetLocalReference_builder{Id: subnet.GetId()}.Build())
+	}
 
-	virtualNetworkID := refKey(subnet.GetSpec().GetVirtualNetwork())
-	sg, err := findDefaultSecurityGroup(ctx, s.logger, s.securityGroupsDao, virtualNetworkID, tenant, vm.GetMetadata().GetProject())
+	if len(attachment.GetSecurityGroups()) != 0 {
+		return nil
+	}
+
+	subnetRef := attachment.GetSubnet()
+	subnetID := refKey(subnetRef)
+	subnet, err := resolveAndCanonicalizeReference(ctx, s.subnetsDao, metadata, subnetRef, "subnet", grpccodes.NotFound)
+	if err != nil {
+		if grpcstatus.Code(err) == grpccodes.NotFound {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"network_attachments[0]: subnet '%s' does not exist", subnetID)
+		}
+		return err
+	}
+
+	virtualNetworkRef := subnet.GetSpec().GetVirtualNetwork()
+	if virtualNetworkRef == nil || refKey(virtualNetworkRef) == "" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"network_attachments[0]: subnet '%s' has no VirtualNetwork", subnetID)
+	}
+	virtualNetworkID := refKey(virtualNetworkRef)
+	virtualNetwork, err := resolveAndCanonicalizeReference(ctx, s.virtualNetworksDao, metadata,
+		virtualNetworkRef, "virtual network", grpccodes.NotFound)
+	if err != nil {
+		if grpcstatus.Code(err) == grpccodes.NotFound {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"network_attachments[0]: VirtualNetwork '%s' does not exist", virtualNetworkID)
+		}
+		return err
+	}
+	if virtualNetwork.GetMetadata().GetLabels()[defaultLabel] != "true" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"spec.network_attachments[0].security_groups: a security group is required for a non-default VirtualNetwork")
+	}
+
+	securityGroup, err := findDefaultSecurityGroup(ctx, s.logger, s.securityGroupsDao,
+		virtualNetworkID, tenant, metadata.GetProject())
 	if err != nil {
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to look up default security group: %v", err)
 	}
-	if sg != nil {
-		attachment.SetSecurityGroups([]*privatev1.SecurityGroupLocalReference{
-			privatev1.SecurityGroupLocalReference_builder{Id: sg.GetId()}.Build(),
-		})
+	if securityGroup == nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"spec.network_attachments[0].security_groups: a default security group is required for the default VirtualNetwork")
 	}
+	attachment.SetSecurityGroups([]*privatev1.SecurityGroupLocalReference{
+		privatev1.SecurityGroupLocalReference_builder{Id: securityGroup.GetId()}.Build(),
+	})
 
-	spec.SetNetworkAttachments([]*privatev1.ComputeNetworkAttachment{attachment})
-
-	attrs := []slog.Attr{
+	s.logger.LogAttrs(ctx, slog.LevelInfo, "completed default compute network attachment",
 		slog.String("subnet_id", subnet.GetId()),
-	}
-	if sg != nil {
-		attrs = append(attrs, slog.String("security_group_id", sg.GetId()))
-	}
-	s.logger.LogAttrs(ctx, slog.LevelInfo, "auto-injected default network attachments", attrs...)
+		slog.String("security_group_id", securityGroup.GetId()))
 	return nil
 }
 
@@ -364,14 +407,16 @@ func (s *PrivateComputeInstancesServer) prepareCreate(ctx context.Context, candi
 	if err = s.validateAndResolveUserDataSecret(ctx, spec, true); err != nil {
 		return
 	}
+	if len(spec.GetNetworkAttachments()) > 1 {
+		err = grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"spec.network_attachments: at most one network attachment is supported")
+		return
+	}
 
-	// Apply Catalog rules before adding the tenant's default network. Otherwise a locked
-	// network field could mistake the server-provided attachment for a caller override.
-	if len(spec.GetNetworkAttachments()) == 0 {
-		err = s.injectDefaultNetworkAttachments(ctx, candidate)
-		if err != nil {
-			return
-		}
+	// Apply Catalog rules before completing network fields. Otherwise a locked network field
+	// could mistake a server-provided default for a caller override.
+	if err = s.completeNetworkAttachmentDefaults(ctx, candidate); err != nil {
+		return
 	}
 
 	// Validate and resolve the final network, including Catalog and Template defaults.
@@ -389,6 +434,9 @@ func (s *PrivateComputeInstancesServer) prepareCreate(ctx context.Context, candi
 		return
 	}
 	warnings = append(warnings, diskImageWarnings...)
+	if err = s.validateWindowsUserData(ctx, candidate, diskImage); err != nil {
+		return
+	}
 	if err = s.validateSshPublicKey(ctx, candidate, diskImage); err != nil {
 		return
 	}
@@ -415,6 +463,71 @@ func (s *PrivateComputeInstancesServer) validateStorageTiers(ctx context.Context
 			return err
 		}
 		disk.SetStorageTier(canonicalStorageTierReference(tier))
+	}
+	return nil
+}
+
+// validateWindowsUserData enforces XML well-formedness on user data when the DiskImage's
+// guest OS family is Windows. For non-Windows images (or when no user data is present), this
+// is a no-op — Linux user_data is treated as opaque content (existing behavior preserved).
+//
+// Error messages for user_data_secret intentionally omit the secret content to prevent
+// leaking sensitive data (design §4.3).
+//
+// Implements IC-1 from design §5.
+func (s *PrivateComputeInstancesServer) validateWindowsUserData(
+	ctx context.Context,
+	ci *privatev1.ComputeInstance,
+	diskImage *privatev1.DiskImage,
+) error {
+	if diskImage == nil || diskImage.GetSpec().GetGuestOsFamily() != privatev1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS {
+		return nil
+	}
+
+	spec := ci.GetSpec()
+
+	// Validate inline user_data.
+	if spec.HasUserData() {
+		if err := isPureXMLNoDTD([]byte(spec.GetUserData())); err != nil {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"user_data is not well-formed XML: %s", err)
+		}
+		return nil
+	}
+
+	// Validate user_data_secret content. The reference has already been resolved and
+	// canonicalized by validateAndResolveUserDataSecret; load the secret data to check
+	// its content format.
+	ref := spec.GetUserDataSecret()
+	if ref == nil {
+		return nil
+	}
+
+	secretResponse, err := s.secretsDao.Get().SetId(ref.GetId()).Do(ctx)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to load user_data_secret for XML validation", "error", err)
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate user_data_secret content")
+	}
+	secret := secretResponse.GetObject()
+	data := secret.GetData()
+	if len(data) == 0 && secret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
+		if s.secretStore == nil {
+			s.logger.ErrorContext(ctx, "Failed to load user_data_secret for XML validation: secret store isn't configured")
+			return grpcstatus.Errorf(grpccodes.Internal, "failed to validate user_data_secret content")
+		}
+		metadata := secret.GetMetadata()
+		data, err = s.secretStore.Fetch(ctx, metadata.GetTenant(), metadata.GetProject(), metadata.GetName())
+		if err != nil {
+			s.logger.ErrorContext(ctx, "Failed to load user_data_secret value from store for XML validation", "error", err)
+			return grpcstatus.Errorf(grpccodes.Internal, "failed to validate user_data_secret content")
+		}
+	}
+
+	value := data[userDataSecretDataKey]
+	if err := isPureXMLNoDTD(value); err != nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"secret '%s' referenced by user_data_secret contains user data that is not well-formed XML",
+			refKey(ref))
 	}
 	return nil
 }
@@ -473,6 +586,19 @@ func (s *PrivateComputeInstancesServer) Update(ctx context.Context,
 			updateIncludesField(request.GetUpdateMask(), "spec.user_data_secret"),
 		); err != nil {
 			return err
+		}
+		if updateIncludesField(request.GetUpdateMask(), "spec.user_data", "spec.user_data_secret") {
+			// Resolve the disk image without lifecycle checks: disk_image is
+			// immutable, so the image may have become OBSOLETE after instance
+			// creation. Blocking user_data updates in that case would
+			// permanently lock out the user.
+			diskImage, err := s.lookupDiskImageForUpdate(ctx, candidate)
+			if err != nil {
+				return err
+			}
+			if err := s.validateWindowsUserData(ctx, candidate, diskImage); err != nil {
+				return err
+			}
 		}
 		if updateIncludesField(request.GetUpdateMask(), "spec.network_attachments") {
 			// During deletion, keep the existing visibility check without requiring dependencies
@@ -688,6 +814,29 @@ func (s *PrivateComputeInstancesServer) validateDiskImage(
 	spec.SetDiskImage(canonicalDiskImageReference(diskImage))
 
 	return diskImage, warnings, nil
+}
+
+// lookupDiskImageForUpdate resolves the instance's disk image without lifecycle
+// validation. disk_image is immutable, so on the update path we only need the
+// image's metadata (e.g. guest OS family) for user-data validation; the image
+// may have transitioned to OBSOLETE after the instance was created and that must
+// not block subsequent user_data changes.
+func (s *PrivateComputeInstancesServer) lookupDiskImageForUpdate(
+	ctx context.Context,
+	ci *privatev1.ComputeInstance,
+) (*privatev1.DiskImage, error) {
+	ref := ci.GetSpec().GetDiskImage()
+	if ref == nil {
+		return nil, nil
+	}
+	key := refKey(ref)
+	if key == "" {
+		return nil, nil
+	}
+	return resolveDiskImageReference(ctx, s.diskImagesDao, referenceScope{
+		tenant:  ci.GetMetadata().GetTenant(),
+		project: ci.GetMetadata().GetProject(),
+	}, ref, "")
 }
 
 // validateSshPublicKey resolves the tenant-scoped Secret reference and checks that the
@@ -1239,7 +1388,7 @@ const (
 func (s *PrivateComputeInstancesServer) autoProvisionExternalIP(
 	ctx context.Context, ci *privatev1.ComputeInstance,
 ) error {
-	pool, err := SelectExternalIPPool(ctx, s.externalIPPoolDao, privatev1.IPFamily_IP_FAMILY_UNSPECIFIED)
+	pool, err := SelectExternalIPPool(ctx, s.externalIPPoolDao, privatev1.IPFamily_IP_FAMILY_IPV4)
 	if err != nil {
 		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "auto_external_ip_attachment: %s", err)
 	}

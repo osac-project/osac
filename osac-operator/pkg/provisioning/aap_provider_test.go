@@ -573,6 +573,11 @@ var _ = Describe("AAPProvider", func() {
 			Expect(status.State).To(Equal(v1alpha1.JobStateSucceeded))
 			Expect(status.ExtraVars).To(HaveKeyWithValue("l2_vni", float64(14)))
 			Expect(status.ExtraVars).To(HaveKeyWithValue("l3_vni", float64(11)))
+
+			vnis, err := provisioning.ParseFabricVNIs(status.ExtraVars)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(*vnis.L2VNI).To(Equal(int32(14)))
+			Expect(*vnis.L3VNI).To(Equal(int32(11)))
 		})
 
 		It("returns no output vars when the job has no artifacts", func() {
@@ -601,10 +606,11 @@ var _ = Describe("AAPProvider", func() {
 				return &aap.Job{Status: "successful", Artifacts: []byte(`{"l2_vni":`)}, nil
 			}
 
-			_, err := provider.GetProvisionStatusWithExtraVars(ctx, &v1alpha1.Subnet{}, "789")
+			status, err := provider.GetProvisionStatusWithExtraVars(ctx, &v1alpha1.Subnet{}, "789")
 
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("job 789"))
+			Expect(status.State).To(Equal(v1alpha1.JobStateSucceeded))
 		})
 	})
 

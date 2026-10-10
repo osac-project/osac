@@ -303,6 +303,126 @@ var _ = ginkgo.Describe("RunProvisioningLifecycle", func() {
 	})
 })
 
+var _ = ginkgo.Describe("PollJob output callbacks", func() {
+	ginkgo.It("passes successful AAP artifact outputs to the output callback", func() {
+		provider := &mockProviderWithExtraVars{
+			mockProvider: &mockProvider{
+				getProvisionStatusFunc: func(context.Context, client.Object, string) (ProvisionStatus, error) {
+					return ProvisionStatus{JobID: "job-1", State: v1alpha1.JobStateSucceeded}, nil
+				},
+			},
+			getProvisionStatusWithExtraVarsFunc: func(context.Context, client.Object, string) (ProvisionStatusWithExtraVars, error) {
+				return ProvisionStatusWithExtraVars{
+					ProvisionStatus: ProvisionStatus{JobID: "job-1", State: v1alpha1.JobStateSucceeded},
+					ExtraVars:       map[string]any{"l2_vni": float64(4096)},
+				}, nil
+			},
+		}
+		jobs := []v1alpha1.JobStatus{{JobID: "job-1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateRunning}}
+		provState := &State{Jobs: &jobs}
+		var received *ProvisionStatusWithExtraVars
+		callbacks := &PollCallbacks{OnSuccessWithExtraVars: func(status ProvisionStatusWithExtraVars) error {
+			received = &status
+			return nil
+		}}
+
+		result, err := PollJob(ctx, provider, &v1alpha1.Subnet{}, provState, &jobs[0], time.Second, callbacks)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(BeZero())
+		Expect(received).NotTo(BeNil())
+		Expect(received.ExtraVars["l2_vni"]).To(Equal(float64(4096)))
+		Expect(jobs[0].State).To(Equal(v1alpha1.JobStateSucceeded))
+	})
+
+	ginkgo.It("requeues and retries when successful job outputs cannot be read", func() {
+		provider := &mockProviderWithExtraVars{
+			mockProvider: &mockProvider{
+				getProvisionStatusFunc: func(context.Context, client.Object, string) (ProvisionStatus, error) {
+					return ProvisionStatus{JobID: "job-1", State: v1alpha1.JobStateSucceeded}, nil
+				},
+			},
+			getProvisionStatusWithExtraVarsFunc: func(context.Context, client.Object, string) (ProvisionStatusWithExtraVars, error) {
+				return ProvisionStatusWithExtraVars{}, fmt.Errorf("AAP temporarily unavailable")
+			},
+		}
+		jobs := []v1alpha1.JobStatus{{JobID: "job-1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateRunning}}
+		provState := &State{Jobs: &jobs}
+		callbackCalled := false
+		callbacks := &PollCallbacks{OnSuccessWithExtraVars: func(ProvisionStatusWithExtraVars) error {
+			callbackCalled = true
+			return nil
+		}}
+
+		result, err := PollJob(ctx, provider, &v1alpha1.Subnet{}, provState, &jobs[0], time.Second, callbacks)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(time.Second))
+		Expect(callbackCalled).To(BeFalse())
+		Expect(jobs[0].State).To(Equal(v1alpha1.JobStateRunning))
+	})
+
+	ginkgo.It("reports invalid successful-job outputs without invoking success callbacks", func() {
+		provider := &mockProviderWithExtraVars{
+			mockProvider: &mockProvider{},
+			getProvisionStatusWithExtraVarsFunc: func(context.Context, client.Object, string) (ProvisionStatusWithExtraVars, error) {
+				return ProvisionStatusWithExtraVars{
+					ProvisionStatus: ProvisionStatus{JobID: "job-1", State: v1alpha1.JobStateSucceeded},
+					ExtraVars:       map[string]any{"l2_vni": float64(1.5)},
+				}, nil
+			},
+		}
+		jobs := []v1alpha1.JobStatus{{JobID: "job-1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateRunning}}
+		provState := &State{Jobs: &jobs}
+		outputError := ""
+		successCalled := false
+		callbacks := &PollCallbacks{
+			OnOutputError: func(message string) { outputError = message },
+			OnSuccessWithExtraVars: func(ProvisionStatusWithExtraVars) error {
+				return fmt.Errorf("l2_vni is fractional")
+			},
+			OnSuccess: func(ProvisionStatus) { successCalled = true },
+		}
+
+		_, err := PollJob(ctx, provider, &v1alpha1.Subnet{}, provState, &jobs[0], time.Second, callbacks)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(outputError).To(ContainSubstring("l2_vni is fractional"))
+		Expect(successCalled).To(BeFalse())
+		Expect(jobs[0].State).To(Equal(v1alpha1.JobStateSucceeded))
+	})
+
+	ginkgo.It("reports malformed artifacts as a terminal output error instead of retrying", func() {
+		provider := &mockProviderWithExtraVars{
+			mockProvider: &mockProvider{},
+			getProvisionStatusWithExtraVarsFunc: func(context.Context, client.Object, string) (ProvisionStatusWithExtraVars, error) {
+				return ProvisionStatusWithExtraVars{
+					ProvisionStatus: ProvisionStatus{JobID: "job-1", State: v1alpha1.JobStateSucceeded},
+				}, fmt.Errorf("failed to decode AAP job artifacts")
+			},
+		}
+		jobs := []v1alpha1.JobStatus{{JobID: "job-1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateRunning}}
+		provState := &State{Jobs: &jobs}
+		outputError := ""
+		callbackCalled := false
+		callbacks := &PollCallbacks{
+			OnOutputError: func(message string) { outputError = message },
+			OnSuccessWithExtraVars: func(ProvisionStatusWithExtraVars) error {
+				callbackCalled = true
+				return nil
+			},
+		}
+
+		result, err := PollJob(ctx, provider, &v1alpha1.Subnet{}, provState, &jobs[0], time.Second, callbacks)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(BeZero())
+		Expect(outputError).To(ContainSubstring("failed to retrieve provision outputs"))
+		Expect(callbackCalled).To(BeFalse())
+		Expect(jobs[0].State).To(Equal(v1alpha1.JobStateSucceeded))
+	})
+})
+
 var _ = ginkgo.Describe("RunMultiTargetProvisioningLifecycle", func() {
 	noAPIServerJob := func() bool { return false }
 

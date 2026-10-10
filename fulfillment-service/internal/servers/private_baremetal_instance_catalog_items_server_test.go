@@ -86,6 +86,17 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
+		It("rejects system-tenant catalog items while allowing shared offerings", func() {
+			_, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
+				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{Name: "system-bmi-offering", Tenant: auth.SystemTenant}.Build(),
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-shared-template-id", Shared: true}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
+			Expect(err).To(MatchError(ContainSubstring("objects cannot be placed in the 'system' tenant")))
+		})
+
 		It("Creates object", func() {
 			response, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
@@ -491,6 +502,8 @@ var _ = Describe("Bare Metal Instance Catalog Item policy application", func() {
 		Expect(spec.GetNetworkAttachments()[1]).NotTo(BeIdenticalTo(attachment))
 		Expect(spec.GetAutoExternalIpAttachment()).To(BeFalse())
 		Expect(spec.GetInstanceType()).NotTo(BeIdenticalTo(instanceType))
+		Expect(spec.GetInstanceType().GetName()).To(Equal(instanceType.GetName()))
+		Expect(spec.GetInstanceType().GetShared()).To(BeTrue())
 		Expect(spec.GetDiskImage()).NotTo(BeIdenticalTo(diskImage))
 
 		spec.GetNetworkAttachments()[1].GetSubnet().SetName("changed")
@@ -501,5 +514,21 @@ var _ = Describe("Bare Metal Instance Catalog Item policy application", func() {
 		Expect(attachment.GetSecurityGroups()[0].GetName()).To(Equal("bare-metal-security-group"))
 		Expect(instanceType.GetName()).To(Equal("host"))
 		Expect(diskImage.GetName()).To(Equal("disk-image"))
+	})
+
+	It("defers attachment type validation for an editable type without a default", func() {
+		template := privatev1.BareMetalInstanceTemplate_builder{
+			InstanceType: privatev1.BareMetalInstanceTypeReference_builder{
+				Id: "template-type",
+			}.Build(),
+		}.Build()
+		policy := privatev1.BareMetalInstanceTypeReferenceFieldPolicy_builder{
+			Editable: privatev1.EditableBareMetalInstanceTypeReferenceField_builder{}.Build(),
+		}.Build()
+
+		ref, source, err := effectiveBareMetalInstanceTypeReference(template, policy)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(ref).To(BeNil())
+		Expect(source).To(BeEmpty())
 	})
 })

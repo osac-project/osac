@@ -1076,14 +1076,114 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Expect(vnet.Status.Phase).To(Equal(osacv1alpha1.VirtualNetworkPhaseReady))
 		})
 	})
+
+	Context("fabric VNI status is not persisted", func() {
+		It("completes provisioning when an AAP job returns VNI values", func() {
+			vnet.Status.DesiredConfigVersion = testConfigVersion
+			vnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
+				JobID:         "vni-job",
+				Type:          osacv1alpha1.JobTypeProvision,
+				State:         osacv1alpha1.JobStateRunning,
+				ConfigVersion: testConfigVersion,
+				Timestamp:     metav1.NewTime(time.Now().UTC()),
+			}}
+			mockProvider.getProvisionStatusWithExtraVarsFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {
+				return provisioning.ProvisionStatusWithExtraVars{
+					ProvisionStatus: provisioning.ProvisionStatus{JobID: jobID, State: osacv1alpha1.JobStateSucceeded},
+					ExtraVars:       map[string]any{"l2_vni": float64(4096), "l3_vni": float64(8192)},
+				}, nil
+			}
+
+			_, err := reconciler.handleProvisioning(ctx, vnet)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(vnet.Status.Phase).To(Equal(osacv1alpha1.VirtualNetworkPhaseReady))
+		})
+
+		It("leaves the L3 VNI unset when the AAP job has no VNI output", func() {
+			vnet.Status.DesiredConfigVersion = testConfigVersion
+			vnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
+				JobID:         "vni-job-without-output",
+				Type:          osacv1alpha1.JobTypeProvision,
+				State:         osacv1alpha1.JobStateRunning,
+				ConfigVersion: testConfigVersion,
+				Timestamp:     metav1.NewTime(time.Now().UTC()),
+			}}
+
+			_, err := reconciler.handleProvisioning(ctx, vnet)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(vnet.Status.Phase).To(Equal(osacv1alpha1.VirtualNetworkPhaseReady))
+		})
+
+		It("clears a previously stored L3 VNI when the successful job omits it", func() {
+			vnet.Status.DesiredConfigVersion = testConfigVersion
+			vnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
+				JobID:         "vni-job-without-output",
+				Type:          osacv1alpha1.JobTypeProvision,
+				State:         osacv1alpha1.JobStateRunning,
+				ConfigVersion: testConfigVersion,
+				Timestamp:     metav1.NewTime(time.Now().UTC()),
+			}}
+
+			_, err := reconciler.handleProvisioning(ctx, vnet)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(vnet.Status.Phase).To(Equal(osacv1alpha1.VirtualNetworkPhaseReady))
+		})
+
+		It("does not replace an unchanged L3 VNI", func() {
+			vnet.Status.DesiredConfigVersion = testConfigVersion
+			vnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
+				JobID:         "vni-job-unchanged",
+				Type:          osacv1alpha1.JobTypeProvision,
+				State:         osacv1alpha1.JobStateRunning,
+				ConfigVersion: testConfigVersion,
+				Timestamp:     metav1.NewTime(time.Now().UTC()),
+			}}
+			mockProvider.getProvisionStatusWithExtraVarsFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {
+				return provisioning.ProvisionStatusWithExtraVars{
+					ProvisionStatus: provisioning.ProvisionStatus{JobID: jobID, State: osacv1alpha1.JobStateSucceeded},
+					ExtraVars:       map[string]any{"l3_vni": float64(8192)},
+				}, nil
+			}
+
+			_, err := reconciler.handleProvisioning(ctx, vnet)
+
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("does not consume AAP VNI artifacts during VirtualNetwork provisioning", func() {
+			vnet.Status.DesiredConfigVersion = testConfigVersion
+			vnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
+				JobID:         "vni-job-invalid",
+				Type:          osacv1alpha1.JobTypeProvision,
+				State:         osacv1alpha1.JobStateRunning,
+				ConfigVersion: testConfigVersion,
+				Timestamp:     metav1.NewTime(time.Now().UTC()),
+			}}
+			mockProvider.getProvisionStatusWithExtraVarsFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {
+				return provisioning.ProvisionStatusWithExtraVars{
+					ProvisionStatus: provisioning.ProvisionStatus{JobID: jobID, State: osacv1alpha1.JobStateSucceeded},
+					ExtraVars:       map[string]any{"l3_vni": float64(0)},
+				}, nil
+			}
+
+			_, err := reconciler.handleProvisioning(ctx, vnet)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(vnet.Status.Phase).To(Equal(osacv1alpha1.VirtualNetworkPhaseReady))
+		})
+	})
 })
 
 // mockVirtualNetworkProvider implements the ProvisioningProvider interface for VirtualNetwork testing
 type mockVirtualNetworkProvider struct {
-	triggerProvisionFunc     func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error)
-	getProvisionStatusFunc   func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error)
-	triggerDeprovisionFunc   func(ctx context.Context, resource client.Object, provisionJobs []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error)
-	getDeprovisionStatusFunc func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error)
+	triggerProvisionFunc                func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error)
+	getProvisionStatusFunc              func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error)
+	getProvisionStatusWithExtraVarsFunc func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error)
+	triggerDeprovisionFunc              func(ctx context.Context, resource client.Object, provisionJobs []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error)
+	getDeprovisionStatusFunc            func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error)
 }
 
 func (m *mockVirtualNetworkProvider) TriggerProvision(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
@@ -1106,6 +1206,14 @@ func (m *mockVirtualNetworkProvider) GetProvisionStatus(ctx context.Context, res
 		State:   osacv1alpha1.JobStateSucceeded,
 		Message: "Job completed successfully",
 	}, nil
+}
+
+func (m *mockVirtualNetworkProvider) GetProvisionStatusWithExtraVars(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {
+	if m.getProvisionStatusWithExtraVarsFunc != nil {
+		return m.getProvisionStatusWithExtraVarsFunc(ctx, resource, jobID)
+	}
+	status, err := m.GetProvisionStatus(ctx, resource, jobID)
+	return provisioning.ProvisionStatusWithExtraVars{ProvisionStatus: status}, err
 }
 
 func (m *mockVirtualNetworkProvider) TriggerDeprovision(ctx context.Context, resource client.Object, provisionJobs []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {

@@ -80,12 +80,6 @@ describe('VirtualNetworkCreateModal', () => {
     expect(createButton).not.toBeDisabled();
   });
 
-  it('renders IPv6 CIDR field as optional', () => {
-    renderModal(mockOnClose);
-
-    expect(screen.getByLabelText(/IPv6 CIDR \(Optional\)/i)).toBeInTheDocument();
-  });
-
   it('shows validation errors and does not submit when Name and CIDRs are empty', async () => {
     const { user } = renderModal(mockOnClose);
 

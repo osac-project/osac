@@ -311,6 +311,12 @@ automatically by Phase 1. Each is gated by a values toggle (e.g.,
 `certManager.enabled: true`). See [prerequisites/README.md](prerequisites/README.md)
 for details on what each prerequisite provides.
 
+Standalone MCE is disabled by default. Set `mce.enabled: true` in the
+infrastructure values when this installation owns its lifecycle; the `caas-ci`
+profile does so explicitly. Leave it `false` when RHACM or an existing MCE
+installation owns the lifecycle. The disabled state also suppresses the
+temporary Assisted image override resources.
+
 #### AAP Configuration
 
 AAP instance groups carry backend credentials for provisioning jobs.
@@ -373,9 +379,14 @@ oc logs -f job/osac-aap-bootstrap -n <project-name>
 helm upgrade osac charts/osac/ \
   --namespace <project-name> \
   --values values/<project-name>/values.yaml \
+  --force-conflicts \
   --timeout 40m \
   --wait
 ```
+
+On Helm 4, `--force-conflicts` is required: the AAP operator takes field
+ownership of `app.kubernetes.io/managed-by` on the `osac-aap` CR. Omit the
+flag on Helm 3.
 
 The post-upgrade hook re-publishes cluster templates automatically. This is
 idempotent - existing templates are updated via PATCH while new templates
@@ -402,6 +413,7 @@ make uninstall     PLATFORM=... PROFILE=... NS=...  # Full uninstall
 make test          PLATFORM=... PROFILE=... NS=... SUITE=...  # Integration tests
 make helm-lint                                       # Lint all charts
 make helm-template       # Dry-run render all templates
+make mce-render-test                                  # Verify disabled MCE defaults and CaaS enablement
 make helm-validate                                   # Lint + template (full validation)
 make sync-charts         # Rebuild chart dependencies (legacy alias; runs helm dependency build)
 ```

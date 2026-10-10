@@ -70,6 +70,21 @@ on:
           (release mode only, when fulfillment-service is actually bumped
           this run).
         required: true
+      KONFLUX_SA_TOKEN:
+        description: >-
+          Token for the konflux-bot-0 ServiceAccount, used by
+          "Trigger Konflux staging release" to log in to the Konflux
+          cluster (release mode only). A secret referenced via
+          secrets.X here but never declared in this workflow_call block
+          silently evaluates to empty -- no validation error at call
+          time or runtime -- which is exactly how this went unnoticed
+          until the skip-cascade fix let the job actually run instead of
+          being skipped. Declaring it here with required: true only
+          catches a caller that omits the mapping entirely (that fails
+          workflow validation at call time); a caller that maps it to an
+          expression which itself resolves to nothing (secret doesn't
+          exist, is empty, etc.) still passes silently either way.
+        required: true
 
 permissions: {}
 
@@ -842,7 +857,7 @@ jobs:
     uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-full-install.yml@main
     with:
       test-suite: bmaas
-      test-filter: 'not TestBmaasNetworking'
+      test-filter: 'not TestBmaasNetworking and not TestCrossTenantBmaasNetworking'
       installer-repo: ${{ github.repository }}
       installer-ref: ${{ needs.prepare.outputs.temp-branch }}
       test-infra-repository: osac-project/osac-test-infra
@@ -1441,6 +1456,40 @@ jobs:
         git push origin "${TAG}"
         echo "Tagged: ${TAG}"
 
+    # Dedicated release-only marker tag. The umbrella tag above (osac/v*)
+    # fires on both nightly and release runs -- only its message differs --
+    # so it can't be used as a trigger for anything that should fire on
+    # real releases only. This tag exists purely so Konflux's
+    # Pipelines-as-Code can distinguish the two (see .tekton/*-release.yaml,
+    # which trigger on refs/tags/osac-release/*). Not consumed by anything
+    # in this repo itself.
+    - name: Create release-only marker tag
+      if: inputs.mode == 'release'
+      run: |
+        set -euo pipefail
+        source osac-installer/scripts/nightly-charts.sh
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        TAG="osac-release/v${VERSION}"
+        COMMIT_SHA=$(git rev-parse HEAD)
+
+        if git fetch origin "refs/tags/${TAG}:refs/tags/${TAG}" 2>/dev/null; then
+          EXISTING_SHA=$(git rev-parse "${TAG}^{commit}")
+          if [[ "${EXISTING_SHA}" == "${COMMIT_SHA}" ]]; then
+            echo "Tag ${TAG} already exists at ${COMMIT_SHA}; skipping create/push"
+            exit 0
+          fi
+          safe_tag=$(_gha_sanitize_for_message "${TAG}")
+          safe_existing=$(_gha_sanitize_for_message "${EXISTING_SHA}")
+          safe_commit=$(_gha_sanitize_for_message "${COMMIT_SHA}")
+          echo "::error::Tag ${safe_tag} already exists at ${safe_existing}, expected ${safe_commit}; refusing to move tag"
+          exit 1
+        fi
+
+        git tag "${TAG}" -m "Release ${VERSION}"
+        git push origin "${TAG}"
+        echo "Tagged: ${TAG}"
+
     # Real, permanent per-component tags -- only in release mode, only for
     # components that actually needed a real build this run (prepare's
     # components-to-tag; empty in nightly mode and in a release that isn't
@@ -1457,6 +1506,7 @@ jobs:
         COMPONENTS_TO_TAG: ${{ needs.prepare.outputs.components-to-tag }}
       run: |
         set -euo pipefail
+        source osac-installer/scripts/nightly-charts.sh
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
 
@@ -1793,9 +1843,258 @@ jobs:
   # only need tag), racing publish-fulfillment-service-binaries/-proto's own
   # checkout of this same temp branch against cleanup deleting it.
   # -------------------------------------------------------------------
+  trigger-konflux-staging-release:
+    name: Trigger Konflux staging release
+    # Release mode only -- the osac-release/v<version> tag (which Konflux's
+    # Pipelines-as-Code triggers off, see .tekton/*-release.yaml) is itself
+    # only pushed in release mode (see "Create release-only marker tag"
+    # above). Needs tag specifically (not e.g. promote-and-publish) because
+    # that's the job that actually pushes the tag Konflux reacts to --
+    # nothing to wait for here until that's landed. always() is required
+    # even though this job only wants to act on real success -- without it,
+    # GitHub skip-cascades this job whenever a job further back in the
+    # transitive dependency graph (e.g. the e2e-*-test jobs under
+    # skip_e2e=true) is skipped, regardless of this custom if:. Confirmed
+    # live: every skip_e2e=true release dispatch (rerun or fresh) skipped
+    # this job even though prepare and tag both succeeded. Same bug class
+    # already documented and fixed on cleanup's own if: below. !cancelled()
+    # is required alongside it -- always() alone would also let this job
+    # fire off a real external Konflux Release if someone cancels the
+    # workflow run *after* tag already succeeded (e.g. during e2e/promote/
+    # notify), since needs.tag.result would still read 'success'. A skipped
+    # dependency is not the same as an operator-initiated cancellation.
+    needs: [prepare, tag]
+    if: always() && !cancelled() && inputs.mode == 'release' && needs.tag.result == 'success'
+    runs-on: osac-ci
+    # Must exceed the sum of the script's own three poll phases (build
+    # poll + override-snapshot-test poll + Release-completion poll, each
+    # up to 80min = 240min), not just one of them -- otherwise GitHub
+    # cancels the job mid-phase with no ::error:: message, silently
+    # producing neither a release nor a clear failure reason.
+    timeout-minutes: 260
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      with:
+        ref: ${{ needs.prepare.outputs.temp-branch }}
+
+    - name: Resolve release commit SHA
+      id: commit
+      run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+    - name: Log in to Konflux cluster
+      uses: redhat-actions/oc-login@2a1614bc977c054c8786c8e35fc9534bd0ddc156  # v2.0.1
+      with:
+        openshift_server_url: https://api.kflux-prd-rh02.0fk9.p1.openshiftapps.com:6443
+        openshift_token: ${{ secrets.KONFLUX_SA_TOKEN }}
+        namespace: osac-tenant
+
+    # Waits for all 8 components' release-triggered Konflux builds (see
+    # .tekton/*-release.yaml) to produce a passing Snapshot for this exact
+    # commit, assembles those into one override Snapshot (Konflux's
+    # documented mechanism for combining independently-built components --
+    # PR-scoped group-snapshot auto-combining doesn't apply here, this is a
+    # tag push, not a PR), waits for that override Snapshot's own
+    # integration test to pass, then creates a Release against the
+    # cloud-extensions-stage ReleasePlan. Production is deliberately never
+    # touched by this job -- no ReleasePlan exists for
+    # cloud-extensions-prod yet, by design.
+    - name: Assemble override Snapshot and create staging Release
+      env:
+        COMMIT_SHA: ${{ steps.commit.outputs.sha }}
+        RUN_ATTEMPT: ${{ github.run_attempt }}
+      run: |
+        set -euo pipefail
+        python3 - <<'PYEOF'
+        import json
+        import os
+        import subprocess
+        import sys
+        import time
+
+        COMMIT_SHA = os.environ["COMMIT_SHA"]
+        VERSION = os.environ["VERSION"]
+        RUN_ATTEMPT = os.environ["RUN_ATTEMPT"]
+        NAMESPACE = "osac-tenant"
+        COMPONENTS = [
+            "fulfillment-service",
+            "osac-operator",
+            "osac-csi-driver",
+            "bare-metal-fulfillment-operator",
+            "osac-ui",
+            "metering-service",
+            "metering-m360-adapter",
+            "metering-echo-adapter",
+        ]
+        POLL_INTERVAL_SECONDS = 30
+        TIMEOUT_SECONDS = 80 * 60
+
+        def condition_true(conditions, cond_type):
+            return any(
+                c.get("type") == cond_type and c.get("status") == "True"
+                for c in conditions
+            )
+
+        def condition_false(conditions, cond_type):
+            return any(
+                c.get("type") == cond_type and c.get("status") == "False"
+                for c in conditions
+            )
+
+        def find_components():
+            out = subprocess.run(
+                ["oc", "get", "snapshots", "-n", NAMESPACE, "-o", "json"],
+                capture_output=True, text=True, check=True,
+            )
+            found = {}
+            for item in json.loads(out.stdout)["items"]:
+                ann = item["metadata"].get("annotations", {})
+                if ann.get("build.appstudio.redhat.com/commit_sha") != COMMIT_SHA:
+                    continue
+                comps = item["spec"].get("components", [])
+                # Every real push-triggered build Snapshot observed on this
+                # cluster is single-component (verified empirically: 506/506,
+                # zero exceptions) -- Konflux's app-wide component-build
+                # Snapshot shape is a documented *possibility*, not what this
+                # repo's pipelines actually produce. If that ever changes,
+                # this filter would need revisiting.
+                if len(comps) != 1:
+                    continue
+                component = comps[0]
+                name = component["name"]
+                if name not in COMPONENTS or name in found:
+                    continue
+                if condition_true(item.get("status", {}).get("conditions", []), "AppStudioTestSucceeded"):
+                    found[name] = component  # keep full entry, incl. source
+            return found
+
+        deadline = time.time() + TIMEOUT_SECONDS
+        found = {}
+        while time.time() < deadline:
+            found = find_components()
+            missing = [c for c in COMPONENTS if c not in found]
+            if not missing:
+                break
+            print(f"Waiting on Konflux builds, still missing: {missing}", flush=True)
+            time.sleep(POLL_INTERVAL_SECONDS)
+        else:
+            missing = [c for c in COMPONENTS if c not in found]
+            print(f"::error::Timed out waiting for Konflux release builds. Missing/failed: {missing}")
+            sys.exit(1)
+
+        print("All 8 components built and passed tests:")
+        for name, component in found.items():
+            print(f"  {name}: {component['containerImage']}")
+
+        # Suffixed with the run attempt so a GitHub "Re-run failed jobs"
+        # creates fresh resources instead of colliding with an immutable
+        # Snapshot spec from a prior attempt, or silently no-op'ing against
+        # an already-existing Release. VERSION's dots are replaced with
+        # hyphens -- Snapshot's own metadata.name accepts dots fine, but
+        # Release's spec.snapshot reference field enforces a stricter
+        # pattern (^[a-z0-9]([-a-z0-9]*[a-z0-9])?$) that rejects them;
+        # confirmed live via a real Release creation attempt ("osac-release-
+        # v0.0.22-attempt1" was rejected with exactly this pattern error).
+        version_slug = VERSION.replace(".", "-")
+        resource_name = f"osac-release-v{version_slug}-attempt{RUN_ATTEMPT}"
+        snapshot = {
+            "apiVersion": "appstudio.redhat.com/v1alpha1",
+            "kind": "Snapshot",
+            "metadata": {
+                "name": resource_name,
+                "namespace": NAMESPACE,
+                # Required for Konflux's Integration Service to process this
+                # as an override Snapshot at all -- without it, the wait
+                # below would hang until TIMEOUT_SECONDS with no test ever
+                # having run.
+                "labels": {"test.appstudio.openshift.io/type": "override"},
+            },
+            "spec": {
+                "application": "osac",
+                "components": [
+                    {
+                        "name": n,
+                        "containerImage": component["containerImage"],
+                        # Every real component entry on this cluster carries
+                        # a source block (verified: 612/612); Konflux's own
+                        # docs warn an incorrect or missing one can fail a
+                        # Conforma check, so pass through whatever the
+                        # originating build Snapshot provided.
+                        **({"source": component["source"]} if "source" in component else {}),
+                    }
+                    for n, component in found.items()
+                ],
+            },
+        }
+        with open("/tmp/snapshot.json", "w") as f:
+            json.dump(snapshot, f)
+        subprocess.run(["oc", "apply", "-f", "/tmp/snapshot.json"], check=True)
+        print(f"Created override Snapshot {resource_name}")
+
+        deadline = time.time() + TIMEOUT_SECONDS
+        while time.time() < deadline:
+            out = subprocess.run(
+                ["oc", "get", "snapshot", resource_name, "-n", NAMESPACE, "-o", "json"],
+                capture_output=True, text=True, check=True,
+            )
+            conditions = json.loads(out.stdout).get("status", {}).get("conditions", [])
+            if condition_true(conditions, "AppStudioTestSucceeded"):
+                break
+            if condition_false(conditions, "AppStudioTestSucceeded"):
+                print(f"::error::Override snapshot {resource_name} failed its integration tests")
+                sys.exit(1)
+            print(f"Waiting on {resource_name}'s integration tests...", flush=True)
+            time.sleep(POLL_INTERVAL_SECONDS)
+        else:
+            print(f"::error::Timed out waiting for {resource_name}'s integration tests")
+            sys.exit(1)
+
+        release = {
+            "apiVersion": "appstudio.redhat.com/v1alpha1",
+            "kind": "Release",
+            "metadata": {"name": resource_name, "namespace": NAMESPACE},
+            "spec": {"releasePlan": "cloud-extensions-stage", "snapshot": resource_name},
+        }
+        with open("/tmp/release.json", "w") as f:
+            json.dump(release, f)
+        subprocess.run(["oc", "apply", "-f", "/tmp/release.json"], check=True)
+        print(f"Created Release {resource_name}, waiting for it to complete")
+
+        # Real condition type/reason values confirmed against
+        # release_conditions.go in konflux-ci/release-service: type
+        # "Released", reason "Succeeded"/"Failed"/"Progressing". Applying
+        # the Release object succeeding says nothing about whether Konflux
+        # actually released it -- only this confirms that.
+        deadline = time.time() + TIMEOUT_SECONDS
+        while time.time() < deadline:
+            out = subprocess.run(
+                ["oc", "get", "release", resource_name, "-n", NAMESPACE, "-o", "json"],
+                capture_output=True, text=True, check=True,
+            )
+            conditions = json.loads(out.stdout).get("status", {}).get("conditions", [])
+            if condition_true(conditions, "Released"):
+                print(f"::notice::Konflux staging release succeeded: {resource_name}")
+                break
+            if condition_false(conditions, "Released") and any(
+                c.get("type") == "Released" and c.get("reason") == "Failed" for c in conditions
+            ):
+                print(f"::error::Konflux staging release failed: {resource_name}")
+                sys.exit(1)
+            print(f"Waiting on {resource_name}'s release to complete...", flush=True)
+            time.sleep(POLL_INTERVAL_SECONDS)
+        else:
+            print(f"::error::Timed out waiting for {resource_name}'s release to complete")
+            sys.exit(1)
+        PYEOF
+
   cleanup:
     name: Cleanup temp branch
-    needs: [prepare, build, unit-tests, integration-tests, security-tests, e2e-vmaas-test, e2e-caas-test, e2e-bmaas-test, promote-and-publish, publish-umbrella, tag, create-component-releases, publish-fulfillment-service-binaries, publish-fulfillment-service-proto, notify-release, notify-failure]
+    needs: [prepare, build, unit-tests, integration-tests, security-tests, e2e-vmaas-test, e2e-caas-test, e2e-bmaas-test, promote-and-publish, publish-umbrella, tag, create-component-releases, publish-fulfillment-service-binaries, publish-fulfillment-service-proto, notify-release, notify-failure, trigger-konflux-staging-release]
     runs-on: ubuntu-latest
     # notify-failure (and now notify-release, create-component-releases,
     # publish-fulfillment-service-binaries/-proto) are routinely skipped

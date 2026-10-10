@@ -38,8 +38,8 @@ OSAC installs as three ordered Helm releases. Each release is a plain
 
 **Phase 1a: `osac-deps`.** Installs Operator Lifecycle Manager (OLM)
 `Subscription` resources for the platform Operators in their own namespaces:
-cert-manager and Ansible Automation Platform (AAP) by default, and LVM
-Storage, MetalLB, OpenShift Virtualization, multicluster engine, and Streams
+cert-manager and Ansible Automation Platform (AAP) by default, and standalone
+multicluster engine, LVM Storage, MetalLB, OpenShift Virtualization, and Streams
 for Apache Kafka when enabled. Every Operator is gated by a toggle — see
 [Table 2.1](#table-21-platform-operators-and-components). Post-installation hooks wait for the cert-manager and AAP
 `ClusterServiceVersion` (CSV) resources to reach `Succeeded`.
@@ -50,7 +50,7 @@ Keycloak and the `osac` realm in the `keycloak` namespace, and the operand
 custom resources (CRs) `HyperConverged`, `LVMCluster`, the MetalLB
 `IPAddressPool`, and the Kafka CR. The `configure-*` hooks wait for each
 remaining Operator CSV to reach `Succeeded` before applying its operand. For
-evaluation, this phase can also deploy bundled PostgreSQL database and OpenBao.
+testing, this phase can also deploy bundled PostgreSQL database and OpenBao.
 
 **Phase 2: `osac`.** Installs the platform into your namespace: the OSAC
 Operator and its CRDs, the Fulfillment Service with an Envoy sidecar, an AAP
@@ -175,9 +175,13 @@ Notes on individual components:
 - **MetalLB Operator** provides a `LoadBalancer`-class implementation. Any
   solution that provides one works if you disable `metallb.enabled`.
 - **multicluster engine for Kubernetes Operator** is required for
-  agent-based cluster provisioning. If Red Hat Advanced Cluster Management for
-  Kubernetes (RHACM) is installed, leave `mce.enabled=false`; RHACM manages its
-  own multicluster engine.
+  agent-based cluster provisioning but is disabled by default. Set
+  `mce.enabled=true` when this installation owns standalone MCE; the `caas-ci`
+  infrastructure profile does so explicitly. Leave it `false` when Red Hat
+  Advanced Cluster Management for Kubernetes (RHACM) or another MCE
+  installation already owns it. The disabled state also prevents the phase-1
+  chart from applying its temporary Assisted image override `ConfigMap` and
+  compatibility RBAC.
 
 ### 2.4 Credentials and external services
 
@@ -199,17 +203,17 @@ Always required:
 
 Required for a production deployment:
 
-- **An external PostgreSQL 18 or later database.** The bundled PostgreSQL is a
-  single ephemeral pod that loses data on restart. For production, run your own
-  database and create the `osac-db-config` and `osac-db-client-cert` Secrets in
+- **An external PostgreSQL 18 or later database.** The bundled PostgreSQL is
+  for testing only and is not intended for production. For production, run
+  your own database and create the `osac-db-config` and `osac-db-client-cert` Secrets in
   the install namespace, and the `osac-db-metering-config` and
   `osac-db-metering-client-cert` Secrets when metering is enabled. For more
   information, see
   [`fulfillment-service/docs/INSTALL.md`](https://github.com/osac-project/osac/blob/main/fulfillment-service/docs/INSTALL.md).
-- **An external secret store.** The bundled OpenBao secret store is a single
-  ephemeral pod that loses data on restart. Before installing the `osac` chart,
-  prepare Vault or OpenBao, its Keycloak client, and the Kubernetes Secret and
-  CA bundle used by OSAC. See the
+- **An external secret store.** The bundled OpenBao instance is for testing and
+  CI, not production. Before installing the `osac` chart, prepare Vault or
+  OpenBao, its Keycloak client, and the Kubernetes Secret and CA bundle used by
+  OSAC. See the
   [secrets management configuration guide](secrets-management-configuration.md).
 
 Required for CaaS:
@@ -436,6 +440,11 @@ Use this procedure when the cluster already meets the prerequisites.
   bootstrap job takes 10 to 40 minutes. Helm does not return until it and, for
   CaaS, the `osac-publish-templates` hook have finished.
 
+  On Helm 4, later `helm upgrade` (or re-running `helm upgrade --install`)
+  must include `--force-conflicts`. The AAP operator takes field ownership of
+  `app.kubernetes.io/managed-by` on the `osac-aap` custom resource, and Helm
+  4 server-side apply fails without that flag. Helm 3 does not accept it.
+
 **Verification**
 
 - Complete [Section 7](#7-verifying-the-installation).
@@ -554,9 +563,9 @@ subchart's own `values.yaml` file.
 | `metering.reconciliation.interval`, `metering.m360Adapter.enabled`, `metering.m360Adapter.m360.apiUrl`, `metering.m360Adapter.apiKeySecret` | subchart | Reconcile period and the Monetize360 billing adapter. | Not applicable |
 | `validation.enabled` | schema | Runs the pre-installation validation hook. | `true` |
 | `metallb.enabled`, `metallb.addressCIDR` | schema | In the `osac` chart, creates an `IPAddressPool` and an `L2Advertisement`. Edit the pool after installation to match your network. | `false` and `192.168.40.0/24` |
-| `bundledVault.enabled`, `bundledVault.image`, `bundledVault.devRootToken` | schema | Ephemeral in-cluster OpenBao. For evaluation only. | `true` and `openbao:2.6.2` |
+| `bundledVault.enabled`, `bundledVault.image` | schema | In-cluster OpenBao for testing and CI. Not intended for production. | `true` and `openbao:2.6.2` |
 | `hubAccess.enabled` | schema | Creates hub-access RBAC and registers the local cluster as its own hub. Single-cluster development only. | `false` |
-| `bundledPostgres.enabled` | schema | Ephemeral in-cluster PostgreSQL. For evaluation only. | `false` |
+| `bundledPostgres.enabled` | schema | Bundled PostgreSQL for testing only; not intended for production. | `false` |
 | `dbInit.host` | schema | Host that the `db-init` pre-installation hook connects to, to create the databases. Set it to your external PostgreSQL host for a production deployment. | `postgres.osac-infra.svc.cluster.local` |
 | `clusterVersions.enabled`, `clusterVersions.versions[]` | schema | OpenShift Container Platform release images offered to hosted clusters. Each entry has `version`, `image`, and an optional `default`. | `false` and `[]` |
 
@@ -1128,10 +1137,10 @@ Reapply the patch after any infrastructure reinstall that recreates this
 
 ### 9.2 Evaluation only
 
-- The bundled PostgreSQL database (`bundledPostgres.enabled: true`). It is
-  ephemeral and loses data on restart.
-- The bundled OpenBao secret store (`bundledVault.enabled: true`). It runs in
-  development mode and loses data on restart.
+- The bundled PostgreSQL database (`bundledPostgres.enabled: true`) is for
+  testing only and is not intended for production.
+- The bundled OpenBao secret store (`bundledVault.enabled: true`). It is for
+  testing and CI, not production.
 - `keycloak.devFixtures.enabled: true` and the default `admin` Keycloak
   credentials.
 - Development or CI reference values files and `main`/`latest` image tags.
@@ -1254,7 +1263,7 @@ $ helm show chart oci://ghcr.io/osac-project/charts/osac --version 0.0.17
   `invalid PostgreSQL url`: create the `osac-db-config` and
   `osac-db-client-cert` Secrets before you install the `osac` chart (see
   [Section 4.1](#41-preparing-the-cluster)), or enable `bundledPostgres` for
-  evaluation.
+  testing.
 - `PostgreSQL Service ... has no ready endpoints`: the host in the database URL
   does not resolve to a running PostgreSQL database. Point `dbInit.host` and the
   URL at a reachable server.
@@ -1303,6 +1312,11 @@ $ oc get csr | grep -c Pending
   ```console
   $ oc label aap osac-aap -n <namespace> app.kubernetes.io/managed-by=Helm --overwrite
   ```
+
+- a field-ownership conflict on `app.kubernetes.io/managed-by` owned by the
+  AAP operator (Helm 4): add `--force-conflicts` to the `helm upgrade`
+  command. The operator takes ownership of that field on the `osac-aap`
+  custom resource after install.
 
 ### 11.8 The `osac-aap-bootstrap` job fails
 
@@ -1430,6 +1444,5 @@ with the correct `global.clusterDomain`.
 - **config-as-code** — The Ansible content that the `osac-aap-bootstrap` job
   loads into AAP. Its subscription manifest is stored in the
   `config-as-code-manifest-ig` Secret.
-- **Bundled compared with external** — Bundled PostgreSQL and OpenBao are
-  ephemeral in-cluster pods for evaluation. Production deployments use external
-  services.
+- **Bundled compared with external** — Bundled PostgreSQL is for testing, and
+  OpenBao is for testing and CI. Production deployments use external services.

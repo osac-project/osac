@@ -77,6 +77,16 @@
     - name: "*.{{ external_access_ingress_domain }}"
       addr: "{{ external_access_ingress_ip }}"
 
+- name: Resolve authoritative nameserver for DNS zone
+  ansible.builtin.command: >-
+    dig +short NS {{ lookup('env', 'DNS_ZONE') | default(external_access_base_domain, true) }}
+  register: _external_access_zone_ns
+  changed_when: false
+  failed_when: false
+  no_log: true
+  when: >-
+    external_access_base_domain in external_access_supported_base_domains | default([])
+
 - name: Wait for DNS records
   when: >-
     external_access_base_domain in external_access_supported_base_domains | default([])
@@ -85,6 +95,7 @@
     tasks_from: wait_for_dns
   vars:
     wait_for_dns_record: "{{ item }}"
+    wait_for_dns_server: "{{ (_external_access_zone_ns.stdout_lines | default([])) | first | default('') | regex_replace('\\.$', '') }}"
   loop:
     - "{{ external_access_api_domain }}"
     - "{{ external_access_api_int_domain }}"
@@ -97,7 +108,8 @@
     retrieve_kubeconfig_namespace: "{{ cluster_working_namespace }}"
     retrieve_kubeconfig_cluster_name: "{{ cluster_order.metadata.name }}"
 
-- name: Wait for cluster to become ready
+- name: Wait for cluster network operator to become ready
+  when: not (external_access_skip_network_operator_wait | default(false))
   ansible.builtin.include_role:
     name: osac.service.wait_for
     tasks_from: wait_for_network_cluster_operator

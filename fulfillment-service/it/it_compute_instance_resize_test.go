@@ -45,6 +45,7 @@ var _ = Describe("ComputeInstance InstanceType resize", func() {
 		networkClassId            string
 		virtualNetworkId          string
 		subnetId                  string
+		securityGroupId           string
 		diskImageId               string
 	)
 
@@ -199,11 +200,14 @@ var _ = Describe("ComputeInstance InstanceType resize", func() {
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+
+		securityGroupId = createComputeInstanceFixtureSecurityGroup(ctx, fixtureClients.securityGroups,
+			fmt.Sprintf("test-resize-sg-%s", uuid.New()), virtualNetworkId)
 	})
 
 	AfterEach(func() {
 		cleanupComputeInstanceFixture(ctx, fixtureClients, computeInstanceId, resizeInstanceTypeId, instanceTypeId,
-			subnetId, virtualNetworkId, networkClassId, computeInstanceTemplateId, diskImageId, storageTierId, storageBackendId)
+			securityGroupId, subnetId, virtualNetworkId, networkClassId, computeInstanceTemplateId, diskImageId, storageTierId, storageBackendId)
 	})
 
 	It("updates ComputeInstance InstanceType through the public API", func() {
@@ -251,6 +255,9 @@ var _ = Describe("ComputeInstance InstanceType resize", func() {
 					NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
 						publicv1.ComputeNetworkAttachment_builder{
 							Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),
+							SecurityGroups: []*publicv1.SecurityGroupLocalReference{
+								publicv1.SecurityGroupLocalReference_builder{Id: securityGroupId}.Build(),
+							},
 						}.Build(),
 					},
 				}.Build(),

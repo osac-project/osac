@@ -240,6 +240,41 @@ var _ = Describe("Network classes server", func() {
 			Expect(created.GetSpec().GetDefaults().GetVirtualNetworkIpv4Cidr()).To(Equal("10.0.0.0/16"))
 		})
 
+		DescribeTable("rejects IPv6 default CIDR configuration",
+			func(defaults *privatev1.NetworkDefaults) {
+				_, err := server.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
+					Object: privatev1.NetworkClass_builder{
+						Title:         "IPv6 defaults",
+						FabricManager: new("netris"),
+						Spec:          privatev1.NetworkClassSpec_builder{Defaults: defaults}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			},
+			Entry("virtual network CIDR", privatev1.NetworkDefaults_builder{
+				VirtualNetworkIpv6Cidr: "2001:db8::/32",
+			}.Build()),
+			Entry("subnet CIDR", privatev1.NetworkDefaults_builder{
+				SubnetIpv6Cidr: "2001:db8:1::/64",
+			}.Build()),
+		)
+
+		It("rejects IPv6 default CIDR configuration on update", func() {
+			created := createWithDefaults(validDefaults())
+			_, err := server.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
+				Object: privatev1.NetworkClass_builder{
+					Id: created.GetId(),
+					Spec: privatev1.NetworkClassSpec_builder{Defaults: privatev1.NetworkDefaults_builder{
+						VirtualNetworkIpv4Cidr: "10.0.0.0/16",
+						SubnetIpv4Cidr:         "10.0.1.0/24",
+						SubnetIpv6Cidr:         "2001:db8:1::/64",
+					}.Build()}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.defaults"}},
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		})
+
 		It("rejects a subnet CIDR without its parent virtual-network CIDR", func() {
 			_, err := server.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 				Object: privatev1.NetworkClass_builder{

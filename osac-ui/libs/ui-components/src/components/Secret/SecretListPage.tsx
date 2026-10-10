@@ -1,43 +1,51 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  MenuToggle,
+  Gallery,
+  GalleryItem,
   SearchInput,
   Toolbar,
   ToolbarContent,
   ToolbarGroup,
   ToolbarItem,
 } from '@patternfly/react-core';
-import { EllipsisVIcon } from '@patternfly/react-icons/dist/esm/icons/ellipsis-v-icon';
-import { ActionsColumn, Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
-import { Secret, SecretType, Secrets } from '@osac/types';
+import { Secret, Secrets } from '@osac/types';
 import { cel } from '@osac/ui-components/api/cel';
 import { useListResource } from '@osac/ui-components/api/use-resource';
+import {
+  DEFAULT_VIEW_TYPE,
+  ViewType,
+  getViewTypePrefKey,
+  isViewType,
+} from '@osac/ui-components/components/Primitives/ViewSwitcher';
 import {
   SEARCH_PARAM,
   useArrayPageFilter,
   usePageFilter,
 } from '@osac/ui-components/hooks/use-page-filter';
 import { useProjectFilterQuery } from '@osac/ui-components/hooks/use-project-filter-query';
+import { useUserPreferences } from '@osac/ui-components/hooks/use-user-preferences';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
+import SecretCard from './SecretCard.tsx';
 import SecretDeleteModal from './SecretDeleteModal.tsx';
+import SecretTable from './SecretTable.tsx';
 import TypeFilter from './TypeFilter.tsx';
 import {
   TYPE_FILTER_TO_ENUM,
   TYPE_PARAM,
   type TypeFilterValue,
-  getSecretType,
   isTypeFilterValue,
 } from './utils.ts';
 import ListPage from '../Page/ListPage';
 import ListPageBody from '../Page/ListPageBody';
 import ProjectFilter from '../Page/ProjectFilter';
-import CreateDropdownButton from '../Primitives/CreateDropdownButton.tsx';
-import { Timestamp } from '../Primitives/Timestamp';
-import ResourceNameField from '../Resource/ResourceNameField';
+import CreateButton from '../Primitives/CreateButton.tsx';
+import ViewSwitcher from '../Primitives/ViewSwitcher.tsx';
 import { SubtleContent } from '../SubtleContent/SubtleContent';
+
+const SECRETS_VIEW_KEY = 'secrets';
 
 const SecretListPage = () => {
   const navigate = useNavigate();
@@ -49,6 +57,8 @@ const SecretListPage = () => {
     isTypeFilterValue,
   );
   const projectFilter = useProjectFilterQuery<Secret>();
+  const [viewTypePref] = useUserPreferences(getViewTypePrefKey(SECRETS_VIEW_KEY));
+  const viewType: ViewType = isViewType(viewTypePref) ? viewTypePref : DEFAULT_VIEW_TYPE;
 
   const typeFilter = type.map((t) => TYPE_FILTER_TO_ENUM[t]);
 
@@ -64,7 +74,10 @@ const SecretListPage = () => {
     ),
   });
 
-  const secretTypes = getSecretType(t);
+  const items = data?.items ?? [];
+
+  const handleEdit = (secret: Secret) => navigate(`/secrets/${secret.id}/edit`);
+  const handleDelete = (secret: Secret) => setDeleteTarget(secret);
 
   return (
     <>
@@ -80,34 +93,7 @@ const SecretListPage = () => {
         description={t(
           'Store credentials for use at launch. Encrypted at rest in the platform vault.',
         )}
-        actions={
-          <CreateDropdownButton
-            items={[
-              {
-                to: '/secrets/create',
-                title: secretTypes[SecretType.OPAQUE],
-              },
-              {
-                to: '/secrets/create?type=kubeconfig',
-                title: secretTypes[SecretType.KUBECONFIG],
-              },
-              {
-                to: '/secrets/create?type=pullsecret',
-                title: secretTypes[SecretType.PULL_SECRET],
-              },
-              {
-                to: '/secrets/create?type=userdata',
-                title: secretTypes[SecretType.USER_DATA],
-              },
-              {
-                to: '/secrets/create?type=value',
-                title: secretTypes[SecretType.VALUE],
-              },
-            ]}
-          >
-            {t('Create secret')}
-          </CreateDropdownButton>
-        }
+        actions={<CreateButton to="/secrets/create">{t('Create secret')}</CreateButton>}
         error={error}
       >
         <ListPageBody isLoading={isLoading} error={error}>
@@ -130,67 +116,40 @@ const SecretListPage = () => {
                   />
                 </ToolbarItem>
               </ToolbarGroup>
+              <ToolbarGroup align={{ default: 'alignEnd' }}>
+                <ToolbarItem>
+                  <ViewSwitcher pageKey={SECRETS_VIEW_KEY} />
+                </ToolbarItem>
+              </ToolbarGroup>
             </ToolbarContent>
           </Toolbar>
-          {!data?.items.length ? (
+          {!items.length ? (
             <SubtleContent component="p">
               {search || projectFilter || type.length
                 ? t('No secrets match your search.')
                 : t('No secrets yet. Create one to get started.')}
             </SubtleContent>
           ) : (
-            <Table aria-label={t('Secrets')} variant="compact">
-              <Thead>
-                <Tr>
-                  <Th>{t('Name')}</Th>
-                  <Th>{t('Project')}</Th>
-                  <Th>{t('Type')}</Th>
-                  <Th>{t('Created')}</Th>
-                  <Th aria-label={t('Actions')} />
-                </Tr>
-              </Thead>
-              <Tbody>
-                {data.items.map((secret) => (
-                  <Tr key={secret.id}>
-                    <Td dataLabel={t('Name')}>
-                      <ResourceNameField resource={secret} detailsUrl={`/secrets/${secret.id}`} />
-                    </Td>
-                    <Td dataLabel={t('Project')}>{secret.metadata?.project || t('Default')}</Td>
-                    <Td dataLabel={t('Type')}>
-                      {secretTypes[secret.type] || secretTypes[SecretType.UNSPECIFIED]}
-                    </Td>
-                    <Td dataLabel={t('Created')}>
-                      <Timestamp value={secret.metadata?.creationTimestamp} />
-                    </Td>
-                    <Td dataLabel={t('Actions')} isActionCell>
-                      <ActionsColumn
-                        items={[
-                          {
-                            title: t('Edit'),
-                            onClick: () => navigate(`/secrets/${secret.id}/edit`),
-                          },
-                          {
-                            title: t('Delete'),
-                            onClick: () => setDeleteTarget(secret),
-                          },
-                        ]}
-                        actionsToggle={({ onToggle, isOpen, toggleRef }) => (
-                          <MenuToggle
-                            ref={toggleRef}
-                            variant="plain"
-                            isExpanded={isOpen}
-                            onClick={onToggle}
-                            aria-label={t('Actions for {{name}}', { name: secret.metadata?.name })}
-                          >
-                            <EllipsisVIcon />
-                          </MenuToggle>
-                        )}
+            <>
+              <SubtleContent component="p">
+                {t('{{count}} secret', { count: items.length })}
+              </SubtleContent>
+              {viewType === 'cards' ? (
+                <Gallery hasGutter minWidths={{ default: '300px' }} maxWidths={{ default: '1fr' }}>
+                  {items.map((secret) => (
+                    <GalleryItem key={secret.id}>
+                      <SecretCard
+                        secret={secret}
+                        onEdit={() => handleEdit(secret)}
+                        onDelete={() => handleDelete(secret)}
                       />
-                    </Td>
-                  </Tr>
-                ))}
-              </Tbody>
-            </Table>
+                    </GalleryItem>
+                  ))}
+                </Gallery>
+              ) : (
+                <SecretTable items={items} onEdit={handleEdit} onDelete={handleDelete} />
+              )}
+            </>
           )}
         </ListPageBody>
       </ListPage>

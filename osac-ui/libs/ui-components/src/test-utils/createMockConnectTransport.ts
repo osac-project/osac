@@ -2,6 +2,7 @@ import type { MessageInitShape } from '@bufbuild/protobuf';
 import { Code, ConnectError, type Transport, createRouterTransport } from '@connectrpc/connect';
 
 import {
+  BareMetalInstanceType,
   Cluster,
   ClusterCatalogItem,
   ClusterTemplate,
@@ -26,7 +27,6 @@ import {
   ExternalIPsCreateRequest,
   ExternalIPsCreateResponse,
   ExternalIPsListRequest,
-  HostType,
   IdentityProvider,
   IdentityProvidersCreateRequest,
   IdentityProvidersCreateResponse,
@@ -55,6 +55,8 @@ import {
   User,
   VirtualNetwork,
   Volume,
+  VolumesCreateRequest,
+  VolumesCreateResponse,
   VolumesDeleteRequest,
   VolumesDeleteResponse,
   VolumesGetRequest,
@@ -76,7 +78,6 @@ import {
   ExternalIPAttachments,
   ExternalIPState,
   ExternalIPs,
-  HostTypes,
   IdentityProviders,
   InstanceTypeState,
   InstanceTypes,
@@ -170,7 +171,7 @@ export type MockApiFixtures = {
   clusterCatalogItems?: ClusterCatalogItem[];
   clusterTemplates?: ClusterTemplate[];
   clusterVersions?: ClusterVersion[];
-  hostTypes?: HostType[];
+  bareMetalInstanceTypes?: BareMetalInstanceType[];
   tenants?: PrivateTenant[];
   virtualNetworks?: VirtualNetwork[];
   subnets?: Subnet[];
@@ -341,11 +342,13 @@ const matchesStorageBackendReadyFilter = (
 const matchesStorageTierActiveFilter = (
   filter: string | undefined,
   state: number | undefined,
+  protocol: number | undefined,
 ): boolean => {
-  if (!filter?.includes('this.status.state ==')) {
-    return true;
+  if (filter?.includes('this.status.state ==') && state !== StorageTierState.ACTIVE) {
+    return false;
   }
-  return state === StorageTierState.ACTIVE;
+  const protocolMatch = filter?.match(/this\.spec\.protocol == (\d+)/);
+  return !protocolMatch || protocol === Number(protocolMatch[1]);
 };
 
 export type MockTransportOverrides = {
@@ -447,6 +450,7 @@ export type MockTransportOverrides = {
     req: ExternalIPAttachmentsCreateRequest,
   ) => ExternalIPAttachmentsCreateResponse | Promise<ExternalIPAttachmentsCreateResponse>;
   onVolumeGet?: (req: VolumesGetRequest) => VolumesGetResponse | Promise<VolumesGetResponse>;
+  onVolumeCreate?: (req: VolumesCreateRequest) => VolumesCreateResponse;
   onVolumeDelete?: (req: VolumesDeleteRequest) => VolumesDeleteResponse;
 };
 
@@ -464,7 +468,7 @@ export const createMockConnectTransport = (
   const clusterCatalogItems = fixtures.clusterCatalogItems ?? [];
   const clusterTemplates = fixtures.clusterTemplates ?? [];
   const clusterVersions = fixtures.clusterVersions ?? [];
-  const hostTypes = fixtures.hostTypes ?? [];
+  const bareMetalInstanceTypes = fixtures.bareMetalInstanceTypes ?? [];
   const tenants = fixtures.tenants ?? [];
   const identityProviders = fixtures.identityProviders ?? [];
   const projects = fixtures.projects ?? [];
@@ -543,23 +547,6 @@ export const createMockConnectTransport = (
         get: (req) => ({
           object: clusterVersions.find((i) => i.id === req.id),
         }),
-      });
-
-      router.service(HostTypes, {
-        list: () => ({
-          items: hostTypes,
-          size: hostTypes.length,
-          total: hostTypes.length,
-        }),
-        get: (req) => {
-          const hostType = hostTypes.find((i) => i.id === req.id);
-          if (!hostType) {
-            throw new ConnectError(`Host type not found in test: ${req.id}`, Code.NotFound);
-          }
-          return {
-            object: hostType,
-          };
-        },
       });
 
       router.service(VirtualNetworks, {
@@ -776,7 +763,7 @@ export const createMockConnectTransport = (
             return overrides.onStorageTierList(req);
           }
           const items = storageTiers.filter((item) =>
-            matchesStorageTierActiveFilter(req.filter, item.status?.state),
+            matchesStorageTierActiveFilter(req.filter, item.status?.state, item.spec?.protocol),
           );
           return {
             items,
@@ -823,7 +810,7 @@ export const createMockConnectTransport = (
             return overrides.onPublicStorageTierList(req);
           }
           const items = publicStorageTiers.filter((item) =>
-            matchesStorageTierActiveFilter(req.filter, item.status?.state),
+            matchesStorageTierActiveFilter(req.filter, item.status?.state, item.spec?.protocol),
           );
           return {
             items,
@@ -874,8 +861,12 @@ export const createMockConnectTransport = (
       });
 
       router.service(PublicBareMetalInstanceTypes, {
-        list: () => ({ items: [], size: 0, total: 0 }),
-        get: () => ({}),
+        list: () => ({
+          items: bareMetalInstanceTypes,
+          size: bareMetalInstanceTypes.length,
+          total: bareMetalInstanceTypes.length,
+        }),
+        get: (req) => ({ object: bareMetalInstanceTypes.find((item) => item.id === req.id) }),
       });
 
       router.service(PrivateBareMetalInstanceTypes, {
@@ -1144,12 +1135,11 @@ export const createMockConnectTransport = (
           }
           return { object: volumes.find((v) => v.id === req.id) };
         },
-        create: (req) => ({
-          object: { id: 'new-volume-1', ...req.object },
-        }),
-        update: (req) => ({
-          object: req.object,
-        }),
+        create: (req) =>
+          overrides.onVolumeCreate?.(req) ?? {
+            object: { id: 'new-volume-1', ...req.object },
+          },
+        update: (req) => ({ object: req.object }),
         delete: (req) => {
           if (overrides.onVolumeDelete) {
             return overrides.onVolumeDelete(req);

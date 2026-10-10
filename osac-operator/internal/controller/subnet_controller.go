@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	coordinationv1 "k8s.io/api/coordination/v1"
@@ -257,6 +258,10 @@ func (r *SubnetReconciler) handleUpdate(ctx context.Context, subnet *v1alpha1.Su
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	plan, err = r.applySequentialProvisioningPolicy(ctx, subnet, plan)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 	implementationStrategy := vnet.Annotations[osacImplementationStrategyAnnotation]
 	// plan may be nil here (no-dispatcher legacy path); FabricTarget/K8sTarget have
 	// nil-receiver-safe implementations that return nil in that case, so this — unlike
@@ -336,6 +341,95 @@ func (r *SubnetReconciler) handleUpdate(ctx context.Context, subnet *v1alpha1.Su
 
 	// Handle provisioning
 	return r.handleProvisioning(ctx, subnet, plan)
+}
+
+// applySequentialProvisioningPolicy limits cudn_evpn to one K8s target per
+// VirtualNetwork. The oldest Subnet keeps K8s provisioning; later Subnets are
+// fabric-only unless they already have K8s target history, which is grandfathered
+// to preserve previously provisioned CUDNs. An explicit skip annotation always
+// removes the K8s target so the normal stale-target deprovisioning path can run.
+func (r *SubnetReconciler) applySequentialProvisioningPolicy(
+	ctx context.Context, subnet *v1alpha1.Subnet, plan *dispatcher.DispatchPlan,
+) (*dispatcher.DispatchPlan, error) {
+	k8sTarget := plan.K8sTarget()
+	if k8sTarget == nil || k8sTarget.Manager.Name != "cudn_evpn" {
+		return plan, nil
+	}
+	if subnet.Annotations[osacSkipK8sManagerAnnotation] == labelValueTrue {
+		return withoutK8sTarget(plan), nil
+	}
+
+	reader := r.APIReader
+	if reader == nil {
+		reader = r.Client
+	}
+	subnetList := &v1alpha1.SubnetList{}
+	if err := reader.List(ctx, subnetList, client.InNamespace(subnet.Namespace)); err != nil {
+		return nil, fmt.Errorf("listing Subnets for sequential cudn_evpn provisioning: %w", err)
+	}
+	candidates := make([]*v1alpha1.Subnet, 0, len(subnetList.Items)+1)
+	foundCurrent := false
+	for i := range subnetList.Items {
+		candidate := &subnetList.Items[i]
+		if candidate.Spec.VirtualNetwork != subnet.Spec.VirtualNetwork {
+			continue
+		}
+		candidates = append(candidates, candidate)
+		if candidate.Name == subnet.Name {
+			foundCurrent = true
+		}
+	}
+	// A newly created Subnet may not yet appear in a cache-backed reader. Include
+	// the reconcile object so selection remains deterministic for back-to-back creates.
+	if !foundCurrent {
+		candidates = append(candidates, subnet)
+	}
+	if oldestOperatorSubnet(candidates).Name == subnet.Name || hasK8sTargetHistory(subnet) {
+		return plan, nil
+	}
+	return withoutK8sTarget(plan), nil
+}
+
+func oldestOperatorSubnet(subnets []*v1alpha1.Subnet) *v1alpha1.Subnet {
+	sort.Slice(subnets, func(i, j int) bool {
+		left, right := subnets[i], subnets[j]
+		switch {
+		case left.CreationTimestamp.IsZero() && !right.CreationTimestamp.IsZero():
+			return true
+		case !left.CreationTimestamp.IsZero() && right.CreationTimestamp.IsZero():
+			return false
+		case !left.CreationTimestamp.Equal(&right.CreationTimestamp):
+			return left.CreationTimestamp.Before(&right.CreationTimestamp)
+		default:
+			return left.Name < right.Name
+		}
+	})
+	return subnets[0]
+}
+
+func hasK8sTargetHistory(subnet *v1alpha1.Subnet) bool {
+	if subnet.Annotations[osacK8sImplementationStrategyAnnotation] != "" {
+		return true
+	}
+	for _, job := range subnet.Status.ProvisioningJobs {
+		if job.Target == string(dispatcher.ManagerRoleK8s) && job.Type == v1alpha1.JobTypeProvision {
+			return true
+		}
+	}
+	return false
+}
+
+func withoutK8sTarget(plan *dispatcher.DispatchPlan) *dispatcher.DispatchPlan {
+	if plan == nil || plan.K8sTarget() == nil {
+		return plan
+	}
+	filtered := &dispatcher.DispatchPlan{Targets: make([]dispatcher.DispatchTarget, 0, len(plan.Targets)-1)}
+	for _, target := range plan.Targets {
+		if target.Role != dispatcher.ManagerRoleK8s {
+			filtered.Targets = append(filtered.Targets, target)
+		}
+	}
+	return filtered
 }
 
 // ensureVNetLockLease creates a K8s Lease for V-Net mutex locking if it
@@ -541,8 +635,9 @@ func subnetProvisioningJobsExtractor(obj client.Object) []v1alpha1.JobStatus {
 // resolved targets via RunMultiTargetProvisioningLifecycle, always tagging the fabric
 // target's jobs "fabric". Keeping the fabric target consistently tagged, whether or not
 // a k8s target is present, preserves its job history across dispatcher changes. When
-// both managers are dispatched, k8s waits for current fabric success and inherits only
-// l2_vni and l3_vni. Targets without dependencies retain independent retries. The Subnet
+// both managers are dispatched, k8s waits for fabric success and inherits l2_vni, l3_vni,
+// and fabric_reserved_range from the Subnet-namespace fabric output ConfigMap. Targets
+// without dependencies retain independent retries. The Subnet
 // reaches Ready only once every resolved target's latest job succeeds at the current
 // desired config version.
 func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alpha1.Subnet, plan *dispatcher.DispatchPlan) (ctrl.Result, error) {
@@ -559,14 +654,16 @@ func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alp
 		// VirtualNetwork spec's annotation rather than a resolved DispatchPlan. Job
 		// history for these Subnets has always been untargeted, so keep using the
 		// fully single-target lifecycle unchanged.
+		onProvisioningFailure := func(message string) {
+			subnet.Status.Phase = v1alpha1.SubnetPhaseFailed
+			setReadyConditionFailed(&subnet.Status.Conditions, message)
+		}
 		result, err = provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, subnet,
 			&provisioning.State{Jobs: &subnet.Status.ProvisioningJobs, DesiredConfigVersion: subnet.Status.DesiredConfigVersion},
 			r.MaxJobHistory, r.StatusPollInterval,
 			&provisioning.PollCallbacks{
-				OnFailed: func(message string) {
-					subnet.Status.Phase = v1alpha1.SubnetPhaseFailed
-					setReadyConditionFailed(&subnet.Status.Conditions, message)
-				},
+				OnFailed:      onProvisioningFailure,
+				OnOutputError: onProvisioningFailure,
 				OnSuccess: func(_ provisioning.ProvisionStatus) {
 					subnet.Status.Phase = v1alpha1.SubnetPhaseReady
 					setReadyConditionTrue(&subnet.Status.Conditions)
@@ -608,11 +705,21 @@ func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alp
 			}
 		}
 
+		fabricCallbacks := &provisioning.PollCallbacks{
+			OnFailed:      onFailedFor(fabricName),
+			OnOutputError: onFailedFor(fabricName),
+			OnSuccess:     onSuccess,
+		}
+		fabricProvider := provisioning.ProvisioningProvider(newDispatchTargetProvider(r.ProvisioningProvider, fabricTarget.Manager.Name))
+		if k8sTarget != nil {
+			fabricCallbacks.OnSuccessWithExtraVars = func(provisioning.ProvisionStatusWithExtraVars) error { return nil }
+			fabricProvider = newFabricOutputProvider(fabricProvider, r.Client)
+		}
 		targets := []provisioning.JobTarget{
 			{
 				Name:           fabricName,
-				Provider:       newDispatchTargetProvider(r.ProvisioningProvider, fabricTarget.Manager.Name),
-				Callbacks:      &provisioning.PollCallbacks{OnFailed: onFailedFor(fabricName), OnSuccess: onSuccess},
+				Provider:       fabricProvider,
+				Callbacks:      fabricCallbacks,
 				CheckAPIServer: checkAPIServerFor(fabricName),
 				// Subnet was fabric-only (single, untargeted job history) before the
 				// dispatcher path existed, so fabric inherits any pre-existing
@@ -630,7 +737,7 @@ func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alp
 			})
 			dependencies[k8sName] = provisioning.JobTargetDependency{
 				DependsOn:         fabricName,
-				RequiredExtraVars: []string{"l2_vni", "l3_vni"},
+				RequiredExtraVars: []string{"l2_vni", "l3_vni", "fabric_reserved_range"},
 			}
 		}
 

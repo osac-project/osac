@@ -91,7 +91,6 @@ type VirtualNetworkStatus struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
 	BackendNetworkID string `json:"backendNetworkId,omitempty"`
-
 	// Conditions holds an array of metav1.Condition that describe the state of the VirtualNetwork
 	// +kubebuilder:validation:Optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`

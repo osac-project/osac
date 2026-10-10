@@ -338,11 +338,8 @@ func validateNetworkDefaults(defaults *privatev1.NetworkDefaults) error {
 		return err
 	}
 
-	if err := validateDefaultCIDRPair(
-		defaults.GetVirtualNetworkIpv6Cidr(), defaults.GetSubnetIpv6Cidr(),
-		cidrIPv6, "virtual_network_ipv6_cidr", "subnet_ipv6_cidr",
-	); err != nil {
-		return err
+	if defaults.GetVirtualNetworkIpv6Cidr() != "" || defaults.GetSubnetIpv6Cidr() != "" {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "IPv6 default networking is not supported")
 	}
 
 	for i, rule := range defaults.GetIngressRules() {

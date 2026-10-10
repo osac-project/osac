@@ -73,7 +73,7 @@ for entry in \
   it_mem="${rest%%:*}"; it_desc="${rest#*:}"
   resp=$(post instance_types "{
     \"metadata\": {\"name\": \"${it_name}\"},
-    \"spec\": {\"cores\": ${it_cores}, \"memory_gib\": ${it_mem}, \"description\": \"${it_desc}\", \"state\": \"INSTANCE_TYPE_STATE_ACTIVE\"}
+    \"spec\": {\"vcpus\": ${it_cores}, \"memory_gib\": ${it_mem}, \"description\": \"${it_desc}\", \"state\": \"INSTANCE_TYPE_STATE_ACTIVE\"}
   }")
   echo "$resp" | has_id && log "  instance-type: ${it_name} (${it_desc})" || warn "  instance-type ${it_name} failed (may already exist)"
 done
@@ -96,7 +96,7 @@ resp=$(post compute_instance_templates '{
       "name": "exposed_ports",
       "title": "Exposed Ports",
       "description": "Ports to expose (e.g. 22/tcp,80/tcp)",
-      "type": "string",
+      "type": "type.googleapis.com/google.protobuf.StringValue",
       "required": false
     }
   ]
@@ -110,8 +110,7 @@ resp=$(post compute_instance_catalog_items '{
   "title": "Linux Virtual Machine",
   "description": "Fedora-based virtual machine with KVM acceleration. Default: 4 cores, 8 GiB RAM, 10 GiB disk.",
   "template": {"id": "osac.templates.ocp_virt_vm"},
-  "published": true,
-  "tenant": ""
+  "published": true
 }')
 echo "$resp" | has_id && log "  catalog-item: linux-vm" || warn "  catalog-item failed (may already exist)"
 

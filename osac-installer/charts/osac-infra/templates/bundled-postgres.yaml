@@ -101,8 +101,6 @@ data:
     ssl_cert_file = '/secrets/cert/tls.crt'
     ssl_key_file = '/secrets/cert/tls.key'
     hba_file = '/config/access/access.conf'
-    fsync = off
-    full_page_writes = off
   access.conf: |
     local all all peer
     hostssl all all 0.0.0.0/0 cert
@@ -140,6 +138,20 @@ spec:
     port: 5432
     targetPort: postgres
 ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -150,9 +162,8 @@ metadata:
     {{- include "osac-infra.labels" . | nindent 4 }}
 spec:
   replicas: 1
-  # emptyDir-backed data, and only one replica is ever wanted -- Recreate
-  # avoids two postgres pods briefly coexisting (and racing on the same
-  # Service) during a rollout, which RollingUpdate would otherwise allow.
+  # Recreate avoids overlapping Postgres pods racing on the shared data volume
+  # and Service during rollout.
   strategy:
     type: Recreate
   selector:
@@ -186,7 +197,8 @@ spec:
         secret:
           secretName: postgres-init
       - name: data
-        emptyDir: {}
+        persistentVolumeClaim:
+          claimName: postgres-data
       - name: tmp
         emptyDir: {}
       - name: run

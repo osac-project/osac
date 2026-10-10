@@ -5,8 +5,8 @@ argument_specs:
         type: str
         required: true
         choices:
-        - present
-        - absent
+          - present
+          - absent
       hosted_cluster_name:
         type: str
         required: true
@@ -17,12 +17,19 @@ argument_specs:
         type: list
         elements: dict
         options:
+          nodeSet:
+            type: str
+            required: true
           numberOfNodes:
             type: int
             required: true
-          resourceClass:
-            type: str
+          bareMetal:
+            type: dict
             required: true
+            options:
+              instanceType:
+                type: str
+                required: true
       hosted_cluster_settings:
         type: dict
         required: true
@@ -36,15 +43,18 @@ argument_specs:
           ssh_public_key:
             type: str
             required: false
+          ovn_kubernetes_mtu:
+            type: int
+            required: false
       hosted_cluster_controller_availability_policy:
         type: str
         required: false
         choices:
-        - HighlyAvailable
-        - SingleReplica
+          - HighlyAvailable
+          - SingleReplica
       hosted_cluster_infrastructure_availability_policy:
         type: str
         required: false
         choices:
-        - HighlyAvailable
-        - SingleReplica
+          - HighlyAvailable
+          - SingleReplica

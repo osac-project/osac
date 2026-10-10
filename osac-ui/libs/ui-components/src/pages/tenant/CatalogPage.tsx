@@ -301,42 +301,40 @@ const CatalogPage = () => {
       <Stack hasGutter>
         <StackItem>
           <Toolbar>
-            <ToolbarContent rowWrap={{ default: 'nowrap' }}>
-              <ToolbarGroup>
+            <ToolbarContent>
+              <ToolbarItem>
+                <CatalogServiceTierFilter
+                  selectedTypeOptions={selectedTypeOptions}
+                  typeCounts={typeCounts}
+                  toggleTypeFilter={toggleTypeFilter}
+                />
+              </ToolbarItem>
+              {role === 'admin' || role === 'tenant-admin' ? (
                 <ToolbarItem>
-                  <CatalogServiceTierFilter
-                    selectedTypeOptions={selectedTypeOptions}
-                    typeCounts={typeCounts}
-                    toggleTypeFilter={toggleTypeFilter}
+                  <CatalogPublishedStatusFilter
+                    selected={publishedFilter}
+                    onChange={(value) => setPublishedFilterParam(value ?? '')}
                   />
                 </ToolbarItem>
-                {role === 'admin' || role === 'tenant-admin' ? (
-                  <ToolbarItem>
-                    <CatalogPublishedStatusFilter
-                      selected={publishedFilter}
-                      onChange={(value) => setPublishedFilterParam(value ?? '')}
-                    />
-                  </ToolbarItem>
-                ) : null}
-                {role === 'admin' ? (
-                  <ToolbarItem>
-                    <CatalogTenantFilter
-                      selected={tenantFilter}
-                      onChange={(value) => setTenantFilter(value ?? '')}
-                    />
-                  </ToolbarItem>
-                ) : null}
+              ) : null}
+              {role === 'admin' ? (
                 <ToolbarItem>
-                  <SearchInput
-                    placeholder={t('Search catalog items')}
-                    value={searchFilter}
-                    onChange={(_event, value) => setSearchFilter(value)}
-                    onClear={() => setSearchFilter('')}
-                    aria-label={t('Filter catalog by keyword')}
-                    isDisabled={!hasSuccessfulQuery}
+                  <CatalogTenantFilter
+                    selected={tenantFilter}
+                    onChange={(value) => setTenantFilter(value ?? '')}
                   />
                 </ToolbarItem>
-              </ToolbarGroup>
+              ) : null}
+              <ToolbarItem>
+                <SearchInput
+                  placeholder={t('Search catalog items')}
+                  value={searchFilter}
+                  onChange={(_event, value) => setSearchFilter(value)}
+                  onClear={() => setSearchFilter('')}
+                  aria-label={t('Filter catalog by keyword')}
+                  isDisabled={!hasSuccessfulQuery}
+                />
+              </ToolbarItem>
               <ToolbarGroup align={{ default: 'alignEnd' }}>
                 <ToolbarItem>
                   <ViewSwitcher pageKey={CATALOG_ITEMS_VIEW_KEY} />

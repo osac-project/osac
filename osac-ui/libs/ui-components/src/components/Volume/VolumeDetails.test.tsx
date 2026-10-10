@@ -42,7 +42,6 @@ const makeVolume = (state: VolumeState, overrides: Partial<{ message: string }> 
 
 const renderDetails = (volume: Volume) => renderWithProviders(<VolumeDetails volume={volume} />);
 
-const getEditButton = () => screen.getByRole('button', { name: 'Edit' });
 const getDeleteButton = () => screen.getByRole('button', { name: 'Delete' });
 
 describe('VolumeDetails', () => {
@@ -122,45 +121,40 @@ describe('VolumeDetails', () => {
   });
 
   describe('action buttons', () => {
-    it('enables both Edit and Delete when state is AVAILABLE', () => {
+    it('renders Delete without Edit when state is AVAILABLE', () => {
       renderDetails(makeVolume(VolumeState.AVAILABLE));
 
-      expect(getEditButton()).not.toBeDisabled();
       expect(getDeleteButton()).not.toBeDisabled();
+      expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
     });
 
-    it('enables both Edit and Delete when state is FAILED', () => {
+    it('enables Delete when state is FAILED', () => {
       renderDetails(makeVolume(VolumeState.FAILED));
 
-      expect(getEditButton()).not.toBeDisabled();
       expect(getDeleteButton()).not.toBeDisabled();
     });
 
-    it('enables Edit but disables Delete when state is CREATING', () => {
+    it('disables Delete when state is CREATING', () => {
       renderDetails(makeVolume(VolumeState.CREATING));
 
-      expect(getEditButton()).not.toBeDisabled();
       expect(getDeleteButton()).toBeDisabled();
     });
 
-    it('disables both Edit and Delete when state is DELETING', () => {
+    it('disables Delete when state is DELETING', () => {
       renderDetails(makeVolume(VolumeState.DELETING));
 
-      expect(getEditButton()).toBeDisabled();
       expect(getDeleteButton()).toBeDisabled();
     });
 
-    it('disables both Edit and Delete when state is DELETED', () => {
+    it('disables Delete when state is DELETED', () => {
       renderDetails(makeVolume(VolumeState.DELETED));
 
-      expect(getEditButton()).toBeDisabled();
       expect(getDeleteButton()).toBeDisabled();
     });
 
-    it('disables both Edit and Delete when state is UNSPECIFIED', () => {
+    it('disables Delete when state is UNSPECIFIED', () => {
       renderDetails(makeVolume(VolumeState.UNSPECIFIED));
 
-      expect(getEditButton()).toBeDisabled();
       expect(getDeleteButton()).toBeDisabled();
     });
   });

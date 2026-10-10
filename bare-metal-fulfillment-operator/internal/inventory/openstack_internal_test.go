@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"reflect"
 	"testing"
 
 	th "github.com/gophercloud/gophercloud/v2/testhelper"
@@ -27,6 +28,54 @@ import (
 
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
 )
+
+func TestGetHostLogicalPortMACs_OpenStack(t *testing.T) {
+	tests := []struct {
+		name    string
+		extra   string
+		status  int
+		want    map[string]string
+		wantErr bool
+	}{
+		{
+			name:  "logical port names and MACs are preserved",
+			extra: `{"osac_interface_macs":{"data-0":"52:54:00:16:04:83","data-1":"52:54:00:AA:BB:CC"}}`,
+			want:  map[string]string{"data-0": "52:54:00:16:04:83", "data-1": "52:54:00:AA:BB:CC"},
+		},
+		{name: "absent mapping", extra: `{}`, want: map[string]string{}},
+		{name: "empty mapping", extra: `{"osac_interface_macs":{}}`, want: map[string]string{}},
+		{name: "null mapping", extra: `{"osac_interface_macs":null}`, want: map[string]string{}},
+		{name: "null extra", extra: `null`, want: map[string]string{}},
+		{name: "wrong shape", extra: `{"osac_interface_macs":[]}`, wantErr: true},
+		{name: "non-string MAC", extra: `{"osac_interface_macs":{"data-0":42}}`, wantErr: true},
+		{name: "missing node", extra: `{}`, status: http.StatusNotFound, wantErr: true},
+		{name: "auth failure", extra: `{}`, status: http.StatusUnauthorized, wantErr: true},
+		{name: "API failure", extra: `{}`, status: http.StatusInternalServerError, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fakeServer := th.SetupHTTP()
+			defer fakeServer.Teardown()
+			fakeServer.Mux.HandleFunc("/nodes/test-node-uuid", func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				status := tt.status
+				if status == 0 {
+					status = http.StatusOK
+				}
+				w.WriteHeader(status)
+				_, _ = fmt.Fprintf(w, `{"uuid":"test-node-uuid","extra":%s}`, tt.extra)
+			})
+			c := &OpenStackClient{client: fakeclient.ServiceClient(fakeServer)}
+			got, err := c.GetHostLogicalPortMACs(context.Background(), "test-node-uuid")
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("GetHostLogicalPortMACs error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !tt.wantErr && !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("GetHostLogicalPortMACs = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestGetHostNICs_OpenStack(t *testing.T) {
 	t.Run("returns lowercased MACs from port records", func(t *testing.T) {

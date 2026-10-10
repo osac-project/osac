@@ -17,6 +17,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/IBM/sarama"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 )
@@ -47,7 +48,9 @@ var _ = Describe("Container", func() {
 
 		Expect(container.Brokers()).To(MatchRegexp(`^127\.0\.0\.1:\d+$`))
 
-		client, err := container.Client()
+		config, err := container.Config()
+		Expect(err).ToNot(HaveOccurred())
+		client, err := sarama.NewClient([]string{container.Brokers()}, config)
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(client.Close)
 		Expect(client.Brokers()).ToNot(BeEmpty())

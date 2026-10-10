@@ -96,7 +96,6 @@ var bmaasHandlers = []string{
 
 var sharedHandlers = []string{
 	"public/v1.RegisterCapabilitiesHandler",
-	"public/v1.RegisterHostTypesHandler",
 	"public/v1.RegisterVirtualNetworksHandler",
 	"public/v1.RegisterSubnetsHandler",
 	"public/v1.RegisterSecurityGroupsHandler",
@@ -108,9 +107,9 @@ var sharedHandlers = []string{
 	"public/v1.RegisterRoleBindingsHandler",
 	"public/v1.RegisterJsonWebKeySetHandler",
 	"public/v1.RegisterStorageTiersHandler",
+	"public/v1.RegisterSelfSubjectAccessReviewsHandler",
 	"private/v1.RegisterCapabilitiesHandler",
 	"private/v1.RegisterEventsHandler",
-	"private/v1.RegisterHostTypesHandler",
 	"private/v1.RegisterHubsHandler",
 	"private/v1.RegisterNetworkClassesHandler",
 	"private/v1.RegisterSecretsHandler",
@@ -125,6 +124,7 @@ var sharedHandlers = []string{
 	"private/v1.RegisterExternalIPAttachmentsHandler",
 	"private/v1.RegisterRolesHandler",
 	"private/v1.RegisterRoleBindingsHandler",
+	"private/v1.RegisterSelfSubjectAccessReviewsHandler",
 }
 
 var _ = Describe("buildHandlerList", func() {

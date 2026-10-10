@@ -166,13 +166,8 @@ func (m *manager) Ensure(ctx context.Context, tenantName string) error {
 	}
 
 	if defaults.GetSubnetIpv4Cidr() != "" {
-		if err := m.ensureSubnet(ctx, tenantName, vn.GetId(), defaults.GetSubnetIpv4Cidr(), "", "default-ipv4"); err != nil {
+		if err := m.ensureSubnet(ctx, tenantName, vn.GetId(), defaults.GetSubnetIpv4Cidr(), "default-ipv4"); err != nil {
 			return fmt.Errorf("failed to ensure default IPv4 Subnet: %w", err)
-		}
-	}
-	if defaults.GetSubnetIpv6Cidr() != "" {
-		if err := m.ensureSubnet(ctx, tenantName, vn.GetId(), "", defaults.GetSubnetIpv6Cidr(), "default-ipv6"); err != nil {
-			return fmt.Errorf("failed to ensure default IPv6 Subnet: %w", err)
 		}
 	}
 	if err := m.ensureSecurityGroup(ctx, tenantName, vn.GetId(), defaults); err != nil {
@@ -228,9 +223,6 @@ func (m *manager) ensureVirtualNetwork(ctx context.Context, tenantName string, n
 	if defaults.GetVirtualNetworkIpv4Cidr() != "" {
 		object.GetSpec().SetIpv4Cidr(defaults.GetVirtualNetworkIpv4Cidr())
 	}
-	if defaults.GetVirtualNetworkIpv6Cidr() != "" {
-		object.GetSpec().SetIpv6Cidr(defaults.GetVirtualNetworkIpv6Cidr())
-	}
 	created, err := m.virtualNetworks.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{Object: object}.Build())
 	if status.Code(err) == codes.AlreadyExists {
 		return m.getVirtualNetwork(ctx, tenantName)
@@ -253,7 +245,7 @@ func (m *manager) getVirtualNetwork(ctx context.Context, tenantName string) (*pr
 	return response.GetItems()[0], nil
 }
 
-func (m *manager) ensureSubnet(ctx context.Context, tenantName, virtualNetworkID, ipv4CIDR, ipv6CIDR, name string) error {
+func (m *manager) ensureSubnet(ctx context.Context, tenantName, virtualNetworkID, ipv4CIDR, name string) error {
 	filter := resourceFilter(tenantName, name)
 	response, err := m.subnets.List(ctx, privatev1.SubnetsListRequest_builder{Filter: &filter}.Build())
 	if err != nil {
@@ -274,9 +266,6 @@ func (m *manager) ensureSubnet(ctx context.Context, tenantName, virtualNetworkID
 	}.Build()
 	if ipv4CIDR != "" {
 		object.GetSpec().SetIpv4Cidr(ipv4CIDR)
-	}
-	if ipv6CIDR != "" {
-		object.GetSpec().SetIpv6Cidr(ipv6CIDR)
 	}
 	_, err = m.subnets.Create(ctx, privatev1.SubnetsCreateRequest_builder{Object: object}.Build())
 	if status.Code(err) == codes.AlreadyExists {
@@ -362,7 +351,8 @@ func (m *manager) ensureExternalIP(ctx context.Context, tenantName string) (*pri
 	}
 	available := make([]*privatev1.ExternalIPPool, 0, len(pools.GetItems()))
 	for _, pool := range pools.GetItems() {
-		if pool.GetStatus().GetState() == privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY &&
+		if pool.GetSpec().GetIpFamily() == privatev1.IPFamily_IP_FAMILY_IPV4 &&
+			pool.GetStatus().GetState() == privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY &&
 			pool.GetStatus().GetAvailable() > 0 {
 			available = append(available, pool)
 		}

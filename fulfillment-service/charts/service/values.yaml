@@ -18,6 +18,16 @@ variant: kind
 # and is intended only for development environments.
 debug: false
 
+# Controller configuration:
+controller:
+
+  # Enable startup and periodic synchronization. Event-driven reconciliation remains enabled when false.
+  sync: true
+
+# The event publisher requires a Kafka backend. Disable it for API-only deployments.
+eventPublisher:
+  enabled: true
+
 # Certificate configuration:
 certs:
 
@@ -213,6 +223,9 @@ vault:
 
   # KV v2 secret engine mount path within tenant namespaces.
   kvMountPath: secret
+
+  # Transit engine mount path within tenant namespaces.
+  transitMountPath: transit
 
   # Vault role name used when authenticating with JWT for lifecycle operations.
   lifecycleRole: ""

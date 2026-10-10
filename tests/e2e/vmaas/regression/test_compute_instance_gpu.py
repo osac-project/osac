@@ -43,7 +43,7 @@ def test_gpu_compute_instance(
     private_grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     k8s_virt_client: K8sClient,
-    default_subnet: str,
+    default_network_attachment: dict[str, object],
     vm_template: str,
 ) -> None:
     # Does not require GPU hardware. Verifies the control plane path: GPU InstanceType
@@ -59,7 +59,7 @@ def test_gpu_compute_instance(
 
         name = unique_name("e2e-gpu")
         ci_uuid = cli.create_compute_instance(
-            name=name, template=vm_template, network_attachments=[{"subnet": default_subnet}], instance_type=it_name
+            name=name, template=vm_template, network_attachments=[default_network_attachment], instance_type=it_name
         )
         assert ci_uuid in grpc.list_compute_instance_ids()
 

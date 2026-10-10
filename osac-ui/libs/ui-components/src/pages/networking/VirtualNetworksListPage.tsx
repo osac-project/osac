@@ -117,7 +117,7 @@ export const VirtualNetworksListPage = () => {
                         <VirtualNetworkStatusLabel state={vn.status?.state} />
                       </Td>
                       <Td dataLabel={t('CIDR')}>
-                        <CidrDisplay ipv4Cidr={vn.spec?.ipv4Cidr} ipv6Cidr={vn.spec?.ipv6Cidr} />
+                        <CidrDisplay ipv4Cidr={vn.spec?.ipv4Cidr} />
                       </Td>
                       <Td dataLabel={t('Subnets')}>{subnetCount}</Td>
                       <Td dataLabel={t('NAT gateway')}>

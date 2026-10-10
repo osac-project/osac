@@ -52,7 +52,9 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 		hubANamespace := hubAResponse.GetObject().GetSpec().GetNamespace()
 		Expect(hubANamespace).ToNot(BeEmpty())
 
-		hubBID, hubBNamespace := createValidRoutingHub(ctx, hubsClient)
+		hubBID, hubBNamespace := createValidRoutingHub(ctx, hubsClient, hubANamespace)
+		tenantsClient := privatev1.NewTenantsClient(tool.InternalView().AdminConn())
+		expectTenantSyncedToHubNamespace(ctx, tenantsClient, hubBNamespace)
 
 		networkClassesClient := privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
 		virtualNetworksClient := privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn())
@@ -64,7 +66,6 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 		attachmentsClient := publicv1.NewExternalIPAttachmentsClient(tool.ExternalView().UserConn())
 		privateAttachmentsClient := privatev1.NewExternalIPAttachmentsClient(tool.InternalView().AdminConn())
 		natGatewaysClient := publicv1.NewNATGatewaysClient(tool.ExternalView().UserConn())
-		hostTypesClient := privatev1.NewHostTypesClient(tool.InternalView().AdminConn())
 		clusterTemplatesClient := privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
 		clustersClient := publicv1.NewClustersClient(tool.ExternalView().UserConn())
 
@@ -256,17 +257,7 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 		natGatewayIPID := createAllocatedExternalIP()
 
 		By("creating a Cluster target and an ExternalIPAttachment")
-		hostTypeID := fmt.Sprintf("test-hub-a-host-type-%s", uuid.New())
-		_, err = hostTypesClient.Create(ctx, privatev1.HostTypesCreateRequest_builder{
-			Object: privatev1.HostType_builder{
-				Id:       hostTypeID,
-				Metadata: privatev1.Metadata_builder{Name: hostTypeID}.Build(),
-			}.Build(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(func(cleanupCtx context.Context) {
-			_, _ = hostTypesClient.Delete(cleanupCtx, privatev1.HostTypesDeleteRequest_builder{Id: hostTypeID}.Build())
-		})
+		instanceTypeID := createCatalogItemBareMetalInstanceTypeFixture(ctx, "")
 
 		clusterTemplateID := fmt.Sprintf("test-hub-a-template-%s", uuid.New())
 		_, err = clusterTemplatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
@@ -274,12 +265,6 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 				Id:       clusterTemplateID,
 				Title:    "Hub placement test template",
 				Metadata: privatev1.Metadata_builder{Name: clusterTemplateID}.Build(),
-				NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
-					"workers": privatev1.ClusterTemplateNodeSet_builder{
-						HostType: privatev1.HostTypeReference_builder{Id: hostTypeID}.Build(),
-						Size:     1,
-					}.Build(),
-				},
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -292,6 +277,7 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 				Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("test-hub-a-cluster-%s", uuid.New()[24:])}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: clusterTemplateID}.Build(),
+					NodeSets: testClusterNodeSets(instanceTypeID, 1),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -389,22 +375,37 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 
 })
 
-func createValidRoutingHub(ctx context.Context, hubsClient privatev1.HubsClient) (string, string) {
+func createValidRoutingHub(ctx context.Context, hubsClient privatev1.HubsClient, canonicalHubNamespace string) (string, string) {
 	GinkgoHelper()
 	hubID := fmt.Sprintf("test-routing-hub-%s", uuid.New())
 	namespace := fmt.Sprintf("test-hub-%s", uuid.New()[24:])
+	serviceAccountName := "networking-routing-test"
+	clusterRoleName := fmt.Sprintf("%s-tenant-sync", hubID)
 	Expect(tool.KubeClient().Create(ctx, &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{Name: namespace},
 	})).To(Succeed())
 	DeferCleanup(func(cleanupCtx context.Context) {
 		_, _ = hubsClient.Delete(cleanupCtx, privatev1.HubsDeleteRequest_builder{Id: hubID}.Build())
+		for _, object := range []crclient.Object{
+			&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: clusterRoleName}},
+			&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: clusterRoleName}},
+		} {
+			deleteErr := tool.KubeClient().Delete(cleanupCtx, object)
+			if deleteErr != nil && !apierrors.IsNotFound(deleteErr) {
+				Expect(deleteErr).ToNot(HaveOccurred())
+			}
+		}
 		deleteErr := tool.KubeClient().Delete(cleanupCtx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}})
 		if deleteErr != nil && !apierrors.IsNotFound(deleteErr) {
 			Expect(deleteErr).ToNot(HaveOccurred())
 		}
+		expectTenantSyncedToHubNamespace(
+			cleanupCtx,
+			privatev1.NewTenantsClient(tool.InternalView().AdminConn()),
+			canonicalHubNamespace,
+		)
 	})
 
-	serviceAccountName := "networking-routing-test"
 	Expect(tool.KubeClient().Create(ctx, &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{Name: serviceAccountName, Namespace: namespace},
 	})).To(Succeed())
@@ -430,6 +431,34 @@ func createValidRoutingHub(ctx context.Context, hubsClient privatev1.HubsClient)
 			APIGroup: rbacv1.GroupName,
 			Kind:     "Role",
 			Name:     serviceAccountName,
+		},
+		Subjects: []rbacv1.Subject{{
+			Kind:      "ServiceAccount",
+			Name:      serviceAccountName,
+			Namespace: namespace,
+		}},
+	})).To(Succeed())
+	Expect(tool.KubeClient().Create(ctx, &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{Name: clusterRoleName},
+		Rules: []rbacv1.PolicyRule{
+			{
+				APIGroups: []string{osacv1alpha1.GroupVersion.Group},
+				Resources: []string{"tenants"},
+				Verbs:     []string{"create", "get", "patch"},
+			},
+			{
+				APIGroups: []string{""},
+				Resources: []string{"namespaces"},
+				Verbs:     []string{"create", "get", "patch"},
+			},
+		},
+	})).To(Succeed())
+	Expect(tool.KubeClient().Create(ctx, &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: clusterRoleName},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: rbacv1.GroupName,
+			Kind:     "ClusterRole",
+			Name:     clusterRoleName,
 		},
 		Subjects: []rbacv1.Subject{{
 			Kind:      "ServiceAccount",
@@ -477,6 +506,28 @@ func createValidRoutingHub(ctx context.Context, hubsClient privatev1.HubsClient)
 	}.Build())
 	Expect(err).ToNot(HaveOccurred())
 	return hubID, namespace
+}
+
+func expectTenantSyncedToHubNamespace(ctx context.Context, tenantsClient privatev1.TenantsClient, hubNamespace string) {
+	GinkgoHelper()
+	_, err := tenantsClient.Signal(ctx, privatev1.TenantsSignalRequest_builder{Id: usersGroup}.Build())
+	Expect(err).ToNot(HaveOccurred())
+	Eventually(func(g Gomega) {
+		hubTenant := &osacv1alpha1.Tenant{}
+		g.Expect(tool.KubeClient().Get(ctx, crclient.ObjectKey{
+			Namespace: hubNamespace,
+			Name:      usersGroup,
+		}, hubTenant)).To(Succeed())
+
+		tenantNamespace := &corev1.Namespace{}
+		g.Expect(tool.KubeClient().Get(ctx, crclient.ObjectKey{Name: usersGroup}, tenantNamespace)).To(Succeed())
+		g.Expect(tenantNamespace.Labels[labels.Project]).To(Equal(hubNamespace))
+
+		response, getErr := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{Id: usersGroup}.Build())
+		g.Expect(getErr).ToNot(HaveOccurred())
+		g.Expect(response.GetObject().GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_SYNCED),
+			"tenant status message: %s", response.GetObject().GetStatus().GetMessage())
+	}, time.Minute, time.Second).Should(Succeed())
 }
 
 func expectNetworkingResourceHub(ctx context.Context, expectedHubID string, getHub func(context.Context) (string, error)) {

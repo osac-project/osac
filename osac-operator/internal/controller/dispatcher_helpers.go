@@ -181,6 +181,8 @@ type dispatchTargetProvider struct {
 }
 
 var _ provisioning.ProvisioningProvider = (*dispatchTargetProvider)(nil)
+var _ provisioning.ProvisioningProviderWithExtraVars = (*dispatchTargetProvider)(nil)
+var _ provisioning.ProvisioningProviderWithProvisionOutputs = (*dispatchTargetProvider)(nil)
 
 // newDispatchTargetProvider creates a dispatchTargetProvider that routes jobs for
 // managerName through base.
@@ -192,8 +194,24 @@ func (p *dispatchTargetProvider) TriggerProvision(ctx context.Context, resource 
 	return p.base.TriggerProvision(ctx, p.withOverriddenStrategy(resource))
 }
 
+func (p *dispatchTargetProvider) TriggerProvisionWithExtraVars(ctx context.Context, resource client.Object, extraVars map[string]any) (*provisioning.ProvisionResult, error) {
+	provider, ok := p.base.(provisioning.ProvisioningProviderWithExtraVars)
+	if !ok {
+		return nil, fmt.Errorf("provider %q does not support inherited extra vars", p.base.Name())
+	}
+	return provider.TriggerProvisionWithExtraVars(ctx, p.withOverriddenStrategy(resource), extraVars)
+}
+
 func (p *dispatchTargetProvider) GetProvisionStatus(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error) {
 	return p.base.GetProvisionStatus(ctx, resource, jobID)
+}
+
+func (p *dispatchTargetProvider) GetProvisionStatusWithExtraVars(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {
+	provider, ok := p.base.(provisioning.ProvisioningProviderWithProvisionOutputs)
+	if !ok {
+		return provisioning.ProvisionStatusWithExtraVars{}, fmt.Errorf("provider %q does not expose provisioning outputs", p.base.Name())
+	}
+	return provider.GetProvisionStatusWithExtraVars(ctx, resource, jobID)
 }
 
 func (p *dispatchTargetProvider) TriggerDeprovision(

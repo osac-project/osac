@@ -194,6 +194,7 @@ var _ = Describe("Client", func() {
 						"started":          time.Now().UTC().Format(time.RFC3339),
 						"finished":         time.Now().UTC().Add(time.Minute).Format(time.RFC3339),
 						"extra_vars":       "{\"key\": \"value\"}",
+						"artifacts":        map[string]any{"l2_vni": 14, "l3_vni": 11},
 						"result_traceback": "",
 					})
 				}))
@@ -205,6 +206,7 @@ var _ = Describe("Client", func() {
 				Expect(err).NotTo(HaveOccurred())
 				Expect(job.ID).To(Equal(789))
 				Expect(job.Status).To(Equal("successful"))
+				Expect(string(job.Artifacts)).To(MatchJSON(`{"l2_vni":14,"l3_vni":11}`))
 			})
 		})
 

@@ -57,6 +57,7 @@ const (
 	ExtraValueResourceClass  = "resource_class"
 	ExtraValueBMCAddress     = "osac_bmc_address"
 	ExtraValueBMCCredentials = "osac_bmc_credentials_secret"
+	ExtraValueInterfaceMACs  = "osac_interface_macs"
 )
 
 // Typed errors for BCM API failures.

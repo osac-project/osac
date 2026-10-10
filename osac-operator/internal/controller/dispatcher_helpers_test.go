@@ -338,6 +338,41 @@ var _ = Describe("dispatchTargetProvider", func() {
 		Expect(resource.Annotations[osacImplementationStrategyAnnotation]).To(Equal("original-value"))
 	})
 
+	It("overrides strategy and forwards inherited vars when triggering provision with extra vars", func() {
+		var seenAnnotation string
+		var seenExtraVars map[string]any
+		mock := &mockSubnetProvider{
+			triggerProvisionWithExtraVarsFunc: func(_ context.Context, r client.Object, extraVars map[string]any) (*provisioning.ProvisionResult, error) {
+				seenAnnotation = r.GetAnnotations()[osacImplementationStrategyAnnotation]
+				seenExtraVars = extraVars
+				return &provisioning.ProvisionResult{JobID: "job-1"}, nil
+			},
+		}
+		provider := newDispatchTargetProvider(mock, "cudn_net")
+		inherited := map[string]any{"l2_vni": 14}
+
+		result, err := provider.TriggerProvisionWithExtraVars(ctx, resource, inherited)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.JobID).To(Equal("job-1"))
+		Expect(seenAnnotation).To(Equal("cudn_net"))
+		Expect(seenExtraVars).To(Equal(inherited))
+		Expect(resource.Annotations[osacImplementationStrategyAnnotation]).To(Equal("original-value"))
+	})
+
+	It("returns capability errors when the base provider lacks optional output methods", func() {
+		base := struct {
+			provisioning.ProvisioningProvider
+		}{ProvisioningProvider: &mockSubnetProvider{}}
+		provider := newDispatchTargetProvider(base, "cudn_net")
+
+		_, triggerErr := provider.TriggerProvisionWithExtraVars(ctx, resource, map[string]any{"l2_vni": 14})
+		_, statusErr := provider.GetProvisionStatusWithExtraVars(ctx, resource, "job-1")
+
+		Expect(triggerErr).To(MatchError(ContainSubstring("does not support inherited extra vars")))
+		Expect(statusErr).To(MatchError(ContainSubstring("does not expose provisioning outputs")))
+	})
+
 	It("overrides the implementation-strategy annotation on the resource seen by TriggerDeprovision, without mutating the caller's original", func() {
 		var seenAnnotation string
 		mock := &mockSubnetProvider{
@@ -384,6 +419,26 @@ var _ = Describe("dispatchTargetProvider", func() {
 		_, err := provider.GetProvisionStatus(ctx, resource, "job-1")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(seenResource).To(BeIdenticalTo(resource))
+	})
+
+	It("delegates provisioning output status with the exact same resource passed in", func() {
+		var seenResource client.Object
+		mock := &mockSubnetProvider{
+			getProvisionStatusWithExtraVarsFunc: func(_ context.Context, r client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {
+				seenResource = r
+				return provisioning.ProvisionStatusWithExtraVars{
+					ProvisionStatus: provisioning.ProvisionStatus{JobID: jobID, State: osacv1alpha1.JobStateSucceeded},
+					ExtraVars:       map[string]any{"l2_vni": 14},
+				}, nil
+			},
+		}
+		provider := newDispatchTargetProvider(mock, "netris")
+
+		status, err := provider.GetProvisionStatusWithExtraVars(ctx, resource, "job-1")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(seenResource).To(BeIdenticalTo(resource))
+		Expect(status.ExtraVars).To(HaveKeyWithValue("l2_vni", 14))
 	})
 
 	It("delegates GetDeprovisionStatus with the exact same resource passed in, unmodified", func() {

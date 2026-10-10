@@ -209,10 +209,9 @@ export type BareMetalInstanceSpec = Message<"osac.public.v1.BareMetalInstanceSpe
   template?: BareMetalInstanceTemplateReference | undefined;
 
   /**
-   * Reference to a BareMetalInstanceType. Optional; immutable after creation.
-   * When set, the system resolves this to the instance type's host_label_selector and maps it
-   * to the CRD's Selector.HostSelector for host selection. When omitted, host selection falls
-   * back to the catalog item's template host_type.
+   * Reference to the BareMetalInstanceType used for hardware placement.
+   * If omitted from the create request, a catalog item or template may provide it.
+   * The resolved reference is immutable after creation.
    *
    * @generated from field: osac.public.v1.BareMetalInstanceTypeReference instance_type = 11;
    */

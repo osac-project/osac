@@ -1,9 +1,9 @@
 ---
 name: agentless_net
-title: AgentlessNet networking stub
+title: AgentlessNet networking backend
 description: >-
-  Registers AgentlessNet for unified networking. The available resource
-  operation entrypoints currently fail with NotImplemented.
+  Registers AgentlessNet for unified networking. VirtualNetwork lifecycle
+  creates and removes UID-keyed Linux routing namespaces and uplinks.
 
 template_type: network
 fabric_manager: agentless_net

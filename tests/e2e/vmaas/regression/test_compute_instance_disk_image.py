@@ -26,6 +26,7 @@ def test_compute_instance_with_disk_image(
     grpc: GRPCClient,
     vm_template: str,
     default_subnet: str,
+    default_security_group: str,
     default_instance_type: str,
     k8s_hub_client: K8sClient,
     default_storage_tier: str,
@@ -49,6 +50,7 @@ def test_compute_instance_with_disk_image(
             template=vm_template,
             disk_image_name=di_name,
             subnet_ids=[default_subnet],
+            security_group_ids=[default_security_group],
             instance_type=default_instance_type,
             name=unique_name("e2e-ci"),
             boot_disk_storage_tier=default_storage_tier,
@@ -83,7 +85,12 @@ def test_compute_instance_with_disk_image(
 
 
 def test_obsolete_disk_image_blocks_creation(
-    grpc: GRPCClient, vm_template: str, default_subnet: str, default_instance_type: str, default_storage_tier: str
+    grpc: GRPCClient,
+    vm_template: str,
+    default_subnet: str,
+    default_security_group: str,
+    default_instance_type: str,
+    default_storage_tier: str,
 ) -> None:
     """AC-2 / TC-FR7-04: OBSOLETE DiskImage blocks ComputeInstance creation."""
     di_name = unique_name("e2e-di")
@@ -101,6 +108,7 @@ def test_obsolete_disk_image_blocks_creation(
                 template=vm_template,
                 disk_image_name=di_name,
                 subnet_ids=[default_subnet],
+                security_group_ids=[default_security_group],
                 instance_type=default_instance_type,
                 name=unique_name("e2e-ci-obsolete"),
                 boot_disk_storage_tier=default_storage_tier,
@@ -162,6 +170,7 @@ def test_disk_image_deletion_protection(
     grpc: GRPCClient,
     vm_template: str,
     default_subnet: str,
+    default_security_group: str,
     default_instance_type: str,
     k8s_hub_client: K8sClient,
     default_storage_tier: str,
@@ -179,6 +188,7 @@ def test_disk_image_deletion_protection(
             template=vm_template,
             disk_image_name=di_name,
             subnet_ids=[default_subnet],
+            security_group_ids=[default_security_group],
             instance_type=default_instance_type,
             name=unique_name("e2e-ci"),
             boot_disk_storage_tier=default_storage_tier,

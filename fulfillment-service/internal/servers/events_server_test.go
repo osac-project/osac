@@ -75,6 +75,7 @@ var _ = Describe("Events server visibility", Ordered, func() {
 	var (
 		broker      *kafka.Container
 		kafkaClient sarama.Client
+		kafkaConfig *sarama.Config
 		producer    sarama.SyncProducer
 	)
 
@@ -87,6 +88,8 @@ var _ = Describe("Events server visibility", Ordered, func() {
 		startCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 		Expect(broker.Start(startCtx)).To(Succeed())
+		kafkaConfig, err = broker.Config()
+		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func() {
 			stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Minute)
 			defer stopCancel()
@@ -95,13 +98,34 @@ var _ = Describe("Events server visibility", Ordered, func() {
 	})
 
 	BeforeEach(func() {
-		var err error
-		kafkaClient, err = broker.Client()
+		config, err := broker.Config()
+		Expect(err).ToNot(HaveOccurred())
+		kafkaClient, err = sarama.NewClient([]string{broker.Brokers()}, config)
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(kafkaClient.Close)
 		producer, err = sarama.NewSyncProducerFromClient(kafkaClient)
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(producer.Close)
+	})
+
+	It("Requires a Kafka configuration", func() {
+		server, err := NewEventsServer().
+			SetLogger(logger).
+			SetKafkaBrokers(broker.Brokers()).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).To(MatchError("kafka configuration is mandatory"))
+		Expect(server).To(BeNil())
+	})
+
+	It("Requires Kafka bootstrap brokers", func() {
+		server, err := NewEventsServer().
+			SetLogger(logger).
+			SetKafkaConfig(kafkaConfig).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).To(MatchError("kafka brokers are mandatory"))
+		Expect(server).To(BeNil())
 	})
 
 	// sendEvent writes an event to the tenant topic selected from its payload metadata.
@@ -127,10 +151,12 @@ var _ = Describe("Events server visibility", Ordered, func() {
 	startServer := func(tenancy auth.TenancyLogic) (*EventsServer, publicv1.EventsClient) {
 		eventsServer, err := NewEventsServer().
 			SetLogger(logger).
-			SetKafkaClient(kafkaClient).
+			SetKafkaConfig(kafkaConfig).
+			SetKafkaBrokers(broker.Brokers()).
 			SetTenancyLogic(tenancy).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(eventsServer.Close)
 
 		// Create the gRPC server using bufconn:
 		grpcListener := bufconn.Listen(1024 * 1024)

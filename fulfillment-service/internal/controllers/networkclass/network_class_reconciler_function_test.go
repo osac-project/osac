@@ -119,6 +119,71 @@ var _ = Describe("NetworkClass reconciler", func() {
 		Expect(client.updates).To(BeEmpty())
 	})
 
+	It("preserves manager failure when Hub resolution is ready", func() {
+		resolver := &fakeNetworkClassHubResolver{
+			result: controllers.NetworkingHubResolution{
+				NetworkingHub: controllers.NetworkingHub{ID: "hub-a"},
+				HubID:         "hub-a",
+				State:         privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+			},
+		}
+		client := &fakeNetworkClassStatusClient{}
+		reconcile, err := NewFunction().
+			SetLogger(logger).
+			SetResolver(resolver).
+			SetNetworkClassesClient(client).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		networkClass := privatev1.NetworkClass_builder{
+			Id: "nc-a",
+			Status: privatev1.NetworkClassStatus_builder{
+				ManagerState:   privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED,
+				ManagerMessage: proto.String("k8s manager is not registered"),
+			}.Build(),
+		}.Build()
+
+		Expect(reconcile(context.Background(), networkClass)).To(Succeed())
+		Expect(client.updates).To(HaveLen(1))
+		status := client.updates[0].GetObject().GetStatus()
+		Expect(status.GetState()).To(Equal(privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED))
+		Expect(status.GetManagerState()).To(Equal(privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED))
+		Expect(status.GetManagerMessage()).To(Equal("k8s manager is not registered"))
+		Expect(status.GetMessage()).To(Equal("k8s manager is not registered"))
+	})
+
+	It("keeps overall readiness pending until manager discovery completes", func() {
+		resolver := &fakeNetworkClassHubResolver{
+			result: controllers.NetworkingHubResolution{
+				NetworkingHub: controllers.NetworkingHub{ID: "hub-a"},
+				HubID:         "hub-a",
+				State:         privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+			},
+		}
+		client := &fakeNetworkClassStatusClient{}
+		reconcile, err := NewFunction().
+			SetLogger(logger).
+			SetResolver(resolver).
+			SetNetworkClassesClient(client).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		networkClass := privatev1.NetworkClass_builder{
+			Id: "nc-a",
+			Status: privatev1.NetworkClassStatus_builder{
+				ManagerState:   privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING,
+				ManagerMessage: proto.String("manager registration is pending"),
+			}.Build(),
+		}.Build()
+
+		Expect(reconcile(context.Background(), networkClass)).To(Succeed())
+		Expect(client.updates).To(HaveLen(1))
+		status := client.updates[0].GetObject().GetStatus()
+		Expect(status.GetState()).To(Equal(privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING))
+		Expect(status.GetManagerState()).To(Equal(privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING))
+		Expect(status.GetMessage()).To(Equal("manager registration is pending"))
+	})
+
 	It("does not resolve a deleted NetworkClass", func() {
 		resolver := &fakeNetworkClassHubResolver{}
 		client := &fakeNetworkClassStatusClient{}

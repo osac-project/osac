@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Button,
   Card,
   CardBody,
   DescriptionList,
@@ -18,7 +17,9 @@ import {
 
 import type { Volume } from '@osac/types';
 import { VolumeState } from '@osac/types';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
+import { VOLUMES_LIST_PATH } from './values';
 import { VolumeAccessModeLabel } from './VolumeAccessModeLabel';
 import VolumeDeleteConfirmModal from './VolumeDeleteConfirmModal';
 import { VolumeStatusLabel } from './VolumeStatusLabel';
@@ -31,8 +32,6 @@ interface VolumeDetailsProps {
   volume: Volume;
 }
 
-const VOLUMES_LIST_PATH = '/storage/volumes';
-
 const formatSizeGib = (sizeGib: bigint | undefined): string =>
   sizeGib === undefined ? '—' : `${sizeGib} GiB`;
 
@@ -42,10 +41,6 @@ const VolumeDetails = ({ volume }: VolumeDetailsProps) => {
   const [deleteOpen, setDeleteOpen] = useState(false);
 
   const state = volume.status?.state;
-  const canEdit =
-    state === VolumeState.AVAILABLE ||
-    state === VolumeState.CREATING ||
-    state === VolumeState.FAILED;
   const canDelete = state === VolumeState.AVAILABLE || state === VolumeState.FAILED;
 
   return (
@@ -78,26 +73,14 @@ const VolumeDetails = ({ volume }: VolumeDetailsProps) => {
               <FlexItem>
                 <Flex spaceItems={{ default: 'spaceItemsSm' }} flexWrap={{ default: 'wrap' }}>
                   <FlexItem>
-                    <Button
-                      variant="secondary"
-                      isDisabled={!canEdit}
-                      onClick={() => navigate(`${VOLUMES_LIST_PATH}/${volume.id}/edit`)}
-                    >
-                      {t('Edit')}
-                    </Button>
-                  </FlexItem>
-                  <FlexItem>
-                    <Button
-                      variant="danger"
-                      isDisabled={!canDelete}
+                    <DeleteResourceButton
+                      canDelete={canDelete}
                       onClick={() => {
                         if (canDelete) {
                           setDeleteOpen(true);
                         }
                       }}
-                    >
-                      {t('Delete')}
-                    </Button>
+                    />
                   </FlexItem>
                 </Flex>
               </FlexItem>

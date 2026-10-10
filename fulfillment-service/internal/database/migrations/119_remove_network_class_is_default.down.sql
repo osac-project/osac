@@ -1,3 +1,0 @@
--- The removed NetworkClass is_default field is intentionally not restored.
--- Existing data can safely remain without the field when rolling back the
--- schema migration; the generated contract reserves the field number/name.

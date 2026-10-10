@@ -13,10 +13,9 @@ import (
 	context "context"
 	reflect "reflect"
 
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 	gomock "go.uber.org/mock/gomock"
 	grpc "google.golang.org/grpc"
-
-	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 // MockClustersClient is a mock of ClustersClient interface.

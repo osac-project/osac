@@ -116,8 +116,8 @@ var _ = Describe("Resolver", func() {
 		}
 
 		cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
-			newFabricManagerConfigMap("fm-neutron", "neutron", "ipv4,ipv6,dualStack"),
-			newK8sManagerConfigMap("km-cudn", "cudn_localnet", "ipv4,ipv6,dualStack"),
+			newFabricManagerConfigMap("fm-neutron", "neutron", "ipv4"),
+			newK8sManagerConfigMap("km-cudn", "cudn_localnet", "ipv4"),
 		).Build()
 		disc, err := networkmanager.NewDiscovery(cl, "osac")
 		Expect(err).NotTo(HaveOccurred())
@@ -177,7 +177,7 @@ var _ = Describe("Resolver", func() {
 		}
 
 		cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
-			newK8sManagerConfigMap("km-cudn", "cudn_localnet", "ipv4,ipv6,dualStack"),
+			newK8sManagerConfigMap("km-cudn", "cudn_localnet", "ipv4"),
 		).Build()
 		disc, err := networkmanager.NewDiscovery(cl, "osac")
 		Expect(err).NotTo(HaveOccurred())

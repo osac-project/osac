@@ -95,7 +95,8 @@ func main() {
 		log.Printf("DLQ enabled: topic=%s", envutil.EnvOrDefault("DLQ_TOPIC", kafka.TopicDLQ))
 	}
 
-	adapter := echo.NewAdapter(bufferSize)
+	store := echo.NewEventStore(bufferSize)
+	adapter := echo.NewAdapter(store)
 	r := runner.NewRunner(adapter, runner.RunnerConfig{
 		Brokers:       brokers,
 		ConsumerGroup: group,
@@ -115,10 +116,10 @@ func main() {
 			}
 			w.WriteHeader(http.StatusOK)
 		})
-		mux.HandleFunc("GET /events", adapter.HandleEvents)
-		mux.HandleFunc("DELETE /events", adapter.HandleDeleteEvents)
-		mux.HandleFunc("GET /events/count", adapter.HandleCount)
-		mux.HandleFunc("GET /events/{id}", adapter.HandleEventByID)
+		mux.HandleFunc("GET /events", store.HandleEvents)
+		mux.HandleFunc("DELETE /events", store.HandleDeleteEvents)
+		mux.HandleFunc("GET /events/count", store.HandleCount)
+		mux.HandleFunc("GET /events/{id}", store.HandleEventByID)
 		httpServer := &http.Server{
 			Addr:              metricsAddr,
 			Handler:           mux,

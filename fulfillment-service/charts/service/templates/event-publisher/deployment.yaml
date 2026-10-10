@@ -11,6 +11,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
 language governing permissions and limitations under the License.
 */}}
 
+{{- if .Values.eventPublisher.enabled }}
 {{- $caBundleConfigMap := required "certs.caBundle.configMap is required" .Values.certs.caBundle.configMap }}
 
 apiVersion: apps/v1
@@ -182,3 +183,4 @@ spec:
           timeoutSeconds: 5
           failureThreshold: 5
         {{ end }}
+{{- end }}

@@ -75,11 +75,12 @@ var _ = Describe("Network classes server", func() {
 	}
 
 	Describe("singleton admission", func() {
-		It("accepts the first NetworkClass and leaves readiness to the controller", func() {
+		It("clears caller status and initializes a manager-backed NetworkClass as pending", func() {
 			response, err := server.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 				Object: privatev1.NetworkClass_builder{
 					Title:         "Provider network",
 					FabricManager: new("netris"),
+					K8SManager:    new("cudn_evpn"),
 					Status: privatev1.NetworkClassStatus_builder{
 						Hub:     "caller-hub",
 						State:   privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED,
@@ -88,7 +89,22 @@ var _ = Describe("Network classes server", func() {
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(response.GetObject().GetStatus()).To(BeNil())
+			status := response.GetObject().GetStatus()
+			Expect(status.GetState()).To(Equal(privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING))
+			Expect(status.GetHub()).To(BeEmpty())
+			Expect(status.HasMessage()).To(BeFalse())
+		})
+
+		It("initializes a fabric-only NetworkClass as ready", func() {
+			response, err := server.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
+				Object: privatev1.NetworkClass_builder{
+					Title:         "Provider network",
+					FabricManager: new("netris"),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetStatus().GetState()).To(Equal(
+				privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY))
 		})
 
 		It("rejects a second active NetworkClass", func() {
@@ -222,6 +238,41 @@ var _ = Describe("Network classes server", func() {
 		It("validates and persists defaults without making them a second selection mechanism", func() {
 			created := createWithDefaults(validDefaults())
 			Expect(created.GetSpec().GetDefaults().GetVirtualNetworkIpv4Cidr()).To(Equal("10.0.0.0/16"))
+		})
+
+		DescribeTable("rejects IPv6 default CIDR configuration",
+			func(defaults *privatev1.NetworkDefaults) {
+				_, err := server.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
+					Object: privatev1.NetworkClass_builder{
+						Title:         "IPv6 defaults",
+						FabricManager: new("netris"),
+						Spec:          privatev1.NetworkClassSpec_builder{Defaults: defaults}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			},
+			Entry("virtual network CIDR", privatev1.NetworkDefaults_builder{
+				VirtualNetworkIpv6Cidr: "2001:db8::/32",
+			}.Build()),
+			Entry("subnet CIDR", privatev1.NetworkDefaults_builder{
+				SubnetIpv6Cidr: "2001:db8:1::/64",
+			}.Build()),
+		)
+
+		It("rejects IPv6 default CIDR configuration on update", func() {
+			created := createWithDefaults(validDefaults())
+			_, err := server.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
+				Object: privatev1.NetworkClass_builder{
+					Id: created.GetId(),
+					Spec: privatev1.NetworkClassSpec_builder{Defaults: privatev1.NetworkDefaults_builder{
+						VirtualNetworkIpv4Cidr: "10.0.0.0/16",
+						SubnetIpv4Cidr:         "10.0.1.0/24",
+						SubnetIpv6Cidr:         "2001:db8:1::/64",
+					}.Build()}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.defaults"}},
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
 		})
 
 		It("rejects a subnet CIDR without its parent virtual-network CIDR", func() {

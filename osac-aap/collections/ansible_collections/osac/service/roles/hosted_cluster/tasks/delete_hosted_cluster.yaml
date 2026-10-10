@@ -1,3 +1,129 @@
+# Leave the HostedCluster, guest credentials and ManagedCluster in place while
+# CAP-Agent unbinds Agents. The baremetalworker controller only deletes each
+# worker BMI after its Agent has unbound. Skip drain only on terminal cluster
+# deletion; CAPI still waits for volume detach and its pre-terminate hook.
+- name: Set hosted control-plane namespace
+  ansible.builtin.set_fact:
+    hosted_control_plane_namespace: "{{ hosted_cluster_namespace }}-{{ hosted_cluster_name }}"
+
+- name: List cluster Machines before NodePool deletion
+  kubernetes.core.k8s_info:
+    api_version: cluster.x-k8s.io/v1beta1
+    kind: Machine
+    namespace: "{{ hosted_control_plane_namespace }}"
+    label_selectors:
+      - "cluster.x-k8s.io/cluster-name={{ hosted_cluster_name }}"
+  register: cluster_machines_before
+  no_log: true
+
+- name: Validate cluster Machines before NodePool deletion
+  ansible.builtin.assert:
+    that:
+      - item.spec.clusterName == hosted_cluster_name
+      - item.metadata.namespace == hosted_control_plane_namespace
+      - item.metadata.labels['cluster.x-k8s.io/cluster-name'] == hosted_cluster_name
+  loop: "{{ cluster_machines_before.resources }}"
+  no_log: true
+
+- name: Skip drain for cluster Machines before NodePool deletion
+  kubernetes.core.k8s:
+    state: present
+    merge_type: [merge]
+    definition:
+      apiVersion: cluster.x-k8s.io/v1beta1
+      kind: Machine
+      metadata:
+        namespace: "{{ hosted_control_plane_namespace }}"
+        name: "{{ item.metadata.name }}"
+        annotations:
+          machine.cluster.x-k8s.io/exclude-node-draining: ""
+  loop: "{{ cluster_machines_before.resources | selectattr('spec.clusterName', 'equalto', hosted_cluster_name) | list }}"
+  when: "'machine.cluster.x-k8s.io/exclude-node-draining' not in (item.metadata.annotations | default({}, true))"
+  no_log: true
+
+- name: List NodePools owned by this cluster
+  kubernetes.core.k8s_info:
+    api_version: hypershift.openshift.io/v1beta1
+    kind: NodePool
+    namespace: "{{ hosted_cluster_namespace }}"
+    label_selectors:
+      - "{{ cluster_order_label }}={{ hosted_cluster_name }}"
+  register: cluster_nodepools
+
+- name: Delete NodePool resources
+  kubernetes.core.k8s:
+    state: absent
+    api_version: hypershift.openshift.io/v1beta1
+    kind: NodePool
+    namespace: "{{ hosted_cluster_namespace }}"
+    name: "{{ item.metadata.name }}"
+  loop: "{{ cluster_nodepools.resources }}"
+  loop_control:
+    label: "Delete NodePool {{ item.metadata.name }}"
+
+# Catch Machines created by an in-flight scale-up between the first list and
+# the NodePool deletion; validate ownership again before changing anything.
+- name: List cluster Machines after NodePool deletion
+  kubernetes.core.k8s_info:
+    api_version: cluster.x-k8s.io/v1beta1
+    kind: Machine
+    namespace: "{{ hosted_control_plane_namespace }}"
+    label_selectors:
+      - "cluster.x-k8s.io/cluster-name={{ hosted_cluster_name }}"
+  register: cluster_machines_after
+  no_log: true
+
+- name: Validate cluster Machines after NodePool deletion
+  ansible.builtin.assert:
+    that:
+      - item.spec.clusterName == hosted_cluster_name
+      - item.metadata.namespace == hosted_control_plane_namespace
+      - item.metadata.labels['cluster.x-k8s.io/cluster-name'] == hosted_cluster_name
+  loop: "{{ cluster_machines_after.resources }}"
+  no_log: true
+
+- name: Skip drain for cluster Machines after NodePool deletion
+  kubernetes.core.k8s:
+    state: present
+    merge_type: [merge]
+    definition:
+      apiVersion: cluster.x-k8s.io/v1beta1
+      kind: Machine
+      metadata:
+        namespace: "{{ hosted_control_plane_namespace }}"
+        name: "{{ item.metadata.name }}"
+        annotations:
+          machine.cluster.x-k8s.io/exclude-node-draining: ""
+  loop: "{{ cluster_machines_after.resources | selectattr('spec.clusterName', 'equalto', hosted_cluster_name) | list }}"
+  when: "'machine.cluster.x-k8s.io/exclude-node-draining' not in (item.metadata.annotations | default({}, true))"
+  no_log: true
+
+- name: Wait for NodePool resources to finish deleting
+  kubernetes.core.k8s_info:
+    api_version: hypershift.openshift.io/v1beta1
+    kind: NodePool
+    namespace: "{{ hosted_cluster_namespace }}"
+    label_selectors:
+      - "{{ cluster_order_label }}={{ hosted_cluster_name }}"
+  register: remaining_nodepools
+  until: remaining_nodepools.resources | length == 0
+  retries: 210
+  delay: 10
+
+- name: Wait for baremetalworker to finish deleting workers
+  kubernetes.core.k8s_info:
+    api_version: osac.openshift.io/v1alpha1
+    kind: ClusterOrder
+    namespace: "{{ cluster_order.metadata.namespace }}"
+    name: "{{ hosted_cluster_name }}"
+  register: worker_clusterorder
+  until: >-
+    (worker_clusterorder.resources | length == 0) or
+    ('osac.openshift.io/baremetalworker-finalizer' not in
+     (worker_clusterorder.resources[0].metadata.finalizers | default([])))
+  retries: 210
+  delay: 10
+
 - name: Delete Secret resource containing pull-secret
   kubernetes.core.k8s:
     state: absent
@@ -30,17 +156,6 @@
     kind: HostedCluster
     namespace: "{{ hosted_cluster_namespace }}"
     name: "{{ hosted_cluster_name }}"
-
-- name: Delete NodePool resources
-  kubernetes.core.k8s:
-    state: absent
-    api_version: hypershift.openshift.io/v1beta1
-    kind: NodePool
-    namespace: "{{ hosted_cluster_namespace }}"
-    name: "nodepool-{{ hosted_cluster_name }}-{{ item.resourceClass }}"
-  loop: "{{ hosted_cluster_node_requests }}"
-  loop_control:
-    label: "Delete NodePool nodepool-{{ hosted_cluster_name }}-{{ item.resourceClass }}"
 
 # Wait for the HostedCluster to delete before we proceed; this ensures that we
 # don't prematurely destroy infrastructure resources required for the clean

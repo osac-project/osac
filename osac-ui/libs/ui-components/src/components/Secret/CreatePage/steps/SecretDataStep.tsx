@@ -1,4 +1,4 @@
-import { Stack, StackItem, Title } from '@patternfly/react-core';
+import { Content, Stack, StackItem, Title } from '@patternfly/react-core';
 import { useFormikContext } from 'formik';
 
 import { SecretType } from '@osac/types';
@@ -44,6 +44,9 @@ const SecretDataStep = ({ isEdit }: SecretDataStepProps) => {
         <Title headingLevel="h2" size="lg">
           {t('Secret data')}
         </Title>
+        <Content component="p">
+          {t('Select a secret type, then enter or upload its key(s) and values.')}
+        </Content>
       </StackItem>
       <StackItem>
         <OsacForm>

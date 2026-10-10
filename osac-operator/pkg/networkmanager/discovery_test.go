@@ -74,7 +74,7 @@ var _ = Describe("Discovery", func() {
 				Data: map[string]string{
 					"name":         "neutron",
 					"description":  "OpenStack Neutron",
-					"capabilities": "ipv4,ipv6,dualStack",
+					"capabilities": "ipv4",
 				},
 			}
 
@@ -163,7 +163,7 @@ var _ = Describe("Discovery", func() {
 				},
 				Data: map[string]string{
 					"name":         "netris",
-					"capabilities": "ipv4,ipv6",
+					"capabilities": "ipv4",
 				},
 			}
 
@@ -186,7 +186,7 @@ var _ = Describe("Discovery", func() {
 				},
 				Data: map[string]string{
 					"name":         "cudn_localnet",
-					"capabilities": "ipv4,ipv6,dualStack",
+					"capabilities": "ipv4",
 				},
 			}
 
@@ -389,7 +389,7 @@ var _ = Describe("Discovery", func() {
 				},
 				Data: map[string]string{
 					"name":         "neutron",
-					"capabilities": "ipv4,ipv6,dualStack",
+					"capabilities": "ipv4",
 				},
 			}
 
@@ -400,11 +400,7 @@ var _ = Describe("Discovery", func() {
 			mgr, err := disc.GetFabricManager(ctx, "neutron")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(mgr.Name).To(Equal("neutron"))
-			Expect(mgr.Capabilities).To(ConsistOf(
-				networkmanager.CapabilityIPv4,
-				networkmanager.CapabilityIPv6,
-				networkmanager.CapabilityDualStack,
-			))
+			Expect(mgr.Capabilities).To(ConsistOf(networkmanager.CapabilityIPv4))
 		})
 
 		It("returns ManagerNotFoundError when manager does not exist", func() {

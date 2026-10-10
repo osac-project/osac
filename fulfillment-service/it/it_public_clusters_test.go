@@ -30,12 +30,12 @@ import (
 
 var _ = Describe("Public clusters", func() {
 	var (
-		ctx             context.Context
-		clustersClient  publicv1.ClustersClient
-		hostTypesClient privatev1.HostTypesClient
-		templatesClient privatev1.ClusterTemplatesClient
-		hostTypeId      string
-		templateId      string
+		ctx                 context.Context
+		clustersClient      publicv1.ClustersClient
+		instanceTypesClient privatev1.BareMetalInstanceTypesClient
+		templatesClient     privatev1.ClusterTemplatesClient
+		bmitName            string
+		templateId          string
 	)
 
 	BeforeEach(func() {
@@ -44,26 +44,39 @@ var _ = Describe("Public clusters", func() {
 
 		// Create the clients:
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
-		hostTypesClient = privatev1.NewHostTypesClient(tool.InternalView().AdminConn())
+		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
 		templatesClient = privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
 
-		// Create a host type for testing:
-		hostTypeId = fmt.Sprintf("my-host-type-%s", uuid.New())
-		_, err := hostTypesClient.Create(ctx, privatev1.HostTypesCreateRequest_builder{
-			Object: privatev1.HostType_builder{
+		// Create a bare metal instance type for testing:
+		bmitName = fmt.Sprintf("test-bmit-%s", uuid.New()[24:32])
+		_, err := instanceTypesClient.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceType_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: fmt.Sprintf("test-ht-%s", uuid.New()[24:32]),
+					Name: bmitName,
 				}.Build(),
-				Id: hostTypeId,
-				Interfaces: []*privatev1.NetworkInterface{
-					privatev1.NetworkInterface_builder{Name: "data-0", Role: "fabric"}.Build(),
-				},
+				Spec: privatev1.BareMetalInstanceTypeSpec_builder{
+					Hardware: privatev1.BareMetalHardwareSpec_builder{
+						Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 32, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
+						Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 128}.Build(),
+						NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+							privatev1.BareMetalNetworkPortSpec_builder{
+								Name:  "eth0",
+								Role:  "fabric",
+								Type:  "Ethernet",
+								Speed: "10Gbps",
+							}.Build(),
+						},
+					}.Build(),
+					HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
+						MatchLabels: map[string]string{"hardware.profile": "compute"},
+					}.Build(),
+				}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func() {
-			_, err := hostTypesClient.Delete(ctx, privatev1.HostTypesDeleteRequest_builder{
-				Id: hostTypeId,
+			_, err := instanceTypesClient.Delete(ctx, privatev1.BareMetalInstanceTypesDeleteRequest_builder{
+				Id: bmitName,
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 		})
@@ -78,12 +91,6 @@ var _ = Describe("Public clusters", func() {
 				Id:          templateId,
 				Title:       "My template %s",
 				Description: "My template.",
-				NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
-					"my-node-set": privatev1.ClusterTemplateNodeSet_builder{
-						HostType: privatev1.HostTypeReference_builder{Id: hostTypeId}.Build(),
-						Size:     3,
-					}.Build(),
-				},
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -104,6 +111,7 @@ var _ = Describe("Public clusters", func() {
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets: testClusterNodeSets(bmitName, 3),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -142,6 +150,7 @@ var _ = Describe("Public clusters", func() {
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets: testClusterNodeSets(bmitName, 3),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -171,6 +180,7 @@ var _ = Describe("Public clusters", func() {
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets: testClusterNodeSets(bmitName, 3),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -204,6 +214,7 @@ var _ = Describe("Public clusters", func() {
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets: testClusterNodeSets(bmitName, 3),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -227,7 +238,8 @@ var _ = Describe("Public clusters", func() {
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"my-node-set": {
-							Size: proto.Int32(4),
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
+							Size:                  proto.Int32(4),
 						},
 					},
 				}.Build(),
@@ -259,6 +271,7 @@ var _ = Describe("Public clusters", func() {
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets:          testClusterNodeSets(bmitName, 3),
 					NetworkAttachment: network.clusterAttachment(),
 				}.Build(),
 			}.Build(),
@@ -297,6 +310,7 @@ var _ = Describe("Public clusters", func() {
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets: testClusterNodeSets(bmitName, 3),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -359,7 +373,8 @@ var _ = Describe("Public clusters", func() {
 	})
 
 	It("Can create a cluster with explicit version", func() {
-		// Create a non-default cluster version:
+		// Bare-metal workers require the selected version to have a DiskImage.
+		image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
 		cvClient := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())
 		version := nextCVVersion()
 		cvResponse, err := cvClient.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
@@ -368,8 +383,9 @@ var _ = Describe("Public clusters", func() {
 					Name: fmt.Sprintf("test-cv-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: privatev1.ClusterVersionSpec_builder{
-					Version: version,
-					Image:   fmt.Sprintf("quay.io/openshift-release-dev/ocp-release:%s-multi", version),
+					Version:   version,
+					Image:     fmt.Sprintf("quay.io/openshift-release-dev/ocp-release:%s-multi", version),
+					DiskImage: privatev1.DiskImageReference_builder{Id: image.GetId()}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -393,6 +409,7 @@ var _ = Describe("Public clusters", func() {
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 					Version:  publicv1.ClusterVersionReference_builder{Name: cvName}.Build(),
+					NodeSets: testClusterNodeSets(bmitName, 3),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -436,6 +453,7 @@ var _ = Describe("Public clusters", func() {
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets: testClusterNodeSets(bmitName, 3),
 				}.Build(),
 			}.Build(),
 		}.Build())

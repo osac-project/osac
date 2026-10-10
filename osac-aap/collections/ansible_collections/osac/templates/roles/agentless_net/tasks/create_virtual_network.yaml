@@ -1,4 +1,36 @@
 ---
-- name: Report unimplemented AgentlessNet operation
-  ansible.builtin.fail:
-    msg: "NotImplemented: agentless_net resource operations are not implemented."
+- name: Provision the AgentlessNet VirtualNetwork provider state
+  block:
+    - name: Load the AgentlessNet provider inventory
+      ansible.builtin.include_tasks: _load_network_node_inventory.yaml
+
+    - name: Read VirtualNetwork provider settings
+      ansible.builtin.set_fact:
+        agentless_net_vn_uid: "{{ virtual_network.metadata.uid | default('') }}"
+        agentless_net_vn_tenant_id: "{{ virtual_network.metadata.annotations['osac.openshift.io/tenant'] | default('') }}"
+        agentless_net_vn_cidr: "{{ virtual_network.spec.ipv4Cidr | default('') }}"
+      no_log: true
+
+    - name: Validate VirtualNetwork provisioning inputs
+      ansible.builtin.assert:
+        that:
+          - agentless_net_vn_uid | length > 0
+          - agentless_net_vn_tenant_id | length > 0
+          - agentless_net_vn_cidr | length > 0
+        fail_msg: >-
+          AgentlessNet requires a VirtualNetwork UID, tenant annotation, and IPv4 CIDR.
+      no_log: true
+
+    - name: Reconcile the VirtualNetwork namespace and forwarding baseline
+      osac.templates.agentless_net_state:
+        action: ensure_virtual_network
+        state_file: "{{ agentless_net_network_state_file }}"
+        uid: "{{ agentless_net_vn_uid }}"
+        tenant_id: "{{ agentless_net_vn_tenant_id }}"
+        virtual_network_cidr: "{{ agentless_net_vn_cidr }}"
+      delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
+      become: true
+      no_log: true
+  always:
+    - name: Remove the temporary AgentlessNet SSH key file
+      ansible.builtin.include_tasks: _cleanup_network_node_inventory.yaml

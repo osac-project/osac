@@ -1,0 +1,22 @@
+---
+- name: BareMetalPool adapter translates the requested instance type
+  hosts: localhost
+  gather_facts: false
+  vars:
+    cluster_infra_node_requests:
+      - numberOfNodes: 2
+        bareMetal:
+          instanceType: bm.large
+      - numberOfNodes: 1
+        bareMetal:
+          instanceType: bm.small
+  tasks:
+    - name: Build BareMetalPool host sets
+      ansible.builtin.include_role:
+        name: osac.steps.cluster_infra
+        tasks_from: build_host_sets.yaml
+
+    - name: Verify pool contract translates only at its boundary
+      ansible.builtin.assert:
+        that:
+          - "baremetalpool_host_sets == [{'hostType': 'bm.large', 'replicas': 2}, {'hostType': 'bm.small', 'replicas': 1}]"

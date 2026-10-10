@@ -86,6 +86,12 @@ func Cmd() *cobra.Command {
 		RunE:                  runner.run,
 	}
 	flags := command.Flags()
+	flags.BoolVar(
+		&runner.args.sync,
+		"sync",
+		true,
+		syncFlagHelp,
+	)
 	flags.StringArrayVar(
 		&runner.args.caFiles,
 		"ca-file",
@@ -178,6 +184,7 @@ type runnerContext struct {
 	logger *slog.Logger
 	flags  *pflag.FlagSet
 	args   struct {
+		sync                 bool
 		caFiles              []string
 		authIssuerUrl        string
 		authIssuerUrlFile    string
@@ -445,6 +452,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create cluster reconciler function: %w", err)
 	}
 	clusterReconciler, err := controllers.NewReconciler[*privatev1.Cluster]().
+		SetSync(r.args.sync).
 		SetLogger(r.logger).
 		SetName("cluster").
 		SetClient(r.client).
@@ -482,8 +490,9 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create compute instance reconciler function: %w", err)
 	}
 	computeInstanceReconciler, err := controllers.NewReconciler[*privatev1.ComputeInstance]().
+		SetSync(r.args.sync).
 		SetLogger(r.logger).
-		SetName("compute_instance").
+		SetName("compute-instance").
 		SetClient(r.client).
 		SetFunction(computeInstanceReconcilerFunction).
 		SetEventFilter("has(event.compute_instance) || (has(event.hub) && event.type == EVENT_TYPE_OBJECT_CREATED)").
@@ -519,8 +528,9 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create bare metal instance reconciler function: %w", err)
 	}
 	bareMetalInstanceReconciler, err := controllers.NewReconciler[*privatev1.BareMetalInstance]().
+		SetSync(r.args.sync).
 		SetLogger(r.logger).
-		SetName("bare_metal_instance").
+		SetName("bare-metal-instance").
 		SetClient(r.client).
 		SetFunction(bareMetalInstanceReconcilerFunction).
 		SetEventFilter("has(event.bare_metal_instance) || (has(event.hub) && event.type == EVENT_TYPE_OBJECT_CREATED)").
@@ -556,10 +566,12 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create NetworkClass reconciler function: %w", err)
 	}
 	networkClassReconciler, err := controllers.NewReconciler[*privatev1.NetworkClass]().
+		SetSync(r.args.sync).
 		SetLogger(r.logger).
-		SetName("network_class").
+		SetName("network-class").
 		SetClient(r.client).
 		SetFunction(networkClassReconcilerFunction).
+		SetSyncInterval(10 * time.Second).
 		SetEventFilter("has(event.network_class) || has(event.hub)").
 		SetHealthReporter(healthAggregator).
 		Build()
@@ -593,6 +605,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create subnet reconciler function: %w", err)
 	}
 	subnetReconciler, err := controllers.NewReconciler[*privatev1.Subnet]().
+		SetSync(r.args.sync).
 		SetLogger(r.logger).
 		SetName("subnet").
 		SetClient(r.client).
@@ -630,8 +643,9 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create virtual network reconciler function: %w", err)
 	}
 	virtualNetworkReconciler, err := controllers.NewReconciler[*privatev1.VirtualNetwork]().
+		SetSync(r.args.sync).
 		SetLogger(r.logger).
-		SetName("virtual_network").
+		SetName("virtual-network").
 		SetClient(r.client).
 		SetFunction(virtualNetworkReconcilerFunction).
 		SetEventFilter("has(event.virtual_network) || has(event.network_class) || has(event.hub)").
@@ -667,8 +681,9 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create security group reconciler function: %w", err)
 	}
 	securityGroupReconciler, err := controllers.NewReconciler[*privatev1.SecurityGroup]().
+		SetSync(r.args.sync).
 		SetLogger(r.logger).
-		SetName("security_group").
+		SetName("security-group").
 		SetClient(r.client).
 		SetFunction(securityGroupReconcilerFunction).
 		SetEventFilter("has(event.security_group) || (has(event.hub) && event.type == EVENT_TYPE_OBJECT_CREATED) || (has(event.virtual_network) && event.type == EVENT_TYPE_OBJECT_UPDATED)").
@@ -704,8 +719,9 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create external IP pool reconciler function: %w", err)
 	}
 	externalIPPoolReconciler, err := controllers.NewReconciler[*privatev1.ExternalIPPool]().
+		SetSync(r.args.sync).
 		SetLogger(r.logger).
-		SetName("external_ip_pool").
+		SetName("external-ip-pool").
 		SetClient(r.client).
 		SetFunction(externalIPPoolReconcilerFunction).
 		SetEventFilter("has(event.external_ip_pool) || (has(event.hub) && event.type == EVENT_TYPE_OBJECT_CREATED)").
@@ -741,8 +757,9 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create external IP reconciler function: %w", err)
 	}
 	externalIPReconciler, err := controllers.NewReconciler[*privatev1.ExternalIP]().
+		SetSync(r.args.sync).
 		SetLogger(r.logger).
-		SetName("external_ip").
+		SetName("external-ip").
 		SetClient(r.client).
 		SetFunction(externalIPReconcilerFunction).
 		SetEventFilter("has(event.external_ip) || (has(event.hub) && event.type == EVENT_TYPE_OBJECT_CREATED)").
@@ -778,8 +795,9 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create external IP attachment reconciler function: %w", err)
 	}
 	externalIPAttachmentReconciler, err := controllers.NewReconciler[*privatev1.ExternalIPAttachment]().
+		SetSync(r.args.sync).
 		SetLogger(r.logger).
-		SetName("external_ip_attachment").
+		SetName("external-ip-attachment").
 		SetClient(r.client).
 		SetFunction(externalIPAttachmentReconcilerFunction).
 		SetEventFilter("has(event.external_ip_attachment) || (has(event.hub) && event.type == EVENT_TYPE_OBJECT_CREATED)").
@@ -815,8 +833,9 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create NAT gateway reconciler function: %w", err)
 	}
 	natGatewayReconciler, err := controllers.NewReconciler[*privatev1.NATGateway]().
+		SetSync(r.args.sync).
 		SetLogger(r.logger).
-		SetName("nat_gateway").
+		SetName("nat-gateway").
 		SetClient(r.client).
 		SetFunction(natGatewayReconcilerFunction).
 		SetEventFilter("has(event.nat_gateway) || (has(event.hub) && event.type == EVENT_TYPE_OBJECT_CREATED) || (has(event.virtual_network) && event.type == EVENT_TYPE_OBJECT_UPDATED)").
@@ -852,6 +871,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create volume reconciler function: %w", err)
 	}
 	volumeReconciler, err := controllers.NewReconciler[*privatev1.Volume]().
+		SetSync(r.args.sync).
 		SetLogger(r.logger).
 		SetName("volume").
 		SetClient(r.client).
@@ -888,6 +908,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create role reconciler function: %w", err)
 	}
 	roleReconciler, err := controllers.NewReconciler[*privatev1.Role]().
+		SetSync(r.args.sync).
 		SetLogger(r.logger).
 		SetName("role").
 		SetClient(r.client).
@@ -925,8 +946,9 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create role binding reconciler function: %w", err)
 	}
 	roleBindingReconciler, err := controllers.NewReconciler[*privatev1.RoleBinding]().
+		SetSync(r.args.sync).
 		SetLogger(r.logger).
-		SetName("role_binding").
+		SetName("role-binding").
 		SetClient(r.client).
 		SetFunction(roleBindingReconcilerFunction.Run).
 		SetEventFilter("has(event.role_binding)").
@@ -954,6 +976,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	// Create the tenant reconciler:
 	r.logger.InfoContext(ctx, "Creating tenant reconciler")
 	tenantReconcilerFunction, err := tenant.NewFunction().
+		SetHubCache(hubCache).
 		SetLogger(r.logger).
 		SetConnection(r.client).
 		SetIdpManager(idpManager).
@@ -978,6 +1001,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		)
 	}
 	tenantReconciler, err := controllers.NewReconciler[*privatev1.Tenant]().
+		SetSync(r.args.sync).
 		SetLogger(r.logger).
 		SetName("tenant").
 		SetClient(r.client).
@@ -1015,6 +1039,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create user reconciler function: %w", err)
 	}
 	userReconciler, err := controllers.NewReconciler[*privatev1.User]().
+		SetSync(r.args.sync).
 		SetLogger(r.logger).
 		SetName("user").
 		SetClient(r.client).
@@ -1052,6 +1077,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create onboarding reconciler function: %w", err)
 	}
 	onboardingReconciler, err := controllers.NewReconciler[*privatev1.Tenant]().
+		SetSync(r.args.sync).
 		SetLogger(r.logger).
 		SetName("onboarding").
 		SetClient(r.client).
@@ -1090,6 +1116,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create project reconciler function: %w", err)
 	}
 	projectReconciler, err := controllers.NewReconciler[*privatev1.Project]().
+		SetSync(r.args.sync).
 		SetLogger(r.logger).
 		SetName("project").
 		SetClient(r.client).
@@ -1127,8 +1154,9 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to build project membership reconciler function: %w", err)
 	}
 	projectMembershipReconciler, err := controllers.NewReconciler[*privatev1.ProjectMembership]().
+		SetSync(r.args.sync).
 		SetLogger(r.logger).
-		SetName("project_membership").
+		SetName("project-membership").
 		SetClient(r.client).
 		SetFunction(projectMembershipReconcilerFunction.Run).
 		SetEventFilter("has(event.project_membership)").
@@ -1164,8 +1192,9 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create identity provider reconciler function: %w", err)
 	}
 	identityProviderReconciler, err := controllers.NewReconciler[*privatev1.IdentityProvider]().
+		SetSync(r.args.sync).
 		SetLogger(r.logger).
-		SetName("identity_provider").
+		SetName("identity-provider").
 		SetClient(r.client).
 		SetFunction(identityProviderReconcilerFunction.Run).
 		SetEventFilter("has(event.identity_provider)").
@@ -1447,6 +1476,11 @@ const shortHelp = `Starts the controller`
 
 const longHelp = `
 Starts the controller.
+`
+
+const syncFlagHelp = `
+Enable startup, periodic and watch-restart synchronization for all controllers. Defaults to true.
+Event-driven reconciliation, including reconciliation of dependent objects, remains enabled when false.
 `
 
 const caFileFlagHelp = `

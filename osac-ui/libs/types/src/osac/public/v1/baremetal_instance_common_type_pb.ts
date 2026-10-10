@@ -53,7 +53,7 @@ export type BareMetalNetworkAttachment = Message<"osac.public.v1.BareMetalNetwor
   securityGroups: SecurityGroupLocalReference[];
 
   /**
-   * Physical interface name from the HostType's NetworkInterface list.
+   * Physical interface name from the BareMetalInstanceType's network ports.
    * When omitted on a single-attachment instance, the system selects the first fabric-role interface.
    *
    * @generated from field: optional string interface = 3;

@@ -268,7 +268,24 @@
             _cluster_pod_with_ca.spec.containers[0].volumeMounts
             | selectattr('name', 'equalto', 'netris-ca-bundle')
             | selectattr('mountPath', 'equalto', '/etc/netris/ca/bundle.pem')
+            | selectattr('readOnly', 'equalto', true)
             | list | length == 1
+          - >-
+            (_cluster_pod_with_ca.spec.volumes
+             | selectattr('name', 'equalto', 'netris-ca-bundle')
+             | list | first).configMap.name == 'customer-netris-ca'
+          - >-
+            (_cluster_pod_with_ca.spec.volumes
+             | selectattr('name', 'equalto', 'netris-ca-bundle')
+             | list | first).configMap['items'][0].key == 'bundle.pem'
+          - >-
+            (_cluster_pod_with_ca.spec.volumes
+             | selectattr('name', 'equalto', 'netris-ca-bundle')
+             | list | first).configMap['items'][0].path == 'bundle.pem'
+          - >-
+            (_cluster_pod_with_ca.spec.volumes
+             | selectattr('name', 'equalto', 'netris-ca-bundle')
+             | list | first).configMap.optional == false
           - >-
             _cluster_pod_with_ca.spec.containers[0].env
             | selectattr('name', 'equalto', 'NETRIS_VALIDATE_CERTS')

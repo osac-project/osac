@@ -1,6 +1,6 @@
 module github.com/osac/proxy
 
-go 1.25.5
+go 1.26.0
 
 require (
 	connectrpc.com/vanguard v0.4.0

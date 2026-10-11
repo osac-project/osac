@@ -77,7 +77,7 @@ def catalog_item(
         fields={
             "ssh_public_key": {"editable": {}},
             "disk_image": {"editable": {"default_value": {"name": bmi_disk_image}}},
-            "instance_type": {"editable": {"default_value": {"name": bmi_instance_type, "shared": True}}},
+            "instance_type": {"editable": {"default_value": {"name": bmi_instance_type}}},
         },
     )
     print(f"CatalogItem created: {item_id}")

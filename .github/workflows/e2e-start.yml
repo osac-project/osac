@@ -1,0 +1,115 @@
+---
+# Starts the full-install E2E for a pull request once it is allowed to: a person with write access or CodeRabbit has
+# approved the exact head commit, the cheap checks passed on it, and the change affects an E2E suite. Every finished
+# cheap workflow and every review re-asks the question; the answer ("start", or what the pull request is still waiting
+# for) is in the job summary of the decide job. The decision lives in osac-project/osac-ci (docs: its README, "Deciding
+# when the E2E starts"); the pin below changes it only through a reviewed change here.
+#
+# "Start" replays the pull_request run of each E2E workflow at that commit (osac-test-infra's e2e-on-label.yml, called
+# with decided: true). The replay re-evaluates the e2e-readiness job of that run, which asks osac-ci the same question.
+# It starts nothing twice: a suite that is running or already green is left alone. A push after the approval drops the
+# approval (the repository dismisses stale approvals), and a commit other than the one decided on is never replayed.
+#
+# workflow_run runs the workflow file from the default branch with the base repository's token, so a fork pull request
+# is handled like any other, and nothing here checks out or runs pull request code. It takes exact workflow names, no
+# wildcards: list the workflows whose result the decision reads (the cheap checks) plus the review relay
+# (e2e-start-review.yml). A workflow that is missing only delays the answer until the next one finishes.
+name: E2E start
+on:  # zizmor: ignore[dangerous-triggers] -- no pull request code is checked out or run
+  workflow_run:
+    workflows:
+      - "Ansible Lint"
+      - "Build bare-metal-fulfillment-operator image"
+      - "Build container image"
+      - "Check generated code"
+      - "Check pull request"
+      - "Darwin Keychain Tests"
+      - "Dependency Review"
+      - "E2E start review"
+      - "Helm Lint"
+      - "Integration Tests"
+      - "pre-commit"
+      - "Unit Tests"
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      number:
+        description: Pull request number
+        required: true
+
+permissions:
+  contents: read
+
+# One answer at a time per head commit (or per pull request when started by hand). GitHub keeps one waiting run per
+# group, so a burst of finished workflows costs one extra evaluation, not one each.
+concurrency:
+  group: e2e-start-decision-${{ github.event.workflow_run.head_sha || inputs.number }}
+  cancel-in-progress: false
+
+jobs:
+  decide:
+    # A finished run only matters when it belongs to a pull request (not to a push to main, a merge queue or a schedule).
+    if: >-
+      github.repository == 'osac-project/osac' &&
+      (github.event_name != 'workflow_run' ||
+       github.event.workflow_run.event == 'pull_request' ||
+       github.event.workflow_run.event == 'pull_request_target' ||
+       github.event.workflow_run.event == 'pull_request_review')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read  # the action is fetched from osac-ci by the runner; nothing of this repository is checked out
+      pull-requests: read  # read the pull request, its reviews and files
+      checks: read  # read the check runs of the head commit
+    outputs:
+      ready: ${{ steps.decide.outputs.ready }}
+      number: ${{ steps.decide.outputs.number }}
+      head-sha: ${{ steps.head.outputs.sha }}
+    steps:
+      - uses: osac-project/osac-ci/.github/actions/e2e-decide@9c62a9db9c6a57babc0e2986a802c360f05a5059  # osac-ci main
+        id: decide
+        with:
+          github-token: ${{ github.token }}
+          repo: ${{ github.repository }}
+          policy: policy/osac.yml
+          number: ${{ inputs.number }}
+          head-sha: ${{ github.event.workflow_run.head_sha }}
+      # The commit the decision was made for, read from the decision itself (for a run started by hand there is no event
+      # commit). Only a "start" answer carries one, and the start job replays exactly this commit.
+      - name: Take the commit of the decision
+        id: head
+        if: steps.decide.outputs.ready == 'true'
+        env:
+          DECISION: ${{ steps.decide.outputs.json-file }}
+        run: |
+          set -euo pipefail
+          sha=$(jq -r '.[0].head_sha' "$DECISION")
+          case "$sha" in
+            *[!0-9a-f]* | "") echo "::error::The decision has no valid head commit."; exit 1 ;;
+          esac
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Keep the decision
+        if: steps.decide.outputs.json-file != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: e2e-decision-${{ github.run_id }}
+          path: ${{ steps.decide.outputs.json-file }}
+          retention-days: 14
+          if-no-files-found: ignore
+
+  start:
+    needs: decide
+    # The string "false" is truthy in an expression: compare with 'true'.
+    if: needs.decide.outputs.ready == 'true'
+    permissions:
+      actions: write
+      checks: write
+      contents: read
+      issues: read
+      pull-requests: write
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-on-label.yml@main
+    with:
+      pr_number: ${{ needs.decide.outputs.number }}
+      event_head_sha: ${{ needs.decide.outputs.head-sha }}
+      decided: true
+      workflows: e2e-vmaas-full-install.yml,e2e-bmaas-full-install.yml,e2e-caas-full-install.yml

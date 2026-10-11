@@ -1,0 +1,23 @@
+---
+# Asks e2e-start.yml to look at a pull request again as soon as a review is submitted or dismissed.
+#
+# A review on a pull request from a fork cannot start anything with a token that can write: its token is read-only and
+# the workflow file is the pull request's own. So this workflow does nothing at all. It only has to finish. When it does,
+# e2e-start.yml runs from the default branch with the base repository's token (its workflow_run trigger lists this
+# workflow by name), finds the pull request by the exact head commit this run reports, and decides from live state. Keep
+# the name below in step with that list.
+#
+# No secret, no permission and no checkout: nothing here can leak or run pull request code.
+name: E2E start review
+on:
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions: {}
+
+jobs:
+  relay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - run: echo "A review changed this pull request; e2e-start decides again when this run completes."

@@ -7,6 +7,8 @@ global:
     k8sManager: ""
     netris:
       controllerUrl: "https://test-ctl.netris.io"
+      # CI uses a test endpoint with a certificate that is not trusted by the runner.
+      validateCerts: false
       credentials:
         username: "testuser"
         externalSecret: true

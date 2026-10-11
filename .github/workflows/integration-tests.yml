@@ -122,7 +122,7 @@ jobs:
       group: integration-fulfillment-service-${{ needs.changes.outputs.concurrency-key }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 75  # ginkgo --timeout 1h (Makefile) + ~15m for install/setup/log-collection
+    timeout-minutes: 90  # ginkgo --timeout 1h15m (Makefile) + ~15m for install/setup/log-collection
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       with:

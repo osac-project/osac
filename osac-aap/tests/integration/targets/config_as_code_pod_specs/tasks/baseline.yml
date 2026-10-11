@@ -237,9 +237,14 @@
             | selectattr('name', 'equalto', 'NETRIS_CA_PATH')
             | selectattr('value', 'equalto', '/etc/netris/ca/bundle.pem')
             | list | length == 1
+          - >-
+            _networking_pod_with_ca.spec.containers[0].env
+            | selectattr('name', 'equalto', 'NETRIS_VALIDATE_CERTS')
+            | selectattr('value', 'equalto', 'true')
+            | list | length == 1
         fail_msg: >-
           Networking jobs with a Netris CA must mount bundle.pem read-only and
-          export NETRIS_CA_PATH.
+          export NETRIS_CA_PATH while keeping certificate validation enabled.
 
 - name: Cluster fulfillment pod spec with a Netris CA
   hosts: localhost
@@ -247,7 +252,7 @@
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
     netris_ca_config_map_name: customer-netris-ca
-    netris_validate_certs: false
+    netris_validate_certs: true
     netris_ca_path: /etc/netris/ca/bundle.pem
     _template_path: >-
       {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/templates/cluster-fulfillment-ig.j2
@@ -289,7 +294,7 @@
           - >-
             _cluster_pod_with_ca.spec.containers[0].env
             | selectattr('name', 'equalto', 'NETRIS_VALIDATE_CERTS')
-            | selectattr('value', 'equalto', 'false')
+            | selectattr('value', 'equalto', 'true')
             | list | length == 1
           - >-
             _cluster_pod_with_ca.spec.containers[0].env
@@ -299,3 +304,32 @@
         fail_msg: >-
           Cluster fulfillment must receive the same Netris CA and validation
           settings as networking operations.
+
+- name: Netris container-group template inventory contract
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _controller_vars_path: >-
+      {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/vars/controller.yml
+
+  tasks:
+    - name: Load canonical AAP instance-group definitions
+      ansible.builtin.set_fact:
+        _controller_vars: "{{ lookup('ansible.builtin.file', _controller_vars_path) | from_yaml }}"
+
+    - name: Assert every Netris container-group template is covered
+      ansible.builtin.assert:
+        that:
+          - >-
+            _controller_vars.controller_instance_groups
+            | selectattr('pod_spec_override', 'defined')
+            | selectattr('pod_spec_override', 'search', 'cluster-fulfillment-ig.j2')
+            | list | length == 1
+          - >-
+            _controller_vars.controller_instance_groups
+            | selectattr('pod_spec_override', 'defined')
+            | selectattr('pod_spec_override', 'search', 'networking-operations-ig.j2')
+            | list | length == 1
+        fail_msg: >-
+          Every Netris-backed container-group pod-spec template must have a
+          corresponding CA and TLS contract test.

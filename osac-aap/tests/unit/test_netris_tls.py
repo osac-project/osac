@@ -7,21 +7,32 @@ import yaml
 NETRIS_COLLECTION = Path(__file__).parents[2] / "collections" / "ansible_collections" / "netris"
 
 
-def _uri_task_blocks():
+def _uri_tasks():
     for task_file in NETRIS_COLLECTION.rglob("*.yaml"):
-        contents = task_file.read_text()
-        for block in contents.split("ansible.builtin.uri:")[1:]:
-            yield task_file, block.split("\n- name:", 1)[0]
+        for document in yaml.safe_load_all(task_file.read_text()):
+            yield from _find_uri_tasks(document, task_file)
+
+
+def _find_uri_tasks(value, task_file):
+    if isinstance(value, dict):
+        if "ansible.builtin.uri" in value:
+            yield task_file, value.get("name", "<unnamed>"), value["ansible.builtin.uri"]
+        for child in value.values():
+            yield from _find_uri_tasks(child, task_file)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _find_uri_tasks(child, task_file)
 
 
 def test_every_netris_uri_call_accepts_the_shared_ca_path():
-    uri_tasks = list(_uri_task_blocks())
+    uri_tasks = list(_uri_tasks())
 
     assert uri_tasks, "expected Netris collection URI tasks"
     missing_ca_path = [
-        str(task_file)
-        for task_file, task in uri_tasks
-        if "ca_path: \"{{ netris_ca_path | default(omit, true) }}\"" not in task
+        f"{task_file}:{task_name}"
+        for task_file, task_name, task in uri_tasks
+        if not isinstance(task, dict)
+        or task.get("ca_path") != "{{ netris_ca_path | default(omit, true) }}"
     ]
 
     assert not missing_ca_path, f"Netris URI tasks missing ca_path: {missing_ca_path}"
@@ -125,3 +136,4 @@ def test_auth_request_consumes_resolved_tls_settings():
     uri = auth_task["ansible.builtin.uri"]
 
     assert uri["validate_certs"] == "{{ netris_validate_certs | default(true) }}"
+    assert uri["ca_path"] == "{{ netris_ca_path | default(omit, true) }}"

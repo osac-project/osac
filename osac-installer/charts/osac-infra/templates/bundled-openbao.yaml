@@ -30,9 +30,12 @@ data:
   config.hcl: |
     ui = false
     disable_mlock = true
+    api_addr = "https://openbao.{{ .Release.Namespace }}.svc.cluster.local:8200"
+    cluster_addr = "https://127.0.0.1:8201"
 
-    storage "file" {
-      path = "/vault/data/storage"
+    storage "raft" {
+      path = "/vault/data"
+      node_id = "openbao"
     }
 
     listener "tcp" {

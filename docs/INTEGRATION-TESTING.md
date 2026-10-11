@@ -163,6 +163,23 @@ the certificate. The Kind
 `SUITE=fulfillment` target exercises deployed startup and API behavior, subject
 to the profile's configured CA and enabled services.
 
+### CSI storage lifecycle boundary
+
+The installer no longer statically deploys the OSAC CSI meta-driver. This
+configuration change does not add storage-boundary coverage. The Helm render
+and Kind fulfillment checks do not exercise a real storage backend. Real-backend
+component integration beyond fake-vendor sanity is tracked by
+[OSAC-4845](https://redhat.atlassian.net/browse/OSAC-4845). The full hub and
+cross-cluster PVC create, mount, I/O, and delete E2E flow is tracked separately
+by [OSAC-3285](https://redhat.atlassian.net/browse/OSAC-3285).
+
+OSAC-6218 is scoped to clean Dev Preview installs. An upgrade from an earlier
+release with the static CSI hook enabled may retain the copied hub Secret
+`osac-csi/osac-csi-driver-credentials`; add cleanup before supporting that
+upgrade path. Keep the Keycloak source credential available for AAP, while
+replacement of the shared CSI client remains tracked by
+[OSAC-4197](https://redhat.atlassian.net/browse/OSAC-4197).
+
 ### OSAC-5343 deployed enablement coverage
 
 The release E2E path adds these assertions to existing user journeys. The

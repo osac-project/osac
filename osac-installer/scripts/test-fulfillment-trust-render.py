@@ -17,7 +17,7 @@ HOOKS = {
 }
 
 
-def render(enabled: bool | None = None, *, csi: bool = False) -> list[str]:
+def render(enabled: bool | None = None) -> list[str]:
     cmd = [
         "helm",
         "template",
@@ -40,8 +40,6 @@ def render(enabled: bool | None = None, *, csi: bool = False) -> list[str]:
     ]
     if enabled is not None:
         cmd.extend(("--set", f"global.fulfillmentTrust.enabled={str(enabled).lower()}"))
-    if csi:
-        cmd.extend(("--set", "csiDriver.enabled=true"))
     manifest = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
     return [doc for doc in manifest.split("\n---\n") if doc.strip()]
 
@@ -105,17 +103,17 @@ def check(enabled: bool) -> None:
 
 
 def check_production_default() -> None:
-    docs = render(csi=True)
+    docs = render(True)
     operator = select(docs, "osac/charts/operator/templates/deployment.yaml")
     controller = select(docs, "osac/charts/service/templates/controller/deployment.yaml")
-    node = select(docs, "osac/charts/csiDriver/templates/node-daemonset.yaml")
+    fulfillment_config = select(docs, "osac/templates/fulfillment-runtime-config.yaml")
     assert "--grpc-insecure" not in operator
     assert "--fulfillment-ca-file=/etc/ca-bundle/bundle.pem" in operator
     assert "--fulfillment-trust-enabled" not in controller
-    assert "--fulfillment-ca-file=/etc/osac-csi/fulfillment-ca/bundle.pem" in node
-    assert "name: ca-bundle" in node
-    assert "--grpc-insecure" not in node
-    assert "--allow-stub" not in node
+    assert "kind: ConfigMap" in fulfillment_config
+    assert "name: osac-fulfillment-config" in fulfillment_config
+    assert "OSAC_FULFILLMENT_ENDPOINT:" in fulfillment_config
+    assert "OSAC_FULFILLMENT_ISSUER_URL:" in fulfillment_config
     for name in HOOKS:
         source = f"osac/templates/hooks/{name}.yaml"
         if name == "fulfillment-create-hub":
@@ -128,11 +126,12 @@ def check_production_default() -> None:
 
 
 def check_trust_gate(enabled: bool) -> None:
-    docs = render(enabled, csi=True)
+    docs = render(enabled)
     controller = select(docs, "osac/charts/service/templates/controller/deployment.yaml")
     operator = select(docs, "osac/charts/operator/templates/deployment.yaml")
+    select(docs, "osac/templates/fulfillment-runtime-config.yaml")
     assert "--fulfillment-trust-enabled" not in controller
-    assert ("--metrics-bind-address=:8443" in operator) is enabled
+    assert "--metrics-bind-address=:8443" in operator
     metrics_reader_binding = "kind: ClusterRoleBinding\nmetadata:\n  name: osac-operator-metrics-reader\n"
     assert (metrics_reader_binding in "\n".join(docs)) is enabled
     assert re.search(
@@ -142,10 +141,15 @@ def check_trust_gate(enabled: bool) -> None:
     assert "--grpc-insecure" not in operator
 
 
-def check_infra_ca_bundle_targets_csi() -> None:
+def check_infra_ca_bundle_targets() -> None:
     script = (CHART.parents[1] / "charts/osac-infra/files/hooks/apply-ca-bundle.sh").read_text(encoding="utf-8")
-    assert '- "${CSI_NAMESPACE}"' in script
-    assert "CSI_DRIVER_ENABLED" not in script
+    template = (CHART.parents[1] / "charts/osac-infra/templates/hooks/apply-ca-bundle.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert '- "${RELEASE_NAMESPACE}"' in script
+    assert '- "${OSAC_NAMESPACE}"' in script
+    assert "CSI_NAMESPACE" not in script
+    assert "CSI_NAMESPACE" not in template
 
 
 if __name__ == "__main__":
@@ -154,5 +158,5 @@ if __name__ == "__main__":
     check_production_default()
     check_trust_gate(False)
     check_trust_gate(True)
-    check_infra_ca_bundle_targets_csi()
+    check_infra_ca_bundle_targets()
     print("Fulfillment trust production render checks passed.")

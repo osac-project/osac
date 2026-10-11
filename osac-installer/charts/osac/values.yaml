@@ -15,8 +15,9 @@ global:
   # OpenShift cluster. Leave empty for platforms (e.g. kind) that set these
   # three values explicitly instead.
   clusterDomain: ""
-  # Resolved external fulfillment endpoint used by tenant-cluster CSI jobs.
-  # Leave empty to derive <service.externalHostname>:443 for OpenShift.
+  # Resolved external fulfillment endpoint shared with operator trust sync and
+  # tenant-cluster CSI provisioning. Leave empty to derive
+  # <service.externalHostname>:443 for OpenShift.
   fulfillment:
     endpoint: ""
   fulfillmentTrust:
@@ -325,10 +326,6 @@ aap:
       enabled: false
       config:
         STORAGE_SNAPSHOTS_ENABLED: ""
-      secret:
-        VAST_ENDPOINT: ""
-        VAST_USERNAME: ""
-        VAST_PASSWORD: ""
     publishTemplates:
       enabled: true
       config:
@@ -366,35 +363,6 @@ metering:
     repository: ghcr.io/osac-project/metering-service
     tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
     pullPolicy: Always
-
-# --- CSI Driver ---
-csiDriver:
-  enabled: false
-  # The shared hub CSI deployment runs in its own namespace. Tenant
-  # installations use their Helm release namespace instead.
-  namespace: osac-csi
-  controller:
-    fulfillment:
-      # Shared hub CSI credentials. Tenant-cluster credentials are a separate
-      # AAP/OSAC-4197 concern and are not created by this chart.
-      configMap:
-        name: osac-csi-fulfillment-config
-        endpointKey: OSAC_FULFILLMENT_ENDPOINT
-        issuerUrlKey: OSAC_FULFILLMENT_ISSUER_URL
-      credentials:
-        secretName: osac-csi-driver-credentials
-      tls:
-        caBundle:
-          configMap: ca-bundle
-          key: bundle.pem
-      allowStub: false
-  image:
-    repository: ghcr.io/osac-project/osac-csi-driver
-    tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
-    pullPolicy: Always
-
-# --- CSI Backends ---
-csiBackends: {}
 
 # --- Bare Metal Fulfillment Operator CRDs ---
 bmfCrds: {}

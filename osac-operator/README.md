@@ -109,17 +109,14 @@ Networking controllers derive template names from the prefix:
 - `OSAC_FULFILLMENT_ISSUER_URL` — OAuth issuer URL passed to tenant-cluster CSI
   provisioning.
 
-When the umbrella chart enables both the operator and CSI driver, it renders
-`osac-fulfillment-config` from the resolved Helm values and projects these two
-keys into the operator environment. This ConfigMap is the runtime bridge from
-Helm configuration to the operator process. It contains no credentials; the
-CSI client ID and secret remain in the separate hub credential Secret. The
-umbrella chart also copies the non-secret values into the hub CSI namespace so
-the CSI controller can consume them directly. The CSI namespace copy is
-immutable because it controls where the CSI controller sends its client
-credentials; changing it requires deliberate replacement and a rollout. Tenant
-cluster credentials are managed separately by the AAP storage-provider
-workflow.
+When the operator and Fulfillment Service are enabled, the umbrella chart
+renders `osac-fulfillment-config` from the resolved Helm values and projects
+these two keys into the operator environment. The operator passes the
+non-secret endpoint and issuer to AAP provisioning jobs that configure
+tenant-cluster CSI. This ConfigMap stays on the hub; AAP creates the CSI
+credentials Secret on the guest cluster. `global.fulfillmentTrust.enabled`
+controls trust reconciliation separately. The OSAC chart does not deploy the
+CSI meta-driver or create its hub credential Secret.
 
 ### LVMS development/CI volumes
 

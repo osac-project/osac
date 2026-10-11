@@ -180,9 +180,6 @@ make -C ../fulfillment-service image-build \
 make -C ../osac-operator image-build \
   IMG=ghcr.io/osac-project/osac-operator:latest \
   CONTAINER_TOOL="$CONTAINER_TOOL"
-make -C ../osac-csi-driver image-build \
-  IMG=ghcr.io/osac-project/osac-csi-driver:latest \
-  CONTAINER_TOOL="$CONTAINER_TOOL"
 "$CONTAINER_TOOL" build -t ghcr.io/osac-project/osac-ui:latest \
   -f ../osac-ui/Containerfile ../osac-ui
 

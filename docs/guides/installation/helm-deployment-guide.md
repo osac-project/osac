@@ -177,8 +177,6 @@ and `osac-infra`. Keys a chart doesn't recognize are ignored.
 | `keycloak.images.keycloak` | Keycloak image. | `keycloak:26.6.4` |
 | `keycloak.images.postgres` | Keycloak database image. | `postgresql-18-c10s` |
 | `osacNamespace` | Namespace that the `osac` platform release uses. `osac-infra` stamps cross-namespace resources with it. Set it to your namespace. | `osac` |
-| `csiNamespace` | Namespace that the CSI driver subchart expects. | `osac-csi` |
-| `csiReleaseName` | Release name that the CSI driver subchart expects. | `osac` |
 | `bundledPostgres.enabled` | Deploys bundled PostgreSQL for development and CI. It is not intended for production. | `false` |
 | `bundledPostgres.database.name` | Bundled database name. | `service` |
 | `bundledPostgres.database.user` | Bundled database owner. | `service` |

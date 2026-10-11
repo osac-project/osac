@@ -465,7 +465,6 @@ jobs:
         AAP_VER=$(jq -r '.["osac-aap"] // empty' <<<"${COMPONENT_VERSIONS}")
         BMF_VER=$(jq -r '.["bare-metal-fulfillment-operator"] // empty' <<<"${COMPONENT_VERSIONS}")
         METERING_VER=$(jq -r '.["osac-metering"] // empty' <<<"${COMPONENT_VERSIONS}")
-        CSI_VER=$(jq -r '.["osac-csi-driver"] // empty' <<<"${COMPONENT_VERSIONS}")
         UI_VER=$(jq -r '.["osac-ui"] // empty' <<<"${COMPONENT_VERSIONS}")
 
         for overlay in "${NIGHTLY_CI_OVERLAY_VALUES[@]}"; do
@@ -507,14 +506,6 @@ jobs:
             stamp_ci_overlay_if_present "${overlay}" '.metering.image.tag' "${METERING_TAG}"
             stamp_ci_overlay_if_present "${overlay}" '.metering.echoAdapter.image.tag' "${METERING_TAG}"
             stamp_ci_overlay_if_present "${overlay}" '.metering.m360Adapter.image.tag' "${METERING_TAG}"
-          fi
-          if [[ -n "${CSI_VER}" ]]; then
-            NB=$(needs_build_for osac-csi-driver)
-            if [[ "${NB}" == "true" ]]; then
-              stamp_ci_overlay_if_present "${overlay}" '.csiDriver.image.tag' "${PROVISIONAL_TAG}"
-            else
-              stamp_ci_overlay_if_present "${overlay}" '.csiDriver.image.tag' "${CSI_VER}"
-            fi
           fi
           if [[ -n "${UI_VER}" ]]; then
             NB=$(needs_build_for osac-ui)

@@ -522,8 +522,8 @@ var _ = Describe("Bare Metal Instance Catalog Item policy application", func() {
 				Id: "template-type",
 			}.Build(),
 		}.Build()
-		policy := privatev1.BareMetalInstanceTypeReferenceFieldPolicy_builder{
-			Editable: privatev1.EditableBareMetalInstanceTypeReferenceField_builder{}.Build(),
+		policy := privatev1.BareMetalInstanceTypeLocalReferenceFieldPolicy_builder{
+			Editable: privatev1.EditableBareMetalInstanceTypeLocalReferenceField_builder{}.Build(),
 		}.Build()
 
 		ref, source, err := effectiveBareMetalInstanceTypeReference(template, policy)

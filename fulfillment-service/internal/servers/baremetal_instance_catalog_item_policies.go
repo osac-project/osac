@@ -180,7 +180,7 @@ func validateBareMetalInstanceCatalogItemNetworkPolicy(
 	scope referenceScope,
 	policy *privatev1.BareMetalNetworkAttachmentListFieldPolicy,
 	template *privatev1.BareMetalInstanceTemplate,
-	instanceTypePolicy *privatev1.BareMetalInstanceTypeReferenceFieldPolicy,
+	instanceTypePolicy *privatev1.BareMetalInstanceTypeLocalReferenceFieldPolicy,
 	instanceTypesDao *dao.GenericDAO[*privatev1.BareMetalInstanceType],
 	subnetsDao *dao.GenericDAO[*privatev1.Subnet],
 	virtualNetworksDao *dao.GenericDAO[*privatev1.VirtualNetwork],
@@ -271,7 +271,7 @@ func validateBareMetalInstanceCatalogItemNetworkPolicy(
 // editable policy without a default defers type selection to BMI creation.
 func effectiveBareMetalInstanceTypeReference(
 	template *privatev1.BareMetalInstanceTemplate,
-	policy *privatev1.BareMetalInstanceTypeReferenceFieldPolicy,
+	policy *privatev1.BareMetalInstanceTypeLocalReferenceFieldPolicy,
 ) (*privatev1.BareMetalInstanceTypeReference, string, error) {
 	instanceTypeRef := template.GetInstanceType()
 	instanceTypeSource := " in template.instance_type"
@@ -279,7 +279,7 @@ func effectiveBareMetalInstanceTypeReference(
 		return instanceTypeRef, instanceTypeSource, nil
 	}
 
-	state, err := decodeBareMetalInstanceTypeReferencePolicy(policy)
+	state, err := decodeBareMetalInstanceTypeLocalReferenceAsSpecPolicy(policy)
 	if err != nil {
 		return nil, "", err
 	}

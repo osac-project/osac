@@ -26,8 +26,6 @@ import (
 
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
-	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -490,9 +488,9 @@ var _ = Describe("Private bare metal instances server", func() {
 					Title:    "Catalog with instance type default",
 					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: templateID}.Build(),
 					Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{
-						InstanceType: privatev1.BareMetalInstanceTypeReferenceFieldPolicy_builder{
-							Editable: privatev1.EditableBareMetalInstanceTypeReferenceField_builder{
-								DefaultValue: bareMetalInstanceTypeReference("default-type"),
+						InstanceType: privatev1.BareMetalInstanceTypeLocalReferenceFieldPolicy_builder{
+							Editable: privatev1.EditableBareMetalInstanceTypeLocalReferenceField_builder{
+								DefaultValue: privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "default-type", Name: "default-type"}.Build(),
 							}.Build(),
 						}.Build(),
 					}.Build(),
@@ -1090,8 +1088,8 @@ var _ = Describe("Private bare metal instances server", func() {
 						Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "test-template"}.Build(),
 						Published: true,
 						Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{
-							InstanceType: privatev1.BareMetalInstanceTypeReferenceFieldPolicy_builder{
-								Locked: bareMetalInstanceTypeReference("default-type"),
+							InstanceType: privatev1.BareMetalInstanceTypeLocalReferenceFieldPolicy_builder{
+								Locked: privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "default-type", Name: "default-type"}.Build(),
 							}.Build(),
 						}.Build(),
 					}.Build(),

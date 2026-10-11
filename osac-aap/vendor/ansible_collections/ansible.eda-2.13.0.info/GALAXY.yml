@@ -1,8 +1,43 @@
-download_url: https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/ansible-eda-2.13.0.tar.gz
+download_url: https://console.redhat.com/api/automation-hub/v3/plugin/ansible/content/published/collections/artifacts/ansible-eda-2.13.0.tar.gz
 format_version: 1.0.0
 name: eda
 namespace: ansible
-server: https://galaxy.ansible.com/api/
-signatures: []
+server: https://console.redhat.com/api/automation-hub/content/published/
+signatures:
+- pubkey_fingerprint: 39B5D759361A97464C564A8FE1A4BD708A828AAD
+  pulp_created: '2026-07-07T14:46:40.756290Z'
+  signature: '-----BEGIN PGP SIGNATURE-----
+
+
+    iQIcBAABCAAGBQJqTRFOAAoJEOGkvXCKgoqt8sgP/1scHHh6CSchxyuywYbxQ0Zf
+
+    ZfBrULFsJQLHOIp1qPPpY+srMmMSs9SoPwFgcR/G6U0G9mJmDw4ZVVUmwFsN0zge
+
+    34stjN/m80LldrFuPSNtjY0X3QB5DpFpu5UeyP8fwPr29j4Zuw0aURcX/Wnn5VRk
+
+    44g2YeIIOtWcBPNc6bBTw9s26dkwvjmYCB8wogiTfaMaHFtYQS572kc+Gq3TaBJG
+
+    E8A8e2nY9nVfJ/EB9KbbeusqUY0GbLlBRBxCiDqCWlbiTdCukWReJHECbVecUmWn
+
+    ehQoseOk9YHEWT1bUxnAxam5Z+LyueX9st04oKY50IOgBPadIh4UM3FdUpIRvtP0
+
+    LoBiRyjSTesOTe5Dkp4fUiORTGn0oGhecSlM6FwSJOBrIOFPrXaggZkny/6GK4Op
+
+    aN5pbocSZdCsu6s1lCNSYbf3nO670s4JJ4b0Fc5RSKNKMf8EYUuxfQlqZGEEX6AU
+
+    D84p5dJnI2utwUHzmT2MPec4xQ1bjiazhmHSgKctsZAV2dF5c72rhR0H9Gw4LnEO
+
+    mTi83MQg4d9J1buPryfr4F/XEqBx9w6VVTPhl014MEphlDniygZsxv9uHE3hT/O5
+
+    00JgfqUacybTkVNyz/rj3ImjqDxwlHMg+GOThPSFaUbeMs74Hk0Yh61yrXCroxm+
+
+    852DfxHnQi4JDviDtTbG
+
+    =683d
+
+    -----END PGP SIGNATURE-----
+
+    '
+  signing_service: null
 version: 2.13.0
-version_url: /api/content/published/v3/plugin/ansible/content/published/collections/index/ansible/eda/versions/2.13.0/
+version_url: /api/automation-hub/content/published/v3/plugin/ansible/content/published/collections/index/ansible/eda/versions/2.13.0/

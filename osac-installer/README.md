@@ -225,7 +225,6 @@ make -C ../fulfillment-service image-build \
   CONTAINER_TOOL="$CONTAINER_TOOL"
 make -C ../osac-operator image-build \
   IMG=ghcr.io/osac-project/osac-operator:latest \
-sac-csi
   CONTAINER_TOOL="$CONTAINER_TOOL"
 make -C ../osac-aap execution-environment-build \
   IMG=ghcr.io/osac-project/osac-aap:latest \

@@ -5,6 +5,20 @@ validation. Read the corresponding section below for suite boundaries and gaps.
 Commands and inline paths in each component section are relative to that
 component's directory unless explicitly marked as repository-root commands.
 
+## Contents
+
+- [Shared tiers and boundaries](#shared-tiers-and-boundaries)
+- [Planning evidence](#planning-evidence)
+- [fulfillment-service](#fulfillment-service)
+- [osac-installer](#osac-installer)
+- [osac-operator](#osac-operator)
+- [bare-metal-fulfillment-operator](#bare-metal-fulfillment-operator)
+- [osac-aap](#osac-aap)
+- [osac-csi-driver](#osac-csi-driver)
+- [osac-metering](#osac-metering)
+- [tests/e2e](#testse2e)
+- [Multi-branch test isolation](MULTI-BRANCH-ISOLATION.md)
+
 ## Shared tiers and boundaries
 
 Use these tier names consistently:
@@ -523,3 +537,10 @@ before infrastructure teardown.
 Guest LVMS disk prerequisites are a separate storage/infrastructure follow-up;
 its infrastructure source revision, owner, and Jira URL remain unresolved. Do
 not wipe or reuse the guest OS disk to make the lifecycle test pass.
+
+## Multi-branch test isolation
+
+See [Multi-branch test isolation](MULTI-BRANCH-ISOLATION.md) for detailed
+guidance on running integration tests from multiple checkouts simultaneously,
+including Kind cluster naming, namespace parameters, port isolation, database
+and Kafka separation, cleanup procedures, and a quick-reference checklist.

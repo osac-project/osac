@@ -166,11 +166,12 @@ to the profile's configured CA and enabled services.
 ### CSI storage lifecycle boundary
 
 The installer no longer statically deploys the OSAC CSI meta-driver. This
-configuration change does not close the real-backend/storage-lifecycle gap
-tracked by [OSAC-4845](https://redhat.atlassian.net/browse/OSAC-4845). The Helm
-render and Kind fulfillment checks do not exercise PVC creation through a
-workload mount against a real storage tier; OSAC-4845 remains open until that
-coverage is delivered.
+configuration change does not add storage-boundary coverage. The Helm render
+and Kind fulfillment checks do not exercise a real storage backend. Real-backend
+component integration beyond fake-vendor sanity is tracked by
+[OSAC-4845](https://redhat.atlassian.net/browse/OSAC-4845). The full hub and
+cross-cluster PVC create, mount, I/O, and delete E2E flow is tracked separately
+by [OSAC-3285](https://redhat.atlassian.net/browse/OSAC-3285).
 
 OSAC-6218 is scoped to clean Dev Preview installs. An upgrade from an earlier
 release with the static CSI hook enabled may retain the copied hub Secret

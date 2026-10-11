@@ -15,6 +15,9 @@ global:
   networking:
     fabricManager: cudn_net
     k8sManager: ""
+    netris:
+      # Keep CI safe for any shared Netris configuration.
+      validateCerts: false
   services:
     caas:
       enabled: true

@@ -17,6 +17,9 @@ global:
   networking:
     fabricManager: ""
     k8sManager: k8s_only
+    netris:
+      # Keep CI safe for any shared Netris configuration.
+      validateCerts: false
     networkClass:
       title: "K8s-only networking"
       description: >-

@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import yaml
+
 
 NETRIS_COLLECTION = Path(__file__).parents[2] / "collections" / "ansible_collections" / "netris"
 
@@ -25,12 +27,13 @@ def test_every_netris_uri_call_accepts_the_shared_ca_path():
 
 
 def test_netris_ca_path_is_loaded_from_the_job_environment():
-    configuration = (
+    configuration = yaml.safe_load((
         Path(__file__).parents[2]
         / "group_vars"
         / "all"
         / "configuration.yaml"
-    ).read_text()
+    ).read_text())
 
-    assert "netris_ca_path" in configuration
-    assert "NETRIS_CA_PATH" in configuration
+    assert configuration["netris_ca_path"] == (
+        "{{ lookup('env', 'NETRIS_CA_PATH', default='') }}"
+    )

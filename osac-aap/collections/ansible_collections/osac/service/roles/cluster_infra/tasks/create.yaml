@@ -1,5 +1,4 @@
 ---
-- name: Include network-class-specific create tasks
-  ansible.builtin.include_role:
-    name: "{{ network_steps_collection }}.cluster_infra"
-    tasks_from: create.yaml
+# Step-collection delegation was removed in OSAC-2351.
+# CaaS networking now goes through the OSAC Networking API and dispatcher;
+# step-collection delegation is no longer used.

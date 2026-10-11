@@ -30,7 +30,3 @@ argument_specs:
       default_agent_namespace:
         type: str
         required: true
-      network_steps_collection:
-        type: str
-        required: true
-        description: "Ansible collection providing network-class-specific steps (e.g. 'netris.steps', 'osac.steps')"

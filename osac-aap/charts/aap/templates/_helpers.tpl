@@ -77,7 +77,6 @@ shared controller connection fields.
 -}}
 {{- if .cluster -}}
 {{- $_ := set $derived "NETWORK_CLASS" "netris" -}}
-{{- $_ := set $derived "NETWORK_STEPS_COLLECTION" "netris.steps" -}}
 {{- $_ := set $derived "NETRIS_MGMT_VPC_ID" ($netris.mgmtVpcId | default "" | toString) -}}
 {{- $_ := set $derived "NETRIS_MGMT_VPC_NAME" ($netris.mgmtVpcName | default "") -}}
 {{- $_ := set $derived "NETRIS_RESOURCE_CLASS_MAP" ($netris.resourceClassMap | default "") -}}

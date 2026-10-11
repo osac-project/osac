@@ -40,7 +40,7 @@
 {{- $sec = merge (dict "NETRIS_PASSWORD" $creds.password) $explicitSec -}}
 {{- end }}
 {{- else if $agentlessEnabled -}}
-{{- $cfg = merge (dict "NETWORK_CLASS" "agentless_net" "NETWORK_STEPS_COLLECTION" "agentless_net.steps") $explicitCfg -}}
+{{- $cfg = merge (dict "NETWORK_CLASS" "agentless_net") $explicitCfg -}}
 {{- end }}
 {{- end }}
 apiVersion: v1

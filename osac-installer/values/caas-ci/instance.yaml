@@ -5,11 +5,7 @@
 # --- Service Enablement ---
 global:
   osacDeploymentId: "ci/osac"
-  fulfillmentTrust:
-    enabled: false
-  # Keep clusterFulfillment NETWORK_STEPS_COLLECTION=ci.steps authoritative.
-  # The CUDN CaaS profile requires the explicit ci.steps pairing.
-  # Do not derive Netris/agentless AAP steps (see docs/aap-configuration.md).
+
   expertOverrides:
     aap: true
   networking:
@@ -180,8 +176,7 @@ aap:
     clusterFulfillment:
       enabled: true
       config:
-        NETWORK_CLASS: "ci"
-        NETWORK_STEPS_COLLECTION: "ci.steps"
+
         HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: "SingleReplica"
         HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: "SingleReplica"
     networkFulfillment:

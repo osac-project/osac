@@ -17,7 +17,6 @@ data:
   # Which network class to use (netris / agentless_net). Templates like
   # ocp_hosted_netris override this automatically.
   NETWORK_CLASS: ""
-  NETWORK_STEPS_COLLECTION: ""
 
   # -- Netris controller connection --
   NETRIS_CONTROLLER_URL: "https://redhat-ctl.netris.io"

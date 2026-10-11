@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 import yaml
 
 
@@ -51,15 +52,71 @@ AUTH_TASKS = (
 )
 
 
-def test_auth_role_resolves_tls_settings_from_environment():
-    tasks = yaml.safe_load(AUTH_TASKS.read_text())
-    resolve_task = tasks[0]
+def _render_auth_tls_settings(monkeypatch, tmp_path, existing=None):
+    monkeypatch.setenv("ANSIBLE_LOCAL_TEMP", str(tmp_path))
+    from ansible.parsing.dataloader import DataLoader
+    from ansible.plugins.loader import lookup_loader
+    from ansible.template import Templar
 
-    assert resolve_task["name"] == "Resolve Netris TLS settings from the worker environment"
-    facts = resolve_task["ansible.builtin.set_fact"]
-    assert "NETRIS_VALIDATE_CERTS" in facts["netris_validate_certs"]
-    assert "NETRIS_CA_PATH" in facts["netris_ca_path"]
-    assert facts["netris_ca_path"].endswith("true) }}")
+    monkeypatch.setitem(lookup_loader.aliases, "ansible.builtin.env", "env")
+    tasks = yaml.safe_load(AUTH_TASKS.read_text())
+    facts = tasks[0]["ansible.builtin.set_fact"]
+    templar = Templar(loader=DataLoader(), variables=existing or {})
+
+    return {
+        name: templar.template(expression)
+        for name, expression in facts.items()
+    }
+
+
+@pytest.mark.parametrize(
+    ("environment", "existing", "expected"),
+    [
+        pytest.param({}, {}, (True, ""), id="unset"),
+        pytest.param(
+            {
+                "NETRIS_VALIDATE_CERTS": "false",
+                "NETRIS_CA_PATH": "/env/ca.pem",
+            },
+            {},
+            (False, "/env/ca.pem"),
+            id="configured",
+        ),
+        pytest.param(
+            {
+                "NETRIS_VALIDATE_CERTS": "",
+                "NETRIS_CA_PATH": "",
+            },
+            {},
+            (False, ""),
+            id="empty",
+        ),
+        pytest.param(
+            {
+                "NETRIS_VALIDATE_CERTS": "true",
+                "NETRIS_CA_PATH": "/env/ca.pem",
+            },
+            {
+                "netris_validate_certs": False,
+                "netris_ca_path": "/existing/ca.pem",
+            },
+            (False, "/existing/ca.pem"),
+            id="existing-values-take-precedence",
+        ),
+    ],
+)
+def test_auth_role_renders_tls_settings(
+    monkeypatch, tmp_path, environment, existing, expected
+):
+    for name in ("NETRIS_VALIDATE_CERTS", "NETRIS_CA_PATH"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+
+    facts = _render_auth_tls_settings(monkeypatch, tmp_path, existing)
+
+    assert facts["netris_validate_certs"] is expected[0]
+    assert facts["netris_ca_path"] == expected[1]
 
 
 def test_auth_request_consumes_resolved_tls_settings():

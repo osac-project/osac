@@ -122,12 +122,12 @@ class TestClassifier(unittest.TestCase):
         result = classify_prs([pr])
         self.assertEqual(result[0].status, PRStatus.CI_FAILING)
 
-    def test_label_gate_failure_alone_is_not_ci_failure(self):
-        """A failed label policy check alone does not mean CI is failing."""
+    def test_jira_reference_failure_alone_is_not_ci_failure(self):
+        """A failed Jira reference check alone does not mean CI is failing."""
         for check_name in (
-            "check-labels",
-            "label-gate / check-labels",
-            "label-gate / check-labels (pull_request)",
+            "jira-reference",
+            "jira-reference / jira-reference",
+            "jira-reference / jira-reference (pull_request)",
         ):
             with self.subTest(check_name=check_name):
                 pr = _make_pr(
@@ -143,13 +143,13 @@ class TestClassifier(unittest.TestCase):
                 result = classify_prs([pr])
                 self.assertEqual(result[0].status, PRStatus.NEEDS_REVIEW)
 
-    def test_label_gate_failure_does_not_hide_real_ci_failure(self):
+    def test_jira_reference_failure_does_not_hide_real_ci_failure(self):
         """A real failed check still makes the PR CI-failing."""
         pr = _make_pr(
             ci_status="FAILURE",
             check_runs=[
                 CheckRun(
-                    name="label-gate / check-labels",
+                    name="jira-reference / jira-reference",
                     conclusion="FAILURE",
                     details_url="https://example.com/labels",
                 ),

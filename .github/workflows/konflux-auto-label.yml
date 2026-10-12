@@ -2,27 +2,17 @@
 name: konflux-auto-label
 
 # Konflux (GitHub App `red-hat-konflux-kflux-prd-rh02[bot]`) opens automated
-# dependency-bump PRs against this repo, but it's an external GitHub App,
-# not an org member -- the usual openshift-ci Prow-plugin automation that
-# applies `lgtm`/`approved` per OWNERS files, and the Jira-title check that
-# applies `jira/valid-reference`, don't reliably (or ever, for the Jira
-# label) apply to it. label-gate.yml's check-labels job requires all three
-# on every PR, so Konflux PRs get stuck permanently -- confirmed live:
-# every open Konflux PR is missing jira/valid-reference (its titles never
-# contain a Jira key), and a couple are also missing lgtm/approved since
-# openshift-ci doesn't apply those reliably to this bot either. Separately,
-# as an external App identity, Konflux's own workflow runs on this repo can
-# land in GitHub's native fork/first-time-contributor `action_required`
-# gate and never execute at all -- mirrors osac-test-infra's
-# slash-command-handler.yml "Handle ok-to-test" step to clear that too.
+# dependency-bump PRs against this repo. Its titles never contain a Jira key, so
+# Prow's Jira check never sets `jira/valid-reference`, which the required
+# jira-reference check reads: without help every Konflux PR would be stuck.
+# This workflow sets that label for this one trusted bot, prefixes the title
+# with NO-ISSUE: (this repo's convention for ticket-less changes) when it has
+# no reference yet, and approves the workflow runs of a PR that GitHub holds
+# back as `action_required` because the bot is an external App identity (the
+# same step osac-test-infra's slash-command handler used to take).
 #
-# Also prefixes the PR title with NO-ISSUE: when it has no Jira-key/
-# NO-ISSUE prefix already, matching this repo's own commit-message
-# convention for ticket-less changes. Note: this is cosmetic/consistency
-# only -- the jira/valid-reference *label* above is what actually
-# satisfies label-gate.yml's check-labels job; confirmed live that a
-# correctly-labeled Konflux PR's check-labels passes regardless of title
-# text, since that job only checks label presence, not title content.
+# Approval of the PR itself is not done here: bot-approve.yml approves a
+# dependency update as the osac-ci bot when only dependency files changed.
 #
 # Scoped tightly to this one specific, trusted bot login -- not "any bot"
 # or "any dependency PR" -- per direct instruction; broadening this scope
@@ -46,27 +36,14 @@ jobs:
     if: github.event.pull_request.user.login == 'red-hat-konflux-kflux-prd-rh02[bot]'
     runs-on: ubuntu-latest
     steps:
-      - name: Apply required labels
+      - name: Apply the Jira reference label
         env:
           GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
         run: |
           set -euo pipefail
-          # Known, accepted race on `synchronize`: ok-to-test-label-cleanup.yml
-          # also reacts to this same event and strips `ok-to-test` if it was
-          # present when the push landed, so the two runs can momentarily
-          # disagree on the label's final state. Left as-is (not sequenced
-          # or exempted) because it's cosmetic, not functional: the actual
-          # action_required unblock below happens via a direct `gh api
-          # .../approve` call that doesn't depend on this label surviving,
-          # and the label gets re-applied again on the PR's next push
-          # regardless. Fixing the flap fully would mean editing that other
-          # workflow or adding workflow_run-chained sequencing here, either
-          # of which is more than this cosmetic race is worth.
           pr=${{ github.event.pull_request.number }}
-          echo "Applying labels to Konflux PR #${pr}..."
-          gh pr edit "${pr}" --repo "${{ github.repository }}" \
-            --add-label lgtm --add-label approved \
-            --add-label jira/valid-reference --add-label ok-to-test
+          echo "Labelling Konflux PR #${pr}..."
+          gh pr edit "${pr}" --repo "${{ github.repository }}" --add-label jira/valid-reference
 
       - name: Prefix title with NO-ISSUE when it has no Jira reference
         env:
@@ -94,10 +71,9 @@ jobs:
           GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
         run: |
           set -euo pipefail
-          # Same approach as osac-test-infra's slash-command-handler.yml
-          # "Handle ok-to-test" step: an external App identity's workflow
-          # runs can land in GitHub's native fork/first-time-contributor
-          # action_required gate and never execute at all otherwise.
+          # An external App identity's workflow runs can land in GitHub's
+          # native fork/first-time-contributor action_required gate and never
+          # execute at all otherwise.
           head_sha="${{ github.event.pull_request.head.sha }}"
           approved=0
           failed=0

@@ -40,7 +40,12 @@ from ansible_collections.osac.templates.plugins.module_utils.agentless_net_subne
     prepare_subnet_delete_data_plane,
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 1
+SCHEMA_TABLES = {
+    "virtual_networks",
+    "subnets",
+    "external_ip_pools",
+}
 LOCK_WAIT_SECONDS = 60
 LOCK_POLL_SECONDS = 0.05
 MAX_RULE_DELETIONS = 64
@@ -102,6 +107,42 @@ def _parse_canonical_ipv4_network(value: Any) -> ipaddress.IPv4Network:
     if str(network) != value:
         raise ValueError("VirtualNetwork CIDR must be canonical")
     return network
+
+
+def _external_ip_pool_entry(
+    uid: Any,
+    fulfillment_id: Any,
+    tenant_id: Any,
+    ip_family: Any,
+    cidrs: Any,
+) -> dict[str, str]:
+    if not _is_canonical_uuid(uid):
+        raise StateError("ExternalIPPool UID must be a canonical UUID")
+    if not _is_canonical_uuid(fulfillment_id):
+        raise StateError("ExternalIPPool Fulfillment UUID must be a canonical UUID")
+    if not _is_valid_tenant_id(tenant_id):
+        raise StateError("ExternalIPPool tenant ID is required")
+    if ip_family != "IPv4":
+        raise StateError("ExternalIPPool IP family must be IPv4")
+    if not isinstance(cidrs, list) or len(cidrs) != 1:
+        raise StateError("ExternalIPPool must contain exactly one canonical IPv4 CIDR")
+    if not isinstance(cidrs[0], str):
+        raise StateError("ExternalIPPool must contain exactly one canonical IPv4 CIDR")
+    try:
+        network = ipaddress.ip_network(cidrs[0], strict=True)
+    except ValueError as error:
+        raise StateError(
+            "ExternalIPPool must contain exactly one canonical IPv4 CIDR"
+        ) from error
+    if not isinstance(network, ipaddress.IPv4Network) or str(network) != cidrs[0]:
+        raise StateError("ExternalIPPool must contain exactly one canonical IPv4 CIDR")
+    return {
+        "uid": uid,
+        "fulfillment_id": fulfillment_id,
+        "tenant_id": tenant_id,
+        "ip_family": ip_family,
+        "ipv4_cidr": str(network),
+    }
 
 
 def _validate_dhcp_supervisor(value: Any) -> str:
@@ -228,14 +269,12 @@ class StateStore:
 
     @contextlib.contextmanager
     def _locked_database(
-        self, *, create: bool, migrate: bool = True, read_only: bool = False
+        self, *, create: bool, read_only: bool = False
     ):
         if create:
             self.path.parent.mkdir(parents=True, exist_ok=True)
         if read_only:
-            connection = self._open_database(
-                create=False, migrate=False, read_only=True
-            )
+            connection = self._open_database(create=False, read_only=True)
             try:
                 yield connection
             except sqlite3.DatabaseError as error:
@@ -248,7 +287,7 @@ class StateStore:
             return
 
         with _locked_path(self.lock_path):
-            connection = self._open_database(create=create, migrate=migrate)
+            connection = self._open_database(create=create)
             try:
                 yield connection
             except sqlite3.DatabaseError as error:
@@ -268,7 +307,7 @@ class StateStore:
             yield
 
     def _open_database(
-        self, *, create: bool, migrate: bool = True, read_only: bool = False
+        self, *, create: bool, read_only: bool = False
     ) -> sqlite3.Connection | None:
         if not create and not self.path.exists():
             return None
@@ -334,39 +373,22 @@ class StateStore:
                     )"""
                     )
                     self._create_subnet_schema(connection)
+                    self._create_external_ip_pool_schema(connection)
                     connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
                     connection.commit()
                 except BaseException:
                     connection.rollback()
                     raise
-                tables = {"virtual_networks", "subnets"}
-                version = SCHEMA_VERSION
-
-            if version == 1:
-                if tables != {"virtual_networks"}:
-                    raise StateCorrupt(
-                        "AgentlessNet schema-v1 database has an invalid table set"
-                    )
-                self._validate_virtual_network_table(connection)
-                if not migrate or read_only:
-                    return connection
-                connection.execute("BEGIN IMMEDIATE")
-                try:
-                    self._create_subnet_schema(connection)
-                    connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-                    connection.commit()
-                except BaseException:
-                    connection.rollback()
-                    raise
-                tables = {"virtual_networks", "subnets"}
+                tables = set(SCHEMA_TABLES)
                 version = SCHEMA_VERSION
 
             if version != SCHEMA_VERSION:
                 raise StateCorrupt(f"unsupported state schema: {version!r}")
-            if tables != {"virtual_networks", "subnets"}:
+            if tables != SCHEMA_TABLES:
                 raise StateCorrupt("AgentlessNet state database has an invalid schema")
             self._validate_virtual_network_table(connection)
             self._validate_subnet_table(connection)
+            self._validate_external_ip_pool_schema(connection)
             return connection
         except (sqlite3.DatabaseError, OSError) as error:
             connection.close()
@@ -393,6 +415,54 @@ class StateStore:
         connection.execute(
             "CREATE INDEX subnets_by_vn ON subnets(virtual_network_uid)"
         )
+
+    @staticmethod
+    def _create_external_ip_pool_schema(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """CREATE TABLE external_ip_pools (
+                uid TEXT NOT NULL PRIMARY KEY,
+                fulfillment_id TEXT NOT NULL UNIQUE,
+                tenant_id TEXT NOT NULL,
+                ip_family TEXT NOT NULL,
+                ipv4_cidr TEXT NOT NULL
+            )"""
+        )
+
+    @staticmethod
+    def _validate_external_ip_pool_schema(connection: sqlite3.Connection) -> None:
+        expected_columns = {
+            "uid",
+            "fulfillment_id",
+            "tenant_id",
+            "ip_family",
+            "ipv4_cidr",
+        }
+        column_info = {
+            row[1]: row
+            for row in connection.execute("PRAGMA table_info(external_ip_pools)")
+        }
+        if set(column_info) != expected_columns:
+            raise StateCorrupt("AgentlessNet external_ip_pools table has an invalid schema")
+        if any(
+            column_info[name][2].upper() != "TEXT" or column_info[name][3] != 1
+            for name in expected_columns
+        ):
+            raise StateCorrupt("AgentlessNet external_ip_pools constraints are missing")
+        if column_info["uid"][5] != 1:
+            raise StateCorrupt("AgentlessNet ExternalIPPool UID primary key is missing")
+
+        actual_unique_columns = set()
+        for index_row in connection.execute("PRAGMA index_list(external_ip_pools)"):
+            if not index_row[2] or index_row[4]:
+                continue
+            quoted_index = "'" + index_row[1].replace("'", "''") + "'"
+            index_info = connection.execute(
+                f"PRAGMA index_info({quoted_index})"
+            ).fetchall()
+            if len(index_info) == 1:
+                actual_unique_columns.add(index_info[0][2])
+        if not {"uid", "fulfillment_id"}.issubset(actual_unique_columns):
+            raise StateCorrupt("AgentlessNet ExternalIPPool uniqueness constraints are missing")
 
     @staticmethod
     def _validate_virtual_network_table(connection: sqlite3.Connection) -> None:
@@ -693,13 +763,9 @@ class StateStore:
             raise StateError("Subnet tenant ID is required")
         with self._locked_database(
             create=False,
-            migrate=False,
             read_only=True,
         ) as connection:
             if connection is None:
-                return None
-            version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version < 2:
                 return None
             row = connection.execute(
                 "SELECT virtual_network_uid, tenant_id FROM subnets WHERE uid = ?",
@@ -720,12 +786,9 @@ class StateStore:
             raise StateError("Subnet tenant ID is required")
         with self._locked_database(
             create=False,
-            migrate=False,
             read_only=True,
         ) as connection:
             if connection is None:
-                return None
-            if connection.execute("PRAGMA user_version").fetchone()[0] < 2:
                 return None
             entry = self._subnet_for_uid(connection, uid)
             if entry is not None and entry["tenant_id"] != tenant_id:
@@ -776,7 +839,6 @@ class StateStore:
         with operation_lock:
             with self._locked_database(
                 create=not check_mode,
-                migrate=not check_mode,
                 read_only=check_mode,
             ) as connection:
                 if connection is None:
@@ -799,13 +861,10 @@ class StateStore:
                 if subnet_network.overlaps(transit_network):
                     raise StateError("Subnet CIDR overlaps its parent VirtualNetwork transit link")
 
-                current = None
-                existing_subnets: list[dict[str, Any]] = []
-                if connection.execute("PRAGMA user_version").fetchone()[0] >= 2:
-                    current = self._subnet_for_uid(connection, uid)
-                    existing_subnets = self._subnets_for_virtual_network(
-                        connection, virtual_network_uid
-                    )
+                current = self._subnet_for_uid(connection, uid)
+                existing_subnets = self._subnets_for_virtual_network(
+                    connection, virtual_network_uid
+                )
                 if current is not None:
                     if current["phase"] == "deleting":
                         raise StateError("Subnet is already deleting and cannot be recreated")
@@ -826,7 +885,7 @@ class StateStore:
                 used_vlans = {
                     row[0]
                     for row in connection.execute("SELECT vlan_id FROM subnets")
-                } if connection.execute("PRAGMA user_version").fetchone()[0] >= 2 else set()
+                }
                 vlan_id = next(
                     (
                         candidate
@@ -1073,6 +1132,155 @@ class StateStore:
                 return entry, True
 
     @staticmethod
+    def _external_ip_pool_for_uid(
+        connection: sqlite3.Connection, uid: str
+    ) -> dict[str, str] | None:
+        row = connection.execute(
+            """SELECT uid, fulfillment_id, tenant_id, ip_family, ipv4_cidr
+               FROM external_ip_pools WHERE uid = ?""",
+            (uid,),
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            return _external_ip_pool_entry(row[0], row[1], row[2], row[3], [row[4]])
+        except StateError as error:
+            raise StateCorrupt("malformed ExternalIPPool state") from error
+
+    @staticmethod
+    def _require_unique_external_ip_pool_fulfillment_id(
+        connection: sqlite3.Connection,
+        uid: str,
+        fulfillment_id: str,
+    ) -> None:
+        row = connection.execute(
+            """SELECT uid FROM external_ip_pools
+               WHERE fulfillment_id = ? AND uid <> ? LIMIT 1""",
+            (fulfillment_id, uid),
+        ).fetchone()
+        if row is None:
+            return
+        StateStore._external_ip_pool_for_uid(connection, row[0])
+        raise StateError("ExternalIPPool Fulfillment identity is already registered")
+
+    def ensure_external_ip_pool(
+        self,
+        uid: str,
+        fulfillment_id: str,
+        tenant_id: str,
+        ip_family: str,
+        cidrs: list[str],
+        *,
+        check_mode: bool = False,
+    ) -> tuple[dict[str, str], bool]:
+        requested = _external_ip_pool_entry(
+            uid, fulfillment_id, tenant_id, ip_family, cidrs
+        )
+        operation_lock = (
+            contextlib.nullcontext()
+            if check_mode
+            else self._resource_locked(uid)
+        )
+        with operation_lock:
+            with self._locked_database(
+                create=not check_mode,
+                read_only=check_mode,
+            ) as connection:
+                if connection is None:
+                    return requested, True
+                if not check_mode:
+                    connection.execute("BEGIN IMMEDIATE")
+                try:
+                    existing = self._external_ip_pool_for_uid(connection, uid)
+                    if existing is not None:
+                        if existing != requested:
+                            raise StateError(
+                                "ExternalIPPool identity does not match saved state"
+                            )
+                        if not check_mode:
+                            connection.rollback()
+                        return existing, False
+
+                    self._require_unique_external_ip_pool_fulfillment_id(
+                        connection, uid, fulfillment_id
+                    )
+                    if check_mode:
+                        return requested, True
+
+                    connection.execute(
+                        """INSERT INTO external_ip_pools
+                           (uid, fulfillment_id, tenant_id, ip_family, ipv4_cidr)
+                           VALUES (?, ?, ?, ?, ?)""",
+                        (
+                            requested["uid"],
+                            requested["fulfillment_id"],
+                            requested["tenant_id"],
+                            requested["ip_family"],
+                            requested["ipv4_cidr"],
+                        ),
+                    )
+                    connection.commit()
+                    return requested, True
+                except BaseException:
+                    if not check_mode and connection.in_transaction:
+                        connection.rollback()
+                    raise
+
+    def delete_external_ip_pool(
+        self,
+        uid: str,
+        fulfillment_id: str,
+        tenant_id: str,
+        ip_family: str,
+        cidrs: list[str],
+        *,
+        check_mode: bool = False,
+    ) -> tuple[dict[str, str] | None, bool]:
+        requested = _external_ip_pool_entry(
+            uid, fulfillment_id, tenant_id, ip_family, cidrs
+        )
+        operation_lock = (
+            contextlib.nullcontext()
+            if check_mode
+            else self._resource_locked(uid)
+        )
+        with operation_lock:
+            with self._locked_database(
+                create=False,
+                read_only=check_mode,
+            ) as connection:
+                if connection is None:
+                    return None, False
+                if not check_mode:
+                    connection.execute("BEGIN IMMEDIATE")
+                try:
+                    existing = self._external_ip_pool_for_uid(connection, uid)
+                    if existing is not None and existing != requested:
+                        raise StateError(
+                            "ExternalIPPool identity does not match saved state"
+                        )
+
+                    self._require_unique_external_ip_pool_fulfillment_id(
+                        connection, uid, fulfillment_id
+                    )
+                    if existing is None:
+                        if not check_mode:
+                            connection.rollback()
+                        return None, False
+                    if check_mode:
+                        return existing, True
+
+                    connection.execute(
+                        "DELETE FROM external_ip_pools WHERE uid = ?", (uid,)
+                    )
+                    connection.commit()
+                    return existing, True
+                except BaseException:
+                    if not check_mode and connection.in_transaction:
+                        connection.rollback()
+                    raise
+
+    @staticmethod
     def _validate_uid(uid: str) -> None:
         if not _is_canonical_uuid(uid):
             raise StateError("VirtualNetwork UID must be a canonical UUID")
@@ -1232,7 +1440,6 @@ class StateStore:
         self._validate_tenant_id(tenant_id)
         with self._locked_database(
             create=False,
-            migrate=not check_mode,
             read_only=check_mode,
         ) as connection:
             if connection is None:
@@ -1256,9 +1463,7 @@ class StateStore:
                     else None
                 )
                 self._require_tenant_ownership(entry, tenant_id)
-                if connection is not None and connection.execute(
-                    "PRAGMA user_version"
-                ).fetchone()[0] >= 2:
+                if connection is not None:
                     has_children = connection.execute(
                         "SELECT 1 FROM subnets WHERE virtual_network_uid = ? LIMIT 1",
                         (uid,),

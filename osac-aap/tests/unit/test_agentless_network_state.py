@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -36,6 +37,9 @@ UID_TWO = "22222222-2222-4222-8222-222222222222"
 UID_THREE = "33333333-3333-4333-8333-333333333333"
 TENANT_ONE = "tenant-one"
 TENANT_TWO = "tenant-two"
+POOL_UID = "44444444-4444-4444-8444-444444444444"
+POOL_FULFILLMENT_ID = "55555555-5555-4555-8555-555555555555"
+POOL_CIDR = "198.51.100.0/24"
 
 
 def store_for(tmp_path):
@@ -799,16 +803,23 @@ def test_schema_rejects_non_slash_31_transit_and_noncanonical_cidr(tmp_path):
         get_virtual_network(store, UID_ONE)
 
 
-def test_state_database_uses_schema_v2_and_preserves_uid_and_transit_indexes(tmp_path):
+def test_state_database_uses_current_schema_v1_and_preserves_uid_and_transit_indexes(tmp_path):
     store = store_for(tmp_path)
     first = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
     second = ensure_virtual_network(store, UID_TWO, "10.0.0.0/16")
 
     with sqlite3.connect(store.path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
-        assert connection.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table'"
-        ).fetchall() == [("virtual_networks",), ("subnets",)]
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        } == {
+            "virtual_networks",
+            "subnets",
+            "external_ip_pools",
+        }
         assert connection.execute("SELECT count(*) FROM virtual_networks").fetchone()[0] == 2
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute("INSERT INTO virtual_networks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -822,27 +833,428 @@ def test_state_database_uses_schema_v2_and_preserves_uid_and_transit_indexes(tmp
     assert get_virtual_network(reopened, UID_TWO) == second
 
 
-def test_schema_v1_migrates_additively_and_check_mode_reads_without_migration(tmp_path):
+def test_incomplete_schema_v1_fails_closed_without_modification(tmp_path):
     store = store_for(tmp_path)
     original = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
     with sqlite3.connect(store.path) as connection:
+        connection.execute("DROP TABLE IF EXISTS external_ip_pools")
         connection.execute("DROP TABLE subnets")
         connection.execute("PRAGMA user_version = 1")
 
-    assert store.get_virtual_network(UID_ONE, TENANT_ONE, check_mode=True) == original
+    with pytest.raises(StateCorrupt, match="invalid schema"):
+        store.get_virtual_network(UID_ONE, TENANT_ONE, check_mode=True)
+    with pytest.raises(StateCorrupt, match="invalid schema"):
+        store.get_virtual_network(UID_ONE, TENANT_ONE)
+
     with sqlite3.connect(store.path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table'"
         ).fetchall() == [("virtual_networks",)]
+        assert connection.execute("SELECT count(*) FROM virtual_networks").fetchone()[0] == 1
+    assert original["uid"] == UID_ONE
 
-    assert get_virtual_network(store, UID_ONE) == original
+
+def test_schema_v2_fails_closed_without_downgrade_or_modification(tmp_path):
+    store = store_for(tmp_path)
+    original = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    with sqlite3.connect(store.path) as connection:
+        connection.execute("PRAGMA user_version = 2")
+
+    with pytest.raises(StateCorrupt, match="unsupported state schema: 2"):
+        get_virtual_network(store, UID_ONE)
+
     with sqlite3.connect(store.path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert connection.execute("SELECT count(*) FROM virtual_networks").fetchone()[0] == 1
+        assert connection.execute("SELECT count(*) FROM subnets").fetchone()[0] == 0
+    assert original["uid"] == UID_ONE
+
+
+def test_external_ip_pool_registers_identity_in_current_schema_v1(tmp_path):
+    store = store_for(tmp_path)
+
+    pool, changed = store.ensure_external_ip_pool(
+        POOL_UID,
+        POOL_FULFILLMENT_ID,
+        TENANT_ONE,
+        "IPv4",
+        [POOL_CIDR],
+    )
+
+    assert changed is True
+    assert pool == {
+        "uid": POOL_UID,
+        "fulfillment_id": POOL_FULFILLMENT_ID,
+        "tenant_id": TENANT_ONE,
+        "ip_family": "IPv4",
+        "ipv4_cidr": POOL_CIDR,
+    }
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
         assert connection.execute(
-            "SELECT count(*) FROM subnets"
-        ).fetchone()[0] == 0
-    assert get_virtual_network(store, UID_ONE) == original
+            "SELECT uid, fulfillment_id, tenant_id, ip_family, ipv4_cidr "
+            "FROM external_ip_pools"
+        ).fetchall() == [
+            (POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", POOL_CIDR)
+        ]
+        assert {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        } == {
+            "virtual_networks",
+            "subnets",
+            "external_ip_pools",
+        }
+
+
+def test_external_ip_pool_registration_retry_preserves_saved_identity(tmp_path):
+    store = store_for(tmp_path)
+    first, first_changed = store.ensure_external_ip_pool(
+        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+    )
+
+    retry, retry_changed = store.ensure_external_ip_pool(
+        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+    )
+
+    assert first_changed is True
+    assert retry_changed is False
+    assert retry == first
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM external_ip_pools"
+        ).fetchone() == (1,)
+
+
+def test_external_ip_pool_schema_has_required_identity_uniqueness(tmp_path):
+    store = store_for(tmp_path)
+    store.ensure_external_ip_pool(
+        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+    )
+
+    with sqlite3.connect(store.path) as connection:
+        columns = {
+            row[1]: row for row in connection.execute("PRAGMA table_info(external_ip_pools)")
+        }
+        unique_columns = set()
+        for index_row in connection.execute("PRAGMA index_list(external_ip_pools)"):
+            if not index_row[2] or index_row[4]:
+                continue
+            quoted_index = "'" + index_row[1].replace("'", "''") + "'"
+            index_info = connection.execute(
+                f"PRAGMA index_info({quoted_index})"
+            ).fetchall()
+            if len(index_info) == 1:
+                unique_columns.add(index_info[0][2])
+
+        assert set(columns) == {
+            "uid",
+            "fulfillment_id",
+            "tenant_id",
+            "ip_family",
+            "ipv4_cidr",
+        }
+        assert all(row[2].upper() == "TEXT" and row[3] == 1 for row in columns.values())
+        assert unique_columns == {"uid", "fulfillment_id"}
+
+        connection.execute("BEGIN")
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "INSERT INTO external_ip_pools "
+                "(uid, fulfillment_id, tenant_id, ip_family, ipv4_cidr) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    UID_TWO,
+                    POOL_FULFILLMENT_ID,
+                    TENANT_ONE,
+                    "IPv4",
+                    "203.0.113.0/24",
+                ),
+            )
+        connection.rollback()
+
+
+def test_malformed_saved_external_ip_pool_is_not_repaired(tmp_path):
+    store = store_for(tmp_path)
+    store.ensure_external_ip_pool(
+        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+    )
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            "UPDATE external_ip_pools SET ipv4_cidr = ? WHERE uid = ?",
+            ("198.51.100.1/24", POOL_UID),
+        )
+
+    with pytest.raises(StateCorrupt, match="malformed ExternalIPPool state"):
+        store.ensure_external_ip_pool(
+            POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+        )
+
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute(
+            "SELECT ipv4_cidr FROM external_ip_pools WHERE uid = ?", (POOL_UID,)
+        ).fetchone() == ("198.51.100.1/24",)
+
+
+@pytest.mark.parametrize(
+    ("uid", "fulfillment_id", "tenant_id", "ip_family", "cidrs"),
+    [
+        ("not-a-uuid", POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]),
+        ("AAAAAAAA-1111-4111-8111-111111111111", POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]),
+        (POOL_UID, "not-a-uuid", TENANT_ONE, "IPv4", [POOL_CIDR]),
+        (POOL_UID, "AAAAAAAA-1111-4111-8111-111111111111", TENANT_ONE, "IPv4", [POOL_CIDR]),
+        (POOL_UID, POOL_FULFILLMENT_ID, "", "IPv4", [POOL_CIDR]),
+        (POOL_UID, POOL_FULFILLMENT_ID, " tenant-one ", "IPv4", [POOL_CIDR]),
+        (POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv6", [POOL_CIDR]),
+        (POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IP_FAMILY_IPV4", [POOL_CIDR]),
+        (POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "", [POOL_CIDR]),
+        (POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", []),
+        (POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR, "203.0.113.0/24"]),
+        (POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", "198.51.100.0/24"),
+        (POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [None]),
+        (POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", ["198.51.100.1/24"]),
+        (POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", ["198.51.100.0/024"]),
+        (POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", ["198.51.100.0/24 "]),
+        (POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", ["2001:db8::/64"]),
+    ],
+)
+def test_invalid_external_ip_pool_identity_or_cidr_creates_no_state(
+    tmp_path, uid, fulfillment_id, tenant_id, ip_family, cidrs
+):
+    store = store_for(tmp_path)
+
+    with pytest.raises(StateError):
+        store.ensure_external_ip_pool(uid, fulfillment_id, tenant_id, ip_family, cidrs)
+
+    assert not store.path.exists()
+
+
+@pytest.mark.parametrize(
+    ("fulfillment_id", "tenant_id", "cidrs"),
+    [
+        ("77777777-7777-4777-8777-777777777777", TENANT_ONE, [POOL_CIDR]),
+        (POOL_FULFILLMENT_ID, TENANT_TWO, [POOL_CIDR]),
+        (POOL_FULFILLMENT_ID, TENANT_ONE, ["203.0.113.0/24"]),
+    ],
+)
+def test_conflicting_external_ip_pool_retry_never_overwrites_saved_identity(
+    tmp_path, fulfillment_id, tenant_id, cidrs
+):
+    store = store_for(tmp_path)
+    original, _ = store.ensure_external_ip_pool(
+        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+    )
+
+    with pytest.raises(StateError, match="identity does not match saved state"):
+        store.ensure_external_ip_pool(POOL_UID, fulfillment_id, tenant_id, "IPv4", cidrs)
+
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute(
+            "SELECT uid, fulfillment_id, tenant_id, ip_family, ipv4_cidr "
+            "FROM external_ip_pools"
+        ).fetchall() == [
+            (
+                original["uid"],
+                original["fulfillment_id"],
+                original["tenant_id"],
+                original["ip_family"],
+                original["ipv4_cidr"],
+            )
+        ]
+
+
+def test_invalid_external_ip_pool_retry_does_not_change_existing_state(tmp_path):
+    store = store_for(tmp_path)
+    original, _ = store.ensure_external_ip_pool(
+        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+    )
+
+    with pytest.raises(StateError):
+        store.ensure_external_ip_pool(
+            POOL_UID,
+            POOL_FULFILLMENT_ID,
+            TENANT_ONE,
+            "IPv4",
+            ["198.51.100.1/24"],
+        )
+
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute(
+            "SELECT uid, fulfillment_id, tenant_id, ip_family, ipv4_cidr "
+            "FROM external_ip_pools"
+        ).fetchall() == [
+            (
+                original["uid"],
+                original["fulfillment_id"],
+                original["tenant_id"],
+                original["ip_family"],
+                original["ipv4_cidr"],
+            )
+        ]
+
+
+def test_external_ip_pool_fulfillment_identity_is_unique(tmp_path):
+    store = store_for(tmp_path)
+    store.ensure_external_ip_pool(
+        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+    )
+
+    with pytest.raises(StateError, match="Fulfillment identity is already registered"):
+        store.ensure_external_ip_pool(
+            UID_TWO, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", ["203.0.113.0/24"]
+        )
+
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute(
+            "SELECT uid, fulfillment_id FROM external_ip_pools"
+        ).fetchall() == [(POOL_UID, POOL_FULFILLMENT_ID)]
+
+
+def test_external_ip_pool_check_mode_reads_without_creating_state(tmp_path):
+    store = store_for(tmp_path)
+
+    pool, changed = store.ensure_external_ip_pool(
+        POOL_UID,
+        POOL_FULFILLMENT_ID,
+        TENANT_ONE,
+        "IPv4",
+        [POOL_CIDR],
+        check_mode=True,
+    )
+
+    assert pool["uid"] == POOL_UID
+    assert changed is True
+    assert not store.path.exists()
+    assert list(tmp_path.iterdir()) == []
+    assert store.delete_external_ip_pool(
+        POOL_UID,
+        POOL_FULFILLMENT_ID,
+        TENANT_ONE,
+        "IPv4",
+        [POOL_CIDR],
+        check_mode=True,
+    ) == (None, False)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_external_ip_pool_check_mode_preserves_existing_identity(tmp_path):
+    store = store_for(tmp_path)
+    original, _ = store.ensure_external_ip_pool(
+        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+    )
+
+    pool, changed = store.ensure_external_ip_pool(
+        POOL_UID,
+        POOL_FULFILLMENT_ID,
+        TENANT_ONE,
+        "IPv4",
+        [POOL_CIDR],
+        check_mode=True,
+    )
+
+    assert pool == original
+    assert changed is False
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert connection.execute("SELECT count(*) FROM external_ip_pools").fetchone() == (1,)
+
+
+def test_external_ip_pool_delete_validates_identity_and_is_idempotent(tmp_path):
+    store = store_for(tmp_path)
+    primary, _ = store.ensure_external_ip_pool(
+        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+    )
+    peer, _ = store.ensure_external_ip_pool(
+        "66666666-6666-4666-8666-666666666666",
+        "77777777-7777-4777-8777-777777777777",
+        TENANT_TWO,
+        "IPv4",
+        ["203.0.113.0/24"],
+    )
+    with pytest.raises(StateError, match="identity does not match saved state"):
+        store.delete_external_ip_pool(
+            POOL_UID, POOL_FULFILLMENT_ID, TENANT_TWO, "IPv4", [POOL_CIDR]
+        )
+
+    assert store.delete_external_ip_pool(
+        POOL_UID,
+        POOL_FULFILLMENT_ID,
+        TENANT_ONE,
+        "IPv4",
+        [POOL_CIDR],
+        check_mode=True,
+    ) == (primary, True)
+
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute(
+            "SELECT uid FROM external_ip_pools WHERE uid = ?", (POOL_UID,)
+        ).fetchone() == (POOL_UID,)
+        assert connection.execute(
+            "SELECT uid FROM external_ip_pools WHERE uid = ?", (peer["uid"],)
+        ).fetchone() == (peer["uid"],)
+
+    assert store.delete_external_ip_pool(
+        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+    ) == (primary, True)
+    assert store.delete_external_ip_pool(
+        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+    ) == (None, False)
+    assert store.delete_external_ip_pool(
+        peer["uid"], peer["fulfillment_id"], peer["tenant_id"], "IPv4", [peer["ipv4_cidr"]]
+    ) == (peer, True)
+
+
+def test_external_ip_pool_delete_of_absent_database_does_not_create_state(tmp_path):
+    store = store_for(tmp_path)
+
+    assert store.delete_external_ip_pool(
+        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+    ) == (None, False)
+    assert not store.path.exists()
+
+
+def test_external_ip_pool_simultaneous_retry_creates_one_row(tmp_path):
+    store = store_for(tmp_path)
+    start = threading.Barrier(2)
+
+    def register():
+        start.wait(timeout=5)
+        return store.ensure_external_ip_pool(
+            POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(register) for _ in range(2)]
+        results = [future.result(timeout=10) for future in futures]
+
+    assert sorted(changed for _, changed in results) == [False, True]
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM external_ip_pools"
+        ).fetchone() == (1,)
+
+
+def test_subnet_lifecycle_stays_functional_at_schema_v1(tmp_path, monkeypatch):
+    store = store_for(tmp_path)
+    ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    subnet, _ = reserve_subnet(store, uid=UID_TWO)
+
+    assert store.get_subnet(UID_TWO, TENANT_ONE) == subnet
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT count(*) FROM subnets WHERE uid = ?", (UID_TWO,)
+        ).fetchone() == (1,)
+
+    monkeypatch.setattr(agentless_net_state, "prepare_subnet_delete_data_plane", lambda *args: False)
+    deleting, changed = store.prepare_delete_subnet(UID_TWO, TENANT_ONE, "systemd")
+    assert changed is True
+    assert deleting["phase"] == "deleting"
+    with pytest.raises(StateError, match="saved Subnets remain"):
+        delete_virtual_network(store, UID_ONE)
 
 
 def test_check_mode_subnet_reservation_does_not_create_a_row(tmp_path):
@@ -1134,6 +1546,160 @@ def test_module_failure_does_not_disclose_state_values(monkeypatch, action):
         msg="AgentlessNet VirtualNetwork operation failed; inspect the network node and retry."
     )
     assert sensitive not in str(ansible_module.fail_json.call_args)
+
+
+@pytest.mark.parametrize(
+    ("action", "method"),
+    [
+        ("ensure_external_ip_pool", "ensure_external_ip_pool"),
+        ("delete_external_ip_pool", "delete_external_ip_pool"),
+    ],
+)
+def test_external_ip_pool_module_dispatches_validated_identity_and_check_mode(
+    monkeypatch, action, method
+):
+    module = importlib.import_module(
+        "ansible_collections.osac.templates.plugins.modules.agentless_net_state"
+    )
+    params = {
+        "action": action,
+        "state_file": "/unused/state.sqlite3",
+        "uid": POOL_UID,
+        "fulfillment_id": POOL_FULFILLMENT_ID,
+        "tenant_id": TENANT_ONE,
+        "ip_family": "IPv4",
+        "cidrs": [POOL_CIDR],
+    }
+    pool = {
+        "uid": POOL_UID,
+        "fulfillment_id": POOL_FULFILLMENT_ID,
+        "tenant_id": TENANT_ONE,
+        "ip_family": "IPv4",
+        "ipv4_cidr": POOL_CIDR,
+    }
+
+    class ModuleExit(Exception):
+        pass
+
+    calls = {}
+
+    def exit_json(**kwargs):
+        raise ModuleExit(kwargs)
+
+    module_object = SimpleNamespace(
+        params=params,
+        check_mode=True,
+        exit_json=exit_json,
+        fail_json=lambda **kwargs: pytest.fail(f"unexpected module error: {kwargs}"),
+    )
+    monkeypatch.setattr(
+        module, "AnsibleModule", lambda **kwargs: calls.update(kwargs) or module_object
+    )
+    store = Mock()
+    getattr(store, method).return_value = (pool, False)
+    monkeypatch.setattr(module, "StateStore", lambda path: store)
+
+    with pytest.raises(ModuleExit) as result:
+        module.main()
+
+    assert result.value.args[0] == {
+        "changed": False,
+        "backend_network_id": POOL_UID,
+        "pool": pool,
+    }
+    getattr(store, method).assert_called_once_with(
+        POOL_UID,
+        POOL_FULFILLMENT_ID,
+        TENANT_ONE,
+        "IPv4",
+        [POOL_CIDR],
+        check_mode=True,
+    )
+    assert (
+        "action",
+        action,
+        ["fulfillment_id", "ip_family", "cidrs"],
+    ) in calls["required_if"]
+
+
+@pytest.mark.parametrize(
+    ("action", "method"),
+    [
+        ("ensure_external_ip_pool", "ensure_external_ip_pool"),
+        ("delete_external_ip_pool", "delete_external_ip_pool"),
+    ],
+)
+def test_external_ip_pool_module_errors_do_not_disclose_state_values(
+    monkeypatch, action, method
+):
+    module = importlib.import_module(
+        "ansible_collections.osac.templates.plugins.modules.agentless_net_state"
+    )
+    sensitive = "dummy-sensitive-marker 198.51.100.0/24 tenant-secret"
+    module_object = SimpleNamespace(
+        params={
+            "action": action,
+            "state_file": "/unused/state.sqlite3",
+            "uid": POOL_UID,
+            "fulfillment_id": POOL_FULFILLMENT_ID,
+            "tenant_id": TENANT_ONE,
+            "ip_family": "IPv4",
+            "cidrs": [POOL_CIDR],
+        },
+        check_mode=False,
+        exit_json=lambda **kwargs: pytest.fail("failed pool operation must not succeed"),
+        fail_json=Mock(),
+    )
+    monkeypatch.setattr(module, "AnsibleModule", lambda **kwargs: module_object)
+    store = Mock()
+    getattr(store, method).side_effect = module.StateError(sensitive)
+    monkeypatch.setattr(module, "StateStore", lambda path: store)
+
+    module.main()
+
+    module_object.fail_json.assert_called_once_with(
+        msg="AgentlessNet ExternalIPPool operation failed; inspect the network node and retry."
+    )
+    assert sensitive not in str(module_object.fail_json.call_args)
+
+
+def test_external_ip_pool_delete_module_omits_pool_when_state_is_absent(monkeypatch):
+    module = importlib.import_module(
+        "ansible_collections.osac.templates.plugins.modules.agentless_net_state"
+    )
+
+    class ModuleExit(Exception):
+        pass
+
+    def exit_json(**kwargs):
+        raise ModuleExit(kwargs)
+
+    module_object = SimpleNamespace(
+        params={
+            "action": "delete_external_ip_pool",
+            "state_file": "/unused/state.sqlite3",
+            "uid": POOL_UID,
+            "fulfillment_id": POOL_FULFILLMENT_ID,
+            "tenant_id": TENANT_ONE,
+            "ip_family": "IPv4",
+            "cidrs": [POOL_CIDR],
+        },
+        check_mode=False,
+        exit_json=exit_json,
+        fail_json=lambda **kwargs: pytest.fail(f"unexpected module error: {kwargs}"),
+    )
+    monkeypatch.setattr(module, "AnsibleModule", lambda **kwargs: module_object)
+    store = Mock()
+    store.delete_external_ip_pool.return_value = (None, False)
+    monkeypatch.setattr(module, "StateStore", lambda path: store)
+
+    with pytest.raises(ModuleExit) as result:
+        module.main()
+
+    assert result.value.args[0] == {
+        "changed": False,
+        "backend_network_id": POOL_UID,
+    }
 
 
 def test_tenant_identity_is_checked_on_retry_read_and_delete(tmp_path, monkeypatch):

@@ -1,0 +1,295 @@
+---
+- name: Verify AgentlessNet ExternalIPPool provider lifecycle through the dispatcher
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    tenant_id: integration-tenant
+    primary_fulfillment_id: "11111111-1111-4111-8111-111111111111"
+    peer_fulfillment_id: "22222222-2222-4222-8222-222222222222"
+    primary_cidr: 198.51.100.0/24
+    peer_cidr: 203.0.113.0/24
+    agentless_pool_inventory:
+      all:
+        children:
+          net_nodes:
+            hosts:
+              network-node:
+                ansible_host: 127.0.0.1
+                ansible_user: pool-test
+    expected_tables:
+      - external_ip_pools
+      - subnets
+      - virtual_networks
+  tasks:
+    - name: Create isolated state and namespace names
+      block:
+        - name: Create a temporary AgentlessNet state directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: osac-agentless-pool-
+          register: agentless_pool_tempdir
+
+        - name: Derive this run's namespace and state-file paths
+          ansible.builtin.set_fact:
+            agentless_pool_namespace: >-
+              {{ ('osac-pool-' ~ (agentless_pool_tempdir.path | basename))[:63]
+                 | regex_replace('[^a-z0-9-]', '-') | regex_replace('-+$', '') }}
+            agentless_pool_state_file: >-
+              {{ agentless_pool_tempdir.path }}/agentless_network_state.sqlite3
+
+        - name: Create the isolated fixture namespace
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "{{ agentless_pool_namespace }}"
+            state: present
+
+        - name: Create the primary ExternalIPPool CR
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: ExternalIPPool
+              metadata:
+                name: agentless-pool-primary
+                namespace: "{{ agentless_pool_namespace }}"
+                labels:
+                  osac.openshift.io/externalippool-uuid: "{{ primary_fulfillment_id }}"
+                annotations:
+                  osac.openshift.io/tenant: "{{ tenant_id }}"
+                  osac.openshift.io/implementation-strategy: agentless_net
+              spec:
+                ipFamily: IPv4
+                cidrs:
+                  - "{{ primary_cidr }}"
+
+        - name: Create the peer ExternalIPPool CR
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: ExternalIPPool
+              metadata:
+                name: agentless-pool-peer
+                namespace: "{{ agentless_pool_namespace }}"
+                labels:
+                  osac.openshift.io/externalippool-uuid: "{{ peer_fulfillment_id }}"
+                annotations:
+                  osac.openshift.io/tenant: "{{ tenant_id }}"
+                  osac.openshift.io/implementation-strategy: agentless_net
+              spec:
+                ipFamily: IPv4
+                cidrs:
+                  - "{{ peer_cidr }}"
+
+        - name: Read both persisted CRs and their Kubernetes UIDs
+          kubernetes.core.k8s_info:
+            api_version: osac.openshift.io/v1alpha1
+            kind: ExternalIPPool
+            namespace: "{{ agentless_pool_namespace }}"
+            name: "{{ item }}"
+          loop:
+            - agentless-pool-primary
+            - agentless-pool-peer
+          register: agentless_pool_cr_reads
+
+        - name: Save the persisted pool identities
+          ansible.builtin.set_fact:
+            agentless_primary_pool_cr: "{{ agentless_pool_cr_reads.results[0].resources[0] }}"
+            agentless_peer_pool_cr: "{{ agentless_pool_cr_reads.results[1].resources[0] }}"
+
+        - name: Verify Kubernetes UIDs differ from Fulfillment UUIDs
+          ansible.builtin.assert:
+            that:
+              - agentless_primary_pool_cr.metadata.uid != primary_fulfillment_id
+              - agentless_peer_pool_cr.metadata.uid != peer_fulfillment_id
+              - agentless_primary_pool_cr.metadata.uid != agentless_peer_pool_cr.metadata.uid
+
+        - name: Register both pools using the top-level create playbook
+          ansible.builtin.include_tasks: run_pool_playbook.yaml
+          loop:
+            - "{{ agentless_primary_pool_cr }}"
+            - "{{ agentless_peer_pool_cr }}"
+          loop_control:
+            loop_var: agentless_pool_resource
+            label: "{{ agentless_pool_resource.metadata.name }}"
+          vars:
+            agentless_pool_operation: create
+            agentless_pool_should_succeed: true
+
+        - name: Read the saved provider state
+          ansible.builtin.command:
+            argv:
+              - "{{ ansible_playbook_python }}"
+              - "{{ playbook_dir }}/../files/pool_state.py"
+              - snapshot
+              - "{{ agentless_pool_state_file }}"
+          register: agentless_pool_snapshot_result
+          changed_when: false
+
+        - name: Parse the initial pool snapshot
+          ansible.builtin.set_fact:
+            agentless_pool_initial_snapshot: >-
+              {{ agentless_pool_snapshot_result.stdout | from_json }}
+
+        - name: Verify full schema v1 and both saved CR identities
+          ansible.builtin.assert:
+            that:
+              - agentless_pool_initial_snapshot.user_version | int == 1
+              - agentless_pool_initial_snapshot.tables == expected_tables
+              - agentless_pool_initial_snapshot.pools | length == 2
+              - >-
+                agentless_pool_initial_snapshot.pools
+                | selectattr('uid', 'equalto', agentless_primary_pool_cr.metadata.uid)
+                | selectattr('fulfillment_id', 'equalto', primary_fulfillment_id)
+                | selectattr('tenant_id', 'equalto', tenant_id)
+                | selectattr('ip_family', 'equalto', 'IPv4')
+                | selectattr('ipv4_cidr', 'equalto', primary_cidr)
+                | list | length == 1
+              - >-
+                agentless_pool_initial_snapshot.pools
+                | selectattr('uid', 'equalto', agentless_peer_pool_cr.metadata.uid)
+                | selectattr('fulfillment_id', 'equalto', peer_fulfillment_id)
+                | selectattr('tenant_id', 'equalto', tenant_id)
+                | selectattr('ip_family', 'equalto', 'IPv4')
+                | selectattr('ipv4_cidr', 'equalto', peer_cidr)
+                | list | length == 1
+
+        - name: Retry registration for the primary pool
+          ansible.builtin.include_tasks: run_pool_playbook.yaml
+          vars:
+            agentless_pool_operation: create
+            agentless_pool_resource: "{{ agentless_primary_pool_cr }}"
+            agentless_pool_should_succeed: true
+
+        - name: Read provider state after the idempotent retry
+          ansible.builtin.command:
+            argv:
+              - "{{ ansible_playbook_python }}"
+              - "{{ playbook_dir }}/../files/pool_state.py"
+              - snapshot
+              - "{{ agentless_pool_state_file }}"
+          register: agentless_pool_retry_snapshot_result
+          changed_when: false
+
+        - name: Verify the retry did not change saved provider state
+          ansible.builtin.assert:
+            that:
+              - agentless_pool_retry_snapshot_result.stdout | from_json == agentless_pool_initial_snapshot
+
+        - name: Build a primary-pool request with a conflicting tenant
+          ansible.builtin.set_fact:
+            agentless_pool_conflicting_tenant_cr: >-
+              {{ agentless_primary_pool_cr | combine(
+                {'metadata': {'annotations': {'osac.openshift.io/tenant': 'other-tenant'}}},
+                recursive=true) }}
+
+        - name: Reject a tenant change for the saved pool UID
+          ansible.builtin.include_tasks: run_pool_playbook.yaml
+          vars:
+            agentless_pool_operation: create
+            agentless_pool_resource: "{{ agentless_pool_conflicting_tenant_cr }}"
+            agentless_pool_should_succeed: false
+
+        - name: Build a primary-pool request with a conflicting CIDR
+          ansible.builtin.set_fact:
+            agentless_pool_conflicting_cidr_cr: >-
+              {{ agentless_primary_pool_cr | combine(
+                {'spec': {'cidrs': ['198.51.101.0/24']}}, recursive=true) }}
+
+        - name: Reject a CIDR change for the saved pool UID
+          ansible.builtin.include_tasks: run_pool_playbook.yaml
+          vars:
+            agentless_pool_operation: create
+            agentless_pool_resource: "{{ agentless_pool_conflicting_cidr_cr }}"
+            agentless_pool_should_succeed: false
+
+        - name: Read provider state after conflicting create attempts
+          ansible.builtin.command:
+            argv:
+              - "{{ ansible_playbook_python }}"
+              - "{{ playbook_dir }}/../files/pool_state.py"
+              - snapshot
+              - "{{ agentless_pool_state_file }}"
+          register: agentless_pool_conflict_snapshot_result
+          changed_when: false
+
+        - name: Verify conflicting requests did not overwrite either pool
+          ansible.builtin.assert:
+            that:
+              - agentless_pool_conflict_snapshot_result.stdout | from_json == agentless_pool_initial_snapshot
+
+        - name: Delete the primary pool
+          ansible.builtin.include_tasks: run_pool_playbook.yaml
+          vars:
+            agentless_pool_operation: delete
+            agentless_pool_resource: "{{ agentless_primary_pool_cr }}"
+            agentless_pool_should_succeed: true
+
+        - name: Verify primary deletion preserved the peer pool
+          ansible.builtin.command:
+            argv:
+              - "{{ ansible_playbook_python }}"
+              - "{{ playbook_dir }}/../files/pool_state.py"
+              - snapshot
+              - "{{ agentless_pool_state_file }}"
+          register: agentless_pool_after_primary_delete
+          changed_when: false
+
+        - name: Assert only the peer pool remains
+          ansible.builtin.assert:
+            that:
+              - (agentless_pool_after_primary_delete.stdout | from_json).user_version | int == 1
+              - (agentless_pool_after_primary_delete.stdout | from_json).tables == expected_tables
+              - (agentless_pool_after_primary_delete.stdout | from_json).pools | length == 1
+              - (agentless_pool_after_primary_delete.stdout | from_json).pools[0].uid == agentless_peer_pool_cr.metadata.uid
+
+        - name: Repeat primary deletion to verify idempotence
+          ansible.builtin.include_tasks: run_pool_playbook.yaml
+          vars:
+            agentless_pool_operation: delete
+            agentless_pool_resource: "{{ agentless_primary_pool_cr }}"
+            agentless_pool_should_succeed: true
+
+        - name: Delete the peer pool
+          ansible.builtin.include_tasks: run_pool_playbook.yaml
+          vars:
+            agentless_pool_operation: delete
+            agentless_pool_resource: "{{ agentless_peer_pool_cr }}"
+            agentless_pool_should_succeed: true
+
+        - name: Verify the final database keeps schema v1 with no pool rows
+          ansible.builtin.command:
+            argv:
+              - "{{ ansible_playbook_python }}"
+              - "{{ playbook_dir }}/../files/pool_state.py"
+              - snapshot
+              - "{{ agentless_pool_state_file }}"
+          register: agentless_pool_final_snapshot_result
+          changed_when: false
+
+        - name: Assert pool-only v1 schema remains after deleting both pools
+          ansible.builtin.assert:
+            that:
+              - (agentless_pool_final_snapshot_result.stdout | from_json).user_version | int == 1
+              - (agentless_pool_final_snapshot_result.stdout | from_json).tables == expected_tables
+              - (agentless_pool_final_snapshot_result.stdout | from_json).pools | length == 0
+      always:
+        - name: Delete only the fixture namespace
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "{{ agentless_pool_namespace }}"
+            state: absent
+            wait: true
+            wait_timeout: 120
+          when: agentless_pool_namespace is defined
+
+        - name: Remove only this test's temporary state directory
+          ansible.builtin.file:
+            path: "{{ agentless_pool_tempdir.path }}"
+            state: absent
+          when:
+            - agentless_pool_tempdir is defined
+            - agentless_pool_tempdir.path is defined

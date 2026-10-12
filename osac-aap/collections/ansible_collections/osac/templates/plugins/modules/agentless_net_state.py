@@ -1,5 +1,5 @@
 #!/usr/bin/python
-"""Provision and remove AgentlessNet VirtualNetwork and Subnet state."""
+"""Provision or remove AgentlessNet provider state."""
 
 from __future__ import annotations
 
@@ -19,18 +19,28 @@ from ansible_collections.osac.templates.plugins.module_utils.agentless_net_subne
 DOCUMENTATION = r"""
 ---
 module: agentless_net_state
-short_description: Provision or remove an AgentlessNet VirtualNetwork
+short_description: Provision or remove AgentlessNet network state
 description:
   - Reserves a tenant-owned UID-keyed VirtualNetwork mapping before applying network state.
-  - Uses SQLite indexes and a per-UID operation lock so
-    provider commands do not block unrelated state updates.
+  - Registers ExternalIPPools by Kubernetes UID, Fulfillment UUID, tenant, family, and CIDR.
+  - Uses SQLite indexes and per-UID operation locks for state updates.
   - Retains an allocation until provider cleanup has completed.
 options:
   action:
     description: State operation to perform.
     type: str
     required: true
-    choices: [ensure_virtual_network, delete_virtual_network, get_subnet, preflight_dhcp_supervisor, reserve_subnet, ensure_subnet, prepare_delete_subnet, release_subnet]
+    choices:
+      - ensure_virtual_network
+      - delete_virtual_network
+      - get_subnet
+      - preflight_dhcp_supervisor
+      - reserve_subnet
+      - ensure_subnet
+      - prepare_delete_subnet
+      - release_subnet
+      - ensure_external_ip_pool
+      - delete_external_ip_pool
   state_file:
     description: Path to the AgentlessNet API state file on the managed node.
     type: path
@@ -40,9 +50,19 @@ options:
     type: str
     required: true
   tenant_id:
-    description: Tenant name from the VirtualNetwork tenant annotation.
+    description: Tenant name from the resource tenant annotation.
     type: str
     required: true
+  fulfillment_id:
+    description: Fulfillment UUID label on an ExternalIPPool.
+    type: str
+  ip_family:
+    description: ExternalIPPool address family; only IPv4 is supported.
+    type: str
+  cidrs:
+    description: ExternalIPPool CIDR list; exactly one canonical IPv4 CIDR is supported.
+    type: list
+    elements: str
   virtual_network_cidr:
     description: VirtualNetwork IPv4 supernet.
     type: str
@@ -75,12 +95,22 @@ EXAMPLES = r"""
     uid: 01234567-89ab-cdef-0123-456789abcdef
     tenant_id: tenant-a
     virtual_network_cidr: 10.20.0.0/16
+- name: Register an ExternalIPPool
+  osac.templates.agentless_net_state:
+    action: ensure_external_ip_pool
+    state_file: /etc/osac/agentless_network_state.sqlite3
+    uid: 01234567-89ab-cdef-0123-456789abcdef
+    fulfillment_id: 11234567-89ab-cdef-0123-456789abcdef
+    tenant_id: tenant-a
+    ip_family: IPv4
+    cidrs:
+      - 198.51.100.0/24
 """
 
 RETURN = r"""
 backend_network_id:
   description: Stable provider identifier, equal to the OSAC resource UID.
-  returned: when action is ensure_virtual_network
+  returned: for VirtualNetwork and ExternalIPPool actions
   type: str
 found:
   description: Whether a saved Subnet reservation was found.
@@ -90,7 +120,16 @@ subnet:
   description: Validated Subnet provider state when found.
   returned: for Subnet actions when found
   type: dict
+pool:
+  description: Validated ExternalIPPool provider identity.
+  returned: for ExternalIPPool actions when the pool exists or would be registered
+  type: dict
 """
+
+EXTERNAL_IP_POOL_ACTIONS = {
+    "ensure_external_ip_pool",
+    "delete_external_ip_pool",
+}
 
 
 def main() -> None:
@@ -99,20 +138,25 @@ def main() -> None:
             "action": {
                 "type": "str",
                 "required": True,
-            "choices": [
-                "ensure_virtual_network",
-                "delete_virtual_network",
-                "get_subnet",
-                "preflight_dhcp_supervisor",
-                "reserve_subnet",
-                "ensure_subnet",
-                "prepare_delete_subnet",
-                "release_subnet",
-            ],
+                "choices": [
+                    "ensure_virtual_network",
+                    "delete_virtual_network",
+                    "get_subnet",
+                    "preflight_dhcp_supervisor",
+                    "reserve_subnet",
+                    "ensure_subnet",
+                    "prepare_delete_subnet",
+                    "release_subnet",
+                    "ensure_external_ip_pool",
+                    "delete_external_ip_pool",
+                ],
             },
             "state_file": {"type": "path", "required": True},
             "uid": {"type": "str", "required": True},
             "tenant_id": {"type": "str", "required": True},
+            "fulfillment_id": {"type": "str"},
+            "ip_family": {"type": "str"},
+            "cidrs": {"type": "list", "elements": "str"},
             "virtual_network_cidr": {"type": "str"},
             "virtual_network_uid": {"type": "str"},
             "subnet_cidr": {"type": "str"},
@@ -140,6 +184,16 @@ def main() -> None:
                     "observed_switch_vlan_state",
                 ],
             ),
+            (
+                "action",
+                "ensure_external_ip_pool",
+                ["fulfillment_id", "ip_family", "cidrs"],
+            ),
+            (
+                "action",
+                "delete_external_ip_pool",
+                ["fulfillment_id", "ip_family", "cidrs"],
+            ),
         ],
         supports_check_mode=True,
     )
@@ -147,6 +201,34 @@ def main() -> None:
     store = StateStore(params["state_file"])
 
     try:
+        if params["action"] in EXTERNAL_IP_POOL_ACTIONS:
+            if params["action"] == "ensure_external_ip_pool":
+                pool, changed = store.ensure_external_ip_pool(
+                    params["uid"],
+                    params["fulfillment_id"],
+                    params["tenant_id"],
+                    params["ip_family"],
+                    params["cidrs"],
+                    check_mode=module.check_mode,
+                )
+            else:
+                pool, changed = store.delete_external_ip_pool(
+                    params["uid"],
+                    params["fulfillment_id"],
+                    params["tenant_id"],
+                    params["ip_family"],
+                    params["cidrs"],
+                    check_mode=module.check_mode,
+                )
+            result = {
+                "changed": changed,
+                "backend_network_id": params["uid"],
+            }
+            if pool is not None:
+                result["pool"] = pool
+            module.exit_json(**result)
+            return
+
         if params["action"] == "ensure_virtual_network":
             if module.check_mode:
                 existing = store.get_virtual_network(
@@ -258,6 +340,11 @@ def main() -> None:
             )
         )
     except (StateError, SubnetProviderError) as error:
+        if params["action"] in EXTERNAL_IP_POOL_ACTIONS:
+            module.fail_json(
+                msg="AgentlessNet ExternalIPPool operation failed; inspect the network node and retry."
+            )
+            return
         if params["action"] in {
             "get_subnet",
             "preflight_dhcp_supervisor",

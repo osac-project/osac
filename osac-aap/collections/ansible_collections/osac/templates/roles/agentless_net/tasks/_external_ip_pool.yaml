@@ -1,0 +1,27 @@
+---
+- name: Apply AgentlessNet ExternalIPPool provider state
+  block:
+    - name: Load the AgentlessNet provider inventory
+      ansible.builtin.include_tasks: _load_network_node_inventory.yaml
+      vars:
+        agentless_net_require_switches: false
+
+    - name: Register or remove the ExternalIPPool in provider state
+      osac.templates.agentless_net_state:
+        action: "{{ agentless_net_pool_action }}"
+        state_file: "{{ agentless_net_network_state_file }}"
+        uid: "{{ external_ip_pool.metadata.uid | default('') }}"
+        fulfillment_id: >-
+          {{ (external_ip_pool.metadata.labels | default({}))
+             .get('osac.openshift.io/externalippool-uuid', '') }}
+        tenant_id: >-
+          {{ (external_ip_pool.metadata.annotations | default({}))
+             .get('osac.openshift.io/tenant', '') }}
+        ip_family: "{{ external_ip_pool.spec.ipFamily | default('') }}"
+        cidrs: "{{ external_ip_pool.spec.cidrs | default([]) }}"
+      delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
+      become: true
+      no_log: true
+  always:
+    - name: Remove the temporary AgentlessNet SSH key file
+      ansible.builtin.include_tasks: _cleanup_network_node_inventory.yaml

@@ -78,6 +78,11 @@ endif
 ifeq ($(filter $(SUITE),all fulfillment operator bmf),)
 $(error SUITE=$(SUITE) is invalid; must be all, fulfillment, operator, or bmf)
 endif
+ifeq ($(MCP_TEST_ENABLED),true)
+ifneq ($(PLATFORM),kind)
+$(error MCP_TEST_ENABLED=true requires PLATFORM=kind (the MCP test endpoint uses mcp.osac.localhost:8443))
+endif
+endif
 endif
 
 # -- Paths and constants -----------------------------------------------

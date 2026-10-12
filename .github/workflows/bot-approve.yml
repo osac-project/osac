@@ -1,0 +1,105 @@
+---
+# Approves dependency-update pull requests (Dependabot, Konflux) when no person needs to read them, as the OSAC CI app
+# (osac-ci[bot]). The answer is "approve" only when every commit is the bot's own, plain and signed, and every changed
+# file is a dependency file; a commit added by a person, a hand rebase, an "Update branch" merge, or a change to a
+# workflow or a script makes it refuse, and then a person approves as for any pull request (see osac-project/osac-ci,
+# README, "Approving dependency updates without a person"). The approval is made for the exact head commit that was
+# checked, so a later push drops it (the repository dismisses stale approvals) and the next run looks again. A repeated
+# run does not stack approvals.
+#
+# It runs on a schedule, not on the pull request event. A run started by a pull request that Dependabot opened gets only
+# Dependabot's secrets, so the app's key would have to be given to Dependabot as well; a scheduled run is not started by
+# Dependabot and uses the organization's normal secret, so the key stays out of the Dependabot context. The price is a
+# wait of up to a quarter of an hour. Nothing here checks out or runs pull request code: the decision comes from the API.
+# The approval uses a token of the OSAC CI app with the pull-request permission only, minted from the app's key.
+name: Bot approval
+on:
+  schedule:
+    # Every 15 minutes, not on the hour: GitHub queues everyone's on-the-hour schedules together and can delay them.
+    - cron: '3,18,33,48 * * * *'
+  workflow_dispatch:
+    inputs:
+      number:
+        description: One pull request number (empty means every open dependency update)
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+# One sweep at a time. A sweep is short, and the next one looks again at whatever it missed.
+concurrency:
+  group: bot-approve
+  cancel-in-progress: false
+
+jobs:
+  list:
+    name: List dependency updates
+    if: github.repository == 'osac-project/osac'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      numbers: ${{ steps.list.outputs.numbers }}
+    steps:
+      - name: Open pull requests of the two update bots
+        id: list
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ inputs.number }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${NUMBER}" ]]; then
+            [[ "${NUMBER}" =~ ^[0-9]+$ ]] || { echo "::error::The pull request number must be digits only."; exit 1; }
+            numbers="[${NUMBER}]"
+          else
+            # Only the two update bots; every other author would be answered "skip-not-a-bot" at the cost of a runner.
+            numbers=$(gh api --paginate "repos/${REPO}/pulls?state=open&per_page=100" \
+              --jq '[.[] | select(.draft | not) | select(.user.login == "dependabot[bot]" or .user.login == "red-hat-konflux-kflux-prd-rh02[bot]") | .number]' \
+              | jq -cs 'add // []')
+          fi
+          echo "numbers=${numbers}" >> "$GITHUB_OUTPUT"
+          echo "Dependency updates to look at: ${numbers}" >> "$GITHUB_STEP_SUMMARY"
+
+  approve:
+    name: "Approve #${{ matrix.number }}"
+    needs: list
+    if: needs.list.outputs.numbers != '[]'
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        number: ${{ fromJSON(needs.list.outputs.numbers) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read  # the action is fetched from osac-ci by the runner; nothing of this repository is checked out
+      pull-requests: read  # read the pull request, its commits, files and reviews; the approval uses the app's token
+    steps:
+      # The approval is made by the OSAC CI app (osac-ci[bot]), with a token that has the pull-request permission only and
+      # lasts an hour. The app is the organization's; its key is an organization secret.
+      - name: Token of the OSAC CI app, for the approval only
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          app-id: "4966101"
+          private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
+          permission-pull-requests: write
+      - uses: osac-project/osac-ci/.github/actions/bot-approve@1291e86861e1384a6c69fc767db89b636b965275  # osac-ci main
+        id: approve
+        with:
+          github-token: ${{ github.token }}
+          approve-token: ${{ steps.app-token.outputs.token }}
+          repo: ${{ github.repository }}
+          number: ${{ matrix.number }}
+      - name: Keep the decision
+        if: steps.approve.outputs.json-file != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: bot-approval-${{ matrix.number }}-${{ github.run_id }}
+          path: ${{ steps.approve.outputs.json-file }}
+          retention-days: 14
+          if-no-files-found: ignore

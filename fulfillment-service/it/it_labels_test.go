@@ -38,6 +38,7 @@ var _ = Describe("Labels", func() {
 		templatesClient           privatev1.ClusterTemplatesClient
 		bmitName                  string
 		templateId                string
+		network                   catalogItemNetworkFixture
 	)
 
 	BeforeEach(func() {
@@ -48,6 +49,7 @@ var _ = Describe("Labels", func() {
 		adminClustersClient = privatev1.NewClustersClient(tool.InternalView().AdminConn())
 		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
 		templatesClient = privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
+		network = createCatalogItemNetworkFixture(ctx, usersGroup, "")
 
 		bmitName = fmt.Sprintf("test-bmit-%s", uuid.New()[24:32])
 		_, err := instanceTypesClient.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
@@ -114,8 +116,9 @@ var _ = Describe("Labels", func() {
 					Labels: labels,
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-					NodeSets: testClusterNodeSets(bmitName, 3),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NetworkAttachment: network.clusterAttachment(),
+					NodeSets:          testClusterNodeSets(bmitName, 3),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -149,8 +152,9 @@ var _ = Describe("Labels", func() {
 					Name: fmt.Sprintf("labels-test-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-					NodeSets: testClusterNodeSets(bmitName, 3),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NetworkAttachment: network.clusterAttachment(),
+					NodeSets:          testClusterNodeSets(bmitName, 3),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -175,7 +179,8 @@ var _ = Describe("Labels", func() {
 					Labels: labels,
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NetworkAttachment: object.GetSpec().GetNetworkAttachment(),
 				}.Build(),
 			}.Build(),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
@@ -299,7 +304,8 @@ var _ = Describe("Labels", func() {
 						},
 					}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
-						Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+						NetworkAttachment: network.clusterAttachment(),
+						Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -315,8 +321,9 @@ var _ = Describe("Labels", func() {
 						Name: fmt.Sprintf("labels-test-%s", uuid.New()[24:32]),
 					}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
-						Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-						NodeSets: testClusterNodeSets(bmitName, 3),
+						Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+						NetworkAttachment: network.clusterAttachment(),
+						NodeSets:          testClusterNodeSets(bmitName, 3),
 					}.Build(),
 				}.Build(),
 			}.Build())

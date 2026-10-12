@@ -20,6 +20,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
@@ -55,6 +56,7 @@ var _ = Describe("Tenancy logic", func() {
 		createTenant("your-tenant")
 		seedReadyDefaultNetworking("my-tenant", 0)
 		seedReadyDefaultNetworking("your-tenant", 0)
+seedReadyDefaultNetworking(auth.SharedTenant, 0)
 
 		// Create a default cluster version for version resolution:
 		seedClusterVersion(ctx, privatev1.ClusterVersion_builder{
@@ -507,6 +509,7 @@ var _ = Describe("Tenancy logic", func() {
 					},
 				}.Build(),
 			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.node_sets"}},
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(updateResponse.GetObject().GetMetadata().GetTenant()).To(Equal("my-tenant"))

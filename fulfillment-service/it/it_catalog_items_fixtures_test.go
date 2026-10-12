@@ -527,6 +527,18 @@ func (f catalogItemNetworkFixture) clusterAttachment() *publicv1.ClusterNetworkA
 	return attachment
 }
 
+func (f catalogItemNetworkFixture) privateClusterAttachment() *privatev1.ClusterNetworkAttachment {
+	attachment := privatev1.ClusterNetworkAttachment_builder{
+		Subnet: privatev1.SubnetLocalReference_builder{Id: f.subnetID}.Build(),
+	}.Build()
+	if f.securityGroupID != "" {
+		attachment.SetSecurityGroups([]*privatev1.SecurityGroupLocalReference{
+			privatev1.SecurityGroupLocalReference_builder{Id: f.securityGroupID}.Build(),
+		})
+	}
+	return attachment
+}
+
 func createCatalogItemPullSecretFixture(ctx context.Context, tenant string) string {
 	GinkgoHelper()
 	return createCatalogItemSecretFixture(ctx, tenant, privatev1.SecretType_SECRET_TYPE_PULL_SECRET,

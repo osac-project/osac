@@ -275,7 +275,7 @@ func computeCapabilities(
 	caps.SetSupportsIpv6(supports(networkmanager.CapabilityIPv6))
 	caps.SetSupportsDualStack(supports(networkmanager.CapabilityDualStack))
 	caps.SetDpuSupport(supports(networkmanager.CapabilityDPUSupport))
-	caps.SetSupportsEastWestEthernet(fabric.HasCapability(networkmanager.CapabilityEastWestEthernet))
+	caps.SetSupportsEastWestEthernet(fabric != nil && fabric.HasCapability(networkmanager.CapabilityEastWestEthernet))
 
 	if disabled != nil {
 		if disabled.GetSupportsIpv4() {

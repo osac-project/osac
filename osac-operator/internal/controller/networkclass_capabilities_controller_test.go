@@ -84,6 +84,12 @@ var _ = Describe("computeCapabilities", func() {
 		Expect(caps.GetDpuSupport()).To(BeFalse())
 	})
 
+	It("does not report Ethernet east-west support without a fabric manager", func() {
+		caps := computeCapabilities(&dispatcher.ResolvedManagers{K8sManager: &k8sIPv4Only}, nil)
+		Expect(caps.GetSupportsIpv4()).To(BeTrue())
+		Expect(caps.GetSupportsEastWestEthernet()).To(BeFalse())
+	})
+
 	It("clears disabled capabilities without enabling unsupported families", func() {
 		fabric := fabricDualStack
 		fabric.Capabilities = append(fabric.Capabilities, networkmanager.CapabilityEastWestEthernet)
@@ -419,7 +425,8 @@ var _ = Describe("NetworkClassCapabilitiesReconciler", func() {
 
 		_, err = reconciler.Reconcile(ctx, ctrl.Request{})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(nc.GetCapabilities()).To(BeNil())
+		Expect(nc.GetCapabilities().GetSupportsIpv4()).To(BeTrue())
+		Expect(nc.GetCapabilities().GetSupportsEastWestEthernet()).To(BeFalse())
 		Expect(updates).To(HaveLen(1))
 	})
 

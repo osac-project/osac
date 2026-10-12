@@ -31,6 +31,8 @@
     method: DELETE
     headers:
       Cookie: "connect.sid={{ netris_session_cookie }}"
-    status_code: [200, 204]
+    # 404 means the V-Net was removed concurrently after the list lookup;
+    # the deletion target is already absent, so treat it as deleted.
+    status_code: [200, 204, 404]
     validate_certs: "{{ netris_validate_certs | default(true) }}"
   no_log: true

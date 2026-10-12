@@ -784,16 +784,8 @@ jobs:
   # -------------------------------------------------------------------
   unit-tests:
     name: Unit tests
-    # pull-requests: read matches what unit-tests.yml's own `changes` job
-    # declares (for dorny/paths-filter) -- unused on a workflow_call trigger
-    # (that step's own `if:` only matches pull_request/merge_group), but
-    # GitHub statically validates a called local reusable workflow's job
-    # permissions against the caller's grant regardless of runtime `if:`
-    # guards, so it still must be granted here or the whole run fails to
-    # start.
     permissions:
       contents: read
-      pull-requests: read
     # Skippable via the skip_unit input, same shape as skip_integration/
     # skip_e2e below but independent of them: both callers pass this
     # through from their own workflow_dispatch input; the nightly
@@ -804,10 +796,8 @@ jobs:
 
   integration-tests:
     name: Integration tests
-    # See unit-tests' comment above -- same reason.
     permissions:
       contents: read
-      pull-requests: read
     # Skippable via the skip_integration input, same shape as skip_e2e
     # above but independent of it: both callers pass this through from
     # their own workflow_dispatch input; the nightly scheduled trigger

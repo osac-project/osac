@@ -9,6 +9,7 @@ export const WIZARD_STEP_IDS = [
   'configuration',
   'storage',
   'networking',
+  'access',
   'review',
 ];
 
@@ -20,6 +21,7 @@ export const STEP_LABEL_KEYS = (t: TFunction): Record<WizardStepId, string> => (
   configuration: t('Configuration'),
   storage: t('Storage'),
   networking: t('Networking'),
+  access: t('Access & initial run'),
   review: t('Review'),
 });
 
@@ -48,6 +50,7 @@ const COMPUTE_INSTANCE_WIZARD_STEPS: readonly WizardStepId[] = [
   'configuration',
   'storage',
   'networking',
+  'access',
   'review',
 ];
 

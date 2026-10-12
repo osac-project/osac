@@ -85,7 +85,7 @@ export const BareMetalReviewStep = ({ catalogItem }: Props) => {
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
-            <DescriptionListTerm>{t('User data')}</DescriptionListTerm>
+            <DescriptionListTerm>{t('Cloud-init')}</DescriptionListTerm>
             <DescriptionListDescription>
               {formatReviewScalar(values.spec.userData, true)}
             </DescriptionListDescription>

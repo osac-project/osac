@@ -117,7 +117,7 @@ export const applyBmCatalogDefaults = (
   const userDataOverlay = getCatalogFieldOverlay(
     BM_USER_DATA_WIRE_PATH,
     definitions,
-    t('User data'),
+    t('Cloud-init'),
   );
 
   const instanceTypePolicy = getBareMetalInstanceTypeCatalogPolicy(catalogItem);

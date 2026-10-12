@@ -30,7 +30,7 @@ const buildBareMetalInstanceFieldDefinitions = (
   const userDataOverlay = getCatalogFieldOverlay(
     BM_USER_DATA_WIRE_PATH,
     definitions,
-    t('User data'),
+    t('Cloud-init'),
   );
 
   const sshKeyRequired = hasCatalogFieldDefinition(BM_SSH_KEY_WIRE_PATH, definitions);
@@ -57,7 +57,7 @@ const buildBareMetalInstanceFieldDefinitions = (
       userDataSchema(t),
       userDataOverlay,
       userDataRequired,
-      t('User Data is required'),
+      t('Cloud-init is required'),
     ),
   };
 };

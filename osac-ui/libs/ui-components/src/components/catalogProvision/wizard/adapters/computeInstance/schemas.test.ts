@@ -164,6 +164,23 @@ describe('buildComputeInstanceStepSchema', () => {
     expect(errors).toEqual({});
   });
 
+  it('validates user data on access step', async () => {
+    const errors = await validateStep(
+      'access',
+      {
+        ...emptyValues,
+        catalogItemId: vmCatalogItem.id,
+        metadata: { name: 'web-01', project: '' },
+        spec: {
+          ...emptyValues.spec,
+          userData: 'invalid'.repeat(20_000),
+        },
+      },
+      vmCatalogItem,
+    );
+    expect(errors).not.toEqual({});
+  });
+
   it('does not require networking when leaving the storage step', async () => {
     const errors = await validateStep(
       'storage',

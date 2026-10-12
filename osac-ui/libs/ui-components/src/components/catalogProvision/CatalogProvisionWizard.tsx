@@ -231,6 +231,7 @@ const WizardStepBody = ({
   const { t } = useTranslation();
   const ConfigurationStep = adapter.ConfigurationStep;
   const StorageStep = adapter.StorageStep;
+  const AccessStep = adapter.AccessStep;
   const NetworkingStep = adapter.NetworkingStep;
   const GeneralStepComponent = adapter.GeneralStep;
   const ReviewStepComponent = adapter.ReviewStep;
@@ -255,6 +256,7 @@ const WizardStepBody = ({
         {stepId === 'configuration' ? <ConfigurationStep catalogItem={catalogItem} /> : null}
         {stepId === 'storage' && StorageStep ? <StorageStep catalogItem={catalogItem} /> : null}
         {stepId === 'networking' ? <NetworkingStep catalogItem={catalogItem} /> : null}
+        {stepId === 'access' && AccessStep ? <AccessStep catalogItem={catalogItem} /> : null}
         {stepId === 'review' ? <ReviewStepComponent catalogItem={catalogItem} /> : null}
       </Stack>
     </FieldValidationProvider>

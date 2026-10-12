@@ -11,7 +11,6 @@ import {
 import { useTranslation } from '../../../../../hooks/useTranslation';
 import OsacForm from '../../../../Form/OsacForm';
 import { SelectField } from '../../../../Form/SelectField';
-import UserDataField from '../../fields/UserDataField';
 
 interface Props {
   catalogItem: ComputeInstanceCatalogItem | null;
@@ -66,7 +65,6 @@ export const VmConfigurationStep = ({ catalogItem }: Props) => {
             placeholder={t('catalogProvision.vm.placeholders.selectInstanceType')}
             options={instanceTypeOptions}
           />
-          <UserDataField catalogItem={catalogItem} name="spec.userData" wirePath="spec.user_data" />
         </OsacForm>
       </StackItem>
     </Stack>

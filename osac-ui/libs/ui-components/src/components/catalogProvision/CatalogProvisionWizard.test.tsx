@@ -171,6 +171,10 @@ const advanceToReviewStep = async (user: UserEvent, catalogItemTitle: string) =>
   await selectNetworkingPickers(user);
   await clickWizardNext(user);
   await waitFor(() => {
+    expect(screen.getByLabelText(/^SSH public key/)).toBeInTheDocument();
+  });
+  await clickWizardNext(user);
+  await waitFor(() => {
     expect(screen.getByRole('button', { name: 'Create' })).toBeInTheDocument();
   });
 };
@@ -908,6 +912,7 @@ describe('CatalogProvisionWizard', () => {
     const { unmount } = renderWizard();
     await expectCatalogItemVisible('catalog-rhel-9');
     expect(screen.getByRole('button', { name: 'Storage' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Access & initial run' })).toBeInTheDocument();
     unmount();
 
     renderWizard({ kind: 'cluster' });

@@ -34,6 +34,8 @@ export interface CatalogProvisionAdapter<TItem extends CatalogItem, TValues, TPa
   ConfigurationStep: ComponentType<{ catalogItem: TItem | null }>;
   /** Optional — only kinds whose ordered steps include 'storage' (compute instances) set this. */
   StorageStep?: ComponentType<{ catalogItem: TItem | null }>;
+  /** Optional — only compute instances include an access step after networking. */
+  AccessStep?: ComponentType<{ catalogItem: TItem | null }>;
   NetworkingStep: ComponentType<{ catalogItem: TItem | null }>;
   GeneralStep: ComponentType<{ catalogItem: TItem | null }>;
   ReviewStep: ComponentType<{ catalogItem: TItem | null }>;

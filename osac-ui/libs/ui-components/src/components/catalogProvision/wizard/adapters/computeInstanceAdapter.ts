@@ -11,6 +11,7 @@ import {
   createEmptyComputeInstanceValues,
 } from './computeInstance/payload';
 import { buildComputeInstanceStepSchema } from './computeInstance/schemas';
+import VmAccessStep from './computeInstance/VmAccessStep';
 import { VmConfigurationStep } from './computeInstance/VmConfigurationStep';
 import VmGeneralStep from './computeInstance/VmGeneralStep';
 import { VmNetworkingStep } from './computeInstance/VmNetworkingStep';
@@ -50,6 +51,7 @@ export const useComputeInstanceAdapter = (): CatalogProvisionAdapter<
       buildCreatePayload: buildComputeInstanceCreatePayload,
       ConfigurationStep: VmConfigurationStep,
       StorageStep: VmStorageStep,
+      AccessStep: VmAccessStep,
       NetworkingStep: VmNetworkingStep,
       GeneralStep: VmGeneralStep,
       getStepValidationSchema: (catalogItem, stepId) =>

@@ -19,7 +19,7 @@ const UserDataField = ({ catalogItem, wirePath, name }: UserDataFieldProps) => {
   const { t } = useTranslation();
 
   const definitions = readCatalogFieldDefinitions(catalogItem);
-  const overlay = getCatalogFieldOverlay(wirePath, definitions, t('User data'));
+  const overlay = getCatalogFieldOverlay(wirePath, definitions, t('Cloud-init'));
   const isRequired = hasCatalogFieldDefinition(wirePath, definitions);
   return (
     <InputField

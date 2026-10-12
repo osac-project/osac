@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-import subprocess
 from typing import Any
 
 import pytest
@@ -356,45 +355,3 @@ def test_baremetal_instance_restart(
             private_grpc.delete_disk_image(disk_image_id=deprecated_disk_image_id, api=PRIVATE_API)
         except Exception:
             logger.exception("Failed to delete deprecated DiskImage %s during cleanup", deprecated_disk_image_id)
-
-
-def test_bmi_catalog_item_rejects_cross_tenant_disk_image(
-    bmi_template: str, jwt_grpc_tenant1_admin: GRPCClient, jwt_grpc_tenant2: GRPCClient, test_run_id: str
-) -> None:
-    """A tenant cannot create a BMI CatalogItem that references another tenant's DiskImage."""
-    disk_image_id: str | None = None
-    catalog_item_id: str | None = None
-    disk_image_name = f"e2e-bmi-tenant2-di-{test_run_id}"
-    catalog_item_name = f"e2e-bmi-cross-tenant-{test_run_id}"
-
-    try:
-        disk_image_id = jwt_grpc_tenant2.create_disk_image(name=disk_image_name, source_ref=BMI_DISK_IMAGE_SOURCE_REF)
-
-        try:
-            response = jwt_grpc_tenant1_admin.call(
-                service=f"{PUBLIC_API}.BareMetalInstanceCatalogItems/Create",
-                data={
-                    "object": {
-                        "metadata": {"name": catalog_item_name},
-                        "title": "Cross-tenant DiskImage rejection test",
-                        "description": "Must not disclose another tenant's DiskImage",
-                        "template": {"name": bmi_template, "shared": True},
-                        "published": True,
-                        "fields": {"disk_image": {"editable": {"default_value": {"name": disk_image_name}}}},
-                    }
-                },
-            )
-        except subprocess.CalledProcessError as exc:
-            combined = (exc.stderr or "") + (exc.stdout or "")
-            assert re.search(r"Code:\s*NotFound", combined), f"Expected gRPC NotFound, got: {combined.strip()}"
-        else:
-            catalog_item_id = response["object"]["id"]
-            pytest.fail("Cross-tenant DiskImage reference unexpectedly created a CatalogItem")
-
-        catalog_items = jwt_grpc_tenant1_admin.call(service=f"{PUBLIC_API}.BareMetalInstanceCatalogItems/List")
-        assert catalog_item_name not in {item["metadata"]["name"] for item in catalog_items.get("items", [])}
-    finally:
-        if catalog_item_id is not None:
-            jwt_grpc_tenant1_admin.delete_baremetal_instance_catalog_item(item_id=catalog_item_id)
-        if disk_image_id is not None:
-            jwt_grpc_tenant2.delete_disk_image(disk_image_id=disk_image_id)

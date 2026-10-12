@@ -416,9 +416,9 @@ def test_compute_instance_boot_disk_tier_from_template_default() -> None:
     Why skipped: a custom template cannot drive real VM provisioning in e2e. Its spec.templateID
     is written verbatim into the CR and used by AAP as the role name to include
     (playbook_osac_create_compute_instance.yml), and only AAP-published templates have a backing
-    role, so the CI can neither provision nor delete. This constraint is documented on the sibling
-    test tests/e2e/vmaas/test_compute_instance_disk_image.py::test_template_disk_image_default, which
-    hit the same limitation and works around it by asserting on the template object only.
+    role, so the CI can neither provision nor delete. API-only template DiskImage default resolution
+    is covered in fulfillment-service/it/it_disk_images_api_test.go; it does not establish custom
+    template provisioning.
     """
 
 

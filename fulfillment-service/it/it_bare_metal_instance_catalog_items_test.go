@@ -32,6 +32,42 @@ import (
 )
 
 var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), func() {
+	It("rejects a cross-tenant DiskImage name without persisting a catalog item", func(ctx context.Context) {
+		_, conn := createCatalogItemTenantAdminFixture(ctx)
+		images := publicv1.NewDiskImagesClient(tool.ExternalView().UserConn())
+		image := createPublicDiskImageFixture(ctx, images, "")
+		template := createCatalogItemBareMetalInstanceTemplateFixture(ctx, nil, nil)
+		catalogs := publicv1.NewBareMetalInstanceCatalogItemsClient(conn)
+		name := catalogItemFixtureName()
+		response, err := catalogs.Create(ctx, publicv1.BareMetalInstanceCatalogItemsCreateRequest_builder{
+			Object: publicv1.BareMetalInstanceCatalogItem_builder{
+				Metadata:  publicv1.Metadata_builder{Name: name}.Build(),
+				Title:     "Cross-tenant DiskImage rejection",
+				Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: template, Shared: true}.Build(),
+				Published: true,
+				Fields: publicv1.BareMetalInstanceCatalogItemFields_builder{
+					DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{
+						Editable: publicv1.EditableDiskImageReferenceField_builder{
+							DefaultValue: publicv1.DiskImageReference_builder{Name: image.GetMetadata().GetName()}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		if response.GetObject().GetId() != "" {
+			DeferCleanup(func(ctx context.Context) {
+				_, err := catalogs.Delete(ctx, publicv1.BareMetalInstanceCatalogItemsDeleteRequest_builder{Id: response.GetObject().GetId()}.Build())
+				Expect(err).NotTo(HaveOccurred())
+			})
+		}
+		expectCatalogItemStatusCode(err, codes.NotFound)
+		listed, err := catalogs.List(ctx, publicv1.BareMetalInstanceCatalogItemsListRequest_builder{
+			Filter: new("this.metadata.name == '" + name + "'"),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(listed.GetItems()).To(BeEmpty())
+	})
+
 	Context("Provisioning and field governance", func() {
 		It("materializes bare metal instance typed policies and replaces editable attachments", func(ctx context.Context) {
 			By("creating a tenant catalog item with hardware, image, and network policies")

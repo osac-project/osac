@@ -373,6 +373,51 @@ var _ = Describe("Public clusters", func() {
 		Expect(status.Code()).To(Equal(grpccodes.NotFound))
 	})
 
+	It("rejects a shared ClusterVersion without a disk image without persisting a cluster", func() {
+		versions := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())
+		versionName := catalogItemFixtureName()
+		created, err := versions.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
+			Object: privatev1.ClusterVersion_builder{
+				Metadata: privatev1.Metadata_builder{Name: versionName, Tenant: "shared"}.Build(),
+				Spec: privatev1.ClusterVersionSpec_builder{
+					Version: nextCVVersion(), Image: "quay.io/openshift-release-dev/ocp-release:4.22.0-multi",
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() {
+			_, err := versions.Delete(ctx, privatev1.ClusterVersionsDeleteRequest_builder{Id: created.GetObject().GetId()}.Build())
+			Expect(err).NotTo(HaveOccurred())
+		})
+		Expect(created.GetObject().GetSpec().GetDiskImage()).To(BeNil())
+
+		name := catalogItemFixtureName()
+		response, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
+			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{Name: name}.Build(),
+				Spec: publicv1.ClusterSpec_builder{
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId, Shared: true}.Build(),
+					Version:  publicv1.ClusterVersionReference_builder{Name: versionName, Shared: true}.Build(),
+					NodeSets: testClusterNodeSets(bmitName, 1),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		if response.GetObject().GetId() != "" {
+			DeferCleanup(func() {
+				_, err := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: response.GetObject().GetId()}.Build())
+				Expect(err).NotTo(HaveOccurred())
+			})
+		}
+		expectCatalogItemStatusCode(err, grpccodes.FailedPrecondition)
+		Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring(versionName))
+		Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("does not have a disk image attached"))
+		listed, err := clustersClient.List(ctx, publicv1.ClustersListRequest_builder{
+			Filter: new(fmt.Sprintf("this.metadata.name == %q", name)),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(listed.GetItems()).To(BeEmpty())
+	})
+
 	It("Can create a cluster with explicit version", func() {
 		// Bare-metal workers require the selected version to have a DiskImage.
 		image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())

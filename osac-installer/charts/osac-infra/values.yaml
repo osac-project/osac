@@ -150,14 +150,15 @@ bundledPostgres:
 bundledVault:
   enabled: false
   image: "ghcr.io/openbao/openbao:2.6.2"
-  # podSecurityContext: {}
-  # Leave absent (nil) to use the template's built-in standard-Kubernetes defaults
-  # (runAsNonRoot: true, runAsUser: 100, runAsGroup: 1000, fsGroup: 1000).
-  # On OpenShift with restricted-v2 SCC, set this to just {runAsNonRoot: true}
-  # in the profile's infra.yaml — the SCC allocates UIDs from the namespace
-  # UID range and resolves the named user automatically. Any non-nil value here
-  # FULLY REPLACES the template default (no Helm key-merge), so partial overrides
-  # must include every key you want rendered.
+  # Default podSecurityContext omits a hardcoded UID so that OpenShift's
+  # restricted-v2 SCC can allocate from the namespace UID range. Override
+  # this in a profile's infra.yaml when a specific UID is required (e.g. Kind).
+  # Profile overrides are merged with this chart default; unspecified keys
+  # such as seccompProfile are retained.
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
   resources:
     limits:
       cpu: 500m

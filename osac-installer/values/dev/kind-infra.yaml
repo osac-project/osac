@@ -36,9 +36,18 @@ bundledPostgres:
 
 # --- Bundled OpenBao ---
 # Bundled OpenBao for testing and CI. Not for production.
+# The OpenBao image declares USER openbao (non-numeric); Kubernetes
+# cannot verify runAsNonRoot without a numeric UID, so we must supply
+# one explicitly on Kind. OpenShift's restricted-v2 SCC allocates UIDs
+# from the namespace range, so the chart default omits them.
 bundledVault:
   enabled: true
   keycloakIssuerUrl: "https://keycloak.keycloak.svc.cluster.local:8443/realms/osac"
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 100
+    runAsGroup: 1000
+    fsGroup: 1000
 
 # origin-cli USER is 0; kind has no SCC to allocate a UID.
 cliJobPodSecurityContext:

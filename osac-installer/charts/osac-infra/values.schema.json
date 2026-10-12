@@ -83,7 +83,7 @@
         },
         "podSecurityContext": {
           "type": "object",
-          "description": "Pod-level securityContext for the OpenBao deployment. Leave absent (nil) to use the template's built-in standard-Kubernetes defaults (runAsNonRoot: true, runAsUser: 100, runAsGroup: 1000, fsGroup: 1000). Any non-nil value here FULLY REPLACES the template default — partial overrides must include every key you want rendered. On OpenShift with restricted-v2 SCC, set to {runAsNonRoot: true} only.",
+          "description": "Pod-level securityContext for the OpenBao deployment. Defaults to {runAsNonRoot: true} with seccompProfile RuntimeDefault — no hardcoded UID, so OpenShift's restricted-v2 SCC can allocate from the namespace UID range. Any non-nil value here FULLY REPLACES the template default — partial overrides must include every key you want rendered.",
           "properties": {
             "runAsNonRoot": { "type": "boolean" },
             "runAsUser": { "type": "integer" },

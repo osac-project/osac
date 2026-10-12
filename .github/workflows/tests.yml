@@ -1,0 +1,440 @@
+---
+# One leg of the unit and integration tests: a component's tests, chosen by `kind`. ci.yml builds a matrix from the legs
+# in .github/ci-tests.yml that the change touches and calls this workflow once per leg, so a component that is not needed
+# has no job at all (no skipped row on the pull request). unit-tests.yml and integration-tests.yml call it for every leg
+# of their group on a schedule, by hand and from the nightly build.
+#
+# Only the steps of the chosen kind run; the others are steps of the same job, never separate jobs.
+name: Tests
+
+on:  # yamllint disable-line rule:truthy
+  workflow_call:
+    inputs:
+      kind:
+        description: >-
+          Which tests: go-unit, ui-unit, it-fulfillment-service, it-osac-operator, it-bare-metal-fulfillment-operator,
+          it-osac-aap or it-osac-installer
+        required: true
+        type: string
+      dir:
+        description: Directory of the module (go-unit only)
+        required: false
+        type: string
+        default: ""
+      cmd:
+        description: Command to run in that directory (go-unit only)
+        required: false
+        type: string
+        default: ""
+      timeout:
+        description: Minutes before the job is cancelled
+        required: false
+        type: number
+        default: 360
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    name: Run
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout }}
+    steps:
+      # --- unit tests of a Go module (fulfillment-service, osac-metering/...)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: inputs.kind == 'go-unit'
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-go
+        if: inputs.kind == 'go-unit'
+        with:
+          working-directory: ${{ inputs.dir }}
+      - working-directory: ${{ inputs.dir }}
+        if: inputs.kind == 'go-unit'
+        env:
+          COMMAND: ${{ inputs.cmd }}
+        run: bash -c "$COMMAND"
+      # --- unit tests of osac-ui
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: inputs.kind == 'ui-unit'
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1  # v4.3.0
+        if: inputs.kind == 'ui-unit'
+        with:
+          run_install: false
+          package_json_file: osac-ui/package.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        if: inputs.kind == 'ui-unit'
+        with:
+          node-version-file: osac-ui/package.json
+          cache: pnpm
+          cache-dependency-path: osac-ui/pnpm-lock.yaml
+      - working-directory: osac-ui
+        if: inputs.kind == 'ui-unit'
+        run: pnpm install --frozen-lockfile
+      - working-directory: osac-ui
+        if: inputs.kind == 'ui-unit'
+        run: pnpm test
+      # --- integration test: fulfillment-service
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: inputs.kind == 'it-fulfillment-service'
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-go
+        if: inputs.kind == 'it-fulfillment-service'
+        with:
+          working-directory: fulfillment-service
+      - name: Install Kind
+        if: inputs.kind == 'it-fulfillment-service'
+        uses: helm/kind-action@v1
+        with:
+          install_only: true
+      - name: Install Helm
+        if: inputs.kind == 'it-fulfillment-service'
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+      - name: Install ginkgo
+        if: inputs.kind == 'it-fulfillment-service'
+        env:
+          GODEBUG: http2client=0
+        run: go install github.com/onsi/ginkgo/v2/ginkgo@v2.32.0  # keep in sync with go.mod's github.com/onsi/ginkgo/v2 version
+      - name: Install infrastructure on Kind
+        if: inputs.kind == 'it-fulfillment-service'
+        env:
+          CONTAINER_TOOL: docker
+        run: make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
+      - name: Run integration tests
+        if: inputs.kind == 'it-fulfillment-service'
+        env:
+          CONTAINER_TOOL: docker
+        run: |
+          echo '127.0.0.1 fulfillment-api.osac.svc.cluster.local' | sudo tee -a /etc/hosts
+          echo '127.0.0.1 fulfillment-internal-api.osac.svc.cluster.local' | sudo tee -a /etc/hosts
+          echo '127.0.0.1 keycloak.keycloak.svc.cluster.local' | sudo tee -a /etc/hosts
+          make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
+      - name: Collect diagnostic logs
+        if: inputs.kind == 'it-fulfillment-service' && always()
+        run: |
+          export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
+          echo "=== Pods ==="
+          kubectl get pods -n osac -o wide
+          echo "=== Deployments ==="
+          kubectl get deployments -n osac
+          echo "=== Operator logs ==="
+          kubectl logs -n osac -l control-plane=controller-manager --tail=100
+          echo "=== Fulfillment logs ==="
+          kubectl logs -n osac -l 'app in (fulfillment-console-proxy,fulfillment-controller,fulfillment-grpc-server,fulfillment-rest-gateway,fulfillment-ingress-proxy)' --tail=100 --all-containers
+          echo "=== Events ==="
+          kubectl get events -n osac --sort-by='.lastTimestamp' | tail -50
+      - if: inputs.kind == 'it-fulfillment-service' && always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: logs
+          path: fulfillment-service/logs
+          retention-days: 7
+      # --- integration test: osac-operator
+      - name: Checkout repository
+        if: inputs.kind == 'it-osac-operator'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        if: inputs.kind == 'it-osac-operator'
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'osac-operator/go.mod'
+
+      - name: Install Kind
+        if: inputs.kind == 'it-osac-operator'
+        uses: helm/kind-action@v1
+        with:
+          install_only: true
+
+      - name: Install Helm
+        if: inputs.kind == 'it-osac-operator'
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+
+      - name: Install ginkgo
+        if: inputs.kind == 'it-osac-operator'
+        env:
+          GODEBUG: http2client=0
+        run: go install github.com/onsi/ginkgo/v2/ginkgo@v2.32.0  # keep in sync with go.mod's github.com/onsi/ginkgo/v2 version
+
+      - name: Install infrastructure on Kind
+        if: inputs.kind == 'it-osac-operator'
+        env:
+          CONTAINER_TOOL: docker
+        run: make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
+
+      - name: Run integration tests
+        if: inputs.kind == 'it-osac-operator'
+        env:
+          CONTAINER_TOOL: docker
+        run: make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=operator
+
+      - name: Collect diagnostic logs
+        if: inputs.kind == 'it-osac-operator' && always()
+        run: |
+          export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
+          echo "=== Pods ==="
+          kubectl get pods -n osac -o wide
+          echo "=== Deployments ==="
+          kubectl get deployments -n osac
+          echo "=== Operator logs ==="
+          kubectl logs -n osac -l control-plane=controller-manager --tail=100
+          echo "=== Events ==="
+          kubectl get events -n osac --sort-by='.lastTimestamp' | tail -50
+      # --- integration test: bare-metal-fulfillment-operator
+      - name: Checkout repository
+        if: inputs.kind == 'it-bare-metal-fulfillment-operator'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        if: inputs.kind == 'it-bare-metal-fulfillment-operator'
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'bare-metal-fulfillment-operator/go.mod'
+
+      - name: Install Kind
+        if: inputs.kind == 'it-bare-metal-fulfillment-operator'
+        uses: helm/kind-action@v1
+        with:
+          install_only: true
+
+      - name: Install Helm
+        if: inputs.kind == 'it-bare-metal-fulfillment-operator'
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+
+      - name: Install ginkgo
+        if: inputs.kind == 'it-bare-metal-fulfillment-operator'
+        env:
+          GODEBUG: http2client=0
+        run: go install github.com/onsi/ginkgo/v2/ginkgo@v2.32.0  # keep in sync with go.mod's github.com/onsi/ginkgo/v2 version
+
+      - name: Install infrastructure on Kind
+        if: inputs.kind == 'it-bare-metal-fulfillment-operator'
+        env:
+          CONTAINER_TOOL: docker
+        run: make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
+
+      - name: Run integration tests
+        if: inputs.kind == 'it-bare-metal-fulfillment-operator'
+        env:
+          CONTAINER_TOOL: docker
+        run: make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=bmf
+
+      - name: Collect diagnostic logs
+        if: inputs.kind == 'it-bare-metal-fulfillment-operator' && always()
+        run: |
+          export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
+          echo "=== Pods ==="
+          kubectl get pods -n osac -o wide
+          echo "=== Deployments ==="
+          kubectl get deployments -n osac
+          echo "=== BMF operator logs ==="
+          kubectl logs -n osac -l app.kubernetes.io/name=bmf --tail=100
+          echo "=== BareMetalPools ==="
+          kubectl get baremetalpools -n osac -o yaml
+          echo "=== BareMetalInstances ==="
+          kubectl get baremetalinstances -n osac -o yaml
+          echo "=== BareMetalHosts ==="
+          kubectl get baremetalhosts -n osac -o yaml
+          echo "=== Events ==="
+          kubectl get events -n osac --sort-by='.lastTimestamp' | tail -50
+      # --- integration test: osac-aap
+      - name: Checkout
+        if: inputs.kind == 'it-osac-aap'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        if: inputs.kind == 'it-osac-aap'
+        uses: astral-sh/setup-uv@v7
+
+      - name: "Set up Python"
+        if: inputs.kind == 'it-osac-aap'
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: "osac-aap/pyproject.toml"
+
+      - name: Install the project
+        if: inputs.kind == 'it-osac-aap'
+        working-directory: osac-aap
+        run: uv sync --locked --all-extras --group development
+
+      - name: Install Python dependencies for tests
+        if: inputs.kind == 'it-osac-aap'
+        run: pip install kubernetes openstacksdk
+
+      - name: Install kind
+        if: inputs.kind == 'it-osac-aap'
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: osac-test
+          install_only: true
+
+      - name: Set up Helm
+        if: inputs.kind == 'it-osac-aap'
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+        with:
+          version: v3.22.0
+
+      - name: Run integration tests
+        if: inputs.kind == 'it-osac-aap'
+        working-directory: osac-aap
+        run: uv run make test
+        env:
+          STORAGE_TESTS_ENABLED: "true"
+
+  # osac-installer's own smoke test: deploy the umbrella chart (which
+  # composes every other component's chart via file:// dependencies, plus
+  # osac-ui's OCI chart dependency) to a local Kind
+  # cluster and verify it installs and upgrades idempotently. Distinct from
+  # the jobs above, which test one component in isolation -- this is the
+  # only place that exercises the umbrella chart's composition of all of
+  # them together outside of the heavier OpenShift-based e2e-*-full-install
+  # pipelines.
+      # --- integration test: osac-installer (the umbrella smoke test)
+      - name: Checkout repository
+        if: inputs.kind == 'it-osac-installer'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Helm
+        if: inputs.kind == 'it-osac-installer'
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+        with:
+          version: v3.22.0
+
+      - name: Install Kind
+        if: inputs.kind == 'it-osac-installer'
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc  # v1
+        with:
+          install_only: true
+
+      - name: Lint charts
+        if: inputs.kind == 'it-osac-installer'
+        working-directory: osac-installer
+        run: |
+          make helm-topolvm-deps
+          helm dependency build charts/osac/
+          helm lint charts/osac-deps/
+          helm lint charts/osac-infra/ --values values/dev/infra.yaml
+          helm lint charts/osac/ --values values/dev/kind-instance.yaml
+
+      - name: Template charts (dry-run validation)
+        if: inputs.kind == 'it-osac-installer'
+        working-directory: osac-installer
+        run: |
+          helm template osac-deps charts/osac-deps/ --values values/dev/infra.yaml
+          helm template osac-infra charts/osac-infra/ --values values/dev/infra.yaml \
+            --set trustManager.upstream.enabled=true
+          helm template osac charts/osac/ --values values/dev/kind-instance.yaml
+
+      # Same real command (and cluster: `make install-infra` creates its own
+      # Kind cluster, config, cert-manager/trust-manager/envoy-gateway/osac-infra
+      # install in one shot) fulfillment-service's and osac-operator's jobs in
+      # this same file already use successfully -- rather than hand-reimplementing
+      # the same sequence in workflow YAML, which is exactly how this job drifted
+      # out of sync with the real deployment path in the first place (missing
+      # trust-manager/envoy-gateway installs, wrong values file).
+      - name: Install infrastructure on Kind
+        if: inputs.kind == 'it-osac-installer'
+        env:
+          CONTAINER_TOOL: docker
+        run: make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
+
+      - name: Build fulfillment-service image from PR
+        if: inputs.kind == 'it-osac-installer'
+        env:
+          CONTAINER_TOOL: docker
+        run: |
+          docker build --build-arg GODEBUG=http2client=0 -t localhost/fulfillment-service:it -f fulfillment-service/Containerfile .
+          kind load docker-image localhost/fulfillment-service:it --name osac-dev
+
+      - name: Build osac-operator image from PR
+        if: inputs.kind == 'it-osac-installer'
+        env:
+          CONTAINER_TOOL: docker
+        run: |
+          docker build --build-arg GODEBUG=http2client=0 -t localhost/osac-operator:it -f osac-operator/Containerfile .
+          kind load docker-image localhost/osac-operator:it --name osac-dev
+
+      - name: Deploy charts
+        if: inputs.kind == 'it-osac-installer'
+        env:
+          CONTAINER_TOOL: docker
+        run: >-
+          make -C osac-installer install-osac PLATFORM=kind PROFILE=dev NS=osac
+          EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service
+          --set service.images.service.tag=it
+          --set service.images.service.pullPolicy=Never
+          --set operator.image.repository=localhost/osac-operator
+          --set operator.image.tag=it
+          --set operator.image.pullPolicy=IfNotPresent"
+
+      - name: Collect diagnostic logs
+        if: inputs.kind == 'it-osac-installer' && always()
+        run: |
+          export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
+          mkdir -p osac-installer/logs
+
+          echo "=== Pods ==="
+          kubectl get pods -n osac -o wide | tee osac-installer/logs/pods.txt
+          echo ""
+
+          echo "=== Collecting pod logs to files ==="
+          for pod in $(kubectl get pods -n osac -o jsonpath='{.items[*].metadata.name}'); do
+            echo "Collecting logs for $pod..."
+            kubectl logs -n osac "$pod" --all-containers --tail=500 --prefix > "osac-installer/logs/${pod}.log" 2>&1 || echo "Failed to get logs for $pod"
+            # Also get previous container logs if pod crashed
+            kubectl logs -n osac "$pod" --all-containers --previous --tail=500 --prefix > "osac-installer/logs/${pod}-previous.log" 2>&1 || true
+          done
+
+          echo "=== Deployments ==="
+          kubectl get deployments -n osac -o wide | tee osac-installer/logs/deployments.txt
+          echo ""
+
+          echo "=== Services ==="
+          kubectl get services -n osac | tee osac-installer/logs/services.txt
+          echo ""
+
+          echo "=== Events ==="
+          kubectl get events -n osac --sort-by='.lastTimestamp' | tee osac-installer/logs/events.txt
+          echo ""
+
+          echo "=== Helm releases ==="
+          helm list -n osac | tee osac-installer/logs/helm-releases.txt
+
+          echo "=== Pod descriptions ==="
+          kubectl describe pods -n osac > osac-installer/logs/pod-descriptions.txt 2>&1
+
+      - if: inputs.kind == 'it-osac-installer' && always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: osac-installer-logs
+          path: osac-installer/logs
+          retention-days: 1
+
+      # make install-osac is `helm upgrade --install` -- invoking it again
+      # against an unchanged values file/chart IS the real idempotency test,
+      # using the same real command as the initial deploy above rather than a
+      # hand-copied `helm upgrade` invocation that could drift from it.
+      - name: Test idempotency (helm upgrade with no changes)
+        if: inputs.kind == 'it-osac-installer'
+        env:
+          CONTAINER_TOOL: docker
+        run: >-
+          make -C osac-installer install-osac PLATFORM=kind PROFILE=dev NS=osac
+          EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service
+          --set service.images.service.tag=it
+          --set service.images.service.pullPolicy=Never
+          --set operator.image.repository=localhost/osac-operator
+          --set operator.image.tag=it
+          --set operator.image.pullPolicy=IfNotPresent"

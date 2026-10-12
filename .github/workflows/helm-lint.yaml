@@ -1,150 +1,117 @@
 name: Helm Lint
 
-# Required check names: Check Helm CRD sync (osac-operator),
-# Check Helm CRD sync (bare-metal-fulfillment-operator),
-# Lint Helm charts (osac-installer)
-# No paths on pull_request: a trigger path filter leaves those names pending
-# in the merge queue. Skip is on steps (dorny + should-run).
+# Called by ci.yml (job helm-lint). `changed` lists the Helm filters from
+# .github/filters/ci-filters.yml that matched, as |helm-osac-operator|...|;
+# empty means check everything. The charts job picks the matching entries of
+# the chart lists below, so a component whose charts did not change gets no
+# jobs at all.
 
-on:
-  pull_request:
-    branches: [main]
-  merge_group:
+on:  # yamllint disable-line rule:truthy
+  workflow_call:
+    inputs:
+      changed:
+        type: string
+        default: ''
 
 permissions:
   contents: read
 
 jobs:
-  changes:
+  charts:
+    name: Pick charts
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: read
+    permissions: {}
     outputs:
-      changes: ${{ steps.filter.outputs.changes || '[]' }}
+      crds: ${{ steps.pick.outputs.crds }}
+      lint: ${{ steps.pick.outputs.lint }}
+      installer: ${{ steps.pick.outputs.installer }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d  # v4.0.3
-        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-        id: filter
-        with:
-          predicate-quantifier: 'every'
-          filters: .github/filters/ci-filters.yml
+      - id: pick
+        env:
+          CHANGED: ${{ inputs.changed }}
+        run: |
+          set -euo pipefail
+          crds='[
+            {"component": "osac-operator"},
+            {"component": "bare-metal-fulfillment-operator"}
+          ]'
+          # fulfillment-service's chart guards most values with
+          # `required "..." .Values.X` (auth/certs/idp config), so it needs its
+          # CI-only charts/service/ci-values.yaml passed via -f to lint and
+          # template cleanly. osac-operator's and osac-aap's charts have no such
+          # guards and lint fine bare.
+          lint='[
+            {"component": "osac-operator", "chart": "operator-crds"},
+            {"component": "osac-operator", "chart": "operator"},
+            {"component": "bare-metal-fulfillment-operator", "chart": "operator-crds"},
+            {"component": "bare-metal-fulfillment-operator", "chart": "operator"},
+            {"component": "fulfillment-service", "chart": "service", "values-file": "ci-values.yaml"},
+            {"component": "osac-aap", "chart": "aap"},
+            {"component": "osac-csi-driver", "chart": "csi-driver"},
+            {"component": "osac-csi-driver", "chart": "csi-backends"},
+            {"component": "osac-metering", "chart": "osac-metering"}
+          ]'
+          pick() {
+            jq -c --arg c "${CHANGED}" \
+              'map(. as $m | select($c == "" or ($c | contains("|helm-" + $m.component + "|"))))' <<<"$1"
+          }
+          echo "crds=$(pick "${crds}")" >> "$GITHUB_OUTPUT"
+          echo "lint=$(pick "${lint}")" >> "$GITHUB_OUTPUT"
+          # The installer's umbrella chart (charts/osac/) pulls in every other
+          # component's chart as a file:// dependency, so a change to any Helm
+          # filter changes what it builds and lints.
+          if [[ -z "${CHANGED}" || "${CHANGED}" == *"|helm-"* ]]; then
+            echo "installer=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "installer=false" >> "$GITHUB_OUTPUT"
+          fi
 
-  # Matrixed over every component that generates Helm CRD templates from a
-  # kubebuilder config/crd/bases/ source of truth via hack/sync-helm-crds.py
-  # + make check-helm-crds (osac-operator and bare-metal-fulfillment-operator
-  # share the identical mechanism; fulfillment-service/osac-aap don't have one).
   helm-crds-sync:
     name: Check Helm CRD sync (${{ matrix.component }})
-    needs: changes
-    if: always()
+    needs: charts
+    if: needs.charts.outputs.crds != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        component: [osac-operator, bare-metal-fulfillment-operator]
+        include: ${{ fromJSON(needs.charts.outputs.crds) }}
     steps:
-    - name: Fail if path filter failed
-      if: needs.changes.result != 'success'
-      run: exit 1
-    - name: Check component changes
-      id: should-run
-      # CI_GATING_ENABLED == 'false' is an emergency global override forcing
-      # this job to run regardless of the filter result. matrix.component
-      # values (e.g. "osac-operator") are looked up as "helm-osac-operator"
-      # in the shared ci-filters.yml's matched-filters list, since filter
-      # names there are namespaced per-consumer to avoid collisions.
-      if: >-
-        needs.changes.result == 'success' && (
-          vars.CI_GATING_ENABLED == 'false' ||
-          contains(fromJSON(needs.changes.outputs.changes), format('helm-{0}', matrix.component)))
-      run: echo "run=true" >> "$GITHUB_OUTPUT"
-
     - name: Checkout repository
-      if: steps.should-run.outputs.run
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       with:
         persist-credentials: false
 
     - name: Set up Go
-      if: steps.should-run.outputs.run
       uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6
       with:
         go-version: stable
 
     - name: Verify Helm CRD templates match bases
-      if: steps.should-run.outputs.run
       working-directory: ${{ matrix.component }}
       run: make check-helm-crds
 
-  # fulfillment-service's chart guards most values with `required "..." .Values.X`
-  # (auth/certs/idp config), so it needs its CI-only charts/service/ci-values.yaml
-  # passed via -f to lint/template cleanly -- osac-operator's and osac-aap's
-  # charts have no such guards and lint fine bare.
   helm-lint:
     name: Lint Helm chart (${{ matrix.component }}/${{ matrix.chart }})
-    needs: changes
-    if: always()
+    needs: charts
+    if: needs.charts.outputs.lint != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - component: osac-operator
-            chart: operator-crds
-          - component: osac-operator
-            chart: operator
-          - component: bare-metal-fulfillment-operator
-            chart: operator-crds
-          - component: bare-metal-fulfillment-operator
-            chart: operator
-          - component: fulfillment-service
-            chart: service
-            values-file: ci-values.yaml
-          - component: osac-aap
-            chart: aap
-          - component: osac-csi-driver
-            chart: csi-driver
-          - component: osac-csi-driver
-            chart: csi-backends
-          - component: osac-metering
-            chart: osac-metering
+        include: ${{ fromJSON(needs.charts.outputs.lint) }}
     steps:
-    - name: Fail if path filter failed
-      if: needs.changes.result != 'success'
-      run: exit 1
-    - name: Check component changes
-      id: should-run
-      # CI_GATING_ENABLED == 'false' is an emergency global override forcing
-      # this job to run regardless of the filter result. matrix.component
-      # values are looked up as "helm-<component>" in the shared
-      # ci-filters.yml's matched-filters list (namespaced per-consumer to
-      # avoid collisions).
-      if: >-
-        needs.changes.result == 'success' && (
-          vars.CI_GATING_ENABLED == 'false' ||
-          contains(fromJSON(needs.changes.outputs.changes), format('helm-{0}', matrix.component)))
-      run: echo "run=true" >> "$GITHUB_OUTPUT"
 
     - name: Checkout repository
-      if: steps.should-run.outputs.run
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       with:
         persist-credentials: false
 
     - name: Set up Helm
-      if: steps.should-run.outputs.run
       uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
       with:
         version: v3.22.0
 
     - name: Lint chart
-      if: steps.should-run.outputs.run
       working-directory: ${{ matrix.component }}
       run: |
         if [ -n "${{ matrix.values-file }}" ]; then
@@ -154,7 +121,6 @@ jobs:
         fi
 
     - name: Template chart
-      if: steps.should-run.outputs.run
       working-directory: ${{ matrix.component }}
       run: |
         if [ -n "${{ matrix.values-file }}" ]; then
@@ -175,75 +141,46 @@ jobs:
   # actually builds and lints, not just a change under osac-installer/ itself.
   helm-lint-installer:
     name: Lint Helm charts (osac-installer)
-    needs: changes
-    if: always()
+    needs: charts
+    if: needs.charts.outputs.installer == 'true'
     runs-on: ubuntu-latest
     steps:
-    - name: Fail if path filter failed
-      if: needs.changes.result != 'success'
-      run: exit 1
-    - name: Check whether to lint
-      id: should-run
-      # CI_GATING_ENABLED == 'false' is an emergency global override forcing
-      # this job to run regardless of the filter result. Filter names are
-      # looked up as "helm-<component>" in the shared ci-filters.yml's
-      # matched-filters list (namespaced per-consumer to avoid collisions).
-      if: >-
-        needs.changes.result == 'success' && (
-          vars.CI_GATING_ENABLED == 'false' ||
-          contains(fromJSON(needs.changes.outputs.changes), 'helm-osac-installer') ||
-          contains(fromJSON(needs.changes.outputs.changes), 'helm-osac-operator') ||
-          contains(fromJSON(needs.changes.outputs.changes), 'helm-bare-metal-fulfillment-operator') ||
-          contains(fromJSON(needs.changes.outputs.changes), 'helm-fulfillment-service') ||
-          contains(fromJSON(needs.changes.outputs.changes), 'helm-osac-aap') ||
-          contains(fromJSON(needs.changes.outputs.changes), 'helm-osac-csi-driver') ||
-          contains(fromJSON(needs.changes.outputs.changes), 'helm-osac-metering'))
-      run: echo "run=true" >> "$GITHUB_OUTPUT"
 
     - name: Checkout repository
-      if: steps.should-run.outputs.run
       uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
       with:
         persist-credentials: false
 
     - name: Set up Helm
-      if: steps.should-run.outputs.run
       uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
       with:
         version: v3.22.0
 
     - name: Set up Python
-      if: steps.should-run.outputs.run
       uses: ./.github/actions/setup-python
 
     - name: Set up chart-testing
-      if: steps.should-run.outputs.run
       uses: helm/chart-testing-action@6ec842c01de15ebb84c8627d2744a0c2f2755c9f  # v2.8.0
 
     - name: Build chart dependencies
-      if: steps.should-run.outputs.run
       working-directory: osac-installer
       run: |
         make helm-topolvm-deps
         helm dependency build charts/osac/
 
     - name: Test networking values
-      if: steps.should-run.outputs.run
       working-directory: osac-installer
       run: ./scripts/test-networking-values.sh
 
     - name: Test MCE rendering
-      if: steps.should-run.outputs.run
       working-directory: osac-installer
       run: uv run --project .. make mce-render-test
 
     - name: Run chart-testing lint
-      if: steps.should-run.outputs.run
       working-directory: osac-installer
       run: ct lint --all --config ct.yaml
 
     - name: Template with CI values
-      if: steps.should-run.outputs.run
       working-directory: osac-installer
       run: |
         set -euo pipefail
@@ -253,7 +190,6 @@ jobs:
         done
 
     - name: Template with environment values
-      if: steps.should-run.outputs.run
       working-directory: osac-installer
       run: |
         set -euo pipefail

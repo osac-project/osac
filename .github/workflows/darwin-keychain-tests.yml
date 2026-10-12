@@ -19,64 +19,27 @@
 # macos-latest runner, instead of moving the whole unit-tests.yml suite to macOS.
 name: Darwin Keychain Tests
 
-# Required check name: Run darwin keychain tests
-# No paths on pull_request: a trigger path filter leaves that name pending
-# in the merge queue. Skip is on steps; macos-latest only when those files change.
+# Called by ci.yml (job darwin-keychain-tests) only when the keychain files
+# change; also runnable by hand.
 
-on:
-  pull_request:
-    branches:
-    - main
-  merge_group:
+on:  # yamllint disable-line rule:truthy
+  workflow_call:
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  changes:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: read
-    outputs:
-      # CI_GATING_ENABLED == 'false' is an emergency global override forcing
-      # this job to run regardless of the filter result.
-      should-run: ${{ vars.CI_GATING_ENABLED == 'false' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.darwin-keychain == 'true' }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d  # v4.0.3
-        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-        id: filter
-        with:
-          predicate-quantifier: 'every'
-          filters: .github/filters/ci-filters.yml
-
   run-darwin-keychain-tests:
     name: Run darwin keychain tests
-    needs: changes
-    if: always()
-    runs-on: ${{ needs.changes.outputs.should-run == 'true' && 'macos-latest' || 'ubuntu-latest' }}
+    runs-on: macos-latest
     steps:
-    - name: Fail if path filter failed
-      if: needs.changes.result != 'success'
-      run: exit 1
-    - id: should-run
-      if: needs.changes.result == 'success' && needs.changes.outputs.should-run == 'true'
-      run: echo "run=true" >> "$GITHUB_OUTPUT"
-    - if: steps.should-run.outputs.run
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       with:
         persist-credentials: false
-    - if: steps.should-run.outputs.run
-      uses: ./.github/actions/setup-go
+    - uses: ./.github/actions/setup-go
       with:
         working-directory: fulfillment-service
-    - if: steps.should-run.outputs.run
-      working-directory: fulfillment-service
+    - working-directory: fulfillment-service
       run: |
         go test -run 'TestKeychainAvailable|TestSettingsSave_FallsBackToFileWithNoKeychain' -v ./internal/config/...

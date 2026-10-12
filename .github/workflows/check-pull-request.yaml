@@ -14,15 +14,10 @@
 
 name: Check pull request
 
-# Required check names: Check Python code, Check Go and proto code, Build binaries
-# No paths on pull_request: a trigger path filter leaves those names pending
-# in the merge queue on PRs that do not touch fulfillment-service. Skip is on steps.
+# Called by ci.yml (job check-pull-request) when fulfillment-service changes.
 
-on:
-  pull_request:
-    branches:
-    - main
-  merge_group:
+on:  # yamllint disable-line rule:truthy
+  workflow_call:
 
 permissions:
   contents: read
@@ -34,83 +29,33 @@ jobs:
   # same hook set (trailing-whitespace, yamllint, etc.) repo-wide with
   # correctly component-scoped excludes, making this duplicate redundant.
 
-  changes:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: read
-    outputs:
-      # CI_GATING_ENABLED == 'false' is an emergency global override forcing
-      # this job to run regardless of the filter result.
-      should-run: ${{ vars.CI_GATING_ENABLED == 'false' || steps.filter.outputs.fulfillment-service-checks == 'true' }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d  # v4.0.3
-        id: filter
-        with:
-          # Previously missing -- under the default 'someOf' quantifier, a
-          # positive pattern plus separate negation entries meant each
-          # negation independently OR-matched almost every file. Fixed by
-          # migrating to the shared ci-filters.yml, where this filter is
-          # written as one brace-alternation entry compatible with 'every'.
-          predicate-quantifier: 'every'
-          filters: .github/filters/ci-filters.yml
-
   check-python-code:
     name: Check Python code
-    needs: changes
-    if: always()
     runs-on: ubuntu-latest
     steps:
-    - name: Fail if path filter failed
-      if: needs.changes.result != 'success'
-      run: exit 1
-    - id: should-run
-      if: needs.changes.result == 'success' && needs.changes.outputs.should-run == 'true'
-      run: echo "run=true" >> "$GITHUB_OUTPUT"
-    - if: steps.should-run.outputs.run
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       with:
         persist-credentials: false
-    - if: steps.should-run.outputs.run
-      uses: ./.github/actions/setup-python
-    - if: steps.should-run.outputs.run
-      working-directory: fulfillment-service
+    - uses: ./.github/actions/setup-python
+    - working-directory: fulfillment-service
       run: uv run ruff check
 
   check-go-code:
     name: Check Go and proto code
-    needs: changes
-    if: always()
     runs-on: ubuntu-latest
     steps:
-    - name: Fail if path filter failed
-      if: needs.changes.result != 'success'
-      run: exit 1
-    - id: should-run
-      if: needs.changes.result == 'success' && needs.changes.outputs.should-run == 'true'
-      run: echo "run=true" >> "$GITHUB_OUTPUT"
-    - if: steps.should-run.outputs.run
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       with:
         persist-credentials: false
-    - if: steps.should-run.outputs.run
-      uses: ./.github/actions/setup-go
+    - uses: ./.github/actions/setup-go
       with:
         working-directory: fulfillment-service
-    - if: steps.should-run.outputs.run
-      uses: ./.github/actions/setup-python
-    - if: steps.should-run.outputs.run
-      uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3  # v1
+    - uses: ./.github/actions/setup-python
+    - uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3  # v1
       with:
         version: '1.50.0'
         setup_only: true
-    - if: steps.should-run.outputs.run
-      working-directory: fulfillment-service
+    - working-directory: fulfillment-service
       run: |
         uv run dev.py lint
 
@@ -120,26 +65,15 @@ jobs:
 
   build-binaries:
     name: Build binaries
-    needs: changes
-    if: always()
     runs-on: ubuntu-latest
     steps:
-    - name: Fail if path filter failed
-      if: needs.changes.result != 'success'
-      run: exit 1
-    - id: should-run
-      if: needs.changes.result == 'success' && needs.changes.outputs.should-run == 'true'
-      run: echo "run=true" >> "$GITHUB_OUTPUT"
-    - if: steps.should-run.outputs.run
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       with:
         persist-credentials: false
-    - if: steps.should-run.outputs.run
-      uses: ./.github/actions/setup-go
+    - uses: ./.github/actions/setup-go
       with:
         working-directory: fulfillment-service
-    - if: steps.should-run.outputs.run
-      uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94  # v7
+    - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94  # v7
       with:
         workdir: fulfillment-service
         args: build --snapshot --clean

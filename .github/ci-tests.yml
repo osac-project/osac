@@ -1,0 +1,65 @@
+# The unit and integration tests, one leg each. ci.yml runs a leg when ALL of its `filters` (from
+# .github/filters/ci-filters.yml) match the change; the leg then calls workflows/tests.yml with its `kind`. A leg that is not
+# needed does not exist for that run, so it shows no job on the pull request. unit-tests.yml and integration-tests.yml run
+# every leg of their group (the `group` field) on a schedule, by hand and from the nightly build.
+#
+# To add a component's tests: add a leg here (and, for a new kind of test, its steps in workflows/tests.yml), add its
+# filter to ci-filters.yml, and nothing else. Changes to this file need a code owner's approval (see CODEOWNERS).
+#
+# id       the leg's name, shown as the job name
+# group    unit | integration
+# kind     which steps of tests.yml run
+# dir/cmd  go-unit only: the module and the command run in it
+# timeout  minutes before the job is cancelled (default 360)
+- id: Unit tests (fulfillment-service)
+  group: unit
+  kind: go-unit
+  dir: fulfillment-service
+  cmd: ginkgo run --timeout 1h -r internal
+  filters: [code, unit-tests-fulfillment-service]
+- id: Unit tests (osac-metering)
+  group: unit
+  kind: go-unit
+  dir: osac-metering/metering-service
+  cmd: ginkgo run -r internal
+  filters: [code, unit-tests-osac-metering]
+- id: Unit tests (osac-metering/adapters)
+  group: unit
+  kind: go-unit
+  dir: osac-metering/adapters
+  cmd: ginkgo run -r .
+  filters: [code, unit-tests-osac-metering-adapters]
+- id: Unit tests (osac-metering/schema)
+  group: unit
+  kind: go-unit
+  dir: osac-metering/schema
+  cmd: ginkgo run -r .
+  filters: [code, unit-tests-osac-metering-schema]
+- id: Unit tests (osac-ui)
+  group: unit
+  kind: ui-unit
+  # not `code`: that filter leaves osac-ui out on purpose, so an osac-ui-only change runs just this leg
+  filters: [ui]
+- id: Integration test (fulfillment-service)
+  group: integration
+  kind: it-fulfillment-service
+  timeout: 90  # ginkgo --timeout 1h15m (Makefile) + ~15m for install, setup and log collection
+  filters: [code, integration-tests-fulfillment-service]
+- id: Integration test (osac-operator)
+  group: integration
+  kind: it-osac-operator
+  timeout: 45  # ginkgo --timeout 30m (Makefile) + ~15m for install, setup and log collection
+  filters: [code, integration-tests-osac-operator]
+- id: Integration test (bare-metal-fulfillment-operator)
+  group: integration
+  kind: it-bare-metal-fulfillment-operator
+  timeout: 45  # ginkgo --timeout 30m (Makefile) + ~15m for install, setup and log collection
+  filters: [code, integration-tests-bare-metal-fulfillment-operator]
+- id: Integration test (osac-aap)
+  group: integration
+  kind: it-osac-aap
+  filters: [code, integration-tests-osac-aap]
+- id: Integration test (osac-installer)
+  group: integration
+  kind: it-osac-installer
+  filters: [code]

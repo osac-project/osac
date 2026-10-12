@@ -4,10 +4,9 @@ name: Dependency Review
 permissions:
   contents: read
 
-on:
-  pull_request:
-    branches: [main]
-  merge_group:
+# Called by ci.yml (job dependency-review).
+on:  # yamllint disable-line rule:truthy
+  workflow_call:
 
 jobs:
   dependency-review:

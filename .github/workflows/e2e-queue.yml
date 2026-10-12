@@ -1,0 +1,137 @@
+---
+# The full-install E2E for a merge queue entry. By the time a pull request is queued it was approved and tested on its
+# own commit; the queue entry is that change on top of the latest main (and of the entries ahead of it), so it is tested
+# again, with no approval to wait for. The pull request's own E2E runs from e2e-pr.yml.
+#
+# `plan` lists the suites the entry needs by the rules in .github/e2e-policy.yml, the suites run as one job each, and the
+# job named `E2E` is the required check: it passes when every suite that was needed passed. An entry that touches only
+# docs needs no suite and the check passes at once.
+name: E2E for the merge queue
+
+on:
+  merge_group:
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      suites: ${{ steps.suites.outputs.suites }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: List the changed files
+        env:
+          BASE: ${{ github.event.merge_group.base_sha }}
+          HEAD: ${{ github.event.merge_group.head_sha }}
+        run: git diff --name-only "${BASE}" "${HEAD}" > "${RUNNER_TEMP}/changed-files"
+      - uses: osac-project/osac-ci/.github/actions/e2e-suites@1291e86861e1384a6c69fc767db89b636b965275  # osac-ci main
+        id: suites
+        with:
+          policy-file: ${{ github.workspace }}/.github/e2e-policy.yml
+          files-file: ${{ runner.temp }}/changed-files
+
+  # A queue entry is rebuilt when the entries ahead of it change. The run of the old entry is of no use any more and
+  # holds runners.
+  cancel-stale:
+    name: Cancel superseded runs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Cancel superseded runs for this queue entry
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          THIS_RUN: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          entry="${HEAD_REF##*/}"   # pr-<N>-<sha>
+          pr="${entry%-*}"          # pr-<N>
+          case "$pr" in
+            pr-[0-9]*) ;;
+            *) echo "unexpected merge_group head_ref: '${HEAD_REF}'" >&2; exit 1 ;;
+          esac
+          echo "This entry: ${pr} (run ${THIS_RUN}); cancelling any older run for it."
+          gh run list --workflow e2e-queue.yml --event merge_group \
+            --limit 100 --json databaseId,headBranch,status \
+            --jq ".[] | select(.headBranch | contains(\"/${pr}-\"))
+                      | select(.status == \"in_progress\" or .status == \"queued\")
+                      | select(.databaseId < ${THIS_RUN}) | .databaseId" \
+          | while read -r id; do
+              echo "Cancelling superseded run ${id}"
+              gh run cancel "${id}" || echo "run ${id} already finished; nothing to cancel"
+            done
+
+  # One job per suite, named after the suite id like in e2e-pr.yml; a suite the plan did not pick does not run.
+  vmaas:
+    name: vmaas
+    needs: plan
+    if: contains(needs.plan.outputs.suites, '"vmaas"')
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/e2e-vmaas-full-install.yml
+    with:
+      repo: ${{ github.repository }}
+      sha: ${{ github.event.merge_group.head_sha }}
+
+  caas:
+    name: caas
+    needs: plan
+    if: contains(needs.plan.outputs.suites, '"caas"')
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/e2e-caas-full-install.yml
+    with:
+      repo: ${{ github.repository }}
+      sha: ${{ github.event.merge_group.head_sha }}
+
+  bmaas:
+    name: bmaas
+    needs: plan
+    if: contains(needs.plan.outputs.suites, '"bmaas"')
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/e2e-bmaas-full-install.yml
+    with:
+      repo: ${{ github.repository }}
+      sha: ${{ github.event.merge_group.head_sha }}
+
+  # The required check. It fails when a suite failed, and also when the plan did not run, which would otherwise skip
+  # every suite and let the entry pass untested.
+  E2E:
+    name: E2E
+    if: ${{ !cancelled() }}
+    needs: [plan, vmaas, caas, bmaas]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Every suite that was needed passed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          if [[ "$(jq -r '.plan.result' <<<"${RESULTS}")" != "success" ]]; then
+            echo "::error::Plan did not succeed, so no suite was selected"
+            exit 1
+          fi
+          bad=$(jq -r 'to_entries[] | select(.value.result != "success" and .value.result != "skipped") | "\(.key): \(.value.result)"' <<<"${RESULTS}")
+          if [[ -n "${bad}" ]]; then
+            echo "::error::Failed suites:"
+            echo "${bad}"
+            exit 1
+          fi
+          echo "Suites needed: $(jq -r '.plan.outputs.suites' <<<"${RESULTS}")" >> "$GITHUB_STEP_SUMMARY"

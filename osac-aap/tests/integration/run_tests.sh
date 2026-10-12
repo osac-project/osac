@@ -65,6 +65,7 @@ ROLE_TESTS=(
   "agentless_net_stub"
   "agentless_net_external_ip_pool"
   "agentless_net_subnet"
+  "netris_subnet_delete"
 )
 
 ROLE_SCENARIO_TESTS=(

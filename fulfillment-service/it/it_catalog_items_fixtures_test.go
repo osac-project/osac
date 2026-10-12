@@ -24,7 +24,9 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
+	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 	"google.golang.org/grpc"
@@ -34,6 +36,7 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
+	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // catalogItemFixtureSSHPublicKey is a valid public key for provisioning authentication.
@@ -306,6 +309,11 @@ func createCatalogItemSubnetInClassFixture(ctx context.Context, tenant, project,
 	currentVirtualNetwork.GetObject().SetStatus(privatev1.VirtualNetworkStatus_builder{State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY}.Build())
 	_, err = networks.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{Object: currentVirtualNetwork.GetObject(), UpdateMask: catalogItemUpdateMask("status.state")}.Build())
 	Expect(err).NotTo(HaveOccurred())
+	Eventually(func(g Gomega) {
+		objects := &osacv1alpha1.VirtualNetworkList{}
+		g.Expect(tool.KubeClient().List(ctx, objects, crclient.MatchingLabels{labels.VirtualNetworkUuid: networkID})).To(Succeed())
+		g.Expect(objects.Items).To(HaveLen(1))
+	}, time.Minute, time.Second).Should(Succeed())
 
 	subnets := privatev1.NewSubnetsClient(tool.InternalView().AdminConn())
 	subnet, err := subnets.Create(ctx, privatev1.SubnetsCreateRequest_builder{
@@ -349,6 +357,11 @@ func createCatalogItemSubnetInClassFixture(ctx context.Context, tenant, project,
 	currentSubnet.GetObject().SetStatus(privatev1.SubnetStatus_builder{State: privatev1.SubnetState_SUBNET_STATE_READY}.Build())
 	_, err = subnets.Update(ctx, privatev1.SubnetsUpdateRequest_builder{Object: currentSubnet.GetObject(), UpdateMask: catalogItemUpdateMask("status.state")}.Build())
 	Expect(err).NotTo(HaveOccurred())
+	Eventually(func(g Gomega) {
+		objects := &osacv1alpha1.SubnetList{}
+		g.Expect(tool.KubeClient().List(ctx, objects, crclient.MatchingLabels{labels.SubnetUuid: subnetID})).To(Succeed())
+		g.Expect(objects.Items).To(HaveLen(1))
+	}, time.Minute, time.Second).Should(Succeed())
 	return catalogItemNetworkFixture{subnetID: subnetID, virtualNetworkID: networkID, networkClassID: classID}
 }
 
@@ -397,6 +410,11 @@ func createCatalogItemNetworkInClassFixture(ctx context.Context, tenant, project
 	currentSecurityGroup.GetObject().SetStatus(privatev1.SecurityGroupStatus_builder{State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY}.Build())
 	_, err = groups.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{Object: currentSecurityGroup.GetObject(), UpdateMask: catalogItemUpdateMask("status.state")}.Build())
 	Expect(err).NotTo(HaveOccurred())
+	Eventually(func(g Gomega) {
+		objects := &osacv1alpha1.SecurityGroupList{}
+		g.Expect(tool.KubeClient().List(ctx, objects, crclient.MatchingLabels{labels.SecurityGroupUuid: groupID})).To(Succeed())
+		g.Expect(objects.Items).To(HaveLen(1))
+	}, time.Minute, time.Second).Should(Succeed())
 	network.securityGroupID = groupID
 	return network
 }

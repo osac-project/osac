@@ -217,6 +217,87 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(latestJob.JobID).To(Equal("concurrent-job-123"))
 		})
 
+		It("starts no second provider job after a rejected spec change and reaches Ready once", func() {
+			provisionCalls := 0
+			mockProvider.triggerProvisionFunc = func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+				provisionCalls++
+				return &provisioning.ProvisionResult{
+					JobID:        fmt.Sprintf("provision-job-%d", provisionCalls),
+					InitialState: osacv1alpha1.JobStatePending,
+					Message:      "Provisioning triggered",
+				}, nil
+			}
+
+			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+			req := mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      subnet.Name,
+					Namespace: subnet.Namespace,
+				},
+			}}
+
+			// First reconcile adds the finalizer and strategy annotations
+			_, err := reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile triggers the single provisioning job
+			_, err = reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			// A user Update changing the immutable spec must be rejected by the
+			// real API server, leaving the stored spec at its create-time value
+			rejected := &osacv1alpha1.Subnet{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: subnet.Name, Namespace: subnet.Namespace}, rejected)).To(Succeed())
+			rejected.Spec.IPv4CIDR = "10.0.9.0/24"
+			err = k8sClient.Update(ctx, rejected)
+			Expect(err).To(HaveOccurred())
+			Expect(errors.IsInvalid(err)).To(BeTrue())
+
+			// Reconciling again must not submit a second provider job while the
+			// original job still completes
+			_, err = reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			updatedSubnet := &osacv1alpha1.Subnet{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: subnet.Name, Namespace: subnet.Namespace}, updatedSubnet)).To(Succeed())
+			provisionJobCount := 0
+			for _, job := range updatedSubnet.Status.ProvisioningJobs {
+				if job.Type == osacv1alpha1.JobTypeProvision {
+					provisionJobCount++
+				}
+			}
+			Expect(provisionJobCount).To(Equal(1))
+			latestJob := provisioning.FindLatestJobByType(updatedSubnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
+			Expect(latestJob.JobID).To(Equal("provision-job-1"))
+			Expect(latestJob.State).To(Equal(osacv1alpha1.JobStateSucceeded))
+			Expect(updatedSubnet.Status.Phase).To(Equal(osacv1alpha1.SubnetPhaseReady))
+
+			// Deleting the Subnet must run the deprovision path exactly once
+			deprovisionCalls := 0
+			mockProvider.triggerDeprovisionFunc = func(ctx context.Context, resource client.Object, provisionJobs []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
+				deprovisionCalls++
+				return &provisioning.DeprovisionResult{
+					Action:                 provisioning.DeprovisionTriggered,
+					JobID:                  fmt.Sprintf("deprovision-job-%d", deprovisionCalls),
+					BlockDeletionOnFailure: true,
+				}, nil
+			}
+			current := &osacv1alpha1.Subnet{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: subnet.Name, Namespace: subnet.Namespace}, current)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, current)).To(Succeed())
+
+			_, err = reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(deprovisionCalls).To(Equal(1))
+
+			// The deprovision job completes and the finalizer removal finishes the deletion
+			_, err = reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(deprovisionCalls).To(Equal(1))
+			deletedSubnet := &osacv1alpha1.Subnet{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: subnet.Name, Namespace: subnet.Namespace}, deletedSubnet)).To(HaveOccurred())
+		})
+
 		It("should requeue when parent VirtualNetwork not found", func() {
 			// Create subnet with non-existent parent
 			subnetNoParent := &osacv1alpha1.Subnet{

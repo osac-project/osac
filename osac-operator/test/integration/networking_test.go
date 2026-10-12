@@ -91,7 +91,7 @@ var _ = Describe("Networking Resources", Ordered, func() {
 			By("attempting to change the IPv4 CIDR")
 			cmd := exec.Command("kubectl", "patch", "virtualnetwork", virtualNetworkName,
 				"-n", operatorNamespace, "--type=merge",
-				"-p", `{"spec":{"ipv4Cidr":"10.0.1.0/16"}}`)
+				"-p", `{"spec":{"ipv4Cidr":"10.1.0.0/16"}}`)
 			output, err := utils.Run(cmd)
 			Expect(err).To(HaveOccurred())
 			Expect(string(output)).To(ContainSubstring("immutable"))

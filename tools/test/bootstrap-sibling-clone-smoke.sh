@@ -1091,7 +1091,9 @@ test_hook_install_falls_back_to_pre_commit_and_is_repeatable() {
   : > "${home}/hooks.log"
 
   out=$(run_bootstrap_isolated "$root" "$home" "$bin" 2>&1) || fail "fallback hook bootstrap failed: $out"
+  [[ "$out" != *"failed to install hooks"* ]] || fail "fallback hook installation failed: $out"
   out=$(run_bootstrap_isolated "$root" "$home" "$bin" 2>&1) || fail "repeat hook bootstrap failed: $out"
+  [[ "$out" != *"failed to install hooks"* ]] || fail "repeat hook installation failed: $out"
   hook_log="${home}/hooks.log"
   [[ "$(grep -Fc "upstream|${root}|install" "$hook_log")" -eq 2 ]] \
     || fail "root pre-commit should run once per bootstrap: $(cat "$hook_log")"

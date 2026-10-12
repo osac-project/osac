@@ -21,6 +21,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func waitForNetworkClassReady(
@@ -40,4 +41,29 @@ func waitForNetworkClassReady(
 			object.GetStatus().GetMessage(),
 		)
 	}, time.Minute, time.Second).Should(Succeed())
+}
+
+func waitForNetworkingCR(
+	ctx context.Context,
+	list func(context.Context) (int, error),
+) {
+	GinkgoHelper()
+	Eventually(func(g Gomega) {
+		count, err := list(ctx)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(count).To(Equal(1))
+	}, time.Minute, time.Second).Should(Succeed())
+}
+
+func listNetworkingCR[T crclient.ObjectList](
+	kubeClient crclient.Client,
+	labelKey string,
+	resourceID string,
+	objects T,
+	count func(T) int,
+) func(context.Context) (int, error) {
+	return func(ctx context.Context) (int, error) {
+		err := kubeClient.List(ctx, objects, crclient.MatchingLabels{labelKey: resourceID})
+		return count(objects), err
+	}
 }

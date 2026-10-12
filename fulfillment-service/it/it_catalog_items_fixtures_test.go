@@ -36,7 +36,6 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
-	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // catalogItemFixtureSSHPublicKey is a valid public key for provisioning authentication.
@@ -309,11 +308,13 @@ func createCatalogItemSubnetInClassFixture(ctx context.Context, tenant, project,
 	currentVirtualNetwork.GetObject().SetStatus(privatev1.VirtualNetworkStatus_builder{State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY}.Build())
 	_, err = networks.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{Object: currentVirtualNetwork.GetObject(), UpdateMask: catalogItemUpdateMask("status.state")}.Build())
 	Expect(err).NotTo(HaveOccurred())
-	Eventually(func(g Gomega) {
-		objects := &osacv1alpha1.VirtualNetworkList{}
-		g.Expect(tool.KubeClient().List(ctx, objects, crclient.MatchingLabels{labels.VirtualNetworkUuid: networkID})).To(Succeed())
-		g.Expect(objects.Items).To(HaveLen(1))
-	}, time.Minute, time.Second).Should(Succeed())
+	waitForNetworkingCR(ctx, listNetworkingCR(
+		tool.KubeClient(),
+		labels.VirtualNetworkUuid,
+		networkID,
+		&osacv1alpha1.VirtualNetworkList{},
+		func(objects *osacv1alpha1.VirtualNetworkList) int { return len(objects.Items) },
+	))
 
 	subnets := privatev1.NewSubnetsClient(tool.InternalView().AdminConn())
 	subnet, err := subnets.Create(ctx, privatev1.SubnetsCreateRequest_builder{
@@ -357,11 +358,13 @@ func createCatalogItemSubnetInClassFixture(ctx context.Context, tenant, project,
 	currentSubnet.GetObject().SetStatus(privatev1.SubnetStatus_builder{State: privatev1.SubnetState_SUBNET_STATE_READY}.Build())
 	_, err = subnets.Update(ctx, privatev1.SubnetsUpdateRequest_builder{Object: currentSubnet.GetObject(), UpdateMask: catalogItemUpdateMask("status.state")}.Build())
 	Expect(err).NotTo(HaveOccurred())
-	Eventually(func(g Gomega) {
-		objects := &osacv1alpha1.SubnetList{}
-		g.Expect(tool.KubeClient().List(ctx, objects, crclient.MatchingLabels{labels.SubnetUuid: subnetID})).To(Succeed())
-		g.Expect(objects.Items).To(HaveLen(1))
-	}, time.Minute, time.Second).Should(Succeed())
+	waitForNetworkingCR(ctx, listNetworkingCR(
+		tool.KubeClient(),
+		labels.SubnetUuid,
+		subnetID,
+		&osacv1alpha1.SubnetList{},
+		func(objects *osacv1alpha1.SubnetList) int { return len(objects.Items) },
+	))
 	return catalogItemNetworkFixture{subnetID: subnetID, virtualNetworkID: networkID, networkClassID: classID}
 }
 
@@ -410,11 +413,13 @@ func createCatalogItemNetworkInClassFixture(ctx context.Context, tenant, project
 	currentSecurityGroup.GetObject().SetStatus(privatev1.SecurityGroupStatus_builder{State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY}.Build())
 	_, err = groups.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{Object: currentSecurityGroup.GetObject(), UpdateMask: catalogItemUpdateMask("status.state")}.Build())
 	Expect(err).NotTo(HaveOccurred())
-	Eventually(func(g Gomega) {
-		objects := &osacv1alpha1.SecurityGroupList{}
-		g.Expect(tool.KubeClient().List(ctx, objects, crclient.MatchingLabels{labels.SecurityGroupUuid: groupID})).To(Succeed())
-		g.Expect(objects.Items).To(HaveLen(1))
-	}, time.Minute, time.Second).Should(Succeed())
+	waitForNetworkingCR(ctx, listNetworkingCR(
+		tool.KubeClient(),
+		labels.SecurityGroupUuid,
+		groupID,
+		&osacv1alpha1.SecurityGroupList{},
+		func(objects *osacv1alpha1.SecurityGroupList) int { return len(objects.Items) },
+	))
 	network.securityGroupID = groupID
 	return network
 }

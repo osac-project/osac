@@ -45,6 +45,7 @@ bundledPostgres:
 # Bundled OpenBao for testing and CI. Not for production.
 bundledVault:
   enabled: true
+  keycloakIssuerUrl: "https://keycloak.example.com/realms/osac"
   # Override podSecurityContext for OpenShift restricted-v2 SCC: omit numeric
   # runAsUser/runAsGroup/fsGroup — the SCC allocates UIDs from the namespace UID
   # range and resolves the named user automatically.

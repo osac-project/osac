@@ -1,4 +1,8 @@
 {{- if .Values.bundledVault.enabled }}
+{{- $_ := required (print "bundledVault.keycloakIssuerUrl must be set when "
+    "bundledVault is enabled. It must match the issuer (iss) claim in your "
+    "Keycloak tokens, e.g. https://keycloak.apps.<domain>/realms/osac")
+    .Values.bundledVault.keycloakIssuerUrl }}
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -189,6 +193,12 @@ data:
         policies="lifecycle" \
         token_ttl="1h"
     fi
+    {{- else }}
+    echo "ERROR: bundledVault.keycloakIssuerUrl is not set."
+    echo "JWT auth cannot be configured and fulfillment will fail."
+    echo "Set bundledVault.keycloakIssuerUrl to your Keycloak issuer URL"
+    echo "(e.g. https://keycloak.apps.<domain>/realms/osac)."
+    exit 1
     {{- end }}
 
     echo "OpenBao bootstrap complete."

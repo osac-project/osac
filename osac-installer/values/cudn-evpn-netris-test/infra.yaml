@@ -43,5 +43,6 @@ bundledPostgres:
 # Bundled OpenBao for testing and CI. Not for production.
 bundledVault:
   enabled: true
+  keycloakIssuerUrl: "https://keycloak.example.com/realms/osac"
   podSecurityContext:
     runAsNonRoot: true

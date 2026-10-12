@@ -57,12 +57,7 @@ bundledPostgres:
 # Bundled OpenBao for testing and CI. Not for production.
 bundledVault:
   enabled: true
-  # Optional OpenBao JWT issuer override. It must match the issuer (iss)
-  # claim in Keycloak tokens. Use the in-cluster URL when that is the issuer;
-  # if Keycloak tokens use a route hostname, set that route URL in a local
-  # values overlay instead. The chart/service defaults may already provide
-  # the issuer.
-  # keycloakIssuerUrl: "https://keycloak-keycloak.apps.<cluster-domain>/realms/osac"
+  keycloakIssuerUrl: "https://keycloak.example.com/realms/osac"
   # Override podSecurityContext for OpenShift restricted-v2 SCC: omit numeric
   # runAsUser/runAsGroup/fsGroup — the SCC allocates UIDs from the namespace UID
   # range and resolves the named user automatically.

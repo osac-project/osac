@@ -147,7 +147,7 @@ bundledPostgres:
 # --- Bundled OpenBao (dev/CI only) ---
 # Vault-compatible secret store for testing and CI. Not for production.
 bundledVault:
-  enabled: true
+  enabled: false
   image: "ghcr.io/openbao/openbao:2.6.2"
   # podSecurityContext: {}
   # Leave absent (nil) to use the template's built-in standard-Kubernetes defaults
@@ -165,9 +165,10 @@ bundledVault:
       cpu: 100m
       memory: 256Mi
   # --- Bootstrap configuration ---
-  # keycloakIssuerUrl: Keycloak OIDC issuer URL for JWT auth bootstrap. On
-  # OpenShift this must be the external route URL (not the internal service URL)
-  # to avoid OIDC discovery issuer mismatch. Leave empty to skip JWT bootstrap.
+  # keycloakIssuerUrl: Keycloak OIDC issuer URL for JWT auth bootstrap.
+  # Required when bundledVault is enabled. On OpenShift this must be the
+  # external route URL (not the internal service URL) to avoid OIDC discovery
+  # issuer mismatch.
   keycloakIssuerUrl: ""
   # keycloakAudience: expected "aud" claim in JWT tokens.
   keycloakAudience: "osac-api"

@@ -73,8 +73,8 @@
       "properties": {
         "enabled": {
           "type": "boolean",
-          "description": "Deploy a bundled OpenBao instance. Enabled by default — set to false only when pointing at an external Vault/OpenBao instance.",
-          "default": true
+          "description": "Deploy a bundled OpenBao instance. Disabled by default — enable in a profile infra.yaml and set keycloakIssuerUrl.",
+          "default": false
         },
         "image": {
           "type": "string",
@@ -113,7 +113,7 @@
         },
         "keycloakIssuerUrl": {
           "type": "string",
-          "description": "Keycloak OIDC issuer URL for JWT auth bootstrap. On OpenShift this must be the external route URL (not the internal service URL) to avoid issuer mismatch. Leave empty to skip JWT bootstrap.",
+          "description": "Keycloak OIDC issuer URL for JWT auth bootstrap. Required when bundledVault is enabled. On OpenShift this must be the external route URL (not the internal service URL) to avoid issuer mismatch.",
           "default": ""
         },
         "keycloakAudience": {

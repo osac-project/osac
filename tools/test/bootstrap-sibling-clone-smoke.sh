@@ -164,6 +164,10 @@ write_hook_installer_wrapper() {
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s|%s|%s\n' '${kind}' "\$PWD" "\$*" >> "\$OSAC_SMOKE_HOOK_LOG"
+if [[ '${kind}' == upstream && ( \$# -ne 2 || \$1 != install || \$2 != --overwrite ) ]]; then
+  echo "pre-commit: unsupported arguments: \$*" >&2
+  exit 2
+fi
 if [[ -n "\${OSAC_SMOKE_HOOK_FAIL_MATCH:-}" && "\$PWD \$*" == *"\$OSAC_SMOKE_HOOK_FAIL_MATCH"* ]]; then
   exit 1
 fi
@@ -1061,11 +1065,11 @@ test_hook_install_prefers_rh_and_requires_config() {
 
   out=$(run_bootstrap "$root" "$home" "$bin" 2>&1) || fail "hook bootstrap failed: $out"
   hook_log="${home}/hooks.log"
-  grep -Fq "|install --path ${root}" "$hook_log" \
+  grep -Fq "|install --force --path ${root}" "$hook_log" \
     || fail "root rh hook install missing: $(cat "$hook_log")"
-  grep -Fq "|install --path ${root}/enhancement-proposals" "$hook_log" \
+  grep -Fq "|install --force --path ${root}/enhancement-proposals" "$hook_log" \
     || fail "enhancement-proposals rh hook install missing: $(cat "$hook_log")"
-  grep -Fq "|install --path ${root}/osac-ux" "$hook_log" \
+  grep -Fq "|install --force --path ${root}/osac-ux" "$hook_log" \
     || fail "configured osac-ux rh hook install missing: $(cat "$hook_log")"
   grep -q '^upstream|' "$hook_log" \
     && fail "standard pre-commit must not run when rh installer exists: $(cat "$hook_log")"

@@ -39,7 +39,7 @@ pytestmark = pytest.mark.sanity
 # ClusterVersion via GRPCClient.ensure_cluster_version instead of accumulating
 # duplicates on the shared cluster.
 TEST_RELEASE_IMAGE = env("OSAC_TEST_RELEASE_IMAGE", "quay.io/openshift-release-dev/ocp-release:4.22.0-multi")
-RHCOS_IMAGE = env("OSAC_RHCOS_BMI_IMAGE", "oci://quay.io/rh_ee_rpiccoli/rhcos-bmi:4.22.0")
+RHCOS_IMAGE = env("OSAC_RHCOS_BMI_IMAGE", "oci://quay.io/osac-project/rhcos:4.22.0")
 _WORKER_METRICS = ("osac_caas_worker_desired", "osac_caas_worker_ready", "osac_caas_worker_provisioning_failures_total")
 _WORKER_LEVEL_METRICS = _WORKER_METRICS[:2]
 _WORKER_FAILURE_METRIC = _WORKER_METRICS[2]

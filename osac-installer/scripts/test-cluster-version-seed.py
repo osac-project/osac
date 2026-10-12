@@ -21,7 +21,7 @@ import yaml
 
 INSTALLER = Path(__file__).resolve().parents[1]
 CHART = INSTALLER / "charts/osac"
-SOURCE = "oci://quay.io/rh_ee_rpiccoli/rhcos-bmi:4.22.0"
+SOURCE = "oci://quay.io/osac-project/rhcos:4.22.0"
 VERSION = {
     "version": "4.22.0",
     "image": "quay.io/openshift-release-dev/ocp-release:4.22.0-multi",

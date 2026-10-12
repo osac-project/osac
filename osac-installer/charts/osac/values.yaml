@@ -492,7 +492,7 @@ clusterVersions:
   #   default: true
   #   diskImage:
   #     name: rhcos-4-22
-  #     sourceRef: oci://quay.io/rh_ee_rpiccoli/rhcos-bmi:4.22.0
+  #     sourceRef: oci://quay.io/osac-project/rhcos:4.22.0
   #     architecture: [ARCHITECTURE_AMD64]
 
 lvms:

@@ -15,6 +15,7 @@ package grpcserver
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"slices"
@@ -24,7 +25,10 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
+	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
@@ -86,6 +90,107 @@ var _ = Describe("RegisterReferenceLookups", func() {
 		Expect(refs).To(HaveKey(protoreflect.FullName("osac.tests.v1.TestTargetLocalReference")))
 		Expect(refs).To(HaveKey(protoreflect.FullName("osac.tests.v1.TestOtherTargetLocalReference")))
 	})
+
+	DescribeTableSubtree("CaaS NodeSet reference interception", func(layer, method string) {
+		var request proto.Message
+		var v *references.ReferenceValidator
+		var info *grpc.UnaryServerInfo
+
+		BeforeEach(func() {
+			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+			tenancy, err := auth.NewGuestTenancyLogic().SetLogger(logger).Build()
+			Expect(err).ToNot(HaveOccurred())
+			v, err = newReferenceValidator(logger, tenancy, prometheus.NewRegistry())
+			Expect(err).ToNot(HaveOccurred())
+			prefix := "osac." + layer + ".v1."
+			requestType, err := protoregistry.GlobalTypes.FindMessageByName(protoreflect.FullName(prefix + "Clusters" + method + "Request"))
+			Expect(err).ToNot(HaveOccurred())
+			request = requestType.New().Interface()
+			body := `{"object":{"spec":{"nodeSets":{"workers":{"size":1,"baremetalInstanceType":{"name":"worker-type","shared":true}}}}}}`
+			if method == "Update" {
+				body = `{"object":{"id":"cluster-id","spec":{"nodeSets":{"workers":{"size":1,"baremetalInstanceType":{"name":"worker-type","shared":true}}}}},"updateMask":"spec.nodeSets"}`
+			}
+			Expect(protojson.Unmarshal([]byte(body), request)).To(Succeed())
+			info = &grpc.UnaryServerInfo{FullMethod: "/" + prefix + "Clusters/" + method}
+		})
+
+		It("resolves hardware names in the common interceptor before the handler", func() {
+			lookupCalls := 0
+			v.Register(protoreflect.FullName("osac."+layer+".v1.BareMetalInstanceTypeReference"),
+				func(_ context.Context, tenant, project, id, name string) (*references.ResolvedRef, error) {
+					lookupCalls++
+					Expect(tenant).To(Equal(auth.SharedTenant))
+					Expect(project).To(BeEmpty())
+					Expect(id).To(BeEmpty())
+					Expect(name).To(Equal("worker-type"))
+					return &references.ResolvedRef{ID: "worker-type-id", Name: name, Tenant: auth.SharedTenant}, nil
+				})
+			called := false
+			_, err := v.UnaryServer(ctx, request, info, func(_ context.Context, actual any) (any, error) {
+				called = true
+				message := actual.(proto.Message).ProtoReflect()
+				object := message.Get(message.Descriptor().Fields().ByName("object")).Message()
+				spec := object.Get(object.Descriptor().Fields().ByName("spec")).Message()
+				node := spec.Get(spec.Descriptor().Fields().ByName("node_sets")).Map().Get(protoreflect.ValueOfString("workers").MapKey()).Message()
+				ref := node.Get(node.Descriptor().Fields().ByName("baremetal_instance_type")).Message()
+				Expect(ref.Get(ref.Descriptor().Fields().ByName("id")).String()).To(Equal("worker-type-id"))
+				return "ok", nil
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(called).To(BeTrue())
+			Expect(lookupCalls).To(Equal(1))
+		})
+
+		It("rejects missing hardware through the registered DAO lookup before the handler", func() {
+			body, err := protojson.Marshal(request)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = invokeCatalogRPC(layer, "Clusters", method, string(body))
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err).To(MatchError(ContainSubstring(`reference validation failed: object.spec.node_sets["workers"].baremetal_instance_type`)))
+		})
+	},
+		Entry("public create", "public", "Create"),
+		Entry("private create", "private", "Create"),
+		Entry("public update", "public", "Update"),
+		Entry("private update", "private", "Update"),
+	)
+
+	DescribeTable("leaves CaaS catalog NodeSet policy maps for post-merge handler resolution", func(layer, method, behavior string) {
+		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+		tenancy, err := auth.NewGuestTenancyLogic().SetLogger(logger).Build()
+		Expect(err).ToNot(HaveOccurred())
+		v, err := newReferenceValidator(logger, tenancy, prometheus.NewRegistry())
+		Expect(err).ToNot(HaveOccurred())
+		prefix := "osac." + layer + ".v1."
+		requestType, err := protoregistry.GlobalTypes.FindMessageByName(protoreflect.FullName(prefix + "ClusterCatalogItems" + method + "Request"))
+		Expect(err).ToNot(HaveOccurred())
+		request := requestType.New().Interface()
+		nodeMap := `{"items":{"workers":{"size":1,"baremetalInstanceType":{"name":"unresolved-type","shared":true}}}}`
+		if behavior == "editable" {
+			nodeMap = `{"defaultValue":` + nodeMap + `}`
+		}
+		body := fmt.Sprintf(`{"object":{"fields":{"nodeSets":{%q:%s}}}}`, behavior, nodeMap)
+		Expect(protojson.Unmarshal([]byte(body), request)).To(Succeed())
+		original := proto.Clone(request)
+		called := false
+		_, err = v.UnaryServer(ctx, request, &grpc.UnaryServerInfo{FullMethod: "/" + prefix + "ClusterCatalogItems/" + method},
+			func(_ context.Context, actual any) (any, error) {
+				called = true
+				Expect(proto.Equal(actual.(proto.Message), original)).To(BeTrue())
+				return "ok", nil
+			})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(called).To(BeTrue())
+	},
+		Entry("public create locked", "public", "Create", "locked"),
+		Entry("private create locked", "private", "Create", "locked"),
+		Entry("public update locked", "public", "Update", "locked"),
+		Entry("private update locked", "private", "Update", "locked"),
+		Entry("public create default", "public", "Create", "editable"),
+		Entry("private create default", "private", "Create", "editable"),
+		Entry("public update default", "public", "Update", "editable"),
+		Entry("private update default", "private", "Update", "editable"),
+	)
 
 	It("leaves BMI Create network references for the tenant-scoped handler to resolve", func() {
 		logger := slog.New(slog.NewTextHandler(io.Discard, nil))

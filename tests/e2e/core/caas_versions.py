@@ -21,7 +21,7 @@ def ensure_caas_disk_image_version(private_grpc: GRPCClient) -> str:
         return version["metadata"]["name"]
 
     disk_image_id = private_grpc.ensure_disk_image(
-        name="rhcos-4-22", source_ref=env("OSAC_RHCOS_BMI_IMAGE", "oci://quay.io/rh_ee_rpiccoli/rhcos-bmi:4.22.0")
+        name="rhcos-4-22", source_ref=env("OSAC_RHCOS_BMI_IMAGE", "oci://quay.io/osac-project/rhcos:4.22.0")
     )
     version = private_grpc.ensure_cluster_version(
         version="4.22.0-e2e-references",

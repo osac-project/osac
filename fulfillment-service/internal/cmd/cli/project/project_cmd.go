@@ -155,20 +155,22 @@ func (c *runnerContext) setProject(cmd *cobra.Command, settings *config.Settings
 	}
 
 	// When the resolved name differs from the input (relative resolution was applied),
-	// try the input as-is first so lookups by exact ID or absolute name work even when
-	// a project is already saved.
+	// try the resolved (child) name first so that a bare name like "dev" under project
+	// "team" finds "team.dev" before a root project named "dev". The raw input is used
+	// as a fallback for explicit IDs or absolute names.
 	var object proto.Message
 	var objectHelper reflection.ObjectHelper
 	var err error
 	if name != resolvedName {
-		object, objectHelper, err = c.findProjectQuiet(cmd, settings, name)
+		object, objectHelper, err = c.findProjectQuiet(cmd, settings, resolvedName)
 		if err != nil {
-			// Quiet lookup failed — fall through to the resolved name below.
+			// Relative child lookup failed — fall through to the raw input below
+			// for exact ID or absolute name selection.
 			object = nil
 		}
 	}
 	if object == nil {
-		object, objectHelper, err = c.findProject(cmd, settings, resolvedName)
+		object, objectHelper, err = c.findProject(cmd, settings, name)
 		if err != nil {
 			return err
 		}

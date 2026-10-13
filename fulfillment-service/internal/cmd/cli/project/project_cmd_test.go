@@ -138,14 +138,41 @@ var _ = Describe("Project command", func() {
 
 		// Regression: when a project is saved, a UUID argument should not be
 		// made relative. resolveProjectName does prepend the current project,
-		// but setProject should try the raw argument first.
-		It("Prepends current project to a UUID-like name (setProject tries as-is first)", func() {
+		// but setProject tries the resolved (child) name first, then falls back
+		// to the raw input so that explicit IDs and absolute names still work.
+		It("Prepends current project to a UUID-like name (setProject falls back to raw)", func() {
 			ctx := config.ProjectIntoContext(context.Background(), "team-a")
 			settings := mustSettings()
 			name := runner.resolveProjectName(ctx, settings, "abc-123-def")
-			// resolveProjectName always relativizes — the fix is in setProject
-			// which tries the raw argument first.
+			// resolveProjectName always relativizes — setProject tries this
+			// resolved name first, then falls back to the raw argument for
+			// ID/absolute selection.
 			Expect(name).To(Equal("team-a.abc-123-def"))
+		})
+
+		// Regression: bare name "dev" under effective project "team" should
+		// resolve to "team.dev" (child) before a root project named "dev".
+		// setProject uses this resolved name first, falling back to raw "dev"
+		// only if the child does not exist — preventing root/child collisions.
+		It("Resolves child before root when a project is active", func() {
+			ctx := config.ProjectIntoContext(context.Background(), "team")
+			settings := mustSettings()
+			name := runner.resolveProjectName(ctx, settings, "dev")
+			Expect(name).To(Equal("team.dev"),
+				"bare 'dev' under effective project 'team' should resolve to 'team.dev'")
+		})
+
+		// Regression: when the effective project is "org" and the user types
+		// "dev", the resolved name is "org.dev". If the server has both a root
+		// "dev" and a child "org.dev", the child must win. This test verifies
+		// resolveProjectName produces the right candidate for the child-first
+		// lookup that setProject performs.
+		It("Resolves relative name for child-first lookup precedence", func() {
+			ctx := config.ProjectIntoContext(context.Background(), "org")
+			settings := mustSettings()
+			name := runner.resolveProjectName(ctx, settings, "dev")
+			Expect(name).To(Equal("org.dev"),
+				"setProject should try 'org.dev' first, then fall back to 'dev'")
 		})
 
 		// Regression: resolveProjectName must use the effective project from the

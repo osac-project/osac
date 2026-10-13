@@ -25,7 +25,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 _LOCK = threading.Lock()
 _CALL_LOG = []
-_CONFIG = {}
 
 
 def _empty_config():
@@ -36,6 +35,9 @@ def _empty_config():
         "ipam_subnets": [],
         "ipam_delete_status": 204,
     }
+
+
+_CONFIG = _empty_config()
 
 
 class MockNetrisHandler(BaseHTTPRequestHandler):

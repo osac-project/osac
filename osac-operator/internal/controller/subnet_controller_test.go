@@ -295,7 +295,8 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(deprovisionCalls).To(Equal(1))
 			deletedSubnet := &osacv1alpha1.Subnet{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: subnet.Name, Namespace: subnet.Namespace}, deletedSubnet)).To(HaveOccurred())
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: subnet.Name, Namespace: subnet.Namespace}, deletedSubnet)
+			Expect(errors.IsNotFound(err)).To(BeTrue())
 		})
 
 		It("should requeue when parent VirtualNetwork not found", func() {

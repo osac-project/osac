@@ -32,7 +32,9 @@
     headers:
       Cookie: "connect.sid={{ netris_session_cookie }}"
     return_content: true
-    status_code: [200, 204, 400]
+    # 404 means the subnet was removed concurrently after the lookup; the
+    # deletion target is already absent, so treat it as deleted.
+    status_code: [200, 204, 400, 404]
     timeout: "{{ netris_timeout | default(30) }}"
     validate_certs: "{{ netris_validate_certs | default(true) }}"
   register: _ipam_subnet_delete_resp

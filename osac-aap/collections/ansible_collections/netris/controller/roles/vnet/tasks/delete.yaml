@@ -35,4 +35,12 @@
     # the deletion target is already absent, so treat it as deleted.
     status_code: [200, 204, 404]
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _vnet_delete_resp
   no_log: true
+
+- name: Report the concurrently removed V-Net
+  ansible.builtin.debug:
+    msg: >-
+      V-Net '{{ vnet_name }}' (ID: {{ _existing_vnet.id }}) was already absent
+      (HTTP 404) when deleted; treating the V-Net as deleted.
+  when: _vnet_delete_resp is defined and _vnet_delete_resp.status | default(0) == 404

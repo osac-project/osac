@@ -279,6 +279,69 @@
             that:
               - nd03_configmap.resources | length == 0
             success_msg: "ND-03 fabric output ConfigMap removed"
+
+        # ND-04: the child IPAM subnet DELETE returns 404 after the IPAM
+        # lookup because a concurrent removal deleted it first. The play must
+        # succeed and still remove the fabric output ConfigMap.
+        - name: Seed ND-04 with an IPAM delete that 404s after the lookup
+          ansible.builtin.uri:
+            url: "{{ mock_netris_url }}/_config"
+            method: POST
+            body_format: json
+            body:
+              vnets:
+                - id: 101
+                  name: "{{ subnet_name }}"
+              vnet_delete_status: 204
+              ipam_subnets:
+                - id: 202
+                  name: "{{ subnet_name }}"
+              ipam_delete_status: 404
+            status_code: 200
+          changed_when: false
+
+        - name: Ensure the ND-04 fabric output ConfigMap exists
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: "{{ fabric_configmap_name }}"
+                namespace: "{{ fixture_namespace }}"
+
+        - name: Run the ND-04 delete playbook
+          ansible.builtin.include_tasks: run_delete_playbook.yaml
+          vars:
+            netris_delete_should_succeed: true
+
+        - name: Read the ND-04 request log
+          ansible.builtin.uri:
+            url: "{{ mock_netris_url }}/_calls"
+            method: GET
+            status_code: 200
+          register: nd04_calls
+          changed_when: false
+
+        - name: Assert the ND-04 delete order
+          ansible.builtin.assert:
+            that:
+              - nd04_calls.json.calls == nd01_expected_calls
+            success_msg: "ND-04 request order matched"
+
+        - name: Read the ND-04 fabric output ConfigMap
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: ConfigMap
+            namespace: "{{ fixture_namespace }}"
+            name: "{{ fabric_configmap_name }}"
+          register: nd04_configmap
+
+        - name: Assert the ND-04 ConfigMap was removed
+          ansible.builtin.assert:
+            that:
+              - nd04_configmap.resources | length == 0
+            success_msg: "ND-04 fabric output ConfigMap removed"
       always:
         - name: Stop the mock Netris API fixture
           ansible.builtin.shell: "pkill -f '[m]ock_netris.py {{ mock_netris_port }}' 2>/dev/null || true"

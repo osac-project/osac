@@ -108,10 +108,12 @@ jobs:
         if: inputs.kind == 'it-fulfillment-service'
         env:
           CONTAINER_TOOL: docker
+          MCP_TEST_ENABLED: "true"
         run: |
           echo '127.0.0.1 fulfillment-api.osac.svc.cluster.local' | sudo tee -a /etc/hosts
           echo '127.0.0.1 fulfillment-internal-api.osac.svc.cluster.local' | sudo tee -a /etc/hosts
           echo '127.0.0.1 keycloak.keycloak.svc.cluster.local' | sudo tee -a /etc/hosts
+          echo '127.0.0.1 mcp.osac.localhost' | sudo tee -a /etc/hosts
           make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
       - name: Collect diagnostic logs
         if: inputs.kind == 'it-fulfillment-service' && always()

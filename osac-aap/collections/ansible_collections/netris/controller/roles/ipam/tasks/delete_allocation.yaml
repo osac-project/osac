@@ -39,7 +39,7 @@
     headers:
       Cookie: "connect.sid={{ netris_session_cookie }}"
     return_content: true
-    status_code: [200, 204, 400]
+    status_code: [200, 204, 400, 404]
     timeout: "{{ netris_timeout | default(30) }}"
     validate_certs: "{{ netris_validate_certs | default(true) }}"
   register: _ipam_alloc_delete_resp

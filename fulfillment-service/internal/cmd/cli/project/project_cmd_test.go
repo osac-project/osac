@@ -71,25 +71,22 @@ var _ = Describe("Project command", func() {
 		})
 
 		It("Appends relative name to current project", func() {
-			ctx := context.Background()
+			ctx := config.ProjectIntoContext(context.Background(), "team-a")
 			settings := mustSettings()
-			settings.SetProject("team-a")
 			name := runner.resolveProjectName(ctx, settings, "frontend")
 			Expect(name).To(Equal("team-a.frontend"))
 		})
 
 		It("Navigates up with '..' from a top-level project", func() {
-			ctx := context.Background()
+			ctx := config.ProjectIntoContext(context.Background(), "team-a")
 			settings := mustSettings()
-			settings.SetProject("team-a")
 			name := runner.resolveProjectName(ctx, settings, "..")
 			Expect(name).To(BeEmpty())
 		})
 
 		It("Navigates up with '..' from a nested project", func() {
-			ctx := context.Background()
+			ctx := config.ProjectIntoContext(context.Background(), "team-a.frontend")
 			settings := mustSettings()
-			settings.SetProject("team-a.frontend")
 			name := runner.resolveProjectName(ctx, settings, "..")
 			Expect(name).To(Equal("team-a"))
 		})
@@ -102,9 +99,8 @@ var _ = Describe("Project command", func() {
 		})
 
 		It("Builds a deeply nested name", func() {
-			ctx := context.Background()
+			ctx := config.ProjectIntoContext(context.Background(), "team-a.frontend")
 			settings := mustSettings()
-			settings.SetProject("team-a.frontend")
 			name := runner.resolveProjectName(ctx, settings, "staging")
 			Expect(name).To(Equal("team-a.frontend.staging"))
 		})
@@ -112,10 +108,10 @@ var _ = Describe("Project command", func() {
 		DescribeTable("Navigation edge cases",
 			func(current string, input string, expected string) {
 				ctx := context.Background()
-				settings := mustSettings()
 				if current != "" {
-					settings.SetProject(current)
+					ctx = config.ProjectIntoContext(ctx, current)
 				}
+				settings := mustSettings()
 				name := runner.resolveProjectName(ctx, settings, input)
 				Expect(name).To(Equal(expected))
 			},
@@ -132,9 +128,8 @@ var _ = Describe("Project command", func() {
 		// Regression: when '..' resolves to "" from a top-level project, setProject
 		// should clear the project rather than trying to find a project named "".
 		It("Returns empty for '..' from single-level (setProject clears)", func() {
-			ctx := context.Background()
+			ctx := config.ProjectIntoContext(context.Background(), "team-a")
 			settings := mustSettings()
-			settings.SetProject("team-a")
 			name := runner.resolveProjectName(ctx, settings, "..")
 			Expect(name).To(BeEmpty(),
 				"'..' from a single-level project should resolve to empty, "+
@@ -145,13 +140,38 @@ var _ = Describe("Project command", func() {
 		// made relative. resolveProjectName does prepend the current project,
 		// but setProject should try the raw argument first.
 		It("Prepends current project to a UUID-like name (setProject tries as-is first)", func() {
-			ctx := context.Background()
+			ctx := config.ProjectIntoContext(context.Background(), "team-a")
 			settings := mustSettings()
-			settings.SetProject("team-a")
 			name := runner.resolveProjectName(ctx, settings, "abc-123-def")
 			// resolveProjectName always relativizes — the fix is in setProject
 			// which tries the raw argument first.
 			Expect(name).To(Equal("team-a.abc-123-def"))
+		})
+
+		// Regression: resolveProjectName must use the effective project from the
+		// context (which accounts for --project flag override), not the saved
+		// settings value. When --project org.team is passed but settings has
+		// "team-a", navigation must resolve from "org.team".
+		It("Uses effective project from context, not saved settings", func() {
+			// Simulate --project org.team overriding saved "team-a":
+			// root command puts the effective project into context.
+			ctx := config.ProjectIntoContext(context.Background(), "org.team")
+			settings := mustSettings()
+			settings.SetProject("team-a") // saved value differs from effective
+
+			name := runner.resolveProjectName(ctx, settings, "..")
+			Expect(name).To(Equal("org"),
+				"'..' should navigate from effective context project 'org.team', not saved 'team-a'")
+		})
+
+		It("Appends relative name using effective project from context", func() {
+			ctx := config.ProjectIntoContext(context.Background(), "org.team")
+			settings := mustSettings()
+			settings.SetProject("team-a") // saved value differs
+
+			name := runner.resolveProjectName(ctx, settings, "env")
+			Expect(name).To(Equal("org.team.env"),
+				"relative name should be appended to the effective context project")
 		})
 	})
 

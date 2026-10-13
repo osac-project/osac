@@ -214,7 +214,6 @@ func (c *runnerContext) findProjectQuiet(cmd *cobra.Command, settings *config.Se
 		SetConnection(conn).
 		AddPackages(settings.Packages()).
 		SetTenantFunc(config.TenantFromContext).
-		SetProjectFunc(config.ProjectFromContext).
 		Build()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create reflection tool: %w", err)
@@ -235,8 +234,8 @@ func (c *runnerContext) findProjectQuiet(cmd *cobra.Command, settings *config.Se
 // resolveProjectName resolves a project name relative to the current project context, supporting
 // hierarchical navigation. A ".." navigates to the parent project, and a relative name is appended
 // to the current project with a dot separator, following a filesystem-like navigation model.
-func (c *runnerContext) resolveProjectName(_ context.Context, settings *config.Settings, name string) string {
-	current := settings.Project()
+func (c *runnerContext) resolveProjectName(ctx context.Context, _ *config.Settings, name string) string {
+	current := config.ProjectFromContext(ctx)
 
 	if name == ".." {
 		if current == "" {
@@ -279,7 +278,6 @@ func (c *runnerContext) findProject(cmd *cobra.Command, settings *config.Setting
 		SetConnection(conn).
 		AddPackages(settings.Packages()).
 		SetTenantFunc(config.TenantFromContext).
-		SetProjectFunc(config.ProjectFromContext).
 		Build()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create reflection tool: %w", err)

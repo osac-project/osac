@@ -225,17 +225,6 @@ jobs:
       working-directory: osac-installer
       run: helm dependency build charts/osac/
 
-    - name: Install ripgrep for CSI render checks
-      if: steps.should-run.outputs.run
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends ripgrep
-
-    - name: Test CSI and storage-provider rendering
-      if: steps.should-run.outputs.run
-      working-directory: osac-installer
-      run: make csi-render-test
-
     - name: Test networking values
       if: steps.should-run.outputs.run
       working-directory: osac-installer

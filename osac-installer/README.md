@@ -299,17 +299,15 @@ then authenticates with the `osac-admin` Keycloak service client and lists
 tenants through the Fulfillment gRPC API. It builds the Fulfillment Service
 image from the tested revision, loads it into Kind, and reads the admin client
 secret from the `keycloak-client-secrets` Secret in the running cluster.
-Changes to the smoke workflow or script also trigger a pre-merge run. To run
-the same smoke test on a running dev-full cluster, use:
+Once the workflow is on the default branch, a repository collaborator can run
+it on a pull request by commenting `/test-kind-dev-full`. To run the same smoke
+test on a running dev-full cluster, use:
 
 ```bash
 KUBECONFIG="$HOME/.kube/osac-dev-kind-root.kubeconfig" \
   OSAC_FULFILLMENT_GRPC_ADDRESS=fulfillment-api.osac.localhost:8443 \
   bash ../.github/scripts/test-kind-dev-full.sh
 ```
-
-On a pull request, a repository collaborator can start the workflow by
-commenting `/test-kind-dev-full`.
 
 #### Configure Values
 

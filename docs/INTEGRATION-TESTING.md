@@ -230,9 +230,10 @@ route, then authenticates with the `osac-admin` Keycloak service client and call
 `osac.public.v1.Tenants/List` over the public Fulfillment gRPC endpoint. It uses real Kind, Docker,
 KubeVirt/AWX/Keycloak deployments, a Fulfillment Service image built from the
 tested revision, and the profile's TLS bundle; it does not fake service
-responses. The smoke runs nightly, runs pre-merge when the smoke workflow or
-script changes, and can be requested on a PR by a repository collaborator with
-`/test-kind-dev-full`. It covers
+responses. The smoke runs nightly and, after the workflow is on the default
+branch, can be requested on a PR by a repository collaborator with
+`/test-kind-dev-full`. The PR introducing the workflow was exercised against a
+fresh local Kind dev-full installation. It covers
 deployment availability, UI routing, and authenticated tenant listing only,
 not VM provisioning or other resource lifecycles.
 

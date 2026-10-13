@@ -65,7 +65,7 @@ respective areas.
 | Install preflight rendering contract, hook log policy, or CSI hook deadlines | Helm contract | `uv run --script scripts/test-preflight-render.py` |
 | Install preflight against a real API server, upgrade behavior, or failed-hook logs | Component integration | `uv run --script scripts/test-preflight-kind.py` against a Kind context; see [install preflight](../docs/INTEGRATION-TESTING.md#install-preflight-osac-6561) |
 | Deployed hooks or cross-component startup | Component integration | `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment` with a deployed Kind environment; see [suite boundaries](../docs/INTEGRATION-TESTING.md#osac-installer) |
-| Kind `dev-full` startup, core deployment readiness, UI routing, and authenticated tenant listing | E2E smoke | `.github/scripts/test-kind-dev-full.sh`, run by `.github/workflows/kind-dev-full-smoke.yml` after building the Fulfillment image and installing the `dev-full` profile; requires Docker-backed Kind with `/dev/kvm` |
+| Kind `dev-full` startup, core deployment readiness, UI routing, and authenticated tenant listing | E2E smoke | `.github/scripts/test-kind-dev-full.sh`, run by `.github/workflows/kind-dev-full-smoke.yml` after `make install PLATFORM=kind PROFILE=dev-full NS=osac`; requires Docker-backed Kind with `/dev/kvm` |
 
 ## Validation
 

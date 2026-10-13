@@ -295,12 +295,16 @@ make uninstall PLATFORM=kind PROFILE=dev-full NS=osac
 The GitHub Actions workflow [`Kind dev-full smoke`](../.github/workflows/kind-dev-full-smoke.yml)
 installs this profile nightly, checks that fulfillment, the operator, AWX,
 Keycloak, and the UI deployments are available, verifies the UI Gateway route,
-then logs in as the seeded `tenant1_admin` user and lists tenants through the
-Fulfillment REST API. Changes to the smoke workflow or script also trigger a
-pre-merge run. To run the same smoke test on a running dev-full cluster, use:
+then authenticates with the `osac-admin` Keycloak service client and lists
+tenants through the Fulfillment gRPC API. It builds the Fulfillment Service
+image from the tested revision, loads it into Kind, and reads the admin client
+secret from the `keycloak-client-secrets` Secret in the running cluster.
+Changes to the smoke workflow or script also trigger a pre-merge run. To run
+the same smoke test on a running dev-full cluster, use:
 
 ```bash
 KUBECONFIG="$HOME/.kube/osac-dev-kind-root.kubeconfig" \
+  OSAC_FULFILLMENT_GRPC_ADDRESS=fulfillment-api.osac.localhost:8443 \
   bash ../.github/scripts/test-kind-dev-full.sh
 ```
 

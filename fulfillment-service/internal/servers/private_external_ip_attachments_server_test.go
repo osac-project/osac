@@ -1155,6 +1155,111 @@ var _ = Describe("Private external IP attachments server", func() {
 		})
 	})
 
+	It("keeps a terminating Attachment exclusive until archive", func() {
+		eip := createExternalIPInState(ctx, externalIPDao, sharedPool.GetId(),
+			privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false)
+		firstTarget := createComputeInstanceInState(ctx, computeInstanceDao,
+			privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+		secondTarget := createComputeInstanceInState(ctx, computeInstanceDao,
+			privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+		first, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
+			Object: privatev1.ExternalIPAttachment_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:       fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					Finalizers: []string{"test-hold"},
+				}.Build(),
+				Spec: privatev1.ExternalIPAttachmentSpec_builder{
+					ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+					ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: firstTarget.GetId()}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		_, err = server.Delete(ctx, privatev1.ExternalIPAttachmentsDeleteRequest_builder{Id: first.GetObject().GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
+			Object: privatev1.ExternalIPAttachment_builder{
+				Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
+				Spec: privatev1.ExternalIPAttachmentSpec_builder{
+					ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+					ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: secondTarget.GetId()}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.AlreadyExists))
+	})
+
+	It("keeps a terminating Attachment exclusive until archive", func() {
+		eip := createExternalIPInState(ctx, externalIPDao, sharedPool.GetId(),
+			privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false)
+		firstTarget := createComputeInstanceInState(ctx, computeInstanceDao,
+			privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+		secondTarget := createComputeInstanceInState(ctx, computeInstanceDao,
+			privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+		first, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
+			Object: privatev1.ExternalIPAttachment_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:       fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					Finalizers: []string{"test-hold"},
+				}.Build(),
+				Spec: privatev1.ExternalIPAttachmentSpec_builder{
+					ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+					ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: firstTarget.GetId()}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		_, err = server.Delete(ctx, privatev1.ExternalIPAttachmentsDeleteRequest_builder{Id: first.GetObject().GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
+			Object: privatev1.ExternalIPAttachment_builder{
+				Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
+				Spec: privatev1.ExternalIPAttachmentSpec_builder{
+					ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+					ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: secondTarget.GetId()}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.AlreadyExists))
+	})
+
+	It("keeps a terminating Attachment exclusive until archive", func() {
+		eip := createExternalIPInState(ctx, externalIPDao, sharedPool.GetId(),
+			privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false)
+		firstTarget := createComputeInstanceInState(ctx, computeInstanceDao,
+			privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+		secondTarget := createComputeInstanceInState(ctx, computeInstanceDao,
+			privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+		first, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
+			Object: privatev1.ExternalIPAttachment_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:       fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					Finalizers: []string{"test-hold"},
+				}.Build(),
+				Spec: privatev1.ExternalIPAttachmentSpec_builder{
+					ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+					ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: firstTarget.GetId()}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		_, err = server.Delete(ctx, privatev1.ExternalIPAttachmentsDeleteRequest_builder{Id: first.GetObject().GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
+			Object: privatev1.ExternalIPAttachment_builder{
+				Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
+				Spec: privatev1.ExternalIPAttachmentSpec_builder{
+					ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+					ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: secondTarget.GetId()}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.AlreadyExists))
+	})
+
 	Describe("Immutable fields", func() {
 		It("Rejects update of spec.external_ip", func() {
 			eip := createExternalIPInState(ctx, externalIPDao, sharedPool.GetId(),

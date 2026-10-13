@@ -3954,6 +3954,7 @@ var _ = Describe("Private compute instances server", func() {
 					}.Build(),
 					Status: privatev1.ExternalIPPoolStatus_builder{
 						State:     privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY,
+						Total:     available,
 						Available: available,
 						Allocated: 0,
 					}.Build(),

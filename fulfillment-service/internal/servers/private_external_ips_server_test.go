@@ -601,8 +601,9 @@ var _ = Describe("Private external IPs server", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		It("preserves the deletion boundary and releases capacity once", func() {
+		It("holds capacity until archive and releases it once", func() {
 			object := createExternalIPInState(externalIPsServer, privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING)
+			poolID := object.GetSpec().GetPool().GetId()
 			object.GetMetadata().SetFinalizers([]string{"cleanup"})
 			_, err := externalIPDao.Update().SetObject(object).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
@@ -619,7 +620,15 @@ var _ = Describe("Private external IPs server", func() {
 			second, err := externalIPDao.Get().SetId(object.GetId()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(proto.Equal(firstDeletion, second.GetObject().GetMetadata().GetDeletionTimestamp())).To(BeTrue())
-			pool, err := externalIPPoolDao.Get().SetId(object.GetSpec().GetPool().GetId()).Do(ctx)
+			pool, err := externalIPPoolDao.Get().SetId(poolID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(pool.GetObject().GetStatus().GetAllocated()).To(Equal(int64(1)))
+			Expect(pool.GetObject().GetStatus().GetAvailable()).To(Equal(int64(99)))
+
+			second.GetObject().GetMetadata().SetFinalizers(nil)
+			_, err = externalIPDao.Update().SetObject(second.GetObject()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			pool, err = externalIPPoolDao.Get().SetId(poolID).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(pool.GetObject().GetStatus().GetAllocated()).To(Equal(int64(0)))
 			Expect(pool.GetObject().GetStatus().GetAvailable()).To(Equal(int64(100)))

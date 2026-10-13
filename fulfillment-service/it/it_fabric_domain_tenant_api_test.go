@@ -46,9 +46,25 @@ var _ = Describe("FabricDomain tenant API component integration", Label("network
 		requireFabricDomainProvisioningDisabled(setupCtx)
 
 		adminConn := tool.InternalView().AdminConn()
+		tenants := privatev1.NewTenantsClient(adminConn)
 		networkClasses = privatev1.NewNetworkClassesClient(adminConn)
 		virtualNetworks = privatev1.NewVirtualNetworksClient(adminConn)
 		adminDomains = publicv1.NewFabricDomainsClient(tool.ExternalView().AdminConn())
+		for _, tenantID := range []string{"a", "b"} {
+			response, err := tenants.Create(setupCtx, privatev1.TenantsCreateRequest_builder{
+				Object: privatev1.Tenant_builder{
+					Metadata: privatev1.Metadata_builder{Name: tenantID}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := response.GetObject().GetId()
+			DeferCleanup(func(cleanupCtx context.Context) {
+				_, deleteErr := tenants.Delete(cleanupCtx, privatev1.TenantsDeleteRequest_builder{Id: id}.Build())
+				if deleteErr != nil && !isGRPCCode(deleteErr, grpccodes.NotFound) {
+					Expect(deleteErr).ToNot(HaveOccurred(), "deleting test tenant %s", id)
+				}
+			})
+		}
 
 		manager := "netris"
 		response, err := networkClasses.Create(setupCtx, privatev1.NetworkClassesCreateRequest_builder{

@@ -71,7 +71,11 @@ def _render_auth_tls_settings(monkeypatch, tmp_path, existing=None):
 
     monkeypatch.setitem(lookup_loader.aliases, "ansible.builtin.env", "env")
     tasks = yaml.safe_load(AUTH_TASKS.read_text())
-    facts = tasks[0]["ansible.builtin.set_fact"]
+    facts = next(
+        task["ansible.builtin.set_fact"]
+        for task in tasks
+        if task.get("name") == "Resolve Netris TLS settings from the worker environment"
+    )
     templar = Templar(loader=DataLoader(), variables=existing or {})
 
     return {
@@ -141,7 +145,7 @@ def test_auth_role_renders_tls_settings(
 
 def test_auth_request_consumes_resolved_tls_settings():
     tasks = yaml.safe_load(AUTH_TASKS.read_text())
-    auth_task = tasks[1]
+    auth_task = next(task for task in tasks if task.get("name") == "Login to Netris controller")
     uri = auth_task["ansible.builtin.uri"]
 
     assert uri["validate_certs"] == "{{ netris_validate_certs | default(true) }}"

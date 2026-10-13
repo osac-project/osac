@@ -275,5 +275,7 @@ def test_network_worker_reuses_config_and_secret_environment(remote_secret):
     worker = pod["spec"]["containers"][0]
     assert {"configMapRef": {"name": "network-fulfillment-ig", "optional": True}} in worker["envFrom"]
     assert {"secretRef": {"name": "network-fulfillment-ig"}} in worker["envFrom"]
+    assert {"name": "NETRIS_VALIDATE_CERTS", "value": "true"} in worker["env"]
+    assert all(env["name"] != "NETRIS_CA_PATH" for env in worker["env"])
     assert all(volume["name"] != "agentless-net-inventory" for volume in pod["spec"]["volumes"])
     assert all(mount["name"] != "agentless-net-inventory" for mount in worker["volumeMounts"])

@@ -305,6 +305,58 @@
           Cluster fulfillment must receive the same Netris CA and validation
           settings as networking operations.
 
+- name: Netris pod specs with certificate validation disabled
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    netris_ca_config_map_name: customer-netris-ca
+    netris_validate_certs: false
+    netris_ca_path: /etc/netris/ca/bundle.pem
+    _template_paths:
+      - name: networking operations
+        path: >-
+          {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/templates/networking-operations-ig.j2
+      - name: cluster fulfillment
+        path: >-
+          {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/templates/cluster-fulfillment-ig.j2
+
+  tasks:
+    - name: Render pod specs with certificate validation disabled
+      ansible.builtin.set_fact:
+        _disabled_tls_pod_specs: >-
+          {{ _disabled_tls_pod_specs | default([]) + [
+             {'name': item.name,
+              'pod': lookup('ansible.builtin.template', item.path) | from_yaml}
+          ] }}
+      loop: "{{ _template_paths }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Assert disabled validation is propagated without dropping the CA
+      ansible.builtin.assert:
+        that:
+          - >-
+            item.pod.spec.containers[0].env
+            | selectattr('name', 'equalto', 'NETRIS_VALIDATE_CERTS')
+            | selectattr('value', 'equalto', 'false')
+            | list | length == 1
+          - >-
+            item.pod.spec.containers[0].env
+            | selectattr('name', 'equalto', 'NETRIS_CA_PATH')
+            | selectattr('value', 'equalto', '/etc/netris/ca/bundle.pem')
+            | list | length == 1
+          - >-
+            item.pod.spec.volumes
+            | selectattr('name', 'equalto', 'netris-ca-bundle')
+            | list | length == 1
+        fail_msg: >-
+          {{ item.name }} must preserve the configured CA while propagating
+          NETRIS_VALIDATE_CERTS=false.
+      loop: "{{ _disabled_tls_pod_specs }}"
+      loop_control:
+        label: "{{ item.name }}"
+
 - name: Netris container-group template inventory contract
   hosts: localhost
   gather_facts: false

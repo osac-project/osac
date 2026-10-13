@@ -33,6 +33,8 @@ import (
 var _ = Describe("FabricDomain tenant API component integration", Label("networking", "multitenancy"), func() {
 	var (
 		networkClassID       string
+		tenantA              string
+		tenantB              string
 		networkClasses       privatev1.NetworkClassesClient
 		virtualNetworks      privatev1.VirtualNetworksClient
 		adminDomains         publicv1.FabricDomainsClient
@@ -47,10 +49,13 @@ var _ = Describe("FabricDomain tenant API component integration", Label("network
 
 		adminConn := tool.InternalView().AdminConn()
 		tenants := privatev1.NewTenantsClient(adminConn)
+		projects := privatev1.NewProjectsClient(adminConn)
 		networkClasses = privatev1.NewNetworkClassesClient(adminConn)
 		virtualNetworks = privatev1.NewVirtualNetworksClient(adminConn)
 		adminDomains = publicv1.NewFabricDomainsClient(tool.ExternalView().AdminConn())
-		for _, tenantID := range []string{"a", "b"} {
+		tenantA = fmt.Sprintf("fd-it-a-%s", uuid.New()[24:])
+		tenantB = fmt.Sprintf("fd-it-b-%s", uuid.New()[24:])
+		for _, tenantID := range []string{tenantA, tenantB} {
 			response, err := tenants.Create(setupCtx, privatev1.TenantsCreateRequest_builder{
 				Object: privatev1.Tenant_builder{
 					Metadata: privatev1.Metadata_builder{Name: tenantID}.Build(),
@@ -59,10 +64,7 @@ var _ = Describe("FabricDomain tenant API component integration", Label("network
 			Expect(err).ToNot(HaveOccurred())
 			id := response.GetObject().GetId()
 			DeferCleanup(func(cleanupCtx context.Context) {
-				_, deleteErr := tenants.Delete(cleanupCtx, privatev1.TenantsDeleteRequest_builder{Id: id}.Build())
-				if deleteErr != nil && !isGRPCCode(deleteErr, grpccodes.NotFound) {
-					Expect(deleteErr).ToNot(HaveOccurred(), "deleting test tenant %s", id)
-				}
+				deleteTenant(cleanupCtx, tenants, projects, id, tenantID)
 			})
 		}
 
@@ -173,7 +175,7 @@ var _ = Describe("FabricDomain tenant API component integration", Label("network
 			By(testCase.name)
 			_, err := adminDomains.Create(ctx, publicv1.FabricDomainsCreateRequest_builder{
 				Object: publicv1.FabricDomain_builder{
-					Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("fd-invalid-%s", uuid.New()[24:]), Tenant: "a"}.Build(),
+					Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("fd-invalid-%s", uuid.New()[24:]), Tenant: tenantA}.Build(),
 					Spec: publicv1.FabricDomainSpec_builder{
 						Type: testCase.fabricType, Servers: testCase.servers, VirtualNetwork: testCase.vnet,
 					}.Build(),
@@ -184,14 +186,14 @@ var _ = Describe("FabricDomain tenant API component integration", Label("network
 	})
 
 	It("limits tenant reads to owned domains while allowing platform-admin CRUD", func(ctx context.Context) {
-		vnetA := createVirtualNetwork(ctx, "a")
-		vnetB := createVirtualNetwork(ctx, "b")
-		domainA := createDomain(ctx, "a", fmt.Sprintf("fd-a-%s", uuid.New()[24:]), vnetA)
-		domainB := createDomain(ctx, "b", fmt.Sprintf("fd-b-%s", uuid.New()[24:]), vnetB)
+		vnetA := createVirtualNetwork(ctx, tenantA)
+		vnetB := createVirtualNetwork(ctx, tenantB)
+		domainA := createDomain(ctx, tenantA, fmt.Sprintf("fd-a-%s", uuid.New()[24:]), vnetA)
+		domainB := createDomain(ctx, tenantB, fmt.Sprintf("fd-b-%s", uuid.New()[24:]), vnetB)
 
-		clientA, connA := clientForTenant(ctx, "alice", "a")
+		clientA, connA := clientForTenant(ctx, "alice", tenantA)
 		DeferCleanup(func() { Expect(connA.Close()).To(Succeed()) })
-		clientB, connB := clientForTenant(ctx, "carol", "b")
+		clientB, connB := clientForTenant(ctx, "carol", tenantB)
 		DeferCleanup(func() { Expect(connB.Close()).To(Succeed()) })
 
 		updateResponse, err := adminDomains.Update(ctx, publicv1.FabricDomainsUpdateRequest_builder{
@@ -226,7 +228,7 @@ var _ = Describe("FabricDomain tenant API component integration", Label("network
 
 		own, err := clientA.Get(ctx, publicv1.FabricDomainsGetRequest_builder{Id: domainA}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(own.GetObject().GetMetadata().GetTenant()).To(Equal("a"))
+		Expect(own.GetObject().GetMetadata().GetTenant()).To(Equal(tenantA))
 		_, err = clientA.Get(ctx, publicv1.FabricDomainsGetRequest_builder{Id: domainB}.Build())
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
 		_, err = clientB.Get(ctx, publicv1.FabricDomainsGetRequest_builder{Id: domainA}.Build())
@@ -242,9 +244,9 @@ var _ = Describe("FabricDomain tenant API component integration", Label("network
 	})
 
 	It("denies tenant users create, update, and delete", func(ctx context.Context) {
-		vnetA := createVirtualNetwork(ctx, "a")
-		domainID := createDomain(ctx, "a", fmt.Sprintf("fd-protected-%s", uuid.New()[24:]), vnetA)
-		clientA, connA := clientForTenant(ctx, "alice", "a")
+		vnetA := createVirtualNetwork(ctx, tenantA)
+		domainID := createDomain(ctx, tenantA, fmt.Sprintf("fd-protected-%s", uuid.New()[24:]), vnetA)
+		clientA, connA := clientForTenant(ctx, "alice", tenantA)
 		DeferCleanup(func() { Expect(connA.Close()).To(Succeed()) })
 
 		created, err := clientA.Create(ctx, publicv1.FabricDomainsCreateRequest_builder{

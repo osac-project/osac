@@ -355,6 +355,15 @@ func (p *AAPProvider) extractExtraVars(ctx context.Context, resource client.Obje
 	return extraVars, nil
 }
 
+// GetDeprovisionStatusWithExtraVars returns status and artifacts from an AAP deprovisioning job.
+func (p *AAPProvider) GetDeprovisionStatusWithExtraVars(
+	ctx context.Context,
+	resource client.Object,
+	jobID string,
+) (ProvisionStatusWithExtraVars, error) {
+	return p.GetProvisionStatusWithExtraVars(ctx, resource, jobID)
+}
+
 // GetDeprovisionStatus checks deprovisioning job status via AAP API.
 func (p *AAPProvider) GetDeprovisionStatus(ctx context.Context, resource client.Object, jobID string) (ProvisionStatus, error) {
 	return p.getJobStatus(ctx, jobID)
@@ -465,6 +474,15 @@ func extractExtraVars(ctx context.Context, resource client.Object) (map[string]a
 			"kubernetes_uid": parent.KubernetesUID,
 			"tenant_id":      parent.TenantID,
 			"phase":          parent.Phase,
+		}
+	}
+	if pool := ExternalIPPoolFromContext(ctx); pool != (ExternalIPPoolContext{}) {
+		vars["external_ip_pool"] = map[string]any{
+			"fulfillment_id": pool.FulfillmentID,
+			"kubernetes_uid": pool.KubernetesUID,
+			"tenant_id":      pool.TenantID,
+			"cidr":           pool.CIDR,
+			"phase":          pool.Phase,
 		}
 	}
 

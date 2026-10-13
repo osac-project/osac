@@ -44,6 +44,10 @@ const (
 
 	// DataKeyCapabilities is the ConfigMap data key for a comma-separated list of supported capabilities.
 	DataKeyCapabilities = "capabilities"
+
+	// DataKeyExternalIPContractVersion selects the ExternalIP allocation contract.
+	DataKeyExternalIPContractVersion = "externalIPContractVersion"
+	ExternalIPContractVersionV1      = "v1"
 )
 
 // ManagerType distinguishes fabric managers from k8s managers.
@@ -86,6 +90,9 @@ type Manager struct {
 	// Capabilities lists the networking capabilities this manager supports.
 	Capabilities []Capability
 
+	// ExternalIPContractVersion declares the ExternalIP allocation contract supported by this manager.
+	ExternalIPContractVersion string
+
 	// Type indicates whether this is a fabric or k8s manager.
 	Type ManagerType
 
@@ -121,11 +128,18 @@ func ParseConfigMap(cm *corev1.ConfigMap, managerType ManagerType) (*Manager, er
 		return nil, fmt.Errorf("ConfigMap %s/%s: %w", cm.Namespace, cm.Name, err)
 	}
 
+	contractVersion := strings.TrimSpace(cm.Data[DataKeyExternalIPContractVersion])
+	if contractVersion != "" && contractVersion != ExternalIPContractVersionV1 {
+		return nil, fmt.Errorf("ConfigMap %s/%s: unsupported ExternalIP contract version %q",
+			cm.Namespace, cm.Name, contractVersion)
+	}
+
 	return &Manager{
-		Name:         strings.TrimSpace(name),
-		Description:  strings.TrimSpace(cm.Data[DataKeyDescription]),
-		Capabilities: caps,
-		Type:         managerType,
+		Name:                      strings.TrimSpace(name),
+		Description:               strings.TrimSpace(cm.Data[DataKeyDescription]),
+		Capabilities:              caps,
+		ExternalIPContractVersion: contractVersion,
+		Type:                      managerType,
 		ConfigMapRef: types.NamespacedName{
 			Namespace: cm.Namespace,
 			Name:      cm.Name,

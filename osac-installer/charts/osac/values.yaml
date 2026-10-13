@@ -156,7 +156,8 @@ operator:
   # Network manager ConfigMaps use the nested operator.networkManagers map
   # (fabricManagers / k8sManagers). Defaults live in the osac-operator subchart;
   # override operator.networkManagers here to enable netris/k8s_only or change
-  # capabilitiesSyncInterval.
+  # capabilitiesSyncInterval. Manager registrations can set
+  # externalIPContractVersion to opt into v1.
 
 # --- Fulfillment Service ---
 service:

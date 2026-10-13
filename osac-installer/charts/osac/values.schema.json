@@ -508,6 +508,12 @@
                       ]
                     },
                     "uniqueItems": true
+                  },
+                  "externalIPContractVersion": {
+                    "type": "string",
+                    "description": "ExternalIP result contract supported by this manager. Empty uses the unversioned flow.",
+                    "enum": ["", "v1"],
+                    "default": ""
                   }
                 },
                 "additionalProperties": false
@@ -537,6 +543,12 @@
                       ]
                     },
                     "uniqueItems": true
+                  },
+                  "externalIPContractVersion": {
+                    "type": "string",
+                    "description": "ExternalIP result contract supported by this manager. Empty uses the unversioned flow.",
+                    "enum": ["", "v1"],
+                    "default": ""
                   }
                 },
                 "additionalProperties": false

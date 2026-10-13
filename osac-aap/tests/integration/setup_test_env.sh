@@ -166,6 +166,24 @@ CSIEOF
     sleep 1
   done
 
+  # Start mock FlashBlade server for Pure storage integration tests. Separate
+  # process and port from the VMS mock: py-pure-client negotiates an API
+  # version and logs in before any call, so the two protocols cannot share one
+  # handler. Reuses the same self-signed cert -- the SDK does not verify it.
+  echo "Starting mock FlashBlade server (TLS)..."
+  python3 "${SCRIPT_DIR}/mock_flashblade_server.py" 18444 \
+    --tls --cert "${SCRIPT_DIR}/certs/mock.pem" --key "${SCRIPT_DIR}/certs/mock.key" &
+  MOCK_FB_PID=$!
+  echo "${MOCK_FB_PID}" > "${SCRIPT_DIR}/.mock_flashblade_pid"
+
+  for i in $(seq 1 10); do
+    if curl -sk https://127.0.0.1:18444/api/api_version > /dev/null 2>&1; then
+      echo "Mock FlashBlade server ready on port 18444 (PID: ${MOCK_FB_PID})"
+      break
+    fi
+    sleep 1
+  done
+
   # Create storage test namespace and ConfigMap
   kubectl create namespace test-tenant-ns || true
 

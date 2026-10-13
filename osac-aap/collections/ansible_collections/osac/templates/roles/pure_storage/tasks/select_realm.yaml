@@ -1,0 +1,218 @@
+---
+# Internal helper, not one of the four dispatched actions. Claims a Realm from
+# PURE_REALM_POOL for this tenant. Touches only the hub cluster — no FlashBlade
+# calls — so the whole checkout path is testable without an array.
+#
+# Callers must hold the Realm checkout lease: selection is a read-modify-write
+# over the pool, and nothing in the Kubernetes API serializes it for us.
+#
+# Sets:
+#   _pure_selected_realm     — {realm_name, secret_name}
+#   _pure_existing_config    — decoded hub Secret data, or {} on first onboard
+#   _pure_secret_preexisting — true when this tenant was already onboarded;
+#                              setup.yaml skips provisioning and must not
+#                              delete the Secret during rollback
+
+# AAP surfaces Instance Group ConfigMap entries as environment variables, so the
+# pool arrives as a JSON string. Parsed once here and reused by both branches.
+#
+# It is not necessarily still a string by the time it reaches here. The role
+# default wraps the env lookup in a whole-string template, and Ansible
+# literal-evals a templated result that looks like a list or a dict -- so a
+# correctly configured PURE_REALM_POOL arrives already decoded, and from_json
+# would raise on it. Only a value that is still a string needs parsing;
+# anything else is passed through to the shape check below.
+- name: "Parse the Realm pool"
+  block:
+    - name: "Decode PURE_REALM_POOL as JSON"
+      ansible.builtin.set_fact:
+        _pure_realm_pool: >-
+          {{ (pure_storage_realm_pool_json | from_json)
+             if pure_storage_realm_pool_json is string
+             else pure_storage_realm_pool_json }}
+  rescue:
+    # from_json raises while the task's arguments are templated, before
+    # failed_when is ever consulted -- a rescue is the only way to intercept it.
+    # The sentinel is set unconditionally so the report below does not depend on
+    # whether an earlier include left a pool fact behind.
+    - name: "Mark the Realm pool as unparseable"
+      ansible.builtin.set_fact:
+        _pure_realm_pool: ""
+
+# A JSON object or scalar parses cleanly but would make the per-entry loop below
+# iterate keys or characters, so the shape is checked rather than just the parse.
+- name: "Fail when the Realm pool is not valid JSON"
+  ansible.builtin.fail:
+    msg: >-
+      PURE_REALM_POOL is not a valid JSON array of Realm entries. Expected
+      [{"realm_name": "realm-01", "secret_name": "pure-realm-realm-01"}, ...].
+  when: _pure_realm_pool | default('') | type_debug != 'list'
+
+- name: "Validate every Realm pool entry names a Realm and a Secret"
+  vars:
+    # Checked in one assert rather than a loop of them. A looped assert reports
+    # only "One or more items failed" in ansible_failed_result.msg, which is
+    # what setup.yaml's rescue surfaces -- the operator would never learn which
+    # entry was wrong. selectattr is guarded with 'defined' before 'truthy'
+    # because rejectattr raises on an entry that omits the key entirely.
+    _pure_pool_complete: >-
+      {{ _pure_realm_pool
+         | selectattr('realm_name', 'defined') | selectattr('realm_name', 'truthy')
+         | selectattr('secret_name', 'defined') | selectattr('secret_name', 'truthy')
+         | list }}
+  ansible.builtin.assert:
+    that:
+      - (_pure_realm_pool | difference(_pure_pool_complete)) | length == 0
+    fail_msg: >-
+      Realm pool entries {{ _pure_realm_pool | difference(_pure_pool_complete) }}
+      are incomplete. Every PURE_REALM_POOL entry needs both realm_name and
+      secret_name.
+    quiet: true
+
+- name: "Look for an existing tenant storage config Secret"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ pure_storage_tenant_config_secret_prefix }}{{ tenant_name }}"
+    namespace: "{{ pure_storage_config_namespace }}"
+  register: _pure_tenant_secret
+  no_log: true
+
+- name: "Record whether the tenant was already onboarded"
+  ansible.builtin.set_fact:
+    _pure_secret_preexisting: "{{ _pure_tenant_secret.resources | length == 1 }}"
+
+- name: "Reuse the Realm already assigned to this tenant"
+  when: _pure_secret_preexisting | bool
+  block:
+    - name: "Decode the existing tenant storage config"
+      ansible.builtin.set_fact:
+        _pure_existing_config: >-
+          {{ dict(_pure_tenant_secret.resources[0].data.keys()
+                  | zip(_pure_tenant_secret.resources[0].data.values() | map('b64decode'))) }}
+      no_log: true
+
+    - name: "Fail when the existing tenant config records no Realm"
+      ansible.builtin.fail:
+        msg: >-
+          Tenant storage config Secret
+          '{{ pure_storage_tenant_config_secret_prefix }}{{ tenant_name }}' exists but
+          records no realm_name. Delete the Secret to re-onboard the tenant, or repair
+          it to name the Realm the tenant's filesystems already live in.
+      when: _pure_existing_config.realm_name | default('') | length == 0
+
+    - name: "Resolve the Realm pool entry for the assigned Realm"
+      ansible.builtin.set_fact:
+        _pure_selected_realm:
+          realm_name: "{{ _pure_existing_config.realm_name }}"
+          secret_name: >-
+            {{ (_pure_realm_pool | selectattr('realm_name', 'equalto', _pure_existing_config.realm_name)
+                | map(attribute='secret_name') | list | first)
+               | default('', true) }}
+
+    - name: "Fail when the assigned Realm has left the pool"
+      ansible.builtin.fail:
+        msg: >-
+          Tenant '{{ tenant_name }}' is assigned Realm
+          '{{ _pure_existing_config.realm_name }}', which is no longer listed in
+          PURE_REALM_POOL. Restore the Realm's pool entry — its credentials are needed
+          to manage the tenant's existing filesystems.
+      when: _pure_selected_realm.secret_name | length == 0
+
+- name: "Claim an unassigned Realm for a newly onboarding tenant"
+  when: not (_pure_secret_preexisting | bool)
+  block:
+    - name: "Initialise an empty tenant storage config"
+      ansible.builtin.set_fact:
+        _pure_existing_config: {}
+
+    - name: "Fail when no Realm pool is configured"
+      ansible.builtin.fail:
+        msg: >-
+          No Realm configured in PURE_REALM_POOL. Configure Realm pool entries in the
+          Instance Group ConfigMap.
+      when: _pure_realm_pool | length == 0
+
+    # Only the label values are read -- which Realms are spoken for -- but
+    # k8s_info has no projection, so the register holds the complete body of
+    # every tenant config Secret carrying the label, each with its own
+    # api_token. setup.yaml's always block clears it for that reason.
+    - name: "List Realm assignments already recorded on the hub"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        namespace: "{{ pure_storage_config_namespace }}"
+        label_selectors:
+          - "osac.openshift.io/pure-realm"
+      register: _pure_realm_claims
+      no_log: true
+
+    # The label name is read through dict2items rather than map(attribute=...)
+    # because Jinja splits an attribute string on '.', so
+    # 'osac.openshift.io/pure-realm' would be looked up as the nested path
+    # osac -> openshift -> io/pure-realm. That yields Undefined for every
+    # Secret, and the resulting empty claimed set makes every Realm look free.
+    - name: "Compute the set of claimed Realms"
+      ansible.builtin.set_fact:
+        _pure_claimed_realms: >-
+          {{ _pure_realm_claims.resources
+             | map(attribute='metadata.labels')
+             | map('default', {}, true)
+             | map('dict2items')
+             | flatten
+             | selectattr('key', 'equalto', 'osac.openshift.io/pure-realm')
+             | map(attribute='value')
+             | select('string')
+             | list }}
+
+    - name: "Select the first unclaimed Realm in the pool"
+      ansible.builtin.set_fact:
+        _pure_selected_realm: >-
+          {{ (_pure_realm_pool
+              | rejectattr('realm_name', 'in', _pure_claimed_realms)
+              | list
+              | first)
+             | default({}, true) }}
+
+    - name: "Fail when every Realm in the pool is assigned"
+      ansible.builtin.fail:
+        msg: >-
+          All Realms in PURE_REALM_POOL are assigned. Add additional Realm entries or
+          release existing assignments.
+      when: _pure_selected_realm | length == 0
+
+    # Belt and braces behind the lease: re-reading the claim immediately before
+    # writing catches a Realm assigned out-of-band, by an operator or by a job
+    # that bypassed the lock.
+    - name: "Re-read the claim on the selected Realm"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        namespace: "{{ pure_storage_config_namespace }}"
+        label_selectors:
+          - "osac.openshift.io/pure-realm={{ _pure_selected_realm.realm_name }}"
+      register: _pure_realm_claim_check
+      no_log: true
+
+    - name: "Compute the tenant holding the selected Realm"
+      ansible.builtin.set_fact:
+        _pure_realm_holder: >-
+          {{ (_pure_realm_claim_check.resources
+              | map(attribute='metadata.labels')
+              | map('default', {}, true)
+              | map('dict2items')
+              | flatten
+              | selectattr('key', 'equalto', 'osac.openshift.io/tenant')
+              | map(attribute='value')
+              | select('string')
+              | reject('equalto', tenant_name)
+              | list
+              | first)
+             | default('', true) }}
+
+    - name: "Fail when the selected Realm is already assigned to another tenant"
+      ansible.builtin.fail:
+        msg: >-
+          Realm '{{ _pure_selected_realm.realm_name }}' is already assigned to tenant
+          '{{ _pure_realm_holder }}'. Each Realm must be assigned to exactly one tenant.
+      when: _pure_realm_holder | length > 0

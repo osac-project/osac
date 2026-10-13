@@ -1,0 +1,207 @@
+---
+argument_specs:
+  main:
+    short_description: Pure Storage FlashBlade Realm provisioning
+    description: >
+      Provisions one FlashBlade Realm and records its Realm-scoped credentials
+      in a hub Secret named pure-realm-<realm.name>. A Realm is the
+      FlashBlade's management-plane isolation boundary: everything the Realm
+      owns is named "<realm>::<resource>", and the service-account token
+      created here can only see inside it.
+
+      Operator-initiated through the osac-provision-pure-realms job template,
+      never from a tenant workflow -- it authenticates with the array-wide
+      admin token in PUREFB_API, which the per-tenant roles deliberately never
+      hold. Run it before adding the Realm to PURE_REALM_POOL;
+      osac.templates.pure_storage then checks the Realm out of that pool and
+      reads the Secret this role wrote.
+
+      Idempotent: every create accepts HTTP 400 when the resource already
+      exists. The one exception is the API token, which the FlashBlade returns
+      at creation time only -- on a re-run the token request is rejected, no
+      token is available, and the hub Secret is left untouched rather than
+      overwritten with an empty value.
+
+      Ported from CCI-MOC everpure-moc's ansible/roles/flashblade_realm.
+    options:
+      realm:
+        type: dict
+        required: true
+        description: >
+          The Realm to provision. Supplied one entry at a time by
+          playbook_osac_provision_pure_realms.yml, which loops this role over
+          the realms list in the mounted Realm ConfigMap.
+        options:
+          name:
+            type: str
+            required: true
+            description: >
+              Realm name, used verbatim as the "<realm>::" prefix on every
+              Realm-scoped resource and as the suffix of the hub Secret. Must
+              match the realm_name of the corresponding PURE_REALM_POOL entry.
+          subnet_prefix:
+            type: str
+            required: true
+            description: >
+              CIDR of the Realm's data-plane subnet. Also used as the client
+              restriction in both NFS export policies, so it is what limits
+              who can mount the Realm's exports.
+          subnet_vlan:
+            type: int
+            required: true
+            description: VLAN ID for the Realm's data-plane subnet.
+          subnet_gateway:
+            type: str
+            required: true
+            description: >
+              Default gateway for the Realm's data-plane subnet. Must fall
+              inside subnet_prefix.
+          interface_address:
+            type: str
+            required: true
+            description: >
+              Address of the Realm's data VIP. Becomes the NFS endpoint
+              recorded in the hub Secret, and the common name of the
+              self-signed certificate behind the Realm's TLS policy.
+          dns_domain:
+            type: str
+            required: true
+            description: Search domain for the Realm-scoped DNS configuration.
+          dns_nameservers:
+            type: list
+            elements: str
+            required: true
+            description: Nameservers for the Realm-scoped DNS configuration.
+      pure_realm_fb_url:
+        type: str
+        required: false
+        description: >
+          FlashBlade management endpoint. Defaults to the PUREFB_URL
+          environment variable, which AAP injects into the execution
+          environment. Passed explicitly to every FlashBlade call, so the role
+          does not depend on the environment reaching a module's own process.
+      pure_realm_api_token:
+        type: str
+        required: false
+        description: >
+          Array-wide admin API token. Defaults to the PUREFB_API environment
+          variable, injected from the array-admin Secret attached to the job
+          template. Never written to the hub -- only the Realm-scoped token
+          this role generates is.
+      pure_realm_api_version:
+        type: str
+        required: false
+        default: "2.26"
+        description: >
+          REST API version for the endpoints called directly. Realms,
+          resource-accesses, network-interfaces, NFS export policies,
+          management access policies, admins and TLS policies are raw requests
+          because the vendored purestorage.flashblade 1.26.0 either has no
+          module for them, or has one that cannot pass a required parameter.
+      pure_realm_server_name:
+        type: str
+        required: false
+        default: nfs-server
+        description: >
+          Unqualified name of the Realm's NFS server. Must stay in step with
+          osac.templates.pure_storage's pure_storage_nfs_server_name, which
+          resolves it to "<realm>::<name>" when onboarding a tenant.
+      pure_realm_export_policy_name:
+        type: str
+        required: false
+        default: export-policy
+        description: >
+          Unqualified name of the Realm's NFS export policy. Must stay in step
+          with osac.templates.pure_storage's pure_storage_nfs_policy_name.
+      pure_realm_export_policy_tls_name:
+        type: str
+        required: false
+        default: export-policy-tls
+        description: >
+          Unqualified name of the Realm's TLS-only NFS export policy. Created
+          alongside the plain policy; no OSAC tenant role selects it yet.
+      pure_realm_dns_name:
+        type: str
+        required: false
+        default: dns
+        description: Unqualified name of the Realm-scoped DNS configuration.
+      pure_realm_interface_name:
+        type: str
+        required: false
+        default: interface
+        description: Unqualified name of the Realm's data VIP.
+      pure_realm_cert_name:
+        type: str
+        required: false
+        default: realm-cert
+        description: Unqualified name of the Realm's self-signed certificate.
+      pure_realm_tls_policy_name:
+        type: str
+        required: false
+        default: tls-policy
+        description: Unqualified name of the Realm's TLS policy.
+      pure_realm_s3_account_name:
+        type: str
+        required: false
+        default: cosi-account
+        description: >
+          Unqualified name of the Realm's object store account, created so
+          object storage needs no second provisioning pass. No OSAC tenant
+          role consumes it yet.
+      pure_realm_s3_export_policy_name:
+        type: str
+        required: false
+        default: _s3_export_allow_everything
+        description: >
+          Built-in object store export policy applied when exporting the
+          account through the Realm's server.
+      pure_realm_admin_policy_name:
+        type: str
+        required: false
+        default: realm-admin-policy
+        description: >
+          Suffix of the Realm's management access policy, created as
+          "<realm>-<name>". Its single rule grants the storage role scoped to
+          this Realm, which is what makes the generated token Realm-scoped.
+      pure_realm_admin_user:
+        type: str
+        required: false
+        default: realm-admin
+        description: >
+          Suffix of the Realm's service account, created as "<realm>-<name>"
+          and attached to the management access policy above.
+      pure_realm_subnet_mtu:
+        type: int
+        required: false
+        default: 9000
+        description: MTU of the Realm's data-plane subnet.
+      pure_realm_subnet_lag:
+        type: str
+        required: false
+        default: uplink
+        description: >
+          Link aggregation group the Realm's subnet attaches to. Must already
+          exist on the array.
+      pure_realm_config_namespace:
+        type: str
+        required: false
+        description: >
+          Hub namespace for the Realm credential Secret. Defaults to the
+          OSAC_STORAGE_CONFIG_NAMESPACE environment variable, or osac-system.
+          Must match osac.templates.pure_storage's
+          pure_storage_config_namespace.
+      pure_realm_secret_prefix:
+        type: str
+        required: false
+        default: pure-realm-
+        description: >
+          Prefix of the Realm credential Secret name. The full name must match
+          the secret_name of the corresponding PURE_REALM_POOL entry.
+      pure_realm_validate_certs:
+        type: bool
+        required: false
+        default: true
+        description: >
+          Whether to verify the FlashBlade's TLS certificate on the direct
+          REST calls. The purestorage.flashblade modules expose no equivalent
+          switch, so this cannot cover the calls they make.

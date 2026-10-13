@@ -1,0 +1,6 @@
+bugfixes:
+  - purefb_bucket_replica - Fixed IndexError 'list index out of range' in get_connected() function
+  - purefb_bucket_replica - Added safety checks for empty lists before accessing [0] index
+  - purefb_bucket_replica - Fixed iteration anti-pattern using range(len()) that could cause IndexError
+  - purefb_bucket_replica - Check actual list length instead of unreliable total_item_count
+  - purefb_bucket_replica - Added validation for missing target parameter when creating new replica links

@@ -1,0 +1,76 @@
+---
+# Provisions Pure Storage FlashBlade Realms from the Realm configuration
+# mounted into the AAP execution environment.
+#
+# Operator-initiated through the osac-provision-pure-realms job template, not
+# part of any tenant workflow: it authenticates with the array-wide admin
+# token in PUREFB_API, which the tenant-facing roles deliberately never hold.
+# Run it before adding a Realm to PURE_REALM_POOL -- osac.templates.pure_storage
+# checks Realms out of that pool and reads the Secrets written here.
+#
+# The configuration supplies fb_url and a realms list. Both can also be passed
+# with -e for a local run; see samples/pure_realms_extra_vars.yml.
+
+- name: Provision Pure Storage FlashBlade Realms
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    pure_realms_config_path: "/var/config/pure-realms/realms.yml"
+    # Play vars sit below both include_vars and extra vars, so this is only
+    # the fallback when the configuration names no endpoint.
+    fb_url: "{{ lookup('env', 'PUREFB_URL') }}"
+
+  tasks:
+    - name: Verify the Realm configuration file exists
+      ansible.builtin.stat:
+        path: "{{ pure_realms_config_path }}"
+      register: _pure_realms_file
+      when: realms is not defined
+
+    - name: Fail if the Realm configuration file is missing
+      ansible.builtin.fail:
+        msg: >-
+          Realm configuration not found at {{ pure_realms_config_path }}.
+          Ensure the pure-realms-config ConfigMap is created and mounted, or
+          pass fb_url and realms directly with -e.
+      when:
+        - realms is not defined
+        - not _pure_realms_file.stat.exists
+
+    - name: Load the Realm configuration
+      ansible.builtin.include_vars:
+        file: "{{ pure_realms_config_path }}"
+      when: realms is not defined
+
+    - name: Fail if the Realm configuration lists no Realms
+      ansible.builtin.fail:
+        msg: >-
+          The Realm configuration contains no realms entries. Add the Realms
+          to provision to {{ pure_realms_config_path }}.
+      when: realms | default([]) | length == 0
+
+    - name: Fail if no FlashBlade endpoint is configured
+      ansible.builtin.fail:
+        msg: >-
+          No FlashBlade management endpoint configured. Set fb_url in
+          {{ pure_realms_config_path }} or the PUREFB_URL environment variable
+          on the job template.
+      when: fb_url | length == 0
+
+    - name: Show the Realms to provision
+      ansible.builtin.debug:
+        msg: "{{ realms | map(attribute='name') | list }}"
+
+    # One Realm at a time. The role resets its per-Realm facts on entry and
+    # clears the token it generated on exit, so a Realm that fails part way
+    # leaves the ones before it provisioned and carries nothing forward.
+    - name: Provision each Realm
+      ansible.builtin.include_role:
+        name: osac.service.pure_realm
+      vars:
+        realm: "{{ item }}"
+        pure_realm_fb_url: "{{ fb_url }}"
+      loop: "{{ realms }}"
+      loop_control:
+        label: "{{ item.name }}"

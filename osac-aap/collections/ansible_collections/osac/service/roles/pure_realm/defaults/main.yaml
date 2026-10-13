@@ -1,0 +1,58 @@
+---
+# osac.service.pure_realm defaults -- all use the pure_realm_ prefix.
+
+# FlashBlade management endpoint and array-wide admin credential.
+#
+# lookup('env', ...) reads the AAP execution environment's own process
+# environment and is unaffected by a play- or task-level environment: keyword,
+# so these must be resolved here rather than inside a task -- the same reason
+# osac.templates.pure_storage keeps its env lookups in defaults. Every
+# FlashBlade call below passes fb_url/api_token explicitly from these
+# variables, so the role never relies on the environment reaching a module's
+# own child process.
+pure_realm_fb_url: "{{ lookup('env', 'PUREFB_URL') }}"
+pure_realm_api_token: "{{ lookup('env', 'PUREFB_API') }}"
+
+# REST API version for the endpoints this role calls directly. Realms,
+# resource-accesses, network-interfaces, NFS export policies, management
+# access policies, admins and TLS policies are all called as raw requests --
+# see the comments at each call for why the module was not usable.
+pure_realm_api_version: "2.26"
+
+# Unqualified names of the Realm-scoped resources. The two that tenants
+# consume -- the NFS server and the plain export policy -- must stay in step
+# with osac.templates.pure_storage's pure_storage_nfs_server_name and
+# pure_storage_nfs_policy_name, which resolve them to "<realm>::<name>".
+pure_realm_server_name: "nfs-server"
+pure_realm_dns_name: "dns"
+pure_realm_interface_name: "interface"
+pure_realm_export_policy_name: "export-policy"
+pure_realm_export_policy_tls_name: "export-policy-tls"
+pure_realm_cert_name: "realm-cert"
+pure_realm_tls_policy_name: "tls-policy"
+
+# Object store account for COSI. Created alongside the Realm so object storage
+# does not need a second provisioning pass; no OSAC tenant role consumes it yet.
+pure_realm_s3_account_name: "cosi-account"
+pure_realm_s3_export_policy_name: "_s3_export_allow_everything"
+
+# Management access policy and service account that produce the Realm-scoped
+# token. Named "<realm>-<name>", not "<realm>::<name>": both live in the
+# array-wide namespace and reference the Realm only through their rules.
+pure_realm_admin_policy_name: "realm-admin-policy"
+pure_realm_admin_user: "realm-admin"
+
+# Data-plane subnet attributes shared by every Realm.
+pure_realm_subnet_mtu: 9000
+pure_realm_subnet_lag: "uplink"
+
+# Hub namespace and Secret prefix for the Realm credential record. Must match
+# osac.templates.pure_storage's pure_storage_config_namespace and the
+# secret_name entries in PURE_REALM_POOL.
+pure_realm_config_namespace: "{{ lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE') | default('osac-system', true) }}"
+pure_realm_secret_prefix: "pure-realm-"
+
+# TLS certificate validation for the direct REST calls. Unlike the
+# purestorage.flashblade modules -- which expose no validation switch at all --
+# ansible.builtin.uri honours this, so it is enforced wherever it can be.
+pure_realm_validate_certs: true

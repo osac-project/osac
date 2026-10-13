@@ -25,3 +25,21 @@
   regexes = [
     '''service123''',
   ]
+
+[[allowlists]]
+  description = """
+Vendored purestorage.flashblade collection (OSAC-5016). Upstream ships
+placeholder FlashBlade API tokens in every module's EXAMPLES block — random
+UUIDs such as 'e31060a7-21fc-e277-6240-25983c6c4592' in purefb_alert.py — which
+trip the generic-api-key rule 219 times. These are documentation samples in
+third-party code pinned at v1.26.0 in collections/requirements.yml, not
+credentials for any OSAC system, and the tree is re-vendored wholesale rather
+than edited, so inline annotations would not survive a version bump.
+
+Scoped by path only, deliberately: a path+regex pair would need
+`condition = "AND"`, which older gitleaks silently ignores, degrading to OR and
+allowlisting the token regex repo-wide.
+"""
+  paths = [
+    '''^osac-aap/vendor/ansible_collections/purestorage/flashblade/''',
+  ]

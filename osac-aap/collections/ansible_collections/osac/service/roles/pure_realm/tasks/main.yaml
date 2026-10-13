@@ -1,0 +1,593 @@
+---
+# Provisions one Pure Storage FlashBlade Realm and records its Realm-scoped
+# credentials on the hub.
+#
+# Operator-initiated, not part of any tenant workflow: it needs the array-wide
+# admin token, which the per-tenant roles deliberately never hold. Run it via
+# the osac-provision-pure-realms job template before adding a Realm to
+# PURE_REALM_POOL; osac.templates.pure_storage then checks a Realm out of that
+# pool and reads the Secret written here.
+#
+# Ported from CCI-MOC everpure-moc's ansible/roles/flashblade_realm. The
+# HTTP-400 idempotency guards and the grant/revoke sequence around the global
+# DNS are carried over unchanged -- both are load-bearing.
+#
+# Credential handling splits two ways. The purestorage.flashblade modules
+# declare api_token as a no_log parameter, so Ansible censors it for them and
+# the tasks stay readable when a call fails. The direct REST calls pass the
+# session token as a plain header, which nothing would censor, so each of
+# those is no_log and reports its own failure from a separate task instead.
+#
+# Receives:
+#   realm — one entry from the Realm config (see meta/argument_specs.yaml)
+#
+# Writes:
+#   Secret pure-realm-<realm.name> in pure_realm_config_namespace
+
+# The role is looped over several Realms in one play, and facts outlive each
+# iteration. Without this reset, a Realm whose DNS grant returned 400 would
+# revoke the previous Realm's resource-access ID.
+# The Realm name is operator-supplied through a ConfigMap and the argument
+# spec can only type it as a string. It becomes the "<realm>::" prefix on
+# every array resource, a REST query-string value, and the suffix of the hub
+# Secret name -- so an out-of-range character would otherwise surface as an
+# opaque Kubernetes name-validation error at the very last step, after the
+# Realm and its token already exist on the array and the token cannot be
+# re-issued. Checked here, before anything is created.
+- name: "Verify the Realm name is a DNS label"
+  ansible.builtin.assert:
+    that:
+      - realm.name | regex_search('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
+      - realm.name | length <= 53
+    fail_msg: >-
+      Realm name '{{ realm.name | default('') }}' is not a DNS label of 53
+      characters or fewer. It names the Realm on the array and the hub Secret
+      '{{ pure_realm_secret_prefix }}{{ realm.name | default('') }}'.
+    quiet: true
+
+- name: "Reset the per-Realm facts"
+  ansible.builtin.set_fact:
+    _pure_realm_dns_access_id: ""
+    _pure_realm_token: ""
+
+- name: "Open a session on the FlashBlade"
+  ansible.builtin.uri:
+    url: "https://{{ pure_realm_fb_url }}/api/login"
+    method: POST
+    headers:
+      api-token: "{{ pure_realm_api_token }}"
+    validate_certs: "{{ pure_realm_validate_certs | bool }}"
+    return_content: false
+    # A rejected token is the one failure this task has a readable message
+    # for, and no_log would replace it with "the output has been hidden".
+    # Accepted here so the guard below reports it; anything else -- an
+    # unreachable array, a TLS failure -- still fails the task.
+    status_code: [200, 401, 403]
+  register: _pure_realm_login
+  no_log: true
+
+- name: "Fail when the FlashBlade rejected the array-admin token"
+  ansible.builtin.fail:
+    msg: >-
+      Could not authenticate to the FlashBlade at {{ pure_realm_fb_url }}.
+      Check that PUREFB_API carries a valid array-wide admin token and that
+      PUREFB_URL names the management endpoint.
+  when: _pure_realm_login.x_auth_token is not defined
+
+# purestorage.flashblade 1.26.0's purefb_realm calls post_realms() without
+# without_default_access_list, which the REST API requires; omitting it would
+# also leave the Realm holding the array's default resource accesses, which
+# is the isolation this role exists to establish. Called directly instead.
+- name: "Create the Realm"
+  ansible.builtin.uri:
+    url: >-
+      https://{{ pure_realm_fb_url }}/api/{{ pure_realm_api_version }}/realms?names={{ realm.name }}&without_default_access_list=true
+    method: POST
+    headers:
+      x-auth-token: "{{ _pure_realm_login.x_auth_token }}"
+    validate_certs: "{{ pure_realm_validate_certs | bool }}"
+    status_code: [200, 400]
+    return_content: true
+  register: _pure_realm_create
+  # The session token travels in the request headers, which Ansible would
+  # otherwise echo back under invocation.module_args. Every call below carries
+  # it too, so they are all no_log and report their own failures instead.
+  no_log: true
+  failed_when: false
+
+# 400 is accepted for idempotency -- the API returns it when the resource
+# already exists. The message is matched so real errors are not swallowed.
+# This pattern repeats for every direct REST call below.
+- name: "Fail when the Realm could not be created"
+  ansible.builtin.fail:
+    msg: >-
+      Creating Realm '{{ realm.name }}' failed with HTTP
+      {{ _pure_realm_create.status | default('no response') }}:
+      {{ _pure_realm_create.content | default(_pure_realm_create.msg) | default('') }}
+  when:
+    - _pure_realm_create.status | default(0) != 200
+    - "'already exists' not in (_pure_realm_create.content | default(''))"
+
+- name: "Make the global DNS accessible to the Realm"
+  ansible.builtin.uri:
+    url: "https://{{ pure_realm_fb_url }}/api/{{ pure_realm_api_version }}/resource-accesses/batch"
+    method: POST
+    headers:
+      x-auth-token: "{{ _pure_realm_login.x_auth_token }}"
+    body_format: json
+    body:
+      - resource:
+          name: "management"
+          resource_type: "dns"
+        scope:
+          name: "{{ realm.name }}"
+          resource_type: "realms"
+    validate_certs: "{{ pure_realm_validate_certs | bool }}"
+    status_code: [200, 400]
+    return_content: true
+  register: _pure_realm_dns_access
+  no_log: true
+  failed_when: false
+
+- name: "Fail when the Realm could not reach the global DNS"
+  ansible.builtin.fail:
+    msg: >-
+      Granting Realm '{{ realm.name }}' access to the management DNS failed
+      with HTTP {{ _pure_realm_dns_access.status | default('no response') }}:
+      {{ _pure_realm_dns_access.content | default(_pure_realm_dns_access.msg) | default('') }}
+  when:
+    - _pure_realm_dns_access.status | default(0) != 200
+    - "'already accessible' not in (_pure_realm_dns_access.content | default(''))"
+    - "'already exists' not in (_pure_realm_dns_access.content | default(''))"
+
+# Only a grant this run made can be revoked: the API returns the access ID at
+# creation time only. A run that dies between here and the revoke below leaves
+# the Realm holding global DNS access, which an operator must then remove by
+# hand before re-running.
+- name: "Save the DNS resource-access ID for the revocation below"
+  ansible.builtin.set_fact:
+    _pure_realm_dns_access_id: "{{ _pure_realm_dns_access.json['items'][0].id }}"
+  when:
+    - _pure_realm_dns_access.status | default(0) == 200
+    - (_pure_realm_dns_access.json['items'] | default([])) | length > 0
+
+- name: "Create the Realm's data-plane subnet"
+  purestorage.flashblade.purefb_subnet:
+    name: "{{ realm.name }}-subnet"
+    prefix: "{{ realm.subnet_prefix }}"
+    vlan: "{{ realm.subnet_vlan }}"
+    gateway: "{{ realm.subnet_gateway }}"
+    mtu: "{{ pure_realm_subnet_mtu }}"
+    lag: "{{ pure_realm_subnet_lag }}"
+    state: present
+    fb_url: "{{ pure_realm_fb_url }}"
+    api_token: "{{ pure_realm_api_token }}"
+
+- name: "Make the subnet accessible to the Realm"
+  ansible.builtin.uri:
+    url: "https://{{ pure_realm_fb_url }}/api/{{ pure_realm_api_version }}/resource-accesses/batch"
+    method: POST
+    headers:
+      x-auth-token: "{{ _pure_realm_login.x_auth_token }}"
+    body_format: json
+    body:
+      - resource:
+          name: "{{ realm.name }}-subnet"
+          resource_type: "subnets"
+        scope:
+          name: "{{ realm.name }}"
+          resource_type: "realms"
+    validate_certs: "{{ pure_realm_validate_certs | bool }}"
+    status_code: [200, 400]
+    return_content: true
+  register: _pure_realm_subnet_access
+  no_log: true
+  failed_when: false
+
+- name: "Fail when the Realm could not reach its subnet"
+  ansible.builtin.fail:
+    msg: >-
+      Granting Realm '{{ realm.name }}' access to subnet
+      '{{ realm.name }}-subnet' failed with HTTP
+      {{ _pure_realm_subnet_access.status | default('no response') }}:
+      {{ _pure_realm_subnet_access.content | default(_pure_realm_subnet_access.msg) | default('') }}
+  when:
+    - _pure_realm_subnet_access.status | default(0) != 200
+    - "'already accessible' not in (_pure_realm_subnet_access.content | default(''))"
+    - "'already exists' not in (_pure_realm_subnet_access.content | default(''))"
+
+# Created against the global DNS because the Realm-scoped DNS below needs a
+# VIP, and the VIP needs a server. The server is switched over once both exist.
+- name: "Create the Realm's NFS server against the global DNS"
+  purestorage.flashblade.purefb_server:
+    name: "{{ realm.name }}::{{ pure_realm_server_name }}"
+    dns:
+      - management
+    state: present
+    fb_url: "{{ pure_realm_fb_url }}"
+    api_token: "{{ pure_realm_api_token }}"
+
+- name: "Attach a data VIP to the Realm's server"
+  ansible.builtin.uri:
+    url: >-
+      https://{{ pure_realm_fb_url }}/api/{{ pure_realm_api_version }}/network-interfaces?names={{ realm.name }}::{{ pure_realm_interface_name }}
+    method: POST
+    headers:
+      x-auth-token: "{{ _pure_realm_login.x_auth_token }}"
+    body_format: json
+    body:
+      address: "{{ realm.interface_address }}"
+      services:
+        - data
+      type: vip
+      attached_servers:
+        - name: "{{ realm.name }}::{{ pure_realm_server_name }}"
+    validate_certs: "{{ pure_realm_validate_certs | bool }}"
+    status_code: [200, 400]
+    return_content: true
+  register: _pure_realm_vip
+  no_log: true
+  failed_when: false
+
+- name: "Fail when the Realm's data VIP could not be created"
+  ansible.builtin.fail:
+    msg: >-
+      Creating VIP '{{ realm.name }}::{{ pure_realm_interface_name }}' at
+      {{ realm.interface_address }} failed with HTTP
+      {{ _pure_realm_vip.status | default('no response') }}:
+      {{ _pure_realm_vip.content | default(_pure_realm_vip.msg) | default('') }}
+  when:
+    - _pure_realm_vip.status | default(0) != 200
+    - "'already exists' not in (_pure_realm_vip.content | default(''))"
+
+- name: "Create the Realm-scoped DNS served from the VIP"
+  purestorage.flashblade.purefb_dns:
+    name: "{{ realm.name }}::{{ pure_realm_dns_name }}"
+    service: data
+    domain: "{{ realm.dns_domain }}"
+    nameservers: "{{ realm.dns_nameservers }}"
+    source: "{{ realm.name }}::{{ pure_realm_interface_name }}"
+    state: present
+    fb_url: "{{ pure_realm_fb_url }}"
+    api_token: "{{ pure_realm_api_token }}"
+
+- name: "Switch the Realm's server onto the Realm-scoped DNS"
+  purestorage.flashblade.purefb_server:
+    name: "{{ realm.name }}::{{ pure_realm_server_name }}"
+    dns:
+      - "{{ realm.name }}::{{ pure_realm_dns_name }}"
+    state: present
+    fb_url: "{{ pure_realm_fb_url }}"
+    api_token: "{{ pure_realm_api_token }}"
+
+# The global DNS was only ever a bootstrap dependency. Leaving the grant in
+# place would let the Realm read array-wide DNS configuration it has no
+# business seeing.
+- name: "Revoke the Realm's access to the global DNS"
+  ansible.builtin.uri:
+    url: >-
+      https://{{ pure_realm_fb_url }}/api/{{ pure_realm_api_version }}/resource-accesses?ids={{ _pure_realm_dns_access_id }}
+    method: DELETE
+    headers:
+      x-auth-token: "{{ _pure_realm_login.x_auth_token }}"
+    validate_certs: "{{ pure_realm_validate_certs | bool }}"
+    status_code: [200]
+    return_content: true
+  register: _pure_realm_dns_revoke
+  no_log: true
+  failed_when: false
+  when: _pure_realm_dns_access_id | length > 0
+
+- name: "Fail when the global DNS access could not be revoked"
+  ansible.builtin.fail:
+    msg: >-
+      Revoking Realm '{{ realm.name }}' access to the management DNS failed
+      with HTTP {{ _pure_realm_dns_revoke.status | default('no response') }}:
+      {{ _pure_realm_dns_revoke.content | default(_pure_realm_dns_revoke.msg) | default('') }}
+      The Realm is provisioned but not isolated -- remove resource-access
+      {{ _pure_realm_dns_access_id }} by hand.
+  when:
+    - _pure_realm_dns_access_id | length > 0
+    - _pure_realm_dns_revoke.status | default(0) != 200
+
+- name: "Create the Realm's NFS export policy"
+  ansible.builtin.uri:
+    url: >-
+      https://{{ pure_realm_fb_url }}/api/{{ pure_realm_api_version }}/nfs-export-policies?names={{ realm.name }}::{{ pure_realm_export_policy_name }}
+    method: POST
+    headers:
+      x-auth-token: "{{ _pure_realm_login.x_auth_token }}"
+    body_format: json
+    body:
+      rules:
+        - access: no-squash
+          client: "{{ realm.subnet_prefix }}"
+          permission: rw
+          required_transport_security: "none"
+    validate_certs: "{{ pure_realm_validate_certs | bool }}"
+    status_code: [200, 400]
+    return_content: true
+  register: _pure_realm_nfs_policy
+  no_log: true
+  failed_when: false
+
+- name: "Fail when the Realm's NFS export policy could not be created"
+  ansible.builtin.fail:
+    msg: >-
+      Creating NFS export policy
+      '{{ realm.name }}::{{ pure_realm_export_policy_name }}' failed with HTTP
+      {{ _pure_realm_nfs_policy.status | default('no response') }}:
+      {{ _pure_realm_nfs_policy.content | default(_pure_realm_nfs_policy.msg) | default('') }}
+  when:
+    - _pure_realm_nfs_policy.status | default(0) != 200
+    - "'already exists' not in (_pure_realm_nfs_policy.content | default(''))"
+
+- name: "Create the Realm's TLS-only NFS export policy"
+  ansible.builtin.uri:
+    url: >-
+      https://{{ pure_realm_fb_url }}/api/{{ pure_realm_api_version }}/nfs-export-policies?names={{ realm.name }}::{{ pure_realm_export_policy_tls_name }}
+    method: POST
+    headers:
+      x-auth-token: "{{ _pure_realm_login.x_auth_token }}"
+    body_format: json
+    body:
+      rules:
+        - access: no-squash
+          client: "{{ realm.subnet_prefix }}"
+          permission: rw
+          required_transport_security: "tls"
+    validate_certs: "{{ pure_realm_validate_certs | bool }}"
+    status_code: [200, 400]
+    return_content: true
+  register: _pure_realm_nfs_policy_tls
+  no_log: true
+  failed_when: false
+
+- name: "Fail when the Realm's TLS-only NFS export policy could not be created"
+  ansible.builtin.fail:
+    msg: >-
+      Creating NFS export policy
+      '{{ realm.name }}::{{ pure_realm_export_policy_tls_name }}' failed with
+      HTTP {{ _pure_realm_nfs_policy_tls.status | default('no response') }}:
+      {{ _pure_realm_nfs_policy_tls.content | default(_pure_realm_nfs_policy_tls.msg) | default('') }}
+  when:
+    - _pure_realm_nfs_policy_tls.status | default(0) != 200
+    - "'already exists' not in (_pure_realm_nfs_policy_tls.content | default(''))"
+
+- name: "Create the Realm's object store account"
+  purestorage.flashblade.purefb_s3acc:
+    name: "{{ realm.name }}::{{ pure_realm_s3_account_name }}"
+    state: present
+    fb_url: "{{ pure_realm_fb_url }}"
+    api_token: "{{ pure_realm_api_token }}"
+
+- name: "Export the object store account through the Realm's server"
+  purestorage.flashblade.purefb_s3acc_export:
+    account: "{{ realm.name }}::{{ pure_realm_s3_account_name }}"
+    server: "{{ realm.name }}::{{ pure_realm_server_name }}"
+    policy: "{{ pure_realm_s3_export_policy_name }}"
+    state: present
+    fb_url: "{{ pure_realm_fb_url }}"
+    api_token: "{{ pure_realm_api_token }}"
+
+# least-common-permission plus a single rule scoped to this Realm is what
+# makes the service account's token Realm-scoped rather than array-wide.
+- name: "Create the Realm's management access policy"
+  ansible.builtin.uri:
+    url: >-
+      https://{{ pure_realm_fb_url }}/api/{{ pure_realm_api_version }}/management-access-policies?names={{ realm.name }}-{{ pure_realm_admin_policy_name }}
+    method: POST
+    headers:
+      x-auth-token: "{{ _pure_realm_login.x_auth_token }}"
+    body_format: json
+    body:
+      aggregation_strategy: least-common-permission
+      rules:
+        - role:
+            name: storage
+          scope:
+            name: "{{ realm.name }}"
+            resource_type: realms
+    validate_certs: "{{ pure_realm_validate_certs | bool }}"
+    status_code: [200, 400]
+    return_content: true
+  register: _pure_realm_mgmt_policy
+  no_log: true
+  failed_when: false
+
+- name: "Fail when the Realm's management access policy could not be created"
+  ansible.builtin.fail:
+    msg: >-
+      Creating management access policy
+      '{{ realm.name }}-{{ pure_realm_admin_policy_name }}' failed with HTTP
+      {{ _pure_realm_mgmt_policy.status | default('no response') }}:
+      {{ _pure_realm_mgmt_policy.content | default(_pure_realm_mgmt_policy.msg) | default('') }}
+  when:
+    - _pure_realm_mgmt_policy.status | default(0) != 200
+    - "'already exists' not in (_pure_realm_mgmt_policy.content | default(''))"
+
+- name: "Create the Realm's service account"
+  ansible.builtin.uri:
+    url: >-
+      https://{{ pure_realm_fb_url }}/api/{{ pure_realm_api_version }}/admins?names={{ realm.name }}-{{ pure_realm_admin_user }}
+    method: POST
+    headers:
+      x-auth-token: "{{ _pure_realm_login.x_auth_token }}"
+    body_format: json
+    body:
+      admin_type: service-account
+      management_access_policies:
+        - name: "{{ realm.name }}-{{ pure_realm_admin_policy_name }}"
+    validate_certs: "{{ pure_realm_validate_certs | bool }}"
+    status_code: [200, 400]
+    return_content: true
+  register: _pure_realm_admin
+  no_log: true
+  failed_when: false
+
+- name: "Fail when the Realm's service account could not be created"
+  ansible.builtin.fail:
+    msg: >-
+      Creating service account '{{ realm.name }}-{{ pure_realm_admin_user }}'
+      failed with HTTP {{ _pure_realm_admin.status | default('no response') }}:
+      {{ _pure_realm_admin.content | default(_pure_realm_admin.msg) | default('') }}
+  when:
+    - _pure_realm_admin.status | default(0) != 200
+    - "'already exists' not in (_pure_realm_admin.content | default(''))"
+
+- name: "Generate a self-signed certificate for the Realm"
+  purestorage.flashblade.purefb_certs:
+    name: "{{ realm.name }}::{{ pure_realm_cert_name }}"
+    common_name: "{{ realm.interface_address }}"
+    generate: true
+    state: present
+    fb_url: "{{ pure_realm_fb_url }}"
+    api_token: "{{ pure_realm_api_token }}"
+
+# purefb_tls_policy ships in CCI-MOC's everpure fork, not in the vendored
+# purestorage.flashblade 1.26.0, so the policy and its interface binding are
+# issued directly. Do not hand-edit vendor/ to add the module.
+- name: "Create the Realm's TLS policy"
+  ansible.builtin.uri:
+    url: >-
+      https://{{ pure_realm_fb_url }}/api/{{ pure_realm_api_version }}/tls-policies?names={{ realm.name }}::{{ pure_realm_tls_policy_name }}
+    method: POST
+    headers:
+      x-auth-token: "{{ _pure_realm_login.x_auth_token }}"
+    body_format: json
+    body:
+      appliance_certificate:
+        name: "{{ realm.name }}::{{ pure_realm_cert_name }}"
+    validate_certs: "{{ pure_realm_validate_certs | bool }}"
+    status_code: [200, 400]
+    return_content: true
+  register: _pure_realm_tls_policy
+  no_log: true
+  failed_when: false
+
+- name: "Fail when the Realm's TLS policy could not be created"
+  ansible.builtin.fail:
+    msg: >-
+      Creating TLS policy
+      '{{ realm.name }}::{{ pure_realm_tls_policy_name }}' failed with HTTP
+      {{ _pure_realm_tls_policy.status | default('no response') }}:
+      {{ _pure_realm_tls_policy.content | default(_pure_realm_tls_policy.msg) | default('') }}
+  when:
+    - _pure_realm_tls_policy.status | default(0) != 200
+    - "'already exists' not in (_pure_realm_tls_policy.content | default(''))"
+
+- name: "Bind the Realm's VIP to its TLS policy"
+  vars:
+    # Both names go in the query string, which is past the line budget as a
+    # single folded scalar -- a fold would insert a space into the URL.
+    _tls_members_query: >-
+      policy_names={{ realm.name }}::{{ pure_realm_tls_policy_name
+      }}&member_names={{ realm.name }}::{{ pure_realm_interface_name }}
+  ansible.builtin.uri:
+    url: >-
+      https://{{ pure_realm_fb_url }}/api/{{ pure_realm_api_version }}/tls-policies/network-interfaces?{{ _tls_members_query }}
+    method: POST
+    headers:
+      x-auth-token: "{{ _pure_realm_login.x_auth_token }}"
+    validate_certs: "{{ pure_realm_validate_certs | bool }}"
+    status_code: [200, 400]
+    return_content: true
+  register: _pure_realm_tls_bind
+  no_log: true
+  failed_when: false
+
+- name: "Fail when the Realm's VIP could not be bound to its TLS policy"
+  ansible.builtin.fail:
+    msg: >-
+      Binding '{{ realm.name }}::{{ pure_realm_interface_name }}' to TLS policy
+      '{{ realm.name }}::{{ pure_realm_tls_policy_name }}' failed with HTTP
+      {{ _pure_realm_tls_bind.status | default('no response') }}:
+      {{ _pure_realm_tls_bind.content | default(_pure_realm_tls_bind.msg) | default('') }}
+  when:
+    - _pure_realm_tls_bind.status | default(0) != 200
+    - "'already exists' not in (_pure_realm_tls_bind.content | default(''))"
+
+- name: "Generate the Realm-scoped API token"
+  ansible.builtin.uri:
+    url: >-
+      https://{{ pure_realm_fb_url }}/api/{{ pure_realm_api_version }}/admins/api-tokens?admin_names={{ realm.name }}-{{ pure_realm_admin_user }}
+    method: POST
+    headers:
+      x-auth-token: "{{ _pure_realm_login.x_auth_token }}"
+    body_format: json
+    body:
+      timeout: 0
+    validate_certs: "{{ pure_realm_validate_certs | bool }}"
+    status_code: [200, 400]
+    return_content: true
+  register: _pure_realm_token_response
+  no_log: true
+  failed_when: false
+
+# The response body carries the token itself, so this failure reports the
+# status code only -- never the content.
+- name: "Fail when the Realm-scoped API token could not be generated"
+  ansible.builtin.fail:
+    msg: >-
+      Generating an API token for service account
+      '{{ realm.name }}-{{ pure_realm_admin_user }}' failed with HTTP
+      {{ _pure_realm_token_response.status | default('no response') }}.
+  when:
+    - _pure_realm_token_response.status | default(0) != 200
+    - "'already exists' not in (_pure_realm_token_response.content | default(''))"
+    - "'already created' not in (_pure_realm_token_response.content | default(''))"
+
+- name: "Extract the Realm-scoped API token"
+  ansible.builtin.set_fact:
+    _pure_realm_token: "{{ _pure_realm_token_response.json['items'][0].api_token.token }}"
+  when:
+    - _pure_realm_token_response.status | default(0) == 200
+    - (_pure_realm_token_response.json['items'] | default([])) | length > 0
+  no_log: true
+
+# The FlashBlade returns an API token at creation time only. A re-run against
+# a service account that already has one gets HTTP 400 and no token, so the
+# Secret is left exactly as it is rather than being rewritten with an empty
+# value. Recreating a lost Secret therefore means deleting the service
+# account's existing token on the array first, then re-running.
+#
+# Deliberately not labelled osac.openshift.io/pure-realm: that label marks a
+# Realm as claimed by a tenant, and osac.templates.pure_storage scans this
+# same namespace for it. Labelling the credential Secret with it would make
+# every Realm look permanently assigned.
+- name: "Record the Realm credentials on the hub"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: "{{ pure_realm_secret_prefix }}{{ realm.name }}"
+        namespace: "{{ pure_realm_config_namespace }}"
+        labels:
+          app.kubernetes.io/managed-by: osac-aap
+          osac.openshift.io/pure-realm-credential: "{{ realm.name }}"
+      stringData:
+        realm_name: "{{ realm.name }}"
+        api_token: "{{ _pure_realm_token }}"
+        mgmt_endpoint: "{{ pure_realm_fb_url }}"
+        nfs_endpoint: "{{ realm.interface_address }}"
+  no_log: true
+  when: _pure_realm_token | length > 0
+
+- name: "Report that an existing token left the Realm Secret untouched"
+  ansible.builtin.debug:
+    msg: >-
+      Service account '{{ realm.name }}-{{ pure_realm_admin_user }}' already
+      holds an API token, which the FlashBlade will not return again.
+      Secret '{{ pure_realm_secret_prefix }}{{ realm.name }}' was left as it
+      is. If it is missing, delete the service account's token on the array
+      and re-run this job template.
+  when: _pure_realm_token | length == 0
+
+# Facts outlive the role, and the playbook loops it over every Realm. Clearing
+# the token here keeps one Realm's credential out of the next iteration and
+# out of anything that runs after the loop.
+- name: "Clear the Realm credentials from the fact cache"
+  ansible.builtin.set_fact:
+    _pure_realm_token: ""

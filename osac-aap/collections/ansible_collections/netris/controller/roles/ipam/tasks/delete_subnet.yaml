@@ -48,3 +48,10 @@
     msg: >-
       Failed to delete IPAM subnet '{{ ipam_name }}' (ID: {{ _existing_ipam_subnet.id }}).
       Netris responded with: {{ _ipam_subnet_delete_resp.json.message | default(_ipam_subnet_delete_resp.content | default('unknown error')) }}.
+
+- name: Report the concurrently removed IPAM subnet
+  ansible.builtin.debug:
+    msg: >-
+      An IPAM subnet was already absent (HTTP 404) at deletion time; treating
+      it as deleted.
+  when: _ipam_subnet_delete_resp is defined and _ipam_subnet_delete_resp.status | default(0) == 404

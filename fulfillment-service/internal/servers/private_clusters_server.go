@@ -474,7 +474,7 @@ func (s *PrivateClustersServer) Update(ctx context.Context,
 }
 
 // prepareUpdatedClusterNodeSets retains resolved metadata for unchanged NodeSets and
-// validates new hardware selections against the shared CaaS type scope.
+// checks that newly selected hardware types are not being deleted.
 func (s *PrivateClustersServer) prepareUpdatedClusterNodeSets(
 	ctx context.Context, current, candidate *privatev1.Cluster, mask *fieldmaskpb.FieldMask, sizeOnlyNodeSets bool,
 ) error {
@@ -503,15 +503,13 @@ func (s *PrivateClustersServer) prepareUpdatedClusterNodeSets(
 			continue
 		}
 		kind := "node_sets." + name + ".baremetal_instance_type"
-		resolved, err := resolvePlatformResource(ctx, s.bareMetalInstanceTypesDao,
-			ref.GetId(), ref.GetName(), kind, "", grpccodes.InvalidArgument)
+		resolved, err := getReferenceResource(ctx, s.bareMetalInstanceTypesDao, ref.GetId())
 		if err != nil {
-			return err
+			return resourceLookupError(err, kind, ref.GetId(), "", grpccodes.InvalidArgument)
 		}
 		if err := validateResourceNotDeleted(kind, refKey(ref), "", resolved.GetMetadata()); err != nil {
 			return err
 		}
-		canonicalizeResourceReference(ref, resolved)
 	}
 	return nil
 }
@@ -1334,15 +1332,16 @@ func (s *PrivateClustersServer) applyClusterTemplate(
 		return nil, err
 	}
 
-	// Store the template reference with both ID and name. NodeSet hardware references were
-	// canonicalized in resolveClusterNodeSets, so metering can use their names.
+	// Store the template reference with both ID and name. NodeSet hardware references
+	// already have their IDs and names from the interceptor or Catalog Item authoring.
 	cluster.GetSpec().SetTemplate(canonicalClusterTemplateReference(template))
 
 	return clusterVersion, nil
 }
 
-// resolveClusterNodeSets validates and canonicalizes the effective Cluster NodeSets after
-// Catalog Item policies have been applied. Templates do not supply hardware selections.
+// resolveClusterNodeSets validates the effective Cluster NodeSets after Catalog Item
+// policies have been applied. References are already resolved by the interceptor or
+// Catalog Item authoring; only the hardware types' current deletion state is checked here.
 func (s *PrivateClustersServer) resolveClusterNodeSets(ctx context.Context, cluster *privatev1.Cluster) error {
 	if err := validateClusterNodeSetMap(cluster.GetSpec().GetNodeSets()); err != nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "node_sets: %s", err)
@@ -1350,15 +1349,13 @@ func (s *PrivateClustersServer) resolveClusterNodeSets(ctx context.Context, clus
 	for name, nodeSet := range cluster.GetSpec().GetNodeSets() {
 		ref := nodeSet.GetBaremetalInstanceType()
 		kind := "node_sets." + name + ".baremetal_instance_type"
-		resolved, err := resolvePlatformResource(ctx, s.bareMetalInstanceTypesDao,
-			ref.GetId(), ref.GetName(), kind, "", grpccodes.InvalidArgument)
+		resolved, err := getReferenceResource(ctx, s.bareMetalInstanceTypesDao, ref.GetId())
 		if err != nil {
-			return err
+			return resourceLookupError(err, kind, ref.GetId(), "", grpccodes.InvalidArgument)
 		}
 		if err := validateResourceNotDeleted(kind, refKey(ref), "", resolved.GetMetadata()); err != nil {
 			return err
 		}
-		canonicalizeResourceReference(ref, resolved)
 	}
 	return nil
 }

@@ -35,15 +35,16 @@ import (
 )
 
 // publicClusterCreationFixture supplies request-owned NodeSets for tests of
-// unrelated public fields that previously used template hardware defaults.
+// unrelated public fields that previously used template hardware defaults, and
+// runs the reference interceptor before calling the public handler.
 type publicClusterCreationFixture struct {
 	*ClustersServer
 	singleNodeSet bool
 }
 
 func (s *publicClusterCreationFixture) Create(ctx context.Context, request *publicv1.ClustersCreateRequest) (*publicv1.ClustersCreateResponse, error) {
+	request = proto.Clone(request).(*publicv1.ClustersCreateRequest)
 	if spec := request.GetObject().GetSpec(); spec != nil && spec.GetTemplate() != nil && spec.GetNodeSets() == nil {
-		request = proto.Clone(request).(*publicv1.ClustersCreateRequest)
 		spec = request.GetObject().GetSpec()
 		if spec.GetTemplate().GetId() == "my_bmit_template" || spec.GetTemplate().GetName() == "test-bmit-template" {
 			spec.SetNodeSets(map[string]*publicv1.ClusterNodeSet{"workers": publicv1.ClusterNodeSet_builder{
@@ -59,7 +60,27 @@ func (s *publicClusterCreationFixture) Create(ctx context.Context, request *publ
 			spec.SetNodeSets(nodeSets)
 		}
 	}
+	if err := s.resolveNodeSetReferences(ctx, request.GetObject().GetSpec().GetNodeSets()); err != nil {
+		return nil, err
+	}
 	return s.ClustersServer.Create(ctx, request)
+}
+
+func (s *publicClusterCreationFixture) Update(ctx context.Context, request *publicv1.ClustersUpdateRequest) (*publicv1.ClustersUpdateResponse, error) {
+	request = proto.Clone(request).(*publicv1.ClustersUpdateRequest)
+	if err := s.resolveNodeSetReferences(ctx, request.GetObject().GetSpec().GetNodeSets()); err != nil {
+		return nil, err
+	}
+	return s.ClustersServer.Update(ctx, request)
+}
+
+func (s *publicClusterCreationFixture) resolveNodeSetReferences(ctx context.Context, nodeSets map[string]*publicv1.ClusterNodeSet) error {
+	request := publicv1.ClustersCreateRequest_builder{
+		Object: publicv1.Cluster_builder{
+			Spec: publicv1.ClusterSpec_builder{NodeSets: nodeSets}.Build(),
+		}.Build(),
+	}.Build()
+	return resolveClusterNodeSetReferencesForTest(ctx, request, publicv1.Clusters_Create_FullMethodName)
 }
 
 var _ = Describe("Clusters server", func() {
@@ -1122,7 +1143,7 @@ var _ = Describe("Clusters server", func() {
 							Template: privatev1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
 								"compute": privatev1.ClusterNodeSet_builder{
-									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "my_bmit", Shared: true}.Build(),
+									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Name: "test-bmit-standard", Shared: true}.Build(),
 									Size:                  proto.Int32(3),
 								}.Build(),
 							},
@@ -1146,7 +1167,7 @@ var _ = Describe("Clusters server", func() {
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"compute": publicv1.ClusterNodeSet_builder{
-								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "my_bmit", Shared: true}.Build(),
+								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Name: "test-bmit-standard", Shared: true}.Build(),
 								Size:                  proto.Int32(4),
 							}.Build(),
 						},
@@ -1798,7 +1819,8 @@ var _ = Describe("Clusters server", func() {
 					ref := response.GetObject().GetSpec().GetNodeSets()["workers"].GetBaremetalInstanceType()
 					Expect(ref.GetId()).To(Equal("bmit_standard"))
 					Expect(ref.GetName()).To(Equal("test-bmit-standard"))
-					Expect(ref.GetShared()).To(BeTrue())
+					Expect(ref.GetShared()).To(Equal(shared))
+					Expect(ref.GetProject()).To(Equal(project))
 				},
 				Entry("accepts an explicitly shared name", "", "test-bmit-standard", true, ""),
 				Entry("accepts an explicitly shared ID", "bmit_standard", "", true, ""),
@@ -1807,18 +1829,17 @@ var _ = Describe("Clusters server", func() {
 				Entry("resolves an ID with a project selector", "bmit_standard", "", true, "other"),
 			)
 
-			It("rejects tenant-only BMIT IDs for public CaaS NodeSets", func() {
-				seedCaaSTestBareMetalInstanceType(ctx, "tenant-only-public-id", "tenant-only-public", testTenant, nil)
+			It("rejects missing BMIT IDs for public CaaS NodeSets", func() {
 				_, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
 					Object: publicv1.Cluster_builder{
-						Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("caas-tenant-only-%s", uuid.NewString()[:8])}.Build(),
+						Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("caas-missing-bmit-%s", uuid.NewString()[:8])}.Build(),
 						Spec: publicv1.ClusterSpec_builder{
 							Template: publicv1.ClusterTemplateReference_builder{Id: "my_bmit_template"}.Build(),
 							NodeSets: map[string]*publicv1.ClusterNodeSet{
 								"workers": publicv1.ClusterNodeSet_builder{
 									Size: proto.Int32(2),
 									BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{
-										Id: "tenant-only-public-id", Shared: true,
+										Id: "missing-public-bmit-id", Shared: true,
 									}.Build(),
 								}.Build(),
 							},

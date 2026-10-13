@@ -82,6 +82,20 @@ def test_parse_switch_vlan_exclusions_includes_ranges_pvids_and_nvue_reservation
     assert observed == {1, 100, 101, 102, 220, 3700, 3701, 3702, 4000, 4001, 4002, 4003, 4004, 4005, 4006}
 
 
+def test_parse_switch_vlan_exclusions_accepts_trailing_newline_in_nvue_range():
+    bridge = json.dumps([{"ifname": "swp1", "vlans": []}])
+    reserved = json.dumps(
+        {
+            "internal": {"range": "3725-3999\n"},
+            "l3-vni-vlan": {"begin": 4000, "end": 4064},
+        }
+    )
+
+    observed = agentless_net_subnet.parse_switch_vlan_exclusions(bridge, reserved)
+
+    assert observed == set(range(3725, 4000)) | set(range(4000, 4065))
+
+
 @pytest.mark.parametrize(
     ("bridge", "reserved"),
     [

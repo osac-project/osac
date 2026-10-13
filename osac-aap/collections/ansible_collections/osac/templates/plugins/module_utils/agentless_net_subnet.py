@@ -63,6 +63,7 @@ def _parse_vlan_range(value: Any, context: str) -> tuple[int, int]:
         return first, last
     if not isinstance(value, str):
         raise SubnetProviderError(f"Cumulus {context} range is malformed")
+    value = value.strip()
     match = re.fullmatch(r"([0-9]+)-([0-9]+)", value)
     if match is None:
         raise SubnetProviderError(f"Cumulus {context} range is malformed")

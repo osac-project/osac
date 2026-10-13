@@ -17,6 +17,7 @@ import (
 	"context"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
@@ -40,6 +41,19 @@ var _ = Describe("Project command", func() {
 		flag := cmd.Flags().Lookup("output")
 		Expect(flag).ToNot(BeNil())
 		Expect(flag.Shorthand).To(Equal("o"))
+	})
+
+	It("Has no_matches and multiple_matches templates", func() {
+		// The FindObject contract requires these template names.
+		// Verify they can be read from the embedded filesystem.
+		data, err := templatesFS.ReadFile("templates/no_matches.txt")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(string(data)).To(ContainSubstring("{{ .Ref }}"))
+
+		data, err = templatesFS.ReadFile("templates/multiple_matches.txt")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(string(data)).To(ContainSubstring("{{ .Ref }}"))
+		Expect(string(data)).To(ContainSubstring(".Matches"))
 	})
 
 	Describe("resolveProjectName", func() {
@@ -94,6 +108,26 @@ var _ = Describe("Project command", func() {
 			name := runner.resolveProjectName(ctx, settings, "staging")
 			Expect(name).To(Equal("team-a.frontend.staging"))
 		})
+
+		DescribeTable("Navigation edge cases",
+			func(current string, input string, expected string) {
+				ctx := context.Background()
+				settings := mustSettings()
+				if current != "" {
+					settings.SetProject(current)
+				}
+				name := runner.resolveProjectName(ctx, settings, input)
+				Expect(name).To(Equal(expected))
+			},
+			Entry("Absolute name with no current project", "", "prod", "prod"),
+			Entry("Relative name with single-level current", "org", "team", "org.team"),
+			Entry("Relative name with multi-level current", "org.team", "env", "org.team.env"),
+			Entry("'..' from deeply nested project", "a.b.c.d", "..", "a.b.c"),
+			Entry("'..' from two-level project", "a.b", "..", "a"),
+			Entry("'..' from single-level project", "a", "..", ""),
+			Entry("'..' from empty project", "", "..", ""),
+			Entry("Name containing dots is treated as single segment", "team", "a.b", "team.a.b"),
+		)
 	})
 })
 

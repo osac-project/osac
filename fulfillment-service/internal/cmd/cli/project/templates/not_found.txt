@@ -1,7 +1,0 @@
-Project '{{ .Name }}' not found.
-{{ if .Suggestions }}
-Available projects{{ if gt (len .Suggestions) 10 }} (first 10){{ end }}:
-{{ range .Suggestions }}  - {{ . }}
-{{ end }}
-Run '{{ binary }} get projects' for the full list.
-{{ end }}

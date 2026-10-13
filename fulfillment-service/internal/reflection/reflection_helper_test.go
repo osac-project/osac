@@ -42,6 +42,17 @@ func testTenantIntoContext(ctx context.Context, tenant string) context.Context {
 	return context.WithValue(ctx, testTenantKey{}, tenant)
 }
 
+type testProjectKey struct{}
+
+func testProjectFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(testProjectKey{}).(string)
+	return v
+}
+
+func testProjectIntoContext(ctx context.Context, project string) context.Context {
+	return context.WithValue(ctx, testProjectKey{}, project)
+}
+
 var _ = Describe("Reflection helper", func() {
 	var (
 		ctx        context.Context
@@ -803,6 +814,42 @@ var _ = Describe("Reflection helper", func() {
 			}
 		})
 
+		It("Reports project-scoped types correctly", func() {
+			Expect(helper.Lookup("cluster").IsProjectScoped()).To(BeTrue())
+			Expect(helper.Lookup("computeinstance").IsProjectScoped()).To(BeTrue())
+			Expect(helper.Lookup("project").IsProjectScoped()).To(BeTrue())
+		})
+
+		It("Reports all metadata-bearing types as project-scoped", func() {
+			// All public types share the same Metadata message which has a project field,
+			// so every type with metadata is project-scoped.
+			Expect(helper.Lookup("tenant").IsProjectScoped()).To(BeTrue())
+			Expect(helper.Lookup("role").IsProjectScoped()).To(BeTrue())
+		})
+
+		It("Sets and gets project on cluster metadata", func() {
+			objectHelper := helper.Lookup("cluster")
+			Expect(objectHelper).ToNot(BeNil())
+			object := publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: "my-cluster",
+				}.Build(),
+			}.Build()
+			objectHelper.SetProject(object, "team-a.frontend")
+			Expect(objectHelper.GetProject(object)).To(Equal("team-a.frontend"))
+		})
+
+		It("Returns empty project when none is set", func() {
+			objectHelper := helper.Lookup("cluster")
+			Expect(objectHelper).ToNot(BeNil())
+			object := publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: "my-cluster",
+				}.Build(),
+			}.Build()
+			Expect(objectHelper.GetProject(object)).To(BeEmpty())
+		})
+
 		It("Does not inject tenant filter when no tenant in context", func() {
 			var capturedFilter string
 			publicv1.RegisterClustersServer(server.Registrar(), &testing.ClustersServerFuncs{
@@ -825,6 +872,174 @@ var _ = Describe("Reflection helper", func() {
 			})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(capturedFilter).To(Equal(`this.metadata.name == "my-cluster"`))
+		})
+
+		It("Injects project filter into list when project is in context", func() {
+			var capturedFilter string
+			publicv1.RegisterClustersServer(server.Registrar(), &testing.ClustersServerFuncs{
+				ListFunc: func(ctx context.Context, request *publicv1.ClustersListRequest,
+				) (response *publicv1.ClustersListResponse, err error) {
+					capturedFilter = request.GetFilter()
+					response = publicv1.ClustersListResponse_builder{
+						Size:  0,
+						Total: 0,
+					}.Build()
+					return
+				},
+			})
+			server.Start()
+
+			projectHelper, err := NewHelper().
+				SetLogger(logger).
+				SetConnection(connection).
+				AddPackage(packages.PublicV1, 1).
+				SetTenantFunc(testTenantFromContext).
+				SetProjectFunc(testProjectFromContext).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			projectCtx := testProjectIntoContext(ctx, "team-a")
+			objectHelper := projectHelper.Lookup("cluster")
+			Expect(objectHelper).ToNot(BeNil())
+			_, err = objectHelper.List(projectCtx, ListOptions{})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(capturedFilter).To(Equal(`this.metadata.project == "team-a"`))
+		})
+
+		It("Combines project filter with user-provided filter", func() {
+			var capturedFilter string
+			publicv1.RegisterClustersServer(server.Registrar(), &testing.ClustersServerFuncs{
+				ListFunc: func(ctx context.Context, request *publicv1.ClustersListRequest,
+				) (response *publicv1.ClustersListResponse, err error) {
+					capturedFilter = request.GetFilter()
+					response = publicv1.ClustersListResponse_builder{
+						Size:  0,
+						Total: 0,
+					}.Build()
+					return
+				},
+			})
+			server.Start()
+
+			projectHelper, err := NewHelper().
+				SetLogger(logger).
+				SetConnection(connection).
+				AddPackage(packages.PublicV1, 1).
+				SetTenantFunc(testTenantFromContext).
+				SetProjectFunc(testProjectFromContext).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			projectCtx := testProjectIntoContext(ctx, "team-a")
+			objectHelper := projectHelper.Lookup("cluster")
+			Expect(objectHelper).ToNot(BeNil())
+			_, err = objectHelper.List(projectCtx, ListOptions{
+				Filter: `this.metadata.name == "my-cluster"`,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(capturedFilter).To(Equal(
+				`this.metadata.project == "team-a" && (this.metadata.name == "my-cluster")`,
+			))
+		})
+
+		It("Combines tenant and project filters together", func() {
+			var capturedFilter string
+			publicv1.RegisterClustersServer(server.Registrar(), &testing.ClustersServerFuncs{
+				ListFunc: func(ctx context.Context, request *publicv1.ClustersListRequest,
+				) (response *publicv1.ClustersListResponse, err error) {
+					capturedFilter = request.GetFilter()
+					response = publicv1.ClustersListResponse_builder{
+						Size:  0,
+						Total: 0,
+					}.Build()
+					return
+				},
+			})
+			server.Start()
+
+			projectHelper, err := NewHelper().
+				SetLogger(logger).
+				SetConnection(connection).
+				AddPackage(packages.PublicV1, 1).
+				SetTenantFunc(testTenantFromContext).
+				SetProjectFunc(testProjectFromContext).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			bothCtx := testTenantIntoContext(ctx, "acme")
+			bothCtx = testProjectIntoContext(bothCtx, "team-a")
+			objectHelper := projectHelper.Lookup("cluster")
+			Expect(objectHelper).ToNot(BeNil())
+			_, err = objectHelper.List(bothCtx, ListOptions{})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(capturedFilter).To(Equal(
+				`this.metadata.project == "team-a" && (this.metadata.tenant == "acme")`,
+			))
+		})
+
+		It("Does not inject project filter when no project in context", func() {
+			var capturedFilter string
+			publicv1.RegisterClustersServer(server.Registrar(), &testing.ClustersServerFuncs{
+				ListFunc: func(ctx context.Context, request *publicv1.ClustersListRequest,
+				) (response *publicv1.ClustersListResponse, err error) {
+					capturedFilter = request.GetFilter()
+					response = publicv1.ClustersListResponse_builder{
+						Size:  0,
+						Total: 0,
+					}.Build()
+					return
+				},
+			})
+			server.Start()
+
+			projectHelper, err := NewHelper().
+				SetLogger(logger).
+				SetConnection(connection).
+				AddPackage(packages.PublicV1, 1).
+				SetTenantFunc(testTenantFromContext).
+				SetProjectFunc(testProjectFromContext).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			objectHelper := projectHelper.Lookup("cluster")
+			Expect(objectHelper).ToNot(BeNil())
+			_, err = objectHelper.List(ctx, ListOptions{
+				Filter: `this.metadata.name == "my-cluster"`,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(capturedFilter).To(Equal(`this.metadata.name == "my-cluster"`))
+		})
+
+		It("Properly escapes project names containing special characters in CEL filter", func() {
+			var capturedFilter string
+			publicv1.RegisterClustersServer(server.Registrar(), &testing.ClustersServerFuncs{
+				ListFunc: func(ctx context.Context, request *publicv1.ClustersListRequest,
+				) (response *publicv1.ClustersListResponse, err error) {
+					capturedFilter = request.GetFilter()
+					response = publicv1.ClustersListResponse_builder{
+						Size:  0,
+						Total: 0,
+					}.Build()
+					return
+				},
+			})
+			server.Start()
+
+			projectHelper, err := NewHelper().
+				SetLogger(logger).
+				SetConnection(connection).
+				AddPackage(packages.PublicV1, 1).
+				SetTenantFunc(testTenantFromContext).
+				SetProjectFunc(testProjectFromContext).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			projectCtx := testProjectIntoContext(ctx, `proj"with"quotes`)
+			objectHelper := projectHelper.Lookup("cluster")
+			Expect(objectHelper).ToNot(BeNil())
+			_, err = objectHelper.List(projectCtx, ListOptions{})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(capturedFilter).To(Equal(`this.metadata.project == "proj\"with\"quotes"`))
 		})
 
 		It("Sorts types according to package order when adding packages", func() {

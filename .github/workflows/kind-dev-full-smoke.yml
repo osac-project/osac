@@ -15,7 +15,9 @@ on:
 permissions: {}
 
 concurrency:
-  group: kind-dev-full-smoke-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  # Unrecognized issue comments get unique groups, so they cannot cancel an
+  # authorized smoke run for the same PR before the job-level gate evaluates.
+  group: kind-dev-full-smoke-${{ github.event.pull_request.number || (github.event_name == 'issue_comment' && github.event.comment.body == '/test-kind-dev-full' && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && github.event.issue.number) || github.run_id }}
   cancel-in-progress: true
 
 jobs:

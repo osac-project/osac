@@ -23,6 +23,8 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
@@ -55,17 +57,48 @@ var _ = Describe("FabricDomain tenant API component integration", Label("network
 		adminDomains = publicv1.NewFabricDomainsClient(tool.ExternalView().AdminConn())
 		tenantA = fmt.Sprintf("fd-it-a-%s", uuid.New()[24:])
 		tenantB = fmt.Sprintf("fd-it-b-%s", uuid.New()[24:])
-		for _, tenantID := range []string{tenantA, tenantB} {
+		for _, fixture := range []struct {
+			tenantID       string
+			serviceAccount string
+		}{
+			{tenantID: tenantA, serviceAccount: "alice"},
+			{tenantID: tenantB, serviceAccount: "carol"},
+		} {
 			response, err := tenants.Create(setupCtx, privatev1.TenantsCreateRequest_builder{
 				Object: privatev1.Tenant_builder{
-					Metadata: privatev1.Metadata_builder{Name: tenantID}.Build(),
+					Metadata: privatev1.Metadata_builder{Name: fixture.tenantID}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			id := response.GetObject().GetId()
 			DeferCleanup(func(cleanupCtx context.Context) {
-				deleteTenant(cleanupCtx, tenants, projects, id, tenantID)
+				deleteTenant(cleanupCtx, tenants, projects, id, fixture.tenantID)
 			})
+
+			// Service-account tenant identity comes from the Kubernetes namespace.
+			// Use a test-only namespace matching this unique OSAC tenant so the JWT
+			// groups carry the tenant being exercised by the API assertions.
+			identityMetadata := metav1.ObjectMeta{
+				Name: fixture.tenantID,
+				Annotations: map[string]string{
+					"osac.openshift.io/tenant":          fixture.tenantID,
+					"osac.openshift.io/owner-reference": id,
+				},
+			}
+			Expect(tool.KubeClient().Create(setupCtx, &corev1.Namespace{ObjectMeta: identityMetadata})).To(Succeed())
+			DeferCleanup(func(cleanupCtx context.Context) {
+				deleteErr := tool.KubeClient().Delete(cleanupCtx, &corev1.Namespace{
+					ObjectMeta: metav1.ObjectMeta{Name: fixture.tenantID},
+				})
+				Expect(client.IgnoreNotFound(deleteErr)).To(Succeed())
+			})
+			Expect(tool.KubeClient().Create(setupCtx, &corev1.ServiceAccount{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        fixture.serviceAccount,
+					Namespace:   fixture.tenantID,
+					Annotations: identityMetadata.Annotations,
+				},
+			})).To(Succeed())
 		}
 
 		manager := "netris"

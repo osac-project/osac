@@ -11,8 +11,9 @@ enabled in the `osac` namespace.
 The auth unit matrix in
 `fulfillment-service/internal/auth/grpc_authz_interceptor_test.go` covers
 tenant users, tenant admins, IdP managers, and platform admins. The deployed
-integration case uses the existing `alice` and `carol` tenant identities to
-verify persisted tenant filtering and the public API path.
+integration case creates per-spec `alice` and `carol` service accounts in
+Kubernetes namespaces matching its unique OSAC tenants, so the token tenant
+claims exercise the same tenant IDs used by the persisted resources.
 
 Run the component suite against its dedicated Kind environment:
 

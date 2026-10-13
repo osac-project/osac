@@ -40,4 +40,16 @@ func waitForNetworkClassReady(
 			object.GetStatus().GetMessage(),
 		)
 	}, time.Minute, time.Second).Should(Succeed())
+
+	Eventually(func(g Gomega) {
+		response, err := client.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: id}.Build())
+		g.Expect(err).NotTo(HaveOccurred())
+		object := response.GetObject()
+		g.Expect(object.GetStatus().GetHub()).NotTo(
+			BeEmpty(),
+			"NetworkClass %q has no canonical Hub binding: %s",
+			id,
+			object.GetStatus().GetMessage(),
+		)
+	}, time.Minute, time.Second).Should(Succeed())
 }

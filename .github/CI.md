@@ -14,6 +14,27 @@ what starts the E2E: it runs in parallel with `CI` and does not wait for it, and
 checks are green and the approval is there, the author adds the pull request to the merge queue. The queue runs `CI` and
 `E2E` again on the result of merging, so what lands is what was tested.
 
+## Which tests a directory needs
+
+A change under a directory runs the parts below, and a part that applies has to pass before `CI` does: there is no way
+to merge around it (only an organization admin bypassing the rule). Everything else shows as skipped inside the run. Every
+change also runs `pre-commit` and `dependency-review`. `ci-tests.yml` and `filters/ci-filters.yml` are the source.
+
+| Directory | Required parts of `CI` |
+|---|---|
+| `fulfillment-service/` | Go and proto checks, Python checks, unit tests, integration test, Helm chart lint |
+| `osac-operator/` | unit tests and image build, integration test, Helm chart lint and CRD sync |
+| `bare-metal-fulfillment-operator/` | unit tests and image build, integration test, Helm chart lint and CRD sync |
+| `osac-aap/` | `ansible-lint`, integration test, Helm chart lint |
+| `osac-installer/` | integration test, Helm chart lint |
+| `osac-metering/` | unit tests (service, adapters, schema), Helm chart lint |
+| `osac-ui/` | unit tests, lint (the UI and its Go proxy), typecheck |
+| `osac-csi-driver/` | Helm chart lint only (its Go tests are not run in CI yet) |
+| `proto/` | generated-code check, and the tests of the components that use it |
+| `tests/e2e/` and the E2E workflows | the `E2E` suites the change affects (`e2e-policy.yml`) |
+
+A rule that a change must also add or change tests is not enforced: `CI` checks that the tests which exist pass.
+
 ## What you see on a pull request
 
 `CI` is one check. Open it to see which parts ran: a part your change does not touch shows as skipped inside that run,

@@ -173,6 +173,23 @@ jobs:
       id-token: write
     uses: ./.github/workflows/build-bmf-image.yaml
 
+  # osac-ui: lint (the UI and its Go proxy) and typecheck. The unit tests of osac-ui are a leg of the matrix below.
+  osac-ui-lint:
+    name: osac-ui lint
+    needs: plan
+    if: contains(needs.plan.outputs.changed, '|ui|')
+    permissions:
+      contents: read
+    uses: ./.github/workflows/osac-ui-lint.yaml
+
+  osac-ui-typecheck:
+    name: osac-ui typecheck
+    needs: plan
+    if: contains(needs.plan.outputs.changed, '|ui|')
+    permissions:
+      contents: read
+    uses: ./.github/workflows/osac-ui-typecheck.yaml
+
   # Every unit and integration test the change needs, one job per leg (a matrix built by `plan` from .github/ci-tests.yml).
   # A test that is not needed has no job, so the pull request shows no skipped row for it.
   tests:
@@ -208,6 +225,8 @@ jobs:
       - helm-lint
       - build-osac-operator
       - build-bare-metal-fulfillment-operator
+      - osac-ui-lint
+      - osac-ui-typecheck
       - tests
     runs-on: ubuntu-latest
     permissions: {}

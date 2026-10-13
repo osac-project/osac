@@ -24,7 +24,7 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-var _ = DescribeTableSubtree("platform resource reference resolution", func(locked bool) {
+var _ = Describe("locked platform resource reference resolution", func() {
 	var instanceTypes *dao.GenericDAO[*privatev1.BareMetalInstanceType]
 
 	BeforeEach(func() {
@@ -39,11 +39,8 @@ var _ = DescribeTableSubtree("platform resource reference resolution", func(lock
 	})
 
 	DescribeTable("resolves only in platform scope", func(id, name string, expectedCode grpccodes.Code) {
-		resolve := resolvePlatformResource[*privatev1.BareMetalInstanceType]
-		if locked {
-			resolve = resolveLockedPlatformResource[*privatev1.BareMetalInstanceType]
-		}
-		resolved, err := resolve(ctx, instanceTypes, id, name, "bare metal instance type", " in node set", grpccodes.NotFound)
+		resolved, err := resolveLockedPlatformResource(ctx, instanceTypes, id, name,
+			"bare metal instance type", " in node set", grpccodes.NotFound)
 		if expectedCode != grpccodes.OK {
 			Expect(err).To(MatchError(ContainSubstring("bare metal instance type")))
 			Expect(grpcstatus.Code(err)).To(Equal(expectedCode))
@@ -64,7 +61,4 @@ var _ = DescribeTableSubtree("platform resource reference resolution", func(lock
 		Entry("rejects a missing name", "", "missing", grpccodes.NotFound),
 		Entry("requires ID or name", "", "", grpccodes.InvalidArgument),
 	)
-},
-	Entry("unlocked", false),
-	Entry("locked", true),
-)
+})

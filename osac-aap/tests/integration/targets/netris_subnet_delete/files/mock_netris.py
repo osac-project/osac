@@ -29,6 +29,7 @@ _CONFIG = {}
 
 
 def _empty_config():
+    """Return the default scenario configuration with empty stores."""
     return {
         "vnets": [],
         "vnet_delete_status": 204,
@@ -40,6 +41,7 @@ def _empty_config():
 class MockNetrisHandler(BaseHTTPRequestHandler):
 
     def _respond(self, status, payload=None):
+        """Write a JSON response with the given status code and payload."""
         body = json.dumps(payload if payload is not None else {}).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -48,14 +50,17 @@ class MockNetrisHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _record(self, method):
+        """Append the request method and query-free path to the call log."""
         with _LOCK:
             _CALL_LOG.append({"method": method, "path": self.path.split("?")[0]})
 
     def _config(self):
+        """Return a snapshot copy of the current scenario configuration."""
         with _LOCK:
             return dict(_CONFIG)
 
     def do_GET(self):
+        """Serve the vnet/ipam list endpoints and the test control probes."""
         path = self.path.split("?")[0]
         config = self._config()
         if path == "/_calls":
@@ -73,6 +78,7 @@ class MockNetrisHandler(BaseHTTPRequestHandler):
             self._respond(404, {"message": "unexpected GET %s" % path})
 
     def do_POST(self):
+        """Serve the /_config and /_reset scenario control endpoints."""
         path = self.path.split("?")[0]
         if path == "/_config":
             length = int(self.headers.get("Content-Length", 0))
@@ -96,6 +102,7 @@ class MockNetrisHandler(BaseHTTPRequestHandler):
             self._respond(404, {"message": "unexpected POST %s" % path})
 
     def do_DELETE(self):
+        """Serve the vnet and ipam subnet delete endpoints."""
         path = self.path.split("?")[0]
         config = self._config()
         if path.startswith("/api/v2/vnet/"):
@@ -108,6 +115,7 @@ class MockNetrisHandler(BaseHTTPRequestHandler):
             self._respond(404, {"message": "unexpected DELETE %s" % path})
 
     def log_message(self, format, *args):
+        """Suppress per-request console logging; the call log is the test record."""
         pass
 
 
@@ -116,6 +124,7 @@ class MockNetrisServer(ThreadingHTTPServer):
 
 
 def main():
+    """Parse the port argument and serve the fixture until stopped."""
     parser = argparse.ArgumentParser(description="Mock Netris controller API")
     parser.add_argument("port", type=int)
     args = parser.parse_args()

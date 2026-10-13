@@ -6,7 +6,9 @@
   vars:
     mock_netris_port: 18444
     mock_netris_url: "http://127.0.0.1:{{ mock_netris_port }}"
-    netris_session_cookie: osac-netris-subnet-delete-test
+    # Per-run ephemeral value; the fixture endpoint is independent of real
+    # authentication and the value is never persisted.
+    netris_session_cookie: "{{ lookup('ansible.builtin.password', '/dev/null chars=ascii_letters,digits length=32') }}"
     tenant_id: integration-tenant
     subnet_name: netris-subnet-del
     fabric_configmap_name: "subnet-{{ subnet_name }}-fabric-output"

@@ -1,0 +1,29 @@
+---
+- name: Invoke an AgentlessNet networking playbook
+  ansible.builtin.command:
+    argv:
+      - ansible-playbook
+      - -i
+      - localhost,
+      - "{{ playbook_dir }}/../../../../../playbook_osac_{{ agentless_eip_playbook }}.yml"
+      - -e
+      - "{{ {'osac_job_vars': agentless_eip_job_vars} | to_json }}"
+      - -e
+      - >-
+        {{ {'ansible_connection': 'local', 'ansible_become': false,
+            'ansible_python_interpreter': ansible_playbook_python} | to_json }}
+  args:
+    chdir: "{{ playbook_dir }}/../../../../../"
+  environment:
+    AGENTLESS_NET_VN_INVENTORY: "{{ agentless_eip_inventory | to_json }}"
+    AGENTLESS_NET_STATE_FILE: "{{ agentless_eip_state_file }}"
+    AGENTLESS_NET_SSH_PRIVATE_KEY: ""
+    ANSIBLE_SHOW_CUSTOM_STATS: "true"
+  register: agentless_eip_playbook_result
+  changed_when: false
+  failed_when: false
+
+- name: Check the playbook outcome
+  ansible.builtin.assert:
+    that:
+      - (agentless_eip_playbook_result.rc == 0) == (agentless_eip_should_succeed | bool)

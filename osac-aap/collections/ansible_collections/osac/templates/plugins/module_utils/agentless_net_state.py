@@ -45,6 +45,7 @@ SCHEMA_TABLES = {
     "virtual_networks",
     "subnets",
     "external_ip_pools",
+    "external_ips",
 }
 LOCK_WAIT_SECONDS = 60
 LOCK_POLL_SECONDS = 0.05
@@ -143,6 +144,47 @@ def _external_ip_pool_entry(
         "ip_family": ip_family,
         "ipv4_cidr": str(network),
     }
+
+
+def _external_ip_identity(
+    uid: Any,
+    fulfillment_id: Any,
+    tenant_id: Any,
+    pool_uid: Any,
+) -> dict[str, str]:
+    if not _is_canonical_uuid(uid):
+        raise StateError("ExternalIP UID must be a canonical UUID")
+    if not _is_canonical_uuid(fulfillment_id):
+        raise StateError("ExternalIP Fulfillment UUID must be a canonical UUID")
+    if not _is_valid_tenant_id(tenant_id):
+        raise StateError("ExternalIP tenant ID is required")
+    if not _is_canonical_uuid(pool_uid):
+        raise StateError("ExternalIPPool UID must be a canonical UUID")
+    return {
+        "uid": uid,
+        "fulfillment_id": fulfillment_id,
+        "tenant_id": tenant_id,
+        "pool_uid": pool_uid,
+    }
+
+
+def _external_ip_entry(
+    uid: Any,
+    fulfillment_id: Any,
+    tenant_id: Any,
+    pool_uid: Any,
+    address: Any,
+) -> dict[str, str]:
+    identity = _external_ip_identity(uid, fulfillment_id, tenant_id, pool_uid)
+    if not isinstance(address, str):
+        raise StateError("ExternalIP address must be canonical IPv4")
+    try:
+        parsed = ipaddress.ip_address(address)
+    except ValueError as error:
+        raise StateError("ExternalIP address must be canonical IPv4") from error
+    if not isinstance(parsed, ipaddress.IPv4Address) or str(parsed) != address:
+        raise StateError("ExternalIP address must be canonical IPv4")
+    return {**identity, "address": address}
 
 
 def _validate_dhcp_supervisor(value: Any) -> str:
@@ -374,6 +416,7 @@ class StateStore:
                     )
                     self._create_subnet_schema(connection)
                     self._create_external_ip_pool_schema(connection)
+                    self._create_external_ip_schema(connection)
                     connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
                     connection.commit()
                 except BaseException:
@@ -389,6 +432,7 @@ class StateStore:
             self._validate_virtual_network_table(connection)
             self._validate_subnet_table(connection)
             self._validate_external_ip_pool_schema(connection)
+            self._validate_external_ip_schema(connection)
             return connection
         except (sqlite3.DatabaseError, OSError) as error:
             connection.close()
@@ -427,6 +471,58 @@ class StateStore:
                 ipv4_cidr TEXT NOT NULL
             )"""
         )
+
+    @staticmethod
+    def _create_external_ip_schema(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """CREATE TABLE external_ips (
+                uid TEXT NOT NULL PRIMARY KEY,
+                fulfillment_id TEXT NOT NULL UNIQUE,
+                tenant_id TEXT NOT NULL,
+                pool_uid TEXT NOT NULL REFERENCES external_ip_pools(uid),
+                address TEXT NOT NULL,
+                UNIQUE (pool_uid, address)
+            )"""
+        )
+
+    @staticmethod
+    def _validate_external_ip_schema(connection: sqlite3.Connection) -> None:
+        expected_columns = {"uid", "fulfillment_id", "tenant_id", "pool_uid", "address"}
+        column_info = {
+            row[1]: row
+            for row in connection.execute("PRAGMA table_info(external_ips)")
+        }
+        if set(column_info) != expected_columns:
+            raise StateCorrupt("AgentlessNet external_ips table has an invalid schema")
+        if any(
+            column_info[name][2].upper() != "TEXT" or column_info[name][3] != 1
+            for name in expected_columns
+        ):
+            raise StateCorrupt("AgentlessNet ExternalIP constraints are missing")
+        if column_info["uid"][5] != 1:
+            raise StateCorrupt("AgentlessNet ExternalIP UID primary key is missing")
+
+        unique_columns = set()
+        for index_row in connection.execute("PRAGMA index_list(external_ips)"):
+            if not index_row[2] or index_row[4]:
+                continue
+            quoted_index = "'" + index_row[1].replace("'", "''") + "'"
+            columns = tuple(
+                row[2]
+                for row in connection.execute(
+                    f"PRAGMA index_info({quoted_index})"
+                ).fetchall()
+            )
+            unique_columns.add(columns)
+        if not {("fulfillment_id",), ("pool_uid", "address")}.issubset(unique_columns):
+            raise StateCorrupt("AgentlessNet ExternalIP uniqueness constraints are missing")
+
+        foreign_keys = {
+            (row[2], row[3], row[4])
+            for row in connection.execute("PRAGMA foreign_key_list(external_ips)")
+        }
+        if ("external_ip_pools", "pool_uid", "uid") not in foreign_keys:
+            raise StateCorrupt("AgentlessNet ExternalIP pool foreign key is missing")
 
     @staticmethod
     def _validate_external_ip_pool_schema(connection: sqlite3.Connection) -> None:
@@ -1148,6 +1244,48 @@ class StateStore:
             raise StateCorrupt("malformed ExternalIPPool state") from error
 
     @staticmethod
+    def _external_ip_for_uid(
+        connection: sqlite3.Connection, uid: str
+    ) -> dict[str, str] | None:
+        row = connection.execute(
+            """SELECT uid, fulfillment_id, tenant_id, pool_uid, address
+               FROM external_ips WHERE uid = ?""",
+            (uid,),
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            entry = _external_ip_entry(row[0], row[1], row[2], row[3], row[4])
+        except StateError as error:
+            raise StateCorrupt("malformed ExternalIP reservation state") from error
+        pool = StateStore._external_ip_pool_for_uid(connection, entry["pool_uid"])
+        if pool is None:
+            raise StateCorrupt("ExternalIP reservation references a missing pool")
+        if entry["tenant_id"] != pool["tenant_id"] and pool["tenant_id"] != "shared":
+            raise StateCorrupt("ExternalIP reservation tenant does not match its pool")
+        if ipaddress.ip_address(entry["address"]) not in ipaddress.ip_network(
+            pool["ipv4_cidr"], strict=True
+        ):
+            raise StateCorrupt("ExternalIP reservation address is outside its pool")
+        return entry
+
+    @staticmethod
+    def _require_unique_external_ip_fulfillment_id(
+        connection: sqlite3.Connection,
+        uid: str,
+        fulfillment_id: str,
+    ) -> None:
+        row = connection.execute(
+            """SELECT uid FROM external_ips
+               WHERE fulfillment_id = ? AND uid <> ? LIMIT 1""",
+            (fulfillment_id, uid),
+        ).fetchone()
+        if row is None:
+            return
+        StateStore._external_ip_for_uid(connection, row[0])
+        raise StateError("ExternalIP Fulfillment identity is already reserved")
+
+    @staticmethod
     def _require_unique_external_ip_pool_fulfillment_id(
         connection: sqlite3.Connection,
         uid: str,
@@ -1267,12 +1405,144 @@ class StateStore:
                         if not check_mode:
                             connection.rollback()
                         return None, False
+                    if connection.execute(
+                        "SELECT 1 FROM external_ips WHERE pool_uid = ? LIMIT 1",
+                        (uid,),
+                    ).fetchone() is not None:
+                        raise StateError("ExternalIP reservation still references this pool")
                     if check_mode:
                         return existing, True
 
                     connection.execute(
                         "DELETE FROM external_ip_pools WHERE uid = ?", (uid,)
                     )
+                    connection.commit()
+                    return existing, True
+                except BaseException:
+                    if not check_mode and connection.in_transaction:
+                        connection.rollback()
+                    raise
+
+    def reserve_external_ip(
+        self,
+        uid: str,
+        fulfillment_id: str,
+        tenant_id: str,
+        pool_uid: str,
+        pool_fulfillment_id: str,
+        pool_tenant_id: str,
+        pool_cidr: str,
+        *,
+        check_mode: bool = False,
+    ) -> tuple[dict[str, str], bool]:
+        requested = _external_ip_identity(uid, fulfillment_id, tenant_id, pool_uid)
+        pool = _external_ip_pool_entry(
+            pool_uid, pool_fulfillment_id, pool_tenant_id, "IPv4", [pool_cidr]
+        )
+        if tenant_id != pool_tenant_id and pool_tenant_id != "shared":
+            raise StateError("ExternalIP tenant does not match its pool")
+
+        operation_lock = contextlib.nullcontext() if check_mode else self._resource_locked(uid)
+        with operation_lock:
+            with self._locked_database(create=False, read_only=check_mode) as connection:
+                if connection is None:
+                    raise StateError("ExternalIPPool is not registered")
+                if not check_mode:
+                    connection.execute("BEGIN IMMEDIATE")
+                try:
+                    saved_pool = self._external_ip_pool_for_uid(connection, pool_uid)
+                    if saved_pool != pool:
+                        raise StateError("ExternalIPPool identity does not match saved state")
+
+                    existing = self._external_ip_for_uid(connection, uid)
+                    if existing is not None:
+                        if any(
+                            existing[key] != requested[key]
+                            for key in ("uid", "fulfillment_id", "tenant_id", "pool_uid")
+                        ):
+                            raise StateError("ExternalIP identity does not match saved reservation")
+                        if not check_mode:
+                            connection.rollback()
+                        return existing, False
+
+                    self._require_unique_external_ip_fulfillment_id(
+                        connection, uid, fulfillment_id
+                    )
+                    reserved = {
+                        row[0]
+                        for row in connection.execute(
+                            "SELECT address FROM external_ips WHERE pool_uid = ?",
+                            (pool_uid,),
+                        )
+                    }
+                    network = ipaddress.ip_network(pool["ipv4_cidr"], strict=True)
+                    address = next(
+                        (str(candidate) for candidate in network.hosts() if str(candidate) not in reserved),
+                        None,
+                    )
+                    if address is None:
+                        raise StateError("ExternalIPPool has no available addresses")
+                    reservation = _external_ip_entry(
+                        uid, fulfillment_id, tenant_id, pool_uid, address
+                    )
+                    if check_mode:
+                        return reservation, True
+
+                    connection.execute(
+                        """INSERT INTO external_ips
+                           (uid, fulfillment_id, tenant_id, pool_uid, address)
+                           VALUES (?, ?, ?, ?, ?)""",
+                        (
+                            reservation["uid"],
+                            reservation["fulfillment_id"],
+                            reservation["tenant_id"],
+                            reservation["pool_uid"],
+                            reservation["address"],
+                        ),
+                    )
+                    connection.commit()
+                    return reservation, True
+                except BaseException:
+                    if not check_mode and connection.in_transaction:
+                        connection.rollback()
+                    raise
+
+    def release_external_ip(
+        self,
+        uid: str,
+        fulfillment_id: str,
+        tenant_id: str,
+        pool_uid: str,
+        *,
+        check_mode: bool = False,
+    ) -> tuple[dict[str, str] | None, bool]:
+        _external_ip_identity(uid, fulfillment_id, tenant_id, pool_uid)
+        operation_lock = contextlib.nullcontext() if check_mode else self._resource_locked(uid)
+        with operation_lock:
+            with self._locked_database(create=False, read_only=check_mode) as connection:
+                if connection is None:
+                    return None, False
+                if not check_mode:
+                    connection.execute("BEGIN IMMEDIATE")
+                try:
+                    existing = self._external_ip_for_uid(connection, uid)
+                    if existing is None:
+                        if not check_mode:
+                            connection.rollback()
+                        return None, False
+                    if any(
+                        existing[key] != value
+                        for key, value in (
+                            ("fulfillment_id", fulfillment_id),
+                            ("tenant_id", tenant_id),
+                            ("pool_uid", pool_uid),
+                        )
+                    ):
+                        raise StateError("ExternalIP identity does not match saved reservation")
+                    if check_mode:
+                        return existing, True
+
+                    connection.execute("DELETE FROM external_ips WHERE uid = ?", (uid,))
                     connection.commit()
                     return existing, True
                 except BaseException:

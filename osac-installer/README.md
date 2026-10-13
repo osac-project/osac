@@ -458,6 +458,21 @@ Tear down everything (including the kind cluster, via the same runtime wrapper):
 make uninstall PLATFORM=kind PROFILE=dev-full NS=osac
 ```
 
+The GitHub Actions workflow [`Kind dev-full smoke`](../.github/workflows/kind-dev-full-smoke.yml)
+installs this profile nightly, checks that fulfillment, the operator, AWX,
+Keycloak, and the UI deployments are available, verifies the UI Gateway route,
+then logs in as the seeded `tenant1_admin` user and lists tenants through the
+Fulfillment REST API. Changes to the smoke workflow or script also trigger a
+pre-merge run. To run the same smoke test on a running dev-full cluster, use:
+
+```bash
+KUBECONFIG="$HOME/.kube/osac-dev-kind-root.kubeconfig" \
+  bash ../.github/scripts/test-kind-dev-full.sh
+```
+
+On a pull request, a repository collaborator can start the workflow by
+commenting `/test-kind-dev-full`.
+
 #### Configure Values
 
 Each profile has two values files under `values/<profile>/`:

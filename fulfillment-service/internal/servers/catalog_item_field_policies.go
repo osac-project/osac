@@ -167,6 +167,31 @@ func decodeDiskImageReferencePolicy(policy *privatev1.DiskImageReferenceFieldPol
 	return policyState[*privatev1.DiskImageReference]{}, fmt.Errorf("disk image policy has no behavior")
 }
 
+// decodeAddOnOperatorReferenceListPolicy decodes the selected locked/default list without mutating the policy.
+func decodeAddOnOperatorReferenceListPolicy(policy *privatev1.AddOnOperatorReferenceListFieldPolicy) (policyState[*privatev1.AddOnOperatorReferenceList], error) {
+	if policy == nil {
+		return policyState[*privatev1.AddOnOperatorReferenceList]{}, nil
+	}
+	if policy.HasLocked() {
+		locked := policy.GetLocked()
+		if locked == nil {
+			return policyState[*privatev1.AddOnOperatorReferenceList]{}, fmt.Errorf("locked add-on operator list policy is empty")
+		}
+		return policyState[*privatev1.AddOnOperatorReferenceList]{hasLocked: true, lockedValue: locked}, nil
+	}
+	if policy.HasEditable() {
+		editable := policy.GetEditable()
+		if editable == nil {
+			return policyState[*privatev1.AddOnOperatorReferenceList]{}, fmt.Errorf("editable add-on operator list policy is empty")
+		}
+		return policyState[*privatev1.AddOnOperatorReferenceList]{
+			hasDefault:   editable.GetDefaultValue() != nil,
+			defaultValue: editable.GetDefaultValue(),
+		}, nil
+	}
+	return policyState[*privatev1.AddOnOperatorReferenceList]{}, fmt.Errorf("add-on operator list policy has no behavior")
+}
+
 // catalogItemPolicyError returns an InvalidArgument error identifying the invalid policy field and reason.
 func catalogItemPolicyError(field, reason string) error {
 	return grpcstatus.Errorf(grpccodes.InvalidArgument, "field '%s': %s", field, reason)

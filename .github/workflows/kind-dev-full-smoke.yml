@@ -28,6 +28,9 @@ jobs:
        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
     runs-on: ubuntu-latest
     timeout-minutes: 240
+    env:
+      CONTAINER_TOOL: docker
+      KIND_EXPERIMENTAL_PROVIDER: docker
     permissions:
       contents: read # checkout the scheduled source or PR head
     steps:
@@ -37,6 +40,9 @@ jobs:
           ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/head', github.event.issue.number) || github.sha }}
           persist-credentials: false
 
+      - name: Set temporary kubeconfig path
+        run: printf 'KUBECONFIG=%s/osac-dev-full.kubeconfig\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+
       - name: Install Kind
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1
         with:
@@ -45,7 +51,7 @@ jobs:
       - name: Install Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
-          version: v3.22.0
+          version: v4.2.2
 
       - name: Set up Go
         uses: ./.github/actions/setup-go
@@ -61,40 +67,14 @@ jobs:
           go install github.com/fullstorydev/grpcurl/cmd/grpcurl@v1.9.3
           echo "${GOBIN}" >> "$GITHUB_PATH"
 
-      - name: Build Fulfillment Service for this revision
-        run: docker build --build-arg GODEBUG=http2client=0 -t localhost/fulfillment-service:kind-dev-full -f fulfillment-service/Containerfile .
-
-      - name: Install dev-full infrastructure on Kind
-        env:
-          CONTAINER_TOOL: docker
-          KIND_EXPERIMENTAL_PROVIDER: docker
-          KUBECONFIG: ${{ runner.temp }}/osac-dev-full.kubeconfig
-        run: make -C osac-installer install-infra PLATFORM=kind PROFILE=dev-full NS=osac
-
-      - name: Load Fulfillment Service image into Kind
-        env:
-          KIND_EXPERIMENTAL_PROVIDER: docker
-        run: kind load docker-image localhost/fulfillment-service:kind-dev-full --name osac-dev
-
-      - name: Install OSAC and dev-full stack
-        env:
-          CONTAINER_TOOL: docker
-          KIND_EXPERIMENTAL_PROVIDER: docker
-          KUBECONFIG: ${{ runner.temp }}/osac-dev-full.kubeconfig
-        run: |
-          make -C osac-installer install-osac PLATFORM=kind PROFILE=dev-full NS=osac \
-            EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=kind-dev-full --set service.images.service.pullPolicy=IfNotPresent"
-          make -C osac-installer install-devstack PLATFORM=kind PROFILE=dev-full NS=osac
+      - name: Install kind dev-full profile
+        run: make -C osac-installer install PLATFORM=kind PROFILE=dev-full NS=osac
 
       - name: Check deployments and list tenants through the authenticated API
-        env:
-          KUBECONFIG: ${{ runner.temp }}/osac-dev-full.kubeconfig
         run: bash .github/scripts/test-kind-dev-full.sh
 
       - name: Collect cluster status on failure
         if: failure()
-        env:
-          KUBECONFIG: ${{ runner.temp }}/osac-dev-full.kubeconfig
         run: |
           if [[ ! -s "${KUBECONFIG}" ]]; then
             echo "No Kind kubeconfig was created."
@@ -105,8 +85,6 @@ jobs:
 
       - name: Delete Kind cluster
         if: always()
-        env:
-          KIND_EXPERIMENTAL_PROVIDER: docker
         run: |
           if ! command -v kind >/dev/null 2>&1; then
             echo "Kind is not installed; skipping cluster cleanup."

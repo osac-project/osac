@@ -108,6 +108,7 @@ rules:
   - keycloak-client-secrets
   verbs:
   - get
+  - patch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -349,6 +350,9 @@ spec:
     metadata:
       labels:
         app: keycloak-service
+      annotations:
+        checksum/realm: {{ .Files.Get "files/realm.json" | sha256sum | quote }}
+        checksum/realm-secret-resolver: {{ .Files.Get "files/hooks/resolve-realm-secrets.sh" | sha256sum | quote }}
     spec:
       serviceAccountName: keycloak-service
       volumes:

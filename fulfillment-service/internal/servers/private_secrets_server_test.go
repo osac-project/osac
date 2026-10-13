@@ -813,6 +813,33 @@ var _ = Describe("Private secrets server", func() {
 				return restrictedServer
 			}
 
+			newSystemSecretReaderServer := func() *PrivateSecretsServer {
+				visibility, err := auth.NewVisibility().
+					AddVisibleTenants(auth.SharedTenant, auth.SystemTenant).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				readerTenancy := auth.NewMockTenancyLogic(ctrl)
+				readerTenancy.EXPECT().DetermineAssignableTenants(gomock.Any()).
+					Return(collections.NewSet(auth.SystemTenant), nil).
+					AnyTimes()
+				readerTenancy.EXPECT().DetermineDefaultTenant(gomock.Any()).
+					Return(auth.SystemTenant, nil).
+					AnyTimes()
+				readerTenancy.EXPECT().DetermineVisibility(gomock.Any()).
+					Return(visibility, nil).
+					AnyTimes()
+
+				readerServer, buildErr := NewPrivateSecretsServer().
+					SetLogger(logger).
+					SetAttributionLogic(attribution).
+					SetTenancyLogic(readerTenancy).
+					SetSecretStore(mockStore).
+					SetHubSecretFetcher(mockHubSecretFetcher).
+					Build()
+				Expect(buildErr).ToNot(HaveOccurred())
+				return readerServer
+			}
+
 			createSharedSecret := func(name string) *privatev1.Secret {
 				mockStore.EXPECT().
 					Store(gomock.Any(), auth.SharedTenant, "", name, gomock.Any()).
@@ -822,6 +849,23 @@ var _ = Describe("Private secrets server", func() {
 						Metadata: privatev1.Metadata_builder{
 							Name:   name,
 							Tenant: auth.SharedTenant,
+						}.Build(),
+						Data: map[string][]byte{"key": []byte("value")},
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				return response.GetObject()
+			}
+
+			createSystemSecret := func(name string) *privatev1.Secret {
+				mockStore.EXPECT().
+					Store(gomock.Any(), auth.SystemTenant, "", name, gomock.Any()).
+					Return(nil)
+				response, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   name,
+							Tenant: auth.SystemTenant,
 						}.Build(),
 						Data: map[string][]byte{"key": []byte("value")},
 					}.Build(),
@@ -867,6 +911,103 @@ var _ = Describe("Private secrets server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				Expect(response.GetObject().GetData()).To(HaveKeyWithValue("key", []byte("value")))
+			})
+
+			It("allows a configured system Secret reader to retrieve a system Vault Secret", func() {
+				created := createSystemSecret("system-reader-get-secret")
+				readerServer := newSystemSecretReaderServer()
+				mockStore.EXPECT().
+					Fetch(gomock.Any(), auth.SystemTenant, "", "system-reader-get-secret").
+					Return(map[string][]byte{"key": []byte("value")}, nil)
+
+				response, err := readerServer.Get(ctx, privatev1.SecretsGetRequest_builder{
+					Id: created.GetId(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetData()).To(HaveKeyWithValue("key", []byte("value")))
+			})
+
+			It("lists only system Secrets and preserves caller filters for a configured reader", func() {
+				systemSecret := createSystemSecret("system-reader-list-secret")
+				sharedSecret := createSharedSecret("shared-reader-list-secret")
+				readerServer := newSystemSecretReaderServer()
+
+				request := privatev1.SecretsListRequest_builder{}.Build()
+				response, err := readerServer.List(ctx, request)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetItems()).To(HaveLen(1))
+				Expect(response.GetItems()[0].GetId()).To(Equal(systemSecret.GetId()))
+				Expect(response.GetItems()[0].GetMetadata().GetTenant()).To(Equal(auth.SystemTenant))
+				Expect(request.GetFilter()).To(BeEmpty())
+
+				sharedSecretFilter := "this.id == '" + sharedSecret.GetId() + "'"
+				response, err = readerServer.List(ctx, privatev1.SecretsListRequest_builder{
+					Filter: &sharedSecretFilter,
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetItems()).To(BeEmpty())
+			})
+
+			It("does not let a configured system Secret reader retrieve shared or tenant Secrets", func() {
+				sharedSecret := createSharedSecret("shared-reader-protected-secret")
+				mockStore.EXPECT().
+					Store(gomock.Any(), testTenant, "", "tenant-reader-protected-secret", gomock.Any()).
+					Return(nil)
+				tenantSecretResponse, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "tenant-reader-protected-secret",
+						}.Build(),
+						Data: map[string][]byte{"key": []byte("value")},
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				readerServer := newSystemSecretReaderServer()
+
+				_, err = readerServer.Get(ctx, privatev1.SecretsGetRequest_builder{
+					Id: sharedSecret.GetId(),
+				}.Build())
+				Expect(status.Code(err)).To(Equal(codes.PermissionDenied))
+
+				_, err = readerServer.Get(ctx, privatev1.SecretsGetRequest_builder{
+					Id: tenantSecretResponse.GetObject().GetId(),
+				}.Build())
+				Expect(status.Code(err)).To(Equal(codes.NotFound))
+			})
+
+			It("does not let a configured system Secret reader create, update, delete, or signal system Secrets", func() {
+				created := createSystemSecret("system-reader-mutation-secret")
+				readerServer := newSystemSecretReaderServer()
+
+				_, err := readerServer.Create(ctx, privatev1.SecretsCreateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   "rejected-system-reader-secret",
+							Tenant: auth.SystemTenant,
+						}.Build(),
+						Data: map[string][]byte{"key": []byte("value")},
+					}.Build(),
+				}.Build())
+				Expect(status.Code(err)).To(Equal(codes.PermissionDenied))
+
+				_, err = readerServer.Update(ctx, privatev1.SecretsUpdateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Id:   created.GetId(),
+						Data: map[string][]byte{"key": []byte("changed")},
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"data"}},
+				}.Build())
+				Expect(status.Code(err)).To(Equal(codes.PermissionDenied))
+
+				_, err = readerServer.Delete(ctx, privatev1.SecretsDeleteRequest_builder{
+					Id: created.GetId(),
+				}.Build())
+				Expect(status.Code(err)).To(Equal(codes.PermissionDenied))
+
+				_, err = readerServer.Signal(ctx, privatev1.SecretsSignalRequest_builder{
+					Id: created.GetId(),
+				}.Build())
+				Expect(status.Code(err)).To(Equal(codes.PermissionDenied))
 			})
 
 			It("hides system Secrets from tenant-scoped identities", func() {

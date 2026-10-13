@@ -16,11 +16,13 @@ package servers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
@@ -138,6 +140,23 @@ func (b *PrivateSecretsServerBuilder) Build() (result *PrivateSecretsServer, err
 // to fetch individual secrets with populated data.
 func (s *PrivateSecretsServer) List(ctx context.Context,
 	request *privatev1.SecretsListRequest) (response *privatev1.SecretsListResponse, err error) {
+	canReadSystemSecrets, err := s.canReadSystemSecrets(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if canReadSystemSecrets {
+		// The default visibility includes shared Secret metadata. Add a mandatory filter so the
+		// scoped reader's list results contain system Secrets only, even if it supplies its own filter.
+		request = proto.Clone(request).(*privatev1.SecretsListRequest)
+		filter := request.GetFilter()
+		systemTenantFilter := fmt.Sprintf("this.metadata.tenant == %q", auth.SystemTenant)
+		if filter != "" {
+			filter = "(" + filter + ") && " + systemTenantFilter
+		} else {
+			filter = systemTenantFilter
+		}
+		request.SetFilter(filter)
+	}
 	err = s.generic.List(ctx, request, &response)
 	return
 }
@@ -150,7 +169,7 @@ func (s *PrivateSecretsServer) Get(ctx context.Context,
 	}
 
 	obj := response.GetObject()
-	if err = s.authorizePlatformSecretManagement(ctx, obj); err != nil {
+	if err = s.authorizePlatformSecretRead(ctx, obj); err != nil {
 		return
 	}
 	if obj.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
@@ -344,9 +363,39 @@ func (s *PrivateSecretsServer) Delete(ctx context.Context,
 	return
 }
 
-// authorizePlatformSecretManagement restricts reads and mutations of shared and system Secrets to
-// platform administrators and controllers. Shared metadata remains listable for template references;
-// system metadata is hidden by tenant visibility filtering.
+// authorizePlatformSecretRead allows configured system Secret readers to fetch system-scoped Secret data.
+func (s *PrivateSecretsServer) authorizePlatformSecretRead(ctx context.Context, secret *privatev1.Secret) error {
+	if secret == nil {
+		return nil
+	}
+	tenant := secret.GetMetadata().GetTenant()
+	if tenant != auth.SharedTenant && tenant != auth.SystemTenant {
+		return nil
+	}
+	allowed, err := s.canManagePlatformSecrets(ctx)
+	if err != nil {
+		return err
+	}
+	if allowed {
+		return nil
+	}
+	if tenant == auth.SystemTenant {
+		allowed, err = s.canReadSystemSecrets(ctx)
+		if err != nil {
+			return err
+		}
+		if allowed {
+			return nil
+		}
+	}
+	return grpcstatus.Errorf(
+		grpccodes.PermissionDenied,
+		"shared Secrets and Secret mutations require platform administrator permissions; configured system Secret readers may only read system Secrets",
+	)
+}
+
+// authorizePlatformSecretManagement restricts creation, update, deletion, and signaling of shared and system Secrets to
+// platform administrators and controllers.
 func (s *PrivateSecretsServer) authorizePlatformSecretManagement(ctx context.Context, secret *privatev1.Secret) error {
 	if secret == nil {
 		return nil
@@ -362,7 +411,7 @@ func (s *PrivateSecretsServer) authorizePlatformSecretManagement(ctx context.Con
 	if !allowed {
 		return grpcstatus.Errorf(
 			grpccodes.PermissionDenied,
-			"%s Secrets can only be read or managed by platform administrators and controllers", tenant,
+			"%s Secrets can only be managed by platform administrators and controllers", tenant,
 		)
 	}
 	return nil
@@ -374,6 +423,14 @@ func (s *PrivateSecretsServer) canManagePlatformSecrets(ctx context.Context) (bo
 		return false, grpcstatus.Errorf(grpccodes.Internal, "failed to determine platform Secret access")
 	}
 	return assignable.Universal(), nil
+}
+
+func (s *PrivateSecretsServer) canReadSystemSecrets(ctx context.Context) (bool, error) {
+	assignable, err := s.tenancyLogic.DetermineAssignableTenants(ctx)
+	if err != nil {
+		return false, grpcstatus.Errorf(grpccodes.Internal, "failed to determine system Secret access")
+	}
+	return assignable.Finite() && assignable.Contains(auth.SystemTenant), nil
 }
 
 func (s *PrivateSecretsServer) withSavepoint(ctx context.Context, operation func(context.Context) error) error {

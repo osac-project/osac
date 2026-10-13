@@ -1,0 +1,90 @@
+{{- if .Values.netbox.enabled }}
+{{- $validationName := printf "%s-netbox-ns-validation" (include "bare-metal-fulfillment-operator.fullname" . | trunc 42 | trimSuffix "-") }}
+{{- $rbacName := printf "%s-%s" $validationName .Release.Namespace }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $validationName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bare-metal-fulfillment-operator.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-11"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $rbacName }}
+  labels:
+    {{- include "bare-metal-fulfillment-operator.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-11"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+- apiGroups: [""]
+  resources: ["namespaces"]
+  resourceNames: [{{ .Values.netbox.bmhNamespace | quote }}]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $rbacName }}
+  labels:
+    {{- include "bare-metal-fulfillment-operator.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-11"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $rbacName }}
+subjects:
+- kind: ServiceAccount
+  name: {{ $validationName }}
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $validationName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bare-metal-fulfillment-operator.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  template:
+    metadata:
+      labels:
+        {{- include "bare-metal-fulfillment-operator.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ $validationName }}
+      containers:
+      - name: validate-bmh-namespace
+        image: {{ .Values.validation.cliImage | quote }}
+        env:
+        - name: BMH_NAMESPACE
+          value: {{ .Values.netbox.bmhNamespace | quote }}
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          echo "Checking that the NetBox BMH namespace is dedicated to BMH and BMC Secrets..."
+          BMH_NAMESPACE_LABEL=$(kubectl get namespace "$BMH_NAMESPACE" -o jsonpath='{.metadata.labels.osac\.openshift\.io/bmh-secret-namespace}' 2>/dev/null || true)
+          if [ "$BMH_NAMESPACE_LABEL" != "true" ]; then
+            echo "ERROR: NetBox requires the BMH namespace to be dedicated to BareMetalHosts and their BMC credential Secrets."
+            echo "Label namespace $BMH_NAMESPACE with osac.openshift.io/bmh-secret-namespace=true."
+            exit 1
+          fi
+          echo "  NetBox BMH namespace is marked as dedicated."
+  backoffLimit: 0
+{{- end }}

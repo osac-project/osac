@@ -7,6 +7,9 @@ image:
 
 replicaCount: 1
 
+validation:
+  cliImage: "quay.io/openshift/origin-cli:4.20.0"
+
 resources:
   limits:
     cpu: 500m
@@ -24,6 +27,8 @@ secrets:
   managementConfig: "osac-management-config"
   osClouds: "osac-os-clouds"
   bcmCerts: "osac-bcm-certs"
+  netboxToken: "osac-netbox-token"
+  netboxCA: "osac-netbox-ca"
 
 configMaps:
   profiles: "osac-profiles"
@@ -34,6 +39,25 @@ env:
   aapTokenSecretKey: "token"
   aapInsecureSkipVerify: ""
   enableNetworkingProvisioning: "false"
+
+secretAPI:
+  url: "https://fulfillment-internal-api:8001"
+  # Must match the OIDC issuer configured for the Fulfillment Service.
+  issuerUrl: ""
+  caBundle:
+    configMap: "ca-bundle"
+    key: "bundle.pem"
+
+netbox:
+  enabled: false
+  # BMH namespace used for Metal3 management and BMC Secret RBAC in NetBox mode.
+  bmhNamespace: ""
+  url: ""
+  tokenSecretKey: "token"
+  tokenValue: ""
+  useExistingTokenSecret: false
+  caCert: ""
+  allowInsecureHTTP: false
 
 bcm:
   enabled: false
@@ -47,5 +71,7 @@ bcm:
 
 metal3:
   enabled: false
+  # Namespace used when Metal3 is the inventory backend. NetBox configures its
+  # Metal3 management namespace under netbox.bmhNamespace.
   namespace: ""
   hostClass: "metal3"

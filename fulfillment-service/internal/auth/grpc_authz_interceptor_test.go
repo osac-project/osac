@@ -612,6 +612,87 @@ var _ = Describe("Rego authorization interceptor", func() {
 			Entry("Public Clusters Get", "/osac.public.v1.Clusters/Get"),
 		)
 
+		createBMFToken := func() *jwt.Token {
+			return createKeycloakServiceAccountToken("osac-bmf", jwt.MapClaims{
+				"realm_access": map[string]any{
+					"roles": []any{"osac-bmf-secret-reader"},
+				},
+			})
+		}
+
+		DescribeTable(
+			"Allows the BMF Keycloak client only on private Secret Get and List",
+			func(ctx context.Context, method string) {
+				ctx = ContextWithToken(ctx, createBMFToken())
+				handled := false
+				_, err := interceptor.UnaryServer(
+					ctx,
+					nil,
+					&grpc.UnaryServerInfo{FullMethod: method},
+					func(ctx context.Context, req any) (any, error) {
+						subject := SubjectFromContext(ctx)
+						Expect(subject.User).To(Equal("service-account-osac-bmf"))
+						Expect(subject.Tenants.Universal()).To(BeFalse())
+						Expect(subject.Tenants.Contains("system")).To(BeTrue())
+						handled = true
+						return nil, nil
+					},
+				)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(handled).To(BeTrue())
+			},
+			Entry("Get", "/osac.private.v1.Secrets/Get"),
+			Entry("List", "/osac.private.v1.Secrets/List"),
+		)
+
+		DescribeTable(
+			"Denies the BMF Keycloak client outside private Secret Get and List",
+			func(ctx context.Context, method string) {
+				ctx = ContextWithToken(ctx, createBMFToken())
+				handled := false
+				_, err := interceptor.UnaryServer(
+					ctx,
+					nil,
+					&grpc.UnaryServerInfo{FullMethod: method},
+					func(ctx context.Context, req any) (any, error) {
+						handled = true
+						return nil, nil
+					},
+				)
+				Expect(err).To(HaveOccurred())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.PermissionDenied))
+				Expect(handled).To(BeFalse())
+			},
+			Entry("Create", "/osac.private.v1.Secrets/Create"),
+			Entry("Update", "/osac.private.v1.Secrets/Update"),
+			Entry("Delete", "/osac.private.v1.Secrets/Delete"),
+			Entry("Signal", "/osac.private.v1.Secrets/Signal"),
+			Entry("Other private API", "/osac.private.v1.Hubs/List"),
+			Entry("Public API", "/osac.public.v1.Secrets/Get"),
+		)
+
+		It("Denies a BMF-shaped Keycloak username without the realm role", func(ctx context.Context) {
+			token := createKeycloakServiceAccountToken("osac-bmf", nil)
+			ctx = ContextWithToken(ctx, token)
+			handled := false
+			_, err := interceptor.UnaryServer(
+				ctx,
+				nil,
+				&grpc.UnaryServerInfo{FullMethod: "/osac.private.v1.Secrets/List"},
+				func(ctx context.Context, req any) (any, error) {
+					handled = true
+					return nil, nil
+				},
+			)
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.PermissionDenied))
+			Expect(handled).To(BeFalse())
+		})
+
 		// Authorization must key on the 'osac-csi-driver' realm role, not the
 		// username. An identity that merely looks like a CSI service account -
 		// whether a regular user with a CSI-shaped username or a service account

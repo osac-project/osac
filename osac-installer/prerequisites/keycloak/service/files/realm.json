@@ -121,6 +121,10 @@
         "clientRole": false,
         "containerId": "01e6c34f-6906-4907-9cbd-2dec7a6a0e1d",
         "attributes": {}
+      },
+      {
+        "name": "osac-bmf-secret-reader",
+        "description": "BMF service role for reading system Secrets through the private API"
       }
     ],
     "client": {
@@ -802,6 +806,14 @@
       "clientRoles": {},
       "notBefore": 0,
       "groups": []
+    },
+    {
+      "username": "service-account-osac-bmf",
+      "enabled": true,
+      "serviceAccountClientId": "osac-bmf",
+      "realmRoles": [
+        "osac-bmf-secret-reader"
+      ]
     }
   ],
   "scopeMappings": [
@@ -809,6 +821,12 @@
       "clientScope": "offline_access",
       "roles": [
         "offline_access"
+      ]
+    },
+    {
+      "client": "osac-bmf",
+      "roles": [
+        "osac-bmf-secret-reader"
       ]
     }
   ],
@@ -1359,6 +1377,24 @@
         "organization",
         "offline_access",
         "microprofile-jwt"
+      ]
+    },
+    {
+      "clientId": "osac-bmf",
+      "name": "OSAC Bare Metal Fulfillment Operator",
+      "description": "Service client for BMF private Secrets API access",
+      "enabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "__OSAC_BMF_CLIENT_SECRET__",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "fullScopeAllowed": false,
+      "defaultClientScopes": [
+        "roles",
+        "osac-api"
       ]
     },
     {

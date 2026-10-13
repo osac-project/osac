@@ -170,6 +170,56 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 			})
 		})
 
+		Context("With BMF Keycloak client role", func() {
+			reader := &AuthContext{
+				Username:   "service-account-osac-bmf",
+				AuthMethod: "jwt",
+				RealmAccess: map[string]any{
+					"roles": []any{"osac-bmf-secret-reader"},
+				},
+			}
+
+			It("Allows private Secret Get and List with system scope", func(ctx context.Context) {
+				for _, method := range []string{
+					"/osac.private.v1.Secrets/Get",
+					"/osac.private.v1.Secrets/List",
+				} {
+					decision, err := evaluator.Evaluate(ctx, reader, method)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(decision).ToNot(BeNil())
+					Expect(decision.Allowed).To(BeTrue(), "method %s", method)
+					Expect(decision.SubjectTenants).To(Equal([]string{"system"}))
+				}
+			})
+
+			It("Denies Secret mutations and all other APIs", func(ctx context.Context) {
+				for _, method := range []string{
+					"/osac.private.v1.Secrets/Create",
+					"/osac.private.v1.Secrets/Update",
+					"/osac.private.v1.Secrets/Delete",
+					"/osac.private.v1.Secrets/Signal",
+					"/osac.private.v1.Hubs/List",
+					"/osac.public.v1.Secrets/Get",
+				} {
+					decision, err := evaluator.Evaluate(ctx, reader, method)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(decision).ToNot(BeNil())
+					Expect(decision.Allowed).To(BeFalse(), "method %s", method)
+				}
+			})
+
+			It("Does not grant access based on the service-account username alone", func(ctx context.Context) {
+				usernameOnly := &AuthContext{
+					Username:   "service-account-osac-bmf",
+					AuthMethod: "jwt",
+				}
+				decision, err := evaluator.Evaluate(ctx, usernameOnly, "/osac.private.v1.Secrets/List")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(decision).ToNot(BeNil())
+				Expect(decision.Allowed).To(BeFalse())
+			})
+		})
+
 		Context("With JWT user token", func() {
 			It("Allows user with organization membership", func(ctx context.Context) {
 				authContext := &AuthContext{

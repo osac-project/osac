@@ -68,17 +68,25 @@ spec:
             oc create secret generic keycloak-client-secrets \
               --from-literal=osac-controller="$(openssl rand -base64 18)" \
               --from-literal=osac-admin="$(openssl rand -base64 18)" \
-              --from-literal=osac-csi-driver="$(openssl rand -base64 18)"
+              --from-literal=osac-csi-driver="$(openssl rand -base64 18)" \
+              --from-literal=osac-bmf="$(openssl rand -base64 18)"
           elif ! oc get secret keycloak-client-secrets -o jsonpath='{.data.osac-csi-driver}' | grep -q .; then
             echo "patching keycloak-client-secrets to add osac-csi-driver key"
             CSI_DRIVER_NEW=$(openssl rand -base64 18)
             oc patch secret keycloak-client-secrets \
               -p "{\"data\":{\"osac-csi-driver\":\"$(printf '%s' "${CSI_DRIVER_NEW}" | base64 -w0)\"}}"
           fi
+          if ! oc get secret keycloak-client-secrets -o jsonpath='{.data.osac-bmf}' | grep -q .; then
+            echo "patching keycloak-client-secrets to add osac-bmf key"
+            BMF_NEW=$(openssl rand -base64 18)
+            oc patch secret keycloak-client-secrets \
+              -p "{\"data\":{\"osac-bmf\":\"$(printf '%s' "$BMF_NEW" | base64 -w0)\"}}"
+          fi
           CONTROLLER_SECRET=$(oc get secret keycloak-client-secrets -o jsonpath='{.data.osac-controller}' | base64 -d)
           ADMIN_SECRET=$(oc get secret keycloak-client-secrets -o jsonpath='{.data.osac-admin}' | base64 -d)
+          BMF_SECRET=$(oc get secret keycloak-client-secrets -o jsonpath='{.data.osac-bmf}' | base64 -d)
           CSI_DRIVER_SECRET=$(oc get secret keycloak-client-secrets -o jsonpath='{.data.osac-csi-driver}' | base64 -d)
-          [[ -n "${CONTROLLER_SECRET}" && -n "${ADMIN_SECRET}" && -n "${CSI_DRIVER_SECRET}" ]] || { echo "ERROR: keycloak-client-secrets is missing osac-controller, osac-admin, or osac-csi-driver" >&2; exit 1; }
+          [[ -n "${CONTROLLER_SECRET}" && -n "${ADMIN_SECRET}" && -n "${CSI_DRIVER_SECRET}" && -n "${BMF_SECRET}" ]] || { echo "ERROR: keycloak-client-secrets is missing a required client secret" >&2; exit 1; }
           [[ -n "${REALM_ADMIN_USERNAME}" && -n "${REALM_ADMIN_PASSWORD}" ]] || { echo "ERROR: keycloak-admin-credentials is missing admin-username or admin-password" >&2; exit 1; }
           json_escape_string() { python3 -c "import json,sys; print(json.dumps(sys.argv[1])[1:-1])" "$1"; }
           escape_sed_replacement() { printf '%s' "$1" | sed -e 's/[\&#]/\\&/g'; }
@@ -86,6 +94,7 @@ spec:
             -e "s#__OSAC_CONTROLLER_CLIENT_SECRET__#${CONTROLLER_SECRET}#" \
             -e "s#__OSAC_ADMIN_CLIENT_SECRET__#${ADMIN_SECRET}#" \
             -e "s#__OSAC_CSI_DRIVER_CLIENT_SECRET__#${CSI_DRIVER_SECRET}#" \
+            -e "s#__OSAC_BMF_CLIENT_SECRET__#${BMF_SECRET}#" \
             -e "s#__OSAC_REALM_ADMIN_USERNAME__#$(escape_sed_replacement "$(json_escape_string "${REALM_ADMIN_USERNAME}")")#" \
             -e "s#__OSAC_REALM_ADMIN_PASSWORD__#$(escape_sed_replacement "$(json_escape_string "${REALM_ADMIN_PASSWORD}")")#" \
             /realm-raw/realm.json > /realm/realm.json

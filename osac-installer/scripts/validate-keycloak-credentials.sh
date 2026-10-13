@@ -103,20 +103,71 @@ assert_not_contains "${OVERRIDE_RENDER}" '          value: "DemoUserPass456"' "O
 echo "=== Test 3: realm.json placeholders present, no baked-in credential hash ==="
 assert_contains "${DEFAULT_RENDER}" '__OSAC_REALM_ADMIN_USERNAME__' "realm.json admin username placeholder"
 assert_contains "${DEFAULT_RENDER}" '__OSAC_REALM_ADMIN_PASSWORD__' "realm.json admin password placeholder"
+assert_contains "${DEFAULT_RENDER}" '__OSAC_BMF_CLIENT_SECRET__' "BMF client secret placeholder"
 assert_not_contains "${DEFAULT_RENDER}" 'ETe90wgj32P' "Static argon2 password hash must be removed from realm.json"
 
 echo "=== Test 4: resolve-realm-secrets.sh substitution survives special characters ==="
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
+printf '%s\n' "${DEFAULT_RENDER}" > "${TMP_DIR}/default-render.yaml"
+python3 - "${TMP_DIR}/default-render.yaml" <<'PY'
+import json
+import sys
+import yaml
+
+docs = list(yaml.safe_load_all(open(sys.argv[1], encoding="utf-8")))
+def find(kind, name, namespace=None):
+    return next(
+        doc for doc in docs
+        if doc and doc.get("kind") == kind
+        and doc.get("metadata", {}).get("name") == name
+        and (namespace is None or doc.get("metadata", {}).get("namespace") == namespace)
+    )
+
+realm_config = find("ConfigMap", "keycloak-realm", "keycloak")
+realm = json.loads(realm_config["data"]["realm.json"])
+client = next(client for client in realm["clients"] if client["clientId"] == "osac-bmf")
+assert client["serviceAccountsEnabled"] is True
+assert client["fullScopeAllowed"] is False
+assert "osac-api" in client["defaultClientScopes"]
+bmf_scope = next(mapping for mapping in realm["scopeMappings"] if mapping.get("client") == "osac-bmf")
+assert bmf_scope["roles"] == ["osac-bmf-secret-reader"]
+assert any(role["name"] == "osac-bmf-secret-reader" for role in realm["roles"]["realm"])
+service_account = next(user for user in realm["users"] if user.get("serviceAccountClientId") == "osac-bmf")
+assert "osac-bmf-secret-reader" in service_account["realmRoles"]
+
+credentials = find("Secret", "osac-bmf-secret-api-credentials", "osac")
+assert credentials["metadata"]["annotations"]["osac.openshift.io/tenant"] == "system"
+assert credentials["metadata"]["annotations"]["osac.openshift.io/owner-reference"] == "Deployment/bmf-operator-controller-manager"
+
+source_role = find("Role", "osac-infra-create-bmf-secret-api-creds", "keycloak")
+assert source_role["rules"] == [{
+    "apiGroups": [""], "resources": ["secrets"],
+    "resourceNames": ["keycloak-client-secrets"], "verbs": ["get"],
+}]
+target_role = find("Role", "osac-infra-create-bmf-secret-api-creds", "osac")
+assert target_role["rules"] == [{
+    "apiGroups": [""], "resources": ["secrets"],
+    "resourceNames": ["osac-bmf-secret-api-credentials"], "verbs": ["get", "patch"],
+}]
+job = find("Job", "osac-infra-create-bmf-secret-api-creds")
+assert job["metadata"]["annotations"]["helm.sh/hook-weight"] == "20"
+scripts = find("ConfigMap", "osac-infra-hook-scripts")
+copy_script = scripts["data"]["create-bmf-secret-api-credentials.sh"]
+assert "jsonpath='{.data.osac-bmf}'" in copy_script
+assert "chmod 600" in copy_script
+assert "--from-file=client-secret=" in copy_script
+PY
+
 cat >"${TMP_DIR}/realm-raw.json" <<'EOF'
-{"username": "__OSAC_REALM_ADMIN_USERNAME__", "credentials": [{"type": "password", "value": "__OSAC_REALM_ADMIN_PASSWORD__", "temporary": false}]}
+{"username": "__OSAC_REALM_ADMIN_USERNAME__", "credentials": [{"type": "password", "value": "__OSAC_REALM_ADMIN_PASSWORD__", "temporary": false}], "client": {"secret": "__OSAC_BMF_CLIENT_SECRET__"}}
 EOF
 
 # Stub `oc` so the hook script's client-secret bootstrap path is exercised
 # without a real cluster: existence check reports "not found" once (forcing
 # the generate branch), then jsonpath lookups return fixed base64 values for
-# all four client secrets.
+# all five client secrets.
 mkdir -p "${TMP_DIR}/bin"
 cat >"${TMP_DIR}/bin/oc" <<'EOF'
 #!/usr/bin/env bash
@@ -125,9 +176,31 @@ case "${args}" in
   *"-o jsonpath="*osac-controller*) printf '%s' "$(printf 'controller-secret' | base64)" ;;
   *"-o jsonpath="*osac-admin*)      printf '%s' "$(printf 'admin-secret' | base64)" ;;
   *"-o jsonpath="*osac-csi-driver*) printf '%s' "$(printf 'csi-driver-secret' | base64)" ;;
+  *"-o jsonpath="*osac-bmf*)
+    if [[ "${OC_TEST_UPGRADE:-0}" == "1" ]]; then
+      if [[ -f "${OC_PATCH_CAPTURE}" ]]; then
+        python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['data']['osac-bmf'], end='')" "${OC_PATCH_CAPTURE}"
+      fi
+    else
+      printf '%s' "$(printf 'bmf-client-secret' | base64)"
+    fi
+    ;;
   *"-o jsonpath="*osac-ui-backend*) printf '%s' "$(printf 'ui-backend-secret' | base64)" ;;
+  *"patch secret keycloak-client-secrets"*)
+    previous=''
+    for arg in "$@"; do
+      if [[ "${previous}" == "-p" ]]; then
+        printf '%s' "${arg}" > "${OC_PATCH_CAPTURE:?OC_PATCH_CAPTURE is required for upgrade tests}"
+        exit 0
+      fi
+      previous="${arg}"
+    done
+    exit 2
+    ;;
   *"create secret"*)                exit 0 ;;
-  *"get secret"*)                   exit 1 ;;  # existence check: force the "generate" branch
+  *"get secret"*)
+    if [[ "${OC_TEST_UPGRADE:-0}" == "1" ]]; then exit 0; fi
+    exit 1 ;;  # default mode: force the "generate" branch
   *)                                exit 0 ;;
 esac
 EOF
@@ -151,10 +224,12 @@ if [[ -f "${TMP_DIR}/realm-resolved.json" ]]; then
         python3 -c "
 import json, os, sys
 try:
-    decoded = json.load(open('${TMP_DIR}/realm-resolved.json'))['credentials'][0]['value']
+    resolved = json.load(open('${TMP_DIR}/realm-resolved.json'))
+    decoded = resolved['credentials'][0]['value']
+    bmf_secret = resolved['client']['secret']
 except Exception:
     sys.exit(2)
-sys.exit(0 if decoded == os.environ['EXPECTED_REALM_PASSWORD'] else 1)
+sys.exit(0 if decoded == os.environ['EXPECTED_REALM_PASSWORD'] and bmf_secret == 'bmf-client-secret' else 1)
 "
     case $? in
         2) fail "Resolved realm.json is not valid JSON after substituting a password with sed/JSON metacharacters" ;;
@@ -164,6 +239,33 @@ sys.exit(0 if decoded == os.environ['EXPECTED_REALM_PASSWORD'] else 1)
 else
     fail "resolve-realm-secrets.sh did not produce ${TMP_DIR}/realm-resolved.json"
 fi
+
+echo "=== Test 4b: existing Keycloak Secret gains the BMF key on upgrade ==="
+rm -f "${TMP_DIR}/bmf-upgrade-patch.json" "${TMP_DIR}/realm-upgrade-resolved.json"
+OC_TEST_UPGRADE=1 \
+OC_PATCH_CAPTURE="${TMP_DIR}/bmf-upgrade-patch.json" \
+PATH="${TMP_DIR}/bin:${PATH}" \
+REALM_RAW_PATH="${TMP_DIR}/realm-raw.json" \
+REALM_OUTPUT_PATH="${TMP_DIR}/realm-upgrade-resolved.json" \
+REALM_ADMIN_USERNAME="demo-admin" \
+REALM_ADMIN_PASSWORD="upgrade-password" \
+    bash "${CHART_DIR}/files/hooks/resolve-realm-secrets.sh" >/dev/null 2>&1 || {
+        fail "resolve-realm-secrets.sh failed to add the BMF client key to an existing Secret"
+    }
+python3 - "${TMP_DIR}/bmf-upgrade-patch.json" "${TMP_DIR}/realm-upgrade-resolved.json" <<'PY'
+import base64
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    patch = json.load(f)
+assert set(patch["data"]) == {"osac-bmf"}
+secret = base64.b64decode(patch["data"]["osac-bmf"]).decode()
+assert secret
+with open(sys.argv[2], encoding="utf-8") as f:
+    realm = json.load(f)
+assert realm["client"]["secret"] == secret
+PY
 
 echo "=== Test 5: demo-user reset-password JSON body handles quote/backslash chars ==="
 # Extracts and executes the ACTUAL embedded set-passwords.sh scripts (not a
@@ -270,8 +372,22 @@ echo "=== Test 6: static reference manifest's realm.json and resolve-realm-secre
 # a future edit to the static copy alone could silently diverge unnoticed.
 
 STATIC_REALM_JSON=$(cat "${SCRIPT_DIR}/../prerequisites/keycloak/service/files/realm.json")
+python3 - "${SCRIPT_DIR}/../prerequisites/keycloak/service/files/realm.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    realm = json.load(f)
+client = next(client for client in realm["clients"] if client["clientId"] == "osac-bmf")
+assert client["fullScopeAllowed"] is False
+bmf_scope = next(mapping for mapping in realm["scopeMappings"] if mapping.get("client") == "osac-bmf")
+assert bmf_scope["roles"] == ["osac-bmf-secret-reader"]
+service_account = next(user for user in realm["users"] if user.get("serviceAccountClientId") == "osac-bmf")
+assert "osac-bmf-secret-reader" in service_account["realmRoles"]
+PY
 assert_contains "${STATIC_REALM_JSON}" '__OSAC_REALM_ADMIN_USERNAME__' "Static realm.json admin username placeholder"
 assert_contains "${STATIC_REALM_JSON}" '__OSAC_REALM_ADMIN_PASSWORD__' "Static realm.json admin password placeholder"
+assert_contains "${STATIC_REALM_JSON}" '__OSAC_BMF_CLIENT_SECRET__' "Static realm.json BMF client secret placeholder"
 assert_not_contains "${STATIC_REALM_JSON}" 'ETe90wgj32P' "Static reference manifest's realm.json must not retain the static argon2 password hash"
 
 STATIC_RESOLVE_SCRIPT=$(python3 -c "
@@ -314,10 +430,12 @@ if [[ -n "${STATIC_RESOLVE_SCRIPT}" ]]; then
             python3 -c "
 import json, os, sys
 try:
-    decoded = json.load(open('${TMP_DIR}/static-realm-resolved.json'))['credentials'][0]['value']
+    resolved = json.load(open('${TMP_DIR}/static-realm-resolved.json'))
+    decoded = resolved['credentials'][0]['value']
+    bmf_secret = resolved['client']['secret']
 except Exception:
     sys.exit(2)
-sys.exit(0 if decoded == os.environ['EXPECTED_REALM_PASSWORD'] else 1)
+sys.exit(0 if decoded == os.environ['EXPECTED_REALM_PASSWORD'] and bmf_secret == 'bmf-client-secret' else 1)
 "
         case $? in
             2) fail "Static reference manifest's resolved realm.json is not valid JSON after substituting a password with sed/JSON metacharacters" ;;
@@ -339,6 +457,141 @@ assert_secret_key_ref "${STATIC_DEPLOYMENT}" Deployment keycloak-service keycloa
 assert_secret_key_ref "${STATIC_DEPLOYMENT}" Deployment keycloak-service keycloak KEYCLOAK_ADMIN_PASSWORD keycloak-admin-credentials admin-password "Static deployment.yaml's KEYCLOAK_ADMIN_PASSWORD must source from keycloak-admin-credentials/admin-password"
 assert_secret_key_ref "${STATIC_DEPLOYMENT}" Deployment keycloak-service resolve-realm-secrets REALM_ADMIN_USERNAME keycloak-admin-credentials admin-username "Static deployment.yaml's REALM_ADMIN_USERNAME must source from keycloak-admin-credentials/admin-username"
 assert_secret_key_ref "${STATIC_DEPLOYMENT}" Deployment keycloak-service resolve-realm-secrets REALM_ADMIN_PASSWORD keycloak-admin-credentials admin-password "Static deployment.yaml's REALM_ADMIN_PASSWORD must source from keycloak-admin-credentials/admin-password"
+
+echo "=== Test 8: snapshot refresh creates the BMF client credentials Secret with system metadata ==="
+python3 - "${SCRIPT_DIR}/refresh-after-snapshot.py" <<'PY'
+import base64
+import importlib.util
+import json
+import stat
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+spec = importlib.util.spec_from_file_location("refresh_after_snapshot_test", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+
+with tempfile.TemporaryDirectory() as tmp_dir:
+    temp = Path(tmp_dir)
+    values_file = temp / "values.yaml"
+    values_file.write_text("{}\n", encoding="utf-8")
+    (temp / "license.zip").write_bytes(b"test license")
+    realm_file = temp / "realm.json"
+    realm_file.write_text(json.dumps({"clients": [
+        {"clientId": "osac-bmf", "serviceAccountsEnabled": True},
+        {"clientId": "osac-controller", "serviceAccountsEnabled": True},
+    ]}), encoding="utf-8")
+    config = module.RefreshConfig(
+        values_file=str(values_file), namespace="osac-snapshot",
+        cluster_domain="example.test", realm_json=str(realm_file),
+    )
+    oc_calls = []
+    secret_calls = []
+
+    def fake_oc(*args, check=True, capture=False):
+        oc_calls.append(args)
+        if args[:3] == ("get", "secret", "keycloak-client-secrets"):
+            jsonpath = args[args.index("-o") + 1]
+            key = jsonpath.removeprefix("jsonpath={.data.").removesuffix("}")
+            output = base64.b64encode(("secret-" + key).encode()).decode()
+            return subprocess.CompletedProcess(args, 0, stdout=output, stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    def capture_secret(name, namespace, *args):
+        entry = {"name": name, "namespace": namespace, "args": args}
+        for arg in args:
+            prefix = "--from-file=client-secret="
+            if arg.startswith(prefix):
+                path = Path(arg[len(prefix):])
+                entry["client_secret"] = path.read_text(encoding="utf-8")
+                entry["client_secret_mode"] = stat.S_IMODE(path.stat().st_mode)
+        secret_calls.append(entry)
+
+    module.oc = fake_oc
+    module.oc_apply_secret = capture_secret
+    module.create_secrets(config)
+
+    fulfillment = next(call for call in secret_calls if call["name"] == "fulfillment-controller-credentials")
+    assert "--from-literal=client-id=osac-controller" in fulfillment["args"]
+    assert "--from-literal=client-secret=secret-osac-controller" in fulfillment["args"]
+    bmf = next(call for call in secret_calls if call["name"] == "osac-bmf-secret-api-credentials")
+    assert bmf["namespace"] == "osac-snapshot"
+    assert "--from-literal=client-id=osac-bmf" in bmf["args"]
+    assert bmf["client_secret"] == "secret-osac-bmf"
+    assert bmf["client_secret_mode"] == 0o600
+    annotate = next(call for call in oc_calls if call[:2] == ("annotate", "secret/osac-bmf-secret-api-credentials"))
+    assert "osac.openshift.io/tenant=system" in annotate
+    assert "osac.openshift.io/owner-reference=Deployment/bmf-operator-controller-manager" in annotate
+    assert "--overwrite" in annotate
+PY
+
+echo "=== Test 9: BMF credential copy hook writes the expected Kubernetes Secret ==="
+mkdir -p "${TMP_DIR}/copy-bin"
+cat >"${TMP_DIR}/copy-bin/oc" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  get)
+    args="$*"
+    [[ "${args}" == *"jsonpath="*"osac-bmf"* && "${args}" == *"-n keycloak"* ]] || exit 2
+    printf '%s' "$(printf '%s' 'test-bmf-client-secret' | base64 -w0)"
+    ;;
+  create)
+    client_secret_file=""
+    namespace=""
+    previous=""
+    for arg in "$@"; do
+      if [[ "${previous}" == "-n" ]]; then namespace="${arg}"; fi
+      case "${arg}" in
+        --from-file=client-secret=*) client_secret_file="${arg#--from-file=client-secret=}" ;;
+      esac
+      previous="${arg}"
+    done
+    [[ "${namespace}" == "${OSAC_NAMESPACE}" && -n "${client_secret_file}" ]]
+    cp "${client_secret_file}" "${OC_SECRET_CAPTURE}"
+    stat -c '%a' "${client_secret_file}" > "${OC_MODE_CAPTURE}"
+    client_secret_b64="$(base64 -w0 "${client_secret_file}")"
+    client_id_b64="$(printf '%s' 'osac-bmf' | base64 -w0)"
+    printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: osac-bmf-secret-api-credentials\n  namespace: %s\ntype: Opaque\ndata:\n  client-id: %s\n  client-secret: %s\n' \
+      "${OSAC_NAMESPACE}" "${client_id_b64}" "${client_secret_b64}"
+    ;;
+  apply)
+    cat > "${OC_APPLY_CAPTURE}"
+    ;;
+  *)
+    echo "unexpected oc command: ${*}" >&2
+    exit 2
+    ;;
+esac
+EOF
+chmod +x "${TMP_DIR}/copy-bin/oc"
+PATH="${TMP_DIR}/copy-bin:$PATH" \
+OSAC_NAMESPACE="osac-test" \
+OC_SECRET_CAPTURE="${TMP_DIR}/captured-bmf-client-secret" \
+OC_MODE_CAPTURE="${TMP_DIR}/captured-bmf-client-secret-mode" \
+OC_APPLY_CAPTURE="${TMP_DIR}/captured-bmf-credentials.yaml" \
+    bash "${SCRIPT_DIR}/../charts/osac-infra/files/hooks/create-bmf-secret-api-credentials.sh"
+
+python3 - "${TMP_DIR}/captured-bmf-credentials.yaml" "${TMP_DIR}/captured-bmf-client-secret" "${TMP_DIR}/captured-bmf-client-secret-mode" <<'PY'
+import base64
+import sys
+import yaml
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    secret = yaml.safe_load(f)
+assert secret["kind"] == "Secret"
+assert secret["metadata"]["name"] == "osac-bmf-secret-api-credentials"
+assert secret["metadata"]["namespace"] == "osac-test"
+assert base64.b64decode(secret["data"]["client-id"]).decode() == "osac-bmf"
+assert base64.b64decode(secret["data"]["client-secret"]).decode() == "test-bmf-client-secret"
+with open(sys.argv[2], encoding="utf-8") as f:
+    assert f.read() == "test-bmf-client-secret"
+with open(sys.argv[3], encoding="utf-8") as f:
+    assert f.read().strip() == "600"
+PY
 
 echo
 if [[ "${FAILURES}" -gt 0 ]]; then

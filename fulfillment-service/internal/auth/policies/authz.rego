@@ -163,6 +163,22 @@ is_csi if {
   role in csi_client_roles
 }
 
+# The BMF Keycloak service account receives this realm role. Role-based matching avoids granting
+# Secret access to an identity that merely uses the service-account username.
+bmf_secret_reader_roles := {
+  "osac-bmf-secret-reader",
+}
+default is_bmf_secret_reader = false
+is_bmf_secret_reader if {
+  input.auth.identity.authnMethod == "jwt"
+  some role in subject_realm_roles
+  role in bmf_secret_reader_roles
+  not is_admin
+  not is_tenant_admin
+  not is_tenant_idp_manager
+  not is_csi
+}
+
 # Check if an account is a regular client (no admin, tenant management, or CSI roles):
 default is_client = false
 is_client if {
@@ -170,6 +186,7 @@ is_client if {
   not is_tenant_admin
   not is_tenant_idp_manager
   not is_csi
+  not is_bmf_secret_reader
 }
 
 # Check if account has client-level permissions (clients, tenant admins, or IdP managers):
@@ -358,6 +375,15 @@ allow if {
   is_admin
 }
 
+# The BMF service client may only read system-scoped Secrets through the private API.
+allow if {
+  is_bmf_secret_reader
+  grpc_method in {
+    "/osac.private.v1.Secrets/Get",
+    "/osac.private.v1.Secrets/List",
+  }
+}
+
 # The CSI driver identity may only manage volumes through the private Volume API
 # (OSAC-3279). Tenant scoping is enforced by the application layer via the identity's
 # organization claim; this rule only gates the permitted method set. Publish/unpublish on
@@ -461,9 +487,13 @@ subject_tenant_result = ["*"] if {
 subject_tenant_result = ["*"] if {
   is_csi
 }
+subject_tenant_result = ["system"] if {
+  is_bmf_secret_reader
+}
 subject_tenant_result = subject_tenants if {
   not is_admin
   not is_csi
+  not is_bmf_secret_reader
   input.auth.identity.authnMethod == "jwt"
 }
 subject_tenant_result = [split(input.auth.identity.user.username, ":")[2]] if {

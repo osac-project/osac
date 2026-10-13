@@ -438,6 +438,8 @@ bmf:
     inventoryConfig: "osac-inventory-config"
     managementConfig: "osac-management-config"
     osClouds: "osac-os-clouds"
+    netboxToken: "osac-netbox-token"
+    netboxCA: "osac-netbox-ca"
   # Kind/IT only -- see templates/bmf-metal3-test-secrets.yaml
   testBackend:
     metal3:
@@ -464,10 +466,31 @@ bmf:
     insecureSkipVerify: false
     hostClass: "bcm"
     bmhNamespace: ""
+  secretAPI:
+    url: "https://fulfillment-internal-api:8001"
+    # Keep aligned with service.auth.issuerUrl; tpl resolves the cluster domain at render time.
+    issuerUrl: "https://keycloak-keycloak.{{ .Values.global.clusterDomain }}/realms/osac"
+    caBundle:
+      configMap: "ca-bundle"
+      key: "bundle.pem"
+  netbox:
+    enabled: false
+    bmhNamespace: ""
+    url: ""
+    tokenSecretKey: "token"
+    tokenValue: ""
+    useExistingTokenSecret: false
+    caCert: ""
+    allowInsecureHTTP: false
   metal3:
     enabled: false
+    # Namespace where Metal3 inventory reads BareMetalHost resources.
+    # NetBox configures its Metal3 management namespace under bmf.netbox.bmhNamespace.
     namespace: ""
     hostClass: "metal3"
+  validation:
+    # Image used by the BMF NetBox BMH namespace pre-install check.
+    cliImage: "quay.io/openshift/origin-cli:4.20.0"
 
 # --- Validation hooks ---
 validation:

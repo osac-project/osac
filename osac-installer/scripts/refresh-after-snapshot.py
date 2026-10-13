@@ -21,6 +21,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -466,13 +467,13 @@ def keycloak_sync(config: RefreshConfig) -> None:
 
 
 def create_secrets(config: RefreshConfig) -> None:
-    """Create fulfillment, AAP license, and pull secrets for the namespace."""
+    """Create fulfillment, BMF, AAP license, and pull secrets for the namespace."""
     print("  Creating secrets...")
     realm = json.loads((REPO_ROOT / config.realm_json).read_text())
 
-    fc_client = next((c for c in realm["clients"] if c.get("serviceAccountsEnabled")), None)
+    fc_client = next((c for c in realm["clients"] if c.get("clientId") == "osac-controller"), None)
     if not fc_client:
-        raise RuntimeError("No client with serviceAccountsEnabled in realm.json")
+        raise RuntimeError("No osac-controller client in realm.json")
     fc_id: str = fc_client["clientId"]
 
     # realm.json ships with an __OSAC_CONTROLLER_CLIENT_SECRET__-style placeholder;
@@ -487,6 +488,32 @@ def create_secrets(config: RefreshConfig) -> None:
     oc_apply_secret("fulfillment-controller-credentials", config.namespace,
                     f"--from-literal=client-id={fc_id}",
                     f"--from-literal=client-secret={fc_secret}")
+
+    bmf_secret_result = oc(
+        "get", "secret", "keycloak-client-secrets", "-n", config.keycloak_ns,
+        "-o", "jsonpath={.data.osac-bmf}", capture=True,
+    )
+    bmf_secret = base64.b64decode(bmf_secret_result.stdout.strip()).decode()
+    if not bmf_secret:
+        raise RuntimeError(f"No key 'osac-bmf' in keycloak-client-secrets -n {config.keycloak_ns}")
+
+    with tempfile.TemporaryDirectory(prefix="osac-bmf-credentials-") as credentials_dir:
+        client_secret_path = Path(credentials_dir) / "client-secret"
+        client_secret_path.write_text(bmf_secret, encoding="utf-8")
+        client_secret_path.chmod(0o600)
+        oc_apply_secret(
+            "osac-bmf-secret-api-credentials",
+            config.namespace,
+            "--from-literal=client-id=osac-bmf",
+            f"--from-file=client-secret={client_secret_path}",
+        )
+    oc(
+        "annotate", "secret/osac-bmf-secret-api-credentials",
+        "-n", config.namespace,
+        "osac.openshift.io/tenant=system",
+        "osac.openshift.io/owner-reference=Deployment/bmf-operator-controller-manager",
+        "--overwrite",
+    )
 
     license_path = Path(config.values_dir) / "license.zip"
     if not license_path.exists():

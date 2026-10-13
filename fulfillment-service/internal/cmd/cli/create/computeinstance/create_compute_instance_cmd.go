@@ -259,6 +259,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		SetConnection(conn).
 		AddPackages(c.settings.Packages()).
 		SetTenantFunc(config.TenantFromContext).
+		SetProjectFunc(config.ProjectFromContext).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create reflection tool: %w", err)

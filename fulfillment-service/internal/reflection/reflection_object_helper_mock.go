@@ -171,6 +171,20 @@ func (mr *MockObjectHelperMockRecorder) GetName(object any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetName", reflect.TypeOf((*MockObjectHelper)(nil).GetName), object)
 }
 
+// GetProject mocks base method.
+func (m *MockObjectHelper) GetProject(object proto.Message) string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetProject", object)
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// GetProject indicates an expected call of GetProject.
+func (mr *MockObjectHelperMockRecorder) GetProject(object any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetProject", reflect.TypeOf((*MockObjectHelper)(nil).GetProject), object)
+}
+
 // GetTenant mocks base method.
 func (m *MockObjectHelper) GetTenant(object proto.Message) string {
 	m.ctrl.T.Helper()
@@ -197,6 +211,20 @@ func (m *MockObjectHelper) Instance() proto.Message {
 func (mr *MockObjectHelperMockRecorder) Instance() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Instance", reflect.TypeOf((*MockObjectHelper)(nil).Instance))
+}
+
+// IsProjectScoped mocks base method.
+func (m *MockObjectHelper) IsProjectScoped() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsProjectScoped")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsProjectScoped indicates an expected call of IsProjectScoped.
+func (mr *MockObjectHelperMockRecorder) IsProjectScoped() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsProjectScoped", reflect.TypeOf((*MockObjectHelper)(nil).IsProjectScoped))
 }
 
 // IsTenantScoped mocks base method.
@@ -254,6 +282,18 @@ func (m *MockObjectHelper) Plural() string {
 func (mr *MockObjectHelperMockRecorder) Plural() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Plural", reflect.TypeOf((*MockObjectHelper)(nil).Plural))
+}
+
+// SetProject mocks base method.
+func (m *MockObjectHelper) SetProject(object proto.Message, project string) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetProject", object, project)
+}
+
+// SetProject indicates an expected call of SetProject.
+func (mr *MockObjectHelperMockRecorder) SetProject(object, project any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetProject", reflect.TypeOf((*MockObjectHelper)(nil).SetProject), object, project)
 }
 
 // SetTenant mocks base method.

@@ -144,6 +144,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		SetConnection(c.conn).
 		AddPackages(cfg.Packages()).
 		SetTenantFunc(config.TenantFromContext).
+		SetProjectFunc(config.ProjectFromContext).
 		UseGetForStructuredOutput(&publicv1.Secret{}).
 		Build()
 	if err != nil {

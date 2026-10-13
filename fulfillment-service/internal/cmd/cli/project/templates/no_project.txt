@@ -1,0 +1,9 @@
+No project is currently set.
+
+To list available projects:
+
+  {{ binary }} get projects
+
+To set a project:
+
+  {{ binary }} project <name>

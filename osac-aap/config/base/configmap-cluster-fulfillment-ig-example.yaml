@@ -8,6 +8,17 @@ data:
   EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS: "box.massopen.cloud"
   EXTERNAL_ACCESS_API_INTERNAL_NETWORK: "hypershift"
 
+  # -- DNS readiness checks --
+  # Recursive DNS resolver queried directly by the external_access DNS waits.
+  # When set, waits query this resolver (dig @<DNS_SERVER>) instead of the zone
+  # authoritative nameserver, so restricted environments that cannot reach the
+  # authoritative server over port 53 can still verify records. Empty uses the
+  # system resolver.
+  DNS_SERVER: ""
+  # Opt in to direct authoritative-nameserver DNS waits (bypasses resolver
+  # negative cache). Ignored when DNS_SERVER is set.
+  EXTERNAL_ACCESS_DNS_WAIT_USE_AUTHORITATIVE: "false"
+
   # -- Hosted cluster --
   HOSTED_CLUSTER_BASE_DOMAIN: "box.massopen.cloud"
   HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: "HighlyAvailable"

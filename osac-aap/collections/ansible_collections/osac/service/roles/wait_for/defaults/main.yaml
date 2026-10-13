@@ -1,5 +1,12 @@
+# The total DNS wait budget (wait_for_dns_retries * wait_for_dns_delay) must
+# exceed the zone's negative-cache (SOA minimum) TTL so that a record which
+# appears after an initial NXDOMAIN is still detected when querying a recursive
+# resolver, without a global cache flush. 180 * 10s = 1800s (30 min) covers the
+# typical 5-15 min negative-cache TTL.
 wait_for_dns_retries: 180
 wait_for_dns_delay: 10
+# Optional DNS server for "dig @<server>" in the DNS wait. Empty uses the
+# system resolver. See meta/argument_specs.yaml for the full description.
 wait_for_dns_server: ""
 wait_for_cluster_retries: 180
 wait_for_cluster_delay: 10

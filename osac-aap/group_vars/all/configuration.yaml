@@ -85,6 +85,21 @@ server_ssh_bastion_user: "{{ lookup('env', 'SERVER_SSH_BASTION_USER') }}"
 dns_class: "{{ lookup('env', 'DNS_CLASS', default='dns.route53.dns') }}"
 dns_zone: "{{ lookup('env', 'DNS_ZONE', default=external_access_base_domain) }}"
 
+# Recursive DNS resolver used for external_access DNS readiness checks.
+# When set, the DNS wait queries this resolver directly (dig @<dns_server>)
+# instead of the zone's authoritative nameserver, so deployments in
+# environments that block direct access to authoritative servers can still
+# verify records through an approved internal resolver. Empty (default) uses
+# the execution environment's system resolver. Takes precedence over
+# external_access_dns_wait_use_authoritative.
+dns_server: "{{ lookup('env', 'DNS_SERVER', default='') }}"
+
+# Opt in to querying the zone's authoritative nameserver directly for
+# external_access DNS readiness checks (bypasses any resolver negative cache).
+# Ignored when dns_server is set. Disabled by default so restricted
+# environments are not required to reach authoritative servers over port 53.
+external_access_dns_wait_use_authoritative: "{{ lookup('env', 'EXTERNAL_ACCESS_DNS_WAIT_USE_AUTHORITATIVE', default='false') | bool }}"
+
 # =============================================================================
 # NICo (NVIDIA Bare Metal Manager) Configuration
 # =============================================================================

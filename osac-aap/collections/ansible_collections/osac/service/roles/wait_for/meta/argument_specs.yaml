@@ -7,9 +7,15 @@ argument_specs:
       wait_for_dns_server:
         type: str
         description: >-
-          DNS server to query directly (e.g. an authoritative nameserver).
-          Bypasses the local resolver's negative cache. Empty string (default)
-          uses the system resolver.
+          DNS server to query directly via "dig @<server>" -- either the
+          deployment's configured recursive resolver (dns_server) or a zone
+          authoritative nameserver. Querying a recursive resolver avoids
+          requiring direct access to authoritative servers; querying an
+          authoritative server bypasses the local resolver's negative cache.
+          Empty string (default) uses the system resolver, in which case a
+          record that appears after an initial NXDOMAIN is still detected once
+          the resolver's negative-cache TTL expires, provided
+          wait_for_dns_retries * wait_for_dns_delay exceeds that TTL.
       wait_for_dns_retries:
         type: int
       wait_for_dns_delay:

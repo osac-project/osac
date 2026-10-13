@@ -86,6 +86,8 @@
   no_log: true
   when: >-
     external_access_base_domain in external_access_supported_base_domains | default([])
+    and external_access_dns_wait_use_authoritative | bool
+    and (dns_server | default('') | length == 0)
 
 - name: Wait for DNS records
   when: >-
@@ -95,7 +97,14 @@
     tasks_from: wait_for_dns
   vars:
     wait_for_dns_record: "{{ item }}"
-    wait_for_dns_server: "{{ (_external_access_zone_ns.stdout_lines | default([])) | first | default('') | regex_replace('\\.$', '') }}"
+    wait_for_dns_server: >-
+      {{
+        dns_server if (dns_server | default('') | length > 0)
+        else (
+          (_external_access_zone_ns.stdout_lines | default([]))
+          | first | default('') | regex_replace('\.$', '')
+        )
+      }}
   loop:
     - "{{ external_access_api_domain }}"
     - "{{ external_access_api_int_domain }}"

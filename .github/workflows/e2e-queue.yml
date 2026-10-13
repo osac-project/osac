@@ -3,9 +3,9 @@
 # own commit; the queue entry is that change on top of the latest main (and of the entries ahead of it), so it is tested
 # again, with no approval to wait for. The pull request's own E2E runs from e2e-pr.yml.
 #
-# `plan` lists the suites the entry needs by the rules in .github/e2e-policy.yml, the suites run as one job each, and the
-# job named `E2E` is the required check: it passes when every suite that was needed passed. An entry that touches only
-# docs needs no suite and the check passes at once.
+# `plan` lists the suites the entry needs by the rules in .github/e2e-policy.yml and the suites run as one job each.
+# The required check `E2E` is written by the OSAC CI app and passes when every suite that was needed passed. An entry
+# that touches only docs needs no suite and the check passes at once.
 name: E2E for the merge queue
 
 on:
@@ -110,20 +110,24 @@ jobs:
       repo: ${{ github.repository }}
       sha: ${{ github.event.merge_group.head_sha }}
 
-  # The required check. It fails when a suite failed, and also when the plan did not run, which would otherwise skip
+  # Adds up the suites. It fails when a suite failed, and also when the plan did not run, which would otherwise skip
   # every suite and let the entry pass untested.
-  E2E:
-    name: E2E
+  suites-result:
+    name: Suites result
     if: ${{ !cancelled() }}
     needs: [plan, vmaas, caas, bmaas]
     runs-on: ubuntu-latest
     permissions: {}
+    outputs:
+      suites: ${{ steps.sum.outputs.suites }}
     steps:
       - name: Every suite that was needed passed
+        id: sum
         env:
           RESULTS: ${{ toJSON(needs) }}
         run: |
           set -euo pipefail
+          echo "suites=$(jq -r '.plan.outputs.suites | fromjson | join(", ")' <<<"${RESULTS}")" >> "$GITHUB_OUTPUT"
           if [[ "$(jq -r '.plan.result' <<<"${RESULTS}")" != "success" ]]; then
             echo "::error::Plan did not succeed, so no suite was selected"
             exit 1
@@ -135,3 +139,31 @@ jobs:
             exit 1
           fi
           echo "Suites needed: $(jq -r '.plan.outputs.suites' <<<"${RESULTS}")" >> "$GITHUB_STEP_SUMMARY"
+
+  # The required check, `E2E`. The merge rule requires it from the OSAC CI app only (the same app that writes the E2E
+  # check of a pull request), so it is written with that app's token. A job of this workflow named `E2E` would be a check
+  # of the Actions app and would never satisfy the rule: the queue entry would wait for it until it timed out.
+  report:
+    name: Record the E2E check
+    if: ${{ !cancelled() }}
+    needs: [suites-result]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - name: Token of the OSAC CI app, for the E2E check
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          app-id: "4966101"
+          private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
+          permission-checks: write
+          permission-actions: read
+      - uses: osac-project/osac-ci/.github/actions/e2e-finish@1291e86861e1384a6c69fc767db89b636b965275  # osac-ci main
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          kind: checks
+          repo: ${{ github.repository }}
+          sha: ${{ github.event.merge_group.head_sha }}
+          result: ${{ needs.suites-result.result == 'success' && 'success' || 'failure' }}
+          detail: ${{ needs.suites-result.outputs.suites }}

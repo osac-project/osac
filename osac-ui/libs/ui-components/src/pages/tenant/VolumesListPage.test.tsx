@@ -146,26 +146,11 @@ describe('VolumesListPage', () => {
     });
   });
 
-  it('renders the Create volume button linking to /storage/volumes/create', async () => {
+  // TODO: re-enable when volume creation is supported after developer preview
+  it('does not render the Create volume button (disabled for developer preview)', async () => {
     renderPage();
 
-    const createButton = await screen.findByRole('link', { name: /Create volume/i });
-    expect(createButton).toBeInTheDocument();
-    expect(createButton).toHaveAttribute('href', '/storage/volumes/create');
-  });
-
-  it('hides the Create volume button on error', async () => {
-    vi.mocked(useListResource).mockReturnValue(
-      mockQueryResult<VolumesListResponse>({
-        data: undefined,
-        isLoading: false,
-        error: new Error('Network error'),
-      }),
-    );
-
-    renderPage();
-
-    await screen.findByText('An error occurred');
+    await screen.findByRole('heading', { name: 'Volumes' });
     expect(screen.queryByRole('link', { name: /Create volume/i })).not.toBeInTheDocument();
   });
 

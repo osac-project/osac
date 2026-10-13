@@ -20,7 +20,6 @@ import { useListResource } from '@osac/ui-components/api/use-resource';
 import ListPage from '@osac/ui-components/components/Page/ListPage';
 import ListPageBody from '@osac/ui-components/components/Page/ListPageBody';
 import ProjectFilter from '@osac/ui-components/components/Page/ProjectFilter';
-import CreateButton from '@osac/ui-components/components/Primitives/CreateButton';
 import { VolumeTable } from '@osac/ui-components/components/Volume/VolumeTable';
 import {
   SEARCH_PARAM,
@@ -127,7 +126,8 @@ export const VolumesListPage = () => {
       title={t('Volumes')}
       description={t('View and manage your storage volumes.')}
       error={error}
-      actions={<CreateButton to="/storage/volumes/create">{t('Create volume')}</CreateButton>}
+      // TODO: re-enable when volume creation is supported after developer preview
+      // actions={<CreateButton to="/storage/volumes/create">{t('Create volume')}</CreateButton>}
     >
       <ListPageBody isLoading={isLoading} error={error}>
         <Stack hasGutter>

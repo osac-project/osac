@@ -149,18 +149,12 @@ describe('navRowsForRole', () => {
     ]);
   });
 
-  it('Infrastructure section shows up only for admin role and contains storage, instance types, external IP pools, bare metal instance types, and disk images', () => {
+  it('Infrastructure section shows up only for admin role and contains instance types, external IP pools, bare metal instance types, and disk images', () => {
     expect(findSection('admin', 'nav-infrastructure')).toEqual({
       kind: 'section',
       id: 'nav-infrastructure',
       label: 'Infrastructure',
       children: [
-        {
-          kind: 'link',
-          id: 'storage',
-          label: 'Storage',
-          path: '/admin/infrastructure/storage',
-        },
         {
           kind: 'link',
           id: 'instance-types',
@@ -194,14 +188,41 @@ describe('navRowsForRole', () => {
     }
   });
 
-  it('includes Storage section with Volumes link for tenant roles', () => {
-    for (const role of nonIdpRoles) {
-      const storage = findSection(role, 'nav-tenant-storage');
-      expect(storage).toBeDefined();
-      expect(storage?.children).toEqual([
-        { kind: 'link', id: 'volumes', label: 'Volumes', path: '/storage/volumes' },
-      ]);
+  it('admin Storage section is standalone with Storage Backends and Storage Tiers links', () => {
+    expect(findSection('admin', 'nav-admin-storage')).toEqual({
+      kind: 'section',
+      id: 'nav-admin-storage',
+      label: 'Storage',
+      children: [
+        {
+          kind: 'link',
+          id: 'storage-backends',
+          label: 'Storage Backends',
+          path: '/admin/infrastructure/storage/backends',
+        },
+        {
+          kind: 'link',
+          id: 'storage-tiers',
+          label: 'Storage Tiers',
+          path: '/admin/infrastructure/storage/tiers',
+        },
+      ],
+    });
+    for (const role of ['tenant-user', 'tenant-admin', 'tenant-idp-manager'] as UserRole[]) {
+      expect(findSection(role, 'nav-admin-storage')).toBeUndefined();
     }
+  });
+
+  it('includes Storage section with Volumes link only for tenant-admin', () => {
+    const storage = findSection('tenant-admin', 'nav-tenant-storage');
+    expect(storage).toBeDefined();
+    expect(storage?.children).toEqual([
+      { kind: 'link', id: 'volumes', label: 'Volumes', path: '/storage/volumes' },
+    ]);
+  });
+
+  it('excludes tenant Storage section for tenant-user', () => {
+    expect(findSection('tenant-user', 'nav-tenant-storage')).toBeUndefined();
   });
 
   it('excludes tenant Storage section for admin role', () => {

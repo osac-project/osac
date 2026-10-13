@@ -192,15 +192,17 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
                 </ShellRoute>
               }
             />
-            <Route
-              path="/storage/volumes/*"
-              element={
-                <ShellRoute>
-                  <VolumeRoutes />
-                </ShellRoute>
-              }
-            />
           </>
+        )}
+        {role === 'tenant-admin' && (
+          <Route
+            path="/storage/volumes/*"
+            element={
+              <ShellRoute>
+                <VolumeRoutes />
+              </ShellRoute>
+            }
+          />
         )}
         <Route
           path="/networking/virtual-networks"

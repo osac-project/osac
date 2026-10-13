@@ -2,7 +2,8 @@
 # Minimal TridentBackendConfig CRD for ONTAP storage provider integration tests.
 # Mirrors only the fields the ontap_storage role sets and reads (spec fields are
 # x-kubernetes-preserve-unknown-fields so any backend config validates; status.phase
-# carries the Bound value the role waits on). The real CRD ships with Trident —
+# carries the Bound value the role waits on, status.message the failure reason the
+# role surfaces on phase Failed). The real CRD ships with Trident —
 # applying that here would require the full operator, which the kind test env
 # does not install. A stub Deployment in the same fixture set plays the Trident
 # operator by patching status.phase to Bound.
@@ -36,4 +37,6 @@ spec:
               type: object
               properties:
                 phase:
+                  type: string
+                message:
                   type: string

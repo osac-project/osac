@@ -41,6 +41,6 @@
 - name: Report the concurrently removed V-Net
   ansible.builtin.debug:
     msg: >-
-      V-Net '{{ vnet_name }}' (ID: {{ _existing_vnet.id }}) was already absent
-      (HTTP 404) when deleted; treating the V-Net as deleted.
+      A V-Net was already absent (HTTP 404) at deletion time; treating it
+      as deleted.
   when: _vnet_delete_resp is defined and _vnet_delete_resp.status | default(0) == 404

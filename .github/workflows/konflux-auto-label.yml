@@ -36,15 +36,6 @@ jobs:
     if: github.event.pull_request.user.login == 'red-hat-konflux-kflux-prd-rh02[bot]'
     runs-on: ubuntu-latest
     steps:
-      - name: Apply the Jira reference label
-        env:
-          GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
-        run: |
-          set -euo pipefail
-          pr=${{ github.event.pull_request.number }}
-          echo "Labelling Konflux PR #${pr}..."
-          gh pr edit "${pr}" --repo "${{ github.repository }}" --add-label jira/valid-reference
-
       - name: Prefix title with NO-ISSUE when it has no Jira reference
         env:
           GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
@@ -65,6 +56,16 @@ jobs:
             echo "Prefixing title: ${new_title}"
             gh pr edit "${pr}" --repo "${{ github.repository }}" --title "${new_title}"
           fi
+
+      # After the title step: the label alone makes the Jira check pass, so it must not be there when the title update failed.
+      - name: Apply the Jira reference label
+        env:
+          GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
+        run: |
+          set -euo pipefail
+          pr=${{ github.event.pull_request.number }}
+          echo "Labelling Konflux PR #${pr}..."
+          gh pr edit "${pr}" --repo "${{ github.repository }}" --add-label jira/valid-reference
 
       - name: Approve pending action_required runs for this PR's head SHA
         env:

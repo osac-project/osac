@@ -88,7 +88,7 @@ jobs:
           working-directory: fulfillment-service
       - name: Install Kind
         if: inputs.kind == 'it-fulfillment-service'
-        uses: helm/kind-action@v1
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc  # v1
         with:
           install_only: true
       - name: Install Helm
@@ -144,13 +144,13 @@ jobs:
 
       - name: Set up Go
         if: inputs.kind == 'it-osac-operator'
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6
         with:
           go-version-file: 'osac-operator/go.mod'
 
       - name: Install Kind
         if: inputs.kind == 'it-osac-operator'
-        uses: helm/kind-action@v1
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc  # v1
         with:
           install_only: true
 
@@ -197,13 +197,13 @@ jobs:
 
       - name: Set up Go
         if: inputs.kind == 'it-bare-metal-fulfillment-operator'
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6
         with:
           go-version-file: 'bare-metal-fulfillment-operator/go.mod'
 
       - name: Install Kind
         if: inputs.kind == 'it-bare-metal-fulfillment-operator'
-        uses: helm/kind-action@v1
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc  # v1
         with:
           install_only: true
 
@@ -256,11 +256,11 @@ jobs:
 
       - name: Install uv
         if: inputs.kind == 'it-osac-aap'
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
 
       - name: "Set up Python"
         if: inputs.kind == 'it-osac-aap'
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
         with:
           python-version-file: "osac-aap/pyproject.toml"
 
@@ -275,7 +275,7 @@ jobs:
 
       - name: Install kind
         if: inputs.kind == 'it-osac-aap'
-        uses: helm/kind-action@v1
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc  # v1
         with:
           cluster_name: osac-test
           install_only: true

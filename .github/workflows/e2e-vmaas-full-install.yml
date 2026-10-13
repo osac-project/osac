@@ -1,6 +1,7 @@
 ---
 # The VMaaS full-install E2E: one job, no gating. Whether it runs is decided elsewhere:
-#   * for a pull request, e2e-pr.yml calls it once the change is approved and CI has passed;
+#   * for a pull request, e2e-pr.yml calls it once the exact commit is approved, no cheap check has failed and the change
+#     touches the suite (it does not wait for CI);
 #   * for a merge queue entry, e2e-queue.yml calls it;
 #   * every 5 hours on main (schedule), and by hand (workflow_dispatch).
 # When called, `repo` and `sha` name the exact commit to test (a fork's commit for a fork pull request).
@@ -22,6 +23,16 @@ on:
         type: string
       pr-number:
         description: The pull request, empty for a merge queue entry
+        required: false
+        type: string
+        default: ""
+      fork-pr-author:
+        description: Login of the author of a fork pull request, empty when the commit is not from a fork
+        required: false
+        type: string
+        default: ""
+      fork-pr-author-association:
+        description: Author association of a fork pull request, empty when the commit is not from a fork
         required: false
         type: string
         default: ""
@@ -95,6 +106,10 @@ jobs:
         { "repo": "${{ inputs.repo || github.repository }}", "ref": "${{ inputs.sha || github.sha }}", "containerfile": "osac-metering/adapters/Containerfile.echo-adapter", "context": "osac-metering", "imageKey": "metering.echoAdapter.image.repository" }
         ]
       pr-number: ${{ inputs.pr-number }}
+      # A fork pull request is authorized by the suite (an org member, or the ok-to-test label) before it gets any
+      # secret. Empty for a commit of this repository.
+      fork-pr-author-association: ${{ inputs.fork-pr-author-association }}
+      fork-pr-author: ${{ inputs.fork-pr-author }}
       # Checkout osac-test-infra for tests/Containerfile (not the caller repo)
       test-infra-repository: osac-project/osac-test-infra
       test-infra-ref: ${{ inputs.test-infra-ref || 'main' }}

@@ -276,7 +276,7 @@ helm-osac-installer:
 
 # Gates check-generated-code.yaml.
 proto-check:
-  - '{proto/**,fulfillment-service/dev/**,fulfillment-service/dev.py,fulfillment-service/cmd/buf-plugin-osac-lint/**}'
+  - '{proto/**,fulfillment-service/dev/**,fulfillment-service/dev.py,fulfillment-service/cmd/buf-plugin-osac-lint/**,.github/workflows/check-generated-code.yaml}'
 
 # Gates check-pull-request.yaml.
 fulfillment-service-checks:

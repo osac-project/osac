@@ -65,6 +65,8 @@ jobs:
       suites: ${{ steps.report.outputs.suites }}
       suite-checks: ${{ steps.report.outputs.suite-checks }}
       head-repo: ${{ steps.code.outputs.repo }}
+      fork-author: ${{ steps.code.outputs.fork-author }}
+      fork-association: ${{ steps.code.outputs.fork-association }}
     steps:
       # The default branch (the ref a workflow_run runs at), never the pull request.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -110,12 +112,19 @@ jobs:
           NUMBER: ${{ steps.report.outputs.number }}
         run: |
           set -euo pipefail
-          head_repo=$(gh api "repos/${REPO}/pulls/${NUMBER}" --jq '.head.repo.full_name // empty')
+          pull=$(gh api "repos/${REPO}/pulls/${NUMBER}")
+          head_repo=$(jq -r '.head.repo.full_name // empty' <<<"${pull}")
           if [[ -z "${head_repo}" ]]; then
             echo "::error::The repository of the pull request's branch no longer exists."
             exit 1
           fi
           echo "repo=${head_repo}" >> "$GITHUB_OUTPUT"
+          # A commit from a fork must be authorized by the suite before it gets any secret (an org member, or the
+          # ok-to-test label), whoever approved it. Both stay empty for a commit of this repository.
+          if [[ "${head_repo}" != "${REPO}" ]]; then
+            echo "fork-author=$(jq -r '.user.login' <<<"${pull}")" >> "$GITHUB_OUTPUT"
+            echo "fork-association=$(jq -r '.author_association' <<<"${pull}")" >> "$GITHUB_OUTPUT"
+          fi
       # The E2E of an older commit of this pull request is of no use any more, and it holds a runner. Only a decision
       # that found the pull request still at this commit gets here, so a late event for an old commit cancels nothing.
       - name: Cancel the E2E of older commits
@@ -136,8 +145,16 @@ jobs:
             gh run list --repo "${REPO}" --workflow e2e-pr.yml --status "${status}" --limit 100 \
               --json databaseId,displayTitle \
             | jq -r --arg a "E2E ${REPO}:${branch} @ " --arg b "E2E ${head_repo}:${branch} @ " --arg current "${current}" \
-                '.[] | select((.displayTitle | startswith($a)) or (.displayTitle | startswith($b))) | select(.displayTitle | endswith($current) | not) | .databaseId'
-          done | while read -r id; do
+                '.[] | select((.displayTitle | startswith($a)) or (.displayTitle | startswith($b))) | select(.displayTitle | endswith($current) | not) | "\(.databaseId) \(.displayTitle | split(" @ ") | last)"'
+          done | while read -r id sha; do
+            # A title names a repository and a branch, and two fork pull requests can share both (a branch called
+            # main, say). Never cancel the run of a commit that belongs to another open pull request.
+            [[ "${sha}" =~ ^[0-9a-f]{40}$ ]] || { echo "Leaving run ${id}: no commit in its title"; continue; }
+            others=$(gh api "repos/${REPO}/commits/${sha}/pulls" --jq "[.[] | select(.state == \"open\" and .number != ${NUMBER})] | length")
+            if [[ "${others}" != "0" ]]; then
+              echo "Leaving run ${id}: its commit belongs to another open pull request"
+              continue
+            fi
             echo "Cancelling run ${id}, which is for an older commit"
             gh run cancel "${id}" --repo "${REPO}" || echo "run ${id} already finished"
           done
@@ -174,6 +191,8 @@ jobs:
           repo: ${{ github.repository }}
           sha: ${{ needs.decide.outputs.sha }}
           suite-checks: ${{ needs.decide.outputs.suite-checks }}
+          # The app token lives an hour: stop tracking before it expires. The lines stay as they are until the result.
+          timeout: "3300"
 
   # One job per suite, named after the suite id: the line of the suite on the pull request follows the job of that name
   # (e2e-policy.yml gives the suite its id and the name of its line). A suite the decision did not pick does not run, so
@@ -190,6 +209,8 @@ jobs:
       repo: ${{ needs.decide.outputs.head-repo }}
       sha: ${{ needs.decide.outputs.sha }}
       pr-number: ${{ needs.decide.outputs.number }}
+      fork-pr-author: ${{ needs.decide.outputs.fork-author }}
+      fork-pr-author-association: ${{ needs.decide.outputs.fork-association }}
 
   caas:
     name: caas
@@ -203,6 +224,8 @@ jobs:
       repo: ${{ needs.decide.outputs.head-repo }}
       sha: ${{ needs.decide.outputs.sha }}
       pr-number: ${{ needs.decide.outputs.number }}
+      fork-pr-author: ${{ needs.decide.outputs.fork-author }}
+      fork-pr-author-association: ${{ needs.decide.outputs.fork-association }}
 
   bmaas:
     name: bmaas
@@ -216,6 +239,8 @@ jobs:
       repo: ${{ needs.decide.outputs.head-repo }}
       sha: ${{ needs.decide.outputs.sha }}
       pr-number: ${{ needs.decide.outputs.number }}
+      fork-pr-author: ${{ needs.decide.outputs.fork-author }}
+      fork-pr-author-association: ${{ needs.decide.outputs.fork-association }}
 
   # Runs whatever happened above, including a cancel, so the status never stays "running".
   finish:

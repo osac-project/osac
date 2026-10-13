@@ -17,6 +17,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -26,6 +27,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
+	"github.com/osac-project/osac/fulfillment-service/internal/exit"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
@@ -164,9 +166,15 @@ func (c *runnerContext) setProject(cmd *cobra.Command, settings *config.Settings
 	if name != resolvedName {
 		object, objectHelper, err = c.findProjectQuiet(cmd, settings, resolvedName)
 		if err != nil {
-			// Relative child lookup failed — fall through to the raw input below
-			// for exact ID or absolute name selection.
-			object = nil
+			// Fall through to the raw input only when the relative project was
+			// not found (exit.Error from FindObject). Propagate connection and
+			// service errors instead of discarding them.
+			var exitErr exit.Error
+			if errors.As(err, &exitErr) {
+				object = nil
+			} else {
+				return err
+			}
 		}
 	}
 	if object == nil {

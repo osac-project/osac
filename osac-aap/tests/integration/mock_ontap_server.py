@@ -196,6 +196,10 @@ def main():
         if not args.cert or not args.key:
             parser.error("--tls requires --cert and --key")
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        # PROTOCOL_TLS_SERVER alone permits TLSv1/TLSv1_1 negotiation, which
+        # CodeQL flags (py/insecure-protocol). The mock only serves local
+        # test traffic; TLSv1.2+ is all any modern client speaks.
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.load_cert_chain(args.cert, args.key)
         server.socket = context.wrap_socket(server.socket, server_side=True)
 

@@ -258,7 +258,7 @@ fi
 # both Netris container groups.
 render_success \
   netris-ca-configmap \
-  'NETRIS_CA_CONFIGMAP: "customer-netris-ca"' \
+  'NETRIS_CA_CONFIGMAP: "customer.netris-ca"' \
   --set global.networking.fabricManager=netris \
   --set global.networking.k8sManager= \
   --set-string global.networking.netris.controllerUrl=https://netris.example.com \
@@ -268,7 +268,22 @@ render_success \
   --set-string global.networking.netris.tenantId=1 \
   --set-string global.networking.netris.tenantName=test \
   --set global.networking.netris.validateCerts=true \
-  --set-string global.networking.netris.caBundle.configMap=customer-netris-ca
+  --set-string global.networking.netris.caBundle.configMap=customer.netris-ca
+
+# ConfigMap names use the Kubernetes DNS-subdomain form: dots may separate
+# valid DNS labels, but empty labels and leading dots remain invalid.
+render_failure \
+  netris-ca-configmap-invalid-dot \
+  --set global.networking.fabricManager=netris \
+  --set global.networking.k8sManager= \
+  --set-string global.networking.netris.controllerUrl=https://netris.example.com \
+  --set-string global.networking.netris.credentials.username=test-user \
+  --set global.networking.netris.credentials.externalSecret=true \
+  --set-string global.networking.netris.siteId=1 \
+  --set-string global.networking.netris.tenantId=1 \
+  --set-string global.networking.netris.tenantName=test \
+  --set global.networking.netris.validateCerts=true \
+  --set-string global.networking.netris.caBundle.configMap=.customer-netris-ca
 
 # Inline passwords and externalSecret are mutually exclusive.
 render_failure \

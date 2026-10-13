@@ -2861,7 +2861,7 @@
             "configMap": {
               "type": "string",
               "description": "Name of the customer-created ConfigMap in the AAP namespace. It must contain bundle.pem and is mounted read-only into Netris execution pods.",
-              "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+              "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
               "maxLength": 253
             }
           },

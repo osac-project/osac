@@ -185,6 +185,10 @@
         } }}
   no_log: true
 
+# Fail fast on a Failed phase instead of burning the full retry window: the
+# until-stops-on-failure only works because a failed task aborts the loop —
+# without the explicit check below, a Failed TBC spins through all 12 retries
+# before surfacing a generic timeout error with no cause.
 - name: Wait for the TridentBackendConfig to become Bound
   kubernetes.core.k8s_info:
     api_version: trident.netapp.io/v1
@@ -196,9 +200,19 @@
     _tbc_status.resources | length > 0 and
     _tbc_status.resources[0].status is defined and
     _tbc_status.resources[0].status.phase is defined and
-    _tbc_status.resources[0].status.phase == "Bound"
+    _tbc_status.resources[0].status.phase in ["Bound", "Failed"]
   retries: 12
   delay: 5
+
+- name: Fail with the TBC's status message when phase is Failed
+  ansible.builtin.fail:
+    msg: >-
+      TridentBackendConfig '{{ _tbc_name }}' reached phase Failed:
+      {{ _tbc_status.resources[0].status.message | default('no status message reported') }}.
+      Inspect the TBC's status conditions and Trident operator logs.
+  when: >-
+    _tbc_status.resources | length > 0 and
+    _tbc_status.resources[0].status.phase | default('') == "Failed"
 
 - name: Fail if the TridentBackendConfig did not become Bound
   ansible.builtin.fail:

@@ -270,7 +270,7 @@ The Kind `dev-full` smoke workflow (`../.github/workflows/kind-dev-full-smoke.ym
 installs the full profile, waits for the fulfillment ingress/API deployments,
 operator, AWX web/task, Keycloak, and UI deployments, verifies the UI Gateway
 route, then authenticates with the `osac-admin` Keycloak service client and calls
-`osac.public.v1.Tenants/List` over the public Fulfillment gRPC endpoint. It uses real Kind, Docker,
+`osac.public.v1.Tenants/List` over the public Fulfillment gRPC endpoint. It uses real Kind, Podman,
 KubeVirt/AWX/Keycloak deployments, the profile's published Fulfillment Service
 image, and the profile's TLS bundle; it does not fake service
 responses. The smoke runs nightly and, after the workflow is on the default

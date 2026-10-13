@@ -31,6 +31,10 @@ spec:
     # reachable (matches build-metering-service-image.yaml and
     # resolve-e2e-components/action.yaml's context: .).
     value: .
+  - name: hermetic
+    value: "true"
+  - name: prefetch-input
+    value: '[{"type": "gomod", "path": "osac-metering/metering-service"}]'
   pipelineSpec:
     description: |
       This pipeline is ideal for building container images from a Containerfile while maintaining trust after pipeline customization.

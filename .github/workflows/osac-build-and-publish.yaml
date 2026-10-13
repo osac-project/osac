@@ -1997,10 +1997,23 @@ jobs:
             )
 
         def find_component():
-            out = subprocess.run(
-                ["oc", "get", "snapshots", "-n", NAMESPACE, "-o", "json"],
-                capture_output=True, text=True, check=True,
-            )
+            try:
+                out = subprocess.run(
+                    ["oc", "get", "snapshots", "-n", NAMESPACE, "-o", "json"],
+                    capture_output=True, text=True, check=True,
+                )
+            except subprocess.CalledProcessError as e:
+                # Transient oc/API-server hiccups happen occasionally under
+                # the concurrent load of 8 matrix rows polling simultaneously
+                # -- confirmed live (two separate real release dispatches):
+                # a single failed `oc get snapshots` call used to crash this
+                # whole matrix row even though the underlying Konflux build
+                # had already succeeded (the GitHub check-suite showed it
+                # green while this job reported failure). Treat it the same
+                # as "not found yet" and retry on the next poll instead of
+                # propagating the exception and exiting.
+                print(f"::warning::oc get snapshots failed, will retry: {e.stderr.strip()}", flush=True)
+                return None
             for item in json.loads(out.stdout)["items"]:
                 ann = item["metadata"].get("annotations", {})
                 if ann.get("build.appstudio.redhat.com/commit_sha") != COMMIT_SHA:
@@ -2181,10 +2194,18 @@ jobs:
 
         deadline = time.time() + TIMEOUT_SECONDS
         while time.time() < deadline:
-            out = subprocess.run(
-                ["oc", "get", "snapshot", resource_name, "-n", NAMESPACE, "-o", "json"],
-                capture_output=True, text=True, check=True,
-            )
+            try:
+                out = subprocess.run(
+                    ["oc", "get", "snapshot", resource_name, "-n", NAMESPACE, "-o", "json"],
+                    capture_output=True, text=True, check=True,
+                )
+            except subprocess.CalledProcessError as e:
+                # Same transient-oc-hiccup reasoning as find_component's own
+                # retry above -- don't let one failed `oc get` crash this
+                # job when the override Snapshot itself is still fine.
+                print(f"::warning::oc get snapshot failed, will retry: {e.stderr.strip()}", flush=True)
+                time.sleep(POLL_INTERVAL_SECONDS)
+                continue
             conditions = json.loads(out.stdout).get("status", {}).get("conditions", [])
             if condition_true(conditions, "AppStudioTestSucceeded"):
                 break
@@ -2215,10 +2236,18 @@ jobs:
         # actually released it -- only this confirms that.
         deadline = time.time() + TIMEOUT_SECONDS
         while time.time() < deadline:
-            out = subprocess.run(
-                ["oc", "get", "release", resource_name, "-n", NAMESPACE, "-o", "json"],
-                capture_output=True, text=True, check=True,
-            )
+            try:
+                out = subprocess.run(
+                    ["oc", "get", "release", resource_name, "-n", NAMESPACE, "-o", "json"],
+                    capture_output=True, text=True, check=True,
+                )
+            except subprocess.CalledProcessError as e:
+                # Same transient-oc-hiccup reasoning as find_component's own
+                # retry above -- don't let one failed `oc get` crash this
+                # job when the Release itself is still progressing fine.
+                print(f"::warning::oc get release failed, will retry: {e.stderr.strip()}", flush=True)
+                time.sleep(POLL_INTERVAL_SECONDS)
+                continue
             conditions = json.loads(out.stdout).get("status", {}).get("conditions", [])
             if condition_true(conditions, "Released"):
                 print(f"::notice::Konflux staging release succeeded: {resource_name}")

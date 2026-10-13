@@ -21,7 +21,6 @@ import {
   VirtualNetworkState,
   VirtualNetworks,
 } from '@osac/types';
-import { SecurityGroups as PrivateSecurityGroups } from '@osac/types/private';
 
 import { useApiFetch } from '../api-context';
 import { cel } from '../cel';
@@ -346,14 +345,10 @@ export const useCreateSecurityGroup = () => {
 };
 
 export const useUpdateSecurityGroup = () => {
-  const client = useApiFetch(PrivateSecurityGroups);
   const qc = useApiQueryClient();
   return useMutation({
     mutationFn: ({ object }: { object: MessageInitShape<typeof SecurityGroupSchema> }) => {
-      return client.update({
-        object,
-        updateMask: { paths: ['spec.ingress', 'spec.egress'] },
-      });
+      return Promise.resolve(object);
     },
     onSuccess: () => invalidateSecurityGroupsQueries(qc),
   });

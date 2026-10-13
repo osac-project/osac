@@ -296,9 +296,9 @@ The GitHub Actions workflow [`Kind dev-full smoke`](../.github/workflows/kind-de
 installs this profile nightly, checks that fulfillment, the operator, AWX,
 Keycloak, and the UI deployments are available, verifies the UI Gateway route,
 then authenticates with the `osac-admin` Keycloak service client and lists
-tenants through the Fulfillment gRPC API. It builds the Fulfillment Service
-image from the tested revision, loads it into Kind, and reads the admin client
-secret from the `keycloak-client-secrets` Secret in the running cluster.
+tenants through the Fulfillment gRPC API. It uses the published Fulfillment
+Service image and reads the admin client secret
+from the `keycloak-client-secrets` Secret in the running cluster.
 Once the workflow is on the default branch, a repository collaborator can run
 it on a pull request by commenting `/test-kind-dev-full`. To run the same smoke
 test on a running dev-full cluster, use:

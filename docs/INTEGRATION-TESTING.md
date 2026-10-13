@@ -228,8 +228,8 @@ installs the full profile, waits for the fulfillment ingress/API deployments,
 operator, AWX web/task, Keycloak, and UI deployments, verifies the UI Gateway
 route, then authenticates with the `osac-admin` Keycloak service client and calls
 `osac.public.v1.Tenants/List` over the public Fulfillment gRPC endpoint. It uses real Kind, Docker,
-KubeVirt/AWX/Keycloak deployments, a Fulfillment Service image built from the
-tested revision, and the profile's TLS bundle; it does not fake service
+KubeVirt/AWX/Keycloak deployments, the profile's published Fulfillment Service
+image, and the profile's TLS bundle; it does not fake service
 responses. The smoke runs nightly and, after the workflow is on the default
 branch, can be requested on a PR by a repository collaborator with
 `/test-kind-dev-full`. The PR introducing the workflow was exercised against a

@@ -51,7 +51,7 @@ respective areas.
 | Deployed dev-full hook authentication | Component integration | Coverage gap tracked by [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843); local `install-devstack` invokes the hooks but does not assert token acceptance. |
 | OpenBao security context, podSecurityContext, or Kind/OpenShift UID handling | Helm contract | `make openbao-security-context-test` |
 | Deployed hooks or cross-component startup | Component integration | `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment` with a deployed Kind environment; see [suite boundaries](../docs/INTEGRATION-TESTING.md#osac-installer) |
-| Kind `dev-full` startup, core deployment readiness, UI routing, and authenticated tenant listing | E2E smoke | `.github/scripts/test-kind-dev-full.sh`, run by `.github/workflows/kind-dev-full-smoke.yml` after building the Fulfillment image and installing the `dev-full` profile; requires Docker-backed Kind with `/dev/kvm` |
+| Kind `dev-full` startup, core deployment readiness, UI routing, and authenticated tenant listing | E2E smoke | `.github/scripts/test-kind-dev-full.sh`, run by `.github/workflows/kind-dev-full-smoke.yml` after `make install PLATFORM=kind PROFILE=dev-full NS=osac`; requires Docker-backed Kind with `/dev/kvm` |
 
 ## Validation
 

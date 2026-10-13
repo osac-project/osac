@@ -203,6 +203,13 @@ Touched-area requirements: [component guide](../fulfillment-service/AGENTS.md#in
 
 Touched-area requirements: [component guide](../osac-installer/AGENTS.md#integration-testing).
 
+The `make csi-render-test` Helm contract checks CSI/storage-provider rendering,
+fulfillment configuration and credentials wiring, and rejection of invalid
+namespace/provider settings. Installer Helm-lint CI runs this target explicitly.
+Schema-error assertions accept Helm 3 dotted paths and Helm 4 JSON pointers;
+they still require Helm to reject the values for the expected field. These are
+[DEV] Contract checks only; no CSI driver or storage provider is deployed.
+
 The `make mce-render-test` Helm contract renders the prerequisite charts from
 local sources. It asserts disabled defaults, explicit standalone MCE
 enablement, configuration, Assisted image overrides, compatibility RBAC,

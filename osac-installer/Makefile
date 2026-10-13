@@ -455,6 +455,7 @@ helm-template: ## Dry-run render all templates
 	helm template osac-infra $(INFRA_CHART)
 	helm template osac $(OSAC_CHART) --values $(HELM_VALIDATION_VALUES)
 
+# Schema-error patterns accept Helm 3 dotted paths and Helm 4 JSON pointers.
 .PHONY: csi-render-test
 csi-render-test: helm-deps ## Verify CSI and storage-provider chart rendering
 	@set -euo pipefail; \
@@ -472,11 +473,11 @@ csi-render-test: helm-deps ## Verify CSI and storage-provider chart rendering
 		assert_helm_failure() { \
 			expected="$$1"; shift; \
 			if "$$@" >/dev/null 2>"$$error_render"; then \
-				printf 'Helm unexpectedly accepted invalid values; expected error: %s\n' "$$expected" >&2; \
+				printf 'Helm unexpectedly accepted invalid values; expected error pattern: %s\n' "$$expected" >&2; \
 				exit 1; \
 			fi; \
-			if ! rg -Fq "$$expected" "$$error_render"; then \
-				printf 'Helm failed without the expected error: %s\n' "$$expected" >&2; \
+			if ! rg -q -- "$$expected" "$$error_render"; then \
+				printf 'Helm failed without the expected error pattern: %s\n' "$$expected" >&2; \
 				cat "$$error_render" >&2; \
 				exit 1; \
 			fi; \
@@ -500,11 +501,11 @@ csi-render-test: helm-deps ## Verify CSI and storage-provider chart rendering
 		helm template osac $(OSAC_CHART) \
 			--values $(OSAC_CHART)/ci/default-values.yaml > "$$default_operator_render"; \
 		! rg -q 'name: OSAC_VENDOR_CONTROLLERS' "$$default_operator_render"; \
-		assert_helm_failure "at '/operator/vendorControllers/lvms'" \
+		assert_helm_failure 'operator[./]vendorControllers[./]lvms' \
 			helm template osac $(OSAC_CHART) \
 			--values $(OSAC_CHART)/ci/default-values.yaml \
 			--set-string operator.vendorControllers.lvms=; \
-		assert_helm_failure "at '/operator/vendorControllers/lvms'" \
+		assert_helm_failure 'operator[./]vendorControllers[./]lvms' \
 			helm template osac $(OSAC_CHART) \
 			--values $(OSAC_CHART)/ci/default-values.yaml \
 			--set operator.vendorControllers.lvms=42; \
@@ -549,7 +550,7 @@ csi-render-test: helm-deps ## Verify CSI and storage-provider chart rendering
 			--values values/caas-ci/infra.yaml \
 			--set csiDriver.enabled=true > "$$infra_enabled_render"; \
 		rg -q 'name: osac-infra-create-csi-creds' "$$infra_enabled_render"; \
-		assert_helm_failure 'csiDriver.namespace must be one of the following: "osac-csi"' \
+		assert_helm_failure 'csiDriver[./]namespace.*must be.*osac-csi' \
 			helm template osac $(OSAC_CHART) \
 			--values charts/osac/ci/full-values.yaml \
 			--set operator.networkManagers.enabled=true \
@@ -565,7 +566,7 @@ csi-render-test: helm-deps ## Verify CSI and storage-provider chart rendering
 			--set operator.networkManagers.enabled=true \
 			--namespace osac-csi \
 			--set csiDriver.controller.fulfillment.configMap.name=osac-fulfillment-config; \
-		assert_helm_failure 'namespace must be one of the following: "", "osac-csi"' \
+		assert_helm_failure 'namespace.*must be one of.*osac-csi' \
 			helm template csi-driver ../osac-csi-driver/charts/csi-driver \
 			--set namespace=not-osac-csi; \
 		echo 'CSI render checks passed.'

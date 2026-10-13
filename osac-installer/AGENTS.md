@@ -45,6 +45,7 @@ respective areas.
 
 | Touched area | Required validation | Command / follow-up |
 |---|---|---|
+| CSI/storage-provider rendering, namespace constraints, or fulfillment wiring | Helm contract | `make csi-render-test` (also runs in installer Helm-lint CI) |
 | MCE defaults, lifecycle gate, image overrides, or compatibility RBAC | Helm contract | `make mce-render-test` |
 | Fulfillment hook commands, CA mounts, or gate rendering | Helm contract | `make fulfillment-trust-render-test` |
 | Fulfillment token helper or dev-full hook credential wiring | Unit and Helm contract | `make fulfillment-auth-test` and `make dev-full-render-test` |
@@ -59,6 +60,7 @@ From `osac-installer/`:
 yamllint --strict .
 make helm-validate
 pre-commit run --all-files
+make csi-render-test
 make mce-render-test
 make fulfillment-trust-render-test
 ```

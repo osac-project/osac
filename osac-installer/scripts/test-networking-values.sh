@@ -184,8 +184,8 @@ render_success \
   --set-string global.networking.netris.tenantId=1 \
   --set-string global.networking.netris.tenantName=test
 
-# The networking facade forwards certificate validation to both enabled AAP
-# instance groups and keeps verification enabled by default.
+# The networking facade forwards certificate validation to config-as-code and
+# both enabled AAP instance groups, and keeps verification enabled by default.
 render_success \
   netris-validate-certs-default \
   'NETRIS_VALIDATE_CERTS: "true"' \
@@ -199,8 +199,8 @@ render_success \
   --set-string global.networking.netris.tenantName=test \
   --set aap.instanceGroups.clusterFulfillment.enabled=true \
   --set aap.instanceGroups.networkFulfillment.enabled=true
-if [[ $(grep -Fc 'NETRIS_VALIDATE_CERTS: "true"' "${TMP_DIR}/netris-validate-certs-default.yaml") -ne 2 ]]; then
-  echo "ERROR: certificate validation default was not rendered to both AAP instance groups" >&2
+if [[ $(grep -Fc 'NETRIS_VALIDATE_CERTS: "true"' "${TMP_DIR}/netris-validate-certs-default.yaml") -ne 3 ]]; then
+  echo "ERROR: certificate validation default was not rendered to config-as-code and both AAP instance groups" >&2
   exit 1
 fi
 
@@ -218,10 +218,26 @@ render_success \
   --set-string global.networking.netris.tenantName=test \
   --set aap.instanceGroups.clusterFulfillment.enabled=true \
   --set aap.instanceGroups.networkFulfillment.enabled=true
-if [[ $(grep -Fc 'NETRIS_VALIDATE_CERTS: "false"' "${TMP_DIR}/netris-validate-certs-disabled.yaml") -ne 2 ]]; then
-  echo "ERROR: certificate validation opt-out was not rendered to both AAP instance groups" >&2
+if [[ $(grep -Fc 'NETRIS_VALIDATE_CERTS: "false"' "${TMP_DIR}/netris-validate-certs-disabled.yaml") -ne 3 ]]; then
+  echo "ERROR: certificate validation opt-out was not rendered to config-as-code and both AAP instance groups" >&2
   exit 1
 fi
+
+# Netris-backed CI profiles opt out explicitly because their lab controllers
+# do not use a certificate trusted by the execution environment.
+render_success \
+  netris-bmaas-ci-validate-certs \
+  'NETRIS_VALIDATE_CERTS: "false"' \
+  --values "${SCRIPT_DIR}/../values/bmaas-ci/instance.yaml" \
+  --set-string service.externalHostname=fulfillment-api.test.example.com \
+  --set-string service.internalHostname=fulfillment-internal-api.test.example.com
+
+render_success \
+  netris-cudn-evpn-test-validate-certs \
+  'NETRIS_VALIDATE_CERTS: "false"' \
+  --values "${SCRIPT_DIR}/../values/cudn-evpn-netris-test/instance.yaml" \
+  --set-string service.externalHostname=fulfillment-api.test.example.com \
+  --set-string service.internalHostname=fulfillment-internal-api.test.example.com
 
 # Expert AAP overrides remain an escape hatch for direct ConfigMap control.
 render_success \

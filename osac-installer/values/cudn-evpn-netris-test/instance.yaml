@@ -18,6 +18,7 @@ global:
     k8sManager: ""
     netris:
       controllerUrl: "https://redhat-ctl.netris.io"
+      validateCerts: false
       credentials:
         username: "netris"
         externalSecret: true

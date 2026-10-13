@@ -166,6 +166,24 @@ CSIEOF
     sleep 1
   done
 
+  # Start mock ONTAP server (TLS; the ontap_storage role uses ansible.builtin.uri
+  # with validate_certs, so the endpoint just needs HTTPS). Same TLS cert as the
+  # mock VMS server — tests run with ontap_storage_validate_certs: false.
+  echo "Starting mock ONTAP server (TLS)..."
+  python3 "${SCRIPT_DIR}/mock_ontap_server.py" 18444 \
+    --tls --cert "${SCRIPT_DIR}/certs/mock.pem" --key "${SCRIPT_DIR}/certs/mock.key" &
+  MOCK_ONTAP_PID=$!
+  echo "${MOCK_ONTAP_PID}" > "${SCRIPT_DIR}/.mock_ontap_pid"
+
+  # Wait for mock ONTAP server to be ready
+  for i in $(seq 1 10); do
+    if curl -sk https://127.0.0.1:18444/_calls > /dev/null 2>&1; then
+      echo "Mock ONTAP server ready on port 18444 (PID: ${MOCK_ONTAP_PID})"
+      break
+    fi
+    sleep 1
+  done
+
   # Create storage test namespace and ConfigMap
   kubectl create namespace test-tenant-ns || true
 

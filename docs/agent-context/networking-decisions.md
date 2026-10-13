@@ -6,7 +6,7 @@ including IP, MAC, or network-attachment data on any provisioned resource.
 ## Authoritative sources and implementation status
 
 This summary was checked against the accepted designs on `enhancement-proposals`
-`main` on 2026-09-30. Read the applicable full designs before finalizing scope:
+`main` on 2026-10-12. Read the applicable full designs before finalizing scope:
 
 - [Unified networking, OSAC-1433](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1433-unified-networking/design.md)
 - [Default networking, OSAC-1433](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1433-default-networking/design.md)
@@ -30,7 +30,46 @@ accepted design already commits to it. For unrelated work, exclude overlapping
 scope and cite that design. For an intentional revision or extension, name the
 superseded or extended design explicitly.
 
+## Proposed provider-contract revision (PR #357)
+
+The [Unified Networking and Manager Integration revision](https://github.com/osac-project/enhancement-proposals/pull/357)
+intentionally extends the accepted baseline below. Until merged, treat it as
+desired implementation work, not existing code behavior. Its shared design
+defines the cross-service architecture; the VMaaS, BMaaS, and CaaS extension
+designs define their own workload fields, lifecycle gates, handoffs, and
+teardown flows. The [provider guide](https://github.com/osac-project/osac/pull/1517)
+explains the proposed manager onboarding workflow.
+
+- Immutable NetworkDataModel/NetworkManager API registrations replace the
+  ConfigMap registry. NetworkClass validates selection without a provider job.
+- The fulfillment-service database is authoritative for NetworkData; its
+  existing controller path projects each record as a NetworkData CRD in the
+  networking hub. NetworkData owner scopes include NetworkClass, VirtualNetwork,
+  and Subnet. A Fabric task returns each declared model/owner value that is
+  applicable to its owner context and not already stored. A child operation may
+  first produce a parent- or profile-owned value; later tasks reuse it.
+  Concurrent tasks that can produce the same missing model/owner key must
+  converge on one backend allocation and the same immutable value; conflicting
+  NetworkData writes are rejected and do not replace the stored value.
+- Stable fulfillment-service API IDs identify owners; hub projection UIDs
+  fence dispatch, object writes, and original job results. Recreating a hub
+  projection preserves allocations and operation history, while deleting and
+  recreating the API resource creates a new owner identity. Projection
+  retirement alone cannot authorize provider teardown.
+- Durable operations track ambiguous launches, accepted results and completed
+  persistence separately. Every AAP task is idempotent, including interruption.
+- The unified design fixes serialized task inputs and task-specific results;
+  provider qualification uses the same producer/consumer fixtures. Pool capacity
+  follows its explicit eligible-address rule, independent of vendor allocation.
+- Re-enabling after disabled operation uses a guarded maintenance transition:
+  drain workloads, account for jobs/provider leftovers, reconcile networking
+  readiness, then reopen workload admission. It does not migrate running workloads.
+
 ## Accepted contract
+
+This section records the accepted baseline as of 2026-10-12. Its manager
+registration mechanism in item 9 is superseded by the proposed provider
+contract above; use that revision for the target modular manager design.
 
 1. **Manager responsibilities:** The fabric manager owns physical networking,
    isolation, ACLs, address allocation, DNAT/SNAT, and inter-subnet routing.
@@ -62,10 +101,12 @@ superseded or extended design explicitly.
    feedback paths. BMaaS queries fabric DHCP leases by NIC MAC; CaaS delegates
    host provisioning, port moves, and IP discovery to BMaaS. Check the per-service
    designs for timing and API/ingress VIP allocation.
-9. **Pluggable managers:** Managers register type/capabilities through ConfigMaps
-   and supply Ansible roles. Adding a manager for existing capabilities does not
-   require API changes. Capability types are fixed by the operator; a new
-   capability requires an operator change.
+9. **Manager modularity (accepted baseline):** Managers register type and
+   capabilities through ConfigMaps and supply Ansible roles. Adding a manager
+   for existing capabilities does not require API changes. Capability types
+   are fixed by the operator; a new capability requires an operator change.
+   This legacy registration mechanism is superseded by the proposed
+   NetworkManager and NetworkDataModel resources described above.
 10. **Default networking:** Tenant onboarding provisions a VirtualNetwork, IPv4
     Subnet, SecurityGroup, and NATGateway through the normal API/reconcile path.
     `DefaultNetworkingReady` gates tenant readiness. Missing attachment fields
@@ -76,29 +117,12 @@ superseded or extended design explicitly.
     when no active resource references the target, subject to the accepted
     auto-created resource cleanup rules.
 
-## Resource-specific attachment contracts
+## Service extension boundaries
 
-| Resource | Attachment field and type | Accepted cardinality and primary behavior |
-|----------|---------------------------|-------------------------------------------|
-| ComputeInstance | `network_attachments`, ComputeNetworkAttachment: subnet, security groups | Plural field retained for compatibility, maximum one entry; no primary field |
-| Cluster | `network_attachment`, ClusterNetworkAttachment: subnet, security groups | Singular; no primary field |
-| BaremetalInstance | `network_attachments`, BareMetalNetworkAttachment: subnet, security groups, interface, optional primary | Maximum one entry; primary omitted or true accepted, false rejected |
-
-An omitted attachment requests tenant defaults; a supplied attachment resolves
-missing fields individually. Consult the unified/default designs for validation
-of tenant ownership, subnet/security-group VirtualNetwork alignment, readiness,
-and BMaaS interface selection. Do not interchange these message types.
-
-## Auto-created resource deletion
-
-Use phased reconciliation with a wait between dependent removals:
-
-1. Delete auto-created ExternalIPAttachments and wait for their finalizers.
-2. Delete auto-created ExternalIPs and wait for their removal.
-3. Complete parent cleanup and remove its finalizer.
-
-Find auto-created attachments through `osac.openshift.io/auto-created` and
-orphaned ExternalIPs through `osac.openshift.io/auto-created-for`, as specified
-by the unified design. Manually created external resources and tenant-shared
-default networking persist when a workload is deleted. Follow the full design's
-reverse-reference guards when deleting shared resources or replacing NetworkClass.
+Each workload extension defines its attachment field, message type,
+cardinality, interface selection, request target, readiness/status mapping,
+and teardown gate. The shared Unified Networking design defines the common
+attachment meaning, default resolution, ownership, and cleanup dependencies.
+The VMaaS, CaaS, and BMaaS designs are the source of truth for their exact
+workload flows; do not copy those schemas or flows into new shared-networking
+work.

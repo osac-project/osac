@@ -11,6 +11,10 @@ together, and the design decisions that have been made.
 [Guides](guides/): Step-by-step configuration and usage guides for
 administrators, tenants, and developers.
 
+Cloud providers implementing OSAC networking should start with the
+[network manager contract overview](guides/admin/network-manager-contract-overview.md)
+and continue with the [network manager provider guide](guides/admin/network-manager-provider-guide.md).
+
 To get started with tenant and provider credentials, see
 [Managing Secrets](guides/secrets-guide.md).
 

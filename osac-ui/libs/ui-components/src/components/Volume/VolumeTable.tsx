@@ -51,7 +51,7 @@ export const VolumeTable = ({ volumes }: VolumeTableProps) => {
                   icon={SearchIcon}
                   variant={EmptyStateVariant.sm}
                 >
-                  <EmptyStateBody>{t('Create a volume or adjust your filters.')}</EmptyStateBody>
+                  <EmptyStateBody>{t('Adjust your filters to find volumes.')}</EmptyStateBody>
                 </EmptyState>
               </Bullseye>
             </Td>

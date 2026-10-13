@@ -25,6 +25,7 @@ type contextKey int
 const (
 	contextSettingsKey contextKey = iota
 	contextTenantKey
+	contextShowSharedKey
 )
 
 // SettingsFromContext returns the settings from the context. It panics if the given context doesn't contain settings.
@@ -67,4 +68,16 @@ func TenantFromContext(ctx context.Context) string {
 // TenantIntoContext creates a new context that contains the given tenant.
 func TenantIntoContext(ctx context.Context, tenant string) context.Context {
 	return context.WithValue(ctx, contextTenantKey, tenant)
+}
+
+// ShowSharedFromContext returns whether shared tenant resources should be visually indicated.
+// This is set when the user uses the --include-shared flag with list commands.
+func ShowSharedFromContext(ctx context.Context) bool {
+	v, _ := ctx.Value(contextShowSharedKey).(bool)
+	return v
+}
+
+// ShowSharedIntoContext creates a new context that indicates shared tenant resources should be shown.
+func ShowSharedIntoContext(ctx context.Context, showShared bool) context.Context {
+	return context.WithValue(ctx, contextShowSharedKey, showShared)
 }

@@ -751,6 +751,29 @@ var _ = Describe("Reflection helper", func() {
 			Expect(capturedFilter).To(Equal(`this.metadata.tenant == "acme"`))
 		})
 
+		It("Includes shared tenant when AllTenants is enabled", func() {
+			var capturedFilter string
+			publicv1.RegisterClustersServer(server.Registrar(), &testing.ClustersServerFuncs{
+				ListFunc: func(ctx context.Context, request *publicv1.ClustersListRequest,
+				) (response *publicv1.ClustersListResponse, err error) {
+					capturedFilter = request.GetFilter()
+					response = publicv1.ClustersListResponse_builder{
+						Size:  0,
+						Total: 0,
+					}.Build()
+					return
+				},
+			})
+			server.Start()
+
+			tenantCtx := testTenantIntoContext(ctx, "acme")
+			objectHelper := helper.Lookup("cluster")
+			Expect(objectHelper).ToNot(BeNil())
+			_, err := objectHelper.List(tenantCtx, ListOptions{AllTenants: true})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(capturedFilter).To(Equal(`this.metadata.tenant == "acme" || this.metadata.tenant == "shared"`))
+		})
+
 		It("Combines tenant filter with user-provided filter", func() {
 			var capturedFilter string
 			publicv1.RegisterClustersServer(server.Registrar(), &testing.ClustersServerFuncs{
@@ -774,7 +797,35 @@ var _ = Describe("Reflection helper", func() {
 			})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(capturedFilter).To(Equal(
-				`this.metadata.tenant == "acme" && (this.metadata.name == "my-cluster")`,
+				`(this.metadata.tenant == "acme") && (this.metadata.name == "my-cluster")`,
+			))
+		})
+
+		It("Combines AllTenants filter with user-provided filter", func() {
+			var capturedFilter string
+			publicv1.RegisterClustersServer(server.Registrar(), &testing.ClustersServerFuncs{
+				ListFunc: func(ctx context.Context, request *publicv1.ClustersListRequest,
+				) (response *publicv1.ClustersListResponse, err error) {
+					capturedFilter = request.GetFilter()
+					response = publicv1.ClustersListResponse_builder{
+						Size:  0,
+						Total: 0,
+					}.Build()
+					return
+				},
+			})
+			server.Start()
+
+			tenantCtx := testTenantIntoContext(ctx, "acme")
+			objectHelper := helper.Lookup("cluster")
+			Expect(objectHelper).ToNot(BeNil())
+			_, err := objectHelper.List(tenantCtx, ListOptions{
+				Filter:     `this.metadata.name == "my-cluster"`,
+				AllTenants: true,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(capturedFilter).To(Equal(
+				`(this.metadata.tenant == "acme" || this.metadata.tenant == "shared") && (this.metadata.name == "my-cluster")`,
 			))
 		})
 

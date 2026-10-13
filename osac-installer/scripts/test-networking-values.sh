@@ -253,6 +253,31 @@ if [[ $(grep -Fc 'NETRIS_VALIDATE_CERTS: "false"' "${TMP_DIR}/netris-expert-vali
   exit 1
 fi
 
+# Low-level AAP values become authoritative only when the expert override is
+# enabled. This deliberately permits an AAP-only value that differs from the
+# global facade; without the expert switch, the facade remains authoritative.
+render_success \
+  netris-expert-validate-certs-enabled \
+  'NETRIS_VALIDATE_CERTS: "true"' \
+  --set global.networking.fabricManager=netris \
+  --set global.networking.k8sManager= \
+  --set global.networking.netris.validateCerts=false \
+  --set-string global.networking.netris.controllerUrl=https://netris.example.com \
+  --set-string global.networking.netris.credentials.username=test-user \
+  --set global.networking.netris.credentials.externalSecret=true \
+  --set-string global.networking.netris.siteId=1 \
+  --set-string global.networking.netris.tenantId=1 \
+  --set-string global.networking.netris.tenantName=test \
+  --set global.expertOverrides.aap=true \
+  --set aap.instanceGroups.clusterFulfillment.enabled=true \
+  --set aap.instanceGroups.networkFulfillment.enabled=true \
+  --set-string aap.instanceGroups.clusterFulfillment.config.NETRIS_VALIDATE_CERTS=true \
+  --set-string aap.instanceGroups.networkFulfillment.config.NETRIS_VALIDATE_CERTS=true
+if [[ $(grep -Fc 'NETRIS_VALIDATE_CERTS: "true"' "${TMP_DIR}/netris-expert-validate-certs-enabled.yaml") -ne 2 ]]; then
+  echo "ERROR: expert certificate validation opt-in was not rendered to both AAP instance groups" >&2
+  exit 1
+fi
+
 # A customer-created CA ConfigMap must reach the AAP config-as-code Secret.
 # The AAP pod-spec contract test verifies that the same value is consumed by
 # both Netris container groups.

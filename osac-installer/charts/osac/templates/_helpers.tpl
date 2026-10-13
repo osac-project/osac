@@ -313,6 +313,7 @@ facade vs low-level surface mismatches).
 {{- if $netrisEnabled -}}
 {{- $creds := $netris.credentials | default dict -}}
 {{- $derived := include "osac.netrisConfig" (dict "netris" $netris "cluster" true) | fromYaml -}}
+{{/* Match the AAP chart: facade values win unless expertOverrides.aap is enabled. */}}
 {{- $cfCfg = merge $derived $cfCfg -}}
 {{- $nfDerived := include "osac.netrisConfig" (dict "netris" $netris "cluster" false) | fromYaml -}}
 {{- $nfCfg = merge $nfDerived $nfCfg -}}

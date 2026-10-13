@@ -189,11 +189,17 @@ template role with the filtered tier subset.
 
 2. Define storage provider metadata in `roles/my_provider_storage/meta/osac.yaml`:
    ```yaml
+   name: my-provider-storage
    title: My Storage Provider
+   description: >
+     Provisions storage resources for OSAC tenants. Describe what the role
+     creates and the credentials it manages.
    template_type: storage_provider
    implementation_strategy: my_provider
    capabilities:
-     supports_nfs: true
+     supported_protocols:
+       - nfs
+       - block
      provisioning_targets:
        - vmaas
        # Add caas only when this provider implements guest-cluster provisioning.

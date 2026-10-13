@@ -99,8 +99,17 @@ def _render_auth_tls_settings(monkeypatch, tmp_path, existing=None):
                 "NETRIS_CA_PATH": "",
             },
             {},
-            (False, ""),
+            (True, ""),
             id="empty",
+        ),
+        pytest.param(
+            {
+                "NETRIS_VALIDATE_CERTS": "not-a-boolean",
+                "NETRIS_CA_PATH": "",
+            },
+            {},
+            (True, ""),
+            id="malformed",
         ),
         pytest.param(
             {

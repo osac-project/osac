@@ -5,11 +5,12 @@ OSAC_NAMESPACE="${OSAC_NAMESPACE:-osac}"
 KEYCLOAK_NAMESPACE="${KEYCLOAK_NAMESPACE:-keycloak}"
 ROLLOUT_TIMEOUT="${ROLLOUT_TIMEOUT:-5m}"
 KEYCLOAK_URL="${KEYCLOAK_URL:-https://keycloak.osac.localhost:8443}"
-FULFILLMENT_API_URL="${FULFILLMENT_API_URL:-https://fulfillment-api.osac.localhost:8443/api/fulfillment/v1/tenants}"
-ADMIN_USERNAME="${OSAC_ADMIN_USERNAME:-tenant1_admin}"
+FULFILLMENT_GRPC_ADDRESS="${OSAC_FULFILLMENT_GRPC_ADDRESS:-fulfillment-api.osac.localhost:8443}"
+UI_URL="${OSAC_UI_URL:-http://ui.osac.localhost:8080/}"
+ADMIN_CLIENT_ID="${OSAC_ADMIN_CLIENT_ID:-osac-admin}"
 EXPECTED_TENANT="${OSAC_EXPECTED_TENANT:-tenant1}"
 
-for command in kubectl curl jq base64; do
+for command in kubectl curl grpcurl jq base64 timeout; do
   if ! command -v "${command}" >/dev/null 2>&1; then
     echo "Required command not found: ${command}" >&2
     exit 1
@@ -39,7 +40,7 @@ printf 'Checking the OSAC UI Gateway route ...\n'
 if ! curl --silent --show-error --fail \
   --connect-timeout 10 --max-time 30 --retry 5 --retry-connrefused --retry-delay 2 --retry-max-time 60 \
   --output /dev/null \
-  "http://ui.osac.localhost:8080/"; then
+  "${UI_URL}"; then
   echo "The UI is not reachable through its Kind Gateway route." >&2
   exit 1
 fi
@@ -55,31 +56,27 @@ if [[ ! -s "${ca_bundle}" ]]; then
   exit 1
 fi
 
-password_b64="$(kubectl --namespace "${KEYCLOAK_NAMESPACE}" get secret keycloak-admin-credentials \
-  -o jsonpath='{.data.default-user-password}')"
-if [[ -z "${password_b64}" ]]; then
-  echo "Keycloak default-user-password is missing." >&2
+client_secret_b64="$(kubectl --namespace "${KEYCLOAK_NAMESPACE}" get secret keycloak-client-secrets \
+  -o jsonpath='{.data.osac-admin}')"
+if [[ -z "${client_secret_b64}" ]]; then
+  echo "Keycloak osac-admin client secret is missing." >&2
   exit 1
 fi
-admin_password="$(printf '%s' "${password_b64}" | base64 --decode)"
+client_secret="$(printf '%s' "${client_secret_b64}" | base64 --decode)"
 
-printf 'Authenticating as %s through Keycloak ...\n' "${ADMIN_USERNAME}"
+printf 'Authenticating with the %s service account through Keycloak ...\n' "${ADMIN_CLIENT_ID}"
 token_response="$(curl --silent --show-error --fail-with-body \
   --connect-timeout 10 --max-time 30 --cacert "${ca_bundle}" \
   --request POST "${KEYCLOAK_URL}/realms/osac/protocol/openid-connect/token" \
-  --data-urlencode 'grant_type=password' \
-  --data-urlencode 'client_id=osac-cli' \
-  --data-urlencode "username=${ADMIN_USERNAME}" \
-  --data-urlencode "password=${admin_password}" \
-  --data-urlencode 'scope=openid organization')"
+  --data-urlencode 'grant_type=client_credentials' \
+  --data-urlencode "client_id=${ADMIN_CLIENT_ID}" \
+  --data-urlencode "client_secret=${client_secret}")"
 access_token="$(jq -er '.access_token | select(type == "string" and length > 0)' <<<"${token_response}")"
 
-printf 'Requesting tenant list from Fulfillment API ...\n'
-tenant_response="$(curl --silent --show-error --fail-with-body \
-  --connect-timeout 10 --max-time 30 --retry 5 --retry-connrefused --retry-delay 2 --retry-max-time 60 \
-  --cacert "${ca_bundle}" \
-  --header "Authorization: Bearer ${access_token}" \
-  "${FULFILLMENT_API_URL}")"
+printf 'Requesting tenant list from Fulfillment gRPC API ...\n'
+tenant_response="$(timeout 30s grpcurl --cacert "${ca_bundle}" \
+  -H "Authorization: Bearer ${access_token}" \
+  -d '{}' "${FULFILLMENT_GRPC_ADDRESS}" osac.public.v1.Tenants/List)"
 
 if ! jq -e --arg expected_tenant "${EXPECTED_TENANT}" \
   '(.items | type == "array") and any(.items[]; .metadata.name == $expected_tenant)' \

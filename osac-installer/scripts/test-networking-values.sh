@@ -239,6 +239,15 @@ render_success \
   --set-string service.externalHostname=fulfillment-api.test.example.com \
   --set-string service.internalHostname=fulfillment-internal-api.test.example.com
 
+render_success \
+  netris-full-ci-validate-certs \
+  'NETRIS_VALIDATE_CERTS: "false"' \
+  --values "${CHART_DIR}/ci/full-values.yaml"
+if [[ $(grep -Fc 'NETRIS_VALIDATE_CERTS: "false"' "${TMP_DIR}/netris-full-ci-validate-certs.yaml") -ne 3 ]]; then
+  echo "ERROR: full CI certificate validation opt-out was not rendered to config-as-code and both AAP instance groups" >&2
+  exit 1
+fi
+
 # Expert AAP overrides remain an escape hatch for direct ConfigMap control.
 render_success \
   netris-expert-validate-certs-disabled \

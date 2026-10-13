@@ -67,15 +67,19 @@ client_secret="$(printf '%s' "${client_secret_b64}" | base64 --decode)"
 printf 'Authenticating with the %s service account through Keycloak ...\n' "${ADMIN_CLIENT_ID}"
 token_response="$(curl --silent --show-error --fail-with-body \
   --connect-timeout 10 --max-time 30 --cacert "${ca_bundle}" \
-  --request POST "${KEYCLOAK_URL}/realms/osac/protocol/openid-connect/token" \
-  --data-urlencode 'grant_type=client_credentials' \
-  --data-urlencode "client_id=${ADMIN_CLIENT_ID}" \
-  --data-urlencode "client_secret=${client_secret}")"
+  --config - <<CURL_CONFIG
+url = "${KEYCLOAK_URL}/realms/osac/protocol/openid-connect/token"
+request = "POST"
+data-urlencode = "grant_type=client_credentials"
+data-urlencode = "client_id=${ADMIN_CLIENT_ID}"
+data-urlencode = "client_secret=${client_secret}"
+CURL_CONFIG
+)"
 access_token="$(jq -er '.access_token | select(type == "string" and length > 0)' <<<"${token_response}")"
 
 printf 'Requesting tenant list from Fulfillment gRPC API ...\n'
-tenant_response="$(timeout 30s grpcurl --cacert "${ca_bundle}" \
-  -H "Authorization: Bearer ${access_token}" \
+tenant_response="$(OSAC_ACCESS_TOKEN="${access_token}" timeout 30s grpcurl --expand-headers \
+  --cacert "${ca_bundle}" -H 'Authorization: Bearer ${OSAC_ACCESS_TOKEN}' \
   -d '{}' "${FULFILLMENT_GRPC_ADDRESS}" osac.public.v1.Tenants/List)"
 
 if ! jq -e --arg expected_tenant "${EXPECTED_TENANT}" \

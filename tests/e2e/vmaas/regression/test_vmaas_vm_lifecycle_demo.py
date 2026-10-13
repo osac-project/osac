@@ -52,7 +52,7 @@ def _k8s_manager(item: dict[str, Any]) -> str:
 def _attachment_refs(instance: dict[str, Any]) -> tuple[str, list[str]]:
     spec = instance.get("spec") or {}
     attachments = spec.get("network_attachments") or spec.get("networkAttachments") or []
-    assert attachments, "ComputeInstance has no network attachment"
+    assert len(attachments) == 1, f"expected one network attachment, got {len(attachments)}"
     attachment = attachments[0]
     subnet = attachment.get("subnet") or {}
     groups = attachment.get("security_groups") or attachment.get("securityGroups") or []
@@ -72,7 +72,6 @@ def test_vmaas_vm_lifecycle_demo(
     """Order one VM on a tenant network, stop it, start it, and restart it."""
     tag = uuid4().hex[:8]
     subnet_net = allocate_worker_subnet()
-    vn_net = ipaddress.ip_network(f"{subnet_net.network_address}/16", strict=False)
     it_name = f"e2e-it-{tag}"
     it_created = False
     catalog_id: str | None = None
@@ -115,7 +114,7 @@ def test_vmaas_vm_lifecycle_demo(
         )
         assert catalog_id in grpc.list_compute_instance_catalog_item_ids()
 
-        vn_id, vn_cr_name = create_and_wait_for_virtual_network(grpc, k8s_hub_client, f"e2e-vnet-{tag}", str(vn_net))
+        vn_id, vn_cr_name = create_and_wait_for_virtual_network(grpc, k8s_hub_client, f"e2e-vnet-{tag}", str(subnet_net))
         assert vn_id in grpc.list_virtual_network_ids()
 
         subnet_id, subnet_cr_name = create_and_wait_for_subnet(
@@ -141,7 +140,7 @@ def test_vmaas_vm_lifecycle_demo(
         )
         attached_subnet, attached_groups = _attachment_refs(grpc.get_compute_instance(ci_id=ci_uuid)["object"])
         assert attached_subnet == subnet_id
-        assert sg_id in attached_groups
+        assert attached_groups == [sg_id]
 
         ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=ci_uuid)
         wait_for_running(k8s=k8s_hub_client, name=ci_name)
@@ -158,7 +157,7 @@ def test_vmaas_vm_lifecycle_demo(
             description=f"{ci_name} stopped",
         )
         poll_until(
-            fn=lambda: k8s_virt_client.get_vmi_json(vmi_namespace=vm_ns, compute_instance_name=ci_name, checked=False),
+            fn=lambda: k8s_virt_client.get_vmi_json(vmi_namespace=vm_ns, compute_instance_name=ci_name),
             until=lambda vmi: vmi == {},
             retries=30,
             delay=5,

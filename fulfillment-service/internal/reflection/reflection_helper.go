@@ -412,9 +412,12 @@ func (h *helper) scanService(serviceDesc protoreflect.ServiceDescriptor) {
 	idFieldDesc := objectFields.ByName(idFieldName)
 	metadataFieldDesc := objectFields.ByName(metadataFieldName)
 
-	// Determine if the object is project-scoped by checking if its metadata has a "project" field:
+	// Determine if the object is project-scoped by checking if its metadata has a "project" field.
+	// Platform-scoped types (e.g. Tenant, Role) share the same Metadata message but are not
+	// conceptually project-scoped — exclude them so that List does not inject a project filter
+	// that would hide these resources when a project is selected.
 	projectScoped := false
-	if metadataFieldDesc != nil {
+	if metadataFieldDesc != nil && !platformScopedTypes[objectDesc.Name()] {
 		metadataMsg := metadataFieldDesc.Message()
 		if metadataMsg != nil && metadataMsg.Fields().ByName(projectFieldName) != nil {
 			projectScoped = true

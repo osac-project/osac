@@ -128,6 +128,39 @@ var _ = Describe("Project command", func() {
 			Entry("'..' from empty project", "", "..", ""),
 			Entry("Name containing dots is treated as single segment", "team", "a.b", "team.a.b"),
 		)
+
+		// Regression: when '..' resolves to "" from a top-level project, setProject
+		// should clear the project rather than trying to find a project named "".
+		It("Returns empty for '..' from single-level (setProject clears)", func() {
+			ctx := context.Background()
+			settings := mustSettings()
+			settings.SetProject("team-a")
+			name := runner.resolveProjectName(ctx, settings, "..")
+			Expect(name).To(BeEmpty(),
+				"'..' from a single-level project should resolve to empty, "+
+					"signalling setProject to clear the saved project")
+		})
+
+		// Regression: when a project is saved, a UUID argument should not be
+		// made relative. resolveProjectName does prepend the current project,
+		// but setProject should try the raw argument first.
+		It("Prepends current project to a UUID-like name (setProject tries as-is first)", func() {
+			ctx := context.Background()
+			settings := mustSettings()
+			settings.SetProject("team-a")
+			name := runner.resolveProjectName(ctx, settings, "abc-123-def")
+			// resolveProjectName always relativizes — the fix is in setProject
+			// which tries the raw argument first.
+			Expect(name).To(Equal("team-a.abc-123-def"))
+		})
+	})
+
+	Describe("noOpRenderer", func() {
+		It("Implements the reflection.Renderer interface", func() {
+			var r noOpRenderer
+			// Should not panic; discards all output silently.
+			r.Render(context.Background(), "no_matches.txt", nil)
+		})
 	})
 })
 

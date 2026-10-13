@@ -300,8 +300,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 		computeInstance := publicv1.ComputeInstance_builder{
 			Metadata: publicv1.Metadata_builder{
-				Name:   c.args.name,
-				Tenant: c.settings.Tenant(),
+				Name:    c.args.name,
+				Tenant:  c.settings.Tenant(),
+				Project: config.ProjectFromContext(ctx),
 			}.Build(),
 			Spec: specResult,
 		}.Build()
@@ -357,7 +358,8 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	// Prepare the compute instance:
 	computeInstance := publicv1.ComputeInstance_builder{
 		Metadata: publicv1.Metadata_builder{
-			Name: c.args.name,
+			Name:    c.args.name,
+			Project: config.ProjectFromContext(ctx),
 		}.Build(),
 		Spec: spec,
 	}.Build()

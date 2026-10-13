@@ -820,11 +820,13 @@ var _ = Describe("Reflection helper", func() {
 			Expect(helper.Lookup("project").IsProjectScoped()).To(BeTrue())
 		})
 
-		It("Reports all metadata-bearing types as project-scoped", func() {
-			// All public types share the same Metadata message which has a project field,
-			// so every type with metadata is project-scoped.
-			Expect(helper.Lookup("tenant").IsProjectScoped()).To(BeTrue())
-			Expect(helper.Lookup("role").IsProjectScoped()).To(BeTrue())
+		It("Reports platform-scoped types as not project-scoped", func() {
+			// Platform-scoped types share the same Metadata message but are not
+			// conceptually project-scoped. Marking them project-scoped would inject
+			// a project filter on List that hides these resources when a project is
+			// selected.
+			Expect(helper.Lookup("tenant").IsProjectScoped()).To(BeFalse())
+			Expect(helper.Lookup("role").IsProjectScoped()).To(BeFalse())
 		})
 
 		It("Sets and gets project on cluster metadata", func() {
@@ -1040,6 +1042,21 @@ var _ = Describe("Reflection helper", func() {
 			_, err = objectHelper.List(projectCtx, ListOptions{})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(capturedFilter).To(Equal(`this.metadata.project == "proj\"with\"quotes"`))
+		})
+
+		It("Excludes all platform-scoped types from project scoping", func() {
+			// Platform-scoped types must NOT be marked project-scoped, even though
+			// they share the Metadata message that has a project field. If they were
+			// project-scoped, List would inject a project filter that hides these
+			// resources when a project is selected.
+			for _, name := range helper.Names() {
+				objectHelper := helper.Lookup(name)
+				Expect(objectHelper).ToNot(BeNil(), "Lookup failed for %s", name)
+				if !objectHelper.IsTenantScoped() {
+					Expect(objectHelper.IsProjectScoped()).To(BeFalse(),
+						"platform-scoped type %q must not be project-scoped", name)
+				}
+			}
 		})
 
 		It("Sorts types according to package order when adding packages", func() {

@@ -143,9 +143,35 @@ func (c *runnerContext) setProject(cmd *cobra.Command, settings *config.Settings
 	// Resolve hierarchical navigation: ".." goes up, and a relative name is appended to the current project.
 	resolvedName := c.resolveProjectName(ctx, settings, name)
 
-	object, objectHelper, err := c.findProject(cmd, settings, resolvedName)
-	if err != nil {
-		return err
+	// Navigating up to the default (empty) project clears the saved project.
+	if resolvedName == "" {
+		settings.SetProject("")
+		err := settings.Save(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to save settings: %w", err)
+		}
+		c.console.Render(ctx, "project_cleared.txt", nil)
+		return nil
+	}
+
+	// When the resolved name differs from the input (relative resolution was applied),
+	// try the input as-is first so lookups by exact ID or absolute name work even when
+	// a project is already saved.
+	var object proto.Message
+	var objectHelper reflection.ObjectHelper
+	var err error
+	if name != resolvedName {
+		object, objectHelper, err = c.findProjectQuiet(cmd, settings, name)
+		if err != nil {
+			// Quiet lookup failed — fall through to the resolved name below.
+			object = nil
+		}
+	}
+	if object == nil {
+		object, objectHelper, err = c.findProject(cmd, settings, resolvedName)
+		if err != nil {
+			return err
+		}
 	}
 
 	canonicalName := objectHelper.GetName(object)
@@ -159,6 +185,51 @@ func (c *runnerContext) setProject(cmd *cobra.Command, settings *config.Settings
 		"Project": canonicalName,
 	})
 	return nil
+}
+
+// noOpRenderer is a Renderer that discards all output. Used for silent lookups
+// where error templates should not be displayed.
+type noOpRenderer struct{}
+
+func (noOpRenderer) Render(context.Context, string, any) {}
+
+// findProjectQuiet is like findProject but uses a no-op renderer so that "not found" and
+// "multiple matches" templates are not displayed. It is used for speculative lookups
+// when the caller will fall back to a different ref on failure.
+func (c *runnerContext) findProjectQuiet(cmd *cobra.Command, settings *config.Settings, ref string) (proto.Message, reflection.ObjectHelper, error) {
+	ctx := cmd.Context()
+
+	if !settings.Armed() {
+		return nil, nil, fmt.Errorf("there is no configuration, run the 'login' command")
+	}
+
+	conn, err := settings.Connect(ctx, cmd.Flags())
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create gRPC connection: %w", err)
+	}
+	defer conn.Close()
+
+	helper, err := reflection.NewHelper().
+		SetLogger(c.logger).
+		SetConnection(conn).
+		AddPackages(settings.Packages()).
+		SetTenantFunc(config.TenantFromContext).
+		SetProjectFunc(config.ProjectFromContext).
+		Build()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create reflection tool: %w", err)
+	}
+
+	objectHelper := helper.Lookup("project")
+	if objectHelper == nil {
+		return nil, nil, fmt.Errorf("project resource type not found on the server")
+	}
+
+	object, err := objectHelper.FindObject(ctx, ref, noOpRenderer{})
+	if err != nil {
+		return nil, nil, err
+	}
+	return object, objectHelper, nil
 }
 
 // resolveProjectName resolves a project name relative to the current project context, supporting

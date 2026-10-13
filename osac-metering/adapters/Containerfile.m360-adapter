@@ -2,18 +2,40 @@ FROM registry.access.redhat.com/ubi10/go-toolset:1.26.7-1791275880 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
+# Build context is the repo root (not osac-metering/), matching
+# metering-service's Containerfile: go.work must be reachable even though
+# adapters' own go.mod resolves its deps via local replace directives, not
+# workspace imports. Hermeto's hermetic prefetch runs against the full repo
+# checkout (not just this Containerfile's COPY set), sees go.work at the
+# repo root regardless of what's copied in, and resolves/prefetches
+# dependencies in workspace mode -- confirmed live (a real Konflux PR build
+# failed with specific packages missing from the prefetch cache when this
+# Containerfile omitted go.work and used osac-metering/ as its context,
+# because the actual `go mod download` then ran in standalone mode while
+# prefetch had resolved workspace-wide). Copying go.work here just makes
+# the real build consistent with what was already prefetched; it doesn't
+# change which packages this module's own code can import.
 WORKDIR /opt/app-root/src
-COPY --chown=1001:0 schema/ schema/
-COPY --chown=1001:0 adapters/go.mod adapters/go.sum adapters/
+COPY --chown=1001:0 go.work ./
+COPY --chown=1001:0 proto/go.mod proto/go.sum proto/
+COPY --chown=1001:0 osac-operator/go.mod osac-operator/go.sum osac-operator/
+COPY --chown=1001:0 osac-operator/api/go.mod osac-operator/api/go.sum osac-operator/api/
+COPY --chown=1001:0 bare-metal-fulfillment-operator/go.mod bare-metal-fulfillment-operator/go.sum bare-metal-fulfillment-operator/
+COPY --chown=1001:0 fulfillment-service/go.mod fulfillment-service/go.sum fulfillment-service/
+COPY --chown=1001:0 osac-csi-driver/go.mod osac-csi-driver/go.sum osac-csi-driver/
+COPY --chown=1001:0 osac-metering/metering-service/go.mod osac-metering/metering-service/go.sum osac-metering/metering-service/
+COPY --chown=1001:0 osac-ui/proxy/go.mod osac-ui/proxy/go.sum osac-ui/proxy/
+COPY --chown=1001:0 osac-metering/schema/ osac-metering/schema/
+COPY --chown=1001:0 osac-metering/adapters/go.mod osac-metering/adapters/go.sum osac-metering/adapters/
 # [ -f /cachi2/cachi2.env ] && . ... sources Hermeto/Cachi2's generated env
 # (GOPROXY/GOFLAGS pointed at the prefetched module cache) when present --
 # i.e. a hermetic Konflux build. Absent entirely for local/non-hermetic
 # builds, where go mod download falls back to the real network as before.
-RUN cd adapters && { [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; go mod download; }
+RUN cd osac-metering/adapters && { [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; go mod download; }
 
-COPY --chown=1001:0 adapters/ adapters/
+COPY --chown=1001:0 osac-metering/adapters/ osac-metering/adapters/
 
-RUN cd adapters && { [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -buildvcs=false -a -o /opt/app-root/src/m360-adapter ./cmd/m360-adapter; }
+RUN cd osac-metering/adapters && { [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -buildvcs=false -a -o /opt/app-root/src/m360-adapter ./cmd/m360-adapter; }
 
 FROM registry.access.redhat.com/ubi10-minimal:10.2-1790075626
 LABEL name="cloud-extensions/metering-m360-adapter-rhel10"

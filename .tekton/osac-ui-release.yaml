@@ -23,9 +23,9 @@ spec:
   - name: output-image
     value: quay.io/redhat-user-workloads/osac-tenant/osac-ui:{{revision}}
   - name: dockerfile
-    value: Containerfile
+    value: osac-ui/Containerfile
   - name: path-context
-    value: osac-ui
+    value: .
   - name: build-source-image
     value: "true"
   - name: hermetic
@@ -183,85 +183,6 @@ spec:
       workspaces:
       - name: basic-auth
         workspace: git-auth
-    - name: strip-gowork
-      params:
-      - name: ociStorage
-        value: $(params.output-image).git-nogowork
-      - name: ociArtifactExpiresAfter
-        value: $(params.image-expires-after)
-      runAfter:
-      - clone-repository
-      # Removes go.work (via `git rm`, so it's gone from both the working
-      # tree and the git index) from a FULL checkout, instead of using
-      # clone-repository's sparseCheckoutDirectories param as the
-      # pull-request/push pipelines do. A sparse checkout leaves go.work
-      # (and everything outside the sparse cone) missing from the working
-      # tree but NOT from the git index -- `git ls-files` (used by this
-      # release pipeline's build-source-image task to enumerate files for
-      # `tar`) lists index entries regardless of the sparse-checkout
-      # skip-worktree bit, so it still lists every file in the monorepo
-      # while only osac-ui/ actually exists on disk, and `tar` then fails
-      # trying to read the thousands of paths that were never checked out
-      # -- confirmed live via a real release build's "tar: ... Cannot stat:
-      # No such file or directory" failures. Removing go.work from a full
-      # checkout achieves the same goal (hides it from `go env GOWORK` so
-      # Hermeto's prefetch and the real build both resolve standalone)
-      # without the disk/index mismatch: `git ls-files` genuinely no
-      # longer lists go.work, and every other path it returns still
-      # physically exists, since nothing else was pruned.
-      taskSpec:
-        params:
-        - name: ociStorage
-          type: string
-        - name: ociArtifactExpiresAfter
-          type: string
-        results:
-        - name: SOURCE_ARTIFACT
-          type: string
-          description: The Trusted Artifact URI with go.work removed.
-        volumes:
-        - name: workdir
-          emptyDir: {}
-        steps:
-        - name: use-trusted-artifact
-          image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:7b4f5bbf8b8aa663beaf18bfef4fd16ba1cb5ce846d1fc776a64b312c52ee28c
-          volumeMounts:
-          - name: workdir
-            mountPath: /var/workdir
-          args:
-          - use
-          - $(tasks.clone-repository.results.SOURCE_ARTIFACT)=/var/workdir/source
-        - name: remove-go-work
-          image: quay.io/konflux-ci/konflux-build-cli@sha256:85141954209ee158fe9e559869a0da196ff08c5d4bb15b1a6c2e54d4fcd6b52f
-          # clone-repository's own "clone" step runs as root (same reason:
-          # see git-clone-oci-ta's task definition), so the restored
-          # .git/ directory is root-owned with restrictive permissions --
-          # confirmed live: `git rm` failed with "Unable to create
-          # .git/index.lock: Permission denied" without this.
-          securityContext:
-            runAsUser: 0
-          volumeMounts:
-          - name: workdir
-            mountPath: /var/workdir
-          script: |
-            #!/usr/bin/env bash
-            set -euo pipefail
-            cd /var/workdir/source
-            git config --global --add safe.directory /var/workdir/source
-            git rm --quiet go.work
-        - name: create-trusted-artifact
-          image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:7b4f5bbf8b8aa663beaf18bfef4fd16ba1cb5ce846d1fc776a64b312c52ee28c
-          volumeMounts:
-          - name: workdir
-            mountPath: /var/workdir
-          env:
-          - name: IMAGE_EXPIRES_AFTER
-            value: $(params.ociArtifactExpiresAfter)
-          args:
-          - create
-          - --store
-          - $(params.ociStorage)
-          - $(results.SOURCE_ARTIFACT.path)=/var/workdir/source
     - name: prefetch-dependencies
       params:
       - name: input
@@ -269,13 +190,13 @@ spec:
       - name: enable-package-registry-proxy
         value: $(params.enable-package-registry-proxy)
       - name: SOURCE_ARTIFACT
-        value: $(tasks.strip-gowork.results.SOURCE_ARTIFACT)
+        value: $(tasks.clone-repository.results.SOURCE_ARTIFACT)
       - name: ociStorage
         value: $(params.output-image).prefetch
       - name: ociArtifactExpiresAfter
         value: $(params.image-expires-after)
       runAfter:
-      - strip-gowork
+      - clone-repository
       taskRef:
         params:
         - name: name

@@ -28,9 +28,9 @@ spec:
   - name: image-expires-after
     value: 5d
   - name: dockerfile
-    value: Containerfile
+    value: osac-ui/Containerfile
   - name: path-context
-    value: osac-ui
+    value: .
   - name: hermetic
     value: "true"
   - name: prefetch-input
@@ -172,15 +172,6 @@ spec:
         value: $(params.output-image).git
       - name: ociArtifactExpiresAfter
         value: $(params.image-expires-after)
-      # Limits the checkout fed to prefetch-dependencies and build-container
-      # to osac-ui/ only, so the shared repo-root go.work genuinely doesn't
-      # exist in either one's view of the source tree -- avoids the
-      # workspace-vs-standalone dependency resolution mismatch that affects
-      # every other component sharing go.work (confirmed live: `go env
-      # GOWORK` and `go mod download` both resolve cleanly standalone in a
-      # local `git sparse-checkout set -- osac-ui` test clone).
-      - name: sparseCheckoutDirectories
-        value: osac-ui
       runAfter:
       - init
       taskRef:

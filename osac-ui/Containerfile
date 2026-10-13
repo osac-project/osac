@@ -1,6 +1,11 @@
 # Multi-stage build: one image runs the Go proxy + serves the SPA bundle
+# Build context: mono-repo root (not osac-ui/ alone) -- proxy/'s go.work
+# workspace membership means Hermeto's hermetic prefetch always resolves its
+# deps in workspace mode (go.work is reachable from the full repo checkout
+# regardless of what this Containerfile copies), so the real build must
+# match that; see the proxy-builder stage's own comment for the full story.
 # Usage:
-#   podman build -t osac:latest -f Containerfile .
+#   podman build -t osac:latest -f osac-ui/Containerfile .
 #   podman run --rm -p 8080:8080 -e FULFILLMENT_API_URL=https://fulfillment.example.com osac:latest
 
 # ── Stage 1: install SPA workspace dependencies ───────────────────────────
@@ -28,11 +33,11 @@ RUN if [ -f /cachi2/output/deps/generic/pnpm-9.15.9.tgz ]; then \
 # most packages fetched fine via the artifact-registry-proxy, but a
 # cluster of specific packages failed with ENOTFOUND against
 # registry.npmjs.org directly.
-COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* .npmrc* tsconfig.base.json ./
-COPY libs/i18n/package.json ./libs/i18n/
-COPY libs/types/package.json ./libs/types/
-COPY libs/ui-components/package.json ./libs/ui-components/
-COPY apps/app-frontend/package.json ./apps/app-frontend/
+COPY osac-ui/package.json osac-ui/pnpm-workspace.yaml osac-ui/pnpm-lock.yaml* osac-ui/.npmrc* osac-ui/tsconfig.base.json ./
+COPY osac-ui/libs/i18n/package.json ./libs/i18n/
+COPY osac-ui/libs/types/package.json ./libs/types/
+COPY osac-ui/libs/ui-components/package.json ./libs/ui-components/
+COPY osac-ui/apps/app-frontend/package.json ./apps/app-frontend/
 
 # [ -f /cachi2/cachi2.env ] && . ... sources Hermeto/Cachi2's generated env
 # (pointed at the prefetched pnpm store) when present -- i.e. a hermetic
@@ -44,31 +49,59 @@ RUN [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; pnpm install --frozen-loc
 FROM deps AS spa-builder
 WORKDIR /app
 
-COPY libs/ ./libs/
-COPY apps/app-frontend/ ./apps/app-frontend/
+COPY osac-ui/libs/ ./libs/
+COPY osac-ui/apps/app-frontend/ ./apps/app-frontend/
 
 # SPA output goes to apps/app-frontend/dist (configured in vite.config.ts outDir)
 RUN [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; pnpm --filter @osac/app-frontend run build
 
 # ── Stage 3: build Go proxy ───────────────────────────────────────────────
-FROM registry.access.redhat.com/ubi9/go-toolset:1.25 AS proxy-builder
+# go-toolset 1.26 (not 1.25) -- go.work's `go 1.26.3` directive now applies
+# here too (see below), and an older toolchain can't satisfy it without
+# live network access to download a newer one, which hermetic builds don't
+# have. Confirmed live: 1.25.9 failed with "go.work requires go >= 1.26.3"
+# the moment go.work actually became reachable in this stage.
+FROM registry.access.redhat.com/ubi9/go-toolset:1.26-1791479310 AS proxy-builder
 USER root
 WORKDIR /build
 
-COPY proxy/go.mod proxy/go.sum ./
+# go.work.sum is intentionally not copied in -- it's not committed to the
+# repo (see root .gitignore); go mod download below regenerates it inside
+# the build using the go.sum files already copied in per module. go.work
+# itself IS needed here even though proxy's own go.mod resolves its deps
+# via go.sum alone (no local replace directives to another workspace
+# module): Hermeto's hermetic prefetch runs against the full repo checkout
+# (not just this Containerfile's COPY set), sees go.work at the repo root
+# regardless -- osac-ui/proxy is one of its `use` entries -- and resolves/
+# prefetches dependencies in workspace mode. Confirmed live the same way
+# as the standalone osac-metering modules: a real Konflux PR build failed
+# with specific packages (grpc, x/net, x/sys, x/text, genproto) missing
+# from the prefetch cache when this stage omitted go.work, because the
+# actual `go mod download` then ran in standalone mode while prefetch had
+# resolved workspace-wide. Copying go.work here just makes the real build
+# consistent with what was already prefetched.
+COPY go.work ./
+COPY proto/go.mod proto/go.sum proto/
+COPY osac-operator/go.mod osac-operator/go.sum osac-operator/
+COPY osac-operator/api/go.mod osac-operator/api/go.sum osac-operator/api/
+COPY bare-metal-fulfillment-operator/go.mod bare-metal-fulfillment-operator/go.sum bare-metal-fulfillment-operator/
+COPY fulfillment-service/go.mod fulfillment-service/go.sum fulfillment-service/
+COPY osac-csi-driver/go.mod osac-csi-driver/go.sum osac-csi-driver/
+COPY osac-metering/schema/go.mod osac-metering/schema/go.sum osac-metering/schema/
+COPY osac-metering/metering-service/go.mod osac-metering/metering-service/go.sum osac-metering/metering-service/
+COPY osac-metering/adapters/go.mod osac-metering/adapters/go.sum osac-metering/adapters/
+# go.work's `use` entry for osac-ui/proxy expects go.mod at exactly that
+# relative path -- keep the real repo layout under /build instead of
+# flattening into it, then WORKDIR into it for the actual build commands.
+COPY osac-ui/proxy/go.mod osac-ui/proxy/go.sum osac-ui/proxy/
 # [ -f /cachi2/cachi2.env ] && . ... sources Hermeto/Cachi2's generated env
 # (GOPROXY/GOFLAGS pointed at the prefetched module cache) when present --
 # i.e. a hermetic Konflux build. Absent entirely for local/non-hermetic
 # builds, where go mod download falls back to the real network as before.
-# proxy/ is not a go.work member as far as this build or Hermeto's prefetch
-# are concerned: the clone-repository task's sparseCheckoutDirectories
-# param (see *-pull-request/push/release.yaml) limits the checkout fed to
-# both prefetch and this build to osac-ui/ only, so go.work genuinely
-# doesn't exist anywhere in either one's view of the source tree -- no
-# workspace-vs-standalone resolution mismatch to reconcile, confirmed live.
-RUN [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; go mod download
+RUN cd osac-ui/proxy && { [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; go mod download; }
 
-COPY proxy/ ./
+COPY osac-ui/proxy/ osac-ui/proxy/
+WORKDIR /build/osac-ui/proxy
 RUN [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o osac-proxy .
 
 # ── Stage 4: production image ──────────────────────────────────────────────
@@ -82,7 +115,7 @@ ENV HOST=0.0.0.0
 ENV LOG_LEVEL=info
 
 # Copy the compiled Go binary
-COPY --from=proxy-builder /build/osac-proxy ./osac-proxy
+COPY --from=proxy-builder /build/osac-ui/proxy/osac-proxy ./osac-proxy
 
 # Copy the built SPA (vite outDir = apps/app-frontend/dist)
 COPY --from=spa-builder /app/apps/app-frontend/dist ./public

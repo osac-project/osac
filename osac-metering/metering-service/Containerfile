@@ -5,15 +5,32 @@ ARG TARGETARCH
 # Build context is the repo root (not osac-metering/) so the shared top-level
 # proto/ module -- resolved via `replace github.com/osac-project/osac/proto
 # => ../../proto` in go.mod -- is reachable. metering-service's own go.mod
-# resolves its deps via local replace directives, not workspace imports, and
-# go.work is NOT copied in: the clone-repository task's
-# sparseCheckoutDirectories param (see *-pull-request/push/release.yaml)
-# limits the checkout fed to both Hermeto's hermetic prefetch and this build
-# to osac-metering/ and proto/ only, so go.work genuinely doesn't exist
-# anywhere in either one's view of the source tree -- no workspace-vs-
-# standalone resolution mismatch to reconcile, confirmed live.
+# still resolves its deps via local replace directives, not workspace
+# imports, but go.work is copied in anyway (see below) so hermetic prefetch
+# and the real build resolve dependencies the same way.
 WORKDIR /opt/app-root/src
+# go.work.sum is intentionally not copied in -- it's not committed to the
+# repo (see root .gitignore); go mod download below regenerates it inside
+# the build using the go.sum files already copied in per module. go.work
+# itself IS needed here even though this module doesn't import any workspace
+# sibling: Hermeto's hermetic prefetch runs against the full repo checkout
+# (not just this Containerfile's COPY set), sees go.work at the repo root
+# regardless, and resolves/prefetches dependencies in workspace mode --
+# confirmed live (a real Konflux PR build failed with specific packages
+# missing from the prefetch cache when this Containerfile omitted go.work,
+# because the actual `go mod download` then ran in standalone mode while
+# prefetch had resolved workspace-wide). Copying go.work here just makes the
+# real build consistent with what was already prefetched; it doesn't change
+# which packages this module's own code can import.
+COPY --chown=1001:0 go.work ./
 COPY --chown=1001:0 proto/go.mod proto/go.sum proto/
+COPY --chown=1001:0 osac-operator/go.mod osac-operator/go.sum osac-operator/
+COPY --chown=1001:0 osac-operator/api/go.mod osac-operator/api/go.sum osac-operator/api/
+COPY --chown=1001:0 bare-metal-fulfillment-operator/go.mod bare-metal-fulfillment-operator/go.sum bare-metal-fulfillment-operator/
+COPY --chown=1001:0 fulfillment-service/go.mod fulfillment-service/go.sum fulfillment-service/
+COPY --chown=1001:0 osac-csi-driver/go.mod osac-csi-driver/go.sum osac-csi-driver/
+COPY --chown=1001:0 osac-metering/adapters/go.mod osac-metering/adapters/go.sum osac-metering/adapters/
+COPY --chown=1001:0 osac-ui/proxy/go.mod osac-ui/proxy/go.sum osac-ui/proxy/
 COPY --chown=1001:0 proto/ proto/
 COPY --chown=1001:0 osac-metering/schema/ osac-metering/schema/
 COPY --chown=1001:0 osac-metering/metering-service/go.mod osac-metering/metering-service/go.sum osac-metering/metering-service/

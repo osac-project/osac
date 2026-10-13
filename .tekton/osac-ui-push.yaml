@@ -25,9 +25,9 @@ spec:
   - name: output-image
     value: quay.io/redhat-user-workloads/osac-tenant/osac-ui:{{revision}}
   - name: dockerfile
-    value: Containerfile
+    value: osac-ui/Containerfile
   - name: path-context
-    value: osac-ui
+    value: .
   - name: hermetic
     value: "true"
   - name: prefetch-input
@@ -169,13 +169,6 @@ spec:
         value: $(params.output-image).git
       - name: ociArtifactExpiresAfter
         value: $(params.image-expires-after)
-      # Limits the checkout fed to prefetch-dependencies and build-container
-      # to osac-ui/ only, so the shared repo-root go.work genuinely doesn't
-      # exist in either one's view of the source tree -- avoids the
-      # workspace-vs-standalone dependency resolution mismatch that affects
-      # every other component sharing go.work.
-      - name: sparseCheckoutDirectories
-        value: osac-ui
       runAfter:
       - init
       taskRef:

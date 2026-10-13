@@ -145,7 +145,9 @@ jobs:
   # of the Actions app and would never satisfy the rule: the queue entry would wait for it until it timed out.
   report:
     name: Record the E2E check
-    if: ${{ !cancelled() }}
+    # Also when the run was cancelled: the check is then closed as cancelled and the queue entry is removed at once,
+    # instead of waiting for a check that never comes.
+    if: ${{ always() }}
     needs: [suites-result]
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -165,5 +167,5 @@ jobs:
           kind: checks
           repo: ${{ github.repository }}
           sha: ${{ github.event.merge_group.head_sha }}
-          result: ${{ needs.suites-result.result == 'success' && 'success' || 'failure' }}
+          result: ${{ needs.suites-result.result == 'success' && 'success' || (needs.suites-result.result == 'failure' && 'failure' || 'cancelled') }}
           detail: ${{ needs.suites-result.outputs.suites }}

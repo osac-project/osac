@@ -1,0 +1,92 @@
+name: Kind dev-full smoke
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/scripts/test-kind-dev-full.sh
+      - .github/workflows/kind-dev-full-smoke.yml
+  schedule:
+    # Staggered to avoid the top-of-hour schedule queue.
+    - cron: "17 4 * * *"
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+concurrency:
+  group: kind-dev-full-smoke-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  dev-full-smoke:
+    # Issue comments run only for an exact command from a repository
+    # collaborator. Pull requests run automatically only when the smoke test
+    # implementation changes. The schedule runs on the default branch.
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request != null &&
+       github.event.comment.body == '/test-kind-dev-full' &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    permissions:
+      contents: read # checkout the scheduled source or PR head
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/head', github.event.issue.number) || github.sha }}
+          persist-credentials: false
+
+      - name: Install Kind
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1
+        with:
+          install_only: true
+
+      - name: Install Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v3.22.0
+
+      - name: Install kind dev-full profile
+        env:
+          CONTAINER_TOOL: docker
+          KIND_EXPERIMENTAL_PROVIDER: docker
+          KUBECONFIG: ${{ runner.temp }}/osac-dev-full.kubeconfig
+        run: make -C osac-installer install PLATFORM=kind PROFILE=dev-full NS=osac
+
+      - name: Check deployments and list tenants through the authenticated API
+        env:
+          KUBECONFIG: ${{ runner.temp }}/osac-dev-full.kubeconfig
+        run: bash .github/scripts/test-kind-dev-full.sh
+
+      - name: Collect cluster status on failure
+        if: failure()
+        env:
+          KUBECONFIG: ${{ runner.temp }}/osac-dev-full.kubeconfig
+        run: |
+          if [[ ! -s "${KUBECONFIG}" ]]; then
+            echo "No Kind kubeconfig was created."
+            exit 0
+          fi
+          kubectl get deployments,pods --all-namespaces -o wide || true
+          kubectl get events --all-namespaces --sort-by='.lastTimestamp' | tail -n 100 || true
+
+      - name: Delete Kind cluster
+        if: always()
+        env:
+          KIND_EXPERIMENTAL_PROVIDER: docker
+        run: |
+          if ! command -v kind >/dev/null 2>&1; then
+            echo "Kind is not installed; skipping cluster cleanup."
+            exit 0
+          fi
+          clusters="$(kind get clusters)"
+          if grep -Fxq osac-dev <<<"${clusters}"; then
+            kind delete cluster --name osac-dev
+          else
+            echo "Kind cluster osac-dev was not created."
+          fi

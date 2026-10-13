@@ -29,8 +29,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 240
     env:
-      CONTAINER_TOOL: docker
-      KIND_EXPERIMENTAL_PROVIDER: docker
+      CONTAINER_TOOL: podman
+      KIND_EXPERIMENTAL_PROVIDER: podman
     permissions:
       contents: read # checkout the scheduled source or PR head
     steps:
@@ -42,6 +42,18 @@ jobs:
 
       - name: Set temporary kubeconfig path
         run: printf 'KUBECONFIG=%s/osac-dev-full.kubeconfig\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+
+      - name: Ensure Podman and KVM are available
+        run: |
+          if ! command -v podman >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y podman
+          fi
+          sudo podman info --format 'Rootless: {{.Host.Security.Rootless}}'
+          if [[ ! -e /dev/kvm ]]; then
+            echo "The dev-full profile requires /dev/kvm." >&2
+            exit 1
+          fi
 
       - name: Install Kind
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1
@@ -90,9 +102,8 @@ jobs:
             echo "Kind is not installed; skipping cluster cleanup."
             exit 0
           fi
-          clusters="$(kind get clusters)"
-          if grep -Fxq osac-dev <<<"${clusters}"; then
-            kind delete cluster --name osac-dev
+          if [[ -s "${KUBECONFIG}" ]]; then
+            osac-installer/scripts/dev-full/kind-runtime.sh delete-cluster osac-dev
           else
             echo "Kind cluster osac-dev was not created."
           fi

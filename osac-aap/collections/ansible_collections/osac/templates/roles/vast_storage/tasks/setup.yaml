@@ -32,14 +32,6 @@
       _provider_tiers must be provided by the service role dispatcher.
       This role should not be called directly — use osac.service.storage_provider.
 
-- name: Validate tenant_name is a valid DNS label
-  ansible.builtin.fail:
-    msg: >-
-      tenant_name '{{ tenant_name }}' is not a valid DNS label.
-      Must be 1-63 lowercase alphanumeric characters or hyphens,
-      cannot start or end with a hyphen.
-  when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
-
 - name: Validate tier names are unique
   ansible.builtin.assert:
     that:

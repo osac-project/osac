@@ -92,3 +92,11 @@ argument_specs:
         description: >
           Global API timeout in seconds for storage provider management API calls.
           Defaults to OSAC_STORAGE_API_TIMEOUT or 30 seconds.
+      storage_provider_ca_bundle_path:
+        type: str
+        required: false
+        default: "/etc/ca-bundle/bundle.pem"
+        description: >
+          Path to the cluster-installed PEM CA bundle mounted into the AAP
+          execution environment. Defaults to OSAC_STORAGE_CA_BUNDLE_PATH or
+          /etc/ca-bundle/bundle.pem.

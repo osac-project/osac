@@ -56,15 +56,40 @@
       ansible.builtin.fail:
         msg: "{{ osac_storage_provider_failures[0].message }}"
 
-- name: Fail if tier is missing backend_id
-  ansible.builtin.fail:
-    msg: >-
-      Tier '{{ item.name }}' has no backend_id. Every tier dispatched to the ONTAP
-      provider must reference the backend_id its connection details are keyed by.
-  loop: "{{ _provider_tiers }}"
-  loop_control:
-    label: "{{ item.name }}"
-  when: item.backend_id is not defined or item.backend_id is none or item.backend_id | string | length == 0
+- name: Fail if any dispatched tier is missing backend_id
+  block:
+    - name: Fail if tier is missing backend_id
+      ansible.builtin.fail:
+        msg: >-
+          Tier '{{ item.name }}' has no backend_id. Every tier dispatched to the ONTAP
+          provider must reference the backend_id its connection details are keyed by.
+      loop: "{{ _provider_tiers }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.backend_id is not defined or item.backend_id is none or item.backend_id | string | length == 0
+  rescue:
+    - name: Build structured failure artifact for missing backend_id
+      ansible.builtin.set_fact:
+        osac_storage_provider_failures: >-
+          {% set _tiers = [] -%}
+          {% set _messages = [] -%}
+          {% for _r in (ansible_failed_result.results | default([])) -%}
+          {% if _r.failed | default(false) -%}
+          {% set _ = _tiers.append(_r.item.name) -%}
+          {% set _ = _messages.append(_r.msg | default('')) -%}
+          {% endif -%}
+          {% endfor -%}
+          {{ [{'reason': 'missing_backend_id', 'tiers': _tiers, 'backend_ids': [], 'message': _messages | join(' ')}] }}
+
+    - name: Emit structured failure artifact for missing backend_id
+      ansible.builtin.set_stats:
+        data:
+          osac_storage_provider_failures: "{{ osac_storage_provider_failures }}"
+        aggregate: false
+
+    - name: Re-raise the original missing-backend_id failure
+      ansible.builtin.fail:
+        msg: "{{ osac_storage_provider_failures[0].message }}"
 
 - name: Fail if sanType is not a valid Trident SAN transport
   ansible.builtin.fail:

@@ -51,6 +51,7 @@ GENERATE_PASSWORD="false"
 PASSWORD_STDIN="false"
 declare -a MAPPINGS=()
 
+# Print command-line usage and supported options to stdout.
 usage() {
   cat <<'EOF'
 Usage:
@@ -74,7 +75,10 @@ Options:
 EOF
 }
 
+# Print an informational status line to stdout.
 log() { echo "[+] $*"; }
+
+# Print a warning or error diagnostic line to stderr.
 warn() { echo "[!] $*" >&2; }
 
 while [[ $# -gt 0 ]]; do
@@ -136,7 +140,7 @@ while [[ $# -gt 0 ]]; do
     exit 0
     ;;
   *)
-    warn "Unknown argument: $1"
+    warn "Unrecognized command-line option."
     usage >&2
     exit 1
     ;;
@@ -152,11 +156,13 @@ if [[ ${#MAPPINGS[@]} -eq 0 ]]; then
   MAPPINGS+=("${TENANT_NAME}:${SVM_NAME}:${SVM_USER}:${TENANT_ID}:${SECRET_NAME}")
 fi
 
+# Resolve a StorageBackend name to its Fulfillment ID via the internal REST API.
 resolve_backend_id_by_name() {
   local backend_name="$1"
   local pf_pid=""
   local temp_ca=""
   local token_header=""
+  local svc_host="${INTERNAL_SVC}.${NS}.svc.cluster.local"
 
   # shellcheck source=/dev/null
   source "${SCRIPT_DIR}/../lib.sh"
@@ -168,7 +174,7 @@ resolve_backend_id_by_name() {
   kubectl -n "${NS}" get configmap ca-bundle -o jsonpath='{.data.bundle\.pem}' >"${temp_ca}"
   if [[ ! -s "${temp_ca}" ]]; then
     rm -f "${temp_ca}" "${token_header}"
-    warn "ca-bundle ConfigMap in '${NS}' has no bundle.pem; pass --backend-id directly."
+    warn "ca-bundle ConfigMap has no bundle.pem; pass --backend-id directly."
     return 1
   fi
 
@@ -182,8 +188,10 @@ resolve_backend_id_by_name() {
   sleep 2
 
   local resp=""
-  resp="$(curl -skS --header "@${token_header}" -H "Content-Type: application/json" \
-    "https://127.0.0.1:${LOCAL_PORT}/api/private/v1/storage_backends" || true)"
+  resp="$(curl -sS --cacert "${temp_ca}" \
+    --resolve "${svc_host}:${LOCAL_PORT}:127.0.0.1" \
+    --header "@${token_header}" -H "Content-Type: application/json" \
+    "https://${svc_host}:${LOCAL_PORT}/api/private/v1/storage_backends" || true)"
 
   kill "${pf_pid}" 2>/dev/null || true
   wait "${pf_pid}" 2>/dev/null || true
@@ -194,13 +202,13 @@ resolve_backend_id_by_name() {
 }
 
 if [[ -z "${BACKEND_ID}" && -n "${BACKEND_NAME}" ]]; then
-  log "Resolving backend '${BACKEND_NAME}' via Fulfillment internal API..."
+  log "Resolving StorageBackend ID via Fulfillment internal API..."
   BACKEND_ID="$(resolve_backend_id_by_name "${BACKEND_NAME}")"
   if [[ -z "${BACKEND_ID}" ]]; then
-    warn "Could not resolve StorageBackend '${BACKEND_NAME}'; pass --backend-id explicitly."
+    warn "Could not resolve StorageBackend ID; pass --backend-id explicitly."
     exit 1
   fi
-  log "Resolved backend '${BACKEND_NAME}' -> '${BACKEND_ID}'"
+  log "Resolved StorageBackend ID."
 fi
 
 if [[ -z "${BACKEND_ID}" ]]; then
@@ -209,13 +217,14 @@ if [[ -z "${BACKEND_ID}" ]]; then
   exit 1
 fi
 
+# Resolve the immutable osac.openshift.io/tenant-id label from a hub Tenant CR.
 resolve_tenant_id() {
   local t_name="$1"
   local tid=""
   tid="$(kubectl -n "${TENANT_NS}" get tenant.osac.openshift.io "${t_name}" \
     -o jsonpath='{.metadata.labels.osac\.openshift\.io/tenant-id}' 2>/dev/null || true)"
   if [[ -z "${tid}" ]]; then
-    warn "Tenant '${t_name}' in namespace '${TENANT_NS}' not found or missing label 'osac.openshift.io/tenant-id'."
+    warn "Target Tenant CR not found or missing label 'osac.openshift.io/tenant-id'."
     warn "Create the Tenant first or pass --tenant-id explicitly."
     return 1
   fi
@@ -233,14 +242,15 @@ fi
 
 # Ensure preparation namespace exists on the hub cluster.
 if ! kubectl get namespace "${PREP_NS}" >/dev/null 2>&1; then
-  log "Creating preparation namespace '${PREP_NS}'..."
+  log "Creating preparation namespace..."
   kubectl create namespace "${PREP_NS}" >/dev/null
 fi
 
+prepared_count=0
 for entry in "${MAPPINGS[@]}"; do
   IFS=':' read -r t_name svm_name svm_user explicit_tid explicit_sec <<<"${entry}"
   if [[ -z "${t_name}" || -z "${svm_name}" || -z "${svm_user}" ]]; then
-    warn "Invalid --map entry '${entry}'. Expected '<tenant>:<svm>:<username>[:<tenant_id>[:<secret_name>]]'."
+    warn "Invalid --map entry. Expected '<tenant>:<svm>:<username>[:<tenant_id>[:<secret_name>]]'."
     exit 1
   fi
 
@@ -263,10 +273,10 @@ for entry in "${MAPPINGS[@]}"; do
   elif [[ "${GENERATE_PASSWORD}" == "true" ]]; then
     svm_password="$(openssl rand -hex 16)"
   else
-    read -r -s -p "ONTAP runtime password for tenant '${t_name}' (SVM '${svm_name}', user '${svm_user}'): " svm_password </dev/tty
+    read -r -s -p "ONTAP runtime password: " svm_password </dev/tty
     echo "" >&2
     if [[ -z "${svm_password}" ]]; then
-      warn "Empty password supplied for tenant '${t_name}'; aborting."
+      warn "Empty password supplied; aborting."
       exit 1
     fi
   fi
@@ -302,5 +312,6 @@ for entry in "${MAPPINGS[@]}"; do
     }' | kubectl apply -f - >/dev/null
 
   unset svm_password
-  log "Prepared Secret '${PREP_NS}/${sec_name}' (tenant=${t_name}, tenant-id=${resolved_tid}, backend-id=${BACKEND_ID}, svm=${svm_name})"
+  prepared_count=$((prepared_count + 1))
 done
+log "Prepared ${prepared_count} ONTAP tenant preparation Secret(s)."

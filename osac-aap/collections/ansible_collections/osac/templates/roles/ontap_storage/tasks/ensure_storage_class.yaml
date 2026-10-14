@@ -14,19 +14,31 @@
   ansible.builtin.include_tasks: _validate_tiers.yaml
 
 # ComputeInstance JIT storage provisioning sets tenant_name and tenant_namespace
-# from status.tenantReference without passing tenant_uid. Resolve the owning
-# Tenant CR on the hub cluster into a role-local variable
-# (_ontap_effective_tenant_uid) when tenant_uid is not provided by the caller,
-# and clear it in always: so a subsequent invocation for another tenant in the
-# same play never inherits a prior tenant's resolved UID.
-- name: Use caller-provided tenant_uid when set
-  when: tenant_uid is defined and tenant_uid | default('') | length > 0
+# from status.tenantReference without passing tenant_uid, and ClusterOrder
+# dispatches set tenant_uid to the ClusterOrder UID and tenant_namespace to the
+# guest namespace ('openshift-osac-storage'). Resolve the owning Tenant CR on
+# the hub cluster into a role-local variable (_ontap_effective_tenant_uid)
+# whenever tenant_uid is absent or the resource is a ClusterOrder, and clear it
+# in always: so a subsequent invocation for another tenant in the same play
+# never inherits a prior tenant's resolved UID.
+- name: Use caller-provided tenant_uid when set for a Tenant resource
+  when: >-
+    tenant_uid is defined and
+    (tenant_uid | default('') | length > 0) and
+    (((osac_job_vars.resource.kind | default('Tenant'))
+      if (osac_job_vars is defined and osac_job_vars.resource is defined)
+      else 'Tenant') != 'ClusterOrder')
   ansible.builtin.set_fact:
     _ontap_effective_tenant_uid: "{{ tenant_uid }}"
   no_log: true
 
-- name: Resolve tenant_uid from hub Tenant CR when not provided by caller
-  when: tenant_uid is not defined or tenant_uid | default('') | length == 0
+- name: Resolve tenant_uid from hub Tenant CR when not provided for a Tenant resource
+  when: >-
+    tenant_uid is not defined or
+    (tenant_uid | default('') | length == 0) or
+    (((osac_job_vars.resource.kind | default('Tenant'))
+      if (osac_job_vars is defined and osac_job_vars.resource is defined)
+      else 'Tenant') == 'ClusterOrder')
   block:
     - name: Retrieve Tenant CR from hub cluster for ownership verification
       kubernetes.core.k8s_info:
@@ -34,7 +46,12 @@
         api_version: osac.openshift.io/v1alpha1
         kind: Tenant
         name: "{{ tenant_name }}"
-        namespace: "{{ tenant_namespace }}"
+        namespace: >-
+          {{ 'osac-tenants'
+             if (((osac_job_vars.resource.kind | default('Tenant'))
+                  if (osac_job_vars is defined and osac_job_vars.resource is defined)
+                  else 'Tenant') == 'ClusterOrder')
+             else tenant_namespace }}
       register: _ontap_tenant_cr
       no_log: true
 

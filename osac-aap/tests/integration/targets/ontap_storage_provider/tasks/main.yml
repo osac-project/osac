@@ -270,6 +270,7 @@
         name: "{{ _t_lifecycle_secret }}"
         namespace: "osac-system"
       register: _lifecycle_secret
+      no_log: true
 
     - name: Assert the hub lifecycle Secret was created with expected metadata and no password
       ansible.builtin.assert:
@@ -286,10 +287,9 @@
           - _lifecycle_secret.resources[0].data.source_secret_name | b64decode == 'test-ontap-primary-info'
           - _lifecycle_secret.resources[0].data.source_secret_uid | b64decode == 'uid-source-secret-1'
           - "'password' not in _lifecycle_secret.resources[0].data"
-        fail_msg: >-
-          Hub lifecycle Secret did not match expected state:
-          {{ _lifecycle_secret.resources[0] | default({}) | to_json }}
+        fail_msg: "Hub lifecycle Secret did not match expected claim state"
         success_msg: "Hub lifecycle Secret created with expected claim state and no password"
+      no_log: true
 
     - name: Assert the tenant config output fact was set
       ansible.builtin.assert:
@@ -300,10 +300,9 @@
           - storage_provider_tenant_configs['ontap']['ontap-be-1'].svm_name == _t_svm_name
           - storage_provider_tenant_configs['ontap']['ontap-be-1'].svm_uuid == _t_svm_uuid
           - storage_provider_tenant_configs['ontap']['ontap-be-1'].status == 'claimed'
-        fail_msg: >-
-          storage_provider_tenant_configs wrong:
-          {{ storage_provider_tenant_configs | default('undefined') | to_json }}
+        fail_msg: "storage_provider_tenant_configs did not match expected claimed state"
         success_msg: "storage_provider_tenant_configs correct"
+      no_log: true
 
     - name: Get the mock ONTAP call log
       ansible.builtin.uri:
@@ -579,6 +578,7 @@
         name: "ontap-{{ _t_assignment_key }}"
         namespace: trident
       register: _tbc
+      no_log: true
 
     - name: Assert the TBC matches the PR#1553 and Trident virtual-pool contract spec
       ansible.builtin.assert:
@@ -612,10 +612,9 @@
           - >-
             (_tbc.resources[0].spec.storage | selectattr('labels.tier', 'equalto', 'silver') | list | first).defaults.qosPolicy
             == 'osac-' ~ _t_assignment_key ~ '-' ~ (('silver' | hash('sha256'))[:16] | lower) ~ '-qos'
-        fail_msg: >-
-          TBC does not match contract spec:
-          {{ _tbc.resources[0].spec | to_json if _tbc.resources else 'no TBC' }}
+        fail_msg: "TBC does not match the PR#1553 and Trident virtual-pool contract spec"
         success_msg: "TBC matches the PR#1553 and Trident virtual-pool contract spec"
+      no_log: true
 
     - name: Read back the CSI Secret
       kubernetes.core.k8s_info:
@@ -624,6 +623,7 @@
         name: "ontap-csi-{{ _t_assignment_key }}"
         namespace: trident
       register: _csi_secret
+      no_log: true
 
     - name: Assert the CSI Secret exists in the trident namespace with runtime credentials
       ansible.builtin.assert:
@@ -635,6 +635,7 @@
             (lookup('env', 'OSAC_TEST_ONTAP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true))
         fail_msg: "CSI Secret missing or wrong credentials in the trident namespace"
         success_msg: "CSI Secret carries the prepared SVM runtime credentials"
+      no_log: true
 
     - name: Read back the StorageClasses
       kubernetes.core.k8s_info:
@@ -644,7 +645,10 @@
       loop:
         - "{{ _sc_gold }}"
         - "{{ _sc_silver }}"
+      loop_control:
+        label: "storage-class"
       register: _scs
+      no_log: true
 
     - name: Assert both StorageClasses exist with contract labels and selector parameters
       ansible.builtin.assert:
@@ -674,10 +678,9 @@
           - "'storagePools' not in _scs.results[1].resources[0].parameters"
           - >-
             _scs.results[1].resources[0].parameters['selector'] == 'osac_backend=ontap-' ~ _t_assignment_key ~ ';tier=silver'
-        fail_msg: >-
-          StorageClasses wrong:
-          {{ _scs.results | map(attribute='resources') | flatten | list | to_json }}
+        fail_msg: "StorageClasses do not match expected contract names, labels, or selector parameters"
         success_msg: "StorageClasses carry contract names, labels, and selector parameters"
+      no_log: true
 
     - name: Assert the storage_class_names output fact
       ansible.builtin.assert:
@@ -687,10 +690,9 @@
           - >-
             storage_provider_storage_class_names | map(attribute='name') | list | sort
             == [_sc_gold, _sc_silver] | sort
-        fail_msg: >-
-          storage_provider_storage_class_names output wrong:
-          {{ storage_provider_storage_class_names | default('undefined') | to_json }}
+        fail_msg: "storage_provider_storage_class_names output did not match expected StorageClasses"
         success_msg: "storage_provider_storage_class_names output correct"
+      no_log: true
 
     # ── Short-circuit: second run must not touch the ONTAP API ──
     - name: Reset the mock call log to detect any new discovery calls
@@ -959,6 +961,7 @@
         name: "{{ _t_lifecycle_secret }}"
         namespace: "osac-system"
       register: _after_foreign_teardown
+      no_log: true
 
     - name: Assert the lifecycle Secret remained claimed after foreign teardown_backend
       ansible.builtin.assert:
@@ -968,6 +971,7 @@
           - _after_foreign_teardown.resources[0].data.tenant_uid | b64decode == 'uid-test-ontap-1'
         fail_msg: "Foreign tenant_uid teardown_backend should not alter the claimed lifecycle Secret"
         success_msg: "Foreign tenant_uid teardown_backend refused; lifecycle Secret remains claimed"
+      no_log: true
 
     # 5b. Owning tenant_uid marks the lifecycle Secret as retained.
     - name: Call storage_provider role with teardown_backend action as owner
@@ -983,16 +987,16 @@
         name: "{{ _t_lifecycle_secret }}"
         namespace: "osac-system"
       register: _released_secret
+      no_log: true
 
     - name: Assert the lifecycle Secret was retained
       ansible.builtin.assert:
         that:
           - _released_secret.resources | length == 1
           - _released_secret.resources[0].data.lifecycle_stage | b64decode == 'retained'
-        fail_msg: >-
-          Expected lifecycle_stage=retained after teardown_backend, got
-          {{ _released_secret.resources[0].data | default({}) | to_json if _released_secret.resources else 'secret gone' }}
+        fail_msg: "Expected lifecycle_stage=retained after teardown_backend"
         success_msg: "Hub lifecycle Secret marked as retained"
+      no_log: true
 
     # 5c. Subsequent ensure_storage_class must reject the retained record.
     - name: Attempt ensure_storage_class against the retained lifecycle Secret
@@ -1065,6 +1069,9 @@
           stringData:
             username: drift-user
             password: "{{ lookup('env', 'OSAC_TEST_ONTAP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true) }}"
+      loop_control:
+        label: "drifted-resource"
+      no_log: true
 
     - name: Call storage_provider role with teardown_cluster_storage action
       ansible.builtin.include_role:
@@ -1081,15 +1088,15 @@
           - "osac.openshift.io/tenant=test-ontap"
           - "osac.openshift.io/storage-provider=ontap"
       register: _tbc_after
+      no_log: true
 
     - name: Assert all TBCs are gone (dispatched and drifted)
       ansible.builtin.assert:
         that:
           - _tbc_after.resources | length == 0
-        fail_msg: >-
-          TBCs should be removed by teardown_cluster_storage, still present:
-          {{ _tbc_after.resources | map(attribute='metadata.name') | list }}
+        fail_msg: "TBCs should be removed by teardown_cluster_storage"
         success_msg: "TBC removed (dispatched and drifted)"
+      no_log: true
 
     - name: Read back the StorageClasses by label
       kubernetes.core.k8s_info:
@@ -1099,15 +1106,15 @@
           - "osac.openshift.io/tenant=test-ontap"
           - "osac.openshift.io/storage-provider=ontap"
       register: _scs_after
+      no_log: true
 
     - name: Assert the StorageClasses are gone
       ansible.builtin.assert:
         that:
           - _scs_after.resources | length == 0
-        fail_msg: >-
-          StorageClasses should be removed by teardown_cluster_storage, still present:
-          {{ _scs_after.resources | map(attribute='metadata.name') | list }}
+        fail_msg: "StorageClasses should be removed by teardown_cluster_storage"
         success_msg: "StorageClasses removed"
+      no_log: true
 
     - name: Read back the CSI Secrets by label
       kubernetes.core.k8s_info:
@@ -1118,15 +1125,15 @@
           - "osac.openshift.io/tenant=test-ontap"
           - "osac.openshift.io/storage-provider=ontap"
       register: _csi_secrets_after
+      no_log: true
 
     - name: Assert all CSI Secrets are gone (dispatched and drifted)
       ansible.builtin.assert:
         that:
           - _csi_secrets_after.resources | length == 0
-        fail_msg: >-
-          CSI Secrets should be removed by teardown_cluster_storage, still present:
-          {{ _csi_secrets_after.resources | map(attribute='metadata.name') | list }}
+        fail_msg: "CSI Secrets should be removed by teardown_cluster_storage"
         success_msg: "CSI Secret removed (dispatched and drifted)"
+      no_log: true
 
 # ── Cleanup ──
 - name: "ONTAP Storage Provider - Cleanup"
@@ -1148,7 +1155,10 @@
       loop:
         - "ontap-tenant-{{ _t_assignment_key }}"
         - "ontap-tenant-{{ _mismatch_key }}"
+      loop_control:
+        label: "lifecycle-secret"
       failed_when: false
+      no_log: true
 
     - name: Delete the stub Trident operator
       kubernetes.core.k8s:

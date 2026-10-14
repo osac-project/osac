@@ -21,8 +21,13 @@ osac_csi_driver_chart_version: "0.0.1"
 osac_csi_driver_helm_release: csi-driver
 
 # Hub Secret name prefix written by OSAC-4197 for the tenant CSI service identity.
-# Full name: <prefix><tenant_name> (in storage_provider_config_namespace).
+# Full name: <prefix><tenant_name>
 osac_csi_driver_hub_secret_prefix: "osac-csi-driver-"
+
+# Hub namespace where the OSAC-4197 credential Secret is stored.
+osac_csi_driver_hub_secret_namespace: >-
+  {{ lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE')
+     | default(lookup('file', '/var/run/secrets/kubernetes.io/serviceaccount/namespace', errors='ignore'), true) }}
 
 # Name of the Kubernetes Secret created on the tenant cluster holding OAuth2 credentials.
 osac_csi_driver_credentials_secret_name: osac-csi-driver-credentials

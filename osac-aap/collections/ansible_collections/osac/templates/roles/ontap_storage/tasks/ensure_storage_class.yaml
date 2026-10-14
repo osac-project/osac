@@ -3,9 +3,10 @@
 # StorageClasses on the target cluster.
 #
 # Per backend there is exactly ONE TridentBackendConfig (ontap-<assignment_key>,
-# ontap-san driver, block-only) whose virtual pools carry the per-tier QoS
-# policy and encryption defaults; per tier there is one StorageClass
-# (ontap-<assignment_key>-<tier_key>) selecting the tier's pool.
+# ontap-san driver, block-only) whose virtual pools carry per-tier labels
+# (osac_backend, tier) and defaults (encryption, qosPolicy); per tier there is
+# one StorageClass (ontap-<assignment_key>-<tier_key>) selecting its virtual
+# pool via parameters.selector.
 # The CSI Secret the TBC references is created in the Trident install
 # namespace — Trident only reconciles TBCs and their credential Secrets there.
 
@@ -34,8 +35,12 @@
       {% set _ = names.append('ontap-' ~ _key ~ '-' ~ _tier_key) -%}
       {% endfor -%}
       {{ names }}
+  no_log: true
 
-# Short-circuit — check if ALL tiers' StorageClasses already exist (single API call).
+# Check if all tiers' StorageClasses already exist (single API call).
+# Ownership and lifecycle checks in _ensure_storage_class_backend.yaml ALWAYS
+# run before any short-circuit so a retained or foreign-claimed assignment is
+# rejected even if StorageClasses are still present on the cluster.
 - name: Check existing tenant StorageClasses
   kubernetes.core.k8s_info:
     api_version: storage.k8s.io/v1
@@ -54,25 +59,13 @@
             _ontap_sc_checks.resources | map(attribute='metadata.name') | list
           ) | length) == 0 }}
 
-- name: Set output facts and skip provisioning when all SCs exist
-  when: _ontap_all_sc_exist | bool
+- name: Verify lifecycle records and provision TridentBackendConfig and StorageClasses
   block:
-    - name: Set StorageClass names output (short-circuit)
-      ansible.builtin.set_fact:
-        storage_provider_storage_class_names: "{{ _ontap_expected_sc_entries }}"
-
-    - name: Log short-circuit
-      ansible.builtin.debug:
-        msg: "All {{ _ontap_expected_sc_names | length }} StorageClasses already exist — skipping provisioning."
-
-# --- Full provisioning path ---
-- name: Provision TridentBackendConfig and StorageClasses
-  when: not (_ontap_all_sc_exist | bool)
-  block:
-    # Pre-flight: since OSAC does not install Trident, verify the
-    # TridentBackendConfig CRD exists on the target cluster before attempting
-    # to create backend resources.
+    # Pre-flight (only when provisioning is needed): since OSAC does not
+    # install Trident, verify the TridentBackendConfig CRD exists on the target
+    # cluster before attempting to create backend resources.
     - name: Verify TridentBackendConfig CRD is installed on the target cluster
+      when: not (_ontap_all_sc_exist | bool)
       kubernetes.core.k8s_info:
         api_version: apiextensions.k8s.io/v1
         kind: CustomResourceDefinition
@@ -80,6 +73,9 @@
       register: _trident_crd_check
 
     - name: Fail if Trident is not installed on the target cluster
+      when:
+        - not (_ontap_all_sc_exist | bool)
+        - _trident_crd_check.resources | default([]) | length == 0
       ansible.builtin.fail:
         msg: >-
           TridentBackendConfig CRD (tridentbackendconfigs.trident.netapp.io) was
@@ -87,13 +83,17 @@
           by the cluster administrator in namespace
           '{{ ontap_storage_trident_namespace }}' before onboarding ONTAP
           storage tiers.
-      when: _trident_crd_check.resources | default([]) | length == 0
 
-    - name: Provision per backend
+    - name: Verify lifecycle ownership and provision per backend
       ansible.builtin.include_tasks: _ensure_storage_class_backend.yaml
       loop: "{{ _ontap_backend_ids }}"
       loop_control:
         loop_var: _ontap_backend_id
+
+    - name: Log short-circuit when all StorageClasses already exist
+      when: _ontap_all_sc_exist | bool
+      ansible.builtin.debug:
+        msg: "All {{ _ontap_expected_sc_names | length }} StorageClasses already exist and lifecycle ownership verified — skipping provisioning."
 
     - name: Set StorageClass names output (list)
       ansible.builtin.set_fact:

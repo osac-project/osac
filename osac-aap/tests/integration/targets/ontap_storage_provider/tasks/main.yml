@@ -8,21 +8,24 @@
 # Coverage:
 #   1. setup (PR#1553 tenant_preparation contract): validates explicit SVM and
 #      capped-tier QoS policy against the mock ONTAP server with verified TLS
-#      (using the cluster CA bundle), creates the hub lifecycle Secret
+#      (using ontap_storage_ca_bundle_path), creates the hub lifecycle Secret
 #      (ontap-tenant-<assignment_key>), and sets storage_provider_tenant_configs.
 #   2. setup: refuses an assignment when the hub lifecycle Secret is owned by a
 #      different tenant uid or in state 'retained'.
 #   3. setup: fails when a capped tier's prepared QoS policy has a mismatched
 #      IOPS ceiling or is missing on the ONTAP cluster.
 #   4. ensure_storage_class: creates CSI Secret + TBC (spec asserted against
-#      the PR#1553 netapp-onboarding contract, including virtual-pool defaults
-#      for encryption and qosPolicy, plus trustedCACertificate from the cluster
-#      CA bundle) + per-tier StorageClasses, then short-circuits on the second
-#      run (no ONTAP API calls).
+#      the PR#1553 netapp-onboarding contract, including virtual-pool labels
+#      osac_backend + tier with no invalid 'name' field, defaults for encryption
+#      and qosPolicy, and trustedCACertificate from the CA bundle) + per-tier
+#      StorageClasses bound via parameters.selector, then short-circuits on the
+#      second run (verifying lifecycle ownership without making ONTAP API calls).
 #   4.5. ensure_storage_class: fails fast when the TBC enters phase Failed,
 #      surfacing the TBC's status message.
-#   5. teardown_backend: marks the hub lifecycle Secret as 'retained' after
-#      verifying tenant_uid ownership.
+#   5. teardown_backend: refuses foreign tenant_uid, then marks the hub
+#      lifecycle Secret as 'retained' when called with the owning tenant_uid;
+#      verifies that a subsequent ensure_storage_class refuses to short-circuit
+#      against a 'retained' lifecycle record.
 #   6. teardown_cluster_storage: removes TBC + SCs + CSI Secret, including
 #      labeled resources no longer derivable from the dispatched tiers.
 
@@ -156,8 +159,8 @@
   vars:
     tenant_name: "test-ontap"
     tenant_namespace: "osac-system"
-    storage_provider_config_namespace: "osac-system"
-    storage_provider_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
+    ontap_storage_config_namespace: "osac-system"
+    ontap_storage_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
     tenant_uid: "uid-test-ontap-1"
     _t_assignment_key: "{{ (('ontap-be-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
     _t_silver_tier_key: "{{ ('silver' | hash('sha256'))[:16] | lower }}"
@@ -323,8 +326,8 @@
   vars:
     tenant_name: "test-ontap"
     tenant_namespace: "osac-system"
-    storage_provider_config_namespace: "osac-system"
-    storage_provider_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
+    ontap_storage_config_namespace: "osac-system"
+    ontap_storage_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
     tenant_uid: "uid-test-ontap-2"
     _t_svm_name: "customer_acme_svm"
     storage_provider_tiers:
@@ -378,8 +381,8 @@
   vars:
     tenant_name: "test-ontap-qos-mismatch"
     tenant_namespace: "osac-system"
-    storage_provider_config_namespace: "osac-system"
-    storage_provider_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
+    ontap_storage_config_namespace: "osac-system"
+    ontap_storage_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
     tenant_uid: "uid-test-ontap-3"
     _t_assignment_key: "{{ (('ontap-be-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
     _t_gold_tier_key: "{{ ('gold' | hash('sha256'))[:16] | lower }}"
@@ -470,8 +473,8 @@
   vars:
     tenant_name: "test-ontap"
     tenant_namespace: "osac-system"
-    storage_provider_config_namespace: "osac-system"
-    storage_provider_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
+    ontap_storage_config_namespace: "osac-system"
+    ontap_storage_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
     tenant_uid: "uid-test-ontap-1"
     _t_assignment_key: "{{ (('ontap-be-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
     _t_svm_name: "customer_acme_svm"
@@ -558,7 +561,7 @@
         namespace: trident
       register: _tbc
 
-    - name: Assert the TBC matches the PR#1553 contract spec
+    - name: Assert the TBC matches the PR#1553 and Trident virtual-pool contract spec
       ansible.builtin.assert:
         that:
           - _tbc.resources | length == 1
@@ -570,21 +573,30 @@
           - _tbc.resources[0].spec.storage | length == 2
           # trustedCACertificate comes from the mounted cluster CA bundle.
           - _tbc.resources[0].spec.trustedCACertificate == _mock_ca_b64
-          # Gold has encryption_enabled: true and no QoS cap -> defaults.encryption == 'true', no qosPolicy.
+          # Regression guard: Trident's OntapStorageDriverPool has NO 'name' field;
+          # virtual pools must be matched via labels (osac_backend + tier).
+          - "'name' not in _tbc.resources[0].spec.storage[0]"
+          - "'name' not in _tbc.resources[0].spec.storage[1]"
           - >-
-            (_tbc.resources[0].spec.storage | selectattr('name', 'equalto', 'gold') | list | first).defaults.encryption == 'true'
+            (_tbc.resources[0].spec.storage | selectattr('labels.tier', 'equalto', 'gold') | list | first).labels.osac_backend
+            == 'ontap-' ~ _t_assignment_key
           - >-
-            (_tbc.resources[0].spec.storage | selectattr('name', 'equalto', 'gold') | list | first).defaults.qosPolicy is not defined
+            (_tbc.resources[0].spec.storage | selectattr('labels.tier', 'equalto', 'gold') | list | first).defaults.encryption == 'true'
+          - >-
+            (_tbc.resources[0].spec.storage | selectattr('labels.tier', 'equalto', 'gold') | list | first).defaults.qosPolicy is not defined
           # Silver has encryption_enabled: false and max_iops: 5000 -> defaults.encryption == 'false' and defaults.qosPolicy set.
           - >-
-            (_tbc.resources[0].spec.storage | selectattr('name', 'equalto', 'silver') | list | first).defaults.encryption == 'false'
+            (_tbc.resources[0].spec.storage | selectattr('labels.tier', 'equalto', 'silver') | list | first).labels.osac_backend
+            == 'ontap-' ~ _t_assignment_key
           - >-
-            (_tbc.resources[0].spec.storage | selectattr('name', 'equalto', 'silver') | list | first).defaults.qosPolicy
+            (_tbc.resources[0].spec.storage | selectattr('labels.tier', 'equalto', 'silver') | list | first).defaults.encryption == 'false'
+          - >-
+            (_tbc.resources[0].spec.storage | selectattr('labels.tier', 'equalto', 'silver') | list | first).defaults.qosPolicy
             == 'osac-' ~ _t_assignment_key ~ '-' ~ (('silver' | hash('sha256'))[:16] | lower) ~ '-qos'
         fail_msg: >-
           TBC does not match contract spec:
           {{ _tbc.resources[0].spec | to_json if _tbc.resources else 'no TBC' }}
-        success_msg: "TBC matches the PR#1553 netapp-onboarding contract spec"
+        success_msg: "TBC matches the PR#1553 and Trident virtual-pool contract spec"
 
     - name: Read back the CSI Secret
       kubernetes.core.k8s_info:
@@ -613,7 +625,7 @@
         - "{{ _sc_silver }}"
       register: _scs
 
-    - name: Assert both StorageClasses exist with contract labels and parameters
+    - name: Assert both StorageClasses exist with contract labels and selector parameters
       ansible.builtin.assert:
         that:
           - _scs.results | map(attribute='resources') | flatten | length == 2
@@ -627,20 +639,24 @@
             _scs.results[0].resources[0].metadata.labels['osac.openshift.io/storage-protocol'] == 'block'
           - >-
             _scs.results[0].resources[0].metadata.labels['osac.openshift.io/storage-provider'] == 'ontap'
+          # Regression guard: StorageClasses must bind to their tenant TBC + tier
+          # virtual pool via parameters.selector (NOT storagePools).
+          - "'storagePools' not in _scs.results[0].resources[0].parameters"
           - >-
-            _scs.results[0].resources[0].parameters['storagePools'] == 'ontap-' ~ _t_assignment_key ~ ':gold'
+            _scs.results[0].resources[0].parameters['selector'] == 'osac_backend=ontap-' ~ _t_assignment_key ~ ';tier=gold'
           - >-
             _scs.results[0].resources[0].parameters['backendType'] == 'ontap-san'
           - >-
             _scs.results[0].resources[0].provisioner == 'csi.trident.netapp.io'
           - >-
             _scs.results[1].resources[0].metadata.labels['osac.openshift.io/storage-tier'] == 'silver'
+          - "'storagePools' not in _scs.results[1].resources[0].parameters"
           - >-
-            _scs.results[1].resources[0].parameters['storagePools'] == 'ontap-' ~ _t_assignment_key ~ ':silver'
+            _scs.results[1].resources[0].parameters['selector'] == 'osac_backend=ontap-' ~ _t_assignment_key ~ ';tier=silver'
         fail_msg: >-
           StorageClasses wrong:
-          {{ _scs.results | map(attribute='resources') | flatten | map(attribute='metadata.name') | list }}
-        success_msg: "StorageClasses carry contract names, labels, and parameters"
+          {{ _scs.results | map(attribute='resources') | flatten | list | to_json }}
+        success_msg: "StorageClasses carry contract names, labels, and selector parameters"
 
     - name: Assert the storage_class_names output fact
       ansible.builtin.assert:
@@ -704,8 +720,8 @@
   vars:
     tenant_name: "test-ontap"
     tenant_namespace: "osac-system"
-    storage_provider_config_namespace: "osac-system"
-    storage_provider_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
+    ontap_storage_config_namespace: "osac-system"
+    ontap_storage_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
     tenant_uid: "uid-test-ontap-1"
     _t_assignment_key: "{{ (('ontap-be-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
     _t_svm_name: "customer_acme_svm"
@@ -862,7 +878,7 @@
       retries: 12
       delay: 5
 
-# ── Test 5: teardown_backend releases the claim ──
+# ── Test 5: teardown_backend verifies tenant_uid and marks lifecycle Secret retained ──
 - name: "ONTAP Storage Provider - Teardown backend releases claim"
   hosts: localhost
   gather_facts: false
@@ -870,7 +886,7 @@
   vars:
     tenant_name: "test-ontap"
     tenant_namespace: "osac-system"
-    storage_provider_config_namespace: "osac-system"
+    ontap_storage_config_namespace: "osac-system"
     tenant_uid: "uid-test-ontap-1"
     _t_assignment_key: "{{ (('ontap-be-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
     _t_lifecycle_secret: "ontap-tenant-{{ _t_assignment_key }}"
@@ -918,7 +934,7 @@
   vars:
     tenant_name: "test-ontap"
     tenant_namespace: "osac-system"
-    storage_provider_config_namespace: "osac-system"
+    ontap_storage_config_namespace: "osac-system"
     _t_assignment_key: "{{ (('ontap-be-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
     _drift_assignment_key: "{{ (('ontap-be-drifted' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
     storage_provider_tiers:

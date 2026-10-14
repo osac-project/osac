@@ -13,6 +13,14 @@
       _provider_tiers must be provided by the service role dispatcher.
       This role should not be called directly — use osac.service.storage_provider.
 
+- name: Validate tenant_name is a valid DNS label
+  ansible.builtin.fail:
+    msg: >-
+      tenant_name '{{ tenant_name }}' is not a valid DNS label.
+      Must be 1-63 lowercase alphanumeric characters or hyphens,
+      cannot start or end with a hyphen.
+  when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+
 - name: Validate tier protocols are supported by the ONTAP provider
   block:
     - name: Fail if tier protocol is unsupported
@@ -109,8 +117,8 @@
 - name: Fail if the config namespace could not be resolved
   ansible.builtin.fail:
     msg: >-
-      storage_provider_config_namespace resolved to an empty value. Set
+      ontap_storage_config_namespace resolved to an empty value. Set
       OSAC_STORAGE_CONFIG_NAMESPACE or run inside a pod with a service
       account (namespace file at
       /var/run/secrets/kubernetes.io/serviceaccount/namespace).
-  when: storage_provider_config_namespace | default('') | length == 0
+  when: ontap_storage_config_namespace | default('') | length == 0

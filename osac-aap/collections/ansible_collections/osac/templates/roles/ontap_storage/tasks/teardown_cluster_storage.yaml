@@ -2,14 +2,23 @@
 # ONTAP teardown_cluster_storage: remove cluster-side K8s resources only.
 # Deletes the tenant's ONTAP resources by LABEL (tenant + storage-provider +
 # managed-by): StorageClasses, TridentBackendConfigs (waits for Trident to
-# finish removing the backends), and the CSI Secrets. Label-based selection
-# rather than re-deriving names from the dispatched tiers keeps cleanup
-# symmetric with ensure_storage_class and drift-proof: a backend removed from
-# the tenant's tiers after its resources were created is still cleaned up,
-# rather than leaving behind an orphaned TBC with live CSI credentials.
+# finish removing the backends), and the CSI Secrets (only after all TBCs are
+# confirmed gone so Trident never loses credentials while cleaning up a
+# backend). Label-based selection rather than re-deriving names from the
+# dispatched tiers keeps cleanup symmetric with ensure_storage_class and
+# drift-proof: a backend removed from the tenant's tiers after its resources
+# were created is still cleaned up.
 # Does NOT release the prepared assignment or touch any ONTAP resources —
 # those belong to teardown_backend.
 # Used when a cluster is deleted but the tenant stays.
+
+- name: Validate tenant_name is a valid DNS label
+  ansible.builtin.fail:
+    msg: >-
+      tenant_name '{{ tenant_name }}' is not a valid DNS label.
+      Must be 1-63 lowercase alphanumeric characters or hyphens,
+      cannot start or end with a hyphen.
+  when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
 
 - name: Clean up cluster-side K8s resources
   block:
@@ -22,6 +31,7 @@
           - "osac.openshift.io/storage-provider=ontap"
           - "app.kubernetes.io/managed-by=osac-aap"
       register: _ontap_cleanup_sc_list
+      no_log: true
 
     - name: Delete tenant ONTAP StorageClasses
       kubernetes.core.k8s:
@@ -33,6 +43,7 @@
       loop_control:
         label: "{{ item.metadata.name }}"
       ignore_errors: true  # noqa: ignore-errors
+      no_log: true
 
     - name: Find all tenant ONTAP TridentBackendConfigs by label
       kubernetes.core.k8s_info:
@@ -44,6 +55,7 @@
           - "osac.openshift.io/storage-provider=ontap"
           - "app.kubernetes.io/managed-by=osac-aap"
       register: _ontap_cleanup_tbc_list
+      no_log: true
 
     - name: Delete tenant ONTAP TridentBackendConfigs
       kubernetes.core.k8s:
@@ -56,6 +68,7 @@
       loop_control:
         label: "{{ item.metadata.name }}"
       ignore_errors: true  # noqa: ignore-errors
+      no_log: true
 
     - name: Wait for the TridentBackendConfigs to be removed
       kubernetes.core.k8s_info:
@@ -71,8 +84,10 @@
       retries: 12
       delay: 5
       ignore_errors: true  # noqa: ignore-errors
+      no_log: true
 
     - name: Find all tenant ONTAP CSI Secrets by label
+      when: (_tbc_check.resources | default([]) | length) == 0
       kubernetes.core.k8s_info:
         api_version: v1
         kind: Secret
@@ -84,7 +99,8 @@
       register: _ontap_cleanup_csi_list
       no_log: true
 
-    - name: Delete tenant ONTAP CSI Secrets
+    - name: Delete tenant ONTAP CSI Secrets after TBCs are confirmed gone
+      when: (_tbc_check.resources | default([]) | length) == 0
       kubernetes.core.k8s:
         state: absent
         api_version: v1
@@ -100,8 +116,8 @@
     - name: Report teardown_cluster_storage summary
       ansible.builtin.debug:
         msg: >-
-          Teardown of ONTAP cluster-side resources for tenant '{{ tenant_name }}'
-          complete. {{ (_ontap_cleanup_sc_list.resources | default([]) | length) }}
+          Teardown of ONTAP cluster-side resources complete.
+          {{ (_ontap_cleanup_sc_list.resources | default([]) | length) }}
           StorageClasses, {{ (_ontap_cleanup_tbc_list.resources | default([]) | length) }}
           TridentBackendConfig(s), and {{ (_ontap_cleanup_csi_list.resources | default([]) | length) }}
           CSI Secret(s) removed from the target cluster. Prepared assignments and
@@ -111,7 +127,7 @@
     - name: Warn about teardown_cluster_storage failure (target cluster may be unreachable)
       ansible.builtin.debug:
         msg: >-
-          Teardown of ONTAP cluster-side resources failed for tenant '{{ tenant_name }}'.
+          Teardown of ONTAP cluster-side resources failed.
           This may be expected if the target cluster is being destroyed.
           Error: {{ ansible_failed_result.msg | default('unknown') }}
 

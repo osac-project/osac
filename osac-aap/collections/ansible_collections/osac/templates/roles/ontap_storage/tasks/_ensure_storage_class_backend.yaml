@@ -40,7 +40,7 @@
     api_version: v1
     kind: Secret
     name: "{{ _lifecycle_secret_name }}"
-    namespace: "{{ ontap_storage_config_namespace }}"
+    namespace: "{{ storage_provider_config_namespace }}"
   register: _lifecycle_secret_result
   no_log: true
 
@@ -67,7 +67,7 @@
       ansible.builtin.fail:
         msg: >-
           Hub lifecycle record '{{ _lifecycle_secret_name }}' not found in
-          namespace '{{ ontap_storage_config_namespace }}'. Run setup for this
+          namespace '{{ storage_provider_config_namespace }}'. Run setup for this
           tenant before calling ensure_storage_class.
       when: _lifecycle_secret_result.resources | length == 0
 
@@ -102,7 +102,7 @@
         api_version: v1
         kind: Secret
         name: "{{ _prepared_secret_name }}"
-        namespace: "{{ ontap_storage_config_namespace }}"
+        namespace: "{{ storage_provider_config_namespace }}"
       register: _prepared_secret_result
       no_log: true
 
@@ -110,7 +110,7 @@
       ansible.builtin.fail:
         msg: >-
           Prepared Secret '{{ _prepared_secret_name }}' not found in namespace
-          '{{ ontap_storage_config_namespace }}'. Run setup for this tenant
+          '{{ storage_provider_config_namespace }}'. Run setup for this tenant
           before calling ensure_storage_class.
       when: _prepared_secret_result.resources | length == 0
 

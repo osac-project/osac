@@ -8,7 +8,7 @@ CONTAINERFILE ?= Containerfile
 
 .PHONY: image-build
 image-build: ## Build the container image.
-	$(CONTAINER_TOOL) build -f $(CONTAINERFILE) -t $(IMG) .
+	$(CONTAINER_TOOL) build -f $(CONTAINERFILE) -t $(IMG) ..
 
 .PHONY: image-push
 image-push: ## Push the container image.

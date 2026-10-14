@@ -83,7 +83,8 @@ def test_ontap_setup_consumes_operator_tenant_preparation_only():
 
 def test_ontap_ensure_short_circuit_checks_tbc_and_csi_secret():
     """Verify ensure_storage_class.yaml checks StorageClasses, TridentBackendConfigs,
-    and CSI Secrets before setting _ontap_all_sc_exist.
+    and CSI Secrets before setting _ontap_all_sc_exist, and resolves tenant_uid
+    from the hub Tenant CR when omitted by the caller.
     """
     ensure_path = ONTAP_ROLE_DIR / "tasks" / "ensure_storage_class.yaml"
     raw_text = ensure_path.read_text(encoding="utf-8")
@@ -92,3 +93,8 @@ def test_ontap_ensure_short_circuit_checks_tbc_and_csi_secret():
     assert "_ontap_expected_csi_secret_names" in raw_text
     assert "_ontap_tbc_checks" in raw_text
     assert "_ontap_csi_checks" in raw_text
+    assert "_ontap_tenant_cr" in raw_text
+
+    ensure_backend_path = ONTAP_ROLE_DIR / "tasks" / "_ensure_storage_class_backend.yaml"
+    backend_text = ensure_backend_path.read_text(encoding="utf-8")
+    assert "(tenant_uid | default('') | length == 0) or" in backend_text

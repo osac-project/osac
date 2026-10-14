@@ -36,6 +36,24 @@ var _ = DescribeMigration("Hold ExternalIP capacity until archive", func() {
 		}
 	}
 
+	It("indexes ExternalIP consumers across lifecycle states", func(ctx context.Context) {
+		migrate(ctx)
+
+		for _, indexName := range []string{
+			"external_ip_attachments_by_external_ip_ref",
+			"nat_gateways_by_external_ip_ref",
+		} {
+			var indexDef string
+			err := conn.QueryRow(ctx,
+				`select indexdef from pg_indexes where schemaname=current_schema() and indexname=$1`,
+				indexName,
+			).Scan(&indexDef)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(indexDef).To(ContainSubstring("external_ip"))
+			Expect(indexDef).NotTo(ContainSubstring(" WHERE "))
+		}
+	})
+
 	It("backfills capacity from every unarchived ExternalIP", func(ctx context.Context) {
 		insertPool(ctx, "pool-backfill", 4, 1, 3)
 		insertExternalIP(ctx, "eip-active", "pool-backfill", false)

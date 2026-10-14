@@ -328,7 +328,7 @@
               kind: Secret
               metadata:
                 name: "{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}"
-                namespace: "{{ vast_storage_config_namespace }}"
+                namespace: "{{ storage_provider_config_namespace }}"
                 labels:
                   app.kubernetes.io/managed-by: osac-aap
                   osac.openshift.io/storage-provider: vast
@@ -363,7 +363,7 @@
             api_version: v1
             kind: Secret
             name: "{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}"
-            namespace: "{{ vast_storage_config_namespace }}"
+            namespace: "{{ storage_provider_config_namespace }}"
           ignore_errors: true  # noqa: ignore-errors
 
         - name: Rollback - authenticate for VMS cleanup

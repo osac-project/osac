@@ -27,7 +27,7 @@
       kind: Secret
       metadata:
         name: "{{ lvms_storage_tenant_config_secret_prefix }}{{ tenant_name }}"
-        namespace: "{{ lvms_storage_config_namespace }}"
+        namespace: "{{ storage_provider_config_namespace }}"
         labels:
           osac.openshift.io/tenant: "{{ tenant_name }}"
           osac.openshift.io/storage-provider: lvms

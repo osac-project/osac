@@ -15,18 +15,18 @@ const storageBackendStatusMap = (t: TFunction): Record<StorageBackendState, Stat
     text: t('Ready'),
   },
   [StorageBackendState.UNSPECIFIED]: {
-    status: 'progressing',
-    text: t('Pending'),
+    status: 'unspecified',
+    text: t('Unspecified'),
   },
 });
 
 /**
  * Resolve the display props for a storage backend state.
  *
- * UNSPECIFIED (the proto zero-value) means the backend's provider connection
- * has not been validated yet — display it as "Pending", not "Ready".
- * Any unknown / future enum value also falls back to "Pending" so the UI
- * never claims readiness it cannot verify.
+ * Known enum values are rendered from the map above. Any value the UI
+ * does not recognise — including `undefined` (no status yet) and future
+ * enum additions — falls back to a non-ready "Pending" indicator so the
+ * UI never claims readiness it cannot verify.
  */
 const resolveStorageBackendStatus = (
   t: TFunction,
@@ -36,7 +36,7 @@ const resolveStorageBackendStatus = (
   if (state !== undefined && state in map) {
     return map[state];
   }
-  return map[StorageBackendState.UNSPECIFIED];
+  return { status: 'progressing', text: t('Pending') };
 };
 
 const StorageBackendStatusLabel = ({ state }: StorageBackendStatusLabelProps) => {

@@ -72,59 +72,7 @@ ginkgo run --timeout 20m -r internal # All unit suites. Slow, run only when nece
 
 ### Integration tests
 
-Integration tests run in a local Kind Kubernetes cluster. The installer test
-target builds, loads, and deploys the current service image.
-
-See the [fulfillment-service test tiers and coverage notes](../docs/INTEGRATION-TESTING.md#fulfillment-service).
-
-It reuses the existing cluster and database. For a full suite run, use a fresh
-environment unless the user agrees to reuse the database. See `README.md` for
-prerequisites and host entries.
-
-The `it/` suite includes CLI workflows that exercise only Fulfillment Service
-APIs. Its harness builds the CLI from this checkout and runs it against the
-deployed service. Catalog Item API behavior, CLI creation, and the ClusterOrder
-release image written by Fulfillment are checked in `it/`. Keep cross-component
-provisioning journeys under `tests/e2e/`.
-
-The MCP SDK spec in `it/` starts its HTTP handler in-process and calls the
-deployed public Fulfillment API with each user's API token supplied by a test
-exchanger. It covers public API authorization and persistence. The focused
-deployed MCP spec runs in the Fulfillment Kind CI job: it uses the public MCP
-client's PKCE flow, calls the deployed HTTPS listener, and checks that a
-Fulfillment API token is rejected. Unit tests cover exchange edge cases; chart
-renders cover the opt-in deployment shape.
-
-To prepare a fresh environment, recreate the dedicated `osac-dev` Kind
-cluster. Collect useful diagnostics before deleting it.
-
-#### DiskImage touched-area map
-
-These cases are [DEV] component integration. Public/private Fulfillment APIs,
-authentication, and PostgreSQL run for real; operators, AAP, VM and bare-metal
-providers are not exercised. The ComputeInstance fixture supplies network
-readiness and a fake storage-provider configuration.
-
-| Area | Required coverage | Location |
-|---|---|---|
-| DiskImage CRUD, lifecycle, and tenant visibility | Provider admin/shared, tenant admin/user CRUD; timestamps, default/explicit-filter visibility, reactivation, tenant isolation | `it/it_disk_images_api_test.go`, `it/it_disk_images_tenant_isolation_test.go` |
-| Compute template image defaults and deletion protection | Name resolves to stored ID; deletion refused while referenced and succeeds after template deletion, followed by NotFound | `it/it_disk_images_api_test.go` |
-| ComputeInstance image lifecycle validation | Deprecated image warns; obsolete image rejects creation without persistence | `it/it_disk_image_lifecycle_test.go` |
-| CaaS selected shared version without an image | FailedPrecondition, selected version identity and missing-image reason; no persisted cluster | `it/it_public_clusters_test.go` |
-| BMI catalog foreign-tenant image name | NotFound and no persisted catalog item using a tenant-admin client | `it/it_bare_metal_instance_catalog_items_test.go` |
-
-Run the installer target below. For focused execution against an already deployed
-compatible environment, from this component run:
-
-```bash
-ginkgo run --timeout 20m --focus 'DiskImage API|DiskImage tenant isolation|DiskImage lifecycle|Public clusters rejects a shared ClusterVersion|Bare Metal Instance Catalog Items rejects a cross-tenant DiskImage' it
-```
-
-VM/BMH image application and provisioning, DiskImage-backed CaaS, and deletion
-protection through real workload teardown remain [QE] E2E. See the
-[DiskImage coverage boundaries](../docs/INTEGRATION-TESTING.md#fulfillment-service).
-
-#### Environment and commands
+Integration tests run in a local Kind Kubernetes cluster; the installer builds and deploys current images.
 
 ```bash
 export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"

@@ -29,6 +29,11 @@
       storage tiers for this Tenant if VMaaS-only storage is intended.
   when: _remote_kubeconfig is not defined or _remote_kubeconfig | length == 0
 
+- name: Validate tenant_name is a valid DNS label
+  ansible.builtin.fail:
+    msg: "tenant_name '{{ tenant_name }}' is not a valid DNS label."
+  when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+
 - name: Build expected StorageClass entries
   ansible.builtin.set_fact:
     _osac_csi_expected_sc_entries: >-

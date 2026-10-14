@@ -1,9 +1,16 @@
 ---
 # ONTAP-specific defaults — all use ontap_storage_ prefix.
-# Hub config namespace (storage_provider_config_namespace), global API timeout
-# (storage_provider_api_timeout), and CA bundle path
-# (storage_provider_ca_bundle_path) are provided by the
-# osac.service.storage_provider dispatcher.
+
+# Namespace for hub-cluster lifecycle Secrets. Resolution order:
+#   1. OSAC_STORAGE_CONFIG_NAMESPACE env var — explicit override via the storage-operations-ig
+#      ConfigMap, only needed if the config namespace differs from the IG pod's own namespace.
+#   2. The IG pod's own namespace, read from the standard K8s-mounted service account file —
+#      always accurate for wherever the pod actually runs, no per-deployment config needed.
+# No hardcoded fallback — fail loudly if neither source is available
+# rather than silently targeting a wrong namespace.
+ontap_storage_config_namespace: >-
+  {{ lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE')
+     | default(lookup('file', '/var/run/secrets/kubernetes.io/serviceaccount/namespace', errors='ignore'), true) }}
 
 # Namespace where Trident is installed on the target hosting cluster.
 # The TridentBackendConfig CRD is namespaced and Trident only reconciles TBCs
@@ -15,3 +22,10 @@ ontap_storage_trident_namespace: "{{ lookup('env', 'ONTAP_TRIDENT_NAMESPACE') | 
 # Must match what the prepared SVM's LIFs actually carry; Trident validates
 # the value against its own allowlist. Configurable via ONTAP_SAN_TYPE.
 ontap_storage_san_type: "{{ lookup('env', 'ONTAP_SAN_TYPE') | default('fcp', true) }}"
+
+# Path to the cluster-installed PEM CA bundle. When present, used to verify
+# ONTAP REST discovery calls and to populate TridentBackendConfig.spec.trustedCACertificate.
+ontap_storage_ca_bundle_path: "{{ lookup('env', 'ONTAP_CA_BUNDLE_PATH') | default('/etc/ca-bundle/bundle.pem', true) }}"
+
+# API timeout (seconds) for ONTAP REST discovery calls (aligned with vast_storage_api_timeout: 30).
+ontap_storage_api_timeout: "{{ lookup('env', 'ONTAP_API_TIMEOUT') | default('30', true) | int }}"

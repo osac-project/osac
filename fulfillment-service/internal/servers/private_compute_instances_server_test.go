@@ -3058,6 +3058,226 @@ var _ = Describe("Private compute instances server", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(stored.GetObject().GetSpec().GetNetworkAttachments()).To(HaveLen(2))
 			})
+
+			It("Rejects removing security groups in network_attachments", func() {
+				created, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Metadata: privatev1.Metadata_builder{Name: "test-compute-instance"}.Build(),
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							Template: privatev1.ComputeInstanceTemplateReference_builder{Id: template.GetId()}.Build(),
+							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+								privatev1.ComputeNetworkAttachment_builder{
+									Subnet:         privatev1.SubnetLocalReference_builder{Id: subnet1.GetId()}.Build(),
+									SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: sg1.GetId()}.Build()},
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				id := created.GetObject().GetId()
+
+				updateResponse, err := server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Id: id,
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							Template: privatev1.ComputeInstanceTemplateReference_builder{Id: template.GetId()}.Build(),
+							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+								privatev1.ComputeNetworkAttachment_builder{
+									Subnet: privatev1.SubnetLocalReference_builder{Id: subnet1.GetId()}.Build(),
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.network_attachments"}},
+				}.Build())
+				Expect(updateResponse).To(BeNil())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("security groups are immutable"))
+				stored, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				attachments := stored.GetObject().GetSpec().GetNetworkAttachments()
+				Expect(attachments).To(HaveLen(1))
+				Expect(attachments[0].GetSecurityGroups()).To(HaveLen(1))
+				Expect(attachments[0].GetSecurityGroups()[0].GetId()).To(Equal(sg1.GetId()))
+			})
+
+			It("Rejects replacing a security group in network_attachments", func() {
+				created, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Metadata: privatev1.Metadata_builder{Name: "test-compute-instance"}.Build(),
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							Template: privatev1.ComputeInstanceTemplateReference_builder{Id: template.GetId()}.Build(),
+							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+								privatev1.ComputeNetworkAttachment_builder{
+									Subnet:         privatev1.SubnetLocalReference_builder{Id: subnet1.GetId()}.Build(),
+									SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: sg1.GetId()}.Build()},
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				id := created.GetObject().GetId()
+
+				updateResponse, err := server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Id: id,
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							Template: privatev1.ComputeInstanceTemplateReference_builder{Id: template.GetId()}.Build(),
+							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+								privatev1.ComputeNetworkAttachment_builder{
+									Subnet:         privatev1.SubnetLocalReference_builder{Id: subnet1.GetId()}.Build(),
+									SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: sg2.GetId()}.Build()},
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.network_attachments"}},
+				}.Build())
+				Expect(updateResponse).To(BeNil())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				stored, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				attachments := stored.GetObject().GetSpec().GetNetworkAttachments()
+				Expect(attachments[0].GetSecurityGroups()).To(HaveLen(1))
+				Expect(attachments[0].GetSecurityGroups()[0].GetId()).To(Equal(sg1.GetId()))
+			})
+
+			It("Rejects reordering equivalent security groups in network_attachments", func() {
+				created, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Metadata: privatev1.Metadata_builder{Name: "test-compute-instance"}.Build(),
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							Template: privatev1.ComputeInstanceTemplateReference_builder{Id: template.GetId()}.Build(),
+							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+								privatev1.ComputeNetworkAttachment_builder{
+									Subnet: privatev1.SubnetLocalReference_builder{Id: subnet1.GetId()}.Build(),
+									SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+										privatev1.SecurityGroupLocalReference_builder{Id: sg1.GetId()}.Build(),
+										privatev1.SecurityGroupLocalReference_builder{Id: sg2.GetId()}.Build(),
+									},
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				id := created.GetObject().GetId()
+
+				updateResponse, err := server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Id: id,
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							Template: privatev1.ComputeInstanceTemplateReference_builder{Id: template.GetId()}.Build(),
+							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+								privatev1.ComputeNetworkAttachment_builder{
+									Subnet: privatev1.SubnetLocalReference_builder{Id: subnet1.GetId()}.Build(),
+									SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+										privatev1.SecurityGroupLocalReference_builder{Id: sg2.GetId()}.Build(),
+										privatev1.SecurityGroupLocalReference_builder{Id: sg1.GetId()}.Build(),
+									},
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.network_attachments"}},
+				}.Build())
+				Expect(updateResponse).To(BeNil())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				stored, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				attachments := stored.GetObject().GetSpec().GetNetworkAttachments()
+				Expect(attachments[0].GetSecurityGroups()).To(HaveLen(2))
+				Expect(attachments[0].GetSecurityGroups()[0].GetId()).To(Equal(sg1.GetId()))
+				Expect(attachments[0].GetSecurityGroups()[1].GetId()).To(Equal(sg2.GetId()))
+			})
+
+			It("Rejects changing security groups via a nested field mask", func() {
+				created, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Metadata: privatev1.Metadata_builder{Name: "test-compute-instance"}.Build(),
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							Template: privatev1.ComputeInstanceTemplateReference_builder{Id: template.GetId()}.Build(),
+							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+								privatev1.ComputeNetworkAttachment_builder{
+									Subnet:         privatev1.SubnetLocalReference_builder{Id: subnet1.GetId()}.Build(),
+									SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: sg1.GetId()}.Build()},
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				id := created.GetObject().GetId()
+
+				updateResponse, err := server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Id: id,
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							Template: privatev1.ComputeInstanceTemplateReference_builder{Id: template.GetId()}.Build(),
+							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+								privatev1.ComputeNetworkAttachment_builder{
+									Subnet:         privatev1.SubnetLocalReference_builder{Id: subnet1.GetId()}.Build(),
+									SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: sg2.GetId()}.Build()},
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.network_attachments.security_groups"}},
+				}.Build())
+				Expect(updateResponse).To(BeNil())
+				// A nested mask path through the repeated network_attachments field is
+				// rejected by the mask layer itself; the contract is that the request
+				// fails without persistence, regardless of the specific error code.
+				Expect(grpcstatus.Code(err)).ToNot(Equal(grpccodes.OK))
+				stored, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				attachments := stored.GetObject().GetSpec().GetNetworkAttachments()
+				Expect(attachments[0].GetSecurityGroups()).To(HaveLen(1))
+				Expect(attachments[0].GetSecurityGroups()[0].GetId()).To(Equal(sg1.GetId()))
+			})
+
+			It("Rejects changing a subnet via a parent spec field mask", func() {
+				created, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Metadata: privatev1.Metadata_builder{Name: "test-compute-instance"}.Build(),
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							Template: privatev1.ComputeInstanceTemplateReference_builder{Id: template.GetId()}.Build(),
+							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+								privatev1.ComputeNetworkAttachment_builder{
+									Subnet:         privatev1.SubnetLocalReference_builder{Id: subnet1.GetId()}.Build(),
+									SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: sg1.GetId()}.Build()},
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				id := created.GetObject().GetId()
+
+				storedResp, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				candidate := proto.Clone(storedResp.GetObject()).(*privatev1.ComputeInstance)
+				candidate.GetSpec().GetNetworkAttachments()[0].SetSubnet(
+					privatev1.SubnetLocalReference_builder{Id: subnet2.GetId()}.Build(),
+				)
+
+				updateResponse, err := server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+					Object:     candidate,
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec"}},
+				}.Build())
+				Expect(updateResponse).To(BeNil())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("subnet is immutable"))
+				stored, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(stored.GetObject().GetSpec().GetNetworkAttachments()[0].GetSubnet().GetId()).To(Equal(subnet1.GetId()))
+			})
 		})
 
 		Context("Disk immutability", func() {
@@ -4179,6 +4399,13 @@ var _ = Describe("Private compute instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			ciID := response.GetObject().GetId()
 
+			eipList, err := externalIPDao.List().Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(eipList.GetItems()).To(HaveLen(1))
+			eiaList, err := externalIPAttachmentDao.List().Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(eiaList.GetItems()).To(HaveLen(1))
+
 			_, err = server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
 				Object: privatev1.ComputeInstance_builder{
 					Id: ciID,
@@ -4195,6 +4422,60 @@ var _ = Describe("Private compute instances server", func() {
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(status.Message()).To(ContainSubstring("auto_external_ip_attachment"))
+
+			// The rejected update must not clean up the auto-created resources or restore capacity.
+			eipList, err = externalIPDao.List().Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(eipList.GetItems()).To(HaveLen(1))
+			eiaList, err = externalIPAttachmentDao.List().Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(eiaList.GetItems()).To(HaveLen(1))
+			poolResp, err := externalIPPoolDao.Get().SetId("pool-1").Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(poolResp.GetObject().GetStatus().GetAvailable()).To(Equal(int64(4)))
+			Expect(poolResp.GetObject().GetStatus().GetAllocated()).To(Equal(int64(1)))
+			stored, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: ciID}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(stored.GetObject().GetSpec().GetAutoExternalIpAttachment()).To(BeTrue())
+		})
+
+		It("Rejects enabling auto_external_ip_attachment and provisions nothing", func() {
+			createPool("pool-1", 5)
+
+			response, err := server.Create(ctx, createRequest(false))
+			Expect(err).ToNot(HaveOccurred())
+			ciID := response.GetObject().GetId()
+
+			_, err = server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Id: ciID,
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						AutoExternalIpAttachment: proto.Bool(true),
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"spec.auto_external_ip_attachment"},
+				},
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("auto_external_ip_attachment"))
+
+			eipList, err := externalIPDao.List().Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(eipList.GetItems()).To(BeEmpty())
+			eiaList, err := externalIPAttachmentDao.List().Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(eiaList.GetItems()).To(BeEmpty())
+			poolResp, err := externalIPPoolDao.Get().SetId("pool-1").Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(poolResp.GetObject().GetStatus().GetAvailable()).To(Equal(int64(5)))
+			Expect(poolResp.GetObject().GetStatus().GetAllocated()).To(Equal(int64(0)))
+			stored, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: ciID}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(stored.GetObject().GetSpec().GetAutoExternalIpAttachment()).To(BeFalse())
 		})
 	})
 })

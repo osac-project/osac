@@ -313,6 +313,7 @@
     netris_ca_config_map_name: customer-netris-ca
     netris_validate_certs: false
     netris_ca_path: /etc/netris/ca/bundle.pem
+    remote_cluster_kubeconfig_secret_name: ""
     _template_paths:
       - name: networking operations
         path: >-

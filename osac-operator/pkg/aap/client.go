@@ -127,6 +127,11 @@ type Template struct {
 
 // LaunchJobTemplate launches a job template and returns the job ID.
 func (c *Client) LaunchJobTemplate(ctx context.Context, req LaunchJobTemplateRequest) (*LaunchJobTemplateResponse, error) {
+	if req.ExtraVars != nil {
+		if err := ValidateProtectedNetrisExtraVars(req.ExtraVars); err != nil {
+			return nil, fmt.Errorf("refusing job template launch: %w", err)
+		}
+	}
 	identifier := req.TemplateName
 	if req.TemplateID > 0 {
 		identifier = fmt.Sprintf("%d", req.TemplateID)
@@ -158,6 +163,11 @@ func (c *Client) LaunchJobTemplate(ctx context.Context, req LaunchJobTemplateReq
 
 // LaunchWorkflowTemplate launches a workflow template and returns the job ID.
 func (c *Client) LaunchWorkflowTemplate(ctx context.Context, req LaunchWorkflowTemplateRequest) (*LaunchWorkflowTemplateResponse, error) {
+	if req.ExtraVars != nil {
+		if err := ValidateProtectedNetrisExtraVars(req.ExtraVars); err != nil {
+			return nil, fmt.Errorf("refusing workflow template launch: %w", err)
+		}
+	}
 	identifier := req.TemplateName
 	if req.TemplateID > 0 {
 		identifier = fmt.Sprintf("%d", req.TemplateID)

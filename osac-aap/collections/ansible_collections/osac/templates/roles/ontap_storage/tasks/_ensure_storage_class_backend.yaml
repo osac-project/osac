@@ -161,17 +161,17 @@
 
 # Resolve the CA bundle to pass as TBC spec.trustedCACertificate (base64 of PEM).
 # Priority:
-#   1. Cluster CA bundle mounted at ontap_storage_ca_bundle_path (/etc/ca-bundle/bundle.pem).
+#   1. Cluster CA bundle mounted at storage_provider_ca_bundle_path (/etc/ca-bundle/bundle.pem).
 #   2. Fallback prepared Secret's data['ca.crt'] (already base64 of PEM).
-- name: Check if cluster CA bundle exists at {{ ontap_storage_ca_bundle_path }}
+- name: Check if cluster CA bundle exists at {{ storage_provider_ca_bundle_path }}
   ansible.builtin.stat:
-    path: "{{ ontap_storage_ca_bundle_path }}"
+    path: "{{ storage_provider_ca_bundle_path }}"
   register: _ontap_ca_bundle_stat
 
 - name: Slurp cluster CA bundle when present
   when: _ontap_ca_bundle_stat.stat.exists | default(false)
   ansible.builtin.slurp:
-    src: "{{ ontap_storage_ca_bundle_path }}"
+    src: "{{ storage_provider_ca_bundle_path }}"
   register: _ontap_ca_bundle_slurp
   no_log: true
 

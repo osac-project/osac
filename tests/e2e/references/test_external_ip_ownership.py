@@ -331,8 +331,12 @@ def _clear_provisioning_history(*, k8s: K8sClient, external_ip_name: str) -> Non
 
 
 def _get_metallb_reservation(*, k8s: K8sClient, service_name: str) -> dict[str, Any] | None:
-    services = k8s.list_json(resource="services", namespace=_METALLB_NAMESPACE).get("items", [])
-    return next((service for service in services if service.get("metadata", {}).get("name") == service_name), None)
+    try:
+        return k8s.get_json(resource="service", name=service_name, namespace=_METALLB_NAMESPACE)
+    except subprocess.CalledProcessError as exc:
+        if _is_not_found(exc):
+            return None
+        raise
 
 
 def _assert_metallb_reservation(service: dict[str, Any], *, uid: str, tenant: str, external_ip_name: str) -> None:

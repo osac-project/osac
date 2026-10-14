@@ -12,30 +12,39 @@ package m360
 import (
 	"context"
 
+	"github.com/IBM/sarama"
 	"github.com/go-logr/logr"
 
 	"github.com/osac-project/osac-metering/adapters"
 )
 
 type m360Adapter struct {
-	client *m360Client
+	sub submitter
 }
 
 // NewAdapter creates an M360 provider adapter for the given API configuration.
 func NewAdapter(baseURL, apiVersion, apiKey string, logger logr.Logger) adapters.ProviderAdapter {
-	client := newM360Client(baseURL, apiVersion, apiKey)
-	client.logger = logger
-	return &m360Adapter{client: client}
+	return &m360Adapter{sub: newRESTSubmitter(baseURL, apiVersion, apiKey, logger)}
+}
+
+// NewKafkaAdapter creates an M360 provider adapter that publishes to Kafka.
+func NewKafkaAdapter(
+	producer sarama.SyncProducer,
+	client sarama.Client,
+	topics map[string]string,
+	logger logr.Logger,
+) adapters.ProviderAdapter {
+	return &m360Adapter{sub: newKafkaSubmitter(producer, client, topics, logger)}
 }
 
 func (a *m360Adapter) Name() string { return "m360" }
 
 func (a *m360Adapter) Submit(ctx context.Context, event adapters.MeteringEvent) error {
-	endpoint, payload, err := translateEvent(event.CloudEvent)
+	route, payload, err := translateEvent(event.CloudEvent)
 	if err != nil {
 		return err
 	}
-	return a.client.post(ctx, endpoint, payload)
+	return a.sub.submit(ctx, route, payload)
 }
 
 func (a *m360Adapter) Flush(_ context.Context) (adapters.SubmitResult, error) {
@@ -43,7 +52,7 @@ func (a *m360Adapter) Flush(_ context.Context) (adapters.SubmitResult, error) {
 }
 
 func (a *m360Adapter) HealthCheck(ctx context.Context) error {
-	return a.client.healthCheck(ctx)
+	return a.sub.healthCheck(ctx)
 }
 
-func (a *m360Adapter) Close() error { return nil }
+func (a *m360Adapter) Close() error { return a.sub.close() }

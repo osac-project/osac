@@ -17,16 +17,17 @@ import (
 	"net/http"
 	"net/http/httptest"
 
+	"github.com/go-logr/logr"
 	"github.com/osac-project/osac-metering/adapters"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
-var _ = Describe("m360Client", func() {
+var _ = Describe("restSubmitter", func() {
 	var (
 		server *httptest.Server
-		client *m360Client
+		sub    *restSubmitter
 	)
 
 	AfterEach(func() {
@@ -35,7 +36,7 @@ var _ = Describe("m360Client", func() {
 		}
 	})
 
-	Describe("post", func() {
+	Describe("submit", func() {
 		It("sends POST with correct URL, auth header, and body", func() {
 			var capturedReq *http.Request
 			var capturedBody []byte
@@ -45,10 +46,10 @@ var _ = Describe("m360Client", func() {
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(`{"output":{"event_id":"m360-ev-1"}}`))
 			}))
-			client = newM360Client(server.URL, "v1", "test-api-key")
+			sub = newRESTSubmitter(server.URL, "v1", "test-api-key", logr.Discard())
 
 			payload := map[string]any{"event_id": "ce-123", "resource_type": "compute_instance"}
-			err := client.post(context.Background(), "/vmaas/event", payload)
+			err := sub.submit(context.Background(), "vmaas", payload)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(capturedReq.Method).To(Equal("POST"))
@@ -68,9 +69,9 @@ var _ = Describe("m360Client", func() {
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(`{"output":{"event_id":"ev-1"}}`))
 			}))
-			client = newM360Client(server.URL, "v2", "key")
+			sub = newRESTSubmitter(server.URL, "v2", "key", logr.Discard())
 
-			err := client.post(context.Background(), "/caas/event", map[string]any{})
+			err := sub.submit(context.Background(), "caas", map[string]any{})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(capturedPath).To(Equal("/api/v2/external/run/caas/event"))
 		})
@@ -80,9 +81,9 @@ var _ = Describe("m360Client", func() {
 				w.WriteHeader(http.StatusBadRequest)
 				_, _ = w.Write([]byte(`{"error":"bad request"}`))
 			}))
-			client = newM360Client(server.URL, "v1", "key")
+			sub = newRESTSubmitter(server.URL, "v1", "key", logr.Discard())
 
-			err := client.post(context.Background(), "/vmaas/event", map[string]any{})
+			err := sub.submit(context.Background(), "vmaas", map[string]any{})
 
 			Expect(err).To(HaveOccurred())
 			var nonRetryable *adapters.NonRetryableError
@@ -93,9 +94,9 @@ var _ = Describe("m360Client", func() {
 			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusUnauthorized)
 			}))
-			client = newM360Client(server.URL, "v1", "bad-key")
+			sub = newRESTSubmitter(server.URL, "v1", "bad-key", logr.Discard())
 
-			err := client.post(context.Background(), "/vmaas/event", map[string]any{})
+			err := sub.submit(context.Background(), "vmaas", map[string]any{})
 
 			var nonRetryable *adapters.NonRetryableError
 			Expect(errors.As(err, &nonRetryable)).To(BeTrue())
@@ -105,9 +106,9 @@ var _ = Describe("m360Client", func() {
 			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusRequestTimeout)
 			}))
-			client = newM360Client(server.URL, "v1", "key")
+			sub = newRESTSubmitter(server.URL, "v1", "key", logr.Discard())
 
-			err := client.post(context.Background(), "/vmaas/event", map[string]any{})
+			err := sub.submit(context.Background(), "vmaas", map[string]any{})
 
 			Expect(err).To(HaveOccurred())
 			var nonRetryable *adapters.NonRetryableError
@@ -118,9 +119,9 @@ var _ = Describe("m360Client", func() {
 			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusTooManyRequests)
 			}))
-			client = newM360Client(server.URL, "v1", "key")
+			sub = newRESTSubmitter(server.URL, "v1", "key", logr.Discard())
 
-			err := client.post(context.Background(), "/vmaas/event", map[string]any{})
+			err := sub.submit(context.Background(), "vmaas", map[string]any{})
 
 			Expect(err).To(HaveOccurred())
 			var nonRetryable *adapters.NonRetryableError
@@ -131,9 +132,9 @@ var _ = Describe("m360Client", func() {
 			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusInternalServerError)
 			}))
-			client = newM360Client(server.URL, "v1", "key")
+			sub = newRESTSubmitter(server.URL, "v1", "key", logr.Discard())
 
-			err := client.post(context.Background(), "/vmaas/event", map[string]any{})
+			err := sub.submit(context.Background(), "vmaas", map[string]any{})
 
 			Expect(err).To(HaveOccurred())
 			var nonRetryable *adapters.NonRetryableError
@@ -144,13 +145,26 @@ var _ = Describe("m360Client", func() {
 			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			}))
-			client = newM360Client(server.URL, "v1", "key")
+			sub = newRESTSubmitter(server.URL, "v1", "key", logr.Discard())
 
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel() // cancel immediately
 
-			err := client.post(ctx, "/vmaas/event", map[string]any{})
+			err := sub.submit(ctx, "vmaas", map[string]any{})
 			Expect(err).To(HaveOccurred())
+		})
+
+		It("returns NonRetryableError for unknown route", func() {
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+			sub = newRESTSubmitter(server.URL, "v1", "key", logr.Discard())
+
+			err := sub.submit(context.Background(), "unknown-route", map[string]any{})
+
+			Expect(err).To(HaveOccurred())
+			var nonRetryable *adapters.NonRetryableError
+			Expect(errors.As(err, &nonRetryable)).To(BeTrue())
 		})
 	})
 
@@ -159,9 +173,9 @@ var _ = Describe("m360Client", func() {
 			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			}))
-			client = newM360Client(server.URL, "v1", "key")
+			sub = newRESTSubmitter(server.URL, "v1", "key", logr.Discard())
 
-			err := client.healthCheck(context.Background())
+			err := sub.healthCheck(context.Background())
 			Expect(err).NotTo(HaveOccurred())
 		})
 
@@ -169,9 +183,9 @@ var _ = Describe("m360Client", func() {
 			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusInternalServerError)
 			}))
-			client = newM360Client(server.URL, "v1", "key")
+			sub = newRESTSubmitter(server.URL, "v1", "key", logr.Discard())
 
-			err := client.healthCheck(context.Background())
+			err := sub.healthCheck(context.Background())
 			Expect(err).NotTo(HaveOccurred())
 		})
 
@@ -183,18 +197,18 @@ var _ = Describe("m360Client", func() {
 				capturedPath = r.URL.Path
 				w.WriteHeader(http.StatusOK)
 			}))
-			client = newM360Client(server.URL, "v1", "key")
+			sub = newRESTSubmitter(server.URL, "v1", "key", logr.Discard())
 
-			err := client.healthCheck(context.Background())
+			err := sub.healthCheck(context.Background())
 			Expect(err).NotTo(HaveOccurred())
 			Expect(capturedMethod).To(Equal("HEAD"))
 			Expect(capturedPath).To(Equal("/"))
 		})
 
 		It("returns error when server is unreachable", func() {
-			client = newM360Client("http://127.0.0.1:1", "v1", "key")
+			sub = newRESTSubmitter("http://127.0.0.1:1", "v1", "key", logr.Discard())
 
-			err := client.healthCheck(context.Background())
+			err := sub.healthCheck(context.Background())
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("M360 health check"))
 		})
@@ -203,12 +217,12 @@ var _ = Describe("m360Client", func() {
 			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			}))
-			client = newM360Client(server.URL, "v1", "key")
+			sub = newRESTSubmitter(server.URL, "v1", "key", logr.Discard())
 
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
 
-			err := client.healthCheck(ctx)
+			err := sub.healthCheck(ctx)
 			Expect(err).To(HaveOccurred())
 		})
 	})

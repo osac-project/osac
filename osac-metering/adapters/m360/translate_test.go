@@ -125,10 +125,10 @@ var _ = Describe("translateEvent", func() {
 				},
 			)
 
-			endpoint, payload, err := translateEvent(ce)
+			route, payload, err := translateEvent(ce)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(endpoint).To(Equal("/vmaas/event"))
+			Expect(route).To(Equal("vmaas"))
 			Expect(payload["event_id"]).To(Equal("ce-abc123"))
 			Expect(payload["event_time"]).To(Equal("2026-07-20T10:00:00Z"))
 			Expect(payload["resource_type"]).To(Equal("compute_instance"))
@@ -182,10 +182,10 @@ var _ = Describe("translateEvent", func() {
 				nil,
 			)
 
-			endpoint, payload, err := translateEvent(ce)
+			route, payload, err := translateEvent(ce)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(endpoint).To(Equal("/vmaas/event"))
+			Expect(route).To(Equal("vmaas"))
 			Expect(payload).NotTo(HaveKey("instance_type"))
 		})
 
@@ -239,7 +239,7 @@ var _ = Describe("translateEvent", func() {
 	})
 
 	Describe("CaaS events", func() {
-		It("translates a cluster_order event to /caas/event", func() {
+		It("translates a cluster_order event to the caas route", func() {
 			ce := buildCloudEvent(
 				"ce-caas-001",
 				"osac.resource.created.v1",
@@ -256,10 +256,10 @@ var _ = Describe("translateEvent", func() {
 				},
 			)
 
-			endpoint, payload, err := translateEvent(ce)
+			route, payload, err := translateEvent(ce)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(endpoint).To(Equal("/caas/event"))
+			Expect(route).To(Equal("caas"))
 			Expect(payload["cluster_template"]).To(Equal("ocp-ci-small"))
 			Expect(payload["component"]).To(Equal("control_plane"))
 			Expect(payload["baremetal_instance_type"]).To(Equal("_control_plane"))
@@ -269,7 +269,7 @@ var _ = Describe("translateEvent", func() {
 	})
 
 	Describe("MaaS events", func() {
-		It("translates a maas_inference event to /maas/event", func() {
+		It("translates a maas_inference event to the maas route", func() {
 			ce := buildCloudEvent(
 				"ce-maas-001",
 				"osac.inference.usage.v1",
@@ -293,10 +293,10 @@ var _ = Describe("translateEvent", func() {
 				},
 			)
 
-			endpoint, payload, err := translateEvent(ce)
+			route, payload, err := translateEvent(ce)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(endpoint).To(Equal("/maas/event"))
+			Expect(route).To(Equal("maas"))
 			Expect(payload["provider"]).To(Equal("anthropic"))
 			Expect(payload["prompt_tokens"]).To(BeEquivalentTo(1500))
 			Expect(payload["total_tokens"]).To(BeEquivalentTo(2300))
@@ -318,10 +318,10 @@ var _ = Describe("translateEvent", func() {
 				},
 			), "60.000000", "resource_second")
 
-			endpoint, payload, err := translateEvent(ce)
+			route, payload, err := translateEvent(ce)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(endpoint).To(Equal("/networking/externalip/event"))
+			Expect(route).To(Equal("externalip"))
 			Expect(payload["event_id"]).To(Equal("ce-ip-001"))
 			Expect(payload["resource_id"]).To(Equal("ip-001"))
 			Expect(payload["resource_type"]).To(Equal("external_ip"))
@@ -352,10 +352,10 @@ var _ = Describe("translateEvent", func() {
 				},
 			), "60.000000", "resource_second")
 
-			endpoint, payload, err := translateEvent(ce)
+			route, payload, err := translateEvent(ce)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(endpoint).To(Equal("/networking/natgateway/event"))
+			Expect(route).To(Equal("natgateway"))
 			Expect(payload["event_id"]).To(Equal("ce-nat-001"))
 			Expect(payload["resource_id"]).To(Equal("nat-001"))
 			Expect(payload["resource_type"]).To(Equal("nat_gateway"))
@@ -382,10 +382,10 @@ var _ = Describe("translateEvent", func() {
 				},
 			), "6000.000000", "gibibyte_second")
 
-			endpoint, payload, err := translateEvent(ce)
+			route, payload, err := translateEvent(ce)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(endpoint).To(Equal("/storage/volume/event"))
+			Expect(route).To(Equal("volume"))
 			Expect(payload["event_id"]).To(Equal("ce-volume"))
 			Expect(payload["resource_id"]).To(Equal("volume-001"))
 			Expect(payload["resource_type"]).To(Equal("volume"))
@@ -419,10 +419,10 @@ var _ = Describe("translateEvent", func() {
 			}
 			Expect(ce.SetData(cloudevents.ApplicationJSON, data)).To(Succeed())
 
-			endpoint, payload, err := translateEvent(ce)
+			route, payload, err := translateEvent(ce)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(endpoint).To(Equal("/storage/volume/event"))
+			Expect(route).To(Equal("volume"))
 			Expect(payload["usage_quantity"]).To(Equal("6000.000000"))
 			Expect(payload["usage_unit"]).To(Equal("gibibyte_second"))
 			Expect(payload).NotTo(HaveKey("usage"))
@@ -490,10 +490,10 @@ var _ = Describe("translateEvent", func() {
 					eventTime, transitionTime, tc.durationSeconds, tc.includeLifecycleFields,
 				)
 
-				endpoint, payload, err := translateEvent(ce)
+				route, payload, err := translateEvent(ce)
 
 				Expect(err).NotTo(HaveOccurred())
-				Expect(endpoint).To(Equal("/bmaas/event"))
+				Expect(route).To(Equal("bmaas"))
 				Expect(payload["meter_type"]).To(Equal(tc.meterType))
 				Expect(payload["bm_instance_type"]).To(Equal("bmi-type-gpu-large"))
 				Expect(payload["catalog_item"]).To(Equal("bmi-gpu-workstation"))

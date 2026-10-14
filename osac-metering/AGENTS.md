@@ -67,3 +67,17 @@ and any directly affected module. Build adapter binaries with
 `make build-echo-adapter` or `make build-m360-adapter` from `adapters/`.
 Kafka-backed integration and E2E
 validation requires the installer deployment and its Kafka prerequisites.
+
+## M360 Adapter
+
+The M360 adapter supports `M360_OUTPUT_PROTOCOL=rest|kafka` (default `rest`).
+Translation returns route keys for VMaaS, CaaS, BMaaS, external IP, NAT
+gateway, Volume, and MaaS inference. REST maps these keys to the existing M360
+Usage API endpoints. Kafka output currently configures topics for `vmaas`,
+`caas`, and `maas`.
+
+The Helm chart configures the output with `m360Adapter.output.*`. REST requires
+`m360Adapter.m360.apiUrl` and `m360Adapter.m360.apiKeySecret`. Kafka requires
+`m360Adapter.output.kafka.brokers`; its optional TLS CA and SASL password use
+secrets separate from the OSAC consumer Kafka connection. Do not log Kafka
+credentials or API keys.

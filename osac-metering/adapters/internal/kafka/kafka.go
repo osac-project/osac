@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/IBM/sarama"
 	"github.com/xdg-go/scram"
@@ -110,7 +111,7 @@ func (c *adapterScramClient) Done() bool {
 	return c.conversation.Done()
 }
 
-// NewProducerConfig creates a Sarama config for the adapter producer.
+// NewProducerConfig creates an idempotent, synchronous Sarama producer config.
 func NewProducerConfig(cfg KafkaConfig) (*sarama.Config, error) {
 	sc := sarama.NewConfig()
 	sc.Version = sarama.V3_9_0_0
@@ -118,6 +119,9 @@ func NewProducerConfig(cfg KafkaConfig) (*sarama.Config, error) {
 	sc.Producer.Idempotent = true
 	sc.Producer.Return.Successes = true
 	sc.Net.MaxOpenRequests = 1
+	sc.Net.DialTimeout = 5 * time.Second
+	sc.Net.ReadTimeout = 5 * time.Second
+	sc.Net.WriteTimeout = 5 * time.Second
 
 	if cfg.TLSEnabled {
 		if err := configureTLS(sc, cfg.TLSCACert); err != nil {

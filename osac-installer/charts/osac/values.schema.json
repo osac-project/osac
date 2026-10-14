@@ -1847,6 +1847,87 @@
                 }
               },
               "additionalProperties": false
+            },
+            "output": {
+              "type": "object",
+              "description": "M360 output protocol and Kafka destination",
+              "properties": {
+                "protocol": {
+                  "type": "string",
+                  "description": "Output protocol for M360 events",
+                  "enum": [
+                    "rest",
+                    "kafka"
+                  ],
+                  "default": "rest"
+                },
+                "kafka": {
+                  "type": "object",
+                  "description": "Kafka destination settings used when protocol is kafka",
+                  "properties": {
+                    "brokers": {
+                      "type": "string",
+                      "description": "M360 Kafka bootstrap servers",
+                      "default": ""
+                    },
+                    "tls": {
+                      "type": "object",
+                      "properties": {
+                        "enabled": {
+                          "type": "boolean",
+                          "description": "Enable TLS for the M360 Kafka connection",
+                          "default": true
+                        },
+                        "caCertSecret": {
+                          "type": "string",
+                          "description": "Secret containing the M360 Kafka CA certificate under ca.crt",
+                          "default": ""
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "sasl": {
+                      "type": "object",
+                      "properties": {
+                        "username": {
+                          "type": "string",
+                          "description": "SASL username for the M360 Kafka connection",
+                          "default": ""
+                        },
+                        "passwordSecret": {
+                          "type": "string",
+                          "description": "Secret containing the SASL password under password",
+                          "default": ""
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "topics": {
+                      "type": "object",
+                      "properties": {
+                        "vmaas": {
+                          "type": "string",
+                          "description": "Kafka topic for VMaaS events",
+                          "default": "m360.metering.vmaas"
+                        },
+                        "caas": {
+                          "type": "string",
+                          "description": "Kafka topic for CaaS events",
+                          "default": "m360.metering.caas"
+                        },
+                        "maas": {
+                          "type": "string",
+                          "description": "Kafka topic for MaaS events",
+                          "default": "m360.metering.maas"
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
             }
           },
           "additionalProperties": false

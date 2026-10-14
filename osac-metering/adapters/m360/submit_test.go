@@ -18,6 +18,7 @@ import (
 	"time"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
+	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -42,7 +43,7 @@ var _ = Describe("m360Adapter Submit", func() {
 		}))
 		defer server.Close()
 
-		adapter := &m360Adapter{client: newM360Client(server.URL, "v2", "test-api-key")}
+		adapter := NewAdapter(server.URL, "v2", "test-api-key", logr.Discard())
 		tests := []struct {
 			name       string
 			cloudEvent cloudevents.Event
@@ -120,7 +121,7 @@ var _ = Describe("m360Adapter Submit", func() {
 		}))
 		DeferCleanup(server.Close)
 
-		adapter := &m360Adapter{client: newM360Client(server.URL, "v1", "key")}
+		adapter := NewAdapter(server.URL, "v1", "key", logr.Discard())
 		cases := []struct {
 			name             string
 			id               string

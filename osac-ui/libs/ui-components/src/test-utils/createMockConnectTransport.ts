@@ -28,7 +28,6 @@ import {
   ExternalIPsCreateRequest,
   ExternalIPsCreateResponse,
   ExternalIPsListRequest,
-  HostType,
   IdentityProvider,
   IdentityProvidersCreateRequest,
   IdentityProvidersCreateResponse,
@@ -80,7 +79,6 @@ import {
   ExternalIPAttachments,
   ExternalIPState,
   ExternalIPs,
-  HostTypes,
   IdentityProviders,
   InstanceTypeState,
   InstanceTypes,
@@ -174,7 +172,6 @@ export type MockApiFixtures = {
   clusterCatalogItems?: ClusterCatalogItem[];
   clusterTemplates?: ClusterTemplate[];
   clusterVersions?: ClusterVersion[];
-  hostTypes?: HostType[];
   tenants?: PrivateTenant[];
   virtualNetworks?: VirtualNetwork[];
   subnets?: Subnet[];
@@ -486,7 +483,6 @@ export const createMockConnectTransport = (
   const clusterCatalogItems = fixtures.clusterCatalogItems ?? [];
   const clusterTemplates = fixtures.clusterTemplates ?? [];
   const clusterVersions = fixtures.clusterVersions ?? [];
-  const hostTypes = fixtures.hostTypes ?? [];
   const tenants = fixtures.tenants ?? [];
   const identityProviders = fixtures.identityProviders ?? [];
   const projects = fixtures.projects ?? [];
@@ -565,23 +561,6 @@ export const createMockConnectTransport = (
         get: (req) => ({
           object: clusterVersions.find((i) => i.id === req.id),
         }),
-      });
-
-      router.service(HostTypes, {
-        list: () => ({
-          items: hostTypes,
-          size: hostTypes.length,
-          total: hostTypes.length,
-        }),
-        get: (req) => {
-          const hostType = hostTypes.find((i) => i.id === req.id);
-          if (!hostType) {
-            throw new ConnectError(`Host type not found in test: ${req.id}`, Code.NotFound);
-          }
-          return {
-            object: hostType,
-          };
-        },
       });
 
       router.service(VirtualNetworks, {

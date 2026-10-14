@@ -422,7 +422,6 @@
   "Failed to enable Identity provider": "Failed to enable Identity provider",
   "Failed to fetch bare metal instance type": "Failed to fetch bare metal instance type",
   "Failed to fetch capabilities": "Failed to fetch capabilities",
-  "Failed to fetch host types": "Failed to fetch host types",
   "Failed to fetch Identity provider": "Failed to fetch Identity provider",
   "Failed to fetch instance type": "Failed to fetch instance type",
   "Failed to fetch project": "Failed to fetch project",

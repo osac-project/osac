@@ -67,7 +67,7 @@ export const ClusterNetworkSchema: GenMessage<ClusterNetwork> = /*@__PURE__*/
  *
  * Unlike compute instances, which support multiple network attachments (one per virtual NIC), a cluster has a single
  * network attachment shared by all node sets. The fabric interface for each node set is resolved automatically by the
- * system from the node set's host type.
+ * system from the node set's selected BareMetalInstanceType.
  *
  * @generated from message osac.public.v1.ClusterNetworkAttachment
  */

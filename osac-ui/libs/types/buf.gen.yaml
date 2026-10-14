@@ -7,9 +7,5 @@ plugins:
     include_imports: true
     include_wkt: true
 inputs:
-  - git_repo: https://github.com/osac-project/osac.git
-    branch: stable
-    subdir: proto/public
-  - git_repo: https://github.com/osac-project/osac.git
-    branch: stable
-    subdir: proto/private
+  - module: buf.build/osac-project/public-api:v0.0.118
+  - module: buf.build/osac-project/private-api:v0.0.118

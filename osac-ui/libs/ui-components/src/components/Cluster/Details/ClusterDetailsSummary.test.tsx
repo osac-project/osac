@@ -14,8 +14,8 @@ describe('ClusterDetailsSummary', () => {
       id: 'cl-1',
       spec: {
         nodeSets: {
-          compute: { hostType: { id: 'acme_1tb' }, size: 3 },
-          gpu: { hostType: { id: 'ibm_mi300x' }, size: 2 },
+          compute: { baremetalInstanceType: { id: 'acme_1tb' }, size: 3 },
+          gpu: { baremetalInstanceType: { id: 'ibm_mi300x' }, size: 2 },
         },
       },
       status: {
@@ -33,7 +33,7 @@ describe('ClusterDetailsSummary', () => {
       id: 'cl-1',
       spec: {
         nodeSets: {
-          compute: { hostType: { id: 'acme_1tb' }, size: 1 },
+          compute: { baremetalInstanceType: { id: 'acme_1tb' }, size: 1 },
         },
       },
       status: {

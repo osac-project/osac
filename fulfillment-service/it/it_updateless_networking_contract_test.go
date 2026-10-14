@@ -38,6 +38,9 @@ type publicNetworkingProbes struct {
 	get    func(context.Context, string) error
 	delete func(context.Context, string) error
 	update func(context.Context, string) error
+	// updateCode is the expected gRPC code for the update probe: Unimplemented
+	// for updateless services, InvalidArgument for a scoped rule-only Update.
+	updateCode grpccodes.Code
 }
 
 var _ = Describe("Updateless networking API contract", Label("updateless-networking"), func() {
@@ -66,8 +69,8 @@ var _ = Describe("Updateless networking API contract", Label("updateless-network
 			By("guarding delete of an unknown identifier without persisting anything")
 			Expect(grpcstatus.Code(probes.delete(ctx, uniqueID))).To(Equal(grpccodes.NotFound))
 
-			By("rejecting an update attempt as unimplemented")
-			Expect(grpcstatus.Code(probes.update(ctx, uniqueID))).To(Equal(grpccodes.Unimplemented))
+			By("rejecting an update attempt with the expected code")
+			Expect(grpcstatus.Code(probes.update(ctx, uniqueID))).To(Equal(probes.updateCode))
 		},
 		Entry("VirtualNetworks", "VirtualNetworks", publicNetworkingProbes{
 			list: func(ctx context.Context) error {
@@ -86,6 +89,7 @@ var _ = Describe("Updateless networking API contract", Label("updateless-network
 				return user.Invoke(ctx, "/osac.public.v1.VirtualNetworks/Update",
 					&publicv1.VirtualNetworksGetRequest{}, &publicv1.VirtualNetworksGetResponse{})
 			},
+			updateCode: grpccodes.Unimplemented,
 		}),
 		Entry("Subnets", "Subnets", publicNetworkingProbes{
 			list: func(ctx context.Context) error {
@@ -104,6 +108,7 @@ var _ = Describe("Updateless networking API contract", Label("updateless-network
 				return user.Invoke(ctx, "/osac.public.v1.Subnets/Update",
 					&publicv1.SubnetsGetRequest{}, &publicv1.SubnetsGetResponse{})
 			},
+			updateCode: grpccodes.Unimplemented,
 		}),
 		Entry("SecurityGroups", "SecurityGroups", publicNetworkingProbes{
 			list: func(ctx context.Context) error {
@@ -118,10 +123,14 @@ var _ = Describe("Updateless networking API contract", Label("updateless-network
 				_, err := publicv1.NewSecurityGroupsClient(user).Delete(ctx, publicv1.SecurityGroupsDeleteRequest_builder{Id: id}.Build())
 				return err
 			},
+			// SecurityGroups.Update is a scoped rule-only exception (OSAC-5679):
+			// it resolves in the descriptor and rejects an empty object before
+			// persistence instead of being absent.
 			update: func(ctx context.Context, _ string) error {
 				return user.Invoke(ctx, "/osac.public.v1.SecurityGroups/Update",
 					&publicv1.SecurityGroupsGetRequest{}, &publicv1.SecurityGroupsGetResponse{})
 			},
+			updateCode: grpccodes.InvalidArgument,
 		}),
 		Entry("ExternalIPs", "ExternalIPs", publicNetworkingProbes{
 			list: func(ctx context.Context) error {
@@ -140,6 +149,7 @@ var _ = Describe("Updateless networking API contract", Label("updateless-network
 				return user.Invoke(ctx, "/osac.public.v1.ExternalIPs/Update",
 					&publicv1.ExternalIPsGetRequest{}, &publicv1.ExternalIPsGetResponse{})
 			},
+			updateCode: grpccodes.Unimplemented,
 		}),
 		Entry("ExternalIPAttachments", "ExternalIPAttachments", publicNetworkingProbes{
 			list: func(ctx context.Context) error {
@@ -158,6 +168,7 @@ var _ = Describe("Updateless networking API contract", Label("updateless-network
 				return user.Invoke(ctx, "/osac.public.v1.ExternalIPAttachments/Update",
 					&publicv1.ExternalIPAttachmentsGetRequest{}, &publicv1.ExternalIPAttachmentsGetResponse{})
 			},
+			updateCode: grpccodes.Unimplemented,
 		}),
 		Entry("NATGateways", "NATGateways", publicNetworkingProbes{
 			list: func(ctx context.Context) error {
@@ -176,6 +187,7 @@ var _ = Describe("Updateless networking API contract", Label("updateless-network
 				return user.Invoke(ctx, "/osac.public.v1.NATGateways/Update",
 					&publicv1.NATGatewaysGetRequest{}, &publicv1.NATGatewaysGetResponse{})
 			},
+			updateCode: grpccodes.Unimplemented,
 		}),
 	)
 

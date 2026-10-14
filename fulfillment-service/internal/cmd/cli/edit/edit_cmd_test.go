@@ -222,7 +222,6 @@ var _ = Describe("Edit command", func() {
 		Expect(completed).ToNot(ContainElements(
 			"virtualnetwork", "virtualnetworks",
 			"subnet", "subnets",
-			"securitygroup", "securitygroups",
 			"externalip", "externalips",
 			"externalipattachment", "externalipattachments",
 			"natgateway", "natgateways",
@@ -251,10 +250,19 @@ var _ = Describe("Edit command", func() {
 		},
 		Entry("VirtualNetwork", "virtualnetwork", protoreflect.FullName("osac.public.v1.VirtualNetwork")),
 		Entry("Subnet", "subnet", protoreflect.FullName("osac.public.v1.Subnet")),
-		Entry("SecurityGroup", "securitygroup", protoreflect.FullName("osac.public.v1.SecurityGroup")),
 		Entry("ExternalIP", "externalip", protoreflect.FullName("osac.public.v1.ExternalIP")),
 		Entry("ExternalIPAttachment", "externalipattachment", protoreflect.FullName("osac.public.v1.ExternalIPAttachment")),
 		Entry("NATGateway", "natgateway", protoreflect.FullName("osac.public.v1.NATGateway")),
+	)
+
+	DescribeTable("discovers rule-only SecurityGroup updates through its real descriptor",
+		func(objectType string, fullName protoreflect.FullName) {
+			h := reflectionHelper.Lookup(objectType)
+			Expect(h).ToNot(BeNil(), "object type %q is not discoverable", objectType)
+			Expect(h.FullName()).To(Equal(fullName))
+			Expect(updatable.Ensure(h)).ToNot(HaveOccurred())
+		},
+		Entry("SecurityGroup", "securitygroup", protoreflect.FullName("osac.public.v1.SecurityGroup")),
 	)
 
 	It("allows edits of update-capable objects", func() {

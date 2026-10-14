@@ -430,6 +430,13 @@
             svm: "{{ _t_svm_name }}"
 
   tasks:
+    - name: Reset the mock ONTAP server
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18445/_reset"
+        validate_certs: false
+        method: POST
+        status_code: [200]
+
     - name: Register the SVM for the QoS mismatch test
       ansible.builtin.uri:
         url: "https://127.0.0.1:18445/_svm"

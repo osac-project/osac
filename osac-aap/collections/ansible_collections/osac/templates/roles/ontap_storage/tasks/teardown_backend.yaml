@@ -23,6 +23,21 @@
   when: tenant_uid is not defined or tenant_uid | default('') | length == 0
   no_log: true
 
+- name: Fail if any dispatched tier has an invalid backend_id
+  ansible.builtin.fail:
+    msg: >-
+      Every tier dispatched to the ONTAP provider must provide a non-empty
+      string backend_id before teardown can release its assignment.
+  loop: "{{ _provider_tiers | default([]) }}"
+  loop_control:
+    label: "storage-tier"
+  when: >-
+    item.backend_id is not defined or
+    item.backend_id is none or
+    item.backend_id is not string or
+    item.backend_id | length == 0
+  no_log: true
+
 - name: Compute the dispatched backend ids
   ansible.builtin.set_fact:
     _ontap_backend_ids: "{{ _provider_tiers | default([]) | map(attribute='backend_id') | select('string') | unique | list }}"

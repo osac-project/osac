@@ -66,7 +66,6 @@
     (_lifecycle_secret_result.resources[0].data.lifecycle_stage | default('') | b64decode) != 'claimed' or
     (
       tenant_uid is defined and tenant_uid | default('') | length > 0 and
-      (_lifecycle_secret_result.resources[0].data.tenant_uid | default('') | b64decode) | length > 0 and
       (_lifecycle_secret_result.resources[0].data.tenant_uid | default('') | b64decode) != tenant_uid
     )
   no_log: true

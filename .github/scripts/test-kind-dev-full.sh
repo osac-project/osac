@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(CDPATH= cd -- "${SCRIPT_DIR}/../.." && pwd)"
+# shellcheck source=../../osac-installer/scripts/lib.sh
+source "${REPO_ROOT}/osac-installer/scripts/lib.sh"
+
 OSAC_NAMESPACE="${OSAC_NAMESPACE:-osac}"
 KEYCLOAK_NAMESPACE="${KEYCLOAK_NAMESPACE:-keycloak}"
 ROLLOUT_TIMEOUT="${ROLLOUT_TIMEOUT:-5m}"
-KEYCLOAK_URL="${KEYCLOAK_URL:-https://keycloak.osac.localhost:8443}"
+KEYCLOAK_ISSUER_URL="${OSAC_KEYCLOAK_ISSUER_URL:-https://keycloak.osac.localhost:8443/realms/osac}"
 FULFILLMENT_GRPC_ADDRESS="${OSAC_FULFILLMENT_GRPC_ADDRESS:-fulfillment-api.osac.localhost:8443}"
 UI_URL="${OSAC_UI_URL:-http://ui.osac.localhost:8080/}"
 ADMIN_CLIENT_ID="${OSAC_ADMIN_CLIENT_ID:-osac-admin}"
@@ -65,17 +70,9 @@ fi
 client_secret="$(printf '%s' "${client_secret_b64}" | base64 --decode)"
 
 printf 'Authenticating with the %s service account through Keycloak ...\n' "${ADMIN_CLIENT_ID}"
-token_response="$(curl --silent --show-error --fail-with-body \
-  --connect-timeout 10 --max-time 30 --cacert "${ca_bundle}" \
-  --config - <<CURL_CONFIG
-url = "${KEYCLOAK_URL}/realms/osac/protocol/openid-connect/token"
-request = "POST"
-data-urlencode = "grant_type=client_credentials"
-data-urlencode = "client_id=${ADMIN_CLIENT_ID}"
-data-urlencode = "client_secret=${client_secret}"
-CURL_CONFIG
-)"
-access_token="$(jq -er '.access_token | select(type == "string" and length > 0)' <<<"${token_response}")"
+access_token="$(get_fulfillment_access_token "${KEYCLOAK_ISSUER_URL}" \
+  "${ADMIN_CLIENT_ID}" "${client_secret}" --cacert "${ca_bundle}")"
+unset client_secret client_secret_b64
 
 printf 'Requesting tenant list from Fulfillment gRPC API ...\n'
 tenant_response="$(OSAC_ACCESS_TOKEN="${access_token}" timeout 30s grpcurl --expand-headers \

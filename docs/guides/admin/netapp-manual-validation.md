@@ -21,11 +21,13 @@ configuration and StorageClasses on the VM hosting cluster.
 | Consume arbitrary prepared SVM names and operator-provided preparation | Requires an adapted receiver; published PR #1580 still uses the earlier convention |
 | Verify native Trident readiness, trust, FC disk use and cleanup | Joint deployed qualification; registration success does not establish these |
 
-Tenant creation and preparation Secret creation do not require AAP. With the
-candidate operator, you can also test waiting/selection before connecting AAP;
-a valid preparation then reports that no provisioning provider is configured.
-AAP integration is needed to turn those inputs into native Trident resources
-and StorageClasses. Deploy a matching receiver before that final checkpoint.
+Submitting the Tenant request and creating the preparation Secret do not depend
+on the NetApp AAP role. The normal tenant onboarding workflow must still reach
+Ready; its existing AAP dependencies remain. With a Ready tenant and the
+candidate operator, you can test preparation waiting/selection without a NetApp
+provisioning provider; a valid preparation then reports that none is configured.
+The NetApp AAP role turns those inputs into native Trident resources and
+StorageClasses. Deploy a matching receiver before that final checkpoint.
 The local adapter is restricted to uncapped tiers without an encryption
 requirement; those receiving mappings still belong to the onboarding work.
 

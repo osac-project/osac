@@ -1942,7 +1942,7 @@ var _ = Describe("Private bare metal instances server", func() {
 				SetLogger(logger).SetTenancyLogic(tenancy).Build()
 			Expect(err).ToNot(HaveOccurred())
 			eipList, err := eipDao.List().
-				SetFilter(fmt.Sprintf("this.metadata.labels['osac.openshift.io/auto-created-for'] == '%s'", object.GetId())).
+				SetFilter(fmt.Sprintf("this.metadata.labels['%s'] == '%s'", autoCreatedForLabel, object.GetId())).
 				Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(eipList.GetItems()).To(HaveLen(1))
@@ -1951,7 +1951,7 @@ var _ = Describe("Private bare metal instances server", func() {
 				SetLogger(logger).SetTenancyLogic(tenancy).Build()
 			Expect(err).ToNot(HaveOccurred())
 			attList, err := attDao.List().
-				SetFilter(fmt.Sprintf("this.metadata.labels['osac.openshift.io/auto-created-for'] == '%s'", object.GetId())).
+				SetFilter(fmt.Sprintf("this.metadata.labels['%s'] == '%s'", autoCreatedForLabel, object.GetId())).
 				Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(attList.GetItems()).To(HaveLen(1))
@@ -1983,12 +1983,12 @@ var _ = Describe("Private bare metal instances server", func() {
 
 			// The rejected update must not clean up the auto-created resources or change pool capacity.
 			eipList, err = eipDao.List().
-				SetFilter(fmt.Sprintf("this.metadata.labels['osac.openshift.io/auto-created-for'] == '%s'", object.GetId())).
+				SetFilter(fmt.Sprintf("this.metadata.labels['%s'] == '%s'", autoCreatedForLabel, object.GetId())).
 				Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(eipList.GetItems()).To(HaveLen(1))
 			attList, err = attDao.List().
-				SetFilter(fmt.Sprintf("this.metadata.labels['osac.openshift.io/auto-created-for'] == '%s'", object.GetId())).
+				SetFilter(fmt.Sprintf("this.metadata.labels['%s'] == '%s'", autoCreatedForLabel, object.GetId())).
 				Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(attList.GetItems()).To(HaveLen(1))

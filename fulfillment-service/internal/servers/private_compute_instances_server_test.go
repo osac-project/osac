@@ -3138,7 +3138,10 @@ var _ = Describe("Private compute instances server", func() {
 					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.network_attachments"}},
 				}.Build())
 				Expect(updateResponse).To(BeNil())
-				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("security groups are immutable"))
 				stored, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				attachments := stored.GetObject().GetSpec().GetNetworkAttachments()
@@ -3186,7 +3189,10 @@ var _ = Describe("Private compute instances server", func() {
 					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.network_attachments"}},
 				}.Build())
 				Expect(updateResponse).To(BeNil())
-				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("security groups are immutable"))
 				stored, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				attachments := stored.GetObject().GetSpec().GetNetworkAttachments()

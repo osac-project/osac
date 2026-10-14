@@ -128,7 +128,7 @@ var _ = Describe("Updateless networking API contract", Label("updateless-network
 			// persistence instead of being absent.
 			update: func(ctx context.Context, _ string) error {
 				return user.Invoke(ctx, "/osac.public.v1.SecurityGroups/Update",
-					&publicv1.SecurityGroupsGetRequest{}, &publicv1.SecurityGroupsGetResponse{})
+					&publicv1.SecurityGroupsUpdateRequest{}, &publicv1.SecurityGroupsUpdateResponse{})
 			},
 			updateCode: grpccodes.InvalidArgument,
 		}),

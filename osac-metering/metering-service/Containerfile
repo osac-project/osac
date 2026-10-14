@@ -38,7 +38,7 @@ COPY --chown=1001:0 osac-metering/metering-service/go.mod osac-metering/metering
 # (GOPROXY/GOFLAGS pointed at the prefetched module cache) when present --
 # i.e. a hermetic Konflux build. Absent entirely for local/non-hermetic
 # builds, where go mod download falls back to the real network as before.
-RUN cd osac-metering/metering-service && { [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; go mod download; }
+RUN cd osac-metering/metering-service && { [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; GODEBUG=http2client=0 go mod download; }
 
 COPY --chown=1001:0 osac-metering/metering-service/ osac-metering/metering-service/
 

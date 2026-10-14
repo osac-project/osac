@@ -29,6 +29,16 @@
 {{- end }}
 {{- $explicitCfg := .Values.instanceGroups.clusterFulfillment.config | default dict -}}
 {{- $explicitSec := .Values.instanceGroups.clusterFulfillment.secret | default dict -}}
+{{- range $key, $value := $explicitCfg -}}
+{{- if eq (include "osac-aap.isProtectedNetrisKey" (dict "root" $ "key" $key)) "true" -}}
+{{- fail (printf "instanceGroups.clusterFulfillment.config.%s is managed by global.networking.netris" $key) -}}
+{{- end -}}
+{{- end -}}
+{{- range $key, $value := $explicitSec -}}
+{{- if eq (include "osac-aap.isProtectedNetrisKey" (dict "root" $ "key" $key)) "true" -}}
+{{- fail (printf "instanceGroups.clusterFulfillment.secret.%s is managed by global.networking.netris" $key) -}}
+{{- end -}}
+{{- end -}}
 {{- $cfg := $explicitCfg -}}
 {{- $sec := $explicitSec -}}
 {{- if not $netExpert -}}
@@ -112,6 +122,16 @@ data: {}
 {{- end }}
 {{- $explicitCfg := .Values.instanceGroups.networkFulfillment.config | default dict -}}
 {{- $explicitSec := .Values.instanceGroups.networkFulfillment.secret | default dict -}}
+{{- range $key, $value := $explicitCfg -}}
+{{- if eq (include "osac-aap.isProtectedNetrisKey" (dict "root" $ "key" $key)) "true" -}}
+{{- fail (printf "instanceGroups.networkFulfillment.config.%s is managed by global.networking.netris" $key) -}}
+{{- end -}}
+{{- end -}}
+{{- range $key, $value := $explicitSec -}}
+{{- if eq (include "osac-aap.isProtectedNetrisKey" (dict "root" $ "key" $key)) "true" -}}
+{{- fail (printf "instanceGroups.networkFulfillment.secret.%s is managed by global.networking.netris" $key) -}}
+{{- end -}}
+{{- end -}}
 {{- $cfg := $explicitCfg -}}
 {{- $sec := $explicitSec -}}
 {{- if not $netExpert -}}

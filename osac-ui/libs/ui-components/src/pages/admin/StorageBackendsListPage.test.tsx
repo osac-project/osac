@@ -83,7 +83,7 @@ describe('StorageBackendsListPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Ready')).toBeInTheDocument();
     });
-    expect(screen.getByText('Unspecified')).toBeInTheDocument();
+    expect(screen.getByText('Pending')).toBeInTheDocument();
   });
 
   it('shows empty state when there are no backends', async () => {

@@ -34,13 +34,13 @@ class ActionModule(ActionBase):
         args = dict(self._task.args)
         expected_url = os.environ.get("NETRIS_CONTROLLER_URL", "").rstrip("/")
         actual_url = args.get("url")
-        if expected_url and (
+        if not expected_url or (
             not isinstance(actual_url, str)
-            or not actual_url.startswith(f"{expected_url}/")
+            or (actual_url != expected_url and not actual_url.startswith(f"{expected_url}/"))
         ):
             raise AnsibleActionFail("Netris controller URL is not installation-managed")
 
-        if "validate_certs" in args and _as_bool(
+        if "validate_certs" not in args or _as_bool(
             args["validate_certs"]
         ) != _expected_validate_certs():
             raise AnsibleActionFail("Netris certificate validation is not installation-managed")

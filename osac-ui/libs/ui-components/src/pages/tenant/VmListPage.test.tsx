@@ -131,6 +131,15 @@ describe('VmListPage', () => {
     expect(screen.queryByText('No virtual machines match your filters.')).not.toBeInTheDocument();
   });
 
+  it('shows the filter message when a matching name has a different status', async () => {
+    renderPage(['/?status=stopped&search=web-01']);
+
+    expect(await screen.findByText('No virtual machines match your filters.')).toBeInTheDocument();
+    expect(
+      screen.queryByText('No virtual machines found matching "web-01".'),
+    ).not.toBeInTheDocument();
+  });
+
   it('retains the status-only empty message', async () => {
     renderPage(['/?status=stopped']);
 

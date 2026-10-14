@@ -157,11 +157,13 @@ export const VmListPage = () => {
           <StackItem>
             {showEmptyState ? (
               <SubtleContent component="p">
-                {statusFilters.length === 0
-                  ? t('Choose one or more statuses above to filter virtual machines.')
-                  : vms?.length
-                    ? t('No virtual machines match your filters.')
-                    : t('No virtual machines yet. Create one to get started.')}
+                {search.trim()
+                  ? t('No virtual machines found matching "{{search}}".', { search: search.trim() })
+                  : statusFilters.length === 0
+                    ? t('Choose one or more statuses above to filter virtual machines.')
+                    : vms?.length
+                      ? t('No virtual machines match your filters.')
+                      : t('No virtual machines yet. Create one to get started.')}
               </SubtleContent>
             ) : (
               <VmTable

@@ -648,6 +648,7 @@
   "No tenants yet. Register one to get started.": "No tenants yet. Register one to get started.",
   "No unallocated external IPs": "No unallocated external IPs",
   "No unattached external IPs available": "No unattached external IPs available",
+  "No virtual machines found matching \"{{search}}\".": "No virtual machines found matching \"{{search}}\".",
   "No virtual machines match your filters.": "No virtual machines match your filters.",
   "No virtual machines yet. Create one to get started.": "No virtual machines yet. Create one to get started.",
   "No virtual networks configured.": "No virtual networks configured.",

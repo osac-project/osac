@@ -6,7 +6,6 @@
   vars:
     tenant_name: "{{ osac_job_vars.resource.metadata.name }}"
     tenant_namespace: "{{ osac_job_vars.resource.metadata.namespace }}"
-    tenant_uid: "{{ osac_job_vars.resource.metadata.uid }}"
 
   pre_tasks:
     - name: Show resource metadata
@@ -15,15 +14,13 @@
 
     - name: Validate tenant payload is present
       ansible.builtin.fail:
-        msg: "tenant must be provided via osac_job_vars.resource with metadata.name, metadata.namespace, and metadata.uid set"
+        msg: "tenant must be provided via osac_job_vars.resource with metadata.name and metadata.namespace set"
       when: >-
         osac_job_vars is not defined or
         osac_job_vars.resource.metadata.name is not defined or
         osac_job_vars.resource.metadata.name | length == 0 or
         osac_job_vars.resource.metadata.namespace is not defined or
-        osac_job_vars.resource.metadata.namespace | length == 0 or
-        osac_job_vars.resource.metadata.uid is not defined or
-        osac_job_vars.resource.metadata.uid | length == 0
+        osac_job_vars.resource.metadata.namespace | length == 0
 
     - name: Validate storage_tier_definitions is a non-empty array in the EDA event
       ansible.builtin.fail:

@@ -73,6 +73,13 @@ provisioning. Cluster fulfillment receives `NETWORK_CLASS` /
 `NETWORK_STEPS_COLLECTION` plus cluster-specific Netris fields; network
 fulfillment receives the shared Netris connection fields only.
 
+The generated Netris connection fields are installation-owned. Do not set
+`NETRIS_CONTROLLER_URL`, `NETRIS_VALIDATE_CERTS`, or `NETRIS_CA_PATH` in the
+low-level `aap.instanceGroups.*.config` or `secret` maps; Helm rejects those
+keys and their supported aliases. Managed execution pods export all three
+canonical names explicitly and reject protected `extra_vars` before a Netris
+request. Keep ordinary launch variables enabled for OSAC resource payloads.
+
 ## Netris example
 
 ```yaml

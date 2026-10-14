@@ -118,32 +118,50 @@ Verify the ITMS includes containerdisk entries:
 oc get itms -o yaml | grep -A2 "containerdisk\|rhel-guest"
 ```
 
-### Step 4 — Configure CDI pullMethod
+### Step 4 — Configure CDI for disconnected registry imports
 
-By default, CDI uses the `pod` pull method, which creates a temporary pod
-to pull containerdisk images.  In disconnected environments, this pod may
-not have the correct registry credentials.
+Two distinct image-pull paths exist for VMaaS:
 
-> **OSAC-2991**: The `pullMethod: node` setting is not yet exposed in the
-> OSAC API.  This must be configured manually on the `HyperConverged` CR
-> or via the CDI configuration.
+1. **CRI-O / kubelet pulls** — Pod images (e.g. `virt-launcher`)
+   are resolved automatically via ITMS/IDMS.  No extra configuration
+   is needed beyond the cluster-wide mirror sets applied in Step 3.
 
-Configure CDI to use node-level pulls (which inherit CRI-O mirror config):
+2. **CDI registry imports** — When a `DataVolume` imports a
+   containerdisk from a registry, CDI uses its own HTTP client,
+   which does **not** honour ITMS/IDMS.  Each registry-backed
+   `DataVolume` must set `pullMethod: node` so CDI delegates the
+   pull to CRI-O (which does honour ITMS/IDMS).
 
-```bash
-oc patch hyperconverged kubevirt-hyperconverged -n openshift-cnv --type merge -p '
-{
-  "spec": {
-    "storageImport": {
-      "insecureRegistries": ["<mirror-registry>:8443"]
-    }
-  }
-}'
+> **OSAC-2991**: The `pullMethod: node` setting is not yet exposed
+> in the OSAC API.  It must be set on each `DataVolume` manually
+> or via a template default.
+
+Example `DataVolume` with `pullMethod: node`:
+
+```yaml
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataVolume
+metadata:
+  name: rhel9-containerdisk
+spec:
+  source:
+    registry:
+      url: "docker://<upstream-image>:<tag>"
+      pullMethod: node       # delegates to CRI-O / ITMS
+  storage:
+    resources:
+      requests:
+        storage: 10Gi
 ```
 
-For the `pullMethod: node` workaround, configure the CDI config:
+#### Optional: CDI insecureRegistries (self-signed certificates only)
+
+If the mirror registry uses a self-signed certificate that is **not**
+distributed via trust-manager, add it to CDI's `insecureRegistries`.
+Prefer distributing the CA via trust-manager instead.
 
 ```bash
+# Only needed when the mirror registry CA is not trusted cluster-wide
 oc patch cdi cdi -n openshift-cnv --type merge -p '
 {
   "spec": {
@@ -154,13 +172,15 @@ oc patch cdi cdi -n openshift-cnv --type merge -p '
 }'
 ```
 
-### Step 5 — Verify containerdisk resolution
+### Step 5 — Verify containerdisk resolution via ITMS
 
-Test pulling a containerdisk image on a cluster node:
+Pull using the **upstream** image reference to confirm that ITMS
+redirects the request to the mirror registry:
 
 ```bash
+# Use the upstream tag reference — CRI-O should resolve it via ITMS
 oc debug node/<node-name> -- chroot /host \
-  crictl pull <mirror-registry>:8443/<containerdisk-repo>/<image>:<tag>
+  crictl pull <upstream-registry>/<containerdisk-image>:<tag>
 ```
 
 ## Verification (BDD Scenarios)
@@ -180,9 +200,10 @@ Feature: VMaaS containerdisk mirroring for disconnected OSAC
     And the image pull succeeds
 
   Scenario: CDI can import a containerdisk using node pull method
-    Given the CDI configuration has insecureRegistries set for the mirror registry
-    When a DataVolume is created referencing a mirrored containerdisk
-    Then CDI successfully imports the disk image
+    Given a DataVolume is created with pullMethod "node"
+    When the DataVolume references a mirrored containerdisk
+    Then CDI delegates the pull to CRI-O which resolves via ITMS
+    And CDI successfully imports the disk image
     And the resulting PVC contains a valid VM disk
 
   Scenario: VM boots from a mirrored containerdisk
@@ -207,9 +228,10 @@ oc get itms -o yaml | grep -B5 -A5 "containerdisk"
 # 2. Verify CDI operator is healthy
 oc get pods -n openshift-cnv -l app=cdi-operator
 
-# 3. Test containerdisk pull on a node
+# 3. Test containerdisk pull on a node (use upstream reference
+#    to validate ITMS redirect)
 oc debug node/<node-name> -- chroot /host \
-  crictl pull <mirror-registry>:8443/<containerdisk-image>
+  crictl pull <upstream-registry>/<containerdisk-image>:<tag>
 
 # 4. Verify CDI insecureRegistries configuration
 oc get cdi cdi -n openshift-cnv -o jsonpath='{.spec.config.insecureRegistries}'
@@ -231,7 +253,7 @@ oc get vmi -A -o custom-columns=\
 | DataVolume import fails with `x509: certificate signed by unknown authority` | Mirror registry TLS cert not trusted by CDI | Add registry to CDI `insecureRegistries` or distribute CA via trust-manager |
 | `ImagePullBackOff` on virt-launcher pods | ITMS entry missing for the containerdisk image | Add the image to `additionalImages` in ISC; re-run `oc-mirror` |
 | VM fails to boot — disk import incomplete | DataVolume import timed out or errored | Check DataVolume `.status.conditions` and CDI importer pod logs |
-| `ErrImagePull: unauthorized` on node pull | Mirror registry credentials missing from node | Verify global pull secret: `oc get secret/pull-secret -n openshift-config -o jsonpath='{.data.\.dockerconfigjson}' \| base64 -d \| jq '.auths'` |
+| `ErrImagePull: unauthorized` on node pull | Mirror registry credentials missing from node | Verify global pull secret contains registry entry: `oc get secret/pull-secret -n openshift-config -o jsonpath='{.data.\.dockerconfigjson}' \| base64 -d \| jq '.auths \| keys'` |
 
 ## Known Gaps / Limitations
 
@@ -240,10 +262,12 @@ oc get vmi -A -o custom-columns=\
    Operators must manually identify and add the required containerdisk
    images based on their VM template offerings.
 
-2. **OSAC-2991: `pullMethod: node` not in OSAC API** — The CDI `pullMethod`
-   configuration is not exposed in the OSAC API.  It must be set manually
-   on the `HyperConverged` or `CDI` CR.  This means disconnected VMaaS
-   requires post-install manual configuration.
+2. **OSAC-2991: `pullMethod: node` not in OSAC API** — The CDI
+   `pullMethod` setting is per-`DataVolume`, not a global CDI config.
+   It is not yet exposed in the OSAC API.  Each registry-backed
+   `DataVolume` must set `pullMethod: node` so CDI delegates the pull
+   to CRI-O (which honours ITMS/IDMS).  Until OSAC-2991 is resolved,
+   disconnected VMaaS requires manual `DataVolume` configuration.
 
 3. **MaaS (networking) not supported** — Multus-based network services
    (MaaS) are not supported in disconnected mode.  Only VMaaS virtual

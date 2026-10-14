@@ -34,7 +34,8 @@ registry.
 
 ## ImageSetConfiguration Section
 
-The AAP operator itself isPhase 1A).
+The AAP operator itself is mirrored in Phase 1A (see
+[mirroring-operators.md](mirroring-operators.md)).
 The operator's **operand images** (controller, hub, Redis, PostgreSQL) are
 bundled within the operator catalog and are pulled automatically when the
 `AnsibleAutomationPlatform` CR is created.
@@ -140,8 +141,9 @@ oc get csv -n ansible-aap -o json | \
   jq -r '.items[].spec.install.spec.deployments[].spec.template.spec.containers[].env[] |
     select(.name | startswith("RELATED_IMAGE")) | "\(.name)=\(.value)"'
 
-# 4. Verify no ImagePullBackOff in AAP namespace
-oc get events -n "$NS" --field-selector reason=Failed | grep -i pull
+# 4. Verify no image-pull failures or back-off in AAP namespace
+oc get events -n "$NS" --field-selector reason=Failed -o wide | grep -i pull
+oc get events -n "$NS" --field-selector reason=BackOff -o wide | grep -i pull
 
 # 5. Check AAP controller route
 oc get route -n ansible-aap -o jsonpath='{.items[0].spec.host}'
@@ -160,7 +162,7 @@ oc get pods -n osac -l app.kubernetes.io/name=osac-aap
 | AAP controller stuck in `Pending` | Operator images not mirrored via IDMS | Verify `oc get idms -o yaml \| grep awx`; re-mirror MCE catalog |
 | Redis `ImagePullBackOff` | RELATED_IMAGE_REDIS not resolved via IDMS | Check IDMS entries for Redis image; the image is in the operator bundle |
 | PostgreSQL `ImagePullBackOff` | RELATED_IMAGE_POSTGRES not resolved via IDMS | Check IDMS entries for PostgreSQL image; the image is in the operator bundle |
-| AAP license error | Manifest not uploaded or expired | Verify secret `automationcontroller-license` exists and manifest is valid |
+| AAP license error | Manifest not uploaded or expired | Verify secret `config-as-code-manifest-ig` exists in `$NS` and manifest is valid |
 | Ansible job fails with `EE image not found` | Custom EE image not mirrored | Add EE image to `additionalImages`; re-run `oc-mirror` |
 | AAP controller route not accessible | Route not created or TLS misconfigured | Check `oc get route -n $NS`; verify cert-manager ClusterIssuer |
 

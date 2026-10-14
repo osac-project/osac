@@ -25,7 +25,8 @@ post-OSAC-4558 OCI reference approach.
 | Metal3 / Ironic agent services deployed by MCE | `oc get pods -n multicluster-engine -l app=metal3` |
 | Assisted-service (infrastructure-operator) is running | `oc get pods -n multicluster-engine -l app=assisted-service` |
 | BMaaS enabled in OSAC Helm values | `bmaas.enabled: true` in values file |
-| Mirror registry reachable from provisioning network | Baseboard management controllers (BMC) can reach the cluster |
+| Mirror registry reachable from cluster nodes (kubelet/CRI-O) | `oc debug node/<node> -- chroot /host curl -sSf https://<registry>:8443/v2/ -k` |
+| BMC endpoints reachable via Redfish/IPMI from provisioning network | BMC responds: `curl -k https://<bmc-ip>/redfish/v1/Systems` |
 
 ## Resources Required
 
@@ -141,22 +142,43 @@ registry or from a local HTTP server on the provisioning network.
 
 ### Step 5 — Configure BareMetalHost resources
 
-Create `BareMetalHost` resources with BMC credentials:
+Create the BMC credentials `Secret` and then the `BareMetalHost` resource.
+Ensure the referenced `InfraEnv` exists in the same namespace before
+creating the `BareMetalHost` — the agent-based workflow requires an
+`InfraEnv` to generate the discovery ISO.
 
 ```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: worker-0-bmc-secret
+  namespace: osac
+type: Opaque
+stringData:
+  username: <bmc-username>
+  password: <bmc-password>
+---
 apiVersion: metal3.io/v1alpha1
 kind: BareMetalHost
 metadata:
   name: worker-0
   namespace: osac
+  labels:
+    infraenvs.agent-install.openshift.io: osac-infraenv
 spec:
   online: true
   bootMACAddress: "AA:BB:CC:DD:EE:FF"
   bmc:
     address: idrac-virtualmedia+https://192.168.1.10/redfish/v1/Systems/System.Embedded.1
     credentialsName: worker-0-bmc-secret
-    disableCertificateVerification: true
+    disableCertificateVerification: false  # set to true only for self-signed BMC certificates
 ```
+
+> **Note**: `disableCertificateVerification` defaults to `false`.  Set it
+> to `true` only when the BMC uses a self-signed or untrusted TLS
+> certificate.  The `InfraEnv` label
+> (`infraenvs.agent-install.openshift.io`) binds this host to the
+> specified `InfraEnv` resource, which must exist in the same namespace.
 
 ## Verification (BDD Scenarios)
 

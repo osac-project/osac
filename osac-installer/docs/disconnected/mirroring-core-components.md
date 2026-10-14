@@ -158,14 +158,17 @@ the node daemon resolves them to the mirror registry.
 
 ### Step 3 — Deploy Helm charts via bastion laptop
 
-Helm charts **cannot be mirrored by `oc-mirror`** due to two missing
-features:
+`oc-mirror` v2 supports mirroring Helm charts via the `mirror.helm`
+configuration for charts stored locally or in a repository index.
+However, the OSAC charts on `ghcr.io` use the OCI registry protocol,
+which `oc-mirror` does not yet support for Helm:
 
-- No `oci:` protocol support ([RFE-8713][rfe-8713])
+- No OCI registry pull for Helm charts ([RFE-8713][rfe-8713])
 - No values passthrough for Helm charts ([RFE-8748][rfe-8748])
 
-Instead, use an internet-connected workstation (bastion laptop) to pull
-charts from `ghcr.io` and deploy via SSH tunnel.
+Until RFE-8713 is resolved, use an internet-connected workstation
+(bastion laptop) to pull OCI charts from `ghcr.io` and deploy via
+SSH tunnel.
 
 [rfe-8713]: https://issues.redhat.com/browse/RFE-8713
 [rfe-8748]: https://issues.redhat.com/browse/RFE-8748
@@ -277,8 +280,9 @@ Feature: Core component mirroring and deployment for disconnected OSAC
   Scenario: Phase 1a deploys operators with mirrored catalog
     Given the osac-deps chart is installed with catalogSource override
     When I check Subscription sources
-    Then no Subscription references "redhat-operators"
-    And all Subscriptions reference the mirrored CatalogSource
+    Then all Subscriptions except AAP reference the mirrored CatalogSource
+    # Note: the AAP Subscription template hard-codes
+    # source "redhat-operators" in the osac-deps chart
 
   Scenario: Phase 1b creates shared services
     Given the osac-infra chart is installed
@@ -348,10 +352,11 @@ helm list -A | grep osac
 
 ## Known Gaps / Limitations
 
-1. **Helm chart mirroring not supported** — `oc-mirror` cannot mirror Helm
-   charts due to missing OCI protocol support (RFE-8713) and missing values
-   passthrough (RFE-8748).  The bastion laptop approach is the recommended
-   workaround.
+1. **OCI Helm chart mirroring not supported** — `oc-mirror` v2 can
+   mirror Helm charts from local or repository-index sources via
+   `mirror.helm`, but cannot pull OCI-format charts from a registry
+   (RFE-8713) or pass Helm values (RFE-8748).  The bastion laptop
+   approach is the recommended workaround for OSAC's OCI charts.
 
 2. **No `global.imageRegistry` value** — OSAC does not expose a global
    image registry override in its Helm values.  Disconnected image

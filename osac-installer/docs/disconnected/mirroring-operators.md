@@ -22,8 +22,8 @@ Before you begin, confirm each item:
 | OpenShift cluster is in a disconnected or restricted-network state | `oc get proxy/cluster -o jsonpath='{.spec}'` |
 | `oc-mirror` v2 binary is available on the bastion host | `oc-mirror version --short` shows `>= 4.16` |
 | Mirror registry is reachable from the bastion and from every cluster node | `curl -sSf https://<registry>:8443/v2/ -k` |
-| Red Hat pull secret is configured for `registry.redhat.io` | `jq '.auths["registry.redhat.io"]' ~/.docker/config.json` |
-| Mirror registry credentials are in the pull secret | `jq '.auths["<registry>:8443"]' ~/.docker/config.json` |
+| Red Hat pull secret is configured for `registry.redhat.io` | `jq '.auths | has("registry.redhat.io")' ~/.docker/config.json` |
+| Mirror registry credentials are in the pull secret | `jq '.auths | has("<registry>:8443")' ~/.docker/config.json` |
 | At least 400 GiB free disk on the bastion | `df -h $(pwd)` |
 | Cluster admin access | `oc auth can-i create catalogsource -n openshift-marketplace` |
 
@@ -139,18 +139,16 @@ oc apply --server-side -f oc-mirror-workspace/working-dir/cluster-resources/idms
 
 # ImageTagMirrorSet
 oc apply --server-side -f oc-mirror-workspace/working-dir/cluster-resources/itms-oc-mirror.yaml
-
-# Signature ConfigMap
-oc apply --server-side -f oc-mirror-workspace/working-dir/cluster-resources/signature-configmap.yaml
 ```
 
 ### Step 3 — Record the CatalogSource name
 
-The generated `CatalogSource` name is used when installing OSAC with Helm:
+The generated `CatalogSource` name is used when installing OSAC with
+Helm.  Use the explicit name produced by `oc-mirror`:
 
 ```bash
-CS_NAME=$(oc get catalogsource -n openshift-marketplace \
-  -o jsonpath='{.items[?(@.metadata.name!="redhat-operators")].metadata.name}')
+CS_NAME="cs-redhat-operator-index-v4-22"
+oc get catalogsource "$CS_NAME" -n openshift-marketplace
 echo "Use --set catalogSource=${CS_NAME}"
 ```
 
@@ -194,7 +192,9 @@ Feature: OLM operator mirroring for disconnected OSAC
     Given the osac-deps Helm chart is installed with catalogSource override
     When I list Subscriptions across operator namespaces
     Then each Subscription has status "AtLatestKnown"
-    And each Subscription references the mirrored CatalogSource
+    And each non-AAP Subscription references the mirrored CatalogSource
+    # Note: the AAP Subscription template hard-codes source
+    # "redhat-operators" in the osac-deps chart (aap.yaml)
 
   Scenario: Operator CSVs reach Succeeded phase
     When I list ClusterServiceVersions in operator namespaces
@@ -243,10 +243,20 @@ for crd in certificates.cert-manager.io \
   oc get crd "$crd" -o name 2>/dev/null && echo "  OK: $crd" || echo "  MISSING: $crd"
 done
 
-# 5. Verify no Subscription references the default catalog
+# 5. Verify Subscriptions reference the mirrored catalog
+# Note: the AAP Subscription template hard-codes source
+# "redhat-operators" in the osac-deps chart (aap.yaml); verify
+# it separately.
 oc get subscriptions -A -o json | \
-  jq -r '.items[] | select(.spec.source=="redhat-operators") | .metadata.name' | \
-  xargs -I{} echo "WARNING: {} still references redhat-operators"
+  jq -r '.items[] |
+    select(.spec.source=="redhat-operators") |
+    select(.spec.name!="ansible-automation-platform-operator") |
+    .metadata.name' | \
+  xargs -I{} echo "WARNING: {} still uses redhat-operators"
+
+# Verify the AAP Subscription source independently
+oc get subscription ansible-automation-platform-operator \
+  -n ansible-aap -o jsonpath='{.spec.source}'
 ```
 
 ## Troubleshooting

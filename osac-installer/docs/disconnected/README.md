@@ -55,8 +55,8 @@ Mirror all **7 OLM-managed operators** required by OSAC:
 
 Mirror OSAC dependency and core component images:
 
-- **Dependencies** (6 images): OpenBao, trust-manager, Keycloak,
-  origin-cli, PostgreSQL
+- **Dependencies** (6 images): OpenBao, trust-manager,
+  trust-pkg-debian-bookworm, Keycloak, origin-cli, PostgreSQL
 - **Core components** (6 images): osac-operator, fulfillment-service,
   envoy, osac-aap, osac-ui, bare-metal-fulfillment-operator
 - **Conditional metering** (3 images): metering-service, echo-adapter,
@@ -181,9 +181,11 @@ flowchart TD
    - `catalogSourceNamespace` — Namespace of the CatalogSource
    - `cliImage` — Mirrored origin-cli image reference
 
-4. **Bastion laptop for Helm charts** — Helm charts cannot be mirrored
-   by `oc-mirror` (RFE-8713, RFE-8748).  Use an internet-connected
-   workstation to pull charts from `ghcr.io` and deploy via SSH tunnel.
+4. **Bastion laptop for OCI Helm charts** — `oc-mirror` v2 supports
+   `mirror.helm` for local or repository-index charts, but cannot
+   pull OCI-format charts from a registry (RFE-8713) or pass Helm
+   values (RFE-8748).  Use an internet-connected workstation to pull
+   OSAC's OCI charts from `ghcr.io` and deploy via SSH tunnel.
 
 5. **7 operators** — All seven operators must be mirrored, including
    `amq-streams` for Kafka messaging.

@@ -10,7 +10,9 @@ steps; a READY backend does not certify those prerequisites.
 
 - A cluster management HTTPS endpoint reachable from Fulfillment Service.
   Use its certificate's hostname or a matching IP SAN. The address used by
-  Trident must also match its runtime account's scope; see the onboarding guide.
+  Trident must also match its runtime account's scope. The working MVP profile
+  reuses this address with a separate account supplied per tenant/backend;
+  see the onboarding guide.
 - A discovery account allowed to read cluster version, SVMs, IP and FC
   interfaces, QoS policies, volumes and LUNs through the ONTAP REST API.
 - The approved issuing CA chain in Fulfillment's configured CA bundle. A CA
@@ -26,8 +28,13 @@ steps; a READY backend does not certify those prerequisites.
 - The discovery password, either stored in a Fulfillment Secret that the
   registering administrator can read, or supplied inline in the request.
 
-The cluster endpoint/account provides discovery only. It does not assign a
-tenant SVM or provide that SVM's runtime credentials.
+The registered account is used for discovery. The same endpoint is reused for
+Trident in the working MVP profile, with separate credentials from the tenant
+preparation Secret. Backend registration does not assign a tenant SVM.
+
+For a staged administrator walkthrough, including tenant/preparation steps that
+still need operator/AAP implementation, see
+[manual NetApp validation](netapp-manual-validation.md).
 
 ## Register a backend
 

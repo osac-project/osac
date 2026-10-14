@@ -1110,6 +1110,34 @@ var _ = Describe("AAPProvider", func() {
 			}
 		})
 
+		It("passes one tenant preparation per backend alongside distinct discovery credentials", func() {
+			ctx = provisioning.WithStorageBackendConnections(ctx, map[string]provisioning.BackendConnection{
+				"backend-1": {
+					Endpoint: "https://cluster.example.com", Username: "discovery", Password: "fixture-discovery",
+					TenantPreparation: &provisioning.TenantPreparation{
+						TenantID: "immutable-tenant-id", Namespace: "trident", Name: "admin-chosen-name", UID: "source-uid", ResourceVersion: "42",
+						ProviderConfig: map[string]any{"username": "tenant-user", "password": "fixture-runtime", "svm": "customer_acme"},
+					},
+				},
+				"backend-2": {Endpoint: "https://vast.example.com", Username: "legacy", Password: "fixture-legacy"},
+			})
+			aapClient.launchJobTemplateFunc = func(_ context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				vars := req.ExtraVars["osac_job_vars"].(map[string]any)
+				connections := vars["storage_backend_connections"].(map[string]map[string]any)
+				Expect(connections).To(HaveLen(2))
+				Expect(connections["backend-1"]["password"]).To(Equal("fixture-discovery"))
+				Expect(connections["backend-1"]["tenant_preparation"]).To(Equal(map[string]any{
+					"tenant_id":       "immutable-tenant-id",
+					"source":          map[string]any{"namespace": "trident", "name": "admin-chosen-name", "uid": "source-uid", "resource_version": "42"},
+					"provider_config": map[string]any{"username": "tenant-user", "password": "fixture-runtime", "svm": "customer_acme"},
+				}))
+				Expect(connections["backend-2"]).NotTo(HaveKey("tenant_preparation"))
+				return &aap.LaunchJobTemplateResponse{JobID: 123}, nil
+			}
+			_, err := provider.TriggerProvision(ctx, &v1alpha1.Tenant{ObjectMeta: metav1.ObjectMeta{Name: "tenant-a"}})
+			Expect(err).NotTo(HaveOccurred())
+		})
+
 		DescribeTable("should preserve ONTAP tier requirements in the AAP request", func(encrypted bool, maxIOPS *int64) {
 			var providerConfig map[string]any
 			if maxIOPS != nil {

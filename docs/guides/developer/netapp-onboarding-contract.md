@@ -2,12 +2,21 @@
 
 This contract connects backend/tier registration to prepared-SVM tenant
 onboarding for the developer preview. Registration, the operator request
-mapping, and Fulfillment storage-status projection are implemented on the
+mapping, preparation lookup/waiting, and Fulfillment storage-status projection are implemented on the
 `OSAC-5813-netapp-backend-tiers` branch. The receiving AAP role and native
 resource lifecycle remain onboarding implementation work.
 
+The working MVP profile is a shared cluster management endpoint with separate
+discovery and tenant/backend Trident accounts. This is the implementation
+assumption pending Akshay/Will confirmation; it does not promise that a
+cluster-scoped Trident account is restricted to one SVM. Backend credentials
+serve discovery; the preparation Secret supplies the account for tenant volume
+operations. Both accounts must work through the registered cluster endpoint.
+
 For administrator requests and TLS preparation, see
 [NetApp backend and tier registration](../admin/netapp-backend-tiers.md).
+For administrator-driven acceptance steps and their implementation gates, see
+[manual NetApp validation](../admin/netapp-manual-validation.md).
 
 ## Registration output
 
@@ -50,6 +59,8 @@ osac_job_vars:
       name: tenant-a
       namespace: osac-system
       uid: tenant-cr-uid
+      labels:
+        osac.openshift.io/tenant-id: immutable-osac-tenant-id
   storage_tier_definitions:
     - name: fast
       protocol: block
@@ -67,6 +78,17 @@ osac_job_vars:
       endpoint: https://cluster-mgmt.example.com
       username: osac-discovery
       password: "<resolved only during provisioning>"
+      tenant_preparation:
+        tenant_id: immutable-osac-tenant-id
+        source:
+          namespace: trident
+          name: admin-chosen-preparation
+          uid: source-secret-uid
+          resource_version: "42"
+        provider_config:
+          username: trident-tenant-a
+          password: "<from the protected preparation Secret>"
+          svm: customer_acme
 ```
 
 The operator deduplicates connections and protected password resolution by
@@ -75,10 +97,14 @@ absent, `provider_config` is omitted; an explicitly supplied zero is preserved.
 `encryption_enabled` is always included for ONTAP, including `false`.
 Existing provider payloads omit these additions unless used.
 
-The common connection currently contains discovery credentials only. Prepared-SVM
-credentials are not new backend fields. The next operator/AAP input revision
-below is still pending; it is not included in this implemented payload. Keep credential-bearing
-tasks under `no_log`; never return or log this connection/password.
+The common connection retains discovery credentials. Its optional
+`tenant_preparation` carries the separately resolved tenant credentials and
+provider fields, once per backend. Existing providers omit this key. The
+existing dispatcher filters complete connection entries by backend ID, so this
+addition needs no dispatcher schema change. Prepared credentials are not new
+backend fields. Keep credential-bearing tasks under `no_log`; never log or
+return either password. Credential-bearing AAP launch failures redact response
+bodies, which could otherwise echo submitted passwords.
 
 Sender implementation and tests:
 
@@ -110,13 +136,13 @@ metadata:
     osac.openshift.io/tenant: acme
 type: Opaque
 stringData:
-  username: trident_acme
+  username: trident_acme        # Account usable through the cluster endpoint.
   password: "<tenant-runtime-password>"
   svm: customer_acme             # Explicit prepared SVM; no required name.
 ```
 
 This is the preparation input, not the native Trident credentials Secret. The
-operator is to select exactly one protected input for the tenant/backend and
+operator selects exactly one protected input for the tenant/backend and
 pass its information to AAP. AAP creates the native credentials Secret and TBC
 on the actual VM hosting cluster. Runtime credentials must never be replaced
 with the cluster discovery account. Source presence alone is not proof of
@@ -131,24 +157,34 @@ Admin prepares SVM/account + labelled input Secret
   -> storage conditions report the result
 ```
 
-Agree these remaining inputs with the receiving implementation before enabling
-this flow:
+Deploy a matching receiving implementation before enabling the full flow:
 
 | Item | Proposed resolution / remaining check |
 |---|---|
 | Source cluster | Protected `trident` namespace on the operator/hub cluster; confirm this separately from the runtime Trident cluster, including dedicated VMaaS |
 | Tenant identity | Use the immutable OSAC tenant ID, obtained from the Tenant API; do not substitute the Kubernetes CR UID or reuse a previous tenant's assignment |
-| AAP payload | Add a per-backend generic preparation input, preserving source identity; agree its exact layout with the role owner before changing sender/receiver |
-| Runtime management endpoint | Keep cluster discovery on `StorageBackend.spec.endpoint`; require an explicit SVM endpoint in preparation if the runtime account cannot use that address |
+| AAP payload | The implemented `storage_backend_connections[id].tenant_preparation` layout above; the receiver must consume it |
+| Runtime management endpoint | Use `StorageBackend.spec.endpoint` for discovery and Trident; the preparation supplies separate credentials and an explicit SVM name, with no `management_endpoint` field for this profile |
+| Runtime account permissions | Qualify the supplied account through the cluster endpoint with Trident; distinct accounts do not by themselves establish per-SVM authorization restrictions |
 | Certificate trust | Installation supplies an approved CA bundle to each HTTPS caller; AAP execution-environment and Trident projection remain to wire and qualify |
 
-Will's current role derives Trident's address from the registered backend.
-That is not yet a qualified account/endpoint profile. NetApp's
+Will's current role derives Trident's address from the registered backend,
+which matches this working endpoint profile. It still looks up computed Secret
+and SVM names instead of consuming the operator-selected preparation and its
+explicit `svm`; that receiving interface needs to change. A separate local lab
+adapter for PR #1580 consumes the new payload; it is not part of Will's published
+PR. The operator selection, waiting/retry and payload are implemented.
+The earlier provider-labelled Secret-existence check must not treat an admin
+preparation Secret as proof that native onboarding succeeded.
+
+NetApp's
 [Trident SAN configuration guidance](https://docs.netapp.com/us-en/trident-2510/trident-use/ontap-san-examples.html)
 requires an SVM management address for `vsadmin`, and the cluster management
-address for `admin`. The minimal three-field Secret above therefore does not
-establish that a separate runtime endpoint is unnecessary. Restoring
-`management_endpoint` is the proposed solution for SVM-scoped access.
+address for `admin`. The working profile therefore requires cluster-endpoint
+compatible runtime credentials. It is not compatible with substituting an
+ordinary SVM-scoped account at that address. Separate SVM management endpoints
+remain an alternative if the team changes the chosen account model; that would
+add an endpoint to the preparation and operator/AAP mapping.
 
 The native TBC uses `ontap-san`, `sanType: fcp`, `useREST: true`, the validated
 runtime endpoint/SVM and `deletionPolicy: delete`. An IP data LIF is omitted
@@ -193,9 +229,30 @@ backends in ERROR and unresolved ONTAP discovery credentials. It publishes
 `ConfigurationUnavailable` on both storage conditions and launches no new
 storage provisioning job until resolution succeeds. CaaS cleanup still runs
 before that gate. Legacy compute/deletion callers retain their existing
-best-effort resolution policy. Missing-backend skipping and the new preparation
-lookup/readiness integration remain onboarding follow-ups; sender tests do not
-prove native lifecycle support.
+best-effort resolution policy. Missing-backend skipping remains a catalog-resolution follow-up. Preparation
+lookup now requires exactly one non-deleting Opaque Secret with matching
+immutable tenant/backend labels and non-empty `username`, `password`, `svm`.
+The optional tenant-name label must agree when supplied. The operator reads the
+hub API directly, and polls at `OSAC_AAP_STATUS_POLL_INTERVAL` (default 30s), so
+creating a matching Secret resumes work without a Tenant edit. The namespace
+default is `trident`; `OSAC_STORAGE_PREPARATION_NAMESPACE` overrides it. Restrict
+writes there to trusted administrators.
+
+Missing, ambiguous, invalid or unreadable preparation sets both storage
+conditions false. The input Secret is never patched or deleted. For prepared
+ONTAP, backend readiness requires a successful setup job for the current
+configuration; cluster readiness also requires successful native configuration
+and all tier classes. Older successful jobs without a matching configuration
+version do not satisfy these checks. AAP must only report native success after
+Trident confirms a current-generation bound backend. The operator does not
+independently watch TBCs. Missing classes trigger an idempotent repair job.
+
+Configuration versions include tenant generation, tier settings and source
+UID/SVM, and exclude credentials. Changing only a preparation password does not
+start a rotation job; future provisioning or repair jobs use their newly read
+snapshot. Rotation remains deferred. Deletion retains its finalizer if previous
+prepared work exists but the catalog needed to route cleanup cannot be recovered.
+Sender/controller tests do not prove native lifecycle support.
 
 Persist ownership and partial progress before/after native operations so retries
 resume the same assignment. Cleanup checks data dependencies, removes owned

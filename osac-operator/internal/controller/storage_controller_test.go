@@ -1359,6 +1359,7 @@ var _ = Describe("Storage Controller", func() {
 		DescribeTable("waits for required backend configuration before provisioning", func(failure string) {
 			name := "storage-test-config-wait-" + failure
 			createReadyTenantForStorage(ctx, name, testNamespace)
+			createStoragePreparation(ctx, prepareStorageTenant(ctx, name), "backend-1", name)
 			available := false
 			provisions := 0
 			provider := &mockProvisioningProvider{
@@ -1474,6 +1475,7 @@ var _ = Describe("Storage Controller", func() {
 		It("should pass ONTAP QoS and encryption through reconciliation with one protected backend connection", func() {
 			name := "storage-test-ontap-config-handoff"
 			createReadyTenantForStorage(ctx, name, testNamespace)
+			createStoragePreparation(ctx, prepareStorageTenant(ctx, name), "backend-1", name)
 			var gotTiers []provisioning.TierDefinition
 			var gotConnections map[string]provisioning.BackendConnection
 			provider := &mockProvisioningProvider{

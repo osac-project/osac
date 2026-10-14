@@ -60,9 +60,22 @@ type TierQosLimits struct {
 // details, resolved once per unique backend_id across all tiers so credential
 // material is never duplicated in the extra_vars payload.
 type BackendConnection struct {
-	Endpoint string
-	Username string
-	Password string
+	Endpoint          string
+	Username          string
+	Password          string
+	TenantPreparation *TenantPreparation
+}
+
+// TenantPreparation is a protected, administrator-supplied tenant/backend input.
+// ProviderConfig can contain credentials and must never be logged or persisted
+// in resource status.
+type TenantPreparation struct {
+	TenantID        string
+	Namespace       string
+	Name            string
+	UID             string
+	ResourceVersion string
+	ProviderConfig  map[string]any
 }
 
 // SubnetParentVirtualNetwork carries the parent identity the Subnet controller

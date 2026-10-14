@@ -89,6 +89,13 @@ var _ = ginkgo.Describe("EvaluateAction", func() {
 	noAPIServerJob := func() bool { return false }
 	apiServerHasJob := func() bool { return true }
 
+	ginkgo.It("requires an exact config version when the caller opts out of legacy successes", func() {
+		jobs := []v1alpha1.JobStatus{{JobID: "legacy", State: v1alpha1.JobStateSucceeded, Type: v1alpha1.JobTypeProvision}}
+		state := &State{Jobs: &jobs, DesiredConfigVersion: "new-provider", RequireExactConfigVersion: true}
+		action, _ := EvaluateAction(state, noAPIServerJob)
+		Expect(action).To(Equal(Trigger))
+	})
+
 	ginkgo.DescribeTable("returns the correct action",
 		func(jobs []v1alpha1.JobStatus, desiredVersion string, checkAPIServer func() bool, expectedAction Action) {
 			state := &State{

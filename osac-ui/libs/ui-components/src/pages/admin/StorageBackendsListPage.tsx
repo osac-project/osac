@@ -1,6 +1,7 @@
 import { Flex, FlexItem } from '@patternfly/react-core';
 
 import { usePrivateStorageBackends } from '@osac/ui-components/api/v1/private/storage-backends';
+import ListPage from '@osac/ui-components/components/Page/ListPage';
 import ListPageBody from '@osac/ui-components/components/Page/ListPageBody';
 import CreateButton from '@osac/ui-components/components/Primitives/CreateButton.tsx';
 import { StorageBackendsTable } from '@osac/ui-components/components/Storage/StorageBackendsTable';
@@ -13,7 +14,10 @@ export const StorageBackendsListPage = () => {
   const { data: backends = [], isLoading, error } = usePrivateStorageBackends();
 
   return (
-    <>
+    <ListPage
+      title={t('Storage Backends')}
+      description={t('Manage storage backends for this cloud platform.')}
+    >
       <Flex className="pf-v6-u-mt-md" justifyContent={{ default: 'justifyContentFlexEnd' }}>
         <FlexItem>
           <CreateButton to="/admin/infrastructure/storage/backends/create">
@@ -30,6 +34,6 @@ export const StorageBackendsListPage = () => {
           <StorageBackendsTable backends={backends} />
         )}
       </ListPageBody>
-    </>
+    </ListPage>
   );
 };

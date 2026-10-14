@@ -1,7 +1,7 @@
 ---
 # Integration test for the ontap_storage provider role (dispatched through
 # osac.service.storage_provider). Requires the mock ONTAP server on
-# 127.0.0.1:18444 (started by setup_test_env.sh alongside the mock VMS server)
+# 127.0.0.1:18445 (started by setup_test_env.sh alongside the mock VMS server)
 # and the kind cluster with the TridentBackendConfig CRD fixture applied by
 # the same script (fixtures/storage/).
 #
@@ -184,7 +184,7 @@
             max_iops: 5000
     storage_provider_backend_connections:
       ontap-be-1:
-        endpoint: "https://127.0.0.1:18444"
+        endpoint: "https://127.0.0.1:18445"
         username: "osac-discovery"
         password: "mock-discovery-password"
         tenant_preparation:
@@ -202,7 +202,7 @@
   tasks:
     - name: Reset the mock ONTAP server
       ansible.builtin.uri:
-        url: "https://127.0.0.1:18444/_reset"
+        url: "https://127.0.0.1:18445/_reset"
         validate_certs: false
         method: POST
         status_code: [200]
@@ -218,7 +218,7 @@
 
     - name: Register the prepared SVM on the mock ONTAP server
       ansible.builtin.uri:
-        url: "https://127.0.0.1:18444/_svm"
+        url: "https://127.0.0.1:18445/_svm"
         validate_certs: false
         method: POST
         body_format: json
@@ -229,7 +229,7 @@
 
     - name: Register the prepared QoS policy for the silver tier on the mock ONTAP server
       ansible.builtin.uri:
-        url: "https://127.0.0.1:18444/_qos_policy"
+        url: "https://127.0.0.1:18445/_qos_policy"
         validate_certs: false
         method: POST
         body_format: json
@@ -293,7 +293,7 @@
 
     - name: Get the mock ONTAP call log
       ansible.builtin.uri:
-        url: "https://127.0.0.1:18444/_calls"
+        url: "https://127.0.0.1:18445/_calls"
         validate_certs: false
         method: GET
         return_content: true
@@ -335,7 +335,7 @@
         encryption_enabled: false
     storage_provider_backend_connections:
       ontap-be-1:
-        endpoint: "https://127.0.0.1:18444"
+        endpoint: "https://127.0.0.1:18445"
         username: "osac-discovery"
         password: "mock-discovery-password"
         tenant_preparation:
@@ -400,7 +400,7 @@
             max_iops: 5000
     storage_provider_backend_connections:
       ontap-be-1:
-        endpoint: "https://127.0.0.1:18444"
+        endpoint: "https://127.0.0.1:18445"
         username: "osac-discovery"
         password: "mock-discovery-password"
         tenant_preparation:
@@ -418,7 +418,7 @@
   tasks:
     - name: Register the SVM for the QoS mismatch test
       ansible.builtin.uri:
-        url: "https://127.0.0.1:18444/_svm"
+        url: "https://127.0.0.1:18445/_svm"
         validate_certs: false
         method: POST
         body_format: json
@@ -429,7 +429,7 @@
 
     - name: Register a QoS policy with the wrong IOPS ceiling (9999 instead of 5000)
       ansible.builtin.uri:
-        url: "https://127.0.0.1:18444/_qos_policy"
+        url: "https://127.0.0.1:18445/_qos_policy"
         validate_certs: false
         method: POST
         body_format: json
@@ -496,7 +496,7 @@
             max_iops: 5000
     storage_provider_backend_connections:
       ontap-be-1:
-        endpoint: "https://127.0.0.1:18444"
+        endpoint: "https://127.0.0.1:18445"
         username: "osac-discovery"
         password: "mock-discovery-password"
         tenant_preparation:
@@ -514,7 +514,7 @@
   tasks:
     - name: Reset the mock ONTAP server
       ansible.builtin.uri:
-        url: "https://127.0.0.1:18444/_reset"
+        url: "https://127.0.0.1:18445/_reset"
         validate_certs: false
         method: POST
         status_code: [200]
@@ -564,7 +564,7 @@
           - _tbc.resources | length == 1
           - _tbc.resources[0].spec.storageDriverName == 'ontap-san'
           - _tbc.resources[0].spec.sanType == 'fcp'
-          - _tbc.resources[0].spec.managementLIF == '127.0.0.1:18444'
+          - _tbc.resources[0].spec.managementLIF == '127.0.0.1:18445'
           - _tbc.resources[0].spec.svm == _t_svm_name
           - _tbc.resources[0].spec.credentials.name == 'ontap-csi-' ~ _t_assignment_key
           - _tbc.resources[0].spec.storage | length == 2
@@ -658,7 +658,7 @@
     # ── Short-circuit: second run must not touch the ONTAP API ──
     - name: Reset the mock call log to detect any new discovery calls
       ansible.builtin.uri:
-        url: "https://127.0.0.1:18444/_reset"
+        url: "https://127.0.0.1:18445/_reset"
         validate_certs: false
         method: POST
         status_code: [200]
@@ -681,7 +681,7 @@
 
     - name: Get the mock call log after the short-circuit run
       ansible.builtin.uri:
-        url: "https://127.0.0.1:18444/_calls"
+        url: "https://127.0.0.1:18445/_calls"
         validate_certs: false
         method: GET
         return_content: true
@@ -730,7 +730,7 @@
             max_iops: 5000
     storage_provider_backend_connections:
       ontap-be-1:
-        endpoint: "https://127.0.0.1:18444"
+        endpoint: "https://127.0.0.1:18445"
         username: "osac-discovery"
         password: "mock-discovery-password"
         tenant_preparation:
@@ -881,7 +881,7 @@
         backend_id: ontap-be-1
     storage_provider_backend_connections:
       ontap-be-1:
-        endpoint: "https://127.0.0.1:18444"
+        endpoint: "https://127.0.0.1:18445"
         username: "osac-discovery"
         password: "mock-discovery-password"
 
@@ -928,7 +928,7 @@
         backend_id: ontap-be-1
     storage_provider_backend_connections:
       ontap-be-1:
-        endpoint: "https://127.0.0.1:18444"
+        endpoint: "https://127.0.0.1:18445"
         username: "osac-discovery"
         password: "mock-discovery-password"
 

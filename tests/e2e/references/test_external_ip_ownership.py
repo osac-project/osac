@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ipaddress
 import json
-import logging
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -20,8 +19,6 @@ from tests.e2e.core.helpers import (
     wait_for_external_ip_deletion,
 )
 from tests.e2e.core.k8s_client import K8sClient
-
-logger = logging.getLogger(__name__)
 
 _ALLOCATED_ADDRESS_ANNOTATION = "osac.openshift.io/allocated-address"
 _IMPLEMENTATION_STRATEGY_ANNOTATION = "osac.openshift.io/implementation-strategy"
@@ -129,7 +126,9 @@ def _exercise_external_ip_ownership_lifecycle(
         assert generation is not None, "Allocated ExternalIP CR has no generation"
         tenant = (metadata.get("annotations") or {}).get("osac.openshift.io/tenant", "")
         assert tenant, "Allocated ExternalIP CR has no tenant annotation"
-        assert tenant == pool["tenant"], "Allocated ExternalIP tenant differs from the tenant-scoped test pool"
+        assert tenant == pool["expected_external_ip_tenant"], (
+            "Allocated ExternalIP tenant differs from the JWT user's independently resolved tenant"
+        )
         assert (metadata.get("annotations") or {}).get(_IMPLEMENTATION_STRATEGY_ANNOTATION) == manager
         external_ip_uid = uid
 
@@ -229,7 +228,7 @@ def _exercise_external_ip_ownership_lifecycle(
                 k8s=k8s,
                 external_ip_id=external_ip_id,
                 pool_id=pool["id"],
-                tenant=pool["tenant"],
+                tenant=pool["expected_external_ip_tenant"],
                 expected_uid=external_ip_uid,
                 external_ip_cr_name=external_ip_cr_name,
             )

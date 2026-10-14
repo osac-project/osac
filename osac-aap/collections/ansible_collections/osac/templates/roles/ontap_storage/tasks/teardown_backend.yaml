@@ -9,10 +9,10 @@
 - name: Validate tenant_name is a valid DNS label
   ansible.builtin.fail:
     msg: >-
-      tenant_name '{{ tenant_name }}' is not a valid DNS label.
-      Must be 1-63 lowercase alphanumeric characters or hyphens,
-      cannot start or end with a hyphen.
+      tenant_name is not a valid DNS label. Must be 1-63 lowercase
+      alphanumeric characters or hyphens, cannot start or end with a hyphen.
   when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+  no_log: true
 
 - name: Validate tenant_uid is set
   ansible.builtin.fail:
@@ -21,10 +21,12 @@
       hub lifecycle record belongs to the original tenant instance before
       marking it retained.
   when: tenant_uid is not defined or tenant_uid | default('') | length == 0
+  no_log: true
 
 - name: Compute the dispatched backend ids
   ansible.builtin.set_fact:
     _ontap_backend_ids: "{{ _provider_tiers | default([]) | map(attribute='backend_id') | select('string') | unique | list }}"
+  no_log: true
 
 - name: Fail if no backend ids could be resolved
   ansible.builtin.fail:
@@ -33,9 +35,11 @@
       provider requires backend_id on every tier to locate the assignment's
       hub lifecycle record.
   when: _ontap_backend_ids | length == 0
+  no_log: true
 
 - name: Release the prepared assignment per backend
   ansible.builtin.include_tasks: _teardown_backend_per_backend.yaml
   loop: "{{ _ontap_backend_ids }}"
   loop_control:
     loop_var: _ontap_backend_id
+    label: "ontap-backend"

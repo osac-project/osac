@@ -4,7 +4,7 @@
 # after verifying tenant UID ownership. Never deletes ONTAP SVMs, LIFs,
 # accounts, QoS policies, or admin preparation Secrets.
 
-- name: Compute assignment key for backend {{ _ontap_backend_id }}
+- name: Compute assignment key for dispatched backend
   ansible.builtin.set_fact:
     _assignment_key: >-
       {{ ((_ontap_backend_id ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}
@@ -25,9 +25,7 @@
 
     - name: Log when the hub lifecycle Secret is already absent
       ansible.builtin.debug:
-        msg: >-
-          No hub lifecycle Secret found for assignment '{{ _assignment_key }}'
-          (backend '{{ _ontap_backend_id }}') — nothing to release.
+        msg: "No hub lifecycle Secret found for this ONTAP assignment — nothing to release."
       when: _lifecycle_secret_result.resources | length == 0
 
     - name: Retain the hub lifecycle Secret (atomic resourceVersion patch)
@@ -38,11 +36,11 @@
         - name: Verify lifecycle Secret ownership
           ansible.builtin.fail:
             msg: >-
-              Refusing to release the prepared assignment
-              '{{ _assignment_key }}': the hub lifecycle Secret belongs to a
-              different tenant UID.
+              Refusing to release the prepared ONTAP assignment: the hub
+              lifecycle Secret belongs to a different tenant UID.
           when: >-
             (_lifecycle_secret_result.resources[0].data.tenant_uid | default('') | b64decode) != tenant_uid
+          no_log: true
 
         - name: Patch the hub lifecycle Secret stage to retained
           kubernetes.core.k8s:
@@ -62,22 +60,19 @@
         - name: Report the release
           ansible.builtin.debug:
             msg: >-
-              Released prepared assignment '{{ _assignment_key }}' (backend
-              '{{ _ontap_backend_id }}') — state set to retained. ONTAP resources
-              and admin preparation Secrets are kept per the netapp-onboarding
-              contract.
+              Released prepared ONTAP assignment — state set to retained.
+              ONTAP resources and admin preparation Secrets are kept per the
+              netapp-onboarding contract.
 
   rescue:
     - name: Warn about teardown_backend failure
       ansible.builtin.debug:
-        msg: >-
-          Failed to release the prepared assignment '{{ _assignment_key }}' for
-          backend '{{ _ontap_backend_id }}'.
-          Error: {{ ansible_failed_result.msg | default('unknown') }}
+        msg: "Failed to release the prepared ONTAP assignment."
 
     - name: Re-raise teardown_backend failure
       ansible.builtin.fail:
-        msg: "{{ ansible_failed_result.msg | default('teardown_backend failed') }}"
+        msg: "teardown_backend failed to release the prepared ONTAP assignment."
+      no_log: true
 
   always:
     - name: Clear credential-bearing facts

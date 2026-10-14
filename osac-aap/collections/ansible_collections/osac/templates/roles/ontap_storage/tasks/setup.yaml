@@ -1,23 +1,14 @@
 ---
-# ONTAP setup: validate and claim pre-provisioned SVMs per dispatched backend.
-# The cloud admin pre-provisions per-assignment SVMs, LIFs, accounts, QoS
-# policies, and preparation Secrets (netapp-onboarding contract, PR#1553).
+# ONTAP setup: validate pre-provisioned SVMs and capped-tier QoS policies per
+# dispatched backend.
+# The cloud administrator pre-provisions per-assignment SVMs, LIFs, accounts,
+# QoS policies, and preparation Secrets; osac-operator resolves the matching
+# preparation Secret and passes tenant_preparation in storage_backend_connections.
 # This action verifies each backend's prepared SVM and capped-tier QoS policies
-# against the live ONTAP cluster and persists claim ownership in a hub
-# lifecycle Secret (ontap-tenant-<assignment_key>, without copying the runtime
-# password).
+# against the live ONTAP cluster and outputs storage_provider_tenant_config.
 
 - name: Include shared tier validation
   ansible.builtin.include_tasks: _validate_tiers.yaml
-
-- name: Validate tenant_uid is set
-  ansible.builtin.fail:
-    msg: >-
-      tenant_uid must be a non-empty string. The claim records it in the hub
-      lifecycle Secret so a later recreation of the same tenant name cannot
-      silently reuse a retained assignment.
-  when: tenant_uid is not defined or tenant_uid | default('') | length == 0
-  no_log: true
 
 - name: Compute the dispatched backend ids
   ansible.builtin.set_fact:
@@ -61,7 +52,7 @@
     _ontap_tenant_configs: {}
   no_log: true
 
-- name: Claim the prepared assignment for each dispatched backend
+- name: Validate the prepared assignment for each dispatched backend
   ansible.builtin.include_tasks: _setup_backend.yaml
   loop: "{{ _ontap_backend_ids }}"
   loop_control:

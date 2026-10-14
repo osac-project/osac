@@ -68,11 +68,16 @@ def test_ontap_virtual_pools_use_labels_and_selector_not_storage_pools():
     assert "storagePools" not in sc_params
     assert "storagePools:" not in raw_text
 
+    # 3. CA bundle reading must use lookup('file', ...) + b64encode rather than slurp.
+    assert "lookup('file', ontap_storage_ca_bundle_path" in raw_text
+    assert "b64encode" in raw_text
+    assert "slurp" not in raw_text
 
-def test_ontap_setup_consumes_operator_tenant_preparation_only():
-    """Verify _setup_backend.yaml consumes PR#1553 tenant_preparation from
-    _provider_backend_connections and does not read or patch a prepared
-    credential Secret on the hub cluster.
+
+def test_ontap_consumes_operator_tenant_preparation_with_no_hub_secrets():
+    """Verify ontap_storage consumes tenant_preparation from
+    _provider_backend_connections and performs no hub-cluster Secret reads or
+    writes.
     """
     setup_backend_path = ONTAP_ROLE_DIR / "tasks" / "_setup_backend.yaml"
     raw_text = setup_backend_path.read_text(encoding="utf-8")
@@ -80,11 +85,21 @@ def test_ontap_setup_consumes_operator_tenant_preparation_only():
     assert "_prepared_secret" not in raw_text
     assert "storage-assignment-state" not in raw_text
 
+    defaults_text = (ONTAP_ROLE_DIR / "defaults" / "main.yaml").read_text(encoding="utf-8")
+    assert "ontap_storage_config_namespace" not in defaults_text
+
+    for yaml_file in ONTAP_ROLE_DIR.rglob("*.yaml"):
+        content = yaml_file.read_text(encoding="utf-8")
+        assert "ontap-tenant-" not in content
+        assert "ontap_storage_config_namespace" not in content
+        assert "kubeconfig: ~" not in content
+        assert "slurp" not in content
+        assert "PR#" not in content
+
 
 def test_ontap_ensure_short_circuit_checks_tbc_and_csi_secret():
     """Verify ensure_storage_class.yaml checks StorageClasses, TridentBackendConfigs,
-    and CSI Secrets before setting _ontap_all_sc_exist, and resolves tenant_uid
-    from the hub Tenant CR when omitted by the caller.
+    and CSI Secrets before setting _ontap_all_sc_exist, and no task file emits set_stats.
     """
     ensure_path = ONTAP_ROLE_DIR / "tasks" / "ensure_storage_class.yaml"
     raw_text = ensure_path.read_text(encoding="utf-8")
@@ -93,11 +108,6 @@ def test_ontap_ensure_short_circuit_checks_tbc_and_csi_secret():
     assert "_ontap_expected_csi_secret_names" in raw_text
     assert "_ontap_tbc_checks" in raw_text
     assert "_ontap_csi_checks" in raw_text
-    assert "_ontap_tenant_cr" in raw_text
-
-    ensure_backend_path = ONTAP_ROLE_DIR / "tasks" / "_ensure_storage_class_backend.yaml"
-    backend_text = ensure_backend_path.read_text(encoding="utf-8")
-    assert "(_ontap_effective_tenant_uid | default('') | length == 0) or" in backend_text
 
     for task_file in (ONTAP_ROLE_DIR / "tasks").glob("*.yaml"):
         parsed_tasks = _load_yaml(task_file)

@@ -61,13 +61,3 @@
       ONTAP_TRIDENT_NAMESPACE to a valid namespace name (default: trident).
   when: ontap_storage_trident_namespace | default('') | length == 0
   no_log: true
-
-- name: Fail if the config namespace could not be resolved
-  ansible.builtin.fail:
-    msg: >-
-      ontap_storage_config_namespace resolved to an empty value. Set
-      OSAC_STORAGE_CONFIG_NAMESPACE or run inside a pod with a service
-      account (namespace file at
-      /var/run/secrets/kubernetes.io/serviceaccount/namespace).
-  when: ontap_storage_config_namespace | default('') | length == 0
-  no_log: true

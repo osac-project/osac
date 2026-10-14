@@ -106,16 +106,18 @@ def test_attachment_and_natgateway_playbooks_resolve_allocated_address_from_the_
         )
 
 
-def test_delete_playbooks_release_through_the_expected_provider_role() -> None:
-    for (create_file, delete_file), expected_role in [
-        (("create_virtual_network", "delete_virtual_network"), "netris.controller.vpc"),
-        (("create_subnet", "delete_subnet"), "netris.controller.vnet"),
-        (("create_security_group", "delete_security_group"), "netris.controller.acl"),
-        (("create_external_ip", "delete_external_ip"), "netris.controller.ipam"),
-        (("attach_external_ip", "detach_external_ip"), "netris.controller.nat"),
-        (("create_nat_gateway", "delete_nat_gateway"), "netris.controller.nat"),
+def test_delete_playbooks_release_through_the_expected_provider_operations() -> None:
+    for delete_file, expected_inclusions in [
+        (
+            "delete_virtual_network",
+            [("netris.controller.ipam", "delete_allocation"), ("netris.controller.vpc", "delete")],
+        ),
+        ("delete_subnet", [("netris.controller.vnet", "delete"), ("netris.controller.ipam", "delete_subnet")]),
+        ("delete_security_group", [("netris.controller.acl", "delete")]),
+        ("delete_external_ip", [("netris.controller.ipam", "delete_subnet")]),
+        ("detach_external_ip", [("netris.controller.nat", "delete")]),
+        ("delete_nat_gateway", [("netris.controller.nat", "delete")]),
     ]:
         inclusions = _included_write_tasks(delete_file)
-        assert inclusions, f"{delete_file} must dispatch a provider deletion"
-        targets = {target for target, _ in inclusions}
-        assert expected_role in targets, f"{delete_file} must delete through {expected_role}"
+        for expected in expected_inclusions:
+            assert expected in inclusions, f"{delete_file} must include {expected}"

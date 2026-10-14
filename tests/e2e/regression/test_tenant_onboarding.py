@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
+from tests.e2e.core.helpers import fulfillment_users_for_username
 from tests.e2e.core.keycloak_admin import (
     get_admin_token,
     keycloak_admin_request,
@@ -199,20 +200,15 @@ def _wait_private_status(
 
 def _user_listed(grpc: GRPCClient, *, username: str, tenant_name: str) -> bool:
     """Return True when Users/List includes this username on the story tenant."""
-    filt = f"this.spec.username == {json.dumps(username)}"
     try:
-        resp = grpc.call(service=f"{PRIVATE_API}.Users/List", data={"filter": filt})
+        users = fulfillment_users_for_username(grpc, username=username)
     except subprocess.CalledProcessError as exc:
         if _is_transient_grpc(exc):
             return False
         raise
-    items = resp.get("items") or []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        spec = item.get("spec") if isinstance(item.get("spec"), dict) else {}
-        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-        if spec.get("username") == username and metadata.get("tenant") == tenant_name:
+    for user in users:
+        metadata = user.get("metadata") if isinstance(user.get("metadata"), dict) else {}
+        if metadata.get("tenant") == tenant_name:
             return True
     return False
 

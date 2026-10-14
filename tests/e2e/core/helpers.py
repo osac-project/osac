@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import ipaddress
+import json
 import os
 import re
 import subprocess
@@ -39,6 +40,25 @@ T = TypeVar("T")
 
 def unique_name(prefix: str) -> str:
     return f"{prefix}-{uuid4().hex[:8]}"
+
+
+def fulfillment_users_for_username(
+    grpc: GRPCClient, *, username: str, limit: int | None = None
+) -> list[dict[str, Any]]:
+    """List Fulfillment users matching an exact username."""
+    data: dict[str, Any] = {"filter": f"this.spec.username == {json.dumps(username)}"}
+    if limit is not None:
+        data["limit"] = limit
+    response = grpc.call(service=f"{PRIVATE_API}.Users/List", data=data)
+    users = []
+    for item in response.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        user = item.get("object", item)
+        spec = user.get("spec") if isinstance(user, dict) else None
+        if isinstance(spec, dict) and spec.get("username") == username:
+            users.append(user)
+    return users
 
 
 def get_bmi_instance_type_from_template(grpc: GRPCClient, *, template_name: str) -> str | None:

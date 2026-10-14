@@ -113,12 +113,7 @@ class GRPCClient:
     def create_virtual_network(self, *, name: str, ipv4_cidr: str, tenant: str | None = None) -> str:
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.VirtualNetworks/Create",
-            data={
-                "object": {
-                    "metadata": _metadata(name=name, tenant=tenant),
-                    "spec": {"ipv4_cidr": ipv4_cidr},
-                }
-            },
+            data={"object": {"metadata": _metadata(name=name, tenant=tenant), "spec": {"ipv4_cidr": ipv4_cidr}}},
         )
         return response["object"]["id"]
 
@@ -216,11 +211,7 @@ class GRPCClient:
         return response["object"]["id"]
 
     def update_security_group_rules(
-        self,
-        *,
-        sg_id: str,
-        ingress: list[dict[str, Any]] | None = None,
-        egress: list[dict[str, Any]] | None = None,
+        self, *, sg_id: str, ingress: list[dict[str, Any]] | None = None, egress: list[dict[str, Any]] | None = None
     ) -> dict[str, Any]:
         spec: dict[str, Any] = {}
         paths: list[str] = []
@@ -283,8 +274,7 @@ class GRPCClient:
             offset = 0
             while True:
                 response: dict[str, Any] = self.call(
-                    service=f"{PRIVATE_API}.Tenants/List",
-                    data={"offset": offset, "limit": 100},
+                    service=f"{PRIVATE_API}.Tenants/List", data={"offset": offset, "limit": 100}
                 )
                 page = response.get("items", [])
                 items.extend(item for item in page if item.get("metadata", {}).get("name") == name)
@@ -302,7 +292,7 @@ class GRPCClient:
             service=f"{PRIVATE_API}.ExternalIPPools/Create",
             data={
                 "object": {
-                    "metadata": {"name": name},
+                    "metadata": _metadata(name=name),
                     "spec": {
                         "cidrs": cidrs,
                         "ip_family": ip_family,
@@ -328,12 +318,7 @@ class GRPCClient:
     def create_external_ip(self, *, name: str, pool: str, tenant: str | None = None) -> str:
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.ExternalIPs/Create",
-            data={
-                "object": {
-                    "metadata": _metadata(name=name, tenant=tenant),
-                    "spec": {"pool": {"id": pool}},
-                }
-            },
+            data={"object": {"metadata": _metadata(name=name, tenant=tenant), "spec": {"pool": {"id": pool}}}},
         )
         return response["object"]["id"]
 

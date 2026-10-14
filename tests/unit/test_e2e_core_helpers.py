@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from unittest.mock import Mock
 
@@ -8,6 +9,20 @@ import pytest
 from tests.e2e.core import helpers, runner
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.k8s_client import K8sClient
+
+
+def test_fulfillment_users_for_username_escapes_and_normalizes_items() -> None:
+    grpc = Mock(spec=GRPCClient)
+    username = 'alice"admin'
+    direct_user = {"spec": {"username": username}, "metadata": {"tenant": "tenant-a"}}
+    wrapped_user = {"spec": {"username": username}, "metadata": {"tenant": "tenant-b"}}
+    grpc.call.return_value = {"items": [direct_user, {"object": wrapped_user}, {"spec": {"username": "other"}}, None]}
+
+    assert helpers.fulfillment_users_for_username(grpc, username=username, limit=2) == [direct_user, wrapped_user]
+    grpc.call.assert_called_once_with(
+        service="osac.private.v1.Users/List",
+        data={"filter": f"this.spec.username == {json.dumps(username)}", "limit": 2},
+    )
 
 
 def test_wait_for_new_vmi_retries_lookup_errors_until_timestamp_changes(monkeypatch: pytest.MonkeyPatch) -> None:

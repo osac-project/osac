@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import subprocess
-from unittest.mock import Mock, call
+from unittest.mock import Mock
 
 import pytest
 
@@ -41,86 +41,30 @@ def _patch_ref_eip_pool_setup(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(references_conftest, helper_name, lambda **_: None)
 
 
-def test_ref_eip_pool_teardown_removes_dependent_ips_before_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ref_eip_pool_teardown_does_not_sweep_allocations_when_pool_delete_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _patch_ref_eip_pool_setup(monkeypatch)
-    wait_for_ip_deletion = Mock()
-    wait_for_pool_deletion = Mock()
-    monkeypatch.setattr(references_conftest, "wait_for_external_ip_deletion", wait_for_ip_deletion)
-    monkeypatch.setattr(references_conftest, "wait_for_external_ip_pool_deletion", wait_for_pool_deletion)
-
+    pool_error = subprocess.CalledProcessError(1, ["grpcurl"], stderr="Code: FailedPrecondition: pool is in use")
     private_grpc = Mock(spec=GRPCClient)
     private_grpc.create_external_ip_pool.return_value = "pool-id"
-    private_grpc.call.side_effect = [
-        {
-            "items": [
-                {"id": "unrelated-ip", "spec": {"pool": {"id": "another-pool"}}},
-                {"id": "ip-id-one", "spec": {"pool": {"id": "pool-id"}}},
-            ],
-            "nextPageToken": "next-page",
-        },
-        {"items": [{"id": "ip-id-two", "spec": {"pool": {"id": "pool-id"}}}]},
-    ]
+    private_grpc.delete_external_ip_pool.side_effect = pool_error
     k8s = Mock()
-    k8s.get_external_ip_name.side_effect = ["ip-one-cr", "ip-two-cr"]
-    k8s.is_present.return_value = True
 
     fixture = references_conftest.ref_eip_pool
     generator = getattr(fixture, "__wrapped__", fixture)(private_grpc, k8s, "test-run")
     next(generator)
 
-    with pytest.raises(StopIteration):
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
         next(generator)
 
-    assert private_grpc.method_calls == [
-        call.create_external_ip_pool(name="ref-eip-pool-test-run", cidrs=["172.27.0.0/24"]),
-        call.call(service="osac.private.v1.ExternalIPs/List", data=None),
-        call.call(service="osac.private.v1.ExternalIPs/List", data={"pageToken": "next-page"}),
-        call.delete_external_ip(external_ip_id="ip-id-one"),
-        call.delete_external_ip(external_ip_id="ip-id-two"),
-        call.delete_external_ip_pool(pool_id="pool-id"),
-    ]
-    assert wait_for_ip_deletion.call_args_list == [call(k8s=k8s, name="ip-one-cr"), call(k8s=k8s, name="ip-two-cr")]
-    wait_for_pool_deletion.assert_called_once_with(k8s=k8s, name="pool-cr")
-
-
-def test_ref_eip_pool_teardown_propagates_pool_deletion_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_ref_eip_pool_setup(monkeypatch)
-    private_grpc = Mock(spec=GRPCClient)
-    private_grpc.create_external_ip_pool.return_value = "pool-id"
-    private_grpc.call.return_value = {"items": []}
-    private_grpc.delete_external_ip_pool.side_effect = subprocess.CalledProcessError(
-        1, ["grpcurl"], stderr="Authorization: Bearer secret-token"
-    )
-
-    fixture = references_conftest.ref_eip_pool
-    generator = getattr(fixture, "__wrapped__", fixture)(private_grpc, Mock(), "test-run")
-    next(generator)
-
-    with pytest.raises(subprocess.CalledProcessError, match="grpcurl"):
-        next(generator)
-
-
-def test_ref_eip_pool_teardown_attempts_pool_deletion_after_child_cleanup_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _patch_ref_eip_pool_setup(monkeypatch)
-    cleanup_error = RuntimeError("child cleanup failed")
-    pool_error = subprocess.CalledProcessError(1, ["grpcurl"], stderr="Code: Internal")
-    monkeypatch.setattr(references_conftest, "_cleanup_ref_pool_external_ips", Mock(side_effect=cleanup_error))
-
-    private_grpc = Mock(spec=GRPCClient)
-    private_grpc.create_external_ip_pool.return_value = "pool-id"
-    private_grpc.delete_external_ip_pool.side_effect = pool_error
-
-    fixture = references_conftest.ref_eip_pool
-    generator = getattr(fixture, "__wrapped__", fixture)(private_grpc, Mock(), "test-run")
-    next(generator)
-
-    with pytest.raises(ExceptionGroup) as exc_info:
-        next(generator)
-
-    assert exc_info.value.exceptions == (cleanup_error, pool_error)
+    assert exc_info.value is pool_error
+    private_grpc.create_external_ip_pool.assert_called_once_with(name="ref-eip-pool-test-run", cidrs=["172.27.0.0/24"])
     private_grpc.delete_external_ip_pool.assert_called_once_with(pool_id="pool-id")
+    private_grpc.call.assert_not_called()
+    private_grpc.delete_external_ip.assert_not_called()
+    k8s.get_external_ip_name.assert_not_called()
+    k8s.get_external_ip_pool_name.assert_not_called()
 
 
 def test_ref_eip_pool_teardown_resolves_cr_name_after_setup_failure(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -128,7 +72,6 @@ def test_ref_eip_pool_teardown_resolves_cr_name_after_setup_failure(monkeypatch:
     monkeypatch.setattr(
         references_conftest, "wait_for_external_ip_pool_cr", Mock(side_effect=TimeoutError("CR not found"))
     )
-    monkeypatch.setattr(references_conftest, "_cleanup_ref_pool_external_ips", lambda *_: None)
     wait_for_pool_deletion = Mock()
     monkeypatch.setattr(references_conftest, "wait_for_external_ip_pool_deletion", wait_for_pool_deletion)
 

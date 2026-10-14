@@ -95,18 +95,22 @@ var _ = Describe("ONTAP backend registration", func() {
 		Expect(err).NotTo(HaveOccurred())
 		return response.GetObject()
 	}
-	It("persists READY only after successful discovery", func() {
+	It("persists READY after successful discovery and ERROR after failed discovery", func() {
 		response, err := create(object())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(calls.Load()).To(Equal(int32(7)))
 		Expect(response.GetObject().GetStatus().GetState()).To(Equal(privatev1.StorageBackendState_STORAGE_BACKEND_STATE_READY))
 		obj := object()
+		obj.GetMetadata().SetName("netapp-unreachable")
 		obj.GetSpec().GetCredentials().SetPassword(testOtherPassword)
-		_, err = create(obj)
-		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		failed, err := create(obj)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(failed.GetObject().GetStatus().GetState()).To(Equal(privatev1.StorageBackendState_STORAGE_BACKEND_STATE_ERROR))
+		Expect(failed.GetObject().GetStatus().GetMessage()).To(ContainSubstring("HTTP 401"))
+		Expect(failed.GetObject().GetStatus().GetMessage()).NotTo(ContainSubstring(testOtherPassword))
 		list, err := backendServer.List(ctx, &privatev1.StorageBackendsListRequest{})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(list.GetItems()).To(HaveLen(1))
+		Expect(list.GetItems()).To(HaveLen(2))
 	})
 	It("probes an authorized VALUE Secret without persisting its value", func() {
 		secret := createSecret()
@@ -138,7 +142,7 @@ var _ = Describe("ONTAP backend registration", func() {
 		Expect(status.Code(err)).To(Equal(codes.PermissionDenied))
 		Expect(calls.Load()).To(BeZero())
 	})
-	It("probes effective masked credentials and leaves the record unchanged on failure", func() {
+	It("persists effective masked credentials and reports failure until a successful update", func() {
 		response, err := create(object())
 		Expect(err).NotTo(HaveOccurred())
 		saved := response.GetObject()
@@ -148,18 +152,22 @@ var _ = Describe("ONTAP backend registration", func() {
 		request := privatev1.StorageBackendsUpdateRequest_builder{Object: partial,
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.credentials.password"}},
 		}.Build()
-		_, err = backendServer.Update(ctx, request)
-		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		failed, err := backendServer.Update(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(failed.GetObject().GetStatus().GetState()).To(Equal(privatev1.StorageBackendState_STORAGE_BACKEND_STATE_ERROR))
 		current, err := backendServer.Get(ctx, privatev1.StorageBackendsGetRequest_builder{Id: saved.GetId()}.Build())
 		Expect(err).NotTo(HaveOccurred())
-		Expect(proto.Equal(saved, current.GetObject())).To(BeTrue())
+		Expect(current.GetObject().GetSpec().GetCredentials().GetPassword()).To(Equal(testOtherPassword))
+		Expect(current.GetObject().GetStatus().GetMessage()).To(ContainSubstring("HTTP 401"))
 		partial.GetSpec().GetCredentials().SetPassword(testNewPassword)
 		updated, err := backendServer.Update(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(updated.GetObject().GetSpec().GetCredentials().GetUsername()).To(Equal("discovery"))
+		Expect(updated.GetObject().GetStatus().GetState()).To(Equal(privatev1.StorageBackendState_STORAGE_BACKEND_STATE_READY))
+		Expect(updated.GetObject().GetStatus().GetMessage()).To(BeEmpty())
 		Expect(calls.Load()).To(Equal(int32(15)))
 	})
-	It("permits description and no-op updates without another probe", func() {
+	It("rechecks connectivity for description and unchanged updates", func() {
 		response, err := create(object())
 		Expect(err).NotTo(HaveOccurred())
 		partial := privatev1.StorageBackend_builder{Id: response.GetObject().GetId(),
@@ -173,8 +181,44 @@ var _ = Describe("ONTAP backend registration", func() {
 			UpdateMask: &fieldmaskpb.FieldMask{},
 		}.Build())
 		Expect(err).NotTo(HaveOccurred())
-		Expect(calls.Load()).To(Equal(int32(7)))
+		Expect(calls.Load()).To(Equal(int32(21)))
 	})
+	It("recovers from an external outage on an empty-mask update using stored credentials", func() {
+		var unavailable atomic.Bool
+		unavailable.Store(true)
+		backendServer.registrationProbe = ontapBackendProbeFunc(func(probeCtx context.Context, url, username, password string) error {
+			if unavailable.Load() {
+				return status.Error(codes.Unavailable, "ONTAP management endpoint is unreachable")
+			}
+			return NewOntapRegistrationProbe(endpoint.Client()).Probe(probeCtx, url, username, password)
+		})
+		created, err := create(object())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(created.GetObject().GetStatus().GetState()).To(Equal(privatev1.StorageBackendState_STORAGE_BACKEND_STATE_ERROR))
+		unavailable.Store(false)
+		updated, err := backendServer.Update(ctx, privatev1.StorageBackendsUpdateRequest_builder{
+			Object:     privatev1.StorageBackend_builder{Id: created.GetObject().GetId()}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{},
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(updated.GetObject().GetStatus().GetState()).To(Equal(privatev1.StorageBackendState_STORAGE_BACKEND_STATE_READY))
+		Expect(updated.GetObject().GetStatus().GetMessage()).To(BeEmpty())
+		Expect(proto.Equal(created.GetObject().GetSpec(), updated.GetObject().GetSpec())).To(BeTrue())
+	})
+	DescribeTable("rejects malformed ONTAP endpoints before persistence", func(url string) {
+		obj := object()
+		obj.GetSpec().SetEndpoint(url)
+		_, err := create(obj)
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		Expect(calls.Load()).To(BeZero())
+		list, err := backendServer.List(ctx, &privatev1.StorageBackendsListRequest{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(list.GetItems()).To(BeEmpty())
+	},
+		Entry("HTTP", "http://netapp.example.com"),
+		Entry("embedded credentials", "https://user:password@netapp.example.com"),
+		Entry("invalid port", "https://netapp.example.com:70000"),
+	)
 	It("rejects changing the registered ONTAP endpoint", func() {
 		response, err := create(object())
 		Expect(err).NotTo(HaveOccurred())
@@ -289,7 +333,10 @@ var _ = Describe("ONTAP backend registration", func() {
 			unblock := func() { releaseOnce.Do(func() { close(release) }) }
 			DeferCleanup(unblock)
 			backendServer.registrationProbe = ontapBackendProbeFunc(
-				func(probeCtx context.Context, _, _, _ string) error {
+				func(probeCtx context.Context, _, _, password string) error {
+					if password != testNewPassword {
+						return nil
+					}
 					close(started)
 					select {
 					case <-release:

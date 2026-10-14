@@ -46,17 +46,25 @@ func NewOntapRegistrationProbe(client *http.Client) StorageBackendRegistrationPr
 	return &ontapRegistrationProbe{client: copy}
 }
 
-func (p *ontapRegistrationProbe) Probe(ctx context.Context, endpoint, username, password string) error {
+func ontapManagementURL(endpoint string) (*url.URL, error) {
 	base, err := url.Parse(endpoint)
 	if err != nil || base.Scheme != "https" || base.Hostname() == "" || base.User != nil ||
 		(base.Path != "" && base.Path != "/") || base.RawQuery != "" || base.Fragment != "" || base.Opaque != "" {
-		return status.Error(codes.InvalidArgument, "ONTAP endpoint must be a cluster management HTTPS URL without credentials, path, query or fragment")
+		return nil, status.Error(codes.InvalidArgument, "ONTAP endpoint must be a cluster management HTTPS URL without credentials, path, query or fragment")
 	}
 	if port := base.Port(); port != "" {
 		number, err := strconv.Atoi(port)
 		if err != nil || number < 1 || number > 65535 {
-			return status.Error(codes.InvalidArgument, "ONTAP endpoint has an invalid port")
+			return nil, status.Error(codes.InvalidArgument, "ONTAP endpoint has an invalid port")
 		}
+	}
+	return base, nil
+}
+
+func (p *ontapRegistrationProbe) Probe(ctx context.Context, endpoint, username, password string) error {
+	base, err := ontapManagementURL(endpoint)
+	if err != nil {
+		return err
 	}
 	if username == "" || password == "" {
 		return status.Error(codes.InvalidArgument, "ONTAP discovery username and password must be non-empty")

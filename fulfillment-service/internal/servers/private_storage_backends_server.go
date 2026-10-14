@@ -165,6 +165,12 @@ func (s *PrivateStorageBackendsServer) Create(ctx context.Context,
 		sb.SetStatus(&privatev1.StorageBackendStatus{})
 	}
 	sb.GetStatus().SetState(privatev1.StorageBackendState_STORAGE_BACKEND_STATE_READY)
+	sb.GetStatus().ClearMessage()
+	if sb.GetSpec().GetProvider() == "ontap" {
+		if err = s.checkOntapBackend(ctx, sb); err != nil {
+			return nil, err
+		}
+	}
 
 	sb.SetId("")
 
@@ -199,14 +205,12 @@ func (s *PrivateStorageBackendsServer) Update(ctx context.Context,
 		err = s.generic.UpdateWithValidation(ctx, request, &response, s.validateStorageBackendUpdate)
 		return
 	}
-	if !proto.Equal(candidate.GetSpec().GetCredentials(), current.GetSpec().GetCredentials()) {
-		if err = s.probeOntapBackend(ctx, candidate); err != nil {
-			return nil, err
-		}
+	if err = s.checkOntapBackend(ctx, candidate); err != nil {
+		return nil, err
 	}
 
 	// Reuse the normal locked merge, rejecting concurrent changes even when the
-	// caller did not request optimistic locking. Never save unprobed credentials.
+	// caller did not request optimistic locking. Status must describe the saved spec.
 	err = s.generic.UpdateWithValidation(ctx, request, &response,
 		func(ctx context.Context, updated, stored *privatev1.StorageBackend) error {
 			if stored.GetMetadata().GetVersion() != current.GetMetadata().GetVersion() {
@@ -218,6 +222,7 @@ func (s *PrivateStorageBackendsServer) Update(ctx context.Context,
 			if !proto.Equal(updated.GetSpec(), candidate.GetSpec()) {
 				return grpcstatus.Error(grpccodes.Aborted, "storage backend configuration changed during validation; retry the update")
 			}
+			updated.SetStatus(proto.Clone(candidate.GetStatus()).(*privatev1.StorageBackendStatus))
 			return nil
 		})
 	return
@@ -250,7 +255,8 @@ func (s *PrivateStorageBackendsServer) validateStorageBackendCreate(ctx context.
 		if err := s.generic.validator.Validate(sb); err != nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument, "validation failed: %s", err)
 		}
-		return s.probeOntapBackend(ctx, sb)
+		_, err := ontapManagementURL(sb.GetSpec().GetEndpoint())
+		return err
 	}
 	return nil
 }
@@ -333,7 +339,7 @@ func (s *PrivateStorageBackendsServer) validatePasswordSecret(ctx context.Contex
 	return nil
 }
 
-func (s *PrivateStorageBackendsServer) probeOntapBackend(ctx context.Context, backend *privatev1.StorageBackend) error {
+func (s *PrivateStorageBackendsServer) checkOntapBackend(ctx context.Context, backend *privatev1.StorageBackend) error {
 	spec := backend.GetSpec()
 	credentials := spec.GetCredentials()
 	password := credentials.GetPassword()
@@ -354,5 +360,16 @@ func (s *PrivateStorageBackendsServer) probeOntapBackend(ctx context.Context, ba
 			return grpcstatus.Error(grpccodes.InvalidArgument, "ONTAP discovery password Secret must have non-empty data[\"value\"]")
 		}
 	}
-	return s.registrationProbe.Probe(ctx, spec.GetEndpoint(), credentials.GetUsername(), password)
+	probeErr := s.registrationProbe.Probe(ctx, spec.GetEndpoint(), credentials.GetUsername(), password)
+	if ctx.Err() != nil {
+		return grpcstatus.FromContextError(ctx.Err()).Err()
+	}
+	backend.SetStatus(privatev1.StorageBackendStatus_builder{
+		State: privatev1.StorageBackendState_STORAGE_BACKEND_STATE_READY,
+	}.Build())
+	if probeErr != nil {
+		backend.GetStatus().SetState(privatev1.StorageBackendState_STORAGE_BACKEND_STATE_ERROR)
+		backend.GetStatus().SetMessage(grpcstatus.Convert(probeErr).Message())
+	}
+	return nil
 }

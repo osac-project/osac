@@ -98,4 +98,8 @@ enum StorageBackendState {
 
   // The storage backend is registered and available.
   STORAGE_BACKEND_STATE_READY = 1;
+
+  // The configuration is saved, but the latest connectivity check failed.
+  // Update the backend, including with unchanged values, to check again.
+  STORAGE_BACKEND_STATE_ERROR = 2;
 }

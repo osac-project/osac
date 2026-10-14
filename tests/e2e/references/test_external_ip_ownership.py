@@ -206,15 +206,13 @@ def _exercise_external_ip_ownership_lifecycle(
         assert pending_release["capacity"]["available"] == after_allocation["available"]
 
         wait_for_external_ip_deletion(k8s=k8s, name=external_ip_cr_name)
-        released_capacity = poll_until(
+        poll_until(
             fn=lambda: _pool_capacity(private_grpc, pool["id"]),
             until=lambda status: status["allocated"] == 0 and status["available"] == initial_capacity["available"],
             retries=60,
             delay=2,
             description=f"{profile} ExternalIP release restores pool capacity",
         )
-        assert released_capacity["allocated"] == 0
-        assert released_capacity["available"] == initial_capacity["available"]
         if manager == "k8s_only":
             assert _get_metallb_reservation(k8s=k8s, service_name=service_name) is None, (
                 f"UID-owned MetalLB Service {service_name} remains after ExternalIP release"

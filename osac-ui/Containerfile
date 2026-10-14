@@ -13,17 +13,36 @@ FROM registry.access.redhat.com/ubi9/nodejs-22-minimal:9.8-1791835973 AS deps
 USER root
 WORKDIR /app
 
-# Install pnpm itself offline from Hermeto/Cachi2's prefetched tarball
-# (see artifacts.lock.yaml) when present -- i.e. a hermetic Konflux build,
-# where `npm install -g pnpm@<version>` would otherwise need live network
-# access to the npm registry just to install the package manager before any
-# project dependency can be resolved. Falls back to the live registry
-# install, pinned to the same exact version, for local/non-hermetic builds.
-RUN if [ -f /cachi2/output/deps/generic/pnpm-9.15.9.tgz ]; then \
-      npm install -g /cachi2/output/deps/generic/pnpm-9.15.9.tgz; \
-    else \
-      npm install -g pnpm@9.15.9; \
-    fi
+# Install pnpm itself from .pnpm-bootstrap/, a throwaway npm project whose
+# only dependency is pnpm -- prefetched by Hermeto's npm backend (a
+# recognized package-manager ecosystem) rather than fetching the raw
+# pnpm-9.15.9.tgz as a Hermeto generic-backend artifact. The generic backend
+# tags its output with an explicit download_url SBOM reference, which trips
+# Conforma's sbom_spdx.allowed_package_sources policy (empty allow-list by
+# default) regardless of how trustworthy the source actually is; packages
+# resolved through a real ecosystem backend like npm don't carry that
+# reference and avoid the policy entirely -- the same trick other Red Hat
+# Konflux users apply to get yarn installed hermetically.
+#
+# No cachi2.env sourcing needed here, unlike the gomod/pip steps below --
+# Hermeto's npm backend works by rewriting .pnpm-bootstrap/package-lock.json
+# itself (its "resolved" URL -> a local file:///cachi2/output/... path),
+# applied by prefetch-dependencies directly to the source tree that this
+# COPY pulls from. Verified live with the real hermeto CLI: fetch-deps then
+# inject-files produces exactly that rewritten lockfile, and a plain `npm
+# install --prefix` against it resolves pnpm from the local file with zero
+# network access. Local/non-hermetic builds use the same command unchanged --
+# the committed lockfile still has the real registry.npmjs.org URL, since
+# only prefetch-dependencies' own copy of the source tree ever gets patched.
+#
+# `npm install -g <local-dir>` symlinks back to that directory rather than
+# copying it -- confirmed live -- so .pnpm-bootstrap/ must survive for the
+# rest of this stage. Harmless: this "deps" stage is never copied into the
+# production image (stage 4 only copies spa-builder's dist/ and
+# proxy-builder's binary), so there's nothing to clean up.
+COPY osac-ui/.pnpm-bootstrap/ ./.pnpm-bootstrap/
+RUN npm install --prefix ./.pnpm-bootstrap && \
+    npm install -g ./.pnpm-bootstrap/node_modules/pnpm
 
 # .npmrc* (optional -- none committed to the repo) picks up Hermeto's
 # injected registry override (a local file:// path redirect) during a

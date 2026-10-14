@@ -15,8 +15,16 @@
 
 # ComputeInstance JIT storage provisioning sets tenant_name and tenant_namespace
 # from status.tenantReference without passing tenant_uid. Resolve the owning
-# Tenant CR on the hub cluster when tenant_uid is not provided by the caller so
-# _ensure_storage_class_backend.yaml can unconditionally enforce UID ownership.
+# Tenant CR on the hub cluster into a role-local variable
+# (_ontap_effective_tenant_uid) when tenant_uid is not provided by the caller,
+# and clear it in always: so a subsequent invocation for another tenant in the
+# same play never inherits a prior tenant's resolved UID.
+- name: Use caller-provided tenant_uid when set
+  when: tenant_uid is defined and tenant_uid | default('') | length > 0
+  ansible.builtin.set_fact:
+    _ontap_effective_tenant_uid: "{{ tenant_uid }}"
+  no_log: true
+
 - name: Resolve tenant_uid from hub Tenant CR when not provided by caller
   when: tenant_uid is not defined or tenant_uid | default('') | length == 0
   block:
@@ -41,9 +49,9 @@
         (_ontap_tenant_cr.resources[0].metadata.uid | default('') | length) == 0
       no_log: true
 
-    - name: Set tenant_uid from hub Tenant CR
+    - name: Set effective tenant_uid from hub Tenant CR
       ansible.builtin.set_fact:
-        tenant_uid: "{{ _ontap_tenant_cr.resources[0].metadata.uid }}"
+        _ontap_effective_tenant_uid: "{{ _ontap_tenant_cr.resources[0].metadata.uid }}"
       no_log: true
 
 - name: Compute the dispatched backend ids
@@ -178,6 +186,7 @@
   always:
     - name: Clear credential-bearing facts
       ansible.builtin.set_fact:
+        _ontap_effective_tenant_uid: ""
         _ontap_tenant_cr: {}
         _ontap_sc_checks: {}
         _ontap_tbc_checks: {}

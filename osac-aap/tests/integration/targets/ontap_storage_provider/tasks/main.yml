@@ -326,8 +326,9 @@
             | selectattr('path', 'search', '/api/storage/qos/policies')
             | selectattr('method', 'equalto', 'GET')
             | list | length > 0
-        fail_msg: "Expected both SVM and QoS policy discovery calls against the mock ONTAP server"
-        success_msg: "SVM and QoS policy discovery calls recorded"
+          - _t_svm_name not in (_mock_calls.json | to_json)
+        fail_msg: "Expected both SVM and QoS policy discovery calls against the mock ONTAP server without exposing SVM identifiers in call logs"
+        success_msg: "SVM and QoS policy discovery calls recorded without query identifiers"
 
 # ── Test 2: setup refuses an assignment claimed by another tenant UID ──
 - name: "ONTAP Storage Provider - Setup refuses foreign claim"

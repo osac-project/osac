@@ -82,4 +82,7 @@ def test_strip_protected_env_removes_aliases_but_preserves_other_values():
         "unrelated": "kept",
     }
 
-    assert strip_protected_env(environment) == {"unrelated": "kept"}
+    assert strip_protected_env({**environment, 1: "non-string key"}) == {
+        "unrelated": "kept",
+        1: "non-string key",
+    }

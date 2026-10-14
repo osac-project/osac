@@ -100,5 +100,5 @@ def strip_protected_env(mapping: Mapping[str, Any]) -> dict[str, Any]:
     return {
         key: value
         for key, value in mapping.items()
-        if isinstance(key, str) and not _path_is_protected((key,))
+        if not isinstance(key, str) or not _path_is_protected((key,))
     }

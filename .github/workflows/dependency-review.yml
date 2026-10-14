@@ -36,4 +36,14 @@ jobs:
           #    already on main, pre-dating this PR entirely; not something this
           #    carve-out newly permits into the repo, just a hole this PR's own
           #    scan happens to surface.
-          allow-ghsas: "GHSA-hrxh-6v49-42gf, GHSA-gcjh-h69q-9w9g"
+          #  - GHSA-xpqm-wm3m-f34h / GHSA-m733-5w8f-5ggw: pnpm@9.15.9, newly
+          #    visible only because osac-ui/.pnpm-bootstrap/package-lock.json
+          #    now tracks it as a real npm dependency (fetched via Hermeto's
+          #    npm backend instead of its untracked generic backend) -- the
+          #    exact same pnpm version/tarball this build has always used,
+          #    not a new exposure. Both advisories are about pnpm's own
+          #    behavior resolving file:/git-type dependencies and its
+          #    content-addressable store's md5 path shortening; .pnpm-bootstrap
+          #    only ever installs pnpm itself from the npm registry via this
+          #    committed lockfile, never a file:/git dependency.
+          allow-ghsas: "GHSA-hrxh-6v49-42gf, GHSA-gcjh-h69q-9w9g, GHSA-xpqm-wm3m-f34h, GHSA-m733-5w8f-5ggw"

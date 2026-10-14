@@ -118,6 +118,33 @@ Verify the ITMS includes containerdisk entries:
 oc get itms -o yaml | grep -A2 "containerdisk\|rhel-guest"
 ```
 
+#### Enforce NeverContactSource (recommended)
+
+By default `oc-mirror` v2 generates ITMS entries without a
+`mirrorSourcePolicy`, which allows CRI-O to fall back to the
+upstream registry.  In a strictly disconnected environment, set
+`NeverContactSource` on every containerdisk ITMS source entry
+to guarantee no upstream contact is attempted:
+
+```bash
+# Patch each containerdisk source entry in the generated ITMS
+# before applying, or edit the applied resource:
+oc get itms itms-oc-mirror -o json | \
+  jq '(.spec.imageTagMirrors[] |
+    select(.source | test("containerdisk|rhel-guest")))
+    .mirrorSourcePolicy = "NeverContactSource"' | \
+  oc apply -f -
+```
+
+Verify the policy is set:
+
+```bash
+oc get itms itms-oc-mirror -o json | \
+  jq '.spec.imageTagMirrors[] |
+    select(.source | test("containerdisk|rhel-guest")) |
+    {source, mirrorSourcePolicy}'
+```
+
 ### Step 4 — Configure CDI for disconnected registry imports
 
 Two distinct image-pull paths exist for VMaaS:
@@ -161,15 +188,17 @@ distributed via trust-manager, add it to CDI's `insecureRegistries`.
 Prefer distributing the CA via trust-manager instead.
 
 ```bash
-# Only needed when the mirror registry CA is not trusted cluster-wide
-oc patch cdi cdi -n openshift-cnv --type merge -p '
-{
-  "spec": {
-    "config": {
-      "insecureRegistries": ["<mirror-registry>:8443"]
-    }
-  }
-}'
+# Only needed when the mirror registry CA is not trusted
+# cluster-wide.  This script preserves any existing entries.
+MIRROR_REG="<mirror-registry>:8443"
+CURRENT=$(oc get cdi cdi -n openshift-cnv \
+  -o jsonpath='{.spec.config.insecureRegistries}' \
+  2>/dev/null)
+UPDATED=$(echo "${CURRENT:-[]}" | \
+  jq --arg r "$MIRROR_REG" '. + [$r] | unique')
+oc patch cdi cdi -n openshift-cnv --type merge \
+  -p "$(jq -n --argjson regs "$UPDATED" \
+  '{"spec":{"config":{"insecureRegistries":$regs}}}')"
 ```
 
 ### Step 5 — Verify containerdisk resolution via ITMS
@@ -212,11 +241,17 @@ Feature: VMaaS containerdisk mirroring for disconnected OSAC
     Then the VMI (VirtualMachineInstance) reaches the "Running" phase
     And the guest OS is accessible via console
 
-  Scenario: No external registry access is attempted
+  Scenario: Containerdisk ITMS entries block upstream fallback
     Given all containerdisk images are mirrored
+    And every containerdisk ITMS source has mirrorSourcePolicy "NeverContactSource"
     When a VM is created and started
-    Then no network traffic is directed to external registries
+    Then CRI-O does not attempt to contact the upstream registry
     And all image pulls resolve to the mirror registry
+    # Note: without NeverContactSource, CRI-O may still
+    # attempt upstream contact before falling back to the
+    # mirror.  In a disconnected network the upstream is
+    # unreachable, so the pull succeeds from the mirror
+    # but only after a timeout delay.
 ```
 
 ## Validation Commands
@@ -225,22 +260,29 @@ Feature: VMaaS containerdisk mirroring for disconnected OSAC
 # 1. Verify ITMS includes containerdisk entries
 oc get itms -o yaml | grep -B5 -A5 "containerdisk"
 
-# 2. Verify CDI operator is healthy
+# 2. Verify NeverContactSource on containerdisk ITMS entries
+oc get itms itms-oc-mirror -o json | \
+  jq '.spec.imageTagMirrors[] |
+    select(.source | test("containerdisk|rhel-guest")) |
+    {source, mirrorSourcePolicy}'
+
+# 3. Verify CDI operator is healthy
 oc get pods -n openshift-cnv -l app=cdi-operator
 
-# 3. Test containerdisk pull on a node (use upstream reference
+# 4. Test containerdisk pull on a node (use upstream reference
 #    to validate ITMS redirect)
 oc debug node/<node-name> -- chroot /host \
   crictl pull <upstream-registry>/<containerdisk-image>:<tag>
 
-# 4. Verify CDI insecureRegistries configuration
-oc get cdi cdi -n openshift-cnv -o jsonpath='{.spec.config.insecureRegistries}'
+# 5. Verify CDI insecureRegistries configuration
+oc get cdi cdi -n openshift-cnv \
+  -o jsonpath='{.spec.config.insecureRegistries}'
 
-# 5. Check DataVolume import status
+# 6. Check DataVolume import status
 oc get datavolume -A -o custom-columns=\
 'NAME:.metadata.name,PHASE:.status.phase,PROGRESS:.status.progress'
 
-# 6. Verify VirtualMachine status
+# 7. Verify VirtualMachine status
 oc get vmi -A -o custom-columns=\
 'NAME:.metadata.name,PHASE:.status.phase,NODE:.status.nodeName'
 ```

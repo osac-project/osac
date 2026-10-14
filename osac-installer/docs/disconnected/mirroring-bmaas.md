@@ -130,15 +130,41 @@ oc apply -f oc-mirror-workspace/working-dir/cluster-resources/idms-oc-mirror.yam
 
 ### Step 4 — Configure AgentServiceConfig for disconnected
 
-The `AgentServiceConfig` CR controls where the assisted-service looks for
-OS images.  In disconnected environments, point it to mirrored images:
+The `AgentServiceConfig` CR controls where the assisted-service looks
+for OS images.  In disconnected environments, configure
+`.Values.mce.osImages` in the `osac-infra` chart so the rendered
+`AgentServiceConfig` points to mirrored images.
 
-```bash
-oc get agentserviceconfig agent -o yaml
+Add entries for each OpenShift version your deployment supports:
+
+```yaml
+# In your osac-infra values override (e.g. infra.yaml):
+mce:
+  osImages:
+    - openshiftVersion: "4.22"
+      version: "422.94.202503170640-0"
+      url: "https://<bastion-http>:8080/rhcos-4.22-live.x86_64.iso"
+      cpuArchitecture: x86_64
 ```
 
-Verify the `osImages` section references images accessible from the mirror
-registry or from a local HTTP server on the provisioning network.
+Re-apply the `osac-infra` chart to update the `AgentServiceConfig`:
+
+```bash
+helm upgrade osac-infra osac-installer/charts/osac-infra \
+  --namespace osac --reuse-values \
+  -f infra.yaml
+```
+
+Verify the rendered `AgentServiceConfig` contains the expected
+`osImages` entries:
+
+```bash
+oc get agentserviceconfig agent \
+  -o jsonpath='{.spec.osImages}' | jq .
+```
+
+Each entry must reference a URL accessible from the provisioning
+network — typically a local HTTP server on the bastion host.
 
 ### Step 5 — Configure BareMetalHost resources
 

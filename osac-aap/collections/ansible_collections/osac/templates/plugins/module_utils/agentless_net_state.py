@@ -14,7 +14,7 @@ import stat
 import time
 import uuid as uuidlib
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ansible_collections.osac.templates.plugins.module_utils.agentless_net_network import (
     AGENTLESS_NET_HOST_INTERFACE_PREFIX,
@@ -486,24 +486,35 @@ class StateStore:
         )
 
     @staticmethod
-    def _validate_external_ip_schema(connection: sqlite3.Connection) -> None:
-        expected_columns = {"uid", "fulfillment_id", "tenant_id", "pool_uid", "address"}
+    def _validate_external_ip_identity_table_schema(
+        connection: sqlite3.Connection,
+        table_name: str,
+        resource_name: str,
+        expected_columns: set[str],
+        required_unique_indexes: set[tuple[str, ...]],
+    ) -> None:
         column_info = {
             row[1]: row
-            for row in connection.execute("PRAGMA table_info(external_ips)")
+            for row in connection.execute(f"PRAGMA table_info({table_name})")
         }
         if set(column_info) != expected_columns:
-            raise StateCorrupt("AgentlessNet external_ips table has an invalid schema")
+            raise StateCorrupt(
+                f"AgentlessNet {table_name} table has an invalid schema"
+            )
         if any(
             column_info[name][2].upper() != "TEXT" or column_info[name][3] != 1
             for name in expected_columns
         ):
-            raise StateCorrupt("AgentlessNet ExternalIP constraints are missing")
+            raise StateCorrupt(
+                f"AgentlessNet {resource_name} constraints are missing"
+            )
         if column_info["uid"][5] != 1:
-            raise StateCorrupt("AgentlessNet ExternalIP UID primary key is missing")
+            raise StateCorrupt(
+                f"AgentlessNet {resource_name} UID primary key is missing"
+            )
 
         unique_columns = set()
-        for index_row in connection.execute("PRAGMA index_list(external_ips)"):
+        for index_row in connection.execute(f"PRAGMA index_list({table_name})"):
             if not index_row[2] or index_row[4]:
                 continue
             quoted_index = "'" + index_row[1].replace("'", "''") + "'"
@@ -514,8 +525,20 @@ class StateStore:
                 ).fetchall()
             )
             unique_columns.add(columns)
-        if not {("fulfillment_id",), ("pool_uid", "address")}.issubset(unique_columns):
-            raise StateCorrupt("AgentlessNet ExternalIP uniqueness constraints are missing")
+        if not required_unique_indexes.issubset(unique_columns):
+            raise StateCorrupt(
+                f"AgentlessNet {resource_name} uniqueness constraints are missing"
+            )
+
+    @staticmethod
+    def _validate_external_ip_schema(connection: sqlite3.Connection) -> None:
+        StateStore._validate_external_ip_identity_table_schema(
+            connection,
+            "external_ips",
+            "ExternalIP",
+            {"uid", "fulfillment_id", "tenant_id", "pool_uid", "address"},
+            {("fulfillment_id",), ("pool_uid", "address")},
+        )
 
         foreign_keys = {
             (row[2], row[3], row[4])
@@ -526,39 +549,13 @@ class StateStore:
 
     @staticmethod
     def _validate_external_ip_pool_schema(connection: sqlite3.Connection) -> None:
-        expected_columns = {
-            "uid",
-            "fulfillment_id",
-            "tenant_id",
-            "ip_family",
-            "ipv4_cidr",
-        }
-        column_info = {
-            row[1]: row
-            for row in connection.execute("PRAGMA table_info(external_ip_pools)")
-        }
-        if set(column_info) != expected_columns:
-            raise StateCorrupt("AgentlessNet external_ip_pools table has an invalid schema")
-        if any(
-            column_info[name][2].upper() != "TEXT" or column_info[name][3] != 1
-            for name in expected_columns
-        ):
-            raise StateCorrupt("AgentlessNet external_ip_pools constraints are missing")
-        if column_info["uid"][5] != 1:
-            raise StateCorrupt("AgentlessNet ExternalIPPool UID primary key is missing")
-
-        actual_unique_columns = set()
-        for index_row in connection.execute("PRAGMA index_list(external_ip_pools)"):
-            if not index_row[2] or index_row[4]:
-                continue
-            quoted_index = "'" + index_row[1].replace("'", "''") + "'"
-            index_info = connection.execute(
-                f"PRAGMA index_info({quoted_index})"
-            ).fetchall()
-            if len(index_info) == 1:
-                actual_unique_columns.add(index_info[0][2])
-        if not {"uid", "fulfillment_id"}.issubset(actual_unique_columns):
-            raise StateCorrupt("AgentlessNet ExternalIPPool uniqueness constraints are missing")
+        StateStore._validate_external_ip_identity_table_schema(
+            connection,
+            "external_ip_pools",
+            "ExternalIPPool",
+            {"uid", "fulfillment_id", "tenant_id", "ip_family", "ipv4_cidr"},
+            {("fulfillment_id",)},
+        )
 
     @staticmethod
     def _validate_virtual_network_table(connection: sqlite3.Connection) -> None:
@@ -1270,20 +1267,38 @@ class StateStore:
         return entry
 
     @staticmethod
-    def _require_unique_external_ip_fulfillment_id(
+    def _require_unique_fulfillment_id(
         connection: sqlite3.Connection,
+        table_name: str,
         uid: str,
         fulfillment_id: str,
+        validate_conflicting_row: Callable[[sqlite3.Connection, str], Any],
+        error_message: str,
     ) -> None:
         row = connection.execute(
-            """SELECT uid FROM external_ips
+            f"""SELECT uid FROM {table_name}
                WHERE fulfillment_id = ? AND uid <> ? LIMIT 1""",
             (fulfillment_id, uid),
         ).fetchone()
         if row is None:
             return
-        StateStore._external_ip_for_uid(connection, row[0])
-        raise StateError("ExternalIP Fulfillment identity is already reserved")
+        validate_conflicting_row(connection, row[0])
+        raise StateError(error_message)
+
+    @staticmethod
+    def _require_unique_external_ip_fulfillment_id(
+        connection: sqlite3.Connection,
+        uid: str,
+        fulfillment_id: str,
+    ) -> None:
+        StateStore._require_unique_fulfillment_id(
+            connection,
+            "external_ips",
+            uid,
+            fulfillment_id,
+            StateStore._external_ip_for_uid,
+            "ExternalIP Fulfillment identity is already reserved",
+        )
 
     @staticmethod
     def _require_unique_external_ip_pool_fulfillment_id(
@@ -1291,15 +1306,14 @@ class StateStore:
         uid: str,
         fulfillment_id: str,
     ) -> None:
-        row = connection.execute(
-            """SELECT uid FROM external_ip_pools
-               WHERE fulfillment_id = ? AND uid <> ? LIMIT 1""",
-            (fulfillment_id, uid),
-        ).fetchone()
-        if row is None:
-            return
-        StateStore._external_ip_pool_for_uid(connection, row[0])
-        raise StateError("ExternalIPPool Fulfillment identity is already registered")
+        StateStore._require_unique_fulfillment_id(
+            connection,
+            "external_ip_pools",
+            uid,
+            fulfillment_id,
+            StateStore._external_ip_pool_for_uid,
+            "ExternalIPPool Fulfillment identity is already registered",
+        )
 
     def ensure_external_ip_pool(
         self,
@@ -1468,18 +1482,32 @@ class StateStore:
                     self._require_unique_external_ip_fulfillment_id(
                         connection, uid, fulfillment_id
                     )
-                    reserved = {
-                        row[0]
-                        for row in connection.execute(
-                            "SELECT address FROM external_ips WHERE pool_uid = ?",
-                            (pool_uid,),
-                        )
-                    }
                     network = ipaddress.ip_network(pool["ipv4_cidr"], strict=True)
-                    address = next(
-                        (str(candidate) for candidate in network.hosts() if str(candidate) not in reserved),
-                        None,
+                    first_host = int(network.network_address) + (
+                        1 if network.prefixlen < 31 else 0
                     )
+                    host_count = network.num_addresses - (
+                        2 if network.prefixlen < 31 else 0
+                    )
+                    start = int.from_bytes(
+                        hashlib.sha256(uid.encode("utf-8")).digest()[:8], "big"
+                    ) % host_count
+                    address = None
+                    # Probe the pool/address unique index from a UID-derived offset
+                    # instead of loading all reservations and rescanning hosts.
+                    for offset in range(host_count):
+                        candidate = str(
+                            ipaddress.IPv4Address(
+                                first_host + ((start + offset) % host_count)
+                            )
+                        )
+                        if connection.execute(
+                            "SELECT 1 FROM external_ips "
+                            "WHERE pool_uid = ? AND address = ?",
+                            (pool_uid, candidate),
+                        ).fetchone() is None:
+                            address = candidate
+                            break
                     if address is None:
                         raise StateError("ExternalIPPool has no available addresses")
                     reservation = _external_ip_entry(

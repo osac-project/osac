@@ -1771,11 +1771,13 @@ def test_external_ip_reservation_reuses_uid_and_allocates_unique_addresses(tmp_p
         store, UID_TWO, UID_THREE, pool_cidr="198.51.100.0/30"
     )
 
-    assert first["address"] == "198.51.100.1"
     assert retry == first
     assert first_changed is True
     assert retry_changed is False
-    assert second["address"] == "198.51.100.2"
+    assert {first["address"], second["address"]} == {
+        "198.51.100.1",
+        "198.51.100.2",
+    }
     assert second_changed is True
 
 
@@ -1855,7 +1857,9 @@ def test_external_ip_reservation_check_mode_does_not_write(tmp_path):
     with sqlite3.connect(store.path) as connection:
         assert connection.execute("SELECT count(*) FROM external_ips").fetchone()[0] == 0
 
-    assert candidate["address"] == "198.51.100.1"
+    assert ipaddress.ip_address(candidate["address"]) in ipaddress.ip_network(
+        POOL_CIDR, strict=True
+    )
     assert would_change is True
 
 

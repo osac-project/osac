@@ -816,8 +816,16 @@ func (r *ClusterOrderReconciler) handleNodePool(ctx context.Context, instance *v
 		return nil
 	}
 
-	// Find the matching item inside the `nodeRequests` field of the status, or create a new one if there is no
-	// matching item yet.
+	// Spec.Replicas is a pointer that is nil when autoscaling is
+	// configured or when the replica reconciler has not yet set it.
+	// Skip the status update so an existing NumberOfNodes value is
+	// preserved instead of being overwritten with zero.
+	if nodePool.Spec.Replicas == nil {
+		return nil
+	}
+
+	// Find the matching item inside the `nodeRequests` field of the
+	// status, or create a new one if there is no matching item yet.
 	var nodeRequestStatus *v1alpha1.NodeRequestStatus
 	for i, nodeRequestsItem := range instance.Status.NodeRequests {
 		if nodeRequestsItem.NodeSet == nodeSet {
@@ -825,25 +833,24 @@ func (r *ClusterOrderReconciler) handleNodePool(ctx context.Context, instance *v
 		}
 	}
 	if nodeRequestStatus == nil {
-		instance.Status.NodeRequests = append(instance.Status.NodeRequests, v1alpha1.NodeRequestStatus{
-			NodeSet:   nodeSet,
-			BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: instanceType},
-		})
+		instance.Status.NodeRequests = append(
+			instance.Status.NodeRequests,
+			v1alpha1.NodeRequestStatus{
+				NodeSet:   nodeSet,
+				BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: instanceType},
+			},
+		)
 		nodeRequestStatus = &instance.Status.NodeRequests[len(instance.Status.NodeRequests)-1]
 	}
 
-	// Update the selected `nodeRequests` item using the NodePool's desired
-	// replica count (Spec.Replicas) rather than the transient observed count
-	// (Status.Replicas). Status.Replicas starts at 0 for a newly-created
-	// NodePool and would incorrectly report zero capacity to downstream
-	// consumers (feedback controller, fulfillment service) before the first
-	// node joins.
+	// Update the selected `nodeRequests` item using the NodePool's
+	// desired replica count (Spec.Replicas) rather than the transient
+	// observed count (Status.Replicas). Status.Replicas starts at 0
+	// for a newly-created NodePool and would incorrectly report zero
+	// capacity to downstream consumers (feedback controller,
+	// fulfillment service) before the first node joins.
 	oldValue := nodeRequestStatus.NumberOfNodes
-	var specReplicas int32
-	if nodePool.Spec.Replicas != nil {
-		specReplicas = *nodePool.Spec.Replicas
-	}
-	newValue := int(specReplicas)
+	newValue := int(*nodePool.Spec.Replicas)
 	if newValue != oldValue {
 		log.Info(
 			"updating number of nodes from node pool",

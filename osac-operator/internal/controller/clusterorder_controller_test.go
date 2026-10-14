@@ -1997,6 +1997,69 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(instance.Status.NodeRequests[0].NodeSet).To(Equal("workers"))
 			Expect(instance.Status.NodeRequests[0].BareMetal.InstanceType).To(Equal("ci-worker-bm"))
 		})
+
+		It("skips status update when spec replicas is nil (no existing entry)", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{NodeSet: "workers", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "ci-worker-bm"}, NumberOfNodes: 1},
+					},
+				},
+			}
+
+			nodePool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						agentNodeSetLabel:      "workers",
+						agentInstanceTypeLabel: "ci-worker-bm",
+					},
+				},
+				Spec: hypershiftv1beta1.NodePoolSpec{
+					Replicas: nil,
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(instance.Status.NodeRequests).To(BeEmpty(),
+				"no status entry should be created when spec.replicas is nil")
+		})
+
+		It("preserves existing nonzero status when spec replicas is nil", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{NodeSet: "workers", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "ci-worker-bm"}, NumberOfNodes: 3},
+					},
+				},
+				Status: v1alpha1.ClusterOrderStatus{
+					NodeRequests: []v1alpha1.NodeRequestStatus{
+						{NodeSet: "workers", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "ci-worker-bm"}, NumberOfNodes: 3},
+					},
+				},
+			}
+
+			nodePool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						agentNodeSetLabel:      "workers",
+						agentInstanceTypeLabel: "ci-worker-bm",
+					},
+				},
+				Spec: hypershiftv1beta1.NodePoolSpec{
+					Replicas: nil,
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(instance.Status.NodeRequests).To(HaveLen(1),
+				"existing status entry must be preserved")
+			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(3),
+				"existing numberOfNodes must not be overwritten with zero")
+		})
 	})
 
 	Context("VIP endpoint reconciliation", func() {

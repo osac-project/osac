@@ -42,7 +42,6 @@
       loop: "{{ _ontap_cleanup_sc_list.resources | default([]) }}"
       loop_control:
         label: "storage-class"
-      ignore_errors: true  # noqa: ignore-errors
       no_log: true
 
     - name: Find all tenant ONTAP TridentBackendConfigs by label
@@ -67,7 +66,6 @@
       loop: "{{ _ontap_cleanup_tbc_list.resources | default([]) }}"
       loop_control:
         label: "trident-backend-config"
-      ignore_errors: true  # noqa: ignore-errors
       no_log: true
 
     - name: Wait for the TridentBackendConfigs to be removed
@@ -83,7 +81,6 @@
       until: _tbc_check.resources | length == 0
       retries: 12
       delay: 5
-      ignore_errors: true  # noqa: ignore-errors
       no_log: true
 
     - name: Find all tenant ONTAP CSI Secrets by label
@@ -110,7 +107,6 @@
       loop: "{{ _ontap_cleanup_csi_list.resources | default([]) }}"
       loop_control:
         label: "csi-secret"
-      ignore_errors: true  # noqa: ignore-errors
       no_log: true
 
     - name: Report teardown_cluster_storage summary
@@ -120,11 +116,14 @@
           assignments and ONTAP resources untouched.
 
   rescue:
-    - name: Warn about teardown_cluster_storage failure (target cluster may be unreachable)
+    - name: Warn about teardown_cluster_storage failure
       ansible.builtin.debug:
-        msg: >-
-          Teardown of ONTAP cluster-side resources failed.
-          This may be expected if the target cluster is being destroyed.
+        msg: "Teardown of ONTAP cluster-side resources failed."
+
+    - name: Re-raise teardown_cluster_storage failure
+      ansible.builtin.fail:
+        msg: "teardown_cluster_storage failed to remove all ONTAP cluster-side resources."
+      no_log: true
 
   always:
     - name: Clear credential-bearing facts

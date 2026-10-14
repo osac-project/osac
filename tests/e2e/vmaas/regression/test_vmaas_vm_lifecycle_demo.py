@@ -335,6 +335,8 @@ def test_vmaas_vm_lifecycle_demo(
     temporary_scratch_storage: None,
 ) -> None:
     """Order one VM on a tenant network, stop it, start it, and restart it."""
+    grpc = grpc.with_read_connection_retries()
+    private_grpc = private_grpc.with_read_connection_retries()
     tag = uuid4().hex[:8]
     subnet_net = allocate_worker_subnet()
     it_name = f"e2e-it-{tag}"

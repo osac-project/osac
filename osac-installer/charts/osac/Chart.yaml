@@ -42,6 +42,11 @@ dependencies:
     repository: "file://../../../osac-metering/charts/osac-metering"
     alias: metering
     condition: metering.enabled
+  - name: cost-management-adapter
+    version: ">=0.0.0-0"
+    repository: "file://../../../osac-metering/charts/cost-management-adapter"
+    alias: costManagementAdapter
+    condition: costManagementAdapter.enabled
   - name: csi-driver
     version: ">=0.0.0-0"
     repository: "file://../../../osac-csi-driver/charts/csi-driver"

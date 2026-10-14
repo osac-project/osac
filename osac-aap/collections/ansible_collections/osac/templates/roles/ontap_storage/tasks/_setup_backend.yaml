@@ -112,9 +112,9 @@
 
 # Check if the cluster CA bundle file exists on disk so uri can use it when
 # present, falling back to system trust store when absent.
-- name: Check if cluster CA bundle exists at {{ ontap_storage_ca_bundle_path }}
+- name: Check if cluster CA bundle exists at {{ storage_provider_ca_bundle_path }}
   ansible.builtin.stat:
-    path: "{{ ontap_storage_ca_bundle_path }}"
+    path: "{{ storage_provider_ca_bundle_path }}"
   register: _ontap_ca_bundle_stat
 
 - name: Set ONTAP discovery connection for backend {{ _ontap_backend_id }}
@@ -123,7 +123,7 @@
       url: "{{ _provider_backend_connections[_ontap_backend_id].endpoint }}"
       username: "{{ _provider_backend_connections[_ontap_backend_id].username }}"
       password: "{{ _provider_backend_connections[_ontap_backend_id].password }}"
-      ca_path: "{{ ontap_storage_ca_bundle_path if (_ontap_ca_bundle_stat.stat.exists | default(false)) else '' }}"
+      ca_path: "{{ storage_provider_ca_bundle_path if (_ontap_ca_bundle_stat.stat.exists | default(false)) else '' }}"
   no_log: true
 
 - name: Discover the prepared SVM via the ONTAP REST API

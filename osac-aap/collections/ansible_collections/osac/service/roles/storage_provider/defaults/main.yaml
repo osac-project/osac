@@ -32,3 +32,8 @@ storage_provider_config_namespace: >-
 # Global API timeout (seconds) for storage provider REST/management calls,
 # overridable via OSAC_STORAGE_API_TIMEOUT or per-provider variables.
 storage_provider_api_timeout: "{{ lookup('env', 'OSAC_STORAGE_API_TIMEOUT') | default('30', true) | int }}"
+
+# Path to the cluster-installed PEM CA bundle (mounted from the ca-bundle
+# ConfigMap in storage-operations-ig / compute-instance-operations-ig), shared
+# across all storage providers.
+storage_provider_ca_bundle_path: "{{ lookup('env', 'OSAC_STORAGE_CA_BUNDLE_PATH') | default('/etc/ca-bundle/bundle.pem', true) }}"

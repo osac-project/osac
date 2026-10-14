@@ -156,7 +156,6 @@ var _ = Describe("Private bare metal instances server", func() {
 
 			createDiskImageWithLifecycle("default-bmi-disk-image",
 				privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE, nil)
-			seedTenantDefaultNetworking(testTenant, "", new("netris"))
 
 			// Create a published catalog item for use in tests.
 			Expect(seedBareMetalCatalogItemTemplate(ctx, testTenant, "", "test-template", bareMetalInstanceTypeReference("default-type"))).To(Succeed())

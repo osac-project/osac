@@ -55,6 +55,7 @@ var _ = Describe("Cluster reconciler", func() {
 		bmitName            string
 		templatesClient     privatev1.ClusterTemplatesClient
 		templateId          string
+		network             catalogItemNetworkFixture
 	)
 
 	makeAny := func(value proto.Message) *anypb.Any {
@@ -72,6 +73,7 @@ var _ = Describe("Cluster reconciler", func() {
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
 		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
 		templatesClient = privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
+		network = createCatalogItemNetworkFixture(ctx, usersGroup, "")
 
 		// Create a bare metal instance type for testing:
 		bmitName = fmt.Sprintf("test-bmit-%s", uuid.New()[24:32])
@@ -169,8 +171,9 @@ var _ = Describe("Cluster reconciler", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-					NodeSets: testClusterNodeSets(bmitName, 3),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NetworkAttachment: network.clusterAttachment(),
+					NodeSets:          testClusterNodeSets(bmitName, 3),
 					AddOnOperators: []*publicv1.AddOnOperatorReference{
 						publicv1.AddOnOperatorReference_builder{Id: operatorID}.Build(),
 					},
@@ -251,7 +254,8 @@ var _ = Describe("Cluster reconciler", func() {
 					Name: fmt.Sprintf("test-unpublished-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NetworkAttachment: network.clusterAttachment(),
 					AddOnOperators: []*publicv1.AddOnOperatorReference{
 						publicv1.AddOnOperatorReference_builder{Id: operatorID}.Build(),
 					},
@@ -275,8 +279,9 @@ var _ = Describe("Cluster reconciler", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-					NodeSets: testClusterNodeSets(bmitName, 3),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NetworkAttachment: network.clusterAttachment(),
+					NodeSets:          testClusterNodeSets(bmitName, 3),
 					TemplateParameters: map[string]*anypb.Any{
 						"my": makeAny(wrapperspb.String("my_value")),
 					},
@@ -336,7 +341,8 @@ var _ = Describe("Cluster reconciler", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NetworkAttachment: network.clusterAttachment(),
 					TemplateParameters: map[string]*anypb.Any{
 						"my": makeAny(wrapperspb.String("my_value")),
 					},
@@ -439,8 +445,9 @@ var _ = Describe("Cluster reconciler", func() {
 						Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 					}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
-						Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-						NodeSets: testClusterNodeSets(bmitName, 3),
+						Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+						NetworkAttachment: network.clusterAttachment(),
+						NodeSets:          testClusterNodeSets(bmitName, 3),
 						TemplateParameters: map[string]*anypb.Any{
 							"my": makeAny(wrapperspb.String("my_value")),
 						}}.Build(),

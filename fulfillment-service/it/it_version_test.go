@@ -38,6 +38,7 @@ var _ = Describe("Version", func() {
 		templatesClient     privatev1.ClusterTemplatesClient
 		bmitName            string
 		templateId          string
+		network             catalogItemNetworkFixture
 	)
 
 	BeforeEach(func() {
@@ -49,6 +50,7 @@ var _ = Describe("Version", func() {
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
 		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
 		templatesClient = privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
+		network = createCatalogItemNetworkFixture(ctx, usersGroup, "")
 
 		bmitName = fmt.Sprintf("test-bmit-%s", uuid.New()[24:32])
 		_, err := instanceTypesClient.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
@@ -111,8 +113,9 @@ var _ = Describe("Version", func() {
 					Name: clusterName,
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-					NodeSets: testClusterNodeSets(bmitName, 3),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets:          testClusterNodeSets(bmitName, 3),
+					NetworkAttachment: network.clusterAttachment(),
 				}.Build(),
 			}.Build(),
 		}.Build())

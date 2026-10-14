@@ -293,6 +293,27 @@ class GRPCClient:
                     break
         return str(items[0]["id"]) if items and items[0].get("id") else ""
 
+    def get_tenant_by_name(self, *, name: str) -> dict[str, Any] | None:
+        """Get a private Tenant by its exact metadata name.
+
+        List supports CEL filtering but does not provide a direct name lookup;
+        resolve the ID first, then use Get for the full status conditions.
+        """
+        response: dict[str, Any] = self.call(
+            service=f"{PRIVATE_API}.Tenants/List", data={"filter": f"this.metadata.name == {json.dumps(name)}"}
+        )
+        matches = [tenant for tenant in response.get("items", []) if tenant.get("metadata", {}).get("name") == name]
+        if not matches:
+            return None
+        if len(matches) > 1:
+            raise RuntimeError(f"Found multiple Fulfillment tenants named '{name}'")
+
+        tenant_id = matches[0].get("id")
+        if not tenant_id:
+            raise RuntimeError(f"Fulfillment tenant '{name}' has no ID")
+        tenant_response: dict[str, Any] = self.call(service=f"{PRIVATE_API}.Tenants/Get", data={"id": tenant_id})
+        return tenant_response.get("object")
+
     # ExternalIPPool operations (private API only)
 
     def create_external_ip_pool(

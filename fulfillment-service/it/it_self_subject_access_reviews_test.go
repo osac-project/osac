@@ -41,6 +41,7 @@ var _ = Describe("SelfSubjectAccessReview", func() {
 		tenantName                string
 		templateID                string
 		instanceTypeID            string
+		tenantNetwork             catalogItemNetworkFixture
 	)
 
 	BeforeEach(func() {
@@ -62,6 +63,8 @@ var _ = Describe("SelfSubjectAccessReview", func() {
 		normalUserReviewClient = publicv1.NewSelfSubjectAccessReviewsClient(normalUserConn)
 
 		tenantName = "engineering"
+		networkClassID := createCatalogItemNetworkClassFixture(ctx)
+		tenantNetwork = createCatalogItemNetworkInClassFixture(ctx, tenantName, "", networkClassID)
 
 		// Create a bare metal instance type for the explicit cluster node sets.
 		templateClient := privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
@@ -136,15 +139,18 @@ var _ = Describe("SelfSubjectAccessReview", func() {
 				createResp, err := systemAdminClustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 					Object: publicv1.Cluster_builder{
 						Metadata: publicv1.Metadata_builder{
-							Name: clusterName,
+							Name:   clusterName,
+							Tenant: tenantName,
 						}.Build(),
 						Spec: publicv1.ClusterSpec_builder{
-							Template: publicv1.ClusterTemplateReference_builder{Id: templateID}.Build(),
-							NodeSets: testClusterNodeSets(instanceTypeID, 3),
+							Template:          publicv1.ClusterTemplateReference_builder{Id: templateID}.Build(),
+							NetworkAttachment: tenantNetwork.clusterAttachment(),
+							NodeSets:          testClusterNodeSets(instanceTypeID, 3),
 						}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
+				Expect(createResp.GetObject().GetMetadata().GetTenant()).To(Equal(tenantName))
 				DeferCleanup(func() {
 					_, _ = systemAdminClustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{
 						Id: createResp.GetObject().GetId(),
@@ -204,8 +210,9 @@ var _ = Describe("SelfSubjectAccessReview", func() {
 								Tenant: tenantName,
 							}.Build(),
 							Spec: publicv1.ClusterSpec_builder{
-								Template: publicv1.ClusterTemplateReference_builder{Id: templateID}.Build(),
-								NodeSets: testClusterNodeSets(instanceTypeID, 3),
+								Template:          publicv1.ClusterTemplateReference_builder{Id: templateID}.Build(),
+								NetworkAttachment: tenantNetwork.clusterAttachment(),
+								NodeSets:          testClusterNodeSets(instanceTypeID, 3),
 							}.Build(),
 						}.Build(),
 					}.Build(),

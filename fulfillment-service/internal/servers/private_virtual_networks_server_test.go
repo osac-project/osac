@@ -23,6 +23,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
@@ -1085,6 +1086,39 @@ var _ = Describe("Private virtual networks server", func() {
 
 				// CIDRs must be preserved from the existing record:
 				Expect(updated.GetSpec().GetIpv4Cidr()).To(Equal("10.0.0.0/16"))
+			})
+		})
+
+		Context("Metadata tenant immutability on Update", func() {
+			It("rejects moving a stored VirtualNetwork into a reserved tenant and preserves the stored object", func() {
+				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
+				createResponse, err := server.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
+					Object: privatev1.VirtualNetwork_builder{
+						Metadata: privatev1.Metadata_builder{Name: "tenant-immutable-vn", Tenant: testTenant}.Build(),
+						Spec: privatev1.VirtualNetworkSpec_builder{
+							NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
+							Region:       "us-west-1",
+							Ipv4Cidr:     new("10.0.0.0/16"),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				id := createResponse.GetObject().GetId()
+
+				_, err = server.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
+					Object: privatev1.VirtualNetwork_builder{
+						Id:       id,
+						Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.tenant"}},
+				}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
+				Expect(err.Error()).To(ContainSubstring("objects cannot be placed in the 'shared' tenant"))
+
+				stored, getErr := server.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
+				Expect(getErr).ToNot(HaveOccurred())
+				Expect(stored.GetObject().GetMetadata().GetTenant()).To(Equal(testTenant))
+				Expect(stored.GetObject().GetSpec().GetIpv4Cidr()).To(Equal("10.0.0.0/16"))
 			})
 		})
 	})

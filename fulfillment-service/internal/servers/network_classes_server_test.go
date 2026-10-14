@@ -14,6 +14,7 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -175,6 +176,36 @@ var _ = Describe("Network classes server", func() {
 			Expect(updated.GetObject().GetTitle()).To(Equal("Updated provider network"))
 
 			_, err = server.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: created.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("rejects changing the singleton's tenant and preserves the stored object", func() {
+			created := create()
+
+			// Tenant immutability is enforced by the database trigger, which aborts the
+			// current transaction, so the rejected update runs inside a savepoint.
+			tx, txErr := database.TxFromContext(ctx)
+			Expect(txErr).ToNot(HaveOccurred())
+			txErr = tx.Savepoint(ctx, func(savepointCtx context.Context) error {
+				_, updateErr := server.Update(savepointCtx, privatev1.NetworkClassesUpdateRequest_builder{
+					Object: privatev1.NetworkClass_builder{
+						Id:       created.GetId(),
+						Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.tenant"}},
+				}.Build())
+				return updateErr
+			})
+			Expect(txErr).To(HaveOccurred())
+			Expect(grpcstatus.Code(txErr)).To(Equal(grpccodes.InvalidArgument))
+			Expect(txErr.Error()).To(ContainSubstring("metadata.tenant"))
+			Expect(txErr.Error()).To(ContainSubstring("immutable"))
+
+			stored, getErr := server.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: created.GetId()}.Build())
+			Expect(getErr).ToNot(HaveOccurred())
+			Expect(stored.GetObject().GetMetadata().GetTenant()).To(Equal(testTenant))
+
+			_, err := server.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: created.GetId()}.Build())
 			Expect(err).ToNot(HaveOccurred())
 		})
 

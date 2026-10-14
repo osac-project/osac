@@ -687,6 +687,33 @@ var _ = Describe("Private external IPs server", func() {
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(err.Error()).To(ContainSubstring("spec.pool' is immutable"))
 		})
+
+		It("rejects moving a stored ExternalIP into a reserved tenant and preserves the stored object", func() {
+			pool := createReadyExternalIPPool(ctx, "tenant-immutable-pool", 100, 0)
+			createResponse, err := externalIPsServer.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{
+				Object: privatev1.ExternalIP_builder{
+					Metadata: privatev1.Metadata_builder{Name: "tenant-immutable-eip", Tenant: testTenant}.Build(),
+					Spec:     privatev1.ExternalIPSpec_builder{Pool: privatev1.ExternalIPPoolReference_builder{Id: pool}.Build()}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := createResponse.GetObject().GetId()
+
+			_, err = externalIPsServer.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
+				Object: privatev1.ExternalIP_builder{
+					Id:       id,
+					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.tenant"}},
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
+			Expect(err.Error()).To(ContainSubstring("objects cannot be placed in the 'shared' tenant"))
+
+			stored, getErr := externalIPsServer.Get(ctx, privatev1.ExternalIPsGetRequest_builder{Id: id}.Build())
+			Expect(getErr).ToNot(HaveOccurred())
+			Expect(stored.GetObject().GetMetadata().GetTenant()).To(Equal(testTenant))
+			Expect(stored.GetObject().GetSpec().GetPool().GetId()).To(Equal(pool))
+		})
 	})
 
 	Describe("Tenant isolation", func() {

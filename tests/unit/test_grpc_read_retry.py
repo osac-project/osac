@@ -12,7 +12,8 @@ from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
 
 @pytest.fixture
 def rpc_stub(monkeypatch: pytest.MonkeyPatch) -> tuple[GRPCClient, Mock, Mock]:
-    client = GRPCClient(address="fulfillment-api.example.test:443", token="private-token", retry_read_connections=True)
+    test_token = "test-private-token"
+    client = GRPCClient(address="fulfillment-api.example.test:443", token=test_token, retry_read_connections=True)
     run = Mock(return_value='{"items": []}')
     sleep = Mock()
     monkeypatch.setattr(grpc_client, "run", run)

@@ -1838,6 +1838,23 @@ def test_external_ip_reservation_uses_gap_search_for_fragmented_large_pool(tmp_p
                 str(ipaddress.IPv4Address(int(network.network_address) + 1)),
             ),
         )
+        address_value_sql = store._external_ip_address_value_sql()
+        query_plan = connection.execute(
+            f"""EXPLAIN QUERY PLAN SELECT {address_value_sql}
+                FROM external_ips
+                WHERE pool_uid = ?
+                  AND {address_value_sql} >= ?
+                  AND {address_value_sql} < ?
+                ORDER BY {address_value_sql}""",
+            (
+                POOL_UID,
+                int(network.network_address) + 1,
+                int(network.network_address) + 300,
+            ),
+        ).fetchall()
+        assert any(
+            "external_ips_by_pool_address_value" in row[3] for row in query_plan
+        )
 
     reservation, changed = reserve_external_address(
         store, str(uuid.uuid4()), str(uuid.uuid4()), pool_cidr=cidr

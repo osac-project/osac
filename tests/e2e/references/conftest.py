@@ -71,16 +71,22 @@ def _teardown_ref_external_ip_pool(
 
 
 def _create_ref_external_ip_pool(
-    *, private_grpc: GRPCClient, k8s: K8sClient, name: str, cidr: str, tenant: str | None = None
+    *, private_grpc: GRPCClient, k8s: K8sClient, name: str, cidr: str, expected_external_ip_tenant: str = ""
 ) -> Generator[dict[str, str], None, None]:
     pool_id: str | None = None
     pool_cr_name: str | None = None
     try:
-        pool_id = private_grpc.create_external_ip_pool(name=name, cidrs=[cidr], tenant=tenant)
+        pool_id = private_grpc.create_external_ip_pool(name=name, cidrs=[cidr])
         pool_cr_name = wait_for_external_ip_pool_cr(k8s=k8s, uuid=pool_id)
         wait_for_external_ip_pool_ready(k8s=k8s, name=pool_cr_name)
         wait_for_external_ip_pool_grpc_ready(private_grpc=private_grpc, pool_id=pool_id)
-        yield {"id": pool_id, "name": name, "cr_name": pool_cr_name, "cidr": cidr, "tenant": tenant or "shared"}
+        yield {
+            "id": pool_id,
+            "name": name,
+            "cr_name": pool_cr_name,
+            "cidr": cidr,
+            "expected_external_ip_tenant": expected_external_ip_tenant,
+        }
     finally:
         if pool_id:
             _teardown_ref_external_ip_pool(private_grpc, k8s, pool_id, pool_cr_name)
@@ -108,12 +114,16 @@ def ref_test_run_id() -> str:
 def external_ip_ownership_pool(
     private_grpc: GRPCClient, k8s_hub_client: K8sClient, jwt_username: str
 ) -> Generator[dict[str, str], None, None]:
-    """Create a tenant-scoped, two-address pool for ExternalIP ownership tests."""
+    """Create a deployment-scoped pool and retain the JWT user's tenant for ownership assertions."""
     pool_name = f"ref-eip-ownership-{uuid4().hex[:8]}"
     pool_cidr = str(allocate_worker_subnet(prefix=30))
     tenant = _tenant_for_username(private_grpc, jwt_username)
     yield from _create_ref_external_ip_pool(
-        private_grpc=private_grpc, k8s=k8s_hub_client, name=pool_name, cidr=pool_cidr, tenant=tenant
+        private_grpc=private_grpc,
+        k8s=k8s_hub_client,
+        name=pool_name,
+        cidr=pool_cidr,
+        expected_external_ip_tenant=tenant,
     )
 
 

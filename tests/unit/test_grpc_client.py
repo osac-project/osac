@@ -33,32 +33,6 @@ def test_update_compute_instance_instance_type_updates_only_instance_type(monkey
     ]
 
 
-def test_create_external_ip_pool_sets_tenant(monkeypatch: pytest.MonkeyPatch) -> None:
-    client = GRPCClient(address="fulfillment-api.example.test:443", token="test-token")
-    calls: list[dict[str, Any]] = []
-
-    def capture_call(*, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
-        calls.append({"service": service, "data": data})
-        return {"object": {"id": "external-ip-pool-id"}}
-
-    monkeypatch.setattr(client, "call", capture_call)
-
-    pool_id = client.create_external_ip_pool(name="tenant-pool", cidrs=["192.0.2.0/30"], tenant="tenant-a")
-
-    assert pool_id == "external-ip-pool-id"
-    assert calls == [
-        {
-            "service": f"{PRIVATE_API}.ExternalIPPools/Create",
-            "data": {
-                "object": {
-                    "metadata": {"name": "tenant-pool", "tenant": "tenant-a"},
-                    "spec": {"cidrs": ["192.0.2.0/30"], "ip_family": "IP_FAMILY_IPV4", "implementation_strategy": ""},
-                }
-            },
-        }
-    ]
-
-
 def test_create_compute_instance_with_disk_image_includes_security_group(monkeypatch: pytest.MonkeyPatch) -> None:
     client = GRPCClient(address="fulfillment-api.example.test:443", token="test-token")
     calls: list[dict[str, Any]] = []

@@ -607,12 +607,15 @@ def test_cluster_create(
     )
     logger.info("CaaS: ClusterCatalogItem created")
     name = unique_name("e2e-cluster")
-    logger.info("CaaS: creating cluster from catalog item")
-    uuid = cli.create_cluster_with_catalog_item(catalog_item=catalog_item_id, name=name, pull_secret=pull_secret_name)
-    logger.info("CaaS: cluster created")
-    metering.expect("osac.resource.created.v1", resource_id=uuid)
-
+    uuid = ""
     try:
+        logger.info("CaaS: creating cluster from catalog item")
+        uuid = cli.create_cluster_with_catalog_item(
+            catalog_item=catalog_item_id, name=name, pull_secret=pull_secret_name
+        )
+        logger.info("CaaS: cluster created")
+        metering.expect("osac.resource.created.v1", resource_id=uuid)
+
         _assert_catalog_created_cluster(
             grpc=grpc,
             uuid=uuid,
@@ -641,8 +644,9 @@ def test_cluster_create(
         cli.delete_cluster(uuid=uuid)
         _assert_cluster_deleted(grpc=grpc, k8s=k8s_hub_client, metering=metering, uuid=uuid, cluster=cluster)
     finally:
-        with contextlib.suppress(subprocess.SubprocessError):
-            cli.delete_cluster(uuid=uuid)
+        if uuid:
+            with contextlib.suppress(subprocess.SubprocessError):
+                cli.delete_cluster(uuid=uuid)
         with contextlib.suppress(subprocess.SubprocessError):
             private_grpc.delete_cluster_catalog_item(catalog_item_id=catalog_item_id, api=PRIVATE_API)
 

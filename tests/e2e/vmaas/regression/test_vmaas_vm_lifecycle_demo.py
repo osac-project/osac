@@ -75,16 +75,15 @@ def _attachment_refs(instance: dict[str, Any]) -> tuple[str, list[str]]:
     return str(subnet.get("id") or ""), [str(group.get("id") or "") for group in groups]
 
 
-def _wait_for_api_ready(get_resource: Callable[[], dict[str, Any]], ready_state: str) -> None:
+def _wait_for_api_ready(get_resource: Callable[[], dict[str, Any]], ready_state: str) -> dict[str, Any]:
     # Kubernetes readiness can precede Fulfillment's feedback update. Dependent
     # Create requests validate the API state, so wait for that state as well.
-    poll_until(
-        fn=lambda: get_resource().get("object", {}).get("status", {}).get("state", ""),
-        until=lambda state: state == ready_state,
+    return poll_until(
+        fn=get_resource,
+        until=lambda response: response.get("object", {}).get("status", {}).get("state", "") == ready_state,
         retries=60,
         delay=2,
         description=ready_state,
-        retry_on_error=True,
     )
 
 
@@ -102,7 +101,16 @@ def _wait_for_cli_state(cli: OsacCLI, instance_id: str, expected_state: str) -> 
         retries=60,
         delay=2,
         description=expected_state,
-        retry_on_error=True,
+    )
+
+
+def _rule_signature(rule: dict[str, Any]) -> tuple[str, int, int, str]:
+    protocol = rule["protocol"]
+    return (
+        protocol,
+        rule.get("port_from", rule.get("portFrom", 0)) if protocol == "PROTOCOL_TCP" else 0,
+        rule.get("port_to", rule.get("portTo", 0)) if protocol == "PROTOCOL_TCP" else 0,
+        rule.get("ipv4_cidr") or rule.get("ipv4Cidr") or "",
     )
 
 
@@ -402,7 +410,11 @@ def test_vmaas_vm_lifecycle_demo(
         subnet = grpc.get_subnet(subnet_id=subnet_id)
         assert subnet["object"]["metadata"]["name"] == f"e2e-subnet-{tag}"
         wait_for_subnet_ready(k8s=k8s_hub_client, name=subnet_cr_name)
-        _wait_for_api_ready(lambda: grpc.get_subnet(subnet_id=subnet_id), "SUBNET_STATE_READY")
+        subnet = _wait_for_api_ready(lambda: grpc.get_subnet(subnet_id=subnet_id), "SUBNET_STATE_READY")["object"]
+        subnet_spec = subnet["spec"]
+        subnet_parent = subnet_spec.get("virtual_network") or subnet_spec.get("virtualNetwork") or {}
+        assert subnet_parent.get("id") == vn_id
+        assert ipaddress.ip_network(subnet_spec.get("ipv4_cidr") or subnet_spec.get("ipv4Cidr") or "") == subnet_net
 
         sg_name = f"e2e-sg-{tag}"
         sg_id = grpc.create_security_group_with_rules(
@@ -416,7 +428,17 @@ def test_vmaas_vm_lifecycle_demo(
         )
         sg_cr_name = wait_for_security_group_cr(k8s=k8s_hub_client, uuid=sg_id)
         wait_for_security_group_ready(k8s=k8s_hub_client, name=sg_cr_name)
-        _wait_for_api_ready(lambda: grpc.get_security_group(sg_id=sg_id), "SECURITY_GROUP_STATE_READY")
+        security_group = _wait_for_api_ready(
+            lambda: grpc.get_security_group(sg_id=sg_id), "SECURITY_GROUP_STATE_READY"
+        )["object"]
+        group_spec = security_group["spec"]
+        group_parent = group_spec.get("virtual_network") or group_spec.get("virtualNetwork") or {}
+        assert group_parent.get("id") == vn_id
+        assert sorted(_rule_signature(rule) for rule in group_spec.get("ingress", [])) == [
+            ("PROTOCOL_ICMP", 0, 0, "0.0.0.0/0"),
+            ("PROTOCOL_TCP", 22, 22, "0.0.0.0/0"),
+        ]
+        assert [_rule_signature(rule) for rule in group_spec.get("egress", [])] == [("PROTOCOL_ALL", 0, 0, "0.0.0.0/0")]
         assert sg_id in grpc.list_security_group_ids()
 
         ci_uuid = cli.create_compute_instance_with_catalog_item(

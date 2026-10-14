@@ -1,10 +1,10 @@
 ---
-# ONTAP teardown_backend: release the prepared assignment per backend.
-# Per the netapp-onboarding contract, OSAC never deletes ONTAP resources
+# ONTAP teardown_backend: retain pre-provisioned ONTAP backend resources.
+# Per the NetApp onboarding contract, OSAC never deletes ONTAP resources
 # (SVMs, LIFs, accounts, QoS policies, or admin preparation Secrets stay
-# prepared); releasing marks the hub lifecycle Secret (ontap-tenant-<assignment_key>)
-# as 'retained' after verifying tenant_uid ownership.
-# Cluster-side K8s resources belong to teardown_cluster_storage.
+# prepared), and osac-operator tracks ONTAP backend lifecycle directly via
+# Tenant status and immutable tenant-id preparation labels without a legacy
+# hub Secret. Cluster-side K8s resources belong to teardown_cluster_storage.
 
 - name: Validate tenant_name is a valid DNS label
   ansible.builtin.fail:
@@ -14,20 +14,11 @@
   when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
   no_log: true
 
-- name: Validate tenant_uid is set
-  ansible.builtin.fail:
-    msg: >-
-      tenant_uid must be a non-empty string so teardown_backend can verify the
-      hub lifecycle record belongs to the original tenant instance before
-      marking it retained.
-  when: tenant_uid is not defined or tenant_uid | default('') | length == 0
-  no_log: true
-
 - name: Fail if any dispatched tier has an invalid backend_id
   ansible.builtin.fail:
     msg: >-
       Every tier dispatched to the ONTAP provider must provide a non-empty
-      string backend_id before teardown can release its assignment.
+      string backend_id before teardown can run.
   loop: "{{ _provider_tiers | default([]) }}"
   loop_control:
     label: "storage-tier"
@@ -47,14 +38,12 @@
   ansible.builtin.fail:
     msg: >-
       Could not resolve any backend_id from the dispatched tiers. The ONTAP
-      provider requires backend_id on every tier to locate the assignment's
-      hub lifecycle record.
+      provider requires backend_id on every tier.
   when: _ontap_backend_ids | length == 0
   no_log: true
 
-- name: Release the prepared assignment per backend
-  ansible.builtin.include_tasks: _teardown_backend_per_backend.yaml
-  loop: "{{ _ontap_backend_ids }}"
-  loop_control:
-    loop_var: _ontap_backend_id
-    label: "ontap-backend"
+- name: Report retention of pre-provisioned ONTAP backend resources
+  ansible.builtin.debug:
+    msg: >-
+      Retaining pre-provisioned ONTAP SVMs, accounts, QoS policies, and
+      administrator preparation Secrets per the NetApp onboarding contract.

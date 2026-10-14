@@ -3,15 +3,13 @@
 # ensure_storage_class.yaml with loop_var _ontap_backend_id).
 #
 # Kubeconfig routing: the dispatcher's module_defaults route k8s/k8s_info to
-# the target cluster via storage_provider_target_kubeconfig. The hub lifecycle
-# Secret lives on the HUB, so its read overrides routing with kubeconfig: ~.
-# The CSI Secret, TBC, and StorageClasses are target-cluster resources and use
-# the routed default.
+# the target cluster via storage_provider_target_kubeconfig. All resources
+# created here (CSI Secret, TridentBackendConfig, StorageClasses) live on the
+# target cluster and use the routed default.
 #
 # Resource naming & mapping:
 #   assignment_key = lowercase sha256(backend_id + "|" + tenant_name)[:16]
 #   tier_key       = lowercase sha256(tier_name)[:16]
-#   Lifecycle Sec  = ontap-tenant-<assignment_key>     (on hub, created by setup)
 #   TBC            = ontap-<assignment_key>            (in Trident namespace)
 #   CSI Secret     = ontap-csi-<assignment_key>        (in Trident namespace)
 #   StorageClass   = ontap-<assignment_key>-<tier_key>
@@ -28,44 +26,12 @@
   ansible.builtin.set_fact:
     _assignment_key: >-
       {{ ((_ontap_backend_id ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}
-    _lifecycle_secret_name: "ontap-tenant-{{ ((_ontap_backend_id ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
     _tbc_name: "ontap-{{ ((_ontap_backend_id ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
   no_log: true
 
 - name: Select this backend's tiers
   ansible.builtin.set_fact:
     _backend_tiers: "{{ _provider_tiers | selectattr('backend_id', 'equalto', _ontap_backend_id) | list }}"
-  no_log: true
-
-# Always verify the hub lifecycle Secret written by setup before allowing a
-# short-circuit or creating target-cluster resources.
-- name: Read hub lifecycle Secret for dispatched backend
-  kubernetes.core.k8s_info:
-    kubeconfig: ~
-    api_version: v1
-    kind: Secret
-    name: "{{ _lifecycle_secret_name }}"
-    namespace: "{{ ontap_storage_config_namespace }}"
-  register: _lifecycle_secret_result
-  no_log: true
-
-- name: Fail if setup has not completed for this assignment
-  ansible.builtin.fail:
-    msg: >-
-      Hub lifecycle record for the ONTAP assignment was not found. Run setup
-      for this tenant before calling ensure_storage_class.
-  when: _lifecycle_secret_result.resources | length == 0
-  no_log: true
-
-- name: Fail if hub lifecycle Secret is claimed by a different tenant or not in claimed state
-  ansible.builtin.fail:
-    msg: >-
-      Hub lifecycle record for the ONTAP assignment belongs to a different
-      tenant UID or is not in state 'claimed'.
-  when: >-
-    (_ontap_effective_tenant_uid | default('') | length == 0) or
-    (_lifecycle_secret_result.resources[0].data.lifecycle_stage | default('') | b64decode) != 'claimed' or
-    (_lifecycle_secret_result.resources[0].data.tenant_uid | default('') | b64decode) != _ontap_effective_tenant_uid
   no_log: true
 
 - name: Provision CSI Secret, TridentBackendConfig, and StorageClasses for dispatched backend
@@ -111,25 +77,12 @@
       no_log: true
 
     # Resolve the CA bundle from ontap_storage_ca_bundle_path to pass as TBC
-    # spec.trustedCACertificate (base64 of PEM).
-    - name: Check if cluster CA bundle exists on disk
-      ansible.builtin.stat:
-        path: "{{ ontap_storage_ca_bundle_path }}"
-      register: _ontap_ca_bundle_stat
-
-    - name: Slurp cluster CA bundle when present
-      when: _ontap_ca_bundle_stat.stat.exists | default(false)
-      ansible.builtin.slurp:
-        src: "{{ ontap_storage_ca_bundle_path }}"
-      register: _ontap_ca_bundle_slurp
-      no_log: true
-
-    - name: Resolve trustedCACertificate for TBC
+    # spec.trustedCACertificate (base64 of PEM) using a local file lookup.
+    - name: Resolve trustedCACertificate from cluster CA bundle when present
       ansible.builtin.set_fact:
         _trusted_ca_b64: >-
-          {{ _ontap_ca_bundle_slurp.content
-             if (_ontap_ca_bundle_stat.stat.exists | default(false))
-             else '' }}
+          {% set _ca_pem = lookup('file', ontap_storage_ca_bundle_path, errors='ignore') | default('', true) -%}
+          {{ (_ca_pem | b64encode) if (_ca_pem | length > 0) else '' }}
       no_log: true
 
     # The managementLIF is the ONTAP cluster management endpoint the SVM was
@@ -290,8 +243,6 @@
 
 - name: Clear credential-bearing facts
   ansible.builtin.set_fact:
-    _lifecycle_secret_result: {}
-    _ontap_ca_bundle_slurp: {}
     _trusted_ca_b64: ""
     _runtime_username: ""
     _runtime_password: ""

@@ -2,12 +2,12 @@
 name: ontap-storage
 title: NetApp ONTAP Storage Provider
 description: >
-  Claims pre-provisioned ONTAP SVMs for OSAC tenants and drives NetApp
-  Trident to serve block volumes. Verifies the prepared Secret's
-  annotations against the live ONTAP cluster, atomically claims the
-  assignment, creates a TridentBackendConfig with per-tier virtual
-  pools, and manages tenant StorageClasses. ONTAP is block-only;
-  admin credentials never enter tenant-namespace Secrets.
+  Validates pre-provisioned ONTAP SVMs and capped-tier QoS policies for OSAC
+  tenants and drives NetApp Trident to serve block volumes. Consumes
+  operator-resolved tenant preparation credentials, creates a
+  TridentBackendConfig with per-tier labeled virtual pools and its CSI Secret
+  in the Trident namespace, and manages tenant StorageClasses. ONTAP is
+  block-only; discovery credentials never enter tenant-scoped Secrets.
 
 template_type: storage_provider
 implementation_strategy: ontap

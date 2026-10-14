@@ -13,64 +13,6 @@
 - name: Include shared tier validation
   ansible.builtin.include_tasks: _validate_tiers.yaml
 
-# ComputeInstance JIT storage provisioning sets tenant_name and tenant_namespace
-# from status.tenantReference without passing tenant_uid, and ClusterOrder
-# dispatches set tenant_uid to the ClusterOrder UID and tenant_namespace to the
-# guest namespace ('openshift-osac-storage'). Resolve the owning Tenant CR on
-# the hub cluster into a role-local variable (_ontap_effective_tenant_uid)
-# whenever tenant_uid is absent or the resource is a ClusterOrder, and clear it
-# in always: so a subsequent invocation for another tenant in the same play
-# never inherits a prior tenant's resolved UID.
-- name: Use caller-provided tenant_uid when set for a Tenant resource
-  when: >-
-    tenant_uid is defined and
-    (tenant_uid | default('') | length > 0) and
-    (((osac_job_vars.resource.kind | default('Tenant'))
-      if (osac_job_vars is defined and osac_job_vars.resource is defined)
-      else 'Tenant') != 'ClusterOrder')
-  ansible.builtin.set_fact:
-    _ontap_effective_tenant_uid: "{{ tenant_uid }}"
-  no_log: true
-
-- name: Resolve tenant_uid from hub Tenant CR when not provided for a Tenant resource
-  when: >-
-    tenant_uid is not defined or
-    (tenant_uid | default('') | length == 0) or
-    (((osac_job_vars.resource.kind | default('Tenant'))
-      if (osac_job_vars is defined and osac_job_vars.resource is defined)
-      else 'Tenant') == 'ClusterOrder')
-  block:
-    - name: Retrieve Tenant CR from hub cluster for ownership verification
-      kubernetes.core.k8s_info:
-        kubeconfig: ~
-        api_version: osac.openshift.io/v1alpha1
-        kind: Tenant
-        name: "{{ tenant_name }}"
-        namespace: >-
-          {{ 'osac-tenants'
-             if (((osac_job_vars.resource.kind | default('Tenant'))
-                  if (osac_job_vars is defined and osac_job_vars.resource is defined)
-                  else 'Tenant') == 'ClusterOrder')
-             else tenant_namespace }}
-      register: _ontap_tenant_cr
-      no_log: true
-
-    - name: Fail if hub Tenant CR is missing or has no metadata.uid
-      ansible.builtin.fail:
-        msg: >-
-          Could not resolve tenant_uid for ONTAP storage provisioning:
-          the Tenant resource was not found on the hub cluster or has an
-          empty metadata.uid.
-      when: >-
-        _ontap_tenant_cr.resources | default([]) | length != 1 or
-        (_ontap_tenant_cr.resources[0].metadata.uid | default('') | length) == 0
-      no_log: true
-
-    - name: Set effective tenant_uid from hub Tenant CR
-      ansible.builtin.set_fact:
-        _ontap_effective_tenant_uid: "{{ _ontap_tenant_cr.resources[0].metadata.uid }}"
-      no_log: true
-
 - name: Compute the dispatched backend ids
   ansible.builtin.set_fact:
     _ontap_backend_ids: "{{ _provider_tiers | map(attribute='backend_id') | unique | list }}"
@@ -111,10 +53,7 @@
   no_log: true
 
 # Check if all tiers' StorageClasses, TridentBackendConfigs, and CSI Secrets
-# already exist on the target cluster.
-# Ownership and lifecycle checks in _ensure_storage_class_backend.yaml ALWAYS
-# run before any short-circuit so a retained or foreign-claimed assignment is
-# rejected even if target-cluster resources are still present.
+# already exist on the target cluster before provisioning.
 - name: Check existing tenant StorageClasses
   kubernetes.core.k8s_info:
     api_version: storage.k8s.io/v1
@@ -181,9 +120,10 @@
           ) | length) == 0 }}
   no_log: true
 
-- name: Verify lifecycle records and provision TridentBackendConfig and StorageClasses
+- name: Provision TridentBackendConfig and StorageClasses on target cluster
   block:
-    - name: Verify lifecycle ownership and provision per backend
+    - name: Provision per-backend Trident resources when not already present
+      when: not (_ontap_all_sc_exist | bool)
       ansible.builtin.include_tasks: _ensure_storage_class_backend.yaml
       loop: "{{ _ontap_backend_ids }}"
       loop_control:
@@ -193,7 +133,7 @@
     - name: Log short-circuit when all target-cluster resources already exist
       when: _ontap_all_sc_exist | bool
       ansible.builtin.debug:
-        msg: "All ONTAP target-cluster resources already exist and lifecycle ownership verified — skipping provisioning."
+        msg: "All ONTAP target-cluster resources already exist — skipping provisioning."
 
     - name: Set StorageClass names output (list)
       ansible.builtin.set_fact:
@@ -203,8 +143,6 @@
   always:
     - name: Clear credential-bearing facts
       ansible.builtin.set_fact:
-        _ontap_effective_tenant_uid: ""
-        _ontap_tenant_cr: {}
         _ontap_sc_checks: {}
         _ontap_tbc_checks: {}
         _ontap_csi_checks: {}

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import re
 import subprocess
@@ -10,9 +9,10 @@ from uuid import uuid4
 
 import pytest
 
-from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
+from tests.e2e.core.grpc_client import PUBLIC_API, GRPCClient
 from tests.e2e.core.helpers import (
     allocate_worker_subnet,
+    fulfillment_users_for_username,
     wait_for_external_ip_pool_cr,
     wait_for_external_ip_pool_deletion,
     wait_for_external_ip_pool_grpc_ready,
@@ -93,14 +93,9 @@ def _create_ref_external_ip_pool(
 
 
 def _tenant_for_username(private_grpc: GRPCClient, username: str) -> str:
-    response = private_grpc.call(
-        service=f"{PRIVATE_API}.Users/List",
-        data={"filter": f"this.spec.username == {json.dumps(username)}", "limit": 2},
-    )
-    users = [item.get("object", item) for item in response.get("items", [])]
-    matches = [user for user in users if user.get("spec", {}).get("username") == username]
-    assert len(matches) == 1, f"Expected one Fulfillment user for JWT username {username!r}; found {len(matches)}"
-    tenant = matches[0].get("metadata", {}).get("tenant", "")
+    users = fulfillment_users_for_username(private_grpc, username=username, limit=2)
+    assert len(users) == 1, f"Expected one Fulfillment user for JWT username {username!r}; found {len(users)}"
+    tenant = users[0].get("metadata", {}).get("tenant", "")
     assert tenant, f"Fulfillment user {username!r} has no tenant"
     return tenant
 

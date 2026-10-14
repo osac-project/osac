@@ -1,7 +1,8 @@
 ---
 # ONTAP-specific defaults — all use ontap_storage_ prefix.
-# Hub config namespace (storage_provider_config_namespace) and global API
-# timeout (storage_provider_api_timeout) are provided by the
+# Hub config namespace (storage_provider_config_namespace), global API timeout
+# (storage_provider_api_timeout), and CA bundle path
+# (storage_provider_ca_bundle_path) are provided by the
 # osac.service.storage_provider dispatcher.
 
 # Namespace where Trident is installed on the target hosting cluster.
@@ -14,10 +15,3 @@ ontap_storage_trident_namespace: "{{ lookup('env', 'ONTAP_TRIDENT_NAMESPACE') | 
 # Must match what the prepared SVM's LIFs actually carry; Trident validates
 # the value against its own allowlist. Configurable via ONTAP_SAN_TYPE.
 ontap_storage_san_type: "{{ lookup('env', 'ONTAP_SAN_TYPE') | default('fcp', true) }}"
-
-# Path to the cluster-installed PEM CA bundle (mounted from the ca-bundle
-# ConfigMap in storage-operations-ig / compute-instance-operations-ig). Used
-# when present to verify ONTAP REST discovery calls and to populate
-# TridentBackendConfig.spec.trustedCACertificate when no per-assignment CA is
-# provided.
-ontap_storage_ca_bundle_path: "{{ lookup('env', 'ONTAP_CA_BUNDLE_PATH') | default('/etc/ca-bundle/bundle.pem', true) }}"

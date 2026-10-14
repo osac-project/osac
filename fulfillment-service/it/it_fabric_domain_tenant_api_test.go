@@ -72,6 +72,7 @@ var _ = Describe("FabricDomain tenant API component integration", Label("network
 			Expect(err).ToNot(HaveOccurred())
 			id := response.GetObject().GetId()
 			DeferCleanup(func(cleanupCtx context.Context) {
+				deleteTenantUsers(cleanupCtx, fixture.tenantID)
 				deleteTenant(cleanupCtx, tenants, projects, id, fixture.tenantID)
 			})
 

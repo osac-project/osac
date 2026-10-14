@@ -549,27 +549,7 @@ func createCatalogItemTenantAdminFixture(ctx context.Context) (string, *grpc.Cli
 	Expect(err).NotTo(HaveOccurred())
 	id := created.GetObject().GetId()
 	DeferCleanup(func(ctx context.Context) {
-		// Authentication creates fulfillment User records in the tenant's root project.
-		users := privatev1.NewUsersClient(tool.InternalView().AdminConn())
-		listed, err := users.List(ctx, privatev1.UsersListRequest_builder{Filter: new("this.metadata.tenant == '" + name + "'")}.Build())
-		Expect(err).NotTo(HaveOccurred())
-		for _, user := range listed.GetItems() {
-			_, err = users.Delete(ctx, privatev1.UsersDeleteRequest_builder{Id: user.GetId()}.Build())
-			Expect(err).NotTo(HaveOccurred())
-			Eventually(func(g Gomega) bool {
-				_, err := users.Get(ctx, privatev1.UsersGetRequest_builder{Id: user.GetId()}.Build())
-				if status.Code(err) == codes.NotFound {
-					return true
-				}
-				g.Expect(err).NotTo(HaveOccurred())
-				_, err = users.Signal(ctx, privatev1.UsersSignalRequest_builder{Id: user.GetId()}.Build())
-				if status.Code(err) == codes.NotFound {
-					return true
-				}
-				g.Expect(err).NotTo(HaveOccurred())
-				return false
-			}, time.Minute, time.Second).Should(BeTrue())
-		}
+		deleteTenantUsers(ctx, name)
 		deleteTenant(ctx, tenants, privatev1.NewProjectsClient(tool.InternalView().AdminConn()), id, name)
 	})
 

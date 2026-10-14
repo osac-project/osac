@@ -419,4 +419,86 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 		Expect(err).To(HaveOccurred())
 		computeInstanceId = "" // not created, skip cleanup
 	})
+
+	It("guards deletion of workload-referenced Subnet and SecurityGroup through the API", func() {
+		By("creating a ComputeInstance attached to the READY Subnet and SecurityGroup")
+		computeInstanceId = fmt.Sprintf("test-ci-%s", uuid.New())
+		_, err := computeInstancesClient.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
+			Object: publicv1.ComputeInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-ci-%s", uuid.New()[24:32]),
+				}.Build(),
+				Id: computeInstanceId,
+				Spec: publicv1.ComputeInstanceSpec_builder{
+					Template:     publicv1.ComputeInstanceTemplateReference_builder{Id: computeInstanceTemplateId}.Build(),
+					InstanceType: publicv1.InstanceTypeReference_builder{Name: instanceTypeId}.Build(),
+					RunStrategy:  publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
+					BootDisk: publicv1.ComputeInstanceDisk_builder{
+						SizeGib:     proto.Int32(20),
+						StorageTier: publicv1.StorageTierReference_builder{Id: storageTierId}.Build(),
+					}.Build(),
+					DiskImage: &publicv1.DiskImageReference{Id: diskImageId},
+					NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+						publicv1.ComputeNetworkAttachment_builder{
+							Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),
+							SecurityGroups: []*publicv1.SecurityGroupLocalReference{
+								publicv1.SecurityGroupLocalReference_builder{Id: securityGroupId}.Build(),
+							},
+						}.Build(),
+					},
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		By("rejecting Subnet deletion while the ComputeInstance references it")
+		_, err = subnetsClient.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{
+			Id: subnetId,
+		}.Build())
+		Expect(err).To(HaveOccurred())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+		getResp, err := subnetsClient.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetId}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(getResp.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeFalse())
+
+		By("rejecting SecurityGroup deletion while the ComputeInstance references it")
+		_, err = securityGroupsClient.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{
+			Id: securityGroupId,
+		}.Build())
+		Expect(err).To(HaveOccurred())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+		sgGetResp, err := securityGroupsClient.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: securityGroupId}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(sgGetResp.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeFalse())
+
+		By("deleting the ComputeInstance and waiting for its removal")
+		deleteAndWaitForComputeInstanceFixtureResource(ctx,
+			func(deleteCtx context.Context) error {
+				_, err := computeInstancesClient.Delete(deleteCtx, publicv1.ComputeInstancesDeleteRequest_builder{
+					Id: computeInstanceId,
+				}.Build())
+				return err
+			},
+			func(getCtx context.Context) error {
+				_, err := computeInstancesClient.Get(getCtx, publicv1.ComputeInstancesGetRequest_builder{
+					Id: computeInstanceId,
+				}.Build())
+				return err
+			})
+		computeInstanceId = "" // already removed; skip redundant cleanup
+
+		By("deleting the released Subnet and SecurityGroup in dependency order")
+		deleteComputeInstanceFixtureResource(ctx, func(deleteCtx context.Context) error {
+			_, err := securityGroupsClient.Delete(deleteCtx, privatev1.SecurityGroupsDeleteRequest_builder{
+				Id: securityGroupId,
+			}.Build())
+			return err
+		})
+		deleteComputeInstanceFixtureResource(ctx, func(deleteCtx context.Context) error {
+			_, err := subnetsClient.Delete(deleteCtx, privatev1.SubnetsDeleteRequest_builder{
+				Id: subnetId,
+			}.Build())
+			return err
+		})
+	})
 })

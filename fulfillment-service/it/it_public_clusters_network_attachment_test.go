@@ -471,4 +471,86 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 		Expect(status.Message()).To(ContainSubstring("subnet is immutable"))
 	})
+
+	It("Rejects updating the security groups in network attachment after cluster creation", func() {
+		By("creating a cluster with a subnet and security group attachment")
+		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
+			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
+				}.Build(),
+				Spec: publicv1.ClusterSpec_builder{
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets: testClusterNodeSets(bmitName, 3),
+					NetworkAttachment: publicv1.ClusterNetworkAttachment_builder{
+						Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),
+						SecurityGroups: []*publicv1.SecurityGroupLocalReference{
+							publicv1.SecurityGroupLocalReference_builder{Id: securityGroupId}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		object := createResponse.GetObject()
+		DeferCleanup(func() {
+			_, _ = clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{
+				Id: object.GetId(),
+			}.Build())
+		})
+
+		By("attempting to replace the attachment security groups")
+		otherSgResp, err := securityGroupsClient.Create(ctx, privatev1.SecurityGroupsCreateRequest_builder{
+			Object: privatev1.SecurityGroup_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   fmt.Sprintf("test-sg-%s", uuid.New()[24:32]),
+					Tenant: usersGroup,
+				}.Build(),
+				Spec: privatev1.SecurityGroupSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkId}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		otherSgId := otherSgResp.GetObject().GetId()
+		DeferCleanup(func() {
+			_, _ = securityGroupsClient.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{
+				Id: otherSgId,
+			}.Build())
+		})
+		setSecurityGroupReady(ctx, securityGroupsClient, otherSgId)
+
+		_, err = clustersClient.Update(ctx, publicv1.ClustersUpdateRequest_builder{
+			Object: publicv1.Cluster_builder{
+				Id: object.GetId(),
+				Metadata: publicv1.Metadata_builder{
+					Name: object.GetMetadata().GetName(),
+				}.Build(),
+				Spec: publicv1.ClusterSpec_builder{
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets: testClusterNodeSets(bmitName, 3),
+					NetworkAttachment: publicv1.ClusterNetworkAttachment_builder{
+						Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),
+						SecurityGroups: []*publicv1.SecurityGroupLocalReference{
+							publicv1.SecurityGroupLocalReference_builder{Id: otherSgId}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.network_attachment.security_groups"}},
+		}.Build())
+		Expect(err).To(HaveOccurred())
+		status, ok := grpcstatus.FromError(err)
+		Expect(ok).To(BeTrue())
+		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+		Expect(status.Message()).To(ContainSubstring("security groups are immutable"))
+
+		By("confirming the stored attachment is unchanged")
+		stored, err := clustersClient.Get(ctx, publicv1.ClustersGetRequest_builder{Id: object.GetId()}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		attachment := stored.GetObject().GetSpec().GetNetworkAttachment()
+		Expect(attachment.GetSubnet().GetId()).To(Equal(subnetId))
+		Expect(attachment.GetSecurityGroups()).To(HaveLen(1))
+		Expect(attachment.GetSecurityGroups()[0].GetId()).To(Equal(securityGroupId))
+	})
 })

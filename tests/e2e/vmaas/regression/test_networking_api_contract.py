@@ -10,13 +10,8 @@ from tests.e2e.core.helpers import assert_grpc_method_unavailable, assert_grpc_r
 
 pytestmark = pytest.mark.regression
 
-PUBLIC_NETWORKING_SERVICES = [
-    "VirtualNetworks",
-    "Subnets",
-    "ExternalIPs",
-    "ExternalIPAttachments",
-    "NATGateways",
-]
+PUBLIC_NETWORKING_SERVICES = ["VirtualNetworks", "Subnets", "ExternalIPs", "ExternalIPAttachments", "NATGateways"]
+
 
 # SecurityGroups.Update is a scoped exception for rule updates (OSAC-5679).
 @pytest.mark.parametrize(
@@ -38,9 +33,7 @@ def test_public_security_groups_scoped_update_rejects_invalid_input(jwt_grpc_ten
     persistence; rule-edit journeys live in the SecurityGroup lifecycle suites.
     """
     with pytest.raises(subprocess.CalledProcessError) as exc_info:
-        jwt_grpc_tenant1.call(
-            service=f"{PUBLIC_API}.SecurityGroups/Update", data={"object": {}}
-        )
+        jwt_grpc_tenant1.call(service=f"{PUBLIC_API}.SecurityGroups/Update", data={"object": {}})
     assert_grpc_rejected(exc_info, "InvalidArgument")
 
 

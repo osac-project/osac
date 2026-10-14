@@ -5,7 +5,7 @@
   when: netris_session_cookie is not defined
 
 - name: Get existing V-Nets
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/vnet"
     method: GET
     headers:
@@ -90,7 +90,7 @@
     - vnet_ports is defined
 
 - name: Create V-Net
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/vnet"
     method: POST
     headers:

@@ -90,6 +90,20 @@ shared controller connection fields.
 {{- $derived | toYaml -}}
 {{- end }}
 
+{{/* Return true when a top-level config source attempts to set a protected key. */}}
+{{- define "osac-aap.isProtectedNetrisKey" -}}
+{{- $normalized := .key | lower | replace "_" "" | replace "-" "" | replace "." "" -}}
+{{- $contract := .root.Files.Get "files/netris-protected-inputs.json" | fromJson -}}
+{{- $matched := false -}}
+{{- range $input := $contract.protected_inputs -}}
+  {{- range $alias := $input.aliases -}}
+    {{- if eq $normalized ($alias | lower | replace "_" "" | replace "-" "" | replace "." "") }}{{- $matched = true -}}{{ end -}}
+  {{- end -}}
+  {{- if eq $normalized ($input.canonical_environment | lower | replace "_" "" | replace "-" "" | replace "." "") }}{{- $matched = true -}}{{ end -}}
+{{- end -}}
+{{- if $matched }}true{{ end -}}
+{{- end }}
+
 {{/*
 Shared wait-for-aap readiness script (bootstrap-job.yaml, create-api-token.yaml).
 Wall-clock-bounded (1500s epoch deadline, not iteration count) since each

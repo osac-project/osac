@@ -511,6 +511,7 @@ csi-render-test: helm-deps ## Verify CSI and storage-provider chart rendering
 			--set operator.vendorControllers.lvms=42; \
 		helm template osac $(OSAC_CHART) \
 			--values charts/osac/ci/default-values.yaml \
+			--set-string global.clusterDomain=example.com \
 			--set operator.enabled=false \
 			--set operator.networkManagers.enabled=true \
 			--set csiDriver.enabled=true \
@@ -575,6 +576,10 @@ csi-render-test: helm-deps ## Verify CSI and storage-provider chart rendering
 fulfillment-trust-render-test: helm-deps ## Check verified fulfillment transport renders
 	python3 scripts/test-fulfillment-trust-render.py
 
+.PHONY: metering-auth-render-test
+metering-auth-render-test: helm-deps ## Check metering service-account auth renders in supported profiles
+	python3 scripts/test-metering-auth-render.py
+
 .PHONY: mce-render-test
 mce-render-test: ## Check disabled MCE defaults, explicit enablement, and CaaS inheritance
 	uv run --project .. python scripts/test-mce-render.py
@@ -588,7 +593,7 @@ dev-full-render-test: helm-deps ## Check dev-full TLS and Helm post-rendering
 	./scripts/test-dev-full-render.sh
 
 .PHONY: helm-validate
-helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test fulfillment-auth-test mce-render-test dev-full-render-test ## Validate all charts (lint + template)
+helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test mce-render-test dev-full-render-test ## Validate all charts (lint + template)
 	@for d in values/*/; do \
 		infra="$${d}infra.yaml"; \
 		[ -f "$$infra" ] && echo "Validating $$infra..." && \

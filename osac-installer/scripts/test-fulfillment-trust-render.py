@@ -46,6 +46,8 @@ def render(
         str(CHART / "ci/default-values.yaml"),
         "--set",
         "global.osacDeploymentId=ci/osac",
+        "--set-string",
+        "global.clusterDomain=example.com",
         "--set",
         "metering.enabled=true",
         "--set",

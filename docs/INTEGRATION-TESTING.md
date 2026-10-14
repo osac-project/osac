@@ -526,17 +526,19 @@ Touched-area requirements: [component guide](../osac-metering/AGENTS.md#integrat
 
 | Tier | Location / command | Exercises for real | Faked or omitted |
 |---|---|---|---|
-| Unit | Co-located Ginkgo tests in `schema/`, `metering-service/`, and `adapters/`; `make test` | Schema, mapping, runner, retry, ordering, and adapter behavior in-process | Kafka, fulfillment Watch, and most external services are mocked. |
+| Unit | Co-located Ginkgo tests in `schema/`, `metering-service/`, and `adapters/`, plus `metering-service/cmd/metering-service`; `make test` | Schema, mapping, runner, retry, ordering, adapter behavior, Keycloak token acquisition/use/cache/refresh, credential rotation, and OAuth CA-bundle rotation | Kafka, fulfillment Watch, and most external services are mocked; OAuth uses a local TLS test endpoint. |
 | Component integration (database) | `metering-service/internal/projection/postgres_test.go`; included by `make test` | A real PostgreSQL testcontainer, schema, persistence, versioning, and queries | Kafka and fulfillment event delivery are not exercised. `SKIP_DB_TESTS` disables this tier. |
 | Component integration | No dedicated real-Kafka component suite currently exists | — | Kafka, CloudEvents delivery, fulfillment Watch, offset commits, retries, and DLQ behavior are currently tested with mocks. |
 | Contract | No dedicated contract suite; track [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843)/[OSAC-4846](https://redhat.atlassian.net/browse/OSAC-4846) for fulfillment Watch and Kafka boundaries | No deployed Watch or Kafka protocol endpoint is exercised | Mock streams and Kafka mocks are used. |
 | E2E | Cross-component OSAC metering/E2E deployment | The deployed metering pipeline and its configured Kafka/provider dependencies | Depends on the installer environment and enabled metering path. |
+| Helm render | `make -C osac-installer metering-auth-render-test` | Issuer ConfigMap, existing credential Secret references, and absence of projected service-account token wiring in the vmaas-ci, caas-ci, full-ci, and cudn-evpn-netris-test profiles | Does not verify deployed cross-cluster OAuth; QE owns that check through [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843). |
 
 ### Coverage notes
 
 - **Event schema or transition mapping:** Schema changes affect `schema/`, `metering-service/`, and `adapters/`.
 - **Projection/database code:** Do not set `SKIP_DB_TESTS` when validating database behavior.
-- **Fulfillment client TLS:** `metering-service/cmd/metering-service/verified_fulfillment_test.go` probes a local TLS endpoint with valid and invalid CA/hostname cases and checks bundle rotation and last-client retention. The production render check covers the CA mount and gate; the deployed Watch contract remains with [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
+- **Fulfillment client TLS:** `metering-service/cmd/metering-service/verified_fulfillment_test.go` probes a local TLS endpoint with valid and invalid CA/hostname cases and checks bundle rotation and last-client retention. `fulfillment_oauth_test.go` also verifies that the OAuth HTTP client reloads the mounted CA bundle before its next token request. The production render check covers the CA mount and gate; the deployed Watch contract remains with [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
+- **Fulfillment client OAuth:** `metering-service/cmd/metering-service/fulfillment_oauth_test.go` covers client-credentials token acquisition, gRPC bearer metadata, token reuse and refresh, Secret rotation, and sanitized errors. The installer profile render checks configuration for all supported metering profiles. Deployed cross-cluster authentication remains QE work through [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
 - **Kafka producer/consumer, CloudEvents transport, offsets, retries, or DLQ:** Mock Kafka tests alone do not prove the pipeline boundary.
 - **Fulfillment Watch or gRPC event ingestion:** Mock streams validate local handling, not the wire contract.
 - **Provider adapters:** The shared runner must remain the owner of ordering, retry, deduplication, and DLQ behavior.

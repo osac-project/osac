@@ -24,7 +24,6 @@ service:
     exchangeClientId: https://mcp.example.com/
     exchangeCredentialsSecret: ci-mcp-exchange-credentials
   auth:
-    issuerUrl: https://keycloak.example.com/realms/osac
     controllerCredentials:
     - secret:
         name: fulfillment-controller-credentials

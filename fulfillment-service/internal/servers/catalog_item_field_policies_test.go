@@ -222,4 +222,50 @@ var _ = Describe("Shared typed-policy helper", func() {
 		Expect(bareMetalSpec.GetNetworkAttachments()).To(HaveLen(1))
 	})
 
+	It("applies add-on operator list policies with empty input semantics", func() {
+		lockedReference := privatev1.AddOnOperatorReference_builder{Id: "locked-id", Name: "locked"}.Build()
+		lockedFields := privatev1.ClusterCatalogItemFields_builder{
+			AddOnOperators: privatev1.AddOnOperatorReferenceListFieldPolicy_builder{
+				Locked: privatev1.AddOnOperatorReferenceList_builder{
+					Items: []*privatev1.AddOnOperatorReference{lockedReference},
+				}.Build(),
+			}.Build(),
+		}.Build()
+
+		lockedSpec := &privatev1.ClusterSpec{}
+		Expect(applyClusterCatalogItemPolicies(lockedSpec, privatev1.ClusterCatalogItem_builder{Fields: lockedFields}.Build().GetFields())).To(Succeed())
+		Expect(lockedSpec.GetAddOnOperators()).To(HaveLen(1))
+		Expect(lockedSpec.GetAddOnOperators()[0].GetId()).To(Equal("locked-id"))
+
+		suppliedLockedSpec := privatev1.ClusterSpec_builder{
+			AddOnOperators: []*privatev1.AddOnOperatorReference{
+				privatev1.AddOnOperatorReference_builder{Id: "caller-id", Name: "caller"}.Build(),
+			},
+		}.Build()
+		Expect(applyClusterCatalogItemPolicies(suppliedLockedSpec, privatev1.ClusterCatalogItem_builder{Fields: lockedFields}.Build().GetFields())).To(MatchError(ContainSubstring("field is not editable")))
+
+		defaultReference := privatev1.AddOnOperatorReference_builder{Id: "default-id", Name: "default"}.Build()
+		editableFields := privatev1.ClusterCatalogItemFields_builder{
+			AddOnOperators: privatev1.AddOnOperatorReferenceListFieldPolicy_builder{
+				Editable: privatev1.EditableAddOnOperatorReferenceList_builder{
+					DefaultValue: privatev1.AddOnOperatorReferenceList_builder{
+						Items: []*privatev1.AddOnOperatorReference{defaultReference},
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build()
+
+		emptyEditableSpec := privatev1.ClusterSpec{}
+		emptyEditableSpec.SetAddOnOperators([]*privatev1.AddOnOperatorReference{})
+		Expect(applyClusterCatalogItemPolicies(&emptyEditableSpec, privatev1.ClusterCatalogItem_builder{Fields: editableFields}.Build().GetFields())).To(Succeed())
+		Expect(emptyEditableSpec.GetAddOnOperators()).To(HaveLen(1))
+		Expect(emptyEditableSpec.GetAddOnOperators()[0].GetName()).To(Equal("default"))
+
+		callerReference := privatev1.AddOnOperatorReference_builder{Id: "caller-id", Name: "caller"}.Build()
+		callerEditableSpec := privatev1.ClusterSpec_builder{AddOnOperators: []*privatev1.AddOnOperatorReference{callerReference}}.Build()
+		Expect(applyClusterCatalogItemPolicies(callerEditableSpec, privatev1.ClusterCatalogItem_builder{Fields: editableFields}.Build().GetFields())).To(Succeed())
+		Expect(callerEditableSpec.GetAddOnOperators()).To(HaveLen(1))
+		Expect(callerEditableSpec.GetAddOnOperators()[0]).To(BeIdenticalTo(callerReference))
+	})
+
 })

@@ -18,6 +18,7 @@ package osac.private.v1;
 import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
 import "google/protobuf/any.proto";
+import "osac/private/v1/add_on_operator_type.proto";
 import "osac/private/v1/baremetal_instance_common_type.proto";
 import "osac/private/v1/baremetal_instance_type_type.proto";
 import "osac/private/v1/cluster_common_type.proto";
@@ -271,6 +272,26 @@ message BareMetalNetworkAttachmentListFieldPolicy {
 // Configures editable bare metal network attachments.
 message EditableBareMetalNetworkAttachmentList {
   BareMetalNetworkAttachmentList default_value = 1;
+}
+
+// Wraps add-on operator references for use in a field policy.
+message AddOnOperatorReferenceList {
+  repeated AddOnOperatorReference items = 1 [(buf.validate.field).repeated.max_items = 32];
+}
+
+// Defines whether add-on operator references are locked or editable.
+message AddOnOperatorReferenceListFieldPolicy {
+  oneof behavior {
+    option (buf.validate.oneof).required = true;
+
+    AddOnOperatorReferenceList locked = 1;
+    EditableAddOnOperatorReferenceList editable = 2;
+  }
+}
+
+// Configures editable add-on operator references.
+message EditableAddOnOperatorReferenceList {
+  AddOnOperatorReferenceList default_value = 1;
 }
 
 // Defines whether a template parameter is locked or editable.

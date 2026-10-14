@@ -141,28 +141,54 @@ oc apply --server-side -f oc-mirror-workspace/working-dir/cluster-resources/idms
 oc apply --server-side -f oc-mirror-workspace/working-dir/cluster-resources/itms-oc-mirror.yaml
 ```
 
-### Step 3 — Record the CatalogSource name
+### Step 3 — Rename the CatalogSource to `redhat-operators`
 
-The generated `CatalogSource` name is used when installing OSAC with
-Helm.  Use the explicit name produced by `oc-mirror`:
+All seven Subscription templates in the `osac-deps` chart hard-code
+`source: redhat-operators` (see [Current chart limitation](#current-chart-limitation)).
+The `CatalogSource` that OLM resolves against must therefore be named
+`redhat-operators` in `openshift-marketplace`.
+
+`oc-mirror` generates a CatalogSource whose name encodes the index
+(e.g. `cs-redhat-operator-index-v4-22`).  Rename it before applying:
 
 ```bash
-CS_NAME="cs-redhat-operator-index-v4-22"
-oc get catalogsource "$CS_NAME" -n openshift-marketplace
-echo "Use --set catalogSource=${CS_NAME}"
+# Adjust the generated CatalogSource name to match what
+# the Subscription templates expect.
+sed -i 's/name: cs-redhat-operator-index-v4-22/name: redhat-operators/' \
+  oc-mirror-workspace/working-dir/cluster-resources/cs-redhat-operator-index-v4-22.yaml
+
+oc apply --server-side -f \
+  oc-mirror-workspace/working-dir/cluster-resources/cs-redhat-operator-index-v4-22.yaml
+
+oc get catalogsource redhat-operators -n openshift-marketplace
 ```
+
+> **Why rename?** The chart does not expose a `catalogSource` value
+> that templates into Subscription `.spec.source`.  All seven
+> Subscription templates emit `source: redhat-operators` literally.
+> Naming the mirrored CatalogSource `redhat-operators` is the
+> simplest way to make Subscriptions resolve without chart changes.
+> If the connected-environment default `redhat-operators`
+> CatalogSource still exists, delete it first so the mirrored one
+> takes its place.
 
 ### Step 4 — Install operators via Helm (osac-deps)
 
-Pass the mirrored catalog name to the `osac-deps` chart:
+Install the chart, overriding only the `cliImage` for disconnected
+pull (the only global value consumed by the chart):
 
 ```bash
 helm upgrade --install osac-deps osac-installer/charts/osac-deps \
   --namespace osac-deps --create-namespace \
-  --set catalogSource=${CS_NAME} \
-  --set catalogSourceNamespace=openshift-marketplace \
   --set cliImage=<mirror-registry>:8443/openshift/origin-cli:4.20
 ```
+
+> **Note**: the chart does not expose `catalogSource` or
+> `catalogSourceNamespace` values.  All seven Subscription
+> templates hard-code `source: redhat-operators` and
+> `sourceNamespace: openshift-marketplace`.  The `cliImage` value
+> is used by the chart's pre-install/upgrade hook Jobs (e.g.
+> `wait-cert-manager`, `wait-aap`, `approve-aap-installplan`).
 
 ## Verification (BDD Scenarios)
 
@@ -189,13 +215,14 @@ Feature: OLM operator mirroring for disconnected OSAC
     Then the CatalogSource "cs-redhat-operator-index-v4-22" has connectionState "READY"
 
   Scenario: Operator subscriptions resolve from the mirrored catalog
-    Given the osac-deps Helm chart is installed with catalogSource override
+    Given the osac-deps Helm chart is installed
+    And the mirrored CatalogSource is named "redhat-operators"
     When I list Subscriptions across operator namespaces
     Then each Subscription has status "AtLatestKnown"
-    And each non-exempt Subscription references the mirrored CatalogSource
-    # Note: the AAP Subscription (aap.yaml) and cert-manager
-    # Subscription (cert-manager.yaml) hard-code source
-    # "redhat-operators"; verify those separately.
+    And every Subscription references source "redhat-operators"
+    # All seven Subscription templates hard-code
+    # source: redhat-operators — the mirrored CatalogSource
+    # must use that name (see Step 3).
 
   Scenario: Operator CSVs reach Succeeded phase
     When I list ClusterServiceVersions in operator namespaces
@@ -244,32 +271,16 @@ for crd in certificates.cert-manager.io \
   oc get crd "$crd" -o name 2>/dev/null && echo "  OK: $crd" || echo "  MISSING: $crd"
 done
 
-# 5. Verify Subscriptions reference the mirrored catalog
-# Note: the AAP (aap.yaml) and cert-manager (cert-manager.yaml)
-# Subscription templates hard-code source "redhat-operators";
-# verify those separately below.
+# 5. Verify all Subscriptions reference "redhat-operators"
+# All seven Subscription templates hard-code
+# source: redhat-operators.  The mirrored CatalogSource must
+# use that name (see Step 3).  Any Subscription pointing
+# elsewhere indicates a manual override or stale resource.
 oc get subscriptions -A -o json | \
   jq -r '.items[] |
-    select(.spec.source=="redhat-operators") |
-    select(
-      .spec.name != "ansible-automation-platform-operator"
-      and .spec.name != "openshift-cert-manager-operator"
-    ) |
-    .metadata.name' | \
-  xargs -I{} echo "WARNING: {} still uses redhat-operators"
-
-# Verify hard-coded Subscription sources independently.
-# Look up by spec.name (the OLM package name) so the check
-# works regardless of the Subscription metadata.name chosen
-# by the Helm chart.
-oc get subscriptions -n ansible-aap -o json | \
-  jq -r '.items[] |
-    select(.spec.name=="ansible-automation-platform-operator")
-    | "\(.metadata.name): source=\(.spec.source)"'
-oc get subscriptions -n cert-manager-operator -o json | \
-  jq -r '.items[] |
-    select(.spec.name=="openshift-cert-manager-operator")
-    | "\(.metadata.name): source=\(.spec.source)"'
+    select(.spec.source != "redhat-operators") |
+    "\(.metadata.name) (\(.metadata.namespace)): \
+source=\(.spec.source) — expected redhat-operators"'
 ```
 
 ## Troubleshooting
@@ -282,19 +293,52 @@ oc get subscriptions -n cert-manager-operator -o json | \
 | `oc-mirror` fails with `manifest unknown` | Registry disk full or partial upload | Check registry storage; re-run `oc-mirror` (idempotent) |
 | `maxVersion` mismatch for AAP | Version format includes build metadata | Use exact string `'2.6.0+0.1787258256'` with quotes in YAML |
 
+## Current chart limitation
+
+All seven Subscription templates in `osac-deps` hard-code
+`source: redhat-operators` and
+`sourceNamespace: openshift-marketplace`.  The chart does **not**
+expose `catalogSource` or `catalogSourceNamespace` values that
+template into those fields.
+
+| Template | Subscription `.spec.source` | Templated? |
+|----------|----------------------------|------------|
+| `aap.yaml` | `redhat-operators` | No |
+| `amq-streams.yaml` | `redhat-operators` | No |
+| `cert-manager.yaml` | `redhat-operators` | No |
+| `cnv.yaml` | `redhat-operators` | No |
+| `lvms.yaml` | `redhat-operators` | No |
+| `metallb.yaml` | `redhat-operators` | No |
+| `mce.yaml` | `redhat-operators` | No |
+
+**Consequence for disconnected installs**: the mirrored
+`CatalogSource` must be named `redhat-operators` in
+`openshift-marketplace`, or the Subscriptions cannot resolve.
+See [Step 3](#step-3--rename-the-catalogsource-to-redhat-operators)
+above.
+
+The only global disconnected value consumed by the chart is
+`cliImage`, used by the hook Jobs (`wait-cert-manager`,
+`wait-aap`, `approve-aap-installplan`).
+
 ## Known Gaps / Limitations
 
-1. **oc-mirror v2 catalog filtering** — `oc-mirror` v2 currently mirrors
-   the full catalog index even when individual packages are specified.
-   The `catalog-filter` library prunes unused packages, but the initial
-   download is still the complete index.
+1. **oc-mirror v2 catalog filtering** — `oc-mirror` v2 currently
+   mirrors the full catalog index even when individual packages
+   are specified.  The `catalog-filter` library prunes unused
+   packages, but the initial download is still the complete index.
 
 2. **OLM v1 transition** — OpenShift 4.22 ships both OLM v0
-   (`CatalogSource`) and OLM v1 (`ClusterCatalog`).  The `oc-mirror`
-   output includes both resource types.  Apply both for forward
-   compatibility.
+   (`CatalogSource`) and OLM v1 (`ClusterCatalog`).  The
+   `oc-mirror` output includes both resource types.  Apply both
+   for forward compatibility.
 
-3. **AAP version pinning** — The AAP operator `maxVersion` contains a
-   build-metadata suffix (`+0.1787258256`).  This is intentional and
-   documented in
+3. **AAP version pinning** — The AAP operator `maxVersion`
+   contains a build-metadata suffix (`+0.1787258256`).  This is
+   intentional and documented in
    [cve-2026-75884-security-exception.md](../cve-2026-75884-security-exception.md).
+
+4. **Hard-coded Subscription source** — All seven Subscription
+   templates use `source: redhat-operators` literally.  A future
+   chart change could template this field via a shared value,
+   removing the need to rename the mirrored CatalogSource.

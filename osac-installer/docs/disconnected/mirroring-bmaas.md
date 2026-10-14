@@ -143,9 +143,17 @@ mce:
   osImages:
     - openshiftVersion: "4.22"
       version: "422.94.202503170640-0"
-      url: "https://<bastion-http>:8080/rhcos-4.22-live.x86_64.iso"
+      url: "http://<bastion>:8080/rhcos-4.22-live.x86_64.iso"
       cpuArchitecture: x86_64
 ```
+
+> **HTTP vs HTTPS**: the provisioning network HTTP server on the
+> bastion is typically plain HTTP (port 8080) because it serves
+> only RHCOS live ISOs to Ironic agents on the isolated
+> provisioning network.  If you use HTTPS instead, every
+> provisioning agent must trust the server's CA — add the CA
+> bundle to the `AgentServiceConfig` or to the cluster-wide
+> proxy trust bundle.
 
 Re-apply the `osac-infra` chart to update the `AgentServiceConfig`:
 
@@ -159,8 +167,7 @@ Verify the rendered `AgentServiceConfig` contains the expected
 `osImages` entries:
 
 ```bash
-oc get agentserviceconfig agent \
-  -o jsonpath='{.spec.osImages}' | jq .
+oc get agentserviceconfig agent -o json | jq '.spec.osImages'
 ```
 
 Each entry must reference a URL accessible from the provisioning

@@ -192,10 +192,13 @@ OSAC installation follows a strict three-phase ordering:
 helm upgrade --install osac-deps \
   oci://ghcr.io/osac-project/charts/osac-deps --version 0.0.21 \
   --namespace osac-deps --create-namespace \
-  --set catalogSource=cs-redhat-operator-index-v4-22 \
-  --set catalogSourceNamespace=openshift-marketplace \
   --set cliImage=<mirror-registry>:8443/openshift/origin-cli:4.20
 ```
+
+> The mirrored `CatalogSource` must be named `redhat-operators`
+> in `openshift-marketplace` — all seven Subscription templates
+> hard-code that name.  See
+> [mirroring-operators.md § Step 3](mirroring-operators.md#step-3--rename-the-catalogsource-to-redhat-operators).
 
 Wait for all operator CSVs to reach `Succeeded`:
 
@@ -231,19 +234,19 @@ helm upgrade --install osac \
 
 ### Disconnected Helm Values Reference
 
-The following Helm values control disconnected behavior.  These are the
-**only** disconnected-specific overrides; there is no `global.imageRegistry`
-value.
+The following Helm value controls disconnected behavior.  There is no
+`global.imageRegistry` value; all other image resolution uses IDMS/ITMS
+at the kubelet/CRI-O level.
 
 | Value | Default | Disconnected override | Scope |
 | ----- | ------- | --------------------- | ----- |
-| `catalogSource` | `redhat-operators` | Name of the mirrored `CatalogSource` CR (e.g. `cs-redhat-operator-index-v4-22`) | `osac-deps` |
-| `catalogSourceNamespace` | `openshift-marketplace` | Namespace of the `CatalogSource` | `osac-deps` |
 | `cliImage` | `quay.io/openshift/origin-cli:4.20.0` | Mirrored origin-cli image reference | `osac-deps`, `osac-infra` |
 
-> **Important**: Image resolution for all other images uses IDMS/ITMS at the
-> kubelet/CRI-O level.  Pods reference their upstream image names and the
-> node daemon transparently rewrites them to the mirror registry.
+> **CatalogSource naming**: the chart does not expose
+> `catalogSource` or `catalogSourceNamespace` values — all seven
+> Subscription templates hard-code `source: redhat-operators`.
+> The mirrored CatalogSource must use that name.  See
+> [mirroring-operators.md § Current chart limitation](mirroring-operators.md#current-chart-limitation).
 
 ### Helm Weight Ordering (osac-deps)
 
@@ -278,11 +281,12 @@ Feature: Core component mirroring and deployment for disconnected OSAC
     And the pull succeeds without error
 
   Scenario: Phase 1a deploys operators with mirrored catalog
-    Given the osac-deps chart is installed with catalogSource override
+    Given the mirrored CatalogSource is named "redhat-operators"
+    And the osac-deps chart is installed
     When I check Subscription sources
-    Then all Subscriptions except AAP reference the mirrored CatalogSource
-    # Note: the AAP Subscription template hard-codes
-    # source "redhat-operators" in the osac-deps chart
+    Then all Subscriptions reference source "redhat-operators"
+    # All seven templates hard-code source: redhat-operators;
+    # the mirrored CatalogSource must use that name.
 
   Scenario: Phase 1b creates shared services
     Given the osac-infra chart is installed
@@ -361,8 +365,10 @@ helm list -A | grep osac
 2. **No `global.imageRegistry` value** — OSAC does not expose a global
    image registry override in its Helm values.  Disconnected image
    resolution relies entirely on IDMS/ITMS at the kubelet/CRI-O level.
-   The only disconnected-specific Helm values are `catalogSource`,
-   `catalogSourceNamespace`, and `cliImage`.
+   The only disconnected-specific Helm value consumed by the chart
+   is `cliImage`.  The mirrored CatalogSource must be named
+   `redhat-operators` because all Subscription templates hard-code
+   that source name.
 
 3. **PostgreSQL pinned by digest** — The PostgreSQL image is referenced
    by digest (`@sha256:...`) rather than tag.  This ensures exact version

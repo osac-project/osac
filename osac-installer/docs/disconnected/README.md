@@ -63,8 +63,8 @@ Mirror OSAC dependency and core component images:
   m360-adapter
 - **Conditional CSI** (4 images): osac-csi-driver + 3 CSI sidecars
 - Bastion laptop workflow for Helm chart deployment
-- Disconnected Helm values: `catalogSource`, `catalogSourceNamespace`,
-  `cliImage`
+- Disconnected Helm value: `cliImage`; CatalogSource naming
+  requirement (all Subscriptions hard-code `redhat-operators`)
 
 ### [Category 1C: Mirroring VMaaS Images](mirroring-vmaas.md)
 
@@ -175,11 +175,15 @@ flowchart TD
    (ImageDigestMirrorSet) and ITMS (ImageTagMirrorSet) at the
    kubelet/CRI-O level.
 
-3. **Three disconnected Helm values** — The only disconnected-specific
-   Helm overrides are:
-   - `catalogSource` — Name of the mirrored CatalogSource
-   - `catalogSourceNamespace` — Namespace of the CatalogSource
+3. **One disconnected Helm value** — The only disconnected-specific
+   Helm override consumed by the `osac-deps` chart is:
    - `cliImage` — Mirrored origin-cli image reference
+
+   All seven Subscription templates hard-code
+   `source: redhat-operators`.  The mirrored CatalogSource must
+   be named `redhat-operators` in `openshift-marketplace` so that
+   Subscriptions resolve correctly.  See
+   [mirroring-operators.md § Current chart limitation](mirroring-operators.md#current-chart-limitation).
 
 4. **Bastion laptop for OCI Helm charts** — `oc-mirror` v2 supports
    `mirror.helm` for local or repository-index charts, but cannot

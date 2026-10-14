@@ -15,11 +15,6 @@ vast_storage_tenant_config_secret_prefix: "vast-tenant-config-"
 # TLS certificate validation for VAST VMS API calls.
 vast_storage_validate_certs: "{{ lookup('env', 'VAST_VALIDATE_CERTS') | default('true', true) | bool }}"
 
-# API timeout (seconds) passed to the vastdata.vms modules via the vms: connection dict.
-# Delegates to the global storage_provider_api_timeout (default 30s), overridable via
-# VAST_API_TIMEOUT.
-vast_storage_api_timeout: "{{ lookup('env', 'VAST_API_TIMEOUT') | default(storage_provider_api_timeout, true) | int }}"
-
 # Per-tenant VIP pool, referenced by CONVENTION: osac-<tenant>-vippool.
 # OSAC reuses the pool if it already exists (pre-created by the cloud admin or a
 # prior run). If it is missing and vast_storage_vip_pool_supernet is set, OSAC

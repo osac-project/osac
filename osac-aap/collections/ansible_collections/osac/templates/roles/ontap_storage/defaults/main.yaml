@@ -21,7 +21,3 @@ ontap_storage_san_type: "{{ lookup('env', 'ONTAP_SAN_TYPE') | default('fcp', tru
 # TridentBackendConfig.spec.trustedCACertificate when no per-assignment CA is
 # provided.
 ontap_storage_ca_bundle_path: "{{ lookup('env', 'ONTAP_CA_BUNDLE_PATH') | default('/etc/ca-bundle/bundle.pem', true) }}"
-
-# API timeout (seconds) for ONTAP REST discovery calls. Delegates to the global
-# storage_provider_api_timeout (default 30s), overridable via ONTAP_API_TIMEOUT.
-ontap_storage_api_timeout: "{{ lookup('env', 'ONTAP_API_TIMEOUT') | default(storage_provider_api_timeout, true) | int }}"

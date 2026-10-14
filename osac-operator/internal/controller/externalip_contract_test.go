@@ -21,17 +21,21 @@ import (
 
 func TestExternalIPAllocationPublishesOnlyValidatedResults(t *testing.T) {
 	cases := []struct {
-		name       string
-		address    string
-		generation int64
-		operation  string
-		wantAccept bool
+		name               string
+		address            string
+		annotationAddress  string
+		generation         int64
+		operation          string
+		includeAddressData bool
+		wantAccept         bool
 	}{
-		{name: "valid allocation", address: "198.51.100.1", generation: 2, operation: "external_ip.allocate", wantAccept: true},
-		{name: "out of pool", address: "203.0.113.1", generation: 2, operation: "external_ip.allocate"},
-		{name: "noncanonical address", address: "198.51.100.01", generation: 2, operation: "external_ip.allocate"},
-		{name: "stale generation", address: "198.51.100.1", generation: 1, operation: "external_ip.allocate"},
-		{name: "wrong operation", address: "198.51.100.1", generation: 2, operation: "external_ip.release"},
+		{name: "valid allocation without annotation", address: "198.51.100.1", generation: 2, operation: "external_ip.allocate", includeAddressData: true, wantAccept: true},
+		{name: "artifact wins over conflicting annotation", address: "198.51.100.1", annotationAddress: "198.51.100.2", generation: 2, operation: "external_ip.allocate", includeAddressData: true, wantAccept: true},
+		{name: "annotation cannot replace missing artifact address", annotationAddress: "198.51.100.1", generation: 2, operation: "external_ip.allocate"},
+		{name: "out of pool", address: "203.0.113.1", generation: 2, operation: "external_ip.allocate", includeAddressData: true},
+		{name: "noncanonical address", address: "198.51.100.01", generation: 2, operation: "external_ip.allocate", includeAddressData: true},
+		{name: "stale generation", address: "198.51.100.1", generation: 1, operation: "external_ip.allocate", includeAddressData: true},
+		{name: "wrong operation", address: "198.51.100.1", generation: 2, operation: "external_ip.release", includeAddressData: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -66,9 +70,8 @@ func TestExternalIPAllocationPublishesOnlyValidatedResults(t *testing.T) {
 					Generation: 2,
 					Labels:     map[string]string{osacExternalIPIDLabel: "44444444-4444-4444-8444-444444444444"},
 					Annotations: map[string]string{
-						osacTenantKey:                            "tenant-a",
-						osacExternalIPContractVersionAnnotation:  networkmanager.ExternalIPContractVersionV1,
-						osacExternalIPAllocatedAddressAnnotation: tc.address,
+						osacTenantKey:                           "tenant-a",
+						osacExternalIPContractVersionAnnotation: networkmanager.ExternalIPContractVersionV1,
 					},
 				},
 				Spec: v1alpha1.ExternalIPSpec{Pool: "22222222-2222-4222-8222-222222222222"},
@@ -79,6 +82,9 @@ func TestExternalIPAllocationPublishesOnlyValidatedResults(t *testing.T) {
 					State:                v1alpha1.ExternalIPStatePending,
 				},
 			}
+			if tc.annotationAddress != "" {
+				current.Annotations[osacExternalIPAllocatedAddressAnnotation] = tc.annotationAddress
+			}
 			kubeClient := fake.NewClientBuilder().
 				WithScheme(scheme).
 				WithObjects(pool, current).
@@ -86,12 +92,16 @@ func TestExternalIPAllocationPublishesOnlyValidatedResults(t *testing.T) {
 				Build()
 			reconciler := &ExternalIPReconciler{APIReader: kubeClient}
 			snapshot := current.DeepCopy()
+			allocationData := map[string]any{}
+			if tc.includeAddressData {
+				allocationData["address"] = tc.address
+			}
 			result := provisioning.ProvisionStatusWithExtraVars{
 				ProvisionStatus: provisioning.ProvisionStatus{JobID: "allocation-job", State: v1alpha1.JobStateSucceeded},
 				ExtraVars: map[string]any{"osac_result": map[string]any{
 					"schemaVersion": "v1", "operation": tc.operation,
 					"resourceUID": string(current.UID), "observedGeneration": tc.generation,
-					"data": map[string]any{},
+					"data": allocationData,
 				}},
 			}
 			poolContext := provisioning.ExternalIPPoolContext{
@@ -114,6 +124,9 @@ func TestExternalIPAllocationPublishesOnlyValidatedResults(t *testing.T) {
 				if snapshot.Status.Address != "" || snapshot.Status.State != v1alpha1.ExternalIPStatePending {
 					t.Fatalf("rejected result changed allocation status: %#v", snapshot.Status)
 				}
+			}
+			if snapshot.Annotations[osacExternalIPAllocatedAddressAnnotation] != tc.annotationAddress {
+				t.Fatalf("allocation acceptance changed the address annotation: %q", snapshot.Annotations[osacExternalIPAllocatedAddressAnnotation])
 			}
 		})
 	}

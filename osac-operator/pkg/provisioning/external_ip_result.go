@@ -8,19 +8,19 @@ import (
 
 const externalIPResultKey = "osac_result"
 
-// ValidateExternalIPResult checks the v1 AAP result identity and empty data payload.
+// ValidateExternalIPResult checks the v1 AAP result identity and operation data.
 func ValidateExternalIPResult(
 	outputs map[string]any,
 	operation string,
 	resourceUID string,
 	generation int64,
-) error {
+) (string, error) {
 	if resourceUID == "" || generation < 0 {
-		return fmt.Errorf("ExternalIP UID and nonnegative generation are required")
+		return "", fmt.Errorf("ExternalIP UID and nonnegative generation are required")
 	}
 	encoded, err := json.Marshal(outputs[externalIPResultKey])
 	if err != nil {
-		return fmt.Errorf("ExternalIP result is malformed: %w", err)
+		return "", fmt.Errorf("ExternalIP result is malformed: %w", err)
 	}
 	var result struct {
 		SchemaVersion      string                     `json:"schemaVersion"`
@@ -30,14 +30,32 @@ func ValidateExternalIPResult(
 		Data               map[string]json.RawMessage `json:"data"`
 	}
 	if err := json.Unmarshal(encoded, &result); err != nil {
-		return fmt.Errorf("ExternalIP result is malformed: %w", err)
+		return "", fmt.Errorf("ExternalIP result is malformed: %w", err)
 	}
 	if result.SchemaVersion != "v1" || result.Operation != operation ||
 		result.ResourceUID != resourceUID || result.ObservedGeneration == nil ||
-		*result.ObservedGeneration != generation || result.Data == nil || len(result.Data) != 0 {
-		return fmt.Errorf("ExternalIP result does not match the current operation and resource")
+		*result.ObservedGeneration != generation || result.Data == nil {
+		return "", fmt.Errorf("ExternalIP result does not match the current operation and resource")
 	}
-	return nil
+	switch operation {
+	case "external_ip.allocate":
+		encodedAddress, ok := result.Data["address"]
+		if !ok {
+			return "", fmt.Errorf("ExternalIP allocation result has no address")
+		}
+		var address string
+		if err := json.Unmarshal(encodedAddress, &address); err != nil || address == "" {
+			return "", fmt.Errorf("ExternalIP allocation result address is invalid")
+		}
+		return address, nil
+	case "external_ip.release":
+		if len(result.Data) != 0 {
+			return "", fmt.Errorf("ExternalIP release result data must be empty")
+		}
+		return "", nil
+	default:
+		return "", fmt.Errorf("unsupported ExternalIP operation %q", operation)
+	}
 }
 
 // ValidateExternalIPPoolCIDR validates the IPv4 range accepted by the ExternalIP contract.

@@ -187,9 +187,6 @@ func (r *ExternalIPReconciler) updateStatusWithRetry(
 		}
 		if latest.Annotations[osacExternalIPContractVersionAnnotation] == networkmanager.ExternalIPContractVersionV1 &&
 			computed.State == v1alpha1.ExternalIPStateAllocated && computed.Phase == v1alpha1.ExternalIPPhaseReady {
-			if latest.Annotations[osacExternalIPAllocatedAddressAnnotation] != computed.Address {
-				return fmt.Errorf("ExternalIP allocated address changed before status was written")
-			}
 			latestJob := provisioning.FindLatestJobByType(latest.Status.ProvisioningJobs, v1alpha1.JobTypeProvision)
 			expectedJob := provisioning.FindLatestJobByType(computed.ProvisioningJobs, v1alpha1.JobTypeProvision)
 			if latestJob == nil || expectedJob == nil || latestJob.JobID != expectedJob.JobID ||
@@ -429,15 +426,12 @@ func (r *ExternalIPReconciler) reconcileExternalIPProvisioning(
 	return result, nil
 }
 
-// populateAddressIfMissing sets status.address from the allocated-address annotation
-// after initial provisioning succeeds, and transitions to Ready once the address
-// is known.
+// populateAddressIfMissing fills status.address from legacy manager output after
+// initial provisioning succeeds, and transitions to Ready once the address is known.
 //
-// The AAP provisioning role for each implementation strategy writes the allocated
-// address to the osac.openshift.io/allocated-address annotation on the ExternalIP
-// CR. This function reads it. As a fallback for strategies that haven't been
-// updated to write the annotation, it also checks the legacy
-// LoadBalancer Service as a fallback.
+// This function handles legacy, unversioned managers that publish the address in
+// an annotation or a LoadBalancer Service. V1 managers publish a validated job
+// result that the controller writes directly to status.
 //
 // State == Allocated is set exclusively by OnSuccess after the AAP provisioning
 // job reports success, so this guard ensures address population happens strictly
@@ -455,9 +449,7 @@ func (r *ExternalIPReconciler) populateAddressIfMissing(ctx context.Context, ext
 		return
 	}
 
-	// Fallback: check LoadBalancer Service for strategies that write the address
-	// there instead of the annotation. Remove once all strategies use the
-	// allocated-address annotation.
+	// Legacy managers may publish the address through a LoadBalancer Service.
 	targetClient, err := getTargetClient(ctx, r.mgr, r.targetCluster)
 	if err != nil {
 		log.V(1).Info("allocated-address annotation not set and target client unavailable, will retry")
@@ -710,9 +702,8 @@ func (r *ExternalIPReconciler) handleDeprovisioning(ctx context.Context, externa
 	return ctrl.Result{}, nil
 }
 
-// getExternalIPAddress fetches the LoadBalancer Service created by the AAP provisioning
-// role and returns the assigned IP. This is a fallback for strategies that haven't been
-// updated to write the allocated-address annotation.
+// getExternalIPAddress fetches the LoadBalancer Service address used by legacy,
+// unversioned managers that do not write the allocated-address annotation.
 func (r *ExternalIPReconciler) getExternalIPAddress(ctx context.Context, targetClient client.Client, externalIPName string) string {
 	log := ctrllog.FromContext(ctx)
 

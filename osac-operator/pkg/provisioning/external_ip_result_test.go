@@ -12,16 +12,20 @@ func TestValidateExternalIPResult(t *testing.T) {
 		"operation":          "external_ip.allocate",
 		"resourceUID":        "11111111-1111-4111-8111-111111111111",
 		"observedGeneration": float64(4),
-		"data":               map[string]any{},
+		"data":               map[string]any{"address": "198.51.100.1"},
 	}
 	outputs := func(result map[string]any) map[string]any {
 		return map[string]any{"osac_result": result}
 	}
 
-	if err := provisioning.ValidateExternalIPResult(
+	address, err := provisioning.ValidateExternalIPResult(
 		outputs(valid), "external_ip.allocate", "11111111-1111-4111-8111-111111111111", 4,
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("valid result rejected: %v", err)
+	}
+	if address != "198.51.100.1" {
+		t.Fatalf("got address %q", address)
 	}
 
 	cases := []struct {
@@ -34,7 +38,9 @@ func TestValidateExternalIPResult(t *testing.T) {
 		{name: "wrong UID", change: func(result map[string]any) { result["resourceUID"] = "22222222-2222-4222-8222-222222222222" }},
 		{name: "wrong generation", change: func(result map[string]any) { result["observedGeneration"] = float64(3) }},
 		{name: "noninteger generation", change: func(result map[string]any) { result["observedGeneration"] = float64(4.5) }},
-		{name: "nonempty data", change: func(result map[string]any) { result["data"] = map[string]any{"address": "192.0.2.1"} }},
+		{name: "missing address", change: func(result map[string]any) { result["data"] = map[string]any{} }},
+		{name: "empty address", change: func(result map[string]any) { result["data"] = map[string]any{"address": ""} }},
+		{name: "non-string address", change: func(result map[string]any) { result["data"] = map[string]any{"address": 1} }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -43,12 +49,31 @@ func TestValidateExternalIPResult(t *testing.T) {
 				result[key] = value
 			}
 			tc.change(result)
-			if err := provisioning.ValidateExternalIPResult(
+			if _, err := provisioning.ValidateExternalIPResult(
 				outputs(result), "external_ip.allocate", "11111111-1111-4111-8111-111111111111", 4,
 			); err == nil {
 				t.Fatal("expected invalid result to be rejected")
 			}
 		})
+	}
+
+	release := map[string]any{
+		"schemaVersion":      "v1",
+		"operation":          "external_ip.release",
+		"resourceUID":        "11111111-1111-4111-8111-111111111111",
+		"observedGeneration": float64(4),
+		"data":               map[string]any{},
+	}
+	if address, err := provisioning.ValidateExternalIPResult(
+		outputs(release), "external_ip.release", "11111111-1111-4111-8111-111111111111", 4,
+	); err != nil || address != "" {
+		t.Fatalf("valid release rejected or returned address: address=%q error=%v", address, err)
+	}
+	release["data"] = map[string]any{"address": "198.51.100.1"}
+	if _, err := provisioning.ValidateExternalIPResult(
+		outputs(release), "external_ip.release", "11111111-1111-4111-8111-111111111111", 4,
+	); err == nil {
+		t.Fatal("release result with an address must be rejected")
 	}
 }
 

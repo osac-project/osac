@@ -119,16 +119,12 @@ var _ = Describe("ExternalIP v1 Envtest", func() {
 			return &provisioning.ProvisionResult{JobID: "allocate-job", InitialState: v1alpha1.JobStatePending}, nil
 		}
 		provider.getProvisionStatusWithExtraVarsFunc = func(_ context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {
-			current := &v1alpha1.ExternalIP{}
-			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(resource), current)).To(Succeed())
-			current.Annotations[osacExternalIPAllocatedAddressAnnotation] = "198.51.100.1"
-			Expect(k8sClient.Update(ctx, current)).To(Succeed())
 			return provisioning.ProvisionStatusWithExtraVars{
 				ProvisionStatus: provisioning.ProvisionStatus{JobID: jobID, State: v1alpha1.JobStateSucceeded},
 				ExtraVars: map[string]any{"osac_result": map[string]any{
 					"schemaVersion": "v1", "operation": "external_ip.allocate",
 					"resourceUID": string(resource.GetUID()), "observedGeneration": resource.GetGeneration(),
-					"data": map[string]any{},
+					"data": map[string]any{"address": "198.51.100.1"},
 				}},
 			}, nil
 		}
@@ -145,6 +141,7 @@ var _ = Describe("ExternalIP v1 Envtest", func() {
 		Expect(updated.Status.State).To(Equal(v1alpha1.ExternalIPStateAllocated))
 		Expect(updated.Status.Phase).To(Equal(v1alpha1.ExternalIPPhaseReady))
 		Expect(updated.Annotations[osacExternalIPContractVersionAnnotation]).To(Equal("v1"))
+		Expect(updated.Annotations).NotTo(HaveKey(osacExternalIPAllocatedAddressAnnotation))
 	})
 
 	It("waits for a terminating Attachment before provider release", func() {

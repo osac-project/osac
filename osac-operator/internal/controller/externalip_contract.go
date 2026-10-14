@@ -82,41 +82,42 @@ func (r *ExternalIPReconciler) validatedExternalIPJobResult(
 	status provisioning.ProvisionStatusWithExtraVars,
 	jobType v1alpha1.JobType,
 	operation string,
-) (*v1alpha1.ExternalIP, error) {
+) (*v1alpha1.ExternalIP, string, error) {
 	latest := &v1alpha1.ExternalIP{}
 	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(expected), latest); err != nil {
-		return nil, fmt.Errorf("could not read ExternalIP after provider operation: %w", err)
+		return nil, "", fmt.Errorf("could not read ExternalIP after provider operation: %w", err)
 	}
 	if latest.UID != expected.UID || latest.Generation != expected.Generation {
-		return nil, fmt.Errorf("ExternalIP identity changed while the provider operation was running")
+		return nil, "", fmt.Errorf("ExternalIP identity changed while the provider operation was running")
 	}
 	if latest.Annotations[osacExternalIPContractVersionAnnotation] != networkmanager.ExternalIPContractVersionV1 {
-		return nil, fmt.Errorf("ExternalIP v1 contract changed while the provider operation was running")
+		return nil, "", fmt.Errorf("ExternalIP v1 contract changed while the provider operation was running")
 	}
 	if jobType == v1alpha1.JobTypeProvision && !latest.DeletionTimestamp.IsZero() {
-		return nil, fmt.Errorf("ExternalIP is terminating")
+		return nil, "", fmt.Errorf("ExternalIP is terminating")
 	}
 	if jobType == v1alpha1.JobTypeDeprovision && latest.DeletionTimestamp.IsZero() {
-		return nil, fmt.Errorf("ExternalIP is not terminating")
+		return nil, "", fmt.Errorf("ExternalIP is not terminating")
 	}
 	job := provisioning.FindLatestJobByType(latest.Status.ProvisioningJobs, jobType)
 	if job == nil || job.JobID != status.JobID {
-		return nil, fmt.Errorf("ExternalIP provider result does not match the current job")
+		return nil, "", fmt.Errorf("ExternalIP provider result does not match the current job")
 	}
 	if jobType == v1alpha1.JobTypeProvision &&
 		(job.ConfigVersion == "" || job.ConfigVersion != latest.Status.DesiredConfigVersion ||
 			job.ConfigVersion != expected.Status.DesiredConfigVersion) {
-		return nil, fmt.Errorf("ExternalIP allocation job does not match the current configuration")
+		return nil, "", fmt.Errorf("ExternalIP allocation job does not match the current configuration")
 	}
 	if status.State != v1alpha1.JobStateSucceeded {
-		return nil, fmt.Errorf("ExternalIP provider job did not succeed")
+		return nil, "", fmt.Errorf("ExternalIP provider job did not succeed")
 	}
-	if err := provisioning.ValidateExternalIPResult(
+	address, err := provisioning.ValidateExternalIPResult(
 		status.ExtraVars, operation, string(latest.UID), latest.Generation,
-	); err != nil {
-		return nil, err
+	)
+	if err != nil {
+		return nil, "", err
 	}
-	return latest, nil
+	return latest, address, nil
 }
 
 func (r *ExternalIPReconciler) acceptExternalIPAllocation(
@@ -125,7 +126,7 @@ func (r *ExternalIPReconciler) acceptExternalIPAllocation(
 	poolContext provisioning.ExternalIPPoolContext,
 	status provisioning.ProvisionStatusWithExtraVars,
 ) error {
-	latest, err := r.validatedExternalIPJobResult(
+	latest, resultAddress, err := r.validatedExternalIPJobResult(
 		ctx, externalIP, status, v1alpha1.JobTypeProvision, "external_ip.allocate",
 	)
 	if err != nil {
@@ -156,9 +157,7 @@ func (r *ExternalIPReconciler) acceptExternalIPAllocation(
 		!pool.DeletionTimestamp.IsZero() {
 		return fmt.Errorf("ExternalIP allocation pool changed or is not Ready")
 	}
-	address, err := provisioning.ValidateExternalIPAddress(
-		latest.Annotations[osacExternalIPAllocatedAddressAnnotation], currentPool.CIDR,
-	)
+	address, err := provisioning.ValidateExternalIPAddress(resultAddress, currentPool.CIDR)
 	if err != nil {
 		return err
 	}
@@ -179,7 +178,7 @@ func (r *ExternalIPReconciler) validateExternalIPReleaseResult(
 	externalIP *v1alpha1.ExternalIP,
 	status provisioning.ProvisionStatusWithExtraVars,
 ) error {
-	_, err := r.validatedExternalIPJobResult(
+	_, _, err := r.validatedExternalIPJobResult(
 		ctx, externalIP, status, v1alpha1.JobTypeDeprovision, "external_ip.release",
 	)
 	return err

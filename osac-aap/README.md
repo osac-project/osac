@@ -51,8 +51,9 @@ and removes ExternalIPPools in SQLite. Registration stores the pool's
 Kubernetes UID, Fulfillment UUID, tenant, IPv4 family, and single canonical IPv4
 CIDR; ExternalIP allocation reserves a UID-owned address in the same state file.
 The operator waits for child ExternalIP CRs to be removed before dispatching
-pool deprovisioning. AgentlessNet also writes the allocated-address annotation
-and releases the reservation during ExternalIP deletion.
+pool deprovisioning. AgentlessNet returns the allocated address in the AAP job
+result; the operator validates it and writes `ExternalIP.status.address`.
+ExternalIP deletion releases the UID-owned reservation.
 ExternalIPAttachment, SecurityGroup, NATGateway, workload attachment, and
 external traffic remain unsupported. A Ready Subnet means its VLAN,
 namespace gateway interface, and per-VirtualNetwork DHCP service were verified;
@@ -79,10 +80,10 @@ intentionally supersedes the schema-v2/additive-migration provision in the
 AgentlessNet ExternalIPPool and ExternalIP jobs use the same inventory and
 state-file settings as VirtualNetwork jobs. Inventory describes exactly one
 network node; pool registration and address reservation do not require switch
-inventory. ExternalIP allocation reserves an address by Kubernetes UID before
-patching the CR's `osac.openshift.io/allocated-address` annotation. Release
-removes that UID-owned reservation; API pool capacity remains held until
-Fulfillment archives the ExternalIP.
+inventory. ExternalIP allocation reserves an address by Kubernetes UID and
+returns it in `osac_result.data.address`; the operator validates the result and
+publishes the address in status. Release removes that UID-owned reservation;
+API pool capacity remains held until Fulfillment archives the ExternalIP.
 For Subnet provisioning, osac-operator resolves the parent VirtualNetwork by its
 Fulfillment UUID label in the Subnet namespace and sends its Fulfillment UUID,
 Kubernetes UID, tenant, and phase in `osac_job_vars.parent_virtual_network`.

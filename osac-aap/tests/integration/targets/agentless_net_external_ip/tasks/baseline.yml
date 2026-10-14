@@ -132,13 +132,19 @@
         - name: Run the allocation playbook
           ansible.builtin.include_tasks: run_playbook.yaml
 
-        - name: Verify the allocation result identity
+        - name: Verify the allocation result artifact
           ansible.builtin.assert:
             that:
-              - "'external_ip.allocate' in agentless_eip_playbook_result.stdout"
-              - agentless_eip_resource.metadata.uid in agentless_eip_playbook_result.stdout
+              - agentless_eip_result.schemaVersion == 'v1'
+              - agentless_eip_result.operation == 'external_ip.allocate'
+              - agentless_eip_result.resourceUID == agentless_eip_resource.metadata.uid
+              - agentless_eip_result.observedGeneration | int == agentless_eip_resource.metadata.generation | int
+              - agentless_eip_result.data.address == '198.51.100.1'
+        - name: Save the allocated address
+          ansible.builtin.set_fact:
+            agentless_eip_address: "{{ agentless_eip_result.data.address }}"
 
-        - name: Read the allocated annotation
+        - name: Read the ExternalIP after allocation
           kubernetes.core.k8s_info:
             api_version: osac.openshift.io/v1alpha1
             kind: ExternalIP
@@ -146,10 +152,14 @@
             name: agentless-eip
           register: agentless_eip_allocated_read
 
-        - name: Verify the selected address
+        - name: Verify AAP returned the address without changing the ExternalIP
           ansible.builtin.assert:
             that:
-              - agentless_eip_allocated_read.resources[0].metadata.annotations['osac.openshift.io/allocated-address'] == '198.51.100.1'
+              - agentless_eip_allocated_read.resources[0].metadata.uid == agentless_eip_resource.metadata.uid
+              - agentless_eip_allocated_read.resources[0].metadata.generation | int == agentless_eip_resource.metadata.generation | int
+              - agentless_eip_allocated_read.resources[0].metadata.annotations == agentless_eip_resource.metadata.annotations
+              - agentless_eip_allocated_read.resources[0].status | default({}) == agentless_eip_resource.status | default({})
+              - "'osac.openshift.io/allocated-address' not in agentless_eip_allocated_read.resources[0].metadata.annotations"
 
         - name: Retry allocation for the same UID
           ansible.builtin.set_fact:
@@ -160,6 +170,11 @@
         - name: Run the allocation retry
           ansible.builtin.include_tasks: run_playbook.yaml
 
+        - name: Verify the retry returns the same address
+          ansible.builtin.assert:
+            that:
+              - agentless_eip_result.data.address == agentless_eip_address
+
         - name: Build a stale-generation request
           ansible.builtin.set_fact:
             agentless_eip_job_vars:
@@ -169,10 +184,16 @@
                      | combine({'generation': agentless_eip_allocated_read.resources[0].metadata.generation + 1})},
                      recursive=true) }}
               external_ip_pool: "{{ agentless_eip_pool_context }}"
-            agentless_eip_should_succeed: false
+            agentless_eip_should_succeed: true
 
-        - name: Verify a stale generation cannot patch the CR
+        - name: Run allocation with a supplied newer generation
           ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Verify the job reports the generation it received
+          ansible.builtin.assert:
+            that:
+              - agentless_eip_result.observedGeneration | int == agentless_eip_resource.metadata.generation | int + 1
+              - agentless_eip_result.data.address == agentless_eip_address
 
         - name: Request ExternalIP deletion while retaining the test finalizer
           kubernetes.core.k8s:
@@ -207,11 +228,14 @@
         - name: Run the release playbook
           ansible.builtin.include_tasks: run_playbook.yaml
 
-        - name: Verify the release result identity
+        - name: Verify the release result artifact
           ansible.builtin.assert:
             that:
-              - "'external_ip.release' in agentless_eip_playbook_result.stdout"
-              - agentless_eip_deleting_read.resources[0].metadata.uid in agentless_eip_playbook_result.stdout
+              - agentless_eip_result.schemaVersion == 'v1'
+              - agentless_eip_result.operation == 'external_ip.release'
+              - agentless_eip_result.resourceUID == agentless_eip_deleting_read.resources[0].metadata.uid
+              - agentless_eip_result.observedGeneration | int == agentless_eip_deleting_read.resources[0].metadata.generation | int
+              - agentless_eip_result.data == {}
 
         - name: Retry release to verify idempotence
           ansible.builtin.include_tasks: run_playbook.yaml

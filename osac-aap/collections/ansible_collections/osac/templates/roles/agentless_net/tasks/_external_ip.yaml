@@ -47,26 +47,6 @@
       register: agentless_net_external_ip_state
       no_log: true
 
-    - name: Write the allocated address to the ExternalIP annotation
-      kubernetes.core.k8s_json_patch:
-        api_version: osac.openshift.io/v1alpha1
-        kind: ExternalIP
-        name: "{{ external_ip.metadata.name }}"
-        namespace: "{{ external_ip.metadata.namespace }}"
-        patch:
-          - op: test
-            path: /metadata/uid
-            value: "{{ external_ip.metadata.uid }}"
-          - op: test
-            path: /metadata/generation
-            value: "{{ external_ip.metadata.generation | int }}"
-          - op: add
-            path: /metadata/annotations/osac.openshift.io~1allocated-address
-            value: "{{ agentless_net_external_ip_state.external_ip.address }}"
-      when:
-        - agentless_net_external_ip_action == 'reserve_external_ip'
-        - not ansible_check_mode
-
     - name: Report the ExternalIP operation result
       ansible.builtin.set_stats:
         data:
@@ -75,7 +55,10 @@
             operation: "{{ agentless_net_external_ip_operation }}"
             resourceUID: "{{ external_ip.metadata.uid }}"
             observedGeneration: "{{ external_ip.metadata.generation | int }}"
-            data: {}
+            data: >-
+              {{ {'address': agentless_net_external_ip_state.external_ip.address}
+                 if agentless_net_external_ip_action == 'reserve_external_ip'
+                 else {} }}
         per_host: false
         aggregate: false
       when: not ansible_check_mode

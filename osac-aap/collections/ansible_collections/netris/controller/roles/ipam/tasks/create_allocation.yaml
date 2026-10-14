@@ -5,7 +5,7 @@
   when: netris_session_cookie is not defined
 
 - name: Query existing IPAM tree
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: >-
       {{ netris_controller_url }}/api/v2/ipam{{
         ('?filterByVpc=' + (ipam_vpc_id | string)) if ipam_vpc_id is defined else ''
@@ -36,7 +36,7 @@
   when: _existing_ipam_alloc is defined and _existing_ipam_alloc is not none
 
 - name: Create IPAM allocation
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/ipam/allocation"
     method: POST
     headers:

@@ -5,7 +5,7 @@
   when: netris_session_cookie is not defined
 
 - name: Get existing server clusters
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/server-cluster"
     method: GET
     headers:
@@ -24,7 +24,7 @@
 
 - name: Delete server cluster
   when: _existing_server_cluster is defined and _existing_server_cluster is not none
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/server-cluster/{{ _existing_server_cluster.id }}"
     method: DELETE
     headers:

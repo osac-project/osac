@@ -5,7 +5,7 @@
   when: netris_session_cookie is not defined
 
 - name: Get existing NAT rules
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/nat"
     method: GET
     headers:
@@ -25,7 +25,7 @@
 
 - name: Delete NAT rule
   when: _existing_nat is defined and _existing_nat is mapping
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/nat/{{ _existing_nat.id }}"
     method: DELETE
     headers:

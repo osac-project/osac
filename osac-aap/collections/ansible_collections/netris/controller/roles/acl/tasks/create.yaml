@@ -31,7 +31,7 @@
     var: _acl_body
 
 - name: Get existing ACL rules
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/acl"
     method: GET
     headers:
@@ -56,7 +56,7 @@
   when: _existing_acl_list | default([]) | length > 0
 
 - name: Create ACL rule
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/acl"
     method: POST
     headers:

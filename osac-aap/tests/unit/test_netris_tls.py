@@ -15,8 +15,8 @@ def _uri_tasks():
 
 def _find_uri_tasks(value, task_file):
     if isinstance(value, dict):
-        if "ansible.builtin.uri" in value:
-            yield task_file, value.get("name", "<unnamed>"), value["ansible.builtin.uri"]
+        if "netris.controller.protected_uri" in value:
+            yield task_file, value.get("name", "<unnamed>"), value["netris.controller.protected_uri"]
         for child in value.values():
             yield from _find_uri_tasks(child, task_file)
     elif isinstance(value, list):
@@ -124,8 +124,8 @@ def _render_auth_tls_settings(monkeypatch, tmp_path, existing=None):
                 "netris_validate_certs": False,
                 "netris_ca_path": "/existing/ca.pem",
             },
-            (False, "/existing/ca.pem"),
-            id="existing-values-take-precedence",
+            (True, "/env/ca.pem"),
+            id="worker-environment-is-authoritative",
         ),
     ],
 )
@@ -146,7 +146,7 @@ def test_auth_role_renders_tls_settings(
 def test_auth_request_consumes_resolved_tls_settings():
     tasks = yaml.safe_load(AUTH_TASKS.read_text())
     auth_task = next(task for task in tasks if task.get("name") == "Login to Netris controller")
-    uri = auth_task["ansible.builtin.uri"]
+    uri = auth_task["netris.controller.protected_uri"]
 
     assert uri["validate_certs"] == "{{ netris_validate_certs | default(true) }}"
     assert uri["ca_path"] == "{{ netris_ca_path | default(omit, true) }}"

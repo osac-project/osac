@@ -114,7 +114,9 @@ class MockOntapHandler(BaseHTTPRequestHandler):
             self._respond(200, snapshot)
             return
 
-        _log({"method": "GET", "path": self.path, "headers": _strip_sensitive(dict(self.headers))})
+        # Log only the fixed endpoint path (without query parameters such as
+        # ?name=<svm>) so test call logs never retain customer/SVM identifiers.
+        _log({"method": "GET", "path": path, "headers": _strip_sensitive(dict(self.headers))})
 
         if not self._authenticated():
             self._respond(401, {"error": "unauthorized"})

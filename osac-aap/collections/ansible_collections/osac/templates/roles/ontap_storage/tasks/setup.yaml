@@ -24,93 +24,37 @@
     _ontap_backend_ids: "{{ _provider_tiers | map(attribute='backend_id') | unique | list }}"
   no_log: true
 
-- name: Validate connection details exist for all dispatched backend_ids
-  block:
-    - name: Fail if no connection details were provided for a dispatched backend
-      ansible.builtin.fail:
-        msg: >-
-          No entry for a dispatched backend_id in storage_backend_connections.
-          osac-operator must resolve and pass connection details (endpoint, username, password)
-          for every backend_id referenced by storage_tier_definitions.
-      loop: "{{ _ontap_backend_ids }}"
-      loop_control:
-        label: "ontap-backend"
-      when: item not in _provider_backend_connections
-      no_log: true
-  rescue:
-    - name: Build structured failure artifact for unresolved backend connection
-      ansible.builtin.set_fact:
-        osac_storage_provider_failures: >-
-          {% set _backend_ids = [] -%}
-          {% set _messages = [] -%}
-          {% for _r in (ansible_failed_result.results | default([])) -%}
-          {% if _r.failed | default(false) -%}
-          {% set _ = _backend_ids.append(_r.item | string) -%}
-          {% set _ = _messages.append(_r.msg | default('')) -%}
-          {% endif -%}
-          {% endfor -%}
-          {{ [{'reason': 'unresolved_backend_connection', 'tiers': (_provider_tiers | map(attribute='name') | list), 'backend_ids': _backend_ids, 'message': _messages | join(' ')}] }}
-      no_log: true
+- name: Fail if no connection details were provided for a dispatched backend
+  ansible.builtin.fail:
+    msg: >-
+      No entry for a dispatched backend_id in storage_backend_connections.
+      osac-operator must resolve and pass connection details (endpoint, username, password)
+      for every backend_id referenced by storage_tier_definitions.
+  loop: "{{ _ontap_backend_ids }}"
+  loop_control:
+    label: "ontap-backend"
+  when: item not in _provider_backend_connections
+  no_log: true
 
-    - name: Emit structured failure artifact for unresolved backend connection
-      ansible.builtin.set_stats:
-        data:
-          osac_storage_provider_failures: "{{ osac_storage_provider_failures }}"
-        aggregate: false
-      no_log: true
-
-    - name: Re-raise the original unresolved-connection failure
-      ansible.builtin.fail:
-        msg: "Unresolved storage_backend_connections entry for dispatched ONTAP tier."
-      no_log: true
-
-- name: Validate the resolved connections have complete credentials
-  block:
-    - name: Fail if a resolved connection is missing endpoint, username, or password
-      ansible.builtin.fail:
-        msg: >-
-          storage_backend_connections entry is missing one or more of
-          endpoint, username, password. All three must be set together.
-      loop: "{{ _ontap_backend_ids }}"
-      loop_control:
-        label: "ontap-backend"
-      when: >-
-        _provider_backend_connections[item].endpoint is not defined or
-        _provider_backend_connections[item].endpoint is none or
-        _provider_backend_connections[item].endpoint | default('') | string | length == 0 or
-        _provider_backend_connections[item].username is not defined or
-        _provider_backend_connections[item].username is none or
-        _provider_backend_connections[item].username | default('') | string | length == 0 or
-        _provider_backend_connections[item].password is not defined or
-        _provider_backend_connections[item].password is none or
-        _provider_backend_connections[item].password | default('') | string | length == 0
-      no_log: true
-  rescue:
-    - name: Build structured failure artifact for incomplete backend connection
-      ansible.builtin.set_fact:
-        osac_storage_provider_failures: >-
-          {% set _backend_ids = [] -%}
-          {% set _messages = [] -%}
-          {% for _r in (ansible_failed_result.results | default([])) -%}
-          {% if _r.failed | default(false) -%}
-          {% set _ = _backend_ids.append(_r.item | string) -%}
-          {% set _ = _messages.append(_r.msg | default('')) -%}
-          {% endif -%}
-          {% endfor -%}
-          {{ [{'reason': 'incomplete_backend_connection', 'tiers': (_provider_tiers | map(attribute='name') | list), 'backend_ids': _backend_ids, 'message': _messages | join(' ')}] }}
-      no_log: true
-
-    - name: Emit structured failure artifact for incomplete backend connection
-      ansible.builtin.set_stats:
-        data:
-          osac_storage_provider_failures: "{{ osac_storage_provider_failures }}"
-        aggregate: false
-      no_log: true
-
-    - name: Re-raise the original incomplete-connection failure
-      ansible.builtin.fail:
-        msg: "Incomplete storage_backend_connections entry for dispatched ONTAP tier."
-      no_log: true
+- name: Fail if a resolved connection is missing endpoint, username, or password
+  ansible.builtin.fail:
+    msg: >-
+      storage_backend_connections entry is missing one or more of
+      endpoint, username, password. All three must be set together.
+  loop: "{{ _ontap_backend_ids }}"
+  loop_control:
+    label: "ontap-backend"
+  when: >-
+    _provider_backend_connections[item].endpoint is not defined or
+    _provider_backend_connections[item].endpoint is none or
+    _provider_backend_connections[item].endpoint | default('') | string | length == 0 or
+    _provider_backend_connections[item].username is not defined or
+    _provider_backend_connections[item].username is none or
+    _provider_backend_connections[item].username | default('') | string | length == 0 or
+    _provider_backend_connections[item].password is not defined or
+    _provider_backend_connections[item].password is none or
+    _provider_backend_connections[item].password | default('') | string | length == 0
+  no_log: true
 
 - name: Initialize the per-backend tenant config accumulator
   ansible.builtin.set_fact:

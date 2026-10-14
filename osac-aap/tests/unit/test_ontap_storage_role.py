@@ -97,4 +97,7 @@ def test_ontap_ensure_short_circuit_checks_tbc_and_csi_secret():
 
     ensure_backend_path = ONTAP_ROLE_DIR / "tasks" / "_ensure_storage_class_backend.yaml"
     backend_text = ensure_backend_path.read_text(encoding="utf-8")
-    assert "(tenant_uid | default('') | length == 0) or" in backend_text
+    assert "(_ontap_effective_tenant_uid | default('') | length == 0) or" in backend_text
+
+    for task_file in (ONTAP_ROLE_DIR / "tasks").glob("*.yaml"):
+        assert "set_stats" not in task_file.read_text(encoding="utf-8")

@@ -54,6 +54,7 @@ type PrivateBareMetalInstancesServerBuilder struct {
 	metricsRegisterer prometheus.Registerer
 	filterDesc        protoreflect.MessageDescriptor
 	secretStore       vault.SecretStore
+	pricingResolver   *CatalogPricingResolver
 }
 
 var _ privatev1.BareMetalInstancesServer = (*PrivateBareMetalInstancesServer)(nil)
@@ -77,6 +78,7 @@ type PrivateBareMetalInstancesServer struct {
 	secretsDao              *dao.GenericDAO[*privatev1.Secret]
 	secretStore             vault.SecretStore
 	lifecycle               *externalIPLifecycle
+	pricingResolver         *CatalogPricingResolver
 }
 
 func NewPrivateBareMetalInstancesServer() *PrivateBareMetalInstancesServerBuilder {
@@ -112,6 +114,11 @@ func (b *PrivateBareMetalInstancesServerBuilder) SetFilterDesc(value protoreflec
 
 func (b *PrivateBareMetalInstancesServerBuilder) SetSecretStore(value vault.SecretStore) *PrivateBareMetalInstancesServerBuilder {
 	b.secretStore = value
+	return b
+}
+
+func (b *PrivateBareMetalInstancesServerBuilder) SetPricingResolver(value *CatalogPricingResolver) *PrivateBareMetalInstancesServerBuilder {
+	b.pricingResolver = value
 	return b
 }
 
@@ -262,6 +269,7 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 		externalIPAttachmentDao: externalIPAttachmentDao,
 		secretsDao:              secretsDao,
 		secretStore:             b.secretStore,
+		pricingResolver:         b.pricingResolver,
 	}
 	result.lifecycle = newExternalIPLifecycle(
 		externalIPDao,
@@ -292,7 +300,10 @@ func (s *PrivateBareMetalInstancesServer) Create(ctx context.Context, request *p
 	var warnings []string
 	err = s.generic.CreateWithCandidatePreparation(ctx, request, &response, func(ctx context.Context, _ *privatev1.BareMetalInstance, candidate *privatev1.BareMetalInstance) error {
 		warnings, err = s.prepareCreate(ctx, candidate)
-		return err
+		if err != nil || s.pricingResolver == nil {
+			return err
+		}
+		return coverageErrorForCreate(ctx, s.logger, s.pricingResolver.CheckCoverage(ctx, candidate.GetMetadata().GetTenant(), bareMetalInstanceCoverageRequests(candidate)))
 	})
 	if err != nil {
 		return

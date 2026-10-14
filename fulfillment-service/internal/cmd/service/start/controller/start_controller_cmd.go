@@ -38,8 +38,11 @@ import (
 	crlog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/billing"
+	billingconfig "github.com/osac-project/osac/fulfillment-service/internal/billing/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/baremetalinstance"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/billingassignment"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/cluster"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/computeinstance"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/defaultnetworking"
@@ -173,6 +176,7 @@ func Cmd() *cobra.Command {
 	)
 	vault.AddBaseFlags(flags)
 	vault.AddLifecycleFlags(flags)
+	runner.args.billing.AddFlags(flags)
 	network.AddGrpcClientFlags(flags, network.GrpcClientName, network.DefaultGrpcAddress)
 	network.AddListenerFlags(flags, network.GrpcListenerName, network.DefaultGrpcAddress)
 	network.AddListenerFlags(flags, network.MetricsListenerName, network.DefaultMetricsAddress)
@@ -200,8 +204,10 @@ type runnerContext struct {
 		idpClientSecretFile  string
 		vaultBase            vault.BaseConfig
 		vaultLifecycle       vault.LifecycleConfig
+		billing              billingconfig.Config
 	}
-	client *grpc.ClientConn
+	client          *grpc.ClientConn
+	billingProvider billing.Provider
 }
 
 // run runs the `start controllers` command.
@@ -222,6 +228,10 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 
 	// Save the flags:
 	r.flags = cmd.Flags()
+	_, r.billingProvider, err = r.args.billing.Build(prometheus.DefaultRegisterer)
+	if err != nil {
+		return fmt.Errorf("invalid billing provider configuration: %w", err)
+	}
 
 	// Check the flags:
 	if r.args.authIssuerUrl != "" && r.args.authIssuerUrlFile != "" {
@@ -402,6 +412,36 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	if err != nil {
 		return fmt.Errorf("failed to create hub cache: %w", err)
 	}
+
+	// Create the billing assignment reconciler. It is safe to run while billing
+	// is disabled; the function returns without making provider calls.
+	billingAssignmentFunction, err := billingassignment.NewFunction().
+		SetLogger(r.logger).
+		SetConnection(r.client).
+		SetProvider(r.billingProvider).
+		SetMetricsRegisterer(metricsRegisterer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create billing assignment reconciler function: %w", err)
+	}
+	billingAssignmentReconciler, err := controllers.NewReconciler[*privatev1.TenantBillingAssignment]().
+		SetSync(r.args.sync).
+		SetLogger(r.logger).
+		SetName("tenant-billing-assignment").
+		SetClient(r.client).
+		SetFunction(billingAssignmentFunction.Reconcile).
+		SetEventFilter("has(event.tenant_billing_assignment)").
+		SetHealthReporter(healthAggregator).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create billing assignment reconciler: %w", err)
+	}
+	r.logger.InfoContext(ctx, "Starting billing assignment reconciler")
+	go func() {
+		if err := billingAssignmentReconciler.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			r.logger.ErrorContext(ctx, "billing assignment reconciler failed", slog.Any("error", err))
+		}
+	}()
 
 	// Create the shared default-networking manager. Tenant reconciliation uses
 	// it to ensure resources asynchronously; project reconciliation uses the

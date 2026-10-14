@@ -44,6 +44,7 @@ type view struct {
 	kind        string
 	fields      []row
 	parameters  []row
+	pricing     *publicv1.CatalogItemPricing
 }
 
 // render shows stored Catalog Item policies without incorporating Template or creation defaults.
@@ -86,6 +87,28 @@ func render(w io.Writer, v view, colored bool) error {
 	if _, err := fmt.Fprintf(w, "\nName:       %s\nID:         %s\nScope:      %s\nPublished:  %s\nTemplate:   %s\n",
 		clean(v.name), clean(v.id), clean(scope(v.metadata)), palette.published(v.published, published), clean(v.template)); err != nil {
 		return err
+	}
+	if v.pricing != nil {
+		status := strings.TrimPrefix(v.pricing.GetStatus().String(), "CATALOG_PRICING_STATUS_")
+		if _, err := fmt.Fprintf(w, "Pricing:    %s\n", clean(status)); err != nil {
+			return err
+		}
+		if len(v.pricing.GetComponents()) > 0 {
+			if _, err := fmt.Fprintln(w, "Prices:"); err != nil {
+				return err
+			}
+			for _, component := range v.pricing.GetComponents() {
+				if _, err := fmt.Fprintf(w, "  %s: %s %s/%s\n", clean(component.GetDescription()),
+					clean(component.GetAmount()), clean(v.pricing.GetCurrencyCode()), clean(component.GetUnit())); err != nil {
+					return err
+				}
+			}
+		}
+		if v.pricing.GetPriceMayVary() {
+			if _, err := fmt.Fprintln(w, "Price may vary with configuration"); err != nil {
+				return err
+			}
+		}
 	}
 	if err := renderRows(w, "RESOURCE FIELDS", v.fields, palette); err != nil {
 		return err

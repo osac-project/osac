@@ -59,6 +59,30 @@ Return the hostname for the fulfillment internal API. Fails if 'internalHostname
 {{- end -}}
 
 {{/*
+Resolve shared umbrella-chart billing settings, falling back to chart-local settings.
+*/}}
+{{- define "fulfillment-service.billingConfig" -}}
+{{- $local := .Values.billing | default dict -}}
+{{- $global := .Values.global.billing | default dict -}}
+{{- $localM360 := $local.m360 | default dict -}}
+{{- $globalM360 := $global.m360 | default dict -}}
+{{- $provider := $local.provider | default "" -}}
+{{- $m360 := $localM360 -}}
+{{- if $global.provider -}}
+{{- $provider = $global.provider -}}
+{{- $m360 = $globalM360 -}}
+{{- end -}}
+{{- $secret := $m360.apiKeySecret | default dict -}}
+provider: {{ $provider | quote }}
+m360:
+  apiUrl: {{ $m360.apiUrl | default "" | quote }}
+  apiVersion: {{ $m360.apiVersion | default "" | quote }}
+  apiKeySecret:
+    name: {{ $secret.name | default "" | quote }}
+    key: {{ $secret.key | default "api-key" | quote }}
+{{- end }}
+
+{{/*
 Check if a service tier is enabled via global.services.<key>.enabled.
 Args: list of [context, serviceKey]
 Falls back to true when global.services is not set.

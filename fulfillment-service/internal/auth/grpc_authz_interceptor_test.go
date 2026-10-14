@@ -806,6 +806,241 @@ var _ = Describe("Rego authorization interceptor", func() {
 			),
 		)
 
+		It("restricts billing APIs to cloud provider admins", func(ctx context.Context) {
+			billingMethods := []string{
+				"/osac.public.v1.BillingProviderStatuses/Get",
+				"/osac.public.v1.BillingAccounts/List",
+				"/osac.public.v1.CatalogPricingInputs/List",
+				"/osac.public.v1.ProviderRateCardItems/List",
+				"/osac.public.v1.TenantBillingAssignments/List",
+				"/osac.public.v1.TenantBillingAssignments/Get",
+				"/osac.public.v1.TenantBillingAssignments/Create",
+				"/osac.public.v1.TenantBillingAssignments/Update",
+				"/osac.public.v1.DraftCharges/List",
+				"/osac.public.v1.BillingExports/Create",
+				"/osac.public.v1.BillingExports/Get",
+				"/osac.private.v1.BillingAccounts/Get",
+				"/osac.private.v1.TenantBillingAssignments/Signal",
+				"/osac.private.v1.TenantBillingAssignments/UpdateStatus",
+			}
+			identities := []struct {
+				name  string
+				roles []any
+			}{
+				{name: "regular user"},
+				{name: "tenant admin", roles: []any{"tenant-admin"}},
+				{name: "tenant IdP manager", roles: []any{"tenant-idp-manager"}},
+			}
+			for _, identity := range identities {
+				for _, method := range billingMethods {
+					ctx = ContextWithToken(ctx, createKeycloakUserToken("tenant-a", identity.name, jwt.MapClaims{
+						"realm_access": map[string]any{"roles": identity.roles},
+					}))
+					handled := false
+					_, err := interceptor.UnaryServer(
+						ctx,
+						nil,
+						&grpc.UnaryServerInfo{FullMethod: method},
+						func(ctx context.Context, req any) (any, error) {
+							handled = true
+							return nil, nil
+						},
+					)
+					Expect(err).To(HaveOccurred(), "%s should be denied to %s", method, identity.name)
+					status, ok := grpcstatus.FromError(err)
+					Expect(ok).To(BeTrue())
+					Expect(status.Code()).To(Equal(grpccodes.PermissionDenied))
+					Expect(handled).To(BeFalse())
+				}
+			}
+
+			adminToken := createKeycloakUserToken("tenant-a", "provider-admin", jwt.MapClaims{
+				"groups": []any{"admins"},
+			})
+			for _, method := range billingMethods {
+				ctx = ContextWithToken(ctx, adminToken)
+				handled := false
+				_, err := interceptor.UnaryServer(
+					ctx,
+					nil,
+					&grpc.UnaryServerInfo{FullMethod: method},
+					func(ctx context.Context, req any) (any, error) {
+						handled = true
+						return nil, nil
+					},
+				)
+				Expect(err).ToNot(HaveOccurred(), "%s should be allowed to provider admins", method)
+				Expect(handled).To(BeTrue())
+			}
+		})
+
+		It("denies unlisted billing methods even to cloud provider admins", func(ctx context.Context) {
+			ctx = ContextWithToken(ctx, createKeycloakUserToken("tenant-a", "provider-admin", jwt.MapClaims{
+				"groups": []any{"admins"},
+			}))
+			handled := false
+			_, err := interceptor.UnaryServer(
+				ctx,
+				nil,
+				&grpc.UnaryServerInfo{FullMethod: "/osac.public.v1.BillingAccounts/Delete"},
+				func(ctx context.Context, req any) (any, error) {
+					handled = true
+					return nil, nil
+				},
+			)
+			Expect(err).To(HaveOccurred())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
+			Expect(handled).To(BeFalse())
+		})
+
+		It("allows tenant users and cloud provider admins to query pricing and estimates", func(ctx context.Context) {
+			methods := []string{
+				"/osac.public.v1.PricingQueries/Create",
+				"/osac.public.v1.PriceEstimates/Create",
+			}
+			identities := []struct {
+				name  string
+				claim jwt.MapClaims
+			}{
+				{name: "tenant-user"},
+				{name: "tenant-admin", claim: jwt.MapClaims{
+					"realm_access": map[string]any{"roles": []any{"tenant-admin"}},
+				}},
+				{name: "provider-admin", claim: jwt.MapClaims{"groups": []any{"admins"}}},
+			}
+			for _, identity := range identities {
+				for _, method := range methods {
+					ctx = ContextWithToken(ctx, createKeycloakUserToken("tenant-a", identity.name, identity.claim))
+					handled := false
+					_, err := interceptor.UnaryServer(
+						ctx,
+						nil,
+						&grpc.UnaryServerInfo{FullMethod: method},
+						func(context.Context, any) (any, error) {
+							handled = true
+							return nil, nil
+						},
+					)
+					Expect(err).NotTo(HaveOccurred(), "%s should be allowed to %s", identity.name, method)
+					Expect(handled).To(BeTrue())
+				}
+			}
+		})
+
+		It("allows tenant admins to read their billing invoices", func(ctx context.Context) {
+			token := createKeycloakUserToken("tenant-a", "tenant-admin-user", jwt.MapClaims{
+				"realm_access": map[string]any{"roles": []any{"tenant-admin"}},
+			})
+			for _, method := range []string{
+				"/osac.public.v1.BillingInvoices/List",
+				"/osac.public.v1.BillingInvoices/Get",
+			} {
+				ctx = ContextWithToken(ctx, token)
+				handled := false
+				_, err := interceptor.UnaryServer(
+					ctx,
+					nil,
+					&grpc.UnaryServerInfo{FullMethod: method},
+					func(context.Context, any) (any, error) {
+						handled = true
+						return nil, nil
+					},
+				)
+				Expect(err).NotTo(HaveOccurred(), "%s should be allowed to tenant admins", method)
+				Expect(handled).To(BeTrue())
+			}
+		})
+
+		It("denies regular users and IdP managers from reading billing invoices", func(ctx context.Context) {
+			identities := []struct {
+				name  string
+				claim jwt.MapClaims
+			}{
+				{name: "regular-user"},
+				{name: "tenant-idp-manager", claim: jwt.MapClaims{
+					"realm_access": map[string]any{"roles": []any{"tenant-idp-manager"}},
+				}},
+			}
+			for _, identity := range identities {
+				token := createKeycloakUserToken("tenant-a", identity.name, identity.claim)
+				for _, method := range []string{
+					"/osac.public.v1.BillingInvoices/List",
+					"/osac.public.v1.BillingInvoices/Get",
+				} {
+					ctx = ContextWithToken(ctx, token)
+					handled := false
+					_, err := interceptor.UnaryServer(
+						ctx,
+						nil,
+						&grpc.UnaryServerInfo{FullMethod: method},
+						func(context.Context, any) (any, error) {
+							handled = true
+							return nil, nil
+						},
+					)
+					status, ok := grpcstatus.FromError(err)
+					Expect(ok).To(BeTrue())
+					Expect(status.Code()).To(Equal(grpccodes.PermissionDenied))
+					Expect(handled).To(BeFalse())
+				}
+			}
+		})
+
+		It("denies tenant IdP managers billing costs, pricing queries, and estimates", func(ctx context.Context) {
+			token := createKeycloakUserToken("tenant-a", "tenant-idp-manager", jwt.MapClaims{
+				"realm_access": map[string]any{"roles": []any{"tenant-idp-manager"}},
+			})
+			for _, method := range []string{
+				"/osac.public.v1.BillingCosts/List",
+				"/osac.public.v1.PricingQueries/Create",
+				"/osac.public.v1.PriceEstimates/Create",
+			} {
+				ctx = ContextWithToken(ctx, token)
+				handled := false
+				_, err := interceptor.UnaryServer(
+					ctx,
+					nil,
+					&grpc.UnaryServerInfo{FullMethod: method},
+					func(context.Context, any) (any, error) {
+						handled = true
+						return nil, nil
+					},
+				)
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue(), "%s should be denied to IdP managers", method)
+				Expect(status.Code()).To(Equal(grpccodes.PermissionDenied))
+				Expect(handled).To(BeFalse())
+			}
+		})
+
+		It("allows tenant users to list project-scoped billing costs", func(ctx context.Context) {
+			identities := []struct {
+				name  string
+				claim jwt.MapClaims
+			}{
+				{name: "tenant-user"},
+				{name: "tenant-admin", claim: jwt.MapClaims{
+					"realm_access": map[string]any{"roles": []any{"tenant-admin"}},
+				}},
+			}
+			for _, identity := range identities {
+				token := createKeycloakUserToken("tenant-a", identity.name, identity.claim)
+				ctx = ContextWithToken(ctx, token)
+				handled := false
+				_, err := interceptor.UnaryServer(
+					ctx,
+					nil,
+					&grpc.UnaryServerInfo{FullMethod: "/osac.public.v1.BillingCosts/List"},
+					func(context.Context, any) (any, error) {
+						handled = true
+						return nil, nil
+					},
+				)
+				Expect(err).NotTo(HaveOccurred(), "%s should be allowed to list billing costs", identity.name)
+				Expect(handled).To(BeTrue())
+			}
+		})
+
 		DescribeTable(
 			"Allows Keycloak users on the public Secrets API",
 			func(ctx context.Context, method string) {

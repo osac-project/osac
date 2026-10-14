@@ -42,6 +42,8 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth/jwe"
+	"github.com/osac-project/osac/fulfillment-service/internal/billing"
+	"github.com/osac-project/osac/fulfillment-service/internal/billing/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/console"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -197,6 +199,7 @@ func Cmd() *cobra.Command {
 		emergencyServiceAccountsFlagHelp,
 	)
 	vault.AddBaseFlags(flags)
+	runner.args.billing.AddFlags(flags)
 	network.AddGrpcKeepaliveFlags(flags)
 	runner.args.services = services.RegisterFlags(flags)
 	return command
@@ -204,9 +207,10 @@ func Cmd() *cobra.Command {
 
 // runnerContext contains the data and logic needed to run the `start grpc-server` command.
 type runnerContext struct {
-	logger *slog.Logger
-	flags  *pflag.FlagSet
-	args   struct {
+	logger          *slog.Logger
+	flags           *pflag.FlagSet
+	billingProvider billing.Provider
+	args            struct {
 		caFiles                  []string
 		kafkaTopicPrefix         string
 		authType                 string
@@ -219,6 +223,7 @@ type runnerContext struct {
 		tokenIssuer              string
 		emergencyServiceAccounts []string
 		vaultBase                vault.BaseConfig
+		billing                  config.Config
 		services                 *services.Flags
 	}
 }
@@ -230,6 +235,11 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	if err := c.args.services.Validate(); err != nil {
 		return fmt.Errorf("invalid service flags: %w", err)
 	}
+	billingProviderKey, billingProvider, err := c.args.billing.Build(prometheus.DefaultRegisterer)
+	if err != nil {
+		return fmt.Errorf("invalid billing provider configuration: %w", err)
+	}
+	c.billingProvider = billingProvider
 
 	// Get the context and create a cancellable version:
 	ctx, cancel := context.WithCancel(cmd.Context())
@@ -713,6 +723,8 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		TierResolver:            tierResolver,
 		PrivateUsersServer:      privateUsersServer,
 		Services:                c.args.services,
+		BillingProviderKey:      billingProviderKey,
+		BillingProvider:         c.billingProvider,
 	})
 	if err != nil {
 		return err

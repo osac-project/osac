@@ -32,6 +32,7 @@ type ComputeInstanceCatalogItemsServerBuilder struct {
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
+	pricingResolver   *CatalogPricingResolver
 }
 
 var _ publicv1.ComputeInstanceCatalogItemsServer = (*ComputeInstanceCatalogItemsServer)(nil)
@@ -39,10 +40,12 @@ var _ publicv1.ComputeInstanceCatalogItemsServer = (*ComputeInstanceCatalogItems
 type ComputeInstanceCatalogItemsServer struct {
 	publicv1.UnimplementedComputeInstanceCatalogItemsServer
 
-	logger    *slog.Logger
-	delegate  *PrivateComputeInstanceCatalogItemsServer
-	inMapper  *GenericMapper[*publicv1.ComputeInstanceCatalogItem, *privatev1.ComputeInstanceCatalogItem]
-	outMapper *GenericMapper[*privatev1.ComputeInstanceCatalogItem, *publicv1.ComputeInstanceCatalogItem]
+	logger          *slog.Logger
+	delegate        *PrivateComputeInstanceCatalogItemsServer
+	inMapper        *GenericMapper[*publicv1.ComputeInstanceCatalogItem, *privatev1.ComputeInstanceCatalogItem]
+	outMapper       *GenericMapper[*privatev1.ComputeInstanceCatalogItem, *publicv1.ComputeInstanceCatalogItem]
+	tenancyLogic    auth.TenancyLogic
+	pricingResolver *CatalogPricingResolver
 }
 
 func NewComputeInstanceCatalogItemsServer() *ComputeInstanceCatalogItemsServerBuilder {
@@ -66,6 +69,12 @@ func (b *ComputeInstanceCatalogItemsServerBuilder) SetTenancyLogic(value auth.Te
 
 func (b *ComputeInstanceCatalogItemsServerBuilder) SetMetricsRegisterer(value prometheus.Registerer) *ComputeInstanceCatalogItemsServerBuilder {
 	b.metricsRegisterer = value
+	return b
+}
+
+// SetPricingResolver adds provider-derived pricing to catalog reads when billing is configured.
+func (b *ComputeInstanceCatalogItemsServerBuilder) SetPricingResolver(value *CatalogPricingResolver) *ComputeInstanceCatalogItemsServerBuilder {
+	b.pricingResolver = value
 	return b
 }
 
@@ -99,6 +108,7 @@ func (b *ComputeInstanceCatalogItemsServerBuilder) Build() (result *ComputeInsta
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetPricingResolver(b.pricingResolver).
 		SetFilterDesc((*publicv1.ComputeInstanceCatalogItem)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {
@@ -106,10 +116,12 @@ func (b *ComputeInstanceCatalogItemsServerBuilder) Build() (result *ComputeInsta
 	}
 
 	result = &ComputeInstanceCatalogItemsServer{
-		logger:    b.logger,
-		delegate:  delegate,
-		inMapper:  inMapper,
-		outMapper: outMapper,
+		logger:          b.logger,
+		delegate:        delegate,
+		inMapper:        inMapper,
+		outMapper:       outMapper,
+		tenancyLogic:    b.tenancyLogic,
+		pricingResolver: b.pricingResolver,
 	}
 	return
 }
@@ -140,6 +152,13 @@ func (s *ComputeInstanceCatalogItemsServer) List(ctx context.Context,
 		}
 		publicItems[i] = publicItem
 	}
+	pricingResults, err := resolveCatalogPricing(ctx, s.logger, s.tenancyLogic, s.pricingResolver, request.GetTenantId(), computeCatalogPricingRequestsForServer(ctx, s, publicItems))
+	if err != nil {
+		return nil, err
+	}
+	for i, pricing := range pricingResults {
+		publicItems[i].SetPricing(pricing)
+	}
 
 	response = &publicv1.ComputeInstanceCatalogItemsListResponse{}
 	response.SetSize(privateResponse.GetSize())
@@ -164,6 +183,13 @@ func (s *ComputeInstanceCatalogItemsServer) Get(ctx context.Context,
 		s.logger.ErrorContext(ctx, "Failed to map private compute instance catalog item to public", slog.Any("error", err))
 		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process compute instance catalog item")
 	}
+	pricing, err := resolveCatalogPricing(ctx, s.logger, s.tenancyLogic, s.pricingResolver, request.GetTenantId(), computeCatalogPricingRequestsForServer(ctx, s, []*publicv1.ComputeInstanceCatalogItem{publicCatalogItem}))
+	if err != nil {
+		return nil, err
+	}
+	if len(pricing) != 0 {
+		publicCatalogItem.SetPricing(pricing[0])
+	}
 
 	response = &publicv1.ComputeInstanceCatalogItemsGetResponse{}
 	response.SetObject(publicCatalogItem)
@@ -184,6 +210,7 @@ func (s *ComputeInstanceCatalogItemsServer) Create(ctx context.Context,
 		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process compute instance catalog item")
 		return
 	}
+	clearCatalogItemPricing(privateCatalogItem)
 
 	privateRequest := &privatev1.ComputeInstanceCatalogItemsCreateRequest{}
 	privateRequest.SetObject(privateCatalogItem)
@@ -228,6 +255,7 @@ func (s *ComputeInstanceCatalogItemsServer) Update(ctx context.Context,
 		s.logger.ErrorContext(ctx, "Failed to map public compute instance catalog item to private", slog.Any("error", err))
 		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process compute instance catalog item")
 	}
+	clearCatalogItemPricing(privateCatalogItem)
 
 	if request.GetUpdateMask() == nil {
 		// Preserve private metadata under a row lock so a concurrent finalizer update cannot be lost.

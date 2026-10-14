@@ -30,6 +30,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 type PrivateBareMetalInstanceCatalogItemsServerBuilder struct {
@@ -38,6 +39,7 @@ type PrivateBareMetalInstanceCatalogItemsServerBuilder struct {
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
 	filterDesc        protoreflect.MessageDescriptor
+	pricingResolver   *CatalogPricingResolver
 }
 
 var _ privatev1.BareMetalInstanceCatalogItemsServer = (*PrivateBareMetalInstanceCatalogItemsServer)(nil)
@@ -52,6 +54,8 @@ type PrivateBareMetalInstanceCatalogItemsServer struct {
 	virtualNetworksDao        *dao.GenericDAO[*privatev1.VirtualNetwork]
 	networkClassesDao         *dao.GenericDAO[*privatev1.NetworkClass]
 	securityGroupsDao         *dao.GenericDAO[*privatev1.SecurityGroup]
+	outMapper                 *GenericMapper[*privatev1.BareMetalInstanceCatalogItem, *publicv1.BareMetalInstanceCatalogItem]
+	pricingResolver           *CatalogPricingResolver
 }
 
 func NewPrivateBareMetalInstanceCatalogItemsServer() *PrivateBareMetalInstanceCatalogItemsServerBuilder {
@@ -78,6 +82,11 @@ func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) SetMetricsRegisterer
 	return b
 }
 
+func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) SetPricingResolver(value *CatalogPricingResolver) *PrivateBareMetalInstanceCatalogItemsServerBuilder {
+	b.pricingResolver = value
+	return b
+}
+
 // SetFilterDesc sets the protobuf descriptor used to validate public CEL filters. When omitted, the private Catalog
 // Item descriptor is used.
 func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) SetFilterDesc(value protoreflect.MessageDescriptor) *PrivateBareMetalInstanceCatalogItemsServerBuilder {
@@ -96,6 +105,13 @@ func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) Build() (result *Pri
 	}
 	if b.attributionLogic == nil {
 		err = errors.New("attribution logic is mandatory")
+		return
+	}
+	outMapper, err := NewGenericMapper[*privatev1.BareMetalInstanceCatalogItem, *publicv1.BareMetalInstanceCatalogItem]().
+		SetLogger(b.logger).
+		SetStrict(false).
+		Build()
+	if err != nil {
 		return
 	}
 
@@ -181,6 +197,8 @@ func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) Build() (result *Pri
 		virtualNetworksDao:        virtualNetworksDao,
 		networkClassesDao:         networkClassesDao,
 		securityGroupsDao:         securityGroupsDao,
+		outMapper:                 outMapper,
+		pricingResolver:           b.pricingResolver,
 	}
 	return
 }
@@ -251,9 +269,23 @@ func (s *PrivateBareMetalInstanceCatalogItemsServer) prepareCatalogItemCandidate
 	if err != nil {
 		return nil, err
 	}
-	return validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(ctx, s.generic.logger, candidate, template,
+	warnings, err := validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(ctx, s.generic.logger, candidate, template,
 		s.bareMetalInstanceTypesDao, s.diskImagesDao, s.subnetsDao,
 		s.virtualNetworksDao, s.networkClassesDao, s.securityGroupsDao)
+	if err != nil || !catalogItemNeedsBillingCoverage(s.pricingResolver, candidate.GetMetadata().GetTenant(), candidate.GetPublished()) {
+		return warnings, err
+	}
+	publicItem := &publicv1.BareMetalInstanceCatalogItem{}
+	if err := s.outMapper.Copy(ctx, candidate, publicItem); err != nil {
+		s.generic.logger.ErrorContext(ctx, "Failed to map bare metal catalog item for billing coverage", slog.Any("error", err))
+		return nil, grpcstatus.Error(grpccodes.Internal, "failed to evaluate billing coverage for bare metal catalog item")
+	}
+	requests := bareMetalCatalogPricingRequests([]*publicv1.BareMetalInstanceCatalogItem{publicItem})
+	requests[0] = applyTemplatePricingDefaults(requests[0], bareMetalTemplatePricingDimensions(template))
+	if err := checkCatalogItemBillingCoverage(ctx, s.pricingResolver, candidate.GetMetadata().GetTenant(), candidate.GetPublished(), requests); err != nil {
+		return nil, err
+	}
+	return warnings, nil
 }
 
 // validateAndCanonicalizeTemplate finds the Template named by this Catalog Item. A name lookup

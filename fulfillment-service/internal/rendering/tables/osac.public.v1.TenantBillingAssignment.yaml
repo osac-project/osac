@@ -1,0 +1,13 @@
+# Copyright (c) 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+columns:
+- header: ID
+  value: this.id
+- header: TENANT
+  value: this.spec.tenant_id
+- header: ACCOUNT
+  value: this.spec.billing_account_id
+- header: STATE
+  value: this.status.connection_state
+  type: osac.public.v1.TenantBillingAssignmentConnectionState

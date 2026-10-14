@@ -18,6 +18,7 @@ package osac.private.v1;
 import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
 import "google/api/field_behavior.proto";
+import "osac/private/v1/billing_catalog_pricing_type.proto";
 import "osac/private/v1/baremetal_instance_type_type.proto";
 import "osac/private/v1/cluster_template_type.proto";
 import "osac/private/v1/field_policy_type.proto";
@@ -59,6 +60,10 @@ message ClusterCatalogItem {
 
   // Policies that govern cluster fields during resource creation.
   ClusterCatalogItemFields fields = 10;
+
+  // Current provider-derived pricing for the default configuration. This
+  // field is populated only when billing is configured.
+  CatalogItemPricing pricing = 11 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Groups the policies for governable cluster fields.

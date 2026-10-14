@@ -1,0 +1,52 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "buf/validate/validate.proto";
+import "google/api/annotations.proto";
+import "osac/public/v1/billing_draft_charge_type.proto";
+
+message DraftChargesListRequest {
+  option (buf.validate.message).cel = {
+    id: "draft_charges_date_range"
+    message: "from_date must be on or before to_date"
+    expression: "this.from_date <= this.to_date"
+  };
+
+  // OSAC tenant whose draft charges are requested.
+  string tenant_id = 1 [(buf.validate.field).string = {min_len: 1}];
+  // Required inclusive billing-period bounds in YYYY-MM-DD format.
+  string from_date = 2 [(buf.validate.field).string = {len: 10, pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"}];
+  string to_date = 3 [(buf.validate.field).string = {len: 10, pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"}];
+  optional int32 offset = 4 [(buf.validate.field).int32.gte = 0];
+  optional int32 limit = 5 [(buf.validate.field).int32 = {gte: 1, lte: 100}];
+}
+
+message DraftChargesListResponse {
+  int32 size = 1;
+  int32 total = 2;
+  repeated BillingDraftCharge items = 3;
+}
+
+service DraftCharges {
+  // Lists draft charges for a tenant when supported by the configured provider.
+  rpc List(DraftChargesListRequest) returns (DraftChargesListResponse) {
+    option (google.api.http) = {get: "/api/fulfillment/v1/billing/draft_charges"};
+  }
+}

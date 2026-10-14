@@ -1,0 +1,335 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "cleanapi/cleanapi.proto";
+import "google/api/annotations.proto";
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/timestamp.proto";
+import "osac/private/v1/billing_account_type.proto";
+import "osac/private/v1/tenant_billing_assignment_type.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
+
+// BillingProviderStatus describes the configured billing provider. State
+// reports only reachability of the API endpoint checked by the adapter. It
+// does not report the health of other provider APIs or usage delivery.
+message BillingProviderStatus {
+  BillingProviderState state = 1;
+  string provider_key = 2;
+  string message = 3;
+  // Operations implemented by the configured provider adapter. Presence means
+  // supported, not currently reachable; unprobed operation APIs are not health
+  // checked by this status request.
+  repeated BillingProviderCapability supported_capabilities = 4;
+  // Time of the most recent successful account API reachability check.
+  google.protobuf.Timestamp last_successful_check = 5;
+  // Health of metering usage delivery to the billing provider. Fulfillment
+  // does not observe metering lag or dead-letter queue state, so this remains
+  // UNKNOWN unless that information becomes available.
+  BillingUsageDeliveryState usage_delivery_state = 6;
+}
+
+// BillingProviderState is the normalized reachability state of the provider
+// API checked by the adapter.
+enum BillingProviderState {
+  BILLING_PROVIDER_STATE_UNSPECIFIED = 0;
+  BILLING_PROVIDER_STATE_NOT_CONFIGURED = 1;
+  BILLING_PROVIDER_STATE_AVAILABLE = 2;
+  BILLING_PROVIDER_STATE_UNAVAILABLE = 3;
+}
+
+// BillingProviderCapability identifies an operation supported by the
+// configured provider adapter.
+enum BillingProviderCapability {
+  BILLING_PROVIDER_CAPABILITY_UNSPECIFIED = 0;
+  BILLING_PROVIDER_CAPABILITY_PRICING = 1;
+  BILLING_PROVIDER_CAPABILITY_COSTS = 2;
+  BILLING_PROVIDER_CAPABILITY_INVOICES = 3;
+  BILLING_PROVIDER_CAPABILITY_DRAFT_CHARGES = 4;
+  BILLING_PROVIDER_CAPABILITY_EXPORTS = 5;
+}
+
+// BillingUsageDeliveryState reports whether metering usage is reaching the
+// configured billing provider.
+enum BillingUsageDeliveryState {
+  BILLING_USAGE_DELIVERY_STATE_UNSPECIFIED = 0;
+  BILLING_USAGE_DELIVERY_STATE_UNKNOWN = 1;
+  BILLING_USAGE_DELIVERY_STATE_AVAILABLE = 2;
+  BILLING_USAGE_DELIVERY_STATE_UNAVAILABLE = 3;
+}
+
+message BillingProviderStatusesGetRequest {}
+
+message BillingProviderStatusesGetResponse {
+  BillingProviderStatus object = 1;
+}
+
+service BillingProviderStatuses {
+  // Retrieves the configured provider state. This method is available when
+  // billing is not configured and reports NOT_CONFIGURED in that case.
+  rpc Get(BillingProviderStatusesGetRequest) returns (BillingProviderStatusesGetResponse) {
+    option (google.api.http) = {
+      get: "/api/private/v1/billing/provider_status"
+      response_body: "object"
+    };
+  }
+}
+
+message BillingAccountsListRequest {
+  optional int32 offset = 1;
+  optional int32 limit = 2;
+  optional string filter = 3;
+  optional string order = 4;
+}
+
+message BillingAccountsListResponse {
+  int32 size = 1;
+  int32 total = 2;
+  repeated BillingAccount items = 3;
+}
+
+message BillingAccountsGetRequest {
+  option (cleanapi.message).private = true;
+  string id = 1;
+}
+
+message BillingAccountsGetResponse {
+  option (cleanapi.message).private = true;
+  BillingAccount object = 1;
+}
+
+service BillingAccounts {
+  // Lists billing accounts discovered from the configured provider.
+  rpc List(BillingAccountsListRequest) returns (BillingAccountsListResponse) {
+    option (google.api.http) = {get: "/api/private/v1/billing/accounts"};
+  }
+
+  // Retrieves an account by OSAC ID for internal provider synchronization.
+  rpc Get(BillingAccountsGetRequest) returns (BillingAccountsGetResponse) {
+    option (cleanapi.method).private = true;
+  }
+}
+
+message TenantBillingAssignmentsListRequest {
+  optional int32 offset = 1;
+  optional int32 limit = 2;
+  optional string filter = 3;
+  optional string order = 4;
+}
+
+message TenantBillingAssignmentsListResponse {
+  int32 size = 1;
+  int32 total = 2;
+  repeated TenantBillingAssignment items = 3;
+}
+
+message TenantBillingAssignmentsGetRequest {
+  string id = 1;
+}
+
+message TenantBillingAssignmentsGetResponse {
+  TenantBillingAssignment object = 1;
+}
+
+message TenantBillingAssignmentsCreateRequest {
+  TenantBillingAssignment object = 1;
+}
+
+message TenantBillingAssignmentsCreateResponse {
+  TenantBillingAssignment object = 1;
+}
+
+message TenantBillingAssignmentsUpdateRequest {
+  TenantBillingAssignment object = 1;
+  google.protobuf.FieldMask update_mask = 2;
+  bool lock = 3;
+}
+
+message TenantBillingAssignmentsUpdateResponse {
+  TenantBillingAssignment object = 1;
+}
+
+message TenantBillingAssignmentsSignalRequest {
+  option (cleanapi.message).private = true;
+  string id = 1;
+}
+
+message TenantBillingAssignmentsSignalResponse {
+  option (cleanapi.message).private = true;
+}
+
+message TenantBillingAssignmentsUpdateStatusRequest {
+  option (cleanapi.message).private = true;
+  string id = 1;
+  TenantBillingAssignmentConnectionState connection_state = 2;
+  optional string message = 3;
+}
+
+message TenantBillingAssignmentsUpdateStatusResponse {
+  option (cleanapi.message).private = true;
+}
+
+service TenantBillingAssignments {
+  // Lists current and historical tenant-to-account assignments.
+  rpc List(TenantBillingAssignmentsListRequest) returns (TenantBillingAssignmentsListResponse) {
+    option (google.api.http) = {get: "/api/private/v1/billing/tenant_billing_assignments"};
+  }
+
+  // Retrieves one tenant-to-account assignment by its OSAC identifier.
+  rpc Get(TenantBillingAssignmentsGetRequest) returns (TenantBillingAssignmentsGetResponse) {
+    option (google.api.http) = {
+      get: "/api/private/v1/billing/tenant_billing_assignments/{id}"
+      response_body: "object"
+    };
+  }
+
+  // Creates a tenant-to-account assignment.
+  rpc Create(TenantBillingAssignmentsCreateRequest) returns (TenantBillingAssignmentsCreateResponse) {
+    option (google.api.http) = {
+      post: "/api/private/v1/billing/tenant_billing_assignments"
+      body: "object"
+      response_body: "object"
+    };
+  }
+
+  // Changes the tenant's active billing account. The service retains the
+  // previous assignment as history and creates a new pending assignment.
+  rpc Update(TenantBillingAssignmentsUpdateRequest) returns (TenantBillingAssignmentsUpdateResponse) {
+    option (google.api.http) = {
+      patch: "/api/private/v1/billing/tenant_billing_assignments/{object.id}"
+      body: "object"
+      response_body: "object"
+    };
+  }
+
+  // Signals that provider synchronization should be retried for an assignment.
+  rpc Signal(TenantBillingAssignmentsSignalRequest) returns (TenantBillingAssignmentsSignalResponse) {
+    option (cleanapi.method).private = true;
+  }
+
+  // Updates observed connection state from the internal reconciler.
+  rpc UpdateStatus(TenantBillingAssignmentsUpdateStatusRequest)
+      returns (TenantBillingAssignmentsUpdateStatusResponse) {
+    option (cleanapi.method).private = true;
+  }
+}
+
+// CatalogPricingInput identifies a billable catalog value that an admin may
+// need to cover with a provider rate.
+message CatalogPricingInput {
+  // OSAC resource type, for example "compute_instance".
+  string service = 1;
+  // Billable dimension name used by OSAC usage events.
+  string dimension = 2;
+  // Canonical value configured by the catalog item.
+  string value = 3;
+  // Catalog items that expose this value.
+  repeated CatalogPricingInputSource catalog_items = 4;
+  // Whether a catalog item lets the user choose any value for this dimension.
+  bool accepts_any_value = 5;
+}
+
+// CatalogPricingInputSource identifies an OSAC catalog item that contributes
+// a value to the billing inventory.
+message CatalogPricingInputSource {
+  string id = 1;
+  string name = 2;
+  string title = 3;
+  bool published = 4;
+}
+
+message CatalogPricingInputsListRequest {
+  optional int32 offset = 1;
+  optional int32 limit = 2;
+  optional string filter = 3;
+  optional string order = 4;
+}
+
+message CatalogPricingInputsListResponse {
+  int32 size = 1;
+  int32 total = 2;
+  repeated CatalogPricingInput items = 3;
+}
+
+service CatalogPricingInputs {
+  // Lists billable values from the configured OSAC catalog items.
+  rpc List(CatalogPricingInputsListRequest) returns (CatalogPricingInputsListResponse) {
+    option (google.api.http) = {get: "/api/private/v1/billing/catalog_pricing_inputs"};
+  }
+}
+
+enum BillingRateCardSource {
+  BILLING_RATE_CARD_SOURCE_UNSPECIFIED = 0;
+  BILLING_RATE_CARD_SOURCE_DEFAULT = 1;
+  BILLING_RATE_CARD_SOURCE_CONTRACT = 2;
+}
+
+enum BillingRateMatchOperator {
+  BILLING_RATE_MATCH_OPERATOR_UNSPECIFIED = 0;
+  BILLING_RATE_MATCH_OPERATOR_ANY = 1;
+  BILLING_RATE_MATCH_OPERATOR_EQUALS = 2;
+}
+
+message ProviderRateCardCondition {
+  string dimension = 1;
+  BillingRateMatchOperator operator = 2;
+  string value = 3;
+}
+
+message ProviderRateValue {
+  string amount = 1;
+  string unit = 2;
+}
+
+// ProviderRateCardItem is a singular display row normalized from the
+// configured provider's current rate card.
+message ProviderRateCardItem {
+  string service = 1;
+  string currency_code = 2;
+  BillingRateCardSource source = 3;
+  repeated ProviderRateCardCondition resource_conditions = 4;
+  ProviderRateValue rate = 5;
+  repeated string catalog_item_matches = 6;
+}
+
+message ProviderRateCardItemsListRequest {
+  optional string tenant_id = 1;
+  optional string service = 2;
+  optional string currency_code = 3;
+  optional int32 offset = 4;
+  optional int32 limit = 5;
+  optional string filter = 6;
+  optional string order = 7;
+}
+
+message ProviderRateCardItemsListResponse {
+  int32 size = 1;
+  int32 total = 2;
+  repeated ProviderRateCardItem items = 3;
+}
+
+service ProviderRateCardItems {
+  // Lists current provider rates for the requested OSAC service or all
+  // mapped OSAC services. A tenant selects contract-specific pricing.
+  rpc List(ProviderRateCardItemsListRequest) returns (ProviderRateCardItemsListResponse) {
+    option (google.api.http) = {get: "/api/private/v1/billing/provider_rate_card_items"};
+  }
+}

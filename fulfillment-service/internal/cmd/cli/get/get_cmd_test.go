@@ -39,9 +39,22 @@ var _ = Describe("Get command", func() {
 		ctrl = gomock.NewController(GinkgoT())
 		DeferCleanup(ctrl.Finish)
 		mockHelper = reflection.NewMockObjectHelper(ctrl)
+		mockHelper.EXPECT().Descriptor().AnyTimes().Return((&publicv1.Cluster{}).ProtoReflect().Descriptor())
 	})
 
 	Describe("fetchObjects", func() {
+		It("requests all pages for billing accounts", func() {
+			accounts := reflection.NewMockObjectHelper(ctrl)
+			accounts.EXPECT().Descriptor().Return((&publicv1.BillingAccount{}).ProtoReflect().Descriptor())
+			accounts.EXPECT().List(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, options reflection.ListOptions) (reflection.ListResult, error) {
+				Expect(options.AllPages).To(BeTrue())
+				return reflection.ListResult{}, nil
+			})
+			runner := &runnerContext{objectHelper: accounts}
+			_, err := runner.list(ctx, nil)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
 		It("should call Get for each object when UseGetForStructuredOutput is true", func() {
 			listObject := &publicv1.Cluster{Id: "cluster-1", Metadata: &publicv1.Metadata{Name: "my-cluster"}}
 			fullObject := &publicv1.Cluster{Id: "cluster-1", Metadata: &publicv1.Metadata{Name: "my-cluster"}}
@@ -126,6 +139,10 @@ var _ = Describe("Get command", func() {
 			"externalip", "externalips",
 			"externalipattachment", "externalipattachments",
 			"natgateway", "natgateways",
+		))
+		Expect(completed).To(ContainElements(
+			"billingaccount", "billingaccounts",
+			"tenantbillingassignment", "tenantbillingassignments",
 		))
 	})
 })

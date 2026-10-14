@@ -24,6 +24,30 @@ controller:
   # Enable startup and periodic synchronization. Event-driven reconciliation remains enabled when false.
   sync: true
 
+# Billing is optional. When configured, the same provider connection is used
+# by the API server and assignment controller. The API key comes from an
+# existing Kubernetes Secret and is never stored in Helm values.
+billing:
+  provider: ""
+  m360:
+    apiUrl: ""
+    apiVersion: ""
+    apiKeySecret:
+      name: ""
+      key: api-key
+
+# The umbrella chart sets this shared value for both Fulfillment and metering.
+# Direct installs can continue using the chart-local `billing` block above.
+global:
+  billing:
+    provider: ""
+    m360:
+      apiUrl: ""
+      apiVersion: ""
+      apiKeySecret:
+        name: ""
+        key: api-key
+
 # The event publisher requires a Kafka backend. Disable it for API-only deployments.
 eventPublisher:
   enabled: true

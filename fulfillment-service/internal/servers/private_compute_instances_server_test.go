@@ -31,6 +31,7 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/billing"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -3470,6 +3471,52 @@ var _ = Describe("Private compute instances server", func() {
 
 				Expect(update("resize-large").GetObject().GetSpec().GetInstanceType().GetId()).To(Equal("resize-large"))
 				Expect(update("resize-small").GetObject().GetSpec().GetInstanceType().GetId()).To(Equal("resize-small"))
+			})
+
+			It("Checks changed instance types against billing coverage and permits provider outages", func() {
+				createInstanceTypeWithSpec("billing-current", privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE, 4, 16, nil, nil)
+				createInstanceTypeWithSpec("billing-target", privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE, 8, 32, nil, nil)
+				id := createComputeInstanceWithType("billing-current")
+				current, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				currentPrice := computeInstanceCoverageRequests(current.GetObject())[0]
+				conditions := make([]billing.RateCondition, 0, len(currentPrice.Dimensions))
+				for dimension, value := range currentPrice.Dimensions {
+					conditions = append(conditions, billing.RateCondition{
+						Dimension: dimension, Operator: billing.RateMatchEquals, Value: value,
+					})
+				}
+				provider := &catalogPricingRateCardProviderStub{items: []billing.RateCardItem{{
+					Service: currentPrice.Service, CurrencyCode: "USD", Amount: "1", Unit: billing.RateUnitHour, Conditions: conditions,
+				}}}
+				server.pricingResolver = NewCatalogPricingResolver("m360", provider, &catalogPricingAccountStoreStub{account: billing.AssignedAccount{
+					ProviderKey: "m360", ProviderAccountReference: "account", CurrencyCode: "USD", ConnectionState: "CONNECTED",
+				}})
+				update := func(target string) (*privatev1.ComputeInstancesUpdateResponse, error) {
+					return server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+						Object: privatev1.ComputeInstance_builder{
+							Id: id,
+							Spec: privatev1.ComputeInstanceSpec_builder{
+								InstanceType: privatev1.InstanceTypeReference_builder{Id: target}.Build(),
+							}.Build(),
+						}.Build(),
+						UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.instance_type"}},
+					}.Build())
+				}
+
+				_, err = update("billing-current")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(provider.calls).To(BeZero())
+
+				_, err = update("billing-target")
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("BILLING_COVERAGE_GAP"))
+				Expect(provider.calls).To(Equal(1))
+
+				provider.err = billing.ErrProviderUnavailable
+				response, err := update("billing-target")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetInstanceType().GetId()).To(Equal("billing-target"))
 			})
 
 			It("Resolves name-only current and target InstanceType references before comparison", func() {

@@ -17,6 +17,16 @@
 # =============================================================================
 
 global:
+  # Billing is optional. Both Fulfillment and the metering adapter use this
+  # provider URL, API version, and existing Secret reference.
+  billing:
+    provider: m360
+    m360:
+      apiUrl: https://m360.example.com
+      apiVersion: v1
+      apiKeySecret:
+        name: osac-billing-m360
+        key: api-key
   networking:
     # Supported facade profiles today:
     #   - fabricManager: netris, k8sManager: ""     → fabricManager netris

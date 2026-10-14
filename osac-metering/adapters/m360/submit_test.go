@@ -42,7 +42,7 @@ var _ = Describe("m360Adapter Submit", func() {
 		}))
 		defer server.Close()
 
-		adapter := &m360Adapter{client: newM360Client(server.URL, "v2", "test-api-key")}
+		adapter := &m360Adapter{client: newTestM360Client(server.URL, "v2", "test-api-key")}
 		tests := []struct {
 			name       string
 			cloudEvent cloudevents.Event
@@ -120,7 +120,7 @@ var _ = Describe("m360Adapter Submit", func() {
 		}))
 		DeferCleanup(server.Close)
 
-		adapter := &m360Adapter{client: newM360Client(server.URL, "v1", "key")}
+		adapter := &m360Adapter{client: newTestM360Client(server.URL, "v1", "key")}
 		cases := []struct {
 			name             string
 			id               string

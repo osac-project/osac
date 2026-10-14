@@ -365,6 +365,17 @@ Run all installation commands in the same shell session.
    [secrets management configuration guide](secrets-management-configuration.md)
    to prepare the Vault configuration.
 
+7. When enabling M360 billing, create the API-key Secret in `$NS` before
+   installing or upgrading the chart. Store the key in a protected file and
+   create the Secret with:
+
+   ```console
+   $ oc create secret generic m360-api-key --from-file=api-key=/secure/path/to/m360-api-key -n "$NS" --dry-run=client -o yaml | oc apply --server-side -f -
+   ```
+
+   Set `global.billing.m360.apiKeySecret.name` to `m360-api-key`. Do not put the
+   key in Helm values.
+
 ### 4.2 Configuring the Helm values
 
 You create one values file for the `osac` chart, `my-values.yaml`.
@@ -397,10 +408,36 @@ You create one values file for the `osac` chart, `my-values.yaml`.
 4. For a production deployment, add `service.vault` to `my-values.yaml` using
    the [secrets management configuration guide](secrets-management-configuration.md#configure-the-osac-instance).
 
-5. Add the service-specific value blocks (`global.services.*`, `csiDriver`,
-   `operator.networkManagers`, `networkClass`, `aap`, `metering`, and `bmf`)
+5. Add the service-specific value blocks (`global.services.*`, `global.billing`,
+   `csiDriver`, `operator.networkManagers`, `networkClass`, `aap`, `metering`,
+   and `bmf`)
    from [Section 6](#6-installation-workflows-by-service) for the service you
    are installing.
+
+6. To enable M360 billing, configure the shared `global.billing` values. For
+   example:
+
+   ```yaml
+   global:
+     billing:
+       provider: m360
+       m360:
+         apiUrl: "https://<m360-api-host>"
+         apiVersion: "<m360-api-version>"
+         apiKeySecret:
+           name: m360-api-key
+           key: api-key
+   ```
+
+   Billing is optional. Leave `global.billing.provider` empty (the default)
+   to use OSAC without a billing provider; catalog items then have no prices
+   and billing APIs are unavailable. This release supports only M360. Changing
+   `global.billing.provider` is a configuration change, not a billing-period
+   migration; in-period provider switching and usage replay are not supported.
+
+   `BillingProviderStatuses.Get` reports provider status, not whether usage
+   events are reaching M360. Monitor the metering adapter's delivery-lag and
+   dead-letter-queue (DLQ) metrics separately.
 
 For a full parameter reference, see
 [Section 5](#5-helm-chart-configuration-parameters).
@@ -561,7 +598,8 @@ subchart's own `values.yaml` file.
 | `kafka.enabled` | schema | Creates the Fulfillment Service's Strimzi user and copies its credentials. Set to `false` for an external Kafka connection; this does not disable Kafka use or metering's Strimzi resources. See [Kafka configuration](kafka-configuration.md). | `true` |
 | `service.kafka.connection` | schema | ConfigMap/Secret mappings for the required `brokers`, `user`, and `password` parameters. Supply resources in the OSAC namespace. | `fulfillment-service-kafka` Secret |
 | `metering.enabled` | schema | Deploys the metering service. Requires Strimzi-managed Kafka, a database connection, and `global.osacDeploymentId` (see [Table 5.1](#table-51-service-enablement-my-valuesyaml) and [Kafka configuration](kafka-configuration.md#optional-metering)). | `false` |
-| `metering.reconciliation.interval`, `metering.m360Adapter.enabled`, `metering.m360Adapter.m360.apiUrl`, `metering.m360Adapter.apiKeySecret` | subchart | Reconcile period and the Monetize360 billing adapter. | Not applicable |
+| `metering.reconciliation.interval` | subchart | Metering reconciliation period. | Not applicable |
+| `global.billing.provider`, `global.billing.m360.apiUrl`, `global.billing.m360.apiVersion`, `global.billing.m360.apiKeySecret.name`, `global.billing.m360.apiKeySecret.key` | schema | Optional billing connection. `m360` is the only supported provider; leave provider empty to disable billing. Reference an existing Secret in the OSAC namespace. | Empty provider disables billing |
 | `validation.enabled` | schema | Runs the pre-installation validation hook. | `true` |
 | `metallb.enabled`, `metallb.addressCIDR` | schema | In the `osac` chart, creates an `IPAddressPool` and an `L2Advertisement`. Edit the pool after installation to match your network. | `false` and `192.168.40.0/24` |
 | `bundledVault.enabled`, `bundledVault.image` | schema | In-cluster OpenBao for testing and CI. Not intended for production. | `true` and `openbao:2.6.2` |

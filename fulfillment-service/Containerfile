@@ -19,6 +19,7 @@ COPY --chown=1001:1001 osac-csi-driver/go.mod osac-csi-driver/go.sum osac-csi-dr
 COPY --chown=1001:1001 osac-metering/schema/go.mod osac-metering/schema/go.sum osac-metering/schema/
 COPY --chown=1001:1001 osac-metering/metering-service/go.mod osac-metering/metering-service/go.sum osac-metering/metering-service/
 COPY --chown=1001:1001 osac-metering/adapters/go.mod osac-metering/adapters/go.sum osac-metering/adapters/
+COPY --chown=1001:1001 osac-metering/shared/m360http/go.mod osac-metering/shared/m360http/
 COPY --chown=1001:1001 osac-ui/proxy/go.mod osac-ui/proxy/go.sum osac-ui/proxy/
 # [ -f /cachi2/cachi2.env ] && . ... sources Hermeto/Cachi2's generated env
 # (GOPROXY/GOFLAGS pointed at the prefetched module cache) when present --
@@ -35,6 +36,7 @@ ARG VERSION=""
 # Copy source for fulfillment-service and its workspace dependencies.
 COPY --chown=1001:1001 proto/ proto/
 COPY --chown=1001:1001 fulfillment-service/ fulfillment-service/
+COPY --chown=1001:1001 osac-metering/shared/m360http/ osac-metering/shared/m360http/
 COPY --chown=1001:1001 bare-metal-fulfillment-operator/ bare-metal-fulfillment-operator/
 COPY --chown=1001:1001 osac-operator/api/ osac-operator/api/
 

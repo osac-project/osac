@@ -17,6 +17,7 @@ package osac.public.v1;
 
 import "buf/validate/validate.proto";
 import "google/api/field_behavior.proto";
+import "osac/public/v1/billing_catalog_pricing_type.proto";
 import "osac/public/v1/field_policy_type.proto";
 import "osac/public/v1/metadata_type.proto";
 import "osac/public/v1/baremetal_instance_template_type.proto";
@@ -55,6 +56,10 @@ message BareMetalInstanceCatalogItem {
 
   // Policies that govern bare metal instance fields during resource creation.
   BareMetalInstanceCatalogItemFields fields = 10;
+
+  // Current provider-derived pricing for the default configuration. This
+  // field is populated only when billing is configured.
+  CatalogItemPricing pricing = 11 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Groups the policies for governable bare metal instance fields.

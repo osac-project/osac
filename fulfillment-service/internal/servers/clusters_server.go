@@ -33,6 +33,7 @@ type ClustersServerBuilder struct {
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
+	pricingResolver   *CatalogPricingResolver
 }
 
 var _ publicv1.ClustersServer = (*ClustersServer)(nil)
@@ -72,6 +73,11 @@ func (b *ClustersServerBuilder) SetTenancyLogic(value auth.TenancyLogic) *Cluste
 // access objects. This is optional. If not set, no metrics will be recorded.
 func (b *ClustersServerBuilder) SetMetricsRegisterer(value prometheus.Registerer) *ClustersServerBuilder {
 	b.metricsRegisterer = value
+	return b
+}
+
+func (b *ClustersServerBuilder) SetPricingResolver(value *CatalogPricingResolver) *ClustersServerBuilder {
+	b.pricingResolver = value
 	return b
 }
 
@@ -120,6 +126,7 @@ func (b *ClustersServerBuilder) Build() (result *ClustersServer, err error) {
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetPricingResolver(b.pricingResolver).
 		SetAddOnOperatorResolverFactory(newPublishedScopedAddOnOperatorResourceResolver).
 		SetFilterDesc(objectDesc).
 		Build()

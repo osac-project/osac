@@ -43,6 +43,11 @@ The following table lists the configurable parameters of the chart and their def
 | `images.envoy.tag`         | Envoy proxy container image tag                                                    | `v1.37.1`                                                      |
 | `images.envoy.pullPolicy`  | Envoy proxy image pull policy                                                      | `IfNotPresent`                                                 |
 | `eventPublisher.enabled`   | Deploy the Kafka-backed event publisher                                           | `true`                                                         |
+| `billing.provider`         | Optional billing provider (`m360` or empty to disable billing)                    | `""`                                                           |
+| `billing.m360.apiUrl`      | M360 API base URL, required when `billing.provider` is `m360`                     | `""`                                                           |
+| `billing.m360.apiVersion`  | M360 API version, required when `billing.provider` is `m360`                      | `""`                                                           |
+| `billing.m360.apiKeySecret.name` | Existing Secret containing the M360 API key, required when enabled          | `""`                                                           |
+| `billing.m360.apiKeySecret.key`  | Secret key containing the M360 API key                                            | `api-key`                                                       |
 | `database.connection`      | List of sources for database connection parameters (see below)                    | `[]` (must be configured)                                      |
 | `kafka.connection`         | List of sources for Kafka connection parameters (see below)                       | `[]` (must be configured when the event publisher is enabled)  |
 
@@ -65,6 +70,13 @@ include OSAC's identity claims (`username`, `groups`, `organization`, and
 `roles`) and the `osac-api` audience. Put only its client secret in the
 configured Kubernetes Secret under the `client-secret` key. The MCP deployment
 uses the issuer's Keycloak token endpoint over the configured CA trust bundle.
+
+Billing is disabled by default. To enable M360, set `billing.provider: m360`, provide the API URL and
+version, and create the referenced Kubernetes Secret in the release namespace. The Secret is mounted
+read-only by both the API server and assignment controller; do not put the API key in Helm values.
+This release supports only M360. Leaving the provider empty keeps OSAC usable without billing; catalog
+pricing and billing APIs are unavailable. Changing the provider is not a billing-period migration, and
+in-period provider switching or usage replay is not supported.
 
 **Note on hostnames:** Both `externalHostname` and `internalHostname` are required because TLS
 certificates must be generated with the correct host names.

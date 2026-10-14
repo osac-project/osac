@@ -32,6 +32,7 @@ type BareMetalInstanceCatalogItemsServerBuilder struct {
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
+	pricingResolver   *CatalogPricingResolver
 }
 
 var _ publicv1.BareMetalInstanceCatalogItemsServer = (*BareMetalInstanceCatalogItemsServer)(nil)
@@ -39,10 +40,12 @@ var _ publicv1.BareMetalInstanceCatalogItemsServer = (*BareMetalInstanceCatalogI
 type BareMetalInstanceCatalogItemsServer struct {
 	publicv1.UnimplementedBareMetalInstanceCatalogItemsServer
 
-	logger    *slog.Logger
-	delegate  *PrivateBareMetalInstanceCatalogItemsServer
-	inMapper  *GenericMapper[*publicv1.BareMetalInstanceCatalogItem, *privatev1.BareMetalInstanceCatalogItem]
-	outMapper *GenericMapper[*privatev1.BareMetalInstanceCatalogItem, *publicv1.BareMetalInstanceCatalogItem]
+	logger          *slog.Logger
+	delegate        *PrivateBareMetalInstanceCatalogItemsServer
+	inMapper        *GenericMapper[*publicv1.BareMetalInstanceCatalogItem, *privatev1.BareMetalInstanceCatalogItem]
+	outMapper       *GenericMapper[*privatev1.BareMetalInstanceCatalogItem, *publicv1.BareMetalInstanceCatalogItem]
+	tenancyLogic    auth.TenancyLogic
+	pricingResolver *CatalogPricingResolver
 }
 
 func NewBareMetalInstanceCatalogItemsServer() *BareMetalInstanceCatalogItemsServerBuilder {
@@ -71,6 +74,12 @@ func (b *BareMetalInstanceCatalogItemsServerBuilder) SetTenancyLogic(value auth.
 // access objects. This is optional. If not set, no metrics will be recorded.
 func (b *BareMetalInstanceCatalogItemsServerBuilder) SetMetricsRegisterer(value prometheus.Registerer) *BareMetalInstanceCatalogItemsServerBuilder {
 	b.metricsRegisterer = value
+	return b
+}
+
+// SetPricingResolver adds provider-derived pricing to catalog reads when billing is configured.
+func (b *BareMetalInstanceCatalogItemsServerBuilder) SetPricingResolver(value *CatalogPricingResolver) *BareMetalInstanceCatalogItemsServerBuilder {
+	b.pricingResolver = value
 	return b
 }
 
@@ -104,6 +113,7 @@ func (b *BareMetalInstanceCatalogItemsServerBuilder) Build() (result *BareMetalI
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetPricingResolver(b.pricingResolver).
 		SetFilterDesc((*publicv1.BareMetalInstanceCatalogItem)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {
@@ -111,10 +121,12 @@ func (b *BareMetalInstanceCatalogItemsServerBuilder) Build() (result *BareMetalI
 	}
 
 	result = &BareMetalInstanceCatalogItemsServer{
-		logger:    b.logger,
-		delegate:  delegate,
-		inMapper:  inMapper,
-		outMapper: outMapper,
+		logger:          b.logger,
+		delegate:        delegate,
+		inMapper:        inMapper,
+		outMapper:       outMapper,
+		tenancyLogic:    b.tenancyLogic,
+		pricingResolver: b.pricingResolver,
 	}
 	return
 }
@@ -146,6 +158,13 @@ func (s *BareMetalInstanceCatalogItemsServer) List(ctx context.Context,
 		}
 		publicItems[i] = publicItem
 	}
+	pricingResults, err := resolveCatalogPricing(ctx, s.logger, s.tenancyLogic, s.pricingResolver, request.GetTenantId(), bareMetalCatalogPricingRequestsForServer(ctx, s, publicItems))
+	if err != nil {
+		return nil, err
+	}
+	for i, pricing := range pricingResults {
+		publicItems[i].SetPricing(pricing)
+	}
 
 	response = &publicv1.BareMetalInstanceCatalogItemsListResponse{}
 	response.SetSize(privateResponse.GetSize())
@@ -171,6 +190,13 @@ func (s *BareMetalInstanceCatalogItemsServer) Get(ctx context.Context,
 			slog.Any("error", err))
 		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process bare metal instance catalog item")
 	}
+	pricing, err := resolveCatalogPricing(ctx, s.logger, s.tenancyLogic, s.pricingResolver, request.GetTenantId(), bareMetalCatalogPricingRequestsForServer(ctx, s, []*publicv1.BareMetalInstanceCatalogItem{publicCatalogItem}))
+	if err != nil {
+		return nil, err
+	}
+	if len(pricing) != 0 {
+		publicCatalogItem.SetPricing(pricing[0])
+	}
 
 	response = &publicv1.BareMetalInstanceCatalogItemsGetResponse{}
 	response.SetObject(publicCatalogItem)
@@ -192,6 +218,7 @@ func (s *BareMetalInstanceCatalogItemsServer) Create(ctx context.Context,
 		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process bare metal instance catalog item")
 		return
 	}
+	clearCatalogItemPricing(privateCatalogItem)
 
 	privateRequest := &privatev1.BareMetalInstanceCatalogItemsCreateRequest{}
 	privateRequest.SetObject(privateCatalogItem)
@@ -237,6 +264,7 @@ func (s *BareMetalInstanceCatalogItemsServer) Update(ctx context.Context,
 		s.logger.ErrorContext(ctx, "Failed to map public bare metal instance catalog item to private", slog.Any("error", err))
 		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process bare metal instance catalog item")
 	}
+	clearCatalogItemPricing(privateCatalogItem)
 
 	if request.GetUpdateMask() == nil {
 		// Preserve private metadata under a row lock so a concurrent finalizer update cannot be lost.

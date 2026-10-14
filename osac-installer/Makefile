@@ -576,6 +576,10 @@ csi-render-test: helm-deps ## Verify CSI and storage-provider chart rendering
 fulfillment-trust-render-test: helm-deps ## Check verified fulfillment transport renders
 	python3 scripts/test-fulfillment-trust-render.py
 
+.PHONY: billing-render-test
+billing-render-test: helm-deps ## Check optional billing provider renders
+\tpython3 scripts/test-billing-render.py
+
 .PHONY: metering-auth-render-test
 metering-auth-render-test: helm-deps ## Check metering service-account auth renders in supported profiles
 	python3 scripts/test-metering-auth-render.py
@@ -593,7 +597,7 @@ dev-full-render-test: helm-deps ## Check dev-full TLS and Helm post-rendering
 	./scripts/test-dev-full-render.sh
 
 .PHONY: helm-validate
-helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test mce-render-test dev-full-render-test ## Validate all charts (lint + template)
+helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test billing-render-test mce-render-test dev-full-render-test ## Validate all charts (lint + template)
 	@for d in values/*/; do \
 		infra="$${d}infra.yaml"; \
 		[ -f "$$infra" ] && echo "Validating $$infra..." && \

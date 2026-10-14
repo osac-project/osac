@@ -6,8 +6,12 @@
   "properties": {
     "global": {
       "type": "object",
-      "description": "Values propagated unchanged into every subchart, shared between the umbrella chart's own templates and its subcharts. Use global.networking as the primary networking configuration API.",
+      "description": "Values propagated unchanged into every subchart, shared between the umbrella chart's own templates and its subcharts. Use global.billing and global.networking for shared provider and network configuration.",
       "properties": {
+        "billing": {
+          "$ref": "#/properties/service/properties/billing",
+          "description": "Optional billing connection shared by Fulfillment and metering. M360 is the only supported provider; an empty provider disables billing. When provider is m360, reference an API-key Secret created in the OSAC namespace before installation."
+        },
         "clusterDomain": {
           "type": "string",
           "description": "OpenShift cluster ingress domain (e.g. apps.mycluster.example.com). Backs the tpl-templated defaults for service.auth.issuerUrl, service.idp.url, and service.vault.keycloakIssuerUrl. Set via --set global.clusterDomain=$(oc get ingresses.config/cluster -o jsonpath='{.spec.domain}'). Leave empty on platforms (e.g. kind) that set those three values explicitly instead."
@@ -675,6 +679,75 @@
               "default": true
             }
           },
+          "additionalProperties": false
+        },
+        "billing": {
+          "type": "object",
+          "description": "Optional billing configuration. This release supports only M360; an empty provider disables billing. global.billing takes precedence and is shared with the metering adapter.",
+          "properties": {
+            "provider": {
+              "type": "string",
+              "description": "Billing provider; empty disables billing",
+              "enum": ["", "m360"],
+              "default": ""
+            },
+            "m360": {
+              "type": "object",
+              "properties": {
+                "apiUrl": {
+                  "type": "string",
+                  "description": "M360 API base URL"
+                },
+                "apiVersion": {
+                  "type": "string",
+                  "description": "M360 API version"
+                },
+                "apiKeySecret": {
+                  "type": "object",
+                  "description": "Reference to a Kubernetes Secret created in the OSAC namespace before installation; required when provider is m360.",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "description": "Name of the existing Secret containing the M360 API key; required when provider is m360."
+                    },
+                    "key": {
+                      "type": "string",
+                      "description": "Secret key containing the M360 API key",
+                      "default": "api-key"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {"provider": {"const": "m360"}},
+                "required": ["provider"]
+              },
+              "then": {
+                "properties": {
+                  "m360": {
+                    "required": ["apiUrl", "apiVersion", "apiKeySecret"],
+                    "properties": {
+                      "apiUrl": {"type": "string", "minLength": 1},
+                      "apiVersion": {"type": "string", "minLength": 1},
+                      "apiKeySecret": {
+                        "required": ["name", "key"],
+                        "properties": {
+                          "name": {"type": "string", "minLength": 1},
+                          "key": {"type": "string", "minLength": 1}
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ],
           "additionalProperties": false
         },
         "externalHostname": {
@@ -1805,12 +1878,12 @@
         },
         "m360Adapter": {
           "type": "object",
-          "description": "Monetize360 metering adapter",
+          "description": "Monetize360 metering adapter. It is deployed only when global.billing.provider is m360; set enabled to false as a kill switch.",
           "properties": {
             "enabled": {
               "type": "boolean",
-              "description": "Enable the M360 metering adapter",
-              "default": false
+              "description": "Keep the M360 metering adapter enabled when global.billing.provider is m360",
+              "default": true
             },
             "image": {
               "type": "object",
@@ -1830,19 +1903,19 @@
             },
             "m360": {
               "type": "object",
-              "description": "M360 API connection settings",
+              "description": "Deprecated and ignored. Configure the shared connection under global.billing.m360.",
               "properties": {
                 "apiUrl": {
                   "type": "string",
-                  "description": "Monetize360 Usage API endpoint"
+                  "description": "Deprecated and ignored; use global.billing.m360.apiUrl"
                 },
                 "apiKeySecret": {
                   "type": "string",
-                  "description": "Name of K8s Secret containing the API key"
+                  "description": "Deprecated and ignored; use global.billing.m360.apiKeySecret.name"
                 },
                 "apiVersion": {
                   "type": "string",
-                  "description": "M360 API version",
+                  "description": "Deprecated and ignored; use global.billing.m360.apiVersion",
                   "default": "v1"
                 }
               },

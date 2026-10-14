@@ -4,6 +4,7 @@ ARG TARGETARCH
 
 WORKDIR /opt/app-root/src
 COPY --chown=1001:0 schema/ schema/
+COPY --chown=1001:0 shared/ shared/
 COPY --chown=1001:0 adapters/go.mod adapters/go.sum adapters/
 # [ -f /cachi2/cachi2.env ] && . ... sources Hermeto/Cachi2's generated env
 # (GOPROXY/GOFLAGS pointed at the prefetched module cache) when present --

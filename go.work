@@ -5,6 +5,7 @@ use (
 	./fulfillment-service
 	./osac-csi-driver
 	./osac-metering/adapters
+	./osac-metering/shared/m360http
 	./osac-metering/metering-service
 	./osac-metering/schema
 	./osac-operator

@@ -384,6 +384,98 @@ var _ = Describe("Interceptor", func() {
 		Expect(buffer.String()).ToNot(ContainSubstring("ssh-ed25519 AAAAsecret"))
 		Expect(string(request.GetObject().GetData()["public_key"])).To(Equal("ssh-ed25519 AAAAsecret"))
 	})
+
+	It("Redacts billing amounts and provider account references from body logs", func() {
+		redactedInterceptor, err := NewInterceptor().
+			SetLogger(logger).
+			SetBodies(true).
+			SetRedact(true).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		dumpRedacted := func(message any) map[string]any {
+			buffer.Reset()
+			field, ok := redactedInterceptor.dumpMessage(ctx, "request", message)
+			Expect(ok).To(BeTrue())
+			logger.LogAttrs(ctx, slog.LevelDebug, "body", field.(slog.Attr))
+			messages := Parse(buffer)
+			Expect(messages).To(HaveLen(1))
+			return messages[0]["request"].(map[string]any)
+		}
+
+		cost := privatev1.BillingCost_builder{
+			Service:      "compute_instance",
+			Amount:       "123.45",
+			CurrencyCode: "USD",
+		}.Build()
+		Expect(dumpRedacted(cost)).To(HaveKeyWithValue("amount", "***"))
+		Expect(cost.GetAmount()).To(Equal("123.45"))
+
+		pricing := privatev1.CatalogItemPricing_builder{
+			Status: privatev1.CatalogPricingStatus_CATALOG_PRICING_STATUS_CURRENT,
+			Components: []*privatev1.CatalogPriceComponent{
+				privatev1.CatalogPriceComponent_builder{Amount: "20.00", Unit: "hour"}.Build(),
+			},
+		}.Build()
+		pricingBody := dumpRedacted(pricing)
+		components := pricingBody["components"].([]any)
+		Expect(components[0].(map[string]any)).To(HaveKeyWithValue("amount", "***"))
+
+		invoice := privatev1.BillingInvoice_builder{
+			Id:        "invoice-1",
+			Amount:    "123.45",
+			TaxAmount: "12.34",
+			Balance:   "100.00",
+			Items: []*privatev1.BillingInvoiceLineItem{
+				privatev1.BillingInvoiceLineItem_builder{
+					RatePerUnit: "4.50",
+					Amount:      "90.00",
+					TaxAmount:   "9.00",
+					Balance:     "99.00",
+				}.Build(),
+			},
+		}.Build()
+		invoiceBody := dumpRedacted(invoice)
+		Expect(invoiceBody).To(HaveKeyWithValue("amount", "***"))
+		Expect(invoiceBody).To(HaveKeyWithValue("taxAmount", "***"))
+		Expect(invoiceBody).To(HaveKeyWithValue("balance", "***"))
+		items := invoiceBody["items"].([]any)
+		lineItem := items[0].(map[string]any)
+		Expect(lineItem).To(HaveKeyWithValue("ratePerUnit", "***"))
+		Expect(lineItem).To(HaveKeyWithValue("amount", "***"))
+		Expect(lineItem).To(HaveKeyWithValue("taxAmount", "***"))
+		Expect(lineItem).To(HaveKeyWithValue("balance", "***"))
+
+		hourly, monthly := "4.50", "3285.00"
+		estimate := privatev1.PriceEstimatesCreateResponse_builder{
+			CurrencyCode:  "USD",
+			HourlyAmount:  "4.50",
+			MonthlyAmount: "3285.00",
+			Components: []*privatev1.PriceEstimateComponent{
+				privatev1.PriceEstimateComponent_builder{
+					RateAmount:    "5.00",
+					HourlyAmount:  &hourly,
+					MonthlyAmount: &monthly,
+				}.Build(),
+			},
+		}.Build()
+		estimateBody := dumpRedacted(estimate)
+		Expect(estimateBody).To(HaveKeyWithValue("hourlyAmount", "***"))
+		Expect(estimateBody).To(HaveKeyWithValue("monthlyAmount", "***"))
+		estimateComponents := estimateBody["components"].([]any)
+		estimateComponent := estimateComponents[0].(map[string]any)
+		Expect(estimateComponent).To(HaveKeyWithValue("rateAmount", "***"))
+		Expect(estimateComponent).To(HaveKeyWithValue("hourlyAmount", "***"))
+		Expect(estimateComponent).To(HaveKeyWithValue("monthlyAmount", "***"))
+
+		account := privatev1.BillingAccount_builder{
+			Id:                       "osac-account-1",
+			ProviderAccountReference: "provider-account-secret",
+		}.Build()
+		accountBody := dumpRedacted(account)
+		Expect(accountBody).To(HaveKeyWithValue("providerAccountReference", "***"))
+		Expect(buffer.String()).ToNot(ContainSubstring("provider-account-secret"))
+	})
 })
 
 type mockClientStream struct {

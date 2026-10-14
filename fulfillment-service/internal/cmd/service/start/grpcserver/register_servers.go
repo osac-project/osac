@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/billing"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/servers"
 	"github.com/osac-project/osac/fulfillment-service/internal/services"
@@ -49,6 +50,9 @@ type ResourceServerDeps struct {
 	PrivateUsersServer privatev1.UsersServer
 
 	Services *services.Flags
+
+	BillingProviderKey string
+	BillingProvider    billing.Provider
 }
 
 // ResourceServers exposes the constructed servers and shared infrastructure that code outside the
@@ -65,6 +69,108 @@ type ResourceServers struct {
 // same code path.
 func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistrar, //nolint:gocyclo
 	deps ResourceServerDeps) (*ResourceServers, error) {
+	billingAccountStore := billing.NewAccountStore()
+	catalogPricingInputsBuilder := servers.NewCatalogPricingInputsServer().SetLogger(deps.Logger)
+	rateCardProvider, _ := deps.BillingProvider.(billing.RateCardProvider)
+	var catalogPricingResolver *servers.CatalogPricingResolver
+	var computeCatalogItems publicv1.ComputeInstanceCatalogItemsServer
+	var clusterCatalogItems publicv1.ClusterCatalogItemsServer
+	var bareMetalCatalogItems publicv1.BareMetalInstanceCatalogItemsServer
+	if deps.BillingProvider != nil {
+		catalogPricingResolver = servers.NewCatalogPricingResolver(deps.BillingProviderKey, rateCardProvider, billingAccountStore, deps.MetricsRegisterer)
+	}
+	invoiceProvider, _ := deps.BillingProvider.(billing.InvoiceProvider)
+	costProvider, _ := deps.BillingProvider.(billing.CostProvider)
+	draftChargeProvider, _ := deps.BillingProvider.(billing.DraftChargeProvider)
+	billingExportProvider, _ := deps.BillingProvider.(billing.BillingExportProvider)
+	providerRateCardItemsBuilder := servers.NewProviderRateCardItemsServer().
+		SetLogger(deps.Logger).
+		SetProvider(deps.BillingProviderKey, rateCardProvider).
+		SetPricingResolver(catalogPricingResolver).
+		SetAccountStore(billingAccountStore)
+	billingInvoicesBuilder := servers.NewBillingInvoicesServer().
+		SetLogger(deps.Logger).
+		SetProvider(deps.BillingProviderKey, invoiceProvider).
+		SetAccountStore(billingAccountStore).
+		SetTenancyLogic(deps.TenancyLogic)
+	billingCostsBuilder := servers.NewBillingCostsServer().
+		SetLogger(deps.Logger).
+		SetProvider(deps.BillingProviderKey, costProvider).
+		SetPricingResolver(catalogPricingResolver).
+		SetAccountStore(billingAccountStore).
+		SetTenancyLogic(deps.TenancyLogic)
+	draftChargesBuilder := servers.NewDraftChargesServer().
+		SetLogger(deps.Logger).
+		SetProvider(deps.BillingProviderKey, draftChargeProvider).
+		SetAccountStore(billingAccountStore).
+		SetTenancyLogic(deps.TenancyLogic)
+	billingExportsBuilder := servers.NewBillingExportsServer().
+		SetLogger(deps.Logger).
+		SetProvider(deps.BillingProviderKey, billingExportProvider).
+		SetAccountStore(billingAccountStore).
+		SetTenancyLogic(deps.TenancyLogic)
+	publicBillingProviderStatuses, err := servers.NewBillingProviderStatusesServer().
+		SetLogger(deps.Logger).
+		SetProvider(deps.BillingProviderKey, deps.BillingProvider).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create billing provider status server: %w", err)
+	}
+	publicv1.RegisterBillingProviderStatusesServer(registrar, publicBillingProviderStatuses)
+
+	privateBillingProviderStatuses, err := servers.NewPrivateBillingProviderStatusesServer().
+		SetLogger(deps.Logger).
+		SetProvider(deps.BillingProviderKey, deps.BillingProvider).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create private billing provider status server: %w", err)
+	}
+	privatev1.RegisterBillingProviderStatusesServer(registrar, privateBillingProviderStatuses)
+
+	publicBillingAccounts, err := servers.NewBillingAccountsServer().
+		SetLogger(deps.Logger).
+		SetProvider(deps.BillingProviderKey, deps.BillingProvider).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create billing accounts server: %w", err)
+	}
+	publicv1.RegisterBillingAccountsServer(registrar, publicBillingAccounts)
+
+	privateBillingAccounts, err := servers.NewPrivateBillingAccountsServer().
+		SetLogger(deps.Logger).
+		SetProvider(deps.BillingProviderKey, deps.BillingProvider).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create private billing accounts server: %w", err)
+	}
+	privatev1.RegisterBillingAccountsServer(registrar, privateBillingAccounts)
+
+	publicTenantBillingAssignments, err := servers.NewTenantBillingAssignmentsServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PublicAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetProvider(deps.BillingProvider).
+		SetAccountStore(billingAccountStore).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create tenant billing assignments server: %w", err)
+	}
+	publicv1.RegisterTenantBillingAssignmentsServer(registrar, publicTenantBillingAssignments)
+
+	privateTenantBillingAssignments, err := servers.NewPrivateTenantBillingAssignmentsServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PrivateAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetProvider(deps.BillingProvider).
+		SetAccountStore(billingAccountStore).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create private tenant billing assignments server: %w", err)
+	}
+	privatev1.RegisterTenantBillingAssignmentsServer(registrar, privateTenantBillingAssignments)
+
 	// CaaS: public cluster templates and catalog items
 	if deps.Services.CaaS {
 		deps.Logger.InfoContext(ctx, "Creating cluster templates server")
@@ -97,11 +203,14 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 			SetAttributionLogic(deps.PublicAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
+			SetPricingResolver(catalogPricingResolver).
 			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create cluster catalog items server: %w", err)
 		}
 		publicv1.RegisterClusterCatalogItemsServer(registrar, clusterCatalogItemsServer)
+		clusterCatalogItems = clusterCatalogItemsServer
+		catalogPricingInputsBuilder.SetClusterCatalogItems(clusterCatalogItemsServer)
 	}
 
 	if deps.Services.VMaaS {
@@ -111,11 +220,14 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 			SetAttributionLogic(deps.PublicAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
+			SetPricingResolver(catalogPricingResolver).
 			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create compute instance catalog items server: %w", err)
 		}
 		publicv1.RegisterComputeInstanceCatalogItemsServer(registrar, computeInstanceCatalogItemsServer)
+		computeCatalogItems = computeInstanceCatalogItemsServer
+		catalogPricingInputsBuilder.SetComputeInstanceCatalogItems(computeInstanceCatalogItemsServer)
 	}
 
 	if deps.Services.CaaS {
@@ -177,6 +289,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 			SetAttributionLogic(deps.PublicAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
+			SetPricingResolver(catalogPricingResolver).
 			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create clusters server: %w", err)
@@ -189,6 +302,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 			SetAttributionLogic(deps.PrivateAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
+			SetPricingResolver(catalogPricingResolver).
 			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create private clusters server: %w", err)
@@ -230,6 +344,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
 			SetSecretStore(deps.SecretStore).
+			SetPricingResolver(catalogPricingResolver).
 			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create compute instances server: %w", err)
@@ -243,6 +358,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
 			SetSecretStore(deps.SecretStore).
+			SetPricingResolver(catalogPricingResolver).
 			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create private compute instances server: %w", err)
@@ -296,11 +412,14 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 			SetAttributionLogic(deps.PublicAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
+			SetPricingResolver(catalogPricingResolver).
 			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create bare metal instance catalog items server: %w", err)
 		}
 		publicv1.RegisterBareMetalInstanceCatalogItemsServer(registrar, bareMetalInstanceCatalogItemsServer)
+		bareMetalCatalogItems = bareMetalInstanceCatalogItemsServer
+		catalogPricingInputsBuilder.SetBareMetalInstanceCatalogItems(bareMetalInstanceCatalogItemsServer)
 
 		deps.Logger.InfoContext(ctx, "Creating bare metal instances server")
 		bareMetalInstancesServer, err := servers.NewBareMetalInstancesServer().
@@ -309,6 +428,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
 			SetSecretStore(deps.SecretStore).
+			SetPricingResolver(catalogPricingResolver).
 			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create bare metal instances server: %w", err)
@@ -346,6 +466,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
 			SetSecretStore(deps.SecretStore).
+			SetPricingResolver(catalogPricingResolver).
 			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create private bare metal instances server: %w", err)
@@ -975,6 +1096,57 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 
 	// Register the private users server. It's already constructed — see the PrivateUsersServer doc comment.
 	privatev1.RegisterUsersServer(registrar, deps.PrivateUsersServer)
+
+	catalogPricingInputsServer, err := catalogPricingInputsBuilder.Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create catalog pricing inputs server: %w", err)
+	}
+	publicv1.RegisterCatalogPricingInputsServer(registrar, catalogPricingInputsServer)
+
+	providerRateCardItemsBuilder.SetCatalogPricingInputs(catalogPricingInputsServer)
+	providerRateCardItemsServer, err := providerRateCardItemsBuilder.Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create provider rate-card items server: %w", err)
+	}
+	publicv1.RegisterProviderRateCardItemsServer(registrar, providerRateCardItemsServer)
+
+	billingInvoicesServer, err := billingInvoicesBuilder.Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create billing invoices server: %w", err)
+	}
+	publicv1.RegisterBillingInvoicesServer(registrar, billingInvoicesServer)
+
+	billingCostsServer, err := billingCostsBuilder.Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create billing costs server: %w", err)
+	}
+	publicv1.RegisterBillingCostsServer(registrar, billingCostsServer)
+
+	draftChargesServer, err := draftChargesBuilder.Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create draft charges server: %w", err)
+	}
+	publicv1.RegisterDraftChargesServer(registrar, draftChargesServer)
+
+	billingExportsServer, err := billingExportsBuilder.Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create billing exports server: %w", err)
+	}
+	publicv1.RegisterBillingExportsServer(registrar, billingExportsServer)
+
+	billingPricingServers, err := servers.NewBillingPricingServers(
+		deps.Logger,
+		deps.TenancyLogic,
+		catalogPricingResolver,
+		computeCatalogItems,
+		clusterCatalogItems,
+		bareMetalCatalogItems,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create billing pricing servers: %w", err)
+	}
+	publicv1.RegisterPricingQueriesServer(registrar, billingPricingServers.PricingQueries)
+	publicv1.RegisterPriceEstimatesServer(registrar, billingPricingServers.PriceEstimates)
 
 	return &ResourceServers{
 		PrivateHubsServer:             privateHubsServer,

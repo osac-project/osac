@@ -31,6 +31,11 @@ message ClusterCatalogItemsListRequest {
 
   // Order criteria, similar to SQL ORDER BY syntax.
   optional string order = 4;
+
+  // Tenant used to select prices for a Cloud Provider Admin catalog preview.
+  // This does not change catalog item visibility. Tenant callers are priced for
+  // their active tenant context.
+  optional string tenant_id = 5;
 }
 
 message ClusterCatalogItemsListResponse {
@@ -41,6 +46,11 @@ message ClusterCatalogItemsListResponse {
 
 message ClusterCatalogItemsGetRequest {
   string id = 1;
+
+  // Tenant used to select prices for a Cloud Provider Admin catalog preview.
+  // This does not change catalog item visibility. Tenant callers are priced for
+  // their active tenant context.
+  optional string tenant_id = 2;
 }
 
 message ClusterCatalogItemsGetResponse {

@@ -28,6 +28,11 @@ message BareMetalInstanceCatalogItemsListRequest {
   optional int32 limit = 2;
   optional string filter = 3;
   optional string order = 4;
+
+  // Tenant used to select prices for a Cloud Provider Admin catalog preview.
+  // This does not change catalog item visibility. Tenant callers are priced for
+  // their active tenant context.
+  optional string tenant_id = 5;
 }
 
 message BareMetalInstanceCatalogItemsListResponse {
@@ -39,6 +44,11 @@ message BareMetalInstanceCatalogItemsListResponse {
 message BareMetalInstanceCatalogItemsGetRequest {
   // Unique identifier of the catalog item.
   string id = 1;
+
+  // Tenant used to select prices for a Cloud Provider Admin catalog preview.
+  // This does not change catalog item visibility. Tenant callers are priced for
+  // their active tenant context.
+  optional string tenant_id = 2;
 }
 
 message BareMetalInstanceCatalogItemsGetResponse {

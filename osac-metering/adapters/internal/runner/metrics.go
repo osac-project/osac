@@ -19,6 +19,7 @@ import (
 type adapterMetrics struct {
 	eventsSubmitted      *prometheus.CounterVec
 	eventsFailed         *prometheus.CounterVec
+	usageDeliveryLag     *prometheus.HistogramVec
 	retryDuration        *prometheus.HistogramVec
 	duplicatesSuppressed *prometheus.CounterVec
 	outOfOrderEvents     *prometheus.CounterVec
@@ -44,6 +45,11 @@ func newAdapterMetrics() *adapterMetrics {
 			Name: "osac_metering_adapter_events_failed_total",
 			Help: "Total events that failed processing.",
 		}, []string{"provider", "error_type"}),
+		usageDeliveryLag: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "osac_metering_adapter_usage_delivery_lag_seconds",
+			Help:    "Time from CloudEvent generation until successful provider submission.",
+			Buckets: []float64{0.1, 1, 5, 15, 30, 60, 300, 900, 3600, 21600, 86400},
+		}, []string{"provider"}),
 		retryDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "osac_metering_adapter_retry_duration_seconds",
 			Help:    "Duration of retry attempts for Submit calls.",
@@ -90,7 +96,7 @@ func newAdapterMetrics() *adapterMetrics {
 	}
 
 	reg.MustRegister(
-		m.eventsSubmitted, m.eventsFailed, m.retryDuration,
+		m.eventsSubmitted, m.eventsFailed, m.usageDeliveryLag, m.retryDuration,
 		m.duplicatesSuppressed, m.outOfOrderEvents,
 		m.flushDuration, m.flushErrors,
 		m.eventsDropped, m.dlqEventsTotal, m.dlqSendErrors,

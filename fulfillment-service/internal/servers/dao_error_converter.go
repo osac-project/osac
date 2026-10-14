@@ -137,8 +137,7 @@ func ValidateRequiredObject(fieldName string, obj any) error {
 	}
 	// Use reflection to detect nil pointers held in the any value
 	v := reflect.ValueOf(obj)
-	//nolint:govet // Using named constant reflect.Ptr is more readable than inlining
-	if v.Kind() == reflect.Ptr && v.IsNil() {
+	if v.Kind() == reflect.Pointer && v.IsNil() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "%s is required", fieldName)
 	}
 	return nil

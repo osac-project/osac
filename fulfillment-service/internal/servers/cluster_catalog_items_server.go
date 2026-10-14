@@ -32,6 +32,7 @@ type ClusterCatalogItemsServerBuilder struct {
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
+	pricingResolver   *CatalogPricingResolver
 }
 
 var _ publicv1.ClusterCatalogItemsServer = (*ClusterCatalogItemsServer)(nil)
@@ -39,10 +40,12 @@ var _ publicv1.ClusterCatalogItemsServer = (*ClusterCatalogItemsServer)(nil)
 type ClusterCatalogItemsServer struct {
 	publicv1.UnimplementedClusterCatalogItemsServer
 
-	logger    *slog.Logger
-	delegate  *PrivateClusterCatalogItemsServer
-	inMapper  *GenericMapper[*publicv1.ClusterCatalogItem, *privatev1.ClusterCatalogItem]
-	outMapper *GenericMapper[*privatev1.ClusterCatalogItem, *publicv1.ClusterCatalogItem]
+	logger          *slog.Logger
+	delegate        *PrivateClusterCatalogItemsServer
+	inMapper        *GenericMapper[*publicv1.ClusterCatalogItem, *privatev1.ClusterCatalogItem]
+	outMapper       *GenericMapper[*privatev1.ClusterCatalogItem, *publicv1.ClusterCatalogItem]
+	tenancyLogic    auth.TenancyLogic
+	pricingResolver *CatalogPricingResolver
 }
 
 func NewClusterCatalogItemsServer() *ClusterCatalogItemsServerBuilder {
@@ -66,6 +69,12 @@ func (b *ClusterCatalogItemsServerBuilder) SetTenancyLogic(value auth.TenancyLog
 
 func (b *ClusterCatalogItemsServerBuilder) SetMetricsRegisterer(value prometheus.Registerer) *ClusterCatalogItemsServerBuilder {
 	b.metricsRegisterer = value
+	return b
+}
+
+// SetPricingResolver adds provider-derived pricing to catalog reads when billing is configured.
+func (b *ClusterCatalogItemsServerBuilder) SetPricingResolver(value *CatalogPricingResolver) *ClusterCatalogItemsServerBuilder {
+	b.pricingResolver = value
 	return b
 }
 
@@ -99,6 +108,7 @@ func (b *ClusterCatalogItemsServerBuilder) Build() (result *ClusterCatalogItemsS
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetPricingResolver(b.pricingResolver).
 		SetFilterDesc((*publicv1.ClusterCatalogItem)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {
@@ -106,10 +116,12 @@ func (b *ClusterCatalogItemsServerBuilder) Build() (result *ClusterCatalogItemsS
 	}
 
 	result = &ClusterCatalogItemsServer{
-		logger:    b.logger,
-		delegate:  delegate,
-		inMapper:  inMapper,
-		outMapper: outMapper,
+		logger:          b.logger,
+		delegate:        delegate,
+		inMapper:        inMapper,
+		outMapper:       outMapper,
+		tenancyLogic:    b.tenancyLogic,
+		pricingResolver: b.pricingResolver,
 	}
 	return
 }
@@ -140,6 +152,13 @@ func (s *ClusterCatalogItemsServer) List(ctx context.Context,
 		}
 		publicItems[i] = publicItem
 	}
+	pricingResults, err := resolveCatalogPricing(ctx, s.logger, s.tenancyLogic, s.pricingResolver, request.GetTenantId(), clusterCatalogPricingRequestsForServer(ctx, s, publicItems))
+	if err != nil {
+		return nil, err
+	}
+	for i, pricing := range pricingResults {
+		publicItems[i].SetPricing(pricing)
+	}
 
 	response = &publicv1.ClusterCatalogItemsListResponse{}
 	response.SetSize(privateResponse.GetSize())
@@ -164,6 +183,13 @@ func (s *ClusterCatalogItemsServer) Get(ctx context.Context,
 		s.logger.ErrorContext(ctx, "Failed to map private cluster catalog item to public", slog.Any("error", err))
 		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process cluster catalog item")
 	}
+	pricing, err := resolveCatalogPricing(ctx, s.logger, s.tenancyLogic, s.pricingResolver, request.GetTenantId(), clusterCatalogPricingRequestsForServer(ctx, s, []*publicv1.ClusterCatalogItem{publicCatalogItem}))
+	if err != nil {
+		return nil, err
+	}
+	if len(pricing) != 0 {
+		publicCatalogItem.SetPricing(pricing[0])
+	}
 
 	response = &publicv1.ClusterCatalogItemsGetResponse{}
 	response.SetObject(publicCatalogItem)
@@ -184,6 +210,7 @@ func (s *ClusterCatalogItemsServer) Create(ctx context.Context,
 		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process cluster catalog item")
 		return
 	}
+	clearCatalogItemPricing(privateCatalogItem)
 
 	privateRequest := &privatev1.ClusterCatalogItemsCreateRequest{}
 	privateRequest.SetObject(privateCatalogItem)
@@ -227,6 +254,7 @@ func (s *ClusterCatalogItemsServer) Update(ctx context.Context,
 		s.logger.ErrorContext(ctx, "Failed to map public cluster catalog item to private", slog.Any("error", err))
 		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process cluster catalog item")
 	}
+	clearCatalogItemPricing(privateCatalogItem)
 
 	if request.GetUpdateMask() == nil {
 		// Preserve private metadata under a row lock so a concurrent finalizer update cannot be lost.

@@ -55,6 +55,11 @@ osac-metering
 osac-metering
 {{- end -}}
 
+{{- define "osac-metering.m360AdapterEnabled" -}}
+{{- $billing := .Values.global.billing | default dict -}}
+{{- if and .Values.m360Adapter.enabled (eq ($billing.provider | default "") "m360") -}}true{{- end -}}
+{{- end -}}
+
 {{- define "osac-metering.kafkaReplicas" -}}
 3
 {{- end -}}

@@ -146,6 +146,35 @@ def _safe_command_error(error: BaseException, action: str) -> RuntimeError:
     detail = type(error).__name__
     if isinstance(error, subprocess.CalledProcessError):
         detail += f" (exit {error.returncode})"
+        args = error.cmd if isinstance(error.cmd, (list, tuple)) else []
+        if args and isinstance(args[0], str):
+            executable = Path(args[0]).name
+            if executable in {"grpcurl", "oc", "kubectl", "curl"}:
+                detail += f" [{executable}]"
+        for arg in args:
+            if isinstance(arg, str) and re.fullmatch(
+                r"osac\.(?:public|private)\.v1\."
+                r"(?:ComputeInstances|ComputeInstanceCatalogItems|InstanceTypes|NetworkClasses|"
+                r"VirtualNetworks|Subnets|SecurityGroups)/(?:Create|Get|List|Update|Delete)",
+                arg,
+            ):
+                detail += f" [{arg}]"
+                break
+        stderr = str(error.stderr or "").lower()
+        reasons = [
+            label
+            for pattern, label in (
+                (r"failed to query for service descriptor|failed to resolve symbol", "reflection failure"),
+                (r"connection reset", "connection reset"),
+                (r"connection refused", "connection refused"),
+                (r"code\s*[:=]\s*unavailable\b", "Unavailable"),
+                (r"code\s*[:=]\s*unauthenticated\b", "Unauthenticated"),
+                (r"code\s*[:=]\s*permissiondenied\b", "PermissionDenied"),
+                (r"code\s*[:=]\s*deadlineexceeded\b", "DeadlineExceeded"),
+            )
+            if re.search(pattern, stderr)
+        ]
+        detail += " (" + ", ".join(reasons or ["unclassified"]) + ")"
     elif isinstance(error, subprocess.TimeoutExpired):
         detail += f" (timeout {error.timeout}s)"
     elif isinstance(error, _ScratchRestoreError):

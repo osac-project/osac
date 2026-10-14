@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from bisect import bisect_left
 import contextlib
 import fcntl
 import hashlib
@@ -490,9 +489,6 @@ class StateStore:
                 address TEXT NOT NULL,
                 UNIQUE (pool_uid, address)
             )"""
-        )
-        connection.execute(
-            "CREATE INDEX external_ips_by_pool ON external_ips(pool_uid)"
         )
 
     @staticmethod
@@ -1545,48 +1541,54 @@ class StateStore:
                                 "ExternalIPPool has no available addresses"
                             )
 
-                        reserved_addresses = sorted(
-                            int(ipaddress.IPv4Address(row[0]))
-                            for row in connection.execute(
-                                "SELECT address FROM external_ips WHERE pool_uid = ?",
-                                (pool_uid,),
-                            )
-                        )
                         pool_end = first_host + host_count
-                        if any(
-                            reserved < first_host or reserved >= pool_end
-                            for reserved in reserved_addresses
-                        ):
-                            raise StateCorrupt(
-                                "ExternalIP reservation is outside its pool"
-                            )
-
                         start_address = first_host + (
                             (start + probe_count) % host_count
                         )
 
-                        def first_gap(lower: int, upper: int) -> int | None:
-                            candidate = lower
-                            index = bisect_left(reserved_addresses, lower)
-                            while (
-                                index < len(reserved_addresses)
-                                and reserved_addresses[index] < upper
-                            ):
-                                reserved = reserved_addresses[index]
-                                if reserved > candidate:
-                                    return candidate
-                                candidate += 1
-                                index += 1
-                            return candidate if candidate < upper else None
+                        def first_available_address(
+                            lower: int, upper: int
+                        ) -> str | None:
+                            if lower >= upper:
+                                return None
+                            result = connection.execute(
+                                """WITH RECURSIVE candidates(address_value) AS (
+                                       SELECT ?
+                                       UNION ALL
+                                       SELECT address_value + 1 FROM candidates
+                                       WHERE address_value + 1 < ?
+                                   ), addresses(address_value, address) AS (
+                                       SELECT address_value, printf(
+                                           '%d.%d.%d.%d',
+                                           (address_value >> 24) & 255,
+                                           (address_value >> 16) & 255,
+                                           (address_value >> 8) & 255,
+                                           address_value & 255
+                                       ) FROM candidates
+                                   )
+                                   SELECT address FROM addresses
+                                   WHERE NOT EXISTS (
+                                       SELECT 1 FROM external_ips
+                                       WHERE pool_uid = ?
+                                         AND external_ips.address = addresses.address
+                                   )
+                                   LIMIT 1""",
+                                (lower, upper, pool_uid),
+                            ).fetchone()
+                            return result[0] if result is not None else None
 
-                        available_address = first_gap(start_address, pool_end)
+                        available_address = first_available_address(
+                            start_address, pool_end
+                        )
                         if available_address is None and start_address > first_host:
-                            available_address = first_gap(first_host, start_address)
+                            available_address = first_available_address(
+                                first_host, start_address
+                            )
                         if available_address is None:
                             raise StateError(
                                 "ExternalIPPool has no available addresses"
                             )
-                        address = str(ipaddress.IPv4Address(available_address))
+                        address = available_address
                     reservation = _external_ip_entry(
                         uid, fulfillment_id, tenant_id, pool_uid, address
                     )

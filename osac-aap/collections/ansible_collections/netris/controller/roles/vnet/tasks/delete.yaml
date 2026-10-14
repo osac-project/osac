@@ -5,7 +5,7 @@
   when: netris_session_cookie is not defined
 
 - name: Get existing V-Nets
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/vnet"
     method: GET
     headers:
@@ -27,7 +27,7 @@
 
 - name: Delete V-Net
   when: _existing_vnet is defined and _existing_vnet is not none
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/vnet/{{ _existing_vnet.id }}"
     method: DELETE
     headers:

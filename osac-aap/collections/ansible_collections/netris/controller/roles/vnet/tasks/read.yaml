@@ -12,7 +12,7 @@
   when: netris_session_cookie is not defined
 
 - name: Get V-Nets
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     force: true
     url: "{{ netris_controller_url }}/api/v2/vnet"
     method: GET

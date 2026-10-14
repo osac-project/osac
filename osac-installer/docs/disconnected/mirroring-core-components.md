@@ -276,7 +276,7 @@ Feature: Core component mirroring and deployment for disconnected OSAC
     And IDMS and ITMS resources are applied to the cluster
 
   Scenario: All dependency images are accessible from cluster nodes
-    When a cluster node pulls "trust-manager:v0.20.0"
+    When a cluster node pulls "quay.io/jetstack/trust-manager:v0.20.0"
     Then the image resolves via ITMS to the mirror registry
     And the pull succeeds without error
 
@@ -323,9 +323,9 @@ Feature: Core component mirroring and deployment for disconnected OSAC
 oc get imagedigestmirrorset
 oc get imagetagmirrorset
 
-# 2. Verify dependency images resolve via mirror
+# 2. Verify dependency images resolve via ITMS
 oc debug node/<node-name> -- chroot /host \
-  crictl pull <mirror-registry>:8443/jetstack/trust-manager:v0.20.0
+  crictl pull quay.io/jetstack/trust-manager:v0.20.0
 
 # 3. Verify Phase 1b services
 oc get pods -n keycloak -l app=keycloak

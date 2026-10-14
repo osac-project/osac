@@ -20,7 +20,7 @@ Before you begin, confirm each item:
 | Check | Command / evidence |
 | ----- | ------------------ |
 | OpenShift cluster is in a disconnected or restricted-network state | `oc get proxy/cluster -o jsonpath='{.spec}'` |
-| `oc-mirror` v2 binary is available on the bastion host | `oc-mirror version --short` shows `>= 4.16` |
+| Latest available `oc-mirror` v2 binary on the bastion | `oc-mirror version` |
 | Mirror registry is reachable from the bastion and from every cluster node | `curl -sSf https://<registry>:8443/v2/ -k` |
 | Red Hat pull secret is configured for `registry.redhat.io` | `jq -e '.auths \| has("registry.redhat.io")' ~/.docker/config.json` |
 | Mirror registry credentials are in the pull secret | `jq -e '.auths \| has("<registry>:8443")' ~/.docker/config.json` |

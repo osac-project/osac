@@ -3,85 +3,195 @@
 # ensure_storage_class.yaml with loop_var _ontap_backend_id).
 #
 # Kubeconfig routing: the dispatcher's module_defaults route k8s/k8s_info to
-# the target cluster via storage_provider_target_kubeconfig. The prepared
-# Secret lives on the HUB, so its read overrides the routing with
-# kubeconfig: ~. The CSI Secret and TBC are target-cluster resources and use
-# the routed default.
+# the target cluster via storage_provider_target_kubeconfig. Hub lifecycle and
+# fallback prepared Secrets live on the HUB, so their reads override the
+# routing with kubeconfig: ~. The CSI Secret, TBC, and StorageClasses are
+# target-cluster resources and use the routed default.
 #
-# Contract naming (netapp-onboarding contract, PR#1553):
+# Resource naming:
 #   assignment_key = lowercase sha256(backend_id + "|" + tenant_name)[:16]
 #   tier_key       = lowercase sha256(tier_name)[:16]
-#   TBC            = ontap-<assignment_key>            (one per backend, block-only)
-#   CSI Secret     = ontap-csi-<assignment_key>        (in the Trident namespace)
+#   Lifecycle Sec  = ontap-tenant-<assignment_key>     (on hub, created by setup)
+#   TBC            = ontap-<assignment_key>            (in Trident namespace)
+#   CSI Secret     = ontap-csi-<assignment_key>        (in Trident namespace)
 #   StorageClass   = ontap-<assignment_key>-<tier_key>
-#   QoS policy     = osac-<assignment_key>-<tier_key>-qos (pre-provisioned by the admin)
+#   QoS policy     = osac-<assignment_key>-<tier_key>-qos (pre-provisioned by admin)
 
 - name: Compute assignment key for backend {{ _ontap_backend_id }}
   ansible.builtin.set_fact:
     _assignment_key: >-
       {{ ((_ontap_backend_id ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}
     _prepared_secret_name: "osac-{{ ((_ontap_backend_id ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}-credentials"
+    _lifecycle_secret_name: "ontap-tenant-{{ ((_ontap_backend_id ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
     _tbc_name: "ontap-{{ ((_ontap_backend_id ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
+    _has_operator_preparation: >-
+      {{ _provider_backend_connections[_ontap_backend_id].tenant_preparation is defined and
+         _provider_backend_connections[_ontap_backend_id].tenant_preparation is mapping and
+         _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config is defined }}
 
 - name: Select this backend's tiers
   ansible.builtin.set_fact:
     _backend_tiers: "{{ _provider_tiers | selectattr('backend_id', 'equalto', _ontap_backend_id) | list }}"
 
-- name: Read prepared runtime Secret from the hub cluster
+# Verify the hub lifecycle Secret written by setup (or fallback prepared Secret)
+- name: Read hub lifecycle Secret for backend {{ _ontap_backend_id }}
   kubernetes.core.k8s_info:
     kubeconfig: ~
     api_version: v1
     kind: Secret
-    name: "{{ _prepared_secret_name }}"
+    name: "{{ _lifecycle_secret_name }}"
     namespace: "{{ ontap_storage_config_namespace }}"
-  register: _prepared_secret_result
+  register: _lifecycle_secret_result
   no_log: true
 
-- name: Fail if the prepared Secret is missing
+- name: Fail if hub lifecycle Secret is claimed by a different tenant
   ansible.builtin.fail:
     msg: >-
-      Prepared Secret '{{ _prepared_secret_name }}' not found in namespace
-      '{{ ontap_storage_config_namespace }}'. Run setup for this tenant before
-      calling ensure_storage_class.
-  when: _prepared_secret_result.resources | length == 0
-
-- name: Fail if the prepared Secret is missing runtime credentials
-  ansible.builtin.fail:
-    msg: >-
-      Prepared Secret '{{ _prepared_secret_name }}' is missing runtime
-      credentials (username or password). Re-run the admin preparation for
-      this assignment.
+      Hub lifecycle record '{{ _lifecycle_secret_name }}' for backend
+      '{{ _ontap_backend_id }}' belongs to a different tenant UID or is not in
+      state 'claimed'.
   when: >-
-    _prepared_secret_result.resources[0].data is not defined or
-    _prepared_secret_result.resources[0].data.username is not defined or
-    _prepared_secret_result.resources[0].data.password is not defined
+    _lifecycle_secret_result.resources | length > 0 and (
+      (_lifecycle_secret_result.resources[0].data.lifecycle_stage | default('') | b64decode) != 'claimed' or
+      (
+        tenant_uid is defined and tenant_uid | default('') | length > 0 and
+        (_lifecycle_secret_result.resources[0].data.tenant_uid | default('') | b64decode) | length > 0 and
+        (_lifecycle_secret_result.resources[0].data.tenant_uid | default('') | b64decode) != tenant_uid
+      )
+    )
 
-- name: Fail if the prepared Secret is not claimed by any tenant
-  ansible.builtin.fail:
-    msg: >-
-      Prepared Secret '{{ _prepared_secret_name }}' is in state
-      '{{ _prepared_secret_result.resources[0].metadata.annotations['osac.openshift.io/storage-assignment-state'] | default('available') }}'.
-      Run setup for this tenant before calling ensure_storage_class — the
-      assignment must be claimed before backend resources are created.
-  when: >-
-    _prepared_secret_result.resources[0].metadata.annotations['osac.openshift.io/storage-assignment-state'] | default('available') != 'claimed'
+- name: Extract runtime credentials and SVM from operator tenant_preparation
+  when: _has_operator_preparation | bool
+  block:
+    - name: Fail if setup has not completed for this assignment
+      ansible.builtin.fail:
+        msg: >-
+          Hub lifecycle record '{{ _lifecycle_secret_name }}' not found in
+          namespace '{{ ontap_storage_config_namespace }}'. Run setup for this
+          tenant before calling ensure_storage_class.
+      when: _lifecycle_secret_result.resources | length == 0
 
-- name: Fail if the prepared Secret is claimed by a different tenant
-  ansible.builtin.fail:
-    msg: >-
-      Prepared Secret '{{ _prepared_secret_name }}' is claimed by tenant uid
-      '{{ _prepared_secret_result.resources[0].metadata.annotations['osac.openshift.io/storage-tenant-uid'] | default('') }}'.
-  when: >-
-    tenant_uid is defined and tenant_uid | default('') | length > 0 and
-    _prepared_secret_result.resources[0].metadata.annotations['osac.openshift.io/storage-tenant-uid'] | default('') != tenant_uid
+    - name: Validate operator-supplied runtime credentials and SVM
+      ansible.builtin.fail:
+        msg: >-
+          tenant_preparation for backend '{{ _ontap_backend_id }}' is missing
+          username, password, or svm.
+      when: >-
+        _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.username is not defined or
+        _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.username | default('') | string | trim | length == 0 or
+        _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.password is not defined or
+        _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.password | default('') | string | trim | length == 0 or
+        _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.svm is not defined or
+        _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.svm | default('') | string | trim | length == 0
 
-# The managementLIF must be the ONTAP cluster management endpoint the SVM was
-# prepared on — the backend connection's endpoint, stripped to host:port. The
-# prepared Secret deliberately does not carry it (it is a per-backend property,
-# not a per-assignment secret).
+    - name: Set runtime credentials and SVM name from operator preparation
+      ansible.builtin.set_fact:
+        _runtime_username: "{{ _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.username | string | trim }}"
+        _runtime_password: "{{ _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.password | string }}"
+        _svm_name: "{{ _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.svm | string | trim }}"
+      no_log: true
+
+# Fallback path when called without operator-injected tenant_preparation:
+# read credentials from the hub prepared Secret.
+- name: Read runtime credentials from hub prepared Secret (fallback)
+  when: not (_has_operator_preparation | bool)
+  block:
+    - name: Read prepared runtime Secret from the hub cluster
+      kubernetes.core.k8s_info:
+        kubeconfig: ~
+        api_version: v1
+        kind: Secret
+        name: "{{ _prepared_secret_name }}"
+        namespace: "{{ ontap_storage_config_namespace }}"
+      register: _prepared_secret_result
+      no_log: true
+
+    - name: Fail if the prepared Secret is missing
+      ansible.builtin.fail:
+        msg: >-
+          Prepared Secret '{{ _prepared_secret_name }}' not found in namespace
+          '{{ ontap_storage_config_namespace }}'. Run setup for this tenant
+          before calling ensure_storage_class.
+      when: _prepared_secret_result.resources | length == 0
+
+    - name: Fail if the prepared Secret is missing runtime credentials
+      ansible.builtin.fail:
+        msg: >-
+          Prepared Secret '{{ _prepared_secret_name }}' is missing runtime
+          credentials (username or password). Re-run the admin preparation for
+          this assignment.
+      when: >-
+        _prepared_secret_result.resources[0].data is not defined or
+        _prepared_secret_result.resources[0].data.username is not defined or
+        _prepared_secret_result.resources[0].data.password is not defined
+
+    - name: Fail if the prepared Secret is not claimed by any tenant
+      ansible.builtin.fail:
+        msg: >-
+          Prepared Secret '{{ _prepared_secret_name }}' is in state
+          '{{ _prepared_secret_result.resources[0].metadata.annotations['osac.openshift.io/storage-assignment-state'] | default('available') }}'.
+          Run setup for this tenant before calling ensure_storage_class — the
+          assignment must be claimed before backend resources are created.
+      when: >-
+        _lifecycle_secret_result.resources | length == 0 and
+        (_prepared_secret_result.resources[0].metadata.annotations['osac.openshift.io/storage-assignment-state'] | default('available')) != 'claimed'
+
+    - name: Fail if the prepared Secret is claimed by a different tenant
+      ansible.builtin.fail:
+        msg: >-
+          Prepared Secret '{{ _prepared_secret_name }}' is claimed by a
+          different tenant UID.
+      when: >-
+        tenant_uid is defined and tenant_uid | default('') | length > 0 and
+        _prepared_secret_result.resources[0].metadata.annotations is defined and
+        'osac.openshift.io/storage-tenant-uid' in _prepared_secret_result.resources[0].metadata.annotations and
+        _prepared_secret_result.resources[0].metadata.annotations['osac.openshift.io/storage-tenant-uid'] | default('') != tenant_uid
+
+    - name: Set runtime credentials and SVM name from prepared Secret
+      ansible.builtin.set_fact:
+        _runtime_username: "{{ _prepared_secret_result.resources[0].data.username | b64decode }}"
+        _runtime_password: "{{ _prepared_secret_result.resources[0].data.password | b64decode }}"
+        _svm_name: >-
+          {{ (_lifecycle_secret_result.resources[0].data.svm_name | b64decode)
+             if (_lifecycle_secret_result.resources | length > 0 and _lifecycle_secret_result.resources[0].data.svm_name is defined)
+             else ((_prepared_secret_result.resources[0].data.svm | b64decode | trim)
+                   if ('svm' in _prepared_secret_result.resources[0].data and (_prepared_secret_result.resources[0].data.svm | b64decode | trim | length > 0))
+                   else ('osac-' ~ _assignment_key ~ '-svm')) }}
+      no_log: true
+
+# Resolve the CA bundle to pass as TBC spec.trustedCACertificate (base64 of PEM).
+# Priority:
+#   1. Cluster CA bundle mounted at ontap_storage_ca_bundle_path (/etc/ca-bundle/bundle.pem).
+#   2. Fallback prepared Secret's data['ca.crt'] (already base64 of PEM).
+- name: Check if cluster CA bundle exists at {{ ontap_storage_ca_bundle_path }}
+  ansible.builtin.stat:
+    path: "{{ ontap_storage_ca_bundle_path }}"
+  register: _ontap_ca_bundle_stat
+
+- name: Slurp cluster CA bundle when present
+  when: _ontap_ca_bundle_stat.stat.exists | default(false)
+  ansible.builtin.slurp:
+    src: "{{ ontap_storage_ca_bundle_path }}"
+  register: _ontap_ca_bundle_slurp
+  no_log: true
+
+- name: Resolve trustedCACertificate for TBC
+  ansible.builtin.set_fact:
+    _trusted_ca_b64: >-
+      {{ _ontap_ca_bundle_slurp.content
+         if (_ontap_ca_bundle_stat.stat.exists | default(false))
+         else (_prepared_secret_result.resources[0].data['ca.crt']
+               if (_prepared_secret_result is defined and
+                   _prepared_secret_result.resources | default([]) | length > 0 and
+                   'ca.crt' in (_prepared_secret_result.resources[0].data | default({})))
+               else '') }}
+  no_log: true
+
+# The managementLIF is the ONTAP cluster management endpoint the SVM was
+# prepared on — the backend connection's endpoint, stripped to host:port.
 - name: Derive the management LIF from the backend connection endpoint
   ansible.builtin.set_fact:
-    _management_lif: "{{ _provider_backend_connections[_ontap_backend_id].endpoint | regex_replace('^https?://', '') }}"
+    _management_lif: "{{ _provider_backend_connections[_ontap_backend_id].endpoint | regex_replace('^https?://', '') | regex_replace('/.*$', '') }}"
   no_log: true
 
 - name: Create the CSI Secret in the Trident namespace
@@ -97,47 +207,42 @@
           app.kubernetes.io/managed-by: osac-aap
           osac.openshift.io/tenant: "{{ tenant_name }}"
           osac.openshift.io/storage-provider: ontap
+          osac.openshift.io/storage-backend-id: "{{ _ontap_backend_id }}"
       type: Opaque
       stringData:
-        username: "{{ _prepared_secret_result.resources[0].data.username | b64decode }}"
-        password: "{{ _prepared_secret_result.resources[0].data.password | b64decode }}"
+        username: "{{ _runtime_username }}"
+        password: "{{ _runtime_password }}"
   no_log: true
 
-# Virtual pools: one per tier, each referencing the admin-pre-provisioned
-# capped QoS policy (osac-<assignment_key>-<tier_key>-qos) when the tier has
-# QoS limits configured (dispatcher-derived qos_policy presence is the signal).
-# encryption is omitted — the tier schema carries no per-tier encryption flag.
-# SVM name is deterministic from the contract: osac-<assignment_key>-svm.
-# The prepared Secret does not carry it — setup verified the SVM exists under
-# exactly this name on the backend.
-- name: Set the SVM name for backend {{ _ontap_backend_id }}
-  ansible.builtin.set_fact:
-    _svm_name: "osac-{{ _assignment_key }}-svm"
-
-# Virtual pools: one per tier, each referencing the admin-pre-provisioned
-# capped QoS policy (osac-<assignment_key>-<tier_key>-qos) when the tier has
-# QoS limits configured (dispatcher-derived qos_policy presence is the signal).
+# Virtual pools: one per tier. Per Trident's virtual storage pool schema,
+# per-pool encryption and qosPolicy overrides are nested under `defaults:`.
+# A tier gets a capped QoS policy (osac-<assignment_key>-<tier_key>-qos) when
+# either qos_limits.provider_config.max_iops > 0 (PR#1553 ONTAP QoS contract)
+# or legacy dispatcher-derived qos_policy is present.
 - name: Build the TBC virtual pools for backend {{ _ontap_backend_id }}
   ansible.builtin.set_fact:
     _virtual_pools: >-
       {% set _pools = [] -%}
       {% for tier in _backend_tiers -%}
       {% set _tier_key = (tier.name | hash('sha256'))[:16] | lower -%}
+      {% set _enc = (tier.encryption_enabled | default(false) | bool) | ternary('true', 'false') -%}
+      {% set _defaults = {'encryption': _enc} -%}
+      {% set _max_iops = (tier.qos_limits.provider_config.max_iops | default(0) | int)
+                         if (tier.qos_limits is defined and tier.qos_limits.provider_config is defined)
+                         else 0 -%}
+      {% if _max_iops > 0 or (tier.qos_policy is defined and tier.qos_policy | default('') | length > 0) -%}
+      {% set _ = _defaults.update({'qosPolicy': 'osac-' ~ _assignment_key ~ '-' ~ _tier_key ~ '-qos'}) -%}
+      {% endif -%}
       {% set _pool = {
            'name': tier.name,
-           'labels': {'tier': tier.name}
+           'labels': {'tier': tier.name},
+           'defaults': _defaults
          } -%}
-      {% if tier.qos_policy is defined and tier.qos_policy | default('') | length > 0 -%}
-      {% set _ = _pool.update({'qosPolicy': 'osac-' ~ _assignment_key ~ '-' ~ _tier_key ~ '-qos'}) -%}
-      {% endif -%}
       {% set _ = _pools.append(_pool) -%}
       {% endfor -%}
       {{ _pools }}
   no_log: true
 
-# trustedCACertificate: the prepared Secret's raw ca.crt data value (base64 of
-# PEM) passes through UNDECODED — Trident base64-decodes the spec field itself.
-# The field is omitted entirely when the prepared Secret carries no CA.
 - name: Create the TridentBackendConfig for backend {{ _ontap_backend_id }}
   kubernetes.core.k8s:
     state: present
@@ -150,7 +255,8 @@
             'labels': {
               'app.kubernetes.io/managed-by': 'osac-aap',
               'osac.openshift.io/tenant': tenant_name,
-              'osac.openshift.io/storage-provider': 'ontap'
+              'osac.openshift.io/storage-provider': 'ontap',
+              'osac.openshift.io/storage-backend-id': _ontap_backend_id
             }
           },
           'spec': (
@@ -166,29 +272,12 @@
               'credentials': {'name': 'ontap-csi-' ~ _assignment_key},
               'storage': _virtual_pools
             }
-            | combine({'trustedCACertificate': _prepared_secret_result.resources[0].data['ca.crt']})
-              if ('ca.crt' in _prepared_secret_result.resources[0].data | default({}))
-            else
-            {
-              'version': 1,
-              'storageDriverName': 'ontap-san',
-              'backendName': _tbc_name,
-              'sanType': ontap_storage_san_type,
-              'managementLIF': _management_lif,
-              'svm': _svm_name,
-              'useREST': True,
-              'deletionPolicy': 'delete',
-              'credentials': {'name': 'ontap-csi-' ~ _assignment_key},
-              'storage': _virtual_pools
-            }
+            | combine({'trustedCACertificate': _trusted_ca_b64} if (_trusted_ca_b64 | default('') | length > 0) else {})
           )
         } }}
   no_log: true
 
-# Fail fast on a Failed phase instead of burning the full retry window: the
-# until-stops-on-failure only works because a failed task aborts the loop —
-# without the explicit check below, a Failed TBC spins through all 12 retries
-# before surfacing a generic timeout error with no cause.
+# Fail fast on a Failed phase instead of burning the full retry window.
 - name: Wait for the TridentBackendConfig to become Bound
   kubernetes.core.k8s_info:
     api_version: trident.netapp.io/v1
@@ -203,6 +292,7 @@
     _tbc_status.resources[0].status.phase in ["Bound", "Failed"]
   retries: 12
   delay: 5
+  no_log: true
 
 - name: Fail with the TBC's status message when phase is Failed
   ansible.builtin.fail:
@@ -239,6 +329,7 @@
           osac.openshift.io/storage-tier: "{{ item.name }}"
           osac.openshift.io/storage-protocol: block
           osac.openshift.io/storage-provider: ontap
+          osac.openshift.io/storage-backend-id: "{{ _ontap_backend_id }}"
       provisioner: csi.trident.netapp.io
       parameters:
         backendType: ontap-san
@@ -248,19 +339,16 @@
   loop: "{{ _backend_tiers }}"
   loop_control:
     label: "ontap-{{ _assignment_key }}-{{ (item.name | hash('sha256'))[:16] | lower }}"
-
-- name: Append per-tier entries to the StorageClass output accumulator
-  ansible.builtin.set_fact:
-    _ontap_sc_output: >-
-      {% set _entries = _ontap_sc_output -%}
-      {% for tier in _backend_tiers -%}
-      {% set _ = _entries.append({'name': 'ontap-' ~ _assignment_key ~ '-' ~ (tier.name | hash('sha256'))[:16] | lower, 'tier': tier.name}) -%}
-      {% endfor -%}
-      {{ _entries }}
+  no_log: true
 
 - name: Clear credential-bearing facts
   ansible.builtin.set_fact:
+    _lifecycle_secret_result: {}
     _prepared_secret_result: {}
+    _ontap_ca_bundle_slurp: {}
+    _trusted_ca_b64: ""
+    _runtime_username: ""
+    _runtime_password: ""
     _tbc_status: {}
     _management_lif: ""
   no_log: true

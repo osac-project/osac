@@ -74,6 +74,13 @@
       transport the prepared SVM's LIFs actually carry.
   when: ontap_storage_san_type not in ['iscsi', 'fcp', 'nvme']
 
+- name: Fail if the trident namespace is empty
+  ansible.builtin.fail:
+    msg: >-
+      ontap_storage_trident_namespace resolved to an empty value. Set
+      ONTAP_TRIDENT_NAMESPACE to a valid namespace name (default: trident).
+  when: ontap_storage_trident_namespace | default('') | length == 0
+
 - name: Fail if the config namespace could not be resolved
   ansible.builtin.fail:
     msg: >-

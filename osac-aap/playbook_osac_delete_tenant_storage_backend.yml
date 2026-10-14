@@ -6,6 +6,7 @@
   vars:
     tenant_name: "{{ osac_job_vars.resource.metadata.name }}"
     tenant_namespace: "{{ osac_job_vars.resource.metadata.namespace }}"
+    tenant_uid: "{{ osac_job_vars.resource.metadata.uid | default('') }}"
 
   pre_tasks:
     - name: Show resource metadata

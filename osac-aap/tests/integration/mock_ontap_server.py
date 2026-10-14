@@ -50,12 +50,16 @@ def _strip_sensitive(headers):
 
 
 def _log(entry):
+    """Append an HTTP request entry to the thread-safe call log."""
     with _LOCK:
         CALL_LOG.append(entry)
 
 
 class MockOntapHandler(BaseHTTPRequestHandler):
+    """HTTP request handler simulating ONTAP REST endpoints and test control endpoints."""
+
     def _read_body(self):
+        """Read and JSON-decode the HTTP request body, returning {} if empty or None on parse error."""
         length = int(self.headers.get("Content-Length", 0))
         if not length:
             return {}
@@ -65,6 +69,7 @@ class MockOntapHandler(BaseHTTPRequestHandler):
             return None
 
     def _respond(self, status, data):
+        """Serialize data as JSON and write the HTTP response with the given status code."""
         body = json.dumps(data).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -100,6 +105,7 @@ class MockOntapHandler(BaseHTTPRequestHandler):
         return decoded.split(":", 1)[0] != "unauthorized"
 
     def do_GET(self):
+        """Handle GET requests for ONTAP SVM/QoS discovery and /_calls inspection."""
         path = self.path.split("?")[0]
 
         if path == "/_calls":
@@ -146,6 +152,7 @@ class MockOntapHandler(BaseHTTPRequestHandler):
         self._respond(404, {"error": "not found"})
 
     def do_POST(self):
+        """Handle POST requests for test control endpoints (/_reset, /_svm, /_qos_policy, /_inject_failure)."""
         path = self.path.split("?")[0]
 
         if path == "/_reset":
@@ -219,10 +226,13 @@ class MockOntapHandler(BaseHTTPRequestHandler):
 
 
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    """Multi-threaded HTTP server for concurrent mock ONTAP requests."""
+
     daemon_threads = True
 
 
 def main():
+    """Parse CLI arguments and run the mock ONTAP HTTP(S) server."""
     parser = argparse.ArgumentParser()
     parser.add_argument("port", type=int)
     parser.add_argument("--tls", action="store_true")

@@ -24,7 +24,7 @@
 # StorageClass binds to its tenant TBC + tier virtual pool via
 # parameters.selector: "osac_backend=ontap-<assignment_key>;tier=<tier.name>".
 
-- name: Compute assignment key for backend {{ _ontap_backend_id }}
+- name: Compute assignment key for dispatched backend
   ansible.builtin.set_fact:
     _assignment_key: >-
       {{ ((_ontap_backend_id ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}
@@ -39,7 +39,7 @@
 
 # Always verify the hub lifecycle Secret written by setup before allowing a
 # short-circuit or creating target-cluster resources.
-- name: Read hub lifecycle Secret for backend {{ _ontap_backend_id }}
+- name: Read hub lifecycle Secret for dispatched backend
   kubernetes.core.k8s_info:
     kubeconfig: ~
     api_version: v1
@@ -52,18 +52,16 @@
 - name: Fail if setup has not completed for this assignment
   ansible.builtin.fail:
     msg: >-
-      Hub lifecycle record for assignment '{{ _assignment_key }}' (backend
-      '{{ _ontap_backend_id }}') was not found in namespace
-      '{{ ontap_storage_config_namespace }}'. Run setup for this tenant before
-      calling ensure_storage_class.
+      Hub lifecycle record for the ONTAP assignment was not found. Run setup
+      for this tenant before calling ensure_storage_class.
   when: _lifecycle_secret_result.resources | length == 0
+  no_log: true
 
 - name: Fail if hub lifecycle Secret is claimed by a different tenant or not in claimed state
   ansible.builtin.fail:
     msg: >-
-      Hub lifecycle record for assignment '{{ _assignment_key }}' (backend
-      '{{ _ontap_backend_id }}') belongs to a different tenant UID or is not in
-      state 'claimed'.
+      Hub lifecycle record for the ONTAP assignment belongs to a different
+      tenant UID or is not in state 'claimed'.
   when: >-
     (_lifecycle_secret_result.resources[0].data.lifecycle_stage | default('') | b64decode) != 'claimed' or
     (
@@ -71,14 +69,15 @@
       (_lifecycle_secret_result.resources[0].data.tenant_uid | default('') | b64decode) | length > 0 and
       (_lifecycle_secret_result.resources[0].data.tenant_uid | default('') | b64decode) != tenant_uid
     )
+  no_log: true
 
-- name: Provision CSI Secret, TridentBackendConfig, and StorageClasses for backend {{ _ontap_backend_id }}
+- name: Provision CSI Secret, TridentBackendConfig, and StorageClasses for dispatched backend
   when: not (_ontap_all_sc_exist | bool)
   block:
-    - name: Fail if tenant_preparation is missing for backend {{ _ontap_backend_id }}
+    - name: Fail if tenant_preparation is missing for dispatched backend
       ansible.builtin.fail:
         msg: >-
-          storage_backend_connections['{{ _ontap_backend_id }}'] is missing
+          storage_backend_connections entry is missing
           tenant_preparation.provider_config. osac-operator must resolve the
           tenant preparation and supply provider_config (username, password,
           svm) in storage_backend_connections.
@@ -89,12 +88,12 @@
         _provider_backend_connections[_ontap_backend_id].tenant_preparation is not mapping or
         _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config is not defined or
         _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config is not mapping
+      no_log: true
 
     - name: Validate operator-supplied runtime credentials and SVM
       ansible.builtin.fail:
         msg: >-
-          tenant_preparation for backend '{{ _ontap_backend_id }}' is missing
-          username, password, or svm.
+          tenant_preparation is missing username, password, or svm.
       when: >-
         _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.username is not defined or
         _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.username is none or
@@ -105,6 +104,7 @@
         _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.svm is not defined or
         _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.svm is none or
         _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.svm | default('') | string | trim | length == 0
+      no_log: true
 
     - name: Set runtime credentials and SVM name from operator preparation
       ansible.builtin.set_fact:
@@ -115,7 +115,7 @@
 
     # Resolve the CA bundle from ontap_storage_ca_bundle_path to pass as TBC
     # spec.trustedCACertificate (base64 of PEM).
-    - name: Check if cluster CA bundle exists at {{ ontap_storage_ca_bundle_path }}
+    - name: Check if cluster CA bundle exists on disk
       ansible.builtin.stat:
         path: "{{ ontap_storage_ca_bundle_path }}"
       register: _ontap_ca_bundle_stat
@@ -166,7 +166,7 @@
     # `labels` and `defaults` (`encryption`, `qosPolicy`) — no `name` field.
     # Each pool carries `osac_backend: <tbc_name>` and `tier: <tier.name>` labels
     # so the tier's StorageClass can uniquely select it via parameters.selector.
-    - name: Build the TBC virtual pools for backend {{ _ontap_backend_id }}
+    - name: Build the TBC virtual pools for dispatched backend
       ansible.builtin.set_fact:
         _virtual_pools: >-
           {% set _pools = [] -%}
@@ -177,7 +177,7 @@
           {% set _max_iops = (tier.qos_limits.provider_config.max_iops | default(0) | int)
                              if (tier.qos_limits is defined and tier.qos_limits.provider_config is defined)
                              else 0 -%}
-          {% if _max_iops > 0 or (tier.qos_policy is defined and tier.qos_policy | default('') | length > 0) -%}
+          {% if _max_iops > 0 -%}
           {% set _ = _defaults.update({'qosPolicy': 'osac-' ~ _assignment_key ~ '-' ~ _tier_key ~ '-qos'}) -%}
           {% endif -%}
           {% set _pool = {
@@ -192,7 +192,7 @@
           {{ _pools }}
       no_log: true
 
-    - name: Create the TridentBackendConfig for backend {{ _ontap_backend_id }}
+    - name: Create the TridentBackendConfig for dispatched backend
       kubernetes.core.k8s:
         state: present
         definition: >-
@@ -243,26 +243,27 @@
       delay: 5
       no_log: true
 
-    - name: Fail with the TBC's status message when phase is Failed
+    - name: Fail when TridentBackendConfig phase is Failed
       ansible.builtin.fail:
         msg: >-
-          TridentBackendConfig '{{ _tbc_name }}' reached phase Failed:
-          {{ _tbc_status.resources[0].status.message | default('no status message reported') }}.
-          Inspect the TBC's status conditions and Trident operator logs.
+          TridentBackendConfig reached phase Failed during backend binding.
+          Inspect the TridentBackendConfig status conditions and Trident
+          operator logs on the target cluster.
       when: >-
         _tbc_status.resources | length > 0 and
         _tbc_status.resources[0].status.phase | default('') == "Failed"
+      no_log: true
 
     - name: Fail if the TridentBackendConfig did not become Bound
       ansible.builtin.fail:
         msg: >-
-          TridentBackendConfig '{{ _tbc_name }}' did not reach phase Bound within
-          the wait window. Last observed phase:
-          {{ _tbc_status.resources[0].status.phase | default('none') if (_tbc_status.resources | length > 0) else 'resource absent' }}.
-          Inspect the TBC's status conditions and Trident operator logs.
+          TridentBackendConfig did not reach phase Bound within the wait
+          window. Inspect the TridentBackendConfig status conditions and
+          Trident operator logs on the target cluster.
       when: >-
         _tbc_status.resources | length == 0 or
         _tbc_status.resources[0].status.phase | default('') != "Bound"
+      no_log: true
 
     - name: Create the per-tier StorageClasses
       kubernetes.core.k8s:
@@ -287,7 +288,7 @@
           volumeBindingMode: WaitForFirstConsumer
       loop: "{{ _backend_tiers }}"
       loop_control:
-        label: "ontap-{{ _assignment_key }}-{{ (item.name | hash('sha256'))[:16] | lower }}"
+        label: "storage-tier"
       no_log: true
 
 - name: Clear credential-bearing facts

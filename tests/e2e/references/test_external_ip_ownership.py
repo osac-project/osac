@@ -113,6 +113,7 @@ def _exercise_external_ip_ownership_lifecycle(
 
     external_ip_id = ""
     external_ip_cr_name = ""
+    external_ip_uid = ""
     service_name = ""
     try:
         external_ip_id = grpc.create_external_ip(name=f"ref-eip-owner-{uuid4().hex[:8]}", pool=pool["id"])
@@ -128,7 +129,9 @@ def _exercise_external_ip_ownership_lifecycle(
         assert generation is not None, "Allocated ExternalIP CR has no generation"
         tenant = (metadata.get("annotations") or {}).get("osac.openshift.io/tenant", "")
         assert tenant, "Allocated ExternalIP CR has no tenant annotation"
+        assert tenant == pool["tenant"], "Allocated ExternalIP tenant differs from the tenant-scoped test pool"
         assert (metadata.get("annotations") or {}).get(_IMPLEMENTATION_STRATEGY_ANNOTATION) == manager
+        external_ip_uid = uid
 
         address = _validated_allocated_address(external_ip=allocated_cr, selected_pool_cidr=pool["cidr"])
         cr_status = allocated_cr.get("status", {})
@@ -194,6 +197,7 @@ def _exercise_external_ip_ownership_lifecycle(
             ),
             until=lambda observation: observation is not None,
             retries=300,
+            # Keep a tight cadence to observe the short overlap of release and the finalizer.
             delay=1,
             description=f"{profile} release holds the ExternalIP finalizer and pool capacity",
         )
@@ -219,15 +223,16 @@ def _exercise_external_ip_ownership_lifecycle(
         record_property("external_ip_release", "finalizer completed; pool capacity returned once")
     finally:
         if external_ip_id:
-            try:
-                grpc.delete_external_ip(external_ip_id=external_ip_id)
-            except subprocess.CalledProcessError as exc:
-                if not _is_not_found(exc):
-                    raise
-            if not external_ip_cr_name:
-                external_ip_cr_name = k8s.get_external_ip_name(uuid=external_ip_id, checked=False)
-            if external_ip_cr_name:
-                wait_for_external_ip_deletion(k8s=k8s, name=external_ip_cr_name)
+            _cleanup_owned_external_ip(
+                grpc=grpc,
+                private_grpc=private_grpc,
+                k8s=k8s,
+                external_ip_id=external_ip_id,
+                pool_id=pool["id"],
+                tenant=pool["tenant"],
+                expected_uid=external_ip_uid,
+                external_ip_cr_name=external_ip_cr_name,
+            )
 
 
 def _active_network_class(private_grpc: GRPCClient) -> dict[str, Any]:
@@ -379,3 +384,63 @@ def _release_pending_observation(
 def _is_not_found(exc: subprocess.CalledProcessError) -> bool:
     output = f"{exc.stdout or ''}\n{exc.stderr or ''}".lower()
     return "not found" in output or "notfound" in output
+
+
+def _cleanup_owned_external_ip(
+    *,
+    grpc: GRPCClient,
+    private_grpc: GRPCClient,
+    k8s: K8sClient,
+    external_ip_id: str,
+    pool_id: str,
+    tenant: str,
+    expected_uid: str,
+    external_ip_cr_name: str,
+) -> None:
+    api_external_ip: dict[str, Any] | None
+    try:
+        api_external_ip = private_grpc.get_private_external_ip(external_ip_id=external_ip_id).get("object", {})
+    except subprocess.CalledProcessError as exc:
+        if not _is_not_found(exc):
+            raise
+        api_external_ip = None
+
+    if api_external_ip:
+        assert api_external_ip.get("id") == external_ip_id, "Cleanup lookup returned a different ExternalIP"
+        metadata = api_external_ip.get("metadata", {})
+        assert metadata.get("tenant") == tenant, "Refusing cleanup of an ExternalIP from another tenant"
+        pool_ref = api_external_ip.get("spec", {}).get("pool", {})
+        assert pool_ref.get("id") == pool_id, "Refusing cleanup of an ExternalIP from another pool"
+
+    if not external_ip_cr_name:
+        external_ip_cr_name = k8s.get_external_ip_name(uuid=external_ip_id, checked=False)
+
+    cr_exists = False
+    if external_ip_cr_name:
+        try:
+            external_ip_cr = k8s.get_json(resource="externalip", name=external_ip_cr_name)
+        except subprocess.CalledProcessError as exc:
+            if not _is_not_found(exc):
+                raise
+        else:
+            cr_exists = True
+            cr_metadata = external_ip_cr.get("metadata", {})
+            actual_uid = cr_metadata.get("uid", "")
+            assert actual_uid, "Refusing cleanup of an ExternalIP CR without a UID"
+            assert not expected_uid or actual_uid == expected_uid, (
+                "Refusing cleanup of an ExternalIP with a different UID"
+            )
+            annotations = cr_metadata.get("annotations", {}) or {}
+            assert annotations.get("osac.openshift.io/tenant") == tenant, (
+                "Refusing cleanup of an ExternalIP CR from another tenant"
+            )
+
+    if api_external_ip:
+        try:
+            grpc.delete_external_ip(external_ip_id=external_ip_id)
+        except subprocess.CalledProcessError as exc:
+            if not _is_not_found(exc):
+                raise
+
+    if cr_exists and external_ip_cr_name:
+        wait_for_external_ip_deletion(k8s=k8s, name=external_ip_cr_name)

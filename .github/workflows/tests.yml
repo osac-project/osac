@@ -54,7 +54,16 @@ jobs:
         if: inputs.kind == 'go-unit'
         env:
           COMMAND: ${{ inputs.cmd }}
-        run: bash -c "$COMMAND"
+        run: |
+          set -euo pipefail
+          # The command comes from .github/ci-tests.yml. It is run as a plain command line, never through a shell, and
+          # only a ginkgo run with simple arguments is accepted.
+          if [[ ! "${COMMAND}" =~ ^ginkgo\ run(\ [-A-Za-z0-9_./=]+)*$ ]]; then
+            echo "::error::The command of a go-unit leg must be a ginkgo run with plain arguments: ${COMMAND}"
+            exit 1
+          fi
+          read -r -a args <<<"${COMMAND}"
+          "${args[@]}"
       # --- unit tests of osac-ui
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: inputs.kind == 'ui-unit'
@@ -110,10 +119,10 @@ jobs:
           CONTAINER_TOOL: docker
           MCP_TEST_ENABLED: "true"
         run: |
-          echo '127.0.0.1 fulfillment-api.osac.svc.cluster.local' | sudo tee -a /etc/hosts
-          echo '127.0.0.1 fulfillment-internal-api.osac.svc.cluster.local' | sudo tee -a /etc/hosts
-          echo '127.0.0.1 keycloak.keycloak.svc.cluster.local' | sudo tee -a /etc/hosts
-          echo '127.0.0.1 mcp.osac.localhost' | sudo tee -a /etc/hosts
+          echo '127.0.0.1 fulfillment-api.osac.svc.cluster.local' | sudo tee -a /etc/hosts >/dev/null
+          echo '127.0.0.1 fulfillment-internal-api.osac.svc.cluster.local' | sudo tee -a /etc/hosts >/dev/null
+          echo '127.0.0.1 keycloak.keycloak.svc.cluster.local' | sudo tee -a /etc/hosts >/dev/null
+          echo '127.0.0.1 mcp.osac.localhost' | sudo tee -a /etc/hosts >/dev/null
           make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
       - name: Collect diagnostic logs
         if: inputs.kind == 'it-fulfillment-service' && always()

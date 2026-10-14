@@ -14,26 +14,3 @@ storage_provider_csi_backends_chart_ref: >-
 storage_provider_csi_backends_chart_version: ""
 storage_provider_csi_backends_release_name: "osac-csi-backends"
 storage_provider_csi_backends_namespace: "osac-csi-backends"
-
-# Hub namespace for storage config and lifecycle Secrets, shared across all
-# storage providers. Resolution order:
-#   1. OSAC_STORAGE_CONFIG_NAMESPACE env var — explicit override via the
-#      storage-operations-ig ConfigMap, only needed if the config namespace
-#      differs from the IG pod's own namespace.
-#   2. The IG pod's own namespace, read from the standard K8s-mounted service
-#      account file — always accurate for wherever the pod actually runs, no
-#      per-deployment config needed.
-# No hardcoded fallback — fail loudly if neither source is available
-# rather than silently targeting a wrong namespace.
-storage_provider_config_namespace: >-
-  {{ lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE')
-     | default(lookup('file', '/var/run/secrets/kubernetes.io/serviceaccount/namespace', errors='ignore'), true) }}
-
-# Global API timeout (seconds) for storage provider REST/management calls,
-# overridable via OSAC_STORAGE_API_TIMEOUT or per-provider variables.
-storage_provider_api_timeout: "{{ lookup('env', 'OSAC_STORAGE_API_TIMEOUT') | default('30', true) | int }}"
-
-# Path to the cluster-installed PEM CA bundle (mounted from the ca-bundle
-# ConfigMap in storage-operations-ig / compute-instance-operations-ig), shared
-# across all storage providers.
-storage_provider_ca_bundle_path: "{{ lookup('env', 'OSAC_STORAGE_CA_BUNDLE_PATH') | default('/etc/ca-bundle/bundle.pem', true) }}"

@@ -2,33 +2,42 @@
 # Per-backend validation and claim of a prepared ONTAP assignment (included by
 # setup.yaml with loop_var _ontap_backend_id).
 #
-# Supports the PR#1553 operator-injected tenant_preparation payload:
+# Consumes the PR#1553 operator-injected tenant_preparation payload:
 #   _provider_backend_connections[_ontap_backend_id].tenant_preparation:
 #     tenant_id:       <immutable-osac-tenant-id>
 #     source:          {namespace, name, uid, resource_version}
 #     provider_config: {username, password, svm}
-# as well as the prepared-Secret hub lookup fallback (label-matched by
-# osac.openshift.io/secret-type=storage-tenant-preparation or by the legacy
-# osac-<assignment_key>-credentials name).
+#
+# No prepared Secret is read or patched on the hub cluster — osac-operator
+# resolves the preparation Secret and passes the explicit SVM name and runtime
+# credentials in tenant_preparation.
 #
 # Records claim ownership and completed stage in a deterministic hub lifecycle
-# Secret (ontap-tenant-<assignment_key>) in storage_provider_config_namespace
+# Secret (ontap-tenant-<assignment_key>) in ontap_storage_config_namespace
 # without copying the runtime password.
 
 - name: Compute assignment key and select tiers for backend {{ _ontap_backend_id }}
   ansible.builtin.set_fact:
     _assignment_key: >-
       {{ ((_ontap_backend_id ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}
-    _prepared_secret_name: "osac-{{ ((_ontap_backend_id ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}-credentials"
     _lifecycle_secret_name: "ontap-tenant-{{ ((_ontap_backend_id ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
     _backend_tiers: "{{ _provider_tiers | selectattr('backend_id', 'equalto', _ontap_backend_id) | list }}"
-    _has_operator_preparation: >-
-      {{ _provider_backend_connections[_ontap_backend_id].tenant_preparation is defined and
-         _provider_backend_connections[_ontap_backend_id].tenant_preparation is mapping and
-         _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config is defined }}
+  no_log: true
+
+- name: Fail if tenant_preparation is missing for backend {{ _ontap_backend_id }}
+  ansible.builtin.fail:
+    msg: >-
+      storage_backend_connections['{{ _ontap_backend_id }}'] is missing
+      tenant_preparation.provider_config. osac-operator must resolve the tenant
+      preparation and supply provider_config (username, password, svm) in
+      storage_backend_connections.
+  when: >-
+    _provider_backend_connections[_ontap_backend_id].tenant_preparation is not defined or
+    _provider_backend_connections[_ontap_backend_id].tenant_preparation is not mapping or
+    _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config is not defined or
+    _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config is not mapping
 
 - name: Extract operator-supplied tenant preparation for backend {{ _ontap_backend_id }}
-  when: _has_operator_preparation | bool
   ansible.builtin.set_fact:
     _prep_config: "{{ _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config }}"
     _prep_source: "{{ _provider_backend_connections[_ontap_backend_id].tenant_preparation.source | default({}) }}"
@@ -41,14 +50,11 @@
       tenant_preparation for backend '{{ _ontap_backend_id }}' is missing one
       or more required provider_config fields (username, password, svm).
   when: >-
-    _has_operator_preparation | bool and (
-      _prep_config.username is not defined or _prep_config.username | default('') | string | trim | length == 0 or
-      _prep_config.password is not defined or _prep_config.password | default('') | string | trim | length == 0 or
-      _prep_config.svm is not defined or _prep_config.svm | default('') | string | trim | length == 0
-    )
+    _prep_config.username is not defined or _prep_config.username is none or _prep_config.username | default('') | string | trim | length == 0 or
+    _prep_config.password is not defined or _prep_config.password is none or _prep_config.password | default('') | string | trim | length == 0 or
+    _prep_config.svm is not defined or _prep_config.svm is none or _prep_config.svm | default('') | string | trim | length == 0
 
 - name: Set expected SVM and source identity from operator-supplied preparation
-  when: _has_operator_preparation | bool
   ansible.builtin.set_fact:
     _expected_svm_name: "{{ _prep_config.svm | string | trim }}"
     _source_secret_name: "{{ _prep_source.name | default('') }}"
@@ -56,65 +62,40 @@
     _source_secret_uid: "{{ _prep_source.uid | default('') }}"
   no_log: true
 
-# Fallback path when called without operator-injected tenant_preparation:
-# read the prepared Secret directly from the hub cluster.
-- name: Read prepared runtime Secret from the hub cluster (fallback)
-  when: not (_has_operator_preparation | bool)
-  block:
-    - name: Read prepared Secret by contract name from the hub cluster
-      kubernetes.core.k8s_info:
-        kubeconfig: ~
-        api_version: v1
-        kind: Secret
-        name: "{{ _prepared_secret_name }}"
-        namespace: "{{ storage_provider_config_namespace }}"
-      register: _prepared_secret_result
-      no_log: true
+# Check existing hub lifecycle Secret for ownership conflicts BEFORE probing or
+# mutating state (prevents a recreated tenant with the same name from adopting a
+# retained assignment).
+- name: Read existing hub lifecycle Secret for backend {{ _ontap_backend_id }}
+  kubernetes.core.k8s_info:
+    kubeconfig: ~
+    api_version: v1
+    kind: Secret
+    name: "{{ _lifecycle_secret_name }}"
+    namespace: "{{ ontap_storage_config_namespace }}"
+  register: _existing_lifecycle_secret
+  no_log: true
 
-    - name: Fail if no prepared Secret or tenant_preparation was found
-      ansible.builtin.fail:
-        msg: >-
-          No tenant_preparation was provided by osac-operator and prepared
-          Secret '{{ _prepared_secret_name }}' was not found in namespace
-          '{{ storage_provider_config_namespace }}' for backend
-          '{{ _ontap_backend_id }}' and tenant '{{ tenant_name }}'. The cloud
-          admin must prepare the ONTAP assignment before the tenant can be
-          onboarded. See the netapp-onboarding contract.
-      when: _prepared_secret_result.resources | length == 0
-
-    - name: Extract prepared Secret
-      ansible.builtin.set_fact:
-        _prepared_secret: "{{ _prepared_secret_result.resources[0] }}"
-      no_log: true
-
-    - name: Fail if prepared Secret is missing runtime credentials
-      ansible.builtin.fail:
-        msg: >-
-          Prepared Secret '{{ _prepared_secret_name }}' is missing runtime
-          credentials (username or password). The prepared Secret must carry
-          the ONTAP account credentials Trident will use.
-      when: >-
-        _prepared_secret.data is not defined or
-        _prepared_secret.data.username is not defined or
-        _prepared_secret.data.password is not defined
-
-    - name: Set expected SVM and source identity from prepared Secret
-      ansible.builtin.set_fact:
-        _expected_svm_name: >-
-          {{ (_prepared_secret.data.svm | b64decode | trim)
-             if ('svm' in _prepared_secret.data and (_prepared_secret.data.svm | b64decode | trim | length > 0))
-             else ('osac-' ~ _assignment_key ~ '-svm') }}
-        _source_secret_name: "{{ _prepared_secret.metadata.name }}"
-        _source_secret_namespace: "{{ _prepared_secret.metadata.namespace }}"
-        _source_secret_uid: "{{ _prepared_secret.metadata.uid | default('') }}"
-        _prep_tenant_id: "{{ _prepared_secret.metadata.labels['osac.openshift.io/tenant-id'] | default('') if _prepared_secret.metadata.labels is defined else '' }}"
-      no_log: true
+- name: Fail if hub lifecycle Secret is owned by another tenant or retained
+  ansible.builtin.fail:
+    msg: >-
+      Assignment '{{ _assignment_key }}' for backend '{{ _ontap_backend_id }}'
+      is already owned by another tenant instance or is in state 'retained'.
+      Recreating a tenant with the same name does not authorize reuse of a
+      claimed or retained assignment.
+  when: >-
+    _existing_lifecycle_secret.resources | length > 0 and (
+      (_existing_lifecycle_secret.resources[0].data.lifecycle_stage | default('') | b64decode) == 'retained' or
+      (
+        (_existing_lifecycle_secret.resources[0].data.tenant_uid | default('') | b64decode) | length > 0 and
+        (_existing_lifecycle_secret.resources[0].data.tenant_uid | default('') | b64decode) != tenant_uid
+      )
+    )
 
 # Check if the cluster CA bundle file exists on disk so uri can use it when
 # present, falling back to system trust store when absent.
-- name: Check if cluster CA bundle exists at {{ storage_provider_ca_bundle_path }}
+- name: Check if cluster CA bundle exists at {{ ontap_storage_ca_bundle_path }}
   ansible.builtin.stat:
-    path: "{{ storage_provider_ca_bundle_path }}"
+    path: "{{ ontap_storage_ca_bundle_path }}"
   register: _ontap_ca_bundle_stat
 
 - name: Set ONTAP discovery connection for backend {{ _ontap_backend_id }}
@@ -123,7 +104,7 @@
       url: "{{ _provider_backend_connections[_ontap_backend_id].endpoint }}"
       username: "{{ _provider_backend_connections[_ontap_backend_id].username }}"
       password: "{{ _provider_backend_connections[_ontap_backend_id].password }}"
-      ca_path: "{{ storage_provider_ca_bundle_path if (_ontap_ca_bundle_stat.stat.exists | default(false)) else '' }}"
+      ca_path: "{{ ontap_storage_ca_bundle_path if (_ontap_ca_bundle_stat.stat.exists | default(false)) else '' }}"
   no_log: true
 
 - name: Discover the prepared SVM via the ONTAP REST API
@@ -135,7 +116,7 @@
     force_basic_auth: true
     validate_certs: true
     ca_path: "{{ _ontap_discovery.ca_path if _ontap_discovery.ca_path | length > 0 else omit }}"
-    timeout: "{{ storage_provider_api_timeout | int }}"
+    timeout: "{{ ontap_storage_api_timeout | int }}"
     status_code: [200]
     return_content: true
   register: _svm_discovery
@@ -146,8 +127,9 @@
   ansible.builtin.fail:
     msg: >-
       Authentication failed against the ONTAP management endpoint
-      '{{ _ontap_discovery.url }}' for backend '{{ _ontap_backend_id }}'.
-      Check the backend connection credentials passed by osac-operator.
+      '{{ _ontap_discovery.url }}' for backend '{{ _ontap_backend_id }}'
+      (assignment '{{ _assignment_key }}'). Check the backend connection
+      credentials passed by osac-operator.
   when: >-
     _svm_discovery.failed and
     (_svm_discovery.status | default(0) | int in [401, 403])
@@ -156,9 +138,8 @@
   ansible.builtin.fail:
     msg: >-
       Failed to reach the ONTAP management endpoint '{{ _ontap_discovery.url }}'
-      for backend '{{ _ontap_backend_id }}' (status
-      {{ _svm_discovery.status | default('none') }}, error
-      {{ _svm_discovery.msg | default('unknown') }}). Verify the backend
+      for backend '{{ _ontap_backend_id }}' (assignment '{{ _assignment_key }}',
+      status {{ _svm_discovery.status | default('none') }}). Verify the backend
       connection endpoint, TLS certificate trust, and network reachability from
       the storage-operations IG.
   when: _svm_discovery.failed
@@ -171,10 +152,9 @@
 - name: Fail if the prepared SVM does not exist on the backend
   ansible.builtin.fail:
     msg: >-
-      SVM '{{ _expected_svm_name }}' does not exist on backend
-      '{{ _ontap_backend_id }}'. The prepared assignment exists but the SVM it
-      references was not found on the ONTAP cluster — the assignment is not
-      actually prepared. Re-run the admin preparation for this assignment.
+      Prepared SVM for assignment '{{ _assignment_key }}' does not exist on
+      backend '{{ _ontap_backend_id }}'. Re-run the admin preparation for this
+      assignment.
   when: _svm_info.num_records | int == 0
 
 - name: Extract SVM UUID
@@ -183,8 +163,7 @@
   no_log: true
 
 # Validate capped-tier QoS policies against the live ONTAP cluster when any
-# tier on this backend specifies qos_limits.provider_config.max_iops > 0
-# (or legacy qos_policy).
+# tier on this backend specifies qos_limits.provider_config.max_iops > 0.
 - name: Filter tiers requiring QoS validation on backend {{ _ontap_backend_id }}
   ansible.builtin.set_fact:
     _capped_tiers: >-
@@ -203,6 +182,7 @@
       {% endif -%}
       {% endfor -%}
       {{ _list }}
+  no_log: true
 
 - name: Discover prepared QoS policies on the ONTAP cluster for capped tiers
   when: _capped_tiers | length > 0
@@ -214,7 +194,7 @@
     force_basic_auth: true
     validate_certs: true
     ca_path: "{{ _ontap_discovery.ca_path if _ontap_discovery.ca_path | length > 0 else omit }}"
-    timeout: "{{ storage_provider_api_timeout | int }}"
+    timeout: "{{ ontap_storage_api_timeout | int }}"
     status_code: [200]
     return_content: true
   loop: "{{ _capped_tiers }}"
@@ -227,9 +207,10 @@
   ansible.builtin.fail:
     msg: >-
       Prepared QoS policy '{{ item.item.policy_name }}' for tier
-      '{{ item.item.name }}' on backend '{{ _ontap_backend_id }}' is missing or
-      invalid. Expected a fixed, non-shared (capacity_shared=false) policy
-      owned by SVM '{{ _expected_svm_name }}' with max_throughput_iops={{ item.item.max_iops }}.
+      '{{ item.item.name }}' on backend '{{ _ontap_backend_id }}' (assignment
+      '{{ _assignment_key }}') is missing or invalid. Expected a fixed,
+      non-shared (capacity_shared=false) policy owned by the prepared SVM with
+      max_throughput_iops={{ item.item.max_iops }}.
   loop: "{{ _qos_discovery_results.results | default([]) }}"
   loop_control:
     label: "{{ item.item.policy_name }}"
@@ -242,91 +223,6 @@
       (item.json.records[0].fixed.max_throughput_iops | default(0) | int) != (item.item.max_iops | int)
     )
 
-# When using the legacy annotation-based prepared Secret, verify its identity
-# annotations and claim state.
-- name: Verify and claim annotation-based prepared Secret (fallback)
-  when: not (_has_operator_preparation | bool)
-  block:
-    - name: Fail if prepared Secret annotations do not match the discovered backend
-      ansible.builtin.fail:
-        msg: >-
-          Prepared Secret '{{ _prepared_secret_name }}' annotations do not match
-          the live backend '{{ _ontap_backend_id }}' and tenant
-          '{{ tenant_name }}'. The prepared assignment does not correspond to
-          this backend and tenant.
-      when: >-
-        _prepared_secret.metadata.annotations is defined and
-        'osac.openshift.io/storage-backend' in _prepared_secret.metadata.annotations and (
-          _prepared_secret.metadata.annotations['osac.openshift.io/storage-backend'] | default('') != _ontap_backend_id or
-          _prepared_secret.metadata.annotations['osac.openshift.io/tenant'] | default('') != tenant_name or
-          _prepared_secret.metadata.annotations['osac.openshift.io/storage-resource-id'] | default('') != _svm_uuid
-        )
-
-    - name: Record the prepared Secret's current claim state
-      ansible.builtin.set_fact:
-        _current_state: "{{ _prepared_secret.metadata.annotations['osac.openshift.io/storage-assignment-state'] | default('available') if _prepared_secret.metadata.annotations is defined else 'available' }}"
-        _claimed_tenant: "{{ _prepared_secret.metadata.annotations['osac.openshift.io/storage-tenant-uid'] | default('') if _prepared_secret.metadata.annotations is defined else '' }}"
-      no_log: true
-
-    - name: Fail if the assignment is claimed by another tenant
-      ansible.builtin.fail:
-        msg: >-
-          Prepared assignment '{{ _assignment_key }}' (backend
-          '{{ _ontap_backend_id }}') is in state '{{ _current_state }}' claimed
-          by another tenant UID. Recreating a tenant with the same name does not
-          authorize reuse of a claimed or retained assignment — ask the cloud
-          admin to release the assignment or prepare a new one.
-      when: >-
-        _current_state not in ['available'] and
-        not (_current_state == 'claimed' and _claimed_tenant == tenant_uid)
-
-    - name: Claim the prepared Secret (atomic resourceVersion patch)
-      kubernetes.core.k8s:
-        kubeconfig: ~
-        state: patched
-        api_version: v1
-        kind: Secret
-        name: "{{ _prepared_secret.metadata.name }}"
-        namespace: "{{ storage_provider_config_namespace }}"
-        resource_definition:
-          metadata:
-            resourceVersion: "{{ _prepared_secret.metadata.resourceVersion | string }}"
-            annotations:
-              osac.openshift.io/storage-assignment-state: claimed
-              osac.openshift.io/storage-tenant-uid: "{{ tenant_uid }}"
-              osac.openshift.io/storage-claimed-at: "{{ now(utc=true) | string }}"
-      when: _current_state == 'available'
-      no_log: true
-
-# Check existing hub lifecycle Secret for ownership conflicts (prevents a
-# recreated tenant with the same name from adopting a retained assignment).
-- name: Read existing hub lifecycle Secret for backend {{ _ontap_backend_id }}
-  kubernetes.core.k8s_info:
-    kubeconfig: ~
-    api_version: v1
-    kind: Secret
-    name: "{{ _lifecycle_secret_name }}"
-    namespace: "{{ storage_provider_config_namespace }}"
-  register: _existing_lifecycle_secret
-  no_log: true
-
-- name: Fail if hub lifecycle Secret is owned by another tenant or retained
-  ansible.builtin.fail:
-    msg: >-
-      Hub lifecycle record '{{ _lifecycle_secret_name }}' for backend
-      '{{ _ontap_backend_id }}' is already owned by another tenant instance or
-      is in state '{{ (_existing_lifecycle_secret.resources[0].data.lifecycle_stage | default('') | b64decode) if (_existing_lifecycle_secret.resources | length > 0) else '' }}'.
-      Recreating a tenant with the same name does not authorize reuse of a
-      claimed or retained assignment.
-  when: >-
-    _existing_lifecycle_secret.resources | length > 0 and (
-      (_existing_lifecycle_secret.resources[0].data.lifecycle_stage | default('') | b64decode) == 'retained' or
-      (
-        (_existing_lifecycle_secret.resources[0].data.tenant_uid | default('') | b64decode) | length > 0 and
-        (_existing_lifecycle_secret.resources[0].data.tenant_uid | default('') | b64decode) != tenant_uid
-      )
-    )
-
 - name: Persist hub lifecycle Secret for backend {{ _ontap_backend_id }}
   kubernetes.core.k8s:
     kubeconfig: ~
@@ -336,7 +232,7 @@
       kind: Secret
       metadata:
         name: "{{ _lifecycle_secret_name }}"
-        namespace: "{{ storage_provider_config_namespace }}"
+        namespace: "{{ ontap_storage_config_namespace }}"
         labels:
           app.kubernetes.io/managed-by: osac-aap
           osac.openshift.io/tenant: "{{ tenant_name }}"
@@ -373,8 +269,6 @@
 
 - name: Clear credential-bearing facts
   ansible.builtin.set_fact:
-    _prepared_secret_result: {}
-    _prepared_secret: {}
     _prep_config: {}
     _prep_source: {}
     _existing_lifecycle_secret: {}
@@ -382,6 +276,4 @@
     _svm_info: {}
     _qos_discovery_results: {}
     _ontap_discovery: {}
-    _current_state: ""
-    _claimed_tenant: ""
   no_log: true

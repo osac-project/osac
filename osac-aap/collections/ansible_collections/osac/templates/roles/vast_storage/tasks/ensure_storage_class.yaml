@@ -116,7 +116,7 @@
           username: "{{ vast_username }}"
           password: "{{ vast_password }}"
           validate_certs: "{{ vast_storage_validate_certs }}"
-          timeout: "{{ storage_provider_api_timeout }}"
+          timeout: "{{ vast_storage_api_timeout }}"
       no_log: true
 
     - name: Initialize view policy accumulators

@@ -172,6 +172,11 @@
     fail_msg: >-
       _provider_tiers must be provided by the service role dispatcher.
 
+- name: Validate tenant_name is a valid DNS label
+  ansible.builtin.fail:
+    msg: "tenant_name '{{ tenant_name }}' is not a valid DNS label."
+  when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+
 - name: Build expected StorageClass entries
   ansible.builtin.set_fact:
     _lvms_expected_sc_entries: >-

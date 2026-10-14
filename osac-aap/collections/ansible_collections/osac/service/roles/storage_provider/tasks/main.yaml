@@ -140,14 +140,6 @@
     msg: "tenant_name must be a non-empty string (set at play level from the Tenant CR or ComputeInstance tenant reference)."
   when: tenant_name is not defined or tenant_name | length == 0
 
-- name: Validate tenant_name is a valid DNS label
-  ansible.builtin.fail:
-    msg: >-
-      tenant_name '{{ tenant_name }}' is not a valid DNS label.
-      Must be 1-63 lowercase alphanumeric characters or hyphens,
-      cannot start or end with a hyphen.
-  when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
-
 - name: Validate tenant_namespace is set
   ansible.builtin.fail:
     msg: "tenant_namespace must be a non-empty string (set at play level from the Tenant CR or ComputeInstance tenant reference)."

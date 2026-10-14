@@ -78,25 +78,3 @@ argument_specs:
           Disable TLS certificate validation for the target kubeconfig. Used for
           ClusterOrder guest clusters reached through routes whose certificate
           does not match the kubeconfig CA.
-      storage_provider_config_namespace:
-        type: str
-        required: false
-        description: >
-          Hub-cluster namespace for storage configuration and lifecycle Secrets,
-          shared across all storage providers. Defaults to OSAC_STORAGE_CONFIG_NAMESPACE
-          or the execution pod's own ServiceAccount namespace.
-      storage_provider_api_timeout:
-        type: int
-        required: false
-        default: 30
-        description: >
-          Global API timeout in seconds for storage provider management API calls.
-          Defaults to OSAC_STORAGE_API_TIMEOUT or 30 seconds.
-      storage_provider_ca_bundle_path:
-        type: str
-        required: false
-        default: "/etc/ca-bundle/bundle.pem"
-        description: >
-          Path to the cluster-installed PEM CA bundle mounted into the AAP
-          execution environment. Defaults to OSAC_STORAGE_CA_BUNDLE_PATH or
-          /etc/ca-bundle/bundle.pem.

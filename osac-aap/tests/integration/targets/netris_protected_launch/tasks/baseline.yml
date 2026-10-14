@@ -5,14 +5,11 @@
   gather_facts: false
 
   tasks:
-    - name: Reject a controller URL that is not installation-owned
+    - name: Reject a certificate mode that is not installation-owned
       netris.controller.protected_uri:
         url: https://attacker.example/api/auth
         method: GET
-      environment:
-        NETRIS_CONTROLLER_URL: https://managed.example
-        NETRIS_VALIDATE_CERTS: "true"
-        NETRIS_CA_PATH: ""
+        validate_certs: false
       register: _protected_launch_result
       ignore_errors: true
 
@@ -22,4 +19,4 @@
           - _protected_launch_result.failed | bool
           - >-
             _protected_launch_result.msg is search(
-            'Netris controller URL is not installation-managed')
+            'Netris certificate validation is not installation-managed')

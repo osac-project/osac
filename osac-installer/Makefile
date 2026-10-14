@@ -517,7 +517,7 @@ csi-render-test: helm-deps ## Verify CSI and storage-provider chart rendering
 			--values charts/osac/ci/full-values.yaml \
 			--set operator.networkManagers.enabled=true \
 			--set operator.fulfillment.configMap.name=osac-custom-fulfillment-config > "$$custom_render"; \
-		rg -q '^  name: osac-custom-fulfillment-config$$' "$$custom_render"; \
+		rg -q '^  name: "?osac-custom-fulfillment-config"?$$' "$$custom_render"; \
 		helm template csi-driver ../osac-csi-driver/charts/csi-driver \
 			--show-only templates/node-daemonset.yaml \
 			--set namespace=osac-csi \

@@ -227,7 +227,7 @@ def check_production_default() -> None:
     assert "--fulfillment-ca-file=/etc/ca-bundle/bundle.pem" in operator
     assert "--fulfillment-trust-enabled" not in controller
     assert "kind: ConfigMap" in fulfillment_config
-    assert "name: osac-fulfillment-config" in fulfillment_config
+    assert 'name: "osac-fulfillment-config"' in fulfillment_config
     assert "OSAC_FULFILLMENT_ENDPOINT:" in fulfillment_config
     assert "OSAC_FULFILLMENT_ISSUER_URL:" in fulfillment_config
     for name in HOOKS:

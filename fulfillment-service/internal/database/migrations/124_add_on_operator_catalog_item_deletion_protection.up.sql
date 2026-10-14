@@ -22,15 +22,17 @@ create index if not exists add_on_operators_dependencies_active_idx
 
 create or replace function check_add_on_operator_not_in_use() returns trigger as $$
 declare
-  pending_ids text[] := array[old.id]::text[];
-  visited_ids text[] := '{}'::text[];
+  queue text[] := array[old.id]::text[];
+  visited text[] := '{}'::text[];
   catalog_references jsonb := '[]'::jsonb;
   queue_head integer := 1;
-  current_id text;
-  current_name text;
-  parent_id text;
-  graph_in_use boolean := false;
+  operator_id text;
+  operator_name text;
+  dependent_id text;
+  is_in_use boolean := false;
+  max_graph_nodes integer := 1024;
 begin
+  -- Only soft-deletion and unpublishing require lifecycle protection.
   if not (
     (old.deletion_timestamp = 'epoch' and new.deletion_timestamp <> 'epoch')
     or (
@@ -50,74 +52,79 @@ begin
   ) reference
   where catalog_item.deletion_timestamp = 'epoch';
 
-  while queue_head <= coalesce(cardinality(pending_ids), 0) loop
-    current_id := pending_ids[queue_head];
+  -- Walk from the target operator to every active operator that depends on it.
+  while queue_head <= coalesce(cardinality(queue), 0) loop
+    operator_id := queue[queue_head];
     queue_head := queue_head + 1;
 
-    if current_id = any(visited_ids) then
+    -- A global visited set prevents cycles and duplicate work through converging paths.
+    if operator_id = any(visited) then
       continue;
     end if;
-    if cardinality(visited_ids) >= 1024 then
+    if cardinality(visited) >= max_graph_nodes then
       raise exception using
         errcode = 'Z0003',
         message = format('cannot modify add-on operator ''%s'': dependency graph exceeds the lifecycle protection limit', old.name);
     end if;
-    visited_ids := array_append(visited_ids, current_id);
+    visited := array_append(visited, operator_id);
 
-    if current_id = old.id then
-      current_name := old.name;
+    if operator_id = old.id then
+      operator_name := old.name;
     else
       select operator.name
-      into current_name
+      into operator_name
       from add_on_operators operator
-      where operator.id = current_id
+      where operator.id = operator_id
         and operator.deletion_timestamp = 'epoch'
         and operator.tenant = 'shared'
         and coalesce(operator.project, '') = '';
     end if;
 
+    -- A catalog reference or a published operator reached through a previous
+    -- reverse-dependency step protects this node.
     if exists (
       select 1
       from jsonb_array_elements(catalog_references) reference
-      where reference->>'id' = current_id
-        or (coalesce(reference->>'id', '') = '' and reference->>'name' = current_name)
+      where reference->>'id' = operator_id
+        or (coalesce(reference->>'id', '') = '' and reference->>'name' = operator_name)
     ) or exists (
       select 1
       from add_on_operators operator
-      where operator.id = current_id
+      where operator.id = operator_id
         and operator.id <> old.id
         and operator.deletion_timestamp = 'epoch'
         and operator.tenant = 'shared'
         and coalesce(operator.project, '') = ''
         and coalesce(operator.data->>'published', 'false') = 'true'
     ) then
-      graph_in_use := true;
+      is_in_use := true;
       exit;
     end if;
 
-    for parent_id in
+    -- Find the next reverse-dependency edges: operators that depend on this node.
+    for dependent_id in
       select parent.id
       from add_on_operators parent
       where parent.deletion_timestamp = 'epoch'
         and parent.tenant = 'shared'
         and coalesce(parent.project, '') = ''
         and (
-          parent.data->'dependencies' @> jsonb_build_array(jsonb_build_object('id', current_id))
-          or parent.data->'dependencies' @> jsonb_build_array(jsonb_build_object('name', current_name))
+          parent.data->'dependencies' @> jsonb_build_array(jsonb_build_object('id', operator_id))
+          or parent.data->'dependencies' @> jsonb_build_array(jsonb_build_object('name', operator_name))
         )
     loop
-      if not parent_id = any(visited_ids) and not parent_id = any(pending_ids) then
-        if cardinality(pending_ids) >= 1024 then
+      if not dependent_id = any(visited) and not dependent_id = any(queue) then
+        if cardinality(queue) >= max_graph_nodes then
           raise exception using
             errcode = 'Z0003',
             message = format('cannot modify add-on operator ''%s'': dependency graph exceeds the lifecycle protection limit', old.name);
         end if;
-        pending_ids := array_append(pending_ids, parent_id);
+        queue := array_append(queue, dependent_id);
       end if;
     end loop;
   end loop;
 
-  if graph_in_use then
+  if is_in_use then
     raise exception using
       errcode = 'Z0003',
       message = format('cannot modify add-on operator ''%s'': it is in use by an active catalog item or published operator dependency', old.name);

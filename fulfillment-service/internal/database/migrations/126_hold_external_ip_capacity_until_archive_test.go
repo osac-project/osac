@@ -43,6 +43,7 @@ var _ = DescribeMigration("Hold ExternalIP capacity until archive", func() {
 			"external_ip_attachments_by_external_ip_ref",
 			"external_ip_attachments_by_external_ip_name_ref",
 			"nat_gateways_by_external_ip_ref",
+			"nat_gateways_by_external_ip_name_ref",
 		} {
 			var indexDef string
 			err := conn.QueryRow(ctx,

@@ -6,6 +6,8 @@ create index external_ip_attachments_by_external_ip_name_ref
   on external_ip_attachments ((data->'spec'->'external_ip'->>'name'));
 create index nat_gateways_by_external_ip_ref
   on nat_gateways ((data->'spec'->'external_ip'->>'id'));
+create index nat_gateways_by_external_ip_name_ref
+  on nat_gateways ((data->'spec'->'external_ip'->>'name'));
 
 create or replace function check_external_ip_available() returns trigger as $$
 declare

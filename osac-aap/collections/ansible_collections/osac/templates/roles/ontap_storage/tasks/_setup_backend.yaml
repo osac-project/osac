@@ -86,10 +86,7 @@
   when: >-
     _existing_lifecycle_secret.resources | length > 0 and (
       (_existing_lifecycle_secret.resources[0].data.lifecycle_stage | default('') | b64decode) == 'retained' or
-      (
-        (_existing_lifecycle_secret.resources[0].data.tenant_uid | default('') | b64decode) | length > 0 and
-        (_existing_lifecycle_secret.resources[0].data.tenant_uid | default('') | b64decode) != tenant_uid
-      )
+      (_existing_lifecycle_secret.resources[0].data.tenant_uid | default('') | b64decode) != tenant_uid
     )
   no_log: true
 

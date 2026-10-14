@@ -17,23 +17,26 @@
       lifecycle Secret so a later recreation of the same tenant name cannot
       silently reuse a retained assignment.
   when: tenant_uid is not defined or tenant_uid | default('') | length == 0
+  no_log: true
 
 - name: Compute the dispatched backend ids
   ansible.builtin.set_fact:
     _ontap_backend_ids: "{{ _provider_tiers | map(attribute='backend_id') | unique | list }}"
+  no_log: true
 
 - name: Validate connection details exist for all dispatched backend_ids
   block:
     - name: Fail if no connection details were provided for a dispatched backend
       ansible.builtin.fail:
         msg: >-
-          No entry for backend_id '{{ item }}' in storage_backend_connections.
+          No entry for a dispatched backend_id in storage_backend_connections.
           osac-operator must resolve and pass connection details (endpoint, username, password)
           for every backend_id referenced by storage_tier_definitions.
       loop: "{{ _ontap_backend_ids }}"
       loop_control:
-        label: "{{ item }}"
+        label: "ontap-backend"
       when: item not in _provider_backend_connections
+      no_log: true
   rescue:
     - name: Build structured failure artifact for unresolved backend connection
       ansible.builtin.set_fact:
@@ -47,27 +50,30 @@
           {% endif -%}
           {% endfor -%}
           {{ [{'reason': 'unresolved_backend_connection', 'tiers': (_provider_tiers | map(attribute='name') | list), 'backend_ids': _backend_ids, 'message': _messages | join(' ')}] }}
+      no_log: true
 
     - name: Emit structured failure artifact for unresolved backend connection
       ansible.builtin.set_stats:
         data:
           osac_storage_provider_failures: "{{ osac_storage_provider_failures }}"
         aggregate: false
+      no_log: true
 
     - name: Re-raise the original unresolved-connection failure
       ansible.builtin.fail:
-        msg: "{{ osac_storage_provider_failures[0].message }}"
+        msg: "Unresolved storage_backend_connections entry for dispatched ONTAP tier."
+      no_log: true
 
 - name: Validate the resolved connections have complete credentials
   block:
     - name: Fail if a resolved connection is missing endpoint, username, or password
       ansible.builtin.fail:
         msg: >-
-          storage_backend_connections['{{ item }}'] is missing one or more of
+          storage_backend_connections entry is missing one or more of
           endpoint, username, password. All three must be set together.
       loop: "{{ _ontap_backend_ids }}"
       loop_control:
-        label: "{{ item }}"
+        label: "ontap-backend"
       when: >-
         _provider_backend_connections[item].endpoint is not defined or
         _provider_backend_connections[item].endpoint is none or
@@ -78,6 +84,7 @@
         _provider_backend_connections[item].password is not defined or
         _provider_backend_connections[item].password is none or
         _provider_backend_connections[item].password | default('') | string | length == 0
+      no_log: true
   rescue:
     - name: Build structured failure artifact for incomplete backend connection
       ansible.builtin.set_fact:
@@ -91,27 +98,33 @@
           {% endif -%}
           {% endfor -%}
           {{ [{'reason': 'incomplete_backend_connection', 'tiers': (_provider_tiers | map(attribute='name') | list), 'backend_ids': _backend_ids, 'message': _messages | join(' ')}] }}
+      no_log: true
 
     - name: Emit structured failure artifact for incomplete backend connection
       ansible.builtin.set_stats:
         data:
           osac_storage_provider_failures: "{{ osac_storage_provider_failures }}"
         aggregate: false
+      no_log: true
 
     - name: Re-raise the original incomplete-connection failure
       ansible.builtin.fail:
-        msg: "{{ osac_storage_provider_failures[0].message }}"
+        msg: "Incomplete storage_backend_connections entry for dispatched ONTAP tier."
+      no_log: true
 
 - name: Initialize the per-backend tenant config accumulator
   ansible.builtin.set_fact:
     _ontap_tenant_configs: {}
+  no_log: true
 
 - name: Claim the prepared assignment for each dispatched backend
   ansible.builtin.include_tasks: _setup_backend.yaml
   loop: "{{ _ontap_backend_ids }}"
   loop_control:
     loop_var: _ontap_backend_id
+    label: "ontap-backend"
 
 - name: Set tenant config output fact
   ansible.builtin.set_fact:
     storage_provider_tenant_config: "{{ _ontap_tenant_configs }}"
+  no_log: true

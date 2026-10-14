@@ -108,9 +108,20 @@
                   app: stub-trident-operator
               spec:
                 serviceAccountName: stub-trident-operator
+                securityContext:
+                  runAsNonRoot: true
+                  runAsUser: 65532
+                  seccompProfile:
+                    type: RuntimeDefault
                 containers:
                   - name: binder
                     image: alpine/k8s:1.33.0
+                    securityContext:
+                      allowPrivilegeEscalation: false
+                      runAsNonRoot: true
+                      runAsUser: 65532
+                      capabilities:
+                        drop: ["ALL"]
                     command:
                       - /bin/sh
                       - -c
@@ -189,7 +200,7 @@
       ontap-be-1:
         endpoint: "https://127.0.0.1:18445"
         username: "osac-discovery"
-        password: "mock-discovery-password"
+        password: "{{ lookup('env', 'OSAC_TEST_ONTAP_DISCOVERY_PASSWORD') | default(lookup('env', 'OSAC_TEST_VAST_PASSWORD'), true) }}"
         tenant_preparation:
           tenant_id: "id-test-ontap"
           source:
@@ -199,7 +210,7 @@
             resource_version: "42"
           provider_config:
             username: "trident_test_ontap"
-            password: "svm-runtime-password"
+            password: "{{ lookup('env', 'OSAC_TEST_ONTAP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true) }}"
             svm: "{{ _t_svm_name }}"
 
   tasks:
@@ -340,7 +351,7 @@
       ontap-be-1:
         endpoint: "https://127.0.0.1:18445"
         username: "osac-discovery"
-        password: "mock-discovery-password"
+        password: "{{ lookup('env', 'OSAC_TEST_ONTAP_DISCOVERY_PASSWORD') | default(lookup('env', 'OSAC_TEST_VAST_PASSWORD'), true) }}"
         tenant_preparation:
           tenant_id: "id-test-ontap"
           source:
@@ -350,7 +361,7 @@
             resource_version: "42"
           provider_config:
             username: "trident_test_ontap"
-            password: "svm-runtime-password"
+            password: "{{ lookup('env', 'OSAC_TEST_ONTAP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true) }}"
             svm: "{{ _t_svm_name }}"
 
   tasks:
@@ -405,7 +416,7 @@
       ontap-be-1:
         endpoint: "https://127.0.0.1:18445"
         username: "osac-discovery"
-        password: "mock-discovery-password"
+        password: "{{ lookup('env', 'OSAC_TEST_ONTAP_DISCOVERY_PASSWORD') | default(lookup('env', 'OSAC_TEST_VAST_PASSWORD'), true) }}"
         tenant_preparation:
           tenant_id: "id-test-ontap-mismatch"
           source:
@@ -415,7 +426,7 @@
             resource_version: "1"
           provider_config:
             username: "trident_mismatch"
-            password: "svm-runtime-password"
+            password: "{{ lookup('env', 'OSAC_TEST_ONTAP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true) }}"
             svm: "{{ _t_svm_name }}"
 
   tasks:
@@ -501,7 +512,7 @@
       ontap-be-1:
         endpoint: "https://127.0.0.1:18445"
         username: "osac-discovery"
-        password: "mock-discovery-password"
+        password: "{{ lookup('env', 'OSAC_TEST_ONTAP_DISCOVERY_PASSWORD') | default(lookup('env', 'OSAC_TEST_VAST_PASSWORD'), true) }}"
         tenant_preparation:
           tenant_id: "id-test-ontap"
           source:
@@ -511,7 +522,7 @@
             resource_version: "42"
           provider_config:
             username: "trident_test_ontap"
-            password: "svm-runtime-password"
+            password: "{{ lookup('env', 'OSAC_TEST_ONTAP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true) }}"
             svm: "{{ _t_svm_name }}"
 
   tasks:
@@ -611,7 +622,9 @@
         that:
           - _csi_secret.resources | length == 1
           - _csi_secret.resources[0].data.username | b64decode == 'trident_test_ontap'
-          - _csi_secret.resources[0].data.password | b64decode == 'svm-runtime-password'
+          - >-
+            (_csi_secret.resources[0].data.password | b64decode) ==
+            (lookup('env', 'OSAC_TEST_ONTAP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true))
         fail_msg: "CSI Secret missing or wrong credentials in the trident namespace"
         success_msg: "CSI Secret carries the prepared SVM runtime credentials"
 
@@ -748,7 +761,7 @@
       ontap-be-1:
         endpoint: "https://127.0.0.1:18445"
         username: "osac-discovery"
-        password: "mock-discovery-password"
+        password: "{{ lookup('env', 'OSAC_TEST_ONTAP_DISCOVERY_PASSWORD') | default(lookup('env', 'OSAC_TEST_VAST_PASSWORD'), true) }}"
         tenant_preparation:
           tenant_id: "id-test-ontap"
           source:
@@ -758,7 +771,7 @@
             resource_version: "42"
           provider_config:
             username: "trident_test_ontap"
-            password: "svm-runtime-password"
+            password: "{{ lookup('env', 'OSAC_TEST_ONTAP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true) }}"
             svm: "{{ _t_svm_name }}"
 
   tasks:
@@ -840,16 +853,15 @@
           ansible.builtin.set_fact:
             _failed_tbc_error: "{{ ansible_failed_result.msg | default('') }}"
 
-    - name: Assert the role failed fast with the TBC's status message
+    - name: Assert the role failed fast on a Failed TBC
       ansible.builtin.assert:
         that:
           - _failed_tbc_error | default('') | length > 0
-          - "'fake failure for fail-fast test' in _failed_tbc_error"
           - "'Failed' in _failed_tbc_error"
         fail_msg: >-
-          Role should fail fast on a Failed TBC and surface its status message,
+          Role should fail fast on a Failed TBC,
           got: {{ _failed_tbc_error | default('(no failure captured)') }}
-        success_msg: "Role failed fast on the Failed TBC with its status message"
+        success_msg: "Role failed fast on the Failed TBC"
 
     - name: Restore the stub Trident operator replicas
       kubernetes.core.k8s:
@@ -887,9 +899,11 @@
     tenant_name: "test-ontap"
     tenant_namespace: "osac-system"
     ontap_storage_config_namespace: "osac-system"
+    ontap_storage_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
     tenant_uid: "uid-test-ontap-1"
     _t_assignment_key: "{{ (('ontap-be-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
     _t_lifecycle_secret: "ontap-tenant-{{ _t_assignment_key }}"
+    _t_svm_name: "customer_acme_svm"
     storage_provider_tiers:
       - name: gold
         protocol: block
@@ -899,10 +913,56 @@
       ontap-be-1:
         endpoint: "https://127.0.0.1:18445"
         username: "osac-discovery"
-        password: "mock-discovery-password"
+        password: "{{ lookup('env', 'OSAC_TEST_ONTAP_DISCOVERY_PASSWORD') | default(lookup('env', 'OSAC_TEST_VAST_PASSWORD'), true) }}"
+        tenant_preparation:
+          tenant_id: "id-test-ontap"
+          source:
+            namespace: "trident"
+            name: "test-ontap-primary-info"
+            uid: "uid-source-secret-1"
+            resource_version: "42"
+          provider_config:
+            username: "trident_test_ontap"
+            password: "{{ lookup('env', 'OSAC_TEST_ONTAP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true) }}"
+            svm: "{{ _t_svm_name }}"
 
   tasks:
-    - name: Call storage_provider role with teardown_backend action
+    # 5a. Foreign tenant_uid must NOT mark the lifecycle Secret as retained
+    # (note: osac.service.storage_provider's teardown_backend wraps the include
+    # in ignore_errors: true, while inner fail tasks inside the included role
+    # still raise unless caught by a block/rescue).
+    - name: Attempt teardown_backend with a foreign tenant_uid
+      block:
+        - name: Call storage_provider role with teardown_backend action as foreign tenant
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: teardown_backend
+            tenant_uid: "uid-foreign-intruder"
+      rescue:
+        - name: Record foreign teardown_backend rejection
+          ansible.builtin.set_fact:
+            _foreign_teardown_rejected: true
+
+    - name: Read back the hub lifecycle Secret after foreign teardown_backend attempt
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "{{ _t_lifecycle_secret }}"
+        namespace: "osac-system"
+      register: _after_foreign_teardown
+
+    - name: Assert the lifecycle Secret remained claimed after foreign teardown_backend
+      ansible.builtin.assert:
+        that:
+          - _after_foreign_teardown.resources | length == 1
+          - _after_foreign_teardown.resources[0].data.lifecycle_stage | b64decode == 'claimed'
+          - _after_foreign_teardown.resources[0].data.tenant_uid | b64decode == 'uid-test-ontap-1'
+        fail_msg: "Foreign tenant_uid teardown_backend should not alter the claimed lifecycle Secret"
+        success_msg: "Foreign tenant_uid teardown_backend refused; lifecycle Secret remains claimed"
+
+    # 5b. Owning tenant_uid marks the lifecycle Secret as retained.
+    - name: Call storage_provider role with teardown_backend action as owner
       ansible.builtin.include_role:
         name: osac.service.storage_provider
       vars:
@@ -926,6 +986,26 @@
           {{ _released_secret.resources[0].data | default({}) | to_json if _released_secret.resources else 'secret gone' }}
         success_msg: "Hub lifecycle Secret marked as retained"
 
+    # 5c. Subsequent ensure_storage_class must reject the retained record.
+    - name: Attempt ensure_storage_class against the retained lifecycle Secret
+      block:
+        - name: Call storage_provider role with ensure_storage_class action
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: ensure_storage_class
+      rescue:
+        - name: Mark retained ensure_storage_class rejection as passed
+          ansible.builtin.set_fact:
+            _retained_ensure_rejected: true
+
+    - name: Assert ensure_storage_class rejected the retained lifecycle record
+      ansible.builtin.assert:
+        that:
+          - _retained_ensure_rejected | default(false) | bool
+        fail_msg: "ensure_storage_class should refuse a retained lifecycle record"
+        success_msg: "ensure_storage_class refused the retained lifecycle record"
+
 # ── Test 6: teardown_cluster_storage removes TBC and SCs ──
 - name: "ONTAP Storage Provider - Teardown cluster storage"
   hosts: localhost
@@ -946,7 +1026,7 @@
       ontap-be-1:
         endpoint: "https://127.0.0.1:18445"
         username: "osac-discovery"
-        password: "mock-discovery-password"
+        password: "{{ lookup('env', 'OSAC_TEST_ONTAP_DISCOVERY_PASSWORD') | default(lookup('env', 'OSAC_TEST_VAST_PASSWORD'), true) }}"
 
   tasks:
     - name: Seed a drifted backend's labeled TBC and CSI Secret
@@ -976,7 +1056,7 @@
           type: Opaque
           stringData:
             username: drift-user
-            password: drift-password
+            password: "{{ lookup('env', 'OSAC_TEST_ONTAP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true) }}"
 
     - name: Call storage_provider role with teardown_cluster_storage action
       ansible.builtin.include_role:

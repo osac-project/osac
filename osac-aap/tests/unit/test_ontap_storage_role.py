@@ -17,10 +17,12 @@ ONTAP_ROLE_DIR = (
 
 
 def _load_yaml(path: Path):
+    """Parse and return the YAML document at the given path."""
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
 def test_ontap_meta_declares_block_vmaas_only():
+    """Verify meta/osac.yaml declares storage_provider, ontap strategy, and block/vmaas capabilities."""
     meta = _load_yaml(ONTAP_ROLE_DIR / "meta" / "osac.yaml")
     assert meta["template_type"] == "storage_provider"
     assert meta["implementation_strategy"] == "ontap"
@@ -54,6 +56,7 @@ def test_ontap_virtual_pools_use_labels_and_selector_not_storage_pools():
     assert "'tier': tier.name" in vpool_expr
     assert "'defaults': _defaults" in vpool_expr
     assert "'name': tier.name" not in vpool_expr
+    assert "tier.qos_policy" not in vpool_expr
 
     # 2. StorageClass creation task must use parameters.selector and NOT storagePools.
     sc_task = next(
@@ -76,3 +79,16 @@ def test_ontap_setup_consumes_operator_tenant_preparation_only():
     assert "tenant_preparation" in raw_text
     assert "_prepared_secret" not in raw_text
     assert "storage-assignment-state" not in raw_text
+
+
+def test_ontap_ensure_short_circuit_checks_tbc_and_csi_secret():
+    """Verify ensure_storage_class.yaml checks StorageClasses, TridentBackendConfigs,
+    and CSI Secrets before setting _ontap_all_sc_exist.
+    """
+    ensure_path = ONTAP_ROLE_DIR / "tasks" / "ensure_storage_class.yaml"
+    raw_text = ensure_path.read_text(encoding="utf-8")
+    assert "_ontap_expected_sc_names" in raw_text
+    assert "_ontap_expected_tbc_names" in raw_text
+    assert "_ontap_expected_csi_secret_names" in raw_text
+    assert "_ontap_tbc_checks" in raw_text
+    assert "_ontap_csi_checks" in raw_text

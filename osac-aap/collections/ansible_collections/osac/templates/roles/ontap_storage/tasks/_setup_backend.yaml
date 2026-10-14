@@ -36,7 +36,6 @@
   no_log: true
 
 - name: Validate operator-supplied tenant preparation fields
-  when: _has_operator_preparation | bool
   ansible.builtin.fail:
     msg: >-
       tenant_preparation for backend '{{ _ontap_backend_id }}' is missing one
@@ -225,7 +224,6 @@
   no_log: true
 
 - name: Validate each capped tier's prepared QoS policy matches the requested ceiling
-  when: _capped_tiers | length > 0
   ansible.builtin.fail:
     msg: >-
       Prepared QoS policy '{{ item.item.policy_name }}' for tier
@@ -236,11 +234,13 @@
   loop_control:
     label: "{{ item.item.policy_name }}"
   when: >-
-    (item.json.num_records | default(0) | int) == 0 or
-    (item.json.records[0].svm is defined and item.json.records[0].svm.uuid is defined and item.json.records[0].svm.uuid != _svm_uuid) or
-    item.json.records[0].fixed is not defined or
-    (item.json.records[0].fixed.capacity_shared | default(false) | bool) or
-    (item.json.records[0].fixed.max_throughput_iops | default(0) | int) != (item.item.max_iops | int)
+    (_capped_tiers | length > 0) and (
+      (item.json.num_records | default(0) | int) == 0 or
+      (item.json.records[0].svm is defined and item.json.records[0].svm.uuid is defined and item.json.records[0].svm.uuid != _svm_uuid) or
+      item.json.records[0].fixed is not defined or
+      (item.json.records[0].fixed.capacity_shared | default(false) | bool) or
+      (item.json.records[0].fixed.max_throughput_iops | default(0) | int) != (item.item.max_iops | int)
+    )
 
 # When using the legacy annotation-based prepared Secret, verify its identity
 # annotations and claim state.

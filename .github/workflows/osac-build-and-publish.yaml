@@ -2032,6 +2032,16 @@ jobs:
                     return comps[0]  # keep full entry, incl. source
             return None
 
+        # Set once if KONFLUX_SA_TOKEN turns out to lack RBAC for pipelineruns
+        # (confirmed live: it has snapshots/releases but not tekton.dev
+        # pipelineruns) -- this status line is cosmetic, so a permission gap
+        # here must degrade to the plain "waiting" message instead of failing
+        # the whole job the way find_component's own oc call correctly does;
+        # losing the build it's polling for over a nicer log line would be
+        # absurd. Checked once rather than re-raising every poll to avoid
+        # spamming the same RBAC error for the rest of TIMEOUT_SECONDS.
+        pipelinerun_rbac_denied = [False]
+
         def describe_pending_state():
             # Real resource status instead of a generic "waiting" message --
             # the build PipelineRun (Succeeded condition's reason/message,
@@ -2040,6 +2050,9 @@ jobs:
             # than silence, and is cheap: one extra `oc get` per interval,
             # same label selector Konflux itself uses to key a component's
             # build to this exact commit.
+            if pipelinerun_rbac_denied[0]:
+                print(f"Waiting on {COMPONENT}'s Konflux build...", flush=True)
+                return
             try:
                 out = subprocess.run(
                     ["oc", "get", "pipelinerun", "-n", NAMESPACE,
@@ -2050,8 +2063,10 @@ jobs:
             except subprocess.CalledProcessError as e:
                 stderr = e.stderr or ""
                 if is_permanent_auth_error(stderr):
-                    print(f"::error::oc get pipelinerun failed with a permanent auth/RBAC error: {stderr.strip()}")
-                    raise
+                    print(f"::warning::oc get pipelinerun denied ({stderr.strip()}) -- falling back to plain waiting messages for the rest of this poll")
+                    pipelinerun_rbac_denied[0] = True
+                    print(f"Waiting on {COMPONENT}'s Konflux build...", flush=True)
+                    return
                 print(f"[{COMPONENT}] Waiting on Konflux build (oc get pipelinerun failed, will retry: {stderr.strip()})", flush=True)
                 return
             items = json.loads(out.stdout)["items"]

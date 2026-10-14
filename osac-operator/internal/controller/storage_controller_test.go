@@ -1278,6 +1278,150 @@ var _ = Describe("Storage Controller", func() {
 	})
 
 	Context("Tier definitions in AAP extra_vars context", func() {
+		DescribeTable("retains usable cleanup connections when another backend is unavailable", func(failure string) {
+			name := "storage-test-cleanup-" + failure
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			co := newClusterOrder(name+"-co", testNamespace, map[string]string{osacTenantKey: name})
+			controllerutil.AddFinalizer(co, clusterStorageFinalizer)
+			Expect(k8sClient.Create(ctx, co)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, co) })
+			hcpNamespace := testNamespace + "-" + co.Name
+			Expect(k8sClient.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: hcpNamespace}})).To(Succeed())
+			kubeconfig := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: "admin-kubeconfig", Namespace: hcpNamespace},
+				Data:       map[string][]byte{"kubeconfig": []byte("apiVersion: v1\nclusters: []\n")},
+			}
+			Expect(k8sClient.Create(ctx, kubeconfig)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, kubeconfig) })
+			hcp := &hypershiftv1beta1.HostedControlPlane{ObjectMeta: metav1.ObjectMeta{Name: co.Name, Namespace: hcpNamespace}}
+			Expect(k8sClient.Create(ctx, hcp)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, hcp) })
+			hcp.Status.KubeConfig = &hypershiftv1beta1.KubeconfigSecretRef{Name: kubeconfig.Name, Key: "kubeconfig"}
+			Expect(k8sClient.Status().Update(ctx, hcp)).To(Succeed())
+			co.Status.ClusterReference = &v1alpha1.ClusterOrderClusterReferenceType{Namespace: testNamespace, HostedClusterName: co.Name}
+			Expect(k8sClient.Status().Update(ctx, co)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, co)).To(Succeed())
+
+			deprovisions := 0
+			provider := &mockProvisioningProvider{
+				triggerDeprovisionFunc: func(ctx context.Context, resource client.Object, _ []v1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
+					deprovisions++
+					Expect(resource.GetName()).To(Equal(co.Name))
+					connections := provisioning.StorageBackendConnectionsFromContext(ctx)
+					Expect(connections).To(HaveKey("vast-backend"))
+					if failure == "error" {
+						Expect(connections).To(HaveKey("ontap-backend"))
+					} else {
+						Expect(connections).NotTo(HaveKey("ontap-backend"))
+					}
+					return &provisioning.DeprovisionResult{Action: provisioning.DeprovisionTriggered,
+						JobID: "cleanup-job", BlockDeletionOnFailure: true}, nil
+				},
+				triggerProvisionFunc: func(context.Context, client.Object) (*provisioning.ProvisionResult, error) {
+					Fail("backend failure must not start new provisioning")
+					return nil, nil
+				},
+			}
+			r := NewStorageReconciler(testMcManager, testNamespace, mcmanager.LocalCluster,
+				provider, provider, pollInterval, provisioning.DefaultMaxJobHistory)
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{Items: []*privatev1.StorageTier{
+						newTestStorageTier("ontap", "ontap-backend"), newTestStorageTier("vast", "vast-backend"),
+					}}.Build(), nil
+				},
+			}
+			r.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, request *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					if request.GetId() == "vast-backend" {
+						return newTestStorageBackendGetResponse("vast"), nil
+					}
+					if failure == "credentials" {
+						return newTestStorageBackendGetResponseWithSecret("ontap", "unavailable-password"), nil
+					}
+					response := newTestStorageBackendGetResponse("ontap")
+					response.GetObject().SetStatus(privatev1.StorageBackendStatus_builder{
+						State: privatev1.StorageBackendState_STORAGE_BACKEND_STATE_ERROR,
+					}.Build())
+					return response, nil
+				},
+			}
+			Eventually(func(g Gomega) {
+				_, err := r.Reconcile(ctx, storageReconcileRequest(types.NamespacedName{Name: name, Namespace: testNamespace}))
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(deprovisions).To(Equal(1))
+			}).Should(Succeed())
+			retained := &v1alpha1.ClusterOrder{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), retained)).To(Succeed())
+			Expect(retained.Finalizers).To(ContainElement(clusterStorageFinalizer))
+		}, Entry("backend ERROR", "error"), Entry("missing ONTAP credentials", "credentials"))
+
+		DescribeTable("waits for required backend configuration before provisioning", func(failure string) {
+			name := "storage-test-config-wait-" + failure
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			available := false
+			provisions := 0
+			provider := &mockProvisioningProvider{
+				triggerProvisionFunc: func(ctx context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
+					provisions++
+					Expect(provisioning.StorageTierDefinitionsFromContext(ctx)).To(HaveLen(1))
+					Expect(provisioning.StorageBackendConnectionsFromContext(ctx)).To(HaveKey("backend-1"))
+					return &provisioning.ProvisionResult{JobID: "mock-job-id", InitialState: v1alpha1.JobStatePending}, nil
+				},
+			}
+			r := NewStorageReconciler(testMcManager, testNamespace, mcmanager.LocalCluster,
+				provider, provider, pollInterval, provisioning.DefaultMaxJobHistory)
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					if failure == "catalog" && !available {
+						return nil, status.Error(codes.Unavailable, "catalog unavailable")
+					}
+					tier := newTestStorageTier("fast", "backend-1")
+					tier.GetSpec().SetProtocol(privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK)
+					return privatev1.StorageTiersListResponse_builder{Items: []*privatev1.StorageTier{tier}}.Build(), nil
+				},
+			}
+			backends := registeredBackendsClient(1)
+			backends.getFunc = func(context.Context, *privatev1.StorageBackendsGetRequest, ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+				response := newTestStorageBackendGetResponse("ontap")
+				if !available && failure == "error" {
+					response.GetObject().SetStatus(privatev1.StorageBackendStatus_builder{
+						State: privatev1.StorageBackendState_STORAGE_BACKEND_STATE_ERROR,
+					}.Build())
+				}
+				if !available && failure == "credentials" {
+					response = newTestStorageBackendGetResponseWithSecret("ontap", "missing-discovery-password")
+				}
+				return response, nil
+			}
+			r.BackendsClient = backends
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			result, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(pollInterval))
+			Expect(provisions).To(BeZero(), "unresolved required storage must not fall back to an empty catalog")
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			for _, conditionType := range []v1alpha1.TenantConditionType{
+				v1alpha1.TenantConditionStorageBackendReady, v1alpha1.TenantConditionClusterStorageReady,
+			} {
+				condition := tenant.GetStatusCondition(conditionType)
+				Expect(condition).NotTo(BeNil())
+				Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+				Expect(condition.Reason).To(Equal("ConfigurationUnavailable"))
+				Expect(condition.Message).To(ContainSubstring("storage"))
+				Expect(condition.ObservedGeneration).To(Equal(tenant.Generation))
+			}
+			available = true
+			_, err = r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(provisions).To(Equal(1), "a later reconcile resumes with the recovered catalog")
+		},
+			Entry("backend ERROR", "error"),
+			Entry("catalog unavailable", "catalog"),
+			Entry("ONTAP discovery credential unavailable", "credentials"),
+		)
+
 		tierDefsTiersClient := func() *mockStorageTiersLister {
 			return &mockStorageTiersLister{
 				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
@@ -1578,7 +1722,7 @@ var _ = Describe("Storage Controller", func() {
 			backendCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
 			Expect(backendCond).NotTo(BeNil())
 			Expect(backendCond.Status).To(Equal(metav1.ConditionFalse))
-			Expect(backendCond.Reason).To(Equal("TierResolutionFailed"))
+			Expect(backendCond.Reason).To(Equal("ConfigurationUnavailable"))
 			Expect(backendCond.Message).To(ContainSubstring("fulfillment service unreachable"),
 				"condition message should carry the actual resolution error")
 		})
@@ -1620,7 +1764,7 @@ var _ = Describe("Storage Controller", func() {
 			backendCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
 			Expect(backendCond).NotTo(BeNil())
 			Expect(backendCond.Status).To(Equal(metav1.ConditionFalse))
-			Expect(backendCond.Reason).To(Equal("TierResolutionFailed"))
+			Expect(backendCond.Reason).To(Equal("ConfigurationUnavailable"))
 			Expect(backendCond.Message).To(ContainSubstring("token expired"),
 				"condition message should carry the actual resolution error")
 		})

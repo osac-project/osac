@@ -348,20 +348,15 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 	if caasDelErr != nil || caasDelResult.RequeueAfter > 0 {
 		return caasDelResult, caasDelErr
 	}
-
-	// Guard: when tier resolution failed and any provisioning provider is
-	// configured, do not proceed — the downstream AAP calls would run
-	// without storage_tier_definitions and storage_backend_connections,
-	// creating incomplete or wrong resources. This matches the guard in
-	// handleCaaSDelete (OSAC-4855) and extends it to the provisioning paths.
-	// CaaS cluster deletion (above) already ran and is unaffected.
-	if tierErr != nil && (r.BackendProvider != nil || r.ClusterStorageProvider != nil) {
-		log.Error(tierErr, "tier resolution failed, deferring storage provisioning until fulfillment service recovers",
-			"tenant", tenantName)
-		instance.SetStatusCondition(v1alpha1.TenantConditionStorageBackendReady,
-			metav1.ConditionFalse,
-			"TierResolutionFailed",
-			fmt.Sprintf("Storage tier definitions could not be resolved from the fulfillment service: %v", tierErr))
+	if tierErr != nil {
+		log.Error(tierErr, "storage configuration unavailable, deferring storage provisioning", "tenant", tenantName)
+		for _, conditionType := range []v1alpha1.TenantConditionType{
+			v1alpha1.TenantConditionStorageBackendReady, v1alpha1.TenantConditionClusterStorageReady,
+		} {
+			instance.SetStatusCondition(conditionType, metav1.ConditionFalse,
+				"ConfigurationUnavailable", tierErr.Error())
+			instance.GetStatusCondition(conditionType).ObservedGeneration = instance.Generation
+		}
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 

@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -79,6 +80,7 @@ func resolveTierDefinitions(
 	connections := make(map[string]provisioning.BackendConnection)
 
 	var definitions []provisioning.TierDefinition
+	var readinessErrors []error
 	for _, tier := range resp.GetItems() {
 		tierName := tier.GetMetadata().GetName()
 		backends := tier.GetSpec().GetBackends()
@@ -105,8 +107,15 @@ func resolveTierDefinitions(
 				return nil, nil, fmt.Errorf("get storage backend %q: %w", backendID, err)
 			}
 			spec := getResp.GetObject().GetSpec()
+			if getResp.GetObject().GetStatus().GetState() == privatev1.StorageBackendState_STORAGE_BACKEND_STATE_ERROR {
+				readinessErrors = append(readinessErrors,
+					fmt.Errorf("storage backend %q is in ERROR; an administrator must fix it and save it again", backendID))
+			}
 			password, perr := resolveBackendPassword(ctx, secretsClient, spec.GetCredentials())
 			if perr != nil {
+				if spec.GetProvider() == "ontap" {
+					readinessErrors = append(readinessErrors, fmt.Errorf("resolve storage backend %q credentials: %w", backendID, perr))
+				}
 				// A backend whose password cannot be resolved is skipped with a
 				// logged warning (like a NotFound backend) rather than provisioned
 				// with an empty password. The error carries only the backend id and
@@ -153,7 +162,8 @@ func resolveTierDefinitions(
 		definitions = append(definitions, definition)
 	}
 
-	return definitions, connections, nil
+	// Cleanup still needs usable connections even when setup must wait.
+	return definitions, connections, errors.Join(readinessErrors...)
 }
 
 // resolveBackendPassword returns the storage backend password used for AAP provisioning,
@@ -205,8 +215,8 @@ func resolveBackendPassword(
 // calls to pick up, returning the tier definitions directly for callers that
 // also need them locally (e.g. tier-coverage validation).
 //
-// The returned error is non-nil when both clients were configured but the
-// Tier/Backend API call failed (gRPC Unavailable, Unauthenticated, etc.).
+// The returned error reports catalog fetch failures and backend readiness or
+// credential errors. Usable definitions and connections are preserved for cleanup.
 // Callers that own AAP storage provisioning must check this error and avoid
 // launching jobs whose extra_vars would be missing tier/backend data. A nil
 // error covers both "resolution succeeded" and "clients not configured"
@@ -228,10 +238,6 @@ func resolveAndInjectTierContext(
 	var resolutionErr error
 	if tiersClient != nil && backendsClient != nil {
 		tierDefinitions, backendConnections, resolutionErr = resolveTierDefinitions(ctx, tiersClient, backendsClient, secretsClient)
-		if resolutionErr != nil {
-			tierDefinitions = nil
-			backendConnections = nil
-		}
 	} else if tiersClient != nil || backendsClient != nil {
 		log.Info("storage tier resolution skipped: TiersClient and BackendsClient must both be set",
 			append(logKV, "tiersClientSet", tiersClient != nil, "backendsClientSet", backendsClient != nil)...)

@@ -1,31 +1,40 @@
 ---
 # ONTAP-specific defaults — all use ontap_storage_ prefix.
 
-# Namespace for hub-cluster prepared Secrets. Resolution order:
-#   1. OSAC_STORAGE_CONFIG_NAMESPACE env var — explicit override via the storage-operations-ig
-#      ConfigMap, only needed if the config namespace differs from the IG pod's own namespace.
-#   2. The IG pod's own namespace, read from the standard K8s-mounted service account file —
-#      always accurate for wherever the pod actually runs, no per-deployment config needed.
-# No hardcoded fallback — fail loudly if neither source is available
-# rather than silently targeting a wrong namespace.
+# Namespace for hub-cluster config and prepared Secrets. Delegates to the
+# global storage_provider_config_namespace default (OSAC_STORAGE_CONFIG_NAMESPACE
+# or the pod's mounted service account namespace) so all storage providers
+# share a single source of truth while preserving the role-prefixed variable.
 ontap_storage_config_namespace: >-
-  {{ lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE')
-     | default(lookup('file', '/var/run/secrets/kubernetes.io/serviceaccount/namespace', errors='ignore'), true) }}
+  {{ storage_provider_config_namespace
+     | default(lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE')
+               | default(lookup('file', '/var/run/secrets/kubernetes.io/serviceaccount/namespace', errors='ignore'), true), true) }}
 
-# Namespace where Trident is installed. The TridentBackendConfig CRD is
-# namespaced and Trident only reconciles TBCs (and their credentials Secrets)
-# in its own install namespace, so both the CSI Secret and the TBC must live
-# here. The Trident install namespace is configurable at install time; this
-# default matches Trident's own default. No env fallback exists upstream.
-ontap_storage_trident_namespace: trident
+# Namespace where Trident is installed on the target hosting cluster.
+# The TridentBackendConfig CRD is namespaced and Trident only reconciles TBCs
+# (and their credentials Secrets) in its own install namespace, so both the
+# CSI Secret and the TBC must live here. Configurable via ONTAP_TRIDENT_NAMESPACE.
+ontap_storage_trident_namespace: "{{ lookup('env', 'ONTAP_TRIDENT_NAMESPACE') | default('trident', true) }}"
 
 # SAN transport for the ontap-san driver. Valid values: iscsi, fcp, nvme.
 # Must match what the prepared SVM's LIFs actually carry; Trident validates
-# the value against its own allowlist.
-ontap_storage_san_type: fcp
+# the value against its own allowlist. Configurable via ONTAP_SAN_TYPE.
+ontap_storage_san_type: "{{ lookup('env', 'ONTAP_SAN_TYPE') | default('fcp', true) }}"
 
-# TLS certificate validation for ONTAP REST API calls.
-ontap_storage_validate_certs: "{{ lookup('env', 'ONTAP_VALIDATE_CERTS') | default('true', true) | bool }}"
+# Path to the cluster-installed PEM CA bundle (mounted from the ca-bundle
+# ConfigMap in storage-operations-ig / compute-instance-operations-ig). Used
+# when present to verify ONTAP REST discovery calls and to populate
+# TridentBackendConfig.spec.trustedCACertificate when no per-assignment CA is
+# provided.
+ontap_storage_ca_bundle_path: "{{ lookup('env', 'ONTAP_CA_BUNDLE_PATH') | default('/etc/ca-bundle/bundle.pem', true) }}"
 
-# API timeout (seconds) for ONTAP REST discovery calls.
-ontap_storage_probe_timeout: 10
+# API timeout (seconds) for ONTAP REST discovery calls. Delegates to the global
+# storage_provider_api_timeout (default 30s), overridable via ONTAP_API_TIMEOUT
+# or OSAC_STORAGE_API_TIMEOUT.
+ontap_storage_api_timeout: >-
+  {{ lookup('env', 'ONTAP_API_TIMEOUT')
+     | default(storage_provider_api_timeout | default(lookup('env', 'OSAC_STORAGE_API_TIMEOUT') | default('30', true), true), true)
+     | int }}
+
+# Alias preserved for callers referencing ontap_storage_probe_timeout.
+ontap_storage_probe_timeout: "{{ ontap_storage_api_timeout | int }}"

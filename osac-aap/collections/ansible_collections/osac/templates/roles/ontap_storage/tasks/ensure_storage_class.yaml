@@ -4,13 +4,10 @@
 #
 # Per backend there is exactly ONE TridentBackendConfig (ontap-<assignment_key>,
 # ontap-san driver, block-only) whose virtual pools carry the per-tier QoS
-# policy references; per tier there is one StorageClass
+# policy and encryption defaults; per tier there is one StorageClass
 # (ontap-<assignment_key>-<tier_key>) selecting the tier's pool.
 # The CSI Secret the TBC references is created in the Trident install
 # namespace — Trident only reconciles TBCs and their credential Secrets there.
-# The prepared Secret's raw ca.crt data value (base64 of PEM) passes through
-# UNCHANGED to the TBC's trustedCACertificate: Trident base64-decodes the spec
-# field itself, so decoding here would double-decode.
 
 - name: Include shared tier validation
   ansible.builtin.include_tasks: _validate_tiers.yaml
@@ -56,6 +53,7 @@
       - "osac.openshift.io/storage-provider=ontap"
       - "app.kubernetes.io/managed-by=osac-aap"
   register: _ontap_sc_checks
+  no_log: true
 
 - name: Determine if all StorageClasses already exist
   ansible.builtin.set_fact:
@@ -79,9 +77,25 @@
 - name: Provision TridentBackendConfig and StorageClasses
   when: not (_ontap_all_sc_exist | bool)
   block:
-    - name: Initialize the StorageClass output accumulator
-      ansible.builtin.set_fact:
-        _ontap_sc_output: []
+    # Pre-flight: since OSAC does not install Trident, verify the
+    # TridentBackendConfig CRD exists on the target cluster before attempting
+    # to create backend resources.
+    - name: Verify TridentBackendConfig CRD is installed on the target cluster
+      kubernetes.core.k8s_info:
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: tridentbackendconfigs.trident.netapp.io
+      register: _trident_crd_check
+
+    - name: Fail if Trident is not installed on the target cluster
+      ansible.builtin.fail:
+        msg: >-
+          TridentBackendConfig CRD (tridentbackendconfigs.trident.netapp.io) was
+          not found on the target cluster. NetApp Trident must be pre-installed
+          by the cluster administrator in namespace
+          '{{ ontap_storage_trident_namespace }}' before onboarding ONTAP
+          storage tiers.
+      when: _trident_crd_check.resources | default([]) | length == 0
 
     - name: Provision per backend
       ansible.builtin.include_tasks: _ensure_storage_class_backend.yaml
@@ -91,11 +105,11 @@
 
     - name: Set StorageClass names output (list)
       ansible.builtin.set_fact:
-        storage_provider_storage_class_names: "{{ _ontap_sc_output }}"
+        storage_provider_storage_class_names: "{{ _ontap_expected_sc_entries }}"
 
   always:
     - name: Clear credential-bearing facts
       ansible.builtin.set_fact:
         _ontap_sc_checks: {}
-        _ontap_sc_output: []
+        _trident_crd_check: {}
       no_log: true

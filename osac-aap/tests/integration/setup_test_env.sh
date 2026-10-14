@@ -142,13 +142,16 @@ spec:
   attachRequired: true
 CSIEOF
 
-  # Generate self-signed TLS cert for mock VMS server
-  echo "Generating TLS certificate for mock VMS server..."
+  # Generate self-signed TLS cert for mock VMS and ONTAP servers (with SANs for
+  # 127.0.0.1 and localhost so TLS certificate verification succeeds when
+  # ca_path points to certs/mock.pem).
+  echo "Generating TLS certificate for mock VMS/ONTAP servers..."
   mkdir -p "${SCRIPT_DIR}/certs"
   openssl req -x509 -newkey rsa:2048 \
     -keyout "${SCRIPT_DIR}/certs/mock.key" \
     -out "${SCRIPT_DIR}/certs/mock.pem" \
-    -days 1 -nodes -subj "/CN=127.0.0.1" 2>/dev/null
+    -days 1 -nodes -subj "/CN=127.0.0.1" \
+    -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" 2>/dev/null
 
   # Start mock VMS server for storage integration tests (TLS required by vastdata.vms modules)
   echo "Starting mock VMS server (TLS)..."

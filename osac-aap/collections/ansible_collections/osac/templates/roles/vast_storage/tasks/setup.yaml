@@ -66,7 +66,7 @@
           username: "{{ vast_username }}"
           password: "{{ vast_password }}"
           validate_certs: "{{ vast_storage_validate_certs }}"
-          timeout: "{{ vast_storage_api_timeout }}"
+          timeout: "{{ storage_provider_api_timeout }}"
       no_log: true
 
     # ── VIP pool existence check (fail fast, before creating the tenant) ──
@@ -87,7 +87,7 @@
         url_password: "{{ vast_password }}"
         force_basic_auth: true
         validate_certs: "{{ vast_storage_validate_certs }}"
-        timeout: "{{ vast_storage_api_timeout | int }}"
+        timeout: "{{ storage_provider_api_timeout | int }}"
         status_code: [200]
       register: _vast_vip_pool_check
       no_log: true
@@ -140,7 +140,7 @@
               username: "{{ vast_username }}"
               password: "{{ vast_password }}"
             validate_certs: "{{ vast_storage_validate_certs }}"
-            timeout: "{{ vast_storage_api_timeout | int }}"
+            timeout: "{{ storage_provider_api_timeout | int }}"
             status_code: [200, 201]
           register: _vast_setup_auth
           no_log: true
@@ -156,7 +156,7 @@
             headers:
               Authorization: "Bearer {{ _vast_setup_auth.json.access }}"
             validate_certs: "{{ vast_storage_validate_certs }}"
-            timeout: "{{ vast_storage_api_timeout | int }}"
+            timeout: "{{ storage_provider_api_timeout | int }}"
             status_code: [200]
           register: _vast_lp_check
           no_log: true
@@ -172,7 +172,7 @@
             headers:
               Authorization: "Bearer {{ _vast_setup_auth.json.access }}"
             validate_certs: "{{ vast_storage_validate_certs }}"
-            timeout: "{{ vast_storage_api_timeout | int }}"
+            timeout: "{{ storage_provider_api_timeout | int }}"
             status_code: [200, 201]
           register: _vast_lp_create_result
           no_log: true
@@ -201,7 +201,7 @@
             headers:
               Authorization: "Bearer {{ _vast_setup_auth.json.access }}"
             validate_certs: "{{ vast_storage_validate_certs }}"
-            timeout: "{{ vast_storage_api_timeout | int }}"
+            timeout: "{{ storage_provider_api_timeout | int }}"
             status_code: [200]
           register: _vast_tenant_check
           no_log: true
@@ -376,7 +376,7 @@
               username: "{{ vast_username }}"
               password: "{{ vast_password }}"
             validate_certs: "{{ vast_storage_validate_certs }}"
-            timeout: "{{ vast_storage_api_timeout | int }}"
+            timeout: "{{ storage_provider_api_timeout | int }}"
             status_code: [200, 201]
           register: _vast_rollback_auth
           ignore_errors: true
@@ -430,7 +430,7 @@
             headers:
               Authorization: "Bearer {{ _vast_rollback_auth.json.access }}"
             validate_certs: "{{ vast_storage_validate_certs }}"
-            timeout: "{{ vast_storage_api_timeout | int }}"
+            timeout: "{{ storage_provider_api_timeout | int }}"
             status_code: [200, 204, 404]
           ignore_errors: true  # noqa: ignore-errors
           no_log: true

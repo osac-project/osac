@@ -12,9 +12,9 @@ describe('StorageBackendStatusLabel', () => {
     expect(screen.getByText('Ready')).toBeInTheDocument();
   });
 
-  it('maps UNSPECIFIED to progressing/Pending (not ready)', () => {
+  it('maps UNSPECIFIED to unspecified/Unspecified', () => {
     renderWithProviders(<StorageBackendStatusLabel state={StorageBackendState.UNSPECIFIED} />);
-    expect(screen.getByText('Pending')).toBeInTheDocument();
+    expect(screen.getByText('Unspecified')).toBeInTheDocument();
     expect(screen.queryByText('Ready')).not.toBeInTheDocument();
   });
 

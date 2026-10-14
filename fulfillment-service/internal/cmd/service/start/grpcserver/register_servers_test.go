@@ -26,6 +26,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"sort"
 	"testing"
 	"time"
@@ -53,6 +55,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/servers"
 	"github.com/osac-project/osac/fulfillment-service/internal/services"
 	itesting "github.com/osac-project/osac/fulfillment-service/internal/testing"
+	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -63,15 +66,16 @@ func TestRegisterServers(t *testing.T) {
 }
 
 var (
-	ctx          context.Context
-	ctrl         *gomock.Controller
-	logger       *slog.Logger
-	dbContainer  *database.Container
-	attribution  *auth.MockAttributionLogic
-	tenancy      *auth.MockTenancyLogic
-	conn         *grpc.ClientConn
-	hubScheme    *k8sruntime.Scheme
-	tierResolver servers.TierResolverFunc
+	ctx           context.Context
+	ctrl          *gomock.Controller
+	logger        *slog.Logger
+	dbContainer   *database.Container
+	attribution   *auth.MockAttributionLogic
+	tenancy       *auth.MockTenancyLogic
+	conn          *grpc.ClientConn
+	hubScheme     *k8sruntime.Scheme
+	tierResolver  servers.TierResolverFunc
+	ontapEndpoint *httptest.Server
 )
 
 var _ = BeforeSuite(func() {
@@ -154,6 +158,16 @@ var _ = BeforeSuite(func() {
 	hubScheme, err = hubscheme.NewHub()
 	Expect(err).ToNot(HaveOccurred())
 	metricsRegisterer := prometheus.NewRegistry()
+	ontapEndpoint = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/cluster" {
+			fmt.Fprint(w, `{"version":{"full":"9.17.1"}}`)
+		} else {
+			fmt.Fprint(w, `{"records":[],"num_records":0}`)
+		}
+	}))
+	DeferCleanup(ontapEndpoint.Close)
+	caPool, err := trust.NewCertPool().SetLogger(logger).AddCertificate(ontapEndpoint.Certificate()).Build()
+	Expect(err).NotTo(HaveOccurred())
 
 	// Create the storage tiers and backends DAOs and the tier resolver, exactly as production wires them in
 	// start_grpc_server_cmd.go's run(), for the private volumes server's mandatory SetTierResolver dependency.
@@ -201,6 +215,7 @@ var _ = BeforeSuite(func() {
 		TierResolver:            tierResolver,
 		PrivateUsersServer:      privateUsersServer,
 		Services:                &services.Flags{CaaS: true, VMaaS: true, BMaaS: true, MaaS: true},
+		CAPool:                  caPool,
 	})
 	Expect(err).ToNot(HaveOccurred())
 	server.Start()
@@ -211,6 +226,27 @@ var _ = BeforeSuite(func() {
 	)
 	Expect(err).ToNot(HaveOccurred())
 	DeferCleanup(conn.Close)
+})
+
+var _ = Describe("ONTAP configured certificate trust", func() {
+	It("uses the service CA pool for registration through the registered gRPC API", func() {
+		client := privatev1.NewStorageBackendsClient(conn)
+		created, err := client.Create(ctx, privatev1.StorageBackendsCreateRequest_builder{
+			Object: privatev1.StorageBackend_builder{
+				Metadata: privatev1.Metadata_builder{Name: "configured-ca-netapp"}.Build(),
+				Spec: privatev1.StorageBackendSpec_builder{
+					Provider: "ontap", Endpoint: ontapEndpoint.URL,
+					Credentials: privatev1.StorageBackendCredentials_builder{Username: "discovery", Password: "example-password"}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() {
+			_, deleteErr := client.Delete(ctx, privatev1.StorageBackendsDeleteRequest_builder{Id: created.GetObject().GetId()}.Build())
+			Expect(deleteErr).NotTo(HaveOccurred())
+		})
+		Expect(created.GetObject().GetStatus().GetState()).To(Equal(privatev1.StorageBackendState_STORAGE_BACKEND_STATE_READY))
+	})
 })
 
 // filterOracleCase describes one private-only field path found on a resource that has a public List RPC.

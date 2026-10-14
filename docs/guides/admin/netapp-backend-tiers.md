@@ -9,15 +9,20 @@ steps; a READY backend does not certify those prerequisites.
 ## Prerequisites
 
 - A cluster management HTTPS endpoint reachable from Fulfillment Service.
-  Use its certificate's hostname or a matching IP SAN. An SVM management
-  endpoint used for runtime provisioning is a separate connection.
+  Use its certificate's hostname or a matching IP SAN. The address used by
+  Trident must also match its runtime account's scope; see the onboarding guide.
 - A discovery account allowed to read cluster version, SVMs, IP and FC
   interfaces, QoS policies, volumes and LUNs through the ONTAP REST API.
-- The approved issuing CA chain installed in the Fulfillment process's HTTPS
-  trust store. For a private CA, mount an approved PEM bundle and configure
-  Go's `SSL_CERT_FILE` or `SSL_CERT_DIR` environment setting. Preserve the
-  required existing trust roots. Backend registration has no certificate
-  bypass or certificate-pin field.
+- The approved issuing CA chain in Fulfillment's configured CA bundle. A CA
+  bundle is a PEM file containing certificates the service trusts. The service
+  chart's `certs.caBundle.configMap` selects the ConfigMap mounted through
+  `--ca-file`; the umbrella chart exposes this as
+  `service.certs.caBundle.configMap`. Include the NetApp CA while
+  retaining existing certificates, using the installation's supported bundle
+  source. Do not edit a trust-manager-generated ConfigMap directly. Restart the
+  service after a trust change. Backend registration has no certificate bypass
+  or certificate-pin field. AAP and Trident need their own trust configuration;
+  mounting a bundle in Fulfillment does not configure either of them.
 - The discovery password, either stored in a Fulfillment Secret that the
   registering administrator can read, or supplied inline in the request.
 
@@ -97,7 +102,8 @@ osac get storagebackend netapp-primary -o json
 resolved to canonical ID/name; the resolved password is not copied into the
 backend record.
 
-Before saving READY, the service performs these authenticated GETs:
+The service performs these authenticated GETs and saves the backend as READY
+on success, or ERROR with a diagnostic message on a failed connection check:
 
 | Resource | REST path |
 |---|---|
@@ -172,25 +178,46 @@ change requires a replacement backend. ONTAP tier backend/protocol/QoS/encryptio
 changes require a replacement tier. Other providers retain their existing
 registration behavior and do not receive the ONTAP probe requirement.
 
-Credential updates probe the stored configuration after applying the update
-mask. Failed validation/probing leaves the saved object and version unchanged.
-Discovery runs before taking the backend update lock. If another request changes
-the backend during discovery, the update returns `Aborted`; retry with fresh state.
-Description-only and no-op updates do not perform another probe. To switch
+Every ONTAP Update checks the effective configuration after applying the update
+mask, including description-only and unchanged updates. A failed connection
+check saves the submitted configuration with ERROR and `status.message`; a
+successful check sets READY and clears the old message. The service does not
+retry in the background.
+
+After fixing a network, certificate or array issue, submit an Update to the
+same backend. No field needs to change and no delete/recreate is required:
+
+```bash
+osac edit storagebackend netapp-primary
+# Save and close the editor, keeping the existing fields.
+osac get storagebackend netapp-primary -o json
+```
+
+Inspect `status.state` and `status.message` in the response. Saving a referenced
+password again rereads the protected Secret, so a password changed there is
+checked without changing the reference. The endpoint is always the backend's
+`spec.endpoint`, not an address taken from tenant credentials.
+
+Malformed requests, invalid Secret references and unauthorized Secret reads
+still fail the API request without saving it. Discovery runs before taking the
+backend update lock. If another request changes the backend during discovery,
+the update returns `Aborted`; retry with fresh state. To switch
 from inline password to a reference, explicitly include both
 `spec.credentials.password` and `spec.credentials.password_secret` in the
 protobuf field mask, clearing the old source. Parent masks, such as
-`spec.credentials`, replace that whole subtree. An empty mask changes nothing;
-an absent mask supplies a complete replacement object.
+`spec.credentials`, replace that whole subtree. An empty mask preserves the
+specification and reruns the check; an absent mask supplies a complete replacement
+object.
 
-| Failure | gRPC code | Administrator action |
+| Failure | Result | Administrator action |
 |---|---|---|
-| Invalid endpoint/credentials or HTTP 401 | InvalidArgument | Correct endpoint or discovery credentials |
-| HTTP 403, unsupported discovery path, invalid/oversized response | FailedPrecondition | Check required read permissions and REST API availability |
-| TLS/connectivity failure, redirect, server failure | Unavailable | Check routing, approved CA trust, certificate identity/validity and array health |
-| Probe deadline | DeadlineExceeded | Check endpoint responsiveness and retry |
-| Caller cancellation | Canceled | Retry if still needed |
-| Protected Secret read denied | PermissionDenied | Use an authorized administrator and Secret |
+| Malformed endpoint, missing credential fields or invalid password Secret | API error; not saved | Correct the request or Secret |
+| HTTP 401 | Saved as ERROR | Correct discovery credentials and save again |
+| HTTP 403, unsupported discovery path, invalid/oversized response | Saved as ERROR | Check read permissions and REST API availability, then save again |
+| TLS/connectivity failure, redirect, server failure | Saved as ERROR | Fix routing, approved CA trust, certificate identity/validity or array health; save again |
+| Probe deadline | Saved as ERROR | Check responsiveness and save again |
+| Caller cancellation/deadline | Canceled/DeadlineExceeded; not saved | Retry if still needed |
+| Protected Secret read denied | PermissionDenied; not saved | Use an authorized administrator and Secret |
 
 Errors identify the discovery path/status where available and omit passwords,
 Authorization headers and array response bodies.
@@ -199,8 +226,9 @@ Authorization headers and array response bodies.
 
 With the candidate Fulfillment service deployed and approved CA trust set,
 create an isolated discovery VALUE Secret, register one backend and one tier,
-then Get/List them to confirm persistence. Test a rejected credential update
-and confirm the original backend/version remains unchanged. Delete temporary
+then Get/List them to confirm persistence. Test a bad discovery password and
+confirm the backend remains saved with ERROR. Restore the password and save
+again; verify READY and a cleared message. Delete temporary
 catalog records in dependency order when finished. All ONTAP calls made by
 registration are GET-only. This verifies API-to-array discovery; FC fabric,
 tenant onboarding and VM disk I/O need their own acceptance tests.

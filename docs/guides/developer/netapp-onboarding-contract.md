@@ -12,8 +12,13 @@ For administrator requests and TLS preparation, see
 ## Registration output
 
 `StorageBackendSpec` keeps its existing fields. Use `provider: ontap`, the
-cluster management HTTPS endpoint, and discovery credentials. A successful
-registration stores `READY` only after seven bounded authenticated GETs.
+cluster management HTTPS endpoint, and discovery credentials. Seven bounded
+authenticated GETs set `READY` on success or `ERROR` with `status.message` on
+connection failure. Both outcomes persist the desired configuration. Every
+explicit Update, including an unchanged save, reruns discovery; success clears
+the error. There is no automatic backend reconciliation. Invalid requests and
+unauthorized Secret reads still fail without saving. The probe uses the existing
+Fulfillment CA pool and verifies the registered endpoint's certificate.
 This certifies management discovery; it does not certify a tenant SVM, native
 Trident installation, FC zoning, usable capacity, or VM disk access.
 
@@ -70,9 +75,9 @@ absent, `provider_config` is omitted; an explicitly supplied zero is preserved.
 `encryption_enabled` is always included for ONTAP, including `false`.
 Existing provider payloads omit these additions unless used.
 
-The common connection contains discovery credentials only. Prepared-SVM
-credentials, CA material, topology, policy names and assignments are not
-new backend fields or new operator extra_vars. Keep credential-bearing
+The common connection currently contains discovery credentials only. Prepared-SVM
+credentials are not new backend fields. The next operator/AAP input revision
+below is still pending; it is not included in this implemented payload. Keep credential-bearing
 tasks under `no_log`; never return or log this connection/password.
 
 Sender implementation and tests:
@@ -82,59 +87,83 @@ Sender implementation and tests:
 - [Payload tests](../../../osac-operator/pkg/provisioning/aap_provider_test.go)
 - [Controller tests](../../../osac-operator/internal/controller/storage_controller_test.go)
 
-## Inputs the onboarding role must combine
+## Tenant preparation: updated direction, implementation pending
 
-The selected MVP uses named preassignment. The infrastructure administrator
-prepares the SVM and runtime credential Secret before tenant onboarding.
-Names use exact UTF-8 backend ID and immutable tenant/tier metadata names:
+The CSP admin prepares an SVM and its account. For the preview, the latest
+direction uses one administrator-created Kubernetes Opaque Secret per immutable
+OSAC tenant ID and backend ID, shared by every tier on that backend. Tenant
+preparation through OSAC Secrets Service is deferred. The discovery password
+reference used by registration is unchanged.
 
-```text
-assignment_key = lowercase_hex(sha256(backend_id + "|" + tenant_name))[:16]
-tier_key = lowercase_hex(sha256(tier_name))[:16]
-SVM = osac-<assignment_key>-svm
-runtime Secret = osac-<assignment_key>-credentials
-capped-tier policy = osac-<assignment_key>-<tier_key>-qos
-TBC = ontap-<assignment_key>
-StorageClass = ontap-<assignment_key>-<tier_key>
-```
-
-These names are a lookup convention, not ownership proof or ONTAP requirements.
-For `backend-id`, `tenant-a` and `fast`, the keys are `79457936f209a67b` and
-`115dc3606fbf8691` respectively. Check full identities before adoption.
-
-| Input | Owner/source | Role responsibility |
-|---|---|---|
-| Tenant metadata name, namespace and full CR UID | Operator resource | Preserve exact ownership identity through setup, retry and delete |
-| Backend ID, tier intent and discovery connection | Operator request | Select `ontap`; validate requested settings and discover the named SVM |
-| SVM UUID, management endpoint, FC prerequisites and native policies | Prepared ONTAP resources and discovery | Match full identity, endpoint rule, usable capacity and policy/encryption feasibility |
-| Runtime `username`, `password`, PEM `ca.crt` | Prepared Kubernetes Secret on the native Trident cluster | Inspect/claim protected source; use its credential reference for native provisioning |
-| Native Trident namespace and Kubernetes connection | Role/deployment configuration | Locate source/TBC on the correct hosting target; preserve that placement for deletion |
-
-The prepared runtime Secret carries these annotations:
+The proposed administrator input is:
 
 ```yaml
-osac.openshift.io/storage-backend: backend-id
-osac.openshift.io/tenant: tenant-a
-osac.openshift.io/storage-resource-id: prepared-svm-uuid
-osac.openshift.io/storage-assignment-state: available
+apiVersion: v1
+kind: Secret
+metadata:
+  name: acme-netapp-primary-info  # Admin-selected; no naming formula.
+  namespace: trident
+  labels:
+    osac.openshift.io/secret-type: storage-tenant-preparation
+    osac.openshift.io/storage-backend-id: backend-id
+    osac.openshift.io/tenant-id: immutable-osac-tenant-id
+    osac.openshift.io/tenant: acme
+type: Opaque
+stringData:
+  username: trident_acme
+  password: "<tenant-runtime-password>"
+  svm: customer_acme             # Explicit prepared SVM; no required name.
 ```
 
-Claiming adds `osac.openshift.io/storage-tenant-uid` with the full Tenant CR
-UID and changes the assignment state to `claimed` using resource-version
-checks. Offboarding records `retained`. The source has no Tenant garbage
-collection owner reference. Recreating a tenant name does not authorize reuse
-of an old claim; reuse requires explicit infrastructure-admin release.
+This is the preparation input, not the native Trident credentials Secret. The
+operator is to select exactly one protected input for the tenant/backend and
+pass its information to AAP. AAP creates the native credentials Secret and TBC
+on the actual VM hosting cluster. Runtime credentials must never be replaced
+with the cluster discovery account. Source presence alone is not proof of
+successful onboarding.
 
-The source is separate from the Fulfillment discovery VALUE Secret.
-Discovery cannot recover an existing SVM password and must never substitute
-the discovery account for the runtime account.
+```text
+Admin prepares SVM/account + labelled input Secret
+  -> Tenant CR is Ready
+  -> operator waits for matching preparation
+  -> operator supplies preparation + backend/tier settings to AAP
+  -> AAP validates it and creates runtime Secret, TBC and StorageClasses
+  -> storage conditions report the result
+```
 
-AAP must decode source `data["ca.crt"]` to PEM, verify the selected runtime
-management endpoint, then encode that PEM once into TBC
-`spec.trustedCACertificate`. Referencing `credentials.name` alone does not load
-the CA. The planned TBC uses `ontap-san`, `sanType: fcp`, `useREST: true`, the
-prepared SVM/runtime management endpoint, and `deletionPolicy: delete`.
-An IP data LIF is omitted for FC. Native driver/fabric qualification is separate.
+Agree these remaining inputs with the receiving implementation before enabling
+this flow:
+
+| Item | Proposed resolution / remaining check |
+|---|---|
+| Source cluster | Protected `trident` namespace on the operator/hub cluster; confirm this separately from the runtime Trident cluster, including dedicated VMaaS |
+| Tenant identity | Use the immutable OSAC tenant ID, obtained from the Tenant API; do not substitute the Kubernetes CR UID or reuse a previous tenant's assignment |
+| AAP payload | Add a per-backend generic preparation input, preserving source identity; agree its exact layout with the role owner before changing sender/receiver |
+| Runtime management endpoint | Keep cluster discovery on `StorageBackend.spec.endpoint`; require an explicit SVM endpoint in preparation if the runtime account cannot use that address |
+| Certificate trust | Installation supplies an approved CA bundle to each HTTPS caller; AAP execution-environment and Trident projection remain to wire and qualify |
+
+Will's current role derives Trident's address from the registered backend.
+That is not yet a qualified account/endpoint profile. NetApp's
+[Trident SAN configuration guidance](https://docs.netapp.com/us-en/trident-2510/trident-use/ontap-san-examples.html)
+requires an SVM management address for `vsadmin`, and the cluster management
+address for `admin`. The minimal three-field Secret above therefore does not
+establish that a separate runtime endpoint is unnecessary. Restoring
+`management_endpoint` is the proposed solution for SVM-scoped access.
+
+The native TBC uses `ontap-san`, `sanType: fcp`, `useREST: true`, the validated
+runtime endpoint/SVM and `deletionPolicy: delete`. An IP data LIF is omitted
+for FC. Native driver/fabric qualification is separate. Proposed trust wiring:
+mount the approved PEM CA bundle in the AAP execution environment and use it
+for verified ONTAP requests; AAP also base64-encodes that PEM bundle into TBC
+`spec.trustedCACertificate` for the preview's Trident REST connection.
+The bundle's deployment source and delivery into that environment still need
+agreement with the installation/role owners.
+The TBC credentials Secret reference alone does not supply certificate trust.
+
+Prepared source Secrets have no Tenant garbage collection owner reference.
+Retries and cleanup must check full tenant/backend/source identity and retain
+administrator-prepared SVMs and accounts. The earlier computed SVM/Secret naming
+convention is superseded by the explicit SVM and association labels above.
 
 The draft interprets tier encryption as the requested data-at-rest outcome.
 The receiver must validate that outcome against prepared capacity before
@@ -159,13 +188,14 @@ Reasons/messages are retained. An overall Ready tenant phase alone does not
 make its storage ready. The projection neither creates these conditions nor
 implements lifecycle gating: the onboarding controller owns both.
 
-One existing resolver behavior needs explicit integration handling:
-`resolveTierDefinitions` skips missing backends and failed password resolution,
-and `resolveAndInjectTierContext` treats resolution errors as non-fatal.
-The ONTAP onboarding path must turn unresolved required configuration into a
-failed/not-ready stage. It must not succeed with an empty catalog or fall back
-to a default provider or StorageClass. Sender serialization tests do not prove
-that lifecycle guarantee.
+Tenant storage setup now waits and requeues on catalog resolution errors,
+backends in ERROR and unresolved ONTAP discovery credentials. It publishes
+`ConfigurationUnavailable` on both storage conditions and launches no new
+storage provisioning job until resolution succeeds. CaaS cleanup still runs
+before that gate. Legacy compute/deletion callers retain their existing
+best-effort resolution policy. Missing-backend skipping and the new preparation
+lookup/readiness integration remain onboarding follow-ups; sender tests do not
+prove native lifecycle support.
 
 Persist ownership and partial progress before/after native operations so retries
 resume the same assignment. Cleanup checks data dependencies, removes owned
@@ -188,8 +218,10 @@ workstream. OSAC CSI integration is outside the preview contract.
 Registration qualification has passed through the current candidate CLI and
 REST gateway/API on an isolated host setup, with real PostgreSQL, Kafka and
 read-only ONTAP discovery. It exercised the linked YAML examples, protected
-VALUE password lookup, tier round trips, public filtering, failed credential
-update atomicity, tier guards and catalog cleanup. OIDC/JWKS and Vault were HTTP
+VALUE password lookup, tier round trips, public filtering, the earlier rejected
+credential-update behavior, tier guards and catalog cleanup. The new ERROR/manual
+retry semantics and configured CA-pool injection have local fixture coverage;
+they have not been rerun against the array. OIDC/JWKS and Vault were HTTP
 protocol fixtures; ONTAP trust used a supplied public certificate with normal
 hostname/expiry verification. This is component registration evidence.
 Production identity/Vault/CA deployment, receiving AAP behavior, native lifecycle

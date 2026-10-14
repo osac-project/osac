@@ -2,19 +2,29 @@
 
 Serial-console login stays in test_console.py. This test checks that the
 guest address is inside the subnet created here.
+
+On an exclusively reserved cluster, OSAC_E2E_SCRATCH_STORAGE_CLASS enables
+temporary CDI scratch preparation. Run with -n 0; the original HCO value is
+restored after the lifecycle cleanup. Without the variable, storage is unchanged.
 """
 
 from __future__ import annotations
 
 import ipaddress
+import json
+import os
 import re
+import subprocess
+import sys
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import pytest
 
-from tests.e2e.core.grpc_client import GRPCClient
+from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.helpers import (
     allocate_worker_subnet,
     unique_name,
@@ -26,14 +36,16 @@ from tests.e2e.core.helpers import (
     wait_for_running,
     wait_for_security_group_cr,
     wait_for_security_group_ready,
+    wait_for_subnet_cr,
+    wait_for_subnet_ready,
+    wait_for_virtual_network_cr,
+    wait_for_virtual_network_ready,
     wait_for_vmi_ip,
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
 from tests.e2e.vmaas.networking_lifecycle_helpers import (
-    create_and_wait_for_subnet,
-    create_and_wait_for_virtual_network,
     delete_and_wait_for_security_group,
     delete_and_wait_for_subnet,
     delete_and_wait_for_virtual_network,
@@ -42,6 +54,10 @@ from tests.e2e.vmaas.networking_lifecycle_helpers import (
 pytestmark = pytest.mark.regression
 
 _CUDN_MANAGERS = {"k8s_only", "cudn_localnet", "cudn_evpn"}
+_HCO_RESOURCE = "hyperconvergeds.hco.kubevirt.io"
+_SCRATCH_PATH = "/spec/scratchSpaceStorageClass"
+_SCRATCH_OWNER = "osac.openshift.io/e2e-scratch-owner"
+_SCRATCH_OWNER_PATH = "/metadata/annotations/osac.openshift.io~1e2e-scratch-owner"
 
 
 def _k8s_manager(item: dict[str, Any]) -> str:
@@ -59,8 +75,226 @@ def _attachment_refs(instance: dict[str, Any]) -> tuple[str, list[str]]:
     return str(subnet.get("id") or ""), [str(group.get("id") or "") for group in groups]
 
 
+def _wait_for_api_ready(get_resource: Callable[[], dict[str, Any]], ready_state: str) -> None:
+    # Kubernetes readiness can precede Fulfillment's feedback update. Dependent
+    # Create requests validate the API state, so wait for that state as well.
+    poll_until(
+        fn=lambda: get_resource().get("object", {}).get("status", {}).get("state", ""),
+        until=lambda state: state == ready_state,
+        retries=60,
+        delay=2,
+        description=ready_state,
+        retry_on_error=True,
+    )
+
+
+def _cli_objects(cli: OsacCLI, resource: str) -> list[dict[str, Any]]:
+    objects = json.loads(cli.get(resource, output="json"))
+    return [objects] if isinstance(objects, dict) else objects
+
+
+def _wait_for_cli_state(cli: OsacCLI, instance_id: str, expected_state: str) -> None:
+    poll_until(
+        fn=lambda: _cli_objects(cli, "computeinstance"),
+        until=lambda items: any(
+            item["id"] == instance_id and item.get("status", {}).get("state") == expected_state for item in items
+        ),
+        retries=60,
+        delay=2,
+        description=expected_state,
+        retry_on_error=True,
+    )
+
+
+@pytest.fixture
+def edit_lifecycle(
+    cli: OsacCLI, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Callable[[str, dict[str, str]], None]:
+    """Drive the same CLI editor workflow as the demo without interactive input."""
+    editor = tmp_path / "edit-vm-lifecycle.py"
+    editor.write_text(
+        f"#!{sys.executable}\n"
+        "import json\n"
+        "import os\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "\n"
+        "path = Path(sys.argv[1])\n"
+        "instance = json.loads(path.read_text())\n"
+        "instance['spec'].update(json.loads(os.environ['OSAC_E2E_LIFECYCLE_SPEC']))\n"
+        "path.write_text(json.dumps(instance))\n",
+        encoding="utf-8",
+    )
+    editor.chmod(0o700)
+
+    def edit(instance_id: str, fields: dict[str, str]) -> None:
+        with monkeypatch.context() as context:
+            context.setenv("EDITOR", str(editor))
+            context.setenv("OSAC_E2E_LIFECYCLE_SPEC", json.dumps(fields))
+            cli.edit_compute_instance(uuid=instance_id)
+
+    return edit
+
+
+class _ScratchRestoreError(RuntimeError):
+    """A fixed, credential-free reason for refusing scratch restoration."""
+
+
+def _safe_command_error(error: BaseException, action: str) -> RuntimeError:
+    # Subprocess exceptions embed argv, including gRPC bearer tokens. Keep the
+    # action, exception type, and exit/timeout information without raw output.
+    detail = type(error).__name__
+    if isinstance(error, subprocess.CalledProcessError):
+        detail += f" (exit {error.returncode})"
+    elif isinstance(error, subprocess.TimeoutExpired):
+        detail += f" (timeout {error.timeout}s)"
+    elif isinstance(error, _ScratchRestoreError):
+        detail += f": {error}"
+    return RuntimeError(f"{action}: {detail}")
+
+
+def _patch_scratch_storage(k8s: K8sClient, name: str, operations: list[dict[str, Any]]) -> None:
+    k8s._get("patch", _HCO_RESOURCE, name, "-n", k8s.namespace, "--type=json", "-p", json.dumps(operations))
+
+
+def _wait_for_scratch_storage(k8s: K8sClient, expected: str | None) -> None:
+    poll_until(
+        fn=lambda: (
+            k8s.get_json(resource="cdiconfigs.cdi.kubevirt.io", name="config")
+            .get("status", {})
+            .get("scratchSpaceStorageClass")
+        ),
+        until=lambda current: current == expected,
+        retries=60,
+        delay=2,
+        description="CDI scratch storage reconciled",
+    )
+
+
+@pytest.fixture
+def temporary_scratch_storage(k8s_virt_client: K8sClient, tmp_path: Path) -> Iterator[None]:
+    """Opt into cluster-wide preparation only on an exclusively reserved cluster."""
+    desired = os.environ.get("OSAC_E2E_SCRATCH_STORAGE_CLASS", "").strip()
+    if not desired:
+        yield
+        return
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        raise RuntimeError("Temporary scratch preparation requires serial execution with -n 0")
+
+    # Check the requested class before changing cluster configuration.
+    k8s_virt_client.get_json(resource="storageclasses.storage.k8s.io", name=desired)
+    raw, _ = k8s_virt_client._get("get", _HCO_RESOURCE, "--all-namespaces", "-o", "json")
+    hcos = json.loads(raw)["items"]
+    if len(hcos) != 1 or hcos[0]["metadata"].get("deletionTimestamp"):
+        raise RuntimeError("Temporary scratch preparation requires exactly one active HyperConverged")
+    original = hcos[0]
+    metadata = original["metadata"]
+    annotations = metadata.get("annotations", {})
+    if _SCRATCH_OWNER in annotations:
+        raise RuntimeError("Another scratch preparation is active; recover its original setting before running")
+    owner = uuid4().hex
+    name, uid = metadata["name"], metadata["uid"]
+    k8s = K8sClient(
+        namespace=metadata["namespace"],
+        kubeconfig=k8s_virt_client.kubeconfig,
+        as_system_admin=k8s_virt_client.as_system_admin,
+    )
+    spec = original["spec"]
+    was_present = "scratchSpaceStorageClass" in spec
+    previous = spec.get("scratchSpaceStorageClass")
+    effective = (
+        k8s.get_json(resource="cdiconfigs.cdi.kubevirt.io", name="config")
+        .get("status", {})
+        .get("scratchSpaceStorageClass")
+    )
+    # Preserve a non-secret recovery record before the first mutation. A killed
+    # process cannot execute teardown; this record retains the original value.
+    (tmp_path / "scratch-storage-original.json").write_text(
+        json.dumps(
+            {
+                "namespace": k8s.namespace,
+                "name": name,
+                "uid": uid,
+                "present": was_present,
+                "value": previous,
+                "effective": effective,
+                "temporary": desired,
+                "owner": owner,
+            }
+        ),
+        encoding="utf-8",
+    )
+    changed = previous != desired
+    try:
+        if changed:
+            _patch_scratch_storage(
+                k8s,
+                name,
+                [
+                    {"op": "test", "path": "/metadata/uid", "value": uid},
+                    {"op": "test", "path": "/spec", "value": spec},
+                    {
+                        "op": "test",
+                        "path": "/metadata/annotations" if "annotations" in metadata else "/metadata",
+                        "value": annotations if "annotations" in metadata else metadata,
+                    },
+                    {"op": "add", "path": "/metadata/annotations", "value": {**annotations, _SCRATCH_OWNER: owner}},
+                    {"op": "add", "path": _SCRATCH_PATH, "value": desired},
+                ],
+            )
+        _wait_for_scratch_storage(k8s, desired)
+        yield
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        raise _safe_command_error(error, "prepare scratch storage") from None
+    finally:
+        if changed:
+            primary_error = sys.exception()
+            try:
+                current = k8s.get_json(resource=_HCO_RESOURCE, name=name)
+                if current["metadata"]["uid"] != uid:
+                    raise _ScratchRestoreError("HyperConverged was replaced; refusing to restore a different resource")
+                current_spec = current["spec"]
+                already_restored = ("scratchSpaceStorageClass" in current_spec) == was_present and current_spec.get(
+                    "scratchSpaceStorageClass"
+                ) == previous
+                current_owner = current["metadata"].get("annotations", {}).get(_SCRATCH_OWNER)
+                if current_owner != owner:
+                    if current_owner is not None or not already_restored:
+                        raise _ScratchRestoreError(
+                            "Scratch setting is not owned by this test; refusing to overwrite it"
+                        )
+                else:
+                    if current_spec.get("scratchSpaceStorageClass") != desired:
+                        raise _ScratchRestoreError("Scratch setting changed externally; refusing to overwrite it")
+                    restore = (
+                        {"op": "replace", "path": _SCRATCH_PATH, "value": previous}
+                        if was_present
+                        else {"op": "remove", "path": _SCRATCH_PATH}
+                    )
+                    _patch_scratch_storage(
+                        k8s,
+                        name,
+                        [
+                            {"op": "test", "path": "/metadata/uid", "value": uid},
+                            {"op": "test", "path": _SCRATCH_OWNER_PATH, "value": owner},
+                            {"op": "test", "path": _SCRATCH_PATH, "value": desired},
+                            restore,
+                            {"op": "remove", "path": _SCRATCH_OWNER_PATH},
+                        ],
+                    )
+                _wait_for_scratch_storage(k8s, effective)
+            except Exception as error:
+                cleanup_error = _safe_command_error(error, "restore scratch storage")
+                if primary_error is not None:
+                    raise BaseExceptionGroup(
+                        "Scratch preparation/restore failed", [primary_error, cleanup_error]
+                    ) from None
+                raise cleanup_error from None
+
+
 def test_vmaas_vm_lifecycle_demo(
     cli: OsacCLI,
+    private_cli: OsacCLI,
     grpc: GRPCClient,
     private_grpc: GRPCClient,
     k8s_hub_client: K8sClient,
@@ -68,6 +302,8 @@ def test_vmaas_vm_lifecycle_demo(
     vm_template: str,
     default_storage_tier: str,
     default_disk_image: str,
+    edit_lifecycle: Callable[[str, dict[str, str]], None],
+    temporary_scratch_storage: None,
 ) -> None:
     """Order one VM on a tenant network, stop it, start it, and restart it."""
     tag = uuid4().hex[:8]
@@ -85,13 +321,18 @@ def test_vmaas_vm_lifecycle_demo(
     ci_name: str | None = None
 
     try:
-        classes = private_grpc.list_network_classes()
-        managers = [_k8s_manager(item) for item in classes]
-        assert any(manager in _CUDN_MANAGERS for manager in managers), (
-            f"expected a CUDN-backed VMaaS NetworkClass, got {managers}"
-        )
+        classes = [
+            item
+            for item in private_grpc.list_network_classes()
+            if not (
+                item.get("metadata", {}).get("deletion_timestamp") or item.get("metadata", {}).get("deletionTimestamp")
+            )
+        ]
+        assert len(classes) == 1, f"expected one deployment NetworkClass, got {len(classes)}"
+        network_class = classes[0]
+        assert _k8s_manager(network_class) in _CUDN_MANAGERS, "expected a CUDN-backed VMaaS NetworkClass"
 
-        cli.create_instance_type(name=it_name, vcpus=1, memory_gib=2)
+        private_cli.create_instance_type(name=it_name, vcpus=1, memory_gib=2)
         it_created = True
         described = cli.describe_instance_type(name=it_name)
         assert "ACTIVE" in described
@@ -107,19 +348,30 @@ def test_vmaas_vm_lifecycle_demo(
                     "size_gib": {"editable": {"default_value": 10}},
                 },
                 "disk_image": {"editable": {"default_value": {"name": default_disk_image}}},
-                "instance_type": {"editable": {"default_value": {"name": it_name}}},
+                "instance_type": {"editable": {"default_value": {"name": it_name, "shared": True}}},
                 "network_attachments": {"editable": {}},
                 "run_strategy": {"editable": {}},
             },
         )
-        assert catalog_id in grpc.list_compute_instance_catalog_item_ids()
+        assert any(item["id"] == catalog_id for item in _cli_objects(cli, "computeinstancecatalogitem"))
 
-        vn_id, vn_cr_name = create_and_wait_for_virtual_network(grpc, k8s_hub_client, f"e2e-vnet-{tag}", str(subnet_net))
+        vn_id = grpc.create_virtual_network(name=f"e2e-vnet-{tag}", ipv4_cidr=str(subnet_net))
+        vn_cr_name = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)
+        wait_for_virtual_network_ready(k8s=k8s_hub_client, name=vn_cr_name)
+        _wait_for_api_ready(lambda: grpc.get_virtual_network(vn_id=vn_id), "VIRTUAL_NETWORK_STATE_READY")
+        virtual_network = private_grpc.call(service=f"{PRIVATE_API}.VirtualNetworks/Get", data={"id": vn_id})["object"]
+        vn_spec = virtual_network["spec"]
+        selected_class = vn_spec.get("network_class") or vn_spec.get("networkClass") or {}
+        assert selected_class.get("id") == network_class["id"]
         assert vn_id in grpc.list_virtual_network_ids()
 
-        subnet_id, subnet_cr_name = create_and_wait_for_subnet(
-            grpc, k8s_hub_client, vn_id, str(subnet_net), name_prefix=f"e2e-subnet-{tag}"
-        )
+        subnet_id = grpc.create_subnet(name=f"e2e-subnet-{tag}", virtual_network=vn_id, ipv4_cidr=str(subnet_net))
+        subnet_cr_name = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_id)
+        assert subnet_id in grpc.list_subnet_ids()
+        subnet = grpc.get_subnet(subnet_id=subnet_id)
+        assert subnet["object"]["metadata"]["name"] == f"e2e-subnet-{tag}"
+        wait_for_subnet_ready(k8s=k8s_hub_client, name=subnet_cr_name)
+        _wait_for_api_ready(lambda: grpc.get_subnet(subnet_id=subnet_id), "SUBNET_STATE_READY")
 
         sg_name = f"e2e-sg-{tag}"
         sg_id = grpc.create_security_group_with_rules(
@@ -133,6 +385,7 @@ def test_vmaas_vm_lifecycle_demo(
         )
         sg_cr_name = wait_for_security_group_cr(k8s=k8s_hub_client, uuid=sg_id)
         wait_for_security_group_ready(k8s=k8s_hub_client, name=sg_cr_name)
+        _wait_for_api_ready(lambda: grpc.get_security_group(sg_id=sg_id), "SECURITY_GROUP_STATE_READY")
         assert sg_id in grpc.list_security_group_ids()
 
         ci_uuid = cli.create_compute_instance_with_catalog_item(
@@ -147,8 +400,9 @@ def test_vmaas_vm_lifecycle_demo(
         vm_ns = k8s_hub_client.get_compute_instance_vm_namespace(name=ci_name)
         guest_ip = wait_for_vmi_ip(k8s=k8s_virt_client, vmi_namespace=vm_ns, compute_instance_name=ci_name)
         assert ipaddress.ip_address(guest_ip) in subnet_net
+        _wait_for_cli_state(cli, ci_uuid, "COMPUTE_INSTANCE_STATE_RUNNING")
 
-        grpc.update_compute_instance_run_strategy(ci_id=ci_uuid, run_strategy="Halted")
+        edit_lifecycle(ci_uuid, {"run_strategy": "Halted"})
         poll_until(
             fn=lambda: k8s_hub_client.get_compute_instance_phase(name=ci_name, checked=False),
             until=lambda phase: phase == "Stopped",
@@ -163,20 +417,23 @@ def test_vmaas_vm_lifecycle_demo(
             delay=5,
             description=f"{ci_name} VMI gone",
         )
+        _wait_for_cli_state(cli, ci_uuid, "COMPUTE_INSTANCE_STATE_STOPPED")
 
-        grpc.update_compute_instance_run_strategy(ci_id=ci_uuid, run_strategy="Always")
+        edit_lifecycle(ci_uuid, {"run_strategy": "Always"})
         wait_for_running(k8s=k8s_hub_client, name=ci_name)
+        _wait_for_cli_state(cli, ci_uuid, "COMPUTE_INSTANCE_STATE_RUNNING")
 
         original_vmi_ts = k8s_virt_client.get_vmi_creation_timestamp(vmi_namespace=vm_ns, compute_instance_name=ci_name)
         initial_last_restarted = k8s_hub_client.get_compute_instance_last_restarted_at(name=ci_name)
         restart_ts = datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        grpc.update_restart(uuid=ci_uuid, template=vm_template, timestamp=restart_ts)
+        edit_lifecycle(ci_uuid, {"restart_requested_at": restart_ts})
         wait_for_restart(k8s=k8s_hub_client, name=ci_name, initial=initial_last_restarted, restart_ts=restart_ts)
         wait_for_running(k8s=k8s_hub_client, name=ci_name)
         new_vmi_ts = wait_for_new_vmi(
             k8s=k8s_virt_client, vmi_namespace=vm_ns, compute_instance_name=ci_name, initial_timestamp=original_vmi_ts
         )
         assert new_vmi_ts > original_vmi_ts
+        _wait_for_cli_state(cli, ci_uuid, "COMPUTE_INSTANCE_STATE_RUNNING")
 
         removed_ci = ci_uuid
         removed_sg = sg_id
@@ -197,19 +454,45 @@ def test_vmaas_vm_lifecycle_demo(
         assert removed_sg not in grpc.list_security_group_ids()
         assert removed_subnet not in grpc.list_subnet_ids()
         assert removed_vn not in grpc.list_virtual_network_ids()
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        raise _safe_command_error(error, "OSAC-6110 lifecycle command failed") from None
     finally:
+        primary_error = sys.exception()
+        cleanup_errors: list[Exception] = []
+
+        def cleanup(label: str, action: Callable[[], None]) -> None:
+            try:
+                action()
+            except Exception as error:
+                cleanup_errors.append(_safe_command_error(error, label))
+
         if ci_uuid is not None:
-            cli.delete_compute_instance(uuid=ci_uuid)
+            cleanup("delete ComputeInstance", lambda: cli.delete_compute_instance(uuid=ci_uuid))
             if ci_name is not None:
-                wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
-            wait_for_grpc_removal(grpc=grpc, uuid=ci_uuid)
+                cleanup(
+                    "wait for ComputeInstance CR deletion", lambda: wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
+                )
+            cleanup("wait for ComputeInstance API deletion", lambda: wait_for_grpc_removal(grpc=grpc, uuid=ci_uuid))
         if sg_id is not None:
-            delete_and_wait_for_security_group(grpc, k8s_hub_client, sg_id, sg_cr_name)
+            cleanup(
+                "delete SecurityGroup",
+                lambda: delete_and_wait_for_security_group(grpc, k8s_hub_client, sg_id, sg_cr_name),
+            )
         if subnet_id is not None:
-            delete_and_wait_for_subnet(grpc, k8s_hub_client, subnet_id, subnet_cr_name)
+            cleanup(
+                "delete Subnet", lambda: delete_and_wait_for_subnet(grpc, k8s_hub_client, subnet_id, subnet_cr_name)
+            )
         if vn_id is not None:
-            delete_and_wait_for_virtual_network(grpc, k8s_hub_client, vn_id, vn_cr_name)
+            cleanup(
+                "delete VirtualNetwork",
+                lambda: delete_and_wait_for_virtual_network(grpc, k8s_hub_client, vn_id, vn_cr_name),
+            )
         if catalog_id is not None:
-            grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_id)
+            cleanup(
+                "delete catalog item", lambda: grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_id)
+            )
         if it_created:
-            cli.delete_instance_type(name=it_name)
+            cleanup("delete InstanceType", lambda: private_grpc.delete_instance_type(name=it_name))
+        if cleanup_errors:
+            errors = [primary_error, *cleanup_errors] if primary_error is not None else cleanup_errors
+            raise BaseExceptionGroup("OSAC-6110 lifecycle/cleanup failed", errors) from None

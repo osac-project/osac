@@ -15,7 +15,7 @@
     api_version: v1
     kind: Secret
     name: "{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}"
-    namespace: "{{ vast_storage_config_namespace }}"
+    namespace: "{{ storage_provider_config_namespace }}"
   register: _vast_teardown_config
   no_log: true
   failed_when: false
@@ -215,7 +215,7 @@
         api_version: v1
         kind: Secret
         name: "{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}"
-        namespace: "{{ vast_storage_config_namespace }}"
+        namespace: "{{ storage_provider_config_namespace }}"
       no_log: true
 
     - name: Warn if tenant config Secret preserved due to cleanup failures

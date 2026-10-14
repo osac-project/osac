@@ -1,14 +1,8 @@
 ---
 # ONTAP-specific defaults — all use ontap_storage_ prefix.
-
-# Namespace for hub-cluster config and prepared Secrets. Delegates to the
-# global storage_provider_config_namespace default (OSAC_STORAGE_CONFIG_NAMESPACE
-# or the pod's mounted service account namespace) so all storage providers
-# share a single source of truth while preserving the role-prefixed variable.
-ontap_storage_config_namespace: >-
-  {{ storage_provider_config_namespace
-     | default(lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE')
-               | default(lookup('file', '/var/run/secrets/kubernetes.io/serviceaccount/namespace', errors='ignore'), true), true) }}
+# Hub config namespace (storage_provider_config_namespace) and global API
+# timeout (storage_provider_api_timeout) are provided by the
+# osac.service.storage_provider dispatcher.
 
 # Namespace where Trident is installed on the target hosting cluster.
 # The TridentBackendConfig CRD is namespaced and Trident only reconciles TBCs
@@ -29,12 +23,5 @@ ontap_storage_san_type: "{{ lookup('env', 'ONTAP_SAN_TYPE') | default('fcp', tru
 ontap_storage_ca_bundle_path: "{{ lookup('env', 'ONTAP_CA_BUNDLE_PATH') | default('/etc/ca-bundle/bundle.pem', true) }}"
 
 # API timeout (seconds) for ONTAP REST discovery calls. Delegates to the global
-# storage_provider_api_timeout (default 30s), overridable via ONTAP_API_TIMEOUT
-# or OSAC_STORAGE_API_TIMEOUT.
-ontap_storage_api_timeout: >-
-  {{ lookup('env', 'ONTAP_API_TIMEOUT')
-     | default(storage_provider_api_timeout | default(lookup('env', 'OSAC_STORAGE_API_TIMEOUT') | default('30', true), true), true)
-     | int }}
-
-# Alias preserved for callers referencing ontap_storage_probe_timeout.
-ontap_storage_probe_timeout: "{{ ontap_storage_api_timeout | int }}"
+# storage_provider_api_timeout (default 30s), overridable via ONTAP_API_TIMEOUT.
+ontap_storage_api_timeout: "{{ lookup('env', 'ONTAP_API_TIMEOUT') | default(storage_provider_api_timeout, true) | int }}"

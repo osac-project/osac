@@ -17,7 +17,7 @@
 #   _vast_tenant_result.tenants.id           — VAST tenant ID
 #   tenant_name                              — play-level var
 #   vast_storage_tenant_config_secret_prefix — from defaults
-#   vast_storage_config_namespace            — from defaults
+#   storage_provider_config_namespace            — from defaults
 #
 # Sets output facts (cleared by setup.yaml always block):
 #   _vast_tenant_manager_name
@@ -42,7 +42,7 @@
     api_version: v1
     kind: Secret
     name: "{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}"
-    namespace: "{{ vast_storage_config_namespace }}"
+    namespace: "{{ storage_provider_config_namespace }}"
   register: _vast_tenant_secret_check
   no_log: true
 

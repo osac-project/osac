@@ -2,14 +2,14 @@
 # Hub Secret prefix for per-tenant lifecycle markers.
 lvms_storage_tenant_config_secret_prefix: "lvms-tenant-config-"
 
-# Namespace for hub-cluster config Secrets. Resolution order:
-#   1. OSAC_STORAGE_CONFIG_NAMESPACE env var (explicit override).
-#   2. Pod's own namespace via downward API (always available in-cluster).
-# No hardcoded fallback — fail loudly if neither source is available
-# rather than silently targeting a wrong namespace.
+# Namespace for hub-cluster config Secrets. Delegates to the global
+# storage_provider_config_namespace default (OSAC_STORAGE_CONFIG_NAMESPACE or
+# the pod's mounted service account namespace) so all storage providers share a
+# single source of truth while preserving the role-prefixed variable for callers.
 lvms_storage_config_namespace: >-
-  {{ lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE')
-     | default(lookup('file', '/var/run/secrets/kubernetes.io/serviceaccount/namespace', errors='ignore'), true) }}
+  {{ storage_provider_config_namespace
+     | default(lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE')
+               | default(lookup('file', '/var/run/secrets/kubernetes.io/serviceaccount/namespace', errors='ignore'), true), true) }}
 
 # topolvm StorageClass provisioner name.
 lvms_storage_provisioner: "topolvm.io"

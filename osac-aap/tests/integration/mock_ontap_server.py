@@ -30,14 +30,14 @@ CALL_LOG = []
 _INJECTED_FAILURES = []
 _LOCK = threading.Lock()
 
-# Seeded SVM records, keyed by SVM name. Tests register additional SVMs via
-# POST /_svm (or rely on the convention-named default seeded by the test
-# playbook). The record shape matches what the role reads: uuid + name.
+# Seeded SVM and QoS policy records, keyed by record ID. Tests register SVMs
+# via POST /_svm and QoS policies via POST /_qos_policy.
 _STORE = {
     "svms": {},
+    "qos_policies": {},
 }
 
-_NEXT_ID = {"svms": 1}
+_NEXT_ID = {"svms": 1, "qos_policies": 1}
 
 # Arbitrary UUID stable across runs — tests assert against it via lookup, not
 # by hardcoding.
@@ -131,6 +131,18 @@ class MockOntapHandler(BaseHTTPRequestHandler):
             self._respond(200, {"records": records, "num_records": len(records)})
             return
 
+        if path == "/api/storage/qos/policies":
+            qs = parse_qs(urlparse(self.path).query)
+            name_filter = qs.get("name", [None])[0]
+            with _LOCK:
+                records = [
+                    copy.deepcopy(p)
+                    for p in _STORE["qos_policies"].values()
+                    if name_filter is None or p["name"] == name_filter
+                ]
+            self._respond(200, {"records": records, "num_records": len(records)})
+            return
+
         self._respond(404, {"error": "not found"})
 
     def do_POST(self):
@@ -141,7 +153,9 @@ class MockOntapHandler(BaseHTTPRequestHandler):
                 CALL_LOG.clear()
                 _INJECTED_FAILURES.clear()
                 _STORE["svms"].clear()
+                _STORE["qos_policies"].clear()
                 _NEXT_ID["svms"] = 1
+                _NEXT_ID["qos_policies"] = 1
             self._respond(200, {"status": "reset"})
             return
 
@@ -149,17 +163,42 @@ class MockOntapHandler(BaseHTTPRequestHandler):
             body = self._read_body()
             if not body or "name" not in body:
                 self._respond(400, {"error": "svm name required"})
+            else:
+                with _LOCK:
+                    svm_id = _NEXT_ID["svms"]
+                    _NEXT_ID["svms"] += 1
+                    svm = {
+                        "id": svm_id,
+                        "name": body["name"],
+                        "uuid": body.get("uuid", f"svm-uuid-{svm_id:04d}"),
+                    }
+                    _STORE["svms"][svm_id] = svm
+                self._respond(201, svm)
+            return
+
+        if path == "/_qos_policy":
+            body = self._read_body()
+            if not body or "name" not in body:
+                self._respond(400, {"error": "qos policy name required"})
                 return
             with _LOCK:
-                svm_id = _NEXT_ID["svms"]
-                _NEXT_ID["svms"] += 1
-                svm = {
-                    "id": svm_id,
+                policy_id = _NEXT_ID["qos_policies"]
+                _NEXT_ID["qos_policies"] += 1
+                policy = {
+                    "id": policy_id,
                     "name": body["name"],
-                    "uuid": body.get("uuid", f"svm-uuid-{svm_id:04d}"),
+                    "uuid": body.get("uuid", f"qos-uuid-{policy_id:04d}"),
+                    "svm": body.get("svm", {}),
+                    "fixed": body.get(
+                        "fixed",
+                        {
+                            "max_throughput_iops": body.get("max_iops", 0),
+                            "capacity_shared": body.get("capacity_shared", False),
+                        },
+                    ),
                 }
-                _STORE["svms"][svm_id] = svm
-            self._respond(201, svm)
+                _STORE["qos_policies"][policy_id] = policy
+            self._respond(201, policy)
             return
 
         if path == "/_inject_failure":
@@ -176,6 +215,7 @@ class MockOntapHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):  # noqa: A002
         """Suppress per-request stderr noise."""
+        del format, args
 
 
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):

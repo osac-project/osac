@@ -12,13 +12,23 @@ describe('StorageBackendStatusLabel', () => {
     expect(screen.getByText('Ready')).toBeInTheDocument();
   });
 
-  it('maps UNSPECIFIED to unspecified/Unspecified', () => {
+  it('maps UNSPECIFIED to progressing/Pending (not ready)', () => {
     renderWithProviders(<StorageBackendStatusLabel state={StorageBackendState.UNSPECIFIED} />);
-    expect(screen.getByText('Unspecified')).toBeInTheDocument();
+    expect(screen.getByText('Pending')).toBeInTheDocument();
+    expect(screen.queryByText('Ready')).not.toBeInTheDocument();
   });
 
-  it('maps undefined to unspecified/Unspecified', () => {
+  it('maps undefined to progressing/Pending (not ready)', () => {
     renderWithProviders(<StorageBackendStatusLabel />);
-    expect(screen.getByText('Unspecified')).toBeInTheDocument();
+    expect(screen.getByText('Pending')).toBeInTheDocument();
+    expect(screen.queryByText('Ready')).not.toBeInTheDocument();
+  });
+
+  it('maps unknown future enum values to Pending (not ready)', () => {
+    // Simulate a future enum value the UI does not yet know about
+    const futureState = 99 as StorageBackendState;
+    renderWithProviders(<StorageBackendStatusLabel state={futureState} />);
+    expect(screen.getByText('Pending')).toBeInTheDocument();
+    expect(screen.queryByText('Ready')).not.toBeInTheDocument();
   });
 });

@@ -832,9 +832,18 @@ func (r *ClusterOrderReconciler) handleNodePool(ctx context.Context, instance *v
 		nodeRequestStatus = &instance.Status.NodeRequests[len(instance.Status.NodeRequests)-1]
 	}
 
-	// Update the selected `nodeRequests` item:
+	// Update the selected `nodeRequests` item using the NodePool's desired
+	// replica count (Spec.Replicas) rather than the transient observed count
+	// (Status.Replicas). Status.Replicas starts at 0 for a newly-created
+	// NodePool and would incorrectly report zero capacity to downstream
+	// consumers (feedback controller, fulfillment service) before the first
+	// node joins.
 	oldValue := nodeRequestStatus.NumberOfNodes
-	newValue := int(nodePool.Status.Replicas)
+	var specReplicas int32
+	if nodePool.Spec.Replicas != nil {
+		specReplicas = *nodePool.Spec.Replicas
+	}
+	newValue := int(specReplicas)
 	if newValue != oldValue {
 		log.Info(
 			"updating number of nodes from node pool",

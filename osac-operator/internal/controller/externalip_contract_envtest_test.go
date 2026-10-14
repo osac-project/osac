@@ -180,12 +180,17 @@ var _ = Describe("ExternalIP v1 Envtest", func() {
 			Build()
 		reconciler.Client = indexedClient
 		reconciler.APIReader = indexedClient
+		deprovisionCalls := 0
+		provider.triggerDeprovisionFunc = func(_ context.Context, _ client.Object, _ []v1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
+			deprovisionCalls++
+			return &provisioning.DeprovisionResult{Action: provisioning.DeprovisionTriggered, JobID: "release-job"}, nil
+		}
 
 		request := mcreconcile.Request{Request: ctrl.Request{NamespacedName: client.ObjectKeyFromObject(externalIP)}}
 		result, err := reconciler.Reconcile(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
-		Expect(provider.triggerDeprovisionFunc).To(BeNil())
+		Expect(deprovisionCalls).To(BeZero())
 
 		terminating := &v1alpha1.ExternalIPAttachment{}
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(attachment), terminating)).To(Succeed())

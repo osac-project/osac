@@ -22,8 +22,8 @@ Before you begin, confirm each item:
 | OpenShift cluster is in a disconnected or restricted-network state | `oc get proxy/cluster -o jsonpath='{.spec}'` |
 | `oc-mirror` v2 binary is available on the bastion host | `oc-mirror version --short` shows `>= 4.16` |
 | Mirror registry is reachable from the bastion and from every cluster node | `curl -sSf https://<registry>:8443/v2/ -k` |
-| Red Hat pull secret is configured for `registry.redhat.io` | `jq -e '.auths["registry.redhat.io"]' ~/.docker/config.json` |
-| Mirror registry credentials are in the pull secret | `jq -e '.auths["<registry>:8443"]' ~/.docker/config.json` |
+| Red Hat pull secret is configured for `registry.redhat.io` | `jq -e '.auths \| has("registry.redhat.io")' ~/.docker/config.json` |
+| Mirror registry credentials are in the pull secret | `jq -e '.auths \| has("<registry>:8443")' ~/.docker/config.json` |
 | At least 400 GiB free disk on the bastion | `df -h $(pwd)` |
 | Cluster admin access | `oc auth can-i create catalogsource -n openshift-marketplace` |
 
@@ -258,12 +258,18 @@ oc get subscriptions -A -o json | \
     .metadata.name' | \
   xargs -I{} echo "WARNING: {} still uses redhat-operators"
 
-# Verify hard-coded Subscription sources independently
-oc get subscription ansible-automation-platform-operator \
-  -n ansible-aap -o jsonpath='{.spec.source}'
-echo ""
-oc get subscription openshift-cert-manager-operator \
-  -n cert-manager-operator -o jsonpath='{.spec.source}'
+# Verify hard-coded Subscription sources independently.
+# Look up by spec.name (the OLM package name) so the check
+# works regardless of the Subscription metadata.name chosen
+# by the Helm chart.
+oc get subscriptions -n ansible-aap -o json | \
+  jq -r '.items[] |
+    select(.spec.name=="ansible-automation-platform-operator")
+    | "\(.metadata.name): source=\(.spec.source)"'
+oc get subscriptions -n cert-manager-operator -o json | \
+  jq -r '.items[] |
+    select(.spec.name=="openshift-cert-manager-operator")
+    | "\(.metadata.name): source=\(.spec.source)"'
 ```
 
 ## Troubleshooting

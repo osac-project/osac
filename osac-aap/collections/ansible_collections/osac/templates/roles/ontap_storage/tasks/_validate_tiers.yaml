@@ -21,92 +21,29 @@
   when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
   no_log: true
 
-- name: Validate tier protocols are supported by the ONTAP provider
-  block:
-    - name: Fail if tier protocol is unsupported
-      ansible.builtin.fail:
-        msg: >-
-          A dispatched tier has an unsupported protocol. The ONTAP provider is
-          block-only; Trident serves these tiers through the ontap-san driver.
-          Supported protocols: block.
-      loop: "{{ _provider_tiers }}"
-      loop_control:
-        label: "storage-tier"
-      when: item.protocol not in ['block']
-      no_log: true
-  rescue:
-    # Ansible loops evaluate every item rather than stopping at the first failure, so
-    # ansible_failed_result.results may contain more than one failed tier here.
-    - name: Build structured failure artifact for unsupported protocol
-      ansible.builtin.set_fact:
-        osac_storage_provider_failures: >-
-          {% set _tiers = [] -%}
-          {% set _backend_ids = [] -%}
-          {% set _messages = [] -%}
-          {% for _r in (ansible_failed_result.results | default([])) -%}
-          {% if _r.failed | default(false) -%}
-          {% set _ = _tiers.append(_r.item.name) -%}
-          {% set _bid = _r.item.backend_id | default('') -%}
-          {% if (_bid | length > 0) and (_bid not in _backend_ids) -%}
-          {% set _ = _backend_ids.append(_bid) -%}
-          {% endif -%}
-          {% set _ = _messages.append(_r.msg | default('')) -%}
-          {% endif -%}
-          {% endfor -%}
-          {{ [{'reason': 'unsupported_protocol', 'tiers': _tiers, 'backend_ids': _backend_ids, 'message': _messages | join(' ')}] }}
-      no_log: true
-
-    - name: Emit structured failure artifact for unsupported protocol
-      ansible.builtin.set_stats:
-        data:
-          osac_storage_provider_failures: "{{ osac_storage_provider_failures }}"
-        aggregate: false
-      no_log: true
-
-    - name: Re-raise the original protocol validation failure
-      ansible.builtin.fail:
-        msg: "Unsupported protocol on dispatched ONTAP tier. Supported protocols: block."
-      no_log: true
+- name: Fail if any tier protocol is unsupported by the ONTAP provider
+  ansible.builtin.fail:
+    msg: >-
+      A dispatched tier has an unsupported protocol. The ONTAP provider is
+      block-only; Trident serves these tiers through the ontap-san driver.
+      Supported protocols: block.
+  loop: "{{ _provider_tiers }}"
+  loop_control:
+    label: "storage-tier"
+  when: item.protocol not in ['block']
+  no_log: true
 
 - name: Fail if any dispatched tier is missing backend_id
-  block:
-    - name: Fail if tier is missing backend_id
-      ansible.builtin.fail:
-        msg: >-
-          A dispatched tier has no backend_id. Every tier dispatched to the
-          ONTAP provider must reference the backend_id its connection details
-          are keyed by.
-      loop: "{{ _provider_tiers }}"
-      loop_control:
-        label: "storage-tier"
-      when: item.backend_id is not defined or item.backend_id is none or item.backend_id | string | length == 0
-      no_log: true
-  rescue:
-    - name: Build structured failure artifact for missing backend_id
-      ansible.builtin.set_fact:
-        osac_storage_provider_failures: >-
-          {% set _tiers = [] -%}
-          {% set _messages = [] -%}
-          {% for _r in (ansible_failed_result.results | default([])) -%}
-          {% if _r.failed | default(false) -%}
-          {% set _ = _tiers.append(_r.item.name) -%}
-          {% set _ = _messages.append(_r.msg | default('')) -%}
-          {% endif -%}
-          {% endfor -%}
-          {{ [{'reason': 'missing_backend_id', 'tiers': _tiers, 'backend_ids': [], 'message': _messages | join(' ')}] }}
-      no_log: true
-
-    - name: Emit structured failure artifact for missing backend_id
-      ansible.builtin.set_stats:
-        data:
-          osac_storage_provider_failures: "{{ osac_storage_provider_failures }}"
-        aggregate: false
-      no_log: true
-
-    - name: Re-raise the original missing-backend_id failure
-      ansible.builtin.fail:
-        msg: "Missing backend_id on dispatched ONTAP tier."
-      no_log: true
+  ansible.builtin.fail:
+    msg: >-
+      A dispatched tier has no backend_id. Every tier dispatched to the
+      ONTAP provider must reference the backend_id its connection details
+      are keyed by.
+  loop: "{{ _provider_tiers }}"
+  loop_control:
+    label: "storage-tier"
+  when: item.backend_id is not defined or item.backend_id is none or item.backend_id | string | length == 0
+  no_log: true
 
 - name: Fail if sanType is not a valid Trident SAN transport
   ansible.builtin.fail:

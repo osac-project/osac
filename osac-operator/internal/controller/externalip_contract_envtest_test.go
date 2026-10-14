@@ -12,6 +12,7 @@ import (
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -162,6 +163,23 @@ var _ = Describe("ExternalIP v1 Envtest", func() {
 		Expect(k8sClient.Create(ctx, attachment)).To(Succeed())
 		Expect(k8sClient.Delete(ctx, attachment)).To(Succeed())
 		Expect(k8sClient.Delete(ctx, externalIP)).To(Succeed())
+		terminatingExternalIP := &v1alpha1.ExternalIP{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(externalIP), terminatingExternalIP)).To(Succeed())
+		terminatingAttachment := &v1alpha1.ExternalIPAttachment{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(attachment), terminatingAttachment)).To(Succeed())
+		indexedClient := fake.NewClientBuilder().
+			WithScheme(k8sClient.Scheme()).
+			WithIndex(&v1alpha1.ExternalIPAttachment{}, externalIPReferenceIndexField, func(obj client.Object) []string {
+				return []string{obj.(*v1alpha1.ExternalIPAttachment).Spec.ExternalIP}
+			}).
+			WithIndex(&v1alpha1.NATGateway{}, externalIPReferenceIndexField, func(obj client.Object) []string {
+				return []string{obj.(*v1alpha1.NATGateway).Spec.ExternalIP}
+			}).
+			WithObjects(terminatingExternalIP, terminatingAttachment).
+			WithStatusSubresource(&v1alpha1.ExternalIP{}).
+			Build()
+		reconciler.Client = indexedClient
+		reconciler.APIReader = indexedClient
 
 		request := mcreconcile.Request{Request: ctrl.Request{NamespacedName: client.ObjectKeyFromObject(externalIP)}}
 		result, err := reconciler.Reconcile(ctx, request)

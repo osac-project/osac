@@ -136,6 +136,14 @@ var _ = Describe("ExternalIPReconciler", func() {
 
 		fakeClient = fake.NewClientBuilder().
 			WithScheme(testScheme).
+			WithIndex(&osacv1alpha1.ExternalIPAttachment{}, externalIPReferenceIndexField, func(obj client.Object) []string {
+				attachment := obj.(*osacv1alpha1.ExternalIPAttachment)
+				return []string{attachment.Spec.ExternalIP}
+			}).
+			WithIndex(&osacv1alpha1.NATGateway{}, externalIPReferenceIndexField, func(obj client.Object) []string {
+				natGateway := obj.(*osacv1alpha1.NATGateway)
+				return []string{natGateway.Spec.ExternalIP}
+			}).
 			WithObjects(publicIP, parentPool, newFabricManagerConfigMap("fm-metallb", testNamespace, "metallb-l2")).
 			WithStatusSubresource(&osacv1alpha1.ExternalIP{}).
 			Build()

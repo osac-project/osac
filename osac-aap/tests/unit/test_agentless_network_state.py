@@ -1804,6 +1804,49 @@ def test_external_ip_reservation_rejects_exhausted_or_mismatched_pool(tmp_path):
         assert connection.execute("SELECT count(*) FROM external_ips").fetchone()[0] == 2
 
 
+def test_external_ip_reservation_uses_gap_search_for_fragmented_large_pool(tmp_path):
+    store = store_for(tmp_path)
+    cidr = "10.20.0.0/16"
+    register_external_ip_pool(store, cidr=cidr)
+    network = ipaddress.ip_network(cidr)
+
+    with sqlite3.connect(store.path) as connection:
+        for offset in range(2, 259):
+            connection.execute(
+                "INSERT INTO external_ips "
+                "(uid, fulfillment_id, tenant_id, pool_uid, address) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    str(uuid.uuid4()),
+                    str(uuid.uuid4()),
+                    TENANT_ONE,
+                    POOL_UID,
+                    str(ipaddress.IPv4Address(int(network.network_address) + offset)),
+                ),
+            )
+        # Put the most recent reservation before the occupied run so the bounded
+        # probe path crosses 256 allocated addresses and uses the gap search.
+        connection.execute(
+            "INSERT INTO external_ips "
+            "(uid, fulfillment_id, tenant_id, pool_uid, address) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                str(uuid.uuid4()),
+                str(uuid.uuid4()),
+                TENANT_ONE,
+                POOL_UID,
+                str(ipaddress.IPv4Address(int(network.network_address) + 1)),
+            ),
+        )
+
+    reservation, changed = reserve_external_address(
+        store, str(uuid.uuid4()), str(uuid.uuid4()), pool_cidr=cidr
+    )
+
+    assert changed is True
+    assert reservation["address"] == "10.20.1.3"
+
+
 def test_external_ip_reservation_supports_shared_tenant_and_small_cidrs(tmp_path):
     store = store_for(tmp_path)
     register_external_ip_pool(store, tenant_id="shared", cidr="203.0.113.0/31")

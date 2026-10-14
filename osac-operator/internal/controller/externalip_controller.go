@@ -44,7 +44,8 @@ import (
 )
 
 const (
-	osacExternalIPFinalizer = "osac.openshift.io/externalip-finalizer"
+	osacExternalIPFinalizer       = "osac.openshift.io/externalip-finalizer"
+	externalIPReferenceIndexField = "spec.externalIP"
 )
 
 // ExternalIPReconciler reconciles ExternalIP CRs created by the fulfillment-service.
@@ -488,36 +489,33 @@ func (r *ExternalIPReconciler) handleDelete(ctx context.Context, externalIP *v1a
 	// Gate: wait for all child resources referencing this ExternalIP to be fully removed.
 	eipName := externalIP.Name
 	ns := externalIP.Namespace
-
-	var reader client.Reader = r.Client
-	contracted := externalIPContractVersion(externalIP) == networkmanager.ExternalIPContractVersionV1
-	if contracted && r.APIReader != nil {
-		reader = r.APIReader
-	}
 	attachmentList := &v1alpha1.ExternalIPAttachmentList{}
-	if err := reader.List(ctx, attachmentList, client.InNamespace(ns)); err != nil {
+	if err := r.Client.List(ctx, attachmentList,
+		client.InNamespace(ns),
+		client.MatchingFields{externalIPReferenceIndexField: eipName},
+	); err != nil {
 		return ctrl.Result{}, fmt.Errorf("listing ExternalIPAttachments: %w", err)
 	}
-	for i := range attachmentList.Items {
-		if attachmentList.Items[i].Spec.ExternalIP == eipName {
-			log.Info("waiting for child ExternalIPAttachment to be deleted before deprovisioning ExternalIP",
-				"attachment", attachmentList.Items[i].Name)
-			return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
-		}
+	if len(attachmentList.Items) > 0 {
+		log.Info("waiting for child ExternalIPAttachment to be deleted before deprovisioning ExternalIP",
+			"attachment", attachmentList.Items[0].Name)
+		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
 
 	natgwList := &v1alpha1.NATGatewayList{}
-	if err := reader.List(ctx, natgwList, client.InNamespace(ns)); err != nil {
+	if err := r.Client.List(ctx, natgwList,
+		client.InNamespace(ns),
+		client.MatchingFields{externalIPReferenceIndexField: eipName},
+	); err != nil {
 		return ctrl.Result{}, fmt.Errorf("listing NATGateways: %w", err)
 	}
-	for i := range natgwList.Items {
-		if natgwList.Items[i].Spec.ExternalIP == eipName {
-			log.Info("waiting for child NATGateway to be deleted before deprovisioning ExternalIP",
-				"natGateway", natgwList.Items[i].Name)
-			return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
-		}
+	if len(natgwList.Items) > 0 {
+		log.Info("waiting for child NATGateway to be deleted before deprovisioning ExternalIP",
+			"natGateway", natgwList.Items[0].Name)
+		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
 
+	contracted := externalIPContractVersion(externalIP) == networkmanager.ExternalIPContractVersionV1
 	if contracted && !r.NetworkProvisioningEnabled {
 		log.Info("skipping provider release while network provisioning is disabled")
 	} else if externalIP.Annotations[osacImplementationStrategyAnnotation] == "" {
@@ -724,6 +722,31 @@ func (r *ExternalIPReconciler) getExternalIPAddress(ctx context.Context, targetC
 // SetupWithManager registers this controller with the multicluster manager.
 // It watches ExternalIP CRs in the networking namespace on the local cluster only.
 func (r *ExternalIPReconciler) SetupWithManager(mgr mcmanager.Manager) error {
+	ctx := context.Background()
+	localMgr := mgr.GetLocalManager()
+	if err := localMgr.GetFieldIndexer().IndexField(ctx,
+		&v1alpha1.ExternalIPAttachment{}, externalIPReferenceIndexField,
+		func(obj client.Object) []string {
+			attachment := obj.(*v1alpha1.ExternalIPAttachment)
+			if attachment.Spec.ExternalIP == "" {
+				return nil
+			}
+			return []string{attachment.Spec.ExternalIP}
+		}); err != nil {
+		return fmt.Errorf("failed to index ExternalIPAttachments by ExternalIP: %w", err)
+	}
+	if err := localMgr.GetFieldIndexer().IndexField(ctx,
+		&v1alpha1.NATGateway{}, externalIPReferenceIndexField,
+		func(obj client.Object) []string {
+			natGateway := obj.(*v1alpha1.NATGateway)
+			if natGateway.Spec.ExternalIP == "" {
+				return nil
+			}
+			return []string{natGateway.Spec.ExternalIP}
+		}); err != nil {
+		return fmt.Errorf("failed to index NATGateways by ExternalIP: %w", err)
+	}
+
 	return mcbuilder.ControllerManagedBy(mgr).
 		For(&v1alpha1.ExternalIP{},
 			mcbuilder.WithPredicates(NetworkingNamespacePredicate(r.NetworkingNamespace)),

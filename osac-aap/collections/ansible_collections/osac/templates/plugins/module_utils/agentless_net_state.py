@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from bisect import bisect_left
 import contextlib
 import fcntl
 import hashlib
@@ -41,6 +42,7 @@ from ansible_collections.osac.templates.plugins.module_utils.agentless_net_subne
 )
 
 SCHEMA_VERSION = 1
+EXTERNAL_IP_ALLOCATOR_PROBE_LIMIT = 256
 SCHEMA_TABLES = {
     "virtual_networks",
     "subnets",
@@ -433,6 +435,11 @@ class StateStore:
             self._validate_subnet_table(connection)
             self._validate_external_ip_pool_schema(connection)
             self._validate_external_ip_schema(connection)
+            if not read_only:
+                connection.execute(
+                    "CREATE INDEX IF NOT EXISTS external_ips_by_pool "
+                    "ON external_ips(pool_uid)"
+                )
             return connection
         except (sqlite3.DatabaseError, OSError) as error:
             connection.close()
@@ -483,6 +490,9 @@ class StateStore:
                 address TEXT NOT NULL,
                 UNIQUE (pool_uid, address)
             )"""
+        )
+        connection.execute(
+            "CREATE INDEX external_ips_by_pool ON external_ips(pool_uid)"
         )
 
     @staticmethod
@@ -1489,13 +1499,30 @@ class StateStore:
                     host_count = network.num_addresses - (
                         2 if network.prefixlen < 31 else 0
                     )
-                    start = int.from_bytes(
-                        hashlib.sha256(uid.encode("utf-8")).digest()[:8], "big"
-                    ) % host_count
+                    last_reservation = connection.execute(
+                        "SELECT uid FROM external_ips WHERE pool_uid = ? "
+                        "ORDER BY rowid DESC LIMIT 1",
+                        (pool_uid,),
+                    ).fetchone()
+                    if last_reservation is None:
+                        start = 0
+                    else:
+                        last_entry = self._external_ip_for_uid(
+                            connection, last_reservation[0]
+                        )
+                        if last_entry is None:
+                            raise StateCorrupt("ExternalIP reservation disappeared")
+                        start = (
+                            int(ipaddress.ip_address(last_entry["address"]))
+                            - first_host
+                            + 1
+                        ) % host_count
                     address = None
-                    # Probe the pool/address unique index from a UID-derived offset
-                    # instead of loading all reservations and rescanning hosts.
-                    for offset in range(host_count):
+                    # Keep the common path to a small number of indexed checks.
+                    # For fragmented, nearly full pools, find a gap from the
+                    # reservation set instead of querying every candidate address.
+                    probe_count = min(host_count, EXTERNAL_IP_ALLOCATOR_PROBE_LIMIT)
+                    for offset in range(probe_count):
                         candidate = str(
                             ipaddress.IPv4Address(
                                 first_host + ((start + offset) % host_count)
@@ -1509,7 +1536,57 @@ class StateStore:
                             address = candidate
                             break
                     if address is None:
-                        raise StateError("ExternalIPPool has no available addresses")
+                        reservation_count = connection.execute(
+                            "SELECT COUNT(*) FROM external_ips WHERE pool_uid = ?",
+                            (pool_uid,),
+                        ).fetchone()[0]
+                        if reservation_count >= host_count:
+                            raise StateError(
+                                "ExternalIPPool has no available addresses"
+                            )
+
+                        reserved_addresses = sorted(
+                            int(ipaddress.IPv4Address(row[0]))
+                            for row in connection.execute(
+                                "SELECT address FROM external_ips WHERE pool_uid = ?",
+                                (pool_uid,),
+                            )
+                        )
+                        pool_end = first_host + host_count
+                        if any(
+                            reserved < first_host or reserved >= pool_end
+                            for reserved in reserved_addresses
+                        ):
+                            raise StateCorrupt(
+                                "ExternalIP reservation is outside its pool"
+                            )
+
+                        start_address = first_host + (
+                            (start + probe_count) % host_count
+                        )
+
+                        def first_gap(lower: int, upper: int) -> int | None:
+                            candidate = lower
+                            index = bisect_left(reserved_addresses, lower)
+                            while (
+                                index < len(reserved_addresses)
+                                and reserved_addresses[index] < upper
+                            ):
+                                reserved = reserved_addresses[index]
+                                if reserved > candidate:
+                                    return candidate
+                                candidate += 1
+                                index += 1
+                            return candidate if candidate < upper else None
+
+                        available_address = first_gap(start_address, pool_end)
+                        if available_address is None and start_address > first_host:
+                            available_address = first_gap(first_host, start_address)
+                        if available_address is None:
+                            raise StateError(
+                                "ExternalIPPool has no available addresses"
+                            )
+                        address = str(ipaddress.IPv4Address(available_address))
                     reservation = _external_ip_entry(
                         uid, fulfillment_id, tenant_id, pool_uid, address
                     )

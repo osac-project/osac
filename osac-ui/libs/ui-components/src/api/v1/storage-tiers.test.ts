@@ -58,7 +58,7 @@ describe('useStorageTiers', () => {
       {},
       {
         onPublicStorageTierList: (req) => {
-          captured = req as unknown as Record<string, unknown>;
+          captured = req;
           return create(StorageTiersListResponseSchema, { items: [] });
         },
       },

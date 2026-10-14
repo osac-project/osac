@@ -189,7 +189,7 @@ describe('InstanceTypeCreateForm', () => {
       let captured: Record<string, unknown> | undefined;
       const { user } = renderForm({
         onInstanceTypeCreate: (req) => {
-          captured = req as unknown as Record<string, unknown>;
+          captured = req;
           return create(InstanceTypesCreateResponseSchema, {
             object: { ...req.object, id: CREATED_ID },
           });
@@ -211,7 +211,7 @@ describe('InstanceTypeCreateForm', () => {
       let captured: Record<string, unknown> | undefined;
       const { user } = renderForm({
         onInstanceTypeCreate: (req) => {
-          captured = req as unknown as Record<string, unknown>;
+          captured = req;
           return create(InstanceTypesCreateResponseSchema, {
             object: { ...req.object, id: CREATED_ID },
           });
@@ -232,7 +232,7 @@ describe('InstanceTypeCreateForm', () => {
       let captured: Record<string, unknown> | undefined;
       const { user } = renderForm({
         onInstanceTypeCreate: (req) => {
-          captured = req as unknown as Record<string, unknown>;
+          captured = req;
           return create(InstanceTypesCreateResponseSchema, {
             object: { ...req.object, id: CREATED_ID },
           });

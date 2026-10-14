@@ -72,7 +72,7 @@ export const useUpdateStorageTier = () => {
       const resp = await client.update({
         object: { id: input.id, metadata: input.metadata, spec: input.spec },
         updateMask: {
-          paths: buildUpdateMaskPaths({ spec: input.spec } as Record<string, unknown>),
+          paths: buildUpdateMaskPaths({ spec: input.spec }),
         },
         lock: true,
       });

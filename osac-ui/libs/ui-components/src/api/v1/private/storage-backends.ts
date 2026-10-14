@@ -87,7 +87,7 @@ export const useUpdateStorageBackend = () => {
 
       const resp = await client.update({
         object: { id: input.id, metadata: { version: input.version }, spec },
-        updateMask: { paths: buildUpdateMaskPaths({ spec } as Record<string, unknown>) },
+        updateMask: { paths: buildUpdateMaskPaths({ spec }) },
         lock: true,
       });
       if (!resp.object) {

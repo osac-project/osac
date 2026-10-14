@@ -48,7 +48,7 @@ export const useUpdateBareMetalInstanceType = () => {
       const resp = await client.update({
         object: { id, ...body },
         updateMask: {
-          paths: buildUpdateMaskPaths(body as Record<string, unknown>, {
+          paths: buildUpdateMaskPaths(body, {
             schema: BareMetalInstanceTypeSchema,
           }),
         },

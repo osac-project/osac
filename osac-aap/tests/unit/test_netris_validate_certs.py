@@ -2,7 +2,7 @@ from pathlib import Path
 
 import yaml
 from ansible.parsing.dataloader import DataLoader
-from ansible.template import Templar
+from ansible.template import Templar, trust_as_template
 
 
 CONFIGURATION = (
@@ -25,7 +25,9 @@ def iter_uri_tasks(node):
 def resolve_netris_validate_certs():
     configuration = yaml.safe_load(CONFIGURATION.read_text())
     templar = Templar(loader=DataLoader(), variables={})
-    return templar.template(configuration["netris_validate_certs"])
+    # ansible-core >= 2.19 only templates strings tagged as trusted; Ansible
+    # tags group_vars content at load time, so mirror that here.
+    return templar.template(trust_as_template(configuration["netris_validate_certs"]))
 
 
 def test_netris_certificate_validation_defaults_to_enabled(monkeypatch):

@@ -1,3 +1,36 @@
 {
-  "$schema": "https://docs.renovatebot.com/renovate-schema.json"
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "packageRules": [
+    {
+      "description": "eslint 10 is not installable yet: eslint-plugin-react and eslint-plugin-import peer ranges top out at eslint ^9. Re-evaluate when they publish eslint 10 support.",
+      "matchPackageNames": ["eslint", "@eslint/js"],
+      "allowedVersions": "<10"
+    },
+    {
+      "description": "jsdom 27+ drops the space between sibling text nodes in accessible-name computation (jsdom#4091), breaking PatternFly alert heading queries that match real browsers. Stay on 26.x until that is fixed upstream.",
+      "matchPackageNames": ["jsdom"],
+      "allowedVersions": "<27"
+    },
+    {
+      "description": "TypeScript 7 is the new compiler generation and requires a dedicated migration (typescript-eslint and @types/node resolution do not support it yet). The stack is deliberately pinned to 5.9.x.",
+      "matchPackageNames": ["typescript"],
+      "allowedVersions": "<7"
+    },
+    {
+      "description": "@bufbuild/protobuf is pinned to the version the generated code in @osac/types was produced with (2.12.0 runtime baseline); advancing it requires regenerating libs/types via pnpm gen-types.",
+      "matchPackageNames": ["@bufbuild/protobuf"],
+      "allowedVersions": "2.12.0"
+    },
+    {
+      "description": "Ansible collections in osac-aap/collections/requirements.yml are re-vendored by hand: updates need Automation Hub credentials, a vendor/ refresh, and integration runs. Track them in dedicated PRs instead.",
+      "matchManagers": ["ansible"],
+      "enabled": false
+    },
+    {
+      "description": "Keycloak 26.7+ changes the audience claim of service-account JWTs, which OpenBao JWT auth (bound_audiences) rejects - tenant reconciliation never completes (verified on a fresh Kind install). Hold at 26.6.x until the OpenBao auth config is adapted.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["quay.io/keycloak/keycloak"],
+      "allowedVersions": "<=26.6.4"
+    }
+  ]
 }

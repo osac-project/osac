@@ -236,7 +236,7 @@ describe('AdminBareMetalInstanceTypeFormPage — edit wizard', () => {
       apiFixtures: { privateBaremetalInstanceTypes: [makeBareMetalInstanceType('gpu-1')] },
       transportOverrides: {
         onBaremetalInstanceTypeUpdate: (req) => {
-          captured = req as unknown as typeof captured;
+          captured = req;
           return { object: req.object };
         },
       },

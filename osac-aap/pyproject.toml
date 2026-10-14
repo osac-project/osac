@@ -23,7 +23,10 @@ dependencies = [
 
 [dependency-groups]
 development = [
-  "ansible-lint>=25.2.1",
+  # ansible-lint 26 changes file discovery: even with an explicit "." target it
+  # scans the whole monorepo via the collections paths and flags ~500 findings
+  # in unrelated component YAML. Revisit with a dedicated lint migration PR.
+  "ansible-lint>=25.2.1,<26",
   "antsibull-changelog>=0.33.0",
   "pytest>=9.1.1",
   "pytest-cov>=7.1.0",

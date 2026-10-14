@@ -78,7 +78,7 @@ describe('usePrivateStorageTiers', () => {
       {},
       {
         onStorageTierList: (req) => {
-          captured = req as unknown as Record<string, unknown>;
+          captured = req;
           return create(StorageTiersListResponseSchema, { items: [] });
         },
       },
@@ -138,7 +138,7 @@ describe('useCreateStorageTier', () => {
       {},
       {
         onStorageTierCreate: (req) => {
-          captured = req as unknown as Record<string, unknown>;
+          captured = req;
           return create(StorageTiersCreateResponseSchema, {
             object: makeStorageTier('new-1'),
           });
@@ -188,7 +188,7 @@ describe('useUpdateStorageTier', () => {
       { storageTiers: [makeStorageTier(input.id)] },
       {
         onStorageTierUpdate: (req) => {
-          captured = req as unknown as Record<string, unknown>;
+          captured = req;
           return create(StorageTiersUpdateResponseSchema, {
             object: makeStorageTier(input.id),
           });

@@ -6,39 +6,38 @@ import { type Volume, VolumeAccessMode, VolumeState } from '@osac/types';
 import VolumeDetails from './VolumeDetails';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
-const makeVolume = (state: VolumeState, overrides: Partial<{ message: string }> = {}): Volume =>
-  ({
-    $typeName: 'osac.public.v1.Volume',
-    id: 'vol-test-1',
-    metadata: {
-      $typeName: 'osac.public.v1.Metadata',
-      name: 'test-volume',
-      tenant: 'test-tenant',
-      project: 'test-project',
-      creator: 'alice',
-      creationTimestamp: {
-        $typeName: 'google.protobuf.Timestamp',
-        seconds: 1767225600n,
-        nanos: 0,
-      },
-      displayName: '',
-      description: '',
-      annotations: {},
-      labels: {},
-      version: 1,
+const makeVolume = (state: VolumeState, overrides: Partial<{ message: string }> = {}): Volume => ({
+  $typeName: 'osac.public.v1.Volume',
+  id: 'vol-test-1',
+  metadata: {
+    $typeName: 'osac.public.v1.Metadata',
+    name: 'test-volume',
+    tenant: 'test-tenant',
+    project: 'test-project',
+    creator: 'alice',
+    creationTimestamp: {
+      $typeName: 'google.protobuf.Timestamp',
+      seconds: 1767225600n,
+      nanos: 0,
     },
-    spec: {
-      $typeName: 'osac.public.v1.VolumeSpec',
-      storageTier: 'balanced',
-      sizeGib: 50n,
-      accessMode: VolumeAccessMode.READ_WRITE_ONCE,
-    },
-    status: {
-      $typeName: 'osac.public.v1.VolumeStatus',
-      state,
-      ...(overrides.message !== undefined ? { message: overrides.message } : {}),
-    },
-  }) as Volume;
+    displayName: '',
+    description: '',
+    annotations: {},
+    labels: {},
+    version: 1,
+  },
+  spec: {
+    $typeName: 'osac.public.v1.VolumeSpec',
+    storageTier: 'balanced',
+    sizeGib: 50n,
+    accessMode: VolumeAccessMode.READ_WRITE_ONCE,
+  },
+  status: {
+    $typeName: 'osac.public.v1.VolumeStatus',
+    state,
+    ...(overrides.message !== undefined ? { message: overrides.message } : {}),
+  },
+});
 
 const renderDetails = (volume: Volume) => renderWithProviders(<VolumeDetails volume={volume} />);
 

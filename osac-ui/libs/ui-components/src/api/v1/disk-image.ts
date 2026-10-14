@@ -178,7 +178,7 @@ export const useUpdateDiskImage = () => {
     mutationFn: async ({ id, body }: UpdateDiskImageInput) => {
       const resp = await client.update({
         object: { id, ...body },
-        updateMask: { paths: buildUpdateMaskPaths(body as Record<string, unknown>) },
+        updateMask: { paths: buildUpdateMaskPaths(body) },
       });
       if (!resp.object) {
         throw new Error('Update response missing object');

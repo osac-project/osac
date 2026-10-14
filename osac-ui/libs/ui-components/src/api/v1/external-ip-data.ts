@@ -9,10 +9,7 @@ import { type ListParams } from '../types';
 import { useListResource } from '../use-resource';
 
 export type ExternalIpAttachedTargetKind =
-  | 'computeInstance'
-  | 'cluster'
-  | 'baremetalInstance'
-  | 'natGateway';
+  'computeInstance' | 'cluster' | 'baremetalInstance' | 'natGateway';
 
 export interface ExternalIpAttachedTarget {
   kind: ExternalIpAttachedTargetKind;

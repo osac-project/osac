@@ -22,7 +22,7 @@ inputs:
 runs:
   using: composite
   steps:
-  - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6
+  - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
     with:
       go-version: '1.27.1'
       # Without this, setup-go looks for go.sum at the repo root by
@@ -48,7 +48,7 @@ runs:
       echo "::error::go mod download failed after 3 attempts"
       exit 1
   - id: ginkgo-cache
-    uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25  # v5
+    uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
     with:
       key: ginkgo-${{ hashFiles(format('{0}/go.mod', inputs.working-directory)) }}
       path: ~/go/bin/ginkgo

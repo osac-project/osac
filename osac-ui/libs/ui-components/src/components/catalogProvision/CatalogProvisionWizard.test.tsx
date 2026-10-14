@@ -5,12 +5,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import { UserEvent } from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
-import {
-  type ClusterCatalogItem,
-  type ComputeInstanceCatalogItem,
-  type Secret,
-  SecretType,
-} from '@osac/types';
+import { type ClusterCatalogItem, type ComputeInstanceCatalogItem, SecretType } from '@osac/types';
 import {
   ClusterTemplateReferenceSchema,
   ComputeInstanceTemplateReferenceSchema,
@@ -254,7 +249,7 @@ const apiFixtures: MockApiFixtures = {
       },
       data: {},
       type: SecretType.PULL_SECRET,
-    } as Secret,
+    },
   ],
   catalogItems: [vmCatalogItem],
   clusterCatalogItems: [clusterCatalogItem],

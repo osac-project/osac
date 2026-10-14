@@ -11,7 +11,7 @@ exclude: ^(osac-aap/(vendor|charts)/.*|osac-installer/charts/.*|osac-ui/libs/typ
 
 repos:
 - repo: https://github.com/pre-commit/pre-commit-hooks
-  rev: v5.0.0
+  rev: v6.0.0
   hooks:
     - id: trailing-whitespace
     - id: check-merge-conflict
@@ -41,7 +41,7 @@ repos:
       entry: gitleaks git --pre-commit --redact --staged
 
 - repo: https://github.com/adrienverge/yamllint.git
-  rev: v1.35.1
+  rev: v1.38.0
   hooks:
     - id: yamllint
       files: \.(yaml|yml)$

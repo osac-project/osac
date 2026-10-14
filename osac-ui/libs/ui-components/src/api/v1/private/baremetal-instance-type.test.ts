@@ -80,7 +80,7 @@ describe('useAdminBareMetalInstanceTypes', () => {
       {},
       {
         onBaremetalInstanceTypeList: (req) => {
-          captured = req as unknown as Record<string, unknown>;
+          captured = req;
           return { items: [], size: 0, total: 0 };
         },
       },
@@ -143,7 +143,7 @@ describe('useCreateBareMetalInstanceType', () => {
       {},
       {
         onBaremetalInstanceTypeCreate: (req) => {
-          captured = req as unknown as Record<string, unknown>;
+          captured = req;
           return { object: { ...req.object, id: 'created-1' } };
         },
       },
@@ -190,7 +190,7 @@ describe('useUpdateBareMetalInstanceType', () => {
       {},
       {
         onBaremetalInstanceTypeUpdate: (req) => {
-          captured = req as unknown as typeof captured;
+          captured = req;
           return { object: req.object };
         },
       },

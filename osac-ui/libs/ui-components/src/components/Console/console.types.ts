@@ -1,10 +1,6 @@
 /** UI connection lifecycle — distinct from protobuf ConsoleConnectionState. */
 export type ConsoleUiConnectionState =
-  | 'idle'
-  | 'connecting'
-  | 'connected'
-  | 'disconnected'
-  | 'error';
+  'idle' | 'connecting' | 'connected' | 'disconnected' | 'error';
 
 /**
  * UI-facing console transport choice, decoupled from the generated numeric

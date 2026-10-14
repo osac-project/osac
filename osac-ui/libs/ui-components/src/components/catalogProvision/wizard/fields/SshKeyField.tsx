@@ -2,6 +2,7 @@ import { useField, useFormikContext } from 'formik';
 
 import { CatalogItem } from '@osac/ui-components/components/catalog/catalogItemDisplay';
 
+import { trimSshPublicKey } from './credentialValidation';
 import { useTranslation } from '../../../../hooks/useTranslation';
 import { InputField } from '../../../Form/InputField';
 import {
@@ -9,7 +10,6 @@ import {
   hasCatalogFieldDefinition,
   readCatalogFieldDefinitions,
 } from '../catalogOverlay';
-import { trimSshPublicKey } from './credentialValidation';
 
 interface SshKeyFieldProps {
   catalogItem: CatalogItem | null;

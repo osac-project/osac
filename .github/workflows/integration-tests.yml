@@ -191,7 +191,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: 'osac-operator/go.mod'
 
@@ -247,7 +247,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: 'bare-metal-fulfillment-operator/go.mod'
 
@@ -308,10 +308,10 @@ jobs:
           persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
 
       - name: "Set up Python"
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version-file: "osac-aap/pyproject.toml"
 
@@ -357,7 +357,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout repository
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       with:
         persist-credentials: false
 
@@ -367,7 +367,7 @@ jobs:
         version: v3.22.0
 
     - name: Install Kind
-      uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc  # v1
+      uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa  # v1.15.1
       with:
         install_only: true
 

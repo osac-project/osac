@@ -152,7 +152,7 @@ images:
     pullPolicy: Always
   envoy:
     repository: docker.io/envoyproxy/envoy
-    tag: v1.37.1
+    tag: v1.39.4
     pullPolicy: IfNotPresent
 
 # Database connection configuration. The service expects an external PostgreSQL database to be available. The database

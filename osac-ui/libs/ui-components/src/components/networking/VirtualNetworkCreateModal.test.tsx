@@ -44,7 +44,7 @@ const projects: Project[] = [
       $typeName: 'osac.public.v1.ProjectSpec',
       title: 'My Project',
     },
-  } as Project,
+  },
 ];
 
 const renderModal = (onClose: () => void) =>

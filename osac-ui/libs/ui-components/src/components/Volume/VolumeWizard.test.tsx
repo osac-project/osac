@@ -12,7 +12,7 @@ const routerMocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   proceed: vi.fn(),
   reset: vi.fn(),
-  blockerState: 'unblocked' as 'unblocked' | 'blocked',
+  blockerState: 'unblocked',
 }));
 
 vi.mock('react-router-dom', async (importOriginal) => {

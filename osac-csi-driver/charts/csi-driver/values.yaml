@@ -129,15 +129,15 @@ sidecars:
   provisioner:
     image:
       repository: registry.k8s.io/sig-storage/csi-provisioner
-      tag: v5.1.0
+      tag: v5.3.0
   attacher:
     image:
       repository: registry.k8s.io/sig-storage/csi-attacher
-      tag: v4.7.0
+      tag: v4.13.0
   registrar:
     image:
       repository: registry.k8s.io/sig-storage/csi-node-driver-registrar
-      tag: v2.12.0
+      tag: v2.18.0
 
 serviceAccount:
   controller:
@@ -162,7 +162,7 @@ vendors:
     enabled: false
     image:
       repository: docker.io/vastdataorg/csi
-      tag: v2.6.8
+      tag: v2.7.1
     config:
       # Vendor plugin this node process serves. VAST selects one plugin per process:
       #   "block" -> raw-block (support_block=True)
@@ -184,7 +184,7 @@ vendors:
     enabled: false
     image:
       repository: docker.io/portworx/px-pure-csi-driver
-      tag: "26.2.2"
+      tag: "26.3.0"
     config:
       credentialsSecret: ""
       clusterUuid: ""

@@ -77,7 +77,7 @@ jobs:
     - uses: ./.github/actions/setup-go
       with:
         working-directory: fulfillment-service
-    - uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3  # v1
+    - uses: bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7  # v1.6.0
       with:
         setup_only: true
     # gitleaks hook is --staged only (no-op with empty index). CI secret gate is

@@ -13,9 +13,7 @@ export type CatalogListFilterCriteria = {
 };
 
 export type CatalogListResource =
-  | BareMetalInstanceCatalogItem
-  | ClusterCatalogItem
-  | ComputeInstanceCatalogItem;
+  BareMetalInstanceCatalogItem | ClusterCatalogItem | ComputeInstanceCatalogItem;
 
 export type CatalogListFilterableItem = {
   metadata?: { name?: string; tenant?: string };

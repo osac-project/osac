@@ -70,7 +70,7 @@ describe('DiskImageActionsMenu', () => {
     const { user } = renderMenu(makeDiskImage(DiskImageLifecycle.AVAILABLE), {
       transportOverrides: {
         onDiskImageUpdate: (req) => {
-          captured = req as unknown as Record<string, unknown>;
+          captured = req;
           return create(DiskImagesUpdateResponseSchema, {
             object: makeDiskImage(DiskImageLifecycle.DEPRECATED),
           });

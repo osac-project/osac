@@ -1,10 +1,10 @@
 import { useNavigate } from 'react-router-dom';
 import { Button, Flex, FlexItem, PageSection, Stack, StackItem } from '@patternfly/react-core';
 
+import { CatalogItemDetailContent } from './CatalogItemDetailContent';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { ResourceDetailHeader } from '../../Resource/ResourceDetailHeader';
 import { CatalogItem, getCatalogCreateActionPath } from '../catalogItemDisplay';
-import { CatalogItemDetailContent } from './CatalogItemDetailContent';
 
 interface CatalogItemDetailsProps {
   item: CatalogItem;

@@ -109,7 +109,7 @@ describe('useCreateStorageBackend', () => {
       {},
       {
         onStorageBackendCreate: (req) => {
-          captured = req as unknown as Record<string, unknown>;
+          captured = req;
           return create(StorageBackendsCreateResponseSchema, {
             object: makeStorageBackend('new-1'),
           });
@@ -154,7 +154,7 @@ describe('useUpdateStorageBackend', () => {
       { storageBackends: [makeStorageBackend(input.id)] },
       {
         onStorageBackendUpdate: (req) => {
-          captured = req as unknown as Record<string, unknown>;
+          captured = req;
           return create(StorageBackendsUpdateResponseSchema, {
             object: makeStorageBackend(input.id),
           });

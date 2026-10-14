@@ -15,8 +15,7 @@ const gpuValidationSchema = (t: TFunction) =>
     count: positiveIntegerSchema(t).notRequired(),
   }).test('gpu-fields-complete', requiredForGpu(t), function (gpu) {
     const originalGpu = this.originalValue as
-      | { pciDeviceSelector?: unknown; resourceName?: unknown; count?: unknown }
-      | undefined;
+      { pciDeviceSelector?: unknown; resourceName?: unknown; count?: unknown } | undefined;
     const values = originalGpu ?? gpu;
 
     if (!values || !isGpuConfigured(values.pciDeviceSelector, values.resourceName, values.count)) {

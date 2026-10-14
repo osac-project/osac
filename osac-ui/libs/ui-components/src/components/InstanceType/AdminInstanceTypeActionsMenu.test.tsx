@@ -76,7 +76,7 @@ describe('AdminInstanceTypeActionsMenu', () => {
     const { user } = renderMenu(makeInstanceType(InstanceTypeState.ACTIVE), {
       transportOverrides: {
         onInstanceTypeUpdate: (req) => {
-          captured = req as unknown as Record<string, unknown>;
+          captured = req;
           return create(InstanceTypesUpdateResponseSchema, {
             object: makeInstanceType(InstanceTypeState.DEPRECATED),
           });

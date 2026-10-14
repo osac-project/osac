@@ -8,8 +8,7 @@ export interface ProjectScopedResource {
 }
 
 export const useProjectFilterQuery = <T extends ProjectScopedResource>():
-  | CelFilter<T>
-  | undefined => {
+  CelFilter<T> | undefined => {
   const { projects } = useSession();
   return projects.length
     ? (cel<ProjectScopedResource>((filter) =>

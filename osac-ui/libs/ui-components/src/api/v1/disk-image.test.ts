@@ -310,7 +310,7 @@ describe('useUpdateDiskImage', () => {
       { diskImages: [makeDiskImage('di-1')] },
       {
         onDiskImageUpdate: (req) => {
-          captured = req as unknown as Record<string, unknown>;
+          captured = req;
           return create(DiskImagesUpdateResponseSchema, {
             object: makeDiskImage('di-1', DiskImageLifecycle.DEPRECATED),
           });

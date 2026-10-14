@@ -20,7 +20,6 @@ import ToastProvider from '../components/Toast/ToastProvider';
 const createTestI18n = () => {
   const instance = i18n.createInstance();
   instance.init({
-    initImmediate: false,
     lng: 'en',
     fallbackLng: 'en',
     resources: { en: { translation: en } },

@@ -23,6 +23,12 @@ updates:
     fulfillment-service-go-dependencies:
       patterns:
         - "*"
+  ignore:
+    # k8s.io/kube-openapi after v0.0.0-20260721132016 returns structured-merge-diff
+    # v7 types from schemaconv while k8s.io/apimachinery v0.37.x still consumes
+    # v6, which fails to compile. Follow the version k8s.io v0.37.x pins until
+    # k8s.io moves to structured-merge-diff v7.
+    - dependency-name: "k8s.io/kube-openapi"
   commit-message:
     prefix: "NO-ISSUE"
 
@@ -40,6 +46,12 @@ updates:
     osac-operator-go-dependencies:
       patterns:
         - "*"
+  ignore:
+    # k8s.io/kube-openapi after v0.0.0-20260721132016 returns structured-merge-diff
+    # v7 types from schemaconv while k8s.io/apimachinery v0.37.x still consumes
+    # v6, which fails to compile. Follow the version k8s.io v0.37.x pins until
+    # k8s.io moves to structured-merge-diff v7.
+    - dependency-name: "k8s.io/kube-openapi"
   commit-message:
     prefix: "NO-ISSUE"
 

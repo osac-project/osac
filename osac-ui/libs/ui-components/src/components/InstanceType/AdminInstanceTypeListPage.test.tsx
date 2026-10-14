@@ -180,7 +180,7 @@ describe('AdminInstanceTypeListPage', () => {
           return makeListResponse(items);
         },
         onInstanceTypeUpdate: (req) => {
-          captured = req as unknown as Record<string, unknown>;
+          captured = req;
           items[0] = makeInstanceType('active-1', InstanceTypeState.DEPRECATED);
           return create(InstanceTypesUpdateResponseSchema, { object: items[0] });
         },

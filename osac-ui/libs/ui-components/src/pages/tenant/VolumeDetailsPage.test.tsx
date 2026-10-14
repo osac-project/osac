@@ -39,7 +39,7 @@ const testVolume: Volume = {
     $typeName: 'osac.public.v1.VolumeStatus',
     state: VolumeState.AVAILABLE,
   },
-} as Volume;
+};
 
 const renderAt = (path: string, fixtures?: MockApiFixtures) =>
   renderWithProviders(

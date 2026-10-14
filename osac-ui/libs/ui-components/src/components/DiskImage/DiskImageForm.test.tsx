@@ -127,7 +127,7 @@ describe('DiskImageForm', () => {
       let captured: Record<string, unknown> | undefined;
       const { user } = renderForm({
         onDiskImageCreate: (req) => {
-          captured = req as unknown as Record<string, unknown>;
+          captured = req;
           return create(DiskImagesCreateResponseSchema, {
             object: { ...req.object, id: CREATED_ID },
           });
@@ -155,7 +155,7 @@ describe('DiskImageForm', () => {
       let captured: Record<string, unknown> | undefined;
       const { user } = renderForm({
         onDiskImageCreate: (req) => {
-          captured = req as unknown as Record<string, unknown>;
+          captured = req;
           return create(DiskImagesCreateResponseSchema, {
             object: { ...req.object, id: CREATED_ID },
           });
@@ -259,7 +259,7 @@ describe('DiskImageForm', () => {
       let captured: Record<string, unknown> | undefined;
       const { user } = renderForm({
         onDiskImageCreate: (req) => {
-          captured = req as unknown as Record<string, unknown>;
+          captured = req;
           return create(DiskImagesCreateResponseSchema, {
             object: { ...req.object, id: 'disk-image-created-1' },
           });
@@ -282,7 +282,7 @@ describe('DiskImageForm', () => {
       const { user } = renderForm(
         {
           onDiskImageCreate: (req) => {
-            captured = req as unknown as Record<string, unknown>;
+            captured = req;
             return create(DiskImagesCreateResponseSchema, {
               object: { ...req.object, id: 'disk-image-created-1' },
             });

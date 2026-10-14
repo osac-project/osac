@@ -18,7 +18,6 @@ import { useBareMetalActions } from './useBareMetalActions';
 import { ApiProvider } from '../../api/api-context';
 
 i18n.use(initReactI18next).init({
-  initImmediate: false,
   lng: 'en',
   fallbackLng: 'en',
   resources: { en: { translation: {} } },

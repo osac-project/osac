@@ -18,7 +18,7 @@ class ResizeObserverMock {
   }
 }
 
-globalThis.ResizeObserver = ResizeObserverMock as typeof ResizeObserver;
+globalThis.ResizeObserver = ResizeObserverMock;
 
 // Node can expose a global localStorage when it is started with an invalid
 // --localstorage-file flag. Keep Vitest tests on a functional browser-like

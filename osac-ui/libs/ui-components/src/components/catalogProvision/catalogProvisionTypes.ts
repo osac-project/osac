@@ -12,6 +12,4 @@ export type CatalogProvisionPayload =
   | MessageInitShape<typeof BareMetalInstanceSchema>;
 
 export type CatalogProvisionWizardValues =
-  | ComputeInstanceWizardValues
-  | ClusterWizardValues
-  | BareMetalInstanceWizardValues;
+  ComputeInstanceWizardValues | ClusterWizardValues | BareMetalInstanceWizardValues;

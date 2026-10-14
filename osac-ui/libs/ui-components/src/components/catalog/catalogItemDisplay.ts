@@ -25,9 +25,7 @@ export const isCatalogItemKind = (value: string | undefined): value is CatalogIt
 export type CatalogItemKind = 'vm' | 'bm' | 'cluster';
 
 export type CatalogItem =
-  | ClusterCatalogItem
-  | BareMetalInstanceCatalogItem
-  | ComputeInstanceCatalogItem;
+  ClusterCatalogItem | BareMetalInstanceCatalogItem | ComputeInstanceCatalogItem;
 
 export const catalogItemTypeBadgeLabel = (kind: CatalogItem, t: TFunction): string => {
   switch (kind.$typeName) {

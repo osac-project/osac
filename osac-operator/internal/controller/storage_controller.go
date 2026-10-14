@@ -323,7 +323,7 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 	// handleBackendReadiness), so both Stage 2's tier-coverage validation and
 	// every downstream AAP call in this reconcile see the same result without
 	// re-fetching.
-	ctx, tierDefinitions := resolveAndInjectTierContext(ctx, r.TiersClient, r.BackendsClient, r.SecretsClient, "tenant", tenantName)
+	ctx, tierDefinitions, tierErr := resolveAndInjectTierContext(ctx, r.TiersClient, r.BackendsClient, r.SecretsClient, "tenant", tenantName)
 
 	// Handle individual ClusterOrder deletions while the Tenant is still
 	// alive. When a ClusterOrder is deleted, mapClusterOrderToTenant
@@ -339,6 +339,22 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 	caasDelResult, caasDelErr := r.handleCaaSDelete(ctx, instance, false)
 	if caasDelErr != nil || caasDelResult.RequeueAfter > 0 {
 		return caasDelResult, caasDelErr
+	}
+
+	// Guard: when tier resolution failed and any provisioning provider is
+	// configured, do not proceed — the downstream AAP calls would run
+	// without storage_tier_definitions and storage_backend_connections,
+	// creating incomplete or wrong resources. This matches the guard in
+	// handleCaaSDelete (OSAC-4855) and extends it to the provisioning paths.
+	// CaaS cluster deletion (above) already ran and is unaffected.
+	if tierErr != nil && (r.BackendProvider != nil || r.ClusterStorageProvider != nil) {
+		log.Error(tierErr, "tier resolution failed, deferring storage provisioning until fulfillment service recovers",
+			"tenant", tenantName)
+		instance.SetStatusCondition(v1alpha1.TenantConditionStorageBackendReady,
+			metav1.ConditionFalse,
+			"TierResolutionFailed",
+			fmt.Sprintf("Storage tier definitions could not be resolved from the fulfillment service: %v", tierErr))
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
 	// Stage 1: check hub Secret and route provisioning based on backend registration.
@@ -694,7 +710,10 @@ func (r *StorageReconciler) handleDelete(ctx context.Context, instance *v1alpha1
 	// Resolved independently from handleUpdate's resolution (no caching between
 	// create and delete paths), before the first AAP-triggering call in this
 	// function, so every downstream call in this reconcile sees the same result.
-	ctx, _ = resolveAndInjectTierContext(ctx, r.TiersClient, r.BackendsClient, r.SecretsClient, "tenant", instance.Name)
+	ctx, _, tierErr := resolveAndInjectTierContext(ctx, r.TiersClient, r.BackendsClient, r.SecretsClient, "tenant", instance.Name)
+	if tierErr != nil {
+		log.Error(tierErr, "tier resolution failed during deletion", "tenant", instance.Name)
+	}
 
 	// CaaS cleanup: remove cluster-side storage (StorageClasses, CSI) from
 	// all CaaS clusters and remove our finalizer from their ClusterOrders.
@@ -705,9 +724,28 @@ func (r *StorageReconciler) handleDelete(ctx context.Context, instance *v1alpha1
 	// This runs independently of ClusterStorageProvider: when the
 	// HostedControlPlane is already gone the finalizer is removed without
 	// triggering AAP deprovisioning (OSAC-4340).
+	// handleCaaSDelete already guards against empty backend connections (OSAC-4855).
 	caasResult, caasErr := r.handleCaaSDelete(ctx, instance, true)
 	if caasErr != nil || caasResult.RequeueAfter > 0 {
 		return caasResult, caasErr
+	}
+
+	// Guard: when tier resolution failed, do not start or retry tenant
+	// deprovisioning AAP jobs — they would run without backend connections
+	// and fail. Retain the finalizer and requeue so the controller retries
+	// when the fulfillment service recovers, rather than orphaning backend
+	// resources. This differs from the handleCaaSDelete guard (OSAC-4855)
+	// which removes the CaaS finalizer because the cluster being destroyed
+	// makes resource cleanup moot; tenant-level resources (hub Secrets,
+	// StorageClasses on the target cluster) outlive the Tenant CR and must
+	// be cleaned up. When tier clients are nil (no fulfillment service
+	// configured), tierErr is nil and deprovisioning proceeds normally.
+	if tierErr != nil && (r.ClusterStorageProvider != nil || r.BackendProvider != nil) {
+		log.Info("tier resolution failed during deletion, retaining finalizer and requeueing",
+			"tenant", instance.Name, "retryAfter", r.StatusPollInterval)
+		r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, "TierResolutionFailed", "Teardown",
+			"Storage tier resolution failed during deletion, deferring deprovisioning: %v", tierErr)
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
 	// Stage 1: class cleanup

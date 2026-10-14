@@ -196,29 +196,32 @@ func resolveBackendPassword(
 // resolveAndInjectTierContext resolves storage tier definitions and backend
 // connections from the Tier API and injects them into ctx for downstream AAP
 // calls to pick up, returning the tier definitions directly for callers that
-// also need them locally (e.g. tier-coverage validation). A nil tiersClient
-// or backendsClient (no fulfillment service connection configured) and a
-// failed resolution are both treated as "no tier data" — logged and
-// non-fatal — so a transient Tier/Backend API failure never blocks
-// reconciliation of a resource that functioned without this data before this
-// feature existed. logKV is passed through to the error/info log calls for
-// caller-specific context (e.g. "tenant", name or "computeInstance", name).
+// also need them locally (e.g. tier-coverage validation).
+//
+// The returned error is non-nil when both clients were configured but the
+// Tier/Backend API call failed (gRPC Unavailable, Unauthenticated, etc.).
+// Callers that own AAP storage provisioning must check this error and avoid
+// launching jobs whose extra_vars would be missing tier/backend data. A nil
+// error covers both "resolution succeeded" and "clients not configured"
+// (backward-compatible).
+//
+// logKV is passed through to the info log call for caller-specific context
+// (e.g. "tenant", name or "computeInstance", name).
 func resolveAndInjectTierContext(
 	ctx context.Context,
 	tiersClient StorageTiersLister,
 	backendsClient StorageBackendsClient,
 	secretsClient SecretsClient,
 	logKV ...any,
-) (context.Context, []provisioning.TierDefinition) {
+) (context.Context, []provisioning.TierDefinition, error) {
 	log := ctrllog.FromContext(ctx)
 
 	var tierDefinitions []provisioning.TierDefinition
 	var backendConnections map[string]provisioning.BackendConnection
+	var resolutionErr error
 	if tiersClient != nil && backendsClient != nil {
-		var err error
-		tierDefinitions, backendConnections, err = resolveTierDefinitions(ctx, tiersClient, backendsClient, secretsClient)
-		if err != nil {
-			log.Error(err, "failed to resolve storage tier definitions, proceeding without tier data", logKV...)
+		tierDefinitions, backendConnections, resolutionErr = resolveTierDefinitions(ctx, tiersClient, backendsClient, secretsClient)
+		if resolutionErr != nil {
 			tierDefinitions = nil
 			backendConnections = nil
 		}
@@ -229,7 +232,7 @@ func resolveAndInjectTierContext(
 
 	ctx = provisioning.WithStorageTierDefinitions(ctx, tierDefinitions)
 	ctx = provisioning.WithStorageBackendConnections(ctx, backendConnections)
-	return ctx, tierDefinitions
+	return ctx, tierDefinitions, resolutionErr
 }
 
 // storageProtocolToString maps the Tier API's StorageProtocol enum to the lowercase

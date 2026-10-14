@@ -2032,13 +2032,49 @@ jobs:
                     return comps[0]  # keep full entry, incl. source
             return None
 
+        def describe_pending_state():
+            # Real resource status instead of a generic "waiting" message --
+            # the build PipelineRun (Succeeded condition's reason/message,
+            # e.g. "Running"/"Tasks Completed: 4 (Failed: 0, Cancelled 0),
+            # Incomplete: 3, Skipped: 1") is far more actionable mid-poll
+            # than silence, and is cheap: one extra `oc get` per interval,
+            # same label selector Konflux itself uses to key a component's
+            # build to this exact commit.
+            try:
+                out = subprocess.run(
+                    ["oc", "get", "pipelinerun", "-n", NAMESPACE,
+                     "-l", f"appstudio.openshift.io/component={COMPONENT},pipelinesascode.tekton.dev/sha={COMMIT_SHA}",
+                     "-o", "json"],
+                    capture_output=True, text=True, check=True,
+                )
+            except subprocess.CalledProcessError as e:
+                stderr = e.stderr or ""
+                if is_permanent_auth_error(stderr):
+                    print(f"::error::oc get pipelinerun failed with a permanent auth/RBAC error: {stderr.strip()}")
+                    raise
+                print(f"[{COMPONENT}] Waiting on Konflux build (oc get pipelinerun failed, will retry: {stderr.strip()})", flush=True)
+                return
+            items = json.loads(out.stdout)["items"]
+            if not items:
+                print(f"[{COMPONENT}] Waiting on Konflux build -- no PipelineRun found yet for this commit", flush=True)
+                return
+            items.sort(key=lambda i: i["metadata"].get("creationTimestamp", ""))
+            latest = items[-1]
+            succeeded = next(
+                (c for c in latest.get("status", {}).get("conditions", []) if c.get("type") == "Succeeded"),
+                {},
+            )
+            reason = succeeded.get("reason", "Unknown")
+            message = succeeded.get("message", "")
+            print(f"[{COMPONENT}] PipelineRun {latest['metadata']['name']}: {reason} -- {message}", flush=True)
+
         deadline = time.time() + TIMEOUT_SECONDS
         found = None
         while time.time() < deadline:
             found = find_component()
             if found:
                 break
-            print(f"Waiting on {COMPONENT}'s Konflux build...", flush=True)
+            describe_pending_state()
             time.sleep(POLL_INTERVAL_SECONDS)
         else:
             print(f"::error::Timed out waiting for {COMPONENT}'s Konflux release build")
@@ -2232,7 +2268,14 @@ jobs:
             if condition_false(conditions, "AppStudioTestSucceeded"):
                 print(f"::error::Override snapshot {resource_name} failed its integration tests")
                 sys.exit(1)
-            print(f"Waiting on {resource_name}'s integration tests...", flush=True)
+            if conditions:
+                summary = "; ".join(
+                    f"{c.get('type')}={c.get('status')} ({c.get('reason')}: {c.get('message')})"
+                    for c in conditions
+                )
+                print(f"[{resource_name}] {summary}", flush=True)
+            else:
+                print(f"Waiting on {resource_name}'s integration tests -- no conditions reported yet", flush=True)
             time.sleep(POLL_INTERVAL_SECONDS)
         else:
             print(f"::error::Timed out waiting for {resource_name}'s integration tests")
@@ -2281,7 +2324,14 @@ jobs:
             ):
                 print(f"::error::Konflux staging release failed: {resource_name}")
                 sys.exit(1)
-            print(f"Waiting on {resource_name}'s release to complete...", flush=True)
+            if conditions:
+                summary = "; ".join(
+                    f"{c.get('type')}={c.get('status')} ({c.get('reason')}: {c.get('message')})"
+                    for c in conditions
+                )
+                print(f"[{resource_name}] {summary}", flush=True)
+            else:
+                print(f"Waiting on {resource_name}'s release to complete -- no conditions reported yet", flush=True)
             time.sleep(POLL_INTERVAL_SECONDS)
         else:
             print(f"::error::Timed out waiting for {resource_name}'s release to complete")

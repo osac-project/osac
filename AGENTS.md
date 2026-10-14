@@ -38,6 +38,7 @@ The nearest component `AGENTS.md` adds rules for files under that component.
 - Sign commits with `git commit -s`.
 - AI-assisted commits use an `Assisted-by: <actual tool> <contact>` trailer; never use `Co-Authored-By` for an AI tool.
 - Every commit message and pull request title must include an issue prefix: `OSAC-XXXX: description` for linked work, or `NO-ISSUE: description` when there is no linked issue.
+- Keep every line of a commit message — subject, body, and trailers — to a maximum of 80 characters.
 
 ## Architecture
 

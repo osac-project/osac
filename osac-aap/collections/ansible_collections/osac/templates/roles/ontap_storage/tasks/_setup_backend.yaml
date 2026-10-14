@@ -135,7 +135,7 @@
     force_basic_auth: true
     validate_certs: true
     ca_path: "{{ _ontap_discovery.ca_path if _ontap_discovery.ca_path | length > 0 else omit }}"
-    timeout: "{{ ontap_storage_api_timeout | int }}"
+    timeout: "{{ storage_provider_api_timeout | int }}"
     status_code: [200]
     return_content: true
   register: _svm_discovery
@@ -214,7 +214,7 @@
     force_basic_auth: true
     validate_certs: true
     ca_path: "{{ _ontap_discovery.ca_path if _ontap_discovery.ca_path | length > 0 else omit }}"
-    timeout: "{{ ontap_storage_api_timeout | int }}"
+    timeout: "{{ storage_provider_api_timeout | int }}"
     status_code: [200]
     return_content: true
   loop: "{{ _capped_tiers }}"

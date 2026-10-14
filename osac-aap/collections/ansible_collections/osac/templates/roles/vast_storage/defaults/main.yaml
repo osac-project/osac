@@ -11,22 +11,25 @@ vast_storage_csi_provisioner_map:
 # K8s Secret on hub cluster that stores per-tenant VAST config
 vast_storage_tenant_config_secret_prefix: "vast-tenant-config-"
 
-# Namespace for hub-cluster config secrets. Resolution order:
-#   1. OSAC_STORAGE_CONFIG_NAMESPACE env var — explicit override via the storage-operations-ig
-#      ConfigMap, only needed if the config namespace differs from the IG pod's own namespace.
-#   2. The IG pod's own namespace, read from the standard K8s-mounted service account file —
-#      always accurate for wherever the pod actually runs, no per-deployment config needed.
-# No hardcoded fallback — fail loudly if neither source is available
-# rather than silently targeting a wrong namespace.
+# Namespace for hub-cluster config secrets. Delegates to the global
+# storage_provider_config_namespace default (OSAC_STORAGE_CONFIG_NAMESPACE or
+# the pod's mounted service account namespace) so all storage providers share a
+# single source of truth while preserving the role-prefixed variable for callers.
 vast_storage_config_namespace: >-
-  {{ lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE')
-     | default(lookup('file', '/var/run/secrets/kubernetes.io/serviceaccount/namespace', errors='ignore'), true) }}
+  {{ storage_provider_config_namespace
+     | default(lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE')
+               | default(lookup('file', '/var/run/secrets/kubernetes.io/serviceaccount/namespace', errors='ignore'), true), true) }}
 
 # TLS certificate validation for VAST VMS API calls.
 vast_storage_validate_certs: "{{ lookup('env', 'VAST_VALIDATE_CERTS') | default('true', true) | bool }}"
 
 # API timeout (seconds) passed to the vastdata.vms modules via the vms: connection dict.
-vast_storage_api_timeout: 30
+# Delegates to the global storage_provider_api_timeout (default 30s), overridable via
+# VAST_API_TIMEOUT or OSAC_STORAGE_API_TIMEOUT.
+vast_storage_api_timeout: >-
+  {{ lookup('env', 'VAST_API_TIMEOUT')
+     | default(storage_provider_api_timeout | default(lookup('env', 'OSAC_STORAGE_API_TIMEOUT') | default('30', true), true), true)
+     | int }}
 
 # Per-tenant VIP pool, referenced by CONVENTION: osac-<tenant>-vippool.
 # OSAC reuses the pool if it already exists (pre-created by the cloud admin or a

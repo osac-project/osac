@@ -6,22 +6,25 @@
 # the same script (fixtures/storage/).
 #
 # Coverage:
-#   1. setup: claims a prepared assignment (annotations + tenant config fact),
-#      no hub lifecycle Secret, SVM discovery call visible in the mock call log
-#   2. setup: refuses an assignment claimed by a different tenant uid
-#   3. setup: fails on prepared-Secret/live-SVM annotation mismatch
+#   1. setup (PR#1553 tenant_preparation contract): validates explicit SVM and
+#      capped-tier QoS policy against the mock ONTAP server with verified TLS
+#      (using the cluster CA bundle), creates the hub lifecycle Secret
+#      (ontap-tenant-<assignment_key>), and sets storage_provider_tenant_configs.
+#   2. setup: refuses an assignment when the hub lifecycle Secret is owned by a
+#      different tenant uid or in state 'retained'.
+#   3. setup: fails when a capped tier's prepared QoS policy has a mismatched
+#      IOPS ceiling or is missing on the ONTAP cluster.
 #   4. ensure_storage_class: creates CSI Secret + TBC (spec asserted against
-#      the netapp-onboarding contract) + per-tier StorageClasses, then
-#      short-circuits on the second run (no ONTAP API calls)
+#      the PR#1553 netapp-onboarding contract, including virtual-pool defaults
+#      for encryption and qosPolicy, plus trustedCACertificate from the cluster
+#      CA bundle) + per-tier StorageClasses, then short-circuits on the second
+#      run (no ONTAP API calls).
 #   4.5. ensure_storage_class: fails fast when the TBC enters phase Failed,
-#      surfacing the TBC's status message
-#   5. teardown_backend: releases the claim to 'retained'
+#      surfacing the TBC's status message.
+#   5. teardown_backend: marks the hub lifecycle Secret as 'retained' after
+#      verifying tenant_uid ownership.
 #   6. teardown_cluster_storage: removes TBC + SCs + CSI Secret, including
-#      labeled resources no longer derivable from the dispatched tiers
-#
-# The kind env has no Trident operator, so a stub Deployment ("stub-trident-
-# operator", created below) polls TBCs in the trident namespace and patches
-# status.phase to Bound — that is what exercises the role's wait loop.
+#      labeled resources no longer derivable from the dispatched tiers.
 
 # ── Test environment: trident namespace + stub operator ──
 - name: "ONTAP Storage Provider - Test environment"
@@ -43,8 +46,7 @@
 
     # No Trident operator exists in the kind env. The stub below plays its one
     # relevant behavior: poll TBCs and patch status.phase to Bound, which the
-    # role's until-loop (12 retries x 5s) waits for. kubectl is used rather
-    # than the kubernetes Python client so the image stays a stock public one.
+    # role's until-loop (12 retries x 5s) waits for.
     - name: Create the stub Trident operator ServiceAccount and RBAC
       kubernetes.core.k8s:
         state: present
@@ -105,10 +107,6 @@
                 serviceAccountName: stub-trident-operator
                 containers:
                   - name: binder
-                    # kubectl + shell image. registry.k8s.io/kubectl is
-                    # distroless (no /bin/sh), and rancher/kubectl's entrypoint
-                    # intercepts argv — alpine/k8s ships busybox sh + kubectl
-                    # and takes an explicit shell script.
                     image: alpine/k8s:1.33.0
                     command:
                       - /bin/sh
@@ -133,9 +131,6 @@
         label_selectors:
           - "app=stub-trident-operator"
       register: _stub_pod
-      # Ready-condition check, not status.phase: a crash-looping pod still
-      # reports phase Running for the moments between container failures,
-      # which would let a bare phase check pass spuriously.
       until: >-
         _stub_pod.resources | length > 0
         and (_stub_pod.resources[0].status.conditions
@@ -144,67 +139,65 @@
       retries: 30
       delay: 2
 
-    # The prepared Secret's ca.crt must be valid PEM — the role writes it to a
-    # temp file and passes it as ca_path, and ansible's uri module loads the CA
-    # file even when validate_certs is false (load_verify_locations runs
-    # unconditionally, so garbage content fails the connection). Trust is never
-    # actually evaluated in these tests (validate_certs: false); the PEM only
-    # has to parse. Persisted as a fact for use in later plays' fixtures and
-    # assertions.
-    - name: Generate a self-signed CA certificate for the ca.crt fixture
-      ansible.builtin.command:
-        cmd: >-
-          openssl req -x509 -newkey rsa:2048 -nodes -keyout /dev/null
-          -subj "/CN=osac-ontap-test-ca" -days 1
-      register: _test_ca
-      changed_when: false
+    - name: Read the mock server's TLS certificate for CA bundle assertions
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/../../../certs/mock.pem"
+      register: _mock_ca_slurp
 
-    - name: Persist the test CA PEM as a fact
+    - name: Persist the mock CA base64 as a fact
       ansible.builtin.set_fact:
-        _test_ca_pem: "{{ _test_ca.stdout }}"
+        _mock_ca_b64: "{{ _mock_ca_slurp.content }}"
 
-# ── Test 1: setup claims the prepared assignment ──
+# ── Test 1: setup claims the prepared assignment (PR#1553 contract) ──
 - name: "ONTAP Storage Provider - Setup claims prepared assignment"
   hosts: localhost
   gather_facts: false
 
-  environment:
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
-
   vars:
     tenant_name: "test-ontap"
     tenant_namespace: "osac-system"
-    # lookup('env', ...) in role defaults runs controller-side and never sees
-    # the play-level environment: block (it only sets the module execution
-    # env) — set the namespace as a play var so it overrides the default
-    # directly (same pattern as storage_provider_setup).
-    ontap_storage_config_namespace: "osac-system"
+    storage_provider_config_namespace: "osac-system"
+    ontap_storage_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
     tenant_uid: "uid-test-ontap-1"
-    # Contract: assignment_key = lowercase sha256(backend_id + "|" + tenant_name)[:16]
     _t_assignment_key: "{{ (('ontap-be-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
-    _t_prepared_secret: "osac-{{ _t_assignment_key }}-credentials"
-    _t_svm_name: "osac-{{ _t_assignment_key }}-svm"
+    _t_silver_tier_key: "{{ ('silver' | hash('sha256'))[:16] | lower }}"
+    _t_lifecycle_secret: "ontap-tenant-{{ _t_assignment_key }}"
+    _t_svm_name: "customer_acme_svm"
     _t_svm_uuid: "uuid-svm-test-ontap-1"
-    _sc_gold: "ontap-{{ _t_assignment_key }}-{{ ('gold' | hash('sha256'))[:16] | lower }}"
-    _sc_silver: "ontap-{{ _t_assignment_key }}-{{ ('silver' | hash('sha256'))[:16] | lower }}"
+    _t_qos_policy_name: "osac-{{ _t_assignment_key }}-{{ _t_silver_tier_key }}-qos"
     storage_provider_tiers:
       - name: gold
         protocol: block
         provider: ontap
         backend_id: ontap-be-1
+        encryption_enabled: true
       - name: silver
         protocol: block
         provider: ontap
         backend_id: ontap-be-1
+        encryption_enabled: false
         qos_limits:
           static_limits:
-            max_reads_bw_mbps: 100
-            max_writes_bw_mbps: 100
+            max_reads_bw_mbps: 0
+            max_writes_bw_mbps: 0
+          provider_config:
+            max_iops: 5000
     storage_provider_backend_connections:
       ontap-be-1:
         endpoint: "https://127.0.0.1:18444"
-        username: "admin"
-        password: "mock-admin-password"
+        username: "osac-discovery"
+        password: "mock-discovery-password"
+        tenant_preparation:
+          tenant_id: "id-test-ontap"
+          source:
+            namespace: "trident"
+            name: "test-ontap-primary-info"
+            uid: "uid-source-secret-1"
+            resource_version: "42"
+          provider_config:
+            username: "trident_test_ontap"
+            password: "svm-runtime-password"
+            svm: "{{ _t_svm_name }}"
 
   tasks:
     - name: Reset the mock ONTAP server
@@ -214,12 +207,12 @@
         method: POST
         status_code: [200]
 
-    - name: Delete any pre-existing prepared Secret (clean slate)
+    - name: Delete any pre-existing hub lifecycle Secret (clean slate)
       kubernetes.core.k8s:
         state: absent
         api_version: v1
         kind: Secret
-        name: "{{ _t_prepared_secret }}"
+        name: "{{ _t_lifecycle_secret }}"
         namespace: "osac-system"
       failed_when: false
 
@@ -234,52 +227,55 @@
           uuid: "{{ _t_svm_uuid }}"
         status_code: [201]
 
-    - name: Create the prepared Secret
-      kubernetes.core.k8s:
-        state: present
-        definition:
-          apiVersion: v1
-          kind: Secret
-          metadata:
-            name: "{{ _t_prepared_secret }}"
-            namespace: "osac-system"
-            annotations:
-              osac.openshift.io/storage-backend: "ontap-be-1"
-              osac.openshift.io/tenant: "{{ tenant_name }}"
-              osac.openshift.io/storage-resource-id: "{{ _t_svm_uuid }}"
-              osac.openshift.io/storage-assignment-state: "available"
-          type: Opaque
-          stringData:
-            username: "svm-user"
-            password: "svm-password"
-            ca.crt: "{{ _test_ca_pem }}"
+    - name: Register the prepared QoS policy for the silver tier on the mock ONTAP server
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18444/_qos_policy"
+        validate_certs: false
+        method: POST
+        body_format: json
+        body:
+          name: "{{ _t_qos_policy_name }}"
+          svm:
+            uuid: "{{ _t_svm_uuid }}"
+            name: "{{ _t_svm_name }}"
+          fixed:
+            max_throughput_iops: 5000
+            capacity_shared: false
+        status_code: [201]
 
     - name: Call storage_provider role with setup action
       ansible.builtin.include_role:
         name: osac.service.storage_provider
       vars:
         storage_provider_action: setup
-        ontap_storage_validate_certs: false
 
-    - name: Read back the prepared Secret
+    - name: Read back the hub lifecycle Secret
       kubernetes.core.k8s_info:
         api_version: v1
         kind: Secret
-        name: "{{ _t_prepared_secret }}"
+        name: "{{ _t_lifecycle_secret }}"
         namespace: "osac-system"
-      register: _claimed_secret
+      register: _lifecycle_secret
 
-    - name: Assert the assignment was claimed by this tenant uid
+    - name: Assert the hub lifecycle Secret was created with expected metadata and no password
       ansible.builtin.assert:
         that:
-          - _claimed_secret.resources | length == 1
-          - _claimed_secret.resources[0].metadata.annotations['osac.openshift.io/storage-assignment-state'] == 'claimed'
-          - _claimed_secret.resources[0].metadata.annotations['osac.openshift.io/storage-tenant-uid'] == tenant_uid
-          - _claimed_secret.resources[0].metadata.annotations['osac.openshift.io/storage-claimed-at'] is defined
+          - _lifecycle_secret.resources | length == 1
+          - _lifecycle_secret.resources[0].metadata.labels['osac.openshift.io/tenant'] == tenant_name
+          - _lifecycle_secret.resources[0].metadata.labels['osac.openshift.io/storage-provider'] == 'ontap'
+          - _lifecycle_secret.resources[0].metadata.labels['osac.openshift.io/storage-backend-id'] == 'ontap-be-1'
+          - _lifecycle_secret.resources[0].data.lifecycle_stage | b64decode == 'claimed'
+          - _lifecycle_secret.resources[0].data.tenant_uid | b64decode == tenant_uid
+          - _lifecycle_secret.resources[0].data.tenant_id | b64decode == 'id-test-ontap'
+          - _lifecycle_secret.resources[0].data.svm_name | b64decode == _t_svm_name
+          - _lifecycle_secret.resources[0].data.svm_uuid | b64decode == _t_svm_uuid
+          - _lifecycle_secret.resources[0].data.source_secret_name | b64decode == 'test-ontap-primary-info'
+          - _lifecycle_secret.resources[0].data.source_secret_uid | b64decode == 'uid-source-secret-1'
+          - "'password' not in _lifecycle_secret.resources[0].data"
         fail_msg: >-
-          Expected state=claimed, tenant-uid={{ tenant_uid }}, got
-          {{ _claimed_secret.resources[0].metadata.annotations | to_json if _claimed_secret.resources else 'secret missing' }}
-        success_msg: "Assignment claimed with the expected annotations"
+          Hub lifecycle Secret did not match expected state:
+          {{ _lifecycle_secret.resources[0] | default({}) | to_json }}
+        success_msg: "Hub lifecycle Secret created with expected claim state and no password"
 
     - name: Assert the tenant config output fact was set
       ansible.builtin.assert:
@@ -287,29 +283,13 @@
           - storage_provider_tenant_configs is defined
           - storage_provider_tenant_configs is mapping
           - storage_provider_tenant_configs['ontap']['ontap-be-1'].assignment_key == _t_assignment_key
+          - storage_provider_tenant_configs['ontap']['ontap-be-1'].svm_name == _t_svm_name
           - storage_provider_tenant_configs['ontap']['ontap-be-1'].svm_uuid == _t_svm_uuid
           - storage_provider_tenant_configs['ontap']['ontap-be-1'].status == 'claimed'
         fail_msg: >-
           storage_provider_tenant_configs wrong:
           {{ storage_provider_tenant_configs | default('undefined') | to_json }}
         success_msg: "storage_provider_tenant_configs correct"
-
-    - name: Assert no hub lifecycle Secret was created
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Secret
-        name: "ontap-tenant-{{ _t_assignment_key }}"
-        namespace: "osac-system"
-      register: _hub_lifecycle_secret
-
-    - name: Assert the hub lifecycle Secret does not exist
-      ansible.builtin.assert:
-        that:
-          - _hub_lifecycle_secret.resources | length == 0
-        fail_msg: >-
-          Hub lifecycle Secret must not exist — claim state lives on the
-          prepared Secret's annotations (no duplicated lifecycle Secret).
-        success_msg: "No hub lifecycle Secret — claim state is on the prepared Secret"
 
     - name: Get the mock ONTAP call log
       ansible.builtin.uri:
@@ -319,7 +299,7 @@
         return_content: true
       register: _mock_calls
 
-    - name: Assert the SVM discovery call hit the mock ONTAP API
+    - name: Assert both SVM and QoS policy discovery calls hit the mock ONTAP API
       ansible.builtin.assert:
         that:
           - >-
@@ -327,61 +307,57 @@
             | selectattr('path', 'search', '/api/svm/svms')
             | selectattr('method', 'equalto', 'GET')
             | list | length > 0
-        fail_msg: "No SVM discovery call recorded against the mock ONTAP server"
-        success_msg: "SVM discovery call recorded"
+          - >-
+            _mock_calls.json
+            | selectattr('path', 'search', '/api/storage/qos/policies')
+            | selectattr('method', 'equalto', 'GET')
+            | list | length > 0
+        fail_msg: "Expected both SVM and QoS policy discovery calls against the mock ONTAP server"
+        success_msg: "SVM and QoS policy discovery calls recorded"
 
-# ── Test 2: setup refuses an assignment claimed by another tenant ──
+# ── Test 2: setup refuses an assignment claimed by another tenant UID ──
 - name: "ONTAP Storage Provider - Setup refuses foreign claim"
   hosts: localhost
   gather_facts: false
 
-  environment:
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
-
   vars:
     tenant_name: "test-ontap"
     tenant_namespace: "osac-system"
-    # lookup('env', ...) in role defaults runs controller-side and never sees
-    # the play-level environment: block (it only sets the module execution
-    # env) — set the namespace as a play var so it overrides the default
-    # directly (same pattern as storage_provider_setup).
-    ontap_storage_config_namespace: "osac-system"
+    storage_provider_config_namespace: "osac-system"
+    ontap_storage_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
     tenant_uid: "uid-test-ontap-2"
-    _t_assignment_key: "{{ (('ontap-be-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
-    _t_prepared_secret: "osac-{{ _t_assignment_key }}-credentials"
+    _t_svm_name: "customer_acme_svm"
     storage_provider_tiers:
       - name: gold
         protocol: block
         provider: ontap
         backend_id: ontap-be-1
+        encryption_enabled: false
     storage_provider_backend_connections:
       ontap-be-1:
         endpoint: "https://127.0.0.1:18444"
-        username: "admin"
-        password: "mock-admin-password"
+        username: "osac-discovery"
+        password: "mock-discovery-password"
+        tenant_preparation:
+          tenant_id: "id-test-ontap"
+          source:
+            namespace: "trident"
+            name: "test-ontap-primary-info"
+            uid: "uid-source-secret-1"
+            resource_version: "42"
+          provider_config:
+            username: "trident_test_ontap"
+            password: "svm-runtime-password"
+            svm: "{{ _t_svm_name }}"
 
   tasks:
-    - name: Re-claim the prepared Secret as a different tenant uid
-      kubernetes.core.k8s:
-        state: patched
-        api_version: v1
-        kind: Secret
-        name: "{{ _t_prepared_secret }}"
-        namespace: "osac-system"
-        resource_definition:
-          metadata:
-            annotations:
-              osac.openshift.io/storage-assignment-state: "claimed"
-              osac.openshift.io/storage-tenant-uid: "someone-else"
-
-    - name: Attempt setup as the new tenant uid
+    - name: Attempt setup as a different tenant uid against the already-claimed lifecycle Secret
       block:
         - name: Call storage_provider role with setup action
           ansible.builtin.include_role:
             name: osac.service.storage_provider
           vars:
             storage_provider_action: setup
-            ontap_storage_validate_certs: false
       rescue:
         - name: Mark the conflict test as passed
           ansible.builtin.set_fact:
@@ -394,55 +370,53 @@
         fail_msg: "Setup should have failed: the assignment is claimed by a different tenant uid"
         success_msg: "Setup correctly refused the foreign-claimed assignment"
 
-# ── Test 3: setup fails on annotation mismatch ──
-- name: "ONTAP Storage Provider - Setup detects annotation mismatch"
+# ── Test 3: setup fails on mismatched QoS policy ceiling ──
+- name: "ONTAP Storage Provider - Setup detects mismatched QoS ceiling"
   hosts: localhost
   gather_facts: false
 
-  environment:
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
-
   vars:
-    tenant_name: "test-ontap-mismatch"
+    tenant_name: "test-ontap-qos-mismatch"
     tenant_namespace: "osac-system"
-    # lookup('env', ...) in role defaults runs controller-side and never sees
-    # the play-level environment: block (it only sets the module execution
-    # env) — set the namespace as a play var so it overrides the default
-    # directly (same pattern as storage_provider_setup).
-    ontap_storage_config_namespace: "osac-system"
+    storage_provider_config_namespace: "osac-system"
+    ontap_storage_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
     tenant_uid: "uid-test-ontap-3"
     _t_assignment_key: "{{ (('ontap-be-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
-    _t_prepared_secret: "osac-{{ _t_assignment_key }}-credentials"
-    _t_svm_name: "osac-{{ _t_assignment_key }}-svm"
+    _t_gold_tier_key: "{{ ('gold' | hash('sha256'))[:16] | lower }}"
+    _t_svm_name: "customer_mismatch_svm"
+    _t_svm_uuid: "uuid-svm-mismatch"
+    _t_qos_policy_name: "osac-{{ _t_assignment_key }}-{{ _t_gold_tier_key }}-qos"
     storage_provider_tiers:
       - name: gold
         protocol: block
         provider: ontap
         backend_id: ontap-be-1
+        encryption_enabled: false
+        qos_limits:
+          static_limits:
+            max_reads_bw_mbps: 0
+            max_writes_bw_mbps: 0
+          provider_config:
+            max_iops: 5000
     storage_provider_backend_connections:
       ontap-be-1:
         endpoint: "https://127.0.0.1:18444"
-        username: "admin"
-        password: "mock-admin-password"
+        username: "osac-discovery"
+        password: "mock-discovery-password"
+        tenant_preparation:
+          tenant_id: "id-test-ontap-mismatch"
+          source:
+            namespace: "trident"
+            name: "test-ontap-mismatch-info"
+            uid: "uid-source-secret-3"
+            resource_version: "1"
+          provider_config:
+            username: "trident_mismatch"
+            password: "svm-runtime-password"
+            svm: "{{ _t_svm_name }}"
 
   tasks:
-    - name: Reset the mock ONTAP server
-      ansible.builtin.uri:
-        url: "https://127.0.0.1:18444/_reset"
-        validate_certs: false
-        method: POST
-        status_code: [200]
-
-    - name: Delete any pre-existing prepared Secret (clean slate)
-      kubernetes.core.k8s:
-        state: absent
-        api_version: v1
-        kind: Secret
-        name: "{{ _t_prepared_secret }}"
-        namespace: "osac-system"
-      failed_when: false
-
-    - name: Register a live SVM with a different UUID
+    - name: Register the SVM for the QoS mismatch test
       ansible.builtin.uri:
         url: "https://127.0.0.1:18444/_svm"
         validate_certs: false
@@ -450,67 +424,57 @@
         body_format: json
         body:
           name: "{{ _t_svm_name }}"
-          uuid: "uuid-lives-on-cluster"
+          uuid: "{{ _t_svm_uuid }}"
         status_code: [201]
 
-    - name: Create the prepared Secret with mismatched annotations
-      kubernetes.core.k8s:
-        state: present
-        definition:
-          apiVersion: v1
-          kind: Secret
-          metadata:
-            name: "{{ _t_prepared_secret }}"
-            namespace: "osac-system"
-            annotations:
-              osac.openshift.io/storage-backend: "ontap-be-1"
-              osac.openshift.io/tenant: "{{ tenant_name }}"
-              osac.openshift.io/storage-resource-id: "uuid-does-not-match"
-              osac.openshift.io/storage-assignment-state: "available"
-          type: Opaque
-          stringData:
-            username: "svm-user"
-            password: "svm-password"
+    - name: Register a QoS policy with the wrong IOPS ceiling (9999 instead of 5000)
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18444/_qos_policy"
+        validate_certs: false
+        method: POST
+        body_format: json
+        body:
+          name: "{{ _t_qos_policy_name }}"
+          svm:
+            uuid: "{{ _t_svm_uuid }}"
+            name: "{{ _t_svm_name }}"
+          fixed:
+            max_throughput_iops: 9999
+            capacity_shared: false
+        status_code: [201]
 
-    - name: Attempt setup with mismatched annotations
+    - name: Attempt setup with mismatched QoS policy ceiling
       block:
         - name: Call storage_provider role with setup action
           ansible.builtin.include_role:
             name: osac.service.storage_provider
           vars:
             storage_provider_action: setup
-            ontap_storage_validate_certs: false
       rescue:
-        - name: Mark the mismatch test as passed
+        - name: Mark the QoS mismatch test as passed
           ansible.builtin.set_fact:
-            _ontap_mismatch_refused: true
+            _ontap_qos_mismatch_refused: true
 
-    - name: Assert the role refused the mismatched assignment
+    - name: Assert the role refused the mismatched QoS policy
       ansible.builtin.assert:
         that:
-          - _ontap_mismatch_refused | default(false) | bool
-        fail_msg: "Setup should have failed: the prepared Secret's annotations do not match the live SVM"
-        success_msg: "Setup correctly refused the mismatched prepared Secret"
+          - _ontap_qos_mismatch_refused | default(false) | bool
+        fail_msg: "Setup should have failed: the prepared QoS policy ceiling does not match max_iops"
+        success_msg: "Setup correctly refused the mismatched QoS policy"
 
 # ── Test 4: ensure_storage_class creates TBC + SCs, then short-circuits ──
 - name: "ONTAP Storage Provider - Ensure storage classes"
   hosts: localhost
   gather_facts: false
 
-  environment:
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
-
   vars:
     tenant_name: "test-ontap"
     tenant_namespace: "osac-system"
-    # lookup('env', ...) in role defaults runs controller-side and never sees
-    # the play-level environment: block (it only sets the module execution
-    # env) — set the namespace as a play var so it overrides the default
-    # directly (same pattern as storage_provider_setup).
-    ontap_storage_config_namespace: "osac-system"
+    storage_provider_config_namespace: "osac-system"
+    ontap_storage_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
     tenant_uid: "uid-test-ontap-1"
     _t_assignment_key: "{{ (('ontap-be-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
-    _t_prepared_secret: "osac-{{ _t_assignment_key }}-credentials"
+    _t_svm_name: "customer_acme_svm"
     _sc_gold: "ontap-{{ _t_assignment_key }}-{{ ('gold' | hash('sha256'))[:16] | lower }}"
     _sc_silver: "ontap-{{ _t_assignment_key }}-{{ ('silver' | hash('sha256'))[:16] | lower }}"
     storage_provider_tiers:
@@ -518,19 +482,34 @@
         protocol: block
         provider: ontap
         backend_id: ontap-be-1
+        encryption_enabled: true
       - name: silver
         protocol: block
         provider: ontap
         backend_id: ontap-be-1
+        encryption_enabled: false
         qos_limits:
           static_limits:
-            max_reads_bw_mbps: 100
-            max_writes_bw_mbps: 100
+            max_reads_bw_mbps: 0
+            max_writes_bw_mbps: 0
+          provider_config:
+            max_iops: 5000
     storage_provider_backend_connections:
       ontap-be-1:
         endpoint: "https://127.0.0.1:18444"
-        username: "admin"
-        password: "mock-admin-password"
+        username: "osac-discovery"
+        password: "mock-discovery-password"
+        tenant_preparation:
+          tenant_id: "id-test-ontap"
+          source:
+            namespace: "trident"
+            name: "test-ontap-primary-info"
+            uid: "uid-source-secret-1"
+            resource_version: "42"
+          provider_config:
+            username: "trident_test_ontap"
+            password: "svm-runtime-password"
+            svm: "{{ _t_svm_name }}"
 
   tasks:
     - name: Reset the mock ONTAP server
@@ -539,19 +518,6 @@
         validate_certs: false
         method: POST
         status_code: [200]
-
-    - name: Re-claim the prepared Secret for the ensure test's tenant uid
-      kubernetes.core.k8s:
-        state: patched
-        api_version: v1
-        kind: Secret
-        name: "{{ _t_prepared_secret }}"
-        namespace: "osac-system"
-        resource_definition:
-          metadata:
-            annotations:
-              osac.openshift.io/storage-assignment-state: "claimed"
-              osac.openshift.io/storage-tenant-uid: "uid-test-ontap-1"
 
     - name: Delete any pre-existing TBC, CSI Secret, and StorageClasses (clean slate)
       kubernetes.core.k8s:
@@ -583,7 +549,6 @@
         name: osac.service.storage_provider
       vars:
         storage_provider_action: ensure_storage_class
-        ontap_storage_validate_certs: false
 
     - name: Read back the TBC
       kubernetes.core.k8s_info:
@@ -593,32 +558,33 @@
         namespace: trident
       register: _tbc
 
-    - name: Assert the TBC matches the contract spec
+    - name: Assert the TBC matches the PR#1553 contract spec
       ansible.builtin.assert:
         that:
           - _tbc.resources | length == 1
           - _tbc.resources[0].spec.storageDriverName == 'ontap-san'
           - _tbc.resources[0].spec.sanType == 'fcp'
           - _tbc.resources[0].spec.managementLIF == '127.0.0.1:18444'
-          - _tbc.resources[0].spec.svm == 'osac-' ~ _t_assignment_key ~ '-svm'
+          - _tbc.resources[0].spec.svm == _t_svm_name
           - _tbc.resources[0].spec.credentials.name == 'ontap-csi-' ~ _t_assignment_key
           - _tbc.resources[0].spec.storage | length == 2
-          # Raw pass-through: trustedCACertificate is the prepared Secret's
-          # base64 data value, NOT the decoded PEM (Trident decodes itself).
+          # trustedCACertificate comes from the mounted cluster CA bundle.
+          - _tbc.resources[0].spec.trustedCACertificate == _mock_ca_b64
+          # Gold has encryption_enabled: true and no QoS cap -> defaults.encryption == 'true', no qosPolicy.
           - >-
-            _tbc.resources[0].spec.trustedCACertificate
-            == _test_ca_pem | b64encode
-          # Silver has QoS limits → dispatcher-derived qos_policy → pool references
-          # the contract-named policy; gold has none → no qosPolicy on its pool.
+            (_tbc.resources[0].spec.storage | selectattr('name', 'equalto', 'gold') | list | first).defaults.encryption == 'true'
           - >-
-            (_tbc.resources[0].spec.storage | selectattr('name', 'equalto', 'silver') | list | first).qosPolicy
+            (_tbc.resources[0].spec.storage | selectattr('name', 'equalto', 'gold') | list | first).defaults.qosPolicy is not defined
+          # Silver has encryption_enabled: false and max_iops: 5000 -> defaults.encryption == 'false' and defaults.qosPolicy set.
+          - >-
+            (_tbc.resources[0].spec.storage | selectattr('name', 'equalto', 'silver') | list | first).defaults.encryption == 'false'
+          - >-
+            (_tbc.resources[0].spec.storage | selectattr('name', 'equalto', 'silver') | list | first).defaults.qosPolicy
             == 'osac-' ~ _t_assignment_key ~ '-' ~ (('silver' | hash('sha256'))[:16] | lower) ~ '-qos'
-          - >-
-            (_tbc.resources[0].spec.storage | selectattr('name', 'equalto', 'gold') | list | first).qosPolicy is not defined
         fail_msg: >-
           TBC does not match contract spec:
           {{ _tbc.resources[0].spec | to_json if _tbc.resources else 'no TBC' }}
-        success_msg: "TBC matches the netapp-onboarding contract spec"
+        success_msg: "TBC matches the PR#1553 netapp-onboarding contract spec"
 
     - name: Read back the CSI Secret
       kubernetes.core.k8s_info:
@@ -628,14 +594,14 @@
         namespace: trident
       register: _csi_secret
 
-    - name: Assert the CSI Secret exists in the trident namespace
+    - name: Assert the CSI Secret exists in the trident namespace with runtime credentials
       ansible.builtin.assert:
         that:
           - _csi_secret.resources | length == 1
-          - _csi_secret.resources[0].data.username | b64decode == 'svm-user'
-          - _csi_secret.resources[0].data.password | b64decode == 'svm-password'
+          - _csi_secret.resources[0].data.username | b64decode == 'trident_test_ontap'
+          - _csi_secret.resources[0].data.password | b64decode == 'svm-runtime-password'
         fail_msg: "CSI Secret missing or wrong credentials in the trident namespace"
-        success_msg: "CSI Secret carries the prepared SVM credentials"
+        success_msg: "CSI Secret carries the prepared SVM runtime credentials"
 
     - name: Read back the StorageClasses
       kubernetes.core.k8s_info:
@@ -651,8 +617,6 @@
       ansible.builtin.assert:
         that:
           - _scs.results | map(attribute='resources') | flatten | length == 2
-          # SCs are selected by exact name (tier names are hashed away in the
-          # contract naming), so map results back by name.
           - >-
             _scs.results[0].resources[0].metadata.labels['osac.openshift.io/storage-tier'] == 'gold'
           - >-
@@ -704,7 +668,6 @@
         name: osac.service.storage_provider
       vars:
         storage_provider_action: ensure_storage_class
-        ontap_storage_validate_certs: false
 
     - name: Assert the output is stable across the short-circuit run
       ansible.builtin.assert:
@@ -734,33 +697,18 @@
         success_msg: "Short-circuit run made no ONTAP API calls"
 
 # ── Test 4.5: ensure_storage_class fails fast on a Failed TBC phase ──
-# The stub operator patches every TBC to Bound, so observing a Failed phase
-# requires the stub out of the way. Scale it to zero, pre-create this
-# tenant's contract-named TBC with phase Failed (kubectl status-subresource
-# patch — the main-resource write path drops status changes because the CRD
-# enables the status subresource, which is also why the stub uses kubectl),
-# then run the role's provisioning path: it applies the full spec to the
-# pre-existing TBC (status survives a spec-only update), the wait loop
-# observes Failed, and the role must abort immediately with the TBC's status
-# message instead of exhausting the 12 retries.
 - name: "ONTAP Storage Provider - Ensure fails fast on Failed TBC"
   hosts: localhost
   gather_facts: false
 
-  environment:
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
-
   vars:
     tenant_name: "test-ontap"
     tenant_namespace: "osac-system"
-    # lookup('env', ...) in role defaults runs controller-side and never sees
-    # the play-level environment: block (it only sets the module execution
-    # env) — set the namespace as a play var so it overrides the default
-    # directly (same pattern as storage_provider_setup).
-    ontap_storage_config_namespace: "osac-system"
+    storage_provider_config_namespace: "osac-system"
+    ontap_storage_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
     tenant_uid: "uid-test-ontap-1"
     _t_assignment_key: "{{ (('ontap-be-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
-    _t_prepared_secret: "osac-{{ _t_assignment_key }}-credentials"
+    _t_svm_name: "customer_acme_svm"
     _sc_gold: "ontap-{{ _t_assignment_key }}-{{ ('gold' | hash('sha256'))[:16] | lower }}"
     _sc_silver: "ontap-{{ _t_assignment_key }}-{{ ('silver' | hash('sha256'))[:16] | lower }}"
     storage_provider_tiers:
@@ -768,19 +716,34 @@
         protocol: block
         provider: ontap
         backend_id: ontap-be-1
+        encryption_enabled: true
       - name: silver
         protocol: block
         provider: ontap
         backend_id: ontap-be-1
+        encryption_enabled: false
         qos_limits:
           static_limits:
-            max_reads_bw_mbps: 100
-            max_writes_bw_mbps: 100
+            max_reads_bw_mbps: 0
+            max_writes_bw_mbps: 0
+          provider_config:
+            max_iops: 5000
     storage_provider_backend_connections:
       ontap-be-1:
         endpoint: "https://127.0.0.1:18444"
-        username: "admin"
-        password: "mock-admin-password"
+        username: "osac-discovery"
+        password: "mock-discovery-password"
+        tenant_preparation:
+          tenant_id: "id-test-ontap"
+          source:
+            namespace: "trident"
+            name: "test-ontap-primary-info"
+            uid: "uid-source-secret-1"
+            resource_version: "42"
+          provider_config:
+            username: "trident_test_ontap"
+            password: "svm-runtime-password"
+            svm: "{{ _t_svm_name }}"
 
   tasks:
     - name: Scale the stub Trident operator to zero
@@ -856,7 +819,6 @@
             name: osac.service.storage_provider
           vars:
             storage_provider_action: ensure_storage_class
-            ontap_storage_validate_certs: false
       rescue:
         - name: Capture the failure message for the assertion
           ansible.builtin.set_fact:
@@ -892,8 +854,6 @@
         label_selectors:
           - "app=stub-trident-operator"
       register: _stub_pods_restored
-      # Ready-condition check, not status.phase: a crash-looping pod still
-      # reports phase Running for the moments between container failures.
       until: >-
         _stub_pods_restored.resources | length > 0
         and (_stub_pods_restored.resources[0].status.conditions
@@ -907,20 +867,13 @@
   hosts: localhost
   gather_facts: false
 
-  environment:
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
-
   vars:
     tenant_name: "test-ontap"
     tenant_namespace: "osac-system"
-    # lookup('env', ...) in role defaults runs controller-side and never sees
-    # the play-level environment: block (it only sets the module execution
-    # env) — set the namespace as a play var so it overrides the default
-    # directly (same pattern as storage_provider_setup).
-    ontap_storage_config_namespace: "osac-system"
+    storage_provider_config_namespace: "osac-system"
     tenant_uid: "uid-test-ontap-1"
     _t_assignment_key: "{{ (('ontap-be-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
-    _t_prepared_secret: "osac-{{ _t_assignment_key }}-credentials"
+    _t_lifecycle_secret: "ontap-tenant-{{ _t_assignment_key }}"
     storage_provider_tiers:
       - name: gold
         protocol: block
@@ -929,8 +882,8 @@
     storage_provider_backend_connections:
       ontap-be-1:
         endpoint: "https://127.0.0.1:18444"
-        username: "admin"
-        password: "mock-admin-password"
+        username: "osac-discovery"
+        password: "mock-discovery-password"
 
   tasks:
     - name: Call storage_provider role with teardown_backend action
@@ -938,32 +891,26 @@
         name: osac.service.storage_provider
       vars:
         storage_provider_action: teardown_backend
-        ontap_storage_validate_certs: false
 
-    - name: Read back the prepared Secret
+    - name: Read back the hub lifecycle Secret
       kubernetes.core.k8s_info:
         api_version: v1
         kind: Secret
-        name: "{{ _t_prepared_secret }}"
+        name: "{{ _t_lifecycle_secret }}"
         namespace: "osac-system"
       register: _released_secret
 
-    - name: Assert the claim was released to retained
+    - name: Assert the lifecycle Secret was retained
       ansible.builtin.assert:
         that:
           - _released_secret.resources | length == 1
-          - _released_secret.resources[0].metadata.annotations['osac.openshift.io/storage-assignment-state'] == 'retained'
+          - _released_secret.resources[0].data.lifecycle_stage | b64decode == 'retained'
         fail_msg: >-
-          Expected state=retained after teardown_backend, got
-          {{ _released_secret.resources[0].metadata.annotations | default({}) | to_json if _released_secret.resources else 'secret gone' }}
-        success_msg: "Claim released to retained"
+          Expected lifecycle_stage=retained after teardown_backend, got
+          {{ _released_secret.resources[0].data | default({}) | to_json if _released_secret.resources else 'secret gone' }}
+        success_msg: "Hub lifecycle Secret marked as retained"
 
 # ── Test 6: teardown_cluster_storage removes TBC and SCs ──
-# Includes a drift scenario: a second backend's TBC + CSI Secret carry the
-# tenant/provider/managed-by labels but their names are NOT derivable from
-# the currently dispatched tiers (simulating a backend removed from the
-# tenant's tiers after its resources were created). Teardown must remove
-# them too — otherwise an orphaned TBC with live CSI credentials survives.
 - name: "ONTAP Storage Provider - Teardown cluster storage"
   hosts: localhost
   gather_facts: false
@@ -971,11 +918,7 @@
   vars:
     tenant_name: "test-ontap"
     tenant_namespace: "osac-system"
-    # lookup('env', ...) in role defaults runs controller-side and never sees
-    # the play-level environment: block (it only sets the module execution
-    # env) — set the namespace as a play var so it overrides the default
-    # directly (same pattern as storage_provider_setup).
-    ontap_storage_config_namespace: "osac-system"
+    storage_provider_config_namespace: "osac-system"
     _t_assignment_key: "{{ (('ontap-be-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
     _drift_assignment_key: "{{ (('ontap-be-drifted' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
     storage_provider_tiers:
@@ -986,8 +929,8 @@
     storage_provider_backend_connections:
       ontap-be-1:
         endpoint: "https://127.0.0.1:18444"
-        username: "admin"
-        password: "mock-admin-password"
+        username: "osac-discovery"
+        password: "mock-discovery-password"
 
   tasks:
     - name: Seed a drifted backend's labeled TBC and CSI Secret
@@ -1024,7 +967,6 @@
         name: osac.service.storage_provider
       vars:
         storage_provider_action: teardown_cluster_storage
-        ontap_storage_validate_certs: false
 
     - name: Read back the TBCs by label
       kubernetes.core.k8s_info:
@@ -1089,10 +1031,10 @@
 
   vars:
     _t_assignment_key: "{{ (('ontap-be-1' ~ '|' ~ 'test-ontap') | hash('sha256'))[:16] | lower }}"
-    _mismatch_key: "{{ (('ontap-be-1' ~ '|' ~ 'test-ontap-mismatch') | hash('sha256'))[:16] | lower }}"
+    _mismatch_key: "{{ (('ontap-be-1' ~ '|' ~ 'test-ontap-qos-mismatch') | hash('sha256'))[:16] | lower }}"
 
   tasks:
-    - name: Delete the prepared Secrets
+    - name: Delete the test hub lifecycle Secrets
       kubernetes.core.k8s:
         state: absent
         api_version: v1
@@ -1100,8 +1042,8 @@
         name: "{{ item }}"
         namespace: "osac-system"
       loop:
-        - "osac-{{ _t_assignment_key }}-credentials"
-        - "osac-{{ _mismatch_key }}-credentials"
+        - "ontap-tenant-{{ _t_assignment_key }}"
+        - "ontap-tenant-{{ _mismatch_key }}"
       failed_when: false
 
     - name: Delete the stub Trident operator

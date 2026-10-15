@@ -49,7 +49,9 @@ def test_public_networking_exposes_lifecycle_methods(jwt_grpc_tenant1: GRPCClien
     unique_probe = "osac-5374-contract-probe"
 
     response: dict = jwt_grpc_tenant1.call(service=f"{PUBLIC_API}.{service}/List")
-    assert "items" in response
+    # A successful empty List omits the repeated items field in protojson
+    # output, so an empty dict is a valid empty list result.
+    assert isinstance(response.get("items", []), list)
 
     with pytest.raises(subprocess.CalledProcessError) as exc_info:
         jwt_grpc_tenant1.call(service=f"{PUBLIC_API}.{service}/Get", data={"id": unique_probe})
@@ -73,7 +75,9 @@ def test_public_external_ip_pool_exposes_only_read_methods(jwt_grpc_tenant1_admi
     unique_probe = "osac-5374-contract-probe"
 
     response: dict = jwt_grpc_tenant1_admin.call(service=f"{PUBLIC_API}.ExternalIPPools/List")
-    assert "items" in response
+    # A successful empty List omits the repeated items field in protojson
+    # output, so an empty dict is a valid empty list result.
+    assert isinstance(response.get("items", []), list)
 
     for method, data in [
         ("Create", {"object": {"metadata": {"name": unique_probe}}}),

@@ -184,6 +184,7 @@ aap:
   instanceGroups:
     storageFulfillment:
       enabled: true
+      enable_certificate_validation: false
 
 # --- Validation ---
 validation:

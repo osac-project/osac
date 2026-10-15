@@ -53,8 +53,8 @@
     # boundary. `environment:` is a stricter trap than vars: -- it only wraps module
     # subprocess execution and never affects lookup('env', ...) calls at all (those read
     # the controller process's real OS environment directly), even within the SAME play.
-    # vast_storage_config_namespace/vast_storage_validate_certs' defaults are exactly such
-    # lookup('env', ...) expressions.
+    # vast_storage_config_namespace and enable_certificate_validation resolve through
+    # lookup('env', ...), so `environment:` does not override their defaults.
     - name: Set vast_storage_* config as cross-play facts
       ansible.builtin.set_fact:
         vast_storage_config_namespace: "osac-system"

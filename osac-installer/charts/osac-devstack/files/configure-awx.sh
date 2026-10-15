@@ -49,10 +49,23 @@ configure_awx() {
     -H "Content-Type: application/json" \
     -d '{"name": "localhost", "variables": "ansible_connection: local"}' >/dev/null 2>&1 || true
 
-  # Disable collection/role sync and set ANSIBLE_JINJA2_NATIVE=true for osac-aap playbooks.
-  curl -s -X PATCH "${api}/settings/jobs/" -H "Authorization: Bearer ${awx_token}" \
+  # Disable collection/role sync and pass OSAC task environment settings to AWX jobs.
+  local jobs_settings current_task_env
+  jobs_settings=$(curl -fsS -H "Authorization: Bearer ${awx_token}" "${api}/settings/jobs/")
+  current_task_env=$(jq -c '.AWX_TASK_ENV // {}' <<<"${jobs_settings}")
+  curl -sSf -X PATCH "${api}/settings/jobs/" -H "Authorization: Bearer ${awx_token}" \
     -H "Content-Type: application/json" \
-    -d '{"AWX_COLLECTIONS_ENABLED": false, "AWX_ROLES_ENABLED": false, "AWX_TASK_ENV": {"ANSIBLE_JINJA2_NATIVE": "true"}}' >/dev/null
+    -d "$(jq -cn \
+      --argjson current_task_env "${current_task_env}" \
+      --arg certificate_validation "${ENABLE_CERTIFICATE_VALIDATION:-true}" \
+      '{
+        AWX_COLLECTIONS_ENABLED: false,
+        AWX_ROLES_ENABLED: false,
+        AWX_TASK_ENV: ($current_task_env + {
+          ANSIBLE_JINJA2_NATIVE: "true",
+          ENABLE_CERTIFICATE_VALIDATION: $certificate_validation
+        })
+      }')" >/dev/null
 
   # Project from the osac mono-repo.
   local project_id

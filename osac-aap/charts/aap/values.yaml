@@ -58,6 +58,8 @@ instanceGroups:
     secret: {}
   storageFulfillment:
     enabled: false
+    # Applies to TLS validation in storage-workflow Ansible clients only.
+    enable_certificate_validation: true
     config: {}
     secret: {}
   publishTemplates:

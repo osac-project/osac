@@ -16,7 +16,21 @@ profile_values=(
   --values values/dev/kind-instance.yaml
   --values values/dev/kind-instance-devfull.yaml
 )
+default_configure_awx_render=$(helm template test charts/osac-devstack --namespace osac \
+  --show-only templates/hooks/configure-awx.yaml)
+if ! grep -Fq 'name: ENABLE_CERTIFICATE_VALIDATION' <<<"${default_configure_awx_render}" \
+  || ! grep -Fq 'value: "true"' <<<"${default_configure_awx_render}"; then
+  echo "devstack AWX configuration must default certificate validation to enabled" >&2
+  exit 1
+fi
 chart_render=$(helm template test charts/osac-devstack --namespace osac "${profile_values[@]}")
+configure_awx_render=$(helm template test charts/osac-devstack --namespace osac \
+  "${profile_values[@]}" --show-only templates/hooks/configure-awx.yaml)
+if ! grep -Fq 'name: ENABLE_CERTIFICATE_VALIDATION' <<<"${configure_awx_render}" \
+  || ! grep -Fq 'value: "false"' <<<"${configure_awx_render}"; then
+  echo "dev-full AWX configuration must receive the profile's certificate-validation setting" >&2
+  exit 1
+fi
 ui_render=$(helm template test charts/osac-devstack --namespace osac "${profile_values[@]}" \
   --set ui.enabled=true --show-only templates/ui.yaml)
 if ! grep -Fq 'FULFILLMENT_TLS_INSECURE: "0"' <<<"$ui_render" \
@@ -104,6 +118,13 @@ rendered_script() {
      in_script && /^  [^ ]/ { exit }
      in_script { sub(/^    /, ""); print }' <<<"$chart_render"
 }
+
+configure_awx_script=$(rendered_script "configure-awx.sh")
+if ! grep -Fq 'ENABLE_CERTIFICATE_VALIDATION: $certificate_validation' <<<"${configure_awx_script}" \
+  || ! grep -Fq 'AWX_TASK_ENV: ($current_task_env +' <<<"${configure_awx_script}"; then
+  echo "dev-full AWX jobs must preserve and extend their task environment with the profile setting" >&2
+  exit 1
+fi
 
 seed_catalog_script=$(rendered_script "seed-catalog-simple.sh")
 if ! grep -Fq 'AUTH_TOKEN="$(get_fulfillment_access_token)"' <<<"$seed_catalog_script" \

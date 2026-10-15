@@ -223,6 +223,12 @@ the certificate. The Kind
 `SUITE=fulfillment` target exercises deployed startup and API behavior, subject
 to the profile's configured CA and enabled services.
 
+### Storage workflow certificate-validation setting
+
+| Tier | Location / command | Exercises for real | Faked or omitted |
+|---|---|---|---|
+| Helm contract (DEV) | `make certificate-validation-render-test` and `make dev-full-render-test` from `osac-installer/` | Schema, secure default, CI/dev overrides, and rendered AAP storage-group/AWX task environment | Does not start AAP/AWX or execute a job; Ansible client behavior is covered by `osac-aap` tests. |
+
 ### OSAC-5343 deployed enablement coverage
 
 The release E2E path adds these assertions to existing user journeys. The
@@ -433,8 +439,10 @@ Touched-area requirements: [component guide](../osac-aap/AGENTS.md#integration-t
 | Unit | `tests/unit/`; `uv run pytest tests/unit` | Filter and isolated plugin behavior | Kubernetes, AAP, cloud, and storage services are mocked or fixture-driven. |
 | Unit | `tests/unit/plugins/lookup/test_fulfillment_token.py`; included by `uv run pytest tests/unit` | OIDC discovery validation, Keycloak client-credentials exchange, token caching/refresh, and sanitized failures | Keycloak and Fulfillment are mocked; this does not prove deployed credentials or cross-cluster reachability. |
 | Unit | `tests/unit/test_publish_templates_auth_config.py`; included by `uv run pytest tests/unit` | Parsed publisher pod spec, Kubernetes service-account projection, and OAuth Secret/ConfigMap references | No Kubernetes objects are created and no AAP API or external issuer is contacted. |
+| Unit | `tests/unit/test_storage_certificate_validation.py`; included by `uv run pytest tests/unit` | Runtime policy parsing and every storage-role TLS option's use of the shared setting | No HTTP request is made; does not prove a deployed AAP/AWX job receives the rendered environment. |
 | Unit / isolated role transform ([DEV]) | `uv run --group development ansible-playbook collections/ansible_collections/osac/service/roles/hosted_cluster/tests/test.yml` | Executable NodePool definition transforms: distinct NodeSet names and selectors for the same hardware profile, independent replica counts and scale-up | No Kubernetes resources are created. This is not component-integration or deployed AAP/provider coverage; those gaps remain owned by [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843). |
 | Component integration | `tests/integration/`; `make test` (creates Kind, runs playbooks, and tears it down) | Ansible roles/playbooks against real Kind APIs, including a second isolated API for storage target routing, plus CRDs, leases, finalizers, and test-runner pod | AAP, OpenStack, KubeVirt/RHACM, and other provider APIs are not generally real; the VMS storage target uses a mock server. |
+| Component integration (storage TLS) | From `osac-aap/`, run `STORAGE_TESTS_ENABLED=true make test` | Storage Ansible tasks and the Python module client against the existing local HTTPS fixture; test variables exercise disabled validation | No deployed AAP/AWX or real storage service is used; secure-default behavior is asserted by the unit policy and task-wiring test. |
 | Unit ([DEV] OSAC-6306) | `tests/unit/test_agentless_network_state.py`; included by `uv run pytest tests/unit` | Current SQLite schema-v1 initialization and validation, UID-owned pool registration/deletion, identity preservation, and rejection of incompatible schemas without migration | SQLite is real and isolated in temporary files. `ip`, systemd/Supervisor, dnsmasq, namespaces, switches, and AAP are not used by pool-state operations. |
 | Contract | `tests/integration/targets/agentless_net_stub/tasks/baseline.yml`; from `tests/integration/` run `ansible-playbook targets/agentless_net_stub/tasks/baseline.yml -e '@common_vars.yml'` | Fresh Ansible processes run `files/validate_vn_inventory.yml`: real environment lookup, YAML parsing, Cumulus/trunk validation, password rejection, and node/switch registration | AAP, SSH, and Linux/switch provider operations are omitted. |
 | Component integration | `tests/integration/targets/agentless_net_subnet/tasks/baseline.yml`; from `tests/integration/` run `ansible-playbook targets/agentless_net_subnet/tasks/baseline.yml -e '@common_vars.yml'` | Real Kind namespace and VirtualNetwork CR, status-subresource update, and validation of the operator-supplied parent Fulfillment UUID, Kubernetes UID, Ready phase, and tenant | Operator reconciliation, AAP, managed-node SSH, Cumulus switches, Linux VLAN interfaces, and DHCP are omitted. |

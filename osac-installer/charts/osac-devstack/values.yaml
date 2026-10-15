@@ -1,6 +1,11 @@
 # OSAC dev-full local development stack
 osacNamespace: osac
 kindClusterName: osac-dev
+aap:
+  instanceGroups:
+    storageFulfillment:
+      # Applies to TLS validation in storage-workflow Ansible clients only.
+      enable_certificate_validation: true
 # Multi-arch CLI image for hook Jobs (supports amd64, arm64, etc.).
 # The upstream quay.io/openshift/origin-cli:4.20.0 only supports amd64, blocking Mac ARM users.
 # Build the custom multi-arch image with: make -C charts/osac-devstack build-cli-tools

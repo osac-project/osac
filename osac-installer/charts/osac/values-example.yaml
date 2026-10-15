@@ -336,6 +336,10 @@ aap:
   # AAP instance groups. The global.networking facade supplies the network
   # fields; use these blocks for enablement and expert-only overrides.
   instanceGroups:
+    storageFulfillment:
+      enabled: false
+      # Applies to TLS validation in storage-workflow Ansible clients only.
+      enable_certificate_validation: true
     clusterFulfillment:
       enabled: false
       config:

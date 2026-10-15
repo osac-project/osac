@@ -204,7 +204,7 @@ kind: Namespace
 metadata:
   name: cert-manager-operator
 ---
-apiVersion: operators.coreos.com
+apiVersion: operators.coreos.com/v1
 kind: OperatorGroup
 metadata:
   name: cert-manager-operator
@@ -251,7 +251,10 @@ oc get csv -A --no-headers | awk '{print $1, $2, $NF}'
 
 ```bash
 # 1. Verify CatalogSource is READY
-oc get catalogsource -n openshift-marketplace -o wide
+oc get catalogsource redhat-operators -n openshift-marketplace \
+  -o jsonpath='{.status.connectionState.lastObservedState}{"\n"}'
+# Expected output: READY
+# If not READY, check catalog pod logs in openshift-marketplace
 
 # 2. Verify all 7 Subscriptions exist and are healthy
 oc get subscriptions -A -o custom-columns=\

@@ -27,7 +27,7 @@ post-OSAC-4558 OCI reference approach.
 | Metal3 / Ironic agent services deployed by MCE | `oc get pods -n multicluster-engine -l app=metal3` |
 | Assisted-service (infrastructure-operator) is running | `oc get pods -n multicluster-engine -l app=assisted-service` |
 | BMaaS enabled in OSAC Helm values | `bmaas.enabled: true` in values file |
-| Mirror registry reachable from cluster nodes (kubelet/CRI-O) | `oc debug node/<node> -- chroot /host curl -sSf https://<registry>:8443/v2/ -k` |
+| Mirror registry reachable and trusted from cluster nodes | Connectivity: `oc debug node/<node> -- chroot /host curl -sSf https://<registry>:8443/v2/ -k`; trust and pull readiness: `oc debug node/<node> -- chroot /host crictl pull <mirror-registry>:8443/<test-image>` |
 | BMC endpoints reachable via Redfish/IPMI from provisioning network | BMC responds: `curl -k https://<bmc-ip>/redfish/v1/Systems` |
 
 ## Resources Required
@@ -93,8 +93,15 @@ The `multicluster-engine` operator catalog, mirrored in Category 1A,
 includes most Metal3 agent images.  Verify they are present:
 
 ```bash
-# Check that MCE-related images are in the mirror
+# Verify IDMS mirror rules include MCE/assisted entries
+# (this confirms mirror configuration, not that images are
+# present — test a pull to verify registry content)
 oc get idms -o yaml | grep -i "multicluster-engine\|assisted"
+
+# Verify a mirrored image is actually pullable using
+# the original upstream reference (IDMS redirects to mirror)
+oc debug node/<node> -- chroot /host \
+  crictl pull registry.redhat.io/multicluster-engine/assisted-installer-rhel9:<version>
 ```
 
 ### Step 2 — Add any additional agent images (if needed)
@@ -109,11 +116,16 @@ oc-mirror --v2 --config=imageset-config.yaml --workspace \
 
 ### Step 3 — Apply IDMS (disconnected cluster)
 
-Metal3 agent images are typically referenced by digest, so they require
-an **ImageDigestMirrorSet** (IDMS):
+Metal3 agent images mirrored from the MCE operator catalog are
+typically referenced by digest and require an **ImageDigestMirrorSet**
+(IDMS).  If you added tagged `additionalImages` entries, also apply
+the generated **ImageTagMirrorSet** (ITMS):
 
 ```bash
 oc apply -f oc-mirror-workspace/working-dir/cluster-resources/idms-oc-mirror.yaml
+
+# Also apply ITMS if any additionalImages use tag references
+oc apply -f oc-mirror-workspace/working-dir/cluster-resources/itms-oc-mirror.yaml 2>/dev/null || true
 ```
 
 ### Step 4 — Configure AgentServiceConfig for disconnected
@@ -121,7 +133,11 @@ oc apply -f oc-mirror-workspace/working-dir/cluster-resources/idms-oc-mirror.yam
 The `AgentServiceConfig` CR controls where the assisted-service looks
 for OS images.  Configure its `.spec.osImages` per the
 [multicluster engine for Kubernetes documentation](https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.13/html/clusters/cluster_mce_overview)
-so that it points at images reachable from the provisioning network.
+so that it points at images reachable from both the provisioning
+network **and** the assisted-image-service pod network.  The
+assisted-image-service pod fetches the configured OS images to
+build discovery artifacts; if the URL is unreachable from the pod
+network, BMaaS discovery cannot proceed.
 
 Add entries for each OpenShift version your deployment supports:
 
@@ -131,6 +147,18 @@ kind: AgentServiceConfig
 metadata:
   name: agent
 spec:
+  databaseStorage:
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: 10Gi
+  filesystemStorage:
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: 20Gi
   osImages:
     - openshiftVersion: "4.22"
       version: "422.94.202503170640-0"
@@ -162,8 +190,9 @@ Verify the `AgentServiceConfig` contains the expected
 oc get agentserviceconfig agent -o json | jq '.spec.osImages'
 ```
 
-Each entry must reference a URL accessible from the provisioning
-network — typically a local HTTP server on the bastion host.
+Each entry must reference a URL accessible from both the
+provisioning network and the assisted-image-service pod network —
+typically a local HTTP server on the bastion host.
 
 ### Step 5 — Configure BareMetalHost resources
 

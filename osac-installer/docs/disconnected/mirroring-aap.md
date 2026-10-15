@@ -122,10 +122,10 @@ oc create secret generic config-as-code-manifest-ig --from-file=license.zip="$AA
 
 ```bash
 # Wait for AAP controller to become ready
-oc get pods -n "$NS" -l app.kubernetes.io/managed-by=automationcontroller-operator
+oc get pods -n ansible-aap -l app.kubernetes.io/managed-by=automationcontroller-operator
 
 # Check AAP controller route
-oc get route -n "$NS"
+oc get route -n ansible-aap
 ```
 
 ## Validation Commands
@@ -153,7 +153,7 @@ oc get route -n ansible-aap -o jsonpath='{.items[0].spec.host}'
 oc get secret config-as-code-manifest-ig -n $NS
 
 # 7. Verify osac-aap integration pod
-oc get pods -n osac -l app.kubernetes.io/name=osac-aap
+oc get pods -n "$NS" -l app.kubernetes.io/name=osac-aap
 ```
 
 ## Troubleshooting

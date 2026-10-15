@@ -69,7 +69,7 @@ Mirror VM disk images (containerdisks) for VMaaS:
 
 - Containerdisk `additionalImages` entries
 - ITMS configuration for tag-based image resolution
-- The repository visibility must be set to 'public' and allow anonymous pulls.
+- Each mirror-registry repository storing a VM containerdisk must allow anonymous CDI pulls; CDI receives no registry credentials for these imports (this does not apply to the upstream registry or unrelated repositories)
 
 ### [Category 1D: Mirroring BMaaS Images](mirroring-bmaas.md)
 
@@ -137,7 +137,7 @@ flowchart TD
     end
 
     ISC -.->|"extend ISC"| CAT_1C
-    ISC -.->|"via MCE catalog"| CAT_1D
+    ISC -.->|"MCE catalog + additionalImages"| CAT_1D
     ISC -.->|"via AAP catalog"| CAT_1E
 
     subgraph CAT_1C["Category 1C: VMaaS"]

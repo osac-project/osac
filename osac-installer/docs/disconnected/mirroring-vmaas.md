@@ -25,6 +25,7 @@ mirror registry with anonymous pull access.
 | `HyperConverged` CR created (Phase 1b) | `oc get hyperconverged -n openshift-cnv` |
 | CDI (Containerized Data Importer) is running | `oc get pods -n openshift-cnv -l app=cdi-operator` |
 | Mirror registry reachable and trusted from cluster nodes | `oc debug node/<node> -- chroot /host curl -sS https://<registry>:8443/v2/` (no `-k`) — an HTTP 401 response confirms reachability and CA trust; see [Registry TLS trust](#registry-tls-trust) |
+| Mirror registry reachable from importer pod network | CDI importer pods pull containerdisks from their own network, not through CRI-O; verify DNS resolution and an L3 route or gateway from the importer pod network to the mirror registry — a NetworkPolicy or SecurityGroup egress rule alone does not provide a route |
 | VMaaS is enabled in OSAC Helm values | `vmaas.enabled: true` in values file |
 
 ## Resources Required
@@ -142,22 +143,30 @@ upstream registry.  In a strictly disconnected environment, set
 to guarantee no upstream contact is attempted:
 
 ```bash
-# Patch each containerdisk source entry in the generated ITMS
-# before applying, or edit the applied resource:
-oc get itms itms-oc-mirror -o json | \
-  jq '(.spec.imageTagMirrors[] |
-    select(.source | test("containerdisk|rhel-guest")))
-    .mirrorSourcePolicy = "NeverContactSource"' | \
-  oc apply -f -
+# Patch every generated ITMS resource whose sources match the
+# containerdisk images.  oc-mirror v2 may generate ITMS
+# resources with names like itms-generic-0; discover them
+# dynamically rather than assuming a fixed name.
+for itms_name in $(oc get itms -o json | \
+  jq -r '[.items[] |
+    select(.spec.imageTagMirrors[]? |
+      .source | test("containerdisk|rhel-guest"))] |
+    unique_by(.metadata.name)[] | .metadata.name'); do
+  oc get itms "$itms_name" -o json | \
+    jq '(.spec.imageTagMirrors[] |
+      select(.source | test("containerdisk|rhel-guest")))
+      .mirrorSourcePolicy = "NeverContactSource"' | \
+    oc apply -f -
+done
 ```
 
 Verify the policy is set:
 
 ```bash
-oc get itms itms-oc-mirror -o json | \
-  jq '.spec.imageTagMirrors[] |
+oc get itms -o json | \
+  jq '[.items[].spec.imageTagMirrors[] |
     select(.source | test("containerdisk|rhel-guest")) |
-    {source, mirrorSourcePolicy}'
+    {source, mirrorSourcePolicy}]'
 ```
 
 ### Step 4 — Configure CDI for disconnected registry imports
@@ -239,6 +248,12 @@ oc patch proxy cluster --type merge \
 oc wait mcp --all --for=condition=Updated --timeout=30m
 ```
 
+> **Preserve existing CA bundles**: if the cluster proxy already
+> references a `trustedCA` ConfigMap, the patch above replaces that
+> reference.  Merge the mirror registry certificate into the
+> existing bundle ConfigMap instead, or use these commands only
+> when no other custom CA bundle is configured.
+
 Verify from a node — the request must succeed **without** `-k`;
 an HTTP `401` response is normal (the registry's anonymous token
 challenge), and a TLS error means the CA is not yet distributed:
@@ -267,10 +282,9 @@ Virtualization — so discover its name instead of assuming `cdi`:
 # cluster-wide.  This script preserves any existing entries.
 MIRROR_REG="<mirror-registry>:8443"
 CDI_CR=$(oc get cdi -o jsonpath='{.items[0].metadata.name}')
-CURRENT=$(oc get cdi "$CDI_CR" \
-  -o jsonpath='{.spec.config.insecureRegistries}' \
-  2>/dev/null)
-UPDATED=$(echo "${CURRENT:-[]}" | \
+CURRENT=$(oc get cdi "$CDI_CR" -o json | \
+  jq -c '.spec.config.insecureRegistries // []')
+UPDATED=$(echo "$CURRENT" | \
   jq --arg r "$MIRROR_REG" '. + [$r] | unique')
 oc patch cdi "$CDI_CR" --type merge \
   -p "$(jq -n --argjson regs "$UPDATED" \
@@ -349,9 +363,30 @@ osac get computeinstance mirror-validation -o yaml
 ```
 
 `RUNNING` with a populated `status.internal_ip_address` is the
-acceptance signal for this category: the CDI importer pulled the
-containerdisk from the mirror registry anonymously and the VM
-booted from it.  Delete the instance when done:
+first acceptance signal.  Before treating the category as
+validated, also confirm the full import chain with no reused
+PVC or DataVolume and no manual modifications:
+
+```bash
+# Verify the root DataVolume reached Succeeded (CDI import
+# completed from the mirror without an external registry
+# attempt):
+oc get datavolume -A -o custom-columns=\
+'NAME:.metadata.name,PHASE:.status.phase' | \
+  grep mirror-validation
+
+# Verify the backing VMI is Running:
+oc get vmi -A -o custom-columns=\
+'NAME:.metadata.name,PHASE:.status.phase' | \
+  grep mirror-validation
+```
+
+If the DataVolume does not reach `Succeeded` or the VMI does
+not reach `Running`, the CDI import path has a disconnected
+limitation — document it rather than claiming end-to-end
+VMaaS support.
+
+Delete the instance when done:
 
 ```bash
 osac delete computeinstance mirror-validation

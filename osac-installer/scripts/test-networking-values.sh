@@ -81,6 +81,23 @@ render_failure() {
   fi
 }
 
+render_failure_with_message() {
+  local name=$1
+  local expected=$2
+  shift 2
+
+  local error="${TMP_DIR}/${name}.stderr"
+  echo "checking ${name} (expected failure containing ${expected@Q})"
+  if "${HELM_BIN}" "${COMMON_ARGS[@]}" "$@" >"/dev/null" 2>"${error}"; then
+    echo "ERROR: ${name} unexpectedly rendered successfully" >&2
+    exit 1
+  fi
+  if ! grep -Fq -- "${expected}" "${error}"; then
+    echo "ERROR: ${name} failed without expected message ${expected@Q}" >&2
+    exit 1
+  fi
+}
+
 # Render the operator chart directly so we can exercise the
 # networkManagerCapabilities helper with both array and legacy string forms
 # without the umbrella schema forcing capabilities to be an array.
@@ -250,7 +267,7 @@ fi
 
 # Protected connection settings cannot be supplied through low-level AAP maps,
 # including when unrelated expert overrides are enabled.
-render_failure \
+render_failure_with_message \
   netris-protected-validate-certs-disabled \
   'managed by global.networking.netris' \
   --set global.expertOverrides.aap=true \

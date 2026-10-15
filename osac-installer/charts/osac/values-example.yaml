@@ -343,7 +343,6 @@ aap:
         HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: ""
         HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: ""
       secret:
-        NETRIS_PASSWORD: ""
         AWS_ACCESS_KEY_ID: ""
         AWS_SECRET_ACCESS_KEY: ""
         SERVER_SSH_KEY: ""
@@ -351,8 +350,7 @@ aap:
     networkFulfillment:
       enabled: false
       config: {}
-      secret:
-        NETRIS_PASSWORD: ""
+      secret: {}
     publishTemplates:
       enabled: true
       config:

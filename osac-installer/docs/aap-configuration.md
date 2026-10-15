@@ -33,9 +33,11 @@ installation. Ordinary resource variables remain launchable because
 `ask_variables_on_launch` stays enabled.
 
 Netris jobs use the managed cluster-fulfillment or networking-operations
-instance group with fallback disabled. A direct AAP launch that changes a
-protected setting fails before an HTTP request. Use the global networking
-facade to change these settings, then reconcile the Helm release.
+instance group with fallback disabled. Their protected strategy validates the
+original Ansible Runner `extra_vars` before the first task. A direct AAP launch
+that includes a protected key fails before an HTTP request, even when the value
+would otherwise be ignored. Use the global networking facade to change these
+settings, then reconcile the Helm release.
 
 ## How It Works
 

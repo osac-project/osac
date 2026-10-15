@@ -191,6 +191,16 @@
             | selectattr('value', 'equalto', '')
             | list | length == 1
           - >-
+            _networking_pod.spec.containers[0].env
+            | selectattr('name', 'equalto', 'ANSIBLE_STRATEGY')
+            | selectattr('value', 'equalto', 'netris.controller.protected_linear')
+            | list | length == 1
+          - >-
+            _networking_pod.spec.containers[0].env
+            | selectattr('name', 'equalto', 'OSAC_LAUNCH_EXTRA_VARS_PATH')
+            | selectattr('value', 'equalto', '/runner/env/extravars')
+            | list | length == 1
+          - >-
             _networking_pod.spec.volumes
             | selectattr('name', 'equalto', 'netris-ca-bundle')
             | list | length == 0
@@ -319,6 +329,16 @@
             _cluster_pod_with_ca.spec.containers[0].env
             | selectattr('name', 'equalto', 'NETRIS_CA_PATH')
             | selectattr('value', 'equalto', '/etc/netris/ca/bundle.pem')
+            | list | length == 1
+          - >-
+            _cluster_pod_with_ca.spec.containers[0].env
+            | selectattr('name', 'equalto', 'ANSIBLE_STRATEGY')
+            | selectattr('value', 'equalto', 'netris.controller.protected_linear')
+            | list | length == 1
+          - >-
+            _cluster_pod_with_ca.spec.containers[0].env
+            | selectattr('name', 'equalto', 'OSAC_LAUNCH_EXTRA_VARS_PATH')
+            | selectattr('value', 'equalto', '/runner/env/extravars')
             | list | length == 1
         fail_msg: >-
           Cluster fulfillment must receive the same Netris CA and validation

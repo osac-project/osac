@@ -19,14 +19,11 @@
 
 - name: Find V-Net by name
   ansible.builtin.set_fact:
-    _existing_vnet: >-
-      {{ (_vnet_list_resp.json.data | default([]))
-         | selectattr('name', 'equalto', vnet_name)
-         | list | first | default(none) }}
+    _existing_vnet: "{{ (_vnet_list_resp.json.data | default([])) | selectattr('name', 'equalto', vnet_name) | list | first | default({}) }}"
   when: _vnet_list_resp.json is mapping
 
 - name: Delete V-Net
-  when: _existing_vnet is defined and _existing_vnet is not none
+  when: _existing_vnet | length > 0
   netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/vnet/{{ _existing_vnet.id }}"
     method: DELETE

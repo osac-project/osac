@@ -328,6 +328,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
       - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
@@ -340,6 +341,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
       - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0

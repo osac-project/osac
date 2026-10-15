@@ -50,6 +50,7 @@ respective areas.
 | Fulfillment token helper or dev-full hook credential wiring | Unit and Helm contract | `make fulfillment-auth-test` and `make dev-full-render-test` |
 | Deployed dev-full hook authentication | Component integration | Coverage gap tracked by [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843); local `install-devstack` invokes the hooks but does not assert token acceptance. |
 | OpenBao security context, podSecurityContext, or Kind/OpenShift UID handling | Helm contract | `make openbao-security-context-test` |
+| MCP Keycloak audience-scope reconciliation | Unit and component integration | `make mcp-keycloak-test`; `MCP_TEST_ENABLED=true make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment` deletes the scope in the local Kind realm, reruns infra to reconcile it, then exercises deployed MCP `list_resources`. |
 | Deployed hooks or cross-component startup | Component integration | `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment` with a deployed Kind environment; see [suite boundaries](../docs/INTEGRATION-TESTING.md#osac-installer) |
 
 ## Validation

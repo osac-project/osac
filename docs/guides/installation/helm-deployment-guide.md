@@ -167,6 +167,24 @@ helm upgrade --install osac ./charts/osac \
     --wait --timeout 40m
 ```
 
+When bundled Keycloak is enabled, the `osac-infra` chart creates or repairs
+the `osac-api` client scope and its audience mapper in the `osac` realm on
+install and upgrade. This repairs an existing realm in place and does not
+depend on `keycloak.realmOverwrite`. Without development fixtures, the
+`keycloak-reconcile-mcp-scope` hook reconciles the scope. With development
+fixtures, `keycloak-set-passwords` performs that reconciliation and assigns the
+scope as a default scope on the MCP exchange client. If MCP token exchange
+fails, inspect the relevant hook job:
+
+```bash
+kubectl -n keycloak logs job/keycloak-set-passwords # with dev fixtures
+kubectl -n keycloak logs job/keycloak-reconcile-mcp-scope # otherwise
+```
+
+When `keycloak.enabled` is `false`, the installer cannot reconcile an
+externally managed Keycloak; configure the same scope, mapper, and
+default-scope assignment through that realm's administration path.
+
 `my-infra-values.yaml` configures `osac-deps` and `osac-infra` — see
 [Phase-1 Parameters](#phase-1-parameters) below. For the phase-2
 `my-values.yaml` (per-service configuration, the full parameter reference,

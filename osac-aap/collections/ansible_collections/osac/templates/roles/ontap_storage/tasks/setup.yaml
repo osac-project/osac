@@ -1,11 +1,11 @@
 ---
-# ONTAP setup: validate pre-provisioned SVMs and capped-tier QoS policies per
+# ONTAP setup: validate operator-resolved SVM preparation parameters per
 # dispatched backend.
-# The cloud administrator pre-provisions per-assignment SVMs, LIFs, accounts,
-# QoS policies, and preparation Secrets; osac-operator resolves the matching
-# preparation Secret and passes tenant_preparation in storage_backend_connections.
-# This action verifies each backend's prepared SVM and capped-tier QoS policies
-# against the live ONTAP cluster and outputs storage_provider_tenant_config.
+# Networking to the ONTAP management LIF is only assumed on the target VMaaS
+# cluster where NetApp Trident runs (not on the hub cluster), and only
+# SVM-scoped runtime credentials (in tenant_preparation.provider_config) are
+# required. This action validates the dispatched tiers and per-backend
+# preparation inputs and outputs storage_provider_tenant_config.
 
 - name: Include shared tier validation
   ansible.builtin.include_tasks: _validate_tiers.yaml
@@ -19,32 +19,26 @@
   ansible.builtin.fail:
     msg: >-
       No entry for a dispatched backend_id in storage_backend_connections.
-      osac-operator must resolve and pass connection details (endpoint, username, password)
-      for every backend_id referenced by storage_tier_definitions.
+      osac-operator must resolve and pass connection details (endpoint and
+      tenant_preparation) for every backend_id referenced by
+      storage_tier_definitions.
   loop: "{{ _ontap_backend_ids }}"
   loop_control:
     label: "ontap-backend"
   when: item not in _provider_backend_connections
   no_log: true
 
-- name: Fail if a resolved connection is missing endpoint, username, or password
+- name: Fail if a resolved connection is missing endpoint
   ansible.builtin.fail:
     msg: >-
-      storage_backend_connections entry is missing one or more of
-      endpoint, username, password. All three must be set together.
+      storage_backend_connections entry is missing a non-empty endpoint.
   loop: "{{ _ontap_backend_ids }}"
   loop_control:
     label: "ontap-backend"
   when: >-
     _provider_backend_connections[item].endpoint is not defined or
     _provider_backend_connections[item].endpoint is none or
-    _provider_backend_connections[item].endpoint | default('') | string | length == 0 or
-    _provider_backend_connections[item].username is not defined or
-    _provider_backend_connections[item].username is none or
-    _provider_backend_connections[item].username | default('') | string | length == 0 or
-    _provider_backend_connections[item].password is not defined or
-    _provider_backend_connections[item].password is none or
-    _provider_backend_connections[item].password | default('') | string | length == 0
+    _provider_backend_connections[item].endpoint | default('') | string | trim | length == 0
   no_log: true
 
 - name: Initialize the per-backend tenant config accumulator
@@ -52,7 +46,7 @@
     _ontap_tenant_configs: {}
   no_log: true
 
-- name: Validate the prepared assignment for each dispatched backend
+- name: Validate the prepared SVM assignment for each dispatched backend
   ansible.builtin.include_tasks: _setup_backend.yaml
   loop: "{{ _ontap_backend_ids }}"
   loop_control:

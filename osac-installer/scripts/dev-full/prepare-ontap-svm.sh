@@ -188,10 +188,10 @@ resolve_backend_id_by_name() {
   sleep 2
 
   local resp=""
-  resp="$(curl -sS --cacert "${temp_ca}" \
+  resp="$(curl -s --cacert "${temp_ca}" \
     --resolve "${svc_host}:${LOCAL_PORT}:127.0.0.1" \
     --header "@${token_header}" -H "Content-Type: application/json" \
-    "https://${svc_host}:${LOCAL_PORT}/api/private/v1/storage_backends" || true)"
+    "https://${svc_host}:${LOCAL_PORT}/api/private/v1/storage_backends" 2>/dev/null || true)"
 
   kill "${pf_pid}" 2>/dev/null || true
   wait "${pf_pid}" 2>/dev/null || true

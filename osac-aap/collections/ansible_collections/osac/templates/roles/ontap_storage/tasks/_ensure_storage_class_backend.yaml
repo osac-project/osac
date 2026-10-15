@@ -94,6 +94,17 @@
           {%- endif %}
       no_log: true
 
+    - name: Fail when certificate validation is enabled without a CA bundle
+      ansible.builtin.fail:
+        msg: >-
+          Certificate validation is enabled, but ontap_storage_ca_bundle_path is
+          missing, unreadable, or empty. Provide a CA bundle or explicitly
+          disable validation with ONTAP_VALIDATE_CERTS=false.
+      when: >-
+        (ontap_storage_validate_certs | bool) and
+        (_trusted_ca_b64 | default('') | length == 0)
+      no_log: true
+
     # The managementLIF is the ONTAP management endpoint the SVM is accessed
     # through — the backend connection's endpoint, stripped to host:port.
     - name: Derive the management LIF from the backend connection endpoint

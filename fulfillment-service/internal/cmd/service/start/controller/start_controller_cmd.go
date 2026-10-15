@@ -46,6 +46,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/externalip"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/externalipattachment"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/externalippool"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/fabricdomain"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/identityprovider"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/natgateway"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/networkclass"
@@ -203,6 +204,8 @@ type runnerContext struct {
 	}
 	client *grpc.ClientConn
 }
+
+const fabricDomainEventFilter = "has(event.fabric_domain) || (has(event.virtual_network) && event.type == EVENT_TYPE_OBJECT_UPDATED && ((has(event.virtual_network.status) && event.virtual_network.status.hub != '') || (has(event.virtual_network.metadata) && has(event.virtual_network.metadata.deletion_timestamp))))"
 
 // run runs the `start controllers` command.
 func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:gocyclo
@@ -667,6 +670,38 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 				"Virtual network reconciler failed",
 				slog.Any("error", err),
 			)
+		}
+	}()
+
+	// Create the fabric domain reconciler. VirtualNetwork changes wake domains waiting for hub placement.
+	r.logger.InfoContext(ctx, "Creating fabric domain reconciler")
+	fabricDomainReconcilerFunction, err := fabricdomain.NewFunction().
+		SetLogger(r.logger).
+		SetConnection(r.client).
+		SetHubCache(hubCache).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create fabric domain reconciler function: %w", err)
+	}
+	fabricDomainReconciler, err := controllers.NewReconciler[*privatev1.FabricDomain]().
+		SetLogger(r.logger).
+		SetName("fabric-domain").
+		SetSync(r.args.sync).
+		SetClient(r.client).
+		SetFunction(fabricDomainReconcilerFunction).
+		SetEventFilter(fabricDomainEventFilter).
+		SetHealthReporter(healthAggregator).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create fabric domain reconciler: %w", err)
+	}
+	r.logger.InfoContext(ctx, "Starting fabric domain reconciler")
+	go func() {
+		err := fabricDomainReconciler.Start(ctx)
+		if err == nil || errors.Is(err, context.Canceled) {
+			r.logger.InfoContext(ctx, "Fabric domain reconciler finished")
+		} else {
+			r.logger.ErrorContext(ctx, "Fabric domain reconciler failed", slog.Any("error", err))
 		}
 	}()
 

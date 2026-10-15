@@ -19,6 +19,7 @@ import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
 import "google/api/field_behavior.proto";
 import "google/protobuf/any.proto";
+import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
 import "osac/private/v1/add_on_operator_type.proto";
 import "osac/private/v1/baremetal_instance_type_type.proto";
@@ -330,6 +331,77 @@ message ClusterStatus {
   // Per-operator installation state, synced from the ClusterOrder's
   // AddOnOperatorJobs via the feedback controller.
   repeated AddOnOperatorStatus add_on_operators = 12;
+
+  // OpenShift version observed on the hosted control plane.
+  string observed_cp_version = 13 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  reserved 14;
+  reserved "upgrade";
+
+  // Component upgrade attempts in acceptance order. The last entry is the current or most recent attempt.
+  repeated ClusterUpgradeHistoryEntry upgrade_history = 15 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// State of a component upgrade attempt, independent of the cluster's readiness state.
+enum ClusterUpgradeState {
+  // No upgrade state has been reported. Accepted attempts start in PENDING.
+  CLUSTER_UPGRADE_STATE_UNSPECIFIED = 0;
+
+  // OSAC accepted the attempt, but HyperShift has not reported that the selected component started upgrading.
+  CLUSTER_UPGRADE_STATE_PENDING = 1;
+
+  // HyperShift is working toward the requested version of the selected component.
+  CLUSTER_UPGRADE_STATE_PROGRESSING = 2;
+
+  // The attempt did not reach a definitive result within the timeout. This may be recorded as a terminal history
+  // outcome, but observation continues and a later HyperShift result can update this attempt to SUCCEEDED or FAILED.
+  CLUSTER_UPGRADE_STATE_TIMED_OUT = 3;
+
+  // HyperShift completed the upgrade and the selected component reached the requested version.
+  CLUSTER_UPGRADE_STATE_SUCCEEDED = 4;
+
+  // HyperShift reported a terminal error and stopped working toward the requested version.
+  CLUSTER_UPGRADE_STATE_FAILED = 5;
+}
+
+// Identifies the control plane or a node set within the Cluster being upgraded.
+message ClusterUpgradeComponent {
+  oneof target {
+    option (buf.validate.oneof).required = true;
+
+    // Selects the Cluster's control plane.
+    google.protobuf.Empty control_plane = 1;
+
+    // ID of the selected node set, as keyed in the Cluster's spec.node_sets.
+    string node_set_id = 2 [(buf.validate.field).string.min_len = 1];
+  }
+}
+
+// State and progress of one component upgrade attempt.
+message ClusterUpgradeHistoryEntry {
+  // Control plane or node set selected for this attempt.
+  ClusterUpgradeComponent component = 1;
+
+  // OpenShift version observed on the selected component when the attempt was accepted, as a semver string.
+  string source_version = 2;
+
+  // OpenShift version requested for the selected component, as a semver string.
+  string target_version = 3;
+
+  // Time OSAC accepted the attempt.
+  google.protobuf.Timestamp accepted_time = 4;
+
+  // Time this attempt last changed state, including a later update after TIMED_OUT.
+  google.protobuf.Timestamp last_state_time = 5;
+
+  // Current outcome or progress state of this attempt.
+  ClusterUpgradeState state = 6;
+
+  // Human-readable explanation of the state, including any failure or timeout reason.
+  string message = 7;
+
+  // Identifier correlating this history entry with private operator feedback.
+  string attempt_id = 8 [(cleanapi.field).private = true];
 }
 
 // Represents the overall state of a cluster.
@@ -435,6 +507,12 @@ message ClusterNodeSet {
   //
   // Immutable after creation.
   BareMetalInstanceTypeReference baremetal_instance_type = 4 [(google.api.field_behavior) = IMMUTABLE];
+
+  // Desired OpenShift version of this node set.
+  ClusterVersionReference version = 5;
+
+  // OpenShift version observed on this node set. Populated only in Cluster status.
+  string observed_version = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Local reference to a Cluster resource.

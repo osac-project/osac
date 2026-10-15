@@ -116,9 +116,6 @@ aap:
       config: {}
       secret: {}
 
-csiDriver:
-  enabled: true
-
 bmf:
   bcm:
     enabled: true

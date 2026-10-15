@@ -269,15 +269,10 @@ spec:
         {{- if .Values.bundledVault.podSecurityContext }}
         {{- toYaml .Values.bundledVault.podSecurityContext | nindent 8 }}
         {{- else }}
-        # Standard Kubernetes default: explicit numeric UID required because the
-        # OpenBao image uses a named user ("openbao") — Kubernetes cannot satisfy
-        # runAsNonRoot: true without a numeric UID at admission time.
-        # On OpenShift, override podSecurityContext in the profile's instance.yaml
-        # to just {runAsNonRoot: true}; the restricted-v2 SCC allocates the UID.
+        # SCC-compatible default: no hardcoded UID so OpenShift's restricted-v2
+        # SCC can allocate from the namespace UID range. Override
+        # podSecurityContext in the profile's infra.yaml if you need a fixed UID.
         runAsNonRoot: true
-        runAsUser: 100
-        runAsGroup: 1000
-        fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
         {{- end }}

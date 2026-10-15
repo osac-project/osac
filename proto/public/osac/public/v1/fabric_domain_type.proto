@@ -44,8 +44,6 @@ message FabricDomainSpec {
 
 message FabricDomainStatus {
   repeated FabricDomainCondition conditions = 1;
-  string backend_id = 2;
-  string vpc_id = 3;
   repeated FabricDomainMemberStatus members = 4;
 }
 

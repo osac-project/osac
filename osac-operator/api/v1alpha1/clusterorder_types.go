@@ -64,7 +64,7 @@ type ClusterOrderSpec struct {
 	// If not provided, the template's default release image is used.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MaxLength=512
-	// +kubebuilder:validation:Pattern=`^.+/.+:.+$`
+	// +kubebuilder:validation:Pattern=`^(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\[[A-Fa-f0-9:]+\])(?::[0-9]+)?(?:/[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*)+(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}(?:@sha256:[A-Fa-f0-9]{64})?|@sha256:[A-Fa-f0-9]{64})$`
 	ReleaseImage string `json:"releaseImage,omitempty"`
 	// Network contains cluster networking configuration.
 	// +kubebuilder:validation:Optional
@@ -132,6 +132,11 @@ type NodeRequest struct {
 	// Resolved from the instance type's fabric network port; may also be set explicitly.
 	// +kubebuilder:validation:Optional
 	FabricInterface string `json:"fabricInterface,omitempty"`
+	// ReleaseImage is the desired OpenShift release image for this node set.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxLength=512
+	// +kubebuilder:validation:Pattern=`^(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\[[A-Fa-f0-9:]+\])(?::[0-9]+)?(?:/[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*)+(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}(?:@sha256:[A-Fa-f0-9]{64})?|@sha256:[A-Fa-f0-9]{64})$`
+	ReleaseImage string `json:"releaseImage,omitempty"`
 }
 
 // NodeRequestStatus records the observed node count for an instance type.
@@ -148,6 +153,9 @@ type NodeRequestStatus struct {
 	BareMetal *BareMetalNodeSpec `json:"bareMetal,omitempty"`
 	// +kubebuilder:validation:Optional
 	FabricInterface string `json:"fabricInterface,omitempty"`
+	// ObservedVersion is the OpenShift version reported by this node pool.
+	// +kubebuilder:validation:Optional
+	ObservedVersion string `json:"observedVersion,omitempty"`
 }
 
 // BareMetalNodeSpec holds configuration specific to bare-metal node requests.
@@ -240,6 +248,9 @@ type AddOnOperatorJobStatus struct {
 
 // ClusterOrderStatus defines the observed state of ClusterOrder
 type ClusterOrderStatus struct {
+	// ObservedVersion is the OpenShift version reported by the hosted control plane.
+	// +kubebuilder:validation:Optional
+	ObservedVersion string `json:"observedVersion,omitempty"`
 	// Phase provides a single-value overview of the state of the ClusterOrder
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string

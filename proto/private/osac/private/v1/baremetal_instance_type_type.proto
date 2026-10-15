@@ -50,6 +50,31 @@ message BareMetalInstanceTypeSpec {
   // Label selector for matching inventory hosts. Required.
   // Labels are passed directly to the inventory backend using backend-native naming conventions.
   BareMetalLabelSelector host_label_selector = 3 [(cleanapi.field).private = true, (buf.validate.field).required = true];
+
+  // Backend fabric bindings for hosts selected by this instance type.
+  BareMetalFabricBindings fabric_bindings = 4 [(cleanapi.field).private = true];
+}
+
+// Fabric-manager profile references for a bare metal instance type.
+message BareMetalFabricBindings {
+  option (cleanapi.message).private = true;
+
+  // Opaque Ethernet east-west profile references keyed by fabric-manager name.
+  // For Netris, the value is a Server Cluster Template ID. The matching
+  // NetworkClass selects the fabric manager; this hardware profile is
+  // independent of NetworkClass.
+  map<string, string> ethernet_ew = 1 [(buf.validate.field).map = {
+    keys: {
+      string: {
+        min_len: 1
+      }
+    }
+    values: {
+      string: {
+        min_len: 1
+      }
+    }
+  }];
 }
 
 // Contains the system-provided status of a BareMetalInstanceType.

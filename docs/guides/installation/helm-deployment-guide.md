@@ -214,12 +214,11 @@ and `osac-infra`. Keys a chart doesn't recognize are ignored.
 | `keycloak.images.keycloak` | Keycloak image. | `keycloak:26.6.4` |
 | `keycloak.images.postgres` | Keycloak database image. | `postgresql-18-c10s` |
 | `osacNamespace` | Namespace that the `osac` platform release uses. `osac-infra` stamps cross-namespace resources with it. Set it to your namespace. | `osac` |
-| `csiNamespace` | Namespace that the CSI driver subchart expects. | `osac-csi` |
-| `csiReleaseName` | Release name that the CSI driver subchart expects. | `osac` |
 | `bundledPostgres.enabled` | Deploys bundled PostgreSQL for development and CI. It is not intended for production. | `false` |
 | `bundledPostgres.database.name` | Bundled database name. | `service` |
 | `bundledPostgres.database.user` | Bundled database owner. | `service` |
 | `bundledVault.enabled` | Deploys an in-cluster OpenBao secret store for testing and CI. Set it to `false` for production and configure external Vault in the `osac` values file; see the [secrets management configuration guide](secrets-management-configuration.md). | `true` |
+| `bundledVault.podSecurityContext` | Pod-level `securityContext` for the OpenBao deployment. Defaults to `{runAsNonRoot: true}` with no hardcoded UID so OpenShift's restricted-v2 SCC can allocate from the namespace range. Override with a fixed UID (e.g. `runAsUser: 100`) on platforms that require one. | `{runAsNonRoot: true}` |
 | `cliImage` | The `oc` image that the chart hook jobs use. | `origin-cli:4.20.0` |
 
 ## When Prerequisites Already Exist

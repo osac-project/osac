@@ -621,7 +621,16 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 	// provisioning — osac-aap's playbook_osac_create_compute_instance.yml reads
 	// these to provision an on-demand StorageClass when the tenant doesn't
 	// already have one for the requested tier (OSAC-1992).
-	ctx, _ = resolveAndInjectTierContext(ctx, r.TiersClient, r.BackendsClient, r.SecretsClient, "computeInstance", instance.GetName())
+	// The tier resolution error is logged but does not block VM provisioning:
+	// this controller's primary action is VM creation, and tier data is
+	// supplementary for JIT storage — blocking VM provisioning on a transient
+	// Tier API failure would be a worse outcome than provisioning without JIT
+	// storage classes.
+	ctx, _, tierErr := resolveAndInjectTierContext(ctx, r.TiersClient, r.BackendsClient, r.SecretsClient, "computeInstance", instance.GetName())
+	if tierErr != nil {
+		log.Error(tierErr, "tier resolution failed, proceeding with VM provisioning — tier data is supplementary for JIT storage",
+			"computeInstance", instance.GetName())
+	}
 
 	// Always delegate to provisioning lifecycle — EvaluateAction decides
 	// whether to skip, poll, or trigger. This avoids the A-B-A problem where

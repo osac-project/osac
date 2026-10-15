@@ -118,6 +118,37 @@ func deleteSecrets(ctx context.Context, client privatev1.SecretsClient, tenant s
 	).Should(Succeed())
 }
 
+func deleteTenantUsers(ctx context.Context, tenant string) {
+	usersClient := privatev1.NewUsersClient(tool.InternalView().AdminConn())
+	listFilter := fmt.Sprintf("this.metadata.tenant == %q", tenant)
+	listRequest := privatev1.UsersListRequest_builder{
+		Filter: &listFilter,
+	}.Build()
+	listResponse, err := usersClient.List(ctx, listRequest)
+	Expect(err).ToNot(HaveOccurred())
+	for _, user := range listResponse.GetItems() {
+		_, err := usersClient.Delete(ctx, privatev1.UsersDeleteRequest_builder{
+			Id: user.GetId(),
+		}.Build())
+		if err != nil && !isGRPCCode(err, grpccodes.NotFound) {
+			Expect(err).ToNot(HaveOccurred())
+		}
+		Eventually(func(g Gomega) bool {
+			_, err := usersClient.Get(ctx, privatev1.UsersGetRequest_builder{Id: user.GetId()}.Build())
+			if isGRPCCode(err, grpccodes.NotFound) {
+				return true
+			}
+			g.Expect(err).ToNot(HaveOccurred())
+			_, err = usersClient.Signal(ctx, privatev1.UsersSignalRequest_builder{Id: user.GetId()}.Build())
+			if isGRPCCode(err, grpccodes.NotFound) {
+				return true
+			}
+			g.Expect(err).ToNot(HaveOccurred())
+			return false
+		}, time.Minute, time.Second).Should(BeTrue())
+	}
+}
+
 func deleteTenant(ctx context.Context, tenantsClient privatev1.TenantsClient, projectsClient privatev1.ProjectsClient,
 	id, name string) {
 	// Break-glass secrets are stored against the tenant's default project, so they

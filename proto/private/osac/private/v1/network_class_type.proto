@@ -215,8 +215,10 @@ message EastWestConfig {
   NVLinkEastWestConfig nvlink = 3;
 }
 
+// Reserved for future Ethernet east-west policy. Templates are bound to bare metal instance types.
 message EthernetEastWestConfig {
-  string template_id = 1;
+  reserved 1;
+  reserved "template_id";
 }
 
 message InfiniBandEastWestConfig {

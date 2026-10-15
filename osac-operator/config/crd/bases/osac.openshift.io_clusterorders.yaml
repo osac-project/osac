@@ -144,6 +144,12 @@ spec:
                         of this instance type.
                       minimum: 1
                       type: integer
+                    releaseImage:
+                      description: ReleaseImage is the desired OpenShift release image
+                        for this node set.
+                      maxLength: 512
+                      pattern: ^(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\[[A-Fa-f0-9:]+\])(?::[0-9]+)?(?:/[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*)+(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}(?:@sha256:[A-Fa-f0-9]{64})?|@sha256:[A-Fa-f0-9]{64})$
+                      type: string
                   required:
                   - bareMetal
                   - nodeSet
@@ -161,7 +167,7 @@ spec:
                   ReleaseImage is the OCP release image URL that controls the OpenShift version.
                   If not provided, the template's default release image is used.
                 maxLength: 512
-                pattern: ^.+/.+:.+$
+                pattern: ^(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\[[A-Fa-f0-9:]+\])(?::[0-9]+)?(?:/[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*)+(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}(?:@sha256:[A-Fa-f0-9]{64})?|@sha256:[A-Fa-f0-9]{64})$
                 type: string
               sshPublicKey:
                 description: |-
@@ -470,12 +476,20 @@ spec:
                     numberOfNodes:
                       minimum: 0
                       type: integer
+                    observedVersion:
+                      description: ObservedVersion is the OpenShift version reported
+                        by this node pool.
+                      type: string
                   required:
                   - bareMetal
                   - nodeSet
                   - numberOfNodes
                   type: object
                 type: array
+              observedVersion:
+                description: ObservedVersion is the OpenShift version reported by
+                  the hosted control plane.
+                type: string
               phase:
                 description: Phase provides a single-value overview of the state of
                   the ClusterOrder

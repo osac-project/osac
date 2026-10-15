@@ -172,17 +172,6 @@ spec:
         value: $(params.output-image).git
       - name: ociArtifactExpiresAfter
         value: $(params.image-expires-after)
-      # Limits the checkout fed to prefetch-dependencies and build-container
-      # to osac-metering/ and proto/ (metering-service's one real
-      # cross-module dependency) only, so the shared repo-root go.work
-      # genuinely doesn't exist in either one's view of the source tree --
-      # avoids the workspace-vs-standalone dependency resolution mismatch
-      # that affects every other component sharing go.work (confirmed live:
-      # `go env GOWORK` and `go mod download` both resolve cleanly standalone
-      # in a local `git sparse-checkout set -- osac-metering proto` test
-      # clone).
-      - name: sparseCheckoutDirectories
-        value: osac-metering,proto
       runAfter:
       - init
       taskRef:

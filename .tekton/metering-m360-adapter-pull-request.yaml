@@ -28,9 +28,9 @@ spec:
   - name: image-expires-after
     value: 5d
   - name: dockerfile
-    value: adapters/Containerfile.m360-adapter
+    value: osac-metering/adapters/Containerfile.m360-adapter
   - name: path-context
-    value: osac-metering
+    value: .
   - name: hermetic
     value: "true"
   - name: prefetch-input
@@ -169,14 +169,6 @@ spec:
         value: $(params.output-image).git
       - name: ociArtifactExpiresAfter
         value: $(params.image-expires-after)
-      # Limits the checkout fed to prefetch-dependencies and build-container
-      # to osac-metering/ only (this adapter has no dependency on proto/ or
-      # any other component), so the shared repo-root go.work genuinely
-      # doesn't exist in either one's view of the source tree -- avoids the
-      # workspace-vs-standalone dependency resolution mismatch that affects
-      # every other component sharing go.work.
-      - name: sparseCheckoutDirectories
-        value: osac-metering
       runAfter:
       - init
       taskRef:

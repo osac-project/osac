@@ -17,24 +17,6 @@ operator:
     storage: true
     volume: true
 
-# --- CSI Driver & Backends ---
-# Enable the OSAC CSI driver for persistent volume provisioning via storage tiers.
-# The hub runtime ConfigMap and shared credential Secret configure fulfillment;
-# vendor backends remain disabled for local dev.
-#
-# CSI backends (VAST, Pure, NetApp) are available but not enabled for local dev.
-# The driver uses vendorControllers="lvms=none" for node-local LVMS storage,
-# which doesn't require an external storage-array controller.
-csiDriver:
-  enabled: true
-  image:
-    pullPolicy: IfNotPresent
-
-# csiBackends chart is deployed (same condition as csiDriver), but all vendor
-# backends are disabled. To enable a backend for testing, set csiBackends.<vendor>.enabled: true
-# and provide the required credentials/configuration. Available backends: vast, pure, trident.
-csiBackends: {}
-
 # --- Browser-reachable endpoints (dev-full only) ---
 # dev-full drives the full "create a VM from the UI" flow in a real browser, so
 # the fulfillment API and the OIDC issuer must be reachable *from the host* without

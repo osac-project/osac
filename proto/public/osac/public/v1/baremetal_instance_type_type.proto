@@ -43,6 +43,7 @@ message BareMetalInstanceTypeSpec {
 
   // Human-readable description of the bare metal instance type.
   string description = 2;
+
 }
 
 // Contains the system-provided status of a BareMetalInstanceType.

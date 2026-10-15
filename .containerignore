@@ -11,7 +11,7 @@
 !osac-operator/
 !osac-csi-driver/
 !osac-metering/
-!osac-ui/proxy/
+!osac-ui/
 
 # Shared proto module: every Containerfile now COPYs proto/ for the single
 # generated Go tree at proto/gen/ that all components import.

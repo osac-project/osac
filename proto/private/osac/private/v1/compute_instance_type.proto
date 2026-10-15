@@ -125,8 +125,9 @@ message ComputeInstanceSpec {
   // Boot disk configuration.
   optional ComputeInstanceDisk boot_disk = 8;
 
-  // Additional disk configurations.
-  repeated ComputeInstanceDisk additional_disks = 9;
+  // Additional disk configurations. When creating from a Catalog Item, omit this field to use its default.
+  // Set `items` to an empty list to request no additional disks.
+  ComputeInstanceDiskList additional_disks = 9;
 
   // Run strategy for the compute instance.
   optional ComputeInstanceRunStrategy run_strategy = 10 [(buf.validate.field).enum = {defined_only: true, not_in: [0]}];

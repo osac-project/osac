@@ -4408,7 +4408,7 @@ var _ = Describe("Private compute instances server", func() {
 			eipList, err := externalIPDao.List().Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(eipList.GetItems()).To(HaveLen(1))
-			// Attachment creation is deferred to the reconciler (OSAC-1445).
+			// Attachment creation is deferred to the reconciler.
 			eiaList, err := externalIPAttachmentDao.List().Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(eiaList.GetItems()).To(BeEmpty())

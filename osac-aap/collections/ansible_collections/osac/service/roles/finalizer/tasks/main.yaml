@@ -16,7 +16,9 @@
   when: finalizer_resources.resources | length == 0
 
 - name: "Add finalizer to {{ finalizer_target.kind }}/{{ finalizer_target.name }}" # noqa: name[template]
-  when: finalizer_state == "present" and finalizer_target_resource is not none
+  when:
+    - finalizer_state == "present"
+    - finalizer_resources.resources | length > 0
   kubernetes.core.k8s:
     state: present
     definition:
@@ -28,7 +30,9 @@
         finalizers: "{{ (finalizer_target_resource.metadata.finalizers | default([])) | union([finalizer_name]) }}"
 
 - name: "Remove finalizer from {{ finalizer_target.kind }}/{{ finalizer_target.name }}" # noqa: name[template]
-  when: finalizer_state == "absent" and finalizer_target_resource is not none
+  when:
+    - finalizer_state == "absent"
+    - finalizer_resources.resources | length > 0
   kubernetes.core.k8s_json_patch:
     api_version: "{{ finalizer_target.api_version }}"
     kind: "{{ finalizer_target.kind }}"

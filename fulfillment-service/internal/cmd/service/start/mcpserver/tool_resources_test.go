@@ -335,7 +335,10 @@ var _ = Describe("handleListResources", func() {
 		_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), ListResourcesInput{
 			ResourceType: ResourceTypeComputeInstanceCatalogItem,
 		})
-		Expect(err).To(MatchError("public API request failed"))
+		envelope := decodeToolError(err)
+		Expect(envelope.Category).To(Equal("upstream_failure"))
+		Expect(envelope.GRPCCode).To(Equal("Unknown"))
+		Expect(err.Error()).ToNot(ContainSubstring("private SQL host"))
 	})
 })
 
@@ -475,7 +478,10 @@ var _ = Describe("handleGetResource", func() {
 			ResourceType: ResourceTypeComputeInstance,
 			ID:           "instance-1",
 		})
-		Expect(err).To(MatchError("resource not found"))
+		envelope := decodeToolError(err)
+		Expect(envelope.Category).To(Equal("not_found"))
+		Expect(envelope.GRPCCode).To(Equal("NotFound"))
+		Expect(err.Error()).ToNot(ContainSubstring("private SQL host"))
 	})
 })
 

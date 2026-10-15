@@ -18,8 +18,8 @@ on:  # yamllint disable-line rule:truthy
         default: ""
       kind:
         description: >-
-          Which tests: go-unit, ui-unit, it-fulfillment-service, it-osac-operator, it-bare-metal-fulfillment-operator,
-          it-osac-aap or it-osac-installer
+          Which tests: go-unit, ui-unit, it-fulfillment-service, it-osac-operator, it-osac-operator-multicluster,
+          it-bare-metal-fulfillment-operator, it-osac-aap or it-osac-installer
         required: true
         type: string
       dir:
@@ -213,6 +213,86 @@ jobs:
           kubectl logs -n osac -l control-plane=controller-manager --tail=100
           echo "=== Events ==="
           kubectl get events -n osac --sort-by='.lastTimestamp' | tail -50
+      # --- integration test: osac-operator multicluster
+      - name: Checkout repository
+        if: inputs.kind == 'it-osac-operator-multicluster'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ inputs.commit }}
+          persist-credentials: false
+
+      - name: Set up Go
+        if: inputs.kind == 'it-osac-operator-multicluster'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6
+        with:
+          go-version-file: 'osac-operator/go.mod'
+
+      - name: Install Kind
+        if: inputs.kind == 'it-osac-operator-multicluster'
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc  # v1
+        with:
+          install_only: true
+
+      - name: Install Helm
+        if: inputs.kind == 'it-osac-operator-multicluster'
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+
+      - name: Install ginkgo
+        if: inputs.kind == 'it-osac-operator-multicluster'
+        env:
+          GODEBUG: http2client=0
+        run: go install github.com/onsi/ginkgo/v2/ginkgo@v2.32.0  # keep in sync with go.mod's github.com/onsi/ginkgo/v2 version
+
+      - name: Install infrastructure on Kind
+        if: inputs.kind == 'it-osac-operator-multicluster'
+        env:
+          CONTAINER_TOOL: docker
+        run: make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
+
+      - name: Run multicluster integration tests
+        if: inputs.kind == 'it-osac-operator-multicluster'
+        env:
+          CONTAINER_TOOL: docker
+          MULTICLUSTER_ARTIFACT_DIR: ${{ github.workspace }}/multicluster-bootstrap-diagnostics
+        run: make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=operator-multicluster
+
+      - name: Collect diagnostic logs
+        if: inputs.kind == 'it-osac-operator-multicluster' && always()
+        run: |
+          export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
+          echo "=== Pods ==="
+          kubectl get pods -n osac -o wide
+          echo "=== Deployments ==="
+          kubectl get deployments -n osac
+          echo "=== Operator logs ==="
+          kubectl logs -n osac -l control-plane=controller-manager --tail=200
+          echo "=== Events ==="
+          kubectl get events -n osac --sort-by='.lastTimestamp' | tail -50
+          echo "=== Fulfillment service logs ==="
+          kubectl logs -n osac -l app.kubernetes.io/name=fulfillment-service --tail=100 || echo "fulfillment-service not found"
+          echo "=== Storage hook job ==="
+          kubectl get jobs -n osac register-local-storage -o wide || echo "register-local-storage job not found"
+          kubectl logs -n osac job/register-local-storage --all-containers || echo "no register-local-storage logs"
+          echo "=== AWX pods ==="
+          kubectl get pods -n osac -l app.kubernetes.io/name=awx -o wide || echo "AWX not found"
+          echo "=== Workload cluster (if exists) ==="
+          kind get kubeconfig --name osac-workload > /tmp/wl.kubeconfig 2>/dev/null && \
+            kubectl --kubeconfig /tmp/wl.kubeconfig get pods -A || echo "Workload cluster not available"
+          echo "=== Workload cluster StorageClasses ==="
+          test -f /tmp/wl.kubeconfig && \
+            kubectl --kubeconfig /tmp/wl.kubeconfig get storageclasses -o wide || echo "no workload kubeconfig"
+
+      - name: Upload multicluster bootstrap diagnostics
+        if: inputs.kind == 'it-osac-operator-multicluster' && always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: multicluster-bootstrap-diagnostics${{ inputs.artifact_suffix }}
+          # Upload ONLY the vetted sanitized diagnostic file, not
+          # the entire directory — sibling files (kubeconfigs, raw
+          # logs, secrets) must never be included in artifacts.
+          path: multicluster-bootstrap-diagnostics/workload-bootstrap-diagnostics.txt
+          if-no-files-found: ignore
+          retention-days: 7
       # --- integration test: bare-metal-fulfillment-operator
       - name: Checkout repository
         if: inputs.kind == 'it-bare-metal-fulfillment-operator'

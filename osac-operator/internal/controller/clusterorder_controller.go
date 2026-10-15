@@ -816,11 +816,13 @@ func (r *ClusterOrderReconciler) handleNodePool(ctx context.Context, instance *v
 		return nil
 	}
 
-	// Spec.Replicas is a pointer that is nil when autoscaling is
-	// configured or when the replica reconciler has not yet set it.
-	// Skip the status update so an existing NumberOfNodes value is
-	// preserved instead of being overwritten with zero.
-	if nodePool.Spec.Replicas == nil {
+	// Skip the status update when replicas are not yet observable.
+	// Spec.Replicas is nil under autoscaling or before the replica
+	// reconciler sets it. Status.Replicas is zero for a newly-
+	// created NodePool before any node joins.  Publishing zero
+	// would violate the fulfillment ClusterNodeSet.size > 0
+	// constraint and misrepresent capacity to downstream consumers.
+	if nodePool.Spec.Replicas == nil || nodePool.Status.Replicas == 0 {
 		return nil
 	}
 
@@ -843,14 +845,12 @@ func (r *ClusterOrderReconciler) handleNodePool(ctx context.Context, instance *v
 		nodeRequestStatus = &instance.Status.NodeRequests[len(instance.Status.NodeRequests)-1]
 	}
 
-	// Update the selected `nodeRequests` item using the NodePool's
-	// desired replica count (Spec.Replicas) rather than the transient
-	// observed count (Status.Replicas). Status.Replicas starts at 0
-	// for a newly-created NodePool and would incorrectly report zero
-	// capacity to downstream consumers (feedback controller,
-	// fulfillment service) before the first node joins.
+	// Update the selected `nodeRequests` item with the NodePool's
+	// observed replica count.  The zero-guard above ensures this
+	// value is always positive, satisfying the fulfillment proto's
+	// ClusterNodeSet.size > 0 constraint.
 	oldValue := nodeRequestStatus.NumberOfNodes
-	newValue := int(*nodePool.Spec.Replicas)
+	newValue := int(nodePool.Status.Replicas)
 	if newValue != oldValue {
 		log.Info(
 			"updating number of nodes from node pool",

@@ -139,8 +139,10 @@ type NodeRequest struct {
 	ReleaseImage string `json:"releaseImage,omitempty"`
 }
 
-// NodeRequestStatus records the desired NodePool replica count for a node set.
-// Sourced from the NodePool's spec.replicas, not the transient observed count.
+// NodeRequestStatus records the observed node count for a node set.
+// The count is not updated while the NodePool has zero observed
+// replicas (e.g. during initial provisioning), so it is always
+// positive once set.
 type NodeRequestStatus struct {
 	// NodeSet identifies the logical group whose observed count is reported.
 	// +kubebuilder:validation:Required

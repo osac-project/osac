@@ -178,8 +178,12 @@ resolve_backend_id_by_name() {
     return 1
   fi
 
-  local token
-  token="$(get_fulfillment_service_account_token "${NS}" --cacert "${temp_ca}")"
+  local token=""
+  if ! token="$(get_fulfillment_service_account_token "${NS}" --cacert "${temp_ca}" 2>/dev/null)" || [[ -z "${token}" ]]; then
+    rm -f "${temp_ca}" "${token_header}"
+    warn "Fulfillment authentication failed; pass --backend-id directly."
+    return 1
+  fi
   printf 'Authorization: Bearer %s\n' "${token}" >"${token_header}"
   unset token
 

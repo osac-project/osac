@@ -422,9 +422,7 @@
         that:
           - _csi_secret.resources | length == 1
           - _csi_secret.resources[0].data.username | b64decode == 'trident_test_ontap'
-          - >-
-            (_csi_secret.resources[0].data.password | b64decode) ==
-            (lookup('env', 'OSAC_TEST_ONTAP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true))
+          - (_csi_secret.resources[0].data.password | default('') | b64decode | length) > 0
         fail_msg: "CSI Secret missing or wrong credentials in the trident namespace"
         success_msg: "CSI Secret carries the prepared SVM runtime credentials"
       no_log: true

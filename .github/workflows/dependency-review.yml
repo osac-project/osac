@@ -36,14 +36,35 @@ jobs:
           #    already on main, pre-dating this PR entirely; not something this
           #    carve-out newly permits into the repo, just a hole this PR's own
           #    scan happens to surface.
-          #  - GHSA-xpqm-wm3m-f34h / GHSA-m733-5w8f-5ggw: pnpm@9.15.9, newly
-          #    visible only because osac-ui/.pnpm-bootstrap/package-lock.json
-          #    now tracks it as a real npm dependency (fetched via Hermeto's
-          #    npm backend instead of its untracked generic backend) -- the
-          #    exact same pnpm version/tarball this build has always used,
-          #    not a new exposure. Both advisories are about pnpm's own
-          #    behavior resolving file:/git-type dependencies and its
-          #    content-addressable store's md5 path shortening; .pnpm-bootstrap
-          #    only ever installs pnpm itself from the npm registry via this
-          #    committed lockfile, never a file:/git dependency.
-          allow-ghsas: "GHSA-hrxh-6v49-42gf, GHSA-gcjh-h69q-9w9g, GHSA-xpqm-wm3m-f34h, GHSA-m733-5w8f-5ggw"
+          #  - pnpm@9.15.9: 25 known advisories (12 high, 13 moderate; full
+          #    list below), newly visible only because
+          #    osac-ui/.pnpm-bootstrap/package-lock.json now tracks pnpm as a
+          #    real npm dependency (fetched via Hermeto's npm backend instead
+          #    of its untracked generic backend) -- not a new exposure, this
+          #    is the exact same pnpm version/tarball osac-ui's build has
+          #    always used; the detection is new, not the fact. 9.15.9 is
+          #    pnpm's latest 9.x release (confirmed against the npm
+          #    registry) -- none of these are fixed within the 9.x line, so
+          #    there is no patch version to bump to. A real fix needs a pnpm
+          #    major-version bump (10.x+: new lockfile format, needs real
+          #    testing), which is out of scope here and should be owned and
+          #    scheduled by whoever owns osac-ui, not decided as a side
+          #    effect of this CI-gate fix. Re-check this list (e.g. via
+          #    `curl -s -X POST https://api.osv.dev/v1/query -d
+          #    '{"version":"<new-pnpm-version>","package":{"name":"pnpm","ecosystem":"npm"}}'`)
+          #    whenever pnpm is bumped, and shrink or remove this carve-out
+          #    accordingly.
+          #    GHSA-2phv-j68v-wwqx (high), GHSA-3qhv-2rgh-x77r (moderate),
+          #    GHSA-4gxm-v5v7-fqc4 (moderate), GHSA-54hh-g5mx-jqcp (moderate),
+          #    GHSA-5wx6-mg75-v57r (high), GHSA-6pfh-p556-v868 (moderate),
+          #    GHSA-6x96-7vc8-cm3p (moderate), GHSA-72r4-9c5j-mj57 (high),
+          #    GHSA-7vhp-vf5g-r2fw (high), GHSA-8cc4-rfj6-fhg4 (moderate),
+          #    GHSA-c59q-g84q-2gj5 (high), GHSA-cjhr-43r9-cfmw (moderate),
+          #    GHSA-fr4h-3cph-29xv (high), GHSA-gj8w-mvpf-x27x (high),
+          #    GHSA-hg3w-7f8c-63hp (moderate), GHSA-hwx4-2j3j-g496 (high),
+          #    GHSA-m733-5w8f-5ggw (moderate), GHSA-p4xf-rf54-rj3x (moderate),
+          #    GHSA-q6j5-fjx5-2mc3 (moderate), GHSA-qrv3-253h-g69c (high),
+          #    GHSA-rxhj-4m44-96r4 (high), GHSA-v253-rj99-jwpq (moderate),
+          #    GHSA-vq4v-j7r6-jq4m (high), GHSA-w466-c33r-3gjp (high),
+          #    GHSA-xpqm-wm3m-f34h (moderate)
+          allow-ghsas: "GHSA-hrxh-6v49-42gf, GHSA-gcjh-h69q-9w9g, GHSA-2phv-j68v-wwqx, GHSA-3qhv-2rgh-x77r, GHSA-4gxm-v5v7-fqc4, GHSA-54hh-g5mx-jqcp, GHSA-5wx6-mg75-v57r, GHSA-6pfh-p556-v868, GHSA-6x96-7vc8-cm3p, GHSA-72r4-9c5j-mj57, GHSA-7vhp-vf5g-r2fw, GHSA-8cc4-rfj6-fhg4, GHSA-c59q-g84q-2gj5, GHSA-cjhr-43r9-cfmw, GHSA-fr4h-3cph-29xv, GHSA-gj8w-mvpf-x27x, GHSA-hg3w-7f8c-63hp, GHSA-hwx4-2j3j-g496, GHSA-m733-5w8f-5ggw, GHSA-p4xf-rf54-rj3x, GHSA-q6j5-fjx5-2mc3, GHSA-qrv3-253h-g69c, GHSA-rxhj-4m44-96r4, GHSA-v253-rj99-jwpq, GHSA-vq4v-j7r6-jq4m, GHSA-w466-c33r-3gjp, GHSA-xpqm-wm3m-f34h"

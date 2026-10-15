@@ -18,7 +18,7 @@ configuration and StorageClasses on the VM hosting cluster.
 | Register backend and tier; inspect ERROR/READY; save unchanged to retry | Implemented locally; deploy the matching service/CLI and CA configuration before testing |
 | Create Tenant through OSAC | Existing API; requires the lab's normal identity, infrastructure and operator setup |
 | Wait for preparation, select it by tenant/backend labels, pass it to AAP | Implemented locally; deploy the candidate operator to test waiting/selection |
-| Consume arbitrary prepared SVM names and operator-provided preparation | Requires an adapted receiver; published PR #1580 still uses the earlier convention |
+| Consume explicit prepared SVM and operator-provided credentials | Receiving implementation in PR #1580; deploy a matching revision before native qualification |
 | Verify native Trident readiness, trust, FC disk use and cleanup | Joint deployed qualification; registration success does not establish these |
 
 Submitting the Tenant request and creating the preparation Secret do not depend
@@ -28,17 +28,19 @@ candidate operator, you can test preparation waiting/selection without a NetApp
 provisioning provider; a valid preparation then reports that none is configured.
 The NetApp AAP role turns those inputs into native Trident resources and
 StorageClasses. Deploy a matching receiver before that final checkpoint.
-The local adapter is restricted to uncapped tiers without an encryption
-requirement; those receiving mappings still belong to the onboarding work.
+For a data-passing test, route all four storage actions to a reviewed capture-only
+AAP playbook before creating inputs or resuming retries. That playbook must stop
+before ONTAP requests or native provisioning. An intentionally failed capture
+job leaves storage not ready; it does not establish native readiness.
 
 ## 1. Confirm the environment
 
 Record the deployed Fulfillment/operator image revisions and AAP collection
 revision. The local status/trust changes must be included. Establish your
 authenticated private `osac` CLI session and separate Kubernetes contexts for
-the operator/hub and VM hosting cluster. Confirm which cluster holds the source
-preparation Secret; the current proposal is the protected hub `trident`
-namespace, which still needs agreement with the role owner.
+the operator/hub and VM hosting cluster. The source preparation Secret belongs in `osac-storage` on the hub. The installer
+creates this protected namespace; it is independent of the target `trident`
+namespace. Verify that the deployed operator can list Secrets there.
 
 Confirm these inputs without printing passwords:
 
@@ -115,8 +117,8 @@ osac get osac.private.v1.Tenant netapp-manual -o json
 ```
 
 Tenant Create prints one-time break-glass credentials; store them securely.
-Record the OSAC Tenant ID for preparation labels. It is distinct from the
-Kubernetes Tenant CR UID. Tenant creation starts the normal onboarding workflow;
+Use the Tenant resource name (`netapp-manual`) for preparation labels. OSAC
+enforces Tenant ID == resource name; the Kubernetes Tenant CR UID is different. Tenant creation starts the normal onboarding workflow;
 there is no separate NetApp start command.
 
 Use your hub context and operator namespace to inspect the Tenant CR:
@@ -141,11 +143,9 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: netapp-manual-primary-info
-  namespace: trident
+  namespace: osac-storage
   labels:
-    osac.openshift.io/secret-type: storage-tenant-preparation
-    osac.openshift.io/storage-backend-id: <backend-id>
-    osac.openshift.io/tenant-id: <osac-tenant-id>
+    osac.openshift.io/storage-backend: netapp-primary
     osac.openshift.io/tenant: netapp-manual
 type: Opaque
 stringData:
@@ -157,6 +157,10 @@ stringData:
 There is no `management_endpoint` or per-tenant CA field in this working profile.
 The endpoint comes from the backend; trust comes from deployment configuration.
 Use the actual prepared SVM name; no computed naming formula is required.
+The backend label uses its registered **name**, not its ID. The Secret name is
+admin-selected. Only the two illustrated labels are required. Admins can create
+it before the Tenant using the intended Tenant resource name; storage still
+waits for Tenant Ready. Restrict namespace access to trusted admins/operator.
 
 To create it without putting the password in a file, command argument or shell
 history, edit the non-secret placeholders below and run this in your terminal:
@@ -175,11 +179,9 @@ secret = {
     "kind": "Secret",
     "metadata": {
         "name": "netapp-manual-primary-info",
-        "namespace": "trident",
+        "namespace": "osac-storage",
         "labels": {
-            "osac.openshift.io/secret-type": "storage-tenant-preparation",
-            "osac.openshift.io/storage-backend-id": "<backend-id>",
-            "osac.openshift.io/tenant-id": "<osac-tenant-id>",
+            "osac.openshift.io/storage-backend": "netapp-primary",
             "osac.openshift.io/tenant": "netapp-manual",
         },
     },
@@ -197,14 +199,19 @@ subprocess.run(
 PY
 ```
 
-**Checkpoint:** the operator finds exactly one preparation for the immutable
-tenant/backend IDs and continues without a manual Tenant status edit. Duplicate,
+**Checkpoint:** the operator finds exactly one preparation for the
+tenant/backend names and continues without a manual Tenant status edit. Duplicate,
 incomplete or mismatched preparations must keep storage not ready with a useful
 reason. These selection/retry cases are implemented in the candidate operator.
 
-## 6. Observe the native result
+## 6. Observe the result
 
-Inspect conditions using the command from step 4. On the actual VM hosting
+For capture-only testing, check sanitized capture evidence: source namespace,
+name/UID, backend ID, tier names and private value-comparison results. Expect zero
+ONTAP requests, zero Trident creations and storage conditions still false. Pause
+retries after capture. Stop here when native provisioning is not authorized.
+
+For an authorized native test with compatible AAP/Trident setup, inspect conditions using the command from step 4. On the actual VM hosting
 cluster, inspect only runtime metadata/status:
 
 ```bash

@@ -32,8 +32,8 @@ The registered account is used for discovery. The same endpoint is reused for
 Trident in the working MVP profile, with separate credentials from the tenant
 preparation Secret. Backend registration does not assign a tenant SVM.
 
-For a staged administrator walkthrough, including tenant/preparation steps that
-still need operator/AAP implementation, see
+For a staged administrator walkthrough, including the hub preparation Secret
+and separate native onboarding qualification, see
 [manual NetApp validation](netapp-manual-validation.md).
 
 ## Register a backend

@@ -3,13 +3,13 @@
 This contract connects backend/tier registration to prepared-SVM tenant
 onboarding for the developer preview. Registration, the operator request
 mapping, preparation lookup/waiting, and Fulfillment storage-status projection are implemented on the
-`OSAC-5813-netapp-backend-tiers` branch. The receiving AAP role and native
-resource lifecycle remain onboarding implementation work.
+`OSAC-5813-netapp-backend-tiers` branch. The receiving AAP role is developed separately in
+[PR #1580](https://github.com/osac-project/osac/pull/1580); deployed native
+resource lifecycle and FC qualification remain joint work.
 
 The working MVP profile is a shared cluster management endpoint with separate
-discovery and tenant/backend Trident accounts. This is the implementation
-assumption pending Akshay/Will confirmation; it does not promise that a
-cluster-scoped Trident account is restricted to one SVM. Backend credentials
+discovery and tenant/backend Trident accounts. This is the agreed preview profile; the actual account's permissions still
+need qualification to establish restriction to its tenant's SVM. Backend credentials
 serve discovery; the preparation Secret supplies the account for tenant volume
 operations. Both accounts must work through the registered cluster endpoint.
 
@@ -60,7 +60,7 @@ osac_job_vars:
       namespace: osac-system
       uid: tenant-cr-uid
       labels:
-        osac.openshift.io/tenant-id: immutable-osac-tenant-id
+        osac.openshift.io/tenant-id: tenant-a
   storage_tier_definitions:
     - name: fast
       protocol: block
@@ -79,9 +79,9 @@ osac_job_vars:
       username: osac-discovery
       password: "<resolved only during provisioning>"
       tenant_preparation:
-        tenant_id: immutable-osac-tenant-id
+        tenant_id: tenant-a
         source:
-          namespace: trident
+          namespace: osac-storage
           name: admin-chosen-preparation
           uid: source-secret-uid
           resource_version: "42"
@@ -113,69 +113,69 @@ Sender implementation and tests:
 - [Payload tests](../../../osac-operator/pkg/provisioning/aap_provider_test.go)
 - [Controller tests](../../../osac-operator/internal/controller/storage_controller_test.go)
 
-## Tenant preparation: updated direction, implementation pending
+## Tenant preparation on the hub
 
-The CSP admin prepares an SVM and its account. For the preview, the latest
-direction uses one administrator-created Kubernetes Opaque Secret per immutable
-OSAC tenant ID and backend ID, shared by every tier on that backend. Tenant
-preparation through OSAC Secrets Service is deferred. The discovery password
-reference used by registration is unchanged.
-
-The proposed administrator input is:
+The CSP admin prepares each tenant's SVM and account, then creates one Kubernetes
+Opaque Secret per tenant/backend in the hub's `osac-storage` namespace. All tiers
+on that backend share the same preparation. The installer creates this namespace
+and retains it on uninstall; restrict access to trusted administrators and the
+operator. OSAC Secrets Service preparation sourcing is deferred. The discovery
+password reference used by registration is unchanged.
 
 ```yaml
 apiVersion: v1
 kind: Secret
 metadata:
   name: acme-netapp-primary-info  # Admin-selected; no naming formula.
-  namespace: trident
+  namespace: osac-storage
   labels:
-    osac.openshift.io/secret-type: storage-tenant-preparation
-    osac.openshift.io/storage-backend-id: backend-id
-    osac.openshift.io/tenant-id: immutable-osac-tenant-id
-    osac.openshift.io/tenant: acme
+    osac.openshift.io/storage-backend: netapp-primary  # Backend metadata.name.
+    osac.openshift.io/tenant: acme                     # Tenant resource name.
 type: Opaque
 stringData:
-  username: trident_acme        # Account usable through the cluster endpoint.
-  password: "<tenant-runtime-password>"
-  svm: customer_acme             # Explicit prepared SVM; no required name.
+  username: trident_acme
+  password: "<tenant-account-password>"
+  svm: customer_acme  # Explicit prepared SVM; no required name.
 ```
 
-This is the preparation input, not the native Trident credentials Secret. The
-operator selects exactly one protected input for the tenant/backend and
-pass its information to AAP. AAP creates the native credentials Secret and TBC
-on the actual VM hosting cluster. Runtime credentials must never be replaced
-with the cluster discovery account. Source presence alone is not proof of
-successful onboarding.
+Only those two association labels are required. The backend label contains its
+registered **name**, while tier associations and AAP connection keys retain the
+backend **ID**. The operator resolves name to ID from the catalog internally.
+OSAC enforces Tenant ID == Tenant resource name; neither is the Kubernetes UID.
+Admins can therefore prepare this Secret before creating the intended Tenant.
+Each matching pair must have exactly one source; duplicates block dispatch.
+Old purpose/backend-ID/tenant-ID labels alone do not select a preparation.
+
+This source is not the native Trident credentials Secret. The operator passes
+its contents and source metadata to AAP in `tenant_preparation`; AAP creates a
+separate credentials Secret and TBC in the actual VM hosting cluster's Trident
+namespace. This supports a separate hub/VMaaS cluster. Keep preparation selector
+labels off AAP output Secrets. Never substitute discovery credentials for the
+supplied tenant account or modify/delete the admin source.
 
 ```text
-Admin prepares SVM/account + labelled input Secret
-  -> Tenant CR is Ready
-  -> operator waits for matching preparation
-  -> operator supplies preparation + backend/tier settings to AAP
-  -> AAP validates it and creates runtime Secret, TBC and StorageClasses
-  -> storage conditions report the result
+CSP admin: prepare SVM/account and hub Secret (before or after Tenant creation)
+  -> normal Tenant onboarding reaches Ready
+  -> operator polls for the matching tenant/backend-name labels
+  -> operator passes source + ID-keyed backend/tier settings to AAP
+  -> backend setup validates prepared SVM/account and requested policies
+  -> native setup creates target credentials Secret, TBC and StorageClasses
+  -> successful current-configuration jobs and classes establish storage readiness
 ```
 
-Deploy a matching receiving implementation before enabling the full flow:
-
-| Item | Proposed resolution / remaining check |
+| Input / boundary | Source or remaining qualification |
 |---|---|
-| Source cluster | Protected `trident` namespace on the operator/hub cluster; confirm this separately from the runtime Trident cluster, including dedicated VMaaS |
-| Tenant identity | Use the immutable OSAC tenant ID, obtained from the Tenant API; do not substitute the Kubernetes CR UID or reuse a previous tenant's assignment |
-| AAP payload | The implemented `storage_backend_connections[id].tenant_preparation` layout above; the receiver must consume it |
-| Runtime management endpoint | Use `StorageBackend.spec.endpoint` for discovery and Trident; the preparation supplies separate credentials and an explicit SVM name, with no `management_endpoint` field for this profile |
-| Runtime account permissions | Qualify the supplied account through the cluster endpoint with Trident; distinct accounts do not by themselves establish per-SVM authorization restrictions |
-| Certificate trust | Installation supplies an approved CA bundle to each HTTPS caller; AAP execution-environment and Trident projection remain to wire and qualify |
+| Preparation | Hub `osac-storage`; independent of the workload Trident namespace |
+| AAP payload | Layout above; the namespace/name change does not alter its schema |
+| Runtime endpoint | Registered `StorageBackend.spec.endpoint`; no preparation `management_endpoint` field for this profile |
+| Runtime permissions | Qualify the separate tenant account through the shared cluster endpoint; distinct usernames alone do not restrict access |
+| TLS trust | Approved bundle for every HTTPS caller; AAP execution-environment and Trident delivery remain installation/role integration work |
+| Native placement | AAP must use the actual VM hosting cluster, including dedicated VMaaS; capture-only testing does not verify this |
 
-Will's current role derives Trident's address from the registered backend,
-which matches this working endpoint profile. It still looks up computed Secret
-and SVM names instead of consuming the operator-selected preparation and its
-explicit `svm`; that receiving interface needs to change. A separate local lab
-adapter for PR #1580 consumes the new payload; it is not part of Will's published
-PR. The operator selection, waiting/retry and payload are implemented.
-The earlier provider-labelled Secret-existence check must not treat an admin
-preparation Secret as proof that native onboarding succeeded.
+Will's receiving role consumes `tenant_preparation.provider_config`, including
+the explicit SVM and credentials, and derives the address from the registered
+backend. Use compatible operator/role revisions when testing; registration and
+source selection alone do not establish working native provisioning.
 
 NetApp's
 [Trident SAN configuration guidance](https://docs.netapp.com/us-en/trident-2510/trident-use/ontap-san-examples.html)
@@ -231,12 +231,14 @@ storage provisioning job until resolution succeeds. CaaS cleanup still runs
 before that gate. Legacy compute/deletion callers retain their existing
 best-effort resolution policy. Missing-backend skipping remains a catalog-resolution follow-up. Preparation
 lookup now requires exactly one non-deleting Opaque Secret with matching
-immutable tenant/backend labels and non-empty `username`, `password`, `svm`.
-The optional tenant-name label must agree when supplied. The operator reads the
+tenant-name/backend-name labels and non-empty `username`, `password`, `svm`. The operator reads the
 hub API directly, and polls at `OSAC_AAP_STATUS_POLL_INTERVAL` (default 30s), so
 creating a matching Secret resumes work without a Tenant edit. The namespace
-default is `trident`; `OSAC_STORAGE_PREPARATION_NAMESPACE` overrides it. Restrict
-writes there to trusted administrators.
+default is `osac-storage`; the operator Helm deployment explicitly sets
+`OSAC_STORAGE_PREPARATION_NAMESPACE` to that value. A custom deployment can
+override it, provided the namespace exists and the operator can read its Secrets.
+`OSAC_STORAGE_CONFIG_NAMESPACE` remains the legacy provider-output namespace;
+it is unrelated to NetApp preparation selection.
 
 Missing, ambiguous, invalid or unreadable preparation sets both storage
 conditions false. The input Secret is never patched or deleted. For prepared
@@ -276,10 +278,11 @@ Registration qualification has passed through the current candidate CLI and
 REST gateway/API on an isolated host setup, with real PostgreSQL, Kafka and
 read-only ONTAP discovery. It exercised the linked YAML examples, protected
 VALUE password lookup, tier round trips, public filtering, the earlier rejected
-credential-update behavior, tier guards and catalog cleanup. The new ERROR/manual
-retry semantics and configured CA-pool injection have local fixture coverage;
-they have not been rerun against the array. OIDC/JWKS and Vault were HTTP
+credential-update behavior, tier guards and catalog cleanup. ERROR/manual retry and configured CA-pool injection also passed a deployed
+read-only ONTAP check on edge-17. A separate operator-to-real-AAP capture verified
+prepared values without ONTAP requests or native resource creation; that run used
+the earlier source labels/namespace and must be repeated for this revision. OIDC/JWKS and Vault were HTTP
 protocol fixtures; ONTAP trust used a supplied public certificate with normal
 hostname/expiry verification. This is component registration evidence.
-Production identity/Vault/CA deployment, receiving AAP behavior, native lifecycle
-and FC VM acceptance still need their respective integration checks.
+OSAC Secrets Service production sourcing, AAP/Trident trust delivery, native
+lifecycle and FC VM acceptance still need their respective integration checks.

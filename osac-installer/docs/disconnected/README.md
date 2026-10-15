@@ -1,7 +1,6 @@
 # Disconnected Mirroring Documentation
 
-Category-specific guides for mirroring OSAC images and dependencies into
-a disconnected (air-gapped) mirror registry.
+Category-specific guides for mirroring OSAC images and dependencies into a disconnected (air-gapped) mirror registry.
 
 ## Overview
 
@@ -13,8 +12,7 @@ operators (via catalog mirroring) and additional images (via the
 
 These category-specific guides break down the mirroring process into
 focused, independently verifiable steps.  Each guide covers a specific
-image group with its own prerequisites, execution steps, and BDD
-verification scenarios.
+image group with its own prerequisites, execution steps, and verification scenarios.
 
 > **Main guide**: For the unified end-to-end disconnected installation
 > procedure, see [disconnected-install.md](../disconnected-install.md).
@@ -25,8 +23,8 @@ OSAC installation follows a strict three-phase deployment order:
 
 | Phase | Helm Chart | Purpose | Mirroring Categories |
 | ----- | ---------- | ------- | -------------------- |
-| **Phase 1a** | `osac-deps` | Install OLM operators, register CRDs | [Category 1A](mirroring-operators.md) |
-| **Phase 1b** | `osac-infra` | Create CRD instances, deploy shared services | [Category 1B](mirroring-core-components.md) |
+| **Phase 1a** | Unsupported | Install OLM operators, register CRDs | [Category 1A](mirroring-operators.md) |
+| **Phase 1b** | Unsupported | Create CRD instances, deploy shared services | [Category 1B](mirroring-core-components.md) |
 | **Phase 2** | `osac` | Deploy the OSAC platform | [Category 1B](mirroring-core-components.md) |
 
 Service-specific categories extend the base mirroring:
@@ -35,7 +33,6 @@ Service-specific categories extend the base mirroring:
 | -------- | ------- | ----- |
 | **1C** | VMaaS (Virtual Machine as a Service) | [mirroring-vmaas.md](mirroring-vmaas.md) |
 | **1D** | BMaaS (Bare Metal as a Service) | [mirroring-bmaas.md](mirroring-bmaas.md) |
-| **1E** | AAP (Ansible Automation Platform) | [mirroring-aap.md](mirroring-aap.md) |
 
 ## Category Guides
 
@@ -72,16 +69,14 @@ Mirror VM disk images (containerdisks) for VMaaS:
 
 - Containerdisk `additionalImages` entries
 - ITMS configuration for tag-based image resolution
-- CDI `pullMethod: node` workaround
-- Known gap: OSAC-5188 (containerdisks not in Tier-1 mirror list)
-- Known gap: OSAC-2991 (CDI pullMethod not in OSAC API)
+- The repository visibility must be set to 'public' and allow anonymous pulls.
 
 ### [Category 1D: Mirroring BMaaS Images](mirroring-bmaas.md)
 
+TODO: Placeholder section
 Mirror BMaaS / Metal3 OCI images:
 
 - Metal3 agent images via IDMS
-- Post-OSAC-4558 OCI reference approach
 - BareMetalHost provisioning verification
 
 ### [Category 1E: Mirroring AAP Images](mirroring-aap.md)
@@ -90,7 +85,6 @@ Mirror AAP controller/hub images:
 
 - Operator-managed Redis and PostgreSQL (via `RELATED_IMAGE_*` env vars,
   not Helm values)
-- Playbook `extra_vars` overrides for disconnected execution
 - Execution environment image mirroring
 
 ## Dependency Flowchart
@@ -126,13 +120,13 @@ flowchart TD
     CAT_1A ==>|"CRDs registered"| PHASE_1A
     CAT_1B ==>|"images mirrored"| PHASE_1B
 
-    subgraph PHASE_1A["Phase 1a: osac-deps"]
+    subgraph PHASE_1A["Phase 1a"]
         P1A["Install operators<br/>Register CRDs"]:::phaseStyle
     end
 
     PHASE_1A ==>|"CRDs available"| PHASE_1B
 
-    subgraph PHASE_1B["Phase 1b: osac-infra"]
+    subgraph PHASE_1B["Phase 1b"]
         P1B["Create CRD instances<br/>Deploy shared services"]:::phaseStyle
     end
 
@@ -175,15 +169,11 @@ flowchart TD
    (ImageDigestMirrorSet) and ITMS (ImageTagMirrorSet) at the
    kubelet/CRI-O level.
 
-3. **One disconnected Helm value** — The only disconnected-specific
-   Helm override consumed by the `osac-deps` chart is:
-   - `cliImage` — Mirrored origin-cli image reference
-
-   All seven Subscription templates hard-code
+3. All seven operator Subscriptions reference
    `source: redhat-operators`.  The mirrored CatalogSource must
    be named `redhat-operators` in `openshift-marketplace` so that
    Subscriptions resolve correctly.  See
-   [mirroring-operators.md § Current chart limitation](mirroring-operators.md#current-chart-limitation).
+   [mirroring-operators.md § CatalogSource naming requirement](mirroring-operators.md#catalogsource-naming-requirement).
 
 4. **Bastion laptop for OCI Helm charts** — `oc-mirror` v2 supports
    `mirror.helm` for local or repository-index charts, but cannot

@@ -30,7 +30,7 @@ registry.
 | -------- | ------- |
 | Additional disk (mirror registry) | ~3 GiB for AAP operand images |
 | AAP subscription manifest | `license.zip` from Red Hat Subscription Management |
-| Execution environment image(s) | Custom EE images used by OSAC playbooks, default: `osac-aap:0.0.19`|
+| Execution environment image(s) | Custom EE images used by OSAC playbooks, default: `osac-aap:0.0.19` |
 
 ## ImageSetConfiguration Section
 
@@ -50,7 +50,7 @@ configurable through OSAC Helm values:
 | ----- | ------- | ------------------------------- | ------------------------------------------ |
 | Redis | Session cache and task queue for AAP controller | AAP operator env var `RELATED_IMAGE_REDIS` | `aap.aap.instance.redisMode: standalone` |
 | PostgreSQL | Database for AAP controller and hub | AAP operator env var `RELATED_IMAGE_POSTGRES` | Derived automatically by operator deployment spec |
-| AAP Controller (awx-ee) | Default execution environment |`RELATED_IMAGE_EE` in AWX database | `configAsCode.eeImage: ghcr.io/osac-project/osac-aap:0.0.19` |
+| AAP Controller (awx-ee) | Default execution environment | `RELATED_IMAGE_EE` in AWX database | `configAsCode.eeImage: ghcr.io/osac-project/osac-aap:0.0.19` |
 | AAP Hub (galaxy-ng) | Automation content hub | AAP operator env var `RELATED_IMAGE_HUB` | `aap.aap.instance.hub.disabled: true` |
 
 These images are included in the operator bundle and are resolved via
@@ -63,7 +63,7 @@ The following images are required for AAP integration (version tags are
 specified in the ImageSetConfiguration below):
 
 | Image | Registry | Purpose |
-|-------|----------|---------|
+| ------------------------------- | ------- | ------------------------------ |
 | `ghcr.io/osac-project/osac-aap` | ghcr.io | OSAC AAP integration component |
 | `quay.io/openshift/origin-cli` | quay.io | EE image builds and Helm hooks |
 
@@ -91,6 +91,7 @@ OSAC automation must be mirrored separately:
 ```
 
 ## Execution Steps
+
 Here, `NS` denotes the namespace in which osac helm chart is installed.
 
 ### Step 1 — Verify AAP operator images are mirrored

@@ -13,7 +13,7 @@ local catalog instead of the default `redhat-operators` source.
 > operator listed here; this page provides category-specific detail and
 > verification steps.
 
-## Prerequisites (TDD: define checks first)
+## Prerequisites
 
 Before you begin, confirm each item:
 
@@ -143,8 +143,10 @@ oc apply --server-side -f oc-mirror-workspace/working-dir/cluster-resources/itms
 
 ### Step 3 — Rename the CatalogSource to `redhat-operators`
 
-All seven Subscription templates in the `osac-deps` chart hard-code
-`source: redhat-operators` (see [Current chart limitation](#current-chart-limitation)).
+The Subscription manifests used to install the OSAC operators (and
+Red Hat's own documented Subscription examples) reference the
+`redhat-operators` catalog source in `openshift-marketplace` (see
+[CatalogSource naming requirement](#catalogsource-naming-requirement)).
 The `CatalogSource` that OLM resolves against must therefore be named
 `redhat-operators` in `openshift-marketplace`.
 
@@ -163,86 +165,86 @@ oc apply --server-side -f \
 oc get catalogsource redhat-operators -n openshift-marketplace
 ```
 
-> **Why rename?** The chart does not expose a `catalogSource` value
-> that templates into Subscription `.spec.source`.  All seven
-> Subscription templates emit `source: redhat-operators` literally.
-> Naming the mirrored CatalogSource `redhat-operators` is the
-> simplest way to make Subscriptions resolve without chart changes.
-> If the connected-environment default `redhat-operators`
-> CatalogSource still exists, delete it first so the mirrored one
-> takes its place.
+> **Why rename?** The documented Subscription manifests for all seven
+> operators specify `source: redhat-operators` and
+> `sourceNamespace: openshift-marketplace` — the same catalog name a
+> connected OpenShift cluster uses by default.  Naming the mirrored
+> CatalogSource `redhat-operators` lets those Subscriptions resolve
+> without editing each manifest.  If the connected-environment default
+> `redhat-operators` CatalogSource still exists, delete it first so
+> the mirrored one takes its place.
 
-### Step 4 — Install operators via Helm (osac-deps)
+### Step 4 — Install the operators
 
-Install the chart, overriding only the `cliImage` for disconnected
-pull (the only global value consumed by the chart):
+Install each operator following the official Red Hat documentation —
+via OperatorHub in the web console, or by applying `Namespace`,
+`OperatorGroup`, and `Subscription` manifests with `oc`.  For the
+documented procedure, see
+[Adding Operators to a cluster](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/operators/user-tasks).
 
-```bash
-helm upgrade --install osac-deps osac-installer/charts/osac-deps \
-  --namespace osac-deps --create-namespace \
-  --set cliImage=<mirror-registry>:8443/openshift/origin-cli:4.20
+Install them in the namespaces and channels below — these are the
+namespaces the OSAC platform expects the operators in:
+
+| Operator package | Namespace | Channel |
+| ---------------- | --------- | ------- |
+| `openshift-cert-manager-operator` | `cert-manager-operator` | `stable-v1` |
+| `ansible-automation-platform-operator` | `ansible-aap` | `stable-2.6-cluster-scoped` |
+| `amq-streams` | `osac-kafka` | `stable` |
+| `kubevirt-hyperconverged` | `openshift-cnv` | `stable` |
+| `lvms-operator` | `openshift-storage` | `stable-4.22` |
+| `metallb-operator` | `metallb-system` | `stable` |
+| `multicluster-engine` | `multicluster-engine` | `stable-2.17` |
+
+Example manifests for the cert-manager operator (repeat the pattern
+for each operator, adjusting name, namespace, and channel):
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-manager-operator
+---
+apiVersion: operators.coreos.com
+kind: OperatorGroup
+metadata:
+  name: cert-manager-operator
+  namespace: cert-manager-operator
+spec:
+  targetNamespaces:
+    - cert-manager-operator
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: openshift-cert-manager-operator
+  namespace: cert-manager-operator
+spec:
+  channel: stable-v1
+  name: openshift-cert-manager-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Automatic
 ```
 
-> **Note**: the chart does not expose `catalogSource` or
-> `catalogSourceNamespace` values.  All seven Subscription
-> templates hard-code `source: redhat-operators` and
-> `sourceNamespace: openshift-marketplace`.  The `cliImage` value
-> is used by the chart's pre-install/upgrade hook Jobs (e.g.
-> `wait-cert-manager`, `wait-aap`, `approve-aap-installplan`).
+> **AAP version pin**: subscribe the
+> `ansible-automation-platform-operator` with
+> `installPlanApproval: Manual` and
+> `startingCSV: aap-operator.v2.6.0-0.1787258256` so it resolves to
+> the version mirrored in Category 1A
+> (`maxVersion: '2.6.0+0.1787258256'`), then approve the generated
+> InstallPlan:
+>
+> ```bash
+> oc patch installplan <installplan-name> -n ansible-aap \
+>   --type merge -p '{"spec":{"approved":true}}'
+> ```
 
-## Verification (BDD Scenarios)
+Wait for every operator CSV to reach `Succeeded` — cert-manager
+first, since the Phase 1b certificates and CA resources depend on it —
+before continuing to [Category 1B](mirroring-core-components.md):
 
-```gherkin
-Feature: OLM operator mirroring for disconnected OSAC
-
-  Background:
-    Given a disconnected OpenShift 4.22 cluster
-    And a mirror registry populated by oc-mirror v2
-    And the CatalogSource "cs-redhat-operator-index-v4-22" exists in "openshift-marketplace"
-
-  Scenario: All seven operator packages are available in the mirrored catalog
-    When I query the mirrored CatalogSource
-    Then the catalog contains the package "openshift-cert-manager-operator"
-    And the catalog contains the package "ansible-automation-platform-operator"
-    And the catalog contains the package "amq-streams"
-    And the catalog contains the package "kubevirt-hyperconverged"
-    And the catalog contains the package "lvms-operator"
-    And the catalog contains the package "metallb-operator"
-    And the catalog contains the package "multicluster-engine"
-
-  Scenario: CatalogSource pod reaches READY state
-    When I check the CatalogSource status
-    Then the CatalogSource "cs-redhat-operator-index-v4-22" has connectionState "READY"
-
-  Scenario: Operator subscriptions resolve from the mirrored catalog
-    Given the osac-deps Helm chart is installed
-    And the mirrored CatalogSource is named "redhat-operators"
-    When I list Subscriptions across operator namespaces
-    Then each Subscription has status "AtLatestKnown"
-    And every Subscription references source "redhat-operators"
-    # All seven Subscription templates hard-code
-    # source: redhat-operators — the mirrored CatalogSource
-    # must use that name (see Step 3).
-
-  Scenario: Operator CSVs reach Succeeded phase
-    When I list ClusterServiceVersions in operator namespaces
-    Then the CSV for "openshift-cert-manager-operator" has phase "Succeeded"
-    And the CSV for "ansible-automation-platform-operator" has phase "Succeeded"
-    And the CSV for "amq-streams" has phase "Succeeded"
-    And the CSV for "kubevirt-hyperconverged" has phase "Succeeded"
-    And the CSV for "lvms-operator" has phase "Succeeded"
-    And the CSV for "metallb-operator" has phase "Succeeded"
-    And the CSV for "multicluster-engine" has phase "Succeeded"
-
-  Scenario: CRDs required by Phase 1b are registered
-    When I query the API server for CRDs
-    Then CRD "certificates.cert-manager.io" exists
-    And CRD "clusterissuers.cert-manager.io" exists
-    And CRD "kafkas.kafka.strimzi.io" exists
-    And CRD "hyperconvergeds.hco.kubevirt.io" exists
-    And CRD "lvmclusters.lvm.topolvm.io" exists
-    And CRD "ipaddresspools.metallb.io" exists
-    And CRD "multiclusterengines.multicluster.openshift.io" exists
+```bash
+oc get csv -A --no-headers | awk '{print $1, $2, $NF}'
 ```
 
 ## Validation Commands
@@ -272,7 +274,7 @@ for crd in certificates.cert-manager.io \
 done
 
 # 5. Verify all Subscriptions reference "redhat-operators"
-# All seven Subscription templates hard-code
+# The documented Subscription manifests specify
 # source: redhat-operators.  The mirrored CatalogSource must
 # use that name (see Step 3).  Any Subscription pointing
 # elsewhere indicates a manual override or stale resource.
@@ -293,33 +295,27 @@ source=\(.spec.source) — expected redhat-operators"'
 | `oc-mirror` fails with `manifest unknown` | Registry disk full or partial upload | Check registry storage; re-run `oc-mirror` (idempotent) |
 | `maxVersion` mismatch for AAP | Version format includes build metadata | Use exact string `'2.6.0+0.1787258256'` with quotes in YAML |
 
-## Current chart limitation
+## CatalogSource naming requirement
 
-All seven Subscription templates in `osac-deps` hard-code
-`source: redhat-operators` and
-`sourceNamespace: openshift-marketplace`.  The chart does **not**
-expose `catalogSource` or `catalogSourceNamespace` values that
-template into those fields.
+The documented Subscription manifests for all seven operators specify
+`source: redhat-operators` and `sourceNamespace: openshift-marketplace`
+— the catalog name a connected OpenShift cluster uses by default.
 
-| Template | Subscription `.spec.source` | Templated? |
-|----------|----------------------------|------------|
-| `aap.yaml` | `redhat-operators` | No |
-| `amq-streams.yaml` | `redhat-operators` | No |
-| `cert-manager.yaml` | `redhat-operators` | No |
-| `cnv.yaml` | `redhat-operators` | No |
-| `lvms.yaml` | `redhat-operators` | No |
-| `metallb.yaml` | `redhat-operators` | No |
-| `mce.yaml` | `redhat-operators` | No |
+| Operator package | Subscription `.spec.source` |
+| ---------------- | ---------------------------- |
+| `ansible-automation-platform-operator` | `redhat-operators` |
+| `amq-streams` | `redhat-operators` |
+| `openshift-cert-manager-operator` | `redhat-operators` |
+| `kubevirt-hyperconverged` | `redhat-operators` |
+| `lvms-operator` | `redhat-operators` |
+| `metallb-operator` | `redhat-operators` |
+| `multicluster-engine` | `redhat-operators` |
 
 **Consequence for disconnected installs**: the mirrored
 `CatalogSource` must be named `redhat-operators` in
 `openshift-marketplace`, or the Subscriptions cannot resolve.
 See [Step 3](#step-3--rename-the-catalogsource-to-redhat-operators)
 above.
-
-The only global disconnected value consumed by the chart is
-`cliImage`, used by the hook Jobs (`wait-cert-manager`,
-`wait-aap`, `approve-aap-installplan`).
 
 ## Known Gaps / Limitations
 
@@ -338,7 +334,7 @@ The only global disconnected value consumed by the chart is
    intentional and documented in
    [cve-2026-75884-security-exception.md](../cve-2026-75884-security-exception.md).
 
-4. **Hard-coded Subscription source** — All seven Subscription
-   templates use `source: redhat-operators` literally.  A future
-   chart change could template this field via a shared value,
-   removing the need to rename the mirrored CatalogSource.
+4. **Fixed Subscription source** — The documented Subscription
+   manifests reference `source: redhat-operators` literally.  A
+   mirrored CatalogSource with a different name requires editing
+   every Subscription manifest to match.

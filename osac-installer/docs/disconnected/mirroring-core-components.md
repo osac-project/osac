@@ -4,9 +4,9 @@
 
 Mirror all OSAC dependency images and core component images into a
 disconnected mirror registry using the `additionalImages` section of the
-`oc-mirror` v2 `ImageSetConfiguration`.  Then deploy OSAC via the bastion
-laptop workflow using the three-phase Helm architecture with disconnected
-values.
+`oc-mirror` v2 `ImageSetConfiguration`.  Then deploy OSAC using the
+[customer install guide](../../../docs/guides/installation/customer-install-guide.md)
+with disconnected values.
 
 > **Relationship to the main guide**: this document expands on the
 > `additionalImages` and Helm chart sections of
@@ -40,7 +40,7 @@ The following images are required (version tags are specified in the
 ImageSetConfiguration below):
 
 | Image | Registry | Purpose |
-|-------|----------|---------|
+| ------- | ---------- | --------- |
 | `ghcr.io/openbao/openbao` | ghcr.io | Per-tenant secret storage (Vault-compatible) |
 | `quay.io/jetstack/trust-manager` | quay.io | CA bundle distribution |
 | `quay.io/jetstack/trust-pkg-debian-bookworm` | quay.io | Base trust-store package |
@@ -63,8 +63,8 @@ ImageSetConfiguration below):
 
 ### Dependency Images (Phase 1a / Phase 1b)
 
-These images are consumed by the `osac-deps` and `osac-infra` Helm charts
-for shared services such as trust management, identity, and databases.
+These images are consumed by the Phase 1a and Phase 1b shared services
+such as trust management, identity, and databases.
 
 ```yaml
   additionalImages:
@@ -83,10 +83,13 @@ for shared services such as trust management, identity, and databases.
 | `trust-manager` | v0.20.0 | Distributes CA bundles across keycloak, osac, and postgres namespaces |
 | `trust-pkg-debian-bookworm` | 20230311-deb12u1.1 | Base trust-store package consumed by trust-manager |
 | `keycloak` | 26.6.4 | Identity provider; issues JWTs for all OSAC services |
-| `origin-cli` | 4.20 | Used by osac-infra Helm hook jobs and osac-aap EE image builds |
+| `origin-cli` | 4.20 | osac-aap EE image builds, osac-metering, kafka component of fulfillment-service,osac-csi-driver |
 | `postgresql-18-c10s` | (digest-pinned) | Primary relational database for fulfillment-service |
 
 ### OSAC Core Component Images (Phase 2)
+
+The following command( value passed to version argument varies based upon the release ) gives the tag of each sub-component of the osac.
+`helm show values oci://ghcr.io/osac-project/charts/osac --version 0.0.21 > values-upstream.yaml`
 
 ```yaml
     # --- OSAC core components ---
@@ -182,23 +185,19 @@ SSH tunnel.
 └──────────────────┘                    └───────────────┘                 └─────────────────────┘
 ```
 
-### Step 4 — Three-phase Helm deployment
+### Step 4 — Three-phase deployment
 
 OSAC installation follows a strict three-phase ordering:
 
-#### Phase 1a: `osac-deps` — Install operators and register CRDs
+#### Phase 1a: Install operators and register CRDs
 
-```bash
-helm upgrade --install osac-deps \
-  oci://ghcr.io/osac-project/charts/osac-deps --version 0.0.21 \
-  --namespace osac-deps --create-namespace \
-  --set cliImage=<mirror-registry>:8443/openshift/origin-cli:4.20
-```
-
-> The mirrored `CatalogSource` must be named `redhat-operators`
-> in `openshift-marketplace` — all seven Subscription templates
-> hard-code that name.  See
-> [mirroring-operators.md § Step 3](mirroring-operators.md#step-3--rename-the-catalogsource-to-redhat-operators).
+Install the seven operators from the mirrored `redhat-operators`
+catalog following the official Red Hat documentation.  Namespaces,
+channels, the AAP version pin, and the verification steps are in
+[mirroring-operators.md § Step 4](mirroring-operators.md#step-4--install-the-operators).
+The mirrored `CatalogSource` must be named `redhat-operators` in
+`openshift-marketplace` (see
+[mirroring-operators.md § Step 3](mirroring-operators.md#step-3--rename-the-catalogsource-to-redhat-operators)).
 
 Wait for all operator CSVs to reach `Succeeded`:
 
@@ -206,115 +205,83 @@ Wait for all operator CSVs to reach `Succeeded`:
 oc get csv -A --no-headers | awk '{print $1, $2, $NF}'
 ```
 
-#### Phase 1b: `osac-infra` — Create CRD instances and shared services
+#### Phase 1b: Create CRD instances and shared services
 
-```bash
-helm upgrade --install osac-infra \
-  oci://ghcr.io/osac-project/charts/osac-infra --version 0.0.21 \
-  --namespace osac-infra --create-namespace \
-  -f osac-installer/values/disconnected-dev/infra.yaml \
-  --set cliImage=<mirror-registry>:8443/openshift/origin-cli:4.20
-```
+Create the prerequisite CRD instances and shared services that the
+`osac` chart expects, following the official documentation for each
+component.  The authoritative prerequisite list, with documentation
+links per component, is
+[Table 2.1 of the customer install guide](../../../docs/guides/installation/customer-install-guide.md#table-21-platform-operators-and-components).
+In summary, this phase provisions:
 
-This phase creates:
+- TLS: `default-ca` `ClusterIssuer`, CA certificates, the trust-manager
+  `Bundle`, and the `ca-bundle` ConfigMap
+- Shared services: Keycloak (with the `osac` realm) in `keycloak`,
+  Kafka in `osac-kafka`, PostgreSQL, and OpenBao
+- Operand CRs: `LVMCluster`, `HyperConverged`, MetalLB
+  `IPAddressPool`/`L2Advertisement` — create each per its Red Hat
+  product documentation
+  ([LVM Storage](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/storage/index#persistent-storage-using-lvms),
+  [OpenShift Virtualization](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/virtualization/installing),
+  [MetalLB](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/networking_operators/metallb-operator))
+- Shared secrets: `fulfillment-controller-credentials`,
+  `keycloak-client-secrets`, and the database secrets the `osac` chart
+  expects (see the customer install guide prerequisites)
 
-- TLS: `ClusterIssuer`, CA certificates, trust-manager `Bundle`, `ca-bundle` ConfigMaps
-- Shared services: Keycloak (+ osac realm), PostgreSQL, OpenBao
-- Operand CRs: `LVMCluster`, `HyperConverged`, MetalLB `IPAddressPool`/`L2Advertisement`, `Kafka`
-- Shared secrets: `fulfillment-controller-credentials`, `keycloak-client-secrets`
+Readiness gates before Phase 2: the `default-ca` `ClusterIssuer`
+reports ready, the `ca-bundle` ConfigMap is populated, Keycloak
+answers on its route, and the operand CRs report healthy status.
 
 #### Phase 2: `osac` — Deploy the OSAC platform
+
+Install the supported `osac` chart with your disconnected values file
+(see [Section 4.2 of the customer install
+guide](../../../docs/guides/installation/customer-install-guide.md#42-configuring-the-helm-values)
+for how to prepare it):
 
 ```bash
 helm upgrade --install osac \
   oci://ghcr.io/osac-project/charts/osac --version 0.0.21 \
   --namespace osac --create-namespace \
-  -f osac-installer/values/disconnected-dev/osac.yaml
+  -f my-values.yaml \
+  --set cliImage=<mirror-registry>:8443/openshift/origin-cli:4.20 \
+  --set global.clusterDomain=$(oc get ingresses.config/cluster -o jsonpath='{.spec.domain}')
 ```
 
 ### Disconnected Helm Values Reference
 
-The following Helm value controls disconnected behavior.  There is no
-`global.imageRegistry` value; all other image resolution uses IDMS/ITMS
-at the kubelet/CRI-O level.
+The `osac` chart defines one disconnected-specific Helm value.  There
+is no `global.imageRegistry` value; all other image resolution uses
+IDMS/ITMS at the kubelet/CRI-O level.
 
 | Value | Default | Disconnected override | Scope |
 | ----- | ------- | --------------------- | ----- |
-| `cliImage` | `quay.io/openshift/origin-cli:4.20.0` | Mirrored origin-cli image reference | `osac-deps`, `osac-infra` |
+| `cliImage` | `quay.io/openshift/origin-cli:4.20.0` | Mirrored origin-cli image reference | `osac` |
 
-> **CatalogSource naming**: the chart does not expose
-> `catalogSource` or `catalogSourceNamespace` values — all seven
-> Subscription templates hard-code `source: redhat-operators`.
-> The mirrored CatalogSource must use that name.  See
-> [mirroring-operators.md § Current chart limitation](mirroring-operators.md#current-chart-limitation).
+`cliImage` backs the chart's hook Jobs (pre-install validation,
+database initialization, hub registration, and other cluster-side
+setup tasks).
 
-### Helm Weight Ordering (osac-deps)
+> **CatalogSource naming**: operator Subscriptions reference
+> `source: redhat-operators`, so the mirrored CatalogSource must use
+> that name.  See
+> [mirroring-operators.md § CatalogSource naming requirement](mirroring-operators.md#catalogsource-naming-requirement).
 
-Manual installation order within `osac-deps`:
+### Recommended installation order
 
-1. Namespaces (8 resources)
-2. ConfigMaps (hook scripts)
-3. OperatorGroups (7 resources)
-4. Subscriptions (7 resources)
-5. Post-install hooks in weight order:
-   - Weight 5 → `wait-cert-manager` (gated on `certManager.enabled`)
-   - Weight 14 → subsequent dependency waits
-   - Weight 15 → final dependency readiness
+Within each phase, apply resources in this order and verify readiness
+before moving on:
 
-Within each hook weight: `ServiceAccount` → `ClusterRole`/`Role` →
-`ClusterRoleBinding`/`RoleBinding` → `Job`
-
-## Verification (BDD Scenarios)
-
-```gherkin
-Feature: Core component mirroring and deployment for disconnected OSAC
-
-  Background:
-    Given a disconnected OpenShift 4.22 cluster
-    And all 7 OLM operators are installed (Category 1A complete)
-    And a mirror registry populated with OSAC additional images
-    And IDMS and ITMS resources are applied to the cluster
-
-  Scenario: All dependency images are accessible from cluster nodes
-    When a cluster node pulls "quay.io/jetstack/trust-manager:v0.20.0"
-    Then the image resolves via ITMS to the mirror registry
-    And the pull succeeds without error
-
-  Scenario: Phase 1a deploys operators with mirrored catalog
-    Given the mirrored CatalogSource is named "redhat-operators"
-    And the osac-deps chart is installed
-    When I check Subscription sources
-    Then all Subscriptions reference source "redhat-operators"
-    # All seven templates hard-code source: redhat-operators;
-    # the mirrored CatalogSource must use that name.
-
-  Scenario: Phase 1b creates shared services
-    Given the osac-infra chart is installed
-    When I check the osac-infra namespace
-    Then the Keycloak deployment is available
-    And the PostgreSQL StatefulSet is ready
-    And the OpenBao StatefulSet is ready
-    And the trust-manager Bundle is synced
-
-  Scenario: Phase 2 deploys OSAC platform components
-    Given the osac chart is installed
-    When I list deployments in the osac namespace
-    Then "osac-operator" deployment has available replicas > 0
-    And "fulfillment-service" deployment has available replicas > 0
-    And "envoy" deployment has available replicas > 0
-    And "osac-ui" deployment has available replicas > 0
-
-  Scenario: No image pull errors occur on disconnected nodes
-    When I check events across all OSAC namespaces
-    Then there are no events with reason "ImagePullBackOff"
-    And there are no events with reason "ErrImagePull"
-
-  Scenario: Helm charts are not mirrored via oc-mirror
-    Given the bastion laptop has internet access
-    When the operator installs Helm charts
-    Then charts are pulled directly from ghcr.io via the workstation
-    And rendered manifests are submitted to the cluster API
-```
+1. Namespaces for the operators
+2. `OperatorGroup` in each namespace
+3. `Subscription` for each operator (`redhat-operators` source)
+4. InstallPlan approval (only where `installPlanApproval: Manual`
+   is used, e.g. the AAP version pin)
+5. Readiness gates:
+   - All seven operator CSVs report `Succeeded` — cert-manager first,
+     since every Phase 1b certificate and CA resource depends on it
+   - Phase 1b CRD instances and shared services are healthy before
+     installing the `osac` chart
 
 ## Validation Commands
 
@@ -328,9 +295,11 @@ oc debug node/<node-name> -- chroot /host \
   crictl pull quay.io/jetstack/trust-manager:v0.20.0
 
 # 3. Verify Phase 1b services
+oc get clusterissuer default-ca
 oc get pods -n keycloak -l app=keycloak
-oc get pods -n osac-postgres
-oc get pods -n osac-vault
+oc get pods -n osac-kafka
+# PostgreSQL and OpenBao: verify the pods and services in the
+# namespaces your Phase 1b deployment uses
 
 # 4. Verify Phase 2 deployments
 oc get deployments -n osac
@@ -351,7 +320,7 @@ helm list -A | grep osac
 | `ImagePullBackOff` on dependency pods | IDMS/ITMS not applied or image tag mismatch | Verify `oc get itms -o yaml` includes the image; re-run `oc-mirror` |
 | Helm install fails with `connection refused` | SSH tunnel not established to cluster API | Verify sshuttle/SSH tunnel; check `oc cluster-info` from workstation |
 | `origin-cli` image not found | `cliImage` Helm value not overridden | Pass `--set cliImage=<mirror-registry>:8443/openshift/origin-cli:4.20` |
-| Phase 1b hooks fail with `CRD not found` | Phase 1a operators not fully ready | Wait for all 7 CSVs to reach `Succeeded` before installing osac-infra |
+| Phase 1b hooks fail with `CRD not found` | Phase 1a operators not fully ready | Wait for all 7 CSVs to reach `Succeeded` before creating the Phase 1b CRD instances |
 | Keycloak pod in CrashLoopBackOff | PostgreSQL not ready or CA bundle not synced | Check trust-manager Bundle status; verify PostgreSQL StatefulSet |
 
 ## Known Gaps / Limitations
@@ -365,10 +334,10 @@ helm list -A | grep osac
 2. **No `global.imageRegistry` value** — OSAC does not expose a global
    image registry override in its Helm values.  Disconnected image
    resolution relies entirely on IDMS/ITMS at the kubelet/CRI-O level.
-   The only disconnected-specific Helm value consumed by the chart
-   is `cliImage`.  The mirrored CatalogSource must be named
-   `redhat-operators` because all Subscription templates hard-code
-   that source name.
+   The only disconnected-specific Helm value is `cliImage` (scoped to
+   the `osac` chart).  The mirrored CatalogSource must be named
+   `redhat-operators` because operator Subscriptions reference that
+   source name.
 
 3. **PostgreSQL pinned by digest** — The PostgreSQL image is referenced
    by digest (`@sha256:...`) rather than tag.  This ensures exact version

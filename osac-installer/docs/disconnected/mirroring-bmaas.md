@@ -1,5 +1,7 @@
 # Category 1D: Mirroring BMaaS / Metal3 Images
 
+WIP.
+
 ## Aim
 
 Mirror Bare Metal as a Service (BMaaS) and Metal3 agent images into a
@@ -16,7 +18,7 @@ post-OSAC-4558 OCI reference approach.
 > `bare-metal-fulfillment-operator` core image is covered in
 > [mirroring-core-components.md](mirroring-core-components.md).
 
-## Prerequisites (TDD: define checks first)
+## Prerequisites
 
 | Check | Command / evidence |
 | ----- | ------------------ |
@@ -54,7 +56,7 @@ the MCE version; version tags are specified in the ImageSetConfiguration
 below):
 
 | Image | Registry | Purpose |
-|-------|----------|---------|
+| ------- | ---------- | --------- |
 | `registry.redhat.io/multicluster-engine/assisted-installer-agent-rhel9` | registry.redhat.io | Assisted installer discovery agent |
 | `registry.redhat.io/multicluster-engine/assisted-installer-rhel9` | registry.redhat.io | Assisted installer service |
 | `registry.redhat.io/multicluster-engine/assisted-image-service-rhel9` | registry.redhat.io | Assisted image service |
@@ -82,20 +84,6 @@ operator catalog provides, add them to the `additionalImages` section:
 > Category 1A, the MCE catalog includes its operand images.  Explicit
 > `additionalImages` entries are only needed for images not bundled in the
 > catalog (e.g., custom agent images or OSAC-specific overrides).
-
-### Post-OSAC-4558: OCI Reference Approach
-
-After OSAC-4558 is implemented, BMaaS provisioning images will be
-referenced as OCI artifacts instead of raw HTTP downloads.  This will
-enable them to be mirrored as standard `additionalImages` entries and
-resolved via IDMS.
-
-```yaml
-  # Post-OSAC-4558 approach (future):
-  additionalImages:
-    - name: <registry>/osac-project/bmaas-agent-image:<version>
-    # OCI-packaged discovery ISO and ramdisk images
-```
 
 ## Execution Steps
 
@@ -131,15 +119,18 @@ oc apply -f oc-mirror-workspace/working-dir/cluster-resources/idms-oc-mirror.yam
 ### Step 4 — Configure AgentServiceConfig for disconnected
 
 The `AgentServiceConfig` CR controls where the assisted-service looks
-for OS images.  In disconnected environments, configure
-`.Values.mce.osImages` in the `osac-infra` chart so the rendered
-`AgentServiceConfig` points to mirrored images.
+for OS images.  Configure its `.spec.osImages` per the
+[multicluster engine for Kubernetes documentation](https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.13/html/clusters/cluster_mce_overview)
+so that it points at images reachable from the provisioning network.
 
 Add entries for each OpenShift version your deployment supports:
 
 ```yaml
-# In your osac-infra values override (e.g. infra.yaml):
-mce:
+apiVersion: agent-install.openshift.io/v1beta1
+kind: AgentServiceConfig
+metadata:
+  name: agent
+spec:
   osImages:
     - openshiftVersion: "4.22"
       version: "422.94.202503170640-0"
@@ -155,15 +146,16 @@ mce:
 > bundle to the `AgentServiceConfig` or to the cluster-wide
 > proxy trust bundle.
 
-Re-apply the `osac-infra` chart to update the `AgentServiceConfig`:
+Apply the updated `AgentServiceConfig`:
 
 ```bash
-helm upgrade osac-infra osac-installer/charts/osac-infra \
-  --namespace osac --reuse-values \
-  -f infra.yaml
+oc apply -f agentserviceconfig.yaml
+# or, to update the existing resource in place:
+oc patch agentserviceconfig agent --type merge \
+  -p '{"spec":{"osImages":[{"openshiftVersion":"4.22","version":"422.94.202503170640-0","url":"http://<bastion>:8080/rhcos-4.22-live.x86_64.iso","cpuArchitecture":"x86_64"}]}}'
 ```
 
-Verify the rendered `AgentServiceConfig` contains the expected
+Verify the `AgentServiceConfig` contains the expected
 `osImages` entries:
 
 ```bash
@@ -197,7 +189,7 @@ metadata:
   name: worker-0
   namespace: osac
   labels:
-    infraenvs.agent-install.openshift.io: osac-infraenv
+    infraenvs.agent-install.openshift.io: bmaas-infraenv
 spec:
   online: true
   bootMACAddress: "AA:BB:CC:DD:EE:FF"
@@ -212,48 +204,6 @@ spec:
 > certificate.  The `InfraEnv` label
 > (`infraenvs.agent-install.openshift.io`) binds this host to the
 > specified `InfraEnv` resource, which must exist in the same namespace.
-
-## Verification (BDD Scenarios)
-
-```gherkin
-Feature: BMaaS image mirroring for disconnected OSAC
-
-  Background:
-    Given a disconnected OpenShift 4.22 cluster with BMaaS enabled
-    And the multicluster-engine operator is installed and healthy
-    And Metal3 agent images are available in the mirror registry
-    And IDMS resources include Metal3 image mirror entries
-
-  Scenario: Metal3 agent images resolve via IDMS
-    When the assisted-service requests an agent image
-    Then the image reference resolves via IDMS to the mirror registry
-    And the image pull succeeds
-
-  Scenario: BareMetalHost discovery succeeds in disconnected mode
-    Given a BareMetalHost CR is created with valid BMC credentials
-    When the Metal3 provisioning agent boots the host
-    Then the host transitions to "inspecting" state
-    And the host eventually reaches "available" state
-
-  Scenario: BareMetalHost provisioning completes
-    Given a BareMetalHost is in "available" state
-    When OSAC requests provisioning of the bare-metal host
-    Then the bare-metal-fulfillment-operator creates the provisioning request
-    And the host transitions through "provisioning" to "provisioned"
-    And the host is registered in OSAC inventory
-
-  Scenario: Discovery ISO boots without external registry access
-    Given the AgentServiceConfig references mirrored OS images
-    When a new bare-metal host boots from the discovery ISO
-    Then the discovery agent registers with the assisted-service
-    And no external registry access is attempted
-
-  Scenario: Post-OSAC-4558 OCI references resolve via IDMS
-    Given OSAC-4558 is implemented (future)
-    When provisioning images are referenced as OCI artifacts
-    Then the images resolve via IDMS to the mirror registry
-    And provisioning completes without HTTP download fallback
-```
 
 ## Validation Commands
 
@@ -293,22 +243,15 @@ oc get pods -n osac -l app.kubernetes.io/name=bare-metal-fulfillment-operator
 
 ## Known Gaps / Limitations
 
-1. **OSAC-4558: OCI reference approach** — Currently, some Metal3
-   provisioning images (discovery ISO, ramdisk) are distributed as HTTP
-   downloads rather than OCI artifacts.  OSAC-4558 tracks the migration
-   to OCI references, which will enable standard `additionalImages`
-   mirroring.  Until then, these images may require a local HTTP server
-   on the provisioning network.
-
-2. **MCE catalog completeness** — The `multicluster-engine` operator
+1. **MCE catalog completeness** — The `multicluster-engine` operator
    catalog includes most Metal3 agent images, but the exact set depends
    on the MCE version.  Verify that all required agent images are present
    in the mirror after running `oc-mirror`.
 
-3. **Provisioning network requirements** — BMaaS requires a Layer 2
+2. **Provisioning network requirements** — BMaaS requires a Layer 2
    provisioning network for BMC (IPMI/Redfish) access.  This network
    must be configured independently of the disconnected mirroring setup.
 
-4. **Agent image versioning** — Metal3 agent images are versioned with
+3. **Agent image versioning** — Metal3 agent images are versioned with
    the MCE release.  Ensure the mirrored MCE version matches the
    installed operator version to avoid version skew.

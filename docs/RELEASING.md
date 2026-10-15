@@ -151,6 +151,38 @@ for validating the release *mechanism* itself (e.g. after a change to
   release binaries attached, not the plain changelog style above — plus
   its proto schema pushed to the buf.build
   registry.
+- A real **staging release** to Red Hat's registry for every bumped
+  component — see "Staging release (Konflux)" below.
+
+## Staging release (Konflux)
+
+Tagging a component (above) doesn't just publish it to GHCR — it also
+triggers a separate, independent build of that exact version through
+Konflux, Red Hat's internal build/release system. `osac-release.yaml`'s
+final job, `trigger-konflux-staging-release`, waits for every bumped
+component's Konflux build to finish and pass its policy gate, then
+releases the whole set together to the **staging** registry
+(`registry.stage.redhat.io`, under `cloud-extensions/<component>-rhel10`).
+This is currently staging only — there is no automated path to a
+production release yet.
+
+A component only reaches staging if its Konflux build passes Red Hat's
+Enterprise Contract policy — a set of supply-chain and security checks
+every component must satisfy. The one check worth knowing about
+directly: a clean **Snyk Code (SAST)** scan, which requires a
+`snyk-secret` (key `snyk_token`) to already exist in the `osac-tenant`
+namespace on the Konflux cluster — without it, the scan is skipped
+outright and the policy fails for that reason alone. The rest of the
+policy (hermetic build integrity, SBOM/signature requirements, and so on)
+is Konflux's own concern and isn't something this repo's release process
+needs to reason about directly.
+
+On success, each component's image is live on `registry.stage.redhat.io`,
+signed and with an SBOM attached, and gets a real Pyxis catalog entry
+(`catalog.stage.redhat.com/software/containers/cloud-extensions/<component>-rhel10`)
+plus a stage errata advisory. The GHCR-side publish and the Konflux
+staging release are independent — a failure in one doesn't undo the
+other.
 
 ## Releasing a new component version
 

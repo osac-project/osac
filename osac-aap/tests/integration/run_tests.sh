@@ -259,10 +259,9 @@ if [ "${STORAGE_TESTS_ENABLED:-}" = "true" ]; then
   echo "=== Running Storage Provider Tests ==="
   echo ""
 
-  # Reset mock servers once before tests (individual tests re-reset when they
+  # Reset mock server once before tests (individual tests re-reset when they
   # assert on the call log or seed state)
   curl -sk -X POST https://127.0.0.1:18443/_reset > /dev/null 2>&1 || true
-  curl -sk -X POST https://127.0.0.1:18445/_reset > /dev/null 2>&1 || true
 
   # Storage tests share a mock VMS server with a global call log and object
   # store. Tests that assert on the call log or pre-seed VMS resources cannot

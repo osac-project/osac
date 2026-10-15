@@ -1,29 +1,29 @@
 ---
 # Integration test for the ontap_storage provider role (dispatched through
-# osac.service.storage_provider). Requires the mock ONTAP server on
-# 127.0.0.1:18445 (started by setup_test_env.sh alongside the mock VMS server)
-# and the kind cluster with the TridentBackendConfig CRD fixture applied by
-# the same script (fixtures/storage/).
+# osac.service.storage_provider). Requires the kind cluster with the
+# TridentBackendConfig CRD fixture applied by setup_test_env.sh
+# (fixtures/storage/).
 #
 # Coverage:
-#   1. setup: validates explicit SVM and capped-tier QoS policy against the
-#      mock ONTAP server with verified TLS (using ontap_storage_ca_bundle_path),
-#      sets storage_provider_tenant_configs, and writes no hub Secret.
-#   2. setup: refuses an assignment when the prepared SVM is absent on the
-#      ONTAP cluster.
-#   3. setup: fails when a capped tier's prepared QoS policy has a mismatched
-#      IOPS ceiling on the ONTAP cluster.
-#   4. ensure_storage_class: creates CSI Secret + TBC (virtual-pool labels
+#   1. setup: validates operator-supplied SVM preparation parameters using
+#      SVM-only credentials (no cluster-admin credentials on the backend
+#      connection and no hub-side HTTP calls to ONTAP), sets
+#      storage_provider_tenant_configs, and writes no hub Secret.
+#   2. setup: refuses an assignment when tenant_preparation.provider_config is
+#      missing required SVM fields.
+#   3. ensure_storage_class: creates CSI Secret + TBC (virtual-pool labels
 #      osac_backend + tier with no invalid 'name' field, defaults for encryption
-#      and qosPolicy, and trustedCACertificate from the CA bundle) + per-tier
-#      StorageClasses bound via parameters.selector, short-circuits on the
-#      second run when all resources exist, and recreates the TBC when missing
-#      even if StorageClasses already exist.
-#   4.5. ensure_storage_class: fails fast when the TBC enters phase Failed.
+#      and qosPolicy, and trustedCACertificate when ontap_storage_validate_certs
+#      is true) + per-tier StorageClasses bound via parameters.selector,
+#      short-circuits on the second run when all resources exist, and omits
+#      trustedCACertificate when ontap_storage_validate_certs is false.
+#   4. ensure_storage_class: fails fast when the TBC enters phase Failed.
 #   5. teardown_backend: rejects tiers missing backend_id and succeeds as a
-#      retention no-op for valid tiers without touching ONTAP resources.
+#      retention no-op for valid tiers.
 #   6. teardown_cluster_storage: removes TBC + SCs + CSI Secret, including
 #      labeled resources no longer derivable from the dispatched tiers.
+#   7. prepare-ontap-svm.sh: creates operator-compatible
+#      storage-tenant-preparation Secrets on the hub cluster.
 
 # ── Test environment: trident namespace + stub operator ──
 - name: "ONTAP Storage Provider - Test environment"
@@ -154,7 +154,7 @@
         _mock_ca_b64: "{{ lookup('file', playbook_dir ~ '/../../../certs/mock.pem') | b64encode }}"
       no_log: true
 
-# ── Test 1: setup validates the prepared assignment ──
+# ── Test 1: setup validates the prepared assignment with SVM-only credentials ──
 - name: "ONTAP Storage Provider - Setup validates prepared assignment"
   hosts: localhost
   gather_facts: false
@@ -162,12 +162,8 @@
   vars:
     tenant_name: "test-ontap"
     tenant_namespace: "osac-system"
-    ontap_storage_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
     _t_assignment_key: "{{ (('ontap-be-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
-    _t_silver_tier_key: "{{ ('silver' | hash('sha256'))[:16] | lower }}"
     _t_svm_name: "customer_acme_svm"
-    _t_svm_uuid: "uuid-svm-test-ontap-1"
-    _t_qos_policy_name: "osac-{{ _t_assignment_key }}-{{ _t_silver_tier_key }}-qos"
     storage_provider_tiers:
       - name: gold
         protocol: block
@@ -187,9 +183,7 @@
             max_iops: 5000
     storage_provider_backend_connections:
       ontap-be-1:
-        endpoint: "https://127.0.0.1:18445"
-        username: "osac-discovery"
-        password: "{{ lookup('env', 'OSAC_TEST_ONTAP_DISCOVERY_PASSWORD') | default(lookup('env', 'OSAC_TEST_VAST_PASSWORD'), true) }}"
+        endpoint: "https://10.46.246.90"
         tenant_preparation:
           tenant_id: "id-test-ontap"
           source:
@@ -203,40 +197,6 @@
             svm: "{{ _t_svm_name }}"
 
   tasks:
-    - name: Reset the mock ONTAP server
-      ansible.builtin.uri:
-        url: "https://127.0.0.1:18445/_reset"
-        validate_certs: false
-        method: POST
-        status_code: [200]
-
-    - name: Register the prepared SVM on the mock ONTAP server
-      ansible.builtin.uri:
-        url: "https://127.0.0.1:18445/_svm"
-        validate_certs: false
-        method: POST
-        body_format: json
-        body:
-          name: "{{ _t_svm_name }}"
-          uuid: "{{ _t_svm_uuid }}"
-        status_code: [201]
-
-    - name: Register the prepared QoS policy for the silver tier on the mock ONTAP server
-      ansible.builtin.uri:
-        url: "https://127.0.0.1:18445/_qos_policy"
-        validate_certs: false
-        method: POST
-        body_format: json
-        body:
-          name: "{{ _t_qos_policy_name }}"
-          svm:
-            uuid: "{{ _t_svm_uuid }}"
-            name: "{{ _t_svm_name }}"
-          fixed:
-            max_throughput_iops: 5000
-            capacity_shared: false
-        status_code: [201]
-
     - name: Call storage_provider role with setup action
       ansible.builtin.include_role:
         name: osac.service.storage_provider
@@ -269,46 +229,19 @@
           - storage_provider_tenant_configs is mapping
           - storage_provider_tenant_configs['ontap']['ontap-be-1'].assignment_key == _t_assignment_key
           - storage_provider_tenant_configs['ontap']['ontap-be-1'].svm_name == _t_svm_name
-          - storage_provider_tenant_configs['ontap']['ontap-be-1'].svm_uuid == _t_svm_uuid
           - storage_provider_tenant_configs['ontap']['ontap-be-1'].status == 'ready'
         fail_msg: "storage_provider_tenant_configs did not match expected ready state"
         success_msg: "storage_provider_tenant_configs correct"
       no_log: true
 
-    - name: Get the mock ONTAP call log
-      ansible.builtin.uri:
-        url: "https://127.0.0.1:18445/_calls"
-        validate_certs: false
-        method: GET
-        return_content: true
-      register: _mock_calls
-
-    - name: Assert both SVM and QoS policy discovery calls hit the mock ONTAP API
-      ansible.builtin.assert:
-        that:
-          - >-
-            _mock_calls.json
-            | selectattr('path', 'search', '/api/svm/svms')
-            | selectattr('method', 'equalto', 'GET')
-            | list | length > 0
-          - >-
-            _mock_calls.json
-            | selectattr('path', 'search', '/api/storage/qos/policies')
-            | selectattr('method', 'equalto', 'GET')
-            | list | length > 0
-          - _t_svm_name not in (_mock_calls.json | to_json)
-        fail_msg: "Expected both SVM and QoS policy discovery calls against the mock ONTAP server without exposing SVM identifiers in call logs"
-        success_msg: "SVM and QoS policy discovery calls recorded without query identifiers"
-
-# ── Test 2: setup fails when the prepared SVM does not exist on ONTAP ──
-- name: "ONTAP Storage Provider - Setup rejects missing SVM"
+# ── Test 2: setup fails when tenant_preparation is missing SVM fields ──
+- name: "ONTAP Storage Provider - Setup rejects incomplete tenant_preparation"
   hosts: localhost
   gather_facts: false
 
   vars:
     tenant_name: "test-ontap"
     tenant_namespace: "osac-system"
-    ontap_storage_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
     storage_provider_tiers:
       - name: gold
         protocol: block
@@ -317,9 +250,7 @@
         encryption_enabled: false
     storage_provider_backend_connections:
       ontap-be-1:
-        endpoint: "https://127.0.0.1:18445"
-        username: "osac-discovery"
-        password: "{{ lookup('env', 'OSAC_TEST_ONTAP_DISCOVERY_PASSWORD') | default(lookup('env', 'OSAC_TEST_VAST_PASSWORD'), true) }}"
+        endpoint: "https://10.46.246.90"
         tenant_preparation:
           tenant_id: "id-test-ontap"
           source:
@@ -330,10 +261,10 @@
           provider_config:
             username: "trident_test_ontap"
             password: "{{ lookup('env', 'OSAC_TEST_ONTAP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true) }}"
-            svm: "nonexistent_svm"
+            svm: ""
 
   tasks:
-    - name: Attempt setup when the prepared SVM does not exist on the ONTAP backend
+    - name: Attempt setup when tenant_preparation.provider_config.svm is empty
       block:
         - name: Call storage_provider role with setup action
           ansible.builtin.include_role:
@@ -341,115 +272,18 @@
           vars:
             storage_provider_action: setup
       rescue:
-        - name: Mark the missing-SVM test as passed
+        - name: Mark the incomplete-preparation test as passed
           ansible.builtin.set_fact:
-            _ontap_missing_svm_refused: true
+            _ontap_incomplete_prep_refused: true
 
-    - name: Assert the role refused the missing SVM
+    - name: Assert the role refused the incomplete tenant_preparation
       ansible.builtin.assert:
         that:
-          - _ontap_missing_svm_refused | default(false) | bool
-        fail_msg: "Setup should have failed when the prepared SVM is missing on ONTAP"
-        success_msg: "Setup correctly refused the missing SVM"
+          - _ontap_incomplete_prep_refused | default(false) | bool
+        fail_msg: "Setup should have failed when tenant_preparation.provider_config.svm is empty"
+        success_msg: "Setup correctly refused the incomplete tenant_preparation"
 
-# ── Test 3: setup fails on mismatched QoS policy ceiling ──
-- name: "ONTAP Storage Provider - Setup detects mismatched QoS ceiling"
-  hosts: localhost
-  gather_facts: false
-
-  vars:
-    tenant_name: "test-ontap-qos-mismatch"
-    tenant_namespace: "osac-system"
-    ontap_storage_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
-    _t_assignment_key: "{{ (('ontap-be-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
-    _t_gold_tier_key: "{{ ('gold' | hash('sha256'))[:16] | lower }}"
-    _t_svm_name: "customer_mismatch_svm"
-    _t_svm_uuid: "uuid-svm-mismatch"
-    _t_qos_policy_name: "osac-{{ _t_assignment_key }}-{{ _t_gold_tier_key }}-qos"
-    storage_provider_tiers:
-      - name: gold
-        protocol: block
-        provider: ontap
-        backend_id: ontap-be-1
-        encryption_enabled: false
-        qos_limits:
-          static_limits:
-            max_reads_bw_mbps: 0
-            max_writes_bw_mbps: 0
-          provider_config:
-            max_iops: 5000
-    storage_provider_backend_connections:
-      ontap-be-1:
-        endpoint: "https://127.0.0.1:18445"
-        username: "osac-discovery"
-        password: "{{ lookup('env', 'OSAC_TEST_ONTAP_DISCOVERY_PASSWORD') | default(lookup('env', 'OSAC_TEST_VAST_PASSWORD'), true) }}"
-        tenant_preparation:
-          tenant_id: "id-test-ontap-mismatch"
-          source:
-            namespace: "trident"
-            name: "test-ontap-mismatch-info"
-            uid: "uid-source-secret-3"
-            resource_version: "1"
-          provider_config:
-            username: "trident_mismatch"
-            password: "{{ lookup('env', 'OSAC_TEST_ONTAP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true) }}"
-            svm: "{{ _t_svm_name }}"
-
-  tasks:
-    - name: Reset the mock ONTAP server
-      ansible.builtin.uri:
-        url: "https://127.0.0.1:18445/_reset"
-        validate_certs: false
-        method: POST
-        status_code: [200]
-
-    - name: Register the SVM for the QoS mismatch test
-      ansible.builtin.uri:
-        url: "https://127.0.0.1:18445/_svm"
-        validate_certs: false
-        method: POST
-        body_format: json
-        body:
-          name: "{{ _t_svm_name }}"
-          uuid: "{{ _t_svm_uuid }}"
-        status_code: [201]
-
-    - name: Register a QoS policy with the wrong IOPS ceiling (9999 instead of 5000)
-      ansible.builtin.uri:
-        url: "https://127.0.0.1:18445/_qos_policy"
-        validate_certs: false
-        method: POST
-        body_format: json
-        body:
-          name: "{{ _t_qos_policy_name }}"
-          svm:
-            uuid: "{{ _t_svm_uuid }}"
-            name: "{{ _t_svm_name }}"
-          fixed:
-            max_throughput_iops: 9999
-            capacity_shared: false
-        status_code: [201]
-
-    - name: Attempt setup with mismatched QoS policy ceiling
-      block:
-        - name: Call storage_provider role with setup action
-          ansible.builtin.include_role:
-            name: osac.service.storage_provider
-          vars:
-            storage_provider_action: setup
-      rescue:
-        - name: Mark the QoS mismatch test as passed
-          ansible.builtin.set_fact:
-            _ontap_qos_mismatch_refused: true
-
-    - name: Assert the role refused the mismatched QoS policy
-      ansible.builtin.assert:
-        that:
-          - _ontap_qos_mismatch_refused | default(false) | bool
-        fail_msg: "Setup should have failed: the prepared QoS policy ceiling does not match max_iops"
-        success_msg: "Setup correctly refused the mismatched QoS policy"
-
-# ── Test 4: ensure_storage_class creates TBC + SCs, then short-circuits ──
+# ── Test 3: ensure_storage_class creates TBC + SCs, then short-circuits ──
 - name: "ONTAP Storage Provider - Ensure storage classes"
   hosts: localhost
   gather_facts: false
@@ -481,9 +315,7 @@
             max_iops: 5000
     storage_provider_backend_connections:
       ontap-be-1:
-        endpoint: "https://127.0.0.1:18445"
-        username: "osac-discovery"
-        password: "{{ lookup('env', 'OSAC_TEST_ONTAP_DISCOVERY_PASSWORD') | default(lookup('env', 'OSAC_TEST_VAST_PASSWORD'), true) }}"
+        endpoint: "https://10.46.246.90"
         tenant_preparation:
           tenant_id: "id-test-ontap"
           source:
@@ -497,13 +329,6 @@
             svm: "{{ _t_svm_name }}"
 
   tasks:
-    - name: Reset the mock ONTAP server
-      ansible.builtin.uri:
-        url: "https://127.0.0.1:18445/_reset"
-        validate_certs: false
-        method: POST
-        status_code: [200]
-
     - name: Delete any pre-existing TBC, CSI Secret, and StorageClasses (clean slate)
       kubernetes.core.k8s:
         state: absent
@@ -553,11 +378,11 @@
           - _tbc.resources | length == 1
           - _tbc.resources[0].spec.storageDriverName == 'ontap-san'
           - _tbc.resources[0].spec.sanType == 'fcp'
-          - _tbc.resources[0].spec.managementLIF == '127.0.0.1:18445'
+          - _tbc.resources[0].spec.managementLIF == '10.46.246.90'
           - _tbc.resources[0].spec.svm == _t_svm_name
           - _tbc.resources[0].spec.credentials.name == 'ontap-csi-' ~ _t_assignment_key
           - _tbc.resources[0].spec.storage | length == 2
-          # trustedCACertificate comes from the mounted cluster CA bundle.
+          # trustedCACertificate comes from the mounted cluster CA bundle when ontap_storage_validate_certs is true.
           - _tbc.resources[0].spec.trustedCACertificate == _mock_ca_b64
           # Regression guard: Trident's OntapStorageDriverPool has NO 'name' field;
           # virtual pools must be matched via labels (osac_backend + tier).
@@ -661,14 +486,7 @@
         success_msg: "storage_provider_storage_class_names output correct"
       no_log: true
 
-    # ── Short-circuit: second run must not touch the ONTAP API ──
-    - name: Reset the mock call log to detect any new discovery calls
-      ansible.builtin.uri:
-        url: "https://127.0.0.1:18445/_reset"
-        validate_certs: false
-        method: POST
-        status_code: [200]
-
+    # ── Short-circuit: second run when all resources exist ──
     - name: Re-run ensure_storage_class (should short-circuit)
       ansible.builtin.include_role:
         name: osac.service.storage_provider
@@ -686,23 +504,42 @@
         success_msg: "Short-circuit run preserved the output fact"
       no_log: true
 
-    - name: Get the mock call log after the short-circuit run
-      ansible.builtin.uri:
-        url: "https://127.0.0.1:18445/_calls"
-        validate_certs: false
-        method: GET
-        return_content: true
-      register: _mock_calls_shortcircuit
-
-    - name: Assert no ONTAP API calls were made on the short-circuit run
-      ansible.builtin.assert:
-        that:
-          - _mock_calls_shortcircuit.json | length == 0
-        fail_msg: "Short-circuit run should not call the ONTAP API"
-        success_msg: "Short-circuit run made no ONTAP API calls"
+    # ── Cert validation override: ontap_storage_validate_certs=false omits trustedCACertificate ──
+    - name: Delete TBC to test ontap_storage_validate_certs=false recreation
+      kubernetes.core.k8s:
+        state: absent
+        api_version: trident.netapp.io/v1
+        kind: TridentBackendConfig
+        name: "ontap-{{ _t_assignment_key }}"
+        namespace: trident
       no_log: true
 
-# ── Test 4.5: ensure_storage_class fails fast on a Failed TBC phase ──
+    - name: Re-run ensure_storage_class with ontap_storage_validate_certs=false
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: ensure_storage_class
+        ontap_storage_validate_certs: false
+
+    - name: Read back recreated TBC when ontap_storage_validate_certs=false
+      kubernetes.core.k8s_info:
+        api_version: trident.netapp.io/v1
+        kind: TridentBackendConfig
+        name: "ontap-{{ _t_assignment_key }}"
+        namespace: trident
+      register: _tbc_no_cert
+      no_log: true
+
+    - name: Assert trustedCACertificate is omitted when ontap_storage_validate_certs is false
+      ansible.builtin.assert:
+        that:
+          - _tbc_no_cert.resources | length == 1
+          - _tbc_no_cert.resources[0].spec.trustedCACertificate is not defined
+        fail_msg: "trustedCACertificate should be omitted when ontap_storage_validate_certs is false"
+        success_msg: "trustedCACertificate omitted when ontap_storage_validate_certs is false"
+      no_log: true
+
+# ── Test 4: ensure_storage_class fails fast on a Failed TBC phase ──
 - name: "ONTAP Storage Provider - Ensure fails fast on Failed TBC"
   hosts: localhost
   gather_facts: false
@@ -734,9 +571,7 @@
             max_iops: 5000
     storage_provider_backend_connections:
       ontap-be-1:
-        endpoint: "https://127.0.0.1:18445"
-        username: "osac-discovery"
-        password: "{{ lookup('env', 'OSAC_TEST_ONTAP_DISCOVERY_PASSWORD') | default(lookup('env', 'OSAC_TEST_VAST_PASSWORD'), true) }}"
+        endpoint: "https://10.46.246.90"
         tenant_preparation:
           tenant_id: "id-test-ontap"
           source:
@@ -773,7 +608,7 @@
       retries: 12
       delay: 5
 
-    - name: Delete Test 4's TBC and StorageClasses (clean slate, keep CSI Secret)
+    - name: Delete Test 3's TBC and StorageClasses (clean slate, keep CSI Secret)
       kubernetes.core.k8s:
         state: absent
         definition: "{{ item }}"
@@ -885,9 +720,7 @@
         backend_id: ontap-be-1
     storage_provider_backend_connections:
       ontap-be-1:
-        endpoint: "https://127.0.0.1:18445"
-        username: "osac-discovery"
-        password: "{{ lookup('env', 'OSAC_TEST_ONTAP_DISCOVERY_PASSWORD') | default(lookup('env', 'OSAC_TEST_VAST_PASSWORD'), true) }}"
+        endpoint: "https://10.46.246.90"
 
   tasks:
     - name: Attempt teardown_backend with a tier missing backend_id
@@ -936,9 +769,7 @@
         backend_id: ontap-be-1
     storage_provider_backend_connections:
       ontap-be-1:
-        endpoint: "https://127.0.0.1:18445"
-        username: "osac-discovery"
-        password: "{{ lookup('env', 'OSAC_TEST_ONTAP_DISCOVERY_PASSWORD') | default(lookup('env', 'OSAC_TEST_VAST_PASSWORD'), true) }}"
+        endpoint: "https://10.46.246.90"
 
   tasks:
     - name: Seed a drifted backend's labeled TBC and CSI Secret

@@ -1,6 +1,6 @@
 ---
-# Per-backend validation of a prepared ONTAP assignment (included by
-# setup.yaml with loop_var _ontap_backend_id).
+# Per-backend validation of operator-supplied ONTAP SVM preparation parameters
+# (included by setup.yaml with loop_var _ontap_backend_id).
 #
 # Consumes the operator-injected tenant_preparation payload:
 #   _provider_backend_connections[_ontap_backend_id].tenant_preparation:
@@ -8,15 +8,15 @@
 #     source:          {namespace, name, uid, resource_version}
 #     provider_config: {username, password, svm}
 #
-# No Secret is read or written on the hub cluster — osac-operator resolves the
-# preparation Secret by immutable tenant_id + backend_id labels and tracks
-# Stage 1 backend readiness via job completion and config version.
+# Only SVM-scoped runtime credentials (provider_config.username / password) are
+# required, and no direct HTTP calls to ONTAP are made from the hub cluster —
+# NetApp Trident on the target VMaaS cluster validates and binds the SVM using
+# the runtime CSI Secret during ensure_storage_class.
 
-- name: Compute assignment key and select tiers for dispatched backend
+- name: Compute assignment key for dispatched backend
   ansible.builtin.set_fact:
     _assignment_key: >-
       {{ ((_ontap_backend_id ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}
-    _backend_tiers: "{{ _provider_tiers | selectattr('backend_id', 'equalto', _ontap_backend_id) | list }}"
   no_log: true
 
 - name: Fail if tenant_preparation is missing for dispatched backend
@@ -54,136 +54,6 @@
     _expected_svm_name: "{{ _prep_config.svm | string | trim }}"
   no_log: true
 
-# Check if the cluster CA bundle file exists on disk so uri can use it when
-# present, falling back to system trust store when absent.
-- name: Check if cluster CA bundle exists on disk
-  ansible.builtin.stat:
-    path: "{{ ontap_storage_ca_bundle_path }}"
-  register: _ontap_ca_bundle_stat
-
-- name: Set ONTAP discovery connection for dispatched backend
-  ansible.builtin.set_fact:
-    _ontap_discovery:
-      url: "{{ _provider_backend_connections[_ontap_backend_id].endpoint }}"
-      username: "{{ _provider_backend_connections[_ontap_backend_id].username }}"
-      password: "{{ _provider_backend_connections[_ontap_backend_id].password }}"
-      ca_path: "{{ ontap_storage_ca_bundle_path if (_ontap_ca_bundle_stat.stat.exists | default(false)) else '' }}"
-  no_log: true
-
-- name: Discover the prepared SVM via the ONTAP REST API
-  ansible.builtin.uri:
-    url: "{{ _ontap_discovery.url }}/api/svm/svms?name={{ _expected_svm_name | urlencode }}&fields=uuid,name,state"
-    method: GET
-    user: "{{ _ontap_discovery.username }}"
-    password: "{{ _ontap_discovery.password }}"
-    force_basic_auth: true
-    validate_certs: true
-    ca_path: "{{ _ontap_discovery.ca_path if _ontap_discovery.ca_path | length > 0 else omit }}"
-    timeout: "{{ ontap_storage_api_timeout | int }}"
-    status_code: [200]
-    return_content: true
-  register: _svm_discovery
-  no_log: true
-  ignore_errors: true
-
-- name: Fail on authentication failure against the ONTAP API
-  ansible.builtin.fail:
-    msg: >-
-      Authentication failed against the ONTAP management endpoint.
-      Check the backend connection credentials passed by osac-operator.
-  when: >-
-    _svm_discovery.failed and
-    (_svm_discovery.status | default(0) | int in [401, 403])
-  no_log: true
-
-- name: Fail on unreachable ONTAP management endpoint
-  ansible.builtin.fail:
-    msg: >-
-      Failed to reach the ONTAP management endpoint. Verify the backend
-      connection endpoint, TLS certificate trust, and network reachability from
-      the storage-operations IG.
-  when: _svm_discovery.failed
-  no_log: true
-
-- name: Parse SVM discovery response
-  ansible.builtin.set_fact:
-    _svm_info: "{{ _svm_discovery.json }}"
-  no_log: true
-
-- name: Fail if the prepared SVM does not exist on the backend
-  ansible.builtin.fail:
-    msg: >-
-      Prepared SVM does not exist on the ONTAP backend. Re-run the admin
-      preparation for this assignment.
-  when: _svm_info.num_records | int == 0
-  no_log: true
-
-- name: Extract SVM UUID
-  ansible.builtin.set_fact:
-    _svm_uuid: "{{ _svm_info.records[0].uuid }}"
-  no_log: true
-
-# Validate capped-tier QoS policies against the live ONTAP cluster when any
-# tier on this backend specifies qos_limits.provider_config.max_iops > 0.
-- name: Filter tiers requiring QoS validation on dispatched backend
-  ansible.builtin.set_fact:
-    _capped_tiers: >-
-      {% set _list = [] -%}
-      {% for tier in _backend_tiers -%}
-      {% set _max_iops = (tier.qos_limits.provider_config.max_iops | default(0) | int)
-                         if (tier.qos_limits is defined and tier.qos_limits.provider_config is defined)
-                         else 0 -%}
-      {% if _max_iops > 0 -%}
-      {% set _tier_key = (tier.name | hash('sha256'))[:16] | lower -%}
-      {% set _ = _list.append({
-           'name': tier.name,
-           'max_iops': _max_iops,
-           'policy_name': 'osac-' ~ _assignment_key ~ '-' ~ _tier_key ~ '-qos'
-         }) -%}
-      {% endif -%}
-      {% endfor -%}
-      {{ _list }}
-  no_log: true
-
-- name: Discover prepared QoS policies on the ONTAP cluster for capped tiers
-  when: _capped_tiers | length > 0
-  ansible.builtin.uri:
-    url: "{{ _ontap_discovery.url }}/api/storage/qos/policies?name={{ item.policy_name | urlencode }}&fields=uuid,name,svm,fixed"
-    method: GET
-    user: "{{ _ontap_discovery.username }}"
-    password: "{{ _ontap_discovery.password }}"
-    force_basic_auth: true
-    validate_certs: true
-    ca_path: "{{ _ontap_discovery.ca_path if _ontap_discovery.ca_path | length > 0 else omit }}"
-    timeout: "{{ ontap_storage_api_timeout | int }}"
-    status_code: [200]
-    return_content: true
-  loop: "{{ _capped_tiers }}"
-  loop_control:
-    label: "capped-tier"
-  register: _qos_discovery_results
-  no_log: true
-
-- name: Validate each capped tier's prepared QoS policy matches the requested ceiling
-  ansible.builtin.fail:
-    msg: >-
-      Prepared QoS policy for a capped tier on the ONTAP backend is missing or
-      invalid. Expected a fixed, non-shared (capacity_shared=false) policy
-      owned by the prepared SVM with max_throughput_iops matching the tier's
-      configured max_iops ceiling.
-  loop: "{{ _qos_discovery_results.results | default([]) }}"
-  loop_control:
-    label: "capped-tier"
-  when: >-
-    (_capped_tiers | length > 0) and (
-      (item.json.num_records | default(0) | int) == 0 or
-      (item.json.records[0].svm is defined and item.json.records[0].svm.uuid is defined and item.json.records[0].svm.uuid != _svm_uuid) or
-      item.json.records[0].fixed is not defined or
-      (item.json.records[0].fixed.capacity_shared | default(false) | bool) or
-      (item.json.records[0].fixed.max_throughput_iops | default(0) | int) != (item.item.max_iops | int)
-    )
-  no_log: true
-
 - name: Record the per-backend tenant config
   ansible.builtin.set_fact:
     _ontap_tenant_configs: >-
@@ -191,7 +61,6 @@
            _ontap_backend_id: {
              'assignment_key': _assignment_key,
              'svm_name': _expected_svm_name,
-             'svm_uuid': _svm_uuid,
              'status': 'ready'
            }
          }) }}
@@ -200,8 +69,4 @@
 - name: Clear credential-bearing facts
   ansible.builtin.set_fact:
     _prep_config: {}
-    _svm_discovery: {}
-    _svm_info: {}
-    _qos_discovery_results: {}
-    _ontap_discovery: {}
   no_log: true

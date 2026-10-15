@@ -12,9 +12,15 @@ ontap_storage_trident_namespace: "{{ lookup('env', 'ONTAP_TRIDENT_NAMESPACE') | 
 # the value against its own allowlist. Configurable via ONTAP_SAN_TYPE.
 ontap_storage_san_type: "{{ lookup('env', 'ONTAP_SAN_TYPE') | default('fcp', true) }}"
 
-# Path to the cluster-installed PEM CA bundle. When present, used to verify
-# ONTAP REST discovery calls and to populate TridentBackendConfig.spec.trustedCACertificate.
+# Path to the cluster-installed PEM CA bundle. When present and
+# ontap_storage_validate_certs is true, used to populate
+# TridentBackendConfig.spec.trustedCACertificate. Configurable via ONTAP_CA_BUNDLE_PATH.
 ontap_storage_ca_bundle_path: "{{ lookup('env', 'ONTAP_CA_BUNDLE_PATH') | default('/etc/ca-bundle/bundle.pem', true) }}"
 
-# API timeout (seconds) for ONTAP REST discovery calls (aligned with vast_storage_api_timeout: 30).
-ontap_storage_api_timeout: "{{ lookup('env', 'ONTAP_API_TIMEOUT') | default('30', true) | int }}"
+# Keep TLS certificate verification enabled unless ONTAP_VALIDATE_CERTS is
+# explicitly set to "false" (e.g. for a lab ONTAP endpoint with a self-signed
+# or expired certificate). Blank or malformed values fail closed to true.
+# When false, trustedCACertificate is omitted from the TridentBackendConfig.
+ontap_storage_validate_certs: >-
+  {{ (lookup('env', 'ONTAP_VALIDATE_CERTS')
+      | default('true', true) | lower | trim) != 'false' }}

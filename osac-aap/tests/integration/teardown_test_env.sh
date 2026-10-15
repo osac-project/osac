@@ -12,14 +12,6 @@ if [ -f "${SCRIPT_DIR}/.mock_vms_pid" ]; then
   rm -f "${SCRIPT_DIR}/.mock_vms_pid"
 fi
 
-# Stop mock ONTAP server if running
-if [ -f "${SCRIPT_DIR}/.mock_ontap_pid" ]; then
-  MOCK_ONTAP_PID=$(cat "${SCRIPT_DIR}/.mock_ontap_pid")
-  echo "Stopping mock ONTAP server (PID: ${MOCK_ONTAP_PID})..."
-  kill "${MOCK_ONTAP_PID}" 2>/dev/null || true
-  rm -f "${SCRIPT_DIR}/.mock_ontap_pid"
-fi
-
 # Stop local OCI registry for csi_driver_install tests, if running. Mirrors
 # setup_test_env.sh's own 3-way container-tool detection (KIND_EXPERIMENTAL_PROVIDER >
 # docker > podman) -- a 2-way docker/podman-only cascade here could remove the wrong

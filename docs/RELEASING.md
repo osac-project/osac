@@ -151,20 +151,24 @@ for validating the release *mechanism* itself (e.g. after a change to
   release binaries attached, not the plain changelog style above — plus
   its proto schema pushed to the buf.build
   registry.
-- A real **staging release** to Red Hat's registry for every bumped
-  component — see "Staging release (Konflux)" below.
+- A real **staging release** to Red Hat's registry — see "Staging release
+  (Konflux)" below.
 
 ## Staging release (Konflux)
 
-Tagging a component (above) doesn't just publish it to GHCR — it also
-triggers a separate, independent build of that exact version through
+Every release run also triggers a separate, independent build through
 Konflux, Red Hat's internal build/release system. `osac-release.yaml`'s
-final job, `trigger-konflux-staging-release`, waits for every bumped
-component's Konflux build to finish and pass its policy gate, then
-releases the whole set together to the **staging** registry
+final job, `trigger-konflux-staging-release`, waits for a fixed set of
+eight Konflux image components — `fulfillment-service`, `osac-operator`,
+`osac-csi-driver`, `bare-metal-fulfillment-operator`, `osac-ui`,
+`metering-service`, `metering-m360-adapter`, and `metering-echo-adapter`
+— to finish building and pass their policy gates, then releases that
+whole set together to the **staging** registry
 (`registry.stage.redhat.io`, under `cloud-extensions/<component>-rhel10`).
-This is currently staging only — there is no automated path to a
-production release yet.
+This wait set is fixed regardless of what `component_versions` actually
+bumped this run; `osac-aap` has no Konflux image component yet and is
+never included. This is currently staging only — there is no automated
+path to a production release yet.
 
 A component only reaches staging if its Konflux build passes Red Hat's
 Enterprise Contract policy — a set of supply-chain and security checks

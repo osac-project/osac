@@ -73,10 +73,12 @@ describe('StorageBackendCreatePage', () => {
   });
 
   describe('create mode', () => {
-    const fillValidForm = async (user: ReturnType<typeof renderCreatePage>['user']) => {
+    const fillValidForm = async (
+      user: ReturnType<typeof renderCreatePage>['user'],
+      provider = 'vast',
+    ) => {
       await user.type(screen.getByRole('textbox', { name: 'Name' }), 'vast-prod-1');
-      await user.click(screen.getByLabelText(/^Provider/));
-      await user.click(screen.getByRole('option', { name: 'VAST' }));
+      await user.type(screen.getByRole('textbox', { name: 'Provider / product key' }), provider);
       await user.type(screen.getByRole('textbox', { name: 'Endpoint' }), 'vast.example.com:443');
       await user.type(screen.getByLabelText(/^Username/), 'test-admin');
       await user.type(screen.getByLabelText(/^Password/), testBackendPassword);
@@ -88,7 +90,7 @@ describe('StorageBackendCreatePage', () => {
       expect(screen.getByRole('heading', { name: 'Create storage backend' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Storage Backends' })).toBeInTheDocument();
       expect(screen.getByRole('textbox', { name: 'Name' })).toBeInTheDocument();
-      expect(screen.getByLabelText(/^Provider/)).toBeInTheDocument();
+      expect(screen.getByRole('textbox', { name: 'Provider / product key' })).toBeInTheDocument();
       expect(screen.getByRole('textbox', { name: 'Endpoint' })).toBeInTheDocument();
       expect(screen.getByRole('textbox', { name: 'Description' })).toBeInTheDocument();
       expect(screen.getByLabelText(/^Username/)).toBeInTheDocument();
@@ -101,18 +103,30 @@ describe('StorageBackendCreatePage', () => {
       renderCreatePage();
 
       expect(screen.getByRole('textbox', { name: 'Name' })).toBeEnabled();
-      expect(screen.getByLabelText(/^Provider/)).toBeEnabled();
+      expect(screen.getByRole('textbox', { name: 'Provider / product key' })).toBeEnabled();
     });
 
-    it('renders the provider select with exactly vast, ceph, and pure options', async () => {
-      const { user } = renderCreatePage();
+    it.each(['netapp', 'pure-flashobject', 'pure-flasharray'])(
+      'accepts the provider/product key "%s" without a hardcoded allowlist',
+      async (provider) => {
+        let capturedRequest: StorageBackendsCreateRequest | undefined;
+        const { user } = renderCreatePage({
+          onStorageBackendCreate: (req) => {
+            capturedRequest = req;
+            return create(StorageBackendsCreateResponseSchema, {
+              object: { id: 'new-backend-1' },
+            });
+          },
+        });
 
-      await user.click(screen.getByLabelText(/^Provider/));
+        await fillValidForm(user, provider);
+        await user.click(screen.getByRole('button', { name: 'Create' }));
 
-      const options = screen.getAllByRole('option');
-      expect(options).toHaveLength(3);
-      expect(options.map((option) => option.textContent)).toEqual(['VAST', 'Ceph', 'Pure']);
-    });
+        await waitFor(() => {
+          expect(capturedRequest?.object?.spec?.provider).toBe(provider);
+        });
+      },
+    );
 
     it('renders the password field as a masked input', () => {
       renderCreatePage();
@@ -144,8 +158,7 @@ describe('StorageBackendCreatePage', () => {
       const { user } = renderCreatePage({ onStorageBackendCreate });
 
       await user.type(screen.getByRole('textbox', { name: 'Name' }), 'vast-prod-1');
-      await user.click(screen.getByLabelText(/^Provider/));
-      await user.click(screen.getByRole('option', { name: 'VAST' }));
+      await user.type(screen.getByRole('textbox', { name: 'Provider / product key' }), 'vast');
       await user.click(screen.getByRole('button', { name: 'Create' }));
 
       await waitFor(() => {
@@ -156,7 +169,7 @@ describe('StorageBackendCreatePage', () => {
       expect(onStorageBackendCreate).not.toHaveBeenCalled();
     });
 
-    it('shows a required error for provider when nothing is selected, not the removed oneOf message', async () => {
+    it('requires a provider/product key when the field is empty', async () => {
       const onStorageBackendCreate = vi.fn();
       const { user } = renderCreatePage({ onStorageBackendCreate });
 
@@ -167,11 +180,8 @@ describe('StorageBackendCreatePage', () => {
       await user.click(screen.getByRole('button', { name: 'Create' }));
 
       await waitFor(() => {
-        expect(screen.getByText('Provider is required')).toBeInTheDocument();
+        expect(screen.getByText('Provider or product key is required')).toBeInTheDocument();
       });
-      expect(
-        screen.queryByText('Provider must be one of vast, ceph, or pure'),
-      ).not.toBeInTheDocument();
       expect(onStorageBackendCreate).not.toHaveBeenCalled();
     });
 
@@ -289,7 +299,7 @@ describe('StorageBackendCreatePage', () => {
       expect(screen.getByRole('textbox', { name: 'Endpoint' })).toHaveValue('vast.example.com:443');
       expect(screen.getByRole('textbox', { name: 'Description' })).toHaveValue('primary array');
       expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('vast-prod-1');
-      expect(screen.getByLabelText(/^Provider/)).toHaveTextContent('VAST');
+      expect(screen.getByRole('textbox', { name: 'Provider / product key' })).toHaveValue('vast');
     });
 
     it('renders name and provider as disabled', async () => {
@@ -299,7 +309,7 @@ describe('StorageBackendCreatePage', () => {
         expect(screen.getByRole('textbox', { name: 'Name' })).toBeInTheDocument();
       });
       expect(screen.getByRole('textbox', { name: 'Name' })).toBeDisabled();
-      expect(screen.getByLabelText(/^Provider/)).toBeDisabled();
+      expect(screen.getByRole('textbox', { name: 'Provider / product key' })).toBeDisabled();
     });
 
     it('renders credential fields blank regardless of the fetched record', async () => {

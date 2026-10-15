@@ -4408,9 +4408,10 @@ var _ = Describe("Private compute instances server", func() {
 			eipList, err := externalIPDao.List().Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(eipList.GetItems()).To(HaveLen(1))
+			// Attachment creation is deferred to the reconciler (OSAC-1445).
 			eiaList, err := externalIPAttachmentDao.List().Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(eiaList.GetItems()).To(HaveLen(1))
+			Expect(eiaList.GetItems()).To(BeEmpty())
 
 			_, err = server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
 				Object: privatev1.ComputeInstance_builder{
@@ -4433,9 +4434,10 @@ var _ = Describe("Private compute instances server", func() {
 			eipList, err = externalIPDao.List().Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(eipList.GetItems()).To(HaveLen(1))
+			// The deferred attachment was never created, and the rejected update must not create one.
 			eiaList, err = externalIPAttachmentDao.List().Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(eiaList.GetItems()).To(HaveLen(1))
+			Expect(eiaList.GetItems()).To(BeEmpty())
 			poolResp, err := externalIPPoolDao.Get().SetId("pool-1").Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(poolResp.GetObject().GetStatus().GetAvailable()).To(Equal(int64(4)))

@@ -37,10 +37,9 @@ from tests.e2e.vmaas.networking_lifecycle_helpers import delete_and_wait_for_sec
 pytestmark = pytest.mark.regression
 
 
-def _attachment_of(instance: dict) -> dict:
+def _attachments_of(instance: dict) -> list:
     spec = instance.get("spec", {})
-    attachments = spec.get("networkAttachments") or spec.get("network_attachments") or []
-    return attachments[0] if attachments else {}
+    return spec.get("networkAttachments") or spec.get("network_attachments") or []
 
 
 def _same_attachment_payload(subnet_id: str, sg_id: str) -> dict:
@@ -112,15 +111,20 @@ def test_compute_instance_network_attachment_immutability(
 
         # Snapshot the API, CR, and provider-job evidence before any rejected update.
         instance_before = grpc.get_compute_instance(ci_id=vm_id)["object"]
-        attachment_before = _attachment_of(instance_before)
-        assert attachment_before.get("subnet", {}).get("id") == subnet_id, "created VM missing expected subnet"
+        attachments_before = _attachments_of(instance_before)
+        assert attachments_before, "created VM has no network attachments"
+        assert attachments_before[0].get("subnet", {}).get("id") == subnet_id, "created VM missing expected subnet"
         cr_before = k8s_hub_client.get_json(resource="computeinstance", name=vm_cr).get("spec", {})
         job_before = k8s_hub_client.get_compute_instance_latest_job_id(name=vm_cr, job_type="provision", checked=False)
 
         def assert_unchanged() -> None:
             """The persisted attachment, CR spec, and provider job did not move."""
             instance_after = grpc.get_compute_instance(ci_id=vm_id)["object"]
-            assert _attachment_of(instance_after) == attachment_before, "network attachment changed"
+            # Compare the complete attachment list so appended or otherwise
+            # changed attachments are detected, not just the first entry.
+            assert _attachments_of(instance_after) == attachments_before, (
+                f"network attachments changed: {attachments_before} -> {_attachments_of(instance_after)}"
+            )
             assert instance_after.get("spec", {}).get("autoExternalIpAttachment") == instance_before.get(
                 "spec", {}
             ).get("autoExternalIpAttachment"), "auto_external_ip_attachment changed"

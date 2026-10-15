@@ -5,6 +5,7 @@ echo "=== Tearing down test environment ==="
 
 # Stop mock VMS server if running
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export KUBECONFIG="${SCRIPT_DIR}/kubeconfig-osac-test"
 if [ -f "${SCRIPT_DIR}/.mock_vms_pid" ]; then
   MOCK_VMS_PID=$(cat "${SCRIPT_DIR}/.mock_vms_pid")
   echo "Stopping mock VMS server (PID: ${MOCK_VMS_PID})..."

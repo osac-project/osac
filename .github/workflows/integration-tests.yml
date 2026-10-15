@@ -379,6 +379,10 @@ jobs:
         helm lint charts/osac-infra/ --values values/dev/infra.yaml
         helm lint charts/osac/ --values values/dev/kind-instance.yaml
 
+    - name: Validate IPv4-only networking values
+      working-directory: osac-installer
+      run: make helm-networking-test
+
     - name: Template charts (dry-run validation)
       working-directory: osac-installer
       run: |

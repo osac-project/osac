@@ -67,6 +67,9 @@ class TestBmaasNetworking:
         pool_cr = wait_for_external_ip_pool_cr(k8s=k8s_hub_client, uuid=pool_id)
         wait_for_external_ip_pool_ready(k8s=k8s_hub_client, name=pool_cr)
         wait_for_external_ip_pool_grpc_ready(private_grpc=private_grpc, pool_id=pool_id)
+        pool_spec = private_grpc.get_external_ip_pool(pool_id=pool_id)["object"]["spec"]
+        assert pool_spec["ipFamily"] == "IP_FAMILY_IPV4"
+        assert len(pool_spec["cidrs"]) == 1
 
         self.__class__.state.update(pool_id=pool_id, pool_cr=pool_cr)
         print("Created ExternalIPPool")

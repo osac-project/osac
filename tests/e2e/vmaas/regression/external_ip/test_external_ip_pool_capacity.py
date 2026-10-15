@@ -24,6 +24,9 @@ class TestPoolCapacity:
 
     def test_capacity_initialized_from_cidr(self, small_pool: tuple[str, str], private_grpc: GRPCClient) -> None:
         pool_id, _ = small_pool
+        spec = private_grpc.get_external_ip_pool(pool_id=pool_id)["object"]["spec"]
+        assert spec["ipFamily"] == "IP_FAMILY_IPV4"
+        assert len(spec["cidrs"]) == 1
         status = pool_status(private_grpc, pool_id)
         assert status["total"] == 2, f"Expected small pool to have 2 usable IPs, got {status['total']}"
         assert status["available"] == 2

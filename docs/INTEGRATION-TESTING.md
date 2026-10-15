@@ -566,6 +566,24 @@ Touched-area requirements: [component guide](../tests/e2e/AGENTS.md#touched-area
 | Unit ([DEV], CaaS teardown) | From the repository root: `uv run pytest -n 0 tests/unit/test_caas_teardown_order.py tests/unit/test_cluster_deletion_polling.py tests/unit/test_caas_deletion_diagnostics.py tests/unit/test_caas_worker_bmi_visibility.py tests/unit/test_caas_two_node_sets.py tests/unit/test_caas_selector_contracts.py` | Read-only wait logic, exact-resource NotFound, ordered worker/parent/dependent waits, shared single/two-node-set budgets, stage-specific safe failures, snapshot throttling and sanitization, worker ownership checks, NodeSet selectors with shared BMITs, and shared-only BMIT reference expectations | API/client responses and time are mocked. No deployed controllers, fulfillment, AAP, provider, or metering is exercised. |
 | E2E ([QE], focused bare-metal CaaS lifecycle) | From the repository root: `uv run pytest -n 0 tests/e2e/caas/sanity/test_cluster_create.py::test_cluster_create --junitxml=/tmp/test-output/caas-bm-teardown-junit.xml` | CLI/API/database, Kubernetes, OSAC operators, AAP, HyperShift/CAPI/CAP-Agent, Assisted Service, provider-backed virtual BMHs, and Kafka/metering; catalog-item-authored creation (published ClusterCatalogItem locking version, node sets, and SSH key), guest readiness, scale events, natural worker/parent teardown, independent InfraEnv GC, fulfillment removal, and deleted events | Requires the compatible deployed CaaS profile; no mocked completion or workaround-enabled deletion wait. Virtual BMHs do not prove physical-hardware coverage. Guest LVMS device readiness, PVC/CSI mount, and application I/O are not established by this lifecycle test. |
 
+### OSAC-5369 IPv4-only networking journeys
+
+These are QE-owned deployed E2E cases. They require a full OSAC installation
+with the corresponding provider enabled; component unit and Kind integration
+suites do not replace these provider boundaries.
+
+| Journey | Command from repository root | Required prerequisites and real boundary |
+|---|---|---|
+| CaaS onboarding and default networking | `METERING_ADAPTER_URL=<adapter> uv run pytest -n 0 tests/e2e/caas/sanity/test_cluster_create.py` | CaaS cluster template (`OSAC_CLUSTER_TEMPLATE`), pull secret (`OSAC_PULL_SECRET_PATH`), SSH public key (`OSAC_SSH_PUBLIC_KEY_PATH`), and a reachable metering adapter. Creates a real ClusterOrder and checks tenant VirtualNetwork/Subnet CIDRs through the deployed API. |
+| VMaaS API and ExternalIPPool lifecycle/capacity | `uv run pytest -n 0 tests/e2e/vmaas/regression/test_networking_api_contract.py tests/e2e/vmaas/regression/external_ip/test_external_ip_pool_lifecycle.py tests/e2e/vmaas/regression/external_ip/test_external_ip_pool_capacity.py` | VMaaS/KubeVirt, `OSAC_VM_KUBECONFIG`, a usable `OSAC_VM_TEMPLATE`, tenant default subnet, service-account private API access, and an IPv4-capable operator/provider. Exercises rejection, exact-one-CIDR pools, allocation, exhaustion, attachment, and cleanup against real Fulfillment/operator services. |
+| BMaaS networking and automatic ExternalIP allocation | `uv run pytest -n 0 tests/e2e/bmaas/regression/networking/test_bmaas_networking.py` | Netris lab profile with `eth9`, three available BM hosts, `OSAC_BMH_NAMESPACE`, `OSAC_BMH_SSH_HOSTS`, `OSAC_BMI_SSH_PUBLIC_KEY`, BM catalog items, and the configured external IPv4 pool (`OSAC_EXTERNAL_IP_POOL_CIDR`). Verifies real BM connectivity, automatic allocation, ingress, and cleanup. |
+
+The BMaaS networking suite is intentionally excluded from the standard GitHub
+Actions BMaaS workflow because it requires the Netris lab and physical-host
+inventory; run it only in that provider-gated environment. If metering is
+enabled for the CaaS/VMaaS/BMaaS profile, also set
+`OSAC_FULFILLMENT_TRUST_E2E=true` to include the optional trust assertions.
+
 Resize lifecycle tests expect `RestartRequired`. Multi-node live hot-plug
 coverage is tracked under
 [OSAC-5335](https://redhat.atlassian.net/browse/OSAC-5335).

@@ -165,44 +165,23 @@ var _ = Describe("ParseConfigMap", func() {
 		Expect(err.Error()).To(ContainSubstring("capabilities field must not be empty"))
 	})
 
-	It("rejects the IPv6 capability", func() {
-		cm := &corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "osac"},
-			Data: map[string]string{
-				"name":         "ipv6-only",
-				"capabilities": "ipv6",
-			},
-		}
+	DescribeTable("rejects unsupported address-family capabilities",
+		func(capabilities string) {
+			cm := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "osac"},
+				Data: map[string]string{
+					"name":         "ds-only",
+					"capabilities": capabilities,
+				},
+			}
 
-		_, err := networkmanager.ParseConfigMap(cm, networkmanager.FabricManager)
-		Expect(err).To(MatchError(ContainSubstring("ipv6")))
-	})
-
-	It("rejects the dual-stack capability", func() {
-		cm := &corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "osac"},
-			Data: map[string]string{
-				"name":         "dual-stack",
-				"capabilities": "dualStack",
-			},
-		}
-
-		_, err := networkmanager.ParseConfigMap(cm, networkmanager.FabricManager)
-		Expect(err).To(MatchError(ContainSubstring("dualStack")))
-	})
-
-	It("rejects unsupported capability combinations", func() {
-		cm := &corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "osac"},
-			Data: map[string]string{
-				"name":         "mixed-capabilities",
-				"capabilities": "ipv4,dpuSupport",
-			},
-		}
-
-		_, err := networkmanager.ParseConfigMap(cm, networkmanager.FabricManager)
-		Expect(err).To(MatchError(ContainSubstring("dpuSupport")))
-	})
+			_, err := networkmanager.ParseConfigMap(cm, networkmanager.FabricManager)
+			Expect(err).To(MatchError(ContainSubstring("invalid capability")))
+		},
+		Entry("IPv6", "ipv6"),
+		Entry("dual-stack", "dualStack"),
+		Entry("mixed IPv4 and IPv6", "ipv4,ipv6"),
+	)
 
 	It("deduplicates repeated capabilities", func() {
 		cm := &corev1.ConfigMap{
@@ -275,7 +254,7 @@ var _ = Describe("Ethernet east-west capability discovery", func() {
 var _ = Describe("Manager.HasCapability", func() {
 	It("returns true for a supported capability", func() {
 		mgr := &networkmanager.Manager{
-			Capabilities: []networkmanager.Capability{networkmanager.CapabilityIPv4, networkmanager.CapabilityIPv6},
+			Capabilities: []networkmanager.Capability{networkmanager.CapabilityIPv4, networkmanager.CapabilityDPUSupport},
 		}
 		Expect(mgr.HasCapability(networkmanager.CapabilityIPv4)).To(BeTrue())
 	})

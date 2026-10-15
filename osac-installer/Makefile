@@ -576,5 +576,6 @@ helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-
 	@echo "Validation passed."
 
 .PHONY: helm-networking-test
-helm-networking-test: helm-deps ## Test networking fabricManager/k8sManager validation and derivation
+helm-networking-test: ## Test networking fabricManager/k8sManager validation and derivation
+	helm dependency build $(OSAC_CHART)
 	./scripts/test-networking-values.sh

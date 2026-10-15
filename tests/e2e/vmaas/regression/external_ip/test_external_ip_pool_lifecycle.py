@@ -40,7 +40,10 @@ class TestExternalIPPoolLifecycle:
         ip_id, ip_cr_name = external_ip
         (ci1_uuid, _ci1_name), (ci2_uuid, _ci2_name) = make_compute_instances(2)
 
+        pool = private_grpc.get_external_ip_pool(pool_id=pool_id)["object"]
         assert pool_id in private_grpc.list_external_ip_pool_ids()
+        assert pool["spec"]["ipFamily"] == "IP_FAMILY_IPV4"
+        assert len(pool["spec"]["cidrs"]) == 1
         assert ip_id in grpc.list_external_ip_ids()
         wait_for_external_ip_allocated(k8s=k8s_hub_client, name=ip_cr_name)
         metering.expect("osac.resource.started.v1", resource_id=ip_id)

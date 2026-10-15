@@ -60,11 +60,11 @@ var _ = Describe("computeCapabilities", func() {
 		Type:         networkmanager.K8sManager,
 	}
 
-	It("uses the fabric manager's capabilities as-is when no k8s manager is configured", func() {
-		caps := computeCapabilities(&dispatcher.ResolvedManagers{FabricManager: &fabricDualStack}, nil)
+	It("projects the fabric manager's capabilities when no k8s manager is configured", func() {
+		caps := computeCapabilities(&dispatcher.ResolvedManagers{FabricManager: &fabricIPv4Only}, nil)
 		Expect(caps.GetSupportsIpv4()).To(BeTrue())
-		Expect(caps.GetSupportsIpv6()).To(BeTrue())
-		Expect(caps.GetSupportsDualStack()).To(BeTrue())
+		Expect(caps.GetSupportsIpv6()).To(BeFalse())
+		Expect(caps.GetSupportsDualStack()).To(BeFalse())
 		Expect(caps.GetDpuSupport()).To(BeFalse())
 	})
 

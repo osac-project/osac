@@ -629,6 +629,19 @@ def test_cluster_create(
         if os.environ.get("OSAC_FULFILLMENT_TRUST_E2E") == "true":
             assert_management_tls(k8s_hub_client, require_metering=True)
             assert_cluster_trust(k8s_hub_client, cluster.co_name)
+
+        # Tenant onboarding in the installed CaaS profile must expose only
+        # IPv4 default networking resources.
+        virtual_networks = grpc.call(service="osac.public.v1.VirtualNetworks/List").get("items", [])
+        assert virtual_networks, "Expected at least one tenant VirtualNetwork after onboarding"
+        assert all(item.get("spec", {}).get("ipv4Cidr") for item in virtual_networks)
+        assert all(not item.get("spec", {}).get("ipv6Cidr") for item in virtual_networks)
+
+        subnets = grpc.call(service="osac.public.v1.Subnets/List").get("items", [])
+        assert subnets, "Expected at least one tenant Subnet after onboarding"
+        assert all(item.get("spec", {}).get("ipv4Cidr") for item in subnets)
+        assert all(not item.get("spec", {}).get("ipv6Cidr") for item in subnets)
+
         _assert_cluster_metering(
             metering=metering, uuid=uuid, node_sets=cluster.node_sets, cluster_template=cluster_template
         )

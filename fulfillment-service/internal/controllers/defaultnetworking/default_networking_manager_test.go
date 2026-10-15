@@ -219,8 +219,8 @@ var _ = Describe("default networking manager", func() {
 				Spec: privatev1.NetworkClassSpec_builder{
 					Defaults: privatev1.NetworkDefaults_builder{
 						VirtualNetworkIpv4Cidr: "10.0.0.0/16",
-						SubnetIpv4Cidr:         "10.0.1.0/24",
 						VirtualNetworkIpv6Cidr: "2001:db8::/32",
+						SubnetIpv4Cidr:         "10.0.1.0/24",
 						SubnetIpv6Cidr:         "2001:db8:1::/64",
 					}.Build(),
 				}.Build(),
@@ -240,14 +240,17 @@ var _ = Describe("default networking manager", func() {
 		Expect(vns.creates).To(HaveLen(1))
 		Expect(vns.creates[0].GetMetadata().GetLabels()).To(HaveKeyWithValue(defaultLabel, "true"))
 		Expect(vns.creates[0].GetSpec().GetNetworkClass().GetId()).To(Equal("nc-1"))
+		Expect(vns.creates[0].GetSpec().GetIpv4Cidr()).To(Equal("10.0.0.0/16"))
 		Expect(vns.creates[0].GetSpec().GetIpv6Cidr()).To(BeEmpty())
 		Expect(subnets.creates).To(HaveLen(1))
-		Expect(subnets.creates[0].GetMetadata().GetAnnotations()).To(HaveKeyWithValue(ownerReferenceAnnotation, "vn-default"))
+		Expect(subnets.creates[0].GetMetadata().GetName()).To(Equal("default-ipv4"))
+		Expect(subnets.creates[0].GetSpec().GetIpv4Cidr()).To(Equal("10.0.1.0/24"))
 		Expect(subnets.creates[0].GetSpec().GetIpv6Cidr()).To(BeEmpty())
+		Expect(subnets.creates[0].GetMetadata().GetAnnotations()).To(HaveKeyWithValue(ownerReferenceAnnotation, "vn-default"))
 		Expect(securityGroups.creates).To(HaveLen(1))
 	})
 
-	It("allocates a default NAT ExternalIP from the first ready pool with capacity", func() {
+	It("allocates a default NAT ExternalIP from the first ready IPv4 pool with capacity", func() {
 		m.networkClasses = &fakeNetworkClasses{items: []*privatev1.NetworkClass{
 			privatev1.NetworkClass_builder{
 				Id: "nc-1",
@@ -279,6 +282,16 @@ var _ = Describe("default networking manager", func() {
 				Status: privatev1.ExternalIPPoolStatus_builder{
 					State:     privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY,
 					Available: 1,
+				}.Build(),
+			}.Build(),
+			privatev1.ExternalIPPool_builder{
+				Id: "pool-0-ipv6",
+				Spec: privatev1.ExternalIPPoolSpec_builder{
+					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV6,
+				}.Build(),
+				Status: privatev1.ExternalIPPoolStatus_builder{
+					State:     privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY,
+					Available: 100,
 				}.Build(),
 			}.Build(),
 		}}

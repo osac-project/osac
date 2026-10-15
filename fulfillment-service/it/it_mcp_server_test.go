@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -522,6 +523,8 @@ var _ = Describe("MCP server", func() {
 		)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(created.ID).ToNot(BeEmpty())
+		Expect(created.Version).To(BeNumerically(">=", 0))
+		Expect(created.State).ToNot(BeEmpty())
 		computeInstanceID = created.ID
 		DeferCleanup(func() {
 			if computeInstanceID == "" {
@@ -594,6 +597,7 @@ var _ = Describe("MCP server", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("tool \"delete_compute_instance\" returned an error result"))
 		Expect(err.Error()).To(MatchRegexp(`(?i)(not.?found|permission.?denied)`))
+		Expect(err.Error()).To(ContainSubstring(`"grpc_code":"NotFound"`))
 		stillPresent, err := computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: computeInstanceID}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(stillPresent.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeFalse())
@@ -620,6 +624,10 @@ var _ = Describe("MCP server", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring(`"category":"invalid_request"`))
 		Expect(err.Error()).To(ContainSubstring(`"grpc_code":"InvalidArgument"`))
+		deniedEnvelope := regexp.MustCompile(`"category":"([^"]+)".*"grpc_code":"([^"]+)"`).FindStringSubmatch(err.Error())
+		Expect(deniedEnvelope).To(HaveLen(3))
+		Expect(deniedEnvelope[1]).To(Equal("invalid_request"))
+		Expect(deniedEnvelope[2]).To(Equal("InvalidArgument"))
 		adminInstances := privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn())
 		for _, name := range []string{invalidName, deniedName} {
 			invalidList, e := adminInstances.List(ctx, privatev1.ComputeInstancesListRequest_builder{
@@ -628,6 +636,23 @@ var _ = Describe("MCP server", func() {
 			Expect(e).ToNot(HaveOccurred())
 			Expect(invalidList.GetItems()).To(BeEmpty())
 		}
+
+		dispatchName := fmt.Sprintf("mcp-dispatch-compute-%s", uuid.New()[24:32])
+		_, err = callMCPTool[mcpserver.CreateComputeInstanceOutput](
+			ctx, session, "create_compute_instance", map[string]any{
+				"service": "osac.public.v1.ComputeInstances",
+				"method":  "Delete",
+				"payload": map[string]any{"id": computeInstanceID},
+				"name":    dispatchName,
+			},
+		)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("invalid"))
+		dispatchList, err := adminInstances.List(ctx, privatev1.ComputeInstancesListRequest_builder{
+			Filter: proto.String(fmt.Sprintf("this.metadata.name == %q", dispatchName)),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(dispatchList.GetItems()).To(BeEmpty())
 
 		_, err = callMCPTool[mcpserver.DeleteComputeInstanceOutput](
 			ctx, session, "delete_compute_instance", mcpserver.DeleteComputeInstanceInput{},

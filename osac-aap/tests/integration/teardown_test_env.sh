@@ -41,6 +41,26 @@ if [ -f /usr/local/share/ca-certificates/osac-test-registry-ca.crt ]; then
   sudo update-ca-certificates > /dev/null 2>&1 || true
 fi
 
+# Stop publish_templates test servers left behind by an interrupted scenario.
+python3 - <<'PY'
+import ssl
+import urllib.error
+import urllib.request
+
+opener = urllib.request.build_opener(
+    urllib.request.ProxyHandler({}),
+    urllib.request.HTTPSHandler(context=ssl._create_unverified_context()),
+)
+for url in (
+    "http://127.0.0.1:18081/_shutdown",
+    "https://127.0.0.1:18082/_shutdown",
+):
+    try:
+        opener.open(url, timeout=1).close()
+    except (OSError, urllib.error.URLError):
+        pass
+PY
+
 # Delete kind cluster
 kind delete cluster --name osac-test
 

@@ -1,0 +1,61 @@
+---
+# Minimal UserDefinedNetwork CRD (k8s.ovn.org/v1) for integration
+# testing.  The tenant controller watches this type on the remote
+# (workload) cluster via multicluster-runtime.  Without the CRD the
+# informer cannot sync, which blocks every controller that shares the
+# remote cluster cache.  Only the structure needed for the watch is
+# defined here; no spec or status schema is required.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: userdefinednetworks.k8s.ovn.org
+spec:
+  group: k8s.ovn.org
+  names:
+    kind: UserDefinedNetwork
+    listKind: UserDefinedNetworkList
+    plural: userdefinednetworks
+    singular: userdefinednetwork
+    shortNames:
+      - udn
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+      subresources:
+        status: {}
+---
+# Minimal ClusterUserDefinedNetwork CRD (k8s.ovn.org/v1) for
+# integration testing.  The ovnv1.AddToScheme call registers both
+# UserDefinedNetwork and ClusterUserDefinedNetwork in the remote
+# cluster scheme.  Providing this CRD prevents discovery errors when
+# the API server encounters a list/watch for the type.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: clusteruserdefinednetworks.k8s.ovn.org
+spec:
+  group: k8s.ovn.org
+  names:
+    kind: ClusterUserDefinedNetwork
+    listKind: ClusterUserDefinedNetworkList
+    plural: clusteruserdefinednetworks
+    singular: clusteruserdefinednetwork
+    shortNames:
+      - cudn
+  scope: Cluster
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+      subresources:
+        status: {}

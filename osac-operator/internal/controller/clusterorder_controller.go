@@ -828,6 +828,20 @@ func (r *ClusterOrderReconciler) handleNodePool(ctx context.Context, instance *v
 	// AutoScaling), yet Status.Replicas still reflects the
 	// actual observed count and should be reported.
 	if nodePool.Status.Replicas == 0 {
+		// Remove a pre-existing zero-valued entry so the feedback
+		// controller does not forward it to fulfillment where
+		// ClusterNodeSet.size > 0 would reject it.  Older operator
+		// versions wrote NumberOfNodes = 0 for newly created
+		// NodePools; this cleans them up on upgrade.  Positive
+		// entries are preserved (last-known-value).
+		for i, nr := range instance.Status.NodeRequests {
+			if nr.NodeSet == nodeSet && nr.NumberOfNodes == 0 {
+				instance.Status.NodeRequests = append(
+					instance.Status.NodeRequests[:i],
+					instance.Status.NodeRequests[i+1:]...)
+				break
+			}
+		}
 		return nil
 	}
 

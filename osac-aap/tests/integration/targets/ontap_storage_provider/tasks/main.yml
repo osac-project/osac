@@ -417,6 +417,18 @@
       register: _csi_secret
       no_log: true
 
+    - name: Verify CSI Secret password matches prepared credential in constant time
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - "import hmac, os, sys; sys.exit(0 if hmac.compare_digest(os.environ['ACTUAL_CRED'], os.environ['EXPECTED_CRED']) else 1)"
+      environment:
+        ACTUAL_CRED: "{{ _csi_secret.resources[0].data.password | default('') | b64decode }}"
+        EXPECTED_CRED: "{{ storage_provider_backend_connections['ontap-be-1'].tenant_preparation.provider_config.password }}"
+      changed_when: false
+      no_log: true
+
     - name: Assert the CSI Secret exists in the trident namespace with runtime credentials
       ansible.builtin.assert:
         that:

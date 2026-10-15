@@ -106,14 +106,18 @@
   register: _ontap_csi_checks
   no_log: true
 
-- name: Determine if all StorageClasses, TridentBackendConfigs, and CSI Secrets already exist
+- name: Determine if all StorageClasses, Bound TridentBackendConfigs, and CSI Secrets already exist
   ansible.builtin.set_fact:
     _ontap_all_sc_exist: >-
       {{ (_ontap_expected_sc_names | difference(
             _ontap_sc_checks.resources | default([]) | map(attribute='metadata.name') | list
           ) | length) == 0
           and (_ontap_expected_tbc_names | difference(
-            _ontap_tbc_checks.resources | default([]) | map(attribute='metadata.name') | list
+            _ontap_tbc_checks.resources | default([])
+            | selectattr('status', 'defined')
+            | selectattr('status.phase', 'defined')
+            | selectattr('status.phase', 'equalto', 'Bound')
+            | map(attribute='metadata.name') | list
           ) | length) == 0
           and (_ontap_expected_csi_secret_names | difference(
             _ontap_csi_checks.resources | default([]) | map(attribute='metadata.name') | list

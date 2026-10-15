@@ -55,6 +55,10 @@ spec:
           value: "{{ netris_validate_certs | string | lower }}"
         - name: NETRIS_CA_PATH
           value: "{{ netris_ca_path }}"
+        - name: ANSIBLE_STRATEGY
+          value: netris.controller.protected_linear
+        - name: OSAC_LAUNCH_EXTRA_VARS_PATH
+          value: /runner/env/extravars
       envFrom:
         - configMapRef:
             name: cluster-fulfillment-ig

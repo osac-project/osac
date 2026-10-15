@@ -28,6 +28,9 @@
   environment:
     KUBECONFIG: "{{ lookup('env', 'KUBECONFIG') }}"
     K8S_AUTH_KUBECONFIG: "{{ lookup('env', 'K8S_AUTH_KUBECONFIG') }}"
+    NETRIS_CONTROLLER_URL: "{{ mock_netris_url }}"
+    NETRIS_VALIDATE_CERTS: "false"
+    NETRIS_CA_PATH: ""
   register: netris_delete_playbook_result
   changed_when: false
   failed_when: false

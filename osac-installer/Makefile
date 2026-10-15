@@ -602,6 +602,11 @@ csi-render-test: helm-deps helm-topolvm-deps ## Verify CSI and storage-provider 
 		helm template osac $(OSAC_CHART) \
 			--values $(OSAC_CHART)/ci/default-values.yaml > "$$default_operator_render"; \
 		! rg -q 'name: OSAC_VENDOR_CONTROLLERS' "$$default_operator_render"; \
+		for rendered in "$$caas_render" "$$vmaas_render" "$$default_operator_render"; do \
+			rg -Uq 'kind: Namespace\nmetadata:\n  name: osac-storage' "$$rendered"; \
+			rg -Uq 'name: OSAC_STORAGE_PREPARATION_NAMESPACE\n[[:blank:]]+value: "osac-storage"' "$$rendered"; \
+			rg -Uq 'name: OSAC_STORAGE_CONFIG_NAMESPACE\n[[:blank:]]+valueFrom:\n[[:blank:]]+fieldRef:\n[[:blank:]]+fieldPath: metadata.namespace' "$$rendered"; \
+		done; \
 		test "$$(rg -c '^  OSAC_FULFILLMENT_ENDPOINT:' "$$default_operator_render")" -eq 1; \
 		assert_helm_failure 'operator[./]vendorControllers[./]lvms' \
 			helm template osac $(OSAC_CHART) \

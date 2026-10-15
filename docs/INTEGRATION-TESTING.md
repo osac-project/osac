@@ -334,12 +334,19 @@ Touched-area requirements: [component guide](../osac-operator/AGENTS.md#integrat
 The NetApp preparation cases in `internal/controller/storage_preparation_test.go`
 run in the existing Controller Envtest Suite via `make test`. Kubernetes/etcd
 and Tenant/Secret persistence are real; catalog and provisioning providers are
-doubles. They cover preparation identity/wait/resume, setup/native-job ordering,
-legacy-job migration, missing-class repair and catalog-loss deletion guards.
+doubles. They cover hub namespace and selection by tenant/backend names with two
+labels, payloads indexed by backend ID, ambiguous or invalid preparations,
+wait/resume, setup/native-job ordering, legacy-job migration, missing-class repair
+and catalog-loss deletion guards.
 `pkg/provisioning/storage_launch_test.go` additionally uses the production AAP
 HTTP client and a local response-echo fixture to check credential redaction for
 job/workflow launches. These tests do not run an AAP execution environment,
-Trident, ONTAP, or FC I/O. The receiving-role/deployed boundary remains joint
+Trident, ONTAP, or FC I/O. The installer `make csi-render-test` checks hub
+namespace creation, explicit preparation namespace wiring and the unchanged
+legacy output namespace. `test/integration/storage_preparation_test.go` checks
+the installed namespace and operator Secret-read authorization in Kind; it
+neither reads credential values nor invokes AAP. The receiving-role/deployed
+boundary remains joint
 [DEV]/[QE] work under [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
 
 ### Bare-metal worker coverage ([DEV])

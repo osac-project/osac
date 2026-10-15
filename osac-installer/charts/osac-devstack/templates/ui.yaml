@@ -1,4 +1,4 @@
-{{- if .Values.ui.enabled }}
+{{- if .Values.devFullUi.enabled }}
 ---
 apiVersion: v1
 kind: ConfigMap

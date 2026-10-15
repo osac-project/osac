@@ -54,8 +54,12 @@ awx:
         limits: {cpu: "500m", memory: 1Gi}
 
 # --- OSAC UI ---
-ui:
+devFullUi:
+  # Separate from ui.enabled because the installer passes the platform's
+  # shared Kind values to this chart; the platform UI is disabled there.
   enabled: true
+
+ui:
   image:
     repository: ghcr.io/osac-project/osac-ui
     tag: latest  # DEV_FLOATING -- intentionally unpinned for local dev

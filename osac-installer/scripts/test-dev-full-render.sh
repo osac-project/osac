@@ -18,7 +18,11 @@ profile_values=(
 )
 chart_render=$(helm template test charts/osac-devstack --namespace osac "${profile_values[@]}")
 ui_render=$(helm template test charts/osac-devstack --namespace osac "${profile_values[@]}" \
-  --set ui.enabled=true --show-only templates/ui.yaml)
+  --show-only templates/ui.yaml)
+if ! awk 'BEGIN { RS = "---" } /kind: Deployment/ && /name: osac-ui/ { found = 1 } END { exit !found }' <<<"$ui_render"; then
+  echo "dev-full UI must be enabled in the devstack chart even when the platform UI is disabled" >&2
+  exit 1
+fi
 if ! grep -Fq 'FULFILLMENT_TLS_INSECURE: "0"' <<<"$ui_render" \
   || ! grep -Fq 'OIDC_TLS_INSECURE: "0"' <<<"$ui_render" \
   || ! grep -Fq 'FULFILLMENT_TLS_CA_FILE: "/etc/ca-bundle/bundle.pem"' <<<"$ui_render" \
@@ -32,9 +36,6 @@ for template in \
   templates/hooks/provision-tenant.yaml \
   templates/hooks/seed-catalog.yaml; do
   template_values=("${profile_values[@]}")
-  if [[ "$template" == "templates/ui.yaml" ]]; then
-    template_values+=(--set ui.enabled=true)
-  fi
   rendered=$(helm template test charts/osac-devstack --namespace osac "${template_values[@]}" --show-only "$template")
   if ! grep -Fq 'name: ca-bundle' <<<"$rendered" \
     || ! grep -Fq 'key: bundle.pem' <<<"$rendered" \

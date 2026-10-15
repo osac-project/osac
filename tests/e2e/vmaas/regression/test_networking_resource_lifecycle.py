@@ -27,6 +27,7 @@ from tests.e2e.core.helpers import (
     wait_for_virtual_network_ready,
 )
 from tests.e2e.core.k8s_client import K8sClient
+from tests.e2e.core.runner import poll_until
 from tests.e2e.vmaas.networking_lifecycle_helpers import (
     delete_and_wait_for_security_group,
     delete_and_wait_for_subnet,
@@ -118,7 +119,15 @@ def test_networking_resource_lifecycle(
         natgw_id = jwt_grpc_tenant1.create_nat_gateway(
             name=natgw_name, virtual_network_name=vn_name, external_ip_name=eip_name
         )
-        natgw_cr = k8s_hub_client.get_nat_gateway_name(uuid=natgw_id)
+        # The operator creates the CR asynchronously, so poll for the CR name
+        # (mirroring the BMaaS suite) instead of reading it directly after Create.
+        natgw_cr = poll_until(
+            fn=lambda: k8s_hub_client.get_nat_gateway_name(uuid=natgw_id, checked=False),
+            until=lambda name: name != "",
+            retries=30,
+            delay=2,
+            description=f"NATGateway CR for {natgw_id}",
+        )
         wait_for_nat_gateway_ready(k8s=k8s_hub_client, name=natgw_cr)
 
         # List/Get surface per resource, same identity as created.

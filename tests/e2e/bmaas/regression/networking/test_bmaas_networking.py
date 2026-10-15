@@ -514,6 +514,8 @@ class TestBmaasNetworking:
             wait_for_bmi_deletion(k8s=k8s_hub_client, name=bmi["cr"])
             wait_for_bmi_grpc_removal(grpc=grpc, uuid=bmi["id"])
             wait_for_bmh_available(k8s=k8s_hub_client, name=bmi["bmh"], bmh_namespace=bmh_namespace)
+            if key == "bmi1":
+                self.__class__.state["bmi1_deleted"] = True
             print("BMI deprovisioned, BMH available")
 
     def test_14b_verify_auto_eip_garbage_collected(self, grpc: GRPCClient) -> None:
@@ -539,7 +541,7 @@ class TestBmaasNetworking:
 
     def test_14c_verify_idempotent_delete(self, grpc: GRPCClient) -> None:
         """A second public Delete of a removed BMI returns NotFound (the retry contract)."""
-        _require(self.state, "bmi1")
+        _require(self.state, "bmi1", "bmi1_deleted")
         bmi1 = self.state["bmi1"]
         with pytest.raises(subprocess.CalledProcessError) as exc_info:
             grpc.call(service="osac.public.v1.BareMetalInstances/Delete", data={"id": bmi1["id"]})

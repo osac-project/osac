@@ -1,0 +1,26 @@
+---
+apiVersion: osac.openshift.io/v1alpha1
+kind: ComputeInstance
+metadata:
+  name: test-win-sysprep
+  namespace: osac-system
+  annotations:
+    osac.openshift.io/subnet-target-namespace: computeinstance-test-vm-work
+    osac.openshift.io/tenant: integration-tenant
+spec:
+  templateID: osac.templates.ocp_virt_vm
+  guestOSFamily: "windows"
+  vcpus: 4
+  memoryGiB: 8
+  networkAttachments:
+    - subnetRef: test-subnet
+  bootDisk:
+    sizeGiB: 40
+    storageTier: local
+  image:
+    sourceType: registry
+    sourceRef: "registry.example.com/osac/windows-golden:ltsc2022"
+  userDataSecretRef:
+    name: test-win-sysprep-userdata
+status:
+  desiredConfigVersion: "1"

@@ -47,7 +47,7 @@
 #   Test 14 (Linux VM with user-data -- no sysprep extraction):
 #     ansible-playbook ... -e test_linux_userdata_no_extraction=true
 #
-#   Test 15 (Windows with user-data -- user-supplied sysprep path):
+#   Test 15 (Windows with user-data -- pre-secrets base spec):
 #     ansible-playbook ... -e test_windows_userdata_sysprep=true
 #
 #   Test 16 (Windows without user-data -- no sysprep created):
@@ -788,12 +788,18 @@
               got {{ vm_user_data_secret_ref | default('undefined') }}
 
 # ──────────────────────────────────────────────────────────────
-# Test 15: Windows VM with user-data — user-supplied sysprep path
+# Test 15: Windows VM with user-data — pre-secrets base spec
 # Expected: vm_user_data_secret_ref extracted, Windows template spec built
-#           (EFI, clock, no cloudInitNoCloud), sysprep patch adds SATA CD-ROM
-#           volume pointing to the sysprep Secret
+#           (EFI, no cloudInitNoCloud), base spec has only root-disk before
+#           create_secrets runs.
+# The actual sysprep Secret copy, SATA CD-ROM disk/volume injection,
+# destination Secret reference, and byte-identical userdata→Unattend.xml
+# assertions are covered by the Kind-backed sysprep_secret_copy scenario
+# (tests/integration/targets/compute_instance_create/tasks/
+# sysprep_secret_copy.yml), which exercises the real create_secrets.yaml
+# path end-to-end.
 # ──────────────────────────────────────────────────────────────
-- name: "Test ocp_virt_vm -- Windows VM with user-data targets sysprep path"
+- name: "Test ocp_virt_vm -- Windows VM with user-data pre-secrets base spec"
   hosts: localhost
 
   collections:
@@ -866,41 +872,6 @@
             fail_msg: >-
               Expected only root-disk volume before create_secrets runs,
               got {{ vm_template_spec.volumes }}
-
-        - name: Apply sysprep patch (offline replay of create_secrets combine logic)
-          ansible.builtin.set_fact:
-            sysprep_patched_spec: "{{ vm_template_spec | combine(sysprep_patch, recursive=True, list_merge='append') }}"
-          vars:
-            sysprep_patch:
-              domain:
-                devices:
-                  disks:
-                    - name: sysprep-disk
-                      cdrom:
-                        bus: sata
-              volumes:
-                - name: sysprep-disk
-                  sysprep:
-                    secret:
-                      name: "{{ compute_instance_name }}-sysprep"
-
-        - name: Verify sysprep disk is mounted as SATA CD-ROM
-          ansible.builtin.assert:
-            that:
-              - sysprep_patched_spec.domain.devices.disks | selectattr('name', 'equalto', 'sysprep-disk') | list | length == 1
-              - (sysprep_patched_spec.domain.devices.disks | selectattr('name', 'equalto', 'sysprep-disk') | first).cdrom.bus == 'sata'
-            fail_msg: >-
-              Expected sysprep-disk with cdrom.bus=sata,
-              got {{ sysprep_patched_spec.domain.devices.disks }}
-
-        - name: Verify sysprep volume references correct secret
-          ansible.builtin.assert:
-            that:
-              - sysprep_patched_spec.volumes | selectattr('name', 'equalto', 'sysprep-disk') | list | length == 1
-              - (sysprep_patched_spec.volumes | selectattr('name', 'equalto', 'sysprep-disk') | first).sysprep.secret.name == "test-win-userdata-sysprep"
-            fail_msg: >-
-              Expected sysprep volume with secret 'test-win-userdata-sysprep',
-              got {{ sysprep_patched_spec.volumes }}
 
 # ──────────────────────────────────────────────────────────────
 # Test 16: Windows VM without user-data — no sysprep created

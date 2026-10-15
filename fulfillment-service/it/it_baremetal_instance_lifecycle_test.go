@@ -53,6 +53,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		catalogItemId                       string
 		instanceTypeId                      string
 		defaultDiskImageId                  string
+		defaultNetworkingFixture            catalogItemNetworkFixture
 	)
 
 	BeforeEach(func(ctx context.Context) {
@@ -111,7 +112,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 
 		// Lifecycle Creates omit network_attachments and use shared catalog items without
 		// network field policies; hard-fail defaulting needs a tenant-default Subnet/SG.
-		ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
+		defaultNetworkingFixture = ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
 
 		// Create BareMetalInstanceTemplate with an explicit ID that matches the BMFO CRD
 		// validation pattern (^[a-zA-Z_][a-zA-Z0-9._]*$). Auto-generated UUIDs start with
@@ -220,21 +221,6 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			}, 2*time.Minute, time.Second).Should(Succeed())
 		})
 
-		// Set BareMetalInstance to RUNNING state via private Update API
-		bmiGetResp, err := privateBareMetalInstancesClient.Get(ctx, privatev1.BareMetalInstancesGetRequest_builder{
-			Id: bareMetalInstanceId,
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		bmi := bmiGetResp.GetObject()
-		bmi.SetStatus(privatev1.BareMetalInstanceStatus_builder{
-			State: privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING,
-		}.Build())
-		_, err = privateBareMetalInstancesClient.Update(ctx, privatev1.BareMetalInstancesUpdateRequest_builder{
-			Object:     bmi,
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-
 		// Verify the BareMetalInstance fields via public Get
 		getResp, err := bareMetalInstancesClient.Get(ctx, publicv1.BareMetalInstancesGetRequest_builder{
 			Id: bareMetalInstanceId,
@@ -253,9 +239,6 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			"materialized template should reference the template from the catalog item")
 		Expect(object.GetSpec().GetDiskImage().GetId()).To(Equal(defaultDiskImageId),
 			"BareMetalInstance should persist the requested disk image")
-		Expect(object.GetStatus().GetState()).To(
-			Equal(publicv1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING),
-			"BareMetalInstance should be in RUNNING state after status override")
 	})
 
 	It("Rejects BareMetalInstance with non-existent catalog item", func(ctx context.Context) {
@@ -339,18 +322,19 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		virtualNetworksClient := privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn())
 		subnetsClient := privatev1.NewSubnetsClient(tool.InternalView().AdminConn())
 		securityGroupsClient := privatev1.NewSecurityGroupsClient(tool.InternalView().AdminConn())
-		// NetworkClass is a deployment singleton. Remove the fabric-backed default
-		// class created by BeforeEach before creating the k8s-only class needed by
-		// this validation case. The next spec will recreate the default fixture.
+		// The default fixture is system-managed. Remove it through the controller's
+		// default-networking lifecycle before replacing its singleton NetworkClass.
+		defaultNetworkingManager, err := newTestDefaultNetworkingManager()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(deleteTenantDefaultNetworkingFixture(ctx, defaultNetworkingManager, usersGroup)).To(Succeed())
+		Expect(defaultNetworkingFixture.networkClassCreated).To(BeTrue(),
+			"the k8s-only validation fixture must own the deployment's singleton NetworkClass")
+		Expect(cleanupNetworkClassFixture(ctx, networkClassesClient, defaultNetworkingFixture.networkClassID)).To(Succeed())
 		listedClasses, err := networkClassesClient.List(ctx, privatev1.NetworkClassesListRequest_builder{
 			Filter: new("!has(this.metadata.deletion_timestamp)"),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(listedClasses.GetItems()).To(HaveLen(1))
-		_, err = networkClassesClient.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
-			Id: listedClasses.GetItems()[0].GetId(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
+		Expect(listedClasses.GetItems()).To(BeEmpty(), "default fixture cleanup must remove its NetworkClass before replacement")
 
 		// Create a k8s-only NetworkClass (no fabric_manager):
 		ncResp, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
@@ -362,10 +346,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		Expect(err).ToNot(HaveOccurred())
 		networkClassId := ncResp.GetObject().GetId()
 		DeferCleanup(func(ctx context.Context) {
-			_, err := networkClassesClient.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
-				Id: networkClassId,
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
+			Expect(cleanupNetworkClassFixture(ctx, networkClassesClient, networkClassId)).To(Succeed())
 		})
 		waitForNetworkClassReady(ctx, networkClassesClient, networkClassId)
 
@@ -386,10 +367,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func(ctx context.Context) {
-			_, err := virtualNetworksClient.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
-				Id: virtualNetworkId,
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
+			Expect(cleanupVirtualNetworkFixture(ctx, virtualNetworksClient, virtualNetworkId)).To(Succeed())
 		})
 
 		// Wait for the VN reconciler to finish initial processing before
@@ -435,10 +413,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func(ctx context.Context) {
-			_, err := subnetsClient.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{
-				Id: subnetId,
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
+			Expect(cleanupSubnetFixture(ctx, subnetsClient, subnetId)).To(Succeed())
 		})
 
 		securityGroupID := fmt.Sprintf("test-security-group-%s", uuid.New())
@@ -456,8 +431,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func(ctx context.Context) {
-			_, err := securityGroupsClient.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{Id: securityGroupID}.Build())
-			Expect(err).ToNot(HaveOccurred())
+			Expect(cleanupSecurityGroupFixture(ctx, securityGroupsClient, securityGroupID)).To(Succeed())
 		})
 		Eventually(func(g Gomega) {
 			resp, err := securityGroupsClient.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: securityGroupID}.Build())

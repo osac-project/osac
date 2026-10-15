@@ -57,7 +57,7 @@ type ExtRealmState struct {
 // IssuerURL returns the OIDC issuer URL for this realm.
 // This is used as both the OSAC IdP issuer config and as the `iss` claim validator.
 func (s *ExtRealmState) IssuerURL() string {
-	return fmt.Sprintf("https://%s/realms/%s", keycloakAddr, s.realmName)
+	return fmt.Sprintf("https://%s/realms/%s", keycloakInternalAddr, s.realmName)
 }
 
 // AuthorizationURL returns the OIDC authorization endpoint.
@@ -90,8 +90,9 @@ func (s *ExtRealmState) RealmName() string { return s.realmName }
 // The realm serves as the external OIDC Identity Provider for the test. Call
 // DeleteExtRealm in DeferCleanup to remove it.
 //
-// The realm and its client are accessible at the same cluster-internal Keycloak address
-// used by all other OSAC integration tests, so no special networking is required.
+// The realm endpoints use the Keycloak Service's in-cluster port (8443), so Keycloak
+// can reach them during the broker token exchange. The test runner's port bridge maps
+// that same address to the dedicated Kind cluster's host port when the host port differs.
 func (t *Tool) CreateExtRealm(ctx context.Context) (*ExtRealmState, error) {
 	realmName := fmt.Sprintf("ext-%s", uuid.New())
 	clientID := "ext-client-" + uuid.New()

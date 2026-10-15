@@ -82,6 +82,7 @@ type function struct {
 	logger                *slog.Logger
 	hubCache              controllers.HubCache
 	networkingHubReader   controllers.NetworkingHubReader
+	networkingCleanup     controllers.WorkloadNetworkingCleanup
 	clustersClient        privatev1.ClustersClient
 	hubsClient            privatev1.HubsClient
 	clusterVersionsClient privatev1.ClusterVersionsClient
@@ -139,6 +140,7 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 	// Create and populate the object:
 	object := &function{
 		logger:                b.logger,
+		networkingCleanup:     controllers.NewWorkloadNetworkingCleanup(b.connection),
 		clustersClient:        privatev1.NewClustersClient(b.connection),
 		hubsClient:            privatev1.NewHubsClient(b.connection),
 		clusterVersionsClient: privatev1.NewClusterVersionsClient(b.connection),
@@ -173,9 +175,11 @@ func (r *function) run(ctx context.Context, cluster *privatev1.Cluster) error {
 	if err != nil {
 		handled, retry := controllers.HandleResourceNetworkingHubResolutionError(err, t.setPending, t.setFailed)
 		if !handled {
-			return err
-		}
-		if retry {
+			if !controllers.IsRequeueable(err) {
+				return err
+			}
+			hubResolutionRetryErr = err
+		} else if retry {
 			hubResolutionRetryErr = err
 		}
 		err = nil
@@ -596,6 +600,9 @@ func (t *task) delete(ctx context.Context) (err error) {
 	// No hub was assigned, so no ClusterOrder or hub secrets could have been created.
 	t.hubId = t.cluster.GetStatus().GetHub()
 	if t.hubId == "" {
+		if err = controllers.ReconcileWorkloadNetworkingCleanup(ctx, t.r.networkingCleanup, t.cluster.GetId()); err != nil {
+			return err
+		}
 		t.removeFinalizer()
 		return
 	}
@@ -604,6 +611,9 @@ func (t *task) delete(ctx context.Context) (err error) {
 	if err != nil {
 		// Check if the hub has been decommissioned (deleted from database)
 		if errors.Is(err, controllers.ErrHubNotFound) {
+			if err = controllers.ReconcileWorkloadNetworkingCleanup(ctx, t.r.networkingCleanup, t.cluster.GetId()); err != nil {
+				return err
+			}
 			if err = t.deleteClusterSecrets(ctx); err != nil {
 				return err
 			}
@@ -625,6 +635,9 @@ func (t *task) delete(ctx context.Context) (err error) {
 			"Cluster order doesn't exist",
 			slog.String("id", t.cluster.GetId()),
 		)
+		if err = controllers.ReconcileWorkloadNetworkingCleanup(ctx, t.r.networkingCleanup, t.cluster.GetId()); err != nil {
+			return err
+		}
 		if err = t.deleteClusterSecrets(ctx); err != nil {
 			return err
 		}
@@ -650,6 +663,9 @@ func (t *task) delete(ctx context.Context) (err error) {
 		return nil
 	}
 
+	if err = controllers.ReconcileWorkloadNetworkingCleanup(ctx, t.r.networkingCleanup, t.cluster.GetId()); err != nil {
+		return err
+	}
 	if err = t.deleteClusterSecrets(ctx); err != nil {
 		return err
 	}

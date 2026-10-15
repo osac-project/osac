@@ -338,6 +338,10 @@ var _ = Describe("Tenant compute infrastructure readiness", func() {
 				Expect(saved.GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_SYNCED))
 				Expect(condition(saved).GetStatus()).To(Equal(ready))
 			} else {
+				networkClasses := NewMockNetworkClassesClient(ctrl)
+				reconciler.networkClassesClient = networkClasses
+				networkClasses.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+					privatev1.NetworkClassesListResponse_builder{}.Build(), nil)
 				vn := NewMockVirtualNetworksClient(ctrl)
 				reconciler.virtualNetworksClient = vn
 				vn.EXPECT().List(gomock.Any(), gomock.Any()).Return(nil, failure)

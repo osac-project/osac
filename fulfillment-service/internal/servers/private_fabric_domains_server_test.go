@@ -52,6 +52,10 @@ var _ = Describe("Private fabric domains server", func() {
 			Spec: privatev1.NetworkClassSpec_builder{
 				EastWestConfig: privatev1.EastWestConfig_builder{EthernetEw: config}.Build(),
 			}.Build(),
+			Status: privatev1.NetworkClassStatus_builder{
+				State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+				Hub:   "hub-a",
+			}.Build(),
 		}.Build()).Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
 		vnDAO, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
@@ -62,6 +66,10 @@ var _ = Describe("Private fabric domains server", func() {
 			Spec: privatev1.VirtualNetworkSpec_builder{
 				NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
 				Region:       "region-a", Ipv4Cidr: new("10.0.0.0/16"),
+			}.Build(),
+			Status: privatev1.VirtualNetworkStatus_builder{
+				State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
+				Hub:   "hub-a",
 			}.Build(),
 		}.Build()).Do(ctx)
 		Expect(err).ToNot(HaveOccurred())

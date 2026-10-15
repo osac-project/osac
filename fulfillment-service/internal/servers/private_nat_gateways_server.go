@@ -191,8 +191,21 @@ func (s *PrivateNATGatewaysServer) Create(ctx context.Context,
 		err = tenantErr
 		return
 	}
+	externalIPKey := refKey(natGateway.GetSpec().GetExternalIp())
+	var externalIP *privatev1.ExternalIP
+	externalIP, err = s.validateExternalIPReference(ctx, externalIPKey)
+	if err != nil {
+		return
+	}
+	if err = validateTenantMatch(natTenant, externalIP, "ExternalIP", externalIPKey); err != nil {
+		return
+	}
+	if err = s.lifecycle.ensureExternalIPAvailable(ctx, externalIPKey, externalIP.GetMetadata().GetName()); err != nil {
+		return
+	}
+
 	virtualNetworkKey := refKey(natGateway.GetSpec().GetVirtualNetwork())
-	virtualNetworkResponse, getErr := s.virtualNetworksDao.Get().SetId(virtualNetworkKey).Do(ctx)
+	virtualNetworkResponse, getErr := s.virtualNetworksDao.Get().SetId(virtualNetworkKey).SetLock(true).Do(ctx)
 	if getErr != nil {
 		var notFoundErr *dao.ErrNotFound
 		if errors.As(getErr, &notFoundErr) {
@@ -205,7 +218,19 @@ func (s *PrivateNATGatewaysServer) Create(ctx context.Context,
 		}
 		return
 	}
-	if err = validateTenantMatch(natTenant, virtualNetworkResponse.GetObject(), "VirtualNetwork", virtualNetworkKey); err != nil {
+	virtualNetwork := virtualNetworkResponse.GetObject()
+	if err = validateTenantMatch(natTenant, virtualNetwork, "VirtualNetwork", virtualNetworkKey); err != nil {
+		return
+	}
+	if virtualNetwork.GetMetadata().HasDeletionTimestamp() {
+		err = grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"VirtualNetwork '%s' is being deleted", virtualNetworkKey)
+		return
+	}
+	if virtualNetwork.GetStatus().GetState() != privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY {
+		err = grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"VirtualNetwork '%s' must be READY (current state: %s)",
+			virtualNetworkKey, virtualNetwork.GetStatus().GetState().String())
 		return
 	}
 	err = s.validateNetworkClassHasFabricManager(ctx, refKey(natGateway.GetSpec().GetVirtualNetwork()))
@@ -213,16 +238,6 @@ func (s *PrivateNATGatewaysServer) Create(ctx context.Context,
 		return
 	}
 
-	externalIPKey := refKey(natGateway.GetSpec().GetExternalIp())
-
-	var externalIP *privatev1.ExternalIP
-	externalIP, err = s.validateExternalIPReference(ctx, externalIPKey)
-	if err != nil {
-		return
-	}
-	if err = validateTenantMatch(natTenant, externalIP, "ExternalIP", externalIPKey); err != nil {
-		return
-	}
 	canonicalHubID, err := canonicalNetworkingHubID(ctx, s.logger, s.networkClassesDao)
 	if err != nil {
 		return
@@ -238,7 +253,6 @@ func (s *PrivateNATGatewaysServer) Create(ctx context.Context,
 	}); err != nil {
 		return
 	}
-
 	if natGateway.GetStatus() == nil {
 		natGateway.SetStatus(privatev1.NATGatewayStatus_builder{
 			State: privatev1.NATGatewayState_NAT_GATEWAY_STATE_PENDING,
@@ -384,16 +398,16 @@ func (s *PrivateNATGatewaysServer) validateExternalIPReference(
 	}
 
 	externalIP := getResponse.GetObject()
+	if externalIP.GetMetadata().HasDeletionTimestamp() {
+		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"ExternalIP '%s' is being deleted", externalIPID)
+	}
 
 	if externalIP.GetStatus().GetState() != privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED {
 		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
 			"ExternalIP '%s' is not in ALLOCATED state (current state: %s)",
 			externalIPID, externalIP.GetStatus().GetState().String())
 	}
-	if err := s.lifecycle.ensureExternalIPAvailable(ctx, externalIPID); err != nil {
-		return nil, err
-	}
-
 	return externalIP, nil
 }
 

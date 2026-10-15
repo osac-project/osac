@@ -196,10 +196,6 @@ var _ = Describe("MCP server", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		networkClassID = networkClassResponse.GetObject().GetId()
-		DeferCleanup(func() {
-			_, err := networkClassesClient.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: networkClassID}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		})
 
 		virtualNetworkID = fmt.Sprintf("mcp-virtual-network-%s", uuid.New())
 		_, err = virtualNetworksClient.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
@@ -217,10 +213,6 @@ var _ = Describe("MCP server", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(func() {
-			_, err := virtualNetworksClient.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{Id: virtualNetworkID}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		})
 		Eventually(func(g Gomega) {
 			response, err := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: virtualNetworkID}.Build())
 			g.Expect(err).ToNot(HaveOccurred())
@@ -251,10 +243,6 @@ var _ = Describe("MCP server", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(func() {
-			_, err := subnetsClient.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{Id: subnetID}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		})
 		Eventually(func(g Gomega) {
 			response, err := subnetsClient.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetID}.Build())
 			g.Expect(err).ToNot(HaveOccurred())
@@ -283,10 +271,6 @@ var _ = Describe("MCP server", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		securityGroupID = securityGroupResponse.GetObject().GetId()
-		DeferCleanup(func() {
-			_, err := securityGroupsClient.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{Id: securityGroupID}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		})
 		Eventually(func(g Gomega) {
 			response, err := securityGroupsClient.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: securityGroupID}.Build())
 			g.Expect(err).ToNot(HaveOccurred())
@@ -301,6 +285,16 @@ var _ = Describe("MCP server", func() {
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+
+		// The delete guards require all references to be removed before their
+		// parent networking resources. Keep these operations together so a
+		// NetworkClass cannot be left behind if a parent is deleted too early.
+		DeferCleanup(func(cleanupCtx context.Context) {
+			Expect(cleanupSecurityGroupFixture(cleanupCtx, securityGroupsClient, securityGroupID)).To(Succeed())
+			Expect(cleanupSubnetFixture(cleanupCtx, subnetsClient, subnetID)).To(Succeed())
+			Expect(cleanupVirtualNetworkFixture(cleanupCtx, virtualNetworksClient, virtualNetworkID)).To(Succeed())
+			Expect(cleanupNetworkClassFixture(cleanupCtx, networkClassesClient, networkClassID)).To(Succeed())
+		})
 
 		catalogItemID = fmt.Sprintf("mcp-compute-catalog-item-%s", uuid.New())
 		_, err = catalogItemsClient.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{

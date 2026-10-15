@@ -22,10 +22,12 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -53,11 +55,46 @@ import (
 var (
 	cfg           *rest.Config
 	k8sClient     client.Client
+	indexedClient client.Client
 	testMcManager mcmanager.Manager
 	testEnv       *envtest.Environment
 	ctx           context.Context
 	cancel        context.CancelFunc
 )
+
+// indexedAutoExternalIPCleanupTestClient routes cleanup resource lists through
+// the manager cache while keeping mutations and unrelated reads on envtest's client.
+type indexedAutoExternalIPCleanupTestClient struct {
+	client.Client
+	indexedReader client.Reader
+}
+
+func (c indexedAutoExternalIPCleanupTestClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	switch list.(type) {
+	case *osacv1alpha1.ExternalIPAttachmentList, *osacv1alpha1.ExternalIPList:
+		return c.indexedReader.List(ctx, list, opts...)
+	default:
+		return c.Client.List(ctx, list, opts...)
+	}
+}
+
+func autoExternalIPCleanupTestClient() client.Client {
+	return indexedAutoExternalIPCleanupTestClient{Client: k8sClient, indexedReader: indexedClient}
+}
+
+func waitForIndexedClientObject(obj client.Object) {
+	cached := obj.DeepCopyObject().(client.Object)
+	Eventually(func() error {
+		return indexedClient.Get(ctx, client.ObjectKeyFromObject(obj), cached)
+	}).WithTimeout(5 * time.Second).Should(Succeed())
+}
+
+func waitForIndexedClientObjectGone(obj client.Object) {
+	Eventually(func() bool {
+		cached := obj.DeepCopyObject().(client.Object)
+		return apierrors.IsNotFound(indexedClient.Get(ctx, client.ObjectKeyFromObject(obj), cached))
+	}).WithTimeout(5 * time.Second).Should(BeTrue())
+}
 
 func TestControllers(t *testing.T) {
 	RegisterFailHandler(Fail)
@@ -120,6 +157,8 @@ var _ = BeforeSuite(func() {
 		Metrics: metricsserver.Options{BindAddress: "0"},
 	})
 	Expect(err).NotTo(HaveOccurred())
+	Expect(RegisterAutoExternalIPAttachmentOwnerIndex(localMgr.GetFieldIndexer())).To(Succeed())
+	indexedClient = localMgr.GetClient()
 	testMcManager, err = mcmanager.WithMultiCluster(localMgr, nil)
 	Expect(err).NotTo(HaveOccurred())
 	go func() {

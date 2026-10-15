@@ -250,29 +250,21 @@ func cleanupComputeInstanceFixture(
 			})
 	}
 	if securityGroupID != "" {
-		deleteComputeInstanceFixtureResource(ctx,
-			func(deleteCtx context.Context) error {
-				_, err := clients.securityGroups.Delete(deleteCtx, privatev1.SecurityGroupsDeleteRequest_builder{Id: securityGroupID}.Build())
-				return err
-			})
+		Expect(cleanupSecurityGroupFixture(ctx, clients.securityGroups, securityGroupID)).To(Succeed())
 	}
 	if subnetID != "" {
-		deleteComputeInstanceFixtureResource(ctx,
-			func(deleteCtx context.Context) error {
-				_, err := clients.subnets.Delete(deleteCtx, privatev1.SubnetsDeleteRequest_builder{Id: subnetID}.Build())
-				return err
-			})
+		Expect(cleanupSubnetFixture(ctx, clients.subnets, subnetID)).To(Succeed())
+		waitForNotFound(func() error {
+			_, err := clients.subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetID}.Build())
+			return err
+		})
 	}
 	if virtualNetworkID != "" {
-		// VirtualNetworks may have an operator finalizer, so Delete can acknowledge the
-		// soft delete while Get continues returning the object until asynchronous cleanup
-		// completes. The deletion timestamp is enough to release this fixture's dependency
-		// before deleting its NetworkClass.
-		deleteComputeInstanceFixtureResource(ctx,
-			func(deleteCtx context.Context) error {
-				_, err := clients.virtualNetworks.Delete(deleteCtx, privatev1.VirtualNetworksDeleteRequest_builder{Id: virtualNetworkID}.Build())
-				return err
-			})
+		Expect(cleanupVirtualNetworkFixture(ctx, clients.virtualNetworks, virtualNetworkID)).To(Succeed())
+		waitForNotFound(func() error {
+			_, err := clients.virtualNetworks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: virtualNetworkID}.Build())
+			return err
+		})
 	}
 	if networkClassID != "" {
 		deleteAndWaitForComputeInstanceFixtureResource(ctx,

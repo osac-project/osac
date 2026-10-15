@@ -196,6 +196,7 @@ Touched-area requirements: [component guide](../fulfillment-service/AGENTS.md#in
 - **Canonical networking Hub routing:** [`fulfillment-service/it/it_networking_hub_placement_test.go`](../fulfillment-service/it/it_networking_hub_placement_test.go) covers VirtualNetwork, Subnet, SecurityGroup, ExternalIPPool, ExternalIP, ExternalIPAttachment, and NATGateway CR placement on the NetworkClass canonical Hub and absence on a valid alternate Hub. It also verifies that two separately provisioned network-attached Cluster resources sharing a subnet use the same Hub, repeated reconciliation does not create duplicate ClusterOrders, a cross-Hub Cluster create fails without a database row or CR, and SecurityGroup retains its stored Hub assignment when the canonical Hub changes. The fixture uses distinct Hub entries and namespaces on the service Kind cluster; it tests Hub entry and namespace routing, not isolation across separate Kubernetes clusters or real provider provisioning. Unavailable-canonical/no-fallback, ComputeInstance, and BareMetalInstance placement remain controller unit coverage because this deployed-service fixture does not isolate reconcilers between cases or exercise provider workflows.
 - **SecurityGroup rule updates ([OSAC-5679](https://redhat.atlassian.net/browse/OSAC-5679), DEV):** `fulfillment-service/it/it_ipv4_networking_contract_test.go` calls the public Update API as a tenant user, verifies ingress and egress persistence while name and parent VirtualNetwork remain unchanged, and waits for Fulfillment to patch the corresponding SecurityGroup CR. This proves the public authorization and Fulfillment-to-Kubernetes API write path; operator/provider reaction to the changed CR remains outside this component suite.
 - **FabricDomain API authorization, tenant filtering, and CRUD persistence:** [`fulfillment-service/it/it_fabric_domain_tenant_api_test.go`](../fulfillment-service/it/it_fabric_domain_tenant_api_test.go) runs in the component-integration suite. The deployed Fulfillment API, PostgreSQL, and Keycloak identities are real; the operator is disabled, so this test does not claim FabricDomain controller, AAP, or Netris lifecycle coverage. See [FabricDomain integration and lifecycle coverage](../fulfillment-service/it/README.fabric-domain.md).
+- **ExternalIP lifecycle races:** [`fulfillment-service/it/it_external_ip_test.go`](../fulfillment-service/it/it_external_ip_test.go) races ExternalIPAttachment creation with parent ExternalIP deletion and verifies one side wins without a dangling reference. It also keeps a parent IP allocated while a dependent attachment is terminating behind a test finalizer, then releases the finalizer and retries deletion. The deferred-attachment case races Cluster readiness with Cluster deletion and verifies retries do not create a late attachment or leave auto-created IPs behind. These are deployed Fulfillment API and database checks; they do not exercise provider detach or release behavior.
 - **NetworkClass manager registration and capability propagation:** `it_networkclass_manager_capabilities_test.go` creates the NetworkClass first, then adds fabric and Kubernetes manager registrations and verifies the deployed operator persists their capability intersection. The installer target runs this spec separately with the local operator image so the rest of the service-only suite remains isolated from operator reconciliation.
 - **NetworkClass manager readiness:** `it_networkclass_manager_readiness_test.go` covers `PENDING → FAILED` while a manager is missing, recovery to `READY` after its ConfigMap registration appears, and the persisted capability intersection.
 - **Provisioning journeys that cross into operators or providers:** Keep them in `tests/e2e/` and exercise those boundaries explicitly.
@@ -369,6 +370,43 @@ there is no provider-side atomic resolve/cancel protocol in this change.
 Mixed-version execution with an older controller that ignores create state is
 not safe; deploy the generated CRD and drain older worker controllers before
 using reservation cancellation. The deployed early-delete E2E remains unchanged.
+
+### Networking cleanup lifecycle coverage (NET-CLEAN-07)
+
+The Fulfillment component integration suite installs the current controller
+manager and exercises networking cleanup through the Kubernetes API. It deletes
+ClusterOrder, ComputeInstance, and BareMetalInstance resources and verifies that
+the current and legacy ownership markers lead to the expected networking child
+cleanup. The cases verify ExternalIPAttachment deletion before ExternalIP,
+workload finalizer retention while test finalizers hold children, preservation
+of manual or foreign resources, and BareMetalFulfillment projection of its
+finalizer before networking children are created. The BareMetalInstance case
+restarts the installed manager while attachment cleanup is held by a test
+finalizer, then confirms cleanup resumes for the same attachment after the
+finalizer is released. Test finalizers simulate provider cleanup; they do not
+exercise a real provider.
+
+Run the suite in its own Kind cluster when testing in parallel. Use a local-only
+Kind config with unique HTTP and HTTPS host ports, and set the HTTPS port to the
+same value as `FULFILLMENT_IT_HTTPS_PORT`. Do not check environment-specific Kind
+configs into the repository. For example:
+
+```bash
+export KIND_CLUSTER_NAME=osac-5749-operator
+export KIND_CONFIG="$HOME/.config/kind/osac-5749-operator.yaml" # local config maps HTTP 38080 and HTTPS 38443
+export FULFILLMENT_IT_HTTPS_PORT=38443
+
+KUBECONFIG= make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
+KUBECONFIG= make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=operator
+KUBECONFIG= make -C osac-installer uninstall PLATFORM=kind PROFILE=dev NS=osac
+```
+
+Run NET-CLEAN-08 in a separate cluster with its own local Kind config,
+kubeconfig, and host ports when validating both suites in parallel. Deployed QE
+coverage is tracked under
+[OSAC-5750](https://redhat.atlassian.net/browse/OSAC-5750); real provider
+cleanup coverage is tracked under
+[OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
 
 ### Coverage gaps and ownership
 

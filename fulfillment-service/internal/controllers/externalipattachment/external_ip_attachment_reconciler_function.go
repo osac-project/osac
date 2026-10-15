@@ -171,11 +171,15 @@ func (t *task) update(ctx context.Context) error {
 		return err
 	}
 
+	hubJustSelected := t.externalIPAttachment.GetStatus().GetHub() == ""
 	if err := t.selectHub(ctx); err != nil {
 		return err
 	}
 
 	t.externalIPAttachment.GetStatus().SetHub(t.hubId)
+	if hubJustSelected {
+		return nil
+	}
 
 	object, err := t.getKubeObject(ctx)
 	if err != nil {
@@ -183,15 +187,16 @@ func (t *task) update(ctx context.Context) error {
 	}
 
 	spec := t.buildSpec()
+	metadata := t.externalIPAttachment.GetMetadata()
 
 	if object == nil {
 		newObject := &osacv1alpha1.ExternalIPAttachment{
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace:    t.hubNamespace,
 				GenerateName: objectPrefix,
-				Labels: map[string]string{
+				Labels: labels.MergeTrustedExternalIPLifecycleLabels(map[string]string{
 					labels.ExternalIPAttachmentUuid: t.externalIPAttachment.GetId(),
-				},
+				}, metadata.GetLabels(), metadata.GetCreator() == "system"),
 				Annotations: map[string]string{
 					annotations.Tenant: t.externalIPAttachment.GetMetadata().GetTenant(),
 				},
@@ -211,6 +216,10 @@ func (t *task) update(ctx context.Context) error {
 	} else {
 		update := object.DeepCopy()
 		update.Spec = spec
+		update.Labels = labels.MergeTrustedExternalIPLifecycleLabels(
+			object.GetLabels(), metadata.GetLabels(), metadata.GetCreator() == "system",
+		)
+		update.Labels[labels.ExternalIPAttachmentUuid] = t.externalIPAttachment.GetId()
 		err = t.hubClient.Patch(ctx, update, clnt.MergeFrom(object))
 		if err != nil {
 			return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)

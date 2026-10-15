@@ -197,6 +197,7 @@ func (t *task) update(ctx context.Context) error {
 
 	// Prepare the changes to the spec:
 	spec := t.buildSpec()
+	metadata := t.externalIP.GetMetadata()
 
 	// Create or update the Kubernetes object:
 	if object == nil {
@@ -204,9 +205,9 @@ func (t *task) update(ctx context.Context) error {
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace:    t.hubNamespace,
 				GenerateName: objectPrefix,
-				Labels: map[string]string{
+				Labels: labels.MergeTrustedExternalIPLifecycleLabels(map[string]string{
 					labels.ExternalIPUuid: t.externalIP.GetId(),
-				},
+				}, metadata.GetLabels(), metadata.GetCreator() == "system"),
 				Annotations: map[string]string{
 					annotations.Tenant: t.externalIP.GetMetadata().GetTenant(),
 				},
@@ -226,6 +227,10 @@ func (t *task) update(ctx context.Context) error {
 	} else {
 		update := object.DeepCopy()
 		update.Spec = spec
+		update.Labels = labels.MergeTrustedExternalIPLifecycleLabels(
+			object.GetLabels(), metadata.GetLabels(), metadata.GetCreator() == "system",
+		)
+		update.Labels[labels.ExternalIPUuid] = t.externalIP.GetId()
 		err = t.hubClient.Patch(ctx, update, clnt.MergeFrom(object))
 		if err != nil {
 			return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)
@@ -315,7 +320,7 @@ func (t *task) delete(ctx context.Context) (err error) {
 	}
 
 	// Don't remove finalizer: K8s object still exists with finalizers being processed.
-	return
+	return controllers.RequeueAfterKubernetesDeletion("external IP")
 }
 
 func (t *task) selectHub(ctx context.Context) error {

@@ -601,6 +601,52 @@ var _ = Describe("Private external IPs server", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
+		It("blocks deletion while a deleting NATGateway still references the ExternalIP", func() {
+			object := createExternalIPInState(externalIPsServer, privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
+			natGateway, err := externalIPsServer.lifecycle.natGatewayDao.Create().SetObject(privatev1.NATGateway_builder{
+				Metadata: privatev1.Metadata_builder{
+					Tenant: testTenant, Name: "nat-with-deleting-eip-ref", Finalizers: []string{"test-cleanup"},
+				}.Build(),
+				Spec: privatev1.NATGatewaySpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "virtual-network-id"}.Build(),
+					ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: object.GetId()}.Build(),
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = externalIPsServer.lifecycle.natGatewayDao.Delete().SetId(natGateway.GetObject().GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = externalIPsServer.Delete(ctx, privatev1.ExternalIPsDeleteRequest_builder{Id: object.GetId()}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(err.Error()).To(ContainSubstring("NATGateway"))
+		})
+
+		It("blocks deletion while a deleting ExternalIPAttachment still references the ExternalIP", func() {
+			object := createExternalIPInState(externalIPsServer, privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
+			computeInstanceDao, err := dao.NewGenericDAO[*privatev1.ComputeInstance]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			computeInstance := createComputeInstanceInState(ctx, computeInstanceDao,
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING)
+			attachment, err := externalIPsServer.lifecycle.externalIPAttachmentDao.Create().SetObject(
+				privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Tenant: testTenant, Name: "attachment-with-deleting-eip-ref", Finalizers: []string{"test-cleanup"},
+					}.Build(),
+					Spec: privatev1.ExternalIPAttachmentSpec_builder{
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: object.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: computeInstance.GetId()}.Build(),
+					}.Build(),
+				}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = externalIPsServer.lifecycle.externalIPAttachmentDao.Delete().SetId(attachment.GetObject().GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = externalIPsServer.Delete(ctx, privatev1.ExternalIPsDeleteRequest_builder{Id: object.GetId()}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(err.Error()).To(ContainSubstring("ExternalIPAttachment"))
+		})
+
 		It("preserves the deletion boundary and releases capacity once", func() {
 			object := createExternalIPInState(externalIPsServer, privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING)
 			object.GetMetadata().SetFinalizers([]string{"cleanup"})

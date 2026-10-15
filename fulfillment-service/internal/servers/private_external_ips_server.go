@@ -324,7 +324,6 @@ func (s *PrivateExternalIPsServer) Delete(ctx context.Context,
 			"cannot delete ExternalIP in state %s: must be in PENDING, ALLOCATED, FAILED, or DELETING state", state)
 		return
 	}
-
 	err = translateLifecycleError(s.lifecycle.deleteExternalIP(ctx, id))
 	if err == nil {
 		response = &privatev1.ExternalIPsDeleteResponse{}
@@ -357,6 +356,7 @@ func (s *PrivateExternalIPsServer) validateExternalIP(ctx context.Context,
 func (s *PrivateExternalIPsServer) validatePoolReference(ctx context.Context, poolID string) (*privatev1.ExternalIPPool, error) {
 	getResponse, err := s.externalIPPoolDao.Get().
 		SetId(poolID).
+		SetLock(true).
 		Do(ctx)
 	if err != nil {
 		var notFoundErr *dao.ErrNotFound
@@ -371,6 +371,10 @@ func (s *PrivateExternalIPsServer) validatePoolReference(ctx context.Context, po
 	}
 
 	pool := getResponse.GetObject()
+	if pool.GetMetadata().HasDeletionTimestamp() {
+		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"pool '%s' is being deleted", poolID)
+	}
 
 	if pool.GetStatus().GetState() != privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY {
 		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,

@@ -38,7 +38,7 @@ pytestmark = pytest.mark.regression
 
 
 def _attachment_of(instance: dict) -> dict:
-    spec = instance.get("object", {}).get("spec", {})
+    spec = instance.get("spec", {})
     attachments = spec.get("networkAttachments") or spec.get("network_attachments") or []
     return attachments[0] if attachments else {}
 
@@ -112,18 +112,15 @@ def test_compute_instance_network_attachment_immutability(
 
         # Snapshot the API, CR, and provider-job evidence before any rejected update.
         instance_before = grpc.get_compute_instance(ci_id=vm_id)["object"]
+        attachment_before = _attachment_of(instance_before)
+        assert attachment_before.get("subnet", {}).get("id") == subnet_id, "created VM missing expected subnet"
         cr_before = k8s_hub_client.get_json(resource="computeinstance", name=vm_cr).get("spec", {})
         job_before = k8s_hub_client.get_compute_instance_latest_job_id(name=vm_cr, job_type="provision", checked=False)
 
         def assert_unchanged() -> None:
             """The persisted attachment, CR spec, and provider job did not move."""
             instance_after = grpc.get_compute_instance(ci_id=vm_id)["object"]
-            before_attach = _attachment_of(instance_before)
-            after_attach = _attachment_of(instance_after)
-            assert after_attach.get("subnet", {}).get("id") == subnet_id, "subnet attachment changed"
-            assert (after_attach.get("securityGroups") or after_attach.get("security_groups")) == (
-                before_attach.get("securityGroups") or before_attach.get("security_groups")
-            ), "security groups changed"
+            assert _attachment_of(instance_after) == attachment_before, "network attachment changed"
             assert instance_after.get("spec", {}).get("autoExternalIpAttachment") == instance_before.get(
                 "spec", {}
             ).get("autoExternalIpAttachment"), "auto_external_ip_attachment changed"

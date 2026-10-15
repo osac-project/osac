@@ -295,14 +295,13 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 				Build()
 			reconciler = NewClusterOrderReconciler(
 				fakeClient, fakeClient, scheme,
-				clusterOrderTestNamespace, "", "", noopProvisioningProvider{}, statusPollInterval, provisioning.DefaultMaxJobHistory,
+				clusterOrderTestNamespace, "", noopProvisioningProvider{}, statusPollInterval, provisioning.DefaultMaxJobHistory,
 			)
 
-			instance.Status.NodeSets = []osacv1alpha1.NodeSetStatus{{
-				Name:   "worker",
-				Agents: []osacv1alpha1.AgentStatus{{AgentName: "agent-1"}},
-			}}
 			instance.Status.Phase = osacv1alpha1.ClusterOrderPhaseProgressing
+			instance.Status.DesiredWorkers = p32(1)
+			instance.Status.CurrentWorkers = p32(1)
+			instance.Status.ReadyWorkers = p32(1)
 			instance.Status.Conditions = []metav1.Condition{
 				{Type: osacv1alpha1.ConditionProgressing, Status: metav1.ConditionTrue, Reason: osacv1alpha1.ReasonControlPlaneStarting},
 				{Type: osacv1alpha1.ConditionControlPlaneAvailable, Status: metav1.ConditionFalse, Reason: osacv1alpha1.ReasonInitialized},

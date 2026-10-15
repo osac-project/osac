@@ -313,7 +313,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 				Reason: v1alpha1.ReasonAsExpected,
 			}},
 		}
-		reconciler.recordTransitionEvents(instance, &oldStatus)
+		reconciler.recordTransitionEventsForStatus(instance, &oldStatus, &instance.Status)
 		Expect(recorder.Events).To(Receive(ContainSubstring(v1alpha1.ReasonWorkersJoining)))
 		Eventually(recorder.Events).Should(Receive(And(
 			ContainSubstring(corev1.EventTypeNormal),

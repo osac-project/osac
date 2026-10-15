@@ -816,13 +816,18 @@ func (r *ClusterOrderReconciler) handleNodePool(ctx context.Context, instance *v
 		return nil
 	}
 
-	// Skip the status update when replicas are not yet observable.
-	// Spec.Replicas is nil under autoscaling or before the replica
-	// reconciler sets it. Status.Replicas is zero for a newly-
-	// created NodePool before any node joins.  Publishing zero
-	// would violate the fulfillment ClusterNodeSet.size > 0
-	// constraint and misrepresent capacity to downstream consumers.
-	if nodePool.Spec.Replicas == nil || nodePool.Status.Replicas == 0 {
+	// Skip the status update while observed replicas is zero.
+	// A newly created NodePool reports Status.Replicas == 0
+	// before any node joins.  Publishing zero would violate the
+	// fulfillment ClusterNodeSet.size > 0 constraint.  An
+	// existing ClusterOrder status entry retains its last
+	// positive value until a new positive observation arrives.
+	//
+	// Spec.Replicas is intentionally not checked: it is nil when
+	// autoscaling is active (HyperShift enforces Replicas XOR
+	// AutoScaling), yet Status.Replicas still reflects the
+	// actual observed count and should be reported.
+	if nodePool.Status.Replicas == 0 {
 		return nil
 	}
 

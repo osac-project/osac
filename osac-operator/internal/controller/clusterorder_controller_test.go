@@ -2056,7 +2056,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 				"existing numberOfNodes must not change when observed replicas is zero")
 		})
 
-		It("skips status update when spec replicas is nil (no existing entry)", func() {
+		It("skips status update when spec replicas is nil and observed is zero", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Spec: v1alpha1.ClusterOrderSpec{
 					NodeRequests: []v1alpha1.NodeRequest{
@@ -2075,16 +2075,19 @@ var _ = Describe("ClusterOrder Controller", func() {
 				Spec: hypershiftv1beta1.NodePoolSpec{
 					Replicas: nil,
 				},
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 0,
+				},
 			}
 
 			err := reconciler.handleNodePool(ctx, instance, nodePool)
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(instance.Status.NodeRequests).To(BeEmpty(),
-				"no status entry should be created when spec.replicas is nil")
+				"no status entry should be created when observed replicas is zero")
 		})
 
-		It("preserves existing nonzero status when spec replicas is nil", func() {
+		It("preserves existing nonzero status when spec replicas is nil and observed is zero", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Spec: v1alpha1.ClusterOrderSpec{
 					NodeRequests: []v1alpha1.NodeRequest{
@@ -2108,6 +2111,9 @@ var _ = Describe("ClusterOrder Controller", func() {
 				Spec: hypershiftv1beta1.NodePoolSpec{
 					Replicas: nil,
 				},
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 0,
+				},
 			}
 
 			err := reconciler.handleNodePool(ctx, instance, nodePool)
@@ -2116,7 +2122,78 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(instance.Status.NodeRequests).To(HaveLen(1),
 				"existing status entry must be preserved")
 			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(3),
-				"existing numberOfNodes must not be overwritten with zero")
+				"existing numberOfNodes must not be overwritten when observed is zero")
+		})
+
+		It("reports positive observed replicas when spec replicas is nil (autoscaling)", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{NodeSet: "workers", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "ci-worker-bm"}, NumberOfNodes: 1},
+					},
+				},
+			}
+
+			nodePool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						agentNodeSetLabel:      "workers",
+						agentInstanceTypeLabel: "ci-worker-bm",
+					},
+				},
+				Spec: hypershiftv1beta1.NodePoolSpec{
+					Replicas: nil, // autoscaling: Spec.Replicas must be nil
+				},
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 5, // autoscaler has provisioned nodes
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(instance.Status.NodeRequests).To(HaveLen(1),
+				"autoscaling NodePool with positive observed replicas must create a status entry")
+			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(5),
+				"status should reflect observed replica count from autoscaler")
+		})
+
+		It("updates existing status with autoscaling observed replicas", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{NodeSet: "workers", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "ci-worker-bm"}, NumberOfNodes: 3},
+					},
+				},
+				Status: v1alpha1.ClusterOrderStatus{
+					NodeRequests: []v1alpha1.NodeRequestStatus{
+						{NodeSet: "workers", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "ci-worker-bm"}, NumberOfNodes: 3},
+					},
+				},
+			}
+
+			nodePool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						agentNodeSetLabel:      "workers",
+						agentInstanceTypeLabel: "ci-worker-bm",
+					},
+				},
+				Spec: hypershiftv1beta1.NodePoolSpec{
+					Replicas: nil, // autoscaling
+				},
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 7, // autoscaler scaled up
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(instance.Status.NodeRequests).To(HaveLen(1),
+				"existing status entry must be updated")
+			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(7),
+				"status should reflect autoscaler's updated observed count")
 		})
 	})
 

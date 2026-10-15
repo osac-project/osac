@@ -1,0 +1,41 @@
+# Snyk (https://snyk.io) policy file, used by the sast-snyk-check-oci-ta
+# Konflux task's `snyk code test` to scope SAST scanning. Every component's
+# release pipeline scans the whole repo root (sast-target-dirs defaults to
+# "."), so this file applies uniformly across all 8 components -- it isn't
+# scoped to just one.
+#
+# Only excludes non-shipped code: test suites/fixtures, documentation, and
+# generated/vendored code that isn't hand-written (any real issue belongs in
+# the generator or source it's generated from, not the generated output).
+# Extend the list below as new test/docs/generated directories are added.
+exclude:
+  global:
+    # Documentation
+    - docs/**
+    - '**/docs/**'
+    - presentations/**
+
+    # Test suites and fixtures
+    - tests/**
+    - '**/test/**'
+    - '**/tests/**'
+    - '**/it/**'
+    - '**/e2e-tests/**'
+    - osac-ui/apps/playwright/**
+    - '**/*_test.go'
+    - '**/*.test.ts'
+    - '**/*.test.tsx'
+    - '**/*.spec.ts'
+    - '**/*_mock.go'
+
+    # Generated code -- never hand-edited (see AGENTS.md); real issues
+    # belong in the generator or its source inputs, not generated output
+    - proto/gen/**
+    - osac-ui/libs/types/src/**
+    - '**/*.pb.go'
+    - '**/*_pb.ts'
+
+    # Vendored/third-party and tool-generated, non-source artifacts
+    - '**/vendor/**'
+    - '**/node_modules/**'
+    - graphify-out/**

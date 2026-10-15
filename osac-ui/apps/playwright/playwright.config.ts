@@ -90,13 +90,13 @@ export default defineConfig({
     {
       name: 'vmaas',
       testDir: vmaasDir,
-      testMatch: /create\.tenant\.spec\.ts/,
+      testMatch: /create\.(tenant|disk_images)\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
     {
       name: 'vmaas-delete',
       testDir: vmaasDir,
-      testMatch: /delete\.tenant\.spec\.ts/,
+      testMatch: /delete\.(tenant|disk_images)\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
       dependencies: ['vmaas'],
     },

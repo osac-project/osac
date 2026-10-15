@@ -1781,6 +1781,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 			Expect(sawConns).To(BeTrue())
 			Expect(gotConns).To(HaveKeyWithValue("backend-1", provisioning.BackendConnection{
+				Name:     "vast-primary",
 				Endpoint: "https://vast.example.com",
 				Username: testBackendUsername,
 				Password: testBackendPassword,

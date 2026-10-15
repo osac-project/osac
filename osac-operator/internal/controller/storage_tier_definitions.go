@@ -128,6 +128,7 @@ func resolveTierDefinitions(
 			resolution = backendResolution{provider: spec.GetProvider(), found: true}
 			backendCache[backendID] = resolution
 			connections[backendID] = provisioning.BackendConnection{
+				Name:     getResp.GetObject().GetMetadata().GetName(),
 				Endpoint: spec.GetEndpoint(),
 				Username: spec.GetCredentials().GetUsername(),
 				Password: password,

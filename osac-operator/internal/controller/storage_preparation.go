@@ -36,9 +36,7 @@ const (
 	ontapStorageProvider           = "ontap"
 	preparationUsernameKey         = "username"
 	preparationPasswordKey         = "password"
-	storagePreparationTypeLabel    = "osac.openshift.io/secret-type"
-	storagePreparationType         = "storage-tenant-preparation"
-	storagePreparationBackendLabel = "osac.openshift.io/storage-backend-id"
+	storagePreparationBackendLabel = "osac.openshift.io/storage-backend"
 )
 
 func ontapBackendIDs(tiers []provisioning.TierDefinition) []string {
@@ -60,7 +58,7 @@ func storagePreparationNamespace() string {
 	if ns := os.Getenv("OSAC_STORAGE_PREPARATION_NAMESPACE"); ns != "" {
 		return ns
 	}
-	return "trident"
+	return "osac-storage"
 }
 
 func setStorageWaiting(tenant *v1alpha1.Tenant, reason, message string) {
@@ -77,38 +75,36 @@ func (r *StorageReconciler) resolveTenantPreparations(ctx context.Context, tenan
 	if len(ids) == 0 {
 		return true
 	}
-	tenantID := tenant.Labels[osacTenantIDLabel]
-	if tenantID == "" {
-		setStorageWaiting(tenant, "TenantIdentityMissing", "Waiting for the Tenant's immutable Fulfillment ID")
-		return false
-	}
 	connections := provisioning.StorageBackendConnectionsFromContext(ctx)
 	for _, id := range ids {
+		connection := connections[id]
+		if connection.Name == "" {
+			setStorageWaiting(tenant, "ConfigurationUnavailable", fmt.Sprintf("Cannot resolve the registered name of backend %q", id))
+			return false
+		}
 		var secrets corev1.SecretList
 		if err := r.APIReader.List(ctx, &secrets, client.InNamespace(storagePreparationNamespace()), client.MatchingLabels{
-			storagePreparationTypeLabel: storagePreparationType, storagePreparationBackendLabel: id, osacTenantIDLabel: tenantID,
+			storagePreparationBackendLabel: connection.Name, osacTenantKey: tenant.Name,
 		}); err != nil {
-			setStorageWaiting(tenant, "PreparationUnavailable", fmt.Sprintf("Cannot read preparation for backend %q; check operator access to the preparation namespace", id))
+			setStorageWaiting(tenant, "PreparationUnavailable", fmt.Sprintf("Cannot read preparation for backend %q; check operator access to the preparation namespace", connection.Name))
 			return false
 		}
 		if len(secrets.Items) == 0 {
-			setStorageWaiting(tenant, "PreparationMissing", fmt.Sprintf("Waiting for a tenant preparation Secret for backend %q in namespace %q", id, storagePreparationNamespace()))
+			setStorageWaiting(tenant, "PreparationMissing", fmt.Sprintf("Waiting for a tenant preparation Secret for backend %q in namespace %q", connection.Name, storagePreparationNamespace()))
 			return false
 		}
 		if len(secrets.Items) != 1 {
-			setStorageWaiting(tenant, "PreparationAmbiguous", fmt.Sprintf("Multiple preparation Secrets match this Tenant and backend %q; keep exactly one", id))
+			setStorageWaiting(tenant, "PreparationAmbiguous", fmt.Sprintf("Multiple preparation Secrets match this Tenant and backend %q; keep exactly one", connection.Name))
 			return false
 		}
 		s := &secrets.Items[0]
 		if !s.DeletionTimestamp.IsZero() || s.Type != corev1.SecretTypeOpaque ||
-			(s.Labels[osacTenantKey] != "" && s.Labels[osacTenantKey] != tenant.Name) ||
 			strings.TrimSpace(string(s.Data[preparationUsernameKey])) == "" || strings.TrimSpace(string(s.Data[preparationPasswordKey])) == "" || strings.TrimSpace(string(s.Data["svm"])) == "" {
-			setStorageWaiting(tenant, "PreparationInvalid", fmt.Sprintf("Preparation for backend %q must be a non-deleting Opaque Secret with matching tenant identity and non-empty username, password and svm", id))
+			setStorageWaiting(tenant, "PreparationInvalid", fmt.Sprintf("Preparation for backend %q must be a non-deleting Opaque Secret with non-empty username, password and svm", connection.Name))
 			return false
 		}
-		connection := connections[id]
 		connection.TenantPreparation = &provisioning.TenantPreparation{
-			TenantID: tenantID, Namespace: s.Namespace, Name: s.Name, UID: string(s.UID), ResourceVersion: s.ResourceVersion,
+			TenantID: tenant.Name, Namespace: s.Namespace, Name: s.Name, UID: string(s.UID), ResourceVersion: s.ResourceVersion,
 			ProviderConfig: map[string]any{preparationUsernameKey: string(s.Data[preparationUsernameKey]), preparationPasswordKey: string(s.Data[preparationPasswordKey]), "svm": string(s.Data["svm"])},
 		}
 		connections[id] = connection
@@ -138,7 +134,7 @@ func storageDesiredConfigVersion(ctx context.Context, tenant *v1alpha1.Tenant) s
 		Generation int64
 		Tiers      []provisioning.TierDefinition
 		Sources    []source
-	}{tenant.Labels[osacTenantIDLabel], tenant.Generation, tiers, sources})
+	}{tenant.Name, tenant.Generation, tiers, sources})
 	return version
 }
 

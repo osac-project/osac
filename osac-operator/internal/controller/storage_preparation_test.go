@@ -44,25 +44,22 @@ func (r preparationDeniedReader) List(ctx context.Context, list client.ObjectLis
 	return r.Reader.List(ctx, list, opts...)
 }
 
-// prepareStorageTenant supplies the immutable Fulfillment identity, which is
-// distinct from both the display name and Kubernetes UID.
+// Fulfillment enforces Tenant ID == resource name; Kubernetes UID is separate.
 func prepareStorageTenant(ctx context.Context, name string) *v1alpha1.Tenant {
 	tenant := &v1alpha1.Tenant{}
 	Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: "default", Name: name}, tenant)).To(Succeed())
-	tenant.Labels = map[string]string{osacTenantIDLabel: "id-" + name}
+	tenant.Labels = map[string]string{osacTenantIDLabel: name}
 	Expect(k8sClient.Update(ctx, tenant)).To(Succeed())
 	return tenant
 }
 
-func createStoragePreparation(ctx context.Context, tenant *v1alpha1.Tenant, backendID, name string) *corev1.Secret {
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "trident"}}
+func createStoragePreparation(ctx context.Context, tenant *v1alpha1.Tenant, backendName, name string) *corev1.Secret {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "osac-storage"}}
 	Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, ns))).To(Succeed())
 	s := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "trident", Name: name, Labels: map[string]string{
-			"osac.openshift.io/secret-type":        "storage-tenant-preparation",
-			"osac.openshift.io/storage-backend-id": backendID,
-			osacTenantIDLabel:                      tenant.Labels[osacTenantIDLabel],
-			osacTenantKey:                          tenant.Name,
+		ObjectMeta: metav1.ObjectMeta{Namespace: "osac-storage", Name: name, Labels: map[string]string{
+			"osac.openshift.io/storage-backend": backendName,
+			osacTenantKey:                       tenant.Name,
 		}},
 		Type: corev1.SecretTypeOpaque,
 		Data: map[string][]byte{"username": []byte("tenant-user"), "password": []byte("fixture-runtime-password"), "svm": []byte("admin_chosen_svm")},
@@ -94,8 +91,12 @@ var _ = Describe("NetApp storage preparation", func() {
 			}}.Build(), nil
 		}}
 		backends := registeredBackendsClient(1)
-		backends.getFunc = func(context.Context, *privatev1.StorageBackendsGetRequest, ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
-			return newTestStorageBackendGetResponse("ontap"), nil
+		backends.getFunc = func(_ context.Context, req *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+			resp := newTestStorageBackendGetResponse("ontap")
+			if req.GetId() == "backend-2" {
+				resp.GetObject().GetMetadata().SetName("ontap-secondary")
+			}
+			return resp, nil
 		}
 		r.BackendsClient = backends
 	})
@@ -130,7 +131,7 @@ var _ = Describe("NetApp storage preparation", func() {
 
 	It("waits without AAP until the admin creates a preparation, then starts once", func() {
 		expectWaiting("PreparationMissing")
-		s := createStoragePreparation(ctx, tenant, "backend-1", tenant.Name)
+		s := createStoragePreparation(ctx, tenant, "ontap-primary", tenant.Name)
 		reconcile()
 		Expect(provisions).To(Equal(1))
 		Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady).Status).To(Equal(metav1.ConditionFalse))
@@ -144,7 +145,7 @@ var _ = Describe("NetApp storage preparation", func() {
 	})
 
 	It("passes one runtime preparation for two tiers while preserving discovery credentials", func() {
-		s := createStoragePreparation(ctx, tenant, "backend-1", tenant.Name)
+		s := createStoragePreparation(ctx, tenant, "ontap-primary", tenant.Name)
 		r.BackendProvider = &mockProvisioningProvider{triggerProvisionFunc: func(ctx context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
 			provisions++
 			connections := provisioning.StorageBackendConnectionsFromContext(ctx)
@@ -163,20 +164,20 @@ var _ = Describe("NetApp storage preparation", func() {
 	})
 
 	It("waits for every backend preparation before dispatching", func() {
-		createStoragePreparation(ctx, tenant, "backend-1", tenant.Name+"-a")
+		createStoragePreparation(ctx, tenant, "ontap-primary", tenant.Name+"-a")
 		r.TiersClient = &mockStorageTiersLister{listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
 			return privatev1.StorageTiersListResponse_builder{Items: []*privatev1.StorageTier{
 				newTestStorageTier("fast", "backend-1"), newTestStorageTier("standard", "backend-2"),
 			}}.Build(), nil
 		}}
 		expectWaiting("PreparationMissing")
-		createStoragePreparation(ctx, tenant, "backend-2", tenant.Name+"-b")
+		createStoragePreparation(ctx, tenant, "ontap-secondary", tenant.Name+"-b")
 		reconcile()
 		Expect(provisions).To(Equal(1))
 	})
 
 	It("keeps readiness false until both jobs and all tier classes are present", func() {
-		s := createStoragePreparation(ctx, tenant, "backend-1", tenant.Name)
+		s := createStoragePreparation(ctx, tenant, "ontap-primary", tenant.Name)
 		createLabeledStorageClass(ctx, tenant.Name+"-fast", tenant.Name, "fast")
 		createLabeledStorageClass(ctx, tenant.Name+"-standard", tenant.Name, "standard")
 		reconcile()
@@ -213,13 +214,13 @@ var _ = Describe("NetApp storage preparation", func() {
 	})
 
 	It("waits with valid preparation when AAP is not configured", func() {
-		createStoragePreparation(ctx, tenant, "backend-1", tenant.Name)
+		createStoragePreparation(ctx, tenant, "ontap-primary", tenant.Name)
 		r.BackendProvider = nil
 		expectWaiting(v1alpha1.TenantReasonBackendConfiguredNoProvider)
 	})
 
 	It("does not reuse legacy successful jobs for newly configured NetApp storage", func() {
-		createStoragePreparation(ctx, tenant, "backend-1", tenant.Name)
+		createStoragePreparation(ctx, tenant, "ontap-primary", tenant.Name)
 		createLabeledStorageClass(ctx, tenant.Name+"-fast", tenant.Name, "fast")
 		createLabeledStorageClass(ctx, tenant.Name+"-standard", tenant.Name, "standard")
 		legacy := v1alpha1.JobStatus{JobID: "legacy", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded, Timestamp: metav1.Now()}
@@ -232,7 +233,7 @@ var _ = Describe("NetApp storage preparation", func() {
 	})
 
 	It("repairs missing classes after a successful native job", func() {
-		createStoragePreparation(ctx, tenant, "backend-1", tenant.Name)
+		createStoragePreparation(ctx, tenant, "ontap-primary", tenant.Name)
 		for range 4 {
 			reconcile()
 		}
@@ -243,7 +244,7 @@ var _ = Describe("NetApp storage preparation", func() {
 	})
 
 	It("revalidates a changed SVM while deferring password rotation", func() {
-		s := createStoragePreparation(ctx, tenant, "backend-1", tenant.Name)
+		s := createStoragePreparation(ctx, tenant, "ontap-primary", tenant.Name)
 		createLabeledStorageClass(ctx, tenant.Name+"-fast", tenant.Name, "fast")
 		createLabeledStorageClass(ctx, tenant.Name+"-standard", tenant.Name, "standard")
 		for range 5 {
@@ -262,7 +263,7 @@ var _ = Describe("NetApp storage preparation", func() {
 	})
 
 	It("holds deletion after partial setup when its catalog cannot be recovered", func() {
-		s := createStoragePreparation(ctx, tenant, "backend-1", tenant.Name)
+		s := createStoragePreparation(ctx, tenant, "ontap-primary", tenant.Name)
 		reconcile()
 		Expect(k8sClient.Delete(ctx, tenant)).To(Succeed())
 		r.TiersClient = &mockStorageTiersLister{listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
@@ -275,20 +276,58 @@ var _ = Describe("NetApp storage preparation", func() {
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(s), &corev1.Secret{})).To(Succeed())
 	})
 
-	It("waits for an immutable Tenant ID rather than using the Kubernetes UID", func() {
+	It("uses the Tenant name without requiring a tenant-ID label", func() {
 		tenant.Labels = nil
 		Expect(k8sClient.Update(ctx, tenant)).To(Succeed())
-		expectWaiting("TenantIdentityMissing")
+		createStoragePreparation(ctx, tenant, "ontap-primary", "arbitrary-admin-name")
+		r.BackendProvider = &mockProvisioningProvider{triggerProvisionFunc: func(ctx context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
+			provisions++
+			p := provisioning.StorageBackendConnectionsFromContext(ctx)["backend-1"].TenantPreparation
+			Expect(p.TenantID).To(Equal(tenant.Name))
+			Expect(p.Name).To(Equal("arbitrary-admin-name"))
+			return &provisioning.ProvisionResult{JobID: "1", InitialState: v1alpha1.JobStatePending}, nil
+		}}
+		reconcile()
+		Expect(provisions).To(Equal(1))
+	})
+
+	It("waits if the catalog omits the backend name", func() {
+		r.BackendsClient.(*mockStorageBackendsClient).getFunc = func(context.Context, *privatev1.StorageBackendsGetRequest, ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+			resp := newTestStorageBackendGetResponse("ontap")
+			resp.GetObject().GetMetadata().SetName("")
+			return resp, nil
+		}
+		expectWaiting("ConfigurationUnavailable")
+	})
+
+	It("ignores a matching preparation in the workload namespace", func() {
+		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "trident"}}
+		Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, ns))).To(Succeed())
+		s := createStoragePreparation(ctx, tenant, "ontap-primary", tenant.Name)
+		Expect(k8sClient.Delete(ctx, s)).To(Succeed())
+		s.ResourceVersion, s.UID = "", ""
+		s.Namespace = "trident"
+		Expect(k8sClient.Create(ctx, s)).To(Succeed())
+		expectWaiting("PreparationMissing")
 	})
 
 	It("rejects ambiguous preparations instead of selecting the first", func() {
-		createStoragePreparation(ctx, tenant, "backend-1", tenant.Name+"-a")
-		createStoragePreparation(ctx, tenant, "backend-1", tenant.Name+"-b")
+		createStoragePreparation(ctx, tenant, "ontap-primary", tenant.Name+"-a")
+		createStoragePreparation(ctx, tenant, "ontap-primary", tenant.Name+"-b")
 		expectWaiting("PreparationAmbiguous")
 	})
 
+	It("rejects non-Opaque preparation Secrets", func() {
+		s := createStoragePreparation(ctx, tenant, "ontap-primary", tenant.Name)
+		Expect(k8sClient.Delete(ctx, s)).To(Succeed())
+		s.ResourceVersion, s.UID = "", ""
+		s.Type = corev1.SecretTypeBasicAuth
+		Expect(k8sClient.Create(ctx, s)).To(Succeed())
+		expectWaiting("PreparationInvalid")
+	})
+
 	DescribeTable("rejects invalid preparations", func(change func(*corev1.Secret)) {
-		s := createStoragePreparation(ctx, tenant, "backend-1", tenant.Name)
+		s := createStoragePreparation(ctx, tenant, "ontap-primary", tenant.Name)
 		change(s)
 		Expect(k8sClient.Update(ctx, s)).To(Succeed())
 		expectWaiting("PreparationInvalid")
@@ -296,17 +335,27 @@ var _ = Describe("NetApp storage preparation", func() {
 		Entry("missing username", func(s *corev1.Secret) { delete(s.Data, "username") }),
 		Entry("empty password", func(s *corev1.Secret) { s.Data["password"] = nil }),
 		Entry("blank SVM", func(s *corev1.Secret) { s.Data["svm"] = []byte(" ") }),
-		Entry("contradictory tenant name", func(s *corev1.Secret) { s.Labels[osacTenantKey] = "another-tenant" }),
+		Entry("deleting Secret", func(s *corev1.Secret) {
+			s.Finalizers = []string{"fixture/hold"}
+			Expect(k8sClient.Update(ctx, s)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, s)).To(Succeed())
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(s), s)).To(Succeed())
+			DeferCleanup(func() { s.Finalizers = nil; Expect(k8sClient.Update(ctx, s)).To(Succeed()) })
+		}),
 	)
 
 	DescribeTable("ignores records outside the authorized assignment", func(change func(*corev1.Secret)) {
-		s := createStoragePreparation(ctx, tenant, "backend-1", tenant.Name)
+		s := createStoragePreparation(ctx, tenant, "ontap-primary", tenant.Name)
 		change(s)
 		Expect(k8sClient.Update(ctx, s)).To(Succeed())
 		expectWaiting("PreparationMissing")
 	},
-		Entry("another tenant ID", func(s *corev1.Secret) { s.Labels[osacTenantIDLabel] = "unrelated" }),
-		Entry("another backend ID", func(s *corev1.Secret) { s.Labels["osac.openshift.io/storage-backend-id"] = "unrelated" }),
-		Entry("another Secret purpose", func(s *corev1.Secret) { s.Labels["osac.openshift.io/secret-type"] = "unrelated" }),
+		Entry("another tenant", func(s *corev1.Secret) { s.Labels[osacTenantKey] = "unrelated" }),
+		Entry("another backend", func(s *corev1.Secret) { s.Labels["osac.openshift.io/storage-backend"] = "unrelated" }),
+		Entry("backend ID in place of name", func(s *corev1.Secret) { s.Labels["osac.openshift.io/storage-backend"] = "backend-1" }),
+		Entry("missing tenant label", func(s *corev1.Secret) { delete(s.Labels, osacTenantKey) }),
+		Entry("legacy ID and purpose labels only", func(s *corev1.Secret) {
+			s.Labels = map[string]string{"osac.openshift.io/storage-backend-id": "backend-1", osacTenantIDLabel: tenant.Name, "osac.openshift.io/secret-type": "storage-tenant-preparation"}
+		}),
 	)
 })

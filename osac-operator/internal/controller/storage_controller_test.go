@@ -199,6 +199,7 @@ const (
 func newTestStorageBackendGetResponseWithSecret(provider, secretID string) *privatev1.StorageBackendsGetResponse {
 	return privatev1.StorageBackendsGetResponse_builder{
 		Object: privatev1.StorageBackend_builder{
+			Metadata: privatev1.Metadata_builder{Name: provider + "-primary"}.Build(),
 			Spec: privatev1.StorageBackendSpec_builder{
 				Provider: provider,
 				Endpoint: "https://" + provider + ".example.com",
@@ -216,6 +217,7 @@ func newTestStorageBackendGetResponseWithSecret(provider, secretID string) *priv
 func newTestStorageBackendGetResponse(provider string) *privatev1.StorageBackendsGetResponse {
 	return privatev1.StorageBackendsGetResponse_builder{
 		Object: privatev1.StorageBackend_builder{
+			Metadata: privatev1.Metadata_builder{Name: provider + "-primary"}.Build(),
 			Spec: privatev1.StorageBackendSpec_builder{
 				Provider: provider,
 				Endpoint: "https://" + provider + ".example.com",
@@ -758,6 +760,7 @@ var _ = Describe("Storage Controller", func() {
 			Expect(defs[0].QosLimits.MaxReadBandwidthMBs).To(Equal(int32(100)))
 			Expect(defs[0].QosLimits.MaxWriteBandwidthMBs).To(Equal(int32(100)))
 			Expect(conns).To(HaveKeyWithValue("backend-1", provisioning.BackendConnection{
+				Name:     "vast-primary",
 				Endpoint: "https://vast.example.com",
 				Username: testBackendUsername,
 				Password: testBackendPassword,
@@ -794,6 +797,7 @@ var _ = Describe("Storage Controller", func() {
 			Expect(defs).To(HaveLen(1))
 			Expect(secretsClient.getCallCount).To(Equal(1))
 			Expect(conns).To(HaveKeyWithValue("backend-1", provisioning.BackendConnection{
+				Name:     "vast-primary",
 				Endpoint: "https://vast.example.com",
 				Username: testBackendUsername,
 				Password: testSecretPassword,
@@ -1359,7 +1363,7 @@ var _ = Describe("Storage Controller", func() {
 		DescribeTable("waits for required backend configuration before provisioning", func(failure string) {
 			name := "storage-test-config-wait-" + failure
 			createReadyTenantForStorage(ctx, name, testNamespace)
-			createStoragePreparation(ctx, prepareStorageTenant(ctx, name), "backend-1", name)
+			createStoragePreparation(ctx, prepareStorageTenant(ctx, name), "ontap-primary", name)
 			available := false
 			provisions := 0
 			provider := &mockProvisioningProvider{
@@ -1475,7 +1479,7 @@ var _ = Describe("Storage Controller", func() {
 		It("should pass ONTAP QoS and encryption through reconciliation with one protected backend connection", func() {
 			name := "storage-test-ontap-config-handoff"
 			createReadyTenantForStorage(ctx, name, testNamespace)
-			createStoragePreparation(ctx, prepareStorageTenant(ctx, name), "backend-1", name)
+			createStoragePreparation(ctx, prepareStorageTenant(ctx, name), "ontap-primary", name)
 			var gotTiers []provisioning.TierDefinition
 			var gotConnections map[string]provisioning.BackendConnection
 			provider := &mockProvisioningProvider{
@@ -1590,6 +1594,7 @@ var _ = Describe("Storage Controller", func() {
 
 			Expect(sawConns).To(BeTrue())
 			Expect(gotConns).To(HaveKeyWithValue("backend-1", provisioning.BackendConnection{
+				Name:     "vast-primary",
 				Endpoint: "https://vast.example.com",
 				Username: testBackendUsername,
 				Password: testBackendPassword,

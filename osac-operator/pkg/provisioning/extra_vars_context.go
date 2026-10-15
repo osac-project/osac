@@ -60,6 +60,8 @@ type TierQosLimits struct {
 // details, resolved once per unique backend_id across all tiers so credential
 // material is never duplicated in the extra_vars payload.
 type BackendConnection struct {
+	// Name identifies administrator preparation; AAP connections remain ID-keyed.
+	Name              string
 	Endpoint          string
 	Username          string
 	Password          string

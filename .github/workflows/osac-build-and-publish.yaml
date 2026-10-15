@@ -2613,6 +2613,25 @@ jobs:
                 component = json.load(f)
             found[component["name"]] = component
 
+        # wait-for-konflux-chart-build runs with continue-on-error: true per
+        # component (see its own top comment) -- a chart whose build/wait
+        # failed or never ran simply never uploads a component.json, with no
+        # other signal here. Without this check, `found` could silently come
+        # up short (or carry an unexpected name) and this job would release
+        # an incomplete/wrong chart set rather than failing loudly.
+        EXPECTED = {
+            "osac-chart", "osac-operator-chart", "osac-operator-crds-chart",
+            "fulfillment-service-chart", "osac-aap-chart",
+            "bare-metal-fulfillment-operator-chart",
+            "bare-metal-fulfillment-operator-crds-chart", "osac-metering-chart",
+            "osac-csi-driver-chart", "osac-csi-backends-chart", "osac-ui-chart",
+        }
+        missing = EXPECTED - found.keys()
+        unexpected = found.keys() - EXPECTED
+        if missing or unexpected:
+            print(f"::error::Chart fragment set mismatch -- missing={sorted(missing)} unexpected={sorted(unexpected)}")
+            sys.exit(1)
+
         print("All chart components built and passed tests:")
         for name, component in found.items():
             print(f"  {name}: {component['containerImage']}")

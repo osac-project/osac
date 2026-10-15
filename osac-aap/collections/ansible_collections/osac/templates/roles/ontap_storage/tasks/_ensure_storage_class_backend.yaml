@@ -37,16 +37,19 @@
 - name: Provision CSI Secret, TridentBackendConfig, and StorageClasses for dispatched backend
   when: not (_ontap_all_sc_exist | bool)
   block:
-    - name: Fail if tenant_preparation is missing for dispatched backend
+    - name: Fail if backend endpoint or tenant_preparation is missing for dispatched backend
       ansible.builtin.fail:
         msg: >-
-          storage_backend_connections entry is missing
+          storage_backend_connections entry is missing endpoint or
           tenant_preparation.provider_config. osac-operator must resolve the
-          tenant preparation and supply provider_config (username, password,
-          svm) in storage_backend_connections.
+          tenant preparation and supply endpoint and provider_config (username,
+          password, svm) in storage_backend_connections.
       when: >-
         _provider_backend_connections is not defined or
         _ontap_backend_id not in _provider_backend_connections or
+        _provider_backend_connections[_ontap_backend_id].endpoint is not defined or
+        _provider_backend_connections[_ontap_backend_id].endpoint is none or
+        _provider_backend_connections[_ontap_backend_id].endpoint | default('') | string | trim | length == 0 or
         _provider_backend_connections[_ontap_backend_id].tenant_preparation is not defined or
         _provider_backend_connections[_ontap_backend_id].tenant_preparation is not mapping or
         _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config is not defined or
@@ -77,16 +80,22 @@
       no_log: true
 
     # Resolve the CA bundle from ontap_storage_ca_bundle_path to pass as TBC
-    # spec.trustedCACertificate (base64 of PEM) using a local file lookup.
-    - name: Resolve trustedCACertificate from cluster CA bundle when present
+    # spec.trustedCACertificate (base64 of PEM) when ontap_storage_validate_certs
+    # is enabled. When ontap_storage_validate_certs is false, omit
+    # trustedCACertificate so Trident does not reject self-signed/expired lab certs.
+    - name: Resolve trustedCACertificate from cluster CA bundle when cert validation is enabled
       ansible.builtin.set_fact:
         _trusted_ca_b64: >-
+          {% if ontap_storage_validate_certs | bool -%}
           {% set _ca_pem = lookup('file', ontap_storage_ca_bundle_path, errors='ignore') | default('', true) -%}
           {{ (_ca_pem | b64encode) if (_ca_pem | length > 0) else '' }}
+          {%- else -%}
+          {{ '' }}
+          {%- endif %}
       no_log: true
 
-    # The managementLIF is the ONTAP cluster management endpoint the SVM was
-    # prepared on — the backend connection's endpoint, stripped to host:port.
+    # The managementLIF is the ONTAP management endpoint the SVM is accessed
+    # through — the backend connection's endpoint, stripped to host:port.
     - name: Derive the management LIF from the backend connection endpoint
       ansible.builtin.set_fact:
         _management_lif: "{{ _provider_backend_connections[_ontap_backend_id].endpoint | regex_replace('^https?://', '') | regex_replace('/.*$', '') }}"

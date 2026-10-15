@@ -155,10 +155,8 @@ spec:
   attachRequired: true
 CSIEOF
 
-  # Generate self-signed TLS cert for mock VMS and ONTAP servers (with SANs for
-  # 127.0.0.1 and localhost so TLS certificate verification succeeds when
-  # ca_path points to certs/mock.pem).
-  echo "Generating TLS certificate for mock VMS/ONTAP servers..."
+  # Generate self-signed TLS cert for mock VMS server
+  echo "Generating TLS certificate for mock VMS server..."
   mkdir -p "${SCRIPT_DIR}/certs"
   openssl req -x509 -newkey rsa:2048 \
     -keyout "${SCRIPT_DIR}/certs/mock.key" \
@@ -182,23 +180,6 @@ CSIEOF
     sleep 1
   done
 
-  # Start mock ONTAP server (TLS; uses port 18445 so it does not collide with
-  # netris_subnet_delete/netris_parent_delete's mock_netris.py on port 18444).
-  echo "Starting mock ONTAP server (TLS)..."
-  python3 "${SCRIPT_DIR}/mock_ontap_server.py" 18445 \
-    --tls --cert "${SCRIPT_DIR}/certs/mock.pem" --key "${SCRIPT_DIR}/certs/mock.key" &
-  MOCK_ONTAP_PID=$!
-  echo "${MOCK_ONTAP_PID}" > "${SCRIPT_DIR}/.mock_ontap_pid"
-
-  # Wait for mock ONTAP server to be ready
-  for i in $(seq 1 10); do
-    if curl -sk https://127.0.0.1:18445/_calls > /dev/null 2>&1; then
-      echo "Mock ONTAP server ready on port 18445 (PID: ${MOCK_ONTAP_PID})"
-      break
-    fi
-    sleep 1
-  done
-
   # Create storage test namespace and ConfigMap
   kubectl create namespace test-tenant-ns || true
 
@@ -208,7 +189,6 @@ CSIEOF
 # literals to task files.
 OSAC_TEST_VAST_PASSWORD="$(openssl rand -hex 16)"
 OSAC_TEST_TENANT_PASSWORD="$(openssl rand -hex 16)"
-OSAC_TEST_ONTAP_DISCOVERY_PASSWORD="$(openssl rand -hex 16)"
 OSAC_TEST_ONTAP_RUNTIME_PASSWORD="$(openssl rand -hex 16)"
 OSAC_TEST_OAUTH_CLIENT_ID="osac-test-$(openssl rand -hex 8)"
 OSAC_TEST_OAUTH_CLIENT_SECRET="$(openssl rand -hex 16)"
@@ -219,7 +199,6 @@ export VAST_VIP_POOL_SUPERNET="10.0.0.0/24"
 export VAST_VALIDATE_CERTS="false"
 export OSAC_TEST_VAST_PASSWORD="${OSAC_TEST_VAST_PASSWORD}"
 export OSAC_TEST_TENANT_PASSWORD="${OSAC_TEST_TENANT_PASSWORD}"
-export OSAC_TEST_ONTAP_DISCOVERY_PASSWORD="${OSAC_TEST_ONTAP_DISCOVERY_PASSWORD}"
 export OSAC_TEST_ONTAP_RUNTIME_PASSWORD="${OSAC_TEST_ONTAP_RUNTIME_PASSWORD}"
 export OSAC_TEST_OAUTH_CLIENT_ID="${OSAC_TEST_OAUTH_CLIENT_ID}"
 export OSAC_TEST_OAUTH_CLIENT_SECRET="${OSAC_TEST_OAUTH_CLIENT_SECRET}"

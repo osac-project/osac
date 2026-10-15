@@ -68,17 +68,24 @@ def test_ontap_virtual_pools_use_labels_and_selector_not_storage_pools():
     assert "storagePools" not in sc_params
     assert "storagePools:" not in raw_text
 
-    # 3. CA bundle reading must use lookup('file', ...) + b64encode rather than slurp.
+    # 3. CA bundle reading must use lookup('file', ...) + b64encode gated on
+    #    ontap_storage_validate_certs rather than slurp.
+    assert "ontap_storage_validate_certs" in raw_text
     assert "lookup('file', ontap_storage_ca_bundle_path" in raw_text
     assert "b64encode" in raw_text
     assert "slurp" not in raw_text
 
 
-def test_ontap_consumes_operator_tenant_preparation_with_no_hub_secrets():
-    """Verify ontap_storage consumes tenant_preparation from
-    _provider_backend_connections and performs no hub-cluster Secret reads or
-    writes.
+def test_ontap_consumes_svm_preparation_without_hub_secrets_or_ontap_http():
+    """Verify ontap_storage requires only SVM-scoped credentials in
+    tenant_preparation.provider_config, makes no direct HTTP calls to ONTAP from
+    the hub cluster, and performs no hub-cluster Secret reads or writes.
     """
+    setup_path = ONTAP_ROLE_DIR / "tasks" / "setup.yaml"
+    setup_text = setup_path.read_text(encoding="utf-8")
+    assert "_provider_backend_connections[item].username" not in setup_text
+    assert "_provider_backend_connections[item].password" not in setup_text
+
     setup_backend_path = ONTAP_ROLE_DIR / "tasks" / "_setup_backend.yaml"
     raw_text = setup_backend_path.read_text(encoding="utf-8")
     assert "tenant_preparation" in raw_text
@@ -87,12 +94,14 @@ def test_ontap_consumes_operator_tenant_preparation_with_no_hub_secrets():
 
     defaults_text = (ONTAP_ROLE_DIR / "defaults" / "main.yaml").read_text(encoding="utf-8")
     assert "ontap_storage_config_namespace" not in defaults_text
+    assert "ontap_storage_validate_certs:" in defaults_text
 
     for yaml_file in ONTAP_ROLE_DIR.rglob("*.yaml"):
         content = yaml_file.read_text(encoding="utf-8")
         assert "ontap-tenant-" not in content
         assert "ontap_storage_config_namespace" not in content
         assert "kubeconfig: ~" not in content
+        assert "ansible.builtin.uri" not in content
         assert "slurp" not in content
         assert "PR#" not in content
 

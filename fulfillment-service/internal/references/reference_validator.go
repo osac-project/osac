@@ -544,7 +544,9 @@ func (v *ReferenceValidator) recordDuration(resourceType string, d time.Duration
 }
 
 // resolveTenantProject determines the tenant and project for a reference lookup based on the
-// reference type and fields.
+// reference type and fields. Local references always use the caller's tenant and project.
+// Global (full) references use the reference's own project value directly: an empty project
+// selects the tenant's default/root project rather than inheriting the caller's project.
 func resolveTenantProject(refMsg protoreflect.Message, fullName protoreflect.FullName,
 	callerTenant, callerProject string) (string, string) {
 	if isLocalReference(fullName) {
@@ -552,19 +554,16 @@ func resolveTenantProject(refMsg protoreflect.Message, fullName protoreflect.Ful
 	}
 
 	tenant := callerTenant
-	project := callerProject
 
 	sharedField := refMsg.Descriptor().Fields().ByName("shared")
 	if sharedField != nil && refMsg.Get(sharedField).Bool() {
 		tenant = "shared"
 	}
 
+	project := ""
 	projectField := refMsg.Descriptor().Fields().ByName("project")
 	if projectField != nil {
-		explicitProject := refMsg.Get(projectField).String()
-		if explicitProject != "" {
-			project = explicitProject
-		}
+		project = refMsg.Get(projectField).String()
 	}
 
 	return tenant, project

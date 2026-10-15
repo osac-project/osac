@@ -21,11 +21,9 @@ import (
 	"fmt"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -304,60 +302,26 @@ func (r *ExternalIPReconciler) handleUpdate(ctx context.Context, externalIP *v1a
 		}
 	}
 
-	r.populateAddressIfMissing(ctx, externalIP)
-
 	result, err := r.handleProvisioning(ctx, externalIP)
 	if err != nil || result.RequeueAfter > 0 {
 		return result, err
 	}
 
 	if externalIP.Status.State == v1alpha1.ExternalIPStateAllocated && externalIP.Status.Address == "" {
+		message := "ExternalIP is marked allocated but has no validated address; allocation must be retried"
+		externalIP.Status.Phase = v1alpha1.ExternalIPPhaseFailed
+		setExternalIPState(&externalIP.Status, v1alpha1.ExternalIPStateFailed)
+		setReadyConditionFailed(&externalIP.Status.Conditions, message)
+		if latestJob := provisioning.FindLatestJobByType(externalIP.Status.ProvisioningJobs, v1alpha1.JobTypeProvision); latestJob != nil && latestJob.State.IsSuccessful() {
+			failedJob := *latestJob
+			failedJob.State = v1alpha1.JobStateFailed
+			failedJob.Message = message
+			provisioning.UpdateJob(externalIP.Status.ProvisioningJobs, failedJob)
+		}
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
 	return result, nil
-}
-
-// populateAddressIfMissing sets status.address from the allocated-address annotation
-// after initial provisioning succeeds, and transitions to Ready once the address
-// is known.
-//
-// The AAP provisioning role for each implementation strategy writes the allocated
-// address to the osac.openshift.io/allocated-address annotation on the ExternalIP
-// CR. This function reads it. As a fallback for strategies that haven't been
-// updated to write the annotation, it also checks the legacy
-// LoadBalancer Service as a fallback.
-//
-// State == Allocated is set exclusively by OnSuccess after the AAP provisioning
-// job reports success, so this guard ensures address population happens strictly
-// after provisioning completes.
-func (r *ExternalIPReconciler) populateAddressIfMissing(ctx context.Context, externalIP *v1alpha1.ExternalIP) {
-	if externalIP.Status.State != v1alpha1.ExternalIPStateAllocated || externalIP.Status.Address != "" {
-		return
-	}
-	log := ctrllog.FromContext(ctx)
-
-	if addr, ok := externalIP.Annotations[osacExternalIPAllocatedAddressAnnotation]; ok && addr != "" {
-		externalIP.Status.Address = addr
-		externalIP.Status.Phase = v1alpha1.ExternalIPPhaseReady
-		log.Info("populated ExternalIP address from allocated-address annotation", "address", addr)
-		return
-	}
-
-	// Fallback: check LoadBalancer Service for strategies that write the address
-	// there instead of the annotation. Remove once all strategies use the
-	// allocated-address annotation.
-	targetClient, err := getTargetClient(ctx, r.mgr, r.targetCluster)
-	if err != nil {
-		log.V(1).Info("allocated-address annotation not set and target client unavailable, will retry")
-		return
-	}
-	ipAddress := r.getExternalIPAddress(ctx, targetClient, externalIP.Name)
-	if ipAddress != "" {
-		externalIP.Status.Address = ipAddress
-		externalIP.Status.Phase = v1alpha1.ExternalIPPhaseReady
-		log.Info("populated ExternalIP address from LoadBalancer Service (fallback)", "address", ipAddress)
-	}
 }
 
 // handleDelete sets the Deleting phase, runs deprovisioning, and removes the finalizer
@@ -443,26 +407,21 @@ func (r *ExternalIPReconciler) handleProvisioning(ctx context.Context, externalI
 		&provisioning.State{Jobs: &externalIP.Status.ProvisioningJobs, DesiredConfigVersion: externalIP.Status.DesiredConfigVersion},
 		r.MaxJobHistory, r.StatusPollInterval,
 		&provisioning.PollCallbacks{
+			RetryOnOutputError: true,
 			OnFailed: func(message string) {
 				externalIP.Status.Phase = v1alpha1.ExternalIPPhaseFailed
 				setExternalIPState(&externalIP.Status, v1alpha1.ExternalIPStateFailed)
+				externalIP.Status.Address = ""
 				setReadyConditionFailed(&externalIP.Status.Conditions, message)
 			},
-			OnSuccess: func(_ provisioning.ProvisionStatus) {
-				setExternalIPState(&externalIP.Status, v1alpha1.ExternalIPStateAllocated)
-				if externalIP.Status.Address == "" {
-					if addr, ok := externalIP.Annotations[osacExternalIPAllocatedAddressAnnotation]; ok && addr != "" {
-						externalIP.Status.Address = addr
-					} else if targetClient, err := getTargetClient(ctx, r.mgr, r.targetCluster); err == nil {
-						if ip := r.getExternalIPAddress(ctx, targetClient, externalIP.Name); ip != "" {
-							externalIP.Status.Address = ip
-						}
-					}
-				}
-				if externalIP.Status.Address != "" {
-					externalIP.Status.Phase = v1alpha1.ExternalIPPhaseReady
-				}
-				setReadyConditionTrue(&externalIP.Status.Conditions)
+			OnOutputError: func(message string) {
+				externalIP.Status.Phase = v1alpha1.ExternalIPPhaseFailed
+				setExternalIPState(&externalIP.Status, v1alpha1.ExternalIPStateFailed)
+				externalIP.Status.Address = ""
+				setReadyConditionFailed(&externalIP.Status.Conditions, message)
+			},
+			OnSuccessWithExtraVars: func(status provisioning.ProvisionStatusWithExtraVars) error {
+				return r.acceptAllocationResult(ctx, externalIP, status.ExtraVars)
 			},
 		},
 		func() bool {
@@ -485,32 +444,78 @@ func (r *ExternalIPReconciler) handleDeprovisioning(ctx context.Context, externa
 		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping deprovisioning")
 		return ctrl.Result{}, nil
 	}
-	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, externalIP,
-		&externalIP.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
+	result, done, err := provisioning.RunDeprovisioningLifecycleWithCallbacks(ctx, r.ProvisioningProvider, externalIP,
+		&externalIP.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval,
+		&provisioning.DeprovisionCallbacks{
+			OnOutputError: func(message string) {
+				ctrllog.FromContext(ctx).Error(fmt.Errorf("%s", message), "ExternalIP release result was rejected")
+			},
+			OnSuccessWithExtraVars: func(status provisioning.ProvisionStatusWithExtraVars) error {
+				_, err := r.validateExternalIPResult(ctx, externalIP, status.ExtraVars, provisioning.ExternalIPOperationRelease)
+				return err
+			},
+		})
 	if err != nil || !done {
 		return result, err
 	}
 	return ctrl.Result{}, nil
 }
 
-// getExternalIPAddress fetches the LoadBalancer Service created by the AAP provisioning
-// role and returns the assigned IP. This is a fallback for strategies that haven't been
-// updated to write the allocated-address annotation.
-func (r *ExternalIPReconciler) getExternalIPAddress(ctx context.Context, targetClient client.Client, externalIPName string) string {
-	log := ctrllog.FromContext(ctx)
-
-	svc := &corev1.Service{}
-	serviceName := externalIPServiceNamePrefix + externalIPName
-	if err := targetClient.Get(ctx, types.NamespacedName{Namespace: externalIPDefaultMetalLBNamespace, Name: serviceName}, svc); err != nil {
-		log.V(1).Info("LoadBalancer Service not found (may not be a MetalLB strategy)", "name", serviceName)
-		return ""
+func (r *ExternalIPReconciler) acceptAllocationResult(ctx context.Context, externalIP *v1alpha1.ExternalIP, artifacts map[string]any) error {
+	current, err := r.validateExternalIPResult(ctx, externalIP, artifacts, provisioning.ExternalIPOperationAllocate)
+	if err != nil {
+		return err
 	}
 
-	if len(svc.Status.LoadBalancer.Ingress) == 0 {
-		return ""
+	pools := &v1alpha1.ExternalIPPoolList{}
+	if err := r.APIReader.List(ctx, pools,
+		client.InNamespace(current.Namespace),
+		client.MatchingLabels{osacExternalIPPoolIDLabel: current.Spec.Pool},
+	); err != nil {
+		return fmt.Errorf("listing ExternalIPPool for allocation validation: %w", err)
+	}
+	if len(pools.Items) != 1 {
+		return fmt.Errorf("expected exactly one ExternalIPPool for UUID %q, found %d", current.Spec.Pool, len(pools.Items))
+	}
+	address := current.Annotations[osacExternalIPAllocatedAddressAnnotation]
+	if err := validateAllocatedAddress(address, pools.Items[0].Spec.CIDRs); err != nil {
+		return err
 	}
 
-	return svc.Status.LoadBalancer.Ingress[0].IP
+	externalIP.Status.Address = address
+	externalIP.Status.Phase = v1alpha1.ExternalIPPhaseReady
+	setExternalIPState(&externalIP.Status, v1alpha1.ExternalIPStateAllocated)
+	setReadyConditionTrue(&externalIP.Status.Conditions)
+	return nil
+}
+
+func (r *ExternalIPReconciler) validateExternalIPResult(ctx context.Context, externalIP *v1alpha1.ExternalIP,
+	artifacts map[string]any, expectedOperation provisioning.ExternalIPOperation) (*v1alpha1.ExternalIP, error) {
+	outcome, err := provisioning.ParseExternalIPResult(artifacts)
+	if err != nil {
+		return nil, err
+	}
+	if outcome.Operation != expectedOperation {
+		return nil, fmt.Errorf("ExternalIP result operation %q does not match expected operation %q", outcome.Operation, expectedOperation)
+	}
+	if outcome.ResourceUID != string(externalIP.UID) {
+		return nil, fmt.Errorf("ExternalIP result UID %q does not match current UID %q", outcome.ResourceUID, externalIP.UID)
+	}
+	if outcome.Generation != externalIP.Generation {
+		return nil, fmt.Errorf("ExternalIP result generation %d does not match dispatched generation %d", outcome.Generation, externalIP.Generation)
+	}
+
+	current := &v1alpha1.ExternalIP{}
+	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(externalIP), current); err != nil {
+		return nil, fmt.Errorf("reading current ExternalIP before accepting manager result: %w", err)
+	}
+	if current.UID != externalIP.UID || string(current.UID) != outcome.ResourceUID {
+		return nil, fmt.Errorf("ExternalIP identity changed before manager result was accepted")
+	}
+	if current.Generation != outcome.Generation {
+		return nil, fmt.Errorf("ExternalIP generation changed before manager result was accepted")
+	}
+	return current, nil
 }
 
 // SetupWithManager registers this controller with the multicluster manager.

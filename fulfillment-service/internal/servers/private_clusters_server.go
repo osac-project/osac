@@ -556,6 +556,12 @@ func (s *PrivateClustersServer) validateSpecUpdateRequest(request *privatev1.Clu
 
 func (s *PrivateClustersServer) Delete(ctx context.Context,
 	request *privatev1.ClustersDeleteRequest) (response *privatev1.ClustersDeleteResponse, err error) {
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return
+	}
+	defer tx.ReportError(&err)
+
 	id := request.GetId()
 	if id != "" {
 		getResponse, getErr := s.generic.dao.Get().SetId(id).Do(ctx)

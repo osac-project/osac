@@ -93,6 +93,12 @@ type ProvisioningProviderWithProvisionOutputs interface {
 	GetProvisionStatusWithExtraVars(ctx context.Context, resource client.Object, jobID string) (ProvisionStatusWithExtraVars, error)
 }
 
+// ProvisioningProviderWithDeprovisionOutputs can retrieve output variables
+// emitted by a deprovisioning job.
+type ProvisioningProviderWithDeprovisionOutputs interface {
+	GetDeprovisionStatusWithExtraVars(ctx context.Context, resource client.Object, jobID string) (ProvisionStatusWithExtraVars, error)
+}
+
 // ProvisioningJobCanceler can cancel a running provisioning job during resource deletion.
 // Providers that cannot cancel jobs may omit this interface; callers must then wait for the
 // job to reach a terminal state before continuing deletion.

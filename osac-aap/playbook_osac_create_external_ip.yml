@@ -28,3 +28,10 @@
       ansible.builtin.include_role:
         name: "{{ template_id_override | default('osac.templates.' + (implementation_strategy | replace('-', '_'))) }}"
         tasks_from: create_external_ip
+
+    - name: Publish the successful ExternalIP allocation result
+      ansible.builtin.include_role:
+        name: osac.service.common
+        tasks_from: publish_external_ip_result.yaml
+      vars:
+        external_ip_result_operation: external_ip.allocate

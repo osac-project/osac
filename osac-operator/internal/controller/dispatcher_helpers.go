@@ -182,6 +182,7 @@ type dispatchTargetProvider struct {
 var _ provisioning.ProvisioningProvider = (*dispatchTargetProvider)(nil)
 var _ provisioning.ProvisioningProviderWithExtraVars = (*dispatchTargetProvider)(nil)
 var _ provisioning.ProvisioningProviderWithProvisionOutputs = (*dispatchTargetProvider)(nil)
+var _ provisioning.ProvisioningProviderWithDeprovisionOutputs = (*dispatchTargetProvider)(nil)
 
 // newDispatchTargetProvider creates a dispatchTargetProvider that routes jobs for
 // managerName through base.
@@ -221,6 +222,14 @@ func (p *dispatchTargetProvider) TriggerDeprovision(
 
 func (p *dispatchTargetProvider) GetDeprovisionStatus(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error) {
 	return p.base.GetDeprovisionStatus(ctx, resource, jobID)
+}
+
+func (p *dispatchTargetProvider) GetDeprovisionStatusWithExtraVars(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {
+	if provider, ok := p.base.(provisioning.ProvisioningProviderWithDeprovisionOutputs); ok {
+		return provider.GetDeprovisionStatusWithExtraVars(ctx, resource, jobID)
+	}
+	status, err := p.base.GetDeprovisionStatus(ctx, resource, jobID)
+	return provisioning.ProvisionStatusWithExtraVars{ProvisionStatus: status}, err
 }
 
 func (p *dispatchTargetProvider) Name() string {

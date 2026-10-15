@@ -1,26 +1,84 @@
 ---
-# ExternalIP deletion — removes the /32 IPAM subnet that reserved the IP
+# Release only the Netris reservation whose durable name contains this
+# ExternalIP's Kubernetes UID. A pre-existing display-name reservation cannot
+# be safely attributed to this object and is therefore left untouched.
+- name: Validate ExternalIP identity before release
+  ansible.builtin.assert:
+    that:
+      - external_ip.metadata.uid is defined
+      - external_ip.metadata.uid | length > 0
+      - external_ip.metadata.generation is defined
+      - external_ip.metadata.namespace is defined
+      - external_ip.spec.pool is defined
+    fail_msg: >-
+      ExternalIP UID, generation, namespace, and pool reference are required
+      to release its provider reservation.
 
-- name: Extract ExternalIP name
+- name: Resolve and validate the ExternalIPPool for release
+  ansible.builtin.include_tasks: _resolve_external_ip_pool.yaml
+
+- name: Set ExternalIP release lock identity
   ansible.builtin.set_fact:
     eip_name: "{{ external_ip.metadata.name }}"
-
-- name: Display deletion information
-  ansible.builtin.debug:
-    msg: "Deleting Netris IPAM subnet for ExternalIP '{{ eip_name }}'"
+    eip_uid: "{{ external_ip.metadata.uid }}"
+    eip_lock_name: "external-ip-{{ _eip_pool.metadata.uid | hash('sha1') }}"
+    eip_lock_namespace: "{{ external_ip.metadata.namespace }}"
+    eip_lock_holder: >-
+      {{ lookup('env', 'AWX_JOB_ID')
+         | default(lookup('password', '/dev/null length=32'), true) }}
 
 - name: Ensure Netris auth
   ansible.builtin.include_role:
     name: netris.controller.auth
   when: netris_session_cookie is not defined
 
-- name: Delete /32 IPAM subnet from Netris controller
-  ansible.builtin.include_role:
-    name: netris.controller.ipam
-    tasks_from: delete_subnet
-  vars:
-    ipam_name: "{{ eip_name }}"
+- name: Release only the UID-owned Netris reservation while holding the pool Lease
+  block:
+    - name: Acquire the pool allocation Lease
+      ansible.builtin.include_role:
+        name: osac.service.vnet_lock
+        tasks_from: acquire
+      vars:
+        vnet_lock_name: "{{ eip_lock_name }}"
+        vnet_lock_namespace: "{{ eip_lock_namespace }}"
+        vnet_lock_holder: "{{ eip_lock_holder }}"
+        _vnet_lock_max_retries: 24
+        _vnet_lock_retry_delay: 5
 
-- name: Display deletion result
-  ansible.builtin.debug:
-    msg: "IPAM subnet '{{ eip_name }}' deletion completed"
+    - name: Read and validate this ExternalIP's Netris reservations
+      ansible.builtin.include_tasks: _read_external_ip_reservations.yaml
+      vars:
+        _eip_reservation_operation: release
+
+    - name: Delete the UID-owned Netris reservation
+      ansible.builtin.include_role:
+        name: netris.controller.ipam
+        tasks_from: delete_subnet
+      vars:
+        ipam_name: "osac-eip-{{ eip_uid }}"
+      when: _eip_owned_subnet is not none
+
+    - name: Confirm the UID-owned Netris reservation is absent
+      ansible.builtin.include_role:
+        name: netris.controller.ipam
+        tasks_from: read_subnets
+
+    - name: Verify provider release completed
+      ansible.builtin.assert:
+        that:
+          - >-
+            netris_ipam_subnets
+            | selectattr('name', 'equalto', 'osac-eip-' ~ eip_uid)
+            | list | length == 0
+        fail_msg: >-
+          Netris reservation for ExternalIP UID '{{ eip_uid }}' still exists;
+          release cannot be reported as complete.
+  always:
+    - name: Release the pool allocation Lease
+      ansible.builtin.include_role:
+        name: osac.service.vnet_lock
+        tasks_from: release
+      vars:
+        vnet_lock_name: "{{ eip_lock_name }}"
+        vnet_lock_namespace: "{{ eip_lock_namespace }}"
+        vnet_lock_holder: "{{ eip_lock_holder }}"

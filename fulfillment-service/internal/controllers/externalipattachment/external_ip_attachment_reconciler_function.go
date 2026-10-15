@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -52,6 +53,7 @@ type function struct {
 	externalIPAttachmentsClient privatev1.ExternalIPAttachmentsClient
 	networkingHubReader         controllers.NetworkingHubReader
 	maskCalculator              *masks.Calculator
+	deleteRetry                 *controllers.ReconcileSignalScheduler
 }
 
 type task struct {
@@ -114,6 +116,7 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 		networkingHubReader:         networkingHubReader,
 		hubCache:                    b.hubCache,
 		maskCalculator:              masks.NewCalculator().Build(),
+		deleteRetry:                 controllers.NewReconcileSignalScheduler(b.logger, 5*time.Second),
 	}
 	result = object.run
 	return
@@ -290,8 +293,21 @@ func (t *task) delete(ctx context.Context) (err error) {
 			slog.String("name", object.GetName()),
 		)
 	}
+	t.scheduleDeleteRetry(ctx)
 
 	return
+}
+
+func (t *task) scheduleDeleteRetry(ctx context.Context) {
+	if t.r.deleteRetry == nil {
+		return
+	}
+	id := t.externalIPAttachment.GetId()
+	client := t.r.externalIPAttachmentsClient
+	t.r.deleteRetry.Schedule(ctx, id, func(signalCtx context.Context, id string) error {
+		_, err := client.Signal(signalCtx, privatev1.ExternalIPAttachmentsSignalRequest_builder{Id: id}.Build())
+		return err
+	})
 }
 
 func (t *task) selectHub(ctx context.Context) error {

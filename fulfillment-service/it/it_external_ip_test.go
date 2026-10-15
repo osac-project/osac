@@ -501,11 +501,13 @@ var _ = Describe("ExternalIP lifecycle", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 
-		poolResp, err := poolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{
-			Id: poolId,
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		Expect(poolResp.GetObject().GetStatus().GetAllocated()).To(Equal(int64(0)))
+		Eventually(func(g Gomega) {
+			poolResp, getErr := poolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{
+				Id: poolId,
+			}.Build())
+			g.Expect(getErr).ToNot(HaveOccurred())
+			g.Expect(poolResp.GetObject().GetStatus().GetAllocated()).To(Equal(int64(0)))
+		}, time.Minute, time.Second).Should(Succeed())
 	})
 
 	It("Can delete a PENDING ExternalIP and release its pool capacity", func() {
@@ -725,10 +727,14 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func(cleanupCtx context.Context) {
-			deleteComputeInstanceFixtureResource(cleanupCtx,
+			deleteAndWaitForComputeInstanceFixtureResource(cleanupCtx,
 				func(deleteCtx context.Context) error {
 					_, deleteErr := externalIPsClient.Delete(deleteCtx, publicv1.ExternalIPsDeleteRequest_builder{Id: externalIPId}.Build())
 					return deleteErr
+				},
+				func(getCtx context.Context) error {
+					_, getErr := privateExternalIPsClient.Get(getCtx, privatev1.ExternalIPsGetRequest_builder{Id: externalIPId}.Build())
+					return getErr
 				})
 		})
 		Eventually(func(g Gomega) {
@@ -1051,10 +1057,14 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func(cleanupCtx context.Context) {
-			deleteComputeInstanceFixtureResource(cleanupCtx,
+			deleteAndWaitForComputeInstanceFixtureResource(cleanupCtx,
 				func(deleteCtx context.Context) error {
 					_, deleteErr := externalIPsClient.Delete(deleteCtx, publicv1.ExternalIPsDeleteRequest_builder{Id: pendingIPId}.Build())
 					return deleteErr
+				},
+				func(getCtx context.Context) error {
+					_, getErr := privateExternalIPsClient.Get(getCtx, privatev1.ExternalIPsGetRequest_builder{Id: pendingIPId}.Build())
+					return getErr
 				})
 		})
 		Eventually(func(g Gomega) {

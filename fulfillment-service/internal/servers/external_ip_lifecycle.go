@@ -480,12 +480,20 @@ func (l *externalIPLifecycle) deleteExternalIP(ctx context.Context, id string) e
 
 func (l *externalIPLifecycle) deleteLockedExternalIP(ctx context.Context, externalIP *privatev1.ExternalIP) error {
 	firstDeletionBoundary := !externalIP.HasMetadata() || !externalIP.GetMetadata().HasDeletionTimestamp()
+	hasFinalizers := len(externalIP.GetMetadata().GetFinalizers()) > 0
 	if _, err := l.externalIPDao.Delete().SetId(externalIP.GetId()).Do(ctx); err != nil {
 		return err
 	}
-	if !firstDeletionBoundary {
+	// Keep the pool slot reserved while an external finalizer is still cleaning
+	// up the provider-side address. Capacity is released by Update when the last
+	// finalizer is removed.
+	if !firstDeletionBoundary || hasFinalizers {
 		return nil
 	}
+	return l.releaseExternalIPCapacity(ctx, externalIP)
+}
+
+func (l *externalIPLifecycle) releaseExternalIPCapacity(ctx context.Context, externalIP *privatev1.ExternalIP) error {
 	poolID := refKey(externalIP.GetSpec().GetPool())
 	if poolID == "" {
 		return nil

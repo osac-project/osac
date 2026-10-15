@@ -1,0 +1,88 @@
+---
+- name: Write the ExternalIP playbook input
+  ansible.builtin.copy:
+    dest: "{{ eip_contract_vars_file }}"
+    mode: "0600"
+    content: >-
+      {{ {'osac_job_vars': {'resource': eip_contract_resource},
+          'netris_controller_url': eip_contract_netris_url,
+          'netris_session_cookie': 'integration-test-cookie',
+          'netris_site_id': 1,
+          'netris_tenant_id': 1,
+          'netris_validate_certs': false,
+          'ansible_connection': 'local',
+          'ansible_become': false,
+          'ansible_python_interpreter': ansible_playbook_python} | to_json }}
+
+- name: Run the top-level ExternalIP playbook
+  ansible.builtin.command:
+    argv:
+      - uv
+      - run
+      - ansible-playbook
+      - -i
+      - localhost,
+      - "{{ playbook_dir }}/../../../../../playbook_osac_{{ eip_contract_operation }}_external_ip.yml"
+      - -e
+      - "@{{ eip_contract_vars_file }}"
+  args:
+    chdir: "{{ playbook_dir }}/../../../../../"
+  environment:
+    KUBECONFIG: "{{ lookup('env', 'KUBECONFIG') }}"
+    K8S_AUTH_KUBECONFIG: "{{ lookup('env', 'K8S_AUTH_KUBECONFIG') }}"
+    ANSIBLE_SHOW_CUSTOM_STATS: "true"
+  register: eip_contract_playbook_result
+  changed_when: false
+  failed_when: false
+
+- name: Remove the temporary ExternalIP input file
+  ansible.builtin.file:
+    path: "{{ eip_contract_vars_file }}"
+    state: absent
+
+- name: Check the top-level ExternalIP playbook result
+  ansible.builtin.assert:
+    that:
+      - (eip_contract_playbook_result.rc == 0) == (eip_contract_should_succeed | bool)
+      - >-
+        eip_contract_should_succeed | bool or
+        (eip_contract_expected_failure | default('')) in (
+          (eip_contract_playbook_result.stdout | default('')) ~
+          (eip_contract_playbook_result.stderr | default('')))
+    fail_msg: >-
+      The {{ eip_contract_operation }} ExternalIP playbook returned
+      {{ eip_contract_playbook_result.rc }}; expected success is
+      {{ eip_contract_should_succeed }}.
+      Expected failure text={{ eip_contract_expected_failure | default('not supplied') }}.
+      stdout={{ eip_contract_playbook_result.stdout | default('') }}
+      stderr={{ eip_contract_playbook_result.stderr | default('') }}
+
+- name: Parse the manager result from Ansible per-job statistics
+  ansible.builtin.set_fact:
+    eip_contract_manager_stats: >-
+      {{ eip_contract_playbook_result.stdout
+         | regex_findall('(?m)^\s*RUN:\s*(\{.*\})$')
+         | first | from_json }}
+  when: eip_contract_should_succeed | bool
+
+- name: Verify the complete ExternalIP result was published
+  ansible.builtin.assert:
+    that:
+      - >-
+        eip_contract_manager_stats == {
+          'osac_result': {
+            'schemaVersion': 'v1',
+            'operation': 'external_ip.allocate' if eip_contract_operation == 'create'
+                         else 'external_ip.release',
+            'resourceUID': eip_contract_resource.metadata.uid,
+            'generation': eip_contract_resource.metadata.generation | int,
+            'data': {}
+          }
+        }
+  when: eip_contract_should_succeed | bool
+
+- name: Verify a rejected ExternalIP operation publishes no success result
+  ansible.builtin.assert:
+    that:
+      - eip_contract_playbook_result.stdout is not search('(?m)^\s*RUN:')
+  when: not (eip_contract_should_succeed | bool)

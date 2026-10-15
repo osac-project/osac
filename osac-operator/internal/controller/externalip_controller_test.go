@@ -126,8 +126,13 @@ var _ = Describe("ExternalIPReconciler", func() {
 		// The ExternalIP references the parent pool by UUID, not by K8s name.
 		publicIP = &osacv1alpha1.ExternalIP{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      "test-externalip",
-				Namespace: testNamespace,
+				Name:       "test-externalip",
+				Namespace:  testNamespace,
+				UID:        types.UID("external-ip-test-uid"),
+				Generation: 1,
+				Annotations: map[string]string{
+					osacExternalIPAllocatedAddressAnnotation: "192.168.1.10",
+				},
 			},
 			Spec: osacv1alpha1.ExternalIPSpec{
 				Pool: testPoolUUID,
@@ -141,6 +146,20 @@ var _ = Describe("ExternalIPReconciler", func() {
 			Build()
 
 		mockProvider = &mockProvisioningProvider{name: "mock-aap"}
+		mockProvider.getProvisionStatusWithExtraVarsFunc = func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {
+			status, err := mockProvider.GetProvisionStatus(ctx, resource, jobID)
+			return provisioning.ProvisionStatusWithExtraVars{
+				ProvisionStatus: status,
+				ExtraVars:       externalIPTestResult(resource, provisioning.ExternalIPOperationAllocate),
+			}, err
+		}
+		mockProvider.getDeprovisionStatusWithExtraVarsFunc = func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {
+			status, err := mockProvider.GetDeprovisionStatus(ctx, resource, jobID)
+			return provisioning.ProvisionStatusWithExtraVars{
+				ProvisionStatus: status,
+				ExtraVars:       externalIPTestResult(resource, provisioning.ExternalIPOperationRelease),
+			}, err
+		}
 
 		// Default mock mgr provides an empty workload-cluster client so the
 		// address-population guard in handleUpdate does not nil-panic. Tests
@@ -339,7 +358,7 @@ var _ = Describe("ExternalIPReconciler", func() {
 			updated := &osacv1alpha1.ExternalIP{}
 			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
 			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.ExternalIPPhaseReady))
-			Expect(updated.Status.Address).To(Equal("203.0.113.99"))
+			Expect(updated.Status.Address).To(Equal("192.168.1.10"))
 		})
 
 		It("should set phase to Failed on provision failure", func() {
@@ -521,6 +540,36 @@ var _ = Describe("ExternalIPReconciler", func() {
 			Expect(toDelete.Finalizers).NotTo(ContainElement(osacExternalIPFinalizer))
 		})
 
+		It("keeps the finalizer when the release result belongs to another ExternalIP", func() {
+			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
+			mockProvider.getDeprovisionStatusWithExtraVarsFunc = func(
+				ctx context.Context, resource client.Object, jobID string,
+			) (provisioning.ProvisionStatusWithExtraVars, error) {
+				status, err := mockProvider.GetDeprovisionStatus(ctx, resource, jobID)
+				result := externalIPTestResult(resource, provisioning.ExternalIPOperationRelease)
+				result["osac_result"].(map[string]any)["resourceUID"] = "some-other-external-ip"
+				return provisioning.ProvisionStatusWithExtraVars{ProvisionStatus: status, ExtraVars: result}, err
+			}
+
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+			toDelete := &osacv1alpha1.ExternalIP{}
+			Expect(fakeClient.Get(testCtx, key, toDelete)).To(Succeed())
+			now := metav1.Now()
+			toDelete.DeletionTimestamp = &now
+
+			// The first call starts release; the next one rejects its mismatched result.
+			_, err = reconciler.handleDelete(testCtx, toDelete)
+			Expect(err).NotTo(HaveOccurred())
+			result, err := reconciler.handleDelete(testCtx, toDelete)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+			Expect(toDelete.Finalizers).To(ContainElement(osacExternalIPFinalizer))
+			latestJob := provisioning.FindLatestJobByType(toDelete.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision)
+			Expect(latestJob.State).To(Equal(osacv1alpha1.JobStateFailed))
+		})
+
 		It("should still handle delete for unmanaged ExternalIP with finalizer", func() {
 			// Edge case: a ExternalIP was managed (has finalizer), then an admin marked
 			// it unmanaged. The management-state guard in Reconcile skips processing
@@ -594,8 +643,12 @@ var _ = Describe("ExternalIPReconciler", func() {
 			Expect(updated.Status.State).To(Equal(osacv1alpha1.ExternalIPStatePending))
 		})
 
-		It("should stay Progressing when Allocated but address not yet available", func() {
+		It("should fail and retry when the allocation result has no address annotation", func() {
 			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
+			stored := &osacv1alpha1.ExternalIP{}
+			Expect(fakeClient.Get(testCtx, key, stored)).To(Succeed())
+			delete(stored.Annotations, osacExternalIPAllocatedAddressAnnotation)
+			Expect(fakeClient.Update(testCtx, stored)).To(Succeed())
 
 			mockProvider.triggerProvisionFunc = func(
 				ctx context.Context, resource client.Object,
@@ -617,7 +670,7 @@ var _ = Describe("ExternalIPReconciler", func() {
 				}, nil
 			}
 
-			// Pass 1: finalizer, Pass 2: trigger, Pass 3: poll -> Allocated but no address
+			// Pass 1: metadata, Pass 2: trigger, Pass 3: poll -> rejected result.
 			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
@@ -627,20 +680,20 @@ var _ = Describe("ExternalIPReconciler", func() {
 
 			updated := &osacv1alpha1.ExternalIP{}
 			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
-			Expect(updated.Status.State).To(Equal(osacv1alpha1.ExternalIPStateAllocated))
-			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.ExternalIPPhaseProgressing),
-				"phase should stay Progressing until address is populated")
+			Expect(updated.Status.State).To(Equal(osacv1alpha1.ExternalIPStateFailed))
+			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.ExternalIPPhaseFailed),
+				"an AAP success without a valid allocation result must fail and remain retryable")
 			Expect(updated.Status.Address).To(BeEmpty())
 			Expect(result.RequeueAfter).To(BeNumerically(">", 0),
-				"should requeue to retry address population")
+				"an invalid allocation output should enter retry backoff")
 		})
 
-		It("should populate address in OnSuccess on initial allocation when Service already has an IP", func() {
-			// This test covers the new code path added to the OnSuccess callback inside
-			// handleProvisioning: when state transitions to Allocated and the parking
-			// Service already has an ingress IP, the address must be set immediately
-			// within the same reconcile pass -- no extra round-trip through handleUpdate.
+		It("does not use a LoadBalancer Service address when the allocation annotation is missing", func() {
 			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
+			stored := &osacv1alpha1.ExternalIP{}
+			Expect(fakeClient.Get(testCtx, key, stored)).To(Succeed())
+			delete(stored.Annotations, osacExternalIPAllocatedAddressAnnotation)
+			Expect(fakeClient.Update(testCtx, stored)).To(Succeed())
 
 			svc := &corev1.Service{
 				ObjectMeta: metav1.ObjectMeta{
@@ -675,7 +728,7 @@ var _ = Describe("ExternalIPReconciler", func() {
 				}, nil
 			}
 
-			// Pass 1: finalizer, Pass 2: trigger job, Pass 3: poll -> Succeeded -> OnSuccess
+			// Pass 1: finalizer, Pass 2: trigger, Pass 3: poll -> rejected output.
 			for range 3 {
 				_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 				Expect(err).NotTo(HaveOccurred())
@@ -683,9 +736,50 @@ var _ = Describe("ExternalIPReconciler", func() {
 
 			updated := &osacv1alpha1.ExternalIP{}
 			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
-			Expect(updated.Status.State).To(Equal(osacv1alpha1.ExternalIPStateAllocated))
-			Expect(updated.Status.Address).To(Equal("203.0.113.10"),
-				"address should be populated immediately in OnSuccess, not deferred to the next reconcile")
+			Expect(updated.Status.State).To(Equal(osacv1alpha1.ExternalIPStateFailed))
+			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.ExternalIPPhaseFailed))
+			Expect(updated.Status.Address).To(BeEmpty(), "a Service ingress is not proof of a successful allocation result")
+		})
+
+		It("retries an older successful job when the ExternalIP has no address", func() {
+			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			stored := &osacv1alpha1.ExternalIP{}
+			Expect(fakeClient.Get(testCtx, key, stored)).To(Succeed())
+			delete(stored.Annotations, osacExternalIPAllocatedAddressAnnotation)
+			desiredVersion, err := provisioning.ComputeDesiredConfigVersion(struct {
+				Spec                   osacv1alpha1.ExternalIPSpec
+				ImplementationStrategy string
+			}{stored.Spec, "metallb-l2"})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fakeClient.Update(testCtx, stored)).To(Succeed())
+
+			stored.Status = osacv1alpha1.ExternalIPStatus{
+				Phase:                osacv1alpha1.ExternalIPPhaseReady,
+				State:                osacv1alpha1.ExternalIPStateAllocated,
+				DesiredConfigVersion: desiredVersion,
+				ProvisioningJobs: []osacv1alpha1.JobStatus{{
+					JobID:         "legacy-success",
+					Type:          osacv1alpha1.JobTypeProvision,
+					State:         osacv1alpha1.JobStateSucceeded,
+					Timestamp:     metav1.Now(),
+					ConfigVersion: desiredVersion,
+				}},
+			}
+			Expect(fakeClient.Status().Update(testCtx, stored)).To(Succeed())
+
+			result, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.ExternalIP{}
+			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
+			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.ExternalIPPhaseFailed))
+			Expect(updated.Status.State).To(Equal(osacv1alpha1.ExternalIPStateFailed))
+			Expect(updated.Status.Address).To(BeEmpty())
+			Expect(updated.Status.ProvisioningJobs[0].State).To(Equal(osacv1alpha1.JobStateFailed))
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
 		})
 
 		It("should set state to Failed on provisioning failure", func() {
@@ -1035,129 +1129,4 @@ var _ = Describe("ExternalIPReconciler", func() {
 		})
 	})
 
-	Context("getExternalIPAddress", func() {
-		It("should return IP from LoadBalancer Service ingress", func() {
-			svc := &corev1.Service{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      externalIPServiceNamePrefix + "test-externalip",
-					Namespace: externalIPDefaultMetalLBNamespace,
-				},
-				Status: corev1.ServiceStatus{
-					LoadBalancer: corev1.LoadBalancerStatus{
-						Ingress: []corev1.LoadBalancerIngress{
-							{IP: "203.0.113.42"},
-						},
-					},
-				},
-			}
-			targetClient := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(svc).Build()
-
-			ip := reconciler.getExternalIPAddress(testCtx, targetClient, "test-externalip")
-			Expect(ip).To(Equal("203.0.113.42"))
-		})
-
-		It("should return empty string when Service not found", func() {
-			targetClient := fake.NewClientBuilder().WithScheme(testScheme).Build()
-
-			ip := reconciler.getExternalIPAddress(testCtx, targetClient, "nonexistent")
-			Expect(ip).To(Equal(""))
-		})
-
-		It("should return empty string when ingress list is empty", func() {
-			svc := &corev1.Service{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      externalIPServiceNamePrefix + "test-externalip",
-					Namespace: externalIPDefaultMetalLBNamespace,
-				},
-				Status: corev1.ServiceStatus{
-					LoadBalancer: corev1.LoadBalancerStatus{
-						Ingress: []corev1.LoadBalancerIngress{},
-					},
-				},
-			}
-			targetClient := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(svc).Build()
-
-			ip := reconciler.getExternalIPAddress(testCtx, targetClient, "test-externalip")
-			Expect(ip).To(Equal(""))
-		})
-
-		It("should return empty string when ingress IP is empty", func() {
-			svc := &corev1.Service{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      externalIPServiceNamePrefix + "test-externalip",
-					Namespace: externalIPDefaultMetalLBNamespace,
-				},
-				Status: corev1.ServiceStatus{
-					LoadBalancer: corev1.LoadBalancerStatus{
-						Ingress: []corev1.LoadBalancerIngress{
-							{IP: ""},
-						},
-					},
-				},
-			}
-			targetClient := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(svc).Build()
-
-			ip := reconciler.getExternalIPAddress(testCtx, targetClient, "test-externalip")
-			Expect(ip).To(Equal(""))
-		})
-
-		It("should not populate address before provisioning succeeds (temporal ordering)", func() {
-			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
-
-			// A LoadBalancer Service with an assigned IP exists on the workload cluster.
-			// The guard condition (state==Allocated && address=="") must prevent
-			// address population until provisioning has completed.
-			svc := &corev1.Service{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      externalIPServiceNamePrefix + "test-externalip",
-					Namespace: externalIPDefaultMetalLBNamespace,
-				},
-				Status: corev1.ServiceStatus{
-					LoadBalancer: corev1.LoadBalancerStatus{
-						Ingress: []corev1.LoadBalancerIngress{
-							{IP: "203.0.113.42"},
-						},
-					},
-				},
-			}
-			targetClient := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(svc).Build()
-			reconciler.mgr = &mockExternalIPMulticlusterManager{targetClient: targetClient}
-
-			// Keep jobs in Running state so OnSuccess does not fire and
-			// override the state we set for each sub-test.
-			mockProvider.getProvisionStatusFunc = func(
-				_ context.Context, _ client.Object, jobID string,
-			) (provisioning.ProvisionStatus, error) {
-				return provisioning.ProvisionStatus{
-					JobID:   jobID,
-					State:   osacv1alpha1.JobStateRunning,
-					Message: "Job running",
-				}, nil
-			}
-
-			// Pending state: address must NOT be populated (pre-provisioning).
-			// Call handleUpdate and verify the in-memory object.
-			pendingIP := publicIP.DeepCopy()
-			pendingIP.Status.Phase = osacv1alpha1.ExternalIPPhaseProgressing
-			pendingIP.Status.State = osacv1alpha1.ExternalIPStatePending
-			pendingIP.Status.Address = ""
-
-			_, err := reconciler.handleUpdate(testCtx, pendingIP)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(pendingIP.Status.Address).To(Equal(""), "address must not be populated in Pending state")
-
-			// Allocated state: address SHOULD be populated (post-provisioning).
-			// Re-read the object from the fake client to get the current
-			// resourceVersion (handleUpdate modifies the object in the store).
-			allocatedIP := &osacv1alpha1.ExternalIP{}
-			Expect(fakeClient.Get(testCtx, key, allocatedIP)).To(Succeed())
-			allocatedIP.Status.Phase = osacv1alpha1.ExternalIPPhaseProgressing
-			allocatedIP.Status.State = osacv1alpha1.ExternalIPStateAllocated
-			allocatedIP.Status.Address = ""
-
-			_, err = reconciler.handleUpdate(testCtx, allocatedIP)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(allocatedIP.Status.Address).To(Equal("203.0.113.42"), "address should be populated in Allocated state")
-		})
-	})
 })

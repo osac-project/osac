@@ -17,11 +17,14 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -292,11 +295,24 @@ var _ = Describe("delete", func() {
 			}, nil)
 
 		t := newTaskForDelete(attachmentID, hubID, hubCache)
+		ctx, cancel := context.WithCancel(ctx)
+		DeferCleanup(cancel)
+		signalCalled := make(chan struct{}, 1)
+		externalIPAttachmentsClient := NewMockExternalIPAttachmentsClient(ctrl)
+		externalIPAttachmentsClient.EXPECT().Signal(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(context.Context, *privatev1.ExternalIPAttachmentsSignalRequest, ...grpc.CallOption) (*privatev1.ExternalIPAttachmentsSignalResponse, error) {
+				signalCalled <- struct{}{}
+				return nil, grpcstatus.Error(grpccodes.NotFound, "resource is gone")
+			},
+		)
+		t.r.externalIPAttachmentsClient = externalIPAttachmentsClient
+		t.r.deleteRetry = controllers.NewReconcileSignalScheduler(logger, time.Millisecond)
 
 		err := t.delete(ctx)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(deleteCalled).To(BeTrue())
 		Expect(hasFinalizer(t.externalIPAttachment)).To(BeTrue())
+		Eventually(signalCalled).Should(Receive())
 	})
 
 	It("should not call hubClient.Delete when K8s object has DeletionTimestamp", func() {

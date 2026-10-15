@@ -4,34 +4,98 @@
     name: osac.service.common
     tasks_from: get_remote_cluster_kubeconfig
 
-- name: Validate ExternalIP fields and annotations
+- name: Validate ExternalIP identity and pool annotation
   ansible.builtin.assert:
     that:
-      - external_ip.metadata is defined
+      - external_ip.metadata.uid is defined
+      - external_ip.metadata.uid | length > 0
+      - external_ip.metadata.generation is defined
       - external_ip.metadata.name is defined
-      - external_ip.metadata.name | length > 0
+      - external_ip.metadata.namespace is defined
       - external_ip.metadata.annotations is defined
       - "'osac.openshift.io/externalippool-name' in external_ip.metadata.annotations"
     fail_msg: >-
-      ExternalIP metadata.name and
-      metadata.annotations['osac.openshift.io/externalippool-name'] are required
+      ExternalIP UID, generation, name, namespace, and pool annotation are
+      required to reserve a MetalLB address.
 
-- name: Extract ExternalIP configuration
+- name: Set UID-owned LoadBalancer Service identity
   ansible.builtin.set_fact:
     ip_name: "{{ external_ip.metadata.name }}"
-    ip_pool_name: >-
-      {{ external_ip.metadata.annotations['osac.openshift.io/externalippool-name'] }}
+    ip_uid: "{{ external_ip.metadata.uid }}"
+    ip_generation: "{{ external_ip.metadata.generation | int }}"
+    ip_service_name: "osac-eip-{{ external_ip.metadata.uid }}"
+    ip_legacy_service_name: "osac-eip-{{ external_ip.metadata.name }}"
+    ip_pool_name: "{{ external_ip.metadata.annotations['osac.openshift.io/externalippool-name'] }}"
+    ip_tenant: >-
+      {{ (external_ip.metadata.annotations | default({})).get(
+           'osac.openshift.io/tenant', 'shared') }}
 
-- name: Display ExternalIP information
-  ansible.builtin.debug:
-    msg:
-      - "Creating LoadBalancer Service for ExternalIP '{{ ip_name }}'"
-      - "Pool name (IPAddressPool): {{ ip_pool_name }}"
+- name: Read the current ExternalIP before creating a MetalLB reservation
+  kubernetes.core.k8s_info:
+    api_version: osac.openshift.io/v1alpha1
+    kind: ExternalIP
+    name: "{{ ip_name }}"
+    namespace: "{{ external_ip.metadata.namespace }}"
+  register: _eip_current_resource
 
-# Empty-selector LB Service reserves an IP from the MetalLB pool without
-# routing traffic. Port 65535 is arbitrary — required by the Service spec
-# but unused. MetalLB writes the assigned IP to status.loadBalancer.ingress.
-- name: Create LoadBalancer Service
+- name: Reject a MetalLB allocation request for a stale ExternalIP UID
+  ansible.builtin.assert:
+    that:
+      - _eip_current_resource.resources | length == 1
+      - _eip_current_resource.resources[0].metadata.uid == ip_uid
+      - _eip_current_resource.resources[0].metadata.generation | int == ip_generation | int
+    fail_msg: >-
+      ExternalIP '{{ ip_name }}' no longer matches UID '{{ ip_uid }}' and
+      generation '{{ ip_generation }}'; refusing to create a MetalLB
+      reservation for a stale resource.
+
+- name: Read any legacy display-name MetalLB Service
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: v1
+    kind: Service
+    name: "{{ ip_legacy_service_name }}"
+    namespace: metallb-system
+  register: lb_legacy_service
+  when: ip_legacy_service_name != ip_service_name
+
+- name: Refuse an ambiguous legacy MetalLB Service
+  ansible.builtin.assert:
+    that:
+      - (lb_legacy_service.resources | default([]) | length) == 0
+    fail_msg: >-
+      Legacy MetalLB Service '{{ ip_legacy_service_name }}' has no ExternalIP
+      UID ownership. Its owner cannot be proven, so allocation is blocked
+      until an administrator safely migrates or removes that Service.
+  when: ip_legacy_service_name != ip_service_name
+
+- name: Read any existing UID-owned parking Service
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: v1
+    kind: Service
+    name: "{{ ip_service_name }}"
+    namespace: metallb-system
+  register: lb_service_before
+
+- name: Refuse to adopt a Service that is not owned by this ExternalIP UID
+  ansible.builtin.assert:
+    that:
+      - >-
+        lb_service_before.resources | length == 0 or
+        (
+          (lb_service_before.resources[0].metadata.labels | default({})).get(
+            'osac.openshift.io/externalip-uid', '') == ip_uid and
+          (lb_service_before.resources[0].metadata.annotations | default({})).get(
+            'osac.openshift.io/tenant', '') == ip_tenant
+        )
+    fail_msg: >-
+      MetalLB Service '{{ ip_service_name }}' exists but does not prove
+      ownership by ExternalIP UID '{{ ip_uid }}' and tenant '{{ ip_tenant }}'.
+
+# An empty-selector LoadBalancer Service reserves an address without routing
+# traffic. Its UID-derived name makes retries durable.
+- name: Create the UID-owned LoadBalancer Service
   kubernetes.core.k8s:
     kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     state: present
@@ -39,12 +103,15 @@
       apiVersion: v1
       kind: Service
       metadata:
-        name: "osac-eip-{{ ip_name }}"
+        name: "{{ ip_service_name }}"
         namespace: metallb-system
         annotations:
           metallb.universe.tf/address-pool: "{{ ip_pool_name }}"
+          osac.openshift.io/tenant: "{{ ip_tenant }}"
+          osac.openshift.io/owner-reference: "ExternalIP/{{ ip_name }}"
         labels:
           osac.openshift.io/externalip: "{{ ip_name }}"
+          osac.openshift.io/externalip-uid: "{{ ip_uid }}"
           osac.openshift.io/managed-by: osac-fulfillment
       spec:
         type: LoadBalancer
@@ -59,30 +126,54 @@
   delay: 10
   until: lb_service_result is successful
 
-- name: Display LoadBalancer Service creation result
-  ansible.builtin.debug:
-    msg:
-      - "LoadBalancer Service 'osac-eip-{{ ip_name }}' created"
-      - "Changed: {{ lb_service_result.changed | default(false) }}"
-
-- name: Wait for IP assignment
+- name: Wait for MetalLB to assign an IPv4 address
   kubernetes.core.k8s_info:
     kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     api_version: v1
     kind: Service
-    name: "osac-eip-{{ ip_name }}"
+    name: "{{ ip_service_name }}"
     namespace: metallb-system
   register: lb_service_info
   retries: 60
   delay: 10
   until: >-
-    lb_service_info.resources | length > 0 and
-    lb_service_info.resources[0].status.loadBalancer.ingress | default([]) | length > 0
+    lb_service_info.resources | length == 1 and
+    (lb_service_info.resources[0].metadata.labels | default({})).get(
+      'osac.openshift.io/externalip-uid', '') == ip_uid and
+    lb_service_info.resources[0].status.loadBalancer.ingress | default([]) | length > 0 and
+    lb_service_info.resources[0].status.loadBalancer.ingress[0].ip | default('')
+      is ansible.utils.ipv4
 
-- name: Extract assigned IP
+- name: Extract the assigned address
   ansible.builtin.set_fact:
     assigned_ip: "{{ lb_service_info.resources[0].status.loadBalancer.ingress[0].ip }}"
 
-- name: Display assigned IP
+- name: Write the allocated address with UID and generation preconditions
+  kubernetes.core.k8s_json_patch:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: osac.openshift.io/v1alpha1
+    kind: ExternalIP
+    name: "{{ ip_name }}"
+    namespace: "{{ external_ip.metadata.namespace }}"
+    # Render the complete typed patch so generation remains a JSON number
+    # under both native and non-native Jinja configurations.
+    patch: >-
+      {{
+        [
+          {'op': 'test', 'path': '/metadata/uid', 'value': ip_uid},
+          {
+            'op': 'test',
+            'path': '/metadata/generation',
+            'value': ip_generation
+          },
+          {
+            'op': 'add',
+            'path': '/metadata/annotations/osac.openshift.io~1allocated-address',
+            'value': assigned_ip
+          }
+        ]
+      }}
+
+- name: Display assigned MetalLB address
   ansible.builtin.debug:
-    msg: "ExternalIP '{{ ip_name }}' assigned address: {{ assigned_ip }}"
+    msg: "ExternalIP UID '{{ ip_uid }}' reserved {{ assigned_ip }} from pool '{{ ip_pool_name }}'"

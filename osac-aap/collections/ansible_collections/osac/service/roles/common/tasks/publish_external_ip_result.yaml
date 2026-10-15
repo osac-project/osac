@@ -1,0 +1,17 @@
+---
+- name: Publish the successful ExternalIP result
+  ansible.builtin.set_stats:
+    data: >-
+      {{
+        {
+          'osac_result': {
+            'schemaVersion': 'v1',
+            'operation': external_ip_result_operation,
+            'resourceUID': external_ip.metadata.uid,
+            'generation': external_ip.metadata.generation | int,
+            'data': {}
+          }
+        }
+      }}
+    per_host: false
+    aggregate: true

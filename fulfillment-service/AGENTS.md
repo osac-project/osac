@@ -90,6 +90,14 @@ make -C ../osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
 make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
 ```
 
+#### ExternalIP capacity touched-area map
+
+| Area | Required coverage | Location |
+|---|---|---|
+| ExternalIP pool capacity release, finalizer retries, underflow protection, and auto-created ComputeInstance cascade rollback | Unit | `internal/servers/private_external_ips_server_test.go`, `internal/servers/private_compute_instances_server_test.go`, `internal/controllers/externalip/external_ip_reconciler_function_test.go`, and `internal/controllers/externalipattachment/external_ip_attachment_reconciler_function_test.go` |
+
+Run `ginkgo run --timeout 10m internal/servers` and `go test ./internal/controllers ./internal/controllers/externalip ./internal/controllers/externalipattachment` from `fulfillment-service/`. The server suite uses its PostgreSQL test container; controller tests use mocked Kubernetes and gRPC clients. Neither exercises deployed operator, AAP, or network-provider behavior. See the [ExternalIP capacity coverage boundary](../docs/INTEGRATION-TESTING.md#fulfillment-service).
+
 If a fresh environment is needed, confirm that `osac-dev` is a disposable test cluster before deleting it with `kind delete cluster --name osac-dev`.
 
 If setup fails with `failed to lookup host '...'`, read [README.md — Running integration tests](README.md#running-integration-tests) for host entries.

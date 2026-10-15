@@ -31,6 +31,7 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -4114,6 +4115,45 @@ var _ = Describe("Private compute instances server", func() {
 			Expect(poolResp.GetObject().GetStatus().GetAvailable()).To(Equal(int64(5)))
 			Expect(poolResp.GetObject().GetStatus().GetAllocated()).To(Equal(int64(0)))
 
+		})
+
+		It("rolls back ComputeInstance cascade cleanup when capacity release would underflow", func() {
+			createPool("pool-1", 5)
+			response, err := server.Create(ctx, createRequest(true))
+			Expect(err).ToNot(HaveOccurred())
+			ciID := response.GetObject().GetId()
+
+			eiaList, err := externalIPAttachmentDao.List().
+				SetFilter(fmt.Sprintf("this.metadata.labels['%s'] == '%s'", autoCreatedForLabel, ciID)).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(eiaList.GetItems()).To(HaveLen(1))
+			eipID := eiaList.GetItems()[0].GetSpec().GetExternalIp().GetId()
+
+			poolResponse, err := externalIPPoolDao.Get().SetId("pool-1").Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			pool := poolResponse.GetObject()
+			pool.GetStatus().SetAllocated(0)
+			pool.GetStatus().SetAvailable(5)
+			_, err = externalIPPoolDao.Update().SetObject(pool).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			tx, err := database.TxFromContext(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			err = tx.Savepoint(ctx, func(savepointCtx context.Context) error {
+				_, deleteErr := server.Delete(savepointCtx,
+					privatev1.ComputeInstancesDeleteRequest_builder{Id: ciID}.Build())
+				return deleteErr
+			})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("allocated capacity would become negative"))
+
+			_, err = server.generic.dao.Get().SetId(ciID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = externalIPAttachmentDao.Get().SetId(eiaList.GetItems()[0].GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = externalIPDao.Get().SetId(eipID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
 		})
 
 		It("Rejects update to auto_external_ip_attachment", func() {

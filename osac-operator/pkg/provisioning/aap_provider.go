@@ -136,6 +136,16 @@ func (p *AAPProvider) CancelJob(ctx context.Context, jobID string) error {
 
 // GetProvisionStatusWithExtraVars checks provisioning job status and returns its output variables.
 func (p *AAPProvider) GetProvisionStatusWithExtraVars(ctx context.Context, resource client.Object, jobID string) (ProvisionStatusWithExtraVars, error) {
+	return p.getJobStatusWithExtraVars(ctx, jobID)
+}
+
+// GetDeprovisionStatusWithExtraVars checks deprovisioning status and returns
+// output variables published by the AAP job.
+func (p *AAPProvider) GetDeprovisionStatusWithExtraVars(ctx context.Context, resource client.Object, jobID string) (ProvisionStatusWithExtraVars, error) {
+	return p.getJobStatusWithExtraVars(ctx, jobID)
+}
+
+func (p *AAPProvider) getJobStatusWithExtraVars(ctx context.Context, jobID string) (ProvisionStatusWithExtraVars, error) {
 	job, err := p.client.GetJob(ctx, jobID)
 	if err != nil {
 		return ProvisionStatusWithExtraVars{}, fmt.Errorf("failed to get job: %w", err)

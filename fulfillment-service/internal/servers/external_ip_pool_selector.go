@@ -94,6 +94,9 @@ func UpdatePoolCapacity(
 	pool := getResponse.GetObject()
 	newAllocated := pool.GetStatus().GetAllocated() + delta
 	newAvailable := pool.GetStatus().GetAvailable() - delta
+	if newAllocated < 0 {
+		return fmt.Errorf("ExternalIP pool '%s' allocated capacity would become negative", poolID)
+	}
 	if newAvailable < 0 {
 		return fmt.Errorf("ExternalIP pool '%s' has no available capacity", poolID)
 	}

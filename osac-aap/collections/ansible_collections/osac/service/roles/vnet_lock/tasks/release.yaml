@@ -20,26 +20,34 @@
         - (_vnet_lock_release_read.resources[0].spec.holderIdentity | default('', true)) == vnet_lock_holder
       block:
         - name: CAS update to release
-          kubernetes.core.k8s:
-            state: present
-            definition:
-              apiVersion: coordination.k8s.io/v1
-              kind: Lease
-              metadata:
-                name: "{{ vnet_lock_name }}"
-                namespace: "{{ vnet_lock_namespace }}"
-                resourceVersion: "{{ _vnet_lock_release_read.resources[0].metadata.resourceVersion }}"
-              spec:
-                holderIdentity: null
-                leaseDurationSeconds: "{{ _vnet_lock_release_read.resources[0].spec.leaseDurationSeconds | default(120) | int }}"
-                acquireTime: null
-                renewTime: null
+          kubernetes.core.k8s_json_patch:
+            api_version: coordination.k8s.io/v1
+            kind: Lease
+            name: "{{ vnet_lock_name }}"
+            namespace: "{{ vnet_lock_namespace }}"
+            # Keep resourceVersion as a string with Ansible's native Jinja config.
+            patch: >-
+              {{
+                [
+                  {
+                    'op': 'test',
+                    'path': '/metadata/resourceVersion',
+                    'value': _vnet_lock_release_read.resources[0].metadata.resourceVersion
+                  },
+                  {'op': 'replace', 'path': '/spec/holderIdentity', 'value': ''},
+                  {'op': 'remove', 'path': '/spec/acquireTime'},
+                  {'op': 'remove', 'path': '/spec/renewTime'}
+                ]
+              }}
           register: _vnet_lock_release_result
           ignore_errors: true
 
         - name: Display release result
           ansible.builtin.debug:
-            msg: "{{ (_vnet_lock_release_result is succeeded) | ternary('Released', 'Release conflict (will expire naturally)') }} V-Net lock '{{ vnet_lock_name }}'"
+            msg: >-
+              {{ (_vnet_lock_release_result is succeeded)
+                 | ternary('Released', 'Release conflict (will expire naturally)') }}
+              V-Net lock '{{ vnet_lock_name }}'
 
     - name: Warn if held by someone else
       ansible.builtin.debug:

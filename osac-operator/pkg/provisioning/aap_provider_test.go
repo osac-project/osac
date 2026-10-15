@@ -813,6 +813,22 @@ var _ = Describe("AAPProvider", func() {
 			Expect(status.JobID).To(Equal("888"))
 			Expect(status.State).To(Equal(v1alpha1.JobStateSucceeded))
 		})
+
+		It("returns successful deprovision job artifacts", func() {
+			aapClient.getJobFunc = func(_ context.Context, jobID string) (*aap.Job, error) {
+				return &aap.Job{
+					ID:        888,
+					Status:    "successful",
+					Artifacts: []byte(`{"osac_result":{"schemaVersion":"v1","operation":"external_ip.release","resourceUID":"eip-uid","generation":4,"data":{}}}`),
+				}, nil
+			}
+
+			status, err := provider.GetDeprovisionStatusWithExtraVars(ctx, &v1alpha1.ExternalIP{}, "888")
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(status.State).To(Equal(v1alpha1.JobStateSucceeded))
+			Expect(status.ExtraVars).To(HaveKey("osac_result"))
+		})
 	})
 
 	Describe("Name", func() {

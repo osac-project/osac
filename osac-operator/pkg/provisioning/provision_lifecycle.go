@@ -170,6 +170,9 @@ type PollCallbacks struct {
 	// before OnSuccess. Errors without a confirmed successful status are retried; output
 	// errors accompanying a successful status are reported through OnOutputError.
 	OnSuccessWithExtraVars func(status ProvisionStatusWithExtraVars) error
+	// RetryOnOutputError marks a successful provider job failed when its required
+	// outputs cannot be read or accepted, so EvaluateAction can launch a retry.
+	RetryOnOutputError bool
 }
 
 // PollJob checks the status of an existing provision job and updates the jobs slice in place.
@@ -200,6 +203,15 @@ func PollJob(ctx context.Context, provider ProvisioningProvider, resource client
 
 			outputErr := fmt.Errorf("failed to retrieve provision outputs: %w", err)
 			log.Error(err, "failed to retrieve provision outputs", "jobID", latestJob.JobID)
+			if callbacks.RetryOnOutputError {
+				updatedJob.State = v1alpha1.JobStateFailed
+				updatedJob.Message = outputErr.Error()
+				UpdateJob(*provState.Jobs, updatedJob)
+				if callbacks.OnOutputError != nil {
+					callbacks.OnOutputError(outputErr.Error())
+				}
+				return ctrl.Result{RequeueAfter: pollInterval}, nil
+			}
 			if callbacks.OnOutputError != nil {
 				callbacks.OnOutputError(outputErr.Error())
 				return ctrl.Result{}, nil
@@ -237,6 +249,16 @@ func PollJob(ctx context.Context, provider ProvisioningProvider, resource client
 			if err := callbacks.OnSuccessWithExtraVars(statusWithExtraVars); err != nil {
 				outputErr := fmt.Errorf("failed to process provision outputs: %w", err)
 				log.Error(err, "failed to process provision outputs", "jobID", latestJob.JobID)
+				if callbacks.RetryOnOutputError {
+					updatedJob := *latestJob
+					updatedJob.State = v1alpha1.JobStateFailed
+					updatedJob.Message = outputErr.Error()
+					UpdateJob(*provState.Jobs, updatedJob)
+					if callbacks.OnOutputError != nil {
+						callbacks.OnOutputError(outputErr.Error())
+					}
+					return ctrl.Result{RequeueAfter: pollInterval}, nil
+				}
 				if callbacks.OnOutputError != nil {
 					callbacks.OnOutputError(outputErr.Error())
 					return ctrl.Result{}, nil
@@ -870,14 +892,28 @@ func updateProvisionJobFromDeprovisionResultForTarget(jobs *[]v1alpha1.JobStatus
 // controller can proceed with finalizer removal.
 func RunDeprovisioningLifecycle(ctx context.Context, provider ProvisioningProvider, resource client.Object,
 	jobs *[]v1alpha1.JobStatus, maxHistory int, pollInterval time.Duration) (ctrl.Result, bool, error) {
-	return runDeprovisioningLifecycleForTarget(ctx, provider, resource, jobs, "", maxHistory, pollInterval)
+	return RunDeprovisioningLifecycleWithCallbacks(ctx, provider, resource, jobs, maxHistory, pollInterval, nil)
+}
+
+// DeprovisionCallbacks allows a resource controller to require and validate
+// manager outputs before the lifecycle reports deletion complete.
+type DeprovisionCallbacks struct {
+	OnOutputError          func(message string)
+	OnSuccessWithExtraVars func(status ProvisionStatusWithExtraVars) error
+}
+
+// RunDeprovisioningLifecycleWithCallbacks runs the deprovision lifecycle and
+// gates completion on an optional output callback.
+func RunDeprovisioningLifecycleWithCallbacks(ctx context.Context, provider ProvisioningProvider, resource client.Object,
+	jobs *[]v1alpha1.JobStatus, maxHistory int, pollInterval time.Duration, callbacks *DeprovisionCallbacks) (ctrl.Result, bool, error) {
+	return runDeprovisioningLifecycleForTarget(ctx, provider, resource, jobs, "", maxHistory, pollInterval, callbacks)
 }
 
 // runDeprovisioningLifecycleForTarget is RunDeprovisioningLifecycle scoped to
 // a single job target, driven from only that target's own deprovision job
 // history.
 func runDeprovisioningLifecycleForTarget(ctx context.Context, provider ProvisioningProvider, resource client.Object,
-	jobs *[]v1alpha1.JobStatus, target string, maxHistory int, pollInterval time.Duration) (ctrl.Result, bool, error) {
+	jobs *[]v1alpha1.JobStatus, target string, maxHistory int, pollInterval time.Duration, callbacks *DeprovisionCallbacks) (ctrl.Result, bool, error) {
 	latestDeprovisionJob := FindLatestJobByTypeAndTarget(*jobs, v1alpha1.JobTypeDeprovision, target)
 
 	if !HasJobID(latestDeprovisionJob) {
@@ -885,7 +921,7 @@ func runDeprovisioningLifecycleForTarget(ctx context.Context, provider Provision
 		return result, false, err
 	}
 
-	return pollDeprovisionJobForTarget(ctx, provider, resource, jobs, target, latestDeprovisionJob, maxHistory, pollInterval)
+	return pollDeprovisionJobForTarget(ctx, provider, resource, jobs, target, latestDeprovisionJob, maxHistory, pollInterval, callbacks)
 }
 
 // PollDeprovisionJob polls the status of an existing deprovision job.
@@ -895,24 +931,51 @@ func runDeprovisioningLifecycleForTarget(ctx context.Context, provider Provision
 // after exponential backoff rather than blocking forever.
 func PollDeprovisionJob(ctx context.Context, provider ProvisioningProvider, resource client.Object,
 	jobs *[]v1alpha1.JobStatus, latestDeprovisionJob *v1alpha1.JobStatus, maxHistory int, pollInterval time.Duration) (ctrl.Result, bool, error) {
-	return pollDeprovisionJobForTarget(ctx, provider, resource, jobs, "", latestDeprovisionJob, maxHistory, pollInterval)
+	return pollDeprovisionJobForTarget(ctx, provider, resource, jobs, "", latestDeprovisionJob, maxHistory, pollInterval, nil)
 }
 
 // pollDeprovisionJobForTarget is PollDeprovisionJob scoped to a single job target.
 func pollDeprovisionJobForTarget(ctx context.Context, provider ProvisioningProvider, resource client.Object,
-	jobs *[]v1alpha1.JobStatus, target string, latestDeprovisionJob *v1alpha1.JobStatus, maxHistory int, pollInterval time.Duration) (ctrl.Result, bool, error) {
+	jobs *[]v1alpha1.JobStatus, target string, latestDeprovisionJob *v1alpha1.JobStatus, maxHistory int, pollInterval time.Duration, callbacks *DeprovisionCallbacks) (ctrl.Result, bool, error) {
 	log := ctrllog.FromContext(ctx)
 
 	if latestDeprovisionJob.State.IsTerminal() {
 		if !latestDeprovisionJob.State.IsSuccessful() && latestDeprovisionJob.BlockDeletionOnFailure {
 			return handleDeprovisionBackoffForTarget(ctx, provider, resource, jobs, target, latestDeprovisionJob, maxHistory, pollInterval)
 		}
+		if latestDeprovisionJob.State.IsSuccessful() && callbacks != nil && callbacks.OnSuccessWithExtraVars != nil {
+			statusWithExtraVars, err := getDeprovisionStatusWithOutputs(ctx, provider, resource, latestDeprovisionJob.JobID)
+			if err != nil {
+				if statusWithExtraVars.State.IsSuccessful() {
+					return failDeprovisionOutput(ctx, jobs, target, latestDeprovisionJob, maxHistory, pollInterval, callbacks,
+						fmt.Errorf("failed to retrieve deprovision outputs: %w", err), provider, resource)
+				}
+				return ctrl.Result{RequeueAfter: pollInterval}, false, nil
+			}
+			if err := callbacks.OnSuccessWithExtraVars(statusWithExtraVars); err != nil {
+				return failDeprovisionOutput(ctx, jobs, target, latestDeprovisionJob, maxHistory, pollInterval, callbacks,
+					fmt.Errorf("failed to process deprovision outputs: %w", err), provider, resource)
+			}
+		}
 		return ctrl.Result{}, true, nil
 	}
 
 	log.Info("polling deprovision job status", "jobID", latestDeprovisionJob.JobID, "target", target, "currentState", latestDeprovisionJob.State)
-	status, err := provider.GetDeprovisionStatus(ctx, resource, latestDeprovisionJob.JobID)
+	var statusWithExtraVars ProvisionStatusWithExtraVars
+	var status ProvisionStatus
+	var err error
+	if callbacks != nil && callbacks.OnSuccessWithExtraVars != nil {
+		statusWithExtraVars, err = getDeprovisionStatusWithOutputs(ctx, provider, resource, latestDeprovisionJob.JobID)
+		status = statusWithExtraVars.ProvisionStatus
+	} else {
+		status, err = provider.GetDeprovisionStatus(ctx, resource, latestDeprovisionJob.JobID)
+		statusWithExtraVars.ProvisionStatus = status
+	}
 	if err != nil {
+		if callbacks != nil && callbacks.OnSuccessWithExtraVars != nil && status.State.IsSuccessful() {
+			return failDeprovisionOutput(ctx, jobs, target, latestDeprovisionJob, maxHistory, pollInterval, callbacks,
+				fmt.Errorf("failed to retrieve deprovision outputs: %w", err), provider, resource)
+		}
 		log.Error(err, "failed to get deprovision status", "jobID", latestDeprovisionJob.JobID, "target", target)
 		updatedJob := *latestDeprovisionJob
 		updatedJob.Message = fmt.Sprintf("Failed to get deprovision status: %v", err)
@@ -920,10 +983,10 @@ func pollDeprovisionJobForTarget(ctx context.Context, provider ProvisioningProvi
 		return ctrl.Result{RequeueAfter: pollInterval}, false, nil
 	}
 
+	updatedJob := *latestDeprovisionJob
 	if status.State != latestDeprovisionJob.State || status.Message != latestDeprovisionJob.Message {
 		log.Info("deprovision job status changed", "jobID", latestDeprovisionJob.JobID, "target", target,
 			"oldState", latestDeprovisionJob.State, "newState", status.State)
-		updatedJob := *latestDeprovisionJob
 		updatedJob.State = status.State
 		updatedJob.Message = status.MessageWithDetails()
 		UpdateJob(*jobs, updatedJob)
@@ -933,11 +996,42 @@ func pollDeprovisionJobForTarget(ctx context.Context, provider ProvisioningProvi
 		return ctrl.Result{RequeueAfter: pollInterval}, false, nil
 	}
 
-	if !status.State.IsSuccessful() && latestDeprovisionJob.BlockDeletionOnFailure {
-		return handleDeprovisionBackoffForTarget(ctx, provider, resource, jobs, target, latestDeprovisionJob, maxHistory, pollInterval)
+	if !status.State.IsSuccessful() && updatedJob.BlockDeletionOnFailure {
+		return handleDeprovisionBackoffForTarget(ctx, provider, resource, jobs, target, &updatedJob, maxHistory, pollInterval)
+	}
+
+	if status.State.IsSuccessful() && callbacks != nil && callbacks.OnSuccessWithExtraVars != nil {
+		if err := callbacks.OnSuccessWithExtraVars(statusWithExtraVars); err != nil {
+			return failDeprovisionOutput(ctx, jobs, target, &updatedJob, maxHistory, pollInterval, callbacks,
+				fmt.Errorf("failed to process deprovision outputs: %w", err), provider, resource)
+		}
 	}
 
 	return ctrl.Result{}, true, nil
+}
+
+func getDeprovisionStatusWithOutputs(ctx context.Context, provider ProvisioningProvider, resource client.Object, jobID string) (ProvisionStatusWithExtraVars, error) {
+	if outputProvider, ok := provider.(ProvisioningProviderWithDeprovisionOutputs); ok {
+		return outputProvider.GetDeprovisionStatusWithExtraVars(ctx, resource, jobID)
+	}
+	status, err := provider.GetDeprovisionStatus(ctx, resource, jobID)
+	return ProvisionStatusWithExtraVars{ProvisionStatus: status}, err
+}
+
+func failDeprovisionOutput(ctx context.Context, jobs *[]v1alpha1.JobStatus, target string, latestJob *v1alpha1.JobStatus,
+	maxHistory int, pollInterval time.Duration, callbacks *DeprovisionCallbacks, outputErr error,
+	provider ProvisioningProvider, resource client.Object) (ctrl.Result, bool, error) {
+	log := ctrllog.FromContext(ctx)
+	log.Error(outputErr, "deprovision output was rejected", "jobID", latestJob.JobID, "target", target)
+	failedJob := *latestJob
+	failedJob.State = v1alpha1.JobStateFailed
+	failedJob.Message = outputErr.Error()
+	failedJob.BlockDeletionOnFailure = true
+	UpdateJob(*jobs, failedJob)
+	if callbacks != nil && callbacks.OnOutputError != nil {
+		callbacks.OnOutputError(outputErr.Error())
+	}
+	return handleDeprovisionBackoffForTarget(ctx, provider, resource, jobs, target, &failedJob, maxHistory, pollInterval)
 }
 
 func handleDeprovisionBackoffForTarget(ctx context.Context, provider ProvisioningProvider, resource client.Object,
@@ -1015,7 +1109,7 @@ func RunMultiTargetDeprovisioningLifecycle(
 	)
 
 	for _, t := range targets {
-		res, done, err := runDeprovisioningLifecycleForTarget(ctx, t.Provider, resource, jobs, t.Name, maxHistory, pollInterval)
+		res, done, err := runDeprovisioningLifecycleForTarget(ctx, t.Provider, resource, jobs, t.Name, maxHistory, pollInterval, nil)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("target %q: %w", t.Name, err))
 		}

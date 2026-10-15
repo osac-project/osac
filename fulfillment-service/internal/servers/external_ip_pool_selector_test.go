@@ -143,4 +143,18 @@ var _ = Describe("ExternalIP pool selector", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("IP_FAMILY_IPV4"))
 	})
+
+	It("rejects a capacity release that would underflow allocated count", func() {
+		pool := createPool("underflow-pool", privatev1.IPFamily_IP_FAMILY_IPV4,
+			privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY, 10)
+
+		err := UpdatePoolCapacity(ctx, poolDao, pool.GetId(), -1)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("allocated capacity would become negative"))
+
+		persisted, err := poolDao.Get().SetId(pool.GetId()).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(persisted.GetObject().GetStatus().GetAllocated()).To(Equal(int64(0)))
+		Expect(persisted.GetObject().GetStatus().GetAvailable()).To(Equal(int64(10)))
+	})
 })

@@ -662,6 +662,12 @@ func (s *PrivateComputeInstancesServer) validateAndResolveUserDataSecret(
 
 func (s *PrivateComputeInstancesServer) Delete(ctx context.Context,
 	request *privatev1.ComputeInstancesDeleteRequest) (response *privatev1.ComputeInstancesDeleteResponse, err error) {
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return
+	}
+	defer tx.ReportError(&err)
+
 	id := request.GetId()
 	if id != "" {
 		getResponse, getErr := s.generic.dao.Get().SetId(id).Do(ctx)

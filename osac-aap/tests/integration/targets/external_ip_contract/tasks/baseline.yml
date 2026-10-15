@@ -1,0 +1,651 @@
+---
+- name: Verify Netris ExternalIP allocation and release use UID-owned reservations
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    netris_port: 18446
+    netris_url: "http://127.0.0.1:{{ netris_port }}"
+    pool_name: "external-ip-contract-pool"
+    pool_fulfillment_id: "11111111-1111-4111-8111-111111111111"
+    pool_cidr: "198.51.100.0/29"
+  tasks:
+    - name: Run the Netris ExternalIP contract scenarios
+      block:
+        - name: Stop a stale Netris fixture
+          ansible.builtin.shell: "pkill -f '[m]ock_netris.py {{ netris_port }}' 2>/dev/null || true"
+          changed_when: false
+
+        - name: Verify the test Kind kubeconfig is selected
+          ansible.builtin.assert:
+            that:
+              - lookup('env', 'KUBECONFIG') is search('kubeconfig-osac-test')
+              - lookup('env', 'K8S_AUTH_KUBECONFIG') is search('kubeconfig-osac-test')
+
+        - name: Start the Netris IPAM fixture
+          ansible.builtin.command:
+            argv:
+              - python3
+              - "{{ playbook_dir }}/../files/mock_netris.py"
+              - "{{ netris_port }}"
+          changed_when: false
+          async: 600
+          poll: 0
+
+        - name: Wait for the Netris fixture
+          ansible.builtin.wait_for:
+            host: 127.0.0.1
+            port: "{{ netris_port }}"
+            timeout: 30
+
+        - name: Create a unique fixture namespace
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: osac-eip-contract-
+          register: eip_contract_tempdir
+
+        - name: Set namespace and temporary file paths
+          ansible.builtin.set_fact:
+            eip_contract_namespace: >-
+              {{ ('osac-eip-' ~ (eip_contract_tempdir.path | basename))[:63]
+                 | regex_replace('[^a-z0-9-]', '-') | regex_replace('-+$', '') }}
+            eip_contract_vars_file: "{{ eip_contract_tempdir.path }}/extra-vars.json"
+
+        - name: Create the fixture namespace
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "{{ eip_contract_namespace }}"
+            state: present
+
+        - name: Ensure the MetalLB Service namespace exists for the fixture
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: metallb-system
+            state: present
+
+        - name: Start the deterministic MetalLB assignment fixture
+          ansible.builtin.command:
+            argv:
+              - uv
+              - run
+              - python
+              - "{{ playbook_dir }}/../files/fake_metallb.py"
+          environment:
+            KUBECONFIG: "{{ lookup('env', 'KUBECONFIG') }}"
+            OSAC_EIP_STATUS_MUTATION_NAMESPACE: "{{ eip_contract_namespace }}"
+            OSAC_EIP_STATUS_MUTATION_NAME: external-ip-contract-metallb
+          changed_when: false
+          async: 600
+          poll: 0
+
+        - name: Create the ExternalIPPool CR
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: ExternalIPPool
+              metadata:
+                name: "{{ pool_name }}"
+                namespace: "{{ eip_contract_namespace }}"
+                labels:
+                  osac.openshift.io/externalippool-uuid: "{{ pool_fulfillment_id }}"
+              spec:
+                ipFamily: IPv4
+                cidrs:
+                  - "{{ pool_cidr }}"
+
+        - name: Create the first ExternalIP CR
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: ExternalIP
+              metadata:
+                name: external-ip-contract-one
+                namespace: "{{ eip_contract_namespace }}"
+                annotations:
+                  osac.openshift.io/externalippool-name: "{{ pool_name }}"
+                  osac.openshift.io/implementation-strategy: netris
+              spec:
+                pool: "{{ pool_fulfillment_id }}"
+
+        - name: Create the second ExternalIP CR
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: ExternalIP
+              metadata:
+                name: external-ip-contract-two
+                namespace: "{{ eip_contract_namespace }}"
+                annotations:
+                  osac.openshift.io/externalippool-name: "{{ pool_name }}"
+                  osac.openshift.io/implementation-strategy: netris
+              spec:
+                pool: "{{ pool_fulfillment_id }}"
+
+        - name: Create an ExternalIP with an ambiguous legacy Netris reservation
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: ExternalIP
+              metadata:
+                name: external-ip-contract-legacy-netris
+                namespace: "{{ eip_contract_namespace }}"
+                annotations:
+                  osac.openshift.io/externalippool-name: "{{ pool_name }}"
+                  osac.openshift.io/implementation-strategy: netris
+              spec:
+                pool: "{{ pool_fulfillment_id }}"
+
+        - name: Create an ExternalIP with an ambiguous legacy MetalLB Service
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: ExternalIP
+              metadata:
+                name: external-ip-contract-legacy-metallb
+                namespace: "{{ eip_contract_namespace }}"
+                annotations:
+                  osac.openshift.io/externalippool-name: "{{ pool_name }}"
+                  osac.openshift.io/implementation-strategy: k8s_only
+              spec:
+                pool: "{{ pool_fulfillment_id }}"
+
+        - name: Create a Service using the legacy name-based MetalLB identity
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: osac-eip-external-ip-contract-legacy-metallb
+                namespace: metallb-system
+                labels:
+                  osac.openshift.io/externalip: external-ip-contract-legacy-metallb
+                  osac.openshift.io/managed-by: osac-fulfillment
+              spec:
+                type: LoadBalancer
+                selector: {}
+                ports:
+                  - name: placeholder
+                    protocol: TCP
+                    port: 65535
+                    targetPort: 65535
+
+        - name: Read the pool and ExternalIP identities from Kubernetes
+          kubernetes.core.k8s_info:
+            api_version: osac.openshift.io/v1alpha1
+            kind: "{{ item.kind }}"
+            namespace: "{{ eip_contract_namespace }}"
+            name: "{{ item.name }}"
+          loop:
+            - {kind: ExternalIPPool, name: "{{ pool_name }}"}
+            - {kind: ExternalIP, name: external-ip-contract-one}
+            - {kind: ExternalIP, name: external-ip-contract-two}
+            - {kind: ExternalIP, name: external-ip-contract-legacy-netris}
+            - {kind: ExternalIP, name: external-ip-contract-legacy-metallb}
+          register: eip_contract_cr_reads
+
+        - name: Save the persisted objects
+          ansible.builtin.set_fact:
+            eip_contract_first: "{{ eip_contract_cr_reads.results[1].resources[0] }}"
+            eip_contract_second: "{{ eip_contract_cr_reads.results[2].resources[0] }}"
+            eip_contract_legacy_netris: "{{ eip_contract_cr_reads.results[3].resources[0] }}"
+            eip_contract_legacy_metallb: "{{ eip_contract_cr_reads.results[4].resources[0] }}"
+            eip_contract_first_before: "{{ eip_contract_cr_reads.results[1].resources[0] }}"
+
+        - name: Configure a concurrent claim on the first Netris candidate
+          ansible.builtin.uri:
+            url: "{{ netris_url }}/_config"
+            method: POST
+            body_format: json
+            body:
+              conflict_once: true
+              status_update_once:
+                name: external-ip-contract-one
+                namespace: "{{ eip_contract_namespace }}"
+                status:
+                  phase: Progressing
+              allocations:
+                - name: "{{ pool_name }}"
+                  prefix: "{{ pool_cidr }}"
+              subnets:
+                - id: 800
+                  name: external-ip-contract-legacy-netris
+                  prefix: 198.51.100.6/32
+            status_code: 200
+
+        - name: Refuse ambiguous legacy Netris reservations on allocation and release
+          block:
+            - name: Refuse allocation from an ambiguous name-keyed reservation
+              ansible.builtin.include_tasks: run_external_ip_playbook.yaml
+              vars:
+                eip_contract_operation: create
+                eip_contract_resource: "{{ eip_contract_legacy_netris }}"
+                eip_contract_netris_url: "{{ netris_url }}"
+                eip_contract_should_succeed: false
+                eip_contract_expected_failure: 'allocation is blocked'
+
+            - name: Refuse release while the legacy reservation remains
+              ansible.builtin.include_tasks: run_external_ip_playbook.yaml
+              vars:
+                eip_contract_operation: delete
+                eip_contract_resource: "{{ eip_contract_legacy_netris }}"
+                eip_contract_netris_url: "{{ netris_url }}"
+                eip_contract_should_succeed: false
+                eip_contract_expected_failure: 'release is blocked'
+
+            - name: Read Netris state after rejecting the legacy reservation
+              ansible.builtin.uri:
+                url: "{{ netris_url }}/_state"
+                method: GET
+                status_code: 200
+              register: eip_contract_legacy_netris_state
+
+            - name: Verify the ambiguous reservation remains untouched
+              ansible.builtin.assert:
+                that:
+                  - >-
+                    eip_contract_legacy_netris_state.json.subnets
+                    | selectattr('name', 'equalto', eip_contract_legacy_netris.metadata.name)
+                    | list | length == 1
+                  - >-
+                    eip_contract_legacy_netris_state.json.subnets
+                    | selectattr('name', 'equalto', 'osac-eip-' ~ eip_contract_legacy_netris.metadata.uid)
+                    | list | length == 0
+
+        - name: Create the first UID-owned reservation and retry after a claim conflict
+          ansible.builtin.include_tasks: run_external_ip_playbook.yaml
+          vars:
+            eip_contract_operation: create
+            eip_contract_resource: "{{ eip_contract_first }}"
+            eip_contract_netris_url: "{{ netris_url }}"
+            eip_contract_should_succeed: true
+
+        - name: Read the first ExternalIP after provisioning
+          kubernetes.core.k8s_info:
+            api_version: osac.openshift.io/v1alpha1
+            kind: ExternalIP
+            namespace: "{{ eip_contract_namespace }}"
+            name: external-ip-contract-one
+          register: eip_contract_first_after_create
+
+        - name: Read Netris reservations after the first claim
+          ansible.builtin.uri:
+            url: "{{ netris_url }}/_state"
+            method: GET
+            status_code: 200
+          register: eip_contract_first_netris_state
+
+        - name: Verify conflict retry, UID ownership, and annotation-only mutation
+          vars:
+            _eip_first_annotations_without_allocation: >-
+              {{ eip_contract_first_after_create.resources[0].metadata.annotations
+                 | dict2items
+                 | rejectattr('key', 'equalto', 'osac.openshift.io/allocated-address')
+                 | items2dict }}
+          ansible.builtin.assert:
+            that:
+              - >-
+                eip_contract_first_after_create.resources[0].metadata.annotations[
+                  'osac.openshift.io/allocated-address'] == '198.51.100.2'
+              - _eip_first_annotations_without_allocation == eip_contract_first_before.metadata.annotations
+              - eip_contract_first_after_create.resources[0].spec == eip_contract_first_before.spec
+              - eip_contract_first_after_create.resources[0].status.phase == 'Progressing'
+              - >-
+                eip_contract_first_after_create.resources[0].metadata.resourceVersion !=
+                eip_contract_first_before.metadata.resourceVersion
+              - >-
+                eip_contract_first_after_create.resources[0].metadata.generation ==
+                eip_contract_first_before.metadata.generation
+              - >-
+                eip_contract_first_netris_state.json.subnets
+                | selectattr('name', 'equalto', 'osac-eip-' ~ eip_contract_first.metadata.uid)
+                | list | length == 1
+
+        - name: Retry the same ExternalIP allocation
+          ansible.builtin.include_tasks: run_external_ip_playbook.yaml
+          vars:
+            eip_contract_operation: create
+            eip_contract_resource: "{{ eip_contract_first_after_create.resources[0] }}"
+            eip_contract_netris_url: "{{ netris_url }}"
+            eip_contract_should_succeed: true
+
+        - name: Read Netris reservations after same-UID retry
+          ansible.builtin.uri:
+            url: "{{ netris_url }}/_state"
+            method: GET
+            status_code: 200
+          register: eip_contract_retry_state
+
+        - name: Verify same-UID retry reused the durable reservation
+          ansible.builtin.assert:
+            that:
+              - >-
+                eip_contract_retry_state.json.subnets
+                | selectattr('name', 'equalto', 'osac-eip-' ~ eip_contract_first.metadata.uid)
+                | list | length == 1
+              - >-
+                eip_contract_retry_state.json.calls
+                | selectattr('method', 'equalto', 'POST') | list | length == 2
+
+        - name: Prepare a stale-generation copy of the allocated ExternalIP
+          ansible.builtin.set_fact:
+            eip_contract_stale_generation: >-
+              {{ eip_contract_first_after_create.resources[0]
+                 | combine({'metadata': eip_contract_first_after_create.resources[0].metadata
+                    | combine({'generation': (eip_contract_first_after_create.resources[0].metadata.generation | int) + 1})},
+                   recursive=true) }}
+
+        - name: Reject a stale-generation manager result
+          ansible.builtin.include_tasks: run_external_ip_playbook.yaml
+          vars:
+            eip_contract_operation: create
+            eip_contract_resource: "{{ eip_contract_stale_generation }}"
+            eip_contract_netris_url: "{{ netris_url }}"
+            eip_contract_should_succeed: false
+            eip_contract_expected_failure: 'refusing to create a provider reservation for a stale resource'
+
+        - name: Prepare a stale-UID copy of the allocated ExternalIP
+          ansible.builtin.set_fact:
+            eip_contract_stale_uid: >-
+              {{ eip_contract_first_after_create.resources[0]
+                 | combine({'metadata': eip_contract_first_after_create.resources[0].metadata
+                    | combine({'uid': 'stale-external-ip-uid'})}, recursive=true) }}
+
+        - name: Reject a stale-UID allocation before creating a provider reservation
+          ansible.builtin.include_tasks: run_external_ip_playbook.yaml
+          vars:
+            eip_contract_operation: create
+            eip_contract_resource: "{{ eip_contract_stale_uid }}"
+            eip_contract_netris_url: "{{ netris_url }}"
+            eip_contract_should_succeed: false
+            eip_contract_expected_failure: 'refusing to create a provider reservation for a stale resource'
+
+        - name: Read Netris state after stale allocation attempts
+          ansible.builtin.uri:
+            url: "{{ netris_url }}/_state"
+            method: GET
+            status_code: 200
+          register: eip_contract_stale_requests_state
+
+        - name: Verify stale allocation attempts made no extra reservation
+          ansible.builtin.assert:
+            that:
+              - >-
+                eip_contract_stale_requests_state.json.subnets
+                | selectattr('name', 'equalto', 'osac-eip-' ~ eip_contract_first.metadata.uid)
+                | list | length == 1
+              - >-
+                eip_contract_stale_requests_state.json.subnets
+                | selectattr('name', 'equalto', 'osac-eip-stale-external-ip-uid')
+                | list | length == 0
+
+        - name: Create a distinct ExternalIP reservation
+          ansible.builtin.include_tasks: run_external_ip_playbook.yaml
+          vars:
+            eip_contract_operation: create
+            eip_contract_resource: "{{ eip_contract_second }}"
+            eip_contract_netris_url: "{{ netris_url }}"
+            eip_contract_should_succeed: true
+
+        - name: Read the second ExternalIP and current provider state
+          block:
+            - name: Read the second ExternalIP
+              kubernetes.core.k8s_info:
+                api_version: osac.openshift.io/v1alpha1
+                kind: ExternalIP
+                namespace: "{{ eip_contract_namespace }}"
+                name: external-ip-contract-two
+              register: eip_contract_second_after_create
+
+            - name: Read the provider state
+              ansible.builtin.uri:
+                url: "{{ netris_url }}/_state"
+                method: GET
+                status_code: 200
+              register: eip_contract_two_state
+
+        - name: Verify distinct UIDs receive unique pool addresses
+          ansible.builtin.assert:
+            that:
+              - >-
+                eip_contract_second_after_create.resources[0].metadata.annotations[
+                  'osac.openshift.io/allocated-address'] == '198.51.100.3'
+              - >-
+                eip_contract_two_state.json.subnets
+                | selectattr('name', 'equalto', 'osac-eip-' ~ eip_contract_first.metadata.uid)
+                | list | length == 1
+              - >-
+                eip_contract_two_state.json.subnets
+                | selectattr('name', 'equalto', 'osac-eip-' ~ eip_contract_second.metadata.uid)
+                | list | length == 1
+
+        - name: Release only the first UID-owned reservation
+          ansible.builtin.include_tasks: run_external_ip_playbook.yaml
+          vars:
+            eip_contract_operation: delete
+            eip_contract_resource: "{{ eip_contract_first_after_create.resources[0] }}"
+            eip_contract_netris_url: "{{ netris_url }}"
+            eip_contract_should_succeed: true
+
+        - name: Read provider state after release
+          ansible.builtin.uri:
+            url: "{{ netris_url }}/_state"
+            method: GET
+            status_code: 200
+          register: eip_contract_release_state
+
+        - name: Verify release leaves the other UID reservation intact
+          ansible.builtin.assert:
+            that:
+              - >-
+                eip_contract_release_state.json.subnets
+                | selectattr('name', 'equalto', 'osac-eip-' ~ eip_contract_second.metadata.uid)
+                | list | length == 1
+              - >-
+                eip_contract_release_state.json.subnets
+                | selectattr('name', 'equalto', 'osac-eip-' ~ eip_contract_first.metadata.uid)
+                | list | length == 0
+
+        - name: Create an ExternalIP that uses the k8s_only MetalLB manager
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: ExternalIP
+              metadata:
+                name: external-ip-contract-metallb
+                namespace: "{{ eip_contract_namespace }}"
+                annotations:
+                  osac.openshift.io/externalippool-name: "{{ pool_name }}"
+                  osac.openshift.io/implementation-strategy: k8s_only
+              spec:
+                pool: "{{ pool_fulfillment_id }}"
+
+        - name: Read the persisted MetalLB ExternalIP identity
+          kubernetes.core.k8s_info:
+            api_version: osac.openshift.io/v1alpha1
+            kind: ExternalIP
+            namespace: "{{ eip_contract_namespace }}"
+            name: external-ip-contract-metallb
+          register: eip_contract_metallb_before
+
+        - name: Create and annotate the k8s_only ExternalIP through the top-level playbook
+          ansible.builtin.include_tasks: run_external_ip_playbook.yaml
+          vars:
+            eip_contract_operation: create
+            eip_contract_resource: "{{ eip_contract_metallb_before.resources[0] }}"
+            eip_contract_netris_url: "{{ netris_url }}"
+            eip_contract_should_succeed: true
+
+        - name: Read the MetalLB ExternalIP and UID-owned parking Service
+          block:
+            - name: Read the MetalLB ExternalIP
+              kubernetes.core.k8s_info:
+                api_version: osac.openshift.io/v1alpha1
+                kind: ExternalIP
+                namespace: "{{ eip_contract_namespace }}"
+                name: external-ip-contract-metallb
+              register: eip_contract_metallb_after_create
+
+            - name: Read the parking Service
+              kubernetes.core.k8s_info:
+                api_version: v1
+                kind: Service
+                namespace: metallb-system
+                name: "osac-eip-{{ eip_contract_metallb_before.resources[0].metadata.uid }}"
+              register: eip_contract_metallb_service
+
+        - name: Verify MetalLB UID ownership, allocation annotation, and pool selection
+          ansible.builtin.assert:
+            that:
+              - >-
+                eip_contract_metallb_after_create.resources[0].metadata.annotations[
+                  'osac.openshift.io/allocated-address'] == '198.51.100.6'
+              - eip_contract_metallb_after_create.resources[0].status.phase == 'Progressing'
+              - >-
+                eip_contract_metallb_after_create.resources[0].metadata.resourceVersion !=
+                eip_contract_metallb_before.resources[0].metadata.resourceVersion
+              - >-
+                eip_contract_metallb_after_create.resources[0].metadata.generation ==
+                eip_contract_metallb_before.resources[0].metadata.generation
+              - eip_contract_metallb_service.resources | length == 1
+              - >-
+                eip_contract_metallb_service.resources[0].metadata.labels[
+                  'osac.openshift.io/externalip-uid'] ==
+                eip_contract_metallb_before.resources[0].metadata.uid
+              - >-
+                eip_contract_metallb_service.resources[0].metadata.annotations[
+                  'metallb.universe.tf/address-pool'] == pool_name
+
+        - name: Retry the same MetalLB allocation
+          ansible.builtin.include_tasks: run_external_ip_playbook.yaml
+          vars:
+            eip_contract_operation: create
+            eip_contract_resource: "{{ eip_contract_metallb_after_create.resources[0] }}"
+            eip_contract_netris_url: "{{ netris_url }}"
+            eip_contract_should_succeed: true
+
+        - name: Verify the MetalLB retry reused one UID-owned Service
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Service
+            namespace: metallb-system
+            name: "osac-eip-{{ eip_contract_metallb_before.resources[0].metadata.uid }}"
+          register: eip_contract_metallb_service_after_retry
+
+        - name: Assert the MetalLB retry kept the reservation present
+          ansible.builtin.assert:
+            that:
+              - eip_contract_metallb_service_after_retry.resources | length == 1
+
+        - name: Refuse ambiguous legacy MetalLB ownership on create and release
+          block:
+            - name: Read the legacy MetalLB ExternalIP
+              kubernetes.core.k8s_info:
+                api_version: osac.openshift.io/v1alpha1
+                kind: ExternalIP
+                namespace: "{{ eip_contract_namespace }}"
+                name: external-ip-contract-legacy-metallb
+              register: eip_contract_legacy_metallb_before
+
+            - name: Refuse to create beside the legacy MetalLB Service
+              ansible.builtin.include_tasks: run_external_ip_playbook.yaml
+              vars:
+                eip_contract_operation: create
+                eip_contract_resource: "{{ eip_contract_legacy_metallb_before.resources[0] }}"
+                eip_contract_netris_url: "{{ netris_url }}"
+                eip_contract_should_succeed: false
+                eip_contract_expected_failure: 'allocation is blocked until an administrator safely migrates or removes that Service'
+
+            - name: Refuse release while the legacy MetalLB Service remains
+              ansible.builtin.include_tasks: run_external_ip_playbook.yaml
+              vars:
+                eip_contract_operation: delete
+                eip_contract_resource: "{{ eip_contract_legacy_metallb_before.resources[0] }}"
+                eip_contract_netris_url: "{{ netris_url }}"
+                eip_contract_should_succeed: false
+                eip_contract_expected_failure: 'release is blocked until an administrator safely migrates or removes that Service'
+
+            - name: Read the legacy and UID-owned MetalLB Services
+              kubernetes.core.k8s_info:
+                api_version: v1
+                kind: Service
+                namespace: metallb-system
+                name: "{{ item }}"
+              loop:
+                - osac-eip-external-ip-contract-legacy-metallb
+                - "osac-eip-{{ eip_contract_legacy_metallb_before.resources[0].metadata.uid }}"
+              register: eip_contract_legacy_metallb_services
+
+            - name: Verify the legacy Service remains without a replacement
+              ansible.builtin.assert:
+                that:
+                  - eip_contract_legacy_metallb_services.results[0].resources | length == 1
+                  - eip_contract_legacy_metallb_services.results[1].resources | length == 0
+
+        - name: Release the k8s_only MetalLB ExternalIP through the top-level playbook
+          ansible.builtin.include_tasks: run_external_ip_playbook.yaml
+          vars:
+            eip_contract_operation: delete
+            eip_contract_resource: "{{ eip_contract_metallb_after_create.resources[0] }}"
+            eip_contract_netris_url: "{{ netris_url }}"
+            eip_contract_should_succeed: true
+
+        - name: Confirm the MetalLB parking Service was removed
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Service
+            namespace: metallb-system
+            name: "osac-eip-{{ eip_contract_metallb_before.resources[0].metadata.uid }}"
+          register: eip_contract_metallb_service_after_delete
+
+        - name: Verify the UID-owned parking Service is absent
+          ansible.builtin.assert:
+            that:
+              - eip_contract_metallb_service_after_delete.resources | length == 0
+      always:
+        - name: Stop the MetalLB assignment fixture
+          ansible.builtin.shell: "pkill -f '[f]ake_metallb.py' 2>/dev/null || true"
+          changed_when: false
+
+        - name: Remove the test UID-owned MetalLB Service
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Service
+            name: "osac-eip-{{ eip_contract_metallb_before.resources[0].metadata.uid }}"
+            namespace: metallb-system
+            state: absent
+          when:
+            - eip_contract_metallb_before is defined
+            - eip_contract_metallb_before.resources | default([]) | length > 0
+          failed_when: false
+
+        - name: Remove the test namespace
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "{{ eip_contract_namespace | default('osac-eip-contract-cleanup') }}"
+            state: absent
+            wait: true
+            wait_timeout: 60
+          failed_when: false
+
+        - name: Stop the Netris fixture
+          ansible.builtin.shell: "pkill -f '[m]ock_netris.py {{ netris_port }}' 2>/dev/null || true"
+          changed_when: false
+
+        - name: Remove the legacy MetalLB fixture Service
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Service
+            name: osac-eip-external-ip-contract-legacy-metallb
+            namespace: metallb-system
+            state: absent
+          failed_when: false

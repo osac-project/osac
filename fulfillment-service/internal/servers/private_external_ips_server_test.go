@@ -26,6 +26,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -401,6 +402,81 @@ var _ = Describe("Private external IPs server", func() {
 			Expect(pool.GetStatus().GetAllocated()).To(Equal(int64(0)))
 			Expect(pool.GetStatus().GetAvailable()).To(Equal(int64(10)))
 		})
+
+		It("keeps Delete retryable when releasing capacity would underflow", func() {
+			object := createExternalIPInState(externalIPsServer, privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
+			poolID := object.GetSpec().GetPool().GetId()
+			poolResponse, err := externalIPPoolDao.Get().SetId(poolID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			pool := poolResponse.GetObject()
+			pool.GetStatus().SetAllocated(0)
+			pool.GetStatus().SetAvailable(pool.GetStatus().GetTotal())
+			_, err = externalIPPoolDao.Update().SetObject(pool).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			tx, err := database.TxFromContext(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			err = tx.Savepoint(ctx, func(savepointCtx context.Context) error {
+				_, deleteErr := externalIPsServer.Delete(savepointCtx,
+					privatev1.ExternalIPsDeleteRequest_builder{Id: object.GetId()}.Build())
+				return deleteErr
+			})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("allocated capacity would become negative"))
+
+			persistedIP, err := externalIPDao.Get().SetId(object.GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(persistedIP.GetObject().GetMetadata().GetDeletionTimestamp()).To(BeNil())
+			persistedPool, err := externalIPPoolDao.Get().SetId(poolID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(persistedPool.GetObject().GetStatus().GetAllocated()).To(Equal(int64(0)))
+			Expect(persistedPool.GetObject().GetStatus().GetAvailable()).To(Equal(int64(100)))
+		})
+
+		It("keeps the finalizer when its capacity release would underflow", func() {
+			object := createExternalIPInState(externalIPsServer, privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING)
+			object.GetMetadata().SetFinalizers([]string{"cleanup"})
+			_, err := externalIPDao.Update().SetObject(object).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = externalIPsServer.Delete(ctx, privatev1.ExternalIPsDeleteRequest_builder{Id: object.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			poolID := object.GetSpec().GetPool().GetId()
+			poolResponse, err := externalIPPoolDao.Get().SetId(poolID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			pool := poolResponse.GetObject()
+			pool.GetStatus().SetAllocated(0)
+			pool.GetStatus().SetAvailable(pool.GetStatus().GetTotal())
+			_, err = externalIPPoolDao.Update().SetObject(pool).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			tx, err := database.TxFromContext(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			err = tx.Savepoint(ctx, func(savepointCtx context.Context) error {
+				current, getErr := externalIPDao.Get().SetId(object.GetId()).Do(savepointCtx)
+				if getErr != nil {
+					return getErr
+				}
+				finalizerCleanup := current.GetObject()
+				finalizerCleanup.GetMetadata().SetFinalizers(nil)
+				_, updateErr := externalIPsServer.Update(savepointCtx, privatev1.ExternalIPsUpdateRequest_builder{
+					Object:     finalizerCleanup,
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}},
+				}.Build())
+				return updateErr
+			})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("allocated capacity would become negative"))
+
+			persistedIP, err := externalIPDao.Get().SetId(object.GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(persistedIP.GetObject().GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
+			Expect(persistedIP.GetObject().GetMetadata().GetFinalizers()).To(Equal([]string{"cleanup"}))
+			persistedPool, err := externalIPPoolDao.Get().SetId(poolID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(persistedPool.GetObject().GetStatus().GetAllocated()).To(Equal(int64(0)))
+			Expect(persistedPool.GetObject().GetStatus().GetAvailable()).To(Equal(int64(100)))
+		})
 	})
 
 	Describe("State machine enforcement", func() {
@@ -601,7 +677,7 @@ var _ = Describe("Private external IPs server", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		It("preserves the deletion boundary and releases capacity once", func() {
+		It("preserves capacity through finalizer cleanup and releases it once", func() {
 			object := createExternalIPInState(externalIPsServer, privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING)
 			object.GetMetadata().SetFinalizers([]string{"cleanup"})
 			_, err := externalIPDao.Update().SetObject(object).Do(ctx)
@@ -620,6 +696,28 @@ var _ = Describe("Private external IPs server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(proto.Equal(firstDeletion, second.GetObject().GetMetadata().GetDeletionTimestamp())).To(BeTrue())
 			pool, err := externalIPPoolDao.Get().SetId(object.GetSpec().GetPool().GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(pool.GetObject().GetStatus().GetAllocated()).To(Equal(int64(1)))
+			Expect(pool.GetObject().GetStatus().GetAvailable()).To(Equal(int64(99)))
+
+			finalizerCleanup := second.GetObject()
+			finalizerCleanup.GetMetadata().SetFinalizers(nil)
+			_, err = externalIPsServer.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
+				Object:     finalizerCleanup,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			pool, err = externalIPPoolDao.Get().SetId(object.GetSpec().GetPool().GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(pool.GetObject().GetStatus().GetAllocated()).To(Equal(int64(0)))
+			Expect(pool.GetObject().GetStatus().GetAvailable()).To(Equal(int64(100)))
+
+			// The row is archived when the last finalizer is removed, so repeated
+			// deletion cannot release the same capacity a second time.
+			_, err = externalIPsServer.Delete(ctx, privatev1.ExternalIPsDeleteRequest_builder{Id: object.GetId()}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+			pool, err = externalIPPoolDao.Get().SetId(object.GetSpec().GetPool().GetId()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(pool.GetObject().GetStatus().GetAllocated()).To(Equal(int64(0)))
 			Expect(pool.GetObject().GetStatus().GetAvailable()).To(Equal(int64(100)))

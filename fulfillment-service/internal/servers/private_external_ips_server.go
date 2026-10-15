@@ -25,6 +25,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -203,6 +204,12 @@ func (s *PrivateExternalIPsServer) Get(ctx context.Context,
 
 func (s *PrivateExternalIPsServer) Create(ctx context.Context,
 	request *privatev1.ExternalIPsCreateRequest) (response *privatev1.ExternalIPsCreateResponse, err error) {
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return
+	}
+	defer tx.ReportError(&err)
+
 	externalIP := request.GetObject()
 	if err = rejectOutputStatusOnCreate(externalIP != nil && externalIP.HasStatus()); err != nil {
 		return
@@ -251,6 +258,12 @@ func (s *PrivateExternalIPsServer) Create(ctx context.Context,
 
 func (s *PrivateExternalIPsServer) Update(ctx context.Context,
 	request *privatev1.ExternalIPsUpdateRequest) (response *privatev1.ExternalIPsUpdateResponse, err error) {
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return
+	}
+	defer tx.ReportError(&err)
+
 	id := request.GetObject().GetId()
 	if id == "" {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
@@ -288,11 +301,29 @@ func (s *PrivateExternalIPsServer) Update(ctx context.Context,
 	}
 
 	err = s.generic.Update(ctx, request, &response)
+	if err != nil {
+		return
+	}
+
+	updatedExternalIP := response.GetObject()
+	wasDeletingWithFinalizers := existingExternalIP.GetMetadata().GetDeletionTimestamp() != nil &&
+		len(existingExternalIP.GetMetadata().GetFinalizers()) > 0
+	finalizersRemoved := updatedExternalIP.GetMetadata().GetDeletionTimestamp() != nil &&
+		len(updatedExternalIP.GetMetadata().GetFinalizers()) == 0
+	if wasDeletingWithFinalizers && finalizersRemoved {
+		err = s.lifecycle.releaseExternalIPCapacity(ctx, existingExternalIP)
+	}
 	return
 }
 
 func (s *PrivateExternalIPsServer) Delete(ctx context.Context,
 	request *privatev1.ExternalIPsDeleteRequest) (response *privatev1.ExternalIPsDeleteResponse, err error) {
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return
+	}
+	defer tx.ReportError(&err)
+
 	id := request.GetId()
 	if id == "" {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")

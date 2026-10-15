@@ -48,6 +48,15 @@ type mockProviderWithExtraVars struct {
 	getProvisionStatusWithExtraVarsFunc func(ctx context.Context, resource client.Object, jobID string) (ProvisionStatusWithExtraVars, error)
 }
 
+type mockProviderWithDeprovisionOutputs struct {
+	*mockProvider
+	getDeprovisionStatusWithExtraVarsFunc func(ctx context.Context, resource client.Object, jobID string) (ProvisionStatusWithExtraVars, error)
+}
+
+func (m *mockProviderWithDeprovisionOutputs) GetDeprovisionStatusWithExtraVars(ctx context.Context, resource client.Object, jobID string) (ProvisionStatusWithExtraVars, error) {
+	return m.getDeprovisionStatusWithExtraVarsFunc(ctx, resource, jobID)
+}
+
 func (m *mockProviderWithExtraVars) TriggerProvisionWithExtraVars(ctx context.Context, resource client.Object, extraVars map[string]any) (*ProvisionResult, error) {
 	if m.triggerProvisionWithExtraVarsFunc != nil {
 		return m.triggerProvisionWithExtraVarsFunc(ctx, resource, extraVars)
@@ -420,6 +429,102 @@ var _ = ginkgo.Describe("PollJob output callbacks", func() {
 		Expect(outputError).To(ContainSubstring("failed to retrieve provision outputs"))
 		Expect(callbackCalled).To(BeFalse())
 		Expect(jobs[0].State).To(Equal(v1alpha1.JobStateSucceeded))
+	})
+
+	ginkgo.It("marks an output-invalid successful job failed when output retry is enabled", func() {
+		provider := &mockProviderWithExtraVars{
+			mockProvider: &mockProvider{},
+			getProvisionStatusWithExtraVarsFunc: func(context.Context, client.Object, string) (ProvisionStatusWithExtraVars, error) {
+				return ProvisionStatusWithExtraVars{
+					ProvisionStatus: ProvisionStatus{JobID: "job-1", State: v1alpha1.JobStateSucceeded},
+					ExtraVars:       map[string]any{},
+				}, nil
+			},
+		}
+		jobs := []v1alpha1.JobStatus{{JobID: "job-1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateRunning}}
+		provState := &State{Jobs: &jobs}
+		callbacks := &PollCallbacks{
+			RetryOnOutputError: true,
+			OnOutputError:      func(string) {},
+			OnSuccessWithExtraVars: func(ProvisionStatusWithExtraVars) error {
+				return fmt.Errorf("required result is missing")
+			},
+		}
+
+		result, err := PollJob(ctx, provider, &v1alpha1.ExternalIP{}, provState, &jobs[0], time.Second, callbacks)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(time.Second))
+		Expect(jobs[0].State).To(Equal(v1alpha1.JobStateFailed))
+		Expect(jobs[0].Message).To(ContainSubstring("required result is missing"))
+	})
+})
+
+var _ = ginkgo.Describe("RunDeprovisioningLifecycleWithCallbacks", func() {
+	ginkgo.It("only completes deletion after the output callback accepts the release result", func() {
+		provider := &mockProviderWithDeprovisionOutputs{
+			mockProvider: &mockProvider{},
+			getDeprovisionStatusWithExtraVarsFunc: func(context.Context, client.Object, string) (ProvisionStatusWithExtraVars, error) {
+				return ProvisionStatusWithExtraVars{
+					ProvisionStatus: ProvisionStatus{JobID: "release-job", State: v1alpha1.JobStateSucceeded},
+					ExtraVars:       map[string]any{"osac_result": map[string]any{"operation": "external_ip.release"}},
+				}, nil
+			},
+		}
+		jobs := []v1alpha1.JobStatus{{
+			JobID:                  "release-job",
+			Type:                   v1alpha1.JobTypeDeprovision,
+			State:                  v1alpha1.JobStateRunning,
+			BlockDeletionOnFailure: true,
+			Timestamp:              metav1.Now(),
+		}}
+		callbackCalled := false
+		callbacks := &DeprovisionCallbacks{OnSuccessWithExtraVars: func(status ProvisionStatusWithExtraVars) error {
+			callbackCalled = true
+			Expect(status.ExtraVars).To(HaveKey("osac_result"))
+			return nil
+		}}
+
+		result, done, err := RunDeprovisioningLifecycleWithCallbacks(ctx, provider, &v1alpha1.ExternalIP{}, &jobs, 10, time.Second, callbacks)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(BeZero())
+		Expect(done).To(BeTrue())
+		Expect(callbackCalled).To(BeTrue())
+	})
+
+	ginkgo.It("keeps deletion blocked and makes the job retryable when release output is rejected", func() {
+		provider := &mockProviderWithDeprovisionOutputs{
+			mockProvider: &mockProvider{},
+			getDeprovisionStatusWithExtraVarsFunc: func(context.Context, client.Object, string) (ProvisionStatusWithExtraVars, error) {
+				return ProvisionStatusWithExtraVars{
+					ProvisionStatus: ProvisionStatus{JobID: "release-job", State: v1alpha1.JobStateSucceeded},
+					ExtraVars:       map[string]any{},
+				}, nil
+			},
+		}
+		jobs := []v1alpha1.JobStatus{{
+			JobID:                  "release-job",
+			Type:                   v1alpha1.JobTypeDeprovision,
+			State:                  v1alpha1.JobStateRunning,
+			BlockDeletionOnFailure: true,
+			Timestamp:              metav1.Now(),
+		}}
+		outputError := ""
+		callbacks := &DeprovisionCallbacks{
+			OnOutputError: func(message string) { outputError = message },
+			OnSuccessWithExtraVars: func(ProvisionStatusWithExtraVars) error {
+				return fmt.Errorf("release result is missing")
+			},
+		}
+
+		result, done, err := RunDeprovisioningLifecycleWithCallbacks(ctx, provider, &v1alpha1.ExternalIP{}, &jobs, 10, time.Second, callbacks)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(done).To(BeFalse())
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+		Expect(jobs[0].State).To(Equal(v1alpha1.JobStateFailed))
+		Expect(outputError).To(ContainSubstring("release result is missing"))
 	})
 })
 

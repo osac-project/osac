@@ -1,5 +1,6 @@
 import { type Page, expect } from '@playwright/test';
 
+import { DiskImagesMainPage } from '../../locators/disk_images';
 import { InstanceTypesMainPage } from '../../locators/instance_types';
 import { MainPage } from '../../locators/main_page';
 import { TenantsMainPage } from '../../locators/tenants';
@@ -59,4 +60,11 @@ export const openInstanceTypesPage = async (page: Page): Promise<void> => {
   await openMainPageOption(page, 'instanceTypes');
 
   await expect(page.getByRole(...InstanceTypesMainPage.pageTitle)).toBeVisible();
+};
+
+/** Open the Disk images page from the Infrastructure section and verify its title. */
+export const openDiskImagesPage = async (page: Page): Promise<void> => {
+  await openMainPageOption(page, 'diskImages');
+
+  await expect(page.getByRole(...DiskImagesMainPage.pageTitle)).toBeVisible();
 };

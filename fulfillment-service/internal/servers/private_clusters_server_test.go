@@ -1424,8 +1424,12 @@ var _ = Describe("Private clusters server", func() {
 			},
 			Entry("new NodeSet without shared=true", "gpu", false, ""),
 			Entry("changed NodeSet without shared=true", "compute", false, ""),
-			Entry("new NodeSet with a project", "gpu", true, "other"),
-			Entry("changed NodeSet with a project", "compute", true, "other"),
+			// The fixture resource lives in shared/""; after
+			// OSAC-6381 the validator scopes name lookups to the
+			// resolved project, so these entries must use the
+			// resource's actual project.
+			Entry("new NodeSet with shared=true", "gpu", true, ""),
+			Entry("changed NodeSet with shared=true", "compute", true, ""),
 		)
 
 		It("canonicalizes newly added shared NodeSets on update and preserves them on size-only updates", func() {

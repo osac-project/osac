@@ -663,7 +663,8 @@ def test_cluster_create(
         after_attachment = spec_after.get("networkAttachment") or spec_after.get("network_attachment")
         assert after_attachment == before_attachment, "cluster attachment changed"
 
-        # Flipping auto_external_ip_attachment after creation is rejected.
+        # Flipping auto_external_ip_attachment after creation is rejected; the
+        # cluster is read back to prove the rejected update did not persist.
         with pytest.raises(subprocess.CalledProcessError) as exc_info:
             grpc.call(
                 service=f"{PUBLIC_API}.Clusters/Update",
@@ -673,6 +674,11 @@ def test_cluster_create(
                 },
             )
         assert_grpc_rejected(exc_info, "InvalidArgument")
+        cluster_after_flip = grpc.get_cluster(cluster_id=uuid)["object"]
+        spec_after_flip = cluster_after_flip.get("spec", {})
+        assert not (
+            spec_after_flip.get("autoExternalIpAttachment") or spec_after_flip.get("auto_external_ip_attachment")
+        ), "auto_external_ip_attachment persisted"
         logger.info("CaaS: cluster attachment immutability verified")
 
         scaled_size = cluster.original_size + 1

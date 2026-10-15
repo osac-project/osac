@@ -96,6 +96,11 @@ def test_public_network_classes_service_is_private_only(jwt_grpc_tenant1_admin: 
 
     combined = (exc_info.value.stderr or "") + (exc_info.value.stdout or "")
     # A missing service fails at descriptor resolution before any server-side gRPC
-    # status is produced, so no "Code:" block may appear.
+    # status is produced, so no "Code:" block may appear; a missing method on an
+    # existing service would report "does not include a method named", which must
+    # not be the failure shape here.
     assert not re.search(r"Code:\s*\w+", combined), f"expected no server-side status, got: {combined.strip()}"
+    assert "does not include a method named" not in combined, (
+        f"expected a missing-service resolution failure, not a missing-method error, got: {combined.strip()}"
+    )
     assert "NetworkClasses" in combined, f"expected a descriptor-resolution failure, got: {combined.strip()}"

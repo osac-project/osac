@@ -1452,6 +1452,103 @@ var _ = Describe("Reference validator", func() {
 			Expect(capturedTenant).To(Equal("shared"))
 			Expect(capturedProject).To(BeEmpty())
 		})
+
+		// OSAC-6381 regression: a scope-aware lookup must pass
+		// the resolved tenant and project so a same-named resource
+		// in a visible named project cannot shadow the intended
+		// root-project target.
+		It("Scope-aware lookup receives the resolved project for name lookups", func() {
+			var calls []string
+			validator.Register("osac.tests.v1.TestTargetReference", func(
+				ctx context.Context, tenant, project, id, name string,
+			) (*ResolvedRef, error) {
+				calls = append(calls, fmt.Sprintf(
+					"tenant=%s project=%q id=%s name=%s",
+					tenant, project, id, name,
+				))
+				return &ResolvedRef{
+					ID: "root-id", Tenant: tenant,
+					Project: project, Name: name,
+				}, nil
+			})
+
+			request := testsv1.CreateTestResourceWithRefsRequest_builder{
+				Object: testsv1.TestResourceWithRefs_builder{
+					Metadata: testsv1.Metadata_builder{
+						Tenant:  "acme",
+						Project: "apps",
+					}.Build(),
+					Spec: testsv1.TestRefSpec_builder{
+						Target: testsv1.TestTargetReference_builder{
+							Name: "shared-name",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			_, err := validator.UnaryServer(
+				context.Background(),
+				request,
+				&grpc.UnaryServerInfo{
+					FullMethod: "/osac.tests.v1.TestService/Create",
+				},
+				func(ctx context.Context, req any) (any, error) {
+					return "ok", nil
+				},
+			)
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(calls).To(HaveLen(1))
+			Expect(calls[0]).To(Equal(
+				`tenant=acme project="" id= name=shared-name`,
+			))
+		})
+
+		// ID-based lookups must still receive the scope but the
+		// lookup function may use broader visibility for IDs.
+		It("ID-based global lookup receives resolved scope", func() {
+			var capturedProject, capturedID string
+			validator.Register("osac.tests.v1.TestTargetReference", func(
+				ctx context.Context, tenant, project, id, name string,
+			) (*ResolvedRef, error) {
+				capturedProject = project
+				capturedID = id
+				return &ResolvedRef{
+					ID: id, Tenant: tenant,
+					Project: project, Name: "resolved",
+				}, nil
+			})
+
+			request := testsv1.CreateTestResourceWithRefsRequest_builder{
+				Object: testsv1.TestResourceWithRefs_builder{
+					Metadata: testsv1.Metadata_builder{
+						Tenant:  "acme",
+						Project: "apps",
+					}.Build(),
+					Spec: testsv1.TestRefSpec_builder{
+						Target: testsv1.TestTargetReference_builder{
+							Id: "known-id",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			_, err := validator.UnaryServer(
+				context.Background(),
+				request,
+				&grpc.UnaryServerInfo{
+					FullMethod: "/osac.tests.v1.TestService/Create",
+				},
+				func(ctx context.Context, req any) (any, error) {
+					return "ok", nil
+				},
+			)
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(capturedID).To(Equal("known-id"))
+			// Global ref with empty project: scope is root.
+			Expect(capturedProject).To(BeEmpty())
+		})
 	})
 
 	Describe("Error reporting", func() {

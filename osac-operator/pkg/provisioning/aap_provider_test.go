@@ -616,13 +616,19 @@ var _ = Describe("AAPProvider", func() {
 		It("returns the successful job artifacts as normalized extra vars", func() {
 			aapClient.getJobFunc = func(_ context.Context, jobID string) (*aap.Job, error) {
 				Expect(jobID).To(Equal("789"))
-				return &aap.Job{ID: 789, Status: "successful", Artifacts: []byte(`{"l2_vni":14,"l3_vni":11}`)}, nil
+				return &aap.Job{
+					ID:        789,
+					Status:    "successful",
+					ExtraVars: `{"osac_job_vars":{"resource":{"metadata":{"uid":"eip-uid"}}}}`,
+					Artifacts: []byte(`{"l2_vni":14,"l3_vni":11}`),
+				}, nil
 			}
 
 			status, err := provider.GetProvisionStatusWithExtraVars(ctx, &v1alpha1.Subnet{}, "789")
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(status.State).To(Equal(v1alpha1.JobStateSucceeded))
+			Expect(status.InputExtraVars).To(HaveKey("osac_job_vars"))
 			Expect(status.ExtraVars).To(HaveKeyWithValue("l2_vni", float64(14)))
 			Expect(status.ExtraVars).To(HaveKeyWithValue("l3_vni", float64(11)))
 
@@ -632,15 +638,35 @@ var _ = Describe("AAPProvider", func() {
 			Expect(*vnis.L3VNI).To(Equal(int32(11)))
 		})
 
-		It("returns no output vars when the job has no artifacts", func() {
+		It("returns inputs when the successful job has no artifacts", func() {
 			aapClient.getJobFunc = func(_ context.Context, _ string) (*aap.Job, error) {
-				return &aap.Job{Status: "successful"}, nil
+				return &aap.Job{
+					Status:    "successful",
+					ExtraVars: `{"osac_job_vars":{"external_ip_pool":{"kubernetes_uid":"pool-uid"}}}`,
+				}, nil
 			}
 
 			status, err := provider.GetProvisionStatusWithExtraVars(ctx, &v1alpha1.Subnet{}, "789")
 
 			Expect(err).NotTo(HaveOccurred())
+			Expect(status.InputExtraVars).To(HaveKey("osac_job_vars"))
 			Expect(status.ExtraVars).To(BeNil())
+		})
+
+		It("returns a sanitized error for malformed submitted inputs", func() {
+			aapClient.getJobFunc = func(_ context.Context, _ string) (*aap.Job, error) {
+				return &aap.Job{
+					Status:    "successful",
+					ExtraVars: `{"token":"sensitive-fixture-value"`,
+				}, nil
+			}
+
+			status, err := provider.GetProvisionStatusWithExtraVars(ctx, &v1alpha1.ExternalIP{}, "789")
+
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("job 789"))
+			Expect(err.Error()).NotTo(ContainSubstring("sensitive-fixture-value"))
+			Expect(status.State).To(Equal(v1alpha1.JobStateSucceeded))
 		})
 
 		It("returns an error when the AAP client cannot fetch the job", func() {
@@ -816,11 +842,17 @@ var _ = Describe("AAPProvider", func() {
 
 		It("returns deprovision job artifacts", func() {
 			aapClient.getJobFunc = func(_ context.Context, jobID string) (*aap.Job, error) {
-				return &aap.Job{ID: 888, Status: "successful", Artifacts: []byte(`{"osac_result":{"schemaVersion":"v1"}}`)}, nil
+				return &aap.Job{
+					ID:        888,
+					Status:    "successful",
+					ExtraVars: `{"osac_job_vars":{"resource":{"metadata":{"uid":"eip-uid"}}}}`,
+					Artifacts: []byte(`{"osac_result":{"schemaVersion":"v1"}}`),
+				}, nil
 			}
 			status, err := provider.GetDeprovisionStatusWithExtraVars(ctx, &v1alpha1.ExternalIP{}, "888")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(status.JobID).To(Equal("888"))
+			Expect(status.InputExtraVars).To(HaveKey("osac_job_vars"))
 			Expect(status.ExtraVars).To(HaveKey("osac_result"))
 		})
 	})

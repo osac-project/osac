@@ -57,6 +57,23 @@ func TestValidateExternalIPResult(t *testing.T) {
 		})
 	}
 
+	for _, outputs := range []map[string]any{
+		nil,
+		{"osac_result": nil},
+		{"osac_result": []any{"not", "an", "object"}},
+		{"osac_result": map[string]any{
+			"schemaVersion": "v1", "operation": "external_ip.allocate",
+			"resourceUID":        "11111111-1111-4111-8111-111111111111",
+			"observedGeneration": float64(4), "data": []any{"not", "an", "object"},
+		}},
+	} {
+		if _, err := provisioning.ValidateExternalIPResult(
+			outputs, "external_ip.allocate", "11111111-1111-4111-8111-111111111111", 4,
+		); err == nil {
+			t.Errorf("expected malformed result %#v to be rejected", outputs)
+		}
+	}
+
 	release := map[string]any{
 		"schemaVersion":      "v1",
 		"operation":          "external_ip.release",

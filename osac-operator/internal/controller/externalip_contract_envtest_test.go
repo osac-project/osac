@@ -8,11 +8,13 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -102,8 +104,11 @@ var _ = Describe("ExternalIP v1 Envtest", func() {
 		externalIP = &v1alpha1.ExternalIP{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "external-ip", Namespace: namespaceName, Finalizers: finalizers,
-				Labels:      map[string]string{osacExternalIPIDLabel: externalIPID},
-				Annotations: map[string]string{osacTenantKey: "tenant-a"},
+				Labels: map[string]string{osacExternalIPIDLabel: externalIPID},
+				Annotations: map[string]string{
+					osacTenantKey:                           "tenant-a",
+					osacExternalIPContractVersionAnnotation: networkmanager.ExternalIPContractVersionV1,
+				},
 			},
 			Spec: v1alpha1.ExternalIPSpec{Pool: poolID},
 		}
@@ -114,6 +119,43 @@ var _ = Describe("ExternalIP v1 Envtest", func() {
 		}
 	}
 
+	startIndexedEnvtestClient := func() client.Client {
+		localManager, err := ctrl.NewManager(cfg, ctrl.Options{
+			Scheme:  k8sClient.Scheme(),
+			Metrics: server.Options{BindAddress: "0"},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(localManager.GetFieldIndexer().IndexField(ctx,
+			&v1alpha1.ExternalIPAttachment{}, externalIPReferenceIndexField,
+			func(obj client.Object) []string {
+				return []string{obj.(*v1alpha1.ExternalIPAttachment).Spec.ExternalIP}
+			},
+		)).To(Succeed())
+		Expect(localManager.GetFieldIndexer().IndexField(ctx,
+			&v1alpha1.NATGateway{}, externalIPReferenceIndexField,
+			func(obj client.Object) []string {
+				return []string{obj.(*v1alpha1.NATGateway).Spec.ExternalIP}
+			},
+		)).To(Succeed())
+
+		managerCtx, stopManager := context.WithCancel(ctx)
+		managerStopped := make(chan error, 1)
+		go func() { managerStopped <- localManager.Start(managerCtx) }()
+		DeferCleanup(func() {
+			stopManager()
+			select {
+			case err := <-managerStopped:
+				Expect(err).NotTo(HaveOccurred())
+			case <-time.After(5 * time.Second):
+				Fail("indexed Envtest manager did not stop")
+			}
+		})
+		syncCtx, cancelSync := context.WithTimeout(ctx, 15*time.Second)
+		defer cancelSync()
+		Expect(localManager.GetCache().WaitForCacheSync(syncCtx)).To(BeTrue())
+		return localManager.GetClient()
+	}
+
 	It("publishes only the validated current allocation", func() {
 		createExternalIP(v1alpha1.ExternalIPStatus{}, nil)
 		provider.triggerProvisionFunc = func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
@@ -122,6 +164,7 @@ var _ = Describe("ExternalIP v1 Envtest", func() {
 		provider.getProvisionStatusWithExtraVarsFunc = func(_ context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {
 			return provisioning.ProvisionStatusWithExtraVars{
 				ProvisionStatus: provisioning.ProvisionStatus{JobID: jobID, State: v1alpha1.JobStateSucceeded},
+				InputExtraVars:  externalIPJobInputsFixture(resource.(*v1alpha1.ExternalIP), pool),
 				ExtraVars: map[string]any{"osac_result": map[string]any{
 					"schemaVersion": "v1", "operation": "external_ip.allocate",
 					"resourceUID": string(resource.GetUID()), "observedGeneration": resource.GetGeneration(),
@@ -143,6 +186,156 @@ var _ = Describe("ExternalIP v1 Envtest", func() {
 		Expect(updated.Status.Phase).To(Equal(v1alpha1.ExternalIPPhaseReady))
 		Expect(updated.Annotations[osacExternalIPContractVersionAnnotation]).To(Equal("v1"))
 		Expect(updated.Annotations).NotTo(HaveKey(osacExternalIPAllocatedAddressAnnotation))
+	})
+
+	It("does not publish an allocation when the submitted pool snapshot is stale", func() {
+		createExternalIP(v1alpha1.ExternalIPStatus{}, nil)
+		provider.triggerProvisionFunc = func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
+			return &provisioning.ProvisionResult{JobID: "stale-allocation-job", InitialState: v1alpha1.JobStatePending}, nil
+		}
+		provider.getProvisionStatusWithExtraVarsFunc = func(_ context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {
+			inputs := externalIPJobInputsFixture(resource.(*v1alpha1.ExternalIP), pool)
+			jobVars := inputs["osac_job_vars"].(map[string]any)
+			poolSnapshot := jobVars["external_ip_pool"].(map[string]any)
+			poolSnapshot["kubernetes_uid"] = "stale-pool-uid"
+			return provisioning.ProvisionStatusWithExtraVars{
+				ProvisionStatus: provisioning.ProvisionStatus{JobID: jobID, State: v1alpha1.JobStateSucceeded},
+				InputExtraVars:  inputs,
+				ExtraVars: map[string]any{"osac_result": map[string]any{
+					"schemaVersion": "v1", "operation": "external_ip.allocate",
+					"resourceUID": string(resource.GetUID()), "observedGeneration": resource.GetGeneration(),
+					"data": map[string]any{"address": "198.51.100.1"},
+				}},
+			}, nil
+		}
+
+		request := mcreconcile.Request{Request: ctrl.Request{NamespacedName: client.ObjectKeyFromObject(externalIP)}}
+		for range 5 {
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+		}
+		updated := &v1alpha1.ExternalIP{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(externalIP), updated)).To(Succeed())
+		Expect(updated.Status.Address).To(BeEmpty())
+		Expect(updated.Status.State).NotTo(Equal(v1alpha1.ExternalIPStateAllocated))
+	})
+
+	It("keeps the finalizer until a release result matches the submitted job inputs", func() {
+		createExternalIP(v1alpha1.ExternalIPStatus{
+			Phase:   v1alpha1.ExternalIPPhaseReady,
+			State:   v1alpha1.ExternalIPStateAllocated,
+			Address: "198.51.100.1",
+			ProvisioningJobs: []v1alpha1.JobStatus{{
+				JobID: "allocate-job", Type: v1alpha1.JobTypeProvision, Timestamp: metav1.Now(),
+				State: v1alpha1.JobStateSucceeded, ConfigVersion: "allocated",
+			}},
+		}, []string{osacExternalIPFinalizer})
+		externalIP.Annotations[osacImplementationStrategyAnnotation] = "agentless_net"
+		Expect(k8sClient.Update(ctx, externalIP)).To(Succeed())
+		reconciler.Client = startIndexedEnvtestClient()
+
+		provider.triggerDeprovisionFunc = func(_ context.Context, _ client.Object, _ []v1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
+			return &provisioning.DeprovisionResult{
+				Action: provisioning.DeprovisionTriggered, JobID: "release-job",
+				BlockDeletionOnFailure: true,
+			}, nil
+		}
+		provider.getDeprovisionStatusFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+			return provisioning.ProvisionStatus{JobID: jobID, State: v1alpha1.JobStateSucceeded}, nil
+		}
+		provider.getDeprovisionStatusWithExtraVarsFunc = func(_ context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {
+			inputs := externalIPJobInputsFixture(resource.(*v1alpha1.ExternalIP), pool)
+			jobVars := inputs["osac_job_vars"].(map[string]any)
+			poolSnapshot := jobVars["external_ip_pool"].(map[string]any)
+			poolSnapshot["kubernetes_uid"] = "stale-pool-uid"
+			return provisioning.ProvisionStatusWithExtraVars{
+				ProvisionStatus: provisioning.ProvisionStatus{JobID: jobID, State: v1alpha1.JobStateSucceeded},
+				InputExtraVars:  inputs,
+				ExtraVars: map[string]any{"osac_result": map[string]any{
+					"schemaVersion": "v1", "operation": "external_ip.release",
+					"resourceUID": string(resource.GetUID()), "observedGeneration": resource.GetGeneration(),
+					"data": map[string]any{},
+				}},
+			}, nil
+		}
+
+		Expect(k8sClient.Delete(ctx, externalIP)).To(Succeed())
+		request := mcreconcile.Request{Request: ctrl.Request{NamespacedName: client.ObjectKeyFromObject(externalIP)}}
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(func() bool {
+			current := &v1alpha1.ExternalIP{}
+			if err := reconciler.Client.Get(ctx, client.ObjectKeyFromObject(externalIP), current); err != nil {
+				return false
+			}
+			releaseJob := provisioning.FindLatestJobByType(current.Status.ProvisioningJobs, v1alpha1.JobTypeDeprovision)
+			return releaseJob != nil && releaseJob.JobID == "release-job"
+		}).WithTimeout(15 * time.Second).WithPolling(100 * time.Millisecond).Should(BeTrue())
+		result, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(time.Second))
+		retained := &v1alpha1.ExternalIP{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(externalIP), retained)).To(Succeed())
+		Expect(retained.Finalizers).To(ContainElement(osacExternalIPFinalizer))
+		latestRelease := provisioning.FindLatestJobByType(retained.Status.ProvisioningJobs, v1alpha1.JobTypeDeprovision)
+		Expect(latestRelease).NotTo(BeNil())
+		Expect(latestRelease.State).To(Equal(v1alpha1.JobStateFailed))
+	})
+
+	It("removes the finalizer after validating a successful release snapshot", func() {
+		createExternalIP(v1alpha1.ExternalIPStatus{
+			Phase:   v1alpha1.ExternalIPPhaseReady,
+			State:   v1alpha1.ExternalIPStateAllocated,
+			Address: "198.51.100.1",
+			ProvisioningJobs: []v1alpha1.JobStatus{{
+				JobID: "allocate-job", Type: v1alpha1.JobTypeProvision, Timestamp: metav1.Now(),
+				State: v1alpha1.JobStateSucceeded, ConfigVersion: "allocated",
+			}},
+		}, []string{osacExternalIPFinalizer})
+		externalIP.Annotations[osacImplementationStrategyAnnotation] = "agentless_net"
+		Expect(k8sClient.Update(ctx, externalIP)).To(Succeed())
+		reconciler.Client = startIndexedEnvtestClient()
+		provider.triggerDeprovisionFunc = func(_ context.Context, _ client.Object, _ []v1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
+			return &provisioning.DeprovisionResult{
+				Action: provisioning.DeprovisionTriggered, JobID: "release-job",
+				BlockDeletionOnFailure: true,
+			}, nil
+		}
+		provider.getDeprovisionStatusFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+			return provisioning.ProvisionStatus{JobID: jobID, State: v1alpha1.JobStateSucceeded}, nil
+		}
+		provider.getDeprovisionStatusWithExtraVarsFunc = func(_ context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {
+			return provisioning.ProvisionStatusWithExtraVars{
+				ProvisionStatus: provisioning.ProvisionStatus{JobID: jobID, State: v1alpha1.JobStateSucceeded},
+				InputExtraVars:  externalIPJobInputsFixture(resource.(*v1alpha1.ExternalIP), pool),
+				ExtraVars: map[string]any{"osac_result": map[string]any{
+					"schemaVersion": "v1", "operation": "external_ip.release",
+					"resourceUID": string(resource.GetUID()), "observedGeneration": resource.GetGeneration(),
+					"data": map[string]any{},
+				}},
+			}, nil
+		}
+
+		Expect(k8sClient.Delete(ctx, externalIP)).To(Succeed())
+		request := mcreconcile.Request{Request: ctrl.Request{NamespacedName: client.ObjectKeyFromObject(externalIP)}}
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(func() bool {
+			current := &v1alpha1.ExternalIP{}
+			if err := reconciler.Client.Get(ctx, client.ObjectKeyFromObject(externalIP), current); err != nil {
+				return false
+			}
+			releaseJob := provisioning.FindLatestJobByType(current.Status.ProvisioningJobs, v1alpha1.JobTypeDeprovision)
+			return releaseJob != nil && releaseJob.JobID == "release-job"
+		}).WithTimeout(15 * time.Second).WithPolling(100 * time.Millisecond).Should(BeTrue())
+		Eventually(func() bool {
+			_, err := reconciler.Reconcile(ctx, request)
+			if err != nil {
+				return false
+			}
+			current := &v1alpha1.ExternalIP{}
+			return apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(externalIP), current))
+		}).WithTimeout(15 * time.Second).WithPolling(100 * time.Millisecond).Should(BeTrue())
 	})
 
 	It("waits for a terminating Attachment before provider release", func() {

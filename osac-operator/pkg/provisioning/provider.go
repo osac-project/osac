@@ -139,9 +139,13 @@ type ProvisionStatus struct {
 	Outputs map[string]any
 }
 
-// ProvisionStatusWithExtraVars contains the provisioning status and returned output variables.
+// ProvisionStatusWithExtraVars contains the provisioning status, the inputs submitted to the job,
+// and the output artifacts returned by the job.
 type ProvisionStatusWithExtraVars struct {
 	ProvisionStatus
+	// InputExtraVars contains the job's submitted extra_vars input.
+	InputExtraVars map[string]any
+	// ExtraVars contains the job's returned artifacts.
 	ExtraVars map[string]any
 }
 

@@ -88,6 +88,8 @@ configure_awx() {
   compute_extra_vars="tenant_storage_classes:
   - name: standard
     tier: local"
+  local compute_extra_vars_json
+  compute_extra_vars_json=$(python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' <<< "${compute_extra_vars}")
   local entry name playbook
   for entry in \
     "osac-create-compute-instance:osac-aap/playbook_osac_create_compute_instance.yml" \
@@ -98,7 +100,7 @@ configure_awx() {
         \"name\": \"${name}\", \"organization\": 1, \"inventory\": ${inv_id},
         \"project\": ${project_id}, \"playbook\": \"${playbook}\",
         \"ask_variables_on_launch\": true,
-        \"extra_vars\": $(echo "${compute_extra_vars}" | jq -Rs .)
+        \"extra_vars\": ${compute_extra_vars_json}
       }" >/dev/null
     log "  template: ${name}"
   done
@@ -125,18 +127,23 @@ configure_awx() {
   kubectl create clusterrolebinding awx-runner-admin --clusterrole=cluster-admin \
     --serviceaccount="${NS}:awx-runner" 2>/dev/null || true
 
-  local awx_runner_token cluster_ca cred_id
+  local awx_runner_token cluster_ca cluster_ca_json cred_id
   awx_runner_token=$(kubectl -n "${NS}" create token awx-runner --duration=87600h)
   cluster_ca=$(kubectl config view --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d)
+  cluster_ca_json=$(python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' <<< "${cluster_ca}")
   cred_id=$(curl -s -X POST "${api}/credentials/" -H "Authorization: Bearer ${awx_token}" \
     -H "Content-Type: application/json" -d "{
       \"name\": \"kind-cluster\", \"organization\": 1, \"credential_type\": 17,
       \"inputs\": {
         \"host\": \"https://kubernetes.default.svc.cluster.local:443\",
         \"bearer_token\": \"${awx_runner_token}\", \"verify_ssl\": true,
-        \"ssl_ca_cert\": $(echo "${cluster_ca}" | jq -Rs .)
+        \"ssl_ca_cert\": ${cluster_ca_json}
       }
     }" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))")
+  if [[ -z "${cred_id}" ]]; then
+    warn "Failed to create AWX Kubernetes credential"
+    return 1
+  fi
 
   # Attach credential to all job templates.
   local templates jt_id

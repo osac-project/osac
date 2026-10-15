@@ -356,6 +356,7 @@ ifneq ($(PLATFORM)/$(PROFILE),kind/dev-full)
 	@echo "ERROR: install-devstack requires PLATFORM=kind PROFILE=dev-full" >&2; exit 1
 endif
 	@case "$(HELM_MAJOR)" in 3|4) ;; *) echo "ERROR: install-devstack requires Helm 3 or 4; could not detect a supported Helm version" >&2; exit 1;; esac
+	helm dependency build charts/osac-devstack
 	# Pre-install: node-level CNI setup (requires host container runtime access)
 	$(KIND_RUNTIME_ENV) scripts/dev-full/install-virt-node-setup.sh $(KIND_CLUSTER_NAME)
 ifeq ($(HELM_MAJOR),4)

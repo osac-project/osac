@@ -20,7 +20,8 @@ Scenarios:
 import json
 import ssl
 import sys
-from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SCENARIO = "empty"
 # Track API calls for test verification
@@ -81,6 +82,11 @@ class MockHandler(BaseHTTPRequestHandler):
         if path == "/_reset":
             CALL_LOG.clear()
             self._respond(200, {"status": "reset"})
+            return
+
+        if path == "/_shutdown":
+            self._respond(200, {"status": "shutting down"})
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
             return
 
         CALL_LOG.append(
@@ -171,8 +177,8 @@ class MockHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 18080
     SCENARIO = sys.argv[2] if len(sys.argv) > 2 else "empty"
-    HTTPServer.allow_reuse_address = True
-    server = HTTPServer(("127.0.0.1", port), MockHandler)
+    ThreadingHTTPServer.allow_reuse_address = True
+    server = ThreadingHTTPServer(("127.0.0.1", port), MockHandler)
     if len(sys.argv) > 4:
         tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         tls_context.minimum_version = ssl.TLSVersion.TLSv1_2
@@ -180,4 +186,7 @@ if __name__ == "__main__":
         server.socket = tls_context.wrap_socket(server.socket, server_side=True)
     print(f"Mock API server running on port {port} (scenario: {SCENARIO})")
     sys.stdout.flush()
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()

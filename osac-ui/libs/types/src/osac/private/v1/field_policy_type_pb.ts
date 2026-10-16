@@ -35,7 +35,7 @@ import type { DiskImageReference } from "./disk_image_type_pb";
 import { file_osac_private_v1_disk_image_type } from "./disk_image_type_pb";
 import type { InstanceTypeReference } from "./instance_type_type_pb";
 import { file_osac_private_v1_instance_type_type } from "./instance_type_type_pb";
-import type { SecretLocalReference } from "./secret_type_pb";
+import type { SecretLocalReference, SecretReference } from "./secret_type_pb";
 import { file_osac_private_v1_secret_type } from "./secret_type_pb";
 import type { Message } from "@bufbuild/protobuf";
 
@@ -43,7 +43,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/field_policy_type.proto.
  */
 export const file_osac_private_v1_field_policy_type: GenFile = /*@__PURE__*/
-  fileDesc("Cidvc2FjL3ByaXZhdGUvdjEvZmllbGRfcG9saWN5X3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSJyChFTdHJpbmdGaWVsZFBvbGljeRIQCgZsb2NrZWQYASABKAlIABI4CghlZGl0YWJsZRgCIAEoCzIkLm9zYWMucHJpdmF0ZS52MS5FZGl0YWJsZVN0cmluZ0ZpZWxkSABCEQoIYmVoYXZpb3ISBbpIAggBIkMKE0VkaXRhYmxlU3RyaW5nRmllbGQSGgoNZGVmYXVsdF92YWx1ZRgBIAEoCUgAiAEBQhAKDl9kZWZhdWx0X3ZhbHVlInAKEEludDMyRmllbGRQb2xpY3kSEAoGbG9ja2VkGAEgASgFSAASNwoIZWRpdGFibGUYAiABKAsyIy5vc2FjLnByaXZhdGUudjEuRWRpdGFibGVJbnQzMkZpZWxkSABCEQoIYmVoYXZpb3ISBbpIAggBIkIKEkVkaXRhYmxlSW50MzJGaWVsZBIaCg1kZWZhdWx0X3ZhbHVlGAEgASgFSACIAQFCEAoOX2RlZmF1bHRfdmFsdWUibgoPQm9vbEZpZWxkUG9saWN5EhAKBmxvY2tlZBgBIAEoCEgAEjYKCGVkaXRhYmxlGAIgASgLMiIub3NhYy5wcml2YXRlLnYxLkVkaXRhYmxlQm9vbEZpZWxkSABCEQoIYmVoYXZpb3ISBbpIAggBIkEKEUVkaXRhYmxlQm9vbEZpZWxkEhoKDWRlZmF1bHRfdmFsdWUYASABKAhIAIgBAUIQCg5fZGVmYXVsdF92YWx1ZSK4AQogSW5zdGFuY2VUeXBlUmVmZXJlbmNlRmllbGRQb2xpY3kSOAoGbG9ja2VkGAEgASgLMiYub3NhYy5wcml2YXRlLnYxLkluc3RhbmNlVHlwZVJlZmVyZW5jZUgAEkcKCGVkaXRhYmxlGAIgASgLMjMub3NhYy5wcml2YXRlLnYxLkVkaXRhYmxlSW5zdGFuY2VUeXBlUmVmZXJlbmNlRmllbGRIAEIRCghiZWhhdmlvchIFukgCCAEiYwoiRWRpdGFibGVJbnN0YW5jZVR5cGVSZWZlcmVuY2VGaWVsZBI9Cg1kZWZhdWx0X3ZhbHVlGAEgASgLMiYub3NhYy5wcml2YXRlLnYxLkluc3RhbmNlVHlwZVJlZmVyZW5jZSK1AQofU3RvcmFnZVRpZXJSZWZlcmVuY2VGaWVsZFBvbGljeRI3CgZsb2NrZWQYASABKAsyJS5vc2FjLnByaXZhdGUudjEuU3RvcmFnZVRpZXJSZWZlcmVuY2VIABJGCghlZGl0YWJsZRgCIAEoCzIyLm9zYWMucHJpdmF0ZS52MS5FZGl0YWJsZVN0b3JhZ2VUaWVyUmVmZXJlbmNlRmllbGRIAEIRCghiZWhhdmlvchIFukgCCAEiYQohRWRpdGFibGVTdG9yYWdlVGllclJlZmVyZW5jZUZpZWxkEjwKDWRlZmF1bHRfdmFsdWUYASABKAsyJS5vc2FjLnByaXZhdGUudjEuU3RvcmFnZVRpZXJSZWZlcmVuY2UirwEKHURpc2tJbWFnZVJlZmVyZW5jZUZpZWxkUG9saWN5EjUKBmxvY2tlZBgBIAEoCzIjLm9zYWMucHJpdmF0ZS52MS5EaXNrSW1hZ2VSZWZlcmVuY2VIABJECghlZGl0YWJsZRgCIAEoCzIwLm9zYWMucHJpdmF0ZS52MS5FZGl0YWJsZURpc2tJbWFnZVJlZmVyZW5jZUZpZWxkSABCEQoIYmVoYXZpb3ISBbpIAggBIl0KH0VkaXRhYmxlRGlza0ltYWdlUmVmZXJlbmNlRmllbGQSOgoNZGVmYXVsdF92YWx1ZRgBIAEoCzIjLm9zYWMucHJpdmF0ZS52MS5EaXNrSW1hZ2VSZWZlcmVuY2UivgEKIkNsdXN0ZXJWZXJzaW9uUmVmZXJlbmNlRmllbGRQb2xpY3kSOgoGbG9ja2VkGAEgASgLMigub3NhYy5wcml2YXRlLnYxLkNsdXN0ZXJWZXJzaW9uUmVmZXJlbmNlSAASSQoIZWRpdGFibGUYAiABKAsyNS5vc2FjLnByaXZhdGUudjEuRWRpdGFibGVDbHVzdGVyVmVyc2lvblJlZmVyZW5jZUZpZWxkSABCEQoIYmVoYXZpb3ISBbpIAggBImcKJEVkaXRhYmxlQ2x1c3RlclZlcnNpb25SZWZlcmVuY2VGaWVsZBI/Cg1kZWZhdWx0X3ZhbHVlGAEgASgLMigub3NhYy5wcml2YXRlLnYxLkNsdXN0ZXJWZXJzaW9uUmVmZXJlbmNlIqsBChpTZWNyZXRSZWZlcmVuY2VGaWVsZFBvbGljeRI3CgZsb2NrZWQYASABKAsyJS5vc2FjLnByaXZhdGUudjEuU2VjcmV0TG9jYWxSZWZlcmVuY2VIABJBCghlZGl0YWJsZRgCIAEoCzItLm9zYWMucHJpdmF0ZS52MS5FZGl0YWJsZVNlY3JldFJlZmVyZW5jZUZpZWxkSABCEQoIYmVoYXZpb3ISBbpIAggBIlwKHEVkaXRhYmxlU2VjcmV0UmVmZXJlbmNlRmllbGQSPAoNZGVmYXVsdF92YWx1ZRgBIAEoCzIlLm9zYWMucHJpdmF0ZS52MS5TZWNyZXRMb2NhbFJlZmVyZW5jZSLTAQopQmFyZU1ldGFsSW5zdGFuY2VUeXBlUmVmZXJlbmNlRmllbGRQb2xpY3kSQQoGbG9ja2VkGAEgASgLMi8ub3NhYy5wcml2YXRlLnYxLkJhcmVNZXRhbEluc3RhbmNlVHlwZVJlZmVyZW5jZUgAElAKCGVkaXRhYmxlGAIgASgLMjwub3NhYy5wcml2YXRlLnYxLkVkaXRhYmxlQmFyZU1ldGFsSW5zdGFuY2VUeXBlUmVmZXJlbmNlRmllbGRIAEIRCghiZWhhdmlvchIFukgCCAEidQorRWRpdGFibGVCYXJlTWV0YWxJbnN0YW5jZVR5cGVSZWZlcmVuY2VGaWVsZBJGCg1kZWZhdWx0X3ZhbHVlGAEgASgLMi8ub3NhYy5wcml2YXRlLnYxLkJhcmVNZXRhbEluc3RhbmNlVHlwZVJlZmVyZW5jZSLBAQojQ2x1c3Rlck5ldHdvcmtBdHRhY2htZW50RmllbGRQb2xpY3kSOwoGbG9ja2VkGAEgASgLMikub3NhYy5wcml2YXRlLnYxLkNsdXN0ZXJOZXR3b3JrQXR0YWNobWVudEgAEkoKCGVkaXRhYmxlGAIgASgLMjYub3NhYy5wcml2YXRlLnYxLkVkaXRhYmxlQ2x1c3Rlck5ldHdvcmtBdHRhY2htZW50RmllbGRIAEIRCghiZWhhdmlvchIFukgCCAEiaQolRWRpdGFibGVDbHVzdGVyTmV0d29ya0F0dGFjaG1lbnRGaWVsZBJACg1kZWZhdWx0X3ZhbHVlGAEgASgLMikub3NhYy5wcml2YXRlLnYxLkNsdXN0ZXJOZXR3b3JrQXR0YWNobWVudCLTAQolQ29tcHV0ZUluc3RhbmNlUnVuU3RyYXRlZ3lGaWVsZFBvbGljeRJJCgZsb2NrZWQYASABKA4yKy5vc2FjLnByaXZhdGUudjEuQ29tcHV0ZUluc3RhbmNlUnVuU3RyYXRlZ3lCCrpIB4IBBBABIABIABJMCghlZGl0YWJsZRgCIAEoCzI4Lm9zYWMucHJpdmF0ZS52MS5FZGl0YWJsZUNvbXB1dGVJbnN0YW5jZVJ1blN0cmF0ZWd5RmllbGRIAEIRCghiZWhhdmlvchIFukgCCAEikAEKJ0VkaXRhYmxlQ29tcHV0ZUluc3RhbmNlUnVuU3RyYXRlZ3lGaWVsZBJTCg1kZWZhdWx0X3ZhbHVlGAEgASgOMisub3NhYy5wcml2YXRlLnYxLkNvbXB1dGVJbnN0YW5jZVJ1blN0cmF0ZWd5Qgq6SAeCAQQQASAASACIAQFCEAoOX2RlZmF1bHRfdmFsdWUi2QEKJ0JhcmVNZXRhbEluc3RhbmNlUnVuU3RyYXRlZ3lGaWVsZFBvbGljeRJLCgZsb2NrZWQYASABKA4yLS5vc2FjLnByaXZhdGUudjEuQmFyZU1ldGFsSW5zdGFuY2VSdW5TdHJhdGVneUIKukgHggEEEAEgAEgAEk4KCGVkaXRhYmxlGAIgASgLMjoub3NhYy5wcml2YXRlLnYxLkVkaXRhYmxlQmFyZU1ldGFsSW5zdGFuY2VSdW5TdHJhdGVneUZpZWxkSABCEQoIYmVoYXZpb3ISBbpIAggBIpQBCilFZGl0YWJsZUJhcmVNZXRhbEluc3RhbmNlUnVuU3RyYXRlZ3lGaWVsZBJVCg1kZWZhdWx0X3ZhbHVlGAEgASgOMi0ub3NhYy5wcml2YXRlLnYxLkJhcmVNZXRhbEluc3RhbmNlUnVuU3RyYXRlZ3lCCrpIB4IBBBABIABIAIgBAUIQCg5fZGVmYXVsdF92YWx1ZSJYChxDb21wdXRlTmV0d29ya0F0dGFjaG1lbnRMaXN0EjgKBWl0ZW1zGAEgAygLMikub3NhYy5wcml2YXRlLnYxLkNvbXB1dGVOZXR3b3JrQXR0YWNobWVudCLIAQonQ29tcHV0ZU5ldHdvcmtBdHRhY2htZW50TGlzdEZpZWxkUG9saWN5Ej8KBmxvY2tlZBgBIAEoCzItLm9zYWMucHJpdmF0ZS52MS5Db21wdXRlTmV0d29ya0F0dGFjaG1lbnRMaXN0SAASSQoIZWRpdGFibGUYAiABKAsyNS5vc2FjLnByaXZhdGUudjEuRWRpdGFibGVDb21wdXRlTmV0d29ya0F0dGFjaG1lbnRMaXN0SABCEQoIYmVoYXZpb3ISBbpIAggBImwKJEVkaXRhYmxlQ29tcHV0ZU5ldHdvcmtBdHRhY2htZW50TGlzdBJECg1kZWZhdWx0X3ZhbHVlGAEgASgLMi0ub3NhYy5wcml2YXRlLnYxLkNvbXB1dGVOZXR3b3JrQXR0YWNobWVudExpc3QiTgoXQ29tcHV0ZUluc3RhbmNlRGlza0xpc3QSMwoFaXRlbXMYASADKAsyJC5vc2FjLnByaXZhdGUudjEuQ29tcHV0ZUluc3RhbmNlRGlzayK5AQoiQ29tcHV0ZUluc3RhbmNlRGlza0xpc3RGaWVsZFBvbGljeRI6CgZsb2NrZWQYASABKAsyKC5vc2FjLnByaXZhdGUudjEuQ29tcHV0ZUluc3RhbmNlRGlza0xpc3RIABJECghlZGl0YWJsZRgCIAEoCzIwLm9zYWMucHJpdmF0ZS52MS5FZGl0YWJsZUNvbXB1dGVJbnN0YW5jZURpc2tMaXN0SABCEQoIYmVoYXZpb3ISBbpIAggBImIKH0VkaXRhYmxlQ29tcHV0ZUluc3RhbmNlRGlza0xpc3QSPwoNZGVmYXVsdF92YWx1ZRgBIAEoCzIoLm9zYWMucHJpdmF0ZS52MS5Db21wdXRlSW5zdGFuY2VEaXNrTGlzdCJcCh5CYXJlTWV0YWxOZXR3b3JrQXR0YWNobWVudExpc3QSOgoFaXRlbXMYASADKAsyKy5vc2FjLnByaXZhdGUudjEuQmFyZU1ldGFsTmV0d29ya0F0dGFjaG1lbnQizgEKKUJhcmVNZXRhbE5ldHdvcmtBdHRhY2htZW50TGlzdEZpZWxkUG9saWN5EkEKBmxvY2tlZBgBIAEoCzIvLm9zYWMucHJpdmF0ZS52MS5CYXJlTWV0YWxOZXR3b3JrQXR0YWNobWVudExpc3RIABJLCghlZGl0YWJsZRgCIAEoCzI3Lm9zYWMucHJpdmF0ZS52MS5FZGl0YWJsZUJhcmVNZXRhbE5ldHdvcmtBdHRhY2htZW50TGlzdEgAQhEKCGJlaGF2aW9yEgW6SAIIASJwCiZFZGl0YWJsZUJhcmVNZXRhbE5ldHdvcmtBdHRhY2htZW50TGlzdBJGCg1kZWZhdWx0X3ZhbHVlGAEgASgLMi8ub3NhYy5wcml2YXRlLnYxLkJhcmVNZXRhbE5ldHdvcmtBdHRhY2htZW50TGlzdCKUAQoXVGVtcGxhdGVQYXJhbWV0ZXJQb2xpY3kSJgoGbG9ja2VkGAEgASgLMhQuZ29vZ2xlLnByb3RvYnVmLkFueUgAEj4KCGVkaXRhYmxlGAIgASgLMioub3NhYy5wcml2YXRlLnYxLkVkaXRhYmxlVGVtcGxhdGVQYXJhbWV0ZXJIAEIRCghiZWhhdmlvchIFukgCCAEiSAoZRWRpdGFibGVUZW1wbGF0ZVBhcmFtZXRlchIrCg1kZWZhdWx0X3ZhbHVlGAEgASgLMhQuZ29vZ2xlLnByb3RvYnVmLkFueUIUirUYEBIOb3NhYy5wdWJsaWMudjFiBnByb3RvMw", [file_buf_validate_validate, file_cleanapi_cleanapi, file_google_protobuf_any, file_osac_private_v1_baremetal_instance_common_type, file_osac_private_v1_baremetal_instance_type_type, file_osac_private_v1_cluster_common_type, file_osac_private_v1_cluster_version_type, file_osac_private_v1_compute_instance_common_type, file_osac_private_v1_disk_image_type, file_osac_private_v1_instance_type_type, file_osac_private_v1_secret_type]);
+  fileDesc("Cidvc2FjL3ByaXZhdGUvdjEvZmllbGRfcG9saWN5X3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSJyChFTdHJpbmdGaWVsZFBvbGljeRIQCgZsb2NrZWQYASABKAlIABI4CghlZGl0YWJsZRgCIAEoCzIkLm9zYWMucHJpdmF0ZS52MS5FZGl0YWJsZVN0cmluZ0ZpZWxkSABCEQoIYmVoYXZpb3ISBbpIAggBIkMKE0VkaXRhYmxlU3RyaW5nRmllbGQSGgoNZGVmYXVsdF92YWx1ZRgBIAEoCUgAiAEBQhAKDl9kZWZhdWx0X3ZhbHVlInAKEEludDMyRmllbGRQb2xpY3kSEAoGbG9ja2VkGAEgASgFSAASNwoIZWRpdGFibGUYAiABKAsyIy5vc2FjLnByaXZhdGUudjEuRWRpdGFibGVJbnQzMkZpZWxkSABCEQoIYmVoYXZpb3ISBbpIAggBIkIKEkVkaXRhYmxlSW50MzJGaWVsZBIaCg1kZWZhdWx0X3ZhbHVlGAEgASgFSACIAQFCEAoOX2RlZmF1bHRfdmFsdWUibgoPQm9vbEZpZWxkUG9saWN5EhAKBmxvY2tlZBgBIAEoCEgAEjYKCGVkaXRhYmxlGAIgASgLMiIub3NhYy5wcml2YXRlLnYxLkVkaXRhYmxlQm9vbEZpZWxkSABCEQoIYmVoYXZpb3ISBbpIAggBIkEKEUVkaXRhYmxlQm9vbEZpZWxkEhoKDWRlZmF1bHRfdmFsdWUYASABKAhIAIgBAUIQCg5fZGVmYXVsdF92YWx1ZSK4AQogSW5zdGFuY2VUeXBlUmVmZXJlbmNlRmllbGRQb2xpY3kSOAoGbG9ja2VkGAEgASgLMiYub3NhYy5wcml2YXRlLnYxLkluc3RhbmNlVHlwZVJlZmVyZW5jZUgAEkcKCGVkaXRhYmxlGAIgASgLMjMub3NhYy5wcml2YXRlLnYxLkVkaXRhYmxlSW5zdGFuY2VUeXBlUmVmZXJlbmNlRmllbGRIAEIRCghiZWhhdmlvchIFukgCCAEiYwoiRWRpdGFibGVJbnN0YW5jZVR5cGVSZWZlcmVuY2VGaWVsZBI9Cg1kZWZhdWx0X3ZhbHVlGAEgASgLMiYub3NhYy5wcml2YXRlLnYxLkluc3RhbmNlVHlwZVJlZmVyZW5jZSK1AQofU3RvcmFnZVRpZXJSZWZlcmVuY2VGaWVsZFBvbGljeRI3CgZsb2NrZWQYASABKAsyJS5vc2FjLnByaXZhdGUudjEuU3RvcmFnZVRpZXJSZWZlcmVuY2VIABJGCghlZGl0YWJsZRgCIAEoCzIyLm9zYWMucHJpdmF0ZS52MS5FZGl0YWJsZVN0b3JhZ2VUaWVyUmVmZXJlbmNlRmllbGRIAEIRCghiZWhhdmlvchIFukgCCAEiYQohRWRpdGFibGVTdG9yYWdlVGllclJlZmVyZW5jZUZpZWxkEjwKDWRlZmF1bHRfdmFsdWUYASABKAsyJS5vc2FjLnByaXZhdGUudjEuU3RvcmFnZVRpZXJSZWZlcmVuY2UirwEKHURpc2tJbWFnZVJlZmVyZW5jZUZpZWxkUG9saWN5EjUKBmxvY2tlZBgBIAEoCzIjLm9zYWMucHJpdmF0ZS52MS5EaXNrSW1hZ2VSZWZlcmVuY2VIABJECghlZGl0YWJsZRgCIAEoCzIwLm9zYWMucHJpdmF0ZS52MS5FZGl0YWJsZURpc2tJbWFnZVJlZmVyZW5jZUZpZWxkSABCEQoIYmVoYXZpb3ISBbpIAggBIl0KH0VkaXRhYmxlRGlza0ltYWdlUmVmZXJlbmNlRmllbGQSOgoNZGVmYXVsdF92YWx1ZRgBIAEoCzIjLm9zYWMucHJpdmF0ZS52MS5EaXNrSW1hZ2VSZWZlcmVuY2UivgEKIkNsdXN0ZXJWZXJzaW9uUmVmZXJlbmNlRmllbGRQb2xpY3kSOgoGbG9ja2VkGAEgASgLMigub3NhYy5wcml2YXRlLnYxLkNsdXN0ZXJWZXJzaW9uUmVmZXJlbmNlSAASSQoIZWRpdGFibGUYAiABKAsyNS5vc2FjLnByaXZhdGUudjEuRWRpdGFibGVDbHVzdGVyVmVyc2lvblJlZmVyZW5jZUZpZWxkSABCEQoIYmVoYXZpb3ISBbpIAggBImcKJEVkaXRhYmxlQ2x1c3RlclZlcnNpb25SZWZlcmVuY2VGaWVsZBI/Cg1kZWZhdWx0X3ZhbHVlGAEgASgLMigub3NhYy5wcml2YXRlLnYxLkNsdXN0ZXJWZXJzaW9uUmVmZXJlbmNlIqsBChpTZWNyZXRSZWZlcmVuY2VGaWVsZFBvbGljeRI3CgZsb2NrZWQYASABKAsyJS5vc2FjLnByaXZhdGUudjEuU2VjcmV0TG9jYWxSZWZlcmVuY2VIABJBCghlZGl0YWJsZRgCIAEoCzItLm9zYWMucHJpdmF0ZS52MS5FZGl0YWJsZVNlY3JldFJlZmVyZW5jZUZpZWxkSABCEQoIYmVoYXZpb3ISBbpIAggBIlwKHEVkaXRhYmxlU2VjcmV0UmVmZXJlbmNlRmllbGQSPAoNZGVmYXVsdF92YWx1ZRgBIAEoCzIlLm9zYWMucHJpdmF0ZS52MS5TZWNyZXRMb2NhbFJlZmVyZW5jZSKyAQogR2xvYmFsU2VjcmV0UmVmZXJlbmNlRmllbGRQb2xpY3kSMgoGbG9ja2VkGAEgASgLMiAub3NhYy5wcml2YXRlLnYxLlNlY3JldFJlZmVyZW5jZUgAEkcKCGVkaXRhYmxlGAIgASgLMjMub3NhYy5wcml2YXRlLnYxLkVkaXRhYmxlR2xvYmFsU2VjcmV0UmVmZXJlbmNlRmllbGRIAEIRCghiZWhhdmlvchIFukgCCAEiXQoiRWRpdGFibGVHbG9iYWxTZWNyZXRSZWZlcmVuY2VGaWVsZBI3Cg1kZWZhdWx0X3ZhbHVlGAEgASgLMiAub3NhYy5wcml2YXRlLnYxLlNlY3JldFJlZmVyZW5jZSLTAQopQmFyZU1ldGFsSW5zdGFuY2VUeXBlUmVmZXJlbmNlRmllbGRQb2xpY3kSQQoGbG9ja2VkGAEgASgLMi8ub3NhYy5wcml2YXRlLnYxLkJhcmVNZXRhbEluc3RhbmNlVHlwZVJlZmVyZW5jZUgAElAKCGVkaXRhYmxlGAIgASgLMjwub3NhYy5wcml2YXRlLnYxLkVkaXRhYmxlQmFyZU1ldGFsSW5zdGFuY2VUeXBlUmVmZXJlbmNlRmllbGRIAEIRCghiZWhhdmlvchIFukgCCAEidQorRWRpdGFibGVCYXJlTWV0YWxJbnN0YW5jZVR5cGVSZWZlcmVuY2VGaWVsZBJGCg1kZWZhdWx0X3ZhbHVlGAEgASgLMi8ub3NhYy5wcml2YXRlLnYxLkJhcmVNZXRhbEluc3RhbmNlVHlwZVJlZmVyZW5jZSLBAQojQ2x1c3Rlck5ldHdvcmtBdHRhY2htZW50RmllbGRQb2xpY3kSOwoGbG9ja2VkGAEgASgLMikub3NhYy5wcml2YXRlLnYxLkNsdXN0ZXJOZXR3b3JrQXR0YWNobWVudEgAEkoKCGVkaXRhYmxlGAIgASgLMjYub3NhYy5wcml2YXRlLnYxLkVkaXRhYmxlQ2x1c3Rlck5ldHdvcmtBdHRhY2htZW50RmllbGRIAEIRCghiZWhhdmlvchIFukgCCAEiaQolRWRpdGFibGVDbHVzdGVyTmV0d29ya0F0dGFjaG1lbnRGaWVsZBJACg1kZWZhdWx0X3ZhbHVlGAEgASgLMikub3NhYy5wcml2YXRlLnYxLkNsdXN0ZXJOZXR3b3JrQXR0YWNobWVudCLTAQolQ29tcHV0ZUluc3RhbmNlUnVuU3RyYXRlZ3lGaWVsZFBvbGljeRJJCgZsb2NrZWQYASABKA4yKy5vc2FjLnByaXZhdGUudjEuQ29tcHV0ZUluc3RhbmNlUnVuU3RyYXRlZ3lCCrpIB4IBBBABIABIABJMCghlZGl0YWJsZRgCIAEoCzI4Lm9zYWMucHJpdmF0ZS52MS5FZGl0YWJsZUNvbXB1dGVJbnN0YW5jZVJ1blN0cmF0ZWd5RmllbGRIAEIRCghiZWhhdmlvchIFukgCCAEikAEKJ0VkaXRhYmxlQ29tcHV0ZUluc3RhbmNlUnVuU3RyYXRlZ3lGaWVsZBJTCg1kZWZhdWx0X3ZhbHVlGAEgASgOMisub3NhYy5wcml2YXRlLnYxLkNvbXB1dGVJbnN0YW5jZVJ1blN0cmF0ZWd5Qgq6SAeCAQQQASAASACIAQFCEAoOX2RlZmF1bHRfdmFsdWUi2QEKJ0JhcmVNZXRhbEluc3RhbmNlUnVuU3RyYXRlZ3lGaWVsZFBvbGljeRJLCgZsb2NrZWQYASABKA4yLS5vc2FjLnByaXZhdGUudjEuQmFyZU1ldGFsSW5zdGFuY2VSdW5TdHJhdGVneUIKukgHggEEEAEgAEgAEk4KCGVkaXRhYmxlGAIgASgLMjoub3NhYy5wcml2YXRlLnYxLkVkaXRhYmxlQmFyZU1ldGFsSW5zdGFuY2VSdW5TdHJhdGVneUZpZWxkSABCEQoIYmVoYXZpb3ISBbpIAggBIpQBCilFZGl0YWJsZUJhcmVNZXRhbEluc3RhbmNlUnVuU3RyYXRlZ3lGaWVsZBJVCg1kZWZhdWx0X3ZhbHVlGAEgASgOMi0ub3NhYy5wcml2YXRlLnYxLkJhcmVNZXRhbEluc3RhbmNlUnVuU3RyYXRlZ3lCCrpIB4IBBBABIABIAIgBAUIQCg5fZGVmYXVsdF92YWx1ZSJYChxDb21wdXRlTmV0d29ya0F0dGFjaG1lbnRMaXN0EjgKBWl0ZW1zGAEgAygLMikub3NhYy5wcml2YXRlLnYxLkNvbXB1dGVOZXR3b3JrQXR0YWNobWVudCLIAQonQ29tcHV0ZU5ldHdvcmtBdHRhY2htZW50TGlzdEZpZWxkUG9saWN5Ej8KBmxvY2tlZBgBIAEoCzItLm9zYWMucHJpdmF0ZS52MS5Db21wdXRlTmV0d29ya0F0dGFjaG1lbnRMaXN0SAASSQoIZWRpdGFibGUYAiABKAsyNS5vc2FjLnByaXZhdGUudjEuRWRpdGFibGVDb21wdXRlTmV0d29ya0F0dGFjaG1lbnRMaXN0SABCEQoIYmVoYXZpb3ISBbpIAggBImwKJEVkaXRhYmxlQ29tcHV0ZU5ldHdvcmtBdHRhY2htZW50TGlzdBJECg1kZWZhdWx0X3ZhbHVlGAEgASgLMi0ub3NhYy5wcml2YXRlLnYxLkNvbXB1dGVOZXR3b3JrQXR0YWNobWVudExpc3QiTgoXQ29tcHV0ZUluc3RhbmNlRGlza0xpc3QSMwoFaXRlbXMYASADKAsyJC5vc2FjLnByaXZhdGUudjEuQ29tcHV0ZUluc3RhbmNlRGlzayK5AQoiQ29tcHV0ZUluc3RhbmNlRGlza0xpc3RGaWVsZFBvbGljeRI6CgZsb2NrZWQYASABKAsyKC5vc2FjLnByaXZhdGUudjEuQ29tcHV0ZUluc3RhbmNlRGlza0xpc3RIABJECghlZGl0YWJsZRgCIAEoCzIwLm9zYWMucHJpdmF0ZS52MS5FZGl0YWJsZUNvbXB1dGVJbnN0YW5jZURpc2tMaXN0SABCEQoIYmVoYXZpb3ISBbpIAggBImIKH0VkaXRhYmxlQ29tcHV0ZUluc3RhbmNlRGlza0xpc3QSPwoNZGVmYXVsdF92YWx1ZRgBIAEoCzIoLm9zYWMucHJpdmF0ZS52MS5Db21wdXRlSW5zdGFuY2VEaXNrTGlzdCJcCh5CYXJlTWV0YWxOZXR3b3JrQXR0YWNobWVudExpc3QSOgoFaXRlbXMYASADKAsyKy5vc2FjLnByaXZhdGUudjEuQmFyZU1ldGFsTmV0d29ya0F0dGFjaG1lbnQizgEKKUJhcmVNZXRhbE5ldHdvcmtBdHRhY2htZW50TGlzdEZpZWxkUG9saWN5EkEKBmxvY2tlZBgBIAEoCzIvLm9zYWMucHJpdmF0ZS52MS5CYXJlTWV0YWxOZXR3b3JrQXR0YWNobWVudExpc3RIABJLCghlZGl0YWJsZRgCIAEoCzI3Lm9zYWMucHJpdmF0ZS52MS5FZGl0YWJsZUJhcmVNZXRhbE5ldHdvcmtBdHRhY2htZW50TGlzdEgAQhEKCGJlaGF2aW9yEgW6SAIIASJwCiZFZGl0YWJsZUJhcmVNZXRhbE5ldHdvcmtBdHRhY2htZW50TGlzdBJGCg1kZWZhdWx0X3ZhbHVlGAEgASgLMi8ub3NhYy5wcml2YXRlLnYxLkJhcmVNZXRhbE5ldHdvcmtBdHRhY2htZW50TGlzdCKUAQoXVGVtcGxhdGVQYXJhbWV0ZXJQb2xpY3kSJgoGbG9ja2VkGAEgASgLMhQuZ29vZ2xlLnByb3RvYnVmLkFueUgAEj4KCGVkaXRhYmxlGAIgASgLMioub3NhYy5wcml2YXRlLnYxLkVkaXRhYmxlVGVtcGxhdGVQYXJhbWV0ZXJIAEIRCghiZWhhdmlvchIFukgCCAEiSAoZRWRpdGFibGVUZW1wbGF0ZVBhcmFtZXRlchIrCg1kZWZhdWx0X3ZhbHVlGAEgASgLMhQuZ29vZ2xlLnByb3RvYnVmLkFueUIUirUYEBIOb3NhYy5wdWJsaWMudjFiBnByb3RvMw", [file_buf_validate_validate, file_cleanapi_cleanapi, file_google_protobuf_any, file_osac_private_v1_baremetal_instance_common_type, file_osac_private_v1_baremetal_instance_type_type, file_osac_private_v1_cluster_common_type, file_osac_private_v1_cluster_version_type, file_osac_private_v1_compute_instance_common_type, file_osac_private_v1_disk_image_type, file_osac_private_v1_instance_type_type, file_osac_private_v1_secret_type]);
 
 /**
  * Defines whether a string field is locked or editable.
@@ -446,6 +446,56 @@ export const EditableSecretReferenceFieldSchema: GenMessage<EditableSecretRefere
   messageDesc(file_osac_private_v1_field_policy_type, 15);
 
 /**
+ * Defines whether a global Secret reference is locked or editable.
+ *
+ * @generated from message osac.private.v1.GlobalSecretReferenceFieldPolicy
+ */
+export type GlobalSecretReferenceFieldPolicy = Message<"osac.private.v1.GlobalSecretReferenceFieldPolicy"> & {
+  /**
+   * @generated from oneof osac.private.v1.GlobalSecretReferenceFieldPolicy.behavior
+   */
+  behavior: {
+    /**
+     * @generated from field: osac.private.v1.SecretReference locked = 1;
+     */
+    value: SecretReference;
+    case: "locked";
+  } | {
+    /**
+     * @generated from field: osac.private.v1.EditableGlobalSecretReferenceField editable = 2;
+     */
+    value: EditableGlobalSecretReferenceField;
+    case: "editable";
+  } | { case: undefined; value?: undefined };
+};
+
+/**
+ * Describes the message osac.private.v1.GlobalSecretReferenceFieldPolicy.
+ * Use `create(GlobalSecretReferenceFieldPolicySchema)` to create a new message.
+ */
+export const GlobalSecretReferenceFieldPolicySchema: GenMessage<GlobalSecretReferenceFieldPolicy> = /*@__PURE__*/
+  messageDesc(file_osac_private_v1_field_policy_type, 16);
+
+/**
+ * Configures an editable global Secret reference.
+ *
+ * @generated from message osac.private.v1.EditableGlobalSecretReferenceField
+ */
+export type EditableGlobalSecretReferenceField = Message<"osac.private.v1.EditableGlobalSecretReferenceField"> & {
+  /**
+   * @generated from field: osac.private.v1.SecretReference default_value = 1;
+   */
+  defaultValue?: SecretReference | undefined;
+};
+
+/**
+ * Describes the message osac.private.v1.EditableGlobalSecretReferenceField.
+ * Use `create(EditableGlobalSecretReferenceFieldSchema)` to create a new message.
+ */
+export const EditableGlobalSecretReferenceFieldSchema: GenMessage<EditableGlobalSecretReferenceField> = /*@__PURE__*/
+  messageDesc(file_osac_private_v1_field_policy_type, 17);
+
+/**
  * Defines whether a bare metal instance type reference is locked or editable.
  *
  * @generated from message osac.private.v1.BareMetalInstanceTypeReferenceFieldPolicy
@@ -474,7 +524,7 @@ export type BareMetalInstanceTypeReferenceFieldPolicy = Message<"osac.private.v1
  * Use `create(BareMetalInstanceTypeReferenceFieldPolicySchema)` to create a new message.
  */
 export const BareMetalInstanceTypeReferenceFieldPolicySchema: GenMessage<BareMetalInstanceTypeReferenceFieldPolicy> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_field_policy_type, 16);
+  messageDesc(file_osac_private_v1_field_policy_type, 18);
 
 /**
  * Configures an editable bare metal instance type reference.
@@ -493,7 +543,7 @@ export type EditableBareMetalInstanceTypeReferenceField = Message<"osac.private.
  * Use `create(EditableBareMetalInstanceTypeReferenceFieldSchema)` to create a new message.
  */
 export const EditableBareMetalInstanceTypeReferenceFieldSchema: GenMessage<EditableBareMetalInstanceTypeReferenceField> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_field_policy_type, 17);
+  messageDesc(file_osac_private_v1_field_policy_type, 19);
 
 /**
  * Defines whether a cluster network attachment is locked or editable.
@@ -524,7 +574,7 @@ export type ClusterNetworkAttachmentFieldPolicy = Message<"osac.private.v1.Clust
  * Use `create(ClusterNetworkAttachmentFieldPolicySchema)` to create a new message.
  */
 export const ClusterNetworkAttachmentFieldPolicySchema: GenMessage<ClusterNetworkAttachmentFieldPolicy> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_field_policy_type, 18);
+  messageDesc(file_osac_private_v1_field_policy_type, 20);
 
 /**
  * Configures an editable cluster network attachment.
@@ -543,7 +593,7 @@ export type EditableClusterNetworkAttachmentField = Message<"osac.private.v1.Edi
  * Use `create(EditableClusterNetworkAttachmentFieldSchema)` to create a new message.
  */
 export const EditableClusterNetworkAttachmentFieldSchema: GenMessage<EditableClusterNetworkAttachmentField> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_field_policy_type, 19);
+  messageDesc(file_osac_private_v1_field_policy_type, 21);
 
 /**
  * Defines whether a compute instance run strategy is locked or editable.
@@ -574,7 +624,7 @@ export type ComputeInstanceRunStrategyFieldPolicy = Message<"osac.private.v1.Com
  * Use `create(ComputeInstanceRunStrategyFieldPolicySchema)` to create a new message.
  */
 export const ComputeInstanceRunStrategyFieldPolicySchema: GenMessage<ComputeInstanceRunStrategyFieldPolicy> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_field_policy_type, 20);
+  messageDesc(file_osac_private_v1_field_policy_type, 22);
 
 /**
  * Configures an editable compute instance run strategy.
@@ -593,7 +643,7 @@ export type EditableComputeInstanceRunStrategyField = Message<"osac.private.v1.E
  * Use `create(EditableComputeInstanceRunStrategyFieldSchema)` to create a new message.
  */
 export const EditableComputeInstanceRunStrategyFieldSchema: GenMessage<EditableComputeInstanceRunStrategyField> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_field_policy_type, 21);
+  messageDesc(file_osac_private_v1_field_policy_type, 23);
 
 /**
  * Defines whether a bare metal instance run strategy is locked or editable.
@@ -624,7 +674,7 @@ export type BareMetalInstanceRunStrategyFieldPolicy = Message<"osac.private.v1.B
  * Use `create(BareMetalInstanceRunStrategyFieldPolicySchema)` to create a new message.
  */
 export const BareMetalInstanceRunStrategyFieldPolicySchema: GenMessage<BareMetalInstanceRunStrategyFieldPolicy> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_field_policy_type, 22);
+  messageDesc(file_osac_private_v1_field_policy_type, 24);
 
 /**
  * Configures an editable bare metal instance run strategy.
@@ -643,7 +693,7 @@ export type EditableBareMetalInstanceRunStrategyField = Message<"osac.private.v1
  * Use `create(EditableBareMetalInstanceRunStrategyFieldSchema)` to create a new message.
  */
 export const EditableBareMetalInstanceRunStrategyFieldSchema: GenMessage<EditableBareMetalInstanceRunStrategyField> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_field_policy_type, 23);
+  messageDesc(file_osac_private_v1_field_policy_type, 25);
 
 /**
  * Wraps compute network attachments for use in a field policy.
@@ -662,7 +712,7 @@ export type ComputeNetworkAttachmentList = Message<"osac.private.v1.ComputeNetwo
  * Use `create(ComputeNetworkAttachmentListSchema)` to create a new message.
  */
 export const ComputeNetworkAttachmentListSchema: GenMessage<ComputeNetworkAttachmentList> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_field_policy_type, 24);
+  messageDesc(file_osac_private_v1_field_policy_type, 26);
 
 /**
  * Defines whether compute network attachments are locked or editable.
@@ -693,7 +743,7 @@ export type ComputeNetworkAttachmentListFieldPolicy = Message<"osac.private.v1.C
  * Use `create(ComputeNetworkAttachmentListFieldPolicySchema)` to create a new message.
  */
 export const ComputeNetworkAttachmentListFieldPolicySchema: GenMessage<ComputeNetworkAttachmentListFieldPolicy> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_field_policy_type, 25);
+  messageDesc(file_osac_private_v1_field_policy_type, 27);
 
 /**
  * Configures editable compute network attachments.
@@ -712,10 +762,10 @@ export type EditableComputeNetworkAttachmentList = Message<"osac.private.v1.Edit
  * Use `create(EditableComputeNetworkAttachmentListSchema)` to create a new message.
  */
 export const EditableComputeNetworkAttachmentListSchema: GenMessage<EditableComputeNetworkAttachmentList> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_field_policy_type, 26);
+  messageDesc(file_osac_private_v1_field_policy_type, 28);
 
 /**
- * Wraps compute instance disks for use in a field policy.
+ * Contains a list of compute instance disks. Message presence distinguishes an omitted list from an empty list.
  *
  * @generated from message osac.private.v1.ComputeInstanceDiskList
  */
@@ -731,7 +781,7 @@ export type ComputeInstanceDiskList = Message<"osac.private.v1.ComputeInstanceDi
  * Use `create(ComputeInstanceDiskListSchema)` to create a new message.
  */
 export const ComputeInstanceDiskListSchema: GenMessage<ComputeInstanceDiskList> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_field_policy_type, 27);
+  messageDesc(file_osac_private_v1_field_policy_type, 29);
 
 /**
  * Defines whether compute instance additional disks are locked or editable.
@@ -762,7 +812,7 @@ export type ComputeInstanceDiskListFieldPolicy = Message<"osac.private.v1.Comput
  * Use `create(ComputeInstanceDiskListFieldPolicySchema)` to create a new message.
  */
 export const ComputeInstanceDiskListFieldPolicySchema: GenMessage<ComputeInstanceDiskListFieldPolicy> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_field_policy_type, 28);
+  messageDesc(file_osac_private_v1_field_policy_type, 30);
 
 /**
  * Configures editable compute instance additional disks.
@@ -781,7 +831,7 @@ export type EditableComputeInstanceDiskList = Message<"osac.private.v1.EditableC
  * Use `create(EditableComputeInstanceDiskListSchema)` to create a new message.
  */
 export const EditableComputeInstanceDiskListSchema: GenMessage<EditableComputeInstanceDiskList> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_field_policy_type, 29);
+  messageDesc(file_osac_private_v1_field_policy_type, 31);
 
 /**
  * Wraps bare metal network attachments for use in a field policy.
@@ -800,7 +850,7 @@ export type BareMetalNetworkAttachmentList = Message<"osac.private.v1.BareMetalN
  * Use `create(BareMetalNetworkAttachmentListSchema)` to create a new message.
  */
 export const BareMetalNetworkAttachmentListSchema: GenMessage<BareMetalNetworkAttachmentList> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_field_policy_type, 30);
+  messageDesc(file_osac_private_v1_field_policy_type, 32);
 
 /**
  * Defines whether bare metal network attachments are locked or editable.
@@ -831,7 +881,7 @@ export type BareMetalNetworkAttachmentListFieldPolicy = Message<"osac.private.v1
  * Use `create(BareMetalNetworkAttachmentListFieldPolicySchema)` to create a new message.
  */
 export const BareMetalNetworkAttachmentListFieldPolicySchema: GenMessage<BareMetalNetworkAttachmentListFieldPolicy> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_field_policy_type, 31);
+  messageDesc(file_osac_private_v1_field_policy_type, 33);
 
 /**
  * Configures editable bare metal network attachments.
@@ -850,7 +900,7 @@ export type EditableBareMetalNetworkAttachmentList = Message<"osac.private.v1.Ed
  * Use `create(EditableBareMetalNetworkAttachmentListSchema)` to create a new message.
  */
 export const EditableBareMetalNetworkAttachmentListSchema: GenMessage<EditableBareMetalNetworkAttachmentList> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_field_policy_type, 32);
+  messageDesc(file_osac_private_v1_field_policy_type, 34);
 
 /**
  * Defines whether a template parameter is locked or editable.
@@ -881,7 +931,7 @@ export type TemplateParameterPolicy = Message<"osac.private.v1.TemplateParameter
  * Use `create(TemplateParameterPolicySchema)` to create a new message.
  */
 export const TemplateParameterPolicySchema: GenMessage<TemplateParameterPolicy> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_field_policy_type, 33);
+  messageDesc(file_osac_private_v1_field_policy_type, 35);
 
 /**
  * Configures an editable template parameter.
@@ -900,5 +950,5 @@ export type EditableTemplateParameter = Message<"osac.private.v1.EditableTemplat
  * Use `create(EditableTemplateParameterSchema)` to create a new message.
  */
 export const EditableTemplateParameterSchema: GenMessage<EditableTemplateParameter> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_field_policy_type, 34);
+  messageDesc(file_osac_private_v1_field_policy_type, 36);
 

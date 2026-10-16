@@ -72,19 +72,9 @@ func validateUserDataSecret(
 	if err := validateSecretType(secret, refKey(ref), "user_data_secret", privatev1.SecretType_SECRET_TYPE_USER_DATA); err != nil {
 		return nil, err
 	}
-	data := secret.GetData()
-	// Vault-backed Secrets may keep their value outside the database and must be fetched before validation.
-	if len(data) == 0 && secret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
-		if secretStore == nil {
-			logger.ErrorContext(ctx, "Failed to load user_data_secret value: secret store isn't configured")
-			return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to resolve user_data_secret reference")
-		}
-		metadata := secret.GetMetadata()
-		data, err = secretStore.Fetch(ctx, metadata.GetTenant(), metadata.GetProject(), metadata.GetName())
-		if err != nil {
-			logger.ErrorContext(ctx, "Failed to load user_data_secret value from store", "error", err)
-			return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to resolve user_data_secret reference")
-		}
+	data, err := fetchSecretData(ctx, logger, secretStore, secret, "user_data_secret")
+	if err != nil {
+		return nil, err
 	}
 	value, ok := data[userDataSecretDataKey]
 	if !ok || len(value) == 0 {

@@ -62,7 +62,13 @@ message BareMetalInstanceSpec {
   // SSH public key injected into the OS at provisioning time. Immutable after creation.
   // Must be a valid SSH public key in OpenSSH format (ssh-rsa, ssh-ed25519, etc.).
   // Invalid keys are rejected at create time with a 400 error.
-  optional string ssh_public_key = 2 [(google.api.field_behavior) = IMMUTABLE];
+  //
+  // Deprecated: use `ssh_key` with a registered SSH public-key Secret instead.
+  // Mutually exclusive with `ssh_key`.
+  optional string ssh_public_key = 2 [
+    (google.api.field_behavior) = IMMUTABLE,
+    deprecated = true
+  ];
 
   // User data (e.g. cloud-init). Passed to the OS at first boot. Immutable after creation.
   // Maximum size: 64 KB.
@@ -152,6 +158,14 @@ message BareMetalInstanceSpec {
   // An existing inline value may be migrated by setting this field while clearing `user_data`
   // in the same update.
   SecretLocalReference user_data_secret = 13 [(google.api.field_behavior) = IMMUTABLE];
+
+  // Reference to a Secret containing an OpenSSH public key for bare metal access.
+  // An empty project selects the tenant's default project; an explicit project selects that project.
+  // The Secret must have type SECRET_TYPE_SSH_PUBLIC_KEY and a non-empty data["public_key"] entry.
+  // The reference is resolved to its canonical values and is immutable after creation.
+  //
+  // Mutually exclusive with `ssh_public_key`.
+  SecretReference ssh_key = 14 [(google.api.field_behavior) = IMMUTABLE];
 }
 
 // The status contains the details of the bare metal instance provided by the system.

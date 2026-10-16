@@ -31,6 +31,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/utils"
@@ -324,6 +325,9 @@ func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, can
 	if err = s.validateAndResolveUserDataSecret(ctx, candidate.GetSpec(), true); err != nil {
 		return
 	}
+	if err = s.validateAndResolveSshKey(ctx, candidate); err != nil {
+		return
+	}
 
 	if err = s.validateSpec(candidate); err != nil {
 		return
@@ -467,6 +471,56 @@ func (s *PrivateBareMetalInstancesServer) validateAndResolveUserDataSecret(
 	return nil
 }
 
+// validateAndResolveSshKey validates a BMaaS full Secret reference and loads
+// its public-key material only for optimistic create-time validation. The
+// material is deliberately not copied into the BareMetalInstance spec.
+//
+// Unlike generic full references, the SSH-key Secret must belong to the
+// instance's own project: an empty reference project selects the tenant's
+// default project, and an explicit reference project must match the
+// instance's project exactly. Shared Secrets are rejected.
+func (s *PrivateBareMetalInstancesServer) validateAndResolveSshKey(
+	ctx context.Context,
+	bmi *privatev1.BareMetalInstance,
+) error {
+	if bmi == nil || bmi.GetSpec().GetSshKey() == nil {
+		return nil
+	}
+	metadata := bmi.GetMetadata()
+	if metadata == nil {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "cannot resolve ssh_key reference without instance metadata")
+	}
+	ref := bmi.GetSpec().GetSshKey()
+	if ref.GetShared() {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "spec.ssh_key must not reference a shared secret")
+	}
+	if project := ref.GetProject(); project != "" && project != metadata.GetProject() {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"spec.ssh_key project '%s' must match the instance project '%s'", project, metadata.GetProject())
+	}
+	secret, err := resolveResourceInScope(ctx, s.secretsDao,
+		referenceScope{tenant: metadata.GetTenant(), project: ref.GetProject()},
+		ref.GetId(), ref.GetName(), "secret", " in spec.ssh_key", grpccodes.NotFound)
+	if err != nil {
+		return err
+	}
+	if err := validateResolvedSecretLifecycleAndType(secret, refKey(ref), "spec.ssh_key",
+		privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY); err != nil {
+		return err
+	}
+
+	data, err := fetchSecretData(ctx, s.logger, s.secretStore, secret, "ssh_key")
+	if err != nil {
+		return err
+	}
+	if err := controllers.ValidateSSHKeySecretData(secret, data, refKey(ref)); err != nil {
+		return err
+	}
+
+	bmi.GetSpec().SetSshKey(canonicalSecretReference(secret))
+	return nil
+}
+
 func (s *PrivateBareMetalInstancesServer) Delete(ctx context.Context,
 	request *privatev1.BareMetalInstancesDeleteRequest) (response *privatev1.BareMetalInstancesDeleteResponse, err error) {
 	id := request.GetId()
@@ -560,6 +614,11 @@ func (s *PrivateBareMetalInstancesServer) validateSpec(bmi *privatev1.BareMetalI
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "bare metal instance spec is mandatory")
 	}
 
+	if spec.GetSshPublicKey() != "" && spec.GetSshKey() != nil {
+		return grpcstatus.Error(grpccodes.InvalidArgument,
+			"spec.ssh_public_key and spec.ssh_key are mutually exclusive")
+	}
+
 	if key := spec.GetSshPublicKey(); key != "" {
 		if err := validateOpenSSHPublicKey(key); err != nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument, "spec.ssh_public_key: %s", err)
@@ -573,9 +632,9 @@ func (s *PrivateBareMetalInstancesServer) validateSpec(bmi *privatev1.BareMetalI
 	}
 
 	// If none of the authentication inputs are set, the server cannot be accessed after deployment.
-	if spec.GetSshPublicKey() == "" && spec.GetUserData() == "" && spec.GetUserDataSecret() == nil {
+	if spec.GetSshPublicKey() == "" && spec.GetSshKey() == nil && spec.GetUserData() == "" && spec.GetUserDataSecret() == nil {
 		return grpcstatus.Error(grpccodes.InvalidArgument,
-			"at least one authentication method must be provided: spec.ssh_public_key, spec.user_data or spec.user_data_secret")
+			"at least one authentication method must be provided: spec.ssh_public_key, spec.ssh_key, spec.user_data or spec.user_data_secret")
 	}
 
 	return nil
@@ -826,7 +885,7 @@ func (s *PrivateBareMetalInstancesServer) applyBareMetalTemplate(bmi *privatev1.
 	return nil
 }
 
-// validateBareMetalImmutability ensures template, catalog_item, instance_type, disk_image, ssh_public_key, user_data, template_parameters,
+// validateBareMetalImmutability ensures template, catalog_item, instance_type, disk_image, ssh_key, ssh_public_key, user_data, template_parameters,
 // auto_external_ip_attachment, and network_attachments cannot be changed after creation.
 func validateBareMetalImmutability(
 	current, candidate *privatev1.BareMetalInstance,
@@ -836,7 +895,8 @@ func validateBareMetalImmutability(
 	updatingCatalogItem := updateIncludesField(mask, "spec.catalog_item")
 	updatingInstanceType := updateIncludesField(mask, "spec.instance_type")
 	updatingDiskImage := updateIncludesField(mask, "spec.disk_image")
-	updatingSshKey := updateIncludesField(mask, "spec.ssh_public_key")
+	updatingSshPublicKey := updateIncludesField(mask, "spec.ssh_public_key")
+	updatingSshKey := updateIncludesField(mask, "spec.ssh_key")
 	updatingUserData := updateIncludesField(mask, "spec.user_data")
 	updatingUserDataSecret := updateIncludesField(mask, "spec.user_data_secret")
 	updatingTemplateParams := updateIncludesField(mask, "spec.template_parameters")
@@ -872,9 +932,30 @@ func validateBareMetalImmutability(
 			refKey(existingSpec.GetDiskImage()), refKey(newSpec.GetDiskImage()))
 	}
 
-	if updatingSshKey && existingSpec.GetSshPublicKey() != newSpec.GetSshPublicKey() {
+	if updatingSshPublicKey && existingSpec.GetSshPublicKey() != newSpec.GetSshPublicKey() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"cannot change spec.ssh_public_key: ssh_public_key is immutable after creation")
+	}
+	if updatingSshKey {
+		existingKey := existingSpec.GetSshKey()
+		newKey := newSpec.GetSshKey()
+		sameKey := proto.Equal(existingKey, newKey)
+		if existingKey != nil && newKey != nil {
+			if newKey.GetId() != "" {
+				sameKey = existingKey.GetId() == newKey.GetId()
+			} else {
+				sameKey = existingKey.GetName() == newKey.GetName() &&
+					(newKey.GetProject() == "" || newKey.GetProject() == existingKey.GetProject()) &&
+					(!newKey.GetShared() || existingKey.GetShared())
+			}
+		}
+		if !sameKey {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"cannot change spec.ssh_key: ssh_key is immutable after creation")
+		}
+		if existingKey != nil {
+			newSpec.SetSshKey(cloneMessage(existingKey))
+		}
 	}
 
 	if err := validateBareMetalUserDataImmutability(

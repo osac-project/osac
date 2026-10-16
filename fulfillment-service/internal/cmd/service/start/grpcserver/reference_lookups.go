@@ -310,6 +310,14 @@ func registerReferenceLookups(
 		"osac.public.v1.SecretLocalReference",
 		references.NewScopedDAOLookupFunc(secretsDAO),
 	)
+	validator.Register(
+		"osac.private.v1.SecretReference",
+		references.NewScopedDAOLookupFunc(secretsDAO),
+	)
+	validator.Register(
+		"osac.public.v1.SecretReference",
+		references.NewScopedDAOLookupFunc(secretsDAO),
+	)
 
 	return nil
 }

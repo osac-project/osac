@@ -41,6 +41,7 @@ func validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(
 	virtualNetworksDao *dao.GenericDAO[*privatev1.VirtualNetwork],
 	networkClassesDao *dao.GenericDAO[*privatev1.NetworkClass],
 	securityGroupsDao *dao.GenericDAO[*privatev1.SecurityGroup],
+	secretsDao *dao.GenericDAO[*privatev1.Secret],
 ) ([]string, error) {
 	if item == nil {
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "catalog item is mandatory")
@@ -57,6 +58,9 @@ func validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(
 	if err := validateBareMetalInstanceCatalogItemInstanceTypePolicy(ctx, fields.GetInstanceType(), bareMetalInstanceTypesDao); err != nil {
 		return nil, err
 	}
+	if err := validateBareMetalInstanceCatalogItemSSHKeyPolicy(ctx, scope, fields.GetSshKey(), secretsDao); err != nil {
+		return nil, err
+	}
 
 	warnings, err := validateCatalogItemDiskImagePolicy(ctx, scope, fields.GetDiskImage(), diskImagesDao)
 	if err != nil {
@@ -68,6 +72,65 @@ func validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(
 		return nil, err
 	}
 	return warnings, nil
+}
+
+// validateBareMetalInstanceCatalogItemSSHKeyPolicy checks a BMaaS SSH-key
+// policy using the full Secret reference scope. Unlike ComputeInstance's
+// local-reference policy, an empty project selects the referenced tenant's
+// default project and an explicit project selector is retained. Shared
+// references are rejected to match instance-level validation: a shared locked
+// or default key could never be consumed by an instance.
+func validateBareMetalInstanceCatalogItemSSHKeyPolicy(
+	ctx context.Context,
+	scope referenceScope,
+	policy *privatev1.GlobalSecretReferenceFieldPolicy,
+	secretsDao *dao.GenericDAO[*privatev1.Secret],
+) error {
+	if policy == nil {
+		return nil
+	}
+	state, err := decodeGlobalSecretReferencePolicy(policy)
+	if err != nil {
+		return catalogItemPolicyError("fields.ssh_key", err.Error())
+	}
+	resolve := func(ref *privatev1.SecretReference) (*privatev1.SecretReference, error) {
+		if ref == nil {
+			return nil, nil
+		}
+		if ref.GetShared() {
+			return nil, grpcstatus.Error(grpccodes.InvalidArgument,
+				"fields.ssh_key must not reference a shared secret")
+		}
+		// Unlike sibling policy validators, this resolution deliberately takes no
+		// row lock: BMaaS SSH-key Secrets opt out of delete protection (see
+		// migration 125), so a Secret deleted between validation and persistence
+		// leaves a dangling reference that fails closed at instance create.
+		resolved, resolveErr := resolveFullResourceReference(ctx, secretsDao, scope, ref,
+			"secret", " in fields.ssh_key", grpccodes.InvalidArgument)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		if err := validateResolvedSecretLifecycleAndType(resolved, refKey(ref), "fields.ssh_key",
+			privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY); err != nil {
+			return nil, err
+		}
+		return canonicalSecretReference(resolved), nil
+	}
+	if state.hasLocked {
+		canonical, resolveErr := resolve(state.lockedValue)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		policy.SetLocked(canonical)
+	}
+	if state.hasDefault {
+		canonical, resolveErr := resolve(state.defaultValue)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		policy.GetEditable().SetDefaultValue(canonical)
+	}
+	return nil
 }
 
 // applyBareMetalInstanceCatalogItemPolicies merges the offering's field rules into a new bare
@@ -103,7 +166,34 @@ func applyBareMetalInstanceCatalogItemPolicies(
 	if err := applyPolicy(fields.GetDiskImage(), spec.GetDiskImage() != nil, spec.SetDiskImage, decodeDiskImageReferencePolicy, cloneMessage[*privatev1.DiskImageReference]); err != nil {
 		return fmt.Errorf("disk_image: %w", err)
 	}
+	if err := applyPolicy(fields.GetSshKey(), spec.GetSshKey() != nil, spec.SetSshKey, decodeGlobalSecretReferencePolicy, cloneMessage[*privatev1.SecretReference]); err != nil {
+		return fmt.Errorf("ssh_key: %w", err)
+	}
 	return nil
+}
+
+func decodeGlobalSecretReferencePolicy(policy *privatev1.GlobalSecretReferenceFieldPolicy) (policyState[*privatev1.SecretReference], error) {
+	if policy == nil {
+		return policyState[*privatev1.SecretReference]{}, nil
+	}
+	if policy.HasLocked() {
+		locked := policy.GetLocked()
+		if locked == nil {
+			return policyState[*privatev1.SecretReference]{}, fmt.Errorf("locked global secret policy is empty")
+		}
+		return policyState[*privatev1.SecretReference]{hasLocked: true, lockedValue: locked}, nil
+	}
+	if policy.HasEditable() {
+		editable := policy.GetEditable()
+		if editable == nil {
+			return policyState[*privatev1.SecretReference]{}, fmt.Errorf("editable global secret policy is empty")
+		}
+		return policyState[*privatev1.SecretReference]{
+			hasDefault:   editable.GetDefaultValue() != nil,
+			defaultValue: editable.GetDefaultValue(),
+		}, nil
+	}
+	return policyState[*privatev1.SecretReference]{}, fmt.Errorf("global secret policy has no behavior")
 }
 
 // validateBareMetalInstanceCatalogItemScalarPolicies checks supported scalar values and returns the first invalid policy.

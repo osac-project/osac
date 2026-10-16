@@ -74,6 +74,9 @@ message BareMetalInstanceCatalogItemFields {
   BareMetalInstanceTypeReferenceFieldPolicy instance_type = 7;
   // Policy for the DiskImage used to provision the instance.
   DiskImageReferenceFieldPolicy disk_image = 8;
+
+  // Policy for the SecretReference used to configure bare metal access.
+  GlobalSecretReferenceFieldPolicy ssh_key = 9;
 }
 
 // Reference to a BareMetalInstanceCatalogItem resource.

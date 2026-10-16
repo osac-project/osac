@@ -204,8 +204,7 @@ func (c *runnerContext) buildSpec(catalogItemID string, externalIPAttachmentSet 
 		CatalogItem: &publicv1.BareMetalInstanceCatalogItemReference{Id: catalogItemID},
 	}
 	if c.args.sshKey != "" {
-		sshKey := c.args.sshKey
-		spec.SshPublicKey = &sshKey
+		spec.SshKey = &publicv1.SecretReference{Name: strings.TrimSpace(c.args.sshKey)}
 	}
 	c.applyUserDataFlags(&spec)
 	if c.args.diskImage != "" {
@@ -253,8 +252,8 @@ one visible item, use its identifier. Required.
 `
 
 const sshKeyFlagHelp = `
-_KEY_ - SSH public key injected into the OS at provisioning time. Must be a
-valid OpenSSH public key. Immutable after creation.
+_NAME_ - Name of a registered SSH public-key Secret. An unqualified name uses
+the tenant's default project. Immutable after creation.
 `
 
 const userDataFlagHelp = `

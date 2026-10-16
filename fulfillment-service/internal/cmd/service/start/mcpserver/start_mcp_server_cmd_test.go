@@ -102,7 +102,7 @@ var _ = Describe("newServer", func() {
 
 		response, err := clientSession.ListTools(ctx, nil)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(response.Tools).To(HaveLen(5))
+		Expect(response.Tools).To(HaveLen(6))
 
 		tools := make(map[string]*mcp.Tool, len(response.Tools))
 		for _, tool := range response.Tools {
@@ -114,6 +114,7 @@ var _ = Describe("newServer", func() {
 		Expect(tools).To(HaveKey("list_resources"))
 		Expect(tools).To(HaveKey("get_resource"))
 		Expect(tools).To(HaveKey("create_compute_instance"))
+		Expect(tools).To(HaveKey("update_compute_instance"))
 		Expect(tools).To(HaveKey("delete_compute_instance"))
 		Expect(tools["list_resources"].Description).To(ContainSubstring("Use this tool to discover"))
 		Expect(tools["get_resource"].Description).To(ContainSubstring("Use this tool to inspect"))
@@ -123,14 +124,20 @@ var _ = Describe("newServer", func() {
 		Expect(tools["create_compute_instance"].Description).To(ContainSubstring("storage_tier_id"))
 		Expect(tools["create_compute_instance"].Description).To(ContainSubstring("network_attachments"))
 		Expect(tools["create_compute_instance"].Description).To(ContainSubstring("subnet_id"))
+		Expect(tools["create_compute_instance"].Description).To(ContainSubstring("disk_image_id"))
+		Expect(tools["create_compute_instance"].Description).To(ContainSubstring("project_id"))
+		Expect(tools["update_compute_instance"].Description).To(ContainSubstring("current metadata.version"))
 		Expect(tools["delete_compute_instance"].Description).To(ContainSubstring("only when the user explicitly requests"))
 		expectToolAnnotations(tools["check_connection"], "Check OSAC MCP connection", true, false, true, true)
 		expectToolAnnotations(tools["list_resources"], "List OSAC deployment resources", true, false, true, true)
 		expectToolAnnotations(tools["get_resource"], "Get OSAC deployment resource", true, false, true, true)
 		expectToolAnnotations(tools["create_compute_instance"], "Create OSAC compute instance", false, false, false, true)
+		expectToolAnnotations(tools["update_compute_instance"], "Update OSAC compute instance", false, true, false, true)
 		expectToolAnnotations(tools["delete_compute_instance"], "Delete OSAC compute instance", false, true, false, true)
 		expectComputeInstanceCreateSchema(tools["create_compute_instance"].InputSchema)
+		expectComputeInstanceUpdateSchema(tools["update_compute_instance"].InputSchema)
 		expectTypedWriteSchema(tools["create_compute_instance"].InputSchema, "name", "catalog_item")
+		expectTypedWriteSchema(tools["update_compute_instance"].InputSchema, "id", "version")
 		expectTypedWriteSchema(tools["delete_compute_instance"].InputSchema, "id")
 		expectNullableArraySchema(tools["list_resources"].OutputSchema, "items")
 		expectResourceTypeSchema(tools["list_resources"].InputSchema, []ResourceType{
@@ -343,6 +350,39 @@ func expectComputeInstanceCreateSchema(schema any) {
 	securityGroups, ok := itemProperties["security_group_ids"].(map[string]any)
 	Expect(ok).To(BeTrue())
 	Expect(securityGroups["items"]).To(HaveKeyWithValue("type", "string"))
+}
+
+func expectComputeInstanceUpdateSchema(schema any) {
+	document, ok := schema.(map[string]any)
+	Expect(ok).To(BeTrue())
+	properties, ok := document["properties"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(properties).To(HaveKey("instance_type_id"))
+	Expect(properties).To(HaveKey("boot_disk"))
+	Expect(properties).To(HaveKey("run_strategy"))
+	Expect(properties).ToNot(HaveKey("display_name"))
+	Expect(properties).ToNot(HaveKey("description"))
+	Expect(properties).ToNot(HaveKey("catalog_item"))
+	Expect(properties).ToNot(HaveKey("disk_image_id"))
+	Expect(properties).ToNot(HaveKey("network_attachments"))
+	Expect(properties).ToNot(HaveKey("user_data"))
+	Expect(properties).ToNot(HaveKey("ssh_key"))
+	Expect(properties).ToNot(HaveKey("status"))
+	for _, name := range []string{"id", "instance_type_id", "run_strategy"} {
+		property, ok := properties[name].(map[string]any)
+		Expect(ok).To(BeTrue(), name)
+		Expect(property["type"]).To(Equal("string"), name)
+	}
+	version, ok := properties["version"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(version["type"]).To(Equal("integer"))
+	Expect(version["minimum"]).To(Equal(float64(1)))
+	bootDisk, ok := properties["boot_disk"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	bootDiskProperties, ok := bootDisk["properties"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(bootDiskProperties).To(HaveKey("size_gib"))
+	Expect(bootDiskProperties).To(HaveKey("storage_tier_id"))
 }
 
 func expectTypedWriteSchema(schema any, required ...string) {

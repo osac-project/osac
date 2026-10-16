@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -95,25 +96,31 @@ var _ = Describe("handleCheckConnection", func() {
 			ResourceTypeInstanceType,
 			ResourceTypeDiskImage,
 			ResourceTypeStorageTier,
+			ResourceTypeProject,
 			ResourceTypeVirtualNetwork,
 			ResourceTypeSubnet,
 			ResourceTypeSecurityGroup,
 			ResourceTypeComputeInstance,
-			ResourceTypeProject,
 			ResourceTypeSecretReference,
 		))
 		Expect(output.Tools).To(ConsistOf(
-			"check_connection", "list_resources", "get_resource", "create_compute_instance", "delete_compute_instance",
+			"check_connection", "list_resources", "get_resource", "create_compute_instance",
+			"update_compute_instance", "delete_compute_instance",
 		))
 		Expect(output.Permissions).To(Equal([]CheckConnectionPermission{
 			{Tenant: "tenant-1", Service: "osac.public.v1.ComputeInstances", Method: "List", Allowed: true},
 			{Tenant: "tenant-1", Service: "osac.public.v1.ComputeInstances", Method: "Create", Allowed: false},
+			{Tenant: "tenant-1", Service: "osac.public.v1.ComputeInstances", Method: "Update", Allowed: false},
 		}))
 		Expect(capturedToken).To(Equal("Bearer api-for-raw-bearer-value"))
-		Expect(capturedServices).To(Equal([]string{"osac.public.v1.ComputeInstances", "osac.public.v1.ComputeInstances"}))
-		Expect(capturedMethods).To(Equal([]string{"List", "Create"}))
-		Expect(capturedTenants).To(Equal([]string{"tenant-1", "tenant-1"}))
-		Expect(capturedNames).To(Equal([]string{"mcp-check-connection", "mcp-check-connection"}))
+		Expect(capturedServices).To(Equal([]string{
+			"osac.public.v1.ComputeInstances", "osac.public.v1.ComputeInstances", "osac.public.v1.ComputeInstances",
+		}))
+		Expect(capturedMethods).To(Equal([]string{"List", "Create", "Update"}))
+		Expect(capturedTenants).To(Equal([]string{"tenant-1", "tenant-1", "tenant-1"}))
+		Expect(capturedNames).To(Equal([]string{
+			"mcp-check-connection", "mcp-check-connection", "mcp-check-connection",
+		}))
 	})
 
 	It("Uses an unscoped permission review for a caller without a tenant", func() {
@@ -140,7 +147,40 @@ var _ = Describe("handleCheckConnection", func() {
 		Expect(output.Permissions).To(Equal([]CheckConnectionPermission{
 			{Service: "osac.public.v1.ComputeInstances", Method: "List", Allowed: true},
 			{Service: "osac.public.v1.ComputeInstances", Method: "Create", Allowed: true},
+			{Service: "osac.public.v1.ComputeInstances", Method: "Update", Allowed: true},
 		}))
+	})
+
+	It("Bounds the permission summary tenant matrix", func() {
+		var reviewCount int
+		var capturedTenants []string
+		reviews := &mockSelfSubjectAccessReviewsClient{
+			createFunc: func(
+				_ context.Context, request *publicv1.SelfSubjectAccessReviewsCreateRequest, _ ...grpc.CallOption,
+			) (*publicv1.SelfSubjectAccessReviewsCreateResponse, error) {
+				reviewCount++
+				capturedTenants = append(capturedTenants, request.GetObject().GetMetadata().GetTenant())
+				return publicv1.SelfSubjectAccessReviewsCreateResponse_builder{
+					Object: publicv1.SelfSubjectAccessReview_builder{
+						Status: publicv1.SelfSubjectAccessReviewStatus_builder{Allowed: true}.Build(),
+					}.Build(),
+				}.Build(), nil
+			},
+		}
+
+		tenants := make([]string, 11)
+		for i := range tenants {
+			tenants[i] = fmt.Sprintf("tenant-%d", i+1)
+		}
+		handler := handleCheckConnection("https://mcp.example.com/", newResourceRegistry(ServerDeps{}), reviews)
+		_, output, err := handler(context.Background(), requestWithCaller("raw-bearer-value", safeCallerContext{
+			Subject: "user-1", Tenants: tenants,
+		}), CheckConnectionInput{})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(reviewCount).To(Equal(30))
+		Expect(output.Permissions).To(HaveLen(30))
+		Expect(output.PermissionsTruncated).To(BeTrue())
+		Expect(capturedTenants).ToNot(ContainElement("tenant-11"))
 	})
 
 	It("Returns a stable safe error envelope for a service failure", func() {

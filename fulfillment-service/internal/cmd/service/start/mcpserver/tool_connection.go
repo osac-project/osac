@@ -38,19 +38,23 @@ type CheckConnectionPermission struct {
 }
 
 type CheckConnectionOutput struct {
-	Endpoint         string                      `json:"endpoint"`
-	Server           CheckConnectionServer       `json:"server"`
-	Caller           safeCallerContext           `json:"caller"`
-	ResourceFamilies []ResourceType              `json:"resource_families"`
-	Tools            []string                    `json:"tools"`
-	Permissions      []CheckConnectionPermission `json:"permission_summary"`
+	Endpoint             string                      `json:"endpoint"`
+	Server               CheckConnectionServer       `json:"server"`
+	Caller               safeCallerContext           `json:"caller"`
+	ResourceFamilies     []ResourceType              `json:"resource_families"`
+	Tools                []string                    `json:"tools"`
+	Permissions          []CheckConnectionPermission `json:"permission_summary"`
+	PermissionsTruncated bool                        `json:"permission_summary_truncated"`
 }
+
+const maxCheckConnectionTenants = 10
 
 var mcpToolNames = []string{
 	"check_connection",
 	"list_resources",
 	"get_resource",
 	"create_compute_instance",
+	"update_compute_instance",
 	"delete_compute_instance",
 }
 
@@ -75,9 +79,13 @@ func handleCheckConnection(
 		if len(tenants) == 0 {
 			tenants = []string{""}
 		}
-		permissions := make([]CheckConnectionPermission, 0, len(tenants)*2)
+		permissionsTruncated := len(tenants) > maxCheckConnectionTenants
+		if permissionsTruncated {
+			tenants = tenants[:maxCheckConnectionTenants]
+		}
+		permissions := make([]CheckConnectionPermission, 0, len(tenants)*3)
 		for _, tenant := range tenants {
-			for _, method := range []string{"List", "Create"} {
+			for _, method := range []string{"List", "Create", "Update"} {
 				allowed, err := checkComputeInstancePermission(ctx, client, tenant, method)
 				if err != nil {
 					return nil, CheckConnectionOutput{}, safePublicAPIError(err)
@@ -92,12 +100,13 @@ func handleCheckConnection(
 		}
 
 		return nil, CheckConnectionOutput{
-			Endpoint:         endpoint,
-			Server:           CheckConnectionServer{Name: "osac-deployment-mcp", Version: version.Get()},
-			Caller:           caller,
-			ResourceFamilies: resources.resourceTypes(),
-			Tools:            mcpToolNames,
-			Permissions:      permissions,
+			Endpoint:             endpoint,
+			Server:               CheckConnectionServer{Name: "osac-deployment-mcp", Version: version.Get()},
+			Caller:               caller,
+			ResourceFamilies:     resources.resourceTypes(),
+			Tools:                mcpToolNames,
+			Permissions:          permissions,
+			PermissionsTruncated: permissionsTruncated,
 		}, nil
 	}
 }

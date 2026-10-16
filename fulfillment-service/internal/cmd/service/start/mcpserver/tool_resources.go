@@ -32,11 +32,11 @@ const (
 	ResourceTypeInstanceType               ResourceType = "instance_type"
 	ResourceTypeDiskImage                  ResourceType = "disk_image"
 	ResourceTypeStorageTier                ResourceType = "storage_tier"
+	ResourceTypeProject                    ResourceType = "project"
 	ResourceTypeVirtualNetwork             ResourceType = "virtual_network"
 	ResourceTypeSubnet                     ResourceType = "subnet"
 	ResourceTypeSecurityGroup              ResourceType = "security_group"
 	ResourceTypeComputeInstance            ResourceType = "compute_instance"
-	ResourceTypeProject                    ResourceType = "project"
 	ResourceTypeSecretReference            ResourceType = "secret_reference"
 )
 

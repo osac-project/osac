@@ -90,6 +90,7 @@ type mockComputeInstancesClient struct {
 	listFunc   func(context.Context, *publicv1.ComputeInstancesListRequest, ...grpc.CallOption) (*publicv1.ComputeInstancesListResponse, error)
 	getFunc    func(context.Context, *publicv1.ComputeInstancesGetRequest, ...grpc.CallOption) (*publicv1.ComputeInstancesGetResponse, error)
 	createFunc func(context.Context, *publicv1.ComputeInstancesCreateRequest, ...grpc.CallOption) (*publicv1.ComputeInstancesCreateResponse, error)
+	updateFunc func(context.Context, *publicv1.ComputeInstancesUpdateRequest, ...grpc.CallOption) (*publicv1.ComputeInstancesUpdateResponse, error)
 	deleteFunc func(context.Context, *publicv1.ComputeInstancesDeleteRequest, ...grpc.CallOption) (*publicv1.ComputeInstancesDeleteResponse, error)
 }
 
@@ -147,10 +148,60 @@ func (m *mockComputeInstancesClient) Create(
 	return m.createFunc(ctx, request, options...)
 }
 
+func (m *mockComputeInstancesClient) Update(
+	ctx context.Context, request *publicv1.ComputeInstancesUpdateRequest, options ...grpc.CallOption,
+) (*publicv1.ComputeInstancesUpdateResponse, error) {
+	return m.updateFunc(ctx, request, options...)
+}
+
 func (m *mockComputeInstancesClient) Delete(
 	ctx context.Context, request *publicv1.ComputeInstancesDeleteRequest, options ...grpc.CallOption,
 ) (*publicv1.ComputeInstancesDeleteResponse, error) {
 	return m.deleteFunc(ctx, request, options...)
+}
+
+type mockDiskImagesClient struct {
+	publicv1.DiskImagesClient
+	getFunc func(context.Context, *publicv1.DiskImagesGetRequest, ...grpc.CallOption) (*publicv1.DiskImagesGetResponse, error)
+}
+
+func (m *mockDiskImagesClient) Get(
+	ctx context.Context, request *publicv1.DiskImagesGetRequest, options ...grpc.CallOption,
+) (*publicv1.DiskImagesGetResponse, error) {
+	return m.getFunc(ctx, request, options...)
+}
+
+type mockInstanceTypesClient struct {
+	publicv1.InstanceTypesClient
+	getFunc func(context.Context, *publicv1.InstanceTypesGetRequest, ...grpc.CallOption) (*publicv1.InstanceTypesGetResponse, error)
+}
+
+func (m *mockInstanceTypesClient) Get(
+	ctx context.Context, request *publicv1.InstanceTypesGetRequest, options ...grpc.CallOption,
+) (*publicv1.InstanceTypesGetResponse, error) {
+	return m.getFunc(ctx, request, options...)
+}
+
+type mockSubnetsClient struct {
+	publicv1.SubnetsClient
+	getFunc func(context.Context, *publicv1.SubnetsGetRequest, ...grpc.CallOption) (*publicv1.SubnetsGetResponse, error)
+}
+
+func (m *mockSubnetsClient) Get(
+	ctx context.Context, request *publicv1.SubnetsGetRequest, options ...grpc.CallOption,
+) (*publicv1.SubnetsGetResponse, error) {
+	return m.getFunc(ctx, request, options...)
+}
+
+type mockSecurityGroupsClient struct {
+	publicv1.SecurityGroupsClient
+	listFunc func(context.Context, *publicv1.SecurityGroupsListRequest, ...grpc.CallOption) (*publicv1.SecurityGroupsListResponse, error)
+}
+
+func (m *mockSecurityGroupsClient) List(
+	ctx context.Context, request *publicv1.SecurityGroupsListRequest, options ...grpc.CallOption,
+) (*publicv1.SecurityGroupsListResponse, error) {
+	return m.listFunc(ctx, request, options...)
 }
 
 func requestWithToken(rawToken string) *mcp.CallToolRequest {

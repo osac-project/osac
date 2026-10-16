@@ -44,6 +44,8 @@ func (f TokenExchangerFunc) Exchange(ctx context.Context, subjectToken string, s
 	return f(ctx, subjectToken, subject)
 }
 
+var errOAuthTokenExchangeUnavailable = errors.New("OAuth token exchange is unavailable")
+
 type oauthTokenExchanger struct {
 	endpoint     string
 	clientID     string
@@ -90,7 +92,7 @@ func (e *oauthTokenExchanger) Exchange(ctx context.Context, subjectToken string,
 	request.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(credentials)))
 	response, err := e.client.Do(request)
 	if err != nil {
-		return "", errors.New("OAuth token exchange is unavailable")
+		return "", errOAuthTokenExchangeUnavailable
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {

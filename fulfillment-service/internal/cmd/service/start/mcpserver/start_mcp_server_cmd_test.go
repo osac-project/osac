@@ -84,7 +84,7 @@ var _ = Describe("Cmd", func() {
 var _ = Describe("newServer", func() {
 	It("publishes portable schemas for slice fields", func() {
 		ctx := context.Background()
-		server := newServer(ServerDeps{})
+		server := newServer(ServerDeps{}, "https://mcp.example.com/")
 		client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "test"}, nil)
 		serverTransport, clientTransport := mcp.NewInMemoryTransports()
 
@@ -102,7 +102,7 @@ var _ = Describe("newServer", func() {
 
 		response, err := clientSession.ListTools(ctx, nil)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(response.Tools).To(HaveLen(4))
+		Expect(response.Tools).To(HaveLen(5))
 
 		tools := make(map[string]*mcp.Tool, len(response.Tools))
 		for _, tool := range response.Tools {
@@ -110,6 +110,7 @@ var _ = Describe("newServer", func() {
 			Expect(hasMultiTypeSchema(tool.InputSchema)).To(BeFalse(), tool.Name+" input schema")
 			Expect(hasMultiTypeSchema(tool.OutputSchema)).To(BeFalse(), tool.Name+" output schema")
 		}
+		Expect(tools).To(HaveKey("check_connection"))
 		Expect(tools).To(HaveKey("list_resources"))
 		Expect(tools).To(HaveKey("get_resource"))
 		Expect(tools).To(HaveKey("create_compute_instance"))
@@ -123,6 +124,7 @@ var _ = Describe("newServer", func() {
 		Expect(tools["create_compute_instance"].Description).To(ContainSubstring("network_attachments"))
 		Expect(tools["create_compute_instance"].Description).To(ContainSubstring("subnet_id"))
 		Expect(tools["delete_compute_instance"].Description).To(ContainSubstring("only when the user explicitly requests"))
+		expectToolAnnotations(tools["check_connection"], "Check OSAC MCP connection", true, false, true, true)
 		expectToolAnnotations(tools["list_resources"], "List OSAC deployment resources", true, false, true, true)
 		expectToolAnnotations(tools["get_resource"], "Get OSAC deployment resource", true, false, true, true)
 		expectToolAnnotations(tools["create_compute_instance"], "Create OSAC compute instance", false, false, false, true)
@@ -292,8 +294,11 @@ var _ = Describe("newTokenVerifier", func() {
 	It("Maps a validated token to a caller-specific API token source", func() {
 		expiration := time.Now().Add(time.Hour)
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-			"sub": "alice",
-			"exp": float64(expiration.Unix()),
+			"sub":                "alice",
+			"preferred_username": "alice",
+			"organization":       map[string]any{"tenant-1": map[string]any{"groups": []any{"/tenant-1/system:viewers"}}},
+			"realm_access":       map[string]any{"roles": []any{"tenant-user"}},
+			"exp":                float64(expiration.Unix()),
 		})
 		validator := auth.NewMockJwtValidator(ctrl)
 		validator.EXPECT().Validate(gomock.Any(), "raw-bearer-value").Return(token, nil)
@@ -303,6 +308,11 @@ var _ = Describe("newTokenVerifier", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(info.UserID).To(Equal("alice"))
 		Expect(info.Expiration.Unix()).To(Equal(expiration.Unix()))
+		caller, ok := info.Extra[callerContextExtraKey].(safeCallerContext)
+		Expect(ok).To(BeTrue())
+		Expect(caller).To(Equal(safeCallerContext{
+			Subject: "alice", Username: "alice", Tenants: []string{"tenant-1"},
+		}))
 		source, ok := info.Extra[exchangeTokenExtraKey].(apiTokenSource)
 		Expect(ok).To(BeTrue())
 		apiToken, err := source(context.Background())
@@ -318,6 +328,24 @@ var _ = Describe("newTokenVerifier", func() {
 		_, err := verifier(context.Background(), "bad-token", nil)
 		Expect(err).To(HaveOccurred())
 		Expect(errors.Is(err, sdkauth.ErrInvalidToken)).To(BeTrue())
+	})
+
+	It("Does not treat generic groups as tenant names", func() {
+		expiration := time.Now().Add(time.Hour)
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+			"sub":    "alice",
+			"groups": []any{"employees", "platform-viewers"},
+			"exp":    float64(expiration.Unix()),
+		})
+		validator := auth.NewMockJwtValidator(ctrl)
+		validator.EXPECT().Validate(gomock.Any(), "raw-bearer-value").Return(token, nil)
+
+		verifier := newTokenVerifier(validator, testExchanger)
+		info, err := verifier(context.Background(), "raw-bearer-value", nil)
+		Expect(err).ToNot(HaveOccurred())
+		caller, ok := info.Extra[callerContextExtraKey].(safeCallerContext)
+		Expect(ok).To(BeTrue())
+		Expect(caller.Tenants).To(BeEmpty())
 	})
 
 	It("Rejects a validated token with no subject claim", func() {

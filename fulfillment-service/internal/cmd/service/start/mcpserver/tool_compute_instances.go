@@ -70,7 +70,7 @@ func handleCreateComputeInstance(
 	) (*mcp.CallToolResult, CreateComputeInstanceOutput, error) {
 		spec, err := computeInstanceSpecFromInput(input)
 		if err != nil {
-			return nil, CreateComputeInstanceOutput{}, err
+			return nil, CreateComputeInstanceOutput{}, safeInvalidRequestError(err)
 		}
 		ctx, cancel := toolCallContext(ctx)
 		defer cancel()

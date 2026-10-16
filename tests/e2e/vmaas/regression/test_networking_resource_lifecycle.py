@@ -50,20 +50,31 @@ def _nat_gateway_ids(grpc: GRPCClient) -> list[str]:
     return [item["id"] for item in response.get("items", [])]
 
 
+def _has_fabric_manager(private_grpc: GRPCClient) -> bool:
+    """NATGateways require a fabric manager; k8s-only environments cannot provision them."""
+    for network_class in private_grpc.list_network_classes():
+        spec = network_class.get("spec", {})
+        if spec.get("fabricManager") or spec.get("fabric_manager"):
+            return True
+    return False
+
+
 def test_networking_resource_lifecycle(
     jwt_grpc_tenant1: GRPCClient, private_grpc: GRPCClient, k8s_hub_client: K8sClient
 ) -> None:
     """The shared networking resources follow the accepted lifecycle on the deployed stack.
 
-    Creates a tenant-scoped graph in readiness order (VirtualNetwork, SecurityGroup,
-    Subnet, then the provider-owned ExternalIPPool, ExternalIP, and NATGateway),
-    proves the dependency guards reject out-of-order deletion, replaces a Subnet
-    with a changed spec, and deletes the graph in reverse dependency order
-    confirming NotFound on every read after removal and on a second Delete
-    (the retry contract). The ExternalIPAttachment path and the VM
-    attachment-immutability journey live in test_compute_network_immutability.py;
-    NetworkClass is a provider-owned singleton covered by the unit suites and is
-    never mutated here.
+    Creates a tenant-scoped graph in readiness order (VirtualNetwork, Subnet,
+    SecurityGroup, then the provider-owned ExternalIPPool, ExternalIP, and — where
+    the environment's NetworkClass has a fabric manager — NATGateway), proves the
+    dependency guards reject out-of-order deletion, replaces a Subnet with a
+    changed spec, and deletes the graph in reverse dependency order confirming
+    NotFound on every read after removal and on a second Delete (the retry
+    contract). NATGateways are skipped in k8s-only environments (their deployed
+    lifecycle is covered by the BMaaS suite). The ExternalIPAttachment path and
+    the VM attachment-immutability journey live in
+    test_compute_network_immutability.py; NetworkClass is a provider-owned
+    singleton covered by the unit suites and is never mutated here.
     """
     suffix = uuid4().hex[:8]
     vn_name = f"res-life-vn-{suffix}"
@@ -119,36 +130,50 @@ def test_networking_resource_lifecycle(
         eip_cr = wait_for_external_ip_cr(k8s=k8s_hub_client, uuid=eip_id)
         wait_for_external_ip_allocated(k8s=k8s_hub_client, name=eip_cr)
 
-        natgw_id = jwt_grpc_tenant1.create_nat_gateway(
-            name=natgw_name, virtual_network_name=vn_name, external_ip_name=eip_name
-        )
-        # The operator creates the CR asynchronously, so poll for the CR name
-        # (mirroring the BMaaS suite) instead of reading it directly after Create.
-        natgw_cr = poll_until(
-            fn=lambda: k8s_hub_client.get_nat_gateway_name(uuid=natgw_id, checked=False),
-            until=lambda name: name != "",
-            retries=30,
-            delay=2,
-            description=f"NATGateway CR for {natgw_id}",
-        )
-        wait_for_nat_gateway_ready(k8s=k8s_hub_client, name=natgw_cr)
+        # NATGateways require a fabric manager. k8s-only environments (e.g. the
+        # VMaaS CI profile, which clears the singleton NetworkClass's fabric
+        # manager) reject NATGateway creation by design (OSAC-4875 dispatcher
+        # blocking), so the NATGateway leg only runs where the fabric exists.
+        # Its deployed lifecycle is covered by the BMaaS suite (create/delete
+        # phases); this journey covers the five resources this environment owns.
+        has_fabric = _has_fabric_manager(private_grpc)
+        if has_fabric:
+            natgw_id = jwt_grpc_tenant1.create_nat_gateway(
+                name=natgw_name, virtual_network_name=vn_name, external_ip_name=eip_name
+            )
+            # The operator creates the CR asynchronously, so poll for the CR name
+            # (mirroring the BMaaS suite) instead of reading it directly after Create.
+            natgw_cr = poll_until(
+                fn=lambda: k8s_hub_client.get_nat_gateway_name(uuid=natgw_id, checked=False),
+                until=lambda name: name != "",
+                retries=30,
+                delay=2,
+                description=f"NATGateway CR for {natgw_id}",
+            )
+            wait_for_nat_gateway_ready(k8s=k8s_hub_client, name=natgw_cr)
+        else:
+            print("NetworkClass has no fabric manager; skipping the NATGateway leg")
 
         # List/Get surface per resource, same identity as created.
         assert vn_id in jwt_grpc_tenant1.list_virtual_network_ids()
         assert sg_id in jwt_grpc_tenant1.list_security_group_ids()
         assert subnet_id in jwt_grpc_tenant1.list_subnet_ids()
         assert eip_id in jwt_grpc_tenant1.list_external_ip_ids()
-        assert natgw_id in _nat_gateway_ids(jwt_grpc_tenant1)
 
         assert jwt_grpc_tenant1.get_virtual_network(vn_id=vn_id)["object"]["metadata"]["name"] == vn_name
         assert jwt_grpc_tenant1.get_subnet(subnet_id=subnet_id)["object"]["metadata"]["name"] == subnet_name
         assert jwt_grpc_tenant1.get_security_group(sg_id=sg_id)["object"]["metadata"]["name"] == sg_name
         assert jwt_grpc_tenant1.get_external_ip(external_ip_id=eip_id)["object"]["metadata"]["name"] == eip_name
 
-        # Dependency guard: the ExternalIP cannot be deleted while the NATGateway references it.
-        with pytest.raises(subprocess.CalledProcessError) as exc_info:
-            jwt_grpc_tenant1.call(service=f"{PUBLIC_API}.ExternalIPs/Delete", data={"id": eip_id})
-        assert_grpc_rejected(exc_info, "FailedPrecondition")
+        # NATGateways require a fabric manager (checked before Create above); the
+        # ExternalIP dependency guard only applies while a NATGateway references it.
+        if has_fabric:
+            assert natgw_id in _nat_gateway_ids(jwt_grpc_tenant1)
+
+            # Dependency guard: the ExternalIP cannot be deleted while the NATGateway references it.
+            with pytest.raises(subprocess.CalledProcessError) as exc_info:
+                jwt_grpc_tenant1.call(service=f"{PUBLIC_API}.ExternalIPs/Delete", data={"id": eip_id})
+            assert_grpc_rejected(exc_info, "FailedPrecondition")
 
         # Replacement: the deleted Subnet is recreated with a changed spec in the
         # same VirtualNetwork; reads and a second Delete return NotFound after removal.
@@ -168,11 +193,12 @@ def test_networking_resource_lifecycle(
         wait_for_subnet_ready(k8s=k8s_hub_client, name=subnet_cr)
 
         # Reverse dependency order, confirming NotFound reads after each removal.
-        jwt_grpc_tenant1.call(service=f"{NAT_GATEWAYS}/Delete", data={"id": natgw_id})
-        wait_for_nat_gateway_deletion(k8s=k8s_hub_client, name=natgw_cr)
-        _expect_not_found(jwt_grpc_tenant1, service=NAT_GATEWAYS, resource_id=natgw_id)
-        natgw_id = None
-        natgw_cr = None
+        if has_fabric:
+            jwt_grpc_tenant1.call(service=f"{NAT_GATEWAYS}/Delete", data={"id": natgw_id})
+            wait_for_nat_gateway_deletion(k8s=k8s_hub_client, name=natgw_cr)
+            _expect_not_found(jwt_grpc_tenant1, service=NAT_GATEWAYS, resource_id=natgw_id)
+            natgw_id = None
+            natgw_cr = None
 
         jwt_grpc_tenant1.delete_external_ip(external_ip_id=eip_id)
         wait_for_external_ip_deletion(k8s=k8s_hub_client, name=eip_cr)

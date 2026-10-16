@@ -116,6 +116,8 @@ type ServerDeps struct {
 	SubnetsClient                     publicv1.SubnetsClient
 	SecurityGroupsClient              publicv1.SecurityGroupsClient
 	ComputeInstancesClient            publicv1.ComputeInstancesClient
+	ProjectsClient                    publicv1.ProjectsClient
+	SecretsClient                     publicv1.SecretsClient
 	SelfSubjectAccessReviewsClient    publicv1.SelfSubjectAccessReviewsClient
 }
 
@@ -132,6 +134,8 @@ func NewServerDeps(conn grpc.ClientConnInterface) ServerDeps {
 		SubnetsClient:                     publicv1.NewSubnetsClient(conn),
 		SecurityGroupsClient:              publicv1.NewSecurityGroupsClient(conn),
 		ComputeInstancesClient:            publicv1.NewComputeInstancesClient(conn),
+		ProjectsClient:                    publicv1.NewProjectsClient(conn),
+		SecretsClient:                     publicv1.NewSecretsClient(conn),
 		SelfSubjectAccessReviewsClient:    publicv1.NewSelfSubjectAccessReviewsClient(conn),
 	}
 }
@@ -331,7 +335,7 @@ func canonicalMCPResourceURL(resourceURL string) (string, error) {
 // newServer creates the MCP server and registers its tools.
 func newServer(deps ServerDeps, endpoint string) *mcp.Server {
 	resources := newResourceRegistry(deps)
-	resourceTypes := resources.resourceTypes()
+	listResourceTypes := resources.listResourceTypes()
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "osac-deployment-mcp",
 		Version: version.Get(),
@@ -355,7 +359,7 @@ func newServer(deps ServerDeps, endpoint string) *mcp.Server {
 		Name: "list_resources",
 		Description: "Use this tool to discover or compare tenant-visible OSAC deployment options and existing compute instances. " +
 			"resource_type must be one of: " +
-			supportedResourceTypesDescription(resourceTypes) + ".",
+			supportedResourceTypesDescription(listResourceTypes) + ".",
 		Annotations: &mcp.ToolAnnotations{
 			Title:           "List OSAC deployment resources",
 			ReadOnlyHint:    true,
@@ -363,14 +367,14 @@ func newServer(deps ServerDeps, endpoint string) *mcp.Server {
 			IdempotentHint:  true,
 			OpenWorldHint:   toolAnnotationBool(true),
 		},
-		InputSchema:  resourceToolSchema[ListResourcesInput](resourceTypes),
+		InputSchema:  resourceToolSchema[ListResourcesInput](listResourceTypes),
 		OutputSchema: compatibleToolSchema[ListResourcesOutput](),
 	}, handleListResources(resources))
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "get_resource",
 		Description: "Use this tool to inspect one selected resource, verify catalog or reference details, or report current compute instance state. " +
-			"resource_type must be one of: " +
-			supportedResourceTypesDescription(resourceTypes) + ".",
+			"resource_type must be one of: " + supportedResourceTypesDescription(listResourceTypes) +
+			". secret_reference is list-only and is rejected by this tool.",
 		Annotations: &mcp.ToolAnnotations{
 			Title:           "Get OSAC deployment resource",
 			ReadOnlyHint:    true,
@@ -378,7 +382,7 @@ func newServer(deps ServerDeps, endpoint string) *mcp.Server {
 			IdempotentHint:  true,
 			OpenWorldHint:   toolAnnotationBool(true),
 		},
-		InputSchema:  resourceToolSchema[GetResourceInput](resourceTypes),
+		InputSchema:  resourceToolSchema[GetResourceInput](listResourceTypes),
 		OutputSchema: compatibleToolSchema[GetResourceOutput](),
 	}, handleGetResource(resources))
 	mcp.AddTool(server, &mcp.Tool{

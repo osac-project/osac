@@ -99,6 +99,8 @@ var _ = Describe("handleCheckConnection", func() {
 			ResourceTypeSubnet,
 			ResourceTypeSecurityGroup,
 			ResourceTypeComputeInstance,
+			ResourceTypeProject,
+			ResourceTypeSecretReference,
 		))
 		Expect(output.Tools).To(ConsistOf(
 			"check_connection", "list_resources", "get_resource", "create_compute_instance", "delete_compute_instance",

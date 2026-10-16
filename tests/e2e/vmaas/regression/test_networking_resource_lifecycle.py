@@ -181,7 +181,7 @@ def test_networking_resource_lifecycle(
         assert eip_id in jwt_grpc_tenant1.list_external_ip_ids()
 
         assert jwt_grpc_tenant1.get_virtual_network(vn_id=vn_id)["object"]["metadata"]["name"] == vn_name
-        assert jwt_grpc_tenant1.get_subnet(subnet_id=subnet_id)["object"]["metadata"]["name"] == subnet_name
+        assert jwt_grpc_tenant1.get_subnet(subnet_id=subnet_id)["object"]["metadata"]["name"] == f"{subnet_name}-r"
         assert jwt_grpc_tenant1.get_security_group(sg_id=sg_id)["object"]["metadata"]["name"] == sg_name
         assert jwt_grpc_tenant1.get_external_ip(external_ip_id=eip_id)["object"]["metadata"]["name"] == eip_name
 

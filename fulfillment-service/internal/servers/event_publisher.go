@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/IBM/sarama"
 	"github.com/cenkalti/backoff/v4"
@@ -49,6 +50,7 @@ import (
 //	event_publish_latency_seconds - Time from change row creation to successful Kafka publish, in seconds.
 //	event_publish_total - Number of events published to Kafka.
 //	event_publish_errors_total - Number of errors publishing events, including rows that cannot be encoded or routed.
+//	event_quarantined_total - Number of change rows quarantined because they cannot be converted to events.
 //
 // The unpublished event count is refreshed periodically. Use the SetMetricsInterval method to change that interval. It
 // defaults to 15 seconds.
@@ -85,32 +87,36 @@ type EventPublisherBuilder struct {
 // EventPublisher drains the changes table to Kafka. Don't create instances of this type directly, use the
 // NewEventPublisher function instead.
 type EventPublisher struct {
-	logger           *slog.Logger
-	dbPool           *pgxpool.Pool
-	dbTable          string
-	dbChannel        string
-	fetchSQL         string
-	deleteSQL        string
-	countSQL         string
-	existsSQL        string
-	listenSQL        string
-	listenConn       *pgxpool.Conn
-	drainLoop        *work.Loop
-	listenLoop       *work.Loop
-	metricsLoop      *work.Loop
-	kafkaAdmin       sarama.ClusterAdmin
-	kafkaProducer    sarama.SyncProducer
-	kafkaTopicPrefix string
-	publishedTopics  map[string]bool
-	batchSize        int
-	publishCallback  func(context.Context, *privatev1.Event) error
-	payloadOneof     protoreflect.OneofDescriptor
-	payloadFields    map[string]protoreflect.FieldDescriptor
-	metrics          struct {
+	logger              *slog.Logger
+	dbPool              *pgxpool.Pool
+	dbTable             string
+	dbChannel           string
+	fetchSQL            string
+	quarantineFetchSQL  string
+	deleteSQL           string
+	quarantineSQL       string
+	quarantineExistsSQL string
+	countSQL            string
+	existsSQL           string
+	listenSQL           string
+	listenConn          *pgxpool.Conn
+	drainLoop           *work.Loop
+	listenLoop          *work.Loop
+	metricsLoop         *work.Loop
+	kafkaAdmin          sarama.ClusterAdmin
+	kafkaProducer       sarama.SyncProducer
+	kafkaTopicPrefix    string
+	publishedTopics     map[string]bool
+	batchSize           int
+	publishCallback     func(context.Context, *privatev1.Event) error
+	payloadOneof        protoreflect.OneofDescriptor
+	payloadFields       map[string]protoreflect.FieldDescriptor
+	metrics             struct {
 		unpublishedCount prometheus.Gauge
 		publishLatency   prometheus.Histogram
 		publishTotal     *prometheus.CounterVec
 		publishErrors    *prometheus.CounterVec
+		quarantinedTotal *prometheus.CounterVec
 	}
 }
 
@@ -302,7 +308,10 @@ func (b *EventPublisherBuilder) Build() (result *EventPublisher, err error) {
 
 	// Calculate the SQL statements:
 	fetchSQL := b.calculateFetchSQL(dbTable)
+	quarantineFetchSQL := b.calculateQuarantineFetchSQL(dbTable)
 	deleteSQL := b.calculateDeleteSQL(dbTable)
+	quarantineSQL := b.calculateQuarantineSQL(dbTable)
+	quarantineExistsSQL := b.calculateQuarantineExistsSQL(dbTable)
 	countSQL := b.calculateCountSQL(dbTable)
 	existsSQL := b.calculateExistsSQL(dbTable)
 	listenSQL := b.calculateListenSQL(dbChannel)
@@ -358,23 +367,26 @@ func (b *EventPublisherBuilder) Build() (result *EventPublisher, err error) {
 
 	// Create and populate the object:
 	result = &EventPublisher{
-		logger:           b.logger,
-		dbPool:           b.dbPool,
-		dbTable:          dbTable,
-		dbChannel:        dbChannel,
-		kafkaAdmin:       kafkaAdmin,
-		kafkaProducer:    kafkaProducer,
-		kafkaTopicPrefix: b.kafkaTopicPrefix,
-		publishedTopics:  map[string]bool{},
-		fetchSQL:         fetchSQL,
-		deleteSQL:        deleteSQL,
-		countSQL:         countSQL,
-		existsSQL:        existsSQL,
-		listenSQL:        listenSQL,
-		batchSize:        b.batchSize,
-		publishCallback:  b.publishCallback,
-		payloadOneof:     payloadOneof,
-		payloadFields:    payloadFields,
+		logger:              b.logger,
+		dbPool:              b.dbPool,
+		dbTable:             dbTable,
+		dbChannel:           dbChannel,
+		kafkaAdmin:          kafkaAdmin,
+		kafkaProducer:       kafkaProducer,
+		kafkaTopicPrefix:    b.kafkaTopicPrefix,
+		publishedTopics:     map[string]bool{},
+		fetchSQL:            fetchSQL,
+		quarantineFetchSQL:  quarantineFetchSQL,
+		deleteSQL:           deleteSQL,
+		quarantineSQL:       quarantineSQL,
+		quarantineExistsSQL: quarantineExistsSQL,
+		countSQL:            countSQL,
+		existsSQL:           existsSQL,
+		listenSQL:           listenSQL,
+		batchSize:           b.batchSize,
+		publishCallback:     b.publishCallback,
+		payloadOneof:        payloadOneof,
+		payloadFields:       payloadFields,
 	}
 
 	// Set up metrics:
@@ -382,22 +394,7 @@ func (b *EventPublisherBuilder) Build() (result *EventPublisher, err error) {
 	if metricsRegisterer == nil {
 		metricsRegisterer = prometheus.DefaultRegisterer
 	}
-	err = result.registerUnpublishedCountMetric(metricsRegisterer)
-	if err != nil {
-		result = nil
-		return
-	}
-	err = result.registerPublishLatencyMetric(metricsRegisterer)
-	if err != nil {
-		result = nil
-		return
-	}
-	err = result.registerPublishTotalMetric(metricsRegisterer)
-	if err != nil {
-		result = nil
-		return
-	}
-	err = result.registerPublishErrorsMetric(metricsRegisterer)
+	err = result.registerMetrics(metricsRegisterer)
 	if err != nil {
 		result = nil
 		return
@@ -510,6 +507,69 @@ func (b *EventPublisherBuilder) calculateFetchSQL(dbTable string) string {
 // calculateDeleteSQL returns the query used to delete a change from the configured table.
 func (b *EventPublisherBuilder) calculateDeleteSQL(dbTable string) string {
 	return fmt.Sprintf("delete from %s where id = $1", dbTable)
+}
+
+// calculateQuarantineSQL returns the query used to quarantine a change that cannot be converted to an event. The row
+// is kept, so an operator can fix the cause and clear the quarantine to republish it.
+func (b *EventPublisherBuilder) calculateQuarantineSQL(dbTable string) string {
+	return fmt.Sprintf(
+		"update %s set quarantined_at = now(), quarantine_reason = $2 where id = $1",
+		dbTable,
+	)
+}
+
+// calculateQuarantineExistsSQL returns the query used to check cheaply whether the configured table has any
+// quarantined row. It is an indexed partial scan when no row is quarantined, which is the common case.
+func (b *EventPublisherBuilder) calculateQuarantineExistsSQL(dbTable string) string {
+	return fmt.Sprintf(
+		"select exists (select 1 from %s where quarantined_at is not null)",
+		dbTable,
+	)
+}
+
+// calculateQuarantineFetchSQL returns the query used to fetch changes while at least one row is quarantined. It
+// excludes the quarantined rows themselves and the rows held back by the quarantine: while a tenant has a
+// quarantined row, later rows of the same tenant are not published, so that tenant's topic stays in order until the
+// quarantined change is fixed and republished. Other tenants keep flowing.
+//
+// The tenant of a row is the 'tenant' key of its data. Rows without that key, and rows whose tenant is the empty
+// string (which can never be published, because events require a non-empty tenant), form a single group of their own,
+// so a quarantined row without a tenant only holds back other rows without a usable tenant.
+//
+// The 'xmin' where clause has the same purpose as in calculateFetchSQL.
+func (b *EventPublisherBuilder) calculateQuarantineFetchSQL(dbTable string) string {
+	return fmt.Sprintf(`
+		select
+			"id",
+			"table",
+			"op",
+			"data",
+			"timestamp"
+		from
+			%s as candidate
+		where
+			quarantined_at is null and
+			xmin::text::bigint < pg_snapshot_xmin(pg_current_snapshot())::text::bigint and
+			not exists (
+				select
+					1
+				from
+					%s as quarantined
+				where
+					quarantined.quarantined_at is not null and
+					coalesce(quarantined.data->>'tenant', '') =
+						coalesce(candidate.data->>'tenant', '') and
+					quarantined.id < candidate.id
+			)
+		order by
+			id
+		for update of candidate
+		skip locked
+		limit $1
+		`,
+		dbTable,
+		dbTable,
+	)
 }
 
 // calculateCountSQL returns the query used to count the number of changes in the configured table.
@@ -719,8 +779,21 @@ func (p *EventPublisher) drain(ctx context.Context) (more bool, err error) {
 		}
 	}()
 
+	// Check whether any row is quarantined. When none is, the plain fetch is used and behavior is exactly the same as
+	// if quarantine didn't exist. When one is, the fetch also leaves quarantined rows and their tenants' held-back
+	// later rows unclaimed.
+	var quarantined bool
+	err = tx.QueryRow(ctx, p.quarantineExistsSQL).Scan(&quarantined)
+	if err != nil {
+		return false, fmt.Errorf("failed to check for quarantined changes: %w", err)
+	}
+	fetchSQL := p.fetchSQL
+	if quarantined {
+		fetchSQL = p.quarantineFetchSQL
+	}
+
 	// Fetch the next batch of changes:
-	rows, err := tx.Query(ctx, p.fetchSQL, p.batchSize)
+	rows, err := tx.Query(ctx, fetchSQL, p.batchSize)
 	if err != nil {
 		return false, fmt.Errorf("failed to fetch changes: %w", err)
 	}
@@ -738,15 +811,26 @@ func (p *EventPublisher) drain(ctx context.Context) (more bool, err error) {
 		return false, fmt.Errorf("failed to scan change rows: %w", err)
 	}
 
-	// Process the changes:
+	// Process the changes. When a change is quarantined mid-batch, the rest of that tenant's rows in the same batch
+	// are left in the table: they were claimed before the quarantine existed, so the fetch above could not have held
+	// them back. They stay unclaimed and the next drain applies the hold-back.
+	heldBack := map[string]bool{}
 	for _, change := range changes {
 		if err = ctx.Err(); err != nil {
 			err = fmt.Errorf("publish aborted: %w", err)
 			return
 		}
-		err = p.processChange(ctx, tx, &change)
+		tenant := p.changeTenant(&change)
+		if heldBack[tenant] {
+			continue
+		}
+		var quarantinedChange bool
+		quarantinedChange, err = p.processChange(ctx, tx, &change)
 		if err != nil {
 			return
+		}
+		if quarantinedChange {
+			heldBack[tenant] = true
 		}
 	}
 
@@ -756,57 +840,49 @@ func (p *EventPublisher) drain(ctx context.Context) (more bool, err error) {
 
 // processChange converts a change into an event and writes it to Kafka.
 //
-// Changes that cannot be converted are reated as permanently unpublishable. Returning an error here would abort the
-// drain and leave that row at the head of the table, so later changes would never be published. Instead the failure is
-// written to the log, the 'event_publish_errors_total' metric is incremented, and the row is deleted so the drain can
-// continue. Kafka send failures are not skipped: they abort the drain and leave the row in the table so it can be
-// retried.
+// Rows of tables that have no event payload field are structural non-events: they can never become events by design,
+// not by fault, and several object tables are in that situation. They are logged and dropped, as they always were,
+// so they neither quarantine nor hold back their tenant's later rows.
+//
+// Changes that should convert but cannot are quarantined instead of deleted: the metering design rebuilds all usage
+// from the events published to Kafka, so a captured change may never be lost. The failure is written to the log, the
+// 'event_publish_errors_total' and 'event_quarantined_total' metrics are incremented, and the row is marked with
+// 'quarantined_at' and 'quarantine_reason' so the drain can continue without publishing the tenant's later rows out
+// of order. An operator fixes the cause and clears the two columns to republish the change. Kafka send failures are
+// not quarantined: they abort the drain and leave the row in the table so it can be retried.
 //
 // The 'event_publish_errors_total' metric is intended for a future alert when unpublishable rows appear, for example:
 //
 //	increase(event_publish_errors_total[5m]) > 0
-func (p *EventPublisher) processChange(ctx context.Context, tx pgx.Tx, change *eventPublisherChange) error {
-	// Convert the change to an event:
-	event, err := p.convertChange(change)
-	if err != nil {
+func (p *EventPublisher) processChange(
+	ctx context.Context, tx pgx.Tx, change *eventPublisherChange) (quarantined bool, err error) {
+	// A table without an event payload field is a structural non-event: drop it as before, so
+	// a table that was never publishable cannot quarantine and hold back its tenant.
+	if p.payloadFields[change.table] == nil {
 		p.logger.ErrorContext(
 			ctx,
-			"Failed to convert change",
+			"Change row for a table without an event payload field, dropping it",
 			slog.String("id", change.id),
 			slog.String("table", change.table),
 			slog.String("op", change.op),
-			slog.String("error", err.Error()),
 		)
 		p.metrics.publishErrors.With(nil).Inc()
-		return p.deleteChange(ctx, tx, change.id)
+		return false, p.deleteChange(ctx, tx, change.id)
+	}
+	// Convert the change to an event:
+	event, err := p.convertChange(change)
+	if err != nil {
+		return p.quarantineChange(ctx, tx, change, err)
 	}
 
 	// Find the tenant and the identifier object, as we need them to calculate the Kafka topic and message key:
 	tenant, id, err := p.payloadIdentity(event)
 	if err != nil {
-		p.logger.ErrorContext(
-			ctx,
-			"Failed to obtain tenant and identifier from change",
-			slog.String("id", change.id),
-			slog.String("table", change.table),
-			slog.String("op", change.op),
-			slog.String("error", err.Error()),
-		)
-		p.metrics.publishErrors.With(nil).Inc()
-		return p.deleteChange(ctx, tx, change.id)
+		return p.quarantineChange(ctx, tx, change, err)
 	}
 	value, err := proto.Marshal(event)
 	if err != nil {
-		p.logger.ErrorContext(
-			ctx,
-			"Failed to marshal event",
-			slog.String("id", change.id),
-			slog.String("table", change.table),
-			slog.String("op", change.op),
-			slog.String("error", err.Error()),
-		)
-		p.metrics.publishErrors.With(nil).Inc()
-		return p.deleteChange(ctx, tx, change.id)
+		return p.quarantineChange(ctx, tx, change, err)
 	}
 
 	// Calculate the Kafka topic and the message key:
@@ -814,7 +890,7 @@ func (p *EventPublisher) processChange(ctx context.Context, tx pgx.Tx, change *e
 	err = p.ensureTopic(ctx, topic)
 	if err != nil {
 		p.metrics.publishErrors.With(nil).Inc()
-		return fmt.Errorf("failed to prepare topic for change '%s': %w", change.id, err)
+		return false, fmt.Errorf("failed to prepare topic for change '%s': %w", change.id, err)
 	}
 	_, _, err = p.kafkaProducer.SendMessage(&sarama.ProducerMessage{
 		Topic: topic,
@@ -823,7 +899,7 @@ func (p *EventPublisher) processChange(ctx context.Context, tx pgx.Tx, change *e
 	})
 	if err != nil {
 		p.metrics.publishErrors.With(nil).Inc()
-		return fmt.Errorf("failed to publish change '%s': %w", change.id, err)
+		return false, fmt.Errorf("failed to publish change '%s': %w", change.id, err)
 	}
 	p.publishedTopics[topic] = true
 	if p.logger.Enabled(ctx, slog.LevelDebug) {
@@ -838,17 +914,17 @@ func (p *EventPublisher) processChange(ctx context.Context, tx pgx.Tx, change *e
 	if p.publishCallback != nil {
 		err = p.publishCallback(ctx, event)
 		if err != nil {
-			return err
+			return false, err
 		}
 	}
 	err = p.deleteChange(ctx, tx, change.id)
 	if err != nil {
 		p.metrics.publishErrors.With(nil).Inc()
-		return err
+		return false, err
 	}
 	p.metrics.publishTotal.With(nil).Inc()
 	p.metrics.publishLatency.Observe(time.Since(change.timestamp).Seconds())
-	return nil
+	return false, nil
 }
 
 // ensureTopic checks if a topic exists, and creates it if needed.
@@ -919,6 +995,76 @@ func (p *EventPublisher) deleteChange(ctx context.Context, tx pgx.Tx, id string)
 		return fmt.Errorf("failed to delete change '%s': %w", id, err)
 	}
 	return nil
+}
+
+// quarantineChange marks a change row as quarantined instead of deleting it, so the captured change is never lost and
+// an operator can fix the cause and republish it. The design requires a notification when this happens; notifications
+// are not a feature of OSAC yet, so this error log is the notification until they exist.
+func (p *EventPublisher) quarantineChange(
+	ctx context.Context, tx pgx.Tx, change *eventPublisherChange, reason error) (quarantined bool, err error) {
+	tenant := p.changeTenant(change)
+	attributes := []any{
+		slog.String("id", change.id),
+		slog.String("table", change.table),
+		slog.String("op", change.op),
+		slog.String("reason", reason.Error()),
+	}
+	if tenant != "" {
+		attributes = append(attributes, slog.String("tenant", tenant))
+	}
+	p.logger.ErrorContext(
+		ctx,
+		"Change quarantined: later events of its tenant are held back until it is fixed and republished",
+		attributes...,
+	)
+	p.metrics.publishErrors.With(nil).Inc()
+	p.metrics.quarantinedTotal.With(nil).Inc()
+	text := quarantineReasonText(reason)
+	_, err = tx.Exec(ctx, p.quarantineSQL, change.id, text)
+	if err != nil {
+		err = fmt.Errorf("failed to quarantine change '%s': %w", change.id, err)
+		return false, err
+	}
+	return true, nil
+}
+
+// quarantineReasonText prepares the reason of a quarantined change for the 'quarantine_reason' column:
+// it is truncated to at most eventPublisherQuarantineReasonLimit bytes and made valid UTF-8. The error
+// message can quote raw row data and contain invalid UTF-8, and a cut at a byte offset can split a
+// multi-byte rune; PostgreSQL rejects parameters that aren't valid UTF-8, which would roll back the
+// drain and make it fail on the same row forever.
+func quarantineReasonText(reason error) string {
+	text := truncateUTF8(reason.Error(), eventPublisherQuarantineReasonLimit)
+	text = strings.ToValidUTF8(text, "�")
+	// Replacing invalid sequences with the three-byte replacement character can grow the text past
+	// the limit again; the second truncation can't split a rune because the text is valid UTF-8 then:
+	return truncateUTF8(text, eventPublisherQuarantineReasonLimit)
+}
+
+// truncateUTF8 cuts the text to at most limit bytes, moving the cut back to the start of a rune so
+// that it doesn't split a multi-byte character. The result may still contain invalid UTF-8 left
+// over from the middle of the text; sanitize it with strings.ToValidUTF8 if that matters.
+func truncateUTF8(text string, limit int) string {
+	if len(text) <= limit {
+		return text
+	}
+	// The cut splits a rune when the first excluded byte is a continuation byte: move it back until
+	// it is the start of a rune:
+	for limit > 0 && !utf8.RuneStart(text[limit]) {
+		limit--
+	}
+	return text[:limit]
+}
+
+// changeTenant returns the tenant of a change row, extracted from the 'tenant' key of its data. Rows from tables
+// without a tenant column, and rows whose tenant is empty, return the empty string. This matches the grouping of the
+// quarantine hold-back query, which treats those rows as a single group of their own.
+func (p *EventPublisher) changeTenant(change *eventPublisherChange) string {
+	var object eventPublisherObjectJson
+	if err := json.Unmarshal(change.data, &object); err != nil {
+		return ""
+	}
+	return object.Tenant
 }
 
 // metricsWorkFunc refreshes gauges whose values are calculated periodically, such as the unpublished event count.
@@ -1160,6 +1306,24 @@ func (p *EventPublisher) payloadIdentity(event *privatev1.Event) (objectTenant, 
 	return
 }
 
+// registerMetrics registers all the metrics of the publisher with the given registerer.
+func (p *EventPublisher) registerMetrics(registerer prometheus.Registerer) error {
+	registrations := []func(prometheus.Registerer) error{
+		p.registerUnpublishedCountMetric,
+		p.registerPublishLatencyMetric,
+		p.registerPublishTotalMetric,
+		p.registerPublishErrorsMetric,
+		p.registerQuarantinedTotalMetric,
+	}
+	for _, register := range registrations {
+		err := register(registerer)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (p *EventPublisher) registerUnpublishedCountMetric(registerer prometheus.Registerer) error {
 	const name = "event_unpublished_count"
 	metric := prometheus.NewGauge(prometheus.GaugeOpts{
@@ -1265,6 +1429,32 @@ func (p *EventPublisher) registerPublishErrorsMetric(registerer prometheus.Regis
 	return nil
 }
 
+func (p *EventPublisher) registerQuarantinedTotalMetric(registerer prometheus.Registerer) error {
+	const name = "event_quarantined_total"
+	metric := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: name,
+		Help: "Number of change rows quarantined because they cannot be converted to events.",
+	}, nil)
+	err := registerer.Register(metric)
+	if err != nil {
+		var registered prometheus.AlreadyRegisteredError
+		if !errors.As(err, &registered) {
+			return err
+		}
+		existing, ok := registered.ExistingCollector.(*prometheus.CounterVec)
+		if !ok {
+			return fmt.Errorf(
+				"metric '%s' can't be registered as a counter vector because it is already registered as a '%T'",
+				name, registered.ExistingCollector,
+			)
+		}
+		p.metrics.quarantinedTotal = existing
+		return nil
+	}
+	p.metrics.quarantinedTotal = metric
+	return nil
+}
+
 const (
 	// DefaultEventTopicPrefix is prepended to the tenant identifier to form Kafka topic names.
 	DefaultEventTopicPrefix = "osac.events."
@@ -1279,6 +1469,11 @@ const (
 	defaultListenRetryInterval = 5 * time.Second
 	defaultBatchSize           = 100
 	defaultMetricsInterval     = 15 * time.Second
+
+	// eventPublisherQuarantineReasonLimit is the maximum number of bytes of the error message stored in the
+	// 'quarantine_reason' column of a quarantined change row. The cut is moved back to the start of a rune
+	// so that it never splits a multi-byte character.
+	eventPublisherQuarantineReasonLimit = 1024
 )
 
 // Possible values of the 'op' column of the changes table.

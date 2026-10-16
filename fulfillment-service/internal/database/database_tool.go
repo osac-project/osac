@@ -480,6 +480,7 @@ func (t *tool) CheckSchema(ctx context.Context) error {
 	for _, table := range archiveTables {
 		issues += t.checkArchiveTable(ctx, pool, table)
 	}
+	issues += t.checkChangesQuarantine(ctx, pool)
 	if issues > 0 {
 		return fmt.Errorf("found %d issues in the database schema", issues)
 	}
@@ -626,6 +627,61 @@ func (t *tool) checkArchiveTable(ctx context.Context, pool *pgxpool.Pool, table 
 	issues := 0
 	issues += t.checkColumns(ctx, pool, table, toolArchivedColumns)
 	issues += t.checkTableExists(ctx, pool, strings.TrimPrefix(table, "archived_"))
+	return issues
+}
+
+// checkChangesQuarantine verifies that the changes table has the quarantine columns added by migration 126 and the
+// partial index over quarantined rows added by migration 127. The event publisher relies on them to park unpublishable
+// rows and hold back their tenant's later rows instead of deleting them. Returns the number of issues found.
+func (t *tool) checkChangesQuarantine(ctx context.Context, pool *pgxpool.Pool) int {
+	issues := 0
+	issues += t.checkColumns(ctx, pool, "changes", toolChangesColumns)
+
+	var count int
+	err := pool.QueryRow(
+		ctx,
+		`
+		select
+			count(*)
+		from
+			pg_catalog.pg_class c
+		join
+			pg_catalog.pg_namespace n on n.oid = c.relnamespace
+		join
+			pg_catalog.pg_index i on i.indrelid = c.oid
+		join
+			pg_catalog.pg_class ic on ic.oid = i.indexrelid
+		where
+			n.nspname = 'public' and
+			c.relname = 'changes' and
+			ic.relname = 'changes_quarantined' and
+			i.indpred is not null and
+			i.indisvalid`,
+	).Scan(&count)
+	if err != nil {
+		t.logger.ErrorContext(
+			ctx,
+			"Failed to check the quarantine index of the changes table",
+			slog.Any("error", err),
+		)
+		return issues + 1
+	}
+	if count != 1 {
+		// A concurrent index build that failed partway leaves an invalid index behind, which
+		// counts as missing here. Recover by dropping the invalid index and re-running
+		// migration 127:
+		//
+		//	drop index changes_quarantined;
+		//
+		// then re-run the migration so the index is built again.
+		t.logger.ErrorContext(
+			ctx,
+			"Changes table is missing a valid partial index over quarantined rows; if a failed concurrent build left an invalid one, drop it and re-run the migration that creates it",
+			slog.String("table", "changes"),
+			slog.String("index", "changes_quarantined"),
+		)
+		issues++
+	}
 	return issues
 }
 
@@ -1036,4 +1092,11 @@ var toolArchivedColumns = map[string]string{
 	"project":            "ltree",
 	"tenant":             "text",
 	"version":            "integer",
+}
+
+// toolChangesColumns maps each quarantine column that the event publisher expects in the changes table to its
+// expected PostgreSQL full type, as reported by 'pg_catalog.format_type'.
+var toolChangesColumns = map[string]string{
+	"quarantined_at":    "timestamp with time zone",
+	"quarantine_reason": "text",
 }

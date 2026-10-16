@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/IBM/sarama"
 	"github.com/gobuffalo/flect"
@@ -350,6 +351,29 @@ var _ = Describe("Event publisher", Ordered, func() {
 		})
 	})
 
+	Describe("Quarantine reason", func() {
+		It("Keeps short valid reasons unchanged", func() {
+			Expect(quarantineReasonText(errors.New("unknown change operation 'TRUNCATE'"))).
+				To(Equal("unknown change operation 'TRUNCATE'"))
+		})
+
+		It("Truncates long reasons on a rune boundary and replaces invalid UTF-8", func() {
+			// Longer than the limit, with invalid UTF-8 bytes that can appear when the error quotes raw
+			// row data, and with three-byte runes placed so that a cut at the byte limit lands in the
+			// middle of one:
+			reason := fmt.Sprintf(
+				"unknown change operation '%s%s'",
+				strings.Repeat("\xff", 21),
+				strings.Repeat("日", 600),
+			)
+			text := quarantineReasonText(errors.New(reason))
+			Expect(utf8.ValidString(text)).To(BeTrue())
+			Expect(len(text)).To(BeNumerically("<=", eventPublisherQuarantineReasonLimit))
+			Expect(text).To(HavePrefix("unknown change operation '"))
+			Expect(text).To(ContainSubstring("�"))
+		})
+	})
+
 	Describe("Encode change event", func() {
 		var (
 			encodeCtx context.Context
@@ -673,7 +697,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 		It("Does not publish a row with invalid object data", func() {
 			tenant := "baddata-" + uuid.New()
 			topic := DefaultEventTopicPrefix + tenant
-			insertChange("projects", tenant, "p-1", fmt.Sprintf(
+			changeID := insertChange("projects", tenant, "p-1", fmt.Sprintf(
 				`{"id":"p-1","tenant":%q,"data":[]}`,
 				tenant,
 			))
@@ -684,21 +708,38 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Consistently(func() bool {
 				return kafkaHasTopic(client, topic)
 			}).WithTimeout(300 * time.Millisecond).WithPolling(50 * time.Millisecond).Should(BeFalse())
-			Eventually(func() int {
-				var count int
-				err := pool.QueryRow(encodeCtx, "select count(*) from changes").Scan(&count)
-				Expect(err).ToNot(HaveOccurred())
-				return count
-			}).WithTimeout(5 * time.Second).Should(Equal(0))
+			Eventually(func() bool {
+				var quarantined bool
+				err := pool.QueryRow(
+					encodeCtx,
+					"select quarantined_at is not null from changes where id = $1",
+					changeID,
+				).Scan(&quarantined)
+				if err != nil {
+					return false
+				}
+				return quarantined
+			}).WithTimeout(5 * time.Second).Should(BeTrue())
+			var reason string
+			err := pool.QueryRow(
+				encodeCtx,
+				"select coalesce(quarantine_reason, '') from changes where id = $1",
+				changeID,
+			).Scan(&reason)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(reason).To(ContainSubstring("failed to unmarshal object data"))
 			Expect(metricValue(registry, "event_publish_errors_total")).To(Equal(float64(1)))
+			Expect(metricValue(registry, "event_quarantined_total")).To(Equal(float64(1)))
 		})
 
 		It("Does not publish a row that has an empty tenant", func() {
 			topic := DefaultEventTopicPrefix
-			_, err := pool.Exec(encodeCtx, `
+			var changeID string
+			err := pool.QueryRow(encodeCtx, `
 				insert into changes ("table", op, data)
 				values ('projects', 'INSERT', '{"id": "p-1"}'::jsonb)
-			`)
+				returning id
+			`).Scan(&changeID)
 			Expect(err).ToNot(HaveOccurred())
 
 			cancel, done := startPublisher(pub)
@@ -707,13 +748,28 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Consistently(func() bool {
 				return kafkaHasTopic(client, topic)
 			}).WithTimeout(300 * time.Millisecond).WithPolling(50 * time.Millisecond).Should(BeFalse())
-			Eventually(func() int {
-				var count int
-				err := pool.QueryRow(encodeCtx, "select count(*) from changes").Scan(&count)
-				Expect(err).ToNot(HaveOccurred())
-				return count
-			}).WithTimeout(5 * time.Second).Should(Equal(0))
+			Eventually(func() bool {
+				var quarantined bool
+				err := pool.QueryRow(
+					encodeCtx,
+					"select quarantined_at is not null from changes where id = $1",
+					changeID,
+				).Scan(&quarantined)
+				if err != nil {
+					return false
+				}
+				return quarantined
+			}).WithTimeout(5 * time.Second).Should(BeTrue())
+			var reason string
+			err = pool.QueryRow(
+				encodeCtx,
+				"select coalesce(quarantine_reason, '') from changes where id = $1",
+				changeID,
+			).Scan(&reason)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(reason).To(ContainSubstring("empty tenant"))
 			Expect(metricValue(registry, "event_publish_errors_total")).To(Equal(float64(1)))
+			Expect(metricValue(registry, "event_quarantined_total")).To(Equal(float64(1)))
 		})
 	})
 
@@ -770,7 +826,9 @@ var _ = Describe("Event publisher", Ordered, func() {
 					"table" text not null,
 					op text not null,
 					data jsonb not null,
-					"timestamp" timestamptz not null default now()
+					"timestamp" timestamptz not null default now(),
+					quarantined_at timestamptz,
+					quarantine_reason text
 				)
 			`)
 			Expect(err).ToNot(HaveOccurred())
@@ -1339,12 +1397,12 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		It("Skips a row that cannot be encoded and continues draining later rows", func() {
+		It("Quarantines a row that cannot be encoded and continues draining later rows", func() {
 			badTenant := "badop-" + uuid.New()
 			badTopic := DefaultEventTopicPrefix + badTenant
 			tenant := "keep-" + uuid.New()
 			topic := DefaultEventTopicPrefix + tenant
-			insertChange(badTenant, "obj-1", "TRUNCATE")
+			badID := insertChange(badTenant, "obj-1", "TRUNCATE")
 			insertChange(tenant, "obj-1", "INSERT")
 
 			cancel, done := startPublisher(pub)
@@ -1353,8 +1411,17 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Consistently(func() bool {
 				return kafkaHasTopic(client, badTopic)
 			}).WithTimeout(300 * time.Millisecond).WithPolling(50 * time.Millisecond).Should(BeFalse())
-			Eventually(countChanges).WithTimeout(5 * time.Second).Should(Equal(0))
+			Eventually(countChanges).WithTimeout(5 * time.Second).Should(Equal(1))
+			var reason string
+			err := pool.QueryRow(
+				drainCtx,
+				"select coalesce(quarantine_reason, '') from changes where id = $1",
+				badID,
+			).Scan(&reason)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(reason).To(ContainSubstring("unknown change operation 'TRUNCATE'"))
 			Expect(metricValue(registry, "event_publish_errors_total")).To(Equal(float64(1)))
+			Expect(metricValue(registry, "event_quarantined_total")).To(Equal(float64(1)))
 
 			events := collectKafkaEvents(client, topic, 1)
 			Expect(events[0].key).To(Equal("obj-1"))
@@ -1362,12 +1429,12 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Expect(events[0].event.GetProject().GetMetadata().GetTenant()).To(Equal(tenant))
 		})
 
-		It("Skips a row that cannot be routed and continues draining later rows", func() {
+		It("Quarantines a row that cannot be routed and continues draining later rows", func() {
 			badTenant := "emptyid-" + uuid.New()
 			badTopic := DefaultEventTopicPrefix + badTenant
 			tenant := "keep-" + uuid.New()
 			topic := DefaultEventTopicPrefix + tenant
-			insertChange(badTenant, "", "INSERT")
+			badID := insertChange(badTenant, "", "INSERT")
 			insertChange(tenant, "obj-1", "INSERT")
 
 			cancel, done := startPublisher(pub)
@@ -1376,8 +1443,17 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Consistently(func() bool {
 				return kafkaHasTopic(client, badTopic)
 			}).WithTimeout(300 * time.Millisecond).WithPolling(50 * time.Millisecond).Should(BeFalse())
-			Eventually(countChanges).WithTimeout(5 * time.Second).Should(Equal(0))
+			Eventually(countChanges).WithTimeout(5 * time.Second).Should(Equal(1))
+			var reason string
+			err := pool.QueryRow(
+				drainCtx,
+				"select coalesce(quarantine_reason, '') from changes where id = $1",
+				badID,
+			).Scan(&reason)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(reason).To(ContainSubstring("empty object identifier"))
 			Expect(metricValue(registry, "event_publish_errors_total")).To(Equal(float64(1)))
+			Expect(metricValue(registry, "event_quarantined_total")).To(Equal(float64(1)))
 
 			events := collectKafkaEvents(client, topic, 1)
 			Expect(events[0].key).To(Equal("obj-1"))
@@ -1385,22 +1461,64 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Expect(events[0].event.GetProject().GetMetadata().GetTenant()).To(Equal(tenant))
 		})
 
-		It("Skips non-Event payloads and continues draining later rows", func() {
+		It("Quarantines a row whose reason is cut inside a multi-byte character", func() {
+			badTenant := "multibyte-" + uuid.New()
+			badTopic := DefaultEventTopicPrefix + badTenant
+			tenant := "keep-" + uuid.New()
+			topic := DefaultEventTopicPrefix + tenant
+			// An unknown operation made of three-byte runes, long enough that truncating the reason
+			// at the byte limit lands in the middle of one. Without the rune boundary handling the
+			// quarantine update sends invalid UTF-8 to PostgreSQL, which rejects it and rolls back
+			// the drain, so the same row is fetched and fails again forever:
+			badID := insertChange(badTenant, "obj-1", strings.Repeat("日", 700))
+			insertChange(tenant, "obj-1", "INSERT")
+
+			cancel, done := startPublisher(pub)
+			defer stopPublisher(cancel, done)
+
+			Consistently(func() bool {
+				return kafkaHasTopic(client, badTopic)
+			}).WithTimeout(300 * time.Millisecond).WithPolling(50 * time.Millisecond).Should(BeFalse())
+			Eventually(countChanges).WithTimeout(5 * time.Second).Should(Equal(1))
+			var reason string
+			err := pool.QueryRow(
+				drainCtx,
+				"select coalesce(quarantine_reason, '') from changes where id = $1",
+				badID,
+			).Scan(&reason)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(reason).To(HavePrefix("unknown change operation '"))
+			Expect(utf8.ValidString(reason)).To(BeTrue())
+			Expect(len(reason)).To(BeNumerically("<=", eventPublisherQuarantineReasonLimit))
+			Expect(metricValue(registry, "event_publish_errors_total")).To(Equal(float64(1)))
+			Expect(metricValue(registry, "event_quarantined_total")).To(Equal(float64(1)))
+
+			events := collectKafkaEvents(client, topic, 1)
+			Expect(events[0].key).To(Equal("obj-1"))
+			Expect(events[0].event.GetProject().GetId()).To(Equal("obj-1"))
+			Expect(events[0].event.GetProject().GetMetadata().GetTenant()).To(Equal(tenant))
+		})
+
+		It("Quarantines rows that cannot be converted and continues draining later rows", func() {
 			skipTenant := "skip-" + uuid.New()
 			skipTopic := DefaultEventTopicPrefix + skipTenant
 			tenant := "keep-" + uuid.New()
 			topic := DefaultEventTopicPrefix + tenant
-			_, err := pool.Exec(drainCtx, `
+			var badID string
+			// The table is a real event payload table, but the operation is not one the
+			// publisher can convert, so the row should convert but cannot: it quarantines.
+			err := pool.QueryRow(drainCtx, `
 				insert into changes ("table", op, data)
 				values (
-					'objects',
-					'INSERT',
+					'projects',
+					'TRUNCATE',
 					jsonb_build_object(
 						'id', 'obj-1',
 						'tenant', $1::text
 					)
 				)
-			`, skipTenant)
+				returning id
+			`, skipTenant).Scan(&badID)
 			Expect(err).ToNot(HaveOccurred())
 			insertChange(tenant, "obj-1", "INSERT")
 			Expect(countChanges()).To(Equal(2))
@@ -1411,13 +1529,124 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Consistently(func() bool {
 				return kafkaHasTopic(client, skipTopic)
 			}).WithTimeout(300 * time.Millisecond).WithPolling(50 * time.Millisecond).Should(BeFalse())
-			Eventually(countChanges).WithTimeout(5 * time.Second).Should(Equal(0))
+			Eventually(countChanges).WithTimeout(5 * time.Second).Should(Equal(1))
+			var reason string
+			err = pool.QueryRow(
+				drainCtx,
+				"select coalesce(quarantine_reason, '') from changes where id = $1",
+				badID,
+			).Scan(&reason)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(reason).To(ContainSubstring("unknown change operation"))
 
 			events := collectKafkaEvents(client, topic, 1)
 			Expect(events[0].key).To(Equal("obj-1"))
 			Expect(events[0].headers).To(BeEmpty())
 			Expect(events[0].event.GetProject().GetId()).To(Equal("obj-1"))
 			Expect(events[0].event.GetProject().GetMetadata().GetTenant()).To(Equal(tenant))
+		})
+
+		It("Drops rows of tables without an event payload field without quarantining", func() {
+			tenant := "keep-" + uuid.New()
+			topic := DefaultEventTopicPrefix + tenant
+			// 'objects' has no event payload field, so its rows can never become events:
+			// they are dropped like they always were, and they hold nothing back.
+			pool.Exec(drainCtx, `
+				insert into changes ("table", op, data)
+				values (
+					'objects',
+					'INSERT',
+					jsonb_build_object(
+						'id', 'obj-1',
+						'tenant', $1::text
+					)
+				)
+			`, tenant)
+			insertChange(tenant, "obj-2", "INSERT")
+			Expect(countChanges()).To(Equal(2))
+
+			cancel, done := startPublisher(pub)
+			defer stopPublisher(cancel, done)
+
+			Eventually(countChanges).WithTimeout(5 * time.Second).Should(Equal(0))
+			var quarantined int
+			err := pool.QueryRow(
+				drainCtx,
+				"select count(*) from changes where quarantined_at is not null",
+			).Scan(&quarantined)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(quarantined).To(Equal(0))
+
+			events := collectKafkaEvents(client, topic, 1)
+			Expect(events[0].event.GetProject().GetId()).To(Equal("obj-2"))
+		})
+
+		countQuarantined := func() int {
+			var count int
+			err := pool.QueryRow(
+				drainCtx,
+				"select count(*) from changes where quarantined_at is not null",
+			).Scan(&count)
+			Expect(err).ToNot(HaveOccurred())
+			return count
+		}
+
+		It("Holds back a quarantined tenant's later rows while other tenants keep publishing", func() {
+			heldTenant := "held-" + uuid.New()
+			otherTenant := "flow-" + uuid.New()
+			heldTopic := DefaultEventTopicPrefix + heldTenant
+			otherTopic := DefaultEventTopicPrefix + otherTenant
+			insertChange(heldTenant, "obj-1", "TRUNCATE")
+
+			cancel, done := startPublisher(pub)
+			defer stopPublisher(cancel, done)
+
+			Eventually(countQuarantined).WithTimeout(5 * time.Second).Should(Equal(1))
+
+			// Rows captured after the quarantine was established are held back by the drain query itself:
+			insertChange(heldTenant, "obj-2", "INSERT")
+			insertChange(otherTenant, "obj-3", "INSERT")
+			notifyChanges(drainCtx, pool)
+
+			events := collectKafkaEvents(client, otherTopic, 1)
+			Expect(events[0].key).To(Equal("obj-3"))
+			Consistently(func() bool {
+				return kafkaHasTopic(client, heldTopic)
+			}).WithTimeout(300 * time.Millisecond).WithPolling(50 * time.Millisecond).Should(BeFalse())
+			Eventually(countChanges).WithTimeout(5 * time.Second).Should(Equal(2))
+			Expect(countQuarantined()).To(Equal(1))
+		})
+
+		It("Publishes held-back rows in id order after the quarantine is cleared", func() {
+			heldTenant := "release-" + uuid.New()
+			heldTopic := DefaultEventTopicPrefix + heldTenant
+			badID := insertChange(heldTenant, "obj-1", "TRUNCATE")
+			insertChange(heldTenant, "obj-2", "INSERT")
+			insertChange(heldTenant, "obj-3", "INSERT")
+
+			cancel, done := startPublisher(pub)
+			defer stopPublisher(cancel, done)
+
+			// The rows of the same batch that follow the quarantined row are held back too, so the topic stays in
+			// order:
+			Eventually(countQuarantined).WithTimeout(5 * time.Second).Should(Equal(1))
+			Eventually(countChanges).WithTimeout(5 * time.Second).Should(Equal(3))
+
+			// The operator fixes the cause and clears the quarantine, which republishes the change:
+			_, err := pool.Exec(drainCtx, `
+				update changes
+				set op = 'INSERT', quarantined_at = null, quarantine_reason = null
+				where id = $1
+			`, badID)
+			Expect(err).ToNot(HaveOccurred())
+			notifyChanges(drainCtx, pool)
+
+			events := collectKafkaEvents(client, heldTopic, 3)
+			Expect(events[0].key).To(Equal("obj-1"))
+			Expect(events[1].key).To(Equal("obj-2"))
+			Expect(events[2].key).To(Equal("obj-3"))
+			Eventually(countChanges).WithTimeout(5 * time.Second).Should(BeZero())
+			Expect(countQuarantined()).To(BeZero())
 		})
 
 		It("Drains all batches without waiting for another notification", func() {
@@ -1614,7 +1843,9 @@ var _ = Describe("Event publisher", Ordered, func() {
 					"table" text not null,
 					op text not null,
 					data jsonb not null,
-					"timestamp" timestamptz not null default now()
+					"timestamp" timestamptz not null default now(),
+					quarantined_at timestamptz,
+					quarantine_reason text
 				)
 			`)
 			Expect(err).ToNot(HaveOccurred())

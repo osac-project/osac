@@ -107,7 +107,7 @@ class TestRunTransientRetry:
         with patch("subprocess.run", side_effect=mock_run), pytest.raises(subprocess.CalledProcessError):
             run("grpcurl", "test")
 
-        expected_calls = runner._TRANSIENT_GRPC_MAX_RETRIES + 1
+        expected_calls = runner._TRANSIENT_GRPC_MAX_ATTEMPTS
         assert call_count == expected_calls
 
     def test_permanent_error_not_retried(self, monkeypatch: pytest.MonkeyPatch) -> None:

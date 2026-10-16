@@ -304,8 +304,15 @@ the `osac` and `osac-devstack` releases plus `scripts/dev-full/`:
   its default VirtualNetwork + Subnet + SecurityGroup via tenant onboarding, so those are
   ready without manual seeding.
 
-The `dev-full` overlay also sets `operator.controllers.networkingProvisioning=false`
-so networking resources reconcile to READY without a real fabric (kind has none).
+The `dev-full` overlay enables `operator.controllers.networkingProvisioning` so
+Subnet AAP jobs create a target namespace and `ClusterUserDefinedNetwork` object
+for every tenant. The Kind-only `ClusterUserDefinedNetwork` CRD is installed by
+the earlier `osac-infra` phase and accepts the object without running an OVN
+controller. This supports VM target-namespace provisioning but creates no CUDN
+dataplane and does not validate tenant subnet isolation. Kind VMs continue
+to use the default pod network and the cluster-wide `l2bridge` binding. The
+dev-full tenant hook waits for the starter tenant's namespace and CUDN object so
+missing AAP provisioning or CRD installation fails the install visibly.
 
 **Prerequisites** (beyond the base tools) — enforced by `scripts/dev-full/kind-runtime.sh check`:
 

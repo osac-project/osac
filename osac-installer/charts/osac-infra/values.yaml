@@ -62,6 +62,8 @@ keycloak:
     keycloak: quay.io/keycloak/keycloak:26.6.4
     postgres: quay.io/sclorg/postgresql-18-c10s@sha256:6be2c9d855f06fb665257a6b0911676a38d740be7022cc61acee1c99a832b1b2
 
+# Kind-only API stubs, including ClusterUserDefinedNetwork for dev-full.
+# They accept API objects but do not provide the corresponding controllers.
 fakeCrds:
   enabled: false
 

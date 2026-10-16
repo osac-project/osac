@@ -12,6 +12,21 @@ if ! grep -Fq 'value: "https://keycloak.osac.localhost:8443/realms/osac"' <<<"$i
   exit 1
 fi
 
+infra_cudn_crd_render=$(helm template test charts/osac-infra --namespace osac-infra \
+  --values values/dev/kind-infra.yaml \
+  --values values/dev/kind-infra-devfull.yaml \
+  --show-only templates/fake-crds.yaml)
+if ! grep -Fq 'name: clusteruserdefinednetworks.k8s.ovn.org' <<<"$infra_cudn_crd_render" \
+  || ! grep -Fq 'group: k8s.ovn.org' <<<"$infra_cudn_crd_render" \
+  || ! grep -Fq 'kind: ClusterUserDefinedNetwork' <<<"$infra_cudn_crd_render" \
+  || ! grep -Fq 'name: v1' <<<"$infra_cudn_crd_render" \
+  || ! grep -Fq 'x-kubernetes-preserve-unknown-fields: true' <<<"$infra_cudn_crd_render" \
+  || ! grep -Fq 'scope: Cluster' <<<"$infra_cudn_crd_render" \
+  || grep -Fq 'finalizers:' <<<"$infra_cudn_crd_render"; then
+  echo "dev-full must render the cluster-scoped, non-finalized Kind CUDN API placeholder in osac-infra" >&2
+  exit 1
+fi
+
 profile_values=(
   --values values/dev/kind-instance.yaml
   --values values/dev/kind-instance-devfull.yaml
@@ -22,6 +37,11 @@ osac_render=$(helm template osac charts/osac --namespace osac \
   --values values/dev/kind-instance.yaml \
   --values values/dev/kind-instance-devfull.yaml \
   --set-string global.osacDeploymentId=osac/osac)
+if ! awk '/name: OSAC_ENABLE_NETWORKING_PROVISIONING/ { getline; if ($0 ~ /value: "true"/) found = 1 } END { exit !found }' \
+  <<<"$osac_render"; then
+  echo "dev-full must enable Subnet AAP provisioning so every tenant gets a target namespace" >&2
+  exit 1
+fi
 if awk 'BEGIN { RS = "---" } /kind: Deployment/ && /name: osac-ui/ { found = 1 } END { exit found ? 0 : 1 }' \
   <<<"$osac_render"; then
   echo "dev-full must keep the umbrella chart's UI disabled to avoid a second release owner" >&2
@@ -154,6 +174,12 @@ if ! grep -Fq 'fulfillment_token="$(get_fulfillment_access_token)"' <<<"$provisi
   echo "dev-full tenant provisioning must pass its Keycloak token to grpcurl through the temporary Secret" >&2
   exit 1
 fi
+if ! grep -Fq 'kubectl get clusteruserdefinednetwork' <<<"$provision_tenant_script" \
+  || ! grep -Fq 'timed out waiting for Subnet AAP' <<<"$provision_tenant_script" \
+  || grep -Fq 'kubectl create namespace' <<<"$provision_tenant_script"; then
+  echo "dev-full tenant hook must verify AAP-created namespace/CUDN resources instead of masking failures" >&2
+  exit 1
+fi
 
 if ! grep -Fq -- '"-expand-headers"' <<<"$chart_render" \
   || ! grep -Fq 'authorization: Bearer ${FULFILLMENT_TOKEN}' <<<"$chart_render" \
@@ -184,4 +210,4 @@ if ! grep -Fq 'image: ghcr.io/kube-rbac-proxy/kube-rbac-proxy:v0.22.1' <<<"$prox
   exit 1
 fi
 
-echo "Dev-full shared UI TLS and Helm post-render checks passed."
+echo "Dev-full networking, shared UI TLS, and Helm post-render checks passed."

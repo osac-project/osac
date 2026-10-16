@@ -88,7 +88,7 @@ jobs:
           app-id: "4966101"
           private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
           permission-pull-requests: write
-      - uses: osac-project/osac-ci/.github/actions/bot-approve@1291e86861e1384a6c69fc767db89b636b965275  # osac-ci main
+      - uses: osac-project/osac-ci/.github/actions/bot-approve@d914a112324f5431ed0dc7986559a108f255ee2e  # osac-ci main
         id: approve
         with:
           github-token: ${{ github.token }}

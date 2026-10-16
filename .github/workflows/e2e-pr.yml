@@ -76,7 +76,7 @@ jobs:
             .github/e2e-policy.yml
             .github/filters/ci-filters.yml
           persist-credentials: false
-      - uses: osac-project/osac-ci/.github/actions/e2e-decide@1291e86861e1384a6c69fc767db89b636b965275  # osac-ci main
+      - uses: osac-project/osac-ci/.github/actions/e2e-decide@d914a112324f5431ed0dc7986559a108f255ee2e  # osac-ci main
         id: decide
         with:
           github-token: ${{ github.token }}
@@ -96,7 +96,7 @@ jobs:
           private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
           permission-checks: write
           permission-actions: read
-      - uses: osac-project/osac-ci/.github/actions/e2e-report@1291e86861e1384a6c69fc767db89b636b965275  # osac-ci main
+      - uses: osac-project/osac-ci/.github/actions/e2e-report@d914a112324f5431ed0dc7986559a108f255ee2e  # osac-ci main
         id: report
         with:
           github-token: ${{ steps.app-token.outputs.token }}
@@ -185,7 +185,7 @@ jobs:
           private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
           permission-checks: write
           permission-actions: read
-      - uses: osac-project/osac-ci/.github/actions/e2e-suites-track@1291e86861e1384a6c69fc767db89b636b965275  # osac-ci main
+      - uses: osac-project/osac-ci/.github/actions/e2e-suites-track@d914a112324f5431ed0dc7986559a108f255ee2e  # osac-ci main
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           kind: checks
@@ -286,7 +286,7 @@ jobs:
           private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
           permission-checks: write
           permission-actions: read
-      - uses: osac-project/osac-ci/.github/actions/e2e-finish@1291e86861e1384a6c69fc767db89b636b965275  # osac-ci main
+      - uses: osac-project/osac-ci/.github/actions/e2e-finish@d914a112324f5431ed0dc7986559a108f255ee2e  # osac-ci main
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           kind: checks
@@ -294,7 +294,7 @@ jobs:
           sha: ${{ needs.decide.outputs.sha }}
           result: ${{ steps.result.outputs.result }}
           detail: ${{ steps.result.outputs.suites }}
-      - uses: osac-project/osac-ci/.github/actions/e2e-suites-settle@1291e86861e1384a6c69fc767db89b636b965275  # osac-ci main
+      - uses: osac-project/osac-ci/.github/actions/e2e-suites-settle@d914a112324f5431ed0dc7986559a108f255ee2e  # osac-ci main
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           kind: checks

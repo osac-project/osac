@@ -114,6 +114,14 @@ def _rule_signature(rule: dict[str, Any]) -> tuple[str, int, int, str]:
     )
 
 
+def _delete_instance_type_if_present(grpc: GRPCClient, name: str) -> None:
+    try:
+        grpc.delete_instance_type(name=name)
+    except subprocess.CalledProcessError as error:
+        if not re.match(r"ERROR:\s+Code:\s+NotFound\s+Message:", (error.stderr or "").strip()):
+            raise
+
+
 @pytest.fixture
 def edit_lifecycle(
     cli: OsacCLI, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -348,7 +356,7 @@ def test_vmaas_vm_lifecycle_demo(
     tag = uuid4().hex[:8]
     subnet_net = allocate_worker_subnet()
     it_name = f"e2e-it-{tag}"
-    it_created = False
+    it_cleanup_needed = False
     catalog_id: str | None = None
     vn_id: str | None = None
     vn_cr_name: str | None = None
@@ -371,8 +379,8 @@ def test_vmaas_vm_lifecycle_demo(
         network_class = classes[0]
         assert _k8s_manager(network_class) in _CUDN_MANAGERS, "expected a CUDN-backed VMaaS NetworkClass"
 
+        it_cleanup_needed = True
         private_cli.create_instance_type(name=it_name, vcpus=1, memory_gib=2)
-        it_created = True
         described = cli.describe_instance_type(name=it_name)
         assert "ACTIVE" in described
         assert re.search(r"vCPUs:\s+1\b", described)
@@ -450,6 +458,35 @@ def test_vmaas_vm_lifecycle_demo(
 
         ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=ci_uuid)
         wait_for_running(k8s=k8s_hub_client, name=ci_name)
+
+        instance_spec = grpc.get_compute_instance(ci_id=ci_uuid)["object"]["spec"]
+        catalog = instance_spec.get("catalog_item") or instance_spec.get("catalogItem") or {}
+        assert catalog.get("id") == catalog_id
+        instance_type = instance_spec.get("instance_type") or instance_spec.get("instanceType") or {}
+        assert instance_type.get("name") == it_name
+        disk_image = instance_spec.get("disk_image") or instance_spec.get("diskImage") or {}
+        assert disk_image.get("name") == default_disk_image
+        image = grpc.get_disk_image(disk_image_id=disk_image["id"])["object"]
+        assert image["metadata"]["name"] == default_disk_image
+        image_spec = image["spec"]
+        assert image_spec.get("guest_os_family", image_spec.get("guestOsFamily")) == "GUEST_OS_FAMILY_LINUX"
+        image_source = image_spec.get("source_ref") or image_spec.get("sourceRef")
+        assert image_source, "DiskImage must have a source reference"
+        boot_disk = instance_spec.get("boot_disk") or instance_spec.get("bootDisk") or {}
+        assert boot_disk.get("size_gib", boot_disk.get("sizeGib")) == 10
+        storage_tier = boot_disk.get("storage_tier") or boot_disk.get("storageTier") or {}
+        assert storage_tier.get("name") == default_storage_tier
+
+        instance_cr = k8s_hub_client.get_json(resource="computeinstance", name=ci_name)
+        assert instance_cr["metadata"]["labels"]["osac.openshift.io/instance-type-name"] == it_name
+        cr_spec = instance_cr["spec"]
+        assert cr_spec["vcpus"] == 1
+        assert cr_spec["memoryGiB"] == 2
+        assert cr_spec["guestOSFamily"] == "linux"
+        assert cr_spec["image"]["sourceRef"] == image_source
+        assert cr_spec["bootDisk"]["sizeGiB"] == 10
+        assert cr_spec["bootDisk"]["storageTier"] == default_storage_tier
+
         vm_ns = k8s_hub_client.get_compute_instance_vm_namespace(name=ci_name)
         guest_ip = wait_for_vmi_ip(k8s=k8s_virt_client, vmi_namespace=vm_ns, compute_instance_name=ci_name)
         assert ipaddress.ip_address(guest_ip) in subnet_net
@@ -544,8 +581,8 @@ def test_vmaas_vm_lifecycle_demo(
             cleanup(
                 "delete catalog item", lambda: grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_id)
             )
-        if it_created:
-            cleanup("delete InstanceType", lambda: private_grpc.delete_instance_type(name=it_name))
+        if it_cleanup_needed:
+            cleanup("delete InstanceType", lambda: _delete_instance_type_if_present(private_grpc, it_name))
         if cleanup_errors:
             errors = [primary_error, *cleanup_errors] if primary_error is not None else cleanup_errors
             raise BaseExceptionGroup("OSAC-6110 lifecycle/cleanup failed", errors) from None

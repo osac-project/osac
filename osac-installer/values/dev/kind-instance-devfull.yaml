@@ -31,11 +31,12 @@ lvms:
 # (→ the real service). The plain `dev`/IT profile keeps the *.svc.cluster.local
 # names (kind-instance.yaml) because its test client uses /etc/hosts.
 #
-# Only the browser-facing names change: externalHostname (UI → API) and the
-# Keycloak issuer/idp URLs (browser login + in-cluster JWKS). internalHostname is
-# left as-is — only in-cluster controllers use it, never the browser.
+# The public and internal API hostnames both use localhost so their TLSRoutes
+# can be reached through the host port mapping. CoreDNS rewrites these names
+# back to the in-cluster Services for controller traffic.
 service:
   externalHostname: fulfillment-api.osac.localhost
+  internalHostname: fulfillment-internal-api.osac.localhost
   images:
     service:
       pullPolicy: IfNotPresent

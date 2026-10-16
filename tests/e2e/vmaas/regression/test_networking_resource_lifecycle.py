@@ -87,18 +87,21 @@ def test_networking_resource_lifecycle(
     natgw_cr: str | None = None
 
     try:
-        # Readiness order: VirtualNetwork, then its dependents.
+        # Readiness order: VirtualNetwork, then its dependents. The Subnet is
+        # readied before the SecurityGroup: both CI failures left the SG CR
+        # un-Ready when it was created before any subnet existed in the VN,
+        # while every SG created after a Ready subnet reached Ready.
         vn_id = jwt_grpc_tenant1.create_virtual_network(name=vn_name, ipv4_cidr="10.101.0.0/16")
         vn_cr = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)
         wait_for_virtual_network_ready(k8s=k8s_hub_client, name=vn_cr)
 
-        sg_id = jwt_grpc_tenant1.create_security_group(name=sg_name, virtual_network=vn_id)
-        sg_cr = wait_for_security_group_cr(k8s=k8s_hub_client, uuid=sg_id)
-        wait_for_security_group_ready(k8s=k8s_hub_client, name=sg_cr)
-
         subnet_id = jwt_grpc_tenant1.create_subnet(name=subnet_name, virtual_network=vn_id, ipv4_cidr="10.101.1.0/24")
         subnet_cr = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_id)
         wait_for_subnet_ready(k8s=k8s_hub_client, name=subnet_cr)
+
+        sg_id = jwt_grpc_tenant1.create_security_group(name=sg_name, virtual_network=vn_id)
+        sg_cr = wait_for_security_group_cr(k8s=k8s_hub_client, uuid=sg_id)
+        wait_for_security_group_ready(k8s=k8s_hub_client, name=sg_cr)
 
         # Dependency guard: the VirtualNetwork cannot be deleted while the Subnet is active.
         with pytest.raises(subprocess.CalledProcessError) as exc_info:

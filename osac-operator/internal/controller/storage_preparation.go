@@ -78,6 +78,9 @@ func (r *StorageReconciler) resolveTenantPreparations(ctx context.Context, tenan
 	connections := provisioning.StorageBackendConnectionsFromContext(ctx)
 	for _, id := range ids {
 		connection := connections[id]
+		if _, shared := connection.ProviderConfig["profiles"]; shared {
+			continue
+		}
 		if connection.Name == "" {
 			setStorageWaiting(tenant, "ConfigurationUnavailable", fmt.Sprintf("Cannot resolve the registered name of backend %q", id))
 			return false
@@ -120,13 +123,18 @@ func storageDesiredConfigVersion(ctx context.Context, tenant *v1alpha1.Tenant) s
 	if len(ontapBackendIDs(tiers)) == 0 {
 		return ""
 	}
-	type source struct{ BackendID, UID, SVM string }
+	type source struct {
+		BackendID, UID, SVM string
+		ProviderConfig      map[string]any
+	}
 	sources := make([]source, 0)
 	connections := provisioning.StorageBackendConnectionsFromContext(ctx)
 	for _, id := range ontapBackendIDs(tiers) {
 		if p := connections[id].TenantPreparation; p != nil {
 			svm, _ := p.ProviderConfig["svm"].(string)
-			sources = append(sources, source{id, p.UID, svm})
+			sources = append(sources, source{BackendID: id, UID: p.UID, SVM: svm})
+		} else if config := connections[id].ProviderConfig; len(config) > 0 {
+			sources = append(sources, source{BackendID: id, ProviderConfig: config})
 		}
 	}
 	version, _ := provisioning.ComputeDesiredConfigVersion(struct {

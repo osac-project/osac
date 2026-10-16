@@ -246,7 +246,8 @@ func (s *PrivateStorageTiersServer) validateBackends(ctx context.Context,
 		}
 		return false, ConvertDAOErrorToGRPC(err, "get", association.GetBackendId())
 	}
-	ontap := response.GetObject().GetSpec().GetProvider() == "ontap"
+	backendSpec := response.GetObject().GetSpec()
+	ontap := backendSpec.GetProvider() == "ontap"
 	if !ontap && association.GetOntap() != nil {
 		return false, grpcstatus.Error(grpccodes.InvalidArgument, "ONTAP QoS configuration requires an ONTAP backend")
 	}
@@ -256,6 +257,27 @@ func (s *PrivateStorageTiersServer) validateBackends(ctx context.Context,
 		}
 		if association.GetMaxReadBandwidthMbs() != 0 || association.GetMaxWriteBandwidthMbs() != 0 {
 			return false, grpcstatus.Error(grpccodes.InvalidArgument, "ONTAP tiers use native IOPS configuration; generic bandwidth limits must be zero")
+		}
+		config := association.GetOntap()
+		if backendSpec.GetOntap() != nil {
+			var selected *privatev1.OntapBackendProfile
+			for _, profile := range backendSpec.GetOntap().GetProfiles() {
+				if profile.GetName() == config.GetProfile() {
+					selected = profile
+					break
+				}
+			}
+			if selected.GetShared() == nil {
+				return false, grpcstatus.Error(grpccodes.InvalidArgument, "ONTAP tier must select a registered shared backend profile")
+			}
+			if len(config.GetPoolSelector()) == 0 {
+				return false, grpcstatus.Error(grpccodes.InvalidArgument, "shared ONTAP tiers require a virtual-pool selector")
+			}
+			if config.GetMaxIops() != 0 {
+				return false, grpcstatus.Error(grpccodes.InvalidArgument, "shared ONTAP performance is configured in customer-managed virtual pools; max_iops must be zero")
+			}
+		} else if config.GetProfile() != "" || len(config.GetPoolSelector()) > 0 {
+			return false, grpcstatus.Error(grpccodes.InvalidArgument, "ONTAP pool selection requires registered backend profiles")
 		}
 	}
 	return ontap, nil

@@ -504,6 +504,9 @@ func tierDefinitionsToExtraVars(tiers []TierDefinition) []map[string]any {
 		if tier.EncryptionEnabled != nil {
 			result[i]["encryption_enabled"] = *tier.EncryptionEnabled
 		}
+		if len(tier.ProviderConfig) > 0 {
+			result[i]["provider_config"] = tier.ProviderConfig
+		}
 	}
 	return result
 }
@@ -519,6 +522,12 @@ func backendConnectionsToExtraVars(conns map[string]BackendConnection) map[strin
 			"endpoint": conn.Endpoint,
 			"username": conn.Username,
 			"password": conn.Password,
+		}
+		if len(conn.ProviderConfig) > 0 {
+			if conn.Endpoint == "" && conn.Username == "" && conn.Password == "" {
+				result[backendID] = map[string]any{}
+			}
+			result[backendID]["provider_config"] = conn.ProviderConfig
 		}
 		if p := conn.TenantPreparation; p != nil {
 			result[backendID]["tenant_preparation"] = map[string]any{

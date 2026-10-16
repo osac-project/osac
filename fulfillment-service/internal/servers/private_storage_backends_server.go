@@ -17,6 +17,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/url"
+	"strconv"
 
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
@@ -35,8 +37,6 @@ type PrivateStorageBackendsServerBuilder struct {
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
 	filterDesc        protoreflect.MessageDescriptor
-	secretsServer     privatev1.SecretsServer
-	registrationProbe StorageBackendRegistrationProbe
 }
 
 var _ privatev1.StorageBackendsServer = (*PrivateStorageBackendsServer)(nil)
@@ -44,11 +44,9 @@ var _ privatev1.StorageBackendsServer = (*PrivateStorageBackendsServer)(nil)
 type PrivateStorageBackendsServer struct {
 	privatev1.UnimplementedStorageBackendsServer
 
-	logger            *slog.Logger
-	generic           *GenericServer[*privatev1.StorageBackend]
-	secretsDao        *dao.GenericDAO[*privatev1.Secret]
-	secretsServer     privatev1.SecretsServer
-	registrationProbe StorageBackendRegistrationProbe
+	logger     *slog.Logger
+	generic    *GenericServer[*privatev1.StorageBackend]
+	secretsDao *dao.GenericDAO[*privatev1.Secret]
 }
 
 func NewPrivateStorageBackendsServer() *PrivateStorageBackendsServerBuilder {
@@ -75,16 +73,6 @@ func (b *PrivateStorageBackendsServerBuilder) SetMetricsRegisterer(value prometh
 	return b
 }
 
-func (b *PrivateStorageBackendsServerBuilder) SetSecretsServer(value privatev1.SecretsServer) *PrivateStorageBackendsServerBuilder {
-	b.secretsServer = value
-	return b
-}
-
-func (b *PrivateStorageBackendsServerBuilder) SetRegistrationProbe(value StorageBackendRegistrationProbe) *PrivateStorageBackendsServerBuilder {
-	b.registrationProbe = value
-	return b
-}
-
 // SetFilterDesc sets the protobuf message descriptor used to validate and translate CEL filter
 // expressions. This is optional. When unset, the descriptor of this server's own private message type is used.
 func (b *PrivateStorageBackendsServerBuilder) SetFilterDesc(value protoreflect.MessageDescriptor) *PrivateStorageBackendsServerBuilder {
@@ -105,12 +93,7 @@ func (b *PrivateStorageBackendsServerBuilder) Build() (result *PrivateStorageBac
 
 	// Create the server early so that we can use its functions to set up other objects:
 	s := &PrivateStorageBackendsServer{
-		logger:            b.logger,
-		secretsServer:     b.secretsServer,
-		registrationProbe: b.registrationProbe,
-	}
-	if s.registrationProbe == nil {
-		s.registrationProbe = NewOntapRegistrationProbe(nil)
+		logger: b.logger,
 	}
 
 	// Create the generic server:
@@ -166,11 +149,6 @@ func (s *PrivateStorageBackendsServer) Create(ctx context.Context,
 	}
 	sb.GetStatus().SetState(privatev1.StorageBackendState_STORAGE_BACKEND_STATE_READY)
 	sb.GetStatus().ClearMessage()
-	if sb.GetSpec().GetProvider() == "ontap" {
-		if err = s.checkOntapBackend(ctx, sb); err != nil {
-			return nil, err
-		}
-	}
 
 	sb.SetId("")
 
@@ -192,37 +170,16 @@ func (s *PrivateStorageBackendsServer) Update(ctx context.Context,
 		return
 	}
 
-	// Prepare the effective request without locking the row. Slow Secret retrieval
-	// and ONTAP discovery must not block another administrator updating/deleting it.
-	current, candidate, err := s.generic.prepareUpdateCandidate(ctx, request,
-		func(ctx context.Context, current, candidate *privatev1.StorageBackend) error {
-			return s.validateStorageBackendUpdate(ctx, candidate, current)
-		}, true, false)
-	if err != nil {
-		return nil, err
-	}
-	if current.GetSpec().GetProvider() != "ontap" {
-		err = s.generic.UpdateWithValidation(ctx, request, &response, s.validateStorageBackendUpdate)
-		return
-	}
-	if err = s.checkOntapBackend(ctx, candidate); err != nil {
-		return nil, err
-	}
-
-	// Reuse the normal locked merge, rejecting concurrent changes even when the
-	// caller did not request optimistic locking. Status must describe the saved spec.
 	err = s.generic.UpdateWithValidation(ctx, request, &response,
 		func(ctx context.Context, updated, stored *privatev1.StorageBackend) error {
-			if stored.GetMetadata().GetVersion() != current.GetMetadata().GetVersion() {
-				return grpcstatus.Error(grpccodes.Aborted, "storage backend changed during validation; retry the update")
-			}
 			if err := s.validateStorageBackendUpdate(ctx, updated, stored); err != nil {
 				return err
 			}
-			if !proto.Equal(updated.GetSpec(), candidate.GetSpec()) {
-				return grpcstatus.Error(grpccodes.Aborted, "storage backend configuration changed during validation; retry the update")
+			if updated.GetSpec().GetProvider() == "ontap" {
+				updated.SetStatus(privatev1.StorageBackendStatus_builder{
+					State: privatev1.StorageBackendState_STORAGE_BACKEND_STATE_READY,
+				}.Build())
 			}
-			updated.SetStatus(proto.Clone(candidate.GetStatus()).(*privatev1.StorageBackendStatus))
 			return nil
 		})
 	return
@@ -251,12 +208,11 @@ func (s *PrivateStorageBackendsServer) validateStorageBackendCreate(ctx context.
 	if err := s.validatePasswordSecret(ctx, sb.GetSpec().GetCredentials()); err != nil {
 		return err
 	}
-	if sb.GetSpec().GetProvider() == "ontap" {
+	if sb.GetSpec().GetProvider() == "ontap" || sb.GetSpec().GetOntap() != nil {
 		if err := s.generic.validator.Validate(sb); err != nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument, "validation failed: %s", err)
 		}
-		_, err := ontapManagementURL(sb.GetSpec().GetEndpoint())
-		return err
+		return validateOntapEndpoint(sb.GetSpec().GetEndpoint())
 	}
 	return nil
 }
@@ -273,6 +229,9 @@ func (s *PrivateStorageBackendsServer) validateStorageBackendUpdate(ctx context.
 			existingSB.GetSpec().GetProvider(), newSB.GetSpec().GetProvider())
 	}
 	ontap := existingSB.GetSpec().GetProvider() == "ontap"
+	if !proto.Equal(newSB.GetSpec().GetOntap(), existingSB.GetSpec().GetOntap()) {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.ontap' is immutable; register a replacement backend")
+	}
 	if ontap && newSB.GetSpec().GetEndpoint() != existingSB.GetSpec().GetEndpoint() {
 		return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.endpoint' is immutable for ONTAP; register a replacement backend")
 	}
@@ -339,37 +298,17 @@ func (s *PrivateStorageBackendsServer) validatePasswordSecret(ctx context.Contex
 	return nil
 }
 
-func (s *PrivateStorageBackendsServer) checkOntapBackend(ctx context.Context, backend *privatev1.StorageBackend) error {
-	spec := backend.GetSpec()
-	credentials := spec.GetCredentials()
-	password := credentials.GetPassword()
-	if ref := credentials.GetPasswordSecret(); ref != nil {
-		if s.secretsServer == nil {
-			return grpcstatus.Error(grpccodes.FailedPrecondition, "ONTAP discovery Secret retrieval is not configured")
-		}
-		response, err := s.secretsServer.Get(ctx, privatev1.SecretsGetRequest_builder{Id: ref.GetId()}.Build())
-		if err != nil {
-			return grpcstatus.Error(grpcstatus.Code(err), "unable to read ONTAP discovery password Secret")
-		}
-		secret := response.GetObject()
-		if err := validateResolvedSecretLifecycleAndType(secret, ref.GetId(), "password_secret", privatev1.SecretType_SECRET_TYPE_VALUE); err != nil {
-			return err
-		}
-		password = string(secret.GetData()["value"])
-		if password == "" {
-			return grpcstatus.Error(grpccodes.InvalidArgument, "ONTAP discovery password Secret must have non-empty data[\"value\"]")
-		}
+func validateOntapEndpoint(endpoint string) error {
+	base, err := url.Parse(endpoint)
+	if err != nil || base.Scheme != "https" || base.Hostname() == "" || base.User != nil ||
+		(base.Path != "" && base.Path != "/") || base.RawQuery != "" || base.Fragment != "" || base.Opaque != "" {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "ONTAP endpoint must be a cluster management HTTPS URL without credentials, path, query or fragment")
 	}
-	probeErr := s.registrationProbe.Probe(ctx, spec.GetEndpoint(), credentials.GetUsername(), password)
-	if ctx.Err() != nil {
-		return grpcstatus.FromContextError(ctx.Err()).Err()
-	}
-	backend.SetStatus(privatev1.StorageBackendStatus_builder{
-		State: privatev1.StorageBackendState_STORAGE_BACKEND_STATE_READY,
-	}.Build())
-	if probeErr != nil {
-		backend.GetStatus().SetState(privatev1.StorageBackendState_STORAGE_BACKEND_STATE_ERROR)
-		backend.GetStatus().SetMessage(grpcstatus.Convert(probeErr).Message())
+	if port := base.Port(); port != "" {
+		number, err := strconv.Atoi(port)
+		if err != nil || number < 1 || number > 65535 {
+			return grpcstatus.Error(grpccodes.InvalidArgument, "ONTAP endpoint has an invalid port")
+		}
 	}
 	return nil
 }

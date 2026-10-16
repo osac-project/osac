@@ -1,241 +1,158 @@
 # NetApp backend and tier registration
 
-Platform administrators register ONTAP through the private StorageBackends API,
-then create StorageTiers referencing the returned backend ID. Registration
-checks management access and stores the catalog configuration. Tenant SVM
-preparation, onboarding, native Trident setup and FC disk access are separate
-steps; a READY backend does not certify those prerequisites.
+The Developer Preview uses an administrator-created, shared Trident backend on
+one VM hosting cluster. OSAC registers its reference and creates tenant-specific
+StorageClasses selecting its prepared virtual pools. The administrator owns the
+SVM, TridentBackendConfig (TBC), credentials, TLS trust, QoS and encryption settings.
 
-## Prerequisites
+Registration and the operator's shared-profile payload are implemented on the
+feature branch. The matching AAP receiver is separate work; native onboarding
+requires that receiver. See the [onboarding interface](../developer/netapp-onboarding-contract.md)
+and [manual validation guide](netapp-manual-validation.md).
 
-- A cluster management HTTPS endpoint reachable from Fulfillment Service.
-  Use its certificate's hostname or a matching IP SAN. The address used by
-  Trident must also match its runtime account's scope. The working MVP profile
-  reuses this address with a separate account supplied per tenant/backend;
-  see the onboarding guide.
-- A discovery account allowed to read cluster version, SVMs, IP and FC
-  interfaces, QoS policies, volumes and LUNs through the ONTAP REST API.
-- The approved issuing CA chain in Fulfillment's configured CA bundle. A CA
-  bundle is a PEM file containing certificates the service trusts. The service
-  chart's `certs.caBundle.configMap` selects the ConfigMap mounted through
-  `--ca-file`; the umbrella chart exposes this as
-  `service.certs.caBundle.configMap`. Include the NetApp CA while
-  retaining existing certificates, using the installation's supported bundle
-  source. Do not edit a trust-manager-generated ConfigMap directly. Restart the
-  service after a trust change. Backend registration has no certificate bypass
-  or certificate-pin field. AAP and Trident need their own trust configuration;
-  mounting a bundle in Fulfillment does not configure either of them.
-- The discovery password, either stored in a Fulfillment Secret that the
-  registering administrator can read, or supplied inline in the request.
+## Before registration
 
-The registered account is used for discovery. The same endpoint is reused for
-Trident in the working MVP profile, with separate credentials from the tenant
-preparation Secret. Backend registration does not assign a tenant SVM.
+The Cloud Infrastructure Admin prepares:
 
-For a staged administrator walkthrough, including the hub preparation Secret
-and separate native onboarding qualification, see
-[manual NetApp validation](netapp-manual-validation.md).
+- Trident and its CRDs on the actual VM hosting cluster, with the required FC
+  worker/HBA, zoning and multipath configuration.
+- An ONTAP SVM and native credentials, then a TBC using `ontap-san` and
+  `sanType: fcp`. Its management endpoint, account permissions and server
+  certificate trust belong in the native Trident configuration.
+- Named virtual pools and their performance/encryption defaults. For example,
+  a pool labelled `performance: extreme` uses the administrator's adaptive QoS
+  policy. Pool labels select storage; they do not authorize tenants.
 
-## Register a backend
+A TBC is a namespaced Kubernetes object. Its `metadata.name` can differ from
+Trident's native `backendName`. OSAC records the TBC namespace/name; AAP must
+resolve the bound native backend name when generating StorageClasses.
+See NetApp's [TBC lifecycle](https://docs.netapp.com/us-en/trident-2510/trident-use/backend-kubectl.html)
+and [SAN configuration examples](https://docs.netapp.com/us-en/trident-2510/trident-use/ontap-san-examples.html).
 
-### 1. Prepare the password
+Backend registration still requires the existing HTTPS endpoint, username and
+exactly one password source. These compatibility fields remain stored, but the
+shared-profile operator does not resolve or send them to AAP. Trident uses the
+credentials and endpoint already configured in the customer-managed TBC.
+Fulfillment and AAP make no direct ONTAP connection.
 
-For the Secret reference used below, first create a Secret through the
-Fulfillment Secrets API with type `SECRET_TYPE_VALUE`. This type stores a
-single value: put the discovery password in its `data` map under the key
-`value`. The password must be non-empty. In ProtoJSON, this binary value is
-base64-encoded; base64 is an encoding, not encryption.
+## 1. Create the backend password reference
 
-Take the returned Fulfillment Secret ID and use it as `passwordSecret.id`
-in the backend request. The administrator registering the backend must be
-allowed to read that Secret; reading shared/system Secrets requires the
-Secrets API's platform administrator permissions.
+Use an OSAC Secrets Service VALUE Secret for the password, or supply an inline
+password through the existing API. VALUE means a single non-empty byte value
+under `data["value"]`. It is different from a native Kubernetes Secret.
 
-A Kubernetes Secret is a different resource. Creating a Kubernetes Secret
-for a lab connection test does not create a Fulfillment Secret, and its
-Kubernetes name cannot be used as `passwordSecret.id`.
-
-```text
-Discovery password -> Fulfillment VALUE Secret -> returned Secret ID
-                                               -> credentials.passwordSecret.id
-```
-
-Alternatively, use `"password": "<discovery-password>"` in `credentials`
-instead of `passwordSecret`. Supply exactly one password source.
-
-The existing CLI can read the password from a protected file or stdin, keeping
-it out of command arguments. After logging in to the private API, for example:
+After private API login, the CLI can read exact password bytes from stdin:
 
 ```bash
-osac --tenant shared create secret --name netapp-discovery --type value \
-  --from-file=value=- < /path/to/protected/discovery-password
+osac --tenant shared create secret --name netapp-catalog-password --type value \
+  --from-file=value=- < /path/to/protected/password
 ```
 
-The input must contain the exact password bytes; avoid an unintended trailing
-newline. Record the returned Fulfillment Secret ID.
+Record the returned OSAC Secret ID. Registration checks reference visibility,
+existence, type and lifecycle; it does not fetch the protected password or test
+it against ONTAP. Shared/system Secret read restrictions remain unchanged.
+The shared-profile onboarding path does not consume this password.
 
-### 2. Submit the backend request
+## 2. Register the shared backend
 
-Example ProtoJSON request for `osac.private.v1.StorageBackends/Create`:
+Edit the [backend example](examples/netapp-backend.yaml). Its new section is:
 
-```json
-{
-  "object": {
-    "metadata": {"name": "netapp-primary"},
-    "spec": {
-      "provider": "ontap",
-      "endpoint": "https://cluster-mgmt.example.com",
-      "credentials": {
-        "username": "osac-discovery",
-        "passwordSecret": {"id": "discovery-value-secret-id"}
-      }
-    }
-  }
-}
+```yaml
+ontap:
+  profiles:
+    - name: shared-fc
+      shared:
+        tbcNamespace: trident
+        tbcName: customer-fc
 ```
 
-Replace `discovery-value-secret-id` with the Fulfillment Secret ID from step 1.
-
-For `osac create -f`, use the downloadable
-[backend YAML example](examples/netapp-backend.yaml). It contains the object's
-`@type` and fields directly; omit the RPC request's `object` wrapper:
+This is `spec.ontap`, beside `provider`, `endpoint` and `credentials`. It selects
+one existing TBC in the VM hosting cluster chosen by deployment configuration;
+it does not select a cluster. Profile names must be unique DNS labels. The API
+supports shared profiles now; a dedicated mode requires a later typed branch.
 
 ```bash
 osac create -f netapp-backend.yaml
 osac get storagebackend netapp-primary -o json
 ```
 
-`password` and `passwordSecret` are mutually exclusive. Secret references are
-resolved to canonical ID/name; the resolved password is not copied into the
-backend record.
+Record the returned backend ID. A valid request persists as READY without an
+ONTAP request. **READY means accepted catalog configuration.** It does not
+prove the TBC exists, its credentials work, or FC disk I/O is available.
 
-The service performs these authenticated GETs and saves the backend as READY
-on success, or ERROR with a diagnostic message on a failed connection check:
+## 3. Register tiers selecting prepared pools
 
-| Resource | REST path |
-|---|---|
-| Cluster version | `/api/cluster?fields=version` |
-| SVMs | `/api/svm/svms` |
-| IP/management LIFs | `/api/network/ip/interfaces` |
-| FC LIFs | `/api/network/fc/interfaces` |
-| QoS policies | `/api/storage/qos/policies` |
-| Volumes | `/api/storage/volumes` |
-| LUNs | `/api/storage/luns` |
+Edit the [tier example](examples/netapp-tier.yaml) with that backend ID:
 
-Collection queries request UUID only, at most one record and a two-second
-server return timeout. Empty collections are valid. The complete probe has
-a ten-second budget and a 1 MiB response limit per request; a shorter caller
-deadline takes precedence. Redirects are rejected. No array writes occur.
-See the [ONTAP cluster API](https://docs.netapp.com/us-en/ontap-restapi-9171/get-cluster.html)
-and [LUN API](https://docs.netapp.com/us-en/ontap-restapi-9171/get-storage-luns.html).
-
-## Create a tier
-
-Example request for `osac.private.v1.StorageTiers/Create`, using the backend ID
-returned above:
-
-```json
-{
-  "object": {
-    "metadata": {"name": "netapp-block-5000"},
-    "spec": {
-      "description": "NetApp block tier with a per-volume IOPS ceiling",
-      "protocol": "STORAGE_PROTOCOL_BLOCK",
-      "backends": [{
-        "backendId": "registered-backend-id",
-        "encryptionEnabled": true,
-        "ontap": {"maxIops": "5000"}
-      }]
-    }
-  }
-}
+```yaml
+backends:
+  - backendId: registered-backend-id
+    encryptionEnabled: true
+    ontap:
+      profile: shared-fc
+      poolSelector:
+        performance: extreme
 ```
-
-ONTAP tiers require one backend and BLOCK protocol. Generic read/write
-bandwidth limits must be zero; ONTAP uses the typed `ontap.maxIops` field.
-The private proto's `provider_qos` oneof selects this field; it does not add
-a `providerQos` wrapper to JSON. ProtoJSON represents the int64 ceiling as
-a decimal string. The accepted range is 0–2147483647; absent/zero adds no
-OSAC tier IOPS cap and promises no minimum performance. An ONTAP QoS branch
-on a different provider is rejected.
-
-The cap and encryption boolean describe the requested tier configuration.
-Registration does not create or validate native QoS/encryption resources;
-onboarding must validate the prepared SVM's configuration before exposing it.
-The public tenant tier API omits backend associations and provider details.
-
-The [tier YAML example](examples/netapp-tier.yaml) uses the same CLI input format:
 
 ```bash
 osac create -f netapp-tier.yaml
-osac get osac.private.v1.StorageTier netapp-block-5000 -o json
+osac get osac.private.v1.StorageTier netapp-block-extreme -o json
 ```
 
-The fully qualified type selects the generic private API command, which shows
-the association settings. The dedicated `osac get storagetier` command displays
-the public tier view and does not accept `-o json`.
+ONTAP requires one existing backend and BLOCK protocol. A shared association
+must name a registered profile and supply a non-empty pool selector. Generic
+bandwidth limits and `ontap.maxIops` must be zero/absent: the prepared virtual
+pool supplies its native QoS. Selector entries are literal label equalities,
+not arbitrary Trident expressions.
 
-See the [onboarding interface contract](../developer/netapp-onboarding-contract.md)
-for the operator/AAP payload and the separate prepared-SVM credential handoff.
+`encryptionEnabled` remains the existing advertised tier setting. The admin must
+ensure the selected pool's native encryption configuration matches that claim.
+OSAC stores and forwards the boolean; it does not change the TBC, choose NAE/NVE,
+or verify encryption on the array. For encrypted offerings, prepare and qualify
+an encrypted pool before advertising the tier.
+
+A second tier may select another pool on the same profile. Both use the same
+customer TBC. The public tenant tier API omits backend/provider details; the
+fully qualified private type above shows them.
+
+## 4. Onboard a tenant
+
+Normal Tenant creation starts identity onboarding. Once the Tenant is Ready,
+the storage operator resolves the catalog and dispatches the two storage stages:
+
+1. AAP observes the referenced TBC through the hosting cluster's Kubernetes API.
+2. AAP creates tenant/tier StorageClasses selecting that bound backend and pools.
+
+The shared path needs **no per-tenant preparation Secret**. Successful jobs for
+the current configuration and observed classes establish the separate
+`StorageBackendReady` and `ClusterStorageReady` conditions. AAP's receiver must
+implement these steps; sender capture alone does not establish readiness.
+Offboarding removes only OSAC-owned tenant configuration under the existing
+lifecycle guards. Customer-managed TBCs, Secrets, SVMs and policies remain.
 
 ## Updates and failures
 
-Descriptions remain editable. Provider is immutable; an ONTAP backend endpoint
-change requires a replacement backend. ONTAP tier backend/protocol/QoS/encryption
-changes require a replacement tier. Other providers retain their existing
-registration behavior and do not receive the ONTAP probe requirement.
+Descriptions and credentials remain editable. Provider, ONTAP endpoint and
+profile definitions are immutable; changing those bindings requires a replacement
+backend. ONTAP tier backend/protocol/QoS/encryption bindings likewise require a
+replacement tier. Existing update-mask and optimistic-lock behavior applies.
+An accepted backend Update clears a historical probe ERROR/message.
 
-Every ONTAP Update checks the effective configuration after applying the update
-mask, including description-only and unchanged updates. A failed connection
-check saves the submitted configuration with ERROR and `status.message`; a
-successful check sets READY and clears the old message. The service does not
-retry in the background.
+| Failure | Result / action |
+|---|---|
+| Malformed endpoint/profile/selector, missing credentials, invalid password reference | API rejects without saving; correct the input |
+| Unknown profile, empty selector or nonzero shared IOPS cap | API rejects the tier; select an existing profile/pool |
+| Unreachable array, invalid native password or untrusted ONTAP certificate | Catalog registration still succeeds; inspect TBC/Trident status on the hosting cluster |
+| Missing/unbound TBC or failed AAP/class creation | Tenant storage stays not ready; correct native preparation or receiver configuration and retry |
 
-After fixing a network, certificate or array issue, submit an Update to the
-same backend. No field needs to change and no delete/recreate is required:
+## Compatibility and verification limits
 
-```bash
-osac edit storagebackend netapp-primary
-# Save and close the editor, keeping the existing fields.
-osac get storagebackend netapp-primary -o json
-```
+Legacy ONTAP backends without profiles keep the earlier prepared-SVM path;
+existing providers retain their payloads. New shared-profile requests require
+matching API/operator/AAP versions; do not send them to the old prepared-SVM role.
 
-Inspect `status.state` and `status.message` in the response. Saving a referenced
-password again rereads the protected Secret, so a password changed there is
-checked without changing the reference. The endpoint is always the backend's
-`spec.endpoint`, not an address taken from tenant credentials.
-
-Malformed requests, invalid Secret references and unauthorized Secret reads
-still fail the API request without saving it. Discovery runs before taking the
-backend update lock. If another request changes the backend during discovery,
-the update returns `Aborted`; retry with fresh state. To switch
-from inline password to a reference, explicitly include both
-`spec.credentials.password` and `spec.credentials.password_secret` in the
-protobuf field mask, clearing the old source. Parent masks, such as
-`spec.credentials`, replace that whole subtree. An empty mask preserves the
-specification and reruns the check; an absent mask supplies a complete replacement
-object.
-
-| Failure | Result | Administrator action |
-|---|---|---|
-| Malformed endpoint, missing credential fields or invalid password Secret | API error; not saved | Correct the request or Secret |
-| HTTP 401 | Saved as ERROR | Correct discovery credentials and save again |
-| HTTP 403, unsupported discovery path, invalid/oversized response | Saved as ERROR | Check read permissions and REST API availability, then save again |
-| TLS/connectivity failure, redirect, server failure | Saved as ERROR | Fix routing, approved CA trust, certificate identity/validity or array health; save again |
-| Probe deadline | Saved as ERROR | Check responsiveness and save again |
-| Caller cancellation/deadline | Canceled/DeadlineExceeded; not saved | Retry if still needed |
-| Protected Secret read denied | PermissionDenied; not saved | Use an authorized administrator and Secret |
-
-Errors identify the discovery path/status where available and omit passwords,
-Authorization headers and array response bodies.
-
-## Read-only lab validation
-
-With the candidate Fulfillment service deployed and approved CA trust set,
-create an isolated discovery VALUE Secret, register one backend and one tier,
-then Get/List them to confirm persistence. Test a bad discovery password and
-confirm the backend remains saved with ERROR. Restore the password and save
-again; verify READY and a cleared message. Delete temporary
-catalog records in dependency order when finished. All ONTAP calls made by
-registration are GET-only. This verifies API-to-array discovery; FC fabric,
-tenant onboarding and VM disk I/O need their own acceptance tests.
+Local API/database and operator tests cover registration, payloads and lifecycle
+gates. The edge-17 shared-path test uses real Kubernetes/AAP with catalog fixtures
+and a capture-only playbook: two pool selections pass, credentials/preparation are
+absent, and no ONTAP requests or Trident creations occur. Native TBC observation,
+StorageClass creation, encrypted FC volumes and VM I/O remain joint qualification.

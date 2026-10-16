@@ -26,9 +26,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -43,6 +45,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
@@ -55,7 +58,6 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/servers"
 	"github.com/osac-project/osac/fulfillment-service/internal/services"
 	itesting "github.com/osac-project/osac/fulfillment-service/internal/testing"
-	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -66,16 +68,17 @@ func TestRegisterServers(t *testing.T) {
 }
 
 var (
-	ctx           context.Context
-	ctrl          *gomock.Controller
-	logger        *slog.Logger
-	dbContainer   *database.Container
-	attribution   *auth.MockAttributionLogic
-	tenancy       *auth.MockTenancyLogic
-	conn          *grpc.ClientConn
-	hubScheme     *k8sruntime.Scheme
-	tierResolver  servers.TierResolverFunc
-	ontapEndpoint *httptest.Server
+	ctx              context.Context
+	ctrl             *gomock.Controller
+	logger           *slog.Logger
+	dbContainer      *database.Container
+	attribution      *auth.MockAttributionLogic
+	tenancy          *auth.MockTenancyLogic
+	conn             *grpc.ClientConn
+	hubScheme        *k8sruntime.Scheme
+	tierResolver     servers.TierResolverFunc
+	ontapEndpoint    *httptest.Server
+	ontapConnections atomic.Int32
 )
 
 var _ = BeforeSuite(func() {
@@ -158,16 +161,16 @@ var _ = BeforeSuite(func() {
 	hubScheme, err = hubscheme.NewHub()
 	Expect(err).ToNot(HaveOccurred())
 	metricsRegisterer := prometheus.NewRegistry()
-	ontapEndpoint = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/cluster" {
-			fmt.Fprint(w, `{"version":{"full":"9.17.1"}}`)
-		} else {
-			fmt.Fprint(w, `{"records":[],"num_records":0}`)
-		}
+	ontapEndpoint = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
+	ontapEndpoint.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			ontapConnections.Add(1)
+		}
+	}
+	ontapEndpoint.StartTLS()
 	DeferCleanup(ontapEndpoint.Close)
-	caPool, err := trust.NewCertPool().SetLogger(logger).AddCertificate(ontapEndpoint.Certificate()).Build()
-	Expect(err).NotTo(HaveOccurred())
 
 	// Create the storage tiers and backends DAOs and the tier resolver, exactly as production wires them in
 	// start_grpc_server_cmd.go's run(), for the private volumes server's mandatory SetTierResolver dependency.
@@ -215,7 +218,6 @@ var _ = BeforeSuite(func() {
 		TierResolver:            tierResolver,
 		PrivateUsersServer:      privateUsersServer,
 		Services:                &services.Flags{CaaS: true, VMaaS: true, BMaaS: true, MaaS: true},
-		CAPool:                  caPool,
 	})
 	Expect(err).ToNot(HaveOccurred())
 	server.Start()
@@ -228,15 +230,18 @@ var _ = BeforeSuite(func() {
 	DeferCleanup(conn.Close)
 })
 
-var _ = Describe("ONTAP configured certificate trust", func() {
-	It("uses the service CA pool for registration through the registered gRPC API", func() {
+var _ = Describe("ONTAP configuration-only registration", func() {
+	It("creates and updates a backend without connecting to ONTAP or configuring its CA", func() {
 		client := privatev1.NewStorageBackendsClient(conn)
 		created, err := client.Create(ctx, privatev1.StorageBackendsCreateRequest_builder{
 			Object: privatev1.StorageBackend_builder{
-				Metadata: privatev1.Metadata_builder{Name: "configured-ca-netapp"}.Build(),
+				Metadata: privatev1.Metadata_builder{Name: "configuration-only-netapp"}.Build(),
 				Spec: privatev1.StorageBackendSpec_builder{
 					Provider: "ontap", Endpoint: ontapEndpoint.URL,
 					Credentials: privatev1.StorageBackendCredentials_builder{Username: "discovery", Password: "example-password"}.Build(),
+					Ontap: privatev1.OntapBackendConfig_builder{Profiles: []*privatev1.OntapBackendProfile{privatev1.OntapBackendProfile_builder{
+						Name: "shared-fc", Shared: privatev1.SharedTridentBackend_builder{TbcNamespace: "trident", TbcName: "customer-fc"}.Build(),
+					}.Build()}}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -246,6 +251,26 @@ var _ = Describe("ONTAP configured certificate trust", func() {
 			Expect(deleteErr).NotTo(HaveOccurred())
 		})
 		Expect(created.GetObject().GetStatus().GetState()).To(Equal(privatev1.StorageBackendState_STORAGE_BACKEND_STATE_READY))
+		Expect(ontapConnections.Load()).To(BeZero())
+		updated, err := client.Update(ctx, privatev1.StorageBackendsUpdateRequest_builder{
+			Object: privatev1.StorageBackend_builder{
+				Id: created.GetObject().GetId(),
+				Spec: privatev1.StorageBackendSpec_builder{
+					Credentials: privatev1.StorageBackendCredentials_builder{Password: "updated-example-password"}.Build(),
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.credentials.password"}},
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(updated.GetObject().GetStatus().GetState()).To(Equal(privatev1.StorageBackendState_STORAGE_BACKEND_STATE_READY))
+		saved, err := client.Get(ctx, privatev1.StorageBackendsGetRequest_builder{Id: created.GetObject().GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(saved.GetObject().GetSpec().GetEndpoint()).To(Equal(ontapEndpoint.URL))
+		Expect(saved.GetObject().GetSpec().GetCredentials().GetUsername()).To(Equal("discovery"))
+		Expect(saved.GetObject().GetSpec().GetCredentials().GetPassword()).To(Equal("updated-example-password"))
+		Expect(proto.Equal(saved.GetObject().GetSpec().GetOntap(), created.GetObject().GetSpec().GetOntap())).To(BeTrue())
+		Expect(saved.GetObject().GetStatus().GetMessage()).To(BeEmpty())
+		Expect(ontapConnections.Load()).To(BeZero())
 	})
 })
 

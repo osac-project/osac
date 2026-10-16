@@ -47,6 +47,7 @@ type TierDefinition struct {
 	BackendID         string
 	QosLimits         TierQosLimits
 	EncryptionEnabled *bool
+	ProviderConfig    map[string]any
 }
 
 // TierQosLimits carries the QoS requirements for a backend association.
@@ -66,6 +67,7 @@ type BackendConnection struct {
 	Username          string
 	Password          string
 	TenantPreparation *TenantPreparation
+	ProviderConfig    map[string]any
 }
 
 // TenantPreparation is a protected, administrator-supplied tenant/backend input.

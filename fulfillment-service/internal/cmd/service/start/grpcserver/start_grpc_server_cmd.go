@@ -711,7 +711,6 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		HubScheme:               hubScheme,
 		SecretStore:             secretStore,
 		TierResolver:            tierResolver,
-		CAPool:                  caPool,
 		PrivateUsersServer:      privateUsersServer,
 		Services:                c.args.services,
 	})

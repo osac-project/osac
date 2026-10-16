@@ -15,10 +15,8 @@ package grpcserver
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"log/slog"
-	"net/http"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
@@ -28,7 +26,6 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/servers"
 	"github.com/osac-project/osac/fulfillment-service/internal/services"
-	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -45,7 +42,6 @@ type ResourceServerDeps struct {
 	HubScheme               *runtime.Scheme
 	SecretStore             vault.SecretStore
 	TierResolver            servers.TierResolverFunc
-	CAPool                  *trust.CertPool
 
 	// PrivateUsersServer is already constructed by the caller — the JIT provisioning interceptor needs it
 	// before the gRPC server's interceptor chain is built, which happens before RegisterResourceServers is
@@ -613,14 +609,10 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 
 	// Create the private storage backends server:
 	deps.Logger.InfoContext(ctx, "Creating private storage backends server")
-	ontapTransport := http.DefaultTransport.(*http.Transport).Clone()
-	ontapTransport.TLSClientConfig = &tls.Config{RootCAs: deps.CAPool.Pool(), MinVersion: tls.VersionTLS12}
 	privateStorageBackendsServer, err := servers.NewPrivateStorageBackendsServer().
 		SetLogger(deps.Logger).
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
-		SetSecretsServer(privateSecretsServer).
-		SetRegistrationProbe(servers.NewOntapRegistrationProbe(&http.Client{Transport: ontapTransport})).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
 		Build()
 	if err != nil {

@@ -14,34 +14,22 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
-	"context"
-	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
-	"sync"
 	"sync/atomic"
-	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/collections"
-	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
-
-type ontapBackendProbeFunc func(context.Context, string, string, string) error
-
-func (f ontapBackendProbeFunc) Probe(ctx context.Context, endpoint, username, password string) error {
-	return f(ctx, endpoint, username, password)
-}
 
 var _ = Describe("ONTAP backend registration", func() {
 	var backendServer *PrivateStorageBackendsServer
@@ -51,19 +39,15 @@ var _ = Describe("ONTAP backend registration", func() {
 	var calls atomic.Int32
 	BeforeEach(func() {
 		calls.Store(0)
-		endpoint = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			calls.Add(1)
-			user, password, ok := r.BasicAuth()
-			if !ok || user != "discovery" || (password != testPassword && password != testNewPassword) {
-				w.WriteHeader(http.StatusUnauthorized)
-				return
-			}
-			if r.URL.Path == "/api/cluster" {
-				fmt.Fprint(w, `{"version":{"full":"9.17.1"}}`)
-			} else {
-				fmt.Fprint(w, `{"records":[],"num_records":0}`)
-			}
+		endpoint = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
 		}))
+		endpoint.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+			if state == http.StateNew {
+				calls.Add(1)
+			}
+		}
+		endpoint.StartTLS()
 		DeferCleanup(endpoint.Close)
 		store = newMemorySecretStore()
 		var err error
@@ -71,8 +55,7 @@ var _ = Describe("ONTAP backend registration", func() {
 			SetTenancyLogic(tenancy).SetSecretStore(store).Build()
 		Expect(err).NotTo(HaveOccurred())
 		backendServer, err = NewPrivateStorageBackendsServer().SetLogger(logger).SetAttributionLogic(attribution).
-			SetTenancyLogic(tenancy).SetSecretsServer(secretsServer).
-			SetRegistrationProbe(NewOntapRegistrationProbe(endpoint.Client())).Build()
+			SetTenancyLogic(tenancy).Build()
 		Expect(err).NotTo(HaveOccurred())
 	})
 	object := func() *privatev1.StorageBackend {
@@ -95,54 +78,26 @@ var _ = Describe("ONTAP backend registration", func() {
 		Expect(err).NotTo(HaveOccurred())
 		return response.GetObject()
 	}
-	It("persists READY after successful discovery and ERROR after failed discovery", func() {
+	It("accepts configuration without contacting ONTAP", func() {
 		response, err := create(object())
 		Expect(err).NotTo(HaveOccurred())
-		Expect(calls.Load()).To(Equal(int32(7)))
 		Expect(response.GetObject().GetStatus().GetState()).To(Equal(privatev1.StorageBackendState_STORAGE_BACKEND_STATE_READY))
-		obj := object()
-		obj.GetMetadata().SetName("netapp-unreachable")
-		obj.GetSpec().GetCredentials().SetPassword(testOtherPassword)
-		failed, err := create(obj)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(failed.GetObject().GetStatus().GetState()).To(Equal(privatev1.StorageBackendState_STORAGE_BACKEND_STATE_ERROR))
-		Expect(failed.GetObject().GetStatus().GetMessage()).To(ContainSubstring("HTTP 401"))
-		Expect(failed.GetObject().GetStatus().GetMessage()).NotTo(ContainSubstring(testOtherPassword))
-		list, err := backendServer.List(ctx, &privatev1.StorageBackendsListRequest{})
-		Expect(err).NotTo(HaveOccurred())
-		Expect(list.GetItems()).To(HaveLen(2))
+		Expect(calls.Load()).To(BeZero())
 	})
-	It("probes an authorized VALUE Secret without persisting its value", func() {
+	It("accepts a VALUE Secret reference without reading or copying its protected value", func() {
 		secret := createSecret()
+		Expect(store.Delete(ctx, auth.SharedTenant, "", secret.GetMetadata().GetName())).To(Succeed())
 		obj := object()
 		creds := obj.GetSpec().GetCredentials()
 		creds.SetPassword("")
 		creds.SetPasswordSecret(privatev1.SecretLocalReference_builder{Name: secret.GetMetadata().GetName()}.Build())
 		response, err := create(obj)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(calls.Load()).To(Equal(int32(7)))
+		Expect(calls.Load()).To(BeZero())
 		Expect(response.GetObject().GetSpec().GetCredentials().GetPassword()).To(BeEmpty())
 		Expect(response.GetObject().GetSpec().GetCredentials().GetPasswordSecret().GetId()).To(Equal(secret.GetId()))
 	})
-	It("honors platform Secret read authorization before probing", func() {
-		secret := createSecret()
-		restricted := auth.NewMockTenancyLogic(ctrl)
-		restricted.EXPECT().DetermineAssignableTenants(gomock.Any()).Return(collections.NewSet(testTenant), nil).AnyTimes()
-		restricted.EXPECT().DetermineVisibility(gomock.Any()).Return(auth.TotalVisibility(), nil).AnyTimes()
-		reader, err := NewPrivateSecretsServer().SetLogger(logger).SetAttributionLogic(attribution).
-			SetTenancyLogic(restricted).SetSecretStore(store).Build()
-		Expect(err).NotTo(HaveOccurred())
-		backendServer, err = NewPrivateStorageBackendsServer().SetLogger(logger).SetAttributionLogic(attribution).
-			SetTenancyLogic(tenancy).SetSecretsServer(reader).SetRegistrationProbe(NewOntapRegistrationProbe(endpoint.Client())).Build()
-		Expect(err).NotTo(HaveOccurred())
-		obj := object()
-		obj.GetSpec().GetCredentials().SetPassword("")
-		obj.GetSpec().GetCredentials().SetPasswordSecret(privatev1.SecretLocalReference_builder{Id: secret.GetId()}.Build())
-		_, err = create(obj)
-		Expect(status.Code(err)).To(Equal(codes.PermissionDenied))
-		Expect(calls.Load()).To(BeZero())
-	})
-	It("persists effective masked credentials and reports failure until a successful update", func() {
+	It("persists effective masked credentials without contacting ONTAP", func() {
 		response, err := create(object())
 		Expect(err).NotTo(HaveOccurred())
 		saved := response.GetObject()
@@ -154,20 +109,20 @@ var _ = Describe("ONTAP backend registration", func() {
 		}.Build()
 		failed, err := backendServer.Update(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(failed.GetObject().GetStatus().GetState()).To(Equal(privatev1.StorageBackendState_STORAGE_BACKEND_STATE_ERROR))
+		Expect(failed.GetObject().GetStatus().GetState()).To(Equal(privatev1.StorageBackendState_STORAGE_BACKEND_STATE_READY))
 		current, err := backendServer.Get(ctx, privatev1.StorageBackendsGetRequest_builder{Id: saved.GetId()}.Build())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(current.GetObject().GetSpec().GetCredentials().GetPassword()).To(Equal(testOtherPassword))
-		Expect(current.GetObject().GetStatus().GetMessage()).To(ContainSubstring("HTTP 401"))
+		Expect(current.GetObject().GetStatus().GetMessage()).To(BeEmpty())
 		partial.GetSpec().GetCredentials().SetPassword(testNewPassword)
 		updated, err := backendServer.Update(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(updated.GetObject().GetSpec().GetCredentials().GetUsername()).To(Equal("discovery"))
 		Expect(updated.GetObject().GetStatus().GetState()).To(Equal(privatev1.StorageBackendState_STORAGE_BACKEND_STATE_READY))
 		Expect(updated.GetObject().GetStatus().GetMessage()).To(BeEmpty())
-		Expect(calls.Load()).To(Equal(int32(15)))
+		Expect(calls.Load()).To(BeZero())
 	})
-	It("rechecks connectivity for description and unchanged updates", func() {
+	It("preserves configuration on description and unchanged updates without contacting ONTAP", func() {
 		response, err := create(object())
 		Expect(err).NotTo(HaveOccurred())
 		partial := privatev1.StorageBackend_builder{Id: response.GetObject().GetId(),
@@ -181,29 +136,29 @@ var _ = Describe("ONTAP backend registration", func() {
 			UpdateMask: &fieldmaskpb.FieldMask{},
 		}.Build())
 		Expect(err).NotTo(HaveOccurred())
-		Expect(calls.Load()).To(Equal(int32(21)))
+		Expect(calls.Load()).To(BeZero())
 	})
-	It("recovers from an external outage on an empty-mask update using stored credentials", func() {
-		var unavailable atomic.Bool
-		unavailable.Store(true)
-		backendServer.registrationProbe = ontapBackendProbeFunc(func(probeCtx context.Context, url, username, password string) error {
-			if unavailable.Load() {
-				return status.Error(codes.Unavailable, "ONTAP management endpoint is unreachable")
-			}
-			return NewOntapRegistrationProbe(endpoint.Client()).Probe(probeCtx, url, username, password)
-		})
+	It("clears a previous connectivity error on an explicit update without contacting ONTAP", func() {
 		created, err := create(object())
 		Expect(err).NotTo(HaveOccurred())
-		Expect(created.GetObject().GetStatus().GetState()).To(Equal(privatev1.StorageBackendState_STORAGE_BACKEND_STATE_ERROR))
-		unavailable.Store(false)
+		backend := created.GetObject()
+		backend.SetStatus(privatev1.StorageBackendStatus_builder{
+			State:   privatev1.StorageBackendState_STORAGE_BACKEND_STATE_ERROR,
+			Message: proto.String("ONTAP management endpoint is unreachable"),
+		}.Build())
+		backendsDAO, err := dao.NewGenericDAO[*privatev1.StorageBackend]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+		Expect(err).NotTo(HaveOccurred())
+		_, err = backendsDAO.Update().SetObject(backend).Do(ctx)
+		Expect(err).NotTo(HaveOccurred())
 		updated, err := backendServer.Update(ctx, privatev1.StorageBackendsUpdateRequest_builder{
-			Object:     privatev1.StorageBackend_builder{Id: created.GetObject().GetId()}.Build(),
+			Object:     privatev1.StorageBackend_builder{Id: backend.GetId()}.Build(),
 			UpdateMask: &fieldmaskpb.FieldMask{},
 		}.Build())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(updated.GetObject().GetStatus().GetState()).To(Equal(privatev1.StorageBackendState_STORAGE_BACKEND_STATE_READY))
 		Expect(updated.GetObject().GetStatus().GetMessage()).To(BeEmpty())
-		Expect(proto.Equal(created.GetObject().GetSpec(), updated.GetObject().GetSpec())).To(BeTrue())
+		Expect(proto.Equal(backend.GetSpec(), updated.GetObject().GetSpec())).To(BeTrue())
+		Expect(calls.Load()).To(BeZero())
 	})
 	DescribeTable("rejects malformed ONTAP endpoints before persistence", func(url string) {
 		obj := object()
@@ -218,6 +173,12 @@ var _ = Describe("ONTAP backend registration", func() {
 		Entry("HTTP", "http://netapp.example.com"),
 		Entry("embedded credentials", "https://user:password@netapp.example.com"),
 		Entry("invalid port", "https://netapp.example.com:70000"),
+		Entry("zero port", "https://netapp.example.com:0"),
+		Entry("non-numeric port", "https://netapp.example.com:invalid"),
+		Entry("path", "https://netapp.example.com/api"),
+		Entry("query", "https://netapp.example.com?fields=*"),
+		Entry("fragment", "https://netapp.example.com#fragment"),
+		Entry("missing host", "https://"),
 	)
 	It("rejects changing the registered ONTAP endpoint", func() {
 		response, err := create(object())
@@ -228,7 +189,7 @@ var _ = Describe("ONTAP backend registration", func() {
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec"}},
 		}.Build())
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
-		Expect(calls.Load()).To(Equal(int32(7)))
+		Expect(calls.Load()).To(BeZero())
 	})
 	DescribeTable("rejects unusable password references without array calls", func(problem string, code codes.Code) {
 		secret := createSecret()
@@ -238,8 +199,6 @@ var _ = Describe("ONTAP backend registration", func() {
 			ref.SetId("missing")
 		case "empty-reference":
 			ref.SetId("")
-		case "empty-value":
-			Expect(store.Store(ctx, auth.SharedTenant, "", secret.GetMetadata().GetName(), map[string][]byte{})).To(Succeed())
 		default:
 			secretsDAO, err := dao.NewGenericDAO[*privatev1.Secret]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
 			Expect(err).NotTo(HaveOccurred())
@@ -272,7 +231,6 @@ var _ = Describe("ONTAP backend registration", func() {
 	},
 		Entry("missing", "missing", codes.InvalidArgument),
 		Entry("empty reference", "empty-reference", codes.InvalidArgument),
-		Entry("empty value", "empty-value", codes.InvalidArgument),
 		Entry("wrong type", "wrong-type", codes.InvalidArgument),
 		Entry("deleted", "deleted", codes.InvalidArgument),
 	)
@@ -290,7 +248,7 @@ var _ = Describe("ONTAP backend registration", func() {
 		}.Build()
 		_, err = backendServer.Update(ctx, request)
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
-		Expect(calls.Load()).To(Equal(int32(7)))
+		Expect(calls.Load()).To(BeZero())
 		request.SetUpdateMask(&fieldmaskpb.FieldMask{Paths: []string{"spec.credentials.password", "spec.credentials.password_secret"}})
 		updated, err := backendServer.Update(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
@@ -301,9 +259,9 @@ var _ = Describe("ONTAP backend registration", func() {
 		updated, err = backendServer.Update(ctx, request)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(updated.GetObject().GetSpec().GetCredentials().GetPasswordSecret()).To(BeNil())
-		Expect(calls.Load()).To(Equal(int32(21)))
+		Expect(calls.Load()).To(BeZero())
 	})
-	It("checks the requested version before a credential probe", func() {
+	It("rejects a stale credential update when optimistic locking is requested", func() {
 		created, err := create(object())
 		Expect(err).NotTo(HaveOccurred())
 		obj := proto.Clone(created.GetObject()).(*privatev1.StorageBackend)
@@ -313,88 +271,6 @@ var _ = Describe("ONTAP backend registration", func() {
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.credentials"}},
 		}.Build())
 		Expect(status.Code(err)).To(Equal(codes.Aborted))
-		Expect(calls.Load()).To(Equal(int32(7)))
+		Expect(calls.Load()).To(BeZero())
 	})
-	DescribeTable("allows concurrent requests while discovery is stalled and rejects stale persistence",
-		func(operation string, expectedCode codes.Code) {
-			created, err := create(object())
-			Expect(err).NotTo(HaveOccurred())
-			saved := created.GetObject()
-			// Commit preparation so each public handler can run in its own request
-			// transaction, matching the gRPC interceptor's real concurrency boundary.
-			Expect(suiteTx.End(ctx)).To(Succeed())
-			suiteTx, err = tm.Begin(ctx)
-			Expect(err).NotTo(HaveOccurred())
-			ctx = database.TxIntoContext(ctx, suiteTx)
-
-			started := make(chan struct{})
-			release := make(chan struct{})
-			var releaseOnce sync.Once
-			unblock := func() { releaseOnce.Do(func() { close(release) }) }
-			DeferCleanup(unblock)
-			backendServer.registrationProbe = ontapBackendProbeFunc(
-				func(probeCtx context.Context, _, _, password string) error {
-					if password != testNewPassword {
-						return nil
-					}
-					close(started)
-					select {
-					case <-release:
-						return nil
-					case <-probeCtx.Done():
-						return probeCtx.Err()
-					}
-				})
-			partial := privatev1.StorageBackend_builder{Id: saved.GetId(),
-				Spec: privatev1.StorageBackendSpec_builder{
-					Credentials: privatev1.StorageBackendCredentials_builder{Password: testNewPassword}.Build(),
-				}.Build(),
-			}.Build()
-			request := privatev1.StorageBackendsUpdateRequest_builder{Object: partial,
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.credentials.password"}},
-				Lock:       false,
-			}.Build()
-			finished := make(chan error, 1)
-			go func() {
-				defer GinkgoRecover()
-				finished <- tm.Run(ctx, func(requestCtx context.Context) error {
-					_, updateErr := backendServer.Update(requestCtx, request)
-					return updateErr
-				})
-			}()
-			Eventually(started).Should(BeClosed())
-
-			concurrentCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-			defer cancel()
-			err = tm.Run(concurrentCtx, func(requestCtx context.Context) error {
-				if operation == "delete" {
-					_, deleteErr := backendServer.Delete(requestCtx,
-						privatev1.StorageBackendsDeleteRequest_builder{Id: saved.GetId()}.Build())
-					return deleteErr
-				}
-				_, updateErr := backendServer.Update(requestCtx, privatev1.StorageBackendsUpdateRequest_builder{
-					Object: privatev1.StorageBackend_builder{Id: saved.GetId(),
-						Spec: privatev1.StorageBackendSpec_builder{Description: "Concurrent update"}.Build(),
-					}.Build(),
-					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.description"}},
-				}.Build())
-				return updateErr
-			})
-			Expect(err).NotTo(HaveOccurred())
-			unblock()
-			var updateErr error
-			Eventually(finished).Should(Receive(&updateErr))
-			Expect(status.Code(updateErr)).To(Equal(expectedCode))
-			current, err := backendServer.Get(ctx, privatev1.StorageBackendsGetRequest_builder{Id: saved.GetId()}.Build())
-			if operation == "delete" {
-				Expect(status.Code(err)).To(Equal(codes.NotFound))
-			} else {
-				Expect(err).NotTo(HaveOccurred())
-				Expect(current.GetObject().GetSpec().GetCredentials().GetPassword()).To(Equal(testPassword))
-				Expect(current.GetObject().GetSpec().GetDescription()).To(Equal("Concurrent update"))
-			}
-		},
-		Entry("description update", "update", codes.Aborted),
-		Entry("delete", "delete", codes.NotFound),
-	)
 })

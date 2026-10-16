@@ -39,6 +39,8 @@ import (
 // so a single unpaginated call is used instead of looping on offset/total.
 const tierListLimit = 1000
 
+const storageProfileNameKey = "name"
+
 // resolveTierDefinitions lists tier definitions from the Tier API and resolves each
 // tier's serving provider from its first backend association (multi-backend tiers
 // are not yet supported — first association wins). Backend lookups are deduplicated
@@ -75,6 +77,7 @@ func resolveTierDefinitions(
 	type backendResolution struct {
 		provider string
 		found    bool
+		config   *privatev1.OntapBackendConfig
 	}
 	backendCache := make(map[string]backendResolution)
 	connections := make(map[string]provisioning.BackendConnection)
@@ -111,27 +114,47 @@ func resolveTierDefinitions(
 				readinessErrors = append(readinessErrors,
 					fmt.Errorf("storage backend %q is in ERROR; an administrator must fix it and save it again", backendID))
 			}
-			password, perr := resolveBackendPassword(ctx, secretsClient, spec.GetCredentials())
-			if perr != nil {
-				if spec.GetProvider() == "ontap" {
-					readinessErrors = append(readinessErrors, fmt.Errorf("resolve storage backend %q credentials: %w", backendID, perr))
+			if spec.GetProvider() == ontapStorageProvider && spec.GetOntap() != nil {
+				profiles := make([]map[string]any, 0, len(spec.GetOntap().GetProfiles()))
+				for _, profile := range spec.GetOntap().GetProfiles() {
+					shared := profile.GetShared()
+					if shared == nil {
+						return nil, nil, fmt.Errorf("backend %q profile %q has no supported mode", backendID, profile.GetName())
+					}
+					profiles = append(profiles, map[string]any{
+						storageProfileNameKey: profile.GetName(), "shared": map[string]any{
+							"tbc_namespace": shared.GetTbcNamespace(), "tbc_name": shared.GetTbcName(),
+						},
+					})
 				}
-				// A backend whose password cannot be resolved is skipped with a
-				// logged warning (like a NotFound backend) rather than provisioned
-				// with an empty password. The error carries only the backend id and
-				// reason — never the secret value.
-				log.Info("failed to resolve storage backend password, skipping tiers that reference it",
-					"backendID", backendID, "tier", tierName, "error", perr.Error())
-				backendCache[backendID] = backendResolution{found: false}
-				continue
-			}
-			resolution = backendResolution{provider: spec.GetProvider(), found: true}
-			backendCache[backendID] = resolution
-			connections[backendID] = provisioning.BackendConnection{
-				Name:     getResp.GetObject().GetMetadata().GetName(),
-				Endpoint: spec.GetEndpoint(),
-				Username: spec.GetCredentials().GetUsername(),
-				Password: password,
+				resolution = backendResolution{provider: spec.GetProvider(), found: true, config: spec.GetOntap()}
+				backendCache[backendID] = resolution
+				connections[backendID] = provisioning.BackendConnection{
+					Name: getResp.GetObject().GetMetadata().GetName(), ProviderConfig: map[string]any{"profiles": profiles},
+				}
+			} else {
+				password, perr := resolveBackendPassword(ctx, secretsClient, spec.GetCredentials())
+				if perr != nil {
+					if spec.GetProvider() == "ontap" {
+						readinessErrors = append(readinessErrors, fmt.Errorf("resolve storage backend %q credentials: %w", backendID, perr))
+					}
+					// A backend whose password cannot be resolved is skipped with a
+					// logged warning (like a NotFound backend) rather than provisioned
+					// with an empty password. The error carries only the backend id and
+					// reason — never the secret value.
+					log.Info("failed to resolve storage backend password, skipping tiers that reference it",
+						"backendID", backendID, "tier", tierName, "error", perr.Error())
+					backendCache[backendID] = backendResolution{found: false}
+					continue
+				}
+				resolution = backendResolution{provider: spec.GetProvider(), found: true}
+				backendCache[backendID] = resolution
+				connections[backendID] = provisioning.BackendConnection{
+					Name:     getResp.GetObject().GetMetadata().GetName(),
+					Endpoint: spec.GetEndpoint(),
+					Username: spec.GetCredentials().GetUsername(),
+					Password: password,
+				}
 			}
 		}
 		if !resolution.found {
@@ -156,7 +179,17 @@ func resolveTierDefinitions(
 		}
 		if resolution.provider == "ontap" {
 			definition.EncryptionEnabled = ptr.To(assoc.GetEncryptionEnabled())
-			if config := assoc.GetOntap(); config != nil {
+			config := assoc.GetOntap()
+			if resolution.config != nil {
+				matched := false
+				for _, profile := range resolution.config.GetProfiles() {
+					matched = matched || profile.GetName() == config.GetProfile()
+				}
+				if !matched || len(config.GetPoolSelector()) == 0 {
+					return nil, nil, fmt.Errorf("tier %q must select a registered ONTAP profile and virtual pool", tierName)
+				}
+				definition.ProviderConfig = map[string]any{"profile": config.GetProfile(), "pool_selector": config.GetPoolSelector()}
+			} else if config != nil {
 				definition.QosLimits.ProviderConfig = map[string]any{"max_iops": config.GetMaxIops()}
 			}
 		}

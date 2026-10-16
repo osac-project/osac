@@ -1110,6 +1110,38 @@ var _ = Describe("AAPProvider", func() {
 			}
 		})
 
+		It("passes shared backend profiles and pool selectors without management credentials", func() {
+			backendConfig := map[string]any{"profiles": []map[string]any{{
+				"name": "shared-fc", "shared": map[string]any{"tbc_namespace": "trident", "tbc_name": "customer-fc"},
+			}}}
+			tierConfig := map[string]any{"profile": "shared-fc", "pool_selector": map[string]string{"performance": "extreme"}}
+			ctx = provisioning.WithStorageBackendConnections(ctx, map[string]provisioning.BackendConnection{
+				"backend-1": {ProviderConfig: backendConfig},
+				"backend-2": {Endpoint: "https://vast.example.com", Username: "vast-user", Password: "fixture-password"},
+				"backend-3": {Endpoint: "https://provider.example.com", Username: "provider-user", Password: "fixture-password", ProviderConfig: map[string]any{"setting": "value"}},
+			})
+			ctx = provisioning.WithStorageTierDefinitions(ctx, []provisioning.TierDefinition{{
+				Name: "fast", Provider: "ontap", Protocol: "block", BackendID: "backend-1", ProviderConfig: tierConfig,
+			}})
+			aapClient.launchJobTemplateFunc = func(_ context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				vars := req.ExtraVars["osac_job_vars"].(map[string]any)
+				connections := vars["storage_backend_connections"].(map[string]map[string]any)
+				Expect(connections["backend-1"]).To(Equal(map[string]any{"provider_config": backendConfig}))
+				Expect(connections["backend-2"]).To(Equal(map[string]any{
+					"endpoint": "https://vast.example.com", "username": "vast-user", "password": "fixture-password",
+				}))
+				Expect(connections["backend-3"]).To(Equal(map[string]any{
+					"endpoint": "https://provider.example.com", "username": "provider-user", "password": "fixture-password",
+					"provider_config": map[string]any{"setting": "value"},
+				}))
+				tiers := vars["storage_tier_definitions"].([]map[string]any)
+				Expect(tiers[0]).To(HaveKeyWithValue("provider_config", tierConfig))
+				return &aap.LaunchJobTemplateResponse{JobID: 124}, nil
+			}
+			_, err := provider.TriggerProvision(ctx, &v1alpha1.Tenant{ObjectMeta: metav1.ObjectMeta{Name: "tenant-a"}})
+			Expect(err).NotTo(HaveOccurred())
+		})
+
 		It("passes one tenant preparation per backend alongside distinct discovery credentials", func() {
 			ctx = provisioning.WithStorageBackendConnections(ctx, map[string]provisioning.BackendConnection{
 				"backend-1": {

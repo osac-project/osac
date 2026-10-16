@@ -31,6 +31,30 @@ logger = logging.getLogger(__name__)
 # print nothing until they finish or time out.
 _PROGRESS_LOG_INTERVAL_S = 30
 
+# Retry budget for transient Envoy "no healthy upstream" errors.  These
+# occur when Envoy momentarily has zero endpoints for the fulfillment
+# backend -- the request is never delivered, so retrying is safe even
+# for mutating RPCs.
+_TRANSIENT_GRPC_MAX_RETRIES: int = 3
+_TRANSIENT_GRPC_RETRY_DELAY_S: float = 2.0
+
+
+def _is_transient_grpc_error(exc: subprocess.CalledProcessError) -> bool:
+    """Return True when *exc* looks like a transient Envoy upstream outage.
+
+    Matches only the narrow pattern where grpcurl (or the osac CLI,
+    which speaks gRPC under the hood) reports ``Unavailable`` **and**
+    the stderr mentions ``no healthy upstream``.  This combination
+    means Envoy had zero endpoints for the backend cluster -- the
+    request was never forwarded, so retrying is safe regardless of
+    whether the RPC is idempotent.
+
+    Other gRPC error codes (PermissionDenied, NotFound, InvalidArgument,
+    etc.) are never matched.
+    """
+    stderr = (exc.stderr or "").lower()
+    return "unavailable" in stderr and "no healthy upstream" in stderr
+
 
 _OUTPUT_TAIL = 2000
 _SCALAR_SUMMARY_LIMIT = 120
@@ -71,16 +95,42 @@ class CommandTimedOut(subprocess.TimeoutExpired):
 
 
 def run(*args: str, timeout: int = 300) -> str:
-    # pytest's long traceback prints each frame's arguments, and these hold the Authorization header and payload.
+    # pytest's long traceback prints each frame's arguments,
+    # and these hold the Authorization header and payload.
     __tracebackhide__ = True
-    # The raw subprocess exceptions carry the unsanitized command line, so they are never chained.
-    try:
-        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=True)
-    except subprocess.CalledProcessError as exc:
-        raise CommandFailed(exc.returncode, args, exc.stdout, exc.stderr) from None
-    except subprocess.TimeoutExpired as exc:
-        raise CommandTimedOut(args, exc.timeout, exc.stdout, exc.stderr) from None
-    return result.stdout.strip()
+    # The raw subprocess exceptions carry the unsanitized command
+    # line, so they are never chained.
+    for attempt in range(_TRANSIENT_GRPC_MAX_RETRIES + 1):
+        try:
+            result = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=True,
+            )
+            return result.stdout.strip()
+        except subprocess.CalledProcessError as exc:
+            if (
+                attempt < _TRANSIENT_GRPC_MAX_RETRIES
+                and _is_transient_grpc_error(exc)
+            ):
+                logger.warning(
+                    "Transient gRPC upstream error "
+                    "(attempt %d/%d), retrying...",
+                    attempt + 1,
+                    _TRANSIENT_GRPC_MAX_RETRIES + 1,
+                )
+                time.sleep(_TRANSIENT_GRPC_RETRY_DELAY_S)
+                continue
+            raise CommandFailed(
+                exc.returncode, args, exc.stdout, exc.stderr
+            ) from None
+        except subprocess.TimeoutExpired as exc:
+            raise CommandTimedOut(
+                args, exc.timeout, exc.stdout, exc.stderr
+            ) from None
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 def run_unchecked(*args: str, timeout: int = 300, include_stderr: bool = False) -> tuple[str, int]:

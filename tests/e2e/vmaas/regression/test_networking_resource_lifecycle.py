@@ -110,6 +110,26 @@ def test_networking_resource_lifecycle(
         subnet_cr = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_id)
         wait_for_subnet_ready(k8s=k8s_hub_client, name=subnet_cr)
 
+        # Replacement: the Subnet is deleted and recreated with a changed spec
+        # before the SecurityGroup exists — SecurityGroups reference the
+        # VirtualNetwork and block Subnet deletion for their whole lifetime, so
+        # the replacement cannot happen after the SG is created. Reads and a
+        # second Delete return NotFound after removal.
+        delete_and_wait_for_subnet(jwt_grpc_tenant1, k8s_hub_client, subnet_id, subnet_cr)
+        deleted_subnet_id = subnet_id
+        subnet_id = None
+        subnet_cr = None
+        _expect_not_found(jwt_grpc_tenant1, service=f"{PUBLIC_API}.Subnets", resource_id=deleted_subnet_id)
+        with pytest.raises(subprocess.CalledProcessError) as exc_info:
+            jwt_grpc_tenant1.call(service=f"{PUBLIC_API}.Subnets/Delete", data={"id": deleted_subnet_id})
+        assert_grpc_rejected(exc_info, "NotFound")
+
+        subnet_id = jwt_grpc_tenant1.create_subnet(
+            name=f"{subnet_name}-r", virtual_network=vn_id, ipv4_cidr="10.101.2.0/24"
+        )
+        subnet_cr = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_id)
+        wait_for_subnet_ready(k8s=k8s_hub_client, name=subnet_cr)
+
         sg_id = jwt_grpc_tenant1.create_security_group(name=sg_name, virtual_network=vn_id)
         sg_cr = wait_for_security_group_cr(k8s=k8s_hub_client, uuid=sg_id)
         wait_for_security_group_ready(k8s=k8s_hub_client, name=sg_cr)
@@ -174,23 +194,6 @@ def test_networking_resource_lifecycle(
             with pytest.raises(subprocess.CalledProcessError) as exc_info:
                 jwt_grpc_tenant1.call(service=f"{PUBLIC_API}.ExternalIPs/Delete", data={"id": eip_id})
             assert_grpc_rejected(exc_info, "FailedPrecondition")
-
-        # Replacement: the deleted Subnet is recreated with a changed spec in the
-        # same VirtualNetwork; reads and a second Delete return NotFound after removal.
-        delete_and_wait_for_subnet(jwt_grpc_tenant1, k8s_hub_client, subnet_id, subnet_cr)
-        deleted_subnet_id = subnet_id
-        subnet_id = None
-        subnet_cr = None
-        _expect_not_found(jwt_grpc_tenant1, service=f"{PUBLIC_API}.Subnets", resource_id=deleted_subnet_id)
-        with pytest.raises(subprocess.CalledProcessError) as exc_info:
-            jwt_grpc_tenant1.call(service=f"{PUBLIC_API}.Subnets/Delete", data={"id": deleted_subnet_id})
-        assert_grpc_rejected(exc_info, "NotFound")
-
-        subnet_id = jwt_grpc_tenant1.create_subnet(
-            name=f"{subnet_name}-r", virtual_network=vn_id, ipv4_cidr="10.101.2.0/24"
-        )
-        subnet_cr = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_id)
-        wait_for_subnet_ready(k8s=k8s_hub_client, name=subnet_cr)
 
         # Reverse dependency order, confirming NotFound reads after each removal.
         if has_fabric:

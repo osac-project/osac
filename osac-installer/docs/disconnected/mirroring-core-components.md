@@ -12,7 +12,7 @@ with disconnected values.
 > `additionalImages` and Helm chart sections of
 > [disconnected-install.md](../disconnected-install.md).
 
-## Prerequisites (TDD: define checks first)
+## Prerequisites
 
 | Check | Command / evidence |
 | ----- | ------------------ |

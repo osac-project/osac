@@ -1,5 +1,10 @@
 cliImage: quay.io/openshift/origin-cli:4.20.0
 
+# OLM CatalogSource for operator Subscriptions.
+# Override these when using a mirrored catalog in disconnected environments.
+catalogSource: redhat-operators
+catalogSourceNamespace: openshift-marketplace
+
 certManager:
   enabled: true
   channel: "stable-v1"

@@ -183,12 +183,20 @@ func (r *ComputeInstanceReconciler) Reconcile(ctx context.Context, req mcreconci
 }
 
 // updateStatusWithRetry updates the instance status with retry on conflict.
-// This prevents duplicate job triggers when status updates fail due to optimistic concurrency conflicts.
+// This prevents duplicate job triggers when status updates fail due to
+// optimistic concurrency conflicts.  Each retry reads through the uncached
+// API reader so the latest resourceVersion is always used, even when the
+// informer cache lags behind a recent write.
 func (r *ComputeInstanceReconciler) updateStatusWithRetry(ctx context.Context, key client.ObjectKey, newStatus v1alpha1.ComputeInstanceStatus) error {
+	apiReader := r.mgr.GetLocalManager().GetAPIReader()
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		// Fetch latest version to get current resourceVersion
+		// Fetch latest version to get current resourceVersion.
+		// Use the uncached API reader: the informer cache may
+		// not have processed a recent status or metadata write
+		// yet, and a stale resourceVersion causes a 409 Conflict
+		// that wastes a retry attempt.
 		latest := &v1alpha1.ComputeInstance{}
-		if err := r.Get(ctx, key, latest); err != nil {
+		if err := apiReader.Get(ctx, key, latest); err != nil {
 			return err
 		}
 		// Copy status updates to the latest version

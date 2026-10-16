@@ -22,5 +22,5 @@ import (
 
 func TestCreateInstancetype(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Create instancetype command")
+	RunSpecs(t, "Create instance type command")
 }

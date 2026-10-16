@@ -25,7 +25,7 @@ import (
 
 func TestKafka(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Kafka")
+	RunSpecs(t, "Kafka package")
 }
 
 // Logger used for tests:

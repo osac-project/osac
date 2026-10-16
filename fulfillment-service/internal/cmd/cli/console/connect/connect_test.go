@@ -33,7 +33,7 @@ import (
 
 func TestConnect(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Console connect")
+	RunSpecs(t, "Console connect package")
 }
 
 // Logger used for tests:

@@ -23,13 +23,27 @@ import (
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 func TestDefaultNetworkingManager(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Default networking manager")
+	RunSpecs(t, "Default networking manager package")
 }
+
+var logger *slog.Logger
+
+var _ = BeforeSuite(func() {
+	var err error
+
+	// Capture test logs so they are shown on failure or in verbose runs:
+	logger, err = logging.NewLogger().
+		SetLevel(slog.LevelDebug.String()).
+		SetWriter(GinkgoWriter).
+		Build()
+	Expect(err).ToNot(HaveOccurred())
+})
 
 type fakeNetworkClasses struct {
 	items []*privatev1.NetworkClass
@@ -183,7 +197,7 @@ var _ = Describe("default networking manager", func() {
 	BeforeEach(func() {
 		ctx = context.Background()
 		m = &manager{
-			logger:          slog.Default(),
+			logger:          logger,
 			networkClasses:  &fakeNetworkClasses{},
 			virtualNetworks: &fakeVirtualNetworks{},
 			subnets:         &fakeSubnets{},

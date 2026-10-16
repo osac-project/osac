@@ -15,23 +15,25 @@ package validation
 
 import (
 	"log/slog"
-	"os"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 )
 
 var logger *slog.Logger
 
 func TestValidation(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Validation Suite")
+	RunSpecs(t, "Validation package")
 }
 
 var _ = BeforeSuite(func() {
-	// Create logger for tests:
-	logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-	}))
+	var err error
+	logger, err = logging.NewLogger().
+		SetLevel(slog.LevelDebug.String()).
+		SetWriter(GinkgoWriter).
+		Build()
+	Expect(err).ToNot(HaveOccurred())
 })

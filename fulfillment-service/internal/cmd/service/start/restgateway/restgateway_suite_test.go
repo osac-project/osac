@@ -22,5 +22,5 @@ import (
 
 func TestRestgatewaySuite(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "REST gateway")
+	RunSpecs(t, "Start REST gateway command")
 }

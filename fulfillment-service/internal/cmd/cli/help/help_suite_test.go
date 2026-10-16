@@ -22,5 +22,5 @@ import (
 
 func TestHelp(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Help Suite")
+	RunSpecs(t, "Help package")
 }

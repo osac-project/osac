@@ -59,7 +59,7 @@ import (
 
 func TestRegisterServers(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "gRPC server registration package")
+	RunSpecs(t, "Start gRPC server command")
 }
 
 var (

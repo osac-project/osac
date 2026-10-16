@@ -29,7 +29,7 @@ import (
 
 func TestTemplateParameters(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Template parameters")
+	RunSpecs(t, "Utils package")
 }
 
 var _ = Describe("ValidateTemplateParameters", func() {

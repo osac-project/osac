@@ -14,13 +14,29 @@ language governing permissions and limitations under the License.
 package vnc
 
 import (
+	"log/slog"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 )
 
 func TestVNC(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "VNC console")
+	RunSpecs(t, "Console VNC command")
 }
+
+var logger *slog.Logger
+
+var _ = BeforeSuite(func() {
+	var err error
+
+	// Capture test logs so they are shown on failure or in verbose runs:
+	logger, err = logging.NewLogger().
+		SetLevel(slog.LevelDebug.String()).
+		SetWriter(GinkgoWriter).
+		Build()
+	Expect(err).ToNot(HaveOccurred())
+})

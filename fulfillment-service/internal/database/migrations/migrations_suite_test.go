@@ -36,7 +36,7 @@ import (
 
 func TestMigrations(t *gotesting.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Database migrations")
+	RunSpecs(t, "Database migrations package")
 }
 
 // Logger and database objects used by the tests:

@@ -22,5 +22,5 @@ import (
 
 func TestSerial(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Serial console")
+	RunSpecs(t, "Console serial command")
 }

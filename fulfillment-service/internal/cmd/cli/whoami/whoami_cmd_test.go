@@ -16,7 +16,6 @@ package whoami
 import (
 	"bytes"
 	"context"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,7 +83,7 @@ var _ = Describe("Whoami command execution", func() {
 
 	BeforeEach(func() {
 		ctx = context.Background()
-		ctx = logging.LoggerIntoContext(ctx, slog.Default())
+		ctx = logging.LoggerIntoContext(ctx, logger)
 		output = &bytes.Buffer{}
 		stderr = &bytes.Buffer{}
 	})
@@ -112,7 +111,7 @@ var _ = Describe("Whoami command execution", func() {
 
 	setupContext := func(tokenString string) context.Context {
 		console, err := terminal.NewConsole().
-			SetLogger(slog.Default()).
+			SetLogger(logger).
 			SetStdout(output).
 			SetStderr(stderr).
 			Build()
@@ -128,7 +127,7 @@ var _ = Describe("Whoami command execution", func() {
 
 		// Create settings with a valid token
 		settings, err := config.NewSettings().
-			SetLogger(slog.Default()).
+			SetLogger(logger).
 			SetDir(filepath.Join(tempDir, "settings")).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
@@ -144,7 +143,7 @@ var _ = Describe("Whoami command execution", func() {
 
 	It("Shows error when not logged in", func() {
 		console, err := terminal.NewConsole().
-			SetLogger(slog.Default()).
+			SetLogger(logger).
 			SetStdout(output).
 			SetStderr(stderr).
 			Build()
@@ -160,7 +159,7 @@ var _ = Describe("Whoami command execution", func() {
 
 		// Settings with no auth token
 		settings, err := config.NewSettings().
-			SetLogger(slog.Default()).
+			SetLogger(logger).
 			SetDir(filepath.Join(tempDir, "settings")).
 			Build()
 		Expect(err).ToNot(HaveOccurred())

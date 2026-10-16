@@ -82,6 +82,8 @@ var _ = Describe("Create baremetalinstance response output", func() {
 			ctx = terminal.ConsoleIntoContext(ctx, console)
 
 			cmd := Cmd()
+			cmd.SetOut(GinkgoWriter)
+			cmd.SetErr(GinkgoWriter)
 			cmd.SetContext(ctx)
 			cmd.SetArgs([]string{"--catalog-item", "catalog-123", "--name", "example"})
 			err = cmd.Execute()

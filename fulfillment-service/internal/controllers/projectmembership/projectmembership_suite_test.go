@@ -25,7 +25,7 @@ import (
 
 func TestProjectMembership(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "ProjectMembership controller")
+	RunSpecs(t, "Project membership controller")
 }
 
 var logger *slog.Logger

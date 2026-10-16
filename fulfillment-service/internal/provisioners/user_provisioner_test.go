@@ -33,7 +33,7 @@ import (
 
 func TestUserProvisioner(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "User Provisioner Suite")
+	RunSpecs(t, "Provisioners package")
 }
 
 var (

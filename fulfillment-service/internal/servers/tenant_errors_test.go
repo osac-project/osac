@@ -16,7 +16,6 @@ package servers
 import (
 	"context"
 	"errors"
-	"log/slog"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -27,19 +26,15 @@ import (
 )
 
 var _ = Describe("convertTenantErrorToGRPC", func() {
-	var (
-		testCtx    context.Context
-		testLogger *slog.Logger
-	)
+	var testCtx context.Context
 
 	BeforeEach(func() {
 		testCtx = context.Background()
-		testLogger = slog.Default()
 	})
 
 	Context("with nil error", func() {
 		It("should return nil", func() {
-			result := convertTenantErrorToGRPC(testCtx, nil, testLogger, "engineering")
+			result := convertTenantErrorToGRPC(testCtx, nil, logger, "engineering")
 			Expect(result).ToNot(HaveOccurred())
 		})
 	})
@@ -48,7 +43,7 @@ var _ = Describe("convertTenantErrorToGRPC", func() {
 		It("should return PermissionDenied with appropriate message", func() {
 			err := &auth.TenantInvisibleError{Tenant: "engineering"}
 
-			result := convertTenantErrorToGRPC(testCtx, err, testLogger, "engineering")
+			result := convertTenantErrorToGRPC(testCtx, err, logger, "engineering")
 
 			Expect(result).To(HaveOccurred())
 			status, ok := grpcstatus.FromError(result)
@@ -62,7 +57,7 @@ var _ = Describe("convertTenantErrorToGRPC", func() {
 		It("should return PermissionDenied with appropriate message", func() {
 			err := &auth.TenantUnassignableError{Tenant: "sales"}
 
-			result := convertTenantErrorToGRPC(testCtx, err, testLogger, "sales")
+			result := convertTenantErrorToGRPC(testCtx, err, logger, "sales")
 
 			Expect(result).To(HaveOccurred())
 			status, ok := grpcstatus.FromError(result)
@@ -76,7 +71,7 @@ var _ = Describe("convertTenantErrorToGRPC", func() {
 		It("should return Internal error with generic message", func() {
 			err := errors.New("some unexpected error")
 
-			result := convertTenantErrorToGRPC(testCtx, err, testLogger, "development")
+			result := convertTenantErrorToGRPC(testCtx, err, logger, "development")
 
 			Expect(result).To(HaveOccurred())
 			status, ok := grpcstatus.FromError(result)

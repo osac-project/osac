@@ -22,5 +22,5 @@ import (
 
 func TestDescribeSubnet(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Describe Subnet Suite")
+	RunSpecs(t, "Describe subnet command")
 }

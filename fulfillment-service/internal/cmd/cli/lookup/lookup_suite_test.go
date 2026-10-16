@@ -22,5 +22,5 @@ import (
 
 func TestLookup(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Lookup Suite")
+	RunSpecs(t, "Lookup package")
 }

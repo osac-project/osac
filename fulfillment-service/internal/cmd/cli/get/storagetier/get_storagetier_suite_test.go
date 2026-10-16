@@ -25,7 +25,7 @@ import (
 
 func TestGetStorageTier(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Get StorageTier Suite")
+	RunSpecs(t, "Get storage tier command")
 }
 
 var logger *slog.Logger

@@ -1590,7 +1590,7 @@ jobs:
     # fires on both nightly and release runs -- only its message differs --
     # so it can't be used as a trigger for anything that should fire on
     # real releases only. This tag exists purely so Konflux's
-    # Pipelines-as-Code can distinguish the two (see .tekton/*-release.yaml,
+    # Pipelines-as-Code can distinguish the two (see .tekton/*/release.yaml,
     # which trigger on refs/tags/osac-release/*). Not consumed by anything
     # in this repo itself.
     - name: Create release-only marker tag
@@ -1985,7 +1985,7 @@ jobs:
   # -------------------------------------------------------------------
   # Wait for Konflux build — one job per component (matrix, same shape as
   # `build` above), each polling for that component's own release-
-  # triggered Konflux build (see .tekton/*-release.yaml) to produce a
+  # triggered Konflux build (see .tekton/*/release.yaml) to produce a
   # passing Snapshot for this exact commit. Split out of what used to be
   # trigger-konflux-staging-release's own first phase purely so each
   # component's wait gets its own status/logs in the Actions UI, the same
@@ -1996,7 +1996,7 @@ jobs:
   wait-for-konflux-build:
     name: Wait for Konflux build (${{ matrix.component }})
     # Release mode only -- the osac-release/v<version> tag (which Konflux's
-    # Pipelines-as-Code triggers off, see .tekton/*-release.yaml) is itself
+    # Pipelines-as-Code triggers off, see .tekton/*/release.yaml) is itself
     # only pushed in release mode (see "Create release-only marker tag"
     # above). Needs tag specifically (not e.g. promote-and-publish) because
     # that's the job that actually pushes the tag Konflux reacts to --

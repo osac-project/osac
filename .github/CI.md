@@ -44,7 +44,7 @@ not as a separate check.
 
 | The check says | What to do |
 |---|---|
-| Waiting for an approval | Ask for a review. CodeRabbit's approval or a person with write access starts the E2E; the author cannot approve their own pull request. |
+| Waiting for an approval | Ask for a review. CodeRabbit's approval or a person with write access starts the E2E (on a pull request from a fork only a person with write access does); the author cannot approve their own pull request. |
 | CI failed | Fix CI and push; the E2E does not start on a commit whose cheap checks have already failed. |
 | Changes requested | The reviewer's request has to be resolved first. |
 | Draft | Mark the pull request ready. |

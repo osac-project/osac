@@ -127,7 +127,7 @@ jobs:
           RESULTS: ${{ toJSON(needs) }}
         run: |
           set -euo pipefail
-          echo "suites=$(jq -r '.plan.outputs.suites | fromjson | join(", ")' <<<"${RESULTS}")" >> "$GITHUB_OUTPUT"
+          echo "suites=$(jq -r '(.plan.outputs.suites // "[]") | fromjson | join(", ")' <<<"${RESULTS}")" >> "$GITHUB_OUTPUT"
           if [[ "$(jq -r '.plan.result' <<<"${RESULTS}")" != "success" ]]; then
             echo "::error::Plan did not succeed, so no suite was selected"
             exit 1

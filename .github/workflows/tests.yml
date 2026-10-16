@@ -128,16 +128,20 @@ jobs:
         if: inputs.kind == 'it-fulfillment-service' && always()
         run: |
           export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
-          echo "=== Pods ==="
-          kubectl get pods -n osac -o wide
-          echo "=== Deployments ==="
-          kubectl get deployments -n osac
-          echo "=== Operator logs ==="
-          kubectl logs -n osac -l control-plane=controller-manager --tail=100
-          echo "=== Fulfillment logs ==="
-          kubectl logs -n osac -l 'app in (fulfillment-console-proxy,fulfillment-controller,fulfillment-grpc-server,fulfillment-rest-gateway,fulfillment-ingress-proxy)' --tail=100 --all-containers
-          echo "=== Events ==="
-          kubectl get events -n osac --sort-by='.lastTimestamp' | tail -50
+          # The upload below takes this directory, so the diagnostics go to a file in it as well as to the log.
+          mkdir -p fulfillment-service/logs
+          {
+            echo "=== Pods ==="
+            kubectl get pods -n osac -o wide
+            echo "=== Deployments ==="
+            kubectl get deployments -n osac
+            echo "=== Operator logs ==="
+            kubectl logs -n osac -l control-plane=controller-manager --tail=100
+            echo "=== Fulfillment logs ==="
+            kubectl logs -n osac -l 'app in (fulfillment-console-proxy,fulfillment-controller,fulfillment-grpc-server,fulfillment-rest-gateway,fulfillment-ingress-proxy)' --tail=100 --all-containers
+            echo "=== Events ==="
+            kubectl get events -n osac --sort-by='.lastTimestamp' | tail -50
+          } 2>&1 | tee fulfillment-service/logs/diagnostics.txt
       - if: inputs.kind == 'it-fulfillment-service' && always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
@@ -313,7 +317,7 @@ jobs:
       # --- integration test: osac-installer (the umbrella smoke test)
       - name: Checkout repository
         if: inputs.kind == 'it-osac-installer'
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 

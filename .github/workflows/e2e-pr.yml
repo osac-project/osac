@@ -3,7 +3,8 @@
 # push to the result. The E2E takes about 100 minutes of a real cluster, so it starts only when it is allowed to:
 #
 #   * a person with write access, or CodeRabbit, has approved the exact head commit (a push drops the approval; a clean
-#     rebase keeps it),
+#     rebase keeps it). For a pull request from a fork only a person with write access counts: the author of a fork
+#     controls what CodeRabbit reads, and the E2E runs that code with secrets,
 #   * no cheap check has already failed on that commit, and
 #   * the change touches something an E2E suite tests (docs and the like need none).
 #

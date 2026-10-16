@@ -28,7 +28,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
+	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
@@ -459,6 +462,121 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 			latestProvisionJob = provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
 			Expect(latestProvisionJob).NotTo(BeNil())
 			Expect(latestProvisionJob.State).To(Equal(osacv1alpha1.JobStateSucceeded))
+		})
+	})
+
+	// Regression test for OSAC-5667: handleDelete must persist the
+	// deprovision job's terminal status before removing the base
+	// finalizer.  Without the status flush the metadata Update()
+	// clobbers the in-memory Succeeded state with the server-side
+	// Running value, the feedback controller never sees the terminal
+	// state, and the CR deadlocks in Deleting.
+	Context("OSAC-5667: deletion status persistence", func() {
+		It("persists deprovision job Succeeded status before "+
+			"removing the base finalizer", func() {
+			instanceName := "test-osac-5667"
+			instance := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: testNamespace,
+					Finalizers: []string{
+						osacComputeInstanceFinalizer,
+						osacComputeInstanceFeedbackFinalizer,
+					},
+					Annotations: map[string]string{
+						osacTenantKey: "test-tenant",
+					},
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+
+			// Mark the CR for deletion so DeletionTimestamp is set.
+			Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
+
+			// Re-fetch to pick up the server-set DeletionTimestamp.
+			key := types.NamespacedName{
+				Name:      instanceName,
+				Namespace: testNamespace,
+			}
+			Expect(k8sClient.Get(ctx, key, instance)).To(Succeed())
+			Expect(instance.DeletionTimestamp.IsZero()).To(BeFalse(),
+				"DeletionTimestamp must be set after Delete")
+
+			// --- Phase 1: trigger the deprovision job ---------
+			// Reconcile drives handleDelete → handleDeprovisioning
+			// which triggers a deprovision job in Pending state.
+			req := mcreconcile.Request{
+				Request: reconcile.Request{NamespacedName: key},
+			}
+			result, err := reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0),
+				"should requeue while deprovision job is non-terminal")
+
+			// The API server must already show the deprovision job.
+			Expect(k8sClient.Get(ctx, key, instance)).To(Succeed())
+			deprovJob := provisioning.FindLatestJobByType(
+				instance.Status.ProvisioningJobs,
+				osacv1alpha1.JobTypeDeprovision,
+			)
+			Expect(deprovJob).NotTo(BeNil(),
+				"deprovision job must be visible after first reconcile")
+			Expect(deprovJob.State).To(Equal(
+				osacv1alpha1.JobStatePending))
+
+			// --- Phase 2: complete the AAP job, reconcile -----
+			// Simulate AAP returning "successful" on the next poll.
+			provider.setDeprovisionJobState(
+				osacv1alpha1.JobStateSucceeded,
+				"Deprovision completed",
+			)
+
+			// This reconcile must:
+			//  a) persist the Succeeded status,
+			//  b) remove the base finalizer,
+			//  c) NOT leave the status at Running.
+			result, err = reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			// --- Verify persisted state -----------------------
+			// Read the CR from the API server (not in-memory).
+			Expect(k8sClient.Get(ctx, key, instance)).To(Succeed())
+
+			// Invariant 1: the base finalizer must be removed.
+			Expect(controllerutil.ContainsFinalizer(
+				instance,
+				osacComputeInstanceFinalizer,
+			)).To(BeFalse(),
+				"base finalizer must be removed after "+
+					"successful deprovisioning")
+
+			// Invariant 2: the feedback finalizer must still be
+			// present (it is managed by a different controller).
+			Expect(controllerutil.ContainsFinalizer(
+				instance,
+				osacComputeInstanceFeedbackFinalizer,
+			)).To(BeTrue(),
+				"feedback finalizer must survive base-finalizer "+
+					"removal")
+
+			// Invariant 3 (OSAC-5667): the deprovision job's
+			// terminal state must be persisted in the API server.
+			// Before the fix, the metadata Update() in handleDelete
+			// clobbered the in-memory status, so the persisted
+			// status still showed Running.
+			deprovJob = provisioning.FindLatestJobByType(
+				instance.Status.ProvisioningJobs,
+				osacv1alpha1.JobTypeDeprovision,
+			)
+			Expect(deprovJob).NotTo(BeNil(),
+				"deprovision job must still be visible")
+			Expect(deprovJob.State).To(Equal(
+				osacv1alpha1.JobStateSucceeded),
+				"OSAC-5667: deprovision job terminal status must "+
+					"be persisted before finalizer removal — was "+
+					"clobbered to Running without the fix")
 		})
 	})
 })

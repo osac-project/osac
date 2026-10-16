@@ -2,6 +2,7 @@
 set -e
 
 echo "=== Tearing down test environment ==="
+CLEANUP_FAILED=0
 
 # Stop mock VMS server if running
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -61,8 +62,20 @@ for url in (
         pass
 PY
 
-# Delete kind cluster
-kind delete cluster --name osac-test
+# Setup can fail before creating the cluster; still clean up local resources.
+if command -v kind > /dev/null 2>&1; then
+  if KIND_CLUSTERS=$(kind get clusters); then
+    if grep -Fxq "osac-test" <<<"${KIND_CLUSTERS}"; then
+      if ! kind delete cluster --name osac-test; then
+        echo "WARNING: Failed to delete Kind cluster; continuing local cleanup" >&2
+        CLEANUP_FAILED=1
+      fi
+    fi
+  else
+    echo "WARNING: Could not list Kind clusters; continuing local cleanup" >&2
+    CLEANUP_FAILED=1
+  fi
+fi
 
 # Clean up temporary files
 rm -f /tmp/osac_test_overrides.log
@@ -70,5 +83,10 @@ rm -rf /tmp/osac-operator
 rm -rf "${SCRIPT_DIR}/certs"
 rm -f "${SCRIPT_DIR}/kubeconfig-osac-test"
 rm -f "${SCRIPT_DIR}/.storage_env"
+
+if [ "${CLEANUP_FAILED}" -ne 0 ]; then
+  echo "=== Cleanup completed with errors ===" >&2
+  exit 1
+fi
 
 echo "=== Cleanup complete ==="

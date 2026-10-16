@@ -145,9 +145,11 @@ var _ = It("releases the attempted reservation when deletion wins the race", fun
 		Expect(latest.Status.Workers[0].BMICreateState).To(Equal(v1alpha1.WorkerBMICreateStateAttempted), "attempt not durable before Create")
 		Expect(kube.Delete(ctx, latest)).To(Succeed())
 		for range 3 {
-			if apierrors.IsNotFound(kube.Get(ctx, key, latest)) {
+			err := kube.Get(ctx, key, latest)
+			if apierrors.IsNotFound(err) {
 				break
 			}
+			Expect(err).NotTo(HaveOccurred())
 			if _, err := cleanup.handleClusterDeletion(ctx, latest); err != nil {
 				Expect(err).NotTo(HaveOccurred())
 			}
@@ -207,6 +209,9 @@ var _ = It("releases a lost-Create worker when the List confirms absence", func(
 	if _, err := runWorkerCapacityStage(r, co); err == nil {
 		Fail("expected lost acknowledgement")
 	}
+	// The nodeSetClient accepted the Create; clear its store so
+	// the fixture is consistent with the empty List that follows.
+	fc.bmis = nil
 	Expect(r.apiReader.Get(ctx, client.ObjectKeyFromObject(co), co)).To(Succeed())
 	w := co.Status.Workers[0]
 	Expect(w.BMICreateState).To(Equal(v1alpha1.WorkerBMICreateStateAttempted), "missing durable unknown outcome: %+v", w)

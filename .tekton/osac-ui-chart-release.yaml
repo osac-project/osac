@@ -28,7 +28,7 @@ spec:
   # git-describe/TAG_PREFIX mechanism resolves cleanly to the dedicated
   # osac-ui-chart-vX.Y.Z tag osac-build-and-publish.yaml's "Create chart
   # release tags" step pushes before the osac-release/v* marker tag that
-  # triggers this build. NOT our usual "osac-ui/vX.Y.Z" per-component tag
+  # triggers this build. NOT the existing per-component "<component>/vX.Y.Z" tag
   # format -- this task's version-computation script does
   # `sed -e "s/^${TAG_PREFIX}//"`, and since sed uses "/" as its own
   # delimiter, a "/"-containing TAG_PREFIX breaks that command outright
@@ -39,7 +39,7 @@ spec:
   pipelineSpec:
     description: |
       Packages and pushes a Helm chart to an OCI repository using trusted artifacts,
-      for a real release. Chart version is computed from the osac-ui/vX.Y.Z git tag
+      for a real release. Chart version is computed from the dedicated chart git tag
       already pushed at this exact commit by osac-build-and-publish.yaml's own
       release tagging step.
     params:

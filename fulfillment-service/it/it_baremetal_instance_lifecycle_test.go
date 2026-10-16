@@ -76,7 +76,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					Hardware: privatev1.BareMetalHardwareSpec_builder{
 						Cpu: privatev1.BareMetalCPUSpec_builder{
 							Cores:          4,
-							Architecture:   "x86_64",
+							Architecture:   "amd64",
 							ThreadsPerCore: 2,
 						}.Build(),
 						Memory: privatev1.BareMetalMemorySpec_builder{

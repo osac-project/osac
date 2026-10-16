@@ -604,7 +604,7 @@ type DiskImageSpec_builder struct {
 	SourceRef string
 	// Guest operating system family of the disk image. Affects VM provisioning defaults. Immutable after creation.
 	GuestOsFamily GuestOSFamily
-	// CPU architectures supported by the disk image. Informational metadata only.
+	// CPU architectures supported by the disk image.
 	Architecture []Architecture
 	// Current lifecycle state of the disk image.
 	Lifecycle DiskImageLifecycle

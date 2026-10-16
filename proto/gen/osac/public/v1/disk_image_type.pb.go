@@ -494,7 +494,7 @@ type DiskImageSpec struct {
 	SourceRef string `protobuf:"bytes,2,opt,name=source_ref,json=sourceRef,proto3" json:"source_ref,omitempty"`
 	// Guest operating system family of the disk image. Affects VM provisioning defaults. Immutable after creation.
 	GuestOsFamily GuestOSFamily `protobuf:"varint,3,opt,name=guest_os_family,json=guestOsFamily,proto3,enum=osac.public.v1.GuestOSFamily" json:"guest_os_family,omitempty"`
-	// CPU architectures supported by the disk image. Informational metadata only.
+	// CPU architectures supported by the disk image.
 	Architecture []Architecture `protobuf:"varint,4,rep,packed,name=architecture,proto3,enum=osac.public.v1.Architecture" json:"architecture,omitempty"`
 	// Current lifecycle state of the disk image.
 	Lifecycle DiskImageLifecycle `protobuf:"varint,5,opt,name=lifecycle,proto3,enum=osac.public.v1.DiskImageLifecycle" json:"lifecycle,omitempty"`
@@ -615,7 +615,7 @@ type DiskImageSpec_builder struct {
 	SourceRef string
 	// Guest operating system family of the disk image. Affects VM provisioning defaults. Immutable after creation.
 	GuestOsFamily GuestOSFamily
-	// CPU architectures supported by the disk image. Informational metadata only.
+	// CPU architectures supported by the disk image.
 	Architecture []Architecture
 	// Current lifecycle state of the disk image.
 	Lifecycle DiskImageLifecycle

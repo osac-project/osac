@@ -1512,6 +1512,80 @@ jobs:
         git push origin "${TAG}"
         echo "Tagged: ${TAG}"
 
+    # Dedicated slash-free tags for each Helm chart Konflux Component,
+    # pushed BEFORE the osac-release marker tag below so a chart's release
+    # build (triggered by that marker tag) is guaranteed to see this tag
+    # already pushed by the time it clones -- without this ordering, the
+    # marker tag's webhook could fire and the chart build could start
+    # before this step has run at all.
+    #
+    # Slash-free is not a style choice: build-helm-chart-oci-ta's version
+    # computation runs `sed -e "s/^${TAG_PREFIX}//"`, and since sed uses
+    # "/" as its own delimiter, a TAG_PREFIX containing "/" (our usual
+    # "<component>/v" per-component tag format) breaks that command
+    # outright -- confirmed live, it exits with "unknown option to `s'"
+    # rather than silently producing a wrong version. Hence a dedicated
+    # "<chart-component>-v<version>" tag instead of reusing the existing
+    # per-component tag below.
+    #
+    # Always tags the umbrella chart (osac-chart; it's published every
+    # release); per-component chart tags only for whichever components
+    # components-to-tag actually includes this run.
+    - name: Create chart release tags
+      if: inputs.mode == 'release'
+      env:
+        COMPONENT_VERSIONS: ${{ needs.prepare.outputs.component-versions }}
+        COMPONENTS_TO_TAG: ${{ needs.prepare.outputs.components-to-tag }}
+      run: |
+        set -euo pipefail
+        source osac-installer/scripts/nightly-charts.sh
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+
+        declare -A COMPONENT_CHARTS=(
+          ["osac-operator"]="osac-operator-chart osac-operator-crds-chart"
+          ["fulfillment-service"]="fulfillment-service-chart"
+          ["osac-aap"]="osac-aap-chart"
+          ["bare-metal-fulfillment-operator"]="bare-metal-fulfillment-operator-chart bare-metal-fulfillment-operator-crds-chart"
+          ["osac-metering"]="osac-metering-chart"
+          ["osac-csi-driver"]="osac-csi-driver-chart osac-csi-backends-chart"
+          ["osac-ui"]="osac-ui-chart"
+        )
+
+        push_chart_tag() {
+          local CHART_COMPONENT="$1" CHART_VERSION="$2"
+          local TAG="${CHART_COMPONENT}-v${CHART_VERSION}"
+          local COMMIT_SHA
+          COMMIT_SHA=$(git rev-parse HEAD)
+
+          if git fetch origin "refs/tags/${TAG}:refs/tags/${TAG}" 2>/dev/null; then
+            local EXISTING_SHA
+            EXISTING_SHA=$(git rev-parse "${TAG}^{commit}")
+            if [[ "${EXISTING_SHA}" == "${COMMIT_SHA}" ]]; then
+              echo "Tag ${TAG} already exists at ${COMMIT_SHA}; skipping create/push"
+              return 0
+            fi
+            local safe_tag
+            safe_tag=$(_gha_sanitize_for_message "${TAG}")
+            echo "::error::Tag ${safe_tag} already exists at a different commit; refusing to move tag" >&2
+            exit 1
+          fi
+
+          git tag "${TAG}" -m "Release ${CHART_VERSION}"
+          git push origin "${TAG}"
+          echo "Tagged: ${TAG}"
+        }
+
+        push_chart_tag osac-chart "${VERSION}"
+
+        for COMPONENT in $(jq -r '.[]' <<<"${COMPONENTS_TO_TAG}"); do
+          COMPONENT_VERSION=$(jq -r --arg k "${COMPONENT}" '.[$k]' <<<"${COMPONENT_VERSIONS}")
+          # Intentional word splitting: some entries list multiple charts.
+          for CHART_COMPONENT in ${COMPONENT_CHARTS[$COMPONENT]:-}; do
+            push_chart_tag "${CHART_COMPONENT}" "${COMPONENT_VERSION}"
+          done
+        done
+
     # Dedicated release-only marker tag. The umbrella tag above (osac/v*)
     # fires on both nightly and release runs -- only its message differs --
     # so it can't be used as a trigger for anything that should fire on

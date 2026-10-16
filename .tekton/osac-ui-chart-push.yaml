@@ -27,13 +27,14 @@ spec:
   - name: chart-context
     value: osac-ui/charts/ui
   # Same reasoning as the pull-request variant's chart-version: a plain
-  # push to main isn't a real release (no <component>/vX.Y.Z tag exists
-  # yet on this exact commit for TAG_PREFIX/git-describe to resolve
-  # cleanly against), so use a fixed dev placeholder here too. Only the
-  # release variant (triggered by the real per-component tag) relies on
-  # the default git-describe/TAG_PREFIX mechanism.
+  # push to main isn't a real release (no dedicated chart tag exists yet
+  # on this exact commit for TAG_PREFIX/git-describe to resolve cleanly
+  # against), so use a dev placeholder here too, with {{revision}} so
+  # each push gets its own distinct tag instead of overwriting the last
+  # one. Only the release variant (triggered by the dedicated chart tag)
+  # relies on the default git-describe/TAG_PREFIX mechanism.
   - name: chart-version
-    value: 0.0.0-dev
+    value: 0.0.0-dev-{{revision}}
   pipelineSpec:
     description: |
       Packages and pushes a Helm chart to an OCI repository using trusted artifacts,

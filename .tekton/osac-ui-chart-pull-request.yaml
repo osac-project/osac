@@ -26,13 +26,15 @@ spec:
     value: quay.io/redhat-user-workloads/osac-tenant/osac-ui-chart:on-pr-{{revision}}
   - name: chart-context
     value: osac-ui/charts/ui
-  # PR builds are validation-only, never published for real use -- a fixed
+  # PR builds are validation-only, never published for real use -- a
   # placeholder avoids relying on build-helm-chart-oci-ta's default
   # git-describe/TAG_PREFIX version computation against whatever tags an
   # arbitrary PR commit happens to be near (same reasoning DPF's own real
-  # chart-pull-request.yaml uses this exact value for).
+  # chart-pull-request.yaml uses a fixed placeholder for). {{revision}}
+  # keeps each PR/commit's build under its own distinct tag instead of
+  # every PR overwriting the same "0.0.0-pr" artifact.
   - name: chart-version
-    value: 0.0.0-pr
+    value: 0.0.0-pr-{{revision}}
   pipelineSpec:
     description: |
       Packages and pushes a Helm chart to an OCI repository using trusted artifacts,

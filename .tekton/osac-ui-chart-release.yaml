@@ -25,15 +25,17 @@ spec:
   - name: chart-context
     value: osac-ui/charts/ui
   # No chart-version override here -- build-helm-chart-oci-ta's default
-  # git-describe/TAG_PREFIX mechanism resolves cleanly to our real
-  # osac-build-and-publish.yaml-pushed osac-ui/vX.Y.Z tag, since the
-  # release pipeline always runs at the exact commit that tag was pushed
-  # to (same commit the osac-release/v* marker tag triggering this build
-  # lives on). See [[project_osac_helm_charts_to_rh_oci]] memory for the
-  # full reasoning -- this is the one real difference from the image-side
-  # version stamping mechanism (which this task ignores entirely).
+  # git-describe/TAG_PREFIX mechanism resolves cleanly to the dedicated
+  # osac-ui-chart-vX.Y.Z tag osac-build-and-publish.yaml's "Create chart
+  # release tags" step pushes before the osac-release/v* marker tag that
+  # triggers this build. NOT our usual "osac-ui/vX.Y.Z" per-component tag
+  # format -- this task's version-computation script does
+  # `sed -e "s/^${TAG_PREFIX}//"`, and since sed uses "/" as its own
+  # delimiter, a "/"-containing TAG_PREFIX breaks that command outright
+  # (confirmed live: "unknown option to `s'"). Hence the dedicated,
+  # slash-free tag instead of reusing the existing per-component one.
   - name: tag-prefix
-    value: osac-ui/v
+    value: osac-ui-chart-v
   pipelineSpec:
     description: |
       Packages and pushes a Helm chart to an OCI repository using trusted artifacts,

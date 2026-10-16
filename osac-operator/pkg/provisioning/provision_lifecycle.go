@@ -41,6 +41,9 @@ import (
 type State struct {
 	Jobs                 *[]v1alpha1.JobStatus
 	DesiredConfigVersion string
+	// RequireExactConfigVersion prevents a legacy success with no recorded
+	// version from satisfying newly introduced provisioning prerequisites.
+	RequireExactConfigVersion bool
 }
 
 // JobsExtractor extracts a jobs array from a resource. Used by CheckAPIServerForNonTerminalProvisionJob
@@ -71,7 +74,7 @@ func evaluateActionForTarget(provState *State, target string, checkAPIServer fun
 			return Skip, latestJob
 		}
 		return Backoff, latestJob
-	} else if latestJob.ConfigVersion == "" && latestJob.State == v1alpha1.JobStateSucceeded {
+	} else if !provState.RequireExactConfigVersion && latestJob.ConfigVersion == "" && latestJob.State == v1alpha1.JobStateSucceeded {
 		// Legacy job without ConfigVersion that succeeded — skip
 		return Skip, latestJob
 	}

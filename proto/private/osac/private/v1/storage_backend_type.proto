@@ -45,6 +45,11 @@ message StorageBackend {
 
 // Defines the desired configuration for a StorageBackend.
 message StorageBackendSpec {
+  option (buf.validate.message).cel = {
+    id: "ontap_provider_config"
+    message: "ONTAP configuration requires provider ontap"
+    expression: "!has(this.ontap) || this.provider == 'ontap'"
+  };
   // Storage provider identifier. For example: "vast", "ceph", "pure".
   //
   // This value is immutable once the StorageBackend is created.
@@ -58,6 +63,47 @@ message StorageBackendSpec {
 
   // Credentials for authenticating with the storage management API.
   StorageBackendCredentials credentials = 4 [(buf.validate.field).required = true];
+
+  // Provider-specific backend registration settings.
+  oneof provider_config {
+    // ONTAP native Trident backend profiles.
+    OntapBackendConfig ontap = 5;
+  }
+}
+
+// Named ONTAP offerings that tier associations can select.
+message OntapBackendConfig {
+  option (buf.validate.message).cel = {
+    id: "unique_profile_names"
+    message: "ONTAP profile names must be unique"
+    expression: "this.profiles.all(p, this.profiles.filter(q, q.name == p.name).size() == 1)"
+  };
+
+  // Available backend profiles.
+  repeated OntapBackendProfile profiles = 1 [(buf.validate.field).repeated = {min_items: 1, max_items: 32}];
+}
+
+// A named backend configuration; additional provisioning modes can be added independently.
+message OntapBackendProfile {
+  // Stable profile name selected by a tier association.
+  string name = 1 [(buf.validate.field).string = {min_len: 1, max_len: 63, pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"}];
+
+  // Exactly one backend management mode must be selected.
+  oneof mode {
+    option (buf.validate.oneof).required = true;
+
+    // Existing customer-managed Trident backend on the configured VM hosting cluster.
+    SharedTridentBackend shared = 2;
+  }
+}
+
+// An existing TridentBackendConfig, retained throughout OSAC tenant lifecycles.
+message SharedTridentBackend {
+  // Namespace containing the Trident controller and backend configuration.
+  string tbc_namespace = 1 [(buf.validate.field).string = {min_len: 1, max_len: 63, pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"}];
+
+  // Kubernetes metadata.name of the TridentBackendConfig, not its Trident backendName.
+  string tbc_name = 2 [(buf.validate.field).string = {min_len: 1, max_len: 253, pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$"}];
 }
 
 // Credentials for authenticating with a storage backend's management API.
@@ -98,4 +144,7 @@ enum StorageBackendState {
 
   // The storage backend is registered and available.
   STORAGE_BACKEND_STATE_READY = 1;
+
+  // The backend has a reported configuration error.
+  STORAGE_BACKEND_STATE_ERROR = 2;
 }

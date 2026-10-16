@@ -1,0 +1,15 @@
+---
+# Replace backendId with the ID returned by backend registration.
+# The selected customer-managed pool must match the advertised encryption setting.
+'@type': type.googleapis.com/osac.private.v1.StorageTier
+metadata:
+  name: netapp-block-extreme
+spec:
+  protocol: STORAGE_PROTOCOL_BLOCK
+  backends:
+    - backendId: registered-backend-id
+      encryptionEnabled: true
+      ontap:
+        profile: shared-fc
+        poolSelector:
+          performance: extreme

@@ -84,6 +84,10 @@ Networking controllers derive template names from the prefix:
 - `OSAC_COMPUTE_INSTANCE_NAMESPACE` — namespace for ComputeInstance resources
   (optional).
 - `OSAC_TENANT_NAMESPACE` — namespace for Tenant resources (optional).
+- `OSAC_STORAGE_PREPARATION_NAMESPACE` — protected hub namespace for administrator
+  tenant/backend preparation Secrets (default: `osac-storage`). ONTAP preparation
+  uses immutable tenant/backend labels; restrict Secret writers to platform admins.
+  This is independent of the Trident runtime namespace on the VM hosting cluster.
 - `OSAC_NETWORKING_NAMESPACE` — namespace for networking resources
   (VirtualNetwork, Subnet, SecurityGroup) (optional).
 

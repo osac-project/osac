@@ -275,7 +275,7 @@ func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, r
 		return "", fmt.Errorf("failed to extract extra vars: %w", err)
 	}
 	extraVars = mergeExtraVars(extraVars, inheritedExtraVars)
-	sensitive := adminKubeconfigInExtraVars(extraVars)
+	sensitive := sensitiveExtraVars(extraVars)
 
 	var jobID int
 	switch template.Type {
@@ -308,13 +308,17 @@ func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, r
 	return strconv.Itoa(jobID), nil
 }
 
-func adminKubeconfigInExtraVars(extraVars map[string]any) bool {
+func sensitiveExtraVars(extraVars map[string]any) bool {
 	jobVars, ok := extraVars["osac_job_vars"].(map[string]any)
 	if !ok {
 		return false
 	}
-	_, ok = jobVars["admin_kubeconfig"]
-	return ok
+	for _, key := range []string{"admin_kubeconfig", "storage_backend_connections"} {
+		if _, ok := jobVars[key]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func mergeExtraVars(extraVars, inheritedExtraVars map[string]any) map[string]any {
@@ -494,6 +498,15 @@ func tierDefinitionsToExtraVars(tiers []TierDefinition) []map[string]any {
 				},
 			},
 		}
+		if len(tier.QosLimits.ProviderConfig) > 0 {
+			result[i]["qos_limits"].(map[string]any)["provider_config"] = tier.QosLimits.ProviderConfig
+		}
+		if tier.EncryptionEnabled != nil {
+			result[i]["encryption_enabled"] = *tier.EncryptionEnabled
+		}
+		if len(tier.ProviderConfig) > 0 {
+			result[i]["provider_config"] = tier.ProviderConfig
+		}
 	}
 	return result
 }
@@ -502,12 +515,26 @@ func tierDefinitionsToExtraVars(tiers []TierDefinition) []map[string]any {
 // AAP-schema-shaped map format, keyed by backend_id, one entry per unique backend
 // (never repeated per tier — see BackendConnection's doc comment).
 func backendConnectionsToExtraVars(conns map[string]BackendConnection) map[string]map[string]any {
+	const preparationSourceNameKey = "name"
 	result := make(map[string]map[string]any, len(conns))
 	for backendID, conn := range conns {
 		result[backendID] = map[string]any{
 			"endpoint": conn.Endpoint,
 			"username": conn.Username,
 			"password": conn.Password,
+		}
+		if len(conn.ProviderConfig) > 0 {
+			if conn.Endpoint == "" && conn.Username == "" && conn.Password == "" {
+				result[backendID] = map[string]any{}
+			}
+			result[backendID]["provider_config"] = conn.ProviderConfig
+		}
+		if p := conn.TenantPreparation; p != nil {
+			result[backendID]["tenant_preparation"] = map[string]any{
+				"tenant_id":       p.TenantID,
+				"source":          map[string]any{"namespace": p.Namespace, preparationSourceNameKey: p.Name, "uid": p.UID, "resource_version": p.ResourceVersion},
+				"provider_config": p.ProviderConfig,
+			}
 		}
 	}
 	return result

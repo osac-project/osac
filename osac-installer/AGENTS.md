@@ -45,6 +45,7 @@ respective areas.
 
 | Touched area | Required validation | Command / follow-up |
 |---|---|---|
+| Hub storage preparation namespace or operator namespace wiring | Helm contract plus deployed access | `make csi-render-test`; verify installed service-account Secret access on the hub |
 | MCE defaults, lifecycle gate, image overrides, or compatibility RBAC | Helm contract | `make mce-render-test` |
 | Kind runtime selection, sudo authentication, image loading, device-mapper permissions, cluster/storage lifecycle, or devstack Helm apply flags | Unit with command stubs | `make kind-runtime-test` |
 | TopoLVM chart dependency download, cache reuse, build scoping, or install preparation | Unit with command stubs | `make kind-runtime-test` |

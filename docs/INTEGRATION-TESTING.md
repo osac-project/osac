@@ -188,6 +188,12 @@ Touched-area requirements: [component guide](../fulfillment-service/AGENTS.md#in
 ### Coverage notes
 
 - **CLI commands that only call Fulfillment APIs:** Cover them in `fulfillment-service/it/`.
+- **NetApp shared registration:** `internal/servers/shared_trident_registration_test.go`
+  and the ONTAP handler/registered-gRPC regressions use real PostgreSQL, production
+  validation and a local HTTPS connection trap. They check profile/pool persistence,
+  immutable bindings, reference lifecycle and zero array connections. These remain
+  package-level coverage; deployed CLI registration and native Trident/AAP behavior
+  are separate boundaries under [OSAC-5813](https://redhat.atlassian.net/browse/OSAC-5813).
 - **DiskImage API-only workflows ([DEV]):** `it_disk_images_api_test.go` covers public CRUD for provider admin/shared, tenant-admin, and tenant-user images; deprecation/obsolescence timestamps, default-list visibility, explicit lifecycle filtering, reactivation, template-default name resolution, and template-bound deletion protection. `it_disk_images_tenant_isolation_test.go` covers tenant visibility and access refusal. `it_disk_image_lifecycle_test.go` covers deprecated-image warnings and obsolete-image rejection without ComputeInstance persistence. `it_public_clusters_test.go` checks the selected shared ClusterVersion's missing-image `FailedPrecondition`, version identity, reason, and absence of a persisted cluster. `it_bare_metal_instance_catalog_items_test.go` rejects foreign-tenant image names with `NotFound` and no persisted catalog item.
   These component-integration cases use real public/private Fulfillment APIs, authentication, and PostgreSQL. The ComputeInstance fixture simulates network readiness and storage-provider configuration; no VM, cluster, AAP, or bare-metal provider lifecycle is exercised. Run the documented Fulfillment installer target above; against an already deployed compatible Kind environment, run `ginkgo run --timeout 20m --focus 'DiskImage API|DiskImage tenant isolation|DiskImage lifecycle|Public clusters rejects a shared ClusterVersion|Bare Metal Instance Catalog Items rejects a cross-tenant DiskImage' it` from `fulfillment-service/`.
   VM image projection/running and deletion protection through deployed workload teardown remain in `tests/e2e/vmaas/regression/test_compute_instance_disk_image.py`. BMH image selection and deprecated-image provisioning remain in `tests/e2e/bmaas/sanity/test_baremetal_instance_lifecycle.py`; DiskImage-backed CaaS provisioning remains in the CaaS E2Es.
@@ -330,6 +336,37 @@ Touched-area requirements: [component guide](../osac-operator/AGENTS.md#integrat
 - **AAP, dispatcher, provisioning, KubeVirt and fulfillment:** A test-local
   dependency double does not prove the receiving service/provider boundary.
 - **Generated CRDs/manifests:** Change the source and run the owning generator.
+
+The shared NetApp profile cases in
+`internal/controller/storage_shared_trident_test.go` also run through `make test`.
+They use real Envtest persistence and public reconciliation with catalog/AAP
+provider doubles: two tiers share one customer TBC reference, no unused password
+or preparation Secret is read, current-configuration jobs/classes gate readiness,
+and deletion keeps the finalizer until class then backend cleanup succeeds.
+`pkg/provisioning/aap_provider_test.go` checks shared references/selectors and
+legacy/generic connection-field compatibility. These tests do not run the
+receiving Ansible role or inspect a real Trident backend. Shared receiver/native
+FC and retention coverage remains joint work under
+[OSAC-5813](https://redhat.atlassian.net/browse/OSAC-5813) and
+[OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
+
+The NetApp preparation cases in `internal/controller/storage_preparation_test.go`
+run in the existing Controller Envtest Suite via `make test`. Kubernetes/etcd
+and Tenant/Secret persistence are real; catalog and provisioning providers are
+doubles. They cover hub namespace and selection by tenant/backend names with two
+labels, payloads indexed by backend ID, ambiguous or invalid preparations,
+wait/resume, setup/native-job ordering, legacy-job migration, missing-class repair
+and catalog-loss deletion guards.
+`pkg/provisioning/storage_launch_test.go` additionally uses the production AAP
+HTTP client and a local response-echo fixture to check credential redaction for
+job/workflow launches. These tests do not run an AAP execution environment,
+Trident, ONTAP, or FC I/O. The installer `make csi-render-test` checks hub
+namespace creation, explicit preparation namespace wiring and the unchanged
+legacy output namespace. `test/integration/storage_preparation_test.go` checks
+the installed namespace and operator Secret-read authorization in Kind; it
+neither reads credential values nor invokes AAP. The receiving-role/deployed
+boundary remains joint
+[DEV]/[QE] work under [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
 
 ### Bare-metal worker coverage ([DEV])
 

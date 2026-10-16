@@ -17,10 +17,13 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/url"
+	"strconv"
 
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
@@ -145,6 +148,7 @@ func (s *PrivateStorageBackendsServer) Create(ctx context.Context,
 		sb.SetStatus(&privatev1.StorageBackendStatus{})
 	}
 	sb.GetStatus().SetState(privatev1.StorageBackendState_STORAGE_BACKEND_STATE_READY)
+	sb.GetStatus().ClearMessage()
 
 	sb.SetId("")
 
@@ -166,22 +170,18 @@ func (s *PrivateStorageBackendsServer) Update(ctx context.Context,
 		return
 	}
 
-	getRequest := &privatev1.StorageBackendsGetRequest{}
-	getRequest.SetId(id)
-	var getResponse *privatev1.StorageBackendsGetResponse
-	err = s.generic.Get(ctx, getRequest, &getResponse)
-	if err != nil {
-		return
-	}
-
-	existingSB := getResponse.GetObject()
-
-	err = s.validateStorageBackendUpdate(ctx, request, existingSB)
-	if err != nil {
-		return
-	}
-
-	err = s.generic.Update(ctx, request, &response)
+	err = s.generic.UpdateWithValidation(ctx, request, &response,
+		func(ctx context.Context, updated, stored *privatev1.StorageBackend) error {
+			if err := s.validateStorageBackendUpdate(ctx, updated, stored); err != nil {
+				return err
+			}
+			if updated.GetSpec().GetProvider() == "ontap" {
+				updated.SetStatus(privatev1.StorageBackendStatus_builder{
+					State: privatev1.StorageBackendState_STORAGE_BACKEND_STATE_READY,
+				}.Build())
+			}
+			return nil
+		})
 	return
 }
 
@@ -191,11 +191,7 @@ func (s *PrivateStorageBackendsServer) Delete(ctx context.Context,
 	return
 }
 
-const (
-	passwordField       = "spec.credentials.password"
-	passwordSecretField = "spec.credentials.password_secret"
-	passwordExclusive   = "password and password_secret are mutually exclusive"
-)
+const passwordExclusive = "password and password_secret are mutually exclusive"
 
 func (s *PrivateStorageBackendsServer) validateStorageBackendCreate(ctx context.Context,
 	sb *privatev1.StorageBackend) error {
@@ -209,22 +205,53 @@ func (s *PrivateStorageBackendsServer) validateStorageBackendCreate(ctx context.
 	if err := s.validatePasswordExactlyOne(sb.GetSpec().GetCredentials()); err != nil {
 		return err
 	}
-	return s.validatePasswordSecret(ctx, sb.GetSpec().GetCredentials())
+	if err := s.validatePasswordSecret(ctx, sb.GetSpec().GetCredentials()); err != nil {
+		return err
+	}
+	if sb.GetSpec().GetProvider() == "ontap" || sb.GetSpec().GetOntap() != nil {
+		if err := s.generic.validator.Validate(sb); err != nil {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument, "validation failed: %s", err)
+		}
+		// Only new registrations require shared profiles. Stored profile-less
+		// backends remain readable and updatable through the legacy workflow.
+		if sb.GetSpec().GetProvider() == "ontap" && sb.GetSpec().GetOntap() == nil {
+			return grpcstatus.Error(grpccodes.InvalidArgument, "new ONTAP backends require at least one shared profile in spec.ontap")
+		}
+		return validateOntapEndpoint(sb.GetSpec().GetEndpoint())
+	}
+	return nil
 }
 
 func (s *PrivateStorageBackendsServer) validateStorageBackendUpdate(ctx context.Context,
-	request *privatev1.StorageBackendsUpdateRequest, existingSB *privatev1.StorageBackend) error {
+	newSB, existingSB *privatev1.StorageBackend) error {
 
-	newSB := request.GetObject()
-	if newSB.GetSpec().GetProvider() != "" && newSB.GetSpec().GetProvider() != existingSB.GetSpec().GetProvider() {
+	if err := s.validatePasswordExactlyOne(newSB.GetSpec().GetCredentials()); err != nil {
+		return err
+	}
+	if newSB.GetSpec().GetProvider() != existingSB.GetSpec().GetProvider() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.provider' is immutable and cannot be changed from '%s' to '%s'",
 			existingSB.GetSpec().GetProvider(), newSB.GetSpec().GetProvider())
 	}
-	if err := s.validatePasswordMutualExclusionForUpdate(request, existingSB); err != nil {
+	ontap := existingSB.GetSpec().GetProvider() == "ontap"
+	if !proto.Equal(newSB.GetSpec().GetOntap(), existingSB.GetSpec().GetOntap()) {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.ontap' is immutable; register a replacement backend")
+	}
+	if ontap && newSB.GetSpec().GetEndpoint() != existingSB.GetSpec().GetEndpoint() {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.endpoint' is immutable for ONTAP; register a replacement backend")
+	}
+	if proto.Equal(newSB.GetSpec().GetCredentials(), existingSB.GetSpec().GetCredentials()) {
+		return nil
+	}
+	if err := s.validatePasswordSecret(ctx, newSB.GetSpec().GetCredentials()); err != nil {
 		return err
 	}
-	return s.validatePasswordSecret(ctx, newSB.GetSpec().GetCredentials())
+	if ontap {
+		if err := s.generic.validator.Validate(newSB); err != nil {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument, "validation failed: %s", err)
+		}
+	}
+	return nil
 }
 
 func credentialsPasswordSet(creds *privatev1.StorageBackendCredentials) bool {
@@ -242,40 +269,6 @@ func (s *PrivateStorageBackendsServer) validatePasswordExactlyOne(
 	}
 	hasPassword := credentialsPasswordSet(creds)
 	hasSecret := credentialsPasswordSecretSet(creds)
-	if hasPassword && hasSecret {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, passwordExclusive)
-	}
-	if !hasPassword && !hasSecret {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"exactly one of password or password_secret must be set")
-	}
-	return nil
-}
-
-func (s *PrivateStorageBackendsServer) validatePasswordMutualExclusionForUpdate(
-	request *privatev1.StorageBackendsUpdateRequest, existingSB *privatev1.StorageBackend) error {
-	creds := request.GetObject().GetSpec().GetCredentials()
-	if credentialsPasswordSet(creds) && credentialsPasswordSecretSet(creds) {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, passwordExclusive)
-	}
-
-	mask := request.GetUpdateMask()
-	if mask == nil || len(mask.GetPaths()) == 0 {
-		return s.validatePasswordExactlyOne(creds)
-	}
-
-	existingCreds := existingSB.GetSpec().GetCredentials()
-
-	// Simulate post-merge state: masked fields come from request, others from existing.
-	hasPassword := credentialsPasswordSet(creds)
-	if !updateIncludesField(mask, passwordField) {
-		hasPassword = credentialsPasswordSet(existingCreds)
-	}
-	hasSecret := credentialsPasswordSecretSet(creds)
-	if !updateIncludesField(mask, passwordSecretField) {
-		hasSecret = credentialsPasswordSecretSet(existingCreds)
-	}
-
 	if hasPassword && hasSecret {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, passwordExclusive)
 	}
@@ -307,5 +300,20 @@ func (s *PrivateStorageBackendsServer) validatePasswordSecret(ctx context.Contex
 	resolvedRef.SetId(resolved.ID)
 	resolvedRef.SetName(resolved.Name)
 	creds.SetPasswordSecret(resolvedRef)
+	return nil
+}
+
+func validateOntapEndpoint(endpoint string) error {
+	base, err := url.Parse(endpoint)
+	if err != nil || base.Scheme != "https" || base.Hostname() == "" || base.User != nil ||
+		(base.Path != "" && base.Path != "/") || base.RawQuery != "" || base.Fragment != "" || base.Opaque != "" {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "ONTAP endpoint must be a cluster management HTTPS URL without credentials, path, query or fragment")
+	}
+	if port := base.Port(); port != "" {
+		number, err := strconv.Atoi(port)
+		if err != nil || number < 1 || number > 65535 {
+			return grpcstatus.Error(grpccodes.InvalidArgument, "ONTAP endpoint has an invalid port")
+		}
+	}
 	return nil
 }

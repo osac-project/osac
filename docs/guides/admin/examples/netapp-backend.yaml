@@ -1,0 +1,20 @@
+---
+# CLI input after private API login: osac create -f netapp-backend.yaml
+# Replace connection fields, OSAC Secret ID and the customer-created TBC reference.
+# Connection fields remain required; shared onboarding does not send them to AAP.
+'@type': type.googleapis.com/osac.private.v1.StorageBackend
+metadata:
+  name: netapp-primary
+spec:
+  provider: ontap
+  endpoint: https://cluster-mgmt.example.com
+  credentials:
+    username: osac-catalog
+    passwordSecret:
+      id: catalog-value-secret-id
+  ontap:
+    profiles:
+      - name: shared-fc
+        shared:
+          tbcNamespace: trident
+          tbcName: customer-fc

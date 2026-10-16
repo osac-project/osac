@@ -47,6 +47,30 @@ message BackendAssociation {
 
   // Whether data at rest is encrypted on this backend.
   bool encryption_enabled = 4;
+
+  // Provider-specific association settings. The configuration must match the backend provider.
+  oneof provider_qos {
+    // ONTAP pool selection or per-volume IOPS ceiling.
+    OntapAssociationConfig ontap = 5;
+  }
+}
+
+// ONTAP offering selection and service limits.
+message OntapAssociationConfig {
+  option (cleanapi.message).private = true;
+
+  // Maximum IOPS per volume; zero adds no OSAC tier limit.
+  int64 max_iops = 1 [(buf.validate.field).int64 = {gte: 0, lte: 2147483647}];
+
+  // Named profile from the registered backend; required for a shared Trident backend.
+  string profile = 2 [(buf.validate.field).string = {max_len: 63, pattern: "^([a-z0-9]([a-z0-9-]*[a-z0-9])?)?$"}];
+
+  // Equality constraints on Trident virtual-pool provisioning labels, not Kubernetes metadata labels.
+  map<string, string> pool_selector = 3 [(buf.validate.field).map = {
+    max_pairs: 32
+    keys: {string: {min_len: 1, max_len: 253, pattern: "^[A-Za-z0-9][A-Za-z0-9_./-]*$"}}
+    values: {string: {min_len: 1, max_len: 253, pattern: "^[A-Za-z0-9][A-Za-z0-9_./-]*$"}}
+  }];
 }
 
 // Describes a class of storage service that can be referenced by name when provisioning

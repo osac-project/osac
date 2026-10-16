@@ -1110,6 +1110,100 @@ var _ = Describe("AAPProvider", func() {
 			}
 		})
 
+		It("passes shared backend profiles and pool selectors without management credentials", func() {
+			backendConfig := map[string]any{"profiles": []map[string]any{{
+				"name": "shared-fc", "shared": map[string]any{"tbc_namespace": "trident", "tbc_name": "customer-fc"},
+			}}}
+			tierConfig := map[string]any{"profile": "shared-fc", "pool_selector": map[string]string{"performance": "extreme"}}
+			ctx = provisioning.WithStorageBackendConnections(ctx, map[string]provisioning.BackendConnection{
+				"backend-1": {ProviderConfig: backendConfig},
+				"backend-2": {Endpoint: "https://vast.example.com", Username: "vast-user", Password: "fixture-password"},
+				"backend-3": {Endpoint: "https://provider.example.com", Username: "provider-user", Password: "fixture-password", ProviderConfig: map[string]any{"setting": "value"}},
+			})
+			ctx = provisioning.WithStorageTierDefinitions(ctx, []provisioning.TierDefinition{{
+				Name: "fast", Provider: "ontap", Protocol: "block", BackendID: "backend-1", ProviderConfig: tierConfig,
+			}})
+			aapClient.launchJobTemplateFunc = func(_ context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				vars := req.ExtraVars["osac_job_vars"].(map[string]any)
+				connections := vars["storage_backend_connections"].(map[string]map[string]any)
+				Expect(connections["backend-1"]).To(Equal(map[string]any{"provider_config": backendConfig}))
+				Expect(connections["backend-2"]).To(Equal(map[string]any{
+					"endpoint": "https://vast.example.com", "username": "vast-user", "password": "fixture-password",
+				}))
+				Expect(connections["backend-3"]).To(Equal(map[string]any{
+					"endpoint": "https://provider.example.com", "username": "provider-user", "password": "fixture-password",
+					"provider_config": map[string]any{"setting": "value"},
+				}))
+				tiers := vars["storage_tier_definitions"].([]map[string]any)
+				Expect(tiers[0]).To(HaveKeyWithValue("provider_config", tierConfig))
+				return &aap.LaunchJobTemplateResponse{JobID: 124}, nil
+			}
+			_, err := provider.TriggerProvision(ctx, &v1alpha1.Tenant{ObjectMeta: metav1.ObjectMeta{Name: "tenant-a"}})
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("passes one tenant preparation per backend alongside distinct discovery credentials", func() {
+			ctx = provisioning.WithStorageBackendConnections(ctx, map[string]provisioning.BackendConnection{
+				"backend-1": {
+					Name: "netapp-primary", Endpoint: "https://cluster.example.com", Username: "discovery", Password: "fixture-discovery",
+					TenantPreparation: &provisioning.TenantPreparation{
+						TenantID: "tenant-a", Namespace: "osac-storage", Name: "admin-chosen-name", UID: "source-uid", ResourceVersion: "42",
+						ProviderConfig: map[string]any{"username": "tenant-user", "password": "fixture-runtime", "svm": "customer_acme"},
+					},
+				},
+				"backend-2": {Endpoint: "https://vast.example.com", Username: "legacy", Password: "fixture-legacy"},
+			})
+			aapClient.launchJobTemplateFunc = func(_ context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				vars := req.ExtraVars["osac_job_vars"].(map[string]any)
+				connections := vars["storage_backend_connections"].(map[string]map[string]any)
+				Expect(connections).To(HaveLen(2))
+				Expect(connections).NotTo(HaveKey("netapp-primary"))
+				Expect(connections["backend-1"]).NotTo(HaveKey("name"))
+				Expect(connections["backend-1"]["password"]).To(Equal("fixture-discovery"))
+				Expect(connections["backend-1"]["tenant_preparation"]).To(Equal(map[string]any{
+					"tenant_id":       "tenant-a",
+					"source":          map[string]any{"namespace": "osac-storage", "name": "admin-chosen-name", "uid": "source-uid", "resource_version": "42"},
+					"provider_config": map[string]any{"username": "tenant-user", "password": "fixture-runtime", "svm": "customer_acme"},
+				}))
+				Expect(connections["backend-2"]).NotTo(HaveKey("tenant_preparation"))
+				return &aap.LaunchJobTemplateResponse{JobID: 123}, nil
+			}
+			_, err := provider.TriggerProvision(ctx, &v1alpha1.Tenant{ObjectMeta: metav1.ObjectMeta{Name: "tenant-a"}})
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		DescribeTable("should preserve ONTAP tier requirements in the AAP request", func(encrypted bool, maxIOPS *int64) {
+			var providerConfig map[string]any
+			if maxIOPS != nil {
+				providerConfig = map[string]any{"max_iops": *maxIOPS}
+			}
+			ctx = provisioning.WithStorageTierDefinitions(ctx, []provisioning.TierDefinition{{
+				Name: "fast", Protocol: "block", Provider: "ontap", BackendID: "backend-1",
+				EncryptionEnabled: &encrypted,
+				QosLimits:         provisioning.TierQosLimits{ProviderConfig: providerConfig},
+			}})
+			aapClient.launchJobTemplateFunc = func(_ context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				vars := req.ExtraVars["osac_job_vars"].(map[string]any)
+				tiers := vars["storage_tier_definitions"].([]map[string]any)
+				Expect(tiers).To(HaveLen(1))
+				Expect(tiers[0]).To(HaveKeyWithValue("encryption_enabled", encrypted))
+				qos := tiers[0]["qos_limits"].(map[string]any)
+				if maxIOPS == nil {
+					Expect(qos).NotTo(HaveKey("provider_config"))
+				} else {
+					Expect(qos).To(HaveKeyWithValue("provider_config", map[string]any{"max_iops": *maxIOPS}))
+				}
+				return &aap.LaunchJobTemplateResponse{JobID: 111}, nil
+			}
+			_, err := provider.TriggerProvision(ctx, &v1alpha1.Tenant{ObjectMeta: metav1.ObjectMeta{Name: "tenant", Namespace: "default"}})
+			Expect(err).NotTo(HaveOccurred())
+		},
+			Entry("unencrypted with a numeric cap", false, new(int64(5000))),
+			Entry("encrypted with the largest cap", true, new(int64(2147483647))),
+			Entry("explicit zero cap", false, new(int64(0))),
+			Entry("no provider QoS extension", true, (*int64)(nil)),
+		)
+
 		It("should shape storage_tier_definitions per the storage_provider role's argument_specs", func() {
 			ctx = provisioning.WithStorageTierDefinitions(ctx, []provisioning.TierDefinition{
 				{

@@ -93,7 +93,7 @@ func validateResolvedSecretType(
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to resolve %s reference", field)
 	}
 
-	return validateSecretType(secretResponse.GetObject(), refKey(ref), field, expected)
+	return validateResolvedSecretLifecycleAndType(secretResponse.GetObject(), refKey(ref), field, expected)
 }
 
 // validateResolvedSecretLifecycleAndType checks a Secret that has already been loaded.

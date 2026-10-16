@@ -638,13 +638,17 @@ func (s *GenericServer[O]) UpdateWithCandidatePreparation(
 	return s.updateWithCandidatePreparation(ctx, request, response, prepareCandidate, false)
 }
 
-func (s *GenericServer[O]) updateWithCandidatePreparation(
+// prepareUpdateCandidate applies the same detached mask, ownership and validation
+// rules for locked persistence and an unlocked preview. A preview is not permission
+// to save: callers doing external validation must recheck it under the update lock.
+func (s *GenericServer[O]) prepareUpdateCandidate(
 	ctx context.Context,
 	request any,
-	response any,
 	prepareCandidate PrepareCandidateFunc[O],
 	prepareBeforeValidation bool,
-) error {
+	lock bool,
+) (O, O, error) {
+	var zero O
 	// Extract the object from the request message:
 	type requestIface interface {
 		GetObject() O
@@ -654,22 +658,22 @@ func (s *GenericServer[O]) updateWithCandidatePreparation(
 	requestMsg := request.(requestIface)
 	requestObject := requestMsg.GetObject()
 	if s.isNil(requestObject) {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
+		return zero, zero, grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
 	}
 	requestId := requestObject.GetId()
 	if requestId == "" {
-		return grpcstatus.Errorf(grpccodes.Internal, "object identifier is mandatory")
+		return zero, zero, grpcstatus.Errorf(grpccodes.Internal, "object identifier is mandatory")
 	}
 
 	// Fetch the current representation of the object:
 	getResponse, err := s.dao.Get().
 		SetId(requestId).
-		SetLock(true).
+		SetLock(lock).
 		Do(ctx)
 	if err != nil {
 		var notFoundErr *dao.ErrNotFound
 		if errors.As(err, &notFoundErr) {
-			return grpcstatus.Errorf(
+			return zero, zero, grpcstatus.Errorf(
 				grpccodes.NotFound,
 				"object with identifier '%s' not found",
 				requestId,
@@ -677,11 +681,11 @@ func (s *GenericServer[O]) updateWithCandidatePreparation(
 		}
 		var deniedErr *dao.ErrDenied
 		if errors.As(err, &deniedErr) {
-			return grpcstatus.Errorf(grpccodes.PermissionDenied, "%s", deniedErr.Reason)
+			return zero, zero, grpcstatus.Errorf(grpccodes.PermissionDenied, "%s", deniedErr.Reason)
 		}
 		var deadlockErr *dao.ErrDeadlock
 		if errors.As(err, &deadlockErr) {
-			return grpcstatus.Errorf(grpccodes.Aborted, "%s", deadlockErr.Error())
+			return zero, zero, grpcstatus.Errorf(grpccodes.Aborted, "%s", deadlockErr.Error())
 		}
 		s.logger.ErrorContext(
 			ctx,
@@ -689,7 +693,7 @@ func (s *GenericServer[O]) updateWithCandidatePreparation(
 			slog.String("id", requestId),
 			slog.Any("error", err),
 		)
-		return grpcstatus.Errorf(
+		return zero, zero, grpcstatus.Errorf(
 			grpccodes.Internal,
 			"failed to get object with identifier '%s'",
 			requestId,
@@ -697,7 +701,7 @@ func (s *GenericServer[O]) updateWithCandidatePreparation(
 	}
 	currentObject := getResponse.GetObject()
 	if s.isNil(currentObject) {
-		return grpcstatus.Errorf(
+		return zero, zero, grpcstatus.Errorf(
 			grpccodes.InvalidArgument,
 			"object with identifier '%s' doesn't exist",
 			requestId,
@@ -711,7 +715,7 @@ func (s *GenericServer[O]) updateWithCandidatePreparation(
 		currentMetadata := s.getMetadata(currentObject)
 		if requestMetadata != nil && currentMetadata != nil {
 			if requestMetadata.GetVersion() != currentMetadata.GetVersion() {
-				return grpcstatus.Errorf(
+				return zero, zero, grpcstatus.Errorf(
 					grpccodes.Aborted,
 					"object with identifier '%s' has been modified: requested version is %d "+
 						"but current version is %d",
@@ -729,7 +733,7 @@ func (s *GenericServer[O]) updateWithCandidatePreparation(
 		tmpObject = proto.Clone(currentObject).(O)
 		fieldPaths, err := s.compilePaths(requestMask.GetPaths())
 		if err != nil {
-			return err
+			return zero, zero, err
 		}
 		for _, fieldPath := range fieldPaths {
 			value, ok := fieldPath.Get(requestObject)
@@ -751,7 +755,7 @@ func (s *GenericServer[O]) updateWithCandidatePreparation(
 		err = s.validator.Validate(tmpObject)
 		if err != nil {
 			s.logger.DebugContext(ctx, "Object validation failed after mask merge", "error", err.Error())
-			return grpcstatus.Errorf(grpccodes.InvalidArgument, "validation failed: %s", err.Error())
+			return zero, zero, grpcstatus.Errorf(grpccodes.InvalidArgument, "validation failed: %s", err.Error())
 		}
 
 		// Validate the resulting metadata:
@@ -759,7 +763,7 @@ func (s *GenericServer[O]) updateWithCandidatePreparation(
 		if tmpMetadata != nil {
 			err = s.validateMetadata(ctx, tmpMetadata)
 			if err != nil {
-				return err
+				return zero, zero, err
 			}
 		}
 	}
@@ -767,18 +771,18 @@ func (s *GenericServer[O]) updateWithCandidatePreparation(
 	// Calculate the tenant for the updated object:
 	assignedTenant, err := s.determineAssignedTenant(ctx, tmpObject, currentObject)
 	if err != nil {
-		return err
+		return zero, zero, err
 	}
 	err = s.setTenant(ctx, tmpObject, assignedTenant)
 	if err != nil {
-		return err
+		return zero, zero, err
 	}
 	// Only check the tenant restriction when the tenant is changing — existing objects
 	// in reserved tenants can be updated in place but cannot be moved into them.
 	currentTenant := s.getMetadata(currentObject).GetTenant()
 	if assignedTenant != currentTenant {
 		if err = s.checkAllowedTenant(assignedTenant); err != nil {
-			return err
+			return zero, zero, err
 		}
 	}
 
@@ -786,12 +790,30 @@ func (s *GenericServer[O]) updateWithCandidatePreparation(
 		preparedID := tmpObject.GetId()
 		preparedMetadata := proto.Clone(s.getMetadata(tmpObject)).(metadataIface)
 		if err = prepareCandidate(ctx, proto.Clone(currentObject).(O), tmpObject); err != nil {
-			return err
+			return zero, zero, err
 		}
 		if err = s.validatePreparedCandidate(ctx, tmpObject, preparedID, preparedMetadata); err != nil {
-			return err
+			return zero, zero, err
 		}
 	}
+
+	return currentObject, tmpObject, nil
+}
+
+func (s *GenericServer[O]) updateWithCandidatePreparation(
+	ctx context.Context,
+	request any,
+	response any,
+	prepareCandidate PrepareCandidateFunc[O],
+	prepareBeforeValidation bool,
+) error {
+	currentObject, tmpObject, err := s.prepareUpdateCandidate(
+		ctx, request, prepareCandidate, prepareBeforeValidation, true,
+	)
+	if err != nil {
+		return err
+	}
+	requestId := currentObject.GetId()
 
 	// Save the object only if there is any actual difference:
 	var responseObject O

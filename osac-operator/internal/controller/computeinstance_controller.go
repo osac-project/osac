@@ -169,6 +169,12 @@ func (r *ComputeInstanceReconciler) Reconcile(ctx context.Context, req mcreconci
 	if !equality.Semantic.DeepEqual(instance.Status, *oldstatus) {
 		log.Info("status requires update")
 		if err := r.updateStatusWithRetry(ctx, req.NamespacedName, instance.Status); err != nil {
+			// After all finalizers are removed Kubernetes deletes the
+			// object immediately.  A NotFound from the status update
+			// means the object is already gone — nothing left to do.
+			if apierrors.IsNotFound(err) {
+				return ctrl.Result{}, nil
+			}
 			return res, err
 		}
 	}

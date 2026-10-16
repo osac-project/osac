@@ -69,6 +69,48 @@ func createStoragePreparation(ctx context.Context, tenant *v1alpha1.Tenant, back
 	return s
 }
 
+var _ = Describe("Storage class repair backoff", func() {
+	now := time.Date(2026, time.October, 16, 10, 0, 0, 0, time.UTC)
+	job := func(at time.Time) v1alpha1.JobStatus {
+		return v1alpha1.JobStatus{JobID: "success", Type: v1alpha1.JobTypeProvision,
+			State: v1alpha1.JobStateSucceeded, ConfigVersion: "current", Timestamp: metav1.NewTime(at)}
+	}
+	DescribeTable("limits successive launches using persisted history", func(gap, age, want time.Duration) {
+		latest := job(now.Add(-age))
+		jobs := []v1alpha1.JobStatus{latest}
+		if gap != 0 {
+			jobs = append([]v1alpha1.JobStatus{job(latest.Timestamp.Add(-gap))}, jobs...)
+		}
+		Expect(storageClassRepairDelay(jobs, "current", now)).To(Equal(want))
+	},
+		Entry("initial discovery window", time.Duration(0), time.Duration(0), 2*time.Minute),
+		Entry("remaining delay", time.Duration(0), time.Minute, time.Minute),
+		Entry("expired delay", time.Duration(0), 3*time.Minute, time.Duration(0)),
+		Entry("second success doubles launch interval", 2*time.Minute, time.Duration(0), 4*time.Minute),
+		Entry("later successes keep increasing delay", 4*time.Minute, time.Duration(0), 8*time.Minute),
+		Entry("maximum delay", 20*time.Minute, time.Duration(0), 30*time.Minute),
+		Entry("reversed launch times use base delay", -time.Minute, time.Duration(0), 2*time.Minute),
+		Entry("clock skew does not exceed base delay", time.Duration(0), -time.Minute, 2*time.Minute),
+	)
+	It("ignores unrelated jobs and starts a new configuration without a cooldown", func() {
+		jobs := make([]v1alpha1.JobStatus, 1, 6)
+		jobs[0] = job(now.Add(-time.Minute))
+		for _, change := range []func(*v1alpha1.JobStatus){
+			func(j *v1alpha1.JobStatus) { j.ConfigVersion = "other" },
+			func(j *v1alpha1.JobStatus) { j.Target = "other" },
+			func(j *v1alpha1.JobStatus) { j.Type = v1alpha1.JobTypeDeprovision },
+			func(j *v1alpha1.JobStatus) { j.State = v1alpha1.JobStateFailed },
+			func(j *v1alpha1.JobStatus) { j.State = v1alpha1.JobStateRunning },
+		} {
+			unrelated := job(now)
+			change(&unrelated)
+			jobs = append(jobs, unrelated)
+		}
+		Expect(storageClassRepairDelay(jobs, "current", now)).To(Equal(time.Minute))
+		Expect(storageClassRepairDelay(jobs, "new-config", now)).To(BeZero())
+	})
+})
+
 var _ = Describe("NetApp storage preparation", func() {
 	ctx := context.Background()
 	var r *StorageReconciler
@@ -232,15 +274,16 @@ var _ = Describe("NetApp storage preparation", func() {
 		Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady).Status).To(Equal(metav1.ConditionFalse))
 	})
 
-	It("repairs missing classes after a successful native job", func() {
+	It("waits before repairing missing classes after a successful native job", func() {
 		createStoragePreparation(ctx, tenant, "ontap-primary", tenant.Name)
 		for range 4 {
 			reconcile()
 		}
 		Expect(provisions).To(Equal(2))
 		reconcile()
-		Expect(provisions).To(Equal(3))
+		Expect(provisions).To(Equal(2), "class discovery must not immediately launch another successful job")
 		Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady).Status).To(Equal(metav1.ConditionFalse))
+		Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady).Reason).To(Equal("StorageClassRepairPending"))
 	})
 
 	It("revalidates a changed SVM while deferring password rotation", func() {

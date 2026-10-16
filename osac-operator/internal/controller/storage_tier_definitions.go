@@ -55,6 +55,8 @@ const storageProfileNameKey = "name"
 // A tier with no backend association, or whose backend_id resolves to NotFound, is
 // skipped with a logged warning rather than failing the whole resolution — a bad
 // backend on one tier must not block resolution of tiers on other, healthy backends.
+// Invalid shared profiles or selectors return an aggregate readiness error along
+// with usable results; callers that require complete configuration must still wait.
 func resolveTierDefinitions(
 	ctx context.Context,
 	tiersClient StorageTiersLister,
@@ -84,6 +86,7 @@ func resolveTierDefinitions(
 
 	var definitions []provisioning.TierDefinition
 	var readinessErrors []error
+tierLoop:
 	for _, tier := range resp.GetItems() {
 		tierName := tier.GetMetadata().GetName()
 		backends := tier.GetSpec().GetBackends()
@@ -119,7 +122,9 @@ func resolveTierDefinitions(
 				for _, profile := range spec.GetOntap().GetProfiles() {
 					shared := profile.GetShared()
 					if shared == nil {
-						return nil, nil, fmt.Errorf("backend %q profile %q has no supported mode", backendID, profile.GetName())
+						readinessErrors = append(readinessErrors, fmt.Errorf("backend %q profile %q has no supported mode", backendID, profile.GetName()))
+						backendCache[backendID] = backendResolution{found: false}
+						continue tierLoop
 					}
 					profiles = append(profiles, map[string]any{
 						storageProfileNameKey: profile.GetName(), "shared": map[string]any{
@@ -186,7 +191,8 @@ func resolveTierDefinitions(
 					matched = matched || profile.GetName() == config.GetProfile()
 				}
 				if !matched || len(config.GetPoolSelector()) == 0 {
-					return nil, nil, fmt.Errorf("tier %q must select a registered ONTAP profile and virtual pool", tierName)
+					readinessErrors = append(readinessErrors, fmt.Errorf("tier %q must select a registered ONTAP profile and virtual pool", tierName))
+					continue
 				}
 				definition.ProviderConfig = map[string]any{"profile": config.GetProfile(), "pool_selector": config.GetPoolSelector()}
 			} else if config != nil {

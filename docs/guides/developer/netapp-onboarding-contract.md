@@ -49,6 +49,8 @@ message SharedTridentBackend {
 
 The `ontap` branch requires provider `ontap`. It contains 1–32 uniquely named
 profiles, each with a required shared mode and valid Kubernetes namespace/name.
+New ONTAP registrations must provide this branch; profile-less records already
+stored remain readable and updatable through the legacy path.
 A future dedicated mode can add another typed branch; it is not accepted now.
 
 Create/Update validate local configuration and password-reference metadata,
@@ -167,6 +169,12 @@ reference or a Ready Tenant phase cannot satisfy storage readiness. Configuratio
 versions include profile/TBC routing and pool selectors. Missing profiles or
 catalog failures set `ConfigurationUnavailable` without dispatch.
 
+If a class job succeeds but expected classes remain missing, the operator reports
+`StorageClassRepairPending` and delays repair using persisted job launch times:
+at least two minutes between launches, doubling repeated intervals up to thirty
+minutes. It continues checking for late classes during that delay. Changed
+configuration is applied immediately; retries do not permanently exhaust.
+
 Fulfillment projects the two storage conditions independently, preserving
 reasons/messages and generation checks. The operator does not directly watch
 TBC health; AAP must report success only after observing the appropriate native
@@ -179,8 +187,8 @@ classes and the shared TBC must survive.
 
 ## Compatibility and checks
 
-ONTAP without backend profiles retains the legacy prepared-SVM path, including
-its hub preparation Secret and credential payload. VAST and other providers keep
+Existing ONTAP records without backend profiles retain the legacy prepared-SVM
+path, including its hub preparation Secret and credential payload. VAST and other providers keep
 their behavior. Do not route a new shared payload to an old prepared-SVM receiver.
 
 Automated coverage includes real API/database validation and persistence,

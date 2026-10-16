@@ -54,6 +54,56 @@ func sharedTridentTier(name, performance string) *privatev1.StorageTier {
 	return obj
 }
 
+var _ = Describe("Shared Trident tier resolution", func() {
+	DescribeTable("retains healthy tiers when another shared configuration is invalid", func(problem string, invalidFirst bool) {
+		healthy := sharedTridentTier("healthy", "extreme")
+		invalid := sharedTridentTier("invalid", "value")
+		invalidBackend := sharedTridentBackend()
+		switch problem {
+		case "profile":
+			invalid.GetSpec().GetBackends()[0].GetOntap().SetProfile("missing")
+		case "selector":
+			invalid.GetSpec().GetBackends()[0].GetOntap().SetPoolSelector(nil)
+		case "mode":
+			invalid.GetSpec().GetBackends()[0].SetBackendId("backend-2")
+			invalidBackend.GetObject().GetSpec().GetOntap().GetProfiles()[0].ClearShared()
+		}
+		items := []*privatev1.StorageTier{healthy, invalid}
+		if invalidFirst {
+			items[0], items[1] = items[1], items[0]
+		}
+		tiers := &mockStorageTiersLister{listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+			return privatev1.StorageTiersListResponse_builder{Items: items}.Build(), nil
+		}}
+		backends := &mockStorageBackendsClient{getFunc: func(_ context.Context, req *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+			if req.GetId() == "backend-2" {
+				return invalidBackend, nil
+			}
+			return sharedTridentBackend(), nil
+		}}
+		resolved, definitions, err := resolveAndInjectTierContext(context.Background(), tiers, backends, nil, "tenant", "tenant-a")
+		Expect(err).To(HaveOccurred(), "tenant onboarding must still wait for a complete configuration")
+		Expect(definitions).To(HaveLen(1))
+		Expect(definitions[0].Name).To(Equal("healthy"))
+		Expect(provisioning.StorageTierDefinitionsFromContext(resolved)).To(Equal(definitions))
+		connections := provisioning.StorageBackendConnectionsFromContext(resolved)
+		Expect(connections).To(HaveKey("backend-1"))
+		Expect(connections).NotTo(HaveKey("backend-2"))
+		expectedLookups := 1
+		if problem == "mode" {
+			expectedLookups = 2
+		}
+		Expect(backends.getCallCount).To(Equal(expectedLookups))
+	},
+		Entry("unknown profile after healthy tier", "profile", false),
+		Entry("unknown profile before healthy tier", "profile", true),
+		Entry("empty selector after healthy tier", "selector", false),
+		Entry("empty selector before healthy tier", "selector", true),
+		Entry("unsupported mode after healthy tier", "mode", false),
+		Entry("unsupported mode before healthy tier", "mode", true),
+	)
+})
+
 var _ = Describe("Shared Trident onboarding", func() {
 	ctx := context.Background()
 	var r *StorageReconciler
@@ -133,6 +183,50 @@ var _ = Describe("Shared Trident onboarding", func() {
 		reconcile()
 		Expect(calls).To(BeZero())
 		Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady).Reason).To(Equal("ConfigurationUnavailable"))
+	})
+	It("backs off repeated successful repairs and discovers late classes after a restart", func() {
+		for range 4 {
+			reconcile()
+		}
+		Expect(calls).To(Equal(2))
+		reconcile()
+		Expect(calls).To(Equal(2))
+		Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady).Reason).To(Equal("StorageClassRepairPending"))
+
+		// Expire the persisted launch cooldown without sleeping.
+		tenant.Status.ClusterStorageJobs[0].Timestamp = metav1.NewTime(time.Now().Add(-provisioning.BackoffBaseDelay - time.Second))
+		Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+		reconcile()
+		Expect(calls).To(Equal(3))
+		reconcile() // Observe the repair's successful completion.
+		reconcile()
+		Expect(calls).To(Equal(3), "a successful repair without classes must also back off")
+
+		restarted := NewStorageReconciler(testMcManager, "default", mcmanager.LocalCluster,
+			r.BackendProvider, r.ClusterStorageProvider, r.StatusPollInterval, r.MaxJobHistory)
+		restarted.TiersClient, restarted.BackendsClient, restarted.SecretsClient = r.TiersClient, r.BackendsClient, r.SecretsClient
+		restarted.APIReader = r.APIReader
+		r = restarted
+		reconcile()
+		Expect(calls).To(Equal(3), "restart must retain the cooldown from persisted job history")
+
+		createLabeledStorageClass(ctx, tenant.Name+"-fast", tenant.Name, "fast")
+		createLabeledStorageClass(ctx, tenant.Name+"-standard", tenant.Name, "standard")
+		Eventually(func(g Gomega) {
+			reconcile()
+			g.Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady).Status).To(Equal(metav1.ConditionTrue))
+		}, 5*time.Second, 10*time.Millisecond).Should(Succeed())
+		Expect(calls).To(Equal(3), "late class discovery must recover without waiting for another job")
+	})
+	It("starts a changed configuration immediately during a repair cooldown", func() {
+		for range 5 {
+			reconcile()
+		}
+		Expect(calls).To(Equal(2))
+		catalog[0].GetSpec().GetBackends()[0].GetOntap().SetPoolSelector(map[string]string{"performance": "highwrite"})
+		reconcile()
+		Expect(calls).To(Equal(3))
+		Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady).Reason).To(Equal("BackendSetupPending"))
 	})
 	It("retains the finalizer until class cleanup then backend cleanup complete", func() {
 		reconcile()

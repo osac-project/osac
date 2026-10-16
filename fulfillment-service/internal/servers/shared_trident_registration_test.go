@@ -82,6 +82,35 @@ var _ = Describe("Shared Trident registration", func() {
 		_, err = create()
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 	})
+	It("rejects new profile-less ONTAP backends without persisting them", func() {
+		backend.GetSpec().ClearOntap()
+		_, err := create()
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		Expect(err.Error()).To(ContainSubstring("shared profile"))
+		listed, err := backends.List(ctx, &privatev1.StorageBackendsListRequest{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(listed.GetItems()).To(BeEmpty())
+	})
+	It("continues to read and update stored profile-less ONTAP backends", func() {
+		backend.GetSpec().ClearOntap()
+		// Seed an existing record without going through the new Create policy.
+		var created *privatev1.StorageBackendsCreateResponse
+		Expect(backends.generic.Create(ctx, privatev1.StorageBackendsCreateRequest_builder{Object: backend}.Build(), &created)).To(Succeed())
+		id := created.GetObject().GetId()
+		got, err := backends.Get(ctx, privatev1.StorageBackendsGetRequest_builder{Id: id}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got.GetObject().GetSpec().GetOntap()).To(BeNil())
+		updated, err := backends.Update(ctx, privatev1.StorageBackendsUpdateRequest_builder{
+			Object: privatev1.StorageBackend_builder{Id: id, Spec: privatev1.StorageBackendSpec_builder{
+				Description: "Existing backend", Credentials: privatev1.StorageBackendCredentials_builder{Password: testNewPassword}.Build(),
+			}.Build()}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.description", "spec.credentials.password"}},
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(updated.GetObject().GetSpec().GetOntap()).To(BeNil())
+		Expect(updated.GetObject().GetSpec().GetDescription()).To(Equal("Existing backend"))
+		Expect(updated.GetObject().GetSpec().GetCredentials().GetPassword()).To(Equal(testNewPassword))
+	})
 	It("rejects an ONTAP configuration on another provider", func() {
 		backend.GetSpec().SetProvider("vast")
 		_, err := create()

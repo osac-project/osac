@@ -62,6 +62,11 @@ var _ = Describe("ONTAP backend registration", func() {
 		return privatev1.StorageBackend_builder{
 			Metadata: privatev1.Metadata_builder{Name: "netapp"}.Build(),
 			Spec: privatev1.StorageBackendSpec_builder{Provider: "ontap", Endpoint: endpoint.URL,
+				Ontap: privatev1.OntapBackendConfig_builder{Profiles: []*privatev1.OntapBackendProfile{
+					privatev1.OntapBackendProfile_builder{Name: "shared-fc", Shared: privatev1.SharedTridentBackend_builder{
+						TbcNamespace: "trident", TbcName: "customer-fc",
+					}.Build()}.Build(),
+				}}.Build(),
 				Credentials: privatev1.StorageBackendCredentials_builder{Username: "discovery", Password: testPassword}.Build(),
 			}.Build(),
 		}.Build()

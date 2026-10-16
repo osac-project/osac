@@ -179,13 +179,16 @@ var _ = Describe("Tenant compute infrastructure readiness", func() {
 				Expect(c.GetReason()).To(Equal("StorageStatusUnknown"))
 			}
 		})
-		It("does not publish stale storage readiness", func() {
+		DescribeTable("does not publish stale storage readiness", func(kind osacv1alpha1.TenantConditionType, projected privatev1.TenantConditionType) {
 			cr := storageObject(metav1.ConditionTrue, metav1.ConditionTrue)
-			cr.Status.Conditions[0].ObservedGeneration = 1
+			cr.GetStatusCondition(kind).ObservedGeneration = cr.Generation - 1
 			observe(clientWith(cr))
 			Expect(reconciler.Run(ctx, tenant)).To(Succeed())
-			Expect(storageCondition(tenants.updates[0].GetObject(), privatev1.TenantConditionType_TENANT_CONDITION_TYPE_STORAGE_BACKEND_READY).GetStatus()).To(Equal(unknown))
-		})
+			Expect(storageCondition(tenants.updates[0].GetObject(), projected).GetStatus()).To(Equal(unknown))
+		},
+			Entry("backend readiness", osacv1alpha1.TenantConditionStorageBackendReady, privatev1.TenantConditionType_TENANT_CONDITION_TYPE_STORAGE_BACKEND_READY),
+			Entry("class readiness", osacv1alpha1.TenantConditionClusterStorageReady, privatev1.TenantConditionType_TENANT_CONDITION_TYPE_CLUSTER_STORAGE_READY),
+		)
 		DescribeTable("a ready hub cannot hide another hub's storage status", func(other metav1.ConditionStatus, want privatev1.ConditionStatus) {
 			observe(clientWith(storageObject(metav1.ConditionTrue, metav1.ConditionTrue)), clientWith(storageObject(other, other)))
 			Expect(reconciler.Run(ctx, tenant)).To(Succeed())

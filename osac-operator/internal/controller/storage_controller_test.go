@@ -287,6 +287,103 @@ var _ = Describe("Storage Controller", func() {
 		}
 	})
 
+	Context("Storage condition generations", func() {
+		DescribeTable("records the generation evaluated by generic storage reconciliation", func(mode string) {
+			name := "storage-generation-" + mode
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			r := NewStorageReconciler(testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, nil, pollInterval, provisioning.DefaultMaxJobHistory)
+			r.Client = k8sClient
+			switch mode {
+			case "backend-pending":
+				r.BackendsClient = registeredBackendsClient(1)
+				r.BackendProvider = &mockProvisioningProvider{}
+			case "backend-no-aap":
+				r.BackendsClient = registeredBackendsClient(1)
+			case "no-backend":
+				r.BackendsClient = registeredBackendsClient(0)
+			case "no-service":
+			default:
+				if mode == "vast-ready" {
+					Expect(k8sClient.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+						Name: name, Namespace: secretsNamespace,
+						Labels: map[string]string{osacTenantKey: name, osacStorageProviderLabel: "vast"},
+					}})).To(Succeed())
+				} else {
+					createHubSecret(ctx, name, secretsNamespace)
+				}
+				if mode != "manual-missing" && mode != "aap-missing" {
+					createLabeledStorageClass(ctx, name+"-fast", name, "fast")
+				}
+				if mode == "manual-duplicate" || mode == "aap-duplicate" {
+					createLabeledStorageClass(ctx, name+"-duplicate", name, "fast")
+				}
+				if mode == "aap-ready" || mode == "aap-duplicate" || mode == "aap-missing-tier" || mode == "aap-missing" || mode == "vast-ready" {
+					r.ClusterStorageProvider = &mockProvisioningProvider{}
+				}
+				if mode == "aap-missing-tier" {
+					r.TiersClient = &mockStorageTiersLister{listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+						return privatev1.StorageTiersListResponse_builder{Items: []*privatev1.StorageTier{
+							newTestStorageTier("fast", "backend-1"), newTestStorageTier("standard", "backend-1"),
+						}}.Build(), nil
+					}}
+					r.BackendsClient = &mockStorageBackendsClient{getFunc: func(context.Context, *privatev1.StorageBackendsGetRequest, ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+						return newTestStorageBackendGetResponse("lvms"), nil
+					}}
+				}
+			}
+			key := types.NamespacedName{Namespace: testNamespace, Name: name}
+			Eventually(func(g Gomega) {
+				_, err := r.Reconcile(ctx, storageReconcileRequest(key))
+				g.Expect(err).NotTo(HaveOccurred())
+				tenant := &v1alpha1.Tenant{}
+				g.Expect(k8sClient.Get(ctx, key, tenant)).To(Succeed())
+				backend := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
+				g.Expect(backend).NotTo(BeNil())
+				g.Expect(backend.ObservedGeneration).To(Equal(tenant.Generation))
+				if mode != "backend-pending" && mode != "backend-no-aap" {
+					classes := tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)
+					g.Expect(classes).NotTo(BeNil())
+					g.Expect(classes.ObservedGeneration).To(Equal(tenant.Generation))
+					if mode == "manual-ready" || mode == "aap-ready" || mode == "vast-ready" {
+						g.Expect(classes.Status).To(Equal(metav1.ConditionTrue))
+						g.Expect(backend.Status).To(Equal(metav1.ConditionTrue))
+					} else {
+						g.Expect(classes.Status).To(Equal(metav1.ConditionFalse))
+					}
+				}
+			}, 5*time.Second, 10*time.Millisecond).Should(Succeed())
+		},
+			Entry("backend setup pending", "backend-pending"),
+			Entry("registered backend without AAP", "backend-no-aap"),
+			Entry("no registered backend", "no-backend"),
+			Entry("no Fulfillment connection", "no-service"),
+			Entry("manual classes found", "manual-ready"),
+			Entry("manual classes missing", "manual-missing"),
+			Entry("manual classes ambiguous", "manual-duplicate"),
+			Entry("AAP classes found", "aap-ready"),
+			Entry("VAST classes found", "vast-ready"),
+			Entry("AAP classes missing", "aap-missing"),
+			Entry("AAP classes ambiguous", "aap-duplicate"),
+			Entry("AAP tier missing", "aap-missing-tier"),
+		)
+
+		It("does not turn an old observation into a current one while saving status", func() {
+			name := "storage-generation-stale"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			tenant := &v1alpha1.Tenant{}
+			key := types.NamespacedName{Namespace: testNamespace, Name: name}
+			Expect(k8sClient.Get(ctx, key, tenant)).To(Succeed())
+			tenant.SetStatusCondition(v1alpha1.TenantConditionStorageBackendReady, metav1.ConditionTrue, "Found", "Old observation")
+			tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady).ObservedGeneration = tenant.Generation - 1
+			r := NewStorageReconciler(testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, nil, pollInterval, provisioning.DefaultMaxJobHistory)
+			Expect(r.patchTenantStorageStatus(ctx, key, tenant.Status)).To(Succeed())
+			Expect(k8sClient.Get(ctx, key, tenant)).To(Succeed())
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady).ObservedGeneration).To(Equal(tenant.Generation - 1))
+		})
+	})
+
 	Context("Stage 1: Backend provisioning", func() {
 		It("should skip reconciliation when Tenant is not Ready", func() {
 			name := "storage-test-not-ready"

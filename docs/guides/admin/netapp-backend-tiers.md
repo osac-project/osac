@@ -147,7 +147,8 @@ An accepted backend Update clears a historical probe ERROR/message.
 
 ## Compatibility and verification limits
 
-Legacy ONTAP backends without profiles keep the earlier prepared-SVM path;
+New ONTAP backends require shared profiles. Existing backends without profiles
+keep the earlier prepared-SVM path and remain readable and updatable;
 existing providers retain their payloads. New shared-profile requests require
 matching API/operator/AAP versions; do not send them to the old prepared-SVM role.
 

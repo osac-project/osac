@@ -22,6 +22,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -61,10 +62,16 @@ func storagePreparationNamespace() string {
 	return "osac-storage"
 }
 
+// Stamp the generation evaluated by this reconcile, not a newer generation
+// fetched while saving status. Fulfillment ignores stale storage observations.
+func setTenantStorageCondition(tenant *v1alpha1.Tenant, typ v1alpha1.TenantConditionType, status metav1.ConditionStatus, reason, message string) {
+	tenant.SetStatusCondition(typ, status, reason, message)
+	tenant.GetStatusCondition(typ).ObservedGeneration = tenant.Generation
+}
+
 func setStorageWaiting(tenant *v1alpha1.Tenant, reason, message string) {
 	for _, typ := range []v1alpha1.TenantConditionType{v1alpha1.TenantConditionStorageBackendReady, v1alpha1.TenantConditionClusterStorageReady} {
-		tenant.SetStatusCondition(typ, metav1.ConditionFalse, reason, message)
-		tenant.GetStatusCondition(typ).ObservedGeneration = tenant.Generation
+		setTenantStorageCondition(tenant, typ, metav1.ConditionFalse, reason, message)
 	}
 }
 
@@ -150,8 +157,7 @@ func (r *StorageReconciler) handlePreparedClusterStorage(ctx context.Context, te
 	if storageDesiredConfigVersion(ctx, tenant) == "" || preparedStorageApplied(tenant.Status.ClusterStorageJobs, storageDesiredConfigVersion(ctx, tenant)) {
 		return ctrl.Result{}, false, nil
 	}
-	tenant.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady, metav1.ConditionFalse, "ClusterSetupPending", "Waiting for native storage configuration to complete")
-	tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady).ObservedGeneration = tenant.Generation
+	setTenantStorageCondition(tenant, v1alpha1.TenantConditionClusterStorageReady, metav1.ConditionFalse, "ClusterSetupPending", "Waiting for native storage configuration to complete")
 	if r.ClusterStorageProvider == nil {
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, true, nil
 	}
@@ -167,6 +173,40 @@ func preparedStorageApplied(jobs []v1alpha1.JobStatus, version string) bool {
 	return latest != nil && latest.State == v1alpha1.JobStateSucceeded && latest.ConfigVersion == version && version != ""
 }
 
+// Allow class discovery before reapplying a successful job. Use persisted launch
+// times so restarts and frequent events cannot reset the cooldown. Like failed
+// provisioning retries, repeated successes without outputs double the previous
+// launch interval, capped at the existing maximum. A new config starts afresh.
+func storageClassRepairDelay(jobs []v1alpha1.JobStatus, version string, now time.Time) time.Duration {
+	var latest, previous *v1alpha1.JobStatus
+	for i := len(jobs) - 1; i >= 0; i-- {
+		job := &jobs[i]
+		if job.Type != v1alpha1.JobTypeProvision || job.Target != "" || job.ConfigVersion != version || job.State != v1alpha1.JobStateSucceeded {
+			continue
+		}
+		if latest == nil {
+			latest = job
+		} else {
+			previous = job
+			break
+		}
+	}
+	if latest == nil {
+		return 0
+	}
+	delay := provisioning.BackoffBaseDelay
+	if previous != nil {
+		gap := latest.Timestamp.Sub(previous.Timestamp.Time)
+		if gap >= provisioning.BackoffMaxDelay/2 {
+			delay = provisioning.BackoffMaxDelay
+		} else if gap > delay/2 {
+			delay = gap * 2
+		}
+	}
+	elapsed := max(time.Duration(0), now.Sub(latest.Timestamp.Time))
+	return max(time.Duration(0), delay-elapsed)
+}
+
 func preparedStorageStarted(tenant *v1alpha1.Tenant) bool {
 	for _, job := range tenant.Status.StorageBackendJobs {
 		if job.Type == v1alpha1.JobTypeProvision && job.ConfigVersion != "" {
@@ -180,6 +220,5 @@ func (r *StorageReconciler) preparedStorageRequeue(ctx context.Context, tenant *
 	if len(ontapBackendIDs(provisioning.StorageTierDefinitionsFromContext(ctx))) == 0 {
 		return ctrl.Result{}
 	}
-	tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady).ObservedGeneration = tenant.Generation
 	return ctrl.Result{RequeueAfter: r.StatusPollInterval}
 }

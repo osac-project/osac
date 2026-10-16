@@ -212,6 +212,11 @@ func (s *PrivateStorageBackendsServer) validateStorageBackendCreate(ctx context.
 		if err := s.generic.validator.Validate(sb); err != nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument, "validation failed: %s", err)
 		}
+		// Only new registrations require shared profiles. Stored profile-less
+		// backends remain readable and updatable through the legacy workflow.
+		if sb.GetSpec().GetProvider() == "ontap" && sb.GetSpec().GetOntap() == nil {
+			return grpcstatus.Error(grpccodes.InvalidArgument, "new ONTAP backends require at least one shared profile in spec.ontap")
+		}
 		return validateOntapEndpoint(sb.GetSpec().GetEndpoint())
 	}
 	return nil

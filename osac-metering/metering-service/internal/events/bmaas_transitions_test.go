@@ -191,7 +191,7 @@ var _ = Describe("DecomposeBMIEvents", func() {
 		Expect(consumptionRequest.DurationSeconds).To(BeNil())
 	})
 
-	It("does not assign state duration to heartbeat events", func() {
+	It("uses each meter's active start for its first heartbeat", func() {
 		eventsOut, err := events.DecomposeBMIEvents(
 			map[string]any{"bm_instance_type": "bm.large"},
 			"evt-heartbeat",
@@ -207,11 +207,13 @@ var _ = Describe("DecomposeBMIEvents", func() {
 		var allocationRequest, consumptionRequest events.BMaaSEventBuildRequest
 		Expect(eventsOut[0].DataAs(&allocationRequest)).To(Succeed())
 		Expect(eventsOut[1].DataAs(&consumptionRequest)).To(Succeed())
-		Expect(allocationRequest.DurationSeconds).To(BeNil())
-		Expect(consumptionRequest.DurationSeconds).To(BeNil())
+		Expect(allocationRequest.DurationSeconds).NotTo(BeNil())
+		Expect(*allocationRequest.DurationSeconds).To(Equal(3600.0))
+		Expect(consumptionRequest.DurationSeconds).NotTo(BeNil())
+		Expect(*consumptionRequest.DurationSeconds).To(Equal(1800.0))
 	})
 
-	It("reports full time spent in each previous state when closing meters", func() {
+	It("uses the active start when closing meters before any heartbeat", func() {
 		eventsOut, err := events.DecomposeBMIEvents(
 			map[string]any{"bm_instance_type": "bm.large"},
 			"evt-suspend",
@@ -231,6 +233,32 @@ var _ = Describe("DecomposeBMIEvents", func() {
 		Expect(*allocationRequest.DurationSeconds).To(Equal(3600.0))
 		Expect(consumptionRequest.DurationSeconds).NotTo(BeNil())
 		Expect(*consumptionRequest.DurationSeconds).To(Equal(1800.0))
+	})
+
+	It("clamps each meter's close duration to its active start and latest heartbeat", func() {
+		lastHeartbeat := time.Date(2026, 9, 14, 11, 45, 0, 0, time.UTC)
+		consumptionSince := time.Date(2026, 9, 14, 11, 55, 0, 0, time.UTC)
+		eventsOut, err := events.DecomposeBMIEvents(
+			map[string]any{"bm_instance_type": "bm.large"},
+			"evt-suspend-after-heartbeat",
+			transitionTime,
+			events.BMaaSMeterIntervals{
+				AllocationSince:  &allocationSince,
+				ConsumptionSince: &consumptionSince,
+				LastHeartbeatAt:  &lastHeartbeat,
+			},
+			build,
+			events.EventSuspended,
+			events.EventSuspended,
+		)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(eventsOut).To(HaveLen(2))
+
+		var allocationRequest, consumptionRequest events.BMaaSEventBuildRequest
+		Expect(eventsOut[0].DataAs(&allocationRequest)).To(Succeed())
+		Expect(eventsOut[1].DataAs(&consumptionRequest)).To(Succeed())
+		Expect(*allocationRequest.DurationSeconds).To(Equal(900.0))
+		Expect(*consumptionRequest.DurationSeconds).To(Equal(300.0))
 	})
 
 	It("emits only active meter closures", func() {

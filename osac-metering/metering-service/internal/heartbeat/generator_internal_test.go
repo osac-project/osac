@@ -12,6 +12,7 @@ package heartbeat
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,13 +76,15 @@ func bmaasTickState(id, currentState string, activeSince time.Time) projection.R
 
 func TestBuildHeartbeatEventsStableIDWithinSameWindow(t *testing.T) {
 	g := &Generator{interval: 60 * time.Second}
+	windowStart := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	activeSince := windowStart.Add(-time.Hour)
 	state := &projection.ResourceState{
 		ResourceID:        "vm-1",
 		ResourceType:      events.ResourceTypeComputeInstance,
+		BillableSince:     &activeSince,
 		BillingDimensions: map[string]any{"instance_type": "m5.large"},
 	}
 
-	windowStart := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	first, err := g.buildHeartbeatEvents(state, windowStart.Add(5*time.Second))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -98,13 +101,15 @@ func TestBuildHeartbeatEventsStableIDWithinSameWindow(t *testing.T) {
 
 func TestBuildHeartbeatEventsNewIDInNextWindow(t *testing.T) {
 	g := &Generator{interval: 60 * time.Second}
+	windowStart := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	activeSince := windowStart.Add(-time.Hour)
 	state := &projection.ResourceState{
 		ResourceID:        "vm-1",
 		ResourceType:      events.ResourceTypeComputeInstance,
+		BillableSince:     &activeSince,
 		BillingDimensions: map[string]any{"instance_type": "m5.large"},
 	}
 
-	windowStart := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	first, err := g.buildHeartbeatEvents(state, windowStart)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -121,9 +126,11 @@ func TestBuildHeartbeatEventsNewIDInNextWindow(t *testing.T) {
 
 func TestBuildNetworkingHeartbeatEvents(t *testing.T) {
 	g := &Generator{interval: 60 * time.Second}
+	activeSince := time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC)
 	state := &projection.ResourceState{
-		ResourceID:   "nat-1",
-		ResourceType: events.ResourceTypeNATGateway,
+		ResourceID:    "nat-1",
+		ResourceType:  events.ResourceTypeNATGateway,
+		BillableSince: &activeSince,
 		BillingDimensions: map[string]any{
 			"deployment":      "installation-1",
 			"virtual_network": "vnet-1",
@@ -144,6 +151,192 @@ func TestBuildNetworkingHeartbeatEvents(t *testing.T) {
 		t.Errorf("expected NATGateway resource type, got %v", got)
 	}
 }
+
+func TestBuildHeartbeatEventsUseDeltasForSingleResourceFamilies(t *testing.T) {
+	start := time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)
+	lastHeartbeat := start.Add(45 * time.Minute)
+	now := start.Add(time.Hour)
+	for _, test := range []struct {
+		name         string
+		resourceType string
+		dimensions   map[string]any
+	}{
+		{name: "VMaaS", resourceType: events.ResourceTypeComputeInstance, dimensions: map[string]any{"instance_type": "m6.large"}},
+		{name: "ExternalIP", resourceType: events.ResourceTypeExternalIP, dimensions: map[string]any{"external_ip": "192.0.2.1"}},
+		{name: "NATGateway", resourceType: events.ResourceTypeNATGateway, dimensions: map[string]any{"virtual_network": "vnet-1"}},
+		{name: "storage", resourceType: events.ResourceTypeVolume, dimensions: map[string]any{"volume_id": "vol-1", "size_gib": int64(10)}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			state := &projection.ResourceState{
+				ResourceID:        "resource-1",
+				ResourceType:      test.resourceType,
+				TenantID:          "tenant-1",
+				CurrentState:      "ACTIVE",
+				BillableSince:     &start,
+				LastHeartbeatAt:   &lastHeartbeat,
+				BillingDimensions: test.dimensions,
+			}
+			got, err := BuildHeartbeatEvents(state, "hb/resource-1", now, "test")
+			if err != nil {
+				t.Fatalf("BuildHeartbeatEvents() error = %v", err)
+			}
+			if len(got) != 1 {
+				t.Fatalf("heartbeat count = %d, want 1", len(got))
+			}
+			var data map[string]any
+			if err := json.Unmarshal(got[0].Data(), &data); err != nil {
+				t.Fatalf("unmarshal heartbeat data: %v", err)
+			}
+			if got := data["duration_seconds"]; got != float64(900) {
+				t.Errorf("duration_seconds = %v, want 900", got)
+			}
+		})
+	}
+
+	state := &projection.ResourceState{
+		ResourceID:        "resource-first-heartbeat",
+		ResourceType:      events.ResourceTypeComputeInstance,
+		BillableSince:     &start,
+		BillingDimensions: map[string]any{"instance_type": "m6.large"},
+	}
+	got, err := BuildHeartbeatEvents(state, "hb/first", now, "test")
+	if err != nil {
+		t.Fatalf("BuildHeartbeatEvents() first heartbeat error = %v", err)
+	}
+	var firstData map[string]any
+	if err := json.Unmarshal(got[0].Data(), &firstData); err != nil {
+		t.Fatalf("unmarshal first heartbeat data: %v", err)
+	}
+	if got := firstData["duration_seconds"]; got != float64(3600) {
+		t.Errorf("first heartbeat duration_seconds = %v, want 3600 from active start", got)
+	}
+}
+
+func TestBuildClusterHeartbeatUsesComponentStartAndHeartbeatBounds(t *testing.T) {
+	start := time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)
+	lastHeartbeat := start.Add(30 * time.Minute)
+	componentSince := start.Add(50 * time.Minute)
+	state := &projection.ResourceState{
+		ResourceID:      "cluster-1",
+		ResourceType:    events.ResourceTypeClusterOrder,
+		CurrentState:    "READY",
+		BillableSince:   &start,
+		LastHeartbeatAt: &lastHeartbeat,
+		ComponentBillableSince: map[string]time.Time{
+			"cpu-workers": start,
+			"gpu-workers": componentSince,
+		},
+		BillingDimensions: map[string]any{
+			"components": []any{
+				map[string]any{"node_set": "cpu-workers", "component": "worker", "host_type": "cpu", "node_count": 2},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu", "node_count": 1},
+			},
+		},
+	}
+	got, err := BuildHeartbeatEvents(state, "hb/cluster-1", start.Add(time.Hour), "test")
+	if err != nil {
+		t.Fatalf("BuildHeartbeatEvents() error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("heartbeat count = %d, want 2", len(got))
+	}
+	for _, event := range got {
+		var data map[string]any
+		if err := json.Unmarshal(event.Data(), &data); err != nil {
+			t.Fatalf("unmarshal heartbeat data: %v", err)
+		}
+		dimensions := data["billing_dimensions"].(map[string]any)
+		want := float64(1800)
+		if dimensions["node_set"] == "gpu-workers" {
+			want = 600
+		}
+		if got := data["duration_seconds"]; got != want {
+			t.Errorf("%s duration_seconds = %v, want %v", dimensions["node_set"], got, want)
+		}
+	}
+}
+
+func TestBuildClusterHeartbeatRequiresComponentStart(t *testing.T) {
+	start := time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)
+	lastHeartbeat := start.Add(30 * time.Minute)
+	state := &projection.ResourceState{
+		ResourceID:      "cluster-missing-start",
+		ResourceType:    events.ResourceTypeClusterOrder,
+		CurrentState:    "READY",
+		BillableSince:   &start,
+		LastHeartbeatAt: &lastHeartbeat,
+		BillingDimensions: map[string]any{
+			"cluster_template": "ocp-ci-small",
+			"release_image":    "4.17.0",
+			"components": []any{
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": 1},
+			},
+		},
+	}
+
+	got, err := BuildHeartbeatEvents(state, "hb/missing-start", start.Add(time.Hour), "test")
+	if err == nil {
+		t.Fatalf("BuildHeartbeatEvents() events = %d, want missing component start error", len(got))
+	}
+	const want = `cluster cluster-missing-start node_set "_control_plane" has no component billable-since timestamp`
+	if err.Error() != want {
+		t.Fatalf("BuildHeartbeatEvents() error = %q, want %q", err, want)
+	}
+}
+
+func TestFirstClusterHeartbeatUsesComponentStartWithoutLastHeartbeat(t *testing.T) {
+	clusterStart := time.Date(2026, 9, 27, 9, 0, 0, 0, time.UTC)
+	componentStart := clusterStart.Add(20 * time.Minute)
+	now := clusterStart.Add(time.Hour)
+	state := &projection.ResourceState{
+		ResourceID:    "cluster-first-heartbeat",
+		ResourceType:  events.ResourceTypeClusterOrder,
+		CurrentState:  "READY",
+		BillableSince: &clusterStart,
+		ComponentBillableSince: map[string]time.Time{
+			"_control_plane": componentStart,
+		},
+		BillingDimensions: map[string]any{
+			"cluster_template": "ocp-ci-small",
+			"release_image":    "4.17.0",
+			"components": []any{
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": 1},
+			},
+		},
+	}
+
+	got, err := BuildHeartbeatEvents(state, "hb/first-cluster", now, "test")
+	if err != nil {
+		t.Fatalf("BuildHeartbeatEvents() error = %v", err)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(got[0].Data(), &data); err != nil {
+		t.Fatalf("unmarshal heartbeat data: %v", err)
+	}
+	if got, want := data["duration_seconds"], float64(now.Sub(componentStart).Seconds()); got != want {
+		t.Errorf("first cluster heartbeat duration_seconds = %v, want %v from component start", got, want)
+	}
+}
+
+func TestBuildHeartbeatEventsRequiresBillableStart(t *testing.T) {
+	now := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
+	lastHeartbeat := now.Add(-time.Minute)
+	state := &projection.ResourceState{
+		ResourceID:        "missing-heartbeat-start",
+		ResourceType:      events.ResourceTypeComputeInstance,
+		LastHeartbeatAt:   &lastHeartbeat,
+		BillingDimensions: map[string]any{"instance_type": "m6.large"},
+	}
+
+	got, err := BuildHeartbeatEvents(state, "hb/missing-start", now, "test")
+	if err == nil {
+		t.Fatalf("BuildHeartbeatEvents() events = %d, want missing active start error", len(got))
+	}
+	if !strings.Contains(err.Error(), "active start timestamp is required") {
+		t.Fatalf("BuildHeartbeatEvents() error = %q, want active start error", err)
+	}
+}
+
 func TestBuildHeartbeatEventsBMaaSUsesIndependentMeters(t *testing.T) {
 	g := &Generator{interval: 60 * time.Second}
 	allocationSince := time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC)
@@ -197,8 +390,12 @@ func TestBuildHeartbeatEventsBMaaSUsesIndependentMeters(t *testing.T) {
 		if !ok || dimensions["meter_type"] != expectation {
 			t.Errorf("heartbeat %d meter_type = %v, want %q", i, dimensions["meter_type"], expectation)
 		}
-		if _, ok := data["duration_seconds"]; ok {
-			t.Errorf("heartbeat %d unexpectedly includes duration_seconds: %v", i, data["duration_seconds"])
+		want := float64(3600)
+		if expectation == events.BMaaSMeterConsumption {
+			want = 1800
+		}
+		if got := data["duration_seconds"]; got != want {
+			t.Errorf("heartbeat %d duration_seconds = %v, want %v", i, got, want)
 		}
 		if dimensions["bm_instance_type"] != "gpu-large" {
 			t.Errorf("heartbeat %d lost base billing dimensions: %#v", i, dimensions)
@@ -206,7 +403,7 @@ func TestBuildHeartbeatEventsBMaaSUsesIndependentMeters(t *testing.T) {
 	}
 }
 
-func TestBuildHeartbeatEventsBMaaSOmitsDurationAfterPreviousHeartbeat(t *testing.T) {
+func TestBuildHeartbeatEventsBMaaSUsesDeltaAfterPreviousHeartbeat(t *testing.T) {
 	g := &Generator{interval: 60 * time.Second}
 	allocationSince := time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC)
 	consumptionSince := time.Date(2026, 1, 1, 11, 55, 0, 0, time.UTC)
@@ -223,7 +420,7 @@ func TestBuildHeartbeatEventsBMaaSOmitsDurationAfterPreviousHeartbeat(t *testing
 		BillingDimensions: map[string]any{"bm_instance_type": "gpu-large"},
 	}
 
-	checkDurationsOmitted := func(at time.Time) {
+	checkDurations := func(at time.Time, allocationWant, consumptionWant float64) {
 		t.Helper()
 		got, err := g.buildHeartbeatEvents(state, at)
 		if err != nil {
@@ -232,24 +429,24 @@ func TestBuildHeartbeatEventsBMaaSOmitsDurationAfterPreviousHeartbeat(t *testing
 		if len(got) != 2 {
 			t.Fatalf("heartbeat count = %d, want 2", len(got))
 		}
-		for i := range got {
+		for i, want := range []float64{allocationWant, consumptionWant} {
 			var data map[string]any
 			if err := json.Unmarshal(got[i].Data(), &data); err != nil {
 				t.Fatalf("heartbeat %d data: %v", i, err)
 			}
-			if _, ok := data["duration_seconds"]; ok {
-				t.Errorf("heartbeat %d unexpectedly includes duration_seconds: %v", i, data["duration_seconds"])
+			if got := data["duration_seconds"]; got != want {
+				t.Errorf("heartbeat %d duration_seconds = %v, want %v", i, got, want)
 			}
 		}
 	}
 
-	checkDurationsOmitted(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	checkDurations(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC), 900, 300)
 
 	lastHeartbeat = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	checkDurationsOmitted(time.Date(2026, 1, 1, 12, 1, 0, 0, time.UTC))
+	checkDurations(time.Date(2026, 1, 1, 12, 1, 0, 0, time.UTC), 60, 60)
 
 	lastHeartbeat = time.Date(2026, 1, 1, 12, 1, 0, 0, time.UTC)
-	checkDurationsOmitted(time.Date(2026, 1, 1, 12, 4, 0, 0, time.UTC))
+	checkDurations(time.Date(2026, 1, 1, 12, 4, 0, 0, time.UTC), 180, 180)
 }
 
 func TestBuildHeartbeatEventsBMaaSStateCardinality(t *testing.T) {

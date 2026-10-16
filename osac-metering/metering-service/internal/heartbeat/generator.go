@@ -193,7 +193,23 @@ func BuildHeartbeatEventsWithMutes(state *projection.ResourceState, baseID strin
 	}
 
 	buildFn := func(dims map[string]any, eventID string) (cloudevents.Event, error) {
-		return buildHeartbeatEvent(state, eventID, dims, now, source, heartbeatDurationSeconds(now, state.BillableSince))
+		activeSince := state.BillableSince
+		if state.ResourceType == events.ResourceTypeClusterOrder {
+			nodeSet := dims["node_set"].(string)
+			componentSince, exists := state.ComponentBillableSince[nodeSet]
+			if !exists {
+				return cloudevents.Event{}, fmt.Errorf("cluster %s node_set %q has no component billable-since timestamp", state.ResourceID, nodeSet)
+			}
+			activeSince = &componentSince
+		}
+		duration, err := events.DurationSeconds(now, state.LastHeartbeatAt, activeSince)
+		if err != nil {
+			if state.ResourceType == events.ResourceTypeClusterOrder {
+				return cloudevents.Event{}, fmt.Errorf("cluster %s node_set %q heartbeat: %w", state.ResourceID, dims["node_set"], err)
+			}
+			return cloudevents.Event{}, fmt.Errorf("resource %s heartbeat: %w", state.ResourceID, err)
+		}
+		return buildHeartbeatEvent(state, eventID, dims, now, source, duration)
 	}
 	return events.BuildResourceEvents(state.ResourceType, state.BillingDimensions, baseID, buildFn)
 }
@@ -216,6 +232,7 @@ func buildBMaaSHeartbeatEvents(state *projection.ResourceState, baseID string, n
 			consumptionType = events.EventHeartbeat
 		}
 	}
+	intervals.LastHeartbeatAt = state.LastHeartbeatAt
 	if allocationType == "" && consumptionType == "" {
 		return nil, nil
 	}
@@ -233,16 +250,11 @@ func buildBMaaSHeartbeatEvents(state *projection.ResourceState, baseID string, n
 	)
 }
 
-func heartbeatDurationSeconds(now time.Time, since *time.Time) *float64 {
-	if since == nil {
-		return nil
-	}
-	seconds := now.Sub(*since).Seconds()
-	return &seconds
-}
-
 func buildHeartbeatEvent(state *projection.ResourceState, eventID string, dims map[string]any, now time.Time, source string, durationSeconds *float64) (cloudevents.Event, error) {
 	ce := cloudevents.NewEvent()
+	if durationSeconds == nil {
+		return ce, fmt.Errorf("resource %s heartbeat has no duration", state.ResourceID)
+	}
 	ce.SetID(eventID)
 	ce.SetSource(source)
 	ce.SetType(events.EventHeartbeat)
@@ -250,22 +262,13 @@ func buildHeartbeatEvent(state *projection.ResourceState, eventID string, dims m
 
 	events.SetOSACExtensions(&ce, state.ResourceID, state.ResourceType, state.TenantID, state.ProjectID)
 
-	var duration *float64
-	if state.ResourceType != events.ResourceTypeBareMetalInstance {
-		seconds := float64(0)
-		if durationSeconds != nil {
-			seconds = *durationSeconds
-		}
-		duration = &seconds
-	}
-
 	data := heartbeatData{
 		ResourceID:        state.ResourceID,
 		ResourceType:      state.ResourceType,
 		TenantID:          state.TenantID,
 		ProjectID:         events.NilIfEmpty(state.ProjectID),
 		CurrentState:      state.CurrentState,
-		DurationSeconds:   duration,
+		DurationSeconds:   durationSeconds,
 		BillingDimensions: dims,
 		SchemaVersion:     schema.SchemaVersion,
 	}

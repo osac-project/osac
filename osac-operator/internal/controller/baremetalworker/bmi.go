@@ -30,17 +30,19 @@ const (
 // A successful create is not written back into the invocation's observation:
 // the caller persists the returned identity and the next invocation re-observes.
 func (r *Reconciler) ensureBMI(
-	ctx context.Context, co *v1alpha1.ClusterOrder, tenant string, nodeSet v1alpha1.NodeRequest,
+	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster, nodeSet v1alpha1.NodeRequest,
 	workerName string, image *privatev1.DiskImageReference, ignitionRaw, filter, fabricInterface string,
 ) (*privatev1.BareMetalInstance, ctrl.Result, error) {
-	req := r.buildBMICreateRequest(co, tenant, nodeSet, workerName, image, ignitionRaw, fabricInterface)
+	// The worker lives in its cluster's project and records its cluster in
+	// status.cluster, so usage is attributed to the cluster and its node set.
+	req := r.buildBMICreateRequest(co, cluster.GetMetadata().GetTenant(), cluster, nodeSet, workerName, image, ignitionRaw, fabricInterface)
 	created, err := r.fulfillment.CreateBareMetalInstance(ctx, req)
 	if err == nil {
 		return created, ctrl.Result{}, nil
 	}
 
 	if st, ok := status.FromError(err); ok && st.Code() == codes.AlreadyExists {
-		bmi, listErr := r.findBMIByName(ctx, co, tenant, filter, workerName)
+		bmi, listErr := r.findBMIByName(ctx, co, cluster.GetMetadata().GetTenant(), filter, workerName)
 		if listErr != nil {
 			return nil, ctrl.Result{}, listErr
 		}
@@ -83,12 +85,9 @@ func (r *Reconciler) findBMIByName(ctx context.Context, co *v1alpha1.ClusterOrde
 }
 
 func (r *Reconciler) buildBMICreateRequest(
-	co *v1alpha1.ClusterOrder, tenant string, nodeSet v1alpha1.NodeRequest, workerName string,
-	image *privatev1.DiskImageReference, ignitionRaw, fabricInterface string,
+	co *v1alpha1.ClusterOrder, tenant string, cluster *privatev1.Cluster, nodeSet v1alpha1.NodeRequest,
+	workerName string, image *privatev1.DiskImageReference, ignitionRaw, fabricInterface string,
 ) *privatev1.BareMetalInstance {
-	labels := map[string]string{clusterOrderLabel: co.Name}
-	annotations := map[string]string{ownerReferenceAnnotation: fmt.Sprintf("ClusterOrder/%s", co.Name)}
-
 	var netAttachments []*privatev1.BareMetalNetworkAttachment
 	if na := co.Spec.NetworkAttachment; na != nil && na.SubnetRef != "" {
 		sgRefs := make([]*privatev1.SecurityGroupLocalReference, 0, len(na.SecurityGroupRefs))
@@ -128,12 +127,17 @@ func (r *Reconciler) buildBMICreateRequest(
 
 	return privatev1.BareMetalInstance_builder{
 		Metadata: privatev1.Metadata_builder{
-			Tenant:      tenant,
-			Name:        workerName,
-			Labels:      labels,
-			Annotations: annotations,
+			Tenant:  tenant,
+			Project: cluster.GetMetadata().GetProject(),
+			Name:    workerName,
 		}.Build(),
 		Spec: specBuilder.Build(),
+		Status: privatev1.BareMetalInstanceStatus_builder{
+			Cluster: privatev1.ClusterLocalReference_builder{
+				Id: cluster.GetId(),
+			}.Build(),
+			NodeSet: &nodeSet.NodeSet,
+		}.Build(),
 	}.Build()
 }
 

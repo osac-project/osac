@@ -76,8 +76,7 @@ func (o *workerObservation) exactOwnedName(co *v1alpha1.ClusterOrder, tenant, na
 }
 
 func (r *Reconciler) observeWorkerResources(ctx context.Context, co *v1alpha1.ClusterOrder) (*workerObservation, ctrl.Result, error) {
-	filter := fmt.Sprintf(`this.metadata.labels["%s"] == "%s"`, clusterOrderLabel, co.Name)
-	bmis, err := r.fulfillment.ListBareMetalInstances(ctx, filter)
+	bmis, err := r.fulfillment.ListBareMetalInstances(ctx, workerBMIFilter(co))
 	if err != nil {
 		return nil, ctrl.Result{}, fmt.Errorf("observing worker BMIs: %w", err)
 	}

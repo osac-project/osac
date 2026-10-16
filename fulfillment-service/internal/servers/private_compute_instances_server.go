@@ -1521,6 +1521,7 @@ func (s *PrivateComputeInstancesServer) autoProvisionExternalIP(
 	}
 
 	tenant := ci.GetMetadata().GetTenant()
+	project := ci.GetMetadata().GetProject()
 	ciID := ci.GetId()
 	shortID := ciID
 	if len(shortID) > 8 {
@@ -1531,6 +1532,9 @@ func (s *PrivateComputeInstancesServer) autoProvisionExternalIP(
 		Metadata: privatev1.Metadata_builder{
 			Name:   fmt.Sprintf("auto-eip-%s", shortID),
 			Tenant: tenant,
+			// The automatic IP is usage-attributed to the instance, so it lives in the
+			// instance's project, not the default one.
+			Project: project,
 			Labels: map[string]string{
 				autoCreatedLabel:    "true",
 				autoCreatedForLabel: ciID,

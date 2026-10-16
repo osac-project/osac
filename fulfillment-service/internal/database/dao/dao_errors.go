@@ -241,4 +241,9 @@ const (
 	// relationship between tenants and domains returns this code when a domain is already assigned to
 	// another tenant.
 	errNotUniqueCode = "Z0004"
+
+	// errOwnerReferenceCode is the SQLSTATE error code returned by the 'check_owner_reference' trigger when a
+	// write violates the owner-reference attribution contract: changing an existing reference, or setting one
+	// that targets a missing, deleting or cross-project resource.
+	errOwnerReferenceCode = "Z0005"
 )

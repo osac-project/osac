@@ -191,6 +191,7 @@ func (s *PrivateNATGatewaysServer) Create(ctx context.Context,
 		err = tenantErr
 		return
 	}
+	natProject := natGateway.GetMetadata().GetProject()
 	virtualNetworkKey := refKey(natGateway.GetSpec().GetVirtualNetwork())
 	virtualNetworkResponse, getErr := s.virtualNetworksDao.Get().SetId(virtualNetworkKey).Do(ctx)
 	if getErr != nil {
@@ -205,7 +206,7 @@ func (s *PrivateNATGatewaysServer) Create(ctx context.Context,
 		}
 		return
 	}
-	if err = validateTenantMatch(natTenant, virtualNetworkResponse.GetObject(), "VirtualNetwork", virtualNetworkKey); err != nil {
+	if err = validateTenantProjectMatch(natTenant, natProject, virtualNetworkResponse.GetObject(), "VirtualNetwork", virtualNetworkKey); err != nil {
 		return
 	}
 	err = s.validateNetworkClassHasFabricManager(ctx, refKey(natGateway.GetSpec().GetVirtualNetwork()))
@@ -220,7 +221,7 @@ func (s *PrivateNATGatewaysServer) Create(ctx context.Context,
 	if err != nil {
 		return
 	}
-	if err = validateTenantMatch(natTenant, externalIP, "ExternalIP", externalIPKey); err != nil {
+	if err = validateTenantProjectMatch(natTenant, natProject, externalIP, "ExternalIP", externalIPKey); err != nil {
 		return
 	}
 	canonicalHubID, err := canonicalNetworkingHubID(ctx, s.logger, s.networkClassesDao)

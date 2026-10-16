@@ -783,17 +783,17 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		_, err := run()
 		Expect(err).NotTo(HaveOccurred())
 		reserved := getOrder().Status.Workers
-		candidate := privatev1.BareMetalInstance_builder{Id: "incarnation", Metadata: privatev1.Metadata_builder{
-			Name: reserved[0].BareMetalInstance.Name, Tenant: tenant,
-			Labels:      map[string]string{"osac.openshift.io/cluster-order": co.Name},
-			Annotations: map[string]string{"osac.openshift.io/owner-reference": "ClusterOrder/" + co.Name},
-		}.Build()}.Build()
+		candidate := privatev1.BareMetalInstance_builder{
+			Id:       "incarnation",
+			Metadata: privatev1.Metadata_builder{Name: reserved[0].BareMetalInstance.Name, Tenant: tenant}.Build(),
+			Status:   ownedWorkerStatus("cluster"),
+		}.Build()
 		candidates := []*privatev1.BareMetalInstance{candidate}
 		switch kind {
 		case "foreign tenant":
 			candidate.GetMetadata().SetTenant("foreign")
 		case "foreign owner":
-			candidate.GetMetadata().SetAnnotations(map[string]string{"osac.openshift.io/owner-reference": "ClusterOrder/foreign"})
+			candidate.GetStatus().GetCluster().SetId("foreign")
 		case "ambiguous":
 			other := proto.Clone(candidate).(*privatev1.BareMetalInstance)
 			other.SetId("other-incarnation")
@@ -987,7 +987,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 	It("repairs identity and early Ready phase before the InfraEnv gate", func() {
 		ready()
 		reserveExistingWorker(co, "recorded")
-		bmi, err := fc.CreateBareMetalInstance(ctx, privatev1.BareMetalInstance_builder{Id: "owned-id", Metadata: privatev1.Metadata_builder{Name: "recorded", Tenant: tenant, Labels: map[string]string{"osac.openshift.io/cluster-order": co.Name}, Annotations: map[string]string{"osac.openshift.io/owner-reference": "ClusterOrder/" + co.Name}}.Build()}.Build())
+		bmi, err := fc.CreateBareMetalInstance(ctx, privatev1.BareMetalInstance_builder{Id: "owned-id", Metadata: privatev1.Metadata_builder{Name: "recorded", Tenant: tenant}.Build(), Status: ownedWorkerStatus("cluster")}.Build())
 		Expect(err).NotTo(HaveOccurred())
 		fc.SetHostMAC(bmi.GetId(), "aa:bb:cc:dd:ee:ff")
 		agent := &unstructured.Unstructured{}
@@ -1193,7 +1193,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		future := metav1.NewTime(time.Now().Add(time.Hour))
 		w.NextRetryTime = &future
 		Expect(k8sClient.Status().Update(ctx, latest)).To(Succeed())
-		_, err := fc.CreateBareMetalInstance(ctx, privatev1.BareMetalInstance_builder{Id: "old-bmi", Metadata: privatev1.Metadata_builder{Name: "failed-reservation", Tenant: tenant, DeletionTimestamp: timestamppb.Now(), Labels: map[string]string{"osac.openshift.io/cluster-order": co.Name}, Annotations: map[string]string{"osac.openshift.io/owner-reference": "ClusterOrder/" + co.Name}}.Build(), Status: privatev1.BareMetalInstanceStatus_builder{State: privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING}.Build()}.Build())
+		_, err := fc.CreateBareMetalInstance(ctx, privatev1.BareMetalInstance_builder{Id: "old-bmi", Metadata: privatev1.Metadata_builder{Name: "failed-reservation", Tenant: tenant, DeletionTimestamp: timestamppb.Now()}.Build(), Status: ownedWorkerStatus("cluster", privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING)}.Build())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(k8sClient.Delete(ctx, latest)).To(Succeed())
 		createsBefore := len(fc.CreateCalls())

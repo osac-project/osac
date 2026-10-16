@@ -117,7 +117,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err := validateBareMetalNodeSets(co); err != nil {
 		return ctrl.Result{}, err
 	}
-	tenant, err := r.authoritativeWorkerTenant(ctx, co)
+	cluster, err := r.authoritativeWorkerCluster(ctx, co)
 	if err != nil {
 		return r.handleFulfillmentError(ctx, co, err)
 	}
@@ -133,7 +133,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return workerBoundaryRequeue(), nil
 	}
 
-	res, err := r.reconcileWorkers(ctx, co, tenant)
+	res, err := r.reconcileWorkers(ctx, co, cluster)
 	if errors.Is(err, errWorkerObservationChanged) {
 		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}

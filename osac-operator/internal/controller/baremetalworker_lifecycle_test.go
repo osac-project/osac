@@ -357,20 +357,18 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 		// Legacy fixture identities are explicit; generated incarnation IDs no longer equal names.
 		_, err := fc.CreateBareMetalInstance(ctx, privatev1.BareMetalInstance_builder{
 			Id: "bmw-rebuild-worker-0", Metadata: privatev1.Metadata_builder{
-				Tenant:      "tenant1",
-				Name:        "bmw-rebuild-worker-0",
-				Labels:      map[string]string{"osac.openshift.io/cluster-order": "bmw-rebuild"},
-				Annotations: map[string]string{"osac.openshift.io/owner-reference": "ClusterOrder/bmw-rebuild"},
+				Tenant: "tenant1",
+				Name:   "bmw-rebuild-worker-0",
 			}.Build(),
+			Status: ownedWorkerStatus(clusterUUID),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		_, err = fc.CreateBareMetalInstance(ctx, privatev1.BareMetalInstance_builder{
 			Id: "bmw-rebuild-worker-1", Metadata: privatev1.Metadata_builder{
-				Tenant:      "tenant1",
-				Name:        "bmw-rebuild-worker-1",
-				Labels:      map[string]string{"osac.openshift.io/cluster-order": "bmw-rebuild"},
-				Annotations: map[string]string{"osac.openshift.io/owner-reference": "ClusterOrder/bmw-rebuild"},
+				Tenant: "tenant1",
+				Name:   "bmw-rebuild-worker-1",
 			}.Build(),
+			Status: ownedWorkerStatus(clusterUUID),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 

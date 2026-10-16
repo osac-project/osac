@@ -59,6 +59,36 @@ func validateTenantMatch(parentTenant string, referenced tenantMetadataObject,
 	return nil
 }
 
+// validateTenantProjectMatch checks that a referenced resource belongs to the same tenant and
+// project as the resource referencing it. Local references resolve in one tenant and project
+// (OSAC-1330): an attachment joins two resources in one project, and so do a NAT gateway, its
+// virtual network and its external IP.
+func validateTenantProjectMatch(parentTenant, parentProject string, referenced tenantMetadataObject,
+	referencedKind, referencedID string) error {
+	if referenced == nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"%s '%s' does not exist", referencedKind, referencedID)
+	}
+	referencedMetadata := referenced.GetMetadata()
+	if referencedMetadata == nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"%s '%s' has no tenant", referencedKind, referencedID)
+	}
+	referencedTenant := referencedMetadata.GetTenant()
+	if parentTenant != referencedTenant {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"%s '%s' belongs to tenant '%s', expected tenant '%s'",
+			referencedKind, referencedID, referencedTenant, parentTenant)
+	}
+	referencedProject := referencedMetadata.GetProject()
+	if parentProject != referencedProject {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"%s '%s' belongs to project '%s', expected project '%s'",
+			referencedKind, referencedID, referencedProject, parentProject)
+	}
+	return nil
+}
+
 func validateTenantOrShared(parentTenant string, referenced tenantMetadataObject,
 	referencedKind, referencedID, sharedTenant string) error {
 	if referenced == nil {

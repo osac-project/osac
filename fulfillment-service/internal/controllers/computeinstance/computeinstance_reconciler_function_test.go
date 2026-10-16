@@ -900,6 +900,7 @@ var _ = Describe("automatic ExternalIP attachment", func() {
 		ctrl := gomock.NewController(GinkgoT())
 		DeferCleanup(ctrl.Finish)
 		ci := newReadyAutoExternalIPComputeInstance()
+		ci.GetMetadata().SetProject("project-a")
 		attachmentsClient := NewMockExternalIPAttachmentsClient(ctrl)
 		externalIPsClient := NewMockExternalIPsClient(ctrl)
 		attachmentsClient.EXPECT().
@@ -920,6 +921,9 @@ var _ = Describe("automatic ExternalIP attachment", func() {
 			DoAndReturn(func(_ context.Context, request *privatev1.ExternalIPAttachmentsCreateRequest, _ ...grpc.CallOption) (*privatev1.ExternalIPAttachmentsCreateResponse, error) {
 				attachment := request.GetObject()
 				Expect(attachment.GetMetadata().GetTenant()).To(Equal("tenant-a"))
+				// The attachment joins the instance and its automatic IP, which live in the
+				// instance's project.
+				Expect(attachment.GetMetadata().GetProject()).To(Equal("project-a"))
 				Expect(attachment.GetMetadata().GetName()).To(Equal("auto-eipa-ci-auto-eip"))
 				Expect(attachment.GetMetadata().GetLabels()).To(HaveKeyWithValue(labels.AutoCreated, "true"))
 				Expect(attachment.GetMetadata().GetLabels()).To(HaveKeyWithValue(labels.AutoCreatedFor, "ci-auto-eip"))

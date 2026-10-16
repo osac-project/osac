@@ -123,6 +123,10 @@
           parameters:
             tier: "{{ item.tier }}"
             tenant: "{{ tenant_name }}"
+            # Placement of provisioned volumes: the CaaS cluster's fulfillment project,
+            # supplied by playbook_osac_create_tenant_cluster_storage.yml from the
+            # ClusterOrder annotation. Empty means the tenant's default project.
+            project: "{{ project_name | default('') }}"
             osac.openshift.io/tenant: "{{ tenant_name }}"
             osac.openshift.io/storage-tier: "{{ item.tier }}"
           reclaimPolicy: "{{ osac_csi_driver_reclaim_policy }}"

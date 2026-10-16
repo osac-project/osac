@@ -58,6 +58,17 @@ var _ = Describe("Filter translator", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
+		It("Translates the status.cluster typed-reference path", func(ctx context.Context) {
+			bmiTranslator, err := NewFilterTranslator().
+				SetLogger(logger).
+				SetDescriptor((*privatev1.BareMetalInstance)(nil).ProtoReflect().Descriptor()).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			actual, err := bmiTranslator.Translate(ctx, `this.status.cluster.id == 'abc'`)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(actual).To(ContainSubstring(`data->'status'->'cluster'->>'id'`))
+		})
+
 		It("Rejects a filter referencing a field absent from the configured descriptor", func(ctx context.Context) {
 			restricted, err := NewFilterTranslator().
 				SetLogger(logger).

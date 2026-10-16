@@ -68,11 +68,25 @@ func (f *bmiObservationClient) ListBareMetalInstances(ctx context.Context, filte
 	}
 	return f.nodeSetClient.ListBareMetalInstances(ctx, filter)
 }
+
+// ownedBMIStatus builds the status of a BMI owned by the order's Cluster, as the worker
+// controller records it at creation.
+func ownedBMIStatus(co *v1alpha1.ClusterOrder) *privatev1.BareMetalInstanceStatus {
+	return privatev1.BareMetalInstanceStatus_builder{
+		Cluster: privatev1.ClusterLocalReference_builder{
+			Id: co.Labels[clusterOrderIDLabel],
+		}.Build(),
+	}.Build()
+}
+
 func ownedBMIFixture(co *v1alpha1.ClusterOrder, name, id string) *privatev1.BareMetalInstance {
-	return privatev1.BareMetalInstance_builder{Id: id, Metadata: privatev1.Metadata_builder{
-		Name: name, Tenant: "tenant", Labels: map[string]string{clusterOrderLabel: co.Name},
-		Annotations: map[string]string{ownerReferenceAnnotation: "ClusterOrder/" + co.Name},
-	}.Build()}.Build()
+	return privatev1.BareMetalInstance_builder{
+		Id: id,
+		Metadata: privatev1.Metadata_builder{
+			Name: name, Tenant: "tenant",
+		}.Build(),
+		Status: ownedBMIStatus(co),
+	}.Build()
 }
 func bmiStageHarness(phase, id string) (*Reconciler, *bmiObservationClient, *v1alpha1.ClusterOrder) {
 	GinkgoHelper()

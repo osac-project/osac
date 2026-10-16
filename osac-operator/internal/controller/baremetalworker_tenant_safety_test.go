@@ -125,9 +125,8 @@ var _ = Describe("BareMetalWorker tenant safety", Label("baremetalworker"), func
 		bmi, err := fc.CreateBareMetalInstance(ctx, privatev1.BareMetalInstance_builder{
 			Metadata: privatev1.Metadata_builder{
 				Tenant: "tenant2", Name: bmiName,
-				Labels:      map[string]string{"osac.openshift.io/cluster-order": orderName},
-				Annotations: map[string]string{"osac.openshift.io/owner-reference": "ClusterOrder/" + orderName},
 			}.Build(),
+			Status: ownedWorkerStatus("another-cluster"),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		return bmi.GetId()
@@ -251,9 +250,8 @@ var _ = Describe("BareMetalWorker tenant safety", Label("baremetalworker"), func
 		bmi, err := fc.CreateBareMetalInstance(ctx, privatev1.BareMetalInstance_builder{
 			Metadata: privatev1.Metadata_builder{
 				Tenant: tenant, Name: "other-worker",
-				Labels:      map[string]string{"osac.openshift.io/cluster-order": co.Name},
-				Annotations: map[string]string{"osac.openshift.io/owner-reference": "ClusterOrder/" + co.Name},
 			}.Build(),
+			Status: ownedWorkerStatus(clusterID),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		workerName := co.Name + "-worker-0"
@@ -276,9 +274,8 @@ var _ = Describe("BareMetalWorker tenant safety", Label("baremetalworker"), func
 		bmi, err := fc.CreateBareMetalInstance(ctx, privatev1.BareMetalInstance_builder{
 			Metadata: privatev1.Metadata_builder{
 				Tenant: tenant, Name: name,
-				Labels:      map[string]string{"osac.openshift.io/cluster-order": "another-order"},
-				Annotations: map[string]string{"osac.openshift.io/owner-reference": "ClusterOrder/another-order"},
 			}.Build(),
+			Status: ownedWorkerStatus("another-cluster"),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		setStatus(co.Name, name, bmi.GetId(), "Deleting")
@@ -296,9 +293,8 @@ var _ = Describe("BareMetalWorker tenant safety", Label("baremetalworker"), func
 		bmi, err := fc.CreateBareMetalInstance(ctx, privatev1.BareMetalInstance_builder{
 			Metadata: privatev1.Metadata_builder{
 				Tenant: tenant, Name: co.Name + "-worker-0",
-				Labels:      map[string]string{"osac.openshift.io/cluster-order": co.Name},
-				Annotations: map[string]string{"osac.openshift.io/owner-reference": "ClusterOrder/" + co.Name},
 			}.Build(),
+			Status: ownedWorkerStatus(clusterID),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		setStatus(co.Name, bmi.GetMetadata().GetName(), "", "Provisioning")
@@ -318,9 +314,8 @@ var _ = Describe("BareMetalWorker tenant safety", Label("baremetalworker"), func
 		bmi, err := fc.CreateBareMetalInstance(ctx, privatev1.BareMetalInstance_builder{
 			Metadata: privatev1.Metadata_builder{
 				Tenant: tenant, Name: co.Name + "-worker-0",
-				Labels:      map[string]string{"osac.openshift.io/cluster-order": co.Name},
-				Annotations: map[string]string{"osac.openshift.io/owner-reference": "ClusterOrder/" + co.Name},
 			}.Build(),
+			Status: ownedWorkerStatus(clusterID),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		setStatus(co.Name, bmi.GetMetadata().GetName(), "", "Provisioning")

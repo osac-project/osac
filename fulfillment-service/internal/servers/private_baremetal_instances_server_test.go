@@ -1921,6 +1921,52 @@ var _ = Describe("Private bare metal instances server", func() {
 
 		})
 
+		It("auto_external_ip_attachment places the ExternalIP and attachment in the instance's project", func() {
+			seedProject("auto-eip-project")
+			seedTenantDefaultNetworking(testTenant, "auto-eip-project", new("netris"))
+
+			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:    fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						Project: "auto-eip-project",
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						DiskImage:                privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:              privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						SshPublicKey:             new(testSSHPublicKey),
+						AutoExternalIpAttachment: proto.Bool(true),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			bmiID := response.GetObject().GetId()
+
+			eipDao, err := dao.NewGenericDAO[*privatev1.ExternalIP]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			eipList, err := eipDao.List().
+				SetFilter(fmt.Sprintf("this.metadata.labels['osac.openshift.io/auto-created-for'] == '%s'", bmiID)).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(eipList.GetItems()).To(HaveLen(1))
+			Expect(eipList.GetItems()[0].GetMetadata().GetProject()).To(Equal("auto-eip-project"),
+				"the automatic IP must be usage-attributed to the instance's project")
+
+			attDao, err := dao.NewGenericDAO[*privatev1.ExternalIPAttachment]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			attList, err := attDao.List().
+				SetFilter(fmt.Sprintf("this.metadata.labels['osac.openshift.io/auto-created-for'] == '%s'", bmiID)).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(attList.GetItems()).To(HaveLen(1))
+			Expect(attList.GetItems()[0].GetMetadata().GetProject()).To(Equal("auto-eip-project"),
+				"the attachment joins the instance and its automatic IP in the instance's project")
+		})
+
 		It("Rejects PATCH that changes auto_external_ip_attachment", func() {
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{

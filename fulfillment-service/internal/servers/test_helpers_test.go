@@ -76,10 +76,12 @@ func createComputeInstanceInState(
 	if len(hubIDs) > 0 {
 		hubID = hubIDs[0]
 	}
+	// Attachments join resources in one tenant and project, so the fixture lives in the suite
+	// tenant like the ExternalIPs and attachments created against it.
 	resp, err := computeInstanceDao.Create().SetObject(
 		privatev1.ComputeInstance_builder{
 			Metadata: privatev1.Metadata_builder{
-				Tenant: "shared",
+				Tenant: testTenant,
 				Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 			}.Build(),
 			Spec: privatev1.ComputeInstanceSpec_builder{

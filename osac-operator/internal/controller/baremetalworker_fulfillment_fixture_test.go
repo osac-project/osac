@@ -513,3 +513,15 @@ func (f *workerFulfillmentStub) GetInstanceTypeCalls() []string {
 	defer f.mu.Unlock()
 	return append([]string(nil), f.getInstanceTypeCalls...)
 }
+
+// ownedWorkerStatus builds the status the worker controller records on a created BMI: the
+// cluster it was created for, and optionally a lifecycle state.
+func ownedWorkerStatus(clusterID string, state ...privatev1.BareMetalInstanceState) *privatev1.BareMetalInstanceStatus {
+	builder := privatev1.BareMetalInstanceStatus_builder{
+		Cluster: privatev1.ClusterLocalReference_builder{Id: clusterID}.Build(),
+	}
+	if len(state) > 0 {
+		builder.State = state[0]
+	}
+	return builder.Build()
+}

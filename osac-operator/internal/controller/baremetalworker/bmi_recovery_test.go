@@ -33,17 +33,15 @@ import (
 
 var _ = Describe("BMI recovery rejects foreign identities", func() {
 	for _, deletion := range []bool{false, true} {
-		for _, field := range []string{"tenant", "owner", "label", "empty ID", "unrecorded name"} {
+		for _, field := range []string{"tenant", "owner reference", "empty ID", "unrecorded name"} {
 			It(map[bool]string{true: "deletion", false: "normal"}[deletion]+"/"+field, func() {
 				r, fc, co := bmiStageHarness(workerPhaseProvisioning, "")
 				bmi := ownedBMIFixture(co, "recorded-bmi", "owned-id")
 				switch field {
 				case "tenant":
 					bmi.GetMetadata().SetTenant("foreign")
-				case "owner":
-					bmi.GetMetadata().SetAnnotations(map[string]string{ownerReferenceAnnotation: "ClusterOrder/foreign"})
-				case "label":
-					bmi.GetMetadata().SetLabels(map[string]string{clusterOrderLabel: "foreign"})
+				case "owner reference":
+					bmi.GetStatus().GetCluster().SetId("foreign-cluster")
 				case "empty ID":
 					bmi.SetId("")
 				case "unrecorded name":

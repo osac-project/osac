@@ -884,11 +884,11 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 			getClusterOrder(name).Status.Conditions, osacv1alpha1.ConditionInfraEnvReady)).To(BeTrue())
 	}
 
-	It("creates a tenant-owned fulfillment worker BMI with owner annotation", func() {
+	It("creates a tenant-owned fulfillment worker BMI attributed to its cluster", func() {
 		preloadDiskImageChain()
 		fc.AddCluster(privatev1.Cluster_builder{
 			Id:       clusterUUID,
-			Metadata: privatev1.Metadata_builder{Tenant: "tenant1"}.Build(),
+			Metadata: privatev1.Metadata_builder{Tenant: "tenant1", Project: "team1"}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
 				Version: privatev1.ClusterVersionReference_builder{Id: cvID}.Build(),
 			}.Build(),
@@ -903,9 +903,11 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 		Expect(fc.CreateCalls()).To(HaveLen(1))
 		bmi := fc.CreateCalls()[0]
 		Expect(bmi.GetMetadata().GetTenant()).To(Equal("tenant1"))
-		Expect(bmi.GetMetadata().GetAnnotations()).To(HaveKeyWithValue(
-			"osac.openshift.io/owner-reference", "ClusterOrder/bmw-tenant-owned"))
-		Expect(bmi.GetMetadata().GetLabels()).To(HaveKeyWithValue("osac.openshift.io/cluster-order", co.Name))
+		Expect(bmi.GetMetadata().GetProject()).To(Equal("team1"))
+		Expect(bmi.GetMetadata().GetLabels()).To(BeEmpty())
+		Expect(bmi.GetMetadata().GetAnnotations()).To(BeEmpty())
+		Expect(bmi.GetStatus().GetCluster().GetId()).To(Equal(clusterUUID))
+		Expect(bmi.GetStatus().GetNodeSet()).To(Equal("bm-standard"))
 		Expect(bmi.GetSpec().GetCatalogItem()).To(BeNil())
 		Expect(bmi.GetSpec().GetTemplate().GetId()).To(Equal("osac.templates.bm_host_provisioning"))
 		Expect(bmi.GetSpec().GetTemplate().GetShared()).To(BeTrue())
@@ -928,9 +930,8 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 		bmi := calls[0]
 		Expect(bmi.GetMetadata().GetTenant()).To(Equal("tenant1"))
 		Expect(bmi.GetMetadata().GetName()).To(Equal(getClusterOrder("bmw-create").Status.Workers[0].BareMetalInstance.Name))
-		Expect(bmi.GetMetadata().GetLabels()).To(HaveKeyWithValue("osac.openshift.io/cluster-order", "bmw-create"))
-		Expect(bmi.GetMetadata().GetAnnotations()).To(HaveKeyWithValue(
-			"osac.openshift.io/owner-reference", "ClusterOrder/bmw-create"))
+		Expect(bmi.GetStatus().GetCluster().GetId()).To(Equal(clusterUUID))
+		Expect(bmi.GetStatus().GetNodeSet()).To(Equal("bm-standard"))
 		Expect(bmi.GetSpec().GetCatalogItem()).To(BeNil())
 		Expect(bmi.GetSpec().GetTemplate().GetShared()).To(BeTrue())
 		Expect(bmi.GetSpec().GetInstanceType().GetShared()).To(BeTrue())
@@ -1096,11 +1097,10 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 		// reconcile in makeInfraEnvReady reaches reconcileWorkers.
 		_, err := fc.CreateBareMetalInstance(ctx, privatev1.BareMetalInstance_builder{
 			Metadata: privatev1.Metadata_builder{
-				Tenant:      "tenant1",
-				Name:        "bmw-idem-worker-0",
-				Labels:      map[string]string{"osac.openshift.io/cluster-order": "bmw-idem"},
-				Annotations: map[string]string{"osac.openshift.io/owner-reference": "ClusterOrder/bmw-idem"},
+				Tenant: "tenant1",
+				Name:   "bmw-idem-worker-0",
 			}.Build(),
+			Status: ownedWorkerStatus(clusterUUID),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 
@@ -1130,11 +1130,10 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 		// Pre-create the tenant-owned BMI; no catalog item should be needed.
 		_, err := fc.CreateBareMetalInstance(ctx, privatev1.BareMetalInstance_builder{
 			Metadata: privatev1.Metadata_builder{
-				Tenant:      "tenant1",
-				Name:        "bmw-catalog-heal-worker-0",
-				Labels:      map[string]string{"osac.openshift.io/cluster-order": "bmw-catalog-heal"},
-				Annotations: map[string]string{"osac.openshift.io/owner-reference": "ClusterOrder/bmw-catalog-heal"},
+				Tenant: "tenant1",
+				Name:   "bmw-catalog-heal-worker-0",
 			}.Build(),
+			Status: ownedWorkerStatus(clusterUUID),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 

@@ -20,6 +20,16 @@
       {%- elif osac_job_vars.resource.kind == 'Tenant' -%}
       {{ osac_job_vars.resource.metadata.name }}
       {%- endif -%}
+    # The fulfillment project of the CaaS cluster, recorded on the ClusterOrder by the
+    # fulfillment-service cluster controller. StorageClasses carry it as the `project`
+    # parameter so volumes provisioned through the OSAC CSI driver land in the cluster's
+    # project instead of the tenant's default one.
+    project_name: >-
+      {%- if osac_job_vars.resource.kind == 'ClusterOrder' -%}
+      {{ osac_job_vars.resource.metadata.annotations['osac.openshift.io/project'] | default('') }}
+      {%- else -%}
+      {{ '' }}
+      {%- endif -%}
     tenant_namespace: >-
       {%- if osac_job_vars.resource.kind == 'ClusterOrder' -%}
       openshift-osac-storage

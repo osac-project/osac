@@ -527,6 +527,7 @@ func (t *task) reconcileAutoExternalIPAttachment(ctx context.Context) error {
 		Metadata: privatev1.Metadata_builder{
 			Name:    "auto-eipa-" + shortID,
 			Tenant:  ci.GetMetadata().GetTenant(),
+			Project: ci.GetMetadata().GetProject(),
 			Creator: "system",
 			Labels: map[string]string{
 				labels.AutoCreated:    "true",

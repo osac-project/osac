@@ -3818,6 +3818,7 @@ var _ = Describe("Private compute instances server", func() {
 		var externalIPPoolDao *dao.GenericDAO[*privatev1.ExternalIPPool]
 		var externalIPDao *dao.GenericDAO[*privatev1.ExternalIP]
 		var externalIPAttachmentDao *dao.GenericDAO[*privatev1.ExternalIPAttachment]
+		var projectSubnetID string
 
 		BeforeEach(func() {
 			var err error
@@ -3940,6 +3941,11 @@ var _ = Describe("Private compute instances server", func() {
 				SetTenancyLogic(tenancy).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
+
+			// Seed a project with its own default networking so the automatic ExternalIP's
+			// project placement can be asserted for an instance outside the default project.
+			seedProject("auto-eip-project")
+			projectSubnetID, _, _ = seedTenantDefaultNetworking(testTenant, "auto-eip-project", new("netris"))
 		})
 
 		createPool := func(id string, available int64) {
@@ -3983,6 +3989,17 @@ var _ = Describe("Private compute instances server", func() {
 					}.Build(),
 				}.Build(),
 			}.Build()
+		}
+
+		// createRequestInProject builds the same request for an instance in a named project,
+		// using the project-scoped default networking seeded in the BeforeEach.
+		createRequestInProject := func(autoEIP bool, project string) *privatev1.ComputeInstancesCreateRequest {
+			request := createRequest(autoEIP)
+			request.GetObject().GetMetadata().SetProject(project)
+			request.GetObject().GetSpec().GetNetworkAttachments()[0].SetSubnet(
+				privatev1.SubnetLocalReference_builder{Id: projectSubnetID}.Build(),
+			)
+			return request
 		}
 
 		It("rejects VM creation on a NetworkClass without a Kubernetes manager before creating an auto ExternalIP", func() {
@@ -4043,6 +4060,24 @@ var _ = Describe("Private compute instances server", func() {
 			Expect(poolResp.GetObject().GetStatus().GetAvailable()).To(Equal(int64(4)))
 			Expect(poolResp.GetObject().GetStatus().GetAllocated()).To(Equal(int64(1)))
 
+		})
+
+		It("places the auto ExternalIP in the ComputeInstance's project", func() {
+			createPool("pool-1", 5)
+
+			response, err := server.Create(ctx, createRequestInProject(true, "auto-eip-project"))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response).ToNot(BeNil())
+
+			ciID := response.GetObject().GetId()
+
+			eipList, err := externalIPDao.List().
+				SetFilter(fmt.Sprintf("this.metadata.labels['%s'] == '%s'", autoCreatedForLabel, ciID)).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(eipList.GetItems()).To(HaveLen(1))
+			Expect(eipList.GetItems()[0].GetMetadata().GetProject()).To(Equal("auto-eip-project"),
+				"the automatic IP must be usage-attributed to the instance's project")
 		})
 
 		It("Does not auto-provision when auto_external_ip_attachment is false", func() {

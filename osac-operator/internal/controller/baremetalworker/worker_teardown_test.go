@@ -145,7 +145,7 @@ var _ = Describe("Worker retention when cleanup evidence is unknown", func() {
 				if scenario == "foreign-tenant" {
 					fc.returned.GetMetadata().SetTenant("foreign")
 				} else {
-					fc.returned.GetMetadata().SetAnnotations(map[string]string{ownerReferenceAnnotation: "ClusterOrder/foreign"})
+					fc.returned.GetStatus().GetCluster().SetId("foreign-cluster")
 				}
 			case "idless":
 				w.BareMetalInstance.ID = ""

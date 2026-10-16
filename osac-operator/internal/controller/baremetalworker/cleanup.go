@@ -71,8 +71,7 @@ func (r *Reconciler) recoverCleanupBMI(ctx context.Context, co *v1alpha1.Cluster
 	if w.BareMetalInstance.Name == "" {
 		return fmt.Errorf("worker %s has no recorded BMI name", w.Name)
 	}
-	filter := fmt.Sprintf(`this.metadata.labels["%s"] == "%s"`, clusterOrderLabel, co.Name)
-	bmis, err := r.fulfillment.ListBareMetalInstances(ctx, filter)
+	bmis, err := r.fulfillment.ListBareMetalInstances(ctx, workerBMIFilter(co))
 	if err != nil {
 		return err
 	}

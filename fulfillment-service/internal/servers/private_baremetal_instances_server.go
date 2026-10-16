@@ -1110,6 +1110,7 @@ func (s *PrivateBareMetalInstancesServer) autoProvisionExternalIP(
 	}
 
 	tenant := bmi.GetMetadata().GetTenant()
+	project := bmi.GetMetadata().GetProject()
 	bmiID := bmi.GetId()
 	shortID := bmiID
 	if len(shortID) > 8 {
@@ -1120,6 +1121,9 @@ func (s *PrivateBareMetalInstancesServer) autoProvisionExternalIP(
 		Metadata: privatev1.Metadata_builder{
 			Name:   fmt.Sprintf("auto-eip-%s", shortID),
 			Tenant: tenant,
+			// The automatic IP is usage-attributed to the instance, so it lives in the
+			// instance's project, not the default one.
+			Project: project,
 			Labels: map[string]string{
 				autoCreatedLabel:    "true",
 				autoCreatedForLabel: bmiID,
@@ -1157,6 +1161,9 @@ func (s *PrivateBareMetalInstancesServer) autoProvisionExternalIP(
 		Metadata: privatev1.Metadata_builder{
 			Name:   fmt.Sprintf("auto-eipa-%s", shortID),
 			Tenant: tenant,
+			// The attachment joins the instance and its automatic IP, which live in the
+			// instance's project.
+			Project: project,
 			Labels: map[string]string{
 				autoCreatedLabel:    "true",
 				autoCreatedForLabel: bmiID,

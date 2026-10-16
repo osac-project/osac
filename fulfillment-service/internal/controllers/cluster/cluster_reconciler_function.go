@@ -300,6 +300,12 @@ func (t *task) update(ctx context.Context) error {
 		orderAnnotations := map[string]string{
 			annotations.Tenant: t.cluster.GetMetadata().GetTenant(),
 		}
+		// The cluster's project rides along so downstream consumers, like the storage
+		// provisioning that creates the cluster's CSI StorageClasses, can place resources in
+		// the cluster's project.
+		if project := t.cluster.GetMetadata().GetProject(); project != "" {
+			orderAnnotations[annotations.Project] = project
+		}
 		object := &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace:    t.hubNamespace,

@@ -26,6 +26,11 @@ class TestIsTransientGrpcError:
         exc = _make_cpe("ERROR:\n  Code: Unavailable\n  Message: no healthy upstream")
         assert _is_transient_grpc_error(exc) is True
 
+    def test_matches_osac_cli_go_status_format(self) -> None:
+        """The osac CLI (a Go gRPC binary) emits the Go status format."""
+        exc = _make_cpe("Error: rpc error: code = Unavailable desc = no healthy upstream")
+        assert _is_transient_grpc_error(exc) is True
+
     def test_matches_case_insensitive(self) -> None:
         exc = _make_cpe("code: UNAVAILABLE\nmessage: No Healthy Upstream")
         assert _is_transient_grpc_error(exc) is True

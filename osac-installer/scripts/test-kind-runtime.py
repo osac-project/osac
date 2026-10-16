@@ -396,6 +396,23 @@ esac
                 self.assertNotIn("b 253:* rwm", self.storage_run_arguments())
                 self.assertNotIn("--privileged", self.storage_run_arguments())
 
+    def test_topolvm_backing_size_is_passed_to_storage_setup(self):
+        for size in ("20G", "2G"):
+            with self.subTest(size=size):
+                self.configure_storage_stubs()
+                self.env["TOPOLVM_BACKING_SIZE"] = size
+                result = self.run_shell("configure_topolvm_device_access; prepare_topolvm_storage")
+                self.assert_success(result)
+                arguments = self.storage_run_arguments()
+                self.assertIn("--env", arguments)
+                self.assertIn(f"TOPOLVM_BACKING_SIZE={size}", arguments)
+                setup_script = arguments[-1]
+                self.assertIn(
+                    'expected_size=$(numfmt --from=iec "$TOPOLVM_BACKING_SIZE" 2>/dev/null)',
+                    setup_script,
+                )
+                self.assertIn('truncate -s "$expected_size" "$disk"', setup_script)
+
     def test_lvmd_replaces_image_with_udev_dependent_configuration(self):
         for provider in ("podman", "docker"):
             with self.subTest(provider=provider):

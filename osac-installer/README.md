@@ -344,8 +344,18 @@ make install PLATFORM=kind PROFILE=dev-full NS=osac
 ```
 
 `dev-full` installs TopoLVM as the tenant `local` storage backend. Before Kind
-is created, `kind-runtime.sh` prepares a disposable 20 GiB sparse disk, the
-`vg1` volume group, and an external `lvmd` process. Linux stores these at
+is created, `kind-runtime.sh` prepares a disposable sparse disk (20 GiB by
+default), the `vg1` volume group, and an external `lvmd` process. Set
+`TOPOLVM_BACKING_SIZE` in the script's environment to a positive byte count or
+integer binary size such as `40G` to change the disk size. Make forwards the
+same setting when it invokes the script:
+
+```bash
+TOPOLVM_BACKING_SIZE=40G make install PLATFORM=kind PROFILE=dev-full NS=osac
+```
+
+Changing the configured size requires removing the existing dev-full Kind
+cluster and its local storage before reinstalling. Linux stores these at
 `/var/lib/osac-dev-full/topolvm` on the host. Docker Desktop and Podman Desktop
 store them at the same path inside the selected Linux VM. Podman Desktop needs
 a rootful machine; switch the machine to rootful mode in Podman Desktop and

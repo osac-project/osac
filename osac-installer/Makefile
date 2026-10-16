@@ -44,6 +44,7 @@ DRY_RUN_INVALID_HELM_FLAGS := $(filter-out --set --set-string --set=% --set-stri
 # builds (see osac-test-infra#543).  Override with `make test GODEBUG=` to
 # disable, or set a different value to experiment.
 GODEBUG ?= http2client=0
+TOPOLVM_BACKING_SIZE ?= 20G
 
 # -- Fail-fast parameter validation ------------------------------------
 # Guards fire at parse time, gated by MAKECMDGOALS so `make help` works.
@@ -200,6 +201,7 @@ endif
 endif
 KIND_RUNTIME_ENV := KIND_PROFILE=$(PROFILE) \
 	KIND_OSAC_NAMESPACE=$(NS) \
+	TOPOLVM_BACKING_SIZE=$(TOPOLVM_BACKING_SIZE) \
 	$(if $(KIND_RUNTIME_PROVIDER),KIND_EXPERIMENTAL_PROVIDER=$(KIND_RUNTIME_PROVIDER))
 KIND_RUNTIME_CMD := $(KIND_RUNTIME_ENV) $(KIND_RUNTIME)
 KIND_CLUSTER_NAME ?= osac-dev

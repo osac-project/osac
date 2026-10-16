@@ -31,11 +31,11 @@ logger = logging.getLogger(__name__)
 # print nothing until they finish or time out.
 _PROGRESS_LOG_INTERVAL_S = 30
 
-# Retry budget for transient Envoy "no healthy upstream" errors.  These
-# occur when Envoy momentarily has zero endpoints for the fulfillment
-# backend -- the request is never delivered, so retrying is safe even
-# for mutating RPCs.
-_TRANSIENT_GRPC_MAX_RETRIES: int = 3
+# Attempt budget for transient Envoy "no healthy upstream" errors.
+# These occur when Envoy momentarily has zero endpoints for the
+# fulfillment backend -- the request is never delivered, so retrying
+# is safe even for mutating RPCs.
+_TRANSIENT_GRPC_MAX_ATTEMPTS: int = 3
 _TRANSIENT_GRPC_RETRY_DELAY_S: float = 2.0
 
 
@@ -100,7 +100,7 @@ def run(*args: str, timeout: int = 300) -> str:
     __tracebackhide__ = True
     # The raw subprocess exceptions carry the unsanitized command
     # line, so they are never chained.
-    for attempt in range(_TRANSIENT_GRPC_MAX_RETRIES + 1):
+    for attempt in range(_TRANSIENT_GRPC_MAX_ATTEMPTS):
         try:
             result = subprocess.run(
                 args,
@@ -112,14 +112,14 @@ def run(*args: str, timeout: int = 300) -> str:
             return result.stdout.strip()
         except subprocess.CalledProcessError as exc:
             if (
-                attempt < _TRANSIENT_GRPC_MAX_RETRIES
+                attempt < _TRANSIENT_GRPC_MAX_ATTEMPTS - 1
                 and _is_transient_grpc_error(exc)
             ):
                 logger.warning(
                     "Transient gRPC upstream error "
                     "(attempt %d/%d), retrying...",
                     attempt + 1,
-                    _TRANSIENT_GRPC_MAX_RETRIES + 1,
+                    _TRANSIENT_GRPC_MAX_ATTEMPTS,
                 )
                 time.sleep(_TRANSIENT_GRPC_RETRY_DELAY_S)
                 continue

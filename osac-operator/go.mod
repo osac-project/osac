@@ -1,6 +1,6 @@
 module github.com/osac-project/osac/osac-operator
 
-go 1.26.3
+go 1.27
 
 require (
 	github.com/coder/websocket v1.8.15

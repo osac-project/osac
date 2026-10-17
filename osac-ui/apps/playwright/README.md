@@ -60,28 +60,35 @@ pnpm playwright:run     # ...repeat as many times as you're iterating
 `pnpm playwright:run` never re-authenticates — if `.auth/user.json` is missing
 or the session has expired, re-run `pnpm playwright:setup` first.
 
-### Tenant flow tests
+### Tenant and disk image flow tests
 
-The tenant create and delete specs require these additional environment
-variables:
+The create and delete specs use these optional resource names. For a combined
+create/delete run, set the name to a resource that does not already exist:
 
-| Variable              | Description                                                                                                                                        |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OSAC_TENANT_NAME`    | Tenant name used by the create and delete flows. The create flow requires that it does not already exist; the delete flow requires that it exists. |
-| `IGNORE_HTTPS_ERRORS` | Set to `true` for trusted lab clusters using a self-signed or cluster-internal certificate.                                                        |
+| Variable               | Description                                                                                 |
+| ---------------------- | ------------------------------------------------------------------------------------------- |
+| `OSAC_TENANT_NAME`     | Tenant name used by the tenant create and delete flows.                                     |
+| `OSAC_DISK_IMAGE_NAME` | DNS-label name used by the disk image create and delete flows.                              |
+| `IGNORE_HTTPS_ERRORS`  | Set to `true` for trusted lab clusters using a self-signed or cluster-internal certificate. |
 
-Set all variables before running the tenant tests:
+Tenant tests are skipped when `OSAC_TENANT_NAME` is unset. Disk image creation
+uses a unique generated name when `OSAC_DISK_IMAGE_NAME` is unset, while its
+delete test is skipped. Set `OSAC_DISK_IMAGE_NAME` to run the disk image create
+and delete flow together.
+
+Set the variables before running the flows:
 
 ```bash
 export OSAC_UI_BASE_URL=https://osac-ui-<namespace>.<cluster-domain>
 export OSAC_USERNAME=<keycloak-user>
 read -rs OSAC_PASSWORD && export OSAC_PASSWORD
 export OSAC_TENANT_NAME=tenant1
+export OSAC_DISK_IMAGE_NAME=fedora-e2e-unique
 export IGNORE_HTTPS_ERRORS=true
 ```
 
-Run the create and delete flow together. The `vmaas-delete` project depends on
-`vmaas`, so creation runs before deletion:
+Run the create and delete flows together. The `vmaas-delete` project depends
+on `vmaas`, so creation runs before deletion:
 
 ```bash
 pnpm --filter @osac/playwright exec playwright test --project=vmaas-delete
@@ -95,6 +102,12 @@ pnpm --filter @osac/playwright exec playwright test \
 
 pnpm --filter @osac/playwright exec playwright test \
   delete.tenant.spec.ts --project=vmaas-delete --no-deps
+
+pnpm --filter @osac/playwright exec playwright test \
+  create.disk_images.spec.ts --project=vmaas
+
+pnpm --filter @osac/playwright exec playwright test \
+  delete.disk_images.spec.ts --project=vmaas-delete --no-deps
 ```
 
 Use `--headed` when a graphical display is available. Run these commands from

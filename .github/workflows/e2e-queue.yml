@@ -1,81 +1,23 @@
 ---
-# The full-install E2E for a merge queue entry. By the time a pull request is queued it was approved and tested on its
-# own commit; the queue entry is that change on top of the latest main (and of the entries ahead of it), so it is tested
-# again, with no approval to wait for. The pull request's own E2E runs from e2e-pr.yml.
-#
-# `plan` lists the suites the entry needs by the rules in .github/e2e-policy.yml and the suites run as one job each.
-# The required check `E2E` is written by the OSAC CI app and passes when every suite that was needed passed. An entry
-# that touches only docs needs no suite and the check passes at once.
+# The merge queue's E2E: plans the suites for the queue entry from its changed files (a documentation-only entry needs
+# none), runs them on the entry's speculative commit, and writes the required `E2E` check of that commit. The plan, the
+# cancelling of superseded runs and the check are the shared workflows of osac-ci (pinned by commit, release tag in a
+# comment); the suite jobs are this repository's, named after the suite ids of .github/e2e-policy.yml.
 name: E2E for the merge queue
 
 on:
   merge_group:
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   plan:
-    name: Plan
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    uses: osac-project/osac-ci/.github/workflows/e2e-queue-plan.yml@c9463f6a0f6e00459160434041d38d6b7e5ae5df  # v1.0.0
     permissions:
       contents: read
-    outputs:
-      suites: ${{ steps.suites.outputs.suites }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: List the changed files
-        env:
-          BASE: ${{ github.event.merge_group.base_sha }}
-          HEAD: ${{ github.event.merge_group.head_sha }}
-        run: git diff --name-only "${BASE}" "${HEAD}" > "${RUNNER_TEMP}/changed-files"
-      - uses: osac-project/osac-ci/.github/actions/e2e-suites@d914a112324f5431ed0dc7986559a108f255ee2e  # osac-ci main
-        id: suites
-        with:
-          policy-file: ${{ github.workspace }}/.github/e2e-policy.yml
-          files-file: ${{ runner.temp }}/changed-files
-
-  # A queue entry is rebuilt when the entries ahead of it change. The run of the old entry is of no use any more and
-  # holds runners.
-  cancel-stale:
-    name: Cancel superseded runs
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
       actions: write
-    steps:
-      - name: Cancel superseded runs for this queue entry
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          HEAD_REF: ${{ github.event.merge_group.head_ref }}
-          THIS_RUN: ${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          entry="${HEAD_REF##*/}"   # pr-<N>-<sha>
-          pr="${entry%-*}"          # pr-<N>
-          case "$pr" in
-            pr-[0-9]*) ;;
-            *) echo "unexpected merge_group head_ref: '${HEAD_REF}'" >&2; exit 1 ;;
-          esac
-          echo "This entry: ${pr} (run ${THIS_RUN}); cancelling any older run for it."
-          gh run list --workflow e2e-queue.yml --event merge_group \
-            --limit 100 --json databaseId,headBranch,status \
-            --jq ".[] | select(.headBranch | contains(\"/${pr}-\"))
-                      | select(.status == \"in_progress\" or .status == \"queued\")
-                      | select(.databaseId < ${THIS_RUN}) | .databaseId" \
-          | while read -r id; do
-              echo "Cancelling superseded run ${id}"
-              gh run cancel "${id}" || echo "run ${id} already finished; nothing to cancel"
-            done
 
-  # One job per suite, named after the suite id like in e2e-pr.yml; a suite the plan did not pick does not run.
   vmaas:
-    name: vmaas
     needs: plan
     if: contains(needs.plan.outputs.suites, '"vmaas"')
     permissions:
@@ -87,7 +29,6 @@ jobs:
       sha: ${{ github.event.merge_group.head_sha }}
 
   caas:
-    name: caas
     needs: plan
     if: contains(needs.plan.outputs.suites, '"caas"')
     permissions:
@@ -99,7 +40,6 @@ jobs:
       sha: ${{ github.event.merge_group.head_sha }}
 
   bmaas:
-    name: bmaas
     needs: plan
     if: contains(needs.plan.outputs.suites, '"bmaas"')
     permissions:
@@ -110,62 +50,14 @@ jobs:
       repo: ${{ github.repository }}
       sha: ${{ github.event.merge_group.head_sha }}
 
-  # Adds up the suites. It fails when a suite failed, and also when the plan did not run, which would otherwise skip
-  # every suite and let the entry pass untested.
-  suites-result:
-    name: Suites result
-    if: ${{ !cancelled() }}
+  finish:
     needs: [plan, vmaas, caas, bmaas]
-    runs-on: ubuntu-latest
-    permissions: {}
-    outputs:
-      suites: ${{ steps.sum.outputs.suites }}
-    steps:
-      - name: Every suite that was needed passed
-        id: sum
-        env:
-          RESULTS: ${{ toJSON(needs) }}
-        run: |
-          set -euo pipefail
-          echo "suites=$(jq -r '(.plan.outputs.suites // "[]") | fromjson | join(", ")' <<<"${RESULTS}")" >> "$GITHUB_OUTPUT"
-          if [[ "$(jq -r '.plan.result' <<<"${RESULTS}")" != "success" ]]; then
-            echo "::error::Plan did not succeed, so no suite was selected"
-            exit 1
-          fi
-          bad=$(jq -r 'to_entries[] | select(.value.result != "success" and .value.result != "skipped") | "\(.key): \(.value.result)"' <<<"${RESULTS}")
-          if [[ -n "${bad}" ]]; then
-            echo "::error::Failed suites:"
-            echo "${bad}"
-            exit 1
-          fi
-          echo "Suites needed: $(jq -r '.plan.outputs.suites' <<<"${RESULTS}")" >> "$GITHUB_STEP_SUMMARY"
-
-  # The required check, `E2E`. The merge rule requires it from the OSAC CI app only (the same app that writes the E2E
-  # check of a pull request), so it is written with that app's token. A job of this workflow named `E2E` would be a check
-  # of the Actions app and would never satisfy the rule: the queue entry would wait for it until it timed out.
-  report:
-    name: Record the E2E check
-    # Also when the run was cancelled: the check is then closed as cancelled and the queue entry is removed at once,
-    # instead of waiting for a check that never comes.
-    if: ${{ always() }}
-    needs: [suites-result]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions: {}
-    steps:
-      - name: Token of the OSAC CI app, for the E2E check
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
-        with:
-          app-id: "4966101"
-          private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
-          permission-checks: write
-          permission-actions: read
-      - uses: osac-project/osac-ci/.github/actions/e2e-finish@d914a112324f5431ed0dc7986559a108f255ee2e  # osac-ci main
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          kind: checks
-          repo: ${{ github.repository }}
-          sha: ${{ github.event.merge_group.head_sha }}
-          result: ${{ needs.suites-result.result == 'success' && 'success' || (needs.suites-result.result == 'failure' && 'failure' || 'cancelled') }}
-          detail: ${{ needs.suites-result.outputs.suites }}
+    if: always()
+    uses: osac-project/osac-ci/.github/workflows/e2e-queue-finish.yml@c9463f6a0f6e00459160434041d38d6b7e5ae5df  # v1.0.0
+    permissions:
+      contents: read
+    with:
+      sha: ${{ github.event.merge_group.head_sha }}
+      results: ${{ toJSON(needs) }}
+    secrets:
+      OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}

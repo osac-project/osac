@@ -94,9 +94,11 @@ comes within about a quarter of an hour). Anything else gets a person.
   `e2e-pr.yml` and in `e2e-queue.yml` (copy the `vmaas` job). The line on the pull request follows the job of that name
   (waiting for a runner, running, then passed or failed, with a link to its log); a suite the policy did not pick does not
   run and has no line.
-- **The decision and the `E2E` check** (approval, CI result, the wording above) live in
-  [osac-project/osac-ci](https://github.com/osac-project/osac-ci). The workflows pin its actions to a full commit; bump
-  the pin in a reviewed pull request.
+- **The decision and the `E2E` check** (approval, CI result, the wording above), the queue plan and the bot sweep are the
+  shared workflows of [osac-project/osac-ci](https://github.com/osac-project/osac-ci); `e2e-pr.yml`, `e2e-queue.yml` and
+  `bot-approve.yml` here are thin callers that keep the triggers and the suite jobs. The rules they apply are one page:
+  osac-ci `docs/RULES.md`. The callers pin a full commit of an osac-ci release (the tag in a comment); the Dependabot group
+  `osac-ci` opens one pull request per release, reviewed by wg-infra.
 - **Emergency:** setting the repository variable `CI_GATING_ENABLED` to `false` makes `CI` run every part.
 - `workflow_run` lists workflows by exact name. `e2e-pr.yml` lists `CI` and `E2E review relay`; renaming either needs the
   list changed.

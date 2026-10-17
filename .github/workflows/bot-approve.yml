@@ -1,24 +1,17 @@
 ---
-# Approves dependency-update pull requests (Dependabot, Konflux) when no person needs to read them, as the OSAC CI app
-# (osac-ci[bot]). The answer is "approve" only when every commit is the bot's own, plain and signed, and every changed
-# file is a dependency file; a commit added by a person, a hand rebase, an "Update branch" merge, or a change to a
-# workflow or a script makes it refuse, and then a person approves as for any pull request (see osac-project/osac-ci,
-# README, "Approving dependency updates without a person"). The approval is made for the exact head commit that was
-# checked, so a later push drops it (the repository dismisses stale approvals) and the next run looks again. A repeated
-# run does not stack approvals.
+# Approves dependency updates (Dependabot and Konflux) as the OSAC CI app (osac-ci[bot]) when no person needs to read
+# them: every commit is the bot's own, plain and signed, and every changed file is a dependency file. Everything else
+# waits for a person as for any pull request. The sweep is the shared workflow of osac-ci (pinned by commit, release tag
+# in a comment); which bots, which files and which commits count are osac-ci's central rules (docs/RULES.md there).
 #
-# For a Konflux pull request it also makes the title and the label the `jira-reference` check needs, and approves its held
-# workflow runs (this was konflux-auto-label.yml).
-#
-# It runs on a schedule, not on the pull request event. A run started by a pull request that Dependabot opened gets only
-# Dependabot's secrets, so the app's key would have to be given to Dependabot as well; a scheduled run is not started by
-# Dependabot and uses the organization's normal secret, so the key stays out of the Dependabot context. The price is a
-# wait of up to a quarter of an hour. Nothing here checks out or runs pull request code: the decision comes from the API.
-# The approval uses a token of the OSAC CI app with the pull-request permission only, minted from the app's key.
+# It runs on a schedule and by hand, not on the pull request: a run started by a pull request that Dependabot opened
+# gets only Dependabot's secrets, while a scheduled run uses the organization's normal secret. For a Konflux pull request
+# it also makes the title and the label the Jira reference check needs and approves its held workflow runs (once the bot
+# policy approves the commit), with the merge queue token, because an edit by the workflow's own token starts no workflow.
 name: Bot approval
+
 on:
   schedule:
-    # Every 15 minutes, not on the hour: GitHub queues everyone's on-the-hour schedules together and can delay them.
     - cron: '3,18,33,48 * * * *'
   workflow_dispatch:
     inputs:
@@ -27,125 +20,22 @@ on:
         required: false
         default: ""
 
-permissions:
-  contents: read
+permissions: {}
 
-# One sweep at a time. A sweep is short, and the next one looks again at whatever it missed.
 concurrency:
   group: bot-approve
   cancel-in-progress: false
 
 jobs:
-  list:
-    name: List dependency updates
+  sweep:
     if: github.repository == 'osac-project/osac'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    uses: osac-project/osac-ci/.github/workflows/bot-sweep.yml@c9463f6a0f6e00459160434041d38d6b7e5ae5df  # v1.0.0
     permissions:
       contents: read
       pull-requests: read
-    outputs:
-      numbers: ${{ steps.list.outputs.numbers }}
-    steps:
-      - name: Open pull requests of the two update bots
-        id: list
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          NUMBER: ${{ inputs.number }}
-        run: |
-          set -euo pipefail
-          if [[ -n "${NUMBER}" ]]; then
-            [[ "${NUMBER}" =~ ^[0-9]+$ ]] || { echo "::error::The pull request number must be digits only."; exit 1; }
-            numbers="[${NUMBER}]"
-          else
-            # Only the two update bots; every other author would be answered "skip-not-a-bot" at the cost of a runner.
-            numbers=$(gh api --paginate "repos/${REPO}/pulls?state=open&per_page=100" \
-              --jq '[.[] | select(.draft | not) | select(.user.login == "dependabot[bot]" or .user.login == "red-hat-konflux-kflux-prd-rh02[bot]") | .number]' \
-              | jq -cs 'add // []')
-          fi
-          echo "numbers=${numbers}" >> "$GITHUB_OUTPUT"
-          echo "Dependency updates to look at: ${numbers}" >> "$GITHUB_STEP_SUMMARY"
-
-  approve:
-    name: "Approve #${{ matrix.number }}"
-    needs: list
-    if: needs.list.outputs.numbers != '[]'
-    strategy:
-      fail-fast: false
-      max-parallel: 3
-      matrix:
-        number: ${{ fromJSON(needs.list.outputs.numbers) }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read  # the action is fetched from osac-ci by the runner; nothing of this repository is checked out
-      pull-requests: read  # read the pull request, its commits, files and reviews; the approval uses the app's token
-    steps:
-      # Konflux (an external app) opens pull requests whose title has no Jira key and that Prow gives no
-      # jira/valid-reference label (the `jira-reference` check reads it), and its workflow runs can wait in GitHub's
-      # first-time-contributor gate. So a Konflux pull request gets NO-ISSUE: in its title, then the label, and its held runs
-      # are approved. This was konflux-auto-label.yml, a pull_request_target workflow that put a skipped row on every pull
-      # request. The merge queue token makes the edits: an edit by the workflow's own token starts no workflow, and
-      # `jira-reference` has to run again.
-      - name: Make a Konflux pull request ready
-        env:
-          GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
-          REPO: ${{ github.repository }}
-          NUMBER: ${{ matrix.number }}
-        run: |
-          set -euo pipefail
-          pull=$(gh api "repos/${REPO}/pulls/${NUMBER}")
-          if [[ "$(jq -r '.user.login' <<<"${pull}")" != "red-hat-konflux-kflux-prd-rh02[bot]" ]]; then
-            echo "PR #${NUMBER} is not a Konflux pull request; nothing to do"
-            exit 0
-          fi
-          title=$(jq -r '.title' <<<"${pull}")
-          if [[ ! "${title}" =~ ^(NO-ISSUE|[A-Z][A-Z0-9]*-[0-9]+): ]]; then
-            echo "Prefixing the title: NO-ISSUE: ${title}"
-            gh pr edit "${NUMBER}" --repo "${REPO}" --title "NO-ISSUE: ${title}"
-          fi
-          if [[ "$(jq -r '[.labels[].name] | index("jira/valid-reference") != null' <<<"${pull}")" != "true" ]]; then
-            echo "Adding the label jira/valid-reference"
-            gh pr edit "${NUMBER}" --repo "${REPO}" --add-label jira/valid-reference
-          fi
-          head_sha=$(jq -r '.head.sha' <<<"${pull}")
-          # A real listing failure must not look like "no held runs".
-          pending=$(gh api --paginate "repos/${REPO}/actions/runs?head_sha=${head_sha}&status=action_required&per_page=100" \
-            --jq '.workflow_runs[].id')
-          approved=0
-          failed=0
-          for run_id in ${pending}; do
-            if gh api "repos/${REPO}/actions/runs/${run_id}/approve" --method POST --silent; then
-              approved=$((approved + 1))
-            else
-              failed=$((failed + 1))
-              echo "::error::Failed to approve run ${run_id} for ${head_sha:0:7}"
-            fi
-          done
-          echo "Approved ${approved} held run(s) for ${head_sha:0:7}."
-          [[ "${failed}" -eq 0 ]]
-      # The approval is made by the OSAC CI app (osac-ci[bot]), with a token that has the pull-request permission only and
-      # lasts an hour. The app is the organization's; its key is an organization secret.
-      - name: Token of the OSAC CI app, for the approval only
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
-        with:
-          app-id: "4966101"
-          private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
-          permission-pull-requests: write
-      - uses: osac-project/osac-ci/.github/actions/bot-approve@d914a112324f5431ed0dc7986559a108f255ee2e  # osac-ci main
-        id: approve
-        with:
-          github-token: ${{ github.token }}
-          approve-token: ${{ steps.app-token.outputs.token }}
-          repo: ${{ github.repository }}
-          number: ${{ matrix.number }}
-      - name: Keep the decision
-        if: steps.approve.outputs.json-file != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
-        with:
-          name: bot-approval-${{ matrix.number }}-${{ github.run_id }}
-          path: ${{ steps.approve.outputs.json-file }}
-          retention-days: 14
-          if-no-files-found: ignore
+    with:
+      number: ${{ inputs.number }}
+      konflux-prep: true
+    secrets:
+      OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
+      MERGE_QUEUE_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}

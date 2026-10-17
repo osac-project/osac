@@ -1,26 +1,22 @@
 ---
 # Runs the full-install E2E for a pull request, and keeps the pull request's one `E2E` check up to date from the first
-# push to the result. The E2E takes about 100 minutes of a real cluster, so it starts only when it is allowed to:
+# push to the result. The E2E takes about 100 minutes of a real cluster, so it starts only when it is allowed to: a person
+# with write access (or CodeRabbit, for a branch of this repository, never for a fork) approved the exact head commit, no
+# cheap check has failed on it, and the change touches something an E2E suite tests. It does not wait for CI.
 #
-#   * a person with write access, or CodeRabbit, has approved the exact head commit (a push drops the approval; a clean
-#     rebase keeps it). For a pull request from a fork only a person with write access counts: the author of a fork
-#     controls what CodeRabbit reads, and the E2E runs that code with secrets,
-#   * no cheap check has already failed on that commit, and
-#   * the change touches something an E2E suite tests (docs and the like need none).
+# The decision, the `E2E` check and its suite lines, and the housekeeping (auto-merge, the relay run, superseded Jira
+# check runs) are the shared workflows of osac-ci, pinned by commit with the release tag in a comment; the rules they
+# apply are in osac-ci's docs/RULES.md and policy/flow.yml. What stays here: the triggers, which GitHub requires in the
+# repository, and the suite jobs, because a `uses:` cannot be dynamic. Which suites a change needs is
+# .github/e2e-policy.yml (suite ids = the job names below), read from the default branch, never from the pull request.
+# See .github/CI.md for adding a suite.
 #
-# It does NOT wait for CI: the integration tests alone can take an hour, so the E2E runs in parallel with CI, and both
-# are required for the merge. Until the approval the `E2E` check says what it waits for. A commit gets its E2E once: a
-# re-run of the finished run from the Actions page runs it again, and so does a new commit.
-#
-# Where the rules are: .github/e2e-policy.yml (the suites and the path filters that need them) and osac-ci (the
-# decision, and the check). Where the E2E itself is: the e2e-<suite>-full-install.yml workflows, one job each.
-#
-# This workflow starts when CI starts or finishes and when a review is submitted or dismissed or the pull request changes
-# between draft and ready (e2e-review-relay.yml). It runs from the default branch with the repository's token and checks
-# out nothing of the pull request, so a fork pull request is handled like any other. It reads the policy from the default
-# branch, never from the pull request. The suites it calls run the pull request's code, on the commit that was approved
-# and nothing else.
+# This workflow starts when CI starts or finishes, and when a review is submitted or dismissed or the pull request
+# changes between draft and ready (e2e-review-relay.yml). It runs from the default branch and checks out nothing of the
+# pull request, so a fork pull request is handled like any other. The suites it calls run the pull request's code, on the
+# commit that was approved and nothing else.
 name: E2E for pull requests
+# The decision cancels the E2E of older commits by reading run titles: keep this exact format.
 run-name: >-
   ${{ github.event_name == 'workflow_dispatch' && format('E2E #{0} (started by hand)', inputs.number) ||
   format('E2E {0}:{1} @ {2}', github.event.workflow_run.head_repository.full_name, github.event.workflow_run.head_branch,
@@ -28,7 +24,7 @@ run-name: >-
 
 on:  # zizmor: ignore[dangerous-triggers] -- no pull request code is checked out; the suites run the approved commit
   workflow_run:
-    workflows: ["CI", "E2E review relay"]
+    workflows: ["CI", "E2E review relay"]  # keep in step with ci-workflow-name and relay-workflow-name of the decision
     types: [requested, completed]
   workflow_dispatch:
     inputs:
@@ -36,261 +32,32 @@ on:  # zizmor: ignore[dangerous-triggers] -- no pull request code is checked out
         description: Pull request number
         required: true
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   decide:
-    name: Decide
-    # A finished run only matters when it belongs to a pull request (not to the merge queue or a push to main).
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.event == 'pull_request' ||
-      github.event.workflow_run.event == 'pull_request_review'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    # One decision at a time per head commit (or per pull request when started by hand), so two runs never claim the
-    # same commit together. GitHub keeps one waiting run per group, so a burst of events costs one extra decision.
-    concurrency:
-      group: e2e-decide-${{ github.event.workflow_run.head_sha || inputs.number }}
-      cancel-in-progress: false
-    permissions:
-      contents: read  # check out the policy and the path filters of the default branch
-      pull-requests: read  # the pull request, its reviews and files
-      checks: read  # the check runs of the head commit, for the decision
-      actions: write  # cancel the E2E of an older commit of the same pull request
-    outputs:
-      start: ${{ steps.report.outputs.start }}
-      sha: ${{ steps.report.outputs.sha }}
-      number: ${{ steps.report.outputs.number }}
-      suites: ${{ steps.report.outputs.suites }}
-      suite-checks: ${{ steps.report.outputs.suite-checks }}
-      head-repo: ${{ steps.code.outputs.repo }}
-      fork-author: ${{ steps.code.outputs.fork-author }}
-      fork-association: ${{ steps.code.outputs.fork-association }}
-      approved: ${{ steps.approved.outputs.yes }}
-      approved-number: ${{ steps.approved.outputs.number }}
-      approved-sha: ${{ steps.approved.outputs.sha }}
-    steps:
-      # The default branch (the ref a workflow_run runs at), never the pull request.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          sparse-checkout: |
-            .github/e2e-policy.yml
-            .github/filters/ci-filters.yml
-          persist-credentials: false
-      - uses: osac-project/osac-ci/.github/actions/e2e-decide@d914a112324f5431ed0dc7986559a108f255ee2e  # osac-ci main
-        id: decide
-        with:
-          github-token: ${{ github.token }}
-          repo: ${{ github.repository }}
-          policy-file: ${{ github.workspace }}/.github/e2e-policy.yml
-          number: ${{ inputs.number }}
-          head-sha: ${{ github.event.workflow_run.head_sha }}
-      # The E2E lines are check runs of the OSAC CI app, which the pull request page draws (a spinner while they run, the
-      # exact names). A check run written with this workflow's own token would be attached to whichever Actions check
-      # suite of the commit is oldest, and the page does not draw those. The token has the permissions this job needs and
-      # lasts an hour.
-      - name: Token of the OSAC CI app, for the E2E lines
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
-        with:
-          app-id: "4966101"
-          private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
-          permission-checks: write
-          permission-actions: read
-      - uses: osac-project/osac-ci/.github/actions/e2e-report@d914a112324f5431ed0dc7986559a108f255ee2e  # osac-ci main
-        id: report
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          kind: checks
-          repo: ${{ github.repository }}
-          decision-file: ${{ steps.decide.outputs.json-file }}
-      # The pull request has an approval that counts on its head commit: the auto-merge job below turns auto-merge on.
-      # Decided from the state, not from the event that woke this run: several runs for one commit replace each other, and
-      # the one that survives may be any of them.
-      - name: Is the pull request approved?
-        id: approved
-        if: steps.decide.outputs.number != ''
-        env:
-          DECISION: ${{ steps.decide.outputs.json-file }}
-        run: |
-          # One pull request was evaluated (the file is a list with one decision).
-          {
-            echo "yes=$(jq -r '.[0].approvers | length > 0' "${DECISION}")"
-            echo "number=$(jq -r '.[0].number' "${DECISION}")"
-            echo "sha=$(jq -r '.[0].head_sha' "${DECISION}")"
-          } >> "$GITHUB_OUTPUT"
-      # The repository the commit lives in (a fork for a fork pull request), for the suites to check out.
-      - name: Find the code to test
-        id: code
-        if: steps.report.outputs.start == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          NUMBER: ${{ steps.report.outputs.number }}
-        run: |
-          set -euo pipefail
-          pull=$(gh api "repos/${REPO}/pulls/${NUMBER}")
-          head_repo=$(jq -r '.head.repo.full_name // empty' <<<"${pull}")
-          if [[ -z "${head_repo}" ]]; then
-            echo "::error::The repository of the pull request's branch no longer exists."
-            exit 1
-          fi
-          echo "repo=${head_repo}" >> "$GITHUB_OUTPUT"
-          # A commit from a fork must be authorized by the suite before it gets any secret (an org member, or the
-          # ok-to-test label), whoever approved it. Both stay empty for a commit of this repository.
-          if [[ "${head_repo}" != "${REPO}" ]]; then
-            echo "fork-author=$(jq -r '.user.login' <<<"${pull}")" >> "$GITHUB_OUTPUT"
-            echo "fork-association=$(jq -r '.author_association' <<<"${pull}")" >> "$GITHUB_OUTPUT"
-          fi
-      # The E2E of an older commit of this pull request is of no use any more, and it holds a runner. Only a decision
-      # that found the pull request still at this commit gets here, so a late event for an old commit cancels nothing.
-      - name: Cancel the E2E of older commits
-        if: steps.report.outputs.number != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          NUMBER: ${{ steps.report.outputs.number }}
-          DECISION: ${{ steps.decide.outputs.json-file }}
-        run: |
-          set -euo pipefail
-          current=$(jq -r '.[0].head_sha' "${DECISION}")
-          # The run title names the repository and branch of the event: the fork for a CI run, this repository for a
-          # run started by a review. Match both, from the pull request itself.
-          branch=$(gh api "repos/${REPO}/pulls/${NUMBER}" --jq '.head.ref')
-          head_repo=$(gh api "repos/${REPO}/pulls/${NUMBER}" --jq '.head.repo.full_name // empty')
-          for status in queued waiting pending in_progress; do
-            gh run list --repo "${REPO}" --workflow e2e-pr.yml --status "${status}" --limit 100 \
-              --json databaseId,displayTitle \
-            | jq -r --arg a "E2E ${REPO}:${branch} @ " --arg b "E2E ${head_repo}:${branch} @ " --arg current "${current}" \
-                '.[] | select((.displayTitle | startswith($a)) or (.displayTitle | startswith($b))) | select(.displayTitle | endswith($current) | not) | "\(.databaseId) \(.displayTitle | split(" @ ") | last)"'
-          done | while read -r id sha; do
-            # A title names a repository and a branch, and two fork pull requests can share both (a branch called
-            # main, say). Never cancel the run of a commit that belongs to another open pull request.
-            [[ "${sha}" =~ ^[0-9a-f]{40}$ ]] || { echo "Leaving run ${id}: no commit in its title"; continue; }
-            others=$(gh api "repos/${REPO}/commits/${sha}/pulls" --jq "[.[] | select(.state == \"open\" and .number != ${NUMBER})] | length")
-            if [[ "${others}" != "0" ]]; then
-              echo "Leaving run ${id}: its commit belongs to another open pull request"
-              continue
-            fi
-            echo "Cancelling run ${id}, which is for an older commit"
-            gh run cancel "${id}" --repo "${REPO}" || echo "run ${id} already finished"
-          done
-
-  # The review relay only wakes this workflow. Once it has, its run is of no use and its row on the pull request is noise,
-  # so delete it (a deleted run takes its check rows with it). Only a relay that succeeded: a failed one stays, to be
-  # looked at. A separate job, not a step of `decide`: the concurrency group of `decide` cancels a waiting run, and a
-  # cancelled run would leave its relay row behind.
-  clean-relay:
-    name: Remove the relay run
-    if: >-
-      github.event.action == 'completed' && github.event.workflow_run.name == 'E2E review relay' &&
-      github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    permissions:
-      actions: write
-    steps:
-      - name: Delete the relay run
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          RUN_ID: ${{ github.event.workflow_run.id }}
-        run: |
-          gh api -X DELETE "repos/${REPO}/actions/runs/${RUN_ID}" \
-            || echo "::warning::Could not delete the relay run ${RUN_ID}"
-
-  # Turns auto-merge on for an approved pull request, so nobody has to come back to add it to the merge queue: once `CI`,
-  # `E2E` and `jira-reference` are green GitHub puts it in the queue, and the queue merges it. It changes no rule. It
-  # runs in the default branch's context like the rest of this workflow, so it adds no check to the pull request, and it
-  # checks out nothing. A new commit drops the approval. "Disable auto-merge" on a pull request keeps it off: the job does
-  # nothing when auto-merge was turned off after the latest approval of the head commit (so a pull request converted to
-  # a draft after its approval is not turned on again by this job; turn it on by hand).
-  auto-merge:
-    name: Auto-merge
-    needs: decide
-    if: needs.decide.outputs.approved == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions: {}
-    steps:
-      # The token of the OSAC CI app, not the workflow's: a pull request queued with the workflow's token starts no
-      # workflow for the queue (GitHub does not run workflows for what that token causes), so it would wait for its
-      # checks for ever.
-      - name: Token of the OSAC CI app
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
-        with:
-          app-id: "4966101"
-          private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
-          permission-pull-requests: write
-          permission-contents: write
-      - name: Enable auto-merge
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          REPO: ${{ github.repository }}
-          NUMBER: ${{ needs.decide.outputs.approved-number }}
-          HEAD_SHA: ${{ needs.decide.outputs.approved-sha }}
-        run: |
-          set -euo pipefail
-          view=$(gh pr view "${NUMBER}" --repo "${REPO}" --json autoMergeRequest,isDraft)
-          if [[ "$(jq -r '.autoMergeRequest != null or .isDraft' <<<"${view}")" == "true" ]]; then
-            echo "PR #${NUMBER} has auto-merge already, or is a draft"
-            exit 0
-          fi
-          approved_at=$(gh api --paginate --slurp "repos/${REPO}/pulls/${NUMBER}/reviews" \
-            | jq -r --arg sha "${HEAD_SHA}" '[.[][] | select(.state == "APPROVED" and .commit_id == $sha) | .submitted_at] | max // ""')
-          disabled_at=$(gh api --paginate --slurp "repos/${REPO}/issues/${NUMBER}/events" \
-            | jq -r '[.[][] | select(.event == "auto_merge_disabled") | .created_at] | max // ""')
-          if [[ -n "${disabled_at}" && "${disabled_at}" > "${approved_at}" ]]; then
-            echo "Auto-merge was turned off on PR #${NUMBER} after its approval; leaving it off"
-            exit 0
-          fi
-          # Only for the commit that was decided on: if the pull request has moved on, GitHub refuses.
-          gh pr merge "${NUMBER}" --repo "${REPO}" --auto --match-head-commit "${HEAD_SHA}" \
-            || echo "::warning::Could not enable auto-merge on PR #${NUMBER}"
-
-  # One check per suite on the pull request, named by the policy ("E2E / VMaaS Full Install" ...), next to the single E2E
-  # check: the suites run in this workflow run, whose jobs are not on the pull request, so this is how a person on the
-  # pull request sees which suite is waiting, running or failed, and gets to its log in one click. Only the suites that
-  # run get a check, and which suites run, and what their checks are called, is the policy's (e2e-policy.yml).
-  track:
-    name: Suite checks
-    needs: decide
-    if: needs.decide.outputs.start == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 140
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-decide.yml@c9463f6a0f6e00459160434041d38d6b7e5ae5df  # v1.0.0
     permissions:
       contents: read
-    steps:
-      # The E2E lines are check runs of the OSAC CI app, which the pull request page draws (a spinner while they run, the
-      # exact names). A check run written with this workflow's own token would be attached to whichever Actions check
-      # suite of the commit is oldest, and the page does not draw those. The token has the permissions this job needs and
-      # lasts an hour.
-      - name: Token of the OSAC CI app, for the E2E lines
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
-        with:
-          app-id: "4966101"
-          private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
-          permission-checks: write
-          permission-actions: read
-      - uses: osac-project/osac-ci/.github/actions/e2e-suites-track@d914a112324f5431ed0dc7986559a108f255ee2e  # osac-ci main
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          kind: checks
-          repo: ${{ github.repository }}
-          sha: ${{ needs.decide.outputs.sha }}
-          suite-checks: ${{ needs.decide.outputs.suite-checks }}
-          # The app token lives an hour: stop tracking before it expires. The lines stay as they are until the result.
-          timeout: "3300"
+      pull-requests: read
+      checks: read
+      actions: write
+    secrets:
+      OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
 
-  # One job per suite, named after the suite id: the line of the suite on the pull request follows the job of that name
-  # (e2e-policy.yml gives the suite its id and the name of its line). A suite the decision did not pick does not run, so
-  # it has no line. To add a suite, add its job here and in e2e-queue.yml.
+  track:
+    needs: decide
+    if: needs.decide.outputs.start == 'true'
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-track.yml@c9463f6a0f6e00459160434041d38d6b7e5ae5df  # v1.0.0
+    permissions:
+      contents: read
+    with:
+      sha: ${{ needs.decide.outputs.sha }}
+      suite-checks: ${{ needs.decide.outputs.suite-checks }}
+    secrets:
+      OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
+
   vmaas:
-    name: vmaas
     needs: decide
     if: needs.decide.outputs.start == 'true' && contains(needs.decide.outputs.suites, '"vmaas"')
     permissions:
@@ -305,7 +72,6 @@ jobs:
       fork-pr-author-association: ${{ needs.decide.outputs.fork-association }}
 
   caas:
-    name: caas
     needs: decide
     if: needs.decide.outputs.start == 'true' && contains(needs.decide.outputs.suites, '"caas"')
     permissions:
@@ -320,7 +86,6 @@ jobs:
       fork-pr-author-association: ${{ needs.decide.outputs.fork-association }}
 
   bmaas:
-    name: bmaas
     needs: decide
     if: needs.decide.outputs.start == 'true' && contains(needs.decide.outputs.suites, '"bmaas"')
     permissions:
@@ -334,61 +99,16 @@ jobs:
       fork-pr-author: ${{ needs.decide.outputs.fork-author }}
       fork-pr-author-association: ${{ needs.decide.outputs.fork-association }}
 
-  # Runs whatever happened above, including a cancel, so the status never stays "running".
   finish:
-    name: Record the result
     needs: [decide, track, vmaas, caas, bmaas]
     if: always() && needs.decide.outputs.start == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-finish.yml@c9463f6a0f6e00459160434041d38d6b7e5ae5df  # v1.0.0
     permissions:
       contents: read
-    steps:
-      - name: Add up the suites
-        id: result
-        env:
-          RESULTS: ${{ toJSON(needs) }}
-          SUITES: ${{ needs.decide.outputs.suites }}
-        run: |
-          set -euo pipefail
-          # the suites that ran are the jobs that were not skipped; decide and track are not suites
-          ran='del(.decide, .track) | [.[].result] | map(select(. != "skipped"))'
-          if jq -e "${ran} | any(. == \"failure\")" <<<"${RESULTS}" >/dev/null; then
-            result=failure
-          elif jq -e "${ran} | any(. == \"cancelled\")" <<<"${RESULTS}" >/dev/null; then
-            result=cancelled
-          elif jq -e "${ran} | length == 0" <<<"${RESULTS}" >/dev/null; then
-            # the decision said start but no suite ran: do not report a pass
-            result=failure
-          else
-            result=success
-          fi
-          echo "result=${result}" >> "$GITHUB_OUTPUT"
-          echo "suites=$(jq -r 'join(", ")' <<<"${SUITES}")" >> "$GITHUB_OUTPUT"
-      # The E2E lines are check runs of the OSAC CI app, which the pull request page draws (a spinner while they run, the
-      # exact names). A check run written with this workflow's own token would be attached to whichever Actions check
-      # suite of the commit is oldest, and the page does not draw those. The token has the permissions this job needs and
-      # lasts an hour.
-      - name: Token of the OSAC CI app, for the E2E lines
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
-        with:
-          app-id: "4966101"
-          private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
-          permission-checks: write
-          permission-actions: read
-      - uses: osac-project/osac-ci/.github/actions/e2e-finish@d914a112324f5431ed0dc7986559a108f255ee2e  # osac-ci main
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          kind: checks
-          repo: ${{ github.repository }}
-          sha: ${{ needs.decide.outputs.sha }}
-          result: ${{ steps.result.outputs.result }}
-          detail: ${{ steps.result.outputs.suites }}
-      - uses: osac-project/osac-ci/.github/actions/e2e-suites-settle@d914a112324f5431ed0dc7986559a108f255ee2e  # osac-ci main
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          kind: checks
-          repo: ${{ github.repository }}
-          sha: ${{ needs.decide.outputs.sha }}
-          suite-checks: ${{ needs.decide.outputs.suite-checks }}
+    with:
+      sha: ${{ needs.decide.outputs.sha }}
+      suites: ${{ needs.decide.outputs.suites }}
+      suite-checks: ${{ needs.decide.outputs.suite-checks }}
+      results: ${{ toJSON(needs) }}
+    secrets:
+      OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}

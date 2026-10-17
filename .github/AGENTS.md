@@ -14,7 +14,7 @@ plus a native approval on the head commit, and the merge queue.
   one matrix of unit and integration test legs (`ci-tests.yml` lists them, `workflows/tests.yml` runs a leg), and ends
   in the job `CI`. A leg that is not needed has no job, so the pull request shows no skipped row for it. The reusable workflows hold no path logic; `ci.yml`'s `plan` job reads
   `filters/ci-filters.yml`. A new check needs a filter, a job in `ci.yml` and an entry in the `needs` of `CI`.
-- `workflows/e2e-pr.yml` decides, from the default branch with the repository token, when the full-install E2E starts for a
+- `workflows/e2e-pr.yml` (a thin caller of the shared osac-ci workflows, pinned to a release commit) decides, from the default branch with the repository token, when the full-install E2E starts for a
   pull request and keeps the single `E2E` check up to date (plus one line per suite that runs, named by its `check` in `e2e-policy.yml`, such as `E2E / VMaaS Full Install`). The lines are check runs of the OSAC CI app (a token minted from the organization secrets `OSAC_CI_APP_ID` and `OSAC_CI_APP_PRIVATE_KEY`, with the checks permission), so the page draws them with a spinner; `E2E` is required from that app only: approved on the exact head commit by a person with write
   access or CodeRabbit (only a person with write access for a pull request from a fork), a suite affected (`e2e-policy.yml`), and no cheap check already failed. It does not wait for `CI`: the E2E runs in parallel with it and both are required for the merge. It checks out no pull request code (only the policy and
   filters of the default branch), and the suites it calls test the approved commit. `workflows/e2e-queue.yml` runs the
@@ -34,8 +34,8 @@ plus a native approval on the head commit, and the merge queue.
   person needs to read them (every commit the bot's own, plain and signed; only dependency files changed). It runs every
   15 minutes and looks at every open dependency update, so an approval comes within about a quarter of an hour. It is a
   scheduled run on purpose: a run started by a Dependabot pull request only sees Dependabot's secrets, so the app's key
-  would have to be handed to Dependabot too. The logic is in osac-project/osac-ci (`osac-ci bot-decide`), pinned to a full
-  commit SHA. The workflow mints a token from the organization secret `OSAC_CI_APP_PRIVATE_KEY` with the pull-request
+  would have to be handed to Dependabot too. It is a thin caller of the shared `bot-sweep` workflow of osac-project/osac-ci (`osac-ci bot-decide`), pinned to a full
+  commit SHA of a release. The workflow mints a token from the organization secret `OSAC_CI_APP_PRIVATE_KEY` with the pull-request
   permission only.
 - Changes to the files that define the checks (`.github/workflows`, `actions`, `scripts`, `filters`, `e2e-policy.yml`,
   `CODEOWNERS`, `.pre-commit-config.yaml`; Markdown in them excepted) need an approval from `@osac-project/wg-infra`

@@ -8,8 +8,8 @@ Three checks must pass before a pull request merges, and one approval must be on
 | `E2E` | The full-install end-to-end suites on a real cluster, about 100 minutes. | `workflows/e2e-pr.yml`, `workflows/e2e-queue.yml` |
 | `jira-reference` | The title names a Jira issue (`OSAC-1234:`) or says `NO-ISSUE:`. | `workflows/jira-reference.yml` |
 
-The approval is a normal GitHub review from someone with write access (and from a code owner when you touch `.github/`,
-`proto/` or the installer, see `CODEOWNERS`). A new commit drops it; a clean rebase or "Update branch" keeps it. The approval is also
+The approval is a normal GitHub review from someone with write access (and from a code owner when you touch a path
+that has one in `CODEOWNERS`: the CI definition under `.github/`, and any folder a team has claimed). A new commit drops it; a clean rebase or "Update branch" keeps it. The approval is also
 what starts the E2E: it runs in parallel with `CI` and does not wait for it, and both must pass. When the
 checks are green and the approval is there, the author adds the pull request to the merge queue. The queue runs `CI` and
 `E2E` again on the result of merging, so what lands is what was tested.

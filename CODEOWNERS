@@ -4,6 +4,11 @@
 # See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
 #
 # Patterns are evaluated top-to-bottom (last matching pattern takes precedence).
+#
+# A team that wants to own a folder adds a line here, for example `/osac-operator/ @osac-project/wg-vmaas`, in a pull
+# request that wg-infra approves (see the self-protection rule below). From then on a change to that folder needs the
+# approval of a member of that team, other than the author. The team must be visible and have write access to the
+# repository (the wg-* teams do). Leave a folder out and any maintainer's approval is enough.
 
 # CODEOWNERS Self-Protection
 # Protects this file from unauthorized modification
@@ -27,13 +32,6 @@
 /.github/workflows/osac-ui-typecheck.yaml @osac-project/wg-infra @eliorerz @rawagner @ElayAharoni @batzionb @eranco74 @rccrdpccl
 # Markdown inside those folders (a README) cannot change a check: a rule with no owner clears ownership.
 /.github/**/*.md
-
-# Sensitive code outside .github: a change here needs a code owner's approval, on top of the approval every pull
-# request needs. Everything else needs any maintainer's approval only.
-# The shared Fulfillment API contract (proto/): consumed by every component.
-/proto/ @osac-project/fulfillment-wg
-# The installer composes every component's chart and decides what a deployment looks like.
-/osac-installer/ @osac-project/wg-infra
 
 # fullsend Configuration Protection
 # Prevents pull_request_target misconfiguration and unauthorized workflow changes

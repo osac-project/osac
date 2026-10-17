@@ -567,20 +567,27 @@ var _ = Describe("MCP server", func() {
 		Expect(err.Error()).To(ContainSubstring(`"category":"conflict"`))
 		Expect(err.Error()).To(ContainSubstring(`"grpc_code":"Aborted"`))
 
-		retryResponse, err := computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
-			Id: computeInstanceID,
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		retryVersion := retryResponse.GetObject().GetMetadata().GetVersion()
+		var updated mcpserver.UpdateComputeInstanceOutput
+		Eventually(func(g Gomega) {
+			retryResponse, err := computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
+				Id: computeInstanceID,
+			}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+			retryVersion := retryResponse.GetObject().GetMetadata().GetVersion()
 
-		updated, err := callMCPTool[mcpserver.UpdateComputeInstanceOutput](
-			ctx, session, "update_compute_instance", mcpserver.UpdateComputeInstanceInput{
-				ID: computeInstanceID, Version: retryVersion, RunStrategy: "HALTED",
-			},
-		)
-		Expect(err).ToNot(HaveOccurred())
+			output, updateErr := callMCPTool[mcpserver.UpdateComputeInstanceOutput](
+				ctx, session, "update_compute_instance", mcpserver.UpdateComputeInstanceInput{
+					ID: computeInstanceID, Version: retryVersion, RunStrategy: "HALTED",
+				},
+			)
+			if updateErr != nil {
+				g.Expect(updateErr.Error()).To(ContainSubstring("The resource version is stale"))
+				return
+			}
+			updated = output
+			g.Expect(updated.Version).To(BeNumerically(">", retryVersion))
+		}, time.Minute, 100*time.Millisecond).Should(Succeed())
 		Expect(updated.ID).To(Equal(computeInstanceID))
-		Expect(updated.Version).To(BeNumerically(">", retryVersion))
 
 		otherNetwork := createCatalogItemNetworkInClassFixture(ctx, "development", "", networkClassID)
 		otherTokenSource, err := tool.makeKeycloakTokenSource(ctx, "ben", usersPassword)

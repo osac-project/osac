@@ -16,6 +16,15 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
+// cleanupAbsenceGrace is the grace window after a recorded Create
+// attempt during which an empty List does not conclude BMI absence.
+// The production fulfillment-service uses a single Postgres database
+// (strong read-after-write consistency), so this window is defensive
+// rather than necessary. Five minutes is far beyond any conceivable
+// commit-visibility latency and short enough to restore teardown
+// liveness.
+const cleanupAbsenceGrace = 5 * time.Minute
+
 // cleanupWorker retains the incarnation until both its old Agent and BMI are
 // authoritatively absent. A successful Delete is pending, never completion.
 // Failed callers keep their disposition; retiring callers advance to Deleting.
@@ -47,11 +56,19 @@ func (r *Reconciler) cleanupWorker(ctx context.Context, co *v1alpha1.ClusterOrde
 			// invocation so the caller persists the identity.
 			return false, nil
 		}
-		// The filtered List found no BMI matching this worker's
-		// name.  Proceed with Agent-only cleanup — the instance
-		// is already gone or was never successfully created.  No
-		// external BMI mutation is possible without a recovered
-		// ID.
+		// A recently-attempted Create may have succeeded with a
+		// lost response. The fulfillment-service's Postgres
+		// backend is strongly consistent, but we defer cleanup
+		// for an additional grace window as defense-in-depth so
+		// the BMI can appear in the List before we conclude it
+		// was never created. Once the grace expires, proceed
+		// with Agent-only cleanup — no external BMI mutation is
+		// possible without a recovered ID.
+		if w.BMICreateState == v1alpha1.WorkerBMICreateStateAttempted &&
+			w.AttemptStartedAt != nil &&
+			time.Since(w.AttemptStartedAt.Time) < cleanupAbsenceGrace {
+			return false, nil
+		}
 		agent, err := r.cleanupAgent(ctx, co, *w, nil)
 		if err != nil {
 			return false, err

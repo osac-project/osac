@@ -76,7 +76,10 @@ type ComputeInstanceReconciler struct {
 	StatusPollInterval time.Duration
 	// MaxJobHistory defines how many jobs to keep per job array
 	MaxJobHistory int
-	targetCluster mc.ClusterName
+	// StorageControllerEnabled indicates whether storage readiness is required
+	// before ComputeInstances can be provisioned.
+	StorageControllerEnabled bool
+	targetCluster            mc.ClusterName
 	// TiersClient and BackendsClient query the fulfillment service Tier API for
 	// JIT storage provisioning extra_vars. When nil, tier/backend context
 	// injection is skipped — backward compatible with environments without a
@@ -98,6 +101,7 @@ func NewComputeInstanceReconciler(
 	statusPollInterval time.Duration,
 	maxJobHistory int,
 	targetCluster mc.ClusterName,
+	storageControllerEnabled bool,
 ) *ComputeInstanceReconciler {
 	if mgr == nil {
 		panic("mgr must not be nil")
@@ -126,6 +130,7 @@ func NewComputeInstanceReconciler(
 		ProvisioningProvider:     provisioningProvider,
 		StatusPollInterval:       statusPollInterval,
 		MaxJobHistory:            maxJobHistory,
+		StorageControllerEnabled: storageControllerEnabled,
 		targetCluster:            targetCluster,
 	}
 }
@@ -493,6 +498,24 @@ func (r *ComputeInstanceReconciler) syncMetadataPreflight(ctx context.Context, i
 	return subnetTargetNamespace, nil
 }
 
+func (r *ComputeInstanceReconciler) tenantReadyForComputeInstance(tenant *v1alpha1.Tenant) bool {
+	if tenant.Status.Phase != v1alpha1.TenantPhaseReady {
+		return false
+	}
+	// This is a cluster-wide setting. Keep it unchanged for existing Tenants:
+	// changing it can make ComputeInstance readiness inconsistent with the
+	// storage readiness state already recorded for those Tenants.
+	if !r.StorageControllerEnabled {
+		return true
+	}
+
+	// When the storage controller is enabled, a missing condition means its
+	// readiness report has not arrived yet. When disabled, tenants may use the
+	// existing storage-class fallback and do not publish this condition.
+	storageCondition := tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)
+	return storageCondition != nil && storageCondition.Status == metav1.ConditionTrue
+}
+
 func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcile.Request, instance *v1alpha1.ComputeInstance) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
@@ -521,11 +544,11 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 		return ctrl.Result{}, err
 	}
 
-	// If the tenant is not ready, requeue
-	if tenant.Status.Phase != v1alpha1.TenantPhaseReady {
+	storageCondition := tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)
+	if !r.tenantReadyForComputeInstance(tenant) {
 		msg := fmt.Sprintf("Tenant '%s' is not ready (phase: %s)", tenant.GetName(), tenant.Status.Phase)
-		if scCond := tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady); scCond != nil && scCond.Message != "" {
-			msg = fmt.Sprintf("%s. %s: %s", msg, scCond.Type, scCond.Message)
+		if storageCondition != nil && storageCondition.Message != "" {
+			msg = fmt.Sprintf("%s. %s: %s", msg, storageCondition.Type, storageCondition.Message)
 		}
 		oldReason := conditionReason(instance, v1alpha1.ComputeInstanceConditionProvisioned)
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, msg, v1alpha1.ReasonTenantNotReady)

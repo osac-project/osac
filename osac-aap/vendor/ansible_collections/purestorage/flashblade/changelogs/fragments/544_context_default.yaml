@@ -1,0 +1,16 @@
+bugfixes:
+  - purefb_bucket - Default context to the local array name to avoid errors from an empty context_names on newer Purity//FB releases
+  - purefb_bucket_access - Default context to the local array name to avoid errors from an empty context_names on newer Purity//FB releases
+  - purefb_bucket_replica - Default context to the local array name to avoid errors from an empty context_names on newer Purity//FB releases
+  - purefb_connect - Default context to the local array name to avoid errors from an empty context_names on newer Purity//FB releases
+  - purefb_export - Default context to the local array name to avoid errors from an empty context_names on newer Purity//FB releases
+  - purefb_fs - Default context to the local array name to avoid errors from an empty context_names on newer Purity//FB releases
+  - purefb_groupquota - Default context to the local array name to avoid errors from an empty context_names on newer Purity//FB releases
+  - purefb_lifecycle - Default context to the local array name to avoid errors from an empty context_names on newer Purity//FB releases
+  - purefb_remote_cred - Default context to the local array name to avoid errors from an empty context_names on newer Purity//FB releases
+  - purefb_s3acc - Default context to the local array name to avoid errors from an empty context_names on newer Purity//FB releases
+  - purefb_s3user - Default context to the local array name to avoid errors from an empty context_names on newer Purity//FB releases
+  - purefb_snap - Default context to the local array name to avoid errors from an empty context_names on newer Purity//FB releases
+  - purefb_userpolicy - Default context to the local array name to avoid errors from an empty context_names on newer Purity//FB releases
+  - purefb_userquota - Default context to the local array name to avoid errors from an empty context_names on newer Purity//FB releases
+  - purefb_virtualhost - Default context to the local array name to avoid errors from an empty context_names on newer Purity//FB releases

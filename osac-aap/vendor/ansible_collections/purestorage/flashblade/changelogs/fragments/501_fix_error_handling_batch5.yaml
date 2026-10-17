@@ -1,0 +1,7 @@
+bugfixes:
+  - purefb_syslog - Fix unsafe res.errors[0].message access that could cause IndexError (#501)
+  - purefb_target - Fix unsafe res.errors[0].message access that could cause IndexError (#501)
+  - purefb_tz - Fix unsafe res.errors[0].message access that could cause IndexError (#501)
+  - purefb_user - Fix unsafe res.errors[0].message access that could cause IndexError (#501)
+  - purefb_userpolicy - Fix unsafe res.errors[0].message access that could cause IndexError (#501)
+  - purefb_userquota - Fix unsafe res.errors[0].message access that could cause IndexError (#501)

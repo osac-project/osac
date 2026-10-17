@@ -1,0 +1,2 @@
+minor_changes:
+ - Standardize all import checks of Pure SDK to use the same variable name

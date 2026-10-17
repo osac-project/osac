@@ -12,8 +12,8 @@ import type { ComputeInstance } from '@osac/types';
 
 import { useTranslation } from '../../../hooks/useTranslation';
 import { displayValue } from '../../../utils/detailFormatters';
-import { formatBootDiskSizeForReview } from '../../catalogProvision/wizard/catalogOverlay';
 import { Timestamp } from '../../Primitives/Timestamp';
+import { formatBootDiskSizeForReview } from '../../ProvisioningWizard/reviewFormatters';
 
 interface Props {
   vm: ComputeInstance;

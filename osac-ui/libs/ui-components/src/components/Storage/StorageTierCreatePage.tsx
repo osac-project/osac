@@ -32,9 +32,9 @@ import {
 import { useTranslation } from '../../hooks/useTranslation';
 import { getErrorMessage } from '../../utils/error';
 import { resourceNameSchema } from '../../validation/resource-name';
-import NameField from '../catalogProvision/wizard/fields/NameField';
 import { InputField } from '../Form/InputField';
 import LeaveFormConfirmation from '../Form/LeaveFormConfirmation';
+import NameField from '../Form/NameField';
 import OsacForm from '../Form/OsacForm';
 import { RadioButtonField } from '../Form/RadioButtonField';
 import { SelectField, type SelectFieldOption } from '../Form/SelectField';

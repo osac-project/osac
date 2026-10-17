@@ -182,7 +182,7 @@ export const getLabels = (t: TFunction) => ({
   - `libs/ui-components/src/components/Form/fieldError.test.ts`
 
 **Mocking API calls in tests**:
-- Use `createMockConnectTransport` from `libs/ui-components/src/components/catalogProvision/test/createMockConnectTransport.ts` — in-memory Connect router transport for protobuf services
+- Use `createMockConnectTransport` from `libs/ui-components/src/test-utils/createMockConnectTransport.ts` — in-memory Connect router transport for protobuf services
 - Pass the mock transport to `ApiProvider`; do not mock fetch or REST endpoints (the REST layer was removed)
 
 **Test guidelines**:

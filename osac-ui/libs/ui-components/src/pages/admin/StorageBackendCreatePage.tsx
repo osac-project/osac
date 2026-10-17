@@ -24,9 +24,9 @@ import {
   usePrivateStorageBackend,
   useUpdateStorageBackend,
 } from '@osac/ui-components/api/v1/private/storage-backends';
-import NameField from '@osac/ui-components/components/catalogProvision/wizard/fields/NameField';
 import { InputField } from '@osac/ui-components/components/Form/InputField';
 import LeaveFormConfirmation from '@osac/ui-components/components/Form/LeaveFormConfirmation';
+import NameField from '@osac/ui-components/components/Form/NameField';
 import OsacForm from '@osac/ui-components/components/Form/OsacForm';
 import {
   SelectField,

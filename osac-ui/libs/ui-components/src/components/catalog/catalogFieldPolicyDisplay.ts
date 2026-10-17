@@ -1,6 +1,6 @@
 export type CatalogFieldPolicyBehavior = 'locked' | 'editable';
 
-type FieldPolicyLike = { behavior?: { case?: string } } | undefined;
+export type FieldPolicyLike = { behavior?: { case?: string } } | undefined;
 
 export const catalogFieldPolicyBehavior = (
   policy: FieldPolicyLike,
@@ -14,6 +14,9 @@ export const catalogFieldPolicyBehavior = (
 
 export const catalogFieldPolicyIsConfigured = (policy: FieldPolicyLike): boolean =>
   catalogFieldPolicyBehavior(policy) !== undefined;
+
+export const catalogFieldPolicyLocked = (policy: FieldPolicyLike): boolean =>
+  catalogFieldPolicyBehavior(policy) === 'locked';
 
 export const CATALOG_RESOURCE_EMPTY_DISPLAY = '—';
 

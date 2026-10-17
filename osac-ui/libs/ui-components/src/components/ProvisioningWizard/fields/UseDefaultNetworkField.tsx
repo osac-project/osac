@@ -1,0 +1,26 @@
+import type { ProvisioningFieldControlProps } from './provisioningFieldValue';
+import { useTranslation } from '../../../hooks/useTranslation';
+import { CheckboxField } from '../../Form/CheckboxField';
+
+interface UseDefaultNetworkFieldProps extends ProvisioningFieldControlProps {
+  fieldId?: string;
+}
+
+const UseDefaultNetworkField = ({
+  name = '',
+  fieldId = 'use-default-network',
+  isDisabled = false,
+}: UseDefaultNetworkFieldProps) => {
+  const { t } = useTranslation();
+
+  return (
+    <CheckboxField
+      name={name}
+      label={t('Use tenant default network')}
+      fieldId={fieldId}
+      isDisabled={isDisabled}
+    />
+  );
+};
+
+export default UseDefaultNetworkField;

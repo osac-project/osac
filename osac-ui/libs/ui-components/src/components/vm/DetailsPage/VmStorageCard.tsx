@@ -4,7 +4,7 @@ import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 import type { ComputeInstance } from '@osac/types';
 
 import { useTranslation } from '../../../hooks/useTranslation';
-import { getVmStorageRows } from '../../catalogProvision/wizard/storageRows';
+import { getVmStorageRows } from '../../ProvisioningWizard/storageRows';
 
 interface VmStorageCardProps {
   vm: ComputeInstance;

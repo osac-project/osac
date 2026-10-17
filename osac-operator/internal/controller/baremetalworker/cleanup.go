@@ -11,10 +11,28 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
+
+// cleanupAbsenceGracePeriod bounds how long cleanup retries an
+// unconfirmed BMI absence before accepting it. A Create that was
+// Attempted but whose response was lost will be visible in the
+// fulfillment List well within this window; after it elapses, repeated
+// empty Lists are treated as authoritative absence.
+const cleanupAbsenceGracePeriod = 5 * time.Minute
+
+// cleanupAbsenceExpired reports whether the worker has been in
+// teardown long enough for repeated List absence to be authoritative.
+// LastFailureTime is set when entering Unbinding (worker_teardown.go)
+// and is not modified during cleanup; a nil value means the timestamp
+// was never recorded, so the grace period is not applicable.
+func cleanupAbsenceExpired(w *v1alpha1.WorkerStatus) bool {
+	return w.LastFailureTime != nil &&
+		time.Since(w.LastFailureTime.Time) > cleanupAbsenceGracePeriod
+}
 
 // cleanupWorker retains the incarnation until both its old Agent and BMI are
 // authoritatively absent. A successful Delete is pending, never completion.
@@ -39,7 +57,17 @@ func (r *Reconciler) cleanupWorker(ctx context.Context, co *v1alpha1.ClusterOrde
 			}
 			return true, nil
 		}
-		return false, r.recoverCleanupBMI(ctx, co, tenant, w)
+		if err := r.recoverCleanupBMI(ctx, co, tenant, w); err != nil {
+			return false, err
+		}
+		// recoverCleanupBMI either recovered the ID (proceed with
+		// ID-present cleanup on next reconcile) or accepted timed-out
+		// absence (ID still empty). In the latter case the worker is
+		// authoritatively gone.
+		if w.BareMetalInstance.ID == "" {
+			return true, nil
+		}
+		return false, nil
 	}
 	state, err := r.readCleanupBMI(ctx, co, tenant, *w)
 	if err != nil {
@@ -81,6 +109,14 @@ func (r *Reconciler) recoverCleanupBMI(ctx context.Context, co *v1alpha1.Cluster
 		return r.rejectWorkerIdentity(co, err.Error())
 	}
 	if bmi == nil {
+		if cleanupAbsenceExpired(w) {
+			ctrllog.FromContext(ctx).Info(
+				"accepting BMI absence after grace period",
+				"worker", w.Name,
+				"gracePeriod", cleanupAbsenceGracePeriod,
+			)
+			return nil
+		}
 		return fmt.Errorf("worker %s BMI reservation absence is unconfirmed", w.Name)
 	}
 	candidate := *w

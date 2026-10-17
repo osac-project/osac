@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -15,6 +16,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -183,6 +185,81 @@ var _ = Describe("Conservative cleanup of ID-less workers", func() {
 			}
 			Expect(fc.lists).To(Equal(2), "lists=%d creates=%v", fc.lists, fc.names)
 			Expect(fc.names).To(BeEmpty(), "lists=%d creates=%v", fc.lists, fc.names)
+		})
+	}
+})
+
+var _ = Describe("Bounded absence grace period for ID-less cleanup", func() {
+	for _, tc := range []struct {
+		label      string
+		state      string
+		elapsed    time.Duration
+		wantGone   bool
+		wantErr    bool
+		wantNoList bool
+	}{
+		{
+			label:   "before grace period",
+			state:   v1alpha1.WorkerBMICreateStateAttempted,
+			elapsed: 1 * time.Minute,
+			wantErr: true,
+		},
+		{
+			label:    "after grace period",
+			state:    v1alpha1.WorkerBMICreateStateAttempted,
+			elapsed:  6 * time.Minute,
+			wantGone: true,
+		},
+		{
+			label:   "empty state before grace period",
+			state:   "",
+			elapsed: 2 * time.Minute,
+			wantErr: true,
+		},
+		{
+			label:    "empty state after grace period",
+			state:    "",
+			elapsed:  6 * time.Minute,
+			wantGone: true,
+		},
+		{
+			label:      "Reserved state ignores grace period",
+			state:      v1alpha1.WorkerBMICreateStateReserved,
+			elapsed:    6 * time.Minute,
+			wantGone:   true,
+			wantNoList: true,
+		},
+	} {
+		It(tc.label, func() {
+			r, fc, co := workerReadHarness()
+			co.Status.Workers[0].BareMetalInstance.ID = ""
+			co.Status.Workers[0].BMICreateState = tc.state
+			co.Status.Workers[0].Phase = workerPhaseUnbinding
+			past := metav1.NewTime(time.Now().Add(-tc.elapsed))
+			co.Status.Workers[0].LastFailureTime = &past
+			Expect(r.Status().Update(context.Background(), co)).To(Succeed())
+			w := co.Status.Workers[0]
+			gone, err := r.cleanupWorker(context.Background(), co, &w)
+			if tc.wantErr {
+				Expect(err).To(HaveOccurred(),
+					"expected conservative error: gone=%v err=%v worker=%+v",
+					gone, err, w)
+				Expect(gone).To(BeFalse(),
+					"expected conservative error: gone=%v err=%v worker=%+v",
+					gone, err, w)
+			} else {
+				Expect(err).NotTo(HaveOccurred(),
+					"unexpected error: gone=%v err=%v worker=%+v",
+					gone, err, w)
+				Expect(gone).To(Equal(tc.wantGone),
+					"gone mismatch: gone=%v err=%v worker=%+v",
+					gone, err, w)
+			}
+			if tc.wantNoList {
+				Expect(fc.lists).To(Equal(0),
+					"Reserved path should not List: lists=%d",
+					fc.lists)
+			}
 		})
 	}
 })

@@ -18,8 +18,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
@@ -48,7 +52,35 @@ func TestMain(t *testing.T) {
 const (
 	testMetal3Backend = "metal3"
 	testNetBoxBackend = "netbox"
+
+	netboxDeviceObjectType    = "dcim.device"
+	netboxCustomFieldLabelKey = "label"
+	netboxTextType            = "text"
+	netboxTextTypeLabel       = "Text"
 )
+
+func customFieldFixture(
+	id int, name, label, fieldType, typeLabel string,
+	defaultValue any,
+	exactFilter bool,
+) map[string]any {
+	field := map[string]any{
+		"id":                      id,
+		"url":                     "/api/extras/custom-fields/" + strconv.Itoa(id) + "/",
+		"display":                 label,
+		"object_types":            []string{netboxDeviceObjectType},
+		"type":                    map[string]string{"value": fieldType, netboxCustomFieldLabelKey: typeLabel},
+		"data_type":               fieldType,
+		"name":                    name,
+		netboxCustomFieldLabelKey: label,
+		"required":                false,
+		"default":                 defaultValue,
+	}
+	if exactFilter {
+		field["filter_logic"] = map[string]string{"value": "exact", netboxCustomFieldLabelKey: "Exact"}
+	}
+	return field
+}
 
 type startupTestManager struct {
 	ctrl.Manager
@@ -209,9 +241,38 @@ var _ = Describe("createInventoryClient", func() {
 		Expect(inventoryClient).To(BeNil())
 	})
 
-	It("constructs a NetBox backend with Metal3 startup configuration", func() {
+	It("validates the fixed NetBox schema at startup without listing devices", func() {
 		tokenFile := filepath.Join(GinkgoT().TempDir(), "netbox-token")
 		Expect(os.WriteFile(tokenFile, []byte("test-token\n"), 0o600)).To(Succeed())
+
+		metadataRequests := 0
+		deviceRequests := 0
+		objectType := ""
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/extras/custom-fields/" {
+				if r.URL.Path == "/api/dcim/devices/" {
+					deviceRequests++
+				}
+				http.NotFound(w, r)
+				return
+			}
+			metadataRequests++
+			objectType = r.URL.Query().Get("object_type")
+			fields := []any{
+				customFieldFixture(1, "osac_managed", "OSAC managed", "boolean", "Boolean (true/false)", false, true),
+				customFieldFixture(
+					2, "osac_instance_id", "OSAC instance ID",
+					netboxTextType, netboxTextTypeLabel, "", true,
+				),
+				customFieldFixture(3, "osac_bmc_address", "OSAC BMC address", netboxTextType, netboxTextTypeLabel, "", false),
+				customFieldFixture(4, "osac_boot_mac", "OSAC boot MAC", netboxTextType, netboxTextTypeLabel, "", false),
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"count": len(fields), "next": nil, "previous": nil, "results": fields,
+			})
+		}))
+		defer server.Close()
 
 		mgr := newStartupTestManager()
 		inventoryCfg := &inventory.Config{
@@ -219,8 +280,9 @@ var _ = Describe("createInventoryClient", func() {
 			HostClass: testMetal3Backend,
 			Options: map[string]any{
 				testNetBoxBackend: map[string]any{
-					"url":       "https://netbox.example.test",
-					"tokenFile": tokenFile,
+					"url":               server.URL,
+					"tokenFile":         tokenFile,
+					"allowInsecureHTTP": true,
 				},
 			},
 		}
@@ -234,5 +296,8 @@ var _ = Describe("createInventoryClient", func() {
 		inventoryClient, err := createInventoryClient(context.Background(), inventoryCfg, managementCfg, mgr)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(inventoryClient).To(BeAssignableToTypeOf(&inventory.NetBoxClient{}))
+		Expect(metadataRequests).To(Equal(1))
+		Expect(objectType).To(Equal(netboxDeviceObjectType))
+		Expect(deviceRequests).To(BeZero())
 	})
 })

@@ -530,7 +530,7 @@ func createInventoryClient(
 	case "bcm":
 		return createBCMInventoryClient(ctx, inventoryCfg, managementCfg, mgr)
 	case "netbox":
-		return createNetBoxInventoryClient(inventoryCfg, managementCfg, mgr)
+		return createNetBoxInventoryClient(ctx, inventoryCfg, managementCfg, mgr)
 	}
 
 	inventoryClient, err := inventory.NewClient(ctx, inventoryCfg)
@@ -553,18 +553,12 @@ func validateNetBoxManagementConfig(managementCfg *management.Config) error {
 }
 
 func createNetBoxInventoryClient(
+	ctx context.Context,
 	inventoryCfg *inventory.Config,
 	managementCfg *management.Config,
 	mgr ctrl.Manager,
 ) (inventory.Client, error) {
-	if inventoryCfg.HostClass != metal3Backend {
-		return nil, fmt.Errorf(
-			"NetBox backend requires inventory.hostClass=%s (got %q)",
-			metal3Backend,
-			inventoryCfg.HostClass,
-		)
-	}
-	if err := validateNetBoxManagementConfig(managementCfg); err != nil {
+	if err := validateNetBoxInventoryConfig(inventoryCfg, managementCfg); err != nil {
 		return nil, err
 	}
 
@@ -573,13 +567,38 @@ func createNetBoxInventoryClient(
 		return nil, fmt.Errorf("failed to configure Metal3 BMH manager for NetBox: %w", err)
 	}
 
+	return createValidatedNetBoxClient(ctx, inventoryCfg, bmhManager)
+}
+
+func validateNetBoxInventoryConfig(
+	inventoryCfg *inventory.Config,
+	managementCfg *management.Config,
+) error {
+	if inventoryCfg.HostClass != metal3Backend {
+		return fmt.Errorf(
+			"NetBox backend requires inventory.hostClass=%s (got %q)",
+			metal3Backend,
+			inventoryCfg.HostClass,
+		)
+	}
+	return validateNetBoxManagementConfig(managementCfg)
+}
+
+func createValidatedNetBoxClient(
+	ctx context.Context,
+	inventoryCfg *inventory.Config,
+	bmhManager *baremetalhost.Manager,
+) (*inventory.NetBoxClient, error) {
 	netBoxAPI, err := inventory.NewNetBoxAPI(inventoryCfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create inventory client: %w", err)
 	}
+	netBoxClient := inventory.NewNetBoxClient(netBoxAPI, bmhManager, inventoryCfg.HostClass)
+	if err := netBoxClient.ValidateFixedSchema(ctx); err != nil {
+		return nil, fmt.Errorf("failed to validate NetBox custom-field schema: %w", err)
+	}
 	setupLog.Info("BMH manager configured", "namespace", bmhManager.Namespace())
-
-	return inventory.NewNetBoxClient(netBoxAPI, bmhManager, inventoryCfg.HostClass), nil
+	return netBoxClient, nil
 }
 
 func createBCMInventoryClient(

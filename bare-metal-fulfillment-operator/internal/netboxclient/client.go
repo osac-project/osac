@@ -57,6 +57,9 @@ type CustomField struct {
 	Label       string
 	Type        string
 	DataType    string
+	FilterLogic string
+	Default     any
+	Status      *string
 	Required    bool
 	ObjectTypes []string
 }
@@ -80,6 +83,9 @@ type DevicePatch struct {
 type Client struct {
 	api *netbox.APIClient
 }
+
+type paginatedFetcher[T any] func(context.Context, int32) ([]T, int32, bool, error)
+type paginatedVisitor[T any] func(T) (bool, error)
 
 // New validates configuration and creates a client without making a network
 // request. Connectivity and schema checks remain the responsibility of callers.
@@ -133,45 +139,31 @@ func (c *Client) ForEachDevice(ctx context.Context, query DeviceQuery, visit fun
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(nonNilContext(ctx), maxPaginationDuration)
-	defer cancel()
+	return forEachPaginatedResults(
+		ctx,
+		func(ctx context.Context, offset int32) ([]netbox.DeviceWithConfigContext, int32, bool, error) {
+			return c.fetchDevicePage(ctx, status, customFields, offset)
+		},
+		func(device netbox.DeviceWithConfigContext) (bool, error) {
+			return visit(fromSDKDevice(device))
+		},
+	)
+}
 
-	var offset int32
-	for {
-		currentOffset := offset
-		page, _, err := c.listDevicePage(ctx, status, customFields, currentOffset)
-		if err != nil {
-			return err
-		}
-		if page == nil {
-			return &APIError{Kind: ErrorKindInvalidResponse}
-		}
-
-		hasNext := page.GetNext() != ""
-		nextOffset, err := nextPaginationOffset(offset, page.Count, len(page.Results), hasNext)
-		if err != nil {
-			return err
-		}
-		for _, device := range page.Results {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			continueListing, err := visit(fromSDKDevice(device))
-			if err != nil {
-				return err
-			}
-			if !continueListing {
-				return ctx.Err()
-			}
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if !hasNext {
-			return nil
-		}
-		offset = nextOffset
+func (c *Client) fetchDevicePage(
+	ctx context.Context,
+	status string,
+	customFields map[string]string,
+	offset int32,
+) ([]netbox.DeviceWithConfigContext, int32, bool, error) {
+	page, _, err := c.listDevicePage(ctx, status, customFields, offset)
+	if err != nil {
+		return nil, 0, false, err
 	}
+	if page == nil {
+		return nil, 0, false, &APIError{Kind: ErrorKindInvalidResponse}
+	}
+	return page.Results, page.Count, page.GetNext() != "", nil
 }
 
 // listDevicePage retrieves one device page using the shared GET retry policy.
@@ -205,58 +197,82 @@ func (c *Client) ForEachDeviceCustomField(ctx context.Context, visit func(Custom
 		return &APIError{Kind: ErrorKindInvalidRequest}
 	}
 
+	return forEachPaginatedResults(
+		ctx,
+		func(ctx context.Context, offset int32) ([]netbox.CustomField, int32, bool, error) {
+			return c.fetchDeviceCustomFieldPage(ctx, offset)
+		},
+		func(field netbox.CustomField) (bool, error) {
+			return visit(fromSDKCustomField(field))
+		},
+	)
+}
+
+func (c *Client) fetchDeviceCustomFieldPage(
+	ctx context.Context,
+	offset int32,
+) ([]netbox.CustomField, int32, bool, error) {
+	page, _, err := c.listDeviceCustomFieldPage(ctx, offset)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	if page == nil {
+		return nil, 0, false, &APIError{Kind: ErrorKindInvalidResponse}
+	}
+	return page.Results, page.Count, page.GetNext() != "", nil
+}
+
+func (c *Client) listDeviceCustomFieldPage(
+	ctx context.Context,
+	offset int32,
+) (*netbox.PaginatedCustomFieldList, *http.Response, error) {
+	return retryGET(ctx, func(requestContext context.Context) (*netbox.PaginatedCustomFieldList, *http.Response, error) {
+		return c.api.ExtrasAPI.ExtrasCustomFieldsList(requestContext).
+			ObjectType("dcim.device").
+			Limit(defaultPageSize).
+			Offset(offset).
+			Execute()
+	})
+}
+
+func forEachPaginatedResults[T any](ctx context.Context, fetchPage paginatedFetcher[T], visit paginatedVisitor[T]) error {
 	ctx, cancel := context.WithTimeout(nonNilContext(ctx), maxPaginationDuration)
 	defer cancel()
-
 	var offset int32
 	for {
-		currentOffset := offset
-		page, _, err := retryGET(ctx, func(requestContext context.Context) (*netbox.PaginatedCustomFieldList, *http.Response, error) {
-			return c.api.ExtrasAPI.ExtrasCustomFieldsList(requestContext).
-				ObjectType("dcim.device").
-				Limit(defaultPageSize).
-				Offset(currentOffset).
-				Execute()
-		})
+		results, total, hasNext, err := fetchPage(ctx, offset)
 		if err != nil {
 			return err
 		}
-		if page == nil {
-			return &APIError{Kind: ErrorKindInvalidResponse}
-		}
-
-		hasNext := page.GetNext() != ""
-		nextOffset, err := nextPaginationOffset(offset, page.Count, len(page.Results), hasNext)
+		nextOffset, err := nextPaginationOffset(offset, total, len(results), hasNext)
 		if err != nil {
 			return err
 		}
-		for _, field := range page.Results {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			continueListing, err := visit(CustomField{
-				Name:        field.Name,
-				Label:       field.GetLabel(),
-				Type:        string(field.Type.GetValue()),
-				DataType:    field.DataType,
-				Required:    field.GetRequired(),
-				ObjectTypes: append([]string(nil), field.ObjectTypes...),
-			})
-			if err != nil {
-				return err
-			}
-			if !continueListing {
-				return ctx.Err()
-			}
-		}
-		if err := ctx.Err(); err != nil {
+		continueListing, err := visitPaginatedPage(ctx, results, visit)
+		if err != nil {
 			return err
 		}
-		if !hasNext {
+		if !continueListing || !hasNext {
 			return nil
 		}
 		offset = nextOffset
 	}
+}
+
+func visitPaginatedPage[T any](ctx context.Context, results []T, visit paginatedVisitor[T]) (bool, error) {
+	for _, result := range results {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		continueListing, err := visit(result)
+		if err != nil {
+			return false, err
+		}
+		if !continueListing {
+			return false, ctx.Err()
+		}
+	}
+	return true, ctx.Err()
 }
 
 // nextPaginationOffset rejects page metadata that could make pagination stop
@@ -268,10 +284,8 @@ func nextPaginationOffset(offset, total int32, resultCount int, hasNext bool) (i
 	}
 
 	nextOffset := int64(offset) + int64(resultCount)
-	if nextOffset > maxInt32Offset {
-		return 0, &APIError{Kind: ErrorKindInvalidResponse}
-	}
-	if hasNext && (resultCount == 0 || nextOffset >= int64(total)) {
+	if nextOffset > maxInt32Offset ||
+		(hasNext && (resultCount == 0 || nextOffset >= int64(total))) {
 		return 0, &APIError{Kind: ErrorKindInvalidResponse}
 	}
 
@@ -466,6 +480,53 @@ func validCustomFieldName(name string) bool {
 		return false
 	}
 	return true
+}
+
+func fromSDKCustomField(field netbox.CustomField) CustomField {
+	return CustomField{
+		Name:        field.Name,
+		Label:       field.GetLabel(),
+		Type:        string(field.Type.GetValue()),
+		DataType:    field.DataType,
+		FilterLogic: customFieldFilterLogic(field),
+		Default:     field.Default,
+		Status:      customFieldStatusPointer(field.AdditionalProperties),
+		Required:    field.GetRequired(),
+		ObjectTypes: append([]string(nil), field.ObjectTypes...),
+	}
+}
+
+func customFieldFilterLogic(field netbox.CustomField) string {
+	logic, ok := field.GetFilterLogicOk()
+	if !ok {
+		return ""
+	}
+	value, ok := logic.GetValueOk()
+	if !ok {
+		return ""
+	}
+	return string(*value)
+}
+
+func customFieldStatusPointer(properties map[string]interface{}) *string {
+	rawStatus, ok := properties["status"]
+	if !ok {
+		return nil
+	}
+	status, _ := customFieldStatus(rawStatus)
+	return &status
+}
+
+func customFieldStatus(value any) (string, bool) {
+	switch value := value.(type) {
+	case string:
+		return value, true
+	case map[string]interface{}:
+		status, ok := value["value"].(string)
+		return status, ok
+	default:
+		return "", false
+	}
 }
 
 func fromSDKDevice(device netbox.DeviceWithConfigContext) Device {

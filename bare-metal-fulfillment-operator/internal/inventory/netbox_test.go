@@ -29,6 +29,18 @@ import (
 )
 
 var _ = Describe("NetBox inventory client", func() {
+	Describe("FindFreeHost", func() {
+		It("returns a not-implemented error", func() {
+			host, err := NewNetBoxClient(nil, nil, netBoxHostClass).FindFreeHost(
+				context.Background(),
+				map[string]string{"placement_zone": "west"},
+			)
+
+			Expect(errors.Is(err, errNetBoxClientNotImplemented)).To(BeTrue())
+			Expect(host).To(BeNil())
+		})
+	})
+
 	Describe("GetHostLogicalPortMACs", func() {
 		It("returns a not-implemented error", func() {
 			macs, err := (&NetBoxClient{}).GetHostLogicalPortMACs(context.Background(), "baremetal/netbox-42")
@@ -130,11 +142,7 @@ var _ = Describe("NetBox inventory client", func() {
 			client := &NetBoxClient{}
 			ctx := context.Background()
 
-			host, err := client.FindFreeHost(ctx, map[string]string{"region": "lab"})
-			Expect(host).To(BeNil())
-			Expect(errors.Is(err, errNetBoxClientNotImplemented)).To(BeTrue())
-
-			host, err = client.AssignHost(ctx, "baremetal/netbox-42", "provider-42", map[string]string{"region": "lab"})
+			host, err := client.AssignHost(ctx, "baremetal/netbox-42", "provider-42", map[string]string{"region": "lab"})
 			Expect(host).To(BeNil())
 			Expect(errors.Is(err, errNetBoxClientNotImplemented)).To(BeTrue())
 

@@ -32,12 +32,13 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
-	"testing"
+
+	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 )
 
 const testToken = "test-netbox-api-token"
 
-func TestNormalizeEndpoint(t *testing.T) {
+func testNormalizeEndpoint(t GinkgoTInterface) {
 	tests := []struct {
 		name              string
 		endpoint          string
@@ -88,19 +89,18 @@ func TestNormalizeEndpoint(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := normalizeEndpoint(tt.endpoint, tt.allowInsecureHTTP)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("normalizeEndpoint(%q) error = %v, wantErr %t", tt.endpoint, err, tt.wantErr)
-			}
-			if err == nil && got != tt.want {
-				t.Fatalf("normalizeEndpoint(%q) = %q, want %q", tt.endpoint, got, tt.want)
-			}
-		})
+		By(tt.name)
+		got, err := normalizeEndpoint(tt.endpoint, tt.allowInsecureHTTP)
+		if (err != nil) != tt.wantErr {
+			t.Fatalf("normalizeEndpoint(%q) error = %v, wantErr %t", tt.endpoint, err, tt.wantErr)
+		}
+		if err == nil && got != tt.want {
+			t.Fatalf("normalizeEndpoint(%q) = %q, want %q", tt.endpoint, got, tt.want)
+		}
 	}
 }
 
-func TestReadToken(t *testing.T) {
+func testReadToken(t GinkgoTInterface) {
 	tests := []struct {
 		name    string
 		content string
@@ -115,19 +115,18 @@ func TestReadToken(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "token")
-			if err := os.WriteFile(path, []byte(tt.content), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			got, err := readToken(path)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("readToken() error = %v, wantErr %t", err, tt.wantErr)
-			}
-			if err == nil && got != tt.want {
-				t.Fatalf("readToken() = %q, want %q", got, tt.want)
-			}
-		})
+		By(tt.name)
+		path := filepath.Join(t.TempDir(), "token")
+		if err := os.WriteFile(path, []byte(tt.content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := readToken(path)
+		if (err != nil) != tt.wantErr {
+			t.Fatalf("readToken() error = %v, wantErr %t", err, tt.wantErr)
+		}
+		if err == nil && got != tt.want {
+			t.Fatalf("readToken() = %q, want %q", got, tt.want)
+		}
 	}
 
 	if _, err := readToken(filepath.Join(t.TempDir(), "missing")); !errors.Is(err, errInvalidToken) {
@@ -138,7 +137,7 @@ func TestReadToken(t *testing.T) {
 	}
 }
 
-func TestNewRejectsInvalidCA(t *testing.T) {
+func testNewRejectsInvalidCA(t GinkgoTInterface) {
 	tokenFile := writeTestToken(t)
 	caFile := filepath.Join(t.TempDir(), "ca.pem")
 	if err := os.WriteFile(caFile, []byte("not a certificate"), 0o600); err != nil {
@@ -151,7 +150,7 @@ func TestNewRejectsInvalidCA(t *testing.T) {
 	}
 }
 
-func TestNewValidatesHTTPAndRequiresTokenFile(t *testing.T) {
+func testNewValidatesHTTPAndRequiresTokenFile(t GinkgoTInterface) {
 	validToken := writeTestToken(t)
 	tests := []struct {
 		name   string
@@ -187,22 +186,21 @@ func TestNewValidatesHTTPAndRequiresTokenFile(t *testing.T) {
 		{name: "missing token file", config: Config{Endpoint: "https://netbox.example.test"}, want: errInvalidToken},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := New(tt.config)
-			if tt.want == nil {
-				if err != nil {
-					t.Fatalf("New() error = %v, want nil", err)
-				}
-				return
+		By(tt.name)
+		_, err := New(tt.config)
+		if tt.want == nil {
+			if err != nil {
+				t.Fatalf("New() error = %v, want nil", err)
 			}
-			if !errors.Is(err, tt.want) {
-				t.Fatalf("New() error = %v, want %v", err, tt.want)
-			}
-		})
+			continue
+		}
+		if !errors.Is(err, tt.want) {
+			t.Fatalf("New() error = %v, want %v", err, tt.want)
+		}
 	}
 }
 
-func TestGetDeviceReturnsTypedDeviceAndETag(t *testing.T) {
+func testGetDeviceReturnsTypedDeviceAndETag(t GinkgoTInterface) {
 	etag := `W/"device-revision-42"`
 	server, client := newTrustedClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/dcim/devices/42/" {
@@ -231,7 +229,7 @@ func TestGetDeviceReturnsTypedDeviceAndETag(t *testing.T) {
 	}
 }
 
-func TestForEachDeviceEncodesStatusAndCustomFieldFilters(t *testing.T) {
+func testForEachDeviceEncodesStatusAndCustomFieldFilters(t GinkgoTInterface) {
 	server, client := newTrustedClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/dcim/devices/" {
 			t.Errorf("request = %s %s, want GET /api/dcim/devices/", r.Method, r.URL.Path)
@@ -276,7 +274,7 @@ func TestForEachDeviceEncodesStatusAndCustomFieldFilters(t *testing.T) {
 	}
 }
 
-func TestForEachDeviceFollowsPagination(t *testing.T) {
+func testForEachDeviceFollowsPagination(t GinkgoTInterface) {
 	var calls atomic.Int32
 	_, client := newTrustedClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		call := calls.Add(1)
@@ -324,7 +322,7 @@ func TestForEachDeviceFollowsPagination(t *testing.T) {
 	}
 }
 
-func TestForEachDeviceStopsWhenVisitorStops(t *testing.T) {
+func testForEachDeviceStopsWhenVisitorStops(t GinkgoTInterface) {
 	var calls atomic.Int32
 	_, client := newTrustedClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
@@ -352,7 +350,7 @@ func TestForEachDeviceStopsWhenVisitorStops(t *testing.T) {
 	}
 }
 
-func TestForEachDeviceStopsOnContextCancellation(t *testing.T) {
+func testForEachDeviceStopsOnContextCancellation(t GinkgoTInterface) {
 	var calls atomic.Int32
 	_, client := newTrustedClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
@@ -377,7 +375,7 @@ func TestForEachDeviceStopsOnContextCancellation(t *testing.T) {
 	}
 }
 
-func TestForEachDeviceRejectsNextAfterReportedCount(t *testing.T) {
+func testForEachDeviceRejectsNextAfterReportedCount(t GinkgoTInterface) {
 	var calls atomic.Int32
 	var visited atomic.Int32
 	_, client := newTrustedClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -403,7 +401,7 @@ func TestForEachDeviceRejectsNextAfterReportedCount(t *testing.T) {
 	}
 }
 
-func TestForEachDeviceRejectsUnsupportedQueryWithoutRequest(t *testing.T) {
+func testForEachDeviceRejectsUnsupportedQueryWithoutRequest(t GinkgoTInterface) {
 	var calls atomic.Int32
 	_, client := newTrustedClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
@@ -419,7 +417,7 @@ func TestForEachDeviceRejectsUnsupportedQueryWithoutRequest(t *testing.T) {
 	}
 }
 
-func TestForEachDeviceCustomFieldUsesDeviceObjectType(t *testing.T) {
+func testForEachDeviceCustomFieldUsesDeviceObjectType(t GinkgoTInterface) {
 	_, client := newTrustedClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/extras/custom-fields/" {
 			t.Errorf("request = %s %s, want GET /api/extras/custom-fields/", r.Method, r.URL.Path)
@@ -441,6 +439,9 @@ func TestForEachDeviceCustomFieldUsesDeviceObjectType(t *testing.T) {
 				"name":         "osac_instance_id",
 				"label":        "OSAC instance ID",
 				"required":     false,
+				"filter_logic": map[string]string{"value": "exact", "label": "Exact"},
+				"default":      "",
+				"status":       map[string]string{"value": "active", "label": "Active"},
 			}},
 		})
 	}))
@@ -460,12 +461,15 @@ func TestForEachDeviceCustomFieldUsesDeviceObjectType(t *testing.T) {
 	if field.Name != "osac_instance_id" || field.Label != "OSAC instance ID" || field.Type != "text" || field.DataType != "text" || field.Required {
 		t.Fatalf("ForEachDeviceCustomField() field = %#v", field)
 	}
+	if field.FilterLogic != "exact" || field.Default != "" || field.Status == nil || *field.Status != "active" {
+		t.Fatalf("ForEachDeviceCustomField() schema metadata = %#v", field)
+	}
 	if len(field.ObjectTypes) != 1 || field.ObjectTypes[0] != "dcim.device" {
 		t.Fatalf("custom field object types = %#v, want [dcim.device]", field.ObjectTypes)
 	}
 }
 
-func TestForEachDeviceCustomFieldFollowsPagination(t *testing.T) {
+func testForEachDeviceCustomFieldFollowsPagination(t GinkgoTInterface) {
 	var calls atomic.Int32
 	_, client := newTrustedClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.URL.Query().Get("object_type"); got != "dcim.device" {
@@ -517,7 +521,7 @@ func TestForEachDeviceCustomFieldFollowsPagination(t *testing.T) {
 	}
 }
 
-func TestForEachDeviceCustomFieldStopsWhenVisitorStops(t *testing.T) {
+func testForEachDeviceCustomFieldStopsWhenVisitorStops(t GinkgoTInterface) {
 	var calls atomic.Int32
 	_, client := newTrustedClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
@@ -549,7 +553,7 @@ func TestForEachDeviceCustomFieldStopsWhenVisitorStops(t *testing.T) {
 	}
 }
 
-func TestForEachDeviceCustomFieldRejectsNextAfterReportedCount(t *testing.T) {
+func testForEachDeviceCustomFieldRejectsNextAfterReportedCount(t GinkgoTInterface) {
 	var visited atomic.Int32
 	_, client := newTrustedClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(t, w, http.StatusOK, map[string]any{
@@ -580,7 +584,7 @@ func TestForEachDeviceCustomFieldRejectsNextAfterReportedCount(t *testing.T) {
 	}
 }
 
-func TestNextPaginationOffsetRejectsInvalidMetadata(t *testing.T) {
+func testNextPaginationOffsetRejectsInvalidMetadata(t GinkgoTInterface) {
 	tests := []struct {
 		name        string
 		offset      int32
@@ -596,10 +600,9 @@ func TestNextPaginationOffsetRejectsInvalidMetadata(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := nextPaginationOffset(tt.offset, tt.total, tt.resultCount, tt.hasNext)
-			assertAPIError(t, err, ErrorKindInvalidResponse, 0)
-		})
+		By(tt.name)
+		_, err := nextPaginationOffset(tt.offset, tt.total, tt.resultCount, tt.hasNext)
+		assertAPIError(t, err, ErrorKindInvalidResponse, 0)
 	}
 }
 
@@ -618,7 +621,7 @@ func customFieldResult(id int, name string) map[string]any {
 	}
 }
 
-func TestPatchDeviceForwardsETagAndReturnsUpdatedSnapshot(t *testing.T) {
+func testPatchDeviceForwardsETagAndReturnsUpdatedSnapshot(t GinkgoTInterface) {
 	const expectedETag = `W/"device-revision-42"`
 	const updatedETag = `W/"device-revision-43"`
 	var calls atomic.Int32
@@ -668,7 +671,7 @@ func TestPatchDeviceForwardsETagAndReturnsUpdatedSnapshot(t *testing.T) {
 	}
 }
 
-func TestPatchDeviceRejectsMissingETagWithoutRequest(t *testing.T) {
+func testPatchDeviceRejectsMissingETagWithoutRequest(t GinkgoTInterface) {
 	var calls atomic.Int32
 	_, client := newTrustedClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
@@ -683,7 +686,7 @@ func TestPatchDeviceRejectsMissingETagWithoutRequest(t *testing.T) {
 	}
 }
 
-func TestGetDeviceRetriesTransientFailureAndSanitizesErrors(t *testing.T) {
+func testGetDeviceRetriesTransientFailureAndSanitizesErrors(t GinkgoTInterface) {
 	var calls atomic.Int32
 	server, client := newTrustedClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if calls.Add(1) == 1 {
@@ -708,7 +711,7 @@ func TestGetDeviceRetriesTransientFailureAndSanitizesErrors(t *testing.T) {
 	}
 }
 
-func TestGetDeviceClassifiesAndRedactsPermanentFailures(t *testing.T) {
+func testGetDeviceClassifiesAndRedactsPermanentFailures(t GinkgoTInterface) {
 	tests := []struct {
 		name       string
 		statusCode int
@@ -720,25 +723,24 @@ func TestGetDeviceClassifiesAndRedactsPermanentFailures(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var calls atomic.Int32
-			server, client := newTrustedClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				calls.Add(1)
-				w.WriteHeader(tt.statusCode)
-				_, _ = fmt.Fprintf(w, "private response body; token=%s", testToken)
-			}))
+		By(tt.name)
+		var calls atomic.Int32
+		server, client := newTrustedClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			calls.Add(1)
+			w.WriteHeader(tt.statusCode)
+			_, _ = fmt.Fprintf(w, "private response body; token=%s", testToken)
+		}))
 
-			_, err := client.GetDevice(context.Background(), "42")
-			assertAPIError(t, err, tt.kind, tt.statusCode)
-			if got := calls.Load(); got != 1 {
-				t.Fatalf("GET calls = %d, want 1 for non-retryable HTTP %d", got, tt.statusCode)
-			}
-			assertDoesNotContain(t, err.Error(), testToken, "private response body", server.URL)
-		})
+		_, err := client.GetDevice(context.Background(), "42")
+		assertAPIError(t, err, tt.kind, tt.statusCode)
+		if got := calls.Load(); got != 1 {
+			t.Fatalf("GET calls = %d, want 1 for non-retryable HTTP %d", got, tt.statusCode)
+		}
+		assertDoesNotContain(t, err.Error(), testToken, "private response body", server.URL)
 	}
 }
 
-func TestGetDeviceStopsAfterThreeTransientFailures(t *testing.T) {
+func testGetDeviceStopsAfterThreeTransientFailures(t GinkgoTInterface) {
 	var calls atomic.Int32
 	server, client := newTrustedClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
@@ -754,7 +756,7 @@ func TestGetDeviceStopsAfterThreeTransientFailures(t *testing.T) {
 	assertDoesNotContain(t, err.Error(), testToken, "private response body", server.URL)
 }
 
-func TestPatchDeviceDoesNotRetryUncertainFailure(t *testing.T) {
+func testPatchDeviceDoesNotRetryUncertainFailure(t GinkgoTInterface) {
 	var calls atomic.Int32
 	_, client := newTrustedClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
@@ -774,7 +776,7 @@ func TestPatchDeviceDoesNotRetryUncertainFailure(t *testing.T) {
 	assertDoesNotContain(t, err.Error(), testToken, "private response body")
 }
 
-func TestPatchDeviceClassifiesPreconditionFailure(t *testing.T) {
+func testPatchDeviceClassifiesPreconditionFailure(t GinkgoTInterface) {
 	var calls atomic.Int32
 	_, client := newTrustedClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
@@ -794,7 +796,7 @@ func TestPatchDeviceClassifiesPreconditionFailure(t *testing.T) {
 	assertDoesNotContain(t, err.Error(), "stale ETag detail")
 }
 
-func TestClientRejectsTLSCertificateNotInConfiguredRoots(t *testing.T) {
+func testClientRejectsTLSCertificateNotInConfiguredRoots(t GinkgoTInterface) {
 	var calls atomic.Int32
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
@@ -816,7 +818,7 @@ func TestClientRejectsTLSCertificateNotInConfiguredRoots(t *testing.T) {
 	assertDoesNotContain(t, err.Error(), server.URL, testToken)
 }
 
-func TestClientDoesNotFollowRedirects(t *testing.T) {
+func testClientDoesNotFollowRedirects(t GinkgoTInterface) {
 	var destinationCalls atomic.Int32
 	destination := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		destinationCalls.Add(1)
@@ -835,7 +837,7 @@ func TestClientDoesNotFollowRedirects(t *testing.T) {
 	}
 }
 
-func TestGetDeviceRejectsNonNumericIDBeforeRequest(t *testing.T) {
+func testGetDeviceRejectsNonNumericIDBeforeRequest(t GinkgoTInterface) {
 	var calls atomic.Int32
 	_, client := newTrustedClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
@@ -849,7 +851,7 @@ func TestGetDeviceRejectsNonNumericIDBeforeRequest(t *testing.T) {
 	}
 }
 
-func newTrustedClient(t *testing.T, handler http.Handler) (*httptest.Server, *Client) {
+func newTrustedClient(t GinkgoTInterface, handler http.Handler) (*httptest.Server, *Client) {
 	t.Helper()
 	server := httptest.NewTLSServer(handler)
 	t.Cleanup(server.Close)
@@ -865,7 +867,7 @@ func newTrustedClient(t *testing.T, handler http.Handler) (*httptest.Server, *Cl
 	return server, client
 }
 
-func writeTestToken(t *testing.T) string {
+func writeTestToken(t GinkgoTInterface) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "netbox-token")
 	if err := os.WriteFile(path, []byte(testToken+"\n"), 0o600); err != nil {
@@ -874,7 +876,7 @@ func writeTestToken(t *testing.T) string {
 	return path
 }
 
-func writeJSON(t *testing.T, w http.ResponseWriter, status int, value any) {
+func writeJSON(t GinkgoTInterface, w http.ResponseWriter, status int, value any) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -913,7 +915,7 @@ func deviceResponse(id int, name, status string) string {
 	}`, id, id, name, name, status)
 }
 
-func assertAPIError(t *testing.T, err error, wantKind ErrorKind, wantStatus int) {
+func assertAPIError(t GinkgoTInterface, err error, wantKind ErrorKind, wantStatus int) {
 	t.Helper()
 	if err == nil {
 		t.Fatalf("error = nil, want API error kind %q", wantKind)
@@ -927,7 +929,7 @@ func assertAPIError(t *testing.T, err error, wantKind ErrorKind, wantStatus int)
 	}
 }
 
-func assertDoesNotContain(t *testing.T, value string, forbidden ...string) {
+func assertDoesNotContain(t GinkgoTInterface, value string, forbidden ...string) {
 	t.Helper()
 	for _, part := range forbidden {
 		if part != "" && strings.Contains(value, part) {
@@ -936,7 +938,7 @@ func assertDoesNotContain(t *testing.T, value string, forbidden ...string) {
 	}
 }
 
-func TestTLSConfigKeepsCertificateVerificationEnabled(t *testing.T) {
+func testTLSConfigKeepsCertificateVerificationEnabled(t GinkgoTInterface) {
 	config, err := newTLSConfig("")
 	if err != nil {
 		t.Fatalf("newTLSConfig() error = %v", err)
@@ -952,12 +954,52 @@ func TestTLSConfigKeepsCertificateVerificationEnabled(t *testing.T) {
 	}
 }
 
-func TestParseDeviceIDRejectsOverflowAndNonPositiveIDs(t *testing.T) {
+func testParseDeviceIDRejectsOverflowAndNonPositiveIDs(t GinkgoTInterface) {
 	for _, id := range []string{"", "0", "-1", "2147483648", "host-42", "42/"} {
-		t.Run(url.PathEscape(id), func(t *testing.T) {
-			if _, err := parseDeviceID(id); err == nil {
-				t.Fatalf("parseDeviceID(%q) succeeded, want error", id)
-			}
-		})
+		By(url.PathEscape(id))
+		if _, err := parseDeviceID(id); err == nil {
+			t.Fatalf("parseDeviceID(%q) succeeded, want error", id)
+		}
 	}
 }
+
+var _ = Describe("NetBox client", func() {
+	Describe("client configuration", func() {
+		It("normalizes endpoints", func() { testNormalizeEndpoint(GinkgoT()) })
+		It("reads the token file", func() { testReadToken(GinkgoT()) })
+		It("rejects an invalid CA certificate", func() { testNewRejectsInvalidCA(GinkgoT()) })
+		It("validates HTTP endpoints and requires a token file", func() { testNewValidatesHTTPAndRequiresTokenFile(GinkgoT()) })
+	})
+	Describe("device reads", func() {
+		It("returns a typed device and its ETag", func() { testGetDeviceReturnsTypedDeviceAndETag(GinkgoT()) })
+		It("encodes status and custom-field filters", func() { testForEachDeviceEncodesStatusAndCustomFieldFilters(GinkgoT()) })
+		It("follows device pagination", func() { testForEachDeviceFollowsPagination(GinkgoT()) })
+		It("stops when the visitor requests it", func() { testForEachDeviceStopsWhenVisitorStops(GinkgoT()) })
+		It("stops when the context is cancelled", func() { testForEachDeviceStopsOnContextCancellation(GinkgoT()) })
+		It("rejects pagination beyond the reported count", func() { testForEachDeviceRejectsNextAfterReportedCount(GinkgoT()) })
+		It("rejects unsupported queries without a request", func() { testForEachDeviceRejectsUnsupportedQueryWithoutRequest(GinkgoT()) })
+	})
+	Describe("custom-field discovery", func() {
+		It("uses the device object type", func() { testForEachDeviceCustomFieldUsesDeviceObjectType(GinkgoT()) })
+		It("follows custom-field pagination", func() { testForEachDeviceCustomFieldFollowsPagination(GinkgoT()) })
+		It("stops when the visitor requests it", func() { testForEachDeviceCustomFieldStopsWhenVisitorStops(GinkgoT()) })
+		It("rejects pagination beyond the reported count", func() { testForEachDeviceCustomFieldRejectsNextAfterReportedCount(GinkgoT()) })
+		It("rejects invalid pagination metadata", func() { testNextPaginationOffsetRejectsInvalidMetadata(GinkgoT()) })
+	})
+	Describe("device updates and retries", func() {
+		It("forwards the ETag and returns the updated device", func() { testPatchDeviceForwardsETagAndReturnsUpdatedSnapshot(GinkgoT()) })
+		It("rejects a missing ETag without a request", func() { testPatchDeviceRejectsMissingETagWithoutRequest(GinkgoT()) })
+		It("retries transient read failures and sanitizes errors", func() { testGetDeviceRetriesTransientFailureAndSanitizesErrors(GinkgoT()) })
+		It("classifies and redacts permanent failures", func() { testGetDeviceClassifiesAndRedactsPermanentFailures(GinkgoT()) })
+		It("stops after three transient failures", func() { testGetDeviceStopsAfterThreeTransientFailures(GinkgoT()) })
+		It("does not retry a patch after an uncertain failure", func() { testPatchDeviceDoesNotRetryUncertainFailure(GinkgoT()) })
+		It("classifies an ETag precondition failure", func() { testPatchDeviceClassifiesPreconditionFailure(GinkgoT()) })
+	})
+	Describe("TLS and request validation", func() {
+		It("rejects certificates outside the configured roots", func() { testClientRejectsTLSCertificateNotInConfiguredRoots(GinkgoT()) })
+		It("does not follow redirects", func() { testClientDoesNotFollowRedirects(GinkgoT()) })
+		It("rejects a nonnumeric device ID before making a request", func() { testGetDeviceRejectsNonNumericIDBeforeRequest(GinkgoT()) })
+		It("keeps certificate verification enabled", func() { testTLSConfigKeepsCertificateVerificationEnabled(GinkgoT()) })
+		It("rejects overflowing and nonpositive device IDs", func() { testParseDeviceIDRejectsOverflowAndNonPositiveIDs(GinkgoT()) })
+	})
+})

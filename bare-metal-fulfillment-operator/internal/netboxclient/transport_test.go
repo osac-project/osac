@@ -21,7 +21,8 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"testing"
+
+	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -30,7 +31,7 @@ func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) 
 	return f(request)
 }
 
-func TestRequestExtensionTransportInitializesNilHeaderForIfMatch(t *testing.T) {
+func testRequestExtensionTransportInitializesNilHeaderForIfMatch(t GinkgoTInterface) {
 	var forwarded *http.Request
 	transport := &requestExtensionTransport{base: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		forwarded = request
@@ -68,7 +69,7 @@ func TestRequestExtensionTransportInitializesNilHeaderForIfMatch(t *testing.T) {
 	}
 }
 
-func TestRequestExtensionTransportRejectsOutOfScopeOptions(t *testing.T) {
+func testRequestExtensionTransportRejectsOutOfScopeOptions(t GinkgoTInterface) {
 	tests := []struct {
 		name    string
 		method  string
@@ -106,32 +107,31 @@ func TestRequestExtensionTransportRejectsOutOfScopeOptions(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			baseCalls := 0
-			transport := &requestExtensionTransport{base: roundTripFunc(func(*http.Request) (*http.Response, error) {
-				baseCalls++
-				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: http.NoBody}, nil
-			})}
-			request := (&http.Request{
-				Method: tt.method,
-				URL:    &url.URL{Scheme: "https", Host: "netbox.example.test", Path: tt.path},
-			}).WithContext(withRequestOptions(context.Background(), tt.options))
+		By(tt.name)
+		baseCalls := 0
+		transport := &requestExtensionTransport{base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			baseCalls++
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: http.NoBody}, nil
+		})}
+		request := (&http.Request{
+			Method: tt.method,
+			URL:    &url.URL{Scheme: "https", Host: "netbox.example.test", Path: tt.path},
+		}).WithContext(withRequestOptions(context.Background(), tt.options))
 
-			response, err := transport.RoundTrip(request)
-			if !errors.Is(err, errUnexpectedRequestScope) {
-				t.Fatalf("RoundTrip() error = %v, want %v", err, errUnexpectedRequestScope)
-			}
-			if response != nil {
-				t.Fatalf("RoundTrip() response = %#v, want nil on rejected request", response)
-			}
-			if baseCalls != 0 {
-				t.Fatalf("base transport calls = %d, want 0 for rejected request", baseCalls)
-			}
-		})
+		response, err := transport.RoundTrip(request)
+		if !errors.Is(err, errUnexpectedRequestScope) {
+			t.Fatalf("RoundTrip() error = %v, want %v", err, errUnexpectedRequestScope)
+		}
+		if response != nil {
+			t.Fatalf("RoundTrip() response = %#v, want nil on rejected request", response)
+		}
+		if baseCalls != 0 {
+			t.Fatalf("base transport calls = %d, want 0 for rejected request", baseCalls)
+		}
 	}
 }
 
-func TestIsDeviceDetailPathRejectsInvalidPaths(t *testing.T) {
+func testIsDeviceDetailPathRejectsInvalidPaths(t GinkgoTInterface) {
 	tests := []struct {
 		name string
 		path string
@@ -143,10 +143,21 @@ func TestIsDeviceDetailPathRejectsInvalidPaths(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if isDeviceDetailPath(tt.path) {
-				t.Fatalf("isDeviceDetailPath(%q) = true, want false", tt.path)
-			}
-		})
+		By(tt.name)
+		if isDeviceDetailPath(tt.path) {
+			t.Fatalf("isDeviceDetailPath(%q) = true, want false", tt.path)
+		}
 	}
 }
+
+var _ = Describe("NetBox request extension transport", func() {
+	It("initializes a nil header for If-Match", func() {
+		testRequestExtensionTransportInitializesNilHeaderForIfMatch(GinkgoT())
+	})
+	It("rejects request options outside their supported scope", func() {
+		testRequestExtensionTransportRejectsOutOfScopeOptions(GinkgoT())
+	})
+	It("rejects invalid device detail paths", func() {
+		testIsDeviceDetailPathRejectsInvalidPaths(GinkgoT())
+	})
+})

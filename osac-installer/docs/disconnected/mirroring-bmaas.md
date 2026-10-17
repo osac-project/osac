@@ -1,0 +1,286 @@
+# Category 1D: Mirroring BMaaS / Metal3 Images
+
+WIP.
+
+## Aim
+
+Mirror Bare Metal as a Service (BMaaS) and Metal3 agent images into a
+disconnected mirror registry using the `additionalImages` section of the
+`oc-mirror` v2 `ImageSetConfiguration`.  Configure IDMS
+(ImageDigestMirrorSet) for image resolution and prepare for the
+post-OSAC-4558 OCI reference approach.
+
+> **Relationship to the main guide**: this document covers BMaaS-specific
+> images that extend the base `ImageSetConfiguration` from
+> [disconnected-install.md](../disconnected-install.md).  The operator
+> required for BMaaS (`multicluster-engine`) is covered in
+> [mirroring-operators.md](mirroring-operators.md).  The
+> `bare-metal-fulfillment-operator` core image is covered in
+> [mirroring-core-components.md](mirroring-core-components.md).
+
+## Prerequisites
+
+| Check | Command / evidence |
+| ----- | ------------------ |
+| Category 1A complete: `multicluster-engine` operator installed | `oc get csv -n multicluster-engine \| grep multicluster \| grep Succeeded` |
+| Category 1B complete: `bare-metal-fulfillment-operator` image mirrored | Image present in mirror registry |
+| Metal3 / Ironic agent services deployed by MCE | `oc get pods -n multicluster-engine -l app=metal3` |
+| Assisted-service (infrastructure-operator) is running | `oc get pods -n multicluster-engine -l app=assisted-service` |
+| BMaaS enabled in OSAC Helm values | `bmaas.enabled: true` in values file |
+| Mirror registry reachable and trusted from cluster nodes | Connectivity: `oc debug node/<node> -- chroot /host curl -sSf https://<registry>:8443/v2/ -k`; trust and pull readiness: `oc debug node/<node> -- chroot /host crictl pull <mirror-registry>:8443/<test-image>` |
+| BMC endpoints reachable via Redfish/IPMI from provisioning network | BMC responds: `curl -k https://<bmc-ip>/redfish/v1/Systems` |
+
+## Resources Required
+
+| Resource | Minimum |
+| -------- | ------- |
+| Additional disk (mirror registry) | ~5 GiB for agent and discovery ISO images |
+| Provisioning network | Layer 2 network for IPMI/Redfish BMC access |
+| BareMetalHost CRD | Provided by the `multicluster-engine` operator |
+
+## ImageSetConfiguration Section
+
+Metal3 agent images are used during bare-metal host discovery and
+provisioning.  These images are pulled by the assisted-installer service
+and the Ironic provisioning agents.
+
+The `bare-metal-fulfillment-operator` image is already included in the
+core components (Category 1B).  The additional Metal3-specific images
+depend on the MCE version and are typically mirrored as part of the MCE
+operator catalog.
+
+### Image Reference
+
+The following Metal3 agent images may be required (exact images depend on
+the MCE version; version tags are specified in the ImageSetConfiguration
+below):
+
+| Image | Registry | Purpose |
+| ------- | ---------- | --------- |
+| `registry.redhat.io/multicluster-engine/assisted-installer-agent-rhel9` | registry.redhat.io | Assisted installer discovery agent |
+| `registry.redhat.io/multicluster-engine/assisted-installer-rhel9` | registry.redhat.io | Assisted installer service |
+| `registry.redhat.io/multicluster-engine/assisted-image-service-rhel9` | registry.redhat.io | Assisted image service |
+
+### Agent images as additionalImages
+
+If specific Metal3 agent images need to be mirrored beyond what the MCE
+operator catalog provides, add them to the `additionalImages` section:
+
+```yaml
+  additionalImages:
+    # --- BMaaS / Metal3 agent images ---
+    # These are typically included in the MCE operator catalog mirror.
+    # Add explicit entries only if specific versions are needed or if
+    # the catalog mirror does not include them.
+    #
+    # The exact images depend on the MCE version and the assisted-service
+    # agent configuration.  Common images include:
+    # - name: registry.redhat.io/multicluster-engine/assisted-installer-agent-rhel9:<version>
+    # - name: registry.redhat.io/multicluster-engine/assisted-installer-rhel9:<version>
+    # - name: registry.redhat.io/multicluster-engine/assisted-image-service-rhel9:<version>
+```
+
+> **Note**: When the `multicluster-engine` operator is mirrored as part of
+> Category 1A, the MCE catalog includes its operand images.  Explicit
+> `additionalImages` entries are only needed for images not bundled in the
+> catalog (e.g., custom agent images or OSAC-specific overrides).
+
+## Execution Steps
+
+### Step 1 — Verify MCE operator images are mirrored
+
+The `multicluster-engine` operator catalog, mirrored in Category 1A,
+includes most Metal3 agent images.  Verify they are present:
+
+```bash
+# Verify IDMS mirror rules include MCE/assisted entries
+# (this confirms mirror configuration, not that images are
+# present — test a pull to verify registry content)
+oc get idms -o yaml | grep -i "multicluster-engine\|assisted"
+
+# Verify a mirrored image is actually pullable using
+# the original upstream reference (IDMS redirects to mirror)
+oc debug node/<node> -- chroot /host \
+  crictl pull registry.redhat.io/multicluster-engine/assisted-installer-rhel9:<version>
+```
+
+### Step 2 — Add any additional agent images (if needed)
+
+If specific agent images are missing from the MCE catalog mirror, add them
+to the unified `ImageSetConfiguration` and re-run `oc-mirror`:
+
+```bash
+oc-mirror --v2 --config=imageset-config.yaml --workspace \
+  file://$(pwd)/oc-mirror-workspace docker://<mirror-registry>:8443/
+```
+
+### Step 3 — Apply IDMS (disconnected cluster)
+
+Metal3 agent images mirrored from the MCE operator catalog are
+typically referenced by digest and require an **ImageDigestMirrorSet**
+(IDMS).  If you added tagged `additionalImages` entries, also apply
+the generated **ImageTagMirrorSet** (ITMS):
+
+```bash
+oc apply -f oc-mirror-workspace/working-dir/cluster-resources/idms-oc-mirror.yaml
+
+# Also apply ITMS if any additionalImages use tag references
+oc apply -f oc-mirror-workspace/working-dir/cluster-resources/itms-oc-mirror.yaml 2>/dev/null || true
+```
+
+### Step 4 — Configure AgentServiceConfig for disconnected
+
+The `AgentServiceConfig` CR controls where the assisted-service looks
+for OS images.  Configure its `.spec.osImages` per the
+[multicluster engine for Kubernetes documentation](https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.13/html/clusters/cluster_mce_overview)
+so that it points at images reachable from both the provisioning
+network **and** the assisted-image-service pod network.  The
+assisted-image-service pod fetches the configured OS images to
+build discovery artifacts; if the URL is unreachable from the pod
+network, BMaaS discovery cannot proceed.
+
+Add entries for each OpenShift version your deployment supports:
+
+```yaml
+apiVersion: agent-install.openshift.io/v1beta1
+kind: AgentServiceConfig
+metadata:
+  name: agent
+spec:
+  databaseStorage:
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: 10Gi
+  filesystemStorage:
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: 20Gi
+  osImages:
+    - openshiftVersion: "4.22"
+      version: "422.94.202503170640-0"
+      url: "http://<bastion>:8080/rhcos-4.22-live.x86_64.iso"
+      cpuArchitecture: x86_64
+```
+
+> **HTTP vs HTTPS**: the provisioning network HTTP server on the
+> bastion is typically plain HTTP (port 8080) because it serves
+> only RHCOS live ISOs to Ironic agents on the isolated
+> provisioning network.  If you use HTTPS instead, every
+> provisioning agent must trust the server's CA — add the CA
+> bundle to the `AgentServiceConfig` or to the cluster-wide
+> proxy trust bundle.
+
+Apply the updated `AgentServiceConfig`:
+
+```bash
+oc apply -f agentserviceconfig.yaml
+# or, to update the existing resource in place:
+oc patch agentserviceconfig agent --type merge \
+  -p '{"spec":{"osImages":[{"openshiftVersion":"4.22","version":"422.94.202503170640-0","url":"http://<bastion>:8080/rhcos-4.22-live.x86_64.iso","cpuArchitecture":"x86_64"}]}}'
+```
+
+Verify the `AgentServiceConfig` contains the expected
+`osImages` entries:
+
+```bash
+oc get agentserviceconfig agent -o json | jq '.spec.osImages'
+```
+
+Each entry must reference a URL accessible from both the
+provisioning network and the assisted-image-service pod network —
+typically a local HTTP server on the bastion host.
+
+### Step 5 — Configure BareMetalHost resources
+
+Create the BMC credentials `Secret` and then the `BareMetalHost` resource.
+Ensure the referenced `InfraEnv` exists in the same namespace before
+creating the `BareMetalHost` — the agent-based workflow requires an
+`InfraEnv` to generate the discovery ISO.
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: worker-0-bmc-secret
+  namespace: osac
+type: Opaque
+stringData:
+  username: <bmc-username>
+  password: <bmc-password>
+---
+apiVersion: metal3.io/v1alpha1
+kind: BareMetalHost
+metadata:
+  name: worker-0
+  namespace: osac
+  labels:
+    infraenvs.agent-install.openshift.io: bmaas-infraenv
+spec:
+  online: true
+  bootMACAddress: "AA:BB:CC:DD:EE:FF"
+  bmc:
+    address: idrac-virtualmedia+https://192.168.1.10/redfish/v1/Systems/System.Embedded.1
+    credentialsName: worker-0-bmc-secret
+    disableCertificateVerification: false  # set to true only for self-signed BMC certificates
+```
+
+> **Note**: `disableCertificateVerification` defaults to `false`.  Set it
+> to `true` only when the BMC uses a self-signed or untrusted TLS
+> certificate.  The `InfraEnv` label
+> (`infraenvs.agent-install.openshift.io`) binds this host to the
+> specified `InfraEnv` resource, which must exist in the same namespace.
+
+## Validation Commands
+
+```bash
+# 1. Verify MCE operator is healthy
+oc get csv -n multicluster-engine | grep multicluster
+
+# 2. Verify Metal3 pods are running
+oc get pods -n multicluster-engine -l app.kubernetes.io/part-of=metal3
+
+# 3. Verify assisted-service is running
+oc get pods -n multicluster-engine -l app=assisted-service
+
+# 4. Check IDMS entries for MCE/Metal3 images
+oc get idms -o yaml | grep -c "multicluster-engine"
+
+# 5. Verify BareMetalHost status
+oc get baremetalhost -A -o custom-columns=\
+'NAME:.metadata.name,STATE:.status.provisioning.state,ERROR:.status.errorMessage'
+
+# 6. Check AgentServiceConfig OS images
+oc get agentserviceconfig agent -o jsonpath='{.spec.osImages[*].url}'
+
+# 7. Verify bare-metal-fulfillment-operator is running
+oc get pods -n osac -l app.kubernetes.io/name=bare-metal-fulfillment-operator
+```
+
+## Troubleshooting
+
+| Symptom | Likely cause | Resolution |
+| ------- | ------------ | ---------- |
+| BareMetalHost stuck in `registering` | Agent images not mirrored or IDMS missing | Check IDMS includes MCE images; verify agent pod logs |
+| Discovery ISO fails to boot | OS image URL not reachable from provisioning network | Verify `AgentServiceConfig` `osImages` URLs are accessible |
+| `ImagePullBackOff` on assisted-service pods | MCE operator images not fully mirrored | Re-run `oc-mirror` with the MCE catalog; check catalog completeness |
+| BareMetalHost `inspection error` | Ironic inspector cannot reach the host via BMC | Verify BMC credentials and network connectivity |
+| `bare-metal-fulfillment-operator` CrashLoop | Missing secrets or OSAC platform not fully deployed | Ensure Phase 2 (osac chart) is complete; check operator logs |
+
+## Known Gaps / Limitations
+
+1. **MCE catalog completeness** — The `multicluster-engine` operator
+   catalog includes most Metal3 agent images, but the exact set depends
+   on the MCE version.  Verify that all required agent images are present
+   in the mirror after running `oc-mirror`.
+
+2. **Provisioning network requirements** — BMaaS requires a Layer 2
+   provisioning network for BMC (IPMI/Redfish) access.  This network
+   must be configured independently of the disconnected mirroring setup.
+
+3. **Agent image versioning** — Metal3 agent images are versioned with
+   the MCE release.  Ensure the mirrored MCE version matches the
+   installed operator version to avoid version skew.

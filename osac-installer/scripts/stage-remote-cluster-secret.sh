@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# Create the management-cluster Secret used by the OSAC operator and AAP.
+
+set -euo pipefail
+
+HUB_KUBECONFIG=${HUB_KUBECONFIG:-${KUBECONFIG:-}}
+REMOTE_KUBECONFIG=${REMOTE_KUBECONFIG:?REMOTE_KUBECONFIG must be set}
+REMOTE_API_ADDRESS=${REMOTE_API_ADDRESS:-}
+INSTALLER_NAMESPACE=${INSTALLER_NAMESPACE:-osac}
+REMOTE_KUBECONFIG_SECRET_NAME=${REMOTE_KUBECONFIG_SECRET_NAME:-osac-remote-kubeconfig}
+REMOTE_KUBECONFIG_SECRET_KEY=${REMOTE_KUBECONFIG_SECRET_KEY:-kubeconfig}
+
+[[ -r "${REMOTE_KUBECONFIG}" ]] || {
+    echo "ERROR: REMOTE_KUBECONFIG is not readable: ${REMOTE_KUBECONFIG}" >&2
+    exit 2
+}
+
+remote_args=(--kubeconfig "${REMOTE_KUBECONFIG}")
+hub_oc() {
+    if [[ -n "${HUB_KUBECONFIG}" ]]; then
+        oc --kubeconfig "${HUB_KUBECONFIG}" "$@"
+    else
+        oc "$@"
+    fi
+}
+
+management_api=$(hub_oc config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+workload_api=$(oc "${remote_args[@]}" config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+if [[ -z "${management_api}" || -z "${workload_api}" || "${management_api}" == "${workload_api}" ]]; then
+    echo "ERROR: management and workload kubeconfigs must specify different API server endpoints" >&2
+    exit 1
+fi
+REMOTE_API_ADDRESS=${REMOTE_API_ADDRESS:-${workload_api}}
+if [[ "${REMOTE_API_ADDRESS}" != https://* ]]; then
+    echo "ERROR: REMOTE_API_ADDRESS must use https://" >&2
+    exit 2
+fi
+workload_ca_data=$(oc "${remote_args[@]}" config view --minify --raw --flatten \
+    -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')
+if [[ -z "${workload_ca_data}" ]]; then
+    echo "ERROR: REMOTE_KUBECONFIG must provide trusted certificate authority data" >&2
+    exit 1
+fi
+
+hub_oc get namespace "${INSTALLER_NAMESPACE}" >/dev/null || {
+    echo "ERROR: management namespace ${INSTALLER_NAMESPACE} does not exist; install infrastructure before staging remote access" >&2
+    exit 1
+}
+
+umask 077
+REMOTE_TOKEN_FILE=$(mktemp)
+REMOTE_KUBECONFIG_FILE=$(mktemp)
+REMOTE_KUBECONFIG_TEMPLATE=$(mktemp)
+chmod 600 "${REMOTE_TOKEN_FILE}" "${REMOTE_KUBECONFIG_FILE}" "${REMOTE_KUBECONFIG_TEMPLATE}"
+trap 'rm -f "${REMOTE_TOKEN_FILE}" "${REMOTE_KUBECONFIG_FILE}" "${REMOTE_KUBECONFIG_TEMPLATE}"' EXIT
+
+oc "${remote_args[@]}" create token osac-remote-access \
+    -n "${INSTALLER_NAMESPACE}" --duration=8760h >"${REMOTE_TOKEN_FILE}"
+[[ -s "${REMOTE_TOKEN_FILE}" ]] || {
+    echo "ERROR: failed to create token for ${INSTALLER_NAMESPACE}/osac-remote-access on the workload cluster" >&2
+    exit 1
+}
+
+cat >"${REMOTE_KUBECONFIG_TEMPLATE}" <<EOF
+apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    certificate-authority-data: ${workload_ca_data}
+    server: "${REMOTE_API_ADDRESS}"
+  name: remote
+contexts:
+- context:
+    cluster: remote
+    user: osac-remote-access
+    namespace: ${INSTALLER_NAMESPACE}
+  name: remote
+current-context: remote
+users:
+- name: osac-remote-access
+  user:
+    token: __REMOTE_TOKEN__
+EOF
+
+# Stream the credential from its restricted file into the final kubeconfig.
+# Keeping it out of shell variables also keeps it out of shell tracing output.
+awk 'FNR == NR { token = $0; next }
+     $0 == "    token: __REMOTE_TOKEN__" { print "    token: " token; next }
+     { print }' "${REMOTE_TOKEN_FILE}" "${REMOTE_KUBECONFIG_TEMPLATE}" >"${REMOTE_KUBECONFIG_FILE}"
+
+if ! oc --kubeconfig "${REMOTE_KUBECONFIG_FILE}" --request-timeout=30s \
+    get serviceaccount osac-remote-access \
+    -n "${INSTALLER_NAMESPACE}" >/dev/null; then
+    echo "ERROR: generated remote kubeconfig cannot authenticate to the workload cluster at ${REMOTE_API_ADDRESS}" >&2
+    exit 1
+fi
+
+hub_oc create secret generic "${REMOTE_KUBECONFIG_SECRET_NAME}" \
+    --from-file="${REMOTE_KUBECONFIG_SECRET_KEY}=${REMOTE_KUBECONFIG_FILE}" \
+    -n "${INSTALLER_NAMESPACE}" --dry-run=client -o yaml |
+    hub_oc apply -f -
+hub_oc label secret "${REMOTE_KUBECONFIG_SECRET_NAME}" \
+    osac.openshift.io/remote-cluster-kubeconfig=true \
+    -n "${INSTALLER_NAMESPACE}" --overwrite
+
+echo "Staged remote-cluster Secret ${INSTALLER_NAMESPACE}/${REMOTE_KUBECONFIG_SECRET_NAME}"

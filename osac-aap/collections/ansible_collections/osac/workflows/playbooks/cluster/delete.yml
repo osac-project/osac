@@ -74,42 +74,56 @@
       ansible.builtin.include_role:
         name: osac.service.cluster_working_namespace
       vars:
-        cluster_working_namespace_cluster_order_name: "{{ cluster_order_name }}"
+        cluster_working_namespace_cluster_order_name: >-
+          {{ cluster_order_name }}
+        cluster_working_namespace_allow_missing: true
 
   tasks:
     - name: Display cluster deletion information
       ansible.builtin.debug:
         msg:
           - "Deleting cluster: {{ cluster_order.metadata.name }}"
-          - "Cluster working namespace: {{ cluster_working_namespace }}"
-          - "Template ID: {{ template_id_override | default(template_id) }}"
+          - >-
+            Cluster working namespace:
+            {{ cluster_working_namespace | default('(not found)') }}
+          - >-
+            Template ID:
+            {{ template_id_override | default(template_id) }}
 
-    # CRITICAL: Call template (NOT overrideable, but template has internal override points)
+    # CRITICAL: Call template (NOT overrideable, but template has
+    # internal override points).  Skipped when the working namespace
+    # was never created -- there is nothing to tear down.
     - name: Call selected template
       ansible.builtin.include_role:
         name: "{{ template_id_override | default(template_id) }}"
         tasks_from: delete
+      when: cluster_working_namespace is defined
 
     # CRITICAL: Remove finalizers (NOT overrideable)
-    - name: Remove infrastructure finalizer
+    - name: Remove ClusterOrder infrastructure finalizer
       ansible.builtin.include_role:
         name: osac.service.finalizer
       vars:
         finalizer_state: absent
         finalizer_name: "{{ cluster_order_infrastructure_finalizer }}"
         finalizer_target:
-          api_version: "{{ item.api_version }}"
-          kind: "{{ item.kind }}"
-          namespace: "{{ item.namespace | default(omit) }}"
-          name: "{{ item.name }}"
-      loop:
-        - api_version: osac.openshift.io/v1alpha1
+          api_version: osac.openshift.io/v1alpha1
           kind: ClusterOrder
-          namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"
+          namespace: >-
+            {{ lookup('env', 'POD_NAMESPACE') }}
           name: "{{ cluster_order.metadata.name }}"
-        - api_version: v1
+
+    - name: Remove Namespace infrastructure finalizer
+      ansible.builtin.include_role:
+        name: osac.service.finalizer
+      vars:
+        finalizer_state: absent
+        finalizer_name: "{{ cluster_order_infrastructure_finalizer }}"
+        finalizer_target:
+          api_version: v1
           kind: Namespace
           name: "{{ cluster_working_namespace }}"
+      when: cluster_working_namespace is defined
 
     # HOOK: Workflow complete
     - name: Hook - Workflow complete

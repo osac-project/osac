@@ -1074,18 +1074,19 @@
       "clientId": "osac-ui",
       "name": "OSAC UI",
       "description": "OSAC web console",
-      "rootUrl": "",
+      "rootUrl": "__OSAC_UI_URL__",
       "adminUrl": "",
-      "baseUrl": "",
+      "baseUrl": "/",
       "surrogateAuthRequired": false,
       "enabled": true,
       "alwaysDisplayInConsole": false,
       "clientAuthenticatorType": "client-secret",
       "redirectUris": [
-        "/*"
+        "__OSAC_UI_URL__/callback",
+        "__OSAC_UI_URL__/*"
       ],
       "webOrigins": [
-        "+"
+        "__OSAC_UI_URL__"
       ],
       "notBefore": 0,
       "bearerOnly": false,

@@ -48,6 +48,7 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-ope
 | Pure helpers, validation, or state calculations | Unit | `make test` |
 | Fulfillment client CA parsing, TLS verification, or bundle rotation | Unit with local TLS endpoint; component integration for deployment | `make test`, then [installer Kind target](../docs/INTEGRATION-TESTING.md#osac-operator) and `make -C ../osac-installer fulfillment-trust-render-test` |
 | Controller reconciliation, finalizers, status, or CRD interactions | Envtest | `make test` |
+| BareMetalWorker Agent role assignment and retry repair | Unit plus Envtest; deployed Assisted gap | `go test ./internal/controller/baremetalworker -count=1` and the `baremetalworker` Controller Suite exercise initial binding, established-Agent repair, and CAP-Agent handoff; [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) owns deployed Assisted validation |
 | Controller deployment, watches (including optional TopoLVM watch), RBAC, console proxy, networking, or Helm wiring | Component integration | Deploy current image/manifests, then `make integration-tests`; [installer alternative](../docs/INTEGRATION-TESTING.md#osac-operator) |
 | AAP, dispatcher, provisioning-provider, KubeVirt, or fulfillment boundary | Qualifying Contract or E2E | Use a boundary-specific suite; follow [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) when coverage is missing |
 | Generated CRDs or manifests | Envtest plus applicable Kind suite | `make manifests generate helm-crds check-helm-crds`, then the required test command |
@@ -78,7 +79,8 @@ Worker coverage is owned by **osac-operator [DEV]**:
   through metric accessors.
 - `baremetalworker_reconciler_test.go` and `baremetalworker_lifecycle_test.go`
   drive public Reconcile through InfraEnv ownership/artifact changes, BMI
-  creation/recovery, Agent binding/demotion/handoff, scale-up/down and finalization.
+  creation/recovery, Agent binding and empty-role repair, demotion/handoff,
+  scale-up/down and finalization.
 - `baremetalworker_convergence_test.go` preserves R01–R10 persistence and
   fault traces: interrupted/lost Create acknowledgement, delayed List/NotFound/
   outage evidence, conflicts and restart recovery, prerequisite-free progress,

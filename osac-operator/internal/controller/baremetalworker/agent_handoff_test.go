@@ -12,6 +12,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -128,4 +129,28 @@ var _ = It("preserves authoritative binding during CAP-Agent handoff", func() {
 	got.SetGroupVersionKind(agentGVK)
 	Expect(c.Get(context.Background(), key, got)).To(Succeed())
 	Expect(got).To(Equal(before), "stale discovery rewrote CAP-Agent's authoritative binding")
+})
+
+var _ = It("repairs an empty role after CAP-Agent handoff without changing its deployment", func() {
+	co, a := handoffFixture()
+	a.SetUID("cap-agent-uid")
+	unstructured.RemoveNestedField(a.Object, "spec", "role")
+	c := clientfake.NewClientBuilder().WithObjects(a).Build()
+	r := &Reconciler{Client: c, apiReader: c, recorder: events.NewFakeRecorder(10)}
+	worker := newWorkerStatus("standard", "workers", "worker", "bmi-id", workerPhaseBinding)
+	workers, _, err := reconcileAgentStage(r, co, []v1alpha1.WorkerStatus{worker}, &unstructured.UnstructuredList{Items: []unstructured.Unstructured{*a}})
+	Expect(err).NotTo(HaveOccurred())
+	Expect(workers[0].Phase).To(Equal(workerPhaseBinding))
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(agentGVK)
+	Expect(c.Get(context.Background(), client.ObjectKeyFromObject(a), got)).To(Succeed())
+	role, _, err := unstructured.NestedString(got.Object, "spec", "role")
+	Expect(err).NotTo(HaveOccurred())
+	Expect(role).To(Equal("worker"))
+	deployment, _, err := unstructured.NestedMap(got.Object, "spec", "clusterDeploymentName")
+	Expect(err).NotTo(HaveOccurred())
+	Expect(deployment).To(Equal(map[string]interface{}{
+		"name": "hosted", "namespace": "osac-order-hosted",
+	}))
+	Expect(got.GetLabels()).To(Equal(a.GetLabels()))
 })

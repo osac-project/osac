@@ -319,6 +319,36 @@ var _ = Describe("Authentication interceptor behaviour", func() {
 		Expect(handled).To(BeTrue())
 	})
 
+	It("Requires authorization header for gRPC reflection", func(ctx context.Context) {
+		jwtValidator := NewMockJwtValidator(ctrl)
+		interceptor, err := NewGrpcAuthnInterceptor().
+			SetLogger(logger).
+			SetJwtValidator(jwtValidator).
+			AddAnonymousMethodRegex(`^/(osac\.public\.v1\.(Capabilities/|JsonWebKeySet/)|grpc\.health\.).*$`).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+		handled := false
+		_, err = interceptor.UnaryServer(
+			ctx,
+			nil,
+			&grpc.UnaryServerInfo{
+				FullMethod: "/grpc.reflection.v1.ServerReflection/ServerReflectionInfo",
+			},
+			func(ctx context.Context, req any) (any, error) {
+				handled = true
+				return nil, nil
+			},
+		)
+		Expect(err).To(HaveOccurred())
+		status, ok := grpcstatus.FromError(err)
+		Expect(ok).To(BeTrue())
+		Expect(status.Code()).To(Equal(grpccodes.Unauthenticated))
+		Expect(status.Message()).To(Equal(
+			"method '/grpc.reflection.v1.ServerReflection/ServerReflectionInfo' requires authentication",
+		))
+		Expect(handled).To(BeFalse())
+	})
+
 	It("Combines multiple anonymous method patterns", func(ctx context.Context) {
 		jwtValidator := NewMockJwtValidator(ctrl)
 		interceptor, err := NewGrpcAuthnInterceptor().

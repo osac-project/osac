@@ -231,7 +231,10 @@ func (b0 StorageBackend_builder) Build() *StorageBackend {
 // Defines the desired configuration for a StorageBackend.
 type StorageBackendSpec struct {
 	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// Storage provider identifier. For example: "vast", "ceph", "pure".
+	// Open provider or product identifier recognized by the storage integration.
+	// Deployments may support different identifiers; use a product-specific
+	// identifier when a provider offers multiple products.
+	// The API requires a non-empty value but does not validate deployment support.
 	//
 	// This value is immutable once the StorageBackend is created.
 	Provider string `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"`
@@ -328,7 +331,10 @@ func (x *StorageBackendSpec) ClearCredentials() {
 type StorageBackendSpec_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
-	// Storage provider identifier. For example: "vast", "ceph", "pure".
+	// Open provider or product identifier recognized by the storage integration.
+	// Deployments may support different identifiers; use a product-specific
+	// identifier when a provider offers multiple products.
+	// The API requires a non-empty value but does not validate deployment support.
 	//
 	// This value is immutable once the StorageBackend is created.
 	Provider string

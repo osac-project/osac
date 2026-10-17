@@ -28,10 +28,6 @@ import NameField from '@osac/ui-components/components/catalogProvision/wizard/fi
 import { InputField } from '@osac/ui-components/components/Form/InputField';
 import LeaveFormConfirmation from '@osac/ui-components/components/Form/LeaveFormConfirmation';
 import OsacForm from '@osac/ui-components/components/Form/OsacForm';
-import {
-  SelectField,
-  type SelectFieldOption,
-} from '@osac/ui-components/components/Form/SelectField';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 import { getErrorMessage } from '@osac/ui-components/utils/error';
 import { resourceNameSchema } from '@osac/ui-components/validation/resource-name';
@@ -58,7 +54,7 @@ const getStorageBackendSchema = (t: TFunction, isEdit: boolean) => {
   const pairError = t('Enter both username and password, or leave both blank');
   return Yup.object({
     metadata: Yup.object({ name: resourceNameSchema(t) }),
-    provider: Yup.string().required(t('Provider is required')),
+    provider: Yup.string().required(t('Provider or product key is required')),
     endpoint: Yup.string().required(t('Endpoint is required')),
     description: Yup.string(),
     // On edit, credentials start blank and are all-or-nothing: both blank keeps them
@@ -89,12 +85,6 @@ const StorageBackendForm = ({ backend }: { backend?: StorageBackend }) => {
   const { mutateAsync: create, error: createError } = useCreateStorageBackend();
   const { mutateAsync: update, error: updateError } = useUpdateStorageBackend();
   const error = isEdit ? updateError : createError;
-
-  const providerOptions: SelectFieldOption[] = [
-    { value: 'vast', label: t('VAST') },
-    { value: 'ceph', label: t('Ceph') },
-    { value: 'pure', label: t('Pure') },
-  ];
 
   const onSubmit = async (values: StorageBackendFormValues) => {
     try {
@@ -165,13 +155,15 @@ const StorageBackendForm = ({ backend }: { backend?: StorageBackend }) => {
               <StackItem>
                 <OsacForm>
                   <NameField isDisabled={isEdit} />
-                  <SelectField
+                  <InputField
                     name="provider"
-                    label={t('Provider')}
+                    label={t('Provider / product key')}
                     fieldId="storage-backend-provider"
                     isRequired
                     isDisabled={isEdit}
-                    options={providerOptions}
+                    helperText={t(
+                      'Enter the provider/product routing key used by the storage integration. Use a product-specific key when needed. The API accepts any non-empty key but does not verify deployment support.',
+                    )}
                   />
                   <InputField
                     name="endpoint"

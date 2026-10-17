@@ -45,7 +45,10 @@ message StorageBackend {
 
 // Defines the desired configuration for a StorageBackend.
 message StorageBackendSpec {
-  // Storage provider identifier. For example: "vast", "ceph", "pure".
+  // Open provider or product identifier recognized by the storage integration.
+  // Deployments may support different identifiers; use a product-specific
+  // identifier when a provider offers multiple products.
+  // The API requires a non-empty value but does not validate deployment support.
   //
   // This value is immutable once the StorageBackend is created.
   string provider = 1 [(buf.validate.field).string.min_len = 1];

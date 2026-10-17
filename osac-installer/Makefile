@@ -487,6 +487,11 @@ ifeq ($(SUITE),all)
 	$(MAKE) test SUITE=bmf
 endif
 ifeq ($(SUITE),fulfillment)
+ifeq ($(MCP_TEST_ENABLED),true)
+	@command -v helm >/dev/null || { echo "helm is required for MCP regression setup" >&2; exit 1; }
+	python3 scripts/prepare-mcp-scope-regression.py $(KIND_CLUSTER_NAME)
+	$(MAKE) install-infra PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS)
+endif
 # Exercise event-driven reconciliation without full synchronization in every test phase.
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/fulfillment-service:it -f ../fulfillment-service/Containerfile ..)
 	$(call kind-load-image,localhost/fulfillment-service:it)
@@ -652,6 +657,10 @@ metering-auth-render-test: helm-deps ## Check metering service-account auth rend
 mce-render-test: helm-topolvm-deps ## Check disabled MCE defaults, explicit enablement, and CaaS inheritance
 	uv run --project .. python scripts/test-mce-render.py
 
+.PHONY: mcp-keycloak-test
+mcp-keycloak-test: ## Test MCP Keycloak scope, mapper, assignment, and chart rendering
+	python3 scripts/test-mcp-keycloak-reconciliation.py
+
 .PHONY: fulfillment-auth-test
 fulfillment-auth-test: ## Check Fulfillment service-account token exchange behavior
 	./scripts/test-fulfillment-auth.sh
@@ -669,7 +678,7 @@ kind-runtime-test: ## Check Kind runtime, sudo, image loading, and cluster clean
 	python3 scripts/test-kind-runtime.py
 
 .PHONY: helm-validate
-helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test mce-render-test dev-full-render-test openbao-security-context-test ## Validate all charts (lint + template)
+helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test mce-render-test mcp-keycloak-test dev-full-render-test openbao-security-context-test ## Validate all charts (lint + template)
 	@for d in values/*/; do \
 		infra="$${d}infra.yaml"; \
 		[ -f "$$infra" ] && echo "Validating $$infra..." && \

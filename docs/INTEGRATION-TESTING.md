@@ -243,6 +243,19 @@ the certificate. The Kind
 `SUITE=fulfillment` target exercises deployed startup and API behavior, subject
 to the profile's configured CA and enabled services.
 
+The `make mcp-keycloak-test` unit suite uses a local fake Keycloak Admin API to
+verify missing-scope creation, audience-mapper configuration, client-scope
+assignment, idempotency, and actionable assignment failure. When Helm is
+available, it also checks the rendered chart resources. It does not prove a
+real token exchange. For that boundary, run
+`MCP_TEST_ENABLED=true make test PLATFORM=kind PROFILE=dev NS=osac
+SUITE=fulfillment` from `osac-installer` against the dedicated local Kind
+cluster. The opt-in setup removes `osac-api` from the existing Keycloak realm,
+reruns `install-infra` so the applicable post-upgrade hook recreates it, then
+the deployed MCP test obtains a user token through real Keycloak, calls
+`list_resources`, and reaches real Fulfillment and PostgreSQL. The setup
+rejects non-local Kind contexts; do not point it at a shared cluster.
+
 ### OSAC-5343 deployed enablement coverage
 
 The release E2E path adds these assertions to existing user journeys. The

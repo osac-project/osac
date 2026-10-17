@@ -142,13 +142,16 @@ spec:
   attachRequired: true
 CSIEOF
 
-  # Generate self-signed TLS cert for mock VMS server
-  echo "Generating TLS certificate for mock VMS server..."
+  # Generate self-signed TLS cert for mock VMS and ONTAP servers (with SANs for
+  # 127.0.0.1 and localhost so TLS certificate verification succeeds when
+  # ca_path points to certs/mock.pem).
+  echo "Generating TLS certificate for mock VMS/ONTAP servers..."
   mkdir -p "${SCRIPT_DIR}/certs"
   openssl req -x509 -newkey rsa:2048 \
     -keyout "${SCRIPT_DIR}/certs/mock.key" \
     -out "${SCRIPT_DIR}/certs/mock.pem" \
-    -days 1 -nodes -subj "/CN=127.0.0.1" 2>/dev/null
+    -days 1 -nodes -subj "/CN=127.0.0.1" \
+    -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" 2>/dev/null
 
   # Start mock VMS server for storage integration tests (TLS required by vastdata.vms modules)
   echo "Starting mock VMS server (TLS)..."
@@ -161,6 +164,23 @@ CSIEOF
   for i in $(seq 1 10); do
     if curl -sk https://127.0.0.1:18443/api > /dev/null 2>&1; then
       echo "Mock VMS server ready on port 18443 (PID: ${MOCK_VMS_PID})"
+      break
+    fi
+    sleep 1
+  done
+
+  # Start mock ONTAP server (TLS; uses port 18445 so it does not collide with
+  # netris_subnet_delete/netris_parent_delete's mock_netris.py on port 18444).
+  echo "Starting mock ONTAP server (TLS)..."
+  python3 "${SCRIPT_DIR}/mock_ontap_server.py" 18445 \
+    --tls --cert "${SCRIPT_DIR}/certs/mock.pem" --key "${SCRIPT_DIR}/certs/mock.key" &
+  MOCK_ONTAP_PID=$!
+  echo "${MOCK_ONTAP_PID}" > "${SCRIPT_DIR}/.mock_ontap_pid"
+
+  # Wait for mock ONTAP server to be ready
+  for i in $(seq 1 10); do
+    if curl -sk https://127.0.0.1:18445/_calls > /dev/null 2>&1; then
+      echo "Mock ONTAP server ready on port 18445 (PID: ${MOCK_ONTAP_PID})"
       break
     fi
     sleep 1

@@ -14,11 +14,6 @@
       _provider_tiers must be provided by the service role dispatcher.
       This role should not be called directly — use osac.service.storage_provider.
 
-- name: Validate tenant_name is a valid DNS label
-  ansible.builtin.fail:
-    msg: "tenant_name '{{ tenant_name }}' is not a valid DNS label."
-  when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
-
 - name: Create hub lifecycle marker Secret for tenant
   kubernetes.core.k8s:
     state: present
@@ -27,7 +22,7 @@
       kind: Secret
       metadata:
         name: "{{ lvms_storage_tenant_config_secret_prefix }}{{ tenant_name }}"
-        namespace: "{{ lvms_storage_config_namespace }}"
+        namespace: "{{ storage_provider_config_namespace }}"
         labels:
           osac.openshift.io/tenant: "{{ tenant_name }}"
           osac.openshift.io/storage-provider: lvms

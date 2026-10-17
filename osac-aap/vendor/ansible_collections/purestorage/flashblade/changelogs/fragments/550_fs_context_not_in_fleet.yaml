@@ -1,0 +1,2 @@
+bugfixes:
+  - purefb_fs - Fixed ``not in a fleet`` errors on standalone arrays by only sending ``context_names`` when a context is set, and only defaulting the context for arrays that are fleet members.

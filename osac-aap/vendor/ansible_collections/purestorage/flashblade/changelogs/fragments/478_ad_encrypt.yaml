@@ -1,0 +1,2 @@
+bugfixes:
+ - purefb_ad - Ensure encryption algorithms used match the GUI values

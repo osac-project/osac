@@ -1,0 +1,11 @@
+bugfixes:
+  - purefb_certs - Fix unsafe res.errors[0].message access that could cause IndexError (#498)
+  - purefb_connect - Fix unsafe res.errors[0].message access that could cause IndexError (#498)
+  - purefb_dns - Fix unsafe res.errors[0].message access that could cause IndexError (#498)
+  - purefb_ds - Fix unsafe res.errors[0].message access that could cause IndexError (#498)
+  - purefb_dsrole - Fix unsafe res.errors[0].message access that could cause IndexError (#498)
+  - purefb_export - Fix unsafe res.errors[0].message access that could cause IndexError (#498)
+  - purefb_fleet - Fix unsafe res.errors[0].message access that could cause IndexError (#498)
+  - purefb_fs - Fix unsafe res.errors[0].message access that could cause IndexError (#498)
+  - purefb_fs_replica - Fix unsafe res.errors[0].message access that could cause IndexError (#498)
+  - purefb_groupquota - Fix unsafe res.errors[0].message access that could cause IndexError (#498)

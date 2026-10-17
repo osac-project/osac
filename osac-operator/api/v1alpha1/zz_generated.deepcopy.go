@@ -436,6 +436,10 @@ func (in *ComputeInstanceStatus) DeepCopyInto(out *ComputeInstanceStatus) {
 		in, out := &in.LastRestartedAt, &out.LastRestartedAt
 		*out = (*in).DeepCopy()
 	}
+	if in.RunningConfigSince != nil {
+		in, out := &in.RunningConfigSince, &out.RunningConfigSince
+		*out = (*in).DeepCopy()
+	}
 	if in.ProvisioningJobs != nil {
 		in, out := &in.ProvisioningJobs, &out.ProvisioningJobs
 		*out = make([]JobStatus, len(*in))

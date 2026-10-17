@@ -589,6 +589,8 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 		}
 	}
 
+	recordRunningConfig(instance)
+
 	// Inject tenant storage classes into context for AAP extra_vars.
 	// Prefer Tenant.status.storageClasses (populated by the storage controller);
 	// fall back to resolving labeled StorageClasses on the target cluster only
@@ -1062,6 +1064,30 @@ func (r *ComputeInstanceReconciler) handleDesiredConfigVersion(ctx context.Conte
 	}
 	instance.Status.DesiredConfigVersion = version
 	return nil
+}
+
+// recordRunningConfig records the desired config version that is actually running, with the
+// time of that observation, so the running instance type can be billed from when it started
+// running rather than from when the change was reported downstream. The version is recorded
+// once per configuration: while it is unchanged the recorded time stays put.
+func recordRunningConfig(instance *v1alpha1.ComputeInstance) {
+	// Cheap equality first: in the steady state every reconcile re-enters here with the
+	// versions already equal, and the condition checks below walk the conditions list.
+	if instance.Status.RunningConfigVersion == instance.Status.DesiredConfigVersion {
+		return
+	}
+	if instance.Status.Phase != v1alpha1.ComputeInstancePhaseRunning {
+		return
+	}
+	if !instance.IsStatusConditionTrue(v1alpha1.ComputeInstanceConditionConfigurationApplied) {
+		return
+	}
+	if instance.IsStatusConditionTrue(v1alpha1.ComputeInstanceConditionRestartRequired) {
+		return
+	}
+	since := metav1.NewTime(time.Now().UTC())
+	instance.Status.RunningConfigVersion = instance.Status.DesiredConfigVersion
+	instance.Status.RunningConfigSince = &since
 }
 
 func conditionReason(instance *v1alpha1.ComputeInstance, condType v1alpha1.ComputeInstanceConditionType) string {

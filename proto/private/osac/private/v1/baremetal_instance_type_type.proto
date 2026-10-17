@@ -17,6 +17,7 @@ package osac.private.v1;
 
 import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
+import "google/api/field_behavior.proto";
 import "osac/private/v1/metadata_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
@@ -36,7 +37,7 @@ message BareMetalInstanceType {
 
   Metadata metadata = 2;
   BareMetalInstanceTypeSpec spec = 3 [(buf.validate.field).required = true];
-  BareMetalInstanceTypeStatus status = 4;
+  BareMetalInstanceTypeStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Defines the hardware specifications and description for a BareMetalInstanceType.

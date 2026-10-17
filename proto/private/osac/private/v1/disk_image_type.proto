@@ -17,6 +17,7 @@ package osac.private.v1;
 
 import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
+import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
 import "osac/private/v1/metadata_type.proto";
 
@@ -103,7 +104,7 @@ message DiskImage {
   DiskImageSpec spec = 3;
 
   // Current state of the disk image (system-provided, read-only).
-  DiskImageStatus status = 4;
+  DiskImageStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Defines the desired configuration for a DiskImage.

@@ -722,11 +722,12 @@ var _ = Describe("Private compute instances server", func() {
 				Object: privatev1.ComputeInstance_builder{
 					Id: id,
 					Status: privatev1.ComputeInstanceStatus_builder{
-						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+						State:               privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+						StateTransitionTime: timestamppb.Now(),
 					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"status.state"},
+					Paths: []string{"status.state", "status.state_transition_time"},
 				},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -971,11 +972,12 @@ var _ = Describe("Private compute instances server", func() {
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "same-template"}.Build(),
 					}.Build(),
 					Status: privatev1.ComputeInstanceStatus_builder{
-						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+						State:               privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+						StateTransitionTime: timestamppb.Now(),
 					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"spec.template", "status.state"},
+					Paths: []string{"spec.template", "status.state", "status.state_transition_time"},
 				},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())

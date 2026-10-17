@@ -15,6 +15,7 @@ syntax = "proto3";
 
 package osac.public.v1;
 
+import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
 import "osac/public/v1/metadata_type.proto";
 import "osac/public/v1/secret_type.proto";
@@ -33,7 +34,7 @@ message IdentityProvider {
   IdentityProviderSpec spec = 3;
 
   // Status is the observed state of the identity provider.
-  IdentityProviderStatus status = 4;
+  IdentityProviderStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // IdentityProviderSpec represents the desired state of an identity provider.

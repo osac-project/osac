@@ -465,6 +465,20 @@ spec:
                   - type
                   type: object
                 type: array
+              runningConfigSince:
+                description: |-
+                  RunningConfigSince records when the controller observed the configuration named
+                  by RunningConfigVersion running. It moves only when RunningConfigVersion changes,
+                  so metering can bill the running instance type from the time it actually started
+                  running rather than from when the change was reported downstream.
+                format: date-time
+                type: string
+              runningConfigVersion:
+                description: |-
+                  RunningConfigVersion is the desired config version that the controller observed
+                  actually running: the instance is Running, that configuration is applied, and no
+                  restart required to realize it is pending.
+                type: string
               tenantReference:
                 description: Reference to the tenant that contains the ComputeInstance
                   resources

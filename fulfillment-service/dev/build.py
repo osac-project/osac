@@ -134,6 +134,31 @@ def sync_cleanapi_version() -> None:
     _sync_cleanapi_version()
 
 
+def _strip_metering_annotations(proto_dir: pathlib.Path) -> None:
+    """
+    Removes the metering field options from the generated public API.
+
+    The metering options are private: their definition file is excluded from the public API with
+    `cleanapi.file.private`, and metering reads them from the private protos. However,
+    `protoc-gen-cleanapi` doesn't remove the text of options it doesn't know from the fields it
+    copies to the public API, so the annotations are removed here. Without this the public API
+    wouldn't compile, because the option isn't defined there.
+    """
+    annotation = re.compile(r",?\s*\(osac\.(?:public|private)\.v1\.metering\)\s*=\s*\{[^{}]*\}")
+    for file in (proto_dir / "public").rglob("*.proto"):
+        content = file.read_text()
+        stripped = annotation.sub("", content)
+        if stripped == content:
+            continue
+        # Remove the option brackets and separators left behind by the removed annotation:
+        stripped = re.sub(r"\[\s*,\s*", "[", stripped)
+        stripped = re.sub(r",\s*\]", "]", stripped)
+        stripped = re.sub(r"\[\s*\]", "", stripped)
+        stripped = re.sub(r"\s+;", ";", stripped)
+        file.write_text(stripped)
+        logging.info(f"Removed metering annotations from {file.relative_to(proto_dir)}")
+
+
 @build.command()
 def protos() -> None:
     """
@@ -225,6 +250,8 @@ def protos() -> None:
         env=env,
         check=True,
     )
+
+    _strip_metering_annotations(proto_dir)
 
     logging.info(f"Public proto generation complete - processed {len(proto_files)} files")
     # TODO: Add functions to lint all proto files and generate Go code.

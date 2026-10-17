@@ -17,6 +17,7 @@ package osac.private.v1;
 
 import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
+import "google/api/field_behavior.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/secret_type.proto";
 
@@ -40,7 +41,7 @@ message StorageBackend {
   StorageBackendSpec spec = 3 [(buf.validate.field).required = true];
 
   // Current operational status of the storage backend.
-  StorageBackendStatus status = 4;
+  StorageBackendStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Defines the desired configuration for a StorageBackend.

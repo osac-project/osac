@@ -40,7 +40,7 @@ message Cluster {
 
   Metadata metadata = 2;
   ClusterSpec spec = 3;
-  ClusterStatus status = 4;
+  ClusterStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // The spec contains the details of a cluster as desired by the user.
@@ -327,13 +327,13 @@ message ClusterStatus {
   repeated AddOnOperatorStatus add_on_operators = 12;
 
   // OpenShift version observed on the hosted control plane.
-  string observed_cp_version = 13 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string observed_cp_version = 13;
 
   reserved 14;
   reserved "upgrade";
 
   // Component upgrade attempts in acceptance order. The last entry is the current or most recent attempt.
-  repeated ClusterUpgradeHistoryEntry upgrade_history = 15 [(google.api.field_behavior) = OUTPUT_ONLY];
+  repeated ClusterUpgradeHistoryEntry upgrade_history = 15;
 
   // Records when fulfillment accepted a change to spec.version. This is the authoritative
   // timestamp of the version transition: metering splits version-dimensioned usage at this
@@ -341,7 +341,7 @@ message ClusterStatus {
   // while the version stays the same.
   //
   // This will be empty if spec.version has never changed since creation.
-  optional google.protobuf.Timestamp version_transition_time = 16 [(google.api.field_behavior) = OUTPUT_ONLY];
+  optional google.protobuf.Timestamp version_transition_time = 16;
 }
 
 // State of a component upgrade attempt, independent of the cluster's readiness state.

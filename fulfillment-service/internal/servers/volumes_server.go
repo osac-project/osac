@@ -338,6 +338,9 @@ func (s *VolumesServer) Update(ctx context.Context,
 		// Without mask: use the existing private object as base for the merge.
 		privateVolume = existing
 	}
+	// The public API has no writable status, and the mapper clears fields the request doesn't
+	// set. Keep the stored status, so an update without a status doesn't reset the state.
+	storedStatus := existing.GetStatus()
 	err = s.inMapper.Copy(ctx, publicVolume, privateVolume)
 	if err != nil {
 		s.logger.ErrorContext(
@@ -347,6 +350,9 @@ func (s *VolumesServer) Update(ctx context.Context,
 		)
 		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process volume")
 		return
+	}
+	if !publicVolume.HasStatus() {
+		privateVolume.SetStatus(storedStatus)
 	}
 
 	// Delegate to the private server:

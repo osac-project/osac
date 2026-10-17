@@ -330,6 +330,17 @@ func (t *task) update(ctx context.Context) error {
 		spec.NetworkAttachments = object.Spec.NetworkAttachments
 		update := object.DeepCopy()
 		update.Spec = spec
+		// Keep the instance-type-name label in sync with the spec being patched so it
+		// always names the type the CR was reconciled toward. The operator's feedback
+		// controller gates the running-type stamp on this label; updating it atomically
+		// with the spec prevents a requested resize from being billed before the CR
+		// actually carries the new configuration.
+		if instanceType := t.computeInstance.GetSpec().GetInstanceType(); instanceType != nil {
+			if update.Labels == nil {
+				update.Labels = map[string]string{}
+			}
+			update.Labels[labels.InstanceTypeName] = instanceType.GetName()
+		}
 		err = t.hubClient.Patch(ctx, update, clnt.MergeFrom(object))
 		if err != nil {
 			if err := controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed); err != nil {

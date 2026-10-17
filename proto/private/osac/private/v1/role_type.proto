@@ -16,6 +16,7 @@ syntax = "proto3";
 package osac.private.v1;
 
 import "cleanapi/cleanapi.proto";
+import "google/api/field_behavior.proto";
 import "osac/private/v1/metadata_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
@@ -38,7 +39,7 @@ message Role {
   RoleSpec spec = 3;
 
   // Current observed state of the role.
-  RoleStatus status = 4;
+  RoleStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Desired state of a role.

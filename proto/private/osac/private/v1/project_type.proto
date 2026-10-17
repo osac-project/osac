@@ -17,6 +17,7 @@ package osac.private.v1;
 
 import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
+import "google/api/field_behavior.proto";
 import "osac/private/v1/condition_status_type.proto";
 import "osac/private/v1/metadata_type.proto";
 
@@ -58,7 +59,7 @@ message Project {
   ProjectSpec spec = 3;
 
   // Current state of the project (system-provided, read-only).
-  ProjectStatus status = 4;
+  ProjectStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Defines the desired configuration for a Project.

@@ -27,6 +27,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -2313,11 +2314,12 @@ var _ = Describe("Private clusters server", func() {
 					Object: privatev1.Cluster_builder{
 						Id: object.GetId(),
 						Status: privatev1.ClusterStatus_builder{
-							State: state,
+							State:               state,
+							StateTransitionTime: timestamppb.Now(),
 						}.Build(),
 					}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{
-						Paths: []string{"status.state"},
+						Paths: []string{"status.state", "status.state_transition_time"},
 					},
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -2752,11 +2754,12 @@ var _ = Describe("Private clusters server", func() {
 					Object: privatev1.Cluster_builder{
 						Id: object.GetId(),
 						Status: privatev1.ClusterStatus_builder{
-							State: privatev1.ClusterState_CLUSTER_STATE_READY,
+							State:               privatev1.ClusterState_CLUSTER_STATE_READY,
+							StateTransitionTime: timestamppb.Now(),
 						}.Build(),
 					}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{
-						Paths: []string{"status.state"},
+						Paths: []string{"status.state", "status.state_transition_time"},
 					},
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())

@@ -50,6 +50,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/metrics"
 	"github.com/osac-project/osac/fulfillment-service/internal/network"
+	"github.com/osac-project/osac/fulfillment-service/internal/outputonly"
 	"github.com/osac-project/osac/fulfillment-service/internal/provisioners"
 	"github.com/osac-project/osac/fulfillment-service/internal/recovery"
 	"github.com/osac-project/osac/fulfillment-service/internal/servers"
@@ -403,6 +404,16 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create validation interceptor: %w", err)
 	}
 
+	// Prepare the output-only interceptor. It rejects public API updates whose mask touches
+	// fields annotated as OUTPUT_ONLY, so no public server needs its own guard:
+	c.logger.InfoContext(ctx, "Creating output-only interceptor")
+	outputOnlyInterceptor, err := outputonly.NewInterceptor().
+		SetLogger(c.logger).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create output-only interceptor: %w", err)
+	}
+
 	// Create metadata fetchers for project and project membership authorization.
 	metadataFetcher, err := dao.NewMetadataFetcher().
 		SetLogger(c.logger).
@@ -602,6 +613,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 			metricsInterceptor.UnaryServer,
 			loggingInterceptor.UnaryServer,
 			validationInterceptor.UnaryServer,
+			outputOnlyInterceptor.UnaryServer,
 			txInterceptor.UnaryServer,
 			authnInterceptor.UnaryServer,
 			authzInterceptor.UnaryServer,

@@ -21,6 +21,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
@@ -216,10 +217,11 @@ var _ = Describe("Worker attribution", func() {
 
 		update := proto.Clone(worker).(*privatev1.BareMetalInstance)
 		update.GetStatus().SetState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING)
+		update.GetStatus().SetStateTransitionTime(timestamppb.Now())
 		updateResponse, err := privateServer.Update(ctx, privatev1.BareMetalInstancesUpdateRequest_builder{
 			Object: update,
 			UpdateMask: &fieldmaskpb.FieldMask{
-				Paths: []string{"status.state"},
+				Paths: []string{"status.state", "status.state_transition_time"},
 			},
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -259,26 +261,6 @@ var _ = Describe("Worker attribution", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(getResponse.GetObject().GetStatus().GetCluster()).To(BeNil())
-	})
-
-	It("rejects a public update of the output-only node set field", func() {
-		cluster := seedClusterInProject("web")
-		response, err := privateServer.Create(ctx, createWorker("web", clusterRef(cluster.GetId())))
-		Expect(err).ToNot(HaveOccurred())
-
-		_, err = publicServer.Update(ctx, publicv1.BareMetalInstancesUpdateRequest_builder{
-			Object: publicv1.BareMetalInstance_builder{
-				Id: response.GetObject().GetId(),
-				Status: publicv1.BareMetalInstanceStatus_builder{
-					NodeSet: new("gpu"),
-				}.Build(),
-			}.Build(),
-			UpdateMask: &fieldmaskpb.FieldMask{
-				Paths: []string{"status.node_set"},
-			},
-		}.Build())
-		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-		Expect(err.Error()).To(ContainSubstring("status.node_set is output-only"))
 	})
 
 	It("preserves the owner reference and node set on a public update without a mask", func() {

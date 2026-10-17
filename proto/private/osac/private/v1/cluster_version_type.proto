@@ -90,7 +90,7 @@ message ClusterVersion {
   ClusterVersionSpec spec = 3;
 
   // Current state of the cluster version (system-provided, read-only).
-  ClusterVersionStatus status = 4;
+  ClusterVersionStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Defines the desired configuration for a ClusterVersion.

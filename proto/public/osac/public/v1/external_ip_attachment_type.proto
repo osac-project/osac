@@ -51,7 +51,7 @@ message ExternalIPAttachment {
   ExternalIPAttachmentSpec spec = 3;
 
   // Current state of the external IP attachment (system-provided, read-only).
-  ExternalIPAttachmentStatus status = 4;
+  ExternalIPAttachmentStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Defines the desired configuration for an ExternalIPAttachment.
@@ -130,19 +130,19 @@ message ExternalIPAttachmentSpec {
 // controller.
 message ExternalIPAttachmentStatus {
   // Current lifecycle state of the external IP attachment.
-  ExternalIPAttachmentState state = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
+  ExternalIPAttachmentState state = 1;
 
   // Allocated IP address from the parent ExternalIP.
   //
   // Populated for convenience once the attachment reaches READY state. Mirrors the address
   // field from the referenced ExternalIP's status.
-  string external_ip_address = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string external_ip_address = 2;
 
   // Human-readable message providing additional details about the current state.
   //
   // For PENDING state, may contain progress information. For FAILED state, contains the
   // error details. Typically empty for READY state.
-  optional string message = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+  optional string message = 3;
 
 }
 

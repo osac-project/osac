@@ -38,3 +38,36 @@ uv run pytest -n 0 tests/e2e/bmaas/serial/test_baremetal_instance_inventory_exha
 
 The networking regression has additional provider, SSH, and ExternalIP
 prerequisites; run it only in a matching environment.
+
+The Netris networking regression exercises OSAC-4923 against the deployed
+Fulfillment/operator/AAP/Netris path. It replays same-spec creates for the
+ExternalIPPool, VirtualNetwork, both Subnets, SecurityGroup, NATGateway,
+ExternalIP, and ExternalIPAttachment, then checks that each replay finishes
+with a fresh successful AAP job while preserving the Kubernetes resource and
+desired state. It replays one BMaaS tenant-network attachment move and verifies
+the attachment status and handoff conditions remain ready. Teardown checks the
+successful provider deprovision job and controller-finalizer completion for
+each resource, and verifies BMaaS port moves back to the provisioning network
+during instance deletion. NATGateway and ExternalIPAttachment transition
+timestamps may advance during replay because their controllers timestamp
+Progressing/Ready phase changes. Run the suite without pytest's `-x` option to
+continue through later tests after an individual failure; dependent cases may
+skip when a failed create left their prerequisites unavailable. The
+`netris_subnet_delete` and `netris_parent_delete`
+component-integration targets cover provider-absence handling for their
+documented callers; default-resource guards are component-integration
+coverage. The deployed E2E does not force a second reconcile after deletion
+begins.
+
+Run that suite with:
+
+```bash
+uv run pytest -n 0 tests/e2e/bmaas/regression/networking/test_bmaas_networking.py
+```
+
+It requires `OSAC_BMI_CATALOG_ITEM`, `OSAC_BMI_AUTO_EIP_CATALOG_ITEM`, the
+ExternalIPPool name/CIDR settings, and `OSAC_BMH_SSH_HOSTS` as a JSON mapping
+of BareMetalHost names to reachable SSH hosts. The selected instance type must
+provide an attachable `eth9` port. This deployed journey does not inject AAP or
+Netris failures, create immutable-field drift, exercise default-resource
+delete guards, or test deferred SecurityGroup stale-ACL pruning.

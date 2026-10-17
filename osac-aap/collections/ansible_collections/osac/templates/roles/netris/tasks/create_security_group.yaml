@@ -3,6 +3,10 @@
 # Creates permit ACL rules for each ingress and egress rule in the SecurityGroup CR.
 # ACL rules are created per-subnet in the VN — each subnet maps to a Netris network
 # segment, and Netris ACL rules must use subnet CIDRs (not the wider VN CIDR).
+#
+# Idempotency (OSAC-4923): create is get-or-create by ACL name (controller skip).
+# Stale-rule prune / desired-state reconcile when ingress/egress change is
+# OSAC-4888 (out of scope). Attached-subnet scoping is OSAC-4925.
 
 - name: Extract SecurityGroup configuration
   ansible.builtin.set_fact:

@@ -69,3 +69,35 @@ def test_list_json_can_use_the_credentials_from_the_kubeconfig(monkeypatch: pyte
     )
 
     assert calls == [("kubectl", "--kubeconfig", "/tmp/workload-kubeconfig", "get", "nodes", "-o", "json")]
+
+
+def test_patch_status_uses_the_status_subresource(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run_unchecked(*args: str, **_kwargs: object) -> tuple[str, int]:
+        calls.append(args)
+        return "patched", 0
+
+    monkeypatch.setattr(k8s_client, "run_unchecked", fake_run_unchecked)
+
+    result = K8sClient(namespace="osac").patch_status(
+        resource="virtualnetwork", name="test-vnet", patch='{"status":{"provisioningJobs":[]}}'
+    )
+
+    assert result == ("patched", 0)
+    assert calls == [
+        (
+            "kubectl",
+            "--as",
+            "system:admin",
+            "patch",
+            "virtualnetwork",
+            "test-vnet",
+            "--subresource=status",
+            "-n",
+            "osac",
+            "--type=merge",
+            "-p",
+            '{"status":{"provisioningJobs":[]}}',
+        )
+    ]

@@ -108,6 +108,20 @@ class K8sClient:
     def patch(self, *, resource: str, name: str, patch: str) -> tuple[str, int]:
         return run_unchecked(*self._base(), "patch", resource, name, "-n", self.namespace, "--type=merge", "-p", patch)
 
+    def patch_status(self, *, resource: str, name: str, patch: str) -> tuple[str, int]:
+        return run_unchecked(
+            *self._base(),
+            "patch",
+            resource,
+            name,
+            "--subresource=status",
+            "-n",
+            self.namespace,
+            "--type=merge",
+            "-p",
+            patch,
+        )
+
     def apply(self, *, manifest: str) -> None:
         args: list[str] = [*self._base(), "apply", "-f", "-"]
         subprocess.run(args, input=manifest, capture_output=True, text=True, check=True)

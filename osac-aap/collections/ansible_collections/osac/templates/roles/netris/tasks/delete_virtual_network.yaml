@@ -5,6 +5,13 @@
   ansible.builtin.set_fact:
     vn_name: "{{ virtual_network.metadata.name }}"
 
+- name: Refuse delete of default VirtualNetwork
+  ansible.builtin.include_tasks: _refuse_if_default.yaml
+  vars:
+    _default_refuse_resource: "{{ virtual_network }}"
+    _default_refuse_kind: VirtualNetwork
+    _default_refuse_name: "{{ vn_name }}"
+
 - name: Display VirtualNetwork deletion info
   ansible.builtin.debug:
     msg: "Deleting Netris VPC + IPAM allocation for VirtualNetwork '{{ vn_name }}'"

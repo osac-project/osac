@@ -160,13 +160,16 @@ func createMCPDiscoveryProject(
 ) string {
 	name := fmt.Sprintf("mcp-%s-%s", caller, uuid.New()[24:32])
 	userFilter := fmt.Sprintf("this.spec.username == %q", caller)
-	userResponse, err := users.List(ctx, privatev1.UsersListRequest_builder{
-		Filter: &userFilter,
-		Limit:  new(int32(1)),
-	}.Build())
-	ExpectWithOffset(1, err).ToNot(HaveOccurred())
-	ExpectWithOffset(1, userResponse.GetSize()).To(Equal(int32(1)))
-	userID := userResponse.GetItems()[0].GetId()
+	var userID string
+	EventuallyWithOffset(1, func(g Gomega) {
+		userResponse, err := users.List(ctx, privatev1.UsersListRequest_builder{
+			Filter: &userFilter,
+			Limit:  new(int32(1)),
+		}.Build())
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(userResponse.GetSize()).To(Equal(int32(1)))
+		userID = userResponse.GetItems()[0].GetId()
+	}, time.Minute, time.Second).Should(Succeed())
 
 	response, err := projects.Create(ctx, privatev1.ProjectsCreateRequest_builder{
 		Object: privatev1.Project_builder{

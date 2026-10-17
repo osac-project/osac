@@ -16,6 +16,7 @@ syntax = "proto3";
 package osac.private.v1;
 
 import "cleanapi/cleanapi.proto";
+import "google/api/field_behavior.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/secret_type.proto";
 
@@ -33,7 +34,7 @@ message Hub {
 
   // Desired and current state of the hub.
   HubSpec spec = 3;
-  HubStatus status = 4;
+  HubStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Desired state of the hub.

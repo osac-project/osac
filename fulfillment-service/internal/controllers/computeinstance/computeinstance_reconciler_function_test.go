@@ -2712,6 +2712,101 @@ var _ = Describe("instance_type resolution in reconciler", func() {
 		Expect(list.Items[0].Labels).To(HaveKeyWithValue(labels.InstanceTypeName, "test-type"))
 	})
 
+	It("updates osac.io/instance-type-name label on CR when instance_type changes", func() {
+		mockInstanceTypesClient := NewMockInstanceTypesClient(ctrl)
+		mockInstanceTypesClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.InstanceTypesGetResponse_builder{
+				Object: privatev1.InstanceType_builder{
+					Id: "test-type",
+					Spec: privatev1.InstanceTypeSpec_builder{
+						Vcpus:     4,
+						MemoryGib: 8,
+					}.Build(),
+				}.Build(),
+			}.Build(), nil)
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), "test-hub").
+			Return(&controllers.HubEntry{
+				Namespace: hubNamespace,
+				Client:    fakeClient,
+			}, nil).
+			AnyTimes()
+
+		hubsClient := controllers.NewMockHubsClient(ctrl)
+
+		computeInstancesClient := NewMockComputeInstancesClient(ctrl)
+		computeInstancesClient.EXPECT().
+			Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(ctx context.Context, req *privatev1.ComputeInstancesUpdateRequest, opts ...grpc.CallOption) (*privatev1.ComputeInstancesUpdateResponse, error) {
+				return &privatev1.ComputeInstancesUpdateResponse{Object: req.GetObject()}, nil
+			}).
+			AnyTimes()
+
+		// Seed an existing CR reconciled toward the previous type:
+		existingCR := &osacv1alpha1.ComputeInstance{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: hubNamespace,
+				Name:      "existing-vm",
+				Labels: map[string]string{
+					labels.ComputeInstanceUuid: "test-instance-label-update",
+					labels.InstanceTypeName:    "old-type",
+				},
+			},
+			Spec: osacv1alpha1.ComputeInstanceSpec{
+				TemplateID: "osac.templates.ocp_virt_vm",
+				VCPUs:      2,
+				MemoryGiB:  4,
+				NetworkAttachments: []osacv1alpha1.ComputeNetworkAttachment{
+					{SubnetRef: "test-sn"},
+				},
+			},
+		}
+		Expect(fakeClient.Create(ctx, existingCR)).To(Succeed())
+
+		computeInstance := privatev1.ComputeInstance_builder{
+			Id: "test-instance-label-update",
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     "test-tenant",
+			}.Build(),
+			Spec: privatev1.ComputeInstanceSpec_builder{
+				Template:     &privatev1.ComputeInstanceTemplateReference{Name: "osac.templates.ocp_virt_vm"},
+				InstanceType: &privatev1.InstanceTypeReference{Name: "test-type"},
+				NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+					privatev1.ComputeNetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: subnetID}}.Build(),
+				},
+			}.Build(),
+			Status: privatev1.ComputeInstanceStatus_builder{
+				State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
+				Hub:   "test-hub",
+			}.Build(),
+		}.Build()
+
+		f := &function{
+			logger:                 logger,
+			hubCache:               hubCache,
+			networkingHubReader:    readyComputeNetworkingHubReader("test-hub", hubNamespace, fakeClient),
+			computeInstancesClient: computeInstancesClient,
+			hubsClient:             hubsClient,
+			instanceTypesClient:    mockInstanceTypesClient,
+			maskCalculator:         nil,
+		}
+
+		err := f.run(ctx, computeInstance)
+		Expect(err).ToNot(HaveOccurred())
+
+		// Verify the CR spec was patched and the label follows the new type
+		list := &osacv1alpha1.ComputeInstanceList{}
+		err = fakeClient.List(ctx, list)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(list.Items).To(HaveLen(1))
+		Expect(list.Items[0].Spec.VCPUs).To(Equal(int32(4)))
+		Expect(list.Items[0].Labels).To(HaveKeyWithValue(labels.InstanceTypeName, "test-type"))
+	})
+
 	It("returns error when InstanceType lookup fails (triggers requeue)", func() {
 		mockInstanceTypesClient := NewMockInstanceTypesClient(ctrl)
 		mockInstanceTypesClient.EXPECT().

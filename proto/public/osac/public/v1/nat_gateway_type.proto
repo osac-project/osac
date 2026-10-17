@@ -47,7 +47,7 @@ message NATGateway {
   NATGatewaySpec spec = 3;
 
   // Current state of the NAT gateway (system-provided, read-only).
-  NATGatewayStatus status = 4;
+  NATGatewayStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Defines the desired configuration for a NATGateway.
@@ -83,13 +83,13 @@ message NATGatewaySpec {
 // updates them based on reconciliation of the spec and feedback from the cluster controller.
 message NATGatewayStatus {
   // Current lifecycle state of the NAT gateway.
-  NATGatewayState state = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
+  NATGatewayState state = 1;
 
   // Human-readable message providing additional details about the current state.
   //
   // For PENDING state, may contain progress information like "Configuring SNAT rule".
   // For FAILED state, contains the error details. Typically empty for READY state.
-  optional string message = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
+  optional string message = 2;
 
 }
 

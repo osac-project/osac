@@ -300,6 +300,22 @@ type ComputeInstanceStatus struct {
 	// +kubebuilder:validation:Format=date-time
 	LastRestartedAt *metav1.Time `json:"lastRestartedAt,omitempty"`
 
+	// RunningConfigVersion is the desired config version that the controller observed
+	// actually running: the instance is Running, that configuration is applied, and no
+	// restart required to realize it is pending.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Type=string
+	RunningConfigVersion string `json:"runningConfigVersion,omitempty"`
+
+	// RunningConfigSince records when the controller observed the configuration named
+	// by RunningConfigVersion running. It moves only when RunningConfigVersion changes,
+	// so metering can bill the running instance type from the time it actually started
+	// running rather than from when the change was reported downstream.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Format=date-time
+	RunningConfigSince *metav1.Time `json:"runningConfigSince,omitempty"`
+
 	// ProvisioningJobs tracks the history of provision and deprovision operations
 	// Ordered chronologically, with latest operations at the end
 	// Limited to the last N jobs (configurable via OSAC_MAX_JOB_HISTORY, default 10)

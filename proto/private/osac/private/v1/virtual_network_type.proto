@@ -45,7 +45,7 @@ message VirtualNetwork {
   VirtualNetworkSpec spec = 3;
 
   // Current state of the virtual network (system-provided, read-only).
-  VirtualNetworkStatus status = 4;
+  VirtualNetworkStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Defines the desired configuration for a VirtualNetwork.

@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -27,6 +28,8 @@ import (
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
+
+	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 
 	ckv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/internal/controller/feedback"
@@ -98,6 +101,7 @@ func newComputeInstanceFeedbackBridge(hubClient clnt.Client, ciClient privatev1.
 					feedbackStatusConditionsPath, feedbackStatusStatePath,
 					"status.external_ip_address", "status.internal_ip_address",
 					"status.compute_network_attachment_statuses", "status.last_restarted_at",
+					"status.instance_type", "status.instance_type_transition_time",
 				}},
 			}.Build())
 			return err
@@ -118,6 +122,7 @@ func syncComputeInstanceUpdate(ctx context.Context, obj *ckv1alpha1.ComputeInsta
 	syncCIPhase(ctx, obj, remote)
 	syncCIIPAddresses(obj, remote)
 	syncCILastRestartedAt(obj, remote)
+	syncCIRunningInstanceType(obj, remote)
 	return nil
 }
 
@@ -222,4 +227,94 @@ func syncCILastRestartedAt(obj *ckv1alpha1.ComputeInstance, remote *privatev1.Co
 	if obj.Status.LastRestartedAt != nil {
 		remote.GetStatus().SetLastRestartedAt(timestamppb.New(obj.Status.LastRestartedAt.Time))
 	}
+}
+
+// syncCIRunningInstanceType records the instance type that is actually running, with the time it
+// became running, so metering can bill the VM against it. spec.instance_type is only the request:
+// it changes as soon as a resize is requested, while the VM keeps running the old type until any
+// restart the resize requires has completed.
+//
+// The CR's osac.openshift.io/instance-type-name label names the type its spec was last reconciled
+// toward; the stamp only moves once that label names the requested type, so a requested resize
+// that the reconciler has not applied yet cannot be billed as running. The CR reports the resize
+// complete when the instance is Running, the provisioning job that applies the new configuration
+// has finished (ConfigurationApplied), and KubeVirt no longer reports a pending restart
+// (RestartRequired). Until then the previous stamp is left untouched.
+//
+// The transition time is the CR's recorded observation of the running configuration changing
+// (RunningConfigSince), not the time of this reconciliation: feedback can run long after the
+// resize completed, and those hours belong to the type that was actually running.
+func syncCIRunningInstanceType(obj *ckv1alpha1.ComputeInstance, remote *privatev1.ComputeInstance) {
+	requested := remote.GetSpec().GetInstanceType()
+	if requested == nil {
+		return
+	}
+	if obj.Labels[osacComputeInstanceTypeNameLabel] != requested.GetName() {
+		return
+	}
+	if sameInstanceTypeRef(remote.GetStatus().GetInstanceType(), requested) {
+		return
+	}
+	if !ciRunningWithAppliedConfig(obj) {
+		return
+	}
+	since := obj.Status.RunningConfigSince
+	if since == nil || since.IsZero() {
+		return
+	}
+	remote.GetStatus().SetInstanceType(proto.Clone(requested).(*privatev1.InstanceTypeReference))
+	remote.GetStatus().SetInstanceTypeTransitionTime(timestamppb.New(since.Time))
+}
+
+// sameInstanceTypeRef reports whether two references point to the same instance type. Identity
+// is the id, falling back to the name when either side carries none; this mirrors the
+// reference-key convention used across the fulfillment service (RefKeyStr, refKey), which the
+// operator cannot import. Project and shared are resolution hints, not identity: the same type
+// can be referenced with different hints, and treating those as a different type would re-stamp
+// the billing transition time for a resize that never happened.
+func sameInstanceTypeRef(a, b *privatev1.InstanceTypeReference) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	if a.GetId() != "" && b.GetId() != "" {
+		return a.GetId() == b.GetId()
+	}
+	return a.GetName() != "" && a.GetName() == b.GetName()
+}
+
+// ciRunningWithAppliedConfig reports whether the CR confirms the instance is running with the
+// configuration currently in its spec: the status was computed for that spec, the phase is
+// Running, the configuration has been applied, and no restart is pending that would still be
+// required to realize it.
+//
+// The desiredConfigVersion check is the freshness gate: status.desiredConfigVersion is the hash
+// of the spec the CR controller last reconciled, and the conditions describe that spec. Right
+// after the reconciler patches a resized spec, the stored version still names the old one, so
+// the conditions cannot yet vouch for the new spec and the stamp waits.
+func ciRunningWithAppliedConfig(obj *ckv1alpha1.ComputeInstance) bool {
+	if obj.Status.Phase != ckv1alpha1.ComputeInstancePhaseRunning {
+		return false
+	}
+	version, err := provisioning.ComputeDesiredConfigVersion(obj.Spec)
+	if err != nil || version != obj.Status.DesiredConfigVersion {
+		return false
+	}
+	// The recorded observation must be of this spec as well, so the time sent downstream is
+	// the moment this configuration was observed running.
+	if obj.Status.RunningConfigVersion != version {
+		return false
+	}
+	applied := false
+	for _, condition := range obj.Status.Conditions {
+		switch condition.Type {
+		case string(ckv1alpha1.ComputeInstanceConditionConfigurationApplied):
+			// The condition must exist and be true: a missing condition vouches for nothing.
+			applied = condition.Status == metav1.ConditionTrue
+		case string(ckv1alpha1.ComputeInstanceConditionRestartRequired):
+			if condition.Status == metav1.ConditionTrue {
+				return false
+			}
+		}
+	}
+	return applied
 }

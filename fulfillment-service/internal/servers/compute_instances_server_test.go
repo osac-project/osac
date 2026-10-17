@@ -778,6 +778,43 @@ var _ = Describe("Compute instances server", func() {
 			Expect(spec.GetDiskImage().GetId()).To(Equal("test-disk-image"))
 			Expect(spec.GetBootDisk().GetSizeGib()).To(Equal(int32(10)))
 		})
+
+		It("Drops a user-supplied running instance type on public create", func() {
+			createTemplate("running-type-template")
+
+			response, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
+				Object: publicv1.ComputeInstance_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-compute-instance",
+					}.Build(),
+					Spec: publicv1.ComputeInstanceSpec_builder{
+						Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "running-type-template"}.Build(),
+						NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+							publicv1.ComputeNetworkAttachment_builder{
+								Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
+							}.Build(),
+						},
+					}.Build(),
+					Status: publicv1.ComputeInstanceStatus_builder{
+						InstanceType: publicv1.InstanceTypeReference_builder{
+							Id: "standard-4-16", Name: "standard-4-16",
+						}.Build(),
+						InstanceTypeTransitionTime: timestamppb.Now(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			// Only the system sets the running type fields; user-supplied values are dropped.
+			Expect(response.GetObject().GetStatus().GetInstanceType()).To(BeNil())
+			Expect(response.GetObject().GetStatus().GetInstanceTypeTransitionTime()).To(BeNil())
+
+			getResponse, err := server.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
+				Id: response.GetObject().GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResponse.GetObject().GetStatus().GetInstanceType()).To(BeNil())
+			Expect(getResponse.GetObject().GetStatus().GetInstanceTypeTransitionTime()).To(BeNil())
+		})
 	})
 })
 

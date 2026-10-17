@@ -16,6 +16,7 @@ syntax = "proto3";
 package osac.private.v1;
 
 import "cleanapi/cleanapi.proto";
+import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
 import "osac/private/v1/condition_status_type.proto";
 import "osac/private/v1/metadata_type.proto";
@@ -33,7 +34,7 @@ message User {
   UserSpec spec = 3;
 
   // Status of the user.
-  UserStatus status = 4;
+  UserStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // UserSpec contains the desired state of the user.

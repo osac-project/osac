@@ -261,26 +261,6 @@ var _ = Describe("Worker attribution", func() {
 		Expect(getResponse.GetObject().GetStatus().GetCluster()).To(BeNil())
 	})
 
-	It("rejects a public update of the output-only node set field", func() {
-		cluster := seedClusterInProject("web")
-		response, err := privateServer.Create(ctx, createWorker("web", clusterRef(cluster.GetId())))
-		Expect(err).ToNot(HaveOccurred())
-
-		_, err = publicServer.Update(ctx, publicv1.BareMetalInstancesUpdateRequest_builder{
-			Object: publicv1.BareMetalInstance_builder{
-				Id: response.GetObject().GetId(),
-				Status: publicv1.BareMetalInstanceStatus_builder{
-					NodeSet: new("gpu"),
-				}.Build(),
-			}.Build(),
-			UpdateMask: &fieldmaskpb.FieldMask{
-				Paths: []string{"status.node_set"},
-			},
-		}.Build())
-		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-		Expect(err.Error()).To(ContainSubstring("status.node_set is output-only"))
-	})
-
 	It("preserves the owner reference and node set on a public update without a mask", func() {
 		cluster := seedClusterInProject("web")
 		response, err := privateServer.Create(ctx, createWorker("web", clusterRef(cluster.GetId())))

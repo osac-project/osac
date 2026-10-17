@@ -241,13 +241,9 @@ func (s *BareMetalInstancesServer) Update(ctx context.Context,
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
 		return
 	}
-	for _, path := range request.GetUpdateMask().GetPaths() {
-		if path == "status" || path == "status.state_transition_time" ||
-			path == "status.cluster" || path == "status.node_set" {
-			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "%s is output-only", path)
-			return
-		}
-	}
+
+	// Output-only fields, including the whole status, are kept out of update masks by the
+	// output-only interceptor; see internal/outputonly.
 
 	// When there's a field mask, copy to a new private object and let the generic server handle the
 	// merge with the database object, which correctly applies field mask semantics.

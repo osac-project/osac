@@ -16,6 +16,7 @@ syntax = "proto3";
 package osac.public.v1;
 
 import "buf/validate/validate.proto";
+import "google/api/field_behavior.proto";
 import "osac/public/v1/metadata_type.proto";
 
 // Emit the public counterpart of this type into the osac.public.v1 package. Fields marked with
@@ -84,7 +85,7 @@ message Volume {
   VolumeSpec spec = 3;
 
   // Current operational status of the volume.
-  VolumeStatus status = 4;
+  VolumeStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Defines the desired configuration for a Volume. All fields are immutable after creation.

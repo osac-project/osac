@@ -25,7 +25,7 @@ message FabricDomain {
   string id = 1;
   Metadata metadata = 2;
   FabricDomainSpec spec = 3;
-  FabricDomainStatus status = 4;
+  FabricDomainStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 message FabricDomainSpec {

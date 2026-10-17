@@ -16,6 +16,7 @@ syntax = "proto3";
 package osac.public.v1;
 
 import "buf/validate/validate.proto";
+import "google/api/field_behavior.proto";
 import "osac/public/v1/metadata_type.proto";
 
 // SelfSubjectAccessReview checks whether the current user can perform an action.
@@ -27,7 +28,7 @@ message SelfSubjectAccessReview {
   SelfSubjectAccessReviewSpec spec = 2 [(buf.validate.field).required = true];
 
   // Status is filled in by the server and indicates whether the request is allowed or not.
-  SelfSubjectAccessReviewStatus status = 3;
+  SelfSubjectAccessReviewStatus status = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // SelfSubjectAccessReviewSpec describes the hypothetical operation to check.

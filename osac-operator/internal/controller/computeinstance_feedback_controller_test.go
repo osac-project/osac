@@ -27,6 +27,7 @@ import (
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -35,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -169,6 +171,293 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			syncCIIPAddresses(obj, remote)
 
 			Expect(remote.GetStatus().GetComputeNetworkAttachmentStatuses()).To(BeEmpty())
+		})
+	})
+
+	Context("running instance type feedback", func() {
+		typeRef := func(id, name string) *privatev1.InstanceTypeReference {
+			return privatev1.InstanceTypeReference_builder{Id: id, Name: name}.Build()
+		}
+
+		runningCR := func(restartRequired, configApplied bool) *osacv1alpha1.ComputeInstance {
+			conditionStatus := func(value bool) metav1.ConditionStatus {
+				if value {
+					return metav1.ConditionTrue
+				}
+				return metav1.ConditionFalse
+			}
+			conditions := []metav1.Condition{
+				{
+					Type:               string(osacv1alpha1.ComputeInstanceConditionRestartRequired),
+					Status:             conditionStatus(restartRequired),
+					Reason:             "AsExpected",
+					LastTransitionTime: metav1.NewTime(time.Now().UTC()),
+				},
+				{
+					Type:               string(osacv1alpha1.ComputeInstanceConditionConfigurationApplied),
+					Status:             conditionStatus(configApplied),
+					Reason:             "AsExpected",
+					LastTransitionTime: metav1.NewTime(time.Now().UTC()),
+				},
+			}
+			version, err := provisioning.ComputeDesiredConfigVersion(osacv1alpha1.ComputeInstanceSpec{})
+			Expect(err).ToNot(HaveOccurred())
+			runningSince := metav1.NewTime(time.Now().Add(-time.Hour).UTC())
+			return &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						osacComputeInstanceTypeNameLabel: "standard-8-32",
+					},
+				},
+				Status: osacv1alpha1.ComputeInstanceStatus{
+					Phase:                osacv1alpha1.ComputeInstancePhaseRunning,
+					DesiredConfigVersion: version,
+					RunningConfigVersion: version,
+					RunningConfigSince:   &runningSince,
+					Conditions:           conditions,
+				}}
+		}
+
+		remoteWithRequestedType := func(running *privatev1.InstanceTypeReference, transitionTime *timestamppb.Timestamp) *privatev1.ComputeInstance {
+			return privatev1.ComputeInstance_builder{
+				Spec: privatev1.ComputeInstanceSpec_builder{
+					InstanceType: typeRef("standard-8-32", "standard-8-32"),
+				}.Build(),
+				Status: privatev1.ComputeInstanceStatus_builder{
+					InstanceType:               running,
+					InstanceTypeTransitionTime: transitionTime,
+				}.Build(),
+			}.Build()
+		}
+
+		It("stamps the requested type when the resize completes", func() {
+			oldStamp := timestamppb.New(time.Now().Add(-2 * time.Hour))
+			remote := remoteWithRequestedType(typeRef("standard-4-16", "standard-4-16"), oldStamp)
+			cr := runningCR(false, true)
+
+			syncCIRunningInstanceType(cr, remote)
+
+			Expect(remote.GetStatus().GetInstanceType().GetId()).To(Equal("standard-8-32"))
+			Expect(remote.GetStatus().GetInstanceType().GetName()).To(Equal("standard-8-32"))
+			// The transition time is the CR's recorded observation of the running
+			// configuration changing, not the time of this reconciliation.
+			Expect(remote.GetStatus().GetInstanceTypeTransitionTime().AsTime()).To(Equal(cr.Status.RunningConfigSince.Time))
+		})
+
+		It("stamps the type on the first running observation", func() {
+			remote := remoteWithRequestedType(nil, nil)
+			cr := runningCR(false, true)
+
+			syncCIRunningInstanceType(cr, remote)
+
+			Expect(remote.GetStatus().GetInstanceType().GetId()).To(Equal("standard-8-32"))
+			Expect(remote.GetStatus().GetInstanceTypeTransitionTime().AsTime()).To(Equal(cr.Status.RunningConfigSince.Time))
+		})
+
+		It("does not stamp while the CR label still names the previous type", func() {
+			oldStamp := timestamppb.New(time.Now().Add(-time.Hour))
+			remote := remoteWithRequestedType(typeRef("standard-4-16", "standard-4-16"), oldStamp)
+			cr := runningCR(false, true)
+			// The reconciler has not yet caught up to the resize: the CR label still
+			// names the type the CR spec was last reconciled toward.
+			cr.Labels[osacComputeInstanceTypeNameLabel] = "standard-4-16"
+
+			syncCIRunningInstanceType(cr, remote)
+
+			Expect(remote.GetStatus().GetInstanceType().GetId()).To(Equal("standard-4-16"))
+			Expect(remote.GetStatus().GetInstanceTypeTransitionTime().AsTime()).To(Equal(oldStamp.AsTime()))
+		})
+
+		It("does not stamp when the CR carries no instance type label", func() {
+			remote := remoteWithRequestedType(nil, nil)
+			cr := runningCR(false, true)
+			cr.Labels = nil
+
+			syncCIRunningInstanceType(cr, remote)
+
+			Expect(remote.GetStatus().GetInstanceType()).To(BeNil())
+			Expect(remote.GetStatus().GetInstanceTypeTransitionTime()).To(BeNil())
+		})
+
+		It("does not stamp while a restart is still required", func() {
+			oldStamp := timestamppb.New(time.Now().Add(-time.Hour))
+			remote := remoteWithRequestedType(typeRef("standard-4-16", "standard-4-16"), oldStamp)
+
+			syncCIRunningInstanceType(runningCR(true, true), remote)
+
+			Expect(remote.GetStatus().GetInstanceType().GetId()).To(Equal("standard-4-16"))
+			Expect(remote.GetStatus().GetInstanceTypeTransitionTime().AsTime()).To(Equal(oldStamp.AsTime()))
+		})
+
+		It("does not stamp before the new configuration is applied", func() {
+			remote := remoteWithRequestedType(nil, nil)
+
+			syncCIRunningInstanceType(runningCR(false, false), remote)
+
+			Expect(remote.GetStatus().GetInstanceType()).To(BeNil())
+			Expect(remote.GetStatus().GetInstanceTypeTransitionTime()).To(BeNil())
+		})
+
+		It("does not stamp while the instance is not running", func() {
+			notRunning := runningCR(false, true)
+			notRunning.Status.Phase = osacv1alpha1.ComputeInstancePhaseStarting
+			remote := remoteWithRequestedType(nil, nil)
+
+			syncCIRunningInstanceType(notRunning, remote)
+
+			Expect(remote.GetStatus().GetInstanceType()).To(BeNil())
+			Expect(remote.GetStatus().GetInstanceTypeTransitionTime()).To(BeNil())
+		})
+
+		It("does not stamp while the status still describes the previous spec", func() {
+			oldStamp := timestamppb.New(time.Now().Add(-time.Hour))
+			remote := remoteWithRequestedType(typeRef("standard-4-16", "standard-4-16"), oldStamp)
+			stale := runningCR(false, true)
+			// The reconciler patched the resized spec, but the CR controller has not
+			// recomputed the desired config version, so the conditions still vouch
+			// for the old spec.
+			stale.Status.DesiredConfigVersion = "hash-of-the-previous-spec"
+
+			syncCIRunningInstanceType(stale, remote)
+
+			Expect(remote.GetStatus().GetInstanceType().GetId()).To(Equal("standard-4-16"))
+			Expect(remote.GetStatus().GetInstanceTypeTransitionTime().AsTime()).To(Equal(oldStamp.AsTime()))
+		})
+
+		It("does not stamp when the applied-config condition is missing", func() {
+			oldStamp := timestamppb.New(time.Now().Add(-time.Hour))
+			remote := remoteWithRequestedType(typeRef("standard-4-16", "standard-4-16"), oldStamp)
+			noCondition := runningCR(false, true)
+			noCondition.Status.Conditions = []metav1.Condition{
+				{
+					Type:               string(osacv1alpha1.ComputeInstanceConditionRestartRequired),
+					Status:             metav1.ConditionFalse,
+					Reason:             "AsExpected",
+					LastTransitionTime: metav1.NewTime(time.Now().UTC()),
+				},
+			}
+
+			syncCIRunningInstanceType(noCondition, remote)
+
+			Expect(remote.GetStatus().GetInstanceType().GetId()).To(Equal("standard-4-16"))
+			Expect(remote.GetStatus().GetInstanceTypeTransitionTime().AsTime()).To(Equal(oldStamp.AsTime()))
+		})
+
+		It("does not stamp when the running-config observation is for the previous spec", func() {
+			oldStamp := timestamppb.New(time.Now().Add(-time.Hour))
+			remote := remoteWithRequestedType(typeRef("standard-4-16", "standard-4-16"), oldStamp)
+			staleObservation := runningCR(false, true)
+			// The conditions describe the current spec, but the controller has not yet
+			// observed this configuration running: the recorded observation names the
+			// previous one, so its time cannot vouch for the new type.
+			staleObservation.Status.RunningConfigVersion = "hash-of-the-previous-spec"
+
+			syncCIRunningInstanceType(staleObservation, remote)
+
+			Expect(remote.GetStatus().GetInstanceType().GetId()).To(Equal("standard-4-16"))
+			Expect(remote.GetStatus().GetInstanceTypeTransitionTime().AsTime()).To(Equal(oldStamp.AsTime()))
+		})
+
+		It("does not stamp when the running-config observation carries no time", func() {
+			remote := remoteWithRequestedType(nil, nil)
+			noSince := runningCR(false, true)
+			noSince.Status.RunningConfigSince = nil
+
+			syncCIRunningInstanceType(noSince, remote)
+
+			Expect(remote.GetStatus().GetInstanceType()).To(BeNil())
+			Expect(remote.GetStatus().GetInstanceTypeTransitionTime()).To(BeNil())
+		})
+
+		It("keeps the existing stamp when already running the requested type", func() {
+			oldStamp := timestamppb.New(time.Now().Add(-time.Hour))
+			remote := remoteWithRequestedType(typeRef("standard-8-32", "standard-8-32"), oldStamp)
+
+			syncCIRunningInstanceType(runningCR(false, true), remote)
+
+			Expect(remote.GetStatus().GetInstanceType().GetId()).To(Equal("standard-8-32"))
+			Expect(remote.GetStatus().GetInstanceTypeTransitionTime().AsTime()).To(Equal(oldStamp.AsTime()))
+		})
+
+		It("keeps the stamp when the same type is referenced by id under a different name", func() {
+			oldStamp := timestamppb.New(time.Now().Add(-time.Hour))
+			remote := remoteWithRequestedType(typeRef("standard-8-32", "old-name"), oldStamp)
+
+			syncCIRunningInstanceType(runningCR(false, true), remote)
+
+			Expect(remote.GetStatus().GetInstanceTypeTransitionTime().AsTime()).To(Equal(oldStamp.AsTime()))
+		})
+
+		It("keeps the stamp when the recorded type carries no id and only the name matches", func() {
+			oldStamp := timestamppb.New(time.Now().Add(-time.Hour))
+			remote := remoteWithRequestedType(typeRef("", "standard-8-32"), oldStamp)
+
+			syncCIRunningInstanceType(runningCR(false, true), remote)
+
+			Expect(remote.GetStatus().GetInstanceTypeTransitionTime().AsTime()).To(Equal(oldStamp.AsTime()))
+		})
+
+		It("keeps the stamp when only the resolution hints differ", func() {
+			oldStamp := timestamppb.New(time.Now().Add(-time.Hour))
+			remote := remoteWithRequestedType(privatev1.InstanceTypeReference_builder{
+				Id:      "standard-8-32",
+				Name:    "standard-8-32",
+				Project: "other-project",
+				Shared:  true,
+			}.Build(), oldStamp)
+
+			syncCIRunningInstanceType(runningCR(false, true), remote)
+
+			Expect(remote.GetStatus().GetInstanceTypeTransitionTime().AsTime()).To(Equal(oldStamp.AsTime()))
+		})
+
+		It("sends the running instance type paths in the update mask", func() {
+			vm := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: computeInstanceNS,
+					Labels: map[string]string{
+						osacComputeInstanceIDLabel:       ciID,
+						osacComputeInstanceTypeNameLabel: "standard-8-32",
+					},
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+			Expect(k8sClient.Create(ctx, vm)).To(Succeed())
+			DeferCleanup(func() {
+				updated := &osacv1alpha1.ComputeInstance{}
+				err := k8sClient.Get(ctx, typeNamespacedName, updated)
+				if apierrors.IsNotFound(err) {
+					return
+				}
+				Expect(err).ToNot(HaveOccurred())
+				updated.Finalizers = nil
+				Expect(k8sClient.Update(ctx, updated)).To(Succeed())
+				Expect(k8sClient.Delete(ctx, updated)).To(Succeed())
+			})
+			Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
+			vm.Status = runningCR(false, true).Status
+			// The desired config version must hash the CR's actual spec, as the CR
+			// controller would compute it, and the running-config observation must
+			// record that same spec, so the status vouches for this spec.
+			version, err := provisioning.ComputeDesiredConfigVersion(vm.Spec)
+			Expect(err).ToNot(HaveOccurred())
+			vm.Status.DesiredConfigVersion = version
+			vm.Status.RunningConfigVersion = version
+			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
+
+			mockClient.getResponse = &privatev1.ComputeInstancesGetResponse{
+				Object: remoteWithRequestedType(nil, nil),
+			}
+			mockClient.updateResponse = &privatev1.ComputeInstancesUpdateResponse{}
+
+			_, reconcileErr := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(reconcileErr).NotTo(HaveOccurred())
+			Expect(mockClient.updateCalled).To(BeTrue())
+			Expect(mockClient.lastUpdateMask.GetPaths()).To(ContainElement("status.instance_type"))
+			Expect(mockClient.lastUpdateMask.GetPaths()).To(ContainElement("status.instance_type_transition_time"))
+			Expect(mockClient.lastUpdate.GetStatus().GetInstanceType().GetId()).To(Equal("standard-8-32"))
+			Expect(mockClient.lastUpdate.GetStatus().GetInstanceTypeTransitionTime()).ToNot(BeNil())
 		})
 	})
 

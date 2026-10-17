@@ -16,6 +16,7 @@ syntax = "proto3";
 package osac.public.v1;
 
 import "buf/validate/validate.proto";
+import "google/api/field_behavior.proto";
 import "osac/public/v1/metadata_type.proto";
 
 // Describes a pre-configured bare metal hardware type that can be referenced by name when provisioning
@@ -33,7 +34,7 @@ message BareMetalInstanceType {
 
   Metadata metadata = 2;
   BareMetalInstanceTypeSpec spec = 3 [(buf.validate.field).required = true];
-  BareMetalInstanceTypeStatus status = 4;
+  BareMetalInstanceTypeStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Defines the hardware specifications and description for a BareMetalInstanceType.

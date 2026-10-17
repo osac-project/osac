@@ -16,6 +16,7 @@ syntax = "proto3";
 package osac.public.v1;
 
 import "buf/validate/validate.proto";
+import "google/api/field_behavior.proto";
 import "osac/public/v1/metadata_type.proto";
 
 // A project is a logical grouping of resources.
@@ -54,7 +55,7 @@ message Project {
   ProjectSpec spec = 3;
 
   // Current state of the project (system-provided, read-only).
-  ProjectStatus status = 4;
+  ProjectStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Defines the desired configuration for a Project.

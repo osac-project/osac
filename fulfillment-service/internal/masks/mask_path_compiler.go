@@ -133,6 +133,16 @@ func (c *PathCompiler[M]) Compile(path string) (result *Path[M], err error) {
 }
 
 func (c *PathCompiler[M]) split(path string) []string {
+	return SplitPath(path)
+}
+
+// SplitPath splits a field mask path into its normalized segments: chunks are
+// dot separated, trimmed of surrounding whitespace, and empty chunks are
+// dropped. The compiler normalizes paths this way before resolving them, so
+// anything that walks paths against the same descriptors — such as the
+// output-only interceptor — must resolve the same fields the compiled paths
+// touch, and shares this normalization to keep the two from drifting apart.
+func SplitPath(path string) []string {
 	chunks := strings.Split(path, ".")
 	for i, chunk := range chunks {
 		chunks[i] = strings.TrimSpace(chunk)

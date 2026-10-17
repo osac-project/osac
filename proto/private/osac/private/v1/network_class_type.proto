@@ -17,6 +17,7 @@ package osac.private.v1;
 
 import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
+import "google/api/field_behavior.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/security_rule_type.proto";
 
@@ -65,7 +66,7 @@ message NetworkClass {
   NetworkClassCapabilities capabilities = 7;
 
   // Current operational status of the network class.
-  NetworkClassStatus status = 8;
+  NetworkClassStatus status = 8 [(google.api.field_behavior) = OUTPUT_ONLY];
 
   // Field 9 previously held the removed is_default flag. It must not be reused.
   reserved 9;

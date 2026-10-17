@@ -91,7 +91,7 @@ message Volume {
   VolumeSpec spec = 3;
 
   // Current operational status of the volume.
-  VolumeStatus status = 4;
+  VolumeStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // CSI-style topology segments that constrain where a volume may be
@@ -149,14 +149,12 @@ message VolumeStatus {
   // Time at which the lifecycle state last changed. Written by the operator
   // and persisted unchanged by fulfillment-service.
   google.protobuf.Timestamp state_transition_time = 9 [
-    (cleanapi.field).private = true,
-    (google.api.field_behavior) = OUTPUT_ONLY
+    (cleanapi.field).private = true
   ];
 
   // Capacity successfully committed on the vendor storage array. Visible only
   // through the private API.
   int64 provisioned_size_gib = 10 [
-    (cleanapi.field).private = true,
-    (google.api.field_behavior) = OUTPUT_ONLY
+    (cleanapi.field).private = true
   ];
 }

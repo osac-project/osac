@@ -1288,36 +1288,6 @@ var _ = Describe("Clusters server", func() {
 			Expect(getResponse.GetObject().GetStatus().GetVersionTransitionTime()).To(BeNil())
 		})
 
-		It("Rejects a public update of the output-only version transition time", func() {
-			// Create the object:
-			createResponse, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
-				Object: publicv1.Cluster_builder{
-					Metadata: publicv1.Metadata_builder{
-						Name: "test-cluster",
-					}.Build(),
-					Spec: publicv1.ClusterSpec_builder{
-						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			object := createResponse.GetObject()
-
-			_, err = server.Update(ctx, publicv1.ClustersUpdateRequest_builder{
-				Object: publicv1.Cluster_builder{
-					Id: object.GetId(),
-					Status: publicv1.ClusterStatus_builder{
-						VersionTransitionTime: timestamppb.Now(),
-					}.Build(),
-				}.Build(),
-				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"status.version_transition_time"},
-				},
-			}.Build())
-			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-			Expect(err.Error()).To(ContainSubstring("status.version_transition_time is output-only"))
-		})
-
 		It("Update object with mask", func() {
 			// Create the object:
 			createResponse, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{

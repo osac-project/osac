@@ -48,6 +48,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	hubscheme "github.com/osac-project/osac/fulfillment-service/internal/kubernetes/scheme"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
+	"github.com/osac-project/osac/fulfillment-service/internal/outputonly"
 	"github.com/osac-project/osac/fulfillment-service/internal/packages"
 	"github.com/osac-project/osac/fulfillment-service/internal/recovery"
 	"github.com/osac-project/osac/fulfillment-service/internal/servers"
@@ -55,6 +56,8 @@ import (
 	itesting "github.com/osac-project/osac/fulfillment-service/internal/testing"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 func TestRegisterServers(t *testing.T) {
@@ -184,8 +187,13 @@ var _ = BeforeSuite(func() {
 	// register every filterable resource through the same function production calls:
 	referenceValidator, err := newReferenceValidator(logger, tenancy, metricsRegisterer)
 	Expect(err).ToNot(HaveOccurred())
+	outputOnlyInterceptor, err := outputonly.NewInterceptor().
+		SetLogger(logger).
+		Build()
+	Expect(err).ToNot(HaveOccurred())
 	server := itesting.NewServer(grpc.ChainUnaryInterceptor(
 		panicInterceptor.UnaryServer,
+		outputOnlyInterceptor.UnaryServer,
 		txInterceptor.UnaryServer,
 		referenceValidator.UnaryServer,
 	))
@@ -618,5 +626,44 @@ var _ = Describe("Conditional service registration", func() {
 		_, rs, err := registerWithFlags(&services.Flags{CaaS: true, VMaaS: true, BMaaS: false, MaaS: false})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(rs.PrivateComputeInstancesServer).ToNot(BeNil())
+	})
+})
+
+var _ = Describe("Output-only interceptor wiring", func() {
+	// These specs go through the real server chain with every public resource
+	// registered, so they notice both failure modes the unit tests can't: the
+	// interceptor dropping out of the chain, and its method prefix drifting
+	// away from the methods the registered services actually serve.
+
+	It("rejects a public update whose mask touches an output-only field", func() {
+		client := publicv1.NewComputeInstancesClient(conn)
+		_, err := client.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+			Object: publicv1.ComputeInstance_builder{
+				Id: "wiring-probe",
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{
+				// Leading whitespace on purpose: the server's path compiler
+				// trims it, so the interceptor must resolve it the same way.
+				Paths: []string{" status"},
+			},
+		}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(err.Error()).To(ContainSubstring("output-only"))
+	})
+
+	It("lets a public update with writable mask paths reach the server", func() {
+		client := publicv1.NewComputeInstancesClient(conn)
+		_, err := client.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+			Object: publicv1.ComputeInstance_builder{
+				Id: "does-not-exist",
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{
+				Paths: []string{"spec.instance_type"},
+			},
+		}.Build())
+		// The object doesn't exist, so the server itself must answer — the
+		// point is that the request passes the interceptor and reaches it,
+		// instead of being rejected as output-only.
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
 	})
 })

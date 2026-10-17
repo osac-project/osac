@@ -326,7 +326,10 @@ def _safe_delete_vn(grpc: GRPCClient, k8s: K8sClient, *, vn_id: str, vn_cr_name:
             logger.warning("VN %s teardown failed: %s", vn_id, combined.strip())
             return
     if k8s.is_present(resource="virtualnetwork", name=vn_cr_name):
-        wait_for_virtual_network_deletion(k8s=k8s, name=vn_cr_name)
+        try:
+            wait_for_virtual_network_deletion(k8s=k8s, name=vn_cr_name)
+        except Exception as exc:
+            logger.warning("VN CR %s deletion wait failed: %s", vn_cr_name, exc)
 
 
 def _safe_delete_subnet(grpc: GRPCClient, k8s: K8sClient, *, subnet_id: str, subnet_cr_name: str) -> None:
@@ -343,7 +346,10 @@ def _safe_delete_subnet(grpc: GRPCClient, k8s: K8sClient, *, subnet_id: str, sub
             logger.warning("Subnet %s teardown failed: %s", subnet_id, combined.strip())
             return
     if k8s.is_present(resource="subnet", name=subnet_cr_name):
-        wait_for_subnet_deletion(k8s=k8s, name=subnet_cr_name)
+        try:
+            wait_for_subnet_deletion(k8s=k8s, name=subnet_cr_name)
+        except Exception as exc:
+            logger.warning("Subnet CR %s deletion wait failed: %s", subnet_cr_name, exc)
 
 
 def _safe_delete_sg(grpc: GRPCClient, k8s: K8sClient, *, sg_id: str, sg_cr_name: str) -> None:
@@ -360,4 +366,7 @@ def _safe_delete_sg(grpc: GRPCClient, k8s: K8sClient, *, sg_id: str, sg_cr_name:
             logger.warning("SG %s teardown failed: %s", sg_id, combined.strip())
             return
     if k8s.is_present(resource="securitygroup", name=sg_cr_name):
-        wait_for_security_group_deletion(k8s=k8s, name=sg_cr_name)
+        try:
+            wait_for_security_group_deletion(k8s=k8s, name=sg_cr_name)
+        except Exception as exc:
+            logger.warning("SG CR %s deletion wait failed: %s", sg_cr_name, exc)

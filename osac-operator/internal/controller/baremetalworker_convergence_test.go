@@ -436,7 +436,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(fc.DeleteCalls()).To(BeEmpty())
 	})
 
-	It("retains legacy ID-less state without inferring safety from its timestamp", func() {
+	It("completes cleanup for a legacy ID-less worker regardless of its timestamp", func() {
 		ready()
 		step()
 		latest := getOrder()
@@ -444,14 +444,15 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(latest.Status.Workers[0].AttemptStartedAt).NotTo(BeNil())
 		Expect(k8sClient.Status().Update(ctx, latest)).To(Succeed())
 		Expect(k8sClient.Delete(ctx, getOrder())).To(Succeed())
-		for range 3 {
+		// Legacy workers (BMICreateState="") proceed through
+		// Agent-only cleanup without a grace window.
+		for range 16 + 8 {
 			r = buildReconciler(k8sClient)
 			step()
-			Expect(getOrder().Status.Workers).To(HaveLen(1))
-			Expect(getOrder().Status.Workers[0].BMICreateState).To(BeEmpty())
-			Expect(getOrder().Finalizers).To(ContainElement("osac.openshift.io/baremetalworker-finalizer"))
 		}
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), &api.ClusterOrder{}))).To(BeTrue())
 		Expect(fc.CreateCalls()).To(BeEmpty())
+		Expect(fc.DeleteCalls()).To(BeEmpty())
 	})
 
 	It("recovers a lost Create acknowledgement during deletion only after delayed visibility", func() {

@@ -31,5 +31,11 @@ make install PLATFORM=openshift PROFILE=cudn-evpn-netris-test NS=osac \
   INSTANCE_VALUES_EXTRA="-f cudn-evpn-netris-test-secrets.local.yaml"
 ```
 
+The serial EVPN provisioning E2E test also reads Netris VPC, V-Net, IPAM subnet,
+and host lease data. Provide `NETRIS_CONTROLLER_URL`, `NETRIS_USERNAME`, and
+`NETRIS_PASSWORD` to the pytest runner from the same protected test credentials;
+the test does not read credentials from the installed cluster. Keep them out of
+checked-in values and logs.
+
 The Makefile profile selection is the installation wiring for this profile;
 the standard CI workflows continue to use their existing profiles.

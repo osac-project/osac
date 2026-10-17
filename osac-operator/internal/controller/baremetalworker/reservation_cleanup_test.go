@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -15,6 +16,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -133,7 +135,7 @@ var _ = It("rejects a stale Create when cancellation wins the intent race", func
 	Expect(latest.Status.Workers).To(BeEmpty(), "cancelled reservation resurrected: %+v", latest.Status.Workers)
 })
 
-var _ = It("Create intent wins the cancellation race and cleanup proceeds", func() {
+var _ = It("retains the reservation when Create intent wins the cancellation race", func() {
 	r, fc, co := workerReadHarness()
 	reserveCleanupSlot(r, co)
 	ctx := context.Background()
@@ -151,26 +153,25 @@ var _ = It("Create intent wins the cancellation race and cleanup proceeds", func
 				Expect(err).NotTo(HaveOccurred())
 			}
 		}
-		// Cleanup now completes: the filtered List found no BMI, so
-		// the worker is removed and the finalizer released.
-		err := kube.Get(ctx, key, latest)
-		if apierrors.IsNotFound(err) {
-			return // Fully cleaned up
-		}
-		Expect(err).NotTo(HaveOccurred())
-		Expect(latest.Status.Workers).To(BeEmpty(), "ID-less worker should complete cleanup")
+		Expect(kube.Get(ctx, key, latest)).To(Succeed())
+		Expect(latest.Status.Workers).To(HaveLen(1), "attempted reservation released before Create")
 	}}
 	_, err := runWorkerCapacityStage(r, co)
-	Expect(apierrors.IsConflict(err) || apierrors.IsNotFound(err)).To(BeTrue(), "identity write after retirement should conflict or observe deletion: %v", err)
+	Expect(apierrors.IsConflict(err)).To(BeTrue(), "identity write after retirement should conflict: %v", err)
 	Expect(fc.names).To(HaveLen(1), "creates=%v bmis=%v", fc.names, fc.bmis)
-	// The ClusterOrder was cleaned up during the race, so the
-	// Create's precondition check (Get ClusterOrder) may fail,
-	// leaving bmis unpopulated.
+	Expect(fc.bmis).To(HaveLen(1), "creates=%v bmis=%v", fc.names, fc.bmis)
+	Expect(kube.Get(ctx, client.ObjectKeyFromObject(co), co)).To(Succeed())
+	fc.listed = fc.bmis
+	w := co.Status.Workers[0]
+	gone, err := cleanup.cleanupWorker(ctx, co, &w)
+	Expect(err).NotTo(HaveOccurred(), "lost identity not recovered: worker=%+v gone=%v err=%v", w, gone, err)
+	Expect(gone).To(BeFalse(), "lost identity not recovered: worker=%+v gone=%v err=%v", w, gone, err)
+	Expect(w.BareMetalInstance.ID).To(Equal(fc.bmis[0].GetId()), "lost identity not recovered: worker=%+v gone=%v err=%v", w, gone, err)
 })
 
 var _ = Describe("ID-less worker cleanup when List is empty", func() {
-	for _, state := range []string{"", v1alpha1.WorkerBMICreateStateAttempted, "unknown"} {
-		It("state="+state, func() {
+	for _, state := range []string{"", "unknown"} {
+		It("proceeds immediately for state="+state, func() {
 			r, fc, co := workerReadHarness()
 			co.Status.Workers[0].BareMetalInstance.ID = ""
 			co.Status.Workers[0].BMICreateState = state
@@ -185,6 +186,35 @@ var _ = Describe("ID-less worker cleanup when List is empty", func() {
 			Expect(fc.names).To(BeEmpty(), "lists=%d creates=%v", fc.lists, fc.names)
 		})
 	}
+
+	It("defers cleanup within the grace window for Attempted state", func() {
+		r, fc, co := workerReadHarness()
+		co.Status.Workers[0].BareMetalInstance.ID = ""
+		co.Status.Workers[0].BMICreateState = v1alpha1.WorkerBMICreateStateAttempted
+		co.Status.Workers[0].Phase = workerPhaseUnbinding
+		Expect(r.Status().Update(context.Background(), co)).To(Succeed())
+		w := co.Status.Workers[0]
+		// AttemptStartedAt is recent (set by newWorkerStatus).
+		gone, err := r.cleanupWorker(context.Background(), co, &w)
+		Expect(err).NotTo(HaveOccurred(), "grace deferred: gone=%v err=%v worker=%+v", gone, err, w)
+		Expect(gone).To(BeFalse(), "recent Attempted released: gone=%v err=%v worker=%+v", gone, err, w)
+		Expect(fc.lists).To(Equal(1), "lists=%d", fc.lists)
+	})
+
+	It("proceeds after grace expires for Attempted state", func() {
+		r, fc, co := workerReadHarness()
+		co.Status.Workers[0].BareMetalInstance.ID = ""
+		co.Status.Workers[0].BMICreateState = v1alpha1.WorkerBMICreateStateAttempted
+		co.Status.Workers[0].Phase = workerPhaseUnbinding
+		past := metav1.NewTime(time.Now().Add(-10 * time.Minute))
+		co.Status.Workers[0].AttemptStartedAt = &past
+		Expect(r.Status().Update(context.Background(), co)).To(Succeed())
+		w := co.Status.Workers[0]
+		gone, err := r.cleanupWorker(context.Background(), co, &w)
+		Expect(err).NotTo(HaveOccurred(), "expired grace blocked: gone=%v err=%v worker=%+v", gone, err, w)
+		Expect(gone).To(BeTrue(), "expired grace blocked: gone=%v err=%v worker=%+v", gone, err, w)
+		Expect(fc.lists).To(Equal(1), "lists=%d", fc.lists)
+	})
 })
 
 type lostReservationCreateClient struct{ *workerReadClient }
@@ -203,7 +233,7 @@ func (f *lostReservationCreateClient) CreateBareMetalInstance(ctx context.Contex
 	return nil, errors.New("lost successful Create acknowledgement")
 }
 
-var _ = It("recovers identity when the BMI appears in the List", func() {
+var _ = It("retains and recovers identity after a lost Create acknowledgement", func() {
 	r, fc, co := workerReadHarness()
 	reserveCleanupSlot(r, co)
 	r.fulfillment = &lostReservationCreateClient{workerReadClient: fc}
@@ -215,7 +245,14 @@ var _ = It("recovers identity when the BMI appears in the List", func() {
 	w := co.Status.Workers[0]
 	Expect(w.BMICreateState).To(Equal(v1alpha1.WorkerBMICreateStateAttempted), "missing durable unknown outcome: %+v", w)
 	Expect(w.BareMetalInstance.ID).To(Equal(""), "missing durable unknown outcome: %+v", w)
-	// When the BMI is already in the List, its ID is recovered.
+	// Within the grace window, cleanup defers for the Attempted
+	// state even when the List is empty.
+	for range 2 {
+		gone, err := r.cleanupWorker(ctx, co, &w)
+		Expect(err).NotTo(HaveOccurred(), "grace deferred: gone=%v err=%v", gone, err)
+		Expect(gone).To(BeFalse(), "grace deferred: gone=%v err=%v", gone, err)
+	}
+	// When the BMI appears in the List, its ID is recovered.
 	fc.listed = fc.bmis
 	gone, err := r.cleanupWorker(ctx, co, &w)
 	Expect(err).NotTo(HaveOccurred(), "owned recovery: gone=%v err=%v worker=%+v", gone, err, w)

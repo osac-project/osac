@@ -95,7 +95,7 @@ config-yaml-json:
   - '!bare-metal-fulfillment-operator/**'
 
 # Informational only -- CaaS Netris and BMaaS Netris (real EC2/Netris-SDN
-# provisioning, triggered manually via label) aren't wired into any gating
+# provisioning, started by hand or with `/test`) aren't wired into any gating
 # at all. `git grep -il netris` confirms
 # osac-aap/collections/ansible_collections/{netris,agentless_net}/** is the
 # actual Ansible automation those two backends run. tests/e2e/bmaas/regression/

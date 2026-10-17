@@ -16,6 +16,14 @@ auto-merge (`e2e-pr.yml`, job `Auto-merge`). To keep one pull request from mergi
 convert it to a draft. The queue runs `CI` and
 `E2E` again on the result of merging, so what lands is what was tested.
 
+## Optional: BMaaS Netris
+
+The BMaaS Netris end-to-end test (a real Netris lab on an AWS box) is not part of `E2E` and is not
+required. Start it on a pull request with the comment `/test e2e-bmaas-netris-full-install` (and `/retest` to run it
+again), or by hand from the Actions page ("E2E BMaaS Netris Full Install", Run workflow, with the pull request's number,
+repository, branch and commit). The comment form is in `optional-workflows.yml`. A label no longer starts it. A new commit
+does not cancel a run that is already going.
+
 ## Approvals after a rebase, and pull requests from forks
 
 - A clean rebase, or "Update branch", keeps the approval and moves it to the new head. A rebase that needs conflict

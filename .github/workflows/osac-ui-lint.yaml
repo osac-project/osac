@@ -28,7 +28,7 @@ jobs:
           package_json_file: osac-ui/package.json
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version-file: osac-ui/package.json
           cache: pnpm

@@ -1105,6 +1105,20 @@
                   "description": "Name of the AAP instance",
                   "default": "osac-aap"
                 },
+                "api": {
+                  "type": "object",
+                  "description": "Platform gateway API container configuration",
+                  "properties": {
+                    "resourceRequirements": {
+                      "$ref": "#/$defs/aapResourceRequirements",
+                      "default": {
+                        "requests": {"cpu": "50m", "memory": "750Mi"},
+                        "limits": {"cpu": "1", "memory": "1Gi"}
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                },
                 "controller": {
                   "type": "object",
                   "properties": {
@@ -1134,6 +1148,26 @@
                       "type": "boolean",
                       "description": "Disable Ansible Lightspeed",
                       "default": true
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "proxy": {
+                  "type": "object",
+                  "description": "Platform gateway proxy container configuration",
+                  "properties": {
+                    "concurrency": {
+                      "type": "integer",
+                      "description": "Number of Envoy proxy worker threads",
+                      "minimum": 1,
+                      "default": 1
+                    },
+                    "resourceRequirements": {
+                      "$ref": "#/$defs/aapResourceRequirements",
+                      "default": {
+                        "requests": {"cpu": "50m", "memory": "750Mi"},
+                        "limits": {"cpu": "256m", "memory": "1Gi"}
+                      }
                     }
                   },
                   "additionalProperties": false
@@ -2525,6 +2559,32 @@
     }
   },
   "$defs": {
+    "aapResourceRequirements": {
+      "type": "object",
+      "description": "Kubernetes resource requests and limits for one AAP gateway container",
+      "properties": {
+        "requests": {
+          "type": "object",
+          "properties": {
+            "cpu": {"type": "string", "description": "Requested CPU quantity"},
+            "memory": {"type": "string", "description": "Requested memory quantity"}
+          },
+          "required": ["cpu", "memory"],
+          "additionalProperties": false
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "cpu": {"type": "string", "description": "CPU limit quantity"},
+            "memory": {"type": "string", "description": "Memory limit quantity"}
+          },
+          "required": ["cpu", "memory"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["requests", "limits"],
+      "additionalProperties": false
+    },
     "positiveDuration": {
       "type": "string",
       "description": "Positive Go time.Duration (e.g. 500ms, 15m, 1h30m). A zero or negative threshold is not useful for stall detection.",

@@ -178,10 +178,6 @@ jobs:
             gh run cancel "${id}" --repo "${REPO}" || echo "run ${id} already finished"
           done
 
-  # One check per suite on the pull request, named by the policy ("E2E / VMaaS Full Install" ...), next to the single E2E
-  # check: the suites run in this workflow run, whose jobs are not on the pull request, so this is how a person on the
-  # pull request sees which suite is waiting, running or failed, and gets to its log in one click. Only the suites that
-  # run get a check, and which suites run, and what their checks are called, is the policy's (e2e-policy.yml).
   # Turns auto-merge on for an approved pull request, so nobody has to come back to add it to the merge queue: once `CI`,
   # `E2E` and `jira-reference` are green GitHub puts it in the queue, and the queue merges it. It changes no rule. It
   # runs in the default branch's context like the rest of this workflow, so it adds no check to the pull request, and it
@@ -232,6 +228,10 @@ jobs:
           gh pr merge "${NUMBER}" --repo "${REPO}" --auto --match-head-commit "${HEAD_SHA}" \
             || echo "::warning::Could not enable auto-merge on PR #${NUMBER}"
 
+  # One check per suite on the pull request, named by the policy ("E2E / VMaaS Full Install" ...), next to the single E2E
+  # check: the suites run in this workflow run, whose jobs are not on the pull request, so this is how a person on the
+  # pull request sees which suite is waiting, running or failed, and gets to its log in one click. Only the suites that
+  # run get a check, and which suites run, and what their checks are called, is the policy's (e2e-policy.yml).
   track:
     name: Suite checks
     needs: decide

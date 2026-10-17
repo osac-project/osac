@@ -22,6 +22,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -45,6 +46,13 @@ func setExternalIPTestFinalizer(
 	add bool,
 ) {
 	GinkgoHelper()
+	if add {
+		Eventually(func(g Gomega) {
+			response, err := client.Get(ctx, privatev1.ExternalIPsGetRequest_builder{Id: id}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(response.GetObject().GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
+		}, time.Minute, 100*time.Millisecond).Should(Succeed())
+	}
 	timeout := 10 * time.Second
 	if !add {
 		timeout = 2 * time.Minute

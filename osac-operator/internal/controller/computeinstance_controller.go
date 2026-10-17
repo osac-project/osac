@@ -72,6 +72,7 @@ type ComputeInstanceReconciler struct {
 	TenantNamespace          string
 	NetworkingNamespace      string
 	ProvisioningProvider     provisioning.ProvisioningProvider
+	tenantReadinessEvaluator TenantReadinessEvaluator
 	// StatusPollInterval defines how often to check provisioning job status
 	StatusPollInterval time.Duration
 	// MaxJobHistory defines how many jobs to keep per job array
@@ -98,6 +99,7 @@ func NewComputeInstanceReconciler(
 	statusPollInterval time.Duration,
 	maxJobHistory int,
 	targetCluster mc.ClusterName,
+	tenantReadinessEvaluator TenantReadinessEvaluator,
 ) *ComputeInstanceReconciler {
 	if mgr == nil {
 		panic("mgr must not be nil")
@@ -124,6 +126,7 @@ func NewComputeInstanceReconciler(
 		TenantNamespace:          tenantNamespace,
 		NetworkingNamespace:      networkingNamespace,
 		ProvisioningProvider:     provisioningProvider,
+		tenantReadinessEvaluator: tenantReadinessEvaluator,
 		StatusPollInterval:       statusPollInterval,
 		MaxJobHistory:            maxJobHistory,
 		targetCluster:            targetCluster,
@@ -521,11 +524,12 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 		return ctrl.Result{}, err
 	}
 
-	// If the tenant is not ready, requeue
-	if tenant.Status.Phase != v1alpha1.TenantPhaseReady {
-		msg := fmt.Sprintf("Tenant '%s' is not ready (phase: %s)", tenant.GetName(), tenant.Status.Phase)
-		if scCond := tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady); scCond != nil && scCond.Message != "" {
-			msg = fmt.Sprintf("%s. %s: %s", msg, scCond.Type, scCond.Message)
+	// Customer-facing work waits until the shared evaluator considers the
+	// Tenant usable, including any prerequisites owned by enabled controllers.
+	if !r.tenantReadinessEvaluator.IsTenantReadyToUse(tenant) {
+		msg := fmt.Sprintf("Tenant '%s' is not ready to use", tenant.GetName())
+		if tenant.Status.Phase != v1alpha1.TenantPhaseReady {
+			msg = fmt.Sprintf("Tenant '%s' is not ready (phase: %s)", tenant.GetName(), tenant.Status.Phase)
 		}
 		oldReason := conditionReason(instance, v1alpha1.ComputeInstanceConditionProvisioned)
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, msg, v1alpha1.ReasonTenantNotReady)

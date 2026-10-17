@@ -232,15 +232,34 @@ func TestGetDeviceReturnsTypedDeviceAndETag(t *testing.T) {
 }
 
 func TestForEachDeviceEncodesStatusAndCustomFieldFilters(t *testing.T) {
+	longFieldName := strings.Repeat("x", 51)
+	freeDevice := strings.Replace(
+		deviceResponse(42, "host-42", "staged"),
+		"\"custom_fields\": {\"osac_instance_id\": \"instance-42\"}",
+		"\"custom_fields\": {\"osac_managed\": true, \"osac_instance_id\": \"\"}",
+		1)
 	server, client := newTrustedClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/dcim/devices/" {
 			t.Errorf("request = %s %s, want GET /api/dcim/devices/", r.Method, r.URL.Path)
 		}
-		if got := r.URL.Query().Get("status"); got != "active" {
-			t.Errorf("status filter = %q, want active", got)
+		query := r.URL.Query()
+		if got := query.Get("status"); got != "staged" {
+			t.Errorf("status filter = %q, want staged", got)
 		}
-		if got := r.URL.Query().Get("cf_osac_instance_id"); got != "instance-42" {
-			t.Errorf("custom field filter = %q, want instance-42", got)
+		if got := query.Get("cf_osac_managed"); got != "true" {
+			t.Errorf("managed custom field filter = %q, want true", got)
+		}
+		if got := query.Get("cf_osac_instance_id__empty"); got != "true" {
+			t.Errorf("owner empty filter = %q, want true", got)
+		}
+		if _, exists := query["cf_osac_instance_id"]; exists {
+			t.Errorf("owner filter unexpectedly contains a specific instance ID: %#v", query["cf_osac_instance_id"])
+		}
+		if got := query.Get("cf_gpu-model"); got != "a100" {
+			t.Errorf("hyphenated custom field filter = %q, want a100", got)
+		}
+		if got := query.Get("cf_" + longFieldName); got != "long-name" {
+			t.Errorf("long custom field filter = %q, want long-name", got)
 		}
 		if got := r.URL.Query().Get("limit"); got != "100" {
 			t.Errorf("limit = %q, want 100", got)
@@ -255,15 +274,18 @@ func TestForEachDeviceEncodesStatusAndCustomFieldFilters(t *testing.T) {
 			"count":    1,
 			"next":     nil,
 			"previous": nil,
-			"results":  []json.RawMessage{json.RawMessage(deviceResponse(42, "host-42", "active"))},
+			"results":  []json.RawMessage{json.RawMessage(freeDevice)},
 		})
 	}))
 	_ = server
 
 	var devices []Device
 	err := client.ForEachDevice(context.Background(), DeviceQuery{
-		"status":              "active",
-		"cf_osac_instance_id": "instance-42",
+		"status":                     "staged",
+		"cf_osac_managed":            "true",
+		"cf_osac_instance_id__empty": "true",
+		"cf_gpu-model":               "a100",
+		"cf_" + longFieldName:        "long-name",
 	}, func(device Device) (bool, error) {
 		devices = append(devices, device)
 		return true, nil
@@ -273,6 +295,36 @@ func TestForEachDeviceEncodesStatusAndCustomFieldFilters(t *testing.T) {
 	}
 	if len(devices) != 1 || devices[0].ID != "42" || devices[0].Name != "host-42" {
 		t.Fatalf("ForEachDevice() visited %#v, want one host-42 device", devices)
+	}
+}
+
+func TestForEachDeviceEscapesCustomFieldQueryValues(t *testing.T) {
+	_, client := newTrustedClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		if statuses := query["status"]; len(statuses) != 1 || statuses[0] != "staged" {
+			t.Errorf("status filters = %#v, want only staged", statuses)
+		}
+		if got := query.Get("cf_placement_zone"); got != "&status=active" {
+			t.Errorf("placement_zone filter = %q, want original metacharacters", got)
+		}
+		if got := query.Get("cf_model"); got != "a+b # 100%" {
+			t.Errorf("model filter = %q, want original metacharacters", got)
+		}
+		writeJSON(t, w, http.StatusOK, map[string]any{
+			"count": 0, "next": nil, "previous": nil, "results": []json.RawMessage{},
+		})
+	}))
+
+	err := client.ForEachDevice(context.Background(), DeviceQuery{
+		"status":            "staged",
+		"cf_placement_zone": "&status=active",
+		"cf_model":          "a+b # 100%",
+	}, func(Device) (bool, error) {
+		t.Fatal("visitor called for an empty result set")
+		return false, nil
+	})
+	if err != nil {
+		t.Fatalf("ForEachDevice() error = %v", err)
 	}
 }
 

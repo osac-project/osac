@@ -88,7 +88,8 @@ Worker coverage is owned by **osac-operator [DEV]**:
   NodeSet-partitioned counts. Reservation cleanup specs add pre-Create
   cancellation/finalization, real create-intent resourceVersion races,
   authoritative-absence cleanup for unreached and legacy Create state,
-  and lost-ack List-error delayed visibility.
+  lost-ack List-error delayed visibility, and post-Create orphan
+  compensation on identity-write failure (success and provider-error).
   Each case uses explicit calls; legacy fixture
   convergence is bounded by `16 + 8*N`, not a latency SLA or fallback polling.
 - `baremetalworker_tenant_safety_test.go` preserves tenant/owner rejection and

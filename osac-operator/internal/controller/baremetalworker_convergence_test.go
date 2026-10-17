@@ -387,7 +387,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(getOrder().Status.Workers).To(BeEmpty())
 	})
 
-	It("completes cancellation when deletion races before the external Create", func() {
+	It("compensates a created BMI when deletion races before the identity write", func() {
 		ready()
 		step()
 		cancel := buildReconciler(k8sClient)
@@ -406,10 +406,49 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		}})
 		_, err := run()
 		// The primary reconciler's Create succeeds but the identity
-		// write fails because the order was already finalized.
+		// write fails because the order was already finalized. The
+		// reconciler compensates by deleting the orphaned BMI.
 		Expect(err).To(HaveOccurred())
 		Expect(fc.CreateCalls()).To(HaveLen(1))
-		Expect(fc.DeleteCalls()).To(BeEmpty())
+		Expect(fc.DeleteCalls()).To(HaveLen(1), "orphaned BMI must be compensated")
+		// The compensating delete must target the exact BMI that Create returned.
+		Expect(fc.DeleteCalls()[0]).NotTo(BeEmpty())
+		// The BMI must not remain in the provider after compensation.
+		bmis, listErr := fc.ListBareMetalInstances(ctx, "")
+		Expect(listErr).NotTo(HaveOccurred())
+		Expect(bmis).To(BeEmpty(), "no BMI should remain after compensation")
+	})
+
+	It("reports compensation failure when the orphaned BMI delete fails", func() {
+		ready()
+		step()
+		cancel := buildReconciler(k8sClient)
+		r = buildReconciler(&workerAttemptRaceClient{Client: k8sClient, after: func() error {
+			Expect(getOrder().Status.Workers[0].BMICreateState).To(Equal(api.WorkerBMICreateStateAttempted))
+			Expect(fc.CreateCalls()).To(BeEmpty())
+			Expect(k8sClient.Delete(ctx, getOrder())).To(Succeed())
+			for range 2 {
+				_, err := cancel.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(co)})
+				Expect(err).NotTo(HaveOccurred())
+			}
+			Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), &api.ClusterOrder{}))).To(BeTrue())
+			// Inject a delete error so compensation fails.
+			fc.SetDeleteError(status.Error(codes.Internal, "provider unavailable"))
+			return nil
+		}})
+		_, err := run()
+		// The identity write fails and the compensating delete also
+		// fails. The original write error is still returned so the
+		// caller sees the root cause, and the BMI leak is observable
+		// through the CRITICAL log and event.
+		Expect(err).To(HaveOccurred())
+		Expect(fc.CreateCalls()).To(HaveLen(1))
+		Expect(fc.DeleteCalls()).To(HaveLen(1), "compensation must be attempted even when it fails")
+		// The BMI remains because the delete failed; this is an
+		// observable leak, not a silent one.
+		bmis, listErr := fc.ListBareMetalInstances(ctx, "")
+		Expect(listErr).NotTo(HaveOccurred())
+		Expect(bmis).To(HaveLen(1))
 	})
 
 	It("cleans up persisted intent when no Create reached the API", func() {

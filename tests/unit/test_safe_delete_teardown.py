@@ -175,9 +175,8 @@ def test_safe_delete_subnet_notfound_still_waits_for_cr() -> None:
 
 @pytest.mark.usefixtures("_no_sleep")
 def test_safe_delete_warnings_do_not_log_exception_text(caplog: pytest.LogCaptureFixture) -> None:
-    """Teardown warnings must log the exception type, not the
-    raw message, so that sensitive API data stays out of CI
-    logs."""
+    """Teardown warnings must not include any exception-derived
+    content so that sensitive API data stays out of CI logs."""
     secret_msg = "secret-api-response-payload"
     grpc = Mock(spec=GRPCClient)
     k8s = Mock(spec=K8sClient)
@@ -190,5 +189,6 @@ def test_safe_delete_warnings_do_not_log_exception_text(caplog: pytest.LogCaptur
     ):
         _safe_delete_vn(grpc, k8s, vn_id="vn-s", vn_cr_name="vn-cr-s")
 
-    assert "TimeoutError" in caplog.text
+    assert "timed out" in caplog.text
     assert secret_msg not in caplog.text
+    assert "TimeoutError" not in caplog.text

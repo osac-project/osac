@@ -93,10 +93,10 @@ endif
 SUITE_TARGETS := test
 ifneq ($(filter $(SUITE_TARGETS),$(MAKECMDGOALS)),)
 ifndef SUITE
-$(error SUITE is required (all|fulfillment|operator|bmf))
+$(error SUITE is required (all|fulfillment|operator|operator-multicluster|bmf))
 endif
-ifeq ($(filter $(SUITE),all fulfillment operator bmf),)
-$(error SUITE=$(SUITE) is invalid; must be all, fulfillment, operator, or bmf)
+ifeq ($(filter $(SUITE),all fulfillment operator operator-multicluster bmf),)
+$(error SUITE=$(SUITE) is invalid; must be all, fulfillment, operator, operator-multicluster, or bmf)
 endif
 ifeq ($(MCP_TEST_ENABLED),true)
 ifneq ($(PLATFORM),kind)
@@ -512,6 +512,26 @@ ifeq ($(SUITE),operator)
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.fulfillment.serverAddress= --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.fulfillmentTrust.enabled=false --set global.networking.networkClass.enabled=false"
 	cd ../osac-operator && ginkgo run --timeout 30m -v test/integration
+endif
+ifeq ($(SUITE),operator-multicluster)
+	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/osac-operator:it -f ../osac-operator/Containerfile ..)
+	$(call kind-load-image,localhost/osac-operator:it)
+	$(call kind-container-build,-t localhost/fulfillment-service:it -f ../fulfillment-service/Containerfile ../ --build-arg GODEBUG=$(GODEBUG))
+	$(call kind-load-image,localhost/fulfillment-service:it)
+	@echo "Installing AWX for real AAP provisioning..."
+	$(MAKE) helm-devstack-deps
+	helm upgrade --install osac-devstack charts/osac-devstack \
+		--namespace $(NS) --create-namespace \
+		--set osacNamespace=$(NS) \
+		--set virt.enabled=false \
+		--set ui.enabled=false \
+		--set catalog.enabled=false \
+		--set tenant.enabled=false \
+		$(DEVSTACK_HELM_APPLY_ARGS) \
+		--wait-for-jobs --timeout 20m
+	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
+		EXTRA_HELM_ARGS="--set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set lvms.enabled=true --set hubAccess.enabled=false --set validation.enabled=false --set operator.aap.url=http://awx-service.$(NS).svc.cluster.local:80/api --set operator.controllers.networking=false --set global.services.caas.enabled=false --set global.services.bmaas.enabled=false --set global.services.maas.enabled=false"
+	cd ../osac-operator && ginkgo run --timeout 30m -v test/integration/multicluster
 endif
 ifeq ($(SUITE),bmf)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/bmf-operator:it -f ../bare-metal-fulfillment-operator/Containerfile ..)

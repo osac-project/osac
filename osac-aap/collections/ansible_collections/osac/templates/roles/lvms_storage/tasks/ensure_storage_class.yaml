@@ -192,10 +192,45 @@
       {% endfor -%}
       {{ names }}
 
+# Resolve the target kubeconfig once for all per-tenant StorageClass tasks.
+# Primary: OSAC_REMOTE_CLUSTER_KUBECONFIG env var (Tenant/VMaaS path, set by
+# the ContainerGroup pod spec).  Fallback: _dispatch_target_kubeconfig play
+# fact from _dispatch_provider.yaml (CaaS/ClusterOrder path).  Empty string
+# means "not configured" — converted to omit at the task-parameter level.
+# Never store the omit sentinel in set_fact: when ALL values resolve to omit,
+# Ansible raises "No key/value pairs provided".
+- name: Resolve target kubeconfig for StorageClass operations
+  ansible.builtin.set_fact:
+    _lvms_sc_kubeconfig: >-
+      {{ lookup('env', 'OSAC_REMOTE_CLUSTER_KUBECONFIG')
+         | default(_dispatch_target_kubeconfig | default(''), true) }}
+
+- name: Show resolved StorageClass kubeconfig routing
+  ansible.builtin.debug:
+    msg: >-
+      kubeconfig={{ _lvms_sc_kubeconfig | default('EMPTY', true) }},
+      env={{ lookup('env', 'OSAC_REMOTE_CLUSTER_KUBECONFIG')
+             | default('UNSET', true) }},
+      fact={{ _dispatch_target_kubeconfig | default('UNDEF') }}
+
+- name: Show kubeconfig server URL for target routing diagnostics
+  ansible.builtin.shell:
+    cmd: >-
+      grep -m1 'server:' '{{ _lvms_sc_kubeconfig }}'
+  register: _lvms_kc_server
+  changed_when: false
+  failed_when: false
+  when: _lvms_sc_kubeconfig | default('') | length > 0
+
+- name: Log kubeconfig target server
+  ansible.builtin.debug:
+    msg: "kubeconfig target: {{ _lvms_kc_server.stdout | default('none') }}"
+  when: _lvms_kc_server is defined and _lvms_kc_server.stdout is defined
+
 - name: Check existing tenant StorageClasses
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ storage_provider_target_kubeconfig | default(omit) }}"
-    validate_certs: "{{ false if (storage_provider_target_kubeconfig_insecure | default(false) | bool) else omit }}"
+    kubeconfig: "{{ _lvms_sc_kubeconfig | default(omit, true) }}"
+    validate_certs: "{{ false if (_lvms_sc_kubeconfig | default('') | length > 0) else omit }}"
     api_version: storage.k8s.io/v1
     kind: StorageClass
     label_selectors:
@@ -212,8 +247,8 @@
 
 - name: Create missing per-tenant StorageClasses
   kubernetes.core.k8s:
-    kubeconfig: "{{ storage_provider_target_kubeconfig | default(omit) }}"
-    validate_certs: "{{ false if (storage_provider_target_kubeconfig_insecure | default(false) | bool) else omit }}"
+    kubeconfig: "{{ _lvms_sc_kubeconfig | default(omit, true) }}"
+    validate_certs: "{{ false if (_lvms_sc_kubeconfig | default('') | length > 0) else omit }}"
     state: present
     definition:
       apiVersion: storage.k8s.io/v1

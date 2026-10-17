@@ -48,14 +48,30 @@
       }}
   no_log: true
 
+# Capture the target kubeconfig into intermediate facts before the
+# nested include_role.  The provider storage role's own tasks set
+# explicit `kubeconfig:` parameters, which override module_defaults.
+# Without forwarding the values, the child role scope cannot resolve
+# storage_provider_target_kubeconfig (a role parameter of the parent
+# storage_provider role, not a play fact).  Using distinct names here
+# avoids any same-name self-reference that could trigger recursive
+# Jinja2 templating on Ansible versions below 2.17.
+- name: "Capture target kubeconfig for provider dispatch"
+  ansible.builtin.set_fact:
+    _dispatch_target_kubeconfig: "{{ storage_provider_target_kubeconfig }}"
+    _dispatch_target_kubeconfig_insecure: >-
+      {{ storage_provider_target_kubeconfig_insecure
+         | default(false) | bool }}
+  when: storage_provider_target_kubeconfig is defined
+
 - name: "Dispatch provider storage action with remote kubeconfig routing"
   module_defaults:
     kubernetes.core.k8s:
-      kubeconfig: "{{ storage_provider_target_kubeconfig | default(omit) }}"
-      validate_certs: "{{ false if (storage_provider_target_kubeconfig_insecure | default(false) | bool) else omit }}"
+      kubeconfig: "{{ _dispatch_target_kubeconfig | default(omit) }}"
+      validate_certs: "{{ false if (_dispatch_target_kubeconfig_insecure | default(false) | bool) else omit }}"
     kubernetes.core.k8s_info:
-      kubeconfig: "{{ storage_provider_target_kubeconfig | default(omit) }}"
-      validate_certs: "{{ false if (storage_provider_target_kubeconfig_insecure | default(false) | bool) else omit }}"
+      kubeconfig: "{{ _dispatch_target_kubeconfig | default(omit) }}"
+      validate_certs: "{{ false if (_dispatch_target_kubeconfig_insecure | default(false) | bool) else omit }}"
   block:
     - name: "Include provider storage role"
       ansible.builtin.include_role:
@@ -67,6 +83,8 @@
       vars:
         _provider_tiers: "{{ _computed_provider_tiers }}"
         _provider_backend_connections: "{{ _computed_provider_backend_connections }}"
+        storage_provider_target_kubeconfig: "{{ _dispatch_target_kubeconfig | default(omit) }}"
+        storage_provider_target_kubeconfig_insecure: "{{ _dispatch_target_kubeconfig_insecure | default(false) }}"
 
 - name: "Accumulate tenant config after dispatch (setup only)"
   ansible.builtin.set_fact:

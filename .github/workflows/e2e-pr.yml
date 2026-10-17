@@ -178,6 +178,29 @@ jobs:
             gh run cancel "${id}" --repo "${REPO}" || echo "run ${id} already finished"
           done
 
+  # The review relay only wakes this workflow. Once it has, its run is of no use and its row on the pull request is noise,
+  # so delete it (a deleted run takes its check rows with it). Only a relay that succeeded: a failed one stays, to be
+  # looked at. A separate job, not a step of `decide`: the concurrency group of `decide` cancels a waiting run, and a
+  # cancelled run would leave its relay row behind.
+  clean-relay:
+    name: Remove the relay run
+    if: >-
+      github.event.action == 'completed' && github.event.workflow_run.name == 'E2E review relay' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      actions: write
+    steps:
+      - name: Delete the relay run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          gh api -X DELETE "repos/${REPO}/actions/runs/${RUN_ID}" \
+            || echo "::warning::Could not delete the relay run ${RUN_ID}"
+
   # Turns auto-merge on for an approved pull request, so nobody has to come back to add it to the merge queue: once `CI`,
   # `E2E` and `jira-reference` are green GitHub puts it in the queue, and the queue merges it. It changes no rule. It
   # runs in the default branch's context like the rest of this workflow, so it adds no check to the pull request, and it

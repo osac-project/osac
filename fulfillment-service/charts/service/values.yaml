@@ -24,6 +24,18 @@ controller:
   # Enable startup and periodic synchronization. Event-driven reconciliation remains enabled when false.
   sync: true
 
+  # Kafka topics created by the onboarding reconciler for each tenant. The
+  # namespace and cluster name must match the Strimzi Kafka cluster deployed by
+  # the installation. An empty hub disables topic creation, for example when
+  # Kafka is external and topics are managed outside the cluster.
+  kafkaTopics:
+    hub: hub
+    namespace: osac-kafka
+    clusterName: osac-kafka
+    # How long tenant topics keep records, in milliseconds. The default, -1,
+    # keeps them indefinitely.
+    retentionMs: -1
+
 # The event publisher requires a Kafka backend. Disable it for API-only deployments.
 eventPublisher:
   enabled: true

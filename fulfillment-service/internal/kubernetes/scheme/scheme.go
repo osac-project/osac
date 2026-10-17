@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
+	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/strimzi"
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
@@ -32,6 +33,9 @@ func NewHub() (*runtime.Scheme, error) {
 		return nil, err
 	}
 	if err := corev1.AddToScheme(s); err != nil {
+		return nil, err
+	}
+	if err := strimzi.AddToScheme(s); err != nil {
 		return nil, err
 	}
 	return s, nil

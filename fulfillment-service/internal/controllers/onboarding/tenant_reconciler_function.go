@@ -45,6 +45,7 @@ type FunctionBuilder struct {
 	logger     *slog.Logger
 	connection *grpc.ClientConn
 	hubCache   controllers.HubCache
+	topics     TopicsConfig
 }
 
 type function struct {
@@ -54,6 +55,7 @@ type function struct {
 	projectsClient privatev1.ProjectsClient
 	hubsClient     privatev1.HubsClient
 	maskCalculator *masks.Calculator
+	topics         TopicsConfig
 }
 
 type task struct {
@@ -80,6 +82,13 @@ func (b *FunctionBuilder) SetHubCache(value controllers.HubCache) *FunctionBuild
 	return b
 }
 
+// SetTopics sets the configuration of the Kafka topics created for each tenant. This is optional; by default no
+// topics are created.
+func (b *FunctionBuilder) SetTopics(value TopicsConfig) *FunctionBuilder {
+	b.topics = value
+	return b
+}
+
 func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privatev1.Tenant], err error) {
 	if b.logger == nil {
 		err = errors.New("logger is mandatory")
@@ -93,6 +102,10 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 		err = errors.New("hub cache is mandatory")
 		return
 	}
+	if err = b.topics.validate(); err != nil {
+		err = fmt.Errorf("invalid kafka topics configuration: %w", err)
+		return
+	}
 
 	object := &function{
 		logger:         b.logger,
@@ -101,6 +114,7 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 		hubsClient:     privatev1.NewHubsClient(b.connection),
 		hubCache:       b.hubCache,
 		maskCalculator: masks.NewCalculator().Build(),
+		topics:         b.topics,
 	}
 	result = object.run
 	return
@@ -163,6 +177,18 @@ func (t *task) update(ctx context.Context) error {
 			))
 			return err
 		}
+	}
+
+	if err := t.ensureTopics(ctx); err != nil {
+		t.r.logger.ErrorContext(ctx, "Failed to create tenant Kafka topics",
+			slog.String("hub_id", t.r.topics.HubID),
+			slog.String("tenant_id", t.tenant.GetId()),
+			slog.String("error", err.Error()),
+		)
+		t.setFailed(fmt.Sprintf(
+			"Failed to create tenant Kafka topics on hub '%s'", t.r.topics.HubID,
+		))
+		return err
 	}
 
 	t.clearFailed()

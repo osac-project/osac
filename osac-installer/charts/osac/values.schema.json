@@ -699,6 +699,33 @@
               "type": "boolean",
               "description": "Enable full synchronization for all fulfillment controllers",
               "default": true
+            },
+            "kafkaTopics": {
+              "type": "object",
+              "description": "Kafka topics created for each tenant by the onboarding reconciler",
+              "properties": {
+                "hub": {
+                  "type": "string",
+                  "description": "Hub hosting the Strimzi Kafka cluster; empty disables topic creation",
+                  "default": "hub"
+                },
+                "namespace": {
+                  "type": "string",
+                  "description": "Namespace of the Strimzi Kafka cluster",
+                  "default": "osac-kafka"
+                },
+                "clusterName": {
+                  "type": "string",
+                  "description": "Name of the Strimzi Kafka cluster",
+                  "default": "osac-kafka"
+                },
+                "retentionMs": {
+                  "type": "integer",
+                  "description": "How long tenant topics keep records, in milliseconds; -1 keeps them indefinitely",
+                  "default": -1
+                }
+              },
+              "additionalProperties": false
             }
           },
           "additionalProperties": false

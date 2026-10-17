@@ -287,10 +287,11 @@ its two instance-group manifests.
 {{- end }}
 
 {{/*
-Fail helm template when networking values are inconsistent. Schema validates
+Fail helm template when values are inconsistent. Schema validates
 individual fields; this enforces cross-field invariants that JSON Schema
 cannot express (duplicated Netris config, inverted port ranges, networking
-facade vs low-level surface mismatches).
+facade vs low-level surface mismatches, tenant topic configuration that
+contradicts the deployed Kafka).
 */}}
 {{- define "osac.validateValues" -}}
 {{- $networking := include "osac.networking.effective" . | fromYaml -}}
@@ -448,5 +449,20 @@ facade vs low-level surface mismatches).
 {{- $syncInterval := $nm.capabilitiesSyncInterval | default "5m" -}}
 {{- if not (regexMatch "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$" ($syncInterval | toString)) }}
   {{- fail (printf "operator.networkManagers.capabilitiesSyncInterval must be a valid Go duration (got %q)" $syncInterval) }}
+{{- end }}
+{{- $topics := .Values.service.controller.kafkaTopics | default dict -}}
+{{- $topicsHub := $topics.hub | default "" -}}
+{{- if and .Values.service.enabled (ne $topicsHub "") }}
+  {{- if not .Values.kafka.enabled }}
+    {{- fail "service.controller.kafkaTopics.hub must be empty when kafka.enabled is false: tenant topics can only be created for the in-cluster Kafka" }}
+  {{- end }}
+  {{- $kafkaNamespace := .Values.kafka.clusterNamespace | default "osac-kafka" -}}
+  {{- if ne ($topics.namespace | default "osac-kafka") $kafkaNamespace }}
+    {{- fail (printf "service.controller.kafkaTopics.namespace (%s) must match kafka.clusterNamespace (%s)" ($topics.namespace | default "osac-kafka") $kafkaNamespace) }}
+  {{- end }}
+  {{- $kafkaName := .Values.kafka.clusterName | default "osac-kafka" -}}
+  {{- if ne ($topics.clusterName | default "osac-kafka") $kafkaName }}
+    {{- fail (printf "service.controller.kafkaTopics.clusterName (%s) must match kafka.clusterName (%s)" ($topics.clusterName | default "osac-kafka") $kafkaName) }}
+  {{- end }}
 {{- end }}
 {{- end -}}

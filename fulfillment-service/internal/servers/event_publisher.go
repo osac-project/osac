@@ -36,6 +36,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/kafkatopics"
 	"github.com/osac-project/osac/fulfillment-service/internal/work"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -1267,7 +1268,7 @@ func (p *EventPublisher) registerPublishErrorsMetric(registerer prometheus.Regis
 
 const (
 	// DefaultEventTopicPrefix is prepended to the tenant identifier to form Kafka topic names.
-	DefaultEventTopicPrefix = "osac.events."
+	DefaultEventTopicPrefix = kafkatopics.EventsPrefix
 
 	// defaultEventPublisherTable is the PostgreSQL table that stores change rows.
 	defaultEventPublisherTable = "changes"

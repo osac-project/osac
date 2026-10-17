@@ -174,6 +174,30 @@ func Cmd() *cobra.Command {
 	)
 	vault.AddBaseFlags(flags)
 	vault.AddLifecycleFlags(flags)
+	flags.StringVar(
+		&runner.args.kafkaTopicsHub,
+		"kafka-topics-hub",
+		"hub",
+		kafkaTopicsHubFlagHelp,
+	)
+	flags.StringVar(
+		&runner.args.kafkaTopicsNamespace,
+		"kafka-topics-namespace",
+		"osac-kafka",
+		kafkaTopicsNamespaceFlagHelp,
+	)
+	flags.StringVar(
+		&runner.args.kafkaTopicsCluster,
+		"kafka-topics-cluster-name",
+		"osac-kafka",
+		kafkaTopicsClusterNameFlagHelp,
+	)
+	flags.Int64Var(
+		&runner.args.kafkaTopicsRetention,
+		"kafka-topics-retention-ms",
+		-1,
+		kafkaTopicsRetentionFlagHelp,
+	)
 	network.AddGrpcClientFlags(flags, network.GrpcClientName, network.DefaultGrpcAddress)
 	network.AddListenerFlags(flags, network.GrpcListenerName, network.DefaultGrpcAddress)
 	network.AddListenerFlags(flags, network.MetricsListenerName, network.DefaultMetricsAddress)
@@ -201,6 +225,10 @@ type runnerContext struct {
 		idpClientSecretFile  string
 		vaultBase            vault.BaseConfig
 		vaultLifecycle       vault.LifecycleConfig
+		kafkaTopicsHub       string
+		kafkaTopicsNamespace string
+		kafkaTopicsCluster   string
+		kafkaTopicsRetention int64
 	}
 	client *grpc.ClientConn
 }
@@ -1107,6 +1135,12 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		SetLogger(r.logger).
 		SetConnection(r.client).
 		SetHubCache(hubCache).
+		SetTopics(onboarding.TopicsConfig{
+			HubID:       r.args.kafkaTopicsHub,
+			Namespace:   r.args.kafkaTopicsNamespace,
+			ClusterName: r.args.kafkaTopicsCluster,
+			RetentionMS: r.args.kafkaTopicsRetention,
+		}).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create onboarding reconciler function: %w", err)
@@ -1582,4 +1616,26 @@ authentication. Mutually exclusive with {{ bt }}--idp-client-secret{{ bt }}.
 const idpClientSecretFlagHelp = `
 _SECRET_ - OAuth client secret for IDP authentication. Mutually
 exclusive with {{ bt }}--idp-client-secret-file{{ bt }}.
+`
+
+const kafkaTopicsHubFlagHelp = `
+_HUB_ - Identifier of the hub that hosts the Strimzi Kafka cluster
+where tenant topics are created. The installer deploys Kafka in the local
+cluster and registers it as the hub "hub". Set an empty value to disable
+topic creation, for example when Kafka is external to the cluster.
+`
+
+const kafkaTopicsNamespaceFlagHelp = `
+_NAMESPACE_ - Namespace of the Strimzi Kafka cluster. Defaults to the
+namespace used by the installer.
+`
+
+const kafkaTopicsClusterNameFlagHelp = `
+_NAME_ - Name of the Strimzi Kafka cluster that tenant topics belong to.
+Defaults to the name used by the installer.
+`
+
+const kafkaTopicsRetentionFlagHelp = `
+_MILLISECONDS_ - How long tenant topics keep records. Defaults to -1,
+which keeps them indefinitely.
 `

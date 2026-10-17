@@ -193,6 +193,15 @@ spec:
         - --vault-keycloak-client-secret-file=/etc/fulfillment-controller/vault/client-secret
         - --vault-keycloak-issuer-url={{ $vaultIssuerURL }}
         - --vault-keycloak-audience={{ .Values.vault.keycloakAudience }}
+        {{- $kafkaTopics := .Values.controller.kafkaTopics | default dict }}
+        - --kafka-topics-hub={{ $kafkaTopics.hub | default "" }}
+        - --kafka-topics-namespace={{ $kafkaTopics.namespace | default "osac-kafka" }}
+        - --kafka-topics-cluster-name={{ $kafkaTopics.clusterName | default "osac-kafka" }}
+        {{- if hasKey $kafkaTopics "retentionMs" }}
+        - --kafka-topics-retention-ms={{ $kafkaTopics.retentionMs | int }}
+        {{- else }}
+        - --kafka-topics-retention-ms=-1
+        {{- end }}
         {{- if .Values.vault.caBundle.configMap }}
         - --vault-ca-cert-file=/etc/fulfillment-controller/vault-cas/bundle.pem
         {{- end }}

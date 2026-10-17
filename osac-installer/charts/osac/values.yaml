@@ -166,6 +166,20 @@ service:
   controller:
     # Enable full synchronization in fulfillment controllers.
     sync: true
+    # Kafka topics created for each tenant by the onboarding reconciler. The
+    # namespace and cluster name must match the Kafka deployed by the
+    # osac-infra chart (kafka.clusterNamespace and kafka.clusterName); the
+    # install fails when they drift. Set hub to an empty string to disable
+    # topic creation, for example when Kafka is external and topics are
+    # managed outside the cluster; the install fails when kafka is disabled
+    # while the hub is still set.
+    kafkaTopics:
+      hub: hub
+      namespace: osac-kafka
+      clusterName: osac-kafka
+      # How long tenant topics keep records, in milliseconds. The default,
+      # -1, keeps them indefinitely.
+      retentionMs: -1
   # [REQUIRED] Hostname for the external API Route (e.g. fulfillment-api-osac.apps.mycluster.example.com)
   externalHostname: ""
   # [REQUIRED] Hostname for the internal API Route (e.g. fulfillment-internal-api-osac.apps.mycluster.example.com)

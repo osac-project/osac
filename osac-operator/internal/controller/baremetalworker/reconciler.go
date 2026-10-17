@@ -46,8 +46,9 @@ import (
 )
 
 const (
-	infraEnvNameSuffix   = "-infraenv"
-	pullSecretNameSuffix = "-pull-secret"
+	infraEnvNameSuffix     = "-infraenv"
+	pullSecretNameSuffix   = "-pull-secret"
+	serialConsoleKernelArg = "console=ttyS0,115200n8"
 
 	// ignitionSizeWarningThreshold is 75% of the 64KB user_data limit; above it the controller
 	// warns that discovery ignition is approaching the BMI user_data ceiling.
@@ -503,6 +504,15 @@ func (r *Reconciler) buildInfraEnv(co *v1alpha1.ClusterOrder, name string) (*uns
 	// register unbound and are bound explicitly after MAC correlation (OSAC-4160).
 	spec := map[string]interface{}{
 		"pullSecretRef": map[string]interface{}{"name": co.Name + pullSecretNameSuffix},
+		// Keep discovery boot output on the VM serial console. This lets
+		// operators diagnose early boot and Assisted Service registration
+		// failures before a worker Agent exists.
+		"kernelArguments": []interface{}{
+			map[string]interface{}{
+				"operation": "append",
+				"value":     serialConsoleKernelArg,
+			},
+		},
 	}
 	if sshKey := r.resolveSSHPublicKey(co); sshKey != "" {
 		spec["sshAuthorizedKey"] = sshKey

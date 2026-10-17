@@ -34,9 +34,12 @@ plus a native approval on the head commit, and the merge queue.
   person needs to read them (every commit the bot's own, plain and signed; only dependency files changed). It runs every
   15 minutes and looks at every open dependency update, so an approval comes within about a quarter of an hour. It is a
   scheduled run on purpose: a run started by a Dependabot pull request only sees Dependabot's secrets, so the app's key
-  would have to be handed to Dependabot too. It is a thin caller of the shared `bot-sweep` workflow of osac-project/osac-ci (`osac-ci bot-decide`), pinned to a full
-  commit SHA of a release. The workflow mints a token from the organization secret `OSAC_CI_APP_PRIVATE_KEY` with the pull-request
-  permission only.
+  would have to be handed to Dependabot too. It is a thin caller of the shared `bot-sweep` workflow of osac-project/osac-ci
+  (`osac-ci bot-decide`), pinned to a full commit SHA of a release. The approval is made with a token minted from the
+  organization secret `OSAC_CI_APP_PRIVATE_KEY` with the pull-request permission only. For a Konflux pull request the
+  sweep also uses the secret `MERGE_QUEUE_TOKEN` to put the title prefix and the `jira/valid-reference` label the Jira
+  reference check needs and to approve its held workflow runs (an edit by the workflow's own token starts no workflow),
+  and only once the bot policy approves the commit.
 - Changes to the files that define the checks (`.github/workflows`, `actions`, `scripts`, `filters`, `e2e-policy.yml`,
   `CODEOWNERS`, `.pre-commit-config.yaml`; Markdown in them excepted) need an approval from `@osac-project/wg-infra`
   (see `CODEOWNERS`). Only the osac-ui lint and typecheck workflows are also approvable by the osac-ui maintainers

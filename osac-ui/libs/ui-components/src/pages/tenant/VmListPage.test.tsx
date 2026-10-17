@@ -49,11 +49,12 @@ const vm = {
   },
 } as ComputeInstance;
 
-const renderPage = () =>
+const renderPage = (routerEntries?: string[]) =>
   renderWithProviders(
     <SessionProvider role="tenant-user" username="test-user" tenantId="test-tenant">
       <VmListPage />
     </SessionProvider>,
+    { routerEntries },
   );
 
 describe('VmListPage', () => {
@@ -106,5 +107,54 @@ describe('VmListPage', () => {
     expect(await screen.findByText('An error occurred')).toBeInTheDocument();
     expect(screen.getByText('VMs unavailable')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'web-01' })).not.toBeInTheDocument();
+  });
+
+  it('shows the search term when no virtual machines match the name search', async () => {
+    const { user } = renderPage();
+
+    await user.type(await screen.findByLabelText('Filter virtual machines by name'), 'test-polina');
+
+    expect(
+      screen.getByText('No virtual machines found matching "test-polina".'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('Choose one or more statuses above to filter virtual machines.'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('shows the search term when a status filter also leaves no matches', async () => {
+    renderPage(['/?status=running&search=test-polina']);
+
+    expect(
+      await screen.findByText('No virtual machines found matching "test-polina".'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('No virtual machines match your filters.')).not.toBeInTheDocument();
+  });
+
+  it('shows the filter message when a matching name has a different status', async () => {
+    renderPage(['/?status=stopped&search=web-01']);
+
+    expect(await screen.findByText('No virtual machines match your filters.')).toBeInTheDocument();
+    expect(
+      screen.queryByText('No virtual machines found matching "web-01".'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('retains the status-only empty message', async () => {
+    renderPage(['/?status=stopped']);
+
+    expect(await screen.findByText('No virtual machines match your filters.')).toBeInTheDocument();
+  });
+
+  it('retains the no-VM message with a status filter', async () => {
+    vi.mocked(useComputeInstances).mockReturnValue(
+      mockQueryResult({ data: [], isLoading: false, error: null }),
+    );
+
+    renderPage(['/?status=running']);
+
+    expect(
+      await screen.findByText('No virtual machines yet. Create one to get started.'),
+    ).toBeInTheDocument();
   });
 });

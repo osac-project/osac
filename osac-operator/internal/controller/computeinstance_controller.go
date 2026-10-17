@@ -168,6 +168,12 @@ func (r *ComputeInstanceReconciler) Reconcile(ctx context.Context, req mcreconci
 	if !equality.Semantic.DeepEqual(instance.Status, *oldstatus) {
 		log.Info("status requires update")
 		if err := r.updateStatusWithRetry(ctx, req.NamespacedName, instance.Status); err != nil {
+			// After all finalizers are removed Kubernetes deletes the
+			// object immediately.  A NotFound from the status update
+			// means the object is already gone — nothing left to do.
+			if apierrors.IsNotFound(err) {
+				return ctrl.Result{}, nil
+			}
 			return res, err
 		}
 	}
@@ -177,12 +183,20 @@ func (r *ComputeInstanceReconciler) Reconcile(ctx context.Context, req mcreconci
 }
 
 // updateStatusWithRetry updates the instance status with retry on conflict.
-// This prevents duplicate job triggers when status updates fail due to optimistic concurrency conflicts.
+// This prevents duplicate job triggers when status updates fail due to
+// optimistic concurrency conflicts.  Each retry reads through the uncached
+// API reader so the latest resourceVersion is always used, even when the
+// informer cache lags behind a recent write.
 func (r *ComputeInstanceReconciler) updateStatusWithRetry(ctx context.Context, key client.ObjectKey, newStatus v1alpha1.ComputeInstanceStatus) error {
+	apiReader := r.mgr.GetLocalManager().GetAPIReader()
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		// Fetch latest version to get current resourceVersion
+		// Fetch latest version to get current resourceVersion.
+		// Use the uncached API reader: the informer cache may
+		// not have processed a recent status or metadata write
+		// yet, and a stale resourceVersion causes a 409 Conflict
+		// that wastes a retry attempt.
 		latest := &v1alpha1.ComputeInstance{}
-		if err := r.Get(ctx, key, latest); err != nil {
+		if err := apiReader.Get(ctx, key, latest); err != nil {
 			return err
 		}
 		// Copy status updates to the latest version
@@ -660,6 +674,29 @@ func (r *ComputeInstanceReconciler) handleDelete(ctx context.Context, _ reconcil
 	// If we need to requeue (jobs still running or provider needs time), do so
 	if result.RequeueAfter > 0 {
 		return result, nil
+	}
+
+	// Persist the deprovisioning job's terminal status before removing the
+	// finalizer.  The metadata Update() below writes the server response
+	// back into `instance`, overwriting in-memory status fields with the
+	// server-side values that have not been updated yet.  Without this
+	// explicit status flush the job stays at "Running" in the persisted
+	// status even though AAP returned "successful", which prevents the
+	// feedback controller from completing its own finalizer removal and
+	// deadlocks the CR in the Deleting phase.  (OSAC-5667)
+	key := client.ObjectKeyFromObject(instance)
+	if err := r.updateStatusWithRetry(ctx, key, instance.Status); err != nil {
+		return ctrl.Result{}, err
+	}
+	// Re-read the instance so the metadata Update below uses the current
+	// ResourceVersion (the status subresource write above changed it).
+	// Use the uncached API reader: the informer cache may not have
+	// processed the status-update watch event yet, and a stale
+	// ResourceVersion would cause a 409 Conflict on the next Update.
+	if err := r.mgr.GetLocalManager().GetAPIReader().Get(
+		ctx, key, instance,
+	); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// Deprovisioning complete or skipped, remove base finalizer

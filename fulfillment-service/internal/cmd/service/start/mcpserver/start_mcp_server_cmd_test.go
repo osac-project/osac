@@ -84,7 +84,7 @@ var _ = Describe("Cmd", func() {
 var _ = Describe("newServer", func() {
 	It("publishes portable schemas for slice fields", func() {
 		ctx := context.Background()
-		server := newServer(ServerDeps{})
+		server := newServer(ServerDeps{}, "https://mcp.example.com/")
 		client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "test"}, nil)
 		serverTransport, clientTransport := mcp.NewInMemoryTransports()
 
@@ -102,7 +102,7 @@ var _ = Describe("newServer", func() {
 
 		response, err := clientSession.ListTools(ctx, nil)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(response.Tools).To(HaveLen(4))
+		Expect(response.Tools).To(HaveLen(6))
 
 		tools := make(map[string]*mcp.Tool, len(response.Tools))
 		for _, tool := range response.Tools {
@@ -110,9 +110,11 @@ var _ = Describe("newServer", func() {
 			Expect(hasMultiTypeSchema(tool.InputSchema)).To(BeFalse(), tool.Name+" input schema")
 			Expect(hasMultiTypeSchema(tool.OutputSchema)).To(BeFalse(), tool.Name+" output schema")
 		}
+		Expect(tools).To(HaveKey("check_connection"))
 		Expect(tools).To(HaveKey("list_resources"))
 		Expect(tools).To(HaveKey("get_resource"))
 		Expect(tools).To(HaveKey("create_compute_instance"))
+		Expect(tools).To(HaveKey("update_compute_instance"))
 		Expect(tools).To(HaveKey("delete_compute_instance"))
 		Expect(tools["list_resources"].Description).To(ContainSubstring("Use this tool to discover"))
 		Expect(tools["get_resource"].Description).To(ContainSubstring("Use this tool to inspect"))
@@ -122,16 +124,105 @@ var _ = Describe("newServer", func() {
 		Expect(tools["create_compute_instance"].Description).To(ContainSubstring("storage_tier_id"))
 		Expect(tools["create_compute_instance"].Description).To(ContainSubstring("network_attachments"))
 		Expect(tools["create_compute_instance"].Description).To(ContainSubstring("subnet_id"))
+		Expect(tools["create_compute_instance"].Description).To(ContainSubstring("disk_image_id"))
+		Expect(tools["create_compute_instance"].Description).To(ContainSubstring("project_id"))
+		Expect(tools["update_compute_instance"].Description).To(ContainSubstring("current metadata.version"))
 		Expect(tools["delete_compute_instance"].Description).To(ContainSubstring("only when the user explicitly requests"))
+		expectToolAnnotations(tools["check_connection"], "Check OSAC MCP connection", true, false, true, true)
 		expectToolAnnotations(tools["list_resources"], "List OSAC deployment resources", true, false, true, true)
 		expectToolAnnotations(tools["get_resource"], "Get OSAC deployment resource", true, false, true, true)
 		expectToolAnnotations(tools["create_compute_instance"], "Create OSAC compute instance", false, false, false, true)
+		expectToolAnnotations(tools["update_compute_instance"], "Update OSAC compute instance", false, true, false, true)
 		expectToolAnnotations(tools["delete_compute_instance"], "Delete OSAC compute instance", false, true, false, true)
 		expectComputeInstanceCreateSchema(tools["create_compute_instance"].InputSchema)
+		expectComputeInstanceUpdateSchema(tools["update_compute_instance"].InputSchema)
+		expectTypedWriteSchema(tools["create_compute_instance"].InputSchema, "name", "catalog_item")
+		expectTypedWriteSchema(tools["update_compute_instance"].InputSchema, "id", "version")
+		expectTypedWriteSchema(tools["delete_compute_instance"].InputSchema, "id")
 		expectNullableArraySchema(tools["list_resources"].OutputSchema, "items")
-		expectResourceTypeSchema(tools["list_resources"].InputSchema)
+		expectResourceTypeSchema(tools["list_resources"].InputSchema, []ResourceType{
+			ResourceTypeComputeInstanceCatalogItem,
+			ResourceTypeComputeInstanceTemplate,
+			ResourceTypeInstanceType,
+			ResourceTypeDiskImage,
+			ResourceTypeStorageTier,
+			ResourceTypeVirtualNetwork,
+			ResourceTypeSubnet,
+			ResourceTypeSecurityGroup,
+			ResourceTypeComputeInstance,
+			ResourceTypeProject,
+			ResourceTypeSecretReference,
+		})
 		expectResourcePaginationSchema(tools["list_resources"].InputSchema)
-		expectResourceTypeSchema(tools["get_resource"].InputSchema)
+		expectResourceTypeSchema(tools["get_resource"].InputSchema, []ResourceType{
+			ResourceTypeComputeInstanceCatalogItem,
+			ResourceTypeComputeInstanceTemplate,
+			ResourceTypeInstanceType,
+			ResourceTypeDiskImage,
+			ResourceTypeStorageTier,
+			ResourceTypeVirtualNetwork,
+			ResourceTypeSubnet,
+			ResourceTypeSecurityGroup,
+			ResourceTypeComputeInstance,
+			ResourceTypeProject,
+			ResourceTypeSecretReference,
+		})
+	})
+
+	Describe("Rejects typed tool registrations with unsafe or inconsistent metadata", func() {
+		newHandler := func() mcp.ToolHandlerFor[DeleteComputeInstanceInput, DeleteComputeInstanceOutput] {
+			return func(
+				_ context.Context, _ *mcp.CallToolRequest, _ DeleteComputeInstanceInput,
+			) (*mcp.CallToolResult, DeleteComputeInstanceOutput, error) {
+				return nil, DeleteComputeInstanceOutput{}, nil
+			}
+		}
+		baseTool := func() *mcp.Tool {
+			return &mcp.Tool{
+				Name:        "delete_compute_instance",
+				Description: "typed delete",
+				Annotations: &mcp.ToolAnnotations{
+					Title:           "Delete",
+					ReadOnlyHint:    false,
+					DestructiveHint: toolAnnotationBool(true),
+					IdempotentHint:  false,
+					OpenWorldHint:   toolAnnotationBool(true),
+				},
+				InputSchema:  compatibleToolSchema[DeleteComputeInstanceInput](),
+				OutputSchema: compatibleToolSchema[DeleteComputeInstanceOutput](),
+			}
+		}
+
+		DescribeTable("Registration metadata failures",
+			func(mutate func(tool *mcp.Tool)) {
+				server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0"}, nil)
+				registry := newTypedToolRegistry(server)
+				tool := baseTool()
+				mutate(tool)
+				Expect(func() {
+					registerWriteTool(registry, tool, writeToolContract{Destructive: true}, newHandler())
+				}).To(Panic())
+			},
+			Entry("missing open-world hint", func(tool *mcp.Tool) {
+				tool.Annotations.OpenWorldHint = nil
+			}),
+			Entry("write marked read-only", func(tool *mcp.Tool) {
+				tool.Annotations.ReadOnlyHint = true
+			}),
+			Entry("destructive write marked non-destructive", func(tool *mcp.Tool) {
+				tool.Annotations.DestructiveHint = toolAnnotationBool(false)
+			}),
+			Entry("missing input schema", func(tool *mcp.Tool) {
+				tool.InputSchema = nil
+			}),
+		)
+
+		server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0"}, nil)
+		registry := newTypedToolRegistry(server)
+		registerWriteTool(registry, baseTool(), writeToolContract{Destructive: true}, newHandler())
+		Expect(func() {
+			registerWriteTool(registry, baseTool(), writeToolContract{Destructive: true}, newHandler())
+		}).To(Panic())
 	})
 })
 
@@ -175,24 +266,18 @@ func hasMultiTypeSchema(value any) bool {
 	return false
 }
 
-func expectResourceTypeSchema(schema any) {
+func expectResourceTypeSchema(schema any, expected []ResourceType) {
 	document, ok := schema.(map[string]any)
 	Expect(ok).To(BeTrue())
 	properties, ok := document["properties"].(map[string]any)
 	Expect(ok).To(BeTrue())
 	resourceType, ok := properties["resource_type"].(map[string]any)
 	Expect(ok).To(BeTrue())
-	Expect(resourceType["enum"]).To(ConsistOf(
-		string(ResourceTypeComputeInstanceCatalogItem),
-		string(ResourceTypeComputeInstanceTemplate),
-		string(ResourceTypeInstanceType),
-		string(ResourceTypeDiskImage),
-		string(ResourceTypeStorageTier),
-		string(ResourceTypeVirtualNetwork),
-		string(ResourceTypeSubnet),
-		string(ResourceTypeSecurityGroup),
-		string(ResourceTypeComputeInstance),
-	))
+	expectedNames := make([]string, len(expected))
+	for i, resourceType := range expected {
+		expectedNames[i] = string(resourceType)
+	}
+	Expect(resourceType["enum"]).To(ConsistOf(expectedNames))
 }
 
 func expectResourcePaginationSchema(schema any) {
@@ -267,6 +352,51 @@ func expectComputeInstanceCreateSchema(schema any) {
 	Expect(securityGroups["items"]).To(HaveKeyWithValue("type", "string"))
 }
 
+func expectComputeInstanceUpdateSchema(schema any) {
+	document, ok := schema.(map[string]any)
+	Expect(ok).To(BeTrue())
+	properties, ok := document["properties"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(properties).To(HaveKey("instance_type_id"))
+	Expect(properties).To(HaveKey("boot_disk"))
+	Expect(properties).To(HaveKey("run_strategy"))
+	Expect(properties).ToNot(HaveKey("display_name"))
+	Expect(properties).ToNot(HaveKey("description"))
+	Expect(properties).ToNot(HaveKey("catalog_item"))
+	Expect(properties).ToNot(HaveKey("disk_image_id"))
+	Expect(properties).ToNot(HaveKey("network_attachments"))
+	Expect(properties).ToNot(HaveKey("user_data"))
+	Expect(properties).ToNot(HaveKey("ssh_key"))
+	Expect(properties).ToNot(HaveKey("status"))
+	for _, name := range []string{"id", "instance_type_id", "run_strategy"} {
+		property, ok := properties[name].(map[string]any)
+		Expect(ok).To(BeTrue(), name)
+		Expect(property["type"]).To(Equal("string"), name)
+	}
+	version, ok := properties["version"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(version["type"]).To(Equal("integer"))
+	Expect(version["minimum"]).To(Equal(float64(1)))
+	bootDisk, ok := properties["boot_disk"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	bootDiskProperties, ok := bootDisk["properties"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(bootDiskProperties).To(HaveKey("size_gib"))
+	Expect(bootDiskProperties).To(HaveKey("storage_tier_id"))
+}
+
+func expectTypedWriteSchema(schema any, required ...string) {
+	document, ok := schema.(map[string]any)
+	Expect(ok).To(BeTrue())
+	properties, ok := document["properties"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(properties).ToNot(HaveKey("service"))
+	Expect(properties).ToNot(HaveKey("method"))
+	Expect(properties).ToNot(HaveKey("payload"))
+	Expect(document["required"]).To(ConsistOf(required))
+	Expect(document["additionalProperties"]).To(BeFalse())
+}
+
 func expectNullableArraySchema(schema any, name string) {
 	document, ok := schema.(map[string]any)
 	Expect(ok).To(BeTrue())
@@ -292,8 +422,11 @@ var _ = Describe("newTokenVerifier", func() {
 	It("Maps a validated token to a caller-specific API token source", func() {
 		expiration := time.Now().Add(time.Hour)
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-			"sub": "alice",
-			"exp": float64(expiration.Unix()),
+			"sub":                "alice",
+			"preferred_username": "alice",
+			"organization":       map[string]any{"tenant-1": map[string]any{"groups": []any{"/tenant-1/system:viewers"}}},
+			"realm_access":       map[string]any{"roles": []any{"tenant-user"}},
+			"exp":                float64(expiration.Unix()),
 		})
 		validator := auth.NewMockJwtValidator(ctrl)
 		validator.EXPECT().Validate(gomock.Any(), "raw-bearer-value").Return(token, nil)
@@ -303,6 +436,11 @@ var _ = Describe("newTokenVerifier", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(info.UserID).To(Equal("alice"))
 		Expect(info.Expiration.Unix()).To(Equal(expiration.Unix()))
+		caller, ok := info.Extra[callerContextExtraKey].(safeCallerContext)
+		Expect(ok).To(BeTrue())
+		Expect(caller).To(Equal(safeCallerContext{
+			Subject: "alice", Username: "alice", Tenants: []string{"tenant-1"},
+		}))
 		source, ok := info.Extra[exchangeTokenExtraKey].(apiTokenSource)
 		Expect(ok).To(BeTrue())
 		apiToken, err := source(context.Background())
@@ -318,6 +456,24 @@ var _ = Describe("newTokenVerifier", func() {
 		_, err := verifier(context.Background(), "bad-token", nil)
 		Expect(err).To(HaveOccurred())
 		Expect(errors.Is(err, sdkauth.ErrInvalidToken)).To(BeTrue())
+	})
+
+	It("Does not treat generic groups as tenant names", func() {
+		expiration := time.Now().Add(time.Hour)
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+			"sub":    "alice",
+			"groups": []any{"employees", "platform-viewers"},
+			"exp":    float64(expiration.Unix()),
+		})
+		validator := auth.NewMockJwtValidator(ctrl)
+		validator.EXPECT().Validate(gomock.Any(), "raw-bearer-value").Return(token, nil)
+
+		verifier := newTokenVerifier(validator, testExchanger)
+		info, err := verifier(context.Background(), "raw-bearer-value", nil)
+		Expect(err).ToNot(HaveOccurred())
+		caller, ok := info.Extra[callerContextExtraKey].(safeCallerContext)
+		Expect(ok).To(BeTrue())
+		Expect(caller.Tenants).To(BeEmpty())
 	})
 
 	It("Rejects a validated token with no subject claim", func() {

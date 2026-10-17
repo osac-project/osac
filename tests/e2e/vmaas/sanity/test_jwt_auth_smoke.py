@@ -26,14 +26,23 @@ CLIENT_LISTABLE_RESOURCES = [
 # JWT List access for all resource types
 
 
+def _assert_list_allowed(cli: OsacCLI, resource: str) -> None:
+    output, rc = cli.get_unchecked(resource)
+    # A successful List may contain no objects; the CLI reports that case with
+    # exit code 1 only after the API has accepted the request.
+    assert rc == 0 or (rc == 1 and output == "There are no objects matching the given criteria."), (
+        f"Expected an authorized list response for {resource}, got exit {rc}: {output}"
+    )
+
+
 @pytest.mark.parametrize("resource", CLIENT_LISTABLE_RESOURCES)
 def test_jwt_user_can_list(jwt_cli_user: OsacCLI, resource: str) -> None:
-    jwt_cli_user.get(resource)
+    _assert_list_allowed(jwt_cli_user, resource)
 
 
 @pytest.mark.parametrize("resource", CLIENT_LISTABLE_RESOURCES)
 def test_jwt_admin_can_list(jwt_cli_admin: OsacCLI, resource: str) -> None:
-    jwt_cli_admin.get(resource)
+    _assert_list_allowed(jwt_cli_admin, resource)
 
 
 # Authorization boundary: Users API

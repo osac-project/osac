@@ -80,7 +80,7 @@ var _ = Describe("CLI SSH public key Secret lifecycle", Label("cli", "secrets"),
 		created = false
 
 		getOutput, getStderr, code = tool.RunCLI(ctx, homeDir, "get", "secrets", name)
-		Expect(code).To(Equal(0), "get after delete failed: %s", getStderr)
+		Expect(code).To(Equal(1), "get after delete should report no matching Secret: %s%s", getOutput, getStderr)
 		Expect(getOutput).To(ContainSubstring("There are no objects matching the given criteria."))
 	})
 })

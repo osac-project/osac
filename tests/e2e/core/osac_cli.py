@@ -310,13 +310,25 @@ class OsacCLI:
         return self._parse_uuid(self._run(*args))
 
     def create_compute_instance_with_catalog_item(
-        self, *, catalog_item: str, name: str | None = None, subnet: str | None = None
+        self,
+        *,
+        catalog_item: str,
+        name: str | None = None,
+        subnet: str | None = None,
+        security_groups: list[str] | None = None,
     ) -> str:
         args: list[str] = ["create", "computeinstance", "--catalog-item", catalog_item]
         if name is not None:
             args.extend(["--name", name])
+        if security_groups and not subnet:
+            raise ValueError("security_groups require subnet")
+        if security_groups and not all(isinstance(sg, str) and sg for sg in security_groups):
+            raise ValueError("security_groups must be non-empty strings")
         if subnet is not None:
-            args.extend(["--network-attachment", f"subnet={subnet}"])
+            attachment = f"subnet={subnet}"
+            if security_groups:
+                attachment += ",security-groups=" + ",".join(security_groups)
+            args.extend(["--network-attachment", attachment])
         return self._parse_uuid(self._run(*args))
 
     def scale_cluster(self, *, uuid: str, node_set: str, size: int) -> None:

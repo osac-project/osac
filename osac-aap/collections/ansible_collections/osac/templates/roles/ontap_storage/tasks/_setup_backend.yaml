@@ -1,0 +1,72 @@
+---
+# Per-backend validation of operator-supplied ONTAP SVM preparation parameters
+# (included by setup.yaml with loop_var _ontap_backend_id).
+#
+# Consumes the operator-injected tenant_preparation payload:
+#   _provider_backend_connections[_ontap_backend_id].tenant_preparation:
+#     tenant_id:       <immutable-osac-tenant-id>
+#     source:          {namespace, name, uid, resource_version}
+#     provider_config: {username, password, svm}
+#
+# Only SVM-scoped runtime credentials (provider_config.username / password) are
+# required, and no direct HTTP calls to ONTAP are made from the hub cluster —
+# NetApp Trident on the target VMaaS cluster validates and binds the SVM using
+# the runtime CSI Secret during ensure_storage_class.
+
+- name: Compute assignment key for dispatched backend
+  ansible.builtin.set_fact:
+    _assignment_key: >-
+      {{ ((_ontap_backend_id ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}
+  no_log: true
+
+- name: Fail if tenant_preparation is missing for dispatched backend
+  ansible.builtin.fail:
+    msg: >-
+      storage_backend_connections entry is missing
+      tenant_preparation.provider_config. osac-operator must resolve the tenant
+      preparation and supply provider_config (username, password, svm) in
+      storage_backend_connections.
+  when: >-
+    _provider_backend_connections[_ontap_backend_id].tenant_preparation is not defined or
+    _provider_backend_connections[_ontap_backend_id].tenant_preparation is not mapping or
+    _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config is not defined or
+    _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config is not mapping
+  no_log: true
+
+- name: Extract operator-supplied tenant preparation for dispatched backend
+  ansible.builtin.set_fact:
+    _prep_config: "{{ _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config }}"
+  no_log: true
+
+- name: Validate operator-supplied tenant preparation fields
+  ansible.builtin.fail:
+    msg: >-
+      tenant_preparation is missing one or more required provider_config fields
+      (username, password, svm).
+  when: >-
+    _prep_config.username is not defined or _prep_config.username is none or _prep_config.username | default('') | string | trim | length == 0 or
+    _prep_config.password is not defined or _prep_config.password is none or _prep_config.password | default('') | string | trim | length == 0 or
+    _prep_config.svm is not defined or _prep_config.svm is none or _prep_config.svm | default('') | string | trim | length == 0
+  no_log: true
+
+- name: Set expected SVM name from operator-supplied preparation
+  ansible.builtin.set_fact:
+    _expected_svm_name: "{{ _prep_config.svm | string | trim }}"
+  no_log: true
+
+- name: Record the per-backend tenant config
+  ansible.builtin.set_fact:
+    _ontap_tenant_configs: >-
+      {{ _ontap_tenant_configs | combine({
+           _ontap_backend_id: {
+             'assignment_key': _assignment_key,
+             'svm_name': _expected_svm_name,
+             'status': 'ready'
+           }
+         }) }}
+  no_log: true
+
+- name: Clear credential-bearing facts
+  ansible.builtin.set_fact:
+    _prep_config: {}
+  no_log: true

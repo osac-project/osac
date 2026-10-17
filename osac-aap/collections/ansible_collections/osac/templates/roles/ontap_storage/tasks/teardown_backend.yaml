@@ -1,0 +1,49 @@
+---
+# ONTAP teardown_backend: retain pre-provisioned ONTAP backend resources.
+# Per the NetApp onboarding contract, OSAC never deletes ONTAP resources
+# (SVMs, LIFs, accounts, QoS policies, or admin preparation Secrets stay
+# prepared), and osac-operator tracks ONTAP backend lifecycle directly via
+# Tenant status and immutable tenant-id preparation labels without a legacy
+# hub Secret. Cluster-side K8s resources belong to teardown_cluster_storage.
+
+- name: Validate tenant_name is a valid DNS label
+  ansible.builtin.fail:
+    msg: >-
+      tenant_name is not a valid DNS label. Must be 1-63 lowercase
+      alphanumeric characters or hyphens, cannot start or end with a hyphen.
+  when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+  no_log: true
+
+- name: Fail if any dispatched tier has an invalid backend_id
+  ansible.builtin.fail:
+    msg: >-
+      Every tier dispatched to the ONTAP provider must provide a non-empty
+      string backend_id before teardown can run.
+  loop: "{{ _provider_tiers | default([]) }}"
+  loop_control:
+    label: "storage-tier"
+  when: >-
+    item.backend_id is not defined or
+    item.backend_id is none or
+    item.backend_id is not string or
+    item.backend_id | length == 0
+  no_log: true
+
+- name: Compute the dispatched backend ids
+  ansible.builtin.set_fact:
+    _ontap_backend_ids: "{{ _provider_tiers | default([]) | map(attribute='backend_id') | select('string') | unique | list }}"
+  no_log: true
+
+- name: Fail if no backend ids could be resolved
+  ansible.builtin.fail:
+    msg: >-
+      Could not resolve any backend_id from the dispatched tiers. The ONTAP
+      provider requires backend_id on every tier.
+  when: _ontap_backend_ids | length == 0
+  no_log: true
+
+- name: Report retention of pre-provisioned ONTAP backend resources
+  ansible.builtin.debug:
+    msg: >-
+      Retaining pre-provisioned ONTAP SVMs, accounts, QoS policies, and
+      administrator preparation Secrets per the NetApp onboarding contract.

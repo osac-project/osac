@@ -148,7 +148,8 @@ CSIEOF
   openssl req -x509 -newkey rsa:2048 \
     -keyout "${SCRIPT_DIR}/certs/mock.key" \
     -out "${SCRIPT_DIR}/certs/mock.pem" \
-    -days 1 -nodes -subj "/CN=127.0.0.1" 2>/dev/null
+    -days 1 -nodes -subj "/CN=127.0.0.1" \
+    -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" 2>/dev/null
 
   # Start mock VMS server for storage integration tests (TLS required by vastdata.vms modules)
   echo "Starting mock VMS server (TLS)..."
@@ -175,6 +176,7 @@ CSIEOF
 # literals to task files.
 OSAC_TEST_VAST_PASSWORD="$(openssl rand -hex 16)"
 OSAC_TEST_TENANT_PASSWORD="$(openssl rand -hex 16)"
+OSAC_TEST_ONTAP_RUNTIME_PASSWORD="$(openssl rand -hex 16)"
 OSAC_TEST_OAUTH_CLIENT_ID="osac-test-$(openssl rand -hex 8)"
 OSAC_TEST_OAUTH_CLIENT_SECRET="$(openssl rand -hex 16)"
 OSAC_TEST_ENCRYPTION_PASSPHRASE="$(openssl rand -hex 16)"
@@ -184,6 +186,7 @@ export VAST_VIP_POOL_SUPERNET="10.0.0.0/24"
 export VAST_VALIDATE_CERTS="false"
 export OSAC_TEST_VAST_PASSWORD="${OSAC_TEST_VAST_PASSWORD}"
 export OSAC_TEST_TENANT_PASSWORD="${OSAC_TEST_TENANT_PASSWORD}"
+export OSAC_TEST_ONTAP_RUNTIME_PASSWORD="${OSAC_TEST_ONTAP_RUNTIME_PASSWORD}"
 export OSAC_TEST_OAUTH_CLIENT_ID="${OSAC_TEST_OAUTH_CLIENT_ID}"
 export OSAC_TEST_OAUTH_CLIENT_SECRET="${OSAC_TEST_OAUTH_CLIENT_SECRET}"
 export OSAC_TEST_ENCRYPTION_PASSPHRASE="${OSAC_TEST_ENCRYPTION_PASSPHRASE}"

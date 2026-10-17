@@ -1,0 +1,154 @@
+---
+# ONTAP ensure_storage_class: per-backend TridentBackendConfig + per-tier
+# StorageClasses on the target cluster.
+#
+# Per backend there is exactly ONE TridentBackendConfig (ontap-<assignment_key>,
+# ontap-san driver, block-only) whose virtual pools carry per-tier labels
+# (osac_backend, tier) and defaults (encryption, qosPolicy); per tier there is
+# one StorageClass (ontap-<assignment_key>-<tier_key>) selecting its virtual
+# pool via parameters.selector.
+# The CSI Secret the TBC references is created in the Trident install
+# namespace — Trident only reconciles TBCs and their credential Secrets there.
+
+- name: Include shared tier validation
+  ansible.builtin.include_tasks: _validate_tiers.yaml
+
+- name: Compute the dispatched backend ids
+  ansible.builtin.set_fact:
+    _ontap_backend_ids: "{{ _provider_tiers | map(attribute='backend_id') | unique | list }}"
+  no_log: true
+
+- name: Build expected StorageClass entries, TBC names, and CSI Secret names
+  ansible.builtin.set_fact:
+    _ontap_expected_sc_entries: >-
+      {% set entries = [] -%}
+      {% for tier in _provider_tiers -%}
+      {% set _key = ((tier.backend_id ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower -%}
+      {% set _tier_key = (tier.name | hash('sha256'))[:16] | lower -%}
+      {% set _ = entries.append({'name': 'ontap-' ~ _key ~ '-' ~ _tier_key, 'tier': tier.name}) -%}
+      {% endfor -%}
+      {{ entries }}
+    _ontap_expected_sc_names: >-
+      {% set names = [] -%}
+      {% for tier in _provider_tiers -%}
+      {% set _key = ((tier.backend_id ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower -%}
+      {% set _tier_key = (tier.name | hash('sha256'))[:16] | lower -%}
+      {% set _ = names.append('ontap-' ~ _key ~ '-' ~ _tier_key) -%}
+      {% endfor -%}
+      {{ names }}
+    _ontap_expected_tbc_names: >-
+      {% set names = [] -%}
+      {% for bid in _ontap_backend_ids -%}
+      {% set _key = ((bid ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower -%}
+      {% set _ = names.append('ontap-' ~ _key) -%}
+      {% endfor -%}
+      {{ names }}
+    _ontap_expected_csi_secret_names: >-
+      {% set names = [] -%}
+      {% for bid in _ontap_backend_ids -%}
+      {% set _key = ((bid ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower -%}
+      {% set _ = names.append('ontap-csi-' ~ _key) -%}
+      {% endfor -%}
+      {{ names }}
+  no_log: true
+
+# Check if all tiers' StorageClasses, TridentBackendConfigs, and CSI Secrets
+# already exist on the target cluster before provisioning.
+- name: Check existing tenant StorageClasses
+  kubernetes.core.k8s_info:
+    api_version: storage.k8s.io/v1
+    kind: StorageClass
+    label_selectors:
+      - "osac.openshift.io/tenant={{ tenant_name }}"
+      - "osac.openshift.io/storage-provider=ontap"
+      - "app.kubernetes.io/managed-by=osac-aap"
+  register: _ontap_sc_checks
+  no_log: true
+
+- name: Verify TridentBackendConfig CRD is installed on the target cluster
+  kubernetes.core.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: tridentbackendconfigs.trident.netapp.io
+  register: _trident_crd_check
+  no_log: true
+
+- name: Fail if Trident is not installed on the target cluster
+  when: _trident_crd_check.resources | default([]) | length == 0
+  ansible.builtin.fail:
+    msg: >-
+      TridentBackendConfig CRD (tridentbackendconfigs.trident.netapp.io) was
+      not found on the target cluster. NetApp Trident must be pre-installed
+      by the cluster administrator before onboarding ONTAP storage tiers.
+  no_log: true
+
+- name: Check existing tenant TridentBackendConfigs
+  kubernetes.core.k8s_info:
+    api_version: trident.netapp.io/v1
+    kind: TridentBackendConfig
+    namespace: "{{ ontap_storage_trident_namespace }}"
+    label_selectors:
+      - "osac.openshift.io/tenant={{ tenant_name }}"
+      - "osac.openshift.io/storage-provider=ontap"
+      - "app.kubernetes.io/managed-by=osac-aap"
+  register: _ontap_tbc_checks
+  no_log: true
+
+- name: Check existing tenant CSI Secrets
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    namespace: "{{ ontap_storage_trident_namespace }}"
+    label_selectors:
+      - "osac.openshift.io/tenant={{ tenant_name }}"
+      - "osac.openshift.io/storage-provider=ontap"
+      - "app.kubernetes.io/managed-by=osac-aap"
+  register: _ontap_csi_checks
+  no_log: true
+
+- name: Determine if all StorageClasses, Bound TridentBackendConfigs, and CSI Secrets already exist
+  ansible.builtin.set_fact:
+    _ontap_all_sc_exist: >-
+      {{ (_ontap_expected_sc_names | difference(
+            _ontap_sc_checks.resources | default([]) | map(attribute='metadata.name') | list
+          ) | length) == 0
+          and (_ontap_expected_tbc_names | difference(
+            _ontap_tbc_checks.resources | default([])
+            | selectattr('status', 'defined')
+            | selectattr('status.phase', 'defined')
+            | selectattr('status.phase', 'equalto', 'Bound')
+            | map(attribute='metadata.name') | list
+          ) | length) == 0
+          and (_ontap_expected_csi_secret_names | difference(
+            _ontap_csi_checks.resources | default([]) | map(attribute='metadata.name') | list
+          ) | length) == 0 }}
+  no_log: true
+
+- name: Provision TridentBackendConfig and StorageClasses on target cluster
+  block:
+    - name: Provision per-backend Trident resources when not already present
+      when: not (_ontap_all_sc_exist | bool)
+      ansible.builtin.include_tasks: _ensure_storage_class_backend.yaml
+      loop: "{{ _ontap_backend_ids }}"
+      loop_control:
+        loop_var: _ontap_backend_id
+        label: "ontap-backend"
+
+    - name: Log short-circuit when all target-cluster resources already exist
+      when: _ontap_all_sc_exist | bool
+      ansible.builtin.debug:
+        msg: "All ONTAP target-cluster resources already exist — skipping provisioning."
+
+    - name: Set StorageClass names output (list)
+      ansible.builtin.set_fact:
+        storage_provider_storage_class_names: "{{ _ontap_expected_sc_entries }}"
+      no_log: true
+
+  always:
+    - name: Clear credential-bearing facts
+      ansible.builtin.set_fact:
+        _ontap_sc_checks: {}
+        _ontap_tbc_checks: {}
+        _ontap_csi_checks: {}
+        _trident_crd_check: {}
+      no_log: true

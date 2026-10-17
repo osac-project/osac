@@ -229,6 +229,143 @@ var _ = It("retains and recovers identity after a lost Create acknowledgement", 
 	Expect(fc.names).To(HaveLen(1), "cleanup created another incarnation: %v", fc.names)
 })
 
+// refusedReservationCreateClient models the service evaluating the Create
+// request and refusing it before any mutation, so no BMI can ever appear.
+type refusedReservationCreateClient struct {
+	*workerReadClient
+	err     error
+	creates int
+}
+
+func (f *refusedReservationCreateClient) CreateBareMetalInstance(
+	context.Context, *privatev1.BareMetalInstance,
+) (*privatev1.BareMetalInstance, error) {
+	f.creates++
+	return nil, f.err
+}
+
+var _ = It("cancels a reservation whose Create the service authoritatively refused", func() {
+	r, fc, co := workerReadHarness()
+	reserveCleanupSlot(r, co)
+	ctx := context.Background()
+	// The order was already deleting when the Create was evaluated, so the
+	// service refused the request outright and created nothing.
+	provider := &refusedReservationCreateClient{workerReadClient: fc, err: status.Error(
+		codes.InvalidArgument, "the owner reference of bare_metal_instances targets a deleting clusters")}
+	r.fulfillment = provider
+	if _, err := runWorkerCapacityStage(r, co); err == nil {
+		Fail("refused Create did not surface")
+	}
+	Expect(provider.creates).To(Equal(1), "refusal was not observed: creates=%d", provider.creates)
+	Expect(r.apiReader.Get(ctx, client.ObjectKeyFromObject(co), co)).To(Succeed())
+	w := co.Status.Workers[0]
+	Expect(w.BMICreateState).To(Equal(v1alpha1.WorkerBMICreateStateReserved), "refusal kept the attempt fence: %+v", w)
+	Expect(w.BareMetalInstance.ID).To(Equal(""), "refusal recorded an identity: %+v", w)
+	// The journal now proves no Create was authorized, so teardown cancels the
+	// slot instead of waiting for an absence the refusal can never produce.
+	listsBeforeCleanup := fc.lists
+	gone, err := r.cleanupWorker(ctx, co, &w)
+	Expect(err).NotTo(HaveOccurred(), "refused reservation still blocks cleanup: gone=%v err=%v worker=%+v", gone, err, w)
+	Expect(gone).To(BeTrue(), "refused reservation still blocks cleanup: gone=%v err=%v worker=%+v", gone, err, w)
+	Expect(fc.lists).To(Equal(listsBeforeCleanup), "cancellation searched for a refused BMI: lists=%d", fc.lists)
+})
+
+var _ = Describe("Unknown Create outcomes keep the attempt fence", func() {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"unavailable", status.Error(codes.Unavailable, "service did not answer")},
+		{"deadline", status.Error(codes.DeadlineExceeded, "no answer within the deadline")},
+		{"internal", status.Error(codes.Internal, "server fault after a partial write")},
+		{"exhausted", status.Error(codes.ResourceExhausted, "quota")},
+		{"unknown", status.Error(codes.Unknown, "unclassified")},
+	} {
+		It(tc.name, func() {
+			r, fc, co := workerReadHarness()
+			reserveCleanupSlot(r, co)
+			ctx := context.Background()
+			r.fulfillment = &refusedReservationCreateClient{workerReadClient: fc, err: tc.err}
+			if _, err := runWorkerCapacityStage(r, co); err == nil {
+				Fail("expected the Create failure to surface")
+			}
+			Expect(r.apiReader.Get(ctx, client.ObjectKeyFromObject(co), co)).To(Succeed())
+			w := co.Status.Workers[0]
+			Expect(w.BMICreateState).To(Equal(v1alpha1.WorkerBMICreateStateAttempted),
+				"unknown outcome released the attempt fence: %+v", w)
+			// An empty List is still not absence for an unknown outcome.
+			gone, err := r.cleanupWorker(ctx, co, &w)
+			Expect(err).To(HaveOccurred(), "unknown outcome was cancelled: gone=%v err=%v worker=%+v", gone, err, w)
+			Expect(gone).To(BeFalse(), "unknown outcome was cancelled: gone=%v err=%v worker=%+v", gone, err, w)
+		})
+	}
+})
+
+// alreadyExistsRecoveryClient models Create reporting AlreadyExists while the
+// recovery List then fails with a code that, read on its own, looks definitive.
+type alreadyExistsRecoveryClient struct {
+	*workerReadClient
+	creates int
+}
+
+func (f *alreadyExistsRecoveryClient) CreateBareMetalInstance(
+	context.Context, *privatev1.BareMetalInstance,
+) (*privatev1.BareMetalInstance, error) {
+	f.creates++
+	// Observation already listed successfully; only the recovery List fails.
+	f.workerReadClient.listErr = status.Error(codes.PermissionDenied, "not allowed to list")
+	return nil, status.Error(codes.AlreadyExists, "BMI already exists")
+}
+
+var _ = It("keeps the fence when AlreadyExists recovery fails with a refusal code", func() {
+	r, fc, co := workerReadHarness()
+	reserveCleanupSlot(r, co)
+	ctx := context.Background()
+	// AlreadyExists proves a BMI exists; the recovery List failure must not be
+	// read as evidence that the Create was refused.
+	provider := &alreadyExistsRecoveryClient{workerReadClient: fc}
+	r.fulfillment = provider
+	if _, err := runWorkerCapacityStage(r, co); err == nil {
+		Fail("expected the recovery failure to surface")
+	}
+	Expect(provider.creates).To(Equal(1), "Create was not reached: creates=%d", provider.creates)
+	Expect(r.apiReader.Get(ctx, client.ObjectKeyFromObject(co), co)).To(Succeed())
+	w := co.Status.Workers[0]
+	Expect(w.BMICreateState).To(Equal(v1alpha1.WorkerBMICreateStateAttempted),
+		"recovery error released the fence for an existing BMI: %+v", w)
+	// Clear the injected List failure so cleanup is refused by the retained
+	// fence, not by the transport error.
+	fc.listErr = nil
+	gone, err := r.cleanupWorker(ctx, co, &w)
+	Expect(err).To(HaveOccurred(), "existing BMI was cancelled: gone=%v err=%v worker=%+v", gone, err, w)
+	Expect(gone).To(BeFalse(), "existing BMI was cancelled: gone=%v err=%v worker=%+v", gone, err, w)
+})
+
+var _ = It("keeps a prior attempt's fence when a later Create is refused", func() {
+	r, fc, co := workerReadHarness()
+	reserveCleanupSlot(r, co)
+	ctx := context.Background()
+	key := client.ObjectKeyFromObject(co)
+	// A previous attempt lost its acknowledgement: the slot is already Attempted
+	// with no ID, so an earlier Create may have succeeded invisibly.
+	Expect(r.apiReader.Get(ctx, key, co)).To(Succeed())
+	co.Status.Workers[0].BMICreateState = v1alpha1.WorkerBMICreateStateAttempted
+	Expect(r.Status().Update(ctx, co)).To(Succeed())
+	Expect(r.apiReader.Get(ctx, key, co)).To(Succeed())
+	r.fulfillment = &refusedReservationCreateClient{workerReadClient: fc, err: status.Error(
+		codes.InvalidArgument, "the owner reference of bare_metal_instances targets a deleting clusters")}
+	if _, err := runWorkerCapacityStage(r, co); err == nil {
+		Fail("refused Create did not surface")
+	}
+	Expect(r.apiReader.Get(ctx, key, co)).To(Succeed())
+	w := co.Status.Workers[0]
+	Expect(w.BMICreateState).To(Equal(v1alpha1.WorkerBMICreateStateAttempted),
+		"a later refusal released an earlier attempt's fence: %+v", w)
+	gone, err := r.cleanupWorker(ctx, co, &w)
+	Expect(err).To(HaveOccurred(), "prior ambiguous attempt was cancelled: gone=%v err=%v worker=%+v", gone, err, w)
+	Expect(gone).To(BeFalse(), "prior ambiguous attempt was cancelled: gone=%v err=%v worker=%+v", gone, err, w)
+})
+
 var _ = It("requires persisted Create intent in the status patch response", func() {
 	r, fc, co := workerReadHarness()
 	reserveCleanupSlot(r, co)

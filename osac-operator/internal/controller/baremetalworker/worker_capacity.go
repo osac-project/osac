@@ -5,11 +5,14 @@ package baremetalworker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"time"
 
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -287,6 +290,10 @@ func (r *Reconciler) createSelectedWorker(
 		}
 		return workerBoundaryRequeue(), nil
 	}
+	// Only a slot this invocation moved out of Reserved is known to carry no
+	// earlier Create. An already-Attempted slot may hold a lost acknowledgement
+	// from a previous attempt, and a later refusal says nothing about that one.
+	fenceWasReserved := prev.BMICreateState == v1alpha1.WorkerBMICreateStateReserved
 	if err := r.recordBMICreateAttempt(ctx, co, prev); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -301,6 +308,11 @@ func (r *Reconciler) createSelectedWorker(
 		}
 	}
 	if err != nil || !res.IsZero() {
+		if err != nil && fenceWasReserved && prev.BareMetalInstance.ID == "" && definitiveCreateRejection(err) {
+			if releaseErr := r.releaseRejectedCreateAttempt(ctx, co, prev); releaseErr != nil {
+				return res, errors.Join(err, releaseErr)
+			}
+		}
 		return res, err
 	}
 	if err := r.writeSelectedWorker(ctx, co, prev); err != nil {
@@ -308,6 +320,60 @@ func (r *Reconciler) createSelectedWorker(
 	}
 	// Observe the external action next time, even if its response was a no-op.
 	return workerBoundaryRequeue(), nil
+}
+
+// definitiveCreateRejection reports whether the fulfillment service evaluated
+// this Create request and refused it, so no BareMetalInstance was authorized.
+// Only the Create call's own outcome is classified: an error raised while
+// recovering from AlreadyExists carries the List or Get code even though a BMI
+// demonstrably exists, so it must never be read as a refusal. Among Create's
+// own codes only those decided before any mutation qualify. Transport loss,
+// deadlines, caller cancellation, resource exhaustion and server faults stay
+// unknown outcomes and keep the conservative Attempted retention.
+func definitiveCreateRejection(err error) bool {
+	var refused *createRefusedError
+	if !errors.As(err, &refused) {
+		return false
+	}
+	if errors.Is(refused.err, ErrFulfillmentServiceUnavailable) {
+		return false
+	}
+	switch status.Code(refused.err) {
+	case codes.InvalidArgument, codes.FailedPrecondition, codes.PermissionDenied, codes.Unauthenticated:
+		return true
+	default:
+		return false
+	}
+}
+
+// releaseRejectedCreateAttempt returns the attempt fence to Reserved after an
+// authoritative Create refusal. The journal, not a List, is what proves no
+// Create was authorized, so recording the refusal keeps the slot cancellable:
+// cleanup can cancel a Reserved reservation, while an Attempted one with no ID
+// waits for an absence that a refused Create can never produce. The write
+// reuses the same optimistic fence as the attempt itself, so a concurrent
+// cancellation or retirement wins and this invocation reports the conflict.
+func (r *Reconciler) releaseRejectedCreateAttempt(
+	ctx context.Context, co *v1alpha1.ClusterOrder, worker *v1alpha1.WorkerStatus,
+) error {
+	next := co.DeepCopy()
+	recorded := workerByName(next.Status.Workers, worker.Name)
+	if recorded == nil || !reflect.DeepEqual(*recorded, *worker) {
+		return errWorkerObservationChanged
+	}
+	recorded.BMICreateState = v1alpha1.WorkerBMICreateStateReserved
+	if err := r.patchStatusFromBase(ctx, co, next); err != nil {
+		return err
+	}
+	// Require the API response to show the release, exactly as the attempt
+	// write does: a pruned or rewritten field must not look like a release.
+	persisted := workerByName(next.Status.Workers, worker.Name)
+	if persisted == nil || persisted.BMICreateState != v1alpha1.WorkerBMICreateStateReserved {
+		return fmt.Errorf("BMI Create release was not persisted for worker %s", worker.Name)
+	}
+	*co = *next
+	*worker = *persisted
+	return nil
 }
 
 // recordBMICreateAttempt fences Create against cancellation on the same

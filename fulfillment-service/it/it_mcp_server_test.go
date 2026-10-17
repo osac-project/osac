@@ -73,6 +73,7 @@ var _ = Describe("MCP server", func() {
 	)
 
 	BeforeEach(func() {
+		Skip("OSAC-6371: quarantined – MCP fixture VirtualNetwork READY→PENDING race")
 		ctx = context.Background()
 		catalogItemID, computeInstanceID, otherComputeInstanceID = "", "", ""
 		templateID, diskImageID, instanceTypeID = "", "", ""

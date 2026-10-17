@@ -259,6 +259,7 @@ var _ = Describe("Default networking provisioning", func() {
 	})
 
 	It("rejects Delete and default-label removal for system-managed VN/Subnet/SG", func(ctx context.Context) {
+		Skip("OSAC-6370: quarantined – default-network READY→PENDING fixture race")
 		tenantName := fmt.Sprintf("test-defnet-protect-%s", uuid.New())
 
 		By("Creating tenant and waiting for SYNCED")

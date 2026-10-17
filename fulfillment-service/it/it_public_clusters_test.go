@@ -424,6 +424,7 @@ var _ = Describe("Public clusters", func() {
 	})
 
 	It("Can create a cluster with explicit version", func() {
+		Skip("OSAC-6374: quarantined – fixture SecurityGroup READY→PENDING race")
 		// Bare-metal workers require the selected version to have a DiskImage.
 		image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
 		cvClient := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())

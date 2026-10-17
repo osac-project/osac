@@ -11,7 +11,9 @@ Three checks must pass before a pull request merges, and one approval must be on
 The approval is a normal GitHub review from someone with write access (and from a code owner when you touch a path
 that has one in `CODEOWNERS`: the CI definition under `.github/`, and any folder a team has claimed). A new commit drops it; a clean rebase or "Update branch" keeps it. The approval is also
 what starts the E2E: it runs in parallel with `CI` and does not wait for it, and both must pass. When the
-checks are green and the approval is there, the author adds the pull request to the merge queue. The queue runs `CI` and
+checks are green and the approval is there, the pull request goes into the merge queue by itself: the approval turns on
+auto-merge (`e2e-pr.yml`, job `Auto-merge`). To keep one pull request from merging, choose "Disable auto-merge" on it (it stays off) or
+convert it to a draft. The queue runs `CI` and
 `E2E` again on the result of merging, so what lands is what was tested.
 
 ## Which tests a directory needs

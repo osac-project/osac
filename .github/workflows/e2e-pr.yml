@@ -68,6 +68,9 @@ jobs:
       head-repo: ${{ steps.code.outputs.repo }}
       fork-author: ${{ steps.code.outputs.fork-author }}
       fork-association: ${{ steps.code.outputs.fork-association }}
+      approved: ${{ steps.approved.outputs.yes }}
+      approved-number: ${{ steps.approved.outputs.number }}
+      approved-sha: ${{ steps.approved.outputs.sha }}
     steps:
       # The default branch (the ref a workflow_run runs at), never the pull request.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -103,6 +106,21 @@ jobs:
           kind: checks
           repo: ${{ github.repository }}
           decision-file: ${{ steps.decide.outputs.json-file }}
+      # The pull request has an approval that counts on its head commit: the auto-merge job below turns auto-merge on.
+      # Decided from the state, not from the event that woke this run: several runs for one commit replace each other, and
+      # the one that survives may be any of them.
+      - name: Is the pull request approved?
+        id: approved
+        if: steps.decide.outputs.number != ''
+        env:
+          DECISION: ${{ steps.decide.outputs.json-file }}
+        run: |
+          # One pull request was evaluated (the file is a list with one decision).
+          {
+            echo "yes=$(jq -r '.[0].approvers | length > 0' "${DECISION}")"
+            echo "number=$(jq -r '.[0].number' "${DECISION}")"
+            echo "sha=$(jq -r '.[0].head_sha' "${DECISION}")"
+          } >> "$GITHUB_OUTPUT"
       # The repository the commit lives in (a fork for a fork pull request), for the suites to check out.
       - name: Find the code to test
         id: code
@@ -164,6 +182,47 @@ jobs:
   # check: the suites run in this workflow run, whose jobs are not on the pull request, so this is how a person on the
   # pull request sees which suite is waiting, running or failed, and gets to its log in one click. Only the suites that
   # run get a check, and which suites run, and what their checks are called, is the policy's (e2e-policy.yml).
+  # Turns auto-merge on for an approved pull request, so nobody has to come back to add it to the merge queue: once `CI`,
+  # `E2E` and `jira-reference` are green GitHub puts it in the queue, and the queue merges it. It changes no rule. It
+  # runs in the default branch's context like the rest of this workflow, so it adds no check to the pull request, and it
+  # checks out nothing. A new commit drops the approval. "Disable auto-merge" on a pull request keeps it off: the job does
+  # nothing when auto-merge was turned off after the latest approval of the head commit (so a pull request converted to
+  # a draft after its approval is not turned on again by this job; turn it on by hand).
+  auto-merge:
+    name: Auto-merge
+    needs: decide
+    if: needs.decide.outputs.approved == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write  # enabling auto-merge asks for it
+      pull-requests: write
+    steps:
+      - name: Enable auto-merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ needs.decide.outputs.approved-number }}
+          HEAD_SHA: ${{ needs.decide.outputs.approved-sha }}
+        run: |
+          set -euo pipefail
+          view=$(gh pr view "${NUMBER}" --repo "${REPO}" --json autoMergeRequest,isDraft)
+          if [[ "$(jq -r '.autoMergeRequest != null or .isDraft' <<<"${view}")" == "true" ]]; then
+            echo "PR #${NUMBER} has auto-merge already, or is a draft"
+            exit 0
+          fi
+          approved_at=$(gh api --paginate --slurp "repos/${REPO}/pulls/${NUMBER}/reviews" \
+            | jq -r --arg sha "${HEAD_SHA}" '[.[][] | select(.state == "APPROVED" and .commit_id == $sha) | .submitted_at] | max // ""')
+          disabled_at=$(gh api --paginate --slurp "repos/${REPO}/issues/${NUMBER}/events" \
+            | jq -r '[.[][] | select(.event == "auto_merge_disabled") | .created_at] | max // ""')
+          if [[ -n "${disabled_at}" && "${disabled_at}" > "${approved_at}" ]]; then
+            echo "Auto-merge was turned off on PR #${NUMBER} after its approval; leaving it off"
+            exit 0
+          fi
+          # Only for the commit that was decided on: if the pull request has moved on, GitHub refuses.
+          gh pr merge "${NUMBER}" --repo "${REPO}" --auto --match-head-commit "${HEAD_SHA}" \
+            || echo "::warning::Could not enable auto-merge on PR #${NUMBER}"
+
   track:
     name: Suite checks
     needs: decide

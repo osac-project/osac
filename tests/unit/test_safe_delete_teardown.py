@@ -10,6 +10,7 @@ failure in run 39040205073).
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import subprocess
 from unittest.mock import Mock, patch
@@ -170,25 +171,46 @@ def test_safe_delete_subnet_notfound_still_waits_for_cr() -> None:
     mock_wait.assert_called_once_with(k8s=k8s, name="sub-cr-nf")
 
 
-# -- Warning logs must not include exception text -------------------
+# -- Warning logs must not include runtime values -------------------
 
 
 @pytest.mark.usefixtures("_no_sleep")
-def test_safe_delete_warnings_do_not_log_exception_text(caplog: pytest.LogCaptureFixture) -> None:
-    """Teardown warnings must not include any exception-derived
-    content so that sensitive API data stays out of CI logs."""
+@pytest.mark.parametrize(
+    ("helper", "wait_target", "extra_patches", "kwargs"),
+    [
+        (
+            _safe_delete_vn,
+            "wait_for_virtual_network_deletion",
+            ["_cleanup_child_nat_gateways"],
+            {"vn_id": "vn-s", "vn_cr_name": "vn-cr-s"},
+        ),
+        (_safe_delete_subnet, "wait_for_subnet_deletion", [], {"subnet_id": "sub-s", "subnet_cr_name": "sub-cr-s"}),
+        (_safe_delete_sg, "wait_for_security_group_deletion", [], {"sg_id": "sg-s", "sg_cr_name": "sg-cr-s"}),
+    ],
+    ids=["vn", "subnet", "sg"],
+)
+def test_safe_delete_warnings_log_no_runtime_values(
+    caplog: pytest.LogCaptureFixture, helper: object, wait_target: str, extra_patches: list[str], kwargs: dict[str, str]
+) -> None:
+    """Teardown warnings must be fully constant strings with
+    no exception-derived or API-derived content so that
+    sensitive data stays out of CI logs."""
     secret_msg = "secret-api-response-payload"
     grpc = Mock(spec=GRPCClient)
     k8s = Mock(spec=K8sClient)
     k8s.is_present.return_value = True
 
-    with (
-        caplog.at_level(logging.WARNING, logger=ref_conftest.logger.name),
-        patch("tests.e2e.references.conftest.wait_for_virtual_network_deletion", side_effect=TimeoutError(secret_msg)),
-        patch("tests.e2e.references.conftest._cleanup_child_nat_gateways"),
-    ):
-        _safe_delete_vn(grpc, k8s, vn_id="vn-s", vn_cr_name="vn-cr-s")
+    prefix = "tests.e2e.references.conftest"
+
+    with caplog.at_level(logging.WARNING, logger=ref_conftest.logger.name), contextlib.ExitStack() as stack:
+        stack.enter_context(patch(f"{prefix}.{wait_target}", side_effect=TimeoutError(secret_msg)))
+        for name in extra_patches:
+            stack.enter_context(patch(f"{prefix}.{name}"))
+        helper(grpc, k8s, **kwargs)  # type: ignore[operator]
 
     assert "timed out" in caplog.text
     assert secret_msg not in caplog.text
     assert "TimeoutError" not in caplog.text
+    # CR names come from K8s API responses; must not appear.
+    for v in kwargs.values():
+        assert v not in caplog.text

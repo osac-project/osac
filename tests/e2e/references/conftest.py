@@ -329,7 +329,7 @@ def _safe_delete_vn(grpc: GRPCClient, k8s: K8sClient, *, vn_id: str, vn_cr_name:
         try:
             wait_for_virtual_network_deletion(k8s=k8s, name=vn_cr_name)
         except Exception:
-            logger.warning("VN CR %s deletion wait timed out", vn_cr_name)
+            logger.warning("VirtualNetwork CR deletion wait timed out")
 
 
 def _safe_delete_subnet(grpc: GRPCClient, k8s: K8sClient, *, subnet_id: str, subnet_cr_name: str) -> None:
@@ -349,7 +349,7 @@ def _safe_delete_subnet(grpc: GRPCClient, k8s: K8sClient, *, subnet_id: str, sub
         try:
             wait_for_subnet_deletion(k8s=k8s, name=subnet_cr_name)
         except Exception:
-            logger.warning("Subnet CR %s deletion wait timed out", subnet_cr_name)
+            logger.warning("Subnet CR deletion wait timed out")
 
 
 def _safe_delete_sg(grpc: GRPCClient, k8s: K8sClient, *, sg_id: str, sg_cr_name: str) -> None:
@@ -369,4 +369,4 @@ def _safe_delete_sg(grpc: GRPCClient, k8s: K8sClient, *, sg_id: str, sg_cr_name:
         try:
             wait_for_security_group_deletion(k8s=k8s, name=sg_cr_name)
         except Exception:
-            logger.warning("SG CR %s deletion wait timed out", sg_cr_name)
+            logger.warning("SecurityGroup CR deletion wait timed out")

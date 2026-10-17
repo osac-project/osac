@@ -1,5 +1,37 @@
 ---
-- name: Include network-class-specific delete tasks
-  ansible.builtin.include_role:
-    name: "{{ network_steps_collection }}.cluster_infra"
-    tasks_from: delete.yaml
+# Cluster infrastructure deletion.
+# Agents live in the cluster namespace (created via per-cluster InfraEnv).
+# When the namespace is deleted as part of hosted cluster teardown, agents
+# are cleaned up automatically.  This task removes any remaining agents if
+# the namespace still exists.
+
+- name: Check if cluster namespace still exists
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Namespace
+    name: "{{ cluster_infra_namespace }}-{{ cluster_infra_name }}"
+  register: cluster_ns
+
+- name: Clean up agents if namespace still exists
+  when: cluster_ns.resources | length > 0
+  block:
+    - name: Find agents in cluster namespace
+      kubernetes.core.k8s_info:
+        api_version: agent-install.openshift.io/v1beta1
+        kind: Agent
+        namespace: "{{ cluster_infra_namespace }}-{{ cluster_infra_name }}"
+      register: cluster_infra_ci_agents
+      no_log: true
+
+    - name: Delete remaining agents
+      kubernetes.core.k8s:
+        api_version: agent-install.openshift.io/v1beta1
+        kind: Agent
+        namespace: "{{ cluster_infra_namespace }}-{{ cluster_infra_name }}"
+        name: "{{ item.metadata.name }}"
+        state: absent
+      loop: "{{ cluster_infra_ci_agents.resources }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      when: cluster_infra_ci_agents.resources | length > 0
+      no_log: true

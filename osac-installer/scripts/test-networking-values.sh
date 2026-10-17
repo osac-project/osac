@@ -132,8 +132,9 @@ render_success \
   --set global.networking.fabricManager=agentless_net \
   --set global.networking.k8sManager=
 
-# The disposable CaaS test profile normally preserves ci.steps through the AAP
-# expert override. The overlay clears it so the facade installs AgentlessNet.
+# The CaaS CI profile inherits default k8s_only networking with provisioning
+# disabled. The agentless-net-stub overlay overrides the networking section
+# entirely, switching to the AgentlessNet fabric manager for testing.
 render_success \
   agentless-net-stub-caas-overlay \
   'fabric_manager\":\"agentless_net' \
@@ -393,18 +394,19 @@ render_failure \
   --set global.networking.fabricManager=netris \
   --set global.networking.k8sManager=
 
-# CaaS on virtual BareMetalHosts uses the CUDN overlay manager with ci.steps
-# (operator-bound Agent waits), not a physical Netris fabric.
+# CaaS CI disables networking provisioning (networkingProvisioning: false) and
+# inherits the chart-default k8s_only manager. The facade still auto-derives
+# the agentless_net AAP backend from the effective k8s_only manager.
 render_success \
-  caas-cudn-profile \
-  'fabric_manager\":\"cudn_net' \
+  caas-no-provisioning-profile \
+  'k8s_manager\":\"k8s_only' \
   --values "${SCRIPT_DIR}/../values/caas-ci/instance.yaml" \
   --set-string global.clusterDomain=apps.example.test \
   --set-string service.externalHostname=api.example.test \
   --set-string service.internalHostname=api-internal.example.test
 # Parse only whitelisted, non-secret documents/fields. Never print the render:
 # it may include credential-bearing Secrets from other chart components.
-python3 - "${TMP_DIR}/caas-cudn-profile.yaml" <<'PY'
+python3 - "${TMP_DIR}/caas-no-provisioning-profile.yaml" <<'PY'
 import json
 import sys
 import yaml
@@ -422,27 +424,41 @@ assert len(containers) == 1, f"expected one create-network-class container, got 
 body_env = [e for e in containers[0]['env'] if e['name'] == 'NETWORK_CLASS_BODY']
 assert len(body_env) == 1 and 'value' in body_env[0], 'expected one literal NETWORK_CLASS_BODY env var'
 body = json.loads(body_env[0]['value'])
-assert body.get('fabric_manager') == 'cudn_net', 'default class must select CUDN'
-assert not body.get('k8s_manager'), 'default class must have no k8s manager'
-manager = resource('ConfigMap', 'osac-network-fabric-manager-cudn-net')
-assert manager['data']['name'] == 'cudn_net'
+assert body.get('k8s_manager') == 'k8s_only', 'default class must select k8s_only'
+assert not body.get('fabric_manager'), 'default class must have no fabric manager'
+manager = resource('ConfigMap', 'osac-network-k8s-manager-k8s-only')
+assert manager['data']['name'] == 'k8s_only'
 cluster = resource('ConfigMap', 'cluster-fulfillment-ig')['data']
-assert cluster['NETWORK_CLASS'] == 'ci'
-assert cluster['NETWORK_STEPS_COLLECTION'] == 'ci.steps'
+assert cluster['NETWORK_CLASS'] == 'agentless_net'
+assert cluster['NETWORK_STEPS_COLLECTION'] == 'agentless_net.steps'
 resource('ConfigMap', 'network-fulfillment-ig')
+operator = resource('Deployment', 'osac-operator')
+managers = [container for container in operator['spec']['template']['spec']['containers']
+            if container['name'] == 'manager']
+assert len(managers) == 1, 'expected one operator manager container'
+compute_controller = [entry for entry in managers[0]['env']
+                      if entry['name'] == 'OSAC_ENABLE_COMPUTE_INSTANCE_CONTROLLER']
+assert len(compute_controller) == 1 and compute_controller[0].get('value') == 'false', \
+    'CaaS CI without KubeVirt must disable the ComputeInstance controller'
+ignition_trust = [entry for entry in managers[0]['env']
+                  if entry['name'] == 'OSAC_IGNITION_TRUST_INGRESS_CA']
+assert len(ignition_trust) == 1 and ignition_trust[0].get('value') == 'true', \
+    'CaaS CI must trust the OpenShift ingress CA for Assisted Service discovery ignition'
+ingress_ca_rules = [rule for rule in resource('ClusterRole', 'osac-operator-manager')['rules']
+                    if rule.get('apiGroups') == [''] and rule.get('resources') == ['configmaps']
+                    and rule.get('resourceNames') == ['default-ingress-cert']]
+assert len(ingress_ca_rules) == 1 and ingress_ca_rules[0].get('verbs') == ['get'], \
+    'CaaS CI must grant read-only access to the cluster-managed ingress CA bundle'
 PY
 
-# A CUDN profile without CaaS, with wrong AAP pairing, a conflicting class,
-# or without registered manager must fail before any deployable render.
-for name in cudn-without-caas cudn-wrong-steps cudn-wrong-class cudn-disabled-manager cudn-k8s-conflict cudn-operatorless-openshift cudn-operatorless-kind; do
+# caas-ci guards: a conflicting fabric class, disabled network managers,
+# or a conflicting global fabricManager must fail against the chart-default
+# k8s_only manager inherited by the CaaS CI profile.
+for name in k8s-only-wrong-class k8s-only-disabled-managers k8s-only-conflicting-fabric; do
   case "${name}" in
-    cudn-without-caas) overrides=(--set global.services.caas.enabled=false) ;;
-    cudn-wrong-steps) overrides=(--set-string aap.instanceGroups.clusterFulfillment.config.NETWORK_STEPS_COLLECTION=agentless_net.steps) ;;
-    cudn-wrong-class) overrides=(--set global.networking.networkClass.fabricManager=netris) ;;
-    cudn-disabled-manager) overrides=(--set operator.networkManagers.fabricManagers.cudn_net.enabled=false) ;;
-    cudn-k8s-conflict) overrides=(--set global.networking.k8sManager=k8s_only) ;;
-    cudn-operatorless-openshift) overrides=(--set operator.enabled=false --set aap.aap.instance.enabled=false --set aap.bootstrap.enabled=false) ;;
-    cudn-operatorless-kind) overrides=(--set service.variant=kind --set hubAccess.enabled=true --set operator.enabled=false --set aap.aap.instance.enabled=false --set aap.bootstrap.enabled=false) ;;
+    k8s-only-wrong-class) overrides=(--set global.networking.networkClass.fabricManager=netris) ;;
+    k8s-only-disabled-managers) overrides=(--set operator.networkManagers.enabled=false) ;;
+    k8s-only-conflicting-fabric) overrides=(--set global.networking.fabricManager=netris) ;;
   esac
   render_failure "${name}" \
     --values "${SCRIPT_DIR}/../values/caas-ci/instance.yaml" \

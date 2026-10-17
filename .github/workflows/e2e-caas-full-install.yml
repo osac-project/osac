@@ -263,11 +263,13 @@ jobs:
       test-repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
       test-ref: ${{ github.event.pull_request.head.sha || github.sha }}
       notify-on-failure: ${{ github.event_name == 'schedule' }}
-      # CaaS-specific inputs (cluster-template, caas-domain, flavor-image,
-      # flavor-name, namespace, etc.) are left at the reusable workflow's own
-      # defaults -- none are required and this caller has no need to override
-      # them today.
-      # Gated on ref, not event type: the real constraint is WIF trust
+      # OSAC-5697: agents are created in the per-cluster
+      # namespace via InfraEnv and approved by
+      # osac.service.cluster_infra, not drawn from a
+      # shared hot pool.
+      caas-agent-flow: cluster-namespace
+      # Gated on ref, not event type: the real constraint
+      # is WIF trust
       # (main branch only), not which event triggered the run. This
       # correctly covers schedule (always main) AND a manual
       # workflow_dispatch run against main (same safe WIF context) --

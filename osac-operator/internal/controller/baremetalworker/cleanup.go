@@ -9,6 +9,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
@@ -17,20 +18,40 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-// cleanupAbsenceGracePeriod bounds how long cleanup retries an
-// unconfirmed BMI absence before accepting it. A Create that was
-// Attempted but whose response was lost will be visible in the
-// fulfillment List well within this window; after it elapses, repeated
-// empty Lists are treated as authoritative absence.
-const cleanupAbsenceGracePeriod = 5 * time.Minute
+const (
+	// cleanupAbsenceGracePeriod is the minimum teardown age before
+	// the first empty-List observation can be recorded. Measured
+	// from the LastFailureTime written at Unbinding entry.
+	cleanupAbsenceGracePeriod = 5 * time.Minute
 
-// cleanupAbsenceExpired reports whether the worker has been in
-// teardown long enough for repeated List absence to be authoritative.
-// LastFailureTime is set when entering Unbinding (worker_teardown.go)
-// and is not modified during cleanup; a nil value means the timestamp
-// was never recorded, so the grace period is not applicable.
-func cleanupAbsenceExpired(w *v1alpha1.WorkerStatus) bool {
-	return w.LastFailureTime != nil &&
+	// cleanupAbsenceConfirmWindow is the minimum separation between
+	// the first and second successful empty-List observations. A
+	// BMI whose accepted Create had delayed List visibility will
+	// appear within this window after the first observation.
+	cleanupAbsenceConfirmWindow = 1 * time.Minute
+
+	// eventReasonBMIAbsenceObserved marks that recoverCleanupBMI
+	// recorded a first successful empty-List observation after the
+	// grace period. Persisted in LastFailureReason so the second
+	// observation on a later reconcile can confirm the absence.
+	eventReasonBMIAbsenceObserved = "BMIAbsenceObserved"
+)
+
+// cleanupAbsenceConfirmed reports whether a prior first-observation
+// was recorded AND enough time has elapsed since it for a second
+// empty List to be authoritative.
+func cleanupAbsenceConfirmed(w *v1alpha1.WorkerStatus) bool {
+	return w.LastFailureReason == eventReasonBMIAbsenceObserved &&
+		w.LastFailureTime != nil &&
+		time.Since(w.LastFailureTime.Time) > cleanupAbsenceConfirmWindow
+}
+
+// cleanupAbsenceEligible reports whether the worker has been in
+// teardown long enough to record the first empty-List observation.
+// Returns true only before the first observation has been recorded.
+func cleanupAbsenceEligible(w *v1alpha1.WorkerStatus) bool {
+	return w.LastFailureReason != eventReasonBMIAbsenceObserved &&
+		w.LastFailureTime != nil &&
 		time.Since(w.LastFailureTime.Time) > cleanupAbsenceGracePeriod
 }
 
@@ -109,15 +130,30 @@ func (r *Reconciler) recoverCleanupBMI(ctx context.Context, co *v1alpha1.Cluster
 		return r.rejectWorkerIdentity(co, err.Error())
 	}
 	if bmi == nil {
-		if cleanupAbsenceExpired(w) {
+		if cleanupAbsenceConfirmed(w) {
 			ctrllog.FromContext(ctx).Info(
-				"accepting BMI absence after grace period",
+				"accepting BMI absence after two observations",
 				"worker", w.Name,
-				"gracePeriod", cleanupAbsenceGracePeriod,
 			)
 			return nil
 		}
-		return fmt.Errorf("worker %s BMI reservation absence is unconfirmed", w.Name)
+		if cleanupAbsenceEligible(w) {
+			now := metav1.Now()
+			w.LastFailureTime = &now
+			w.LastFailureReason = eventReasonBMIAbsenceObserved
+			w.LastFailureMessage = fmt.Sprintf(
+				"first empty List recorded at %s",
+				now.UTC().Format(time.RFC3339),
+			)
+			ctrllog.FromContext(ctx).Info(
+				"recorded first BMI absence observation",
+				"worker", w.Name,
+			)
+		}
+		return fmt.Errorf(
+			"worker %s BMI reservation absence is unconfirmed",
+			w.Name,
+		)
 	}
 	candidate := *w
 	candidate.BareMetalInstance.ID = bmi.GetId()

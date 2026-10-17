@@ -10,6 +10,7 @@ failure in run 39040205073).
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from unittest.mock import Mock, patch
 
@@ -18,6 +19,7 @@ import pytest
 from tests.e2e.core import runner
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.k8s_client import K8sClient
+from tests.e2e.references import conftest as ref_conftest
 from tests.e2e.references.conftest import _safe_delete_sg, _safe_delete_subnet, _safe_delete_vn
 
 
@@ -154,13 +156,39 @@ def test_safe_delete_sg_still_attempts_delete() -> None:
 
 
 @pytest.mark.usefixtures("_no_sleep")
-def test_safe_delete_subnet_notfound_skips_wait() -> None:
-    """When gRPC returns NotFound, the wait should still run
-    (resource might exist in K8s but not gRPC)."""
+def test_safe_delete_subnet_notfound_still_waits_for_cr() -> None:
+    """When gRPC returns NotFound the CR may still exist in
+    K8s, so the deletion wait must still run."""
     grpc = Mock(spec=GRPCClient)
     grpc.delete_subnet.side_effect = subprocess.CalledProcessError(returncode=1, cmd="grpcurl", stderr="Code: NotFound")
     k8s = Mock(spec=K8sClient)
-    k8s.is_present.return_value = False
+    k8s.is_present.return_value = True
 
-    # Must not raise
-    _safe_delete_subnet(grpc, k8s, subnet_id="sub-nf", subnet_cr_name="sub-cr-nf")
+    with patch("tests.e2e.references.conftest.wait_for_subnet_deletion") as mock_wait:
+        _safe_delete_subnet(grpc, k8s, subnet_id="sub-nf", subnet_cr_name="sub-cr-nf")
+
+    mock_wait.assert_called_once_with(k8s=k8s, name="sub-cr-nf")
+
+
+# -- Warning logs must not include exception text -------------------
+
+
+@pytest.mark.usefixtures("_no_sleep")
+def test_safe_delete_warnings_do_not_log_exception_text(caplog: pytest.LogCaptureFixture) -> None:
+    """Teardown warnings must log the exception type, not the
+    raw message, so that sensitive API data stays out of CI
+    logs."""
+    secret_msg = "secret-api-response-payload"
+    grpc = Mock(spec=GRPCClient)
+    k8s = Mock(spec=K8sClient)
+    k8s.is_present.return_value = True
+
+    with (
+        caplog.at_level(logging.WARNING, logger=ref_conftest.logger.name),
+        patch("tests.e2e.references.conftest.wait_for_virtual_network_deletion", side_effect=TimeoutError(secret_msg)),
+        patch("tests.e2e.references.conftest._cleanup_child_nat_gateways"),
+    ):
+        _safe_delete_vn(grpc, k8s, vn_id="vn-s", vn_cr_name="vn-cr-s")
+
+    assert "TimeoutError" in caplog.text
+    assert secret_msg not in caplog.text

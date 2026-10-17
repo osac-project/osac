@@ -116,6 +116,9 @@ type ServerDeps struct {
 	SubnetsClient                     publicv1.SubnetsClient
 	SecurityGroupsClient              publicv1.SecurityGroupsClient
 	ComputeInstancesClient            publicv1.ComputeInstancesClient
+	ProjectsClient                    publicv1.ProjectsClient
+	SecretsClient                     publicv1.SecretsClient
+	SelfSubjectAccessReviewsClient    publicv1.SelfSubjectAccessReviewsClient
 }
 
 // NewServerDeps creates the public API clients used by the MCP server. All
@@ -131,6 +134,9 @@ func NewServerDeps(conn grpc.ClientConnInterface) ServerDeps {
 		SubnetsClient:                     publicv1.NewSubnetsClient(conn),
 		SecurityGroupsClient:              publicv1.NewSecurityGroupsClient(conn),
 		ComputeInstancesClient:            publicv1.NewComputeInstancesClient(conn),
+		ProjectsClient:                    publicv1.NewProjectsClient(conn),
+		SecretsClient:                     publicv1.NewSecretsClient(conn),
+		SelfSubjectAccessReviewsClient:    publicv1.NewSelfSubjectAccessReviewsClient(conn),
 	}
 }
 
@@ -327,9 +333,9 @@ func canonicalMCPResourceURL(resourceURL string) (string, error) {
 }
 
 // newServer creates the MCP server and registers its tools.
-func newServer(deps ServerDeps) *mcp.Server {
+func newServer(deps ServerDeps, endpoint string) *mcp.Server {
 	resources := newResourceRegistry(deps)
-	resourceTypes := resources.resourceTypes()
+	listResourceTypes := resources.listResourceTypes()
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "osac-deployment-mcp",
 		Version: version.Get(),
@@ -337,10 +343,23 @@ func newServer(deps ServerDeps) *mcp.Server {
 		Instructions: serverInstructions,
 	})
 	mcp.AddTool(server, &mcp.Tool{
+		Name:        "check_connection",
+		Description: "Use this tool to verify the signed-in caller's MCP and OSAC access without creating or changing a resource.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Check OSAC MCP connection",
+			ReadOnlyHint:    true,
+			DestructiveHint: toolAnnotationBool(false),
+			IdempotentHint:  true,
+			OpenWorldHint:   toolAnnotationBool(true),
+		},
+		InputSchema:  compatibleToolSchema[CheckConnectionInput](),
+		OutputSchema: compatibleToolSchema[CheckConnectionOutput](),
+	}, handleCheckConnection(endpoint, resources, deps.SelfSubjectAccessReviewsClient))
+	mcp.AddTool(server, &mcp.Tool{
 		Name: "list_resources",
 		Description: "Use this tool to discover or compare tenant-visible OSAC deployment options and existing compute instances. " +
 			"resource_type must be one of: " +
-			supportedResourceTypesDescription(resourceTypes) + ".",
+			supportedResourceTypesDescription(listResourceTypes) + ".",
 		Annotations: &mcp.ToolAnnotations{
 			Title:           "List OSAC deployment resources",
 			ReadOnlyHint:    true,
@@ -348,14 +367,14 @@ func newServer(deps ServerDeps) *mcp.Server {
 			IdempotentHint:  true,
 			OpenWorldHint:   toolAnnotationBool(true),
 		},
-		InputSchema:  resourceToolSchema[ListResourcesInput](resourceTypes),
+		InputSchema:  resourceToolSchema[ListResourcesInput](listResourceTypes),
 		OutputSchema: compatibleToolSchema[ListResourcesOutput](),
 	}, handleListResources(resources))
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "get_resource",
 		Description: "Use this tool to inspect one selected resource, verify catalog or reference details, or report current compute instance state. " +
-			"resource_type must be one of: " +
-			supportedResourceTypesDescription(resourceTypes) + ".",
+			"resource_type must be one of: " + supportedResourceTypesDescription(listResourceTypes) +
+			". secret_reference is list-only and is rejected by this tool.",
 		Annotations: &mcp.ToolAnnotations{
 			Title:           "Get OSAC deployment resource",
 			ReadOnlyHint:    true,
@@ -363,7 +382,7 @@ func newServer(deps ServerDeps) *mcp.Server {
 			IdempotentHint:  true,
 			OpenWorldHint:   toolAnnotationBool(true),
 		},
-		InputSchema:  resourceToolSchema[GetResourceInput](resourceTypes),
+		InputSchema:  resourceToolSchema[GetResourceInput](listResourceTypes),
 		OutputSchema: compatibleToolSchema[GetResourceOutput](),
 	}, handleGetResource(resources))
 	mcp.AddTool(server, &mcp.Tool{
@@ -510,7 +529,7 @@ func NewHandler(
 			return nil, fmt.Errorf("'--oauth-resource-url': %w", err)
 		}
 	}
-	server := newServer(deps)
+	server := newServer(deps, oauthResourceURL)
 	streamableHandler := mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return server },
 		&mcp.StreamableHTTPOptions{
@@ -552,20 +571,23 @@ func newTokenVerifier(validator auth.JwtValidator, exchanger TokenExchanger) sdk
 		if err != nil {
 			return nil, fmt.Errorf("%w: %w", sdkauth.ErrInvalidToken, err)
 		}
-		subject, err := parsed.Claims.GetSubject()
-		if err != nil || subject == "" {
-			return nil, fmt.Errorf("%w: token has no subject claim", sdkauth.ErrInvalidToken)
+		caller, err := safeCallerContextFromToken(parsed)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", sdkauth.ErrInvalidToken, err)
 		}
 		expiration, err := parsed.Claims.GetExpirationTime()
 		if err != nil || expiration == nil {
 			return nil, fmt.Errorf("%w: token has no expiration claim", sdkauth.ErrInvalidToken)
 		}
 		return &sdkauth.TokenInfo{
-			UserID:     subject,
+			UserID:     caller.Subject,
 			Expiration: expiration.Time,
-			Extra: map[string]any{exchangeTokenExtraKey: apiTokenSource(func(ctx context.Context) (string, error) {
-				return exchanger.Exchange(ctx, token, parsed)
-			})},
+			Extra: map[string]any{
+				callerContextExtraKey: caller,
+				exchangeTokenExtraKey: apiTokenSource(func(ctx context.Context) (string, error) {
+					return exchanger.Exchange(ctx, token, parsed)
+				}),
+			},
 		}, nil
 	}
 }
@@ -573,18 +595,18 @@ func newTokenVerifier(validator auth.JwtValidator, exchanger TokenExchanger) sdk
 // forwardAPIToken exchanges the caller's MCP token once for this tool call and attaches only the API token.
 func forwardAPIToken(ctx context.Context, req *mcp.CallToolRequest) (context.Context, error) {
 	if req == nil || req.Extra == nil || req.Extra.TokenInfo == nil {
-		return nil, errors.New("MCP caller token is missing")
+		return nil, safeTokenExchangeError(errors.New("MCP caller token is missing"))
 	}
 	source, ok := req.Extra.TokenInfo.Extra[exchangeTokenExtraKey].(apiTokenSource)
 	if !ok || source == nil {
-		return nil, errors.New("MCP caller token exchange is unavailable")
+		return nil, safeTokenExchangeError(errors.New("MCP caller token exchange is unavailable"))
 	}
 	apiToken, err := source(ctx)
 	if err != nil {
-		return nil, err
+		return nil, safeTokenExchangeError(err)
 	}
 	if apiToken == "" {
-		return nil, errors.New("OAuth token exchange returned no API token")
+		return nil, safeTokenExchangeError(errors.New("OAuth token exchange returned no API token"))
 	}
 	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+apiToken), nil
 }

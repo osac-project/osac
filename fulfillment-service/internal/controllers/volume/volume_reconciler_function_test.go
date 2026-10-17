@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -60,6 +61,15 @@ func newVolumeCR(id, namespace, name string, deletionTimestamp *metav1.Time) *os
 
 func hasFinalizer(volume *privatev1.Volume) bool {
 	return slices.Contains(volume.GetMetadata().GetFinalizers(), finalizers.Controller)
+}
+
+func expectDeletionRetry(err error) {
+	var retryable interface{ RequeueAfter() time.Duration }
+	Expect(errors.As(err, &retryable)).To(BeTrue())
+	Expect(retryable.RequeueAfter()).To(Equal(time.Second))
+	var backoff interface{ UseExponentialBackoff() bool }
+	Expect(errors.As(err, &backoff)).To(BeTrue())
+	Expect(backoff.UseExponentialBackoff()).To(BeFalse())
 }
 
 func newTaskForDelete(volumeID, hubID string, hubCache controllers.HubCache) *task {
@@ -563,7 +573,7 @@ var _ = Describe("delete", func() {
 		Expect(hasFinalizer(t.volume)).To(BeFalse())
 	})
 
-	It("calls hubClient.Delete when K8s object exists without DeletionTimestamp", func() {
+	It("requests deletion and requeues while the K8s object exists without DeletionTimestamp", func() {
 		cr := newVolumeCR(volumeID, hubNamespace, crName, nil)
 
 		scheme := runtime.NewScheme()
@@ -592,12 +602,12 @@ var _ = Describe("delete", func() {
 		t := newTaskForDelete(volumeID, hubID, hubCache)
 
 		err := t.delete(ctx)
-		Expect(err).ToNot(HaveOccurred())
+		expectDeletionRetry(err)
 		Expect(deleteCalled).To(BeTrue())
 		Expect(hasFinalizer(t.volume)).To(BeTrue())
 	})
 
-	It("does not call hubClient.Delete when K8s object has DeletionTimestamp", func() {
+	It("requeues while the K8s object has DeletionTimestamp", func() {
 		now := metav1.Now()
 		cr := newVolumeCR(volumeID, hubNamespace, crName, &now)
 
@@ -627,7 +637,7 @@ var _ = Describe("delete", func() {
 		t := newTaskForDelete(volumeID, hubID, hubCache)
 
 		err := t.delete(ctx)
-		Expect(err).ToNot(HaveOccurred())
+		expectDeletionRetry(err)
 		Expect(deleteCalled).To(BeFalse())
 		Expect(hasFinalizer(t.volume)).To(BeTrue())
 	})

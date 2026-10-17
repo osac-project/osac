@@ -36,6 +36,8 @@ const (
 	ResourceTypeSubnet                     ResourceType = "subnet"
 	ResourceTypeSecurityGroup              ResourceType = "security_group"
 	ResourceTypeComputeInstance            ResourceType = "compute_instance"
+	ResourceTypeProject                    ResourceType = "project"
+	ResourceTypeSecretReference            ResourceType = "secret_reference"
 )
 
 type ListResourcesInput struct {
@@ -51,6 +53,7 @@ type ResourceSummary struct {
 	Title       string `json:"title,omitempty"`
 	Description string `json:"description,omitempty"`
 	State       string `json:"state,omitempty"`
+	Type        string `json:"type,omitempty"`
 }
 
 type ListResourcesOutput struct {
@@ -75,7 +78,7 @@ func handleListResources(resources resourceRegistry) mcp.ToolHandlerFor[ListReso
 	) (*mcp.CallToolResult, ListResourcesOutput, error) {
 		page, err := resourcePage(input)
 		if err != nil {
-			return nil, ListResourcesOutput{}, err
+			return nil, ListResourcesOutput{}, safeInvalidRequestError(err)
 		}
 		operations, ok := resources[input.ResourceType]
 		if !ok {
@@ -103,6 +106,11 @@ func handleGetResource(resources resourceRegistry) mcp.ToolHandlerFor[GetResourc
 		if !ok {
 			return nil, GetResourceOutput{}, unsupportedResourceTypeError(input.ResourceType)
 		}
+		if operations.get == nil {
+			return nil, GetResourceOutput{}, safeInvalidRequestError(fmt.Errorf(
+				"get_resource does not support %s", input.ResourceType,
+			))
+		}
 		ctx, cancel := toolCallContext(ctx)
 		defer cancel()
 		ctx, err := forwardAPIToken(ctx, req)
@@ -115,7 +123,7 @@ func handleGetResource(resources resourceRegistry) mcp.ToolHandlerFor[GetResourc
 		}
 		resource, err := messageToMap(message)
 		if err != nil {
-			return nil, GetResourceOutput{}, fmt.Errorf("failed to encode %s: %w", operations.label, err)
+			return nil, GetResourceOutput{}, safePublicAPIError(fmt.Errorf("failed to encode %s: %w", operations.label, err))
 		}
 		switch input.ResourceType {
 		case ResourceTypeComputeInstance:
@@ -167,7 +175,7 @@ func resourceListOutput(
 }
 
 func unsupportedResourceTypeError(resourceType ResourceType) error {
-	return fmt.Errorf("unsupported resource type %q", resourceType)
+	return safeInvalidRequestError(fmt.Errorf("unsupported resource type %q", resourceType))
 }
 
 func supportedResourceTypesDescription(supportedResourceTypes []ResourceType) string {

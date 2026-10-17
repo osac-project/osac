@@ -360,3 +360,5 @@ Assisted-by: Claude Code <noreply@anthropic.com>"
 # Push to your fork (origin) and open a PR against osac-project/osac:main
 git push origin feat/update-architecture-docs
 ```
+
+<!-- Canary: documentation-only change to check the shared pull request workflows. -->

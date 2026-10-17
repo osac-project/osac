@@ -96,8 +96,9 @@ comes within about a quarter of an hour). Anything else gets a person.
   run and has no line.
 - **The decision and the `E2E` check** (approval, CI result, the wording above), the queue plan and the bot sweep are the
   shared workflows of [osac-project/osac-ci](https://github.com/osac-project/osac-ci); `e2e-pr.yml`, `e2e-queue.yml` and
-  `bot-approve.yml` here are thin callers that keep the triggers and the suite jobs. A member of the organization can start a suite by hand from the comment the decision keeps on the pull request (a
-  checkbox per suite; any approval state, drafts and forks included). The rules they apply are one page:
+  `bot-approve.yml` here are thin callers that keep the triggers and the suite jobs. A member of the organization can start a suite by hand from the comment the decision keeps on a pull request
+  written by a member (a checkbox per suite; any approval state, a draft and a fork of a member included; a pull
+  request by someone outside the organization gets no comment). The rules they apply are one page:
   osac-ci `docs/RULES.md`. The callers pin a full commit of an osac-ci release (the tag in a comment); the Dependabot group
   `osac-ci` opens one pull request per release, reviewed by wg-infra.
 - **Emergency:** setting the repository variable `CI_GATING_ENABLED` to `false` makes `CI` run every part.

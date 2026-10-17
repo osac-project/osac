@@ -194,13 +194,22 @@ jobs:
     if: needs.decide.outputs.approved == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    permissions:
-      contents: write  # enabling auto-merge asks for it
-      pull-requests: write
+    permissions: {}
     steps:
+      # The token of the OSAC CI app, not the workflow's: a pull request queued with the workflow's token starts no
+      # workflow for the queue (GitHub does not run workflows for what that token causes), so it would wait for its
+      # checks for ever.
+      - name: Token of the OSAC CI app
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          app-id: "4966101"
+          private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
+          permission-pull-requests: write
+          permission-contents: write
       - name: Enable auto-merge
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           NUMBER: ${{ needs.decide.outputs.approved-number }}
           HEAD_SHA: ${{ needs.decide.outputs.approved-sha }}

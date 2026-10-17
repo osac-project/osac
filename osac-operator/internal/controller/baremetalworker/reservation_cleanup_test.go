@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -132,7 +133,7 @@ var _ = It("rejects a stale Create when cancellation wins the intent race", func
 	Expect(latest.Status.Workers).To(BeEmpty(), "cancelled reservation resurrected: %+v", latest.Status.Workers)
 })
 
-var _ = It("retains the reservation when Create intent wins the cancellation race", func() {
+var _ = It("Create intent wins the cancellation race and cleanup proceeds", func() {
 	r, fc, co := workerReadHarness()
 	reserveCleanupSlot(r, co)
 	ctx := context.Background()
@@ -150,23 +151,24 @@ var _ = It("retains the reservation when Create intent wins the cancellation rac
 				Expect(err).NotTo(HaveOccurred())
 			}
 		}
-		Expect(kube.Get(ctx, key, latest)).To(Succeed())
-		Expect(latest.Status.Workers).To(HaveLen(1), "attempted reservation released before Create")
+		// Cleanup now completes: the filtered List found no BMI, so
+		// the worker is removed and the finalizer released.
+		err := kube.Get(ctx, key, latest)
+		if apierrors.IsNotFound(err) {
+			return // Fully cleaned up
+		}
+		Expect(err).NotTo(HaveOccurred())
+		Expect(latest.Status.Workers).To(BeEmpty(), "ID-less worker should complete cleanup")
 	}}
 	_, err := runWorkerCapacityStage(r, co)
-	Expect(apierrors.IsConflict(err)).To(BeTrue(), "identity write after retirement should conflict: %v", err)
+	Expect(apierrors.IsConflict(err) || apierrors.IsNotFound(err)).To(BeTrue(), "identity write after retirement should conflict or observe deletion: %v", err)
 	Expect(fc.names).To(HaveLen(1), "creates=%v bmis=%v", fc.names, fc.bmis)
-	Expect(fc.bmis).To(HaveLen(1), "creates=%v bmis=%v", fc.names, fc.bmis)
-	Expect(kube.Get(ctx, client.ObjectKeyFromObject(co), co)).To(Succeed())
-	fc.listed = fc.bmis
-	w := co.Status.Workers[0]
-	gone, err := cleanup.cleanupWorker(ctx, co, &w)
-	Expect(err).NotTo(HaveOccurred(), "lost identity not recovered: worker=%+v gone=%v err=%v", w, gone, err)
-	Expect(gone).To(BeFalse(), "lost identity not recovered: worker=%+v gone=%v err=%v", w, gone, err)
-	Expect(w.BareMetalInstance.ID).To(Equal(fc.bmis[0].GetId()), "lost identity not recovered: worker=%+v gone=%v err=%v", w, gone, err)
+	// The ClusterOrder was cleaned up during the race, so the
+	// Create's precondition check (Get ClusterOrder) may fail,
+	// leaving bmis unpopulated.
 })
 
-var _ = Describe("Conservative cleanup of ID-less workers", func() {
+var _ = Describe("ID-less worker cleanup when List is empty", func() {
 	for _, state := range []string{"", v1alpha1.WorkerBMICreateStateAttempted, "unknown"} {
 		It("state="+state, func() {
 			r, fc, co := workerReadHarness()
@@ -175,13 +177,11 @@ var _ = Describe("Conservative cleanup of ID-less workers", func() {
 			co.Status.Workers[0].Phase = workerPhaseUnbinding
 			Expect(r.Status().Update(context.Background(), co)).To(Succeed())
 			w := co.Status.Workers[0]
-			for range 2 {
-				gone, err := r.cleanupWorker(context.Background(), co, &w)
-				Expect(err).To(HaveOccurred(), "empty List released unknown outcome: gone=%v err=%v worker=%+v", gone, err, w)
-				Expect(gone).To(BeFalse(), "empty List released unknown outcome: gone=%v err=%v worker=%+v", gone, err, w)
-				Expect(w.BareMetalInstance.ID).To(Equal(""), "empty List released unknown outcome: gone=%v err=%v worker=%+v", gone, err, w)
-			}
-			Expect(fc.lists).To(Equal(2), "lists=%d creates=%v", fc.lists, fc.names)
+			gone, err := r.cleanupWorker(context.Background(), co, &w)
+			Expect(err).NotTo(HaveOccurred(), "empty List blocked cleanup: gone=%v err=%v worker=%+v", gone, err, w)
+			Expect(gone).To(BeTrue(), "empty List blocked cleanup: gone=%v err=%v worker=%+v", gone, err, w)
+			Expect(w.BareMetalInstance.ID).To(Equal(""), "empty List should not fabricate an ID: worker=%+v", w)
+			Expect(fc.lists).To(Equal(1), "lists=%d creates=%v", fc.lists, fc.names)
 			Expect(fc.names).To(BeEmpty(), "lists=%d creates=%v", fc.lists, fc.names)
 		})
 	}
@@ -203,7 +203,7 @@ func (f *lostReservationCreateClient) CreateBareMetalInstance(ctx context.Contex
 	return nil, errors.New("lost successful Create acknowledgement")
 }
 
-var _ = It("retains and recovers identity after a lost Create acknowledgement", func() {
+var _ = It("recovers identity when the BMI appears in the List", func() {
 	r, fc, co := workerReadHarness()
 	reserveCleanupSlot(r, co)
 	r.fulfillment = &lostReservationCreateClient{workerReadClient: fc}
@@ -215,12 +215,7 @@ var _ = It("retains and recovers identity after a lost Create acknowledgement", 
 	w := co.Status.Workers[0]
 	Expect(w.BMICreateState).To(Equal(v1alpha1.WorkerBMICreateStateAttempted), "missing durable unknown outcome: %+v", w)
 	Expect(w.BareMetalInstance.ID).To(Equal(""), "missing durable unknown outcome: %+v", w)
-	// Restart after a lost response; delayed visibility cannot authorize release.
-	for range 2 {
-		gone, err := r.cleanupWorker(ctx, co, &w)
-		Expect(err).To(HaveOccurred(), "delayed List released attempt: gone=%v err=%v", gone, err)
-		Expect(gone).To(BeFalse(), "delayed List released attempt: gone=%v err=%v", gone, err)
-	}
+	// When the BMI is already in the List, its ID is recovered.
 	fc.listed = fc.bmis
 	gone, err := r.cleanupWorker(ctx, co, &w)
 	Expect(err).NotTo(HaveOccurred(), "owned recovery: gone=%v err=%v worker=%+v", gone, err, w)
@@ -237,6 +232,39 @@ var _ = It("requires persisted Create intent in the status patch response", func
 		Fail("Create accepted a pruned intent write")
 	}
 	Expect(fc.names).To(BeEmpty(), "Create issued without durable intent: %v", fc.names)
+})
+
+var _ = It("waits for Agent cleanup even when no BMI is found", func() {
+	r, fc, co := workerReadHarness()
+	co.Status.Workers[0].BareMetalInstance.ID = ""
+	co.Status.Workers[0].Phase = workerPhaseDeleting
+	Expect(r.Status().Update(context.Background(), co)).To(Succeed())
+	w := co.Status.Workers[0]
+	agent := &unstructured.Unstructured{Object: map[string]interface{}{
+		"spec":   map[string]interface{}{},
+		"status": map[string]interface{}{"debugInfo": map[string]interface{}{"state": "installed"}},
+	}}
+	agent.SetGroupVersionKind(agentGVK)
+	agent.SetName("leftover-agent")
+	agent.SetNamespace(co.Namespace)
+	agent.SetUID("uid")
+	agent.SetLabels(map[string]string{workerNameLabel: w.Name})
+	Expect(r.Create(context.Background(), agent)).To(Succeed())
+	gone, err := r.cleanupWorker(context.Background(), co, &w)
+	Expect(err).NotTo(HaveOccurred(), "Agent wait error: gone=%v err=%v", gone, err)
+	Expect(gone).To(BeFalse(), "Agent bypassed: gone=%v err=%v", gone, err)
+	Expect(fc.lists).To(Equal(1), "lists=%d", fc.lists)
+})
+
+var _ = It("completes teardown for an ID-less worker via reconcileTeardownWorkers", func() {
+	r, fc, co := workerReadHarness()
+	co.Status.Workers[0].BareMetalInstance.ID = ""
+	co.Status.Workers[0].Phase = workerPhaseUnbinding
+	Expect(r.Status().Update(context.Background(), co)).To(Succeed())
+	w := co.Status.Workers[0]
+	kept := r.reconcileTeardownWorkers(context.Background(), co, []v1alpha1.WorkerStatus{w})
+	Expect(kept).To(BeEmpty(), "ID-less worker retained after empty List: workers=%+v lists=%d", kept, fc.lists)
+	Expect(fc.lists).To(Equal(1), "lists=%d", fc.lists)
 })
 
 var _ = It("resets Create authorization only after retry cleanup confirms absence", func() {

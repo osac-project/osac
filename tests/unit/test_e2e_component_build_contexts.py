@@ -20,8 +20,12 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github/workflows"
 RESOLVER = ROOT / ".github/actions/resolve-e2e-components/action.yaml"
+_RESOLVER_SOURCE = f"{RESOLVER.parent.name}/{RESOLVER.name}"
 
-# Containerfile instructions continued onto the next line, and `#` comment lines.
+# A whole-line Containerfile comment, and an instruction continued onto the next line. Comments
+# are dropped before continuations are joined, which is the order the builder itself uses: a
+# comment line inside a continuation is removed rather than ending the instruction.
+_COMMENT = re.compile(r"^[ \t]*#.*\n?", re.MULTILINE)
 _CONTINUED = re.compile(r"\\\s*\n")
 _COPY = re.compile(r"^\s*COPY\s+(?P<arguments>\S.*)$", re.IGNORECASE)
 # The resolver builds its list inside a jq program. Both of its arrays are flat (no nested
@@ -40,24 +44,27 @@ class Declaration(NamedTuple):
         return f"{self.source}:{self.containerfile}(context={self.context})"
 
 
-def _context_of(entry: dict) -> str:
+def _context_of(entry: dict, containerfile: str) -> str:
     # Matches the reusable workflow: an omitted context defaults to the Containerfile's
     # own parent directory, so only an explicit context can widen or narrow it.
     context = entry.get("context")
     if context:
         return str(context)
-    parent = Path(str(entry["containerfile"])).parent
+    parent = Path(containerfile).parent
     return "." if parent == Path() else str(parent)
 
 
 def _entries(source: str, raw_entries: list[dict]) -> list[Declaration]:
-    return [
-        Declaration(source, str(entry["containerfile"]), _context_of(entry))
-        for entry in raw_entries
+    declarations: list[Declaration] = []
+    for entry in raw_entries:
         # `ansible-builder` entries name an execution-environment.yaml and are built from a
         # generated context, so they have no Containerfile of their own to check here.
-        if entry.get("buildType", "containerfile") == "containerfile"
-    ]
+        if entry.get("buildType", "containerfile") != "containerfile":
+            continue
+        # The same default the reusable workflow applies to a missing `containerfile`.
+        containerfile = str(entry.get("containerfile", "Containerfile"))
+        declarations.append(Declaration(source, containerfile, _context_of(entry, containerfile)))
+    return declarations
 
 
 def _workflow_declarations() -> list[Declaration]:
@@ -77,7 +84,7 @@ def _resolver_declarations() -> list[Declaration]:
     declarations: list[Declaration] = []
     for array in _JQ_ARRAY.findall(script):
         literal = array.replace("$repo", '"repo"').replace("$ref", '"ref"')
-        declarations += _entries(RESOLVER.name, json.loads(literal))
+        declarations += _entries(_RESOLVER_SOURCE, json.loads(literal))
     return declarations
 
 
@@ -88,11 +95,13 @@ def _declarations() -> list[Declaration]:
 def _copy_sources(containerfile: Path) -> list[str]:
     """Return the build-context paths a Containerfile copies, ignoring earlier build stages."""
     sources: list[str] = []
-    for line in _CONTINUED.sub(" ", containerfile.read_text()).splitlines():
+    text = _CONTINUED.sub(" ", _COMMENT.sub("", containerfile.read_text()))
+    for line in text.splitlines():
         match = _COPY.match(line)
         if not match:
             continue
-        arguments = match.group("arguments").split("#", 1)[0].split()
+        arguments = match.group("arguments").split()
+        assert not arguments[0].startswith("["), f"{containerfile}: COPY exec form is not parsed here"
         if any(argument.startswith("--from=") for argument in arguments):
             continue
         operands = [argument for argument in arguments if not argument.startswith("--")]
@@ -121,10 +130,16 @@ def test_copy_sources_are_inside_the_declared_context(declaration: Declaration) 
 
 def test_every_declaration_site_is_covered() -> None:
     # Guards the parsing above: a declaration site that stops being read would otherwise turn
-    # this file into a silent no-op instead of a failure.
-    expected = {path.name for path in WORKFLOWS.glob("e2e-*-full-install.yml")} | {RESOLVER.name}
-    assert expected, "No E2E component declaration sites were found"
-    assert {declaration.source for declaration in DECLARATIONS} == expected
+    # this file into a silent no-op instead of a failure. Only callers that actually declare
+    # components are required to contribute, so adding a caller without them is not a failure.
+    callers = {
+        path.name
+        for path in WORKFLOWS.glob("e2e-*-full-install.yml")
+        for job in yaml.safe_load(path.read_text())["jobs"].values()
+        if job.get("with", {}).get("components")
+    }
+    assert callers, "No e2e-*-full-install.yml caller declares components"
+    assert {declaration.source for declaration in DECLARATIONS} == callers | {_RESOLVER_SOURCE}
 
 
 def test_echo_adapter_builds_from_the_repository_root() -> None:

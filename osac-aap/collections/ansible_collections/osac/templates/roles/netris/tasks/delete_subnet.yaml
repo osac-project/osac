@@ -16,6 +16,15 @@
   vars:
     vnet_name: "{{ subnet_name }}"
 
+- name: Delete the reserved EVPN fabric IPAM subnet
+  ansible.builtin.include_role:
+    name: netris.controller.ipam
+    tasks_from: delete_subnet
+  vars:
+    ipam_name: "{{ subnet_name }}-fabric"
+  when: >-
+    (subnet.metadata.annotations | default({})).get('osac.openshift.io/k8s-cleanup-strategy', '') == 'cudn_evpn'
+
 - name: Delete IPAM subnet from Netris controller
   ansible.builtin.include_role:
     name: netris.controller.ipam

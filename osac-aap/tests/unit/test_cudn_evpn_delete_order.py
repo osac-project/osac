@@ -34,6 +34,20 @@ def _delete_tasks() -> list[dict]:
     return _flatten_tasks(_raw_delete_tasks())
 
 
+def _flatten_values(values):
+    for value in values:
+        if isinstance(value, (list, tuple)):
+            yield from _flatten_values(value)
+        else:
+            yield value
+
+
+def _compile_expression(expression: str):
+    environment = Environment()
+    environment.filters["flatten"] = lambda values: list(_flatten_values(values))
+    return environment.compile_expression(expression.removeprefix("{{").removesuffix("}}").strip())
+
+
 def test_cudn_is_deleted_and_fully_absent_before_namespace_cleanup() -> None:
     tasks = _delete_tasks()
     task_names = [task.get("name") for task in tasks]
@@ -202,20 +216,24 @@ def test_bare_fabric_only_sibling_is_not_a_live_cudn_consumer() -> None:
     live_siblings = list(initialize_expression)
     assert live_siblings == []
 
-    reference_task = next(
-        task for task in tasks if task.get("name") == "Identify sibling Subnets referenced by ComputeInstances"
+    extract_task = next(
+        task for task in tasks if task.get("name") == "Extract Subnet references from ComputeInstances"
     )
-    append_expression = Environment().compile_expression(
-        reference_task["ansible.builtin.set_fact"]["cudn_evpn_live_siblings"]
-        .removeprefix("{{")
-        .removesuffix("}}")
-        .strip()
+    extract_expression = _compile_expression(
+        extract_task["ansible.builtin.set_fact"]["_compute_instance_subnet_refs"]
+    )
+    subnet_refs = extract_expression(_compute_instance_lookup={"resources": []})
+    preserve_task = next(
+        task for task in tasks if task.get("name") == "Preserve sibling Subnets referenced by ComputeInstances"
+    )
+    append_expression = _compile_expression(
+        preserve_task["ansible.builtin.set_fact"]["cudn_evpn_live_siblings"]
     )
     bare_fabric_only = {"metadata": {"name": "fabric-only-successor"}}
     live_siblings = append_expression(
         cudn_evpn_live_siblings=live_siblings,
         cudn_evpn_sibling_subnets=[bare_fabric_only],
-        _compute_instance_subnet_refs=[],
+        _compute_instance_subnet_refs=subnet_refs,
     )
     assert live_siblings == []
 
@@ -245,10 +263,10 @@ def test_bare_fabric_only_sibling_is_not_a_live_cudn_consumer() -> None:
     lookup = namespace_lookup["kubernetes.core.k8s_info"]
     assert lookup["kind"] == "Namespace"
     assert lookup["name"] == "{{ item.metadata.name }}"
-    reference_task = next(
-        task for task in tasks if task.get("name") == "Identify sibling Subnets referenced by ComputeInstances"
+    preserve_task = next(
+        task for task in tasks if task.get("name") == "Preserve sibling Subnets referenced by ComputeInstances"
     )
-    expression = reference_task["ansible.builtin.set_fact"]["cudn_evpn_live_siblings"]
+    expression = preserve_task["ansible.builtin.set_fact"]["cudn_evpn_live_siblings"]
     select_referenced = Environment().compile_expression(expression.removeprefix("{{").removesuffix("}}").strip())
     siblings = [
         {"metadata": {"name": "active"}},
@@ -272,12 +290,38 @@ def test_compute_instance_references_are_considered_for_any_sibling_state() -> N
     assert lookup["kubernetes.core.k8s_info"]["api_version"] == "osac.openshift.io/v1alpha1"
     assert lookup["kubernetes.core.k8s_info"]["kind"] == "ComputeInstance"
 
-    identify = next(
-        task for task in tasks if task.get("name") == "Identify sibling Subnets referenced by ComputeInstances"
+    extract = next(
+        task for task in tasks if task.get("name") == "Extract Subnet references from ComputeInstances"
     )
-    facts = identify["ansible.builtin.set_fact"]
-    assert "subnetRef" in facts["_compute_instance_subnet_refs"]
-    assert "selectattr('metadata.name', 'in', _compute_instance_subnet_refs)" in facts["cudn_evpn_live_siblings"]
+    preserve = next(
+        task for task in tasks if task.get("name") == "Preserve sibling Subnets referenced by ComputeInstances"
+    )
+    names = [task.get("name") for task in tasks]
+    assert names.index("List ComputeInstances in the management namespace") < names.index(
+        "Extract Subnet references from ComputeInstances"
+    ) < names.index("Preserve sibling Subnets referenced by ComputeInstances")
+
+    extract_expression = _compile_expression(
+        extract["ansible.builtin.set_fact"]["_compute_instance_subnet_refs"]
+    )
+    refs = extract_expression(
+        _compute_instance_lookup={
+            "resources": [
+                {"spec": {"networkAttachments": [{"subnetRef": "active"}, {"subnetRef": "deleting"}]}},
+                {"spec": {"networkAttachments": [{"subnetRef": "active"}]}},
+            ]
+        }
+    )
+    assert refs == ["active", "deleting", "active"]
+
+    preserve_expression = _compile_expression(
+        preserve["ansible.builtin.set_fact"]["cudn_evpn_live_siblings"]
+    )
+    siblings = [{"metadata": {"name": "active"}}, {"metadata": {"name": "deleting"}}]
+    live_siblings = preserve_expression(
+        cudn_evpn_live_siblings=[], cudn_evpn_sibling_subnets=siblings, _compute_instance_subnet_refs=refs
+    )
+    assert live_siblings == siblings
 
 
 def test_resource_deletes_are_idempotent() -> None:

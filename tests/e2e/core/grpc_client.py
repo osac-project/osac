@@ -216,13 +216,18 @@ class GRPCClient:
         return response["object"]["id"]
 
     def update_security_group_rules(
-        self,
-        *,
-        sg_id: str,
-        ingress: list[dict[str, Any]] | None = None,
-        egress: list[dict[str, Any]] | None = None,
+        self, *, sg_id: str, ingress: list[dict[str, Any]] | None = None, egress: list[dict[str, Any]] | None = None
     ) -> dict[str, Any]:
-        spec: dict[str, Any] = {}
+        """GET-merge then privately Update SecurityGroup ingress and/or egress rules."""
+        # Public SecurityGroups/Update was removed (OSAC-5373). Live rule
+        # changes use private Update. GET-merge the stored object so omitted
+        # spec fields, including immutable virtual_network, are not cleared.
+        if ingress is None and egress is None:
+            raise ValueError("update_security_group_rules requires ingress and/or egress")
+        current: dict[str, Any] = self.call(service=f"{PRIVATE_API}.SecurityGroups/Get", data={"id": sg_id})
+        obj = current.get("object")
+        existing: dict[str, Any] = obj if isinstance(obj, dict) else current
+        spec: dict[str, Any] = dict(existing.get("spec") or {})
         paths: list[str] = []
         if ingress is not None:
             spec["ingress"] = ingress
@@ -230,11 +235,12 @@ class GRPCClient:
         if egress is not None:
             spec["egress"] = egress
             paths.append("spec.egress")
-        if not paths:
-            raise ValueError("update_security_group_rules requires ingress and/or egress")
+        payload: dict[str, Any] = {"id": sg_id, "spec": spec}
+        metadata = existing.get("metadata")
+        if isinstance(metadata, dict):
+            payload["metadata"] = metadata
         return self.call(
-            service=f"{PRIVATE_API}.SecurityGroups/Update",
-            data={"object": {"id": sg_id, "spec": spec}, "updateMask": {"paths": paths}},
+            service=f"{PRIVATE_API}.SecurityGroups/Update", data={"object": payload, "updateMask": {"paths": paths}}
         )
 
     # Console operations

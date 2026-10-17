@@ -290,6 +290,10 @@ func (r *Reconciler) createSelectedWorker(
 		}
 		return workerBoundaryRequeue(), nil
 	}
+	// Only a slot this invocation moved out of Reserved is known to carry no
+	// earlier Create. An already-Attempted slot may hold a lost acknowledgement
+	// from a previous attempt, and a later refusal says nothing about that one.
+	fenceWasReserved := prev.BMICreateState == v1alpha1.WorkerBMICreateStateReserved
 	if err := r.recordBMICreateAttempt(ctx, co, prev); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -304,7 +308,7 @@ func (r *Reconciler) createSelectedWorker(
 		}
 	}
 	if err != nil || !res.IsZero() {
-		if err != nil && prev.BareMetalInstance.ID == "" && definitiveCreateRejection(err) {
+		if err != nil && fenceWasReserved && prev.BareMetalInstance.ID == "" && definitiveCreateRejection(err) {
 			if releaseErr := r.releaseRejectedCreateAttempt(ctx, co, prev); releaseErr != nil {
 				return res, errors.Join(err, releaseErr)
 			}
@@ -320,15 +324,21 @@ func (r *Reconciler) createSelectedWorker(
 
 // definitiveCreateRejection reports whether the fulfillment service evaluated
 // this Create request and refused it, so no BareMetalInstance was authorized.
-// Only codes that are decided before any mutation qualify. Transport loss,
+// Only the Create call's own outcome is classified: an error raised while
+// recovering from AlreadyExists carries the List or Get code even though a BMI
+// demonstrably exists, so it must never be read as a refusal. Among Create's
+// own codes only those decided before any mutation qualify. Transport loss,
 // deadlines, caller cancellation, resource exhaustion and server faults stay
-// unknown outcomes, and AlreadyExists means the object does exist; all of them
-// keep the conservative Attempted retention.
+// unknown outcomes and keep the conservative Attempted retention.
 func definitiveCreateRejection(err error) bool {
-	if err == nil || errors.Is(err, ErrFulfillmentServiceUnavailable) {
+	var refused *createRefusedError
+	if !errors.As(err, &refused) {
 		return false
 	}
-	switch status.Code(err) {
+	if errors.Is(refused.err, ErrFulfillmentServiceUnavailable) {
+		return false
+	}
+	switch status.Code(refused.err) {
 	case codes.InvalidArgument, codes.FailedPrecondition, codes.PermissionDenied, codes.Unauthenticated:
 		return true
 	default:

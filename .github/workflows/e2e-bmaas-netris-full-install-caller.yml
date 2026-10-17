@@ -38,7 +38,7 @@ on:
         required: false
         default: ""
       pr-sha:
-        description: "Ignored: the commit is read from the PR"
+        description: "Optional: the commit the run is for. With a PR number the run fails if the PR head is a different commit; empty means the current head"
         required: false
         default: ""
       fork-pr-author-association:
@@ -51,7 +51,7 @@ on:
         default: ""
 
 concurrency:
-  group: e2e-bmaas-netris-full-install-${{ inputs.pr-repository || github.repository }}-${{ inputs.pr-number || github.run_id }}
+  group: e2e-bmaas-netris-full-install-${{ github.repository }}-${{ inputs.pr-number || github.run_id }}
   cancel-in-progress: ${{ inputs.pr-number != '' }}
 
 jobs:
@@ -83,6 +83,7 @@ jobs:
           NUMBER: ${{ inputs.pr-number }}
           TYPED_REPOSITORY: ${{ inputs.pr-repository }}
           TYPED_REF: ${{ inputs.pr-ref }}
+          TYPED_SHA: ${{ inputs.pr-sha }}
           BRANCH: ${{ github.ref_name }}
         run: |
           set -euo pipefail
@@ -98,6 +99,11 @@ jobs:
             [[ -n "${repository}" ]] || { echo "::error::The repository of the pull request's branch no longer exists."; exit 1; }
             ref=$(jq -r '.head.ref' <<<"${pull}")
             sha=$(jq -r '.head.sha' <<<"${pull}")
+            # A commit that was asked for must still be the head: the run tests that commit or none.
+            if [[ -n "${TYPED_SHA}" && "${TYPED_SHA}" != "${sha}" ]]; then
+              echo "::error::The head of PR #${NUMBER} is ${sha}, not the requested ${TYPED_SHA}; refusing to run."
+              exit 1
+            fi
             if [[ "${repository}" != "${REPO}" ]]; then
               fork_author=$(jq -r '.user.login' <<<"${pull}")
               fork_association=$(jq -r '.author_association' <<<"${pull}")

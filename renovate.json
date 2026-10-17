@@ -1,3 +1,10 @@
 {
-  "$schema": "https://docs.renovatebot.com/renovate-schema.json"
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "packageRules": [
+    {
+      "description": "OSAC-4529: limit dependency-update PRs to weekday nights and weekends (UTC) without overriding inherited tekton or lockFileMaintenance schedules",
+      "matchUpdateTypes": ["major", "minor", "patch", "pin", "digest"],
+      "schedule": ["after 10pm and before 6am every weekday", "every weekend"]
+    }
+  ]
 }

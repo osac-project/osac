@@ -1,0 +1,16 @@
+---
+- name: Request mock API server shutdown
+  ansible.builtin.uri:
+    url: "{{ test_mock_url }}/_shutdown"
+    validate_certs: "{{ test_mock_validate_certs | default(true) | bool }}"
+    status_code: 200
+    timeout: 1
+  changed_when: false
+  failed_when: false
+
+- name: Wait for mock API server to stop
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ test_mock_port }}"
+    state: stopped
+    timeout: 5

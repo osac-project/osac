@@ -12,12 +12,7 @@ keywords:
 maintainers:
   - name: OSAC Team
 dependencies:
-  - name: osac-ui
-    version: ">=0.0.0-0"
-    repository: "file://../../../osac-ui/charts/ui"
-    alias: ui
-    condition: ui.enabled
   - name: awx-operator
     version: "2.19.1"
-    repository: "https://ansible-community.github.io/awx-operator-helm/"
+    repository: https://ansible-community.github.io/awx-operator-helm/
     condition: awx.enabled

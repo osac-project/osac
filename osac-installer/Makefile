@@ -5,13 +5,13 @@
 #
 # Usage:
 # Every deployment target requires PLATFORM, PROFILE, and NS. No exceptions.
-#   make install         PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
-#   make uninstall       PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
-#   make install-infra   PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
-#   make install-osac    PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
-#   make uninstall-osac  PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
-#   make uninstall-infra PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
-#   make test            PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac  SUITE=all|fulfillment|operator|bmf
+#   make install         PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
+#   make uninstall       PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
+#   make install-infra   PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
+#   make install-osac    PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
+#   make uninstall-osac  PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
+#   make uninstall-infra PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
+#   make test            PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac  SUITE=all|fulfillment|operator|bmf
 #
 # PROFILE=dev-full (kind only) is a superset of dev: it runs the same chart-based
 # control plane, then layers on the full local dev stack (KubeVirt/CDI/Multus, AWX,
@@ -58,10 +58,10 @@ ifeq ($(filter $(PLATFORM),kind openshift),)
 $(error PLATFORM=$(PLATFORM) is invalid; must be kind or openshift)
 endif
 ifndef PROFILE
-$(error PROFILE is required (dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test))
+$(error PROFILE is required (dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|cudn-evpn-netris-test))
 endif
-ifeq ($(filter $(PROFILE),dev dev-full vmaas-ci bmaas-ci caas-ci full-ci cudn-evpn-netris-test),)
-$(error PROFILE=$(PROFILE) is invalid; must be dev, dev-full, vmaas-ci, bmaas-ci, caas-ci, full-ci, or cudn-evpn-netris-test)
+ifeq ($(filter $(PROFILE),dev dev-full vmaas-ci bmaas-ci bmaas-netbox-ci caas-ci full-ci cudn-evpn-netris-test),)
+$(error PROFILE=$(PROFILE) is invalid; must be dev, dev-full, vmaas-ci, bmaas-ci, bmaas-netbox-ci, caas-ci, full-ci, or cudn-evpn-netris-test)
 endif
 ifndef NS
 $(error NS is required (namespace for OSAC instance, e.g. NS=osac))
@@ -114,10 +114,12 @@ OSAC_CHART     := $(CHARTS)/osac
 # Runtime supplies hostnames and credentials; use the minimal CI fixture for
 # local chart checks without loosening the required-values schema.
 HELM_VALIDATION_VALUES := $(OSAC_CHART)/ci/default-values.yaml
-TOPOLVM_REPO := https://topolvm.github.io/topolvm
-TOPOLVM_VERSION := $(shell awk '/- name: topolvm/ {found=1} found && $$1 == "version:" {print $$2; exit}' $(INFRA_CHART)/Chart.yaml)
-TOPOLVM_CHART := $(INFRA_CHART)/charts/topolvm-$(TOPOLVM_VERSION).tgz
-AWX_OPERATOR_REPO := https://ansible-community.github.io/awx-operator-helm/
+# One archive and repository per external subchart declared in the chart's
+# Chart.yaml; both lists are derived, so adding a dependency to osac-infra or
+# osac-devstack requires no Makefile change.
+INFRA_DEP_ARCHIVES := $(shell awk '/^dependencies:/ {deps = 1; next} deps && /^  - name:/ {dep = $$3} deps && /^    version:/ {gsub(/"/, ""); print "$(INFRA_CHART)/charts/" dep "-" $$2 ".tgz"} deps && /^[^ ]/ {deps = 0}' $(INFRA_CHART)/Chart.yaml)
+INFRA_DEP_REPOS := $(shell awk '/^dependencies:/ {deps = 1; next} deps && /^  - name:/ {dep = $$3} deps && /^    repository:/ {gsub(/"/, ""); if ($$2 ~ /^https/) print dep "=" $$2} deps && /^[^ ]/ {deps = 0}' $(INFRA_CHART)/Chart.yaml)
+DEVSTACK_DEP_REPOS := $(shell awk '/^dependencies:/ {deps = 1; next} deps && /^  - name:/ {dep = $$3} deps && /^    repository:/ {gsub(/"/, ""); if ($$2 ~ /^https/) print dep "=" $$2} deps && /^[^ ]/ {deps = 0}' $(CHARTS)/osac-devstack/Chart.yaml)
 # The osac chart only has local file:// dependencies; ignore user Helm repos.
 LOCAL_HELM_REPOSITORY_CONFIG := /dev/null
 
@@ -139,6 +141,11 @@ INFRA_VALUES_EXTRA := -f values/dev/kind-infra-devfull.yaml
 # Keep the OpenShift LVMS operator off on Kind and enable its TopoLVM CSI path.
 INFRA_HELM_ARGS := --set topolvm.enabled=true --set lvms.enabled=false
 endif
+else ifeq ($(PROFILE),bmaas-netbox-ci)
+INFRA_VALUES         := values/bmaas-ci/infra.yaml
+INFRA_VALUES_EXTRA   := -f values/bmaas-netbox-ci/infra.yaml
+INSTANCE_VALUES      := values/bmaas-ci/instance.yaml
+INSTANCE_VALUES_EXTRA := -f values/bmaas-netbox-ci/instance.yaml
 else ifdef PROFILE
 INFRA_VALUES    := values/$(PROFILE)/infra.yaml
 INSTANCE_VALUES := values/$(PROFILE)/instance.yaml
@@ -266,7 +273,7 @@ kind-load-images: ## Load previously built dev-full images into Kind (PLATFORM=k
 ##@ Entity: Infra
 
 .PHONY: install-infra
-install-infra: helm-topolvm-deps ## Install infrastructure (PLATFORM= PROFILE= NS= required)
+install-infra: helm-infra-deps ## Install infrastructure (PLATFORM= PROFILE= NS= required)
 ifeq ($(PLATFORM),kind)
 ifeq ($(HOST_IS_MAC_ARM),true)
 	@$(KIND_RUNTIME_CMD) check
@@ -327,7 +334,7 @@ else
 	@[ -n "$(DOMAIN)" ] || { echo "ERROR: could not determine cluster domain" >&2; exit 1; }
 	helm upgrade --install osac-infra $(INFRA_CHART) \
 		--namespace osac-infra --create-namespace \
-		--values $(INFRA_VALUES) \
+		--values $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
 		--set osacNamespace=$(NS) \
 		--set lvms.channel=stable-$(OCP_VERSION) \
 		--set keycloak.hostname=https://keycloak-keycloak.$(DOMAIN) \
@@ -533,33 +540,43 @@ helm-deps: ## Build OSAC and devstack Helm chart dependencies
 	helm --repository-config $(LOCAL_HELM_REPOSITORY_CONFIG) dependency build $(OSAC_CHART)
 	$(MAKE) helm-devstack-deps
 
-.PHONY: helm-topolvm-deps
-helm-topolvm-deps: $(TOPOLVM_CHART) ## Download the pinned TopoLVM chart if missing
+.PHONY: helm-infra-deps
+helm-infra-deps: $(INFRA_DEP_ARCHIVES) ## Vendor the osac-infra chart dependencies
 
-$(TOPOLVM_CHART):
-	helm repo add topolvm $(TOPOLVM_REPO) --force-update
+# One rule for every archive: `helm dependency build` vendors all declared
+# dependencies in a single pass, so any missing archive triggers a full build.
+# Repositories are registered from Chart.yaml so helm's lock-based resolution
+# can find them on rebuilds.
+ifneq ($(INFRA_DEP_ARCHIVES),)
+$(INFRA_DEP_ARCHIVES):
+	@for repo in $(INFRA_DEP_REPOS); do \
+		helm repo add "$${repo%%=*}" "$${repo#*=}" --force-update || exit 1; \
+	done
 	helm dependency build $(INFRA_CHART)
+endif
 
 .PHONY: helm-devstack-deps
 helm-devstack-deps: ## Build osac-devstack Helm dependencies
-	helm repo add awx-operator $(AWX_OPERATOR_REPO) --force-update
+	@for repo in $(DEVSTACK_DEP_REPOS); do \
+		helm repo add "$${repo%%=*}" "$${repo#*=}" --force-update || exit 1; \
+	done
 	helm dependency build $(CHARTS)/osac-devstack
 
 .PHONY: helm-lint
-helm-lint: helm-deps helm-topolvm-deps ## Lint all charts
+helm-lint: helm-deps helm-infra-deps ## Lint all charts
 	helm lint $(DEPS_CHART)
 	helm lint $(INFRA_CHART)
 	helm lint $(OSAC_CHART) --values $(HELM_VALIDATION_VALUES)
 
 .PHONY: helm-template
-helm-template: helm-topolvm-deps ## Dry-run render all templates
+helm-template: helm-infra-deps ## Dry-run render all templates
 	helm template osac-deps $(DEPS_CHART)
 	helm template osac-infra $(INFRA_CHART)
 	helm template osac $(OSAC_CHART) --values $(HELM_VALIDATION_VALUES)
 
 # Schema-error patterns accept Helm 3 dotted paths and Helm 4 JSON pointers.
 .PHONY: csi-render-test
-csi-render-test: helm-deps helm-topolvm-deps ## Verify CSI and storage-provider chart rendering
+csi-render-test: helm-deps helm-infra-deps ## Verify CSI and storage-provider chart rendering
 	@set -euo pipefail; \
 		caas_render="$$(mktemp)"; \
 		vmaas_render="$$(mktemp)"; \
@@ -649,7 +666,7 @@ metering-auth-render-test: helm-deps ## Check metering service-account auth rend
 	python3 scripts/test-metering-auth-render.py
 
 .PHONY: mce-render-test
-mce-render-test: helm-topolvm-deps ## Check disabled MCE defaults, explicit enablement, and CaaS inheritance
+mce-render-test: helm-infra-deps ## Check disabled MCE defaults, explicit enablement, and CaaS inheritance
 	uv run --project .. python scripts/test-mce-render.py
 
 .PHONY: fulfillment-auth-test
@@ -657,11 +674,11 @@ fulfillment-auth-test: ## Check Fulfillment service-account token exchange behav
 	./scripts/test-fulfillment-auth.sh
 
 .PHONY: dev-full-render-test
-dev-full-render-test: helm-deps helm-topolvm-deps ## Check dev-full TLS and Helm post-rendering
+dev-full-render-test: helm-deps helm-infra-deps ## Check dev-full TLS and Helm post-rendering
 	./scripts/test-dev-full-render.sh
 
 .PHONY: openbao-security-context-test
-openbao-security-context-test: helm-topolvm-deps ## Check OpenBao securityContext renders numeric UID on Kind, omits on OpenShift
+openbao-security-context-test: helm-infra-deps ## Check OpenBao securityContext renders numeric UID on Kind, omits on OpenShift
 	./scripts/test-openbao-security-context.sh
 
 .PHONY: kind-runtime-test
@@ -670,11 +687,17 @@ kind-runtime-test: ## Check Kind runtime, sudo, image loading, and cluster clean
 
 .PHONY: helm-validate
 helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test mce-render-test dev-full-render-test openbao-security-context-test ## Validate all charts (lint + template)
+	@# bmaas-netbox-ci layers bmaas-ci as its base (see the profile-selection
+	@# block); validate the same combination the installer deploys.
 	@for d in values/*/; do \
 		infra="$${d}infra.yaml"; \
+		extra=""; \
+		case "$${d%/}" in \
+			values/bmaas-netbox-ci) extra="--values values/bmaas-ci/infra.yaml";; \
+		esac; \
 		[ -f "$$infra" ] && echo "Validating $$infra..." && \
-			helm template osac-deps $(DEPS_CHART) --values "$$infra" && \
-			helm template osac-infra $(INFRA_CHART) --values "$$infra"; \
+			helm template osac-deps $(DEPS_CHART) $$extra --values "$$infra" && \
+			helm template osac-infra $(INFRA_CHART) $$extra --values "$$infra"; \
 	done
 	@echo "Validating values/dev/kind-infra.yaml..."
 	helm template osac-infra $(INFRA_CHART) --values values/dev/kind-infra.yaml
@@ -683,5 +706,5 @@ helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-
 	@echo "Validation passed."
 
 .PHONY: helm-networking-test
-helm-networking-test: helm-deps helm-topolvm-deps ## Test networking fabricManager/k8sManager validation and derivation
+helm-networking-test: helm-deps helm-infra-deps ## Test networking fabricManager/k8sManager validation and derivation
 	./scripts/test-networking-values.sh

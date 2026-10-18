@@ -71,7 +71,7 @@ Multi-stage build images: `nodejs-22-minimal:9.8`, `go-toolset:1.25`, `ubi-minim
 | `@osac/ui-components` | Shared components consumed at source (no build) — typed gRPC hooks live here |
 | `@osac/types` | Generated protobuf types and service descriptors — **never edit**; regenerate with `pnpm gen-types` only when deliberately advancing the UI's selected API baseline |
 | `@osac/i18n` | Translation extraction — `locales/en/translation.json` is generated, not hand-edited |
-| `@osac/playwright` | Playwright harness for manual verification against a **live deployed cluster** — not a CI suite, not persisted test coverage. See [Manual verification against a live cluster](#manual-verification-against-a-live-cluster) |
+| `@osac/playwright` | Playwright harness for manually running scratch specs and tracked UI E2E flows against a **live deployed cluster** — not run by CI. See [Tracked UI E2E](#tracked-ui-e2e) and [Manual verification against a live cluster](#manual-verification-against-a-live-cluster) |
 
 ## Code Style
 
@@ -195,14 +195,28 @@ export const getLabels = (t: TFunction) => ({
 - `apps/app-frontend/vitest.config.ts` — single runner for app-frontend and ui-components tests (`include` spans both packages)
 - ESLint relaxes type safety rules for test files (no-unsafe-* off)
 - Testing libraries: @testing-library/react 16.x, @testing-library/jest-dom 6.x
-- No persisted E2E test suite in this repo, and no persisted UI-level E2E coverage anywhere: `osac-test-infra`'s CI-tracked E2E suites hit the fulfillment gRPC/REST API and Kubernetes CRs directly — no browser, nothing UI-related
+- Tracked browser feature flows live in `apps/e2e-tests/src/vmaas/` and run through `@osac/playwright` against a live deployment; they are not run by CI. `osac-test-infra`'s CI-tracked E2E suites hit the fulfillment gRPC/REST API and Kubernetes CRs directly and do not cover the browser UI.
 - CI runs typecheck, lint, test, and container build as **separate jobs**; run `pnpm run typecheck`, `pnpm lint`, and `pnpm test` locally before submitting (see [Pre-submit validation](#pre-submit-validation-ci-parity))
+
+### Tracked UI E2E
+
+Feature flows are committed under `apps/e2e-tests/src/` and selected by
+projects in `apps/playwright/playwright.config.ts`. Run them from `osac-ui/`
+with `pnpm --filter @osac/playwright exec playwright test` and the requested
+project. These tests use a real browser, the deployed `osac-ui`, Keycloak, and
+Fulfillment API/database; they do not run in CI and do not exercise provider
+provisioning unless a flow explicitly does so. For the disk image chain,
+`OSAC_DISK_IMAGE_NAME` must be set to a unique name; the create test skips when
+it is unset so it cannot leave an unpaired image behind. See the
+[Playwright README](apps/playwright/README.md) for commands and environment
+variables.
 
 ### Manual verification against a live cluster
 
 `apps/playwright` (`@osac/playwright`) is a Playwright harness for manually confirming
 that a change works end-to-end against a **live, already-deployed** cluster —
-not a CI suite and not something that adds to this repo's persisted test count. See
+not a CI suite. It runs both committed feature flows from `apps/e2e-tests/`
+and ad hoc specs from `apps/playwright/scratch/`. See
 [apps/playwright/README.md](apps/playwright/README.md).
 
 - **This is not a test suite — specs are throwaway**: write ad hoc specs under

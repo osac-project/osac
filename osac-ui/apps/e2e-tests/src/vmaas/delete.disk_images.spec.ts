@@ -2,6 +2,7 @@ import { test } from '@playwright/test';
 
 import {
   deleteDiskImage,
+  includeObsoleteDiskImages,
   openDiskImageDetails,
 } from '../../../../libs/test-utils/src/disk_images.page';
 import { openAndLoginWithEnvironment } from '../../../../libs/test-utils/src/general/open_and_login';
@@ -22,6 +23,7 @@ test('deletes the requested obsolete disk image', async ({ page }) => {
 
   // 2. Open Infrastructure > Disk images and the image made obsolete by the lifecycle flow.
   await openDiskImagesPage(page);
+  await includeObsoleteDiskImages(page);
   await openDiskImageDetails(page, diskImageName);
 
   // 3. Confirm deletion and verify that the image is no longer in the table.

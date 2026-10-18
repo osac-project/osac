@@ -180,6 +180,16 @@ export const openDiskImageDetails = async (page: Page, diskImageName: string): P
   await expect(page.getByRole('heading', { name: diskImageName, exact: true })).toBeVisible();
 };
 
+/** Include obsolete images in the disk image list. */
+export const includeObsoleteDiskImages = async (page: Page): Promise<void> => {
+  const listUrl = new URL(page.url());
+  listUrl.searchParams.set('showObsolete', 'true');
+  await page.goto(listUrl.toString());
+
+  const showObsolete = page.getByRole('checkbox', { name: 'Show obsolete', exact: true });
+  await expect(showObsolete).toBeChecked();
+};
+
 /** Confirm deletion and verify the disk image is absent, including obsolete rows. */
 export const deleteDiskImage = async (page: Page, diskImageName: string): Promise<void> => {
   await page.getByRole('button', { name: 'Delete', exact: true }).click();
@@ -195,13 +205,7 @@ export const deleteDiskImage = async (page: Page, diskImageName: string): Promis
   await expect(deleteDialog).toBeHidden();
   await expect(page.getByRole(...DiskImagesMainPage.pageTitle)).toBeVisible();
 
-  // Obsolete rows are hidden by default; include them in the list query.
-  const listUrl = new URL(page.url());
-  listUrl.searchParams.set('showObsolete', 'true');
-  await page.goto(listUrl.toString());
-
-  const showObsolete = page.getByRole('checkbox', { name: 'Show obsolete', exact: true });
-  await expect(showObsolete).toBeChecked();
+  await includeObsoleteDiskImages(page);
 
   const diskImagesTable = page.getByRole(...DiskImagesMainPage.diskImagesTable);
   await expect(diskImagesTable).toBeVisible();

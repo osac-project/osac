@@ -20,25 +20,12 @@
     msg: >-
       No entry for a dispatched backend_id in storage_backend_connections.
       osac-operator must resolve and pass connection details (endpoint and
-      tenant_preparation) for every backend_id referenced by
-      storage_tier_definitions.
+      tenant_preparation, or provider_config.profiles) for every backend_id
+      referenced by storage_tier_definitions.
   loop: "{{ _ontap_backend_ids }}"
   loop_control:
     label: "ontap-backend"
   when: item not in _provider_backend_connections
-  no_log: true
-
-- name: Fail if a resolved connection is missing endpoint
-  ansible.builtin.fail:
-    msg: >-
-      storage_backend_connections entry is missing a non-empty endpoint.
-  loop: "{{ _ontap_backend_ids }}"
-  loop_control:
-    label: "ontap-backend"
-  when: >-
-    _provider_backend_connections[item].endpoint is not defined or
-    _provider_backend_connections[item].endpoint is none or
-    _provider_backend_connections[item].endpoint | default('') | string | trim | length == 0
   no_log: true
 
 - name: Initialize the per-backend tenant config accumulator

@@ -21,7 +21,7 @@ interface CatalogItemTableProps {
 
 const CatalogItemTable: FC<CatalogItemTableProps> = ({ items, resourceLookups }) => {
   const { t } = useTranslation();
-  const { role } = useSession();
+  const { role, tenantId } = useSession();
   const nameLabel = t('Name');
   const statusLabel = t('Status');
   const configurationLabel = t('Configuration');
@@ -91,7 +91,7 @@ const CatalogItemTable: FC<CatalogItemTableProps> = ({ items, resourceLookups })
               {role === 'tenant-user' ? (
                 <CatalogItemLaunchButton isDisabled={!item.published} catalogItem={item} />
               ) : (
-                <CatalogItemActionsMenu item={item} role={role} />
+                <CatalogItemActionsMenu item={item} role={role} tenantId={tenantId} />
               )}
             </Td>
           </Tr>

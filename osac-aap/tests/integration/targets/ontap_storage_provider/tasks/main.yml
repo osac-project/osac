@@ -917,6 +917,71 @@
         success_msg: "prepare-ontap-svm.sh created operator-compatible storage-tenant-preparation Secret"
       no_log: true
 
+    - name: Replace test Tenant CR without osac.openshift.io/tenant-id label
+      kubernetes.core.k8s:
+        state: present
+        force: true
+        definition:
+          apiVersion: osac.openshift.io/v1alpha1
+          kind: Tenant
+          metadata:
+            name: test-ontap-prep
+            namespace: osac-system
+          spec: {}
+      no_log: true
+
+    - name: Run prepare-ontap-svm.sh with --backend only (omitting --backend-id and --tenant-id)
+      ansible.builtin.command:
+        argv:
+          - "{{ _prep_script }}"
+          - "--tenant"
+          - "test-ontap-prep"
+          - "--backend"
+          - "ontap-primary"
+          - "--svm"
+          - "svm_test_ontap_prep_fallback"
+          - "--username"
+          - "trident_test_prep_fallback"
+          - "--generate-password"
+      changed_when: true
+      no_log: true
+
+    - name: Query fallback preparation Secret created with --backend only
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: ontap-prep-test-ontap-prep-ontap-primary
+        namespace: osac-storage
+      register: _prep_fallback_secret_lookup
+      no_log: true
+
+    - name: Assert prepare-ontap-svm.sh created ontap-prep-test-ontap-prep-ontap-primary with fallback labels
+      ansible.builtin.assert:
+        that:
+          - _prep_fallback_secret_lookup.resources | length == 1
+          - _prep_fallback_secret_lookup.resources[0].metadata.name == 'ontap-prep-test-ontap-prep-ontap-primary'
+          - _prep_fallback_secret_lookup.resources[0].metadata.namespace == 'osac-storage'
+          - _prep_fallback_secret_lookup.resources[0].metadata.labels['osac.openshift.io/secret-type'] == 'storage-tenant-preparation'
+          - _prep_fallback_secret_lookup.resources[0].metadata.labels['osac.openshift.io/storage-backend'] == 'ontap-primary'
+          - _prep_fallback_secret_lookup.resources[0].metadata.labels['osac.openshift.io/storage-backend-id'] == 'ontap-primary'
+          - _prep_fallback_secret_lookup.resources[0].metadata.labels['osac.openshift.io/tenant'] == 'test-ontap-prep'
+          - _prep_fallback_secret_lookup.resources[0].metadata.labels['osac.openshift.io/tenant-id'] == 'test-ontap-prep'
+          - _prep_fallback_secret_lookup.resources[0].data.username | b64decode == 'trident_test_prep_fallback'
+          - _prep_fallback_secret_lookup.resources[0].data.svm | b64decode == 'svm_test_ontap_prep_fallback'
+          - (_prep_fallback_secret_lookup.resources[0].data.password | b64decode | length) > 0
+        fail_msg: "prepare-ontap-svm.sh --backend fallback did not create expected Secret or labels"
+        success_msg: "prepare-ontap-svm.sh --backend fallback created Secret with expected labels"
+      no_log: true
+
+    - name: Clean up fallback preparation Secret ontap-prep-test-ontap-prep-ontap-primary
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: ontap-prep-test-ontap-prep-ontap-primary
+        namespace: osac-storage
+      no_log: true
+
 # ── Test 8: Shared-TBC setup validates profiles and pool selectors ──
 - name: "ONTAP Storage Provider - Shared-TBC setup validation"
   hosts: localhost
@@ -1027,6 +1092,71 @@
           - _unknown_profile_rejected | default(false) | bool
         fail_msg: "Shared-TBC setup must reject tiers referencing an undeclared profile"
         success_msg: "Shared-TBC setup rejected unknown profile"
+
+    - name: Attempt setup when backend defines both provider_config.profiles and tenant_preparation
+      block:
+        - name: Call storage_provider setup with both profiles and tenant_preparation
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: setup
+            storage_provider_backend_connections:
+              ontap-shared-1:
+                endpoint: "https://10.46.246.90"
+                provider_config:
+                  profiles:
+                    - name: shared-fc
+                      shared:
+                        tbc_namespace: trident
+                        tbc_name: customer-fc
+                tenant_preparation:
+                  tenant_id: "id-test-ontap-shared"
+                  provider_config:
+                    username: "trident_test_ontap"
+                    password: "{{ lookup('env', 'OSAC_TEST_ONTAP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true) }}"
+                    svm: "customer_acme_svm"
+      rescue:
+        - name: Record mutual-exclusion mode rejection
+          ansible.builtin.set_fact:
+            _mixed_mode_backend_rejected: true
+
+    - name: Assert backend defining both profiles and tenant_preparation was rejected
+      ansible.builtin.assert:
+        that:
+          - _mixed_mode_backend_rejected | default(false) | bool
+        fail_msg: "Setup must reject backend connections defining both provider_config.profiles and tenant_preparation"
+        success_msg: "Setup rejected backend connection defining both profiles and tenant_preparation"
+
+    - name: Attempt Shared-TBC setup when a tier sets qos_limits.provider_config.max_iops
+      block:
+        - name: Call storage_provider setup with max_iops on a Shared-TBC tier
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: setup
+            storage_provider_tiers:
+              - name: extreme
+                protocol: block
+                provider: ontap
+                backend_id: ontap-shared-1
+                provider_config:
+                  profile: shared-fc
+                  pool_selector:
+                    performance: extreme
+                qos_limits:
+                  provider_config:
+                    max_iops: 5000
+      rescue:
+        - name: Record Shared-TBC max_iops rejection
+          ansible.builtin.set_fact:
+            _shared_tbc_max_iops_rejected: true
+
+    - name: Assert Shared-TBC tier with qos_limits.provider_config.max_iops was rejected
+      ansible.builtin.assert:
+        that:
+          - _shared_tbc_max_iops_rejected | default(false) | bool
+        fail_msg: "Shared-TBC setup must reject tiers setting qos_limits.provider_config.max_iops"
+        success_msg: "Shared-TBC setup rejected tier setting qos_limits.provider_config.max_iops"
 
 # ── Test 9: Shared-TBC ensure_storage_class (Bound TBC + selector update) ──
 - name: "ONTAP Storage Provider - Shared-TBC ensure_storage_class with Bound customer TBC"
@@ -1399,7 +1529,29 @@
   gather_facts: false
 
   tasks:
-    - name: Delete test Tenant CR, preparation Secret, and Shared-TBC test resources
+    - name: Find any remaining ONTAP test StorageClasses by label
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        label_selectors:
+          - "osac.openshift.io/storage-provider=ontap"
+      register: _remaining_ontap_scs
+      failed_when: false
+      no_log: true
+
+    - name: Delete any remaining ONTAP test StorageClasses discovered by label
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ item.metadata.name }}"
+      loop: "{{ _remaining_ontap_scs.resources | default([]) }}"
+      loop_control:
+        label: "cleanup-labeled-sc"
+      failed_when: false
+      no_log: true
+
+    - name: Delete test Tenant CR, preparation Secrets, and Shared-TBC test resources
       kubernetes.core.k8s:
         state: absent
         definition: "{{ item }}"
@@ -1408,6 +1560,11 @@
           kind: Secret
           metadata:
             name: ontap-prep-test-ontap-prep-ontap-be-1
+            namespace: osac-storage
+        - apiVersion: v1
+          kind: Secret
+          metadata:
+            name: ontap-prep-test-ontap-prep-ontap-primary
             namespace: osac-storage
         - apiVersion: osac.openshift.io/v1alpha1
           kind: Tenant

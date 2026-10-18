@@ -89,13 +89,8 @@
         item.resources is defined and
         item.resources is sequence and
         (item.resources | length > 0) and (
-          (
-            ((item.resources[0].spec | default({}, true)).storageDriverName | default('', true) | string | trim | length > 0) and
-            ((item.resources[0].spec | default({}, true)).storageDriverName | default('', true) | string | trim != 'ontap-san')
-          ) or (
-            ((item.resources[0].spec | default({}, true)).sanType | default('', true) | string | trim | length > 0) and
-            ((item.resources[0].spec | default({}, true)).sanType | default('', true) | string | trim not in ['iscsi', 'fcp', 'nvme'])
-          )
+          ((item.resources[0].spec | default({}, true)).storageDriverName | default('', true) | string | trim) not in ['', 'ontap-san'] or
+          ((item.resources[0].spec | default({}, true)).sanType | default('', true) | string | trim) not in ['', 'iscsi', 'fcp', 'nvme']
         )
       no_log: true
 

@@ -108,3 +108,17 @@ export const catalogItemDetailsPath = (item: CatalogItem): string => {
       return '#';
   }
 };
+
+export const catalogItemKind = (item: CatalogItem): CatalogItemKind => {
+  switch (item.$typeName) {
+    case 'osac.public.v1.ComputeInstanceCatalogItem':
+      return 'vm';
+    case 'osac.public.v1.BareMetalInstanceCatalogItem':
+      return 'bm';
+    case 'osac.public.v1.ClusterCatalogItem':
+      return 'cluster';
+  }
+};
+
+export const catalogItemEditPath = (item: CatalogItem): string =>
+  `/catalog/${catalogItemKind(item)}/${item.id}/edit`;

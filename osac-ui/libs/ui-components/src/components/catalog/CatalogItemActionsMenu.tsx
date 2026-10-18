@@ -5,64 +5,111 @@ import { EllipsisVIcon } from '@patternfly/react-icons/dist/esm/icons/ellipsis-v
 
 import { UserRole } from '@osac/ui-components/shellTypes';
 
+import { canManageCatalogItem } from './authoring/canManageCatalogItem';
+import CatalogItemDeleteModal from './authoring/CatalogItemDeleteModal';
+import { useSetCatalogItemPublished } from './authoring/useSetCatalogItemPublished';
 import {
   type CatalogItem,
   catalogItemDetailsPath,
+  catalogItemEditPath,
   getCatalogCreateActionPath,
 } from './catalogItemDisplay';
 import { useTranslation } from '../../hooks/useTranslation';
+import DeleteResourceButton from '../Resource/DeleteResourceButton';
 
 interface CatalogItemActionsMenuProps {
   item: CatalogItem;
   role: UserRole;
+  tenantId: string;
 }
 
-const CatalogItemActionsMenu = ({ item, role }: CatalogItemActionsMenuProps) => {
+const CatalogItemActionsMenu = ({ item, role, tenantId }: CatalogItemActionsMenuProps) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const { setPublished } = useSetCatalogItemPublished(item);
+  const canManage = canManageCatalogItem(role, tenantId, item);
 
   return (
-    <Dropdown
-      isOpen={open}
-      onOpenChange={setOpen}
-      popperProps={{ position: 'right' }}
-      toggle={(ref) => (
-        <MenuToggle
-          ref={ref}
-          variant="plain"
-          onClick={(event) => {
-            event.stopPropagation();
-            setOpen((isOpen) => !isOpen);
-          }}
-          aria-label={t('Actions for {{name}}', { name: item.metadata?.name ?? item.id })}
-        >
-          <EllipsisVIcon />
-        </MenuToggle>
+    <>
+      {deleteOpen && (
+        <CatalogItemDeleteModal
+          item={item}
+          onClose={() => setDeleteOpen(false)}
+          onSuccess={() => setDeleteOpen(false)}
+        />
       )}
-    >
-      <DropdownList>
-        <DropdownItem
-          onClick={() => {
-            setOpen(false);
-            navigate(catalogItemDetailsPath(item));
-          }}
-        >
-          {t('View details')}
-        </DropdownItem>
-        {role === 'tenant-admin' || role === 'tenant-user' ? (
+      <Dropdown
+        isOpen={open}
+        onOpenChange={setOpen}
+        popperProps={{ position: 'right' }}
+        toggle={(ref) => (
+          <MenuToggle
+            ref={ref}
+            variant="plain"
+            onClick={(event) => {
+              event.stopPropagation();
+              setOpen((isOpen) => !isOpen);
+            }}
+            aria-label={t('Actions for {{name}}', { name: item.metadata?.name ?? item.id })}
+          >
+            <EllipsisVIcon />
+          </MenuToggle>
+        )}
+      >
+        <DropdownList>
           <DropdownItem
-            isDisabled={!item.published}
             onClick={() => {
               setOpen(false);
-              navigate(getCatalogCreateActionPath(item));
+              navigate(catalogItemDetailsPath(item));
             }}
           >
-            {t('Launch instance')}
+            {t('View details')}
           </DropdownItem>
-        ) : null}
-      </DropdownList>
-    </Dropdown>
+          {role === 'tenant-admin' || role === 'tenant-user' ? (
+            <DropdownItem
+              isDisabled={!item.published}
+              onClick={() => {
+                setOpen(false);
+                navigate(getCatalogCreateActionPath(item));
+              }}
+            >
+              {t('Launch instance')}
+            </DropdownItem>
+          ) : null}
+          {canManage ? (
+            <DropdownItem
+              onClick={() => {
+                setOpen(false);
+                navigate(catalogItemEditPath(item));
+              }}
+            >
+              {t('Edit')}
+            </DropdownItem>
+          ) : null}
+          {canManage ? (
+            <DropdownItem
+              onClick={() => {
+                setOpen(false);
+                setPublished(!item.published);
+              }}
+            >
+              {item.published ? t('Unpublish') : t('Publish')}
+            </DropdownItem>
+          ) : null}
+          {canManage ? (
+            <DeleteResourceButton
+              isDropdown
+              onClick={() => {
+                setDeleteOpen(true);
+                setOpen(false);
+              }}
+            />
+          ) : null}
+        </DropdownList>
+      </Dropdown>
+    </>
   );
 };
 

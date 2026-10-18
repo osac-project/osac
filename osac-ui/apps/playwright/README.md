@@ -60,23 +60,31 @@ pnpm playwright:run     # ...repeat as many times as you're iterating
 `pnpm playwright:run` never re-authenticates — if `.auth/user.json` is missing
 or the session has expired, re-run `pnpm playwright:setup` first.
 
-### Tenant flow tests
+### Tenant and Storage tier flow tests
 
-The tenant create and delete specs require these additional environment
+The tenant and Storage tier create/delete specs use these environment
 variables:
 
-| Variable              | Description                                                                                                                                        |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OSAC_TENANT_NAME`    | Tenant name used by the create and delete flows. The create flow requires that it does not already exist; the delete flow requires that it exists. |
-| `IGNORE_HTTPS_ERRORS` | Set to `true` for trusted lab clusters using a self-signed or cluster-internal certificate.                                                        |
+| Variable                        | Description                                                                                                                                        |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OSAC_TENANT_NAME`              | Tenant name used by the create and delete flows. The create flow requires that it does not already exist; the delete flow requires that it exists. |
+| `OSAC_STORAGE_TIER_NAME`        | Tier name for create and delete. Creation generates a unique name when unset; deletion is skipped when unset.                                      |
+| `OSAC_STORAGE_TIER_DESCRIPTION` | Tier description; defaults to `Storage tier created by Playwright.`                                                                                |
+| `OSAC_STORAGE_TIER_BACKEND`     | Name of an existing backend; defaults to `local`. The flow does not create a backend.                                                              |
+| `OSAC_STORAGE_TIER_PROTOCOL`    | Tier protocol, either `NFS` or `Block`; defaults to `Block`.                                                                                       |
+| `IGNORE_HTTPS_ERRORS`           | Set to `true` for trusted lab clusters using a self-signed or cluster-internal certificate.                                                        |
 
-Set all variables before running the tenant tests:
+Set the variables for the flows you want to run:
 
 ```bash
 export OSAC_UI_BASE_URL=https://osac-ui-<namespace>.<cluster-domain>
 export OSAC_USERNAME=<keycloak-user>
 read -rs OSAC_PASSWORD && export OSAC_PASSWORD
 export OSAC_TENANT_NAME=tenant1
+export OSAC_STORAGE_TIER_NAME=storage-tier-e2e
+export OSAC_STORAGE_TIER_DESCRIPTION='Storage tier created by Playwright'
+export OSAC_STORAGE_TIER_BACKEND=local
+export OSAC_STORAGE_TIER_PROTOCOL=Block
 export IGNORE_HTTPS_ERRORS=true
 ```
 
@@ -95,6 +103,12 @@ pnpm --filter @osac/playwright exec playwright test \
 
 pnpm --filter @osac/playwright exec playwright test \
   delete.tenant.spec.ts --project=vmaas-delete --no-deps
+
+pnpm --filter @osac/playwright exec playwright test \
+  create.storage_tier.spec.ts --project=vmaas
+
+pnpm --filter @osac/playwright exec playwright test \
+  delete.storage_tier.spec.ts --project=vmaas-delete --no-deps
 ```
 
 Use `--headed` when a graphical display is available. Run these commands from

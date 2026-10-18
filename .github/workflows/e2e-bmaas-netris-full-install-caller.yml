@@ -18,9 +18,9 @@ on:
         required: false
         default: "osac-project/osac-test-infra"
       test-infra-ref:
-        description: "Branch or tag of test-infra; ignored when test-infra-sha is set"
+        description: "Branch or tag of test-infra; ignored when test-infra-sha is set (empty: the revision this repository pins)"
         required: false
-        default: "main"
+        default: ""
       test-infra-sha:
         description: "Exact test-infra commit SHA; overrides test-infra-ref"
         required: false
@@ -142,13 +142,13 @@ jobs:
       id-token: write
       checks: write
       pull-requests: read
-    uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-netris-full-install.yml@main
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-netris-full-install.yml@811c12160717e27afdcdcbcc6bd66eb30b23e8b7  # v1.0.0
     with:
       osac-repo: https://github.com/${{ needs.pr.outputs.repository }}.git
       osac-branch: ${{ needs.pr.outputs.source-ref }}
       components: ${{ needs.pr.outputs.components }}
       test-infra-repository: ${{ inputs.test-infra-repository || 'osac-project/osac-test-infra' }}
-      test-infra-ref: ${{ inputs.test-infra-ref || 'main' }}
+      test-infra-ref: ${{ inputs.test-infra-ref }}
       test-infra-sha: ${{ inputs.test-infra-sha || '' }}
       pr-repository: ${{ inputs.pr-number != '' && needs.pr.outputs.repository || '' }}
       pr-ref: ${{ inputs.pr-number != '' && needs.pr.outputs.ref || '' }}

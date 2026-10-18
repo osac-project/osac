@@ -56,9 +56,9 @@ on:
         required: false
         default: ""
       test-infra-ref:
-        description: "Branch/ref of osac-test-infra"
+        description: "Branch/ref of osac-test-infra (empty: the revision this repository pins)"
         required: false
-        default: "main"
+        default: ""
 
 jobs:
   e2e-bmaas-full-install:
@@ -66,7 +66,7 @@ jobs:
       contents: read
       # See e2e-vmaas-full-install.yml's identical grant for why this is needed.
       id-token: write
-    uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-full-install.yml@main
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-full-install.yml@811c12160717e27afdcdcbcc6bd66eb30b23e8b7  # v1.0.0
     with:
       # PR/merge_group: full bmaas suite. Schedule: serial (-n 0, inventory
       # exhaust). workflow_dispatch: honor input, else sanity (bmaas/regression
@@ -112,7 +112,8 @@ jobs:
       fork-pr-author: ${{ inputs.fork-pr-author }}
       # Checkout osac-test-infra for tests/Containerfile (not the caller repo)
       test-infra-repository: osac-project/osac-test-infra
-      test-infra-ref: ${{ inputs.test-infra-ref || 'main' }}
+      # Empty: the scripts and actions are the revision of the pinned workflow (a manual run can name another ref).
+      test-infra-ref: ${{ inputs.test-infra-ref }}
       test-repository: ${{ inputs.repo || github.repository }}
       test-ref: ${{ inputs.sha || github.sha }}
       notify-on-failure: ${{ github.event_name == 'schedule' }}

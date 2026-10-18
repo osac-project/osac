@@ -18,5 +18,5 @@ jobs:
       (startsWith(github.event.comment.body, '/test') ||
        startsWith(github.event.comment.body, '/retest') ||
        startsWith(github.event.comment.body, '/cancel'))
-    uses: osac-project/osac-test-infra/.github/workflows/slash-command-handler.yml@main
+    uses: osac-project/osac-test-infra/.github/workflows/slash-command-handler.yml@811c12160717e27afdcdcbcc6bd66eb30b23e8b7  # v1.0.0
     secrets: inherit

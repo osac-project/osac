@@ -104,6 +104,11 @@ comes within about a quarter of an hour). Anything else gets a person.
   request by someone outside the organization gets no comment). The rules they apply are one page:
   osac-ci `docs/RULES.md`. The callers pin a full commit of an osac-ci release (the tag in a comment); the Dependabot group
   `osac-ci` opens one pull request per release, reviewed by wg-infra.
+- **The suites** (`e2e-<suite>-full-install.yml`, one job each) call the reusable workflows of
+  [osac-project/osac-test-infra](https://github.com/osac-project/osac-test-infra), pinned by the full commit of a test-infra
+  release (the tag in a comment). `test-infra-ref` is left empty, so the scripts and actions the suite runs are the revision of
+  the pinned workflow too (a manual run can still name another ref). The Dependabot group `osac-test-infra` opens one pull
+  request per test-infra release, reviewed by wg-infra.
 - **Emergency:** setting the repository variable `CI_GATING_ENABLED` to `false` makes `CI` run every part.
 - `workflow_run` lists workflows by exact name. `e2e-pr.yml` lists `CI` and `E2E review relay`; renaming either needs the
   list changed.

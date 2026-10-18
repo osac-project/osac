@@ -846,7 +846,7 @@ jobs:
       # declared job permissions against what the caller grants regardless
       # of runtime reachability, so it must still be granted here.
       id-token: write
-    uses: osac-project/osac-test-infra/.github/workflows/e2e-vmaas-full-install.yml@main
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-vmaas-full-install.yml@811c12160717e27afdcdcbcc6bd66eb30b23e8b7  # v1.0.0
     with:
       test-suite: vmaas
       # The references module contains CaaS and BMaaS tests too. Those
@@ -856,7 +856,6 @@ jobs:
       installer-repo: ${{ github.repository }}
       installer-ref: ${{ needs.prepare.outputs.temp-branch }}
       test-infra-repository: osac-project/osac-test-infra
-      test-infra-ref: main
       test-ref: ${{ needs.prepare.outputs.temp-branch }}
       # This pipeline only runs via schedule/workflow_dispatch against
       # main, same safe WIF context as the regular e2e-*-full-install.yml
@@ -876,13 +875,12 @@ jobs:
       contents: read
       # See e2e-vmaas-test's identical grant above for why this is needed.
       id-token: write
-    uses: osac-project/osac-test-infra/.github/workflows/e2e-caas-full-install.yml@main
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-caas-full-install.yml@811c12160717e27afdcdcbcc6bd66eb30b23e8b7  # v1.0.0
     with:
       test-suite: caas
       installer-repo: ${{ github.repository }}
       installer-ref: ${{ needs.prepare.outputs.temp-branch }}
       test-infra-repository: osac-project/osac-test-infra
-      test-infra-ref: main
       test-ref: ${{ needs.prepare.outputs.temp-branch }}
       # See e2e-vmaas-test's identical input above for why this is set.
       enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' }}
@@ -895,14 +893,13 @@ jobs:
       contents: read
       # See e2e-vmaas-test's identical grant above for why this is needed.
       id-token: write
-    uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-full-install.yml@main
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-full-install.yml@811c12160717e27afdcdcbcc6bd66eb30b23e8b7  # v1.0.0
     with:
       test-suite: bmaas
       test-filter: 'not TestBmaasNetworking and not TestCrossTenantBmaasNetworking'
       installer-repo: ${{ github.repository }}
       installer-ref: ${{ needs.prepare.outputs.temp-branch }}
       test-infra-repository: osac-project/osac-test-infra
-      test-infra-ref: main
       test-ref: ${{ needs.prepare.outputs.temp-branch }}
       # See e2e-vmaas-test's identical input above for why this is set.
       enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' }}

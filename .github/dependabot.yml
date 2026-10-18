@@ -16,6 +16,11 @@ updates:
     osac-ci:
       patterns:
         - "osac-project/osac-ci"
+    # The suites are osac-test-infra's reusable workflows, pinned by commit with the release tag in a comment: one pull
+    # request per test-infra release moves all of them together.
+    osac-test-infra:
+      patterns:
+        - "osac-project/osac-test-infra"
 
 - package-ecosystem: "gomod"
   directory: "/fulfillment-service"

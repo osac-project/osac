@@ -7,7 +7,8 @@
 # It runs on a schedule and by hand, not on the pull request: a run started by a pull request that Dependabot opened
 # gets only Dependabot's secrets, while a scheduled run uses the organization's normal secret. For a Konflux pull request
 # it also makes the title and the label the Jira reference check needs and approves its held workflow runs (once the bot
-# policy approves the commit), with the merge queue token, because an edit by the workflow's own token starts no workflow.
+# policy approves the commit), as the same app: an edit by the workflow's own token would start no workflow, one by the
+# app does. (It used the secret MERGE_QUEUE_TOKEN before; the sweep still accepts it, but nothing passes it any more.)
 name: Bot approval
 
 on:
@@ -29,7 +30,7 @@ concurrency:
 jobs:
   sweep:
     if: github.repository == 'osac-project/osac'
-    uses: osac-project/osac-ci/.github/workflows/bot-sweep.yml@ec980b4ab20ad5882d661684dc1060512634e787  # v1.1.0
+    uses: osac-project/osac-ci/.github/workflows/bot-sweep.yml@d1e22be5695f81f6d2e3c2b3dd1430ce26ade8fe  # v1.2.0
     permissions:
       contents: read
       pull-requests: read
@@ -38,4 +39,3 @@ jobs:
       konflux-prep: true
     secrets:
       OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
-      MERGE_QUEUE_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}

@@ -19,10 +19,13 @@ convert it to a draft. The queue runs `CI` and
 ## Optional: BMaaS Netris
 
 The BMaaS Netris end-to-end test (a real Netris lab on an AWS box) is not part of `E2E` and is not
-required. Start it on a pull request with the comment `/test e2e-bmaas-netris-full-install` (and `/retest` to run it
-again), or by hand from the Actions page ("E2E BMaaS Netris Full Install", Run workflow, with the pull request's number,
-repository, branch and commit). The comment form is in `optional-workflows.yml`. A label no longer starts it. A new commit
-does not cancel a run that is already going.
+required: the policy marks it `manual_only`, so the decision never chooses it and the `E2E` check does not wait for it.
+Start it on a pull request by checking its box in the E2E comment of the pull request (any member of the organization,
+any approval state; the suite has its own line, `E2E / BMaaS Netris Full Install`, and `e2e-pr.yml` runs it through
+`workflows/e2e-bmaas-netris-full-install.yml`). The older ways still work: the comment `/test e2e-bmaas-netris-full-install`
+(and `/retest` to run it again; the comment form is in `optional-workflows.yml`), or by hand from the Actions page ("E2E
+BMaaS Netris Full Install", Run workflow, with the pull request's number, repository, branch and commit). A label no longer
+starts it. A new commit does not cancel a run that is already going.
 
 ## Approvals after a rebase, and pull requests from forks
 

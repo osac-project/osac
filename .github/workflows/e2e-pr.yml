@@ -106,8 +106,25 @@ jobs:
       fork-pr-author: ${{ needs.decide.outputs.fork-author }}
       fork-pr-author-association: ${{ needs.decide.outputs.fork-association }}
 
+  # Only a checked box starts this one (the policy marks it manual_only): it is never in the decision's own list.
+  netris:
+    needs: decide
+    if: needs.decide.outputs.start == 'true' && contains(needs.decide.outputs.suites, '"netris"')
+    permissions:
+      contents: read
+      id-token: write
+      checks: write
+      pull-requests: read
+    uses: ./.github/workflows/e2e-bmaas-netris-full-install.yml
+    with:
+      repo: ${{ needs.decide.outputs.head-repo }}
+      sha: ${{ needs.decide.outputs.sha }}
+      pr-number: ${{ needs.decide.outputs.number }}
+      fork-pr-author: ${{ needs.decide.outputs.fork-author }}
+      fork-pr-author-association: ${{ needs.decide.outputs.fork-association }}
+
   finish:
-    needs: [decide, track, vmaas, caas, bmaas]
+    needs: [decide, track, vmaas, caas, bmaas, netris]
     if: always() && needs.decide.outputs.start == 'true'
     uses: osac-project/osac-ci/.github/workflows/e2e-pr-finish.yml@ec980b4ab20ad5882d661684dc1060512634e787  # v1.1.0
     permissions:

@@ -32,3 +32,10 @@ jobs:
     suite: bmaas
     filters: [bmaas-outside-known-safe]
     filters_any: [e2e-code, e2e-suite]
+  # A suite that is only started by hand (the checkbox in the comment of the pull request): a real Netris lab, slow and
+  # expensive. It is listed there, never chosen by the decision, and not part of what the E2E check waits for.
+  e2e-netris:
+    kind: e2e
+    check: "E2E / BMaaS Netris Full Install"
+    suite: netris
+    manual_only: true

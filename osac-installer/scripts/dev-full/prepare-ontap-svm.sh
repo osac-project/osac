@@ -211,7 +211,7 @@ resolve_backend_id_by_name() {
   local resp=""
   resp="$(fetch_storage_backends_json)"
   printf '%s' "${resp}" | jq -r --arg name "${backend_name}" \
-    '.items[]? | select(.metadata.name == $name) | .id' | head -n 1
+    'first(.items[]? | select(.metadata.name == $name) | .id) // empty' 2>/dev/null || true
 }
 
 # Resolve a StorageBackend ID to its Fulfillment name via the internal REST API.
@@ -220,12 +220,12 @@ resolve_backend_name_by_id() {
   local resp=""
   resp="$(fetch_storage_backends_json)"
   printf '%s' "${resp}" | jq -r --arg id "${backend_id}" \
-    '.items[]? | select(.id == $id) | .metadata.name' | head -n 1
+    'first(.items[]? | select(.id == $id) | .metadata.name) // empty' 2>/dev/null || true
 }
 
 if [[ -z "${BACKEND_ID}" && -n "${BACKEND_NAME}" ]]; then
   log "Resolving StorageBackend ID via Fulfillment internal API..."
-  BACKEND_ID="$(resolve_backend_id_by_name "${BACKEND_NAME}" 2>/dev/null)"
+  BACKEND_ID="$(resolve_backend_id_by_name "${BACKEND_NAME}")"
   BACKEND_ID="${BACKEND_ID:-${BACKEND_NAME}}"
   log "Resolved StorageBackend ID."
 elif [[ -n "${BACKEND_ID}" && -z "${BACKEND_NAME}" ]]; then
@@ -249,13 +249,12 @@ fi
 resolve_tenant_id() {
   local t_name="$1"
   local tid=""
-  if ! kubectl -n "${TENANT_NS}" get tenant.osac.openshift.io "${t_name}" >/dev/null 2>&1; then
+  if ! tid="$(kubectl -n "${TENANT_NS}" get tenant.osac.openshift.io "${t_name}" \
+    -o jsonpath='{.metadata.labels.osac\.openshift\.io/tenant-id}' 2>/dev/null)"; then
     warn "Target Tenant CR '${t_name}' not found in namespace '${TENANT_NS}'."
     warn "Create the Tenant first or pass --tenant-id explicitly."
     return 1
   fi
-  tid="$(kubectl -n "${TENANT_NS}" get tenant.osac.openshift.io "${t_name}" \
-    -o jsonpath='{.metadata.labels.osac\.openshift\.io/tenant-id}' 2>/dev/null || true)"
   tid="${tid:-${t_name}}"
   printf '%s' "${tid}"
 }

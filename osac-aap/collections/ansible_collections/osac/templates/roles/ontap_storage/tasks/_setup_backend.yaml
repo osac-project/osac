@@ -65,7 +65,8 @@
   always:
     - name: Clear credential-bearing facts
       ansible.builtin.set_fact:
-        _prep_config: {}
+        _expected_svm_name: ""
+        _assignment_key: ""
         _ontap_shared_profile_map: {}
         _ontap_is_shared_tbc: false
         _backend_tiers: []

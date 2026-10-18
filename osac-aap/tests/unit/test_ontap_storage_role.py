@@ -150,6 +150,51 @@ def test_ontap_dual_mode_validation_and_shared_tbc_contracts():
     assert "_runtime_password" in cleared_facts
     assert "_shared_tbc_lookups" in cleared_facts
 
+    # _setup_backend.yaml must wrap tasks in block/always, record mode: shared and
+    # mode: dedicated in _ontap_tenant_configs[_ontap_backend_id], and clear
+    # per-backend facts in always with no_log: true.
+    setup_backend_path = ONTAP_ROLE_DIR / "tasks" / "_setup_backend.yaml"
+    setup_backend_tasks = _load_yaml(setup_backend_path)
+    setup_block = next(
+        t
+        for t in setup_backend_tasks
+        if "Validate ONTAP backend mode and record per-backend tenant config" in t.get("name", "")
+    )
+    setup_block_tasks = setup_block["block"]
+    setup_always_tasks = setup_block["always"]
+
+    shared_record_task = next(
+        t
+        for t in setup_block_tasks
+        if t.get("name") == "Record the per-backend tenant config for Shared-TBC mode"
+    )
+    shared_record_expr = shared_record_task["ansible.builtin.set_fact"]["_ontap_tenant_configs"]
+    assert "_ontap_backend_id" in shared_record_expr
+    assert "'mode': 'shared'" in shared_record_expr
+
+    dedicated_record_task = next(
+        t
+        for t in setup_block_tasks
+        if t.get("name") == "Record the per-backend tenant config for Dedicated-SVM mode"
+    )
+    dedicated_record_expr = dedicated_record_task["ansible.builtin.set_fact"]["_ontap_tenant_configs"]
+    assert "_ontap_backend_id" in dedicated_record_expr
+    assert "'mode': 'dedicated'" in dedicated_record_expr
+
+    setup_clear_task = next(
+        t for t in setup_always_tasks if "Clear credential-bearing facts" in t.get("name", "")
+    )
+    assert setup_clear_task.get("no_log") is True
+    setup_cleared_facts = setup_clear_task["ansible.builtin.set_fact"]
+    for fact_name in (
+        "_expected_svm_name",
+        "_assignment_key",
+        "_ontap_shared_profile_map",
+        "_ontap_is_shared_tbc",
+        "_backend_tiers",
+    ):
+        assert fact_name in setup_cleared_facts
+
 
 def test_ontap_consumes_svm_preparation_without_hub_secrets_or_ontap_http():
     """Verify ontap_storage requires only SVM-scoped credentials in

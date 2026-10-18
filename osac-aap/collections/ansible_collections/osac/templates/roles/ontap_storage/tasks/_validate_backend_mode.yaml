@@ -176,11 +176,8 @@
     msg: >-
       storage_backend_connections entry is missing a non-empty endpoint.
   when: >-
-    not (_ontap_is_shared_tbc | bool) and (
-      _provider_backend_connections[_ontap_backend_id].endpoint is not defined or
-      _provider_backend_connections[_ontap_backend_id].endpoint is none or
-      _provider_backend_connections[_ontap_backend_id].endpoint | default('') | string | trim | length == 0
-    )
+    not (_ontap_is_shared_tbc | bool) and
+    (_provider_backend_connections[_ontap_backend_id].endpoint | default('', true) | string | trim | length) == 0
   no_log: true
 
 - name: Fail if tenant_preparation is missing for Dedicated-SVM backend
@@ -206,15 +203,9 @@
       (username, password, svm).
   when: >-
     not (_ontap_is_shared_tbc | bool) and (
-      _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.username is not defined or
-      _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.username is none or
-      _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.username | default('') | string | trim | length == 0 or
-      _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.password is not defined or
-      _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.password is none or
-      _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.password | default('') | string | trim | length == 0 or
-      _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.svm is not defined or
-      _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.svm is none or
-      _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.svm | default('') | string | trim | length == 0
+      (_provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.username | default('', true) | string | trim | length) == 0 or
+      (_provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.password | default('', true) | string | trim | length) == 0 or
+      (_provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.svm | default('', true) | string | trim | length) == 0
     )
   no_log: true
 

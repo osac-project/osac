@@ -60,8 +60,12 @@ awx:
         limits: {cpu: "500m", memory: 1Gi}
 
 # --- OSAC UI (shared osac-ui chart) ---
-ui:
+devFullUi:
+  # Separate from ui.enabled: the installer passes the platform's shared Kind
+  # values to this chart, where ui.enabled=false disables the umbrella-chart UI.
   enabled: true
+
+ui:
   route:
     enabled: false  # Kind uses the Gateway API HTTPRoute in templates/ui.yaml.
   api:

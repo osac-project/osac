@@ -16,8 +16,7 @@ profile_values=(
   --values values/dev/kind-instance.yaml
   --values values/dev/kind-instance-devfull.yaml
 )
-chart_render=$(helm template test charts/osac-devstack --namespace osac \
-  "${profile_values[@]}" --set ui.enabled=true)
+chart_render=$(helm template test charts/osac-devstack --namespace osac "${profile_values[@]}")
 osac_render=$(helm template osac charts/osac --namespace osac \
   --values values/dev/kind-instance.yaml \
   --values values/dev/kind-instance-devfull.yaml \

@@ -90,7 +90,7 @@ export default defineConfig({
     {
       name: 'vmaas',
       testDir: vmaasDir,
-      testMatch: /create\.(tenant|disk_images)\.spec\.ts/,
+      testMatch: /create\.tenant\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
     {
@@ -116,9 +116,29 @@ export default defineConfig({
     {
       name: 'vmaas-delete',
       testDir: vmaasDir,
-      testMatch: /delete\.(tenant|disk_images)\.spec\.ts/,
+      testMatch: /delete\.tenant\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
       dependencies: ['vmaas'],
+    },
+    {
+      name: 'vmaas-disk-image',
+      testDir: vmaasDir,
+      testMatch: /create\.disk_images\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+    },
+    {
+      name: 'vmaas-disk-image-lifecycle',
+      testDir: vmaasDir,
+      testMatch: /lifecycle\.disk_images\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      dependencies: ['vmaas-disk-image'],
+    },
+    {
+      name: 'vmaas-disk-image-delete',
+      testDir: vmaasDir,
+      testMatch: /delete\.disk_images\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      dependencies: ['vmaas-disk-image-lifecycle'],
     },
   ],
 });

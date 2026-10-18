@@ -59,6 +59,9 @@ func validateAndCanonicalizeComputeInstanceCatalogItemPolicies(
 	if err := validateComputeInstanceCatalogItemSSHKeyPolicy(ctx, scope, fields.GetSshKey(), secretsDao); err != nil {
 		return nil, err
 	}
+	if err := validateCatalogItemUserDataSecretPolicy(ctx, scope, fields.GetUserDataSecret(), secretsDao); err != nil {
+		return nil, err
+	}
 
 	if err := validateComputeInstanceCatalogItemBootDiskPolicy(ctx, fields.GetBootDisk(), storageTiersDao); err != nil {
 		return nil, err
@@ -140,6 +143,9 @@ func applyComputeInstanceCatalogItemPolicies(spec *privatev1.ComputeInstanceSpec
 	}
 	if err := applyPolicy(fields.GetSshKey(), spec.GetSshKey() != nil, spec.SetSshKey, decodeSecretReferencePolicy, cloneMessage[*privatev1.SecretLocalReference]); err != nil {
 		return fmt.Errorf("ssh_key: %w", err)
+	}
+	if err := applyPolicy(fields.GetUserDataSecret(), spec.GetUserDataSecret() != nil, spec.SetUserDataSecret, decodeSecretReferencePolicy, cloneMessage[*privatev1.SecretLocalReference]); err != nil {
+		return fmt.Errorf("user_data_secret: %w", err)
 	}
 	if err := applyPolicy(fields.GetInstanceType(), spec.HasInstanceType(), spec.SetInstanceType, decodeInstanceTypeReferencePolicy, cloneMessage[*privatev1.InstanceTypeReference]); err != nil {
 		return fmt.Errorf("instance_type: %w", err)

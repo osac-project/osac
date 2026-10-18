@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { Page, SkipToContent } from '@patternfly/react-core';
 
 import { ServiceTier } from '@osac/types';
+import { CatalogItemCreatePage } from '@osac/ui-components/components/catalog/CatalogItemCreatePage';
 import { CatalogItemDetailPage } from '@osac/ui-components/components/catalog/details/CatalogItemDetailPage.tsx';
 import ErrorBoundary from '@osac/ui-components/components/ErrorBoundary/ErrorBoundary';
 import ExternalIpRoutes from '@osac/ui-components/components/ExternalIp/ExternalIpRoutes';
@@ -65,6 +66,14 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
           element={
             <ShellRoute>
               <CatalogPage />
+            </ShellRoute>
+          }
+        />
+        <Route
+          path="/catalog/:kind/create"
+          element={
+            <ShellRoute>
+              <CatalogItemCreatePage />
             </ShellRoute>
           }
         />

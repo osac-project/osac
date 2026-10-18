@@ -72,6 +72,7 @@ for entry in entry_pattern.finditer(section):
 '
 }
 
+# Install AWX and configure its OSAC automation resources for dev-full.
 install_awx() {
   log "Installing AWX operator..."
   helm repo add awx-operator https://ansible-community.github.io/awx-operator-helm/ 2>/dev/null || true
@@ -137,8 +138,9 @@ configure_awx() {
   # Local AWX workers may lack a service-account namespace file. Use the
   # release namespace for storage config Secrets through the supported override.
   local settings_payload
-  settings_payload=$(python3 -c '
+  settings_payload=$(ENABLE_CERTIFICATE_VALIDATION="${ENABLE_CERTIFICATE_VALIDATION:-true}" python3 -c '
 import json
+import os
 import sys
 
 print(json.dumps({
@@ -147,6 +149,7 @@ print(json.dumps({
     "AWX_TASK_ENV": {
         "ANSIBLE_JINJA2_NATIVE": "true",
         "OSAC_STORAGE_CONFIG_NAMESPACE": sys.argv[1],
+        "ENABLE_CERTIFICATE_VALIDATION": os.environ["ENABLE_CERTIFICATE_VALIDATION"],
     },
 }))
 ' "${NS}")

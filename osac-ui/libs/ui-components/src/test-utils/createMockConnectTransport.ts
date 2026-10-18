@@ -3,16 +3,22 @@ import { Code, ConnectError, type Transport, createRouterTransport } from '@conn
 
 import {
   BareMetalInstanceCatalogItem,
+  type BareMetalInstanceCatalogItemsDeleteRequest,
+  type BareMetalInstanceCatalogItemsUpdateRequest,
   BareMetalInstancesCreateRequest,
   BareMetalInstancesCreateResponse,
   Cluster,
   ClusterCatalogItem,
+  type ClusterCatalogItemsDeleteRequest,
+  type ClusterCatalogItemsUpdateRequest,
   ClusterTemplate,
   ClusterVersion,
   ClusterVersionsListRequest,
   ClustersCreateRequest,
   ClustersCreateResponse,
   ComputeInstanceCatalogItem,
+  type ComputeInstanceCatalogItemsDeleteRequest,
+  type ComputeInstanceCatalogItemsUpdateRequest,
   ComputeInstanceTemplate,
   ComputeInstancesCreateRequest,
   ComputeInstancesCreateResponse,
@@ -73,15 +79,21 @@ import {
 } from '@osac/types';
 import {
   BareMetalInstanceCatalogItems,
+  BareMetalInstanceCatalogItemsDeleteResponseSchema,
+  BareMetalInstanceCatalogItemsUpdateResponseSchema,
   BareMetalInstances,
   Capabilities,
   ClusterCatalogItems,
+  ClusterCatalogItemsDeleteResponseSchema,
+  ClusterCatalogItemsUpdateResponseSchema,
   ClusterTemplates,
   ClusterVersionState,
   ClusterVersions,
   ClusterVersionsListResponseSchema,
   Clusters,
   ComputeInstanceCatalogItems,
+  ComputeInstanceCatalogItemsDeleteResponseSchema,
+  ComputeInstanceCatalogItemsUpdateResponseSchema,
   ComputeInstanceTemplates,
   ComputeInstances,
   DiskImageLifecycle,
@@ -380,6 +392,36 @@ const matchesStorageTierActiveFilter = (
 };
 
 export type MockTransportOverrides = {
+  onComputeInstanceCatalogItemUpdate?: (
+    req: ComputeInstanceCatalogItemsUpdateRequest,
+  ) =>
+    | MessageInitShape<typeof ComputeInstanceCatalogItemsUpdateResponseSchema>
+    | Promise<MessageInitShape<typeof ComputeInstanceCatalogItemsUpdateResponseSchema>>;
+  onComputeInstanceCatalogItemDelete?: (
+    req: ComputeInstanceCatalogItemsDeleteRequest,
+  ) =>
+    | MessageInitShape<typeof ComputeInstanceCatalogItemsDeleteResponseSchema>
+    | Promise<MessageInitShape<typeof ComputeInstanceCatalogItemsDeleteResponseSchema>>;
+  onClusterCatalogItemUpdate?: (
+    req: ClusterCatalogItemsUpdateRequest,
+  ) =>
+    | MessageInitShape<typeof ClusterCatalogItemsUpdateResponseSchema>
+    | Promise<MessageInitShape<typeof ClusterCatalogItemsUpdateResponseSchema>>;
+  onClusterCatalogItemDelete?: (
+    req: ClusterCatalogItemsDeleteRequest,
+  ) =>
+    | MessageInitShape<typeof ClusterCatalogItemsDeleteResponseSchema>
+    | Promise<MessageInitShape<typeof ClusterCatalogItemsDeleteResponseSchema>>;
+  onBareMetalInstanceCatalogItemUpdate?: (
+    req: BareMetalInstanceCatalogItemsUpdateRequest,
+  ) =>
+    | MessageInitShape<typeof BareMetalInstanceCatalogItemsUpdateResponseSchema>
+    | Promise<MessageInitShape<typeof BareMetalInstanceCatalogItemsUpdateResponseSchema>>;
+  onBareMetalInstanceCatalogItemDelete?: (
+    req: BareMetalInstanceCatalogItemsDeleteRequest,
+  ) =>
+    | MessageInitShape<typeof BareMetalInstanceCatalogItemsDeleteResponseSchema>
+    | Promise<MessageInitShape<typeof BareMetalInstanceCatalogItemsDeleteResponseSchema>>;
   onClusterCreate?: (req: ClustersCreateRequest) => ClustersCreateResponse;
   onComputeInstanceCreate?: (
     req: ComputeInstancesCreateRequest,
@@ -560,6 +602,18 @@ export const createMockConnectTransport = (
         get: (req) => ({
           object: catalogItems.find((i) => i.id === req.id),
         }),
+        update: (req) => {
+          if (overrides.onComputeInstanceCatalogItemUpdate) {
+            return overrides.onComputeInstanceCatalogItemUpdate(req);
+          }
+          return { object: req.object };
+        },
+        delete: (req) => {
+          if (overrides.onComputeInstanceCatalogItemDelete) {
+            return overrides.onComputeInstanceCatalogItemDelete(req);
+          }
+          return {};
+        },
       });
 
       router.service(ComputeInstances, {
@@ -590,6 +644,18 @@ export const createMockConnectTransport = (
         get: (req) => ({
           object: clusterCatalogItems.find((i) => i.id === req.id),
         }),
+        update: (req) => {
+          if (overrides.onClusterCatalogItemUpdate) {
+            return overrides.onClusterCatalogItemUpdate(req);
+          }
+          return { object: req.object };
+        },
+        delete: (req) => {
+          if (overrides.onClusterCatalogItemDelete) {
+            return overrides.onClusterCatalogItemDelete(req);
+          }
+          return {};
+        },
       });
 
       router.service(BareMetalInstanceCatalogItems, {
@@ -597,6 +663,18 @@ export const createMockConnectTransport = (
         get: (req) => ({
           object: bareMetalCatalogItems.find((i) => i.id === req.id),
         }),
+        update: (req) => {
+          if (overrides.onBareMetalInstanceCatalogItemUpdate) {
+            return overrides.onBareMetalInstanceCatalogItemUpdate(req);
+          }
+          return { object: req.object };
+        },
+        delete: (req) => {
+          if (overrides.onBareMetalInstanceCatalogItemDelete) {
+            return overrides.onBareMetalInstanceCatalogItemDelete(req);
+          }
+          return {};
+        },
       });
 
       router.service(BareMetalInstances, {

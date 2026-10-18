@@ -65,3 +65,27 @@ def test_config_as_code_secret_tracks_publish_templates_enabled():
         secret = yaml.safe_load(result.stdout)
 
         assert secret["stringData"]["OSAC_PUBLISH_TEMPLATES_ENABLED"] == str(enabled).lower()
+
+
+def test_config_as_code_secret_always_tracks_netris_ca_configmap():
+    chart_path = Path(__file__).resolve().parents[2] / "charts/aap"
+
+    for config_map in ("", "customer-netris-ca"):
+        result = subprocess.run(
+            [
+                "helm",
+                "template",
+                "aap-test",
+                str(chart_path),
+                "--show-only",
+                "templates/config-as-code-secret.yaml",
+                "--set-string",
+                f"global.networking.netris.caBundle.configMap={config_map}",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        secret = yaml.safe_load(result.stdout)
+
+        assert secret["stringData"]["NETRIS_CA_CONFIGMAP"] == config_map

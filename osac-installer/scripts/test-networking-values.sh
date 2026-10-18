@@ -280,6 +280,19 @@ render_failure_with_message \
 # The AAP pod-spec contract test verifies that the same value is consumed by
 # both Netris container groups.
 render_success \
+  netris-ca-configmap-empty \
+  'NETRIS_CA_CONFIGMAP: ""' \
+  --set global.networking.fabricManager=netris \
+  --set global.networking.k8sManager= \
+  --set-string global.networking.netris.controllerUrl=https://netris.example.com \
+  --set-string global.networking.netris.credentials.username=test-user \
+  --set global.networking.netris.credentials.externalSecret=true \
+  --set-string global.networking.netris.siteId=1 \
+  --set-string global.networking.netris.tenantId=1 \
+  --set-string global.networking.netris.tenantName=test \
+  --set global.networking.netris.validateCerts=true
+
+render_success \
   netris-ca-configmap \
   'NETRIS_CA_CONFIGMAP: "customer.netris-ca"' \
   --set global.networking.fabricManager=netris \

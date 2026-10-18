@@ -77,9 +77,18 @@ export const useCatalogItems = (
     clustersTotalQuery.error ||
     bmsTotalQuery.error;
 
-  const hasSuccessfulQuery = [vmsQuery, clustersQuery, bmsQuery].some(
-    (query) => !query.isLoading && !query.error,
-  );
+  const fetchedQueries = [
+    { enabled: shouldFetchKind(ServiceTier.VMAAS), query: vmsQuery },
+    { enabled: shouldFetchKind(ServiceTier.CAAS), query: clustersQuery },
+    { enabled: shouldFetchKind(ServiceTier.BMAAS), query: bmsQuery },
+  ].filter((entry) => entry.enabled);
+
+  // A kind that was never fetched (not enabled, or not in typeFilter) reports
+  // isLoading: false and error: null, which would otherwise count as a vacuous
+  // success below and enable search before the fetched kind actually resolves.
+  const hasSuccessfulQuery =
+    fetchedQueries.length === 0 ||
+    fetchedQueries.some(({ query }) => !query.isLoading && !query.error);
 
   const totalVmsCount = vmsTotalQuery.data?.total ?? 0;
   const totalBmsCount = bmsTotalQuery.data?.total ?? 0;

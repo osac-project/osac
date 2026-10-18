@@ -66,7 +66,7 @@ jobs:
       contents: read
       # See e2e-vmaas-full-install.yml's identical grant for why this is needed.
       id-token: write
-    uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-full-install.yml@811c12160717e27afdcdcbcc6bd66eb30b23e8b7  # v1.0.0
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-full-install.yml@f8a96ca7c6b393983a244a4fd439176c8057a362  # v1.0.1
     with:
       # PR/merge_group: full bmaas suite. Schedule: serial (-n 0, inventory
       # exhaust). workflow_dispatch: honor input, else sanity (bmaas/regression

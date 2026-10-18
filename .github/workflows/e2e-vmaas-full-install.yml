@@ -67,7 +67,7 @@ jobs:
       # The called workflow declares it for the AI diagnostic and the secrets; a called workflow's job
       # permissions are checked against what the caller grants.
       id-token: write
-    uses: osac-project/osac-test-infra/.github/workflows/e2e-vmaas-full-install.yml@811c12160717e27afdcdcbcc6bd66eb30b23e8b7  # v1.0.0
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-vmaas-full-install.yml@f8a96ca7c6b393983a244a4fd439176c8057a362  # v1.0.1
     with:
       # PR/merge_group and schedule: full vmaas suite (sanity + regression +
       # serial). workflow_dispatch: honor the selected input, else sanity.

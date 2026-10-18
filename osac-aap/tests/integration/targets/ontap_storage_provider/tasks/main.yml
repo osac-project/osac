@@ -688,33 +688,6 @@
         success_msg: "Role failed fast on the Failed TBC"
       no_log: true
 
-    - name: Restore the stub Trident operator replicas
-      kubernetes.core.k8s:
-        state: patched
-        api_version: apps/v1
-        kind: Deployment
-        name: stub-trident-operator
-        namespace: trident
-        resource_definition:
-          spec:
-            replicas: 1
-
-    - name: Wait for the stub operator pod to be ready again
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Pod
-        namespace: trident
-        label_selectors:
-          - "app=stub-trident-operator"
-      register: _stub_pods_restored
-      until: >-
-        _stub_pods_restored.resources | length > 0
-        and (_stub_pods_restored.resources[0].status.conditions
-             | selectattr('type', 'equalto', 'Ready')
-             | map(attribute='status') | list | first | default('False')) == 'True'
-      retries: 12
-      delay: 5
-
 # ── Test 5: teardown_backend validates tiers and retains ONTAP resources ──
 - name: "ONTAP Storage Provider - Teardown backend retains resources"
   hosts: localhost
@@ -905,6 +878,8 @@
           - "{{ _prep_script }}"
           - "--tenant"
           - "test-ontap-prep"
+          - "--backend"
+          - "ontap-primary"
           - "--backend-id"
           - "ontap-be-1"
           - "--svm"
@@ -919,10 +894,12 @@
       kubernetes.core.k8s_info:
         api_version: v1
         kind: Secret
-        namespace: trident
+        namespace: osac-storage
         label_selectors:
           - "osac.openshift.io/secret-type=storage-tenant-preparation"
+          - "osac.openshift.io/storage-backend=ontap-primary"
           - "osac.openshift.io/storage-backend-id=ontap-be-1"
+          - "osac.openshift.io/tenant=test-ontap-prep"
           - "osac.openshift.io/tenant-id=tid-test-ontap-prep"
       register: _prep_secret_lookup
       no_log: true
@@ -931,6 +908,7 @@
       ansible.builtin.assert:
         that:
           - _prep_secret_lookup.resources | length == 1
+          - _prep_secret_lookup.resources[0].metadata.labels['osac.openshift.io/storage-backend'] == 'ontap-primary'
           - _prep_secret_lookup.resources[0].metadata.labels['osac.openshift.io/tenant'] == 'test-ontap-prep'
           - _prep_secret_lookup.resources[0].data.username | b64decode == 'trident_test_prep'
           - _prep_secret_lookup.resources[0].data.svm | b64decode == 'svm_test_ontap_prep'
@@ -939,13 +917,489 @@
         success_msg: "prepare-ontap-svm.sh created operator-compatible storage-tenant-preparation Secret"
       no_log: true
 
+# ── Test 8: Shared-TBC setup validates profiles and pool selectors ──
+- name: "ONTAP Storage Provider - Shared-TBC setup validation"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: "test-ontap-shared"
+    tenant_namespace: "osac-system"
+    _t_assignment_key: "{{ (('ontap-shared-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
+    storage_provider_tiers:
+      - name: extreme
+        protocol: block
+        provider: ontap
+        backend_id: ontap-shared-1
+        provider_config:
+          profile: shared-fc
+          pool_selector:
+            performance: extreme
+      - name: value
+        protocol: block
+        provider: ontap
+        backend_id: ontap-shared-1
+        provider_config:
+          profile: shared-fc
+          pool_selector:
+            performance: value
+    storage_provider_backend_connections:
+      ontap-shared-1:
+        provider_config:
+          profiles:
+            - name: shared-fc
+              shared:
+                tbc_namespace: trident
+                tbc_name: customer-fc
+
+  tasks:
+    - name: Call storage_provider role with setup action for Shared-TBC backend
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: setup
+
+    - name: Assert Shared-TBC tenant config output fact was set
+      ansible.builtin.assert:
+        that:
+          - storage_provider_tenant_configs is defined
+          - storage_provider_tenant_configs['ontap']['ontap-shared-1'].assignment_key == _t_assignment_key
+          - storage_provider_tenant_configs['ontap']['ontap-shared-1'].mode == 'shared'
+          - storage_provider_tenant_configs['ontap']['ontap-shared-1'].profiles['shared-fc'].tbc_namespace == 'trident'
+          - storage_provider_tenant_configs['ontap']['ontap-shared-1'].profiles['shared-fc'].tbc_name == 'customer-fc'
+          - storage_provider_tenant_configs['ontap']['ontap-shared-1'].status == 'ready'
+        fail_msg: "Shared-TBC setup did not produce expected storage_provider_tenant_configs"
+        success_msg: "Shared-TBC setup output verified"
+      no_log: true
+
+    - name: Attempt Shared-TBC setup with a malformed pool_selector containing semicolon
+      block:
+        - name: Call storage_provider setup with invalid pool_selector value
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: setup
+            storage_provider_tiers:
+              - name: extreme
+                protocol: block
+                provider: ontap
+                backend_id: ontap-shared-1
+                provider_config:
+                  profile: shared-fc
+                  pool_selector:
+                    performance: "extreme;injected=1"
+      rescue:
+        - name: Record malformed pool_selector rejection
+          ansible.builtin.set_fact:
+            _malformed_selector_rejected: true
+
+    - name: Assert malformed pool_selector was rejected
+      ansible.builtin.assert:
+        that:
+          - _malformed_selector_rejected | default(false) | bool
+        fail_msg: "Shared-TBC setup must reject pool_selector values containing ';'"
+        success_msg: "Shared-TBC setup rejected malformed pool_selector"
+
+    - name: Attempt Shared-TBC setup with an unknown profile reference
+      block:
+        - name: Call storage_provider setup with unknown profile name
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: setup
+            storage_provider_tiers:
+              - name: extreme
+                protocol: block
+                provider: ontap
+                backend_id: ontap-shared-1
+                provider_config:
+                  profile: unknown-profile
+                  pool_selector:
+                    performance: extreme
+      rescue:
+        - name: Record unknown profile rejection
+          ansible.builtin.set_fact:
+            _unknown_profile_rejected: true
+
+    - name: Assert unknown profile was rejected
+      ansible.builtin.assert:
+        that:
+          - _unknown_profile_rejected | default(false) | bool
+        fail_msg: "Shared-TBC setup must reject tiers referencing an undeclared profile"
+        success_msg: "Shared-TBC setup rejected unknown profile"
+
+# ── Test 9: Shared-TBC ensure_storage_class (Bound TBC + selector update) ──
+- name: "ONTAP Storage Provider - Shared-TBC ensure_storage_class with Bound customer TBC"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: "test-ontap-shared"
+    tenant_namespace: "osac-system"
+    _t_assignment_key: "{{ (('ontap-shared-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
+    _sc_extreme: "ontap-{{ _t_assignment_key }}-{{ ('extreme' | hash('sha256'))[:16] | lower }}"
+    _sc_value: "ontap-{{ _t_assignment_key }}-{{ ('value' | hash('sha256'))[:16] | lower }}"
+    storage_provider_tiers:
+      - name: extreme
+        protocol: block
+        provider: ontap
+        backend_id: ontap-shared-1
+        provider_config:
+          profile: shared-fc
+          pool_selector:
+            performance: extreme
+      - name: value
+        protocol: block
+        provider: ontap
+        backend_id: ontap-shared-1
+        provider_config:
+          profile: shared-fc
+          pool_selector:
+            performance: value
+    storage_provider_backend_connections:
+      ontap-shared-1:
+        provider_config:
+          profiles:
+            - name: shared-fc
+              shared:
+                tbc_namespace: trident
+                tbc_name: customer-fc
+
+  tasks:
+    - name: Pre-create customer-owned TridentBackendConfig trident/customer-fc
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: trident.netapp.io/v1
+          kind: TridentBackendConfig
+          metadata:
+            name: customer-fc
+            namespace: trident
+          spec:
+            version: 1
+            backendName: osiscsibackend
+            storageDriverName: ontap-san
+            dataLIF: 192.168.1.6
+            storage:
+              - labels:
+                  performance: extreme
+              - labels:
+                  performance: highwrite
+              - labels:
+                  performance: value
+      no_log: true
+
+    - name: Patch customer-fc TBC status to Bound with backendInfo.backendName=osiscsibackend
+      ansible.builtin.command:
+        cmd: >-
+          kubectl patch tridentbackendconfig customer-fc -n trident
+          --subresource=status --type=merge
+          -p '{"status":{"phase":"Bound","lastOperationStatus":"Success","backendInfo":{"backendName":"osiscsibackend","backendUUID":"uuid-customer-fc"}}}'
+      changed_when: true
+      no_log: true
+
+    - name: Run ensure_storage_class for Shared-TBC backend
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: ensure_storage_class
+
+    - name: Read back Shared-TBC StorageClasses
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ item }}"
+      loop:
+        - "{{ _sc_extreme }}"
+        - "{{ _sc_value }}"
+      loop_control:
+        label: "shared-storage-class"
+      register: _shared_scs
+      no_log: true
+
+    - name: Assert Shared-TBC StorageClasses carry selector and storagePools
+      ansible.builtin.assert:
+        that:
+          - _shared_scs.results | map(attribute='resources') | flatten | length == 2
+          - _shared_scs.results[0].resources[0].parameters['backendType'] == 'ontap-san'
+          - _shared_scs.results[0].resources[0].parameters['selector'] == 'performance=extreme'
+          - _shared_scs.results[0].resources[0].parameters['storagePools'] == 'osiscsibackend:.*'
+          - _shared_scs.results[1].resources[0].parameters['backendType'] == 'ontap-san'
+          - _shared_scs.results[1].resources[0].parameters['selector'] == 'performance=value'
+          - _shared_scs.results[1].resources[0].parameters['storagePools'] == 'osiscsibackend:.*'
+        fail_msg: "Shared-TBC StorageClasses did not match expected selector or storagePools parameters"
+        success_msg: "Shared-TBC StorageClasses verified"
+      no_log: true
+
+    - name: Check that no OSAC-managed TBC or CSI Secret was created for Shared-TBC tenant
+      kubernetes.core.k8s_info:
+        api_version: "{{ item.api_version }}"
+        kind: "{{ item.kind }}"
+        name: "{{ item.name }}"
+        namespace: trident
+      loop:
+        - api_version: trident.netapp.io/v1
+          kind: TridentBackendConfig
+          name: "ontap-{{ _t_assignment_key }}"
+        - api_version: v1
+          kind: Secret
+          name: "ontap-csi-{{ _t_assignment_key }}"
+      loop_control:
+        label: "osac-managed-check"
+      register: _shared_osac_resources
+      no_log: true
+
+    - name: Assert no OSAC-managed TBC or CSI Secret exists for Shared-TBC backend
+      ansible.builtin.assert:
+        that:
+          - (_shared_osac_resources.results | map(attribute='resources') | flatten | length) == 0
+        fail_msg: "Shared-TBC mode must not create per-tenant TBC or CSI Secret"
+        success_msg: "No per-tenant TBC or CSI Secret created in Shared-TBC mode"
+      no_log: true
+
+    - name: Re-run ensure_storage_class for Shared-TBC backend (idempotent short-circuit)
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: ensure_storage_class
+
+    - name: Update extreme tier pool_selector to performance=highwrite and re-run ensure_storage_class
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: ensure_storage_class
+        storage_provider_tiers:
+          - name: extreme
+            protocol: block
+            provider: ontap
+            backend_id: ontap-shared-1
+            provider_config:
+              profile: shared-fc
+              pool_selector:
+                performance: highwrite
+          - name: value
+            protocol: block
+            provider: ontap
+            backend_id: ontap-shared-1
+            provider_config:
+              profile: shared-fc
+              pool_selector:
+                performance: value
+
+    - name: Read back updated extreme StorageClass
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ _sc_extreme }}"
+      register: _updated_extreme_sc
+      no_log: true
+
+    - name: Assert extreme StorageClass was recreated with updated selector
+      ansible.builtin.assert:
+        that:
+          - _updated_extreme_sc.resources | length == 1
+          - _updated_extreme_sc.resources[0].parameters['selector'] == 'performance=highwrite'
+          - _updated_extreme_sc.resources[0].parameters['storagePools'] == 'osiscsibackend:.*'
+        fail_msg: "StorageClass was not recreated when pool_selector changed"
+        success_msg: "StorageClass recreated with updated pool_selector"
+      no_log: true
+
+# ── Test 10: Shared-TBC ensure_storage_class fallback when customer TBC is NotFound ──
+- name: "ONTAP Storage Provider - Shared-TBC NotFound TBC fallback to selector-only"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: "test-ontap-shared-nf"
+    tenant_namespace: "osac-system"
+    _t_assignment_key: "{{ (('ontap-shared-nf' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
+    _sc_extreme: "ontap-{{ _t_assignment_key }}-{{ ('extreme' | hash('sha256'))[:16] | lower }}"
+    storage_provider_tiers:
+      - name: extreme
+        protocol: block
+        provider: ontap
+        backend_id: ontap-shared-nf
+        provider_config:
+          profile: shared-unreadable
+          pool_selector:
+            performance: extreme
+    storage_provider_backend_connections:
+      ontap-shared-nf:
+        provider_config:
+          profiles:
+            - name: shared-unreadable
+              shared:
+                tbc_namespace: trident
+                tbc_name: unreadable-or-tridentctl-tbc
+
+  tasks:
+    - name: Run ensure_storage_class when referenced TBC does not exist
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: ensure_storage_class
+
+    - name: Read back fallback StorageClass
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ _sc_extreme }}"
+      register: _nf_sc
+      no_log: true
+
+    - name: Assert fallback StorageClass uses selector without storagePools
+      ansible.builtin.assert:
+        that:
+          - _nf_sc.resources | length == 1
+          - _nf_sc.resources[0].parameters['backendType'] == 'ontap-san'
+          - _nf_sc.resources[0].parameters['selector'] == 'performance=extreme'
+          - "'storagePools' not in _nf_sc.resources[0].parameters"
+        fail_msg: "NotFound TBC fallback should set selector without storagePools"
+        success_msg: "NotFound TBC fallback created selector-only StorageClass"
+      no_log: true
+
+# ── Test 11: Shared-TBC ensure_storage_class fails fast on visible Failed customer TBC ──
+- name: "ONTAP Storage Provider - Shared-TBC fail-fast on visible Failed customer TBC"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: "test-ontap-shared"
+    tenant_namespace: "osac-system"
+    _t_assignment_key: "{{ (('ontap-shared-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
+    _sc_extreme: "ontap-{{ _t_assignment_key }}-{{ ('extreme' | hash('sha256'))[:16] | lower }}"
+    _sc_value: "ontap-{{ _t_assignment_key }}-{{ ('value' | hash('sha256'))[:16] | lower }}"
+    storage_provider_tiers:
+      - name: extreme
+        protocol: block
+        provider: ontap
+        backend_id: ontap-shared-1
+        provider_config:
+          profile: shared-fc
+          pool_selector:
+            performance: extreme
+    storage_provider_backend_connections:
+      ontap-shared-1:
+        provider_config:
+          profiles:
+            - name: shared-fc
+              shared:
+                tbc_namespace: trident
+                tbc_name: customer-fc
+
+  tasks:
+    - name: Delete existing Shared-TBC StorageClasses before Failed TBC test
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ item }}"
+      loop:
+        - "{{ _sc_extreme }}"
+        - "{{ _sc_value }}"
+      loop_control:
+        label: "cleanup-shared-sc"
+      no_log: true
+
+    - name: Patch customer-fc TBC status to Failed
+      ansible.builtin.command:
+        cmd: >-
+          kubectl patch tridentbackendconfig customer-fc -n trident
+          --subresource=status --type=merge
+          -p '{"status":{"phase":"Failed","lastOperationStatus":"Failed"}}'
+      changed_when: true
+      no_log: true
+
+    - name: Attempt ensure_storage_class against visible Failed customer TBC
+      block:
+        - name: Call storage_provider ensure_storage_class with Failed customer TBC
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: ensure_storage_class
+      rescue:
+        - name: Record Failed customer TBC error
+          ansible.builtin.set_fact:
+            _shared_failed_tbc_error: "{{ ansible_failed_result.msg | default('') }}"
+          no_log: true
+
+    - name: Assert ensure_storage_class failed fast on visible Failed customer TBC
+      ansible.builtin.assert:
+        that:
+          - _shared_failed_tbc_error | default('') | length > 0
+          - "'Failed' in _shared_failed_tbc_error"
+        fail_msg: "Shared-TBC ensure_storage_class must fail fast when customer TBC is Failed"
+        success_msg: "Shared-TBC ensure_storage_class failed fast on Failed customer TBC"
+      no_log: true
+
+# ── Test 12: Shared-TBC teardown_cluster_storage preserves customer TBC ──
+- name: "ONTAP Storage Provider - Shared-TBC teardown preserves customer TBC"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: "test-ontap-shared-nf"
+    tenant_namespace: "osac-system"
+    _t_assignment_key: "{{ (('ontap-shared-nf' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
+    _sc_extreme: "ontap-{{ _t_assignment_key }}-{{ ('extreme' | hash('sha256'))[:16] | lower }}"
+    storage_provider_tiers:
+      - name: extreme
+        protocol: block
+        provider: ontap
+        backend_id: ontap-shared-nf
+        provider_config:
+          profile: shared-unreadable
+          pool_selector:
+            performance: extreme
+    storage_provider_backend_connections:
+      ontap-shared-nf:
+        provider_config:
+          profiles:
+            - name: shared-unreadable
+              shared:
+                tbc_namespace: trident
+                tbc_name: customer-fc
+
+  tasks:
+    - name: Run teardown_cluster_storage for Shared-TBC tenant
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: teardown_cluster_storage
+
+    - name: Verify tenant Shared-TBC StorageClass was deleted
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ _sc_extreme }}"
+      register: _shared_sc_after_teardown
+      no_log: true
+
+    - name: Verify customer-owned trident/customer-fc TBC remains intact
+      kubernetes.core.k8s_info:
+        api_version: trident.netapp.io/v1
+        kind: TridentBackendConfig
+        name: customer-fc
+        namespace: trident
+      register: _customer_tbc_after_teardown
+      no_log: true
+
+    - name: Assert tenant StorageClass was removed and customer TBC was retained
+      ansible.builtin.assert:
+        that:
+          - _shared_sc_after_teardown.resources | length == 0
+          - _customer_tbc_after_teardown.resources | length == 1
+        fail_msg: "teardown_cluster_storage either left tenant StorageClass or deleted customer TBC"
+        success_msg: "teardown_cluster_storage removed tenant StorageClass and preserved customer TBC"
+      no_log: true
+
 # ── Cleanup ──
 - name: "ONTAP Storage Provider - Cleanup"
   hosts: localhost
   gather_facts: false
 
   tasks:
-    - name: Delete test Tenant CR and preparation Secret
+    - name: Delete test Tenant CR, preparation Secret, and Shared-TBC test resources
       kubernetes.core.k8s:
         state: absent
         definition: "{{ item }}"
@@ -954,12 +1408,17 @@
           kind: Secret
           metadata:
             name: ontap-prep-test-ontap-prep-ontap-be-1
-            namespace: trident
+            namespace: osac-storage
         - apiVersion: osac.openshift.io/v1alpha1
           kind: Tenant
           metadata:
             name: test-ontap-prep
             namespace: osac-system
+        - apiVersion: trident.netapp.io/v1
+          kind: TridentBackendConfig
+          metadata:
+            name: customer-fc
+            namespace: trident
       loop_control:
         label: "cleanup-prep-resource"
       failed_when: false

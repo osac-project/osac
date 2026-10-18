@@ -281,6 +281,25 @@ or API tokens — these 4 resources use `ansible.builtin.uri` directly. Per-tena
 credentials are stored in a hub-cluster Secret and used in CSI Secrets. Password
 rotation requires teardown + re-provisioning.
 
+**ONTAP provider specifics (`ontap_storage`):** The `ontap_storage` role supports two
+per-backend tenancy modes via NetApp Trident (`ontap-san`, block-only on VMaaS):
+- **Shared-TBC mode (`provider_config.profiles`):** Consumes a customer-managed
+  `TridentBackendConfig` (e.g. `trident/customer-fc`) declared under
+  `storage_backend_connections[backend_id].provider_config.profiles` and per-tier
+  `provider_config.{profile, pool_selector}` bindings. `setup` validates profile and
+  selector inputs without cluster or ONTAP network calls; `ensure_storage_class` performs
+  a best-effort `k8s_info` check on the referenced `TridentBackendConfig` (failing fast if
+  visibly `Failed` or misconfigured, pinning `parameters.storagePools: "<backendName>:.*"`
+  when `Bound`, and falling back to `parameters.selector` only when `NotFound`/`Forbidden`)
+  and creates per-tenant per-tier `StorageClass`es without creating or deleting customer
+  TBCs or Secrets.
+- **Dedicated-SVM mode (`tenant_preparation`):** Consumes administrator-prepared per-tenant
+  SVM credentials (`endpoint` + `tenant_preparation.provider_config.{username, password, svm}`,
+  prepared via `osac-installer/scripts/dev-full/prepare-ontap-svm.sh`). `ensure_storage_class`
+  creates a per-tenant CSI `Secret`, `TridentBackendConfig` with labeled virtual pools, and
+  per-tier `StorageClass`es on the target cluster, and `teardown_cluster_storage` removes
+  only OSAC-managed resources (`app.kubernetes.io/managed-by=osac-aap`).
+
 **Block encryption:** When `spec.blockEncryptionPassphrase` is provided in the Tenant CR
 event payload, the passphrase is persisted to the hub Secret during `setup` and used by
 `ensure_storage_class` to populate the CSI Secret's `passphrase` field and set

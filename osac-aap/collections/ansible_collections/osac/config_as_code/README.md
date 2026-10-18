@@ -131,6 +131,11 @@ use this kubeconfig when it is configured; without it, they use the worker's
 default cluster context. ClusterOrder storage continues to use the per-job
 `admin_kubeconfig`.
 
+The installer sets `ENABLE_CERTIFICATE_VALIDATION` from
+`aap.instanceGroups.storageFulfillment.enable_certificate_validation` for
+storage-workflow Ansible clients. The secure default is `true`; set it to
+`false` only for development systems using self-signed provider certificates.
+
 ## Deploy a local AAP installation using CRC
 
 ### Download and deploy CRC

@@ -35,7 +35,8 @@
         password: "mock-admin-password"
     storage_provider_action: setup
     storage_provider_provisioning_target: vmaas
-    vast_storage_validate_certs: false
+    # Deliberately omit vast_storage_validate_certs to exercise the worker's
+    # ENABLE_CERTIFICATE_VALIDATION environment setting.
 
   tasks:
     - name: Run storage provider setup

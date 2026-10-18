@@ -92,6 +92,7 @@ it is not a unit-only command.
 | Networking manager tasks and operator wire contracts | Unit plus component contract: `make test`; keep shared `../tests/contract/network-task` goldens in sync with operator consumers |
 | Netris/cudn_evpn task and Python coverage | Measured gate: `make test` fails on gaps; `make role-coverage` runs the focused unit/Kind targets and report |
 | Tenant storage mappings, disk IDs, VM/DataVolume annotations and Secret copying | Unit plus Kind component integration: `make test`; see `tests/integration/targets/compute_instance_create/README.md` |
+| Storage workflow TLS validation defaults, task wiring, and runtime environment | Unit and component integration: `uv run pytest tests/unit/test_storage_certificate_validation.py`; storage targets in `STORAGE_TESTS_ENABLED=true make test` use a local mock HTTPS service, not a deployed automation controller |
 | Storage providers, including NetApp | `STORAGE_TESTS_ENABLED=true make test`, plus qualifying real-provider coverage |
 | Execution-environment definition or dependencies | `make execution-environment-build`, then applicable `make test` targets |
 | AAP, OpenStack, KubeVirt/RHACM or network/provider behavior | Real-provider Contract/E2E; missing boundaries remain [coverage gaps](../docs/INTEGRATION-TESTING.md#osac-aap) |

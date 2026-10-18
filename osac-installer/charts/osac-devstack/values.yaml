@@ -4,6 +4,11 @@ kindClusterName: osac-dev
 # Enabled only by the installer for Apple Silicon dev-full Kind clusters.
 arm64VmCompatibility:
   enabled: false
+aap:
+  instanceGroups:
+    storageFulfillment:
+      # Applies to TLS validation in storage-workflow AWX jobs only.
+      enable_certificate_validation: true
 # CLI image for hook Jobs. On Apple Silicon, the installer builds an arm64
 # replacement with the same tag before installing the chart. The AWX
 # configuration hook uses Python's standard JSON library, so it does not

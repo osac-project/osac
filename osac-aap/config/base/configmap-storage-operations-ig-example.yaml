@@ -12,9 +12,8 @@ data:
   # a configurable toggle — the role always checks live whether the VolumeSnapshot CRD
   # is installed on the target cluster and creates VolumeSnapshotClasses only if so.
 
-  # TLS certificate validation for VAST VMS API calls.
-  # Set to "false" for self-signed certificates in dev/test environments.
-  # VAST_VALIDATE_CERTS: "true"
+  # TLS certificate validation is managed by the installer value
+  # aap.instanceGroups.storageFulfillment.enable_certificate_validation.
 
   # Per-tenant VIP pool (osac-<tenant>-vippool). OSAC reuses the pool if it already
   # exists (pre-created by the cloud admin). To let OSAC self-create a dedicated pool

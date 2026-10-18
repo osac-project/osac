@@ -47,6 +47,8 @@ spec:
         env:
         - name: NS
           value: {{ .Values.osacNamespace | quote }}
+        - name: ENABLE_CERTIFICATE_VALIDATION
+          value: {{ printf "%t" .Values.aap.instanceGroups.storageFulfillment.enable_certificate_validation | quote }}
         - name: OSAC_EE_IMAGE
           value: {{ .Values.awx.executionEnvironment.image | quote }}
         - name: OSAC_EE_PULL

@@ -16,6 +16,7 @@ component's directory unless explicitly marked as repository-root commands.
 - [osac-aap](#osac-aap)
 - [osac-csi-driver](#osac-csi-driver)
 - [osac-metering](#osac-metering)
+- [osac-ui](#osac-ui)
 - [tests/e2e](#testse2e)
 - [Multi-branch test isolation](MULTI-BRANCH-ISOLATION.md)
 
@@ -652,6 +653,26 @@ There is no component-level suite that runs the full fulfillment Watch → Kafka
 → CloudEvents pipeline. Changes to that path must not claim integration
 coverage from mock-based tests; add or extend the real-Kafka coverage under
 [OSAC-4846](https://redhat.atlassian.net/browse/OSAC-4846).
+
+## osac-ui
+
+Touched-area requirements: [component guide](../osac-ui/AGENTS.md#tracked-ui-e2e).
+
+| Tier | Location / command | Exercises for real | Faked or omitted |
+|---|---|---|---|
+| E2E (manual UI flow) | `apps/e2e-tests/src/vmaas/`; from `osac-ui/`, run `pnpm --filter @osac/playwright exec playwright test --project=vmaas-disk-image-delete` | A real browser against deployed `osac-ui`, Keycloak login, and the Fulfillment API/database; disk image creation, lifecycle changes, and deletion | Provider provisioning and VM creation are not exercised; this flow validates the UI and persisted disk image metadata only. |
+
+The chained disk image project runs create, lifecycle, then delete. It requires
+`OSAC_UI_BASE_URL`, `OSAC_USERNAME`, `OSAC_PASSWORD`, and a unique
+`OSAC_DISK_IMAGE_NAME`; create skips when the name is unset. Set
+`IGNORE_HTTPS_ERRORS=true` only for a trusted lab deployment with a
+self-signed or cluster-internal certificate. These tests are manually run
+against a live deployment and are not a CI suite. See the
+[Playwright instructions](../osac-ui/apps/playwright/README.md#tenant-and-disk-image-flow-tests).
+
+### Coverage notes
+
+- **Disk image UI metadata lifecycle:** The chained browser flow covers creation, lifecycle transitions, and deletion through the deployed UI and Fulfillment boundary. It does not establish VM provisioning or provider behavior; those remain covered by their owning deployed E2E paths.
 
 ## tests/e2e
 

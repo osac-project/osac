@@ -62,20 +62,20 @@ or the session has expired, re-run `pnpm playwright:setup` first.
 
 ### Tenant and disk image flow tests
 
-The create, lifecycle, and delete specs use these optional resource names. For
-a combined run, set each name to a resource that does not already exist:
+The create, lifecycle, and delete specs use these resource names. For a
+combined run, set each name to a resource that does not already exist:
 
 | Variable               | Description                                                                                                                                        |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `OSAC_TENANT_NAME`     | Tenant name used by the create and delete flows. The create flow requires that it does not already exist; the delete flow requires that it exists. |
-| `OSAC_DISK_IMAGE_NAME` | DNS-label name used by the disk image create, lifecycle, and delete flows.                                                                         |
+| `OSAC_DISK_IMAGE_NAME` | Unique DNS-label name used by the disk image create, lifecycle, and delete flows.                                                                  |
 
-Tenant tests are skipped when `OSAC_TENANT_NAME` is unset. Disk image creation
-uses a unique generated name when `OSAC_DISK_IMAGE_NAME` is unset, while its
-lifecycle and delete tests are skipped. Set `OSAC_DISK_IMAGE_NAME` to run the
-disk image create, lifecycle, and delete flows together. The lifecycle flow
-leaves the image Obsolete; the separate delete flow only deletes it. Disk
-image configuration is in `apps/e2e-tests/extravars.yaml`.
+Tenant tests are skipped when `OSAC_TENANT_NAME` is unset. Disk image tests
+are skipped when `OSAC_DISK_IMAGE_NAME` is unset. Set a unique
+`OSAC_DISK_IMAGE_NAME` to run the disk image create, lifecycle, and delete
+flows together. The lifecycle flow leaves the image Obsolete; the separate
+delete flow only deletes it. Disk image source and configuration values are
+read from `apps/e2e-tests/extravars.yaml`.
 
 Set the variables before running the flows:
 

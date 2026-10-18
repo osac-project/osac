@@ -68,7 +68,7 @@ variables:
 | Variable                        | Description                                                                                                                                        |
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `OSAC_TENANT_NAME`              | Tenant name used by the create and delete flows. The create flow requires that it does not already exist; the delete flow requires that it exists. |
-| `OSAC_STORAGE_TIER_NAME`        | Tier name for create and delete. Creation generates a unique name when unset; deletion is skipped when unset.                                      |
+| `OSAC_STORAGE_TIER_NAME`        | Explicit tier name for create and delete. Required by both flows; both are skipped when unset.                                                       |
 | `OSAC_STORAGE_TIER_DESCRIPTION` | Tier description; defaults to `Storage tier created by Playwright.`                                                                                |
 | `OSAC_STORAGE_TIER_BACKEND`     | Name of an existing backend; defaults to `local`. The flow does not create a backend.                                                              |
 | `OSAC_STORAGE_TIER_PROTOCOL`    | Tier protocol, either `NFS` or `Block`; defaults to `Block`.                                                                                       |

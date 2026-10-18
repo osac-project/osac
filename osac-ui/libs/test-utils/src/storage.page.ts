@@ -1,5 +1,6 @@
 import { type Page, expect } from '@playwright/test';
 
+import { expectRowRemoved } from './general/expect_row_removed';
 import {
   StorageMainPage,
   StorageTierCreatePage,
@@ -97,20 +98,13 @@ export const expectStorageTierRemoved = async (
   timeout = 120_000,
 ): Promise<void> => {
   const tierRow = storageTierRow(page, tierName);
-  try {
-    await expect(storageTierLink(page, tierName)).toHaveCount(0, { timeout });
-  } catch {
-    const remainingRows = await tierRow.count();
-    const currentStatus =
-      remainingRows === 1
-        ? ((await tierRow.getByRole('gridcell').nth(1).textContent())?.trim() ?? 'unknown')
-        : 'unknown';
-    throw new Error(
-      `Storage tier "${tierName}" was not removed from the Tiers table within ` +
-        `${Math.round(timeout / 1000)} seconds after deletion. ` +
-        `The row is still present with status "${currentStatus}".`,
-    );
-  }
+  await expectRowRemoved({
+    row: tierRow,
+    statusCell: tierRow.getByRole('gridcell').nth(1),
+    resource: `Storage tier "${tierName}"`,
+    table: 'Tiers',
+    timeout,
+  });
 };
 
 /** Open the tier creation form and verify its title and required inputs. */

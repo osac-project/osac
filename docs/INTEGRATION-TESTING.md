@@ -16,6 +16,7 @@ component's directory unless explicitly marked as repository-root commands.
 - [osac-aap](#osac-aap)
 - [osac-csi-driver](#osac-csi-driver)
 - [osac-metering](#osac-metering)
+- [osac-ui](#osac-ui)
 - [tests/e2e](#testse2e)
 - [Multi-branch test isolation](MULTI-BRANCH-ISOLATION.md)
 
@@ -578,6 +579,19 @@ There is no component-level suite that runs the full fulfillment Watch → Kafka
 → CloudEvents pipeline. Changes to that path must not claim integration
 coverage from mock-based tests; add or extend the real-Kafka coverage under
 [OSAC-4846](https://redhat.atlassian.net/browse/OSAC-4846).
+
+## osac-ui
+
+Touched-area requirements: [component guide](../osac-ui/AGENTS.md#integration-testing).
+
+| Tier | Location / command | Exercises for real | Faked or omitted |
+|---|---|---|---|
+| E2E (manual Storage tier browser flow) | From `osac-ui/`, run `pnpm --filter @osac/playwright exec playwright test create.storage_tier.spec.ts --project=vmaas` and `pnpm --filter @osac/playwright exec playwright test delete.storage_tier.spec.ts --project=vmaas-delete --no-deps` | Deployed osac-ui, Keycloak authentication, Fulfillment API/database, existing Storage backend, and the browser flow | No application services are mocked. The tests require a live cluster and are not run in CI. Set `OSAC_STORAGE_TIER_NAME` explicitly; the create and delete flows are skipped when it is unset. |
+
+The Playwright specs are manual live-cluster verification, not CI regression
+coverage. Creation uses an existing backend and does not create one. The delete
+flow acts only on the explicitly named tier; verify that the name identifies the
+test resource before running it.
 
 ## tests/e2e
 

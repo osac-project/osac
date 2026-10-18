@@ -25,9 +25,15 @@ const protocolFromEnvironment = (): StorageTierProtocol => {
 
 test('creates a storage tier from Infrastructure > Storage', async ({ page }) => {
   test.setTimeout(120_000);
+  const tierName = process.env.OSAC_STORAGE_TIER_NAME;
+  if (!tierName) {
+    test.skip(true, 'OSAC_STORAGE_TIER_NAME is not set.');
+    return;
+  }
+
   const tier: StorageTierCreateParams = {
     ...localStorageTier,
-    name: process.env.OSAC_STORAGE_TIER_NAME ?? `${localStorageTier.name}-${Date.now()}`,
+    name: tierName,
     description: process.env.OSAC_STORAGE_TIER_DESCRIPTION ?? localStorageTier.description,
     backend: process.env.OSAC_STORAGE_TIER_BACKEND ?? localStorageTier.backend,
     protocol: protocolFromEnvironment(),

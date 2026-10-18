@@ -62,20 +62,20 @@ or the session has expired, re-run `pnpm playwright:setup` first.
 
 ### Tenant and disk image flow tests
 
-The tenant and disk image create/delete specs use these optional resource
-names. For a combined run, set each name to a resource that does not already
-exist:
+The create, lifecycle, and delete specs use these optional resource names. For
+a combined run, set each name to a resource that does not already exist:
 
 | Variable               | Description                                                                                                                                        |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `OSAC_TENANT_NAME`     | Tenant name used by the create and delete flows. The create flow requires that it does not already exist; the delete flow requires that it exists. |
-| `OSAC_DISK_IMAGE_NAME` | DNS-label name used by the disk image create and delete flows.                                                                                     |
+| `OSAC_DISK_IMAGE_NAME` | DNS-label name used by the disk image create, lifecycle, and delete flows.                                                                         |
 
 Tenant tests are skipped when `OSAC_TENANT_NAME` is unset. Disk image creation
 uses a unique generated name when `OSAC_DISK_IMAGE_NAME` is unset, while its
-delete test is skipped. Set `OSAC_DISK_IMAGE_NAME` to run the disk image create
-and delete flow together. The disk image configuration is in
-`apps/e2e-tests/extravars.yaml`.
+lifecycle and delete tests are skipped. Set `OSAC_DISK_IMAGE_NAME` to run the
+disk image create, lifecycle, and delete flows together. The lifecycle flow
+leaves the image Obsolete; the separate delete flow only deletes it. Disk
+image configuration is in `apps/e2e-tests/extravars.yaml`.
 
 Set the variables before running the flows:
 
@@ -87,8 +87,8 @@ export OSAC_TENANT_NAME=tenant1
 export OSAC_DISK_IMAGE_NAME=fedora-e2e-unique
 ```
 
-Run the create and delete flows together. The `vmaas-delete` project depends
-on `vmaas`, so creation runs before deletion:
+Run the tenant create and delete flows together. The `vmaas-delete` project
+depends on `vmaas`, so creation runs before deletion:
 
 ```bash
 pnpm --filter @osac/playwright exec playwright test --project=vmaas-delete
@@ -104,11 +104,21 @@ pnpm --filter @osac/playwright exec playwright test \
   delete.tenant.spec.ts --project=vmaas-delete --no-deps
 
 pnpm --filter @osac/playwright exec playwright test \
-  create.disk_images.spec.ts --project=vmaas
+  create.disk_images.spec.ts --project=vmaas-disk-image
 
 pnpm --filter @osac/playwright exec playwright test \
-  delete.disk_images.spec.ts --project=vmaas-delete --no-deps
+  lifecycle.disk_images.spec.ts --project=vmaas-disk-image-lifecycle --no-deps
+
+pnpm --filter @osac/playwright exec playwright test \
+  delete.disk_images.spec.ts --project=vmaas-disk-image-delete --no-deps
+
+pnpm --filter @osac/playwright exec playwright test --project=vmaas-disk-image-delete
 ```
+
+The `vmaas-disk-image-delete` project depends on `vmaas-disk-image-lifecycle`,
+which depends on `vmaas-disk-image`; running it executes create, lifecycle,
+then delete. The separate lifecycle and delete commands use `--no-deps` and
+expect the explicitly named image to already be in the required state.
 
 Use `--headed` when a graphical display is available. Run these commands from
 the repository root; pass only the spec filename because the Playwright

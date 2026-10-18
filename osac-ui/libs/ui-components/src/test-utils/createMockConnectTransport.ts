@@ -13,6 +13,7 @@ import {
   ClustersCreateRequest,
   ClustersCreateResponse,
   ComputeInstanceCatalogItem,
+  ComputeInstanceTemplate,
   ComputeInstancesCreateRequest,
   ComputeInstancesCreateResponse,
   DiskImage,
@@ -81,6 +82,7 @@ import {
   ClusterVersionsListResponseSchema,
   Clusters,
   ComputeInstanceCatalogItems,
+  ComputeInstanceTemplates,
   ComputeInstances,
   DiskImageLifecycle,
   DiskImages,
@@ -185,6 +187,7 @@ export type MockApiFixtures = {
   clusterCatalogItems?: ClusterCatalogItem[];
   bareMetalCatalogItems?: BareMetalInstanceCatalogItem[];
   clusterTemplates?: ClusterTemplate[];
+  computeInstanceTemplates?: ComputeInstanceTemplate[];
   clusterVersions?: ClusterVersion[];
   tenants?: PrivateTenant[];
   virtualNetworks?: VirtualNetwork[];
@@ -514,6 +517,7 @@ export const createMockConnectTransport = (
   const clusterCatalogItems = fixtures.clusterCatalogItems ?? [];
   const bareMetalCatalogItems = fixtures.bareMetalCatalogItems ?? [];
   const clusterTemplates = fixtures.clusterTemplates ?? [];
+  const computeInstanceTemplates = fixtures.computeInstanceTemplates ?? [];
   const clusterVersions = fixtures.clusterVersions ?? [];
   const tenants = fixtures.tenants ?? [];
   const identityProviders = fixtures.identityProviders ?? [];
@@ -564,6 +568,20 @@ export const createMockConnectTransport = (
             return overrides.onComputeInstanceCreate(req);
           }
           return { object: { ...req.object, id: req.object?.id || 'compute-instance-1' } };
+        },
+      });
+
+      router.service(ComputeInstanceTemplates, {
+        list: () => ({ items: computeInstanceTemplates }),
+        get: (req) => {
+          const template = computeInstanceTemplates.find((i) => i.id === req.id);
+          if (!template) {
+            throw new ConnectError(
+              `Compute instance template not found in test: ${req.id}`,
+              Code.NotFound,
+            );
+          }
+          return { object: template };
         },
       });
 

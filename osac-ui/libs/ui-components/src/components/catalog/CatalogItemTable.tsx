@@ -11,11 +11,7 @@ import ResourceNameField from '@osac/ui-components/components/Resource/ResourceN
 import { useSession } from '@osac/ui-components/hooks/use-session';
 
 import CatalogItemActionsMenu from './CatalogItemActionsMenu';
-import {
-  type CatalogItem,
-  catalogItemDetailsPath,
-  catalogItemTypeBadgeLabel,
-} from './catalogItemDisplay';
+import { type CatalogItem, catalogItemDetailsPath } from './catalogItemDisplay';
 import { useTranslation } from '../../hooks/useTranslation';
 
 interface CatalogItemTableProps {
@@ -60,11 +56,7 @@ const CatalogItemTable: FC<CatalogItemTableProps> = ({ items, resourceLookups })
         {items.map((item) => (
           <Tr key={item.id}>
             <Td dataLabel={nameLabel}>
-              <ResourceNameField
-                resource={item}
-                detailsUrl={catalogItemDetailsPath(item)}
-                subTitle={catalogItemTypeBadgeLabel(item, t)}
-              />
+              <ResourceNameField resource={item} detailsUrl={catalogItemDetailsPath(item)} />
             </Td>
             <Td dataLabel={statusLabel}>
               {item.published ? (

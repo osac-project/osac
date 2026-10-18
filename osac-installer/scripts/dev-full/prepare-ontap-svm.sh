@@ -17,6 +17,7 @@
 #   # Single tenant with auto-resolved tenant-id and generated test password:
 #   ./prepare-ontap-svm.sh \
 #     --tenant tenant1 \
+#     --backend ontap-primary \
 #     --backend-id ontap-be-1 \
 #     --svm svm_tenant1 \
 #     --username trident_tenant1 \
@@ -24,6 +25,7 @@
 #
 #   # Batch-prepare multiple tenant SVMs on the same backend:
 #   ./prepare-ontap-svm.sh \
+#     --backend ontap-primary \
 #     --backend-id ontap-be-1 \
 #     --map "tenant1:svm_tenant1:trident_t1" \
 #     --map "tenant2:svm_tenant2:trident_t2" \
@@ -35,7 +37,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 NS="${NS:-osac}"
 TENANT_NS="${OSAC_TENANT_NAMESPACE:-osac-system}"
-PREP_NS="${OSAC_STORAGE_PREPARATION_NAMESPACE:-trident}"
+PREP_NS="${OSAC_STORAGE_PREPARATION_NAMESPACE:-osac-storage}"
 INTERNAL_SVC="${INTERNAL_SVC:-fulfillment-internal-api}"
 INTERNAL_PORT="${INTERNAL_PORT:-8001}"
 LOCAL_PORT="${LOCAL_PORT:-18001}"
@@ -66,7 +68,7 @@ Options:
   --username <user>           ONTAP runtime username for Trident
   --secret-name <name>        Preparation Secret name (default: ontap-prep-<tenant>-<backend-id>)
   --map <spec>                Batch entry: "<tenant>:<svm>:<username>[:<tenant_id>[:<secret_name>]]" (repeatable)
-  --prep-namespace <ns>       Preparation Secret namespace (default: $OSAC_STORAGE_PREPARATION_NAMESPACE or trident)
+  --prep-namespace <ns>       Preparation Secret namespace (default: $OSAC_STORAGE_PREPARATION_NAMESPACE or osac-storage)
   --tenant-namespace <ns>     Hub Tenant CR namespace (default: $OSAC_TENANT_NAMESPACE or osac-system)
   --osac-namespace <ns>       OSAC control-plane namespace for API lookup (default: $NS or osac)
   --generate-password         Generate an ephemeral random password via openssl (for local/mock testing)
@@ -156,9 +158,8 @@ if [[ ${#MAPPINGS[@]} -eq 0 ]]; then
   MAPPINGS+=("${TENANT_NAME}:${SVM_NAME}:${SVM_USER}:${TENANT_ID}:${SECRET_NAME}")
 fi
 
-# Resolve a StorageBackend name to its Fulfillment ID via the internal REST API.
-resolve_backend_id_by_name() {
-  local backend_name="$1"
+# Fetch the StorageBackend list JSON from the Fulfillment internal REST API.
+fetch_storage_backends_json() {
   local pf_pid=""
   local temp_ca=""
   local token_header=""
@@ -169,20 +170,20 @@ resolve_backend_id_by_name() {
 
   temp_ca="$(mktemp)"
   token_header="$(mktemp)"
-  chmod 600 "${token_header}"
+  chmod 600 "${temp_ca}" "${token_header}"
 
-  kubectl -n "${NS}" get configmap ca-bundle -o jsonpath='{.data.bundle\.pem}' >"${temp_ca}"
+  kubectl -n "${NS}" get configmap ca-bundle -o jsonpath='{.data.bundle\.pem}' >"${temp_ca}" 2>/dev/null || true
   if [[ ! -s "${temp_ca}" ]]; then
     rm -f "${temp_ca}" "${token_header}"
-    warn "ca-bundle ConfigMap has no bundle.pem; pass --backend-id directly."
-    return 1
+    warn "ca-bundle ConfigMap has no bundle.pem; pass --backend and --backend-id directly."
+    return 0
   fi
 
   local token=""
   if ! token="$(get_fulfillment_service_account_token "${NS}" --cacert "${temp_ca}" 2>/dev/null)" || [[ -z "${token}" ]]; then
     rm -f "${temp_ca}" "${token_header}"
-    warn "Fulfillment authentication failed; pass --backend-id directly."
-    return 1
+    warn "Fulfillment authentication failed; pass --backend and --backend-id directly."
+    return 0
   fi
   printf 'Authorization: Bearer %s\n' "${token}" >"${token_header}"
   unset token
@@ -201,37 +202,61 @@ resolve_backend_id_by_name() {
   wait "${pf_pid}" 2>/dev/null || true
   rm -f "${temp_ca}" "${token_header}"
 
+  printf '%s' "${resp}"
+}
+
+# Resolve a StorageBackend name to its Fulfillment ID via the internal REST API.
+resolve_backend_id_by_name() {
+  local backend_name="$1"
+  local resp=""
+  resp="$(fetch_storage_backends_json)"
   printf '%s' "${resp}" | jq -r --arg name "${backend_name}" \
     '.items[]? | select(.metadata.name == $name) | .id' | head -n 1
 }
 
+# Resolve a StorageBackend ID to its Fulfillment name via the internal REST API.
+resolve_backend_name_by_id() {
+  local backend_id="$1"
+  local resp=""
+  resp="$(fetch_storage_backends_json)"
+  printf '%s' "${resp}" | jq -r --arg id "${backend_id}" \
+    '.items[]? | select(.id == $id) | .metadata.name' | head -n 1
+}
+
 if [[ -z "${BACKEND_ID}" && -n "${BACKEND_NAME}" ]]; then
   log "Resolving StorageBackend ID via Fulfillment internal API..."
-  BACKEND_ID="$(resolve_backend_id_by_name "${BACKEND_NAME}")"
-  if [[ -z "${BACKEND_ID}" ]]; then
-    warn "Could not resolve StorageBackend ID; pass --backend-id explicitly."
+  BACKEND_ID="$(resolve_backend_id_by_name "${BACKEND_NAME}" 2>/dev/null)"
+  BACKEND_ID="${BACKEND_ID:-${BACKEND_NAME}}"
+  log "Resolved StorageBackend ID."
+elif [[ -n "${BACKEND_ID}" && -z "${BACKEND_NAME}" ]]; then
+  log "Resolving StorageBackend name via Fulfillment internal API..."
+  BACKEND_NAME="$(resolve_backend_name_by_id "${BACKEND_ID}")"
+  if [[ -z "${BACKEND_NAME}" ]]; then
+    warn "Could not resolve StorageBackend name for ID '${BACKEND_ID}'; pass --backend <name> explicitly."
     exit 1
   fi
-  log "Resolved StorageBackend ID."
+  log "Resolved StorageBackend name."
 fi
 
-if [[ -z "${BACKEND_ID}" ]]; then
-  warn "--backend-id (or --backend) is required."
+if [[ -z "${BACKEND_ID}" || -z "${BACKEND_NAME}" ]]; then
+  warn "--backend <name> (and optionally --backend-id <id>) is required."
   usage >&2
   exit 1
 fi
 
-# Resolve the immutable osac.openshift.io/tenant-id label from a hub Tenant CR.
+# Resolve the immutable osac.openshift.io/tenant-id label from a hub Tenant CR,
+# falling back to the Tenant CR name when the label is absent.
 resolve_tenant_id() {
   local t_name="$1"
   local tid=""
-  tid="$(kubectl -n "${TENANT_NS}" get tenant.osac.openshift.io "${t_name}" \
-    -o jsonpath='{.metadata.labels.osac\.openshift\.io/tenant-id}' 2>/dev/null || true)"
-  if [[ -z "${tid}" ]]; then
-    warn "Target Tenant CR not found or missing label 'osac.openshift.io/tenant-id'."
+  if ! kubectl -n "${TENANT_NS}" get tenant.osac.openshift.io "${t_name}" >/dev/null 2>&1; then
+    warn "Target Tenant CR '${t_name}' not found in namespace '${TENANT_NS}'."
     warn "Create the Tenant first or pass --tenant-id explicitly."
     return 1
   fi
+  tid="$(kubectl -n "${TENANT_NS}" get tenant.osac.openshift.io "${t_name}" \
+    -o jsonpath='{.metadata.labels.osac\.openshift\.io/tenant-id}' 2>/dev/null || true)"
+  tid="${tid:-${t_name}}"
   printf '%s' "${tid}"
 }
 
@@ -288,6 +313,7 @@ for entry in "${MAPPINGS[@]}"; do
   jq -n \
     --arg name "${sec_name}" \
     --arg ns "${PREP_NS}" \
+    --arg backend_name "${BACKEND_NAME}" \
     --arg backend_id "${BACKEND_ID}" \
     --arg tenant_id "${resolved_tid}" \
     --arg tenant_name "${t_name}" \
@@ -302,6 +328,7 @@ for entry in "${MAPPINGS[@]}"; do
         namespace: $ns,
         labels: {
           "osac.openshift.io/secret-type": "storage-tenant-preparation",
+          "osac.openshift.io/storage-backend": $backend_name,
           "osac.openshift.io/storage-backend-id": $backend_id,
           "osac.openshift.io/tenant-id": $tenant_id,
           "osac.openshift.io/tenant": $tenant_name

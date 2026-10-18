@@ -13,12 +13,25 @@
 - name: Include shared tier validation
   ansible.builtin.include_tasks: _validate_tiers.yaml
 
-- name: Compute the dispatched backend ids
+- name: Compute the dispatched backend ids and dedicated-SVM backend subset
   ansible.builtin.set_fact:
     _ontap_backend_ids: "{{ _provider_tiers | map(attribute='backend_id') | unique | list }}"
+    _ontap_dedicated_backend_ids: >-
+      {% set dedicated = [] -%}
+      {% set conns = _provider_backend_connections | default({}, true) -%}
+      {% for bid in (_provider_tiers | map(attribute='backend_id') | unique | list) -%}
+      {% if bid not in conns
+            or conns[bid] is not mapping
+            or conns[bid].provider_config is not defined
+            or conns[bid].provider_config is not mapping
+            or conns[bid].provider_config.profiles is not defined -%}
+      {% set _ = dedicated.append(bid) -%}
+      {% endif -%}
+      {% endfor -%}
+      {{ dedicated }}
   no_log: true
 
-- name: Build expected StorageClass entries, TBC names, and CSI Secret names
+- name: Build expected StorageClass entries, selectors, TBC names, and CSI Secret names
   ansible.builtin.set_fact:
     _ontap_expected_sc_entries: >-
       {% set entries = [] -%}
@@ -36,16 +49,39 @@
       {% set _ = names.append('ontap-' ~ _key ~ '-' ~ _tier_key) -%}
       {% endfor -%}
       {{ names }}
+    _ontap_expected_sc_selectors: >-
+      {% set selectors = {} -%}
+      {% for tier in _provider_tiers -%}
+      {% set _key = ((tier.backend_id ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower -%}
+      {% set _tier_key = (tier.name | hash('sha256'))[:16] | lower -%}
+      {% set _sc_name = 'ontap-' ~ _key ~ '-' ~ _tier_key -%}
+      {% if tier.backend_id in _ontap_dedicated_backend_ids -%}
+      {% set _ = selectors.update({_sc_name: 'osac_backend=ontap-' ~ _key ~ ';tier=' ~ tier.name}) -%}
+      {% elif tier.provider_config is defined
+              and tier.provider_config is mapping
+              and tier.provider_config.pool_selector is defined
+              and tier.provider_config.pool_selector is mapping
+              and (tier.provider_config.pool_selector | length > 0) -%}
+      {% set _parts = [] -%}
+      {% for entry in (tier.provider_config.pool_selector | dict2items | sort(attribute='key')) -%}
+      {% set _ = _parts.append((entry.key | string) ~ '=' ~ (entry.value | string)) -%}
+      {% endfor -%}
+      {% set _ = selectors.update({_sc_name: (_parts | join(';'))}) -%}
+      {% else -%}
+      {% set _ = selectors.update({_sc_name: ''}) -%}
+      {% endif -%}
+      {% endfor -%}
+      {{ selectors }}
     _ontap_expected_tbc_names: >-
       {% set names = [] -%}
-      {% for bid in _ontap_backend_ids -%}
+      {% for bid in _ontap_dedicated_backend_ids -%}
       {% set _key = ((bid ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower -%}
       {% set _ = names.append('ontap-' ~ _key) -%}
       {% endfor -%}
       {{ names }}
     _ontap_expected_csi_secret_names: >-
       {% set names = [] -%}
-      {% for bid in _ontap_backend_ids -%}
+      {% for bid in _ontap_dedicated_backend_ids -%}
       {% set _key = ((bid ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower -%}
       {% set _ = names.append('ontap-csi-' ~ _key) -%}
       {% endfor -%}
@@ -66,6 +102,7 @@
   no_log: true
 
 - name: Verify TridentBackendConfig CRD is installed on the target cluster
+  when: _ontap_dedicated_backend_ids | length > 0
   kubernetes.core.k8s_info:
     api_version: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
@@ -74,7 +111,9 @@
   no_log: true
 
 - name: Fail if Trident is not installed on the target cluster
-  when: _trident_crd_check.resources | default([]) | length == 0
+  when: >-
+    (_ontap_dedicated_backend_ids | length > 0) and
+    (_trident_crd_check.resources | default([]) | length == 0)
   ansible.builtin.fail:
     msg: >-
       TridentBackendConfig CRD (tridentbackendconfigs.trident.netapp.io) was
@@ -83,6 +122,7 @@
   no_log: true
 
 - name: Check existing tenant TridentBackendConfigs
+  when: _ontap_dedicated_backend_ids | length > 0
   kubernetes.core.k8s_info:
     api_version: trident.netapp.io/v1
     kind: TridentBackendConfig
@@ -95,6 +135,7 @@
   no_log: true
 
 - name: Check existing tenant CSI Secrets
+  when: _ontap_dedicated_backend_ids | length > 0
   kubernetes.core.k8s_info:
     api_version: v1
     kind: Secret
@@ -109,9 +150,16 @@
 - name: Determine if all StorageClasses, Bound TridentBackendConfigs, and CSI Secrets already exist
   ansible.builtin.set_fact:
     _ontap_all_sc_exist: >-
-      {{ (_ontap_expected_sc_names | difference(
-            _ontap_sc_checks.resources | default([]) | map(attribute='metadata.name') | list
-          ) | length) == 0
+      {% set matching_sc_names = [] -%}
+      {% for sc in (_ontap_sc_checks.resources | default([])) -%}
+      {% set sc_name = sc.metadata.name -%}
+      {% if sc_name in _ontap_expected_sc_selectors
+            and (_ontap_expected_sc_selectors[sc_name] | length > 0)
+            and ((sc.parameters | default({}, true)).selector | default('') == _ontap_expected_sc_selectors[sc_name]) -%}
+      {% set _ = matching_sc_names.append(sc_name) -%}
+      {% endif -%}
+      {% endfor -%}
+      {{ (_ontap_expected_sc_names | difference(matching_sc_names) | length) == 0
           and (_ontap_expected_tbc_names | difference(
             _ontap_tbc_checks.resources | default([])
             | selectattr('status', 'defined')

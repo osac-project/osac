@@ -69,6 +69,7 @@
       no_log: true
 
     - name: Wait for the TridentBackendConfigs to be removed
+      when: (_ontap_cleanup_tbc_list.resources | default([]) | length) > 0
       kubernetes.core.k8s_info:
         api_version: trident.netapp.io/v1
         kind: TridentBackendConfig
@@ -84,7 +85,9 @@
       no_log: true
 
     - name: Find all tenant ONTAP CSI Secrets by label
-      when: _tbc_check is succeeded and (_tbc_check.resources | default([]) | length) == 0
+      when: >-
+        ((_ontap_cleanup_tbc_list.resources | default([]) | length) == 0) or
+        (_tbc_check is succeeded and (_tbc_check.resources | default([]) | length) == 0)
       kubernetes.core.k8s_info:
         api_version: v1
         kind: Secret
@@ -97,7 +100,9 @@
       no_log: true
 
     - name: Delete tenant ONTAP CSI Secrets after TBCs are confirmed gone
-      when: _tbc_check is succeeded and (_tbc_check.resources | default([]) | length) == 0
+      when: >-
+        ((_ontap_cleanup_tbc_list.resources | default([]) | length) == 0) or
+        (_tbc_check is succeeded and (_tbc_check.resources | default([]) | length) == 0)
       kubernetes.core.k8s:
         state: absent
         api_version: v1

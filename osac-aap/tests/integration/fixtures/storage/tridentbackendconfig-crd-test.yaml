@@ -40,3 +40,12 @@ spec:
                   type: string
                 message:
                   type: string
+                lastOperationStatus:
+                  type: string
+                backendInfo:
+                  type: object
+                  properties:
+                    backendName:
+                      type: string
+                    backendUUID:
+                      type: string

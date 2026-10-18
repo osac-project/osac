@@ -58,7 +58,9 @@ def test_ontap_virtual_pools_use_labels_and_selector_not_storage_pools():
     assert "'name': tier.name" not in vpool_expr
     assert "tier.qos_policy" not in vpool_expr
 
-    # 2. StorageClass creation task must use parameters.selector and NOT storagePools.
+    # 2. Dedicated-SVM StorageClass creation task must use parameters.selector
+    #    and NOT storagePools, while Shared-TBC StorageClass creation uses
+    #    sorted selector and conditional escaped storagePools.
     sc_task = next(
         t for t in block_tasks if t.get("name") == "Create the per-tier StorageClasses"
     )
@@ -66,7 +68,19 @@ def test_ontap_virtual_pools_use_labels_and_selector_not_storage_pools():
     assert sc_params["backendType"] == "ontap-san"
     assert sc_params["selector"] == "osac_backend={{ _tbc_name }};tier={{ item.name }}"
     assert "storagePools" not in sc_params
-    assert "storagePools:" not in raw_text
+
+    shared_sc_task = next(
+        t
+        for t in block_tasks
+        if t.get("name") == "Create the per-tier StorageClasses for shared Trident backend"
+    )
+    shared_sc_params_expr = shared_sc_task["kubernetes.core.k8s"]["definition"]["parameters"]
+    assert "'backendType': 'ontap-san'" in shared_sc_params_expr
+    assert "sort(attribute='key')" in shared_sc_params_expr
+    assert "'selector'" in shared_sc_params_expr
+    assert "replace('.', '\\\\.')" in shared_sc_params_expr
+    assert "~ ':.*'" in shared_sc_params_expr
+    assert "'storagePools'" in shared_sc_params_expr
 
     # 3. CA bundle reading must use lookup('file', ...) + b64encode gated on
     #    ontap_storage_validate_certs rather than slurp.
@@ -74,6 +88,67 @@ def test_ontap_virtual_pools_use_labels_and_selector_not_storage_pools():
     assert "lookup('file', ontap_storage_ca_bundle_path" in raw_text
     assert "b64encode" in raw_text
     assert "slurp" not in raw_text
+
+
+def test_ontap_dual_mode_validation_and_shared_tbc_contracts():
+    """Verify dual-mode validation (_validate_backend_mode.yaml), dedicated vs shared
+    partitioning in ensure_storage_class.yaml, and RBAC-resilient Shared-TBC behavior
+    in _ensure_storage_class_backend.yaml.
+    """
+    validate_mode_path = ONTAP_ROLE_DIR / "tasks" / "_validate_backend_mode.yaml"
+    assert validate_mode_path.exists()
+    validate_mode_text = validate_mode_path.read_text(encoding="utf-8")
+    assert "_ontap_is_shared_tbc" in validate_mode_text
+    assert "provider_config.profiles" in validate_mode_text
+    assert "tenant_preparation" in validate_mode_text
+    assert "^[A-Za-z0-9][A-Za-z0-9_./-]{0,252}$" in validate_mode_text
+    assert "max_iops" in validate_mode_text
+
+    ensure_path = ONTAP_ROLE_DIR / "tasks" / "ensure_storage_class.yaml"
+    ensure_text = ensure_path.read_text(encoding="utf-8")
+    assert "_ontap_dedicated_backend_ids" in ensure_text
+    assert "for bid in _ontap_dedicated_backend_ids" in ensure_text
+    assert "_ontap_expected_sc_selectors" in ensure_text
+
+    ensure_backend_path = ONTAP_ROLE_DIR / "tasks" / "_ensure_storage_class_backend.yaml"
+    ensure_backend_tasks = _load_yaml(ensure_backend_path)
+    provision_block = next(
+        t
+        for t in ensure_backend_tasks
+        if "Provision CSI Secret, TridentBackendConfig, and StorageClasses" in t.get("name", "")
+    )
+    block_tasks = provision_block["block"]
+    always_tasks = provision_block.get("always", [])
+
+    # Shared-TBC k8s_info lookup must be best-effort (failed_when: false) with no_log: true
+    lookup_task = next(
+        t for t in block_tasks if "Inspect referenced customer TridentBackendConfigs" in t.get("name", "")
+    )
+    assert lookup_task.get("failed_when") is False
+    assert lookup_task.get("no_log") is True
+
+    # Fail-fast checks on visible Failed phase/lastOperationStatus and driver/sanType
+    ensure_backend_text = ensure_backend_path.read_text(encoding="utf-8")
+    assert "lastOperationStatus" in ensure_backend_text
+    assert "storageDriverName" in ensure_backend_text
+    assert "^[A-Za-z0-9._-]+$" in ensure_backend_text
+
+    # Dedicated-only TBC and CSI Secret creation must be gated on not (_ontap_is_shared_tbc | bool)
+    for dedicated_task_name in (
+        "Create the CSI Secret in the Trident namespace",
+        "Create the TridentBackendConfig for dispatched backend",
+    ):
+        dedicated_task = next(t for t in block_tasks if t.get("name") == dedicated_task_name)
+        assert "not (_ontap_is_shared_tbc | bool)" in str(dedicated_task.get("when", ""))
+
+    # Clear credential-bearing facts must live inside provision_block["always"]
+    clear_task = next(
+        t for t in always_tasks if "Clear credential-bearing facts" in t.get("name", "")
+    )
+    assert clear_task.get("no_log") is True
+    cleared_facts = clear_task["ansible.builtin.set_fact"]
+    assert "_runtime_password" in cleared_facts
+    assert "_shared_tbc_lookups" in cleared_facts
 
 
 def test_ontap_consumes_svm_preparation_without_hub_secrets_or_ontap_http():

@@ -208,7 +208,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 				remaining := &osacv1alpha1.ComputeInstance{}
 				if k8sClient.Get(ctx, key, remaining) == nil {
 					remaining.Finalizers = nil
-					_ = k8sClient.Update(ctx, remaining)
+					Expect(k8sClient.Update(ctx, remaining)).To(Succeed())
 				}
 			})
 
@@ -308,6 +308,18 @@ var _ = Describe("ComputeInstance Controller", func() {
 			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
 
 			_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: key,
+			}})
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func(g Gomega) {
+				ci := &osacv1alpha1.ComputeInstance{}
+				g.Expect(controllerReconciler.Get(ctx, key, ci)).To(Succeed())
+				g.Expect(ci.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseDeleting))
+				g.Expect(ci.Finalizers).To(ContainElement(osacComputeInstanceFinalizer))
+			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+
+			_, err = controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
 				NamespacedName: key,
 			}})
 			Expect(err).NotTo(HaveOccurred())

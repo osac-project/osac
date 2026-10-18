@@ -19,7 +19,6 @@ import { useSession } from '@osac/ui-components/hooks/use-session';
 
 import CatalogItemActionsMenu from './CatalogItemActionsMenu';
 import { CatalogItem, catalogItemDetailsPath, getCatalogItemKind } from './catalogItemDisplay';
-import { catalogItemTypeBadgeLabel } from './catalogItemDisplay';
 import { useTranslation } from '../../hooks/useTranslation';
 import { CatalogItemIcon } from '../../icons';
 
@@ -57,9 +56,6 @@ const CatalogItemCard = ({ item, selection, resourceLookups }: CatalogItemCardPr
         actions={{
           actions: !isWizardMode ? (
             <Flex flexWrap={{ default: 'nowrap' }} spaceItems={{ default: 'spaceItemsSm' }}>
-              <FlexItem>
-                <Label color="blue">{catalogItemTypeBadgeLabel(item, t)}</Label>
-              </FlexItem>
               <FlexItem>
                 {item.published ? (
                   <Label color="green">{t('Live')}</Label>

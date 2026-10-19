@@ -162,6 +162,32 @@ def test_two_node_set_scenario_uses_same_natural_teardown_budgets(
         getattr(two_node_set_clients["k8s_hub_client"], name).assert_not_called()
 
 
+def test_two_node_set_create_passes_network_attachment_with_security_group(
+    monkeypatch: pytest.MonkeyPatch, two_node_set_clients: dict[str, Mock]
+) -> None:
+    """Regression: OSAC-5561 requires security groups on BMI creation.
+
+    The two-node-set test must supply an explicit --network-attachment with
+    security-groups so the baremetalworker controller can create BMIs.  Without
+    it, the fulfillment API rejects BMI creation with InvalidArgument and the
+    cluster times out waiting for workers that never arrive.
+    """
+    scenario_poll = Mock(wraps=runner.poll_until)
+    monkeypatch.setattr(scenario, "poll_until", scenario_poll)
+    monkeypatch.setattr(helpers, "poll_until", Mock(wraps=runner.poll_until))
+
+    _run_scenario(two_node_set_clients)
+
+    cli = two_node_set_clients["cli"]
+    cli.create_cluster.assert_called_once()
+    create_kwargs = cli.create_cluster.call_args.kwargs
+    assert "network_attachment" in create_kwargs, (
+        "create_cluster must pass network_attachment so BMI creation has security groups"
+    )
+    na = create_kwargs["network_attachment"]
+    assert "security-groups=" in na, f"network_attachment must include security-groups, got: {na!r}"
+
+
 def test_two_node_set_scenario_rejects_foreign_worker_before_teardown(two_node_set_clients: dict[str, Mock]) -> None:
     grpc = two_node_set_clients["grpc"]
     lookup: Callable[..., dict[str, Any]] = grpc.get_baremetal_instance.side_effect

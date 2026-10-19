@@ -114,3 +114,20 @@ orphaned ExternalIPs through `osac.openshift.io/auto-created-for`, as specified
 by the unified design. Manually created external resources and tenant-shared
 default networking persist when a workload is deleted. Follow the full design's
 reverse-reference guards when deleting shared resources or replacing NetworkClass.
+
+## AgentlessNet ExternalIP implementation status
+
+The OSAC-6307 AgentlessNet v1 implementation supplies the resolved ExternalIP
+pool context to AAP. AAP reserves the UID-owned address and returns it in the
+successful `external_ip.allocate` job artifact at `osac_result.data.address`.
+The operator validates the current job result and pool, then publishes the
+address in `ExternalIP.status.address`; AAP does not query the ExternalIPPool
+or write the allocated-address annotation for this v1 flow. For both allocation
+and release, it validates the result against the resource and pool snapshots in
+the same AAP job's submitted `extra_vars`. Release continues to use the v1
+identity envelope with empty `data`.
+
+This implementation updates the allocation handoff in the accepted unified
+networking design. The contract amendment is to follow the deployed AgentlessNet
+ExternalIP E2E validation tracked with OSAC-6307. Unversioned Netris continues
+using its existing annotation handoff until its contract-adoption work is done.

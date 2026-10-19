@@ -73,5 +73,16 @@ COPY --from=dlv-builder /opt/app-root/src/go/bin/dlv /usr/local/bin
 
 # Default (non-debug) runtime — must stay last so plain `podman build .` targets it.
 FROM runtime-base AS runtime
+# Stamped to the real release version on osac-build-and-publish.yaml's
+# temp branch before tagging (same mechanism as Chart.yaml's own
+# version field) -- the committed default below is only ever what a
+# local/dev build sees. Surfaced as a real OCI label so Konflux's
+# release-side {{ oci_version }} tag templating resolves to it instead
+# of silently falling back to the base image's own inherited version
+# label. Separate from the internal.version.id ldflags above (that one
+# is baked into the binary for `osac version`/CLI reporting; this one is
+# the registry/OCI-level label, invisible to the binary).
+ARG VERSION=dev
 LABEL name="cloud-extensions/fulfillment-service-rhel10"
 LABEL cpe="cpe:/a:redhat:cloud_extensions:0.1::el10"
+LABEL org.opencontainers.image.version="${VERSION}"

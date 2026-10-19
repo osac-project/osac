@@ -49,22 +49,23 @@ Subnet VLAN/gateway/DHCP state. Subnet VLANs are added to configured Cumulus
 trunks; the role never moves a host access port. AgentlessNet also registers
 and removes ExternalIPPools in SQLite. Registration stores the pool's
 Kubernetes UID, Fulfillment UUID, tenant, IPv4 family, and single canonical IPv4
-CIDR; it does not allocate addresses. The existing operator deletion gate waits
-for child ExternalIP CRs to be removed before dispatching pool deprovisioning;
-AgentlessNet then removes the saved registration. ExternalIP allocation,
+CIDR; ExternalIP allocation reserves a UID-owned address in the same state file.
+The operator waits for child ExternalIP CRs to be removed before dispatching
+pool deprovisioning. AgentlessNet returns the allocated address in the AAP job
+result; the operator validates it and writes `ExternalIP.status.address`.
+ExternalIP deletion releases the UID-owned reservation.
 ExternalIPAttachment, SecurityGroup, NATGateway, workload attachment, and
-external routing operations remain unsupported. A Ready Subnet means its VLAN,
+external traffic remain unsupported. A Ready Subnet means its VLAN,
 namespace gateway interface, and per-VirtualNetwork DHCP service were verified;
 it does not claim external reachability or workload attachment.
 
 All AgentlessNet provider state uses schema version 1 in a SQLite database at
 `AGENTLESS_NET_STATE_FILE` (default `/etc/osac/agentless_network_state.sqlite3`).
 The current schema is created directly at v1 with `virtual_networks`,
-`subnets`, and `external_ip_pools`. The first two tables retain the existing
-VirtualNetwork/Subnet state; `external_ip_pools` stores the pool's immutable
-identity. ExternalIP reservations and attachments do not have SQLite tables
-until their implementation work requires them. The `virtual_networks` table
-stores each VirtualNetwork's immutable CR CIDR and one UID-keyed `/31` transit
+`subnets`, `external_ip_pools`, and `external_ips`. The first three tables
+store VirtualNetwork, Subnet, and immutable ExternalIPPool state. `external_ips`
+reserves one provider IPv4 address per ExternalIP Kubernetes UID and pool. The
+`virtual_networks` table stores each VirtualNetwork's immutable CR CIDR and one UID-keyed `/31` transit
 link carved from that CIDR. The `subnets` table stores each Kubernetes Subnet
 UID, its parent Kubernetes UID and tenant, the global VLAN ID, and saved
 gateway/DHCP state.
@@ -72,13 +73,17 @@ gateway/DHCP state.
 There is no SQLite migration or in-application downgrade path. An existing
 database with an unexpected v1 layout or a different `user_version` fails
 closed without being changed; an operator must handle disposable development
-state out of band before using this v1 layout. This OSAC-6306 rule
+state out of band before using this v1 layout. The OSAC-6306/OSAC-6307 schema-v1 rule
 intentionally supersedes the schema-v2/additive-migration provision in the
 [OSAC-3664 Agentless VLAN Fabric Manager design](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-3664-agentless-vlan-fabric-manager/design.md).
 
-AgentlessNet ExternalIPPool jobs use the same inventory and state-file
-settings as VirtualNetwork jobs. Inventory describes exactly one network node;
-pool registration and deletion do not require switch inventory.
+AgentlessNet ExternalIPPool and ExternalIP jobs use the same inventory and
+state-file settings as VirtualNetwork jobs. Inventory describes exactly one
+network node; pool registration and address reservation do not require switch
+inventory. ExternalIP allocation reserves an address by Kubernetes UID and
+returns it in `osac_result.data.address`; the operator validates the result and
+publishes the address in status. Release removes that UID-owned reservation;
+API pool capacity remains held until Fulfillment archives the ExternalIP.
 For Subnet provisioning, osac-operator resolves the parent VirtualNetwork by its
 Fulfillment UUID label in the Subnet namespace and sends its Fulfillment UUID,
 Kubernetes UID, tenant, and phase in `osac_job_vars.parent_virtual_network`.

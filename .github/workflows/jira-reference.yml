@@ -1,0 +1,57 @@
+---
+name: jira-reference
+
+# Required check: jira-reference.
+#
+# The title of every pull request must name a Jira issue (OSAC-1234:) or say
+# NO-ISSUE:. Prow's jira plugin checks that and puts the label
+# jira/valid-reference on the pull request; this check turns the label into a
+# status the merge rules can require. It runs again whenever labels or the title
+# change, so it turns green as soon as Prow has set the label.
+
+on:  # yamllint disable-line rule:truthy
+  pull_request:
+    types: [opened, labeled, unlabeled, edited, synchronize, reopened]
+    branches: [main]
+  merge_group:
+
+permissions:
+  contents: read
+
+jobs:
+  jira-reference:
+    name: jira-reference
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Already checked on the pull request
+        if: github.event_name == 'merge_group'
+        run: echo "The Jira reference was checked on the pull request."
+      - name: Check the Jira reference label
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          for i in 1 2 3; do
+            LABELS=$(gh pr view "${PR_NUMBER}" --repo "${REPO}" --json labels --jq '[.labels[].name]') && break
+            if [ "$i" -lt 3 ]; then
+              echo "::warning::gh pr view attempt $i/3 failed, retrying in 3s..."
+              sleep 3
+            else
+              echo "::error::gh pr view failed after 3 attempts"
+              exit 1
+            fi
+          done
+          if ! echo "$LABELS" | jq -e 'index("jira/valid-reference")' > /dev/null 2>&1; then
+            echo "::error::The pull request has no valid Jira reference."
+            echo ""
+            echo "Start the title with OSAC-1234: (an existing Jira issue) or NO-ISSUE:."
+            echo "Prow checks the title and sets the label jira/valid-reference;"
+            echo "this check runs again when it does."
+            exit 1
+          fi
+          echo "Jira reference is valid"

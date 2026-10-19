@@ -18,3 +18,6 @@ const Tenant = "osac.openshift.io/tenant"
 
 // Project is the annotation key for project information on all OSAC resources.
 const Project = "osac.openshift.io/project"
+
+// OwnerReference is the annotation key for the OSAC resource that owns a dependent resource.
+const OwnerReference = "osac.openshift.io/owner-reference"

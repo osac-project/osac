@@ -10,6 +10,12 @@ updates:
     day: "friday"
     time: "22:00"
     timezone: "America/Los_Angeles"
+  groups:
+    # The shared workflows of osac-ci are pinned by commit with the release tag in a comment: one pull request per
+    # release moves all of them together (reviewed by wg-infra, as every workflow change is).
+    osac-ci:
+      patterns:
+        - "osac-project/osac-ci"
 
 - package-ecosystem: "gomod"
   directory: "/fulfillment-service"

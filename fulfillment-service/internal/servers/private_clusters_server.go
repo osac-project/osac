@@ -29,6 +29,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"k8s.io/apimachinery/pkg/util/validation"
 
@@ -345,6 +346,7 @@ func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *pr
 	if err != nil {
 		return
 	}
+	populateUnsetNodeSetVersions(spec.GetNodeSets(), spec.GetVersion())
 	if key := spec.GetSshPublicKey(); key != "" {
 		if err = validateOpenSSHPublicKey(key); err != nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument, "spec.ssh_public_key: %s", err)
@@ -442,6 +444,17 @@ func (s *PrivateClustersServer) Update(ctx context.Context,
 		if err := s.prepareUpdatedClusterNodeSets(ctx, current, candidate, mask, sizeOnlyNodeSets); err != nil {
 			return err
 		}
+		if updateIncludesField(mask, "spec.version") &&
+			current.GetSpec().GetVersion().GetName() != candidate.GetSpec().GetVersion().GetName() {
+			populateUnsetNodeSetVersions(candidate.GetSpec().GetNodeSets(), current.GetSpec().GetVersion())
+			// Metering splits version-dimensioned usage at the acceptance time, so stamp it in
+			// the same transaction that applies the new version. Same-version updates never
+			// re-stamp: validateVersionUpdate already normalized them to the stored reference.
+			if !candidate.HasStatus() {
+				candidate.SetStatus(privatev1.ClusterStatus_builder{}.Build())
+			}
+			candidate.GetStatus().SetVersionTransitionTime(timestamppb.Now())
+		}
 		if updateIncludesField(mask, "spec.ssh_public_key") {
 			if key := candidate.GetSpec().GetSshPublicKey(); key != "" {
 				if err := validateOpenSSHPublicKey(key); err != nil {
@@ -479,6 +492,17 @@ func (s *PrivateClustersServer) Update(ctx context.Context,
 	return
 }
 
+func populateUnsetNodeSetVersions(nodeSets map[string]*privatev1.ClusterNodeSet, version *privatev1.ClusterVersionReference) {
+	if version == nil {
+		return
+	}
+	for _, nodeSet := range nodeSets {
+		if nodeSet != nil && refKey(nodeSet.GetVersion()) == "" {
+			nodeSet.SetVersion(cloneMessage(version))
+		}
+	}
+}
+
 // prepareUpdatedClusterNodeSets retains resolved metadata for unchanged NodeSets and
 // checks that newly selected hardware types are not being deleted.
 func (s *PrivateClustersServer) prepareUpdatedClusterNodeSets(
@@ -489,6 +513,15 @@ func (s *PrivateClustersServer) prepareUpdatedClusterNodeSets(
 	}
 	for name, nodeSet := range candidate.GetSpec().GetNodeSets() {
 		existing := current.GetSpec().GetNodeSets()[name]
+		if nodeSet != nil && refKey(nodeSet.GetVersion()) == "" {
+			version := current.GetSpec().GetVersion()
+			if existing != nil {
+				version = existing.GetVersion()
+			}
+			if version != nil {
+				nodeSet.SetVersion(cloneMessage(version))
+			}
+		}
 		if sizeOnlyNodeSets && existing == nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"node_sets.%s.baremetal_instance_type is required when adding a node set with a size-only update", name)
@@ -983,6 +1016,7 @@ func (s *PrivateClustersServer) validateVersionUpdate(ctx context.Context,
 		return nil
 	}
 	if existingRef != nil && newRef.GetName() == existingRef.GetName() {
+		newSpec.SetVersion(cloneMessage(existingRef))
 		return nil
 	}
 	version, err := resolveAndCanonicalizeReference(ctx, s.clusterVersionsDao, existing.GetMetadata(), newRef, "version", grpccodes.InvalidArgument)

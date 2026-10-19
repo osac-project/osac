@@ -1,3 +1,10 @@
 chart-dirs:
   - charts
+# ct lint runs `helm dependency build` per chart; once a Chart.lock exists
+# (e.g. left behind by `make helm-deps`), helm resolves repositories against
+# the local helm repo config rather than the Chart.yaml URLs and fails with
+# "no repository definition for <url>". Register external repositories here
+# so ct runs `helm repo add` before building dependencies.
+chart-repos:
+  - awx-operator=https://ansible-community.github.io/awx-operator-helm/
 validate-maintainers: false

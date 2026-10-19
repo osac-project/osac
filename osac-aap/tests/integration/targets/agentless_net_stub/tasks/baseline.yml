@@ -7,15 +7,11 @@
     agentless_operations:
       - create_security_group
       - delete_security_group
-      - create_external_ip
-      - delete_external_ip
       - create_nat_gateway
       - delete_nat_gateway
     resource_playbooks:
       - playbook_osac_create_security_group.yml
       - playbook_osac_delete_security_group.yml
-      - playbook_osac_create_external_ip.yml
-      - playbook_osac_delete_external_ip.yml
       - playbook_osac_create_nat_gateway.yml
       - playbook_osac_delete_nat_gateway.yml
     subnet_playbooks:

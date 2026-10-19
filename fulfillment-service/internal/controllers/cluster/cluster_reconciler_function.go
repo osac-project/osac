@@ -415,8 +415,36 @@ func (t *task) buildSpec(ctx context.Context) (osacv1alpha1.ClusterOrderSpec, er
 	if err = t.addExplicitFields(ctx, &spec); err != nil {
 		return osacv1alpha1.ClusterOrderSpec{}, err
 	}
+	if err = t.addNodeReleaseImages(ctx, &spec); err != nil {
+		return osacv1alpha1.ClusterOrderSpec{}, err
+	}
 
 	return spec, nil
+}
+
+func (t *task) addNodeReleaseImages(ctx context.Context, spec *osacv1alpha1.ClusterOrderSpec) error {
+	versionImages := map[string]string{}
+	if versionName := t.cluster.GetSpec().GetVersion().GetName(); versionName != "" {
+		versionImages[versionName] = spec.ReleaseImage
+	}
+	for i := range spec.NodeRequests {
+		request := &spec.NodeRequests[i]
+		versionName := t.cluster.GetSpec().GetNodeSets()[request.NodeSet].GetVersion().GetName()
+		if versionName == "" {
+			continue
+		}
+		image, ok := versionImages[versionName]
+		if !ok {
+			var err error
+			image, err = t.resolveVersionImage(ctx, versionName)
+			if err != nil {
+				return fmt.Errorf("failed to resolve node set %q version: %w", request.NodeSet, err)
+			}
+			versionImages[versionName] = image
+		}
+		request.ReleaseImage = image
+	}
+	return nil
 }
 
 func equalNetworkAttachment(left, right *osacv1alpha1.ClusterNetworkAttachment) bool {

@@ -67,6 +67,18 @@
         }
       }
     },
+    "topolvm": {
+      "type": "object",
+      "description": "Optional TopoLVM CSI driver for local development clusters.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Install the TopoLVM Helm dependency.",
+          "default": false
+        }
+      },
+      "additionalProperties": true
+    },
     "bundledVault": {
       "type": "object",
       "description": "Bundled OpenBao (Vault-compatible) secret store for testing and CI. Not intended for production.",

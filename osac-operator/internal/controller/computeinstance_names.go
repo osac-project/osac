@@ -41,4 +41,11 @@ var (
 	osacComputeInstanceFeedbackFinalizer         string = fmt.Sprintf("%s/computeinstance-feedback", osacPrefix)
 	osacComputeInstanceManagementStateAnnotation string = fmt.Sprintf("%s/management-state", osacPrefix)
 	osacSubnetTargetNamespaceAnnotation          string = fmt.Sprintf("%s/subnet-target-namespace", osacPrefix)
+
+	// osacComputeInstanceTypeNameLabel carries the name of the instance type the
+	// fulfillment-service compute instance reconciler last reconciled the CR spec
+	// toward. The value is owned by that reconciler (labels.InstanceTypeName in
+	// fulfillment-service); it is duplicated here because the operator cannot
+	// import fulfillment-service internals.
+	osacComputeInstanceTypeNameLabel string = fmt.Sprintf("%s/instance-type-name", osacPrefix)
 )

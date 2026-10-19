@@ -98,7 +98,14 @@ func (b *ComputeInstancesServerBuilder) Build() (result *ComputeInstancesServer,
 	inMapper, err := NewGenericMapper[*publicv1.ComputeInstance, *privatev1.ComputeInstance]().
 		SetLogger(b.logger).
 		SetStrict(true).
-		AddIgnoredFields("compute_network_attachment_statuses").
+		AddIgnoredFields(
+			"compute_network_attachment_statuses",
+			// The system sets the running instance type fields when it observes the instance
+			// running; users can read them but never supply them. Full names are required so
+			// the spec's instance_type reference keeps flowing through.
+			"osac.public.v1.ComputeInstanceStatus.instance_type",
+			"osac.public.v1.ComputeInstanceStatus.instance_type_transition_time",
+		).
 		Build()
 	if err != nil {
 		return
@@ -271,8 +278,19 @@ func (s *ComputeInstancesServer) Update(ctx context.Context,
 		return
 	}
 	const networkAttachmentStatusFieldPath = "status.compute_network_attachment_statuses"
+	const instanceTypeFieldPath = "status.instance_type"
+	const instanceTypeTransitionTimeFieldPath = "status.instance_type_transition_time"
 	for _, path := range request.GetUpdateMask().GetPaths() {
 		path = normalizeFieldMaskPath(path)
+		// The system sets the running instance type fields when it observes the instance
+		// running; users can read them but never supply them. Subpaths are rejected too,
+		// otherwise a mask like status.instance_type.name would slip past the guard.
+		if path == instanceTypeFieldPath || path == instanceTypeTransitionTimeFieldPath ||
+			strings.HasPrefix(path, instanceTypeFieldPath+".") ||
+			strings.HasPrefix(path, instanceTypeTransitionTimeFieldPath+".") {
+			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "%s is output-only", path)
+			return
+		}
 		if path == "status" || path == networkAttachmentStatusFieldPath || strings.HasPrefix(path, networkAttachmentStatusFieldPath+".") {
 			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "%s is output-only", networkAttachmentStatusFieldPath)
 			return

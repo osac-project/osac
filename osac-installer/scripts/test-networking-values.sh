@@ -544,4 +544,16 @@ render_operator_success \
 
 HELM_BIN="${HELM_BIN}" python3 "${SCRIPT_DIR}/test-fabric-domain-values.py"
 
+# AgentlessNet uses the ExternalIP v1 reservation and result contract.
+render_operator_success \
+  agentless-net-eip-contract \
+  'externalIPContractVersion: "v1"' \
+  --set networkManagers.enabled=true \
+  --set global.networking.fabricManager=agentless_net \
+  --set global.networking.k8sManager=
+
+render_failure \
+  agentless-net-unsupported-external-ip-contract \
+  --set operator.networkManagers.fabricManagers.agentless_net.externalIPContractVersion=v2
+
 echo "networking values validation passed"

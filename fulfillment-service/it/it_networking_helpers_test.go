@@ -24,6 +24,11 @@ import (
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// The fulfillment-service integration suite does not run the networking
+// operator. This placeholder marks test NetworkClasses as VM-capable so API
+// tests can exercise attachment validation without testing manager dispatch.
+const testVMK8SManagerName = "test-k8s-manager"
+
 func waitForNetworkingFixtureResource(ctx context.Context, get func(context.Context) error) {
 	GinkgoHelper()
 	Eventually(func(g Gomega) {

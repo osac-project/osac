@@ -1,0 +1,41 @@
+---
+# Approves dependency updates (Dependabot and Konflux) as the OSAC CI app (osac-ci[bot]) when no person needs to read
+# them: every commit is the bot's own, plain and signed, and every changed file is a dependency file. Everything else
+# waits for a person as for any pull request. The sweep is the shared workflow of osac-ci (pinned by commit, release tag
+# in a comment); which bots, which files and which commits count are osac-ci's central rules (docs/RULES.md there).
+#
+# It runs on a schedule and by hand, not on the pull request: a run started by a pull request that Dependabot opened
+# gets only Dependabot's secrets, while a scheduled run uses the organization's normal secret. For a Konflux pull request
+# it also makes the title and the label the Jira reference check needs and approves its held workflow runs (once the bot
+# policy approves the commit), as the same app: an edit by the workflow's own token would start no workflow, one by the
+# app does. (It used the secret MERGE_QUEUE_TOKEN before; the sweep still accepts it, but nothing passes it any more.)
+name: Bot approval
+
+on:
+  schedule:
+    - cron: '3,18,33,48 * * * *'
+  workflow_dispatch:
+    inputs:
+      number:
+        description: One pull request number (empty means every open dependency update)
+        required: false
+        default: ""
+
+permissions: {}
+
+concurrency:
+  group: bot-approve
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    if: github.repository == 'osac-project/osac'
+    uses: osac-project/osac-ci/.github/workflows/bot-sweep.yml@639e33f549c91a5c1e8b4ad55256b69f028a42b8  # v1.2.4
+    permissions:
+      contents: read
+      pull-requests: read
+    with:
+      number: ${{ inputs.number }}
+      konflux-prep: true
+    secrets:
+      OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}

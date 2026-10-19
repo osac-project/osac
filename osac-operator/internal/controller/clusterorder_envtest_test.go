@@ -159,7 +159,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 		Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
 	})
 
-	It("allows zero observed NodePool replicas while requiring a positive desired worker count", func() {
+	It("skips status when observed replicas is zero and rejects zero desired workers", func() {
 		const name = "cluster-order-zero-observed-workers"
 		instance := newTestClusterOrder(name)
 		instance.Spec.NodeRequests = []osacv1alpha1.NodeRequest{{NodeSet: "worker",
@@ -171,12 +171,8 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 
 		pool := readyClusterOrderNodePool("worker", 0)
 		Expect(reconciler.handleNodePool(ctx, instance, &pool)).To(Succeed())
-		Expect(instance.Status.NodeRequests).To(HaveLen(1))
-		Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed(),
-			"a newly created NodePool reports zero observed replicas")
-		stored := getClusterOrder(name)
-		Expect(stored.Spec.NodeRequests[0].NumberOfNodes).To(Equal(1))
-		Expect(stored.Status.NodeRequests[0].NumberOfNodes).To(Equal(0))
+		Expect(instance.Status.NodeRequests).To(BeEmpty(),
+			"zero observed replicas must not create a status entry")
 
 		invalid := newTestClusterOrder("cluster-order-zero-desired-workers")
 		invalid.Spec.NodeRequests = []osacv1alpha1.NodeRequest{{NodeSet: "worker",

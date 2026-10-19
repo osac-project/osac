@@ -139,8 +139,11 @@ type NodeRequest struct {
 	ReleaseImage string `json:"releaseImage,omitempty"`
 }
 
-// NodeRequestStatus records the observed node count for an instance type.
-// Unlike the desired count in NodeRequest, the observed count can be zero.
+// NodeRequestStatus records the observed node count for a node set.
+// The count is not updated while the NodePool has zero observed
+// replicas (e.g. during initial provisioning or node drain), so
+// an existing entry retains its last positive value until a new
+// positive observation arrives.
 type NodeRequestStatus struct {
 	// NodeSet identifies the logical group whose observed count is reported.
 	// +kubebuilder:validation:Required

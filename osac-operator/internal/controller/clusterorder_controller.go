@@ -816,8 +816,37 @@ func (r *ClusterOrderReconciler) handleNodePool(ctx context.Context, instance *v
 		return nil
 	}
 
-	// Find the matching item inside the `nodeRequests` field of the status, or create a new one if there is no
-	// matching item yet.
+	// Skip the status update while observed replicas is zero.
+	// A newly created NodePool reports Status.Replicas == 0
+	// before any node joins.  Publishing zero would violate the
+	// fulfillment ClusterNodeSet.size > 0 constraint.  An
+	// existing ClusterOrder status entry retains its last
+	// positive value until a new positive observation arrives.
+	//
+	// Spec.Replicas is intentionally not checked: it is nil when
+	// autoscaling is active (HyperShift enforces Replicas XOR
+	// AutoScaling), yet Status.Replicas still reflects the
+	// actual observed count and should be reported.
+	if nodePool.Status.Replicas == 0 {
+		// Remove a pre-existing zero-valued entry so the feedback
+		// controller does not forward it to fulfillment where
+		// ClusterNodeSet.size > 0 would reject it.  Older operator
+		// versions wrote NumberOfNodes = 0 for newly created
+		// NodePools; this cleans them up on upgrade.  Positive
+		// entries are preserved (last-known-value).
+		for i, nr := range instance.Status.NodeRequests {
+			if nr.NodeSet == nodeSet && nr.NumberOfNodes == 0 {
+				instance.Status.NodeRequests = append(
+					instance.Status.NodeRequests[:i],
+					instance.Status.NodeRequests[i+1:]...)
+				break
+			}
+		}
+		return nil
+	}
+
+	// Find the matching item inside the `nodeRequests` field of the
+	// status, or create a new one if there is no matching item yet.
 	var nodeRequestStatus *v1alpha1.NodeRequestStatus
 	for i, nodeRequestsItem := range instance.Status.NodeRequests {
 		if nodeRequestsItem.NodeSet == nodeSet {
@@ -825,14 +854,20 @@ func (r *ClusterOrderReconciler) handleNodePool(ctx context.Context, instance *v
 		}
 	}
 	if nodeRequestStatus == nil {
-		instance.Status.NodeRequests = append(instance.Status.NodeRequests, v1alpha1.NodeRequestStatus{
-			NodeSet:   nodeSet,
-			BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: instanceType},
-		})
+		instance.Status.NodeRequests = append(
+			instance.Status.NodeRequests,
+			v1alpha1.NodeRequestStatus{
+				NodeSet:   nodeSet,
+				BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: instanceType},
+			},
+		)
 		nodeRequestStatus = &instance.Status.NodeRequests[len(instance.Status.NodeRequests)-1]
 	}
 
-	// Update the selected `nodeRequests` item:
+	// Update the selected `nodeRequests` item with the NodePool's
+	// observed replica count.  The zero-guard above ensures this
+	// value is always positive, satisfying the fulfillment proto's
+	// ClusterNodeSet.size > 0 constraint.
 	oldValue := nodeRequestStatus.NumberOfNodes
 	newValue := int(nodePool.Status.Replicas)
 	if newValue != oldValue {

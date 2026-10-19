@@ -36,8 +36,17 @@ RUN [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; CGO_ENABLED=0 GOOS=${TARG
 RUN [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o trust-admission cmd/trust-admission/main.go
 
 FROM registry.access.redhat.com/ubi10-minimal:10.2-1790075626
+# Stamped to the real release version on osac-build-and-publish.yaml's
+# temp branch before tagging (same mechanism as Chart.yaml's own
+# version field) -- the committed default below is only ever what a
+# local/dev build sees. Surfaced as a real OCI label so Konflux's
+# release-side {{ oci_version }} tag templating resolves to it instead
+# of silently falling back to the base image's own inherited version
+# label.
+ARG VERSION=dev
 LABEL name="cloud-extensions/osac-operator-rhel10"
 LABEL cpe="cpe:/a:redhat:cloud_extensions:0.1::el10"
+LABEL org.opencontainers.image.version="${VERSION}"
 COPY --from=builder /opt/app-root/src/osac-operator/manager /usr/local/bin/
 COPY --from=builder /opt/app-root/src/osac-operator/console-proxy /usr/local/bin/
 COPY --from=builder /opt/app-root/src/osac-operator/trust-admission /usr/local/bin/

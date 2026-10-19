@@ -1,6 +1,11 @@
 # This defines the hostname for the OpenShift Route. When not set, the hostname is automatically assigned by OpenShift.
 externalHostname:
 
+# Route is the OpenShift ingress. Disable it when another ingress resource
+# (for example a Gateway API HTTPRoute on Kind) exposes the UI Service.
+route:
+  enabled: true
+
 api:
   fulfillment:
     url: https://fulfillment-api:8000
@@ -39,3 +44,5 @@ log:
 # Image configuration:
 images:
   ui: ghcr.io/osac-project/osac-ui:main  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+  # "auto" leaves the field unset so Kubernetes selects its tag-based default.
+  pullPolicy: auto

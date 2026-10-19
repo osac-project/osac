@@ -8,6 +8,7 @@ import pytest
 from tests.e2e.bmaas.regression.networking import bmi_ssh
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
+    assert_grpc_rejected,
     wait_for_bmh_available,
     wait_for_bmi_cr,
     wait_for_bmi_deletion,
@@ -288,6 +289,78 @@ class TestBmaasNetworking:
         )
         print("BMI3 auto EIP and attachment resolved")
 
+    def test_05c_verify_attachment_immutability(self, grpc: GRPCClient, k8s_hub_client: K8sClient) -> None:
+        """A running BMI's resolved attachment is immutable through the public API.
+
+        Changed SecurityGroup, interface, and auto-external-access updates are
+        rejected with InvalidArgument and the persisted attachment and CR spec are
+        unchanged after every rejection. The primary check runs before the
+        security-group comparison, so every candidate pins ``primary: true``.
+        """
+        _require(self.state, "bmi1", "subnet_a_id", "sg_id")
+        bmi1 = self.state["bmi1"]
+        subnet_a_id = self.state["subnet_a_id"]
+        sg_id = self.state["sg_id"]
+
+        instance_before = grpc.get_baremetal_instance(bmi_id=bmi1["id"])["object"]
+        cr_before = k8s_hub_client.get_json(resource="baremetalinstance", name=bmi1["cr"]).get("spec", {})
+
+        def stored_attachment(candidate: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "object": {"id": bmi1["id"], "spec": {"network_attachments": [candidate]}},
+                "updateMask": {"paths": ["spec.network_attachments"]},
+            }
+
+        def assert_unchanged() -> None:
+            instance_after = grpc.get_baremetal_instance(bmi_id=bmi1["id"])["object"]
+            spec_before = instance_before.get("spec", {})
+            spec_after = instance_after.get("spec", {})
+            before_attach = (spec_before.get("networkAttachments") or spec_before.get("network_attachments") or [{}])[0]
+            after_attach = (spec_after.get("networkAttachments") or spec_after.get("network_attachments") or [{}])[0]
+            assert after_attach == before_attach, "stored attachment changed"
+            cr_after = k8s_hub_client.get_json(resource="baremetalinstance", name=bmi1["cr"]).get("spec", {})
+            assert cr_after == cr_before, "BareMetalInstance CR spec changed"
+
+        # SecurityGroup removal is rejected.
+        with pytest.raises(subprocess.CalledProcessError) as exc_info:
+            grpc.call(
+                service="osac.public.v1.BareMetalInstances/Update",
+                data=stored_attachment(
+                    {"subnet": {"id": subnet_a_id}, "interface": "eth9", "primary": True, "security_groups": []}
+                ),
+            )
+        assert_grpc_rejected(exc_info, "InvalidArgument")
+        assert_unchanged()
+
+        # An interface change is rejected.
+        with pytest.raises(subprocess.CalledProcessError) as exc_info:
+            grpc.call(
+                service="osac.public.v1.BareMetalInstances/Update",
+                data=stored_attachment(
+                    {
+                        "subnet": {"id": subnet_a_id},
+                        "interface": "eth10",
+                        "primary": True,
+                        "security_groups": [{"id": sg_id}],
+                    }
+                ),
+            )
+        assert_grpc_rejected(exc_info, "InvalidArgument")
+        assert_unchanged()
+
+        # Flipping auto_external_ip_attachment after creation is rejected.
+        with pytest.raises(subprocess.CalledProcessError) as exc_info:
+            grpc.call(
+                service="osac.public.v1.BareMetalInstances/Update",
+                data={
+                    "object": {"id": bmi1["id"], "spec": {"auto_external_ip_attachment": True}},
+                    "updateMask": {"paths": ["spec.auto_external_ip_attachment"]},
+                },
+            )
+        assert_grpc_rejected(exc_info, "InvalidArgument")
+        assert_unchanged()
+        print("BMI attachment immutability verified")
+
     # ── Phase 3: Connectivity Tests ─────────────────────────────────────
 
     def test_06_l2_arping_same_subnet(self) -> None:
@@ -441,6 +514,8 @@ class TestBmaasNetworking:
             wait_for_bmi_deletion(k8s=k8s_hub_client, name=bmi["cr"])
             wait_for_bmi_grpc_removal(grpc=grpc, uuid=bmi["id"])
             wait_for_bmh_available(k8s=k8s_hub_client, name=bmi["bmh"], bmh_namespace=bmh_namespace)
+            if key == "bmi1":
+                self.__class__.state["bmi1_deleted"] = True
             print("BMI deprovisioned, BMH available")
 
     def test_14b_verify_auto_eip_garbage_collected(self, grpc: GRPCClient) -> None:
@@ -463,6 +538,15 @@ class TestBmaasNetworking:
             description="auto-created ExternalIP garbage collection",
         )
         print("Auto EIP and attachment garbage collected after BMI3 deletion")
+
+    def test_14c_verify_idempotent_delete(self, grpc: GRPCClient) -> None:
+        """A second public Delete of a removed BMI returns NotFound (the retry contract)."""
+        _require(self.state, "bmi1", "bmi1_deleted")
+        bmi1 = self.state["bmi1"]
+        with pytest.raises(subprocess.CalledProcessError) as exc_info:
+            grpc.call(service="osac.public.v1.BareMetalInstances/Delete", data={"id": bmi1["id"]})
+        assert_grpc_rejected(exc_info, "NotFound")
+        print("Second BMI delete returned NotFound")
 
     def test_15_delete_nat_gateway(self, grpc: GRPCClient, k8s_hub_client: K8sClient) -> None:
         if "nat_id" not in self.state:

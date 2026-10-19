@@ -179,6 +179,10 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 				},
 			},
 		}
+		ci.Status.ComputeNetworkAttachmentStatuses = []osacv1alpha1.ComputeNetworkAttachmentStatus{{
+			SubnetRef: "subnet-id-123",
+			IPAddress: "10.0.0.42",
+		}}
 
 		attachment = &osacv1alpha1.ExternalIPAttachment{
 			ObjectMeta: metav1.ObjectMeta{
@@ -377,10 +381,14 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 			Expect(updated.DeletionTimestamp).To(BeNil())
 		})
 
-		It("should requeue when CI has no VirtualMachineReference", func() {
-			ciNoVM := ci.DeepCopy()
-			ciNoVM.Status.VirtualMachineReference = nil
-			fakeClient = buildClient(attachment, publicIP, pool, ciNoVM)
+		It("should requeue when CI has no attachment IP even if it has a VirtualMachineReference", func() {
+			ciWithoutAttachmentIP := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: ci.ObjectMeta,
+				Status: osacv1alpha1.ComputeInstanceStatus{
+					VirtualMachineReference: ci.Status.VirtualMachineReference,
+				},
+			}
+			fakeClient = buildClient(attachment, publicIP, pool, ciWithoutAttachmentIP)
 			setupReconciler(fakeClient)
 
 			_, _ = reconcileOnce() // finalizer
@@ -392,6 +400,42 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 	})
 
 	Context("Annotation sync", func() {
+		It("uses attachment status IP as the DNAT target", func() {
+			ciWithAttachmentIP := ci.DeepCopy()
+			ciWithAttachmentIP.Status.ComputeNetworkAttachmentStatuses = []osacv1alpha1.ComputeNetworkAttachmentStatus{{
+				SubnetRef: "subnet-id-123",
+				IPAddress: "10.0.0.42",
+			}}
+			fakeClient = buildClient(attachment, publicIP, pool, ciWithAttachmentIP)
+			setupReconciler(fakeClient)
+
+			_, _ = reconcileOnce() // finalizer
+			result, err := reconcileOnce()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically("<=", defaultPreconditionRequeueInterval))
+
+			updated := &osacv1alpha1.ExternalIPAttachment{}
+			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
+			Expect(updated.Annotations[osacExternalIPTargetIPAnnotation]).To(Equal("10.0.0.42"))
+			Expect(updated.Annotations[osacExternalIPTargetNamespaceAnnotation]).To(Equal(ci.Status.VirtualMachineReference.Namespace))
+		})
+
+		It("waits for a VM reference before dispatching even when the attachment IP is reported", func() {
+			ciWithoutVMReference := ci.DeepCopy()
+			ciWithoutVMReference.Status.VirtualMachineReference = nil
+			fakeClient = buildClient(attachment, publicIP, pool, ciWithoutVMReference)
+			setupReconciler(fakeClient)
+
+			_, _ = reconcileOnce() // finalizer
+			result, err := reconcileOnce()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+
+			updated := &osacv1alpha1.ExternalIPAttachment{}
+			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
+			Expect(updated.Annotations).NotTo(HaveKey(osacExternalIPTargetIPAnnotation))
+		})
+
 		It("should set implementation-strategy, pool-name, and target-namespace annotations", func() {
 			fakeClient = buildClient(attachment, publicIP, pool, ci)
 			setupReconciler(fakeClient)

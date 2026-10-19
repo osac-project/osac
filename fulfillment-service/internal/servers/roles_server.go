@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
@@ -130,7 +131,12 @@ func (s *RolesServer) List(ctx context.Context,
 	if request.HasLimit() {
 		privateRequest.SetLimit(request.GetLimit())
 	}
-	privateRequest.SetFilter(request.GetFilter())
+	filter := "!(this.metadata.name.startsWith('cloud-provider'))"
+	if request.HasFilter() {
+		filter = "(" + request.GetFilter() + ") && " + filter
+	}
+
+	privateRequest.SetFilter(filter)
 	privateRequest.SetOrder(request.GetOrder())
 
 	privateResponse, err := s.delegate.List(ctx, privateRequest)
@@ -172,6 +178,10 @@ func (s *RolesServer) Get(ctx context.Context,
 	}
 
 	privateRole := privateResponse.GetObject()
+	if strings.HasPrefix(privateRole.GetMetadata().GetName(), "cloud-provider") {
+		err = grpcstatus.Errorf(grpccodes.NotFound, "role not found")
+		return
+	}
 	publicRole := &publicv1.Role{}
 	err = s.outMapper.Copy(ctx, privateRole, publicRole)
 	if err != nil {

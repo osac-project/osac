@@ -1,17 +1,12 @@
 name: Lint
 
-# Carried over as-is from osac-ui's own standalone repo at merge time, only
-# relocated (osac-ui/-prefixed paths) and path-scoped so it runs only on
-# osac-ui changes -- not yet wired into this repo's own lint tooling or
-# required-check conventions. That's a follow-up, not this move.
-on:
-  pull_request:
-    paths:
-      - 'osac-ui/**'
+# osac-ui's lint check, run by ci.yml when osac-ui changes (the `ui` filter) and part of the required `CI`.
+# It holds no path logic and no concurrency group of its own: ci.yml cancels the older run of a pull request.
+on:  # yamllint disable-line rule:truthy
+  workflow_call:
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+permissions:
+  contents: read
 
 jobs:
   lint:

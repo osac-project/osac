@@ -307,6 +307,7 @@ Disable these for any real deployment.
 |-------|---------|-------------|
 | `bundledPostgres.enabled` | `false` | Deploys bundled PostgreSQL for development and CI. It is not intended for production. |
 | `bundledVault.enabled` | `true` | Deploys an in-cluster OpenBao secret store for testing and CI. Set to `false` for production and follow the [secrets management configuration guide](secrets-management-configuration.md). |
+| `topolvm.enabled` | `false` | Installs the pinned TopoLVM CSI chart for Kind `dev-full`. It uses an external `lvmd` service and disposable `vg1`; the profile exposes the non-default `topolvm-provisioner` StorageClass. |
 
 The upgrade does not migrate data from the previous bundled PostgreSQL instance.
 Back up any data you need before upgrading.

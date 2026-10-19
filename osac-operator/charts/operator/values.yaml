@@ -147,11 +147,13 @@ networkManagers:
       - ipv4
     agentless_net:
       enabled: false
+      externalIPContractVersion: v1
       description: >-
         AgentlessNet VirtualNetwork and Subnet baseline. Implements UID-keyed
         namespaces, /31 transit links, Cumulus trunk VLANs, Subnet gateways,
-        and per-VirtualNetwork DHCP. SecurityGroups, NAT, workload attachment,
-        BGP, and external access remain unsupported.
+        per-VirtualNetwork DHCP, and UID-owned IPv4 ExternalIP allocation and
+        release. Attachments, SecurityGroups, NAT, BGP, and external traffic
+        remain unsupported.
       capabilities:
       - ipv4
   k8sManagers:

@@ -208,6 +208,10 @@ func (r *CreateRequest[O]) translateError(ctx context.Context, id, tenant, proje
 		return &ErrReference{
 			Reason: pgErr.Message,
 		}
+	case errOwnerReferenceCode:
+		return &ErrReference{
+			Reason: pgErr.Message,
+		}
 	case pgerrcode.ForeignKeyViolation:
 		switch {
 		case strings.HasSuffix(pgErr.ConstraintName, "_tenant_fk"):

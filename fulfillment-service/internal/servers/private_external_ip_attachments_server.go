@@ -451,6 +451,10 @@ func (s *PrivateExternalIPAttachmentsServer) validateExternalIPReference(
 	}
 
 	externalIP := getResponse.GetObject()
+	if externalIP.HasMetadata() && externalIP.GetMetadata().HasDeletionTimestamp() {
+		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"ExternalIP '%s' is being deleted", externalIPID)
+	}
 
 	if externalIP.GetStatus().GetState() != privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED {
 		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
@@ -491,7 +495,12 @@ func (s *PrivateExternalIPAttachmentsServer) validateComputeInstanceReference(
 		}
 		return networkingHubReference{}, ConvertDAOErrorToGRPC(err, "get", key)
 	}
-	return networkingHubReference{resourceType: "ComputeInstance", id: key, hubID: response.GetObject().GetStatus().GetHub()}, nil
+	computeInstance := response.GetObject()
+	if computeInstance.GetMetadata().HasDeletionTimestamp() {
+		return networkingHubReference{}, grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"ComputeInstance '%s' is being deleted", key)
+	}
+	return networkingHubReference{resourceType: "ComputeInstance", id: key, hubID: computeInstance.GetStatus().GetHub()}, nil
 }
 
 func (s *PrivateExternalIPAttachmentsServer) validateClusterReference(
@@ -546,7 +555,7 @@ func (s *PrivateExternalIPAttachmentsServer) getTargetID(
 
 func (s *PrivateExternalIPAttachmentsServer) validateUniqueness(
 	ctx context.Context, externalIPID string, targetID string) error {
-	eipFilter := fmt.Sprintf("(this.spec.external_ip.id == %[1]q || this.spec.external_ip.name == %[1]q) && !has(this.metadata.deletion_timestamp)", externalIPID)
+	eipFilter := fmt.Sprintf("(this.spec.external_ip.id == %[1]q || this.spec.external_ip.name == %[1]q)", externalIPID)
 	eipResp, err := s.externalIPAttachmentDao.List().
 		SetFilter(eipFilter).
 		SetLimit(1).

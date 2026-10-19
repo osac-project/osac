@@ -354,4 +354,123 @@ var _ = Describe("IPv4-only networking CRD contracts", func() {
 		object.Spec.IPFamily = "IPv6"
 		Expect(k8sClient.Update(ctx, object)).To(HaveOccurred())
 	})
+
+	It("rejects workload attachment spec changes for ComputeInstance and ClusterOrder while allowing status and metadata updates", func() {
+		By("creating a ComputeInstance with a network attachment")
+		computeInstance := &v1alpha1.ComputeInstance{
+			ObjectMeta: metav1.ObjectMeta{Name: networkingContractName("vm-attachment"), Namespace: "default"},
+			Spec:       newTestComputeInstanceSpec("test_template"),
+		}
+		computeInstance.Spec.NetworkAttachments = []v1alpha1.ComputeNetworkAttachment{{
+			SubnetRef:         "subnet-a",
+			SecurityGroupRefs: []string{"sg-a"},
+		}}
+		Expect(k8sClient.Create(ctx, computeInstance)).To(Succeed())
+		DeferCleanup(func() {
+			current := &v1alpha1.ComputeInstance{}
+			err := k8sClient.Get(ctx, client.ObjectKeyFromObject(computeInstance), current)
+			if apierrors.IsNotFound(err) {
+				return
+			}
+			Expect(err).ToNot(HaveOccurred())
+			current.SetFinalizers(nil)
+			Expect(k8sClient.Update(ctx, current)).To(Succeed())
+			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, current))).To(Succeed())
+			Eventually(func() bool {
+				return apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(computeInstance), current))
+			}, 5*time.Second, 50*time.Millisecond).Should(BeTrue())
+		})
+
+		By("rejecting a changed attachment subnet")
+		stored := &v1alpha1.ComputeInstance{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(computeInstance), stored)).To(Succeed())
+		stored.Spec.NetworkAttachments[0].SubnetRef = "subnet-b"
+		err := k8sClient.Update(ctx, stored)
+		Expect(err).To(HaveOccurred())
+		Expect(apierrors.IsInvalid(err)).To(BeTrue())
+
+		By("rejecting changed attachment security groups")
+		stored = &v1alpha1.ComputeInstance{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(computeInstance), stored)).To(Succeed())
+		stored.Spec.NetworkAttachments[0].SecurityGroupRefs = []string{"sg-b"}
+		err = k8sClient.Update(ctx, stored)
+		Expect(err).To(HaveOccurred())
+		Expect(apierrors.IsInvalid(err)).To(BeTrue())
+
+		By("keeping the persisted attachment unchanged")
+		stored = &v1alpha1.ComputeInstance{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(computeInstance), stored)).To(Succeed())
+		Expect(stored.Spec.NetworkAttachments).To(HaveLen(1))
+		Expect(stored.Spec.NetworkAttachments[0].SubnetRef).To(Equal("subnet-a"))
+		Expect(stored.Spec.NetworkAttachments[0].SecurityGroupRefs).To(Equal([]string{"sg-a"}))
+
+		By("allowing metadata and status updates for the ComputeInstance")
+		stored = &v1alpha1.ComputeInstance{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(computeInstance), stored)).To(Succeed())
+		stored.SetLabels(map[string]string{"contract-test": "allowed"})
+		Expect(k8sClient.Update(ctx, stored)).To(Succeed())
+		stored = &v1alpha1.ComputeInstance{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(computeInstance), stored)).To(Succeed())
+		stored.Status.Phase = v1alpha1.ComputeInstancePhaseRunning
+		Expect(k8sClient.Status().Update(ctx, stored)).To(Succeed())
+
+		By("creating a ClusterOrder with a network attachment")
+		clusterOrder := &v1alpha1.ClusterOrder{
+			ObjectMeta: metav1.ObjectMeta{Name: networkingContractName("cluster-attachment"), Namespace: "default"},
+			Spec: v1alpha1.ClusterOrderSpec{
+				TemplateID: "test_template",
+				NetworkAttachment: &v1alpha1.ClusterNetworkAttachment{
+					SubnetRef:         "subnet-a",
+					SecurityGroupRefs: []string{"sg-a"},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, clusterOrder)).To(Succeed())
+		DeferCleanup(func() {
+			current := &v1alpha1.ClusterOrder{}
+			err := k8sClient.Get(ctx, client.ObjectKeyFromObject(clusterOrder), current)
+			if apierrors.IsNotFound(err) {
+				return
+			}
+			Expect(err).ToNot(HaveOccurred())
+			current.SetFinalizers(nil)
+			Expect(k8sClient.Update(ctx, current)).To(Succeed())
+			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, current))).To(Succeed())
+			Eventually(func() bool {
+				return apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(clusterOrder), current))
+			}, 5*time.Second, 50*time.Millisecond).Should(BeTrue())
+		})
+
+		By("rejecting a changed ClusterOrder attachment subnet")
+		storedOrder := &v1alpha1.ClusterOrder{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(clusterOrder), storedOrder)).To(Succeed())
+		storedOrder.Spec.NetworkAttachment.SubnetRef = "subnet-b"
+		err = k8sClient.Update(ctx, storedOrder)
+		Expect(err).To(HaveOccurred())
+		Expect(apierrors.IsInvalid(err)).To(BeTrue())
+
+		By("rejecting changed ClusterOrder attachment security groups")
+		storedOrder = &v1alpha1.ClusterOrder{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(clusterOrder), storedOrder)).To(Succeed())
+		storedOrder.Spec.NetworkAttachment.SecurityGroupRefs = []string{"sg-b"}
+		err = k8sClient.Update(ctx, storedOrder)
+		Expect(err).To(HaveOccurred())
+		Expect(apierrors.IsInvalid(err)).To(BeTrue())
+
+		By("keeping the persisted ClusterOrder attachment unchanged")
+		storedOrder = &v1alpha1.ClusterOrder{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(clusterOrder), storedOrder)).To(Succeed())
+		Expect(storedOrder.Spec.NetworkAttachment.SubnetRef).To(Equal("subnet-a"))
+		Expect(storedOrder.Spec.NetworkAttachment.SecurityGroupRefs).To(Equal([]string{"sg-a"}))
+
+		By("allowing metadata and status updates for the ClusterOrder")
+		storedOrder = &v1alpha1.ClusterOrder{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(clusterOrder), storedOrder)).To(Succeed())
+		storedOrder.SetLabels(map[string]string{"contract-test": "allowed"})
+		Expect(k8sClient.Update(ctx, storedOrder)).To(Succeed())
+		storedOrder = &v1alpha1.ClusterOrder{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(clusterOrder), storedOrder)).To(Succeed())
+		storedOrder.Status.Phase = v1alpha1.ClusterOrderPhaseProgressing
+		Expect(k8sClient.Status().Update(ctx, storedOrder)).To(Succeed())
+	})
 })

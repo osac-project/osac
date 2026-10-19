@@ -94,7 +94,13 @@ func (b *BareMetalInstancesServerBuilder) Build() (result *BareMetalInstancesSer
 	inMapper, err := NewGenericMapper[*publicv1.BareMetalInstance, *privatev1.BareMetalInstance]().
 		SetLogger(b.logger).
 		SetStrict(true).
-		AddIgnoredFields("osac.public.v1.BareMetalInstanceStatus.state_transition_time").
+		AddIgnoredFields(
+			"osac.public.v1.BareMetalInstanceStatus.state_transition_time",
+			// The system sets the worker attribution fields once, at creation; users can read
+			// them but never supply them.
+			"osac.public.v1.BareMetalInstanceStatus.cluster",
+			"osac.public.v1.BareMetalInstanceStatus.node_set",
+		).
 		Build()
 	if err != nil {
 		return
@@ -236,8 +242,9 @@ func (s *BareMetalInstancesServer) Update(ctx context.Context,
 		return
 	}
 	for _, path := range request.GetUpdateMask().GetPaths() {
-		if path == "status" || path == "status.state_transition_time" {
-			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "status.state_transition_time is output-only")
+		if path == "status" || path == "status.state_transition_time" ||
+			path == "status.cluster" || path == "status.node_set" {
+			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "%s is output-only", path)
 			return
 		}
 	}

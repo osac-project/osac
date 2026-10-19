@@ -287,3 +287,33 @@ var _ = Describe("Manager.HasCapability", func() {
 		Expect(mgr.HasCapability(networkmanager.CapabilityDualStack)).To(BeFalse())
 	})
 })
+
+var _ = Describe("ExternalIPContractVersion", func() {
+	It("accepts v1 for a registered manager", func() {
+		manager, err := networkmanager.ParseConfigMap(&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "agentless", Namespace: "osac"},
+			Data: map[string]string{
+				"name":         "agentless_net",
+				"capabilities": "ipv4",
+				networkmanager.DataKeyExternalIPContractVersion: networkmanager.ExternalIPContractVersionV1,
+			},
+		}, networkmanager.FabricManager)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(manager.ExternalIPContractVersion).To(Equal(networkmanager.ExternalIPContractVersionV1))
+	})
+
+	It("rejects unsupported versions", func() {
+		_, err := networkmanager.ParseConfigMap(&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "agentless", Namespace: "osac"},
+			Data: map[string]string{
+				"name":         "agentless_net",
+				"capabilities": "ipv4",
+				networkmanager.DataKeyExternalIPContractVersion: "v2",
+			},
+		}, networkmanager.FabricManager)
+
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("unsupported ExternalIP contract version"))
+	})
+})

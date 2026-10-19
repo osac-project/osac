@@ -146,6 +146,7 @@ var _ = Describe("ComputeInstance InstanceType resize", func() {
 				Metadata:      privatev1.Metadata_builder{Name: networkClassName}.Build(),
 				Title:         "Resize test network class",
 				FabricManager: new("netris"),
+				K8SManager:    new(testVMK8SManagerName),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())

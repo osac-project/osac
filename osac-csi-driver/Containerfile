@@ -37,8 +37,17 @@ RUN [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; \
     -o osac-csi-driver ./cmd/osac-csi-driver
 
 FROM registry.access.redhat.com/ubi10-minimal:10.2-1790075626
+# Stamped to the real release version on osac-build-and-publish.yaml's
+# temp branch before tagging (same mechanism as Chart.yaml's own
+# version field). Surfaced as a real OCI label so Konflux's release-side
+# {{ oci_version }} tag templating resolves to it instead of silently
+# falling back to the base image's own inherited version label.
+# Separate from the main.version ldflags above (that one is baked into
+# the binary; this is the registry/OCI-level label).
+ARG VERSION=0.1.0
 LABEL name="cloud-extensions/osac-csi-driver-rhel10"
 LABEL cpe="cpe:/a:redhat:cloud_extensions:0.1::el10"
+LABEL org.opencontainers.image.version="${VERSION}"
 COPY --from=builder /opt/app-root/src/osac-csi-driver/osac-csi-driver /usr/local/bin/
 USER 1001
 ENTRYPOINT ["/usr/local/bin/osac-csi-driver"]

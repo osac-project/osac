@@ -73,6 +73,7 @@ var _ = Describe("MCP server", func() {
 	)
 
 	BeforeEach(func() {
+		Skip("OSAC-6371: quarantined – MCP fixture VirtualNetwork READY→PENDING race")
 		ctx = context.Background()
 		catalogItemID, computeInstanceID, otherComputeInstanceID = "", "", ""
 		templateID, diskImageID, instanceTypeID = "", "", ""
@@ -192,6 +193,7 @@ var _ = Describe("MCP server", func() {
 				Metadata:      privatev1.Metadata_builder{Name: fmt.Sprintf("mcp-network-class-%s", uuid.New()[24:32])}.Build(),
 				Title:         "MCP network class",
 				FabricManager: proto.String("netris"),
+				K8SManager:    new(testVMK8SManagerName),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())

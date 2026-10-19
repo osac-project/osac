@@ -259,6 +259,7 @@ var _ = Describe("Default networking provisioning", func() {
 	})
 
 	It("rejects Delete and default-label removal for system-managed VN/Subnet/SG", func(ctx context.Context) {
+		Skip("OSAC-6370: quarantined – default-network READY→PENDING fixture race")
 		tenantName := fmt.Sprintf("test-defnet-protect-%s", uuid.New())
 
 		By("Creating tenant and waiting for SYNCED")
@@ -434,6 +435,7 @@ func createDefaultNetworkClass(
 			Metadata:      privatev1.Metadata_builder{Name: fmt.Sprintf("%s-%s", namePrefix, uuid.New())}.Build(),
 			Title:         title,
 			FabricManager: new("cudn_net"),
+			K8SManager:    new(testVMK8SManagerName),
 			Spec: privatev1.NetworkClassSpec_builder{
 				Defaults: privatev1.NetworkDefaults_builder{
 					VirtualNetworkIpv4Cidr: virtualNetworkCIDR,

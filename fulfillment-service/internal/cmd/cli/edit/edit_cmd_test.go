@@ -222,7 +222,6 @@ var _ = Describe("Edit command", func() {
 		Expect(completed).ToNot(ContainElements(
 			"virtualnetwork", "virtualnetworks",
 			"subnet", "subnets",
-			"securitygroup", "securitygroups",
 			"externalip", "externalips",
 			"externalipattachment", "externalipattachments",
 			"natgateway", "natgateways",
@@ -239,6 +238,32 @@ var _ = Describe("Edit command", func() {
 		err := updatable.Ensure(mockHelper)
 		Expect(err).To(MatchError(`object type "osac.public.v1.VirtualNetwork" is immutable; updates are not supported`))
 	})
+
+	DescribeTable("rejects edits of every public networking resource through its real descriptor",
+		func(objectType string, fullName protoreflect.FullName) {
+			h := reflectionHelper.Lookup(objectType)
+			Expect(h).ToNot(BeNil(), "object type %q is not discoverable", objectType)
+
+			err := updatable.Ensure(h)
+			Expect(err).To(MatchError(fmt.Sprintf(
+				"object type %q is immutable; updates are not supported", fullName)))
+		},
+		Entry("VirtualNetwork", "virtualnetwork", protoreflect.FullName("osac.public.v1.VirtualNetwork")),
+		Entry("Subnet", "subnet", protoreflect.FullName("osac.public.v1.Subnet")),
+		Entry("ExternalIP", "externalip", protoreflect.FullName("osac.public.v1.ExternalIP")),
+		Entry("ExternalIPAttachment", "externalipattachment", protoreflect.FullName("osac.public.v1.ExternalIPAttachment")),
+		Entry("NATGateway", "natgateway", protoreflect.FullName("osac.public.v1.NATGateway")),
+	)
+
+	DescribeTable("discovers rule-only SecurityGroup updates through its real descriptor",
+		func(objectType string, fullName protoreflect.FullName) {
+			h := reflectionHelper.Lookup(objectType)
+			Expect(h).ToNot(BeNil(), "object type %q is not discoverable", objectType)
+			Expect(h.FullName()).To(Equal(fullName))
+			Expect(updatable.Ensure(h)).ToNot(HaveOccurred())
+		},
+		Entry("SecurityGroup", "securitygroup", protoreflect.FullName("osac.public.v1.SecurityGroup")),
+	)
 
 	It("allows edits of update-capable objects", func() {
 		ctrl := gomock.NewController(GinkgoT())

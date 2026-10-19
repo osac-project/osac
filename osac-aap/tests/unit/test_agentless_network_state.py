@@ -63,6 +63,40 @@ def delete_virtual_network(store, uid, tenant_id=TENANT_ONE):
     return store.delete_and_remove_virtual_network(uid, tenant_id)
 
 
+def register_external_ip_pool(store, *, tenant_id=TENANT_ONE, cidr=POOL_CIDR):
+    return store.ensure_external_ip_pool(
+        POOL_UID,
+        POOL_FULFILLMENT_ID,
+        tenant_id,
+        "IPv4",
+        [cidr],
+    )
+
+
+def reserve_external_address(
+    store,
+    uid,
+    fulfillment_id,
+    *,
+    tenant_id=TENANT_ONE,
+    pool_uid=POOL_UID,
+    pool_fulfillment_id=POOL_FULFILLMENT_ID,
+    pool_tenant_id=TENANT_ONE,
+    pool_cidr=POOL_CIDR,
+    check_mode=False,
+):
+    return store.reserve_external_ip(
+        uid,
+        fulfillment_id,
+        tenant_id,
+        pool_uid,
+        pool_fulfillment_id,
+        pool_tenant_id,
+        pool_cidr,
+        check_mode=check_mode,
+    )
+
+
 def available_subnet_cidr(parent, *, prefix=24, exclude=()):
     parent_network = ipaddress.ip_network(parent["virtual_network_cidr"])
     transit = ipaddress.ip_network(parent["transit"]["cidr"])
@@ -819,6 +853,7 @@ def test_state_database_uses_current_schema_v1_and_preserves_uid_and_transit_ind
             "virtual_networks",
             "subnets",
             "external_ip_pools",
+            "external_ips",
         }
         assert connection.execute("SELECT count(*) FROM virtual_networks").fetchone()[0] == 2
         with pytest.raises(sqlite3.IntegrityError):
@@ -837,6 +872,7 @@ def test_incomplete_schema_v1_fails_closed_without_modification(tmp_path):
     store = store_for(tmp_path)
     original = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
     with sqlite3.connect(store.path) as connection:
+        connection.execute("DROP TABLE IF EXISTS external_ips")
         connection.execute("DROP TABLE IF EXISTS external_ip_pools")
         connection.execute("DROP TABLE subnets")
         connection.execute("PRAGMA user_version = 1")
@@ -907,6 +943,7 @@ def test_external_ip_pool_registers_identity_in_current_schema_v1(tmp_path):
             "virtual_networks",
             "subnets",
             "external_ip_pools",
+            "external_ips",
         }
 
 
@@ -1717,3 +1754,244 @@ def test_tenant_identity_is_checked_on_retry_read_and_delete(tmp_path, monkeypat
     )
     with pytest.raises(StateError, match="tenant does not match"):
         delete_virtual_network(store, UID_ONE, tenant_id=TENANT_TWO)
+
+
+
+def test_external_ip_reservation_reuses_uid_and_allocates_unique_addresses(tmp_path):
+    store = store_for(tmp_path)
+    register_external_ip_pool(store, cidr="198.51.100.0/30")
+
+    first, first_changed = reserve_external_address(
+        store, UID_ONE, POOL_UID, pool_cidr="198.51.100.0/30"
+    )
+    retry, retry_changed = reserve_external_address(
+        store, UID_ONE, POOL_UID, pool_cidr="198.51.100.0/30"
+    )
+    second, second_changed = reserve_external_address(
+        store, UID_TWO, UID_THREE, pool_cidr="198.51.100.0/30"
+    )
+
+    assert retry == first
+    assert first_changed is True
+    assert retry_changed is False
+    assert {first["address"], second["address"]} == {
+        "198.51.100.1",
+        "198.51.100.2",
+    }
+    assert second_changed is True
+
+
+def test_external_ip_reservation_rejects_exhausted_or_mismatched_pool(tmp_path):
+    store = store_for(tmp_path)
+    register_external_ip_pool(store, cidr="198.51.100.0/30")
+    reserve_external_address(store, UID_ONE, POOL_UID, pool_cidr="198.51.100.0/30")
+    reserve_external_address(store, UID_TWO, UID_THREE, pool_cidr="198.51.100.0/30")
+
+    with pytest.raises(StateError, match="no available"):
+        reserve_external_address(store, UID_THREE, UID_ONE, pool_cidr="198.51.100.0/30")
+    with pytest.raises(StateError, match="identity does not match"):
+        reserve_external_address(
+            store,
+            UID_ONE,
+            POOL_UID,
+            pool_cidr="198.51.100.4/30",
+            pool_fulfillment_id=UID_THREE,
+        )
+    with pytest.raises(StateError, match="tenant"):
+        reserve_external_address(store, UID_THREE, UID_ONE, tenant_id=TENANT_TWO)
+
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute("SELECT count(*) FROM external_ips").fetchone()[0] == 2
+
+
+def test_external_ip_reservation_uses_gap_search_for_fragmented_large_pool(tmp_path):
+    store = store_for(tmp_path)
+    cidr = "10.20.0.0/16"
+    register_external_ip_pool(store, cidr=cidr)
+    network = ipaddress.ip_network(cidr)
+
+    with sqlite3.connect(store.path) as connection:
+        for offset in range(2, 259):
+            connection.execute(
+                "INSERT INTO external_ips "
+                "(uid, fulfillment_id, tenant_id, pool_uid, address) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    str(uuid.uuid4()),
+                    str(uuid.uuid4()),
+                    TENANT_ONE,
+                    POOL_UID,
+                    str(ipaddress.IPv4Address(int(network.network_address) + offset)),
+                ),
+            )
+        # Put the most recent reservation before the occupied run so the bounded
+        # probe path crosses 256 allocated addresses and uses the gap search.
+        connection.execute(
+            "INSERT INTO external_ips "
+            "(uid, fulfillment_id, tenant_id, pool_uid, address) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                str(uuid.uuid4()),
+                str(uuid.uuid4()),
+                TENANT_ONE,
+                POOL_UID,
+                str(ipaddress.IPv4Address(int(network.network_address) + 1)),
+            ),
+        )
+        address_value_sql = store._external_ip_address_value_sql()
+        query_plan = connection.execute(
+            f"""EXPLAIN QUERY PLAN SELECT {address_value_sql}
+                FROM external_ips
+                WHERE pool_uid = ?
+                  AND {address_value_sql} >= ?
+                  AND {address_value_sql} < ?
+                ORDER BY {address_value_sql}""",
+            (
+                POOL_UID,
+                int(network.network_address) + 1,
+                int(network.network_address) + 300,
+            ),
+        ).fetchall()
+        assert any(
+            "external_ips_by_pool_address_value" in row[3] for row in query_plan
+        )
+
+    reservation, changed = reserve_external_address(
+        store, str(uuid.uuid4()), str(uuid.uuid4()), pool_cidr=cidr
+    )
+
+    assert changed is True
+    assert reservation["address"] == "10.20.1.3"
+
+
+def test_external_ip_reservation_supports_shared_tenant_and_small_cidrs(tmp_path):
+    store = store_for(tmp_path)
+    register_external_ip_pool(store, tenant_id="shared", cidr="203.0.113.0/31")
+
+    first, _ = reserve_external_address(
+        store,
+        UID_ONE,
+        POOL_UID,
+        tenant_id=TENANT_TWO,
+        pool_tenant_id="shared",
+        pool_cidr="203.0.113.0/31",
+    )
+    second, _ = reserve_external_address(
+        store,
+        UID_TWO,
+        UID_THREE,
+        tenant_id=TENANT_TWO,
+        pool_tenant_id="shared",
+        pool_cidr="203.0.113.0/31",
+    )
+
+    assert {first["address"], second["address"]} == {"203.0.113.0", "203.0.113.1"}
+
+
+def test_external_ip_reservation_release_is_owner_checked_and_idempotent(tmp_path):
+    store = store_for(tmp_path)
+    register_external_ip_pool(store)
+    reservation, _ = reserve_external_address(store, UID_ONE, POOL_UID)
+
+    with pytest.raises(StateError, match="identity does not match"):
+        store.release_external_ip(UID_ONE, UID_TWO, TENANT_ONE, POOL_UID)
+
+    released, changed = store.release_external_ip(UID_ONE, POOL_UID, TENANT_ONE, POOL_UID)
+    absent, unchanged = store.release_external_ip(UID_ONE, POOL_UID, TENANT_ONE, POOL_UID)
+
+    assert released == reservation
+    assert changed is True
+    assert absent is None
+    assert unchanged is False
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute("SELECT count(*) FROM external_ips").fetchone()[0] == 0
+
+
+def test_external_ip_reservation_check_mode_does_not_write(tmp_path):
+    store = store_for(tmp_path)
+    register_external_ip_pool(store)
+
+    candidate, would_change = reserve_external_address(
+        store, UID_ONE, POOL_UID, check_mode=True
+    )
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute("SELECT count(*) FROM external_ips").fetchone()[0] == 0
+
+    assert ipaddress.ip_address(candidate["address"]) in ipaddress.ip_network(
+        POOL_CIDR, strict=True
+    )
+    assert would_change is True
+
+
+def test_external_ip_pool_cannot_be_deleted_while_addresses_are_reserved(tmp_path):
+    store = store_for(tmp_path)
+    pool, _ = register_external_ip_pool(store)
+    reserve_external_address(store, UID_ONE, POOL_UID)
+
+    with pytest.raises(StateError, match="ExternalIP reservation"):
+        store.delete_external_ip_pool(
+            POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+        )
+
+    store.release_external_ip(UID_ONE, POOL_UID, TENANT_ONE, POOL_UID)
+    deleted, changed = store.delete_external_ip_pool(
+        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+    )
+    assert deleted == pool
+    assert changed is True
+
+
+@pytest.mark.parametrize(
+    ("action", "method", "result", "expected"),
+    [
+        (
+            "reserve_external_ip",
+            "reserve_external_ip",
+            {"uid": UID_ONE, "address": "198.51.100.1"},
+            {"changed": True, "backend_network_id": UID_ONE, "external_ip": {"uid": UID_ONE, "address": "198.51.100.1"}},
+        ),
+        (
+            "release_external_ip",
+            "release_external_ip",
+            None,
+            {"changed": False, "backend_network_id": UID_ONE},
+        ),
+    ],
+)
+def test_external_ip_actions_return_state_results(action, method, result, expected, monkeypatch):
+    module = importlib.import_module(
+        "ansible_collections.osac.templates.plugins.modules.agentless_net_state"
+    )
+
+    class ModuleExit(Exception):
+        pass
+
+    def exit_json(**kwargs):
+        raise ModuleExit(kwargs)
+
+    module_object = SimpleNamespace(
+        params={
+            "action": action,
+            "state_file": "/unused/state.sqlite3",
+            "uid": UID_ONE,
+            "fulfillment_id": UID_TWO,
+            "tenant_id": TENANT_ONE,
+            "pool_uid": POOL_UID,
+            "pool_fulfillment_id": POOL_FULFILLMENT_ID,
+            "pool_tenant_id": TENANT_ONE,
+            "pool_cidr": POOL_CIDR,
+        },
+        check_mode=False,
+        exit_json=exit_json,
+        fail_json=lambda **kwargs: pytest.fail(f"unexpected module error: {kwargs}"),
+    )
+    monkeypatch.setattr(module, "AnsibleModule", lambda **kwargs: module_object)
+    store = Mock()
+    getattr(store, method).return_value = (result, expected["changed"])
+    monkeypatch.setattr(module, "StateStore", lambda path: store)
+
+    with pytest.raises(ModuleExit) as returned:
+        module.main()
+
+    assert returned.value.args[0] == expected
+    getattr(store, method).assert_called_once()

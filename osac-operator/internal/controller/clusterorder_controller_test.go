@@ -42,6 +42,9 @@ import (
 func readyClusterOrderNodePool(instanceType string, replicas int32) hypershiftv1beta1.NodePool {
 	return hypershiftv1beta1.NodePool{
 		ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentNodeSetLabel: instanceType, agentInstanceTypeLabel: instanceType}},
+		Spec: hypershiftv1beta1.NodePoolSpec{
+			Replicas: p32(replicas),
+		},
 		Status: hypershiftv1beta1.NodePoolStatus{
 			Replicas: replicas,
 			Conditions: []hypershiftv1beta1.NodePoolCondition{
@@ -1559,8 +1562,11 @@ var _ = Describe("ClusterOrder Controller", func() {
 
 			nodePool := &hypershiftv1beta1.NodePool{
 				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentNodeSetLabel: "m1.large", agentInstanceTypeLabel: "m1.large"}},
+				Spec: hypershiftv1beta1.NodePoolSpec{
+					Replicas: p32(5),
+				},
 				Status: hypershiftv1beta1.NodePoolStatus{
-					Replicas: 5,
+					Replicas: 3,
 				},
 			}
 
@@ -1568,14 +1574,14 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(instance.Spec.NodeRequests).To(HaveLen(1),
-				"spec.nodeRequests must not be mutated by observed state")
+				"spec.nodeRequests must not be mutated")
 			Expect(instance.Spec.NodeRequests[0].NumberOfNodes).To(Equal(3),
 				"spec.nodeRequests[0].numberOfNodes must remain unchanged")
 
 			Expect(instance.Status.NodeRequests).To(HaveLen(1),
 				"status.nodeRequests should have exactly one entry")
 			Expect(instance.Status.NodeRequests[0].BareMetal.InstanceType).To(Equal("m1.large"))
-			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(5),
+			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(3),
 				"status.nodeRequests[0].numberOfNodes should reflect observed replicas")
 		})
 
@@ -1595,8 +1601,11 @@ var _ = Describe("ClusterOrder Controller", func() {
 
 			nodePool := &hypershiftv1beta1.NodePool{
 				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentNodeSetLabel: "m1.large", agentInstanceTypeLabel: "m1.large"}},
+				Spec: hypershiftv1beta1.NodePoolSpec{
+					Replicas: p32(5),
+				},
 				Status: hypershiftv1beta1.NodePoolStatus{
-					Replicas: 5,
+					Replicas: 3,
 				},
 			}
 
@@ -1604,7 +1613,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(instance.Status.NodeRequests).To(HaveLen(1))
-			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(5))
+			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(3))
 			Expect(instance.Spec.NodeRequests).To(HaveLen(1),
 				"spec must not be modified")
 		})
@@ -1622,15 +1631,13 @@ var _ = Describe("ClusterOrder Controller", func() {
 			nodePools := &hypershiftv1beta1.NodePoolList{Items: []hypershiftv1beta1.NodePool{
 				{
 					ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentNodeSetLabel: "m1.small", agentInstanceTypeLabel: "m1.small"}},
-					Status: hypershiftv1beta1.NodePoolStatus{
-						Replicas: 2,
-					},
+					Spec:       hypershiftv1beta1.NodePoolSpec{Replicas: p32(2)},
+					Status:     hypershiftv1beta1.NodePoolStatus{Replicas: 2},
 				},
 				{
 					ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentNodeSetLabel: "m1.large", agentInstanceTypeLabel: "m1.large"}},
-					Status: hypershiftv1beta1.NodePoolStatus{
-						Replicas: 4,
-					},
+					Spec:       hypershiftv1beta1.NodePoolSpec{Replicas: p32(4)},
+					Status:     hypershiftv1beta1.NodePoolStatus{Replicas: 4},
 				},
 			}}
 			status := []v1alpha1.NodeRequestStatus{
@@ -1664,6 +1671,9 @@ var _ = Describe("ClusterOrder Controller", func() {
 
 			nodePool := &hypershiftv1beta1.NodePool{
 				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentNodeSetLabel: "m1.large", agentInstanceTypeLabel: "m1.large"}},
+				Spec: hypershiftv1beta1.NodePoolSpec{
+					Replicas: p32(5),
+				},
 				Status: hypershiftv1beta1.NodePoolStatus{
 					Replicas: 5,
 				},
@@ -1674,6 +1684,133 @@ var _ = Describe("ClusterOrder Controller", func() {
 
 			Expect(instance.Status.NodeRequests).To(HaveLen(1))
 			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(5))
+		})
+
+		It("skips status update when observed replicas is zero (new NodePool)", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{NodeSet: "workers", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "ci-worker-bm"}, NumberOfNodes: 1},
+					},
+				},
+			}
+
+			nodePool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentNodeSetLabel: "workers", agentInstanceTypeLabel: "ci-worker-bm"}},
+				Spec: hypershiftv1beta1.NodePoolSpec{
+					Replicas: p32(1),
+				},
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 0,
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(instance.Status.NodeRequests).To(BeEmpty(),
+				"no status entry should be created when observed replicas is zero")
+		})
+
+		It("preserves existing positive status when observed replicas is zero", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{NodeSet: "workers", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "ci-worker-bm"}, NumberOfNodes: 3},
+					},
+				},
+				Status: v1alpha1.ClusterOrderStatus{
+					NodeRequests: []v1alpha1.NodeRequestStatus{
+						{NodeSet: "workers", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "ci-worker-bm"}, NumberOfNodes: 3},
+					},
+				},
+			}
+
+			nodePool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentNodeSetLabel: "workers", agentInstanceTypeLabel: "ci-worker-bm"}},
+				Spec: hypershiftv1beta1.NodePoolSpec{
+					Replicas: p32(1),
+				},
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 0,
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(instance.Status.NodeRequests).To(HaveLen(1),
+				"existing status entry must be preserved")
+			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(3),
+				"existing numberOfNodes must not change when observed replicas is zero")
+		})
+
+		It("removes pre-existing zero entry when observed replicas is zero", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{NodeSet: "workers", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "ci-worker-bm"}, NumberOfNodes: 1},
+					},
+				},
+				Status: v1alpha1.ClusterOrderStatus{
+					NodeRequests: []v1alpha1.NodeRequestStatus{
+						{NodeSet: "workers", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "ci-worker-bm"}, NumberOfNodes: 0},
+					},
+				},
+			}
+
+			nodePool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentNodeSetLabel: "workers", agentInstanceTypeLabel: "ci-worker-bm"}},
+				Spec: hypershiftv1beta1.NodePoolSpec{
+					Replicas: p32(1),
+				},
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 0,
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(instance.Status.NodeRequests).To(BeEmpty(),
+				"pre-existing zero entry must be removed to prevent feedback from forwarding it")
+		})
+
+		It("removes pre-existing zero entry while preserving unrelated entries", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{NodeSet: "gpu", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "bm.gpu"}, NumberOfNodes: 2},
+						{NodeSet: "workers", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "ci-worker-bm"}, NumberOfNodes: 1},
+					},
+				},
+				Status: v1alpha1.ClusterOrderStatus{
+					NodeRequests: []v1alpha1.NodeRequestStatus{
+						{NodeSet: "gpu", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "bm.gpu"}, NumberOfNodes: 4},
+						{NodeSet: "workers", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "ci-worker-bm"}, NumberOfNodes: 0},
+					},
+				},
+			}
+
+			nodePool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentNodeSetLabel: "workers", agentInstanceTypeLabel: "ci-worker-bm"}},
+				Spec: hypershiftv1beta1.NodePoolSpec{
+					Replicas: p32(1),
+				},
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 0,
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(instance.Status.NodeRequests).To(HaveLen(1),
+				"only the matching zero entry should be removed")
+			Expect(instance.Status.NodeRequests[0].NodeSet).To(Equal("gpu"),
+				"unrelated entry must be preserved")
+			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(4),
+				"unrelated entry value must be unchanged")
 		})
 	})
 
@@ -1812,8 +1949,11 @@ var _ = Describe("ClusterOrder Controller", func() {
 
 			nodePool := &hypershiftv1beta1.NodePool{
 				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentNodeSetLabel: "m1.large", agentInstanceTypeLabel: "m1.large"}},
+				Spec: hypershiftv1beta1.NodePoolSpec{
+					Replicas: p32(5),
+				},
 				Status: hypershiftv1beta1.NodePoolStatus{
-					Replicas: 5,
+					Replicas: 3,
 				},
 			}
 
@@ -1821,14 +1961,14 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(instance.Spec.NodeRequests).To(HaveLen(1),
-				"spec.nodeRequests must not be mutated by observed state")
+				"spec.nodeRequests must not be mutated")
 			Expect(instance.Spec.NodeRequests[0].NumberOfNodes).To(Equal(3),
 				"spec.nodeRequests[0].numberOfNodes must remain unchanged")
 
 			Expect(instance.Status.NodeRequests).To(HaveLen(1),
 				"status.nodeRequests should have exactly one entry")
 			Expect(instance.Status.NodeRequests[0].BareMetal.InstanceType).To(Equal("m1.large"))
-			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(5),
+			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(3),
 				"status.nodeRequests[0].numberOfNodes should reflect observed replicas")
 		})
 
@@ -1848,8 +1988,11 @@ var _ = Describe("ClusterOrder Controller", func() {
 
 			nodePool := &hypershiftv1beta1.NodePool{
 				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentNodeSetLabel: "m1.large", agentInstanceTypeLabel: "m1.large"}},
+				Spec: hypershiftv1beta1.NodePoolSpec{
+					Replicas: p32(5),
+				},
 				Status: hypershiftv1beta1.NodePoolStatus{
-					Replicas: 5,
+					Replicas: 3,
 				},
 			}
 
@@ -1857,7 +2000,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(instance.Status.NodeRequests).To(HaveLen(1))
-			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(5))
+			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(3))
 			Expect(instance.Spec.NodeRequests).To(HaveLen(1),
 				"spec must not be modified")
 		})
@@ -1874,9 +2017,8 @@ var _ = Describe("ClusterOrder Controller", func() {
 
 			nodePool := &hypershiftv1beta1.NodePool{
 				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentNodeSetLabel: "m1.small", agentInstanceTypeLabel: "m1.small"}},
-				Status: hypershiftv1beta1.NodePoolStatus{
-					Replicas: 2,
-				},
+				Spec:       hypershiftv1beta1.NodePoolSpec{Replicas: p32(2)},
+				Status:     hypershiftv1beta1.NodePoolStatus{Replicas: 2},
 			}
 			instance.Status.NodeRequests = []v1alpha1.NodeRequestStatus{
 				{NodeSet: "m1.large", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "m1.large"}, NumberOfNodes: 0},
@@ -1908,6 +2050,9 @@ var _ = Describe("ClusterOrder Controller", func() {
 
 			nodePool := &hypershiftv1beta1.NodePool{
 				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentNodeSetLabel: "m1.large", agentInstanceTypeLabel: "m1.large"}},
+				Spec: hypershiftv1beta1.NodePoolSpec{
+					Replicas: p32(5),
+				},
 				Status: hypershiftv1beta1.NodePoolStatus{
 					Replicas: 5,
 				},
@@ -1918,6 +2063,273 @@ var _ = Describe("ClusterOrder Controller", func() {
 
 			Expect(instance.Status.NodeRequests).To(HaveLen(1))
 			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(5))
+		})
+
+		It("skips status update when observed replicas is zero (new NodePool)", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{NodeSet: "workers", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "ci-worker-bm"}, NumberOfNodes: 1},
+					},
+				},
+			}
+
+			nodePool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentNodeSetLabel: "workers", agentInstanceTypeLabel: "ci-worker-bm"}},
+				Spec: hypershiftv1beta1.NodePoolSpec{
+					Replicas: p32(1),
+				},
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 0,
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(instance.Status.NodeRequests).To(BeEmpty(),
+				"no status entry should be created when observed replicas is zero")
+		})
+
+		It("preserves existing positive status when observed replicas is zero", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{NodeSet: "workers", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "ci-worker-bm"}, NumberOfNodes: 3},
+					},
+				},
+				Status: v1alpha1.ClusterOrderStatus{
+					NodeRequests: []v1alpha1.NodeRequestStatus{
+						{NodeSet: "workers", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "ci-worker-bm"}, NumberOfNodes: 3},
+					},
+				},
+			}
+
+			nodePool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentNodeSetLabel: "workers", agentInstanceTypeLabel: "ci-worker-bm"}},
+				Spec: hypershiftv1beta1.NodePoolSpec{
+					Replicas: p32(1),
+				},
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 0,
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(instance.Status.NodeRequests).To(HaveLen(1),
+				"existing status entry must be preserved")
+			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(3),
+				"existing numberOfNodes must not change when observed replicas is zero")
+		})
+
+		It("skips status update when spec replicas is nil and observed is zero", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{NodeSet: "workers", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "ci-worker-bm"}, NumberOfNodes: 1},
+					},
+				},
+			}
+
+			nodePool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						agentNodeSetLabel:      "workers",
+						agentInstanceTypeLabel: "ci-worker-bm",
+					},
+				},
+				Spec: hypershiftv1beta1.NodePoolSpec{
+					Replicas: nil,
+				},
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 0,
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(instance.Status.NodeRequests).To(BeEmpty(),
+				"no status entry should be created when observed replicas is zero")
+		})
+
+		It("preserves existing nonzero status when spec replicas is nil and observed is zero", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{NodeSet: "workers", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "ci-worker-bm"}, NumberOfNodes: 3},
+					},
+				},
+				Status: v1alpha1.ClusterOrderStatus{
+					NodeRequests: []v1alpha1.NodeRequestStatus{
+						{NodeSet: "workers", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "ci-worker-bm"}, NumberOfNodes: 3},
+					},
+				},
+			}
+
+			nodePool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						agentNodeSetLabel:      "workers",
+						agentInstanceTypeLabel: "ci-worker-bm",
+					},
+				},
+				Spec: hypershiftv1beta1.NodePoolSpec{
+					Replicas: nil,
+				},
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 0,
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(instance.Status.NodeRequests).To(HaveLen(1),
+				"existing status entry must be preserved")
+			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(3),
+				"existing numberOfNodes must not be overwritten when observed is zero")
+		})
+
+		It("reports positive observed replicas when spec replicas is nil (autoscaling)", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{NodeSet: "workers", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "ci-worker-bm"}, NumberOfNodes: 1},
+					},
+				},
+			}
+
+			nodePool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						agentNodeSetLabel:      "workers",
+						agentInstanceTypeLabel: "ci-worker-bm",
+					},
+				},
+				Spec: hypershiftv1beta1.NodePoolSpec{
+					Replicas: nil, // autoscaling: Spec.Replicas must be nil
+				},
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 5, // autoscaler has provisioned nodes
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(instance.Status.NodeRequests).To(HaveLen(1),
+				"autoscaling NodePool with positive observed replicas must create a status entry")
+			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(5),
+				"status should reflect observed replica count from autoscaler")
+		})
+
+		It("updates existing status with autoscaling observed replicas", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{NodeSet: "workers", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "ci-worker-bm"}, NumberOfNodes: 3},
+					},
+				},
+				Status: v1alpha1.ClusterOrderStatus{
+					NodeRequests: []v1alpha1.NodeRequestStatus{
+						{NodeSet: "workers", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "ci-worker-bm"}, NumberOfNodes: 3},
+					},
+				},
+			}
+
+			nodePool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						agentNodeSetLabel:      "workers",
+						agentInstanceTypeLabel: "ci-worker-bm",
+					},
+				},
+				Spec: hypershiftv1beta1.NodePoolSpec{
+					Replicas: nil, // autoscaling
+				},
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 7, // autoscaler scaled up
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(instance.Status.NodeRequests).To(HaveLen(1),
+				"existing status entry must be updated")
+			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(7),
+				"status should reflect autoscaler's updated observed count")
+		})
+
+		It("removes pre-existing zero entry when observed replicas is zero", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{NodeSet: "workers", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "ci-worker-bm"}, NumberOfNodes: 1},
+					},
+				},
+				Status: v1alpha1.ClusterOrderStatus{
+					NodeRequests: []v1alpha1.NodeRequestStatus{
+						{NodeSet: "workers", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "ci-worker-bm"}, NumberOfNodes: 0},
+					},
+				},
+			}
+
+			nodePool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentNodeSetLabel: "workers", agentInstanceTypeLabel: "ci-worker-bm"}},
+				Spec: hypershiftv1beta1.NodePoolSpec{
+					Replicas: p32(1),
+				},
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 0,
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(instance.Status.NodeRequests).To(BeEmpty(),
+				"pre-existing zero entry must be removed to prevent feedback from forwarding it")
+		})
+
+		It("removes pre-existing zero entry while preserving unrelated entries", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{NodeSet: "gpu", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "bm.gpu"}, NumberOfNodes: 2},
+						{NodeSet: "workers", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "ci-worker-bm"}, NumberOfNodes: 1},
+					},
+				},
+				Status: v1alpha1.ClusterOrderStatus{
+					NodeRequests: []v1alpha1.NodeRequestStatus{
+						{NodeSet: "gpu", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "bm.gpu"}, NumberOfNodes: 4},
+						{NodeSet: "workers", BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "ci-worker-bm"}, NumberOfNodes: 0},
+					},
+				},
+			}
+
+			nodePool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentNodeSetLabel: "workers", agentInstanceTypeLabel: "ci-worker-bm"}},
+				Spec: hypershiftv1beta1.NodePoolSpec{
+					Replicas: p32(1),
+				},
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 0,
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(instance.Status.NodeRequests).To(HaveLen(1),
+				"only the matching zero entry should be removed")
+			Expect(instance.Status.NodeRequests[0].NodeSet).To(Equal("gpu"),
+				"unrelated entry must be preserved")
+			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(4),
+				"unrelated entry value must be unchanged")
 		})
 	})
 

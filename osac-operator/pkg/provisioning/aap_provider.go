@@ -134,7 +134,8 @@ func (p *AAPProvider) CancelJob(ctx context.Context, jobID string) error {
 	return p.cancelProvisionJob(ctx, jobID)
 }
 
-// GetProvisionStatusWithExtraVars checks provisioning job status and returns its output variables.
+// GetProvisionStatusWithExtraVars checks provisioning job status and returns its submitted inputs
+// and output artifacts from the same AAP job response.
 func (p *AAPProvider) GetProvisionStatusWithExtraVars(ctx context.Context, resource client.Object, jobID string) (ProvisionStatusWithExtraVars, error) {
 	job, err := p.client.GetJob(ctx, jobID)
 	if err != nil {
@@ -142,7 +143,17 @@ func (p *AAPProvider) GetProvisionStatusWithExtraVars(ctx context.Context, resou
 	}
 
 	status := ProvisionStatusWithExtraVars{ProvisionStatus: provisionStatusFromAAPJob(ctx, jobID, job)}
-	if status.State != v1alpha1.JobStateSucceeded || len(job.Artifacts) == 0 {
+	if status.State != v1alpha1.JobStateSucceeded {
+		return status, nil
+	}
+	if strings.TrimSpace(job.ExtraVars) != "" {
+		if err := json.Unmarshal([]byte(job.ExtraVars), &status.InputExtraVars); err != nil {
+			// Avoid including the input or decoder error in the returned message. AAP inputs can
+			// contain secrets for unrelated provisioning jobs.
+			return status, fmt.Errorf("failed to decode AAP job input variables for job %s", jobID)
+		}
+	}
+	if len(job.Artifacts) == 0 {
 		return status, nil
 	}
 	if err := json.Unmarshal(job.Artifacts, &status.ExtraVars); err != nil {
@@ -355,6 +366,16 @@ func (p *AAPProvider) extractExtraVars(ctx context.Context, resource client.Obje
 	return extraVars, nil
 }
 
+// GetDeprovisionStatusWithExtraVars returns status, submitted inputs, and artifacts from an AAP
+// deprovisioning job.
+func (p *AAPProvider) GetDeprovisionStatusWithExtraVars(
+	ctx context.Context,
+	resource client.Object,
+	jobID string,
+) (ProvisionStatusWithExtraVars, error) {
+	return p.GetProvisionStatusWithExtraVars(ctx, resource, jobID)
+}
+
 // GetDeprovisionStatus checks deprovisioning job status via AAP API.
 func (p *AAPProvider) GetDeprovisionStatus(ctx context.Context, resource client.Object, jobID string) (ProvisionStatus, error) {
 	return p.getJobStatus(ctx, jobID)
@@ -465,6 +486,15 @@ func extractExtraVars(ctx context.Context, resource client.Object) (map[string]a
 			"kubernetes_uid": parent.KubernetesUID,
 			"tenant_id":      parent.TenantID,
 			"phase":          parent.Phase,
+		}
+	}
+	if pool := ExternalIPPoolFromContext(ctx); pool != (ExternalIPPoolContext{}) {
+		vars["external_ip_pool"] = map[string]any{
+			"fulfillment_id": pool.FulfillmentID,
+			"kubernetes_uid": pool.KubernetesUID,
+			"tenant_id":      pool.TenantID,
+			"cidr":           pool.CIDR,
+			"phase":          pool.Phase,
 		}
 	}
 

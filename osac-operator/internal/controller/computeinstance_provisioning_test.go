@@ -34,11 +34,13 @@ import (
 
 // mockProvisioningProvider implements the ProvisioningProvider interface for testing
 type mockProvisioningProvider struct {
-	name                     string
-	triggerProvisionFunc     func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error)
-	getProvisionStatusFunc   func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error)
-	triggerDeprovisionFunc   func(ctx context.Context, resource client.Object, provisionJobs []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error)
-	getDeprovisionStatusFunc func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error)
+	name                                  string
+	triggerProvisionFunc                  func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error)
+	getProvisionStatusFunc                func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error)
+	getProvisionStatusWithExtraVarsFunc   func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error)
+	triggerDeprovisionFunc                func(ctx context.Context, resource client.Object, provisionJobs []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error)
+	getDeprovisionStatusFunc              func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error)
+	getDeprovisionStatusWithExtraVarsFunc func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error)
 }
 
 func (m *mockProvisioningProvider) TriggerProvision(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
@@ -63,6 +65,16 @@ func (m *mockProvisioningProvider) GetProvisionStatus(ctx context.Context, resou
 	}, nil
 }
 
+func (m *mockProvisioningProvider) GetProvisionStatusWithExtraVars(
+	ctx context.Context, resource client.Object, jobID string,
+) (provisioning.ProvisionStatusWithExtraVars, error) {
+	if m.getProvisionStatusWithExtraVarsFunc != nil {
+		return m.getProvisionStatusWithExtraVarsFunc(ctx, resource, jobID)
+	}
+	status, err := m.GetProvisionStatus(ctx, resource, jobID)
+	return provisioning.ProvisionStatusWithExtraVars{ProvisionStatus: status}, err
+}
+
 func (m *mockProvisioningProvider) TriggerDeprovision(ctx context.Context, resource client.Object, provisionJobs []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
 	if m.triggerDeprovisionFunc != nil {
 		return m.triggerDeprovisionFunc(ctx, resource, provisionJobs)
@@ -83,6 +95,16 @@ func (m *mockProvisioningProvider) GetDeprovisionStatus(ctx context.Context, res
 		State:   osacv1alpha1.JobStateSucceeded,
 		Message: "Deprovision completed successfully",
 	}, nil
+}
+
+func (m *mockProvisioningProvider) GetDeprovisionStatusWithExtraVars(
+	ctx context.Context, resource client.Object, jobID string,
+) (provisioning.ProvisionStatusWithExtraVars, error) {
+	if m.getDeprovisionStatusWithExtraVarsFunc != nil {
+		return m.getDeprovisionStatusWithExtraVarsFunc(ctx, resource, jobID)
+	}
+	status, err := m.GetDeprovisionStatus(ctx, resource, jobID)
+	return provisioning.ProvisionStatusWithExtraVars{ProvisionStatus: status}, err
 }
 
 func (m *mockProvisioningProvider) Name() string {
@@ -519,5 +541,84 @@ var _ = Describe("ComputeInstance Provisioning", func() {
 			latestDeprovisionJob := provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision)
 			Expect(latestDeprovisionJob).To(BeNil())
 		})
+	})
+})
+
+var _ = Describe("ComputeInstance running config", func() {
+	runningInstance := func(phase osacv1alpha1.ComputeInstancePhaseType, applied, restartRequired bool) *osacv1alpha1.ComputeInstance {
+		conditionStatus := func(value bool) metav1.ConditionStatus {
+			if value {
+				return metav1.ConditionTrue
+			}
+			return metav1.ConditionFalse
+		}
+		return &osacv1alpha1.ComputeInstance{
+			Status: osacv1alpha1.ComputeInstanceStatus{
+				Phase:                phase,
+				DesiredConfigVersion: "v2",
+				RunningConfigVersion: "v1",
+				RunningConfigSince:   &metav1.Time{Time: time.Now().Add(-time.Hour).UTC()},
+				Conditions: []metav1.Condition{
+					{
+						Type:               string(osacv1alpha1.ComputeInstanceConditionConfigurationApplied),
+						Status:             conditionStatus(applied),
+						Reason:             "AsExpected",
+						LastTransitionTime: metav1.NewTime(time.Now().UTC()),
+					},
+					{
+						Type:               string(osacv1alpha1.ComputeInstanceConditionRestartRequired),
+						Status:             conditionStatus(restartRequired),
+						Reason:             "AsExpected",
+						LastTransitionTime: metav1.NewTime(time.Now().UTC()),
+					},
+				},
+			},
+		}
+	}
+
+	It("records the version and time when the new configuration is running", func() {
+		instance := runningInstance(osacv1alpha1.ComputeInstancePhaseRunning, true, false)
+		previous := instance.Status.RunningConfigSince.Time
+
+		recordRunningConfig(instance)
+
+		Expect(instance.Status.RunningConfigVersion).To(Equal("v2"))
+		Expect(instance.Status.RunningConfigSince).ToNot(BeNil())
+		Expect(instance.Status.RunningConfigSince.Time).ToNot(Equal(previous))
+	})
+
+	It("does not re-record while the running configuration is unchanged", func() {
+		instance := runningInstance(osacv1alpha1.ComputeInstancePhaseRunning, true, false)
+		recordRunningConfig(instance)
+		recorded := instance.Status.RunningConfigSince.Time
+
+		recordRunningConfig(instance)
+
+		Expect(instance.Status.RunningConfigVersion).To(Equal("v2"))
+		Expect(instance.Status.RunningConfigSince.Time).To(Equal(recorded))
+	})
+
+	It("does not record before the new configuration is applied", func() {
+		instance := runningInstance(osacv1alpha1.ComputeInstancePhaseRunning, false, false)
+
+		recordRunningConfig(instance)
+
+		Expect(instance.Status.RunningConfigVersion).To(Equal("v1"))
+	})
+
+	It("does not record while a restart is still required", func() {
+		instance := runningInstance(osacv1alpha1.ComputeInstancePhaseRunning, true, true)
+
+		recordRunningConfig(instance)
+
+		Expect(instance.Status.RunningConfigVersion).To(Equal("v1"))
+	})
+
+	It("does not record while the instance is not running", func() {
+		instance := runningInstance(osacv1alpha1.ComputeInstancePhaseStarting, true, false)
+
+		recordRunningConfig(instance)
+
+		Expect(instance.Status.RunningConfigVersion).To(Equal("v1"))
 	})
 })

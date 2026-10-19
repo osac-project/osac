@@ -24,6 +24,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -533,6 +534,33 @@ var _ = Describe("SecurityGroups server", func() {
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("rejects moving a stored SecurityGroup into a reserved tenant and preserves the stored object", func() {
+			created, err := privateServer.Create(ctx, privatev1.SecurityGroupsCreateRequest_builder{
+				Object: privatev1.SecurityGroup_builder{
+					Metadata: privatev1.Metadata_builder{Name: "tenant-immutable-security-group", Tenant: testTenant}.Build(),
+					Spec: privatev1.SecurityGroupSpec_builder{
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := created.GetObject().GetId()
+
+			_, err = privateServer.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{
+				Object: privatev1.SecurityGroup_builder{
+					Id:       id,
+					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.tenant"}},
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
+			Expect(err.Error()).To(ContainSubstring("objects cannot be placed in the 'shared' tenant"))
+
+			stored, getErr := privateServer.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: id}.Build())
+			Expect(getErr).ToNot(HaveOccurred())
+			Expect(stored.GetObject().GetMetadata().GetTenant()).To(Equal(testTenant))
 		})
 
 		It("blocks deletion after an update omits the default label", func() {

@@ -4,6 +4,11 @@
 # See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
 #
 # Patterns are evaluated top-to-bottom (last matching pattern takes precedence).
+#
+# A team that wants to own a folder adds a line here, for example `/osac-operator/ @osac-project/wg-vmaas`, in a pull
+# request that wg-infra approves (see the self-protection rule below). From then on a change to that folder needs the
+# approval of a member of that team, other than the author. The team must be visible and have write access to the
+# repository (the wg-* teams do). Leave a folder out and any maintainer's approval is enough.
 
 # CODEOWNERS Self-Protection
 # Protects this file from unauthorized modification
@@ -12,15 +17,17 @@
 
 # CI pipeline definition
 # A pull request can change the workflows and scripts that produce the checks it is judged by, and then a passing
-# check proves little. A change to them needs review from the infrastructure team. The OSAC CI check applies the same
-# rule from its own policy (osac-project/osac-ci, policy/osac.yml): keep the two lists in step.
+# check proves little. A change to them needs review from the infrastructure team. e2e-policy.yml decides which E2E suites a
+# change needs.
 /.github/workflows/ @osac-project/wg-infra
 /.github/actions/ @osac-project/wg-infra
 /.github/scripts/ @osac-project/wg-infra
 /.github/filters/ @osac-project/wg-infra
+/.github/e2e-policy.yml @osac-project/wg-infra
+/.github/ci-tests.yml @osac-project/wg-infra
 /.pre-commit-config.yaml @osac-project/wg-infra
 # The osac-ui lint and typecheck workflows run on pull_request, use no secret and report no required check, so the osac-ui
-# maintainers (approvers in osac-ui/OWNERS) may approve them as well. The OSAC CI policy reads that file; keep this in step.
+# maintainers (approvers in osac-ui/OWNERS) may approve them as well.
 /.github/workflows/osac-ui-lint.yaml @osac-project/wg-infra @eliorerz @rawagner @ElayAharoni @batzionb @eranco74 @rccrdpccl
 /.github/workflows/osac-ui-typecheck.yaml @osac-project/wg-infra @eliorerz @rawagner @ElayAharoni @batzionb @eranco74 @rccrdpccl
 # Markdown inside those folders (a README) cannot change a check: a rule with no owner clears ownership.

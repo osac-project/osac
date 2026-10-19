@@ -16,11 +16,13 @@ package it
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync/atomic"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -34,6 +36,137 @@ import (
 // cidrCounter provides a process-wide monotonic sequence so uniqueCIDR never returns
 // the same CIDR twice within a test run, avoiding pool CIDR collisions between specs.
 var cidrCounter atomic.Int64
+
+const externalIPTestFinalizer = "integration-test-external-ip-capacity"
+
+func setExternalIPTestFinalizer(
+	ctx context.Context,
+	client privatev1.ExternalIPsClient,
+	id string,
+	add bool,
+) {
+	GinkgoHelper()
+	if add {
+		Eventually(func(g Gomega) {
+			response, err := client.Get(ctx, privatev1.ExternalIPsGetRequest_builder{Id: id}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(response.GetObject().GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
+		}, time.Minute, 100*time.Millisecond).Should(Succeed())
+	}
+	timeout := 10 * time.Second
+	if !add {
+		timeout = 2 * time.Minute
+	}
+	Eventually(func(g Gomega) bool {
+		response, err := client.Get(ctx, privatev1.ExternalIPsGetRequest_builder{Id: id}.Build())
+		if !add && grpcstatus.Code(err) == grpccodes.NotFound {
+			return true
+		}
+		g.Expect(err).ToNot(HaveOccurred())
+		object := response.GetObject()
+		finalizers := slices.DeleteFunc(object.GetMetadata().GetFinalizers(), func(value string) bool {
+			return value == externalIPTestFinalizer
+		})
+		if add {
+			finalizers = append(finalizers, externalIPTestFinalizer)
+		}
+		object.GetMetadata().SetFinalizers(finalizers)
+		_, err = client.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
+			Object:     object,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}},
+			Lock:       true,
+		}.Build())
+		g.Expect(err).ToNot(HaveOccurred())
+		if add {
+			return true
+		}
+		_, err = client.Signal(ctx, privatev1.ExternalIPsSignalRequest_builder{Id: id}.Build())
+		if grpcstatus.Code(err) == grpccodes.NotFound {
+			return true
+		}
+		g.Expect(err).ToNot(HaveOccurred())
+		return false
+	}, timeout, 100*time.Millisecond).Should(BeTrue())
+}
+
+func deleteAndWaitForExternalIPFixture(
+	ctx context.Context,
+	deleteResource func(context.Context) error,
+	getResource func(context.Context) error,
+	signalResource func(context.Context) error,
+) {
+	GinkgoHelper()
+	deleteCtx, cancel := context.WithTimeout(ctx, computeInstanceFixtureProbeTimeout)
+	err := deleteResource(deleteCtx)
+	cancel()
+	if !expectFixtureDelete(err) || err != nil {
+		return
+	}
+
+	Eventually(func(g Gomega) bool {
+		probeCtx, cancel := context.WithTimeout(ctx, computeInstanceFixtureProbeTimeout)
+		defer cancel()
+		err := getResource(probeCtx)
+		if grpcstatus.Code(err) == grpccodes.NotFound {
+			return true
+		}
+		g.Expect(err).ToNot(HaveOccurred())
+		err = signalResource(probeCtx)
+		if grpcstatus.Code(err) == grpccodes.NotFound {
+			return true
+		}
+		g.Expect(err).ToNot(HaveOccurred())
+		return false
+	}, time.Minute, time.Second).Should(BeTrue())
+}
+
+func deleteExternalIPFixtureAndWait(
+	ctx context.Context,
+	publicClient publicv1.ExternalIPsClient,
+	privateClient privatev1.ExternalIPsClient,
+	id string,
+) {
+	GinkgoHelper()
+	deleteAndWaitForExternalIPFixture(
+		ctx,
+		func(deleteCtx context.Context) error {
+			_, err := publicClient.Delete(deleteCtx, publicv1.ExternalIPsDeleteRequest_builder{Id: id}.Build())
+			return err
+		},
+		func(getCtx context.Context) error {
+			_, err := privateClient.Get(getCtx, privatev1.ExternalIPsGetRequest_builder{Id: id}.Build())
+			return err
+		},
+		func(signalCtx context.Context) error {
+			_, err := privateClient.Signal(signalCtx, privatev1.ExternalIPsSignalRequest_builder{Id: id}.Build())
+			return err
+		},
+	)
+}
+
+func deleteExternalIPAttachmentFixtureAndWait(
+	ctx context.Context,
+	publicClient publicv1.ExternalIPAttachmentsClient,
+	privateClient privatev1.ExternalIPAttachmentsClient,
+	id string,
+) {
+	GinkgoHelper()
+	deleteAndWaitForExternalIPFixture(
+		ctx,
+		func(deleteCtx context.Context) error {
+			_, err := publicClient.Delete(deleteCtx, publicv1.ExternalIPAttachmentsDeleteRequest_builder{Id: id}.Build())
+			return err
+		},
+		func(getCtx context.Context) error {
+			_, err := privateClient.Get(getCtx, privatev1.ExternalIPAttachmentsGetRequest_builder{Id: id}.Build())
+			return err
+		},
+		func(signalCtx context.Context) error {
+			_, err := privateClient.Signal(signalCtx, privatev1.ExternalIPAttachmentsSignalRequest_builder{Id: id}.Build())
+			return err
+		},
+	)
+}
 
 func uniqueCIDR() string {
 	n := cidrCounter.Add(1)
@@ -442,6 +575,9 @@ var _ = Describe("ExternalIP lifecycle", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(response).ToNot(BeNil())
+		DeferCleanup(func(cleanupCtx context.Context) {
+			deleteExternalIPFixtureAndWait(cleanupCtx, externalIPsClient, privateExternalIPsClient, ipId)
+		})
 
 		ip := response.GetObject()
 		Expect(ip.GetId()).To(Equal(ipId))
@@ -466,9 +602,11 @@ var _ = Describe("ExternalIP lifecycle", func() {
 		Expect(listResponse.GetItems()).ToNot(BeEmpty())
 	})
 
-	It("Can delete an ExternalIP in ALLOCATED state", func() {
+	It("retains ALLOCATED ExternalIP capacity until the ExternalIP is archived", func() {
 		ipId := fmt.Sprintf("test-ip-%s", uuid.New())
-		_, err := externalIPsClient.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
+		poolBefore, err := poolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: poolId}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		_, err = externalIPsClient.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
 			Object: publicv1.ExternalIP_builder{
 				Id: ipId,
 				Metadata: publicv1.Metadata_builder{
@@ -480,6 +618,11 @@ var _ = Describe("ExternalIP lifecycle", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func(cleanupCtx context.Context) {
+			setExternalIPTestFinalizer(cleanupCtx, privateExternalIPsClient, ipId, false)
+			deleteExternalIPFixtureAndWait(cleanupCtx, externalIPsClient, privateExternalIPsClient, ipId)
+		})
+		setExternalIPTestFinalizer(ctx, privateExternalIPsClient, ipId, true)
 
 		// State promotion requires private API (admin-only)
 		ipGetResp, err := privateExternalIPsClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{
@@ -501,14 +644,43 @@ var _ = Describe("ExternalIP lifecycle", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 
-		poolResp, err := poolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{
-			Id: poolId,
-		}.Build())
+		ipResp, err := privateExternalIPsClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{Id: ipId}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(poolResp.GetObject().GetStatus().GetAllocated()).To(Equal(int64(0)))
+		Expect(ipResp.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
+
+		poolWhileDeleting, err := poolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: poolId}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(poolWhileDeleting.GetObject().GetStatus().GetAllocated()).To(
+			Equal(poolBefore.GetObject().GetStatus().GetAllocated() + 1))
+		Expect(poolWhileDeleting.GetObject().GetStatus().GetAvailable()).To(
+			Equal(poolBefore.GetObject().GetStatus().GetAvailable() - 1))
+
+		_, err = poolsClient.Delete(ctx, privatev1.ExternalIPPoolsDeleteRequest_builder{Id: poolId}.Build())
+		Expect(err).To(HaveOccurred())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+
+		// Repeating Delete while the test finalizer holds the row is idempotent.
+		_, err = externalIPsClient.Delete(ctx, publicv1.ExternalIPsDeleteRequest_builder{Id: ipId}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		poolAfterRetry, err := poolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: poolId}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(poolAfterRetry.GetObject().GetStatus().GetAllocated()).To(
+			Equal(poolBefore.GetObject().GetStatus().GetAllocated() + 1))
+
+		setExternalIPTestFinalizer(ctx, privateExternalIPsClient, ipId, false)
+		Eventually(func(g Gomega) {
+			_, getErr := privateExternalIPsClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{Id: ipId}.Build())
+			g.Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
+		}, time.Minute, time.Second).Should(Succeed())
+		poolAfterArchive, err := poolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: poolId}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(poolAfterArchive.GetObject().GetStatus().GetAllocated()).To(
+			Equal(poolBefore.GetObject().GetStatus().GetAllocated()))
+		Expect(poolAfterArchive.GetObject().GetStatus().GetAvailable()).To(
+			Equal(poolBefore.GetObject().GetStatus().GetAvailable()))
 	})
 
-	It("Can delete a PENDING ExternalIP and release its pool capacity", func() {
+	It("retains PENDING ExternalIP capacity until the ExternalIP is archived", func() {
 		ipId := fmt.Sprintf("test-ip-%s", uuid.New())
 		poolBefore, err := poolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: poolId}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -524,15 +696,32 @@ var _ = Describe("ExternalIP lifecycle", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func(cleanupCtx context.Context) {
+			setExternalIPTestFinalizer(cleanupCtx, privateExternalIPsClient, ipId, false)
+			deleteExternalIPFixtureAndWait(cleanupCtx, externalIPsClient, privateExternalIPsClient, ipId)
+		})
+		setExternalIPTestFinalizer(ctx, privateExternalIPsClient, ipId, true)
 
 		_, err = externalIPsClient.Delete(ctx, publicv1.ExternalIPsDeleteRequest_builder{
 			Id: ipId,
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		poolAfter, err := poolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: poolId}.Build())
+		poolWhileDeleting, err := poolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: poolId}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(poolAfter.GetObject().GetStatus().GetAllocated()).To(Equal(poolBefore.GetObject().GetStatus().GetAllocated()))
-		Expect(poolAfter.GetObject().GetStatus().GetAvailable()).To(Equal(poolBefore.GetObject().GetStatus().GetAvailable()))
+		Expect(poolWhileDeleting.GetObject().GetStatus().GetAllocated()).To(
+			Equal(poolBefore.GetObject().GetStatus().GetAllocated() + 1))
+		Expect(poolWhileDeleting.GetObject().GetStatus().GetAvailable()).To(
+			Equal(poolBefore.GetObject().GetStatus().GetAvailable() - 1))
+
+		setExternalIPTestFinalizer(ctx, privateExternalIPsClient, ipId, false)
+		Eventually(func(g Gomega) {
+			_, getErr := privateExternalIPsClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{Id: ipId}.Build())
+			g.Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
+		}, time.Minute, time.Second).Should(Succeed())
+		poolAfterArchive, err := poolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: poolId}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(poolAfterArchive.GetObject().GetStatus().GetAllocated()).To(Equal(poolBefore.GetObject().GetStatus().GetAllocated()))
+		Expect(poolAfterArchive.GetObject().GetStatus().GetAvailable()).To(Equal(poolBefore.GetObject().GetStatus().GetAvailable()))
 	})
 
 	It("Rejects create with non-existent pool", func() {
@@ -725,11 +914,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func(cleanupCtx context.Context) {
-			deleteComputeInstanceFixtureResource(cleanupCtx,
-				func(deleteCtx context.Context) error {
-					_, deleteErr := externalIPsClient.Delete(deleteCtx, publicv1.ExternalIPsDeleteRequest_builder{Id: externalIPId}.Build())
-					return deleteErr
-				})
+			deleteExternalIPFixtureAndWait(cleanupCtx, externalIPsClient, privateExternalIPsClient, externalIPId)
 		})
 		Eventually(func(g Gomega) {
 			resp, err := privateExternalIPsClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{
@@ -942,11 +1127,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(response).ToNot(BeNil())
 		DeferCleanup(func(cleanupCtx context.Context) {
-			deleteComputeInstanceFixtureResource(cleanupCtx,
-				func(deleteCtx context.Context) error {
-					_, deleteErr := attachmentsClient.Delete(deleteCtx, publicv1.ExternalIPAttachmentsDeleteRequest_builder{Id: attachmentId}.Build())
-					return deleteErr
-				})
+			deleteExternalIPAttachmentFixtureAndWait(cleanupCtx, attachmentsClient, privateAttachmentsClient, attachmentId)
 		})
 
 		attachment := response.GetObject()
@@ -993,11 +1174,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func(cleanupCtx context.Context) {
-			deleteComputeInstanceFixtureResource(cleanupCtx,
-				func(deleteCtx context.Context) error {
-					_, deleteErr := attachmentsClient.Delete(deleteCtx, publicv1.ExternalIPAttachmentsDeleteRequest_builder{Id: attachmentId1}.Build())
-					return deleteErr
-				})
+			deleteExternalIPAttachmentFixtureAndWait(cleanupCtx, attachmentsClient, privateAttachmentsClient, attachmentId1)
 		})
 
 		attachmentId2 := fmt.Sprintf("test-att-%s", uuid.New())
@@ -1051,11 +1228,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func(cleanupCtx context.Context) {
-			deleteComputeInstanceFixtureResource(cleanupCtx,
-				func(deleteCtx context.Context) error {
-					_, deleteErr := externalIPsClient.Delete(deleteCtx, publicv1.ExternalIPsDeleteRequest_builder{Id: pendingIPId}.Build())
-					return deleteErr
-				})
+			deleteExternalIPFixtureAndWait(cleanupCtx, externalIPsClient, privateExternalIPsClient, pendingIPId)
 		})
 		Eventually(func(g Gomega) {
 			resp, err := privateExternalIPsClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{
@@ -1155,11 +1328,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		Expect(ipResp.GetObject().GetStatus().GetAttribution().GetCluster().GetId()).To(Equal(clusterId))
 		Expect(ipResp.GetObject().GetStatus().GetAttachmentTransitionTime()).ToNot(BeNil())
 
-		deleteComputeInstanceFixtureResource(ctx,
-			func(deleteCtx context.Context) error {
-				_, deleteErr := attachmentsClient.Delete(deleteCtx, publicv1.ExternalIPAttachmentsDeleteRequest_builder{Id: attachmentId}.Build())
-				return deleteErr
-			})
+		deleteExternalIPAttachmentFixtureAndWait(ctx, attachmentsClient, privateAttachmentsClient, attachmentId)
 
 		ipResp, err = privateExternalIPsClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{
 			Id: externalIPId,

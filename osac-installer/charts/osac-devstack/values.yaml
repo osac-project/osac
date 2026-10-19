@@ -1,10 +1,11 @@
 # OSAC dev-full local development stack
 osacNamespace: osac
 kindClusterName: osac-dev
-# Multi-arch CLI image for hook Jobs (supports amd64, arm64, etc.).
-# The upstream quay.io/openshift/origin-cli:4.20.0 only supports amd64, blocking Mac ARM users.
-# Build the custom multi-arch image with: make -C charts/osac-devstack build-cli-tools
-cliImage: quay.io/openshift/origin-cli:4.20.0  # TODO: Replace with ghcr.io/osac-project/cli-tools:latest after first build
+# CLI image for hook Jobs. On Apple Silicon, the installer builds an arm64
+# replacement with the same tag before installing the chart. The AWX
+# configuration hook uses Python's standard JSON library, so it does not
+# require jq in this image.
+cliImage: quay.io/openshift/origin-cli:4.20.0
 
 # Shared with the OSAC chart profile so devstack hooks use the same issuer and
 # credential Secret references as the main installer hooks.
@@ -34,6 +35,11 @@ awx:
   enabled: true
   operatorChart: awx-operator/awx-operator
   operatorVersion: ""  # Empty = latest
+  executionEnvironment:
+    # Same image used by the OSAC AAP chart; includes every collection from
+    # osac-aap/collections/requirements.yml, including vastdata.vms.
+    image: ghcr.io/osac-project/osac-aap:latest  # PLACEHOLDER -- overwritten at release time
+    pull: missing
   instance:
     name: awx
     serviceType: ClusterIP
@@ -53,23 +59,25 @@ awx:
         requests: {cpu: 100m, memory: 128Mi}
         limits: {cpu: "500m", memory: 1Gi}
 
-# --- OSAC UI ---
+# --- OSAC UI (shared osac-ui chart) ---
 ui:
   enabled: true
-  image:
-    repository: ghcr.io/osac-project/osac-ui
-    tag: latest  # DEV_FLOATING -- intentionally unpinned for local dev
+  route:
+    enabled: false  # Kind uses the Gateway API HTTPRoute in templates/ui.yaml.
+  api:
+    fulfillment:
+      url: "https://fulfillment-api.osac.localhost:8000"
+      certs:
+        caBundle:
+          configMap: ca-bundle
+  auth:
+    oidcIssuerURL: "https://keycloak.osac.localhost:8443/realms/osac"
+    certs:
+      caBundle:
+        configMap: ca-bundle
+  images:
+    ui: ghcr.io/osac-project/osac-ui:latest  # DEV_FLOATING -- intentionally unpinned for local dev
     pullPolicy: IfNotPresent
-  replicas: 1
-  resources:
-    requests: {cpu: 100m, memory: 128Mi}
-    limits: {cpu: 500m, memory: 512Mi}
-  config:
-    logLevel: info
-    fulfillmentApiUrl: "https://fulfillment-api.osac.localhost:8000"
-    oidcClientId: osac-ui
-    oidcIssuerUrl: "https://keycloak.osac.localhost:8443/realms/osac"
-    tlsInsecure: "0"
 
 # --- Catalog Seeding ---
 catalog:

@@ -1080,7 +1080,9 @@ var _ = Describe("Reference validator", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(handlerCalled).To(BeTrue())
 			Expect(capturedTenant).To(Equal("tenant-a"))
-			Expect(capturedProject).To(Equal("project-b"))
+			// Global reference with empty project selects the
+			// tenant's default/root project, not the owner's.
+			Expect(capturedProject).To(BeEmpty())
 			Expect(capturedID).To(BeEmpty())
 			Expect(capturedName).To(Equal("my-target"))
 		})
@@ -1298,6 +1300,254 @@ var _ = Describe("Reference validator", func() {
 
 			Expect(err).ToNot(HaveOccurred())
 			Expect(capturedTenant).To(Equal("shared"))
+		})
+
+		// OSAC-6381 regression: a global reference with an empty
+		// project from an owner in a named project must select
+		// the tenant's default/root project, not inherit the
+		// owner's project.
+		It("Global reference with empty project selects the default project", func() {
+			var capturedTenant, capturedProject string
+			validator.Register("osac.tests.v1.TestTargetReference", func(
+				ctx context.Context, tenant, project, id, name string,
+			) (*ResolvedRef, error) {
+				capturedTenant = tenant
+				capturedProject = project
+				return &ResolvedRef{
+					ID: "id-1", Tenant: tenant,
+					Project: project, Name: name,
+				}, nil
+			})
+
+			request := testsv1.CreateTestResourceWithRefsRequest_builder{
+				Object: testsv1.TestResourceWithRefs_builder{
+					Id: "resource-1",
+					Metadata: testsv1.Metadata_builder{
+						Tenant:  "tenant-a",
+						Project: "named-project",
+					}.Build(),
+					Spec: testsv1.TestRefSpec_builder{
+						Target: testsv1.TestTargetReference_builder{
+							Name: "default-project-target",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			mockHandler := func(ctx context.Context, req any) (any, error) {
+				return "response", nil
+			}
+
+			_, err := validator.UnaryServer(
+				context.Background(),
+				request,
+				&grpc.UnaryServerInfo{
+					FullMethod: "/osac.tests.v1.TestService/Create",
+				},
+				mockHandler,
+			)
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(capturedTenant).To(Equal("tenant-a"))
+			Expect(capturedProject).To(BeEmpty())
+		})
+
+		// Verify that local references still inherit the owner's
+		// project, unlike global references.
+		It("Local reference still uses the owner's project", func() {
+			var capturedProject string
+			validator.Register(
+				"osac.tests.v1.TestTargetLocalReference",
+				func(
+					ctx context.Context,
+					tenant, project, id, name string,
+				) (*ResolvedRef, error) {
+					capturedProject = project
+					return &ResolvedRef{
+						ID: "id-1", Tenant: tenant,
+						Project: project, Name: name,
+					}, nil
+				},
+			)
+
+			request := testsv1.CreateTestResourceWithRefsRequest_builder{
+				Object: testsv1.TestResourceWithRefs_builder{
+					Id: "resource-1",
+					Metadata: testsv1.Metadata_builder{
+						Tenant:  "tenant-a",
+						Project: "named-project",
+					}.Build(),
+					Spec: testsv1.TestRefSpec_builder{
+						LocalTarget: testsv1.TestTargetLocalReference_builder{
+							Name: "local-target",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			mockHandler := func(ctx context.Context, req any) (any, error) {
+				return "response", nil
+			}
+
+			_, err := validator.UnaryServer(
+				context.Background(),
+				request,
+				&grpc.UnaryServerInfo{
+					FullMethod: "/osac.tests.v1.TestService/Create",
+				},
+				mockHandler,
+			)
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(capturedProject).To(
+				Equal("named-project"),
+			)
+		})
+
+		// Shared global reference with empty project targets the
+		// shared tenant's default project.
+		It("Shared global reference with empty project selects shared default", func() {
+			var capturedTenant, capturedProject string
+			validator.Register("osac.tests.v1.TestTargetReference", func(
+				ctx context.Context, tenant, project, id, name string,
+			) (*ResolvedRef, error) {
+				capturedTenant = tenant
+				capturedProject = project
+				return &ResolvedRef{
+					ID: "id-1", Tenant: tenant,
+					Project: project, Name: name,
+				}, nil
+			})
+
+			request := testsv1.CreateTestResourceWithRefsRequest_builder{
+				Object: testsv1.TestResourceWithRefs_builder{
+					Id: "resource-1",
+					Metadata: testsv1.Metadata_builder{
+						Tenant:  "tenant-a",
+						Project: "named-project",
+					}.Build(),
+					Spec: testsv1.TestRefSpec_builder{
+						Target: testsv1.TestTargetReference_builder{
+							Name:   "shared-default-target",
+							Shared: true,
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			mockHandler := func(ctx context.Context, req any) (any, error) {
+				return "response", nil
+			}
+
+			_, err := validator.UnaryServer(
+				context.Background(),
+				request,
+				&grpc.UnaryServerInfo{
+					FullMethod: "/osac.tests.v1.TestService/Create",
+				},
+				mockHandler,
+			)
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(capturedTenant).To(Equal("shared"))
+			Expect(capturedProject).To(BeEmpty())
+		})
+
+		// OSAC-6381 regression: a scope-aware lookup must pass
+		// the resolved tenant and project so a same-named resource
+		// in a visible named project cannot shadow the intended
+		// root-project target.
+		It("Scope-aware lookup receives the resolved project for name lookups", func() {
+			var calls []string
+			validator.Register("osac.tests.v1.TestTargetReference", func(
+				ctx context.Context, tenant, project, id, name string,
+			) (*ResolvedRef, error) {
+				calls = append(calls, fmt.Sprintf(
+					"tenant=%s project=%q id=%s name=%s",
+					tenant, project, id, name,
+				))
+				return &ResolvedRef{
+					ID: "root-id", Tenant: tenant,
+					Project: project, Name: name,
+				}, nil
+			})
+
+			request := testsv1.CreateTestResourceWithRefsRequest_builder{
+				Object: testsv1.TestResourceWithRefs_builder{
+					Metadata: testsv1.Metadata_builder{
+						Tenant:  "acme",
+						Project: "apps",
+					}.Build(),
+					Spec: testsv1.TestRefSpec_builder{
+						Target: testsv1.TestTargetReference_builder{
+							Name: "shared-name",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			_, err := validator.UnaryServer(
+				context.Background(),
+				request,
+				&grpc.UnaryServerInfo{
+					FullMethod: "/osac.tests.v1.TestService/Create",
+				},
+				func(ctx context.Context, req any) (any, error) {
+					return "ok", nil
+				},
+			)
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(calls).To(HaveLen(1))
+			Expect(calls[0]).To(Equal(
+				`tenant=acme project="" id= name=shared-name`,
+			))
+		})
+
+		// ID-based lookups must still receive the scope but the
+		// lookup function may use broader visibility for IDs.
+		It("ID-based global lookup receives resolved scope", func() {
+			var capturedProject, capturedID string
+			validator.Register("osac.tests.v1.TestTargetReference", func(
+				ctx context.Context, tenant, project, id, name string,
+			) (*ResolvedRef, error) {
+				capturedProject = project
+				capturedID = id
+				return &ResolvedRef{
+					ID: id, Tenant: tenant,
+					Project: project, Name: "resolved",
+				}, nil
+			})
+
+			request := testsv1.CreateTestResourceWithRefsRequest_builder{
+				Object: testsv1.TestResourceWithRefs_builder{
+					Metadata: testsv1.Metadata_builder{
+						Tenant:  "acme",
+						Project: "apps",
+					}.Build(),
+					Spec: testsv1.TestRefSpec_builder{
+						Target: testsv1.TestTargetReference_builder{
+							Id: "known-id",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			_, err := validator.UnaryServer(
+				context.Background(),
+				request,
+				&grpc.UnaryServerInfo{
+					FullMethod: "/osac.tests.v1.TestService/Create",
+				},
+				func(ctx context.Context, req any) (any, error) {
+					return "ok", nil
+				},
+			)
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(capturedID).To(Equal("known-id"))
+			// Global ref with empty project: scope is root.
+			Expect(capturedProject).To(BeEmpty())
 		})
 	})
 

@@ -264,6 +264,20 @@ message ComputeInstanceStatus {
 
   // Subnet and IP details reported for each configured network attachment.
   repeated ComputeNetworkAttachmentStatus compute_network_attachment_statuses = 8 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // The instance type that is actually running, after any restart that a resize required. It may
+  // lag `spec.instance_type` while a resize is in progress. The system sets it when it observes
+  // the instance running with the type; users can't set or change it.
+  //
+  // Metering bills the running instance against this type.
+  InstanceTypeReference instance_type = 9 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Records when the instance type in `status.instance_type` became running. This is the
+  // authoritative timestamp of the running type transition, suitable for billing interval
+  // calculations: metering bills the new type from this time.
+  //
+  // This will be empty if the instance has not been observed running yet.
+  optional google.protobuf.Timestamp instance_type_transition_time = 10 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Contains the Subnet and IPv4 address reported for a network attachment.

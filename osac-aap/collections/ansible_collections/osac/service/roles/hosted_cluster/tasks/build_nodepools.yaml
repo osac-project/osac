@@ -27,10 +27,12 @@
             }
           },
           'release': {
-            'image': ocp_release_image
+            'image': nodepool_ocp_release_image
           }
         }
       }] }}
+  vars:
+    nodepool_ocp_release_image: "{{ item.releaseImage | default(ocp_release_image, true) }}"
   loop: "{{ hosted_cluster_node_requests }}"
   loop_control:
     label: "{{ item.nodeSet }}"

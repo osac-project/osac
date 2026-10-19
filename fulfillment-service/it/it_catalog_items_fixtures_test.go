@@ -222,7 +222,12 @@ func createCatalogItemNetworkClassFixtureWithoutCleanup(ctx context.Context) str
 	GinkgoHelper()
 	classes := privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
 	class, err := classes.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
-		Object: privatev1.NetworkClass_builder{Metadata: catalogItemFixtureMetadata("shared", ""), Title: "Catalog item integration network", FabricManager: new("netris")}.Build(),
+		Object: privatev1.NetworkClass_builder{
+			Metadata:      catalogItemFixtureMetadata("shared", ""),
+			Title:         "Catalog item integration network",
+			FabricManager: new("netris"),
+			K8SManager:    new(testVMK8SManagerName),
+		}.Build(),
 	}.Build())
 	Expect(err).NotTo(HaveOccurred())
 	classID := class.GetObject().GetId()

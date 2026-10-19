@@ -173,8 +173,8 @@ _NAME_ - Name of the storage backend. Must be a unique, human-readable identifie
 `
 
 const providerFlagHelp = `
-_PROVIDER_ - Product routing key. Use {{ bt }}vast{{ bt }}, {{ bt }}netapp{{ bt }},
-{{ bt }}pure-flashblade{{ bt }}, or {{ bt }}pure-flasharray{{ bt }}. Legacy
+_PROVIDER_ - Provider routing key. Use {{ bt }}vast{{ bt }}, {{ bt }}netapp{{ bt }}, or
+{{ bt }}pure{{ bt }} (Pure FlashArray/FlashBlade). Legacy
 {{ bt }}ontap{{ bt }} remains accepted; {{ bt }}lvms{{ bt }} is reserved for deployment-managed
 local storage. Immutable after creation.
 `

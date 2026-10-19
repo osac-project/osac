@@ -667,8 +667,7 @@ var _ = Describe("Protovalidate interceptor", func() {
 			for _, provider := range []string{
 				"vast",
 				"netapp",
-				"pure-flashblade",
-				"pure-flasharray",
+				"pure",
 				"ontap",
 				"lvms",
 			} {

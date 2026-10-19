@@ -43,15 +43,13 @@
         csi_driver_install_supported_vendors:
           - vast
           - netapp
-          - pure-flashblade
-          - pure-flasharray
+          - pure
           - ontap
           - trident
         csi_driver_install_vendor_node_socket_paths:
           vast: /var/lib/kubelet/plugins/csi.vast.vastdata.com
           netapp: /var/lib/kubelet/plugins/csi.trident.netapp.io
-          pure-flashblade: /var/lib/kubelet/plugins/csi.pure.purestorage.com
-          pure-flasharray: /var/lib/kubelet/plugins/csi.pure.purestorage.com
+          pure: /var/lib/kubelet/plugins/csi.pure.purestorage.com
           trident: /var/lib/kubelet/plugins/csi.trident.netapp.io
     - name: Uninstall any pre-existing csi-driver release
       kubernetes.core.helm:
@@ -358,7 +356,7 @@
         success_msg: "Identical re-dispatch correctly detected as converged -- install block short-circuited (no lock, no Helm upgrade)"
 
 # ── Test 3: A product route accumulates under its vendor driver without clearing VAST ──
-- name: "CSI Driver Install - Third dispatch adds Pure FlashBlade, vast wiring survives"
+- name: "CSI Driver Install - Third dispatch adds Pure, vast wiring survives"
   hosts: localhost
   gather_facts: false
 
@@ -367,34 +365,34 @@
     csi_driver_install_tiers:
       - name: default
         protocol: nfs
-        provider: pure-flashblade
+        provider: pure
 
   tasks:
-    - name: Call csi_driver_install role for a different product key (Pure FlashBlade)
+    - name: Call csi_driver_install role for the Pure provider key
       ansible.builtin.include_role:
         name: osac.service.csi_driver_install
 
-    - name: Read installed csi-driver release after the Pure FlashBlade dispatch
+    - name: Read installed csi-driver release after the Pure dispatch
       kubernetes.core.helm_info:
         name: csi-driver
         release_namespace: osac-csi
-      register: _driver_release_after_flashblade
+      register: _driver_release_after_pure
 
     - name: Assert VAST and Pure remain enabled under their provider/product routes
       ansible.builtin.assert:
         that:
-          - _driver_release_after_flashblade.status['values'].vendors.vast.enabled | bool
-          - _driver_release_after_flashblade.status['values'].vendors.pure.enabled | bool
+          - _driver_release_after_pure.status['values'].vendors.vast.enabled | bool
+          - _driver_release_after_pure.status['values'].vendors.pure.enabled | bool
           - >-
-            ('vast=' in (_driver_release_after_flashblade.status['values'].controller.vendorControllers | default(''))) or
-            ('vast=' in (_driver_release_after_flashblade.status['values'].controller.vendorSockets | default('')))
+            ('vast=' in (_driver_release_after_pure.status['values'].controller.vendorControllers | default(''))) or
+            ('vast=' in (_driver_release_after_pure.status['values'].controller.vendorSockets | default('')))
           - >-
-            ('pure-flashblade=' in (_driver_release_after_flashblade.status['values'].controller.vendorControllers | default(''))) or
-            ('pure-flashblade=' in (_driver_release_after_flashblade.status['values'].controller.vendorSockets | default('')))
-          - "'vast=/var/lib/kubelet/plugins/csi.vast.vastdata.com/csi.sock' in _driver_release_after_flashblade.status['values'].node.vendorSockets"
+            ('pure=' in (_driver_release_after_pure.status['values'].controller.vendorControllers | default(''))) or
+            ('pure=' in (_driver_release_after_pure.status['values'].controller.vendorSockets | default('')))
+          - "'vast=/var/lib/kubelet/plugins/csi.vast.vastdata.com/csi.sock' in _driver_release_after_pure.status['values'].node.vendorSockets"
           - >-
-            'pure-flashblade=/var/lib/kubelet/plugins/csi.pure.purestorage.com/csi.sock' in
-            _driver_release_after_flashblade.status['values'].node.vendorSockets
+            'pure=/var/lib/kubelet/plugins/csi.pure.purestorage.com/csi.sock' in
+            _driver_release_after_pure.status['values'].node.vendorSockets
         fail_msg: "Dispatching a second provider did not retain the first provider's wiring in release values"
         success_msg: "vast wiring survived the pure dispatch; both vendors are enabled"
 

@@ -363,13 +363,25 @@ var _ = Describe("BareMetalWorker tenant safety", Label("baremetalworker"), func
 			ready(co.Name)
 			fc.SetCreateError(status.Error(codes.InvalidArgument, "shared template "+reason))
 			_, err := run(co.Name)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("shared template " + reason))
+			// A definitive InvalidArgument rejection from the
+			// Create RPC is now recorded as Failed/Reserved
+			// instead of propagated, so the finalizer can clear
+			// during deletion and the standard retry machinery
+			// handles recovery. The tenant-safety guarantee is
+			// preserved: no foreign BMI is adopted and the
+			// worker has no ID.
+			Expect(err).NotTo(HaveOccurred(),
+				"definitive rejection is recorded, not propagated")
 			Expect(fc.CreateCalls()).To(HaveLen(1))
 			Expect(fc.CreateCalls()[0].GetSpec().GetTemplate().GetShared()).To(BeTrue())
 			Expect(fc.CreateCatalogItemCalls()).To(BeEmpty())
-			Expect(getOrder(co.Name).Status.Workers).To(HaveLen(1))
-			Expect(getOrder(co.Name).Status.Workers[0].BareMetalInstance.ID).To(BeEmpty())
+			w := getOrder(co.Name).Status.Workers
+			Expect(w).To(HaveLen(1))
+			Expect(w[0].BareMetalInstance.ID).To(BeEmpty())
+			Expect(w[0].Phase).To(Equal("Failed"),
+				"rejected create must enter Failed phase")
+			Expect(w[0].LastFailureReason).To(
+				Equal("BMICreateRejected"))
 		})
 	}
 

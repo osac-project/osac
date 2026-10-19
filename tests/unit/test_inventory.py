@@ -637,19 +637,28 @@ def test_settings_env_overrides_win(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     assert settings.skip_tls_verify is True
 
 
-def test_settings_env_overrides_skip_secret_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_settings_env_overrides_skip_connection_secret_reads(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OSAC_NETBOX_URL", "https://external.example.test")
     monkeypatch.setenv("OSAC_NETBOX_TOKEN", "external-token")
 
-    # A fully env-driven run against an external NetBox reads no required
-    # Secrets (the management-config cross-check stays best-effort).
-    settings = netbox_settings_from_bmf(k8s=cast(K8sClient, FakeSecretsK8s({})), namespace="osac")
+    class NoConnectionSecretReadsK8s(FakeSecretsK8s):
+        def get_json(self, *, resource: str, name: str, namespace: str | None = None) -> dict[str, Any]:
+            assert name == "osac-management-config", f"unexpected Secret read: {name}"
+            return super().get_json(resource=resource, name=name, namespace=namespace)
+
+    settings = netbox_settings_from_bmf(
+        k8s=cast(K8sClient, NoConnectionSecretReadsK8s(_bmf_secrets())), namespace="osac"
+    )
 
     assert settings.url == "https://external.example.test"
     assert settings.token == "external-token"
+    # The deployed CA (present in the fake) must not leak into the override
+    # connection: an override URL uses system roots unless OSAC_NETBOX_CA_FILE
+    # is set.
     assert settings.ca_pem is None
     assert settings.skip_tls_verify is False
-    assert settings.bmh_namespace == ""
+    # The cluster-scoped BMH-namespace cross-check is still read.
+    assert settings.bmh_namespace == "host-inventory"
 
 
 def test_settings_propagate_non_not_found_secret_errors() -> None:

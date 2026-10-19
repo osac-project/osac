@@ -239,7 +239,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 		Expect(spec.GetNetworkAttachment().GetSecurityGroups()[0].GetId()).To(Equal(securityGroupId))
 	})
 
-	It("uses tenant defaults when network_attachment is omitted", func() {
+	It("Uses tenant defaults when network_attachment is omitted", func() {
 		// Seed READY tenant default networking (default Subnet + SecurityGroup
 		// and backing VirtualNetwork) for the suite tenant:
 		ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")

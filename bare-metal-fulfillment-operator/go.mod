@@ -11,7 +11,8 @@ require (
 	github.com/netbox-community/go-netbox/v4 v4.3.0
 	github.com/onsi/ginkgo/v2 v2.33.1
 	github.com/onsi/gomega v1.44.0
-	github.com/osac-project/osac/osac-operator v0.0.14
+	github.com/osac-project/osac/bare-metal-fulfillment-operator/api v0.0.0-00010101000000-000000000000
+	github.com/osac-project/osac/osac-operator v0.0.32
 	github.com/osac-project/osac/osac-operator/api v0.0.7
 	github.com/osac-project/osac/proto v0.0.0
 	github.com/prometheus/client_golang v1.25.0
@@ -39,7 +40,6 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
-	github.com/evanphx/json-patch v5.9.11+incompatible // indirect
 	github.com/evanphx/json-patch/v5 v5.9.11 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
@@ -123,6 +123,7 @@ require (
 )
 
 replace (
+	github.com/osac-project/osac/bare-metal-fulfillment-operator/api => ./api
 	github.com/osac-project/osac/osac-operator => ../osac-operator
 	github.com/osac-project/osac/osac-operator/api => ../osac-operator/api
 	github.com/osac-project/osac/proto => ../proto

@@ -33,7 +33,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/muesli/cancelreader v0.2.2
 	github.com/open-policy-agent/opa v1.18.2
-	github.com/osac-project/osac/bare-metal-fulfillment-operator v0.0.0-00010101000000-000000000000
+	github.com/osac-project/osac/bare-metal-fulfillment-operator/api v0.0.0-00010101000000-000000000000
 	github.com/osac-project/osac/osac-operator/api v0.0.7
 	github.com/osac-project/osac/proto v0.0.0-00010101000000-000000000000
 	github.com/prometheus/client_golang v1.25.0
@@ -142,6 +142,7 @@ require (
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
+	github.com/moby/term v0.5.2 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
@@ -204,7 +205,7 @@ require (
 )
 
 replace (
-	github.com/osac-project/osac/bare-metal-fulfillment-operator => ../bare-metal-fulfillment-operator
+	github.com/osac-project/osac/bare-metal-fulfillment-operator/api => ../bare-metal-fulfillment-operator/api
 	github.com/osac-project/osac/osac-operator/api => ../osac-operator/api
 	github.com/osac-project/osac/proto => ../proto
 )

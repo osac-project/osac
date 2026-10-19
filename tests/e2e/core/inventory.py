@@ -370,11 +370,16 @@ def netbox_settings_from_bmf(*, k8s: K8sClient, namespace: str) -> NetBoxSetting
     """Resolve NetBox settings from env overrides and the deployed BMF config.
 
     The OSAC_NETBOX_* env vars are local-debugging / external-NetBox overrides
-    that win when set; each Secret is read only when its matching override is
-    unset, so a fully env-driven run needs no deployed Secrets at all. The
-    token is never logged.
+    that win when set. The URL and token Secrets are read only when their
+    overrides are unset, and the CA Secret applies only when the URL comes
+    from the deployed config — an override URL uses system roots unless
+    OSAC_NETBOX_CA_FILE is set, so the deployed NetBox's private CA never
+    leaks into an external connection. The osac-management-config cross-check
+    is cluster-scoped and read best-effort in every mode. The token is never
+    logged.
     """
     url: str = env("OSAC_NETBOX_URL", "").strip()
+    url_from_secret = not url
     token: str = env("OSAC_NETBOX_TOKEN", "").strip()
     ca_file: str = env("OSAC_NETBOX_CA_FILE", "").strip()
     skip_tls_verify = env("OSAC_NETBOX_INSECURE", "").strip().lower() in ("1", "true", "yes")
@@ -401,8 +406,10 @@ def netbox_settings_from_bmf(*, k8s: K8sClient, namespace: str) -> NetBoxSetting
     if ca_file:
         with open(ca_file) as handle:
             ca_pem = handle.read()
-    else:
-        # The CA Secret is optional: absent means default TLS verification.
+    elif url_from_secret:
+        # The CA Secret belongs to the deployed NetBox (paired with the URL
+        # from its inventory config); an override URL uses system roots.
+        # Absent means default TLS verification.
         ca_data = _optional_secret_data(k8s, namespace=namespace, name=_NETBOX_CA_SECRET)
         ca_pem = ca_data.get(_NETBOX_CA_KEY)
 

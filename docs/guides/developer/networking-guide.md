@@ -633,7 +633,7 @@ updates to other networking resources or fields are future scope
 
 | Symptom | Cause | What to do |
 |---------|-------|------------|
-| `osac edit` fails with `immutable; updates are not supported` | The CLI refuses to edit immutable networking resources before any write | Delete the resource and create a replacement |
+| `osac edit` fails with `object type "osac.public.v1.<Type>" is immutable; updates are not supported` | The CLI refuses to edit immutable networking resources before any write | Delete the resource and create a replacement |
 | gRPC `Update` on a networking service reports `Unimplemented` | All networking services except SecurityGroups have no Update RPC | Use delete and recreate |
 | `SecurityGroups/Update` rejects with `InvalidArgument` (`object is mandatory`, `object identifier is mandatory`, or `object spec is mandatory`) | The scoped rule update requires the object, its ID, and a spec | Send the object with the group ID and the complete ingress and egress lists |
 | Delete rejected with a precondition error naming a blocking resource type | Active dependents still reference the resource | Remove the dependents first, then delete |

@@ -861,33 +861,24 @@ func (s *PrivateComputeInstancesServer) validateSshPublicKey(
 	diskImage *privatev1.DiskImage,
 ) error {
 	spec := ci.GetSpec()
-	ref := spec.GetSshKey()
-	if ref == nil {
-		return nil
-	}
-	metadata := ci.GetMetadata()
-	if metadata == nil {
-		return grpcstatus.Error(grpccodes.InvalidArgument, "cannot resolve ssh key reference without instance metadata")
-	}
-
-	resolved, err := resolveTenantScopedSSHKey(
+	canonical, err := resolveAndCanonicalizeSSHKeyReference(
 		ctx,
 		s.logger,
 		s.secretsDao,
 		s.secretStore,
-		metadata.GetTenant(),
-		ref,
-		"ssh_key",
+		ci.GetMetadata(),
+		spec.GetSshKey(),
 	)
 	if err != nil {
-		if grpcstatus.Code(err) == grpccodes.NotFound {
-			return grpcstatus.Error(grpccodes.NotFound, sshKeyReferenceNotFoundMessage)
-		}
 		return err
 	}
-	spec.SetSshKey(resolved.reference)
+	if canonical != nil {
+		spec.SetSshKey(canonical)
+	}
 
-	if diskImage != nil && diskImage.GetSpec().GetGuestOsFamily() == privatev1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS {
+	// The Windows restriction applies only when a key is actually injected;
+	// instances without spec.ssh_key keep their user-data-only validation.
+	if canonical != nil && diskImage != nil && diskImage.GetSpec().GetGuestOsFamily() == privatev1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS {
 		return grpcstatus.Error(grpccodes.InvalidArgument, "SSH key injection is not supported for Windows instances")
 	}
 	return nil

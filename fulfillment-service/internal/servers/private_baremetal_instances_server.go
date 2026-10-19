@@ -325,6 +325,9 @@ func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, can
 	if err = s.validateAndResolveUserDataSecret(ctx, candidate.GetSpec(), true); err != nil {
 		return
 	}
+	if err = s.validateAndResolveSshKey(ctx, candidate); err != nil {
+		return
+	}
 
 	if err = s.validateSpec(candidate); err != nil {
 		return
@@ -471,6 +474,32 @@ func (s *PrivateBareMetalInstancesServer) validateAndResolveUserDataSecret(
 	return nil
 }
 
+// validateAndResolveSshKey resolves and validates the tenant-scoped SSH-key
+// Secret and stores only its canonical reference.
+func (s *PrivateBareMetalInstancesServer) validateAndResolveSshKey(
+	ctx context.Context,
+	bmi *privatev1.BareMetalInstance,
+) error {
+	if bmi == nil {
+		return nil
+	}
+	canonical, err := resolveAndCanonicalizeSSHKeyReference(
+		ctx,
+		s.logger,
+		s.secretsDao,
+		s.secretStore,
+		bmi.GetMetadata(),
+		bmi.GetSpec().GetSshKey(),
+	)
+	if err != nil {
+		return err
+	}
+	if canonical != nil {
+		bmi.GetSpec().SetSshKey(canonical)
+	}
+	return nil
+}
+
 func (s *PrivateBareMetalInstancesServer) Delete(ctx context.Context,
 	request *privatev1.BareMetalInstancesDeleteRequest) (response *privatev1.BareMetalInstancesDeleteResponse, err error) {
 	id := request.GetId()
@@ -556,6 +585,11 @@ func (s *PrivateBareMetalInstancesServer) validateSpec(bmi *privatev1.BareMetalI
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "bare metal instance spec is mandatory")
 	}
 
+	if spec.GetSshPublicKey() != "" && spec.GetSshKey() != nil {
+		return grpcstatus.Error(grpccodes.InvalidArgument,
+			"spec.ssh_public_key and spec.ssh_key are mutually exclusive")
+	}
+
 	if key := spec.GetSshPublicKey(); key != "" {
 		if err := validateOpenSSHPublicKey(key); err != nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument, "spec.ssh_public_key: %s", err)
@@ -569,9 +603,10 @@ func (s *PrivateBareMetalInstancesServer) validateSpec(bmi *privatev1.BareMetalI
 	}
 
 	// If none of the authentication inputs are set, the server cannot be accessed after deployment.
-	if spec.GetSshPublicKey() == "" && spec.GetUserDataSource().GetInline() == "" && spec.GetUserDataSource().GetSecret() == nil {
+	if spec.GetSshPublicKey() == "" && spec.GetSshKey() == nil &&
+		spec.GetUserDataSource().GetInline() == "" && spec.GetUserDataSource().GetSecret() == nil {
 		return grpcstatus.Error(grpccodes.InvalidArgument,
-			"at least one authentication method must be provided: spec.ssh_public_key, spec.user_data_source.inline or spec.user_data_source.secret")
+			"at least one authentication method must be provided: spec.ssh_public_key, spec.ssh_key, spec.user_data_source.inline or spec.user_data_source.secret")
 	}
 
 	return nil
@@ -822,7 +857,8 @@ func (s *PrivateBareMetalInstancesServer) applyBareMetalTemplate(bmi *privatev1.
 	return nil
 }
 
-// validateBareMetalImmutability ensures template, catalog_item, instance_type, disk_image, ssh_public_key, user_data_source.inline, template_parameters,
+// validateBareMetalImmutability ensures template, catalog_item, instance_type, disk_image, ssh_key, ssh_public_key,
+// user_data_source.inline, template_parameters,
 // auto_external_ip_attachment, and network_attachments cannot be changed after creation.
 func validateBareMetalImmutability(
 	current, candidate *privatev1.BareMetalInstance,
@@ -832,7 +868,8 @@ func validateBareMetalImmutability(
 	updatingCatalogItem := updateIncludesField(mask, "spec.catalog_item")
 	updatingInstanceType := updateIncludesField(mask, "spec.instance_type")
 	updatingDiskImage := updateIncludesField(mask, "spec.disk_image")
-	updatingSshKey := updateIncludesField(mask, "spec.ssh_public_key")
+	updatingSshPublicKey := updateIncludesField(mask, "spec.ssh_public_key")
+	updatingSshKey := updateIncludesField(mask, "spec.ssh_key")
 	updatingUserDataSource := updateIncludesField(mask, "spec.user_data_source")
 	updatingTemplateParams := updateIncludesField(mask, "spec.template_parameters")
 	updatingAutoExternalIP := updateIncludesField(mask, "spec.auto_external_ip_attachment")
@@ -867,9 +904,30 @@ func validateBareMetalImmutability(
 			refKey(existingSpec.GetDiskImage()), refKey(newSpec.GetDiskImage()))
 	}
 
-	if updatingSshKey && existingSpec.GetSshPublicKey() != newSpec.GetSshPublicKey() {
+	if updatingSshPublicKey && existingSpec.GetSshPublicKey() != newSpec.GetSshPublicKey() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"cannot change spec.ssh_public_key: ssh_public_key is immutable after creation")
+	}
+	if updatingSshKey {
+		existingKey := existingSpec.GetSshKey()
+		newKey := newSpec.GetSshKey()
+		sameKey := proto.Equal(existingKey, newKey)
+		if existingKey != nil && newKey != nil {
+			if newKey.GetId() != "" {
+				sameKey = existingKey.GetId() == newKey.GetId()
+			} else {
+				sameKey = existingKey.GetName() == newKey.GetName() &&
+					(newKey.GetProject() == "" || newKey.GetProject() == existingKey.GetProject()) &&
+					(!newKey.GetShared() || existingKey.GetShared())
+			}
+		}
+		if !sameKey {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"cannot change spec.ssh_key: ssh_key is immutable after creation")
+		}
+		if existingKey != nil {
+			newSpec.SetSshKey(cloneMessage(existingKey))
+		}
 	}
 
 	if err := validateBareMetalUserDataImmutability(

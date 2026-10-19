@@ -386,7 +386,7 @@ func (c *runnerContext) sshKeyReference() (*publicv1.SecretReference, error) {
 	if c.parsedSSHKeyRef != nil {
 		return c.parsedSSHKeyRef, nil
 	}
-	ref, err := parseSSHKeyFlag(c.args.sshKey)
+	ref, err := fieldutil.ParseSSHKeyFlag(c.args.sshKey)
 	if err != nil {
 		return nil, err
 	}
@@ -962,58 +962,6 @@ func (c *runnerContext) buildSpecFromCatalogItem(catalogItemID string) (*publicv
 		return nil, err
 	}
 	return spec.Build(), nil
-}
-
-func parseSSHKeyFlag(value string) (*publicv1.SecretReference, error) {
-	invalid := func(msg string, args ...any) (*publicv1.SecretReference, error) {
-		return nil, fmt.Errorf("invalid --ssh-key value %q: %s", value, fmt.Sprintf(msg, args...))
-	}
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return invalid("value is empty")
-	}
-	if !strings.Contains(value, "=") {
-		if strings.Contains(value, ",") {
-			return invalid("expected a bare name or name=<name>[,project=<project>]")
-		}
-		return publicv1.SecretReference_builder{Name: value}.Build(), nil
-	}
-
-	var name, project string
-	var hasName, hasProject bool
-	for _, fragment := range strings.Split(value, ",") {
-		fragment = strings.TrimSpace(fragment)
-		if fragment == "" {
-			return invalid("empty key/value fragment")
-		}
-		key, item, ok := strings.Cut(fragment, "=")
-		if !ok || strings.Contains(item, "=") {
-			return invalid("fragment %q must use key=value syntax", fragment)
-		}
-		key = strings.TrimSpace(key)
-		item = strings.TrimSpace(item)
-		switch key {
-		case "name":
-			if hasName {
-				return invalid("name appears more than once")
-			}
-			if item == "" {
-				return invalid("name is empty")
-			}
-			name, hasName = item, true
-		case "project":
-			if hasProject {
-				return invalid("project appears more than once")
-			}
-			project, hasProject = item, true
-		default:
-			return invalid("unknown key %q", key)
-		}
-	}
-	if !hasName {
-		return invalid("name is required")
-	}
-	return publicv1.SecretReference_builder{Name: name, Project: project}.Build(), nil
 }
 
 // parseAdditionalDisks parses disk specifications in key=value format:

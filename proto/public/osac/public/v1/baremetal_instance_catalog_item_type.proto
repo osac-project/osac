@@ -78,8 +78,10 @@ message BareMetalInstanceCatalogItemFields {
 
   // Governs the complete user data source, including selection of inline content or a Secret.
   UserDataSourceFieldPolicy user_data_source = 10;
-}
 
+  // Optional tenant-scoped SSH public key Secret reference for bare metal access.
+  FullSecretReferenceFieldPolicy ssh_key = 11;
+}
 // Reference to a BareMetalInstanceCatalogItem resource.
 message BareMetalInstanceCatalogItemReference {
   string id = 1;

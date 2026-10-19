@@ -26,6 +26,8 @@ import (
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -49,6 +51,205 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
+
+// testSSHPublicKeyMaterial is a valid OpenSSH public key; registered-key
+// resolution validates the fetched material's format.
+const testSSHPublicKeyMaterial = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8K1ZuSC7tmzxD5LJJXwkCfStVEjzXWYCFhJaLBxWAn test@example.com"
+
+var _ = Describe("BMaaS registered SSH-key resolution", func() {
+	It("loads the current public key by canonical Secret ID", func() {
+		ctrl := gomock.NewController(GinkgoT())
+		secrets := NewMockSecretsClient(ctrl)
+		secrets.EXPECT().Get(gomock.Any(), privatev1.SecretsGetRequest_builder{Id: "secret-id"}.Build()).
+			Return(privatev1.SecretsGetResponse_builder{Object: privatev1.Secret_builder{
+				Id:   "secret-id",
+				Type: privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+				Data: map[string][]byte{"public_key": []byte(testSSHPublicKeyMaterial)},
+			}.Build()}.Build(), nil)
+
+		key, err := controllers.ResolveSSHKey(context.Background(), secrets,
+			privatev1.SecretReference_builder{Id: "secret-id", Name: "login"}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(key).To(Equal(testSSHPublicKeyMaterial))
+	})
+
+	DescribeTable("rejects unusable registered Secrets", func(secret *privatev1.Secret, expected string) {
+		ctrl := gomock.NewController(GinkgoT())
+		secrets := NewMockSecretsClient(ctrl)
+		secrets.EXPECT().Get(gomock.Any(), privatev1.SecretsGetRequest_builder{Id: "secret-id"}.Build()).
+			Return(privatev1.SecretsGetResponse_builder{Object: secret}.Build(), nil)
+
+		_, err := controllers.ResolveSSHKey(context.Background(), secrets,
+			privatev1.SecretReference_builder{Id: "secret-id", Name: "login"}.Build())
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring(expected))
+	},
+		Entry("wrong type", privatev1.Secret_builder{
+			Type: privatev1.SecretType_SECRET_TYPE_USER_DATA,
+			Data: map[string][]byte{"public_key": []byte("ssh-ed25519 AAAA")},
+		}.Build(), "expected"),
+		Entry("empty public key", privatev1.Secret_builder{
+			Type: privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+		}.Build(), "non-empty 'public_key'"),
+		Entry("malformed public key", privatev1.Secret_builder{
+			Type: privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+			Data: map[string][]byte{"public_key": []byte("not-an-ssh-key")},
+		}.Build(), "invalid OpenSSH public key"),
+	)
+
+	It("preserves materialized key material without re-reading a deleted Secret", func() {
+		ctrl := gomock.NewController(GinkgoT())
+		secrets := NewMockSecretsClient(ctrl)
+		t := &task{
+			r: &function{secretsClient: secrets},
+			bareMetalInstance: privatev1.BareMetalInstance_builder{
+				Spec: privatev1.BareMetalInstanceSpec_builder{
+					SshKey: privatev1.SecretReference_builder{Id: "deleted-secret"}.Build(),
+				}.Build(),
+			}.Build(),
+		}
+		existing := &bmfov1alpha1.BareMetalInstance{}
+		existing.Spec.TemplateParameters = `{"sshPublicKey":"ssh-ed25519 OLD"}`
+
+		Expect(t.resolveSSHKey(context.Background(), existing)).To(Succeed())
+		Expect(t.sshPublicKey).To(Equal("ssh-ed25519 OLD"))
+	})
+
+	It("lets deprecated raw ssh_public_key override a registered reference", func() {
+		ctrl := gomock.NewController(GinkgoT())
+		secrets := NewMockSecretsClient(ctrl)
+		t := &task{
+			r: &function{secretsClient: secrets},
+			bareMetalInstance: privatev1.BareMetalInstance_builder{
+				Spec: privatev1.BareMetalInstanceSpec_builder{
+					SshPublicKey: new("ssh-ed25519 INLINE"),
+					SshKey:       privatev1.SecretReference_builder{Id: "registered-secret"}.Build(),
+				}.Build(),
+			}.Build(),
+		}
+
+		Expect(t.resolveSSHKey(context.Background(), nil)).To(Succeed())
+		Expect(t.sshPublicKey).To(Equal("ssh-ed25519 INLINE"))
+	})
+
+	It("classifies a reference without a canonical ID as permanently invalid", func() {
+		_, err := controllers.ResolveSSHKey(context.Background(), nil,
+			privatev1.SecretReference_builder{Name: "login"}.Build())
+		var resolutionErr *controllers.SSHKeyResolutionError
+		Expect(errors.As(err, &resolutionErr)).To(BeTrue())
+		Expect(resolutionErr.Permanent).To(BeTrue())
+		Expect(resolutionErr.Reason).To(Equal("SecretInvalid"))
+	})
+
+	DescribeTable("classifies registered SSH-key lookup failures", func(code codes.Code, permanent bool, reason string) {
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		secrets := NewMockSecretsClient(ctrl)
+		secrets.EXPECT().Get(gomock.Any(), gomock.Any()).
+			Return(nil, status.Error(code, "lookup failed"))
+		t := &task{
+			r: &function{secretsClient: secrets},
+			bareMetalInstance: privatev1.BareMetalInstance_builder{
+				Spec: privatev1.BareMetalInstanceSpec_builder{
+					SshKey: privatev1.SecretReference_builder{Id: "secret-id"}.Build(),
+				}.Build(),
+			}.Build(),
+		}
+
+		err := t.resolveSSHKey(context.Background(), nil)
+		var resolutionErr *controllers.SSHKeyResolutionError
+		Expect(errors.As(err, &resolutionErr)).To(BeTrue())
+		Expect(resolutionErr.Permanent).To(Equal(permanent))
+		Expect(resolutionErr.Reason).To(Equal(reason))
+	},
+		Entry("not found", codes.NotFound, false, "SecretNotFound"),
+		Entry("invalid", codes.InvalidArgument, true, "SecretInvalid"),
+		Entry("unavailable", codes.Unavailable, false, ""),
+		Entry("deadline exceeded", codes.DeadlineExceeded, false, ""),
+		Entry("canceled", codes.Canceled, false, ""),
+	)
+})
+
+var _ = Describe("run SSH-key failure handling", func() {
+	newRunner := func(ctrl *gomock.Controller, secretsErr error) (*function, *privatev1.BareMetalInstance, *MockBareMetalInstancesClient) {
+		secrets := NewMockSecretsClient(ctrl)
+		secrets.EXPECT().Get(gomock.Any(), gomock.Any()).Return(nil, secretsErr)
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().Get(gomock.Any(), "hub-1").Return(&controllers.HubEntry{
+			Namespace: "hub-ns",
+			Client:    fake.NewClientBuilder().WithScheme(newFakeScheme()).Build(),
+		}, nil)
+		instances := NewMockBareMetalInstancesClient(ctrl)
+		f := &function{
+			logger:                   logger,
+			hubCache:                 hubCache,
+			secretsClient:            secrets,
+			bareMetalInstancesClient: instances,
+			maskCalculator:           masks.NewCalculator().Build(),
+		}
+		bmi := privatev1.BareMetalInstance_builder{
+			Id: "bmi-run-test",
+			Metadata: privatev1.Metadata_builder{
+				Tenant:     "tenant-a",
+				Finalizers: []string{finalizers.Controller},
+			}.Build(),
+			Status: privatev1.BareMetalInstanceStatus_builder{Hub: "hub-1"}.Build(),
+			Spec: privatev1.BareMetalInstanceSpec_builder{
+				SshKey: privatev1.SecretReference_builder{Id: "secret-id"}.Build(),
+			}.Build(),
+		}.Build()
+		return f, bmi, instances
+	}
+
+	It("persists only the failure status for a permanent SSH-key resolution failure", func() {
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		f, bmi, instances := newRunner(ctrl, status.Error(codes.InvalidArgument, "secret invalid"))
+
+		var updated *privatev1.BareMetalInstancesUpdateRequest
+		instances.EXPECT().Update(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, request *privatev1.BareMetalInstancesUpdateRequest, _ ...grpc.CallOption) (
+				*privatev1.BareMetalInstancesUpdateResponse, error) {
+				updated = request
+				return privatev1.BareMetalInstancesUpdateResponse_builder{}.Build(), nil
+			})
+
+		Expect(f.run(context.Background(), bmi)).To(Succeed())
+
+		Expect(updated).ToNot(BeNil())
+		object := updated.GetObject()
+		Expect(object.GetStatus().GetState()).To(
+			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_FAILED))
+		provisioned := findProtoCondition(object,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED)
+		Expect(provisioned).ToNot(BeNil())
+		Expect(provisioned.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(provisioned.GetReason()).To(Equal("SecretInvalid"))
+		Expect(provisioned.GetMessage()).To(Equal(messageFailureSSHKey))
+		ready := findProtoCondition(object,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY)
+		Expect(ready).ToNot(BeNil())
+		Expect(ready.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		// The failed reconcile's partial changes are discarded: only the failure
+		// status is set, and the reset input keeps its finalizer and hub.
+		Expect(object.GetStatus().GetConditions()).To(HaveLen(2))
+		Expect(hasFinalizer(object)).To(BeTrue())
+		Expect(object.GetStatus().GetHub()).To(Equal("hub-1"))
+	})
+
+	It("returns transient SSH-key resolution failures without persisting status", func() {
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		f, bmi, instances := newRunner(ctrl, status.Error(codes.Unavailable, "api unavailable"))
+		instances.EXPECT().Update(gomock.Any(), gomock.Any()).Times(0)
+
+		err := f.run(context.Background(), bmi)
+		Expect(err).To(HaveOccurred())
+		var resolutionErr *controllers.SSHKeyResolutionError
+		Expect(errors.As(err, &resolutionErr)).To(BeTrue())
+		Expect(resolutionErr.Permanent).To(BeFalse())
+	})
+})
 
 func newBareMetalInstanceCR(id, namespace, name string, deletionTimestamp *metav1.Time) *bmfov1alpha1.BareMetalInstance {
 	obj := &bmfov1alpha1.BareMetalInstance{
@@ -172,6 +373,46 @@ var _ = Describe("mutateBMI", func() {
 		err := t.mutateBMI(ctx, &obj)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(obj.Spec.RunStrategy).To(Equal(bmfov1alpha1.RunStrategyAlways))
+	})
+
+	It("should materialize a resolved registered SSH key into the BMFO template parameters", func() {
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		secrets := NewMockSecretsClient(ctrl)
+		secrets.EXPECT().Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.SecretsGetResponse_builder{Object: privatev1.Secret_builder{
+				Metadata: privatev1.Metadata_builder{Name: "registered-key"}.Build(),
+				Type:     privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+				Data:     map[string][]byte{"public_key": []byte(testSSHPublicKeyMaterial)},
+			}.Build()}.Build(), nil)
+		t := &task{
+			r: &function{
+				logger:                       logger,
+				secretsClient:                secrets,
+				bareMetalInstanceTypesClient: defaultFakeBareMetalInstanceTypesClient(),
+			},
+			bareMetalInstance: privatev1.BareMetalInstance_builder{
+				Id: "bmi-test",
+				Spec: privatev1.BareMetalInstanceSpec_builder{
+					CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{
+						Id: "catalog-1",
+					}.Build(),
+					Template:     privatev1.BareMetalInstanceTemplateReference_builder{Id: "osac.templates.default"}.Build(),
+					InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
+					SshKey:       privatev1.SecretReference_builder{Id: "registered-key"}.Build(),
+				}.Build(),
+			}.Build(),
+		}
+
+		Expect(t.resolveSSHKey(ctx, nil)).To(Succeed())
+
+		var obj bmfov1alpha1.BareMetalInstance
+		err := t.mutateBMI(ctx, &obj)
+		Expect(err).ToNot(HaveOccurred())
+		var params map[string]string
+		Expect(json.Unmarshal([]byte(obj.Spec.TemplateParameters), &params)).To(Succeed())
+		Expect(params).To(HaveKeyWithValue("sshPublicKey", testSSHPublicKeyMaterial),
+			"the resolved registered key must reach the BMFO CR template parameters")
 	})
 
 	It("should map run_strategy HALTED to RunStrategy Halted", func() {

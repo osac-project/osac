@@ -63,14 +63,15 @@ extend google.protobuf.FieldOptions {
 // Defines the desired configuration for a StorageBackend.
 message StorageBackendSpec {
   // Product-specific provider routing key. New StorageBackends may use "vast",
-  // "netapp", "pure-flashblade", or "pure-flasharray". The legacy "pure" and
-  // "ontap" aliases remain accepted for compatibility.
+  // "netapp", "pure-flashblade", or "pure-flasharray". The legacy "ontap"
+  // alias remains accepted, and "lvms" is reserved for deployment-managed
+  // local storage.
   //
   // This value is immutable once the StorageBackend is created.
   string provider = 1 [
     (buf.validate.field).string = {
       min_len: 1,
-      in: ["vast", "netapp", "pure-flashblade", "pure-flasharray", "pure", "ontap"]
+      in: ["vast", "netapp", "pure-flashblade", "pure-flasharray", "ontap", "lvms"]
     },
     (storage_backend_provider_options) = {
       choices: { key: "vast" display_name: "VAST Data" }

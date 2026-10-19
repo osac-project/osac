@@ -669,8 +669,8 @@ var _ = Describe("Protovalidate interceptor", func() {
 				"netapp",
 				"pure-flashblade",
 				"pure-flasharray",
-				"pure",
 				"ontap",
+				"lvms",
 			} {
 				response, err := interceptor.UnaryServer(
 					context.Background(),

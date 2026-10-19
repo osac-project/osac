@@ -1268,8 +1268,8 @@
           - pure_flashblade
           - pure_flasharray
           - ontap
-          - pure
           - trident
+          - lvms
           - unknown
 
     - name: Resolve CSI backend vendors from product keys

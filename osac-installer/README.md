@@ -199,6 +199,31 @@ the end-to-end "create a VM from the UI" experience:
 make install PLATFORM=kind PROFILE=dev-full NS=osac
 ```
 
+New dev-full clusters use Kind's default node image. On Apple Silicon, before
+installing the `osac-devstack` release, the installer checks that the API
+server reports v1.36 or later and that all Kind nodes are `arm64`; these are
+prerequisites for the ARM compatibility policy. If an existing cluster's API
+server is older, upgrade its Kubernetes version or recreate it; if its nodes
+are not `arm64`, recreate the cluster:
+
+```bash
+make uninstall PLATFORM=kind PROFILE=dev-full NS=osac
+make install PLATFORM=kind PROFILE=dev-full NS=osac
+```
+
+Recreating dev-full also removes its disposable TopoLVM storage.
+
+Linux dev-full does not run this compatibility check and does not require
+Kubernetes v1.36.
+
+The ARM compatibility policy is enabled only on Apple Silicon dev-full
+installations, after the installer confirms all Kind nodes report `arm64`. The
+binding applies to OSAC tenant namespaces, where the dev-full flow creates VM
+resources. It removes SMM and Hyper-V domain settings from KubeVirt VM creates
+and updates. Existing VMs are unchanged until they are updated or recreated
+after the policy is installed. Linux dev-full and `PROFILE=dev` do not install
+the policy.
+
 The devstack release uses client-side apply so AWX can manage its resources.
 On Helm 4, the installer passes `--server-side=false` without
 `--force-conflicts`; combining these flags prevents initial AWX CRD creation.
@@ -328,7 +353,7 @@ missing AAP provisioning or CRD installation fails the install visibly.
   - **macOS** — Docker Desktop or Podman Desktop. For Podman, start its machine and
     verify `podman info` succeeds before installing.
 - **`/dev/kvm`** present (Linux), **`fs.inotify.max_user_instances >= 256`**, and
-  `kind`, `helm`, `kubectl`, `jq`, `curl`, `openssl`, `python3` on `PATH`
+  `kind`, `helm`, `kubectl`, `jq`, `curl`, `openssl`, and `python3` on `PATH`
 - Override runtime detection with `KIND_EXPERIMENTAL_PROVIDER=docker|podman`.
   On Apple Silicon, an explicit `CONTAINER_TOOL=docker|podman` selects the same
   runtime for installer operations when `KIND_EXPERIMENTAL_PROVIDER` is unset;

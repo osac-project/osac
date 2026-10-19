@@ -48,6 +48,109 @@ if awk 'BEGIN { RS = "---" } /kind: Deployment/ && /name: osac-ui/ { found = 1 }
   exit 1
 fi
 
+if grep -Eq '^kind: MutatingAdmissionPolicy(Binding)?$' <<<"$chart_render"; then
+  echo "the ARM64 VM compatibility policy must be disabled by default and for Linux dev-full" >&2
+  exit 1
+fi
+
+arm64_compat_render=$(helm template test charts/osac-devstack --namespace osac \
+  --set arm64VmCompatibility.enabled=true)
+policy_count=$(grep -c '^kind: MutatingAdmissionPolicy$' <<<"$arm64_compat_render" || true)
+binding_count=$(grep -c '^kind: MutatingAdmissionPolicyBinding$' <<<"$arm64_compat_render" || true)
+if [[ "$policy_count" != 1 || "$binding_count" != 1 ]]; then
+  echo "Apple Silicon dev-full must render exactly one VM compatibility policy and binding" >&2
+  exit 1
+fi
+if ! grep -Fq 'apiVersion: admissionregistration.k8s.io/v1' <<<"$arm64_compat_render" \
+  || ! grep -Fq 'operations: ["CREATE", "UPDATE"]' <<<"$arm64_compat_render" \
+  || ! grep -Fq 'resources: ["virtualmachines"]' <<<"$arm64_compat_render" \
+  || ! grep -Fq 'failurePolicy: Fail' <<<"$arm64_compat_render" \
+  || ! grep -Fq 'operator: Exists' <<<"$arm64_compat_render" \
+  || ! grep -Fq 'key: osac.openshift.io/tenant' <<<"$arm64_compat_render" \
+  || ! grep -Fq '/spec/template/spec/domain/features/smm' <<<"$arm64_compat_render" \
+  || ! grep -Fq '/spec/template/spec/domain/features/hyperv' <<<"$arm64_compat_render" \
+  || ! grep -Fq '/spec/template/spec/domain/clock/timer/hyperv' <<<"$arm64_compat_render"; then
+  echo "the ARM64 VM compatibility resources must scope and remove only the planned KubeVirt fields" >&2
+  exit 1
+fi
+
+mac_arm_make_output=$(make --no-print-directory --dry-run install-devstack \
+  PLATFORM=kind PROFILE=dev-full NS=osac HOST_IS_MAC_ARM=true)
+if ! grep -Fq -- '--set arm64VmCompatibility.enabled=true' <<<"$mac_arm_make_output" \
+  || ! grep -Eq '^[[:space:]]*scripts/dev-full/check-cluster-compatibility\.sh[[:space:]]*$' <<<"$mac_arm_make_output"; then
+  echo "Apple Silicon dev-full must check node architecture and enable the compatibility policy" >&2
+  exit 1
+fi
+
+linux_make_output=$(make --no-print-directory --dry-run install-devstack \
+  PLATFORM=kind PROFILE=dev-full NS=osac HOST_IS_MAC_ARM=false)
+if grep -Fq 'arm64VmCompatibility.enabled=true' <<<"$linux_make_output" \
+  || grep -Fq -- 'check-cluster-compatibility.sh' <<<"$linux_make_output"; then
+  echo "Linux dev-full must not enable the ARM64 VM compatibility policy or run its compatibility check" >&2
+  exit 1
+fi
+
+dev_make_output=$(make --no-print-directory --dry-run install \
+  PLATFORM=kind PROFILE=dev NS=osac HOST_IS_MAC_ARM=true)
+if grep -Fq 'osac-devstack' <<<"$dev_make_output" \
+  || grep -Fq 'arm64VmCompatibility.enabled=true' <<<"$dev_make_output"; then
+  echo "PROFILE=dev must not install the dev-full ARM64 VM compatibility policy" >&2
+  exit 1
+fi
+
+preflight_stub_dir=$(mktemp -d)
+trap 'rm -rf "$preflight_stub_dir"' EXIT
+cat >"$preflight_stub_dir/kubectl" <<'KUBECTL'
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  version)
+    if [[ "${2:-}" != "-o" || "${3:-}" != "json" ]]; then
+      echo "kubectl version must request JSON: $*" >&2
+      exit 2
+    fi
+    printf '{"serverVersion":{"gitVersion":"%s"}}\n' "${MOCK_SERVER_VERSION:-}"
+    ;;
+  get)
+    printf '%s\n' "${MOCK_NODE_ARCHITECTURES:-}" | tr ' ' '\n'
+    ;;
+  *)
+    echo "unexpected kubectl invocation: $*" >&2
+    exit 2
+    ;;
+esac
+KUBECTL
+chmod +x "$preflight_stub_dir/kubectl"
+
+compatibility_check=scripts/dev-full/check-cluster-compatibility.sh
+if ! PATH="$preflight_stub_dir:$PATH" MOCK_SERVER_VERSION=v1.36.0 \
+  MOCK_NODE_ARCHITECTURES='arm64 arm64' "$compatibility_check" >/dev/null; then
+  echo "the installer must accept a Kubernetes 1.36 API server with arm64 nodes" >&2
+  exit 1
+fi
+if ! PATH="$preflight_stub_dir:$PATH" MOCK_SERVER_VERSION=v1.37.1 \
+  MOCK_NODE_ARCHITECTURES='arm64' "$compatibility_check" >/dev/null; then
+  echo "the installer must accept Kubernetes API servers newer than 1.36" >&2
+  exit 1
+fi
+if output=$(PATH="$preflight_stub_dir:$PATH" MOCK_SERVER_VERSION=v1.35.9 \
+  MOCK_NODE_ARCHITECTURES='arm64' "$compatibility_check" 2>&1); then
+  echo "the installer must reject Kubernetes API servers older than 1.36" >&2
+  exit 1
+elif ! grep -Fq 'requires a Kubernetes API server v1.36 or later' <<<"$output" \
+  || ! grep -Fq 'Upgrade this Kind cluster or recreate it' <<<"$output"; then
+  echo "an older Kubernetes API server must produce actionable remediation" >&2
+  exit 1
+fi
+if output=$(PATH="$preflight_stub_dir:$PATH" MOCK_SERVER_VERSION=v1.36.0 \
+  MOCK_NODE_ARCHITECTURES='arm64 amd64' "$compatibility_check" 2>&1); then
+  echo "Apple Silicon dev-full must reject non-arm64 Kind nodes" >&2
+  exit 1
+elif ! grep -Fq 'requires arm64 Kind nodes' <<<"$output"; then
+  echo "a non-arm64 Kind cluster must produce an architecture error" >&2
+  exit 1
+fi
+
 if ! grep -Fq 'FULFILLMENT_TLS_CA_FILE: "/etc/osac-ui/tls/api/bundle.pem"' <<<"$chart_render" \
   || ! grep -Fq 'OIDC_TLS_CA_FILE: "/etc/osac-ui/tls/auth/bundle.pem"' <<<"$chart_render" \
   || ! grep -Fq 'FULFILLMENT_API_URL: "https://fulfillment-api.osac.localhost:8000"' <<<"$chart_render" \
@@ -210,4 +313,4 @@ if ! grep -Fq 'image: ghcr.io/kube-rbac-proxy/kube-rbac-proxy:v0.22.1' <<<"$prox
   exit 1
 fi
 
-echo "Dev-full networking, shared UI TLS, and Helm post-render checks passed."
+echo "Dev-full render, ARM64 admission, cluster-version, TLS, and Helm post-render checks passed."

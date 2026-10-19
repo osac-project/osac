@@ -553,6 +553,14 @@ create_cluster osac-dev config.yaml {shlex.quote(str(kubeconfig))}
         self.assertLess(lookup, reset)
         self.assertLess(reset, creation)
 
+    def test_create_uses_kind_default_node_image(self):
+        self.env["MOCK_KIND_NODES"] = ""
+        self.assert_success(self.run_create_cluster())
+        self.assertIn(
+            "kind 1 create cluster --name osac-dev --config config.yaml --wait 60s",
+            self.commands(),
+        )
+
     def test_uninstall_deletes_cluster_before_storage_cleanup(self):
         self.assert_success(self.run_shell("delete_cluster osac-dev"))
         commands = self.commands()

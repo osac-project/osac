@@ -164,6 +164,14 @@ KIND_ARM64_CLI_IMAGE := quay.io/openshift/origin-cli:4.20.0
 # using the shared cliImage value without platform-specific values files.
 HOST_IS_MAC_ARM := $(shell if [ "$$(uname -s)" = "Darwin" ] && { [ "$$(uname -m)" = "arm64" ] || [ "$$(sysctl -in hw.optional.arm64 2>/dev/null)" = "1" ]; }; then echo true; fi)
 KIND_ARM64_CLI_IMAGE_SCRIPT := scripts/dev-full/build-arm64-cli-image.sh
+DEVSTACK_HELM_ARGS :=
+DEVSTACK_CLUSTER_CHECK :=
+ifeq ($(PLATFORM)/$(PROFILE),kind/dev-full)
+ifeq ($(HOST_IS_MAC_ARM),true)
+DEVSTACK_HELM_ARGS := --set arm64VmCompatibility.enabled=true
+DEVSTACK_CLUSTER_CHECK := scripts/dev-full/check-cluster-compatibility.sh
+endif
+endif
 # Apple Silicon and dev-full use the runtime wrapper. Plain non-macOS dev
 # keeps its existing direct Kind/container-tool behavior.
 KIND_RUNTIME_REQUIRED := $(if $(filter true,$(HOST_IS_MAC_ARM)),true,$(if $(filter dev-full,$(PROFILE)),true,false))
@@ -409,6 +417,7 @@ ifneq ($(PLATFORM)/$(PROFILE),kind/dev-full)
 	@echo "ERROR: install-devstack requires PLATFORM=kind PROFILE=dev-full" >&2; exit 1
 endif
 	@case "$(HELM_MAJOR)" in 3|4) ;; *) echo "ERROR: install-devstack requires Helm 3 or 4; could not detect a supported Helm version" >&2; exit 1;; esac
+	$(DEVSTACK_CLUSTER_CHECK)
   # Pre-install: node-level CNI setup (requires host container runtime access)
 	$(KIND_RUNTIME_ENV) scripts/dev-full/install-virt-node-setup.sh $(KIND_CLUSTER_NAME)
 ifeq ($(HELM_MAJOR),4)
@@ -424,6 +433,7 @@ endif
 		--set osacNamespace=$(NS) \
 		--set kindClusterName=$(KIND_CLUSTER_NAME) \
 		--set ui.enabled=true \
+		$(DEVSTACK_HELM_ARGS) \
 		--post-renderer $(DEV_FULL_HELM_POST_RENDERER) \
 		$(DEVSTACK_HELM_APPLY_ARGS) \
 		--wait --timeout 30m

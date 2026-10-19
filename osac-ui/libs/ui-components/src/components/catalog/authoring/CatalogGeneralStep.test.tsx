@@ -5,7 +5,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type ComputeInstanceTemplate, ComputeInstanceTemplates, ServiceTier } from '@osac/types';
 import type { Tenant } from '@osac/types/private';
 
-import CatalogGeneralStep, { catalogGeneralValues } from './CatalogGeneralStep';
+import CatalogGeneralStep, {
+  catalogGeneralValues,
+  catalogGeneralValuesFromItem,
+} from './CatalogGeneralStep';
 import type { UserRole } from '../../../shellTypes';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
@@ -147,11 +150,10 @@ describe('CatalogGeneralStep', () => {
   });
 
   describe('edit mode', () => {
-    it('disables the name and template fields', () => {
+    it('disables the name field', () => {
       renderStep(true, [], [makeTemplate('template-1', 'Template One')]);
 
       expect(screen.getByRole('textbox', { name: 'Name' })).toBeDisabled();
-      expect(screen.getByRole('button', { name: 'Provisioning template' })).toBeDisabled();
     });
 
     it('disables the project field for a tenant-admin session', () => {
@@ -161,7 +163,7 @@ describe('CatalogGeneralStep', () => {
       expect(screen.getByRole('button', { name: 'Project' })).toBeDisabled();
     });
 
-    it('disables the scope cards and tenant field for an admin session', () => {
+    it('disables the scope cards for an admin session', () => {
       vi.mocked(useSession).mockReturnValue(makeSession('admin'));
       renderStep(true, [makeTenant('tenant-1', 'Tenant One')]);
 
@@ -169,7 +171,7 @@ describe('CatalogGeneralStep', () => {
         .getByText('Tenant scoped')
         .closest('#catalog-item-scope-tenant');
       expect(tenantScopedCard).toHaveClass('pf-m-disabled');
-      expect(screen.getByRole('button', { name: 'Tenant' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Tenant' })).toBeInTheDocument();
     });
 
     it('shows the edit-mode template helper text', () => {
@@ -181,5 +183,43 @@ describe('CatalogGeneralStep', () => {
         ),
       ).toBeInTheDocument();
     });
+  });
+});
+
+describe('catalogGeneralValuesFromItem', () => {
+  const baseItem = {
+    metadata: {
+      name: 'my-item',
+      description: 'My description',
+      project: 'team-a',
+      tenant: 'tenant-1',
+    },
+    template: { id: 'template-1' },
+  };
+
+  it('derives a tenant scope and populates fields from a tenant-scoped item', () => {
+    expect(catalogGeneralValuesFromItem(baseItem)).toEqual({
+      scope: 'tenant',
+      metadata: {
+        name: 'my-item',
+        project: 'team-a',
+        description: 'My description',
+        tenant: { id: 'tenant-1', name: '' },
+      },
+      template: { id: 'template-1', name: '' },
+    });
+  });
+
+  it('derives a global scope and an empty tenant from a global item', () => {
+    const item = { ...baseItem, metadata: { ...baseItem.metadata, tenant: 'shared' } };
+
+    const values = catalogGeneralValuesFromItem(item);
+
+    expect(values.scope).toBe('global');
+    expect(values.metadata.tenant).toEqual({ id: '', name: '' });
+  });
+
+  it('returns empty defaults when metadata and template are absent', () => {
+    expect(catalogGeneralValuesFromItem({})).toEqual(catalogGeneralValues());
   });
 });

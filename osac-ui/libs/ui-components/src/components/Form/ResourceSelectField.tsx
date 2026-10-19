@@ -1,24 +1,13 @@
-import { type MouseEvent, type ReactNode, type Ref, useEffect, useMemo, useState } from 'react';
-import {
-  Alert,
-  Content,
-  FormGroup,
-  MenuToggle,
-  type MenuToggleElement,
-  Select,
-  SelectList,
-  SelectOption,
-} from '@patternfly/react-core';
-import { useField } from 'formik';
+import { type ReactNode, useEffect, useMemo, useRef } from 'react';
+import { Alert, Content } from '@patternfly/react-core';
+import { getIn, useFormikContext } from 'formik';
 
 import type { ListParams } from '@osac/ui-components/api/types';
 import { useListResource } from '@osac/ui-components/api/use-resource';
 import { getErrorMessage } from '@osac/ui-components/utils/error';
 
-import { getVisibleFieldError } from './fieldError';
-import { useShowFieldValidationErrors } from './FieldValidationContext';
-import { FormFieldHelper } from './FormFieldHelper';
-import { type ResourceSelectValue } from './resourceSelectValue';
+import { type ResourceSelectValue, emptyResourceSelectValue } from './resourceSelectValue';
+import { TypeaheadSelectField } from './TypeaheadSelectField';
 
 type ListService = Parameters<typeof useListResource>[0];
 
@@ -45,14 +34,9 @@ export interface ResourceSelectFieldProps {
   loadErrorTitle?: string;
   emptyTitle?: string;
   emptyDescription?: string;
-  /** Called after a new resource is selected. Use to trigger cascade resets. */
+  /** Called after a new resource is selected or the field is cleared. Use to trigger cascade resets. */
   onSelectResource?: (value: ResourceSelectValue) => void;
 }
-
-const resourceFromItem = (item: ResourceListItem): ResourceSelectValue => ({
-  id: item.id,
-  name: item.metadata?.name ?? '',
-});
 
 export const ResourceSelectField = ({
   name,
@@ -71,10 +55,9 @@ export const ResourceSelectField = ({
   emptyDescription,
   onSelectResource,
 }: ResourceSelectFieldProps) => {
-  const [field, meta, helpers] = useField<ResourceSelectValue>(name);
-  const [isOpen, setIsOpen] = useState(false);
-  const showValidationErrors = useShowFieldValidationErrors();
-  const error = getVisibleFieldError(meta, showValidationErrors);
+  const idFieldName = `${name}.id`;
+  const nameFieldName = `${name}.name`;
+  const { values, setFieldValue } = useFormikContext<Record<string, unknown>>();
   const { data, isLoading, error: loadError } = useListResource(service, request);
   const items = useMemo(
     () =>
@@ -86,11 +69,25 @@ export const ResourceSelectField = ({
   const listEmpty = !isLoading && !listFailed && items.length === 0;
   const controlDisabled = isDisabled || isLoading || listFailed || listEmpty;
   const effectivePlaceholder = isLoading ? loadingPlaceholder : placeholder;
-  const selectedId = field.value?.id ?? '';
-  const selectedItem = items.find((item) => item.id === selectedId);
-  const toggleLabel =
-    (selectedItem ? selectedItem.metadata?.name : field.value?.name) || effectivePlaceholder;
-  const validated = error ? 'error' : 'default';
+
+  const selectedId = (getIn(values, idFieldName) as string | undefined) ?? '';
+
+  // Keep the resource's name in sync with its id, and resolve the id to the resource name
+  // whenever a resource is picked, auto-selected, or cleared.
+  const isFirstRender = useRef(true);
+  useEffect(() => {
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      return;
+    }
+    const item = items.find((resource) => resource.id === selectedId);
+    const resourceName = item?.metadata?.name ?? '';
+    void setFieldValue(nameFieldName, resourceName, false);
+    onSelectResource?.(
+      selectedId ? { id: selectedId, name: resourceName } : emptyResourceSelectValue(),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId]);
 
   useEffect(() => {
     if (
@@ -102,36 +99,20 @@ export const ResourceSelectField = ({
     ) {
       return;
     }
-    void helpers.setValue(resourceFromItem(items[0]), false);
-  }, [autoSelectSingleOption, controlDisabled, helpers, isLoading, items, selectedId]);
+    void setFieldValue(idFieldName, items[0].id, false);
+  }, [
+    autoSelectSingleOption,
+    controlDisabled,
+    idFieldName,
+    isLoading,
+    items,
+    selectedId,
+    setFieldValue,
+  ]);
 
-  const onSelect = (_event: MouseEvent<Element> | undefined, value: string | number) => {
-    const item = items.find((resource) => resource.id === value);
-    if (!item) {
-      return;
-    }
-    const resourceValue = resourceFromItem(item);
-    void helpers.setValue(resourceValue, true);
-    void helpers.setTouched(true, false);
-    setIsOpen(false);
-    onSelectResource?.(resourceValue);
-  };
-
-  const toggle = (toggleRef: Ref<MenuToggleElement>) => (
-    <MenuToggle
-      ref={toggleRef}
-      id={fieldId}
-      onClick={() => setIsOpen((wasOpen) => !wasOpen)}
-      isExpanded={isOpen}
-      isDisabled={controlDisabled}
-      isFullWidth
-      status={validated === 'error' ? 'danger' : undefined}
-      aria-invalid={error ? true : undefined}
-      aria-describedby={error ? `${fieldId}-helper-error` : undefined}
-      aria-busy={isLoading || undefined}
-    >
-      {toggleLabel}
-    </MenuToggle>
+  const options = useMemo(
+    () => items.map((item) => ({ value: item.id, content: item.metadata?.name ?? item.id })),
+    [items],
   );
 
   return (
@@ -146,26 +127,17 @@ export const ResourceSelectField = ({
           {emptyDescription ? <Content component="p">{emptyDescription}</Content> : null}
         </Alert>
       ) : null}
-      <FormGroup label={label} fieldId={fieldId} isRequired={isRequired} labelInfo={labelInfo}>
-        <Select
-          id={`${fieldId}-select`}
-          isOpen={isOpen}
-          selected={selectedId}
-          onSelect={onSelect}
-          onOpenChange={setIsOpen}
-          toggle={toggle}
-          shouldFocusToggleOnSelect
-        >
-          <SelectList>
-            {items.map((item) => (
-              <SelectOption key={item.id} value={item.id}>
-                {item.metadata?.name}
-              </SelectOption>
-            ))}
-          </SelectList>
-        </Select>
-        <FormFieldHelper error={error} fieldId={fieldId} />
-      </FormGroup>
+      <TypeaheadSelectField
+        name={idFieldName}
+        label={label}
+        fieldId={fieldId}
+        options={options}
+        isRequired={isRequired}
+        isDisabled={controlDisabled}
+        labelInfo={labelInfo}
+        placeholder={effectivePlaceholder}
+        onClear={() => void setFieldValue(nameFieldName, '', false)}
+      />
     </>
   );
 };

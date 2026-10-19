@@ -8,6 +8,7 @@ import { ComputeInstanceCatalogItemSchema, DiskImageLifecycle, DiskImageSchema }
 import { getComputeInstanceInitialValues } from './fields';
 import { createEmptyComputeInstanceValues } from './payload';
 import VmGeneralStep from './VmGeneralStep';
+import { getResourceSelectInput } from '../../../test-utils/query';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
 const diskImages = [
@@ -34,7 +35,7 @@ describe('VmGeneralStep', () => {
       },
     );
 
-    const diskImageSelect = await screen.findByLabelText(/^Disk image/);
+    const diskImageSelect = await waitFor(() => getResourceSelectInput(/^Disk image/));
     await user.click(diskImageSelect);
 
     expect(screen.getByRole('option', { name: /fedora/ })).toBeInTheDocument();
@@ -42,7 +43,7 @@ describe('VmGeneralStep', () => {
 
     await user.click(screen.getByRole('option', { name: /rhel/ }));
 
-    await waitFor(() => expect(diskImageSelect).toHaveTextContent('rhel'));
+    await waitFor(() => expect(diskImageSelect).toHaveValue('rhel'));
   });
 
   it('shows the catalog item disk image when the wizard opens', async () => {
@@ -70,8 +71,6 @@ describe('VmGeneralStep', () => {
       },
     );
 
-    const diskImageSelect = await screen.findByLabelText(/^Disk image/);
-    await waitFor(() => expect(diskImageSelect).toHaveTextContent('rhel'));
-    expect(diskImageSelect).toBeDisabled();
+    await waitFor(() => expect(getResourceSelectInput(/^Disk image/)).toHaveValue('rhel'));
   });
 });

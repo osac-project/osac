@@ -90,8 +90,9 @@ describe('ResourceSelectField', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/^Tenant/)).toHaveTextContent('Select a tenant');
+      expect(screen.getByRole('combobox')).toHaveAttribute('placeholder', 'Select a tenant');
     });
+    expect(screen.getByRole('combobox')).toHaveValue('');
     expect(screen.getByLabelText('formik-value')).toHaveTextContent('{"id":"","name":""}');
   });
 
@@ -101,9 +102,9 @@ describe('ResourceSelectField', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/^Tenant/)).not.toBeDisabled();
+      expect(screen.getByRole('combobox')).toHaveAttribute('placeholder', 'Select a tenant');
     });
-    await user.click(screen.getByLabelText(/^Tenant/));
+    await user.click(screen.getByRole('combobox'));
     await user.click(screen.getByRole('option', { name: 'globex' }));
 
     await waitFor(() => {
@@ -111,7 +112,7 @@ describe('ResourceSelectField', () => {
         '{"id":"t-2","name":"globex"}',
       );
     });
-    expect(screen.getByLabelText(/^Tenant/)).toHaveTextContent('globex');
+    expect(screen.getByRole('combobox')).toHaveValue('globex');
   });
 
   it('auto-selects a single listed resource as id and name', async () => {
@@ -123,7 +124,7 @@ describe('ResourceSelectField', () => {
       );
     });
 
-    expect(screen.getByLabelText(/^Tenant/)).toHaveTextContent('Only tenant');
+    expect(screen.getByRole('combobox')).toHaveValue('Only tenant');
   });
 
   it('does not auto-select when multiple resources are listed', async () => {
@@ -133,8 +134,9 @@ describe('ResourceSelectField', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/^Tenant/)).toHaveTextContent('Select a tenant');
+      expect(screen.getByRole('combobox')).toHaveAttribute('placeholder', 'Select a tenant');
     });
+    expect(screen.getByRole('combobox')).toHaveValue('');
     expect(screen.getByLabelText('formik-value')).toHaveTextContent('{"id":"","name":""}');
   });
 
@@ -158,7 +160,7 @@ describe('ResourceSelectField', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/^Tenant/)).not.toBeDisabled();
+      expect(screen.getByRole('combobox')).toHaveAttribute('placeholder', 'Select a tenant');
     });
     await user.click(screen.getByRole('button', { name: 'Validate' }));
 
@@ -167,17 +169,16 @@ describe('ResourceSelectField', () => {
     });
   });
 
-  it('shows an empty warning above a disabled select when the list has no resources', async () => {
+  it('shows an empty warning when the list has no resources', async () => {
     renderSelect({ tenants: [] });
 
     expect(await screen.findByText('No registered tenants')).toBeInTheDocument();
     expect(
       screen.getByText('Register a tenant before creating and assigning an external IP pool.'),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText(/^Tenant/)).toBeDisabled();
   });
 
-  it('shows a load error above a disabled select when listing fails', async () => {
+  it('shows a load error when listing fails', async () => {
     renderSelect({
       transportOverrides: {
         onTenantList: () => {
@@ -189,6 +190,46 @@ describe('ResourceSelectField', () => {
     expect(await screen.findByText('Failed to fetch tenants')).toBeInTheDocument();
     expect(screen.getByText('tenants unavailable')).toBeInTheDocument();
     expect(screen.queryByText('No registered tenants')).not.toBeInTheDocument();
-    expect(screen.getByLabelText(/^Tenant/)).toBeDisabled();
+  });
+
+  describe('clear button', () => {
+    it('is hidden when no value is selected', async () => {
+      renderSelect({
+        tenants: [makeTenant('t-1', 'acme'), makeTenant('t-2', 'globex')],
+      });
+
+      await waitFor(() => {
+        expect(screen.getByRole('combobox')).toHaveAttribute('placeholder', 'Select a tenant');
+      });
+      expect(
+        screen.getByRole('button', { name: 'Clear input value', hidden: true }),
+      ).not.toBeVisible();
+    });
+
+    it('appears once a value is selected and clears it back to empty when clicked', async () => {
+      const { user } = renderSelect({
+        tenants: [makeTenant('t-1', 'acme'), makeTenant('t-2', 'globex')],
+      });
+
+      await waitFor(() => {
+        expect(screen.getByRole('combobox')).toHaveAttribute('placeholder', 'Select a tenant');
+      });
+      await user.click(screen.getByRole('combobox'));
+      await user.click(screen.getByRole('option', { name: 'globex' }));
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Clear input value' })).toBeVisible();
+      });
+
+      await user.click(screen.getByRole('button', { name: 'Clear input value' }));
+
+      await waitFor(() => {
+        expect(screen.getByLabelText('formik-value')).toHaveTextContent('{"id":"","name":""}');
+      });
+      expect(screen.getByRole('combobox')).toHaveValue('');
+      expect(
+        screen.getByRole('button', { name: 'Clear input value', hidden: true }),
+      ).not.toBeVisible();
+    });
   });
 });

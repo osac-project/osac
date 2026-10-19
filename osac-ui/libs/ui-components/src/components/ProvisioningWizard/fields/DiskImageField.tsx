@@ -13,6 +13,8 @@ const DiskImageField = ({
   name,
   fieldId = 'disk-image',
   isDisabled = false,
+  isRequired = true,
+  labelInfo,
 }: DiskImageFieldProps) => {
   const { t } = useTranslation();
 
@@ -23,8 +25,9 @@ const DiskImageField = ({
       fieldId={fieldId}
       service={DiskImages}
       request={{ filter: DISK_IMAGE_NON_OBSOLETE_FILTER }}
-      isRequired
+      isRequired={isRequired}
       isDisabled={isDisabled}
+      labelInfo={labelInfo}
       placeholder={t('Select a disk image')}
       loadErrorTitle={t('Could not load disk images')}
       emptyTitle={t('No disk images available')}

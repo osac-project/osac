@@ -194,8 +194,8 @@ def test_baremetal_instance_lifecycle(
         )
 
         # Verify provisioning (image, consumerRef, online bundled on metal3;
-        # device status + claim on netbox)
-        inventory_backend.wait_for_allocated(ref=host_ref, expected_image_url=BMI_DISK_IMAGE_SOURCE_REF)
+        # device status + claim, image via the BMI API, on netbox)
+        inventory_backend.wait_for_allocated(ref=host_ref, bmi_id=bmi_id, expected_image_url=BMI_DISK_IMAGE_SOURCE_REF)
 
         consumer_ref: str = inventory_backend.consumer_ref(ref=host_ref)
         assert consumer_ref != "", f"Host {host_ref} has no consumer reference after allocation"

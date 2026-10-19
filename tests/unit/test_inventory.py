@@ -124,21 +124,21 @@ def test_metal3_count_available_uses_available_and_ready_states() -> None:
 def test_metal3_wait_for_allocated_bundles_the_provisioned_assertions() -> None:
     backend = _metal3(FakeMetal3K8s(state="provisioned", image_url="oci://img:1", consumer_ref="bmi-1", online="true"))
 
-    backend.wait_for_allocated(ref="bmh-1", expected_image_url="oci://img:1")
+    backend.wait_for_allocated(ref="bmh-1", bmi_id="bmi-uid", expected_image_url="oci://img:1")
 
 
 def test_metal3_wait_for_allocated_rejects_wrong_image() -> None:
     backend = _metal3(FakeMetal3K8s(state="provisioned", image_url="oci://other:1"))
 
     with pytest.raises(AssertionError, match="does not match the expected"):
-        backend.wait_for_allocated(ref="bmh-1", expected_image_url="oci://img:1")
+        backend.wait_for_allocated(ref="bmh-1", bmi_id="bmi-uid", expected_image_url="oci://img:1")
 
 
 def test_metal3_wait_for_allocated_without_expected_image_requires_non_empty() -> None:
     backend = _metal3(FakeMetal3K8s(state="provisioned", image_url=""))
 
     with pytest.raises(AssertionError, match="no image URL"):
-        backend.wait_for_allocated(ref="bmh-1")
+        backend.wait_for_allocated(ref="bmh-1", bmi_id="bmi-uid")
 
 
 def test_metal3_wait_for_released_requires_cleared_image_and_consumer() -> None:
@@ -227,11 +227,25 @@ class FakeNetBox:
 
 
 class FakeGRPC:
-    def __init__(self, state: str = "BARE_METAL_INSTANCE_STATE_STOPPED") -> None:
+    def __init__(
+        self,
+        state: str = "BARE_METAL_INSTANCE_STATE_STOPPED",
+        bmi_spec: dict[str, Any] | None = None,
+        disk_images: list[dict[str, Any]] | None = None,
+    ) -> None:
         self.state = state
+        self.bmi_spec = bmi_spec if bmi_spec is not None else {}
+        self.disk_images = disk_images if disk_images is not None else []
 
     def get_baremetal_instance_state(self, *, bmi_id: str) -> str:
         return self.state
+
+    def get_baremetal_instance(self, *, bmi_id: str) -> dict[str, Any]:
+        return {"object": {"spec": self.bmi_spec}}
+
+    def call(self, *, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+        assert service.endswith("DiskImages/List")
+        return {"items": self.disk_images}
 
 
 class FakeDeviceK8s:
@@ -291,18 +305,42 @@ def test_netbox_count_available_uses_the_free_device_query() -> None:
     ]
 
 
-def test_netbox_wait_for_allocated_requires_active_and_claimed(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_netbox_wait_for_allocated_requires_active_claimed_and_matching_image(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("tests.e2e.core.runner.time.sleep", lambda *_: None)
     netbox = FakeNetBox([{"id": "42", "status": "staged", "custom_fields": {"osac_instance_id": ""}}])
-    backend = _netbox(netbox)
+    grpc = FakeGRPC(
+        bmi_spec={"diskImage": {"id": "di-1", "name": "e2e-di"}},
+        disk_images=[{"id": "di-1", "metadata": {"name": "e2e-di"}, "spec": {"sourceRef": "oci://img:1"}}],
+    )
+    backend = _netbox(netbox, grpc=grpc)
 
-    # The image URL is not observable on a device and must be ignored.
     with pytest.raises(TimeoutError, match="timed out"):
-        backend.wait_for_allocated(ref="42", expected_image_url="oci://ignored:1")
+        backend.wait_for_allocated(ref="42", bmi_id="bmi-uid", expected_image_url="oci://img:1")
 
     netbox.devices[0]["status"] = "active"
     netbox.devices[0]["custom_fields"]["osac_instance_id"] = "bmi-uid"
-    backend.wait_for_allocated(ref="42", expected_image_url="oci://ignored:1")
+    backend.wait_for_allocated(ref="42", bmi_id="bmi-uid", expected_image_url="oci://img:1")
+
+
+def test_netbox_wait_for_allocated_verifies_bmi_disk_image_source() -> None:
+    netbox = FakeNetBox([{"id": "42", "status": "active", "custom_fields": {"osac_instance_id": "bmi-uid"}}])
+    grpc = FakeGRPC(
+        bmi_spec={"diskImage": {"id": "di-1", "name": "e2e-di"}},
+        disk_images=[{"id": "di-1", "metadata": {"name": "e2e-di"}, "spec": {"sourceRef": "oci://other:1"}}],
+    )
+    backend = _netbox(netbox, grpc=grpc)
+
+    with pytest.raises(AssertionError, match="selected DiskImage source"):
+        backend.wait_for_allocated(ref="42", bmi_id="bmi-uid", expected_image_url="oci://img:1")
+
+
+def test_netbox_wait_for_allocated_rejects_invisible_disk_image() -> None:
+    netbox = FakeNetBox([{"id": "42", "status": "active", "custom_fields": {"osac_instance_id": "bmi-uid"}}])
+    grpc = FakeGRPC(bmi_spec={"diskImage": {"name": "gone"}})
+    backend = _netbox(netbox, grpc=grpc)
+
+    with pytest.raises(AssertionError, match="not visible"):
+        backend.wait_for_allocated(ref="42", bmi_id="bmi-uid", expected_image_url="oci://img:1")
 
 
 def test_netbox_wait_for_released_requires_staged_and_unclaimed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -473,12 +511,21 @@ options:
     url: https://netbox.example.test
     allowInsecureHTTP: true
 """
-MANAGEMENT_YAML = """\
-name: metal3-management
-type: metal3
+INVENTORY_YAML_HTTP = """\
+name: netbox-inventory
+type: netbox
 options:
-  metal3:
-    namespace: host-inventory
+  netbox:
+    url: http://netbox.example.test
+    allowInsecureHTTP: false
+"""
+INVENTORY_YAML_HTTP_OPT_IN = """\
+name: netbox-inventory
+type: netbox
+options:
+  netbox:
+    url: http://netbox.example.test
+    allowInsecureHTTP: true
 """
 
 
@@ -497,11 +544,7 @@ class FakeSecretsK8s:
 
 
 def _bmf_secrets(
-    *,
-    inventory_yaml: str = INVENTORY_YAML,
-    token: str = "render-test-netbox-token",
-    with_ca: bool = True,
-    with_management: bool = True,
+    *, inventory_yaml: str = INVENTORY_YAML, token: str = "render-test-netbox-token", with_ca: bool = True
 ) -> dict[str, dict[str, str]]:
     secrets: dict[str, dict[str, str]] = {
         "osac-inventory-config": {"inventory.yaml": inventory_yaml},
@@ -509,8 +552,6 @@ def _bmf_secrets(
     }
     if with_ca:
         secrets["osac-netbox-ca"] = {"ca.crt": "TEST-CA-CERTIFICATE\n"}
-    if with_management:
-        secrets["osac-management-config"] = {"management.yaml": MANAGEMENT_YAML}
     return secrets
 
 
@@ -520,8 +561,7 @@ def test_settings_from_full_bmf_configuration() -> None:
     assert settings.url == "https://netbox.example.test"
     assert settings.token == "render-test-netbox-token"
     assert settings.ca_pem == "TEST-CA-CERTIFICATE\n"
-    assert settings.allow_insecure_http is False
-    assert settings.bmh_namespace == "host-inventory"
+    assert settings.skip_tls_verify is False
 
 
 def test_settings_tolerate_missing_ca_secret() -> None:
@@ -531,7 +571,25 @@ def test_settings_tolerate_missing_ca_secret() -> None:
     )
 
     assert settings.ca_pem is None
-    assert settings.allow_insecure_http is True
+    # allowInsecureHTTP is http://-scheme permission only, never a
+    # TLS-verification switch.
+    assert settings.skip_tls_verify is False
+
+
+def test_settings_reject_http_url_without_deployed_opt_in() -> None:
+    with pytest.raises(RuntimeError, match="does not set allowInsecureHTTP"):
+        netbox_settings_from_bmf(
+            k8s=cast(K8sClient, FakeSecretsK8s(_bmf_secrets(inventory_yaml=INVENTORY_YAML_HTTP))), namespace="osac"
+        )
+
+
+def test_settings_allow_http_url_with_deployed_opt_in() -> None:
+    settings = netbox_settings_from_bmf(
+        k8s=cast(K8sClient, FakeSecretsK8s(_bmf_secrets(inventory_yaml=INVENTORY_YAML_HTTP_OPT_IN))), namespace="osac"
+    )
+
+    assert settings.url == "http://netbox.example.test"
+    assert settings.skip_tls_verify is False
 
 
 def test_settings_fail_fast_on_missing_token_secret() -> None:
@@ -549,13 +607,6 @@ def test_settings_fail_fast_on_missing_url() -> None:
         )
 
 
-def test_settings_fail_fast_on_missing_management_config() -> None:
-    with pytest.raises(RuntimeError, match="osac-management-config"):
-        netbox_settings_from_bmf(
-            k8s=cast(K8sClient, FakeSecretsK8s(_bmf_secrets(with_management=False))), namespace="osac"
-        )
-
-
 def test_settings_env_overrides_win(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     ca_file = tmp_path / "ca.pem"
     ca_file.write_text("OVERRIDE-CA")
@@ -569,7 +620,20 @@ def test_settings_env_overrides_win(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     assert settings.url == "https://override.example.test"
     assert settings.token == "override-token"
     assert settings.ca_pem == "OVERRIDE-CA"
-    assert settings.allow_insecure_http is True
+    assert settings.skip_tls_verify is True
+
+
+def test_settings_env_overrides_skip_secret_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OSAC_NETBOX_URL", "https://external.example.test")
+    monkeypatch.setenv("OSAC_NETBOX_TOKEN", "external-token")
+
+    # A fully env-driven run against an external NetBox reads no Secrets.
+    settings = netbox_settings_from_bmf(k8s=cast(K8sClient, FakeSecretsK8s({})), namespace="osac")
+
+    assert settings.url == "https://external.example.test"
+    assert settings.token == "external-token"
+    assert settings.ca_pem is None
+    assert settings.skip_tls_verify is False
 
 
 def test_settings_propagate_non_not_found_secret_errors() -> None:

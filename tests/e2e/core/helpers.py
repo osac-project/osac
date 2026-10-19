@@ -1295,7 +1295,7 @@ def assert_bmi_lifecycle_on_running(
 
     host_ref: str = inventory.host_for_bmi(bmi_cr_name=bmi_cr_name)
 
-    inventory.wait_for_allocated(ref=host_ref, expected_image_url=expected_image_url)
+    inventory.wait_for_allocated(ref=host_ref, bmi_id=bmi_id, expected_image_url=expected_image_url)
 
     if power_cycle:
         grpc.update_baremetal_instance_run_strategy(

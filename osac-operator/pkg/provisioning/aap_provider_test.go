@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -1362,5 +1364,42 @@ var _ = Describe("AAPProvider", func() {
 			_, err := provider.TriggerProvision(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
 		})
+	})
+})
+
+var _ = Describe("AAPProvider workflow template round-trip", func() {
+	It("polls the workflow job ID that TriggerProvision launched", func() {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer GinkgoRecover()
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == fmt.Sprintf("/%s/%s/", aap.APIVersion, aap.JobTemplatesEndpoint):
+				Expect(r.URL.Query().Get("name")).To(Equal("wf-provision"))
+				_ = json.NewEncoder(w).Encode(map[string]any{"count": 0, "results": []any{}})
+			case r.Method == http.MethodGet && r.URL.Path == fmt.Sprintf("/%s/%s/", aap.APIVersion, aap.WorkflowJobTemplatesEndpoint):
+				_ = json.NewEncoder(w).Encode(map[string]any{"count": 1, "results": []any{map[string]any{"id": 7, "name": "wf-provision"}}})
+			case r.Method == http.MethodPost && r.URL.Path == fmt.Sprintf("/%s/%s/7/launch/", aap.APIVersion, aap.WorkflowJobTemplatesEndpoint):
+				_ = json.NewEncoder(w).Encode(map[string]any{"id": 456})
+			case r.Method == http.MethodGet && r.URL.Path == fmt.Sprintf("/%s/%s/456/", aap.APIVersion, aap.JobsEndpoint):
+				w.WriteHeader(http.StatusNotFound)
+			case r.Method == http.MethodGet && r.URL.Path == fmt.Sprintf("/%s/%s/456/", aap.APIVersion, aap.WorkflowJobsEndpoint):
+				_ = json.NewEncoder(w).Encode(map[string]any{"id": 456, "status": "running"})
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer server.Close()
+
+		provider := provisioning.NewAAPProvider(aap.NewClient(server.URL, "token", false), "wf-provision", "wf-delete")
+		instance := &v1alpha1.ComputeInstance{
+			ObjectMeta: metav1.ObjectMeta{Name: "wf-instance", Namespace: "default"},
+		}
+
+		result, err := provider.TriggerProvision(context.Background(), instance)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.JobID).To(Equal("456"))
+
+		status, err := provider.GetProvisionStatus(context.Background(), instance, result.JobID)
+		Expect(err).NotTo(HaveOccurred(), "the workflow job ID a launch returns must be pollable through the provider")
+		Expect(status.State).To(Equal(v1alpha1.JobStateRunning))
 	})
 })

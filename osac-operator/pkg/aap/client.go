@@ -45,6 +45,12 @@ const (
 	// AAP template endpoint paths
 	JobTemplatesEndpoint         = "job_templates"
 	WorkflowJobTemplatesEndpoint = "workflow_job_templates"
+
+	// AAP job endpoint paths. Job IDs are opaque: launching a workflow job
+	// template returns a workflow job ID, which lives under workflow_jobs
+	// rather than jobs.
+	JobsEndpoint         = "jobs"
+	WorkflowJobsEndpoint = "workflow_jobs"
 )
 
 // Client provides an HTTP client for interacting with AAP (Ansible Automation Platform) REST API.
@@ -181,9 +187,35 @@ func (c *Client) LaunchWorkflowTemplate(ctx context.Context, req LaunchWorkflowT
 	return &launchResp, nil
 }
 
-// GetJob retrieves job status by job ID.
+// GetJob retrieves job status by job ID. The jobs endpoint is tried first;
+// a 404 falls back to workflow_jobs, so workflow jobs are pollable with the
+// same opaque ID their launch returned. A job that exists under neither
+// endpoint is reported as NotFoundError (purged or never existed).
 func (c *Client) GetJob(ctx context.Context, jobID string) (*Job, error) {
-	url := fmt.Sprintf("%s/%s/jobs/%s/", c.baseURL, APIVersion, jobID)
+	job, err := c.getJobFromEndpoint(ctx, JobsEndpoint, jobID)
+	if err == nil {
+		return job, nil
+	}
+	var notFoundErr *NotFoundError
+	if errors.As(err, &notFoundErr) {
+		workflowJob, workflowErr := c.getJobFromEndpoint(ctx, WorkflowJobsEndpoint, jobID)
+		if workflowErr == nil {
+			return workflowJob, nil
+		}
+		// A non-404 failure on the fallback endpoint is a real error, not a
+		// missing job: surface it so callers do not classify the job as purged.
+		var workflowNotFound *NotFoundError
+		if !errors.As(workflowErr, &workflowNotFound) {
+			return nil, workflowErr
+		}
+	}
+	return nil, err
+}
+
+// getJobFromEndpoint retrieves job status from one job endpoint (jobs or
+// workflow_jobs).
+func (c *Client) getJobFromEndpoint(ctx context.Context, endpoint, jobID string) (*Job, error) {
+	url := fmt.Sprintf("%s/%s/%s/%s/", c.baseURL, APIVersion, endpoint, jobID)
 
 	resp, err := c.doRequest(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -223,11 +255,38 @@ func (c *Client) CanCancelJob(ctx context.Context, jobID string) (bool, error) {
 
 // CancelJob cancels a pending or running job.
 // Returns nil if successful (HTTP 202), or an error if the job cannot be canceled (HTTP 405).
+// The jobs endpoint is tried first; a 404 falls back to workflow_jobs, so
+// workflow jobs are cancelable with the same opaque ID their launch
+// returned. A job that exists under neither endpoint is reported as
+// NotFoundError.
 // Note: When canceling a job, AAP issues a SIGINT to the ansible-playbook process,
 // which causes Ansible to stop dispatching new tasks. Tasks already dispatched to
 // remote hosts will run to completion.
 func (c *Client) CancelJob(ctx context.Context, jobID string) error {
-	url := fmt.Sprintf("%s/%s/jobs/%s/cancel/", c.baseURL, APIVersion, jobID)
+	err := c.cancelJobFromEndpoint(ctx, JobsEndpoint, jobID)
+	if err == nil {
+		return nil
+	}
+	var notFoundErr *NotFoundError
+	if errors.As(err, &notFoundErr) {
+		workflowErr := c.cancelJobFromEndpoint(ctx, WorkflowJobsEndpoint, jobID)
+		if workflowErr == nil {
+			return nil
+		}
+		// A non-404 failure on the fallback endpoint is a real error (e.g.
+		// 405 already-terminal for a workflow job): surface it.
+		var workflowNotFound *NotFoundError
+		if !errors.As(workflowErr, &workflowNotFound) {
+			return workflowErr
+		}
+	}
+	return err
+}
+
+// cancelJobFromEndpoint cancels a job through one job endpoint (jobs or
+// workflow_jobs).
+func (c *Client) cancelJobFromEndpoint(ctx context.Context, endpoint, jobID string) error {
+	url := fmt.Sprintf("%s/%s/%s/%s/cancel/", c.baseURL, APIVersion, endpoint, jobID)
 
 	_, err := c.doRequest(ctx, http.MethodPost, url, nil)
 	if err != nil {

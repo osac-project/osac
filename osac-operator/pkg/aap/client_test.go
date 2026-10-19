@@ -238,6 +238,68 @@ var _ = Describe("Client", func() {
 				Expect(err).To(HaveOccurred())
 			})
 		})
+
+		Context("when the job is a workflow job", func() {
+			BeforeEach(func() {
+				server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					defer GinkgoRecover()
+					if r.URL.Path == fmt.Sprintf("/%s/%s/456/", aap.APIVersion, aap.JobsEndpoint) {
+						w.WriteHeader(http.StatusNotFound)
+						return
+					}
+					Expect(r.URL.Path).To(Equal(fmt.Sprintf("/%s/%s/456/", aap.APIVersion, aap.WorkflowJobsEndpoint)))
+					Expect(r.Method).To(Equal(http.MethodGet))
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"id":     456,
+						"status": "running",
+					})
+				}))
+				client = aap.NewClient(server.URL, "test-token", false)
+			})
+
+			It("falls back to the workflow_jobs endpoint", func() {
+				job, err := client.GetJob(ctx, "456")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(job.ID).To(Equal(456))
+				Expect(job.Status).To(Equal("running"))
+			})
+		})
+
+		Context("when the job exists under neither endpoint", func() {
+			BeforeEach(func() {
+				server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusNotFound)
+				}))
+				client = aap.NewClient(server.URL, "test-token", false)
+			})
+
+			It("returns NotFoundError after trying both endpoints", func() {
+				_, err := client.GetJob(ctx, "999")
+				Expect(err).To(HaveOccurred())
+				var notFoundErr *aap.NotFoundError
+				Expect(errors.As(err, &notFoundErr)).To(BeTrue())
+			})
+		})
+
+		Context("when the workflow endpoint fails with a server error", func() {
+			BeforeEach(func() {
+				server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path == fmt.Sprintf("/%s/%s/456/", aap.APIVersion, aap.JobsEndpoint) {
+						w.WriteHeader(http.StatusNotFound)
+						return
+					}
+					w.WriteHeader(http.StatusInternalServerError)
+				}))
+				client = aap.NewClient(server.URL, "test-token", false)
+			})
+
+			It("surfaces the real error instead of NotFound", func() {
+				_, err := client.GetJob(ctx, "456")
+				Expect(err).To(HaveOccurred())
+				var notFoundErr *aap.NotFoundError
+				Expect(errors.As(err, &notFoundErr)).To(BeFalse(), "a workflow endpoint failure must not be classified as a missing job")
+			})
+		})
 	})
 
 	Describe("GetTemplateByName", func() {
@@ -611,6 +673,95 @@ var _ = Describe("Client", func() {
 				var methodNotAllowedErr *aap.MethodNotAllowedError
 				Expect(errors.As(err, &methodNotAllowedErr)).To(BeTrue())
 			})
+		})
+
+		Context("when canceling a workflow job", func() {
+			BeforeEach(func() {
+				server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					defer GinkgoRecover()
+					if r.URL.Path == fmt.Sprintf("/%s/%s/456/cancel/", aap.APIVersion, aap.JobsEndpoint) {
+						w.WriteHeader(http.StatusNotFound)
+						return
+					}
+					Expect(r.URL.Path).To(Equal(fmt.Sprintf("/%s/%s/456/cancel/", aap.APIVersion, aap.WorkflowJobsEndpoint)))
+					Expect(r.Method).To(Equal(http.MethodPost))
+					w.WriteHeader(http.StatusAccepted)
+				}))
+				client = aap.NewClient(server.URL, "test-token", false)
+			})
+
+			It("falls back to the workflow_jobs cancel endpoint", func() {
+				Expect(client.CancelJob(ctx, "456")).To(Succeed())
+			})
+		})
+
+		Context("when a workflow job is already terminal", func() {
+			BeforeEach(func() {
+				server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path == fmt.Sprintf("/%s/%s/456/cancel/", aap.APIVersion, aap.JobsEndpoint) {
+						w.WriteHeader(http.StatusNotFound)
+						return
+					}
+					w.WriteHeader(http.StatusMethodNotAllowed)
+				}))
+				client = aap.NewClient(server.URL, "test-token", false)
+			})
+
+			It("returns MethodNotAllowedError from the workflow endpoint", func() {
+				err := client.CancelJob(ctx, "456")
+				Expect(err).To(HaveOccurred())
+				var methodNotAllowedErr *aap.MethodNotAllowedError
+				Expect(errors.As(err, &methodNotAllowedErr)).To(BeTrue())
+			})
+		})
+
+		Context("when the job exists under neither endpoint", func() {
+			BeforeEach(func() {
+				server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusNotFound)
+				}))
+				client = aap.NewClient(server.URL, "test-token", false)
+			})
+
+			It("returns NotFoundError after trying both endpoints", func() {
+				err := client.CancelJob(ctx, "999")
+				Expect(err).To(HaveOccurred())
+				var notFoundErr *aap.NotFoundError
+				Expect(errors.As(err, &notFoundErr)).To(BeTrue())
+			})
+		})
+	})
+
+	Describe("workflow job round-trip", func() {
+		It("polls the workflow job ID its launch returned", func() {
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				defer GinkgoRecover()
+				switch {
+				case r.Method == http.MethodPost && r.URL.Path == fmt.Sprintf("/%s/%s/7/launch/", aap.APIVersion, aap.WorkflowJobTemplatesEndpoint):
+					_ = json.NewEncoder(w).Encode(map[string]any{"id": 456})
+				case r.URL.Path == fmt.Sprintf("/%s/%s/456/", aap.APIVersion, aap.JobsEndpoint):
+					w.WriteHeader(http.StatusNotFound)
+				case r.URL.Path == fmt.Sprintf("/%s/%s/456/", aap.APIVersion, aap.WorkflowJobsEndpoint):
+					_ = json.NewEncoder(w).Encode(map[string]any{"id": 456, "status": "running"})
+				case r.URL.Path == fmt.Sprintf("/%s/%s/456/cancel/", aap.APIVersion, aap.JobsEndpoint):
+					w.WriteHeader(http.StatusNotFound)
+				case r.URL.Path == fmt.Sprintf("/%s/%s/456/cancel/", aap.APIVersion, aap.WorkflowJobsEndpoint):
+					w.WriteHeader(http.StatusAccepted)
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			client = aap.NewClient(server.URL, "test-token", false)
+
+			launchResp, err := client.LaunchWorkflowTemplate(ctx, aap.LaunchWorkflowTemplateRequest{TemplateID: 7, TemplateName: "wf"})
+			Expect(err).NotTo(HaveOccurred())
+
+			jobID := fmt.Sprintf("%d", launchResp.JobID)
+			job, err := client.GetJob(ctx, jobID)
+			Expect(err).NotTo(HaveOccurred(), "the ID a workflow launch returns must be pollable")
+			Expect(job.Status).To(Equal("running"))
+
+			Expect(client.CancelJob(ctx, jobID)).To(Succeed(), "the ID a workflow launch returns must be cancelable")
 		})
 	})
 })

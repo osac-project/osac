@@ -67,6 +67,7 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-aap
 | Windows sysprep Secret copying and VM-spec wiring | Component integration ([DEV] OSAC-6182) | `compute_instance_create:sysprep_secret_copy` in `make test`; real Kind Secrets and `create_secrets.yaml`, including missing-tenant rejection; VM creation and readiness are overridden |
 | Execution-environment definition or dependency inputs | Build/package validation plus applicable integration tests | `make execution-environment-build`, then `make test` |
 | AAP, OpenStack, KubeVirt/RHACM, or provider provisioning | Contract or real-provider integration | Use the qualifying [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) suite |
+| ONTAP storage provider dual-mode validation, `TridentBackendConfig`/`StorageClass` rendering, and `prepare-ontap-svm.sh` helper | Unit and Component integration | `uv run pytest tests/unit/test_ontap_storage_role.py` plus `tests/integration/targets/ontap_storage_provider/tasks/main.yml` (included in `STORAGE_TESTS_ENABLED=true make test`) against Kind with the `TridentBackendConfig` CRD fixture and stub binder; no real NetApp Trident operator or ONTAP cluster |
 | Storage-provider behavior | Component integration (focused) plus real-provider coverage when required | Tenant target-routing runs in `make test`; provider tests require `STORAGE_TESTS_ENABLED=true make test` (or the relevant storage target and provider suite) |
 
 Storage integration requires `STORAGE_TESTS_ENABLED=true`; image builds are separate build/package validation.

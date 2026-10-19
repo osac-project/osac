@@ -1,0 +1,26 @@
+---
+# ExternalIP deletion — removes the /32 IPAM subnet that reserved the IP
+
+- name: Extract ExternalIP name
+  ansible.builtin.set_fact:
+    eip_name: "{{ external_ip.metadata.name }}"
+
+- name: Display deletion information
+  ansible.builtin.debug:
+    msg: "Deleting Netris IPAM subnet for ExternalIP '{{ eip_name }}'"
+
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Delete /32 IPAM subnet from Netris controller
+  ansible.builtin.include_role:
+    name: netris.controller.ipam
+    tasks_from: delete_subnet
+  vars:
+    ipam_name: "{{ eip_name }}"
+
+- name: Display deletion result
+  ansible.builtin.debug:
+    msg: "IPAM subnet '{{ eip_name }}' deletion completed"

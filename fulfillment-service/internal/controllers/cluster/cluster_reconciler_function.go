@@ -55,6 +55,8 @@ const objectPrefix = "order-"
 // dockerConfigJSONKey is the Secret data key that holds a Kubernetes dockerconfigjson payload.
 const dockerConfigJSONKey = ".dockerconfigjson"
 
+const publicKeyDataKey = "public_key"
+
 // Coordinate keys for hub secrets.
 const (
 	coordinateHubID      = "hub_id"
@@ -70,6 +72,9 @@ var errClusterVersionNotFound = errors.New("cluster version not found")
 
 // errPullSecretResolution indicates the cluster's pull_secret_secret could not be resolved.
 var errPullSecretResolution = errors.New("failed to resolve pull secret reference")
+
+// errSSHKeyResolution indicates the cluster's ssh_key could not be resolved.
+var errSSHKeyResolution = errors.New("failed to resolve SSH public key Secret reference")
 
 // FunctionBuilder contains the data and logic needed to build a function that reconciles clustes.
 type FunctionBuilder struct {
@@ -275,10 +280,10 @@ func (t *task) update(ctx context.Context) error {
 			)
 			return nil
 		}
-		if errors.Is(err, errPullSecretResolution) {
+		if errors.Is(err, errPullSecretResolution) || errors.Is(err, errSSHKeyResolution) {
 			t.r.logger.ErrorContext(
 				ctx,
-				"Failed to resolve pull secret reference",
+				"Failed to resolve cluster Secret reference",
 				slog.String("error", err.Error()),
 			)
 			t.updateCondition(
@@ -460,7 +465,13 @@ func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.Cluster
 		}
 		spec.PullSecret = pullSecret
 	}
-	if clusterSpec.HasSshPublicKey() {
+	if clusterSpec.GetSshKey() != nil {
+		publicKey, err := t.resolveSSHKey(ctx, clusterSpec.GetSshKey())
+		if err != nil {
+			return err
+		}
+		spec.SSHPublicKey = publicKey
+	} else if clusterSpec.HasSshPublicKey() {
 		spec.SSHPublicKey = clusterSpec.GetSshPublicKey()
 	}
 	// Resolve version reference to a release image via the ClusterVersion resource.
@@ -535,6 +546,37 @@ func (t *task) resolvePullSecret(ctx context.Context, ref *privatev1.SecretLocal
 		)
 	}
 	return string(raw), nil
+}
+
+// resolveSSHKey fetches the referenced Secret via the private API and returns its public key.
+func (t *task) resolveSSHKey(ctx context.Context, ref *privatev1.SecretLocalReference) (string, error) {
+	id := ref.GetId()
+	if id == "" {
+		return "", fmt.Errorf("%w: ssh_key has no id", errSSHKeyResolution)
+	}
+	response, err := t.r.secretsClient.Get(ctx, privatev1.SecretsGetRequest_builder{Id: id}.Build())
+	if err != nil {
+		if st, ok := status.FromError(err); ok {
+			switch st.Code() {
+			case codes.NotFound:
+				return "", fmt.Errorf("%w: secret '%s' not found", errSSHKeyResolution, id)
+			case codes.Unauthenticated, codes.PermissionDenied:
+				return "", fmt.Errorf("%w: not authorized to read secret '%s'", errSSHKeyResolution, id)
+			}
+		}
+		return "", fmt.Errorf("%w: failed to get secret '%s': %w", errSSHKeyResolution, id, err)
+	}
+	object := response.GetObject()
+	if object == nil {
+		return "", fmt.Errorf("%w: secret '%s' not found", errSSHKeyResolution, id)
+	}
+	if object.GetMetadata().HasDeletionTimestamp() {
+		return "", fmt.Errorf("%w: secret '%s' has been deleted", errSSHKeyResolution, id)
+	}
+	if err := controllers.ValidateOpenSSHPublicKeySecret(object, object.GetData(), id); err != nil {
+		return "", fmt.Errorf("%w: %s", errSSHKeyResolution, status.Convert(err).Message())
+	}
+	return string(object.GetData()[publicKeyDataKey]), nil
 }
 
 // resolveVersionImage looks up a ClusterVersion by name and returns its release image.

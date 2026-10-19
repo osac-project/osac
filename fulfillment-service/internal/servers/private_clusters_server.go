@@ -34,9 +34,11 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/utils"
+	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -47,6 +49,7 @@ type PrivateClustersServerBuilder struct {
 	metricsRegisterer            prometheus.Registerer
 	filterDesc                   protoreflect.MessageDescriptor
 	addOnOperatorResolverFactory addOnOperatorResolverFactory
+	secretStore                  vault.SecretStore
 }
 
 var _ privatev1.ClustersServer = (*PrivateClustersServer)(nil)
@@ -69,6 +72,7 @@ type PrivateClustersServer struct {
 	generic                   *GenericServer[*privatev1.Cluster]
 	lifecycle                 *externalIPLifecycle
 	bareMetalInstanceTypesDao *dao.GenericDAO[*privatev1.BareMetalInstanceType]
+	secretStore               vault.SecretStore
 }
 
 func NewPrivateClustersServer() *PrivateClustersServerBuilder {
@@ -107,6 +111,12 @@ func (b *PrivateClustersServerBuilder) SetFilterDesc(value protoreflect.MessageD
 // SetAddOnOperatorResolverFactory sets the resolver policy used with the server-owned DAO.
 func (b *PrivateClustersServerBuilder) SetAddOnOperatorResolverFactory(value addOnOperatorResolverFactory) *PrivateClustersServerBuilder {
 	b.addOnOperatorResolverFactory = value
+	return b
+}
+
+// SetSecretStore sets the store used to validate Vault-backed SSH-key Secret data.
+func (b *PrivateClustersServerBuilder) SetSecretStore(value vault.SecretStore) *PrivateClustersServerBuilder {
+	b.secretStore = value
 	return b
 }
 
@@ -273,6 +283,7 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		externalIPDao:             externalIPDao,
 		externalIPAttachmentDao:   externalIPAttachmentDao,
 		secretsDao:                secretsDao,
+		secretStore:               b.secretStore,
 		addOnOperators:            addOnOperators,
 		generic:                   generic,
 	}
@@ -347,9 +358,11 @@ func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *pr
 		return
 	}
 	populateUnsetNodeSetVersions(spec.GetNodeSets(), spec.GetVersion())
-	if key := spec.GetSshPublicKey(); key != "" {
-		if err = validateOpenSSHPublicKey(key); err != nil {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument, "spec.ssh_public_key: %s", err)
+	if spec.GetSshKey() == nil {
+		if key := spec.GetSshPublicKey(); key != "" {
+			if err = validateOpenSSHPublicKey(key); err != nil {
+				return grpcstatus.Errorf(grpccodes.InvalidArgument, "spec.ssh_public_key: %s", err)
+			}
 		}
 	}
 
@@ -455,12 +468,8 @@ func (s *PrivateClustersServer) Update(ctx context.Context,
 			}
 			candidate.GetStatus().SetVersionTransitionTime(timestamppb.Now())
 		}
-		if updateIncludesField(mask, "spec.ssh_public_key") {
-			if key := candidate.GetSpec().GetSshPublicKey(); key != "" {
-				if err := validateOpenSSHPublicKey(key); err != nil {
-					return grpcstatus.Errorf(grpccodes.InvalidArgument, "spec.ssh_public_key: %s", err)
-				}
-			}
+		if err := validateSSHKeyUpdate(candidate, mask); err != nil {
+			return err
 		}
 		if err := s.validateAddOnOperatorImmutability(current, candidate, mask); err != nil {
 			return err
@@ -490,6 +499,18 @@ func (s *PrivateClustersServer) Update(ctx context.Context,
 		return nil
 	})
 	return
+}
+
+func validateSSHKeyUpdate(candidate *privatev1.Cluster, mask *fieldmaskpb.FieldMask) error {
+	if candidate.GetSpec().GetSshKey() != nil || !updateIncludesField(mask, "spec.ssh_public_key") {
+		return nil
+	}
+	if key := candidate.GetSpec().GetSshPublicKey(); key != "" {
+		if err := validateOpenSSHPublicKey(key); err != nil {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument, "spec.ssh_public_key: %s", err)
+		}
+	}
+	return nil
 }
 
 func populateUnsetNodeSetVersions(nodeSets map[string]*privatev1.ClusterNodeSet, version *privatev1.ClusterVersionReference) {
@@ -673,6 +694,59 @@ func (s *PrivateClustersServer) validatePullSecretSecret(
 	}
 	return validateResolvedSecretLifecycleAndType(secret, identifier, "pull_secret_secret",
 		privatev1.SecretType_SECRET_TYPE_PULL_SECRET)
+}
+
+func (s *PrivateClustersServer) validateSSHKey(
+	ctx context.Context, cluster *privatev1.Cluster, inheritedScope *privatev1.Metadata,
+) error {
+	ref := cluster.GetSpec().GetSshKey()
+	if ref == nil {
+		return nil
+	}
+	if ref.GetId() == "" && ref.GetName() == "" {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "ssh_key must specify id or name")
+	}
+	identifier := refKey(ref)
+	metadata := cluster.GetMetadata()
+	var secret *privatev1.Secret
+	var err error
+	if inheritedScope != nil {
+		sharedMetadata := privatev1.Metadata_builder{
+			Tenant: auth.SharedTenant, Project: inheritedScope.GetProject(),
+		}.Build()
+		secret, err = resolveAndCanonicalizeReference(ctx, s.secretsDao, sharedMetadata, ref, "ssh_key", grpccodes.NotFound)
+		if err != nil && grpcstatus.Code(err) != grpccodes.NotFound {
+			return err
+		}
+	}
+	if secret == nil {
+		secret, err = resolveAndCanonicalizeReference(ctx, s.secretsDao, metadata, ref, "ssh_key", grpccodes.InvalidArgument)
+		if err != nil {
+			return err
+		}
+	}
+	if err := validateResolvedSecretLifecycleAndType(secret, identifier, "ssh_key",
+		privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY); err != nil {
+		return err
+	}
+	data := secret.GetData()
+	if len(data) == 0 && secret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
+		if s.secretStore == nil {
+			s.logger.ErrorContext(ctx, "Failed to load SSH key Secret: secret store isn't configured")
+			return grpcstatus.Error(grpccodes.Internal, "failed to resolve ssh_key reference")
+		}
+		secretMetadata := secret.GetMetadata()
+		data, err = s.secretStore.Fetch(ctx, secretMetadata.GetTenant(), secretMetadata.GetProject(),
+			secretMetadata.GetName())
+		if err != nil {
+			s.logger.ErrorContext(ctx, "Failed to load SSH key Secret from store", "error", err)
+			return grpcstatus.Error(grpccodes.Internal, "failed to resolve ssh_key reference")
+		}
+	}
+	if err := controllers.ValidateOpenSSHPublicKeySecret(secret, data, identifier); err != nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "ssh_key: %s", grpcstatus.Convert(err).Message())
+	}
+	return nil
 }
 
 // ensureClusterVersion makes sure the cluster spec has a usable version reference: if the user didn't provide one, it
@@ -931,6 +1005,9 @@ func validateClusterTemplateImmutability(current, candidate *privatev1.Cluster, 
 		if newSpec.GetTemplate() == nil {
 			newSpec.SetTemplate(cloneMessage(oldSpec.GetTemplate()))
 		}
+		if newSpec.GetSshKey() == nil {
+			newSpec.SetSshKey(cloneMessage(oldSpec.GetSshKey()))
+		}
 		if len(newSpec.GetTemplateParameters()) == 0 {
 			newSpec.SetTemplateParameters(cloneMessage(oldSpec).GetTemplateParameters())
 		}
@@ -948,6 +1025,25 @@ func validateClusterTemplateImmutability(current, candidate *privatev1.Cluster, 
 		}
 		if newSpec != nil {
 			newSpec.SetCatalogItem(ref)
+		}
+	}
+	if updateIncludesField(mask, "spec.ssh_key") {
+		existingKey := oldSpec.GetSshKey()
+		newKey := newSpec.GetSshKey()
+		sameKey := proto.Equal(existingKey, newKey)
+		if existingKey != nil && newKey != nil {
+			if newKey.GetId() != "" {
+				sameKey = existingKey.GetId() == newKey.GetId()
+			} else {
+				sameKey = existingKey.GetName() == newKey.GetName()
+			}
+		}
+		if !sameKey {
+			return grpcstatus.Error(grpccodes.InvalidArgument,
+				"cannot change spec.ssh_key: ssh_key is immutable after creation")
+		}
+		if existingKey != nil {
+			newSpec.SetSshKey(cloneMessage(existingKey))
 		}
 	}
 
@@ -1354,11 +1450,19 @@ func (s *PrivateClustersServer) applyClusterTemplate(
 	}
 	cluster.GetSpec().SetTemplateParameters(actualClusterParameters)
 
-	// Only a pull secret inherited from a shared template may cross the tenant boundary. Direct
+	// Only credentials inherited from a shared template may cross the tenant boundary. Direct
 	// shared SecretLocalReference values on tenant clusters stay local.
 	inheritsPullSecretSecret := cluster.GetSpec().GetPullSecretSecret() == nil &&
 		template.GetMetadata().GetTenant() == auth.SharedTenant &&
 		template.GetSpecDefaults().GetPullSecretSecret() != nil
+	inheritsSSHKey := cluster.GetSpec().GetSshKey() == nil &&
+		!cluster.GetSpec().HasSshPublicKey() &&
+		template.GetMetadata().GetTenant() == auth.SharedTenant &&
+		template.GetSpecDefaults().GetSshKey() != nil
+	var inheritedSSHKeyScope *privatev1.Metadata
+	if inheritsSSHKey {
+		inheritedSSHKeyScope = template.GetMetadata()
+	}
 
 	// Apply spec defaults from the template (user values take precedence):
 	inheritVersion := cluster.GetSpec().GetVersion() == nil
@@ -1369,6 +1473,9 @@ func (s *PrivateClustersServer) applyClusterTemplate(
 
 	// Validate pull_secret_secret reference exists:
 	if err := s.validatePullSecretSecret(ctx, cluster, inheritsPullSecretSecret); err != nil {
+		return nil, err
+	}
+	if err := s.validateSSHKey(ctx, cluster, inheritedSSHKeyScope); err != nil {
 		return nil, err
 	}
 

@@ -425,7 +425,9 @@ func (b0 ClusterTemplateParameterDefinition_builder) Build() *ClusterTemplatePar
 // providing explicit values. User-provided values always override these defaults.
 type ClusterTemplateSpecDefaults struct {
 	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// Default SSH public key installed on cluster worker nodes.
+	// Default inline SSH public key installed on cluster worker nodes.
+	//
+	// This default is used only when the cluster supplies neither `ssh_key` nor `ssh_public_key`.
 	SshPublicKey *string `protobuf:"bytes,2,opt,name=ssh_public_key,json=sshPublicKey,proto3,oneof" json:"ssh_public_key,omitempty"`
 	// Default cluster networking configuration.
 	Network *ClusterNetwork `protobuf:"bytes,4,opt,name=network,proto3,oneof" json:"network,omitempty"`
@@ -439,8 +441,13 @@ type ClusterTemplateSpecDefaults struct {
 	// When set, clusters created from this template will use this secret reference unless the user provides an explicit
 	// `pull_secret_secret` reference.
 	PullSecretSecret *SecretLocalReference `protobuf:"bytes,6,opt,name=pull_secret_secret,json=pullSecretSecret,proto3" json:"pull_secret_secret,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Default Secret reference for the SSH public key installed on cluster worker nodes.
+	//
+	// This default is used only when the cluster supplies neither `ssh_key` nor `ssh_public_key`. The referenced Secret
+	// must have type `SECRET_TYPE_SSH_PUBLIC_KEY`.
+	SshKey        *SecretLocalReference `protobuf:"bytes,7,opt,name=ssh_key,json=sshKey,proto3" json:"ssh_key,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ClusterTemplateSpecDefaults) Reset() {
@@ -496,6 +503,13 @@ func (x *ClusterTemplateSpecDefaults) GetPullSecretSecret() *SecretLocalReferenc
 	return nil
 }
 
+func (x *ClusterTemplateSpecDefaults) GetSshKey() *SecretLocalReference {
+	if x != nil {
+		return x.SshKey
+	}
+	return nil
+}
+
 func (x *ClusterTemplateSpecDefaults) SetSshPublicKey(v string) {
 	x.SshPublicKey = &v
 }
@@ -510,6 +524,10 @@ func (x *ClusterTemplateSpecDefaults) SetVersion(v *ClusterVersionReference) {
 
 func (x *ClusterTemplateSpecDefaults) SetPullSecretSecret(v *SecretLocalReference) {
 	x.PullSecretSecret = v
+}
+
+func (x *ClusterTemplateSpecDefaults) SetSshKey(v *SecretLocalReference) {
+	x.SshKey = v
 }
 
 func (x *ClusterTemplateSpecDefaults) HasSshPublicKey() bool {
@@ -540,6 +558,13 @@ func (x *ClusterTemplateSpecDefaults) HasPullSecretSecret() bool {
 	return x.PullSecretSecret != nil
 }
 
+func (x *ClusterTemplateSpecDefaults) HasSshKey() bool {
+	if x == nil {
+		return false
+	}
+	return x.SshKey != nil
+}
+
 func (x *ClusterTemplateSpecDefaults) ClearSshPublicKey() {
 	x.SshPublicKey = nil
 }
@@ -556,10 +581,16 @@ func (x *ClusterTemplateSpecDefaults) ClearPullSecretSecret() {
 	x.PullSecretSecret = nil
 }
 
+func (x *ClusterTemplateSpecDefaults) ClearSshKey() {
+	x.SshKey = nil
+}
+
 type ClusterTemplateSpecDefaults_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
-	// Default SSH public key installed on cluster worker nodes.
+	// Default inline SSH public key installed on cluster worker nodes.
+	//
+	// This default is used only when the cluster supplies neither `ssh_key` nor `ssh_public_key`.
 	SshPublicKey *string
 	// Default cluster networking configuration.
 	Network *ClusterNetwork
@@ -573,6 +604,11 @@ type ClusterTemplateSpecDefaults_builder struct {
 	// When set, clusters created from this template will use this secret reference unless the user provides an explicit
 	// `pull_secret_secret` reference.
 	PullSecretSecret *SecretLocalReference
+	// Default Secret reference for the SSH public key installed on cluster worker nodes.
+	//
+	// This default is used only when the cluster supplies neither `ssh_key` nor `ssh_public_key`. The referenced Secret
+	// must have type `SECRET_TYPE_SSH_PUBLIC_KEY`.
+	SshKey *SecretLocalReference
 }
 
 func (b0 ClusterTemplateSpecDefaults_builder) Build() *ClusterTemplateSpecDefaults {
@@ -583,6 +619,7 @@ func (b0 ClusterTemplateSpecDefaults_builder) Build() *ClusterTemplateSpecDefaul
 	x.Network = b.Network
 	x.Version = b.Version
 	x.PullSecretSecret = b.PullSecretSecret
+	x.SshKey = b.SshKey
 	return m0
 }
 
@@ -740,7 +777,7 @@ var file_osac_private_v1_cluster_template_type_proto_rawDesc = string([]byte{
 	0x12, 0x2e, 0x0a, 0x07, 0x64, 0x65, 0x66, 0x61, 0x75, 0x6c, 0x74, 0x18, 0x06, 0x20, 0x01, 0x28,
 	0x0b, 0x32, 0x14, 0x2e, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f,
 	0x62, 0x75, 0x66, 0x2e, 0x41, 0x6e, 0x79, 0x52, 0x07, 0x64, 0x65, 0x66, 0x61, 0x75, 0x6c, 0x74,
-	0x22, 0xd3, 0x02, 0x0a, 0x1b, 0x43, 0x6c, 0x75, 0x73, 0x74, 0x65, 0x72, 0x54, 0x65, 0x6d, 0x70,
+	0x22, 0x93, 0x03, 0x0a, 0x1b, 0x43, 0x6c, 0x75, 0x73, 0x74, 0x65, 0x72, 0x54, 0x65, 0x6d, 0x70,
 	0x6c, 0x61, 0x74, 0x65, 0x53, 0x70, 0x65, 0x63, 0x44, 0x65, 0x66, 0x61, 0x75, 0x6c, 0x74, 0x73,
 	0x12, 0x29, 0x0a, 0x0e, 0x73, 0x73, 0x68, 0x5f, 0x70, 0x75, 0x62, 0x6c, 0x69, 0x63, 0x5f, 0x6b,
 	0x65, 0x79, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x48, 0x00, 0x52, 0x0c, 0x73, 0x73, 0x68, 0x50,
@@ -758,7 +795,11 @@ var file_osac_private_v1_cluster_template_type_proto_rawDesc = string([]byte{
 	0x61, 0x63, 0x2e, 0x70, 0x72, 0x69, 0x76, 0x61, 0x74, 0x65, 0x2e, 0x76, 0x31, 0x2e, 0x53, 0x65,
 	0x63, 0x72, 0x65, 0x74, 0x4c, 0x6f, 0x63, 0x61, 0x6c, 0x52, 0x65, 0x66, 0x65, 0x72, 0x65, 0x6e,
 	0x63, 0x65, 0x52, 0x10, 0x70, 0x75, 0x6c, 0x6c, 0x53, 0x65, 0x63, 0x72, 0x65, 0x74, 0x53, 0x65,
-	0x63, 0x72, 0x65, 0x74, 0x42, 0x11, 0x0a, 0x0f, 0x5f, 0x73, 0x73, 0x68, 0x5f, 0x70, 0x75, 0x62,
+	0x63, 0x72, 0x65, 0x74, 0x12, 0x3e, 0x0a, 0x07, 0x73, 0x73, 0x68, 0x5f, 0x6b, 0x65, 0x79, 0x18,
+	0x07, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x25, 0x2e, 0x6f, 0x73, 0x61, 0x63, 0x2e, 0x70, 0x72, 0x69,
+	0x76, 0x61, 0x74, 0x65, 0x2e, 0x76, 0x31, 0x2e, 0x53, 0x65, 0x63, 0x72, 0x65, 0x74, 0x4c, 0x6f,
+	0x63, 0x61, 0x6c, 0x52, 0x65, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x52, 0x06, 0x73, 0x73,
+	0x68, 0x4b, 0x65, 0x79, 0x42, 0x11, 0x0a, 0x0f, 0x5f, 0x73, 0x73, 0x68, 0x5f, 0x70, 0x75, 0x62,
 	0x6c, 0x69, 0x63, 0x5f, 0x6b, 0x65, 0x79, 0x42, 0x0a, 0x0a, 0x08, 0x5f, 0x6e, 0x65, 0x74, 0x77,
 	0x6f, 0x72, 0x6b, 0x4a, 0x04, 0x08, 0x01, 0x10, 0x02, 0x52, 0x0b, 0x70, 0x75, 0x6c, 0x6c, 0x5f,
 	0x73, 0x65, 0x63, 0x72, 0x65, 0x74, 0x22, 0x70, 0x0a, 0x18, 0x43, 0x6c, 0x75, 0x73, 0x74, 0x65,
@@ -806,11 +847,12 @@ var file_osac_private_v1_cluster_template_type_proto_depIdxs = []int32{
 	6, // 4: osac.private.v1.ClusterTemplateSpecDefaults.network:type_name -> osac.private.v1.ClusterNetwork
 	7, // 5: osac.private.v1.ClusterTemplateSpecDefaults.version:type_name -> osac.private.v1.ClusterVersionReference
 	8, // 6: osac.private.v1.ClusterTemplateSpecDefaults.pull_secret_secret:type_name -> osac.private.v1.SecretLocalReference
-	7, // [7:7] is the sub-list for method output_type
-	7, // [7:7] is the sub-list for method input_type
-	7, // [7:7] is the sub-list for extension type_name
-	7, // [7:7] is the sub-list for extension extendee
-	0, // [0:7] is the sub-list for field type_name
+	8, // 7: osac.private.v1.ClusterTemplateSpecDefaults.ssh_key:type_name -> osac.private.v1.SecretLocalReference
+	8, // [8:8] is the sub-list for method output_type
+	8, // [8:8] is the sub-list for method input_type
+	8, // [8:8] is the sub-list for extension type_name
+	8, // [8:8] is the sub-list for extension extendee
+	0, // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_osac_private_v1_cluster_template_type_proto_init() }

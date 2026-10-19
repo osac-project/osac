@@ -68,6 +68,9 @@ message ClusterCatalogItemFields {
   BoolFieldPolicy auto_external_ip_attachment = 6;
   // Policy for the cluster's subnet and security-group attachment.
   ClusterNetworkAttachmentFieldPolicy network_attachment = 7;
+  // Policy for the SSH public key Secret reference. This and `ssh_public_key` govern the same effective field;
+  // Catalog Items must configure at most one of them.
+  SecretReferenceFieldPolicy ssh_key = 8;
 }
 
 // Defines whether the complete cluster node-set map is locked or editable.

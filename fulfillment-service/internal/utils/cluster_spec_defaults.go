@@ -29,7 +29,10 @@ func ApplyClusterSpecDefaults(spec *privatev1.ClusterSpec, defaults *privatev1.C
 	if spec.GetPullSecretSecret() == nil && defaults.GetPullSecretSecret() != nil {
 		spec.SetPullSecretSecret(proto.Clone(defaults.GetPullSecretSecret()).(*privatev1.SecretLocalReference))
 	}
-	if !spec.HasSshPublicKey() && defaults.HasSshPublicKey() {
+	if spec.GetSshKey() == nil && !spec.HasSshPublicKey() && defaults.GetSshKey() != nil {
+		spec.SetSshKey(proto.Clone(defaults.GetSshKey()).(*privatev1.SecretLocalReference))
+	}
+	if spec.GetSshKey() == nil && !spec.HasSshPublicKey() && defaults.HasSshPublicKey() {
 		spec.SetSshPublicKey(defaults.GetSshPublicKey())
 	}
 	if spec.GetVersion() == nil && defaults.GetVersion() != nil {

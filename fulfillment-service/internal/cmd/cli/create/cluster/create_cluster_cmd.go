@@ -100,6 +100,12 @@ func Cmd() *cobra.Command {
 		pullSecretFlagHelp,
 	)
 	flags.StringVar(
+		&runner.args.sshKey,
+		"ssh-key",
+		"",
+		sshKeyFlagHelp,
+	)
+	flags.StringVar(
 		&runner.args.sshPublicKey,
 		"ssh-public-key",
 		"",
@@ -167,6 +173,7 @@ type runnerContext struct {
 		templateParameterFiles  []string
 		setFields               []string
 		pullSecret              string
+		sshKey                  string
 		sshPublicKey            string
 		sshPublicKeyFile        string
 		version                 string
@@ -344,6 +351,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 // resolveSSHPublicKey reads the SSH public key from a file when specified.
 func (c *runnerContext) resolveSSHPublicKey() (sshPublicKey string, err error) {
+	if c.args.sshKey != "" {
+		return "", nil
+	}
 	sshPublicKey = c.args.sshPublicKey
 	if c.args.sshPublicKeyFile != "" {
 		data, readErr := os.ReadFile(c.args.sshPublicKeyFile)
@@ -364,6 +374,11 @@ func (c *runnerContext) applyOptionalSpecFields(
 	if c.args.pullSecret != "" {
 		specBuilder.PullSecretSecret = publicv1.SecretLocalReference_builder{
 			Name: c.args.pullSecret,
+		}.Build()
+	}
+	if c.args.sshKey != "" {
+		specBuilder.SshKey = publicv1.SecretLocalReference_builder{
+			Name: c.args.sshKey,
 		}.Build()
 	}
 	if sshPublicKey != "" {
@@ -1055,6 +1070,12 @@ const pullSecretFlagHelp = `
 _NAME_ - Name of a Secret resource containing pull secret credentials.
 The secret must exist in the same tenant. See also
 {{ bt }}osac create secret{{ bt }}.
+`
+
+const sshKeyFlagHelp = `
+_NAME_ - Name of a Secret resource containing an SSH public key in its
+{{ bt }}public_key{{ bt }} entry. The secret must exist in the same tenant.
+When set, this reference takes precedence over the inline SSH public key flags.
 `
 
 const sshPublicKeyFlagHelp = `

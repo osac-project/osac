@@ -153,6 +153,9 @@ func (s *PrivateClusterTemplatesServer) Create(ctx context.Context,
 		if err = s.validateSpecDefaultsPullSecret(ctx, object); err != nil {
 			return
 		}
+		if err = s.validateSpecDefaultsSSHKey(ctx, object); err != nil {
+			return
+		}
 		if object.GetMetadata().GetName() == "" && object.GetId() != "" {
 			if object.GetMetadata() == nil {
 				object.SetMetadata(&privatev1.Metadata{})
@@ -172,6 +175,9 @@ func (s *PrivateClusterTemplatesServer) Update(ctx context.Context,
 				return
 			}
 			if err = s.validateSpecDefaultsPullSecret(ctx, object); err != nil {
+				return
+			}
+			if err = s.validateSpecDefaultsSSHKey(ctx, object); err != nil {
 				return
 			}
 		}
@@ -195,6 +201,24 @@ func (s *PrivateClusterTemplatesServer) validateSpecDefaultsPullSecret(
 	resolvedRef.SetId(resolved.ID)
 	resolvedRef.SetName(resolved.Name)
 	template.GetSpecDefaults().SetPullSecretSecret(resolvedRef)
+	return nil
+}
+
+func (s *PrivateClusterTemplatesServer) validateSpecDefaultsSSHKey(
+	ctx context.Context, template *privatev1.ClusterTemplate,
+) error {
+	ref := template.GetSpecDefaults().GetSshKey()
+	if ref == nil {
+		return nil
+	}
+	resolved, err := resolveSecretReferenceOfType(ctx, s.logger, s.secretsDao, ref,
+		"spec_defaults.ssh_key", privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY)
+	if err != nil {
+		return err
+	}
+	template.GetSpecDefaults().SetSshKey(privatev1.SecretLocalReference_builder{
+		Id: resolved.ID, Name: resolved.Name,
+	}.Build())
 	return nil
 }
 

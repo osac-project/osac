@@ -109,7 +109,9 @@ message ClusterTemplateSpecDefaults {
   reserved 1;
   reserved "pull_secret";
 
-  // Default SSH public key installed on cluster worker nodes.
+  // Default inline SSH public key installed on cluster worker nodes.
+  //
+  // This default is used only when the cluster supplies neither `ssh_key` nor `ssh_public_key`.
   optional string ssh_public_key = 2;
 
   // Default cluster networking configuration.
@@ -126,6 +128,12 @@ message ClusterTemplateSpecDefaults {
   // When set, clusters created from this template will use this secret reference unless the user provides an explicit
   // `pull_secret_secret` reference.
   SecretLocalReference pull_secret_secret = 6;
+
+  // Default Secret reference for the SSH public key installed on cluster worker nodes.
+  //
+  // This default is used only when the cluster supplies neither `ssh_key` nor `ssh_public_key`. The referenced Secret
+  // must have type `SECRET_TYPE_SSH_PUBLIC_KEY`.
+  SecretLocalReference ssh_key = 7;
 }
 
 // Reference to a ClusterTemplate resource.

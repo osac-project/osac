@@ -158,7 +158,8 @@ message ClusterSpec {
 
   // SSH public key installed into the `authorized_keys` file on cluster worker nodes.
   //
-  // If not provided, the provider's default SSH key is used.
+  // This compatibility field is used when `ssh_key` is not set. If neither field is provided, the provider's default
+  // SSH key is used.
   optional string ssh_public_key = 5;
 
   // Reference to a ClusterVersion resource.
@@ -209,6 +210,14 @@ message ClusterSpec {
     (google.api.field_behavior) = IMMUTABLE,
     (buf.validate.field).repeated.max_items = 32
   ];
+
+  // Reference to a Secret containing the SSH public key installed on cluster worker nodes.
+  //
+  // The referenced Secret must have type `SECRET_TYPE_SSH_PUBLIC_KEY` and contain a non-empty `public_key` entry.
+  // A directly referenced Secret must exist in the same tenant and project. A shared Secret may only be inherited from
+  // a shared template in the same project.
+  // When both this field and `ssh_public_key` are set, this Secret reference takes precedence.
+  SecretLocalReference ssh_key = 13 [(google.api.field_behavior) = IMMUTABLE];
 }
 
 // The per-operator status contains the installation state of one add-on operator.

@@ -645,6 +645,96 @@ var _ = Describe("Private clusters server", func() {
 			Expect(nodeSets["gpu"].GetSize()).To(BeNumerically("==", 1))
 		})
 
+		It("Creates a Cluster with an authorized SSH-key Secret reference", func() {
+			_, err := server.secretsDao.Create().SetObject(privatev1.Secret_builder{
+				Id:       "cluster-create-key-id",
+				Metadata: privatev1.Metadata_builder{Name: "cluster-create-key", Tenant: testTenant}.Build(),
+				Type:     privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+				Data:     map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+				Object: privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.New()[24:32])}.Build(),
+					Spec: privatev1.ClusterSpec_builder{
+						Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+						SshKey:   privatev1.SecretLocalReference_builder{Name: "cluster-create-key"}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetSpec().GetSshKey().GetId()).To(Equal("cluster-create-key-id"))
+			Expect(response.GetObject().GetSpec().GetSshKey().GetName()).To(Equal("cluster-create-key"))
+		})
+
+		It("Applies and canonicalizes a ClusterTemplate SSH-key Secret default", func() {
+			_, err := server.secretsDao.Create().SetObject(privatev1.Secret_builder{
+				Id:       "template-create-key-id",
+				Metadata: privatev1.Metadata_builder{Name: "template-create-key", Tenant: testTenant}.Build(),
+				Type:     privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+				Data:     map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = server.templatesDao.Create().SetObject(privatev1.ClusterTemplate_builder{
+				Id:       "template-with-ssh-key",
+				Metadata: privatev1.Metadata_builder{Name: "template-with-ssh-key", Tenant: testTenant}.Build(),
+				SpecDefaults: privatev1.ClusterTemplateSpecDefaults_builder{
+					SshKey: privatev1.SecretLocalReference_builder{Name: "template-create-key"}.Build(),
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+				Object: privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.New()[24:32])}.Build(),
+					Spec: privatev1.ClusterSpec_builder{
+						Template: privatev1.ClusterTemplateReference_builder{Id: "template-with-ssh-key"}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetSpec().GetSshKey().GetId()).To(Equal("template-create-key-id"))
+			Expect(response.GetObject().GetSpec().GetSshKey().GetName()).To(Equal("template-create-key"))
+		})
+
+		It("inherits an SSH-key Secret from a shared template project", func() {
+			seedSharedClusterProject()
+			_, err := server.secretsDao.Create().SetObject(privatev1.Secret_builder{
+				Id: "shared-project-key-id",
+				Metadata: privatev1.Metadata_builder{
+					Name: "shared-project-key", Tenant: auth.SharedTenant, Project: "offerings.gpu",
+				}.Build(),
+				Type: privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+				Data: map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = server.templatesDao.Create().SetObject(privatev1.ClusterTemplate_builder{
+				Id: "shared-project-template-id",
+				Metadata: privatev1.Metadata_builder{
+					Name: "shared-project-template", Tenant: auth.SharedTenant, Project: "offerings.gpu",
+				}.Build(),
+				SpecDefaults: privatev1.ClusterTemplateSpecDefaults_builder{
+					SshKey: privatev1.SecretLocalReference_builder{Name: "shared-project-key"}.Build(),
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+				Object: privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.New()[24:32])}.Build(),
+					Spec: privatev1.ClusterSpec_builder{
+						Template: privatev1.ClusterTemplateReference_builder{
+							Id: "shared-project-template-id", Shared: true, Project: "offerings.gpu",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetSpec().GetSshKey().GetId()).To(Equal("shared-project-key-id"))
+			Expect(response.GetObject().GetSpec().GetSshKey().GetName()).To(Equal("shared-project-key"))
+		})
+
 		It("rejects an IPv6-only pool for automatic ExternalIP allocation", func() {
 			_, err := server.externalIPPoolDao.Create().SetObject(
 				privatev1.ExternalIPPool_builder{
@@ -3144,6 +3234,46 @@ var _ = Describe("Private clusters server", func() {
 				Expect(err).ToNot(HaveOccurred())
 				object := response.GetObject()
 				Expect(object.GetSpec().GetSshPublicKey()).To(Equal(testSSHPublicKey))
+			})
+
+			It("Applies an SSH-key Secret default and preserves explicit inline compatibility", func() {
+				_, err := server.secretsDao.Create().SetObject(privatev1.Secret_builder{
+					Id:       "catalog-create-key-id",
+					Metadata: privatev1.Metadata_builder{Name: "catalog-create-key", Tenant: testTenant}.Build(),
+					Type:     privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					Data:     map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				createCatalogItem("cat-ssh-secret-default", true, privatev1.ClusterCatalogItemFields_builder{
+					SshKey: privatev1.SecretReferenceFieldPolicy_builder{
+						Editable: privatev1.EditableSecretReferenceField_builder{
+							DefaultValue: privatev1.SecretLocalReference_builder{Name: "catalog-create-key"}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+
+				create := func(inline *string) *privatev1.Cluster {
+					response, createErr := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+						Object: privatev1.Cluster_builder{
+							Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.New()[24:32])}.Build(),
+							Spec: privatev1.ClusterSpec_builder{
+								CatalogItem:  privatev1.ClusterCatalogItemReference_builder{Id: "cat-ssh-secret-default"}.Build(),
+								SshPublicKey: inline,
+							}.Build(),
+						}.Build(),
+					}.Build())
+					Expect(createErr).ToNot(HaveOccurred())
+					return response.GetObject()
+				}
+
+				fromDefault := create(nil)
+				Expect(fromDefault.GetSpec().GetSshKey().GetId()).To(Equal("catalog-create-key-id"))
+				Expect(fromDefault.GetSpec().GetSshKey().GetName()).To(Equal("catalog-create-key"))
+
+				inline := testSSHPublicKey
+				fromInline := create(&inline)
+				Expect(fromInline.GetSpec().GetSshKey()).To(BeNil())
+				Expect(fromInline.GetSpec().GetSshPublicKey()).To(Equal(testSSHPublicKey))
 			})
 
 			It("Applies spec defaults from template when created via catalog item", func() {

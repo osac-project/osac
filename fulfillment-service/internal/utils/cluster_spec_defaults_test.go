@@ -138,6 +138,59 @@ var _ = Describe("ApplyClusterSpecDefaults", func() {
 		Expect(spec.GetPullSecretSecret().GetId()).To(Equal("user-secret-id"))
 	})
 
+	It("Applies and clones the SSH key Secret default", func() {
+		defaults := privatev1.ClusterTemplateSpecDefaults_builder{
+			SshKey: privatev1.SecretLocalReference_builder{Id: "default-key-id", Name: "default-key"}.Build(),
+		}.Build()
+		spec := privatev1.ClusterSpec_builder{}.Build()
+
+		ApplyClusterSpecDefaults(spec, defaults)
+
+		Expect(spec.GetSshKey().GetId()).To(Equal("default-key-id"))
+		spec.GetSshKey().SetName("changed")
+		Expect(defaults.GetSshKey().GetName()).To(Equal("default-key"))
+	})
+
+	It("Does not apply an SSH key Secret default over an explicit inline key", func() {
+		inline := "ssh-ed25519 explicit"
+		defaults := privatev1.ClusterTemplateSpecDefaults_builder{
+			SshKey: privatev1.SecretLocalReference_builder{Id: "default-key-id"}.Build(),
+		}.Build()
+		spec := privatev1.ClusterSpec_builder{SshPublicKey: &inline}.Build()
+
+		ApplyClusterSpecDefaults(spec, defaults)
+
+		Expect(spec.GetSshKey()).To(BeNil())
+		Expect(spec.GetSshPublicKey()).To(Equal(inline))
+	})
+
+	It("Does not apply an inline default over an explicit SSH key Secret", func() {
+		inlineDefault := "ssh-ed25519 default"
+		defaults := privatev1.ClusterTemplateSpecDefaults_builder{SshPublicKey: &inlineDefault}.Build()
+		spec := privatev1.ClusterSpec_builder{
+			SshKey: privatev1.SecretLocalReference_builder{Id: "explicit-key-id"}.Build(),
+		}.Build()
+
+		ApplyClusterSpecDefaults(spec, defaults)
+
+		Expect(spec.GetSshKey().GetId()).To(Equal("explicit-key-id"))
+		Expect(spec.HasSshPublicKey()).To(BeFalse())
+	})
+
+	It("Prefers a Secret default when a template has both compatibility forms", func() {
+		inlineDefault := "ssh-ed25519 default"
+		defaults := privatev1.ClusterTemplateSpecDefaults_builder{
+			SshPublicKey: &inlineDefault,
+			SshKey:       privatev1.SecretLocalReference_builder{Id: "default-key-id"}.Build(),
+		}.Build()
+		spec := privatev1.ClusterSpec_builder{}.Build()
+
+		ApplyClusterSpecDefaults(spec, defaults)
+
+		Expect(spec.GetSshKey().GetId()).To(Equal("default-key-id"))
+		Expect(spec.HasSshPublicKey()).To(BeFalse())
+	})
+
 	It("Clones network defaults to prevent shared state", func() {
 		podCidr := "10.128.0.0/14"
 		defaults := privatev1.ClusterTemplateSpecDefaults_builder{

@@ -54,7 +54,28 @@ func (mockClusterCatalogItemsServer) List(context.Context, *publicv1.ClusterCata
 	}.Build(), nil
 }
 
+type mockClusterTemplatesServer struct {
+	publicv1.UnimplementedClusterTemplatesServer
+}
+
+func (mockClusterTemplatesServer) List(context.Context, *publicv1.ClusterTemplatesListRequest) (*publicv1.ClusterTemplatesListResponse, error) {
+	return publicv1.ClusterTemplatesListResponse_builder{
+		Items: []*publicv1.ClusterTemplate{
+			publicv1.ClusterTemplate_builder{Id: "template-id"}.Build(),
+		},
+		Size:  1,
+		Total: 1,
+	}.Build(), nil
+}
+
 var _ = Describe("Create cluster flag registration", func() {
+	It("should register --ssh-key without removing inline compatibility flags", func() {
+		cmd := Cmd()
+		Expect(cmd.Flags().Lookup("ssh-key")).ToNot(BeNil())
+		Expect(cmd.Flags().Lookup("ssh-public-key")).ToNot(BeNil())
+		Expect(cmd.Flags().Lookup("ssh-public-key-file")).ToNot(BeNil())
+	})
+
 	It("should register --catalog-item flag", func() {
 		cmd := Cmd()
 		cmd.SetOut(GinkgoWriter)
@@ -97,6 +118,99 @@ var _ = Describe("Create cluster flag registration", func() {
 		flag := cmd.Flags().Lookup("node-set")
 		Expect(flag).NotTo(BeNil())
 		Expect(flag.Usage).To(ContainSubstring("Node set configuration"))
+	})
+})
+
+var _ = Describe("Create cluster SSH key flags", func() {
+	runCreate := func(sourceArgs ...string) *publicv1.Cluster {
+		logger := slog.New(slog.NewTextHandler(GinkgoWriter, nil))
+		console, err := terminal.NewConsole().
+			SetLogger(logger).
+			SetStdout(GinkgoWriter).
+			SetStderr(GinkgoWriter).
+			Build()
+		Expect(err).NotTo(HaveOccurred())
+
+		settings, err := config.NewSettings().
+			SetLogger(logger).
+			SetDir(GinkgoT().TempDir()).
+			Build()
+		Expect(err).NotTo(HaveOccurred())
+		settings.SetTenant("tenant-a")
+		settings.SetPlaintext(true)
+
+		server := testutils.NewServer()
+		DeferCleanup(server.Stop)
+		publicv1.RegisterClusterCatalogItemsServer(server.Registrar(), mockClusterCatalogItemsServer{})
+		publicv1.RegisterClusterTemplatesServer(server.Registrar(), mockClusterTemplatesServer{})
+		createRequests := make(chan *publicv1.ClustersCreateRequest, 1)
+		publicv1.RegisterClustersServer(server.Registrar(), &testutils.ClustersServerFuncs{
+			CreateFunc: func(_ context.Context, request *publicv1.ClustersCreateRequest) (*publicv1.ClustersCreateResponse, error) {
+				createRequests <- request
+				return publicv1.ClustersCreateResponse_builder{
+					Object: publicv1.Cluster_builder{Id: "created-cluster"}.Build(),
+				}.Build(), nil
+			},
+		})
+		server.Start()
+		settings.SetAddress(server.Address())
+
+		ctx := logging.LoggerIntoContext(context.Background(), logger)
+		ctx = terminal.ConsoleIntoContext(ctx, console)
+		ctx = config.SettingsIntoContext(ctx, settings)
+		ctx = config.TenantIntoContext(ctx, settings.Tenant())
+
+		cmd := Cmd()
+		cmd.SetArgs(append(sourceArgs,
+			"--name", "test-cluster",
+			"--ssh-key", "registered-key",
+		))
+		cmd.SetOut(GinkgoWriter)
+		cmd.SetErr(GinkgoWriter)
+		Expect(cmd.ExecuteContext(ctx)).To(Succeed())
+		return (<-createRequests).GetObject()
+	}
+
+	It("sends the Secret reference through the catalog create path", func() {
+		cluster := runCreate("--catalog-item", "catalog-item-id")
+		Expect(cluster.GetSpec().GetCatalogItem().GetId()).To(Equal("catalog-item-id"))
+		Expect(cluster.GetSpec().GetSshKey().GetName()).To(Equal("registered-key"))
+	})
+
+	It("sends the Secret reference through the template create path", func() {
+		cluster := runCreate("--template", "template-id")
+		Expect(cluster.GetSpec().GetTemplate().GetId()).To(Equal("template-id"))
+		Expect(cluster.GetSpec().GetSshKey().GetName()).To(Equal("registered-key"))
+	})
+
+	It("adds a Secret reference while retaining an explicitly supplied inline value", func() {
+		runner := &runnerContext{}
+		runner.args.sshKey = "registered-key"
+		builder := publicv1.ClusterSpec_builder{}
+
+		Expect(runner.applyOptionalSpecFields(&builder, "inline-key")).To(Succeed())
+		spec := builder.Build()
+		Expect(spec.GetSshKey().GetName()).To(Equal("registered-key"))
+		Expect(spec.GetSshPublicKey()).To(Equal("inline-key"))
+	})
+
+	It("does not read an inline key file when a Secret reference takes precedence", func() {
+		runner := &runnerContext{}
+		runner.args.sshKey = "registered-key"
+		runner.args.sshPublicKeyFile = "/does/not/exist"
+
+		key, err := runner.resolveSSHPublicKey()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(key).To(BeEmpty())
+	})
+
+	It("still reports inline key file errors without a Secret reference", func() {
+		runner := &runnerContext{}
+		runner.args.sshPublicKeyFile = "/does/not/exist"
+
+		_, err := runner.resolveSSHPublicKey()
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("failed to read SSH public key file"))
 	})
 })
 

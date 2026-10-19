@@ -4,6 +4,10 @@ import yaml
 
 
 PLAYBOOK = Path(__file__).resolve().parents[2] / "playbook_osac_move_network_attachment.yml"
+AGENTLESS_NET_MOVE_TASKS = (
+    Path(__file__).resolve().parents[2]
+    / "collections/ansible_collections/osac/templates/roles/agentless_net/tasks/_move_network_attachment_impl.yaml"
+)
 
 
 def test_move_playbook_resolves_subnets_with_controller_credentials():
@@ -25,3 +29,39 @@ def test_move_playbook_resolves_subnets_with_controller_credentials():
     assert "api_key" not in lookup
     assert "ca_cert" not in lookup
     assert lookup_task["no_log"] is True
+
+
+def test_agentless_net_delegated_switch_tasks_read_port_mapping_from_controller_hostvars():
+    tasks = yaml.safe_load(AGENTLESS_NET_MOVE_TASKS.read_text(encoding="utf-8"))
+    mapping = "hostvars['localhost']['_agentless_net_attachment_port']"
+    delegated_tasks = {
+        task["name"]: task
+        for task in tasks
+        if task["name"]
+        in {
+            "Inspect the mapped Cumulus access port before moving it",
+            "Configure the mapped physical port with the shared AgentlessNet port role",
+            "Verify the mapped Cumulus access port converged to its destination VLAN",
+        }
+    }
+
+    assert len(delegated_tasks) == 3
+    inspect = delegated_tasks["Inspect the mapped Cumulus access port before moving it"]
+    assert mapping in inspect["delegate_to"]
+    assert mapping in inspect["ansible.builtin.raw"]
+    assert mapping in inspect["vars"]["ansible_host"]
+
+    configure = delegated_tasks[
+        "Configure the mapped physical port with the shared AgentlessNet port role"
+    ]
+    include_role = configure["ansible.builtin.include_role"]
+    assert mapping in include_role["apply"]["delegate_to"]
+    assert mapping in configure["vars"]["ansible_host"]
+    assert mapping in configure["vars"]["port_name"]
+
+    verify = delegated_tasks[
+        "Verify the mapped Cumulus access port converged to its destination VLAN"
+    ]
+    assert mapping in verify["delegate_to"]
+    assert mapping in verify["ansible.builtin.raw"]
+    assert mapping in verify["vars"]["ansible_host"]

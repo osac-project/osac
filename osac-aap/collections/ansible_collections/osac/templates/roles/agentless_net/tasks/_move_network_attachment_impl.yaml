@@ -107,14 +107,20 @@
   no_log: true
 
 - name: Inspect the mapped Cumulus access port before moving it
-  ansible.builtin.raw: bridge -j vlan show dev {{ _agentless_net_attachment_port.port }}
-  delegate_to: "{{ _agentless_net_attachment_port.switch }}"
+  ansible.builtin.raw: >-
+    bridge -j vlan show dev
+    {{ hostvars['localhost']['_agentless_net_attachment_port']['port'] }}
+  delegate_to: >-
+    {{ hostvars['localhost']['_agentless_net_attachment_port']['switch'] }}
   become: true
   vars:
     ansible_connection: ssh
-    ansible_host: "{{ hostvars[_agentless_net_attachment_port.switch].ansible_host }}"
-    ansible_user: "{{ hostvars[_agentless_net_attachment_port.switch].ansible_user }}"
-    ansible_port: "{{ hostvars[_agentless_net_attachment_port.switch].ansible_port | default(22) }}"
+    ansible_host: >-
+      {{ hostvars[hostvars['localhost']['_agentless_net_attachment_port']['switch']].ansible_host }}
+    ansible_user: >-
+      {{ hostvars[hostvars['localhost']['_agentless_net_attachment_port']['switch']].ansible_user }}
+    ansible_port: >-
+      {{ hostvars[hostvars['localhost']['_agentless_net_attachment_port']['switch']].ansible_port | default(22) }}
     ansible_network_os: cumulus
   register: _agentless_net_attachment_vlan_before
   changed_when: false
@@ -172,15 +178,19 @@
     name: agentless_net.l2.port
     tasks_from: set_access_port
     apply:
-      delegate_to: "{{ _agentless_net_attachment_port.switch }}"
+      delegate_to: >-
+        {{ hostvars['localhost']['_agentless_net_attachment_port']['switch'] }}
       become: true
   vars:
     ansible_connection: ssh
-    ansible_host: "{{ hostvars[_agentless_net_attachment_port.switch].ansible_host }}"
-    ansible_user: "{{ hostvars[_agentless_net_attachment_port.switch].ansible_user }}"
-    ansible_port: "{{ hostvars[_agentless_net_attachment_port.switch].ansible_port | default(22) }}"
+    ansible_host: >-
+      {{ hostvars[hostvars['localhost']['_agentless_net_attachment_port']['switch']].ansible_host }}
+    ansible_user: >-
+      {{ hostvars[hostvars['localhost']['_agentless_net_attachment_port']['switch']].ansible_user }}
+    ansible_port: >-
+      {{ hostvars[hostvars['localhost']['_agentless_net_attachment_port']['switch']].ansible_port | default(22) }}
     ansible_network_os: cumulus
-    port_name: "{{ _agentless_net_attachment_port.port }}"
+    port_name: "{{ hostvars['localhost']['_agentless_net_attachment_port']['port'] }}"
     vlan_id: "{{ _agentless_net_target_vlan | int }}"
   when: >-
     _agentless_net_attachment_port_entries | length == 0
@@ -191,14 +201,20 @@
   no_log: true
 
 - name: Verify the mapped Cumulus access port converged to its destination VLAN
-  ansible.builtin.raw: bridge -j vlan show dev {{ _agentless_net_attachment_port.port }}
-  delegate_to: "{{ _agentless_net_attachment_port.switch }}"
+  ansible.builtin.raw: >-
+    bridge -j vlan show dev
+    {{ hostvars['localhost']['_agentless_net_attachment_port']['port'] }}
+  delegate_to: >-
+    {{ hostvars['localhost']['_agentless_net_attachment_port']['switch'] }}
   become: true
   vars:
     ansible_connection: ssh
-    ansible_host: "{{ hostvars[_agentless_net_attachment_port.switch].ansible_host }}"
-    ansible_user: "{{ hostvars[_agentless_net_attachment_port.switch].ansible_user }}"
-    ansible_port: "{{ hostvars[_agentless_net_attachment_port.switch].ansible_port | default(22) }}"
+    ansible_host: >-
+      {{ hostvars[hostvars['localhost']['_agentless_net_attachment_port']['switch']].ansible_host }}
+    ansible_user: >-
+      {{ hostvars[hostvars['localhost']['_agentless_net_attachment_port']['switch']].ansible_user }}
+    ansible_port: >-
+      {{ hostvars[hostvars['localhost']['_agentless_net_attachment_port']['switch']].ansible_port | default(22) }}
     ansible_network_os: cumulus
   register: _agentless_net_attachment_vlan_after
   changed_when: false

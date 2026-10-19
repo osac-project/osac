@@ -124,9 +124,12 @@ def _delete_compute_instance_and_wait(grpc: GRPCClient, k8s: K8sClient, ci_id: s
             delay=2,
             description=f"ComputeInstance {ci_id} API deletion",
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         # grpcurl exceptions contain the bearer token in their command arguments.
-        raise RuntimeError(f"ComputeInstance {ci_id} cleanup request failed") from None
+        pending = exc.__context__
+        if isinstance(pending, subprocess.SubprocessError):
+            pending = None
+        raise RuntimeError(f"ComputeInstance {ci_id} cleanup request failed") from pending
 
 
 @pytest.mark.requires_vmaas

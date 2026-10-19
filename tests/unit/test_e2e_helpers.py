@@ -170,7 +170,41 @@ def test_compute_cleanup_propagates_command_errors_without_credentials(
         compute_references._delete_compute_instance_and_wait(grpc, k8s, "ci-id", "vm-test")
 
     assert "test-token" not in str(exc_info.value)
-    assert exc_info.value.__suppress_context__
+    assert not isinstance(exc_info.value.__cause__, subprocess.CalledProcessError)
+
+
+def test_compute_cleanup_preserves_pending_non_subprocess_context(
+    monkeypatch: pytest.MonkeyPatch, compute_cleanup_clients: tuple[Mock, Mock]
+) -> None:
+    grpc, k8s = compute_cleanup_clients
+    pending = AssertionError("original test failure")
+    grpc.delete_compute_instance.side_effect = subprocess.CalledProcessError(
+        1, ["grpcurl", "-H", "Authorization: Bearer test-token"]
+    )
+    monkeypatch.setattr(compute_references, "wait_for_cr", Mock(side_effect=pending))
+
+    with pytest.raises(RuntimeError, match="ci-id cleanup request failed") as exc_info:
+        compute_references._delete_compute_instance_and_wait(grpc, k8s, "ci-id")
+
+    assert exc_info.value.__cause__ is pending
+    assert "test-token" not in str(exc_info.value)
+
+
+def test_compute_cleanup_suppresses_pending_subprocess_context(
+    monkeypatch: pytest.MonkeyPatch, compute_cleanup_clients: tuple[Mock, Mock]
+) -> None:
+    grpc, k8s = compute_cleanup_clients
+    pending = subprocess.CalledProcessError(1, ["grpcurl", "-H", "Authorization: Bearer test-token"])
+    grpc.delete_compute_instance.side_effect = subprocess.CalledProcessError(
+        1, ["grpcurl", "-H", "Authorization: Bearer test-token"]
+    )
+    monkeypatch.setattr(compute_references, "wait_for_cr", Mock(side_effect=pending))
+
+    with pytest.raises(RuntimeError, match="ci-id cleanup request failed") as exc_info:
+        compute_references._delete_compute_instance_and_wait(grpc, k8s, "ci-id")
+
+    assert exc_info.value.__cause__ is None
+    assert "test-token" not in str(exc_info.value)
 
 
 @pytest.mark.parametrize("stage", ["cr", "api"])

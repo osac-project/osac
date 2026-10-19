@@ -10,7 +10,7 @@ import tempfile
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import Any
+from typing import TYPE_CHECKING, Any, TypeVar
 from uuid import uuid4
 
 import pytest
@@ -24,6 +24,9 @@ from tests.e2e.core.sanitize import sanitize_text
 from tests.e2e.core.wait_kinds import WaitResourceKind
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from tests.e2e.core.inventory import InventoryBackend
 
 _POOL_READY_STATE = "EXTERNAL_IP_POOL_STATE_READY"
 _SUBNET_READY_STATE = "SUBNET_STATE_READY"
@@ -1685,61 +1688,40 @@ def wait_for_bmi_running(*, grpc: GRPCClient, bmi_id: str, retries: int = _BMI_R
 
 
 def assert_bmi_lifecycle_on_running(
-    *, grpc: GRPCClient, k8s: K8sClient, bmi_id: str, bmh_namespace: str, power_cycle: bool = True
+    *,
+    grpc: GRPCClient,
+    k8s: K8sClient,
+    inventory: InventoryBackend,
+    bmi_id: str,
+    expected_image_url: str | None = None,
+    power_cycle: bool = True,
 ) -> tuple[str, str]:
-    """Assert BMH binding/provisioning on an already-RUNNING BMI.
+    """Assert host allocation and power cycling on an already-RUNNING BMI.
 
     Does not create or delete the instance. Inventory exhaust calls this after all
     claim BMIs reach RUNNING so provisioning is not blocked by interleaved checks.
 
-    Returns (bmi_cr_name, bmh_name).
+    Returns (bmi_cr_name, host_ref); the ref is opaque and only meaningful to
+    the selected inventory backend.
     """
     assert bmi_id in grpc.list_baremetal_instance_ids()
     bmi_cr_name: str = wait_for_bmi_cr(k8s=k8s, uuid=bmi_id)
 
-    external_host_id: str = k8s.get_baremetal_instance_external_host_id(name=bmi_cr_name)
-    assert "/" in external_host_id, f"Expected namespace/name format, got: {external_host_id}"
-    bmh_ns, bmh_name = external_host_id.split("/", 1)
-    assert bmh_ns == bmh_namespace, f"BMH landed in {bmh_ns}, expected {bmh_namespace}"
+    host_ref: str = inventory.host_for_bmi(bmi_cr_name=bmi_cr_name)
 
-    wait_for_bmh_provisioned(k8s=k8s, name=bmh_name, bmh_namespace=bmh_ns)
-
-    image_url: str = k8s.get_bmh_image_url(name=bmh_name, bmh_namespace=bmh_ns)
-    assert image_url != "", f"BMH {bmh_name} has no image URL after provisioning"
-
-    consumer_ref: str = k8s.get_bmh_consumer_ref(name=bmh_name, bmh_namespace=bmh_ns)
-    assert consumer_ref != "", f"BMH {bmh_name} has no consumerRef after allocation"
-
-    online: str = k8s.get_bmh_online(name=bmh_name, bmh_namespace=bmh_ns)
-    assert online == "true", f"BMH {bmh_name} should be online after provisioning, got: {online}"
+    inventory.wait_for_allocated(ref=host_ref, expected_image_url=expected_image_url)
 
     if power_cycle:
         grpc.update_baremetal_instance_run_strategy(
             bmi_id=bmi_id, run_strategy="BARE_METAL_INSTANCE_RUN_STRATEGY_HALTED"
         )
-        poll_until(
-            fn=lambda: k8s.get_bmh_powered_on(name=bmh_name, bmh_namespace=bmh_ns),
-            until=lambda v: v == "false",
-            retries=60,
-            delay=5,
-            description=f"{bmh_name} powered off",
-            resource_kind=WaitResourceKind.BARE_METAL_HOST,
-            resource_id=bmh_name,
-        )
+        inventory.wait_for_powered(ref=host_ref, on=False, bmi_id=bmi_id)
         grpc.update_baremetal_instance_run_strategy(
             bmi_id=bmi_id, run_strategy="BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS"
         )
-        poll_until(
-            fn=lambda: k8s.get_bmh_powered_on(name=bmh_name, bmh_namespace=bmh_ns),
-            until=lambda v: v == "true",
-            retries=60,
-            delay=5,
-            description=f"{bmh_name} powered on",
-            resource_kind=WaitResourceKind.BARE_METAL_HOST,
-            resource_id=bmh_name,
-        )
+        inventory.wait_for_powered(ref=host_ref, on=True, bmi_id=bmi_id)
 
-    return bmi_cr_name, bmh_name
+    return bmi_cr_name, host_ref
 
 
 def assert_bmi_does_not_become_running(*, grpc: GRPCClient, bmi_id: str, retries: int = 36, delay: int = 10) -> str:

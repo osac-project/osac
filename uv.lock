@@ -366,11 +366,11 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "pynetbox", specifier = "<7.9" },
+    { name = "pynetbox", specifier = "==7.8.0" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-xdist", specifier = ">=3.0" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "requests", specifier = ">=2.31" },
+    { name = "requests", specifier = "==2.34.2" },
     { name = "websocket-client", specifier = ">=1.6" },
 ]
 

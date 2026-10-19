@@ -56,7 +56,9 @@ def inventory_backend(
 def inventory_hosts(inventory_backend: InventoryBackend) -> Generator[None, None, None]:
     """Ensure inventory has available hosts; release fixture-created ones after.
 
-    metal3: asserts the out-of-band provisioned BMH pool is non-empty.
+    metal3: asserts the BMH pool is non-empty — BMHs are enrolled by the
+    lab/CI infrastructure (the netris Ansible backend) or the platform
+    admin, never by the tests or the OSAC operators.
     netbox: idempotently creates fixture devices from OSAC_NETBOX_FIXTURE_HOSTS
     and deletes them on teardown.
     """

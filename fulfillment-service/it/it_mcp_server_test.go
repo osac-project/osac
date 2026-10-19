@@ -73,7 +73,6 @@ var _ = Describe("MCP server", func() {
 	)
 
 	BeforeEach(func() {
-		Skip("OSAC-6371: quarantined – MCP fixture VirtualNetwork READY→PENDING race")
 		ctx = context.Background()
 		catalogItemID, computeInstanceID, otherComputeInstanceID = "", "", ""
 		templateID, diskImageID, instanceTypeID = "", "", ""
@@ -202,6 +201,7 @@ var _ = Describe("MCP server", func() {
 			_, err := networkClassesClient.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: networkClassID}.Build())
 			Expect(err).ToNot(HaveOccurred())
 		})
+		waitForNetworkClassReady(ctx, networkClassesClient, networkClassID)
 
 		virtualNetworkID = fmt.Sprintf("mcp-virtual-network-%s", uuid.New())
 		_, err = virtualNetworksClient.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{

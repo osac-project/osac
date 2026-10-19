@@ -4,7 +4,6 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"strings"
 )
 
@@ -106,26 +105,33 @@ func ValidateProtectedNetrisExtraVars(extraVars map[string]any) error {
 			Reason:        "extra_vars must be a mapping",
 		}
 	}
+	serialized, err := json.Marshal(extraVars)
+	if err != nil {
+		return &ProtectedInputError{
+			Path:          "$",
+			PolicyVersion: protectedContract.PolicyVersion,
+			Reason:        "extra_vars is not JSON-serializable",
+		}
+	}
+	var wireValue any
+	if err := json.Unmarshal(serialized, &wireValue); err != nil {
+		return &ProtectedInputError{
+			Path:          "$",
+			PolicyVersion: protectedContract.PolicyVersion,
+			Reason:        "extra_vars is not JSON-serializable",
+		}
+	}
 	state := 0
-	return walkProtectedInputValue(reflect.ValueOf(extraVars), nil, 0, &state)
+	return walkProtectedInputValue(wireValue, nil, 0, &state)
 }
 
-func walkProtectedInputValue(value reflect.Value, path []string, depth int, nodes *int) error {
+func walkProtectedInputValue(value any, path []string, depth int, nodes *int) error {
 	if depth > maxProtectedInputDepth {
 		return &ProtectedInputError{
 			Path:          protectedPathText(path),
 			PolicyVersion: protectedContract.PolicyVersion,
 			Reason:        "extra_vars nesting exceeds the supported limit",
 		}
-	}
-	if !value.IsValid() {
-		return nil
-	}
-	if value.Kind() == reflect.Interface {
-		if value.IsNil() {
-			return nil
-		}
-		return walkProtectedInputValue(value.Elem(), path, depth, nodes)
 	}
 	*nodes++
 	if *nodes > maxProtectedInputNodes {
@@ -136,19 +142,9 @@ func walkProtectedInputValue(value reflect.Value, path []string, depth int, node
 		}
 	}
 
-	switch value.Kind() {
-	case reflect.Map:
-		iter := value.MapRange()
-		for iter.Next() {
-			key := iter.Key()
-			if key.Kind() != reflect.String {
-				return &ProtectedInputError{
-					Path:          protectedPathText(path),
-					PolicyVersion: protectedContract.PolicyVersion,
-					Reason:        "extra_vars keys must be strings",
-				}
-			}
-			name := key.String()
+	switch typedValue := value.(type) {
+	case map[string]any:
+		for name, childValue := range typedValue {
 			childPath := append(append([]string{}, path...), name)
 			if protectedPath(childPath) {
 				return &ProtectedInputError{
@@ -158,13 +154,13 @@ func walkProtectedInputValue(value reflect.Value, path []string, depth int, node
 					Reason:        "protected Netris setting is not allowed",
 				}
 			}
-			if err := walkProtectedInputValue(iter.Value(), childPath, depth+1, nodes); err != nil {
+			if err := walkProtectedInputValue(childValue, childPath, depth+1, nodes); err != nil {
 				return err
 			}
 		}
-	case reflect.Slice, reflect.Array:
-		for index := 0; index < value.Len(); index++ {
-			if err := walkProtectedInputValue(value.Index(index), path, depth+1, nodes); err != nil {
+	case []any:
+		for _, childValue := range typedValue {
+			if err := walkProtectedInputValue(childValue, path, depth+1, nodes); err != nil {
 				return err
 			}
 		}

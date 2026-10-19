@@ -755,10 +755,6 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
                     key: password
               - name: LICENSE_MANIFEST_PATH
                 value: /var/secrets/config-as-code/license.zip
-              - name: NETRIS_CONTROLLER_URL
-                value: "{{ netris_controller_url }}"
-              - name: NETRIS_VALIDATE_CERTS
-                value: "{{ netris_validate_certs | string | lower }}"
               - name: NETRIS_CA_PATH
                 value: "{{ netris_ca_path }}"
             volumeMounts:

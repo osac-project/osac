@@ -1,6 +1,8 @@
 package aap_test
 
 import (
+	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/osac-project/osac/osac-operator/pkg/aap"
@@ -50,5 +52,53 @@ func TestValidateProtectedNetrisExtraVarsAllowsOrdinaryValues(t *testing.T) {
 
 	if err := aap.ValidateProtectedNetrisExtraVars(payload); err != nil {
 		t.Fatalf("ordinary launch values were rejected: %v", err)
+	}
+}
+
+func TestValidateProtectedNetrisExtraVarsRejectsProtectedFieldsInTypedValues(t *testing.T) {
+	type launchSettings struct {
+		ControllerURL string `json:"netris_controller_url"`
+	}
+
+	err := aap.ValidateProtectedNetrisExtraVars(map[string]any{
+		"settings": &launchSettings{ControllerURL: "https://attacker.example"},
+	})
+	if err == nil {
+		t.Fatal("expected protected field in typed value to be rejected")
+	}
+}
+
+func TestValidateProtectedNetrisExtraVarsRejectsProtectedFieldsInRawJSON(t *testing.T) {
+	err := aap.ValidateProtectedNetrisExtraVars(map[string]any{
+		"settings": json.RawMessage(`{"nested":{"NETRIS_VALIDATE_CERTS":false}}`),
+	})
+	if err == nil {
+		t.Fatal("expected protected field in json.RawMessage to be rejected")
+	}
+}
+
+func TestValidateProtectedNetrisExtraVarsTreatsByteSlicesAsJSONStrings(t *testing.T) {
+	err := aap.ValidateProtectedNetrisExtraVars(map[string]any{
+		"certificate": make([]byte, 12000),
+	})
+	if err != nil {
+		t.Fatalf("ordinary byte slice was rejected: %v", err)
+	}
+}
+
+func TestValidateProtectedNetrisExtraVarsRejectsNonJSONValues(t *testing.T) {
+	err := aap.ValidateProtectedNetrisExtraVars(map[string]any{
+		"callback": func() {},
+	})
+	if err == nil {
+		t.Fatal("expected non-JSON value to be rejected")
+	}
+
+	var protectedErr *aap.ProtectedInputError
+	if !errors.As(err, &protectedErr) {
+		t.Fatalf("expected ProtectedInputError, got %T", err)
+	}
+	if protectedErr.Reason != "extra_vars is not JSON-serializable" {
+		t.Fatalf("unexpected reason: %q", protectedErr.Reason)
 	}
 }

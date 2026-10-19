@@ -24,6 +24,36 @@ def _find_uri_tasks(value, task_file):
             yield from _find_uri_tasks(child, task_file)
 
 
+def _direct_uri_tasks():
+    for task_file in NETRIS_COLLECTION.rglob("*.yaml"):
+        for document in yaml.safe_load_all(task_file.read_text()):
+            yield from _find_direct_uri_tasks(document, task_file)
+
+
+def _find_direct_uri_tasks(value, task_file):
+    if isinstance(value, dict):
+        for module_name in ("ansible.builtin.uri", "uri"):
+            if module_name in value:
+                yield task_file, value.get("name", "<unnamed>"), module_name
+        for child in value.values():
+            yield from _find_direct_uri_tasks(child, task_file)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _find_direct_uri_tasks(child, task_file)
+
+
+def test_netris_collection_does_not_bypass_protected_uri():
+    direct_uri_tasks = [
+        f"{task_file}:{task_name} ({module_name})"
+        for task_file, task_name, module_name in _direct_uri_tasks()
+    ]
+
+    assert not direct_uri_tasks, (
+        "Netris API calls must use netris.controller.protected_uri: "
+        f"{direct_uri_tasks}"
+    )
+
+
 def test_every_netris_uri_call_accepts_the_shared_ca_path():
     uri_tasks = list(_uri_tasks())
 

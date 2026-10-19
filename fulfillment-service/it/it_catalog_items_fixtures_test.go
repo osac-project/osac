@@ -167,7 +167,7 @@ func createCatalogItemStorageTierFixture(ctx context.Context) string {
 		Object: privatev1.StorageBackend_builder{
 			Metadata: catalogItemFixtureMetadata("shared", ""),
 			Spec: privatev1.StorageBackendSpec_builder{
-				Provider: "test",
+				Provider: "vast",
 				Endpoint: "https://storage.example.com",
 				Credentials: privatev1.StorageBackendCredentials_builder{
 					Username: "integration-test",

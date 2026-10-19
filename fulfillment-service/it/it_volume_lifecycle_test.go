@@ -74,7 +74,7 @@ var _ = Describe("Volume lifecycle", func() {
 						Name: backendName,
 					}.Build(),
 					Spec: privatev1.StorageBackendSpec_builder{
-						Provider: "test-provider",
+						Provider: "vast",
 						Endpoint: "https://test-storage:8443",
 						Credentials: privatev1.StorageBackendCredentials_builder{
 							Username: "admin",
@@ -319,7 +319,7 @@ var _ = Describe("Volume lifecycle", func() {
 							Name: backend2Name,
 						}.Build(),
 						Spec: privatev1.StorageBackendSpec_builder{
-							Provider: "test-provider-nfs",
+							Provider: "netapp",
 							Endpoint: "https://test-nfs:2049",
 							Credentials: privatev1.StorageBackendCredentials_builder{
 								Username: "admin",

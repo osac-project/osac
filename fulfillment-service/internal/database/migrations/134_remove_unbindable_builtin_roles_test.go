@@ -22,7 +22,7 @@ import (
 
 var _ = DescribeMigration("Remove unbindable built-in roles", func() {
 	It("keeps only the bindable built-in roles", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 133)).To(Succeed())
+		Expect(tool.Migrate(ctx, 134)).To(Succeed())
 
 		var count int
 		Expect(conn.QueryRow(ctx, `select count(*) from roles`).Scan(&count)).To(Succeed())
@@ -39,7 +39,7 @@ var _ = DescribeMigration("Remove unbindable built-in roles", func() {
 			values ('custom-role', 'custom-role', 'shared', '{}')`)
 		Expect(err).ToNot(HaveOccurred())
 
-		Expect(tool.Migrate(ctx, 133)).To(Succeed())
+		Expect(tool.Migrate(ctx, 134)).To(Succeed())
 
 		var count int
 		Expect(conn.QueryRow(ctx, `select count(*) from roles where id = 'custom-role'`).Scan(&count)).To(Succeed())

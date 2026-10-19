@@ -57,8 +57,10 @@ the backend needs:
 | `OSAC_NETBOX_ROLE` | Device role slug for fixture devices | `server` |
 | `OSAC_NETBOX_FIXTURE_HOSTS` | JSON list of virtual host specs: `{"bmc_address": ..., "boot_mac": ..., "interface_macs"?: {...}, "custom_fields"?: {...}}` — one per lab host; `custom_fields` carries capability fields matching the instance type's host selector, and `interface_macs` feeds the operator's logical-port MAC mapping (used by DHCP/networking, not by the sanity and serial assertions, which read BMH inspection data) | — |
 
-Unlike metal3 (whose BMHs the infra backend provisions out-of-band), the
-netbox backend provisions its own inventory: the `inventory_hosts` session
+Unlike metal3 (whose BMHs are enrolled into the BMH namespace by the
+lab/CI infrastructure — the netris Ansible backend in osac-test-infra — or
+by the platform admin on a real deployment, never by the tests), the netbox
+backend provisions its own inventory: the `inventory_hosts` session
 fixture creates `osac_managed` devices in the `staged` state from
 `OSAC_NETBOX_FIXTURE_HOSTS` (named `<test_run_id>-netbox-<n>`; repeated setup
 within one session is idempotent) and deletes them on teardown. Each run

@@ -146,7 +146,7 @@ class Metal3Inventory:
         available: int = self.count_available()
         assert available >= 1, (
             f"Need at least 1 available BMH in {self.bmh_namespace}; found {available} "
-            "(metal3 inventory is provisioned out-of-band by the infra backend)"
+            "(metal3 hosts are enrolled by the infra backend or an admin, not by the tests)"
         )
 
     def release_created_hosts(self) -> None:

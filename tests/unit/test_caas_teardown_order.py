@@ -4,6 +4,7 @@ import logging
 import subprocess
 import traceback
 from collections.abc import Iterator
+from pathlib import Path
 from unittest.mock import Mock, call
 
 import pytest
@@ -202,20 +203,32 @@ def test_stage_timeout_replaces_unsafe_message_without_chaining(monkeypatch: pyt
 
 
 def test_focused_scenario_uses_natural_waits_and_throttled_best_effort_snapshots(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, tmp_path: Path
 ) -> None:
     cli, grpc, private, metering = (Mock() for _ in range(4))
     k8s = Mock(spec=K8sClient)
+    public_key = "ssh-ed25519 test-key"
+    public_key_path = tmp_path / "test-key.pub"
+    public_key_path.write_text(public_key)
     k8s.namespace = "osac"
     k8s._base.return_value = ["kubectl"]
     private.ensure_disk_image.return_value = "disk-id"
-    private.ensure_cluster_version.return_value = {"name": "version-name"}
-    cli.create_cluster.return_value = "cluster-id"
+    private.ensure_cluster_version.return_value = {"id": "version-id", "name": "version-name"}
+    private.create_cluster_catalog_item.return_value = "catalog-id"
+    cli.create_cluster_with_catalog_item.return_value = "cluster-id"
+    grpc.call.side_effect = [
+        subprocess.CalledProcessError(1, ["grpcurl"], stderr="Code: InvalidArgument"),
+        subprocess.CalledProcessError(1, ["grpcurl"], stderr="Code: InvalidArgument"),
+    ]
     grpc.list_cluster_ids.return_value = ["cluster-id"]
     grpc.get_cluster.return_value = {
         "object": {
             "metadata": {"tenant": "tenant1"},
             "spec": {
+                "catalogItem": {"id": "catalog-id"},
+                "template": {"id": "template-id"},
+                "sshKey": {"id": "key-id", "name": "registered-key"},
+                "pullSecretSecret": {"name": "test-pull-secret"},
                 "version": {"name": "version-name"},
                 "nodeSets": {"workers": {"size": 1, "baremetalInstanceType": {"name": "ci-worker-bm"}}},
             },
@@ -265,6 +278,7 @@ def test_focused_scenario_uses_natural_waits_and_throttled_best_effort_snapshots
     )
     k8s.get_cluster_order_spec.return_value = {
         "releaseImage": "release-image",
+        "sshPublicKey": public_key,
         "nodeRequests": [{"bareMetal": {"instanceType": "ci-worker-bm"}, "numberOfNodes": 1}],
     }
     k8s.get_cluster_order_hosted_cluster_name.return_value = "hosted-cluster"
@@ -339,7 +353,8 @@ def test_focused_scenario_uses_natural_waits_and_throttled_best_effort_snapshots
             k8s_hub_client=k8s,
             cluster_template="template",
             pull_secret_name="test-pull-secret",
-            ssh_public_key_path="/tmp/test-key.pub",
+            ssh_key_name="registered-key",
+            ssh_public_key_path=str(public_key_path),
             metering=metering,
         )
 

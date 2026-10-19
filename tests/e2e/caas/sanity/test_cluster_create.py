@@ -548,7 +548,7 @@ def _assert_cluster_deleted(
 
 
 def _assert_catalog_created_cluster(
-    *, grpc: GRPCClient, uuid: str, catalog_item_id: str, pull_secret_name: str, ssh_public_key: str
+    *, grpc: GRPCClient, uuid: str, catalog_item_id: str, pull_secret_name: str, ssh_key_name: str
 ) -> None:
     """Check that the catalog offering, not caller input, materialized the cluster spec."""
     spec = grpc.get_cluster(cluster_id=uuid)["object"]["spec"]
@@ -556,7 +556,12 @@ def _assert_catalog_created_cluster(
     assert catalog_ref.get("id") == catalog_item_id
     template_ref = spec.get("template", {})
     assert template_ref.get("id"), "Catalog-created cluster must materialize its template reference"
-    assert spec.get("ssh_public_key", spec.get("sshPublicKey")) == ssh_public_key
+    ssh_key_ref = spec.get("ssh_key", spec.get("sshKey", {}))
+    assert ssh_key_ref.get("id"), "Cluster should store the canonical SSH-key Secret ID"
+    assert ssh_key_ref.get("name") == ssh_key_name
+    assert not spec.get("ssh_public_key", spec.get("sshPublicKey")), (
+        "Registered SSH-key creation should not materialize an inline key"
+    )
     pull_secret_ref = spec.get("pull_secret_secret", spec.get("pullSecretSecret", {}))
     assert pull_secret_ref.get("name") == pull_secret_name
 
@@ -569,6 +574,7 @@ def test_cluster_create(
     k8s_hub_client: K8sClient,
     cluster_template: str,
     pull_secret_name: str,
+    ssh_key_name: str,
     ssh_public_key_path: str,
     metering: MeteringCollector,
 ) -> None:
@@ -588,15 +594,14 @@ def test_cluster_create(
     logger.info("CaaS: ClusterVersion available")
     ssh_public_key = Path(ssh_public_key_path).read_text().strip()
     logger.info("CaaS: creating ClusterCatalogItem")
-    # The shared offering locks every tenant-independent input (version, node sets, SSH
-    # key); the pull secret stays caller-supplied because a shared catalog item cannot
-    # fix a tenant-local secret for every tenant.
+    # The shared offering locks tenant-independent inputs. Tenant-local credentials
+    # stay editable because a shared Catalog Item cannot select them for every tenant.
     catalog_item_id = private_grpc.create_cluster_catalog_item(
         name=unique_name("e2e-caas-catalog"),
         template=cluster_template,
         fields={
             "version": {"locked": {"id": version["id"]}},
-            "ssh_public_key": {"locked": ssh_public_key},
+            "ssh_key": {"editable": {}},
             "pull_secret_secret": {"editable": {}},
             "node_sets": {
                 "locked": {
@@ -612,7 +617,7 @@ def test_cluster_create(
     try:
         logger.info("CaaS: creating cluster from catalog item")
         uuid = cli.create_cluster_with_catalog_item(
-            catalog_item=catalog_item_id, name=name, pull_secret=pull_secret_name
+            catalog_item=catalog_item_id, name=name, pull_secret=pull_secret_name, ssh_key=ssh_key_name
         )
         logger.info("CaaS: cluster created")
         metering.expect("osac.resource.created.v1", resource_id=uuid)
@@ -622,11 +627,13 @@ def test_cluster_create(
             uuid=uuid,
             catalog_item_id=catalog_item_id,
             pull_secret_name=pull_secret_name,
-            ssh_public_key=ssh_public_key,
+            ssh_key_name=ssh_key_name,
         )
         cluster = assert_cluster_available(
             grpc=grpc, k8s=k8s_hub_client, metering=metering, uuid=uuid, version_name=version["name"]
         )
+        cluster_order_spec = k8s_hub_client.get_cluster_order_spec(name=cluster.co_name)
+        assert cluster_order_spec.get("sshPublicKey", cluster_order_spec.get("ssh_public_key")) == ssh_public_key
         if os.environ.get("OSAC_FULFILLMENT_TRUST_E2E") == "true":
             assert_management_tls(k8s_hub_client, require_metering=True)
             assert_cluster_trust(k8s_hub_client, cluster.co_name)

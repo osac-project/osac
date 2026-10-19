@@ -232,6 +232,7 @@ class OsacCLI:
         template: str,
         name: str | None = None,
         pull_secret: str | None = None,
+        ssh_key: str | None = None,
         ssh_public_key_file: str | None = None,
         version: str | None = None,
         node_sets: dict[str, dict[str, Any]] | list[str] | None = None,
@@ -243,6 +244,8 @@ class OsacCLI:
             args.extend(["--name", name])
         if pull_secret is not None:
             args.extend(["--pull-secret", pull_secret])
+        if ssh_key is not None:
+            args.extend(["--ssh-key", ssh_key])
         if ssh_public_key_file is not None:
             args.extend(["--ssh-public-key-file", ssh_public_key_file])
         if version is not None:
@@ -298,6 +301,7 @@ class OsacCLI:
         name: str,
         version: str | None = None,
         pull_secret: str | None = None,
+        ssh_key: str | None = None,
         ssh_public_key_file: str | None = None,
     ) -> str:
         args = ["create", "cluster", "--catalog-item", catalog_item, "--name", name]
@@ -305,6 +309,8 @@ class OsacCLI:
             args.extend(["--version", version])
         if pull_secret is not None:
             args.extend(["--pull-secret", pull_secret])
+        if ssh_key is not None:
+            args.extend(["--ssh-key", ssh_key])
         if ssh_public_key_file is not None:
             args.extend(["--ssh-public-key-file", ssh_public_key_file])
         return self._parse_uuid(self._run(*args))

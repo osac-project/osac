@@ -6,6 +6,7 @@ from collections.abc import Iterator
 
 import pytest
 
+from tests.e2e.core.helpers import unique_name
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import env
 
@@ -47,3 +48,14 @@ def pull_secret_path() -> str:
 def ssh_public_key_path() -> str:
     """Filesystem path to the SSH public key, default ~/.ssh/id_rsa.pub (OSAC_SSH_PUBLIC_KEY_PATH)."""
     return env("OSAC_SSH_PUBLIC_KEY_PATH", os.path.expanduser("~/.ssh/id_rsa.pub"))
+
+
+@pytest.fixture
+def ssh_key_name(cli: OsacCLI, ssh_public_key_path: str) -> Iterator[str]:
+    """Create a tenant-scoped SSH-public-key Secret, then remove it."""
+    name = unique_name("e2e-ssh-key")
+    cli.create_secret(name=name, from_files={"public_key": ssh_public_key_path}, secret_type="ssh-public-key")
+    try:
+        yield name
+    finally:
+        cli.delete_secret(name=name)

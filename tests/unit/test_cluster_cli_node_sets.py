@@ -1,6 +1,7 @@
 import pytest
 
 from tests.e2e import conftest as e2e_fixtures
+from tests.e2e.caas import conftest as caas_fixtures
 from tests.e2e.core.osac_cli import OsacCLI
 
 
@@ -87,5 +88,53 @@ def test_create_cluster_uses_secret_name_and_ssh_key_file(monkeypatch: pytest.Mo
             "secret-name",
             "--ssh-public-key-file",
             "/tmp/key.pub",
+        )
+    ]
+
+
+def test_ssh_key_fixture_creates_typed_secret_before_use_and_deletes_after(monkeypatch: pytest.MonkeyPatch) -> None:
+    commands: list[tuple[str, ...]] = []
+
+    def record_command(_self: OsacCLI, *command: str) -> str:
+        commands.append(command)
+        return "Created secret 'secret-id'"
+
+    monkeypatch.setattr(OsacCLI, "_run", record_command)
+    cli = object.__new__(OsacCLI)
+    fixture = caas_fixtures.ssh_key_name.__wrapped__(cli, "/tmp/key.pub")
+    name = next(fixture)
+    assert commands == [
+        ("create", "secret", "--name", name, "--type", "ssh-public-key", "--from-file", "public_key=/tmp/key.pub")
+    ]
+    with pytest.raises(StopIteration):
+        next(fixture)
+    assert commands[-1] == ("delete", "secret", name)
+
+
+@pytest.mark.parametrize("source_flag,source", [("--template", "sandbox"), ("--catalog-item", "catalog")])
+def test_create_cluster_uses_registered_ssh_key(monkeypatch: pytest.MonkeyPatch, source_flag: str, source: str) -> None:
+    commands: list[tuple[str, ...]] = []
+
+    def record_command(_self: OsacCLI, *command: str) -> str:
+        commands.append(command)
+        return "Created cluster 'cluster-id'"
+
+    monkeypatch.setattr(OsacCLI, "_run", record_command)
+    cli = object.__new__(OsacCLI)
+    if source_flag == "--template":
+        cluster_id = cli.create_cluster(template=source, ssh_key="registered-key")
+    else:
+        cluster_id = cli.create_cluster_with_catalog_item(catalog_item=source, name="cluster", ssh_key="registered-key")
+
+    assert cluster_id == "cluster-id"
+    assert commands == [
+        (
+            "create",
+            "cluster",
+            source_flag,
+            source,
+            *(("--name", "cluster") if source_flag == "--catalog-item" else ()),
+            "--ssh-key",
+            "registered-key",
         )
     ]

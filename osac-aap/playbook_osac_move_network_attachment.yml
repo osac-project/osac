@@ -48,13 +48,21 @@
       kubernetes.core.k8s_info:
         api_version: osac.openshift.io/v1alpha1
         kind: Subnet
+        namespace: "{{ resource.metadata.namespace }}"
         label_selectors:
           - "osac.openshift.io/subnet-uuid={{ item.subnetRef }}"
+        host: https://kubernetes.default.svc
+        api_key: >-
+          {{ lookup('ansible.builtin.file',
+                   '/var/run/secrets/kubernetes.io/serviceaccount/token') | trim }}
+        ca_cert: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        validate_certs: true
       register: _subnet_lookups
       loop: "{{ network_attachments }}"
       loop_control:
         label: "{{ item.subnetRef }}"
       when: network_attachments | length > 0
+      no_log: true
 
     - name: Validate Subnet namespace, tenant, and onboarding readiness
       ansible.builtin.assert:

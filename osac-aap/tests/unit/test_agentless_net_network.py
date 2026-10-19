@@ -273,6 +273,22 @@ def test_network_worker_reuses_config_and_secret_environment(remote_secret):
         netris_validate_certs=True,
     ))
     worker = pod["spec"]["containers"][0]
+    assert pod["spec"]["serviceAccountName"] == "osac-sa"
+    service_account_mount = next(
+        mount
+        for mount in worker["volumeMounts"]
+        if mount["name"] == "kube-api-access"
+    )
+    assert service_account_mount["mountPath"] == "/var/run/secrets/kubernetes.io/serviceaccount"
+    service_account_volume = next(
+        volume for volume in pod["spec"]["volumes"] if volume["name"] == "kube-api-access"
+    )
+    projected_sources = service_account_volume["projected"]["sources"]
+    assert any("serviceAccountToken" in source for source in projected_sources)
+    assert any(
+        source.get("configMap", {}).get("name") == "kube-root-ca.crt"
+        for source in projected_sources
+    )
     assert {"configMapRef": {"name": "network-fulfillment-ig", "optional": True}} in worker["envFrom"]
     assert {"secretRef": {"name": "network-fulfillment-ig"}} in worker["envFrom"]
     assert {"name": "NETRIS_VALIDATE_CERTS", "value": "true"} in worker["env"]

@@ -25,6 +25,12 @@ def run(*args: str, timeout: int = 300) -> str:
 
 def run_unchecked(*args: str, timeout: int = 300) -> tuple[str, int]:
     result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
+    if result.returncode == 0:
+        # On success, return only stdout so callers that parse structured
+        # output (e.g. JSON from ``kubectl -o json``) are not broken by
+        # warnings or transient errors written to stderr (such as DNS
+        # resolver blips that append non-JSON text after valid JSON).
+        return result.stdout.strip(), 0
     combined = (result.stdout.strip() + "\n" + result.stderr.strip()).strip()
     return combined, result.returncode
 

@@ -436,6 +436,61 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(fc.DeleteCalls()).To(BeEmpty())
 	})
 
+	It("records a definitively rejected create when deletion races the journal and finalizes", func() {
+		ready()
+		step() // Durable reservation, no external Create.
+		// Deletion lands between the Attempted journal write and the Create
+		// response, and fulfillment rejects the create because its cluster is
+		// already deleting: the rejected-create deadlock window.
+		fc.SetCreateError(status.Error(codes.InvalidArgument, "the owner reference of bare_metal_instances targets a deleting cluster"))
+		r = buildReconciler(&workerAttemptRaceClient{Client: k8sClient, after: func() error {
+			Expect(getOrder().Status.Workers[0].BMICreateState).To(Equal(api.WorkerBMICreateStateAttempted))
+			Expect(k8sClient.Delete(ctx, getOrder())).To(Succeed())
+			return nil
+		}})
+		step() // Journal, rejected create and rejection checkpoint in one invocation.
+		rejected := getOrder()
+		Expect(rejected.Status.Workers).To(HaveLen(1), "rejection dropped the worker: %+v", rejected.Status.Workers)
+		w := rejected.Status.Workers[0]
+		Expect(w.Phase).To(Equal("Failed"), "rejection checkpoint: %+v", w)
+		Expect(w.BMICreateState).To(Equal(api.WorkerBMICreateStateReserved), "journal not re-armed: %+v", w)
+		Expect(w.LastFailureReason).To(Equal("BMICreateRejected"), "rejection checkpoint: %+v", w)
+		Expect(w.BareMetalInstance.ID).To(BeEmpty(), "rejected create left an identity: %+v", w)
+		Expect(fc.CreateCalls()).To(HaveLen(1), "rejected create not issued exactly once")
+		r = buildReconciler(k8sClient)
+		step() // Persist retirement (Failed -> Unbinding).
+		step() // Cancel the re-armed reservation and finalize.
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), &api.ClusterOrder{}))).To(BeTrue(), "finalizer never cleared after a rejected create")
+		Expect(fc.CreateCalls()).To(HaveLen(1), "teardown re-created after the rejection")
+		Expect(fc.DeleteCalls()).To(BeEmpty(), "no BMI ever existed, but teardown deleted one")
+	})
+
+	It("fails a rejected create through the standard retry machinery", func() {
+		ready()
+		step() // Reservation.
+		fc.SetCreateError(status.Error(codes.InvalidArgument, "the owner reference of bare_metal_instances targets a deleting cluster"))
+		r = buildReconciler(k8sClient)
+		step() // Journal, rejected create, checkpoint.
+		rejected := getOrder()
+		Expect(rejected.Status.Workers[0].Phase).To(Equal("Failed"), "rejection checkpoint: %+v", rejected.Status.Workers[0])
+		Expect(rejected.Status.Workers[0].BMICreateState).To(Equal(api.WorkerBMICreateStateReserved), "rejection checkpoint: %+v", rejected.Status.Workers[0])
+		Expect(rejected.Status.Workers[0].LastFailureReason).To(Equal("BMICreateRejected"), "rejection checkpoint: %+v", rejected.Status.Workers[0])
+		step() // The standard machinery arms the retry and its condition.
+		armed := getOrder()
+		Expect(armed.Status.Workers[0].AttemptCount).To(Equal(int32(1)), "backoff not armed: %+v", armed.Status.Workers[0])
+		Expect(armed.Status.Workers[0].NextRetryTime).NotTo(BeNil(), "backoff not armed: %+v", armed.Status.Workers[0])
+		Expect(apimeta.IsStatusConditionTrue(armed.Status.Conditions, api.ConditionWorkersFailed)).To(BeTrue(), "failed-worker condition lagged the checkpoint")
+		// The retry becomes due and is rejected again: one more checkpoint,
+		// one more backoff, no reconcile error and no tight loop.
+		makeRetryDue()
+		step() // Persist the replacement attempt's fresh origin.
+		step() // Retry create rejected, second checkpoint.
+		step() // The standard machinery arms the second backoff.
+		retried := getOrder()
+		Expect(retried.Status.Workers[0].AttemptCount).To(Equal(int32(2)), "second rejection cycle: %+v", retried.Status.Workers[0])
+		Expect(fc.CreateCalls()).To(HaveLen(2), "retry create not issued exactly once per cycle")
+	})
+
 	It("retains legacy ID-less state without inferring safety from its timestamp", func() {
 		ready()
 		step()

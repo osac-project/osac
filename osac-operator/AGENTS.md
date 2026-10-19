@@ -73,6 +73,10 @@ Worker coverage is owned by **osac-operator [DEV]**:
   intent-derived counts. `reservation_cleanup_test.go` covers explicit Reserved
   cancellation, both optimistic Create-intent race orderings, attempted/legacy
   empty-List retention, lost acknowledgement recovery and retry-state reset.
+  `bmi_rejection_test.go` covers terminal-code classification, the rejected-create
+  checkpoint's deletion-race tolerance and drift fencing, prune verification,
+  retry-path re-rejection backoff, transport conservatism and
+  AlreadyExists-recovery exclusion.
   `metrics_test.go` checks the exact two-instance-type
   desired/zero-ready series before reservations without creating missing series
   through metric accessors.
@@ -80,7 +84,9 @@ Worker coverage is owned by **osac-operator [DEV]**:
   drive public Reconcile through InfraEnv ownership/artifact changes, BMI
   creation/recovery, Agent binding/demotion/handoff, scale-up/down and finalization.
 - `baremetalworker_convergence_test.go` preserves R01–R10 persistence and
-  fault traces: interrupted/lost Create acknowledgement, delayed List/NotFound/
+  fault traces: interrupted/lost Create acknowledgement, definitively rejected
+  creates racing deletion to finalizer removal and their standard retry cycle,
+  delayed List/NotFound/
   outage evidence, conflicts and restart recovery, prerequisite-free progress,
   delayed cleanup and real Agent Delete UID-precondition rejection, selector
   union/ambiguity, stale-ignition classification before UID recording, separate

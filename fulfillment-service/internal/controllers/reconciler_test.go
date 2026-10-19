@@ -15,18 +15,45 @@ package controllers_test
 
 import (
 	"context"
+	"errors"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
+	grpccodes "google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/mocks"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
+
+var _ = Describe("Reconcile signal scheduler", func() {
+	It("retries transient failures and stops after the resource is gone", func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		DeferCleanup(cancel)
+
+		var calls atomic.Int32
+		signal := func(context.Context, string) error {
+			if calls.Add(1) == 1 {
+				return errors.New("temporary signal failure")
+			}
+			return grpcstatus.Error(grpccodes.NotFound, "resource is gone")
+		}
+
+		scheduler := controllers.NewReconcileSignalScheduler(logger, 10*time.Millisecond)
+		scheduler.Schedule(ctx, "resource-1", signal)
+		scheduler.Schedule(ctx, "resource-1", signal)
+
+		Eventually(calls.Load).Should(Equal(int32(2)))
+		Consistently(calls.Load).Should(Equal(int32(2)))
+	})
+})
 
 var _ = Describe("Reconciler builder", func() {
 	DescribeTable("Validates the name", func(name, errorMessage string) {

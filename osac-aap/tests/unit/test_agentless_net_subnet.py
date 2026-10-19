@@ -96,6 +96,30 @@ def test_parse_switch_vlan_exclusions_accepts_trailing_newline_in_nvue_range():
     assert observed == set(range(3725, 4000)) | set(range(4000, 4065))
 
 
+def test_parse_switch_vlan_exclusions_uses_switchd_range_when_nvue_omits_it():
+    bridge = json.dumps([{"ifname": "br_default", "vlans": [{"vlan": 1}]}])
+    reserved = json.dumps({"internal": {}, "l3-vni-vlan": {"begin": 4000, "end": 4064}})
+
+    observed = agentless_net_subnet.parse_switch_vlan_exclusions(
+        bridge, reserved, "resv_vlan_range = 3725-3999\n"
+    )
+
+    assert observed == {1} | set(range(3725, 4000)) | set(range(4000, 4065))
+
+
+def test_parse_switch_vlan_exclusions_rejects_malformed_switchd_range():
+    bridge = json.dumps([{"ifname": "br_default", "vlans": []}])
+    reserved = json.dumps({"internal": {}, "l3-vni-vlan": {"begin": 4000, "end": 4064}})
+
+    with pytest.raises(
+        agentless_net_subnet.SubnetProviderError,
+        match="Cumulus switchd internal reserved VLAN range is malformed",
+    ):
+        agentless_net_subnet.parse_switch_vlan_exclusions(
+            bridge, reserved, "reserved_vlan_range = 3725-3999"
+        )
+
+
 @pytest.mark.parametrize(
     ("bridge", "reserved"),
     [

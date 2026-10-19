@@ -340,6 +340,7 @@ def main() -> None:
                         parse_switch_vlan_exclusions(
                             switch.get("bridge_vlan_output"),
                             switch.get("reserved_vlan_output"),
+                            switch.get("switchd_reserved_vlan_output"),
                         )
                     )
             except SubnetProviderError as error:

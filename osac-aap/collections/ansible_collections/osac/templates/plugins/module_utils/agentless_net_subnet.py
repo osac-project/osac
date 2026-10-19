@@ -74,10 +74,21 @@ def _parse_vlan_range(value: Any, context: str) -> tuple[int, int]:
     return first, last
 
 
+def _parse_switchd_internal_vlan_range(value: Any) -> tuple[int, int]:
+    if not isinstance(value, str) or not value.strip():
+        raise SubnetProviderError("Cumulus switchd internal reserved VLAN range is missing")
+    match = re.fullmatch(r"resv_vlan_range\s*=\s*([0-9]+-[0-9]+)", value.strip())
+    if match is None:
+        raise SubnetProviderError("Cumulus switchd internal reserved VLAN range is malformed")
+    return _parse_vlan_range(match.group(1), "internal reserved VLAN")
+
+
 def parse_switch_vlan_exclusions(
-    bridge_vlan_output: str, reserved_vlan_output: str
+    bridge_vlan_output: str,
+    reserved_vlan_output: str,
+    switchd_reserved_vlan_output: str | None = None,
 ) -> set[int]:
-    """Parse one switch's active VLAN memberships and NVUE reserved ranges."""
+    """Parse VLAN memberships and reserved ranges from Cumulus switch output."""
     try:
         interfaces = json.loads(bridge_vlan_output)
         reserved = json.loads(reserved_vlan_output)
@@ -115,15 +126,26 @@ def parse_switch_vlan_exclusions(
 
     if not isinstance(reserved, dict):
         raise SubnetProviderError("Cumulus reserved VLAN JSON is malformed")
-    internal = reserved.get("internal")
+    internal = reserved.get("internal", {})
     l3_vni = reserved.get("l3-vni-vlan")
-    if not isinstance(internal, dict) or "range" not in internal:
-        raise SubnetProviderError("Cumulus internal reserved VLAN range is missing")
+    if not isinstance(internal, dict):
+        raise SubnetProviderError("Cumulus internal reserved VLAN JSON is malformed")
     if not isinstance(l3_vni, dict) or "begin" not in l3_vni or "end" not in l3_vni:
         raise SubnetProviderError("Cumulus L3-VNI reserved VLAN range is missing")
 
-    for value in _nvue_variants(internal["range"], "internal reserved VLAN").values():
-        first, last = _parse_vlan_range(value, "internal reserved VLAN")
+    if "range" in internal:
+        internal_ranges = _nvue_variants(internal["range"], "internal reserved VLAN").values()
+        parsed_ranges = [
+            _parse_vlan_range(value, "internal reserved VLAN") for value in internal_ranges
+        ]
+    else:
+        if switchd_reserved_vlan_output is None:
+            raise SubnetProviderError(
+                "Cumulus internal reserved VLAN range is missing from NVUE and switchd.conf"
+            )
+        parsed_ranges = [_parse_switchd_internal_vlan_range(switchd_reserved_vlan_output)]
+
+    for first, last in parsed_ranges:
         excluded.update(range(first, last + 1))
 
     begins = _nvue_variants(l3_vni["begin"], "L3-VNI reserved VLAN begin")

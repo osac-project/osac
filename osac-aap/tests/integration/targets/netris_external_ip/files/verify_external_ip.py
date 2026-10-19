@@ -59,7 +59,6 @@ POOL_CIDR = "192.0.2.0/24"
 LEGACY_POOL_NAME = "netris-eip-legacy-pool"
 LEGACY_ALLOC_PREFIX = "198.51.100.0/30"
 LEGACY_ALLOCATED = "198.51.100.1"
-UNUSABLE_KUBECONFIG = "/tmp/osac-eip-no-kubeconfig"
 SUBPROCESS_TIMEOUT = 90
 BARRIER_TIMEOUT = 10
 DELETION_POLL_RETRIES = 20
@@ -444,6 +443,13 @@ class ExternalIPPlaybookTests(unittest.TestCase):
     @classmethod
     def _create_kind_fixtures(cls):
         """Apply the namespace, pool, and ExternalIP CRs; capture identity."""
+        # Write an intentionally invalid kubeconfig so v1 child jobs cannot
+        # reach the API even if a stale file exists at a fixed path.
+        with tempfile.NamedTemporaryFile(
+            "w", suffix="-kubeconfig", delete=False
+        ) as handle:
+            handle.write("apiVersion: v1\nkind: Config\n")
+        cls.unusable_kubeconfig = handle.name
         documents = [
             {
                 "apiVersion": "v1",
@@ -569,8 +575,8 @@ class ExternalIPPlaybookTests(unittest.TestCase):
         if isolated:
             # Prove v1 jobs never reach Kubernetes: unusable credentials
             # plus a loopback sentinel for any K8S_AUTH_HOST request.
-            env["KUBECONFIG"] = UNUSABLE_KUBECONFIG
-            env["K8S_AUTH_KUBECONFIG"] = UNUSABLE_KUBECONFIG
+            env["KUBECONFIG"] = cls.unusable_kubeconfig
+            env["K8S_AUTH_KUBECONFIG"] = cls.unusable_kubeconfig
             env["K8S_AUTH_HOST"] = self.sentinel_url
         return env
 

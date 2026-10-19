@@ -19,6 +19,7 @@ package integration
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -64,7 +65,12 @@ func parseNetrisConfigMaps(rendered string) map[string]netrisManagerConfigMapDat
 			Data map[string]string `yaml:"data"`
 		}
 		if err := decoder.Decode(&manifest); err != nil {
-			break
+			if err == io.EOF {
+				break
+			}
+			GinkgoWriter.Printf(
+				"skipping malformed rendered document: %v\n", err)
+			continue
 		}
 		if manifest.Kind != "ConfigMap" || manifest.Metadata.Name != netrisManagerConfigMap {
 			continue

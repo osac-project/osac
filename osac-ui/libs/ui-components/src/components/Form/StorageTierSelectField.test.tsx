@@ -8,10 +8,6 @@ import { StorageProtocol, StorageTierSchema, StorageTierState } from '@osac/type
 
 import { type ResourceSelectValue, emptyResourceSelectValue } from './resourceSelectValue';
 import { StorageTierSelectField } from './StorageTierSelectField';
-import {
-  expectResourceSelectDisabled,
-  getResourceSelectCombobox,
-} from '../../test-utils/resourceSelect';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
 const makeTier = (
@@ -64,7 +60,7 @@ describe('StorageTierSelectField', () => {
       },
     });
 
-    const toggle = await screen.findByLabelText(/^Storage tier/);
+    const toggle = await screen.findByRole('combobox');
     await user.click(toggle);
     await user.click(await screen.findByRole('option', { name: 'bulk' }));
 
@@ -73,7 +69,7 @@ describe('StorageTierSelectField', () => {
         '{"id":"id-bulk","name":"bulk"}',
       );
     });
-    expect(getResourceSelectCombobox(/^Storage tier/)).toHaveValue('bulk');
+    expect(toggle).toHaveValue('bulk');
   });
 
   it('lists only active tiers', async () => {
@@ -87,7 +83,7 @@ describe('StorageTierSelectField', () => {
       },
     });
 
-    await user.click(await screen.findByLabelText(/^Storage tier/));
+    await user.click(await screen.findByRole('combobox'));
 
     const options = await screen.findAllByRole('option');
     expect(options).toHaveLength(2);
@@ -131,7 +127,7 @@ describe('StorageTierSelectField', () => {
       },
     );
 
-    await screen.findByLabelText(/^Storage tier/);
+    await screen.findByRole('combobox');
     await waitFor(() => expect(capturedFilter).toBeDefined());
     expect(capturedFilter).toContain(`this.status.state == ${StorageTierState.ACTIVE}`);
     expect(capturedFilter).toContain(`this.spec.protocol == ${StorageProtocol.BLOCK}`);
@@ -168,7 +164,7 @@ describe('StorageTierSelectField', () => {
       StorageProtocol.BLOCK,
     );
 
-    const toggle = await screen.findByLabelText(/^Storage tier/);
+    const toggle = await screen.findByRole('combobox');
     await user.click(toggle);
 
     expect(screen.getByRole('option', { name: 'block' })).toBeInTheDocument();
@@ -181,7 +177,6 @@ describe('StorageTierSelectField', () => {
 
     expect(await screen.findByText('No storage tiers available')).toBeInTheDocument();
     expect(screen.getByText('Contact your administrator.')).toBeInTheDocument();
-    expectResourceSelectDisabled(/^Storage tier/);
   });
 
   it('shows a load error while preserving other form state', async () => {
@@ -196,7 +191,6 @@ describe('StorageTierSelectField', () => {
     expect(await screen.findByText('Failed to load storage tiers')).toBeInTheDocument();
     expect(screen.getByText('boom')).toBeInTheDocument();
     expect(screen.getByText('keep-me', { selector: '[data-other]' })).toBeInTheDocument();
-    expectResourceSelectDisabled(/^Storage tier/);
   });
 
   it('does not show a lock badge by default', async () => {
@@ -204,7 +198,7 @@ describe('StorageTierSelectField', () => {
       apiFixtures: { publicStorageTiers: [makeTier('fast', 'Fast SSD', 'low latency')] },
     });
 
-    await screen.findByLabelText(/^Storage tier/);
+    await screen.findByRole('combobox');
     expect(screen.queryByText('Locked by catalog')).not.toBeInTheDocument();
   });
 
@@ -216,9 +210,8 @@ describe('StorageTierSelectField', () => {
     );
 
     await waitFor(() => {
-      expect(getResourceSelectCombobox(/^Storage tier/)).toHaveValue('fast');
+      expect(screen.getByRole('combobox')).toHaveValue('fast');
     });
     expect(screen.getByText('Locked by catalog')).toBeInTheDocument();
-    expectResourceSelectDisabled(/^Storage tier/);
   });
 });

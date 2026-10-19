@@ -597,7 +597,7 @@ var _ = Describe("registered SSH key resolution", func() {
 		Expect(resolutionErr.Permanent).To(Equal(permanent))
 		Expect(resolutionErr.Reason).To(Equal(reason))
 	},
-		Entry("not found", codes.NotFound, false, "SecretNotFound"),
+		Entry("not found", codes.NotFound, true, "SecretNotFound"),
 		Entry("invalid", codes.InvalidArgument, true, "SecretInvalid"),
 		Entry("unavailable", codes.Unavailable, false, ""),
 		Entry("deadline", codes.DeadlineExceeded, false, ""),

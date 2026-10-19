@@ -214,6 +214,44 @@ var _ = Describe("RegisterReferenceLookups", func() {
 		Entry("private update default", "private", "Update", "editable"),
 	)
 
+	DescribeTable("leaves BMI ssh_key references for the project-scoped handler to resolve",
+		func(layer, method string) {
+			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+			tenancy, err := auth.NewGuestTenancyLogic().SetLogger(logger).Build()
+			Expect(err).ToNot(HaveOccurred())
+			v, err := newReferenceValidator(logger, tenancy, prometheus.NewRegistry())
+			Expect(err).ToNot(HaveOccurred())
+
+			prefix := "osac." + layer + ".v1."
+			requestType, err := protoregistry.GlobalTypes.FindMessageByName(
+				protoreflect.FullName(prefix + "BareMetalInstances" + method + "Request"))
+			Expect(err).ToNot(HaveOccurred())
+			request := requestType.New().Interface()
+			body := `{"object":{"spec":{"sshKey":{"name":"unresolved-key","project":"wherever"}}}}`
+			if method == "Update" {
+				body = `{"object":{"id":"bmi-id","spec":{"sshKey":{"name":"unresolved-key","project":"wherever"}}},"updateMask":"spec.sshKey"}`
+			}
+			Expect(protojson.Unmarshal([]byte(body), request)).To(Succeed())
+			original := proto.Clone(request)
+
+			called := false
+			_, err = v.UnaryServer(ctx, request, &grpc.UnaryServerInfo{
+				FullMethod: "/" + prefix + "BareMetalInstances/" + method,
+			}, func(_ context.Context, actual any) (any, error) {
+				called = true
+				Expect(proto.Equal(actual.(proto.Message), original)).To(BeTrue(),
+					"interceptor must not resolve or mutate spec.ssh_key")
+				return "ok", nil
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(called).To(BeTrue(), "ssh_key must reach the handler for project-scoped resolution")
+		},
+		Entry("public create", "public", "Create"),
+		Entry("private create", "private", "Create"),
+		Entry("public update", "public", "Update"),
+		Entry("private update", "private", "Update"),
+	)
+
 	It("leaves BMI Create network references for the tenant-scoped handler to resolve", func() {
 		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 		tenancy, err := auth.NewGuestTenancyLogic().SetLogger(logger).Build()
@@ -316,6 +354,9 @@ func isHandlerOwnedReferenceUse(use referenceUse) bool {
 	switch use.typeName {
 	case "osac.private.v1.SecretReference", "osac.public.v1.SecretReference":
 		if slices.Contains(computeInstanceSSHKeyMethods(), use.method) && use.path == "object.spec.ssh_key" {
+			return true
+		}
+		if slices.Contains(bareMetalInstanceSSHKeyMethods(), use.method) && use.path == "object.spec.ssh_key" {
 			return true
 		}
 		return slices.Contains(catalogAuthoringMethods(), use.method) &&

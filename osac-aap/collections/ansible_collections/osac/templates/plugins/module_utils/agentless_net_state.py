@@ -31,13 +31,17 @@ from ansible_collections.osac.templates.plugins.module_utils.agentless_net_netwo
     run_command,
 )
 from ansible_collections.osac.templates.plugins.module_utils.agentless_net_subnet import (
+    DHCP_MAC_RE,
     MAX_VLAN_ID,
     MIN_VLAN_ID,
     SubnetProviderError,
     cleanup_virtual_network_dhcp,
+    dhcp_lease_path,
     ensure_subnet_data_plane,
+    find_active_dhcp_lease,
     preflight_dhcp_supervisor,
     prepare_subnet_delete_data_plane,
+    read_lease_file_read_only,
 )
 
 SCHEMA_VERSION = 1
@@ -913,6 +917,53 @@ class StateStore:
             if entry is not None and entry["tenant_id"] != tenant_id:
                 raise StateError("Subnet tenant does not match saved state")
             return entry
+
+    def query_dhcp_lease(
+        self,
+        uid: str,
+        tenant_id: str,
+        mac_address: str,
+        *,
+        now: int | None = None,
+    ) -> dict[str, str] | None:
+        """Read the active DHCP lease for one ready Subnet and NIC MAC."""
+        if not _is_canonical_uuid(uid):
+            raise StateError("Subnet UID must be a canonical UUID")
+        if not _is_valid_tenant_id(tenant_id):
+            raise StateError("Subnet tenant ID is required")
+        if not isinstance(mac_address, str) or not DHCP_MAC_RE.fullmatch(mac_address):
+            raise StateError("DHCP lease query requires a valid NIC MAC address")
+
+        with self._locked_database(create=False, read_only=True) as connection:
+            if connection is None:
+                return None
+            initial_subnet = self._subnet_for_uid(connection, uid)
+            if initial_subnet is None:
+                return None
+            if initial_subnet["tenant_id"] != tenant_id:
+                raise StateError("Subnet tenant does not match saved state")
+            parent_uid = initial_subnet["virtual_network_uid"]
+
+        # Subnet reconciliation and deletion hold this same parent lock while
+        # changing DHCP state and the lease file. Re-read the allocation after
+        # acquiring it so a concurrent delete cannot turn a stale snapshot into
+        # a result for a removed Subnet.
+        with self._resource_locked(parent_uid):
+            with self._locked_database(create=False, read_only=True) as connection:
+                if connection is None:
+                    return None
+                subnet = self._subnet_for_uid(connection, uid)
+                if subnet is None:
+                    return None
+                if subnet["tenant_id"] != tenant_id:
+                    raise StateError("Subnet tenant does not match saved state")
+                if subnet["phase"] != "ready":
+                    raise StateError("DHCP lease lookup requires a ready Subnet")
+                parent = self._entry_for_uid(connection, parent_uid)
+                if parent is None or parent["tenant_id"] != tenant_id:
+                    raise StateError("Subnet parent tenant does not match saved state")
+            contents = read_lease_file_read_only(dhcp_lease_path(parent_uid))
+            return find_active_dhcp_lease(contents, subnet, mac_address, now=now)
 
     def reserve_subnet(
         self,

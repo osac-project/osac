@@ -462,6 +462,8 @@ Touched-area requirements: [component guide](../osac-aap/AGENTS.md#integration-t
 | Unit ([DEV] OSAC-6306) | `tests/unit/test_agentless_network_state.py`; included by `uv run pytest tests/unit` | Current SQLite schema-v1 initialization and validation, UID-owned pool registration/deletion, identity preservation, and rejection of incompatible schemas without migration | SQLite is real and isolated in temporary files. `ip`, systemd/Supervisor, dnsmasq, namespaces, switches, and AAP are not used by pool-state operations. |
 | Contract | `tests/integration/targets/agentless_net_stub/tasks/baseline.yml`; from `tests/integration/` run `ansible-playbook targets/agentless_net_stub/tasks/baseline.yml -e '@common_vars.yml'` | Fresh Ansible processes run `files/validate_vn_inventory.yml`: real environment lookup, YAML parsing, Cumulus/trunk validation, password rejection, and node/switch registration | AAP, SSH, and Linux/switch provider operations are omitted. |
 | Component integration | `tests/integration/targets/agentless_net_subnet/tasks/baseline.yml`; from `tests/integration/` run `ansible-playbook targets/agentless_net_subnet/tasks/baseline.yml -e '@common_vars.yml'` | Real Kind namespace and VirtualNetwork CR, status-subresource update, and validation of the operator-supplied parent Fulfillment UUID, Kubernetes UID, Ready phase, and tenant | Operator reconciliation, AAP, managed-node SSH, Cumulus switches, Linux VLAN interfaces, and DHCP are omitted. |
+| Unit ([DEV] OSAC-1562) | `tests/unit/test_agentless_network_state.py` and `tests/unit/test_agentless_net_subnet.py`; included by `uv run pytest tests/unit` | Read-only Subnet/parent ownership validation, active dnsmasq lease matching by normalized NIC MAC and DHCP range, expiry, ambiguous/malformed records, secure file access, and unchanged provider state | SQLite, lease files, clock, and provider command boundaries are local fixtures. AAP and switches are omitted. |
+| Contract ([DEV] OSAC-1562) | `tests/integration/targets/agentless_net_attachment/tasks/baseline.yml`; included by `make test` | Real Ansible role inventory loading and host/interface mapping validation, including duplicate access-port claims and trunk overlap | No AAP controller, Kubernetes API, SSH, switch commands, or DHCP is used. The deployed lab owns the full attachment/discovery flow. |
 | Component integration ([DEV] OSAC-6307) | `tests/integration/targets/agentless_net_external_ip/tasks/baseline.yml`; included by `make test` | Real Kind CR fixtures, top-level dispatcher playbooks, JSON result artifacts, and temporary SQLite reservations; ExternalIP jobs receive unusable Kubernetes credentials | AAP server, operator reconciliation, SSH, switches, and external traffic are omitted. |
 | Component integration ([DEV] OSAC-6306) | `tests/integration/targets/agentless_net_external_ip_pool/tasks/baseline.yml`; after `./setup_test_env.sh`, from `tests/integration/` run `KUBECONFIG="$PWD/kubeconfig-osac-test" K8S_AUTH_KUBECONFIG="$PWD/kubeconfig-osac-test" uv run ansible-playbook targets/agentless_net_external_ip_pool/tasks/baseline.yml -e '@common_vars.yml'` | Real Kind namespace and ExternalIPPool CRs; existing top-level pool playbooks and dispatcher; local Ansible execution of the state module; temporary SQLite identity, retry, identity-checked deletion, and deletion idempotence | No operator reconciliation, deployed AAP, SSH, switches, or network/provider commands. `setup_test_env.sh` creates the dedicated Kind cluster and installs the repository CRDs. |
 | Component integration ([DEV] OSAC-5376) | `tests/integration/targets/netris_subnet_delete/tasks/baseline.yml`; from `osac-aap/` run `make test`, or after `./setup_test_env.sh` from `tests/integration/` run `KUBECONFIG="$PWD/kubeconfig-osac-test" K8S_AUTH_KUBECONFIG="$PWD/kubeconfig-osac-test" uv run ansible-playbook targets/netris_subnet_delete/tasks/baseline.yml -e '@common_vars.yml'` | Real top-level Subnet delete playbook dispatch into `osac.templates.netris` through the `osac.openshift.io/implementation-strategy` annotation, real Netris vnet/ipam roles against a fake Netris HTTP endpoint, and real Kind ConfigMap persistence; ordered V-Net to IPAM to ConfigMap cleanup, success on observed V-Net or IPAM absence, and failure on non-404 provider errors | Real Kind API and ConfigMaps; the Netris HTTP endpoint is a test fixture recording method/path order only; no deployed AAP, operator, switches, or real provider. `setup_test_env.sh` creates the dedicated Kind cluster. |
@@ -492,16 +494,17 @@ applicable integration tests separately to validate workflow behavior.
 
 ### Coverage gaps
 
-Subnet creation, real DHCP client leases, same-Subnet L2 traffic, service
-restart, retry recovery, `/30` addressing, lifecycle, and peer-preserving
-cleanup require the deployed lab journey owned by the `e2e` branch and tracked
-by [DEV OSAC-5530](https://redhat.atlassian.net/browse/OSAC-5530). The lab uses
-real deployed Fulfillment/database/operator/AAP/SSH/Linux/dnsmasq/Cumulus VX
-components and test client containers; it does not establish physical-hardware,
-BMaaS lease-status, NAT, or full-install CI coverage. Unit and Kind checks cover
-state logic, inventory contract, and parent mapping only. AgentlessNet VN
-create/retry/delete through deployed AAP/SSH and isolation of overlapping VNs
-remain broader provider-coverage gaps tracked under [Feature OSAC-3664](https://redhat.atlassian.net/browse/OSAC-3664)
+Subnet lifecycle, real DHCP client leases, same-Subnet L2 traffic, service
+restart, retry recovery, `/30` addressing, peer-preserving cleanup, BMI-shaped
+access-port attachment, and AAP DHCP lease discovery require the deployed lab
+journey owned by the `e2e` branch and tracked by [DEV OSAC-5530](https://redhat.atlassian.net/browse/OSAC-5530)
+and [Feature OSAC-1562](https://redhat.atlassian.net/browse/OSAC-1562). The lab
+uses deployed Fulfillment/database/operator/AAP/SSH/Linux/dnsmasq/Cumulus VX
+components and untagged test clients. It does not establish physical-hardware,
+BMI provisioning/reboot/status feedback, ExternalIPAttachment DNAT, NAT, or
+full-install CI coverage. Unit and contract tests cover lease lookup and
+inventory validation only. ExternalIPAttachment and broader fabric-manager
+coverage remain tracked under [Feature OSAC-3664](https://redhat.atlassian.net/browse/OSAC-3664)
 and [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) /
 [OSAC-4850](https://redhat.atlassian.net/browse/OSAC-4850).
 

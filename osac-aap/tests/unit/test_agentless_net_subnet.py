@@ -121,6 +121,102 @@ def test_parse_switch_vlan_exclusions_rejects_malformed_switchd_range():
 
 
 @pytest.mark.parametrize(
+    ("contents", "mac_address", "now", "expected"),
+    [
+        (
+            b"200 aa:bb:cc:dd:ee:ff 10.20.1.22 client-a *\n",
+            "AA:BB:CC:DD:EE:FF",
+            100,
+            {"ip_address": "10.20.1.22", "mac_address": "aa:bb:cc:dd:ee:ff"},
+        ),
+        (
+            b"0 aa:bb:cc:dd:ee:ff 10.20.1.22 client-a *\n",
+            "aa:bb:cc:dd:ee:ff",
+            100,
+            {"ip_address": "10.20.1.22", "mac_address": "aa:bb:cc:dd:ee:ff"},
+        ),
+        (
+            b"100 aa:bb:cc:dd:ee:ff 10.20.1.22 client-a *\n",
+            "aa:bb:cc:dd:ee:ff",
+            100,
+            None,
+        ),
+        (
+            b"200 aa:bb:cc:dd:ee:ff 10.20.2.22 client-a *\n",
+            "aa:bb:cc:dd:ee:ff",
+            100,
+            None,
+        ),
+        (
+            b"200 02:00:00:00:00:02 10.20.1.22 client-a *\n",
+            "aa:bb:cc:dd:ee:ff",
+            100,
+            None,
+        ),
+    ],
+)
+def test_find_active_dhcp_lease_matches_mac_range_and_expiry(
+    contents, mac_address, now, expected
+):
+    subnet = subnet_entry(SUBNET_A_UID, "10.20.1.0/24", 100)
+
+    result = agentless_net_subnet.find_active_dhcp_lease(
+        contents, subnet, mac_address, now=now
+    )
+
+    assert result == expected
+
+
+def test_find_active_dhcp_lease_rejects_ambiguous_records():
+    subnet = subnet_entry(SUBNET_A_UID, "10.20.1.0/24", 100)
+    contents = (
+        b"200 aa:bb:cc:dd:ee:ff 10.20.1.22 client-a *\n"
+        b"300 AA:BB:CC:DD:EE:FF 10.20.1.23 client-a *\n"
+    )
+
+    with pytest.raises(agentless_net_subnet.SubnetProviderError, match="multiple active"):
+        agentless_net_subnet.find_active_dhcp_lease(
+            contents, subnet, "aa:bb:cc:dd:ee:ff", now=100
+        )
+
+
+def test_find_active_dhcp_lease_rejects_bad_mac_and_malformed_file():
+    subnet = subnet_entry(SUBNET_A_UID, "10.20.1.0/24", 100)
+
+    with pytest.raises(agentless_net_subnet.SubnetProviderError, match="valid NIC MAC"):
+        agentless_net_subnet.find_active_dhcp_lease(b"", subnet, "not-a-mac", now=100)
+    with pytest.raises(agentless_net_subnet.SubnetProviderError, match="malformed"):
+        agentless_net_subnet.find_active_dhcp_lease(
+            b"malformed\n", subnet, "aa:bb:cc:dd:ee:ff", now=100
+        )
+
+
+def test_read_lease_file_read_only_requires_initialized_private_regular_file(tmp_path):
+    lease_dir = tmp_path / "dhcp" / VN_UID
+    lease_dir.mkdir(parents=True, mode=0o700)
+    lease_dir.chmod(0o700)
+    marker = lease_dir / ".initialized"
+    marker.write_text("initialized\n")
+    marker.chmod(0o600)
+    lease_file = lease_dir / "dnsmasq.leases"
+    contents = b"200 aa:bb:cc:dd:ee:ff 10.20.1.22 client-a *\n"
+    lease_file.write_bytes(contents)
+    lease_file.chmod(0o600)
+
+    assert agentless_net_subnet.read_lease_file_read_only(lease_file) == contents
+    assert lease_file.stat().st_mode & 0o777 == 0o600
+
+    lease_file.chmod(0o644)
+    with pytest.raises(agentless_net_subnet.SubnetProviderError, match="unsafe"):
+        agentless_net_subnet.read_lease_file_read_only(lease_file)
+
+    lease_file.unlink()
+    lease_file.symlink_to(marker)
+    with pytest.raises(agentless_net_subnet.SubnetProviderError, match="safely open"):
+        agentless_net_subnet.read_lease_file_read_only(lease_file)
+
+
+@pytest.mark.parametrize(
     ("bridge", "reserved"),
     [
         ("not-json", '{"internal":{"range":"10-20"},"l3-vni-vlan":{"begin":30,"end":40}}'),

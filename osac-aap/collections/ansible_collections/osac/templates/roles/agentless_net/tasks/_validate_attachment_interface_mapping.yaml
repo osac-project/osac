@@ -1,0 +1,24 @@
+---
+- name: Validate AgentlessNet host interface mapping
+  ansible.builtin.assert:
+    that:
+      - _agentless_net_interface_mapping.value is mapping
+      - _agentless_net_interface_mapping.value.get('switch', '') is string
+      - _agentless_net_interface_mapping.value.get('port', '') is string
+      - _agentless_net_interface_mapping.value.get('switch', '') in _agentless_net_inventory_switch_hosts
+      - _agentless_net_interface_mapping.value.get('port', '') is match('^swp[0-9]+$')
+      - >-
+        _agentless_net_interface_mapping.value.port not in
+        _agentless_net_inventory_switch_hosts[_agentless_net_interface_mapping.value.switch].get('trunk_ports', [])
+    fail_msg: >-
+      AgentlessNet attachment inventory must map every host interface to one
+      safe, non-trunk Cumulus switch port.
+  no_log: true
+
+- name: Record the claimed switch port
+  ansible.builtin.set_fact:
+    _agentless_net_attachment_port_claims: >-
+      {{ _agentless_net_attachment_port_claims
+         + [_agentless_net_interface_mapping.value.switch ~ '/' ~
+            _agentless_net_interface_mapping.value.port] }}
+  no_log: true

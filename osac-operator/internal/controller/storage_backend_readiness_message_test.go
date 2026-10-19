@@ -34,11 +34,11 @@ func TestFormatStorageBackendReadinessMessage(t *testing.T) {
 		{
 			name: "partial readiness lists ready and not-ready backends in stable order",
 			statuses: []v1alpha1.StorageBackendStatus{
-				{Name: "vast", Provider: "ceph", Ready: false},
+				{Name: "vast", Provider: "pure-flashblade", Ready: false},
 				{Name: "local", Provider: "lvms", Ready: true},
 				{Name: "block", Provider: "csi", Ready: true},
 			},
-			want: "Hub Secret readiness by backend: ready (2): block: csi, local: lvms; not ready (1): vast: ceph",
+			want: "Hub Secret readiness by backend: ready (2): block: csi, local: lvms; not ready (1): vast: pure-flashblade",
 		},
 		{
 			name: "no backend Hub Secrets are ready",

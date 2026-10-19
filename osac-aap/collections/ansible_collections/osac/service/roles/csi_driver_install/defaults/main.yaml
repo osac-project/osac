@@ -18,14 +18,31 @@ csi_driver_install_chart_version: "0.0.1"
 csi_driver_install_namespace: "osac-csi"
 csi_driver_install_backends_namespace: "osac-csi-backends"
 
-# Vendors the csi-driver chart knows how to enable. Dispatched providers
-# outside this list are logged and skipped rather than failing the whole
-# install, since storage_provider's own provider validation is separate
-# from what this chart happens to support today.
+# Product routing keys the csi-driver chart can map to its vendor CSI drivers.
+# Dispatched providers outside this list are logged and skipped rather than
+# failing the whole install.
 csi_driver_install_supported_vendors:
   - vast
+  - netapp
+  - pure-flashblade
+  - pure-flasharray
+  # Legacy route aliases retained for already-provisioned resources.
+  - pure
+  - ontap
+  - trident
 
-# Per-vendor node CSI socket directory, mirroring the csi-driver chart's own
+# Provider product key to csi-backends chart vendor key. The product key remains
+# the OSAC routing alias; multiple products may share one vendor CSI driver.
+csi_driver_install_provider_vendor_names:
+  vast: vast
+  netapp: trident
+  pure-flashblade: pure
+  pure-flasharray: pure
+  pure: pure
+  ontap: trident
+  trident: trident
+
+# Per-provider node CSI socket directory, mirroring the csi-driver chart's own
 # vendors.<name>.node.socketPath defaults (osac-csi-driver/charts/csi-driver/
 # values.yaml). These are chart-version-invariant constants, so the role reads
 # them from here instead of fetching the chart's default values over the OCI
@@ -33,6 +50,13 @@ csi_driver_install_supported_vendors:
 # socketPath ever changes there; the role appends '/csi.sock' to each.
 csi_driver_install_vendor_node_socket_paths:
   vast: /var/lib/kubelet/plugins/csi.vast.vastdata.com
+  netapp: /var/lib/kubelet/plugins/csi.trident.netapp.io
+  pure-flashblade: /var/lib/kubelet/plugins/csi.pure.purestorage.com
+  pure-flasharray: /var/lib/kubelet/plugins/csi.pure.purestorage.com
+  # Legacy route aliases retained for already-provisioned resources.
+  pure: /var/lib/kubelet/plugins/csi.pure.purestorage.com
+  ontap: /var/lib/kubelet/plugins/csi.trident.netapp.io
+  trident: /var/lib/kubelet/plugins/csi.trident.netapp.io
 
 # Local-tier StorageClass creation is independent of Helm installation and
 # network-vendor enablement: LVMS has no vendor controller Service.

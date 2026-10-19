@@ -27,10 +27,8 @@
       A dispatched tier has an unsupported protocol. The ONTAP provider is
       block-only; Trident serves these tiers through the ontap-san driver.
       Supported protocols: block.
-  loop: "{{ _provider_tiers }}"
-  loop_control:
-    label: "storage-tier"
-  when: item.protocol not in ['block']
+  when: >-
+    (_provider_tiers | map(attribute='protocol') | reject('equalto', 'block') | list | length) > 0
   no_log: true
 
 - name: Fail if any dispatched tier is missing backend_id
@@ -39,10 +37,16 @@
       A dispatched tier has no backend_id. Every tier dispatched to the
       ONTAP provider must reference the backend_id its connection details
       are keyed by.
-  loop: "{{ _provider_tiers }}"
-  loop_control:
-    label: "storage-tier"
-  when: item.backend_id is not defined or item.backend_id is none or item.backend_id | string | length == 0
+  when: >-
+    (
+      _provider_tiers | default([])
+      | selectattr('backend_id', 'defined')
+      | map(attribute='backend_id')
+      | select('string')
+      | map('trim')
+      | reject('equalto', '')
+      | list | length
+    ) != (_provider_tiers | default([]) | length)
   no_log: true
 
 - name: Fail if sanType is not a valid Trident SAN transport

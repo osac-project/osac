@@ -19,19 +19,16 @@
     msg: >-
       Every tier dispatched to the ONTAP provider must provide a non-empty
       string backend_id before teardown can run.
-  loop: "{{ _provider_tiers | default([]) }}"
-  loop_control:
-    label: "storage-tier"
   when: >-
-    item.backend_id is not defined or
-    item.backend_id is none or
-    item.backend_id is not string or
-    item.backend_id | length == 0
-  no_log: true
-
-- name: Compute the dispatched backend ids
-  ansible.builtin.set_fact:
-    _ontap_backend_ids: "{{ _provider_tiers | default([]) | map(attribute='backend_id') | select('string') | unique | list }}"
+    (
+      _provider_tiers | default([])
+      | selectattr('backend_id', 'defined')
+      | map(attribute='backend_id')
+      | select('string')
+      | map('trim')
+      | reject('equalto', '')
+      | list | length
+    ) != (_provider_tiers | default([]) | length)
   no_log: true
 
 - name: Fail if no backend ids could be resolved
@@ -39,7 +36,8 @@
     msg: >-
       Could not resolve any backend_id from the dispatched tiers. The ONTAP
       provider requires backend_id on every tier.
-  when: _ontap_backend_ids | length == 0
+  when: >-
+    (_provider_tiers | default([]) | map(attribute='backend_id') | select('string') | map('trim') | reject('equalto', '') | unique | list | length) == 0
   no_log: true
 
 - name: Report retention of pre-provisioned ONTAP backend resources

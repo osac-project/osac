@@ -219,14 +219,14 @@ template role with the filtered tier subset.
    - `tasks/teardown_backend.yaml` — remove or release backend resources and hub
      lifecycle Secrets.
 
-5. **Credential isolation:** Admin credentials (e.g., VAST VMS admin) must NEVER
+4. **Credential isolation:** Admin credentials (e.g., VAST VMS admin) must NEVER
    appear in tenant-namespace K8s Secrets. Provider roles must create per-tenant
    data-plane credentials and use only those in CSI Secrets. Admin credentials
    arrive via the `storage_provider_backend_connections` extra_var (resolved by
    osac-operator from the Tier API and keyed by `backend_id`) — there is no
    env-var or K8s Secret fallback for admin credentials.
 
-6. **Provisioning targets:** Each provider declares only the targets it implements
+5. **Provisioning targets:** Each provider declares only the targets it implements
    via `meta/osac.yaml`. `caas` is currently supported by the `lvms_storage`
    provider (installs LVMS on the guest cluster, creates per-tenant StorageClasses).
    HCP-level targets (`hcp_control_plane`, `hcp_worker_root`, `hcp_data_plane`)

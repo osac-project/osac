@@ -109,6 +109,7 @@ ARGUMENT_SPEC = {
 
 
 def main() -> None:
+    """Run one ExternalIP v1 provider operation with sanitized failures."""
     module = AnsibleModule(argument_spec=ARGUMENT_SPEC, supports_check_mode=True)
     params = module.params
     try:

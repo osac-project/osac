@@ -599,6 +599,31 @@ def test_reconcile_conflict_refreshes_occupancy_and_retries():
     assert client.deleted == []
 
 
+def test_reconcile_excludes_pool_covering_common_subnet_from_occupancy():
+    common = {
+        "id": 202,
+        "name": "common",
+        "prefix": POOL_CIDR,
+        "purpose": "shared-network",
+        "site_id": NETRIS_SITE_ID,
+        "tenant_id": NETRIS_TENANT_ID,
+    }
+    client = FakeNetrisClient(
+        lists=[[common], [common, make_reservation("10.20.0.1")]]
+    )
+    request = make_request()
+
+    result = netris_eip.reconcile(
+        request, client, NETRIS_SITE_ID, NETRIS_TENANT_ID, delay_seconds=0
+    )
+
+    assert result == {"changed": True, "address": "10.20.0.1"}
+    assert client.created == [
+        (f"osac-eip-{RESOURCE_UID}", "10.20.0.1/32", NETRIS_SITE_ID, NETRIS_TENANT_ID)
+    ]
+    assert client.deleted == []
+
+
 def test_reconcile_lost_create_response_reuses_uid_reservation():
     ours = make_reservation("10.20.0.1")
     client = FakeNetrisClient(

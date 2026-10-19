@@ -153,10 +153,13 @@ func TestNetrisExternalIPRegistrationRendering(t *testing.T) {
 		}
 		configMaps, renderErr := netrisRenderedConfigMapsAllowingFailure(umbrellaDir, netrisUmbrellaOverrides()...)
 		if renderErr != nil {
-			// The umbrella chart requires the full deployment value set
-			// (service hostnames, auth credentials, vault) that is injected
-			// at install time, so a standalone render is unavailable.
-			t.Skipf("umbrella-chart rendering gap: the umbrella requires the full deployment value set: %v", renderErr)
+			// The umbrella chart requires secret-backed controller
+			// credentials that are injected at install time, so a
+			// standalone render skips; other render errors fail.
+			if strings.Contains(renderErr.Error(), "service.auth.controllerCredentials must include a secret-backed") {
+				t.Skipf("umbrella-chart rendering gap: %v", renderErr)
+			}
+			t.Fatalf("umbrella chart render failed with the supplied overrides: %v", renderErr)
 		}
 		Expect(configMaps).To(HaveKey(netrisManagerConfigMap))
 		Expect(configMaps[netrisManagerConfigMap].ExternalIPContractVersion).To(Equal("v1"))

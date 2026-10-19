@@ -22,7 +22,7 @@ setup/teardown use the real dedicated test kubeconfig. Concurrent race
 cases coordinate through fixture barriers that expire after 10 seconds and
 fail loudly; child playbooks have a 90 second wall timeout.
 
-Cases I01-I09 need the integrated module and role files from Tasks 2 and 3
+Cases I01-I10 need the integrated module and role files from Tasks 2 and 3
 to turn green; this harness only wires the executable coverage. Requires
 the dedicated ``kubeconfig-osac-test`` Kind environment (see
 ``./setup_test_env.sh`` from tests/integration/).
@@ -45,7 +45,6 @@ from pathlib import Path
 
 import yaml
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from urllib.request import Request, urlopen
 
 OSAC_AAP = Path(__file__).resolve().parents[5]
@@ -1093,6 +1092,34 @@ class ExternalIPPlaybookTests(unittest.TestCase):
             reservations[0]["prefix"].split("/")[0],
         )
         self._assert_no_kubernetes("I09 lost reply hit the Kubernetes sentinel")
+
+    # I10: a non-nat common subnet covering the whole pool does not
+    # exhaust allocation; only nat reservations occupy addresses.
+    def test_i10_pool_covering_common_subnet_does_not_exhaust(self):
+        """I10: pool-covering common subnet does not exhaust allocation."""
+        uid = str(uuid.uuid4())
+        resource = self._constructed_resource(uid)
+        self._scenario(
+            subnets=[
+                {
+                    "id": 4001, "name": "common",
+                    "prefix": POOL_CIDR, "purpose": "shared-network",
+                    "site_id": PROVIDER_SITE_ID,
+                    "tenant_id": PROVIDER_TENANT_ID,
+                }
+            ]
+        )
+        rc, artifact, output = self._run_child(
+            CREATE_PLAYBOOK, self._job_vars(resource)
+        )
+        self.assertEqual(rc, 0, output)
+        self._assert_artifact(
+            artifact, "external_ip.allocate", resource, {"address": "192.0.2.1"}
+        )
+        reservations = self._uid_reservations(uid)
+        self.assertEqual(len(reservations), 1)
+        self.assertEqual(reservations[0]["prefix"], "192.0.2.1/32")
+        self._assert_no_kubernetes("I10 v1 allocate hit the Kubernetes sentinel")
 
 
 if __name__ == "__main__":

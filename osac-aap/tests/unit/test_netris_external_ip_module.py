@@ -37,7 +37,7 @@ from ansible_collections.osac.templates.plugins.module_utils import (  # noqa: E
 )
 
 RESOURCE_UID = "11111111-1111-4111-8111-111111111111"
-COOKIE = "s%3Asecret-cookie-value"
+TEST_COOKIE = "s%3Asecret-cookie-value"
 
 
 def load_module():
@@ -80,7 +80,7 @@ def module_args(**overrides):
         "resource": make_resource(),
         "pool": make_pool(),
         "controller_url": "https://netris.example",
-        "session_cookie": COOKIE,
+        "session_cookie": TEST_COOKIE,
         "site_id": 1,
         "tenant_id": 7,
     }
@@ -182,7 +182,7 @@ def test_provider_failure_is_sanitized(monkeypatch, capsys):
 
     assert result["failed"] is True
     assert result["msg"] == "Netris ExternalIP external_ip.allocate failed (provider_error, HTTP 400)"
-    assert COOKIE not in capsys.readouterr().out
+    assert TEST_COOKIE not in capsys.readouterr().out
 
 
 def test_unknown_response_shape_fails_the_module(monkeypatch, capsys):
@@ -226,7 +226,7 @@ def test_transport_configuration_is_passed_to_fetch_url(monkeypatch):
     client = netris_eip.NetrisSubnetClient(
         module_stub,
         "https://netris.example",
-        COOKIE,
+        TEST_COOKIE,
         timeout=45,
         validate_certs=False,
         ca_path="/tmp/netris-ca.pem",
@@ -236,7 +236,7 @@ def test_transport_configuration_is_passed_to_fetch_url(monkeypatch):
 
     assert records == []
     assert captured["url"] == "https://netris.example/api/v2/ipam/subnets"
-    assert captured["unredirected_headers"]["Cookie"] == f"connect.sid={COOKIE}"
+    assert captured["unredirected_headers"]["Cookie"] == f"connect.sid={TEST_COOKIE}"
     assert captured["timeout"] == 45
     assert captured["ca_path"] == "/tmp/netris-ca.pem"
     assert module_stub.params["validate_certs"] is False
@@ -251,12 +251,12 @@ def test_session_cookie_never_follows_redirects(monkeypatch):
 
     monkeypatch.setattr(netris_eip, "fetch_url", fake_fetch_url)
     client = netris_eip.NetrisSubnetClient(
-        SimpleNamespace(params={}), "https://netris.example", COOKIE
+        SimpleNamespace(params={}), "https://netris.example", TEST_COOKIE
     )
 
     client.list_subnets()
 
-    assert captured["unredirected_headers"]["Cookie"] == f"connect.sid={COOKIE}"
+    assert captured["unredirected_headers"]["Cookie"] == f"connect.sid={TEST_COOKIE}"
 
 
 def _client_with_response(monkeypatch, status, payload=b""):
@@ -270,7 +270,7 @@ def _client_with_response(monkeypatch, status, payload=b""):
 
     monkeypatch.setattr(netris_eip, "fetch_url", fake_fetch_url)
     return (
-        netris_eip.NetrisSubnetClient(SimpleNamespace(params={}), "https://n", COOKIE),
+        netris_eip.NetrisSubnetClient(SimpleNamespace(params={}), "https://n", TEST_COOKIE),
         captured,
     )
 

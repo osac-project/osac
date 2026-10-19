@@ -32,24 +32,28 @@ class NetrisExternalIPError(ValueError):
     """A Netris ExternalIP provider operation failed or could not be verified."""
 
     def __init__(self, message, category="provider_error", http_status=None):
+        """Store the failure category and optional HTTP status."""
         super().__init__(message)
         self.category = category
         self.http_status = http_status
 
 
 def _required_text(value, context: str) -> str:
+    """Return the value, or raise ValueError unless it is nonempty stripped text."""
     if not isinstance(value, str) or not value or value != value.strip():
         raise ValueError(f"{context} must be a nonempty string")
     return value
 
 
 def _positive_int(value, context: str) -> int:
+    """Return the value, or raise ValueError unless it is a positive non-bool int."""
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError(f"{context} must be a positive integer")
     return value
 
 
 def _canonical_ipv4(value, context: str) -> ipaddress.IPv4Network:
+    """Parse a strict canonical IPv4 CIDR string, or raise ValueError."""
     if not isinstance(value, str) or "/" not in value:
         raise ValueError(f"{context} must be a canonical IPv4 CIDR string")
     try:
@@ -136,6 +140,7 @@ def validate_request(resource: dict, pool: dict, operation: str) -> dict:
 
 
 def _occupied_intervals(cidr: ipaddress.IPv4Network, reserved_prefixes) -> list[tuple[int, int]]:
+    """Merge reserved prefixes into sorted inclusive integer intervals."""
     intervals: list[tuple[int, int]] = []
     for prefix in reserved_prefixes:
         network = _canonical_ipv4(prefix, "provider subnet prefix")
@@ -192,6 +197,7 @@ def owned_address(
 def _owned_record(
     request: dict, subnets: list[dict], site_id: int, tenant_id: int
 ) -> dict | None:
+    """Return the validated UID reservation record, or None if absent."""
     matches = []
     for record in subnets:
         if not isinstance(record, dict):
@@ -227,6 +233,7 @@ def _owned_record(
 
 
 def _reservation_address(record: dict) -> str:
+    """Return the network address of a reservation's /32 prefix."""
     return str(ipaddress.ip_network(record["prefix"]).network_address)
 
 
@@ -319,6 +326,7 @@ class NetrisSubnetClient:
         validate_certs: bool = True,
         ca_path: str | None = None,
     ):
+        """Store the controller URL, cookie transport, and TLS options."""
         self._module = module
         self._controller_url = controller_url.rstrip("/")
         self._session_cookie = session_cookie
@@ -327,6 +335,7 @@ class NetrisSubnetClient:
         self._ca_path = ca_path
 
     def _request(self, method: str, path: str, body=None, success_codes=(200,)) -> dict:
+        """Send one JSON request; raise on unexpected status or malformed body."""
         params = getattr(self._module, "params", None)
         if params is not None:
             params["validate_certs"] = self._validate_certs
@@ -368,6 +377,7 @@ class NetrisSubnetClient:
         return parsed
 
     def list_subnets(self) -> list[dict]:
+        """Return normalized subnet records from the Netris IPAM listing."""
         parsed = self._request("GET", SUBNETS_PATH, success_codes=(200,))
         data = parsed.get("data")
         if not isinstance(data, list):
@@ -378,6 +388,7 @@ class NetrisSubnetClient:
         return [_normalize_subnet_record(record) for record in data]
 
     def create_subnet(self, name: str, prefix: str, site_id: int, tenant_id: int):
+        """Create a nat reservation subnet and return its provider id."""
         body = {
             "name": name,
             "prefix": prefix,
@@ -397,10 +408,12 @@ class NetrisSubnetClient:
         return data
 
     def delete_subnet(self, subnet_id: int) -> None:
+        """Delete one subnet by its provider id."""
         self._request("DELETE", f"{SUBNET_PATH}/{subnet_id}", success_codes=(200, 204))
 
 
 def _read_owned(request: dict, client, site_id: int, tenant_id: int):
+    """List provider subnets and resolve the request's owned reservation."""
     subnets = client.list_subnets()
     try:
         owned = _owned_record(request, subnets, site_id, tenant_id)
@@ -410,11 +423,13 @@ def _read_owned(request: dict, client, site_id: int, tenant_id: int):
 
 
 def _pause(delay_seconds: float, attempt: int, max_attempts: int) -> None:
+    """Sleep between retry attempts until the attempt bound is reached."""
     if attempt < max_attempts and delay_seconds > 0:
         time.sleep(delay_seconds)
 
 
 def _reconcile_allocate(request, client, site_id, tenant_id, delay_seconds) -> dict:
+    """Allocate or reuse the UID reservation; return changed + address."""
     wrote = False
     last_error = None
     attempt = 0
@@ -424,7 +439,14 @@ def _reconcile_allocate(request, client, site_id, tenant_id, delay_seconds) -> d
         if owned is not None:
             return {"changed": wrote, "address": _reservation_address(owned)}
         try:
-            address = select_address(request["cidr"], [r["prefix"] for r in subnets])
+            pool_network = ipaddress.ip_network(request["cidr"])
+            occupied = [
+                r["prefix"]
+                for r in subnets
+                if r["purpose"] == RESERVATION_PURPOSE
+                or not pool_network.subnet_of(ipaddress.ip_network(r["prefix"]))
+            ]
+            address = select_address(request["cidr"], occupied)
         except ValueError as error:
             raise NetrisExternalIPError(str(error), category="exhausted") from error
         wrote = True
@@ -455,6 +477,7 @@ def _reconcile_allocate(request, client, site_id, tenant_id, delay_seconds) -> d
 
 
 def _reconcile_release(request, client, site_id, tenant_id, delay_seconds) -> dict:
+    """Delete the UID reservation and confirm absence within the bound."""
     changed = False
     for observation in range(1, MAX_RELEASE_OBSERVATIONS + 1):
         subnets, owned = _read_owned(request, client, site_id, tenant_id)

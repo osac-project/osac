@@ -33,7 +33,6 @@
     validate_certs: "{{ netris_validate_certs | default(true) }}"
     ca_path: "{{ netris_ca_path | default(omit, true) }}"
   register: external_ip_v1_result
-  no_log: true
 
 - name: Report the ExternalIP v1 operation result
   ansible.builtin.set_stats:

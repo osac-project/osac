@@ -81,7 +81,7 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 					Name: fmt.Sprintf("test-sb-%s", uuid.New()),
 				}.Build(),
 				Spec: privatev1.StorageBackendSpec_builder{
-					Provider:    "test",
+					Provider:    "vast",
 					Description: "Test storage backend for subnet tests",
 					Endpoint:    "https://test-backend.example.com",
 					Credentials: privatev1.StorageBackendCredentials_builder{

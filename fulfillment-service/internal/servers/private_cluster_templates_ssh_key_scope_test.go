@@ -110,6 +110,38 @@ var _ = Describe("Cluster template SSH-key Secret scope", func() {
 		Expect(response).To(BeNil())
 	})
 
+	It("revalidates an unchanged key when a masked update changes scope", func() {
+		seedProject("template-project")
+		seedProject("other-project")
+		seedSSHKey("template-key-id", "login-key", "template-project")
+
+		created, err := server.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
+			Object: privatev1.ClusterTemplate_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: "scope-update-template", Project: "template-project",
+				}.Build(),
+				SpecDefaults: privatev1.ClusterTemplateSpecDefaults_builder{
+					SshKey: privatev1.SecretLocalReference_builder{Name: "login-key"}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		response, err := server.Update(ctx, privatev1.ClusterTemplatesUpdateRequest_builder{
+			Object: privatev1.ClusterTemplate_builder{
+				Id: created.GetObject().GetId(),
+				Metadata: privatev1.Metadata_builder{
+					Project: "other-project",
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.project"}},
+		}.Build())
+
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		Expect(status.Convert(err).Message()).To(ContainSubstring("secret 'template-key-id' not found"))
+		Expect(response).To(BeNil())
+	})
+
 	It("canonicalizes a create reference in the template project", func() {
 		seedProject("template-project")
 		seedProject("other-project")

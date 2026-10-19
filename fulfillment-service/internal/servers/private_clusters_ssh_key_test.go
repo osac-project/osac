@@ -47,13 +47,16 @@ func seedSharedClusterProject() {
 }
 
 var _ = Describe("Cluster SSH key Secret references", func() {
-	newServer := func(store vault.SecretStore) *PrivateClustersServer {
+	newServer := func(store vault.SecretStore, hubFetchers ...HubSecretFetcher) *PrivateClustersServer {
 		builder := NewPrivateClustersServer().
 			SetLogger(logger).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy)
 		if store != nil {
 			builder.SetSecretStore(store)
+		}
+		if len(hubFetchers) > 0 {
+			builder.SetHubSecretFetcher(hubFetchers[0])
 		}
 		server, err := builder.Build()
 		Expect(err).ToNot(HaveOccurred())
@@ -230,6 +233,54 @@ var _ = Describe("Cluster SSH key Secret references", func() {
 
 		Expect(server.validateSSHKey(ctx,
 			clusterWithRef(privatev1.SecretLocalReference_builder{Id: "vault-key-id"}.Build()), nil)).To(Succeed())
+	})
+
+	It("loads and validates a direct HUB-backed key", func() {
+		coordinates := map[string]string{
+			CoordinateHubID: "hub-a", CoordinateNamespace: "keys", CoordinateSecretName: "direct-key",
+		}
+		fetcher := NewMockHubSecretFetcher(ctrl)
+		server := newServer(nil, fetcher)
+		seedSecret(server, privatev1.Secret_builder{
+			Id:          "hub-direct-key-id",
+			Metadata:    privatev1.Metadata_builder{Name: "hub-direct-key", Tenant: testTenant}.Build(),
+			Type:        privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+			Backend:     privatev1.SecretBackend_SECRET_BACKEND_HUB,
+			Coordinates: coordinates,
+		}.Build())
+		fetcher.EXPECT().Fetch(gomock.Any(), coordinates).
+			Return(map[string][]byte{"public_key": []byte(clusterTestSSHPublicKey)}, nil)
+		cluster := clusterWithRef(privatev1.SecretLocalReference_builder{Name: "hub-direct-key"}.Build())
+
+		Expect(server.validateSSHKey(ctx, cluster, nil)).To(Succeed())
+		Expect(cluster.GetSpec().GetSshKey().GetId()).To(Equal("hub-direct-key-id"))
+	})
+
+	It("loads and validates an inherited HUB-backed key", func() {
+		coordinates := map[string]string{
+			CoordinateHubID: "hub-a", CoordinateNamespace: "keys", CoordinateSecretName: "inherited-key",
+		}
+		fetcher := NewMockHubSecretFetcher(ctrl)
+		server := newServer(nil, fetcher)
+		seedSharedClusterProject()
+		seedSecret(server, privatev1.Secret_builder{
+			Id: "hub-inherited-key-id",
+			Metadata: privatev1.Metadata_builder{
+				Name: "hub-inherited-key", Tenant: auth.SharedTenant, Project: "offerings.gpu",
+			}.Build(),
+			Type:        privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+			Backend:     privatev1.SecretBackend_SECRET_BACKEND_HUB,
+			Coordinates: coordinates,
+		}.Build())
+		fetcher.EXPECT().Fetch(gomock.Any(), coordinates).
+			Return(map[string][]byte{"public_key": []byte(clusterTestSSHPublicKey)}, nil)
+		cluster := clusterWithRef(privatev1.SecretLocalReference_builder{Name: "hub-inherited-key"}.Build())
+		inheritedScope := privatev1.Metadata_builder{
+			Tenant: auth.SharedTenant, Project: "offerings.gpu",
+		}.Build()
+
+		Expect(server.validateSSHKey(ctx, cluster, inheritedScope)).To(Succeed())
+		Expect(cluster.GetSpec().GetSshKey().GetId()).To(Equal("hub-inherited-key-id"))
 	})
 
 	It("canonicalizes a ClusterTemplate SSH-key default", func() {

@@ -35,6 +35,7 @@ type ClustersServerBuilder struct {
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
 	secretStore       vault.SecretStore
+	hubSecretFetcher  HubSecretFetcher
 }
 
 var _ publicv1.ClustersServer = (*ClustersServer)(nil)
@@ -80,6 +81,12 @@ func (b *ClustersServerBuilder) SetMetricsRegisterer(value prometheus.Registerer
 // SetSecretStore sets the store used to validate Vault-backed SSH-key Secret data.
 func (b *ClustersServerBuilder) SetSecretStore(value vault.SecretStore) *ClustersServerBuilder {
 	b.secretStore = value
+	return b
+}
+
+// SetHubSecretFetcher sets the fetcher used to validate HUB-backed SSH-key Secret data.
+func (b *ClustersServerBuilder) SetHubSecretFetcher(value HubSecretFetcher) *ClustersServerBuilder {
+	b.hubSecretFetcher = value
 	return b
 }
 
@@ -129,6 +136,7 @@ func (b *ClustersServerBuilder) Build() (result *ClustersServer, err error) {
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
 		SetSecretStore(b.secretStore).
+		SetHubSecretFetcher(b.hubSecretFetcher).
 		SetAddOnOperatorResolverFactory(newPublishedScopedAddOnOperatorResourceResolver).
 		SetFilterDesc(objectDesc).
 		Build()

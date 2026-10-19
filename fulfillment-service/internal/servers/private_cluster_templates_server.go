@@ -186,7 +186,10 @@ func (s *PrivateClusterTemplatesServer) Update(ctx context.Context,
 func (s *PrivateClusterTemplatesServer) prepareSSHKeyCandidate(
 	ctx context.Context, current, candidate *privatev1.ClusterTemplate,
 ) error {
-	if current != nil && proto.Equal(current.GetSpecDefaults().GetSshKey(), candidate.GetSpecDefaults().GetSshKey()) {
+	if current != nil &&
+		current.GetMetadata().GetTenant() == candidate.GetMetadata().GetTenant() &&
+		current.GetMetadata().GetProject() == candidate.GetMetadata().GetProject() &&
+		proto.Equal(current.GetSpecDefaults().GetSshKey(), candidate.GetSpecDefaults().GetSshKey()) {
 		return nil
 	}
 	return s.validateSpecDefaultsSSHKey(ctx, candidate)

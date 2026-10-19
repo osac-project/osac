@@ -50,6 +50,7 @@ type PrivateClustersServerBuilder struct {
 	filterDesc                   protoreflect.MessageDescriptor
 	addOnOperatorResolverFactory addOnOperatorResolverFactory
 	secretStore                  vault.SecretStore
+	hubSecretFetcher             HubSecretFetcher
 }
 
 var _ privatev1.ClustersServer = (*PrivateClustersServer)(nil)
@@ -73,6 +74,7 @@ type PrivateClustersServer struct {
 	lifecycle                 *externalIPLifecycle
 	bareMetalInstanceTypesDao *dao.GenericDAO[*privatev1.BareMetalInstanceType]
 	secretStore               vault.SecretStore
+	hubSecretFetcher          HubSecretFetcher
 }
 
 func NewPrivateClustersServer() *PrivateClustersServerBuilder {
@@ -117,6 +119,12 @@ func (b *PrivateClustersServerBuilder) SetAddOnOperatorResolverFactory(value add
 // SetSecretStore sets the store used to validate Vault-backed SSH-key Secret data.
 func (b *PrivateClustersServerBuilder) SetSecretStore(value vault.SecretStore) *PrivateClustersServerBuilder {
 	b.secretStore = value
+	return b
+}
+
+// SetHubSecretFetcher sets the fetcher used to validate HUB-backed SSH-key Secret data.
+func (b *PrivateClustersServerBuilder) SetHubSecretFetcher(value HubSecretFetcher) *PrivateClustersServerBuilder {
+	b.hubSecretFetcher = value
 	return b
 }
 
@@ -284,6 +292,7 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		externalIPAttachmentDao:   externalIPAttachmentDao,
 		secretsDao:                secretsDao,
 		secretStore:               b.secretStore,
+		hubSecretFetcher:          b.hubSecretFetcher,
 		addOnOperators:            addOnOperators,
 		generic:                   generic,
 	}
@@ -741,6 +750,15 @@ func (s *PrivateClustersServer) validateSSHKey(
 		if err != nil {
 			s.logger.ErrorContext(ctx, "Failed to load SSH key Secret from store", "error", err)
 			return grpcstatus.Error(grpccodes.Internal, "failed to resolve ssh_key reference")
+		}
+	}
+	if len(data) == 0 && secret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_HUB {
+		if s.hubSecretFetcher == nil {
+			return grpcstatus.Error(grpccodes.FailedPrecondition, "hub secret retrieval is not configured")
+		}
+		data, err = s.hubSecretFetcher.Fetch(ctx, secret.GetCoordinates())
+		if err != nil {
+			return err
 		}
 	}
 	if err := controllers.ValidateOpenSSHPublicKeySecret(secret, data, identifier); err != nil {

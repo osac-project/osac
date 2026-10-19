@@ -107,6 +107,20 @@ var _ = Describe("Clusters server", func() {
 			Expect(server).ToNot(BeNil())
 		})
 
+		It("passes the HUB Secret fetcher to the private delegate", func() {
+			fetcher := NewMockHubSecretFetcher(ctrl)
+			server, err := NewClustersServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				SetHubSecretFetcher(fetcher).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			delegate, ok := server.private.(*PrivateClustersServer)
+			Expect(ok).To(BeTrue())
+			Expect(delegate.hubSecretFetcher).To(BeIdenticalTo(fetcher))
+		})
+
 		It("Fails if logger is not set", func() {
 			server, err := NewClustersServer().
 				SetAttributionLogic(attribution).

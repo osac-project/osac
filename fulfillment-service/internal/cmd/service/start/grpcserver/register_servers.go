@@ -170,34 +170,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		privatev1.RegisterComputeInstanceCatalogItemsServer(registrar, privateComputeInstanceCatalogItemsServer)
 	}
 
-	if deps.Services.CaaS {
-		deps.Logger.InfoContext(ctx, "Creating clusters server")
-		clustersServer, err := servers.NewClustersServer().
-			SetLogger(deps.Logger).
-			SetAttributionLogic(deps.PublicAttributionLogic).
-			SetTenancyLogic(deps.TenancyLogic).
-			SetMetricsRegisterer(deps.MetricsRegisterer).
-			SetSecretStore(deps.SecretStore).
-			Build()
-		if err != nil {
-			return nil, fmt.Errorf("failed to create clusters server: %w", err)
-		}
-		publicv1.RegisterClustersServer(registrar, clustersServer)
-
-		deps.Logger.InfoContext(ctx, "Creating private clusters server")
-		privateClustersServer, err := servers.NewPrivateClustersServer().
-			SetLogger(deps.Logger).
-			SetAttributionLogic(deps.PrivateAttributionLogic).
-			SetTenancyLogic(deps.TenancyLogic).
-			SetMetricsRegisterer(deps.MetricsRegisterer).
-			SetSecretStore(deps.SecretStore).
-			Build()
-		if err != nil {
-			return nil, fmt.Errorf("failed to create private clusters server: %w", err)
-		}
-		privatev1.RegisterClustersServer(registrar, privateClustersServer)
-	}
-
 	// VMaaS: compute instance templates and compute instances.
 	var privateComputeInstancesServer privatev1.ComputeInstancesServer
 	if deps.Services.VMaaS {
@@ -393,6 +365,36 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create hub secret fetcher: %w", err)
+	}
+
+	if deps.Services.CaaS {
+		deps.Logger.InfoContext(ctx, "Creating clusters server")
+		clustersServer, err := servers.NewClustersServer().
+			SetLogger(deps.Logger).
+			SetAttributionLogic(deps.PublicAttributionLogic).
+			SetTenancyLogic(deps.TenancyLogic).
+			SetMetricsRegisterer(deps.MetricsRegisterer).
+			SetSecretStore(deps.SecretStore).
+			SetHubSecretFetcher(hubSecretFetcher).
+			Build()
+		if err != nil {
+			return nil, fmt.Errorf("failed to create clusters server: %w", err)
+		}
+		publicv1.RegisterClustersServer(registrar, clustersServer)
+
+		deps.Logger.InfoContext(ctx, "Creating private clusters server")
+		privateClustersServer, err := servers.NewPrivateClustersServer().
+			SetLogger(deps.Logger).
+			SetAttributionLogic(deps.PrivateAttributionLogic).
+			SetTenancyLogic(deps.TenancyLogic).
+			SetMetricsRegisterer(deps.MetricsRegisterer).
+			SetSecretStore(deps.SecretStore).
+			SetHubSecretFetcher(hubSecretFetcher).
+			Build()
+		if err != nil {
+			return nil, fmt.Errorf("failed to create private clusters server: %w", err)
+		}
+		privatev1.RegisterClustersServer(registrar, privateClustersServer)
 	}
 
 	// Create the virtual networks server:

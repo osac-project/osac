@@ -24,8 +24,7 @@ csi_driver_install_backends_namespace: "osac-csi-backends"
 csi_driver_install_supported_vendors:
   - vast
   - netapp
-  - pure-flashblade
-  - pure-flasharray
+  - pure
   # Legacy route aliases retained for already-provisioned resources.
   - ontap
   - trident
@@ -35,8 +34,7 @@ csi_driver_install_supported_vendors:
 csi_driver_install_provider_vendor_names:
   vast: vast
   netapp: trident
-  pure-flashblade: pure
-  pure-flasharray: pure
+  pure: pure
   ontap: trident
   trident: trident
 
@@ -49,8 +47,7 @@ csi_driver_install_provider_vendor_names:
 csi_driver_install_vendor_node_socket_paths:
   vast: /var/lib/kubelet/plugins/csi.vast.vastdata.com
   netapp: /var/lib/kubelet/plugins/csi.trident.netapp.io
-  pure-flashblade: /var/lib/kubelet/plugins/csi.pure.purestorage.com
-  pure-flasharray: /var/lib/kubelet/plugins/csi.pure.purestorage.com
+  pure: /var/lib/kubelet/plugins/csi.pure.purestorage.com
   # Legacy route aliases retained for already-provisioned resources.
   ontap: /var/lib/kubelet/plugins/csi.trident.netapp.io
   trident: /var/lib/kubelet/plugins/csi.trident.netapp.io

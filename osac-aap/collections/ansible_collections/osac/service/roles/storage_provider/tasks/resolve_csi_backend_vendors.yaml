@@ -8,7 +8,7 @@
       {% set _ = _vendors.append('vast') -%}
       {% elif _provider in ['netapp', 'ontap', 'trident'] -%}
       {% set _ = _vendors.append('trident') -%}
-      {% elif _provider in ['pure_flashblade', 'pure_flasharray'] -%}
+      {% elif _provider == 'pure' -%}
       {% set _ = _vendors.append('pure') -%}
       {% endif -%}
       {% endfor -%}

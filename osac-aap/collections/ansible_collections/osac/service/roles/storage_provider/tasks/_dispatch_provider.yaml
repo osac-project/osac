@@ -61,7 +61,9 @@
       ansible.builtin.include_role:
         name: >-
           {% set _clean = _current_provider | replace('-', '_') -%}
-          osac.templates.{{ _clean if _clean.endswith('_storage') else (_clean ~ '_storage') }}
+          {% set _csi_managed = ['netapp', 'ontap', 'trident', 'pure'] -%}
+          {% set _role = 'osac_csi_storage' if _clean in _csi_managed else (_clean if _clean.endswith('_storage') else (_clean ~ '_storage')) -%}
+          osac.templates.{{ _role }}
         tasks_from: "{{ _dispatch_action }}"
         public: true
       vars:

@@ -1265,8 +1265,7 @@
         _unique_providers:
           - vast
           - netapp
-          - pure_flashblade
-          - pure_flasharray
+          - pure
           - ontap
           - trident
           - lvms
@@ -1283,3 +1282,36 @@
           - _this_tenant_vendors == ['vast', 'trident', 'pure']
         fail_msg: "Unexpected CSI backend vendor mapping: {{ _this_tenant_vendors }}"
         success_msg: "Product routing keys resolve to their CSI backend vendor names"
+
+- name: Test storage_provider -- CSI products dispatch to the shared CSI storage role
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _storage_provider_tiers:
+      - name: netapp-tier
+        provider: netapp
+      - name: pure-tier
+        provider: pure
+      - name: ontap-tier
+        provider: ontap
+    storage_provider_backend_connections: {}
+    tenant_name: provider-routing-test
+    _all_tenant_configs: {}
+    _dispatch_action: setup
+
+  tasks:
+    - name: Dispatch CSI-managed providers through their shared storage role
+      ansible.builtin.include_tasks: ../tasks/_dispatch_provider.yaml
+      loop:
+        - netapp
+        - pure
+        - ontap
+      loop_control:
+        loop_var: _current_provider
+
+    - name: Verify the shared CSI role preserves each provider identity
+      ansible.builtin.assert:
+        that:
+          - _all_tenant_configs['netapp'].provider == 'netapp'
+          - _all_tenant_configs['pure'].provider == 'pure'
+          - _all_tenant_configs['ontap'].provider == 'ontap'

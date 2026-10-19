@@ -19,7 +19,8 @@ import (
 	"log/slog"
 
 	"github.com/prometheus/client_golang/prometheus"
-
+	grpccodes "google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
@@ -153,9 +154,6 @@ func (s *PrivateClusterTemplatesServer) Create(ctx context.Context,
 		if err = s.validateSpecDefaultsPullSecret(ctx, object); err != nil {
 			return
 		}
-		if err = s.validateSpecDefaultsSSHKey(ctx, object); err != nil {
-			return
-		}
 		if object.GetMetadata().GetName() == "" && object.GetId() != "" {
 			if object.GetMetadata() == nil {
 				object.SetMetadata(&privatev1.Metadata{})
@@ -163,7 +161,7 @@ func (s *PrivateClusterTemplatesServer) Create(ctx context.Context,
 			object.GetMetadata().SetName(templateNameFromID(object.GetId()))
 		}
 	}
-	err = s.generic.Create(ctx, request, &response)
+	err = s.generic.CreateWithCandidatePreparation(ctx, request, &response, s.prepareSSHKeyCandidate)
 	return
 }
 
@@ -177,13 +175,21 @@ func (s *PrivateClusterTemplatesServer) Update(ctx context.Context,
 			if err = s.validateSpecDefaultsPullSecret(ctx, object); err != nil {
 				return
 			}
-			if err = s.validateSpecDefaultsSSHKey(ctx, object); err != nil {
-				return
-			}
 		}
 	}
-	err = s.generic.Update(ctx, request, &response)
+	err = s.generic.UpdateWithCandidatePreparation(ctx, request, &response, s.prepareSSHKeyCandidate)
 	return
+}
+
+// prepareSSHKeyCandidate validates a changed SSH-key default after GenericServer has
+// assigned ownership on Create or merged the update mask with the stored object on Update.
+func (s *PrivateClusterTemplatesServer) prepareSSHKeyCandidate(
+	ctx context.Context, current, candidate *privatev1.ClusterTemplate,
+) error {
+	if current != nil && proto.Equal(current.GetSpecDefaults().GetSshKey(), candidate.GetSpecDefaults().GetSshKey()) {
+		return nil
+	}
+	return s.validateSpecDefaultsSSHKey(ctx, candidate)
 }
 
 func (s *PrivateClusterTemplatesServer) validateSpecDefaultsPullSecret(
@@ -211,15 +217,16 @@ func (s *PrivateClusterTemplatesServer) validateSpecDefaultsSSHKey(
 	if ref == nil {
 		return nil
 	}
-	resolved, err := resolveSecretReferenceOfType(ctx, s.logger, s.secretsDao, ref,
-		"spec_defaults.ssh_key", privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY)
+	identifier := refKey(ref)
+	resolved, err := resolveAndCanonicalizeReference(
+		ctx, s.secretsDao, template.GetMetadata(), ref, "secret", grpccodes.InvalidArgument,
+	)
 	if err != nil {
 		return err
 	}
-	template.GetSpecDefaults().SetSshKey(privatev1.SecretLocalReference_builder{
-		Id: resolved.ID, Name: resolved.Name,
-	}.Build())
-	return nil
+	return validateResolvedSecretLifecycleAndType(
+		resolved, identifier, "spec_defaults.ssh_key", privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+	)
 }
 
 func (s *PrivateClusterTemplatesServer) validateSpecDefaultsVersion(

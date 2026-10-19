@@ -558,8 +558,9 @@ This displays the security group's state and all ingress and egress rules.
 
 Networking resources are immutable after creation. Read means `List` and `Get`;
 there is no `Update`/`Patch` operation for a networking resource's specification
-or metadata. To change a VirtualNetwork, Subnet, NATGateway, or ExternalIP,
-delete it and create a replacement:
+or metadata, except for the SecurityGroup rule replacement described below. To
+change a VirtualNetwork, Subnet, NATGateway, ExternalIP, ExternalIPPool, or
+ExternalIPAttachment, delete it and create a replacement:
 
 - **Deletion is guarded.** A resource can only be deleted when no other active
   resource references it. If a Subnet is attached to compute instances, for
@@ -636,7 +637,8 @@ updates to other networking resources or fields are future scope
 | gRPC `Update` on a networking service reports `Unimplemented` | All networking services except SecurityGroups have no Update RPC | Use delete and recreate |
 | `SecurityGroups/Update` rejects with `InvalidArgument` (`object is mandatory`, `object identifier is mandatory`, or `object spec is mandatory`) | The scoped rule update requires the object, its ID, and a spec | Send the object with the group ID and the complete ingress and egress lists |
 | Delete rejected with a precondition error naming a blocking resource type | Active dependents still reference the resource | Remove the dependents first, then delete |
-| Create rejected with a precondition error | A referenced resource is not ready or is being deleted | Wait for the referenced resource to reach its terminal ready state, then retry |
+| Create rejected with a precondition error | A referenced resource is not ready | Wait for the referenced resource to reach its terminal ready state, then retry |
+| Create rejected with an invalid-argument error naming a dependency that has been deleted | A referenced resource has been deleted | Recreate the deleted dependency, wait for it to become `READY`, then retry |
 
 The CLI messages and gRPC codes above reflect implemented behavior; REST
 responses surface the same rejections with different status codes.

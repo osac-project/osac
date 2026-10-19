@@ -575,8 +575,8 @@ class ExternalIPPlaybookTests(unittest.TestCase):
         if isolated:
             # Prove v1 jobs never reach Kubernetes: unusable credentials
             # plus a loopback sentinel for any K8S_AUTH_HOST request.
-            env["KUBECONFIG"] = cls.unusable_kubeconfig
-            env["K8S_AUTH_KUBECONFIG"] = cls.unusable_kubeconfig
+            env["KUBECONFIG"] = self.unusable_kubeconfig
+            env["K8S_AUTH_KUBECONFIG"] = self.unusable_kubeconfig
             env["K8S_AUTH_HOST"] = self.sentinel_url
         return env
 

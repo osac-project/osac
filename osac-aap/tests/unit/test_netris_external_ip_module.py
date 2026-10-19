@@ -257,3 +257,81 @@ def test_session_cookie_never_follows_redirects(monkeypatch):
     client.list_subnets()
 
     assert captured["unredirected_headers"]["Cookie"] == f"connect.sid={COOKIE}"
+
+
+def _client_with_response(monkeypatch, status, payload=b""):
+    captured = {}
+
+    def fake_fetch_url(module, url, **kwargs):
+        captured["url"] = url
+        captured["method"] = kwargs.get("method")
+        captured["data"] = kwargs.get("data")
+        return (io.BytesIO(payload), {"status": status})
+
+    monkeypatch.setattr(netris_eip, "fetch_url", fake_fetch_url)
+    return (
+        netris_eip.NetrisSubnetClient(SimpleNamespace(params={}), "https://n", COOKIE),
+        captured,
+    )
+
+
+def test_create_subnet_sends_the_nat_reservation_body(monkeypatch):
+    client, captured = _client_with_response(
+        monkeypatch, 201, json.dumps({"data": {"id": 507}}).encode()
+    )
+
+    subnet_id = client.create_subnet("osac-eip-uid", "192.0.2.5/32", 1, 2)
+
+    assert subnet_id == 507
+    assert captured["method"] == "POST"
+    assert captured["url"] == "https://n/api/v2/ipam/subnet"
+    body = json.loads(captured["data"])
+    assert body == {
+        "name": "osac-eip-uid",
+        "prefix": "192.0.2.5/32",
+        "purpose": "nat",
+        "sites": [{"id": 1}],
+        "tenant": {"id": 2},
+    }
+
+
+def test_create_subnet_accepts_the_flat_data_id_form(monkeypatch):
+    client, _ = _client_with_response(
+        monkeypatch, 200, json.dumps({"data": "508"}).encode()
+    )
+
+    assert client.create_subnet("osac-eip-uid", "192.0.2.5/32", 1, 2) == "508"
+
+
+def test_create_subnet_fails_closed_without_an_id(monkeypatch):
+    client, _ = _client_with_response(
+        monkeypatch, 201, json.dumps({"data": {"name": "x"}}).encode()
+    )
+
+    with pytest.raises(netris_eip.NetrisExternalIPError):
+        client.create_subnet("osac-eip-uid", "192.0.2.5/32", 1, 2)
+
+
+def test_delete_subnet_targets_the_subnet_id(monkeypatch):
+    client, captured = _client_with_response(
+        monkeypatch, 204, json.dumps({"message": "provider delete result"}).encode()
+    )
+
+    client.delete_subnet(507)
+
+    assert captured["method"] == "DELETE"
+    assert captured["url"] == "https://n/api/v2/ipam/subnet/507"
+
+
+def test_request_fails_closed_on_provider_and_transport_errors(monkeypatch):
+    for status in (400, 500, -1):
+        client, _ = _client_with_response(monkeypatch, status, b"{}")
+        with pytest.raises(netris_eip.NetrisExternalIPError):
+            client.list_subnets()
+
+
+def test_request_fails_closed_on_invalid_and_non_object_json(monkeypatch):
+    for payload in (b"not-json", json.dumps([1, 2]).encode()):
+        client, _ = _client_with_response(monkeypatch, 200, payload)
+        with pytest.raises(netris_eip.NetrisExternalIPError):
+            client.list_subnets()

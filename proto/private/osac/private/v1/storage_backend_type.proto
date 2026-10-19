@@ -18,6 +18,7 @@ package osac.private.v1;
 import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
 import "google/api/field_behavior.proto";
+import "google/protobuf/descriptor.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/secret_type.proto";
 
@@ -44,6 +45,22 @@ message StorageBackend {
   StorageBackendStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
+// A selectable storage product and its English display name. osac-ui uses the
+// display name as an i18n key.
+message StorageBackendProviderOption {
+  string key = 1;
+  string display_name = 2;
+}
+
+// Selectable provider products attached to a protobuf field as schema metadata.
+message StorageBackendProviderOptions {
+  repeated StorageBackendProviderOption choices = 1;
+}
+
+extend google.protobuf.FieldOptions {
+  StorageBackendProviderOptions storage_backend_provider_options = 51000;
+}
+
 // Defines the desired configuration for a StorageBackend.
 message StorageBackendSpec {
   option (buf.validate.message).cel = {
@@ -62,11 +79,24 @@ message StorageBackendSpec {
     expression: "this.csp_managed || has(this.credentials)"
   };
 
-  // Storage provider identifier. For example: "vast", "ceph", "pure".
-  // The "netapp" provider requires cspManaged=true.
+  // Product-specific provider routing key. New StorageBackends may use "vast",
+  // "netapp", "pure-flashblade", or "pure-flasharray". The legacy "pure" and
+  // "ontap" aliases remain accepted for compatibility. The "netapp" provider
+  // requires cspManaged=true.
   //
   // This value is immutable once the StorageBackend is created.
-  string provider = 1 [(buf.validate.field).string.min_len = 1];
+  string provider = 1 [
+    (buf.validate.field).string = {
+      min_len: 1,
+      in: ["vast", "netapp", "pure-flashblade", "pure-flasharray", "pure", "ontap"]
+    },
+    (storage_backend_provider_options) = {
+      choices: { key: "vast" display_name: "VAST Data" }
+      choices: { key: "netapp" display_name: "NetApp ONTAP" }
+      choices: { key: "pure-flashblade" display_name: "Pure FlashBlade" }
+      choices: { key: "pure-flasharray" display_name: "Pure FlashArray" }
+    }
+  ];
 
   // Human-readable description of the storage backend.
   string description = 2;

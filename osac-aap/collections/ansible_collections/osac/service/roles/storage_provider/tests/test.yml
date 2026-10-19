@@ -1250,3 +1250,36 @@
               Null backend_id was not caught by validation (OSAC-4956 regression):
               {{ ansible_failed_result.msg | default('unknown error') }}
             success_msg: "Null backend_id correctly rejected by validation"
+
+# ──────────────────────────────────────────────────────────────
+# Test 29: Product routing keys resolve to their CSI backend vendors
+# Expected: NetApp maps to Trident and both Pure products map to Pure.
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- product routing aliases resolve to CSI backend vendors
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Set provider keys for routing alias test
+      ansible.builtin.set_fact:
+        _unique_providers:
+          - vast
+          - netapp
+          - pure_flashblade
+          - pure_flasharray
+          - ontap
+          - pure
+          - trident
+          - unknown
+
+    - name: Resolve CSI backend vendors from product keys
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+        tasks_from: resolve_csi_backend_vendors.yaml
+
+    - name: Assert product keys map to supported vendor controller names
+      ansible.builtin.assert:
+        that:
+          - _this_tenant_vendors == ['vast', 'trident', 'pure']
+        fail_msg: "Unexpected CSI backend vendor mapping: {{ _this_tenant_vendors }}"
+        success_msg: "Product routing keys resolve to their CSI backend vendor names"

@@ -1,0 +1,15 @@
+---
+- name: Resolve storage product routing keys to CSI backend vendors
+  ansible.builtin.set_fact:
+    _this_tenant_vendors: >-
+      {% set _vendors = [] -%}
+      {% for _provider in _unique_providers -%}
+      {% if _provider == 'vast' -%}
+      {% set _ = _vendors.append('vast') -%}
+      {% elif _provider in ['netapp', 'ontap', 'trident'] -%}
+      {% set _ = _vendors.append('trident') -%}
+      {% elif _provider in ['pure', 'pure_flashblade', 'pure_flasharray'] -%}
+      {% set _ = _vendors.append('pure') -%}
+      {% endif -%}
+      {% endfor -%}
+      {{ _vendors | unique | list }}

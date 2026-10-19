@@ -6,7 +6,7 @@ import yaml
 PLAYBOOK = Path(__file__).resolve().parents[2] / "playbook_osac_move_network_attachment.yml"
 
 
-def test_move_playbook_resolves_subnets_with_the_worker_service_account():
+def test_move_playbook_resolves_subnets_with_controller_credentials():
     play = yaml.safe_load(PLAYBOOK.read_text(encoding="utf-8"))[0]
     lookup_task = next(
         task
@@ -21,8 +21,7 @@ def test_move_playbook_resolves_subnets_with_the_worker_service_account():
     assert lookup["label_selectors"] == [
         "osac.openshift.io/subnet-uuid={{ item.subnetRef }}"
     ]
-    assert lookup["host"] == "https://kubernetes.default.svc"
-    assert "/var/run/secrets/kubernetes.io/serviceaccount/token" in lookup["api_key"]
-    assert lookup["ca_cert"] == "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-    assert lookup["validate_certs"] is True
+    assert "host" not in lookup
+    assert "api_key" not in lookup
+    assert "ca_cert" not in lookup
     assert lookup_task["no_log"] is True

@@ -51,12 +51,9 @@
         namespace: "{{ resource.metadata.namespace }}"
         label_selectors:
           - "osac.openshift.io/subnet-uuid={{ item.subnetRef }}"
-        host: https://kubernetes.default.svc
-        api_key: >-
-          {{ lookup('ansible.builtin.file',
-                   '/var/run/secrets/kubernetes.io/serviceaccount/token') | trim }}
-        ca_cert: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-        validate_certs: true
+        # Kubernetes credentials are supplied by an AAP credential through the
+        # K8S_AUTH_* environment variables. This also works when newer
+        # Automation Controller releases reject pod_spec_override token mounts.
       register: _subnet_lookups
       loop: "{{ network_attachments }}"
       loop_control:

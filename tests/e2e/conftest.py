@@ -12,7 +12,12 @@ import pytest
 
 from tests.e2e.core.caas_versions import ensure_caas_disk_image_version
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
-from tests.e2e.core.helpers import unique_name, wait_for_grpc_subnet_ready, wait_for_tenant_condition
+from tests.e2e.core.helpers import (
+    unique_name,
+    wait_for_grpc_security_group_ready,
+    wait_for_grpc_subnet_ready,
+    wait_for_tenant_condition,
+)
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.keycloak import get_jwt
 from tests.e2e.core.keycloak_admin import (
@@ -247,15 +252,16 @@ def ensure_tenants(ensure_k8s_only_network_class: None, private_grpc: GRPCClient
 def _wait_for_default_subnets_ready(
     ensure_jwt_users: None, setup_organization_memberships: None, grpc: GRPCClient
 ) -> None:
-    """Wait for tenant-default subnets to reach READY in the fulfillment database.
+    """Wait for tenant-default networking to reach READY in the fulfillment database.
 
     Tenant creation triggers the DefaultNetworkingProvisioner which creates a
-    default VirtualNetwork, Subnet, and SecurityGroup in SUBNET_STATE_PENDING.
-    The osac-operator marks the K8s CRs Ready, then the subnet feedback
-    controller syncs that state back to PostgreSQL.  Tests that implicitly
-    reference these subnets (e.g. BareMetalInstance creation inherits the
-    tenant's default subnet) hit FailedPrecondition if the DB update hasn't
-    landed yet.
+    default VirtualNetwork, Subnet, and SecurityGroup in PENDING state.
+    The osac-operator marks the K8s CRs Ready, then the feedback
+    controllers sync that state back to PostgreSQL.  Tests that reference
+    these resources (e.g. BareMetalInstance creation inherits the
+    tenant's default subnet, cluster creation attaches the default
+    SecurityGroup) hit FailedPrecondition if the DB update hasn't landed
+    yet.
 
     Depends on ``ensure_jwt_users`` (which itself depends on ``ensure_tenants``)
     so that the ``grpc`` client's first call does not trigger JIT user
@@ -279,6 +285,20 @@ def _wait_for_default_subnets_ready(
     )
     for subnet_id in subnet_ids:
         wait_for_grpc_subnet_ready(grpc=grpc, subnet_id=subnet_id)
+
+    # OSAC-5561: cluster and BMI creation now validate that any
+    # referenced SecurityGroup is READY.  Wait for the tenant-default
+    # SecurityGroup the same way we wait for the default subnet.
+    sg_ids: list[str] = poll_until(
+        fn=lambda: grpc.list_security_group_ids(),
+        until=lambda ids: len(ids) > 0,
+        retries=60,
+        delay=2,
+        description="at least one security group to appear in gRPC",
+        retry_on_error=True,
+    )
+    for sg_id in sg_ids:
+        wait_for_grpc_security_group_ready(grpc=grpc, sg_id=sg_id)
 
 
 @pytest.fixture(scope="session", autouse=True)

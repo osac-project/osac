@@ -20,6 +20,10 @@ export POD_UID="00000000-0000-0000-0000-000000000000"
 # provides one. This is test-only data and is never used outside the suite.
 export OSAC_CLUSTER_UPGRADE_PULL_SECRET="${OSAC_CLUSTER_UPGRADE_PULL_SECRET:-$(printf '{"auths":{"quay.io":{"auth":"%s"}}}' "$(printf '%s:%s' "$(openssl rand -hex 8)" "$(openssl rand -hex 8)" | base64)")}"
 
+# Test-only installer overrides are enabled in this local integration process.
+# Production AAP launches cannot select an arbitrary role/task through extra vars.
+export OSAC_AAP_ENABLE_TEST_INSTALL_OVERRIDES=true
+
 # Suppress inventory parsing warnings
 export ANSIBLE_INVENTORY_UNPARSED_WARNING=False
 export ANSIBLE_LOCALHOST_WARNING=False

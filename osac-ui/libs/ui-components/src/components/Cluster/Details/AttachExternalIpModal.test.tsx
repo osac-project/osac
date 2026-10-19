@@ -12,6 +12,7 @@ import {
 
 import AttachExternalIpModal from './AttachExternalIpModal';
 import type { MockTransportOverrides } from '../../../test-utils/createMockConnectTransport';
+import { getResourceSelectInput } from '../../../test-utils/query';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
 const eligibleIp = {
@@ -61,7 +62,7 @@ describe('AttachExternalIpModal', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/^External IP/)).toHaveTextContent('edge-ip');
+      expect(getResourceSelectInput(/^External IP/)).toHaveValue('edge-ip');
     });
     await user.click(screen.getByRole('button', { name: /^Attach$/ }));
 

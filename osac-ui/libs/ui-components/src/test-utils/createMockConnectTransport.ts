@@ -17,6 +17,8 @@ import {
   ClustersCreateRequest,
   ClustersCreateResponse,
   ComputeInstanceCatalogItem,
+  type ComputeInstanceCatalogItemsCreateRequest,
+  ComputeInstanceCatalogItemsCreateResponse,
   type ComputeInstanceCatalogItemsDeleteRequest,
   type ComputeInstanceCatalogItemsUpdateRequest,
   ComputeInstanceTemplate,
@@ -392,6 +394,11 @@ const matchesStorageTierActiveFilter = (
 };
 
 export type MockTransportOverrides = {
+  onComputeInstanceCatalogItemCreate?: (
+    req: ComputeInstanceCatalogItemsCreateRequest,
+  ) =>
+    | ComputeInstanceCatalogItemsCreateResponse
+    | Promise<ComputeInstanceCatalogItemsCreateResponse>;
   onComputeInstanceCatalogItemUpdate?: (
     req: ComputeInstanceCatalogItemsUpdateRequest,
   ) =>
@@ -602,6 +609,12 @@ export const createMockConnectTransport = (
         get: (req) => ({
           object: catalogItems.find((i) => i.id === req.id),
         }),
+        create: (req) => {
+          if (overrides.onComputeInstanceCatalogItemCreate) {
+            return overrides.onComputeInstanceCatalogItemCreate(req);
+          }
+          return { object: req.object };
+        },
         update: (req) => {
           if (overrides.onComputeInstanceCatalogItemUpdate) {
             return overrides.onComputeInstanceCatalogItemUpdate(req);

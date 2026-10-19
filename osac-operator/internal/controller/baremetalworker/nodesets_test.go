@@ -43,6 +43,7 @@ type nodeSetClient struct {
 	order              client.ObjectKey
 	bmis               []*privatev1.BareMetalInstance
 	failCreate         bool
+	createErr          error
 	names              []string
 	reservationMissing bool
 }
@@ -77,6 +78,9 @@ func (f *nodeSetClient) CreateBareMetalInstance(ctx context.Context, bmi *privat
 	}
 	if f.failCreate {
 		return nil, fmt.Errorf("interrupted create")
+	}
+	if f.createErr != nil {
+		return nil, f.createErr
 	}
 	bmi.SetId(fmt.Sprintf("id-%d", len(f.bmis)))
 	f.bmis = append(f.bmis, bmi)

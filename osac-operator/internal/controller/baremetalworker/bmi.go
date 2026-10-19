@@ -5,6 +5,7 @@ package baremetalworker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"google.golang.org/grpc/codes"
@@ -24,6 +25,32 @@ type bmiState struct {
 const (
 	systemBMITemplateID = "osac.templates.bm_host_provisioning"
 )
+
+// errBMICreateRejected marks a BMI Create the fulfillment service definitively
+// rejected with a terminal gRPC status code and a server-side rollback: no BMI
+// record was persisted for the attempt. The underlying error and its status
+// code remain reachable through wrapping.
+var errBMICreateRejected = errors.New("BMI create rejected")
+
+// isDefinitiveCreateRejection reports whether err is a terminal fulfillment
+// rejection of a BMI Create: the server refused the request and rolled back its
+// transaction, so no BMI can exist for the attempt. Transport-class failures
+// (Unavailable, DeadlineExceeded, Canceled) and unknown outcomes (Unknown,
+// Internal, DataLoss) stay conservative — absence is never inferred from them.
+func isDefinitiveCreateRejection(err error) bool {
+	switch status.Code(err) {
+	case codes.InvalidArgument,
+		codes.NotFound,
+		codes.FailedPrecondition,
+		codes.PermissionDenied,
+		codes.ResourceExhausted,
+		codes.OutOfRange,
+		codes.Unimplemented:
+		return true
+	default:
+		return false
+	}
+}
 
 // ensureBMI creates a single BareMetalInstance, handling the AlreadyExists race by re-listing.
 // Returns the BMI, a non-zero result on unavailability backoff, or an error.
@@ -46,6 +73,10 @@ func (r *Reconciler) ensureBMI(
 			return nil, ctrl.Result{}, listErr
 		}
 		return bmi, ctrl.Result{}, nil
+	}
+
+	if isDefinitiveCreateRejection(err) {
+		return nil, ctrl.Result{}, fmt.Errorf("%w: creating BMI %s: %w", errBMICreateRejected, workerName, err)
 	}
 
 	return nil, ctrl.Result{}, fmt.Errorf("creating BMI %s: %w", workerName, err)

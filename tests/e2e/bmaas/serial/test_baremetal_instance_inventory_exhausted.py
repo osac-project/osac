@@ -10,14 +10,13 @@ from tests.e2e.bmaas.conftest import BMI_DISK_IMAGE_SOURCE_REF
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
     assert_bmi_does_not_become_running,
-    assert_bmi_lifecycle_on_running,
     wait_for_bmi_cr,
     wait_for_bmi_deletion,
     wait_for_bmi_grpc_removal,
     wait_for_bmi_running,
     wait_for_bmi_running_after_recovery,
 )
-from tests.e2e.core.inventory import InventoryBackend
+from tests.e2e.core.inventory import InventoryBackend, assert_bmi_lifecycle_on_running
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until

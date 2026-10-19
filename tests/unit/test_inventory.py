@@ -8,6 +8,13 @@ from typing import Any, cast
 
 import pytest
 
+from tests.e2e.core.helpers import (
+    HostRef,
+    host_consumer_ref,
+    host_hardware_macs,
+    wait_for_host_allocated,
+    wait_for_host_powered,
+)
 from tests.e2e.core.inventory import (
     Metal3Inventory,
     NetBoxInventory,
@@ -39,7 +46,7 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class FakeMetal3K8s:
-    """K8sClient stand-in covering the BMH queries Metal3Inventory delegates to."""
+    """K8sClient stand-in covering the BMH queries the metal3 path uses."""
 
     def __init__(
         self,
@@ -59,7 +66,7 @@ class FakeMetal3K8s:
         self.consumer_ref = consumer_ref
         self.online = online
         self.powered_on = powered_on
-        self.nics = nics if nics is not None else ["AA:BB:CC:DD:EE:01", "aa:bb:cc:dd:ee:02"]
+        self.nics = nics if nics is not None else ["aa:bb:cc:dd:ee:01", "aa:bb:cc:dd:ee:02"]
         self.available_count = available_count
         self.count_calls: list[dict[str, Any]] = []
 
@@ -93,10 +100,10 @@ def _metal3(k8s: FakeMetal3K8s) -> Metal3Inventory:
     return Metal3Inventory(k8s=cast(K8sClient, k8s), bmh_namespace="host-inventory")
 
 
-def test_metal3_host_for_bmi_splits_namespace_and_name() -> None:
+def test_metal3_host_for_bmi_returns_the_bmh_ref() -> None:
     backend = _metal3(FakeMetal3K8s(external_host_id="host-inventory/bmh-7"))
 
-    assert backend.host_for_bmi(bmi_cr_name="bmi-cr") == "bmh-7"
+    assert backend.host_for_bmi(bmi_cr_name="bmi-cr") == HostRef(namespace="host-inventory", name="bmh-7")
 
 
 def test_metal3_host_for_bmi_rejects_wrong_namespace() -> None:
@@ -121,47 +128,14 @@ def test_metal3_count_available_uses_available_and_ready_states() -> None:
     assert k8s.count_calls == [{"bmh_namespace": "host-inventory", "states": {"available", "ready"}}]
 
 
-def test_metal3_wait_for_allocated_bundles_the_provisioned_assertions() -> None:
-    backend = _metal3(FakeMetal3K8s(state="provisioned", image_url="oci://img:1", consumer_ref="bmi-1", online="true"))
-
-    backend.wait_for_allocated(ref="bmh-1", bmi_id="bmi-uid", expected_image_url="oci://img:1")
-
-
-def test_metal3_wait_for_allocated_rejects_wrong_image() -> None:
-    backend = _metal3(FakeMetal3K8s(state="provisioned", image_url="oci://other:1"))
-
-    with pytest.raises(AssertionError, match="does not match the expected"):
-        backend.wait_for_allocated(ref="bmh-1", bmi_id="bmi-uid", expected_image_url="oci://img:1")
-
-
-def test_metal3_wait_for_allocated_without_expected_image_requires_non_empty() -> None:
-    backend = _metal3(FakeMetal3K8s(state="provisioned", image_url=""))
-
-    with pytest.raises(AssertionError, match="no image URL"):
-        backend.wait_for_allocated(ref="bmh-1", bmi_id="bmi-uid")
-
-
 def test_metal3_wait_for_released_requires_cleared_image_and_consumer() -> None:
     backend = _metal3(FakeMetal3K8s(state="available", image_url="", consumer_ref=""))
 
-    backend.wait_for_released(ref="bmh-1")
+    backend.wait_for_released(host=HostRef(namespace="host-inventory", name="bmh-1"))
 
     backend2 = _metal3(FakeMetal3K8s(state="available", image_url="oci://leftover:1", consumer_ref=""))
     with pytest.raises(AssertionError, match="image not cleared"):
-        backend2.wait_for_released(ref="bmh-1")
-
-
-def test_metal3_wait_for_powered_polls_the_bmh_flag() -> None:
-    backend = _metal3(FakeMetal3K8s(powered_on="false"))
-
-    backend.wait_for_powered(ref="bmh-1", on=False, bmi_id="bmi-uid")
-
-
-def test_metal3_hardware_macs_returns_inspection_nics() -> None:
-    # get_bmh_hardware_nics already lowercases per its contract.
-    backend = _metal3(FakeMetal3K8s(nics=["aa:bb:cc:dd:ee:01", "aa:bb:cc:dd:ee:02"]))
-
-    assert backend.hardware_macs(ref="bmh-1") == {"aa:bb:cc:dd:ee:01", "aa:bb:cc:dd:ee:02"}
+        backend2.wait_for_released(host=HostRef(namespace="host-inventory", name="bmh-1"))
 
 
 def test_metal3_ensure_available_hosts_requires_at_least_one() -> None:
@@ -178,6 +152,61 @@ def test_metal3_release_and_close_are_no_ops() -> None:
 
     backend.release_created_hosts()
     backend.close()
+
+
+# Shared provisioning helpers (BMH, backend-agnostic) ------------------------------
+
+
+def test_wait_for_host_allocated_bundles_the_provisioned_assertions() -> None:
+    k8s = FakeMetal3K8s(state="provisioned", image_url="oci://img:1", consumer_ref="bmi-1", online="true")
+
+    wait_for_host_allocated(
+        k8s=cast(K8sClient, k8s),
+        host=HostRef(namespace="host-inventory", name="bmh-1"),
+        expected_image_url="oci://img:1",
+    )
+
+
+def test_wait_for_host_allocated_rejects_wrong_image() -> None:
+    k8s = FakeMetal3K8s(state="provisioned", image_url="oci://other:1")
+
+    with pytest.raises(AssertionError, match="does not match the expected"):
+        wait_for_host_allocated(
+            k8s=cast(K8sClient, k8s),
+            host=HostRef(namespace="host-inventory", name="bmh-1"),
+            expected_image_url="oci://img:1",
+        )
+
+
+def test_wait_for_host_allocated_without_expected_image_requires_non_empty() -> None:
+    k8s = FakeMetal3K8s(state="provisioned", image_url="")
+
+    with pytest.raises(AssertionError, match="no image URL"):
+        wait_for_host_allocated(k8s=cast(K8sClient, k8s), host=HostRef(namespace="host-inventory", name="bmh-1"))
+
+
+def test_host_consumer_ref_reads_the_bmh_marker() -> None:
+    k8s = FakeMetal3K8s(consumer_ref="bmi-1")
+
+    assert (
+        host_consumer_ref(k8s=cast(K8sClient, k8s), host=HostRef(namespace="host-inventory", name="bmh-1")) == "bmi-1"
+    )
+
+
+def test_wait_for_host_powered_polls_the_bmh_flag() -> None:
+    k8s = FakeMetal3K8s(powered_on="false")
+
+    wait_for_host_powered(k8s=cast(K8sClient, k8s), host=HostRef(namespace="host-inventory", name="bmh-1"), on=False)
+
+
+def test_host_hardware_macs_returns_inspection_nics() -> None:
+    # get_bmh_hardware_nics already lowercases per its contract.
+    k8s = FakeMetal3K8s(nics=["aa:bb:cc:dd:ee:01", "aa:bb:cc:dd:ee:02"])
+
+    assert host_hardware_macs(k8s=cast(K8sClient, k8s), host=HostRef(namespace="host-inventory", name="bmh-1")) == {
+        "aa:bb:cc:dd:ee:01",
+        "aa:bb:cc:dd:ee:02",
+    }
 
 
 # NetBox backend -----------------------------------------------------------------
@@ -226,67 +255,75 @@ class FakeNetBox:
         self.closed = True
 
 
-class FakeGRPC:
-    def __init__(
-        self,
-        state: str = "BARE_METAL_INSTANCE_STATE_STOPPED",
-        bmi_spec: dict[str, Any] | None = None,
-        disk_images: list[dict[str, Any]] | None = None,
-    ) -> None:
-        self.state = state
-        self.bmi_spec = bmi_spec if bmi_spec is not None else {}
-        self.disk_images = disk_images if disk_images is not None else []
-
-    def get_baremetal_instance_state(self, *, bmi_id: str) -> str:
-        return self.state
-
-    def get_baremetal_instance(self, *, bmi_id: str) -> dict[str, Any]:
-        return {"object": {"spec": self.bmi_spec}}
-
-    def call(self, *, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
-        assert service.endswith("DiskImages/List")
-        return {"items": self.disk_images}
-
-
 class FakeDeviceK8s:
-    def __init__(self, external_host_id: str) -> None:
+    def __init__(self, external_host_id: str, bmh_present: bool = True) -> None:
         self.external_host_id = external_host_id
+        self.bmh_present = bmh_present
 
     def get_baremetal_instance_external_host_id(self, *, name: str) -> str:
         return self.external_host_id
+
+    def is_bmh_present(self, *, name: str, bmh_namespace: str) -> bool:
+        return self.bmh_present
+
+
+def _claimed_device() -> dict[str, Any]:
+    return {"id": "42", "status": "active", "custom_fields": {"osac_instance_id": "bmi-uid"}}
 
 
 def _netbox(
     netbox: FakeNetBox,
     *,
-    grpc: FakeGRPC | None = None,
     fixture_spec: list[dict[str, Any]] | None = None,
     k8s: FakeDeviceK8s | None = None,
+    bmh_namespace: str = "",
 ) -> NetBoxInventory:
     return NetBoxInventory(
-        k8s=cast(K8sClient, k8s or FakeDeviceK8s("42")),
+        k8s=cast(K8sClient, k8s or FakeDeviceK8s("host-inventory/netbox-42")),
         netbox=cast(Any, netbox),
-        grpc=cast(Any, grpc or FakeGRPC()),
         fixture_spec=fixture_spec or [],
         name_prefix="run1",
+        bmh_namespace=bmh_namespace,
     )
 
 
-def test_netbox_host_for_bmi_returns_the_device_id() -> None:
-    backend = _netbox(FakeNetBox(), k8s=FakeDeviceK8s("42"))
+def test_netbox_host_for_bmi_resolves_the_created_bmh() -> None:
+    backend = _netbox(FakeNetBox([_claimed_device()]), k8s=FakeDeviceK8s("host-inventory/netbox-42"))
 
-    assert backend.host_for_bmi(bmi_cr_name="bmi-cr") == "42"
+    assert backend.host_for_bmi(bmi_cr_name="bmi-cr") == HostRef(namespace="host-inventory", name="netbox-42")
 
 
-def test_netbox_host_for_bmi_rejects_non_device_id_refs() -> None:
-    backend = _netbox(FakeNetBox(), k8s=FakeDeviceK8s("host-inventory/bmh-1"))
+def test_netbox_host_for_bmi_waits_for_the_inventory_claim(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("tests.e2e.core.runner.time.sleep", lambda *_: None)
+    netbox = FakeNetBox([{"id": "42", "status": "staged", "custom_fields": {"osac_instance_id": ""}}])
+    backend = _netbox(netbox, k8s=FakeDeviceK8s("host-inventory/netbox-42"))
 
-    with pytest.raises(AssertionError, match="Expected a NetBox device id"):
+    with pytest.raises(TimeoutError, match="timed out"):
         backend.host_for_bmi(bmi_cr_name="bmi-cr")
 
-    backend2 = _netbox(FakeNetBox(), k8s=FakeDeviceK8s(""))
-    with pytest.raises(AssertionError, match="no externalHostID"):
+    netbox.devices[0]["status"] = "active"
+    netbox.devices[0]["custom_fields"]["osac_instance_id"] = "bmi-uid"
+    assert backend.host_for_bmi(bmi_cr_name="bmi-cr") == HostRef(namespace="host-inventory", name="netbox-42")
+
+
+def test_netbox_host_for_bmi_rejects_non_netbox_derived_names() -> None:
+    backend = _netbox(FakeNetBox([_claimed_device()]), k8s=FakeDeviceK8s("host-inventory/virtual-bmh-1"))
+
+    with pytest.raises(AssertionError, match=r"netbox-<device-id>"):
+        backend.host_for_bmi(bmi_cr_name="bmi-cr")
+
+    backend2 = _netbox(FakeNetBox([_claimed_device()]), k8s=FakeDeviceK8s("netbox-42"))
+    with pytest.raises(AssertionError, match="namespace/name"):
         backend2.host_for_bmi(bmi_cr_name="bmi-cr")
+
+
+def test_netbox_host_for_bmi_cross_checks_the_deployed_bmh_namespace() -> None:
+    backend = _netbox(
+        FakeNetBox([_claimed_device()]), k8s=FakeDeviceK8s("host-inventory/netbox-42"), bmh_namespace="other-ns"
+    )
+
+    with pytest.raises(AssertionError, match="landed in host-inventory"):
+        backend.host_for_bmi(bmi_cr_name="bmi-cr")
 
 
 def test_netbox_count_available_uses_the_free_device_query() -> None:
@@ -305,93 +342,20 @@ def test_netbox_count_available_uses_the_free_device_query() -> None:
     ]
 
 
-def test_netbox_wait_for_allocated_requires_active_claimed_and_matching_image(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_netbox_wait_for_released_requires_bmh_deleted_and_device_staged(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("tests.e2e.core.runner.time.sleep", lambda *_: None)
-    netbox = FakeNetBox([{"id": "42", "status": "staged", "custom_fields": {"osac_instance_id": ""}}])
-    grpc = FakeGRPC(
-        bmi_spec={"diskImage": {"id": "di-1", "name": "e2e-di"}},
-        disk_images=[{"id": "di-1", "metadata": {"name": "e2e-di"}, "spec": {"sourceRef": "oci://img:1"}}],
-    )
-    backend = _netbox(netbox, grpc=grpc)
+    netbox = FakeNetBox([_claimed_device()])
+    k8s = FakeDeviceK8s("host-inventory/netbox-42", bmh_present=True)
+    backend = _netbox(netbox, k8s=k8s)
+    host = HostRef(namespace="host-inventory", name="netbox-42")
 
     with pytest.raises(TimeoutError, match="timed out"):
-        backend.wait_for_allocated(ref="42", bmi_id="bmi-uid", expected_image_url="oci://img:1")
+        backend.wait_for_released(host=host)
 
-    netbox.devices[0]["status"] = "active"
-    netbox.devices[0]["custom_fields"]["osac_instance_id"] = "bmi-uid"
-    backend.wait_for_allocated(ref="42", bmi_id="bmi-uid", expected_image_url="oci://img:1")
-
-
-def test_netbox_wait_for_allocated_verifies_bmi_disk_image_source() -> None:
-    netbox = FakeNetBox([{"id": "42", "status": "active", "custom_fields": {"osac_instance_id": "bmi-uid"}}])
-    grpc = FakeGRPC(
-        bmi_spec={"diskImage": {"id": "di-1", "name": "e2e-di"}},
-        disk_images=[{"id": "di-1", "metadata": {"name": "e2e-di"}, "spec": {"sourceRef": "oci://other:1"}}],
-    )
-    backend = _netbox(netbox, grpc=grpc)
-
-    with pytest.raises(AssertionError, match="selected DiskImage source"):
-        backend.wait_for_allocated(ref="42", bmi_id="bmi-uid", expected_image_url="oci://img:1")
-
-
-def test_netbox_wait_for_allocated_rejects_invisible_disk_image() -> None:
-    netbox = FakeNetBox([{"id": "42", "status": "active", "custom_fields": {"osac_instance_id": "bmi-uid"}}])
-    grpc = FakeGRPC(bmi_spec={"diskImage": {"name": "gone"}})
-    backend = _netbox(netbox, grpc=grpc)
-
-    with pytest.raises(AssertionError, match="not visible"):
-        backend.wait_for_allocated(ref="42", bmi_id="bmi-uid", expected_image_url="oci://img:1")
-
-
-def test_netbox_wait_for_released_requires_staged_and_unclaimed(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("tests.e2e.core.runner.time.sleep", lambda *_: None)
-    netbox = FakeNetBox([{"id": "42", "status": "active", "custom_fields": {"osac_instance_id": "bmi-uid"}}])
-    backend = _netbox(netbox)
-
-    with pytest.raises(TimeoutError, match="timed out"):
-        backend.wait_for_released(ref="42")
-
+    k8s.bmh_present = False
     netbox.devices[0]["status"] = "staged"
     netbox.devices[0]["custom_fields"]["osac_instance_id"] = ""
-    backend.wait_for_released(ref="42")
-
-
-def test_netbox_consumer_ref_reads_the_claim_custom_field() -> None:
-    backend = _netbox(FakeNetBox([{"id": "42", "status": "active", "custom_fields": {"osac_instance_id": "bmi-uid"}}]))
-
-    assert backend.consumer_ref(ref="42") == "bmi-uid"
-
-
-def test_netbox_wait_for_powered_uses_the_bmi_api_state() -> None:
-    backend = _netbox(FakeNetBox(), grpc=FakeGRPC("BARE_METAL_INSTANCE_STATE_STOPPED"))
-
-    backend.wait_for_powered(ref="42", on=False, bmi_id="bmi-uid")
-
-    backend2 = _netbox(FakeNetBox(), grpc=FakeGRPC("BARE_METAL_INSTANCE_STATE_RUNNING"))
-    backend2.wait_for_powered(ref="42", on=True, bmi_id="bmi-uid")
-
-
-def test_netbox_hardware_macs_reads_interface_custom_field() -> None:
-    device = {"id": "42", "status": "active", "custom_fields": {"osac_interface_macs": {"data-0": "AA:BB:CC:DD:EE:01"}}}
-    backend = _netbox(FakeNetBox([device]))
-
-    assert backend.hardware_macs(ref="42") == {"aa:bb:cc:dd:ee:01"}
-
-
-def test_netbox_hardware_macs_accepts_json_string_custom_field() -> None:
-    backend = _netbox(
-        FakeNetBox(
-            [
-                {
-                    "id": "42",
-                    "status": "active",
-                    "custom_fields": {"osac_interface_macs": json.dumps({"data-0": "AA:BB:CC:DD:EE:01"})},
-                }
-            ]
-        )
-    )
-
-    assert backend.hardware_macs(ref="42") == {"aa:bb:cc:dd:ee:01"}
+    backend.wait_for_released(host=host)
 
 
 def test_netbox_fixture_devices_are_created_idempotently_and_deleted(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -457,6 +421,33 @@ def test_netbox_fixture_requires_a_host_spec_and_site(monkeypatch: pytest.Monkey
     backend2 = _netbox(FakeNetBox(), fixture_spec=[{"bmc_address": "redfish://x", "boot_mac": "aa:bb:cc:dd:ee:01"}])
     with pytest.raises(RuntimeError, match="OSAC_NETBOX_SITE"):
         backend2.ensure_available_hosts()
+
+
+def test_netbox_fixture_creation_failure_cleans_up_created_devices(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OSAC_NETBOX_SITE", "dc1")
+
+    class ExplodingNetBox(FakeNetBox):
+        def create_device(self, *, name: str, role: str, site: str, custom_fields: dict[str, Any] | None = None) -> str:
+            device_id = super().create_device(name=name, role=role, site=site, custom_fields=custom_fields)
+            if len(self.created) == 2:
+                raise RuntimeError("boom")
+            return device_id
+
+    netbox = ExplodingNetBox()
+    backend = _netbox(
+        netbox,
+        fixture_spec=[
+            {"bmc_address": "redfish://10.0.0.1", "boot_mac": "aa:bb:cc:dd:ee:01"},
+            {"bmc_address": "redfish://10.0.0.2", "boot_mac": "aa:bb:cc:dd:ee:02"},
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        backend.ensure_available_hosts()
+
+    # Device 1 was created before the failure and must be cleaned up.
+    assert netbox.deleted == ["101"]
+    assert backend._created_device_ids == []
 
 
 def test_netbox_release_created_hosts_aggregates_deletion_failures() -> None:
@@ -527,6 +518,13 @@ options:
     url: http://netbox.example.test
     allowInsecureHTTP: true
 """
+MANAGEMENT_YAML = """\
+name: metal3-management
+type: metal3
+options:
+  metal3:
+    namespace: host-inventory
+"""
 
 
 class FakeSecretsK8s:
@@ -544,7 +542,11 @@ class FakeSecretsK8s:
 
 
 def _bmf_secrets(
-    *, inventory_yaml: str = INVENTORY_YAML, token: str = "render-test-netbox-token", with_ca: bool = True
+    *,
+    inventory_yaml: str = INVENTORY_YAML,
+    token: str = "render-test-netbox-token",
+    with_ca: bool = True,
+    with_management: bool = True,
 ) -> dict[str, dict[str, str]]:
     secrets: dict[str, dict[str, str]] = {
         "osac-inventory-config": {"inventory.yaml": inventory_yaml},
@@ -552,6 +554,8 @@ def _bmf_secrets(
     }
     if with_ca:
         secrets["osac-netbox-ca"] = {"ca.crt": "TEST-CA-CERTIFICATE\n"}
+    if with_management:
+        secrets["osac-management-config"] = {"management.yaml": MANAGEMENT_YAML}
     return secrets
 
 
@@ -562,6 +566,7 @@ def test_settings_from_full_bmf_configuration() -> None:
     assert settings.token == "render-test-netbox-token"
     assert settings.ca_pem == "TEST-CA-CERTIFICATE\n"
     assert settings.skip_tls_verify is False
+    assert settings.bmh_namespace == "host-inventory"
 
 
 def test_settings_tolerate_missing_ca_secret() -> None:
@@ -574,6 +579,15 @@ def test_settings_tolerate_missing_ca_secret() -> None:
     # allowInsecureHTTP is http://-scheme permission only, never a
     # TLS-verification switch.
     assert settings.skip_tls_verify is False
+
+
+def test_settings_tolerate_missing_management_config() -> None:
+    settings = netbox_settings_from_bmf(
+        k8s=cast(K8sClient, FakeSecretsK8s(_bmf_secrets(with_management=False))), namespace="osac"
+    )
+
+    # The BMH-namespace cross-check source is best-effort.
+    assert settings.bmh_namespace == ""
 
 
 def test_settings_reject_http_url_without_deployed_opt_in() -> None:
@@ -627,13 +641,15 @@ def test_settings_env_overrides_skip_secret_reads(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("OSAC_NETBOX_URL", "https://external.example.test")
     monkeypatch.setenv("OSAC_NETBOX_TOKEN", "external-token")
 
-    # A fully env-driven run against an external NetBox reads no Secrets.
+    # A fully env-driven run against an external NetBox reads no required
+    # Secrets (the management-config cross-check stays best-effort).
     settings = netbox_settings_from_bmf(k8s=cast(K8sClient, FakeSecretsK8s({})), namespace="osac")
 
     assert settings.url == "https://external.example.test"
     assert settings.token == "external-token"
     assert settings.ca_pem is None
     assert settings.skip_tls_verify is False
+    assert settings.bmh_namespace == ""
 
 
 def test_settings_propagate_non_not_found_secret_errors() -> None:
@@ -682,11 +698,7 @@ def test_fixture_spec_parses_and_validates() -> None:
 
 def test_make_inventory_backend_defaults_to_metal3() -> None:
     backend = make_inventory_backend(
-        k8s=cast(K8sClient, FakeMetal3K8s()),
-        namespace="osac",
-        grpc=cast(Any, FakeGRPC()),
-        bmh_namespace="host-inventory",
-        test_run_id="run1",
+        k8s=cast(K8sClient, FakeMetal3K8s()), namespace="osac", bmh_namespace="host-inventory", test_run_id="run1"
     )
 
     assert isinstance(backend, Metal3Inventory)
@@ -702,7 +714,6 @@ def test_make_inventory_backend_netbox_uses_bmf_settings(monkeypatch: pytest.Mon
     backend = make_inventory_backend(
         k8s=cast(K8sClient, FakeSecretsK8s(_bmf_secrets())),
         namespace="osac",
-        grpc=cast(Any, FakeGRPC()),
         bmh_namespace="host-inventory",
         test_run_id="run1",
     )
@@ -710,6 +721,7 @@ def test_make_inventory_backend_netbox_uses_bmf_settings(monkeypatch: pytest.Mon
     assert isinstance(backend, NetBoxInventory)
     assert backend.fixture_spec == [{"bmc_address": "redfish://10.0.0.1", "boot_mac": "aa:bb:cc:dd:ee:01"}]
     assert backend.name_prefix == "run1"
+    assert backend.bmh_namespace == "host-inventory"
     backend.close()
 
 
@@ -718,9 +730,5 @@ def test_make_inventory_backend_rejects_unknown_backend(monkeypatch: pytest.Monk
 
     with pytest.raises(RuntimeError, match="valid values: metal3, netbox"):
         make_inventory_backend(
-            k8s=cast(K8sClient, FakeMetal3K8s()),
-            namespace="osac",
-            grpc=cast(Any, FakeGRPC()),
-            bmh_namespace="host-inventory",
-            test_run_id="run1",
+            k8s=cast(K8sClient, FakeMetal3K8s()), namespace="osac", bmh_namespace="host-inventory", test_run_id="run1"
         )

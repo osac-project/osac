@@ -65,11 +65,15 @@ within one session is idempotent) and deletes them on teardown. Each run
 uses a new run id, so delete leftover devices after an aborted run.
 
 Connection settings come from the BMF chart's `osac-inventory-config`,
-`osac-netbox-token`, and `osac-netbox-ca` Secrets; each Secret is read only
-when its matching `OSAC_NETBOX_*` override is unset, so a fully env-driven
-run against an external NetBox needs no deployed Secrets. On deprovision the
-operator deletes the per-device BMH and restores the device to `staged`, so
-release checks wait for both.
+`osac-netbox-token`, and `osac-netbox-ca` Secrets. The URL and token Secrets
+are read only when their `OSAC_NETBOX_*` overrides are unset, and the CA
+Secret applies only when the URL comes from the deployed config — an
+override URL uses system roots unless `OSAC_NETBOX_CA_FILE` is set, so the
+deployed NetBox's private CA never leaks into an external connection. (The
+`osac-management-config` BMH-namespace cross-check is cluster-scoped and read
+best-effort in every mode.) On deprovision the operator deletes the
+per-device BMH and restores the device to `staged`, so release checks wait
+for both.
 
 ## Running
 

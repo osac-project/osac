@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import ipaddress
+import json
+import time
+
+from ansible.module_utils.urls import fetch_url
 
 OPERATIONS = ("external_ip.allocate", "external_ip.release")
 
@@ -15,6 +19,22 @@ RESERVATION_NAME_PREFIX = "osac-eip-"
 RESERVATION_PURPOSE = "nat"
 
 POOL_SNAPSHOT_KEYS = ("fulfillment_id", "kubernetes_uid", "tenant_id", "cidr", "phase")
+
+MAX_ALLOCATE_ATTEMPTS = 5
+MAX_RELEASE_OBSERVATIONS = 5
+RETRY_DELAY_SECONDS = 1.0
+
+SUBNETS_PATH = "/api/v2/ipam/subnets"
+SUBNET_PATH = "/api/v2/ipam/subnet"
+
+
+class NetrisExternalIPError(ValueError):
+    """A Netris ExternalIP provider operation failed or could not be verified."""
+
+    def __init__(self, message, category="provider_error", http_status=None):
+        super().__init__(message)
+        self.category = category
+        self.http_status = http_status
 
 
 def _required_text(value, context: str) -> str:
@@ -163,6 +183,15 @@ def owned_address(
     request: dict, subnets: list[dict], site_id: int, tenant_id: int
 ) -> str | None:
     """Validate/reuse one UID reservation, or return None if it is absent."""
+    record = _owned_record(request, subnets, site_id, tenant_id)
+    if record is None:
+        return None
+    return _reservation_address(record)
+
+
+def _owned_record(
+    request: dict, subnets: list[dict], site_id: int, tenant_id: int
+) -> dict | None:
     matches = []
     for record in subnets:
         if not isinstance(record, dict):
@@ -194,9 +223,261 @@ def owned_address(
         raise ValueError("provider reservation purpose must be nat")
     if record.get("site_id") != site_id or record.get("tenant_id") != tenant_id:
         raise ValueError("provider reservation does not match the configured site or tenant")
-    return str(network.network_address)
+    return record
 
 
-def reconcile(request: dict, client, site_id: int, tenant_id: int) -> dict:
+def _reservation_address(record: dict) -> str:
+    return str(ipaddress.ip_network(record["prefix"]).network_address)
+
+
+def _normalize_subnet_record(record) -> dict:
+    """Map one raw provider JSON record into the documented normalized shape."""
+    if not isinstance(record, dict):
+        raise NetrisExternalIPError(
+            "Netris API returned a malformed subnet record",
+            category="malformed_response",
+        )
+    subnet_id = record.get("id")
+    name = record.get("name")
+    prefix = record.get("prefix")
+    purpose = record.get("purpose")
+    sites = record.get("sites")
+    tenant = record.get("tenant")
+    if isinstance(subnet_id, bool) or not isinstance(subnet_id, int):
+        raise NetrisExternalIPError(
+            "Netris API subnet record omits its numeric id",
+            category="malformed_response",
+        )
+    if not isinstance(name, str) or not name:
+        raise NetrisExternalIPError(
+            "Netris API subnet record omits its name",
+            category="malformed_response",
+        )
+    if not isinstance(prefix, str) or not prefix:
+        raise NetrisExternalIPError(
+            "Netris API subnet record omits its prefix",
+            category="malformed_response",
+        )
+    if not isinstance(purpose, str) or not purpose:
+        raise NetrisExternalIPError(
+            "Netris API subnet record omits its purpose",
+            category="malformed_response",
+        )
+    if not isinstance(sites, list) or not sites or not isinstance(sites[0], dict):
+        raise NetrisExternalIPError(
+            "Netris API subnet record omits its sites",
+            category="malformed_response",
+        )
+    site_id = sites[0].get("id")
+    if isinstance(site_id, bool) or not isinstance(site_id, int):
+        raise NetrisExternalIPError(
+            "Netris API subnet record omits its site id",
+            category="malformed_response",
+        )
+    if not isinstance(tenant, dict):
+        raise NetrisExternalIPError(
+            "Netris API subnet record omits its tenant",
+            category="malformed_response",
+        )
+    tenant_id = tenant.get("id")
+    if isinstance(tenant_id, bool) or not isinstance(tenant_id, int):
+        raise NetrisExternalIPError(
+            "Netris API subnet record omits its tenant id",
+            category="malformed_response",
+        )
+    try:
+        network = ipaddress.ip_network(prefix, strict=True)
+    except ValueError as error:
+        raise NetrisExternalIPError(
+            "Netris API subnet record carries a malformed prefix",
+            category="malformed_response",
+        ) from error
+    if not isinstance(network, ipaddress.IPv4Network):
+        raise NetrisExternalIPError(
+            "Netris API subnet record must be an IPv4 prefix",
+            category="malformed_response",
+        )
+    return {
+        "id": subnet_id,
+        "name": name,
+        "prefix": str(network),
+        "purpose": purpose,
+        "site_id": site_id,
+        "tenant_id": tenant_id,
+    }
+
+
+class NetrisSubnetClient:
+    """GET/POST/DELETE client for the Netris IPAM subnet endpoints."""
+
+    def __init__(
+        self,
+        module,
+        controller_url: str,
+        session_cookie: str,
+        timeout: int = 30,
+        validate_certs: bool = True,
+        ca_path: str | None = None,
+    ):
+        self._module = module
+        self._controller_url = controller_url.rstrip("/")
+        self._session_cookie = session_cookie
+        self._timeout = timeout
+        self._validate_certs = validate_certs
+        self._ca_path = ca_path
+
+    def _request(self, method: str, path: str, body=None, success_codes=(200,)) -> dict:
+        params = getattr(self._module, "params", None)
+        if params is not None:
+            params["validate_certs"] = self._validate_certs
+        response, info = fetch_url(
+            self._module,
+            f"{self._controller_url}{path}",
+            data=json.dumps(body).encode() if body is not None else None,
+            headers={"Content-Type": "application/json"} if body is not None else {},
+            unredirected_headers={"Cookie": f"connect.sid={self._session_cookie}"},
+            method=method,
+            timeout=self._timeout,
+            use_proxy=True,
+            force=True,
+            ca_path=self._ca_path,
+        )
+        status = info.get("status")
+        if status not in success_codes:
+            category = "transport_error" if status == -1 else "provider_error"
+            raise NetrisExternalIPError(
+                f"Netris API {method} request failed",
+                category=category,
+                http_status=status,
+            )
+        content = response.read() if response is not None else b""
+        if not content:
+            return {}
+        try:
+            parsed = json.loads(content)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise NetrisExternalIPError(
+                "Netris API response is not valid JSON",
+                category="malformed_response",
+            ) from error
+        if not isinstance(parsed, dict):
+            raise NetrisExternalIPError(
+                "Netris API response is not a JSON object",
+                category="malformed_response",
+            )
+        return parsed
+
+    def list_subnets(self) -> list[dict]:
+        parsed = self._request("GET", SUBNETS_PATH, success_codes=(200,))
+        data = parsed.get("data")
+        if not isinstance(data, list):
+            raise NetrisExternalIPError(
+                "Netris API subnets response omits its data list",
+                category="malformed_response",
+            )
+        return [_normalize_subnet_record(record) for record in data]
+
+    def create_subnet(self, name: str, prefix: str, site_id: int, tenant_id: int):
+        body = {
+            "name": name,
+            "prefix": prefix,
+            "purpose": RESERVATION_PURPOSE,
+            "sites": [{"id": int(site_id)}],
+            "tenant": {"id": int(tenant_id)},
+        }
+        parsed = self._request("POST", SUBNET_PATH, body=body, success_codes=(200, 201))
+        data = parsed.get("data")
+        if isinstance(data, dict):
+            data = data.get("id")
+        if isinstance(data, bool) or not isinstance(data, (int, str)):
+            raise NetrisExternalIPError(
+                "Netris API subnet create response omits its id",
+                category="malformed_response",
+            )
+        return data
+
+    def delete_subnet(self, subnet_id: int) -> None:
+        self._request("DELETE", f"{SUBNET_PATH}/{subnet_id}", success_codes=(200, 204))
+
+
+def _read_owned(request: dict, client, site_id: int, tenant_id: int):
+    subnets = client.list_subnets()
+    try:
+        owned = _owned_record(request, subnets, site_id, tenant_id)
+    except ValueError as error:
+        raise NetrisExternalIPError(str(error)) from error
+    return subnets, owned
+
+
+def _pause(delay_seconds: float, attempt: int, max_attempts: int) -> None:
+    if attempt < max_attempts and delay_seconds > 0:
+        time.sleep(delay_seconds)
+
+
+def _reconcile_allocate(request, client, site_id, tenant_id, delay_seconds) -> dict:
+    wrote = False
+    last_error = None
+    attempt = 0
+    while attempt < MAX_ALLOCATE_ATTEMPTS:
+        attempt += 1
+        subnets, owned = _read_owned(request, client, site_id, tenant_id)
+        if owned is not None:
+            return {"changed": wrote, "address": _reservation_address(owned)}
+        try:
+            address = select_address(request["cidr"], [r["prefix"] for r in subnets])
+        except ValueError as error:
+            raise NetrisExternalIPError(str(error), category="exhausted") from error
+        wrote = True
+        try:
+            client.create_subnet(
+                request["reservation_name"], f"{address}/32", site_id, tenant_id
+            )
+        except NetrisExternalIPError as error:
+            last_error = error
+            _pause(delay_seconds, attempt, MAX_ALLOCATE_ATTEMPTS)
+            continue
+        subnets, owned = _read_owned(request, client, site_id, tenant_id)
+        if owned is not None:
+            observed = _reservation_address(owned)
+            if observed != address:
+                raise NetrisExternalIPError(
+                    "Netris returned a UID reservation at an unexpected address",
+                    category="uncertain_state",
+                )
+            return {"changed": True, "address": address}
+        _pause(delay_seconds, attempt, MAX_ALLOCATE_ATTEMPTS)
+    if last_error is not None:
+        raise last_error
+    raise NetrisExternalIPError(
+        "Netris ExternalIP allocation did not converge within the attempt bound",
+        category="exhausted_attempts",
+    )
+
+
+def _reconcile_release(request, client, site_id, tenant_id, delay_seconds) -> dict:
+    changed = False
+    for observation in range(1, MAX_RELEASE_OBSERVATIONS + 1):
+        subnets, owned = _read_owned(request, client, site_id, tenant_id)
+        if owned is None:
+            return {"changed": changed, "address": ""}
+        changed = True
+        try:
+            client.delete_subnet(owned["id"])
+        except NetrisExternalIPError as error:
+            if error.http_status != 404:
+                raise
+        _pause(delay_seconds, observation, MAX_RELEASE_OBSERVATIONS)
+    raise NetrisExternalIPError(
+        "Netris UID reservation persists after the observation bound",
+        category="exhausted_observations",
+    )
+
+
+def reconcile(
+    request: dict, client, site_id: int, tenant_id: int,
+    delay_seconds: float = RETRY_DELAY_SECONDS,
+) -> dict:
     """Run allocation/release against the Netris API; return changed + address."""
-    raise NotImplementedError
+    if request["operation"] == "external_ip.allocate":
+        return _reconcile_allocate(request, client, site_id, tenant_id, delay_seconds)
+    return _reconcile_release(request, client, site_id, tenant_id, delay_seconds)

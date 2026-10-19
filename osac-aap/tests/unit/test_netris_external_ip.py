@@ -1,4 +1,6 @@
 import copy
+import io
+import json
 import sys
 from pathlib import Path
 
@@ -483,3 +485,344 @@ def test_owned_address_fails_closed_on_mismatched_reservation(override):
         netris_eip.owned_address(
             request, [make_reservation(**override)], NETRIS_SITE_ID, NETRIS_TENANT_ID
         )
+
+
+# U06 — reconcile: new durable reservation, retry reuse, same UID after changed identity
+
+
+class FakeNetrisClient:
+    def __init__(self, lists=(), create_error=None, delete_error=None):
+        self._lists = list(lists)
+        self._create_error = create_error
+        self._delete_error = delete_error
+        self.list_calls = 0
+        self.created = []
+        self.deleted = []
+
+    def list_subnets(self):
+        if not self._lists:
+            raise AssertionError("unexpected list_subnets call")
+        records = self._lists[min(self.list_calls, len(self._lists) - 1)]
+        self.list_calls += 1
+        return records
+
+    def create_subnet(self, name, prefix, site_id, tenant_id):
+        self.created.append((name, prefix, site_id, tenant_id))
+        if self._create_error is not None:
+            raise self._create_error
+
+    def delete_subnet(self, subnet_id):
+        self.deleted.append(subnet_id)
+        if self._delete_error is not None:
+            raise self._delete_error
+
+
+def make_request(operation="external_ip.allocate", **overrides):
+    if operation == "external_ip.release":
+        overrides.setdefault("metadata.deletionTimestamp", "2026-10-19T00:00:00Z")
+    resource = make_resource(**overrides)
+    pool = make_pool(**({"phase": "Deleting"} if operation == "external_ip.release" else {}))
+    return netris_eip.validate_request(resource, pool, operation)
+
+
+def test_reconcile_allocates_new_durable_reservation():
+    client = FakeNetrisClient(lists=[[], [make_reservation("10.20.0.1")]])
+    request = make_request()
+
+    result = netris_eip.reconcile(
+        request, client, NETRIS_SITE_ID, NETRIS_TENANT_ID, delay_seconds=0
+    )
+
+    assert result == {"changed": True, "address": "10.20.0.1"}
+    assert client.created == [
+        (f"osac-eip-{RESOURCE_UID}", "10.20.0.1/32", NETRIS_SITE_ID, NETRIS_TENANT_ID)
+    ]
+
+
+def test_reconcile_reuses_existing_uid_reservation_without_writing():
+    client = FakeNetrisClient(lists=[[make_reservation("10.20.0.5")]])
+    request = make_request()
+
+    result = netris_eip.reconcile(
+        request, client, NETRIS_SITE_ID, NETRIS_TENANT_ID, delay_seconds=0
+    )
+
+    assert result == {"changed": False, "address": "10.20.0.5"}
+    assert client.created == []
+    assert client.deleted == []
+
+
+def test_reconcile_retry_same_uid_after_changed_name_and_generation():
+    first_request = make_request()
+    retry_request = make_request(**{"metadata.name": "renamed", "metadata.generation": 42})
+    assert first_request["reservation_name"] == retry_request["reservation_name"]
+
+    client = FakeNetrisClient(lists=[[make_reservation("10.20.0.9")]])
+
+    first = netris_eip.reconcile(
+        first_request, client, NETRIS_SITE_ID, NETRIS_TENANT_ID, delay_seconds=0
+    )
+    retry = netris_eip.reconcile(
+        retry_request, client, NETRIS_SITE_ID, NETRIS_TENANT_ID, delay_seconds=0
+    )
+
+    assert first == retry == {"changed": False, "address": "10.20.0.9"}
+
+
+# U07 — conflict, lost POST response, bounded retries, malformed response fails
+
+
+def provider_error(category="conflict", status=409):
+    return netris_eip.NetrisExternalIPError(
+        "Netris IPAM subnet write was rejected", category=category, http_status=status
+    )
+
+
+def test_reconcile_conflict_refreshes_occupancy_and_retries():
+    other = make_reservation("10.20.0.1", name="osac-eip-another-uid")
+    ours = make_reservation("10.20.0.2")
+    client = FakeNetrisClient(
+        lists=[[], [other], [other, ours]],
+        create_error=provider_error(),
+    )
+    request = make_request()
+
+    result = netris_eip.reconcile(
+        request, client, NETRIS_SITE_ID, NETRIS_TENANT_ID, delay_seconds=0
+    )
+
+    assert result == {"changed": True, "address": "10.20.0.2"}
+    assert [prefix for _, prefix, _, _ in client.created] == [
+        "10.20.0.1/32",
+        "10.20.0.2/32",
+    ]
+    assert client.deleted == []
+
+
+def test_reconcile_lost_create_response_reuses_uid_reservation():
+    ours = make_reservation("10.20.0.1")
+    client = FakeNetrisClient(
+        lists=[[], [ours]],
+        create_error=netris_eip.NetrisExternalIPError(
+            "Netris controller request failed",
+            category="transport_error",
+        ),
+    )
+    request = make_request()
+
+    result = netris_eip.reconcile(
+        request, client, NETRIS_SITE_ID, NETRIS_TENANT_ID, delay_seconds=0
+    )
+
+    assert result == {"changed": True, "address": "10.20.0.1"}
+    assert len(client.created) == 1
+    assert client.deleted == []
+
+
+def test_reconcile_fails_closed_after_bounded_retries():
+    client = FakeNetrisClient(lists=[[], []], create_error=provider_error())
+    request = make_request()
+
+    with pytest.raises(netris_eip.NetrisExternalIPError):
+        netris_eip.reconcile(
+            request, client, NETRIS_SITE_ID, NETRIS_TENANT_ID, delay_seconds=0
+        )
+    assert len(client.created) == netris_eip.MAX_ALLOCATE_ATTEMPTS
+    assert client.list_calls == netris_eip.MAX_ALLOCATE_ATTEMPTS
+
+
+def test_reconcile_fails_on_malformed_provider_response():
+    client = FakeNetrisClient(lists=[["garbage"]])
+    request = make_request()
+
+    with pytest.raises(netris_eip.NetrisExternalIPError):
+        netris_eip.reconcile(
+            request, client, NETRIS_SITE_ID, NETRIS_TENANT_ID, delay_seconds=0
+        )
+    assert client.created == []
+
+
+def test_reconcile_fails_when_verification_shows_a_different_address():
+    ours = make_reservation("10.20.0.6")
+    client = FakeNetrisClient(lists=[[], [ours]])
+    request = make_request()
+
+    with pytest.raises(netris_eip.NetrisExternalIPError):
+        netris_eip.reconcile(
+            request, client, NETRIS_SITE_ID, NETRIS_TENANT_ID, delay_seconds=0
+        )
+
+
+def test_reconcile_fails_on_pool_exhaustion_without_retrying():
+    exhausted_pool = make_pool(cidr="10.20.0.5/32")
+    resource = make_resource()
+    request = netris_eip.validate_request(resource, exhausted_pool, "external_ip.allocate")
+    client = FakeNetrisClient(
+        lists=[[make_reservation("10.20.0.5", name="osac-eip-other-1")]]
+    )
+
+    with pytest.raises(netris_eip.NetrisExternalIPError):
+        netris_eip.reconcile(
+            request, client, NETRIS_SITE_ID, NETRIS_TENANT_ID, delay_seconds=0
+        )
+    assert client.list_calls == 1
+    assert client.created == []
+
+
+# U08 — release: absence, delete-then-absence, delayed absence, 404 readback
+
+
+def test_reconcile_release_absent_is_idempotent_success():
+    client = FakeNetrisClient(lists=[[]])
+    request = make_request("external_ip.release")
+
+    result = netris_eip.reconcile(
+        request, client, NETRIS_SITE_ID, NETRIS_TENANT_ID, delay_seconds=0
+    )
+
+    assert result == {"changed": False, "address": ""}
+    assert client.deleted == []
+
+
+def test_reconcile_release_deletes_then_confirms_absence():
+    client = FakeNetrisClient(lists=[[make_reservation("10.20.0.5")], []])
+    request = make_request("external_ip.release")
+
+    result = netris_eip.reconcile(
+        request, client, NETRIS_SITE_ID, NETRIS_TENANT_ID, delay_seconds=0
+    )
+
+    assert result == {"changed": True, "address": ""}
+    assert client.deleted == [101]
+
+
+def test_reconcile_release_404_requires_absence_read():
+    client = FakeNetrisClient(
+        lists=[[make_reservation("10.20.0.5")], []],
+        delete_error=netris_eip.NetrisExternalIPError(
+            "Netris IPAM subnet is already absent", category="absent", http_status=404
+        ),
+    )
+    request = make_request("external_ip.release")
+
+    result = netris_eip.reconcile(
+        request, client, NETRIS_SITE_ID, NETRIS_TENANT_ID, delay_seconds=0
+    )
+
+    assert result == {"changed": True, "address": ""}
+    assert client.deleted == [101]
+
+
+def test_reconcile_release_delayed_absence_fails_without_success():
+    client = FakeNetrisClient(lists=[[make_reservation("10.20.0.5")]])
+    request = make_request("external_ip.release")
+
+    with pytest.raises(netris_eip.NetrisExternalIPError):
+        netris_eip.reconcile(
+            request, client, NETRIS_SITE_ID, NETRIS_TENANT_ID, delay_seconds=0
+        )
+    assert len(client.deleted) == netris_eip.MAX_RELEASE_OBSERVATIONS
+    assert client.list_calls == netris_eip.MAX_RELEASE_OBSERVATIONS
+
+
+def test_reconcile_release_unrelated_delete_error_fails():
+    client = FakeNetrisClient(
+        lists=[[make_reservation("10.20.0.5")]],
+        delete_error=netris_eip.NetrisExternalIPError(
+            "Netris IPAM subnet delete failed", category="provider_error", http_status=400
+        ),
+    )
+    request = make_request("external_ip.release")
+
+    with pytest.raises(netris_eip.NetrisExternalIPError):
+        netris_eip.reconcile(
+            request, client, NETRIS_SITE_ID, NETRIS_TENANT_ID, delay_seconds=0
+        )
+    assert client.deleted == [101]
+
+
+def test_reconcile_release_deletes_only_the_owned_subnet():
+    other = make_reservation("10.20.0.5", name="osac-eip-another-uid", id=101)
+    ours = make_reservation("10.20.0.9", id=102)
+    client = FakeNetrisClient(lists=[[other, ours], []])
+    request = make_request("external_ip.release")
+
+    result = netris_eip.reconcile(
+        request, client, NETRIS_SITE_ID, NETRIS_TENANT_ID, delay_seconds=0
+    )
+
+    assert result == {"changed": True, "address": ""}
+    assert client.deleted == [102]
+
+
+# Transport client — raw provider record mapping at the boundary
+
+
+def test_client_maps_raw_provider_records_to_normalized_shape(monkeypatch):
+    raw = {
+        "id": 101,
+        "name": f"osac-eip-{RESOURCE_UID}",
+        "prefix": "10.20.0.5/32",
+        "purpose": "nat",
+        "sites": [{"id": 3}],
+        "tenant": {"id": 7},
+        "vpc": {"id": 9},
+    }
+    client = netris_eip.NetrisSubnetClient(object(), "https://netris.example", "secret")
+
+    monkeypatch.setattr(
+        netris_eip, "fetch_url", lambda *args, **kwargs: (io.BytesIO(json.dumps({"data": [raw]}).encode()), {"status": 200})
+    )
+    records = client.list_subnets()
+
+    assert records == [
+        {
+            "id": 101,
+            "name": f"osac-eip-{RESOURCE_UID}",
+            "prefix": "10.20.0.5/32",
+            "purpose": "nat",
+            "site_id": 3,
+            "tenant_id": 7,
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        pytest.param({"name": "x", "prefix": "10.0.0.1/32"}, id="missing-fields"),
+        pytest.param(
+            {
+                "id": "not-an-int",
+                "name": "x",
+                "prefix": "10.0.0.1/32",
+                "purpose": "nat",
+                "sites": [{"id": 1}],
+                "tenant": {"id": 1},
+            },
+            id="wrong-types",
+        ),
+        pytest.param(
+            {
+                "id": 1,
+                "name": "x",
+                "prefix": "garbage",
+                "purpose": "nat",
+                "sites": [{"id": 1}],
+                "tenant": {"id": 1},
+            },
+            id="malformed-prefix",
+        ),
+    ],
+)
+def test_client_fails_closed_on_unknown_record_shape(monkeypatch, raw):
+    client = netris_eip.NetrisSubnetClient(object(), "https://netris.example", "secret")
+
+    monkeypatch.setattr(
+        netris_eip,
+        "fetch_url",
+        lambda *args, **kwargs: (io.BytesIO(json.dumps({"data": [raw]}).encode()), {"status": 200}),
+    )
+
+    with pytest.raises(netris_eip.NetrisExternalIPError):
+        client.list_subnets()

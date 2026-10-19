@@ -559,7 +559,7 @@ This displays the security group's state and all ingress and egress rules.
 Networking resources are immutable after creation. Read means `List` and `Get`;
 there is no `Update`/`Patch` operation for a networking resource's specification
 or metadata, except for the SecurityGroup rule replacement described below. To
-change a VirtualNetwork, Subnet, NATGateway, ExternalIP, ExternalIPPool, or
+change a VirtualNetwork, Subnet, NATGateway, ExternalIP, or
 ExternalIPAttachment, delete it and create a replacement:
 
 - **Deletion is guarded.** A resource can only be deleted when no other active
@@ -640,8 +640,9 @@ updates to other networking resources or fields are future scope
 | Create rejected with a precondition error | A referenced resource is not ready | Wait for the referenced resource to reach its terminal ready state, then retry |
 | Create rejected with an invalid-argument error naming a dependency that has been deleted | A referenced resource has been deleted | Recreate the deleted dependency, wait for it to become `READY`, then retry |
 
-The CLI messages and gRPC codes above reflect implemented behavior; REST
-responses surface the same rejections with different status codes.
+The CLI messages and gRPC codes above reflect implemented behavior. For
+operations exposed through REST, REST responses surface the corresponding
+rejections with different status codes.
 
 ---
 

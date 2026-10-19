@@ -46,6 +46,20 @@ var _ = Describe("Compute instances server", func() {
 			Expect(server).ToNot(BeNil())
 		})
 
+		It("passes the HUB Secret fetcher to the private delegate", func() {
+			fetcher := NewMockHubSecretFetcher(ctrl)
+			server, err := NewComputeInstancesServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				SetHubSecretFetcher(fetcher).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			delegate, ok := server.delegate.(*PrivateComputeInstancesServer)
+			Expect(ok).To(BeTrue())
+			Expect(delegate.hubSecretFetcher).To(BeIdenticalTo(fetcher))
+		})
+
 		It("Doesn't create server without logger", func() {
 			// Try to create the public server without logger:
 			server, err := NewComputeInstancesServer().

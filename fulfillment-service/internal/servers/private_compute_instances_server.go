@@ -47,6 +47,7 @@ type PrivateComputeInstancesServerBuilder struct {
 	metricsRegisterer prometheus.Registerer
 	filterDesc        protoreflect.MessageDescriptor
 	secretStore       vault.SecretStore
+	hubSecretFetcher  HubSecretFetcher
 }
 
 var _ privatev1.ComputeInstancesServer = (*PrivateComputeInstancesServer)(nil)
@@ -71,6 +72,7 @@ type PrivateComputeInstancesServer struct {
 	lifecycle               *externalIPLifecycle
 	secretsDao              *dao.GenericDAO[*privatev1.Secret]
 	secretStore             vault.SecretStore
+	hubSecretFetcher        HubSecretFetcher
 	storageTiersDao         *dao.GenericDAO[*privatev1.StorageTier]
 }
 
@@ -109,6 +111,14 @@ func (b *PrivateComputeInstancesServerBuilder) SetFilterDesc(value protoreflect.
 
 func (b *PrivateComputeInstancesServerBuilder) SetSecretStore(value vault.SecretStore) *PrivateComputeInstancesServerBuilder {
 	b.secretStore = value
+	return b
+}
+
+// SetHubSecretFetcher sets the fetcher used to validate HUB-backed SSH-key Secret data.
+func (b *PrivateComputeInstancesServerBuilder) SetHubSecretFetcher(
+	value HubSecretFetcher,
+) *PrivateComputeInstancesServerBuilder {
+	b.hubSecretFetcher = value
 	return b
 }
 
@@ -267,6 +277,7 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 		externalIPAttachmentDao: externalIPAttachmentDao,
 		secretsDao:              secretsDao,
 		secretStore:             b.secretStore,
+		hubSecretFetcher:        b.hubSecretFetcher,
 	}
 	result.lifecycle = newExternalIPLifecycle(
 		externalIPDao,
@@ -945,32 +956,16 @@ func (s *PrivateComputeInstancesServer) validateSshPublicKey(
 		return err
 	}
 
-	if secret.GetType() != privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY {
-		return grpcstatus.Errorf(
-			grpccodes.InvalidArgument,
-			"secret '%s' referenced by ssh_key has type %s; expected %s",
-			refKey(ref),
-			secret.GetType(),
-			privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
-		)
+	if err := validateSecretType(
+		secret, refKey(ref), "ssh_key", privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+	); err != nil {
+		return err
 	}
-	data := secret.GetData()
-	if len(data) == 0 && secret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
-		if s.secretStore == nil {
-			s.logger.ErrorContext(ctx, "Failed to load SSH key Secret: secret store isn't configured")
-			return grpcstatus.Errorf(grpccodes.Internal, "failed to resolve ssh key reference")
-		}
-		secretMetadata := secret.GetMetadata()
-		data, err = s.secretStore.Fetch(
-			ctx,
-			secretMetadata.GetTenant(),
-			secretMetadata.GetProject(),
-			secretMetadata.GetName(),
-		)
-		if err != nil {
-			s.logger.ErrorContext(ctx, "Failed to load SSH key Secret from store", "error", err)
-			return grpcstatus.Errorf(grpccodes.Internal, "failed to resolve ssh key reference")
-		}
+	data, err := loadSSHKeySecretData(
+		ctx, s.logger, s.secretStore, s.hubSecretFetcher, secret, "ssh key",
+	)
+	if err != nil {
+		return err
 	}
 	if len(data["public_key"]) == 0 {
 		return grpcstatus.Errorf(

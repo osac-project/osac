@@ -738,28 +738,11 @@ func (s *PrivateClustersServer) validateSSHKey(
 		privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY); err != nil {
 		return err
 	}
-	data := secret.GetData()
-	if len(data) == 0 && secret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
-		if s.secretStore == nil {
-			s.logger.ErrorContext(ctx, "Failed to load SSH key Secret: secret store isn't configured")
-			return grpcstatus.Error(grpccodes.Internal, "failed to resolve ssh_key reference")
-		}
-		secretMetadata := secret.GetMetadata()
-		data, err = s.secretStore.Fetch(ctx, secretMetadata.GetTenant(), secretMetadata.GetProject(),
-			secretMetadata.GetName())
-		if err != nil {
-			s.logger.ErrorContext(ctx, "Failed to load SSH key Secret from store", "error", err)
-			return grpcstatus.Error(grpccodes.Internal, "failed to resolve ssh_key reference")
-		}
-	}
-	if len(data) == 0 && secret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_HUB {
-		if s.hubSecretFetcher == nil {
-			return grpcstatus.Error(grpccodes.FailedPrecondition, "hub secret retrieval is not configured")
-		}
-		data, err = s.hubSecretFetcher.Fetch(ctx, secret.GetCoordinates())
-		if err != nil {
-			return err
-		}
+	data, err := loadSSHKeySecretData(
+		ctx, s.logger, s.secretStore, s.hubSecretFetcher, secret, "ssh_key",
+	)
+	if err != nil {
+		return err
 	}
 	if err := controllers.ValidateOpenSSHPublicKeySecret(secret, data, identifier); err != nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "ssh_key: %s", grpcstatus.Convert(err).Message())

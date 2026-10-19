@@ -197,31 +197,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		}
 		privatev1.RegisterComputeInstanceTemplatesServer(registrar, privateComputeInstanceTemplatesServer)
 
-		deps.Logger.InfoContext(ctx, "Creating compute instances server")
-		computeInstancesServer, err := servers.NewComputeInstancesServer().
-			SetLogger(deps.Logger).
-			SetAttributionLogic(deps.PublicAttributionLogic).
-			SetTenancyLogic(deps.TenancyLogic).
-			SetMetricsRegisterer(deps.MetricsRegisterer).
-			SetSecretStore(deps.SecretStore).
-			Build()
-		if err != nil {
-			return nil, fmt.Errorf("failed to create compute instances server: %w", err)
-		}
-		publicv1.RegisterComputeInstancesServer(registrar, computeInstancesServer)
-
-		deps.Logger.InfoContext(ctx, "Creating private compute instances server")
-		privateComputeInstancesServer, err = servers.NewPrivateComputeInstancesServer().
-			SetLogger(deps.Logger).
-			SetAttributionLogic(deps.PrivateAttributionLogic).
-			SetTenancyLogic(deps.TenancyLogic).
-			SetMetricsRegisterer(deps.MetricsRegisterer).
-			SetSecretStore(deps.SecretStore).
-			Build()
-		if err != nil {
-			return nil, fmt.Errorf("failed to create private compute instances server: %w", err)
-		}
-		privatev1.RegisterComputeInstancesServer(registrar, privateComputeInstancesServer)
 	}
 
 	// Disk images are required by both VMaaS and BMaaS workflows.
@@ -365,6 +340,36 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create hub secret fetcher: %w", err)
+	}
+
+	if deps.Services.VMaaS {
+		deps.Logger.InfoContext(ctx, "Creating compute instances server")
+		computeInstancesServer, err := servers.NewComputeInstancesServer().
+			SetLogger(deps.Logger).
+			SetAttributionLogic(deps.PublicAttributionLogic).
+			SetTenancyLogic(deps.TenancyLogic).
+			SetMetricsRegisterer(deps.MetricsRegisterer).
+			SetSecretStore(deps.SecretStore).
+			SetHubSecretFetcher(hubSecretFetcher).
+			Build()
+		if err != nil {
+			return nil, fmt.Errorf("failed to create compute instances server: %w", err)
+		}
+		publicv1.RegisterComputeInstancesServer(registrar, computeInstancesServer)
+
+		deps.Logger.InfoContext(ctx, "Creating private compute instances server")
+		privateComputeInstancesServer, err = servers.NewPrivateComputeInstancesServer().
+			SetLogger(deps.Logger).
+			SetAttributionLogic(deps.PrivateAttributionLogic).
+			SetTenancyLogic(deps.TenancyLogic).
+			SetMetricsRegisterer(deps.MetricsRegisterer).
+			SetSecretStore(deps.SecretStore).
+			SetHubSecretFetcher(hubSecretFetcher).
+			Build()
+		if err != nil {
+			return nil, fmt.Errorf("failed to create private compute instances server: %w", err)
+		}
+		privatev1.RegisterComputeInstancesServer(registrar, privateComputeInstancesServer)
 	}
 
 	if deps.Services.CaaS {

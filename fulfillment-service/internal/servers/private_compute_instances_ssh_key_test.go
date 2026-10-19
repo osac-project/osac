@@ -144,6 +144,66 @@ var _ = Describe("ComputeInstance SSH key validation", func() {
 		Expect(instance.GetSpec().GetSshKey().GetId()).To(Equal("vault-compute-key"))
 	})
 
+	It("loads HUB-backed SSH key data through the shared backend path", func() {
+		coordinates := map[string]string{
+			CoordinateHubID: "hub-a", CoordinateNamespace: "keys", CoordinateSecretName: "hub-login",
+		}
+		fetcher := NewMockHubSecretFetcher(ctrl)
+		server, err := NewPrivateComputeInstancesServer().
+			SetLogger(logger).
+			SetAttributionLogic(attribution).
+			SetTenancyLogic(tenancy).
+			SetHubSecretFetcher(fetcher).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = server.secretsDao.Create().SetObject(privatev1.Secret_builder{
+			Id:          "hub-compute-key",
+			Metadata:    privatev1.Metadata_builder{Name: "hub-login", Tenant: testTenant}.Build(),
+			Type:        privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+			Backend:     privatev1.SecretBackend_SECRET_BACKEND_HUB,
+			Coordinates: coordinates,
+		}.Build()).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		fetcher.EXPECT().Fetch(gomock.Any(), coordinates).
+			Return(map[string][]byte{"public_key": []byte("ssh-ed25519 AAAA hub-login")}, nil)
+
+		instance := privatev1.ComputeInstance_builder{
+			Metadata: privatev1.Metadata_builder{Tenant: testTenant}.Build(),
+			Spec: privatev1.ComputeInstanceSpec_builder{
+				SshKey: privatev1.SecretLocalReference_builder{Name: "hub-login"}.Build(),
+			}.Build(),
+		}.Build()
+		Expect(server.validateSshPublicKey(ctx, instance, nil)).To(Succeed())
+		Expect(instance.GetSpec().GetSshKey().GetId()).To(Equal("hub-compute-key"))
+		Expect(instance.GetSpec().GetSshKey().GetName()).To(Equal("hub-login"))
+	})
+
+	It("retains VMaaS non-empty-only key validation", func() {
+		server, err := NewPrivateComputeInstancesServer().
+			SetLogger(logger).
+			SetAttributionLogic(attribution).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = server.secretsDao.Create().SetObject(privatev1.Secret_builder{
+			Id:       "opaque-key-material",
+			Metadata: privatev1.Metadata_builder{Name: "opaque-key-material", Tenant: testTenant}.Build(),
+			Type:     privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+			Data:     map[string][]byte{"public_key": []byte("not-an-openssh-key")},
+		}.Build()).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		instance := privatev1.ComputeInstance_builder{
+			Metadata: privatev1.Metadata_builder{Tenant: testTenant}.Build(),
+			Spec: privatev1.ComputeInstanceSpec_builder{
+				SshKey: privatev1.SecretLocalReference_builder{Id: "opaque-key-material"}.Build(),
+			}.Build(),
+		}.Build()
+		Expect(server.validateSshPublicKey(ctx, instance, nil)).To(Succeed())
+	})
+
 	It("returns Internal when Vault-backed SSH key data cannot be fetched", func() {
 		mockStore := vault.NewMockSecretStore(ctrl)
 		server, err := NewPrivateComputeInstancesServer().

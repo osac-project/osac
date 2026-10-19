@@ -60,7 +60,16 @@ func loadSSHKeySecretData(
 		if hubSecretFetcher == nil {
 			return nil, grpcstatus.Error(grpccodes.FailedPrecondition, "hub secret retrieval is not configured")
 		}
-		return hubSecretFetcher.Fetch(ctx, secret.GetCoordinates())
+		data, err := hubSecretFetcher.Fetch(ctx, secret.GetCoordinates())
+		if err != nil {
+			logger.ErrorContext(ctx, "Failed to load SSH key Secret from HUB", "error", err)
+			code := grpccodes.Internal
+			if statusErr, ok := grpcstatus.FromError(err); ok {
+				code = statusErr.Code()
+			}
+			return nil, grpcstatus.Errorf(code, "failed to resolve %s reference", field)
+		}
+		return data, nil
 	}
 
 	return data, nil

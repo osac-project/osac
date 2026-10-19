@@ -283,6 +283,29 @@ var _ = Describe("Cluster SSH key Secret references", func() {
 		Expect(cluster.GetSpec().GetSshKey().GetId()).To(Equal("hub-inherited-key-id"))
 	})
 
+	It("preserves HUB status codes without exposing backend details", func() {
+		coordinates := map[string]string{
+			CoordinateHubID: "private-hub", CoordinateNamespace: "private-keys", CoordinateSecretName: "private-key",
+		}
+		fetcher := NewMockHubSecretFetcher(ctrl)
+		server := newServer(nil, fetcher)
+		seedSecret(server, privatev1.Secret_builder{
+			Id:          "hub-error-key-id",
+			Metadata:    privatev1.Metadata_builder{Name: "hub-error-key", Tenant: testTenant}.Build(),
+			Type:        privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+			Backend:     privatev1.SecretBackend_SECRET_BACKEND_HUB,
+			Coordinates: coordinates,
+		}.Build())
+		fetcher.EXPECT().Fetch(gomock.Any(), coordinates).
+			Return(nil, status.Error(codes.Unavailable, "private-hub/private-keys/private-key is unavailable"))
+
+		err := server.validateSSHKey(ctx,
+			clusterWithRef(privatev1.SecretLocalReference_builder{Id: "hub-error-key-id"}.Build()), nil)
+		Expect(status.Code(err)).To(Equal(codes.Unavailable))
+		Expect(status.Convert(err).Message()).To(Equal("failed to resolve ssh_key reference"))
+		Expect(status.Convert(err).Message()).ToNot(ContainSubstring("private-hub"))
+	})
+
 	It("canonicalizes a ClusterTemplate SSH-key default", func() {
 		templateServer, err := NewPrivateClusterTemplatesServer().
 			SetLogger(logger).

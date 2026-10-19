@@ -179,6 +179,42 @@ var _ = Describe("ComputeInstance SSH key validation", func() {
 		Expect(instance.GetSpec().GetSshKey().GetName()).To(Equal("hub-login"))
 	})
 
+	It("maps non-status HUB errors to Internal without exposing backend details", func() {
+		coordinates := map[string]string{
+			CoordinateHubID: "private-hub", CoordinateNamespace: "private-keys", CoordinateSecretName: "private-key",
+		}
+		fetcher := NewMockHubSecretFetcher(ctrl)
+		server, err := NewPrivateComputeInstancesServer().
+			SetLogger(logger).
+			SetAttributionLogic(attribution).
+			SetTenancyLogic(tenancy).
+			SetHubSecretFetcher(fetcher).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = server.secretsDao.Create().SetObject(privatev1.Secret_builder{
+			Id:          "hub-error-key",
+			Metadata:    privatev1.Metadata_builder{Name: "hub-error-key", Tenant: testTenant}.Build(),
+			Type:        privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+			Backend:     privatev1.SecretBackend_SECRET_BACKEND_HUB,
+			Coordinates: coordinates,
+		}.Build()).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		fetcher.EXPECT().Fetch(gomock.Any(), coordinates).
+			Return(nil, errors.New("private-hub/private-keys/private-key provider failure"))
+
+		instance := privatev1.ComputeInstance_builder{
+			Metadata: privatev1.Metadata_builder{Tenant: testTenant}.Build(),
+			Spec: privatev1.ComputeInstanceSpec_builder{
+				SshKey: privatev1.SecretLocalReference_builder{Id: "hub-error-key"}.Build(),
+			}.Build(),
+		}.Build()
+		err = server.validateSshPublicKey(ctx, instance, nil)
+		Expect(status.Code(err)).To(Equal(codes.Internal))
+		Expect(status.Convert(err).Message()).To(Equal("failed to resolve ssh key reference"))
+		Expect(status.Convert(err).Message()).ToNot(ContainSubstring("private-hub"))
+	})
+
 	It("retains VMaaS non-empty-only key validation", func() {
 		server, err := NewPrivateComputeInstancesServer().
 			SetLogger(logger).

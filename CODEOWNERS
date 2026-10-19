@@ -48,7 +48,6 @@
 # CaaS (Cluster-as-a-Service) working group
 # Tests
 /tests/e2e/caas/ @osac-project/wg-caas
-/tests/e2e/storage/test_caas_*.py @osac-project/wg-caas
 /tests/unit/test_caas_*.py @osac-project/wg-caas
 /osac-aap/tests/integration/targets/cluster_create_caas/ @osac-project/wg-caas
 /osac-aap/tests/integration/targets/cluster_delete_caas/ @osac-project/wg-caas

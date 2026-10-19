@@ -267,8 +267,10 @@ fi
 
 # Protected connection settings cannot be supplied through low-level AAP maps,
 # including when unrelated expert overrides are enabled.
-render_failure \
+render_failure_with_message \
   netris-protected-cluster-validate-certs-disabled \
+  'managed by global.networking.netris' \
+  --skip-schema-validation \
   --set global.expertOverrides.aap=true \
   --set aap.instanceGroups.clusterFulfillment.enabled=true \
   --set-string aap.instanceGroups.clusterFulfillment.config.NETRIS_VALIDATE_CERTS=false

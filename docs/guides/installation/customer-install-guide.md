@@ -653,16 +653,6 @@ the cluster. Then follow [Section 4](#4-installing-osac).
 
 ### 6.2 Installing OSAC for CaaS with the Netris network backend
 
-> **TBD**
->
-> `network-backend.md` now documents a `global.networking` facade
-> (`fabricManager`/`k8sManager`) that Helm derives the AAP instance-group
-> config from, and a supported `agentless_net` backend this section doesn't
-> cover. This section still uses the older, direct
-> `aap.instanceGroups.clusterFulfillment.config` style. Pending confirmation
-> from the networking team (see the open PR discussion) before rewriting it
-> around the facade.
-
 The AWS Route 53 DNS backend is the default; it's independent of the network
 backend. For the full variable reference, see
 [`network-backend.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/network-backend.md).

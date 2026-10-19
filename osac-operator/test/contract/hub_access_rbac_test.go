@@ -215,7 +215,7 @@ func expectedHubAccessVerbs() []verbExpectation {
 			name:      "core API secrets",
 			apiGroup:  "",
 			resources: []string{"secrets"},
-			verbs:     []string{"create"},
+			verbs:     []string{"create", "patch", "update"},
 		},
 	}
 }

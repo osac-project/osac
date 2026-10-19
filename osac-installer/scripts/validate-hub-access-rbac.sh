@@ -38,7 +38,7 @@ if secret_rule is None:
     raise SystemExit("hub-access Secret RBAC rule was not rendered")
 
 verbs = set(re.findall(r"^      - (.+)$", secret_rule.group(1), re.MULTILINE))
-missing = {"create", "patch"} - verbs
+missing = {"create", "patch", "update"} - verbs
 if missing:
     raise SystemExit(f"hub-access Secret RBAC rule is missing verbs: {sorted(missing)}")
 PY

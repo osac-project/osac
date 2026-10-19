@@ -8,6 +8,13 @@ dependencies = [
     "pytest-xdist>=3.0",
     "pyyaml>=6.0",
     "websocket-client>=1.6",
+    # NetBox inventory client for the e2e backend abstraction. Pin <7.9 for
+    # python3.11 compatibility; bump to >=7.9 (matched to NetBox 4.7) when CI
+    # moves to python >=3.12.
+    "pynetbox<7.9",
+    # requests is imported directly by tests/e2e/core/netbox_client.py for the
+    # TLS session and is also a pynetbox dependency.
+    "requests>=2.31",
 ]
 
 [tool.setuptools.packages.find]

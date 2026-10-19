@@ -41,6 +41,7 @@ import threading
 import time
 import unittest
 import uuid
+from pathlib import Path
 
 import yaml
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -375,6 +376,7 @@ class ExternalIPPlaybookTests(unittest.TestCase):
                 check=False,
             )
         cls._kubectl("delete", "namespace", cls.namespace, "--ignore-not-found")
+        Path(cls.unusable_kubeconfig).unlink(missing_ok=True)
         for server, thread in zip((cls.server, cls.sentinel), cls.threads):
             server.shutdown()
             server.server_close()

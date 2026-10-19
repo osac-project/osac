@@ -14,7 +14,6 @@
     fail_msg: >-
       ExternalIP v1 requires the contract version annotation, the resource
       snapshot, and the osac_job_vars.external_ip_pool snapshot.
-  no_log: true
 
 - name: Ensure Netris auth
   ansible.builtin.include_role:

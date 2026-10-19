@@ -49,16 +49,24 @@ the backend needs:
 |---|---|---|
 | `OSAC_INVENTORY_BACKEND` | `metal3` or `netbox` — the only backend selector | `metal3` |
 | `OSAC_NETBOX_URL` / `OSAC_NETBOX_TOKEN` | NetBox URL and API token overrides | from BMF Secrets |
-| `OSAC_NETBOX_CA_FILE` / `OSAC_NETBOX_INSECURE` | CA PEM file / disable TLS verification | from the `osac-netbox-ca` Secret / deployed `allowInsecureHTTP` |
+| `OSAC_NETBOX_CA_FILE` / `OSAC_NETBOX_INSECURE` | CA PEM file / disable TLS certificate verification — the only verification switch; the deployed `allowInsecureHTTP` merely permits an `http://` URL and never disables verification | CA from the `osac-netbox-ca` Secret / verification on |
 | `OSAC_NETBOX_SITE` | Site slug for fixture devices (required on netbox) | — |
 | `OSAC_NETBOX_ROLE` | Device role slug for fixture devices | `server` |
-| `OSAC_NETBOX_FIXTURE_HOSTS` | JSON list of virtual host specs: `{"bmc_address": ..., "boot_mac": ..., "interface_macs"?: {...}, "custom_fields"?: {...}}` — one per lab host; `custom_fields` carries capability fields matching the instance type's host selector | — |
+| `OSAC_NETBOX_FIXTURE_HOSTS` | JSON list of virtual host specs: `{"bmc_address": ..., "boot_mac": ..., "interface_macs"?: {...}, "custom_fields"?: {...}}` — one per lab host; the sanity lifecycle test requires `interface_macs` (or `custom_fields.osac_interface_macs`) because it asserts NIC metadata against the inventory MACs; `custom_fields` carries capability fields matching the instance type's host selector | — |
 
 Unlike metal3 (whose BMHs the infra backend provisions out-of-band), the
 netbox backend provisions its own inventory: the `inventory_hosts` session
 fixture creates `osac_managed` devices in the `staged` state from
-`OSAC_NETBOX_FIXTURE_HOSTS` (named after the test run id, so re-runs are
-idempotent) and deletes them on teardown.
+`OSAC_NETBOX_FIXTURE_HOSTS` (named `<test_run_id>-netbox-<n>`; repeated setup
+within one session is idempotent) and deletes them on teardown. Each run
+uses a new run id, so delete leftover devices after an aborted run.
+
+Connection settings come from the BMF chart's `osac-inventory-config`,
+`osac-netbox-token`, and `osac-netbox-ca` Secrets; each Secret is read only
+when its matching `OSAC_NETBOX_*` override is unset, so a fully env-driven
+run against an external NetBox needs no deployed Secrets. The image check
+on the netbox path verifies the BMI's bound DiskImage source through the
+public API (the provisioned image URL is only observable on a metal3 BMH).
 
 ## Running
 

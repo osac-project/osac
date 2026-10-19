@@ -5,6 +5,7 @@ package baremetalworker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -42,13 +43,12 @@ func (f *rejectingCreateClient) CreateBareMetalInstance(
 }
 
 var _ = Describe(
-	"isDefinitiveCreateRejection",
+	"isDefinitiveCreateCode",
 	Label("baremetalworker"),
 	func() {
 		DescribeTable("terminal codes return true",
 			func(code codes.Code) {
-				err := status.Error(code, "rejected")
-				Expect(isDefinitiveCreateRejection(err)).
+				Expect(isDefinitiveCreateCode(code)).
 					To(BeTrue(),
 						"code %v must be definitive",
 						code)
@@ -72,8 +72,7 @@ var _ = Describe(
 		DescribeTable(
 			"transient/ambiguous codes return false",
 			func(code codes.Code) {
-				err := status.Error(code, "transient")
-				Expect(isDefinitiveCreateRejection(err)).
+				Expect(isDefinitiveCreateCode(code)).
 					To(BeFalse(),
 						"code %v must stay conservative",
 						code)
@@ -91,33 +90,46 @@ var _ = Describe(
 			Entry("DataLoss",
 				codes.DataLoss),
 		)
+	},
+)
 
-		It("returns false for non-gRPC errors", func() {
-			err := fmt.Errorf("plain error")
-			Expect(isDefinitiveCreateRejection(err)).
-				To(BeFalse())
-		})
-
-		It("detects terminal code through wrapping",
+var _ = Describe(
+	"bmiCreateRejectedError typed boundary",
+	Label("baremetalworker"),
+	func() {
+		It("is detected through fmt.Errorf wrapping",
 			func() {
-				inner := status.Error(
-					codes.InvalidArgument, "bad")
+				inner := &bmiCreateRejectedError{
+					code: codes.InvalidArgument,
+				}
 				wrapped := fmt.Errorf(
 					"creating BMI x: %w", inner)
-				Expect(
-					isDefinitiveCreateRejection(wrapped)).
+				var target *bmiCreateRejectedError
+				Expect(errors.As(wrapped, &target)).
 					To(BeTrue(),
-						"must unwrap fmt.Errorf %%w")
+						"must unwrap through %%w")
+				Expect(target.code).To(
+					Equal(codes.InvalidArgument))
+			})
+
+		It("is NOT produced for transient codes",
+			func() {
+				inner := status.Error(
+					codes.Unavailable, "down")
+				wrapped := fmt.Errorf(
+					"creating BMI x: %w", inner)
+				var target *bmiCreateRejectedError
+				Expect(errors.As(wrapped, &target)).
+					To(BeFalse(),
+						"transient must not match")
 			})
 	},
 )
 
-// driveToCreate reserves a slot, calls createSelectedWorker
-// to persist the attempt origin (first call), then calls
-// again to record Attempted and fire the Create RPC
-// (second call — both happen in the same invocation).
-// The co pointer reflects the post-rejection state on
-// success; caller must r.apiReader.Get to see the store.
+// driveToCreate reserves a slot and calls
+// createSelectedWorker once. The reservation already
+// persists AttemptStartedAt, so this single call records
+// Attempted and fires the Create RPC.
 func driveToCreate(
 	r *Reconciler, fc FulfillmentClient,
 	co *v1alpha1.ClusterOrder,
@@ -128,27 +140,8 @@ func driveToCreate(
 	slot := co.Status.Workers[0]
 	obs := capacityObservation(fc)
 
-	// Call 1: persist AttemptStartedAt origin.
-	_, err = r.createSelectedWorker(
-		ctx, co, cluster, nr, &slot,
-		workerCreationInputs{}, obs)
-	if err != nil {
-		return fmt.Errorf("origin: %w", err)
-	}
-	if e := r.apiReader.Get(
-		ctx,
-		client.ObjectKeyFromObject(co),
-		co); e != nil {
-		return e
-	}
-	slot = co.Status.Workers[0]
-
-	// Call 2: records Attempted then fires Create.
-	// recordBMICreateAttempt transitions Reserved→
-	// Attempted in the same invocation before the
-	// Create RPC. On a definitive rejection,
-	// recordBMICreateRejection transitions back.
-	obs = capacityObservation(fc)
+	// Single call: records Attempted then fires
+	// the Create RPC in the same invocation.
 	_, err = r.createSelectedWorker(
 		ctx, co, cluster, nr, &slot,
 		workerCreationInputs{}, obs)
@@ -157,7 +150,7 @@ func driveToCreate(
 
 // Direct unit test of recordBMICreateRejection: verifies
 // that the function correctly transitions a worker from
-// Attempted to Failed/Reserved.
+// Attempted to Failed/Reserved with sanitized output.
 var _ = It(
 	"recordBMICreateRejection directly transitions "+
 		"Attempted to Failed/Reserved",
@@ -169,8 +162,6 @@ var _ = It(
 		)
 		ctx := context.Background()
 
-		// Manually set up a worker in the Attempted
-		// state (as if recordBMICreateAttempt ran).
 		co.Status.Workers = []v1alpha1.WorkerStatus{
 			newWorkerStatus(
 				"standard", "standard",
@@ -185,47 +176,40 @@ var _ = It(
 			ctx,
 			client.ObjectKeyFromObject(co),
 			co)).To(Succeed())
-		Expect(co.Status.Workers[0].BMICreateState).
-			To(Equal(
-				v1alpha1.WorkerBMICreateStateAttempted),
-				"precondition: state must be Attempted")
 
-		// Call recordBMICreateRejection.
 		worker := &co.Status.Workers[0]
-		createErr := status.Error(
-			codes.InvalidArgument,
-			"owner targets deleting cluster")
+		rejected := &bmiCreateRejectedError{
+			code: codes.InvalidArgument,
+		}
 		res, err := r.recordBMICreateRejection(
-			ctx, co, worker, createErr)
-		Expect(err).NotTo(HaveOccurred(),
-			"rejection recording failed: %v", err)
-		Expect(res.IsZero()).To(BeFalse(),
-			"must boundary-requeue after recording")
+			ctx, co, worker, rejected)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res.IsZero()).To(BeFalse())
 
-		// Read back from the store.
 		Expect(r.apiReader.Get(
 			ctx,
 			client.ObjectKeyFromObject(co),
 			co)).To(Succeed())
 		w := co.Status.Workers[0]
 		Expect(w.Phase).To(
-			Equal(workerPhaseFailed),
-			"must transition to Failed: %+v", w)
+			Equal(workerPhaseFailed))
 		Expect(w.BMICreateState).To(
 			Equal(
-				v1alpha1.WorkerBMICreateStateReserved),
-			"must re-arm Reserved: %+v", w)
+				v1alpha1.WorkerBMICreateStateReserved))
 		Expect(w.LastFailureReason).To(
-			Equal(lastFailureReasonCreateRejected),
-			"must record reason: %+v", w)
-		Expect(w.BareMetalInstance.ID).To(BeEmpty(),
-			"must not record an ID: %+v", w)
+			Equal(lastFailureReasonCreateRejected))
+		// Verify sanitized output: no raw RPC text.
+		Expect(w.LastFailureMessage).To(
+			ContainSubstring("InvalidArgument"))
+		Expect(w.LastFailureMessage).NotTo(
+			ContainSubstring("owner"))
+		Expect(w.BareMetalInstance.ID).To(BeEmpty())
 	},
 )
 
-// Incident replay through createSelectedWorker: the
-// definitive rejection on the Create RPC must be caught
-// and recorded, not propagated as an error.
+// Incident replay through createSelectedWorker: a
+// definitive rejection must be caught and recorded,
+// not propagated as an error.
 var _ = It(
 	"createSelectedWorker handles definitive "+
 		"rejection end-to-end",
@@ -240,12 +224,10 @@ var _ = It(
 		provider := &rejectingCreateClient{
 			nodeSetClient: fc,
 			rejectCode:    codes.InvalidArgument,
-			rejectMsg: "owner reference targets " +
-				"a deleting cluster",
+			rejectMsg:     "owner targets deleting",
 		}
 		r.fulfillment = provider
 
-		// Reserve a worker slot.
 		added, err := r.reserveWorkerSlots(ctx, co)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(added).To(BeTrue())
@@ -254,13 +236,11 @@ var _ = It(
 			client.ObjectKeyFromObject(co),
 			co)).To(Succeed())
 
-		// Drive creation until the rejected Create.
 		err = driveToCreate(r, provider, co)
 		Expect(err).NotTo(HaveOccurred(),
 			"definitive rejection must not "+
 				"propagate: %v", err)
 
-		// Verify the persisted state.
 		Expect(r.apiReader.Get(
 			ctx,
 			client.ObjectKeyFromObject(co),
@@ -268,26 +248,22 @@ var _ = It(
 		Expect(co.Status.Workers).To(HaveLen(1))
 		w := co.Status.Workers[0]
 		Expect(w.Phase).To(
-			Equal(workerPhaseFailed),
-			"must transition to Failed: %+v", w)
+			Equal(workerPhaseFailed))
 		Expect(w.LastFailureReason).To(
-			Equal(lastFailureReasonCreateRejected),
-			"must record rejection reason: "+
-				"%+v", w)
-		Expect(provider.creates).To(
-			BeNumerically(">=", 1),
-			"no Create RPC was issued")
+			Equal(lastFailureReasonCreateRejected))
+		Expect(w.BMICreateState).To(
+			Equal(
+				v1alpha1.WorkerBMICreateStateReserved),
+			"must re-arm Reserved: %+v", w)
+		Expect(provider.creates).To(Equal(1),
+			"must issue exactly one Create RPC")
 	},
 )
 
-// Non-deleting FailedPrecondition rejection: the direct
-// recordBMICreateRejection test (above) covers the
-// BMICreateState=Reserved transition. This test verifies
-// the createSelectedWorker integration for a live order
-// reaching the Failed phase through a different code.
+// FailedPrecondition via createSelectedWorker.
 var _ = It(
-	"records FailedPrecondition rejection on a "+
-		"live order via createSelectedWorker",
+	"records FailedPrecondition rejection via "+
+		"createSelectedWorker",
 	Label("baremetalworker"),
 	func() {
 		r, fc, co := nodeSetHarness(
@@ -312,9 +288,7 @@ var _ = It(
 			co)).To(Succeed())
 
 		err = driveToCreate(r, provider, co)
-		Expect(err).NotTo(HaveOccurred(),
-			"definitive rejection must not "+
-				"propagate")
+		Expect(err).NotTo(HaveOccurred())
 
 		Expect(r.apiReader.Get(
 			ctx,
@@ -322,18 +296,18 @@ var _ = It(
 			co)).To(Succeed())
 		w := co.Status.Workers[0]
 		Expect(w.Phase).To(
-			Equal(workerPhaseFailed),
-			"must use Failed for retry: %+v", w)
+			Equal(workerPhaseFailed))
 		Expect(w.LastFailureReason).To(
-			Equal(lastFailureReasonCreateRejected),
-			"must record rejection reason: "+
-				"%+v", w)
+			Equal(lastFailureReasonCreateRejected))
+		Expect(w.BMICreateState).To(
+			Equal(
+				v1alpha1.WorkerBMICreateStateReserved),
+			"must re-arm Reserved: %+v", w)
 	},
 )
 
 // Transient errors (Unavailable) must NOT be handled as
-// definitive rejections: the error propagates so the
-// fulfillment-unavailable condition machinery handles it.
+// definitive rejections.
 var _ = It(
 	"propagates Unavailable as a transient error "+
 		"without recording rejection",
@@ -364,20 +338,15 @@ var _ = It(
 		Expect(err).To(HaveOccurred(),
 			"transient error must propagate")
 
-		// Worker must NOT transition to Failed.
 		Expect(r.apiReader.Get(
 			ctx,
 			client.ObjectKeyFromObject(co),
 			co)).To(Succeed())
 		w := co.Status.Workers[0]
 		Expect(w.Phase).NotTo(
-			Equal(workerPhaseFailed),
-			"transient must not record "+
-				"rejection: %+v", w)
+			Equal(workerPhaseFailed))
 		Expect(w.BMICreateState).To(
 			Equal(
-				v1alpha1.WorkerBMICreateStateAttempted),
-			"transient must preserve "+
-				"Attempted: %+v", w)
+				v1alpha1.WorkerBMICreateStateAttempted))
 	},
 )

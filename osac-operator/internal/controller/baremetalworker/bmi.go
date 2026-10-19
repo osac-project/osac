@@ -25,18 +25,28 @@ const (
 	systemBMITemplateID = "osac.templates.bm_host_provisioning"
 )
 
-// isDefinitiveCreateRejection returns true for gRPC status codes that
-// prove the server rejected the BMI create with no side-effects. These
-// terminal codes guarantee no BMI was persisted, so the operator can
-// safely record the rejection and re-arm the absence proof for cleanup.
-// Transient/ambiguous codes (Unavailable, DeadlineExceeded, Canceled,
-// Unknown, Internal, DataLoss) stay conservative — the create outcome
-// is unknown and cleanup must still confirm absence via List.
-//
-// The error may be wrapped by fmt.Errorf("%w"), so the gRPC code is
-// extracted via status.Code which traverses the error chain.
-func isDefinitiveCreateRejection(err error) bool {
-	c := status.Code(err)
+// bmiCreateRejectedError wraps only definitive rejections from the
+// CreateBareMetalInstance RPC. It is the typed boundary that
+// createSelectedWorker uses (via errors.As) to distinguish a
+// server-confirmed no-side-effect rejection from errors returned
+// by the AlreadyExists recovery path (List/Get), which must not
+// trigger the rejection handler.
+type bmiCreateRejectedError struct {
+	code codes.Code
+}
+
+func (e *bmiCreateRejectedError) Error() string {
+	return fmt.Sprintf(
+		"BMI create definitively rejected (code %s)",
+		e.code)
+}
+
+// isDefinitiveCreateCode returns true for gRPC status codes
+// that prove the server rejected the BMI create with no
+// side-effects. Transient/ambiguous codes (Unavailable,
+// DeadlineExceeded, Canceled, Unknown, Internal, DataLoss)
+// stay conservative — the create outcome is unknown.
+func isDefinitiveCreateCode(c codes.Code) bool {
 	switch c {
 	case codes.InvalidArgument,
 		codes.NotFound,
@@ -74,7 +84,18 @@ func (r *Reconciler) ensureBMI(
 		return bmi, ctrl.Result{}, nil
 	}
 
-	return nil, ctrl.Result{}, fmt.Errorf("creating BMI %s: %w", workerName, err)
+	// Only the direct Create RPC error is eligible for definitive
+	// rejection classification. Wrapping it in bmiCreateRejectedError
+	// at this boundary prevents AlreadyExists recovery errors (from
+	// List/Get) from being misclassified downstream.
+	if c := status.Code(err); isDefinitiveCreateCode(c) {
+		return nil, ctrl.Result{}, fmt.Errorf(
+			"creating BMI %s: %w",
+			workerName,
+			&bmiCreateRejectedError{code: c})
+	}
+	return nil, ctrl.Result{}, fmt.Errorf(
+		"creating BMI %s: %w", workerName, err)
 }
 
 // findBMIByName re-lists BMIs and returns the one matching the given name.

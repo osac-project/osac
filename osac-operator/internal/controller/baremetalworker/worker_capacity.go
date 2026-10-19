@@ -5,6 +5,7 @@ package baremetalworker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"time"
@@ -305,8 +306,10 @@ func (r *Reconciler) createSelectedWorker(
 		}
 	}
 	if err != nil {
-		if isDefinitiveCreateRejection(err) {
-			return r.recordBMICreateRejection(ctx, co, prev, err)
+		var rejected *bmiCreateRejectedError
+		if errors.As(err, &rejected) {
+			return r.recordBMICreateRejection(
+				ctx, co, prev, rejected)
 		}
 		return res, err
 	}
@@ -362,7 +365,7 @@ func (r *Reconciler) recordBMICreateRejection(
 	ctx context.Context,
 	co *v1alpha1.ClusterOrder,
 	worker *v1alpha1.WorkerStatus,
-	createErr error,
+	rejected *bmiCreateRejectedError,
 ) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
@@ -374,6 +377,13 @@ func (r *Reconciler) recordBMICreateRejection(
 			errWorkerObservationChanged
 	}
 
+	// Use only the gRPC code in persisted fields and
+	// events — the raw RPC error text may contain
+	// sensitive data (cluster IDs, owner references).
+	safeMsg := fmt.Sprintf(
+		"BMI create rejected (code %s)",
+		rejected.code)
+
 	now := metav1.Now()
 	recorded.Phase = workerPhaseFailed
 	recorded.BMICreateState =
@@ -382,9 +392,7 @@ func (r *Reconciler) recordBMICreateRejection(
 	recorded.LastFailureTime = &now
 	recorded.LastFailureReason =
 		lastFailureReasonCreateRejected
-	recorded.LastFailureMessage = fmt.Sprintf(
-		"BMI create rejected: %s",
-		createErr.Error())
+	recorded.LastFailureMessage = safeMsg
 
 	if err := r.patchStatusFromBase(
 		ctx, co, next); err != nil {
@@ -393,18 +401,17 @@ func (r *Reconciler) recordBMICreateRejection(
 	*co = *next
 
 	log.Info(
-		"BMI create definitively rejected, "+
-			"recorded as Failed/Reserved",
+		"BMI create definitively rejected",
 		"worker", worker.Name,
-		"error", createErr.Error(),
+		"code", rejected.code.String(),
 	)
 	r.recorder.Eventf(
 		co, nil,
 		corev1.EventTypeWarning,
 		eventReasonBMICreateRejected,
 		"CreateRejected",
-		"worker %s: BMI create rejected: %s",
-		worker.Name, createErr.Error(),
+		"worker %s: %s",
+		worker.Name, safeMsg,
 	)
 	return workerBoundaryRequeue(), nil
 }

@@ -1,15 +1,5 @@
 {
   "policy_version": "v1",
-  "normalization": {
-    "case": "ascii_lower",
-    "separators": [
-      "_",
-      "-",
-      "."
-    ],
-    "remove_separators": true,
-    "match_path_suffixes": true
-  },
   "ca_path": "/etc/netris/ca/bundle.pem",
   "protected_inputs": [
     {

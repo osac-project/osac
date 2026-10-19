@@ -34,16 +34,6 @@
       "Netris_CA_Path"
     ]
   },
-  "normalization": {
-    "case": "ascii_lower",
-    "match_path_suffixes": true,
-    "remove_separators": true,
-    "separators": [
-      "_",
-      "-",
-      "."
-    ]
-  },
   "policy_version": "v1",
   "protected_inputs": [
     {

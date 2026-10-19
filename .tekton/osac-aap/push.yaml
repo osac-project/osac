@@ -244,13 +244,27 @@ spec:
           - use
           - $(params.SOURCE_ARTIFACT)=/var/workdir/source
         - name: generate-context
-          image: registry.access.redhat.com/ubi10/python-312:latest
+          # ubi10/python-312 doesn't exist (registry.access.redhat.com has no
+          # UBI10 python s2i image published yet -- confirmed via skopeo,
+          # "name unknown: Repo not found"). ubi9's is fine here: this is a
+          # throwaway build-time tool image for pip-installing
+          # ansible-builder, unrelated to the EE's own UBI10 base image
+          # (execution-environment.yaml's base_image, baked into the
+          # generated Containerfile independently of this step).
+          image: registry.access.redhat.com/ubi9/python-312:latest@sha256:f793a102147ffa00b45ccb88ae91d726c17ac2f7e70214eef0cbfdc32816ec01
           workingDir: /var/workdir/source/osac-aap
           script: |
             #!/bin/bash
             set -euo pipefail
             pip install --no-cache-dir ansible-builder==3.2.0
-            ansible-builder create -f execution-environment/execution-environment.yaml
+            # --output-filename explicit: ansible-builder's default depends
+            # on detecting a podman/docker binary on PATH to decide between
+            # Containerfile/Dockerfile, and this minimal tool image has
+            # neither installed -- confirmed locally it silently falls back
+            # to Dockerfile, which wouldn't match this pipeline's own
+            # dockerfile: Containerfile param.
+            ansible-builder create --output-filename Containerfile \
+              -f execution-environment/execution-environment.yaml
         - name: create-trusted-artifact
           image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:6fdd8890c52acb20ffc5f2d2a6cab2a11b7a2e431bf175bf5577ae4b9849a434
           args:

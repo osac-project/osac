@@ -235,6 +235,7 @@ class OsacCLI:
         ssh_public_key_file: str | None = None,
         version: str | None = None,
         node_sets: dict[str, dict[str, Any]] | list[str] | None = None,
+        network_attachment: str | None = None,
         template_parameters: dict[str, str] | None = None,
         template_parameter_files: dict[str, str] | None = None,
     ) -> str:
@@ -259,6 +260,8 @@ class OsacCLI:
             elif isinstance(node_sets, list):
                 for item in node_sets:
                     args.extend(["--node-set", item])
+        if network_attachment is not None:
+            args.extend(["--network-attachment", network_attachment])
         if template_parameters is not None:
             for key, value in template_parameters.items():
                 args.extend(["-p", f"{key}={value}"])

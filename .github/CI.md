@@ -49,7 +49,7 @@ change also runs `pre-commit` and `dependency-review`. `ci-tests.yml` and `filte
 | `osac-aap/` | `ansible-lint`, integration test, Helm chart lint |
 | `osac-installer/` | integration test, Helm chart lint |
 | `osac-metering/` | unit tests (service, adapters, schema), Helm chart lint |
-| `osac-ui/` | unit tests, lint (the UI and its Go proxy), typecheck |
+| `osac-ui/` | generated TypeScript types, unit tests, lint (the UI and its Go proxy), typecheck |
 | `osac-csi-driver/` | Helm chart lint only (its Go tests are not run in CI yet) |
 | `proto/` | generated-code check, and the tests of the components that use it |
 | `tests/e2e/` and the E2E workflows | the `E2E` suites the change affects (`e2e-policy.yml`) |

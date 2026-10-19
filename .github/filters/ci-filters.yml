@@ -257,7 +257,7 @@ code:
 # unit-tests.yml's own `ui` filter -- gates run-osac-ui-tests, which `code`
 # above deliberately excludes.
 ui:
-  - '{osac-ui/**,.github/workflows/tests.yml,.github/ci-tests.yml,.github/workflows/osac-ui-lint.yaml,.github/workflows/osac-ui-typecheck.yaml}'
+  - '{osac-ui/**,.github/workflows/tests.yml,.github/ci-tests.yml,.github/workflows/osac-ui-generated-types.yaml,.github/workflows/osac-ui-lint.yaml,.github/workflows/osac-ui-typecheck.yaml}'
 
 helm-osac-operator:
   - '{osac-operator/api/**,osac-operator/charts/**,osac-operator/config/crd/bases/**,osac-operator/hack/sync-helm-crds.py,osac-operator/Makefile,.github/workflows/helm-lint.yaml}'

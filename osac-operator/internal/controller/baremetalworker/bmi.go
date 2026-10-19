@@ -25,6 +25,32 @@ const (
 	systemBMITemplateID = "osac.templates.bm_host_provisioning"
 )
 
+// isDefinitiveCreateRejection returns true for gRPC status codes that
+// prove the server rejected the BMI create with no side-effects. These
+// terminal codes guarantee no BMI was persisted, so the operator can
+// safely record the rejection and re-arm the absence proof for cleanup.
+// Transient/ambiguous codes (Unavailable, DeadlineExceeded, Canceled,
+// Unknown, Internal, DataLoss) stay conservative — the create outcome
+// is unknown and cleanup must still confirm absence via List.
+//
+// The error may be wrapped by fmt.Errorf("%w"), so the gRPC code is
+// extracted via status.Code which traverses the error chain.
+func isDefinitiveCreateRejection(err error) bool {
+	c := status.Code(err)
+	switch c {
+	case codes.InvalidArgument,
+		codes.NotFound,
+		codes.FailedPrecondition,
+		codes.PermissionDenied,
+		codes.ResourceExhausted,
+		codes.OutOfRange,
+		codes.Unimplemented:
+		return true
+	default:
+		return false
+	}
+}
+
 // ensureBMI creates a single BareMetalInstance, handling the AlreadyExists race by re-listing.
 // Returns the BMI, a non-zero result on unavailability backoff, or an error.
 // A successful create is not written back into the invocation's observation:

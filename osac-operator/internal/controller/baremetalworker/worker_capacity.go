@@ -20,7 +20,11 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-const eventReasonWorkerCreated = "WorkerCreated"
+const (
+	eventReasonWorkerCreated        = "WorkerCreated"
+	eventReasonBMICreateRejected    = "BMICreateRejected"
+	lastFailureReasonCreateRejected = "BMICreateRejected"
+)
 
 // reconcileWorkerLifecycle performs the existing-worker lifecycle work that
 // needs no creation inputs: retirement intent and failed incarnation cleanup. A
@@ -300,8 +304,14 @@ func (r *Reconciler) createSelectedWorker(
 			workerCreated(prev, ws.BareMetalInstance.Name, ws.BareMetalInstance.ID)
 		}
 	}
-	if err != nil || !res.IsZero() {
+	if err != nil {
+		if isDefinitiveCreateRejection(err) {
+			return r.recordBMICreateRejection(ctx, co, prev, err)
+		}
 		return res, err
+	}
+	if !res.IsZero() {
+		return res, nil
 	}
 	if err := r.writeSelectedWorker(ctx, co, prev); err != nil {
 		return ctrl.Result{}, err
@@ -338,6 +348,65 @@ func (r *Reconciler) recordBMICreateAttempt(ctx context.Context, co *v1alpha1.Cl
 	*co = *next
 	*worker = *persisted
 	return nil
+}
+
+// recordBMICreateRejection transitions a worker whose BMI create was
+// definitively rejected (terminal gRPC code, server-side rollback) to
+// Failed with BMICreateState=Reserved. This re-arms the existing
+// absence proof in cleanupWorker so the baremetalworker-finalizer can
+// clear during deletion instead of looping on "BMI reservation absence
+// is unconfirmed". It reads the authoritative order, saves the base
+// snapshot, mutates the target worker, and patches from the saved base
+// so the diff captures every field change.
+func (r *Reconciler) recordBMICreateRejection(
+	ctx context.Context,
+	co *v1alpha1.ClusterOrder,
+	worker *v1alpha1.WorkerStatus,
+	createErr error,
+) (ctrl.Result, error) {
+	log := ctrllog.FromContext(ctx)
+
+	next := co.DeepCopy()
+	recorded := workerByName(
+		next.Status.Workers, worker.Name)
+	if recorded == nil {
+		return ctrl.Result{},
+			errWorkerObservationChanged
+	}
+
+	now := metav1.Now()
+	recorded.Phase = workerPhaseFailed
+	recorded.BMICreateState =
+		v1alpha1.WorkerBMICreateStateReserved
+	recorded.NextRetryTime = nil
+	recorded.LastFailureTime = &now
+	recorded.LastFailureReason =
+		lastFailureReasonCreateRejected
+	recorded.LastFailureMessage = fmt.Sprintf(
+		"BMI create rejected: %s",
+		createErr.Error())
+
+	if err := r.patchStatusFromBase(
+		ctx, co, next); err != nil {
+		return ctrl.Result{}, err
+	}
+	*co = *next
+
+	log.Info(
+		"BMI create definitively rejected, "+
+			"recorded as Failed/Reserved",
+		"worker", worker.Name,
+		"error", createErr.Error(),
+	)
+	r.recorder.Eventf(
+		co, nil,
+		corev1.EventTypeWarning,
+		eventReasonBMICreateRejected,
+		"CreateRejected",
+		"worker %s: BMI create rejected: %s",
+		worker.Name, createErr.Error(),
+	)
+	return workerBoundaryRequeue(), nil
 }
 
 // writeSelectedWorker persists one selected slot's status from the invocation's

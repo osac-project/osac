@@ -176,11 +176,7 @@ def test_two_node_set_create_passes_network_attachment_with_security_group(
     cli = two_node_set_clients["cli"]
     cli.create_cluster.assert_called_once()
     create_kwargs = cli.create_cluster.call_args.kwargs
-    assert "network_attachment" in create_kwargs, (
-        "create_cluster must pass network_attachment so BMI creation has security groups"
-    )
-    na = create_kwargs["network_attachment"]
-    assert "security-groups=" in na, f"network_attachment must include security-groups, got: {na!r}"
+    assert create_kwargs.get("network_attachment") == "subnet=default-ipv4,security-groups=default"
 
 
 def test_two_node_set_scenario_rejects_foreign_worker_before_teardown(two_node_set_clients: dict[str, Mock]) -> None:

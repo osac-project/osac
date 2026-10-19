@@ -225,18 +225,26 @@ def _wait_for_default_subnets_ready(
         wait_for_grpc_subnet_ready(grpc=grpc, subnet_id=subnet_id)
 
     # OSAC-5561: cluster and BMI creation now validate that any
-    # referenced SecurityGroup is READY.  Wait for the tenant-default
-    # SecurityGroup the same way we wait for the default subnet.
-    sg_ids: list[str] = poll_until(
-        fn=lambda: grpc.list_security_group_ids(),
-        until=lambda ids: len(ids) > 0,
+    # referenced SecurityGroup is READY.  Only wait for the
+    # tenant-default group (name "default") so that leftover custom
+    # groups from a previous run cannot block the session, and the
+    # fixture accurately targets the resource the tests reference.
+    def _default_sg_id() -> str:
+        for sg_id in grpc.list_security_group_ids():
+            sg = grpc.get_security_group(sg_id=sg_id)
+            if sg.get("object", {}).get("metadata", {}).get("name") == "default":
+                return sg_id
+        return ""
+
+    default_sg_id: str = poll_until(
+        fn=_default_sg_id,
+        until=lambda v: v != "",
         retries=60,
         delay=2,
-        description="at least one security group to appear in gRPC",
+        description="tenant-default security group to appear in gRPC",
         retry_on_error=True,
     )
-    for sg_id in sg_ids:
-        wait_for_grpc_security_group_ready(grpc=grpc, sg_id=sg_id)
+    wait_for_grpc_security_group_ready(grpc=grpc, sg_id=default_sg_id)
 
 
 @pytest.fixture(scope="session", autouse=True)

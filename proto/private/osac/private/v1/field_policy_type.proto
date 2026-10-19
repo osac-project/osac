@@ -149,6 +149,21 @@ message EditableSecretReferenceField {
   SecretLocalReference default_value = 1;
 }
 
+// Defines whether a global Secret reference is locked or editable.
+message GlobalSecretReferenceFieldPolicy {
+  oneof behavior {
+    option (buf.validate.oneof).required = true;
+
+    SecretReference locked = 1;
+    EditableGlobalSecretReferenceField editable = 2;
+  }
+}
+
+// Configures an editable global Secret reference.
+message EditableGlobalSecretReferenceField {
+  SecretReference default_value = 1;
+}
+
 // Defines whether a bare metal instance type reference is locked or editable.
 message BareMetalInstanceTypeReferenceFieldPolicy {
   oneof behavior {

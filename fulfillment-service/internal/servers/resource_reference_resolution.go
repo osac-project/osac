@@ -549,6 +549,17 @@ func canonicalSecretLocalReference(resolved *privatev1.Secret) *privatev1.Secret
 	return privatev1.SecretLocalReference_builder{Id: resolved.GetId(), Name: resolved.GetMetadata().GetName()}.Build()
 }
 
+// canonicalSecretReference copies the resolved object's ID, name, project, and
+// shared-tenant selector into a full Secret reference.
+func canonicalSecretReference(resolved *privatev1.Secret) *privatev1.SecretReference {
+	return privatev1.SecretReference_builder{
+		Id:      resolved.GetId(),
+		Name:    resolved.GetMetadata().GetName(),
+		Project: resolved.GetMetadata().GetProject(),
+		Shared:  resolved.GetMetadata().GetTenant() == auth.SharedTenant,
+	}.Build()
+}
+
 // canonicalBareMetalInstanceTypeReference copies the resolved object's ID, name, project,
 // and shared-tenant selector into a new reference.
 func canonicalBareMetalInstanceTypeReference(resolved *privatev1.BareMetalInstanceType) *privatev1.BareMetalInstanceTypeReference {

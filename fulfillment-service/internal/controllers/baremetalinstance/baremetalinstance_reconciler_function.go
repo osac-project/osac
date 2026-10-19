@@ -73,6 +73,9 @@ const (
 	messageFailureNetworkHandoff    = "Network handoff (reboot) did not complete."
 	messageFailureIPDiscovery       = "IP address discovery did not complete."
 	messageFailureReadyTimeout      = "The instance did not reach its powered-on ready state."
+
+	// Controller-side failure that never reaches the operator's lifecycle.
+	messageFailureSSHKey = "The registered SSH-key Secret could not be resolved."
 )
 
 // FunctionBuilder contains the data and logic needed to build a function that reconciles bare metal instances.
@@ -98,6 +101,7 @@ type function struct {
 type task struct {
 	r                  *function
 	bareMetalInstance  *privatev1.BareMetalInstance
+	sshPublicKey       string
 	hubId              string
 	hubNamespace       string
 	hubClient          clnt.Client
@@ -177,7 +181,23 @@ func (r *function) run(ctx context.Context, bareMetalInstance *privatev1.BareMet
 		err = t.update(ctx)
 	}
 	var hubResolutionRetryErr error
-	if err != nil {
+	var secretErr *controllers.SSHKeyResolutionError
+	if errors.As(err, &secretErr) {
+		if !secretErr.Permanent {
+			return err
+		}
+		// Create validates the reference before persistence, but the Secret can
+		// still be deleted before this reconciliation. Do not persist partial
+		// changes from that failure; retain only the failure status below.
+		proto.Reset(bareMetalInstance)
+		proto.Merge(bareMetalInstance, oldBareMetalInstance)
+		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_FAILED, nil)
+		t.syncProvisioningStatus(provisioningConditionStatus{
+			progress:       bmfov1alpha1.ProvisioningProgress{State: bmfov1alpha1.StateFailed},
+			failureReason:  secretErr.Reason,
+			failureMessage: messageFailureSSHKey,
+		})
+	} else if err != nil {
 		handled, retry := controllers.HandleResourceNetworkingHubResolutionError(err, t.setPending, t.setFailed)
 		if !handled {
 			return err
@@ -220,6 +240,9 @@ func (t *task) update(ctx context.Context) error {
 		return err
 	}
 	existingObject := object != nil
+	if err := t.resolveSSHKey(ctx, object); err != nil {
+		return fmt.Errorf("failed to resolve ssh key: %w", err)
+	}
 
 	if t.bareMetalInstance.GetSpec().HasUserData() || t.bareMetalInstance.GetSpec().GetUserDataSecret() != nil {
 		t.userDataSecretName = fmt.Sprintf("%s%s", t.bareMetalInstance.GetId(), userDataSecretSuffix)
@@ -515,6 +538,79 @@ func (t *task) updateCondition(conditionType privatev1.BareMetalInstanceConditio
 	t.bareMetalInstance.GetStatus().SetConditions(conditions)
 }
 
+type provisioningConditionStatus struct {
+	progress       bmfov1alpha1.ProvisioningProgress
+	failureReason  string
+	failureMessage string
+	deleting       bool
+}
+
+// syncProvisioningStatus is the single writer for the PROVISIONED and READY
+// conditions. BMFO lifecycle progress and Fulfillment failures that happen
+// before a BMFO object exists are normalized into provisioningConditionStatus.
+func (t *task) syncProvisioningStatus(status provisioningConditionStatus) {
+	if status.deleting {
+		t.updateCondition(
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
+			privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
+		return
+	}
+
+	progress := status.progress
+	switch progress.State {
+	case bmfov1alpha1.StateInProgress:
+		stage := progress.Step.Stage()
+		t.updateCondition(
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
+			privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+			string(stage), stepMessage(progress.Step))
+		t.updateCondition(
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
+			privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
+	case bmfov1alpha1.StateProvisioned:
+		t.updateCondition(
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
+			privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+			string(bmfov1alpha1.StateProvisioned), messageProvisioned)
+		t.updateCondition(
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
+			privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+			string(bmfov1alpha1.StageReady), stepMessage(bmfov1alpha1.StepReadyPowerSync))
+	case bmfov1alpha1.StateReady:
+		t.updateCondition(
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
+			privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+			string(bmfov1alpha1.StateProvisioned), messageProvisioned)
+		t.updateCondition(
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
+			privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+			string(bmfov1alpha1.StateReady), messageReady)
+	case bmfov1alpha1.StateFailed:
+		if progress.Step == bmfov1alpha1.StepReadyPowerSync {
+			// Ready-axis failure: provisioning completed; the host did not reach its
+			// desired power state. PROVISIONED stays True; READY carries the failure.
+			t.updateCondition(
+				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
+				privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+				string(bmfov1alpha1.StateProvisioned), messageProvisioned)
+			t.updateCondition(
+				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
+				privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+				status.failureReason, status.failureMessage)
+		} else {
+			// Provisioning-axis failure. PROVISIONED carries the failure reason;
+			// READY is False (provisioning never completed).
+			t.updateCondition(
+				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
+				privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+				status.failureReason, status.failureMessage)
+			t.updateCondition(
+				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
+				privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
+		}
+	}
+}
+
 func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 	if object == nil {
 		return
@@ -527,64 +623,15 @@ func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 	// Derive PROVISIONED and READY from the operator's lifecycle conditions. The
 	// Deleting phase is guarded: conditions may still indicate a ready instance, but
 	// provisioning progress is not meaningful while the instance is being deleted.
-	if object.Status.Phase != bmfov1alpha1.BareMetalInstancePhaseDeleting {
-		progress := bmfov1alpha1.DeriveProvisioningProgress(object.Status.Conditions)
-		switch progress.State {
-		case bmfov1alpha1.StateInProgress:
-			stage := progress.Step.Stage()
-			t.updateCondition(
-				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
-				privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
-				string(stage), stepMessage(progress.Step))
-			t.updateCondition(
-				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
-				privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
-		case bmfov1alpha1.StateProvisioned:
-			t.updateCondition(
-				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
-				privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
-				string(bmfov1alpha1.StateProvisioned), messageProvisioned)
-			t.updateCondition(
-				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
-				privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
-				string(bmfov1alpha1.StageReady), stepMessage(bmfov1alpha1.StepReadyPowerSync))
-		case bmfov1alpha1.StateReady:
-			t.updateCondition(
-				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
-				privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
-				string(bmfov1alpha1.StateProvisioned), messageProvisioned)
-			t.updateCondition(
-				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
-				privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
-				string(bmfov1alpha1.StateReady), messageReady)
-		case bmfov1alpha1.StateFailed:
-			if progress.Step == bmfov1alpha1.StepReadyPowerSync {
-				// Ready-axis failure: provisioning completed; the host did not reach its
-				// desired power state. PROVISIONED stays True; READY carries the failure.
-				t.updateCondition(
-					privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
-					privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
-					string(bmfov1alpha1.StateProvisioned), messageProvisioned)
-				t.updateCondition(
-					privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
-					privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
-					string(progress.Failure), failureMessage(progress.Failure))
-			} else {
-				// Provisioning-axis failure. PROVISIONED carries the failure reason;
-				// READY is False (provisioning never completed).
-				t.updateCondition(
-					privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
-					privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
-					string(progress.Failure), failureMessage(progress.Failure))
-				t.updateCondition(
-					privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
-					privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
-			}
-		}
+	if object.Status.Phase == bmfov1alpha1.BareMetalInstancePhaseDeleting {
+		t.syncProvisioningStatus(provisioningConditionStatus{deleting: true})
 	} else {
-		t.updateCondition(
-			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
-			privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
+		progress := bmfov1alpha1.DeriveProvisioningProgress(object.Status.Conditions)
+		t.syncProvisioningStatus(provisioningConditionStatus{
+			progress:       progress,
+			failureReason:  string(progress.Failure),
+			failureMessage: failureMessage(progress.Failure),
+		})
 	}
 
 	protoStatuses := make([]*privatev1.BareMetalNetworkAttachmentStatus, 0, len(object.Status.NetworkAttachmentStatuses))
@@ -854,7 +901,9 @@ func (t *task) mutateBMI(ctx context.Context, object *bmfov1alpha1.BareMetalInst
 		}
 	}
 
-	if t.bareMetalInstance.GetSpec().HasSshPublicKey() {
+	if t.sshPublicKey != "" {
+		params["sshPublicKey"] = t.sshPublicKey
+	} else if t.bareMetalInstance.GetSpec().HasSshPublicKey() {
 		params["sshPublicKey"] = t.bareMetalInstance.GetSpec().GetSshPublicKey()
 	}
 	if t.userDataSecretName != "" {

@@ -139,7 +139,7 @@ func (p *AAPProvider) CancelJob(ctx context.Context, jobID string) error {
 func (p *AAPProvider) GetProvisionStatusWithExtraVars(ctx context.Context, resource client.Object, jobID string) (ProvisionStatusWithExtraVars, error) {
 	job, err := p.client.GetJob(ctx, jobID)
 	if err != nil {
-		return ProvisionStatusWithExtraVars{}, fmt.Errorf("failed to get job: %w", err)
+		return ProvisionStatusWithExtraVars{}, wrapAAPJobLookupError(jobID, err)
 	}
 
 	status := ProvisionStatusWithExtraVars{ProvisionStatus: provisionStatusFromAAPJob(ctx, jobID, job)}
@@ -211,8 +211,7 @@ func (p *AAPProvider) isReadyForDeprovision(ctx context.Context, resource client
 
 	status, err := p.GetProvisionStatus(ctx, resource, latestProvisionJob.JobID)
 	if err != nil {
-		var notFoundErr *aap.NotFoundError
-		if errors.As(err, &notFoundErr) {
+		if errors.Is(err, ErrJobNotFound) {
 			log.Info("AAP job not found (purged), treating as terminal", "jobID", latestProvisionJob.JobID)
 			return true, nil, nil
 		}
@@ -390,10 +389,23 @@ func (p *AAPProvider) Name() string {
 func (p *AAPProvider) getJobStatus(ctx context.Context, jobID string) (ProvisionStatus, error) {
 	job, err := p.client.GetJob(ctx, jobID)
 	if err != nil {
-		return ProvisionStatus{}, fmt.Errorf("failed to get job: %w", err)
+		return ProvisionStatus{}, wrapAAPJobLookupError(jobID, err)
 	}
 
 	return provisionStatusFromAAPJob(ctx, jobID, job), nil
+}
+
+// wrapAAPJobLookupError classifies an AAP job lookup failure. A job that no
+// longer exists (HTTP 404: purged or past the retention window) wraps
+// ErrJobNotFound so the shared lifecycle can treat it as terminal; the
+// provider-specific *aap.NotFoundError stays wrapped for callers that
+// inspect it directly. Every other failure is reported as-is.
+func wrapAAPJobLookupError(jobID string, err error) error {
+	var notFoundErr *aap.NotFoundError
+	if errors.As(err, &notFoundErr) {
+		return fmt.Errorf("%w: AAP job %s was purged or removed: %w", ErrJobNotFound, jobID, err)
+	}
+	return fmt.Errorf("failed to get job: %w", err)
 }
 
 func provisionStatusFromAAPJob(ctx context.Context, jobID string, job *aap.Job) ProvisionStatus {

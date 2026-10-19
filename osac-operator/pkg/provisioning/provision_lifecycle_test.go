@@ -1537,6 +1537,50 @@ var _ = ginkgo.Describe("TriggerDeprovisionJob", func() {
 	})
 })
 
+var _ = ginkgo.Describe("PollJob purged-job handling", func() {
+	const pollInterval = 30 * time.Second
+	resource := &v1alpha1.ClusterOrder{}
+
+	ginkgo.It("marks a purged job terminally failed instead of requeueing forever", func() {
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "p1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateRunning, Timestamp: metav1.NewTime(time.Now())},
+		}
+		latestJob := &jobs[0]
+		provider := &mockProvider{
+			getProvisionStatusFunc: func(_ context.Context, _ client.Object, jobID string) (ProvisionStatus, error) {
+				return ProvisionStatus{}, fmt.Errorf("%w: job %s purged", ErrJobNotFound, jobID)
+			},
+		}
+		provState := &State{Jobs: &jobs}
+		failedMessages := []string{}
+		callbacks := &PollCallbacks{OnFailed: func(message string) { failedMessages = append(failedMessages, message) }}
+		result, err := PollJob(ctx, provider, resource, provState, latestJob, pollInterval, callbacks)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal(ctrl.Result{}))
+		Expect(jobs[0].State).To(Equal(v1alpha1.JobStateFailed))
+		Expect(jobs[0].Message).To(Equal(provisionJobPurgedMessage))
+		Expect(failedMessages).To(Equal([]string{provisionJobPurgedMessage}))
+	})
+
+	ginkgo.It("keeps requeueing for transient status errors", func() {
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "p1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateRunning, Timestamp: metav1.NewTime(time.Now())},
+		}
+		latestJob := &jobs[0]
+		provider := &mockProvider{
+			getProvisionStatusFunc: func(_ context.Context, _ client.Object, _ string) (ProvisionStatus, error) {
+				return ProvisionStatus{}, fmt.Errorf("connection refused")
+			},
+		}
+		provState := &State{Jobs: &jobs}
+		result, err := PollJob(ctx, provider, resource, provState, latestJob, pollInterval, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(pollInterval))
+		Expect(jobs[0].State).To(Equal(v1alpha1.JobStateRunning))
+		Expect(jobs[0].Message).To(ContainSubstring("Failed to get job status"))
+	})
+})
+
 var _ = ginkgo.Describe("PollDeprovisionJob", func() {
 	const pollInterval = 30 * time.Second
 	resource := &v1alpha1.ClusterOrder{}
@@ -1676,6 +1720,44 @@ var _ = ginkgo.Describe("PollDeprovisionJob", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(done).To(BeTrue())
 		Expect(result).To(Equal(ctrl.Result{}))
+	})
+
+	ginkgo.It("marks a purged deprovision job failed and waits for backoff when blocking", func() {
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "d1", Type: v1alpha1.JobTypeDeprovision, State: v1alpha1.JobStateRunning,
+				BlockDeletionOnFailure: true, Timestamp: metav1.NewTime(time.Now())},
+		}
+		latestJob := &jobs[0]
+		provider := &mockProvider{
+			getDeprovisionStatusFunc: func(_ context.Context, _ client.Object, jobID string) (ProvisionStatus, error) {
+				return ProvisionStatus{}, fmt.Errorf("%w: job %s purged", ErrJobNotFound, jobID)
+			},
+		}
+		result, done, err := PollDeprovisionJob(ctx, provider, resource, &jobs, latestJob, 10, pollInterval)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(done).To(BeFalse())
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+		Expect(jobs[0].State).To(Equal(v1alpha1.JobStateFailed))
+		Expect(jobs[0].Message).To(Equal(deprovisionJobPurgedMessage))
+	})
+
+	ginkgo.It("marks a purged deprovision job failed and returns done when not blocking", func() {
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "d1", Type: v1alpha1.JobTypeDeprovision, State: v1alpha1.JobStateRunning,
+				BlockDeletionOnFailure: false, Timestamp: metav1.NewTime(time.Now())},
+		}
+		latestJob := &jobs[0]
+		provider := &mockProvider{
+			getDeprovisionStatusFunc: func(_ context.Context, _ client.Object, jobID string) (ProvisionStatus, error) {
+				return ProvisionStatus{}, fmt.Errorf("%w: job %s purged", ErrJobNotFound, jobID)
+			},
+		}
+		result, done, err := PollDeprovisionJob(ctx, provider, resource, &jobs, latestJob, 10, pollInterval)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(done).To(BeTrue())
+		Expect(result).To(Equal(ctrl.Result{}))
+		Expect(jobs[0].State).To(Equal(v1alpha1.JobStateFailed))
+		Expect(jobs[0].Message).To(Equal(deprovisionJobPurgedMessage))
 	})
 })
 

@@ -370,6 +370,22 @@ var _ = Describe("AAPProvider", func() {
 			provider = provisioning.NewAAPProvider(aapClient, "provision-job", "deprovision-job")
 		})
 
+		Context("when the job was purged", func() {
+			BeforeEach(func() {
+				aapClient.getJobFunc = func(_ context.Context, jobID string) (*aap.Job, error) {
+					return nil, &aap.NotFoundError{Resource: fmt.Sprintf("job %s", jobID), URL: "https://aap.example.com/api/v2/jobs/" + jobID + "/"}
+				}
+			})
+
+			It("wraps the lookup failure with ErrJobNotFound while keeping the AAP error", func() {
+				_, err := provider.GetProvisionStatus(ctx, &v1alpha1.ComputeInstance{}, "789")
+				Expect(err).To(HaveOccurred())
+				Expect(errors.Is(err, provisioning.ErrJobNotFound)).To(BeTrue())
+				var notFoundErr *aap.NotFoundError
+				Expect(errors.As(err, &notFoundErr)).To(BeTrue())
+			})
+		})
+
 		Context("when job is successful", func() {
 			BeforeEach(func() {
 				aapClient.getJobFunc = func(ctx context.Context, jobID string) (*aap.Job, error) {
@@ -613,6 +629,17 @@ var _ = Describe("AAPProvider", func() {
 			provider = provisioning.NewAAPProvider(aapClient, "provision-job", "deprovision-job")
 		})
 
+		It("wraps a purged job lookup failure with ErrJobNotFound", func() {
+			aapClient.getJobFunc = func(_ context.Context, jobID string) (*aap.Job, error) {
+				return nil, &aap.NotFoundError{Resource: fmt.Sprintf("job %s", jobID), URL: "https://aap.example.com/api/v2/jobs/" + jobID + "/"}
+			}
+
+			_, err := provider.GetProvisionStatusWithExtraVars(ctx, &v1alpha1.Subnet{}, "789")
+
+			Expect(err).To(HaveOccurred())
+			Expect(errors.Is(err, provisioning.ErrJobNotFound)).To(BeTrue())
+		})
+
 		It("returns the successful job artifacts as normalized extra vars", func() {
 			aapClient.getJobFunc = func(_ context.Context, jobID string) (*aap.Job, error) {
 				Expect(jobID).To(Equal("789"))
@@ -722,6 +749,29 @@ var _ = Describe("AAPProvider", func() {
 				Expect(result.Action).To(Equal(provisioning.DeprovisionTriggered))
 				Expect(result.JobID).To(Equal("999"))
 				Expect(result.BlockDeletionOnFailure).To(BeTrue())
+			})
+		})
+
+		Context("when the recorded provision job was purged", func() {
+			BeforeEach(func() {
+				provider = provisioning.NewAAPProvider(aapClient, "provision-job", "deprovision-job")
+				instance.Status.ProvisioningJobs = []v1alpha1.JobStatus{
+					{
+						JobID:     "9876",
+						Type:      v1alpha1.JobTypeProvision,
+						State:     v1alpha1.JobStateRunning,
+						Timestamp: metav1.NewTime(time.Now().UTC().Add(-5 * time.Minute)),
+					},
+				}
+				aapClient.getJobFunc = func(_ context.Context, jobID string) (*aap.Job, error) {
+					return nil, &aap.NotFoundError{Resource: fmt.Sprintf("job %s", jobID), URL: "https://aap.example.com/api/v2/jobs/" + jobID + "/"}
+				}
+			})
+
+			It("treats the purged provision job as terminal and triggers deprovision", func() {
+				result, err := provider.TriggerDeprovision(ctx, instance, instance.Status.ProvisioningJobs)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.Action).To(Equal(provisioning.DeprovisionTriggered))
 			})
 		})
 

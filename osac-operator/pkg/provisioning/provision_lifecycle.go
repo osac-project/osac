@@ -172,6 +172,15 @@ type PollCallbacks struct {
 	OnSuccessWithExtraVars func(status ProvisionStatusWithExtraVars) error
 }
 
+// provisionJobPurgedMessage is recorded on a provision job whose record no
+// longer exists on the provider (e.g. purged by AAP retention) so polling
+// stops and the failure is visible in the resource status.
+const provisionJobPurgedMessage = "Provisioning job no longer exists on the provisioning provider (purged); treated as failed"
+
+// deprovisionJobPurgedMessage is the deprovision-side counterpart of
+// provisionJobPurgedMessage.
+const deprovisionJobPurgedMessage = "Deprovisioning job no longer exists on the provisioning provider (purged); treated as failed"
+
 // PollJob checks the status of an existing provision job and updates the jobs slice in place.
 func PollJob(ctx context.Context, provider ProvisioningProvider, resource client.Object, provState *State, latestJob *v1alpha1.JobStatus, pollInterval time.Duration, callbacks *PollCallbacks) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
@@ -192,6 +201,21 @@ func PollJob(ctx context.Context, provider ProvisioningProvider, resource client
 		status, err = provider.GetProvisionStatus(ctx, resource, latestJob.JobID)
 	}
 	if err != nil {
+		if errors.Is(err, ErrJobNotFound) {
+			// The job record is gone from the provider (e.g. purged by AAP
+			// retention). Mark it terminally failed instead of requeueing at
+			// the poll interval forever; the recorded failure lets the normal
+			// backoff path re-trigger provisioning when appropriate.
+			log.Info("provision job no longer exists on provider, treating as terminal", "jobID", latestJob.JobID)
+			updatedJob := *latestJob
+			updatedJob.State = v1alpha1.JobStateFailed
+			updatedJob.Message = provisionJobPurgedMessage
+			UpdateJob(*provState.Jobs, updatedJob)
+			if callbacks != nil && callbacks.OnFailed != nil {
+				callbacks.OnFailed(updatedJob.Message)
+			}
+			return ctrl.Result{}, nil
+		}
 		if callbacks != nil && callbacks.OnSuccessWithExtraVars != nil && status.State.IsSuccessful() {
 			updatedJob := *latestJob
 			updatedJob.State = status.State
@@ -913,6 +937,20 @@ func pollDeprovisionJobForTarget(ctx context.Context, provider ProvisioningProvi
 	log.Info("polling deprovision job status", "jobID", latestDeprovisionJob.JobID, "target", target, "currentState", latestDeprovisionJob.State)
 	status, err := provider.GetDeprovisionStatus(ctx, resource, latestDeprovisionJob.JobID)
 	if err != nil {
+		if errors.Is(err, ErrJobNotFound) {
+			// The job record is gone from the provider (e.g. purged by AAP
+			// retention). Mark it terminally failed so polling stops; blocking
+			// deprovisions then retry through the normal backoff path.
+			log.Info("deprovision job no longer exists on provider, treating as terminal", "jobID", latestDeprovisionJob.JobID, "target", target)
+			updatedJob := *latestDeprovisionJob
+			updatedJob.State = v1alpha1.JobStateFailed
+			updatedJob.Message = deprovisionJobPurgedMessage
+			UpdateJob(*jobs, updatedJob)
+			if updatedJob.BlockDeletionOnFailure {
+				return handleDeprovisionBackoffForTarget(ctx, provider, resource, jobs, target, latestDeprovisionJob, maxHistory, pollInterval)
+			}
+			return ctrl.Result{}, true, nil
+		}
 		log.Error(err, "failed to get deprovision status", "jobID", latestDeprovisionJob.JobID, "target", target)
 		updatedJob := *latestDeprovisionJob
 		updatedJob.Message = fmt.Sprintf("Failed to get deprovision status: %v", err)

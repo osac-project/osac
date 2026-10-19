@@ -1,0 +1,46 @@
+---
+- name: Write the scenario extra-vars file
+  ansible.builtin.copy:
+    dest: "{{ netris_delete_vars_file }}"
+    mode: "0600"
+    content: >-
+      {{ {'osac_job_vars': {'resource': netris_delete_resource},
+          'netris_controller_url': mock_netris_url,
+          'netris_session_cookie': netris_session_cookie,
+          'netris_validate_certs': false,
+          'ansible_connection': 'local',
+          'ansible_become': false,
+          'ansible_python_interpreter': ansible_playbook_python} | to_json }}
+
+- name: Invoke the top-level Subnet delete playbook
+  ansible.builtin.command:
+    argv:
+      - uv
+      - run
+      - ansible-playbook
+      - -i
+      - localhost,
+      - "{{ playbook_dir }}/../../../../../playbook_osac_delete_subnet.yml"
+      - -e
+      - "@{{ netris_delete_vars_file }}"
+  args:
+    chdir: "{{ playbook_dir }}/../../../../../"
+  environment:
+    KUBECONFIG: "{{ lookup('env', 'KUBECONFIG') }}"
+    K8S_AUTH_KUBECONFIG: "{{ lookup('env', 'K8S_AUTH_KUBECONFIG') }}"
+  register: netris_delete_playbook_result
+  changed_when: false
+  failed_when: false
+
+- name: Remove the scenario extra-vars file
+  ansible.builtin.file:
+    path: "{{ netris_delete_vars_file }}"
+    state: absent
+
+- name: Check the Subnet delete playbook result
+  ansible.builtin.assert:
+    that:
+      - (netris_delete_playbook_result.rc == 0) == (netris_delete_should_succeed | bool)
+    fail_msg: >-
+      The Subnet delete playbook returned rc {{ netris_delete_playbook_result.rc }};
+      expected success is {{ netris_delete_should_succeed }}.

@@ -24,6 +24,27 @@ import (
 )
 
 var _ = Describe("Resolved ClusterVersion lifecycle validation", func() {
+	DescribeTable("requires a disk image for every caller",
+		func(ref *privatev1.DiskImageReference, expectedCode grpccodes.Code) {
+			version := privatev1.ClusterVersion_builder{
+				Spec: privatev1.ClusterVersionSpec_builder{Enabled: new(true), DiskImage: ref}.Build(),
+			}.Build()
+			for _, source := range []string{"", " in fields.version", " in spec_defaults.version"} {
+				err := validateResolvedClusterVersion(version, "4.20", source)
+				Expect(grpcstatus.Code(err)).To(Equal(expectedCode))
+				if expectedCode != grpccodes.OK {
+					Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("cluster version '4.20'" + source))
+					Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("disk image"))
+				}
+			}
+		},
+		Entry("rejects an absent reference", nil, grpccodes.FailedPrecondition),
+		Entry("rejects an empty reference", &privatev1.DiskImageReference{}, grpccodes.FailedPrecondition),
+		Entry("rejects scope selectors without identity", &privatev1.DiskImageReference{Shared: true, Project: "images"}, grpccodes.FailedPrecondition),
+		Entry("accepts an ID", &privatev1.DiskImageReference{Id: "disk-image"}, grpccodes.OK),
+		Entry("accepts a name", &privatev1.DiskImageReference{Name: "disk-image"}, grpccodes.OK),
+	)
+
 	DescribeTable("uses the same status and source context for every caller",
 		func(version *privatev1.ClusterVersion, reason string) {
 			for _, source := range []string{"", " in fields.version"} {

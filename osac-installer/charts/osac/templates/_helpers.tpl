@@ -116,6 +116,100 @@ Uses .Values.cliImage for the container image.
 --cacert /etc/ca-bundle/bundle.pem
 {{- end -}}
 
+{{- define "osac.fulfillmentAuthCredential" -}}
+{{- $root := index . 0 -}}
+{{- $param := index . 1 -}}
+{{- $credential := dict -}}
+{{- range ($root.Values.service.auth.controllerCredentials | default list) -}}
+  {{- $secret := .secret | default dict -}}
+  {{- range ($secret.items | default list) -}}
+    {{- if eq (.param | default "") $param -}}
+      {{- $_ := set $credential "name" ($secret.name | default "") -}}
+      {{- $_ := set $credential "key" (.key | default "") -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- $secretName := required (printf "service.auth.controllerCredentials must include a secret-backed %s parameter" $param) ($credential.name | default "") -}}
+{{- $secretKey := required (printf "service.auth.controllerCredentials must include a secret key for the %s parameter" $param) ($credential.key | default "") -}}
+{{- toJson (dict "name" $secretName "key" $secretKey) -}}
+{{- end -}}
+
+{{- define "osac.fulfillmentAuthEnv" -}}
+{{- $clientID := include "osac.fulfillmentAuthCredential" (list . "client-id") | fromJson -}}
+- name: FULFILLMENT_ISSUER_URL
+  value: {{ tpl .Values.service.auth.issuerUrl . | quote }}
+- name: FULFILLMENT_CLIENT_ID
+  valueFrom:
+    secretKeyRef:
+      name: {{ $clientID.name | quote }}
+      key: {{ $clientID.key | quote }}
+- name: FULFILLMENT_CLIENT_SECRET_FILE
+  value: /var/run/secrets/fulfillment-client-secret/client-secret
+{{- end -}}
+
+{{- define "osac.fulfillmentAuthVolumeMount" -}}
+- name: fulfillment-client-secret
+  mountPath: /var/run/secrets/fulfillment-client-secret
+  readOnly: true
+{{- end -}}
+
+{{- define "osac.fulfillmentAuthVolume" -}}
+{{- $clientSecret := include "osac.fulfillmentAuthCredential" (list . "client-secret") | fromJson -}}
+- name: fulfillment-client-secret
+  secret:
+    secretName: {{ $clientSecret.name | quote }}
+    defaultMode: 0440
+    items:
+    - key: {{ $clientSecret.key | quote }}
+      path: client-secret
+{{- end -}}
+
+{{- define "osac.fulfillmentAccessTokenFunction" -}}
+get_fulfillment_access_token() {
+  local issuer_url="${FULFILLMENT_ISSUER_URL:-}"
+  local client_id="${FULFILLMENT_CLIENT_ID:-}"
+  local client_secret_file="${FULFILLMENT_CLIENT_SECRET_FILE:-}"
+  if [[ "${issuer_url}" != https://* || -z "${client_id}" || -z "${client_secret_file}" || ! -s "${client_secret_file}" ]]; then
+    echo "ERROR: Fulfillment service-account credentials are unavailable." >&2
+    return 1
+  fi
+
+  local token_url="${issuer_url%/}/protocol/openid-connect/token"
+  local response
+  if ! response=$(curl --silent --show-error --fail {{ include "osac.fulfillmentCurlTLS" . }} \
+    --connect-timeout 5 --max-time 30 \
+    --request POST \
+    --data-urlencode 'grant_type=client_credentials' \
+    --data-urlencode "client_id=${client_id}" \
+    --data-urlencode "client_secret@${client_secret_file}" \
+    "${token_url}"); then
+    echo "ERROR: Fulfillment token request failed." >&2
+    return 1
+  fi
+
+  local access_token
+  if ! access_token=$(printf '%s' "${response}" | python3 -c '
+import json
+import sys
+
+try:
+    token = json.load(sys.stdin).get("access_token")
+except (json.JSONDecodeError, AttributeError):
+    sys.exit(1)
+
+if not isinstance(token, str) or not token:
+    sys.exit(1)
+
+sys.stdout.write(token)
+'); then
+    echo "ERROR: Fulfillment token response was invalid." >&2
+    return 1
+  fi
+
+  printf '%s\n' "${access_token}"
+}
+{{- end -}}
+
 {{- define "osac.waitForFulfillment" -}}
 {{- $url := "https://fulfillment-rest-gateway:8000/healthz" -}}
 - name: wait-for-fulfillment
@@ -170,8 +264,13 @@ its two instance-group manifests.
 {{- define "osac.netrisConfig" -}}
 {{- $netris := .netris | default dict -}}
 {{- $creds := $netris.credentials | default dict -}}
+{{- $validateCerts := true -}}
+{{- if hasKey $netris "validateCerts" -}}
+{{- $validateCerts = $netris.validateCerts -}}
+{{- end -}}
 {{- $derived := dict
   "NETRIS_CONTROLLER_URL" ($netris.controllerUrl | default "")
+  "NETRIS_VALIDATE_CERTS" ($validateCerts | toString)
   "NETRIS_USERNAME" ($creds.username | default "")
   "NETRIS_SITE_ID" ($netris.siteId | default "" | toString)
   "NETRIS_TENANT_ID" ($netris.tenantId | default "" | toString)
@@ -214,6 +313,7 @@ facade vs low-level surface mismatches).
 {{- if $netrisEnabled -}}
 {{- $creds := $netris.credentials | default dict -}}
 {{- $derived := include "osac.netrisConfig" (dict "netris" $netris "cluster" true) | fromYaml -}}
+{{/* Match the AAP chart: facade values win unless expertOverrides.aap is enabled. */}}
 {{- $cfCfg = merge $derived $cfCfg -}}
 {{- $nfDerived := include "osac.netrisConfig" (dict "netris" $netris "cluster" false) | fromYaml -}}
 {{- $nfCfg = merge $nfDerived $nfCfg -}}
@@ -228,6 +328,7 @@ facade vs low-level surface mismatches).
 {{- end }}
 {{- $netrisConfigFields := list
   "NETRIS_CONTROLLER_URL"
+  "NETRIS_VALIDATE_CERTS"
   "NETRIS_USERNAME"
   "NETRIS_SITE_ID"
   "NETRIS_TENANT_ID"

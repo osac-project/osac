@@ -42,6 +42,23 @@ var _ = Describe("Catalog Item CLI", Label("catalog-items", "cli"), func() {
 			Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
 			Published: true,
 		}.Build())
+		// The ComputeInstance reconciler resolves the API subnet and security group
+		// to their Hub CR names before it creates the ComputeInstance CR.
+		Eventually(func(g Gomega) {
+			subnets := &osacv1alpha1.SubnetList{}
+			g.Expect(tool.KubeClient().List(ctx, subnets,
+				crclient.InNamespace(hubNamespace),
+				crclient.MatchingLabels{labels.SubnetUuid: network.subnetID},
+			)).To(Succeed())
+			g.Expect(subnets.Items).To(HaveLen(1))
+
+			securityGroups := &osacv1alpha1.SecurityGroupList{}
+			g.Expect(tool.KubeClient().List(ctx, securityGroups,
+				crclient.InNamespace(hubNamespace),
+				crclient.MatchingLabels{labels.SecurityGroupUuid: network.securityGroupID},
+			)).To(Succeed())
+			g.Expect(securityGroups.Items).To(HaveLen(1))
+		}, time.Minute, time.Second).Should(Succeed())
 
 		sourceFlag, sourceID := "--template", template
 		if createFromCatalogItem {
@@ -97,7 +114,7 @@ var _ = Describe("Catalog Item CLI", Label("catalog-items", "cli"), func() {
 				NodeSets: publicv1.ClusterNodeSetMapPolicy_builder{Locked: publicv1.ClusterNodeSetMap_builder{
 					Items: map[string]*publicv1.ClusterCatalogNodeSet{
 						"workers": publicv1.ClusterCatalogNodeSet_builder{Size: 2,
-							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit}.Build(),
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Shared: true}.Build(),
 						}.Build(),
 					},
 				}.Build()}.Build(),

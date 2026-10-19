@@ -36,14 +36,34 @@ The nearest component `AGENTS.md` adds rules for files under that component.
 - Base changes on the upstream project's default branch.
 - If remote roles are unclear, stop and ask before pushing.
 - Sign commits with `git commit -s`.
-- AI-assisted commits use an `Assisted-by: <actual tool> <contact>` trailer; never use `Co-Authored-By` for an AI tool.
+- AI-assisted commits use an `Assisted-by: <actual tool> <contact>` trailer; never use `Co-Authored-By` for an AI tool, and never add a `Claude-Session:` or other agent session-link trailer, even when the tool suggests one.
 - Every commit message and pull request title must include an issue prefix: `OSAC-XXXX: description` for linked work, or `NO-ISSUE: description` when there is no linked issue.
+- Keep every line of a commit message — subject, body, and trailers — to a maximum of 80 characters.
 
 ## Architecture
 
 - Resource flow: client -> fulfillment API/database -> fulfillment reconciler -> Kubernetes CR -> operator -> AAP/provider -> feedback to fulfillment status.
 - Fulfillment private protos are shared contracts consumed by the operator, metering service, CSI driver, and AAP workflows.
 - The installer composes all components; `tests/e2e/` validates cross-component user journeys. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/CONVENTIONS.md`](docs/CONVENTIONS.md) for details.
+
+## Tenant deployment requests through MCP
+
+When an OSAC MCP connection is available and its tools cover a tenant-facing
+deployment discovery or lifecycle request, use those tools without requiring
+the user to name MCP. Inspect the relevant catalog item and selectable
+references before a create or update. For a delete, identify the exact target
+and act only on an explicit user request. Require the host's approval for each
+write tool call, and stop if approval is denied.
+
+If the connection is unavailable or lacks the requested operation, explain the
+gap and get the user's authorization before using another OSAC interface for
+that tenant request. This routing rule does not restrict the local `osac` CLI,
+API calls, `oc`, `kubectl`, or Kubernetes inspection for implementation,
+testing, debugging, and cluster troubleshooting.
+
+See the [local MCP client
+guide](docs/guides/developer/mcp-local-clients.md) for the current development
+tool surface and setup; later MCP epics own the supported host setup surface.
 
 ## Components
 

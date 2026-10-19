@@ -101,12 +101,12 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				DiskImage:   publicv1.DiskImageReference_builder{Id: overrideImage.GetId()}.Build(),
 				CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
 				BootDisk:    publicv1.ComputeInstanceDisk_builder{SizeGib: new(int32(100))}.Build(),
-				AdditionalDisks: []*publicv1.ComputeInstanceDisk{
+				AdditionalDisks: publicv1.ComputeInstanceDiskList_builder{Items: []*publicv1.ComputeInstanceDisk{
 					publicv1.ComputeInstanceDisk_builder{
 						SizeGib:     new(int32(70)),
 						StorageTier: publicv1.StorageTierReference_builder{Id: tier}.Build(),
 					}.Build(),
-				},
+				}}.Build(),
 				TemplateParameters: map[string]*anypb.Any{"size": catalogItemParameterValue(wrapperspb.Int32(0))},
 			}.Build()
 			created, err := createComputeInstanceFixture(ctx, tool.ExternalView().UserConn(), request)
@@ -127,8 +127,8 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			Expect(spec.GetAutoExternalIpAttachment()).To(BeFalse())
 			Expect(spec.GetBootDisk().GetSizeGib()).To(Equal(int32(100)))
 			Expect(spec.GetBootDisk().GetStorageTier().GetId()).To(Equal(tier))
-			Expect(spec.GetAdditionalDisks()).To(HaveLen(1))
-			Expect(spec.GetAdditionalDisks()[0].GetSizeGib()).To(Equal(int32(70)))
+			Expect(spec.GetAdditionalDisks().GetItems()).To(HaveLen(1))
+			Expect(spec.GetAdditionalDisks().GetItems()[0].GetSizeGib()).To(Equal(int32(70)))
 			Expect(spec.GetNetworkAttachments()[0].GetSubnet().GetId()).To(Equal(network.subnetID))
 			Expect(spec.GetNetworkAttachments()[0].GetSecurityGroups()[0].GetId()).To(Equal(network.securityGroupID))
 			Expect(spec.GetRunStrategy()).To(Equal(publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS))
@@ -197,8 +197,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			}
 			By("using catalog item defaults when editable collections and numeric fields are omitted")
 			defaulted, err := createComputeInstanceFixture(ctx, tool.ExternalView().UserConn(), publicv1.ComputeInstanceSpec_builder{
-				CatalogItem:     publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
-				AdditionalDisks: []*publicv1.ComputeInstanceDisk{},
+				CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
 			}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			persistedDefaults, err := client.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: defaulted.GetId()}.Build())
@@ -207,7 +206,15 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			Expect(defaulted.GetSpec().GetDiskImage().GetId()).To(Equal(image.GetId()))
 			Expect(proto.Equal(defaulted.GetSpec().GetTemplateParameters()["size"], catalogItemParameterValue(wrapperspb.Int32(20)))).To(BeTrue())
 			Expect(defaulted.GetSpec().GetBootDisk().GetSizeGib()).To(Equal(int32(30)))
-			Expect(defaulted.GetSpec().GetAdditionalDisks()[0].GetSizeGib()).To(Equal(int32(50)))
+			Expect(defaulted.GetSpec().GetAdditionalDisks().GetItems()[0].GetSizeGib()).To(Equal(int32(50)))
+			explicitEmpty, err := createComputeInstanceFixture(ctx, tool.ExternalView().UserConn(), publicv1.ComputeInstanceSpec_builder{
+				CatalogItem:     publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
+				AdditionalDisks: publicv1.ComputeInstanceDiskList_builder{}.Build(),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			persistedExplicitEmpty, err := client.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: explicitEmpty.GetId()}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(persistedExplicitEmpty.GetObject().GetSpec().GetAdditionalDisks().GetItems()).To(BeEmpty())
 			By("applying the catalog item's explicitly empty disk list instead of its earlier default")
 			_, err = publicv1.NewComputeInstanceCatalogItemsClient(tool.ExternalView().AdminConn()).Update(ctx, publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
@@ -225,7 +232,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			Expect(err).NotTo(HaveOccurred())
 			persistedEmptyDisks, err := client.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: emptyDisks.GetId()}.Build())
 			Expect(err).NotTo(HaveOccurred())
-			Expect(persistedEmptyDisks.GetObject().GetSpec().GetAdditionalDisks()).To(BeEmpty())
+			Expect(persistedEmptyDisks.GetObject().GetSpec().GetAdditionalDisks().GetItems()).To(BeEmpty())
 			_, err = createComputeInstanceFixture(ctx, tool.ExternalView().UserConn(), request)
 			expectCatalogItemStatusCode(err, codes.InvalidArgument)
 

@@ -16,6 +16,7 @@ package testing
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"net"
 	"strings"
 
@@ -74,7 +75,9 @@ func (s *Server) Start() {
 	go func() {
 		defer GinkgoRecover()
 		err := s.server.Serve(s.listener)
-		Expect(err).ToNot(HaveOccurred())
+		if !errors.Is(err, grpc.ErrServerStopped) {
+			Expect(err).ToNot(HaveOccurred())
+		}
 	}()
 }
 

@@ -27,7 +27,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/secret_type.proto.
  */
 export const file_osac_private_v1_secret_type: GenFile = /*@__PURE__*/
-  fileDesc("CiFvc2FjL3ByaXZhdGUvdjEvc2VjcmV0X3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSKWAwoGU2VjcmV0EgoKAmlkGAEgASgJEisKCG1ldGFkYXRhGAIgASgLMhkub3NhYy5wcml2YXRlLnYxLk1ldGFkYXRhEj0KBGRhdGEYAyADKAsyIS5vc2FjLnByaXZhdGUudjEuU2VjcmV0LkRhdGFFbnRyeUIMukgJmgEGIgRyAhABEjcKB2JhY2tlbmQYBCABKA4yHi5vc2FjLnByaXZhdGUudjEuU2VjcmV0QmFja2VuZEIGirUYAggBEkUKC2Nvb3JkaW5hdGVzGAUgAygLMigub3NhYy5wcml2YXRlLnYxLlNlY3JldC5Db29yZGluYXRlc0VudHJ5QgaKtRgCCAESMwoEdHlwZRgGIAEoDjIbLm9zYWMucHJpdmF0ZS52MS5TZWNyZXRUeXBlQgi6SAWCAQIQARorCglEYXRhRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgMOgI4ARoyChBDb29yZGluYXRlc0VudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAEiMAoUU2VjcmV0TG9jYWxSZWZlcmVuY2USCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCSrMAQoKU2VjcmV0VHlwZRIbChdTRUNSRVRfVFlQRV9VTlNQRUNJRklFRBAAEhsKF1NFQ1JFVF9UWVBFX1BVTExfU0VDUkVUEAESGgoWU0VDUkVUX1RZUEVfS1VCRUNPTkZJRxACEhkKFVNFQ1JFVF9UWVBFX1VTRVJfREFUQRADEhYKElNFQ1JFVF9UWVBFX09QQVFVRRAEEhUKEVNFQ1JFVF9UWVBFX1ZBTFVFEAUSHgoaU0VDUkVUX1RZUEVfU1NIX1BVQkxJQ19LRVkQBippCg1TZWNyZXRCYWNrZW5kEh4KGlNFQ1JFVF9CQUNLRU5EX1VOU1BFQ0lGSUVEEAASGAoUU0VDUkVUX0JBQ0tFTkRfVkFVTFQQARIWChJTRUNSRVRfQkFDS0VORF9IVUIQAhoGirUYAggBQhSKtRgQEg5vc2FjLnB1YmxpYy52MWIGcHJvdG8z", [file_buf_validate_validate, file_cleanapi_cleanapi, file_osac_private_v1_metadata_type]);
+  fileDesc("CiFvc2FjL3ByaXZhdGUvdjEvc2VjcmV0X3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSKWAwoGU2VjcmV0EgoKAmlkGAEgASgJEisKCG1ldGFkYXRhGAIgASgLMhkub3NhYy5wcml2YXRlLnYxLk1ldGFkYXRhEj0KBGRhdGEYAyADKAsyIS5vc2FjLnByaXZhdGUudjEuU2VjcmV0LkRhdGFFbnRyeUIMukgJmgEGIgRyAhABEjcKB2JhY2tlbmQYBCABKA4yHi5vc2FjLnByaXZhdGUudjEuU2VjcmV0QmFja2VuZEIGirUYAggBEkUKC2Nvb3JkaW5hdGVzGAUgAygLMigub3NhYy5wcml2YXRlLnYxLlNlY3JldC5Db29yZGluYXRlc0VudHJ5QgaKtRgCCAESMwoEdHlwZRgGIAEoDjIbLm9zYWMucHJpdmF0ZS52MS5TZWNyZXRUeXBlQgi6SAWCAQIQARorCglEYXRhRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgMOgI4ARoyChBDb29yZGluYXRlc0VudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAEiTAoPU2VjcmV0UmVmZXJlbmNlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSDwoHcHJvamVjdBgDIAEoCRIOCgZzaGFyZWQYBCABKAgiMAoUU2VjcmV0TG9jYWxSZWZlcmVuY2USCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCSrMAQoKU2VjcmV0VHlwZRIbChdTRUNSRVRfVFlQRV9VTlNQRUNJRklFRBAAEhsKF1NFQ1JFVF9UWVBFX1BVTExfU0VDUkVUEAESGgoWU0VDUkVUX1RZUEVfS1VCRUNPTkZJRxACEhkKFVNFQ1JFVF9UWVBFX1VTRVJfREFUQRADEhYKElNFQ1JFVF9UWVBFX09QQVFVRRAEEhUKEVNFQ1JFVF9UWVBFX1ZBTFVFEAUSHgoaU0VDUkVUX1RZUEVfU1NIX1BVQkxJQ19LRVkQBippCg1TZWNyZXRCYWNrZW5kEh4KGlNFQ1JFVF9CQUNLRU5EX1VOU1BFQ0lGSUVEEAASGAoUU0VDUkVUX0JBQ0tFTkRfVkFVTFQQARIWChJTRUNSRVRfQkFDS0VORF9IVUIQAhoGirUYAggBQhSKtRgQEg5vc2FjLnB1YmxpYy52MWIGcHJvdG8z", [file_buf_validate_validate, file_cleanapi_cleanapi, file_osac_private_v1_metadata_type]);
 
 /**
  * Represents a secret containing typed or opaque key-value data.
@@ -96,6 +96,40 @@ export const SecretSchema: GenMessage<Secret> = /*@__PURE__*/
   messageDesc(file_osac_private_v1_secret_type, 0);
 
 /**
+ * Reference to a Secret resource.
+ *
+ * @generated from message osac.private.v1.SecretReference
+ */
+export type SecretReference = Message<"osac.private.v1.SecretReference"> & {
+  /**
+   * @generated from field: string id = 1;
+   */
+  id: string;
+
+  /**
+   * @generated from field: string name = 2;
+   */
+  name: string;
+
+  /**
+   * @generated from field: string project = 3;
+   */
+  project: string;
+
+  /**
+   * @generated from field: bool shared = 4;
+   */
+  shared: boolean;
+};
+
+/**
+ * Describes the message osac.private.v1.SecretReference.
+ * Use `create(SecretReferenceSchema)` to create a new message.
+ */
+export const SecretReferenceSchema: GenMessage<SecretReference> = /*@__PURE__*/
+  messageDesc(file_osac_private_v1_secret_type, 1);
+
+/**
  * Local reference to a Secret resource.
  *
  * @generated from message osac.private.v1.SecretLocalReference
@@ -117,7 +151,7 @@ export type SecretLocalReference = Message<"osac.private.v1.SecretLocalReference
  * Use `create(SecretLocalReferenceSchema)` to create a new message.
  */
 export const SecretLocalReferenceSchema: GenMessage<SecretLocalReference> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_secret_type, 1);
+  messageDesc(file_osac_private_v1_secret_type, 2);
 
 /**
  * The type of data stored in a secret.

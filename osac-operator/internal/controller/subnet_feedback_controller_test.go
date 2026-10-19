@@ -572,6 +572,69 @@ var _ = Describe("SubnetFeedbackController", func() {
 			Expect(err).To(HaveOccurred())
 		})
 
+		It("should send one status-only feedback update echoing the stored spec when the CR spec diverges", func() {
+			// A user Update that changes spec.ipv4Cidr is rejected by the real
+			// API server's immutability validation. To prove the feedback path
+			// cannot propagate spec configuration, this suite's fake client
+			// (which applies no CRD validation) carries the would-be rejected
+			// values on the CR; the update mask must still cover only the
+			// status subresource and the written-back record must echo the
+			// stored spec, not the CR's.
+			ipv4Cidr := testIPv4CIDR
+			subnet := &privatev1.Subnet{
+				Id: subnetID,
+				Metadata: &privatev1.Metadata{
+					Name: subnetName,
+				},
+				Spec: &privatev1.SubnetSpec{
+					VirtualNetwork: &privatev1.VirtualNetworkLocalReference{Name: "vnet-123"},
+					Ipv4Cidr:       &ipv4Cidr,
+				},
+				Status: &privatev1.SubnetStatus{
+					State: privatev1.SubnetState_SUBNET_STATE_PENDING,
+				},
+			}
+			mockServer.addSubnet(subnet)
+
+			cr := &v1alpha1.Subnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      subnetName,
+					Namespace: subnetNamespace,
+					Labels: map[string]string{
+						osacSubnetIDLabel: subnetID,
+					},
+				},
+				Spec: v1alpha1.SubnetSpec{
+					VirtualNetwork: "vnet-123",
+					IPv4CIDR:       "10.0.9.0/24",
+				},
+				Status: v1alpha1.SubnetStatus{
+					Phase: v1alpha1.SubnetPhaseReady,
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      subnetName,
+					Namespace: subnetNamespace,
+				},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Exactly one internal status update is sent
+			Expect(mockServer.updates).To(HaveLen(1))
+			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.SubnetState_SUBNET_STATE_READY))
+
+			// The update mask covers only the status subresource, so no spec
+			// change can propagate through the feedback path
+			Expect(mockServer.updateMaskPaths[0]).To(ConsistOf(feedbackStatusStatePath, feedbackStatusMessagePath))
+
+			// The record written back echoes the stored spec, not the diverged CR spec
+			Expect(mockServer.updates[0].GetSpec().GetVirtualNetwork().GetName()).To(Equal("vnet-123"))
+			Expect(mockServer.updates[0].GetSpec().GetIpv4Cidr()).To(Equal(testIPv4CIDR))
+		})
+
 		It("should not update if status unchanged", func() {
 			ipv4Cidr := testIPv4CIDR
 			subnet := &privatev1.Subnet{
@@ -625,10 +688,11 @@ var _ = Describe("SubnetFeedbackController", func() {
 // mockSubnetsServer implements privatev1.SubnetsServer for testing
 type mockSubnetsServer struct {
 	privatev1.UnimplementedSubnetsServer
-	mu      sync.Mutex
-	subnets map[string]*privatev1.Subnet
-	updates []*privatev1.Subnet
-	signals []string
+	mu              sync.Mutex
+	subnets         map[string]*privatev1.Subnet
+	updates         []*privatev1.Subnet
+	updateMaskPaths [][]string
+	signals         []string
 }
 
 func (m *mockSubnetsServer) addSubnet(subnet *privatev1.Subnet) {
@@ -658,6 +722,7 @@ func (m *mockSubnetsServer) Update(ctx context.Context, req *privatev1.SubnetsUp
 	subnet := req.GetObject()
 	m.subnets[subnet.GetId()] = subnet
 	m.updates = append(m.updates, subnet)
+	m.updateMaskPaths = append(m.updateMaskPaths, req.GetUpdateMask().GetPaths())
 
 	return &privatev1.SubnetsUpdateResponse{
 		Object: subnet,

@@ -13,7 +13,6 @@
 {{- range $networkClass.defaults.egressRules }}
 {{- $rule := dict "protocol" .protocol -}}
 {{- if .ipv4Cidr }}{{ $_ := set $rule "ipv4_cidr" .ipv4Cidr }}{{ end -}}
-{{- if .ipv6Cidr }}{{ $_ := set $rule "ipv6_cidr" .ipv6Cidr }}{{ end -}}
 {{- if .portFrom }}{{ $_ := set $rule "port_from" .portFrom }}{{ end -}}
 {{- if .portTo }}{{ $_ := set $rule "port_to" .portTo }}{{ end -}}
 {{- $egressRules = append $egressRules $rule -}}
@@ -49,12 +48,16 @@ spec:
     metadata:
       labels:
         {{- include "osac.labels" . | nindent 8 }}
+      annotations:
+        openshift.io/required-scc: restricted-v2
     spec:
       securityContext:
         runAsNonRoot: true
+        {{- if not (.Capabilities.APIVersions.Has "security.openshift.io/v1") }}
         runAsUser: 1000
         fsGroup: 1000
-      serviceAccountName: admin
+        {{- end }}
+      automountServiceAccountToken: false
       initContainers:
       {{- include "osac.waitForFulfillment" . | nindent 6 }}
       containers:
@@ -66,7 +69,8 @@ spec:
           - pipefail
           - -c
           - |
-            AUTH_TOKEN=$(< /var/run/secrets/kubernetes.io/serviceaccount/token)
+            {{- include "osac.fulfillmentAccessTokenFunction" . | nindent 12 }}
+            AUTH_TOKEN=$(get_fulfillment_access_token)
             API="https://fulfillment-internal-api:8001/api/private/v1/network_classes"
             RESPONSE=/tmp/nc-response.json
 
@@ -129,12 +133,14 @@ spec:
           value: {{ $body | toJson | quote }}
         - name: NC_IDENTITY
           value: {{ required "networkClass.fabricManager or networkClass.k8sManager is required when networkClass.enabled is true" $identity | quote }}
+        {{- include "osac.fulfillmentAuthEnv" . | nindent 8 }}
         volumeMounts:
         - name: tmp
           mountPath: /tmp
         - name: ca-bundle
           mountPath: /etc/ca-bundle
           readOnly: true
+        {{- include "osac.fulfillmentAuthVolumeMount" . | nindent 8 }}
         resources:
           requests:
             cpu: 50m
@@ -156,5 +162,6 @@ spec:
           items:
           - key: bundle.pem
             path: bundle.pem
+      {{- include "osac.fulfillmentAuthVolume" . | nindent 6 }}
       restartPolicy: OnFailure
 {{- end }}

@@ -102,8 +102,13 @@ var _ = Describe("ConsoleMetrics middleware", func() {
 				resp.Body.Close()
 			}
 
+			Eventually(func() []string {
+				return metricsServer.Metrics()
+			}, 2*time.Second, 50*time.Millisecond).Should(
+				osactesting.MatchLine(`console_websocket_connections_total\{.*status="error".*\} 1`),
+			)
+
 			metrics := metricsServer.Metrics()
-			Expect(metrics).To(osactesting.MatchLine(`console_websocket_connections_total\{.*status="error".*\} 1`))
 			Expect(metrics).NotTo(osactesting.MatchLine(`console_websocket_connection_duration_seconds_count`))
 		})
 

@@ -5,7 +5,8 @@ import * as Yup from 'yup';
 import { SecretType } from '@osac/types';
 import { resourceNameSchema } from '@osac/ui-components/validation/resource-name';
 
-import { SECRET_FILE_MAX_BYTES, type SecretValues } from './values';
+import { SECRET_FILE_MAX_BYTES, type SecretValues, decodeSecretValue } from './values';
+import { isValidSshPublicKey } from '../../catalogProvision/wizard/fields/credentialValidation';
 
 const getByteLength = (value: unknown): number | undefined => {
   if (!value || typeof value !== 'object') {
@@ -36,10 +37,17 @@ const getEntrySchema = (t: TFunction, required: boolean) =>
     value: getValueSchema(t, required),
   });
 
-const getTypedEntrySchema = (t: TFunction, type: SecretType) =>
+const getTypedEntrySchema = (
+  t: TFunction,
+  type: SecretType,
+  valueTest?: Yup.TestConfig<Uint8Array | undefined>,
+) =>
   Yup.object().when('type', {
     is: type,
-    then: () => getEntrySchema(t, true),
+    then: () =>
+      valueTest
+        ? getEntrySchema(t, true).shape({ value: getValueSchema(t, true).test(valueTest) })
+        : getEntrySchema(t, true),
     otherwise: () => getEntrySchema(t, false),
   });
 
@@ -53,6 +61,20 @@ export const getSecretValidationSchema = (t: TFunction, _isEdit: boolean) =>
     pullsecret: getTypedEntrySchema(t, SecretType.PULL_SECRET),
     userData: getTypedEntrySchema(t, SecretType.USER_DATA),
     value: getTypedEntrySchema(t, SecretType.VALUE),
+    sshPublicKey: getTypedEntrySchema(t, SecretType.SSH_PUBLIC_KEY, {
+      name: 'ssh-public-key-format',
+      message: t('Enter a valid OpenSSH public key (ssh-rsa, ssh-ed25519, or ecdsa-sha2-nistp*).'),
+      test: (value) => {
+        if (!value || value.byteLength === 0) {
+          return true;
+        }
+        const decoded = decodeSecretValue(value);
+        if (decoded === undefined || decoded.trim() === '') {
+          return false;
+        }
+        return isValidSshPublicKey(decoded);
+      },
+    }),
     opaque: Yup.array()
       .of(getEntrySchema(t, false))
       .when('type', {
@@ -101,6 +123,7 @@ export const secretStepHasErrors = (
         errors.pullsecret ||
         errors.userData ||
         errors.value ||
+        errors.sshPublicKey ||
         errors.opaque,
       );
     default:

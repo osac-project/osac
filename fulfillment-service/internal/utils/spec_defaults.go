@@ -102,7 +102,7 @@ func ValidateRequiredSpecFields(spec *privatev1.ComputeInstanceSpec) error {
 	if err := ValidateCompleteComputeInstanceDisk(spec.GetBootDisk()); err != nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "boot_disk.%s", err)
 	}
-	for i, disk := range spec.GetAdditionalDisks() {
+	for i, disk := range spec.GetAdditionalDisks().GetItems() {
 		if err := ValidateCompleteComputeInstanceDisk(disk); err != nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument, "additional_disks[%d].%s", i, err)
 		}

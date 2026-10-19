@@ -23,6 +23,9 @@ argument_specs:
           numberOfNodes:
             type: int
             required: true
+          releaseImage:
+            type: str
+            required: false
           bareMetal:
             type: dict
             required: true

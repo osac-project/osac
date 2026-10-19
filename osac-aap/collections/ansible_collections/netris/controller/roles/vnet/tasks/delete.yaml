@@ -13,6 +13,7 @@
     return_content: true
     status_code: 200
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
   register: _vnet_list_resp
   no_log: true
 
@@ -31,6 +32,17 @@
     method: DELETE
     headers:
       Cookie: "connect.sid={{ netris_session_cookie }}"
-    status_code: [200, 204]
+    # 404 means the V-Net was removed concurrently after the list lookup;
+    # the deletion target is already absent, so treat it as deleted.
+    status_code: [200, 204, 404]
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
+  register: _vnet_delete_resp
   no_log: true
+
+- name: Report the concurrently removed V-Net
+  ansible.builtin.debug:
+    msg: >-
+      A V-Net was already absent (HTTP 404) at deletion time; treating it
+      as deleted.
+  when: _vnet_delete_resp is defined and _vnet_delete_resp.status | default(0) == 404

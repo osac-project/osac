@@ -345,7 +345,8 @@ func (r *ClusterOrderReconciler) patchStatusWithRetry(ctx context.Context, key c
 		// Leave them from the fresh read so a concurrent worker status update is preserved.
 		for _, c := range computed.Conditions {
 			if c.Type == v1alpha1.ConditionWorkersFailed ||
-				(terminalPhase && c.Type == v1alpha1.ConditionProgressing) {
+				(terminalPhase && c.Type == v1alpha1.ConditionProgressing) ||
+				c.Type == string(v1alpha1.ClusterOrderConditionAddOnOperatorsReady) {
 				continue
 			}
 			apimeta.SetStatusCondition(&latest.Status.Conditions, c)
@@ -357,7 +358,7 @@ func (r *ClusterOrderReconciler) patchStatusWithRetry(ctx context.Context, key c
 		if equality.Semantic.DeepEqual(base.Status, latest.Status) {
 			return nil
 		}
-		if err := r.Status().Patch(ctx, latest, client.MergeFrom(base)); err != nil {
+		if err := r.Status().Patch(ctx, latest, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
 			return err
 		}
 		transition = &statusTransition{oldStatus: base.Status, newStatus: latest.Status}
@@ -815,8 +816,37 @@ func (r *ClusterOrderReconciler) handleNodePool(ctx context.Context, instance *v
 		return nil
 	}
 
-	// Find the matching item inside the `nodeRequests` field of the status, or create a new one if there is no
-	// matching item yet.
+	// Skip the status update while observed replicas is zero.
+	// A newly created NodePool reports Status.Replicas == 0
+	// before any node joins.  Publishing zero would violate the
+	// fulfillment ClusterNodeSet.size > 0 constraint.  An
+	// existing ClusterOrder status entry retains its last
+	// positive value until a new positive observation arrives.
+	//
+	// Spec.Replicas is intentionally not checked: it is nil when
+	// autoscaling is active (HyperShift enforces Replicas XOR
+	// AutoScaling), yet Status.Replicas still reflects the
+	// actual observed count and should be reported.
+	if nodePool.Status.Replicas == 0 {
+		// Remove a pre-existing zero-valued entry so the feedback
+		// controller does not forward it to fulfillment where
+		// ClusterNodeSet.size > 0 would reject it.  Older operator
+		// versions wrote NumberOfNodes = 0 for newly created
+		// NodePools; this cleans them up on upgrade.  Positive
+		// entries are preserved (last-known-value).
+		for i, nr := range instance.Status.NodeRequests {
+			if nr.NodeSet == nodeSet && nr.NumberOfNodes == 0 {
+				instance.Status.NodeRequests = append(
+					instance.Status.NodeRequests[:i],
+					instance.Status.NodeRequests[i+1:]...)
+				break
+			}
+		}
+		return nil
+	}
+
+	// Find the matching item inside the `nodeRequests` field of the
+	// status, or create a new one if there is no matching item yet.
 	var nodeRequestStatus *v1alpha1.NodeRequestStatus
 	for i, nodeRequestsItem := range instance.Status.NodeRequests {
 		if nodeRequestsItem.NodeSet == nodeSet {
@@ -824,14 +854,20 @@ func (r *ClusterOrderReconciler) handleNodePool(ctx context.Context, instance *v
 		}
 	}
 	if nodeRequestStatus == nil {
-		instance.Status.NodeRequests = append(instance.Status.NodeRequests, v1alpha1.NodeRequestStatus{
-			NodeSet:   nodeSet,
-			BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: instanceType},
-		})
+		instance.Status.NodeRequests = append(
+			instance.Status.NodeRequests,
+			v1alpha1.NodeRequestStatus{
+				NodeSet:   nodeSet,
+				BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: instanceType},
+			},
+		)
 		nodeRequestStatus = &instance.Status.NodeRequests[len(instance.Status.NodeRequests)-1]
 	}
 
-	// Update the selected `nodeRequests` item:
+	// Update the selected `nodeRequests` item with the NodePool's
+	// observed replica count.  The zero-guard above ensures this
+	// value is always positive, satisfying the fulfillment proto's
+	// ClusterNodeSet.size > 0 constraint.
 	oldValue := nodeRequestStatus.NumberOfNodes
 	newValue := int(nodePool.Status.Replicas)
 	if newValue != oldValue {
@@ -1034,6 +1070,12 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 	instance.Status.Phase = v1alpha1.ClusterOrderPhaseDeleting
 	instance.SetStatusCondition(v1alpha1.ConditionDeleting, metav1.ConditionTrue,
 		"ClusterOrder is being deleted", v1alpha1.ReasonDeleting)
+
+	// The add-on controller gets one deletion pass through its finalizer to
+	// cancel active jobs. Job state itself must not block ClusterOrder teardown.
+	if controllerutil.ContainsFinalizer(instance, osacAddOnOperatorFinalizer) {
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+	}
 
 	// Delete auto-provisioned ExternalIPAttachments then ExternalIPs before deprovisioning.
 	done, cleanupResult, err := r.reconcileAutoExternalIPCleanup(ctx, instance)

@@ -830,5 +830,763 @@ var _ = Describe("Private identity providers server", func() {
 			Expect(ref.GetId()).To(Equal("vault-secret-id"))
 			Expect(ref.GetName()).To(Equal("vault-secret-name"))
 		})
+
+		Describe("Conditional client secret validation on Update", func() {
+			var (
+				server     *PrivateIdentityProvidersServer
+				secretsDao *dao.GenericDAO[*privatev1.Secret]
+				idpId      string
+			)
+
+			BeforeEach(func() {
+				var err error
+				server, err = NewPrivateIdentityProvidersServer().
+					SetLogger(logger).
+					SetAttributionLogic(attribution).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+
+				secretsDao, err = dao.NewGenericDAO[*privatev1.Secret]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+
+				// Create a valid secret
+				_, err = secretsDao.Create().SetObject(privatev1.Secret_builder{
+					Id:   "valid-secret-id",
+					Type: privatev1.SecretType_SECRET_TYPE_VALUE,
+					Metadata: privatev1.Metadata_builder{
+						Name:   "valid-secret",
+						Tenant: testTenant,
+					}.Build(),
+					Data: map[string][]byte{"value": []byte("secret-value")},
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				// Create an identity provider
+				createResp, err := server.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   "test-idp",
+							Tenant: "my-tenant",
+						}.Build(),
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Title:   "Test IDP",
+							Enabled: true,
+							Oidc: privatev1.OidcConfig_builder{
+								AuthorizationUrl: "https://example.com/auth",
+								TokenUrl:         "https://example.com/token",
+								ClientId:         "client-id",
+								Issuer:           "https://example.com",
+								ClientSecretSecret: privatev1.SecretLocalReference_builder{
+									Id: "valid-secret-id",
+								}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				idpId = createResp.GetObject().GetId()
+			})
+
+			It("Does not validate client secret when updating only spec.title", func() {
+				// Update only the title - should NOT trigger client secret validation
+				updateResp, err := server.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Id: idpId,
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Title: "Updated Title",
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"spec.title"},
+					},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(updateResp.GetObject().GetSpec().GetTitle()).To(Equal("Updated Title"))
+			})
+
+			It("Validates client secret when updating spec.oidc.client_secret_secret", func() {
+				// Update client_secret_secret - should trigger validation and reject non-existent secret
+				_, err := server.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Id: idpId,
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Oidc: privatev1.OidcConfig_builder{
+								ClientSecretSecret: privatev1.SecretLocalReference_builder{
+									Id: "nonexistent-secret-id",
+								}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"spec.oidc.client_secret_secret"},
+					},
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("no secret"))
+			})
+
+			It("Validates client secret when updating spec.oidc", func() {
+				// Update spec.oidc (broader path) - should trigger validation
+				_, err := server.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Id: idpId,
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Oidc: privatev1.OidcConfig_builder{
+								ClientSecretSecret: privatev1.SecretLocalReference_builder{
+									Id: "nonexistent-secret-id",
+								}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"spec.oidc"},
+					},
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			})
+
+			It("Validates client secret when updating spec", func() {
+				// Update spec (top-level path) - should trigger validation
+				_, err := server.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Id: idpId,
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Oidc: privatev1.OidcConfig_builder{
+								ClientSecretSecret: privatev1.SecretLocalReference_builder{
+									Id: "nonexistent-secret-id",
+								}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"spec"},
+					},
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			})
+
+			It("Does not validate client secret when updating only status", func() {
+				// Update only status - should NOT trigger client secret validation
+				updateResp, err := server.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Id: idpId,
+						Status: privatev1.IdentityProviderStatus_builder{
+							Phase:   privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY,
+							Message: "Synced successfully",
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"status.phase", "status.message"},
+					},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(updateResp.GetObject().GetStatus().GetPhase()).To(Equal(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY))
+				Expect(updateResp.GetObject().GetStatus().GetMessage()).To(Equal("Synced successfully"))
+			})
+
+			It("Resets phase to UNKNOWN when updating spec fields", func() {
+				// First set status to READY
+				_, err := server.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Id: idpId,
+						Status: privatev1.IdentityProviderStatus_builder{
+							Phase: privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY,
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"status.phase"},
+					},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				// Update a spec field - should reset phase to UNKNOWN
+				updateResp, err := server.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Id: idpId,
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Title: "New Title",
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"spec.title"},
+					},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(updateResp.GetObject().GetSpec().GetTitle()).To(Equal("New Title"))
+				Expect(updateResp.GetObject().GetStatus().GetPhase()).To(Equal(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_UNKNOWN))
+			})
+
+			It("Does not reset phase when updating only status fields", func() {
+				// Set status to READY
+				_, err := server.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Id: idpId,
+						Status: privatev1.IdentityProviderStatus_builder{
+							Phase: privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY,
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"status.phase"},
+					},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				// Update status.message - phase should remain READY
+				updateResp, err := server.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Id: idpId,
+						Status: privatev1.IdentityProviderStatus_builder{
+							Message: "Still ready",
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"status.message"},
+					},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(updateResp.GetObject().GetStatus().GetPhase()).To(Equal(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY))
+				Expect(updateResp.GetObject().GetStatus().GetMessage()).To(Equal("Still ready"))
+			})
+
+			It("Does not validate client secret when updating metadata during deletion", func() {
+				// This simulates the deletion flow where the reconciler/finalizer updates
+				// metadata.deletion_timestamp or metadata.finalizers. The client_secret_secret
+				// should not be validated because metadata changes don't affect the IDP spec.
+
+				// First, invalidate the secret by deleting it
+				_, err := secretsDao.Delete().SetId("valid-secret-id").Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				// Now try to update metadata (simulating deletion timestamp being set)
+				// This should succeed even though the client_secret_secret is now invalid
+				updateResp, err := server.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Id: idpId,
+						Metadata: privatev1.Metadata_builder{
+							Finalizers: []string{"osac.openshift.io/cleanup"},
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"metadata.finalizers"},
+					},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(updateResp.GetObject().GetMetadata().GetFinalizers()).To(Equal([]string{"osac.openshift.io/cleanup"}))
+			})
+
+			It("Validates client secret when actually changing it even if secret is invalid", func() {
+				// Delete the valid secret first
+				_, err := secretsDao.Delete().SetId("valid-secret-id").Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				// Create a new secret
+				_, err = secretsDao.Create().SetObject(privatev1.Secret_builder{
+					Id:   "new-secret-id",
+					Type: privatev1.SecretType_SECRET_TYPE_VALUE,
+					Metadata: privatev1.Metadata_builder{
+						Name:   "new-secret",
+						Tenant: testTenant,
+					}.Build(),
+					Data: map[string][]byte{"value": []byte("new-secret-value")},
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				// Now try to change the client_secret_secret - this SHOULD validate
+				updateResp, err := server.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Id: idpId,
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Oidc: privatev1.OidcConfig_builder{
+								ClientSecretSecret: privatev1.SecretLocalReference_builder{
+									Id: "new-secret-id",
+								}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"spec.oidc.client_secret_secret"},
+					},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(updateResp.GetObject().GetSpec().GetOidc().GetClientSecretSecret().GetId()).To(Equal("new-secret-id"))
+				Expect(updateResp.GetObject().GetSpec().GetOidc().GetClientSecretSecret().GetName()).To(Equal("new-secret"))
+			})
+		})
+
+		Describe("OIDC URL validation", func() {
+			var server *PrivateIdentityProvidersServer
+
+			BeforeEach(func() {
+				var err error
+				server, err = NewPrivateIdentityProvidersServer().
+					SetLogger(logger).
+					SetAttributionLogic(attribution).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("Rejects create with missing authorization_url", func() {
+				_, err := server.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   "test-oidc",
+							Tenant: "my-tenant",
+						}.Build(),
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Title:   "Test OIDC",
+							Enabled: true,
+							Oidc: privatev1.OidcConfig_builder{
+								AuthorizationUrl: "",
+								TokenUrl:         "https://example.com/token",
+								ClientId:         "client-id",
+								Issuer:           "https://example.com",
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				status := grpcstatus.Convert(err)
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("spec.oidc.authorization_url is required"))
+			})
+
+			It("Rejects create with missing token_url", func() {
+				_, err := server.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   "test-oidc",
+							Tenant: "my-tenant",
+						}.Build(),
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Title:   "Test OIDC",
+							Enabled: true,
+							Oidc: privatev1.OidcConfig_builder{
+								AuthorizationUrl: "https://example.com/auth",
+								TokenUrl:         "",
+								ClientId:         "client-id",
+								Issuer:           "https://example.com",
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				status := grpcstatus.Convert(err)
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("spec.oidc.token_url is required"))
+			})
+
+			It("Rejects create with missing issuer", func() {
+				_, err := server.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   "test-oidc",
+							Tenant: "my-tenant",
+						}.Build(),
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Title:   "Test OIDC",
+							Enabled: true,
+							Oidc: privatev1.OidcConfig_builder{
+								AuthorizationUrl: "https://example.com/auth",
+								TokenUrl:         "https://example.com/token",
+								ClientId:         "client-id",
+								Issuer:           "",
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				status := grpcstatus.Convert(err)
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("spec.oidc.issuer is required"))
+			})
+
+			It("Rejects create with invalid authorization_url", func() {
+				_, err := server.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   "test-oidc",
+							Tenant: "my-tenant",
+						}.Build(),
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Title:   "Test OIDC",
+							Enabled: true,
+							Oidc: privatev1.OidcConfig_builder{
+								AuthorizationUrl: "not-a-valid-url",
+								TokenUrl:         "https://example.com/token",
+								ClientId:         "client-id",
+								Issuer:           "https://example.com",
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				status := grpcstatus.Convert(err)
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("spec.oidc.authorization_url must be an absolute URL"))
+			})
+
+			It("Rejects create with HTTP (non-HTTPS) authorization_url", func() {
+				_, err := server.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   "test-oidc",
+							Tenant: "my-tenant",
+						}.Build(),
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Title:   "Test OIDC",
+							Enabled: true,
+							Oidc: privatev1.OidcConfig_builder{
+								AuthorizationUrl: "http://example.com/auth",
+								TokenUrl:         "https://example.com/token",
+								ClientId:         "client-id",
+								Issuer:           "https://example.com",
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				status := grpcstatus.Convert(err)
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("spec.oidc.authorization_url must use HTTPS"))
+			})
+
+			It("Rejects create with HTTP (non-HTTPS) token_url", func() {
+				_, err := server.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   "test-oidc",
+							Tenant: "my-tenant",
+						}.Build(),
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Title:   "Test OIDC",
+							Enabled: true,
+							Oidc: privatev1.OidcConfig_builder{
+								AuthorizationUrl: "https://example.com/auth",
+								TokenUrl:         "http://example.com/token",
+								ClientId:         "client-id",
+								Issuer:           "https://example.com",
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				status := grpcstatus.Convert(err)
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("spec.oidc.token_url must use HTTPS"))
+			})
+
+			It("Rejects create with HTTP (non-HTTPS) issuer", func() {
+				_, err := server.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   "test-oidc",
+							Tenant: "my-tenant",
+						}.Build(),
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Title:   "Test OIDC",
+							Enabled: true,
+							Oidc: privatev1.OidcConfig_builder{
+								AuthorizationUrl: "https://example.com/auth",
+								TokenUrl:         "https://example.com/token",
+								ClientId:         "client-id",
+								Issuer:           "http://example.com",
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				status := grpcstatus.Convert(err)
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("spec.oidc.issuer must use HTTPS"))
+			})
+
+			It("Rejects create with relative authorization_url", func() {
+				_, err := server.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   "test-oidc",
+							Tenant: "my-tenant",
+						}.Build(),
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Title:   "Test OIDC",
+							Enabled: true,
+							Oidc: privatev1.OidcConfig_builder{
+								AuthorizationUrl: "/auth",
+								TokenUrl:         "https://example.com/token",
+								ClientId:         "client-id",
+								Issuer:           "https://example.com",
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				status := grpcstatus.Convert(err)
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("spec.oidc.authorization_url must be an absolute URL"))
+			})
+
+			It("Accepts create with valid optional user_info_url", func() {
+				response, err := server.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   "test-oidc",
+							Tenant: "my-tenant",
+						}.Build(),
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Title:   "Test OIDC",
+							Enabled: true,
+							Oidc: privatev1.OidcConfig_builder{
+								AuthorizationUrl: "https://example.com/auth",
+								TokenUrl:         "https://example.com/token",
+								ClientId:         "client-id",
+								Issuer:           "https://example.com",
+								UserInfoUrl:      new("https://example.com/userinfo"),
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.Object.Spec.GetOidc().GetUserInfoUrl()).To(Equal("https://example.com/userinfo"))
+			})
+
+			It("Rejects create with invalid optional user_info_url", func() {
+				_, err := server.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   "test-oidc",
+							Tenant: "my-tenant",
+						}.Build(),
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Title:   "Test OIDC",
+							Enabled: true,
+							Oidc: privatev1.OidcConfig_builder{
+								AuthorizationUrl: "https://example.com/auth",
+								TokenUrl:         "https://example.com/token",
+								ClientId:         "client-id",
+								Issuer:           "https://example.com",
+								UserInfoUrl:      new("http://example.com/userinfo"),
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				status := grpcstatus.Convert(err)
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("spec.oidc.user_info_url must use HTTPS"))
+			})
+
+			It("Rejects create with invalid optional jwks_url", func() {
+				_, err := server.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   "test-oidc",
+							Tenant: "my-tenant",
+						}.Build(),
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Title:   "Test OIDC",
+							Enabled: true,
+							Oidc: privatev1.OidcConfig_builder{
+								AuthorizationUrl: "https://example.com/auth",
+								TokenUrl:         "https://example.com/token",
+								ClientId:         "client-id",
+								Issuer:           "https://example.com",
+								JwksUrl:          new("http://example.com/jwks"),
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				status := grpcstatus.Convert(err)
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("spec.oidc.jwks_url must use HTTPS"))
+			})
+
+			It("Rejects create with invalid optional logout_url", func() {
+				_, err := server.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   "test-oidc",
+							Tenant: "my-tenant",
+						}.Build(),
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Title:   "Test OIDC",
+							Enabled: true,
+							Oidc: privatev1.OidcConfig_builder{
+								AuthorizationUrl: "https://example.com/auth",
+								TokenUrl:         "https://example.com/token",
+								ClientId:         "client-id",
+								Issuer:           "https://example.com",
+								LogoutUrl:        new("http://example.com/logout"),
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				status := grpcstatus.Convert(err)
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("spec.oidc.logout_url must use HTTPS"))
+			})
+
+			It("Validates URLs when updating authorization_url", func() {
+				// Create a valid IDP first
+				createResp, err := server.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   "test-oidc",
+							Tenant: "my-tenant",
+						}.Build(),
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Title:   "Test OIDC",
+							Enabled: true,
+							Oidc: privatev1.OidcConfig_builder{
+								AuthorizationUrl: "https://example.com/auth",
+								TokenUrl:         "https://example.com/token",
+								ClientId:         "client-id",
+								Issuer:           "https://example.com",
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				// Try to update to an invalid URL
+				_, err = server.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Id: createResp.Object.Id,
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Oidc: privatev1.OidcConfig_builder{
+								AuthorizationUrl: "http://insecure.com/auth",
+							}.Build(),
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"spec.oidc.authorization_url"},
+					},
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				status := grpcstatus.Convert(err)
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("spec.oidc.authorization_url must use HTTPS"))
+			})
+
+			It("Accepts valid single-URL update without requiring other fields", func() {
+				// Create an IDP with valid URLs
+				createResp, err := server.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   "test-oidc",
+							Tenant: "my-tenant",
+						}.Build(),
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Title:   "Test OIDC",
+							Enabled: true,
+							Oidc: privatev1.OidcConfig_builder{
+								AuthorizationUrl: "https://example.com/auth",
+								TokenUrl:         "https://example.com/token",
+								ClientId:         "client-id",
+								Issuer:           "https://example.com",
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				// Update only token_url - should succeed without validating other required fields
+				updateResp, err := server.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Id: createResp.Object.Id,
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Oidc: privatev1.OidcConfig_builder{
+								TokenUrl: "https://newdomain.example.com/token",
+							}.Build(),
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"spec.oidc.token_url"},
+					},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(updateResp.Object.Spec.GetOidc().TokenUrl).To(Equal("https://newdomain.example.com/token"))
+			})
+
+			It("Does not validate URLs when updating unrelated fields", func() {
+				// Create an IDP with valid URLs
+				createResp, err := server.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   "test-oidc",
+							Tenant: "my-tenant",
+						}.Build(),
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Title:   "Test OIDC",
+							Enabled: true,
+							Oidc: privatev1.OidcConfig_builder{
+								AuthorizationUrl: "https://example.com/auth",
+								TokenUrl:         "https://example.com/token",
+								ClientId:         "client-id",
+								Issuer:           "https://example.com",
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				// Update only the title - should succeed without URL validation
+				updateResp, err := server.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Id: createResp.Object.Id,
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Title: "Updated Title",
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"spec.title"},
+					},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(updateResp.Object.Spec.Title).To(Equal("Updated Title"))
+			})
+
+			It("Accepts create with all valid URLs", func() {
+				response, err := server.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   "test-oidc-complete",
+							Tenant: "my-tenant",
+						}.Build(),
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Title:   "Complete OIDC",
+							Enabled: true,
+							Oidc: privatev1.OidcConfig_builder{
+								AuthorizationUrl: "https://accounts.example.com/o/oauth2/v2/auth",
+								TokenUrl:         "https://oauth2.example.com/token",
+								ClientId:         "client-id-123",
+								Issuer:           "https://accounts.example.com",
+								UserInfoUrl:      new("https://openidconnect.example.com/v1/userinfo"),
+								JwksUrl:          new("https://www.example.com/oauth2/v3/certs"),
+								LogoutUrl:        new("https://accounts.example.com/logout"),
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.Object).ToNot(BeNil())
+				oidc := response.Object.Spec.GetOidc()
+				Expect(oidc.AuthorizationUrl).To(Equal("https://accounts.example.com/o/oauth2/v2/auth"))
+				Expect(oidc.TokenUrl).To(Equal("https://oauth2.example.com/token"))
+				Expect(oidc.Issuer).To(Equal("https://accounts.example.com"))
+				Expect(oidc.GetUserInfoUrl()).To(Equal("https://openidconnect.example.com/v1/userinfo"))
+				Expect(oidc.GetJwksUrl()).To(Equal("https://www.example.com/oauth2/v3/certs"))
+				Expect(oidc.GetLogoutUrl()).To(Equal("https://accounts.example.com/logout"))
+			})
+		})
 	})
 })

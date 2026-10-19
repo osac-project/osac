@@ -167,6 +167,10 @@ var _ = Describe("File token source", func() {
 		})
 
 		It("Handles file permission errors gracefully", func() {
+			if os.Geteuid() == 0 {
+				Skip("root bypasses file permission bits")
+			}
+
 			// Write the token:
 			file := makeFile("my-token")
 

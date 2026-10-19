@@ -28,11 +28,11 @@ pnpm --filter @osac/playwright exec playwright install chromium
 
 Required environment variables:
 
-| Variable           | Description                                                                                        |
-| ------------------ | --------------------------------------------------------------------------------------------------- |
+| Variable           | Description                                                                                       |
+| ------------------ | ------------------------------------------------------------------------------------------------- |
 | `OSAC_UI_BASE_URL` | Full URL of the `osac-ui` deployment to test, e.g. `https://osac-ui-<namespace>.<cluster-domain>` |
 | `OSAC_USERNAME`    | Username of a Keycloak test user on that deployment's realm                                       |
-| `OSAC_PASSWORD`    | Password for that user                                                                             |
+| `OSAC_PASSWORD`    | Password for that user                                                                            |
 
 ```bash
 export OSAC_UI_BASE_URL=https://... OSAC_USERNAME=...
@@ -60,10 +60,51 @@ pnpm playwright:run     # ...repeat as many times as you're iterating
 `pnpm playwright:run` never re-authenticates — if `.auth/user.json` is missing
 or the session has expired, re-run `pnpm playwright:setup` first.
 
+### Tenant flow tests
+
+The tenant create and delete specs require these additional environment
+variables:
+
+| Variable              | Description                                                                                                                                        |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OSAC_TENANT_NAME`    | Tenant name used by the create and delete flows. The create flow requires that it does not already exist; the delete flow requires that it exists. |
+| `IGNORE_HTTPS_ERRORS` | Set to `true` for trusted lab clusters using a self-signed or cluster-internal certificate.                                                        |
+
+Set all variables before running the tenant tests:
+
+```bash
+export OSAC_UI_BASE_URL=https://osac-ui-<namespace>.<cluster-domain>
+export OSAC_USERNAME=<keycloak-user>
+read -rs OSAC_PASSWORD && export OSAC_PASSWORD
+export OSAC_TENANT_NAME=tenant1
+export IGNORE_HTTPS_ERRORS=true
+```
+
+Run the create and delete flow together. The `vmaas-delete` project depends on
+`vmaas`, so creation runs before deletion:
+
+```bash
+pnpm --filter @osac/playwright exec playwright test --project=vmaas-delete
+```
+
+Run the flows separately:
+
+```bash
+pnpm --filter @osac/playwright exec playwright test \
+  create.tenant.spec.ts --project=vmaas
+
+pnpm --filter @osac/playwright exec playwright test \
+  delete.tenant.spec.ts --project=vmaas-delete --no-deps
+```
+
+Use `--headed` when a graphical display is available. Run these commands from
+the repository root; pass only the spec filename because the Playwright
+configuration already defines the tenant spec directory.
+
 Optional:
 
-| Variable                  | Description                                                                                          |
-| -------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Variable              | Description                                                                                                                                                                                                                                                                                       |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `IGNORE_HTTPS_ERRORS` | Set to `true` to trust self-signed/cluster-internal CA certs, common on dev and lab clusters. Off by default because this flow submits a real Keycloak password — it disables TLS verification for the whole browser context, not just `localhost`, so only enable it against clusters you trust. |
 
 Testing against a local `pnpm dev` instance instead of a remote deployment:

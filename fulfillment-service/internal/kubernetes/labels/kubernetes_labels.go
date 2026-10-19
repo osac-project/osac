@@ -21,6 +21,12 @@ import (
 
 var group = osacv1alpha1.GroupVersion.Group
 
+// AutoCreated marks resources created by OSAC as part of another resource's lifecycle.
+const AutoCreated = "osac.openshift.io/auto-created"
+
+// AutoCreatedFor identifies the resource that caused an automatically created resource.
+const AutoCreatedFor = "osac.openshift.io/auto-created-for"
+
 // ClusterOrderUuid is the label where the fulfillment API will write the identifier of the order.
 var ClusterOrderUuid = fmt.Sprintf("%s/%s", group, "clusterorder-uuid")
 
@@ -35,6 +41,9 @@ var SubnetUuid = fmt.Sprintf("%s/%s", group, "subnet-uuid")
 
 // VirtualNetworkUuid is the label where the fulfillment API will write the identifier of the virtual network.
 var VirtualNetworkUuid = fmt.Sprintf("%s/%s", group, "virtualnetwork-uuid")
+
+// FabricDomainUuid is the label where the fulfillment API writes the fabric domain identifier.
+var FabricDomainUuid = fmt.Sprintf("%s/%s", group, "fabricdomain-uuid")
 
 // NetworkClassUuid is the label where the fulfillment API will write the identifier of the network class.
 var NetworkClassUuid = fmt.Sprintf("%s/%s", group, "networkclass-uuid")

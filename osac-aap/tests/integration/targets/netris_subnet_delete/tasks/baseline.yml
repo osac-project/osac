@@ -1,0 +1,363 @@
+---
+- name: Verify the Netris Subnet delete playbook handles provider responses
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    mock_netris_port: 18444
+    mock_netris_url: "http://127.0.0.1:{{ mock_netris_port }}"
+    # Per-run ephemeral value; the fixture endpoint is independent of real
+    # authentication and the value is never persisted.
+    netris_session_cookie: "{{ lookup('ansible.builtin.password', '/dev/null chars=ascii_letters,digits length=32') }}"
+    tenant_id: integration-tenant
+    subnet_name: netris-subnet-del
+    fabric_configmap_name: "subnet-{{ subnet_name }}-fabric-output"
+    fixture_namespace: >-
+      osac-netris-subnet-del-{{ lookup('env', 'POD_UID') | default('local', true)
+      | regex_replace('[^a-z0-9]', '') | truncate(8, true, '') }}
+    netris_delete_resource:
+      metadata:
+        name: "{{ subnet_name }}"
+        namespace: "{{ fixture_namespace }}"
+        annotations:
+          osac.openshift.io/tenant: "{{ tenant_id }}"
+          osac.openshift.io/implementation-strategy: netris
+    nd01_expected_calls:
+      - method: GET
+        path: /api/v2/vnet
+      - method: DELETE
+        path: /api/v2/vnet/101
+      - method: GET
+        path: /api/v2/ipam/subnets
+      - method: DELETE
+        path: /api/v2/ipam/subnet/202
+    nd02_expected_calls:
+      - method: GET
+        path: /api/v2/vnet
+      - method: DELETE
+        path: /api/v2/vnet/101
+    nd03_expected_calls:
+      - method: GET
+        path: /api/v2/vnet
+      - method: GET
+        path: /api/v2/ipam/subnets
+      - method: DELETE
+        path: /api/v2/ipam/subnet/202
+
+  tasks:
+    - name: Run the Netris Subnet delete scenarios
+      block:
+        - name: Kill any stale fixture on the mock port
+          ansible.builtin.shell: "pkill -f '[m]ock_netris.py {{ mock_netris_port }}' 2>/dev/null || true"
+          changed_when: false
+
+        - name: Fail when the dedicated test kubeconfig is not in use
+          ansible.builtin.assert:
+            that:
+              - lookup('env', 'KUBECONFIG') is search('kubeconfig-osac-test')
+              - lookup('env', 'K8S_AUTH_KUBECONFIG') is search('kubeconfig-osac-test')
+            fail_msg: >-
+              This target creates and deletes Kubernetes resources through the
+              dedicated test kubeconfig. Run it via `make test` from osac-aap/,
+              or after ./setup_test_env.sh from tests/integration/ with
+              KUBECONFIG="$PWD/kubeconfig-osac-test"
+              K8S_AUTH_KUBECONFIG="$PWD/kubeconfig-osac-test".
+
+        - name: Start the mock Netris API fixture
+          ansible.builtin.command:
+            cmd: "python3 {{ playbook_dir }}/../files/mock_netris.py {{ mock_netris_port }}"
+          changed_when: false
+          async: 600
+          poll: 0
+          register: mock_netris_server
+
+        - name: Wait for the mock Netris API fixture
+          ansible.builtin.wait_for:
+            port: "{{ mock_netris_port }}"
+            timeout: 30
+
+        - name: Create a temporary extra-vars file for the child playbooks
+          ansible.builtin.tempfile:
+            state: file
+            prefix: osac-netris-subnet-delete-
+            suffix: .json
+          register: netris_delete_vars_tmp
+
+        - name: Set the scenario extra-vars file path
+          ansible.builtin.set_fact:
+            netris_delete_vars_file: "{{ netris_delete_vars_tmp.path }}"
+
+        - name: Create the dedicated fixture namespace
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "{{ fixture_namespace }}"
+            state: present
+
+        # ND-01: the V-Net is listed, then its DELETE returns 404 because a
+        # concurrent deletion removed it first. The play must succeed, delete
+        # the child IPAM subnet, and remove the fabric output ConfigMap.
+        - name: Seed ND-01 with an existing V-Net that 404s on delete
+          ansible.builtin.uri:
+            url: "{{ mock_netris_url }}/_config"
+            method: POST
+            body_format: json
+            body:
+              vnets:
+                - id: 101
+                  name: "{{ subnet_name }}"
+              vnet_delete_status: 404
+              ipam_subnets:
+                - id: 202
+                  name: "{{ subnet_name }}"
+              ipam_delete_status: 204
+            status_code: 200
+          changed_when: false
+
+        - name: Ensure the ND-01 fabric output ConfigMap exists
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: "{{ fabric_configmap_name }}"
+                namespace: "{{ fixture_namespace }}"
+
+        - name: Run the ND-01 delete playbook
+          ansible.builtin.include_tasks: run_delete_playbook.yaml
+          vars:
+            netris_delete_should_succeed: true
+
+        - name: Read the ND-01 request log
+          ansible.builtin.uri:
+            url: "{{ mock_netris_url }}/_calls"
+            method: GET
+            status_code: 200
+          register: nd01_calls
+          changed_when: false
+
+        - name: Assert the ND-01 delete order
+          ansible.builtin.assert:
+            that:
+              - nd01_calls.json.calls == nd01_expected_calls
+            success_msg: "ND-01 request order matched"
+
+        - name: Read the ND-01 fabric output ConfigMap
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: ConfigMap
+            namespace: "{{ fixture_namespace }}"
+            name: "{{ fabric_configmap_name }}"
+          register: nd01_configmap
+
+        - name: Assert the ND-01 ConfigMap was removed
+          ansible.builtin.assert:
+            that:
+              - nd01_configmap.resources | length == 0
+            success_msg: "ND-01 fabric output ConfigMap removed"
+
+        # ND-02: the V-Net DELETE fails with a server error. The play must
+        # fail before the IPAM deletion and ConfigMap removal so the ordered
+        # cleanup stays retryable.
+        - name: Seed ND-02 with a V-Net delete that returns a server error
+          ansible.builtin.uri:
+            url: "{{ mock_netris_url }}/_config"
+            method: POST
+            body_format: json
+            body:
+              vnets:
+                - id: 101
+                  name: "{{ subnet_name }}"
+              vnet_delete_status: 500
+              ipam_subnets:
+                - id: 202
+                  name: "{{ subnet_name }}"
+              ipam_delete_status: 204
+            status_code: 200
+          changed_when: false
+
+        - name: Ensure the ND-02 fabric output ConfigMap exists
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: "{{ fabric_configmap_name }}"
+                namespace: "{{ fixture_namespace }}"
+
+        - name: Run the ND-02 delete playbook
+          ansible.builtin.include_tasks: run_delete_playbook.yaml
+          vars:
+            netris_delete_should_succeed: false
+
+        - name: Read the ND-02 request log
+          ansible.builtin.uri:
+            url: "{{ mock_netris_url }}/_calls"
+            method: GET
+            status_code: 200
+          register: nd02_calls
+          changed_when: false
+
+        - name: Assert ND-02 stopped after the failed V-Net delete
+          ansible.builtin.assert:
+            that:
+              - nd02_calls.json.calls == nd02_expected_calls
+            success_msg: "ND-02 stopped at the failed V-Net delete"
+
+        - name: Read the ND-02 fabric output ConfigMap
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: ConfigMap
+            namespace: "{{ fixture_namespace }}"
+            name: "{{ fabric_configmap_name }}"
+          register: nd02_configmap
+
+        - name: Assert the ND-02 ConfigMap was kept
+          ansible.builtin.assert:
+            that:
+              - nd02_configmap.resources | length == 1
+            success_msg: "ND-02 fabric output ConfigMap kept"
+
+        # ND-03: the V-Net list already reports absence. No V-Net DELETE may
+        # be sent, while the IPAM cleanup and ConfigMap removal complete.
+        - name: Seed ND-03 with an already absent V-Net
+          ansible.builtin.uri:
+            url: "{{ mock_netris_url }}/_config"
+            method: POST
+            body_format: json
+            body:
+              vnets: []
+              vnet_delete_status: 204
+              ipam_subnets:
+                - id: 202
+                  name: "{{ subnet_name }}"
+              ipam_delete_status: 204
+            status_code: 200
+          changed_when: false
+
+        - name: Ensure the ND-03 fabric output ConfigMap exists
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: "{{ fabric_configmap_name }}"
+                namespace: "{{ fixture_namespace }}"
+
+        - name: Run the ND-03 delete playbook
+          ansible.builtin.include_tasks: run_delete_playbook.yaml
+          vars:
+            netris_delete_should_succeed: true
+
+        - name: Read the ND-03 request log
+          ansible.builtin.uri:
+            url: "{{ mock_netris_url }}/_calls"
+            method: GET
+            status_code: 200
+          register: nd03_calls
+          changed_when: false
+
+        - name: Assert ND-03 sent no V-Net delete and completed the cleanup
+          ansible.builtin.assert:
+            that:
+              - nd03_calls.json.calls == nd03_expected_calls
+            success_msg: "ND-03 skipped the V-Net delete and completed cleanup"
+
+        - name: Read the ND-03 fabric output ConfigMap
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: ConfigMap
+            namespace: "{{ fixture_namespace }}"
+            name: "{{ fabric_configmap_name }}"
+          register: nd03_configmap
+
+        - name: Assert the ND-03 ConfigMap was removed
+          ansible.builtin.assert:
+            that:
+              - nd03_configmap.resources | length == 0
+            success_msg: "ND-03 fabric output ConfigMap removed"
+
+        # ND-04: the child IPAM subnet DELETE returns 404 after the IPAM
+        # lookup because a concurrent removal deleted it first. The play must
+        # succeed and still remove the fabric output ConfigMap.
+        - name: Seed ND-04 with an IPAM delete that 404s after the lookup
+          ansible.builtin.uri:
+            url: "{{ mock_netris_url }}/_config"
+            method: POST
+            body_format: json
+            body:
+              vnets:
+                - id: 101
+                  name: "{{ subnet_name }}"
+              vnet_delete_status: 204
+              ipam_subnets:
+                - id: 202
+                  name: "{{ subnet_name }}"
+              ipam_delete_status: 404
+            status_code: 200
+          changed_when: false
+
+        - name: Ensure the ND-04 fabric output ConfigMap exists
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: "{{ fabric_configmap_name }}"
+                namespace: "{{ fixture_namespace }}"
+
+        - name: Run the ND-04 delete playbook
+          ansible.builtin.include_tasks: run_delete_playbook.yaml
+          vars:
+            netris_delete_should_succeed: true
+
+        - name: Read the ND-04 request log
+          ansible.builtin.uri:
+            url: "{{ mock_netris_url }}/_calls"
+            method: GET
+            status_code: 200
+          register: nd04_calls
+          changed_when: false
+
+        - name: Assert the ND-04 delete order
+          ansible.builtin.assert:
+            that:
+              - nd04_calls.json.calls == nd01_expected_calls
+            success_msg: "ND-04 request order matched"
+
+        - name: Read the ND-04 fabric output ConfigMap
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: ConfigMap
+            namespace: "{{ fixture_namespace }}"
+            name: "{{ fabric_configmap_name }}"
+          register: nd04_configmap
+
+        - name: Assert the ND-04 ConfigMap was removed
+          ansible.builtin.assert:
+            that:
+              - nd04_configmap.resources | length == 0
+            success_msg: "ND-04 fabric output ConfigMap removed"
+      always:
+        - name: Stop the mock Netris API fixture
+          ansible.builtin.shell: "pkill -f '[m]ock_netris.py {{ mock_netris_port }}' 2>/dev/null || true"
+          changed_when: false
+
+        - name: Delete only the dedicated fixture namespace
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "{{ fixture_namespace }}"
+            state: absent
+            wait: true
+          when: fixture_namespace is defined
+
+        - name: Remove only this test's temporary extra-vars file
+          ansible.builtin.file:
+            path: "{{ netris_delete_vars_file }}"
+            state: absent
+          when: netris_delete_vars_file is defined

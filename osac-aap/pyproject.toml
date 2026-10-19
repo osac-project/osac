@@ -30,7 +30,10 @@ development = [
 ]
 
 [tool.pytest.ini_options]
-pythonpath = ["collections/ansible_collections/osac/service/plugins/filter"]
+pythonpath = [
+  "collections/ansible_collections/osac/service/plugins/filter",
+  "collections/ansible_collections/osac/service/plugins/lookup",
+]
 
 [tool.uv.sources]
 python-esiclient = { git = "https://github.com/cci-moc/python-esiclient.git", rev = "1.4" }

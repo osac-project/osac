@@ -77,6 +77,10 @@
             virtualization:
               permittedHostDevices:
                 pciHostDevices: "{{ merged_pci_host_devices }}"
+      register: _r
+      retries: 5
+      delay: 10
+      until: _r is not failed
       when:
         - hyperconverged_pci_devices_use_virtualization | bool
 
@@ -92,5 +96,9 @@
           spec:
             permittedHostDevices:
               pciHostDevices: "{{ merged_pci_host_devices }}"
+      register: _r
+      retries: 5
+      delay: 10
+      until: _r is not failed
       when:
         - not hyperconverged_pci_devices_use_virtualization | bool

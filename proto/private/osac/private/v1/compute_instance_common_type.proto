@@ -46,6 +46,11 @@ message ComputeInstanceDisk {
   optional StorageTierReference storage_tier = 2;
 }
 
+// Contains a list of compute instance disks. Message presence distinguishes an omitted list from an empty list.
+message ComputeInstanceDiskList {
+  repeated ComputeInstanceDisk items = 1;
+}
+
 // Run strategy for the compute instance.
 enum ComputeInstanceRunStrategy {
   // buf:lint:ignore ENUM_NO_ALLOW_ALIAS

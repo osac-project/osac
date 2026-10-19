@@ -117,6 +117,8 @@ class OsacCLI:
 
         # Add additional disks
         if additional_disks is not None:
+            if not additional_disks:
+                args.extend(["--additional-disk", ""])
             for idx, disk in enumerate(additional_disks):
                 if not isinstance(disk, dict):
                     raise ValueError(f"additional_disks[{idx}]: must be a dict, got {type(disk).__name__}")
@@ -266,13 +268,7 @@ class OsacCLI:
 
         return self._parse_uuid(self._run(*args))
 
-    def create_secret(
-        self,
-        *,
-        name: str,
-        from_files: dict[str, str],
-        secret_type: str | None = None,
-    ) -> None:
+    def create_secret(self, *, name: str, from_files: dict[str, str], secret_type: str | None = None) -> None:
         args: list[str] = ["create", "secret", "--name", name]
         if secret_type is not None:
             args.extend(["--type", secret_type])
@@ -295,10 +291,22 @@ class OsacCLI:
     def get_unchecked(self, resource: str) -> tuple[str, int]:
         return self._run_unchecked("get", resource)
 
-    def create_cluster_with_catalog_item(self, *, catalog_item: str, name: str, version: str | None = None) -> str:
+    def create_cluster_with_catalog_item(
+        self,
+        *,
+        catalog_item: str,
+        name: str,
+        version: str | None = None,
+        pull_secret: str | None = None,
+        ssh_public_key_file: str | None = None,
+    ) -> str:
         args = ["create", "cluster", "--catalog-item", catalog_item, "--name", name]
         if version is not None:
             args.extend(["--version", version])
+        if pull_secret is not None:
+            args.extend(["--pull-secret", pull_secret])
+        if ssh_public_key_file is not None:
+            args.extend(["--ssh-public-key-file", ssh_public_key_file])
         return self._parse_uuid(self._run(*args))
 
     def create_compute_instance_with_catalog_item(
@@ -322,6 +330,7 @@ class OsacCLI:
         *,
         name: str,
         catalog_item: str,
+        instance_type: str | None = None,
         ssh_key: str | None = None,
         disk_image: str | None = None,
         user_data: str | None = None,
@@ -329,6 +338,8 @@ class OsacCLI:
         external_ip_attachment: bool = False,
     ) -> tuple[str, list[str]]:
         args: list[str] = ["create", "baremetalinstance", "--name", name, "--catalog-item", catalog_item]
+        if instance_type is not None:
+            args.extend(["--set", f"instance_type.name={instance_type}", "--set", "instance_type.shared=true"])
         if ssh_key is not None:
             args.extend(["--ssh-key", ssh_key])
         if disk_image is not None:

@@ -18,6 +18,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -34,6 +35,35 @@ func policyTestSecurityGroup(name string) *privatev1.SecurityGroupLocalReference
 }
 
 var _ = Describe("Shared typed-policy helper", func() {
+	It("distinguishes omitted and empty additional disks", func() {
+		disk := privatev1.ComputeInstanceDisk_builder{SizeGib: policyTestInt32(20)}.Build()
+		fields := privatev1.ComputeInstanceCatalogItemFields_builder{
+			AdditionalDisks: privatev1.ComputeInstanceDiskListFieldPolicy_builder{
+				Editable: privatev1.EditableComputeInstanceDiskList_builder{
+					DefaultValue: privatev1.ComputeInstanceDiskList_builder{Items: []*privatev1.ComputeInstanceDisk{disk}}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build()
+
+		omitted := &privatev1.ComputeInstanceSpec{}
+		Expect(applyComputeInstanceCatalogItemPolicies(omitted, fields)).To(Succeed())
+		Expect(omitted.GetAdditionalDisks().GetItems()).To(HaveLen(1))
+
+		explicitEmpty := &privatev1.ComputeInstanceSpec{}
+		err := protojson.Unmarshal([]byte(`{"additional_disks":{"items":[]}}`), explicitEmpty)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(applyComputeInstanceCatalogItemPolicies(explicitEmpty, fields)).To(Succeed())
+		Expect(explicitEmpty.GetAdditionalDisks()).NotTo(BeNil())
+		Expect(explicitEmpty.GetAdditionalDisks().GetItems()).To(BeEmpty())
+
+		locked := privatev1.ComputeInstanceCatalogItemFields_builder{
+			AdditionalDisks: privatev1.ComputeInstanceDiskListFieldPolicy_builder{
+				Locked: privatev1.ComputeInstanceDiskList_builder{Items: []*privatev1.ComputeInstanceDisk{disk}}.Build(),
+			}.Build(),
+		}.Build()
+		Expect(applyComputeInstanceCatalogItemPolicies(explicitEmpty, locked)).To(MatchError(ContainSubstring("field is not editable")))
+	})
+
 	Describe("Cluster CIDR policies", func() {
 		It("canonicalizes IPv6 defaults", func() {
 			value := "2001:db8:1::1/48"
@@ -179,23 +209,18 @@ var _ = Describe("Shared typed-policy helper", func() {
 		Expect(sizeSpec.GetBootDisk().GetSizeGib()).To(Equal(zero))
 	})
 
-	It("treats empty collections as omitted input", func() {
-		By("defaulting empty compute attachment and disk lists")
+	It("treats empty network and map inputs as omitted", func() {
+		By("defaulting an empty compute network attachment list")
 		computeAttachment := privatev1.ComputeNetworkAttachment_builder{Subnet: policyTestSubnet("compute-subnet")}.Build()
 		computeSpec := &privatev1.ComputeInstanceSpec{}
 		computeSpec.SetNetworkAttachments([]*privatev1.ComputeNetworkAttachment{})
-		computeSpec.SetAdditionalDisks([]*privatev1.ComputeInstanceDisk{})
 		computeFields := privatev1.ComputeInstanceCatalogItemFields_builder{
 			NetworkAttachments: privatev1.ComputeNetworkAttachmentListFieldPolicy_builder{
 				Locked: privatev1.ComputeNetworkAttachmentList_builder{Items: []*privatev1.ComputeNetworkAttachment{computeAttachment}}.Build(),
 			}.Build(),
-			AdditionalDisks: privatev1.ComputeInstanceDiskListFieldPolicy_builder{
-				Locked: privatev1.ComputeInstanceDiskList_builder{Items: []*privatev1.ComputeInstanceDisk{privatev1.ComputeInstanceDisk_builder{SizeGib: policyTestInt32(20)}.Build()}}.Build(),
-			}.Build(),
 		}.Build()
 		Expect(applyComputeInstanceCatalogItemPolicies(computeSpec, privatev1.ComputeInstanceCatalogItem_builder{Fields: computeFields}.Build().GetFields())).To(Succeed())
 		Expect(computeSpec.GetNetworkAttachments()).To(HaveLen(1))
-		Expect(computeSpec.GetAdditionalDisks()).To(HaveLen(1))
 
 		By("defaulting an empty cluster node-set map")
 		clusterSize := int32(2)

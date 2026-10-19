@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -46,6 +47,7 @@ type mockComputeInstancesClient struct {
 	updateCalled   bool
 	updateCount    int
 	lastUpdate     *privatev1.ComputeInstance
+	lastUpdateMask *fieldmaskpb.FieldMask
 	signalCalled   bool
 	signalCount    int
 	signalID       string
@@ -75,6 +77,7 @@ func (m *mockComputeInstancesClient) Update(ctx context.Context, in *privatev1.C
 	m.updateCalled = true
 	m.updateCount++
 	m.lastUpdate = in.GetObject()
+	m.lastUpdateMask = in.GetUpdateMask()
 	if m.updateError != nil {
 		return nil, m.updateError
 	}
@@ -128,6 +131,45 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 		if err != nil && apierrors.IsNotFound(err) {
 			Expect(k8sClient.Create(ctx, namespace)).To(Succeed())
 		}
+	})
+
+	Context("network attachment IP feedback", func() {
+		It("copies attachment Subnet ID and IP into the Fulfillment status", func() {
+			obj := &osacv1alpha1.ComputeInstance{Status: osacv1alpha1.ComputeInstanceStatus{
+				ComputeNetworkAttachmentStatuses: []osacv1alpha1.ComputeNetworkAttachmentStatus{{
+					SubnetRef: "subnet-id-123",
+					IPAddress: "10.0.0.42",
+				}},
+			}}
+
+			remote := privatev1.ComputeInstance_builder{
+				Status: privatev1.ComputeInstanceStatus_builder{}.Build(),
+			}.Build()
+			syncCIIPAddresses(obj, remote)
+
+			statuses := remote.GetStatus().GetComputeNetworkAttachmentStatuses()
+			Expect(statuses).To(HaveLen(1))
+			Expect(statuses[0].GetSubnetRef()).To(Equal("subnet-id-123"))
+			Expect(statuses[0].GetIpAddress()).To(Equal("10.0.0.42"))
+		})
+
+		It("clears stale attachment status when the operator reports none", func() {
+			obj := &osacv1alpha1.ComputeInstance{}
+			remote := privatev1.ComputeInstance_builder{
+				Status: privatev1.ComputeInstanceStatus_builder{
+					ComputeNetworkAttachmentStatuses: []*privatev1.ComputeNetworkAttachmentStatus{
+						privatev1.ComputeNetworkAttachmentStatus_builder{
+							SubnetRef: "subnet-id-old",
+							IpAddress: "10.0.0.41",
+						}.Build(),
+					},
+				}.Build(),
+			}.Build()
+
+			syncCIIPAddresses(obj, remote)
+
+			Expect(remote.GetStatus().GetComputeNetworkAttachmentStatuses()).To(BeEmpty())
+		})
 	})
 
 	Context("When reconciling a resource that doesn't exist", func() {
@@ -604,6 +646,8 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(mockClient.updateCalled).To(BeTrue())
 			Expect(mockClient.lastUpdate).NotTo(BeNil())
 			Expect(mockClient.lastUpdate.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING))
+			Expect(mockClient.lastUpdateMask).NotTo(BeNil())
+			Expect(mockClient.lastUpdateMask.GetPaths()).To(ContainElement("status.compute_network_attachment_statuses"))
 		})
 
 		It("should sync ConfigurationApplied condition", func() {

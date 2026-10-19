@@ -20,6 +20,7 @@ build:
 	go build -o bin/$(BINARY_NAME) ./cmd/metering-service
 
 test:
+	go test ./cmd/metering-service
 	$(GINKGO) run -r internal
 
 lint: golangci-lint

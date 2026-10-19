@@ -87,6 +87,23 @@ var _ = Describe("Networking Resources", Ordered, func() {
 			}, 30*time.Second, time.Second).Should(Succeed())
 		})
 
+		It("should reject updates to the VirtualNetwork spec", func() {
+			By("attempting to change the IPv4 CIDR")
+			cmd := exec.Command("kubectl", "patch", "virtualnetwork", virtualNetworkName,
+				"-n", operatorNamespace, "--type=merge",
+				"-p", `{"spec":{"ipv4Cidr":"10.1.0.0/16"}}`)
+			output, err := utils.Run(cmd)
+			Expect(err).To(HaveOccurred())
+			Expect(string(output)).To(ContainSubstring("immutable"))
+
+			By("verifying the original CIDR is still stored")
+			cmd = exec.Command("kubectl", "get", "virtualnetwork", virtualNetworkName,
+				"-n", operatorNamespace, "-o", "jsonpath={.spec.ipv4Cidr}")
+			output, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(output)).To(Equal("10.0.0.0/16"))
+		})
+
 		It("should have correct spec fields", func() {
 			cmd := exec.Command("kubectl", "get", "virtualnetwork", virtualNetworkName,
 				"-n", operatorNamespace, "-o", "jsonpath={.spec.region}")

@@ -13,6 +13,7 @@
     return_content: true
     status_code: 200
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
   register: _vpc_list_resp
   no_log: true
 
@@ -29,8 +30,9 @@
     headers:
       Cookie: "connect.sid={{ netris_session_cookie }}"
     return_content: true
-    status_code: [200, 204, 400]
+    status_code: [200, 204, 400, 404]
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
   register: _vpc_delete_resp
   no_log: true
 

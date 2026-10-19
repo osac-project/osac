@@ -1,0 +1,13 @@
+# Rendered by scripts/gen-types.mjs for pnpm gen-types.
+# Change .buf-api-version and run pnpm gen-types to regenerate the bindings.
+version: v2
+plugins:
+  - remote: buf.build/bufbuild/es:v2.12.0
+    out: src
+    opt:
+      - target=ts
+    include_imports: true
+    include_wkt: true
+inputs:
+  - module: buf.build/osac-project/public-api:__OSAC_API_VERSION__
+  - module: buf.build/osac-project/private-api:__OSAC_API_VERSION__

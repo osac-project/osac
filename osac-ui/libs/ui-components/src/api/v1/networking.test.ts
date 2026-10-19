@@ -30,6 +30,12 @@ describe('networking list filters', () => {
     );
   });
 
+  it('filters external IPs to the requested project', () => {
+    expect(unallocatedExternalIpFilter('project-a')).toBe(
+      `this.metadata.project == "project-a" && this.status.state == ${ExternalIPState.EXTERNAL_IP_STATE_ALLOCATED} && this.status.attached == false`,
+    );
+  });
+
   it('filters external IPs by referenced IDs', () => {
     expect(externalIpIdsFilter(['ip-aaa', 'ip-bbb'])).toBe('this.id in ["ip-aaa", "ip-bbb"]');
   });

@@ -19,6 +19,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -34,7 +35,102 @@ func expectCRDCreateRejected(object client.Object) {
 	Expect(k8sClient.Create(ctx, object)).To(HaveOccurred())
 }
 
+func networkingContractObject(kind, name string, spec map[string]interface{}) *unstructured.Unstructured {
+	object := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "osac.openshift.io/v1alpha1",
+		"kind":       kind,
+		"metadata":   map[string]interface{}{"name": name, "namespace": "default"},
+		"spec":       spec,
+	}}
+	object.SetGroupVersionKind(v1alpha1.GroupVersion.WithKind(kind))
+	return object
+}
+
 var _ = Describe("IPv4-only networking CRD contracts", func() {
+	It("makes every networking resource spec immutable while allowing status and metadata updates", func() {
+		cases := []struct {
+			kind   string
+			spec   map[string]interface{}
+			mutate func(map[string]interface{})
+		}{
+			{
+				kind:   "VirtualNetwork",
+				spec:   map[string]interface{}{"region": "us-east-1", "ipv4Cidr": "10.240.0.0/16"},
+				mutate: func(spec map[string]interface{}) { spec["networkClass"] = "secondary" },
+			},
+			{
+				kind:   "Subnet",
+				spec:   map[string]interface{}{"virtualNetwork": "parent-vn", "ipv4Cidr": "10.240.1.0/24"},
+				mutate: func(spec map[string]interface{}) { spec["ipv6Cidr"] = "" },
+			},
+			{
+				kind: "SecurityGroup",
+				spec: map[string]interface{}{"virtualNetwork": "parent-vn"},
+				mutate: func(spec map[string]interface{}) {
+					spec["ingressRules"] = []interface{}{map[string]interface{}{"protocol": "all", "sourceCidr": "10.240.0.0/16"}}
+				},
+			},
+			{
+				kind:   "ExternalIPPool",
+				spec:   map[string]interface{}{"cidrs": []interface{}{"10.241.0.0/28"}, "ipFamily": "IPv4"},
+				mutate: func(spec map[string]interface{}) { spec["implementationStrategy"] = "netris" },
+			},
+			{
+				kind:   "ExternalIP",
+				spec:   map[string]interface{}{"pool": "pool-a"},
+				mutate: func(spec map[string]interface{}) { spec["pool"] = "pool-b" },
+			},
+			{
+				kind: "ExternalIPAttachment",
+				spec: map[string]interface{}{"externalIP": "public-ip", "computeInstance": "vm-a"},
+				mutate: func(spec map[string]interface{}) {
+					spec["computeInstance"] = "vm-b"
+				},
+			},
+			{
+				kind:   "NATGateway",
+				spec:   map[string]interface{}{"virtualNetwork": "parent-vn", "externalIP": "public-ip"},
+				mutate: func(spec map[string]interface{}) { spec["externalIP"] = "other-public-ip" },
+			},
+		}
+
+		for _, testCase := range cases {
+			By("rejecting spec updates for " + testCase.kind)
+			object := networkingContractObject(testCase.kind, networkingContractName("immutable"), testCase.spec)
+			Expect(k8sClient.Create(ctx, object)).To(Succeed())
+			DeferCleanup(func() {
+				current := networkingContractObject(testCase.kind, object.GetName(), nil)
+				err := k8sClient.Get(ctx, client.ObjectKeyFromObject(object), current)
+				if apierrors.IsNotFound(err) {
+					return
+				}
+				Expect(err).ToNot(HaveOccurred())
+				current.SetFinalizers(nil)
+				Expect(k8sClient.Update(ctx, current)).To(Succeed())
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, current))).To(Succeed())
+				Eventually(func() bool {
+					return apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(object), current))
+				}, 5*time.Second, 50*time.Millisecond).Should(BeTrue())
+			})
+
+			stored := networkingContractObject(testCase.kind, object.GetName(), nil)
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(object), stored)).To(Succeed())
+			testCase.mutate(stored.Object["spec"].(map[string]interface{}))
+			err := k8sClient.Update(ctx, stored)
+			Expect(err).To(HaveOccurred())
+			Expect(apierrors.IsInvalid(err)).To(BeTrue())
+
+			By("allowing metadata and status updates for " + testCase.kind)
+			stored = networkingContractObject(testCase.kind, object.GetName(), nil)
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(object), stored)).To(Succeed())
+			stored.SetFinalizers([]string{"osac.openshift.io/test-finalizer"})
+			stored.SetLabels(map[string]string{"contract-test": "allowed"})
+			Expect(k8sClient.Update(ctx, stored)).To(Succeed())
+			Expect(unstructured.SetNestedField(stored.Object, "Progressing", "status", "phase")).To(Succeed())
+			Expect(k8sClient.Status().Update(ctx, stored)).To(Succeed())
+		}
+	})
+
 	It("does not persist fabric VNIs in resource status", func() {
 		virtualNetwork := &unstructured.Unstructured{Object: map[string]interface{}{
 			"apiVersion": "osac.openshift.io/v1alpha1",
@@ -257,5 +353,124 @@ var _ = Describe("IPv4-only networking CRD contracts", func() {
 		object.Spec.CIDRs = []string{"10.1.0.0/28"}
 		object.Spec.IPFamily = "IPv6"
 		Expect(k8sClient.Update(ctx, object)).To(HaveOccurred())
+	})
+
+	It("rejects workload attachment spec changes for ComputeInstance and ClusterOrder while allowing status and metadata updates", func() {
+		By("creating a ComputeInstance with a network attachment")
+		computeInstance := &v1alpha1.ComputeInstance{
+			ObjectMeta: metav1.ObjectMeta{Name: networkingContractName("vm-attachment"), Namespace: "default"},
+			Spec:       newTestComputeInstanceSpec("test_template"),
+		}
+		computeInstance.Spec.NetworkAttachments = []v1alpha1.ComputeNetworkAttachment{{
+			SubnetRef:         "subnet-a",
+			SecurityGroupRefs: []string{"sg-a"},
+		}}
+		Expect(k8sClient.Create(ctx, computeInstance)).To(Succeed())
+		DeferCleanup(func() {
+			current := &v1alpha1.ComputeInstance{}
+			err := k8sClient.Get(ctx, client.ObjectKeyFromObject(computeInstance), current)
+			if apierrors.IsNotFound(err) {
+				return
+			}
+			Expect(err).ToNot(HaveOccurred())
+			current.SetFinalizers(nil)
+			Expect(k8sClient.Update(ctx, current)).To(Succeed())
+			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, current))).To(Succeed())
+			Eventually(func() bool {
+				return apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(computeInstance), current))
+			}, 5*time.Second, 50*time.Millisecond).Should(BeTrue())
+		})
+
+		By("rejecting a changed attachment subnet")
+		stored := &v1alpha1.ComputeInstance{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(computeInstance), stored)).To(Succeed())
+		stored.Spec.NetworkAttachments[0].SubnetRef = "subnet-b"
+		err := k8sClient.Update(ctx, stored)
+		Expect(err).To(HaveOccurred())
+		Expect(apierrors.IsInvalid(err)).To(BeTrue())
+
+		By("rejecting changed attachment security groups")
+		stored = &v1alpha1.ComputeInstance{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(computeInstance), stored)).To(Succeed())
+		stored.Spec.NetworkAttachments[0].SecurityGroupRefs = []string{"sg-b"}
+		err = k8sClient.Update(ctx, stored)
+		Expect(err).To(HaveOccurred())
+		Expect(apierrors.IsInvalid(err)).To(BeTrue())
+
+		By("keeping the persisted attachment unchanged")
+		stored = &v1alpha1.ComputeInstance{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(computeInstance), stored)).To(Succeed())
+		Expect(stored.Spec.NetworkAttachments).To(HaveLen(1))
+		Expect(stored.Spec.NetworkAttachments[0].SubnetRef).To(Equal("subnet-a"))
+		Expect(stored.Spec.NetworkAttachments[0].SecurityGroupRefs).To(Equal([]string{"sg-a"}))
+
+		By("allowing metadata and status updates for the ComputeInstance")
+		stored = &v1alpha1.ComputeInstance{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(computeInstance), stored)).To(Succeed())
+		stored.SetLabels(map[string]string{"contract-test": "allowed"})
+		Expect(k8sClient.Update(ctx, stored)).To(Succeed())
+		stored = &v1alpha1.ComputeInstance{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(computeInstance), stored)).To(Succeed())
+		stored.Status.Phase = v1alpha1.ComputeInstancePhaseRunning
+		Expect(k8sClient.Status().Update(ctx, stored)).To(Succeed())
+
+		By("creating a ClusterOrder with a network attachment")
+		clusterOrder := &v1alpha1.ClusterOrder{
+			ObjectMeta: metav1.ObjectMeta{Name: networkingContractName("cluster-attachment"), Namespace: "default"},
+			Spec: v1alpha1.ClusterOrderSpec{
+				TemplateID: "test_template",
+				NetworkAttachment: &v1alpha1.ClusterNetworkAttachment{
+					SubnetRef:         "subnet-a",
+					SecurityGroupRefs: []string{"sg-a"},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, clusterOrder)).To(Succeed())
+		DeferCleanup(func() {
+			current := &v1alpha1.ClusterOrder{}
+			err := k8sClient.Get(ctx, client.ObjectKeyFromObject(clusterOrder), current)
+			if apierrors.IsNotFound(err) {
+				return
+			}
+			Expect(err).ToNot(HaveOccurred())
+			current.SetFinalizers(nil)
+			Expect(k8sClient.Update(ctx, current)).To(Succeed())
+			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, current))).To(Succeed())
+			Eventually(func() bool {
+				return apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(clusterOrder), current))
+			}, 5*time.Second, 50*time.Millisecond).Should(BeTrue())
+		})
+
+		By("rejecting a changed ClusterOrder attachment subnet")
+		storedOrder := &v1alpha1.ClusterOrder{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(clusterOrder), storedOrder)).To(Succeed())
+		storedOrder.Spec.NetworkAttachment.SubnetRef = "subnet-b"
+		err = k8sClient.Update(ctx, storedOrder)
+		Expect(err).To(HaveOccurred())
+		Expect(apierrors.IsInvalid(err)).To(BeTrue())
+
+		By("rejecting changed ClusterOrder attachment security groups")
+		storedOrder = &v1alpha1.ClusterOrder{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(clusterOrder), storedOrder)).To(Succeed())
+		storedOrder.Spec.NetworkAttachment.SecurityGroupRefs = []string{"sg-b"}
+		err = k8sClient.Update(ctx, storedOrder)
+		Expect(err).To(HaveOccurred())
+		Expect(apierrors.IsInvalid(err)).To(BeTrue())
+
+		By("keeping the persisted ClusterOrder attachment unchanged")
+		storedOrder = &v1alpha1.ClusterOrder{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(clusterOrder), storedOrder)).To(Succeed())
+		Expect(storedOrder.Spec.NetworkAttachment.SubnetRef).To(Equal("subnet-a"))
+		Expect(storedOrder.Spec.NetworkAttachment.SecurityGroupRefs).To(Equal([]string{"sg-a"}))
+
+		By("allowing metadata and status updates for the ClusterOrder")
+		storedOrder = &v1alpha1.ClusterOrder{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(clusterOrder), storedOrder)).To(Succeed())
+		storedOrder.SetLabels(map[string]string{"contract-test": "allowed"})
+		Expect(k8sClient.Update(ctx, storedOrder)).To(Succeed())
+		storedOrder = &v1alpha1.ClusterOrder{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(clusterOrder), storedOrder)).To(Succeed())
+		storedOrder.Status.Phase = v1alpha1.ClusterOrderPhaseProgressing
+		Expect(k8sClient.Status().Update(ctx, storedOrder)).To(Succeed())
 	})
 })

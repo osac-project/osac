@@ -259,6 +259,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		SetConnection(conn).
 		AddPackages(c.settings.Packages()).
 		SetTenantFunc(config.TenantFromContext).
+		SetProjectFunc(config.ProjectFromContext).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create reflection tool: %w", err)
@@ -299,8 +300,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 		computeInstance := publicv1.ComputeInstance_builder{
 			Metadata: publicv1.Metadata_builder{
-				Name:   c.args.name,
-				Tenant: c.settings.Tenant(),
+				Name:    c.args.name,
+				Tenant:  c.settings.Tenant(),
+				Project: config.ProjectFromContext(ctx),
 			}.Build(),
 			Spec: specResult,
 		}.Build()
@@ -356,7 +358,8 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	// Prepare the compute instance:
 	computeInstance := publicv1.ComputeInstance_builder{
 		Metadata: publicv1.Metadata_builder{
-			Name: c.args.name,
+			Name:    c.args.name,
+			Project: config.ProjectFromContext(ctx),
 		}.Build(),
 		Spec: spec,
 	}.Build()
@@ -949,7 +952,10 @@ func (c *runnerContext) buildSpecFromCatalogItem(catalogItemID string) (*publicv
 
 // parseAdditionalDisks parses disk specifications in key=value format:
 // "size=100,storage-tier=standard".
-func parseAdditionalDisks(diskArgs []string) ([]*publicv1.ComputeInstanceDisk, error) {
+func parseAdditionalDisks(diskArgs []string) (*publicv1.ComputeInstanceDiskList, error) {
+	if len(diskArgs) == 1 && strings.TrimSpace(diskArgs[0]) == "" {
+		return publicv1.ComputeInstanceDiskList_builder{}.Build(), nil
+	}
 	disks := make([]*publicv1.ComputeInstanceDisk, 0, len(diskArgs))
 	for _, arg := range diskArgs {
 		arg = strings.TrimSpace(arg)
@@ -1013,7 +1019,7 @@ func parseAdditionalDisks(diskArgs []string) ([]*publicv1.ComputeInstanceDisk, e
 
 		disks = append(disks, disk.Build())
 	}
-	return disks, nil
+	return publicv1.ComputeInstanceDiskList_builder{Items: disks}.Build(), nil
 }
 
 // validTemplateParameter contains the information about a valid template parameter, for use in the error messages that
@@ -1130,7 +1136,8 @@ _SPEC_ - Additional disk specification. Accepts two formats:
 {{ bt }}size=<GiB>,storage-tier=<name>{{ bt }} specifies disk size and storage tier name.
 The storage tier is required for every additional disk.
 
-Can be specified multiple times to add more than one disk.
+Can be specified multiple times to add more than one disk. With a Catalog Item,
+{{ bt }}--additional-disk ""{{ bt }} requests no additional disks and ignores the item default.
 `
 
 const runStrategyFlagHelp = `
@@ -1139,13 +1146,16 @@ _STRATEGY_ - Run strategy, for example {{ bt }}Always{{ bt }} or
 `
 
 const userDataFlagHelp = `
-_DATA_ - User data for the compute instance, for example cloud-init or
-ignition configuration.
+_DATA_ - User data for the compute instance. For Linux DiskImages, this is
+cloud-init or ignition configuration. For Windows DiskImages, the content is
+treated as an Unattend.xml answer file and must be well-formed XML.
 `
 
 const userDataSecretFlagHelp = `
 _NAME_ - Name of a Secret resource containing user data for the compute
-instance. The secret must exist in the same tenant. See also
+instance. For Linux DiskImages, content is cloud-init or ignition configuration.
+For Windows DiskImages, the content is treated as an Unattend.xml answer file
+and must be well-formed XML. The secret must exist in the same tenant. See also
 {{ bt }}osac create secret{{ bt }}. Mutually exclusive with
 {{ bt }}--user-data{{ bt }}.
 `

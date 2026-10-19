@@ -54,6 +54,7 @@ finalize the deployment:
 | Hook | Weight | What it does |
 |------|--------|-------------|
 | `osac-publish-templates` | 20 | Publishes cluster templates to the fulfillment service catalog |
+| `seed-cluster-versions` | 30 | Optionally seeds shared DiskImages and ClusterVersions |
 
 **Cluster template publishing** (`osac-publish-templates`): An init
 container waits for the fulfillment REST gateway to be healthy (up to
@@ -72,6 +73,42 @@ aap:
     publishTemplates:
       enabled: false
 ```
+
+### Seeding ClusterVersions
+
+Enable `clusterVersions.enabled` to seed versions after installation. A version
+marked `default: true` must include a `diskImage`; Helm rejects missing or empty
+image configuration before creating resources. The release `image` and the
+DiskImage `sourceRef` serve different purposes: the former is the OpenShift
+release pullspec, while the latter is the bootable registry disk artifact.
+
+```yaml
+clusterVersions:
+  enabled: true
+  versions:
+  - version: "4.22.0"
+    image: quay.io/openshift-release-dev/ocp-release:4.22.0-multi
+    default: true
+    diskImage:
+      name: rhcos-4-22
+      sourceRef: oci://quay.io/osac-project/rhcos:4.22.0
+      architecture: [ARCHITECTURE_AMD64]
+```
+
+This personal RHCOS artifact is a development/CI example, not a production
+default. Production operators should supply their own compatible artifact.
+`architecture` defaults to `[ARCHITECTURE_AMD64]` when omitted; ARM64 and S390X
+are also supported metadata values. The hook creates a shared Linux registry
+DiskImage first, then references it by name with `shared: true` in the version.
+Non-default versions may omit `diskImage`.
+
+On retry, HTTP 409 retains existing named records without updating their image
+or default selection. Choose a new DiskImage name when changing immutable image
+parameters; use the API to update existing ClusterVersion references or default
+selection. All other API errors fail the hook and print the response. The new
+fields and validation are exposed through the chart JSON Schema for the
+Enclave Wizard; plugin schema adoption and live Wizard rendering require
+separate verification.
 
 ## Installing
 
@@ -177,12 +214,11 @@ and `osac-infra`. Keys a chart doesn't recognize are ignored.
 | `keycloak.images.keycloak` | Keycloak image. | `keycloak:26.6.4` |
 | `keycloak.images.postgres` | Keycloak database image. | `postgresql-18-c10s` |
 | `osacNamespace` | Namespace that the `osac` platform release uses. `osac-infra` stamps cross-namespace resources with it. Set it to your namespace. | `osac` |
-| `csiNamespace` | Namespace that the CSI driver subchart expects. | `osac-csi` |
-| `csiReleaseName` | Release name that the CSI driver subchart expects. | `osac` |
 | `bundledPostgres.enabled` | Deploys bundled PostgreSQL for development and CI. It is not intended for production. | `false` |
 | `bundledPostgres.database.name` | Bundled database name. | `service` |
 | `bundledPostgres.database.user` | Bundled database owner. | `service` |
-| `bundledVault.enabled` | Deploys an ephemeral in-cluster OpenBao secret store. Set it to `false` for production and configure external Vault in the `osac` values file; see the [secrets management configuration guide](secrets-management-configuration.md). | `true` |
+| `bundledVault.enabled` | Deploys an in-cluster OpenBao secret store for testing and CI. Set it to `false` for production and configure external Vault in the `osac` values file; see the [secrets management configuration guide](secrets-management-configuration.md). | `true` |
+| `bundledVault.podSecurityContext` | Pod-level `securityContext` for the OpenBao deployment. Defaults to `{runAsNonRoot: true}` with no hardcoded UID so OpenShift's restricted-v2 SCC can allocate from the namespace range. Override with a fixed UID (e.g. `runAsUser: 100`) on platforms that require one. | `{runAsNonRoot: true}` |
 | `cliImage` | The `oc` image that the chart hook jobs use. | `origin-cli:4.20.0` |
 
 ## When Prerequisites Already Exist
@@ -270,7 +306,8 @@ Disable these for any real deployment.
 | Value | Default | What it does |
 |-------|---------|-------------|
 | `bundledPostgres.enabled` | `false` | Deploys bundled PostgreSQL for development and CI. It is not intended for production. |
-| `bundledVault.enabled` | `true` | Deploys a single-pod ephemeral OpenBao secret store in the `osac-infra` namespace. Dev mode — data is lost on restart. Set to `false` for production and follow the [secrets management configuration guide](secrets-management-configuration.md). |
+| `bundledVault.enabled` | `true` | Deploys an in-cluster OpenBao secret store for testing and CI. Set to `false` for production and follow the [secrets management configuration guide](secrets-management-configuration.md). |
+| `topolvm.enabled` | `false` | Installs the pinned TopoLVM CSI chart for Kind `dev-full`. It uses an external `lvmd` service and disposable `vg1`; the profile exposes the non-default `topolvm-provisioner` StorageClass. |
 
 The upgrade does not migrate data from the previous bundled PostgreSQL instance.
 Back up any data you need before upgrading.

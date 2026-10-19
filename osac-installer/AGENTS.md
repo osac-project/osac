@@ -28,7 +28,7 @@ respective areas.
 - Every value in `charts/osac/values.yaml` must have a matching schema definition; use closed enums for fixed value sets.
 - Preserve deployment order: `install-infra` handles `osac-deps` and `osac-infra` before `install-osac` installs the platform chart.
 - Sibling component charts use source directories in this mono-repo; edit the owning component, not a copied packaged dependency.
-- `osac-ui` is an external OCI dependency and follows the chart's pinned release reference.
+- The umbrella chart sources `osac-ui` from the tracked `../osac-ui/charts/ui` chart; release packaging may rewrite that dependency to its OCI chart reference.
 - Shell scripts use `set -euo pipefail` and shared helpers from `scripts/lib.sh`.
 - Always pass an explicit namespace to `oc` and `kubectl` on shared clusters.
 - Do not modify cluster-scoped prerequisites on shared clusters; coordinate with cluster administrators before changing them.
@@ -46,7 +46,12 @@ respective areas.
 | Touched area | Required validation | Command / follow-up |
 |---|---|---|
 | MCE defaults, lifecycle gate, image overrides, or compatibility RBAC | Helm contract | `make mce-render-test` |
+| Kind runtime selection, sudo authentication, image loading, device-mapper permissions, cluster/storage lifecycle, or devstack Helm apply flags | Unit with command stubs | `make kind-runtime-test` |
+| TopoLVM chart dependency download, cache reuse, build scoping, or install preparation | Unit with command stubs | `make kind-runtime-test` |
 | Fulfillment hook commands, CA mounts, or gate rendering | Helm contract | `make fulfillment-trust-render-test` |
+| Fulfillment token helper or dev-full hook credential wiring | Unit and Helm contract | `make fulfillment-auth-test` and `make dev-full-render-test` |
+| Deployed dev-full hook authentication | Component integration | Coverage gap tracked by [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843); local `install-devstack` invokes the hooks but does not assert token acceptance. |
+| OpenBao security context, podSecurityContext, or Kind/OpenShift UID handling | Helm contract | `make openbao-security-context-test` |
 | Deployed hooks or cross-component startup | Component integration | `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment` with a deployed Kind environment; see [suite boundaries](../docs/INTEGRATION-TESTING.md#osac-installer) |
 
 ## Validation

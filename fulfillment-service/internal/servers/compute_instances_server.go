@@ -17,10 +17,12 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
@@ -96,6 +98,7 @@ func (b *ComputeInstancesServerBuilder) Build() (result *ComputeInstancesServer,
 	inMapper, err := NewGenericMapper[*publicv1.ComputeInstance, *privatev1.ComputeInstance]().
 		SetLogger(b.logger).
 		SetStrict(true).
+		AddIgnoredFields("compute_network_attachment_statuses").
 		Build()
 	if err != nil {
 		return
@@ -267,11 +270,20 @@ func (s *ComputeInstancesServer) Update(ctx context.Context,
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
 		return
 	}
+	const networkAttachmentStatusFieldPath = "status.compute_network_attachment_statuses"
+	for _, path := range request.GetUpdateMask().GetPaths() {
+		path = normalizeFieldMaskPath(path)
+		if path == "status" || path == networkAttachmentStatusFieldPath || strings.HasPrefix(path, networkAttachmentStatusFieldPath+".") {
+			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "%s is output-only", networkAttachmentStatusFieldPath)
+			return
+		}
+	}
 
 	// Determine how to prepare the private compute instance based on whether there's a field mask.
 	// When there's a field mask, copy to a new object and let the generic server handle the merge
 	// with the database object, which correctly applies field mask semantics.
 	var privateComputeInstance *privatev1.ComputeInstance
+	var preservedStatus *privatev1.ComputeInstanceStatus
 	updateMask := request.GetUpdateMask()
 	if len(updateMask.GetPaths()) > 0 {
 		privateComputeInstance = &privatev1.ComputeInstance{}
@@ -284,6 +296,9 @@ func (s *ComputeInstancesServer) Update(ctx context.Context,
 			return nil, err
 		}
 		privateComputeInstance = getResponse.GetObject()
+		if privateComputeInstance.GetStatus() != nil {
+			preservedStatus = proto.Clone(privateComputeInstance.GetStatus()).(*privatev1.ComputeInstanceStatus)
+		}
 	}
 	err = s.inMapper.Copy(ctx, publicComputeInstance, privateComputeInstance)
 	if err != nil {
@@ -294,6 +309,9 @@ func (s *ComputeInstancesServer) Update(ctx context.Context,
 		)
 		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process compute instance")
 		return
+	}
+	if publicComputeInstance.GetStatus() == nil && preservedStatus != nil {
+		privateComputeInstance.SetStatus(preservedStatus)
 	}
 
 	// Delegate to the private server:
@@ -325,6 +343,17 @@ func (s *ComputeInstancesServer) Update(ctx context.Context,
 	response.SetObject(updatedPublicComputeInstance)
 	response.SetWarnings(privateResponse.GetWarnings())
 	return
+}
+
+func normalizeFieldMaskPath(path string) string {
+	parts := strings.Split(path, ".")
+	normalizedParts := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part = strings.TrimSpace(part); part != "" {
+			normalizedParts = append(normalizedParts, part)
+		}
+	}
+	return strings.Join(normalizedParts, ".")
 }
 
 func (s *ComputeInstancesServer) Delete(ctx context.Context,

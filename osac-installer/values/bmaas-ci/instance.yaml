@@ -19,6 +19,8 @@ global:
     k8sManager: ""
     netris:
       controllerUrl: "https://test-ctl.netris.io"
+      # CI uses a test endpoint with a certificate that is not trusted by the runner.
+      validateCerts: false
       credentials:
         username: "netris"
         # NETRIS_PASSWORD is supplied by the externally managed Secret
@@ -43,7 +45,10 @@ operator:
       key: token
   fulfillment:
     serverAddress: "fulfillment-internal-api:8001"
-    tokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    credentials:
+      secretName: fulfillment-controller-credentials
+      clientIdKey: client-id
+      clientSecretKey: client-secret
   controllers:
     tenant: true
     networking: true
@@ -81,8 +86,6 @@ service:
     # install-osac sets --set global.clusterDomain=$(DOMAIN).
     emergencyServiceAccounts:
     - admin
-    - osac-operator
-    - osac-operator-controller-manager
     - template-publisher
     - osac-metering
     controllerCredentials:

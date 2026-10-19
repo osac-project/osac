@@ -16,6 +16,7 @@ export interface SecretValues {
   userData: SecretDataEntry;
   opaque: SecretDataEntry[];
   value: SecretDataEntry;
+  sshPublicKey: SecretDataEntry;
 }
 
 export interface SecretDataEntry {
@@ -64,6 +65,7 @@ const getDefaultValues = (type: SecretType): SecretValues => ({
   userData: createSecretDataEntry('userdata', emptyValue()),
   opaque: [createSecretDataEntry('', emptyValue())],
   value: createSecretDataEntry('value', emptyValue()),
+  sshPublicKey: createSecretDataEntry('public_key', emptyValue()),
 });
 
 export const getSecretValues = (
@@ -90,5 +92,6 @@ export const getSecretValues = (
     userData: getEntry(dataEntries, 'userdata'),
     opaque: dataEntries,
     value: getEntry(dataEntries, 'value'),
+    sshPublicKey: getEntry(dataEntries, 'public_key'),
   };
 };

@@ -16,7 +16,9 @@ export const createEmptyComputeInstanceValues = (): ComputeInstanceWizardValues 
   spec: {
     sshKey: { name: '' },
     instanceType: '',
+    userDataSource: 'inline',
     userData: '',
+    userDataSecret: { name: '' },
     bootDisk: { sizeGib: '', storageTier: emptyResourceSelectValue() },
     additionalDisks: [],
     networking: {
@@ -82,9 +84,16 @@ export const buildComputeInstanceCreatePayload = (
     spec.sshKey = { name: sshKeyName };
   }
 
-  const userData = values.spec.userData.trim();
-  if (userData) {
-    spec.userData = userData;
+  if (values.spec.userDataSource === 'secret') {
+    const userDataSecretName = values.spec.userDataSecret.name.trim();
+    if (userDataSecretName) {
+      spec.userDataSecret = { name: userDataSecretName };
+    }
+  } else {
+    const userData = values.spec.userData.trim();
+    if (userData) {
+      spec.userData = userData;
+    }
   }
 
   const bootDiskRaw = values.spec.bootDisk.sizeGib.trim();

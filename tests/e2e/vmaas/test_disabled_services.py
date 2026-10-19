@@ -107,15 +107,3 @@ def test_disabled_service_controllers_not_running(namespace: str) -> None:
 def test_enabled_services_function_normally(grpc: GRPCClient) -> None:
     ci_output, ci_rc = grpc.call_unchecked(service=f"{PUBLIC_API}.ComputeInstances/List")
     assert ci_rc == 0, f"ComputeInstances.List (VMaaS) should succeed, got rc={ci_rc}: {ci_output}"
-
-
-def test_hosttypes_filters_disabled_service(grpc: GRPCClient) -> None:
-    response = grpc.call(service=f"{PUBLIC_API}.HostTypes/List")
-    items = response.get("items", [])
-    for item in items:
-        spec = item.get("object", item).get("spec", item.get("object", item))
-        interfaces = spec.get("interfaces", [])
-        assert not interfaces, (
-            f"With BMaaS disabled, no host type should have interfaces (bare-metal), "
-            f"but found: {item.get('object', item).get('metadata', {}).get('name', 'unknown')}"
-        )

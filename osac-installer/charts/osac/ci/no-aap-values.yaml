@@ -25,6 +25,8 @@ service:
         items:
         - key: client-id
           param: client-id
+        - key: client-secret
+          param: client-secret
   idp:
     url: https://keycloak.example.com
     credentials:

@@ -14,6 +14,7 @@
     status_code: [200]
     timeout: "{{ netris_timeout | default(30) }}"
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
   register: _ipam_subnets_resp
   no_log: true
 
@@ -32,9 +33,12 @@
     headers:
       Cookie: "connect.sid={{ netris_session_cookie }}"
     return_content: true
-    status_code: [200, 204, 400]
+    # 404 means the subnet was removed concurrently after the lookup; the
+    # deletion target is already absent, so treat it as deleted.
+    status_code: [200, 204, 400, 404]
     timeout: "{{ netris_timeout | default(30) }}"
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
   register: _ipam_subnet_delete_resp
   no_log: true
 
@@ -46,3 +50,10 @@
     msg: >-
       Failed to delete IPAM subnet '{{ ipam_name }}' (ID: {{ _existing_ipam_subnet.id }}).
       Netris responded with: {{ _ipam_subnet_delete_resp.json.message | default(_ipam_subnet_delete_resp.content | default('unknown error')) }}.
+
+- name: Report the concurrently removed IPAM subnet
+  ansible.builtin.debug:
+    msg: >-
+      An IPAM subnet was already absent (HTTP 404) at deletion time; treating
+      it as deleted.
+  when: _ipam_subnet_delete_resp is defined and _ipam_subnet_delete_resp.status | default(0) == 404

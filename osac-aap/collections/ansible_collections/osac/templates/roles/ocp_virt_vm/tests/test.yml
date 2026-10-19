@@ -26,41 +26,35 @@
 #   Test 7 (security group labels propagated to VM):
 #     ansible-playbook ... -e test_create_sg_labels=true
 #
-#   Test 8 (Windows sysprep without password rejected):
-#     ansible-playbook ... -e test_windows_sysprep_requires_password=true
-#
-#   Test 9 (Windows sysprep with valid password accepted):
-#     ansible-playbook ... -e test_windows_sysprep_valid=true
-#
-#   Test 10 (Subnet reference extracted from networkAttachments):
+#   Test 8 (Subnet reference extracted from networkAttachments):
 #     ansible-playbook ... -e test_create_subnet_ref_extracted=true
 #
-#   Test 11 (Missing networkAttachments rejected):
+#   Test 9 (Missing networkAttachments rejected):
 #     ansible-playbook ... -e test_create_missing_subnet_fails=true
 #
-#   Test 12 (Missing spec.vcpus/memoryGiB rejected):
+#   Test 10 (Missing spec.vcpus/memoryGiB rejected):
 #     ansible-playbook ... -e test_create_missing_vcpus_fails=true
 #
-#   Test 13 (GPU single device, count=1):
+#   Test 11 (GPU single device, count=1):
 #     ansible-playbook ... -e test_create_gpu_single=true
 #
-#   Test 14 (GPU multiple devices, count=3):
+#   Test 12 (GPU multiple devices, count=3):
 #     ansible-playbook ... -e test_create_gpu_many=true
 #
-#   Test 15 (No GPU -- no hostDevices in template spec):
+#   Test 13 (No GPU -- no hostDevices in template spec):
 #     ansible-playbook ... -e test_create_no_gpu=true
 #
-#   Test 16 (Windows password extracted from user-data secret):
-#     ansible-playbook ... -e test_windows_password_from_userdata=true
-#
-#   Test 17 (Windows without password in user-data fails assertion):
-#     ansible-playbook ... -e test_windows_userdata_no_password_fails=true
-#
-#   Test 18 (Base64-encoded password in rendered Unattend.xml):
-#     ansible-playbook ... -e test_windows_unattend_password_encoded=true
-#
-#   Test 19 (Linux VM with user-data -- no password extraction):
+#   Test 14 (Linux VM with user-data -- no sysprep extraction):
 #     ansible-playbook ... -e test_linux_userdata_no_extraction=true
+#
+#   Test 15 (Windows with user-data -- user-supplied sysprep path):
+#     ansible-playbook ... -e test_windows_userdata_sysprep=true
+#
+#   Test 16 (Windows without user-data -- no sysprep created):
+#     ansible-playbook ... -e test_windows_no_userdata=true
+#
+#   Test 17 (Linux with user-data -- cloud-init path regression):
+#     ansible-playbook ... -e test_linux_userdata_cloudinit=true
 
 # ──────────────────────────────────────────────────────────────
 # Test 1: Verify spec defaults are merged into a minimal fixture
@@ -288,7 +282,6 @@
             default_spec: "{{ _guest_os_windows_default_spec }}"
             default_arg_specs: "{{ _guest_os_windows_default_arg_specs }}"
             template_parameters: {}
-            vm_enable_sysprep: false
 
         - name: Set compute instance name
           ansible.builtin.set_fact:
@@ -431,119 +424,7 @@
               got {{ default_vm_labels | length }}: {{ default_vm_labels | default('undefined') }}
 
 # ──────────────────────────────────────────────────────────────
-# Test 8: Windows sysprep enabled without password must fail
-# ──────────────────────────────────────────────────────────────
-- name: "Test ocp_virt_vm -- Windows sysprep requires admin password"
-  hosts: localhost
-
-  collections:
-    - osac.templates
-
-  vars:
-    compute_instance_label: "osac.openshift.io/computeinstance"
-
-  tasks:
-    - when: test_windows_sysprep_requires_password | default(false) | bool
-      block:
-        - name: Load ocp_virt_vm role defaults (Windows profile maps)
-          ansible.builtin.include_vars:
-            file: "{{ playbook_dir }}/../defaults/main.yaml"
-
-        - name: Load Windows fixture with sysprep enabled and no password
-          ansible.builtin.set_fact:
-            compute_instance: "{{ lookup('file', 'fixtures/computeinstance-windows-with-image-test.yaml') | from_yaml }}"
-            guest_os_family: windows
-            default_spec: "{{ _guest_os_windows_default_spec }}"
-            default_arg_specs: "{{ _guest_os_windows_default_arg_specs }}"
-            template_parameters: {}
-            vm_enable_sysprep: true
-            vm_sysprep_admin_password: ""
-
-        - name: Set compute instance name
-          ansible.builtin.set_fact:
-            compute_instance_name: "{{ compute_instance.metadata.name }}"
-
-        - name: Run create_validate (expect failure — empty sysprep password)
-          block:
-            - name: Include create_validate
-              ansible.builtin.include_role:
-                name: osac.templates.ocp_virt_vm
-                tasks_from: create_validate.yaml
-          rescue:
-            - name: Capture error message
-              ansible.builtin.set_fact:
-                validation_error: "{{ ansible_failed_result.msg | default('') }}"
-                sysprep_password_failed: true
-
-            - name: Verify failure was due to missing sysprep password
-              ansible.builtin.assert:
-                that:
-                  - "'vm_sysprep_admin_password' in validation_error"
-                fail_msg: "Validation failed for unexpected reason: {{ validation_error }}"
-
-        - name: Verify validation failed without sysprep password
-          ansible.builtin.assert:
-            that:
-              - sysprep_password_failed | default(false)
-            fail_msg: >-
-              Expected create_validate to fail when vm_enable_sysprep is true
-              and vm_sysprep_admin_password is empty
-
-# ──────────────────────────────────────────────────────────────
-# Test 9: Windows sysprep enabled with valid password passes
-# Expected: validation passes, vm_hostname truncated to 15 chars
-# ──────────────────────────────────────────────────────────────
-- name: "Test ocp_virt_vm -- Windows sysprep with valid password passes validation"
-  hosts: localhost
-
-  collections:
-    - osac.templates
-
-  vars:
-    compute_instance_label: "osac.openshift.io/computeinstance"
-
-  tasks:
-    - when: test_windows_sysprep_valid | default(false) | bool
-      block:
-        - name: Load ocp_virt_vm role defaults (Windows profile maps)
-          ansible.builtin.include_vars:
-            file: "{{ playbook_dir }}/../defaults/main.yaml"
-
-        - name: Load Windows fixture with sysprep enabled and valid password
-          ansible.builtin.set_fact:
-            compute_instance: "{{ lookup('file', 'fixtures/computeinstance-windows-with-image-test.yaml') | from_yaml }}"
-            guest_os_family: windows
-            default_spec: "{{ _guest_os_windows_default_spec }}"
-            default_arg_specs: "{{ _guest_os_windows_default_arg_specs }}"
-            template_parameters: {}
-            vm_enable_sysprep: true
-            vm_sysprep_admin_password: "{{ lookup('ansible.builtin.password', '/dev/null length=16 chars=ascii_letters,digits') }}"
-
-        - name: Set compute instance name
-          ansible.builtin.set_fact:
-            compute_instance_name: "{{ compute_instance.metadata.name }}"
-
-        - name: Run create_validate
-          ansible.builtin.include_role:
-            name: osac.templates.ocp_virt_vm
-            tasks_from: create_validate.yaml
-
-        - name: Verify image source from ComputeInstance spec
-          ansible.builtin.assert:
-            that:
-              - vm_image_source == "registry.example.com/osac/windows-golden:ltsc2022"
-            fail_msg: "Expected vm_image_source from spec, got {{ vm_image_source | default('undefined') }}"
-
-        - name: Verify vm_hostname is set and truncated to 15 chars (NetBIOS limit)
-          ansible.builtin.assert:
-            that:
-              - vm_hostname is defined
-              - vm_hostname | length <= 15
-              - vm_hostname == "test-win-with-i"
-            fail_msg: "Expected vm_hostname='test-win-with-i' (truncated), got {{ vm_hostname | default('undefined') }}"
-
-# ──────────────────────────────────────────────────────────────
-# Test 10: Subnet reference extracted from networkAttachments
+# Test 8: Subnet reference extracted from networkAttachments
 # Expected: vm_subnet_ref == subnetRef from fixture
 # ──────────────────────────────────────────────────────────────
 - name: "Test ocp_virt_vm -- subnet reference extracted from networkAttachments"
@@ -579,7 +460,7 @@
             fail_msg: "Expected vm_subnet_ref='test-subnet', got {{ vm_subnet_ref | default('undefined') }}"
 
 # ──────────────────────────────────────────────────────────────
-# Test 11: Missing networkAttachments must fail validation
+# Test 9: Missing networkAttachments must fail validation
 # Expected: validation fails with message about networkAttachments
 # ──────────────────────────────────────────────────────────────
 - name: "Test ocp_virt_vm -- missing networkAttachments rejected"
@@ -629,7 +510,7 @@
               is not set on the ComputeInstance
 
 # ──────────────────────────────────────────────────────────────
-# Test 12: Missing spec.vcpus/memoryGiB must fail validation
+# Test 10: Missing spec.vcpus/memoryGiB must fail validation
 # Expected: validation fails with message about spec.vcpus/spec.memoryGiB
 # (these are resolved by osac-operator from instance_type; there is no
 # role-level default anymore since instance_type is mandatory)
@@ -681,7 +562,7 @@
               are not set on the ComputeInstance
 
 # ──────────────────────────────────────────────────────────────
-# Test 13: GPU with count=1 produces exactly one hostDevices entry
+# Test 11: GPU with count=1 produces exactly one hostDevices entry
 # Expected: vm_template_spec.domain.devices.hostDevices has 1 entry
 #           with name=gpu-0 and deviceName matching spec.gpu.resourceName
 # ──────────────────────────────────────────────────────────────
@@ -744,7 +625,7 @@
               got {{ vm_template_spec.domain.firmware | default('(no firmware key)') }}
 
 # ──────────────────────────────────────────────────────────────
-# Test 14: GPU with count=3 produces three hostDevices entries
+# Test 12: GPU with count=3 produces three hostDevices entries
 # Expected: vm_template_spec.domain.devices.hostDevices has 3 entries
 #           with sequential names (gpu-0, gpu-1, gpu-2) and same deviceName
 # ──────────────────────────────────────────────────────────────
@@ -800,7 +681,7 @@
               hostDevices entries incorrect: {{ vm_template_spec.domain.devices.hostDevices }}
 
 # ──────────────────────────────────────────────────────────────
-# Test 15: No GPU (spec.gpu absent) produces no hostDevices
+# Test 13: No GPU (spec.gpu absent) produces no hostDevices
 # Expected: vm_template_spec.domain.devices.hostDevices is not defined
 # ──────────────────────────────────────────────────────────────
 - name: "Test ocp_virt_vm -- no GPU produces no hostDevices"
@@ -850,213 +731,11 @@
               {{ vm_template_spec.domain.firmware | default('(key not present)') }}
 
 # ──────────────────────────────────────────────────────────────
-# Test 16: Windows password extracted from #cloud-config user-data
-# Expected: The parsing logic correctly extracts the password key
-#           from base64-encoded #cloud-config user-data, and
-#           create_validate accepts the extracted password (>= 8 chars).
-# Note: k8s_info is not available in offline tests; we simulate the
-#       secret lookup result and verify the extraction/parsing logic,
-#       then run create_validate with the password pre-set and no
-#       userDataSecretRef to avoid the k8s_info call.
+# Test 14: Linux VM with user-data -- no sysprep extraction
+# Expected: user-data secret ref is extracted correctly for Linux,
+#           no sysprep-related variables are set
 # ──────────────────────────────────────────────────────────────
-- name: "Test ocp_virt_vm -- Windows password extracted from user-data secret"
-  hosts: localhost
-
-  collections:
-    - osac.templates
-
-  vars:
-    compute_instance_label: "osac.openshift.io/computeinstance"
-
-  tasks:
-    - when: test_windows_password_from_userdata | default(false) | bool
-      block:
-        - name: Load ocp_virt_vm role defaults (Windows profile maps)
-          ansible.builtin.include_vars:
-            file: "{{ playbook_dir }}/../defaults/main.yaml"
-
-        - name: Simulate user-data secret lookup result (bypass k8s_info)
-          ansible.builtin.set_fact:
-            _user_data_secret_result:
-              resources:
-                - data:
-                    userdata: "{{ ('#cloud-config\npassword: \"MySecureP@ss123!\"\n') | b64encode }}"
-
-        - name: Parse user-data and extract password (same logic as role)
-          ansible.builtin.set_fact:
-            vm_sysprep_admin_password: >-
-              {{ (_user_data_secret_result.resources[0].data.userdata
-                  | b64decode
-                  | regex_replace('^#cloud-config\n', '')
-                  | from_yaml).password }}
-
-        - name: Verify password was extracted from user-data
-          ansible.builtin.assert:
-            that:
-              - vm_sysprep_admin_password is defined
-              - vm_sysprep_admin_password == "MySecureP@ss123!"
-              - vm_sysprep_admin_password | length >= 8
-            fail_msg: >-
-              Expected vm_sysprep_admin_password='MySecureP@ss123!' from user-data,
-              got {{ vm_sysprep_admin_password | default('undefined') }}
-
-        - name: Load Windows fixture without userDataSecretRef for create_validate
-          ansible.builtin.set_fact:
-            compute_instance: "{{ lookup('file', 'fixtures/computeinstance-windows-with-image-test.yaml') | from_yaml }}"
-            guest_os_family: windows
-            default_spec: "{{ _guest_os_windows_default_spec }}"
-            default_arg_specs: "{{ _guest_os_windows_default_arg_specs }}"
-            template_parameters: {}
-            vm_enable_sysprep: true
-
-        - name: Set compute instance name
-          ansible.builtin.set_fact:
-            compute_instance_name: "{{ compute_instance.metadata.name }}"
-
-        - name: Run create_validate (should pass with pre-extracted password)
-          ansible.builtin.include_role:
-            name: osac.templates.ocp_virt_vm
-            tasks_from: create_validate.yaml
-
-        - name: Verify password survived validation unchanged
-          ansible.builtin.assert:
-            that:
-              - vm_sysprep_admin_password == "MySecureP@ss123!"
-            fail_msg: >-
-              Expected vm_sysprep_admin_password='MySecureP@ss123!' after validation,
-              got {{ vm_sysprep_admin_password | default('undefined') }}
-
-# ──────────────────────────────────────────────────────────────
-# Test 17: Windows user-data without password field fails assertion
-# Expected: validation fails because password is empty (< 8 chars)
-# ──────────────────────────────────────────────────────────────
-- name: "Test ocp_virt_vm -- Windows user-data without password fails validation"
-  hosts: localhost
-
-  collections:
-    - osac.templates
-
-  vars:
-    compute_instance_label: "osac.openshift.io/computeinstance"
-
-  tasks:
-    - when: test_windows_userdata_no_password_fails | default(false) | bool
-      block:
-        - name: Load ocp_virt_vm role defaults (Windows profile maps)
-          ansible.builtin.include_vars:
-            file: "{{ playbook_dir }}/../defaults/main.yaml"
-
-        - name: Load Windows fixture without password (no userDataSecretRef to provide one)
-          ansible.builtin.set_fact:
-            compute_instance: "{{ lookup('file', 'fixtures/computeinstance-windows-with-image-test.yaml') | from_yaml }}"
-            guest_os_family: windows
-            default_spec: "{{ _guest_os_windows_default_spec }}"
-            default_arg_specs: "{{ _guest_os_windows_default_arg_specs }}"
-            template_parameters: {}
-            vm_enable_sysprep: true
-            vm_sysprep_admin_password: ""
-
-        - name: Set compute instance name
-          ansible.builtin.set_fact:
-            compute_instance_name: "{{ compute_instance.metadata.name }}"
-
-        - name: Run create_validate (expect failure -- empty password, no secret extraction in offline test)
-          block:
-            - name: Include create_validate
-              ansible.builtin.include_role:
-                name: osac.templates.ocp_virt_vm
-                tasks_from: create_validate.yaml
-          rescue:
-            - name: Capture error message
-              ansible.builtin.set_fact:
-                validation_error: "{{ ansible_failed_result.msg | default('') }}"
-                userdata_no_password_failed: true
-
-            - name: Verify failure was due to missing password
-              ansible.builtin.assert:
-                that:
-                  - "'vm_sysprep_admin_password' in validation_error"
-                fail_msg: "Validation failed for unexpected reason: {{ validation_error }}"
-
-        - name: Verify validation failed without password
-          ansible.builtin.assert:
-            that:
-              - userdata_no_password_failed | default(false)
-            fail_msg: >-
-              Expected create_validate to fail when vm_sysprep_admin_password
-              is empty and no user-data secret provides a password
-
-# ──────────────────────────────────────────────────────────────
-# Test 18: Password appears base64-encoded in rendered Unattend.xml
-# Expected: Rendered XML contains base64-encoded password with
-#           PlainText=false, not plain text
-# ──────────────────────────────────────────────────────────────
-- name: "Test ocp_virt_vm -- Unattend.xml contains base64-encoded password"
-  hosts: localhost
-
-  collections:
-    - osac.templates
-
-  vars:
-    compute_instance_label: "osac.openshift.io/computeinstance"
-
-  tasks:
-    - when: test_windows_unattend_password_encoded | default(false) | bool
-      block:
-        - name: Load ocp_virt_vm role defaults (Windows profile maps)
-          ansible.builtin.include_vars:
-            file: "{{ playbook_dir }}/../defaults/main.yaml"
-
-        - name: Set up variables for template rendering
-          ansible.builtin.set_fact:
-            vm_hostname: "test-win-encode"
-            vm_sysprep_admin_password: "MySecureP@ss123!"
-            vm_sysprep_autologon_enabled: true
-            vm_sysprep_input_locale: "en-US"
-            vm_sysprep_system_locale: "en-US"
-            vm_sysprep_ui_language: "en-US"
-            vm_sysprep_user_locale: "en-US"
-            vm_sysprep_timezone: "Eastern Standard Time"
-
-        - name: Render Unattend.xml template
-          ansible.builtin.set_fact:
-            rendered_unattend: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/unattend.xml.j2') }}"
-
-        - name: Compute expected base64-encoded Password value
-          ansible.builtin.set_fact:
-            expected_password_b64: "{{ ('MySecureP@ss123!' ~ 'Password') | b64encode }}"
-            expected_admin_password_b64: "{{ ('MySecureP@ss123!' ~ 'AdministratorPassword') | b64encode }}"
-
-        - name: Verify Password element uses base64 encoding
-          ansible.builtin.assert:
-            that:
-              - expected_password_b64 in rendered_unattend
-              - "'<PlainText>false</PlainText>' in rendered_unattend"
-            fail_msg: >-
-              Expected base64-encoded Password '{{ expected_password_b64 }}'
-              with PlainText=false in Unattend.xml, got: {{ rendered_unattend }}
-
-        - name: Verify AdministratorPassword element uses base64 encoding
-          ansible.builtin.assert:
-            that:
-              - expected_admin_password_b64 in rendered_unattend
-            fail_msg: >-
-              Expected base64-encoded AdministratorPassword '{{ expected_admin_password_b64 }}'
-              in Unattend.xml, got: {{ rendered_unattend }}
-
-        - name: Verify plain text password does NOT appear in rendered XML
-          ansible.builtin.assert:
-            that:
-              - "'<PlainText>true</PlainText>' not in rendered_unattend"
-            fail_msg: >-
-              Unattend.xml should not contain PlainText=true after base64 encoding change
-
-# ──────────────────────────────────────────────────────────────
-# Test 19: Linux VM with user-data -- no password extraction
-# Expected: user-data secret extraction is skipped for Linux guests,
-#           vm_sysprep_admin_password remains at its default (empty)
-# ──────────────────────────────────────────────────────────────
-- name: "Test ocp_virt_vm -- Linux VM with user-data does not extract password"
+- name: "Test ocp_virt_vm -- Linux VM with user-data passes validation"
   hosts: localhost
 
   collections:
@@ -1108,10 +787,330 @@
               Expected vm_user_data_secret_ref='linux-cloud-init',
               got {{ vm_user_data_secret_ref | default('undefined') }}
 
-        - name: Verify password extraction was skipped (Linux)
+# ──────────────────────────────────────────────────────────────
+# Test 15: Windows VM with user-data — user-supplied sysprep path
+# Expected: vm_user_data_secret_ref extracted, Windows template spec built
+#           (EFI, clock, no cloudInitNoCloud), sysprep patch adds SATA CD-ROM
+#           volume pointing to the sysprep Secret
+# ──────────────────────────────────────────────────────────────
+- name: "Test ocp_virt_vm -- Windows VM with user-data targets sysprep path"
+  hosts: localhost
+
+  collections:
+    - osac.templates
+
+  vars:
+    compute_instance_label: "osac.openshift.io/computeinstance"
+
+  tasks:
+    - when: test_windows_userdata_sysprep | default(false) | bool
+      block:
+        - name: Load ocp_virt_vm role defaults (Windows profile maps)
+          ansible.builtin.include_vars:
+            file: "{{ playbook_dir }}/../defaults/main.yaml"
+
+        - name: Load Windows fixture with userDataSecretRef
+          ansible.builtin.set_fact:
+            compute_instance: "{{ lookup('file', 'fixtures/computeinstance-windows-userdata-test.yaml') | from_yaml }}"
+            guest_os_family: windows
+            default_spec: "{{ _guest_os_windows_default_spec }}"
+            default_arg_specs: "{{ _guest_os_windows_default_arg_specs }}"
+            template_parameters: {}
+
+        - name: Set compute instance name
+          ansible.builtin.set_fact:
+            compute_instance_name: "{{ compute_instance.metadata.name }}"
+
+        - name: Run create_validate to extract VM config
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_validate.yaml
+
+        - name: Run create_build_spec to build VM template spec
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_build_spec.yaml
+
+        - name: Verify vm_user_data_secret_ref extracted from spec
           ansible.builtin.assert:
             that:
-              - vm_sysprep_admin_password == ""
+              - vm_user_data_secret_ref is defined
+              - vm_user_data_secret_ref == "win-admin-creds"
             fail_msg: >-
-              Expected vm_sysprep_admin_password to remain empty for Linux guest,
-              got {{ vm_sysprep_admin_password | default('undefined') }}
+              Expected vm_user_data_secret_ref='win-admin-creds',
+              got {{ vm_user_data_secret_ref | default('undefined') }}
+
+        - name: Verify sysprep path preconditions (Windows + non-empty user-data ref)
+          ansible.builtin.assert:
+            that:
+              - guest_os_family == 'windows'
+              - vm_user_data_secret_ref | length > 0
+            fail_msg: >-
+              Sysprep path requires guest_os_family='windows' and non-empty
+              vm_user_data_secret_ref; got guest_os_family='{{ guest_os_family }}'
+              vm_user_data_secret_ref='{{ vm_user_data_secret_ref }}'
+
+        - name: Verify Windows template spec includes EFI secure boot
+          ansible.builtin.assert:
+            that:
+              - vm_template_spec.domain.firmware.bootloader.efi.secureBoot == true
+            fail_msg: >-
+              Expected Windows EFI secureBoot=true,
+              got {{ vm_template_spec.domain.firmware | default('undefined') }}
+
+        - name: Verify base template spec has only root-disk volume (no cloudInitNoCloud)
+          ansible.builtin.assert:
+            that:
+              - vm_template_spec.volumes | length == 1
+              - vm_template_spec.volumes[0].name == 'root-disk'
+            fail_msg: >-
+              Expected only root-disk volume before create_secrets runs,
+              got {{ vm_template_spec.volumes }}
+
+        - name: Apply sysprep patch (offline replay of create_secrets combine logic)
+          ansible.builtin.set_fact:
+            sysprep_patched_spec: "{{ vm_template_spec | combine(sysprep_patch, recursive=True, list_merge='append') }}"
+          vars:
+            sysprep_patch:
+              domain:
+                devices:
+                  disks:
+                    - name: sysprep-disk
+                      cdrom:
+                        bus: sata
+              volumes:
+                - name: sysprep-disk
+                  sysprep:
+                    secret:
+                      name: "{{ compute_instance_name }}-sysprep"
+
+        - name: Verify sysprep disk is mounted as SATA CD-ROM
+          ansible.builtin.assert:
+            that:
+              - sysprep_patched_spec.domain.devices.disks | selectattr('name', 'equalto', 'sysprep-disk') | list | length == 1
+              - (sysprep_patched_spec.domain.devices.disks | selectattr('name', 'equalto', 'sysprep-disk') | first).cdrom.bus == 'sata'
+            fail_msg: >-
+              Expected sysprep-disk with cdrom.bus=sata,
+              got {{ sysprep_patched_spec.domain.devices.disks }}
+
+        - name: Verify sysprep volume references correct secret
+          ansible.builtin.assert:
+            that:
+              - sysprep_patched_spec.volumes | selectattr('name', 'equalto', 'sysprep-disk') | list | length == 1
+              - (sysprep_patched_spec.volumes | selectattr('name', 'equalto', 'sysprep-disk') | first).sysprep.secret.name == "test-win-userdata-sysprep"
+            fail_msg: >-
+              Expected sysprep volume with secret 'test-win-userdata-sysprep',
+              got {{ sysprep_patched_spec.volumes }}
+
+# ──────────────────────────────────────────────────────────────
+# Test 16: Windows VM without user-data — no sysprep created
+# Expected: vm_user_data_secret_ref is empty, base template spec has only
+#           root-disk volume, no sysprep or cloudInitNoCloud volumes
+# ──────────────────────────────────────────────────────────────
+- name: "Test ocp_virt_vm -- Windows VM without user-data skips sysprep"
+  hosts: localhost
+
+  collections:
+    - osac.templates
+
+  vars:
+    compute_instance_label: "osac.openshift.io/computeinstance"
+
+  tasks:
+    - when: test_windows_no_userdata | default(false) | bool
+      block:
+        - name: Load ocp_virt_vm role defaults (Windows profile maps)
+          ansible.builtin.include_vars:
+            file: "{{ playbook_dir }}/../defaults/main.yaml"
+
+        - name: Load Windows fixture without userDataSecretRef
+          ansible.builtin.set_fact:
+            compute_instance: "{{ lookup('file', 'fixtures/computeinstance-windows-with-image-test.yaml') | from_yaml }}"
+            guest_os_family: windows
+            default_spec: "{{ _guest_os_windows_default_spec }}"
+            default_arg_specs: "{{ _guest_os_windows_default_arg_specs }}"
+            template_parameters: {}
+
+        - name: Set compute instance name
+          ansible.builtin.set_fact:
+            compute_instance_name: "{{ compute_instance.metadata.name }}"
+
+        - name: Run create_validate to extract VM config
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_validate.yaml
+
+        - name: Run create_build_spec to build VM template spec
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_build_spec.yaml
+
+        - name: Verify vm_user_data_secret_ref is empty (no userDataSecretRef on CR)
+          ansible.builtin.assert:
+            that:
+              - vm_user_data_secret_ref is defined
+              - vm_user_data_secret_ref | length == 0
+            fail_msg: >-
+              Expected empty vm_user_data_secret_ref when userDataSecretRef is absent,
+              got '{{ vm_user_data_secret_ref | default('undefined') }}'
+
+        - name: Verify sysprep path is skipped (empty ref fails condition)
+          ansible.builtin.assert:
+            that:
+              - not (guest_os_family == 'windows' and vm_user_data_secret_ref | length > 0)
+            fail_msg: >-
+              Sysprep path condition should be false; got guest_os_family='{{ guest_os_family }}'
+              vm_user_data_secret_ref='{{ vm_user_data_secret_ref }}'
+
+        - name: Verify only root-disk volume in template spec (no sysprep, no cloudInit)
+          ansible.builtin.assert:
+            that:
+              - vm_template_spec.volumes | length == 1
+              - vm_template_spec.volumes[0].name == 'root-disk'
+            fail_msg: >-
+              Expected only root-disk volume when no user-data is provided,
+              got {{ vm_template_spec.volumes }}
+
+        - name: Verify no sysprep disk in devices
+          ansible.builtin.assert:
+            that:
+              - vm_template_spec.domain.devices.disks | selectattr('name', 'equalto', 'sysprep-disk') | list | length == 0
+            fail_msg: >-
+              Expected no sysprep-disk when userDataSecretRef is absent,
+              but found one in {{ vm_template_spec.domain.devices.disks }}
+
+# ──────────────────────────────────────────────────────────────
+# Test 17: Linux VM with user-data — cloud-init path (regression check)
+# Expected: vm_user_data_secret_ref extracted, Linux template spec built
+#           (no EFI/clock), cloud-init patch adds cloudInitNoCloud volume
+#           with virtio bus, no sysprep volume present
+# ──────────────────────────────────────────────────────────────
+- name: "Test ocp_virt_vm -- Linux VM with user-data uses cloud-init path"
+  hosts: localhost
+
+  collections:
+    - osac.templates
+
+  vars:
+    compute_instance_label: "osac.openshift.io/computeinstance"
+
+  tasks:
+    - when: test_linux_userdata_cloudinit | default(false) | bool
+      block:
+        - name: Load ocp_virt_vm role defaults
+          ansible.builtin.include_vars:
+            file: "{{ playbook_dir }}/../defaults/main.yaml"
+
+        - name: Build Linux ComputeInstance with userDataSecretRef
+          ansible.builtin.set_fact:
+            compute_instance:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: ComputeInstance
+              metadata:
+                name: test-linux-cloudinit
+                namespace: osac-system
+              spec:
+                templateID: osac.templates.ocp_virt_vm
+                vcpus: 2
+                memoryGiB: 2
+                networkAttachments:
+                  - subnetRef: test-subnet
+                userDataSecretRef:
+                  name: linux-cloud-init
+            guest_os_family: linux
+
+        - name: Set compute instance name
+          ansible.builtin.set_fact:
+            compute_instance_name: "{{ compute_instance.metadata.name }}"
+
+        - name: Run create_validate to extract VM config
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_validate.yaml
+
+        - name: Run create_build_spec to build VM template spec
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_build_spec.yaml
+
+        - name: Verify vm_user_data_secret_ref extracted from spec
+          ansible.builtin.assert:
+            that:
+              - vm_user_data_secret_ref is defined
+              - vm_user_data_secret_ref == "linux-cloud-init"
+            fail_msg: >-
+              Expected vm_user_data_secret_ref='linux-cloud-init',
+              got {{ vm_user_data_secret_ref | default('undefined') }}
+
+        - name: Verify cloud-init path preconditions (non-Windows + non-empty user-data ref)
+          ansible.builtin.assert:
+            that:
+              - guest_os_family != 'windows'
+              - vm_user_data_secret_ref | length > 0
+            fail_msg: >-
+              Cloud-init path requires guest_os_family!='windows' and non-empty
+              vm_user_data_secret_ref; got guest_os_family='{{ guest_os_family }}'
+              vm_user_data_secret_ref='{{ vm_user_data_secret_ref }}'
+
+        - name: Verify Linux template spec has no Windows-specific firmware or clock
+          ansible.builtin.assert:
+            that:
+              - vm_template_spec.domain.firmware is not defined
+              - vm_template_spec.domain.clock is not defined
+            fail_msg: >-
+              Linux VM should not have Windows firmware/clock blocks,
+              got firmware={{ vm_template_spec.domain.firmware | default('(absent)') }}
+              clock={{ vm_template_spec.domain.clock | default('(absent)') }}
+
+        - name: Verify base template spec has only root-disk volume (no sysprep)
+          ansible.builtin.assert:
+            that:
+              - vm_template_spec.volumes | length == 1
+              - vm_template_spec.volumes[0].name == 'root-disk'
+            fail_msg: >-
+              Expected only root-disk volume before create_secrets runs,
+              got {{ vm_template_spec.volumes }}
+
+        - name: Apply cloud-init patch (offline replay of create_secrets combine logic)
+          ansible.builtin.set_fact:
+            cloudinit_patched_spec: "{{ vm_template_spec | combine(cloud_init_patch, recursive=True, list_merge='append') }}"
+          vars:
+            cloud_init_patch:
+              domain:
+                devices:
+                  disks:
+                    - name: cloud-init-disk
+                      disk:
+                        bus: virtio
+                      serial: cloud-init
+              volumes:
+                - name: cloud-init-disk
+                  cloudInitNoCloud:
+                    secretRef:
+                      name: "{{ compute_instance_name }}-user-data"
+
+        - name: Verify cloud-init disk uses virtio bus
+          ansible.builtin.assert:
+            that:
+              - cloudinit_patched_spec.domain.devices.disks | selectattr('name', 'equalto', 'cloud-init-disk') | list | length == 1
+              - (cloudinit_patched_spec.domain.devices.disks | selectattr('name', 'equalto', 'cloud-init-disk') | first).disk.bus == 'virtio'
+            fail_msg: >-
+              Expected cloud-init-disk with disk.bus=virtio,
+              got {{ cloudinit_patched_spec.domain.devices.disks }}
+
+        - name: Verify cloudInitNoCloud volume references correct secret
+          ansible.builtin.assert:
+            that:
+              - cloudinit_patched_spec.volumes | selectattr('name', 'equalto', 'cloud-init-disk') | list | length == 1
+              - (cloudinit_patched_spec.volumes | selectattr('name', 'equalto', 'cloud-init-disk') | first).cloudInitNoCloud.secretRef.name == "test-linux-cloudinit-user-data"
+            fail_msg: >-
+              Expected cloudInitNoCloud volume with secret 'test-linux-cloudinit-user-data',
+              got {{ cloudinit_patched_spec.volumes }}
+
+        - name: Verify no sysprep disk in patched spec
+          ansible.builtin.assert:
+            that:
+              - cloudinit_patched_spec.domain.devices.disks | selectattr('name', 'equalto', 'sysprep-disk') | list | length == 0
+            fail_msg: >-
+              Expected no sysprep-disk for Linux VM,
+              but found one in {{ cloudinit_patched_spec.domain.devices.disks }}

@@ -12,11 +12,16 @@ import {
   StackItem,
 } from '@patternfly/react-core';
 
-import type { BareMetalInstance } from '@osac/types';
+import {
+  type BareMetalInstance,
+  BareMetalInstanceConditionType,
+  ConditionStatus,
+} from '@osac/types';
 
 import BareMetalActionButtons from './BareMetalActionButtons';
 import BareMetalDetailsCard from './BareMetalDetailsCard';
 import BareMetalNetworkingCard from './BareMetalNetworkingCard';
+import BareMetalProvisioningProgress from './BareMetalProvisioningProgress';
 import { BareMetalStatusLabel } from './BareMetalStatusLabel';
 import { useTranslation } from '../../hooks/useTranslation';
 import { ResourceConditionsTable } from '../Resource/ResourceConditionsTable';
@@ -29,6 +34,10 @@ interface Props {
 const BareMetalDetails = ({ instance }: Props) => {
   const { t } = useTranslation();
   const conditions = instance.status?.conditions ?? [];
+
+  const isReady =
+    conditions.find((c) => c.type === BareMetalInstanceConditionType.READY)?.status ===
+    ConditionStatus.TRUE;
 
   return (
     <>
@@ -62,6 +71,11 @@ const BareMetalDetails = ({ instance }: Props) => {
 
       <PageSection hasBodyWrapper={false}>
         <Stack hasGutter>
+          {!isReady && !instance.metadata?.deletionTimestamp && (
+            <StackItem>
+              <BareMetalProvisioningProgress instance={instance} />
+            </StackItem>
+          )}
           <StackItem>
             <Grid hasGutter>
               <GridItem md={6}>

@@ -39,6 +39,7 @@ The fulfillment service includes a Helm chart for deploying Keycloak. The chart 
 each release as an OCI image at [ghcr.io/osac/charts/keycloak][keycloak-chart].
 
 [keycloak-chart]: https://github.com/osac-project/osac/pkgs/container/charts%2Fkeycloak
+[helm-guide]: ../../docs/guides/installation/helm-deployment-guide.md
 
 ### Installation Steps
 
@@ -122,14 +123,22 @@ helm install keycloak oci://ghcr.io/osac/charts/keycloak \
 
 ### Important Notes
 
-- The `hostname` parameter is critical and must match the hostname that Keycloak will use to
-  reference itself, meaning that when Keycloak redirects users, or generates an URL for itself, it
-  will use this host name. This is also used for token issuer URLs.
+- The `hostname` parameter is critical and must match the hostname
+  that Keycloak will use to reference itself, meaning that when
+  Keycloak redirects users, or generates a URL for itself, it will
+  use this host name. This is also used for token issuer URLs.
 
-- The default admin credentials are:
-  - Username: `admin`
-  - Password: `admin`
-  - **Important**: Change these credentials in production environments!
+- Keycloak admin and example-user credentials are configured
+  through the `osac-infra` chart (not the standalone OCI chart
+  above). The `osac-infra` values `keycloak.adminUsername`,
+  `keycloak.adminPassword`, and `keycloak.defaultUserPassword`
+  control the bootstrap admin account and the pre-seeded realm
+  users respectively. See the
+  [Helm deployment guide][helm-guide] for defaults,
+  override instructions, and production guidance.
+
+  **Important**: Always override the default credentials in
+  production environments.
 
 ## Keycloak Configuration
 
@@ -192,8 +201,10 @@ To access the Keycloak Admin Console:
 
 2. **Login**:
 
-   - Username: `admin`
-   - Password: `admin`
+   - Username: the configured `keycloak.adminUsername`
+     (default `admin`)
+   - Password: the configured `keycloak.adminPassword`
+     (default `admin`)
 
 3. **Select the realm**:
 

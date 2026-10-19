@@ -95,9 +95,10 @@ export const VIRTUAL_NETWORK_READY_LIST_FILTER = cel<VirtualNetwork>((filter) =>
   filter.field('status.state').equals(VirtualNetworkState.READY),
 );
 
-export const unallocatedExternalIpFilter = () =>
+export const unallocatedExternalIpFilter = (project?: string) =>
   cel<ExternalIP>((filter) =>
     filter.and(
+      project !== undefined ? filter.field('metadata.project').equals(project) : undefined,
       filter.field('status.state').equals(ExternalIPState.EXTERNAL_IP_STATE_ALLOCATED),
       filter.field('status.attached').equals(false),
     ),

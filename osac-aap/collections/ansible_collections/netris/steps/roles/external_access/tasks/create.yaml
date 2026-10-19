@@ -39,6 +39,7 @@
     status_code: 200
     timeout: "{{ netris_timeout | default(30) }}"
     validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
   register: _dnat_lookup_resp
   no_log: true
 
@@ -156,6 +157,18 @@
     - name: "*.{{ external_access_ingress_domain }}"
       addr: "{{ netris_dnat_ingress_ip }}"
 
+- name: Resolve authoritative nameserver for DNS zone
+  ansible.builtin.command: >-
+    dig +short NS {{ lookup('env', 'DNS_ZONE') | default(external_access_base_domain, true) }}
+  register: _external_access_zone_ns
+  changed_when: false
+  failed_when: false
+  no_log: true
+  when: >-
+    external_access_base_domain in external_access_supported_base_domains | default([])
+    and external_access_dns_wait_use_authoritative | bool
+    and (dns_server | default('') | length == 0)
+
 - name: Wait for DNS records
   when: >-
     external_access_base_domain in external_access_supported_base_domains | default([])
@@ -164,6 +177,14 @@
     tasks_from: wait_for_dns
   vars:
     wait_for_dns_record: "{{ item }}"
+    wait_for_dns_server: >-
+      {{
+        dns_server if (dns_server | default('') | length > 0)
+        else (
+          (_external_access_zone_ns.stdout_lines | default([]))
+          | first | default('') | regex_replace('\.$', '')
+        )
+      }}
   loop:
     - "{{ external_access_api_domain }}"
     - "{{ external_access_api_int_domain }}"

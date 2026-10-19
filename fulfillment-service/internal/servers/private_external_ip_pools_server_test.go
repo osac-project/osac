@@ -14,6 +14,7 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -24,6 +25,8 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -598,6 +601,47 @@ var _ = Describe("Private external IP pools server", func() {
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 				Expect(err.Error()).To(ContainSubstring("immutable"))
+			})
+
+			It("rejects changing a stored ExternalIPPool's tenant and preserves the stored object", func() {
+				createResponse, err := poolsServer.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
+					Object: privatev1.ExternalIPPool_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   "tenant-immutable-pool",
+							Tenant: testTenant,
+						}.Build(),
+						Spec: privatev1.ExternalIPPoolSpec_builder{
+							Cidrs:    []string{"10.0.0.0/24"},
+							IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				id := createResponse.GetObject().GetId()
+
+				// Tenant immutability is enforced by the database trigger, which aborts the
+				// current transaction, so the rejected update runs inside a savepoint.
+				tx, txErr := database.TxFromContext(ctx)
+				Expect(txErr).ToNot(HaveOccurred())
+				txErr = tx.Savepoint(ctx, func(savepointCtx context.Context) error {
+					_, updateErr := poolsServer.Update(savepointCtx, privatev1.ExternalIPPoolsUpdateRequest_builder{
+						Object: privatev1.ExternalIPPool_builder{
+							Id:       id,
+							Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+						}.Build(),
+						UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.tenant"}},
+					}.Build())
+					return updateErr
+				})
+				Expect(txErr).To(HaveOccurred())
+				Expect(grpcstatus.Code(txErr)).To(Equal(grpccodes.InvalidArgument))
+				Expect(txErr.Error()).To(ContainSubstring("immutable"))
+				Expect(txErr.Error()).To(ContainSubstring("tenant"))
+
+				stored, getErr := poolsServer.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: id}.Build())
+				Expect(getErr).ToNot(HaveOccurred())
+				Expect(stored.GetObject().GetMetadata().GetTenant()).To(Equal(testTenant))
+				Expect(stored.GetObject().GetSpec().GetCidrs()).To(Equal([]string{"10.0.0.0/24"}))
 			})
 		})
 	})

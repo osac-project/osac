@@ -3,16 +3,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { AUTH_FILE } from './auth-file';
-import { openAndLogin } from '../../../libs/test-utils/src/general/open_and_login';
+import { openAndLoginWithEnvironment } from '../../../libs/test-utils/src/general/open_and_login';
 
 setup('authenticate', async ({ page }) => {
-  const username = process.env.OSAC_USERNAME;
-  const password = process.env.OSAC_PASSWORD;
-  if (!username || !password) {
-    throw new Error('OSAC_USERNAME and OSAC_PASSWORD must be set to a valid Keycloak test user.');
-  }
-
-  await openAndLogin(page, '/', username, password);
+  await openAndLoginWithEnvironment(page, '/');
 
   // Harden the .auth directory before storageState writes into it — AUTH_FILE
   // holds a live, real Keycloak session cookie, and creating the dir with

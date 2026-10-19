@@ -71,6 +71,7 @@ spec:
           - pipefail
           - -c
           - |
+            {{- include "osac.fulfillmentAccessTokenFunction" . | nindent 12 }}
             NAMESPACE="{{ .Release.Namespace }}"
 
             echo "Reading hub-access token..."
@@ -109,8 +110,7 @@ spec:
             KUBECONFIG_B64=$(echo "${KUBECONFIG_YAML}" | base64 -w0)
             echo "  kubeconfig: ${#KUBECONFIG_B64} chars (base64)"
 
-            AUTH_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
-            [[ -n "${AUTH_TOKEN}" ]] || { echo "ERROR: No service account token mounted"; exit 1; }
+            AUTH_TOKEN=$(get_fulfillment_access_token)
 
             FULFILLMENT_URL="https://fulfillment-internal-api:8001"
 
@@ -149,12 +149,14 @@ spec:
         env:
         - name: HOME
           value: /tmp
+        {{- include "osac.fulfillmentAuthEnv" . | nindent 8 }}
         volumeMounts:
         - name: tmp
           mountPath: /tmp
         - name: ca-bundle
           mountPath: /etc/ca-bundle
           readOnly: true
+        {{- include "osac.fulfillmentAuthVolumeMount" . | nindent 8 }}
         resources:
           requests:
             cpu: 50m
@@ -176,5 +178,6 @@ spec:
           items:
           - key: bundle.pem
             path: bundle.pem
+      {{- include "osac.fulfillmentAuthVolume" . | nindent 6 }}
       restartPolicy: OnFailure
 {{- end }}

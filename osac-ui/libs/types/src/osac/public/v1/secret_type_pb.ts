@@ -26,7 +26,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/secret_type.proto.
  */
 export const file_osac_public_v1_secret_type: GenFile = /*@__PURE__*/
-  fileDesc("CiBvc2FjL3B1YmxpYy92MS9zZWNyZXRfdHlwZS5wcm90bxIOb3NhYy5wdWJsaWMudjEi3wEKBlNlY3JldBIKCgJpZBgBIAEoCRIqCghtZXRhZGF0YRgCIAEoCzIYLm9zYWMucHVibGljLnYxLk1ldGFkYXRhEjwKBGRhdGEYAyADKAsyIC5vc2FjLnB1YmxpYy52MS5TZWNyZXQuRGF0YUVudHJ5Qgy6SAmaAQYiBHICEAESMgoEdHlwZRgGIAEoDjIaLm9zYWMucHVibGljLnYxLlNlY3JldFR5cGVCCLpIBYIBAhABGisKCURhdGFFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAw6AjgBIjAKFFNlY3JldExvY2FsUmVmZXJlbmNlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkqzAEKClNlY3JldFR5cGUSGwoXU0VDUkVUX1RZUEVfVU5TUEVDSUZJRUQQABIbChdTRUNSRVRfVFlQRV9QVUxMX1NFQ1JFVBABEhoKFlNFQ1JFVF9UWVBFX0tVQkVDT05GSUcQAhIZChVTRUNSRVRfVFlQRV9VU0VSX0RBVEEQAxIWChJTRUNSRVRfVFlQRV9PUEFRVUUQBBIVChFTRUNSRVRfVFlQRV9WQUxVRRAFEh4KGlNFQ1JFVF9UWVBFX1NTSF9QVUJMSUNfS0VZEAZiBnByb3RvMw", [file_buf_validate_validate, file_osac_public_v1_metadata_type]);
+  fileDesc("CiBvc2FjL3B1YmxpYy92MS9zZWNyZXRfdHlwZS5wcm90bxIOb3NhYy5wdWJsaWMudjEi3wEKBlNlY3JldBIKCgJpZBgBIAEoCRIqCghtZXRhZGF0YRgCIAEoCzIYLm9zYWMucHVibGljLnYxLk1ldGFkYXRhEjwKBGRhdGEYAyADKAsyIC5vc2FjLnB1YmxpYy52MS5TZWNyZXQuRGF0YUVudHJ5Qgy6SAmaAQYiBHICEAESMgoEdHlwZRgGIAEoDjIaLm9zYWMucHVibGljLnYxLlNlY3JldFR5cGVCCLpIBYIBAhABGisKCURhdGFFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAw6AjgBIkwKD1NlY3JldFJlZmVyZW5jZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEg8KB3Byb2plY3QYAyABKAkSDgoGc2hhcmVkGAQgASgIIjAKFFNlY3JldExvY2FsUmVmZXJlbmNlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkqzAEKClNlY3JldFR5cGUSGwoXU0VDUkVUX1RZUEVfVU5TUEVDSUZJRUQQABIbChdTRUNSRVRfVFlQRV9QVUxMX1NFQ1JFVBABEhoKFlNFQ1JFVF9UWVBFX0tVQkVDT05GSUcQAhIZChVTRUNSRVRfVFlQRV9VU0VSX0RBVEEQAxIWChJTRUNSRVRfVFlQRV9PUEFRVUUQBBIVChFTRUNSRVRfVFlQRV9WQUxVRRAFEh4KGlNFQ1JFVF9UWVBFX1NTSF9QVUJMSUNfS0VZEAZiBnByb3RvMw", [file_buf_validate_validate, file_osac_public_v1_metadata_type]);
 
 /**
  * Represents a secret containing typed or opaque key-value data.
@@ -80,6 +80,40 @@ export const SecretSchema: GenMessage<Secret> = /*@__PURE__*/
   messageDesc(file_osac_public_v1_secret_type, 0);
 
 /**
+ * Reference to a Secret resource.
+ *
+ * @generated from message osac.public.v1.SecretReference
+ */
+export type SecretReference = Message<"osac.public.v1.SecretReference"> & {
+  /**
+   * @generated from field: string id = 1;
+   */
+  id: string;
+
+  /**
+   * @generated from field: string name = 2;
+   */
+  name: string;
+
+  /**
+   * @generated from field: string project = 3;
+   */
+  project: string;
+
+  /**
+   * @generated from field: bool shared = 4;
+   */
+  shared: boolean;
+};
+
+/**
+ * Describes the message osac.public.v1.SecretReference.
+ * Use `create(SecretReferenceSchema)` to create a new message.
+ */
+export const SecretReferenceSchema: GenMessage<SecretReference> = /*@__PURE__*/
+  messageDesc(file_osac_public_v1_secret_type, 1);
+
+/**
  * Local reference to a Secret resource.
  *
  * @generated from message osac.public.v1.SecretLocalReference
@@ -101,7 +135,7 @@ export type SecretLocalReference = Message<"osac.public.v1.SecretLocalReference"
  * Use `create(SecretLocalReferenceSchema)` to create a new message.
  */
 export const SecretLocalReferenceSchema: GenMessage<SecretLocalReference> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_secret_type, 1);
+  messageDesc(file_osac_public_v1_secret_type, 2);
 
 /**
  * The type of data stored in a secret.

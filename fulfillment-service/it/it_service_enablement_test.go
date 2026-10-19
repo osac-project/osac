@@ -23,7 +23,6 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
-	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -39,8 +38,6 @@ var _ = Describe("Service enablement", func() {
 		var (
 			expectedPublicServices  []publicv1.ServiceTier
 			expectedPrivateServices []privatev1.ServiceTier
-			disabledHostType        string
-			enabledHostType         string
 			disabledRestPath        string
 			disabledGrpcError       error
 		)
@@ -55,8 +52,6 @@ var _ = Describe("Service enablement", func() {
 				privatev1.ServiceTier_SERVICE_TIER_CAAS,
 				privatev1.ServiceTier_SERVICE_TIER_VMAAS,
 			}
-			disabledHostType = fmt.Sprintf("it-bm-host-type-%s", uuid.New())
-			enabledHostType = fmt.Sprintf("it-vm-host-type-%s", uuid.New())
 			disabledRestPath = "/api/fulfillment/v1/baremetal_instances"
 
 			client := publicv1.NewBareMetalInstancesClient(tool.ExternalView().UserConn())
@@ -70,8 +65,6 @@ var _ = Describe("Service enablement", func() {
 				privatev1.ServiceTier_SERVICE_TIER_CAAS,
 				privatev1.ServiceTier_SERVICE_TIER_BMAAS,
 			}
-			disabledHostType = fmt.Sprintf("it-vm-host-type-%s", uuid.New())
-			enabledHostType = fmt.Sprintf("it-bm-host-type-%s", uuid.New())
 			disabledRestPath = "/api/fulfillment/v1/compute_instances"
 
 			client := publicv1.NewComputeInstancesClient(tool.ExternalView().UserConn())
@@ -101,48 +94,5 @@ var _ = Describe("Service enablement", func() {
 		defer restResponse.Body.Close()
 		Expect(restResponse.StatusCode).To(Equal(http.StatusServiceUnavailable))
 
-		// Create one HostType for each service category. A non-empty interfaces list identifies BMaaS;
-		// an empty list identifies VMaaS.
-		hostTypesClient := privatev1.NewHostTypesClient(tool.InternalView().AdminConn())
-		createHostType := func(id string, bareMetal bool) {
-			var interfaces []*privatev1.NetworkInterface
-			if bareMetal {
-				interfaces = []*privatev1.NetworkInterface{
-					privatev1.NetworkInterface_builder{Name: "data-0", Role: "fabric"}.Build(),
-				}
-			}
-
-			_, err := hostTypesClient.Create(ctx, privatev1.HostTypesCreateRequest_builder{
-				Object: privatev1.HostType_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("%s-%s", id, uuid.New()[24:32]),
-					}.Build(),
-					Id:         id,
-					Title:      id,
-					Interfaces: interfaces,
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			DeferCleanup(func(ctx context.Context) {
-				_, err := hostTypesClient.Delete(ctx, privatev1.HostTypesDeleteRequest_builder{Id: id}.Build())
-				Expect(err).ToNot(HaveOccurred())
-			})
-		}
-
-		createHostType(disabledHostType, config.TestSuite == "bmaas-disabled")
-		createHostType(enabledHostType, config.TestSuite == "vmaas-disabled")
-
-		publicHostTypes := publicv1.NewHostTypesClient(tool.ExternalView().UserConn())
-		listResponse, err := publicHostTypes.List(ctx, publicv1.HostTypesListRequest_builder{}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		var listedIDs []string
-		for _, item := range listResponse.GetItems() {
-			listedIDs = append(listedIDs, item.GetId())
-		}
-		Expect(listedIDs).To(ContainElement(enabledHostType))
-		Expect(listedIDs).ToNot(ContainElement(disabledHostType))
-
-		_, err = publicHostTypes.Get(ctx, publicv1.HostTypesGetRequest_builder{Id: disabledHostType}.Build())
-		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
 	})
 })

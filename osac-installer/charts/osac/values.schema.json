@@ -14,11 +14,11 @@
         },
         "fulfillment": {
           "type": "object",
-          "description": "Resolved external fulfillment configuration shared with tenant-cluster CSI provisioning",
+          "description": "Resolved external fulfillment configuration shared with operator trust sync and tenant-cluster CSI provisioning",
           "properties": {
             "endpoint": {
               "type": "string",
-              "description": "External fulfillment gRPC endpoint including port. When empty, service.externalHostname:443 is used when CSI is enabled."
+              "description": "External fulfillment gRPC endpoint including port. When empty, service.externalHostname:443 is used when the operator and fulfillment service are enabled."
             }
           },
           "additionalProperties": false
@@ -29,8 +29,8 @@
           "properties": {
             "enabled": {
               "type": "boolean",
-              "description": "Enable fulfillment trust synchronization for tenant-scoped ClusterOrders",
-              "default": true
+              "description": "Enable fulfillment trust synchronization for tenant-scoped ClusterOrders when tenant CSI trust support is deployed",
+              "default": false
             },
             "tenantNamespace": {
               "type": "string",
@@ -171,6 +171,19 @@
       "type": "object",
       "description": "OSAC Operator configuration",
       "properties": {
+        "fabricDomainInventory": {
+          "type": "object",
+          "description": "Admin-managed map of exact Netris hostnames to BareMetalInstanceType ID strings. Creates osac-fabric-domain-inventory in the operator networking (release) namespace only when nonempty. No credentials or template configuration.",
+          "default": {},
+          "patternProperties": {
+            "^[A-Za-z0-9._-]{1,253}$": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            }
+          },
+          "additionalProperties": false
+        },
         "enabled": {
           "type": "boolean",
           "description": "Deploy the OSAC operator",
@@ -320,12 +333,30 @@
           "properties": {
             "serverAddress": {
               "type": "string",
-              "description": "Fulfillment service gRPC address",
+              "description": "Fulfillment service gRPC address; leave empty to disable the operator Fulfillment client",
               "default": "fulfillment-internal-api:8001"
             },
-            "tokenFile": {
-              "type": "string",
-              "description": "Path to service account token file"
+            "credentials": {
+              "type": "object",
+              "description": "Reference to the existing osac-controller Keycloak service-account credentials; osac-infra provisions this for bundled Keycloak, while external Keycloak deployments must provide an equivalent Secret",
+              "properties": {
+                "secretName": {
+                  "type": "string",
+                  "description": "Secret name",
+                  "default": "fulfillment-controller-credentials"
+                },
+                "clientIdKey": {
+                  "type": "string",
+                  "description": "Key within the Secret containing the OAuth client ID",
+                  "default": "client-id"
+                },
+                "clientSecretKey": {
+                  "type": "string",
+                  "description": "Key within the Secret containing the OAuth client secret",
+                  "default": "client-secret"
+                }
+              },
+              "additionalProperties": false
             },
             "tls": {
               "type": "object",
@@ -360,8 +391,8 @@
                 },
                 "optional": {
                   "type": "boolean",
-                  "description": "Allow the ConfigMap to be absent when external CSI configuration is disabled",
-                  "default": true
+                  "description": "Allow the ConfigMap to be absent when the operator or fulfillment service is disabled",
+                  "default": false
                 }
               },
               "additionalProperties": false
@@ -468,14 +499,21 @@
                   },
                   "capabilities": {
                     "type": "array",
-                    "description": "Capability tokens advertised for this manager. Only ipv4 is supported in the current release.",
+                    "description": "Fabric manager capability tokens: ipv4 and eastWestEthernet (physical Ethernet east-west). eastWestEthernet publishes supports_east_west_ethernet independently of k8s manager capabilities, unless disabled by NetworkClass.spec.disable_capabilities.",
                     "items": {
                       "type": "string",
                       "enum": [
-                        "ipv4"
+                        "ipv4",
+                        "eastWestEthernet"
                       ]
                     },
                     "uniqueItems": true
+                  },
+                  "externalIPContractVersion": {
+                    "type": "string",
+                    "description": "ExternalIP result contract supported by this manager. Empty uses the unversioned flow.",
+                    "enum": ["", "v1"],
+                    "default": ""
                   }
                 },
                 "additionalProperties": false
@@ -505,6 +543,12 @@
                       ]
                     },
                     "uniqueItems": true
+                  },
+                  "externalIPContractVersion": {
+                    "type": "string",
+                    "description": "ExternalIP result contract supported by this manager. Empty uses the unversioned flow.",
+                    "enum": ["", "v1"],
+                    "default": ""
                   }
                 },
                 "additionalProperties": false
@@ -668,6 +712,74 @@
           "type": "string",
           "minLength": 1,
           "description": "Hostname for the internal API Route"
+        },
+        "mcp": {
+          "type": "object",
+          "description": "Optional fulfillment MCP endpoint",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Deploy the fulfillment MCP server",
+              "default": false
+            },
+            "externalHostname": {
+              "type": "string",
+              "description": "DNS hostname advertised by the MCP server; Kind requires mcp.<namespace>.localhost"
+            },
+            "externalPort": {
+              "type": "integer",
+              "description": "Externally reachable TLS port for the MCP server; OpenShift Routes require 443",
+              "minimum": 1,
+              "maximum": 65535,
+              "default": 443
+            },
+            "exchangeClientId": {
+              "type": "string",
+              "description": "Confidential OAuth token exchange client ID; use the MCP resource URL ending in / for Keycloak audience validation"
+            },
+            "exchangeCredentialsSecret": {
+              "type": "string",
+              "description": "Secret containing client-secret for the MCP token exchange client"
+            },
+            "resources": {
+              "type": "object",
+              "description": "CPU and memory resources for the MCP server container",
+              "required": ["requests", "limits"],
+              "properties": {
+                "requests": {
+                  "type": "object",
+                  "required": ["cpu", "memory"],
+                  "properties": {
+                    "cpu": {"type": "string", "minLength": 1, "default": "50m"},
+                    "memory": {"type": "string", "minLength": 1, "default": "128Mi"}
+                  },
+                  "additionalProperties": false
+                },
+                "limits": {
+                  "type": "object",
+                  "required": ["cpu", "memory"],
+                  "properties": {
+                    "cpu": {"type": "string", "minLength": 1, "default": "500m"},
+                    "memory": {"type": "string", "minLength": 1, "default": "512Mi"}
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "allOf": [{
+            "if": {"properties": {"enabled": {"const": true}}},
+            "then": {
+              "required": ["externalHostname", "exchangeClientId", "exchangeCredentialsSecret"],
+              "properties": {
+                "externalHostname": {"minLength": 1},
+                "exchangeClientId": {"minLength": 1},
+                "exchangeCredentialsSecret": {"minLength": 1}
+              }
+            }
+          }],
+          "additionalProperties": false
         },
         "variant": {
           "type": "string",
@@ -962,6 +1074,27 @@
           "description": "Helm-injected global values (passed automatically to subcharts)"
         }
       },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "variant": {"const": "openshift"},
+              "mcp": {
+                "properties": {"enabled": {"const": true}},
+                "required": ["enabled"]
+              }
+            },
+            "required": ["variant", "mcp"]
+          },
+          "then": {
+            "properties": {
+              "mcp": {
+                "properties": {"externalPort": {"const": 443}}
+              }
+            }
+          }
+        }
+      ],
       "additionalProperties": false
     },
     "aap": {
@@ -1299,6 +1432,14 @@
                       "type": "string",
                       "description": "Netris controller API endpoint URL"
                     },
+                    "NETRIS_VALIDATE_CERTS": {
+                      "type": "string",
+                      "enum": [
+                        "true",
+                        "false"
+                      ],
+                      "description": "Verify Netris HTTPS certificates; defaults to enabled"
+                    },
                     "NETRIS_SITE_ID": {
                       "type": "string",
                       "description": "Netris site identifier"
@@ -1403,20 +1544,6 @@
                 "secret": {
                   "type": "object",
                   "description": "Secret values for the storage-operations instance group",
-                  "properties": {
-                    "VAST_ENDPOINT": {
-                      "type": "string",
-                      "description": "VAST management endpoint URL"
-                    },
-                    "VAST_USERNAME": {
-                      "type": "string",
-                      "description": "VAST management username"
-                    },
-                    "VAST_PASSWORD": {
-                      "type": "string",
-                      "description": "VAST management password"
-                    }
-                  },
                   "additionalProperties": false
                 }
               },
@@ -1500,6 +1627,18 @@
         "externalHostname": {
           "type": "string",
           "description": "Hostname for the OpenShift Route (auto-assigned if empty)"
+        },
+        "route": {
+          "type": "object",
+          "description": "OpenShift Route configuration for the UI",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Create an OpenShift Route for the UI; disable when exposing it through another ingress, such as Gateway API",
+              "default": true
+            }
+          },
+          "additionalProperties": false
         },
         "api": {
           "type": "object",
@@ -1597,6 +1736,17 @@
               "type": "string",
               "description": "UI container image",
               "default": "ghcr.io/osac-project/osac-ui:latest"
+            },
+            "pullPolicy": {
+              "type": "string",
+              "description": "Kubernetes image pull policy, or auto to use Kubernetes' tag-based default",
+              "enum": [
+                "auto",
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ],
+              "default": "auto"
             }
           },
           "additionalProperties": false
@@ -1758,197 +1908,6 @@
         }
       },
       "additionalProperties": false
-    },
-    "csiDriver": {
-      "type": "object",
-      "description": "OSAC CSI driver configuration",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "description": "Deploy the OSAC CSI driver (opt-in)",
-          "default": false
-        },
-        "namespace": {
-          "type": "string",
-          "description": "Namespace for the shared hub CSI deployment",
-          "enum": [
-            "osac-csi"
-          ],
-          "default": "osac-csi"
-        },
-        "controller": {
-          "type": "object",
-          "description": "CSI controller configuration",
-          "properties": {
-            "fulfillment": {
-              "type": "object",
-              "properties": {
-                "configMap": {
-                  "type": "object",
-                  "properties": {
-                    "name": {
-                      "type": "string",
-                      "description": "ConfigMap containing non-secret fulfillment endpoint and issuer values",
-                      "default": "osac-csi-fulfillment-config"
-                    },
-                    "endpointKey": {
-                      "type": "string",
-                      "description": "ConfigMap key containing the fulfillment endpoint",
-                      "default": "OSAC_FULFILLMENT_ENDPOINT"
-                    },
-                    "issuerUrlKey": {
-                      "type": "string",
-                      "description": "ConfigMap key containing the fulfillment issuer URL",
-                      "default": "OSAC_FULFILLMENT_ISSUER_URL"
-                    }
-                  },
-                  "additionalProperties": false
-                },
-                "credentials": {
-                  "type": "object",
-                  "properties": {
-                    "secretName": {
-                      "type": "string",
-                      "description": "Secret containing the CSI OAuth client credentials",
-                      "default": "osac-csi-driver-credentials"
-                    },
-                    "clientIdKey": {
-                      "type": "string",
-                      "description": "Key within the credentials Secret for the OAuth client ID"
-                    },
-                    "clientSecretKey": {
-                      "type": "string",
-                      "description": "Key within the credentials Secret for the OAuth client secret"
-                    }
-                  },
-                  "additionalProperties": false
-                },
-                "tls": {
-                  "type": "object",
-                  "description": "TLS configuration for fulfillment connection (subchart default)",
-                  "properties": {
-                    "insecureSkipVerify": {
-                      "type": "boolean",
-                      "description": "Skip TLS certificate verification for the fulfillment endpoint",
-                      "default": false
-                    },
-                    "caBundle": {
-                      "type": "object",
-                      "description": "ConfigMap key containing the tenant fulfillment CA bundle",
-                      "properties": {
-                        "configMap": {
-                          "type": "string",
-                          "default": "ca-bundle"
-                        },
-                        "key": {
-                          "type": "string",
-                          "default": "bundle.pem"
-                        }
-                      },
-                      "additionalProperties": false
-                    }
-                  },
-                  "additionalProperties": false
-                },
-                "allowStub": {
-                  "type": "boolean",
-                  "description": "Allow the CSI controller to use the in-memory volume stub when no fulfillment configuration is supplied",
-                  "default": false
-                },
-                "endpoint": {
-                  "type": "string",
-                  "description": "Direct fulfillment endpoint override (subchart default)"
-                },
-                "issuerUrl": {
-                  "type": "string",
-                  "description": "Direct fulfillment issuer URL override (subchart default)"
-                }
-              },
-              "additionalProperties": false
-            },
-            "leaderElection": {
-              "type": "boolean",
-              "description": "Enable leader election for the CSI controller (subchart default)"
-            },
-            "replicas": {
-              "type": "integer",
-              "description": "Number of CSI controller replicas (subchart default)"
-            },
-            "resources": {
-              "type": "object",
-              "description": "CSI controller resource requests and limits (subchart default)"
-            },
-            "vendorControllers": {
-              "type": "string",
-              "description": "Comma-separated list of vendor controllers to enable (subchart default)"
-            },
-            "vendorSockets": {
-              "type": "string",
-              "description": "Comma-separated list of vendor socket paths (subchart default)"
-            },
-            "clusterID": {
-              "type": "string",
-              "description": "Cluster identifier for CSI volume topology (subchart default)"
-            }
-          },
-          "additionalProperties": false
-        },
-        "image": {
-          "type": "object",
-          "properties": {
-            "repository": {
-              "type": "string",
-              "description": "CSI driver container image repository",
-              "default": "ghcr.io/osac-project/osac-csi-driver"
-            },
-            "tag": {
-              "type": "string",
-              "description": "CSI driver container image tag",
-              "default": "latest"
-            },
-            "pullPolicy": {
-              "type": "string",
-              "description": "Image pull policy",
-              "enum": [
-                "Always",
-                "IfNotPresent",
-                "Never"
-              ],
-              "default": "Always"
-            }
-          },
-          "additionalProperties": false
-        },
-        "serviceAccount": {
-          "type": "object",
-          "description": "CSI driver ServiceAccount configuration (subchart default)"
-        },
-        "sidecars": {
-          "type": "object",
-          "description": "CSI sidecar container images (subchart default)"
-        },
-        "node": {
-          "type": "object",
-          "description": "CSI node plugin configuration (subchart default)"
-        },
-        "vendors": {
-          "type": "object",
-          "description": "Vendor-specific CSI backend configuration (subchart default)"
-        },
-        "driverName": {
-          "type": "string",
-          "description": "CSI driver name (subchart default)"
-        },
-        "global": {
-          "type": "object",
-          "description": "Helm-injected global values (passed automatically to subcharts)"
-        }
-      },
-      "additionalProperties": false
-    },
-    "csiBackends": {
-      "type": "object",
-      "description": "Vendor CSI backend configuration (deployed with csiDriver)"
     },
     "bmfCrds": {
       "type": "object",
@@ -2264,12 +2223,70 @@
                 "type": "string",
                 "description": "OCI release image pullspec"
               },
+              "diskImage": {
+                "type": "object",
+                "description": "Seed a shared Linux registry DiskImage before this ClusterVersion. Required for default versions; existing named records are retained without updates.",
+                "required": [
+                  "name",
+                  "sourceRef"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Name of the shared DiskImage to create and reference",
+                    "minLength": 1,
+                    "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+                  },
+                  "sourceRef": {
+                    "type": "string",
+                    "description": "OCI disk image artifact URL (oci://registry/repository:tag or @digest), not the OpenShift release image",
+                    "pattern": "^oci://\\S+$"
+                  },
+                  "architecture": {
+                    "type": "array",
+                    "description": "CPU architectures supported by the disk image",
+                    "minItems": 1,
+                    "uniqueItems": true,
+                    "default": [
+                      "ARCHITECTURE_AMD64"
+                    ],
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "ARCHITECTURE_AMD64",
+                        "ARCHITECTURE_ARM64",
+                        "ARCHITECTURE_S390X"
+                      ]
+                    }
+                  }
+                },
+                "additionalProperties": false
+              },
               "default": {
                 "type": "boolean",
-                "description": "Mark as the default cluster version",
+                "description": "Mark as the default cluster version; requires a diskImage",
                 "default": false
               }
             },
+            "allOf": [
+              {
+                "if": {
+                  "required": [
+                    "default"
+                  ],
+                  "properties": {
+                    "default": {
+                      "const": true
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "diskImage"
+                  ]
+                }
+              }
+            ],
             "additionalProperties": false
           }
         }
@@ -2359,11 +2376,6 @@
                     "type": "string",
                     "description": "IPv4 CIDR for this rule (e.g. 0.0.0.0/0)",
                     "pattern": "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/(3[0-2]|[12]?[0-9])$"
-                  },
-                  "ipv6Cidr": {
-                    "type": "string",
-                    "description": "Optional IPv6 CIDR for this rule. The create-network-class hook forwards it when set. Netris fabric is IPv4-only; CUDN/k8s_only may use IPv6.",
-                    "pattern": "^$|^[0-9a-fA-F:]+/(12[0-8]|1[01][0-9]|[1-9]?[0-9])$"
                   },
                   "portFrom": {
                     "type": "integer",
@@ -2681,6 +2693,24 @@
           "description": "Netris controller API URL (HTTPS only).",
           "pattern": "^$|^https://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$"
         },
+        "validateCerts": {
+          "type": "boolean",
+          "default": true,
+          "description": "Verify Netris HTTPS certificates. Disable only for trusted non-production endpoints with self-signed certificates."
+        },
+        "caBundle": {
+          "type": "object",
+          "description": "Optional customer-created ConfigMap containing the Netris CA chain under the fixed bundle.pem key.",
+          "properties": {
+            "configMap": {
+              "type": "string",
+              "description": "Name of the customer-created ConfigMap in the AAP namespace. It must contain bundle.pem and is mounted read-only into Netris execution pods.",
+              "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+              "maxLength": 253
+            }
+          },
+          "additionalProperties": false
+        },
         "credentials": {
           "type": "object",
           "properties": {
@@ -2787,11 +2817,6 @@
                     "description": "IPv4 CIDR for this rule.",
                     "pattern": "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/(3[0-2]|[12]?[0-9])$"
                   },
-                  "ipv6Cidr": {
-                    "type": "string",
-                    "description": "Optional IPv6 CIDR for this rule. Netris fabric is IPv4-only; CUDN/k8s_only may use IPv6.",
-                    "pattern": "^$|^[0-9a-fA-F:]+/(12[0-8]|1[01][0-9]|[1-9]?[0-9])$"
-                  },
                   "portFrom": {
                     "type": "integer",
                     "description": "Starting port (TCP/UDP only).",
@@ -2871,6 +2896,11 @@
           "type": "string",
           "pattern": "^$|^https://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$",
           "description": "Netris controller API URL. Must match between AAP instance groups."
+        },
+        "NETRIS_VALIDATE_CERTS": {
+          "type": "string",
+          "enum": ["true", "false"],
+          "description": "Verify Netris HTTPS certificates; defaults to enabled."
         },
         "NETRIS_USERNAME": {
           "type": "string",

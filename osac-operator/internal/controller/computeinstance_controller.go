@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -621,7 +622,16 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 	// provisioning — osac-aap's playbook_osac_create_compute_instance.yml reads
 	// these to provision an on-demand StorageClass when the tenant doesn't
 	// already have one for the requested tier (OSAC-1992).
-	ctx, _ = resolveAndInjectTierContext(ctx, r.TiersClient, r.BackendsClient, r.SecretsClient, "computeInstance", instance.GetName())
+	// The tier resolution error is logged but does not block VM provisioning:
+	// this controller's primary action is VM creation, and tier data is
+	// supplementary for JIT storage — blocking VM provisioning on a transient
+	// Tier API failure would be a worse outcome than provisioning without JIT
+	// storage classes.
+	ctx, _, tierErr := resolveAndInjectTierContext(ctx, r.TiersClient, r.BackendsClient, r.SecretsClient, "computeInstance", instance.GetName())
+	if tierErr != nil {
+		log.Error(tierErr, "tier resolution failed, proceeding with VM provisioning — tier data is supplementary for JIT storage",
+			"computeInstance", instance.GetName())
+	}
 
 	// Always delegate to provisioning lifecycle — EvaluateAction decides
 	// whether to skip, poll, or trigger. This avoids the A-B-A problem where
@@ -793,8 +803,32 @@ func (r *ComputeInstanceReconciler) handleKubeVirtVM(ctx context.Context, target
 	// Ready mirrors VirtualMachine.Status.Ready, synced from the VirtualMachineInstance
 	// Ready condition (set by the virt-launcher pod's readiness probe).
 	oldReadyStatus := conditionStatus(instance, v1alpha1.ComputeInstanceConditionReady)
+	instance.Status.ComputeNetworkAttachmentStatuses = nil
 	if kvVMHasConditionWithStatus(kv, kubevirtv1.VirtualMachineReady, corev1.ConditionTrue) {
-		ipAddress := r.getFirstVMIIPAddress(ctx, targetClient, kv.GetNamespace(), name)
+		ipAddress := r.getDefaultVMIIPAddress(ctx, targetClient, kv.GetNamespace(), name)
+
+		if ipAddress != "" && len(instance.Spec.NetworkAttachments) == 1 {
+			subnetRef := instance.Spec.NetworkAttachments[0].SubnetRef
+			subnet := &v1alpha1.Subnet{}
+			if err := r.Get(ctx, types.NamespacedName{Name: subnetRef, Namespace: instance.Namespace}, subnet); err != nil {
+				return fmt.Errorf("failed to get Subnet CR %s for ComputeInstance network status: %w", subnetRef, err)
+			}
+			subnetID := subnet.Labels[osacSubnetIDLabel]
+			if subnetID == "" {
+				return fmt.Errorf("subnet CR %s is missing the %s label", subnetRef, osacSubnetIDLabel)
+			}
+			if !isCanonicalIPv4AddressInSubnet(ipAddress, subnet.Spec.IPv4CIDR) {
+				log.Info("ignoring default VMI interface IP outside the attached Subnet IPv4 CIDR",
+					"computeinstance", instance.GetName(), "ipAddress", ipAddress,
+					"subnet", subnetRef, "subnetIPv4CIDR", subnet.Spec.IPv4CIDR)
+				ipAddress = ""
+			} else {
+				instance.Status.ComputeNetworkAttachmentStatuses = []v1alpha1.ComputeNetworkAttachmentStatus{{
+					SubnetRef: subnetID,
+					IPAddress: ipAddress,
+				}}
+			}
+		}
 
 		log.Info("KubeVirt virtual machine (kubevirt resource) is ready", "computeinstance", instance.GetName(), "ipAddress", ipAddress)
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionReady, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
@@ -817,9 +851,26 @@ func (r *ComputeInstanceReconciler) handleKubeVirtVM(ctx context.Context, target
 	return nil
 }
 
-// getFirstVMIIPAddress fetches the VirtualMachineInstance and returns the first non-empty
-// IP from .status.interfaces[*].ipAddress, or "" if none or on error.
-func (r *ComputeInstanceReconciler) getFirstVMIIPAddress(ctx context.Context, targetClient client.Client, namespace, name string) string {
+// isCanonicalIPv4AddressInSubnet accepts only a canonical IPv4 address contained
+// by the attached Subnet CIDR. VMI status is guest-reported, so it must not be
+// published as a tenant attachment address or used as an ExternalIP DNAT target
+// unless it belongs to that Subnet.
+func isCanonicalIPv4AddressInSubnet(ipAddress, subnetCIDR string) bool {
+	address, err := netip.ParseAddr(ipAddress)
+	if err != nil || !address.Is4() || address.String() != ipAddress {
+		return false
+	}
+
+	prefix, err := netip.ParsePrefix(subnetCIDR)
+	if err != nil || !prefix.Addr().Is4() || prefix != prefix.Masked() {
+		return false
+	}
+
+	return prefix.Contains(address)
+}
+
+// getDefaultVMIIPAddress fetches the VirtualMachineInstance and returns the IP for its default network interface.
+func (r *ComputeInstanceReconciler) getDefaultVMIIPAddress(ctx context.Context, targetClient client.Client, namespace, name string) string {
 	log := ctrllog.FromContext(ctx)
 
 	vmi := &kubevirtv1.VirtualMachineInstance{}
@@ -828,12 +879,12 @@ func (r *ComputeInstanceReconciler) getFirstVMIIPAddress(ctx context.Context, ta
 		return ""
 	}
 	for _, iface := range vmi.Status.Interfaces {
-		if iface.IP != "" {
+		if iface.Name == "default" {
 			return iface.IP
 		}
 	}
 
-	log.Info("no IP address found for VirtualMachineInstance", "namespace", namespace, "name", name)
+	log.Info("no IP address found for default VirtualMachineInstance interface", "namespace", namespace, "name", name)
 	return ""
 }
 

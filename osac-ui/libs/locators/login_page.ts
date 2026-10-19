@@ -1,11 +1,9 @@
-import type { Page } from '@playwright/test';
-
 export const LoginPage = {
-  brand: (page: Page) => page.locator('#kc-header-wrapper'),
-  pageTitle: (page: Page) => page.getByRole('heading', { name: 'Sign in to your account' }),
-  username: (page: Page) => page.getByLabel('Username or email'),
-  password: (page: Page) => page.locator('input[type="password"]'),
-  signIn: (page: Page) => page.getByRole('button', { name: 'Sign In' }),
-  accountMenu: (page: Page) => page.getByRole('button', { name: 'Account menu' }),
-  osacLogo: (page: Page) => page.locator('svg.injected-svg[data-src*="RH-OSAC"]'),
-};
+  brand: ['#kc-header-wrapper'],
+  pageTitle: ['heading', { name: 'Sign in to your account', exact: true }],
+  username: ['Username or email'],
+  password: ['input[type="password"]'],
+  signIn: ['button', { name: 'Sign In', exact: true }],
+  accountMenu: ['button', { name: 'Account menu', exact: true }],
+  osacLogo: ['svg.injected-svg[data-src*="RH-OSAC"]'],
+} as const;

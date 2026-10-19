@@ -50,6 +50,12 @@ type nodeSetClient struct {
 func (f *nodeSetClient) ListBareMetalInstances(context.Context, string) ([]*privatev1.BareMetalInstance, error) {
 	return f.bmis, nil
 }
+func (f *nodeSetClient) GetCluster(_ context.Context, id string) (*privatev1.Cluster, error) {
+	return privatev1.Cluster_builder{
+		Id:       id,
+		Metadata: privatev1.Metadata_builder{Tenant: "tenant"}.Build(),
+	}.Build(), nil
+}
 func (f *nodeSetClient) GetBareMetalInstanceType(_ context.Context, name string) (*privatev1.BareMetalInstanceType, error) {
 	return privatev1.BareMetalInstanceType_builder{Metadata: privatev1.Metadata_builder{Name: name}.Build()}.Build(), nil
 }
@@ -81,7 +87,11 @@ func nodeSetHarness(name string, requests ...v1alpha1.NodeRequest) (*Reconciler,
 	GinkgoHelper()
 	scheme := runtime.NewScheme()
 	Expect(v1alpha1.AddToScheme(scheme)).To(Succeed())
-	co := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "test"}, Spec: v1alpha1.ClusterOrderSpec{NodeRequests: requests}}
+	co := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{
+		Name:      name,
+		Namespace: "test",
+		Labels:    map[string]string{clusterOrderIDLabel: name + "-cluster"},
+	}, Spec: v1alpha1.ClusterOrderSpec{NodeRequests: requests}}
 	kube := clientfake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(co).WithObjects(co).Build()
 	fc := &nodeSetClient{kube: kube, order: client.ObjectKeyFromObject(co)}
 	r := &Reconciler{Client: kube, apiReader: kube, scheme: scheme, fulfillment: fc, recorder: events.NewFakeRecorder(100)}
@@ -89,6 +99,15 @@ func nodeSetHarness(name string, requests ...v1alpha1.NodeRequest) (*Reconciler,
 }
 func nodeRequest(instanceType string, count int) v1alpha1.NodeRequest {
 	return v1alpha1.NodeRequest{NodeSet: instanceType, NumberOfNodes: count, BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: instanceType}}
+}
+
+// authoritativeTestCluster resolves the harness fake's Cluster for the order, standing in for
+// the once-per-reconcile fetch that Reconcile passes down to the worker stages.
+func authoritativeTestCluster(ctx context.Context, r *Reconciler, co *v1alpha1.ClusterOrder) *privatev1.Cluster {
+	GinkgoHelper()
+	cluster, err := r.authoritativeCluster(ctx, co)
+	Expect(err).NotTo(HaveOccurred())
+	return cluster
 }
 
 // capacityObservation lists the provider's current BMIs into the invocation-local
@@ -111,7 +130,8 @@ func runWorkerCapacityStage(r *Reconciler, co *v1alpha1.ClusterOrder) (ctrl.Resu
 	if err != nil || !res.IsZero() {
 		return res, err
 	}
-	_, res, err = r.reconcileDueWorkerCapacity(context.Background(), co, "tenant", workerCreationInputs{}, observed)
+	_, res, err = r.reconcileDueWorkerCapacity(context.Background(), co,
+		authoritativeTestCluster(context.Background(), r, co), workerCreationInputs{}, observed)
 	return res, err
 }
 

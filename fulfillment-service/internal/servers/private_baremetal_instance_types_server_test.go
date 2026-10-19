@@ -16,6 +16,9 @@ package servers
 import (
 	"fmt"
 
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
@@ -24,6 +27,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 var _ = Describe("Private bare metal instance types server", func() {
@@ -70,6 +74,131 @@ var _ = Describe("Private bare metal instance types server", func() {
 				SetTenancyLogic(tenancy).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
+		})
+
+		Describe("Fabric bindings", func() {
+			newBinding := func(profileRef string) *privatev1.BareMetalFabricBindings {
+				return privatev1.BareMetalFabricBindings_builder{
+					EthernetEw: map[string]string{"netris": profileRef},
+				}.Build()
+			}
+			create := func() *privatev1.BareMetalInstanceType {
+				response, err := server.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
+					Object: privatev1.BareMetalInstanceType_builder{
+						Metadata: privatev1.Metadata_builder{Name: "fabric-type"}.Build(),
+						Spec: privatev1.BareMetalInstanceTypeSpec_builder{
+							Description: "Original description",
+							Hardware: privatev1.BareMetalHardwareSpec_builder{
+								Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 8, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
+								Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 32}.Build(),
+								NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+									privatev1.BareMetalNetworkPortSpec_builder{Name: "data-0", Role: "fabric", Type: "Ethernet", Speed: "25Gbps"}.Build(),
+								},
+							}.Build(),
+							HostLabelSelector: privatev1.BareMetalLabelSelector_builder{MatchLabels: map[string]string{"profile": "fabric"}}.Build(),
+							FabricBindings:    newBinding("42"),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				return response.GetObject()
+			}
+
+			It("persists private bindings on create and get", func() {
+				object := create()
+				response, err := server.Get(ctx, privatev1.BareMetalInstanceTypesGetRequest_builder{Id: object.GetId()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(proto.Equal(response.GetObject().GetSpec().GetFabricBindings(), newBinding("42"))).To(BeTrue())
+			})
+
+			DescribeTable("updates masked binding paths", func(path string) {
+				object := create()
+				binding := privatev1.BareMetalFabricBindings_builder{
+					EthernetEw: map[string]string{"netris": "server-cluster-template-42", "other-manager": "profile/hgx-v1"},
+				}.Build()
+				response, err := server.Update(ctx, privatev1.BareMetalInstanceTypesUpdateRequest_builder{
+					Object: privatev1.BareMetalInstanceType_builder{
+						Id:   object.GetId(),
+						Spec: privatev1.BareMetalInstanceTypeSpec_builder{FabricBindings: binding}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{path}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				updated := response.GetObject()
+				Expect(updated.GetSpec().GetFabricBindings().GetEthernetEw()).To(Equal(map[string]string{
+					"netris": "server-cluster-template-42", "other-manager": "profile/hgx-v1",
+				}))
+				Expect(updated.GetSpec().GetDescription()).To(Equal("Original description"))
+				Expect(proto.Equal(updated.GetSpec().GetHardware(), object.GetSpec().GetHardware())).To(BeTrue())
+			},
+				Entry("bindings", "spec.fabric_bindings"),
+				Entry("Ethernet", "spec.fabric_bindings.ethernet_ew"),
+			)
+
+			DescribeTable("clears optional nested binding paths", func(path string) {
+				object := create()
+				response, err := server.Update(ctx, privatev1.BareMetalInstanceTypesUpdateRequest_builder{
+					Object:     privatev1.BareMetalInstanceType_builder{Id: object.GetId()}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{path}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetFabricBindings().GetEthernetEw()).To(BeEmpty())
+				stored, err := server.Get(ctx, privatev1.BareMetalInstanceTypesGetRequest_builder{Id: object.GetId()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(stored.GetObject().GetSpec().GetFabricBindings().GetEthernetEw()).To(BeEmpty())
+			},
+				Entry("bindings", "spec.fabric_bindings"),
+				Entry("Ethernet", "spec.fabric_bindings.ethernet_ew"),
+			)
+
+			DescribeTable("rejects invalid manager profile references", func(profiles map[string]string) {
+				object := create()
+				_, err := server.Update(ctx, privatev1.BareMetalInstanceTypesUpdateRequest_builder{
+					Object: privatev1.BareMetalInstanceType_builder{
+						Id: object.GetId(),
+						Spec: privatev1.BareMetalInstanceTypeSpec_builder{FabricBindings: privatev1.BareMetalFabricBindings_builder{
+							EthernetEw: profiles,
+						}.Build()}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.fabric_bindings.ethernet_ew"}},
+				}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			},
+				Entry("empty manager", map[string]string{"": "profile"}),
+				Entry("empty profile", map[string]string{"netris": ""}),
+			)
+
+			It("ignores unmasked invalid bindings", func() {
+				object := create()
+				response, err := server.Update(ctx, privatev1.BareMetalInstanceTypesUpdateRequest_builder{
+					Object: privatev1.BareMetalInstanceType_builder{
+						Id:   object.GetId(),
+						Spec: privatev1.BareMetalInstanceTypeSpec_builder{Description: "Changed", FabricBindings: newBinding("bad")}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.description"}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetFabricBindings().GetEthernetEw()).To(Equal(map[string]string{"netris": "42"}))
+			})
+
+			It("hides bindings in public get and list responses", func() {
+				object := create()
+				publicServer, err := NewBareMetalInstanceTypesServer().SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+				Expect(err).ToNot(HaveOccurred())
+				got, err := publicServer.Get(ctx, publicv1.BareMetalInstanceTypesGetRequest_builder{Id: object.GetId()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				listed, err := publicServer.List(ctx, &publicv1.BareMetalInstanceTypesListRequest{})
+				Expect(err).ToNot(HaveOccurred())
+				Expect(listed.GetItems()).To(HaveLen(1))
+				for _, projected := range []*publicv1.BareMetalInstanceType{got.GetObject(), listed.GetItems()[0]} {
+					data, err := protojson.Marshal(projected)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(string(data)).ToNot(ContainSubstring("fabricBindings"))
+					Expect(string(data)).ToNot(ContainSubstring("network-class-id"))
+					Expect(projected.GetSpec().ProtoReflect().GetUnknown()).To(BeEmpty())
+					Expect(projected.GetSpec().GetDescription()).To(Equal("Original description"))
+				}
+			})
 		})
 
 		It("Creates object", func() {

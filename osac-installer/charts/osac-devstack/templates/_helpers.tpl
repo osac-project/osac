@@ -58,3 +58,52 @@ Create the name of the service account to use
 {{- default "default" .Values.rbac.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{- define "osac-devstack.fulfillmentAuthCredential" -}}
+{{- $root := index . 0 -}}
+{{- $param := index . 1 -}}
+{{- $credential := dict -}}
+{{- range ($root.Values.service.auth.controllerCredentials | default list) -}}
+  {{- $secret := .secret | default dict -}}
+  {{- range ($secret.items | default list) -}}
+    {{- if eq (.param | default "") $param -}}
+      {{- $_ := set $credential "name" ($secret.name | default "") -}}
+      {{- $_ := set $credential "key" (.key | default "") -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- $secretName := required (printf "service.auth.controllerCredentials must include a secret-backed %s parameter" $param) ($credential.name | default "") -}}
+{{- $secretKey := required (printf "service.auth.controllerCredentials must include a secret key for the %s parameter" $param) ($credential.key | default "") -}}
+{{- toJson (dict "name" $secretName "key" $secretKey) -}}
+{{- end -}}
+
+{{- define "osac-devstack.fulfillmentAuthEnv" -}}
+{{- $clientID := include "osac-devstack.fulfillmentAuthCredential" (list . "client-id") | fromJson -}}
+{{- $issuerURL := .Values.service.auth.issuerUrl | default .Values.ui.auth.oidcIssuerURL -}}
+- name: FULFILLMENT_ISSUER_URL
+  value: {{ tpl $issuerURL . | quote }}
+- name: FULFILLMENT_CLIENT_ID
+  valueFrom:
+    secretKeyRef:
+      name: {{ $clientID.name | quote }}
+      key: {{ $clientID.key | quote }}
+- name: FULFILLMENT_CLIENT_SECRET_FILE
+  value: /var/run/secrets/fulfillment-client-secret/client-secret
+{{- end -}}
+
+{{- define "osac-devstack.fulfillmentAuthVolumeMount" -}}
+- name: fulfillment-controller-credentials
+  mountPath: /var/run/secrets/fulfillment-client-secret
+  readOnly: true
+{{- end -}}
+
+{{- define "osac-devstack.fulfillmentAuthVolume" -}}
+{{- $clientSecret := include "osac-devstack.fulfillmentAuthCredential" (list . "client-secret") | fromJson -}}
+- name: fulfillment-controller-credentials
+  secret:
+    secretName: {{ $clientSecret.name | quote }}
+    defaultMode: 0440
+    items:
+    - key: {{ $clientSecret.key | quote }}
+      path: client-secret
+{{- end -}}

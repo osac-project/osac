@@ -147,6 +147,10 @@ var _ = Describe("Public NAT gateways server", func() {
 							Tenant: auth.SharedTenant,
 							Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 						}.Build(),
+						Status: privatev1.NetworkClassStatus_builder{
+							State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+							Hub:   "network-hub-a",
+						}.Build(),
 					}.Build(),
 				).Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
@@ -161,6 +165,10 @@ var _ = Describe("Public NAT gateways server", func() {
 					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						NetworkClass: privatev1.NetworkClassReference_builder{Id: sharedNetworkClass.GetId()}.Build(),
+					}.Build(),
+					Status: privatev1.VirtualNetworkStatus_builder{
+						State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
+						Hub:   "network-hub-a",
 					}.Build(),
 				}.Build(),
 			).Do(ctx)

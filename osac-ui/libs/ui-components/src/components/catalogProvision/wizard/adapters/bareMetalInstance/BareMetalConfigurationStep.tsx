@@ -27,7 +27,8 @@ import { getErrorMessage } from '@osac/ui-components/utils/error';
 import {
   BM_INSTANCE_TYPE_WIRE_PATH,
   BM_USER_DATA_FORM_PATH,
-  BM_USER_DATA_WIRE_PATH,
+  BM_USER_DATA_SECRET_FORM_PATH,
+  BM_USER_DATA_SOURCE_FORM_PATH,
   BareMetalInstanceWizardValues,
 } from './fields';
 import { useTranslation } from '../../../../../hooks/useTranslation';
@@ -185,9 +186,11 @@ const BareMetalConfigurationStep = ({ catalogItem }: Props) => {
             emptyDescription={t('Contact your administrator to have a disk image provisioned.')}
           />
           <UserDataField
-            catalogItem={catalogItem}
-            name={BM_USER_DATA_FORM_PATH}
-            wirePath={BM_USER_DATA_WIRE_PATH}
+            sourceName={BM_USER_DATA_SOURCE_FORM_PATH}
+            secretRefName={BM_USER_DATA_SECRET_FORM_PATH}
+            currentSource={values.spec.userDataSource}
+            inlineName={BM_USER_DATA_FORM_PATH}
+            projectName={values.metadata.project}
           />
         </OsacForm>
       </StackItem>

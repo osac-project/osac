@@ -391,6 +391,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 		})
 
 		It("Deletes an object that is referenced by a bare metal instance", func() {
+			Expect(createTestBareMetalInstanceType(ctx, "referenced-type", bareMetalNetworkPort("data-0", "fabric"))).To(Succeed())
 			createResponse, err := server.Create(ctx, publicv1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Title:     "Referenced item",
@@ -412,6 +413,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			createDiskImageWithLifecycle("default-bmi-disk-image",
 				privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE, nil)
+			seedTenantDefaultNetworking(testTenant, "", new("netris"))
 			_, err = instancesServer.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -420,6 +422,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
 						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						InstanceType: bareMetalInstanceTypeReference("referenced-type"),
 						SshPublicKey: new(testSSHPublicKey),
 					}.Build(),
 				}.Build(),

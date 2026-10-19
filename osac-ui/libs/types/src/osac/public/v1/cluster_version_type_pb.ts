@@ -21,6 +21,8 @@ import { file_buf_validate_validate } from "../../../buf/validate/validate_pb";
 import { file_google_api_field_behavior } from "../../../google/api/field_behavior_pb";
 import type { Timestamp } from "../../../google/protobuf/timestamp_pb";
 import { file_google_protobuf_timestamp } from "../../../google/protobuf/timestamp_pb";
+import type { DiskImageReference } from "./disk_image_type_pb";
+import { file_osac_public_v1_disk_image_type } from "./disk_image_type_pb";
 import type { Metadata } from "./metadata_type_pb";
 import { file_osac_public_v1_metadata_type } from "./metadata_type_pb";
 import type { Message } from "@bufbuild/protobuf";
@@ -29,7 +31,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/cluster_version_type.proto.
  */
 export const file_osac_public_v1_cluster_version_type: GenFile = /*@__PURE__*/
-  fileDesc("Cilvc2FjL3B1YmxpYy92MS9jbHVzdGVyX3ZlcnNpb25fdHlwZS5wcm90bxIOb3NhYy5wdWJsaWMudjEinAEKGUNsdXN0ZXJWZXJzaW9uRGVwcmVjYXRpb24SPgoVZGVwcmVjYXRpb25fdGltZXN0YW1wGAEgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcEID4EEDEj8KFm9ic29sZXNjZW5jZV90aW1lc3RhbXAYAiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wQgPgQQMisAEKDkNsdXN0ZXJWZXJzaW9uEgoKAmlkGAEgASgJEioKCG1ldGFkYXRhGAIgASgLMhgub3NhYy5wdWJsaWMudjEuTWV0YWRhdGESMAoEc3BlYxgDIAEoCzIiLm9zYWMucHVibGljLnYxLkNsdXN0ZXJWZXJzaW9uU3BlYxI0CgZzdGF0dXMYBCABKAsyJC5vc2FjLnB1YmxpYy52MS5DbHVzdGVyVmVyc2lvblN0YXR1cyKJAgoSQ2x1c3RlclZlcnNpb25TcGVjEhkKB2VuYWJsZWQYAiABKAhCA+BBAUgAiAEBEhwKCmlzX2RlZmF1bHQYAyABKAhCA+BBAUgBiAEBEjcKBXN0YXRlGAQgASgOMiMub3NhYy5wdWJsaWMudjEuQ2x1c3RlclZlcnNpb25TdGF0ZUID4EEBEkMKC2RlcHJlY2F0aW9uGAUgASgLMikub3NhYy5wdWJsaWMudjEuQ2x1c3RlclZlcnNpb25EZXByZWNhdGlvbkID4EEBEiEKB3ZlcnNpb24YBiABKAlCEOBBAuBBBbpIB3IFEAEYgAJCCgoIX2VuYWJsZWRCDQoLX2lzX2RlZmF1bHQiFgoUQ2x1c3RlclZlcnNpb25TdGF0dXMiVAoXQ2x1c3RlclZlcnNpb25SZWZlcmVuY2USCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRIPCgdwcm9qZWN0GAMgASgJEg4KBnNoYXJlZBgEIAEoCCqoAQoTQ2x1c3RlclZlcnNpb25TdGF0ZRIlCiFDTFVTVEVSX1ZFUlNJT05fU1RBVEVfVU5TUEVDSUZJRUQQABIgChxDTFVTVEVSX1ZFUlNJT05fU1RBVEVfQUNUSVZFEAESJAogQ0xVU1RFUl9WRVJTSU9OX1NUQVRFX0RFUFJFQ0FURUQQAhIiCh5DTFVTVEVSX1ZFUlNJT05fU1RBVEVfT0JTT0xFVEUQA2IGcHJvdG8z", [file_buf_validate_validate, file_google_api_field_behavior, file_google_protobuf_timestamp, file_osac_public_v1_metadata_type]);
+  fileDesc("Cilvc2FjL3B1YmxpYy92MS9jbHVzdGVyX3ZlcnNpb25fdHlwZS5wcm90bxIOb3NhYy5wdWJsaWMudjEinAEKGUNsdXN0ZXJWZXJzaW9uRGVwcmVjYXRpb24SPgoVZGVwcmVjYXRpb25fdGltZXN0YW1wGAEgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcEID4EEDEj8KFm9ic29sZXNjZW5jZV90aW1lc3RhbXAYAiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wQgPgQQMisAEKDkNsdXN0ZXJWZXJzaW9uEgoKAmlkGAEgASgJEioKCG1ldGFkYXRhGAIgASgLMhgub3NhYy5wdWJsaWMudjEuTWV0YWRhdGESMAoEc3BlYxgDIAEoCzIiLm9zYWMucHVibGljLnYxLkNsdXN0ZXJWZXJzaW9uU3BlYxI0CgZzdGF0dXMYBCABKAsyJC5vc2FjLnB1YmxpYy52MS5DbHVzdGVyVmVyc2lvblN0YXR1cyLBAgoSQ2x1c3RlclZlcnNpb25TcGVjEhkKB2VuYWJsZWQYAiABKAhCA+BBAUgAiAEBEhwKCmlzX2RlZmF1bHQYAyABKAhCA+BBAUgBiAEBEjcKBXN0YXRlGAQgASgOMiMub3NhYy5wdWJsaWMudjEuQ2x1c3RlclZlcnNpb25TdGF0ZUID4EEBEkMKC2RlcHJlY2F0aW9uGAUgASgLMikub3NhYy5wdWJsaWMudjEuQ2x1c3RlclZlcnNpb25EZXByZWNhdGlvbkID4EEBEiEKB3ZlcnNpb24YBiABKAlCEOBBAuBBBbpIB3IFEAEYgAISNgoKZGlza19pbWFnZRgHIAEoCzIiLm9zYWMucHVibGljLnYxLkRpc2tJbWFnZVJlZmVyZW5jZUIKCghfZW5hYmxlZEINCgtfaXNfZGVmYXVsdCIWChRDbHVzdGVyVmVyc2lvblN0YXR1cyJUChdDbHVzdGVyVmVyc2lvblJlZmVyZW5jZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEg8KB3Byb2plY3QYAyABKAkSDgoGc2hhcmVkGAQgASgIKqgBChNDbHVzdGVyVmVyc2lvblN0YXRlEiUKIUNMVVNURVJfVkVSU0lPTl9TVEFURV9VTlNQRUNJRklFRBAAEiAKHENMVVNURVJfVkVSU0lPTl9TVEFURV9BQ1RJVkUQARIkCiBDTFVTVEVSX1ZFUlNJT05fU1RBVEVfREVQUkVDQVRFRBACEiIKHkNMVVNURVJfVkVSU0lPTl9TVEFURV9PQlNPTEVURRADYgZwcm90bzM", [file_buf_validate_validate, file_google_api_field_behavior, file_google_protobuf_timestamp, file_osac_public_v1_disk_image_type, file_osac_public_v1_metadata_type]);
 
 /**
  * Contains deprecation details for a cluster version.
@@ -175,6 +177,14 @@ export type ClusterVersionSpec = Message<"osac.public.v1.ClusterVersionSpec"> & 
    * @generated from field: string version = 6;
    */
   version: string;
+
+  /**
+   * Reference to a DiskImage resource used to boot bare-metal workers of clusters on this
+   * version. The server validates existence, lifecycle, and tenant visibility.
+   *
+   * @generated from field: osac.public.v1.DiskImageReference disk_image = 7;
+   */
+  diskImage?: DiskImageReference | undefined;
 };
 
 /**

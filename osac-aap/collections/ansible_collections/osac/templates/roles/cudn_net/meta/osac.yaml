@@ -17,8 +17,8 @@ fabric_manager: cudn_net
 is_default: true
 capabilities:
   supports_ipv4: true
-  supports_ipv6: true
-  supports_dual_stack: true
+  supports_ipv6: false
+  supports_dual_stack: false
 defaults:
   virtual_network_ipv4_cidr: "10.200.0.0/16"
   subnet_ipv4_cidr: "10.200.0.0/20"

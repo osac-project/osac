@@ -33,3 +33,23 @@ var _ = Describe("CLI root color flag", func() {
 		Expect(output.String()).To(ContainSubstring("\x1b["))
 	})
 })
+
+var _ = Describe("CLI root --project flag", func() {
+	It("registers the --project persistent flag", func() {
+		cmd, err := Root()
+		Expect(err).NotTo(HaveOccurred())
+		flag := cmd.PersistentFlags().Lookup("project")
+		Expect(flag).NotTo(BeNil())
+		Expect(flag.DefValue).To(Equal(""))
+	})
+
+	It("includes the project subcommand", func() {
+		cmd, err := Root()
+		Expect(err).NotTo(HaveOccurred())
+		var names []string
+		for _, sub := range cmd.Commands() {
+			names = append(names, sub.Name())
+		}
+		Expect(names).To(ContainElement("project"))
+	})
+})

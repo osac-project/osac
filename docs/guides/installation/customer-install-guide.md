@@ -210,10 +210,10 @@ Required for a production deployment:
   `osac-db-metering-client-cert` Secrets when metering is enabled. For more
   information, see
   [`fulfillment-service/docs/INSTALL.md`](https://github.com/osac-project/osac/blob/main/fulfillment-service/docs/INSTALL.md).
-- **An external secret store.** The bundled OpenBao secret store is a single
-  ephemeral pod that loses data on restart. Before installing the `osac` chart,
-  prepare Vault or OpenBao, its Keycloak client, and the Kubernetes Secret and
-  CA bundle used by OSAC. See the
+- **An external secret store.** The bundled OpenBao instance is for testing and
+  CI, not production. Before installing the `osac` chart, prepare Vault or
+  OpenBao, its Keycloak client, and the Kubernetes Secret and CA bundle used by
+  OSAC. See the
   [secrets management configuration guide](secrets-management-configuration.md).
 
 Required for CaaS:
@@ -397,7 +397,7 @@ You create one values file for the `osac` chart, `my-values.yaml`.
 4. For a production deployment, add `service.vault` to `my-values.yaml` using
    the [secrets management configuration guide](secrets-management-configuration.md#configure-the-osac-instance).
 
-5. Add the service-specific value blocks (`global.services.*`, `csiDriver`,
+5. Add the service-specific value blocks (`global.services.*`,
    `operator.networkManagers`, `networkClass`, `aap`, `metering`, and `bmf`)
    from [Section 6](#6-installation-workflows-by-service) for the service you
    are installing.
@@ -484,7 +484,8 @@ subchart's own `values.yaml` file.
 | `operator.image.repository`, `operator.image.tag`, `operator.image.pullPolicy` | schema | Operator image. Use a release tag for production. |
 | `operator.replicaCount`, `operator.resources.*` | schema | Operator sizing. |
 | `operator.aap.url`, `operator.aap.token`, `operator.aap.insecureSkipVerify`, `operator.aap.statusPollInterval`, `operator.aap.templatePrefix` | schema | How the Operator reaches AAP. Set `insecureSkipVerify: "true"` for self-signed AAP routes. |
-| `operator.fulfillment.serverAddress`, `operator.fulfillment.tokenFile` | schema | Fulfillment gRPC endpoint and the service account token that the Operator presents. |
+| `operator.fulfillment.serverAddress` | schema | Fulfillment gRPC endpoint used by the Operator. |
+| `operator.fulfillment.credentials.secretName`, `clientIdKey`, `clientSecretKey` | schema | Name and keys of the Kubernetes Secret holding the `osac-controller` Keycloak service-account credentials. `osac-infra` provisions it for bundled Keycloak; external Keycloak deployments must provide an equivalent Secret. The OSAC chart only references it. |
 | `operator.controllers.tenant`, `operator.controllers.networking`, `operator.controllers.storage` | schema | Enable or disable individual reconcilers. Which services run is driven by `global.services.*`. |
 | `operator.controllers.networkingProvisioning` | schema | When `false`, networking custom resources reconcile to `READY` without a real fabric. |
 | `operator.controllers.volume` | subchart | Enables the Volume reconciler. |
@@ -537,7 +538,7 @@ subchart's own `values.yaml` file.
 | `aap.configAsCode.importAgentsEnabled`, `aap.configAsCode.importBcmAgentsEnabled` | Enable bare-metal agent import and the BCM inventory backend. |
 | `aap.instanceGroups.clusterFulfillment.enabled`, `aap.instanceGroups.clusterFulfillment.config`, `aap.instanceGroups.clusterFulfillment.secret` | The `cluster-fulfillment` instance group for CaaS provisioning. See [Section 6.2](#62-installing-osac-for-caas-with-the-netris-network-backend). |
 | `aap.instanceGroups.networkFulfillment.enabled`, `aap.instanceGroups.networkFulfillment.config`, `aap.instanceGroups.networkFulfillment.secret` | The `network-fulfillment` instance group for Netris. See [Section 6.2](#62-installing-osac-for-caas-with-the-netris-network-backend). |
-| `aap.instanceGroups.storageFulfillment.config.STORAGE_SNAPSHOTS_ENABLED`, `aap.instanceGroups.storageFulfillment.secret.VAST_ENDPOINT`, `aap.instanceGroups.storageFulfillment.secret.VAST_USERNAME`, `aap.instanceGroups.storageFulfillment.secret.VAST_PASSWORD` | The `storage-operations` instance group: snapshot toggle and VAST management credentials. |
+| `aap.instanceGroups.storageFulfillment.config.STORAGE_SNAPSHOTS_ENABLED` | Snapshot toggle for the `storage-operations` instance group. |
 | `aap.instanceGroups.publishTemplates.enabled` | Runs the postinstallation `osac-publish-templates` hook. Default `true`. Set it to `false` for VMaaS-only or BMaaS-only installations. |
 | `aap.instanceGroups.publishTemplates.config.OSAC_TEMPLATE_COLLECTIONS`, `aap.instanceGroups.publishTemplates.config.OSAC_FULFILLMENT_SERVICE_URI` | The Ansible collections to publish and the internal Fulfillment Service URI. |
 
@@ -556,14 +557,13 @@ subchart's own `values.yaml` file.
 | `bmf.bcm.enabled`, `bmf.bcm.url`, `bmf.bcm.cert`, `bmf.bcm.key`, `bmf.bcm.caCert`, `bmf.bcm.insecureSkipVerify`, `bmf.bcm.hostClass`, `bmf.bcm.bmhNamespace` | subchart | Base Command Manager (BCM) backend. | `false` |
 | `bmf.secrets.inventoryConfig`, `bmf.secrets.managementConfig`, `bmf.secrets.osClouds`, `bmf.configMaps.profiles` | schema | Names of the inventory, management, and `clouds.yaml` Secrets and the profiles `ConfigMap`. | Default names |
 | `operatorCrds.install` | schema | Install the OSAC CRDs. Set it to `false` if a cluster administrator manages them. | `true` |
-| `csiDriver.enabled` | schema | Deploys the CSI routing driver. Enable it for VMaaS. | `false` |
 | `kafka.enabled` | schema | Creates the Fulfillment Service's Strimzi user and copies its credentials. Set to `false` for an external Kafka connection; this does not disable Kafka use or metering's Strimzi resources. See [Kafka configuration](kafka-configuration.md). | `true` |
 | `service.kafka.connection` | schema | ConfigMap/Secret mappings for the required `brokers`, `user`, and `password` parameters. Supply resources in the OSAC namespace. | `fulfillment-service-kafka` Secret |
 | `metering.enabled` | schema | Deploys the metering service. Requires Strimzi-managed Kafka, a database connection, and `global.osacDeploymentId` (see [Table 5.1](#table-51-service-enablement-my-valuesyaml) and [Kafka configuration](kafka-configuration.md#optional-metering)). | `false` |
 | `metering.reconciliation.interval`, `metering.m360Adapter.enabled`, `metering.m360Adapter.m360.apiUrl`, `metering.m360Adapter.apiKeySecret` | subchart | Reconcile period and the Monetize360 billing adapter. | Not applicable |
 | `validation.enabled` | schema | Runs the pre-installation validation hook. | `true` |
 | `metallb.enabled`, `metallb.addressCIDR` | schema | In the `osac` chart, creates an `IPAddressPool` and an `L2Advertisement`. Edit the pool after installation to match your network. | `false` and `192.168.40.0/24` |
-| `bundledVault.enabled`, `bundledVault.image`, `bundledVault.devRootToken` | schema | Ephemeral in-cluster OpenBao. For evaluation only. | `true` and `openbao:2.6.2` |
+| `bundledVault.enabled`, `bundledVault.image` | schema | In-cluster OpenBao for testing and CI. Not intended for production. | `true` and `openbao:2.6.2` |
 | `hubAccess.enabled` | schema | Creates hub-access RBAC and registers the local cluster as its own hub. Single-cluster development only. | `false` |
 | `bundledPostgres.enabled` | schema | Bundled PostgreSQL for testing only; not intended for production. | `false` |
 | `dbInit.host` | schema | Host that the `db-init` pre-installation hook connects to, to create the databases. Set it to your external PostgreSQL host for a production deployment. | `postgres.osac-infra.svc.cluster.local` |
@@ -608,11 +608,13 @@ the cluster. Then follow [Section 4](#4-installing-osac).
    using ClusterUserDefinedNetwork (CUDN), the SecurityGroup by using a
    `NetworkPolicy`, and the ExternalIP by using MetalLB L2:
 
+   The OSAC chart does not deploy the OSAC CSI routing meta-driver. Provider CSI
+   setup and tenant storage provisioning are handled separately by the storage
+   workflow.
+
    ```yaml
    global:
      services: { vmaas: { enabled: true }, caas: { enabled: false }, bmaas: { enabled: false }, maas: { enabled: false } }
-   csiDriver:
-     enabled: true
    lvms:
      enabled: true
    operator:
@@ -1139,8 +1141,8 @@ Reapply the patch after any infrastructure reinstall that recreates this
 
 - The bundled PostgreSQL database (`bundledPostgres.enabled: true`) is for
   testing only and is not intended for production.
-- The bundled OpenBao secret store (`bundledVault.enabled: true`). It runs in
-  development mode and loses data on restart.
+- The bundled OpenBao secret store (`bundledVault.enabled: true`). It is for
+  testing and CI, not production.
 - `keycloak.devFixtures.enabled: true` and the default `admin` Keycloak
   credentials.
 - Development or CI reference values files and `main`/`latest` image tags.
@@ -1445,4 +1447,4 @@ with the correct `global.clusterDomain`.
   loads into AAP. Its subscription manifest is stored in the
   `config-as-code-manifest-ig` Secret.
 - **Bundled compared with external** — Bundled PostgreSQL is for testing, and
-  OpenBao is for evaluation. Production deployments use external services.
+  OpenBao is for testing and CI. Production deployments use external services.

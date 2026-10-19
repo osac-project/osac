@@ -316,7 +316,7 @@ func (l *externalIPLifecycle) lockExternalIPConsumers(ctx context.Context, exter
 
 func (l *externalIPLifecycle) ensureExternalIPAvailable(ctx context.Context, externalIPID string) error {
 	filter := fmt.Sprintf(
-		"(this.spec.external_ip.id == %s || this.spec.external_ip.name == %s) && !has(this.metadata.deletion_timestamp)",
+		"(this.spec.external_ip.id == %s || this.spec.external_ip.name == %s)",
 		strconv.Quote(externalIPID), strconv.Quote(externalIPID),
 	)
 	if l.externalIPAttachmentDao != nil {
@@ -479,18 +479,8 @@ func (l *externalIPLifecycle) deleteExternalIP(ctx context.Context, id string) e
 }
 
 func (l *externalIPLifecycle) deleteLockedExternalIP(ctx context.Context, externalIP *privatev1.ExternalIP) error {
-	firstDeletionBoundary := !externalIP.HasMetadata() || !externalIP.GetMetadata().HasDeletionTimestamp()
-	if _, err := l.externalIPDao.Delete().SetId(externalIP.GetId()).Do(ctx); err != nil {
-		return err
-	}
-	if !firstDeletionBoundary {
-		return nil
-	}
-	poolID := refKey(externalIP.GetSpec().GetPool())
-	if poolID == "" {
-		return nil
-	}
-	return UpdatePoolCapacity(ctx, l.externalIPPoolDao, poolID, -1)
+	_, err := l.externalIPDao.Delete().SetId(externalIP.GetId()).Do(ctx)
+	return err
 }
 
 func (l *externalIPLifecycle) deleteLockedNATGateway(ctx context.Context, natGateway *privatev1.NATGateway) error {

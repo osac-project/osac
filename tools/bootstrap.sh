@@ -534,7 +534,7 @@ install_pre_commit_hooks() {
     if ! rh-multi-pre-commit install --force --path "$dir"; then
       echo "  ${label}: failed to install hooks. Continuing."
     fi
-  elif ! (cd "$dir" && pre-commit install --force); then
+  elif ! (cd "$dir" && pre-commit install --overwrite); then
     echo "  ${label}: failed to install hooks. Continuing."
   fi
 }

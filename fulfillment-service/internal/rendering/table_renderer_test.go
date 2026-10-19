@@ -29,6 +29,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
@@ -72,6 +73,50 @@ var _ = Describe("Table renderer", func() {
 			AnyTimes()
 		return helper
 	}
+
+	renderDiskImage := func(ctx context.Context, item proto.Message) string {
+		objectHelper := makeObjectHelper(item)
+		lookupHelper := makeLookupHelper()
+
+		helper := reflection.NewMockHelper(ctrl)
+		helper.EXPECT().
+			Lookup(objectHelper.String()).
+			Return(objectHelper).
+			AnyTimes()
+		helper.EXPECT().
+			Lookup(gomock.Any()).
+			Return(lookupHelper).
+			AnyTimes()
+
+		buffer := &bytes.Buffer{}
+		renderer, err := NewTableRenderer().
+			SetLogger(logger).
+			SetHelper(helper).
+			SetWriter(buffer).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(renderer.Render(ctx, []proto.Message{item})).To(Succeed())
+		return buffer.String()
+	}
+
+	It("Renders DiskImage metadata.name and ID in separate columns", func(ctx context.Context) {
+		items := []proto.Message{
+			publicv1.DiskImage_builder{
+				Id:       "di-123",
+				Metadata: publicv1.Metadata_builder{Name: "fedora"}.Build(),
+			}.Build(),
+			privatev1.DiskImage_builder{
+				Id:       "di-123",
+				Metadata: privatev1.Metadata_builder{Name: "fedora"}.Build(),
+			}.Build(),
+		}
+
+		for _, item := range items {
+			output := renderDiskImage(ctx, item)
+			Expect(output).To(MatchRegexp(`NAME.*\bID\b`))
+			Expect(output).To(MatchRegexp(`(?m)^fedora.*di-123(?:\s|$)`))
+		}
+	})
 
 	Describe("DELETING column", func() {
 		renderSubnets := func(ctx context.Context, items []*publicv1.Subnet) string {

@@ -271,6 +271,15 @@ func (s *ClustersServer) Update(ctx context.Context,
 		return
 	}
 
+	// The system sets the version transition time when it accepts a version change; users can
+	// read it but never supply it. The rest of the status is already ignored on input.
+	for _, path := range request.GetUpdateMask().GetPaths() {
+		if path == "status.version_transition_time" {
+			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "%s is output-only", path)
+			return
+		}
+	}
+
 	// Determine how to prepare the private cluster based on whether there's a field mask. When there's a field mask,
 	// we don't want to merge into the existing object because that would prevent proper replacement of map fields
 	// (like node sets). Instead, we copy to a new object and let the generic server handle the merge with the

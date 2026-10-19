@@ -30,6 +30,14 @@ const SecretDataStep = ({ isEdit }: SecretDataStepProps) => {
         );
       case SecretType.USER_DATA:
         return <SecretValueField label={t('User data')} entry={values.userData} name="userData" />;
+      case SecretType.SSH_PUBLIC_KEY:
+        return (
+          <SecretValueField
+            label={t('SSH public key')}
+            entry={values.sshPublicKey}
+            name="sshPublicKey"
+          />
+        );
       case SecretType.VALUE:
         return <SecretValueField label={t('Value')} entry={values.value} name="value" />;
       case SecretType.OPAQUE:

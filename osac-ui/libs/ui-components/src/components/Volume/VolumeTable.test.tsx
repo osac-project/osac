@@ -52,7 +52,6 @@ describe('VolumeTable', () => {
       'Size',
       'Access Mode',
       'Created',
-      '', // Actions column (aria-label only)
     ]);
   });
 
@@ -101,17 +100,16 @@ describe('VolumeTable', () => {
     expect(screen.getByRole('heading', { name: 'Volume detail page' })).toBeInTheDocument();
   });
 
-  it('renders the actions menu for an AVAILABLE volume', () => {
-    renderTable([makeVolume({ id: 'v-1', name: 'my-vol', state: VolumeState.AVAILABLE })]);
-
-    expect(screen.getByRole('button', { name: 'Actions for my-vol' })).toBeInTheDocument();
-  });
-
-  it('renders the actions menu for a DELETING volume', () => {
-    renderTable([makeVolume({ id: 'v-1', name: 'my-vol', state: VolumeState.DELETING })]);
-
-    expect(screen.getByRole('button', { name: 'Actions for my-vol' })).toBeInTheDocument();
-  });
+  // TODO: re-enable when volume actions are supported after developer preview
+  // it('renders the actions menu for an AVAILABLE volume', () => {
+  //   renderTable([makeVolume({ id: 'v-1', name: 'my-vol', state: VolumeState.AVAILABLE })]);
+  //   expect(screen.getByRole('button', { name: 'Actions for my-vol' })).toBeInTheDocument();
+  // });
+  //
+  // it('renders the actions menu for a DELETING volume', () => {
+  //   renderTable([makeVolume({ id: 'v-1', name: 'my-vol', state: VolumeState.DELETING })]);
+  //   expect(screen.getByRole('button', { name: 'Actions for my-vol' })).toBeInTheDocument();
+  // });
 
   it('shows em-dash for missing fields when spec is absent', () => {
     const vol = create(VolumeSchema, {

@@ -94,9 +94,10 @@ other resources; CaaS tenant-scoped selection, collisions and workspace policy a
 The privileged worker controller creates fulfillment BareMetalInstances owned by the Cluster's
 tenant through the fixed shared `osac.templates.bm_host_provisioning` template with a shared
 hardware type. Its gRPC BMI retains `osac.openshift.io/cluster-order` for correlation and
-`osac.openshift.io/owner-reference=ClusterOrder/<name>`; the Kubernetes BMI CR receives the
-actual tenant and owner-reference annotations and its BMI UUID label. Neither annotation is a
-substitute for the controller's authoritative Cluster/worker ownership checks. Worker CRs use the
+`osac.openshift.io/owner-reference=ClusterOrder/<name>`. The Kubernetes BMI CR receives the
+actual tenant annotation and its BMI UUID label; the API owner-reference annotation is not
+copied to the CR. API ownership metadata and the CR's tenant annotation are not substitutes
+for the controller's authoritative Cluster/worker ownership checks. Worker CRs use the
 configured Hub namespace, **not a per-tenant namespace**; enforcing same-Hub placement across
 multiple Hubs remains a separate rollout gate.
 

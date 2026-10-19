@@ -1,0 +1,44 @@
+---
+argument_specs:
+  create_subnet:
+    options:
+      subnet:
+        type: dict
+        required: true
+        description: Subnet resource passed to the K8s manager playbook
+      subnet_name:
+        type: str
+        required: true
+        description: Name of the Subnet resource
+      template_parameters:
+        type: dict
+        required: false
+        default: {}
+        description: Template-specific parameters
+      l2_vni:
+        type: str
+        required: true
+        description: Layer 2 VNI returned by the fabric manager
+      l3_vni:
+        type: str
+        required: true
+        description: Layer 3 VNI returned by the fabric manager
+      fabric_reserved_range:
+        type: str
+        required: true
+        description: Address range reserved for fabric-managed interfaces
+  delete_subnet:
+    options:
+      subnet:
+        type: dict
+        required: true
+        description: Subnet resource passed to the K8s manager playbook
+      subnet_name:
+        type: str
+        required: true
+        description: Name of the Subnet resource
+      template_parameters:
+        type: dict
+        required: false
+        default: {}
+        description: Template-specific parameters

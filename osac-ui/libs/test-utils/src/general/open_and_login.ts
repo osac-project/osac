@@ -3,7 +3,8 @@ import { type Page, expect } from '@playwright/test';
 import { LoginPage } from '../../../locators/login_page';
 
 const isLoggedIn = async (page: Page): Promise<boolean> =>
-  LoginPage.accountMenu(page)
+  page
+    .getByRole(...LoginPage.accountMenu)
     .isVisible()
     .catch(() => false);
 
@@ -18,8 +19,8 @@ export const openBrowser = async (page: Page, link: string): Promise<void> => {
     return;
   }
 
-  await expect(LoginPage.brand(page)).toContainText(/osac/i);
-  await expect(LoginPage.pageTitle(page)).toBeVisible();
+  await expect(page.locator(...LoginPage.brand)).toContainText(/osac/i);
+  await expect(page.getByRole(...LoginPage.pageTitle)).toBeVisible();
 };
 
 /**
@@ -37,13 +38,13 @@ export const openAndLogin = async (
     return;
   }
 
-  await LoginPage.username(page).fill(username);
-  await LoginPage.signIn(page).click();
+  await page.getByLabel(...LoginPage.username).fill(username);
+  await page.getByRole(...LoginPage.signIn).click();
 
   // The first Keycloak may broker to a second Keycloak, which can present
   // another username screen before showing the password field.
-  const usernameField = LoginPage.username(page);
-  const passwordField = LoginPage.password(page);
+  const usernameField = page.getByLabel(...LoginPage.username);
+  const passwordField = page.locator(...LoginPage.password);
   await Promise.race([
     usernameField.waitFor({ state: 'visible' }).catch(() => {}),
     passwordField.waitFor({ state: 'visible' }).catch(() => {}),
@@ -51,14 +52,25 @@ export const openAndLogin = async (
   if (await usernameField.isVisible().catch(() => false)) {
     await usernameField.fill(username);
     if (!(await passwordField.isVisible().catch(() => false))) {
-      await LoginPage.signIn(page).click();
+      await page.getByRole(...LoginPage.signIn).click();
       await passwordField.waitFor({ state: 'visible' });
     }
   }
 
   await passwordField.fill(password);
-  await LoginPage.signIn(page).click();
+  await page.getByRole(...LoginPage.signIn).click();
 
-  await expect(LoginPage.accountMenu(page)).toBeVisible();
-  await expect(LoginPage.osacLogo(page)).toBeVisible();
+  await expect(page.getByRole(...LoginPage.accountMenu)).toBeVisible();
+  await expect(page.locator(...LoginPage.osacLogo)).toBeVisible();
+};
+
+/** Open the login page and authenticate with the configured test user. */
+export const openAndLoginWithEnvironment = async (page: Page, link: string): Promise<void> => {
+  const username = process.env.OSAC_USERNAME;
+  const password = process.env.OSAC_PASSWORD;
+  if (!username || !password) {
+    throw new Error('OSAC_USERNAME and OSAC_PASSWORD must be set to a valid Keycloak test user.');
+  }
+
+  await openAndLogin(page, link, username, password);
 };

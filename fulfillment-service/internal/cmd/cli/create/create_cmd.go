@@ -136,6 +136,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		SetConnection(c.conn).
 		AddPackages(c.settings.Packages()).
 		SetTenantFunc(config.TenantFromContext).
+		SetProjectFunc(config.ProjectFromContext).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create reflection tool: %w", err)
@@ -175,6 +176,31 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	tenant := config.TenantFromContext(ctx)
+	project := config.ProjectFromContext(ctx)
+
+	// Pre-validate all objects for project conflicts before creating any object.
+	// This prevents partial application when a conflict is detected at index > 0.
+	if project != "" {
+		for i, object := range objects {
+			objectDesc := object.ProtoReflect().Descriptor()
+			objectType := string(objectDesc.FullName())
+			objectHelper := helper.Lookup(objectType)
+			if objectHelper == nil {
+				return fmt.Errorf("input object at index %d is of an unknown type '%s'", i, objectType)
+			}
+			if objectHelper.IsProjectScoped() {
+				fileProject := objectHelper.GetProject(object)
+				if fileProject != "" && fileProject != project {
+					return fmt.Errorf(
+						"input object at index %d has metadata.project '%s' which "+
+							"conflicts with the --project flag value '%s'",
+						i, fileProject, project,
+					)
+				}
+			}
+		}
+	}
+
 	for i, object := range objects {
 		objectDesc := object.ProtoReflect().Descriptor()
 		objectType := string(objectDesc.FullName())
@@ -184,6 +210,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		}
 		if tenant != "" && objectHelper.IsTenantScoped() {
 			objectHelper.SetTenant(object, tenant)
+		}
+		if project != "" && objectHelper.IsProjectScoped() {
+			objectHelper.SetProject(object, project)
 		}
 		object, err = objectHelper.Create(ctx, object)
 		if err != nil {

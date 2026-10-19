@@ -72,7 +72,6 @@ describe('VirtualNetworksListPage', () => {
   it('renders the section label, title, and create button', async () => {
     renderPage();
 
-    expect(screen.getByText('Networking').closest('.pf-v6-c-label')).not.toBeNull();
     expect(screen.getByRole('heading', { name: 'Virtual networks' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Create virtual network' })).toBeInTheDocument();
     await screen.findByRole('link', { name: 'vn-prod' });

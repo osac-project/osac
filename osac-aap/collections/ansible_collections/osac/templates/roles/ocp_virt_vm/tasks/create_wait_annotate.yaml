@@ -49,7 +49,6 @@
       - "Root Disk Size: {{ vm_boot_disk_size }}"
       - "Additional Disks: {{ vm_additional_disks | length }}"
       - "RunStrategy: {{ vm_run_strategy }}"
-      - "Hostname: {{ vm_hostname }}"
       - "Status: {{ vm_status.resources[0].status.printableStatus | default('Unknown') }}"
   when: guest_os_family == 'windows'
 

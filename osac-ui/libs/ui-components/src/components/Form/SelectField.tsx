@@ -34,6 +34,7 @@ export interface SelectFieldProps {
   autoSelectSingleOption?: boolean;
   helperText?: string;
   onSelect?: (value: string | number) => void;
+  asFormGroup?: boolean;
 }
 
 export const SelectField = ({
@@ -49,6 +50,7 @@ export const SelectField = ({
   autoSelectSingleOption = false,
   helperText,
   onSelect: onSelectProp,
+  asFormGroup = true,
 }: SelectFieldProps) => {
   const [field, meta, helpers] = useField<string | number>(name);
   const [isOpen, setIsOpen] = useState(false);
@@ -100,8 +102,8 @@ export const SelectField = ({
     </MenuToggle>
   );
 
-  return (
-    <FormGroup label={label} fieldId={fieldId} isRequired={isRequired}>
+  const select = (
+    <>
       <Select
         id={`${fieldId}-select`}
         isOpen={isOpen}
@@ -110,6 +112,7 @@ export const SelectField = ({
         onOpenChange={setIsOpen}
         toggle={toggle}
         shouldFocusToggleOnSelect
+        aria-label={label}
       >
         <SelectList>
           {options.map((option) => (
@@ -125,6 +128,14 @@ export const SelectField = ({
         </SelectList>
       </Select>
       <FormFieldHelper error={error} description={helperText} fieldId={fieldId} />
+    </>
+  );
+
+  return asFormGroup ? (
+    <FormGroup label={label} fieldId={fieldId} isRequired={isRequired}>
+      {select}
     </FormGroup>
+  ) : (
+    select
   );
 };

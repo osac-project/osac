@@ -39,6 +39,9 @@ var _ = Describe("Node set removal", func() {
 
 	BeforeEach(func() {
 		ctx = context.Background()
+		// A persisted tenant-default subnet can be injected into Cluster creates;
+		// keep a ready NetworkClass available for its canonical Hub validation.
+		getOrCreateTenantDefaultNetworkClassFixture(ctx)
 
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
 		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
@@ -125,8 +128,8 @@ var _ = Describe("Node set removal", func() {
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
-						"workers": publicv1.ClusterNodeSet_builder{Size: new(int32(3)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: workerBmitName}.Build()}.Build(),
-						"storage": publicv1.ClusterNodeSet_builder{Size: new(int32(2)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: storageBmitName}.Build()}.Build(),
+						"workers": publicv1.ClusterNodeSet_builder{Size: new(int32(3)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: workerBmitName, Shared: true}.Build()}.Build(),
+						"storage": publicv1.ClusterNodeSet_builder{Size: new(int32(2)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: storageBmitName, Shared: true}.Build()}.Build(),
 					},
 				}.Build(),
 			}.Build(),

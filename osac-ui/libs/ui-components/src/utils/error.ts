@@ -1,3 +1,6 @@
+import { Code, ConnectError } from '@connectrpc/connect';
+import type { TFunction } from 'i18next';
+
 const readJsonMessage = (value: unknown): string | undefined => {
   if (!value || typeof value !== 'object') {
     return undefined;
@@ -38,4 +41,23 @@ export const getErrorMessage = (error: unknown): string => {
     return error.toString();
   }
   return 'Unexpected error';
+};
+
+/** Map fulfillment API errors to translated user-facing messages. */
+export const getApiErrorMessage = (error: unknown, t: TFunction): string => {
+  if (!(error instanceof ConnectError)) {
+    return getErrorMessage(error);
+  }
+
+  switch (error.code) {
+    case Code.InvalidArgument:
+    case Code.AlreadyExists:
+      return getErrorMessage(error);
+    case Code.PermissionDenied:
+      return t('You are not authorized to access this resource.');
+    case Code.Internal:
+      return t('Unexpected error occurred');
+    default:
+      return getErrorMessage(error);
+  }
 };

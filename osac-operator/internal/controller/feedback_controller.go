@@ -104,7 +104,7 @@ func newClusterOrderFeedbackBridge(hubClient clnt.Client, clustersClient private
 			_, err := clustersClient.Update(ctx, privatev1.ClustersUpdateRequest_builder{
 				Object: remote,
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
-					"status.conditions", feedbackStatusStatePath, "status.api_url", "status.console_url", "status.api_endpoint",
+					feedbackStatusConditionsPath, feedbackStatusStatePath, "status.api_url", "status.console_url", "status.api_endpoint",
 					"status.ingress_endpoint", feedbackStatusStateTransitionTimePath, "status.kubeconfig_secret", "status.password_secret", "status.hub",
 					"status.node_sets", "status.add_on_operators",
 				}},
@@ -188,8 +188,10 @@ func addOnOperatorInstallState(state ckv1alpha1.JobState) privatev1.AddOnOperato
 		return privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_INSTALLING
 	case ckv1alpha1.JobStateSucceeded:
 		return privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_INSTALLED
-	case ckv1alpha1.JobStateFailed, ckv1alpha1.JobStateCanceled, ckv1alpha1.JobStateUnknown:
+	case ckv1alpha1.JobStateFailed, ckv1alpha1.JobStateCanceled:
 		return privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_FAILED
+	case ckv1alpha1.JobStateUnknown:
+		return privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_INSTALLING
 	default:
 		return privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_UNSPECIFIED
 	}
@@ -239,6 +241,12 @@ var clusterOrderProvisioningStages = []string{
 	string(ckv1alpha1.ClusterOrderConditionClusterStorageReady),
 }
 
+// clusterOrderDegradedConditionSources are conditions that contribute to the
+// fulfillment DEGRADED condition without becoming standalone conditions.
+var clusterOrderDegradedConditionSources = map[string]struct{}{
+	string(ckv1alpha1.ClusterOrderConditionAddOnOperatorsReady): {},
+}
+
 // clusterOrderUnsurfacedConditions are ClusterOrder conditions we know about but neither
 // copy to the fulfillment API nor use to refine PROGRESSING. They are listed so they are
 // not reported as unknown:
@@ -248,12 +256,12 @@ var clusterOrderProvisioningStages = []string{
 var clusterOrderUnsurfacedConditions = map[string]struct{}{
 	ckv1alpha1.ConditionNamespaceCreated:                          {},
 	ckv1alpha1.ConditionDeleting:                                  {},
-	string(ckv1alpha1.ClusterOrderConditionAddOnOperatorsReady):   {},
 	string(ckv1alpha1.ClusterOrderConditionFulfillmentTrustReady): {},
 }
 
 func syncClusterOrderConditions(ctx context.Context, clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
 	log := ctrllog.FromContext(ctx)
+	addOnConditionSeen := false
 
 	for i := range clusterOrder.Status.Conditions {
 		condition := clusterOrder.Status.Conditions[i]
@@ -271,6 +279,11 @@ func syncClusterOrderConditions(ctx context.Context, clusterOrder *ckv1alpha1.Cl
 			// fulfillment condition.
 			continue
 		}
+		if _, ok := clusterOrderDegradedConditionSources[condition.Type]; ok {
+			addOnConditionSeen = true
+			syncClusterOrderAddOnDegraded(remote, condition)
+			continue
+		}
 		if _, ok := clusterOrderUnsurfacedConditions[condition.Type]; ok {
 			continue
 		}
@@ -278,8 +291,47 @@ func syncClusterOrderConditions(ctx context.Context, clusterOrder *ckv1alpha1.Cl
 		// is noticed instead of being silently ignored.
 		log.Info("Unmapped ClusterOrder condition, will ignore it", "condition", condition.Type)
 	}
+	if !addOnConditionSeen {
+		// An absent add-on condition means the add-on controller has no current
+		// failure to report. Clear only degradation owned by that controller.
+		syncClusterOrderAddOnDegraded(remote, metav1.Condition{Status: metav1.ConditionTrue})
+	}
 
 	applyProgressingStageDetail(clusterOrder, remote)
+}
+
+func syncClusterOrderAddOnDegraded(remote *privatev1.Cluster, condition metav1.Condition) {
+	if condition.Status == metav1.ConditionTrue {
+		var degraded *privatev1.ClusterCondition
+		for _, current := range remote.GetStatus().GetConditions() {
+			if current.GetType() == privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_DEGRADED {
+				degraded = current
+				break
+			}
+		}
+		if degraded == nil || degraded.GetStatus() != privatev1.ConditionStatus_CONDITION_STATUS_TRUE || degraded.GetReason() != addOnOperatorsFailedReason {
+			return
+		}
+		degraded.SetStatus(privatev1.ConditionStatus_CONDITION_STATUS_FALSE)
+		degraded.SetReason("AddOnOperatorsRecovered")
+		degraded.SetMessage("")
+		degraded.SetLastTransitionTime(timestamppb.Now())
+		return
+	}
+	if condition.Status != metav1.ConditionFalse {
+		return
+	}
+	degraded := findClusterCondition(remote, privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_DEGRADED)
+	if degraded.GetStatus() == privatev1.ConditionStatus_CONDITION_STATUS_TRUE && degraded.GetReason() != addOnOperatorsFailedReason {
+		return
+	}
+	oldStatus := degraded.GetStatus()
+	degraded.SetStatus(privatev1.ConditionStatus_CONDITION_STATUS_TRUE)
+	degraded.SetReason(addOnOperatorsFailedReason)
+	degraded.SetMessage(sanitizeFeedbackText(condition.Message))
+	if oldStatus != degraded.GetStatus() {
+		degraded.SetLastTransitionTime(timestamppb.Now())
+	}
 }
 
 // applyProgressingStageDetail refines the PROGRESSING condition's reason and message to
@@ -414,17 +466,14 @@ func setWorkerCondition(remote *privatev1.Cluster, condType privatev1.ClusterCon
 }
 
 func buildWorkerFailedMessage(workers []ckv1alpha1.WorkerStatus, desired int32) string {
-	var failed, retrying int32
+	var failed int32
 	for i := range workers {
 		if workers[i].Phase == "Failed" {
 			failed++
-			if workers[i].NextRetryTime != nil {
-				retrying++
-			}
 		}
 	}
 	msg := fmt.Sprintf("%d of %d worker nodes failed to provision", failed, desired)
-	if retrying > 0 {
+	if failed > 0 {
 		msg += "; " + baremetalworker.FormatWorkersFailed(workers)
 	}
 	return msg

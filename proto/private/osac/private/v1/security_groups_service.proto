@@ -89,18 +89,19 @@ message SecurityGroupsCreateResponse {
 }
 
 message SecurityGroupsUpdateRequest {
-  option (cleanapi.message).private = true;
+  // SecurityGroup to update. The complete ingress and egress rule lists are
+  // applied as supplied. The ID identifies the existing group; its name and
+  // parent VirtualNetwork are not changed by this operation.
   SecurityGroup object = 1;
-  google.protobuf.FieldMask update_mask = 2;
+  google.protobuf.FieldMask update_mask = 2 [(cleanapi.field).private = true];
 
   // Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
   // matches the value of the metadata.version field of the submitted object. If they differ the update will be
   // rejected. This is useful to prevent lost updates when multiple clients are modifying the same object concurrently.
-  bool lock = 3;
+  bool lock = 3 [(cleanapi.field).private = true];
 }
 
 message SecurityGroupsUpdateResponse {
-  option (cleanapi.message).private = true;
   SecurityGroup object = 1;
 }
 
@@ -142,9 +143,9 @@ service SecurityGroups {
     };
   }
 
-  // Updates an existing security group.
+  // Updates the ingress and egress rules of an existing security group.
+  // Callers must provide the complete rule lists for both directions.
   rpc Update(SecurityGroupsUpdateRequest) returns (SecurityGroupsUpdateResponse) {
-    option (cleanapi.method).private = true;
     option (google.api.http) = {
       patch: "/api/private/v1/security_groups/{object.id}"
       body: "object"

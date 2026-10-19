@@ -30,9 +30,9 @@ _BOT_AUTHORS = frozenset(
 # CI-failing.
 _NON_CI_CHECK_NAMES = frozenset(
     {
-        "check-labels",
-        "label-gate / check-labels",
-        "label-gate / check-labels (pull_request)",
+        "jira-reference",
+        "jira-reference / jira-reference",
+        "jira-reference / jira-reference (pull_request)",
     }
 )
 _NON_FAILING_CHECK_CONCLUSIONS = frozenset({None, "SUCCESS", "NEUTRAL", "SKIPPED"})

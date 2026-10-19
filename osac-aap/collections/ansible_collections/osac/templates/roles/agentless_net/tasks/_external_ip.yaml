@@ -1,0 +1,67 @@
+---
+- name: Apply AgentlessNet ExternalIP provider state
+  block:
+    - name: Validate the ExternalIP v1 request
+      ansible.builtin.assert:
+        that:
+          - external_ip.metadata.uid is defined
+          - external_ip.metadata.generation is number
+          - external_ip.metadata.labels['osac.openshift.io/externalip-uuid'] is defined
+          - external_ip.metadata.annotations['osac.openshift.io/tenant'] is defined
+          - external_ip.metadata.annotations['osac.openshift.io/externalip-contract-version'] == 'v1'
+          - osac_job_vars.external_ip_pool.kubernetes_uid is defined
+          - osac_job_vars.external_ip_pool.fulfillment_id is defined
+          - osac_job_vars.external_ip_pool.tenant_id is defined
+          - osac_job_vars.external_ip_pool.cidr is defined
+          - >-
+            agentless_net_external_ip_action != 'reserve_external_ip'
+            or osac_job_vars.external_ip_pool.phase == 'Ready'
+          - >-
+            agentless_net_external_ip_action != 'reserve_external_ip'
+            or external_ip.metadata.deletionTimestamp is not defined
+        fail_msg: >-
+          AgentlessNet ExternalIP operations require a v1 contract, stable resource
+          and pool identities, and a ready pool for allocation.
+      no_log: true
+
+    - name: Load the AgentlessNet provider inventory
+      ansible.builtin.include_tasks: _load_network_node_inventory.yaml
+      vars:
+        agentless_net_require_switches: false
+
+    - name: Reserve or release the ExternalIP address
+      osac.templates.agentless_net_state:
+        action: "{{ agentless_net_external_ip_action }}"
+        state_file: "{{ agentless_net_network_state_file }}"
+        uid: "{{ external_ip.metadata.uid }}"
+        fulfillment_id: >-
+          {{ external_ip.metadata.labels['osac.openshift.io/externalip-uuid'] }}
+        tenant_id: >-
+          {{ external_ip.metadata.annotations['osac.openshift.io/tenant'] }}
+        pool_uid: "{{ osac_job_vars.external_ip_pool.kubernetes_uid }}"
+        pool_fulfillment_id: "{{ osac_job_vars.external_ip_pool.fulfillment_id }}"
+        pool_tenant_id: "{{ osac_job_vars.external_ip_pool.tenant_id }}"
+        pool_cidr: "{{ osac_job_vars.external_ip_pool.cidr }}"
+      delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
+      become: true
+      register: agentless_net_external_ip_state
+      no_log: true
+
+    - name: Report the ExternalIP operation result
+      ansible.builtin.set_stats:
+        data:
+          osac_result:
+            schemaVersion: v1
+            operation: "{{ agentless_net_external_ip_operation }}"
+            resourceUID: "{{ external_ip.metadata.uid }}"
+            observedGeneration: "{{ external_ip.metadata.generation | int }}"
+            data: >-
+              {{ {'address': agentless_net_external_ip_state.external_ip.address}
+                 if agentless_net_external_ip_action == 'reserve_external_ip'
+                 else {} }}
+        per_host: false
+        aggregate: false
+      when: not ansible_check_mode
+  always:
+    - name: Remove the temporary AgentlessNet SSH key file
+      ansible.builtin.include_tasks: _cleanup_network_node_inventory.yaml

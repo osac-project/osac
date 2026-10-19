@@ -1,0 +1,18 @@
+---
+- name: Ensure shared CUDN Lease exists
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    server_side_apply:
+      field_manager: cudn-evpn-subnet-lock-init
+    definition:
+      apiVersion: coordination.k8s.io/v1
+      kind: Lease
+      metadata:
+        name: "{{ vnet_lock_name }}"
+        namespace: "{{ vnet_lock_namespace }}"
+        annotations:
+          osac.openshift.io/tenant: "{{ tenant_id }}"
+          osac.openshift.io/owner-reference: "VirtualNetwork/{{ vnet_name }}"
+      spec:
+        leaseDurationSeconds: 1200

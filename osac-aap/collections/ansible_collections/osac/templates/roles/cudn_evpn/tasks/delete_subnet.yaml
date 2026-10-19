@@ -1,0 +1,548 @@
+---
+- name: Extract EVPN Subnet deletion names
+  ansible.builtin.set_fact:
+    subnet_name: "{{ subnet.metadata.name | default('') }}"
+    _deleting_subnet_name: "{{ subnet.metadata.name | default('') }}"
+    vnet_uuid: "{{ subnet.spec.virtualNetwork | default('') }}"
+    tenant_id: "{{ (subnet.metadata.annotations | default({})).get('osac.openshift.io/tenant', '') }}"
+
+- name: Validate EVPN Subnet deletion names
+  ansible.builtin.assert:
+    that:
+      - subnet_name | trim | length > 0
+      - vnet_uuid | trim | length > 0
+      - tenant_id | trim | length > 0
+    fail_msg: A Subnet name, tenant, and VirtualNetwork UUID are required for EVPN cleanup.
+
+- name: Look up parent VirtualNetwork by UUID label
+  kubernetes.core.k8s_info:
+    api_version: osac.openshift.io/v1alpha1
+    kind: VirtualNetwork
+    namespace: "{{ subnet.metadata.namespace }}"
+    label_selectors:
+      - "osac.openshift.io/virtualnetwork-uuid={{ vnet_uuid }}"
+  register: _parent_vnet_lookup
+
+- name: Validate parent VirtualNetwork lookup
+  ansible.builtin.assert:
+    that:
+      - _parent_vnet_lookup.resources | length == 1
+    fail_msg: >-
+      Expected exactly one parent VirtualNetwork with UUID '{{ vnet_uuid }}' in namespace
+      '{{ subnet.metadata.namespace }}', found {{ _parent_vnet_lookup.resources | length }}.
+      EVPN cleanup stopped before deleting shared resources.
+
+- name: Set parent VirtualNetwork name
+  ansible.builtin.set_fact:
+    vnet_name: "{{ _parent_vnet_lookup.resources[0].metadata.name }}"
+
+- name: Set shared CUDN lock identity
+  ansible.builtin.set_fact:
+    vnet_lock_name: "cudn-evpn-{{ vnet_uuid | hash('sha1') }}"
+    vnet_lock_namespace: "{{ subnet.metadata.namespace }}"
+    vnet_lock_holder: "{{ lookup('env', 'AWX_JOB_ID') | default(lookup('password', '/dev/null length=32'), true) }}"
+
+- name: Include get remote cluster kubeconfig
+  ansible.builtin.include_role:
+    name: osac.service.common
+    tasks_from: get_remote_cluster_kubeconfig
+
+- name: Ensure shared CUDN lock Lease exists
+  ansible.builtin.include_tasks: ensure_vnet_lock.yaml
+
+- name: Acquire shared CUDN teardown Lease
+  ansible.builtin.include_role:
+    name: osac.service.vnet_lock
+    tasks_from: acquire
+
+- name: Clean up Subnet resources while holding the VirtualNetwork lock
+  block:
+    - name: List Subnets in parent VirtualNetwork
+      kubernetes.core.k8s_info:
+        api_version: osac.openshift.io/v1alpha1
+        kind: Subnet
+        namespace: "{{ subnet.metadata.namespace }}"
+      register: _subnet_lookup
+
+    - name: Find sibling EVPN Subnets
+      ansible.builtin.set_fact:
+        cudn_evpn_sibling_subnets: >-
+          {{ _subnet_lookup.resources | default([])
+             | selectattr('spec.virtualNetwork', 'equalto', vnet_uuid)
+             | rejectattr('metadata.name', 'equalto', subnet_name)
+             | list }}
+
+    - name: Initialize sibling CUDN consumers
+      ansible.builtin.set_fact:
+        cudn_evpn_live_siblings: []
+
+    - name: List ComputeInstances in the management namespace
+      kubernetes.core.k8s_info:
+        api_version: osac.openshift.io/v1alpha1
+        kind: ComputeInstance
+        namespace: "{{ subnet.metadata.namespace }}"
+      register: _compute_instance_lookup
+
+    - name: Identify sibling Subnets referenced by ComputeInstances
+      ansible.builtin.set_fact:
+        _compute_instance_subnet_refs: >-
+          {{ _compute_instance_lookup.resources | default([])
+             | map(attribute='spec.networkAttachments', default=[])
+             | flatten
+             | map(attribute='subnetRef', default='')
+             | list }}
+        cudn_evpn_live_siblings: >-
+          {{ cudn_evpn_live_siblings + (cudn_evpn_sibling_subnets
+             | selectattr('metadata.name', 'in', _compute_instance_subnet_refs)
+             | list) }}
+
+    - name: Check for workload namespaces belonging to sibling Subnets
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+        api_version: v1
+        kind: Namespace
+        name: "{{ item.metadata.name }}"
+      register: _sibling_namespace_lookup
+      loop: "{{ cudn_evpn_sibling_subnets }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+
+    - name: Validate sibling workload Namespace ownership
+      ansible.builtin.assert:
+        that:
+          - >-
+            item.resources | default([]) | length == 0 or
+            (
+              (item.resources[0].metadata.labels | default({})).get('tenant', '') == tenant_id and
+              (item.resources[0].metadata.labels | default({})).get('virtual-network', '') == vnet_name and
+              (item.resources[0].metadata.annotations | default({})).get(
+                'osac.openshift.io/tenant', '') == tenant_id and
+              (item.resources[0].metadata.annotations | default({})).get(
+                'osac.openshift.io/owner-reference', '') == 'Subnet/' ~ item.item.metadata.name and
+              (
+                (item.resources[0].metadata.labels | default({})).get(
+                  'osac.openshift.io/virtualnetwork-uuid', '') == '' or
+                (item.resources[0].metadata.labels | default({})).get(
+                  'osac.openshift.io/virtualnetwork-uuid', '') == vnet_uuid
+              )
+            )
+        fail_msg: >-
+          Existing sibling Namespace '{{ item.item.metadata.name }}' does not match the tenant/Subnet
+          identity for VirtualNetwork '{{ vnet_name }}'. Refusing CUDN handoff or deletion.
+      loop: "{{ _sibling_namespace_lookup.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.metadata.name }}"
+
+    - name: Preserve CUDN for Subnets with workload namespaces
+      ansible.builtin.set_fact:
+        cudn_evpn_live_siblings: "{{ cudn_evpn_live_siblings + [item.item] }}"
+      when: item.resources | default([]) | length > 0
+      loop: "{{ _sibling_namespace_lookup.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.metadata.name }}"
+
+    - name: Read persisted CUDN owner from the shared Lease
+      kubernetes.core.k8s_info:
+        api_version: coordination.k8s.io/v1
+        kind: Lease
+        name: "{{ vnet_lock_name }}"
+        namespace: "{{ vnet_lock_namespace }}"
+      register: _cudn_owner_lease
+
+    - name: Read shared CUDN before owner handoff
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+        api_version: k8s.ovn.org/v1
+        kind: ClusterUserDefinedNetwork
+        name: "{{ vnet_name }}"
+      register: _existing_cudn
+
+    - name: Validate existing CUDN belongs to the parent VirtualNetwork
+      ansible.builtin.assert:
+        that:
+          - >-
+            _existing_cudn.resources | length == 0 or
+            (
+              (_existing_cudn.resources[0].metadata.annotations | default({})).get(
+                'osac.openshift.io/owner-reference', '') == 'VirtualNetwork/' ~ vnet_name and
+              (_existing_cudn.resources[0].metadata.annotations | default({})).get(
+                'osac.openshift.io/tenant', '') == tenant_id and
+              (
+                (
+                  (_existing_cudn.resources[0].metadata.annotations | default({})).get(
+                    'osac.openshift.io/virtualnetwork-uuid', '') == vnet_uuid and
+                  (_existing_cudn.resources[0].metadata.annotations | default({})).get(
+                    'osac.openshift.io/virtualnetwork-namespace', '') == subnet.metadata.namespace
+                ) or
+                (
+                  (_existing_cudn.resources[0].metadata.annotations | default({})).get(
+                    'osac.openshift.io/virtualnetwork-uuid', '') == '' and
+                  (_existing_cudn.resources[0].metadata.annotations | default({})).get(
+                    'osac.openshift.io/virtualnetwork-namespace', '') == ''
+                )
+              )
+            )
+        fail_msg: >-
+          A ClusterUserDefinedNetwork named '{{ vnet_name }}' exists but is not owned by
+          tenant '{{ tenant_id }}' and VirtualNetwork '{{ vnet_name }}'. Refusing to delete this shared resource.
+
+    - name: Resolve persisted CUDN owner before deletion
+      ansible.builtin.set_fact:
+        _cudn_owner_subnet_name: >-
+          {{ (_cudn_owner_lease.resources | default([]) | first | default({})).get('metadata', {})
+             .get('annotations', {}).get('osac.openshift.io/cudn-owner-subnet', '')
+             | default(
+                 ((_existing_cudn.resources | default([]) | first | default({})).get('metadata', {})
+                  .get('annotations', {})).get('osac.openshift.io/cudn-owner-subnet', ''), true
+               )
+             | default(_deleting_subnet_name, true) }}
+
+    - name: Preserve the active persisted CUDN owner as a live consumer
+      ansible.builtin.set_fact:
+        cudn_evpn_live_siblings: >-
+          {{ cudn_evpn_live_siblings + (cudn_evpn_sibling_subnets
+             | selectattr('metadata.name', 'equalto', _cudn_owner_subnet_name)
+             | list) }}
+
+    - name: Build unique live sibling Subnet names
+      ansible.builtin.set_fact:
+        cudn_evpn_live_sibling_names: >-
+          {{ cudn_evpn_live_siblings | map(attribute='metadata.name') | unique | list }}
+
+    - name: Determine whether the shared CUDN has live Subnet consumers
+      ansible.builtin.set_fact:
+        cudn_evpn_has_live_siblings: "{{ cudn_evpn_live_sibling_names | length > 0 }}"
+
+    - name: Initialize eligible CUDN owner successors
+      ansible.builtin.set_fact:
+        _cudn_evpn_owner_candidates: []
+
+    - name: Add active CUDN-enabled siblings as owner successors
+      ansible.builtin.set_fact:
+        _cudn_evpn_owner_candidates: "{{ _cudn_evpn_owner_candidates + [item] }}"
+      loop: >-
+        {{ cudn_evpn_sibling_subnets
+           | rejectattr('metadata.deletionTimestamp', 'defined') | list }}
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      when:
+        - (item.metadata.annotations | default({})).get('osac.openshift.io/skip-k8s-manager', '') != 'true'
+        - >-
+          (item.metadata.annotations | default({})).get('osac.openshift.io/k8s-cleanup-strategy', '') == 'cudn_evpn' or
+          (item.metadata.annotations | default({})).get('osac.openshift.io/k8s-implementation-strategy', '') == 'cudn_evpn'
+
+    - name: Select oldest eligible sibling for a CUDN owner handoff
+      ansible.builtin.set_fact:
+        _cudn_evpn_next_owner: >-
+          {{ _cudn_evpn_owner_candidates
+             | sort(attribute='metadata.name')
+             | sort(attribute='metadata.creationTimestamp')
+             | first | default({}) }}
+
+    - name: Validate live consumers fit the selected CUDN successor
+      ansible.builtin.assert:
+        that:
+          - >-
+            cudn_evpn_live_sibling_names
+            | difference([_cudn_evpn_next_owner.metadata.name])
+            | length == 0
+        fail_msg: >-
+          Shared CUDN '{{ vnet_name }}' still has consumers outside successor Subnet
+          '{{ _cudn_evpn_next_owner.metadata.name }}'. Refusing to change its subnet
+          while those sibling workloads remain.
+      when:
+        - _cudn_owner_subnet_name == _deleting_subnet_name
+        - (_cudn_evpn_next_owner | default({})).get('metadata', {}).get('name', '') | length > 0
+
+    - name: Preserve existing CUDN only when live consumers remain in its configured subnets
+      ansible.builtin.assert:
+        that:
+          - _existing_cudn.resources | default([]) | length == 1
+          - >-
+            (cudn_evpn_live_siblings | map(attribute='spec.ipv4Cidr') | list
+             | difference(
+                 (_existing_cudn.resources[0].spec.network.layer2.subnets | default([]))
+               ) | length == 0)
+        fail_msg: >-
+          Shared CUDN '{{ vnet_name }}' has live sibling consumers whose Subnet CIDRs are not
+          covered by its current spec. Refusing deletion because no eligible CUDN successor
+          can be promoted safely.
+      when:
+        - cudn_evpn_has_live_siblings
+        - not (_cudn_owner_subnet_name == _deleting_subnet_name and
+               (_cudn_evpn_next_owner | default({})).get('metadata', {}).get('name', '') | length > 0)
+
+    - name: Read fabric outputs for the selected CUDN successor
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ConfigMap
+        namespace: "{{ subnet.metadata.namespace }}"
+        name: "subnet-{{ _cudn_evpn_next_owner.metadata.name }}-fabric-output"
+      register: _cudn_next_owner_fabric_output
+      when:
+        - _cudn_owner_subnet_name == _deleting_subnet_name
+        - (_cudn_evpn_next_owner | default({})).get('metadata', {}).get('name', '') | length > 0
+
+    - name: Calculate the successor EVPN reserved range
+      ansible.builtin.set_fact:
+        _cudn_next_owner_subnet_cidr: "{{ _cudn_evpn_next_owner.spec.ipv4Cidr | default('') }}"
+        _cudn_next_owner_reserved_prefix: >-
+          {{ (_cudn_evpn_next_owner.spec.ipv4Cidr | ansible.utils.ipaddr('prefix') | int) + 2 }}
+        _cudn_next_owner_reserved_range: >-
+          {{ _cudn_evpn_next_owner.spec.ipv4Cidr | ansible.utils.ipaddr('network') }}/{{
+             (_cudn_evpn_next_owner.spec.ipv4Cidr | ansible.utils.ipaddr('prefix') | int) + 2 }}
+      when:
+        - _cudn_owner_subnet_name == _deleting_subnet_name
+        - (_cudn_evpn_next_owner | default({})).get('metadata', {}).get('name', '') | length > 0
+
+    - name: Validate successor fabric outputs for CUDN handoff
+      ansible.builtin.assert:
+        that:
+          - _cudn_next_owner_fabric_output.resources | default([]) | length == 1
+          - _cudn_next_owner_subnet_cidr | ansible.utils.ipaddr('version') == 4
+          - _cudn_next_owner_subnet_cidr | ansible.utils.ipaddr('network/prefix') == _cudn_next_owner_subnet_cidr
+          - _cudn_next_owner_subnet_cidr | ansible.utils.ipaddr('prefix') | int <= 28
+          - >-
+            (_cudn_next_owner_fabric_output.resources[0].data.l2_vni | default('') | string) is match('^[0-9]+$') and
+            (_cudn_next_owner_fabric_output.resources[0].data.l2_vni | int) >= 1 and
+            (_cudn_next_owner_fabric_output.resources[0].data.l2_vni | int) <= 16777215
+          - >-
+            (_cudn_next_owner_fabric_output.resources[0].data.l3_vni | default('') | string) is match('^[0-9]+$') and
+            (_cudn_next_owner_fabric_output.resources[0].data.l3_vni | int) >= 1 and
+            (_cudn_next_owner_fabric_output.resources[0].data.l3_vni | int) <= 16777215
+          - _cudn_next_owner_fabric_output.resources[0].data.fabric_reserved_range | default('') == _cudn_next_owner_reserved_range
+        fail_msg: >-
+          Successor Subnet '{{ _cudn_evpn_next_owner.metadata.name }}' has no valid Netris
+          fabric output for safe CUDN handoff. The current CUDN and namespace were left intact.
+      when:
+        - _cudn_owner_subnet_name == _deleting_subnet_name
+        - (_cudn_evpn_next_owner | default({})).get('metadata', {}).get('name', '') | length > 0
+
+    - name: Read successor workload Namespace before CUDN handoff
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+        api_version: v1
+        kind: Namespace
+        name: "{{ _cudn_evpn_next_owner.metadata.name }}"
+      register: _cudn_next_owner_namespace
+      when:
+        - _cudn_owner_subnet_name == _deleting_subnet_name
+        - (_cudn_evpn_next_owner | default({})).get('metadata', {}).get('name', '') | length > 0
+
+    - name: Validate successor workload Namespace ownership before handoff
+      ansible.builtin.assert:
+        that:
+          - >-
+            _cudn_next_owner_namespace.resources | default([]) | length == 0 or
+            (
+              (_cudn_next_owner_namespace.resources[0].metadata.labels | default({})).get('tenant', '') == tenant_id and
+              (_cudn_next_owner_namespace.resources[0].metadata.labels | default({})).get('virtual-network', '') == vnet_name and
+              (_cudn_next_owner_namespace.resources[0].metadata.annotations | default({})).get(
+                'osac.openshift.io/tenant', '') == tenant_id and
+              (_cudn_next_owner_namespace.resources[0].metadata.annotations | default({})).get(
+                'osac.openshift.io/owner-reference', '') == 'Subnet/' ~ _cudn_evpn_next_owner.metadata.name and
+              (
+                (_cudn_next_owner_namespace.resources[0].metadata.labels | default({})).get(
+                  'osac.openshift.io/virtualnetwork-uuid', '') == '' or
+                (_cudn_next_owner_namespace.resources[0].metadata.labels | default({})).get(
+                  'osac.openshift.io/virtualnetwork-uuid', '') == vnet_uuid
+              )
+            )
+        fail_msg: >-
+          Successor Namespace '{{ _cudn_evpn_next_owner.metadata.name }}' does not match the
+          tenant/Subnet identity for VirtualNetwork '{{ vnet_name }}'. Refusing CUDN handoff.
+      when:
+        - _cudn_owner_subnet_name == _deleting_subnet_name
+        - (_cudn_evpn_next_owner | default({})).get('metadata', {}).get('name', '') | length > 0
+
+    - name: Ensure successor workload Namespace exists before CUDN handoff
+      kubernetes.core.k8s:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ _cudn_evpn_next_owner.metadata.name }}"
+            labels:
+              tenant: "{{ tenant_id }}"
+              virtual-network: "{{ vnet_name }}"
+              osac.openshift.io/virtualnetwork-uuid: "{{ vnet_uuid }}"
+              k8s.ovn.org/primary-user-defined-network: ""
+              osac.openshift.io/k8s-manager: cudn_evpn
+            annotations:
+              osac.openshift.io/tenant: "{{ tenant_id }}"
+              osac.openshift.io/owner-reference: "Subnet/{{ _cudn_evpn_next_owner.metadata.name }}"
+      when:
+        - _cudn_owner_subnet_name == _deleting_subnet_name
+        - (_cudn_evpn_next_owner | default({})).get('metadata', {}).get('name', '') | length > 0
+
+    - name: Set CUDN template variables from the successor
+      ansible.builtin.set_fact:
+        subnet_name: "{{ _cudn_evpn_next_owner.metadata.name }}"
+        subnet_cidr: "{{ _cudn_next_owner_subnet_cidr }}"
+        fabric_reserved_range: "{{ _cudn_next_owner_reserved_range }}"
+        l2_vni: "{{ _cudn_next_owner_fabric_output.resources[0].data.l2_vni | int }}"
+        l3_vni: "{{ _cudn_next_owner_fabric_output.resources[0].data.l3_vni | int }}"
+      when:
+        - _cudn_owner_subnet_name == _deleting_subnet_name
+        - (_cudn_evpn_next_owner | default({})).get('metadata', {}).get('name', '') | length > 0
+
+    - name: Apply the CUDN for the successor before deleting its current owner
+      kubernetes.core.k8s:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+        state: present
+        definition: "{{ lookup('template', 'cudn.yaml.j2') | from_yaml }}"
+      when:
+        - _cudn_owner_subnet_name == _deleting_subnet_name
+        - (_cudn_evpn_next_owner | default({})).get('metadata', {}).get('name', '') | length > 0
+
+    - name: Wait for successor CUDN generation to be Ready before deleting its old owner
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+        api_version: k8s.ovn.org/v1
+        kind: ClusterUserDefinedNetwork
+        name: "{{ vnet_name }}"
+      register: _cudn_successor_status
+      until: >-
+        _cudn_successor_status.resources | default([]) | length > 0 and
+        (_cudn_successor_status.resources[0].status.conditions | default([])
+         | selectattr('type', 'equalto', 'Ready')
+         | selectattr('status', 'equalto', 'True')
+         | selectattr('observedGeneration', 'defined')
+         | selectattr('observedGeneration', 'ge', _cudn_successor_status.resources[0].metadata.generation)
+         | list | length > 0)
+      retries: 30
+      delay: 10
+      when:
+        - _cudn_owner_subnet_name == _deleting_subnet_name
+        - (_cudn_evpn_next_owner | default({})).get('metadata', {}).get('name', '') | length > 0
+
+    - name: Validate successor CUDN VRF status
+      ansible.builtin.assert:
+        that:
+          - _cudn_successor_status.resources[0].status.vrfName is defined
+          - _cudn_successor_status.resources[0].status.vrfName | string | trim | length > 0
+        fail_msg: >-
+          Successor CUDN '{{ vnet_name }}' did not report the applied generation Ready with a
+          status.vrfName. The current owner Namespace was left intact.
+      when:
+        - _cudn_owner_subnet_name == _deleting_subnet_name
+        - (_cudn_evpn_next_owner | default({})).get('metadata', {}).get('name', '') | length > 0
+
+    - name: Transfer persisted owner after successor CUDN is Ready
+      kubernetes.core.k8s:
+        state: patched
+        definition:
+          apiVersion: coordination.k8s.io/v1
+          kind: Lease
+          metadata:
+            name: "{{ vnet_lock_name }}"
+            namespace: "{{ vnet_lock_namespace }}"
+            annotations:
+              osac.openshift.io/cudn-owner-subnet: "{{ _cudn_evpn_next_owner.metadata.name }}"
+      when:
+        - _cudn_owner_subnet_name == _deleting_subnet_name
+        - (_cudn_evpn_next_owner | default({})).get('metadata', {}).get('name', '') | length > 0
+
+    - name: Add promoted successor to live CUDN consumers
+      ansible.builtin.set_fact:
+        cudn_evpn_live_siblings: >-
+          {{ cudn_evpn_live_siblings + [_cudn_evpn_next_owner]
+             if _cudn_owner_subnet_name == _deleting_subnet_name and
+                (_cudn_evpn_next_owner | default({})).get('metadata', {}).get('name', '') | length > 0
+             else cudn_evpn_live_siblings }}
+
+    - name: Refresh live CUDN sibling decision after successor promotion
+      ansible.builtin.set_fact:
+        cudn_evpn_live_sibling_names: >-
+          {{ cudn_evpn_live_siblings | map(attribute='metadata.name') | unique | list }}
+        cudn_evpn_has_live_siblings: "{{ cudn_evpn_live_siblings | length > 0 }}"
+
+    - name: Clear stale owner when no eligible successor exists
+      kubernetes.core.k8s:
+        state: patched
+        definition:
+          apiVersion: coordination.k8s.io/v1
+          kind: Lease
+          metadata:
+            name: "{{ vnet_lock_name }}"
+            namespace: "{{ vnet_lock_namespace }}"
+            annotations:
+              osac.openshift.io/cudn-owner-subnet: null
+      when:
+        - _cudn_owner_subnet_name == _deleting_subnet_name
+        - (_cudn_evpn_next_owner | default({})).get('metadata', {}).get('name', '') | length == 0
+
+    - name: Clear stale owner on the retained CUDN when no eligible successor exists
+      kubernetes.core.k8s:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+        state: patched
+        definition:
+          apiVersion: k8s.ovn.org/v1
+          kind: ClusterUserDefinedNetwork
+          metadata:
+            name: "{{ vnet_name }}"
+            annotations:
+              osac.openshift.io/cudn-owner-subnet: null
+      when:
+        - _cudn_owner_subnet_name == _deleting_subnet_name
+        - cudn_evpn_has_live_siblings
+        - _existing_cudn.resources | default([]) | length > 0
+        - (_cudn_evpn_next_owner | default({})).get('metadata', {}).get('name', '') | length == 0
+
+    - name: Display shared CUDN ownership decision
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'Preserving' if cudn_evpn_has_live_siblings else 'Deleting' }}
+          CUDN '{{ vnet_name }}'; {{ cudn_evpn_live_sibling_names | length }} sibling Subnet(s)
+          remain or retain workload namespaces or ComputeInstance references.
+
+    - name: Delete ClusterUserDefinedNetwork
+      kubernetes.core.k8s:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+        state: absent
+        api_version: k8s.ovn.org/v1
+        kind: ClusterUserDefinedNetwork
+        name: "{{ vnet_name }}"
+      when: not cudn_evpn_has_live_siblings
+
+    - name: Wait for CUDN deletion
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+        api_version: k8s.ovn.org/v1
+        kind: ClusterUserDefinedNetwork
+        name: "{{ vnet_name }}"
+      register: cudn_status
+      until: cudn_status.resources | default([]) | length == 0
+      retries: 30
+      delay: 10
+      when: not cudn_evpn_has_live_siblings
+
+    - name: Delete Subnet namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: "{{ _deleting_subnet_name }}"
+        wait: true
+        wait_timeout: 300
+
+    - name: Clear persisted CUDN owner after the final Subnet is removed
+      kubernetes.core.k8s:
+        state: patched
+        definition:
+          apiVersion: coordination.k8s.io/v1
+          kind: Lease
+          metadata:
+            name: "{{ vnet_lock_name }}"
+            namespace: "{{ vnet_lock_namespace }}"
+            annotations:
+              osac.openshift.io/cudn-owner-subnet: null
+      when: not cudn_evpn_has_live_siblings
+  always:
+    - name: Release shared CUDN teardown Lease
+      ansible.builtin.include_role:
+        name: osac.service.vnet_lock
+        tasks_from: release

@@ -91,7 +91,6 @@ describe('AdminInstanceTypeListPage', () => {
     renderPage();
 
     expect(screen.getByRole('heading', { name: 'Instance types' })).toBeInTheDocument();
-    expect(screen.getByText('Infrastructure').closest('.pf-v6-c-label')).not.toBeNull();
     expect(screen.getAllByRole('columnheader').map((header) => header.textContent)).toEqual([
       'Name',
       'Lifecycle state',

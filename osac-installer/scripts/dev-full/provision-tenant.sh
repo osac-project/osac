@@ -10,9 +10,9 @@
 #   - JIT provisioning creates the *user record* on first authenticated call, but it
 #     requires the DB tenant to already exist ("tenant '<t>' doesn't exist" otherwise).
 #   - The Tenants API is gRPC-only (not exposed over REST), so the DB tenant is
-#     created with a throwaway in-cluster grpcurl pod running as the 'admin'
-#     ServiceAccount (same admin identity seed-catalog.sh uses). This keeps the host
-#     dependency-free: only kubectl is needed, no host grpcurl.
+#     created with a throwaway in-cluster grpcurl pod. The Fulfillment token is
+#     stored in a temporary Secret and exposed to grpcurl through an environment
+#     reference. This keeps the host dependency-free: no host grpcurl is needed.
 #
 # What this does (all idempotent -- safe to re-run):
 #   1. Create the DB tenant via the private gRPC Tenants API. Creating the tenant
@@ -27,7 +27,7 @@
 #
 # Usage: provision-tenant.sh [osac-namespace]
 #   Env overrides: TENANT, TENANT_USERS (comma-separated), KC_NS, KC_REALM,
-#                  INTERNAL_SVC, INTERNAL_PORT, GRPCURL_IMAGE
+#                  INTERNAL_SVC, INTERNAL_PORT, GRPCURL_IMAGE, FULFILLMENT_CA_FILE
 
 set -euo pipefail
 
@@ -39,25 +39,105 @@ KC_REALM="${KC_REALM:-osac}"
 INTERNAL_SVC="${INTERNAL_SVC:-fulfillment-internal-api}"
 INTERNAL_PORT="${INTERNAL_PORT:-8001}"
 GRPCURL_IMAGE="${GRPCURL_IMAGE:-docker.io/fullstorydev/grpcurl:latest}"
+AUTH_CA_FILE="${FULFILLMENT_CA_FILE:-}"
+TEMP_AUTH_CA_FILE=""
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/../lib.sh"
 
 log()  { echo "[+] $*"; }
 warn() { echo "[!] $*" >&2; }
 
 log "Provisioning tenant '${TENANT}' in namespace '${NS}'..."
 
+PF_PID=""
+POD_NAME=""
+TOKEN_SECRET_NAME=""
+delete_token_secret() {
+  [[ -z "${TOKEN_SECRET_NAME}" ]] && return 0
+  if kubectl -n "${NS}" delete secret "${TOKEN_SECRET_NAME}" --ignore-not-found >/dev/null 2>&1; then
+    TOKEN_SECRET_NAME=""
+  else
+    return 1
+  fi
+}
+cleanup() {
+  if [[ -n "${POD_NAME}" ]]; then
+    kubectl -n "${NS}" delete pod "${POD_NAME}" --ignore-not-found >/dev/null 2>&1 || true
+  fi
+  if ! delete_token_secret; then
+    warn "failed to delete temporary token Secret ${TOKEN_SECRET_NAME} during exit cleanup"
+  fi
+  if [[ -n "${TEMP_AUTH_CA_FILE}" ]]; then
+    rm -f "${TEMP_AUTH_CA_FILE}"
+  fi
+  if [[ -n "${PF_PID}" ]]; then
+    kill "${PF_PID}" 2>/dev/null || true
+    wait "${PF_PID}" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+
 # ── 1. Create the DB tenant via the private gRPC Tenants API ────────────────────
-# Tenants is gRPC-only. Run grpcurl in-cluster as the 'admin' SA (an emergency
-# service account) so no host grpcurl is required. The admin token is minted
-# host-side and passed as a request header argument; -insecure skips TLS verify
-# against the internal CA. AlreadyExists is treated as success (re-run friendly).
-admin_token=$(kubectl -n "${NS}" create token admin)
+# Tenants is gRPC-only. Run grpcurl in-cluster so no host grpcurl is required.
+# Store the short-lived Fulfillment token in a temporary Secret; grpcurl expands
+# its Secret-backed environment variable at request time. -insecure preserves
+# the existing TLS behavior against the internal CA.
+if [[ -z "${AUTH_CA_FILE}" ]]; then
+  TEMP_AUTH_CA_FILE="$(mktemp)"
+  AUTH_CA_FILE="${TEMP_AUTH_CA_FILE}"
+  kubectl -n "${NS}" get configmap ca-bundle -o jsonpath='{.data.bundle\.pem}' > "${AUTH_CA_FILE}"
+  [[ -s "${AUTH_CA_FILE}" ]] || { warn "ca-bundle ConfigMap in ${NS} has no bundle.pem"; exit 1; }
+fi
+[[ -r "${AUTH_CA_FILE}" ]] || { warn "Fulfillment issuer CA bundle is not readable"; exit 1; }
+fulfillment_token="$(get_fulfillment_service_account_token "${NS}" --cacert "${AUTH_CA_FILE}")"
 pod="osac-provision-tenant-$$"
+POD_NAME="${pod}"
+TOKEN_SECRET_NAME="osac-provision-tenant-token-$$"
 kubectl -n "${NS}" delete pod "${pod}" --ignore-not-found >/dev/null 2>&1 || true
-kubectl -n "${NS}" run "${pod}" --restart=Never --image="${GRPCURL_IMAGE}" \
-  --command -- grpcurl -insecure \
-    -H "authorization: Bearer ${admin_token}" \
-    -d "{\"object\":{\"metadata\":{\"name\":\"${TENANT}\"}}}" \
-    "${INTERNAL_SVC}:${INTERNAL_PORT}" osac.private.v1.Tenants/Create >/dev/null
+kubectl -n "${NS}" delete secret "${TOKEN_SECRET_NAME}" --ignore-not-found >/dev/null 2>&1 || true
+printf '%s' "${fulfillment_token}" \
+  | kubectl -n "${NS}" create secret generic "${TOKEN_SECRET_NAME}" \
+      --from-file=token=/dev/stdin --dry-run=client -o yaml \
+  | kubectl -n "${NS}" apply -f - >/dev/null
+unset fulfillment_token
+export POD_NAME TOKEN_SECRET_NAME GRPCURL_IMAGE NS TENANT INTERNAL_SVC INTERNAL_PORT
+pod_manifest=$(python3 - <<'PY'
+import json
+import os
+
+namespace = os.environ["NS"]
+pod_name = os.environ["POD_NAME"]
+payload = {"object": {"metadata": {"name": os.environ["TENANT"]}}}
+container_args = [
+    "-expand-headers",
+    "-insecure",
+    "-H", "authorization: Bearer ${FULFILLMENT_TOKEN}",
+    "-d", json.dumps(payload),
+    f"{os.environ['INTERNAL_SVC']}:{os.environ['INTERNAL_PORT']}",
+    "osac.private.v1.Tenants/Create",
+]
+manifest = {
+    "apiVersion": "v1",
+    "kind": "Pod",
+    "metadata": {"name": pod_name, "namespace": namespace},
+    "spec": {
+        "restartPolicy": "Never",
+        "automountServiceAccountToken": False,
+        "containers": [{
+            "name": "grpcurl",
+            "image": os.environ["GRPCURL_IMAGE"],
+            "command": ["grpcurl"],
+            "args": container_args,
+            "env": [{"name": "FULFILLMENT_TOKEN", "valueFrom": {
+                "secretKeyRef": {"name": os.environ["TOKEN_SECRET_NAME"], "key": "token"},
+            }}],
+        }],
+    },
+}
+print(json.dumps(manifest))
+PY
+)
+printf '%s\n' "${pod_manifest}" | kubectl -n "${NS}" apply -f - >/dev/null
 
 # Wait for the one-shot pod to finish (Succeeded or Failed), then read its output.
 phase=""
@@ -68,6 +148,10 @@ for _ in $(seq 1 60); do
 done
 out=$(kubectl -n "${NS}" logs "${pod}" 2>/dev/null || true)
 kubectl -n "${NS}" delete pod "${pod}" --ignore-not-found >/dev/null 2>&1 || true
+POD_NAME=""
+if ! delete_token_secret; then
+  warn "failed to delete temporary token Secret ${TOKEN_SECRET_NAME}; exit cleanup will retry"
+fi
 
 if [[ "${phase}" == "Succeeded" ]]; then
   log "  tenant '${TENANT}' created (default network auto-provisioned)"
@@ -124,8 +208,7 @@ admin_pw=$(kubectl -n "${KC_NS}" get secret keycloak-admin-credentials \
   -o jsonpath='{.data.admin-password}' | base64 -d)
 
 kubectl -n "${KC_NS}" port-forward svc/keycloak 18443:443 >/dev/null 2>&1 &
-pf_pid=$!
-trap 'kill "${pf_pid}" 2>/dev/null || true; wait "${pf_pid}" 2>/dev/null || true' EXIT
+PF_PID=$!
 sleep 3
 
 KC="https://localhost:18443"

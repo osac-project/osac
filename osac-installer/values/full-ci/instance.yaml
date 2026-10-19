@@ -35,7 +35,10 @@ operator:
       key: token
   fulfillment:
     serverAddress: "fulfillment-internal-api:8001"
-    tokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    credentials:
+      secretName: fulfillment-controller-credentials
+      clientIdKey: client-id
+      clientSecretKey: client-secret
   controllers:
     tenant: true
     networking: true
@@ -72,8 +75,6 @@ service:
     # install-osac sets --set global.clusterDomain=$(DOMAIN).
     emergencyServiceAccounts:
     - admin
-    - osac-operator
-    - osac-operator-controller-manager
     - template-publisher
     - osac-metering
     controllerCredentials:
@@ -199,6 +200,9 @@ clusterVersions:
   - version: "4.22.0"
     image: "quay.io/openshift-release-dev/ocp-release:4.22.0-multi"
     default: true
+    diskImage:
+      name: rhcos-4-22
+      sourceRef: oci://quay.io/osac-project/rhcos:4.22.0
 
 # --- Hub Access ---
 hubAccess:

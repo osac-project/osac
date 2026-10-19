@@ -101,8 +101,10 @@ describe('SecurityGroupDetailPage', () => {
     expect(screen.getByRole('tab', { name: /Details/i })).toBeInTheDocument();
   });
 
-  it('displays inbound rules in SecurityGroupRulesTable on Inbound Rules tab', () => {
+  it('displays inbound rules in SecurityGroupRulesTable on Inbound Rules tab', async () => {
+    const user = userEvent.setup();
     renderPage();
+    await user.click(screen.getByRole('tab', { name: /Inbound Rules/i }));
 
     const tabPanel = within(screen.getByRole('tabpanel'));
     expect(tabPanel.getByText('Protocol')).toBeInTheDocument();
@@ -133,6 +135,7 @@ describe('SecurityGroupDetailPage', () => {
     it('removes the targeted ingress rule and keeps the rest', async () => {
       const user = userEvent.setup();
       renderPage();
+      await user.click(screen.getByRole('tab', { name: /Inbound Rules/i }));
 
       const tabPanel = within(screen.getByRole('tabpanel'));
       const deleteButtons = tabPanel.getAllByRole('button', { name: /^Delete$/i });
@@ -194,6 +197,7 @@ describe('SecurityGroupDetailPage', () => {
     it('closes the delete rule modal on Cancel', async () => {
       const user = userEvent.setup();
       renderPage();
+      await user.click(screen.getByRole('tab', { name: /Inbound Rules/i }));
 
       const tabPanel = within(screen.getByRole('tabpanel'));
       const deleteButtons = tabPanel.getAllByRole('button', { name: /^Delete$/i });

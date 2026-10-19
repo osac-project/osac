@@ -610,7 +610,16 @@ func (t *Tool) addOIDCUserToOrg(ctx context.Context, userID, username, tenantNam
 // username and password are credentials for a user in the ext realm.
 // Pass empty strings if login is expected to fail before reaching the login form.
 func (t *Tool) SimulateOIDCLogin(ctx context.Context, idpAlias, username, password string) (string, error) {
-	const callbackBase = "http://localhost"
+	return t.simulateOIDCLogin(ctx, "osac-cli", "http://localhost", "", idpAlias, username, password)
+}
+
+// SimulateMCPLogin obtains a user token for the deployed MCP resource using
+// the public development client and the same PKCE flow used by an MCP client.
+func (t *Tool) SimulateMCPLogin(ctx context.Context, resourceURL, username, password string) (string, error) {
+	return t.simulateOIDCLogin(ctx, "osac-mcp-client", "http://localhost:8091/callback", resourceURL, "", username, password)
+}
+
+func (t *Tool) simulateOIDCLogin(ctx context.Context, clientID, callbackBase, resourceURL, idpAlias, username, password string) (string, error) {
 
 	codeVerifier, codeChallenge, err := generatePKCE()
 	if err != nil {
@@ -643,19 +652,22 @@ func (t *Tool) SimulateOIDCLogin(ctx context.Context, idpAlias, username, passwo
 		form   url.Values
 	}
 
-	authURL := fmt.Sprintf(
-		"https://%s/realms/osac/protocol/openid-connect/auth?"+
-			"client_id=osac-cli&response_type=code"+
-			"&redirect_uri=%s&state=%s"+
-			"&kc_idp_hint=%s&scope=%s"+
-			"&code_challenge=%s&code_challenge_method=S256",
-		keycloakAddr,
-		url.QueryEscape(callbackBase),
-		url.QueryEscape("osac-it-"+idpAlias),
-		url.QueryEscape(idpAlias),
-		url.QueryEscape("openid organization"),
-		url.QueryEscape(codeChallenge),
-	)
+	params := url.Values{
+		"client_id":             {clientID},
+		"response_type":         {"code"},
+		"redirect_uri":          {callbackBase},
+		"state":                 {"osac-it-" + idpAlias},
+		"scope":                 {"openid organization"},
+		"code_challenge":        {codeChallenge},
+		"code_challenge_method": {"S256"},
+	}
+	if idpAlias != "" {
+		params.Set("kc_idp_hint", idpAlias)
+	}
+	if resourceURL != "" {
+		params.Set("resource", resourceURL)
+	}
+	authURL := fmt.Sprintf("https://%s/realms/osac/protocol/openid-connect/auth?%s", keycloakAddr, params.Encode())
 
 	next := hop{method: http.MethodGet, rawURL: authURL}
 	var redirectLog []string
@@ -717,7 +729,7 @@ func (t *Tool) SimulateOIDCLogin(ctx context.Context, idpAlias, username, passwo
 					return "", fmt.Errorf("hop %d: callback URL missing 'code' param (sanitized: %s)",
 						i, sanitizeURL(location))
 				}
-				return t.exchangeKCCode(ctx, httpClient, kcCode, callbackBase, codeVerifier)
+				return t.exchangeKCCode(ctx, httpClient, kcCode, callbackBase, codeVerifier, clientID, resourceURL)
 			}
 			next = hop{method: http.MethodGet, rawURL: location}
 
@@ -771,16 +783,20 @@ func sanitizeURL(rawURL string) string {
 }
 
 // exchangeKCCode exchanges a KC authorization code for a JWT access token.
-func (t *Tool) exchangeKCCode(ctx context.Context, httpClient *http.Client, code, redirectURI, codeVerifier string) (string, error) {
+func (t *Tool) exchangeKCCode(ctx context.Context, httpClient *http.Client, code, redirectURI, codeVerifier, clientID, resourceURL string) (string, error) {
 	tokenURL := fmt.Sprintf("https://%s/realms/osac/protocol/openid-connect/token", keycloakAddr)
+	params := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {redirectURI},
+		"client_id":     {clientID},
+		"code_verifier": {codeVerifier},
+	}
+	if resourceURL != "" {
+		params.Set("resource", resourceURL)
+	}
 	tokenReq, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL,
-		strings.NewReader(url.Values{
-			"grant_type":    {"authorization_code"},
-			"code":          {code},
-			"redirect_uri":  {redirectURI},
-			"client_id":     {"osac-cli"},
-			"code_verifier": {codeVerifier},
-		}.Encode()),
+		strings.NewReader(params.Encode()),
 	)
 	if err != nil {
 		return "", fmt.Errorf("failed to build token exchange request: %w", err)

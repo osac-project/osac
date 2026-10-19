@@ -259,7 +259,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			Expect(provisionCalled).To(BeTrue())
 		})
 
-		It("should block with ReasonNoManagerConfigured when no resolver is configured", func() {
+		It("should fail with ReasonNoManagerConfigured when no resolver is configured", func() {
 			// Without a resolver the implementation strategy is "", and the controller
 			// blocks rather than silently proceeding with an empty strategy.
 			reconciler.Resolver = nil
@@ -268,8 +268,8 @@ var _ = Describe("SecurityGroupReconciler", func() {
 
 			// Pass 1: adds finalizer, resolves parent VNet, resolves strategy to "" and blocks.
 			result, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(err).To(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
 
 			updated := &osacv1alpha1.SecurityGroup{}
 			Expect(fakeClient.Get(ctx, key, updated)).To(Succeed())
@@ -871,7 +871,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("netris"))
 		})
 
-		It("blocks with ReasonNoManagerConfigured when fabricManager is not set", func() {
+		It("fails with ReasonNoManagerConfigured when no manager is configured", func() {
 			disc, err := networkmanager.NewDiscovery(fakeClient, "test-namespace")
 			Expect(err).NotTo(HaveOccurred())
 			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
@@ -884,8 +884,8 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			key := types.NamespacedName{Name: sg.Name, Namespace: sg.Namespace}
 
 			result, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(err).To(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
 
 			updated := &osacv1alpha1.SecurityGroup{}
 			Expect(fakeClient.Get(ctx, key, updated)).To(Succeed())
@@ -913,7 +913,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			Expect(err).To(HaveOccurred())
 		})
 
-		It("blocks with ReasonNoManagerConfigured when the parent VirtualNetwork cannot be found", func() {
+		It("requeues when the parent VirtualNetwork cannot be found", func() {
 			disc, err := networkmanager.NewDiscovery(fakeClient, "test-namespace")
 			Expect(err).NotTo(HaveOccurred())
 			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
@@ -930,7 +930,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 
 			key := types.NamespacedName{Name: orphanSG.Name, Namespace: orphanSG.Namespace}
 
-			// Parent VN not found -> networkClassID is empty -> strategy is "" -> blocks
+			// Parent VN not found -> wait for the parent before resolving dispatch.
 			result, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
@@ -938,9 +938,8 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			updated := &osacv1alpha1.SecurityGroup{}
 			Expect(fakeClient.Get(ctx, key, updated)).To(Succeed())
 			cond := apimeta.FindStatusCondition(updated.Status.Conditions, osacv1alpha1.ConditionReady)
-			Expect(cond).NotTo(BeNil())
-			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonNoManagerConfigured))
+			Expect(cond).To(BeNil())
+			Expect(updated.Annotations).NotTo(HaveKey(osacImplementationStrategyAnnotation))
 		})
 
 		It("returns an error when multiple VirtualNetworks share the parent uuid label", func() {

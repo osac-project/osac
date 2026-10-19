@@ -46,7 +46,7 @@ const ClusterCatalogItemResources = ({
   const versionPolicyBehavior = catalogFieldPolicyBehavior(fields?.version);
   const nodeSetsPolicyBehavior = catalogFieldPolicyBehavior(nodeSetsPolicy);
 
-  const { clusterVersions, hostTypes } = resourceLookups;
+  const { clusterVersions, bareMetalInstanceTypes } = resourceLookups;
 
   const clusterVersion = useMemo(
     () => findClusterVersionForReference(clusterVersions, versionReference),
@@ -54,8 +54,12 @@ const ClusterCatalogItemResources = ({
   );
 
   const hostType = useMemo(
-    () => findHostTypeForReference(hostTypes, primaryNodeSet?.nodeSet.hostType),
-    [hostTypes, primaryNodeSet?.nodeSet.hostType],
+    () =>
+      findHostTypeForReference(
+        bareMetalInstanceTypes,
+        primaryNodeSet?.nodeSet.baremetalInstanceType,
+      ),
+    [bareMetalInstanceTypes, primaryNodeSet?.nodeSet.baremetalInstanceType],
   );
 
   const versionLabel = formatClusterCatalogVersionRow(fields, clusterVersion, versionReference);

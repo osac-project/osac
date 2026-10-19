@@ -37,6 +37,20 @@ on:
         type: boolean
         default: false
         required: false
+      skip_integration:
+        description: >-
+          Skip integration tests and publish anyway if unit/security (and,
+          unless also skipped, e2e) tests pass.
+        type: boolean
+        default: false
+        required: false
+      skip_unit:
+        description: >-
+          Skip unit tests and publish anyway if security (and, unless
+          also skipped, integration/e2e) tests pass.
+        type: boolean
+        default: false
+        required: false
 
 concurrency:
   # Keyed off the chosen version so two different, unrelated releases can
@@ -79,8 +93,11 @@ jobs:
     secrets:
       OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
       BUF_TOKEN: ${{ secrets.BUF_TOKEN }}
+      KONFLUX_SA_TOKEN: ${{ secrets.KONFLUX_SA_TOKEN }}
     with:
       mode: release
       release_version: ${{ github.event.inputs.release_version }}
       component_versions: ${{ github.event.inputs.component_versions }}
       skip_e2e: ${{ github.event.inputs.skip_e2e == 'true' }}
+      skip_integration: ${{ github.event.inputs.skip_integration == 'true' }}
+      skip_unit: ${{ github.event.inputs.skip_unit == 'true' }}

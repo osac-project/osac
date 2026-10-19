@@ -26,6 +26,13 @@ global:
     k8sManager: k8s_only
     netris:
       controllerUrl: ""
+      # Verify the Netris HTTPS certificate. Set false only for trusted
+      # non-production endpoints with self-signed certificates.
+      validateCerts: true
+      # Optional customer-created ConfigMap in the AAP namespace. The
+      # ConfigMap must contain the Netris CA chain under bundle.pem.
+      caBundle:
+        configMap: ""
       credentials:
         username: ""
         externalSecret: true
@@ -50,6 +57,16 @@ operatorCrds:
 # OSAC Operator
 # ---------------------
 operator:
+  # Admin onboarding inventory for Phase 1 Netris Ethernet east-west domains.
+  # Keys must exactly match Netris hostnames; values are BareMetalInstanceType
+  # IDs from the private API. Empty means no inventory ConfigMap is created.
+  # Configure spec.fabric_bindings.ethernet_ew on each referenced type through
+  # the private API (for example, netris: "42" for a Netris template ID).
+  fabricDomainInventory: {}
+  # fabricDomainInventory:
+  #   gpu-01.example.com: "gpu-bmit-id"
+  #   gpu-02.example.com: "gpu-bmit-id"
+
   image:
     repository: ghcr.io/osac-project/osac-operator
     # Production: pin to a specific SHA or release tag.
@@ -98,8 +115,12 @@ operator:
     # Internal gRPC address — must use the internal Envoy listener that
     # routes both public and private API methods.
     serverAddress: "fulfillment-internal-api:8001"
-    # Path to the ServiceAccount token file used for authentication.
-    tokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    # osac-infra provisions this for bundled Keycloak; external Keycloak setups
+    # must provide a matching Secret.
+    credentials:
+      secretName: fulfillment-controller-credentials
+      clientIdKey: client-id
+      clientSecretKey: client-secret
 
   # Enable/disable individual controllers. When all are true (default),
   # the operator manages all resource types. Set to false to disable

@@ -241,6 +241,9 @@ func (t *task) updateLifecycle(ctx context.Context) error {
 		if err := t.ensureVaultNamespace(ctx); err != nil {
 			return err
 		}
+		if t.tenant.GetStatus().GetState() == privatev1.TenantState_TENANT_STATE_FAILED {
+			return nil
+		}
 		if err := t.ensureDefaultNetworking(ctx); err != nil {
 			return err
 		}
@@ -286,6 +289,11 @@ func (t *task) syncToIDP(ctx context.Context) error {
 	// must be provisioned first.
 	if err := t.ensureVaultNamespace(ctx); err != nil {
 		return err
+	}
+	// If vault is enabled and provisioning failed, the condition is FALSE and status will be persisted.
+	// Skip break-glass secret persistence since it requires vault.
+	if t.r.vaultLifecycle != nil && !t.isConditionTrue(privatev1.TenantConditionType_TENANT_CONDITION_TYPE_VAULT_READY) {
+		return nil
 	}
 
 	if err := t.persistBreakGlassSecret(ctx); err != nil {
@@ -734,7 +742,10 @@ func (t *task) ensureVaultNamespace(ctx context.Context) error {
 			slog.String("tenant_name", tenantName),
 			slog.Any("error", err),
 		)
-		return fmt.Errorf("failed to provision vault namespace: %w", err)
+
+		t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+			"ProvisionFailed", fmt.Sprintf("Failed to provision vault namespace: %v", err))
+		return nil
 	}
 
 	t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_TRUE,

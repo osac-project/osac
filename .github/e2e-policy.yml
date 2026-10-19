@@ -1,0 +1,41 @@
+# Which full-install E2E suites a change needs. Read by e2e-pr.yml (pull requests) and e2e-queue.yml (merge queue)
+# through osac-ci; the path filters are the shared .github/filters/ci-filters.yml. e2e-pr.yml reads this file from the
+# default branch, never from the pull request, so a pull request cannot change which suites its own change needs.
+#
+# A suite is needed when ALL of its `filters` hold and at least ONE of its `filters_any` holds, so a suite for one area
+# (networking, say) has filters that only that area matches and does not run for any other change. `suite` is the id
+# e2e-suite.yml uses to pick the workflow (e2e-<suite>-full-install.yml); `check` is the name of the suite's line on the
+# pull request, which follows the suite's job while it waits, runs and ends. See .github/CI.md for adding a suite.
+version: 1
+repo: osac-project/osac
+
+path_filters:
+  mode: enforce
+  file: filters/ci-filters.yml
+
+jobs:
+  e2e-vmaas:
+    kind: e2e
+    check: "E2E / VMaaS Full Install"
+    suite: vmaas
+    filters: [vmaas-outside-known-safe]
+    filters_any: [e2e-code, e2e-suite]
+  e2e-caas:
+    kind: e2e
+    check: "E2E / CaaS Full Install"
+    suite: caas
+    filters: [caas-outside-known-safe]
+    filters_any: [e2e-code, e2e-suite]
+  e2e-bmaas:
+    kind: e2e
+    check: "E2E / BMaaS Full Install"
+    suite: bmaas
+    filters: [bmaas-outside-known-safe]
+    filters_any: [e2e-code, e2e-suite]
+  # A suite that is only started by hand (the checkbox in the comment of the pull request): a real Netris lab, slow and
+  # expensive. It is listed there, never chosen by the decision, and not part of what the E2E check waits for.
+  e2e-netris:
+    kind: e2e
+    check: "E2E / BMaaS Netris Full Install"
+    suite: netris
+    manual_only: true

@@ -97,7 +97,6 @@ export const VmListPage = () => {
   return (
     <ListPage
       title={t('Virtual machines')}
-      label={t('Services')}
       description={t('View and filter your virtual machines.')}
       error={error}
       actions={<CreateButton to="/vms/create">{t('Create virtual machine')}</CreateButton>}

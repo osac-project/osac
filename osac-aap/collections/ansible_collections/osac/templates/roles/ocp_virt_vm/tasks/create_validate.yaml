@@ -41,55 +41,6 @@
       from your own registry (for example a golden image built for your environment).
   when: guest_os_family == 'windows'
 
-- name: Read user-data secret and extract password (Windows)
-  no_log: true
-  when:
-    - guest_os_family == 'windows'
-    - vm_user_data_secret_ref | length > 0
-  block:
-    - name: Fetch user-data secret from CR namespace
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Secret
-        name: "{{ vm_user_data_secret_ref }}"
-        namespace: "{{ compute_instance.metadata.namespace }}"
-      register: _user_data_secret_result
-
-    - name: Parse user-data and extract password
-      ansible.builtin.set_fact:
-        vm_sysprep_admin_password: >-
-          {{ (_user_data_secret_result.resources[0].data.userdata
-              | b64decode
-              | regex_replace('^#cloud-config\n', '')
-              | from_yaml).password | default('', true) }}
-      when:
-        - _user_data_secret_result.resources | length > 0
-        - _user_data_secret_result.resources[0].data.userdata is defined
-
-- name: Require vm_sysprep_admin_password when sysprep is enabled (Windows)
-  ansible.builtin.assert:
-    that:
-      - vm_sysprep_admin_password | length >= 8
-    fail_msg: >-
-      vm_sysprep_admin_password must be set to a value of at least 8 characters
-      when guest_os_family is 'windows' and vm_enable_sysprep is true.
-      No default password is provided — the caller must supply one.
-  when:
-    - guest_os_family == 'windows'
-    - vm_enable_sysprep | bool
-
-- name: Extract VM hostname from ComputeInstance metadata (Windows NetBIOS limit)
-  ansible.builtin.set_fact:
-    vm_hostname: "{{ compute_instance.metadata.name[:15] }}"
-  when: guest_os_family == 'windows'
-
-- name: Log hostname truncation warning (Windows)
-  ansible.builtin.debug:
-    msg: "WARNING: ComputeInstance name '{{ compute_instance.metadata.name }}' truncated to '{{ vm_hostname }}' for Windows hostname (15 char limit)"
-  when:
-    - guest_os_family == 'windows'
-    - compute_instance.metadata.name | length > 15
-
 - name: Validate exposed_ports format
   ansible.builtin.assert:
     that:

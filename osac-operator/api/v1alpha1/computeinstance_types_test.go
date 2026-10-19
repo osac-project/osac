@@ -180,11 +180,10 @@ var _ = Describe("ComputeInstance", func() {
 	})
 
 	Describe("PrimarySubnetRef", func() {
-		It("should return the first networkAttachments subnet when set", func() {
+		It("should return the sole networkAttachments subnet when set", func() {
 			spec := v1alpha1.ComputeInstanceSpec{
 				NetworkAttachments: []v1alpha1.ComputeNetworkAttachment{
 					{SubnetRef: "subnet-A", SecurityGroupRefs: []string{"sg-1"}},
-					{SubnetRef: "subnet-B", SecurityGroupRefs: []string{"sg-2"}},
 				},
 			}
 
@@ -221,30 +220,6 @@ var _ = Describe("ComputeInstance", func() {
 			Expect(spec.NetworkAttachments).To(HaveLen(1))
 			Expect(spec.NetworkAttachments[0].SubnetRef).To(Equal("subnet-A"))
 			Expect(spec.NetworkAttachments[0].SecurityGroupRefs).To(Equal([]string{"sg-1", "sg-2"}))
-		})
-
-		It("should support multiple network attachments", func() {
-			spec := v1alpha1.ComputeInstanceSpec{
-				TemplateID: "test-template",
-				Image: v1alpha1.ImageSpec{
-					SourceType: v1alpha1.ImageSourceTypeRegistry,
-					SourceRef:  "test-image:latest",
-				},
-				VCPUs:       2,
-				MemoryGiB:   4,
-				BootDisk:    v1alpha1.DiskSpec{SizeGiB: 10, StorageTier: "standard"},
-				RunStrategy: v1alpha1.RunStrategyAlways,
-				NetworkAttachments: []v1alpha1.ComputeNetworkAttachment{
-					{SubnetRef: "subnet-A", SecurityGroupRefs: []string{"web-sg"}},
-					{SubnetRef: "subnet-B", SecurityGroupRefs: []string{"db-sg"}},
-					{SubnetRef: "subnet-C", SecurityGroupRefs: []string{"mon-sg"}},
-				},
-			}
-
-			Expect(spec.NetworkAttachments).To(HaveLen(3))
-			Expect(spec.NetworkAttachments[0].SubnetRef).To(Equal("subnet-A"))
-			Expect(spec.NetworkAttachments[1].SubnetRef).To(Equal("subnet-B"))
-			Expect(spec.NetworkAttachments[2].SubnetRef).To(Equal("subnet-C"))
 		})
 
 		It("should support network attachment without security groups", func() {

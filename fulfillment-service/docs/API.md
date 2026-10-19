@@ -203,10 +203,14 @@ A name remains reserved while the object exists, including while deletion is pen
 
 Once an object is created, its `metadata.name` cannot be changed. For services that expose `Update`,
 requests that include `metadata.name` in the field mask are accepted only if the value is identical
-to the existing name. The public networking services `VirtualNetworks`, `Subnets`, `SecurityGroups`,
-`ExternalIPs`, `ExternalIPAttachments`, and `NATGateways` are intentionally create/read/delete-only:
-their public APIs do not declare `Update` or a REST `PATCH` route. Their private counterparts retain
-`Update` for controller status and feedback.
+to the existing name. The public networking services `VirtualNetworks`, `Subnets`, `ExternalIPs`,
+`ExternalIPAttachments`, and `NATGateways` remain create/read/delete-only. `SecurityGroups` has a
+temporary OSAC-5679 exception: its public `Update` operation replaces the complete ingress and egress
+rule lists, while preserving the ID, name, parent VirtualNetwork, metadata, and status. The public
+server fixes the field mask to those two rule lists; callers cannot use this operation to update
+other networking fields. This is a scoped extension to the immutable target contract in the
+OSAC-1433 unified networking design. Private APIs retain their separate update operations for
+controller status and feedback.
 
 #### Error responses
 
@@ -216,7 +220,7 @@ their public APIs do not declare `Update` or a REST `PATCH` route. Their private
 | Name fails RFC 1123 format | `InvalidArgument` | Validation error on `metadata.name` (protovalidate) |
 | Name already taken in scope | `AlreadyExists` | `virtual network 'prod-net' already exists` |
 | Update attempts to change name on an update-capable service | `InvalidArgument` | `field 'metadata.name' is immutable` |
-| Update attempt on a public networking service | `Unimplemented` | The public service has no `Update` method |
+| Update attempt on a public networking service without update support | `Unimplemented` | The public service has no `Update` method |
 | Singleton or single-default invariant (for example a second non-deleted `NetworkClass`) | `FailedPrecondition` | `only one NetworkClass per deployment is allowed (existing NetworkClass id '...')` |
 
 Not every unique-index violation is `AlreadyExists`. Ordinary per-object name uniqueness stays

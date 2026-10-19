@@ -55,6 +55,16 @@ var _ = Describe("Context", func() {
 		Expect(TenantFromContext(ctx)).To(Equal("my-tenant"))
 	})
 
+	It("Returns empty string when no project in context", func() {
+		ctx := context.Background()
+		Expect(ProjectFromContext(ctx)).To(BeEmpty())
+	})
+
+	It("Returns the project stored by ProjectIntoContext", func() {
+		ctx := ProjectIntoContext(context.Background(), "my-project")
+		Expect(ProjectFromContext(ctx)).To(Equal("my-project"))
+	})
+
 	Describe("PackageNames", func() {
 		It("Returns only public package names when private is disabled", func() {
 			tmp, err := os.MkdirTemp("", "*.test")

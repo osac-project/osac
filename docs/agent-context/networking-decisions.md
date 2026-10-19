@@ -53,7 +53,13 @@ superseded or extended design explicitly.
 6. **Create/read/delete operations:** Networking specifications and metadata are
    immutable after creation. Read means List/Get. Replacement requires delete
    and recreate under dependency guards. Internal status/condition updates are
-   permitted; they do not create a tenant Update/Patch API.
+   permitted; they do not create a tenant Update/Patch API. The temporary
+   OSAC-5679 exception exposes `SecurityGroups.Update` for replacing the full
+   ingress and egress rule lists only; the public server fixes the update mask
+   so the group ID, name, parent VirtualNetwork, metadata, and status remain
+   unchanged. This is a scoped extension to the immutable target contract in
+   the OSAC-1433 unified networking design. Provider-side rule reconciliation
+   limitations remain tracked separately in OSAC-4888.
 7. **One tenant attachment:** Each VM, bare-metal instance, or cluster has at most
    one tenant network attachment. Its networking is fixed at creation. Preserve
    the resource-specific message types and compatibility rules below.
@@ -84,6 +90,12 @@ superseded or extended design explicitly.
 | Cluster | `network_attachment`, ClusterNetworkAttachment: subnet, security groups | Singular; no primary field |
 | BaremetalInstance | `network_attachments`, BareMetalNetworkAttachment: subnet, security groups, interface, optional primary | Maximum one entry; primary omitted or true accepted, false rejected |
 
+VMaaS reports per-attachment Subnet and assigned IPv4 details through
+`ComputeInstanceStatus.compute_network_attachment_statuses`, with `subnet_ref`
+and `ip_address`. The current single-attachment boundary permits at most one
+status entry; KubeVirt feedback population is tracked by
+[OSAC-2479](https://redhat.atlassian.net/browse/OSAC-2479).
+
 An omitted attachment requests tenant defaults; a supplied attachment resolves
 missing fields individually. Consult the unified/default designs for validation
 of tenant ownership, subnet/security-group VirtualNetwork alignment, readiness,
@@ -102,3 +114,20 @@ orphaned ExternalIPs through `osac.openshift.io/auto-created-for`, as specified
 by the unified design. Manually created external resources and tenant-shared
 default networking persist when a workload is deleted. Follow the full design's
 reverse-reference guards when deleting shared resources or replacing NetworkClass.
+
+## AgentlessNet ExternalIP implementation status
+
+The OSAC-6307 AgentlessNet v1 implementation supplies the resolved ExternalIP
+pool context to AAP. AAP reserves the UID-owned address and returns it in the
+successful `external_ip.allocate` job artifact at `osac_result.data.address`.
+The operator validates the current job result and pool, then publishes the
+address in `ExternalIP.status.address`; AAP does not query the ExternalIPPool
+or write the allocated-address annotation for this v1 flow. For both allocation
+and release, it validates the result against the resource and pool snapshots in
+the same AAP job's submitted `extra_vars`. Release continues to use the v1
+identity envelope with empty `data`.
+
+This implementation updates the allocation handoff in the accepted unified
+networking design. The contract amendment is to follow the deployed AgentlessNet
+ExternalIP E2E validation tracked with OSAC-6307. Unversioned Netris continues
+using its existing annotation handoff until its contract-adoption work is done.

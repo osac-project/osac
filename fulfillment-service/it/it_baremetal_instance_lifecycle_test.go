@@ -64,6 +64,55 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		bareMetalInstanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
 		diskImagesClient = privatev1.NewDiskImagesClient(tool.InternalView().AdminConn())
 
+		// Create BareMetalInstanceType before the template so the template can
+		// provide the effective type for catalog-based instance creation.
+		instanceTypeResp, err := bareMetalInstanceTypesClient.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceType_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   fmt.Sprintf("test-instance-type-%s", uuid.New()[24:32]),
+					Tenant: auth.SharedTenant,
+				}.Build(),
+				Spec: privatev1.BareMetalInstanceTypeSpec_builder{
+					Hardware: privatev1.BareMetalHardwareSpec_builder{
+						Cpu: privatev1.BareMetalCPUSpec_builder{
+							Cores:          4,
+							Architecture:   "x86_64",
+							ThreadsPerCore: 2,
+						}.Build(),
+						Memory: privatev1.BareMetalMemorySpec_builder{
+							TotalGb: 16,
+						}.Build(),
+						NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+							privatev1.BareMetalNetworkPortSpec_builder{
+								Name:  "data-0",
+								Role:  "fabric",
+								Type:  "Ethernet",
+								Speed: "25Gbps",
+							}.Build(),
+						},
+					}.Build(),
+					HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
+						MatchLabels: map[string]string{
+							"osac.openshift.io/host-type": "compute",
+						},
+					}.Build(),
+					Description: "Test bare metal instance type for integration tests.",
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		instanceTypeId = instanceTypeResp.GetObject().GetId()
+		DeferCleanup(func(ctx context.Context) {
+			_, err := bareMetalInstanceTypesClient.Delete(ctx, privatev1.BareMetalInstanceTypesDeleteRequest_builder{
+				Id: instanceTypeId,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		// Lifecycle Creates omit network_attachments and use shared catalog items without
+		// network field policies; hard-fail defaulting needs a tenant-default Subnet/SG.
+		ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
+
 		// Create BareMetalInstanceTemplate with an explicit ID that matches the BMFO CRD
 		// validation pattern (^[a-zA-Z_][a-zA-Z0-9._]*$). Auto-generated UUIDs start with
 		// a digit and are rejected by the CRD when the controller creates the CR.
@@ -74,6 +123,10 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Description: "Template for bare metal instance lifecycle test.",
 				Metadata: privatev1.Metadata_builder{
 					Name: fmt.Sprintf("test-template-%s", uuid.New()[24:32]),
+				}.Build(),
+				InstanceType: privatev1.BareMetalInstanceTypeReference_builder{
+					Id:     instanceTypeId,
+					Shared: true,
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -130,49 +183,6 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		// Create BareMetalInstanceType for the tests
-		instanceTypeResp, err := bareMetalInstanceTypesClient.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
-			Object: privatev1.BareMetalInstanceType_builder{
-				Metadata: privatev1.Metadata_builder{
-					Name:   fmt.Sprintf("test-instance-type-%s", uuid.New()[24:32]),
-					Tenant: auth.SharedTenant,
-				}.Build(),
-				Spec: privatev1.BareMetalInstanceTypeSpec_builder{
-					Hardware: privatev1.BareMetalHardwareSpec_builder{
-						Cpu: privatev1.BareMetalCPUSpec_builder{
-							Cores:          4,
-							Architecture:   "x86_64",
-							ThreadsPerCore: 2,
-						}.Build(),
-						Memory: privatev1.BareMetalMemorySpec_builder{
-							TotalGb: 16,
-						}.Build(),
-						NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
-							privatev1.BareMetalNetworkPortSpec_builder{
-								Name:  "data-0",
-								Role:  "fabric",
-								Type:  "Ethernet",
-								Speed: "25Gbps",
-							}.Build(),
-						},
-					}.Build(),
-					HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
-						MatchLabels: map[string]string{
-							"osac.openshift.io/host-type": "compute",
-						},
-					}.Build(),
-					Description: "Test bare metal instance type for integration tests.",
-				}.Build(),
-			}.Build(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		instanceTypeId = instanceTypeResp.GetObject().GetId()
-		DeferCleanup(func(ctx context.Context) {
-			_, err := bareMetalInstanceTypesClient.Delete(ctx, privatev1.BareMetalInstanceTypesDeleteRequest_builder{
-				Id: instanceTypeId,
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		})
 	})
 
 	It("Creates a BareMetalInstance and verifies fields", func(ctx context.Context) {
@@ -268,7 +278,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 	})
 
 	It("rejects public updates that change network attachments", func(ctx context.Context) {
-		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		// NetworkClass is a deployment singleton. Reuse the tenant-default subnet
+		// and security group instead of creating a second NetworkClass.
+		network := getTenantDefaultNetworkFixture(ctx, usersGroup, "")
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
 				Metadata: publicv1.Metadata_builder{
@@ -326,6 +338,20 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		networkClassesClient := privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
 		virtualNetworksClient := privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn())
 		subnetsClient := privatev1.NewSubnetsClient(tool.InternalView().AdminConn())
+		securityGroupsClient := privatev1.NewSecurityGroupsClient(tool.InternalView().AdminConn())
+		// NetworkClass is a deployment singleton. Remove the fabric-backed default
+		// class created by BeforeEach before creating the k8s-only class needed by
+		// this validation case. The next spec will recreate the default fixture.
+		listedClasses, err := networkClassesClient.List(ctx, privatev1.NetworkClassesListRequest_builder{
+			Filter: new("!has(this.metadata.deletion_timestamp)"),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(listedClasses.GetItems()).To(HaveLen(1))
+		_, err = networkClassesClient.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
+			Id: listedClasses.GetItems()[0].GetId(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
 		// Create a k8s-only NetworkClass (no fabric_manager):
 		ncResp, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 			Object: privatev1.NetworkClass_builder{
@@ -415,6 +441,44 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
+		securityGroupID := fmt.Sprintf("test-security-group-%s", uuid.New())
+		_, err = securityGroupsClient.Create(ctx, privatev1.SecurityGroupsCreateRequest_builder{
+			Object: privatev1.SecurityGroup_builder{
+				Id: securityGroupID,
+				Metadata: privatev1.Metadata_builder{
+					Name:   fmt.Sprintf("test-security-group-%s", uuid.New()[24:32]),
+					Tenant: usersGroup,
+				}.Build(),
+				Spec: privatev1.SecurityGroupSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkId}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func(ctx context.Context) {
+			_, err := securityGroupsClient.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{Id: securityGroupID}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
+		Eventually(func(g Gomega) {
+			resp, err := securityGroupsClient.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: securityGroupID}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(resp.GetObject().GetStatus().GetState()).To(Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING))
+		}, time.Minute, time.Second).Should(Succeed())
+		groupResp, err := securityGroupsClient.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: securityGroupID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		group := groupResp.GetObject()
+		group.SetStatus(privatev1.SecurityGroupStatus_builder{State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY}.Build())
+		_, err = securityGroupsClient.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{
+			Object:     group,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Eventually(func(g Gomega) {
+			resp, err := securityGroupsClient.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: securityGroupID}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(resp.GetObject().GetStatus().GetState()).To(Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY))
+		}, time.Minute, time.Second).Should(Succeed())
+
 		_, err = bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
 				Metadata: publicv1.Metadata_builder{
@@ -427,6 +491,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					NetworkAttachments: []*publicv1.BareMetalNetworkAttachment{
 						publicv1.BareMetalNetworkAttachment_builder{
 							Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),
+							SecurityGroups: []*publicv1.SecurityGroupLocalReference{
+								publicv1.SecurityGroupLocalReference_builder{Id: securityGroupID}.Build(),
+							},
 						}.Build(),
 					},
 				}.Build(),

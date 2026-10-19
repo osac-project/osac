@@ -1,0 +1,141 @@
+---
+# Runs the full-install E2E for a pull request, and keeps the pull request's one `E2E` check up to date from the first
+# push to the result. The E2E takes about 100 minutes of a real cluster, so it starts only when it is allowed to: a person
+# with write access (or CodeRabbit, for a branch of this repository, never for a fork) approved the exact head commit, no
+# cheap check has failed on it, and the change touches something an E2E suite tests. It does not wait for CI.
+#
+# The decision, the `E2E` check and its suite lines, and the housekeeping (auto-merge, the relay run, superseded Jira
+# check runs) are the shared workflows of osac-ci, pinned by commit with the release tag in a comment; the rules they
+# apply are in osac-ci's docs/RULES.md and policy/flow.yml. What stays here: the triggers, which GitHub requires in the
+# repository, and the suite jobs, because a `uses:` cannot be dynamic. Which suites a change needs is
+# .github/e2e-policy.yml (suite ids = the job names below), read from the default branch, never from the pull request.
+# See .github/CI.md for adding a suite.
+#
+# A member of the organization can also start a suite by hand (osac-ci docs/RULES.md, "Starting suites by hand"): by
+# commenting `/test` (the suites the change needs) or `/test vmaas caas` on the pull request, or by checking a box in the
+# comment the decision keeps there. Both wake this workflow through the issue_comment trigger below.
+#
+# This workflow starts when CI starts or finishes, and when a review is submitted or dismissed or the pull request
+# changes between draft and ready (e2e-review-relay.yml). It runs from the default branch and checks out nothing of the
+# pull request, so a fork pull request is handled like any other. The suites it calls run the pull request's code, on the
+# commit that was approved and nothing else.
+name: E2E for pull requests
+# The decision cancels the E2E of older commits by reading run titles: keep this exact format.
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch' && format('E2E #{0} (started by hand)', inputs.number) ||
+  github.event_name == 'issue_comment' && format('E2E #{0} (suites asked for in a comment)', github.event.issue.number) ||
+  format('E2E {0}:{1} @ {2}', github.event.workflow_run.head_repository.full_name, github.event.workflow_run.head_branch,
+  github.event.workflow_run.head_sha) }}
+
+on:  # zizmor: ignore[dangerous-triggers] -- no pull request code is checked out; the suites run the approved commit
+  workflow_run:
+    workflows: ["CI", "E2E review relay"]  # keep in step with ci-workflow-name and relay-workflow-name of the decision
+    types: [requested, completed]
+  issue_comment:
+    types: [edited, created]  # the checkboxes of the control comment, and a /test comment (any other comment is skipped)
+  workflow_dispatch:
+    inputs:
+      number:
+        description: Pull request number
+        required: true
+
+permissions: {}
+
+jobs:
+  decide:
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-decide.yml@639e33f549c91a5c1e8b4ad55256b69f028a42b8  # v1.2.4
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+      actions: write
+    secrets:
+      OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
+
+  track:
+    needs: decide
+    if: needs.decide.outputs.start == 'true'
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-track.yml@639e33f549c91a5c1e8b4ad55256b69f028a42b8  # v1.2.4
+    permissions:
+      contents: read
+    with:
+      sha: ${{ needs.decide.outputs.sha }}
+      suite-checks: ${{ needs.decide.outputs.suite-checks }}
+    secrets:
+      OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
+
+  vmaas:
+    needs: decide
+    if: needs.decide.outputs.start == 'true' && contains(needs.decide.outputs.suites, '"vmaas"')
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/e2e-vmaas-full-install.yml
+    with:
+      repo: ${{ needs.decide.outputs.head-repo }}
+      sha: ${{ needs.decide.outputs.sha }}
+      pr-number: ${{ needs.decide.outputs.number }}
+      fork-pr-author: ${{ needs.decide.outputs.fork-author }}
+      fork-pr-author-association: ${{ needs.decide.outputs.fork-association }}
+
+  caas:
+    needs: decide
+    if: needs.decide.outputs.start == 'true' && contains(needs.decide.outputs.suites, '"caas"')
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/e2e-caas-full-install.yml
+    with:
+      repo: ${{ needs.decide.outputs.head-repo }}
+      sha: ${{ needs.decide.outputs.sha }}
+      pr-number: ${{ needs.decide.outputs.number }}
+      fork-pr-author: ${{ needs.decide.outputs.fork-author }}
+      fork-pr-author-association: ${{ needs.decide.outputs.fork-association }}
+
+  bmaas:
+    needs: decide
+    if: needs.decide.outputs.start == 'true' && contains(needs.decide.outputs.suites, '"bmaas"')
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/e2e-bmaas-full-install.yml
+    with:
+      repo: ${{ needs.decide.outputs.head-repo }}
+      sha: ${{ needs.decide.outputs.sha }}
+      pr-number: ${{ needs.decide.outputs.number }}
+      fork-pr-author: ${{ needs.decide.outputs.fork-author }}
+      fork-pr-author-association: ${{ needs.decide.outputs.fork-association }}
+
+  # Only a checked box starts this one (the policy marks it manual_only): it is never in the decision's own list.
+  netris:
+    needs: decide
+    if: needs.decide.outputs.start == 'true' && contains(needs.decide.outputs.suites, '"netris"')
+    permissions:
+      contents: read
+      id-token: write
+      checks: write
+      pull-requests: read
+    uses: ./.github/workflows/e2e-bmaas-netris-full-install.yml
+    with:
+      repo: ${{ needs.decide.outputs.head-repo }}
+      sha: ${{ needs.decide.outputs.sha }}
+      pr-number: ${{ needs.decide.outputs.number }}
+      fork-pr-author: ${{ needs.decide.outputs.fork-author }}
+      fork-pr-author-association: ${{ needs.decide.outputs.fork-association }}
+
+  finish:
+    needs: [decide, track, vmaas, caas, bmaas, netris]
+    if: always() && needs.decide.outputs.start == 'true'
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-finish.yml@639e33f549c91a5c1e8b4ad55256b69f028a42b8  # v1.2.4
+    permissions:
+      contents: read
+    with:
+      sha: ${{ needs.decide.outputs.sha }}
+      suites: ${{ needs.decide.outputs.suites }}
+      suite-checks: ${{ needs.decide.outputs.suite-checks }}
+      number: ${{ needs.decide.outputs.number }}
+      manual: ${{ needs.decide.outputs.manual }}
+      selected-checks: ${{ needs.decide.outputs.selected-checks }}
+      results: ${{ toJSON(needs) }}
+    secrets:
+      OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}

@@ -30,6 +30,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protopath"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
@@ -352,75 +353,61 @@ func isCanonicalUpdateMask(mask *fieldmaskpb.FieldMask, descriptor protoreflect.
 func (v *ReferenceValidator) walkMessage(ctx context.Context, msg protoreflect.Message, path []string,
 	violations *[]*errdetails.BadRequest_FieldViolation, tenant, project string,
 	excluded map[string]struct{}) error {
-	var internalErr error
+	if isExcludedReferencePath(path, excluded) {
+		return nil
+	}
 
+	fullName := msg.Descriptor().FullName()
+	if isReferenceType(fullName) {
+		return v.resolveAndMutate(ctx, msg, fullName, path, violations, tenant, project)
+	}
+
+	var internalErr error
 	msg.Range(func(fd protoreflect.FieldDescriptor, val protoreflect.Value) bool {
 		if fd.Kind() != protoreflect.MessageKind {
 			return true
 		}
 
 		fieldPath := append(append([]string{}, path...), string(fd.Name()))
-		if _, ok := excluded[strings.Join(fieldPath, ".")]; ok {
+		if (fd.IsMap() || fd.IsList()) && isExcludedReferencePath(fieldPath, excluded) {
 			return true
 		}
 
 		if fd.IsMap() {
-			if fd.MapValue().Kind() == protoreflect.MessageKind {
-				v.logger.WarnContext(ctx, "Skipping map field with message values — map reference validation not yet supported",
-					"field_path", strings.Join(fieldPath, "."),
-				)
+			if fd.MapValue().Kind() != protoreflect.MessageKind {
+				return true
 			}
-			return true
+			val.Map().Range(func(key protoreflect.MapKey, value protoreflect.Value) bool {
+				keyedField := string(fd.Name()) + protopath.MapIndex(key).String()
+				keyedPath := append(append([]string{}, path...), keyedField)
+				internalErr = v.walkMessage(ctx, value.Message(), keyedPath, violations, tenant, project, excluded)
+				return internalErr == nil
+			})
+			return internalErr == nil
 		}
 
 		if fd.IsList() {
 			list := val.List()
 			for i := 0; i < list.Len(); i++ {
-				elemMsg := list.Get(i).Message()
-				fullName := elemMsg.Descriptor().FullName()
-				indexedPath := append(append([]string{}, fieldPath[:len(fieldPath)-1]...),
-					fmt.Sprintf("%s[%d]", fd.Name(), i))
-
-				if isReferenceType(fullName) {
-					err := v.resolveAndMutate(ctx, elemMsg, fullName, indexedPath,
-						violations, tenant, project)
-					if err != nil {
-						internalErr = err
-						return false
-					}
-					continue
-				}
-				err := v.walkMessage(ctx, elemMsg, indexedPath, violations, tenant, project, excluded)
-				if err != nil {
-					internalErr = err
+				indexedPath := append(append([]string{}, path...), fmt.Sprintf("%s[%d]", fd.Name(), i))
+				internalErr = v.walkMessage(ctx, list.Get(i).Message(), indexedPath, violations, tenant, project, excluded)
+				if internalErr != nil {
 					return false
 				}
 			}
 			return true
 		}
 
-		subMsg := val.Message()
-		fullName := subMsg.Descriptor().FullName()
-
-		if isReferenceType(fullName) {
-			err := v.resolveAndMutate(ctx, subMsg, fullName, fieldPath,
-				violations, tenant, project)
-			if err != nil {
-				internalErr = err
-				return false
-			}
-			return true
-		}
-		err := v.walkMessage(ctx, subMsg, fieldPath, violations, tenant, project, excluded)
-		if err != nil {
-			internalErr = err
-			return false
-		}
-
-		return true
+		internalErr = v.walkMessage(ctx, val.Message(), fieldPath, violations, tenant, project, excluded)
+		return internalErr == nil
 	})
 
 	return internalErr
+}
+
+func isExcludedReferencePath(path []string, excluded map[string]struct{}) bool {
+	_, ok := excluded[strings.Join(path, ".")]
+	return ok
 }
 
 // resolveAndMutate validates a single reference field against its registered lookup function and
@@ -557,7 +544,9 @@ func (v *ReferenceValidator) recordDuration(resourceType string, d time.Duration
 }
 
 // resolveTenantProject determines the tenant and project for a reference lookup based on the
-// reference type and fields.
+// reference type and fields. Local references always use the caller's tenant and project.
+// Global (full) references use the reference's own project value directly: an empty project
+// selects the tenant's default/root project rather than inheriting the caller's project.
 func resolveTenantProject(refMsg protoreflect.Message, fullName protoreflect.FullName,
 	callerTenant, callerProject string) (string, string) {
 	if isLocalReference(fullName) {
@@ -565,19 +554,16 @@ func resolveTenantProject(refMsg protoreflect.Message, fullName protoreflect.Ful
 	}
 
 	tenant := callerTenant
-	project := callerProject
 
 	sharedField := refMsg.Descriptor().Fields().ByName("shared")
 	if sharedField != nil && refMsg.Get(sharedField).Bool() {
 		tenant = "shared"
 	}
 
+	project := ""
 	projectField := refMsg.Descriptor().Fields().ByName("project")
 	if projectField != nil {
-		explicitProject := refMsg.Get(projectField).String()
-		if explicitProject != "" {
-			project = explicitProject
-		}
+		project = refMsg.Get(projectField).String()
 	}
 
 	return tenant, project

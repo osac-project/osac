@@ -15,11 +15,13 @@ package servers
 
 import (
 	"context"
-	"fmt"
+	"errors"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
+
+var errMultipleActiveNetworkClasses = errors.New("multiple active NetworkClasses are configured")
 
 // findSingletonNetworkClass returns the sole active NetworkClass. A deployment
 // has one active NetworkClass; callers must not recover by selecting a default
@@ -36,7 +38,7 @@ func findSingletonNetworkClass(
 		return nil, err
 	}
 	if response.GetTotal() > 1 || len(response.GetItems()) > 1 {
-		return nil, fmt.Errorf("multiple active NetworkClasses are configured")
+		return nil, errMultipleActiveNetworkClasses
 	}
 	if len(response.GetItems()) == 0 {
 		return nil, nil

@@ -122,6 +122,13 @@ In the `osac` mono-repo, component charts are sibling directories referenced via
 make helm-deps
 ```
 
+Infrastructure installation and chart validation download the TopoLVM version pinned in
+[`charts/osac-infra/Chart.yaml`](charts/osac-infra/Chart.yaml) if its
+archive is missing. Downloaded chart archives are ignored by Git.
+`make helm-deps` builds only the OSAC and devstack dependencies. Helm requires
+the TopoLVM archive when rendering or installing `osac-infra`, even when
+`topolvm.enabled` is false; the applicable targets prepare it automatically.
+
 #### 2. Populate Local Secrets
 
 Ensure your values directory contains the necessary secret files:
@@ -151,7 +158,34 @@ make install-osac  PLATFORM=openshift PROFILE=<profile> NS=<namespace>   # OSAC 
 | `PLATFORM` | `kind` or `openshift` (required) |
 | `PROFILE` | `dev`, `dev-full`, `vmaas-ci`, `bmaas-ci`, `caas-ci`, `full-ci`, or `cudn-evpn-netris-test` (required; `dev-full` is kind only) |
 | `NS` | Target namespace (required) |
-| `EXTRA_HELM_ARGS` | Extra `--set`/`--set-string` args appended to helm commands |
+| `EXTRA_HELM_ARGS` | Extra `--set`/`--set-string` args for the OSAC chart only |
+| `DRY_RUN=1` | Render all releases from `make install` with `helm template`; no cluster connections or cluster commands are used |
+| `DRY_RUN_CLUSTER_DOMAIN` | Cluster ingress domain required for an OpenShift dry run |
+| `DRY_RUN_OCP_VERSION` | OpenShift major.minor version required for an OpenShift dry run, e.g. `4.20` |
+
+To preview the full Kind install and enable the CSI driver without making cluster
+changes:
+
+```bash
+make install PLATFORM=kind PROFILE=dev NS=osac DRY_RUN=1 \
+  EXTRA_HELM_ARGS='--set csiDriver.enabled=true'
+```
+
+For OpenShift, provide the cluster-specific values explicitly because dry-run
+mode does not query the cluster:
+
+```bash
+make install PLATFORM=openshift PROFILE=vmaas-ci NS=osac DRY_RUN=1 \
+  DRY_RUN_CLUSTER_DOMAIN=apps.example.com DRY_RUN_OCP_VERSION=4.20 \
+  EXTRA_HELM_ARGS='--set csiDriver.enabled=true'
+```
+
+`DRY_RUN=1` routes the composite target through `helm template` for every
+release. It skips Kind cluster creation, `oc`/`kubectl` operations, and the
+dev-full host setup script. Since `helm template` does not connect to a cluster,
+no Kubernetes resources are changed. The generated manifests are printed to
+the terminal; `EXTRA_HELM_ARGS` still applies to the OSAC chart. Do not include a
+Helm `--dry-run` flag in `EXTRA_HELM_ARGS`; rendering is intrinsic to this mode.
 
 #### Full local dev environment (`PROFILE=dev-full`, kind only)
 
@@ -164,6 +198,18 @@ the end-to-end "create a VM from the UI" experience:
 ```bash
 make install PLATFORM=kind PROFILE=dev-full NS=osac
 ```
+
+The devstack release uses client-side apply so AWX can manage its resources.
+On Helm 4, the installer passes `--server-side=false` without
+`--force-conflicts`; combining these flags prevents initial AWX CRD creation.
+Helm 3 uses its default client-side behavior. The OSAC platform release retains
+its separate Helm 4 server-side conflict handling.
+
+Rerunning the install reuses the existing Kind cluster and its TopoLVM storage.
+If node containers are stopped (for example, after a host reboot), the installer
+prepares TopoLVM, starts those nodes through the selected container runtime, and
+waits for the Kubernetes API before proceeding with Helm. Running nodes are
+left running, and existing kubelet credentials are retained.
 
 To use source-built images, use the existing component build targets and then
 load the resulting image tags into Kind. Use the same `CONTAINER_TOOL` value for
@@ -180,8 +226,8 @@ make -C ../fulfillment-service image-build \
 make -C ../osac-operator image-build \
   IMG=ghcr.io/osac-project/osac-operator:latest \
   CONTAINER_TOOL="$CONTAINER_TOOL"
-make -C ../osac-csi-driver image-build \
-  IMG=ghcr.io/osac-project/osac-csi-driver:latest \
+make -C ../osac-aap execution-environment-build \
+  IMG=ghcr.io/osac-project/osac-aap:latest \
   CONTAINER_TOOL="$CONTAINER_TOOL"
 "$CONTAINER_TOOL" build -t ghcr.io/osac-project/osac-ui:latest \
   -f ../osac-ui/Containerfile ../osac-ui
@@ -193,10 +239,18 @@ make install-devstack PLATFORM=kind PROFILE=dev-full NS=osac
 ```
 
 `kind-load-images` only loads already-built images; it does not rebuild them.
+On Apple Silicon, the OSAC AAP execution environment builds natively as
+`linux/arm64`; use `EE_CONTAINER_PLATFORM=linux/amd64,linux/arm64` when a
+multi-architecture image is required. Kubernetes images remain Linux images;
+Kind selects the image matching the node architecture.
 After changing source code, rerun the relevant component `image-build` target
 and then `kind-load-images`. Loaded images are restarted only for workloads that
 use one of the local image references. Each Go component also exposes a
 single-image `kind-load-image` target when loading only that component is useful.
+Component image-load targets default to `PROFILE=dev-full`; use `PROFILE=dev`
+for an ordinary Kind cluster. Image loading checks the required tools and
+cluster availability without requiring KVM or the virtualization install tools.
+`CONTAINER_TOOL` selects the runtime unless `KIND_EXPERIMENTAL_PROVIDER` is set.
 
 #### CUDN EVPN/Netris E2E environment
 
@@ -224,17 +278,22 @@ make install PLATFORM=openshift PROFILE=cudn-evpn-netris-test NS=osac \
   INSTANCE_VALUES_EXTRA="-f cudn-evpn-netris-test-secrets.local.yaml"
 ```
 
-On top of `dev`, `dev-full` adds (via `scripts/dev-full/`, orchestrated by the
-`install-devstack` target):
+On top of `dev`, `dev-full` adds virtualization, AWX, and seeded test data using
+the `osac` and `osac-devstack` releases plus `scripts/dev-full/`:
 
 - **Virtualization** — Multus CNI + bridge plugin, KubeVirt (operator + CR, `l2bridge`
   binding), CDI
 - **AWX** — the open-source AAP backend the operator drives: awx-operator + instance,
   configured with an inventory, a project (`github.com/osac-project/osac.git`,
-  playbooks under `osac-aap/`), job templates, a Kubernetes credential, and the
-  `awx-token` secret the operator reads
-- **OSAC UI** — deployed directly (the chart's `ui.enabled` uses an OpenShift Route,
-  unusable on kind) and routed through the shared Envoy Gateway
+  playbooks under `osac-aap/`), all 35 production job templates assigned to the
+  OSAC AAP execution environment, production-named inventory groups backed by
+  localhost on Kind, a Kubernetes credential, and the `awx-token` secret the operator reads.
+  That execution environment is built from `osac-aap/collections/requirements.yml`,
+  including `vastdata.vms`; dev-full pulls `ghcr.io/osac-project/osac-aap:latest`
+  unless a locally built image with that tag has been loaded into Kind.
+- **OSAC UI** — deployed by the tracked `osac-ui` chart dependency in the
+  `osac-devstack` release; the release adds a Kind-only Gateway API `HTTPRoute`
+  to the shared Envoy Gateway and disables the OpenShift Route.
 - **Seeded catalog** — a `fedora` disk image, `u1-small/medium/large` instance types,
   the `osac.templates.ocp_virt_vm` template, and a `linux-vm` catalog item (shared/global
   objects; networking is per-tenant and auto-provisioned, see below)
@@ -251,7 +310,12 @@ so networking resources reconcile to READY without a real fabric (kind has none)
 **Prerequisites** (beyond the base tools) — enforced by `scripts/dev-full/kind-runtime.sh check`:
 
 - A **rootful** container runtime, because KubeVirt chowns `/dev/kvm`:
-  - **Linux host** — rootful podman (invoked via `sudo`) or Docker
+  - **Linux host** — rootful Podman (using `sudo` or an accessible rootful socket) or Docker.
+    Makefile targets and installation scripts prompt for your sudo password when
+    authentication is needed, including after credentials expire during an
+    install. Rootless Podman, including the socket started by
+    `systemctl --user start podman.socket`, cannot provide the TopoLVM loop device
+    and volume group used by this profile.
   - **Linux + Distrobox** — the rootful podman host socket (`/run/podman/podman.sock`);
     install the drop-in at `scripts/dev-full/manifests/podman-socket-rootful.conf`
   - **macOS** — Docker Desktop or Podman Desktop. For Podman, start its machine and
@@ -262,6 +326,105 @@ so networking resources reconcile to READY without a real fabric (kind has none)
   On Apple Silicon, an explicit `CONTAINER_TOOL=docker|podman` selects the same
   runtime for installer operations when `KIND_EXPERIMENTAL_PROVIDER` is unset;
   the latter takes precedence when both are provided.
+
+For a Podman-backed install, select Podman explicitly and use a rootful Podman
+runtime on Linux:
+
+```bash
+export CONTAINER_TOOL=podman
+export KIND_EXPERIMENTAL_PROVIDER=podman
+make install PLATFORM=kind PROFILE=dev-full NS=osac
+```
+
+`dev-full` installs TopoLVM as the tenant `local` storage backend. Before Kind
+is created, `kind-runtime.sh` prepares a disposable 20 GiB sparse disk, the
+`vg1` volume group, and an external `lvmd` process. Linux stores these at
+`/var/lib/osac-dev-full/topolvm` on the host. Docker Desktop and Podman Desktop
+store them at the same path inside the selected Linux VM. Podman Desktop needs
+a rootful machine; switch the machine to rootful mode in Podman Desktop and
+restart it before installing.
+
+The local storage helper detects the device-mapper block-device major inside
+the selected container runtime and grants access to that major. Rerunning
+`make install-infra PLATFORM=kind PROFILE=dev-full NS=osac` recreates an
+existing `lvmd` helper whose image or device rule does not match, preserving
+the backing disk and volume group. The helper image disables LVM's
+`activation/udev_rules` and `activation/udev_sync` settings because no udev
+daemon runs inside it; LVM creates device nodes and symbolic links directly.
+
+After updating local storage scripts, refresh the helper and verify its settings:
+
+```bash
+KIND_PROFILE=dev-full KIND_EXPERIMENTAL_PROVIDER=podman \
+  bash scripts/dev-full/kind-runtime.sh create-cluster osac-dev \
+  kind-config-dev-full.yaml "$HOME/.kube/osac-dev-kind-root.kubeconfig"
+sudo podman exec osac-dev-full-topolvm-lvmd \
+  lvmconfig --type full activation/udev_rules activation/udev_sync
+```
+
+Both settings should report `0`. Use your existing cluster name and kubeconfig
+path if they differ; the wrapper reuses that cluster.
+
+The `topolvm-provisioner` StorageClass is not the cluster default. Kind's
+`standard` class remains the default for dev-stack components such as AWX
+PostgreSQL. OSAC registers the existing `local` storage tier. AWX's storage
+templates create a tenant-labeled class for that tier, and the operator passes
+the tenant's resolved class to compute provisioning.
+Local AWX jobs receive `OSAC_STORAGE_CONFIG_NAMESPACE` from the selected OSAC
+namespace so they can find storage config Secrets without a mounted
+service-account namespace file.
+
+Kind mounts are fixed when the cluster is created. If `install-infra` finds an
+existing cluster without the required dev-full TopoLVM mounts, it stops with an
+instruction to recreate the cluster and leaves it intact. Run the dev-full
+uninstall and install sequence to recreate it. Uninstalling dev-full also stops
+`lvmd` and removes the `vg1` backing file and volumes; treat this local storage
+as disposable.
+
+After installation, check the classes and TopoLVM workloads:
+
+```bash
+kubectl get storageclass standard topolvm-provisioner
+kubectl get pods -n osac-infra -l app.kubernetes.io/name=topolvm
+```
+
+To exercise provisioning, create a PVC with a pod that consumes it. The class
+uses `WaitForFirstConsumer`, so the PVC binds after a pod is scheduled:
+
+```bash
+kubectl apply -n osac -f - <<'EOF'
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: topolvm-smoke
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: topolvm-provisioner
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: topolvm-smoke
+spec:
+  containers:
+    - name: test
+      image: busybox:1.36
+      command: ["sh", "-c", "touch /data/smoke && sleep 3600"]
+      volumeMounts:
+        - name: data
+          mountPath: /data
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: topolvm-smoke
+EOF
+kubectl wait --for=condition=Bound pvc/topolvm-smoke -n osac --timeout=5m
+kubectl wait --for=condition=Ready pod/topolvm-smoke -n osac --timeout=5m
+kubectl delete pod,pvc topolvm-smoke -n osac
+```
 
 On an Apple Silicon Mac, either Kind profile automatically builds an arm64
 replacement for `quay.io/openshift/origin-cli:4.20.0` with the selected
@@ -357,6 +520,48 @@ from this block. Do not set those by hand unless using expert overrides.
 
 See [docs/network-backend.md](docs/network-backend.md) for profiles,
 credentials, and the advanced/manual path.
+
+#### FabricDomain admin onboarding (Phase 1)
+
+For Netris Ethernet east-west networking, first register each
+BareMetalInstanceType through the fulfillment **private API** and author its
+backend binding there. This fragment belongs to the instance type, not Helm:
+
+```yaml
+spec:
+  fabric_bindings:
+    ethernet_ew:
+      netris: "42" # opaque Ethernet profile reference; Netris uses a Server Cluster Template ID
+```
+
+Then map every participating server's **exact Netris hostname** to its
+BareMetalInstanceType ID in the umbrella values:
+
+```yaml
+operator:
+  fabricDomainInventory:
+    gpu-01.example.com: "gpu-bmit-id"
+    gpu-02.example.com: "gpu-bmit-id"
+```
+
+The umbrella's `operator` dependency alias forwards this to the standalone
+`osac-operator` chart's `fabricDomainInventory` value. A nonempty map creates
+the fixed ConfigMap `osac-fabric-domain-inventory` in the Helm release namespace,
+which is also the operator's networking namespace. Its `data` is exactly the
+hostname-to-ID map; hostname spelling and case are preserved. The default `{}`
+does not create the ConfigMap. Keep this inventory current during onboarding
+and update it through your Helm values.
+
+The NetworkClass of the domain's VirtualNetwork selects the fabric manager; the
+manager name must have a corresponding entry in the instance type's
+`fabric_bindings.ethernet_ew` map. For Netris, that entry is the Server Cluster
+Template ID. The profile belongs to the hardware type and is not scoped to a
+NetworkClass. NetworkClass no longer accepts `template_id`, and FabricDomain
+has no `instance_type` field: the operator resolves the manager-specific profile
+through the server inventory and instance types. Keep Netris credentials in
+the existing AAP Secret configuration; the inventory contains only hostnames
+and catalog IDs.
+The FabricDomain CRD is included when `operatorCrds.install` is enabled.
 
 #### DNS Backend Configuration (CaaS)
 

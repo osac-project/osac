@@ -10,6 +10,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // reconcileWorkers owns normal worker convergence. Finalization never enters
@@ -20,7 +21,8 @@ import (
 // binding, NodePool replicas and summary. Creation prerequisites never gate
 // existing-worker work: a wait or error from the create stage is merged into the
 // final scheduling decision instead.
-func (r *Reconciler) reconcileWorkers(ctx context.Context, co *v1alpha1.ClusterOrder, tenant string) (ctrl.Result, error) {
+func (r *Reconciler) reconcileWorkers(ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster) (ctrl.Result, error) {
+	tenant := cluster.GetMetadata().GetTenant()
 	// One local observation supplies identity, ownership and early Agent phases.
 	observed, res, err := r.observeWorkerResources(ctx, co)
 	if err != nil || !res.IsZero() {
@@ -57,7 +59,7 @@ func (r *Reconciler) reconcileWorkers(ctx context.Context, co *v1alpha1.ClusterO
 
 	// At most one Create for the selected due slot, with image, ignition and
 	// instance type resolved only now, from the observation made above.
-	created, creationRes, creationErr := r.reconcileWorkerCreation(ctx, co, tenant, observed, infra)
+	created, creationRes, creationErr := r.reconcileWorkerCreation(ctx, co, cluster, observed, infra)
 	if created {
 		return creationRes, creationErr
 	}

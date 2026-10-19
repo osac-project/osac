@@ -1,0 +1,251 @@
+---
+name: CI
+
+# One workflow, one required check: the job named `CI` at the bottom.
+#
+# `plan` looks at which files changed (.github/filters/ci-filters.yml is the
+# single source) and the jobs below run only the checks that apply. A check
+# that does not apply shows as skipped inside this run; it never shows up as a
+# separate pending check on the pull request. `CI` passes when every check that
+# applied passed.
+#
+# The checks themselves are reusable workflows in this directory
+# (helm-lint.yaml, build-image.yaml, ...); the unit and integration tests are legs of one matrix
+# (.github/ci-tests.yml, run by tests.yml). They hold no
+# path gating of their own. To add a check: create (or extend) its workflow,
+# add a filter for it to ci-filters.yml, add a job here, and add the job to
+# the `needs` of `CI`.
+#
+# E2E is a separate required check, `E2E`, handled by e2e-pr.yml (pull
+# requests) and e2e-queue.yml (merge queue). It starts after this workflow has
+# passed and the pull request has been approved.
+
+on:  # yamllint disable-line rule:truthy
+  pull_request:
+    branches: [main]
+  merge_group:
+
+# A new push to a pull request cancels the run of the previous commit. Merge
+# queue runs are never cancelled this way: each queue entry has its own ref.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      # The filters that matched, as |name|name|, or every filter when the CI
+      # wiring itself changed or the emergency override is on. Tested with
+      # contains(changed, '|name|').
+      changed: ${{ steps.pick.outputs.changed }}
+      # The unit and integration test legs this change needs (see .github/ci-tests.yml), as a JSON list for a matrix.
+      tests: ${{ steps.tests.outputs.tests }}
+    steps:
+      # dorny/paths-filter uses git diff on merge_group (not the PR Files API),
+      # so the repository must be checked out with enough history for base..head.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d  # v4.0.3
+        id: filter
+        with:
+          predicate-quantifier: 'every'
+          filters: .github/filters/ci-filters.yml
+      - name: List what applies
+        id: pick
+        env:
+          MATCHED: ${{ steps.filter.outputs.changes }}
+          # CI_GATING_ENABLED == 'false' is the emergency override: run every
+          # check regardless of the files that changed.
+          GATING_OFF: ${{ vars.CI_GATING_ENABLED == 'false' }}
+        run: |
+          set -euo pipefail
+          if [[ "${GATING_OFF}" == "true" ]] || jq -e 'index("ci-config")' <<<"${MATCHED}" >/dev/null; then
+            names=$(grep -oE '^[A-Za-z0-9_-]+:' .github/filters/ci-filters.yml | tr -d ':' | paste -sd'|')
+          else
+            names=$(jq -r 'join("|")' <<<"${MATCHED}")
+          fi
+          echo "changed=|${names}|" >> "$GITHUB_OUTPUT"
+          echo "Checks that apply: ${names//|/ }" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Pick the unit and integration tests
+        id: tests
+        env:
+          CHANGED: ${{ steps.pick.outputs.changed }}
+        run: |
+          set -euo pipefail
+          # A leg runs when every filter it names matched. Only the legs that run become jobs of this workflow run.
+          tests=$(yq -o=json -I=0 '.' .github/ci-tests.yml | jq -c --arg changed "${CHANGED}" '
+            [ .[] | select(all(.filters[]; . as $f | ($changed | contains("|" + $f + "|")))) ]')
+          echo "tests=${tests}" >> "$GITHUB_OUTPUT"
+          echo "Tests that run: $(jq -r 'map(.id) | join(", ") | if . == "" then "none" else . end' <<<"${tests}")" >> "$GITHUB_STEP_SUMMARY"
+
+  # Run on every change: they look at the whole diff, not at one component.
+  pre-commit:
+    name: pre-commit
+    needs: plan
+    # issues: write is for the secret-rotation reminder comment in the called
+    # workflow; the scan job itself holds contents: read only.
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/pre-commit.yaml
+
+  dependency-review:
+    name: dependency-review
+    needs: plan
+    permissions:
+      contents: read
+    uses: ./.github/workflows/dependency-review.yml
+
+  ansible-lint:
+    name: ansible-lint
+    needs: plan
+    if: contains(needs.plan.outputs.changed, '|ansible-osac-aap|')
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ansible-lint.yml
+
+  check-generated-code:
+    name: Check generated code
+    needs: plan
+    if: contains(needs.plan.outputs.changed, '|proto-check|')
+    permissions:
+      contents: read
+    uses: ./.github/workflows/check-generated-code.yaml
+
+  check-pull-request:
+    name: Check fulfillment-service
+    needs: plan
+    if: contains(needs.plan.outputs.changed, '|fulfillment-service-checks|')
+    permissions:
+      contents: read
+    uses: ./.github/workflows/check-pull-request.yaml
+
+  darwin-keychain-tests:
+    name: Darwin keychain tests
+    needs: plan
+    if: contains(needs.plan.outputs.changed, '|darwin-keychain|')
+    permissions:
+      contents: read
+    uses: ./.github/workflows/darwin-keychain-tests.yml
+
+  helm-lint:
+    name: Helm
+    needs: plan
+    if: contains(needs.plan.outputs.changed, '|helm-')
+    permissions:
+      contents: read
+    uses: ./.github/workflows/helm-lint.yaml
+    with:
+      changed: ${{ needs.plan.outputs.changed }}
+
+  # The two image workflows also build and push images on main. Called from
+  # here they run the unit tests and a build that is not pushed. The called
+  # jobs declare packages: write / id-token: write, so this caller has to grant
+  # them even though a pull request never uses them.
+  build-osac-operator:
+    name: osac-operator
+    needs: plan
+    if: contains(needs.plan.outputs.changed, '|build-osac-operator|')
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    uses: ./.github/workflows/build-image.yaml
+
+  build-bare-metal-fulfillment-operator:
+    name: bare-metal-fulfillment-operator
+    needs: plan
+    if: contains(needs.plan.outputs.changed, '|build-bare-metal-fulfillment-operator|')
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    uses: ./.github/workflows/build-bmf-image.yaml
+
+  # osac-ui: lint (the UI and its Go proxy) and typecheck. The unit tests of osac-ui are a leg of the matrix below.
+  osac-ui-lint:
+    name: osac-ui lint
+    needs: plan
+    if: contains(needs.plan.outputs.changed, '|ui|')
+    permissions:
+      contents: read
+    uses: ./.github/workflows/osac-ui-lint.yaml
+
+  osac-ui-typecheck:
+    name: osac-ui typecheck
+    needs: plan
+    if: contains(needs.plan.outputs.changed, '|ui|')
+    permissions:
+      contents: read
+    uses: ./.github/workflows/osac-ui-typecheck.yaml
+
+  # Every unit and integration test the change needs, one job per leg (a matrix built by `plan` from .github/ci-tests.yml).
+  # A test that is not needed has no job, so the pull request shows no skipped row for it.
+  tests:
+    name: ${{ matrix.id }}
+    needs: plan
+    if: needs.plan.outputs.tests != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.tests) }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/tests.yml
+    with:
+      kind: ${{ matrix.kind }}
+      dir: ${{ matrix.dir || '' }}
+      cmd: ${{ matrix.cmd || '' }}
+      timeout: ${{ matrix.timeout || 360 }}
+
+  # The one required check. It also runs when a check failed, and fails then;
+  # a check that was skipped because it did not apply does not count against it.
+  CI:
+    name: CI
+    if: ${{ !cancelled() }}
+    needs:
+      - plan
+      - pre-commit
+      - dependency-review
+      - ansible-lint
+      - check-generated-code
+      - check-pull-request
+      - darwin-keychain-tests
+      - helm-lint
+      - build-osac-operator
+      - build-bare-metal-fulfillment-operator
+      - osac-ui-lint
+      - osac-ui-typecheck
+      - tests
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Every check that applied passed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          # plan must have run: a plan that failed would otherwise skip every
+          # check below it and let CI pass with nothing tested.
+          if [[ "$(jq -r '.plan.result' <<<"${RESULTS}")" != "success" ]]; then
+            echo "::error::Plan did not succeed, so no check was selected"
+            exit 1
+          fi
+          bad=$(jq -r 'to_entries[] | select(.value.result != "success" and .value.result != "skipped") | "\(.key): \(.value.result)"' <<<"${RESULTS}")
+          if [[ -n "${bad}" ]]; then
+            echo "::error::Failed checks:"
+            echo "${bad}"
+            exit 1
+          fi
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"${RESULTS}" >> "$GITHUB_STEP_SUMMARY"

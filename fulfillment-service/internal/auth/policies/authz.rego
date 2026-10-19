@@ -239,8 +239,6 @@ allow if {
     "/osac.public.v1.DiskImages/Update",
     "/osac.public.v1.ConsoleSessions/Create",
     "/osac.public.v1.Events/Watch",
-    "/osac.public.v1.HostTypes/Get",
-    "/osac.public.v1.HostTypes/List",
     "/osac.public.v1.InstanceTypes/Get",
     "/osac.public.v1.InstanceTypes/List",
     "/osac.public.v1.SelfSubjectAccessReviews/Create",
@@ -258,6 +256,7 @@ allow if {
     "/osac.public.v1.SecurityGroups/Delete",
     "/osac.public.v1.SecurityGroups/Get",
     "/osac.public.v1.SecurityGroups/List",
+    "/osac.public.v1.SecurityGroups/Update",
     "/osac.public.v1.ExternalIPAttachments/Create",
     "/osac.public.v1.ExternalIPAttachments/Delete",
     "/osac.public.v1.ExternalIPAttachments/Get",
@@ -268,6 +267,10 @@ allow if {
     "/osac.public.v1.ExternalIPs/Delete",
     "/osac.public.v1.ExternalIPs/Get",
     "/osac.public.v1.ExternalIPs/List",
+    # Phase 1 trusts platform admins to supply eligible Netris hostnames.
+    # Tenant visibility is allowed, but writes require the existing is_admin rule.
+    "/osac.public.v1.FabricDomains/Get",
+    "/osac.public.v1.FabricDomains/List",
     "/osac.public.v1.NATGateways/Create",
     "/osac.public.v1.NATGateways/Delete",
     "/osac.public.v1.NATGateways/Get",

@@ -9,12 +9,13 @@ RESOLVED_REALM="${REALM_OUTPUT_PATH:-/realm/realm.json}"
 echo "Resolving Keycloak realm secrets..."
 
 if ! oc get secret "${SECRET_NAME}" -n "${NAMESPACE}"; then
-    echo "Generating osac-controller/osac-admin/osac-csi-driver/osac-ui-backend client secrets..."
+    echo "Generating Keycloak client secrets..."
     oc create secret generic "${SECRET_NAME}" -n "${NAMESPACE}" \
         --from-literal=osac-controller="$(openssl rand -base64 18)" \
         --from-literal=osac-admin="$(openssl rand -base64 18)" \
         --from-literal=osac-csi-driver="$(openssl rand -base64 18)" \
-        --from-literal=osac-ui-backend="$(openssl rand -base64 18)"
+        --from-literal=osac-ui-backend="$(openssl rand -base64 18)" \
+        --from-literal=osac-mcp-exchange="$(openssl rand -base64 18)"
 else
     # Upgrade path: add osac-csi-driver key if the Secret exists but predates
     # this client (i.e. was created before OSAC-4261).
@@ -30,6 +31,12 @@ else
         UI_BACKEND_NEW=$(openssl rand -base64 18)
         oc patch secret "${SECRET_NAME}" -n "${NAMESPACE}" \
             -p "{\"data\":{\"osac-ui-backend\":\"$(printf '%s' "${UI_BACKEND_NEW}" | base64 -w0)\"}}"
+    fi
+    if ! oc get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath='{.data.osac-mcp-exchange}' | grep -q .; then
+        echo "Patching ${SECRET_NAME} to add osac-mcp-exchange key..."
+        MCP_EXCHANGE_NEW=$(openssl rand -base64 18)
+        oc patch secret "${SECRET_NAME}" -n "${NAMESPACE}" \
+            -p "{\"data\":{\"osac-mcp-exchange\":\"$(printf '%s' "${MCP_EXCHANGE_NEW}" | base64 -w0)\"}}"
     fi
 fi
 

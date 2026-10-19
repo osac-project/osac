@@ -17,7 +17,7 @@ import "strings"
 
 // toDNSLabel converts a string to DNS-label format by replacing underscores with hyphens.
 // Used to derive metadata.name from domain-specific identifiers for catalog resources
-// that historically didn't set metadata.name (NetworkClass, Templates, HostType).
+// that historically didn't set metadata.name (NetworkClass and Templates).
 func toDNSLabel(s string) string {
 	return strings.ReplaceAll(s, "_", "-")
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"golang.org/x/oauth2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
@@ -32,13 +33,13 @@ var fulfillmentClientBundleObserved = promauto.NewGaugeVec(prometheus.GaugeOpts{
 }, []string{"sha256"})
 
 type verifiedFulfillmentConn struct {
-	address   string
-	caFile    string
-	tokenFile string
-	mu        sync.Mutex
-	closed    bool
-	current   atomic.Pointer[grpc.ClientConn]
-	observed  atomic.Value
+	address     string
+	caFile      string
+	tokenSource oauth2.TokenSource
+	mu          sync.Mutex
+	closed      bool
+	current     atomic.Pointer[grpc.ClientConn]
+	observed    atomic.Value
 }
 
 const (
@@ -134,9 +135,9 @@ func (v *verifiedFulfillmentConn) reload(ctx context.Context) error {
 	opts := []grpc.DialOption{grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
 		RootCAs: pool, MinVersion: tls.VersionTLS12,
 	}))}
-	if v.tokenFile != "" {
+	if v.tokenSource != nil {
 		opts = append(opts, grpc.WithPerRPCCredentials(oauth.TokenSource{
-			TokenSource: &fileTokenSource{tokenFile: v.tokenFile},
+			TokenSource: v.tokenSource,
 		}))
 	}
 	candidate, err := grpc.NewClient(v.address, opts...)

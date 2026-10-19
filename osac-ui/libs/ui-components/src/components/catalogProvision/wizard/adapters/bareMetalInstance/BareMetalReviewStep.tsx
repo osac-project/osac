@@ -23,7 +23,13 @@ interface Props {
 export const BareMetalReviewStep = ({ catalogItem }: Props) => {
   const { t } = useTranslation();
   const { values } = useFormikContext<BareMetalInstanceWizardValues>();
-  const hasAuthentication = hasBareMetalAuthentication(values.spec.sshKey, values.spec.userData);
+  const isSecretSource = values.spec.userDataSource === 'secret';
+  const selectedUserData = isSecretSource ? values.spec.userDataSecret.name : values.spec.userData;
+  const hasAuthentication = hasBareMetalAuthentication(
+    values.spec.sshKey,
+    isSecretSource ? undefined : values.spec.userData,
+    isSecretSource ? values.spec.userDataSecret.name : undefined,
+  );
 
   const networking = values.spec.networking;
   const isCustomNetwork = !networking.useDefaults;
@@ -87,7 +93,7 @@ export const BareMetalReviewStep = ({ catalogItem }: Props) => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('User data')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatReviewScalar(values.spec.userData, true)}
+              {formatReviewScalar(selectedUserData, !isSecretSource)}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>

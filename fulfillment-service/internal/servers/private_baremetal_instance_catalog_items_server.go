@@ -48,7 +48,6 @@ type PrivateBareMetalInstanceCatalogItemsServer struct {
 	templatesDao              *dao.GenericDAO[*privatev1.BareMetalInstanceTemplate]
 	bareMetalInstanceTypesDao *dao.GenericDAO[*privatev1.BareMetalInstanceType]
 	diskImagesDao             *dao.GenericDAO[*privatev1.DiskImage]
-	hostTypesDao              *dao.GenericDAO[*privatev1.HostType]
 	subnetsDao                *dao.GenericDAO[*privatev1.Subnet]
 	virtualNetworksDao        *dao.GenericDAO[*privatev1.VirtualNetwork]
 	networkClassesDao         *dao.GenericDAO[*privatev1.NetworkClass]
@@ -126,15 +125,6 @@ func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) Build() (result *Pri
 	if err != nil {
 		return
 	}
-	hostTypesDao, err := dao.NewGenericDAO[*privatev1.HostType]().
-		SetLogger(b.logger).
-		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
-		Build()
-	if err != nil {
-		return
-	}
-
 	subnetsDao, err := dao.NewGenericDAO[*privatev1.Subnet]().
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
@@ -187,7 +177,6 @@ func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) Build() (result *Pri
 		templatesDao:              templatesDao,
 		bareMetalInstanceTypesDao: bareMetalInstanceTypesDao,
 		diskImagesDao:             diskImagesDao,
-		hostTypesDao:              hostTypesDao,
 		subnetsDao:                subnetsDao,
 		virtualNetworksDao:        virtualNetworksDao,
 		networkClassesDao:         networkClassesDao,
@@ -263,7 +252,7 @@ func (s *PrivateBareMetalInstanceCatalogItemsServer) prepareCatalogItemCandidate
 		return nil, err
 	}
 	return validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(ctx, s.generic.logger, candidate, template,
-		s.bareMetalInstanceTypesDao, s.diskImagesDao, s.hostTypesDao, s.subnetsDao,
+		s.bareMetalInstanceTypesDao, s.diskImagesDao, s.subnetsDao,
 		s.virtualNetworksDao, s.networkClassesDao, s.securityGroupsDao)
 }
 

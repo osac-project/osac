@@ -223,6 +223,21 @@ func (s *PrivateNATGatewaysServer) Create(ctx context.Context,
 	if err = validateTenantMatch(natTenant, externalIP, "ExternalIP", externalIPKey); err != nil {
 		return
 	}
+	canonicalHubID, err := canonicalNetworkingHubID(ctx, s.logger, s.networkClassesDao)
+	if err != nil {
+		return
+	}
+	if err = validateNetworkingHubReferences(canonicalHubID, networkingHubReference{
+		resourceType: "VirtualNetwork",
+		id:           virtualNetworkResponse.GetObject().GetId(),
+		hubID:        virtualNetworkResponse.GetObject().GetStatus().GetHub(),
+	}, networkingHubReference{
+		resourceType: "ExternalIP",
+		id:           externalIP.GetId(),
+		hubID:        externalIP.GetStatus().GetHub(),
+	}); err != nil {
+		return
+	}
 
 	if natGateway.GetStatus() == nil {
 		natGateway.SetStatus(privatev1.NATGatewayStatus_builder{

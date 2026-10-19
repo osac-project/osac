@@ -30,25 +30,25 @@ import (
 
 var _ = Describe("Generic server", func() {
 	It("signals objects through a flagged no-op update", func() {
-		server, err := NewGenericServer[*privatev1.HostType]().
+		server, err := NewGenericServer[*privatev1.BareMetalInstanceTemplate]().
 			SetLogger(logger).
-			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
+			SetService(privatev1.BareMetalInstanceTemplates_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
-		createResponse := &privatev1.HostTypesCreateResponse{}
-		err = server.Create(ctx, privatev1.HostTypesCreateRequest_builder{
-			Object: privatev1.HostType_builder{
+		createResponse := &privatev1.BareMetalInstanceTemplatesCreateResponse{}
+		err = server.Create(ctx, privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceTemplate_builder{
 				Metadata:    privatev1.Metadata_builder{Name: "signal-event"}.Build(),
 				Description: "sensitive",
 			}.Build(),
 		}.Build(), &createResponse)
 		Expect(err).ToNot(HaveOccurred())
 
-		signalResponse := &privatev1.HostTypesSignalResponse{}
-		err = server.Signal(ctx, privatev1.HostTypesSignalRequest_builder{
+		signalResponse := &privatev1.BareMetalInstanceTemplatesSignalResponse{}
+		err = server.Signal(ctx, privatev1.BareMetalInstanceTemplatesSignalRequest_builder{
 			Id: createResponse.GetObject().GetId(),
 		}.Build(), &signalResponse)
 		Expect(err).ToNot(HaveOccurred())
@@ -63,12 +63,12 @@ var _ = Describe("Generic server", func() {
 			where op = 'SIGNAL'
 		`).Scan(&table, &id, &version)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(table).To(Equal("host_types"))
+		Expect(table).To(Equal("bare_metal_instance_templates"))
 		Expect(id).To(Equal(createResponse.GetObject().GetId()))
 		Expect(version).To(Equal(int32(0)))
 
-		getResponse := &privatev1.HostTypesGetResponse{}
-		err = server.Get(ctx, privatev1.HostTypesGetRequest_builder{
+		getResponse := &privatev1.BareMetalInstanceTemplatesGetResponse{}
+		err = server.Get(ctx, privatev1.BareMetalInstanceTemplatesGetRequest_builder{
 			Id: createResponse.GetObject().GetId(),
 		}.Build(), &getResponse)
 		Expect(err).ToNot(HaveOccurred())
@@ -78,24 +78,25 @@ var _ = Describe("Generic server", func() {
 
 	It("clones the prepared create candidate and invokes the callback before persistence", func() {
 		var order []string
-		server, err := NewGenericServer[*privatev1.HostType]().
+		server, err := NewGenericServer[*privatev1.BareMetalInstanceTemplate]().
 			SetLogger(logger).
-			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
+			SetService(privatev1.BareMetalInstanceTemplates_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
-		requestObject := privatev1.HostType_builder{
+		requestObject := privatev1.BareMetalInstanceTemplate_builder{
+			Id:          "callback_create",
 			Metadata:    privatev1.Metadata_builder{Name: "callback-create"}.Build(),
 			Description: "request-description",
 		}.Build()
-		response := &privatev1.HostTypesCreateResponse{}
+		response := &privatev1.BareMetalInstanceTemplatesCreateResponse{}
 		err = server.CreateWithCandidatePreparation(
 			ctx,
-			privatev1.HostTypesCreateRequest_builder{Object: requestObject}.Build(),
+			privatev1.BareMetalInstanceTemplatesCreateRequest_builder{Object: requestObject}.Build(),
 			&response,
-			func(_ context.Context, current *privatev1.HostType, candidate *privatev1.HostType) error {
+			func(_ context.Context, current *privatev1.BareMetalInstanceTemplate, candidate *privatev1.BareMetalInstanceTemplate) error {
 				order = append(order, "callback")
 				Expect(current).To(BeNil())
 				Expect(candidate).ToNot(BeIdenticalTo(requestObject))
@@ -115,19 +116,19 @@ var _ = Describe("Generic server", func() {
 	})
 
 	It("rejects a create callback that clears metadata before persistence", func() {
-		server, err := NewGenericServer[*privatev1.HostType]().
+		server, err := NewGenericServer[*privatev1.BareMetalInstanceTemplate]().
 			SetLogger(logger).
-			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
+			SetService(privatev1.BareMetalInstanceTemplates_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
-		response := &privatev1.HostTypesCreateResponse{}
-		err = server.CreateWithCandidatePreparation(ctx, privatev1.HostTypesCreateRequest_builder{
-			Object: privatev1.HostType_builder{Metadata: privatev1.Metadata_builder{Name: "create-metadata-clear"}.Build()}.Build(),
+		response := &privatev1.BareMetalInstanceTemplatesCreateResponse{}
+		err = server.CreateWithCandidatePreparation(ctx, privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceTemplate_builder{Metadata: privatev1.Metadata_builder{Name: "create-metadata-clear"}.Build()}.Build(),
 		}.Build(), &response,
-			func(_ context.Context, _ *privatev1.HostType, candidate *privatev1.HostType) error {
+			func(_ context.Context, _ *privatev1.BareMetalInstanceTemplate, candidate *privatev1.BareMetalInstanceTemplate) error {
 				candidate.SetMetadata(nil)
 				return nil
 			},
@@ -135,26 +136,26 @@ var _ = Describe("Generic server", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 
-		listResponse := &privatev1.HostTypesListResponse{}
-		err = server.List(ctx, privatev1.HostTypesListRequest_builder{}.Build(), &listResponse)
+		listResponse := &privatev1.BareMetalInstanceTemplatesListResponse{}
+		err = server.List(ctx, privatev1.BareMetalInstanceTemplatesListRequest_builder{}.Build(), &listResponse)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(listResponse.GetTotal()).To(Equal(int32(0)))
 	})
 
 	It("rejects a create callback that sets a disallowed tenant before persistence", func() {
-		server, err := NewGenericServer[*privatev1.HostType]().
+		server, err := NewGenericServer[*privatev1.BareMetalInstanceTemplate]().
 			SetLogger(logger).
-			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
+			SetService(privatev1.BareMetalInstanceTemplates_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
-		response := &privatev1.HostTypesCreateResponse{}
-		err = server.CreateWithCandidatePreparation(ctx, privatev1.HostTypesCreateRequest_builder{
-			Object: privatev1.HostType_builder{Metadata: privatev1.Metadata_builder{Name: "create-disallowed-tenant"}.Build()}.Build(),
+		response := &privatev1.BareMetalInstanceTemplatesCreateResponse{}
+		err = server.CreateWithCandidatePreparation(ctx, privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceTemplate_builder{Metadata: privatev1.Metadata_builder{Name: "create-disallowed-tenant"}.Build()}.Build(),
 		}.Build(), &response,
-			func(_ context.Context, _ *privatev1.HostType, candidate *privatev1.HostType) error {
+			func(_ context.Context, _ *privatev1.BareMetalInstanceTemplate, candidate *privatev1.BareMetalInstanceTemplate) error {
 				candidate.GetMetadata().SetTenant(auth.SharedTenant)
 				return nil
 			},
@@ -162,67 +163,68 @@ var _ = Describe("Generic server", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(status.Code(err)).To(Equal(codes.PermissionDenied))
 
-		listResponse := &privatev1.HostTypesListResponse{}
-		err = server.List(ctx, privatev1.HostTypesListRequest_builder{}.Build(), &listResponse)
+		listResponse := &privatev1.BareMetalInstanceTemplatesListResponse{}
+		err = server.List(ctx, privatev1.BareMetalInstanceTemplatesListRequest_builder{}.Build(), &listResponse)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(listResponse.GetTotal()).To(Equal(int32(0)))
 	})
 
 	It("rejects a create callback that changes the assigned ID", func() {
-		server, err := NewGenericServer[*privatev1.HostType]().
+		server, err := NewGenericServer[*privatev1.BareMetalInstanceTemplate]().
 			SetLogger(logger).
-			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
+			SetService(privatev1.BareMetalInstanceTemplates_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
-		response := &privatev1.HostTypesCreateResponse{}
-		err = server.CreateWithCandidatePreparation(ctx, privatev1.HostTypesCreateRequest_builder{
-			Object: privatev1.HostType_builder{Metadata: privatev1.Metadata_builder{Name: "create-id-change"}.Build()}.Build(),
+		response := &privatev1.BareMetalInstanceTemplatesCreateResponse{}
+		err = server.CreateWithCandidatePreparation(ctx, privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceTemplate_builder{Metadata: privatev1.Metadata_builder{Name: "create-id-change"}.Build()}.Build(),
 		}.Build(), &response,
-			func(_ context.Context, _ *privatev1.HostType, candidate *privatev1.HostType) error {
+			func(_ context.Context, _ *privatev1.BareMetalInstanceTemplate, candidate *privatev1.BareMetalInstanceTemplate) error {
 				candidate.SetId("replacement-id")
 				return nil
 			},
 		)
 		Expect(status.Code(err)).To(Equal(codes.PermissionDenied))
 
-		listResponse := &privatev1.HostTypesListResponse{}
-		err = server.List(ctx, privatev1.HostTypesListRequest_builder{}.Build(), &listResponse)
+		listResponse := &privatev1.BareMetalInstanceTemplatesListResponse{}
+		err = server.List(ctx, privatev1.BareMetalInstanceTemplatesListRequest_builder{}.Build(), &listResponse)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(listResponse.GetTotal()).To(Equal(int32(0)))
 	})
 
 	It("applies masked clears to a detached update candidate before the callback", func() {
-		server, err := NewGenericServer[*privatev1.HostType]().
+		server, err := NewGenericServer[*privatev1.BareMetalInstanceTemplate]().
 			SetLogger(logger).
-			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
+			SetService(privatev1.BareMetalInstanceTemplates_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
-		createResponse := &privatev1.HostTypesCreateResponse{}
-		err = server.Create(ctx, privatev1.HostTypesCreateRequest_builder{
-			Object: privatev1.HostType_builder{
+		createResponse := &privatev1.BareMetalInstanceTemplatesCreateResponse{}
+		err = server.Create(ctx, privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceTemplate_builder{
+				Id:          "callback_update",
 				Metadata:    privatev1.Metadata_builder{Name: "callback-update"}.Build(),
 				Description: "original-description",
 			}.Build(),
 		}.Build(), &createResponse)
 		Expect(err).ToNot(HaveOccurred())
 		created := createResponse.GetObject()
-		updateObject := privatev1.HostType_builder{
+		updateObject := privatev1.BareMetalInstanceTemplate_builder{
 			Id:       created.GetId(),
 			Metadata: privatev1.Metadata_builder{Name: created.GetMetadata().GetName()}.Build(),
 		}.Build()
-		var currentSeen, candidateSeen *privatev1.HostType
-		updateResponse := &privatev1.HostTypesUpdateResponse{}
-		err = server.UpdateWithCandidatePreparation(ctx, privatev1.HostTypesUpdateRequest_builder{
+		var currentSeen, candidateSeen *privatev1.BareMetalInstanceTemplate
+		updateResponse := &privatev1.BareMetalInstanceTemplatesUpdateResponse{}
+		err = server.UpdateWithCandidatePreparation(ctx, privatev1.BareMetalInstanceTemplatesUpdateRequest_builder{
 			Object:     updateObject,
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"description"}},
 		}.Build(), &updateResponse,
-			func(_ context.Context, current *privatev1.HostType, candidate *privatev1.HostType) error {
+			func(_ context.Context, current *privatev1.BareMetalInstanceTemplate, candidate *privatev1.BareMetalInstanceTemplate) error {
 				currentSeen = current
 				candidateSeen = candidate
 				Expect(current.GetDescription()).To(Equal("original-description"))
@@ -238,24 +240,25 @@ var _ = Describe("Generic server", func() {
 	})
 
 	It("does not alias a no-mask update request after persistence", func() {
-		server, err := NewGenericServer[*privatev1.HostType]().
+		server, err := NewGenericServer[*privatev1.BareMetalInstanceTemplate]().
 			SetLogger(logger).
-			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
+			SetService(privatev1.BareMetalInstanceTemplates_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
-		createResponse := &privatev1.HostTypesCreateResponse{}
-		err = server.Create(ctx, privatev1.HostTypesCreateRequest_builder{
-			Object: privatev1.HostType_builder{
+		createResponse := &privatev1.BareMetalInstanceTemplatesCreateResponse{}
+		err = server.Create(ctx, privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceTemplate_builder{
+				Id:          "no_mask_alias",
 				Metadata:    privatev1.Metadata_builder{Name: "no-mask-alias"}.Build(),
 				Description: "original-description",
 			}.Build(),
 		}.Build(), &createResponse)
 		Expect(err).ToNot(HaveOccurred())
 		created := createResponse.GetObject()
-		updateObject := privatev1.HostType_builder{
+		updateObject := privatev1.BareMetalInstanceTemplate_builder{
 			Id: created.GetId(),
 			Metadata: privatev1.Metadata_builder{
 				Name:   created.GetMetadata().GetName(),
@@ -263,128 +266,129 @@ var _ = Describe("Generic server", func() {
 			}.Build(),
 			Description: "updated-description",
 		}.Build()
-		updateResponse := &privatev1.HostTypesUpdateResponse{}
-		err = server.Update(ctx, privatev1.HostTypesUpdateRequest_builder{Object: updateObject}.Build(), &updateResponse)
+		updateResponse := &privatev1.BareMetalInstanceTemplatesUpdateResponse{}
+		err = server.Update(ctx, privatev1.BareMetalInstanceTemplatesUpdateRequest_builder{Object: updateObject}.Build(), &updateResponse)
 		Expect(err).ToNot(HaveOccurred())
 
 		updateObject.SetDescription("mutated-after-update")
 		updateObject.GetMetadata().GetLabels()["phase"] = "mutated-after-update"
-		getResponse := &privatev1.HostTypesGetResponse{}
-		err = server.Get(ctx, privatev1.HostTypesGetRequest_builder{Id: created.GetId()}.Build(), &getResponse)
+		getResponse := &privatev1.BareMetalInstanceTemplatesGetResponse{}
+		err = server.Get(ctx, privatev1.BareMetalInstanceTemplatesGetRequest_builder{Id: created.GetId()}.Build(), &getResponse)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(getResponse.GetObject().GetDescription()).To(Equal("updated-description"))
 		Expect(getResponse.GetObject().GetMetadata().GetLabels()).To(Equal(map[string]string{"phase": "updated"}))
 	})
 
 	It("does not persist when a create callback fails", func() {
-		server, err := NewGenericServer[*privatev1.HostType]().
+		server, err := NewGenericServer[*privatev1.BareMetalInstanceTemplate]().
 			SetLogger(logger).
-			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
+			SetService(privatev1.BareMetalInstanceTemplates_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
-		response := &privatev1.HostTypesCreateResponse{}
-		err = server.CreateWithCandidatePreparation(ctx, privatev1.HostTypesCreateRequest_builder{
-			Object: privatev1.HostType_builder{Metadata: privatev1.Metadata_builder{Name: "create-callback-failure"}.Build()}.Build(),
+		response := &privatev1.BareMetalInstanceTemplatesCreateResponse{}
+		err = server.CreateWithCandidatePreparation(ctx, privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceTemplate_builder{Metadata: privatev1.Metadata_builder{Name: "create-callback-failure"}.Build()}.Build(),
 		}.Build(), &response,
-			func(context.Context, *privatev1.HostType, *privatev1.HostType) error {
+			func(context.Context, *privatev1.BareMetalInstanceTemplate, *privatev1.BareMetalInstanceTemplate) error {
 				return status.Error(codes.InvalidArgument, "callback failed")
 			},
 		)
 		Expect(err).To(HaveOccurred())
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
-		listResponse := &privatev1.HostTypesListResponse{}
-		err = server.List(ctx, privatev1.HostTypesListRequest_builder{}.Build(), &listResponse)
+		listResponse := &privatev1.BareMetalInstanceTemplatesListResponse{}
+		err = server.List(ctx, privatev1.BareMetalInstanceTemplatesListRequest_builder{}.Build(), &listResponse)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(listResponse.GetTotal()).To(Equal(int32(0)))
 	})
 
 	It("does not persist a failed update callback and leaves the stored object unchanged", func() {
-		server, err := NewGenericServer[*privatev1.HostType]().
+		server, err := NewGenericServer[*privatev1.BareMetalInstanceTemplate]().
 			SetLogger(logger).
-			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
+			SetService(privatev1.BareMetalInstanceTemplates_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
-		createResponse := &privatev1.HostTypesCreateResponse{}
-		err = server.Create(ctx, privatev1.HostTypesCreateRequest_builder{
-			Object: privatev1.HostType_builder{
+		createResponse := &privatev1.BareMetalInstanceTemplatesCreateResponse{}
+		err = server.Create(ctx, privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceTemplate_builder{
 				Metadata:    privatev1.Metadata_builder{Name: "update-callback-failure"}.Build(),
 				Description: "original-description",
 			}.Build(),
 		}.Build(), &createResponse)
 		Expect(err).ToNot(HaveOccurred())
 		created := createResponse.GetObject()
-		updateResponse := &privatev1.HostTypesUpdateResponse{}
-		err = server.UpdateWithCandidatePreparation(ctx, privatev1.HostTypesUpdateRequest_builder{
-			Object: privatev1.HostType_builder{
+		updateResponse := &privatev1.BareMetalInstanceTemplatesUpdateResponse{}
+		err = server.UpdateWithCandidatePreparation(ctx, privatev1.BareMetalInstanceTemplatesUpdateRequest_builder{
+			Object: privatev1.BareMetalInstanceTemplate_builder{
 				Id:          created.GetId(),
 				Metadata:    privatev1.Metadata_builder{Name: created.GetMetadata().GetName()}.Build(),
 				Description: "attempted-description",
 			}.Build(),
 		}.Build(), &updateResponse,
-			func(context.Context, *privatev1.HostType, *privatev1.HostType) error {
+			func(context.Context, *privatev1.BareMetalInstanceTemplate, *privatev1.BareMetalInstanceTemplate) error {
 				return status.Error(codes.InvalidArgument, "callback failed")
 			},
 		)
 		Expect(err).To(HaveOccurred())
-		getResponse := &privatev1.HostTypesGetResponse{}
-		err = server.Get(ctx, privatev1.HostTypesGetRequest_builder{Id: created.GetId()}.Build(), &getResponse)
+		getResponse := &privatev1.BareMetalInstanceTemplatesGetResponse{}
+		err = server.Get(ctx, privatev1.BareMetalInstanceTemplatesGetRequest_builder{Id: created.GetId()}.Build(), &getResponse)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(getResponse.GetObject().GetDescription()).To(Equal("original-description"))
 	})
 
 	It("revalidates a callback-mutated update before persistence", func() {
-		server, err := NewGenericServer[*privatev1.HostType]().
+		server, err := NewGenericServer[*privatev1.BareMetalInstanceTemplate]().
 			SetLogger(logger).
-			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
+			SetService(privatev1.BareMetalInstanceTemplates_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
-		createResponse := &privatev1.HostTypesCreateResponse{}
-		err = server.Create(ctx, privatev1.HostTypesCreateRequest_builder{
-			Object: privatev1.HostType_builder{
+		createResponse := &privatev1.BareMetalInstanceTemplatesCreateResponse{}
+		err = server.Create(ctx, privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceTemplate_builder{
 				Metadata:    privatev1.Metadata_builder{Name: "invalid-callback-update"}.Build(),
 				Description: "original-description",
 			}.Build(),
 		}.Build(), &createResponse)
 		Expect(err).ToNot(HaveOccurred())
 		created := createResponse.GetObject()
-		updateResponse := &privatev1.HostTypesUpdateResponse{}
-		err = server.UpdateWithCandidatePreparation(ctx, privatev1.HostTypesUpdateRequest_builder{
-			Object: privatev1.HostType_builder{
+		updateResponse := &privatev1.BareMetalInstanceTemplatesUpdateResponse{}
+		err = server.UpdateWithCandidatePreparation(ctx, privatev1.BareMetalInstanceTemplatesUpdateRequest_builder{
+			Object: privatev1.BareMetalInstanceTemplate_builder{
 				Id:       created.GetId(),
 				Metadata: privatev1.Metadata_builder{Name: created.GetMetadata().GetName()}.Build(),
 			}.Build(),
 		}.Build(), &updateResponse,
-			func(_ context.Context, _ *privatev1.HostType, candidate *privatev1.HostType) error {
+			func(_ context.Context, _ *privatev1.BareMetalInstanceTemplate, candidate *privatev1.BareMetalInstanceTemplate) error {
 				candidate.SetMetadata(nil)
 				return nil
 			},
 		)
 		Expect(err).To(HaveOccurred())
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
-		getResponse := &privatev1.HostTypesGetResponse{}
-		err = server.Get(ctx, privatev1.HostTypesGetRequest_builder{Id: created.GetId()}.Build(), &getResponse)
+		getResponse := &privatev1.BareMetalInstanceTemplatesGetResponse{}
+		err = server.Get(ctx, privatev1.BareMetalInstanceTemplatesGetRequest_builder{Id: created.GetId()}.Build(), &getResponse)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(getResponse.GetObject().GetDescription()).To(Equal("original-description"))
 	})
 
 	It("rejects an update callback that clears metadata", func() {
-		server, err := NewGenericServer[*privatev1.HostType]().
+		server, err := NewGenericServer[*privatev1.BareMetalInstanceTemplate]().
 			SetLogger(logger).
-			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
+			SetService(privatev1.BareMetalInstanceTemplates_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
-		createResponse := &privatev1.HostTypesCreateResponse{}
-		err = server.Create(ctx, privatev1.HostTypesCreateRequest_builder{
-			Object: privatev1.HostType_builder{
+		createResponse := &privatev1.BareMetalInstanceTemplatesCreateResponse{}
+		err = server.Create(ctx, privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceTemplate_builder{
+				Id:          "update_metadata_clear",
 				Metadata:    privatev1.Metadata_builder{Name: "update-metadata-clear"}.Build(),
 				Description: "original-description",
 			}.Build(),
@@ -392,15 +396,15 @@ var _ = Describe("Generic server", func() {
 		Expect(err).ToNot(HaveOccurred())
 		created := createResponse.GetObject()
 
-		updateResponse := &privatev1.HostTypesUpdateResponse{}
-		err = server.UpdateWithCandidatePreparation(ctx, privatev1.HostTypesUpdateRequest_builder{
-			Object: privatev1.HostType_builder{
+		updateResponse := &privatev1.BareMetalInstanceTemplatesUpdateResponse{}
+		err = server.UpdateWithCandidatePreparation(ctx, privatev1.BareMetalInstanceTemplatesUpdateRequest_builder{
+			Object: privatev1.BareMetalInstanceTemplate_builder{
 				Id:          created.GetId(),
 				Metadata:    privatev1.Metadata_builder{Name: created.GetMetadata().GetName()}.Build(),
 				Description: "attempted-description",
 			}.Build(),
 		}.Build(), &updateResponse,
-			func(_ context.Context, _ *privatev1.HostType, candidate *privatev1.HostType) error {
+			func(_ context.Context, _ *privatev1.BareMetalInstanceTemplate, candidate *privatev1.BareMetalInstanceTemplate) error {
 				candidate.SetMetadata(nil)
 				return nil
 			},
@@ -408,25 +412,26 @@ var _ = Describe("Generic server", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 
-		getResponse := &privatev1.HostTypesGetResponse{}
-		err = server.Get(ctx, privatev1.HostTypesGetRequest_builder{Id: created.GetId()}.Build(), &getResponse)
+		getResponse := &privatev1.BareMetalInstanceTemplatesGetResponse{}
+		err = server.Get(ctx, privatev1.BareMetalInstanceTemplatesGetRequest_builder{Id: created.GetId()}.Build(), &getResponse)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(getResponse.GetObject().GetDescription()).To(Equal("original-description"))
 		Expect(getResponse.GetObject().GetMetadata().GetTenant()).To(Equal(testTenant))
 	})
 
 	It("rejects an update callback that sets a disallowed tenant", func() {
-		server, err := NewGenericServer[*privatev1.HostType]().
+		server, err := NewGenericServer[*privatev1.BareMetalInstanceTemplate]().
 			SetLogger(logger).
-			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
+			SetService(privatev1.BareMetalInstanceTemplates_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
-		createResponse := &privatev1.HostTypesCreateResponse{}
-		err = server.Create(ctx, privatev1.HostTypesCreateRequest_builder{
-			Object: privatev1.HostType_builder{
+		createResponse := &privatev1.BareMetalInstanceTemplatesCreateResponse{}
+		err = server.Create(ctx, privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceTemplate_builder{
+				Id:          "update_disallowed_tenant",
 				Metadata:    privatev1.Metadata_builder{Name: "update-disallowed-tenant"}.Build(),
 				Description: "original-description",
 			}.Build(),
@@ -434,15 +439,15 @@ var _ = Describe("Generic server", func() {
 		Expect(err).ToNot(HaveOccurred())
 		created := createResponse.GetObject()
 
-		updateResponse := &privatev1.HostTypesUpdateResponse{}
-		err = server.UpdateWithCandidatePreparation(ctx, privatev1.HostTypesUpdateRequest_builder{
-			Object: privatev1.HostType_builder{
+		updateResponse := &privatev1.BareMetalInstanceTemplatesUpdateResponse{}
+		err = server.UpdateWithCandidatePreparation(ctx, privatev1.BareMetalInstanceTemplatesUpdateRequest_builder{
+			Object: privatev1.BareMetalInstanceTemplate_builder{
 				Id:          created.GetId(),
 				Metadata:    privatev1.Metadata_builder{Name: created.GetMetadata().GetName()}.Build(),
 				Description: "attempted-description",
 			}.Build(),
 		}.Build(), &updateResponse,
-			func(_ context.Context, _ *privatev1.HostType, candidate *privatev1.HostType) error {
+			func(_ context.Context, _ *privatev1.BareMetalInstanceTemplate, candidate *privatev1.BareMetalInstanceTemplate) error {
 				candidate.GetMetadata().SetTenant(auth.SharedTenant)
 				return nil
 			},
@@ -450,25 +455,25 @@ var _ = Describe("Generic server", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(status.Code(err)).To(Equal(codes.PermissionDenied))
 
-		getResponse := &privatev1.HostTypesGetResponse{}
-		err = server.Get(ctx, privatev1.HostTypesGetRequest_builder{Id: created.GetId()}.Build(), &getResponse)
+		getResponse := &privatev1.BareMetalInstanceTemplatesGetResponse{}
+		err = server.Get(ctx, privatev1.BareMetalInstanceTemplatesGetRequest_builder{Id: created.GetId()}.Build(), &getResponse)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(getResponse.GetObject().GetDescription()).To(Equal("original-description"))
 		Expect(getResponse.GetObject().GetMetadata().GetTenant()).To(Equal(testTenant))
 	})
 
 	It("does not add a row when persistence fails", func() {
-		server, err := NewGenericServer[*privatev1.HostType]().
+		server, err := NewGenericServer[*privatev1.BareMetalInstanceTemplate]().
 			SetLogger(logger).
-			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
+			SetService(privatev1.BareMetalInstanceTemplates_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
-		request := privatev1.HostTypesCreateRequest_builder{
-			Object: privatev1.HostType_builder{Metadata: privatev1.Metadata_builder{Name: "duplicate-create"}.Build()}.Build(),
+		request := privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceTemplate_builder{Metadata: privatev1.Metadata_builder{Name: "duplicate-create"}.Build()}.Build(),
 		}.Build()
-		response := &privatev1.HostTypesCreateResponse{}
+		response := &privatev1.BareMetalInstanceTemplatesCreateResponse{}
 		err = server.Create(ctx, request, &response)
 		Expect(err).ToNot(HaveOccurred())
 		tx, err := database.TxFromContext(ctx)
@@ -478,27 +483,28 @@ var _ = Describe("Generic server", func() {
 		})
 		Expect(err).To(HaveOccurred())
 		Expect(status.Code(err)).To(Equal(codes.AlreadyExists))
-		listResponse := &privatev1.HostTypesListResponse{}
-		err = server.List(ctx, privatev1.HostTypesListRequest_builder{}.Build(), &listResponse)
+		listResponse := &privatev1.BareMetalInstanceTemplatesListResponse{}
+		err = server.List(ctx, privatev1.BareMetalInstanceTemplatesListRequest_builder{}.Build(), &listResponse)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(listResponse.GetTotal()).To(Equal(int32(1)))
 	})
 
 	It("runs dry-run callbacks without persisting", func() {
-		server, err := NewGenericServer[*privatev1.HostType]().
+		server, err := NewGenericServer[*privatev1.BareMetalInstanceTemplate]().
 			SetLogger(logger).
-			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
+			SetService(privatev1.BareMetalInstanceTemplates_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
-		requestObject := privatev1.HostType_builder{
+		requestObject := privatev1.BareMetalInstanceTemplate_builder{
+			Id:          "dry_run_callback",
 			Metadata:    privatev1.Metadata_builder{Name: "dry-run-callback"}.Build(),
 			Description: "request-description",
 		}.Build()
-		response := &privatev1.HostTypesCreateResponse{}
-		err = server.CreateWithCandidatePreparation(dryRunCtx(), privatev1.HostTypesCreateRequest_builder{Object: requestObject}.Build(), &response,
-			func(_ context.Context, current *privatev1.HostType, candidate *privatev1.HostType) error {
+		response := &privatev1.BareMetalInstanceTemplatesCreateResponse{}
+		err = server.CreateWithCandidatePreparation(dryRunCtx(), privatev1.BareMetalInstanceTemplatesCreateRequest_builder{Object: requestObject}.Build(), &response,
+			func(_ context.Context, current *privatev1.BareMetalInstanceTemplate, candidate *privatev1.BareMetalInstanceTemplate) error {
 				Expect(current).To(BeNil())
 				candidate.SetDescription("dry-run-description")
 				return nil
@@ -507,8 +513,8 @@ var _ = Describe("Generic server", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(response.GetObject().GetDescription()).To(Equal("dry-run-description"))
 		Expect(requestObject.GetDescription()).To(Equal("request-description"))
-		listResponse := &privatev1.HostTypesListResponse{}
-		err = server.List(ctx, privatev1.HostTypesListRequest_builder{}.Build(), &listResponse)
+		listResponse := &privatev1.BareMetalInstanceTemplatesListResponse{}
+		err = server.List(ctx, privatev1.BareMetalInstanceTemplatesListRequest_builder{}.Build(), &listResponse)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(listResponse.GetTotal()).To(Equal(int32(0)))
 	})
@@ -517,19 +523,19 @@ var _ = Describe("Generic server", func() {
 var _ = Describe("Generic server filtering", func() {
 	It("Classifies a filter-translate failure as InvalidArgument, not Internal", func() {
 		// Build a server whose filter descriptor is restricted to a message that doesn't have a 'title' field.
-		server, err := NewGenericServer[*privatev1.HostType]().
+		server, err := NewGenericServer[*privatev1.BareMetalInstanceTemplate]().
 			SetLogger(logger).
-			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
+			SetService(privatev1.BareMetalInstanceTemplates_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
 			SetFilterDesc((*privatev1.Tenant)(nil).ProtoReflect().Descriptor()).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
-		response := &privatev1.HostTypesListResponse{}
+		response := &privatev1.BareMetalInstanceTemplatesListResponse{}
 		err = server.List(
 			ctx,
-			privatev1.HostTypesListRequest_builder{
+			privatev1.BareMetalInstanceTemplatesListRequest_builder{
 				Filter: new("this.title == 'x'"),
 			}.Build(),
 			&response,
@@ -540,13 +546,13 @@ var _ = Describe("Generic server filtering", func() {
 })
 
 var _ = Describe("Generic server dry run", func() {
-	var server *GenericServer[*privatev1.HostType]
+	var server *GenericServer[*privatev1.BareMetalInstanceTemplate]
 
 	BeforeEach(func() {
 		var err error
-		server, err = NewGenericServer[*privatev1.HostType]().
+		server, err = NewGenericServer[*privatev1.BareMetalInstanceTemplate]().
 			SetLogger(logger).
-			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
+			SetService(privatev1.BareMetalInstanceTemplates_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
 			Build()
@@ -554,11 +560,11 @@ var _ = Describe("Generic server dry run", func() {
 	})
 
 	It("Assigns creator and tenant to the object", func() {
-		response := &privatev1.HostTypesCreateResponse{}
+		response := &privatev1.BareMetalInstanceTemplatesCreateResponse{}
 		err := server.Create(
 			dryRunCtx(),
-			privatev1.HostTypesCreateRequest_builder{
-				Object: privatev1.HostType_builder{
+			privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
+				Object: privatev1.BareMetalInstanceTemplate_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name: "my-dry-run-object",
 					}.Build(),
@@ -574,11 +580,11 @@ var _ = Describe("Generic server dry run", func() {
 	})
 
 	It("Validates metadata and rejects invalid labels", func() {
-		response := &privatev1.HostTypesCreateResponse{}
+		response := &privatev1.BareMetalInstanceTemplatesCreateResponse{}
 		err := server.Create(
 			dryRunCtx(),
-			privatev1.HostTypesCreateRequest_builder{
-				Object: privatev1.HostType_builder{
+			privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
+				Object: privatev1.BareMetalInstanceTemplate_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name:   "valid-name",
 						Labels: map[string]string{"!!!invalid": "value"},
@@ -592,11 +598,11 @@ var _ = Describe("Generic server dry run", func() {
 	})
 
 	It("Does not persist the object", func() {
-		response := &privatev1.HostTypesCreateResponse{}
+		response := &privatev1.BareMetalInstanceTemplatesCreateResponse{}
 		err := server.Create(
 			dryRunCtx(),
-			privatev1.HostTypesCreateRequest_builder{
-				Object: privatev1.HostType_builder{
+			privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
+				Object: privatev1.BareMetalInstanceTemplate_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name: "dry-run-no-persist",
 					}.Build(),
@@ -606,9 +612,9 @@ var _ = Describe("Generic server dry run", func() {
 		)
 		Expect(err).ToNot(HaveOccurred())
 
-		listResponse := &privatev1.HostTypesListResponse{}
+		listResponse := &privatev1.BareMetalInstanceTemplatesListResponse{}
 		err = server.List(ctx,
-			privatev1.HostTypesListRequest_builder{}.Build(),
+			privatev1.BareMetalInstanceTemplatesListRequest_builder{}.Build(),
 			&listResponse,
 		)
 		Expect(err).ToNot(HaveOccurred())
@@ -616,11 +622,11 @@ var _ = Describe("Generic server dry run", func() {
 	})
 
 	It("Does not persist objects", func() {
-		response := &privatev1.HostTypesCreateResponse{}
+		response := &privatev1.BareMetalInstanceTemplatesCreateResponse{}
 		err := server.Create(
 			dryRunCtx(),
-			privatev1.HostTypesCreateRequest_builder{
-				Object: privatev1.HostType_builder{
+			privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
+				Object: privatev1.BareMetalInstanceTemplate_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name: "dry-run-no-events",
 					}.Build(),
@@ -632,9 +638,9 @@ var _ = Describe("Generic server dry run", func() {
 	})
 
 	It("Persists normally when header value is false", func() {
-		srv, err := NewGenericServer[*privatev1.HostType]().
+		srv, err := NewGenericServer[*privatev1.BareMetalInstanceTemplate]().
 			SetLogger(logger).
-			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
+			SetService(privatev1.BareMetalInstanceTemplates_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
 			Build()
@@ -643,11 +649,11 @@ var _ = Describe("Generic server dry run", func() {
 		falseCtx := grpcmetadata.NewIncomingContext(ctx,
 			grpcmetadata.Pairs(DryRunMetadataKey, "false"))
 
-		response := &privatev1.HostTypesCreateResponse{}
+		response := &privatev1.BareMetalInstanceTemplatesCreateResponse{}
 		err = srv.Create(
 			falseCtx,
-			privatev1.HostTypesCreateRequest_builder{
-				Object: privatev1.HostType_builder{
+			privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
+				Object: privatev1.BareMetalInstanceTemplate_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name: "not-a-dry-run",
 					}.Build(),
@@ -657,9 +663,9 @@ var _ = Describe("Generic server dry run", func() {
 		)
 		Expect(err).ToNot(HaveOccurred())
 
-		listResponse := &privatev1.HostTypesListResponse{}
+		listResponse := &privatev1.BareMetalInstanceTemplatesListResponse{}
 		err = srv.List(ctx,
-			privatev1.HostTypesListRequest_builder{}.Build(),
+			privatev1.BareMetalInstanceTemplatesListRequest_builder{}.Build(),
 			&listResponse,
 		)
 		Expect(err).ToNot(HaveOccurred())

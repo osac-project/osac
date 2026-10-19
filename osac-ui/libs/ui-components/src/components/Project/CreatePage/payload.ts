@@ -6,7 +6,9 @@ import { ProjectCreateValues } from './values';
  * See PrivateProjectsServer.Create — metadata.project must be empty or match that prefix.
  */
 export const getCreateProjectPayload = (values: ProjectCreateValues) => {
-  const name = values.metadata.project ? `${values.metadata.project}.${values.metadata.name}` : values.metadata.name;
+  const name = values.metadata.project
+    ? `${values.metadata.project}.${values.metadata.name}`
+    : values.metadata.name;
 
   return {
     metadata: {

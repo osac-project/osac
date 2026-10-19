@@ -1,16 +1,21 @@
 import { screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { ComputeInstance, ExternalIPAttachment } from '@osac/types';
+import type {
+  ComputeInstance,
+  ExternalIPAttachment,
+  ExternalIPAttachmentsListResponse,
+} from '@osac/types';
 import { ComputeInstanceState, ExternalIPAttachmentState } from '@osac/types';
 
 import VmDetailsActionButtons from './VmDetailsActionButtons';
-import { useExternalIPAttachments } from '../../../api/v1/external-ip';
+import * as resourceModule from '../../../api/use-resource';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
-vi.mock('../../../api/v1/external-ip', () => ({
-  useExternalIPAttachments: vi.fn(),
-}));
+vi.mock('../../../api/use-resource', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../api/use-resource')>();
+  return { ...actual, useListResource: vi.fn() };
+});
 
 vi.mock('../useVmPowerAction', () => ({
   useVmPowerAction: () => ({ runPowerAction: vi.fn() }),
@@ -26,12 +31,12 @@ const attachment = (state: ExternalIPAttachmentState, message?: string) =>
   ({ status: { state, message } }) as ExternalIPAttachment;
 
 const setAttachment = (state: ExternalIPAttachmentState, message?: string) => {
-  vi.mocked(useExternalIPAttachments).mockReturnValue({
-    data: [attachment(state, message)],
+  vi.mocked(resourceModule.useListResource).mockReturnValue({
+    data: { items: [attachment(state, message)] } as ExternalIPAttachmentsListResponse,
     isLoading: false,
     isFetching: false,
     error: null,
-  } as ReturnType<typeof useExternalIPAttachments>);
+  } as unknown as ReturnType<typeof resourceModule.useListResource>);
 };
 
 describe('VmDetailsActionButtons external IP states', () => {

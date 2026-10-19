@@ -39,7 +39,7 @@ const ClusterGeneralStep = ({ catalogItem }: ClusterGeneralStepProps) => {
             filter.field('type').equals(SecretType.PULL_SECRET),
           ),
         )}
-        label={t('Pull secret secret')}
+        label={t('Pull secret')}
         name="spec.pullSecretSecret.name"
         isRequired
       />

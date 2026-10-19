@@ -50,7 +50,8 @@ type SecurityGroupsClient interface {
 	Get(ctx context.Context, in *SecurityGroupsGetRequest, opts ...grpc.CallOption) (*SecurityGroupsGetResponse, error)
 	// Creates a new security group.
 	Create(ctx context.Context, in *SecurityGroupsCreateRequest, opts ...grpc.CallOption) (*SecurityGroupsCreateResponse, error)
-	// Updates an existing security group.
+	// Updates the ingress and egress rules of an existing security group.
+	// Callers must provide the complete rule lists for both directions.
 	Update(ctx context.Context, in *SecurityGroupsUpdateRequest, opts ...grpc.CallOption) (*SecurityGroupsUpdateResponse, error)
 	// Deletes a security group.
 	Delete(ctx context.Context, in *SecurityGroupsDeleteRequest, opts ...grpc.CallOption) (*SecurityGroupsDeleteResponse, error)
@@ -136,7 +137,8 @@ type SecurityGroupsServer interface {
 	Get(context.Context, *SecurityGroupsGetRequest) (*SecurityGroupsGetResponse, error)
 	// Creates a new security group.
 	Create(context.Context, *SecurityGroupsCreateRequest) (*SecurityGroupsCreateResponse, error)
-	// Updates an existing security group.
+	// Updates the ingress and egress rules of an existing security group.
+	// Callers must provide the complete rule lists for both directions.
 	Update(context.Context, *SecurityGroupsUpdateRequest) (*SecurityGroupsUpdateResponse, error)
 	// Deletes a security group.
 	Delete(context.Context, *SecurityGroupsDeleteRequest) (*SecurityGroupsDeleteResponse, error)

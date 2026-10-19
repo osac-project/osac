@@ -1,0 +1,13 @@
+---
+name: cudn-evpn
+title: CUDN EVPN Network Manager
+description: >
+  Connects a Subnet's namespace to the fabric using an EVPN-backed
+  ClusterUserDefinedNetwork.
+
+template_type: network
+k8s_manager: cudn_evpn
+capabilities:
+  supports_ipv4: true
+  supports_ipv6: false
+  supports_dual_stack: false

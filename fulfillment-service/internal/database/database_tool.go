@@ -616,6 +616,7 @@ func (t *tool) checkObjectTable(ctx context.Context, pool *pgxpool.Pool, table s
 	issues += t.checkTenantForeignKey(ctx, pool, table)
 	issues += t.checkTableExists(ctx, pool, "archived_"+table)
 	issues += t.checkEnqueueChangeTrigger(ctx, pool, table)
+	issues += t.checkOwnerReferenceTriggers(ctx, pool, table)
 	return issues
 }
 
@@ -780,6 +781,33 @@ func (t *tool) checkTableExists(ctx context.Context, pool *pgxpool.Pool, table s
 // created after the original changes migration will not get that trigger automatically, so this check fails the schema
 // unless a later migration attaches it. Returns the number of issues found.
 func (t *tool) checkEnqueueChangeTrigger(ctx context.Context, pool *pgxpool.Pool, table string) int {
+	return t.checkTriggerExists(ctx, pool, table, enqueueChangeTriggerName)
+}
+
+// checkOwnerReferenceTriggers verifies that the tables participating in the owner-reference
+// attribution contract have their triggers: tables that record a reference get the set-once and
+// live-target checks, and tables that are referenced get the owner not-in-use check on delete.
+// A table only participates when it is listed in ownerReferences, which must be extended
+// together with the table mapping in migration 125 when a new resource starts recording an
+// owner reference; CheckSchema then fails the table until a migration attaches its triggers.
+// Returns the number of issues found.
+func (t *tool) checkOwnerReferenceTriggers(ctx context.Context, pool *pgxpool.Pool, table string) int {
+	issues := 0
+	if _, records := ownerReferences[table]; records {
+		issues += t.checkTriggerExists(ctx, pool, table, ownerReferenceTriggerName)
+	}
+	for source := range ownerReferences {
+		if ownerReferences[source] == table {
+			issues += t.checkTriggerExists(ctx, pool, table, ownerReferenceNotInUseTriggerName)
+			break
+		}
+	}
+	return issues
+}
+
+// checkTriggerExists verifies that the given object table has a trigger with the given name.
+// Returns the number of issues found.
+func (t *tool) checkTriggerExists(ctx context.Context, pool *pgxpool.Pool, table, trigger string) int {
 	var count int
 	err := pool.QueryRow(
 		ctx,
@@ -799,13 +827,14 @@ func (t *tool) checkEnqueueChangeTrigger(ctx context.Context, pool *pgxpool.Pool
 			not t.tgisinternal
 		`,
 		table,
-		enqueueChangeTriggerName,
+		trigger,
 	).Scan(&count)
 	if err != nil {
 		t.logger.ErrorContext(
 			ctx,
-			"Failed to check enqueue_change trigger",
+			"Failed to check trigger",
 			slog.String("table", table),
+			slog.String("trigger", trigger),
 			slog.Any("error", err),
 		)
 		return 1
@@ -813,8 +842,9 @@ func (t *tool) checkEnqueueChangeTrigger(ctx context.Context, pool *pgxpool.Pool
 	if count != 1 {
 		t.logger.ErrorContext(
 			ctx,
-			"Object table is missing the enqueue_change trigger",
+			"Object table is missing a required trigger",
 			slog.String("table", table),
+			slog.String("trigger", trigger),
 		)
 		return 1
 	}
@@ -959,6 +989,20 @@ var toolFilePathParameters = []string{
 // enqueueChangeTriggerName is the trigger that copies object-table writes into the changes table for the event
 // publisher.
 const enqueueChangeTriggerName = "enqueue_change"
+
+// Names of the triggers that enforce the owner-reference attribution contract.
+const (
+	ownerReferenceTriggerName         = "check_owner_reference"
+	ownerReferenceNotInUseTriggerName = "check_owner_reference_not_in_use"
+)
+
+// ownerReferences maps each object table that records an owner reference in its status to the
+// table holding the referenced resource. Extend together with the table and JSON-path mapping
+// functions in migration 125 when a new resource starts recording an owner reference;
+// CheckSchema fails a mapped table whose migration has not attached the attribution triggers.
+var ownerReferences = map[string]string{
+	"bare_metal_instances": "clusters",
+}
 
 // toolObjectColumns maps each column name that the DAO expects in every object table to its expected PostgreSQL
 // full type, as reported by 'pg_catalog.format_type'.

@@ -9,7 +9,6 @@ import {
   hasCatalogFieldDefinition,
   readCatalogFieldDefinitions,
 } from '../catalogOverlay';
-import { CATALOG_PROVISION_MULTILINE_TEXTAREA } from '../constants';
 import { trimSshPublicKey } from './credentialValidation';
 
 interface SshKeyFieldProps {
@@ -41,8 +40,6 @@ const SshKeyField = ({ catalogItem, wirePath, name }: SshKeyFieldProps) => {
       isRequired={isRequired}
       isDisabled={!overlay.editable}
       multiline
-      rows={CATALOG_PROVISION_MULTILINE_TEXTAREA.rows}
-      resizeOrientation={CATALOG_PROVISION_MULTILINE_TEXTAREA.resizeOrientation}
       helperText={t(
         'Paste a public SSH key for remote access. Supported types: ssh-rsa, ssh-ed25519, and ecdsa-sha2-nistp256/384/521.',
       )}

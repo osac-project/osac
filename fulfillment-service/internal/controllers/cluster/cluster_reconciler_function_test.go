@@ -14,8 +14,10 @@ language governing permissions and limitations under the License.
 package cluster
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -115,14 +117,6 @@ var _ = Describe("update tenant annotation", func() {
 			WithScheme(scheme).
 			Build()
 
-		hubCache := controllers.NewMockHubCache(ctrl)
-		hubCache.EXPECT().
-			Get(gomock.Any(), hubID).
-			Return(&controllers.HubEntry{
-				Namespace: hubNamespace,
-				Client:    fakeClient,
-			}, nil)
-
 		cluster := privatev1.Cluster_builder{
 			Id: clusterID,
 			Metadata: privatev1.Metadata_builder{
@@ -131,6 +125,10 @@ var _ = Describe("update tenant annotation", func() {
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
 				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
+				NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
+					Subnet:         &privatev1.SubnetLocalReference{Name: "created-subnet"},
+					SecurityGroups: []*privatev1.SecurityGroupLocalReference{{Name: "created-security-group"}},
+				}.Build(),
 				AddOnOperators: []*privatev1.AddOnOperatorReference{
 					privatev1.AddOnOperatorReference_builder{Id: "operator-1", Name: "operator-one"}.Build(),
 					privatev1.AddOnOperatorReference_builder{Id: "operator-2", Name: "operator-two"}.Build(),
@@ -144,9 +142,9 @@ var _ = Describe("update tenant annotation", func() {
 
 		t := &task{
 			r: &function{
-				logger:         logger,
-				hubCache:       hubCache,
-				maskCalculator: nil,
+				logger:              logger,
+				networkingHubReader: readyClusterNetworkingHubReader(hubID, hubNamespace, fakeClient),
+				maskCalculator:      nil,
 			},
 			cluster: cluster,
 		}
@@ -165,6 +163,10 @@ var _ = Describe("update tenant annotation", func() {
 		Expect(createdCR.GetAnnotations()).NotTo(HaveKey("osac.openshift.io/fulfillment-trust-enabled"))
 		Expect(createdCR.GetLabels()).To(HaveKeyWithValue(labels.ClusterOrderUuid, clusterID))
 		Expect(createdCR.Spec.AddOnOperators).To(Equal([]string{"operator-one", "operator-two"}))
+		Expect(createdCR.Spec.NetworkAttachment).To(Equal(&osacv1alpha1.ClusterNetworkAttachment{
+			SubnetRef:         "created-subnet",
+			SecurityGroupRefs: []string{"created-security-group"},
+		}))
 	})
 
 	It("should update ClusterOrder when node set size changes on a ready cluster", func() {
@@ -251,6 +253,76 @@ var _ = Describe("update tenant annotation", func() {
 		Expect(updatedCR.Spec.NodeRequests).To(HaveLen(1))
 		Expect(updatedCR.Spec.NodeRequests[0].BareMetal.InstanceType).To(Equal("gpu.gb200"))
 		Expect(updatedCR.Spec.NodeRequests[0].NumberOfNodes).To(Equal(5))
+	})
+
+	It("preserves the existing network attachment while patching a node set update", func() {
+		storedAttachment := &osacv1alpha1.ClusterNetworkAttachment{
+			SubnetRef:         "stored-subnet-private",
+			SecurityGroupRefs: []string{"stored-security-group-private"},
+		}
+		existingOrder := &osacv1alpha1.ClusterOrder{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "order-network-immutable",
+				Namespace: hubNamespace,
+				Labels:    map[string]string{labels.ClusterOrderUuid: clusterID},
+				Annotations: map[string]string{
+					annotations.Tenant: tenantName,
+				},
+			},
+			Spec: osacv1alpha1.ClusterOrderSpec{
+				TemplateID:        "test-template",
+				NetworkAttachment: storedAttachment,
+				NodeRequests: []osacv1alpha1.NodeRequest{{
+					NodeSet:       "gpu-gb200",
+					BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "gpu.gb200"},
+					NumberOfNodes: 3,
+				}},
+			},
+		}
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existingOrder).Build()
+		var logOutput bytes.Buffer
+		t := &task{
+			r: &function{
+				logger:              slog.New(slog.NewTextHandler(&logOutput, nil)),
+				networkingHubReader: readyClusterNetworkingHubReader(hubID, hubNamespace, fakeClient),
+			},
+			cluster: privatev1.Cluster_builder{
+				Id: clusterID,
+				Metadata: privatev1.Metadata_builder{
+					Finalizers: []string{finalizers.Controller},
+					Tenant:     tenantName,
+				}.Build(),
+				Spec: privatev1.ClusterSpec_builder{
+					Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
+					NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
+						Subnet:         &privatev1.SubnetLocalReference{Name: "requested-subnet"},
+						SecurityGroups: []*privatev1.SecurityGroupLocalReference{{Name: "requested-security-group"}},
+					}.Build(),
+					NodeSets: map[string]*privatev1.ClusterNodeSet{
+						"gpu-gb200": privatev1.ClusterNodeSet_builder{
+							BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu.gb200"},
+							Size:                  proto.Int32(5),
+						}.Build(),
+					},
+				}.Build(),
+				Status: privatev1.ClusterStatus_builder{
+					State: privatev1.ClusterState_CLUSTER_STATE_READY,
+					Hub:   hubID,
+				}.Build(),
+			}.Build(),
+		}
+
+		Expect(t.update(ctx)).To(Succeed())
+		updatedOrder := &osacv1alpha1.ClusterOrder{}
+		Expect(fakeClient.Get(ctx, clnt.ObjectKeyFromObject(existingOrder), updatedOrder)).To(Succeed())
+		Expect(updatedOrder.Spec.NetworkAttachment).To(Equal(storedAttachment))
+		Expect(updatedOrder.Spec.NodeRequests).To(HaveLen(1))
+		Expect(updatedOrder.Spec.NodeRequests[0].NumberOfNodes).To(Equal(5))
+		Expect(logOutput.String()).To(ContainSubstring("preserving stored network attachment"))
+		Expect(logOutput.String()).NotTo(ContainSubstring("stored-subnet-private"))
+		Expect(logOutput.String()).NotTo(ContainSubstring("stored-security-group-private"))
 	})
 
 	It("should update ClusterOrder when node set size changes on a progressing cluster", func() {
@@ -465,6 +537,13 @@ var _ = Describe("update tenant annotation", func() {
 				Template:     &privatev1.ClusterTemplateReference{Name: "test-template"},
 				SshPublicKey: &sshKey,
 				Version:      &privatev1.ClusterVersionReference{Name: versionName},
+				NodeSets: map[string]*privatev1.ClusterNodeSet{
+					"workers": privatev1.ClusterNodeSet_builder{
+						BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "bm.large"},
+						Size:                  proto.Int32(2),
+						Version:               &privatev1.ClusterVersionReference{Name: versionName},
+					}.Build(),
+				},
 				Network: privatev1.ClusterNetwork_builder{
 					PodCidr:     &podCIDR,
 					ServiceCidr: &serviceCIDR,
@@ -498,6 +577,8 @@ var _ = Describe("update tenant annotation", func() {
 		createdCR := list.Items[0]
 		Expect(createdCR.Spec.SSHPublicKey).To(Equal(sshKey))
 		Expect(createdCR.Spec.ReleaseImage).To(Equal(resolvedImage))
+		Expect(createdCR.Spec.NodeRequests).To(HaveLen(1))
+		Expect(createdCR.Spec.NodeRequests[0].ReleaseImage).To(Equal(resolvedImage))
 		Expect(createdCR.Spec.Network).ToNot(BeNil())
 		Expect(createdCR.Spec.Network.PodCIDR).To(Equal(podCIDR))
 		Expect(createdCR.Spec.Network.ServiceCIDR).To(Equal(serviceCIDR))
@@ -510,14 +591,6 @@ var _ = Describe("update tenant annotation", func() {
 		fakeClient := fake.NewClientBuilder().
 			WithScheme(scheme).
 			Build()
-
-		hubCache := controllers.NewMockHubCache(ctrl)
-		hubCache.EXPECT().
-			Get(gomock.Any(), hubID).
-			Return(&controllers.HubEntry{
-				Namespace: hubNamespace,
-				Client:    fakeClient,
-			}, nil)
 
 		cluster := privatev1.Cluster_builder{
 			Id: clusterID,
@@ -545,9 +618,9 @@ var _ = Describe("update tenant annotation", func() {
 
 		t := &task{
 			r: &function{
-				logger:         logger,
-				hubCache:       hubCache,
-				maskCalculator: nil,
+				logger:              logger,
+				networkingHubReader: readyClusterNetworkingHubReader(hubID, hubNamespace, fakeClient),
+				maskCalculator:      nil,
 			},
 			cluster: cluster,
 		}
@@ -573,14 +646,6 @@ var _ = Describe("update tenant annotation", func() {
 		fakeClient := fake.NewClientBuilder().
 			WithScheme(scheme).
 			Build()
-
-		hubCache := controllers.NewMockHubCache(ctrl)
-		hubCache.EXPECT().
-			Get(gomock.Any(), hubID).
-			Return(&controllers.HubEntry{
-				Namespace: hubNamespace,
-				Client:    fakeClient,
-			}, nil)
 
 		cluster := privatev1.Cluster_builder{
 			Id: clusterID,
@@ -615,9 +680,9 @@ var _ = Describe("update tenant annotation", func() {
 
 		t := &task{
 			r: &function{
-				logger:         logger,
-				hubCache:       hubCache,
-				maskCalculator: nil,
+				logger:              logger,
+				networkingHubReader: readyClusterNetworkingHubReader(hubID, hubNamespace, fakeClient),
+				maskCalculator:      nil,
 			},
 			cluster: cluster,
 		}
@@ -861,11 +926,13 @@ var _ = Describe("update tenant annotation", func() {
 		Expect(patchedCR.Spec.ReleaseImage).To(Equal(resolvedImage))
 		Expect(patchedCR.Spec.NodeRequests).To(HaveLen(1))
 		Expect(patchedCR.Spec.NodeRequests[0].NumberOfNodes).To(Equal(5))
+		Expect(patchedCR.Spec.NodeRequests[0].ReleaseImage).To(BeEmpty())
 	})
 
 	It("should update ReleaseImage when version changes", func() {
 		oldImage := "quay.io/openshift-release-dev/ocp-release:4.17.0-multi"
 		newImage := "quay.io/openshift-release-dev/ocp-release:4.18.0-multi"
+		otherImage := "quay.io/openshift-release-dev/ocp-release:4.16.0-multi"
 		newVersionName := "4-18-0"
 
 		// Existing ClusterOrder was created with the old version:
@@ -908,21 +975,29 @@ var _ = Describe("update tenant annotation", func() {
 				Client:    fakeClient,
 			}, nil)
 
-		// Mock returns the new version's image:
+		// Mock resolves each requested version independently:
 		clusterVersionsClient := NewMockClusterVersionsClient(ctrl)
 		clusterVersionsClient.EXPECT().
 			List(gomock.Any(), gomock.Any(), gomock.Any()).
-			Return(privatev1.ClusterVersionsListResponse_builder{
-				Total: 1,
-				Size:  1,
-				Items: []*privatev1.ClusterVersion{
-					privatev1.ClusterVersion_builder{
-						Spec: privatev1.ClusterVersionSpec_builder{
-							Image: newImage,
+			DoAndReturn(func(_ context.Context, req *privatev1.ClusterVersionsListRequest,
+				_ ...grpc.CallOption) (*privatev1.ClusterVersionsListResponse, error) {
+				images := map[string]string{
+					`this.metadata.name == "4-18-0"`: newImage,
+					`this.metadata.name == "4-17-0"`: oldImage,
+					`this.metadata.name == "4-16-0"`: otherImage,
+				}
+				image, ok := images[req.GetFilter()]
+				Expect(ok).To(BeTrue(), "unexpected version filter: %s", req.GetFilter())
+				return privatev1.ClusterVersionsListResponse_builder{
+					Total: 1,
+					Size:  1,
+					Items: []*privatev1.ClusterVersion{
+						privatev1.ClusterVersion_builder{
+							Spec: privatev1.ClusterVersionSpec_builder{Image: image}.Build(),
 						}.Build(),
-					}.Build(),
-				},
-			}.Build(), nil)
+					},
+				}.Build(), nil
+			}).AnyTimes()
 
 		// Cluster spec now references the new version:
 		cluster := privatev1.Cluster_builder{
@@ -938,6 +1013,16 @@ var _ = Describe("update tenant annotation", func() {
 					"gpu-gb200": privatev1.ClusterNodeSet_builder{
 						BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu.gb200"},
 						Size:                  proto.Int32(3),
+						Version:               &privatev1.ClusterVersionReference{Name: "4-17-0"},
+					}.Build(),
+					"batch": privatev1.ClusterNodeSet_builder{
+						BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu.gb200"},
+						Size:                  proto.Int32(2),
+						Version:               &privatev1.ClusterVersionReference{Name: "4-16-0"},
+					}.Build(),
+					"legacy": privatev1.ClusterNodeSet_builder{
+						BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu.gb200"},
+						Size:                  proto.Int32(1),
 					}.Build(),
 				},
 			}.Build(),
@@ -967,6 +1052,15 @@ var _ = Describe("update tenant annotation", func() {
 
 		patchedCR := list.Items[0]
 		Expect(patchedCR.Spec.ReleaseImage).To(Equal(newImage))
+		images := map[string]string{}
+		for _, request := range patchedCR.Spec.NodeRequests {
+			images[request.NodeSet] = request.ReleaseImage
+		}
+		Expect(images).To(Equal(map[string]string{
+			"gpu-gb200": oldImage,
+			"batch":     otherImage,
+			"legacy":    "",
+		}))
 	})
 })
 

@@ -14,9 +14,11 @@ language governing permissions and limitations under the License.
 package computeinstance
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"time"
 
@@ -45,6 +47,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
+	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/annotations"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/gvks"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -207,7 +210,7 @@ var _ = Describe("buildSpec", func() {
 							SizeGib:     proto.Int32(20),
 							StorageTier: privatev1.StorageTierReference_builder{Name: "fast"}.Build(),
 						}.Build(),
-						AdditionalDisks: []*privatev1.ComputeInstanceDisk{
+						AdditionalDisks: privatev1.ComputeInstanceDiskList_builder{Items: []*privatev1.ComputeInstanceDisk{
 							privatev1.ComputeInstanceDisk_builder{
 								SizeGib:     proto.Int32(100),
 								StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
@@ -216,7 +219,7 @@ var _ = Describe("buildSpec", func() {
 								SizeGib:     proto.Int32(50),
 								StorageTier: privatev1.StorageTierReference_builder{Name: "archive"}.Build(),
 							}.Build(),
-						},
+						}}.Build(),
 						NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
 							privatev1.ComputeNetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: subnetID}}.Build(),
 						},
@@ -818,6 +821,481 @@ var _ = Describe("delete", func() {
 	})
 })
 
+var _ = Describe("automatic ExternalIP attachment", func() {
+	It("waits for RUNNING, Ready, and one matching attachment IP", func() {
+		ci := newReadyAutoExternalIPComputeInstance()
+		Expect(computeInstanceReadyForExternalIPAttachment(ci)).To(BeTrue())
+
+		cases := []struct {
+			name   string
+			mutate func(*privatev1.ComputeInstance)
+		}{
+			{
+				name: "not running",
+				mutate: func(ci *privatev1.ComputeInstance) {
+					ci.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING)
+				},
+			},
+			{
+				name: "not ready",
+				mutate: func(ci *privatev1.ComputeInstance) {
+					ci.GetStatus().GetConditions()[0].SetStatus(privatev1.ConditionStatus_CONDITION_STATUS_FALSE)
+				},
+			},
+			{
+				name: "missing network attachment",
+				mutate: func(ci *privatev1.ComputeInstance) {
+					ci.GetSpec().SetNetworkAttachments(nil)
+				},
+			},
+			{
+				name: "multiple network attachments",
+				mutate: func(ci *privatev1.ComputeInstance) {
+					ci.GetSpec().SetNetworkAttachments(append(ci.GetSpec().GetNetworkAttachments(),
+						privatev1.ComputeNetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: "subnet-2"}}.Build()))
+				},
+			},
+			{
+				name: "missing attachment status",
+				mutate: func(ci *privatev1.ComputeInstance) {
+					ci.GetStatus().SetComputeNetworkAttachmentStatuses(nil)
+				},
+			},
+			{
+				name: "multiple attachment statuses",
+				mutate: func(ci *privatev1.ComputeInstance) {
+					ci.GetStatus().SetComputeNetworkAttachmentStatuses(append(ci.GetStatus().GetComputeNetworkAttachmentStatuses(),
+						privatev1.ComputeNetworkAttachmentStatus_builder{SubnetRef: "subnet-2", IpAddress: "10.0.1.4"}.Build()))
+				},
+			},
+			{
+				name: "missing IP address",
+				mutate: func(ci *privatev1.ComputeInstance) {
+					ci.GetStatus().GetComputeNetworkAttachmentStatuses()[0].SetIpAddress("")
+				},
+			},
+			{
+				name: "malformed IP address",
+				mutate: func(ci *privatev1.ComputeInstance) {
+					ci.GetStatus().GetComputeNetworkAttachmentStatuses()[0].SetIpAddress("not-an-ip")
+				},
+			},
+			{
+				name: "status belongs to another subnet",
+				mutate: func(ci *privatev1.ComputeInstance) {
+					ci.GetStatus().GetComputeNetworkAttachmentStatuses()[0].SetSubnetRef("stale-subnet")
+				},
+			},
+		}
+
+		for _, tc := range cases {
+			By(tc.name)
+			ci := proto.Clone(newReadyAutoExternalIPComputeInstance()).(*privatev1.ComputeInstance)
+			tc.mutate(ci)
+			Expect(computeInstanceReadyForExternalIPAttachment(ci)).To(BeFalse())
+		}
+	})
+
+	It("creates one labeled attachment only after the auto-created ExternalIP is allocated", func() {
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		ci := newReadyAutoExternalIPComputeInstance()
+		attachmentsClient := NewMockExternalIPAttachmentsClient(ctrl)
+		externalIPsClient := NewMockExternalIPsClient(ctrl)
+		attachmentsClient.EXPECT().
+			List(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, request *privatev1.ExternalIPAttachmentsListRequest, _ ...grpc.CallOption) (*privatev1.ExternalIPAttachmentsListResponse, error) {
+				Expect(request.GetFilter()).To(ContainSubstring("ci-auto-eip"))
+				Expect(request.GetFilter()).To(ContainSubstring("tenant-a"))
+				return privatev1.ExternalIPAttachmentsListResponse_builder{}.Build(), nil
+			})
+		externalIPsClient.EXPECT().
+			List(gomock.Any(), gomock.Any()).
+			Return(privatev1.ExternalIPsListResponse_builder{
+				Total: 1,
+				Items: []*privatev1.ExternalIP{newAutoCreatedExternalIP("eip-1", "ci-auto-eip")},
+			}.Build(), nil)
+		attachmentsClient.EXPECT().
+			Create(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, request *privatev1.ExternalIPAttachmentsCreateRequest, _ ...grpc.CallOption) (*privatev1.ExternalIPAttachmentsCreateResponse, error) {
+				attachment := request.GetObject()
+				Expect(attachment.GetMetadata().GetTenant()).To(Equal("tenant-a"))
+				Expect(attachment.GetMetadata().GetName()).To(Equal("auto-eipa-ci-auto-eip"))
+				Expect(attachment.GetMetadata().GetLabels()).To(HaveKeyWithValue(labels.AutoCreated, "true"))
+				Expect(attachment.GetMetadata().GetLabels()).To(HaveKeyWithValue(labels.AutoCreatedFor, "ci-auto-eip"))
+				Expect(attachment.GetMetadata().GetAnnotations()).To(HaveKeyWithValue(annotations.OwnerReference, "ci-auto-eip"))
+				Expect(attachment.GetStatus()).To(BeNil())
+				Expect(attachment.GetSpec().GetExternalIp().GetId()).To(Equal("eip-1"))
+				Expect(attachment.GetSpec().GetComputeInstance().GetId()).To(Equal("ci-auto-eip"))
+				return privatev1.ExternalIPAttachmentsCreateResponse_builder{Object: attachment}.Build(), nil
+			})
+
+		t := &task{
+			r: &function{
+				logger:                      logger,
+				externalIPAttachmentsClient: attachmentsClient,
+				externalIPsClient:           externalIPsClient,
+			},
+			computeInstance: ci,
+		}
+		Expect(t.reconcileAutoExternalIPAttachment(context.Background())).To(Succeed())
+	})
+
+	It("waits while the ExternalIP is pending", func() {
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		attachmentsClient := NewMockExternalIPAttachmentsClient(ctrl)
+		externalIPsClient := NewMockExternalIPsClient(ctrl)
+		attachmentsClient.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.ExternalIPAttachmentsListResponse_builder{}.Build(), nil)
+		externalIPsClient.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.ExternalIPsListResponse_builder{
+				Total: 1,
+				Items: []*privatev1.ExternalIP{{
+					Metadata: privatev1.Metadata_builder{
+						Annotations: map[string]string{annotations.OwnerReference: "ci-auto-eip"},
+					}.Build(),
+					Status: privatev1.ExternalIPStatus_builder{
+						State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING,
+					}.Build(),
+				}},
+			}.Build(), nil)
+
+		t := &task{
+			r: &function{
+				logger:                      logger,
+				externalIPAttachmentsClient: attachmentsClient,
+				externalIPsClient:           externalIPsClient,
+			},
+			computeInstance: newReadyAutoExternalIPComputeInstance(),
+		}
+		Expect(t.reconcileAutoExternalIPAttachment(context.Background())).To(Succeed())
+	})
+
+	It("does not create a second attachment when one already exists", func() {
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		attachmentsClient := NewMockExternalIPAttachmentsClient(ctrl)
+		attachmentsClient.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.ExternalIPAttachmentsListResponse_builder{
+				Total: 1,
+				Items: []*privatev1.ExternalIPAttachment{newAutoExternalIPAttachment("eipa-1", "ci-auto-eip")},
+			}.Build(), nil)
+
+		t := &task{
+			r: &function{
+				logger:                      logger,
+				externalIPAttachmentsClient: attachmentsClient,
+			},
+			computeInstance: newReadyAutoExternalIPComputeInstance(),
+		}
+		Expect(t.reconcileAutoExternalIPAttachment(context.Background())).To(Succeed())
+	})
+
+	It("treats AlreadyExists as a concurrent successful create after confirming the attachment", func() {
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		attachmentsClient := NewMockExternalIPAttachmentsClient(ctrl)
+		externalIPsClient := NewMockExternalIPsClient(ctrl)
+		attachmentsClient.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.ExternalIPAttachmentsListResponse_builder{}.Build(), nil)
+		externalIPsClient.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.ExternalIPsListResponse_builder{
+				Total: 1,
+				Items: []*privatev1.ExternalIP{newAutoCreatedExternalIP("eip-1", "ci-auto-eip")},
+			}.Build(), nil)
+		attachmentsClient.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil, status.Error(codes.AlreadyExists, "created concurrently"))
+		attachmentsClient.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.ExternalIPAttachmentsListResponse_builder{
+				Total: 1,
+				Items: []*privatev1.ExternalIPAttachment{newAutoExternalIPAttachment("eipa-1", "ci-auto-eip")},
+			}.Build(), nil)
+
+		t := &task{
+			r: &function{
+				logger:                      logger,
+				externalIPAttachmentsClient: attachmentsClient,
+				externalIPsClient:           externalIPsClient,
+			},
+			computeInstance: newReadyAutoExternalIPComputeInstance(),
+		}
+		Expect(t.reconcileAutoExternalIPAttachment(context.Background())).To(Succeed())
+	})
+
+	It("deletes the attachment first and waits before listing or deleting its ExternalIP", func() {
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		attachmentsClient := NewMockExternalIPAttachmentsClient(ctrl)
+		externalIPsClient := NewMockExternalIPsClient(ctrl)
+		attachment := newAutoExternalIPAttachment("eipa-1", "ci-auto-eip")
+		attachmentsClient.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.ExternalIPAttachmentsListResponse_builder{Total: 1, Items: []*privatev1.ExternalIPAttachment{attachment}}.Build(), nil)
+		attachmentsClient.EXPECT().Delete(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, request *privatev1.ExternalIPAttachmentsDeleteRequest, _ ...grpc.CallOption) (*privatev1.ExternalIPAttachmentsDeleteResponse, error) {
+				Expect(request.GetId()).To(Equal("eipa-1"))
+				return privatev1.ExternalIPAttachmentsDeleteResponse_builder{}.Build(), nil
+			})
+
+		t := &task{
+			r: &function{
+				logger:                      logger,
+				externalIPAttachmentsClient: attachmentsClient,
+				externalIPsClient:           externalIPsClient,
+			},
+			computeInstance: newReadyAutoExternalIPComputeInstance(),
+		}
+		complete, err := t.cleanupAutoExternalIPResources(context.Background())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(complete).To(BeFalse())
+	})
+
+	It("waits while an ExternalIP is attached or already deleting", func() {
+		for _, deleting := range []bool{false, true} {
+			ctrl := gomock.NewController(GinkgoT())
+			DeferCleanup(ctrl.Finish)
+			attachmentsClient := NewMockExternalIPAttachmentsClient(ctrl)
+			externalIPsClient := NewMockExternalIPsClient(ctrl)
+			attachmentsClient.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+				privatev1.ExternalIPAttachmentsListResponse_builder{}.Build(), nil)
+			metadata := privatev1.Metadata_builder{
+				Tenant: "tenant-a",
+				Labels: map[string]string{
+					labels.AutoCreated:    "true",
+					labels.AutoCreatedFor: "ci-auto-eip",
+				},
+				Annotations: map[string]string{annotations.OwnerReference: "ci-auto-eip"},
+			}.Build()
+			if deleting {
+				metadata.SetDeletionTimestamp(timestamppb.Now())
+			}
+			externalIPsClient.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+				privatev1.ExternalIPsListResponse_builder{
+					Total: 1,
+					Items: []*privatev1.ExternalIP{{
+						Metadata: metadata,
+						Status: privatev1.ExternalIPStatus_builder{
+							Attached: !deleting,
+						}.Build(),
+					}},
+				}.Build(), nil)
+			t := &task{
+				r: &function{
+					logger:                      logger,
+					externalIPAttachmentsClient: attachmentsClient,
+					externalIPsClient:           externalIPsClient,
+				},
+				computeInstance: newReadyAutoExternalIPComputeInstance(),
+			}
+			complete, err := t.cleanupAutoExternalIPResources(context.Background())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(complete).To(BeFalse())
+		}
+	})
+
+	It("blocks cleanup on a manually managed attachment", func() {
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		attachmentsClient := NewMockExternalIPAttachmentsClient(ctrl)
+		externalIPsClient := NewMockExternalIPsClient(ctrl)
+		attachmentsClient.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.ExternalIPAttachmentsListResponse_builder{
+				Total: 1,
+				Items: []*privatev1.ExternalIPAttachment{{
+					Id: "manual-eipa",
+					Metadata: privatev1.Metadata_builder{
+						Tenant: "tenant-a",
+					}.Build(),
+				}},
+			}.Build(), nil)
+
+		t := &task{
+			r: &function{
+				logger:                      logger,
+				externalIPAttachmentsClient: attachmentsClient,
+				externalIPsClient:           externalIPsClient,
+			},
+			computeInstance: newReadyAutoExternalIPComputeInstance(),
+		}
+		complete, err := t.cleanupAutoExternalIPResources(context.Background())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(complete).To(BeFalse())
+	})
+
+	It("starts ExternalIP deletion only after the attachment is absent", func() {
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		attachmentsClient := NewMockExternalIPAttachmentsClient(ctrl)
+		externalIPsClient := NewMockExternalIPsClient(ctrl)
+		attachmentsClient.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.ExternalIPAttachmentsListResponse_builder{}.Build(), nil)
+		externalIPsClient.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.ExternalIPsListResponse_builder{
+				Total: 1,
+				Items: []*privatev1.ExternalIP{newAutoCreatedExternalIP("eip-1", "ci-auto-eip")},
+			}.Build(), nil)
+		externalIPsClient.EXPECT().Delete(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, request *privatev1.ExternalIPsDeleteRequest, _ ...grpc.CallOption) (*privatev1.ExternalIPsDeleteResponse, error) {
+				Expect(request.GetId()).To(Equal("eip-1"))
+				return privatev1.ExternalIPsDeleteResponse_builder{}.Build(), nil
+			})
+
+		t := &task{
+			r: &function{
+				logger:                      logger,
+				externalIPAttachmentsClient: attachmentsClient,
+				externalIPsClient:           externalIPsClient,
+			},
+			computeInstance: newReadyAutoExternalIPComputeInstance(),
+		}
+		complete, err := t.cleanupAutoExternalIPResources(context.Background())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(complete).To(BeFalse())
+	})
+
+	It("treats a concurrent attachment NotFound as already removed", func() {
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		attachmentsClient := NewMockExternalIPAttachmentsClient(ctrl)
+		externalIPsClient := NewMockExternalIPsClient(ctrl)
+		attachmentsClient.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.ExternalIPAttachmentsListResponse_builder{
+				Total: 1,
+				Items: []*privatev1.ExternalIPAttachment{newAutoExternalIPAttachment("eipa-1", "ci-auto-eip")},
+			}.Build(), nil)
+		attachmentsClient.EXPECT().Delete(gomock.Any(), gomock.Any()).Return(
+			nil, status.Error(codes.NotFound, "already deleted"))
+		externalIPsClient.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.ExternalIPsListResponse_builder{}.Build(), nil)
+
+		t := &task{
+			r: &function{
+				logger:                      logger,
+				externalIPAttachmentsClient: attachmentsClient,
+				externalIPsClient:           externalIPsClient,
+			},
+			computeInstance: newReadyAutoExternalIPComputeInstance(),
+		}
+		complete, err := t.cleanupAutoExternalIPResources(context.Background())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(complete).To(BeTrue())
+	})
+
+	It("keeps the ComputeInstance finalizer while attachment cleanup is asynchronous", func() {
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		attachmentsClient := NewMockExternalIPAttachmentsClient(ctrl)
+		attachmentsClient.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.ExternalIPAttachmentsListResponse_builder{
+				Total: 1,
+				Items: []*privatev1.ExternalIPAttachment{newAutoExternalIPAttachment("eipa-1", "ci-auto-eip")},
+			}.Build(), nil)
+		attachmentsClient.EXPECT().Delete(gomock.Any(), gomock.Any()).Return(
+			privatev1.ExternalIPAttachmentsDeleteResponse_builder{}.Build(), nil)
+
+		ci := newReadyAutoExternalIPComputeInstance()
+		ci.GetMetadata().SetDeletionTimestamp(timestamppb.Now())
+		ci.GetMetadata().SetFinalizers([]string{finalizers.Controller})
+		t := &task{
+			r: &function{
+				logger:                      logger,
+				externalIPAttachmentsClient: attachmentsClient,
+				externalIPsClient:           NewMockExternalIPsClient(ctrl),
+			},
+			computeInstance: ci,
+		}
+
+		Expect(t.delete(context.Background())).To(Succeed())
+		Expect(hasFinalizer(ci)).To(BeTrue())
+	})
+
+	It("completes cleanup after both dependent resources are absent", func() {
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		attachmentsClient := NewMockExternalIPAttachmentsClient(ctrl)
+		externalIPsClient := NewMockExternalIPsClient(ctrl)
+		attachmentsClient.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.ExternalIPAttachmentsListResponse_builder{}.Build(), nil)
+		externalIPsClient.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.ExternalIPsListResponse_builder{}.Build(), nil)
+
+		t := &task{
+			r: &function{
+				logger:                      logger,
+				externalIPAttachmentsClient: attachmentsClient,
+				externalIPsClient:           externalIPsClient,
+			},
+			computeInstance: newReadyAutoExternalIPComputeInstance(),
+		}
+		complete, err := t.cleanupAutoExternalIPResources(context.Background())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(complete).To(BeTrue())
+	})
+})
+
+func newReadyAutoExternalIPComputeInstance() *privatev1.ComputeInstance {
+	return privatev1.ComputeInstance_builder{
+		Id: "ci-auto-eip",
+		Metadata: privatev1.Metadata_builder{
+			Name:   "vm-auto-eip",
+			Tenant: "tenant-a",
+		}.Build(),
+		Spec: privatev1.ComputeInstanceSpec_builder{
+			AutoExternalIpAttachment: proto.Bool(true),
+			NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+				privatev1.ComputeNetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: "subnet-1"}}.Build(),
+			},
+		}.Build(),
+		Status: privatev1.ComputeInstanceStatus_builder{
+			State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+			Conditions: []*privatev1.ComputeInstanceCondition{
+				privatev1.ComputeInstanceCondition_builder{
+					Type:   privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_READY,
+					Status: privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+				}.Build(),
+			},
+			ComputeNetworkAttachmentStatuses: []*privatev1.ComputeNetworkAttachmentStatus{
+				privatev1.ComputeNetworkAttachmentStatus_builder{SubnetRef: "subnet-1", IpAddress: "10.0.0.5"}.Build(),
+			},
+		}.Build(),
+	}.Build()
+}
+
+func newAutoCreatedExternalIP(id, ciID string) *privatev1.ExternalIP {
+	return privatev1.ExternalIP_builder{
+		Id: id,
+		Metadata: privatev1.Metadata_builder{
+			Tenant: "tenant-a",
+			Labels: map[string]string{
+				labels.AutoCreated:    "true",
+				labels.AutoCreatedFor: ciID,
+			},
+			Annotations: map[string]string{annotations.OwnerReference: ciID},
+		}.Build(),
+		Status: privatev1.ExternalIPStatus_builder{
+			State:   privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
+			Address: "192.0.2.20",
+		}.Build(),
+	}.Build()
+}
+
+func newAutoExternalIPAttachment(id, ciID string) *privatev1.ExternalIPAttachment {
+	return privatev1.ExternalIPAttachment_builder{
+		Id: id,
+		Metadata: privatev1.Metadata_builder{
+			Tenant: "tenant-a",
+			Labels: map[string]string{
+				labels.AutoCreated:    "true",
+				labels.AutoCreatedFor: ciID,
+			},
+			Annotations: map[string]string{annotations.OwnerReference: ciID},
+		}.Build(),
+		Spec: privatev1.ExternalIPAttachmentSpec_builder{
+			ExternalIp:      &privatev1.ExternalIPLocalReference{Id: "eip-1"},
+			ComputeInstance: &privatev1.ComputeInstanceLocalReference{Id: ciID},
+		}.Build(),
+	}.Build()
+}
+
 var _ = Describe("getSubnetCR", func() {
 	const (
 		ciID         = "test-ci-subnet"
@@ -1073,21 +1551,13 @@ var _ = Describe("buildSpec with subnetRef", func() {
 		Expect(spec.NetworkAttachments[0].SubnetRef).To(Equal("test-sn"))
 	})
 
-	It("should populate two networkAttachments and omit top-level subnetRef for multi-NIC", func() {
-		sid1, sid2 := "subnet-id-1", "subnet-id-2"
+	It("should populate the sole networkAttachment", func() {
+		sid1 := "subnet-id-1"
 		subnetCR1 := &osacv1alpha1.Subnet{
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace: hubNamespace,
 				Name:      "sn-1",
 				Labels:    map[string]string{labels.SubnetUuid: sid1},
-			},
-		}
-
-		subnetCR2 := &osacv1alpha1.Subnet{
-			ObjectMeta: metav1.ObjectMeta{
-				Namespace: hubNamespace,
-				Name:      "sn-2",
-				Labels:    map[string]string{labels.SubnetUuid: sid2},
 			},
 		}
 
@@ -1097,7 +1567,7 @@ var _ = Describe("buildSpec with subnetRef", func() {
 
 		fakeClient := fake.NewClientBuilder().
 			WithScheme(scheme).
-			WithObjects(subnetCR1, subnetCR2).
+			WithObjects(subnetCR1).
 			Build()
 
 		template := "osac.templates.ocp_virt_vm"
@@ -1113,7 +1583,6 @@ var _ = Describe("buildSpec with subnetRef", func() {
 					InstanceType: &privatev1.InstanceTypeReference{Name: "test-type"},
 					NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
 						privatev1.ComputeNetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: sid1}}.Build(),
-						privatev1.ComputeNetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: sid2}}.Build(),
 					},
 				}.Build(),
 			}.Build(),
@@ -1123,9 +1592,8 @@ var _ = Describe("buildSpec with subnetRef", func() {
 
 		spec, err := t.buildSpec(ctx)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(spec.NetworkAttachments).To(HaveLen(2))
+		Expect(spec.NetworkAttachments).To(HaveLen(1))
 		Expect(spec.NetworkAttachments[0].SubnetRef).To(Equal("sn-1"))
-		Expect(spec.NetworkAttachments[1].SubnetRef).To(Equal("sn-2"))
 	})
 
 	It("should resolve securityGroupRefs inside networkAttachments", func() {
@@ -2226,6 +2694,7 @@ var _ = Describe("instance_type resolution in reconciler", func() {
 		f := &function{
 			logger:                 logger,
 			hubCache:               hubCache,
+			networkingHubReader:    readyComputeNetworkingHubReader("test-hub", hubNamespace, fakeClient),
 			computeInstancesClient: computeInstancesClient,
 			hubsClient:             hubsClient,
 			instanceTypesClient:    mockInstanceTypesClient,
@@ -2362,6 +2831,7 @@ var _ = Describe("Kubernetes validation error handling", func() {
 		f := &function{
 			logger:                 logger,
 			hubCache:               hubCache,
+			networkingHubReader:    readyComputeNetworkingHubReader(hubID, hubNamespace, fakeClient),
 			computeInstancesClient: computeInstancesClient,
 			hubsClient:             hubsClient,
 			instanceTypesClient:    mockInstanceTypesClient,
@@ -2472,6 +2942,74 @@ var _ = Describe("Kubernetes validation error handling", func() {
 		Expect(computeInstance.GetStatus().GetState()).To(
 			Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED),
 		)
+	})
+
+	It("preserves existing network attachments while patching a lifecycle update", func() {
+		mockInstanceTypesClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.InstanceTypesGetResponse_builder{
+				Object: privatev1.InstanceType_builder{
+					Spec: privatev1.InstanceTypeSpec_builder{Vcpus: 4, MemoryGib: 8}.Build(),
+				}.Build(),
+			}.Build(), nil)
+
+		existingAttachments := []osacv1alpha1.ComputeNetworkAttachment{{
+			SubnetRef:         "stored-subnet-private",
+			SecurityGroupRefs: []string{"stored-security-group-private"},
+		}}
+		existingCR := &osacv1alpha1.ComputeInstance{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace:   hubNamespace,
+				Name:        "vm-existing-network",
+				Labels:      map[string]string{labels.ComputeInstanceUuid: computeInstanceID},
+				Annotations: map[string]string{"osac.openshift.io/tenant": tenantName},
+			},
+			Spec: osacv1alpha1.ComputeInstanceSpec{NetworkAttachments: existingAttachments},
+		}
+
+		var patched *osacv1alpha1.ComputeInstance
+		f, _ := newTestHarness(interceptor.Funcs{
+			Patch: func(ctx context.Context, client clnt.WithWatch, obj clnt.Object, patch clnt.Patch, opts ...clnt.PatchOption) error {
+				if instance, ok := obj.(*osacv1alpha1.ComputeInstance); ok {
+					patched = instance.DeepCopy()
+				}
+				return client.Patch(ctx, obj, patch, opts...)
+			},
+		}, existingCR)
+		var logOutput bytes.Buffer
+		f.logger = slog.New(slog.NewTextHandler(&logOutput, nil))
+
+		computeInstance := newComputeInstance()
+		restartAt := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+		computeInstance.GetSpec().SetRestartRequestedAt(timestamppb.New(restartAt))
+		Expect(f.run(ctx, computeInstance)).To(Succeed())
+
+		Expect(patched).NotTo(BeNil())
+		Expect(patched.Spec.NetworkAttachments).To(Equal(existingAttachments))
+		Expect(patched.Spec.RestartRequestedAt).NotTo(BeNil())
+		Expect(patched.Spec.RestartRequestedAt.Time).To(Equal(restartAt))
+		Expect(logOutput.String()).To(ContainSubstring("preserving stored network attachments"))
+		Expect(logOutput.String()).NotTo(ContainSubstring("stored-subnet-private"))
+		Expect(logOutput.String()).NotTo(ContainSubstring("stored-security-group-private"))
+	})
+
+	It("copies resolved network attachments into a newly created CR", func() {
+		mockInstanceTypesClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.InstanceTypesGetResponse_builder{
+				Object: privatev1.InstanceType_builder{
+					Spec: privatev1.InstanceTypeSpec_builder{Vcpus: 4, MemoryGib: 8}.Build(),
+				}.Build(),
+			}.Build(), nil)
+
+		f, fakeClient := newTestHarness(interceptor.Funcs{})
+		Expect(f.run(ctx, newComputeInstance())).To(Succeed())
+
+		created := &osacv1alpha1.ComputeInstanceList{}
+		Expect(fakeClient.List(ctx, created)).To(Succeed())
+		Expect(created.Items).To(HaveLen(1))
+		Expect(created.Items[0].Spec.NetworkAttachments).To(HaveLen(1))
+		Expect(created.Items[0].Spec.NetworkAttachments[0].SubnetRef).To(Equal("test-sn"))
 	})
 
 	It("should still return transient errors from K8s Create", func() {

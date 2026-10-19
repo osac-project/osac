@@ -1,0 +1,10 @@
+{{- if .Values.aap.instanceGroups.publishTemplates.enabled }}
+{{- $issuer := tpl (required "service.auth.issuerUrl is required when AAP template publishing is enabled" .Values.service.auth.issuerUrl) . }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aap-fulfillment-auth-config
+  namespace: {{ .Release.Namespace }}
+data:
+  OSAC_FULFILLMENT_ISSUER_URL: {{ $issuer | quote }}
+{{- end }}

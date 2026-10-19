@@ -469,6 +469,9 @@ def jwt_grpc_tenant2(fulfillment_address: str, keycloak_url: str, jwt_password: 
 
 
 def pytest_collection_finish(session: pytest.Session) -> None:
+    # Collect-only does not execute metering fixtures or contact the adapter.
+    if session.config.getoption("collectonly"):
+        return
     metering_tests = [item for item in session.items if item.get_closest_marker("metering")]
     if metering_tests and not os.environ.get("METERING_ADAPTER_URL"):
         pytest.fail(

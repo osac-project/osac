@@ -35,6 +35,7 @@
 {{- if $netrisEnabled -}}
 {{- $creds := $netris.credentials | default dict -}}
 {{- $derived := include "osac-aap.netrisConfig" (dict "netris" $netris "cluster" true) | fromYaml -}}
+{{/* The facade is authoritative unless expertOverrides.aap disables derivation. */}}
 {{- $cfg = merge $derived $explicitCfg -}}
 {{- if $creds.password }}
 {{- $sec = merge (dict "NETRIS_PASSWORD" $creds.password) $explicitSec -}}
@@ -117,6 +118,7 @@ data: {}
 {{- if $netrisEnabled -}}
 {{- $creds := $netris.credentials | default dict -}}
 {{- $derived := include "osac-aap.netrisConfig" (dict "netris" $netris "cluster" false) | fromYaml -}}
+{{/* The facade is authoritative unless expertOverrides.aap disables derivation. */}}
 {{- $cfg = merge $derived $explicitCfg -}}
 {{- if $creds.password }}
 {{- $sec = merge (dict "NETRIS_PASSWORD" $creds.password) $explicitSec -}}

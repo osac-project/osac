@@ -49,6 +49,7 @@ export const BareMetalCreatePage = () => {
           !hasBareMetalAuthentication(
             bareMetalPayload.spec?.sshPublicKey,
             bareMetalPayload.spec?.userData,
+            bareMetalPayload.spec?.userDataSecret?.name,
           )
         ) {
           throw new Error(

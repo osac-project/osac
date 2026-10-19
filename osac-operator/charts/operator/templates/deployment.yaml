@@ -83,17 +83,27 @@ spec:
           - name: OSAC_NETWORK_CLASS_SYNC_INTERVAL
             value: {{ .Values.networkManagers.capabilitiesSyncInterval | quote }}
           {{- end }}
+          {{- if .Values.fulfillment.serverAddress }}
           - name: OSAC_FULFILLMENT_SERVER_ADDRESS
-            value: {{ .Values.fulfillment.serverAddress | default "fulfillment-internal-api:8001" | quote }}
-          - name: OSAC_FULFILLMENT_TOKEN_FILE
-            value: {{ .Values.fulfillment.tokenFile | default "/var/run/secrets/kubernetes.io/serviceaccount/token" | quote }}
+            value: {{ .Values.fulfillment.serverAddress | quote }}
+          - name: OSAC_FULFILLMENT_CLIENT_ID
+            valueFrom:
+              secretKeyRef:
+                name: {{ .Values.fulfillment.credentials.secretName | required "fulfillment.credentials.secretName is required" }}
+                key: {{ .Values.fulfillment.credentials.clientIdKey | required "fulfillment.credentials.clientIdKey is required" }}
+          - name: OSAC_FULFILLMENT_CLIENT_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: {{ .Values.fulfillment.credentials.secretName | required "fulfillment.credentials.secretName is required" }}
+                key: {{ .Values.fulfillment.credentials.clientSecretKey | required "fulfillment.credentials.clientSecretKey is required" }}
+          {{- end }}
           {{- if .Values.fulfillment.configMap.name }}
           - name: OSAC_FULFILLMENT_ENDPOINT
             valueFrom:
               configMapKeyRef:
                 name: {{ .Values.fulfillment.configMap.name }}
                 key: OSAC_FULFILLMENT_ENDPOINT
-                optional: {{ .Values.fulfillment.configMap.optional }}
+                optional: true
           - name: OSAC_FULFILLMENT_ISSUER_URL
             valueFrom:
               configMapKeyRef:

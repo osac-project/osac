@@ -15,14 +15,15 @@ global:
   # OpenShift cluster. Leave empty for platforms (e.g. kind) that set these
   # three values explicitly instead.
   clusterDomain: ""
-  # Resolved external fulfillment endpoint used by tenant-cluster CSI jobs.
-  # Leave empty to derive <service.externalHostname>:443 for OpenShift.
+  # Resolved external fulfillment endpoint shared with operator trust sync and
+  # tenant-cluster CSI provisioning. Leave empty to derive
+  # <service.externalHostname>:443 for OpenShift.
   fulfillment:
     endpoint: ""
   fulfillmentTrust:
     # Enables trust reconciliation for tenant-scoped ClusterOrders.
-    # Development and CI profiles can override this until tenant trust support is installed.
-    enabled: true
+    # Enable only when tenant CSI trust support is deployed.
+    enabled: false
     tenantNamespace: osac-csi
   # --- Service Enablement ---
   # Controls which service tiers are active across all OSAC components.
@@ -51,6 +52,13 @@ global:
     k8sManager: k8s_only
     netris:
       controllerUrl: ""
+      # Validate the Netris controller certificate. Keep enabled for production;
+      # set false only in a separately managed test profile.
+      validateCerts: true
+      # Optional customer-created ConfigMap in the AAP namespace. It must
+      # contain the PEM bundle under the fixed key bundle.pem.
+      caBundle:
+        configMap: ""
       credentials:
         username: ""
       siteId: ""
@@ -88,6 +96,9 @@ operatorCrds:
 # --- Operator ---
 operator:
   enabled: true
+  # Exact Netris hostname -> BareMetalInstanceType ID (private API catalog).
+  # Nonempty maps create osac-fabric-domain-inventory in the release namespace.
+  fabricDomainInventory: {}
   image:
     repository: ghcr.io/osac-project/osac-operator
     tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
@@ -115,14 +126,17 @@ operator:
     workersJoiningByInstanceType: {}
   fulfillment:
     serverAddress: "fulfillment-internal-api:8001"
-    tokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    credentials:
+      secretName: fulfillment-controller-credentials
+      clientIdKey: client-id
+      clientSecretKey: client-secret
     tls:
       caBundle:
         configMap: ca-bundle
         key: bundle.pem
     configMap:
       name: "osac-fulfillment-config"
-      optional: true
+      optional: false
   controllers:
     tenant: true
     networking: true
@@ -142,7 +156,8 @@ operator:
   # Network manager ConfigMaps use the nested operator.networkManagers map
   # (fabricManagers / k8sManagers). Defaults live in the osac-operator subchart;
   # override operator.networkManagers here to enable netris/k8s_only or change
-  # capabilitiesSyncInterval.
+  # capabilitiesSyncInterval. Manager registrations can set
+  # externalIPContractVersion to opt into v1.
 
 # --- Fulfillment Service ---
 service:
@@ -155,6 +170,21 @@ service:
   externalHostname: ""
   # [REQUIRED] Hostname for the internal API Route (e.g. fulfillment-internal-api-osac.apps.mycluster.example.com)
   internalHostname: ""
+  mcp:
+    enabled: false
+    externalHostname: ""
+    # OpenShift Routes use HTTPS port 443; custom external ports are supported on Kind.
+    externalPort: 443
+    # The OAuth resource URL is the MCP HTTPS root URL ending in /.
+    exchangeClientId: ""
+    exchangeCredentialsSecret: ""
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
   images:
     service:
       repository: ghcr.io/osac-project/fulfillment-service
@@ -285,6 +315,7 @@ aap:
         # Netris connection fields below must also be set on networkFulfillment
         # (including NETRIS_PASSWORD); there is no shared Netris config block.
         NETRIS_CONTROLLER_URL: ""
+        NETRIS_VALIDATE_CERTS: "true"
         NETRIS_USERNAME: ""
         NETRIS_SITE_ID: ""
         NETRIS_TENANT_ID: ""
@@ -315,6 +346,7 @@ aap:
       config:
         # Duplicate of clusterFulfillment Netris connection fields — set both.
         NETRIS_CONTROLLER_URL: ""
+        NETRIS_VALIDATE_CERTS: "true"
         NETRIS_USERNAME: ""
         NETRIS_SITE_ID: ""
         NETRIS_TENANT_ID: ""
@@ -325,10 +357,6 @@ aap:
       enabled: false
       config:
         STORAGE_SNAPSHOTS_ENABLED: ""
-      secret:
-        VAST_ENDPOINT: ""
-        VAST_USERNAME: ""
-        VAST_PASSWORD: ""
     publishTemplates:
       enabled: true
       config:
@@ -339,6 +367,8 @@ aap:
 ui:
   enabled: true
   externalHostname: ""
+  route:
+    enabled: true
   api:
     fulfillment:
       url: https://fulfillment-internal-api:8001
@@ -358,6 +388,7 @@ ui:
     level: info
   images:
     ui: ghcr.io/osac-project/osac-ui:latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+    pullPolicy: auto
 
 # --- Metering ---
 metering:
@@ -366,35 +397,6 @@ metering:
     repository: ghcr.io/osac-project/metering-service
     tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
     pullPolicy: Always
-
-# --- CSI Driver ---
-csiDriver:
-  enabled: false
-  # The shared hub CSI deployment runs in its own namespace. Tenant
-  # installations use their Helm release namespace instead.
-  namespace: osac-csi
-  controller:
-    fulfillment:
-      # Shared hub CSI credentials. Tenant-cluster credentials are a separate
-      # AAP/OSAC-4197 concern and are not created by this chart.
-      configMap:
-        name: osac-csi-fulfillment-config
-        endpointKey: OSAC_FULFILLMENT_ENDPOINT
-        issuerUrlKey: OSAC_FULFILLMENT_ISSUER_URL
-      credentials:
-        secretName: osac-csi-driver-credentials
-      tls:
-        caBundle:
-          configMap: ca-bundle
-          key: bundle.pem
-      allowStub: false
-  image:
-    repository: ghcr.io/osac-project/osac-csi-driver
-    tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
-    pullPolicy: Always
-
-# --- CSI Backends ---
-csiBackends: {}
 
 # --- Bare Metal Fulfillment Operator CRDs ---
 bmfCrds: {}
@@ -461,7 +463,10 @@ hubAccess:
 clusterVersions:
   enabled: false
   versions: []
-  # Example:
+  # Default versions require a diskImage; non-default versions may omit it.
+  # DiskImages are shared Linux registry images, created before the version.
+  # Existing named records are retained without updates.
+  # Example (development/CI image; use your own artifact in production):
   # enabled: true
   # versions:
   # - version: "4.20.0"
@@ -469,6 +474,10 @@ clusterVersions:
   # - version: "4.22.0"
   #   image: "quay.io/openshift-release-dev/ocp-release:4.22.0-multi"
   #   default: true
+  #   diskImage:
+  #     name: rhcos-4-22
+  #     sourceRef: oci://quay.io/osac-project/rhcos:4.22.0
+  #     architecture: [ARCHITECTURE_AMD64]
 
 lvms:
   # Register LVMS as a local StorageBackend + StorageTier in the fulfillment service
@@ -501,7 +510,6 @@ networkClass:
     egressRules:
     - protocol: PROTOCOL_ALL
       ipv4Cidr: "0.0.0.0/0"
-      # ipv6Cidr is optional and forwarded by the create-network-class hook.
   # Example expert override (k8s-only):
   # enabled: true
   # title: "K8s-only networking"

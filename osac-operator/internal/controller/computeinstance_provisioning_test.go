@@ -34,11 +34,13 @@ import (
 
 // mockProvisioningProvider implements the ProvisioningProvider interface for testing
 type mockProvisioningProvider struct {
-	name                     string
-	triggerProvisionFunc     func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error)
-	getProvisionStatusFunc   func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error)
-	triggerDeprovisionFunc   func(ctx context.Context, resource client.Object, provisionJobs []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error)
-	getDeprovisionStatusFunc func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error)
+	name                                  string
+	triggerProvisionFunc                  func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error)
+	getProvisionStatusFunc                func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error)
+	getProvisionStatusWithExtraVarsFunc   func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error)
+	triggerDeprovisionFunc                func(ctx context.Context, resource client.Object, provisionJobs []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error)
+	getDeprovisionStatusFunc              func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error)
+	getDeprovisionStatusWithExtraVarsFunc func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error)
 }
 
 func (m *mockProvisioningProvider) TriggerProvision(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
@@ -63,6 +65,16 @@ func (m *mockProvisioningProvider) GetProvisionStatus(ctx context.Context, resou
 	}, nil
 }
 
+func (m *mockProvisioningProvider) GetProvisionStatusWithExtraVars(
+	ctx context.Context, resource client.Object, jobID string,
+) (provisioning.ProvisionStatusWithExtraVars, error) {
+	if m.getProvisionStatusWithExtraVarsFunc != nil {
+		return m.getProvisionStatusWithExtraVarsFunc(ctx, resource, jobID)
+	}
+	status, err := m.GetProvisionStatus(ctx, resource, jobID)
+	return provisioning.ProvisionStatusWithExtraVars{ProvisionStatus: status}, err
+}
+
 func (m *mockProvisioningProvider) TriggerDeprovision(ctx context.Context, resource client.Object, provisionJobs []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
 	if m.triggerDeprovisionFunc != nil {
 		return m.triggerDeprovisionFunc(ctx, resource, provisionJobs)
@@ -83,6 +95,16 @@ func (m *mockProvisioningProvider) GetDeprovisionStatus(ctx context.Context, res
 		State:   osacv1alpha1.JobStateSucceeded,
 		Message: "Deprovision completed successfully",
 	}, nil
+}
+
+func (m *mockProvisioningProvider) GetDeprovisionStatusWithExtraVars(
+	ctx context.Context, resource client.Object, jobID string,
+) (provisioning.ProvisionStatusWithExtraVars, error) {
+	if m.getDeprovisionStatusWithExtraVarsFunc != nil {
+		return m.getDeprovisionStatusWithExtraVarsFunc(ctx, resource, jobID)
+	}
+	status, err := m.GetDeprovisionStatus(ctx, resource, jobID)
+	return provisioning.ProvisionStatusWithExtraVars{ProvisionStatus: status}, err
 }
 
 func (m *mockProvisioningProvider) Name() string {

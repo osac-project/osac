@@ -44,6 +44,9 @@ Create or delete a server cluster with attached servers.
 - `server_cluster_template_id` — Server cluster template ID
 - `server_cluster_tags` — List of tags
 - `server_cluster_admin_id` / `server_cluster_admin_name` — Admin tenant
+- `server_cluster_backend_id` — Exact Netris ID for update or deletion; a missing ID on delete is already deleted and never falls back to a name
+- `server_cluster_vpc_id` — Required for name-based lookup in the OSAC FabricDomain path; lookup also matches site
+- `server_cluster_allow_name_only_lookup` — Explicit legacy opt-in when no VPC ID is known; ambiguous same-site matches fail
 
 **Output:** `server_cluster_id`, `server_cluster_vpc_id`, `server_cluster_vpc_name`
 

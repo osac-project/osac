@@ -63,6 +63,11 @@ ROLE_TESTS=(
   "fulfillment_trust_sync"
   "lease"
   "agentless_net_stub"
+  "agentless_net_external_ip_pool"
+  "agentless_net_external_ip"
+  "agentless_net_subnet"
+  "netris_subnet_delete"
+  "netris_parent_delete"
 )
 
 ROLE_SCENARIO_TESTS=(

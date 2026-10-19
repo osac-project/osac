@@ -1,23 +1,8 @@
 ---
 # guest_os_family: linux (default) or windows — drives validation, domain spec,
-# initialization (cloud-init vs sysprep), delete cleanup, and ready timeouts.
+# initialization (cloud-init vs user-supplied sysprep), delete cleanup, and
+# ready timeouts.
 guest_os_family: linux
-
-# vm_enable_sysprep: Controls whether to create sysprep disk for Windows VMs.
-# Set to false when using pre-configured golden images that are already sysprepped.
-# Default: true (create sysprep disk for fresh Windows installation images)
-vm_enable_sysprep: true
-
-# Windows Sysprep OOBE Configuration
-# These settings configure Windows Out-of-Box Experience (OOBE) to auto-complete setup.
-# Used when vm_enable_sysprep is true.
-vm_sysprep_timezone: "Eastern Standard Time"     # Timezone (Windows timezone name)
-vm_sysprep_admin_password: ""
-vm_sysprep_autologon_enabled: true               # Enable automatic login on first boot
-vm_sysprep_input_locale: "en-US"                 # Keyboard layout (e.g., en-US, en-GB, de-DE)
-vm_sysprep_system_locale: "en-US"                # Region/format settings
-vm_sysprep_ui_language: "en-US"                  # Display language
-vm_sysprep_user_locale: "en-US"                  # User-specific locale
 
 default_vm_internal_network: "hypershift"
 default_vm_storage_class: "nfs-client"

@@ -2382,7 +2382,7 @@ var _ = Describe("Vault namespace provisioning", func() {
 			mockVaultClient.EXPECT().EnsureTenantNamespace(gomock.Any(), "retry-transit").Return(nil),
 		)
 		t := &task{r: reconciler, tenant: tenant}
-		Expect(t.update(ctx)).To(MatchError(ContainSubstring("failed to mount Transit")))
+		Expect(t.update(ctx)).To(Succeed())
 		// Failed reconciliation restores a snapshot, so inspect the task's current tenant.
 		Expect(findCondition(t.tenant)).ToNot(BeNil())
 		Expect(findCondition(t.tenant).GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
@@ -2391,7 +2391,127 @@ var _ = Describe("Vault namespace provisioning", func() {
 		Expect(findCondition(t.tenant).GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
 		Expect(findCondition(t.tenant).GetReason()).To(Equal("NamespaceReady"))
 	})
+	It("stays PENDING with condition FALSE when vault provisioning fails during initial sync", func() {
+		reconciler := &function{
+			logger:         logger,
+			idpManager:     idpManager,
+			vaultLifecycle: mockVaultClient,
+		}
 
+		tenant := privatev1.Tenant_builder{
+			Id: "org-vault-fail",
+			Metadata: privatev1.Metadata_builder{
+				Name:       "vault-fail-org",
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     "tenant-1",
+			}.Build(),
+			Status: privatev1.TenantStatus_builder{
+				BreakGlassCredentials: privatev1.BreakGlassCredentials_builder{
+					Username: "vault-fail-org-osac-break-glass",
+					Password: testPreGeneratedPassword,
+				}.Build(),
+			}.Build(),
+		}.Build()
+
+		mockIDPClient.EXPECT().
+			CreateTenant(gomock.Any(), gomock.Any()).
+			Return(&idp.Tenant{Name: "vault-fail-org", Enabled: true}, nil)
+		mockIDPClient.EXPECT().
+			CreateUser(gomock.Any(), "vault-fail-org", gomock.Any()).
+			Return(&idp.User{ID: "user-fail"}, nil)
+		mockIDPClient.EXPECT().
+			AssignIdpManagerPermissions(gomock.Any(), "user-fail").
+			Return(nil)
+
+		mockVaultClient.EXPECT().
+			EnsureTenantNamespace(gomock.Any(), "vault-fail-org").
+			Return(fmt.Errorf("vault connection refused"))
+
+		t := &task{r: reconciler, tenant: tenant}
+		err := t.update(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(tenant.GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_PENDING))
+		Expect(tenant.GetStatus().GetIdpTenantName()).To(Equal("vault-fail-org"))
+		cond := findCondition(tenant)
+		Expect(cond).ToNot(BeNil())
+		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(cond.GetReason()).To(Equal("ProvisionFailed"))
+		Expect(cond.GetMessage()).To(ContainSubstring("vault connection refused"))
+	})
+
+	It("stays SYNCED with condition FALSE when vault provisioning fails for synced tenant", func() {
+		reconciler := &function{
+			logger:         logger,
+			idpManager:     idpManager,
+			vaultLifecycle: mockVaultClient,
+		}
+
+		tenant := privatev1.Tenant_builder{
+			Id: "org-synced-vault-fail",
+			Metadata: privatev1.Metadata_builder{
+				Name:       "synced-vault-fail-org",
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     "tenant-1",
+			}.Build(),
+			Status: privatev1.TenantStatus_builder{
+				State:         privatev1.TenantState_TENANT_STATE_SYNCED,
+				IdpTenantName: "synced-vault-fail-org",
+			}.Build(),
+		}.Build()
+
+		mockIDPClient.EXPECT().
+			GetTenant(gomock.Any(), "synced-vault-fail-org").
+			Return(&idp.Tenant{Name: "synced-vault-fail-org"}, nil)
+
+		mockVaultClient.EXPECT().
+			EnsureTenantNamespace(gomock.Any(), "synced-vault-fail-org").
+			Return(fmt.Errorf("dial tcp: no such host"))
+
+		t := &task{r: reconciler, tenant: tenant}
+		err := t.update(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(tenant.GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_SYNCED))
+		cond := findCondition(tenant)
+		Expect(cond).ToNot(BeNil())
+		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(cond.GetReason()).To(Equal("ProvisionFailed"))
+		Expect(cond.GetMessage()).To(ContainSubstring("dial tcp: no such host"))
+	})
+
+	It("provisions a vault namespace for the system tenant", func() {
+		reconciler := &function{
+			logger:         logger,
+			idpManager:     idpManager,
+			vaultLifecycle: mockVaultClient,
+		}
+
+		tenant := privatev1.Tenant_builder{
+			Id: "org-system",
+			Metadata: privatev1.Metadata_builder{
+				Name:       auth.SystemTenant,
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     auth.SystemTenant,
+			}.Build(),
+			Status: privatev1.TenantStatus_builder{
+				State:         privatev1.TenantState_TENANT_STATE_SYNCED,
+				IdpTenantName: auth.SystemTenant,
+			}.Build(),
+		}.Build()
+
+		mockIDPClient.EXPECT().
+			GetTenant(gomock.Any(), auth.SystemTenant).
+			Return(&idp.Tenant{Name: auth.SystemTenant}, nil)
+		mockVaultClient.EXPECT().
+			EnsureTenantNamespace(gomock.Any(), auth.SystemTenant).
+			Return(nil)
+
+		t := &task{r: reconciler, tenant: tenant}
+		err := t.update(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		cond := findCondition(tenant)
+		Expect(cond).ToNot(BeNil())
+		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+	})
 })
 
 var _ = Describe("Vault namespace cleanup during deletion", func() {

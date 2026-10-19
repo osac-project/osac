@@ -35,6 +35,7 @@ const (
 	SecurityGroups_List_FullMethodName   = "/osac.public.v1.SecurityGroups/List"
 	SecurityGroups_Get_FullMethodName    = "/osac.public.v1.SecurityGroups/Get"
 	SecurityGroups_Create_FullMethodName = "/osac.public.v1.SecurityGroups/Create"
+	SecurityGroups_Update_FullMethodName = "/osac.public.v1.SecurityGroups/Update"
 	SecurityGroups_Delete_FullMethodName = "/osac.public.v1.SecurityGroups/Delete"
 )
 
@@ -48,6 +49,9 @@ type SecurityGroupsClient interface {
 	Get(ctx context.Context, in *SecurityGroupsGetRequest, opts ...grpc.CallOption) (*SecurityGroupsGetResponse, error)
 	// Creates a new security group.
 	Create(ctx context.Context, in *SecurityGroupsCreateRequest, opts ...grpc.CallOption) (*SecurityGroupsCreateResponse, error)
+	// Updates the ingress and egress rules of an existing security group.
+	// Callers must provide the complete rule lists for both directions.
+	Update(ctx context.Context, in *SecurityGroupsUpdateRequest, opts ...grpc.CallOption) (*SecurityGroupsUpdateResponse, error)
 	// Deletes a security group.
 	Delete(ctx context.Context, in *SecurityGroupsDeleteRequest, opts ...grpc.CallOption) (*SecurityGroupsDeleteResponse, error)
 }
@@ -90,6 +94,16 @@ func (c *securityGroupsClient) Create(ctx context.Context, in *SecurityGroupsCre
 	return out, nil
 }
 
+func (c *securityGroupsClient) Update(ctx context.Context, in *SecurityGroupsUpdateRequest, opts ...grpc.CallOption) (*SecurityGroupsUpdateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SecurityGroupsUpdateResponse)
+	err := c.cc.Invoke(ctx, SecurityGroups_Update_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *securityGroupsClient) Delete(ctx context.Context, in *SecurityGroupsDeleteRequest, opts ...grpc.CallOption) (*SecurityGroupsDeleteResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SecurityGroupsDeleteResponse)
@@ -110,6 +124,9 @@ type SecurityGroupsServer interface {
 	Get(context.Context, *SecurityGroupsGetRequest) (*SecurityGroupsGetResponse, error)
 	// Creates a new security group.
 	Create(context.Context, *SecurityGroupsCreateRequest) (*SecurityGroupsCreateResponse, error)
+	// Updates the ingress and egress rules of an existing security group.
+	// Callers must provide the complete rule lists for both directions.
+	Update(context.Context, *SecurityGroupsUpdateRequest) (*SecurityGroupsUpdateResponse, error)
 	// Deletes a security group.
 	Delete(context.Context, *SecurityGroupsDeleteRequest) (*SecurityGroupsDeleteResponse, error)
 	mustEmbedUnimplementedSecurityGroupsServer()
@@ -130,6 +147,9 @@ func (UnimplementedSecurityGroupsServer) Get(context.Context, *SecurityGroupsGet
 }
 func (UnimplementedSecurityGroupsServer) Create(context.Context, *SecurityGroupsCreateRequest) (*SecurityGroupsCreateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Create not implemented")
+}
+func (UnimplementedSecurityGroupsServer) Update(context.Context, *SecurityGroupsUpdateRequest) (*SecurityGroupsUpdateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Update not implemented")
 }
 func (UnimplementedSecurityGroupsServer) Delete(context.Context, *SecurityGroupsDeleteRequest) (*SecurityGroupsDeleteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
@@ -209,6 +229,24 @@ func _SecurityGroups_Create_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SecurityGroups_Update_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SecurityGroupsUpdateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SecurityGroupsServer).Update(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SecurityGroups_Update_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SecurityGroupsServer).Update(ctx, req.(*SecurityGroupsUpdateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _SecurityGroups_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SecurityGroupsDeleteRequest)
 	if err := dec(in); err != nil {
@@ -245,6 +283,10 @@ var SecurityGroups_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Create",
 			Handler:    _SecurityGroups_Create_Handler,
+		},
+		{
+			MethodName: "Update",
+			Handler:    _SecurityGroups_Update_Handler,
 		},
 		{
 			MethodName: "Delete",

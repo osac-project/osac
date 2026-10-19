@@ -3,8 +3,9 @@
 # item) into fulfillment-service. These are shared/global catalog objects.
 #
 # Uses the private REST API (/api/private/v1/...) exposed on the internal API
-# service (TLS, port 8001), reached via a local port-forward. Auth is the 'admin'
-# ServiceAccount bearer token. Payloads follow the CURRENT proto schema — notably:
+# service (TLS, port 8001), reached via a local port-forward. Fulfillment auth
+# uses the installer's existing service-account client credentials. Payloads
+# follow the CURRENT proto schema — notably:
 #   - ComputeInstanceTemplate.spec_defaults references an instance_type + disk_image
 #     (the old inline cores/memory/image fields were removed)
 #   - CatalogItem.template is a reference object ({id}), not a bare string
@@ -23,6 +24,10 @@ NS="${1:-${NS:-osac}}"
 INTERNAL_SVC="${INTERNAL_SVC:-fulfillment-internal-api}"
 INTERNAL_PORT="${INTERNAL_PORT:-8001}"
 LOCAL_PORT="${LOCAL_PORT:-8001}"
+AUTH_CA_FILE="${FULFILLMENT_CA_FILE:-}"
+TEMP_AUTH_CA_FILE=""
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/../lib.sh"
 
 log()  { echo "[+] $*"; }
 warn() { echo "[!] $*" >&2; }
@@ -34,16 +39,43 @@ jget() { python3 -c "import json,sys; d=json.load(sys.stdin); print(${1})" 2>/de
 
 log "Seeding catalog into '${NS}' via ${INTERNAL_SVC}:${INTERNAL_PORT}..."
 
-admin_token=$(kubectl -n "${NS}" create token admin)
+PF_PID=""
+TOKEN_HEADER_FILE=""
+cleanup() {
+  if [[ -n "${PF_PID}" ]]; then
+    kill "${PF_PID}" 2>/dev/null || true
+    wait "${PF_PID}" 2>/dev/null || true
+  fi
+  if [[ -n "${TOKEN_HEADER_FILE}" ]]; then
+    rm -f "${TOKEN_HEADER_FILE}"
+  fi
+  if [[ -n "${TEMP_AUTH_CA_FILE}" ]]; then
+    rm -f "${TEMP_AUTH_CA_FILE}"
+  fi
+}
+trap cleanup EXIT
+
+if [[ -z "${AUTH_CA_FILE}" ]]; then
+  TEMP_AUTH_CA_FILE="$(mktemp)"
+  AUTH_CA_FILE="${TEMP_AUTH_CA_FILE}"
+  kubectl -n "${NS}" get configmap ca-bundle -o jsonpath='{.data.bundle\.pem}' > "${AUTH_CA_FILE}"
+  [[ -s "${AUTH_CA_FILE}" ]] || { warn "ca-bundle ConfigMap in ${NS} has no bundle.pem"; exit 1; }
+fi
+[[ -r "${AUTH_CA_FILE}" ]] || { warn "Fulfillment issuer CA bundle is not readable"; exit 1; }
+
+fulfillment_token="$(get_fulfillment_service_account_token "${NS}" --cacert "${AUTH_CA_FILE}")"
+TOKEN_HEADER_FILE="$(mktemp)"
+chmod 600 "${TOKEN_HEADER_FILE}"
+printf 'Authorization: Bearer %s\n' "${fulfillment_token}" > "${TOKEN_HEADER_FILE}"
+unset fulfillment_token
 
 # Port-forward the internal API.
 kubectl -n "${NS}" port-forward "svc/${INTERNAL_SVC}" "${LOCAL_PORT}:${INTERNAL_PORT}" >/dev/null 2>&1 &
-pf_pid=$!
-trap 'kill "${pf_pid}" 2>/dev/null || true; wait "${pf_pid}" 2>/dev/null || true' EXIT
+PF_PID=$!
 sleep 3
 
 API="https://localhost:${LOCAL_PORT}/api/private/v1"
-CURL=(curl -skS -H "Authorization: Bearer ${admin_token}" -H "Content-Type: application/json")
+CURL=(curl -skS --header "@${TOKEN_HEADER_FILE}" -H "Content-Type: application/json")
 
 post() {  # post <path> <json-body>  -> prints response body
   "${CURL[@]}" -X POST "${API}/$1" -d "$2"

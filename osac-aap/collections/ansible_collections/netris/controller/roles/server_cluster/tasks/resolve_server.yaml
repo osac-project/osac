@@ -1,0 +1,54 @@
+---
+- name: Find inventory entries with the exact requested name
+  ansible.builtin.set_fact:
+    _server_cluster_matches: >-
+      {{ _server_cluster_inventory_by_name[_server_cluster_requested_name] | default([]) }}
+
+- name: Require site metadata for resolved hosts when the inventory is site-scoped
+  ansible.builtin.assert:
+    that:
+      - _server_cluster_matches | selectattr('site', 'defined') | list | length == _server_cluster_matches | length
+    fail_msg: "Hostname {{ _server_cluster_requested_name }} lacks site metadata in a site-scoped Netris inventory"
+  when: _server_cluster_inventory_has_site_metadata | bool
+
+# Inventory GET uses site: IDName in Netris's SDK (v4.14.0):
+# https://github.com/netrisai/netriswebapi/blob/v4.14.0/v2/types/inventory/types.go
+- name: Require consistent site metadata for matching hosts
+  ansible.builtin.assert:
+    that:
+      - >-
+        _server_cluster_matches | selectattr('site', 'defined') | list | length
+        in [0, _server_cluster_matches | length]
+    fail_msg: "Cannot establish site scope for hostname {{ _server_cluster_requested_name }} with mixed site metadata"
+
+- name: Validate inventory site identity when present
+  ansible.builtin.assert:
+    that:
+      - item.site is mapping
+      - item.site.id | default('') | string is match('^[1-9][0-9]*$')
+    fail_msg: "Invalid inventory site for hostname {{ _server_cluster_requested_name }}"
+  loop: "{{ _server_cluster_matches | selectattr('site', 'defined') | list }}"
+
+- name: Restrict matching hosts to the intended site
+  ansible.builtin.set_fact:
+    _server_cluster_matches: "{{ _server_cluster_matches | selectattr('site.id', 'equalto', server_cluster_site_id | int) | list }}"
+  when:
+    - _server_cluster_matches | length > 0
+    - _server_cluster_matches[0].site is defined
+
+- name: Require exactly one inventory match for the requested hostname
+  ansible.builtin.assert:
+    that: _server_cluster_matches | length == 1
+    fail_msg: >-
+      Hostname {{ _server_cluster_requested_name }} must resolve to exactly one server at site {{ server_cluster_site_id }}
+      (globally when inventory omits site metadata); found {{ _server_cluster_matches | length }}
+
+- name: Validate resolved server ID
+  ansible.builtin.assert:
+    that: _server_cluster_matches[0].id | default('') | string is match('^[1-9][0-9]*$')
+    fail_msg: "Invalid inventory server ID for hostname {{ _server_cluster_requested_name }}"
+
+- name: Add validated server to the resolved list
+  ansible.builtin.set_fact:
+    _server_cluster_servers: >-
+      {{ _server_cluster_servers + [{'id': _server_cluster_matches[0].id, 'name': _server_cluster_matches[0].name}] }}

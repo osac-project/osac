@@ -18,6 +18,7 @@ from tests.e2e.core.helpers import (
     wait_for_external_ip_pool_grpc_ready,
     wait_for_external_ip_pool_ready,
     wait_for_grpc_subnet_ready,
+    wait_for_nat_gateway_deletion,
     wait_for_security_group_cr,
     wait_for_security_group_deletion,
     wait_for_security_group_ready,
@@ -29,6 +30,7 @@ from tests.e2e.core.helpers import (
     wait_for_virtual_network_ready,
 )
 from tests.e2e.core.k8s_client import K8sClient
+from tests.e2e.core.runner import poll_until
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +132,7 @@ def _cleanup_ref_pool_external_ips(private_grpc: GRPCClient, k8s: K8sClient, poo
 def _create_ref_virtual_network(
     grpc: GRPCClient, k8s_hub_client: K8sClient, vn_name: str
 ) -> Generator[dict[str, str], None, None]:
+    """Create a VirtualNetwork, yield its metadata, and tear it down safely."""
     vn_id: str | None = None
     vn_cr_name: str | None = None
 
@@ -234,7 +237,87 @@ def ref_security_group(
             _safe_delete_sg(grpc, k8s_hub_client, sg_id=sg_id, sg_cr_name=sg_cr_name)
 
 
+def _poll_nat_gateway_gone_via_grpc(grpc: GRPCClient, nat_id: str) -> None:
+    """Poll the NATGateways/Get gRPC endpoint until the resource is gone.
+
+    Used as a fallback when the Kubernetes CR name is unavailable (e.g. the
+    CR was never created or was already garbage-collected).  The poll
+    confirms the backend has fully deleted the NATGateway so the parent
+    VirtualNetwork deletion will not hang.
+    """
+
+    def _is_gone() -> bool:
+        """Return True when the NATGateway gRPC resource no longer exists."""
+        try:
+            grpc.call(service=f"{PUBLIC_API}.NATGateways/Get", data={"id": nat_id})
+        except subprocess.CalledProcessError as exc:
+            combined = (exc.stderr or "") + (exc.stdout or "")
+            if re.search(r"Code:\s*NotFound", combined):
+                return True
+            raise
+        return False
+
+    poll_until(
+        fn=_is_gone,
+        until=lambda gone: gone is True,
+        retries=120,
+        delay=5,
+        description=f"NATGateway {nat_id} gRPC deletion",
+    )
+
+
+def _cleanup_child_nat_gateways(grpc: GRPCClient, k8s: K8sClient, vn_id: str) -> None:
+    """Delete NATGateways belonging to a VirtualNetwork before VN teardown.
+
+    The VirtualNetwork controller gates VN deletion on all child NATGateways
+    being fully removed first (no ownerReferences cascade).  Without this
+    cleanup the VN gets stuck in ``Deleting`` phase indefinitely.
+    """
+    nat_ids: list[str] = []
+    page_token = ""
+    while True:
+        data: dict[str, str] | None = {"pageToken": page_token} if page_token else None
+        response: dict[str, Any] = grpc.call(service=f"{PUBLIC_API}.NATGateways/List", data=data)
+        for item in response.get("items", []):
+            obj = item.get("object", item)
+            spec = obj.get("spec", {})
+            vn_ref = spec.get("virtual_network", spec.get("virtualNetwork", {}))
+            if vn_ref.get("id") != vn_id:
+                continue
+            nat_id = item.get("id") or obj.get("id")
+            if nat_id:
+                nat_ids.append(nat_id)
+        page_token = response.get("nextPageToken", "")
+        if not page_token:
+            break
+
+    for nat_id in nat_ids:
+        try:
+            grpc.delete_nat_gateway(nat_gateway_id=nat_id)
+        except subprocess.CalledProcessError as exc:
+            combined = (exc.stderr or "") + (exc.stdout or "")
+            if not re.search(r"Code:\s*NotFound", combined):
+                raise
+        nat_cr_name = k8s.get_nat_gateway_name(uuid=nat_id, checked=False)
+        if nat_cr_name:
+            wait_for_nat_gateway_deletion(k8s=k8s, name=nat_cr_name)
+        else:
+            _poll_nat_gateway_gone_via_grpc(grpc, nat_id)
+
+
 def _safe_delete_vn(grpc: GRPCClient, k8s: K8sClient, *, vn_id: str, vn_cr_name: str) -> None:
+    """Delete a VirtualNetwork, first removing any child NATGateways.
+
+    Cleans up NATGateways that reference *vn_id* (the VN controller blocks
+    deletion until they are gone), then issues the VN delete and waits for
+    the CR to disappear.  Errors are logged rather than raised so that
+    remaining teardown fixtures can still run.
+    """
+    try:
+        _cleanup_child_nat_gateways(grpc, k8s, vn_id)
+    except Exception as exc:
+        logger.warning("Failed to clean up child NATGateways for VN %s: %s", vn_id, type(exc).__name__)
+        return
     try:
         grpc.delete_virtual_network(vn_id=vn_id)
     except subprocess.CalledProcessError as exc:
@@ -247,6 +330,11 @@ def _safe_delete_vn(grpc: GRPCClient, k8s: K8sClient, *, vn_id: str, vn_cr_name:
 
 
 def _safe_delete_subnet(grpc: GRPCClient, k8s: K8sClient, *, subnet_id: str, subnet_cr_name: str) -> None:
+    """Delete a Subnet and wait for its CR to disappear.
+
+    Errors are logged rather than raised so that remaining teardown
+    fixtures can still run.
+    """
     try:
         grpc.delete_subnet(subnet_id=subnet_id)
     except subprocess.CalledProcessError as exc:
@@ -259,6 +347,11 @@ def _safe_delete_subnet(grpc: GRPCClient, k8s: K8sClient, *, subnet_id: str, sub
 
 
 def _safe_delete_sg(grpc: GRPCClient, k8s: K8sClient, *, sg_id: str, sg_cr_name: str) -> None:
+    """Delete a SecurityGroup and wait for its CR to disappear.
+
+    Errors are logged rather than raised so that remaining teardown
+    fixtures can still run.
+    """
     try:
         grpc.delete_security_group(sg_id=sg_id)
     except subprocess.CalledProcessError as exc:

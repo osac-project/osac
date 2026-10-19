@@ -6,6 +6,7 @@ export const TYPE_FILTER_VALUES = [
   'kubeconfig',
   'opaque',
   'pullsecret',
+  'sshpublickey',
   'userdata',
   'value',
 ] as const;
@@ -19,6 +20,7 @@ export const TYPE_FILTER_TO_ENUM: Record<TypeFilterValue, SecretType> = {
   kubeconfig: SecretType.KUBECONFIG,
   opaque: SecretType.OPAQUE,
   pullsecret: SecretType.PULL_SECRET,
+  sshpublickey: SecretType.SSH_PUBLIC_KEY,
   userdata: SecretType.USER_DATA,
   value: SecretType.VALUE,
 };

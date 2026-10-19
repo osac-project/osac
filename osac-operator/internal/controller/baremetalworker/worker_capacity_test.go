@@ -300,7 +300,8 @@ var _ = It("stops capacity actions after a foreign reference is added concurrent
 	mutateCapacityOrder(r, co, func(latest *v1alpha1.ClusterOrder) {
 		latest.Status.Workers = append(latest.Status.Workers, v1alpha1.WorkerStatus{Name: "foreign", Kind: workerKindBMI, NodeSet: "standard", Phase: workerPhaseReady, BareMetalInstance: v1alpha1.BareMetalInstanceReference{Name: "foreign-bmi", ID: "foreign-id"}, CreationTimestamp: metav1.Now()})
 	})
-	if _, err := r.reconcileDueWorkerCreation(context.Background(), initial, "tenant", workerCreationInputs{}, observed); err == nil {
+	if _, err := r.reconcileDueWorkerCreation(context.Background(), initial,
+		authoritativeTestCluster(context.Background(), r, co), workerCreationInputs{}, observed); err == nil {
 		Fail("unverified refreshed reference permitted capacity actions")
 	}
 	Expect(fc.names).To(BeEmpty(), "provisioned after foreign reference refresh")

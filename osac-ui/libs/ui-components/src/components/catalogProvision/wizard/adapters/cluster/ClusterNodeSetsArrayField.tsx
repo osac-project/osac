@@ -11,9 +11,11 @@ import MinusCircleIcon from '@patternfly/react-icons/dist/esm/icons/minus-circle
 import PlusCircleIcon from '@patternfly/react-icons/dist/esm/icons/plus-circle-icon';
 import { useFormikContext } from 'formik';
 
+import { BareMetalInstanceTypes } from '@osac/types';
+import { useListResource } from '@osac/ui-components/api/use-resource';
+
 import type { ClusterWizardValues } from './fields';
 import { createEmptyNodeSetRow } from './fields';
-import { hostTypeDisplayName, useHostTypes } from '../../../../../api/v1/host-types';
 import { useTranslation } from '../../../../../hooks/useTranslation';
 import { getErrorMessage } from '../../../../../utils/error';
 import { SelectField } from '../../../../Form/SelectField';
@@ -24,15 +26,15 @@ const ClusterNodeSetsArrayField = () => {
   const { t } = useTranslation();
   const { values, setFieldValue } = useFormikContext<ClusterWizardValues>();
   const {
-    data: hostTypes = [],
+    data: hostTypes,
     isLoading: hostTypesLoading,
     error: hostTypesError,
     refetch: refetchHostTypes,
-  } = useHostTypes();
+  } = useListResource(BareMetalInstanceTypes);
 
-  const hostTypeOptions = hostTypes.map((hostType) => ({
+  const hostTypeOptions = (hostTypes?.items || []).map((hostType) => ({
     value: hostType.id,
-    label: hostTypeDisplayName(hostType),
+    label: hostType.metadata?.name || '',
   }));
 
   const addRow = () => {

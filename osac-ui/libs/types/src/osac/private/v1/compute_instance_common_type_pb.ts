@@ -29,7 +29,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/compute_instance_common_type.proto.
  */
 export const file_osac_private_v1_compute_instance_common_type: GenFile = /*@__PURE__*/
-  fileDesc("CjJvc2FjL3ByaXZhdGUvdjEvY29tcHV0ZV9pbnN0YW5jZV9jb21tb25fdHlwZS5wcm90bxIPb3NhYy5wcml2YXRlLnYxIpgBChhDb21wdXRlTmV0d29ya0F0dGFjaG1lbnQSNQoGc3VibmV0GAEgASgLMiUub3NhYy5wcml2YXRlLnYxLlN1Ym5ldExvY2FsUmVmZXJlbmNlEkUKD3NlY3VyaXR5X2dyb3VwcxgCIAMoCzIsLm9zYWMucHJpdmF0ZS52MS5TZWN1cml0eUdyb3VwTG9jYWxSZWZlcmVuY2UiMAoUU3RvcmFnZVRpZXJSZWZlcmVuY2USCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCSKVAQoTQ29tcHV0ZUluc3RhbmNlRGlzaxIeCghzaXplX2dpYhgBIAEoBUIHukgEGgIgAEgAiAEBEkAKDHN0b3JhZ2VfdGllchgCIAEoCzIlLm9zYWMucHJpdmF0ZS52MS5TdG9yYWdlVGllclJlZmVyZW5jZUgBiAEBQgsKCV9zaXplX2dpYkIPCg1fc3RvcmFnZV90aWVyKrsBChpDb21wdXRlSW5zdGFuY2VSdW5TdHJhdGVneRItCilDT01QVVRFX0lOU1RBTkNFX1JVTl9TVFJBVEVHWV9VTlNQRUNJRklFRBAAEigKJENPTVBVVEVfSU5TVEFOQ0VfUlVOX1NUUkFURUdZX0FMV0FZUxABEigKJENPTVBVVEVfSU5TVEFOQ0VfUlVOX1NUUkFURUdZX0hBTFRFRBACEgoKBkFsd2F5cxABEgoKBkhhbHRlZBACGgIQAUIUirUYEBIOb3NhYy5wdWJsaWMudjFiBnByb3RvMw", [file_buf_validate_validate, file_cleanapi_cleanapi, file_osac_private_v1_security_group_type, file_osac_private_v1_subnet_type]);
+  fileDesc("CjJvc2FjL3ByaXZhdGUvdjEvY29tcHV0ZV9pbnN0YW5jZV9jb21tb25fdHlwZS5wcm90bxIPb3NhYy5wcml2YXRlLnYxIpgBChhDb21wdXRlTmV0d29ya0F0dGFjaG1lbnQSNQoGc3VibmV0GAEgASgLMiUub3NhYy5wcml2YXRlLnYxLlN1Ym5ldExvY2FsUmVmZXJlbmNlEkUKD3NlY3VyaXR5X2dyb3VwcxgCIAMoCzIsLm9zYWMucHJpdmF0ZS52MS5TZWN1cml0eUdyb3VwTG9jYWxSZWZlcmVuY2UiMAoUU3RvcmFnZVRpZXJSZWZlcmVuY2USCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCSKVAQoTQ29tcHV0ZUluc3RhbmNlRGlzaxIeCghzaXplX2dpYhgBIAEoBUIHukgEGgIgAEgAiAEBEkAKDHN0b3JhZ2VfdGllchgCIAEoCzIlLm9zYWMucHJpdmF0ZS52MS5TdG9yYWdlVGllclJlZmVyZW5jZUgBiAEBQgsKCV9zaXplX2dpYkIPCg1fc3RvcmFnZV90aWVyIk4KF0NvbXB1dGVJbnN0YW5jZURpc2tMaXN0EjMKBWl0ZW1zGAEgAygLMiQub3NhYy5wcml2YXRlLnYxLkNvbXB1dGVJbnN0YW5jZURpc2squwEKGkNvbXB1dGVJbnN0YW5jZVJ1blN0cmF0ZWd5Ei0KKUNPTVBVVEVfSU5TVEFOQ0VfUlVOX1NUUkFURUdZX1VOU1BFQ0lGSUVEEAASKAokQ09NUFVURV9JTlNUQU5DRV9SVU5fU1RSQVRFR1lfQUxXQVlTEAESKAokQ09NUFVURV9JTlNUQU5DRV9SVU5fU1RSQVRFR1lfSEFMVEVEEAISCgoGQWx3YXlzEAESCgoGSGFsdGVkEAIaAhABQhSKtRgQEg5vc2FjLnB1YmxpYy52MWIGcHJvdG8z", [file_buf_validate_validate, file_cleanapi_cleanapi, file_osac_private_v1_security_group_type, file_osac_private_v1_subnet_type]);
 
 /**
  * Groups one subnet with security groups for that network attachment (multi-NIC VMs).
@@ -110,6 +110,25 @@ export type ComputeInstanceDisk = Message<"osac.private.v1.ComputeInstanceDisk">
  */
 export const ComputeInstanceDiskSchema: GenMessage<ComputeInstanceDisk> = /*@__PURE__*/
   messageDesc(file_osac_private_v1_compute_instance_common_type, 2);
+
+/**
+ * Contains a list of compute instance disks. Message presence distinguishes an omitted list from an empty list.
+ *
+ * @generated from message osac.private.v1.ComputeInstanceDiskList
+ */
+export type ComputeInstanceDiskList = Message<"osac.private.v1.ComputeInstanceDiskList"> & {
+  /**
+   * @generated from field: repeated osac.private.v1.ComputeInstanceDisk items = 1;
+   */
+  items: ComputeInstanceDisk[];
+};
+
+/**
+ * Describes the message osac.private.v1.ComputeInstanceDiskList.
+ * Use `create(ComputeInstanceDiskListSchema)` to create a new message.
+ */
+export const ComputeInstanceDiskListSchema: GenMessage<ComputeInstanceDiskList> = /*@__PURE__*/
+  messageDesc(file_osac_private_v1_compute_instance_common_type, 3);
 
 /**
  * Run strategy for the compute instance.

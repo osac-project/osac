@@ -28,6 +28,11 @@ import NameField from '@osac/ui-components/components/catalogProvision/wizard/fi
 import { InputField } from '@osac/ui-components/components/Form/InputField';
 import LeaveFormConfirmation from '@osac/ui-components/components/Form/LeaveFormConfirmation';
 import OsacForm from '@osac/ui-components/components/Form/OsacForm';
+import { SelectField } from '@osac/ui-components/components/Form/SelectField';
+import {
+  STORAGE_BACKEND_PROVIDER_VALUES,
+  getStorageBackendProviderOptions,
+} from '@osac/ui-components/components/Storage/storageBackendProviders';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 import { getErrorMessage } from '@osac/ui-components/utils/error';
 import { resourceNameSchema } from '@osac/ui-components/validation/resource-name';
@@ -52,9 +57,15 @@ const getInitialValues = (backend?: StorageBackend): StorageBackendFormValues =>
 
 const getStorageBackendSchema = (t: TFunction, isEdit: boolean) => {
   const pairError = t('Enter both username and password, or leave both blank');
+  const providerSchema = Yup.string().required(t('Provider or product key is required'));
   return Yup.object({
     metadata: Yup.object({ name: resourceNameSchema(t) }),
-    provider: Yup.string().required(t('Provider or product key is required')),
+    provider: isEdit
+      ? providerSchema
+      : providerSchema.oneOf(
+          [...STORAGE_BACKEND_PROVIDER_VALUES],
+          t('Select a supported storage product'),
+        ),
     endpoint: Yup.string().required(t('Endpoint is required')),
     description: Yup.string(),
     // On edit, credentials start blank and are all-or-nothing: both blank keeps them
@@ -85,6 +96,15 @@ const StorageBackendForm = ({ backend }: { backend?: StorageBackend }) => {
   const { mutateAsync: create, error: createError } = useCreateStorageBackend();
   const { mutateAsync: update, error: updateError } = useUpdateStorageBackend();
   const error = isEdit ? updateError : createError;
+  const providerOptions = getStorageBackendProviderOptions(t);
+  if (
+    isEdit &&
+    backend?.spec?.provider &&
+    !providerOptions.some(({ value }) => value === backend.spec?.provider)
+  ) {
+    // Keep existing legacy values visible when editing an immutable provider.
+    providerOptions.push({ value: backend.spec.provider, label: backend.spec.provider });
+  }
 
   const onSubmit = async (values: StorageBackendFormValues) => {
     try {
@@ -155,14 +175,16 @@ const StorageBackendForm = ({ backend }: { backend?: StorageBackend }) => {
               <StackItem>
                 <OsacForm>
                   <NameField isDisabled={isEdit} />
-                  <InputField
+                  <SelectField
                     name="provider"
                     label={t('Provider / product key')}
                     fieldId="storage-backend-provider"
                     isRequired
                     isDisabled={isEdit}
+                    options={providerOptions}
+                    placeholder={t('Select a supported storage product')}
                     helperText={t(
-                      'Enter the provider/product routing key used by the storage integration. Use a product-specific key when needed. The API accepts any non-empty key but does not verify deployment support.',
+                      'Choose the storage product configured for this deployment. The selected key is used for downstream provider routing.',
                     )}
                   />
                   <InputField

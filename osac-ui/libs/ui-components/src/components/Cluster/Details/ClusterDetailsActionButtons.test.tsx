@@ -48,6 +48,8 @@ const mockCluster = (state: ClusterState): Cluster => ({
     nodeSets: {},
     apiEndpoint: '',
     ingressEndpoint: '',
+    observedCpVersion: '',
+    upgradeHistory: [],
     kubeconfigSecret: {
       $typeName: 'osac.public.v1.SecretLocalReference',
       id: 'kubeconfig-secret-123',

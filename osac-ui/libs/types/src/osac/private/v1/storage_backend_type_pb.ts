@@ -15,10 +15,12 @@
 // @generated from file osac/private/v1/storage_backend_type.proto (package osac.private.v1, syntax proto3)
 /* eslint-disable */
 
-import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
-import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
+import type { GenEnum, GenExtension, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
+import { enumDesc, extDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import { file_buf_validate_validate } from "../../../buf/validate/validate_pb";
 import { file_cleanapi_cleanapi } from "../../../cleanapi/cleanapi_pb";
+import type { FieldOptions } from "../../../google/protobuf/descriptor_pb";
+import { file_google_protobuf_descriptor } from "../../../google/protobuf/descriptor_pb";
 import type { Metadata } from "./metadata_type_pb";
 import { file_osac_private_v1_metadata_type } from "./metadata_type_pb";
 import type { SecretLocalReference } from "./secret_type_pb";
@@ -29,7 +31,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/storage_backend_type.proto.
  */
 export const file_osac_private_v1_storage_backend_type: GenFile = /*@__PURE__*/
-  fileDesc("Cipvc2FjL3ByaXZhdGUvdjEvc3RvcmFnZV9iYWNrZW5kX3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSK7AQoOU3RvcmFnZUJhY2tlbmQSCgoCaWQYASABKAkSKwoIbWV0YWRhdGEYAiABKAsyGS5vc2FjLnByaXZhdGUudjEuTWV0YWRhdGESOQoEc3BlYxgDIAEoCzIjLm9zYWMucHJpdmF0ZS52MS5TdG9yYWdlQmFja2VuZFNwZWNCBrpIA8gBARI1CgZzdGF0dXMYBCABKAsyJS5vc2FjLnByaXZhdGUudjEuU3RvcmFnZUJhY2tlbmRTdGF0dXMiqAEKElN0b3JhZ2VCYWNrZW5kU3BlYxIZCghwcm92aWRlchgBIAEoCUIHukgEcgIQARITCgtkZXNjcmlwdGlvbhgCIAEoCRIZCghlbmRwb2ludBgDIAEoCUIHukgEcgIQARJHCgtjcmVkZW50aWFscxgEIAEoCzIqLm9zYWMucHJpdmF0ZS52MS5TdG9yYWdlQmFja2VuZENyZWRlbnRpYWxzQga6SAPIAQEinAIKGVN0b3JhZ2VCYWNrZW5kQ3JlZGVudGlhbHMSGQoIdXNlcm5hbWUYASABKAlCB7pIBHICEAESEAoIcGFzc3dvcmQYAiABKAkSPgoPcGFzc3dvcmRfc2VjcmV0GAMgASgLMiUub3NhYy5wcml2YXRlLnYxLlNlY3JldExvY2FsUmVmZXJlbmNlOpEBukiNARqKAQoccGFzc3dvcmRfeG9yX3Bhc3N3b3JkX3NlY3JldBI2ZXhhY3RseSBvbmUgb2YgcGFzc3dvcmQgb3IgcGFzc3dvcmRfc2VjcmV0IG11c3QgYmUgc2V0GjIodGhpcy5wYXNzd29yZCAhPSAnJykgIT0gaGFzKHRoaXMucGFzc3dvcmRfc2VjcmV0KSJtChRTdG9yYWdlQmFja2VuZFN0YXR1cxIzCgVzdGF0ZRgBIAEoDjIkLm9zYWMucHJpdmF0ZS52MS5TdG9yYWdlQmFja2VuZFN0YXRlEhQKB21lc3NhZ2UYAiABKAlIAIgBAUIKCghfbWVzc2FnZSpdChNTdG9yYWdlQmFja2VuZFN0YXRlEiUKIVNUT1JBR0VfQkFDS0VORF9TVEFURV9VTlNQRUNJRklFRBAAEh8KG1NUT1JBR0VfQkFDS0VORF9TVEFURV9SRUFEWRABQgaKtRgCCAFiBnByb3RvMw", [file_buf_validate_validate, file_cleanapi_cleanapi, file_osac_private_v1_metadata_type, file_osac_private_v1_secret_type]);
+  fileDesc("Cipvc2FjL3ByaXZhdGUvdjEvc3RvcmFnZV9iYWNrZW5kX3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSK7AQoOU3RvcmFnZUJhY2tlbmQSCgoCaWQYASABKAkSKwoIbWV0YWRhdGEYAiABKAsyGS5vc2FjLnByaXZhdGUudjEuTWV0YWRhdGESOQoEc3BlYxgDIAEoCzIjLm9zYWMucHJpdmF0ZS52MS5TdG9yYWdlQmFja2VuZFNwZWNCBrpIA8gBARI1CgZzdGF0dXMYBCABKAsyJS5vc2FjLnByaXZhdGUudjEuU3RvcmFnZUJhY2tlbmRTdGF0dXMiQQocU3RvcmFnZUJhY2tlbmRQcm92aWRlck9wdGlvbhILCgNrZXkYASABKAkSFAoMZGlzcGxheV9uYW1lGAIgASgJIl8KHVN0b3JhZ2VCYWNrZW5kUHJvdmlkZXJPcHRpb25zEj4KB2Nob2ljZXMYASADKAsyLS5vc2FjLnByaXZhdGUudjEuU3RvcmFnZUJhY2tlbmRQcm92aWRlck9wdGlvbiLeAgoSU3RvcmFnZUJhY2tlbmRTcGVjEs4BCghwcm92aWRlchgBIAEoCUK7AbpIQXI/EAFSBHZhc3RSBm5ldGFwcFIPcHVyZS1mbGFzaGJsYWRlUg9wdXJlLWZsYXNoYXJyYXlSBHB1cmVSBW9udGFwwvMYcwoRCgR2YXN0EglWQVNUIERhdGEKFgoGbmV0YXBwEgxOZXRBcHAgT05UQVAKIgoPcHVyZS1mbGFzaGJsYWRlEg9QdXJlIEZsYXNoQmxhZGUKIgoPcHVyZS1mbGFzaGFycmF5Eg9QdXJlIEZsYXNoQXJyYXkSEwoLZGVzY3JpcHRpb24YAiABKAkSGQoIZW5kcG9pbnQYAyABKAlCB7pIBHICEAESRwoLY3JlZGVudGlhbHMYBCABKAsyKi5vc2FjLnByaXZhdGUudjEuU3RvcmFnZUJhY2tlbmRDcmVkZW50aWFsc0IGukgDyAEBIpwCChlTdG9yYWdlQmFja2VuZENyZWRlbnRpYWxzEhkKCHVzZXJuYW1lGAEgASgJQge6SARyAhABEhAKCHBhc3N3b3JkGAIgASgJEj4KD3Bhc3N3b3JkX3NlY3JldBgDIAEoCzIlLm9zYWMucHJpdmF0ZS52MS5TZWNyZXRMb2NhbFJlZmVyZW5jZTqRAbpIjQEaigEKHHBhc3N3b3JkX3hvcl9wYXNzd29yZF9zZWNyZXQSNmV4YWN0bHkgb25lIG9mIHBhc3N3b3JkIG9yIHBhc3N3b3JkX3NlY3JldCBtdXN0IGJlIHNldBoyKHRoaXMucGFzc3dvcmQgIT0gJycpICE9IGhhcyh0aGlzLnBhc3N3b3JkX3NlY3JldCkibQoUU3RvcmFnZUJhY2tlbmRTdGF0dXMSMwoFc3RhdGUYASABKA4yJC5vc2FjLnByaXZhdGUudjEuU3RvcmFnZUJhY2tlbmRTdGF0ZRIUCgdtZXNzYWdlGAIgASgJSACIAQFCCgoIX21lc3NhZ2UqXQoTU3RvcmFnZUJhY2tlbmRTdGF0ZRIlCiFTVE9SQUdFX0JBQ0tFTkRfU1RBVEVfVU5TUEVDSUZJRUQQABIfChtTVE9SQUdFX0JBQ0tFTkRfU1RBVEVfUkVBRFkQATqYAQogc3RvcmFnZV9iYWNrZW5kX3Byb3ZpZGVyX29wdGlvbnMSHS5nb29nbGUucHJvdG9idWYuRmllbGRPcHRpb25zGLiOAyABKAsyLi5vc2FjLnByaXZhdGUudjEuU3RvcmFnZUJhY2tlbmRQcm92aWRlck9wdGlvbnNSHXN0b3JhZ2VCYWNrZW5kUHJvdmlkZXJPcHRpb25zQgaKtRgCCAFiBnByb3RvMw", [file_buf_validate_validate, file_cleanapi_cleanapi, file_google_protobuf_descriptor, file_osac_private_v1_metadata_type, file_osac_private_v1_secret_type]);
 
 /**
  * Represents a registered storage backend in the OSAC platform.
@@ -80,13 +82,59 @@ export const StorageBackendSchema: GenMessage<StorageBackend> = /*@__PURE__*/
   messageDesc(file_osac_private_v1_storage_backend_type, 0);
 
 /**
+ * A selectable storage product and its English display name. osac-ui uses the
+ * display name as an i18n key.
+ *
+ * @generated from message osac.private.v1.StorageBackendProviderOption
+ */
+export type StorageBackendProviderOption = Message<"osac.private.v1.StorageBackendProviderOption"> & {
+  /**
+   * @generated from field: string key = 1;
+   */
+  key: string;
+
+  /**
+   * @generated from field: string display_name = 2;
+   */
+  displayName: string;
+};
+
+/**
+ * Describes the message osac.private.v1.StorageBackendProviderOption.
+ * Use `create(StorageBackendProviderOptionSchema)` to create a new message.
+ */
+export const StorageBackendProviderOptionSchema: GenMessage<StorageBackendProviderOption> = /*@__PURE__*/
+  messageDesc(file_osac_private_v1_storage_backend_type, 1);
+
+/**
+ * Selectable provider products attached to a protobuf field as schema metadata.
+ *
+ * @generated from message osac.private.v1.StorageBackendProviderOptions
+ */
+export type StorageBackendProviderOptions = Message<"osac.private.v1.StorageBackendProviderOptions"> & {
+  /**
+   * @generated from field: repeated osac.private.v1.StorageBackendProviderOption choices = 1;
+   */
+  choices: StorageBackendProviderOption[];
+};
+
+/**
+ * Describes the message osac.private.v1.StorageBackendProviderOptions.
+ * Use `create(StorageBackendProviderOptionsSchema)` to create a new message.
+ */
+export const StorageBackendProviderOptionsSchema: GenMessage<StorageBackendProviderOptions> = /*@__PURE__*/
+  messageDesc(file_osac_private_v1_storage_backend_type, 2);
+
+/**
  * Defines the desired configuration for a StorageBackend.
  *
  * @generated from message osac.private.v1.StorageBackendSpec
  */
 export type StorageBackendSpec = Message<"osac.private.v1.StorageBackendSpec"> & {
   /**
-   * Storage provider identifier. For example: "vast", "ceph", "pure".
+   * Product-specific provider routing key. New StorageBackends may use "vast",
+   * "netapp", "pure-flashblade", or "pure-flasharray". The legacy "pure" and
+   * "ontap" aliases remain accepted for compatibility.
    *
    * This value is immutable once the StorageBackend is created.
    *
@@ -121,7 +169,7 @@ export type StorageBackendSpec = Message<"osac.private.v1.StorageBackendSpec"> &
  * Use `create(StorageBackendSpecSchema)` to create a new message.
  */
 export const StorageBackendSpecSchema: GenMessage<StorageBackendSpec> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_storage_backend_type, 1);
+  messageDesc(file_osac_private_v1_storage_backend_type, 3);
 
 /**
  * Credentials for authenticating with a storage backend's management API.
@@ -160,7 +208,7 @@ export type StorageBackendCredentials = Message<"osac.private.v1.StorageBackendC
  * Use `create(StorageBackendCredentialsSchema)` to create a new message.
  */
 export const StorageBackendCredentialsSchema: GenMessage<StorageBackendCredentials> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_storage_backend_type, 2);
+  messageDesc(file_osac_private_v1_storage_backend_type, 4);
 
 /**
  * Represents the current operational state of a StorageBackend.
@@ -188,7 +236,7 @@ export type StorageBackendStatus = Message<"osac.private.v1.StorageBackendStatus
  * Use `create(StorageBackendStatusSchema)` to create a new message.
  */
 export const StorageBackendStatusSchema: GenMessage<StorageBackendStatus> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_storage_backend_type, 3);
+  messageDesc(file_osac_private_v1_storage_backend_type, 5);
 
 /**
  * Lifecycle states for StorageBackend resources.
@@ -216,4 +264,10 @@ export enum StorageBackendState {
  */
 export const StorageBackendStateSchema: GenEnum<StorageBackendState> = /*@__PURE__*/
   enumDesc(file_osac_private_v1_storage_backend_type, 0);
+
+/**
+ * @generated from extension: osac.private.v1.StorageBackendProviderOptions storage_backend_provider_options = 51000;
+ */
+export const storage_backend_provider_options: GenExtension<FieldOptions, StorageBackendProviderOptions> = /*@__PURE__*/
+  extDesc(file_osac_private_v1_storage_backend_type, 0);
 

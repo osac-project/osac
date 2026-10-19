@@ -2,6 +2,7 @@ import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
 import type { StorageBackend } from '@osac/types/private';
 import ResourceNameField from '@osac/ui-components/components/Resource/ResourceNameField.tsx';
+import { getStorageBackendProviderLabel } from '@osac/ui-components/components/Storage/storageBackendProviders';
 
 import StorageBackendActionsMenu from './StorageBackendActionsMenu';
 import StorageBackendStatusLabel from './StorageBackendStatusLabel';
@@ -37,7 +38,9 @@ export const StorageBackendsTable = ({ backends }: StorageBackendsTableProps) =>
             <Td dataLabel={t('Status')}>
               <StorageBackendStatusLabel state={backend.status?.state} />
             </Td>
-            <Td dataLabel={t('Provider')}>{backend.spec?.provider}</Td>
+            <Td dataLabel={t('Provider')}>
+              {getStorageBackendProviderLabel(t, backend.spec?.provider)}
+            </Td>
             <Td dataLabel={t('Endpoint')}>{backend.spec?.endpoint}</Td>
             <Td dataLabel={t('Actions')} isActionCell>
               <StorageBackendActionsMenu backend={backend} />

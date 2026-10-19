@@ -26,6 +26,10 @@
 # Requires (from caller / main.yaml):
 #   _unique_providers — list of provider names from this tenant's tier list
 
+- name: Resolve CSI backend vendors from product routing keys
+  ansible.builtin.include_tasks: resolve_csi_backend_vendors.yaml
+  when: storage_provider_csi_backends_enabled | default(true) | bool
+
 - name: Ensure vendor CSI controllers are deployed on the hub (cumulative across tenants)
   when: storage_provider_csi_backends_enabled | default(true) | bool
   block:
@@ -36,10 +40,8 @@
         namespace: "{{ storage_provider_csi_backends_namespace }}"
       register: _csi_backends_existing
 
-    - name: Compute this tenant's vendors and the controllers already present
+    - name: Discover controller Deployments already present on the hub
       ansible.builtin.set_fact:
-        # Vendors this tenant's tiers require, bounded to the chart-managed vendor set.
-        _this_tenant_vendors: "{{ _unique_providers | intersect(['vast', 'trident', 'pure']) }}"
         # Names of vendor controller Deployments that already exist in the namespace.
         _existing_controller_names: >-
           {{ (_csi_backends_existing.resources | default([]))

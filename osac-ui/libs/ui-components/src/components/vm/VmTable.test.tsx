@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ComputeInstance, InstanceType } from '@osac/types';
 import {
   ComputeInstanceCatalogItemReferenceSchema,
+  ComputeInstanceDiskListSchema,
   ComputeInstanceState,
   ComputeInstanceTemplateReferenceSchema,
   InstanceTypeReferenceSchema,
@@ -55,7 +56,7 @@ const runningVm: ComputeInstance = {
   },
   spec: {
     $typeName: 'osac.public.v1.ComputeInstanceSpec',
-    additionalDisks: [],
+    additionalDisks: create(ComputeInstanceDiskListSchema, { items: [] }),
     catalogItem: create(ComputeInstanceCatalogItemReferenceSchema, { id: '' }),
     networkAttachments: [],
     template: create(ComputeInstanceTemplateReferenceSchema, { id: '' }),
@@ -69,6 +70,7 @@ const runningVm: ComputeInstance = {
     state: ComputeInstanceState.RUNNING,
     internalIpAddress: '10.0.0.5',
     externalIpAddress: '203.0.113.1',
+    computeNetworkAttachmentStatuses: [],
   },
 };
 

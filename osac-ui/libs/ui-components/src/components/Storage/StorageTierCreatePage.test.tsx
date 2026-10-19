@@ -42,7 +42,7 @@ const readyBackend = {
 const notReadyBackend = {
   id: 'backend-2',
   metadata: { name: 'not-ready-backend' },
-  spec: { provider: 'ceph', endpoint: 'ceph.example.com' },
+  spec: { provider: 'pure-flashblade', endpoint: 'pure.example.com' },
   status: { state: StorageBackendState.UNSPECIFIED },
 } as StorageBackend;
 
@@ -62,7 +62,7 @@ const EDIT_PATH = '/admin/infrastructure/storage/tiers/tier-1/edit';
 const assignedNonReadyBackend = {
   id: 'backend-2',
   metadata: { name: 'legacy-backend' },
-  spec: { provider: 'ceph', endpoint: 'ceph.example.com' },
+  spec: { provider: 'pure-flashblade', endpoint: 'pure.example.com' },
   status: { state: StorageBackendState.UNSPECIFIED },
 } as StorageBackend;
 

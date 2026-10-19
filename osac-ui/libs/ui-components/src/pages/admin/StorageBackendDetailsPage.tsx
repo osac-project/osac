@@ -14,6 +14,8 @@ import {
   StackItem,
 } from '@patternfly/react-core';
 
+import { getStorageBackendProviderLabel } from '@osac/ui-components/components/Storage/storageBackendProviders';
+
 import { usePrivateStorageBackend } from '../../api/v1/private/storage-backends';
 import { ResourceDetailHeader } from '../../components/Resource/ResourceDetailHeader';
 import { ResourceDetailsPageError } from '../../components/Resource/ResourceDetailsPageError';
@@ -95,7 +97,7 @@ export const StorageBackendDetailsPage = () => {
               <DescriptionListGroup>
                 <DescriptionListTerm>{t('Provider')}</DescriptionListTerm>
                 <DescriptionListDescription>
-                  {displayValue(backend.spec?.provider)}
+                  {displayValue(getStorageBackendProviderLabel(t, backend.spec?.provider))}
                 </DescriptionListDescription>
               </DescriptionListGroup>
               <DescriptionListGroup>

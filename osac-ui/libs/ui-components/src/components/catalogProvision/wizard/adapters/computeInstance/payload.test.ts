@@ -188,9 +188,9 @@ describe('buildComputeInstanceCreatePayload — disk storage tiers', () => {
       sizeGib: 20,
       storageTier: { id: 'id-fast', name: 'fast' },
     });
-    expect(payload.spec?.additionalDisks).toEqual([
-      { sizeGib: 100, storageTier: { id: 'id-bulk', name: 'bulk' } },
-    ]);
+    expect(payload.spec?.additionalDisks).toEqual({
+      items: [{ sizeGib: 100, storageTier: { id: 'id-bulk', name: 'bulk' } }],
+    });
   });
 
   it('drops additional disk rows that have no size', () => {
@@ -203,9 +203,9 @@ describe('buildComputeInstanceCreatePayload — disk storage tiers', () => {
 
     const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
 
-    expect(payload.spec?.additionalDisks).toEqual([
-      { sizeGib: 100, storageTier: { id: 'id-bulk', name: 'bulk' } },
-    ]);
+    expect(payload.spec?.additionalDisks).toEqual({
+      items: [{ sizeGib: 100, storageTier: { id: 'id-bulk', name: 'bulk' } }],
+    });
   });
 
   it('omits additional_disks entirely when no rows have a size', () => {
@@ -217,7 +217,7 @@ describe('buildComputeInstanceCreatePayload — disk storage tiers', () => {
     expect(payload.spec).not.toHaveProperty('additionalDisks');
   });
 
-  it('sends an explicit empty additional_disks array when the catalog default was cleared', () => {
+  it('sends an explicit empty additional_disks list when the catalog default was cleared', () => {
     const values = baseValues();
     values.spec.additionalDisks = [];
 
@@ -226,7 +226,7 @@ describe('buildComputeInstanceCreatePayload — disk storage tiers', () => {
       catalogItemWithAdditionalDisksDefault,
     );
 
-    expect(payload.spec?.additionalDisks).toEqual([]);
+    expect(payload.spec?.additionalDisks).toEqual({ items: [] });
   });
 
   it('still sends non-empty additional disks as usual when the catalog defines a default', () => {
@@ -240,9 +240,9 @@ describe('buildComputeInstanceCreatePayload — disk storage tiers', () => {
       catalogItemWithAdditionalDisksDefault,
     );
 
-    expect(payload.spec?.additionalDisks).toEqual([
-      { sizeGib: 100, storageTier: { id: 'id-bulk', name: 'bulk' } },
-    ]);
+    expect(payload.spec?.additionalDisks).toEqual({
+      items: [{ sizeGib: 100, storageTier: { id: 'id-bulk', name: 'bulk' } }],
+    });
   });
 });
 

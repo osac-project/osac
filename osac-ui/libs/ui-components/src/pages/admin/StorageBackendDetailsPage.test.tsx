@@ -96,7 +96,7 @@ describe('StorageBackendDetailsPage', () => {
     renderPage();
 
     expect(screen.getByRole('heading', { name: 'vast-prod' })).toBeInTheDocument();
-    expect(screen.getByText('vast')).toBeInTheDocument();
+    expect(screen.getByText('VAST Data')).toBeInTheDocument();
     expect(screen.getByText('vast.example.com:443')).toBeInTheDocument();
     expect(screen.getByText('Primary VAST cluster')).toBeInTheDocument();
     expect(screen.getByText('Ready')).toBeInTheDocument();

@@ -32,7 +32,14 @@ const makeBackend = (
 
 const defaultBackends = [
   makeBackend('b-1', 'vast-prod', 'vast', 'vast.example.com', StorageBackendState.READY),
-  makeBackend('b-2', 'ceph-dev', 'ceph', 'ceph.example.com', StorageBackendState.UNSPECIFIED),
+  makeBackend('b-2', 'netapp-dev', 'netapp', 'netapp.example.com', StorageBackendState.UNSPECIFIED),
+  makeBackend(
+    'b-3',
+    'pure-flashblade-prod',
+    'pure-flashblade',
+    'pure.example.com',
+    StorageBackendState.READY,
+  ),
 ];
 
 const renderPage = (storageBackends: StorageBackend[] = defaultBackends) =>
@@ -60,9 +67,10 @@ describe('StorageBackendsListPage', () => {
     await waitFor(() => {
       expect(screen.getByText('vast-prod')).toBeInTheDocument();
     });
-    expect(screen.getByText('vast')).toBeInTheDocument();
+    expect(screen.getByText('VAST Data')).toBeInTheDocument();
     expect(screen.getByText('vast.example.com')).toBeInTheDocument();
-    expect(screen.getByText('ceph-dev')).toBeInTheDocument();
+    expect(screen.getByText('NetApp ONTAP')).toBeInTheDocument();
+    expect(screen.getByText('Pure FlashBlade')).toBeInTheDocument();
   });
 
   it('links the backend name to its details page', async () => {
@@ -81,7 +89,7 @@ describe('StorageBackendsListPage', () => {
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getByText('Ready')).toBeInTheDocument();
+      expect(screen.getAllByText('Ready')).toHaveLength(2);
     });
     expect(screen.getByText('Unspecified')).toBeInTheDocument();
   });
@@ -148,6 +156,6 @@ describe('StorageBackendsListPage', () => {
     await waitFor(() => {
       expect(screen.queryByText('vast-prod')).not.toBeInTheDocument();
     });
-    expect(screen.getByText('ceph-dev')).toBeInTheDocument();
+    expect(screen.getByText('netapp-dev')).toBeInTheDocument();
   });
 });

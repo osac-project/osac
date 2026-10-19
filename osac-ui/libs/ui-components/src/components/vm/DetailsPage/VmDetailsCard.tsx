@@ -62,7 +62,7 @@ const VmDetailsCard = ({ vm }: Props) => {
               )}
             </DescriptionListDescription>
           </DescriptionListGroup>
-          {(vm.spec?.additionalDisks ?? []).map((disk, index) => (
+          {(vm.spec?.additionalDisks?.items ?? []).map((disk, index) => (
             <DescriptionListGroup key={`additional-disk-${index}`}>
               <DescriptionListTerm>
                 {t('Additional disk {{number}}', { number: index + 1 })}

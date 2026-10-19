@@ -68,7 +68,7 @@ describe('StorageTiersListPage', () => {
     await waitFor(() => {
       expect(screen.getByText('fast')).toBeInTheDocument();
     });
-    expect(screen.getByText('Fast NVMe')).toBeInTheDocument();
+    expect(await screen.findByText('Fast NVMe')).toBeInTheDocument();
     expect(screen.getByText('NFS')).toBeInTheDocument();
   });
 

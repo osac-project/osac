@@ -104,6 +104,7 @@ COPY proto/go.mod proto/go.sum proto/
 COPY osac-operator/go.mod osac-operator/go.sum osac-operator/
 COPY osac-operator/api/go.mod osac-operator/api/go.sum osac-operator/api/
 COPY bare-metal-fulfillment-operator/go.mod bare-metal-fulfillment-operator/go.sum bare-metal-fulfillment-operator/
+COPY bare-metal-fulfillment-operator/api/go.mod bare-metal-fulfillment-operator/api/go.sum bare-metal-fulfillment-operator/api/
 COPY fulfillment-service/go.mod fulfillment-service/go.sum fulfillment-service/
 COPY osac-csi-driver/go.mod osac-csi-driver/go.sum osac-csi-driver/
 COPY osac-metering/schema/go.mod osac-metering/schema/go.sum osac-metering/schema/

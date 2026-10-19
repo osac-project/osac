@@ -17,6 +17,7 @@ import (
 	"context"
 	"strings"
 
+	validate "buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go/buf/validate"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
@@ -32,8 +33,47 @@ import (
 // testPassword is a fixture credential; the test* prefix marks it as non-production.
 const testPassword = "secret"
 
+func newValidStorageBackendCreateRequest(provider string) *privatev1.StorageBackendsCreateRequest {
+	return privatev1.StorageBackendsCreateRequest_builder{
+		Object: privatev1.StorageBackend_builder{
+			Metadata: privatev1.Metadata_builder{Name: "my-backend"}.Build(),
+			Spec: privatev1.StorageBackendSpec_builder{
+				Provider: provider,
+				Endpoint: "https://storage.example.com",
+				Credentials: privatev1.StorageBackendCredentials_builder{
+					Username: "admin",
+					Password: testPassword,
+				}.Build(),
+			}.Build(),
+		}.Build(),
+	}.Build()
+}
+
 var _ = Describe("Protovalidate interceptor", func() {
 	var interceptor *ProtovalidateInterceptor
+
+	It("keeps provider choices included in the provider validation allowlist", func() {
+		providerField := (&privatev1.StorageBackendSpec{}).ProtoReflect().Descriptor().Fields().ByName("provider")
+		Expect(providerField).ToNot(BeNil())
+
+		fieldOptions := providerField.Options()
+		validationRules := proto.GetExtension(fieldOptions, validate.E_Field).(*validate.FieldRules)
+		allowedProviders := validationRules.GetString().GetIn()
+		providerOptions := proto.GetExtension(
+			fieldOptions,
+			privatev1.E_StorageBackendProviderOptions,
+		).(*privatev1.StorageBackendProviderOptions)
+
+		seen := make(map[string]struct{}, len(providerOptions.GetChoices()))
+		for _, choice := range providerOptions.GetChoices() {
+			Expect(choice.GetKey()).ToNot(BeEmpty())
+			Expect(choice.GetDisplayName()).ToNot(BeEmpty())
+			Expect(allowedProviders).To(ContainElement(choice.GetKey()))
+			_, duplicate := seen[choice.GetKey()]
+			Expect(duplicate).To(BeFalse(), "provider key %q is duplicated", choice.GetKey())
+			seen[choice.GetKey()] = struct{}{}
+		}
+	})
 
 	Describe("Creation", func() {
 		It("Can be built if logger is set", func() {
@@ -623,6 +663,48 @@ var _ = Describe("Protovalidate interceptor", func() {
 			Expect(status.Message()).To(ContainSubstring("validation failed"))
 		})
 
+		It("Accepts supported product-specific provider keys and legacy aliases", func() {
+			for _, provider := range []string{
+				"vast",
+				"netapp",
+				"pure-flashblade",
+				"pure-flasharray",
+				"pure",
+				"ontap",
+			} {
+				response, err := interceptor.UnaryServer(
+					context.Background(),
+					newValidStorageBackendCreateRequest(provider),
+					&grpc.UnaryServerInfo{FullMethod: "/osac.private.v1.StorageBackendsService/Create"},
+					func(context.Context, any) (any, error) { return "response", nil },
+				)
+
+				Expect(err).NotTo(HaveOccurred(), provider)
+				Expect(response).To(Equal("response"), provider)
+			}
+		})
+
+		It("Rejects unlisted provider keys", func() {
+			handlerCalled := false
+			response, err := interceptor.UnaryServer(
+				context.Background(),
+				newValidStorageBackendCreateRequest("ceph"),
+				&grpc.UnaryServerInfo{FullMethod: "/osac.private.v1.StorageBackendsService/Create"},
+				func(context.Context, any) (any, error) {
+					handlerCalled = true
+					return "response", nil
+				},
+			)
+
+			Expect(err).To(HaveOccurred())
+			Expect(response).To(BeNil())
+			Expect(handlerCalled).To(BeFalse())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("validation failed"))
+		})
+
 		It("Rejects create request with empty endpoint", func() {
 			request := privatev1.StorageBackendsCreateRequest_builder{
 				Object: privatev1.StorageBackend_builder{
@@ -630,7 +712,7 @@ var _ = Describe("Protovalidate interceptor", func() {
 						Name: "my-backend",
 					}.Build(),
 					Spec: privatev1.StorageBackendSpec_builder{
-						Provider: "ceph",
+						Provider: "vast",
 						Endpoint: "",
 						Credentials: privatev1.StorageBackendCredentials_builder{
 							Username: "admin",
@@ -667,7 +749,7 @@ var _ = Describe("Protovalidate interceptor", func() {
 						Name: "my-backend",
 					}.Build(),
 					Spec: privatev1.StorageBackendSpec_builder{
-						Provider: "ceph",
+						Provider: "vast",
 						Endpoint: "https://storage.example.com",
 					}.Build(),
 				}.Build(),
@@ -700,7 +782,7 @@ var _ = Describe("Protovalidate interceptor", func() {
 						Name: "my-backend",
 					}.Build(),
 					Spec: privatev1.StorageBackendSpec_builder{
-						Provider: "ceph",
+						Provider: "vast",
 						Endpoint: "https://storage.example.com",
 						Credentials: privatev1.StorageBackendCredentials_builder{
 							Username: "",
@@ -737,7 +819,7 @@ var _ = Describe("Protovalidate interceptor", func() {
 						Name: "my-backend",
 					}.Build(),
 					Spec: privatev1.StorageBackendSpec_builder{
-						Provider: "ceph",
+						Provider: "vast",
 						Endpoint: "https://storage.example.com",
 						Credentials: privatev1.StorageBackendCredentials_builder{
 							Username: "admin",
@@ -774,7 +856,7 @@ var _ = Describe("Protovalidate interceptor", func() {
 						Name: "my-backend",
 					}.Build(),
 					Spec: privatev1.StorageBackendSpec_builder{
-						Provider: "ceph",
+						Provider: "vast",
 						Endpoint: "https://storage.example.com",
 						Credentials: privatev1.StorageBackendCredentials_builder{
 							Username: "admin",
@@ -811,7 +893,7 @@ var _ = Describe("Protovalidate interceptor", func() {
 						Name: "my-backend",
 					}.Build(),
 					Spec: privatev1.StorageBackendSpec_builder{
-						Provider: "ceph",
+						Provider: "vast",
 						Endpoint: "https://storage.example.com",
 						Credentials: privatev1.StorageBackendCredentials_builder{
 							Username: "admin",
@@ -851,7 +933,7 @@ var _ = Describe("Protovalidate interceptor", func() {
 						Name: "my-backend",
 					}.Build(),
 					Spec: privatev1.StorageBackendSpec_builder{
-						Provider: "ceph",
+						Provider: "vast",
 						Endpoint: "https://storage.example.com",
 						Credentials: privatev1.StorageBackendCredentials_builder{
 							Username: "admin",

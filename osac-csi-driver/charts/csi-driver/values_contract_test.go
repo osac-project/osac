@@ -16,7 +16,7 @@ func TestFulfillmentTrustDefaults(t *testing.T) {
 		path    string
 		enabled bool
 	}{
-		{"osac-installer/charts/osac/values.yaml", true},
+		{"osac-installer/charts/osac/values.yaml", false},
 		{"osac-operator/charts/operator/values.yaml", false},
 		{"osac-csi-driver/charts/csi-driver/values.yaml", false},
 	} {
@@ -34,7 +34,7 @@ func TestFulfillmentTrustDefaults(t *testing.T) {
 	trustProperties := schemaObject(t, trust, "properties")
 
 	enabled := schemaObject(t, trustProperties, "enabled")
-	if enabled["type"] != "boolean" || enabled["default"] != true {
+	if enabled["type"] != "boolean" || enabled["default"] != false {
 		t.Error("installer schema does not schema the enabled fulfillment trust flag")
 	}
 

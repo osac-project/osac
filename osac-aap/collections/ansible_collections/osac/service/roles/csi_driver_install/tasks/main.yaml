@@ -35,7 +35,7 @@
     _csi_driver_install_unique_providers: "{{ csi_driver_install_tiers | map(attribute='provider') | unique | sort | list }}"
   when: csi_driver_install_enabled | default(false) | bool
 
-- name: Determine dispatched providers supported by the csi-driver chart
+- name: Determine dispatched product keys supported by the csi-driver chart
   ansible.builtin.set_fact:
     _csi_driver_install_dispatched_vendors: "{{ _csi_driver_install_unique_providers | intersect(csi_driver_install_supported_vendors) }}"
   when: csi_driver_install_enabled | default(false) | bool
@@ -54,7 +54,7 @@
   kubernetes.core.k8s_info:
     api_version: v1
     kind: Service
-    name: "{{ item }}-csi-controller"
+    name: "{{ csi_driver_install_provider_vendor_names[item] }}-csi-controller"
     namespace: "{{ csi_driver_install_backends_namespace }}"
   when: csi_driver_install_enabled | default(false) | bool
   register: _csi_driver_install_vendor_service_info
@@ -65,7 +65,7 @@
 - name: Fail if any dispatched vendor's controller Service is missing
   ansible.builtin.fail:
     msg: >-
-      Vendor controller Service '{{ item.item }}-csi-controller' not found in
+      Vendor controller Service '{{ csi_driver_install_provider_vendor_names[item.item] }}-csi-controller' not found in
       {{ csi_driver_install_backends_namespace }} — ensure_csi_backends.yaml
       must run before csi_driver_install for this vendor.
   loop: "{{ _csi_driver_install_vendor_service_info.results }}"
@@ -155,11 +155,12 @@
           {% endfor -%}
           {% set _vendors = (_values.get('vendors') or {}) -%}
           {% set _ns.ok = ((_s.get('chart') or '') == 'csi-driver-' ~ csi_driver_install_chart_version) -%}
-          {% for _v in _csi_driver_install_dispatched_vendors -%}
-          {% if _ctrl.get(_v) != (_v ~ '-csi-controller.'
-             ~ csi_driver_install_backends_namespace ~ '.svc.cluster.local:' ~ (_csi_driver_install_vendor_service_ports[_v] | string))
-             or _node.get(_v) != (csi_driver_install_vendor_node_socket_paths[_v] ~ '/csi.sock')
-             or not ((_vendors.get(_v) or {}).get('enabled', false)) -%}
+          {% for _provider in _csi_driver_install_dispatched_vendors -%}
+          {% set _vendor = csi_driver_install_provider_vendor_names[_provider] -%}
+          {% if _ctrl.get(_provider) != (_vendor ~ '-csi-controller.'
+             ~ csi_driver_install_backends_namespace ~ '.svc.cluster.local:' ~ (_csi_driver_install_vendor_service_ports[_provider] | string))
+             or _node.get(_provider) != (csi_driver_install_vendor_node_socket_paths[_provider] ~ '/csi.sock')
+             or not ((_vendors.get(_vendor) or {}).get('enabled', false)) -%}
           {% set _ns.ok = false -%}
           {% endif -%}
           {% endfor -%}
@@ -308,12 +309,12 @@
     # controller Deployment dials each backend's csi-backends controller Service over
     # gRPC/TCP, while the node DaemonSet reaches vendor sockets only via its shared
     # /var/lib/kubelet hostPath mount and needs a literal Unix socket path.
-    - name: Accumulate this dispatch's controller/node vendor sockets and enablement map
+    - name: Accumulate this dispatch's controller/node routes and vendor enablement map
       ansible.builtin.set_fact:
         _csi_driver_install_controller_socket_map: >-
           {{
             _csi_driver_install_controller_socket_map | combine({
-              item: item ~ '-csi-controller.' ~ csi_driver_install_backends_namespace ~
+              item: csi_driver_install_provider_vendor_names[item] ~ '-csi-controller.' ~ csi_driver_install_backends_namespace ~
                 '.svc.cluster.local:' ~ (_csi_driver_install_vendor_service_ports[item] | string)
             })
           }}
@@ -323,7 +324,8 @@
               item: csi_driver_install_vendor_node_socket_paths[item] ~ '/csi.sock'
             })
           }}
-        _csi_driver_install_vendors_enabled: "{{ _csi_driver_install_vendors_enabled | combine({item: {'enabled': true}}) }}"
+        _csi_driver_install_vendors_enabled: >-
+          {{ _csi_driver_install_vendors_enabled | combine({(csi_driver_install_provider_vendor_names[item]): {'enabled': true}}) }}
       loop: "{{ _csi_driver_install_dispatched_vendors }}"
       loop_control:
         label: "{{ item }}"

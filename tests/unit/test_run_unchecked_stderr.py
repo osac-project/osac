@@ -5,6 +5,9 @@ succeeds (rc 0) the return value must contain only stdout, so callers
 that ``json.loads()`` the output are not broken by warnings or transient
 errors written to stderr -- such as DNS resolver blips that append
 non-JSON text after valid JSON.
+
+Callers that need stderr on success (e.g. to assert a deprecation
+warning) pass ``include_stderr=True``.
 """
 
 from __future__ import annotations
@@ -109,3 +112,66 @@ def test_success_strips_whitespace() -> None:
 
     assert rc == 0
     assert output == "value"
+
+
+# --- include_stderr=True tests ---
+
+
+_DEPRECATION_WARNING = "Warning: instance type is deprecated"
+
+
+def test_include_stderr_success_combines_streams() -> None:
+    """``include_stderr=True`` includes stderr in successful output."""
+
+    def side_effect(*a: object, **kw: object) -> subprocess.CompletedProcess[str]:
+        return _fake_run(stdout="Created 'abc-123'\n", stderr=_DEPRECATION_WARNING + "\n", returncode=0)
+
+    with patch("subprocess.run", side_effect=side_effect):
+        output, rc = run_unchecked("osac", "create", include_stderr=True)
+
+    assert rc == 0
+    assert "abc-123" in output
+    assert _DEPRECATION_WARNING in output
+
+
+def test_include_stderr_false_excludes_stderr_on_success() -> None:
+    """Default (``include_stderr=False``) excludes stderr on success."""
+
+    def side_effect(*a: object, **kw: object) -> subprocess.CompletedProcess[str]:
+        return _fake_run(stdout="Created 'abc-123'\n", stderr=_DEPRECATION_WARNING + "\n", returncode=0)
+
+    with patch("subprocess.run", side_effect=side_effect):
+        output, rc = run_unchecked("osac", "create", include_stderr=False)
+
+    assert rc == 0
+    assert "abc-123" in output
+    assert _DEPRECATION_WARNING not in output
+
+
+def test_include_stderr_failure_always_combines() -> None:
+    """On failure, stderr is combined regardless of include_stderr."""
+
+    def side_effect(*a: object, **kw: object) -> subprocess.CompletedProcess[str]:
+        return _fake_run(stdout="", stderr="connection refused\n", returncode=1)
+
+    with patch("subprocess.run", side_effect=side_effect):
+        output, rc = run_unchecked("cmd", include_stderr=False)
+
+    assert rc == 1
+    assert "connection refused" in output
+
+
+def test_include_stderr_json_with_warning() -> None:
+    """``include_stderr=True`` lets callers see both JSON and warning."""
+
+    def side_effect(*a: object, **kw: object) -> subprocess.CompletedProcess[str]:
+        return _fake_run(stdout=_VALID_JSON + "\n", stderr=_DEPRECATION_WARNING + "\n", returncode=0)
+
+    with patch("subprocess.run", side_effect=side_effect):
+        output, rc = run_unchecked("cmd", include_stderr=True)
+
+    assert rc == 0
+    assert _DEPRECATION_WARNING in output
+    # JSON is present but may not be directly parseable because
+    # stderr is appended; that is the caller's choice.
+    assert _VALID_JSON in output

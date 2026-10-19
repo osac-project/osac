@@ -1,7 +1,14 @@
 ---
 - name: Assert the workload kubeconfig reaches a distinct Kubernetes API
   hosts: localhost
-  gather_facts: false
+  gather_facts: true
+
+  vars:
+    tenant_name: storage-route-native-driver
+    tenant_namespace: osac-system
+    storage_provider_netapp_trident_install_override:
+      name: osac.test_overrides.csi_driver_install_hooks
+      tasks_from: install.yaml
 
   tasks:
     - name: Create a marker namespace on the workload API
@@ -38,6 +45,75 @@
           Workload marker namespace must exist only on the workload API; observed
           management/workload counts {{ _routing_management_marker.resources | length }}/
           {{ _routing_workload_marker.resources | length }}.
+
+    - name: Ensure the NetApp block driver through the selected workload kubeconfig
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: ensure_csi_driver
+        storage_provider_tiers:
+          - name: fast
+            protocol: block
+            provider: netapp
+            backend_id: be-routing-test
+        storage_provider_target_kubeconfig: "{{ routing_test_kubeconfig_path }}"
+        storage_provider_target_kubeconfig_insecure: false
+
+    - name: Check Trident CSIDriver on the workload API
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ routing_test_kubeconfig_path }}"
+        api_version: storage.k8s.io/v1
+        kind: CSIDriver
+        name: csi.trident.netapp.io
+      register: _routing_workload_trident_driver
+
+    - name: Check Trident CSIDriver on the management API
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: CSIDriver
+        name: csi.trident.netapp.io
+      register: _routing_management_trident_driver
+
+    - name: Assert native driver setup changed only the workload cluster
+      ansible.builtin.assert:
+        that:
+          - _routing_workload_trident_driver.resources | length == 1
+          - _routing_management_trident_driver.resources | length == 0
+        fail_msg: >-
+          Trident must be registered only on the selected workload API; observed
+          workload/management counts {{ _routing_workload_trident_driver.resources | length }}/
+          {{ _routing_management_trident_driver.resources | length }}.
+
+    - name: Delete the test Trident CSIDriver from the workload API
+      kubernetes.core.k8s:
+        kubeconfig: "{{ routing_test_kubeconfig_path }}"
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: CSIDriver
+        name: csi.trident.netapp.io
+
+    - name: Delete the test TridentBackendConfig CRD from the workload API
+      kubernetes.core.k8s:
+        kubeconfig: "{{ routing_test_kubeconfig_path }}"
+        state: absent
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: tridentbackendconfigs.trident.netapp.io
+        wait: true
+
+    - name: Delete the test Trident namespace from the workload API
+      kubernetes.core.k8s:
+        kubeconfig: "{{ routing_test_kubeconfig_path }}"
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: trident
+        wait: true
+
+    - name: Delete the native driver override log
+      ansible.builtin.file:
+        path: /tmp/osac_test_overrides.log
+        state: absent
 
     - name: Remove the workload marker namespace
       kubernetes.core.k8s:

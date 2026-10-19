@@ -1,0 +1,26 @@
+---
+- name: Determine whether the test-only CSI installer override is enabled
+  ansible.builtin.set_fact:
+    _csi_driver_install_use_test_override: >-
+      {{ lookup('env', 'OSAC_AAP_ENABLE_TEST_INSTALL_OVERRIDES', default='false') | bool
+         and csi_driver_install_override is defined }}
+
+- name: Validate the test-only CSI installer override
+  when: _csi_driver_install_use_test_override | bool
+  ansible.builtin.assert:
+    that:
+      - csi_driver_install_override is mapping
+      - csi_driver_install_override.name is defined
+      - csi_driver_install_override.tasks_from is defined
+    fail_msg: "The test-only CSI installer override must provide a role name and tasks_from"
+
+- name: Select the CSI installer role and task entry point
+  ansible.builtin.set_fact:
+    _csi_driver_install_selected_role: >-
+      {{ csi_driver_install_override.name
+         if (_csi_driver_install_use_test_override | bool)
+         else 'osac.service.csi_driver_install' }}
+    _csi_driver_install_selected_tasks_from: >-
+      {{ csi_driver_install_override.tasks_from
+         if (_csi_driver_install_use_test_override | bool)
+         else 'main.yaml' }}

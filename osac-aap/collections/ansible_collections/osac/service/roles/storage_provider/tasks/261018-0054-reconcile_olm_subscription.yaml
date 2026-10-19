@@ -1,0 +1,55 @@
+---
+- name: Validate OLM Subscription settings for the selected provider
+  ansible.builtin.assert:
+    that:
+      - storage_provider_olm_subscription_provider in ['netapp', 'vast']
+      - >-
+        storage_provider_olm_subscription_installer
+        == storage_provider_csi_driver_matrix[storage_provider_olm_subscription_provider].installer
+      - storage_provider_olm_subscription_installer.method == 'olm'
+      - storage_provider_olm_subscription_installer.install_plan_approval == 'Manual'
+      - storage_provider_olm_subscription_name == storage_provider_olm_subscription_package
+      - storage_provider_olm_subscription_name == storage_provider_olm_subscription_installer.package
+      - storage_provider_olm_subscription_namespace == storage_provider_olm_subscription_installer.namespace
+      - storage_provider_olm_subscription_spec is mapping
+      - >-
+        storage_provider_olm_subscription_spec == {
+          'channel': storage_provider_olm_subscription_installer.channel,
+          'installPlanApproval': storage_provider_olm_subscription_installer.install_plan_approval,
+          'name': storage_provider_olm_subscription_installer.package,
+          'source': storage_provider_olm_subscription_installer.catalog_source,
+          'sourceNamespace': storage_provider_olm_subscription_installer.catalog_namespace
+        }
+    fail_msg: "The OLM Subscription must use its provider's stable certified channel and Manual approval"
+
+- name: Read any existing provider OLM Subscription before installation
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1alpha1
+    kind: Subscription
+    name: "{{ storage_provider_olm_subscription_name }}"
+    namespace: "{{ storage_provider_olm_subscription_namespace }}"
+  register: _storage_provider_existing_olm_subscription
+
+- name: Create the provider OLM Subscription when absent
+  when: _storage_provider_existing_olm_subscription.resources | length == 0
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: operators.coreos.com/v1alpha1
+      kind: Subscription
+      metadata:
+        name: "{{ storage_provider_olm_subscription_name }}"
+        namespace: "{{ storage_provider_olm_subscription_namespace }}"
+      spec: "{{ storage_provider_olm_subscription_spec }}"
+
+- name: Set an existing provider Subscription to the initial-install policy
+  when: _storage_provider_existing_olm_subscription.resources | length > 0
+  kubernetes.core.k8s:
+    state: patched
+    definition:
+      apiVersion: operators.coreos.com/v1alpha1
+      kind: Subscription
+      metadata:
+        name: "{{ storage_provider_olm_subscription_name }}"
+        namespace: "{{ storage_provider_olm_subscription_namespace }}"
+      spec: "{{ storage_provider_olm_subscription_spec | combine({'startingCSV': none}) }}"

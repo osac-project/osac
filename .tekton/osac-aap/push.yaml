@@ -253,6 +253,18 @@ spec:
           # generated Containerfile independently of this step).
           image: registry.access.redhat.com/ubi9/python-312:latest@sha256:f793a102147ffa00b45ccb88ae91d726c17ac2f7e70214eef0cbfdc32816ec01
           workingDir: /var/workdir/source/osac-aap
+          # use-trusted-artifact's image runs as a different non-root user
+          # ("notroot") than this image's own default (uid 1001), so the
+          # restored source tree isn't writable here even with fsGroup set
+          # (standard git-clone file modes don't grant group write) --
+          # confirmed live: `ansible-builder create` failed with
+          # PermissionError: [Errno 13] Permission denied: 'context'.
+          # Running this step as root sidesteps the cross-image UID
+          # mismatch entirely; the files it creates stay world-readable
+          # (standard umask), so create-trusted-artifact's own non-root
+          # user can still read them back fine afterward.
+          securityContext:
+            runAsUser: 0
           script: |
             #!/bin/bash
             set -euo pipefail

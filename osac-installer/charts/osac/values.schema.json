@@ -2460,7 +2460,7 @@
                 "properties": {
                   "controllerUrl": {
                     "minLength": 1,
-                    "pattern": "^https://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$"
+                    "pattern": "^https?://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$"
                   },
                   "credentials": {
                     "required": [
@@ -2540,8 +2540,8 @@
       "properties": {
         "controllerUrl": {
           "type": "string",
-          "description": "Netris controller API URL (HTTPS only).",
-          "pattern": "^$|^https://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$"
+          "description": "Netris controller API URL (HTTP or HTTPS).",
+          "pattern": "^$|^https?://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$"
         },
         "credentials": {
           "type": "object",
@@ -2731,7 +2731,7 @@
       "properties": {
         "NETRIS_CONTROLLER_URL": {
           "type": "string",
-          "pattern": "^$|^https://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$",
+          "pattern": "^$|^https?://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$",
           "description": "Netris controller API URL. Must match between AAP instance groups."
         },
         "NETRIS_USERNAME": {

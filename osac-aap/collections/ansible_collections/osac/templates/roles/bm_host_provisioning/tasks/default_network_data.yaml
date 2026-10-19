@@ -1,0 +1,45 @@
+---
+- name: Default networkData to DHCP on discovered Metal3 interfaces
+  when: >-
+    bmh_network_data | default('') | length == 0
+    and
+    (
+      bmh_info.status.hardware.nic | default([]) | selectattr('mac', 'defined')
+      | map(attribute='mac') | map('string') | select('ne', '') | list | length > 0
+      or bmh_info.spec.bootMACAddress | default('') | length > 0
+    )
+  ansible.builtin.set_fact:
+    bmh_network_data: >-
+      {%- set discovered_nics = bmh_info.status.hardware.nic | default([], true)
+         | selectattr('mac', 'defined') | list -%}
+      {%- set unique_nics = [] -%}
+      {%- set seen_macs = [] -%}
+      {%- for nic in discovered_nics -%}
+        {%- if nic.mac and nic.mac not in seen_macs -%}
+          {%- set _ = seen_macs.append(nic.mac) -%}
+          {%- set _ = unique_nics.append(nic) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {%- if not unique_nics -%}
+        {%- set boot_mac = bmh_info.spec.bootMACAddress | default('') -%}
+        {%- if boot_mac -%}
+          {%- set _ = unique_nics.append({'mac': boot_mac}) -%}
+        {%- endif -%}
+      {%- endif -%}
+      {%- set sorted_nics = unique_nics | sort(attribute='mac') -%}
+      {%- set links = [] -%}
+      {%- set networks = [] -%}
+      {%- for nic in sorted_nics -%}
+        {%- set interface_id = 'interface-' ~ loop.index -%}
+        {%- set _ = links.append({
+             'id': interface_id,
+             'type': 'phy',
+             'ethernet_mac_address': nic.mac
+           }) -%}
+        {%- set _ = networks.append({
+             'id': interface_id ~ '-dhcp',
+             'link': interface_id,
+             'type': 'ipv4_dhcp'
+           }) -%}
+      {%- endfor -%}
+      {{- {'links': links, 'networks': networks, 'services': []} | to_json -}}

@@ -1036,7 +1036,9 @@ func (r *BareMetalInstanceReconciler) handleDeletion(ctx context.Context, bareMe
 	// Power off BEFORE moving the port back to the provisioning network — ensures tenant
 	// workloads never run on the provisioning network. Only needed when networking
 	// provisioning is enabled (port was actually moved to the tenant network).
-	if len(bareMetalInstance.Spec.NetworkAttachments) > 0 && r.ManagementClient != nil && r.NetworkingProvider != nil {
+	if bareMetalInstance.Spec.ExternalHostID != "" &&
+		len(bareMetalInstance.Spec.NetworkAttachments) > 0 &&
+		r.ManagementClient != nil && r.NetworkingProvider != nil {
 		result, err = r.reconcileNetworkOffboardShutdown(ctx, bareMetalInstance)
 		if err != nil {
 			return result, err

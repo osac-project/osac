@@ -1,7 +1,9 @@
 ---
 # CI-specific cluster infrastructure creation.
-# Inlined from ci.steps.cluster_infra — handles agent selection, labeling, and
-# approval without requiring a physical network backend. Networking CRs
+# Assisted Service creates Agents in the InfraEnv's namespace and labels them
+# with the InfraEnv name. The tenant Agent namespace is shared, so wait for and
+# approve only Agents created by this ClusterOrder's InfraEnv; no hot-pool
+# selection or ClusterOrder labeling is needed. Networking CRs
 # (VirtualNetwork, Subnet, SecurityGroup, ExternalIP) are handled separately
 # by the Networking API dispatcher (NetworkClass → operator → AAP → k8s_only).
 
@@ -15,28 +17,39 @@
   retries: 30
   delay: 10
 
-- name: Set skip network flags for CI
+- name: Wait for this order's agents in the Agent namespace
+  kubernetes.core.k8s_info:
+    api_version: agent-install.openshift.io/v1beta1
+    kind: Agent
+    namespace: "{{ default_agent_namespace }}"
+    label_selectors:
+      - "infraenvs.agent-install.openshift.io={{ cluster_infra_name }}-infraenv"
+  register: ci_agents
+  until: >-
+    (ci_agents.resources | default([])) | length >=
+    (cluster_infra_node_requests
+     | map(attribute='numberOfNodes') | map('int') | sum)
+  retries: 270
+  delay: 10
+
+- name: Select unapproved agents
   ansible.builtin.set_fact:
-    manage_agents_skip_network_detach: true
-    manage_agents_skip_network_attach: true
+    ci_unapproved_agents: >-
+      {{ (ci_agents.resources | default([])) | selectattr('spec.approved', 'false') | list }}
 
-- name: Select and label agents
-  ansible.builtin.include_role:
-    name: osac.service.manage_agents
-    tasks_from: select_and_label_new_agents
-  vars:
-    manage_agents_cluster_order_name: "{{ cluster_infra_name }}"
-    manage_agents_desired_count: "{{ item.numberOfNodes | int }}"
-    manage_agents_instance_type: "{{ item.bareMetal.instanceType }}"
-  loop: "{{ cluster_infra_node_requests }}"
-
-- name: Approve agents
-  ansible.builtin.include_role:
-    name: osac.service.manage_agents
-    tasks_from: attach_and_approve_all_new_agents
-  vars:
-    manage_agents_cluster_order_name: "{{ cluster_infra_name }}"
-    manage_agents_cluster_network: "unused-in-ci"
+- name: Approve unapproved agents for this order
+  kubernetes.core.k8s_json_patch:
+    api_version: agent-install.openshift.io/v1beta1
+    kind: Agent
+    name: "{{ item.metadata.name }}"
+    namespace: "{{ item.metadata.namespace }}"
+    patch:
+      - op: add
+        path: /spec/approved
+        value: true
+  loop: "{{ ci_unapproved_agents }}"
+  loop_control:
+    label: "Approve agent {{ item.metadata.name }}"
 
 - name: Set cluster_infra_network_name
   ansible.builtin.set_fact:

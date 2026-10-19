@@ -268,7 +268,7 @@ string:
 | `imageSourceType` | No | — | Set to `registry` for OCI images to skip checksum validation. |
 | `sshPublicKey` | No | — | SSH public key to inject into the host for remote access. |
 | `userDataSecret` | No | — | Name of a Kubernetes Secret in the BareMetalInstance namespace containing cloud-init userdata. |
-| `networkData` | No | — | Network configuration data (cloud-init network config format). |
+| `networkData` | No | DHCP on every discovered BareMetalHost interface | Network configuration data in OpenStack `network_data.json` format. |
 
 ### Deprovisioning
 

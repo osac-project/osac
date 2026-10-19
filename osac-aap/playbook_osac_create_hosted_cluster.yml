@@ -40,42 +40,58 @@
         cluster_working_namespace_cluster_order_name: "{{ cluster_order_name }}"
 
   tasks:
-    - name: Acquire cluster lock
-      ansible.builtin.include_role:
-        name: osac.service.lease
-      vars:
-        lease_state: present
-        lease_holder: "{{ cluster_order_holder_id }}"
-        lease_name: "cluster-{{ cluster_order_name }}-lock"
+    - name: Create the hosted cluster while holding the cluster lock
+      block:
+        - name: Acquire cluster lock
+          ansible.builtin.include_role:
+            name: osac.service.lease
+          vars:
+            lease_state: present
+            lease_holder: "{{ cluster_order_holder_id }}"
+            lease_name: "cluster-{{ cluster_order_name }}-lock"
 
-    - name: Add infrastructure finalizer
-      ansible.builtin.include_role:
-        name: osac.service.finalizer
-      vars:
-        finalizer_state: present
-        finalizer_name: "{{ cluster_order_infrastructure_finalizer }}"
-        finalizer_target:
-          api_version: "{{ item.api_version }}"
-          kind: "{{ item.kind }}"
-          namespace: "{{ item.namespace | default(omit) }}"
-          name: "{{ item.name }}"
-      loop:
-        - api_version: osac.openshift.io/v1alpha1
-          kind: ClusterOrder
-          namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"
-          name: "{{ cluster_order.metadata.name }}"
-        - api_version: v1
-          kind: Namespace
-          name: "{{ cluster_working_namespace }}"
+        - name: Mark cluster lock acquired
+          ansible.builtin.set_fact:
+            cluster_order_lock_acquired: true
 
-    - name: Display cluster order information
-      ansible.builtin.debug:
-        msg:
-          - "Cluster order: {{ cluster_order.metadata.name }}"
-          - "Cluster working namespace: {{ cluster_working_namespace }}"
-          - "Template ID: {{ template_id }}"
+        - name: Add infrastructure finalizer
+          ansible.builtin.include_role:
+            name: osac.service.finalizer
+          vars:
+            finalizer_state: present
+            finalizer_name: "{{ cluster_order_infrastructure_finalizer }}"
+            finalizer_target:
+              api_version: "{{ item.api_version }}"
+              kind: "{{ item.kind }}"
+              namespace: "{{ item.namespace | default(omit) }}"
+              name: "{{ item.name }}"
+          loop:
+            - api_version: osac.openshift.io/v1alpha1
+              kind: ClusterOrder
+              namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"
+              name: "{{ cluster_order.metadata.name }}"
+            - api_version: v1
+              kind: Namespace
+              name: "{{ cluster_working_namespace }}"
 
-    - name: Call the selected template
-      ansible.builtin.include_role:
-        name: "{{ template_id }}"
-        tasks_from: "install"
+        - name: Display cluster order information
+          ansible.builtin.debug:
+            msg:
+              - "Cluster order: {{ cluster_order.metadata.name }}"
+              - "Cluster working namespace: {{ cluster_working_namespace }}"
+              - "Template ID: {{ template_id }}"
+
+        - name: Call the selected template
+          ansible.builtin.include_role:
+            name: "{{ template_id }}"
+            tasks_from: "install"
+
+      always:
+        - name: Release cluster lock
+          ansible.builtin.include_role:
+            name: osac.service.lease
+          vars:
+            lease_state: absent
+            lease_holder: "{{ cluster_order_holder_id }}"
+            lease_name: "cluster-{{ cluster_order_name }}-lock"
+          when: cluster_order_lock_acquired | default(false)

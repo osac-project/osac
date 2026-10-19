@@ -24,6 +24,8 @@
         user_data_secret_ref: ""
         bmh_name: "test-bmh"
         bmh_namespace: "test-ns"
+        bmh_image_url: "oci://quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:abc123"
+        bmh_image_format: ""
 
     - name: Build BMH patch using actual role code
       ansible.builtin.include_role:
@@ -37,6 +39,40 @@
           - "'checksum' not in bmh_patch.spec.image"
           - "'checksumType' not in bmh_patch.spec.image"
         fail_msg: "OCI image BMH patch must not contain checksum or checksumType"
+
+- name: BMH Patch Construction - Live ISO omits checksum
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    bm_host_metal3_default_image_url: "oci://quay.io/osac-project/fedora-cloud-bmi:44"
+
+  tasks:
+    - name: Set Metal3 live-iso context
+      ansible.builtin.set_fact:
+        template_params:
+          imageURL: "https://example.com/discovery.iso"
+          imageSourceType: ""
+        ssh_key: ""
+        user_data_secret_ref: ""
+        bmh_name: "test-bmh"
+        bmh_namespace: "test-ns"
+        bmh_image_url: "https://example.com/discovery.iso"
+        bmh_image_format: "live-iso"
+
+    - name: Build BMH patch using actual role code
+      ansible.builtin.include_role:
+        name: osac.templates.bm_host_provisioning
+        tasks_from: build_bmh_patch.yaml
+
+    - name: Assert live-iso image patch has format and no checksum fields
+      ansible.builtin.assert:
+        that:
+          - bmh_patch.spec.image.url == "https://example.com/discovery.iso"
+          - bmh_patch.spec.image.format == "live-iso"
+          - "'checksum' not in bmh_patch.spec.image"
+          - "'checksumType' not in bmh_patch.spec.image"
+        fail_msg: "Live-iso BMH patch must contain format and must not contain checksum or checksumType"
 
 - name: BMH Patch Construction - Non-OCI image includes checksum
   hosts: localhost
@@ -64,6 +100,8 @@
         user_data_secret_ref: ""
         bmh_name: "test-bmh"
         bmh_namespace: "test-ns"
+        bmh_image_url: "https://example.com/image.qcow2"
+        bmh_image_format: ""
 
     - name: Build BMH patch using actual role code
       ansible.builtin.include_role:
@@ -77,3 +115,66 @@
           - bmh_patch.spec.image.checksum == "deadbeef1234"
           - bmh_patch.spec.image.checksumType == "md5"
         fail_msg: "Non-OCI image BMH patch must contain checksum and checksumType"
+
+- name: BMH Patch Construction - NetworkData defaults to discovered-interface DHCP
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    bm_host_metal3_default_image_url: "oci://quay.io/osac-project/fedora-cloud-bmi:44"
+
+  tasks:
+    - name: Set Metal3 context without explicit networkData
+      ansible.builtin.set_fact:
+        template_params:
+          imageURL: "{{ bm_host_metal3_default_image_url }}"
+        ssh_key: ""
+        user_data_secret_ref: ""
+        bmh_name: "test-bmh"
+        bmh_namespace: "test-ns"
+        bmh_image_url: "{{ bm_host_metal3_default_image_url }}"
+        bmh_image_format: ""
+        bmh_network_data: ""
+        bmh_info:
+          spec:
+            bootMACAddress: "02:00:00:00:00:01"
+          status:
+            hardware:
+              nic:
+                - mac: "02:00:00:00:00:01"
+                - mac: "02:00:00:00:00:01"
+                - mac: "02:00:00:00:00:02"
+        expected_network_data:
+          links:
+            - id: interface-1
+              type: phy
+              ethernet_mac_address: "02:00:00:00:00:01"
+            - id: interface-2
+              type: phy
+              ethernet_mac_address: "02:00:00:00:00:02"
+          networks:
+            - id: interface-1-dhcp
+              link: interface-1
+              type: ipv4_dhcp
+            - id: interface-2-dhcp
+              link: interface-2
+              type: ipv4_dhcp
+          services: []
+
+    - name: Apply the networkData default using actual role code
+      ansible.builtin.include_role:
+        name: osac.templates.bm_host_provisioning
+        tasks_from: default_network_data.yaml
+
+    - name: Build BMH patch using actual role code
+      ansible.builtin.include_role:
+        name: osac.templates.bm_host_provisioning
+        tasks_from: build_bmh_patch.yaml
+
+    - name: Assert discovered-interface DHCP networkData is applied
+      ansible.builtin.assert:
+        that:
+          - bmh_network_data | from_json == expected_network_data
+          - bmh_patch.spec.networkData.name == "test-bmh-network-data"
+          - bmh_patch.spec.networkData.namespace == "test-ns"
+        fail_msg: "Metal3 must default to DHCP on every discovered BareMetalHost interface"

@@ -176,7 +176,7 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", func() {
 		})
 	}
 
-	It("creates an InfraEnv (late binding, owned by the ClusterOrder) and fetches its ignition [green]", func() {
+	It("creates an InfraEnv with serial-console logging (late binding, owned by the ClusterOrder) and fetches its ignition [green]", func() {
 		preloadDiskImageChain()
 		co := newBareMetalClusterOrder("bmw-green")
 		create(co)
@@ -199,6 +199,15 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", func() {
 		// pull secret referenced by convention.
 		psName, _, _ := unstructured.NestedString(ie.Object, "spec", "pullSecretRef", "name")
 		Expect(psName).To(Equal("bmw-green-pull-secret"))
+		kernelArguments, found, err := unstructured.NestedSlice(ie.Object, "spec", "kernelArguments")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(found).To(BeTrue())
+		Expect(kernelArguments).To(Equal([]interface{}{
+			map[string]interface{}{
+				"operation": "append",
+				"value":     "console=ttyS0,115200n8",
+			},
+		}))
 
 		// InfraEnvReady is False while ignition is pending.
 		cond := apimeta.FindStatusCondition(getClusterOrder("bmw-green").Status.Conditions, osacv1alpha1.ConditionInfraEnvReady)
@@ -852,6 +861,8 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", func() {
 
 	It("creates BMIs with correct fields for a single-worker node set", func() {
 		preloadDiskImageChain()
+		orderIgnition := `{"ignition":{"version":"3.2.0"},"testMarker":"cluster-order-infraenv"}`
+		ign.SetContent([]byte(orderIgnition))
 		co := newBareMetalClusterOrder("bmw-create", 1)
 		create(co)
 		makeInfraEnvReady("bmw-create")
@@ -875,7 +886,7 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", func() {
 		Expect(bmi.GetSpec().GetInstanceType().GetName()).To(Equal("bm-standard"))
 
 		userData := bmi.GetSpec().GetUserData()
-		Expect(userData).ToNot(BeEmpty())
+		Expect(userData).To(Equal(orderIgnition), "the BMI must receive the ignition fetched from its ClusterOrder InfraEnv")
 		Expect(json.Valid([]byte(userData))).To(BeTrue())
 
 		netAttachments := bmi.GetSpec().GetNetworkAttachments()

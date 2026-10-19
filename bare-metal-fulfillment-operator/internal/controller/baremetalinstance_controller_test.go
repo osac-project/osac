@@ -78,6 +78,7 @@ func (m *mockInventoryClient) GetHostNICs(ctx context.Context, inventoryHostID s
 
 // mockManagementClient implements management.Client for testing
 type mockManagementClient struct {
+	getPowerStateCalls       int
 	getPowerStateFunc        func(ctx context.Context, hostID string) (*management.PowerStatus, error)
 	setPowerStateFunc        func(ctx context.Context, hostID string, target management.PowerState) error
 	triggerRestartFunc       func(ctx context.Context, hostID string) error
@@ -86,6 +87,7 @@ type mockManagementClient struct {
 }
 
 func (m *mockManagementClient) GetPowerState(ctx context.Context, hostID string) (*management.PowerStatus, error) {
+	m.getPowerStateCalls++
 	if m.getPowerStateFunc != nil {
 		return m.getPowerStateFunc(ctx, hostID)
 	}
@@ -1387,6 +1389,10 @@ var _ = Describe("BareMetalInstance Controller", func() {
 			Context("when ExternalHostID is empty", func() {
 				BeforeEach(func() {
 					bareMetalInstance.Spec.ExternalHostID = ""
+					bareMetalInstance.Spec.NetworkAttachments = []v1alpha1.BareMetalNetworkAttachment{
+						{SubnetRef: "subnet-1", Interface: "eth9", Primary: true},
+					}
+					reconciler.NetworkingProvider = &mockProvisioningProvider{}
 				})
 
 				It("should remove finalizer without unassigning", func() {
@@ -1405,6 +1411,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					Expect(err).NotTo(HaveOccurred())
 					Expect(result).To(Equal(ctrl.Result{}))
 					Expect(unassignCalled).To(BeFalse())
+					Expect(mockMgmtClient.getPowerStateCalls).To(Equal(0))
 				})
 			})
 

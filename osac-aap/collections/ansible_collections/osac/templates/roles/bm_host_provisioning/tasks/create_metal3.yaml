@@ -4,10 +4,11 @@
     bmh_namespace: "{{ bare_metal_instance.spec.externalHostID.split('/')[0] }}"
     bmh_name: "{{ bare_metal_instance.spec.externalHostID.split('/')[1] }}"
 
-- name: Extract SSH public key and userDataSecret from template parameters
+- name: Extract SSH public key, userDataSecret, and networkData from template parameters
   ansible.builtin.set_fact:
     ssh_key: "{{ template_params.sshPublicKey | default('') }}"
     user_data_secret_ref: "{{ template_params.userDataSecret | default('') }}"
+    bmh_network_data: "{{ template_params.networkData | default('') }}"
 
 - name: Get BareMetalHost
   kubernetes.core.k8s_info:
@@ -26,6 +27,14 @@
   ansible.builtin.set_fact:
     bmh_info: "{{ bmh_result.resources[0] }}"
 
+- name: Set the default Metal3 image
+  ansible.builtin.set_fact:
+    bmh_image_url: "{{ template_params.imageURL }}"
+    bmh_image_format: ""
+
+- name: Default networkData to DHCP on discovered Metal3 interfaces
+  ansible.builtin.include_tasks: default_network_data.yaml
+
 - name: Display current BMH state
   ansible.builtin.debug:
     msg:
@@ -36,7 +45,8 @@
   ansible.builtin.set_fact:
     already_provisioned: >-
       {{ (bmh_info.status.provisioning.state | default('') == 'provisioned') and
-         (bmh_info.status.provisioning.image.url | default('') == template_params.imageURL) }}
+         (bmh_info.status.provisioning.image.url | default('') == bmh_image_url) and
+         (bmh_info.status.provisioning.image.format | default('') == bmh_image_format) }}
 
 - name: Skip provisioning when BMH already has the desired image
   when: already_provisioned | bool
@@ -64,7 +74,19 @@
               '{{ bare_metal_instance.metadata.namespace }}'
           when: user_data_secret_result.resources | length == 0
 
+        - name: Detect Assisted Installer ignition user data
+          block:
+            - name: Check whether user data is Assisted Installer ignition
+              ansible.builtin.set_fact:
+                wait_for_assisted_agent: >-
+                  {{ (user_data_secret_result.resources[0].data.userdata | b64decode | from_json).ignition is defined }}
+          rescue:
+            - name: Treat non-Ignition user data as cloud-init
+              ansible.builtin.set_fact:
+                wait_for_assisted_agent: false
+
         - name: Create userData Secret in BMH namespace
+          when: not (wait_for_assisted_agent | default(false) | bool)
           kubernetes.core.k8s:
             state: present
             definition:
@@ -75,6 +97,68 @@
                 namespace: "{{ bmh_namespace }}"
               data:
                 userData: "{{ user_data_secret_result.resources[0].data.userdata }}"
+
+    - name: Resolve the Assisted Installer discovery ISO
+      when: wait_for_assisted_agent | default(false) | bool
+      block:
+        - name: Extract the owning ClusterOrder
+          ansible.builtin.set_fact:
+            cluster_order_owner: "{{ bare_metal_instance.metadata.annotations['osac.openshift.io/owner-reference'] | default('') }}"
+
+        - name: Extract the owning ClusterOrder name
+          ansible.builtin.set_fact:
+            cluster_order_name: "{{ cluster_order_owner.split('/')[1] | default('') }}"
+
+        - name: Fail when the Assisted worker has no ClusterOrder owner
+          ansible.builtin.fail:
+            msg: "Assisted worker '{{ bare_metal_instance.metadata.name }}' has no ClusterOrder owner-reference annotation"
+          when: >-
+            not (cluster_order_owner.startswith('ClusterOrder/')
+            and cluster_order_owner.split('/') | length == 2
+            and cluster_order_name | length > 0)
+
+        - name: Get the owning ClusterOrder
+          kubernetes.core.k8s_info:
+            api_version: osac.openshift.io/v1alpha1
+            kind: ClusterOrder
+            namespace: "{{ bare_metal_instance.metadata.namespace }}"
+            name: "{{ cluster_order_name }}"
+          register: cluster_order_result
+
+        - name: Fail when the owning ClusterOrder is not found
+          ansible.builtin.fail:
+            msg: "ClusterOrder '{{ cluster_order_name }}' not found in namespace '{{ bare_metal_instance.metadata.namespace }}'"
+          when: cluster_order_result.resources | length == 0
+
+        - name: Fail when the Assisted worker tenant does not own the ClusterOrder
+          ansible.builtin.fail:
+            msg: "Assisted worker '{{ bare_metal_instance.metadata.name }}' is not in the same tenant as ClusterOrder '{{ cluster_order_name }}'"
+          when: >-
+            cluster_order_result.resources[0].metadata.annotations['osac.openshift.io/tenant'] | default('')
+            != bare_metal_instance.metadata.annotations['osac.openshift.io/tenant'] | default('')
+
+        - name: Get the ClusterOrder InfraEnv
+          kubernetes.core.k8s_info:
+            api_version: agent-install.openshift.io/v1beta1
+            kind: InfraEnv
+            namespace: "{{ bare_metal_instance.metadata.namespace }}"
+            name: "{{ cluster_order_name }}-infraenv"
+          register: infraenv_result
+
+        - name: Fail when the ClusterOrder InfraEnv is not found
+          ansible.builtin.fail:
+            msg: "InfraEnv '{{ cluster_order_name }}-infraenv' not found in namespace '{{ bare_metal_instance.metadata.namespace }}'"
+          when: infraenv_result.resources | length == 0
+
+        - name: Select the Assisted discovery ISO as a live-iso image
+          ansible.builtin.set_fact:
+            bmh_image_url: "{{ infraenv_result.resources[0].status.isoDownloadURL | default('') }}"
+            bmh_image_format: "live-iso"
+
+        - name: Fail when the InfraEnv discovery ISO is not ready
+          ansible.builtin.fail:
+            msg: "InfraEnv '{{ infraenv_result.resources[0].metadata.name }}' has no discovery ISO URL"
+          when: bmh_image_url | length == 0
 
     - name: Create metaData Secret with SSH public key
       when: ssh_key | length > 0
@@ -90,7 +174,7 @@
             metaData: "{{ {'public_keys': {'osac': ssh_key}} | to_nice_yaml }}"
 
     - name: Create networkData Secret
-      when: template_params.networkData | default('') | length > 0
+      when: bmh_network_data | length > 0
       kubernetes.core.k8s:
         state: present
         definition:
@@ -100,7 +184,7 @@
             name: "{{ bmh_name }}-network-data"
             namespace: "{{ bmh_namespace }}"
           stringData:
-            networkData: "{{ template_params.networkData }}"
+            networkData: "{{ bmh_network_data }}"
 
     - name: Build BMH patch
       ansible.builtin.include_tasks: build_bmh_patch.yaml
@@ -124,6 +208,24 @@
       until: bmh_provision_status.resources[0].status.provisioning.state | default('') == "provisioned"
       retries: 120
       delay: 30
+
+    - name: Wait for the host's Assisted Agent to register
+      when: wait_for_assisted_agent | default(false) | bool
+      kubernetes.core.k8s_info:
+        api_version: agent-install.openshift.io/v1beta1
+        kind: Agent
+        namespace: "{{ bare_metal_instance.metadata.namespace }}"
+      register: bmh_assisted_agents
+      until: >-
+        bmh_assisted_agents.resources | default([])
+        | selectattr('status.inventory.interfaces', 'defined')
+        | map(attribute='status.inventory.interfaces')
+        | flatten
+        | selectattr('macAddress', 'equalto', bmh_info.spec.bootMACAddress)
+        | list
+        | length > 0
+      retries: 180
+      delay: 10
 
 - name: Metal3 provisioning completed
   ansible.builtin.debug:

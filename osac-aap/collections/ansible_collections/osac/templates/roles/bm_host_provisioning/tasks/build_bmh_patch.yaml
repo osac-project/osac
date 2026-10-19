@@ -4,14 +4,28 @@
     bmh_patch:
       spec:
         image:
-          url: "{{ ('oci://' ~ template_params.imageURL) if (template_params.imageSourceType | default('') == 'registry' and not template_params.imageURL.startswith('oci://')) else template_params.imageURL }}"
+          url: "{{ ('oci://' ~ bmh_image_url) if (template_params.imageSourceType | default('') == 'registry' and not bmh_image_url.startswith('oci://')) else bmh_image_url }}"
         online: true
+
+- name: Add image format to BMH patch
+  when: bmh_image_format | default('') | length > 0
+  ansible.builtin.set_fact:
+    bmh_patch: >-
+      {{ bmh_patch | combine({
+           'spec': bmh_patch.spec | combine({
+             'image': bmh_patch.spec.image | combine({
+               'format': bmh_image_format
+             })
+           })
+         }, recursive=True) }}
 
 - name: Add checksum to BMH patch for non-OCI images
   when: >-
+    (bmh_image_format | default('') != 'live-iso')
+    and
     (template_params.imageSourceType | default('') != 'registry')
     and
-    (template_params.imageSourceType | default('') != '' or not template_params.imageURL.startswith('oci://'))
+    (template_params.imageSourceType | default('') != '' or not bmh_image_url.startswith('oci://'))
   ansible.builtin.set_fact:
     bmh_patch: >-
       {{ bmh_patch | combine({
@@ -24,7 +38,7 @@
          }, recursive=True) }}
 
 - name: Add networkData to BMH patch
-  when: template_params.networkData | default('') | length > 0
+  when: bmh_network_data | default('') | length > 0
   ansible.builtin.set_fact:
     bmh_patch: >-
       {{ bmh_patch | combine({

@@ -42,7 +42,7 @@ const (
 	agentBareMetalRoleLabel = "agentBareMetal"
 	workerNameLabel         = "osac.openshift.io/worker-name"
 
-	agentRegistrationTimeout = 30 * time.Minute
+	agentRegistrationTimeout = 45 * time.Minute
 	agentRequeueInterval     = 30 * time.Second
 
 	eventReasonAgentCorrelated          = "AgentCorrelated"
@@ -364,14 +364,14 @@ func (r *Reconciler) checkAgentRegistrationTimeout(
 	return workers
 }
 
-// workerPhaseStartTime returns when a worker entered its current phase by checking the
-// ClusterOrder's existing status.workers. For WaitingForAgent workers that were just
-// transitioned, uses the resource version change time approximation.
+// workerPhaseStartTime returns when the current worker entry entered WaitingForAgent.
+// Legacy status entries without a worker creation timestamp fall back to the
+// ClusterOrder creation timestamp.
 func (r *Reconciler) workerPhaseStartTime(co *v1alpha1.ClusterOrder, workerName string) time.Time {
 	for _, w := range co.Status.Workers {
 		if w.Name == workerName && w.Phase == workerPhaseWaitingForAgent {
-			if w.LastFailureTime != nil {
-				return w.LastFailureTime.Time
+			if !w.CreationTimestamp.IsZero() {
+				return w.CreationTimestamp.Time
 			}
 			return co.CreationTimestamp.Time
 		}

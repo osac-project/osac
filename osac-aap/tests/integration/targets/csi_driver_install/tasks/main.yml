@@ -45,7 +45,6 @@
           - netapp
           - pure-flashblade
           - pure-flasharray
-          - pure
           - ontap
           - trident
         csi_driver_install_vendor_node_socket_paths:
@@ -53,7 +52,6 @@
           netapp: /var/lib/kubelet/plugins/csi.trident.netapp.io
           pure-flashblade: /var/lib/kubelet/plugins/csi.pure.purestorage.com
           pure-flasharray: /var/lib/kubelet/plugins/csi.pure.purestorage.com
-          pure: /var/lib/kubelet/plugins/csi.pure.purestorage.com
           trident: /var/lib/kubelet/plugins/csi.trident.netapp.io
     - name: Uninstall any pre-existing csi-driver release
       kubernetes.core.helm:
@@ -380,21 +378,23 @@
       kubernetes.core.helm_info:
         name: csi-driver
         release_namespace: osac-csi
-      register: _driver_release_after_pure
+      register: _driver_release_after_flashblade
 
     - name: Assert VAST and Pure remain enabled under their provider/product routes
       ansible.builtin.assert:
         that:
-          - _driver_release_after_pure.status['values'].vendors.vast.enabled | bool
-          - _driver_release_after_pure.status['values'].vendors.pure.enabled | bool
+          - _driver_release_after_flashblade.status['values'].vendors.vast.enabled | bool
+          - _driver_release_after_flashblade.status['values'].vendors.pure.enabled | bool
           - >-
-            ('vast=' in (_driver_release_after_pure.status['values'].controller.vendorControllers | default(''))) or
-            ('vast=' in (_driver_release_after_pure.status['values'].controller.vendorSockets | default('')))
+            ('vast=' in (_driver_release_after_flashblade.status['values'].controller.vendorControllers | default(''))) or
+            ('vast=' in (_driver_release_after_flashblade.status['values'].controller.vendorSockets | default('')))
           - >-
-            ('pure-flashblade=' in (_driver_release_after_pure.status['values'].controller.vendorControllers | default(''))) or
-            ('pure-flashblade=' in (_driver_release_after_pure.status['values'].controller.vendorSockets | default('')))
-          - "'vast=/var/lib/kubelet/plugins/csi.vast.vastdata.com/csi.sock' in _driver_release_after_pure.status['values'].node.vendorSockets"
-          - "'pure-flashblade=/var/lib/kubelet/plugins/csi.pure.purestorage.com/csi.sock' in _driver_release_after_pure.status['values'].node.vendorSockets"
+            ('pure-flashblade=' in (_driver_release_after_flashblade.status['values'].controller.vendorControllers | default(''))) or
+            ('pure-flashblade=' in (_driver_release_after_flashblade.status['values'].controller.vendorSockets | default('')))
+          - "'vast=/var/lib/kubelet/plugins/csi.vast.vastdata.com/csi.sock' in _driver_release_after_flashblade.status['values'].node.vendorSockets"
+          - >-
+            'pure-flashblade=/var/lib/kubelet/plugins/csi.pure.purestorage.com/csi.sock' in
+            _driver_release_after_flashblade.status['values'].node.vendorSockets
         fail_msg: "Dispatching a second provider did not retain the first provider's wiring in release values"
         success_msg: "vast wiring survived the pure dispatch; both vendors are enabled"
 

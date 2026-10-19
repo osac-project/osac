@@ -264,6 +264,17 @@ func (p *AAPProvider) cancelProvisionJob(ctx context.Context, jobID string) erro
 	return nil
 }
 
+// wrapAAPLaunchError maps provider-side rate limiting onto the lifecycle's
+// RateLimitError, so a rate-limited trigger requeues after the advertised
+// delay instead of failing the reconcile.
+func wrapAAPLaunchError(err error) error {
+	var rateLimited *aap.RateLimitedError
+	if errors.As(err, &rateLimited) {
+		return &RateLimitError{RetryAfter: rateLimited.RetryAfter}
+	}
+	return err
+}
+
 // launchDeprovisionJob launches the deprovision template and returns the job ID.
 func (p *AAPProvider) launchDeprovisionJob(ctx context.Context, resource client.Object) (string, error) {
 	templateName, err := p.resolveTemplateName("delete", resource)
@@ -277,7 +288,7 @@ func (p *AAPProvider) launchDeprovisionJob(ctx context.Context, resource client.
 func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, resource client.Object, inheritedExtraVars map[string]any) (string, error) {
 	template, err := p.client.GetTemplate(ctx, templateName)
 	if err != nil {
-		return "", fmt.Errorf("failed to get template: %w", err)
+		return "", wrapAAPLaunchError(fmt.Errorf("failed to get template: %w", err))
 	}
 
 	extraVars, err := p.extractExtraVars(ctx, resource)
@@ -297,7 +308,7 @@ func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, r
 			Sensitive:    sensitive,
 		})
 		if err != nil {
-			return "", fmt.Errorf("failed to launch job template: %w", err)
+			return "", wrapAAPLaunchError(fmt.Errorf("failed to launch job template: %w", err))
 		}
 		jobID = resp.JobID
 	case aap.TemplateTypeWorkflow:
@@ -308,7 +319,7 @@ func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, r
 			Sensitive:    sensitive,
 		})
 		if err != nil {
-			return "", fmt.Errorf("failed to launch workflow template: %w", err)
+			return "", wrapAAPLaunchError(fmt.Errorf("failed to launch workflow template: %w", err))
 		}
 		jobID = resp.JobID
 	default:

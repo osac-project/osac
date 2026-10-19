@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -36,6 +37,32 @@ type MethodNotAllowedError struct {
 
 func (e *MethodNotAllowedError) Error() string {
 	return fmt.Sprintf("method not allowed: %s", e.Operation)
+}
+
+// defaultRateLimitRetryAfter is used when a 429 response carries no parseable
+// Retry-After header, so callers back off rather than requeueing immediately.
+const defaultRateLimitRetryAfter = 30 * time.Second
+
+// RateLimitedError indicates the AAP API is rate-limiting requests (HTTP 429).
+type RateLimitedError struct {
+	// RetryAfter is the delay the caller should wait before retrying. Parsed
+	// from the Retry-After header when present; otherwise a conservative
+	// default.
+	RetryAfter time.Duration
+	URL        string
+}
+
+func (e *RateLimitedError) Error() string {
+	return fmt.Sprintf("rate limited, retry after %s", e.RetryAfter)
+}
+
+// parseRetryAfter extracts the Retry-After delay in seconds. Unparseable or
+// missing values fall back to defaultRateLimitRetryAfter.
+func parseRetryAfter(header string) time.Duration {
+	if seconds, err := strconv.Atoi(header); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	return defaultRateLimitRetryAfter
 }
 
 const (
@@ -435,6 +462,12 @@ func (c *Client) doRequestWithRedaction(ctx context.Context, method, url string,
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return nil, &RateLimitedError{
+				RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After")),
+				URL:        url,
+			}
+		}
 		if sensitive {
 			log.Info("AAP request returned non-success status", "method", method, "url", url, "status", resp.StatusCode)
 			if resp.StatusCode == http.StatusNotFound {

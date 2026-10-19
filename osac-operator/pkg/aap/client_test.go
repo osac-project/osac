@@ -732,6 +732,43 @@ var _ = Describe("Client", func() {
 		})
 	})
 
+	Describe("rate limiting", func() {
+		Context("when the API returns 429 with a Retry-After header", func() {
+			BeforeEach(func() {
+				server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Retry-After", "17")
+					w.WriteHeader(http.StatusTooManyRequests)
+				}))
+				client = aap.NewClient(server.URL, "test-token", false)
+			})
+
+			It("returns RateLimitedError with the advertised delay", func() {
+				_, err := client.GetJob(ctx, "123")
+				Expect(err).To(HaveOccurred())
+				var rateLimited *aap.RateLimitedError
+				Expect(errors.As(err, &rateLimited)).To(BeTrue())
+				Expect(rateLimited.RetryAfter).To(Equal(17 * time.Second))
+			})
+		})
+
+		Context("when the API returns 429 without a Retry-After header", func() {
+			BeforeEach(func() {
+				server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusTooManyRequests)
+				}))
+				client = aap.NewClient(server.URL, "test-token", false)
+			})
+
+			It("returns RateLimitedError with the default delay", func() {
+				_, err := client.GetJob(ctx, "123")
+				Expect(err).To(HaveOccurred())
+				var rateLimited *aap.RateLimitedError
+				Expect(errors.As(err, &rateLimited)).To(BeTrue())
+				Expect(rateLimited.RetryAfter).To(Equal(30 * time.Second))
+			})
+		})
+	})
+
 	Describe("workflow job round-trip", func() {
 		It("polls the workflow job ID its launch returned", func() {
 			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

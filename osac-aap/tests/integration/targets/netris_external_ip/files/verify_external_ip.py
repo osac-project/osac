@@ -41,6 +41,8 @@ import threading
 import time
 import unittest
 import uuid
+
+import yaml
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -107,7 +109,19 @@ class NetrisFixtureHandler(BaseHTTPRequestHandler):
         elif path == "/api/v2/ipam/subnets":
             self._record("GET")
             with self.server.lock:
-                data = [dict(s) for s in self.server.subnets]
+                # Provider wire format: raw records carry nested sites and
+                # tenant objects; the module normalizes them at its boundary.
+                data = [
+                    {
+                        "id": s["id"],
+                        "name": s["name"],
+                        "prefix": s["prefix"],
+                        "purpose": s["purpose"],
+                        "sites": [{"id": s["site_id"]}],
+                        "tenant": {"id": s["tenant_id"]},
+                    }
+                    for s in self.server.subnets
+                ]
             self._respond(200, {"data": data})
         elif path == "/api/v2/ipam":
             self._record("GET")
@@ -146,6 +160,14 @@ class NetrisFixtureHandler(BaseHTTPRequestHandler):
             # Fail loudly: a barrier expiry means a concurrent case never
             # produced its participants within the 10 second bound.
             self._respond(500, {"message": "fixture barrier expired"})
+            return
+        if self.server.scenario.get("reject_create"):
+            # A genuine provider error: the request is rejected and no
+            # reservation commits, so the module must not recover.
+            self._respond(
+                int(self.server.scenario.get("create_status", 500)),
+                {"message": "provider rejected the create"},
+            )
             return
         record = self.server.commit_subnet(body)
         if record is None:
@@ -245,7 +267,7 @@ class NetrisFixtureServer(ThreadingHTTPServer):
             else body.get("tenant_id")
         )
         with self.lock:
-            for subnet in self.server.subnets:
+            for subnet in self.subnets:
                 if subnet.get("name") == body.get("name"):
                     return None
                 if (
@@ -255,15 +277,15 @@ class NetrisFixtureServer(ThreadingHTTPServer):
                 ):
                     return None
             record = {
-                "id": self.server.next_subnet_id,
+                "id": self.next_subnet_id,
                 "name": body.get("name"),
                 "prefix": body.get("prefix"),
                 "purpose": body.get("purpose"),
                 "site_id": site_id,
                 "tenant_id": tenant_id,
             }
-            self.server.next_subnet_id += 1
-            self.server.subnets.append(record)
+            self.next_subnet_id += 1
+            self.subnets.append(record)
             return record
 
     def arrive_barrier(self):
@@ -347,7 +369,7 @@ class ExternalIPPlaybookTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         """Remove the isolated Kind resources and stop the fixtures."""
-        for name in ("netris-eip-v1", "netris-eip-isolated"):
+        for name in ("netris-eip-v1", "netris-eip-isolated", "netris-eip-legacy"):
             cls._kubectl(
                 "patch", "externalip", name, "-n", cls.namespace,
                 "--type=merge", "-p", '{"metadata":{"finalizers":null}}',
@@ -374,12 +396,12 @@ class ExternalIPPlaybookTests(unittest.TestCase):
                 )
 
     @classmethod
-    def _kubectl(cls, *args, check=True):
+    def _kubectl(cls, *args, check=True, input=None):
         """Run one kubectl command and fail loudly on unexpected errors."""
         result = subprocess.run(
             ["kubectl", *args],
             env=os.environ.copy(),
-            input=None,
+            input=input,
             capture_output=True,
             text=True,
             timeout=SUBPROCESS_TIMEOUT,
@@ -451,7 +473,9 @@ class ExternalIPPlaybookTests(unittest.TestCase):
         documents.append(
             cls._external_ip_definition("netris-eip-legacy", versioned=False)
         )
-        manifest = "\n---\n".join(json.dumps(d) for d in documents)
+        manifest = "\n---\n".join(
+            yaml.safe_dump(d, default_flow_style=False).strip() for d in documents
+        )
         cls._kubectl("apply", "-f", "-", input=manifest)
         pool = json.loads(
             cls._kubectl(
@@ -789,20 +813,16 @@ class ExternalIPPlaybookTests(unittest.TestCase):
         """I04: exhaustion and provider errors produce no success artifact."""
         uid = str(uuid.uuid4())
         resource = self._constructed_resource(uid)
+        pool_hosts = range(1, 255)
         self._scenario(
             subnets=[
                 {
-                    "id": 5001, "name": "occupied-1",
-                    "prefix": "192.0.2.1/32", "purpose": "nat",
+                    "id": 5000 + host, "name": f"occupied-{host}",
+                    "prefix": f"192.0.2.{host}/32", "purpose": "nat",
                     "site_id": PROVIDER_SITE_ID,
                     "tenant_id": PROVIDER_TENANT_ID,
-                },
-                {
-                    "id": 5002, "name": "occupied-2",
-                    "prefix": "192.0.2.2/32", "purpose": "nat",
-                    "site_id": PROVIDER_SITE_ID,
-                    "tenant_id": PROVIDER_TENANT_ID,
-                },
+                }
+                for host in pool_hosts
             ]
         )
         rc, artifact, output = self._run_child(
@@ -811,7 +831,7 @@ class ExternalIPPlaybookTests(unittest.TestCase):
         self.assertNotEqual(rc, 0, f"I04 exhaustion unexpectedly passed: {output}")
         self.assertEqual(artifact, {})
         self.assertEqual(self._uid_reservations(uid), [])
-        self._scenario(create_status=500)
+        self._scenario(reject_create=True, create_status=500)
         rc, artifact, output = self._run_child(
             CREATE_PLAYBOOK, self._job_vars(resource)
         )

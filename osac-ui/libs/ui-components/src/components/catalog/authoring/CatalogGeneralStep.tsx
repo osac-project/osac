@@ -16,6 +16,7 @@ import {
   type ResourceSelectValue,
   emptyResourceSelectValue,
 } from '../../Form/ResourceSelectField';
+import { GLOBAL_TENANT_VALUE } from '../catalogItemDisplay';
 
 export type CatalogItemScope = 'global' | 'tenant';
 
@@ -36,6 +37,55 @@ export const catalogGeneralValues = (): CatalogGeneralValues => ({
   metadata: { name: '', project: '', description: '', tenant: emptyResourceSelectValue() },
   template: emptyResourceSelectValue(),
 });
+
+/** Shape shared by all catalog item kinds, used to prefill `CatalogGeneralValues` for edit. */
+export interface CatalogItemGeneralLike {
+  metadata?: {
+    name?: string;
+    description?: string;
+    project?: string;
+    tenant?: string;
+  };
+  template?: { id?: string };
+}
+
+export const catalogGeneralValuesFromItem = (
+  item: CatalogItemGeneralLike,
+): CatalogGeneralValues => {
+  const metadata = item.metadata;
+  const tenant = metadata?.tenant ?? '';
+  const scope: CatalogItemScope = tenant === GLOBAL_TENANT_VALUE ? 'global' : 'tenant';
+  return {
+    scope,
+    metadata: {
+      name: metadata?.name ?? '',
+      project: metadata?.project ?? '',
+      description: metadata?.description ?? '',
+      tenant: scope === 'tenant' && tenant ? { id: tenant, name: '' } : emptyResourceSelectValue(),
+    },
+    template: item.template?.id ? { id: item.template.id, name: '' } : emptyResourceSelectValue(),
+  };
+};
+
+/**
+ * Encodes `CatalogGeneralValues` into the `metadata`/`template` shape shared by every
+ * catalog item create payload. `tenant` and `project` are mutually exclusive by
+ * construction: an admin populates `scope`/`metadata.tenant` and leaves
+ * `metadata.project` empty, while a tenant admin does the opposite, so a single
+ * derivation works for both roles.
+ */
+export const catalogGeneralItemPayload = (
+  values: CatalogGeneralValues,
+): { name: string; description: string; tenant?: string; project?: string } => {
+  const tenant = values.scope === 'global' ? GLOBAL_TENANT_VALUE : values.metadata.tenant.id.trim();
+  const project = values.metadata.project.trim();
+  return {
+    name: values.metadata.name.trim(),
+    description: values.metadata.description.trim(),
+    ...(tenant ? { tenant } : {}),
+    ...(project ? { project } : {}),
+  };
+};
 
 interface CatalogGeneralStepProps {
   isEdit: boolean;

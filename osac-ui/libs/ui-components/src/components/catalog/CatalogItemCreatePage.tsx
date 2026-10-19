@@ -1,6 +1,7 @@
 import { useParams } from 'react-router-dom';
 import { Bullseye, EmptyState, EmptyStateBody, PageSection } from '@patternfly/react-core';
 
+import ComputeCatalogItemWizard from './authoring/compute/ComputeCatalogItemWizard';
 import { isCatalogItemKind } from './catalogItemDisplay';
 import { useTranslation } from '../../hooks/useTranslation';
 import { ResourceDetailsPageError } from '../Resource/ResourceDetailsPageError';
@@ -18,6 +19,10 @@ export const CatalogItemCreatePage = () => {
         variant="not-found"
       />
     );
+  }
+
+  if (kindParam === 'vm') {
+    return <ComputeCatalogItemWizard />;
   }
 
   return (

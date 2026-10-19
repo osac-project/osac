@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react';
+
 import type { FieldPolicyLike } from '../../catalog/catalogFieldPolicyDisplay';
 
 export interface ProvisioningFieldValue<T> {
@@ -8,6 +10,10 @@ export interface ProvisioningFieldValue<T> {
 export interface ProvisioningFieldControlProps {
   name: string;
   isDisabled?: boolean;
+  /** Right side of the control's label line. Catalog authoring passes the Editable/Locked switch here. */
+  labelInfo?: ReactNode;
+  /** Catalog authoring sets this from Locked vs Editable. Provisioning callers keep today's required default. */
+  isRequired?: boolean;
 }
 
 export const provisioningFieldValue = <T>(value: T, locked = false): ProvisioningFieldValue<T> => ({

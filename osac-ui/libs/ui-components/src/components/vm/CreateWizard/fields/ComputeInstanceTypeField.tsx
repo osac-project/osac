@@ -20,6 +20,8 @@ const ComputeInstanceTypeField = ({
   name,
   fieldId = 'vm-instance-type',
   isDisabled = false,
+  isRequired = true,
+  labelInfo,
 }: ComputeInstanceTypeFieldProps) => {
   const { t } = useTranslation();
   const { setFieldValue } = useFormikContext();
@@ -76,12 +78,13 @@ const ComputeInstanceTypeField = ({
           name={name}
           label={t('catalogProvision.vm.fields.instanceType')}
           fieldId={fieldId}
-          isRequired
+          isRequired={isRequired}
           autoSelectSingleOption
           isDisabled={isDisabled}
           isLoading={instanceTypesLoading}
           placeholder={t('catalogProvision.vm.placeholders.selectInstanceType')}
           options={instanceTypeOptions}
+          labelInfo={labelInfo}
         />
       </StackItem>
     </Stack>

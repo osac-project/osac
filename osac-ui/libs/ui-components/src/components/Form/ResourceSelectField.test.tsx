@@ -1,13 +1,12 @@
 import { Code, ConnectError } from '@connectrpc/connect';
 import { screen, waitFor } from '@testing-library/react';
 import { Formik, type FormikErrors } from 'formik';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import * as yup from 'yup';
 
 import { type Tenant, TenantState, Tenants } from '@osac/types/private';
 
 import {
-  type ResourceListItem,
   ResourceSelectField,
   type ResourceSelectValue,
   emptyResourceSelectValue,
@@ -27,20 +26,16 @@ const renderSelect = ({
   autoSelectSingleOption = false,
   filterItems,
   formatOptionLabel,
-  getOptionDescription,
   initialValue = emptyResourceSelectValue(),
   tenants = [makeTenant('only-1', 'Only tenant')],
   transportOverrides,
-  createOption,
 }: {
   autoSelectSingleOption?: boolean;
-  filterItems?: (item: ResourceListItem) => boolean;
-  formatOptionLabel?: (item: ResourceListItem) => string;
-  getOptionDescription?: (item: ResourceListItem) => string | undefined;
+  filterItems?: (item: { id: string; metadata?: { name?: string } }) => boolean;
+  formatOptionLabel?: (item: { id: string; metadata?: { name?: string } }) => string;
   initialValue?: ResourceSelectValue;
   tenants?: Tenant[];
   transportOverrides?: MockTransportOverrides;
-  createOption?: { label: string; onSelect: () => void };
 } = {}) => {
   let latestErrors: FormikErrors<{ tenant: ResourceSelectValue }> = {};
 
@@ -65,8 +60,6 @@ const renderSelect = ({
             autoSelectSingleOption={autoSelectSingleOption}
             filterItems={filterItems}
             formatOptionLabel={formatOptionLabel}
-            getOptionDescription={getOptionDescription}
-            createOption={createOption}
             placeholder="Select a tenant"
             loadErrorTitle="Failed to fetch tenants"
             emptyTitle="No registered tenants"
@@ -103,8 +96,9 @@ describe('ResourceSelectField', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByPlaceholderText('Select a tenant')).toBeInTheDocument();
+      expect(screen.getByRole('combobox')).toHaveAttribute('placeholder', 'Select a tenant');
     });
+    expect(screen.getByRole('combobox')).toHaveValue('');
     expect(screen.getByLabelText('formik-value')).toHaveTextContent('{"id":"","name":""}');
   });
 
@@ -114,9 +108,9 @@ describe('ResourceSelectField', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/^Tenant/)).not.toBeDisabled();
+      expect(screen.getByRole('combobox')).toHaveAttribute('placeholder', 'Select a tenant');
     });
-    await user.click(screen.getByLabelText(/^Tenant/));
+    await user.click(screen.getByRole('combobox'));
     await user.click(screen.getByRole('option', { name: 'globex' }));
 
     await waitFor(() => {
@@ -136,9 +130,7 @@ describe('ResourceSelectField', () => {
       );
     });
 
-    await waitFor(() => {
-      expect(screen.getByRole('combobox')).toHaveValue('Only tenant');
-    });
+    expect(screen.getByRole('combobox')).toHaveValue('Only tenant');
   });
 
   it('does not auto-select when multiple resources are listed', async () => {
@@ -148,8 +140,9 @@ describe('ResourceSelectField', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByPlaceholderText('Select a tenant')).toBeInTheDocument();
+      expect(screen.getByRole('combobox')).toHaveAttribute('placeholder', 'Select a tenant');
     });
+    expect(screen.getByRole('combobox')).toHaveValue('');
     expect(screen.getByLabelText('formik-value')).toHaveTextContent('{"id":"","name":""}');
   });
 
@@ -173,7 +166,7 @@ describe('ResourceSelectField', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/^Tenant/)).not.toBeDisabled();
+      expect(screen.getByRole('combobox')).toHaveAttribute('placeholder', 'Select a tenant');
     });
     await user.click(screen.getByRole('button', { name: 'Validate' }));
 
@@ -182,33 +175,16 @@ describe('ResourceSelectField', () => {
     });
   });
 
-  it('shows an empty warning above a disabled select when the list has no resources', async () => {
+  it('shows an empty warning when the list has no resources', async () => {
     renderSelect({ tenants: [] });
 
     expect(await screen.findByText('No registered tenants')).toBeInTheDocument();
     expect(
       screen.getByText('Register a tenant before creating and assigning an external IP pool.'),
     ).toBeInTheDocument();
-    expect(document.getElementById('tenant')).toHaveClass('pf-m-disabled');
   });
 
-  it('offers resource creation when the list is empty', async () => {
-    const onCreate = vi.fn();
-    const { user } = renderSelect({
-      tenants: [],
-      createOption: { label: 'Create tenant', onSelect: onCreate },
-    });
-
-    await waitFor(() => expect(screen.getByLabelText(/^Tenant/)).not.toBeDisabled());
-    await user.click(screen.getByLabelText(/^Tenant/));
-    await user.click(screen.getByRole('option', { name: 'Create tenant' }));
-
-    expect(onCreate).toHaveBeenCalledOnce();
-    expect(screen.getByLabelText('formik-value')).toHaveTextContent('{"id":"","name":""}');
-    expect(screen.getByRole('combobox')).toHaveValue('');
-  });
-
-  it('shows a load error above a disabled select when listing fails', async () => {
+  it('shows a load error when listing fails', async () => {
     renderSelect({
       transportOverrides: {
         onTenantList: () => {
@@ -220,7 +196,6 @@ describe('ResourceSelectField', () => {
     expect(await screen.findByText('Failed to fetch tenants')).toBeInTheDocument();
     expect(screen.getByText('tenants unavailable')).toBeInTheDocument();
     expect(screen.queryByText('No registered tenants')).not.toBeInTheDocument();
-    expect(document.getElementById('tenant')).toHaveClass('pf-m-disabled');
   });
 
   it('hides options that fail filterItems', async () => {
@@ -230,24 +205,24 @@ describe('ResourceSelectField', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/^Tenant/)).not.toBeDisabled();
+      expect(screen.getByRole('combobox')).toHaveAttribute('placeholder', 'Select a tenant');
     });
-    await user.click(screen.getByLabelText(/^Tenant/));
+    await user.click(screen.getByRole('combobox'));
 
     expect(screen.getByRole('option', { name: 'globex' })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'acme' })).not.toBeInTheDocument();
   });
 
-  it('renders formatOptionLabel for options and the toggle', async () => {
+  it('renders formatOptionLabel for options and the selected value', async () => {
     const { user } = renderSelect({
       tenants: [makeTenant('t-1', 'acme'), makeTenant('t-2', 'globex')],
       formatOptionLabel: (item) => `${item.metadata?.name ?? item.id} (custom)`,
     });
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/^Tenant/)).not.toBeDisabled();
+      expect(screen.getByRole('combobox')).toHaveAttribute('placeholder', 'Select a tenant');
     });
-    await user.click(screen.getByLabelText(/^Tenant/));
+    await user.click(screen.getByRole('combobox'));
     await user.click(screen.getByRole('option', { name: 'globex (custom)' }));
 
     await waitFor(() => {
@@ -258,52 +233,44 @@ describe('ResourceSelectField', () => {
     expect(screen.getByRole('combobox')).toHaveValue('globex (custom)');
   });
 
-  it('renders option details provided by the caller', async () => {
-    const { user } = renderSelect({
-      tenants: [makeTenant('t-1', 'acme'), makeTenant('t-2', 'globex')],
-      getOptionDescription: (item) => `ID: ${item.id}`,
+  describe('clear button', () => {
+    it('is hidden when no value is selected', async () => {
+      renderSelect({
+        tenants: [makeTenant('t-1', 'acme'), makeTenant('t-2', 'globex')],
+      });
+
+      await waitFor(() => {
+        expect(screen.getByRole('combobox')).toHaveAttribute('placeholder', 'Select a tenant');
+      });
+      expect(
+        screen.getByRole('button', { name: 'Clear input value', hidden: true }),
+      ).not.toBeVisible();
     });
 
-    await waitFor(() => expect(screen.getByLabelText(/^Tenant/)).not.toBeDisabled());
-    await user.click(screen.getByLabelText(/^Tenant/));
-    await user.click(screen.getByRole('option', { name: 'globex · ID: t-2' }));
+    it('appears once a value is selected and clears it back to empty when clicked', async () => {
+      const { user } = renderSelect({
+        tenants: [makeTenant('t-1', 'acme'), makeTenant('t-2', 'globex')],
+      });
 
-    expect(screen.getByRole('combobox')).toHaveValue('globex · ID: t-2');
-  });
+      await waitFor(() => {
+        expect(screen.getByRole('combobox')).toHaveAttribute('placeholder', 'Select a tenant');
+      });
+      await user.click(screen.getByRole('combobox'));
+      await user.click(screen.getByRole('option', { name: 'globex' }));
 
-  it('keeps distinct ids for the typeahead select and toggle', async () => {
-    const { user } = renderSelect({
-      tenants: [makeTenant('t-1', 'acme'), makeTenant('t-2', 'globex')],
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Clear input value' })).toBeVisible();
+      });
+
+      await user.click(screen.getByRole('button', { name: 'Clear input value' }));
+
+      await waitFor(() => {
+        expect(screen.getByLabelText('formik-value')).toHaveTextContent('{"id":"","name":""}');
+      });
+      expect(screen.getByRole('combobox')).toHaveValue('');
+      expect(
+        screen.getByRole('button', { name: 'Clear input value', hidden: true }),
+      ).not.toBeVisible();
     });
-
-    await waitFor(() => {
-      expect(screen.getByLabelText(/^Tenant/)).not.toBeDisabled();
-    });
-
-    expect(document.querySelectorAll('#tenant')).toHaveLength(1);
-    await user.click(screen.getByLabelText(/^Tenant/));
-    expect(document.getElementById('tenant-select')).not.toBeNull();
-    expect(document.getElementById('tenant')).not.toBe(document.getElementById('tenant-select'));
-  });
-
-  it('filters options by typeahead input', async () => {
-    const { user } = renderSelect({
-      tenants: [makeTenant('t-1', 'acme'), makeTenant('t-2', 'globex')],
-    });
-
-    await waitFor(() => {
-      expect(screen.getByLabelText(/^Tenant/)).not.toBeDisabled();
-    });
-
-    const toggle = screen.getByLabelText(/^Tenant/);
-    await user.click(toggle);
-    const input = screen.getByRole('combobox');
-    await user.clear(input);
-    await user.type(input, 'glob');
-
-    await waitFor(() => {
-      expect(screen.getByRole('option', { name: 'globex' })).toBeInTheDocument();
-    });
-    expect(screen.queryByRole('option', { name: 'acme' })).not.toBeInTheDocument();
   });
 });

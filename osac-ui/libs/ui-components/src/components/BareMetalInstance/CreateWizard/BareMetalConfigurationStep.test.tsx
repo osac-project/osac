@@ -13,10 +13,6 @@ import {
 
 import BareMetalConfigurationStep from './BareMetalConfigurationStep';
 import { createEmptyBareMetalInstanceValues, getBareMetalInstanceInitialValues } from './fields';
-import {
-  expectResourceSelectDisabled,
-  getResourceSelectCombobox,
-} from '../../../test-utils/resourceSelect';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 import { provisioningFieldValue } from '../../ProvisioningWizard/fields/provisioningFieldValue';
 
@@ -47,7 +43,7 @@ describe('BareMetalConfigurationStep', () => {
       },
     );
 
-    const diskImageSelect = await screen.findByLabelText(/^Disk image/);
+    const diskImageSelect = await screen.findByRole('combobox');
     await user.click(diskImageSelect);
 
     expect(screen.getByRole('option', { name: /fedora/ })).toBeInTheDocument();
@@ -55,7 +51,7 @@ describe('BareMetalConfigurationStep', () => {
 
     await user.click(screen.getByRole('option', { name: /rhel/ }));
 
-    await waitFor(() => expect(getResourceSelectCombobox(/^Disk image/)).toHaveValue('rhel'));
+    await waitFor(() => expect(diskImageSelect).toHaveValue('rhel'));
   });
 
   it('shows the catalog item disk image when the wizard opens', async () => {
@@ -86,9 +82,8 @@ describe('BareMetalConfigurationStep', () => {
       },
     );
 
-    await screen.findByLabelText(/^Disk image/);
-    await waitFor(() => expect(getResourceSelectCombobox(/^Disk image/)).toHaveValue('rhel'));
-    expectResourceSelectDisabled(/^Disk image/);
+    const diskImageSelect = await screen.findByRole('combobox');
+    await waitFor(() => expect(diskImageSelect).toHaveValue('rhel'));
   });
 
   it('disables instance type selection when the catalog item locks its value', async () => {
@@ -104,8 +99,8 @@ describe('BareMetalConfigurationStep', () => {
       },
     );
 
-    await screen.findByLabelText('Instance type');
-    expectResourceSelectDisabled('Instance type');
+    const instanceTypeSelect = await screen.findByLabelText('Instance type');
+    expect(instanceTypeSelect).toBeDisabled();
   });
 
   it('lets the user switch between inline user data and a USER_DATA Secret', async () => {

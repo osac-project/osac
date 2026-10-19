@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Label } from '@patternfly/react-core';
 import LockIcon from '@patternfly/react-icons/dist/esm/icons/lock-icon';
 
@@ -22,6 +23,7 @@ interface StorageTierSelectFieldProps {
   isRequired?: boolean;
   protocol?: StorageProtocol;
   isDisabled?: boolean;
+  labelInfo?: ReactNode;
 }
 
 export const StorageTierSelectField = ({
@@ -31,6 +33,7 @@ export const StorageTierSelectField = ({
   isRequired = false,
   protocol,
   isDisabled = false,
+  labelInfo,
 }: StorageTierSelectFieldProps) => {
   const { t } = useTranslation();
 
@@ -49,11 +52,12 @@ export const StorageTierSelectField = ({
       isRequired={isRequired}
       isDisabled={isDisabled}
       labelInfo={
-        isDisabled ? (
+        labelInfo ??
+        (isDisabled ? (
           <Label color="grey" icon={<LockIcon aria-hidden />}>
             {t('Locked by catalog')}
           </Label>
-        ) : undefined
+        ) : undefined)
       }
       placeholder={t('Select a storage tier')}
       loadingPlaceholder={t('Loading...')}

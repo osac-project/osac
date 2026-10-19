@@ -5,6 +5,7 @@ package baremetalworker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"time"
@@ -14,6 +15,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -21,6 +23,11 @@ import (
 )
 
 const eventReasonWorkerCreated = "WorkerCreated"
+
+// eventReasonBMICreateRejected is both the rejection checkpoint's failure
+// reason and its warning-event reason, mirroring the registration-timeout
+// reason's dual use.
+const eventReasonBMICreateRejected = "BMICreateRejected"
 
 // reconcileWorkerLifecycle performs the existing-worker lifecycle work that
 // needs no creation inputs: retirement intent and failed incarnation cleanup. A
@@ -300,6 +307,15 @@ func (r *Reconciler) createSelectedWorker(
 			workerCreated(prev, ws.BareMetalInstance.Name, ws.BareMetalInstance.ID)
 		}
 	}
+	// A definitive rejection is not an invocation error: record it as the
+	// worker's failure checkpoint so teardown and the retry machinery converge
+	// from durable state instead of an unknown-outcome journal.
+	if err != nil && errors.Is(err, errBMICreateRejected) {
+		if recErr := r.recordBMICreateRejection(ctx, co, prev, err); recErr != nil {
+			return ctrl.Result{}, recErr
+		}
+		return workerBoundaryRequeue(), nil
+	}
 	if err != nil || !res.IsZero() {
 		return res, err
 	}
@@ -337,6 +353,55 @@ func (r *Reconciler) recordBMICreateAttempt(ctx context.Context, co *v1alpha1.Cl
 	// Use the patch response, not a new snapshot that could hide retirement.
 	*co = *next
 	*worker = *persisted
+	return nil
+}
+
+// recordBMICreateRejection persists a definitive Create rejection as the
+// selected worker's failure checkpoint: Phase=Failed with the journal re-armed
+// to Reserved — re-arming cleanupWorker's cancellable-reservation proof — and
+// NextRetryTime cleared, because handleFailedWorkers owns backoff re-arming.
+// Unlike the write-ahead attempt journal, this checkpoint follows an external
+// response: the authoritative order is re-read first and the patch fences on
+// worker-journal drift only, because the deletion race that produces definitive
+// rejections also invalidates the invocation's resourceVersion. The warning
+// event and failure metric are emitted only after the verified write.
+func (r *Reconciler) recordBMICreateRejection(
+	ctx context.Context, co *v1alpha1.ClusterOrder, worker *v1alpha1.WorkerStatus, createErr error,
+) error {
+	latest := &v1alpha1.ClusterOrder{}
+	if err := r.apiReader.Get(ctx, client.ObjectKeyFromObject(co), latest); err != nil {
+		return err
+	}
+	recorded := workerByName(latest.Status.Workers, worker.Name)
+	if latest.UID != co.UID || recorded == nil || !reflect.DeepEqual(*recorded, *worker) {
+		return errWorkerObservationChanged
+	}
+	base := latest.DeepCopy()
+	now := metav1.Now()
+	recorded.Phase = workerPhaseFailed
+	recorded.BMICreateState = v1alpha1.WorkerBMICreateStateReserved
+	recorded.NextRetryTime = nil
+	recorded.ReadySince = nil
+	recorded.LastFailureReason = eventReasonBMICreateRejected
+	recorded.LastFailureMessage = createErr.Error()
+	recorded.LastFailureTime = &now
+	if err := r.patchStatusFromBase(ctx, base, latest); err != nil {
+		return err
+	}
+	// Require the API response to retain the checkpoint: an older CRD may
+	// prune the fields. A successful HTTP status alone cannot authorize
+	// cleanup to treat the reservation as never-attempted.
+	persisted := workerByName(latest.Status.Workers, worker.Name)
+	if persisted == nil || persisted.Phase != workerPhaseFailed ||
+		persisted.BMICreateState != v1alpha1.WorkerBMICreateStateReserved ||
+		persisted.LastFailureReason != eventReasonBMICreateRejected {
+		return fmt.Errorf("BMI Create rejection was not persisted for worker %s", worker.Name)
+	}
+	*co = *latest
+	*worker = *persisted
+	observeProvisioningFailure(tenantOf(co), *persisted)
+	r.recorder.Eventf(co, nil, corev1.EventTypeWarning, eventReasonBMICreateRejected, "CreateWorker",
+		"worker %s: BMI create rejected: %s", worker.Name, createErr)
 	return nil
 }
 

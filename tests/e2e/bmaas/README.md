@@ -26,6 +26,40 @@ name to its SSH host, for example `{"virtual-bmh-1":"198.51.100.10"}`. Those
 CatalogItems must allow the supplied `instance_type` value (leave the field
 editable or unset; do not lock it).
 
+## Inventory backend selection
+
+`OSAC_INVENTORY_BACKEND` selects the inventory backend the sanity and serial
+suites run against: `metal3` (default) or `netbox`. The cluster's configured
+inventory `type` is not consulted for routing — selection is explicit so a
+single cluster can be tested against either backend. BMH-level assertions
+(provisioning state, image URL, consumerRef, power, inspected NICs) route to
+the backend's equivalent: NetBox device status and custom fields, with
+BMI-level facts (state, conditions, `status.hardware.nics`) coming from the
+API on both backends. The networking regression is metal3-specific and does
+not route.
+
+On `netbox`, NetBox connection settings come from the deployed
+bare-metal-fulfillment configuration — the BMF chart's Secrets in the OSAC
+namespace (`osac-inventory-config`, `osac-netbox-token`, the optional
+`osac-netbox-ca`, and `osac-management-config`). The following env vars are
+debug/external-NetBox overrides that win when set, plus the fixture inputs
+the backend needs:
+
+| Var | Purpose | Default |
+|---|---|---|
+| `OSAC_INVENTORY_BACKEND` | `metal3` or `netbox` — the only backend selector | `metal3` |
+| `OSAC_NETBOX_URL` / `OSAC_NETBOX_TOKEN` | NetBox URL and API token overrides | from BMF Secrets |
+| `OSAC_NETBOX_CA_FILE` / `OSAC_NETBOX_INSECURE` | CA PEM file / disable TLS verification | from the `osac-netbox-ca` Secret / deployed `allowInsecureHTTP` |
+| `OSAC_NETBOX_SITE` | Site slug for fixture devices (required on netbox) | — |
+| `OSAC_NETBOX_ROLE` | Device role slug for fixture devices | `server` |
+| `OSAC_NETBOX_FIXTURE_HOSTS` | JSON list of virtual host specs: `{"bmc_address": ..., "boot_mac": ..., "interface_macs"?: {...}, "custom_fields"?: {...}}` — one per lab host; `custom_fields` carries capability fields matching the instance type's host selector | — |
+
+Unlike metal3 (whose BMHs the infra backend provisions out-of-band), the
+netbox backend provisions its own inventory: the `inventory_hosts` session
+fixture creates `osac_managed` devices in the `staged` state from
+`OSAC_NETBOX_FIXTURE_HOSTS` (named after the test run id, so re-runs are
+idempotent) and deletes them on teardown.
+
 ## Running
 
 From the repository root, collect the affected suites before running them:

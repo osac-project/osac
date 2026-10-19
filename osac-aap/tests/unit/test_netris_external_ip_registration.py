@@ -123,19 +123,9 @@ def test_h01_explicit_v1_override_renders_exactly_one_netris_manager_with_v1(
             [f"networkManagers.fabricManagers.netris.{CONTRACT_VERSION_KEY}="],
             id="explicit-empty-contract-version",
         ),
-        pytest.param(
-            ["networkManagers.fabricManagers.netris.enabled=true"],
-            [],
-            id="direct-enabled-default-unversioned",
-        ),
-        pytest.param(
-            ["global.networking.fabricManager=netris"],
-            [],
-            id="global-selection-default-unversioned",
-        ),
     ],
 )
-def test_h02_empty_or_absent_contract_version_keeps_legacy_render(
+def test_h02_empty_contract_version_keeps_legacy_render(
     set_overrides: list[str],
     set_string_overrides: list[str],
 ) -> None:
@@ -148,8 +138,33 @@ def test_h02_empty_or_absent_contract_version_keeps_legacy_render(
         f"expected exactly one Netris fabric-manager ConfigMap, found {len(configmaps)}"
     )
     assert CONTRACT_VERSION_KEY not in configmaps[0]["data"], (
-        "an empty or absent contract version must omit "
+        "an empty contract version must omit "
         f"{CONTRACT_VERSION_KEY} (legacy/unversioned dispatch)"
+    )
+
+
+@pytest.mark.parametrize(
+    "set_overrides",
+    [
+        pytest.param(
+            ["networkManagers.fabricManagers.netris.enabled=true"],
+            id="direct-enabled-default-v1",
+        ),
+        pytest.param(
+            ["global.networking.fabricManager=netris"],
+            id="global-selection-default-v1",
+        ),
+    ],
+)
+def test_h02_default_contract_version_renders_v1(set_overrides: list[str]) -> None:
+    docs = _render(set_overrides=set_overrides, set_string_overrides=[])
+    configmaps = _netris_fabric_manager_configmaps(docs)
+    assert len(configmaps) == 1, (
+        f"expected exactly one Netris fabric-manager ConfigMap, found {len(configmaps)}"
+    )
+    assert configmaps[0]["data"][CONTRACT_VERSION_KEY] == "v1", (
+        "the registration default advertises the v1 contract once the "
+        "AAP role supports the v1 input and result contract"
     )
 
 

@@ -129,5 +129,15 @@ identity envelope with empty `data`.
 
 This implementation updates the allocation handoff in the accepted unified
 networking design. The contract amendment is to follow the deployed AgentlessNet
-ExternalIP E2E validation tracked with OSAC-6307. Unversioned Netris continues
-using its existing annotation handoff until its contract-adoption work is done.
+ExternalIP E2E validation tracked with OSAC-6307. Netris ExternalIP adoption
+follows the same contract: the OSAC-6376 Netris v1 implementation dispatches by
+the `osac.openshift.io/externalip-contract-version` annotation. v1 resources
+run the `osac.templates.netris_external_ip` module, which reserves a UID-owned
+canonical IPv4 /32 nat reservation by Kubernetes UID and returns the exact
+`osac_result` v1 artifact at `data.address`; release removes that reservation
+and reports success only after confirmed absence. Netris v1 jobs do not query
+Kubernetes or mutate ExternalIP annotations or status; the operator owns
+status, finalizers, and capacity. Unversioned Netris resources retain the
+legacy name-owned annotation handoff until its removal (OSAC-6384), and the
+operator chart defaults the netris manager registration to the v1 contract
+while the manager itself stays disabled until an operator enables it.

@@ -27,7 +27,6 @@ csi_driver_install_supported_vendors:
   - pure-flashblade
   - pure-flasharray
   # Legacy route aliases retained for already-provisioned resources.
-  - pure
   - ontap
   - trident
 
@@ -38,7 +37,6 @@ csi_driver_install_provider_vendor_names:
   netapp: trident
   pure-flashblade: pure
   pure-flasharray: pure
-  pure: pure
   ontap: trident
   trident: trident
 
@@ -54,7 +52,6 @@ csi_driver_install_vendor_node_socket_paths:
   pure-flashblade: /var/lib/kubelet/plugins/csi.pure.purestorage.com
   pure-flasharray: /var/lib/kubelet/plugins/csi.pure.purestorage.com
   # Legacy route aliases retained for already-provisioned resources.
-  pure: /var/lib/kubelet/plugins/csi.pure.purestorage.com
   ontap: /var/lib/kubelet/plugins/csi.trident.netapp.io
   trident: /var/lib/kubelet/plugins/csi.trident.netapp.io
 

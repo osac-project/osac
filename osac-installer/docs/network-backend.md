@@ -253,10 +253,12 @@ Prefer the facade above. When not using it, set variables on
 
 ### ConfigMap variables
 
+The installation-owned controller URL, certificate-validation mode, and CA
+path are not expert-overridable here. Configure them with
+`global.networking.netris`.
+
 | Variable | Description |
 |----------|-------------|
-| `NETRIS_CONTROLLER_URL` | Netris controller API URL |
-| `NETRIS_VALIDATE_CERTS` | Whether Netris TLS certificates are verified |
 | `NETRIS_USERNAME` | Netris API username |
 | `NETRIS_SITE_ID` | Netris site ID (integer) |
 | `NETRIS_TENANT_ID` | Netris tenant ID (integer) |
@@ -322,7 +324,6 @@ aap:
       config:
         NETWORK_CLASS: "netris"
         NETWORK_STEPS_COLLECTION: "netris.steps"
-        NETRIS_CONTROLLER_URL: "https://redhat-ctl.netris.io"
         NETRIS_USERNAME: "netris"
         NETRIS_SITE_ID: "5"
         NETRIS_TENANT_ID: "1"
@@ -335,7 +336,6 @@ aap:
     networkFulfillment:
       enabled: true
       config:
-        NETRIS_CONTROLLER_URL: "https://redhat-ctl.netris.io"
         NETRIS_USERNAME: "netris"
         NETRIS_SITE_ID: "5"
         NETRIS_TENANT_ID: "1"

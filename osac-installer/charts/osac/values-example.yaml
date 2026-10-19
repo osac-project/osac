@@ -359,8 +359,16 @@ aap:
         SERVER_SSH_BASTION_KEY: ""
     networkFulfillment:
       enabled: false
-      config: {}
-      secret: {}
+      # Expert overrides only. Normal installations should use
+      # global.networking.netris so shared values cannot drift.
+      config:
+        NETRIS_USERNAME: ""
+        NETRIS_SITE_ID: ""
+        NETRIS_TENANT_ID: ""
+        NETRIS_TENANT_NAME: ""
+      secret:
+        # Prefer global.networking.netris.credentials.externalSecret.
+        NETRIS_PASSWORD: ""
     publishTemplates:
       enabled: true
       config:

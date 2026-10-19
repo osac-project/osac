@@ -267,13 +267,17 @@ fi
 
 # Protected connection settings cannot be supplied through low-level AAP maps,
 # including when unrelated expert overrides are enabled.
-render_failure_with_message \
-  netris-protected-validate-certs-disabled \
-  'managed by global.networking.netris' \
+render_failure \
+  netris-protected-cluster-validate-certs-disabled \
   --set global.expertOverrides.aap=true \
   --set aap.instanceGroups.clusterFulfillment.enabled=true \
+  --set-string aap.instanceGroups.clusterFulfillment.config.NETRIS_VALIDATE_CERTS=false
+
+render_failure_with_message \
+  netris-protected-network-validate-certs-disabled \
+  'managed by global.networking.netris' \
+  --set global.expertOverrides.aap=true \
   --set aap.instanceGroups.networkFulfillment.enabled=true \
-  --set-string aap.instanceGroups.clusterFulfillment.config.NETRIS_VALIDATE_CERTS=false \
   --set-string aap.instanceGroups.networkFulfillment.config.NETRIS_VALIDATE_CERTS=false
 
 # A customer-created CA ConfigMap must reach the AAP config-as-code Secret.
@@ -545,6 +549,45 @@ render_operator_success \
   --set global.networking.k8sManager=
 
 HELM_BIN="${HELM_BIN}" python3 "${SCRIPT_DIR}/test-fabric-domain-values.py"
+
+# The schema drives the Enclave Wizard. Protected connection settings must not
+# be advertised as low-level AAP overrides, while supported expert identity and
+# password fields remain available.
+python3 - "${CHART_DIR}/values.schema.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+schema = json.loads(Path(sys.argv[1]).read_text())
+instance_groups = schema["properties"]["aap"]["properties"]["instanceGroups"]["properties"]
+shared_config = schema["$defs"]["aapNetrisConfig"]["properties"]
+cluster_config = instance_groups["clusterFulfillment"]["properties"]["config"]
+network_config = instance_groups["networkFulfillment"]["properties"]["config"]
+
+expected_ref = "#/$defs/aapNetrisConfig"
+for name, config in (("clusterFulfillment", cluster_config), ("networkFulfillment", network_config)):
+    refs = {entry.get("$ref") for entry in config.get("allOf", [])}
+    if expected_ref not in refs:
+        raise AssertionError(f"{name}.config does not reference {expected_ref}")
+
+protected = {"NETRIS_CONTROLLER_URL", "NETRIS_VALIDATE_CERTS", "NETRIS_CA_PATH"}
+advertised = set(shared_config)
+advertised.update(cluster_config.get("properties", {}))
+advertised.update(network_config.get("properties", {}))
+unexpected = sorted(protected & advertised)
+if unexpected:
+    raise AssertionError(f"protected AAP settings are advertised by the schema: {unexpected}")
+
+expert_identity = {"NETRIS_USERNAME", "NETRIS_SITE_ID", "NETRIS_TENANT_ID", "NETRIS_TENANT_NAME"}
+missing_identity = sorted(expert_identity - set(shared_config))
+if missing_identity:
+    raise AssertionError(f"supported AAP expert settings are missing from the schema: {missing_identity}")
+
+for name in ("clusterFulfillment", "networkFulfillment"):
+    secret_properties = instance_groups[name]["properties"]["secret"]["properties"]
+    if "NETRIS_PASSWORD" not in secret_properties:
+        raise AssertionError(f"{name}.secret does not define NETRIS_PASSWORD")
+PY
 
 # AgentlessNet uses the ExternalIP v1 reservation and result contract.
 render_operator_success \

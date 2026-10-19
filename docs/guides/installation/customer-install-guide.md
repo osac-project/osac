@@ -686,6 +686,19 @@ backend. For the full variable reference, see
    ```yaml
    global:
      services: { caas: { enabled: true }, vmaas: { enabled: false }, bmaas: { enabled: false }, maas: { enabled: false } }
+     networking:
+       fabricManager: netris
+       k8sManager: ""
+       netris:
+         controllerUrl: "https://netris.example.com"
+         credentials:
+           username: "netris"
+         siteId: "5"
+         tenantId: "1"
+         tenantName: "Admin"
+         mgmtVpcId: "4"
+         mgmtVpcName: "RH-Infra"
+         resourceClassMap: '{"fc430":{"server_cluster_template_id":89,"mgmt_interface":"ens4","vpc_interfaces":["ens13"]}}'
    clusterVersions:
      enabled: true
      versions:
@@ -699,17 +712,7 @@ backend. For the full variable reference, see
        clusterFulfillment:
          enabled: true
          config:
-           NETWORK_CLASS: "netris"
-           NETWORK_STEPS_COLLECTION: "netris.steps"
            DNS_CLASS: "dns.route53.dns"
-           NETRIS_CONTROLLER_URL: "https://netris.example.com"
-           NETRIS_USERNAME: "netris"
-           NETRIS_SITE_ID: "5"
-           NETRIS_TENANT_ID: "1"
-           NETRIS_TENANT_NAME: "Admin"
-           NETRIS_MGMT_VPC_ID: "4"
-           NETRIS_MGMT_VPC_NAME: "RH-Infra"
-           NETRIS_RESOURCE_CLASS_MAP: '{"fc430":{"server_cluster_template_id":89,"mgmt_interface":"ens4","vpc_interfaces":["ens13"]}}'
            SERVER_SSH_BASTION_HOST: "bastion.example.com"
            SERVER_SSH_BASTION_USER: "ubuntu"
            SERVER_SSH_USER: "core"
@@ -723,15 +726,9 @@ backend. For the full variable reference, see
            HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: "HighlyAvailable"
        networkFulfillment:
          enabled: true
-         config:
-           NETRIS_CONTROLLER_URL: "https://netris.example.com"
-           NETRIS_USERNAME: "netris"
-           NETRIS_SITE_ID: "5"
-           NETRIS_TENANT_ID: "1"
-           NETRIS_TENANT_NAME: "Admin"
    ```
 
-   In `NETRIS_RESOURCE_CLASS_MAP`, each key is a resource-class name;
+   In `global.networking.netris.resourceClassMap`, each key is a resource-class name;
    `server_cluster_template_id` is the Netris server-cluster template,
    `mgmt_interface` is the management NIC, and `vpc_interfaces` are the
    data-plane NICs.
@@ -740,37 +737,24 @@ backend. For the full variable reference, see
    excluded from version control:
 
    ```yaml
+   global:
+     networking:
+       netris:
+         credentials:
+           password: "<netris_password>"
    aap:
      instanceGroups:
        clusterFulfillment:
          secret:
-           NETRIS_PASSWORD: "<netris_password>"
            AWS_ACCESS_KEY_ID: "<route53_access_key_id>"
            AWS_SECRET_ACCESS_KEY: "<route53_secret_access_key>"
            SERVER_SSH_KEY: |
              <contents_of_your_openssh_private_key_file>
            SERVER_SSH_BASTION_KEY: |
              <contents_of_your_openssh_bastion_private_key_file>
-       networkFulfillment:
-         secret:
-           NETRIS_PASSWORD: "<netris_password>"
    ```
 
-3. Register the `netris` fabric manager and point the default `NetworkClass` at
-   it:
-
-   ```yaml
-   networkManagers:
-     - name: netris
-       role: fabric
-       description: "Netris SDN fabric manager"
-       capabilities: "ipv4"
-   networkClass:
-     fabricManager: "netris"
-     k8sManager: ""
-   ```
-
-4. Install OSAC (see [Section 4.3](#43-installing-osac)), passing every
+3. Install OSAC (see [Section 4.3](#43-installing-osac)), passing every
    values file, for example `helm ... -f my-values.yaml -f my-secrets.local.yaml
    ...`. For more information, see
    [`aap-configuration.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/aap-configuration.md)

@@ -143,6 +143,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		SetLogger(c.logger).
 		SetConnection(c.conn).
 		AddPackages(cfg.Packages()).
+		IncludeReadOnlyObjects(&publicv1.BillingAccount{}, &publicv1.TenantBillingAssignment{}).
 		SetTenantFunc(config.TenantFromContext).
 		SetProjectFunc(config.ProjectFromContext).
 		UseGetForStructuredOutput(&publicv1.Secret{}).
@@ -239,6 +240,13 @@ func (c *runnerContext) getByKeys(ctx context.Context, keys []string) ([]proto.M
 
 func (c *runnerContext) list(ctx context.Context, keys []string) (results []proto.Message, err error) {
 	var options reflection.ListOptions
+	// The provider account API currently supports listing without server-side filters.
+	if c.objectHelper.Descriptor().FullName() == (&publicv1.BillingAccount{}).ProtoReflect().Descriptor().FullName() {
+		if len(keys) > 0 || c.args.filter != "" {
+			return nil, fmt.Errorf("billing accounts support listing only; omit IDs and --filter")
+		}
+		options.AllPages = true
+	}
 
 	// If keys (identifiers or names) were provided, build a CEL filter to match them.
 	if len(keys) > 0 {
@@ -247,10 +255,11 @@ func (c *runnerContext) list(ctx context.Context, keys []string) (results []prot
 			values = append(values, strconv.Quote(key))
 		}
 		list := strings.Join(values, ", ")
-		options.Filter = fmt.Sprintf(
-			`this.id in [%[1]s] || this.metadata.name in [%[1]s]`,
-			list,
-		)
+		if c.objectHelper.Descriptor().Fields().ByName("metadata") == nil {
+			options.Filter = fmt.Sprintf(`this.id in [%s]`, list)
+		} else {
+			options.Filter = fmt.Sprintf(`this.id in [%[1]s] || this.metadata.name in [%[1]s]`, list)
+		}
 	}
 
 	// Apply the user-provided filter if specified.
@@ -351,7 +360,7 @@ func completeObjectTypes(cmd *cobra.Command, args []string, toComplete string) (
 	if cmd != nil {
 		ctx = cmd.Context()
 	}
-	return reflection.ObjectTypeNames(config.PackageNamesFromContext(ctx)...), cobra.ShellCompDirectiveNoFileComp
+	return reflection.ReadOnlyObjectTypeNames(config.PackageNamesFromContext(ctx)...), cobra.ShellCompDirectiveNoFileComp
 }
 
 const shortHelp = `Get objects`

@@ -27,6 +27,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/billing"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/password"
@@ -252,17 +253,25 @@ func (s *PrivateTenantsServer) Update(ctx context.Context,
 func (s *PrivateTenantsServer) Delete(ctx context.Context,
 	request *privatev1.TenantsDeleteRequest) (response *privatev1.TenantsDeleteResponse, err error) {
 	getResponse, getErr := s.dao.Get().SetId(request.GetId()).Do(ctx)
+	var tenantName string
 	// Delete the break-glass secret before generic.Delete so its project and
 	// tenant FKs cannot deadlock teardown (projects cannot be removed while
 	// the secret exists, and the tenant cannot be removed while projects exist).
 	if getErr == nil {
 		tenant := getResponse.GetObject()
+		tenantName = tenant.GetMetadata().GetName()
 		s.deleteBreakGlassSecret(ctx, tenant)
 		if err = s.persistBreakGlassCredentialsSecretRefClear(ctx, tenant); err != nil {
 			return
 		}
 	}
 	err = s.generic.Delete(ctx, request, &response)
+	if err != nil {
+		return
+	}
+	if tenantName != "" {
+		err = billing.NewAccountStore().CloseTenantAssignment(ctx, tenantName)
+	}
 	return
 }
 

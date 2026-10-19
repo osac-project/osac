@@ -577,8 +577,9 @@ The authorization policy distinguishes between the following subject categories:
    methods (`IdentityProviders/Create`, `Get`, `List`, `Update`, `Delete`).
 
 3. **Tenant IdP Manager Subjects**: Users with the `tenant-idp-manager` realm role.
-   They inherit all client permissions **plus** access to IdP management methods
-   (`IdentityProviders/Create`, `Get`, `List`, `Update`, `Delete`). They cannot manage users.
+   They inherit the non-billing client permissions **plus** access to IdP management methods
+   (`IdentityProviders/Create`, `Get`, `List`, `Update`, `Delete`). They cannot manage users or call
+   billing APIs.
 
 4. **Client Subjects**: All other authenticated users (JWT tokens from Keycloak that are not admin, tenant-admin, or tenant-idp-manager).
 
@@ -617,6 +618,21 @@ The authorization policy allows:
 
 4. **Admin Users**:
    - All methods (full access)
+
+### Billing Method Access
+
+| Methods | Who can call them |
+|---|---|
+| `BillingCosts/List`, `PricingQueries/Create`, `PriceEstimates/Create` | Client users and tenant admins. Results are limited by tenant and project visibility. |
+| `BillingAccounts/List`, `TenantBillingAssignments/*`, `CatalogPricingInputs/List`, `ProviderRateCardItems/List` | Platform admins only. |
+| `BillingProviderStatuses/Get` | Platform admins and Cloud Infrastructure Admins. |
+
+Tenant IdP managers do not inherit the billing permissions granted to client users. `BillingProviderStatuses/Get`
+reports billing-provider status; it does not show whether metering usage is reaching the provider. Check the
+metering delivery-lag and dead-letter-queue (DLQ) metrics for usage-pipeline health.
+
+The status `last_successful_check` is local to the serving Fulfillment replica. It records that process's most
+recent successful provider check, is empty after that replica restarts, and is not shared across replicas.
 
 ### Authorization Levels
 
@@ -889,8 +905,9 @@ The fulfillment service uses built-in gRPC interceptors for authentication and a
 
 ### Roles and Permissions
 
-The fulfillment service uses Keycloak realm roles for role-based authorization. The Rego policy
-reads roles from the `realm_access.roles` claim in JWT tokens.
+The fulfillment service uses JWT group membership and Keycloak realm roles for role-based
+authorization. The Rego policy reads groups from the `groups` claim and roles from
+`realm_access.roles`.
 
 1. **Admin Users**:
    - Emergency K8s service accounts (e.g., `system:serviceaccount:<namespace>:admin`)
@@ -898,19 +915,25 @@ reads roles from the `realm_access.roles` claim in JWT tokens.
    - Users in admin groups (e.g., the `admins` group)
    - Have full access to all operations
 
-2. **Tenant Admin Users**:
+2. **Cloud Infrastructure Admin Users**:
+   - Users in the `cloud-infrastructure-admins` group
+   - Can read `BillingProviderStatuses/Get` to check deployment-wide billing-provider status
+   - Must use metering delivery-lag and DLQ metrics to check usage-pipeline health
+   - Do not receive Cloud Provider Admin or ordinary client permissions from this group
+
+3. **Tenant Admin Users**:
    - Users with the `tenant-admin` realm role
    - Have all client permissions plus user management (`Users/Create`, `Get`, `List`, `Update`, `Delete`)
      and IdP management (`IdentityProviders/Create`, `Get`, `List`, `Update`, `Delete`)
    - Access is restricted by tenancy (can only manage users and IdP within their tenants)
 
-3. **Tenant IdP Manager Users**:
+4. **Tenant IdP Manager Users**:
    - Users with the `tenant-idp-manager` realm role
    - Have all client permissions plus IdP management (`IdentityProviders/Create`, `Get`, `List`, `Update`, `Delete`)
    - Cannot manage users (unlike tenant admins)
    - Access is restricted by tenancy (can only manage IdP within their tenants)
 
-4. **Client Users**:
+5. **Client Users**:
    - All other authenticated users
    - Have access to a specific list of operations (defined in the Rego policy)
    - Access is further restricted by tenancy (can only see resources from their tenants)
@@ -927,6 +950,10 @@ The pre-configured realm includes the roles needed by the authorization policy. 
 2. **Roles are included in tokens automatically**: The `roles` client scope (included in
    `osac-cli` default scopes) maps realm roles into the `realm_access.roles` claim in access
    tokens. No additional mapper configuration is needed.
+
+3. **Cloud Infrastructure Admin group**: Add users to the `cloud-infrastructure-admins` group.
+   The `groups` claim grants them access to `BillingProviderStatuses/Get` only. Membership in
+   the `admins` group grants full platform-admin access.
 
 ## Verification
 

@@ -56,6 +56,7 @@ type GenericServerBuilder[O dao.Object] struct {
 	allowedTenants    collections.Set[string]
 	metricsRegisterer prometheus.Registerer
 	filterDesc        protoreflect.MessageDescriptor
+	deleteEnabled     bool
 }
 
 // GenericServer is a gRPC server that knows how to implement the List, Get, Create, Update and Delete operators for
@@ -113,6 +114,7 @@ type metadataIface interface {
 func NewGenericServer[O dao.Object]() *GenericServerBuilder[O] {
 	return &GenericServerBuilder[O]{
 		allowedTenants: auth.DefaultAllowedTenants,
+		deleteEnabled:  true,
 	}
 }
 
@@ -132,6 +134,12 @@ func (b *GenericServerBuilder[O]) SetService(value string) *GenericServerBuilder
 // protobuf message type name. Use this when the table name does not match the type name.
 func (b *GenericServerBuilder[O]) SetTableName(value string) *GenericServerBuilder[O] {
 	b.table = value
+	return b
+}
+
+// SetDeleteEnabled configures whether the generic server should require and support a Delete RPC.
+func (b *GenericServerBuilder[O]) SetDeleteEnabled(value bool) *GenericServerBuilder[O] {
+	b.deleteEnabled = value
 	return b
 }
 
@@ -294,9 +302,11 @@ func (b *GenericServerBuilder[O]) Build() (result *GenericServer[O], err error) 
 	if err != nil {
 		return
 	}
-	s.deleteRequest, s.deleteResponse, err = b.findRequestAndResponse(service, deleteMethod)
-	if err != nil {
-		return
+	if b.deleteEnabled {
+		s.deleteRequest, s.deleteResponse, err = b.findRequestAndResponse(service, deleteMethod)
+		if err != nil {
+			return
+		}
 	}
 	s.updateRequest, s.updateResponse, err = b.findRequestAndResponse(service, updateMethod)
 	if err != nil {
@@ -865,6 +875,10 @@ func (s *GenericServer[O]) compilePath(path string) (result *masks.Path[O], err 
 }
 
 func (s *GenericServer[O]) Delete(ctx context.Context, request any, response any) error {
+	if s.deleteRequest == nil {
+		return grpcstatus.Error(grpccodes.Unimplemented, "delete is not supported")
+	}
+
 	// Extract object identifier from the request:
 	type requestIface interface {
 		GetId() string

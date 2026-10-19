@@ -1,0 +1,129 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "buf/validate/validate.proto";
+import "google/api/annotations.proto";
+import "osac/public/v1/baremetal_instance_type.proto";
+import "osac/public/v1/cluster_type.proto";
+import "osac/public/v1/compute_instance_type.proto";
+
+// BillingPricingConfiguration contains the billable resource configuration
+// selected by a user. Its resource spec must reference an OSAC catalog item.
+message BillingPricingConfiguration {
+  oneof resource {
+    option (buf.validate.oneof).required = true;
+
+    ComputeInstanceSpec compute_instance = 1;
+    ClusterSpec cluster = 2;
+    BareMetalInstanceSpec bare_metal_instance = 3;
+  }
+
+  // Project where the caller intends to provision the resource. Tenant callers
+  // must be authorized to access this project. When omitted, the tenant's
+  // default project is used.
+  string project = 4;
+}
+
+message PricingQueriesCreateRequest {
+  // Target tenant for an authorized Cloud Provider Admin preview. Tenant users
+  // are scoped to their authenticated tenant.
+  optional string tenant_id = 1 [(buf.validate.field).string.min_len = 1];
+  BillingPricingConfiguration configuration = 2 [(buf.validate.field).required = true];
+}
+
+enum PricingCoverageState {
+  PRICING_COVERAGE_STATE_UNSPECIFIED = 0;
+  PRICING_COVERAGE_STATE_COVERED = 1;
+  PRICING_COVERAGE_STATE_GAP = 2;
+  PRICING_COVERAGE_STATE_STALE = 3;
+  PRICING_COVERAGE_STATE_UNAVAILABLE = 4;
+}
+
+// PricingComponentResult reports whether a billable resource component has a
+// matching provider rate. Amount and unit are absent when coverage is missing.
+message PricingComponentResult {
+  string service = 1;
+  string description = 2;
+  PricingCoverageState coverage = 3 [(buf.validate.field).enum.defined_only = true];
+  optional string amount = 4;
+  optional string unit = 5;
+}
+
+message PricingQueriesCreateResponse {
+  string currency_code = 1 [(buf.validate.field).string = {len: 3}];
+  repeated PricingComponentResult components = 2;
+}
+
+service PricingQueries {
+  // Resolves current component rates and coverage for a selected resource configuration.
+  rpc Create(PricingQueriesCreateRequest) returns (PricingQueriesCreateResponse) {
+    option (google.api.http) = {
+      post: "/api/fulfillment/v1/billing/pricing_queries"
+      body: "*"
+    };
+  }
+}
+
+message PriceEstimatesCreateRequest {
+  // Target tenant for an authorized Cloud Provider Admin preview. Tenant users
+  // are scoped to their authenticated tenant.
+  optional string tenant_id = 1 [(buf.validate.field).string.min_len = 1];
+  BillingPricingConfiguration configuration = 2 [(buf.validate.field).required = true];
+}
+
+// PriceEstimateComponent preserves the provider rate and includes recurring
+// hourly/monthly equivalents for time-based rates. Monthly amounts use the
+// fixed 730-hour OSAC estimate convention.
+message PriceEstimateComponent {
+  string service = 1;
+  string description = 2;
+  string rate_amount = 3 [(buf.validate.field).string.min_len = 1];
+  string rate_unit = 4 [(buf.validate.field).string.min_len = 1];
+  optional string hourly_amount = 5;
+  optional string monthly_amount = 6;
+}
+
+enum PriceEstimateStatus {
+  PRICE_ESTIMATE_STATUS_UNSPECIFIED = 0;
+  PRICE_ESTIMATE_STATUS_CURRENT = 1;
+  PRICE_ESTIMATE_STATUS_STALE = 2;
+}
+
+message PriceEstimatesCreateResponse {
+  string currency_code = 1 [(buf.validate.field).string = {len: 3}];
+  repeated PriceEstimateComponent components = 2;
+  string hourly_amount = 3;
+  string monthly_amount = 4;
+  PriceEstimateStatus status = 5 [(buf.validate.field).enum.defined_only = true];
+}
+
+service PriceEstimates {
+  // Calculates a prospective recurring estimate for a selected resource
+  // configuration using current provider rates. Monthly amounts use OSAC's
+  // fixed 730-hour month. This is not an actual provider-rated charge or the
+  // Tenant User deployed-cost view. The method returns FailedPrecondition when
+  // any component has stale or missing rate coverage.
+  rpc Create(PriceEstimatesCreateRequest) returns (PriceEstimatesCreateResponse) {
+    option (google.api.http) = {
+      post: "/api/fulfillment/v1/billing/price_estimates"
+      body: "*"
+    };
+  }
+}

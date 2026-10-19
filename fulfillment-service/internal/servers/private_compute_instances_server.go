@@ -47,6 +47,7 @@ type PrivateComputeInstancesServerBuilder struct {
 	metricsRegisterer prometheus.Registerer
 	filterDesc        protoreflect.MessageDescriptor
 	secretStore       vault.SecretStore
+	pricingResolver   *CatalogPricingResolver
 }
 
 var _ privatev1.ComputeInstancesServer = (*PrivateComputeInstancesServer)(nil)
@@ -72,6 +73,7 @@ type PrivateComputeInstancesServer struct {
 	secretsDao              *dao.GenericDAO[*privatev1.Secret]
 	secretStore             vault.SecretStore
 	storageTiersDao         *dao.GenericDAO[*privatev1.StorageTier]
+	pricingResolver         *CatalogPricingResolver
 }
 
 func NewPrivateComputeInstancesServer() *PrivateComputeInstancesServerBuilder {
@@ -109,6 +111,11 @@ func (b *PrivateComputeInstancesServerBuilder) SetFilterDesc(value protoreflect.
 
 func (b *PrivateComputeInstancesServerBuilder) SetSecretStore(value vault.SecretStore) *PrivateComputeInstancesServerBuilder {
 	b.secretStore = value
+	return b
+}
+
+func (b *PrivateComputeInstancesServerBuilder) SetPricingResolver(value *CatalogPricingResolver) *PrivateComputeInstancesServerBuilder {
+	b.pricingResolver = value
 	return b
 }
 
@@ -267,6 +274,7 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 		externalIPAttachmentDao: externalIPAttachmentDao,
 		secretsDao:              secretsDao,
 		secretStore:             b.secretStore,
+		pricingResolver:         b.pricingResolver,
 	}
 	result.lifecycle = newExternalIPLifecycle(
 		externalIPDao,
@@ -379,10 +387,16 @@ func (s *PrivateComputeInstancesServer) Create(ctx context.Context, request *pri
 	var warnings []string
 	err = s.generic.CreateWithCandidatePreparation(ctx, request, &response, func(ctx context.Context, _ *privatev1.ComputeInstance, candidate *privatev1.ComputeInstance) error {
 		warnings, err = s.prepareCreate(ctx, candidate)
-		if err == nil && candidate.GetSpec().GetAutoExternalIpAttachment() {
+		if err != nil {
+			return err
+		}
+		if candidate.GetSpec().GetAutoExternalIpAttachment() {
 			ensureComputeInstanceFinalizer(candidate, finalizers.Controller)
 		}
-		return err
+		if s.pricingResolver == nil {
+			return nil
+		}
+		return coverageErrorForCreate(ctx, s.logger, s.pricingResolver.CheckCoverage(ctx, candidate.GetMetadata().GetTenant(), computeInstanceCoverageRequests(candidate)))
 	})
 	if err != nil {
 		return
@@ -614,9 +628,15 @@ func (s *PrivateComputeInstancesServer) Update(ctx context.Context,
 			// During deletion, keep the existing visibility check without requiring dependencies
 			// to remain present or ready. Otherwise resolve and validate the final network once.
 			if current.GetMetadata().HasDeletionTimestamp() {
-				return s.validateNetworkReferencesTenancy(ctx, candidate)
+				if err := s.validateNetworkReferencesTenancy(ctx, candidate); err != nil {
+					return err
+				}
+			} else if err := s.validateNetworkReferencesState(ctx, candidate); err != nil {
+				return err
 			}
-			return s.validateNetworkReferencesState(ctx, candidate)
+		}
+		if s.pricingResolver != nil && !resizeNoOp && updateIncludesField(request.GetUpdateMask(), "spec.instance_type") {
+			return coverageErrorForCreate(ctx, s.logger, s.pricingResolver.CheckCoverage(ctx, candidate.GetMetadata().GetTenant(), computeInstanceCoverageRequests(candidate)))
 		}
 		return nil
 	})

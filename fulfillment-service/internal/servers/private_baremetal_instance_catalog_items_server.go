@@ -30,6 +30,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 type PrivateBareMetalInstanceCatalogItemsServerBuilder struct {
@@ -52,6 +53,7 @@ type PrivateBareMetalInstanceCatalogItemsServer struct {
 	virtualNetworksDao        *dao.GenericDAO[*privatev1.VirtualNetwork]
 	networkClassesDao         *dao.GenericDAO[*privatev1.NetworkClass]
 	securityGroupsDao         *dao.GenericDAO[*privatev1.SecurityGroup]
+	outMapper                 *GenericMapper[*privatev1.BareMetalInstanceCatalogItem, *publicv1.BareMetalInstanceCatalogItem]
 }
 
 func NewPrivateBareMetalInstanceCatalogItemsServer() *PrivateBareMetalInstanceCatalogItemsServerBuilder {
@@ -96,6 +98,13 @@ func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) Build() (result *Pri
 	}
 	if b.attributionLogic == nil {
 		err = errors.New("attribution logic is mandatory")
+		return
+	}
+	outMapper, err := NewGenericMapper[*privatev1.BareMetalInstanceCatalogItem, *publicv1.BareMetalInstanceCatalogItem]().
+		SetLogger(b.logger).
+		SetStrict(false).
+		Build()
+	if err != nil {
 		return
 	}
 
@@ -181,6 +190,7 @@ func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) Build() (result *Pri
 		virtualNetworksDao:        virtualNetworksDao,
 		networkClassesDao:         networkClassesDao,
 		securityGroupsDao:         securityGroupsDao,
+		outMapper:                 outMapper,
 	}
 	return
 }
@@ -251,9 +261,13 @@ func (s *PrivateBareMetalInstanceCatalogItemsServer) prepareCatalogItemCandidate
 	if err != nil {
 		return nil, err
 	}
-	return validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(ctx, s.generic.logger, candidate, template,
+	warnings, err := validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(ctx, s.generic.logger, candidate, template,
 		s.bareMetalInstanceTypesDao, s.diskImagesDao, s.subnetsDao,
 		s.virtualNetworksDao, s.networkClassesDao, s.securityGroupsDao)
+	if err != nil {
+		return warnings, err
+	}
+	return warnings, nil
 }
 
 // validateAndCanonicalizeTemplate finds the Template named by this Catalog Item. A name lookup

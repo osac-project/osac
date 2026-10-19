@@ -101,6 +101,11 @@ func (r *Runner) processMessage(
 
 	r.dedup.add(eventID)
 	r.metrics.eventsSubmitted.WithLabelValues(provider, msg.Topic).Inc()
+	eventTime := ce.Time()
+	deliveredAt := time.Now()
+	if !eventTime.IsZero() && !deliveredAt.Before(eventTime) {
+		r.metrics.usageDeliveryLag.WithLabelValues(provider).Observe(deliveredAt.Sub(eventTime).Seconds())
+	}
 	r.trackOffset(msg)
 	return true
 }

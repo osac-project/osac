@@ -469,6 +469,19 @@ const (
 	privateSecretMessage = protoreflect.FullName("osac.private.v1.Secret")
 )
 
+// Redact these string-valued fields by name so new billing messages and nested
+// components receive the same protection without message-specific cases.
+var redactedBillingFieldNames = map[protoreflect.Name]struct{}{
+	"amount":                     {},
+	"tax_amount":                 {},
+	"balance":                    {},
+	"rate_amount":                {},
+	"hourly_amount":              {},
+	"monthly_amount":             {},
+	"rate_per_unit":              {},
+	"provider_account_reference": {},
+}
+
 // redactProtoMessage returns a copy of the message with Secret data replaced by the standard log redaction marker.
 // The copy ensures that logging never changes the message sent through gRPC.
 func redactProtoMessage(message proto.Message) proto.Message {
@@ -481,6 +494,10 @@ func redactProtoMessageFields(message protoreflect.Message) {
 	fields := message.Descriptor().Fields()
 	for index := 0; index < fields.Len(); index++ {
 		field := fields.Get(index)
+		if _, redact := redactedBillingFieldNames[field.Name()]; redact && field.Kind() == protoreflect.StringKind && message.Has(field) {
+			message.Set(field, protoreflect.ValueOfString(redactMark))
+			continue
+		}
 		if field.IsMap() {
 			if field.Name() == "data" && isSecret(field.ContainingMessage()) {
 				values := message.Mutable(field).Map()

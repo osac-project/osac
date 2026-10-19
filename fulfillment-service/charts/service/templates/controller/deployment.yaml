@@ -27,6 +27,11 @@ specific language governing permissions and limitations under the License.
 {{- $vaultIssuerURL := tpl (required "vault.keycloakIssuerUrl is required" .Values.vault.keycloakIssuerUrl) . }}
 {{- $vaultClientID := required "vault.keycloakClientId is required" .Values.vault.keycloakClientId }}
 {{- $vaultLifecycleRole := required "vault.lifecycleRole is required" .Values.vault.lifecycleRole }}
+{{- $billing := include "fulfillment-service.billingConfig" . | fromYaml }}
+{{- $billingProvider := $billing.provider | default "" }}
+{{- if and $billingProvider (ne $billingProvider "m360") }}
+{{- fail "billing.provider must be empty or m360" }}
+{{- end }}
 
 apiVersion: apps/v1
 kind: Deployment
@@ -121,6 +126,14 @@ spec:
               {{- end }}
           {{- end }}
           {{- end }}
+      {{- if eq $billingProvider "m360" }}
+      - name: billing-m360-api-key
+        secret:
+          secretName: {{ required "billing.m360.apiKeySecret.name is required when billing.provider=m360" $billing.m360.apiKeySecret.name }}
+          items:
+          - key: {{ required "billing.m360.apiKeySecret.key is required when billing.provider=m360" $billing.m360.apiKeySecret.key }}
+            path: api-key
+      {{- end }}
       {{- if and .Values.vault.endpoint .Values.vault.caBundle.configMap }}
       - name: vault-cas
         configMap:
@@ -149,6 +162,11 @@ spec:
         - name: vault-credentials
           mountPath: /etc/fulfillment-controller/vault
           readOnly: true
+        {{- if eq $billingProvider "m360" }}
+        - name: billing-m360-api-key
+          mountPath: /etc/fulfillment-controller/billing
+          readOnly: true
+        {{- end }}
         command:
         {{ if .Values.debug }}
         - dlv
@@ -169,6 +187,12 @@ spec:
         - --log-level={{ .Values.log.level }}
         - --log-headers={{ .Values.log.headers }}
         - --log-bodies={{ .Values.log.bodies }}
+        {{- if eq $billingProvider "m360" }}
+        - --billing-provider=m360
+        - --billing-m360-api-url={{ required "billing.m360.apiUrl is required when billing.provider=m360" $billing.m360.apiUrl }}
+        - --billing-m360-api-version={{ required "billing.m360.apiVersion is required when billing.provider=m360" $billing.m360.apiVersion }}
+        - --billing-m360-api-key-file=/etc/fulfillment-controller/billing/api-key
+        {{- end }}
         - --ca-file=/etc/fulfillment-controller/tls/cas
         - --auth-issuer-url={{ $authIssuerUrl }}
         - --auth-client-id-file=/etc/fulfillment-controller/credentials/client-id

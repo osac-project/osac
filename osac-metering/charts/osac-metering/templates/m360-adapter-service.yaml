@@ -1,4 +1,4 @@
-{{- if .Values.m360Adapter.enabled }}
+{{- if include "osac-metering.m360AdapterEnabled" . }}
 apiVersion: v1
 kind: Service
 metadata:

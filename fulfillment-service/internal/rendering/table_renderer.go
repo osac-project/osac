@@ -184,9 +184,9 @@ func (r *TableRenderer) Render(ctx context.Context, objects any) error {
 			slog.String("type", string(helper.FullName())),
 			slog.Any("error", err),
 		)
-		table = r.defaultTable()
+		table = r.defaultTable(helper)
 	} else if table == nil {
-		table = r.defaultTable()
+		table = r.defaultTable(helper)
 	}
 
 	// When no tenant is selected, inject a TENANT column for tenant-scoped types so users can
@@ -206,11 +206,13 @@ func (r *TableRenderer) Render(ctx context.Context, objects any) error {
 
 	// Always show a DELETING column so users can see objects being torn down.
 	// TODO: remove this column once all resource types have DELETING in their state enum.
-	deletingCol := &columnLayout{
-		Header: "DELETING",
-		Value:  "has(this.metadata.deletion_timestamp)? 'Yes': '-'",
+	if helper.Descriptor().Fields().ByName("metadata") != nil {
+		deletingCol := &columnLayout{
+			Header: "DELETING",
+			Value:  "has(this.metadata.deletion_timestamp)? 'Yes': '-'",
+		}
+		table.Columns = slices.Insert(table.Columns, 1, deletingCol)
 	}
-	table.Columns = slices.Insert(table.Columns, 1, deletingCol)
 
 	// Get the descriptor for the object type:
 	thisDesc := helper.Descriptor()
@@ -294,20 +296,13 @@ func (r *TableRenderer) loadTable(helper reflection.ObjectHelper) (result *table
 	return
 }
 
-// defaultTable returns a default table definition with ID and NAME columns.
-func (r *TableRenderer) defaultTable() *tableLayout {
-	return &tableLayout{
-		Columns: []*columnLayout{
-			{
-				Header: "ID",
-				Value:  "this.id",
-			},
-			{
-				Header: "NAME",
-				Value:  "has(this.metadata.name)? this.metadata.name: '-'",
-			},
-		},
+// defaultTable returns an ID column and a NAME column when metadata is present.
+func (r *TableRenderer) defaultTable(helper reflection.ObjectHelper) *tableLayout {
+	columns := []*columnLayout{{Header: "ID", Value: "this.id"}}
+	if helper.Descriptor().Fields().ByName("metadata") != nil {
+		columns = append(columns, &columnLayout{Header: "NAME", Value: "has(this.metadata.name)? this.metadata.name: '-'"})
 	}
+	return &tableLayout{Columns: columns}
 }
 
 // renderHeader renders the table header with column names.

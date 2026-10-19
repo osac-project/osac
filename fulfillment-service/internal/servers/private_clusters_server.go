@@ -47,6 +47,7 @@ type PrivateClustersServerBuilder struct {
 	metricsRegisterer            prometheus.Registerer
 	filterDesc                   protoreflect.MessageDescriptor
 	addOnOperatorResolverFactory addOnOperatorResolverFactory
+	pricingResolver              *CatalogPricingResolver
 }
 
 var _ privatev1.ClustersServer = (*PrivateClustersServer)(nil)
@@ -69,6 +70,7 @@ type PrivateClustersServer struct {
 	generic                   *GenericServer[*privatev1.Cluster]
 	lifecycle                 *externalIPLifecycle
 	bareMetalInstanceTypesDao *dao.GenericDAO[*privatev1.BareMetalInstanceType]
+	pricingResolver           *CatalogPricingResolver
 }
 
 func NewPrivateClustersServer() *PrivateClustersServerBuilder {
@@ -107,6 +109,11 @@ func (b *PrivateClustersServerBuilder) SetFilterDesc(value protoreflect.MessageD
 // SetAddOnOperatorResolverFactory sets the resolver policy used with the server-owned DAO.
 func (b *PrivateClustersServerBuilder) SetAddOnOperatorResolverFactory(value addOnOperatorResolverFactory) *PrivateClustersServerBuilder {
 	b.addOnOperatorResolverFactory = value
+	return b
+}
+
+func (b *PrivateClustersServerBuilder) SetPricingResolver(value *CatalogPricingResolver) *PrivateClustersServerBuilder {
+	b.pricingResolver = value
 	return b
 }
 
@@ -275,6 +282,7 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		secretsDao:                secretsDao,
 		addOnOperators:            addOnOperators,
 		generic:                   generic,
+		pricingResolver:           b.pricingResolver,
 	}
 	result.lifecycle = newExternalIPLifecycle(
 		externalIPDao,
@@ -303,7 +311,13 @@ func (s *PrivateClustersServer) Get(ctx context.Context,
 
 func (s *PrivateClustersServer) Create(ctx context.Context, request *privatev1.ClustersCreateRequest) (response *privatev1.ClustersCreateResponse, err error) {
 	err = s.generic.CreateWithCandidatePreparation(ctx, request, &response, func(ctx context.Context, _ *privatev1.Cluster, candidate *privatev1.Cluster) error {
-		return s.prepareCreate(ctx, candidate)
+		if err := s.prepareCreate(ctx, candidate); err != nil {
+			return err
+		}
+		if s.pricingResolver == nil {
+			return nil
+		}
+		return coverageErrorForCreate(ctx, s.logger, s.pricingResolver.CheckCoverage(ctx, candidate.GetMetadata().GetTenant(), clusterCoverageRequests(candidate)))
 	})
 	if err != nil {
 		return
@@ -487,6 +501,9 @@ func (s *PrivateClustersServer) Update(ctx context.Context,
 				return err
 			}
 		}
+		if s.pricingResolver != nil && s.updateAffectsNodeSets(mask) && clusterNodeSetBillingChanged(current, candidate) {
+			return coverageErrorForCreate(ctx, s.logger, s.pricingResolver.CheckCoverage(ctx, candidate.GetMetadata().GetTenant(), clusterCoverageRequests(candidate)))
+		}
 		return nil
 	})
 	return
@@ -501,6 +518,32 @@ func populateUnsetNodeSetVersions(nodeSets map[string]*privatev1.ClusterNodeSet,
 			nodeSet.SetVersion(cloneMessage(version))
 		}
 	}
+}
+
+// clusterNodeSetBillingChanged compares only the values used to price node sets.
+// Node-set names and other settings do not change the billable configuration.
+func clusterNodeSetBillingChanged(current, candidate *privatev1.Cluster) bool {
+	type billedNodeSet struct {
+		instanceType string
+		size         int32
+	}
+	counts := make(map[billedNodeSet]int)
+	for _, nodeSet := range current.GetSpec().GetNodeSets() {
+		counts[billedNodeSet{refKey(nodeSet.GetBaremetalInstanceType()), nodeSet.GetSize()}]++
+	}
+	for _, nodeSet := range candidate.GetSpec().GetNodeSets() {
+		key := billedNodeSet{refKey(nodeSet.GetBaremetalInstanceType()), nodeSet.GetSize()}
+		counts[key]--
+		if counts[key] < 0 {
+			return true
+		}
+	}
+	for _, count := range counts {
+		if count != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // prepareUpdatedClusterNodeSets retains resolved metadata for unchanged NodeSets and

@@ -1,0 +1,15 @@
+# Copyright (c) 2026 Red Hat, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+columns:
+- header: ID
+  value: this.id
+- header: NAME
+  value: this.display_name
+- header: PROVIDER
+  value: this.provider_key
+- header: CURRENCY
+  value: this.base_currency
+- header: STATE
+  value: this.state
+  type: osac.public.v1.BillingAccountState

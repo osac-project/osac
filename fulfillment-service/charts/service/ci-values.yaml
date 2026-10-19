@@ -32,6 +32,16 @@ mcp:
   exchangeClientId: https://mcp.default.localhost/
   exchangeCredentialsSecret: ci-mcp-exchange-credentials
 
+# Exercises the optional provider configuration and Secret volume mounts.
+billing:
+  provider: m360
+  m360:
+    apiUrl: https://m360.ci.example.com
+    apiVersion: v1
+    apiKeySecret:
+      name: ci-m360-credentials
+      key: api-key
+
 auth:
   issuerUrl: https://issuer.ci.example.com
   controllerCredentials:

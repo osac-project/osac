@@ -29,6 +29,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/billing"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/references"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
@@ -2292,6 +2293,63 @@ var _ = Describe("Private clusters server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			updatedObject := updateResponse.GetObject()
 			Expect(updatedObject.GetSpec().GetNodeSets()["compute"].GetSize()).To(Equal(newSize))
+		})
+
+		It("Checks changed node-set sizes against billing coverage and permits provider outages", func() {
+			created, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+				Object: privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{Name: "billing-node-set"}.Build(),
+					Spec: privatev1.ClusterSpec_builder{
+						Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := created.GetObject().GetId()
+			initialSize := created.GetObject().GetSpec().GetNodeSets()["compute"].GetSize()
+			items := make([]billing.RateCardItem, 0)
+			for _, request := range clusterCoverageRequests(created.GetObject()) {
+				conditions := make([]billing.RateCondition, 0, len(request.Dimensions))
+				for dimension, value := range request.Dimensions {
+					conditions = append(conditions, billing.RateCondition{
+						Dimension: dimension, Operator: billing.RateMatchEquals, Value: value,
+					})
+				}
+				items = append(items, billing.RateCardItem{
+					Service: request.Service, CurrencyCode: "USD", Amount: "1", Unit: billing.RateUnitHour, Conditions: conditions,
+				})
+			}
+			provider := &catalogPricingRateCardProviderStub{items: items}
+			server.pricingResolver = NewCatalogPricingResolver("m360", provider, &catalogPricingAccountStoreStub{account: billing.AssignedAccount{
+				ProviderKey: "m360", ProviderAccountReference: "account", CurrencyCode: "USD", ConnectionState: "CONNECTED",
+			}})
+			update := func(size int32) (*privatev1.ClustersUpdateResponse, error) {
+				return server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Id: id,
+						Spec: privatev1.ClusterSpec_builder{
+							NodeSets: map[string]*privatev1.ClusterNodeSet{
+								"compute": privatev1.ClusterNodeSet_builder{Size: proto.Int32(size)}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.node_sets.compute.size"}},
+				}.Build())
+			}
+
+			_, err = update(initialSize)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(provider.calls).To(BeZero())
+
+			_, err = update(initialSize + 1)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("BILLING_COVERAGE_GAP"))
+			Expect(provider.calls).To(Equal(1))
+
+			provider.err = billing.ErrProviderUnavailable
+			response, err := update(initialSize + 1)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetSpec().GetNodeSets()["compute"].GetSize()).To(Equal(initialSize + 1))
 		})
 
 		Describe("Cluster state validation for spec updates", func() {

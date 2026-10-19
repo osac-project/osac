@@ -98,6 +98,7 @@ type HelperBuilder struct {
 	tenantFunc                  any
 	projectFunc                 any
 	getForStructuredOutputTypes map[protoreflect.Name]bool
+	readOnlyTypes               map[protoreflect.FullName]bool
 }
 
 // helper is the default implementation of the Helper interface.
@@ -110,6 +111,7 @@ type helper struct {
 	tenantFunc                  func(context.Context) (string, error)
 	projectFunc                 func(context.Context) (string, error)
 	getForStructuredOutputTypes map[protoreflect.Name]bool
+	readOnlyTypes               map[protoreflect.FullName]bool
 }
 
 // NewHelper creates a builder that can then be used to configure a reflection helper.
@@ -195,6 +197,18 @@ func (b *HelperBuilder) UseGetForStructuredOutput(msgs ...proto.Message) *Helper
 	return b
 }
 
+// IncludeReadOnlyObjects also discovers the specified types when their services
+// expose List but no mutation RPCs. Use only for read commands.
+func (b *HelperBuilder) IncludeReadOnlyObjects(msgs ...proto.Message) *HelperBuilder {
+	if b.readOnlyTypes == nil {
+		b.readOnlyTypes = make(map[protoreflect.FullName]bool)
+	}
+	for _, msg := range msgs {
+		b.readOnlyTypes[msg.ProtoReflect().Descriptor().FullName()] = true
+	}
+	return b
+}
+
 // Build uses the data stored in the builder to create a new reflection helper.
 func (b *HelperBuilder) Build() (result Helper, err error) {
 	// Check the parameters:
@@ -245,6 +259,7 @@ func (b *HelperBuilder) Build() (result Helper, err error) {
 		tenantFunc:                  tenantFunc,
 		projectFunc:                 projectFunc,
 		getForStructuredOutputTypes: b.getForStructuredOutputTypes,
+		readOnlyTypes:               b.readOnlyTypes,
 	}
 	return
 }
@@ -307,15 +322,24 @@ func (h *helper) scanService(serviceDesc protoreflect.ServiceDescriptor) {
 	}
 	getDesc := methodDescs.ByName(getMethodName)
 	if getDesc == nil {
+		if len(h.readOnlyTypes) > 0 {
+			h.scanReadOnlyService(serviceDesc)
+		}
 		return
 	}
 	createDesc := methodDescs.ByName(createMethodName)
 	if createDesc == nil {
+		if len(h.readOnlyTypes) > 0 {
+			h.scanReadOnlyService(serviceDesc)
+		}
 		return
 	}
 	updateDesc := methodDescs.ByName(updateMethodName)
 	deleteDesc := methodDescs.ByName(deleteMethodName)
 	if deleteDesc == nil {
+		if len(h.readOnlyTypes) > 0 {
+			h.scanReadOnlyService(serviceDesc)
+		}
 		return
 	}
 
@@ -490,6 +514,60 @@ func (h *helper) scanService(serviceDesc protoreflect.ServiceDescriptor) {
 	h.helpers = append(h.helpers, helper)
 }
 
+// scanReadOnlyService recognizes a List response of ID-bearing objects. Get is
+// optional because some provider-backed resources expose only a list operation.
+func (h *helper) scanReadOnlyService(serviceDesc protoreflect.ServiceDescriptor) {
+	methods := serviceDesc.Methods()
+	listDesc := methods.ByName(listMethodName)
+	if listDesc == nil {
+		return
+	}
+	filter := h.getFilterField(listDesc.Input())
+	items := h.getItemsField(listDesc.Output())
+	if filter == nil || items == nil {
+		return
+	}
+	objectDesc := items.Message()
+	if !h.readOnlyTypes[objectDesc.FullName()] {
+		return
+	}
+	id := h.getIdField(objectDesc)
+	if id == nil {
+		return
+	}
+	metadata := objectDesc.Fields().ByName(metadataFieldName)
+	if metadata != nil && metadata.Kind() != protoreflect.MessageKind {
+		return
+	}
+	var get getInfo
+	if getDesc := methods.ByName(getMethodName); getDesc != nil {
+		getID := h.getIdField(getDesc.Input())
+		getObject := h.getObjectField(getDesc.Output())
+		if getID == nil || getObject == nil || getObject.Message() != objectDesc {
+			return
+		}
+		request, response := h.makeMethodTemplates(getDesc)
+		get = getInfo{
+			methodInfo: methodInfo{path: h.makeMethodPath(getDesc), request: request, response: response},
+			id:         getID, object: getObject,
+		}
+	}
+	request, response := h.makeMethodTemplates(listDesc)
+	name := string(objectDesc.Name())
+	h.helpers = append(h.helpers, objectHelper{
+		parent: h, descriptor: objectDesc, template: h.makeTemplate(objectDesc),
+		singular: strings.ToLower(name), plural: strings.ToLower(flect.Pluralize(name)),
+		idField: id, metadataField: metadata,
+		tenantScoped: metadata != nil && !platformScopedTypes[objectDesc.Name()],
+		list: listInfo{
+			methodInfo: methodInfo{path: h.makeMethodPath(listDesc), request: request, response: response},
+			filter:     filter, limit: h.getLimitField(listDesc.Input()), offset: h.getOffsetField(listDesc.Input()), items: items,
+			total: h.getTotalField(listDesc.Output()),
+		},
+		get: get,
+	})
+}
+
 func (h *helper) getIdField(messageDesc protoreflect.MessageDescriptor) protoreflect.FieldDescriptor {
 	fieldDesc := messageDesc.Fields().ByName(idFieldName)
 	if fieldDesc == nil {
@@ -541,6 +619,14 @@ func (h *helper) getLimitField(messageDesc protoreflect.MessageDescriptor) proto
 		return nil
 	}
 	if fieldDesc.Kind() != protoreflect.Int32Kind {
+		return nil
+	}
+	return fieldDesc
+}
+
+func (h *helper) getOffsetField(messageDesc protoreflect.MessageDescriptor) protoreflect.FieldDescriptor {
+	fieldDesc := messageDesc.Fields().ByName("offset")
+	if fieldDesc == nil || fieldDesc.Cardinality() == protoreflect.Repeated || fieldDesc.Kind() != protoreflect.Int32Kind {
 		return nil
 	}
 	return fieldDesc
@@ -675,6 +761,7 @@ type listInfo struct {
 	methodInfo
 	filter protoreflect.FieldDescriptor
 	limit  protoreflect.FieldDescriptor
+	offset protoreflect.FieldDescriptor
 	items  protoreflect.FieldDescriptor
 	total  protoreflect.FieldDescriptor
 }
@@ -721,8 +808,9 @@ func (h *objectHelper) Plural() string {
 }
 
 type ListOptions struct {
-	Filter string
-	Limit  int32
+	Filter   string
+	Limit    int32
+	AllPages bool
 }
 
 type ListResult struct {
@@ -772,32 +860,46 @@ func (h *objectHelper) List(ctx context.Context, options ListOptions) (result Li
 		}
 	}
 
-	request := proto.Clone(h.list.request)
-	if filter != "" {
-		request.ProtoReflect().Set(h.list.filter, protoreflect.ValueOfString(filter))
+	if options.AllPages && (h.list.offset == nil || h.list.total == nil) {
+		return result, fmt.Errorf("object type %q does not support paginated listing", h.FullName())
 	}
-	if options.Limit > 0 && h.list.limit != nil {
-		request.ProtoReflect().Set(h.list.limit, protoreflect.ValueOfInt32(options.Limit))
+	for {
+		request := proto.Clone(h.list.request)
+		if filter != "" {
+			request.ProtoReflect().Set(h.list.filter, protoreflect.ValueOfString(filter))
+		}
+		if options.Limit > 0 && h.list.limit != nil {
+			request.ProtoReflect().Set(h.list.limit, protoreflect.ValueOfInt32(options.Limit))
+		}
+		if options.AllPages {
+			request.ProtoReflect().Set(h.list.offset, protoreflect.ValueOfInt32(int32(len(result.Items)))) // #nosec G115 -- bounded by response total
+		}
+		response := proto.Clone(h.list.response)
+		if err = h.parent.connection.Invoke(ctx, h.list.path, request, response); err != nil {
+			return result, err
+		}
+		list := response.ProtoReflect().Get(h.list.items).List()
+		for i := range list.Len() {
+			result.Items = append(result.Items, list.Get(i).Message().Interface())
+		}
+		if h.list.total != nil {
+			result.Total = int32(response.ProtoReflect().Get(h.list.total).Int()) // #nosec G115 -- proto int32 field
+		} else {
+			result.Total = int32(len(result.Items)) // #nosec G115 -- bounded by MaxLimit
+		}
+		if !options.AllPages || int64(len(result.Items)) >= int64(result.Total) {
+			return result, nil
+		}
+		if list.Len() == 0 {
+			return result, fmt.Errorf("paginated listing of %q stopped before all %d items were returned", h.FullName(), result.Total)
+		}
 	}
-	response := proto.Clone(h.list.response)
-	err = h.parent.connection.Invoke(ctx, h.list.path, request, response)
-	if err != nil {
-		return
-	}
-	list := response.ProtoReflect().Get(h.list.items).List()
-	result.Items = make([]proto.Message, list.Len())
-	for i := range list.Len() {
-		result.Items[i] = list.Get(i).Message().Interface()
-	}
-	if h.list.total != nil {
-		result.Total = int32(response.ProtoReflect().Get(h.list.total).Int()) // #nosec G115 -- proto int32 field
-	} else {
-		result.Total = int32(len(result.Items)) // #nosec G115 -- bounded by MaxLimit
-	}
-	return
 }
 
 func (h *objectHelper) Get(ctx context.Context, id string) (result proto.Message, err error) {
+	if h.get.path == "" {
+		return nil, grpcstatus.Errorf(codes.FailedPrecondition, "object type %q does not support Get", h.FullName())
+	}
 	request := proto.Clone(h.get.request)
 	h.setId(request, h.get.id, id)
 	response := proto.Clone(h.get.response)
@@ -814,10 +916,16 @@ func (h *objectHelper) GetId(object proto.Message) string {
 }
 
 func (h *objectHelper) GetName(object proto.Message) string {
+	if h.metadataField == nil {
+		return ""
+	}
 	return h.GetMetadata(object).GetName()
 }
 
 func (h *objectHelper) GetMetadata(object proto.Message) Metadata {
+	if h.metadataField == nil {
+		return nil
+	}
 	return object.ProtoReflect().Get(h.metadataField).Message().Interface().(Metadata)
 }
 

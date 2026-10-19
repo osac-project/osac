@@ -20,22 +20,34 @@ import (
 	"github.com/gobuffalo/flect"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
+
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
+
+var getReadOnlyTypes = map[protoreflect.FullName]bool{
+	(&publicv1.BillingAccount{}).ProtoReflect().Descriptor().FullName():          true,
+	(&publicv1.TenantBillingAssignment{}).ProtoReflect().Descriptor().FullName(): true,
+}
 
 // ObjectTypeNames scans the proto registry for object types in the given packages and returns the
 // singular and plural names that can be used as shell completion candidates. This function does not
 // require a gRPC connection — it reads only from the compiled-in proto registry.
 func ObjectTypeNames(packages ...string) []string {
-	return objectTypeNames(packages, false)
+	return objectTypeNames(packages, false, false)
+}
+
+// ReadOnlyObjectTypeNames includes list-only resources for the get command.
+func ReadOnlyObjectTypeNames(packages ...string) []string {
+	return objectTypeNames(packages, false, true)
 }
 
 // UpdatableObjectTypeNames scans the proto registry for object types in the given packages and returns
 // only the types that expose the standard Update method. It is used by commands that mutate objects.
 func UpdatableObjectTypeNames(packages ...string) []string {
-	return objectTypeNames(packages, true)
+	return objectTypeNames(packages, true, false)
 }
 
-func objectTypeNames(packages []string, requireUpdate bool) []string {
+func objectTypeNames(packages []string, requireUpdate, includeReadOnly bool) []string {
 	pkgSet := make(map[protoreflect.FullName]bool, len(packages))
 	for _, pkg := range packages {
 		pkgSet[protoreflect.FullName(pkg)] = true
@@ -48,7 +60,11 @@ func objectTypeNames(packages []string, requireUpdate bool) []string {
 		}
 		serviceDescs := fileDesc.Services()
 		for i := range serviceDescs.Len() {
-			scanServiceForNames(serviceDescs.Get(i), seen, requireUpdate)
+			service := serviceDescs.Get(i)
+			scanServiceForNames(service, seen, requireUpdate)
+			if includeReadOnly {
+				scanReadOnlyServiceForNames(service, seen)
+			}
 		}
 		return true
 	})
@@ -59,6 +75,28 @@ func objectTypeNames(packages []string, requireUpdate bool) []string {
 	}
 	sort.Strings(results)
 	return results
+}
+
+func scanReadOnlyServiceForNames(service protoreflect.ServiceDescriptor, seen map[string]bool) {
+	list := service.Methods().ByName(listMethodName)
+	if list == nil || list.Input().Fields().ByName(filterFieldName) == nil {
+		return
+	}
+	items := list.Output().Fields().ByName(itemsFieldName)
+	if items == nil || items.Cardinality() != protoreflect.Repeated || items.Kind() != protoreflect.MessageKind {
+		return
+	}
+	object := items.Message()
+	if !getReadOnlyTypes[object.FullName()] {
+		return
+	}
+	id := object.Fields().ByName(idFieldName)
+	if id == nil || id.Kind() != protoreflect.StringKind {
+		return
+	}
+	name := string(object.Name())
+	seen[strings.ToLower(name)] = true
+	seen[strings.ToLower(flect.Pluralize(name))] = true
 }
 
 // scanServiceForNames checks whether a service has the standard CRUD methods and, if so, adds

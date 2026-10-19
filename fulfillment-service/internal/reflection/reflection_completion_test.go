@@ -21,6 +21,14 @@ import (
 )
 
 var _ = Describe("ObjectTypeNames", func() {
+	It("discovers list-only billing types only for read commands", func() {
+		readNames := ReadOnlyObjectTypeNames(packages.Public...)
+		Expect(readNames).To(ContainElements("billingaccount", "billingaccounts", "tenantbillingassignment", "tenantbillingassignments"))
+		writeNames := ObjectTypeNames(packages.Public...)
+		for _, name := range []string{"billingaccount", "billingaccounts", "tenantbillingassignment", "tenantbillingassignments"} {
+			Expect(writeNames).NotTo(ContainElement(name))
+		}
+	})
 	It("returns names for public packages", func() {
 		names := ObjectTypeNames(packages.Public...)
 		Expect(names).ToNot(BeEmpty())

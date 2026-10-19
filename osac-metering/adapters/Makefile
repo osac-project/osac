@@ -14,7 +14,7 @@ CONTAINER_TOOL ?= podman
 IMG_M360_ADAPTER ?= ghcr.io/osac-project/metering-m360-adapter:latest
 IMG_ECHO_ADAPTER ?= ghcr.io/osac-project/metering-echo-adapter:latest
 
-include $(shell git rev-parse --show-toplevel)/tools/golangci-lint.mk
+include $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../../tools/golangci-lint.mk)
 
 .PHONY: all build-echo-adapter build-m360-adapter test lint clean \
 	image-build-m360-adapter image-push-m360-adapter \

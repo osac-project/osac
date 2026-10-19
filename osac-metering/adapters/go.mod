@@ -2,7 +2,10 @@ module github.com/osac-project/osac-metering/adapters
 
 go 1.26.3
 
-require github.com/osac-project/osac-metering/schema v0.0.0
+require (
+	github.com/osac-project/osac-metering/schema v0.0.0
+	github.com/osac-project/osac-metering/shared/m360http v0.0.0
+)
 
 require (
 	github.com/IBM/sarama v1.60.2
@@ -59,3 +62,5 @@ require (
 )
 
 replace github.com/osac-project/osac-metering/schema => ../schema
+
+replace github.com/osac-project/osac-metering/shared/m360http => ../shared/m360http

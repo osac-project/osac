@@ -55,7 +55,7 @@ func clusterView(item *publicv1.ClusterCatalogItem) view {
 	v := view{
 		name: item.GetMetadata().GetName(), id: item.GetId(), title: item.GetTitle(),
 		description: item.GetDescription(), metadata: item.GetMetadata(),
-		published: item.GetPublished(), template: formatFullRef(item.GetTemplate()), kind: "clustercatalogitem",
+		published: item.GetPublished(), template: formatFullRef(item.GetTemplate()), kind: "clustercatalogitem", pricing: item.GetPricing(),
 	}
 	fields := item.GetFields()
 	if p := fields.GetVersion(); p != nil {

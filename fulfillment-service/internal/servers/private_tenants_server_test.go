@@ -23,7 +23,9 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/billing"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -204,6 +206,111 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 	})
+
+	It("closes a tenant's billing assignment and frees its account when the tenant is deleted", func() {
+		first, err := tenantsServer.Create(ctx, privatev1.TenantsCreateRequest_builder{
+			Object: privatev1.Tenant_builder{
+				Metadata: privatev1.Metadata_builder{Name: "billing-deleted-tenant"}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+
+		tx, err := database.TxFromContext(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = tx.Exec(ctx, `
+			insert into billing_accounts (
+				id, provider_key, provider_account_reference, display_name, state, status_observed_at
+			) values ('deleted-tenant-account', 'm360', 'deleted-tenant-account', 'Account', 'ACTIVE', now())
+		`)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = tx.Exec(ctx, `
+			insert into tenant_billing_assignments (id, name, tenant, creator, data)
+			values ('deleted-tenant-assignment', 'deleted-tenant-assignment', 'billing-deleted-tenant', 'system',
+				jsonb_build_object(
+					'spec', jsonb_build_object('tenant_id', 'billing-deleted-tenant',
+						'billing_account_id', 'deleted-tenant-account'),
+					'status', jsonb_build_object('connection_state', 1)))
+		`)
+		Expect(err).NotTo(HaveOccurred())
+
+		projects, err := projectsServer.List(ctx, privatev1.ProjectsListRequest_builder{
+			Filter: new("this.metadata.tenant == 'billing-deleted-tenant'"),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		for _, project := range projects.GetItems() {
+			_, err = projectsServer.Delete(ctx, privatev1.ProjectsDeleteRequest_builder{Id: project.GetId()}.Build())
+			Expect(err).NotTo(HaveOccurred())
+		}
+
+		_, err = tenantsServer.Delete(ctx, privatev1.TenantsDeleteRequest_builder{Id: first.GetObject().GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		var effectiveTo string
+		Expect(tx.QueryRow(ctx, `
+			select effective_to from tenant_billing_assignments where id = 'deleted-tenant-assignment'
+		`).Scan(&effectiveTo)).To(Succeed())
+		Expect(effectiveTo).NotTo(BeEmpty())
+
+		_, err = tenantsServer.Create(ctx, privatev1.TenantsCreateRequest_builder{
+			Object: privatev1.Tenant_builder{
+				Metadata: privatev1.Metadata_builder{Name: "billing-new-tenant"}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		_, err = tx.Exec(ctx, `
+			insert into tenant_billing_assignments (id, name, tenant, creator, data)
+			values ('new-tenant-assignment', 'new-tenant-assignment', 'billing-new-tenant', 'system',
+				jsonb_build_object(
+					'spec', jsonb_build_object('tenant_id', 'billing-new-tenant',
+						'billing_account_id', 'deleted-tenant-account'),
+					'status', jsonb_build_object('connection_state', 1)))
+		`)
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	DescribeTable("rejects assignments for tenants that are not active", func(deleting bool) {
+		const tenantName = "billing-inactive-tenant"
+		if deleting {
+			created, err := tenantsServer.Create(ctx, privatev1.TenantsCreateRequest_builder{
+				Object: privatev1.Tenant_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: tenantName, Finalizers: []string{"test-finalizer"},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			_, err = tenantsServer.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
+				Id: created.GetObject().GetId(),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+		}
+
+		tx, err := database.TxFromContext(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = tx.Exec(ctx, `
+			insert into billing_accounts (
+				id, provider_key, provider_account_reference, display_name, state, status_observed_at
+			) values ('inactive-tenant-account', 'm360', 'inactive-tenant-account', 'Account', 'ACTIVE', now())
+		`)
+		Expect(err).NotTo(HaveOccurred())
+		assignmentsServer, err := NewPrivateTenantBillingAssignmentsServer().
+			SetLogger(logger).
+			SetAttributionLogic(attribution).
+			SetTenancyLogic(tenancy).
+			SetProvider(&billingProviderStub{account: billing.Account{State: billing.AccountStateActive}}).
+			Build()
+		Expect(err).NotTo(HaveOccurred())
+		_, err = assignmentsServer.Create(ctx, privatev1.TenantBillingAssignmentsCreateRequest_builder{
+			Object: privatev1.TenantBillingAssignment_builder{
+				Spec: privatev1.TenantBillingAssignmentSpec_builder{
+					TenantId: tenantName, BillingAccountId: "inactive-tenant-account",
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+	},
+		Entry("when the tenant does not exist", false),
+		Entry("when the tenant is deleting", true),
+	)
 
 	It("archives a tenant only after both cleanup barriers are removed and rejects stale locked updates", func() {
 		created, err := tenantsServer.Create(ctx, privatev1.TenantsCreateRequest_builder{

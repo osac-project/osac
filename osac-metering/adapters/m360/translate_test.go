@@ -519,7 +519,7 @@ var _ = Describe("translateEvent", func() {
 				"ce-unknown",
 				"osac.resource.created.v1",
 				"res-001",
-				"unknown_type",
+				"unknown_type-native-account-123",
 				"tenant-acme",
 				"project-x",
 				nil,
@@ -530,6 +530,7 @@ var _ = Describe("translateEvent", func() {
 			Expect(err).To(HaveOccurred())
 			var nonRetryable *adapters.NonRetryableError
 			Expect(errors.As(err, &nonRetryable)).To(BeTrue())
+			Expect(err.Error()).To(Equal("unknown resource_type"))
 		})
 
 		It("returns NonRetryableError for empty CloudEvent ID", func() {

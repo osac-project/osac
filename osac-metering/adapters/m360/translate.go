@@ -59,7 +59,7 @@ func translateEvent(ce cloudevents.Event) (string, map[string]any, error) {
 	endpoint, ok := resourceTypeEndpoints[resourceType]
 	if !ok {
 		return "", nil, &adapters.NonRetryableError{
-			Err: fmt.Errorf("unknown resource_type %q", resourceType),
+			Err: errors.New("unknown resource_type"),
 		}
 	}
 

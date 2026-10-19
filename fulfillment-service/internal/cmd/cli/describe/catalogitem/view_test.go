@@ -53,6 +53,21 @@ func parameter(value string) *anypb.Any {
 }
 
 var _ = Describe("Catalog item views", func() {
+	It("shows provider pricing only when present", func() {
+		pricing := publicv1.CatalogItemPricing_builder{
+			Status:       publicv1.CatalogPricingStatus_CATALOG_PRICING_STATUS_STALE,
+			CurrencyCode: proto.String("USD"),
+			Components: []*publicv1.CatalogPriceComponent{
+				publicv1.CatalogPriceComponent_builder{Amount: "4.50", Unit: "hour", Description: "Compute"}.Build(),
+			},
+			PriceMayVary: true,
+		}.Build()
+		withPricing := printView(view{kind: "computeinstancecatalogitem", pricing: pricing}, false)
+		requireContains(withPricing, "Pricing:    STALE", "Compute: 4.50 USD/hour", "Price may vary with configuration")
+		withoutPricing := printView(view{kind: "computeinstancecatalogitem"}, false)
+		Expect(withoutPricing).NotTo(ContainSubstring("Pricing:"))
+	})
+
 	It("renders compute instance policies and template parameters", func() {
 		item := publicv1.ComputeInstanceCatalogItem_builder{
 			Id: "item-id", Title: "PostgreSQL | VM", Description: "Database-ready VM\nChoose a larger disk.", Published: true,

@@ -15,7 +15,9 @@ package reflection
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"sync"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/ginkgo/v2/dsl/table"
@@ -53,6 +55,23 @@ func testProjectIntoContext(ctx context.Context, project string) context.Context
 	return context.WithValue(ctx, testProjectKey{}, project)
 }
 
+type pagedBillingAccountsServer struct {
+	publicv1.UnimplementedBillingAccountsServer
+	mu      sync.Mutex
+	offsets []int32
+}
+
+func (s *pagedBillingAccountsServer) List(_ context.Context, request *publicv1.BillingAccountsListRequest) (*publicv1.BillingAccountsListResponse, error) {
+	s.mu.Lock()
+	s.offsets = append(s.offsets, request.GetOffset())
+	s.mu.Unlock()
+	items := make([]*publicv1.BillingAccount, 0, 100)
+	for i := int(request.GetOffset()); i < min(int(request.GetOffset())+100, 205); i++ {
+		items = append(items, &publicv1.BillingAccount{Id: fmt.Sprintf("account-%03d", i)})
+	}
+	return publicv1.BillingAccountsListResponse_builder{Size: int32(len(items)), Total: 205, Items: items}.Build(), nil
+}
+
 var _ = Describe("Reflection helper", func() {
 	var (
 		ctx        context.Context
@@ -80,6 +99,46 @@ var _ = Describe("Reflection helper", func() {
 	})
 
 	Describe("Creation", func() {
+		It("retrieves every billing account page when requested", func() {
+			paged := &pagedBillingAccountsServer{}
+			publicv1.RegisterBillingAccountsServer(server.Registrar(), paged)
+			server.Start()
+			helper, err := NewHelper().SetLogger(logger).SetConnection(connection).
+				AddPackage(packages.PublicV1, 1).IncludeReadOnlyObjects(&publicv1.BillingAccount{}).Build()
+			Expect(err).NotTo(HaveOccurred())
+			accounts := helper.Lookup("billingaccounts")
+			Expect(accounts).NotTo(BeNil())
+
+			result, err := accounts.List(ctx, ListOptions{AllPages: true})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Items).To(HaveLen(205))
+			Expect(result.Total).To(Equal(int32(205)))
+			Expect(result.Items[0].(*publicv1.BillingAccount).GetId()).To(Equal("account-000"))
+			Expect(result.Items[204].(*publicv1.BillingAccount).GetId()).To(Equal("account-204"))
+			paged.mu.Lock()
+			defer paged.mu.Unlock()
+			Expect(paged.offsets).To(Equal([]int32{0, 100, 200}))
+		})
+
+		It("discovers read-only billing objects only when requested", func() {
+			regular, err := NewHelper().SetLogger(logger).SetConnection(connection).
+				AddPackage(packages.PublicV1, 1).Build()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(regular.Lookup("billingaccounts")).To(BeNil())
+			Expect(regular.Lookup("tenantbillingassignments")).To(BeNil())
+
+			readOnly, err := NewHelper().SetLogger(logger).SetConnection(connection).
+				AddPackage(packages.PublicV1, 1).IncludeReadOnlyObjects(&publicv1.BillingAccount{}, &publicv1.TenantBillingAssignment{}).Build()
+			Expect(err).NotTo(HaveOccurred())
+			accounts := readOnly.Lookup("billingaccounts")
+			Expect(accounts).NotTo(BeNil())
+			Expect(accounts.FullName()).To(Equal((&publicv1.BillingAccount{}).ProtoReflect().Descriptor().FullName()))
+			Expect(accounts.IsTenantScoped()).To(BeFalse())
+			assignments := readOnly.Lookup("tenantbillingassignments")
+			Expect(assignments).NotTo(BeNil())
+			Expect(assignments.FullName()).To(Equal((&publicv1.TenantBillingAssignment{}).ProtoReflect().Descriptor().FullName()))
+		})
+
 		It("Can be created with all the mandatory parameters", func() {
 			helper, err := NewHelper().
 				SetLogger(logger).

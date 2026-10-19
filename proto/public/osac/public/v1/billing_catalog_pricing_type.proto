@@ -1,0 +1,66 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/timestamp.proto";
+
+// CatalogPricing is the current provider-derived pricing for a catalog item's
+// default configuration.
+message CatalogItemPricing {
+  // Whether the returned pricing is current, stale, or unavailable.
+  CatalogPricingStatus status = 1 [(buf.validate.field).enum.defined_only = true];
+
+  // Currency used by the tenant's linked billing account.
+  optional string currency_code = 2 [(buf.validate.field).string = {len: 3}];
+
+  // Provider-derived rates for the billable components in the default
+  // configuration. Unavailable pricing has no components.
+  repeated CatalogPriceComponent components = 3;
+
+  // Whether user-selectable configuration values can change the resulting
+  // price.
+  bool price_may_vary = 4;
+
+  // Time OSAC fetched the current provider pricing. Unset for stale or
+  // unavailable pricing.
+  google.protobuf.Timestamp as_of = 5;
+}
+
+// CatalogPricingStatus describes the freshness and availability of a catalog
+// item's provider-derived pricing.
+enum CatalogPricingStatus {
+  CATALOG_PRICING_STATUS_UNSPECIFIED = 0;
+  CATALOG_PRICING_STATUS_CURRENT = 1;
+  CATALOG_PRICING_STATUS_STALE = 2;
+  CATALOG_PRICING_STATUS_UNAVAILABLE = 3;
+}
+
+// CatalogPriceComponent contains the provider rate for one billable part of a
+// catalog item's default configuration.
+message CatalogPriceComponent {
+  // Decimal amount returned by the provider.
+  string amount = 1 [(buf.validate.field).string.min_len = 1];
+
+  // Provider rate unit, such as "hour" or "month".
+  string unit = 2 [(buf.validate.field).string.min_len = 1];
+
+  // Human-readable component name.
+  string description = 3;
+}

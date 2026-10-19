@@ -17,49 +17,36 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"time"
+	"strings"
 
 	"github.com/go-logr/logr"
 
 	"github.com/osac-project/osac-metering/adapters"
+	"github.com/osac-project/osac-metering/shared/m360http"
 )
 
-const (
-	httpTimeout = 30 * time.Second
-	// healthCheckTimeout is derived from httpTimeout so the invariant
-	// (healthCheckTimeout < httpTimeout) is structural. Capped at 3s to
-	// stay well below the K8s readiness probe timeoutSeconds (5s) even if
-	// httpTimeout is increased.
-	healthCheckTimeout = min(httpTimeout/10, 3*time.Second)
-	// maxBodyLog caps M360 response body excerpts in error messages
-	// to avoid leaking large payloads into logs.
-	maxBodyLog = 256
-)
+const maxBodySize = 1 << 20
 
 // m360Client sends events to the M360 Usage API.
 type m360Client struct {
-	httpClient *http.Client
-	baseURL    string
-	apiVersion string
-	apiKey     string
-	logger     logr.Logger
+	transport *m360http.Client
+	configErr error
+	logger    logr.Logger
 }
 
 // newM360Client creates a client for the M360 Usage API.
 func newM360Client(baseURL, apiVersion, apiKey string) *m360Client {
-	return &m360Client{
-		httpClient: &http.Client{Timeout: httpTimeout},
-		baseURL:    baseURL,
-		apiVersion: apiVersion,
-		apiKey:     apiKey,
-		logger:     logr.Discard(),
-	}
+	transport, err := m360http.NewClient(m360http.Config{BaseURL: baseURL, APIVersion: apiVersion, APIKey: apiKey})
+	return &m360Client{transport: transport, configErr: err, logger: logr.Discard()}
 }
 
 // post sends a flat M360 payload to the given endpoint.
 // Returns NonRetryableError for 4xx responses (except 408 and 429,
 // which are retryable), plain error for 5xx.
 func (c *m360Client) post(ctx context.Context, endpoint string, payload map[string]any) error {
+	if c.configErr != nil {
+		return &adapters.NonRetryableError{Err: errors.New("M360 client configuration is invalid")}
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return &adapters.NonRetryableError{
@@ -67,24 +54,22 @@ func (c *m360Client) post(ctx context.Context, endpoint string, payload map[stri
 		}
 	}
 
-	url := fmt.Sprintf("%s/api/%s/external/run%s", c.baseURL, c.apiVersion, endpoint)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	pathSegments := strings.Split(strings.Trim(endpoint, "/"), "/")
+	url := c.transport.Endpoint("external/run", pathSegments...)
+	req, err := c.transport.NewRequest(ctx, http.MethodPost, url, bytes.NewReader(body), "application/json")
 	if err != nil {
 		return fmt.Errorf("create M360 request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.transport.Do(req)
 	if err != nil {
-		return fmt.Errorf("M360 request to %s: %w", endpoint, err)
+		return errors.New("M360 request failed")
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MB cap
+	respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxBodySize))
 	if readErr != nil {
-		respBody = []byte("[body read error]")
+		return errors.New("M360 response could not be read")
 	}
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
@@ -92,11 +77,7 @@ func (c *m360Client) post(ctx context.Context, endpoint string, payload map[stri
 		return nil
 	}
 
-	excerpt := string(respBody)
-	if len(excerpt) > maxBodyLog {
-		excerpt = excerpt[:maxBodyLog] + "...(truncated)"
-	}
-	errMsg := fmt.Sprintf("M360 %s returned %d: %s", endpoint, resp.StatusCode, excerpt)
+	errMsg := fmt.Sprintf("M360 request returned HTTP %d", resp.StatusCode)
 	// 408 (Request Timeout) and 429 (Too Many Requests) are retryable.
 	if resp.StatusCode >= 400 && resp.StatusCode < 500 &&
 		resp.StatusCode != http.StatusRequestTimeout &&
@@ -112,20 +93,10 @@ func (c *m360Client) post(ctx context.Context, endpoint string, payload map[stri
 // Auth and API route failures surface as post() errors /
 // osac_metering_adapter_events_failed_total, not here.
 func (c *m360Client) healthCheck(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, c.baseURL, nil)
-	if err != nil {
-		return fmt.Errorf("create health check request: %w", err)
+	if c.configErr != nil {
+		return errors.New("M360 client configuration is invalid")
 	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("M360 health check: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	return nil
+	return c.transport.HealthCheck(ctx)
 }
 
 // logResponse extracts event_id from a successful M360 response for debug logging.

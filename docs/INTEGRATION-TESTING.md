@@ -207,6 +207,31 @@ Touched-area requirements: [component guide](../fulfillment-service/AGENTS.md#in
 - **Catalog Items:** `it/` checks creation and update behavior, publication visibility, CLI creation, and the ClusterOrder release image written by Fulfillment. Catalog-backed provisioning journeys that exercise other components remain in the CaaS, VMaaS, BMaaS, and reference E2E suites.
 - **ComputeInstance additional-disk defaults:** the VMaaS regression test `test_compute_instance_empty_additional_disks_disables_catalog_item_default` covers the API contract for omitted and explicitly empty disk lists through provisioning and the resulting operator resource.
 
+### Billing coverage
+
+| Behavior | Tier and owner | Location / command | Boundary and limits |
+|---|---|---|---|
+| Rate matching, component estimates, coverage gap vs provider outage, stale pricing, cost pagination and tenant attribution | Unit, [DEV] | `internal/billing/*_test.go`, `internal/servers/catalog_pricing*_test.go`, `internal/servers/billing_costs_server_test.go`; `ginkgo run -r internal` from `fulfillment-service/` | Provider and account lookups use test doubles. These tests do not prove M360 behavior or a deployed Fulfillment API. |
+| Assignment lifecycle, tenant deletion, provider status and CLI billing commands | Unit, [DEV] | `internal/servers/billing_servers_test.go`, `internal/servers/private_tenants_server_test.go`, `internal/controllers/billingassignment/*_test.go`, `internal/billing/provider_status_test.go`, `internal/cmd/cli/billing/billing_cmd_test.go`; `ginkgo run -r internal` from `fulfillment-service/` | Exercises local assignment and command behavior; no live M360 account discovery or usage delivery. |
+| Catalog price display and unavailable/stale states | Unit, [DEV] | `../osac-ui/libs/ui-components/src/components/catalog/CatalogItemPricingDisplay.test.tsx`, `../osac-ui/libs/ui-components/src/components/catalog/CatalogItemListSection.test.tsx`; `pnpm --filter @osac/app-frontend exec vitest run` from `../osac-ui/` | Exercises UI rendering with API response fixtures; it does not prove deployed API serialization or provider connectivity. |
+
+The Kind Fulfillment suite can create and delete tenants, but it has no fixture
+for creating a billing account without provider-backed account sync. Therefore,
+tenant deletion closing a billing assignment has unit coverage but no deployed
+component-integration case in this change. Track a follow-up to add a
+provider-independent fixture and exercise assignment history through tenant
+deletion: [TODO: add the owning Jira URL](https://redhat.atlassian.net/browse/OSAC-XXXX).
+
+No deployed M360 billing journey is covered. In particular, a successful
+`BillingProviderStatuses.Get` response does not establish that usage reached
+M360; usage-pipeline health is measured through metering lag and DLQ metrics.
+Track a deployed M360 usage-delivery journey as QE follow-up:
+[TODO: add the owning Jira URL](https://redhat.atlassian.net/browse/OSAC-XXXX).
+
+Billing invoice `List` and `Get` remain unfixed follow-up work and are not
+closed by this change. Track them separately so QE does not infer invoice coverage:
+[TODO: add the owning Jira URL](https://redhat.atlassian.net/browse/OSAC-XXXX).
+
 ## osac-installer
 
 Touched-area requirements: [component guide](../osac-installer/AGENTS.md#integration-testing).
@@ -571,6 +596,7 @@ Touched-area requirements: [component guide](../osac-metering/AGENTS.md#integrat
 - **Kafka producer/consumer, CloudEvents transport, offsets, retries, or DLQ:** Mock Kafka tests alone do not prove the pipeline boundary.
 - **Fulfillment Watch or gRPC event ingestion:** Mock streams validate local handling, not the wire contract.
 - **Provider adapters:** The shared runner must remain the owner of ordering, retry, deduplication, and DLQ behavior.
+- **Billing adapter deployment and status:** `make test` covers metering unit behavior, including M360 adapter request handling. The Helm render contract `make -C ../osac-installer billing-render-test` from `osac-metering/` checks adapter enablement, shared global billing URL/Secret configuration, and RBAC using rendered manifests; it does not start Kafka or M360. Neither proves that Kafka usage reaches a live M360 endpoint.
 
 ### Coverage gaps
 
@@ -578,6 +604,11 @@ There is no component-level suite that runs the full fulfillment Watch → Kafka
 → CloudEvents pipeline. Changes to that path must not claim integration
 coverage from mock-based tests; add or extend the real-Kafka coverage under
 [OSAC-4846](https://redhat.atlassian.net/browse/OSAC-4846).
+
+This billing change also has no deployed M360 usage-delivery journey. The
+adapter chart and request handling have local coverage, but provider delivery
+through a deployed OSAC metering pipeline remains a QE gap:
+[TODO: add the owning Jira URL](https://redhat.atlassian.net/browse/OSAC-XXXX).
 
 ## tests/e2e
 

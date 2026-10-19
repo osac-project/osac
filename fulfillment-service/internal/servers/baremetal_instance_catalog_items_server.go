@@ -39,10 +39,11 @@ var _ publicv1.BareMetalInstanceCatalogItemsServer = (*BareMetalInstanceCatalogI
 type BareMetalInstanceCatalogItemsServer struct {
 	publicv1.UnimplementedBareMetalInstanceCatalogItemsServer
 
-	logger    *slog.Logger
-	delegate  *PrivateBareMetalInstanceCatalogItemsServer
-	inMapper  *GenericMapper[*publicv1.BareMetalInstanceCatalogItem, *privatev1.BareMetalInstanceCatalogItem]
-	outMapper *GenericMapper[*privatev1.BareMetalInstanceCatalogItem, *publicv1.BareMetalInstanceCatalogItem]
+	logger       *slog.Logger
+	delegate     *PrivateBareMetalInstanceCatalogItemsServer
+	inMapper     *GenericMapper[*publicv1.BareMetalInstanceCatalogItem, *privatev1.BareMetalInstanceCatalogItem]
+	outMapper    *GenericMapper[*privatev1.BareMetalInstanceCatalogItem, *publicv1.BareMetalInstanceCatalogItem]
+	tenancyLogic auth.TenancyLogic
 }
 
 func NewBareMetalInstanceCatalogItemsServer() *BareMetalInstanceCatalogItemsServerBuilder {
@@ -111,10 +112,11 @@ func (b *BareMetalInstanceCatalogItemsServerBuilder) Build() (result *BareMetalI
 	}
 
 	result = &BareMetalInstanceCatalogItemsServer{
-		logger:    b.logger,
-		delegate:  delegate,
-		inMapper:  inMapper,
-		outMapper: outMapper,
+		logger:       b.logger,
+		delegate:     delegate,
+		inMapper:     inMapper,
+		outMapper:    outMapper,
+		tenancyLogic: b.tenancyLogic,
 	}
 	return
 }
@@ -146,7 +148,6 @@ func (s *BareMetalInstanceCatalogItemsServer) List(ctx context.Context,
 		}
 		publicItems[i] = publicItem
 	}
-
 	response = &publicv1.BareMetalInstanceCatalogItemsListResponse{}
 	response.SetSize(privateResponse.GetSize())
 	response.SetTotal(privateResponse.GetTotal())
@@ -171,7 +172,6 @@ func (s *BareMetalInstanceCatalogItemsServer) Get(ctx context.Context,
 			slog.Any("error", err))
 		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process bare metal instance catalog item")
 	}
-
 	response = &publicv1.BareMetalInstanceCatalogItemsGetResponse{}
 	response.SetObject(publicCatalogItem)
 	return
@@ -192,6 +192,7 @@ func (s *BareMetalInstanceCatalogItemsServer) Create(ctx context.Context,
 		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process bare metal instance catalog item")
 		return
 	}
+	clearCatalogItemPricing(privateCatalogItem)
 
 	privateRequest := &privatev1.BareMetalInstanceCatalogItemsCreateRequest{}
 	privateRequest.SetObject(privateCatalogItem)
@@ -237,6 +238,7 @@ func (s *BareMetalInstanceCatalogItemsServer) Update(ctx context.Context,
 		s.logger.ErrorContext(ctx, "Failed to map public bare metal instance catalog item to private", slog.Any("error", err))
 		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process bare metal instance catalog item")
 	}
+	clearCatalogItemPricing(privateCatalogItem)
 
 	if request.GetUpdateMask() == nil {
 		// Preserve private metadata under a row lock so a concurrent finalizer update cannot be lost.

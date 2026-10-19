@@ -54,7 +54,7 @@ func bareMetalView(item *publicv1.BareMetalInstanceCatalogItem) view {
 	v := view{
 		name: item.GetMetadata().GetName(), id: item.GetId(), title: item.GetTitle(),
 		description: item.GetDescription(), metadata: item.GetMetadata(),
-		published: item.GetPublished(), template: formatFullRef(item.GetTemplate()), kind: "baremetalinstancecatalogitem",
+		published: item.GetPublished(), template: formatFullRef(item.GetTemplate()), kind: "baremetalinstancecatalogitem", pricing: item.GetPricing(),
 	}
 	fields := item.GetFields()
 	addString(&v.fields, "SSH public key", fields.GetSshPublicKey(), false)

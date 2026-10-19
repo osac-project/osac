@@ -2,6 +2,14 @@
 
 global:
   osacDeploymentId: "ci/osac"
+  billing:
+    provider: m360
+    m360:
+      apiUrl: https://m360.ci.example.com
+      apiVersion: v1
+      apiKeySecret:
+        name: ci-m360-credentials
+        key: api-key
   networking:
     fabricManager: netris
     k8sManager: ""

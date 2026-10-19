@@ -25,6 +25,16 @@ global:
     # Enable only when tenant CSI trust support is deployed.
     enabled: false
     tenantNamespace: osac-csi
+  # Shared M360 connection for fulfillment and the metering adapter.
+  # The API key is read from this existing Secret; never put credentials here.
+  billing:
+    provider: ""
+    m360:
+      apiUrl: ""
+      apiVersion: ""
+      apiKeySecret:
+        name: ""
+        key: api-key
   # --- Service Enablement ---
   # Controls which service tiers are active across all OSAC components.
   # When all are true (the default), OSAC operates as a full-stack cloud.
@@ -166,6 +176,15 @@ service:
   controller:
     # Enable full synchronization in fulfillment controllers.
     sync: true
+  # Billing is optional. The M360 API key must already exist in this Secret.
+  billing:
+    provider: ""
+    m360:
+      apiUrl: ""
+      apiVersion: ""
+      apiKeySecret:
+        name: ""
+        key: api-key
   # [REQUIRED] Hostname for the external API Route (e.g. fulfillment-api-osac.apps.mycluster.example.com)
   externalHostname: ""
   # [REQUIRED] Hostname for the internal API Route (e.g. fulfillment-internal-api-osac.apps.mycluster.example.com)
@@ -393,6 +412,10 @@ ui:
 # --- Metering ---
 metering:
   enabled: false
+  # Global billing.provider controls whether the adapter is deployed. Set false
+  # only to keep the M360 metering adapter off when M360 billing is configured.
+  m360Adapter:
+    enabled: true
   image:
     repository: ghcr.io/osac-project/metering-service
     tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml

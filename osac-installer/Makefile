@@ -661,6 +661,10 @@ csi-render-test: helm-deps helm-infra-deps ## Verify CSI and storage-provider ch
 fulfillment-trust-render-test: helm-deps ## Check verified fulfillment transport renders
 	python3 scripts/test-fulfillment-trust-render.py
 
+.PHONY: billing-render-test
+billing-render-test: helm-deps ## Check optional billing provider renders
+	python3 scripts/test-billing-render.py
+
 .PHONY: metering-auth-render-test
 metering-auth-render-test: helm-deps ## Check metering service-account auth renders in supported profiles
 	python3 scripts/test-metering-auth-render.py
@@ -686,7 +690,7 @@ kind-runtime-test: ## Check Kind runtime, sudo, image loading, and cluster clean
 	python3 scripts/test-kind-runtime.py
 
 .PHONY: helm-validate
-helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test mce-render-test dev-full-render-test openbao-security-context-test ## Validate all charts (lint + template)
+helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test billing-render-test mce-render-test dev-full-render-test openbao-security-context-test ## Validate all charts (lint + template)
 	@# bmaas-netbox-ci layers bmaas-ci as its base (see the profile-selection
 	@# block); validate the same combination the installer deploys.
 	@for d in values/*/; do \

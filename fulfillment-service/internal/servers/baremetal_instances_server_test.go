@@ -124,6 +124,27 @@ var _ = Describe("Bare metal instances server", func() {
 			Expect(response.GetObject().GetSpec().GetInstanceType().GetId()).To(Equal("default-type"))
 		})
 
+		It("creates an instance without BM pricing coverage", func() {
+			bareMetalServer, err := NewBareMetalInstancesServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).NotTo(HaveOccurred())
+			response, err := bareMetalServer.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
+				Object: publicv1.BareMetalInstance_builder{
+					Metadata: publicv1.Metadata_builder{Name: "bm-without-rate-coverage"}.Build(),
+					Spec: publicv1.BareMetalInstanceSpec_builder{
+						DiskImage:    publicv1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(response.GetObject().GetId()).NotTo(BeEmpty())
+		})
+
 		It("Returns a warning for a deprecated disk_image", func() {
 			createDiskImageWithLifecycle("deprecated-bmi-disk-image",
 				privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_DEPRECATED, nil)

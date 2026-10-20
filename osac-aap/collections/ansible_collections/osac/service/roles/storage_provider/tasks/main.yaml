@@ -276,13 +276,13 @@
          | selectattr('provider', 'equalto', 'vast')
          | map(attribute='protocol') | unique | sort | list }}
 
-- name: Reject providers without a native CSI setup handler
+- name: Skip providers without a native CSI setup handler
   when:
     - storage_provider_action == 'ensure_csi_driver'
     - _native_csi_driver_unknown_providers | length > 0
-  ansible.builtin.fail:
+  ansible.builtin.debug:
     msg: >-
-      Unsupported provider(s) for native CSI driver setup:
+      Skipping provider-native CSI installation for provider(s) without a native CSI setup handler:
       {{ _native_csi_driver_unknown_providers | join(', ') }}.
 
 - name: Validate the selected native CSI provider matrix

@@ -973,6 +973,33 @@
         that:
           - _native_csi_driver_unknown_providers == ['pure']
 
+    - name: Reject native CSI setup without a target kubeconfig
+      block:
+        - name: Call driver ensure for NetApp without a target kubeconfig
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: ensure_csi_driver
+            storage_provider_tiers:
+              - name: fast-block
+                protocol: block
+                provider: netapp
+
+        - name: Fail if native CSI setup used the ambient kubeconfig
+          ansible.builtin.fail:
+            msg: "The native CSI ensure action accepted a missing target kubeconfig"
+      rescue:
+        - name: Assert missing target kubeconfig was rejected before cluster access
+          ansible.builtin.assert:
+            that:
+              - >-
+                'storage_provider_target_kubeconfig is required' in
+                (ansible_failed_result.msg | default(''))
+            fail_msg: >-
+              Native CSI setup failed for an unexpected reason:
+              {{ ansible_failed_result.msg | default('unknown error') }}
+            success_msg: "Native CSI setup rejected a missing target kubeconfig before API access"
+
     - name: Reject NetApp NFS
       block:
         - name: Call driver ensure for a NetApp NFS tier

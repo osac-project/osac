@@ -249,7 +249,10 @@ def test_stage2_installs_missing_native_csi_operators_and_skips_existing(
                 description="Stage 2 no-op for existing native CSI drivers",
             )
             assert noop_job.get("status") == "successful", f"AAP no-op job {noop_job_id} failed"
-            assert "No install lock or OLM changes are needed." in noop_job.get("result_stdout", ""), (
+            noop_stdout = _controller_request(
+                controller_url=controller_url, token=token, path=f"jobs/{noop_job_id}/stdout/?format=json"
+            ).get("content", "")
+            assert "No install lock or OLM changes are needed." in noop_stdout, (
                 f"AAP no-op job {noop_job_id} did not take the native CSI no-op path"
             )
 

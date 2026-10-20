@@ -110,7 +110,7 @@
   delay: 10
   until: >-
     _storage_provider_olm_csv.resources | length > 0
-    and _storage_provider_olm_csv.resources[0].status.phase == 'Succeeded'
+    and _storage_provider_olm_csv.resources[0].status.phase | default('') == 'Succeeded'
 
 - name: Record the OLM-selected provider version
   ansible.builtin.debug:

@@ -10,7 +10,9 @@ Covers two defects surfaced by osac-test-infra GHA run 39391299393:
 2. _assert_worker_aggregates must survive a transient kubectl
    CalledProcessError (e.g. "connection refused") by retrying through
    poll_until's retry_on_error path instead of terminating
-   immediately.
+   immediately.  Permanent errors (invalid namespace, authorization,
+   unknown resource) must propagate immediately with the original
+   diagnostic.
 
 See osac-project/osac-test-infra#470.
 """
@@ -76,3 +78,38 @@ def test_assert_worker_aggregates_retries_transient_kubectl_error(monkeypatch: p
     test_cluster_create._assert_worker_aggregates(k8s=k8s, co_name="order-xyz", expected_workers=2)
 
     assert call_count == 2, "_assert_worker_aggregates must retry after a transient error"
+
+
+# -- Fix 2b: permanent errors propagate immediately ------------------
+
+
+@pytest.mark.parametrize(
+    "stderr_text",
+    [
+        pytest.param('Error from server (NotFound): namespaces "gone" not found', id="invalid-namespace"),
+        pytest.param(
+            "Error from server (Forbidden): clusterorders.osac is forbidden: User cannot get resource", id="forbidden"
+        ),
+        pytest.param('error: the server doesn\'t have a resource type "clusterorder"', id="unknown-resource"),
+        pytest.param("error: You must be logged in to the server (Unauthorized)", id="unauthorized"),
+    ],
+)
+def test_assert_worker_aggregates_propagates_permanent_error(monkeypatch: pytest.MonkeyPatch, stderr_text: str) -> None:
+    """Permanent kubectl errors must propagate immediately.
+
+    They must NOT be retried for ~20 minutes and then masked by a
+    generic TimeoutError.
+    """
+
+    def always_fail(*, resource: str, name: str) -> dict:
+        raise subprocess.CalledProcessError(1, ("kubectl", "get", "clusterorder", name), stderr=stderr_text)
+
+    k8s = Mock()
+    k8s.get_json = Mock(side_effect=always_fail)
+    monkeypatch.setattr(runner.time, "sleep", lambda _: None)
+
+    with pytest.raises(RuntimeError, match="permanent kubectl failure"):
+        test_cluster_create._assert_worker_aggregates(k8s=k8s, co_name="order-bad", expected_workers=2)
+
+    # Must fail on the very first attempt, not after exhausting retries.
+    assert k8s.get_json.call_count == 1

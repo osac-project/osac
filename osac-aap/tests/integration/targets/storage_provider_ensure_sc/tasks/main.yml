@@ -76,7 +76,10 @@
             vast_local_provider_id: "1"
             vip_pool_name: "osac-test-pool"
             vast_endpoint: "127.0.0.1:18443"
-            storage_tiers: '[{"name":"default","protocol":"nfs","provider":"vast","qos_policy":"test-qos"},{"name":"block-tier","protocol":"block","provider":"vast"}]'
+            storage_tiers: >-
+              [{"name":"default","protocol":"nfs","provider":"vast",
+              "qos_policy":"test-qos"},{"name":"block-tier","protocol":"block",
+              "provider":"vast"}]
             storage_provider_type: "vast"
             tenant_manager_name: "osac-test-ensuresc"
             tenant_manager_username: "osac-test-ensuresc"
@@ -341,7 +344,12 @@
         that:
           - storage_provider_storage_class_names is defined
           - storage_provider_storage_class_names is iterable
-          - "storage_provider_storage_class_names | map(attribute='name') | list is superset(['vast-nfs-test-ensuresc-default', 'vast-block-test-ensuresc-block-tier'])"
+          - >-
+            storage_provider_storage_class_names | map(attribute='name') | list
+            is superset([
+              'vast-nfs-test-ensuresc-default',
+              'vast-block-test-ensuresc-block-tier'
+            ])
         fail_msg: "storage_provider_storage_class_names not set correctly: {{ storage_provider_storage_class_names | default('undefined') }}"
         success_msg: "storage_provider_storage_class_names output correct"
 
@@ -387,7 +395,12 @@
       ansible.builtin.assert:
         that:
           - storage_provider_storage_class_names is defined
-          - "storage_provider_storage_class_names | map(attribute='name') | list is superset(['vast-nfs-test-ensuresc-default', 'vast-block-test-ensuresc-block-tier'])"
+          - >-
+            storage_provider_storage_class_names | map(attribute='name') | list
+            is superset([
+              'vast-nfs-test-ensuresc-default',
+              'vast-block-test-ensuresc-block-tier'
+            ])
         fail_msg: "Short-circuit did not set output facts"
         success_msg: "Short-circuit: output facts preserved"
 
@@ -412,8 +425,11 @@
     - name: Assert views were created
       ansible.builtin.assert:
         that:
-          - _call_log | selectattr('path', 'search', 'views') | selectattr('method', 'equalto', 'POST') | list | length > 0
-            or _call_log | selectattr('path', 'search', 'views') | selectattr('method', 'equalto', 'GET') | list | length > 0
+          - >-
+            _call_log | selectattr('path', 'search', 'views')
+            | selectattr('method', 'equalto', 'POST') | list | length > 0
+            or _call_log | selectattr('path', 'search', 'views')
+            | selectattr('method', 'equalto', 'GET') | list | length > 0
         fail_msg: "No view API calls found — ensure_storage_class should create views"
         success_msg: "View API calls detected"
 

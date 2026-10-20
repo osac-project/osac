@@ -38,7 +38,7 @@
 
     - name: Reset nico_ingress_ip for fresh allocation attempt
       ansible.builtin.set_fact:
-        nico_ingress_ip: null
+        nico_ingress_ip:
 
     - name: Check for existing IP allocation for this cluster
       ansible.builtin.set_fact:

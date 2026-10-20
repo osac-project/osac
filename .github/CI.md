@@ -105,7 +105,7 @@ comes within about a quarter of an hour). Anything else gets a person.
   osac-ci `docs/RULES.md`. The callers pin a full commit of an osac-ci release (the tag in a comment); the Dependabot group
   `osac-ci` opens one pull request per release, reviewed by wg-infra.
 - **Emergency:** setting the repository variable `CI_GATING_ENABLED` to `false` makes `CI` run every part.
-- `workflow_run` lists workflows by exact name. `e2e-pr.yml` lists `CI` and `E2E review relay`; renaming either needs the
-  list changed.
+- `workflow_run` lists workflows by exact name. `e2e-pr.yml` lists `CI`, `E2E review relay` and `E2E comment`; renaming any of them
+  needs the list changed.
 - Changes to `.github/workflows`, `.github/actions`, `.github/scripts`, `.github/filters` and `CODEOWNERS` need a code
   owner's approval.

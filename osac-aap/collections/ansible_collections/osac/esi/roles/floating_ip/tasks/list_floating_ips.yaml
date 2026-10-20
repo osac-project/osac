@@ -6,16 +6,16 @@
 
 - name: List floating IPs with tags
   block:
-  - name: List floating IPs  # noqa:no-changed-when
-    ansible.builtin.command: >-
-      openstack floating ip list
-      {% for tag in tags_to_filter %}
-      --tag "{{ tag }}"
-      {% endfor %}
-      --long
-      -f json
-    register: list_floating_ips_cmd
+    - name: List floating IPs # noqa:no-changed-when
+      ansible.builtin.command: >-
+        openstack floating ip list
+        {% for tag in tags_to_filter %}
+        --tag "{{ tag }}"
+        {% endfor %}
+        --long
+        -f json
+      register: list_floating_ips_cmd
 
-  - name: Set list_floating_ips_result to floating IPs list
-    ansible.builtin.set_fact:
-      list_floating_ips_result: "{{ list_floating_ips_cmd.stdout | from_json }}"
+    - name: Set list_floating_ips_result to floating IPs list
+      ansible.builtin.set_fact:
+        list_floating_ips_result: "{{ list_floating_ips_cmd.stdout | from_json }}"

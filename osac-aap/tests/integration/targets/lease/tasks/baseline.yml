@@ -64,7 +64,6 @@
             fail_msg: "Lease still exists after release"
             success_msg: "Lease lifecycle release: passed"
 
-
 # ── Test 2: Release nonexistent lease ──
 - name: "Lease - Test release nonexistent"
   hosts: localhost

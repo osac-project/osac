@@ -4,7 +4,11 @@
 
 - name: Filter for hosts
   ansible.builtin.set_fact:
-    node_list: "{{ baremetal_node_info_result.baremetal_nodes | selectattr('extra.purpose', 'defined') | selectattr('extra.purpose', 'equalto', 'host') | list }}"
+    node_list: >-
+      {{ baremetal_node_info_result.baremetal_nodes
+         | selectattr('extra.purpose', 'defined')
+         | selectattr('extra.purpose', 'equalto', 'host')
+         | list }}
 
 - name: Filter by resource class
   when: host_type is defined

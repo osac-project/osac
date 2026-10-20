@@ -6,16 +6,16 @@
 
 - name: List networks with tags
   block:
-  - name: List networks  # noqa:no-changed-when
-    ansible.builtin.command: >-
-      openstack network list
-      {% for tag in tags_to_filter %}
-      --tag "{{ tag }}"
-      {% endfor %}
-      --long
-      -f json
-    register: list_networks_cmd
+    - name: List networks # noqa:no-changed-when
+      ansible.builtin.command: >-
+        openstack network list
+        {% for tag in tags_to_filter %}
+        --tag "{{ tag }}"
+        {% endfor %}
+        --long
+        -f json
+      register: list_networks_cmd
 
-  - name: Set list_networks_result to networks list
-    ansible.builtin.set_fact:
-      list_networks_result: "{{ list_networks_cmd.stdout | from_json }}"
+    - name: Set list_networks_result to networks list
+      ansible.builtin.set_fact:
+        list_networks_result: "{{ list_networks_cmd.stdout | from_json }}"

@@ -1,0 +1,11 @@
+# BMaaS-NetBox CI overlay — applied on top of bmaas-ci/instance.yaml.
+# Contains only the values that differ from the bmaas-ci base profile.
+#
+# Disables Metal3. The operator's NetBox inventory wiring (bmf.netbox)
+# lands with OSAC-6198 (T3), which adds the schema and template support;
+# until then this overlay only turns Metal3 off. See README.md for the
+# inventory.yaml shape the operator will consume once T3 lands.
+
+bmf:
+  metal3:
+    enabled: false

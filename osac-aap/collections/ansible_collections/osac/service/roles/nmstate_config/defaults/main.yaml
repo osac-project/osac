@@ -9,7 +9,6 @@ nmstate_config_namespace: "{{ default_agent_namespace }}"
 # Actual server interface names for nmstate config (what the OS sees, e.g., "ens13")
 # Must be provided by the caller (resolved from netris_resource_class_map per resource class)
 nmstate_config_server_interfaces: []
-
 # VPC gateway in CIDR notation (from netris_template_ipv4_gateway, e.g., "192.168.101.1/24")
 nmstate_config_gateway_cidr: "{{ netris_template_ipv4_gateway }}"
 

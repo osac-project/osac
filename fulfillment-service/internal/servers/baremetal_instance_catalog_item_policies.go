@@ -37,6 +37,7 @@ func validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(
 	template *privatev1.BareMetalInstanceTemplate,
 	bareMetalInstanceTypesDao *dao.GenericDAO[*privatev1.BareMetalInstanceType],
 	diskImagesDao *dao.GenericDAO[*privatev1.DiskImage],
+	secretsDao *dao.GenericDAO[*privatev1.Secret],
 	subnetsDao *dao.GenericDAO[*privatev1.Subnet],
 	virtualNetworksDao *dao.GenericDAO[*privatev1.VirtualNetwork],
 	networkClassesDao *dao.GenericDAO[*privatev1.NetworkClass],
@@ -60,6 +61,9 @@ func validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(
 
 	warnings, err := validateCatalogItemDiskImagePolicy(ctx, scope, fields.GetDiskImage(), diskImagesDao)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateCatalogItemUserDataSecretPolicy(ctx, scope, fields.GetUserDataSecret(), secretsDao); err != nil {
 		return nil, err
 	}
 
@@ -87,6 +91,9 @@ func applyBareMetalInstanceCatalogItemPolicies(
 	}
 	if err := applyPolicy(fields.GetUserData(), spec.HasUserData(), spec.SetUserData, decodeStringPolicy, identity[string]); err != nil {
 		return fmt.Errorf("user_data: %w", err)
+	}
+	if err := applyPolicy(fields.GetUserDataSecret(), spec.GetUserDataSecret() != nil, spec.SetUserDataSecret, decodeSecretReferencePolicy, cloneMessage[*privatev1.SecretLocalReference]); err != nil {
+		return fmt.Errorf("user_data_secret: %w", err)
 	}
 	if err := applyPolicy(fields.GetRunStrategy(), spec.HasRunStrategy(), spec.SetRunStrategy, decodeBareMetalInstanceRunStrategyPolicy, identity[privatev1.BareMetalInstanceRunStrategy]); err != nil {
 		return fmt.Errorf("run_strategy: %w", err)

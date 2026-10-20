@@ -14,7 +14,7 @@
     name: "nico-infra-{{ nico_infra_name }}"
     namespace: "{{ nico_infra_configmap_namespace }}"
   register: nico_infra_configmap
-  failed_when: false  # ConfigMap may not exist (manual deletion, etc.)
+  failed_when: false # ConfigMap may not exist (manual deletion, etc.)
 
 - name: Extract VPC and prefix state if ConfigMap exists
   when: nico_infra_configmap.resources | length > 0
@@ -31,7 +31,7 @@
   ansible.builtin.set_fact:
     nico_vpc_id: ""
     nico_vpc_prefix_id: ""
-    cluster_infra_vpc_was_created: false  # Default to skip — avoid deleting resources we didn't create
+    cluster_infra_vpc_was_created: false # Default to skip — avoid deleting resources we didn't create
     cluster_infra_prefix_was_created: false
     cluster_infra_stored_instance_ids: []
     nico_vpc_peering_id: ""
@@ -80,7 +80,7 @@
   loop_control:
     loop_var: instance_id
     label: "Deleting instance {{ instance_id }}"
-  failed_when: false  # Instance may have been manually deleted
+  failed_when: false # Instance may have been manually deleted
 
 # Delete VPC peering before VPC/prefix (must be removed before VPC can be deleted)
 - name: Delete VPC peering with management cluster
@@ -92,7 +92,7 @@
     api_token: "{{ nico_api_token }}"
     org: "{{ nico_org }}"
     api_path_prefix: "{{ nico_api_path_prefix | default('forge') }}"
-  failed_when: false  # Peering may have been manually deleted
+  failed_when: false # Peering may have been manually deleted
 
 # Delete VPC prefix only if created by this cluster
 - name: Delete VPC prefix (only if created by this cluster)
@@ -108,7 +108,7 @@
     api_token: "{{ nico_api_token }}"
     org: "{{ nico_org }}"
     api_path_prefix: "{{ nico_api_path_prefix | default('forge') }}"
-  failed_when: false  # Prefix may have been manually deleted
+  failed_when: false # Prefix may have been manually deleted
 
 - name: Skip VPC prefix deletion (using pre-existing prefix)
   when: not (cluster_infra_prefix_was_created | default(true) | bool)
@@ -126,7 +126,7 @@
     api_token: "{{ nico_api_token }}"
     org: "{{ nico_org }}"
     api_path_prefix: "{{ nico_api_path_prefix | default('forge') }}"
-  failed_when: false  # VPC may have been manually deleted
+  failed_when: false # VPC may have been manually deleted
 
 - name: Skip VPC deletion (using pre-existing VPC)
   when: not (cluster_infra_vpc_was_created | default(true) | bool)

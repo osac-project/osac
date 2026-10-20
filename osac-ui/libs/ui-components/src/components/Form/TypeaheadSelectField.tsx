@@ -17,8 +17,6 @@ interface TypeaheadSelectFieldProps {
   labelInfo?: ReactNode;
   placeholder?: string;
   noOptionsFoundMessage?: (filter: string) => string;
-  /** Called after the field's value is cleared via the typeahead's built-in clear button. */
-  onClear?: () => void;
 }
 
 // Generic Formik-bound typeahead single-select (mirrors SelectField). Owns the
@@ -33,7 +31,6 @@ export const TypeaheadSelectField = ({
   labelInfo,
   placeholder,
   noOptionsFoundMessage,
-  onClear,
 }: TypeaheadSelectFieldProps) => {
   const [field, meta, helpers] = useField<string>(name);
   const showValidationErrors = useShowFieldValidationErrors();
@@ -56,10 +53,13 @@ export const TypeaheadSelectField = ({
           await helpers.setValue(String(value), true);
           await helpers.setTouched(true, false);
         }}
-        onClearSelection={() => {
-          void helpers.setValue('', true);
-          onClear?.();
-        }}
+        onClearSelection={
+          isRequired
+            ? undefined
+            : () => {
+                void helpers.setValue('', true);
+              }
+        }
         toggleProps={{
           id: fieldId,
           'aria-label': label,

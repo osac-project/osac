@@ -24,11 +24,13 @@ const makeTenant = (id: string, name: string): Tenant =>
 
 const renderSelect = ({
   autoSelectSingleOption = false,
+  isRequired = true,
   initialValue = emptyResourceSelectValue(),
   tenants = [makeTenant('only-1', 'Only tenant')],
   transportOverrides,
 }: {
   autoSelectSingleOption?: boolean;
+  isRequired?: boolean;
   initialValue?: ResourceSelectValue;
   tenants?: Tenant[];
   transportOverrides?: MockTransportOverrides;
@@ -52,7 +54,7 @@ const renderSelect = ({
             label="Tenant"
             fieldId="tenant"
             service={Tenants}
-            isRequired
+            isRequired={isRequired}
             autoSelectSingleOption={autoSelectSingleOption}
             placeholder="Select a tenant"
             loadErrorTitle="Failed to fetch tenants"
@@ -208,6 +210,7 @@ describe('ResourceSelectField', () => {
 
     it('appears once a value is selected and clears it back to empty when clicked', async () => {
       const { user } = renderSelect({
+        isRequired: false,
         tenants: [makeTenant('t-1', 'acme'), makeTenant('t-2', 'globex')],
       });
 

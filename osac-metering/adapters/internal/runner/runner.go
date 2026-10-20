@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
@@ -31,6 +32,11 @@ const (
 	shutdownCloseTimeout = 10 * time.Second
 	consumeErrorBackoff  = 5 * time.Second
 	dlqMetricsInterval   = 30 * time.Second
+	// defaultSessionInterval bounds one consume session. A session only subscribes to
+	// the topics it started with; sarama watches partition changes only for subscribed
+	// topics, so a topic created later never triggers the rebalance that would pick it
+	// up. Restarting the session periodically does.
+	defaultSessionInterval = time.Minute
 )
 
 // RunnerConfig configures the adapter Runner.
@@ -38,10 +44,17 @@ type RunnerConfig struct {
 	Brokers       string
 	ConsumerGroup string
 	Topics        []string
-	FlushInterval time.Duration // default 10s
-	DedupTTL      time.Duration // default 10m
-	MaxRetries    int           // default 10
-	Kafka         kafka.KafkaConfig
+	// TopicsProvider discovers the topics to consume on every subscription. When set it
+	// replaces Topics, so the runner follows tenants as they come and go.
+	TopicsProvider func(ctx context.Context) ([]string, error)
+	// SessionInterval bounds one consume session, so topics created after the session
+	// started are picked up on the next one. Defaults to one minute; zero means the
+	// default.
+	SessionInterval time.Duration
+	FlushInterval   time.Duration // default 10s
+	DedupTTL        time.Duration // default 10m
+	MaxRetries      int           // default 10
+	Kafka           kafka.KafkaConfig
 }
 
 type topicPartition struct {
@@ -70,6 +83,9 @@ type Runner struct {
 	mu      sync.Mutex
 	offsets map[topicPartition]int64
 	session sarama.ConsumerGroupSession
+
+	// newGroup creates the consumer group. Tests replace it; production uses sarama.
+	newGroup func(brokers []string, config *sarama.Config) (sarama.ConsumerGroup, error)
 }
 
 // NewRunner creates a Runner for the given adapter.
@@ -83,6 +99,9 @@ func NewRunner(adapter adapters.ProviderAdapter, cfg RunnerConfig, logger logr.L
 	if cfg.MaxRetries == 0 {
 		cfg.MaxRetries = defaultMaxRetries
 	}
+	if cfg.SessionInterval == 0 {
+		cfg.SessionInterval = defaultSessionInterval
+	}
 
 	r := &Runner{
 		adapter: adapter,
@@ -92,6 +111,9 @@ func NewRunner(adapter adapters.ProviderAdapter, cfg RunnerConfig, logger logr.L
 		dedup:   newDedupCache(cfg.DedupTTL),
 		order:   newOrderTracker(cfg.DedupTTL),
 		offsets: make(map[topicPartition]int64),
+	}
+	r.newGroup = func(brokers []string, config *sarama.Config) (sarama.ConsumerGroup, error) {
+		return sarama.NewConsumerGroup(brokers, cfg.ConsumerGroup, config)
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -112,7 +134,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	}
 
 	brokers := kafka.SplitAndTrimBrokers(r.cfg.Brokers, ",")
-	group, err := sarama.NewConsumerGroup(brokers, r.cfg.ConsumerGroup, sc)
+	group, err := r.newGroup(brokers, sc)
 	if err != nil {
 		return fmt.Errorf("creating consumer group: %w", err)
 	}
@@ -128,15 +150,43 @@ func (r *Runner) Run(ctx context.Context) error {
 		go r.dlqDepthMetricsLoop(ctx, occ)
 	}
 
-	r.logger.Info("starting consumer group", "topics", r.cfg.Topics)
+	topics := r.cfg.Topics
+	r.logger.Info("starting consumer group", "topics", topics)
 
 	for {
-		if err := group.Consume(ctx, r.cfg.Topics, r); err != nil {
+		if r.cfg.TopicsProvider != nil {
+			discovered, err := r.cfg.TopicsProvider(ctx)
+			if err != nil {
+				r.logger.Error(err, "discovering topics, retrying with the previous set")
+			} else if !sameTopics(discovered, topics) {
+				r.logger.Info("topic set changed", "topics", discovered)
+				topics = discovered
+			}
+		}
+		if len(topics) == 0 {
+			select {
+			case <-ctx.Done():
+			case <-time.After(consumeErrorBackoff):
+			}
+			if ctx.Err() != nil {
+				break
+			}
+			continue
+		}
+		// A consume session only subscribes to the topics it started with, and a
+		// topic created later never triggers the rebalance that would pick it up, so
+		// the session restarts periodically and discovery runs again.
+		sessionCtx, cancelSession := context.WithTimeout(ctx, r.cfg.SessionInterval)
+		err := group.Consume(sessionCtx, topics, r)
+		cancelSession()
+		if err != nil {
 			if errors.Is(err, sarama.ErrClosedConsumerGroup) {
 				r.logger.Info("consumer group closed, exiting")
 				break
 			}
-			r.logger.Error(err, "consumer group error, retrying after backoff")
+			if ctx.Err() == nil {
+				r.logger.Error(err, "consumer group error, retrying after backoff")
+			}
 			select {
 			case <-ctx.Done():
 			case <-time.After(consumeErrorBackoff):
@@ -245,6 +295,23 @@ func (r *Runner) flush(ctx context.Context) error {
 	session.Commit()
 
 	return nil
+}
+
+// sameTopics reports whether two topic sets are equal, ignoring order.
+func sameTopics(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	sorted := append([]string(nil), a...)
+	sort.Strings(sorted)
+	other := append([]string(nil), b...)
+	sort.Strings(other)
+	for i := range sorted {
+		if sorted[i] != other[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // --- sarama.ConsumerGroupHandler ---

@@ -19,35 +19,35 @@ import (
 	"github.com/osac-project/osac-metering/schema"
 )
 
-var _ = Describe("Lifecycle", func() {
-	Describe("LifecycleDataFields", func() {
-		It("returns exactly the JSON field names of LifecycleData in struct field order", func() {
-			typ := reflect.TypeOf(schema.LifecycleData{})
+var _ = Describe("Heartbeat", func() {
+	Describe("HeartbeatDataFields", func() {
+		It("returns exactly the JSON field names of HeartbeatData in struct field order", func() {
+			typ := reflect.TypeOf(schema.HeartbeatData{})
 			var structFields []string
 			for i := range typ.NumField() {
 				tag := typ.Field(i).Tag.Get("json")
 				name := strings.Split(tag, ",")[0]
-				if name == "billing_dimensions" {
+				if name == "usage" || name == "billing_dimensions" {
 					continue
 				}
 				structFields = append(structFields, name)
 			}
 
-			fields := schema.LifecycleDataFields()
+			fields := schema.HeartbeatDataFields()
 
 			Expect(fields).To(HaveLen(len(structFields)),
-				"LifecycleDataFields() count should match LifecycleData JSON fields (excluding billing_dimensions)")
+				"HeartbeatDataFields() count should match HeartbeatData JSON fields")
 
 			for i, want := range structFields {
 				Expect(fields[i]).To(Equal(want),
-					"LifecycleDataFields()[%d] should match struct field order", i)
+					"HeartbeatDataFields()[%d] should match struct field order", i)
 			}
 		})
 
 		It("returns a fresh copy that cannot mutate the canonical list", func() {
-			a := schema.LifecycleDataFields()
+			a := schema.HeartbeatDataFields()
 			a[0] = "mutated"
-			b := schema.LifecycleDataFields()
+			b := schema.HeartbeatDataFields()
 			Expect(b[0]).NotTo(Equal("mutated"),
 				"LifecycleDataFields() must return a fresh copy on each call")
 		})

@@ -27,6 +27,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/IBM/sarama"
+
 	"github.com/go-logr/stdr"
 
 	"github.com/osac-project/osac-metering/adapters/internal/envutil"
@@ -35,6 +37,22 @@ import (
 	"github.com/osac-project/osac-metering/adapters/m360"
 )
 
+// consumeTopics lists every topic the adapter consumes: each metered tenant's heartbeat
+// topic and the shared MaaS inference topic.
+func consumeTopics(brokers string, kafkaCfg kafka.KafkaConfig) func(context.Context) ([]string, error) {
+	sc, err := kafka.NewConsumerConfig(kafkaCfg)
+	if err != nil {
+		log.Fatalf("creating kafka client config: %v", err)
+	}
+	client, err := sarama.NewClient(kafka.SplitAndTrimBrokers(brokers, ","), sc)
+	if err != nil {
+		log.Fatalf("creating kafka client for topic discovery: %v", err)
+	}
+	return func(ctx context.Context) ([]string, error) {
+		return kafka.ConsumeTopics(client)
+	}
+}
+
 func main() {
 	brokers := envutil.RequireEnv("KAFKA_BROKERS")
 	m360URL := envutil.RequireEnv("M360_API_URL")
@@ -42,14 +60,6 @@ func main() {
 
 	apiKey := envutil.ReadFileOrFatal(apiKeyFile)
 	apiVersion := envutil.EnvOrDefault("M360_API_VERSION", "v1")
-
-	topics := kafka.AllTopics
-	if v := os.Getenv("KAFKA_TOPICS"); v != "" {
-		topics = envutil.SplitAndTrim(v, ",")
-		if len(topics) == 0 {
-			log.Fatal("KAFKA_TOPICS must contain at least one topic")
-		}
-	}
 
 	group := envutil.EnvOrDefault("KAFKA_CONSUMER_GROUP", "m360-adapter")
 
@@ -71,6 +81,9 @@ func main() {
 
 	kafkaCfg := kafka.KafkaConfigFromEnv()
 
+	// The DLQ is mandatory: the adapter refuses to start without one, so a rejected
+	// heartbeat is never dropped. Each rejection goes to the tenant's dead-letter
+	// topic.
 	dlqOpt, dlqClose, err := runner.DLQOptionFromEnv(brokers, kafkaCfg)
 	if err != nil {
 		log.Fatalf("setting up DLQ: %v", err)
@@ -80,20 +93,17 @@ func main() {
 			log.Printf("DLQ producer close failed: %v", err)
 		}
 	}()
-	var opts []runner.RunnerOption
-	if dlqOpt != nil {
-		opts = append(opts, dlqOpt)
-		log.Printf("DLQ enabled: topic=%s", envutil.EnvOrDefault("DLQ_TOPIC", kafka.TopicDLQ))
-	}
 
 	adapter := m360.NewAdapter(m360URL, apiVersion, apiKey, logger)
 	r := runner.NewRunner(adapter, runner.RunnerConfig{
 		Brokers:       brokers,
 		ConsumerGroup: group,
-		Topics:        topics,
 		FlushInterval: flushInterval,
 		Kafka:         kafkaCfg,
-	}, logger, opts...)
+		// Every metered tenant's heartbeat topic plus the shared MaaS inference topic,
+		// rediscovered as tenants come and go.
+		TopicsProvider: consumeTopics(brokers, kafkaCfg),
+	}, logger, dlqOpt)
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", r.MetricsHandler())
@@ -126,8 +136,8 @@ func main() {
 		syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	log.Printf("starting m360 adapter: topics=%v group=%s api_version=%s flush=%s",
-		topics, group, apiVersion, flushInterval)
+	log.Printf("starting m360 adapter: group=%s api_version=%s flush=%s",
+		group, apiVersion, flushInterval)
 
 	runErr := r.Run(ctx)
 

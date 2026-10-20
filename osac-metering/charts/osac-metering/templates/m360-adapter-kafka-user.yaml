@@ -1,4 +1,7 @@
 {{- if .Values.m360Adapter.enabled }}
+{{- /* The adapter reads every tenant's heartbeat topic and the shared
+     inference topic, and writes every tenant's dead-letter topic plus
+     the inference dead-letter topic. */}}
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaUser
 metadata:
@@ -14,7 +17,7 @@ spec:
     acls:
       - resource:
           type: topic
-          name: osac.metering.
+          name: osac.metering.heartbeat.
           patternType: prefix
         operations:
           - Read
@@ -22,17 +25,27 @@ spec:
         host: "*"
       - resource:
           type: topic
-          name: osac.metering.dlq
+          name: osac.metering.inference
+          patternType: literal
+        operations:
+          - Read
+          - Describe
+        host: "*"
+      - resource:
+          type: topic
+          name: osac.metering.dlq.
+          patternType: prefix
+        operations:
+          - Write
+          - Describe
+        host: "*"
+      - resource:
+          type: topic
+          name: osac.metering.inference.dlq
           patternType: literal
         operations:
           - Write
-        host: "*"
-      - resource:
-          type: cluster
-          name: kafka-cluster
-          patternType: literal
-        operations:
-          - IdempotentWrite
+          - Describe
         host: "*"
       - resource:
           type: group

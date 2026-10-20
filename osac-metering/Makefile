@@ -5,7 +5,7 @@
 #
 #   http://www.apache.org/licenses/LICENSE-2.0
 
-.PHONY: all clean helm-lint test lint
+.PHONY: all clean helm-lint test lint rules-render-test
 
 all: test lint
 
@@ -16,6 +16,12 @@ test:
 	$(MAKE) -C schema test
 	$(MAKE) -C metering-service test
 	$(MAKE) -C adapters test
+	$(MAKE) rules-render-test
+
+# The revision ConfigMap is immutable, so its render must not change across
+# chart versions; see scripts/test-rules-render.sh.
+rules-render-test:
+	./scripts/test-rules-render.sh
 
 lint: helm-lint
 	$(MAKE) -C schema lint

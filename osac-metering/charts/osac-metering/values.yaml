@@ -20,23 +20,37 @@ global:
 database:
   connection: []
 
+# Heartbeat round interval. One minute by default; each heartbeat is a rated
+# transaction in the billing provider, so a longer interval sends fewer of
+# them and keeps running totals staler.
 heartbeat:
   interval: "60s"
 
-reconciliation:
-  interval: "60m"
+# Rule revisions live as immutable ConfigMaps in this namespace. The chart
+# ships revision 0001; a new revision is a new ConfigMap with a future
+# effective_at and a metering restart.
+rules:
+  namespace: ""
 
 certs:
   caBundle:
     configMap: ca-bundle
 
+# Sizing: one catch-up pass reads up to CatchUpBatch (500) round groups of
+# heartbeats into memory before applying them one group per transaction. A
+# caught heartbeat costs ~460 bytes in use (a 208-byte struct plus its ID and
+# dimension JSON, measured on the round package), so a heavy pass — 500 groups
+# of, say, 200 heartbeats each on a busy tenant — holds ~45 MB, and the merge
+# builds transient ledger copies and rational arithmetic on top of that. With
+# the Go runtime and Kafka client baseline (~80 MB), the worst case lands
+# around 200 MB; 512 Mi leaves more than 2x headroom over it.
 resources:
   requests:
     cpu: 100m
     memory: 128Mi
   limits:
     cpu: 500m
-    memory: 256Mi
+    memory: 512Mi
 
 # Kafka connection and topic naming. Override to point at a different
 # Kafka cluster or to prefix topics for per-instance isolation.
@@ -46,8 +60,14 @@ kafka:
   clusterName: ""      # default: osac-kafka
   clusterNamespace: "" # default: osac-kafka
 
-# Prefix prepended to all topic names (e.g. "pr101" -> "pr101.osac.metering.lifecycle").
-# When set, this chart skips KafkaTopic/KafkaUser creation (the parent chart owns them).
+# The per-tenant heartbeat and dead-letter topics. Metering creates them when
+# it first serves a tenant; this chart only creates the KafkaUser ACLs. The
+# retention is the recovery window: metering rebuilds its database from the
+# topics, so -1 (indefinite) keeps every record for a full rebuild. A
+# replication factor of -1 leaves the broker default in place.
+topics:
+  retentionMs: "-1"
+  replicationFactor: -1
 
 ## Echo adapter — test/development tool only, not for production use.
 ## Enable and configure via environment-specific values (e.g., values/vmaas-ci/values.yaml).

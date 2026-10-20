@@ -45,6 +45,8 @@ import (
 
 	"github.com/go-logr/stdr"
 
+	"github.com/IBM/sarama"
+
 	"github.com/osac-project/osac-metering/adapters/echo"
 	"github.com/osac-project/osac-metering/adapters/internal/envutil"
 	"github.com/osac-project/osac-metering/adapters/internal/kafka"
@@ -89,21 +91,28 @@ func main() {
 			log.Printf("DLQ producer close failed: %v", err)
 		}
 	}()
-	var opts []runner.RunnerOption
-	if dlqOpt != nil {
-		opts = append(opts, dlqOpt)
-		log.Printf("DLQ enabled: topic=%s", envutil.EnvOrDefault("DLQ_TOPIC", kafka.TopicDLQ))
+	// Discover every tenant's heartbeat topic, like the provider adapters do.
+	sc, err := kafka.NewConsumerConfig(kafkaCfg)
+	if err != nil {
+		log.Fatalf("creating kafka client config: %v", err)
 	}
+	echoClient, err := sarama.NewClient(kafka.SplitAndTrimBrokers(brokers, ","), sc)
+	if err != nil {
+		log.Fatalf("creating kafka client for topic discovery: %v", err)
+	}
+	defer func() { _ = echoClient.Close() }()
 
 	store := echo.NewEventStore(bufferSize)
 	adapter := echo.NewAdapter(store)
 	r := runner.NewRunner(adapter, runner.RunnerConfig{
 		Brokers:       brokers,
 		ConsumerGroup: group,
-		Topics:        kafka.AllTopics,
 		FlushInterval: flushInterval,
 		Kafka:         kafkaCfg,
-	}, logger, opts...)
+		TopicsProvider: func(ctx context.Context) ([]string, error) {
+			return kafka.ConsumeTopics(echoClient)
+		},
+	}, logger, dlqOpt)
 
 	// Serve metrics, health, and event query endpoints.
 	go func() {
@@ -138,8 +147,8 @@ func main() {
 		syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	log.Printf("starting echo adapter: broker_count=%d topics=%v group=%s flush=%s",
-		len(strings.Split(brokers, ",")), kafka.AllTopics, group, flushInterval)
+	log.Printf("starting echo adapter: broker_count=%d group=%s flush=%s",
+		len(strings.Split(brokers, ",")), group, flushInterval)
 
 	if err := r.Run(ctx); err != nil {
 		log.Fatalf("runner error: %v", err)

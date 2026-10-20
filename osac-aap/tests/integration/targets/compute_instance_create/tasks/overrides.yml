@@ -203,64 +203,66 @@
     - ../../../common_vars.yml
 
   tasks:
-    - name: Read JIT override log
-      ansible.builtin.slurp:
-        path: /tmp/osac_test_overrides.log
-      register: _jit_override_log_content
+    - name: Verify JIT storage and always clean up its fixtures
+      block:
+        - name: Read JIT override log
+          ansible.builtin.slurp:
+            path: /tmp/osac_test_overrides.log
+          register: _jit_override_log_content
 
-    - name: Parse JIT override log
-      ansible.builtin.set_fact:
-        _jit_override_log: "{{ _jit_override_log_content.content | b64decode }}"
+        - name: Parse JIT override log
+          ansible.builtin.set_fact:
+            _jit_override_log: "{{ _jit_override_log_content.content | b64decode }}"
 
-    - name: Read the JIT VAST CSIDriver fixture
-      kubernetes.core.k8s_info:
-        api_version: storage.k8s.io/v1
-        kind: CSIDriver
-        name: csi.vastdata.com
-      register: _jit_vast_driver
+        - name: Read the JIT VAST CSIDriver fixture
+          kubernetes.core.k8s_info:
+            api_version: storage.k8s.io/v1
+            kind: CSIDriver
+            name: csi.vastdata.com
+          register: _jit_vast_driver
 
-    - name: Assert JIT storage ensured the VAST driver and reused its StorageClass
-      ansible.builtin.assert:
-        that:
-          - "'native_csi_driver_install' in _jit_override_log"
-          - "'package=vast-csi-operator' in _jit_override_log"
-          - "'providers=[\"vast\"]' in _jit_override_log"
-          - _jit_vast_driver.resources | length == 1
-          - >-
-            tenant_storage_class_storage_classes
-            | selectattr('name', 'equalto', 'vast-nfs-test-jit-tenant-local')
-            | list | length == 1
-        fail_msg: >-
-          ComputeInstance JIT provisioning must ensure the native VAST CSI driver
-          before resolving its StorageClass. Log: {{ _jit_override_log }}
+        - name: Assert JIT storage ensured the VAST driver and reused its StorageClass
+          ansible.builtin.assert:
+            that:
+              - "'native_csi_driver_install' in _jit_override_log"
+              - "'package=vast-csi-operator' in _jit_override_log"
+              - "'providers=[\"vast\"]' in _jit_override_log"
+              - _jit_vast_driver.resources | length == 1
+              - >-
+                tenant_storage_class_storage_classes
+                | selectattr('name', 'equalto', 'vast-nfs-test-jit-tenant-local')
+                | list | length == 1
+            fail_msg: >-
+              ComputeInstance JIT provisioning must ensure the native VAST CSI driver
+              before resolving its StorageClass. Log: {{ _jit_override_log }}
+      always:
+        - name: Delete the JIT StorageClass fixture
+          kubernetes.core.k8s:
+            state: absent
+            api_version: storage.k8s.io/v1
+            kind: StorageClass
+            name: vast-nfs-test-jit-tenant-local
 
-    - name: Delete the JIT StorageClass fixture
-      kubernetes.core.k8s:
-        state: absent
-        api_version: storage.k8s.io/v1
-        kind: StorageClass
-        name: vast-nfs-test-jit-tenant-local
+        - name: Delete the JIT VastCSIDriver fixture
+          kubernetes.core.k8s:
+            state: absent
+            api_version: storage.vastdata.com/v1
+            kind: VastCSIDriver
+            name: csi.vastdata.com
+            namespace: vast-csi-system
+          failed_when: false
 
-    - name: Delete the JIT VastCSIDriver fixture
-      kubernetes.core.k8s:
-        state: absent
-        api_version: storage.vastdata.com/v1
-        kind: VastCSIDriver
-        name: csi.vastdata.com
-        namespace: vast-csi-system
-      failed_when: false
+        - name: Delete the JIT VAST CSIDriver fixture
+          kubernetes.core.k8s:
+            state: absent
+            api_version: storage.k8s.io/v1
+            kind: CSIDriver
+            name: csi.vastdata.com
 
-    - name: Delete the JIT VAST CSIDriver fixture
-      kubernetes.core.k8s:
-        state: absent
-        api_version: storage.k8s.io/v1
-        kind: CSIDriver
-        name: csi.vastdata.com
-
-    - name: Delete the JIT VastCSIDriver CRD fixture
-      kubernetes.core.k8s:
-        state: absent
-        api_version: apiextensions.k8s.io/v1
-        kind: CustomResourceDefinition
-        name: vastcsidrivers.storage.vastdata.com
-        wait: true
+        - name: Delete the JIT VastCSIDriver CRD fixture
+          kubernetes.core.k8s:
+            state: absent
+            api_version: apiextensions.k8s.io/v1
+            kind: CustomResourceDefinition
+            name: vastcsidrivers.storage.vastdata.com
+            wait: true

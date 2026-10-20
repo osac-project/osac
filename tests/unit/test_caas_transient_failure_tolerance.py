@@ -128,3 +128,4 @@ def test_assert_worker_aggregates_propagates_permanent_error(
     # The chained CalledProcessError must be suppressed so raw
     # command output never leaks through the exception chain.
     assert exc_info.value.__cause__ is None
+    assert exc_info.value.__suppress_context__ is True

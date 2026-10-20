@@ -232,6 +232,10 @@ func (s *ComputeInstancesServer) Create(ctx context.Context,
 		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process compute instance")
 		return
 	}
+	// The status is output-only: only the system writes it. The metering source contract
+	// is not enforced on inserts, so a caller-supplied status must never reach the
+	// database as a fabricated fact.
+	privateComputeInstance.ClearStatus()
 
 	// Delegate to the private server:
 	privateRequest := &privatev1.ComputeInstancesCreateRequest{}
@@ -328,9 +332,12 @@ func (s *ComputeInstancesServer) Update(ctx context.Context,
 		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process compute instance")
 		return
 	}
-	if publicComputeInstance.GetStatus() == nil && preservedStatus != nil {
-		privateComputeInstance.SetStatus(preservedStatus)
-	}
+	// The public API has no writable status, and the mapper copies the fields the request
+	// carries. Always restore the stored status, including when the request supplies one:
+	// a maskless update carrying a status must not change output-only fields, and a
+	// fabricated state change with a later transition time would pass the metering source
+	// contract and reach the event log.
+	privateComputeInstance.SetStatus(preservedStatus)
 
 	// Delegate to the private server:
 	privateRequest := &privatev1.ComputeInstancesUpdateRequest{}

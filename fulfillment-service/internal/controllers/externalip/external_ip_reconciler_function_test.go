@@ -17,11 +17,13 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -406,6 +408,140 @@ var _ = Describe("setDefaults", func() {
 
 		Expect(t.externalIP.HasStatus()).To(BeTrue())
 		Expect(t.externalIP.GetStatus().GetState()).To(Equal(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING))
+	})
+
+	It("should stamp the transition time when setting PENDING", func() {
+		externalIP := privatev1.ExternalIP_builder{
+			Id: "eip-defaults-stamp",
+		}.Build()
+
+		t := &task{
+			externalIP: externalIP,
+		}
+
+		t.setDefaults()
+
+		Expect(t.externalIP.GetStatus().GetStateTransitionTime()).NotTo(BeNil())
+	})
+
+	It("should keep the transition time when the state is already set", func() {
+		stamp := timestamppb.New(time.Unix(1000, 0))
+		externalIP := privatev1.ExternalIP_builder{
+			Id: "eip-existing-stamp",
+			Status: privatev1.ExternalIPStatus_builder{
+				State:               privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
+				StateTransitionTime: stamp,
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			externalIP: externalIP,
+		}
+
+		t.setDefaults()
+
+		Expect(t.externalIP.GetStatus().GetStateTransitionTime()).To(Equal(stamp))
+	})
+})
+
+var _ = Describe("setPending", func() {
+	It("should stamp the transition time when moving to PENDING", func() {
+		stamp := timestamppb.New(time.Unix(1000, 0))
+		externalIP := privatev1.ExternalIP_builder{
+			Id: "eip-pending-stamp",
+			Status: privatev1.ExternalIPStatus_builder{
+				State:               privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
+				StateTransitionTime: stamp,
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			externalIP: externalIP,
+		}
+
+		t.setPending(errors.New("retry"))
+
+		Expect(t.externalIP.GetStatus().GetState()).To(Equal(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING))
+		Expect(t.externalIP.GetStatus().GetStateTransitionTime()).NotTo(Equal(stamp))
+		Expect(t.externalIP.GetStatus().GetStateTransitionTime()).NotTo(BeNil())
+	})
+
+	It("should keep the transition time when staying in PENDING", func() {
+		stamp := timestamppb.New(time.Unix(1000, 0))
+		externalIP := privatev1.ExternalIP_builder{
+			Id: "eip-pending-keep",
+			Status: privatev1.ExternalIPStatus_builder{
+				State:               privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING,
+				StateTransitionTime: stamp,
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			externalIP: externalIP,
+		}
+
+		t.setPending(errors.New("retry"))
+
+		Expect(t.externalIP.GetStatus().GetStateTransitionTime()).To(Equal(stamp))
+	})
+
+	It("should stamp the transition time when PENDING has none", func() {
+		externalIP := privatev1.ExternalIP_builder{
+			Id: "eip-pending-no-stamp",
+			Status: privatev1.ExternalIPStatus_builder{
+				State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING,
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			externalIP: externalIP,
+		}
+
+		t.setPending(errors.New("retry"))
+
+		Expect(t.externalIP.GetStatus().GetStateTransitionTime()).NotTo(BeNil())
+	})
+})
+
+var _ = Describe("setFailed", func() {
+	It("should stamp the transition time when moving to FAILED", func() {
+		stamp := timestamppb.New(time.Unix(1000, 0))
+		externalIP := privatev1.ExternalIP_builder{
+			Id: "eip-failed-stamp",
+			Status: privatev1.ExternalIPStatus_builder{
+				State:               privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
+				StateTransitionTime: stamp,
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			externalIP: externalIP,
+		}
+
+		t.setFailed(errors.New("boom"))
+
+		Expect(t.externalIP.GetStatus().GetState()).To(Equal(privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED))
+		Expect(t.externalIP.GetStatus().GetStateTransitionTime()).NotTo(Equal(stamp))
+		Expect(t.externalIP.GetStatus().GetStateTransitionTime()).NotTo(BeNil())
+	})
+
+	It("should keep the transition time when staying in FAILED", func() {
+		stamp := timestamppb.New(time.Unix(1000, 0))
+		externalIP := privatev1.ExternalIP_builder{
+			Id: "eip-failed-keep",
+			Status: privatev1.ExternalIPStatus_builder{
+				State:               privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED,
+				StateTransitionTime: stamp,
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			externalIP: externalIP,
+		}
+
+		t.setFailed(errors.New("boom"))
+
+		Expect(t.externalIP.GetStatus().GetStateTransitionTime()).To(Equal(stamp))
 	})
 })
 

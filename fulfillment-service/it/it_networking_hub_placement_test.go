@@ -27,6 +27,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -713,8 +714,12 @@ func setRoutingExternalIPAllocated(ctx context.Context, client privatev1.Externa
 	Expect(err).ToNot(HaveOccurred())
 	object := response.GetObject()
 	object.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
+	object.GetStatus().SetStateTransitionTime(timestamppb.New(time.Now()))
 	_, err = client.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
-		Object: object, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+		Object: object,
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+			"status.state", "status.state_transition_time",
+		}},
 	}.Build())
 	Expect(err).ToNot(HaveOccurred())
 }

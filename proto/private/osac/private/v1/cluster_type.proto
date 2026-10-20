@@ -29,6 +29,7 @@ import "osac/private/v1/cluster_template_type.proto";
 import "osac/private/v1/cluster_version_type.proto";
 import "osac/private/v1/condition_status_type.proto";
 import "osac/private/v1/metadata_type.proto";
+import "osac/private/v1/metering_type.proto";
 import "osac/private/v1/secret_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
@@ -57,7 +58,7 @@ message ClusterSpec {
   // populates this reference from the catalog item.
   //
   // This can't be modified after the cluster is created.
-  ClusterTemplateReference template = 1;
+  ClusterTemplateReference template = 1 [(osac.private.v1.metering) = {kind: METERING_FIELD_KIND_CONSTANT}];
 
   // Values of the template parameters.
   //
@@ -170,7 +171,7 @@ message ClusterSpec {
   //   3. System default (`is_default = true`).
   //
   // The referenced ClusterVersion must exist, be enabled, and not be in `OBSOLETE` state.
-  ClusterVersionReference version = 6;
+  ClusterVersionReference version = 6 [(osac.private.v1.metering) = {kind: METERING_FIELD_KIND_VARIES transition_time: "status.version_transition_time"}];
 
   // Cluster networking configuration.
   optional ClusterNetwork network = 7;
@@ -230,7 +231,7 @@ enum AddOnOperatorInstallState {
 // The status contains the details of the cluster provided by the system.
 message ClusterStatus {
   // Indicates the overall state of the cluster.
-  ClusterState state = 1;
+  ClusterState state = 1 [(osac.private.v1.metering) = {kind: METERING_FIELD_KIND_VARIES transition_time: "status.state_transition_time"}];
 
   // Contains a list of conditions that describe in detail the status of the cluster.
   //

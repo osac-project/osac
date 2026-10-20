@@ -27,6 +27,7 @@ import "osac/private/v1/condition_status_type.proto";
 import "osac/private/v1/disk_image_type.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/instance_type_type.proto";
+import "osac/private/v1/metering_type.proto";
 import "osac/private/v1/secret_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
@@ -41,7 +42,7 @@ message ComputeInstance {
 
   Metadata metadata = 2;
   ComputeInstanceSpec spec = 3;
-  ComputeInstanceStatus status = 4;
+  ComputeInstanceStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // The spec contains the details of a compute instance as desired by the user.
@@ -163,7 +164,7 @@ message ComputeInstanceSpec {
 
   // Reference to a DiskImage resource. Required after template/catalog item
   // defaults are applied. The server validates existence, lifecycle, and tenant visibility.
-  DiskImageReference disk_image = 19;
+  DiskImageReference disk_image = 19 [(osac.private.v1.metering) = {kind: METERING_FIELD_KIND_CONSTANT}];
 
   // Reference to a Secret containing user data for the compute instance.
   // The Secret must contain a non-empty `userdata` entry. Mutually exclusive with `user_data`.
@@ -182,7 +183,7 @@ message ComputeInstanceSpec {
 // The status contains the details of the compute instance provided by the system.
 message ComputeInstanceStatus {
   // Indicates the overall state of the compute instance.
-  ComputeInstanceState state = 1;
+  ComputeInstanceState state = 1 [(osac.private.v1.metering) = {kind: METERING_FIELD_KIND_VARIES transition_time: "status.state_transition_time"}];
 
   // Contains a list of conditions that describe in detail the status of the compute instance.
   //
@@ -263,21 +264,21 @@ message ComputeInstanceStatus {
   string hub = 7 [(cleanapi.field).private = true];
 
   // Subnet and IP details reported for each configured network attachment.
-  repeated ComputeNetworkAttachmentStatus compute_network_attachment_statuses = 8 [(google.api.field_behavior) = OUTPUT_ONLY];
+  repeated ComputeNetworkAttachmentStatus compute_network_attachment_statuses = 8;
 
   // The instance type that is actually running, after any restart that a resize required. It may
   // lag `spec.instance_type` while a resize is in progress. The system sets it when it observes
   // the instance running with the type; users can't set or change it.
   //
   // Metering bills the running instance against this type.
-  InstanceTypeReference instance_type = 9 [(google.api.field_behavior) = OUTPUT_ONLY];
+  InstanceTypeReference instance_type = 9 [(osac.private.v1.metering) = {kind: METERING_FIELD_KIND_VARIES transition_time: "status.instance_type_transition_time"}];
 
   // Records when the instance type in `status.instance_type` became running. This is the
   // authoritative timestamp of the running type transition, suitable for billing interval
   // calculations: metering bills the new type from this time.
   //
   // This will be empty if the instance has not been observed running yet.
-  optional google.protobuf.Timestamp instance_type_transition_time = 10 [(google.api.field_behavior) = OUTPUT_ONLY];
+  optional google.protobuf.Timestamp instance_type_transition_time = 10;
 }
 
 // Contains the Subnet and IPv4 address reported for a network attachment.

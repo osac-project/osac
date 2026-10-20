@@ -315,6 +315,19 @@ type statusTransition struct {
 	newStatus v1alpha1.ClusterOrderStatus
 }
 
+// setClusterOrderPhase records the phase and, when it changes, the time of the change, so
+// metering can bill the state transition from the moment it happened rather than from when
+// feedback noticed it. The time is stamped once per phase change and kept while the phase is
+// unchanged, the same pattern as ComputeInstance's RunningConfigSince.
+func setClusterOrderPhase(status *v1alpha1.ClusterOrderStatus, phase v1alpha1.ClusterOrderPhaseType) {
+	if status.Phase == phase {
+		return
+	}
+	status.Phase = phase
+	now := metav1.Now()
+	status.PhaseTransitionTime = &now
+}
+
 func (r *ClusterOrderReconciler) patchStatusWithRetry(ctx context.Context, key client.ObjectKey, computed v1alpha1.ClusterOrderStatus) (*statusTransition, error) {
 	var transition *statusTransition
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -331,9 +344,9 @@ func (r *ClusterOrderReconciler) patchStatusWithRetry(ctx context.Context, key c
 		case terminalPhase:
 			// A stale reconcile must not revive a terminal order.
 		case workerPending:
-			latest.Status.Phase = v1alpha1.ClusterOrderPhaseProgressing
+			setClusterOrderPhase(&latest.Status, v1alpha1.ClusterOrderPhaseProgressing)
 		default:
-			latest.Status.Phase = computed.Phase
+			setClusterOrderPhase(&latest.Status, computed.Phase)
 		}
 		latest.Status.ClusterReference = computed.ClusterReference
 		latest.Status.NodeRequests = computed.NodeRequests
@@ -473,7 +486,7 @@ func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ reconcile.R
 
 	r.initializeStatusConditions(instance)
 	if instance.Status.Phase == "" {
-		instance.Status.Phase = v1alpha1.ClusterOrderPhaseProgressing
+		setClusterOrderPhase(&instance.Status, v1alpha1.ClusterOrderPhaseProgressing)
 	}
 	if instance.Status.Phase == v1alpha1.ClusterOrderPhaseProgressing {
 		r.initializeProgressingStage(instance)
@@ -537,7 +550,7 @@ func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ reconcile.R
 		}
 	} else if instance.Status.Phase != v1alpha1.ClusterOrderPhaseFailed &&
 		instance.Status.Phase != v1alpha1.ClusterOrderPhaseDeleting {
-		instance.Status.Phase = v1alpha1.ClusterOrderPhaseProgressing
+		setClusterOrderPhase(&instance.Status, v1alpha1.ClusterOrderPhaseProgressing)
 		r.setProgressingStage(instance, v1alpha1.ReasonControlPlaneStarting)
 	}
 
@@ -642,7 +655,7 @@ func (r *ClusterOrderReconciler) reconcileClusterOrderReadiness(
 		return
 	}
 	if !hostedClusterControlPlaneIsAvailable(hostedCluster) || !hostedClusterIsReady(hostedCluster) {
-		instance.Status.Phase = v1alpha1.ClusterOrderPhaseProgressing
+		setClusterOrderPhase(&instance.Status, v1alpha1.ClusterOrderPhaseProgressing)
 		r.setProgressingStage(instance, deriveProvisioningSubStage(hostedCluster))
 		return
 	}
@@ -650,13 +663,13 @@ func (r *ClusterOrderReconciler) reconcileClusterOrderReadiness(
 	instance.SetStatusCondition(v1alpha1.ConditionClusterAvailable, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
 
 	if instance.HasBareMetalNodeSet() && !bareMetalWorkersReady(instance) {
-		instance.Status.Phase = v1alpha1.ClusterOrderPhaseProgressing
+		setClusterOrderPhase(&instance.Status, v1alpha1.ClusterOrderPhaseProgressing)
 		instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionTrue,
 			humanizeConditionName(v1alpha1.ReasonWorkersJoining), v1alpha1.ReasonWorkersJoining)
 		return
 	}
 
-	instance.Status.Phase = v1alpha1.ClusterOrderPhaseReady
+	setClusterOrderPhase(&instance.Status, v1alpha1.ClusterOrderPhaseReady)
 	instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
 }
 
@@ -1000,7 +1013,7 @@ func finalizeReadyIfProvisioned(log logr.Logger, instance *v1alpha1.ClusterOrder
 	if !hostedClusterAndNodePoolsAreReady(instance, hc, nodePools) {
 		return false
 	}
-	instance.Status.Phase = v1alpha1.ClusterOrderPhaseReady
+	setClusterOrderPhase(&instance.Status, v1alpha1.ClusterOrderPhaseReady)
 	instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
 	return true
 }
@@ -1067,7 +1080,7 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 	log := ctrllog.FromContext(ctx)
 	log.Info("deleting clusterorder")
 
-	instance.Status.Phase = v1alpha1.ClusterOrderPhaseDeleting
+	setClusterOrderPhase(&instance.Status, v1alpha1.ClusterOrderPhaseDeleting)
 	instance.SetStatusCondition(v1alpha1.ConditionDeleting, metav1.ConditionTrue,
 		"ClusterOrder is being deleted", v1alpha1.ReasonDeleting)
 
@@ -1214,7 +1227,7 @@ func (r *ClusterOrderReconciler) provisioningCallbacks(instance *v1alpha1.Cluste
 			// stays Progressing and the failed job is visible in status.provisioningJobs.
 			if instance.Status.ClusterReference == nil ||
 				instance.Status.ClusterReference.HostedClusterName == "" {
-				instance.Status.Phase = v1alpha1.ClusterOrderPhaseFailed
+				setClusterOrderPhase(&instance.Status, v1alpha1.ClusterOrderPhaseFailed)
 				instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionFalse, message, v1alpha1.ReasonProvisioningFailed)
 			}
 		},

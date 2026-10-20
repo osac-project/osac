@@ -39,7 +39,7 @@ message BareMetalInstance {
 
   Metadata metadata = 2;
   BareMetalInstanceSpec spec = 3;
-  BareMetalInstanceStatus status = 4;
+  BareMetalInstanceStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // The spec contains the details of a bare metal instance as desired by the user.
@@ -177,14 +177,14 @@ message BareMetalInstanceStatus {
   // suitable for billing interval calculations.
   //
   // This will be empty if no state transition has been reported yet.
-  optional google.protobuf.Timestamp state_transition_time = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
+  optional google.protobuf.Timestamp state_transition_time = 7;
 
   // The cluster that the system created this bare metal instance for, if any.
   //
   // For a cluster worker this names the cluster the worker serves for its whole life. Empty for
   // standalone instances. The system sets it once, at creation, and it never changes; users can't
   // set or change it.
-  ClusterLocalReference cluster = 8 [(google.api.field_behavior) = OUTPUT_ONLY];
+  ClusterLocalReference cluster = 8;
 
   // The node set that the bare metal instance serves within its cluster. For a cluster worker
   // this is the identifier of the node set in the cluster's spec that the worker belongs to.
@@ -192,8 +192,7 @@ message BareMetalInstanceStatus {
     (buf.validate.field).string = {
       max_len: 63,
       pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
-    },
-    (google.api.field_behavior) = OUTPUT_ONLY
+    }
   ];
 }
 

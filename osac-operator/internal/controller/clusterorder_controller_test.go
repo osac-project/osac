@@ -2366,3 +2366,37 @@ var _ = Describe("ClusterOrder Controller", func() {
 	})
 
 })
+
+var _ = Describe("ClusterOrder phase transition time", func() {
+	It("stamps the time when the phase changes", func() {
+		instance := &v1alpha1.ClusterOrder{Status: v1alpha1.ClusterOrderStatus{
+			Phase: v1alpha1.ClusterOrderPhaseProgressing,
+		}}
+
+		setClusterOrderPhase(&instance.Status, v1alpha1.ClusterOrderPhaseReady)
+
+		Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseReady))
+		Expect(instance.Status.PhaseTransitionTime).NotTo(BeNil())
+	})
+
+	It("stamps the first phase of a new order", func() {
+		instance := &v1alpha1.ClusterOrder{}
+
+		setClusterOrderPhase(&instance.Status, v1alpha1.ClusterOrderPhaseProgressing)
+
+		Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseProgressing))
+		Expect(instance.Status.PhaseTransitionTime).NotTo(BeNil())
+	})
+
+	It("keeps the time while the phase is unchanged", func() {
+		stamped := metav1.NewTime(time.Now().Add(-time.Hour).UTC())
+		instance := &v1alpha1.ClusterOrder{Status: v1alpha1.ClusterOrderStatus{
+			Phase:               v1alpha1.ClusterOrderPhaseReady,
+			PhaseTransitionTime: &stamped,
+		}}
+
+		setClusterOrderPhase(&instance.Status, v1alpha1.ClusterOrderPhaseReady)
+
+		Expect(instance.Status.PhaseTransitionTime.Time).To(Equal(stamped.Time))
+	})
+})

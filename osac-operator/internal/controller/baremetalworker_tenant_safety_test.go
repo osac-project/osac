@@ -20,6 +20,7 @@ import (
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -424,20 +425,22 @@ var _ = Describe("BareMetalWorker tenant safety", Label("baremetalworker"), func
 		// confirm absence without a List/Get round-trip.
 		latest := &osacv1alpha1.ClusterOrder{}
 		err = k8sClient.Get(ctx, client.ObjectKeyFromObject(co), latest)
-		if err == nil {
-			// Object may still exist briefly; verify the
-			// baremetalworker finalizer is gone.
-			for _, f := range latest.Finalizers {
-				Expect(f).NotTo(Equal(finalizer),
-					"baremetalworker finalizer must be "+
-						"removed after rejected-create "+
-						"deletion: finalizers=%v workers=%v",
-					latest.Finalizers,
-					latest.Status.Workers)
-			}
+		if apierrors.IsNotFound(err) {
+			// Fully deleted — finalizer was cleared.
+			return
 		}
-		// If Get returns NotFound, the order was fully
-		// deleted, which also proves the finalizer cleared.
+		Expect(err).NotTo(HaveOccurred(),
+			"unexpected Get error after deletion")
+		// Object still exists; verify the baremetalworker
+		// finalizer is gone.
+		for _, f := range latest.Finalizers {
+			Expect(f).NotTo(Equal(finalizer),
+				"baremetalworker finalizer must be "+
+					"removed after rejected-create "+
+					"deletion: finalizers=%v workers=%v",
+				latest.Finalizers,
+				latest.Status.Workers)
+		}
 	})
 
 	It("does not correlate a foreign status ID during rebuild", func() {

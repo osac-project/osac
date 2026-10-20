@@ -114,6 +114,10 @@ toggles and values to set.
 - The OpenShift CLI (`oc`), matching the cluster version. The installation and
   its hooks call `oc` and `kubectl`.
 - Helm 3.8 or later, for OCI registry support.
+- ORAS CLI v1.3.0 or later, for publishing the CaaS QCOW2 image to an OCI
+  registry. `--artifact-platform` was added in v1.3.0 and is still
+  experimental; see the [ORAS installation guide](https://oras.land/docs/installation/)
+  and [v1.3.0 release notes](https://github.com/oras-project/oras/releases/tag/v1.3.0).
 - The `osac` CLI, latest release, for postinstallation hub registration and
   day-2 operations (see [Section 8.2](#82-installing-the-osac-cli)). Not
   required for the Helm installation.

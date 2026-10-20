@@ -23,6 +23,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -384,14 +385,16 @@ var _ = Describe("Private volumes server", func() {
 				Object: privatev1.Volume_builder{
 					Id: created.GetId(),
 					Status: privatev1.VolumeStatus_builder{
-						State:          privatev1.VolumeState_VOLUME_STATE_AVAILABLE,
-						VendorVolumeId: "vast-vol-123",
-						Provider:       "test-provider",
-						Protocol:       privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
+						State:               privatev1.VolumeState_VOLUME_STATE_AVAILABLE,
+						StateTransitionTime: timestamppb.Now(),
+						VendorVolumeId:      "vast-vol-123",
+						Provider:            "test-provider",
+						Protocol:            privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
 					"status.state",
+					"status.state_transition_time",
 					"status.vendor_volume_id",
 					"status.provider",
 					"status.protocol",

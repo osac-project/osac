@@ -250,6 +250,126 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 	})
 
+	Context("recordRunningConfig", func() {
+		// runningInstance builds a ComputeInstance whose CR reports the labeled type
+		// running: phase Running, configuration applied, and a RestartRequired
+		// condition the caller controls.
+		runningInstance := func(restart metav1.ConditionStatus, present bool) *osacv1alpha1.ComputeInstance {
+			instance := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						osacComputeInstanceTypeNameLabel: "standard-8-32",
+					},
+				},
+			}
+			if present {
+				instance.Status.Conditions = []metav1.Condition{{
+					Type:               string(osacv1alpha1.ComputeInstanceConditionRestartRequired),
+					Status:             restart,
+					Reason:             "AsExpected",
+					LastTransitionTime: metav1.NewTime(time.Now().UTC()),
+				}}
+			}
+			instance.Status.Conditions = append(instance.Status.Conditions, metav1.Condition{
+				Type:               string(osacv1alpha1.ComputeInstanceConditionConfigurationApplied),
+				Status:             metav1.ConditionTrue,
+				Reason:             "AsExpected",
+				LastTransitionTime: metav1.NewTime(time.Now().UTC()),
+			})
+			instance.Status.Phase = osacv1alpha1.ComputeInstancePhaseRunning
+			return instance
+		}
+
+		steadyState := func(instance *osacv1alpha1.ComputeInstance) *osacv1alpha1.ComputeInstance {
+			version, err := provisioning.ComputeDesiredConfigVersion(instance.Spec)
+			Expect(err).ToNot(HaveOccurred())
+			instance.Status.DesiredConfigVersion = version
+			instance.Status.RunningConfigVersion = version
+			instance.Status.RunningInstanceTypeName = instance.Labels[osacComputeInstanceTypeNameLabel]
+			since := metav1.NewTime(time.Now().Add(-time.Hour).UTC())
+			instance.Status.RunningConfigSince = &since
+			return instance
+		}
+
+		It("records when the restart condition is explicitly false", func() {
+			instance := steadyState(runningInstance(metav1.ConditionFalse, true))
+			instance.Status.RunningConfigVersion = ""
+			instance.Status.RunningInstanceTypeName = ""
+			instance.Status.RunningConfigSince = nil
+
+			recordRunningConfig(instance)
+
+			Expect(instance.Status.RunningConfigVersion).To(Equal(instance.Status.DesiredConfigVersion))
+			Expect(instance.Status.RunningInstanceTypeName).To(Equal("standard-8-32"))
+			Expect(instance.Status.RunningConfigSince).ToNot(BeNil())
+		})
+
+		It("does not record when the restart condition is absent", func() {
+			// KubeVirt reports RestartRequired asynchronously: an absent condition
+			// vouches for nothing, so no observation is recorded yet.
+			instance := runningInstance("", false)
+			instance.Status.RunningConfigVersion = ""
+			instance.Status.RunningInstanceTypeName = ""
+			instance.Status.RunningConfigSince = nil
+
+			recordRunningConfig(instance)
+
+			Expect(instance.Status.RunningConfigVersion).To(BeEmpty())
+			Expect(instance.Status.RunningInstanceTypeName).To(BeEmpty())
+			Expect(instance.Status.RunningConfigSince).To(BeNil())
+		})
+
+		It("does not record when the restart condition is unknown", func() {
+			instance := runningInstance(metav1.ConditionUnknown, true)
+			instance.Status.RunningConfigVersion = ""
+			instance.Status.RunningInstanceTypeName = ""
+			instance.Status.RunningConfigSince = nil
+
+			recordRunningConfig(instance)
+
+			Expect(instance.Status.RunningConfigVersion).To(BeEmpty())
+			Expect(instance.Status.RunningConfigSince).To(BeNil())
+		})
+
+		It("clears the observation when a restart is required", func() {
+			// The observation predates the restart and cannot vouch for the
+			// configuration that runs after it.
+			instance := steadyState(runningInstance(metav1.ConditionTrue, true))
+
+			recordRunningConfig(instance)
+
+			Expect(instance.Status.RunningConfigVersion).To(BeEmpty())
+			Expect(instance.Status.RunningInstanceTypeName).To(BeEmpty())
+			Expect(instance.Status.RunningConfigSince).To(BeNil())
+		})
+
+		It("keeps the recorded time in the steady state", func() {
+			instance := steadyState(runningInstance(metav1.ConditionFalse, true))
+			before := *instance.Status.RunningConfigSince
+
+			recordRunningConfig(instance)
+
+			Expect(instance.Status.RunningConfigSince.Time).To(Equal(before.Time))
+		})
+
+		It("moves the stamp on a name-only resize with identical resources", func() {
+			// Two instance types with identical resources hash to the same config
+			// version: only the recorded name distinguishes them, so a resize
+			// between them must still move the stamp.
+			instance := steadyState(runningInstance(metav1.ConditionFalse, true))
+			oldSince := *instance.Status.RunningConfigSince
+			// The reconciler applied the new type: the label moved.
+			instance.Labels[osacComputeInstanceTypeNameLabel] = "standard-8-32-compatible"
+			// ...but the resources are identical, so the config version is unchanged.
+
+			recordRunningConfig(instance)
+
+			Expect(instance.Status.RunningConfigVersion).To(Equal(instance.Status.DesiredConfigVersion))
+			Expect(instance.Status.RunningInstanceTypeName).To(Equal("standard-8-32-compatible"))
+			Expect(instance.Status.RunningConfigSince.Time).To(BeTemporally(">", oldSince.Time))
+		})
+	})
+
 	Context("handleDesiredConfigVersion", func() {
 		var reconciler *ComputeInstanceReconciler
 		ctx := context.Background()

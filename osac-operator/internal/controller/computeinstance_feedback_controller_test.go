@@ -135,6 +135,162 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 		}
 	})
 
+	Context("state transition time feedback", func() {
+		remoteWithState := func(state privatev1.ComputeInstanceState, transitionTime *timestamppb.Timestamp) *privatev1.ComputeInstance {
+			return privatev1.ComputeInstance_builder{
+				Status: privatev1.ComputeInstanceStatus_builder{
+					State:               state,
+					StateTransitionTime: transitionTime,
+				}.Build(),
+			}.Build()
+		}
+
+		It("copies the CR's phase transition time when the state changes", func() {
+			oldStamp := timestamppb.New(time.Now().Add(-2 * time.Hour))
+			phaseStamp := metav1.NewTime(time.Now().Add(-time.Hour).UTC())
+			remote := remoteWithState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING, oldStamp)
+			obj := &osacv1alpha1.ComputeInstance{Status: osacv1alpha1.ComputeInstanceStatus{
+				Phase:               osacv1alpha1.ComputeInstancePhaseFailed,
+				PhaseTransitionTime: &phaseStamp,
+			}}
+
+			syncCIPhase(ctx, obj, remote)
+
+			Expect(remote.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED))
+			// The copied time is the CR's recorded transition, not the feedback moment:
+			// feedback can run long after the phase moved.
+			Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(phaseStamp.Time))
+		})
+
+		It("bumps the stored time by one microsecond when the CR stamp equals it", func() {
+			// Two phase changes within one second carry the same whole-second CR stamp; the
+			// source contract rejects a changed value with a time equal to the stored one,
+			// so the write must land past the stored time instead.
+			phaseStamp := metav1.NewTime(time.Now().Add(-time.Hour).UTC().Truncate(time.Second))
+			stored := timestamppb.New(phaseStamp.Time)
+			remote := remoteWithState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING, stored)
+			obj := &osacv1alpha1.ComputeInstance{Status: osacv1alpha1.ComputeInstanceStatus{
+				Phase:               osacv1alpha1.ComputeInstancePhaseFailed,
+				PhaseTransitionTime: &phaseStamp,
+			}}
+
+			syncCIPhase(ctx, obj, remote)
+
+			Expect(remote.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED))
+			Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(
+				Equal(phaseStamp.Time.Add(time.Microsecond)))
+		})
+
+		It("falls back to the observation time when the CR carries no phase transition time", func() {
+			oldStamp := timestamppb.New(time.Now().Add(-time.Hour))
+			remote := remoteWithState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING, oldStamp)
+			obj := &osacv1alpha1.ComputeInstance{Status: osacv1alpha1.ComputeInstanceStatus{
+				Phase: osacv1alpha1.ComputeInstancePhaseFailed,
+			}}
+
+			syncCIPhase(ctx, obj, remote)
+
+			Expect(remote.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED))
+			Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(BeTemporally(">", oldStamp.AsTime()))
+		})
+
+		It("keeps the existing transition time when the state is unchanged", func() {
+			oldStamp := timestamppb.New(time.Now().Add(-time.Hour))
+			remote := remoteWithState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING, oldStamp)
+			obj := &osacv1alpha1.ComputeInstance{Status: osacv1alpha1.ComputeInstanceStatus{
+				Phase: osacv1alpha1.ComputeInstancePhaseRunning,
+			}}
+
+			syncCIPhase(ctx, obj, remote)
+
+			Expect(remote.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING))
+			Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(oldStamp.AsTime()))
+		})
+
+		It("leaves the state and time untouched for an unknown phase", func() {
+			oldStamp := timestamppb.New(time.Now().Add(-time.Hour))
+			remote := remoteWithState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING, oldStamp)
+			obj := &osacv1alpha1.ComputeInstance{Status: osacv1alpha1.ComputeInstanceStatus{
+				Phase: osacv1alpha1.ComputeInstancePhaseType("unexpected"),
+			}}
+
+			syncCIPhase(ctx, obj, remote)
+
+			Expect(remote.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING))
+			Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(oldStamp.AsTime()))
+		})
+	})
+
+	Context("delete path feedback", func() {
+		remoteWithState := func(state privatev1.ComputeInstanceState, transitionTime *timestamppb.Timestamp) *privatev1.ComputeInstance {
+			return privatev1.ComputeInstance_builder{
+				Status: privatev1.ComputeInstanceStatus_builder{
+					State:               state,
+					StateTransitionTime: transitionTime,
+				}.Build(),
+			}.Build()
+		}
+
+		It("copies the CR's phase transition time when the delete path forces DELETING", func() {
+			oldStamp := timestamppb.New(time.Now().Add(-2 * time.Hour))
+			phaseStamp := metav1.NewTime(time.Now().Add(-time.Hour).UTC())
+			remote := remoteWithState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING, oldStamp)
+			obj := &osacv1alpha1.ComputeInstance{Status: osacv1alpha1.ComputeInstanceStatus{
+				Phase:               osacv1alpha1.ComputeInstancePhaseDeleting,
+				PhaseTransitionTime: &phaseStamp,
+			}}
+
+			Expect(syncComputeInstanceDelete(ctx, obj, remote)).To(Succeed())
+
+			Expect(remote.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING))
+			// The copied time is the CR's recorded transition, not the feedback moment.
+			Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(phaseStamp.Time))
+		})
+
+		It("dates DELETING at the deletionTimestamp when the CR phase has not moved yet", func() {
+			// The delete path can sync before the ComputeInstance CR records Phase=Deleting.
+			// The CR's PhaseTransitionTime then still belongs to the previous phase, and
+			// copying it (or a one-microsecond bump of it) would date DELETING at the old
+			// phase's moment, billing the entire RUNNING span as DELETING.
+			runningStamp := metav1.NewTime(time.Now().Add(-2 * time.Hour).UTC())
+			deletedAt := metav1.NewTime(time.Now().Add(-5 * time.Minute).UTC())
+			remote := remoteWithState(
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+				timestamppb.New(runningStamp.Time))
+			obj := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					DeletionTimestamp: &deletedAt,
+				},
+				Status: osacv1alpha1.ComputeInstanceStatus{
+					Phase:               osacv1alpha1.ComputeInstancePhaseRunning,
+					PhaseTransitionTime: &runningStamp,
+				},
+			}
+
+			Expect(syncComputeInstanceDelete(ctx, obj, remote)).To(Succeed())
+
+			Expect(remote.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING))
+			Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(deletedAt.Time))
+			Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(BeTemporally(">", runningStamp.Time))
+		})
+
+		It("stamps an observation-time transition when the deletion carries no timestamp", func() {
+			runningStamp := metav1.NewTime(time.Now().Add(-2 * time.Hour).UTC())
+			remote := remoteWithState(
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+				timestamppb.New(runningStamp.Time))
+			obj := &osacv1alpha1.ComputeInstance{Status: osacv1alpha1.ComputeInstanceStatus{
+				Phase:               osacv1alpha1.ComputeInstancePhaseRunning,
+				PhaseTransitionTime: &runningStamp,
+			}}
+
+			Expect(syncComputeInstanceDelete(ctx, obj, remote)).To(Succeed())
+
+			Expect(remote.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING))
+			Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(BeTemporally(">", runningStamp.Time))
+		})
+	})
+
 	Context("network attachment IP feedback", func() {
 		It("copies attachment Subnet ID and IP into the Fulfillment status", func() {
 			obj := &osacv1alpha1.ComputeInstance{Status: osacv1alpha1.ComputeInstanceStatus{
@@ -210,11 +366,12 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 					},
 				},
 				Status: osacv1alpha1.ComputeInstanceStatus{
-					Phase:                osacv1alpha1.ComputeInstancePhaseRunning,
-					DesiredConfigVersion: version,
-					RunningConfigVersion: version,
-					RunningConfigSince:   &runningSince,
-					Conditions:           conditions,
+					Phase:                   osacv1alpha1.ComputeInstancePhaseRunning,
+					DesiredConfigVersion:    version,
+					RunningConfigVersion:    version,
+					RunningInstanceTypeName: "standard-8-32",
+					RunningConfigSince:      &runningSince,
+					Conditions:              conditions,
 				}}
 		}
 
@@ -279,80 +436,80 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(remote.GetStatus().GetInstanceTypeTransitionTime()).To(BeNil())
 		})
 
-		It("does not stamp while a restart is still required", func() {
-			oldStamp := timestamppb.New(time.Now().Add(-time.Hour))
-			remote := remoteWithRequestedType(typeRef("standard-4-16", "standard-4-16"), oldStamp)
+		It("does not stamp when the label is missing and the request carries no name", func() {
+			// A request reference without a name and a CR without the label both read as
+			// the empty string; comparing them would pass the gate vacuously, without the
+			// reconciler ever having recorded the applied type.
+			remote := privatev1.ComputeInstance_builder{
+				Spec: privatev1.ComputeInstanceSpec_builder{
+					InstanceType: typeRef("standard-8-32", ""),
+				}.Build(),
+				Status: privatev1.ComputeInstanceStatus_builder{}.Build(),
+			}.Build()
+			cr := runningCR(false, true)
+			cr.Labels = nil
 
-			syncCIRunningInstanceType(runningCR(true, true), remote)
-
-			Expect(remote.GetStatus().GetInstanceType().GetId()).To(Equal("standard-4-16"))
-			Expect(remote.GetStatus().GetInstanceTypeTransitionTime().AsTime()).To(Equal(oldStamp.AsTime()))
-		})
-
-		It("does not stamp before the new configuration is applied", func() {
-			remote := remoteWithRequestedType(nil, nil)
-
-			syncCIRunningInstanceType(runningCR(false, false), remote)
-
-			Expect(remote.GetStatus().GetInstanceType()).To(BeNil())
-			Expect(remote.GetStatus().GetInstanceTypeTransitionTime()).To(BeNil())
-		})
-
-		It("does not stamp while the instance is not running", func() {
-			notRunning := runningCR(false, true)
-			notRunning.Status.Phase = osacv1alpha1.ComputeInstancePhaseStarting
-			remote := remoteWithRequestedType(nil, nil)
-
-			syncCIRunningInstanceType(notRunning, remote)
+			syncCIRunningInstanceType(cr, remote)
 
 			Expect(remote.GetStatus().GetInstanceType()).To(BeNil())
 			Expect(remote.GetStatus().GetInstanceTypeTransitionTime()).To(BeNil())
 		})
 
-		It("does not stamp while the status still describes the previous spec", func() {
+		It("does not stamp when the restart condition is absent", func() {
+			// KubeVirt reports RestartRequired asynchronously: an absent condition
+			// vouches for nothing, so the recorded observation cannot confirm the
+			// requested type running yet.
 			oldStamp := timestamppb.New(time.Now().Add(-time.Hour))
 			remote := remoteWithRequestedType(typeRef("standard-4-16", "standard-4-16"), oldStamp)
-			stale := runningCR(false, true)
-			// The reconciler patched the resized spec, but the CR controller has not
-			// recomputed the desired config version, so the conditions still vouch
-			// for the old spec.
-			stale.Status.DesiredConfigVersion = "hash-of-the-previous-spec"
-
-			syncCIRunningInstanceType(stale, remote)
-
-			Expect(remote.GetStatus().GetInstanceType().GetId()).To(Equal("standard-4-16"))
-			Expect(remote.GetStatus().GetInstanceTypeTransitionTime().AsTime()).To(Equal(oldStamp.AsTime()))
-		})
-
-		It("does not stamp when the applied-config condition is missing", func() {
-			oldStamp := timestamppb.New(time.Now().Add(-time.Hour))
-			remote := remoteWithRequestedType(typeRef("standard-4-16", "standard-4-16"), oldStamp)
-			noCondition := runningCR(false, true)
-			noCondition.Status.Conditions = []metav1.Condition{
+			cr := runningCR(false, true)
+			cr.Status.Conditions = []metav1.Condition{
 				{
-					Type:               string(osacv1alpha1.ComputeInstanceConditionRestartRequired),
-					Status:             metav1.ConditionFalse,
+					Type:               string(osacv1alpha1.ComputeInstanceConditionConfigurationApplied),
+					Status:             metav1.ConditionTrue,
 					Reason:             "AsExpected",
 					LastTransitionTime: metav1.NewTime(time.Now().UTC()),
 				},
 			}
 
-			syncCIRunningInstanceType(noCondition, remote)
+			syncCIRunningInstanceType(cr, remote)
 
 			Expect(remote.GetStatus().GetInstanceType().GetId()).To(Equal("standard-4-16"))
 			Expect(remote.GetStatus().GetInstanceTypeTransitionTime().AsTime()).To(Equal(oldStamp.AsTime()))
 		})
 
-		It("does not stamp when the running-config observation is for the previous spec", func() {
+		It("does not stamp when the restart condition is unknown", func() {
 			oldStamp := timestamppb.New(time.Now().Add(-time.Hour))
 			remote := remoteWithRequestedType(typeRef("standard-4-16", "standard-4-16"), oldStamp)
-			staleObservation := runningCR(false, true)
-			// The conditions describe the current spec, but the controller has not yet
-			// observed this configuration running: the recorded observation names the
-			// previous one, so its time cannot vouch for the new type.
-			staleObservation.Status.RunningConfigVersion = "hash-of-the-previous-spec"
+			cr := runningCR(false, true)
+			cr.Status.Conditions[0].Status = metav1.ConditionUnknown
 
-			syncCIRunningInstanceType(staleObservation, remote)
+			syncCIRunningInstanceType(cr, remote)
+
+			Expect(remote.GetStatus().GetInstanceType().GetId()).To(Equal("standard-4-16"))
+			Expect(remote.GetStatus().GetInstanceTypeTransitionTime().AsTime()).To(Equal(oldStamp.AsTime()))
+		})
+
+		It("does not stamp while the recorded name lags the label", func() {
+			// After the label moves to the new type but before recordRunningConfig
+			// records it, the recorded observation still describes the previous type:
+			// accepting it would assign the previous type's running time to the new
+			// one, and the fulfillment contract would keep the wrong time forever.
+			oldStamp := timestamppb.New(time.Now().Add(-time.Hour))
+			remote := remoteWithRequestedType(typeRef("standard-4-16", "standard-4-16"), oldStamp)
+			cr := runningCR(false, true)
+			cr.Status.RunningInstanceTypeName = "standard-4-16"
+
+			syncCIRunningInstanceType(cr, remote)
+
+			Expect(remote.GetStatus().GetInstanceType().GetId()).To(Equal("standard-4-16"))
+			Expect(remote.GetStatus().GetInstanceTypeTransitionTime().AsTime()).To(Equal(oldStamp.AsTime()))
+		})
+
+		It("does not stamp while a restart is still required", func() {
+			oldStamp := timestamppb.New(time.Now().Add(-time.Hour))
+			remote := remoteWithRequestedType(typeRef("standard-4-16", "standard-4-16"), oldStamp)
+
+			syncCIRunningInstanceType(runningCR(true, true), remote)
 
 			Expect(remote.GetStatus().GetInstanceType().GetId()).To(Equal("standard-4-16"))
 			Expect(remote.GetStatus().GetInstanceTypeTransitionTime().AsTime()).To(Equal(oldStamp.AsTime()))
@@ -456,8 +613,12 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(mockClient.updateCalled).To(BeTrue())
 			Expect(mockClient.lastUpdateMask.GetPaths()).To(ContainElement("status.instance_type"))
 			Expect(mockClient.lastUpdateMask.GetPaths()).To(ContainElement("status.instance_type_transition_time"))
+			// The state changes from unspecified to running, so the sync must also stamp the
+			// state transition time and its mask path must be sent along.
+			Expect(mockClient.lastUpdateMask.GetPaths()).To(ContainElement("status.state_transition_time"))
 			Expect(mockClient.lastUpdate.GetStatus().GetInstanceType().GetId()).To(Equal("standard-8-32"))
 			Expect(mockClient.lastUpdate.GetStatus().GetInstanceTypeTransitionTime()).ToNot(BeNil())
+			Expect(mockClient.lastUpdate.GetStatus().GetStateTransitionTime()).ToNot(BeNil())
 		})
 	})
 

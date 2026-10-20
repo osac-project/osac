@@ -17,6 +17,7 @@ package osac.private.v1;
 
 import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
+import "osac/private/v1/metering_type.proto";
 import "osac/private/v1/security_group_type.proto";
 import "osac/private/v1/subnet_type.proto";
 
@@ -40,7 +41,7 @@ message StorageTierReference {
 // Contains the disk configuration for a compute instance.
 message ComputeInstanceDisk {
   // Disk size in GiB.
-  optional int32 size_gib = 1 [(buf.validate.field).int32.gt = 0];
+  optional int32 size_gib = 1 [(buf.validate.field).int32.gt = 0, (osac.private.v1.metering) = {kind: METERING_FIELD_KIND_CONSTANT}];
 
   // Reference to the storage tier for this disk.
   optional StorageTierReference storage_tier = 2;

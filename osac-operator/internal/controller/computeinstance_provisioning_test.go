@@ -553,6 +553,9 @@ var _ = Describe("ComputeInstance running config", func() {
 			return metav1.ConditionFalse
 		}
 		return &osacv1alpha1.ComputeInstance{
+			ObjectMeta: metav1.ObjectMeta{
+				Labels: map[string]string{osacComputeInstanceTypeNameLabel: "standard-8-32"},
+			},
 			Status: osacv1alpha1.ComputeInstanceStatus{
 				Phase:                phase,
 				DesiredConfigVersion: "v2",
@@ -606,12 +609,67 @@ var _ = Describe("ComputeInstance running config", func() {
 		Expect(instance.Status.RunningConfigVersion).To(Equal("v1"))
 	})
 
-	It("does not record while a restart is still required", func() {
+	It("clears the recorded observation while a restart is still required", func() {
 		instance := runningInstance(osacv1alpha1.ComputeInstancePhaseRunning, true, true)
 
 		recordRunningConfig(instance)
 
-		Expect(instance.Status.RunningConfigVersion).To(Equal("v1"))
+		Expect(instance.Status.RunningConfigVersion).To(Equal(""))
+		Expect(instance.Status.RunningInstanceTypeName).To(Equal(""))
+		Expect(instance.Status.RunningConfigSince).To(BeNil())
+	})
+
+	It("invalidates the observation when a restart becomes required after it", func() {
+		instance := runningInstance(osacv1alpha1.ComputeInstancePhaseRunning, true, false)
+		instance.Labels = map[string]string{osacComputeInstanceTypeNameLabel: "standard-8-32"}
+		recordRunningConfig(instance)
+		Expect(instance.Status.RunningConfigVersion).To(Equal("v2"))
+		recorded := instance.Status.RunningConfigSince.Time
+
+		// KubeVirt reports RestartRequired asynchronously, so the requirement can
+		// surface only after the observation was recorded.
+		instance.SetStatusCondition(
+			osacv1alpha1.ComputeInstanceConditionRestartRequired,
+			metav1.ConditionTrue, "", osacv1alpha1.ReasonAsExpected)
+
+		recordRunningConfig(instance)
+
+		Expect(instance.Status.RunningConfigVersion).To(Equal(""))
+		Expect(instance.Status.RunningInstanceTypeName).To(Equal(""))
+		Expect(instance.Status.RunningConfigSince).To(BeNil())
+
+		// Once the restart completes, the configuration is observed running again and
+		// re-recorded, so the new configuration bills from after the restart.
+		instance.SetStatusCondition(
+			osacv1alpha1.ComputeInstanceConditionRestartRequired,
+			metav1.ConditionFalse, "", osacv1alpha1.ReasonAsExpected)
+
+		recordRunningConfig(instance)
+
+		Expect(instance.Status.RunningConfigVersion).To(Equal("v2"))
+		Expect(instance.Status.RunningInstanceTypeName).To(Equal("standard-8-32"))
+		Expect(instance.Status.RunningConfigSince).ToNot(BeNil())
+		Expect(instance.Status.RunningConfigSince.Time).ToNot(Equal(recorded))
+	})
+
+	It("moves the stamp when the instance type name changes with identical resources", func() {
+		// The config version hashes the resolved resources, so a resize between two
+		// types with identical cores and memory keeps the version; the type name is
+		// part of the running-config identity so the stamp still moves and the new
+		// type bills from the observation.
+		instance := runningInstance(osacv1alpha1.ComputeInstancePhaseRunning, true, false)
+		instance.Labels = map[string]string{osacComputeInstanceTypeNameLabel: "standard-8-32"}
+		recordRunningConfig(instance)
+		recorded := instance.Status.RunningConfigSince.Time
+		Expect(instance.Status.RunningInstanceTypeName).To(Equal("standard-8-32"))
+
+		instance.Labels[osacComputeInstanceTypeNameLabel] = "standard-8-32-flavored"
+
+		recordRunningConfig(instance)
+
+		Expect(instance.Status.RunningConfigVersion).To(Equal("v2"))
+		Expect(instance.Status.RunningInstanceTypeName).To(Equal("standard-8-32-flavored"))
+		Expect(instance.Status.RunningConfigSince.Time).ToNot(Equal(recorded))
 	})
 
 	It("does not record while the instance is not running", func() {
@@ -620,5 +678,39 @@ var _ = Describe("ComputeInstance running config", func() {
 		recordRunningConfig(instance)
 
 		Expect(instance.Status.RunningConfigVersion).To(Equal("v1"))
+	})
+})
+
+var _ = Describe("ComputeInstance phase transition time", func() {
+	It("stamps the time when the phase changes", func() {
+		instance := &osacv1alpha1.ComputeInstance{Status: osacv1alpha1.ComputeInstanceStatus{
+			Phase: osacv1alpha1.ComputeInstancePhaseStarting,
+		}}
+
+		setComputeInstancePhase(&instance.Status, osacv1alpha1.ComputeInstancePhaseRunning)
+
+		Expect(instance.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseRunning))
+		Expect(instance.Status.PhaseTransitionTime).NotTo(BeNil())
+	})
+
+	It("stamps the first phase of a new instance", func() {
+		instance := &osacv1alpha1.ComputeInstance{}
+
+		setComputeInstancePhase(&instance.Status, osacv1alpha1.ComputeInstancePhaseStarting)
+
+		Expect(instance.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseStarting))
+		Expect(instance.Status.PhaseTransitionTime).NotTo(BeNil())
+	})
+
+	It("keeps the time while the phase is unchanged", func() {
+		stamped := metav1.NewTime(time.Now().Add(-time.Hour).UTC())
+		instance := &osacv1alpha1.ComputeInstance{Status: osacv1alpha1.ComputeInstanceStatus{
+			Phase:               osacv1alpha1.ComputeInstancePhaseRunning,
+			PhaseTransitionTime: &stamped,
+		}}
+
+		setComputeInstancePhase(&instance.Status, osacv1alpha1.ComputeInstancePhaseRunning)
+
+		Expect(instance.Status.PhaseTransitionTime.Time).To(Equal(stamped.Time))
 	})
 })

@@ -401,6 +401,15 @@ spec:
                 - Stopped
                 - Paused
                 type: string
+              phaseTransitionTime:
+                description: |-
+                  PhaseTransitionTime records when the controller last changed Phase. It moves only
+                  when Phase changes, so metering can bill state changes from the moment they happened
+                  rather than from when feedback noticed them: during a fulfillment outage every
+                  transition would otherwise be dated at recovery. It follows the RunningConfigSince
+                  pattern: stamped once per phase change, kept when unchanged.
+                format: date-time
+                type: string
               provisioningJobs:
                 description: |-
                   ProvisioningJobs tracks the history of provision and deprovision operations
@@ -478,6 +487,14 @@ spec:
                   RunningConfigVersion is the desired config version that the controller observed
                   actually running: the instance is Running, that configuration is applied, and no
                   restart required to realize it is pending.
+                type: string
+              runningInstanceTypeName:
+                description: |-
+                  RunningInstanceTypeName is the instance type name that was current when
+                  RunningConfigVersion was recorded. It is part of the running-config identity:
+                  the config version hashes the resolved resources, so two types with identical
+                  cores and memory hash to the same version, and a resize between them must still
+                  move RunningConfigSince.
                 type: string
               tenantReference:
                 description: Reference to the tenant that contains the ComputeInstance

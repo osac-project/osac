@@ -15,10 +15,12 @@ package servers
 
 import (
 	"fmt"
+	"strings"
+	"time"
+
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -358,7 +360,9 @@ var _ = Describe("Compute instances server", func() {
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).ToNot(BeEmpty())
 			Expect(object.GetSpec().GetTemplate().GetId()).To(Equal("general.small"))
-			Expect(object.GetStatus().GetState()).To(Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING))
+			// The status is output-only: a caller-supplied state and attachment
+			// statuses are dropped instead of persisted.
+			Expect(object.GetStatus().GetState()).To(Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED))
 			Expect(object.GetStatus().GetComputeNetworkAttachmentStatuses()).To(BeEmpty())
 		})
 
@@ -514,7 +518,8 @@ var _ = Describe("Compute instances server", func() {
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).To(Equal(id))
 			Expect(object.GetSpec().GetTemplate().GetId()).To(Equal("general.small"))
-			Expect(object.GetStatus().GetState()).To(Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING))
+			// No status was supplied on create and the system has not written one yet:
+			Expect(object.GetStatus().GetState()).To(Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED))
 		})
 
 		It("Updates object", func() {
@@ -590,6 +595,84 @@ var _ = Describe("Compute instances server", func() {
 			Expect(fetched.GetSpec().GetDiskImage().GetId()).To(Equal("test-disk-image"))
 			Expect(fetched.GetSpec().GetBootDisk().GetSizeGib()).To(BeNumerically("==", 20))
 			Expect(fetched.GetSpec().GetRestartRequestedAt()).ToNot(BeNil())
+		})
+
+		It("Keeps the stored status across a maskless update carrying a status", func() {
+			createTemplate("general.small")
+
+			// Create an object:
+			createResponse, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
+				Object: publicv1.ComputeInstance_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-compute-instance",
+					}.Build(),
+					Spec: publicv1.ComputeInstanceSpec_builder{
+						Template:     publicv1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
+						InstanceType: publicv1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
+						RunStrategy:  publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
+						DiskImage:    publicv1.DiskImageReference_builder{Id: "test-disk-image"}.Build(),
+						BootDisk: publicv1.ComputeInstanceDisk_builder{
+							SizeGib:     proto.Int32(20),
+							StorageTier: publicv1.StorageTierReference_builder{Name: "standard"}.Build(),
+						}.Build(),
+						NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+							publicv1.ComputeNetworkAttachment_builder{
+								Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := createResponse.GetObject().GetId()
+
+			// Store a state with its transition time, as the operator feedback would. The time
+			// must be after creation: the source contract clamps a first time on or before it.
+			storedTime := timestamppb.New(time.Now())
+			ciDao, err := dao.NewGenericDAO[*privatev1.ComputeInstance]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			stored, err := ciDao.Get().SetId(id).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			storedObject := stored.GetObject()
+			storedObject.SetStatus(privatev1.ComputeInstanceStatus_builder{
+				State:               privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
+				StateTransitionTime: storedTime,
+			}.Build())
+			_, err = ciDao.Update().SetObject(storedObject).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Round-trip the public object without a mask, carrying a fabricated state
+			// with a later transition time:
+			getResponse, err := server.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
+				Id: id,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			tampered := getResponse.GetObject()
+			tampered.GetStatus().SetState(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+			tampered.GetStatus().SetStateTransitionTime(timestamppb.Now())
+			updateResponse, err := server.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+				Object: tampered,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			// The stored status and its transition time are unchanged:
+			Expect(updateResponse.GetObject().GetStatus().GetState()).To(
+				Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING))
+			Expect(updateResponse.GetObject().GetStatus().GetStateTransitionTime().AsTime()).To(
+				Equal(storedTime.AsTime()))
+
+			// And they survive a round-trip through the database:
+			after, err := server.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
+				Id: id,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(after.GetObject().GetStatus().GetState()).To(
+				Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING))
+			Expect(after.GetObject().GetStatus().GetStateTransitionTime().AsTime()).To(
+				Equal(storedTime.AsTime()))
 		})
 
 		It("Rejects changing network attachments via the public update path", func() {

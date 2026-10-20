@@ -55,6 +55,71 @@ func (w *workerStatusFaultWriter) Patch(ctx context.Context, obj client.Object, 
 	return w.SubResourceWriter.Patch(ctx, obj, p, opts...)
 }
 
+// applyRejectionCheckpointRace persists one competing write immediately before
+// the checkpoint reaches the API server. It leaves the reconciler's snapshot
+// untouched, so the real JSON Patch must decide whether that snapshot is valid.
+func applyRejectionCheckpointRace(
+	ctx context.Context, c client.Client, order, original *api.ClusterOrder, competing string,
+) {
+	GinkgoHelper()
+	switch competing {
+	case "target mutation":
+		order.Status.Workers[0].AttemptCount++
+	case "target removal":
+		order.Status.Workers = order.Status.Workers[1:]
+	case "worker reordering":
+		order.Status.Workers[0], order.Status.Workers[1] = order.Status.Workers[1], order.Status.Workers[0]
+	case "object replacement":
+		replaceRejectionCheckpointOrder(ctx, c, order, original)
+	case "unrelated updates":
+		updateUnrelatedRejectionCheckpointFields(ctx, c, order)
+	default:
+		Fail("unknown rejection checkpoint race: " + competing)
+	}
+	Expect(c.Status().Update(ctx, order)).To(Succeed())
+}
+
+func replaceRejectionCheckpointOrder(ctx context.Context, c client.Client, order, original *api.ClusterOrder) {
+	GinkgoHelper()
+	oldUID := order.UID
+	order.Finalizers = nil
+	Expect(c.Update(ctx, order)).To(Succeed())
+	Expect(c.Delete(ctx, order)).To(Succeed())
+	order.ObjectMeta = metav1.ObjectMeta{
+		Name: original.Name, Namespace: original.Namespace,
+		Labels: original.Labels, Annotations: original.Annotations,
+	}
+	workers := order.Status.Workers
+	Expect(c.Create(ctx, order)).To(Succeed())
+	Expect(order.UID).NotTo(Equal(oldUID))
+	order.Status.Workers = workers
+}
+
+func updateUnrelatedRejectionCheckpointFields(ctx context.Context, c client.Client, order *api.ClusterOrder) {
+	GinkgoHelper()
+	order.Annotations["checkpoint-race"] = "preserved"
+	order.Spec.NodeRequests[0].NumberOfNodes = 3
+	Expect(c.Update(ctx, order)).To(Succeed())
+	order.Status.Workers[1].AttemptCount = 7
+	order.SetStatusCondition(api.ConditionWorkersFailed, metav1.ConditionFalse, "competing condition", "RaceFixture")
+}
+
+func workerProvisioningFailureCount() float64 {
+	GinkgoHelper()
+	families, err := controllermetrics.Registry.Gather()
+	Expect(err).NotTo(HaveOccurred())
+	var total float64
+	for _, family := range families {
+		if family.GetName() != "osac_caas_worker_provisioning_failures_total" {
+			continue
+		}
+		for _, metric := range family.Metric {
+			total += metric.GetCounter().GetValue()
+		}
+	}
+	return total
+}
+
 // workerAttemptRaceClient places interruption/competing writes around the real
 // apiserver's optimistic create-intent patch. It never intercepts provider calls.
 type workerAttemptRaceClient struct {
@@ -477,20 +542,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		step() // Reserve two workers.
 		Expect(getOrder().Status.Workers).To(HaveLen(2))
 		fc.SetCreateError(status.Error(codes.InvalidArgument, "request rejected"))
-		failureCount := func() float64 {
-			families, err := controllermetrics.Registry.Gather()
-			Expect(err).NotTo(HaveOccurred())
-			var total float64
-			for _, family := range families {
-				if family.GetName() == "osac_caas_worker_provisioning_failures_total" {
-					for _, metric := range family.Metric {
-						total += metric.GetCounter().GetValue()
-					}
-				}
-			}
-			return total
-		}
-		before := failureCount()
+		before := workerProvisioningFailureCount()
 		var raced *api.ClusterOrder
 		fired := false
 		r = buildReconciler(&workerStatusFaultClient{Client: k8sClient, fail: func(submitted *api.ClusterOrder) bool {
@@ -499,31 +551,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 			}
 			fired = true
 			raced = getOrder()
-			switch competing {
-			case "target mutation":
-				raced.Status.Workers[0].AttemptCount++
-			case "target removal":
-				raced.Status.Workers = raced.Status.Workers[1:]
-			case "worker reordering":
-				raced.Status.Workers[0], raced.Status.Workers[1] = raced.Status.Workers[1], raced.Status.Workers[0]
-			case "object replacement":
-				oldUID := raced.UID
-				raced.Finalizers = nil
-				Expect(k8sClient.Update(ctx, raced)).To(Succeed())
-				Expect(k8sClient.Delete(ctx, raced)).To(Succeed())
-				raced.ObjectMeta = metav1.ObjectMeta{Name: co.Name, Namespace: co.Namespace, Labels: co.Labels, Annotations: co.Annotations}
-				workers := raced.Status.Workers
-				Expect(k8sClient.Create(ctx, raced)).To(Succeed())
-				Expect(raced.UID).NotTo(Equal(oldUID))
-				raced.Status.Workers = workers
-			case "unrelated updates":
-				raced.Annotations["checkpoint-race"] = "preserved"
-				raced.Spec.NodeRequests[0].NumberOfNodes = 3
-				Expect(k8sClient.Update(ctx, raced)).To(Succeed())
-				raced.Status.Workers[1].AttemptCount = 7
-				raced.SetStatusCondition(api.ConditionWorkersFailed, metav1.ConditionFalse, "competing condition", "RaceFixture")
-			}
-			Expect(k8sClient.Status().Update(ctx, raced)).To(Succeed())
+			applyRejectionCheckpointRace(ctx, k8sClient, raced, co, competing)
 			raced = getOrder()
 			return false
 		}})
@@ -541,11 +569,11 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 			Expect(got.Status.ReadyWorkers).To(Equal(raced.Status.ReadyWorkers))
 			Expect(got.Annotations).To(Equal(raced.Annotations))
 			Expect(got.Spec).To(Equal(raced.Spec))
-			Expect(failureCount()).To(Equal(before + 1))
+			Expect(workerProvisioningFailureCount()).To(Equal(before + 1))
 		} else {
 			Expect(err).To(HaveOccurred())
 			Expect(got.Status).To(Equal(raced.Status), "stale checkpoint must be atomic")
-			Expect(failureCount()).To(Equal(before))
+			Expect(workerProvisioningFailureCount()).To(Equal(before))
 		}
 		var rejectionEvents int
 		for len(recorder.Events) > 0 {

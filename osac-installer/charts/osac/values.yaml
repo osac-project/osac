@@ -310,7 +310,7 @@ aap:
       config:
         NETWORK_CLASS: ""
         NETWORK_STEPS_COLLECTION: ""
-        DNS_CLASS: ""
+        DNS_CLASS: "dns.route53.dns"
         DNS_ZONE: ""
         # Netris connection fields below must also be set on networkFulfillment
         # (including NETRIS_PASSWORD); there is no shared Netris config block.

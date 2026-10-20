@@ -1348,9 +1348,9 @@
                     },
                     "DNS_CLASS": {
                       "type": "string",
-                      "description": "Fully-qualified Ansible role name of the DNS driver. Only dns.route53.dns is shipped today; leave empty to use that default.",
+                      "description": "Fully-qualified Ansible role name of the DNS driver. dns.route53.dns manages Route 53 records; dns.noop.dns skips external DNS for environments that do not manage DNS records.",
                       "enum": [
-                        "",
+                        "dns.noop.dns",
                         "dns.route53.dns"
                       ]
                     },

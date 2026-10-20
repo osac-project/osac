@@ -68,6 +68,12 @@ func Cmd() *cobra.Command {
 		servers.DefaultEventTopicPrefix,
 		topicPrefixFlagHelp,
 	)
+	flags.StringVar(
+		&runner.args.topicRetentionMS,
+		"kafka-topic-retention-ms",
+		"-1",
+		"How long a topic the publisher creates keeps records, in milliseconds. -1 keeps them indefinitely.",
+	)
 	return command
 }
 
@@ -76,8 +82,9 @@ type runnerContext struct {
 	logger *slog.Logger
 	flags  *pflag.FlagSet
 	args   struct {
-		caFiles     []string
-		topicPrefix string
+		caFiles          []string
+		topicPrefix      string
+		topicRetentionMS string
 	}
 }
 
@@ -148,6 +155,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) (err error) {
 		SetKafkaConfig(kafkaConfig).
 		SetKafkaBrokers(kafkaBrokers...).
 		SetKafkaTopicPrefix(c.args.topicPrefix).
+		SetTopicRetentionMS(c.args.topicRetentionMS).
 		SetMetricsRegisterer(metricsRegisterer).
 		Build()
 	if err != nil {

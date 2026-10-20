@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+
+	"strconv"
 	"sync"
 	"time"
 	"unicode"
@@ -74,6 +76,7 @@ type EventPublisherBuilder struct {
 	kafkaConfig         *sarama.Config
 	kafkaBrokers        []string
 	kafkaTopicPrefix    string
+	topicRetentionMS    string
 	listenWaitTimeout   time.Duration
 	listenRetryInterval time.Duration
 	batchSize           int
@@ -101,6 +104,7 @@ type EventPublisher struct {
 	kafkaAdmin       sarama.ClusterAdmin
 	kafkaProducer    sarama.SyncProducer
 	kafkaTopicPrefix string
+	topicRetentionMS string
 	publishedTopics  map[string]bool
 	batchSize        int
 	publishCallback  func(context.Context, *privatev1.Event) error
@@ -143,6 +147,7 @@ type eventPublisherObjectJson struct {
 func NewEventPublisher() *EventPublisherBuilder {
 	return &EventPublisherBuilder{
 		kafkaTopicPrefix:    DefaultEventTopicPrefix,
+		topicRetentionMS:    defaultTopicRetentionMS,
 		dbTable:             defaultEventPublisherTable,
 		dbChannel:           defaultEventPublisherChannel,
 		listenWaitTimeout:   defaultListenWaitTimeout,
@@ -196,6 +201,14 @@ func (b *EventPublisherBuilder) SetKafkaTopicPrefix(value string) *EventPublishe
 	return b
 }
 
+// SetTopicRetentionMS sets how long a topic the publisher creates keeps records, in
+// milliseconds. This is optional, defaults to indefinite (-1), and must be -1 or a positive
+// number.
+func (b *EventPublisherBuilder) SetTopicRetentionMS(value string) *EventPublisherBuilder {
+	b.topicRetentionMS = value
+	return b
+}
+
 // SetListenWaitTimeout sets how long the drain loop sleeps after an empty drain before it looks for unpublished rows
 // again. A PostgreSQL notification received by the listen loop interrupts this wait. This is optional, defaults to five
 // seconds, and there is usually no need to change it.
@@ -241,6 +254,28 @@ func (b *EventPublisherBuilder) SetMetricsInterval(value time.Duration) *EventPu
 }
 
 // Build uses the data stored in the builder to create a new EventPublisher.
+// checkSettings validates the numeric publisher settings. The retention is included here
+// because the broker rejects a value it cannot parse as a whole number of milliseconds
+// with an error that names no cause, so a misconfigured value fails here instead.
+func (b *EventPublisherBuilder) checkSettings() error {
+	if b.listenWaitTimeout <= 0 {
+		return fmt.Errorf("listen wait timeout should be positive, but it is %s", b.listenWaitTimeout)
+	}
+	if b.listenRetryInterval <= 0 {
+		return fmt.Errorf("listen retry interval should be positive, but it is %s", b.listenRetryInterval)
+	}
+	if b.batchSize <= 0 {
+		return fmt.Errorf("batch size should be positive, but it is %d", b.batchSize)
+	}
+	if b.metricsInterval <= 0 {
+		return fmt.Errorf("metrics interval should be positive, but it is %s", b.metricsInterval)
+	}
+	if _, err := strconv.ParseInt(b.topicRetentionMS, 10, 64); err != nil {
+		return fmt.Errorf("topic retention should be a whole number of milliseconds: %w", err)
+	}
+	return nil
+}
+
 func (b *EventPublisherBuilder) Build() (result *EventPublisher, err error) {
 	// Check parameters:
 	if b.logger == nil {
@@ -251,20 +286,7 @@ func (b *EventPublisherBuilder) Build() (result *EventPublisher, err error) {
 		err = errors.New("database pool is mandatory")
 		return
 	}
-	if b.listenWaitTimeout <= 0 {
-		err = fmt.Errorf("listen wait timeout should be positive, but it is %s", b.listenWaitTimeout)
-		return
-	}
-	if b.listenRetryInterval <= 0 {
-		err = fmt.Errorf("listen retry interval should be positive, but it is %s", b.listenRetryInterval)
-		return
-	}
-	if b.batchSize <= 0 {
-		err = fmt.Errorf("batch size should be positive, but it is %d", b.batchSize)
-		return
-	}
-	if b.metricsInterval <= 0 {
-		err = fmt.Errorf("metrics interval should be positive, but it is %s", b.metricsInterval)
+	if err = b.checkSettings(); err != nil {
 		return
 	}
 	if b.kafkaTopicPrefix == "" {
@@ -365,6 +387,7 @@ func (b *EventPublisherBuilder) Build() (result *EventPublisher, err error) {
 		kafkaAdmin:       kafkaAdmin,
 		kafkaProducer:    kafkaProducer,
 		kafkaTopicPrefix: b.kafkaTopicPrefix,
+		topicRetentionMS: b.topicRetentionMS,
 		publishedTopics:  map[string]bool{},
 		fetchSQL:         fetchSQL,
 		deleteSQL:        deleteSQL,
@@ -867,7 +890,7 @@ func (p *EventPublisher) ensureTopic(ctx context.Context, topic string) error {
 	admin := p.kafkaAdmin
 	done := make(chan error, 1)
 	go func() {
-		done <- prepareTopic(ctx, admin, topic)
+		done <- prepareTopic(ctx, admin, topic, p.topicRetentionMS)
 	}()
 	select {
 	case <-ctx.Done():
@@ -880,7 +903,7 @@ func (p *EventPublisher) ensureTopic(ctx context.Context, topic string) error {
 	}
 }
 
-func prepareTopic(ctx context.Context, admin sarama.ClusterAdmin, topic string) error {
+func prepareTopic(ctx context.Context, admin sarama.ClusterAdmin, topic, retentionMS string) error {
 	descriptions, err := admin.DescribeTopics([]string{topic})
 	if err != nil {
 		return fmt.Errorf("failed to describe topic '%s': %w", topic, err)
@@ -899,9 +922,14 @@ func prepareTopic(ctx context.Context, admin sarama.ClusterAdmin, topic string) 
 	case sarama.ErrNoError:
 		return nil
 	case sarama.ErrUnknownTopicOrPartition:
+		retentionBytes := "-1"
 		detail := &sarama.TopicDetail{
 			NumPartitions:     1,
 			ReplicationFactor: -1,
+			ConfigEntries: map[string]*string{
+				"retention.ms":    &retentionMS,
+				"retention.bytes": &retentionBytes,
+			},
 		}
 		err = admin.CreateTopic(topic, detail, false)
 		if err != nil && !errors.Is(err, sarama.ErrTopicAlreadyExists) {
@@ -1268,6 +1296,10 @@ func (p *EventPublisher) registerPublishErrorsMetric(registerer prometheus.Regis
 const (
 	// DefaultEventTopicPrefix is prepended to the tenant identifier to form Kafka topic names.
 	DefaultEventTopicPrefix = "osac.events."
+
+	// defaultTopicRetentionMS is how long a topic the publisher creates keeps records:
+	// indefinitely.
+	defaultTopicRetentionMS = "-1"
 
 	// defaultEventPublisherTable is the PostgreSQL table that stores change rows.
 	defaultEventPublisherTable = "changes"

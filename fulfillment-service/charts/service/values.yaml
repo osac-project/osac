@@ -25,8 +25,11 @@ controller:
   sync: true
 
 # The event publisher requires a Kafka backend. Disable it for API-only deployments.
+# topicRetentionMs: how long a tenant's event topic keeps records, in milliseconds; -1 keeps
+# them indefinitely. Only applies to topics the publisher creates.
 eventPublisher:
   enabled: true
+  topicRetentionMs: "-1"
 
 # Certificate configuration:
 certs:

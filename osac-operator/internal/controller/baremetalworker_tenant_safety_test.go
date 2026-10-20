@@ -385,6 +385,61 @@ var _ = Describe("BareMetalWorker tenant safety", Label("baremetalworker"), func
 		})
 	}
 
+	It("clears the baremetalworker finalizer after a definitive rejection", func() {
+		// Incident replay: a rejected InvalidArgument create
+		// must leave the worker Failed/Reserved, and subsequent
+		// ClusterOrder deletion must clear the finalizer instead
+		// of deadlocking on "BMI reservation absence is
+		// unconfirmed". This is the exact OSAC-6535 scenario.
+		co := order("safety-reject-delete", 1)
+		createOrder(co)
+		ready(co.Name)
+		fc.SetCreateError(status.Error(codes.InvalidArgument, "owner targets deleting cluster"))
+		_, err := run(co.Name)
+		Expect(err).NotTo(HaveOccurred(),
+			"definitive rejection must be recorded, not propagated")
+
+		// Verify the rejection was recorded.
+		co = getOrder(co.Name)
+		Expect(co.Status.Workers).To(HaveLen(1))
+		Expect(co.Status.Workers[0].Phase).To(Equal("Failed"))
+		Expect(co.Status.Workers[0].BMICreateState).To(
+			Equal(string(osacv1alpha1.WorkerBMICreateStateReserved)))
+		Expect(co.Status.Workers[0].BareMetalInstance.ID).To(BeEmpty())
+
+		// Clear the create error so deletion reconciliation
+		// can proceed without further rejection interference.
+		fc.SetCreateError(nil)
+
+		// Initiate deletion and drive reconciliation through
+		// the real cleanup path. The baremetalworker finalizer
+		// was added during the ready() call above.
+		Expect(k8sClient.Delete(ctx, getOrder(co.Name))).To(Succeed())
+		_, err = run(co.Name)
+		Expect(err).NotTo(HaveOccurred(),
+			"deletion reconciliation must succeed")
+
+		// The finalizer must be removed: the worker's
+		// Reserved+empty-ID state allows cleanupWorker to
+		// confirm absence without a List/Get round-trip.
+		latest := &osacv1alpha1.ClusterOrder{}
+		err = k8sClient.Get(ctx, client.ObjectKeyFromObject(co), latest)
+		if err == nil {
+			// Object may still exist briefly; verify the
+			// baremetalworker finalizer is gone.
+			for _, f := range latest.Finalizers {
+				Expect(f).NotTo(Equal(finalizer),
+					"baremetalworker finalizer must be "+
+						"removed after rejected-create "+
+						"deletion: finalizers=%v workers=%v",
+					latest.Finalizers,
+					latest.Status.Workers)
+			}
+		}
+		// If Get returns NotFound, the order was fully
+		// deleted, which also proves the finalizer cleared.
+	})
+
 	It("does not correlate a foreign status ID during rebuild", func() {
 		co := order("safety-foreign-rebuild", 1)
 		createOrder(co)

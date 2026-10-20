@@ -26,6 +26,12 @@ pytestmark = [pytest.mark.regression, pytest.mark.requires_vmaas]
 _DRIVER_INSTALL_TAG = "provider_csi_driver_install"
 _CONTROLLER_API_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 _LOGGER = logging.getLogger(__name__)
+
+
+class _RetryableControllerError(RuntimeError):
+    """A transient Controller API failure that can be retried while polling a job."""
+
+
 _OPERATORS: tuple[dict[str, Any], ...] = (
     {
         "package": "trident-operator",
@@ -262,12 +268,15 @@ def test_stage2_installs_missing_native_csi_operators_and_skips_existing(
                     )
         finally:
             if test_template_id is not None:
-                _controller_request(
-                    controller_url=controller_url,
-                    token=token,
-                    path=f"job_templates/{test_template_id}/",
-                    method="DELETE",
-                )
+                try:
+                    _controller_request(
+                        controller_url=controller_url,
+                        token=token,
+                        path=f"job_templates/{test_template_id}/",
+                        method="DELETE",
+                    )
+                except RuntimeError as error:
+                    _LOGGER.warning("Could not delete disposable Stage 2 template %s: %s", test_template_id, error)
         production_template = _controller_request(
             controller_url=controller_url, token=token, path=f"job_templates/{template_id}/"
         )
@@ -288,8 +297,16 @@ def _launch_stage2_job(
     job_id = launched.get("job") or launched.get("id")
     assert job_id, "AAP did not return the launched job ID"
     _LOGGER.info("Launched %s as AAP job %s", description, job_id)
+
+    def _job_status() -> dict[str, Any]:
+        try:
+            return _controller_request(controller_url=controller_url, token=token, path=f"jobs/{job_id}/")
+        except _RetryableControllerError as error:
+            _LOGGER.warning("Transient Controller API error while polling job %s: %s", job_id, error)
+            return {}
+
     job = poll_until(
-        fn=lambda: _controller_request(controller_url=controller_url, token=token, path=f"jobs/{job_id}/"),
+        fn=_job_status,
         until=lambda result: result.get("status") in {"successful", "failed", "error", "canceled"},
         retries=120,
         delay=15,
@@ -356,9 +373,12 @@ def _controller_request(
             response_body = response.read()
             return json.loads(response_body) if response_body else {}
     except urllib.error.HTTPError as error:
-        raise RuntimeError(f"AAP Controller API returned HTTP {error.code} for {path}") from None
+        message = f"AAP Controller API returned HTTP {error.code} for {path}"
+        if error.code in {408, 429} or error.code >= 500:
+            raise _RetryableControllerError(message) from None
+        raise RuntimeError(message) from None
     except urllib.error.URLError:
-        raise RuntimeError(f"Could not connect to the AAP Controller API for {path}") from None
+        raise _RetryableControllerError(f"Could not connect to the AAP Controller API for {path}") from None
 
 
 def _resource_exists(*, k8s: K8sClient, resource: str, name: str, namespace: str | None = None) -> bool:

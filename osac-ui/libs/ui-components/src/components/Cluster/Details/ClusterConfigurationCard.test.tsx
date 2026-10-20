@@ -45,7 +45,10 @@ describe('ClusterConfigurationCard version join', () => {
 
     // Get resolves regardless of lifecycle state (obsolete included).
     expect(await screen.findByText('4.15.0')).toBeInTheDocument();
-    expect(screen.getByText('Obsolete')).toBeInTheDocument();
+    const versionGroup = screen.getByText('Version').closest('.pf-v6-c-description-list__group');
+    expect(versionGroup).toHaveTextContent('Version');
+    expect(versionGroup).toHaveTextContent('4.15.0');
+    expect(versionGroup).toHaveTextContent('Obsolete');
   });
 
   it('falls back to the raw reference name with no label when unresolved', async () => {
@@ -60,6 +63,7 @@ describe('ClusterConfigurationCard version join', () => {
     const versionGroup = screen
       .getByText('4.99.0-missing')
       .closest('.pf-v6-c-description-list__group');
+    expect(versionGroup).toHaveTextContent('Version');
     expect(versionGroup?.querySelector('.pf-v6-c-label')).toBeNull();
   });
 
@@ -76,6 +80,7 @@ describe('ClusterConfigurationCard version join', () => {
     const versionGroup = screen
       .getByText('4.14.0-legacy')
       .closest('.pf-v6-c-description-list__group');
+    expect(versionGroup).toHaveTextContent('Version');
     expect(versionGroup?.querySelector('.pf-v6-c-label')).toBeNull();
   });
 });

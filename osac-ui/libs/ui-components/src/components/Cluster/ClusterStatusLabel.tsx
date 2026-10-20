@@ -9,7 +9,6 @@ import { ResourceStatusLabel, type StatusKind } from '../Resource/ResourceStatus
 
 interface ClusterStatusLabelProps {
   status?: ClusterStatus;
-  state?: ClusterState;
 }
 
 interface ClusterStateActivity {
@@ -41,10 +40,9 @@ const resolveClusterState = (
 
 const formatClusterStateActivity = (
   status: ClusterStatus | undefined,
-  fallbackState: ClusterState | undefined,
   t: TFunction,
 ): ClusterStateActivity => {
-  const state = status?.state ?? fallbackState;
+  const state = status?.state;
   const stateInfo = resolveClusterState(state, t);
   if (status?.state !== ClusterState.PROGRESSING) {
     return { ...stateInfo, activityWarning: false };
@@ -65,11 +63,10 @@ const formatClusterStateActivity = (
   };
 };
 
-export const ClusterStatusLabel = ({ status, state }: ClusterStatusLabelProps) => {
+export const ClusterStatusLabel = ({ status }: ClusterStatusLabelProps) => {
   const { t } = useTranslation();
   const { stateKind, stateText, activityText, activityWarning } = formatClusterStateActivity(
     status,
-    state,
     t,
   );
   const stateLabel = <ResourceStatusLabel status={stateKind} text={stateText} />;

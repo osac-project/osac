@@ -1,8 +1,9 @@
 import { create } from '@bufbuild/protobuf';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import {
+  ClusterConditionType,
   ClusterSchema,
   ClusterState,
   ExternalIPAttachmentEndpoint,
@@ -47,7 +48,92 @@ const attachment = {
   },
 } as unknown as ExternalIPAttachment;
 
+const makeProgressingCluster = (reason?: string) =>
+  create(ClusterSchema, {
+    id: 'cluster-1',
+    metadata: { name: 'cluster-one', project: 'project-a' },
+    status: {
+      state: ClusterState.PROGRESSING,
+      apiUrl: 'https://api.example.com:6443',
+      consoleUrl: 'https://console.example.com',
+      conditions: [
+        {
+          type: ClusterConditionType.PROGRESSING,
+          reason,
+          message: 'Waiting for cluster workers',
+        },
+      ],
+    },
+  });
+
 describe('ClusterDetailsPageContent', () => {
+  it('shows provisioning activity in the header while preserving conditions and endpoint URLs', () => {
+    renderWithProviders(
+      <ClusterDetailsPageContent cluster={makeProgressingCluster('WorkersJoining')} />,
+    );
+
+    const titleRow = screen.getByRole('heading', { name: 'cluster-one' }).closest('.pf-v6-l-flex');
+    expect(titleRow).toHaveTextContent('Provisioning');
+    expect(titleRow).toHaveTextContent('WorkersJoining');
+
+    const conditions = screen.getByRole('grid', { name: 'Cluster conditions' });
+    expect(within(conditions).getByRole('columnheader', { name: 'Reason' })).toBeInTheDocument();
+    expect(within(conditions).getByRole('columnheader', { name: 'Message' })).toBeInTheDocument();
+    expect(within(conditions).getByText('WorkersJoining')).toBeInTheDocument();
+    expect(within(conditions).getByText('Waiting for cluster workers')).toBeInTheDocument();
+
+    const summary = screen.getByRole('group', { name: 'Cluster summary' });
+    expect(within(summary).getByText('https://api.example.com:6443')).toBeInTheDocument();
+    expect(within(summary).getByText('https://console.example.com')).toBeInTheDocument();
+  });
+
+  it('shows Stalled as a warning in the header', () => {
+    renderWithProviders(<ClusterDetailsPageContent cluster={makeProgressingCluster('Stalled')} />);
+
+    const warning = screen.getByLabelText('Warning: Stalled');
+    expect(warning).toHaveTextContent('Stalled');
+    expect(warning).toHaveClass('pf-m-orange');
+  });
+
+  it.each(['StageUnknown', undefined])(
+    'shows Stage unknown in the header for reason %s',
+    (reason) => {
+      renderWithProviders(<ClusterDetailsPageContent cluster={makeProgressingCluster(reason)} />);
+
+      const titleRow = screen
+        .getByRole('heading', { name: 'cluster-one' })
+        .closest('.pf-v6-l-flex');
+      expect(titleRow).toHaveTextContent('Stage unknown');
+    },
+  );
+
+  it('replaces the prior header activity when the public cluster changes', () => {
+    const { rerender } = renderWithProviders(
+      <ClusterDetailsPageContent cluster={makeProgressingCluster('AllocatingWorkers')} />,
+    );
+    expect(
+      screen.getByRole('heading', { name: 'cluster-one' }).closest('.pf-v6-l-flex'),
+    ).toHaveTextContent('AllocatingWorkers');
+
+    rerender(<ClusterDetailsPageContent cluster={makeProgressingCluster('WorkersJoining')} />);
+    expect(screen.queryByText('AllocatingWorkers')).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: 'cluster-one' }).closest('.pf-v6-l-flex'),
+    ).toHaveTextContent('WorkersJoining');
+
+    rerender(
+      <ClusterDetailsPageContent
+        cluster={create(ClusterSchema, {
+          id: 'cluster-1',
+          metadata: { name: 'cluster-one' },
+          status: { state: ClusterState.READY },
+        })}
+      />,
+    );
+    expect(screen.queryByText('WorkersJoining')).not.toBeInTheDocument();
+    expect(screen.getByText('Ready')).toBeInTheDocument();
+  });
+
   it('shows conditions only on Overview and External IP endpoints in the Networking side card', async () => {
     const { user } = renderWithProviders(<ClusterDetailsPageContent cluster={cluster} />, {
       apiFixtures: { externalIpAttachments: [] },

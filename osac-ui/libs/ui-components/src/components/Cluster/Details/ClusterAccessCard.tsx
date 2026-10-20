@@ -29,7 +29,7 @@ export const ClusterAccessCard = ({ cluster }: ClusterStatusCardProps) => {
       <CardBody>
         <Stack hasGutter>
           <StackItem>
-            <ClusterStatusLabel state={cluster.status?.state} />
+            <ClusterStatusLabel status={cluster.status} />
           </StackItem>
           <StackItem>
             <DescriptionList isCompact>

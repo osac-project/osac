@@ -25,9 +25,6 @@ csi_driver_install_supported_vendors:
   - vast
   - netapp
   - pure
-  # Legacy route aliases retained for already-provisioned resources.
-  - ontap
-  - trident
 
 # Provider product key to csi-backends chart vendor key. The product key remains
 # the OSAC routing alias; multiple products may share one vendor CSI driver.
@@ -35,8 +32,6 @@ csi_driver_install_provider_vendor_names:
   vast: vast
   netapp: trident
   pure: pure
-  ontap: trident
-  trident: trident
 
 # Per-provider node CSI socket directory, mirroring the csi-driver chart's own
 # vendors.<name>.node.socketPath defaults (osac-csi-driver/charts/csi-driver/
@@ -48,9 +43,6 @@ csi_driver_install_vendor_node_socket_paths:
   vast: /var/lib/kubelet/plugins/csi.vast.vastdata.com
   netapp: /var/lib/kubelet/plugins/csi.trident.netapp.io
   pure: /var/lib/kubelet/plugins/csi.pure.purestorage.com
-  # Legacy route aliases retained for already-provisioned resources.
-  ontap: /var/lib/kubelet/plugins/csi.trident.netapp.io
-  trident: /var/lib/kubelet/plugins/csi.trident.netapp.io
 
 # Local-tier StorageClass creation is independent of Helm installation and
 # network-vendor enablement: LVMS has no vendor controller Service.

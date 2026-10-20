@@ -6,7 +6,7 @@
       {% for _provider in _unique_providers -%}
       {% if _provider == 'vast' -%}
       {% set _ = _vendors.append('vast') -%}
-      {% elif _provider in ['netapp', 'ontap', 'trident'] -%}
+      {% elif _provider == 'netapp' -%}
       {% set _ = _vendors.append('trident') -%}
       {% elif _provider == 'pure' -%}
       {% set _ = _vendors.append('pure') -%}

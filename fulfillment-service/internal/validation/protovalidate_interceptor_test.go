@@ -663,12 +663,11 @@ var _ = Describe("Protovalidate interceptor", func() {
 			Expect(status.Message()).To(ContainSubstring("validation failed"))
 		})
 
-		It("Accepts supported product-specific provider keys and legacy aliases", func() {
+		It("accepts supported provider keys and internal LVMS", func() {
 			for _, provider := range []string{
 				"vast",
 				"netapp",
 				"pure",
-				"ontap",
 				"lvms",
 			} {
 				response, err := interceptor.UnaryServer(

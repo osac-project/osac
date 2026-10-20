@@ -744,7 +744,8 @@
           - name: osac-csi-block
             protocol: block
             provider: osac-csi
-        _native_csi_test_target_kubeconfig: "{{ lookup('env', 'KUBECONFIG') }}"
+        _native_csi_test_target_kubeconfig: >-
+          {{ lookup('env', 'KUBECONFIG') | default(lookup('env', 'HOME') + '/.kube/config', true) }}
         storage_provider_netapp_trident_install_override:
           name: osac.test_overrides.csi_driver_install_hooks
           tasks_from: install.yaml
@@ -1185,7 +1186,8 @@
 
     - name: Set the selected test target kubeconfig
       ansible.builtin.set_fact:
-        _vast_native_csi_target_kubeconfig: "{{ lookup('env', 'KUBECONFIG') }}"
+        _vast_native_csi_target_kubeconfig: >-
+          {{ lookup('env', 'KUBECONFIG') | default(lookup('env', 'HOME') + '/.kube/config', true) }}
 
 - name: "Native CSI Driver Ensure - Leave existing drivers and Subscriptions unchanged"
   hosts: native_csi_reconcile

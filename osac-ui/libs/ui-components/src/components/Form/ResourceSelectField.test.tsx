@@ -26,7 +26,6 @@ const renderSelect = ({
   autoSelectSingleOption = false,
   filterItems,
   formatOptionLabel,
-  isRequired = true,
   initialValue = emptyResourceSelectValue(),
   tenants = [makeTenant('only-1', 'Only tenant')],
   transportOverrides,
@@ -34,7 +33,6 @@ const renderSelect = ({
   autoSelectSingleOption?: boolean;
   filterItems?: (item: { id: string; metadata?: { name?: string } }) => boolean;
   formatOptionLabel?: (item: { id: string; metadata?: { name?: string } }) => string;
-  isRequired?: boolean;
   initialValue?: ResourceSelectValue;
   tenants?: Tenant[];
   transportOverrides?: MockTransportOverrides;
@@ -58,7 +56,7 @@ const renderSelect = ({
             label="Tenant"
             fieldId="tenant"
             service={Tenants}
-            isRequired={isRequired}
+            isRequired
             autoSelectSingleOption={autoSelectSingleOption}
             filterItems={filterItems}
             formatOptionLabel={formatOptionLabel}
@@ -249,9 +247,8 @@ describe('ResourceSelectField', () => {
       ).not.toBeVisible();
     });
 
-    it('appears for an optional field and clears it back to empty when clicked', async () => {
+    it('appears once a value is selected and clears it back to empty when clicked', async () => {
       const { user } = renderSelect({
-        isRequired: false,
         tenants: [makeTenant('t-1', 'acme'), makeTenant('t-2', 'globex')],
       });
 
@@ -274,27 +271,6 @@ describe('ResourceSelectField', () => {
       expect(
         screen.getByRole('button', { name: 'Clear input value', hidden: true }),
       ).not.toBeVisible();
-    });
-
-    it('is hidden for a required field after a value is selected', async () => {
-      const { user } = renderSelect({
-        tenants: [makeTenant('t-1', 'acme'), makeTenant('t-2', 'globex')],
-      });
-
-      await waitFor(() => {
-        expect(screen.getByRole('combobox')).toHaveAttribute('placeholder', 'Select a tenant');
-      });
-      await user.click(screen.getByRole('combobox'));
-      await user.click(screen.getByRole('option', { name: 'globex' }));
-
-      await waitFor(() => {
-        expect(screen.getByRole('combobox')).toHaveValue('globex');
-      });
-      const clearButton = screen.getByRole('button', {
-        name: 'Clear input value',
-        hidden: true,
-      });
-      expect(clearButton.closest('.osac-typeahead-select--required')).not.toBeNull();
     });
   });
 });

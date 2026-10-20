@@ -845,6 +845,7 @@
         that:
           - _native_csi_trident_operator_group.resources | length == 1
           - _native_csi_trident_operator_group.resources[0].spec.targetNamespaces | default([]) | length == 0
+          - _native_csi_trident_operator_group.resources[0].spec.selector | default({}) | length == 0
         fail_msg: "Trident must use an AllNamespaces OperatorGroup in its dedicated namespace"
         success_msg: "Trident uses an isolated AllNamespaces OperatorGroup"
 

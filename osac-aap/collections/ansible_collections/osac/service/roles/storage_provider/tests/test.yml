@@ -93,6 +93,7 @@
                   package: trident-operator
                   channel: preview
                   namespace: trident-operator
+                  operator_group: trident-operator-group
                   install_plan_approval: Manual
                   catalog_source: certified-operators
                   catalog_namespace: openshift-marketplace

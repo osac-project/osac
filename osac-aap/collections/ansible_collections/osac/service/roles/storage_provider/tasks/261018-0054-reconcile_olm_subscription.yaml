@@ -43,7 +43,11 @@
       spec: "{{ storage_provider_olm_subscription_spec }}"
 
 - name: Set an existing provider Subscription to the initial-install policy
-  when: _storage_provider_existing_olm_subscription.resources | length > 0
+  when:
+    - _storage_provider_existing_olm_subscription.resources | length > 0
+    - >-
+      _storage_provider_existing_olm_subscription.resources[0].status.installedCSV
+      | default('', true) | length == 0
   kubernetes.core.k8s:
     state: patched
     definition:

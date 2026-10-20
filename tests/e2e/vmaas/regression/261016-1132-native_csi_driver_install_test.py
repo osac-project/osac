@@ -56,10 +56,10 @@ def test_stage2_installs_missing_native_csi_operators_and_skips_existing(
     """
     for operator in _OPERATORS:
         assert not _resource_exists(
-            resource="subscription", name=operator["subscription"], namespace=operator["namespace"]
+            k8s=k8s_hub_client, resource="subscription", name=operator["subscription"], namespace=operator["namespace"]
         ), f"Expected a clean CI cluster; Subscription {operator['namespace']}/{operator['subscription']} exists"
         for driver in operator["drivers"]:
-            assert not _resource_exists(resource="csidriver", name=driver), (
+            assert not _resource_exists(k8s=k8s_hub_client, resource="csidriver", name=driver), (
                 f"Expected a clean CI cluster; CSIDriver {driver} already exists"
             )
 
@@ -90,7 +90,7 @@ def test_stage2_installs_missing_native_csi_operators_and_skips_existing(
             ],
         }
     }
-    with _controller_api_proxy(k8s_hub_client.namespace) as controller_url:
+    with _controller_api_proxy(k8s_hub_client) as controller_url:
         templates = _controller_request(
             controller_url=controller_url,
             token=token,
@@ -172,6 +172,10 @@ def test_stage2_installs_missing_native_csi_operators_and_skips_existing(
                 )
                 version = csv.get("spec", {}).get("version", "")
                 assert version, f"Installed CSV {installed_csv} has no version"
+                # CSV name/version are public OLM metadata; this shared client also reads Secrets.
+                _LOGGER.info(  # codeql[py/clear-text-logging-sensitive-data]
+                    "OLM installed %s CSV %s, version %s", operator["package"], installed_csv, version
+                )
                 installed_csvs[operator["package"]] = csv
 
                 install_plans = k8s_hub_client.list_json(resource="installplans", namespace=operator["namespace"]).get(
@@ -200,7 +204,7 @@ def test_stage2_installs_missing_native_csi_operators_and_skips_existing(
                 ), f"Manual approval must leave later {operator['package']} plans unapproved"
 
                 for driver in operator["drivers"]:
-                    assert _resource_exists(resource="csidriver", name=driver), (
+                    assert _resource_exists(k8s=k8s_hub_client, resource="csidriver", name=driver), (
                         f"AAP job succeeded but CSIDriver {driver} was not registered"
                     )
                 before_noop[operator["subscription"]] = {"spec": spec, "installedCSV": installed_csv}
@@ -240,7 +244,7 @@ def test_stage2_installs_missing_native_csi_operators_and_skips_existing(
                 )
                 assert subscription.get("status", {}).get("installedCSV") == expected["installedCSV"]
                 for driver in operator["drivers"]:
-                    assert _resource_exists(resource="csidriver", name=driver), (
+                    assert _resource_exists(k8s=k8s_hub_client, resource="csidriver", name=driver), (
                         f"Existing CSI driver {driver} disappeared after the no-op Stage 2 run"
                     )
         finally:
@@ -282,15 +286,14 @@ def _launch_stage2_job(
 
 
 @contextmanager
-def _controller_api_proxy(namespace: str) -> Iterator[str]:
+def _controller_api_proxy(k8s: K8sClient) -> Iterator[str]:
     """Provide AAP access through kubectl's authenticated local port-forward."""
     with managed_process(
-        "kubectl",
+        *k8s._base(),
         "port-forward",
         "--address=127.0.0.1",
-        "--as=system:admin",
         "-n",
-        namespace,
+        k8s.namespace,
         "service/osac-aap",
         ":80",
         stdout=subprocess.PIPE,
@@ -342,11 +345,8 @@ def _controller_request(
         raise RuntimeError(f"Could not connect to the AAP Controller API for {path}") from None
 
 
-def _resource_exists(*, resource: str, name: str, namespace: str | None = None) -> bool:
-    command = ["kubectl", "get", resource, name, "--as", "system:admin"]
-    if namespace is not None:
-        command.extend(["-n", namespace])
-    output, returncode = run_unchecked(*command)
+def _resource_exists(*, k8s: K8sClient, resource: str, name: str, namespace: str | None = None) -> bool:
+    output, returncode = run_unchecked(*k8s._base(), "get", resource, name, "-n", namespace or k8s.namespace)
     if returncode == 0:
         return True
     if "(NotFound)" in output:

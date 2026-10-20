@@ -10,6 +10,7 @@ EXTERNAL_ACCESS = COLLECTIONS / "osac" / "service" / "roles" / "external_access"
 OCP_CI_SMALL = COLLECTIONS / "osac" / "templates" / "roles" / "ocp_ci_small"
 OCP_SMALL = COLLECTIONS / "osac" / "templates" / "roles" / "ocp_small"
 CI_EXTERNAL_ACCESS = COLLECTIONS / "ci" / "steps" / "roles" / "external_access"
+NICO_EXTERNAL_ACCESS = COLLECTIONS / "nico" / "steps" / "roles" / "external_access"
 
 
 def load_tasks(path: Path) -> list[dict[str, object]]:
@@ -186,6 +187,24 @@ def test_ocp_small_leaves_external_access_to_clusterorder_and_nico_override_is_p
     assert nico_create[1]["ansible.builtin.include_role"]["tasks_from"] == "publish.yaml"
     assert nico_remove[0]["ansible.builtin.include_role"]["name"] == "nico.steps.external_access"
     assert nico_remove[1]["ansible.builtin.include_role"]["tasks_from"] == "clear.yaml"
+
+
+def test_nico_external_access_does_not_retry_an_exhausted_ip_range() -> None:
+    allocate = load_tasks(NICO_EXTERNAL_ACCESS / "tasks" / "allocate_ip.yml")
+    rescue = allocate[0]["rescue"]
+
+    detect = next(
+        task for task in rescue if task.get("name") == "Detect exhaustion reported by the IP filter"
+    )
+    stop = next(
+        task
+        for task in rescue
+        if task.get("name") == "Stop retries when the ingress range has no free address"
+    )
+
+    assert "No available IPs in " in detect["ansible.builtin.set_fact"]["nico_ip_allocation_exhausted"]
+    assert stop["when"] == "nico_ip_allocation_exhausted | default(false) | bool"
+    assert "no free" in stop["ansible.builtin.fail"]["msg"]
 
 
 def test_caas_does_not_publish_a_provider_specific_external_access_task_pair() -> None:

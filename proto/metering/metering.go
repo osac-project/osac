@@ -90,6 +90,10 @@ type Field struct {
 	// TransitionTime is the proto path of the field that holds the time of the last change of
 	// this field. Set only for varying fields.
 	TransitionTime string `json:"transition_time"`
+
+	// OwnerResource names the resource type the field's reference points at, when the field
+	// carries the resource's ownership root. Empty for fields that are not owner references.
+	OwnerResource string `json:"owner_resource"`
 }
 
 // Resource is a billable resource and the fields metering tracks on it.
@@ -166,7 +170,32 @@ func Resources() (result []Resource, err error) {
 		}
 	}
 
+	// An owner annotation must name a resource the registry knows, so the calculator can
+	// resolve the root:
+	shortNames := map[string]bool{}
+	for _, resource := range result {
+		shortNames[shortName(resource.Message)] = true
+	}
+	for _, resource := range result {
+		for _, field := range resource.Fields {
+			if field.OwnerResource == "" {
+				continue
+			}
+			if !shortNames[field.OwnerResource] {
+				return nil, fmt.Errorf(
+					"field '%s' of '%s' names owner resource '%s', which has no tracked fields",
+					field.Path, resource.Message, field.OwnerResource,
+				)
+			}
+		}
+	}
+
 	return result, nil
+}
+
+// shortName returns the message name without its package.
+func shortName(full protoreflect.FullName) string {
+	return string(full.Name())
 }
 
 // annotatedField is a field carrying a metering annotation, with its path from the message the
@@ -234,6 +263,14 @@ func newField(resource protoreflect.MessageDescriptor, annotated annotatedField)
 		Path:           annotated.path,
 		Kind:           kind,
 		TransitionTime: options.GetTransitionTime(),
+		OwnerResource:  options.GetOwnerResource(),
+	}
+
+	if result.OwnerResource != "" && kind != KindFixedOnceSet {
+		return Field{}, fmt.Errorf(
+			"field '%s' of '%s' names an owner resource but isn't fixed once set",
+			annotated.path, resource.FullName(),
+		)
 	}
 
 	if kind == KindVaries {

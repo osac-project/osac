@@ -32,7 +32,7 @@ func TestResources(t *testing.T) {
 			Message: "osac.private.v1.BareMetalInstance",
 			Fields: []Field{
 				{Path: "spec.instance_type", Kind: KindConstant},
-				{Path: "status.cluster", Kind: KindFixedOnceSet},
+				{Path: "status.cluster", Kind: KindFixedOnceSet, OwnerResource: "Cluster"},
 				{Path: "status.node_set", Kind: KindFixedOnceSet},
 				{Path: "status.state", Kind: KindVaries, TransitionTime: "status.state_transition_time"},
 			},

@@ -385,30 +385,8 @@ func (r *Reconciler) recordBMICreateRejection(
 	if co.UID == "" || index < 0 || !reflect.DeepEqual(latest.Status.Workers[index], *worker) {
 		return errWorkerObservationChanged
 	}
-	recorded := &latest.Status.Workers[index]
-	now := metav1.Now()
-	recorded.Phase = workerPhaseFailed
-	recorded.BMICreateState = v1alpha1.WorkerBMICreateStateReserved
-	recorded.NextRetryTime = nil
-	recorded.ReadySince = nil
-	recorded.LastFailureReason = eventReasonBMICreateRejected
-	recorded.LastFailureMessage = createErr.Error()
-	recorded.LastFailureTime = &now
-	type operation struct {
-		Op    string `json:"op"`
-		Path  string `json:"path"`
-		Value any    `json:"value"`
-	}
-	path := fmt.Sprintf("/status/workers/%d", index)
-	payload, err := json.Marshal([]operation{
-		{Op: "test", Path: "/metadata/uid", Value: co.UID},
-		{Op: "test", Path: path, Value: worker},
-		{Op: "replace", Path: path, Value: recorded},
-	})
-	if err != nil {
-		return err
-	}
-	if err := r.Status().Patch(ctx, latest, client.RawPatch(types.JSONPatchType, payload)); err != nil {
+	setBMICreateRejectionCheckpoint(&latest.Status.Workers[index], createErr)
+	if err := r.patchBMICreateRejection(ctx, latest, index, worker); err != nil {
 		return err
 	}
 	// Require the API response to retain the checkpoint: an older CRD may
@@ -426,6 +404,42 @@ func (r *Reconciler) recordBMICreateRejection(
 	r.recorder.Eventf(co, nil, corev1.EventTypeWarning, eventReasonBMICreateRejected, "CreateWorker",
 		"worker %s: BMI create rejected: %s", worker.Name, createErr)
 	return nil
+}
+
+// setBMICreateRejectionCheckpoint re-arms only the rejected reservation, leaving
+// attempt history intact for handleFailedWorkers to count and schedule retries.
+func setBMICreateRejectionCheckpoint(worker *v1alpha1.WorkerStatus, createErr error) {
+	now := metav1.Now()
+	worker.Phase = workerPhaseFailed
+	worker.BMICreateState = v1alpha1.WorkerBMICreateStateReserved
+	worker.NextRetryTime = nil
+	worker.ReadySince = nil
+	worker.LastFailureReason = eventReasonBMICreateRejected
+	worker.LastFailureMessage = createErr.Error()
+	worker.LastFailureTime = &now
+}
+
+// patchBMICreateRejection replaces the checkpoint at index only if the API still
+// holds the observed UID and complete expected worker. next receives the patch
+// response; the caller must verify it before using it or accounting for success.
+func (r *Reconciler) patchBMICreateRejection(
+	ctx context.Context, next *v1alpha1.ClusterOrder, index int, expected *v1alpha1.WorkerStatus,
+) error {
+	type operation struct {
+		Op    string `json:"op"`
+		Path  string `json:"path"`
+		Value any    `json:"value"`
+	}
+	path := fmt.Sprintf("/status/workers/%d", index)
+	payload, err := json.Marshal([]operation{
+		{Op: "test", Path: "/metadata/uid", Value: next.UID},
+		{Op: "test", Path: path, Value: expected},
+		{Op: "replace", Path: path, Value: next.Status.Workers[index]},
+	})
+	if err != nil {
+		return err
+	}
+	return r.Status().Patch(ctx, next, client.RawPatch(types.JSONPatchType, payload))
 }
 
 // writeSelectedWorker persists one selected slot's status from the invocation's

@@ -379,6 +379,8 @@ def _controller_request(
         raise RuntimeError(message) from None
     except urllib.error.URLError:
         raise _RetryableControllerError(f"Could not connect to the AAP Controller API for {path}") from None
+    except (TimeoutError, ConnectionError):
+        raise _RetryableControllerError(f"Connection to the AAP Controller API failed for {path}") from None
 
 
 def _resource_exists(*, k8s: K8sClient, resource: str, name: str, namespace: str | None = None) -> bool:

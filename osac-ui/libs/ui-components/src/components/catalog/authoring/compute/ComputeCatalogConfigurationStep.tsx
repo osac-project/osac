@@ -3,8 +3,8 @@ import { Content, Stack, StackItem, Title } from '@patternfly/react-core';
 import { useTranslation } from '../../../../hooks/useTranslation';
 import { InputField } from '../../../Form/InputField';
 import OsacForm from '../../../Form/OsacForm';
-import ComputeInstanceTypeField from '../../../ProvisioningWizard/fields/ComputeInstanceTypeField';
 import DiskImageField from '../../../ProvisioningWizard/fields/DiskImageField';
+import ComputeInstanceTypeField from '../../../vm/CreateWizard/fields/ComputeInstanceTypeField';
 import CatalogField from '../CatalogField';
 
 const ComputeCatalogConfigurationStep = () => {

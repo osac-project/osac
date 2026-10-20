@@ -1253,7 +1253,7 @@
 
 # ──────────────────────────────────────────────────────────────
 # Test 29: Product routing keys resolve to their CSI backend vendors
-# Expected: NetApp maps to Trident and both Pure products map to Pure.
+# Expected: NetApp maps to Trident and Pure maps to Pure.
 # ──────────────────────────────────────────────────────────────
 - name: Test storage_provider -- product routing aliases resolve to CSI backend vendors
   hosts: localhost
@@ -1266,8 +1266,6 @@
           - vast
           - netapp
           - pure
-          - ontap
-          - trident
           - lvms
           - unknown
 
@@ -1292,8 +1290,6 @@
         provider: netapp
       - name: pure-tier
         provider: pure
-      - name: ontap-tier
-        provider: ontap
     storage_provider_backend_connections: {}
     tenant_name: provider-routing-test
     _all_tenant_configs: {}
@@ -1305,7 +1301,6 @@
       loop:
         - netapp
         - pure
-        - ontap
       loop_control:
         loop_var: _current_provider
 
@@ -1314,4 +1309,3 @@
         that:
           - _all_tenant_configs['netapp'].provider == 'netapp'
           - _all_tenant_configs['pure'].provider == 'pure'
-          - _all_tenant_configs['ontap'].provider == 'ontap'

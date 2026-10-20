@@ -31,7 +31,7 @@ import (
 
 // TierResolution holds the result of resolving a StorageTier name to a
 // provider and protocol. Provider is the StorageBackend's provider (e.g. "vast"),
-// matching the vendor routing keys ("vast", "pure", "ontap", ...) that
+// matching the vendor routing keys ("vast", "netapp", "pure", ...) that
 // osac-csi-driver's Helm-templated --vendor-controllers/--vendor-sockets maps use.
 type TierResolution struct {
 	Provider string

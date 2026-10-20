@@ -44,13 +44,10 @@
           - vast
           - netapp
           - pure
-          - ontap
-          - trident
         csi_driver_install_vendor_node_socket_paths:
           vast: /var/lib/kubelet/plugins/csi.vast.vastdata.com
           netapp: /var/lib/kubelet/plugins/csi.trident.netapp.io
           pure: /var/lib/kubelet/plugins/csi.pure.purestorage.com
-          trident: /var/lib/kubelet/plugins/csi.trident.netapp.io
     - name: Uninstall any pre-existing csi-driver release
       kubernetes.core.helm:
         name: csi-driver

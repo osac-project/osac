@@ -770,6 +770,21 @@
         storage_provider_target_kubeconfig: "{{ _native_csi_test_target_kubeconfig }}"
         storage_provider_target_kubeconfig_insecure: false
 
+    - name: Read native CSI driver installation lease after ensure
+      kubernetes.core.k8s_info:
+        api_version: coordination.k8s.io/v1
+        kind: Lease
+        name: provider-native-csi-install-lock
+        namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"
+      register: _native_csi_install_lease
+
+    - name: Assert native CSI driver installation lease was released
+      ansible.builtin.assert:
+        that:
+          - _native_csi_install_lease.resources | length == 0
+        fail_msg: "Native CSI driver installation left its cluster-wide Lease behind"
+        success_msg: "Native CSI driver installation Lease was released"
+
 - name: "Native CSI Driver Ensure - Verify install and readiness"
   hosts: localhost
   gather_facts: false

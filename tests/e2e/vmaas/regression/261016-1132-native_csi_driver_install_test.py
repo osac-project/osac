@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import re
 import select
 import subprocess
@@ -173,8 +174,11 @@ def test_stage2_installs_missing_native_csi_operators_and_skips_existing(
                 version = csv.get("spec", {}).get("version", "")
                 assert version, f"Installed CSV {installed_csv} has no version"
                 # CSV name/version are public OLM metadata; this shared client also reads Secrets.
-                _LOGGER.info(  # codeql[py/clear-text-logging-sensitive-data]
-                    "OLM installed %s CSV %s, version %s", operator["package"], installed_csv, version
+                _LOGGER.info(
+                    "OLM installed %s CSV %s, version %s",
+                    operator["package"],
+                    installed_csv,  # lgtm[py/clear-text-logging-sensitive-data]
+                    version,  # lgtm[py/clear-text-logging-sensitive-data]
                 )
                 installed_csvs[operator["package"]] = csv
 
@@ -299,8 +303,9 @@ def _controller_api_proxy(k8s: K8sClient) -> Iterator[str]:
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     ) as port_forward:
+        port_forward_output = bytearray()
         local_port = poll_until(
-            fn=lambda: _read_port_forward_port(port_forward),
+            fn=lambda: _read_port_forward_port(port_forward, port_forward_output),
             until=lambda port: port is not None,
             retries=30,
             delay=1,
@@ -311,17 +316,19 @@ def _controller_api_proxy(k8s: K8sClient) -> Iterator[str]:
         yield f"http://127.0.0.1:{local_port}/api/controller/v2"
 
 
-def _read_port_forward_port(port_forward: subprocess.Popen[str]) -> int | None:
-    if port_forward.poll() is not None:
-        output = port_forward.stdout.read() if port_forward.stdout is not None else ""
-        raise RuntimeError(f"kubectl port-forward exited before becoming ready: {output.strip()}")
+def _read_port_forward_port(port_forward: subprocess.Popen[str], output_buffer: bytearray) -> int | None:
     if port_forward.stdout is None:
         raise RuntimeError("kubectl port-forward has no output stream")
-    readable, _, _ = select.select([port_forward.stdout], [], [], 0)
-    if not readable:
-        return None
-    line = port_forward.stdout.readline()
-    match = re.search(r"Forwarding from 127\.0\.0\.1:(\d+) -> \d+", line)
+    fd = port_forward.stdout.fileno()
+    while select.select([fd], [], [], 0)[0]:
+        chunk = os.read(fd, 4096)
+        if not chunk:
+            break
+        output_buffer.extend(chunk)
+    output = output_buffer.decode("utf-8", errors="replace")
+    match = re.search(r"Forwarding from 127\.0\.0\.1:(\d+) -> \d+", output)
+    if match is None and port_forward.poll() is not None:
+        raise RuntimeError(f"kubectl port-forward exited before becoming ready: {output.strip()}")
     return int(match.group(1)) if match else None
 
 

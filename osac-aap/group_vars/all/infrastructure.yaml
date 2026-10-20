@@ -5,7 +5,6 @@ default_agent_namespace: &agent_namespace >-
      else 'hardware-inventory' }}
 manage_agents_namespace: *agent_namespace
 external_access_agent_namespace: *agent_namespace
-
 # Cluster settings credentials (used by cluster_settings role)
 cluster_settings_default_credentials_secret_namespace: "default"
 cluster_settings_default_credentials_secret_name: "cluster-credentials"

@@ -7,4 +7,5 @@ chart-dirs:
 # so ct runs `helm repo add` before building dependencies.
 chart-repos:
   - awx-operator=https://ansible-community.github.io/awx-operator-helm/
+  - netbox-community=https://netbox-community.github.io/netbox-chart/
 validate-maintainers: false

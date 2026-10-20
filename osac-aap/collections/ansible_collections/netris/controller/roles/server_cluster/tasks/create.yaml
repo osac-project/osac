@@ -6,7 +6,7 @@
 
 - name: Reset server cluster lookup results
   ansible.builtin.set_fact:
-    _existing_server_cluster: null
+    _existing_server_cluster:
     _server_names: []
     _server_cluster_servers: []
 

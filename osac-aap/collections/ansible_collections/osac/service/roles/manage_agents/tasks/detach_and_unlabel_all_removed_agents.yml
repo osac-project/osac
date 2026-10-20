@@ -10,8 +10,12 @@
 
 - name: List agents removed from the cluster
   ansible.builtin.set_fact:
-    manage_agents_removed: >
-      {{ manage_agents_allocated.resources | json_query('[?metadata.labels."agent-install.openshift.io/clusterdeployment-namespace"==`null` || metadata.labels."agent-install.openshift.io/clusterdeployment-namespace"==``]') }}
+    manage_agents_removed: >-
+      {{ manage_agents_allocated.resources
+         | json_query(
+             '[?metadata.labels."agent-install.openshift.io/clusterdeployment-namespace"==`null` '
+             ~ '|| metadata.labels."agent-install.openshift.io/clusterdeployment-namespace"==``]'
+           ) }}
 
 # Exclude agents that were just provisioned in this run and haven't been
 # claimed by a HostedCluster yet.  Without this filter, newly provisioned
@@ -31,7 +35,7 @@
   vars:
     node: "{{ agent.metadata.annotations[agent_host_uuid_label] }}"
     networks:
-    - "{{ manage_agents_idle_agents_network }}"
+      - "{{ manage_agents_idle_agents_network }}"
   loop: "{{ manage_agents_removed }}"
   loop_control:
     label: "Detach agent {{ agent.metadata.name }}"

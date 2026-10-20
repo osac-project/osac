@@ -6,6 +6,10 @@ version: 0.0.1
 
 dependencies:
   - name: topolvm
-    version: 17.2.0
+    version: "17.2.0"
     repository: https://topolvm.github.io/topolvm
     condition: topolvm.enabled
+  - name: netbox
+    version: "8.3.91"
+    repository: https://netbox-community.github.io/netbox-chart/
+    condition: netbox.enabled

@@ -45,17 +45,26 @@
 
 - name: Find existing API DNAT rule
   ansible.builtin.set_fact:
-    _existing_api_dnat: "{{ (_dnat_lookup_resp.json.data | default([])) | selectattr('name', 'equalto', external_access_name + '-api-dnat') | list | first | default(none) }}"
+    _existing_api_dnat: >-
+      {{ (_dnat_lookup_resp.json.data | default([]))
+         | selectattr('name', 'equalto', external_access_name + '-api-dnat')
+         | list | first | default(none) }}
   when: _dnat_lookup_resp.json is mapping
 
 - name: Find existing ingress HTTP DNAT rule
   ansible.builtin.set_fact:
-    _existing_ingress_http_dnat: "{{ (_dnat_lookup_resp.json.data | default([])) | selectattr('name', 'equalto', external_access_name + '-ingress-http-dnat') | list | first | default(none) }}"
+    _existing_ingress_http_dnat: >-
+      {{ (_dnat_lookup_resp.json.data | default([]))
+         | selectattr('name', 'equalto', external_access_name + '-ingress-http-dnat')
+         | list | first | default(none) }}
   when: _dnat_lookup_resp.json is mapping
 
 - name: Find existing ingress HTTPS DNAT rule
   ansible.builtin.set_fact:
-    _existing_ingress_https_dnat: "{{ (_dnat_lookup_resp.json.data | default([])) | selectattr('name', 'equalto', external_access_name + '-ingress-https-dnat') | list | first | default(none) }}"
+    _existing_ingress_https_dnat: >-
+      {{ (_dnat_lookup_resp.json.data | default([]))
+         | selectattr('name', 'equalto', external_access_name + '-ingress-https-dnat')
+         | list | first | default(none) }}
   when: _dnat_lookup_resp.json is mapping
 
 - name: Set API DNAT IP from existing rule

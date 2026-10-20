@@ -15,8 +15,7 @@
 
     - name: Apply image defaults to template parameters
       ansible.builtin.set_fact:
-        template_params: "{{ {'imageURL': bm_host_metal3_default_image_url}
-                            | combine(template_params) }}"
+        template_params: "{{ {'imageURL': bm_host_metal3_default_image_url} | combine(template_params) }}"
 
     - name: Set variables expected by build_bmh_patch
       ansible.builtin.set_fact:
@@ -55,8 +54,7 @@
 
     - name: Apply image defaults to template parameters
       ansible.builtin.set_fact:
-        template_params: "{{ {'imageURL': bm_host_metal3_default_image_url}
-                            | combine(template_params) }}"
+        template_params: "{{ {'imageURL': bm_host_metal3_default_image_url} | combine(template_params) }}"
 
     - name: Set variables expected by build_bmh_patch
       ansible.builtin.set_fact:

@@ -16,7 +16,8 @@
 # comment the decision keeps there. Both wake this workflow through the issue_comment trigger below.
 #
 # This workflow starts when CI starts or finishes, and when a review is submitted or dismissed or the pull request
-# changes between draft and ready (e2e-review-relay.yml). It runs from the default branch and checks out nothing of the
+# changes between draft and ready (e2e-review-relay.yml), and when the early comment run finishes (e2e-comment.yml; the
+# decision then deletes that run). It runs from the default branch and checks out nothing of the
 # pull request, so a fork pull request is handled like any other. The suites it calls run the pull request's code, on the
 # commit that was approved and nothing else.
 name: E2E for pull requests
@@ -29,7 +30,7 @@ run-name: >-
 
 on:  # zizmor: ignore[dangerous-triggers] -- no pull request code is checked out; the suites run the approved commit
   workflow_run:
-    workflows: ["CI", "E2E review relay"]  # keep in step with ci-workflow-name and relay-workflow-name of the decision
+    workflows: ["CI", "E2E review relay", "E2E comment"]  # keep in step with the workflow names the decision takes as inputs
     types: [requested, completed]
   issue_comment:
     types: [edited, created]  # the checkboxes of the control comment, and a /test comment (any other comment is skipped)
@@ -43,7 +44,7 @@ permissions: {}
 
 jobs:
   decide:
-    uses: osac-project/osac-ci/.github/workflows/e2e-pr-decide.yml@639e33f549c91a5c1e8b4ad55256b69f028a42b8  # v1.2.4
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-decide.yml@e49642a92dd8f6f5c6680d09c8adea4e2b11e5ef  # v1.2.6
     permissions:
       contents: read
       pull-requests: read
@@ -55,7 +56,7 @@ jobs:
   track:
     needs: decide
     if: needs.decide.outputs.start == 'true'
-    uses: osac-project/osac-ci/.github/workflows/e2e-pr-track.yml@639e33f549c91a5c1e8b4ad55256b69f028a42b8  # v1.2.4
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-track.yml@e49642a92dd8f6f5c6680d09c8adea4e2b11e5ef  # v1.2.6
     permissions:
       contents: read
     with:
@@ -126,7 +127,7 @@ jobs:
   finish:
     needs: [decide, track, vmaas, caas, bmaas, netris]
     if: always() && needs.decide.outputs.start == 'true'
-    uses: osac-project/osac-ci/.github/workflows/e2e-pr-finish.yml@639e33f549c91a5c1e8b4ad55256b69f028a42b8  # v1.2.4
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-finish.yml@e49642a92dd8f6f5c6680d09c8adea4e2b11e5ef  # v1.2.6
     permissions:
       contents: read
     with:

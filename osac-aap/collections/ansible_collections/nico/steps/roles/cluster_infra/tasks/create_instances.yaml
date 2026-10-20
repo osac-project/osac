@@ -208,8 +208,20 @@
         nico_matched_agents + [{
           'agent_name': item.metadata.name,
           'agent_namespace': item.metadata.namespace,
-          'mac_address': (item.status.inventory.interfaces | map(attribute='macAddress') | map('lower') | intersect(cluster_infra_mac_to_instance.keys() | list) | first),
-          'instance_info': cluster_infra_mac_to_instance[(item.status.inventory.interfaces | map(attribute='macAddress') | map('lower') | intersect(cluster_infra_mac_to_instance.keys() | list) | first)]
+          'mac_address': (
+            item.status.inventory.interfaces
+            | map(attribute='macAddress')
+            | map('lower')
+            | intersect(cluster_infra_mac_to_instance.keys() | list)
+            | first
+          ),
+          'instance_info': cluster_infra_mac_to_instance[
+            item.status.inventory.interfaces
+            | map(attribute='macAddress')
+            | map('lower')
+            | intersect(cluster_infra_mac_to_instance.keys() | list)
+            | first
+          ]
         }]
       }}
   loop: "{{ cluster_infra_agents_result.resources }}"

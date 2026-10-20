@@ -6,16 +6,16 @@
 
 - name: List subnets with tags
   block:
-  - name: List subnets  # noqa:no-changed-when
-    ansible.builtin.command: >-
-      openstack subnet list
-      {% for tag in tags_to_filter %}
-      --tag "{{ tag }}"
-      {% endfor %}
-      --long
-      -f json
-    register: list_subnets_cmd
+    - name: List subnets # noqa:no-changed-when
+      ansible.builtin.command: >-
+        openstack subnet list
+        {% for tag in tags_to_filter %}
+        --tag "{{ tag }}"
+        {% endfor %}
+        --long
+        -f json
+      register: list_subnets_cmd
 
-  - name: Set list_subnets_result to subnets list
-    ansible.builtin.set_fact:
-      list_subnets_result: "{{ list_subnets_cmd.stdout | from_json }}"
+    - name: Set list_subnets_result to subnets list
+      ansible.builtin.set_fact:
+        list_subnets_result: "{{ list_subnets_cmd.stdout | from_json }}"

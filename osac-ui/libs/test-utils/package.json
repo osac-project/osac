@@ -4,6 +4,6 @@
   "type": "module",
   "devDependencies": {
     "@playwright/test": "1.64.0",
-    "@types/node": "20.19.41"
+    "@types/node": "24.19.2"
   }
 }

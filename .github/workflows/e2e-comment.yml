@@ -1,7 +1,9 @@
 # Posts the placeholder of the E2E control comment the moment a pull request opens, so it lands above the comments of
 # the bots that post a few seconds later (a comment cannot be moved). The shared workflow of osac-ci does the work; the
 # decision (e2e-pr.yml) fills the comment in later and deletes the finished run of this workflow, whose row would
-# otherwise stay on the pull request (this workflow is in the workflow_run list of e2e-pr.yml).
+# otherwise stay on the pull request (this workflow is in the workflow_run list of e2e-pr.yml). Only a run that
+# succeeded is deleted, on purpose, like the review relay run: a failed run keeps its row and its log, so a broken
+# posting is seen (the decision posts the comment itself a few seconds later, so nothing is missing from the pull request).
 #
 # It runs from the default branch with the app secret for any pull request, a fork's included, and checks out nothing of
 # the pull request. Only a pull request of a member of the organization gets a comment.

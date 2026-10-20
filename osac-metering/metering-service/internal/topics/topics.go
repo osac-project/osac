@@ -26,6 +26,19 @@ const (
 	DeadLetterPrefix = "osac.metering.dlq."
 )
 
+// builtinTenants are the tenants fulfillment creates for platform use. Metering never reads
+// them: the design keeps the system tenant out of metering, and the shared tenant holds
+// platform-scoped objects, not billable tenant usage. The names match fulfillment's
+// auth.SystemTenant and auth.SharedTenant constants.
+var builtinTenants = map[string]bool{
+	"system": true,
+	"shared": true,
+}
+
+// Metered reports whether a tenant is one metering serves. It is false only for the built-in
+// system and shared tenants, whose topics exist but whose usage is never billed.
+func Metered(tenant string) bool { return !builtinTenants[tenant] }
+
 // Events returns the name of the tenant's event topic.
 func Events(tenant string) string { return EventsPrefix + tenant }
 

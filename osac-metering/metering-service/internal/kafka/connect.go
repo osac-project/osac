@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -21,15 +22,40 @@ type ConnectionConfig struct {
 	SASLPassFile string
 }
 
-func NewSyncProducer(cfg ConnectionConfig) (sarama.SyncProducer, error) {
-	brokers := SplitAndTrim(cfg.Brokers, ",")
+// baseConfig builds the sarama config every metering client shares: the broker version,
+// TLS, and SASL.
+func baseConfig(cfg ConnectionConfig) (*sarama.Config, error) {
 	sc := sarama.NewConfig()
 	sc.Version = sarama.V3_9_0_0
-	sc.Producer.Return.Successes = true
 	if err := ConfigureTLS(sc, cfg.TLSCACert); err != nil {
 		return nil, err
 	}
 	if err := ConfigureSASL(sc, cfg.SASLUser, cfg.SASLPassFile); err != nil {
+		return nil, err
+	}
+	return sc, nil
+}
+
+// ProducerConfig builds the sarama config metering produces heartbeats with. Sends wait
+// for all in-sync replicas, like the fulfillment publisher: the relay deletes an outbox
+// row after its send succeeds, so a write the leader acknowledged but never replicated
+// loses committed usage forever.
+func ProducerConfig(cfg ConnectionConfig) (*sarama.Config, error) {
+	sc, err := baseConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	sc.Producer.Return.Successes = true
+	sc.Producer.RequiredAcks = sarama.WaitForAll
+	return sc, nil
+}
+
+// NewSyncProducer creates a producer that sends heartbeats to the tenant heartbeat
+// topics.
+func NewSyncProducer(cfg ConnectionConfig) (sarama.SyncProducer, error) {
+	brokers := SplitAndTrim(cfg.Brokers, ",")
+	sc, err := ProducerConfig(cfg)
+	if err != nil {
 		return nil, err
 	}
 	return sarama.NewSyncProducer(brokers, sc)
@@ -48,16 +74,79 @@ func VerifyTopicExists(cfg ConnectionConfig, topic string) error {
 	return fmt.Errorf("topic %q does not exist on cluster (%d tenants available)", topic, len(tenants))
 }
 
+// topicAdmin is the slice of sarama's ClusterAdmin the topic setup needs. Tests replace it.
+type topicAdmin interface {
+	DescribeTopics(topics []string) ([]*sarama.TopicMetadata, error)
+	CreateTopic(topic string, detail *sarama.TopicDetail, validateOnly bool) error
+}
+
+// EnsureTenantTopics creates the tenant's heartbeat and dead-letter topics when they are
+// missing. Metering owns both, so the discovery pass that first serves a tenant creates
+// them; nothing else does. An existing topic is left untouched, and a topic another pass
+// created in the meantime is not an error.
+func EnsureTenantTopics(cfg ConnectionConfig, tenant string, replicationFactor int16, retentionMS string) error {
+	brokers := SplitAndTrim(cfg.Brokers, ",")
+	sc, err := baseConfig(cfg)
+	if err != nil {
+		return err
+	}
+	admin, err := sarama.NewClusterAdmin(brokers, sc)
+	if err != nil {
+		return fmt.Errorf("connecting to kafka: %w", err)
+	}
+	defer func() { _ = admin.Close() }()
+
+	for _, topic := range []string{topics.Heartbeat(tenant), topics.DeadLetter(tenant)} {
+		if err := ensureTopic(admin, topic, replicationFactor, retentionMS); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ensureTopic creates one topic when it is missing. One partition keeps the heartbeat
+// order the relay relies on, and the retention is the installation's recovery window,
+// because metering rebuilds its database from the topics.
+func ensureTopic(admin topicAdmin, topic string, replicationFactor int16, retentionMS string) error {
+	descriptions, err := admin.DescribeTopics([]string{topic})
+	if err != nil {
+		return fmt.Errorf("describing topic '%s': %w", topic, err)
+	}
+	if len(descriptions) != 1 {
+		return fmt.Errorf("expected one description of topic '%s', but got %d", topic, len(descriptions))
+	}
+	switch descriptions[0].Err {
+	case sarama.ErrNoError:
+		return nil
+	case sarama.ErrUnknownTopicOrPartition:
+	default:
+		return fmt.Errorf("describing topic '%s': %w", topic, descriptions[0].Err)
+	}
+	cleanupPolicy := "delete"
+	detail := &sarama.TopicDetail{
+		NumPartitions:     1,
+		ReplicationFactor: replicationFactor,
+		ConfigEntries: map[string]*string{
+			"retention.ms":   &retentionMS,
+			"cleanup.policy": &cleanupPolicy,
+		},
+	}
+	if replicationFactor >= 2 {
+		minInSync := "2"
+		detail.ConfigEntries["min.insync.replicas"] = &minInSync
+	}
+	if err := admin.CreateTopic(topic, detail, false); err != nil && !errors.Is(err, sarama.ErrTopicAlreadyExists) {
+		return fmt.Errorf("creating topic '%s': %w", topic, err)
+	}
+	return nil
+}
+
 // ListEventTenants returns the tenants that have an event topic, sorted by name. Metering
 // discovers tenants this way: a tenant exists for metering when its event topic does.
 func ListEventTenants(ctx context.Context, cfg ConnectionConfig) ([]string, error) {
 	brokers := SplitAndTrim(cfg.Brokers, ",")
-	sc := sarama.NewConfig()
-	sc.Version = sarama.V3_9_0_0
-	if err := ConfigureTLS(sc, cfg.TLSCACert); err != nil {
-		return nil, err
-	}
-	if err := ConfigureSASL(sc, cfg.SASLUser, cfg.SASLPassFile); err != nil {
+	sc, err := baseConfig(cfg)
+	if err != nil {
 		return nil, err
 	}
 	client, err := sarama.NewClient(brokers, sc)
@@ -70,14 +159,23 @@ func ListEventTenants(ctx context.Context, cfg ConnectionConfig) ([]string, erro
 	if err != nil {
 		return nil, fmt.Errorf("listing topics: %w", err)
 	}
+	return EventTenantsOf(names), nil
+}
+
+// EventTenantsOf maps event topic names to the tenants metering serves, skipping the
+// built-in tenants. Fulfillment creates the system and shared tenants for platform use;
+// metering does not read them.
+func EventTenantsOf(names []string) []string {
 	var tenants []string
 	for _, name := range names {
-		if tenant, ok := topics.TenantOfEvents(name); ok {
-			tenants = append(tenants, tenant)
+		tenant, ok := topics.TenantOfEvents(name)
+		if !ok || !topics.Metered(tenant) {
+			continue
 		}
+		tenants = append(tenants, tenant)
 	}
 	sort.Strings(tenants)
-	return tenants, nil
+	return tenants
 }
 
 func ConfigureTLS(sc *sarama.Config, caCertPath string) error {

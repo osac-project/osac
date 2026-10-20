@@ -70,7 +70,7 @@ const ClusterDetailsPageContent = ({ cluster }: ClusterDetailViewProps) => {
                   parentTo="/clusters"
                   parentLabel={t('Clusters')}
                   resourceName={cluster.metadata?.name ?? cluster.id}
-                  titleAddon={<ClusterStatusLabel status={cluster.status} />}
+                  titleAddon={<ClusterStatusLabel status={cluster.status} activityInLabel />}
                 />
               </FlexItem>
               <FlexItem>

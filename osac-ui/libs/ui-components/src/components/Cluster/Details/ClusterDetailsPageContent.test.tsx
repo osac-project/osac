@@ -73,8 +73,8 @@ describe('ClusterDetailsPageContent', () => {
     );
 
     const titleRow = screen.getByRole('heading', { name: 'cluster-one' }).closest('.pf-v6-l-flex');
-    expect(titleRow).toHaveTextContent('Provisioning');
-    expect(titleRow).toHaveTextContent('WorkersJoining');
+    expect(titleRow).toHaveTextContent('Provisioning - WorkersJoining');
+    expect(titleRow?.querySelectorAll('.pf-v6-c-label')).toHaveLength(1);
 
     const conditions = screen.getByRole('grid', { name: 'Cluster conditions' });
     expect(within(conditions).getByRole('columnheader', { name: 'Reason' })).toBeInTheDocument();
@@ -90,8 +90,8 @@ describe('ClusterDetailsPageContent', () => {
   it('shows Stalled as a warning in the header', () => {
     renderWithProviders(<ClusterDetailsPageContent cluster={makeProgressingCluster('Stalled')} />);
 
-    const warning = screen.getByLabelText('Warning: Stalled');
-    expect(warning).toHaveTextContent('Stalled');
+    const warning = screen.getByLabelText('Warning: Provisioning stalled');
+    expect(warning).toHaveTextContent('Provisioning - Stalled');
     expect(warning).toHaveClass('pf-m-orange');
   });
 
@@ -103,7 +103,7 @@ describe('ClusterDetailsPageContent', () => {
       const titleRow = screen
         .getByRole('heading', { name: 'cluster-one' })
         .closest('.pf-v6-l-flex');
-      expect(titleRow).toHaveTextContent('Stage unknown');
+      expect(titleRow).toHaveTextContent('Provisioning - Stage unknown');
     },
   );
 
@@ -113,13 +113,13 @@ describe('ClusterDetailsPageContent', () => {
     );
     expect(
       screen.getByRole('heading', { name: 'cluster-one' }).closest('.pf-v6-l-flex'),
-    ).toHaveTextContent('AllocatingWorkers');
+    ).toHaveTextContent('Provisioning - AllocatingWorkers');
 
     rerender(<ClusterDetailsPageContent cluster={makeProgressingCluster('WorkersJoining')} />);
-    expect(screen.queryByText('AllocatingWorkers')).not.toBeInTheDocument();
+    expect(screen.queryByText('Provisioning - AllocatingWorkers')).not.toBeInTheDocument();
     expect(
       screen.getByRole('heading', { name: 'cluster-one' }).closest('.pf-v6-l-flex'),
-    ).toHaveTextContent('WorkersJoining');
+    ).toHaveTextContent('Provisioning - WorkersJoining');
 
     rerender(
       <ClusterDetailsPageContent
@@ -130,7 +130,7 @@ describe('ClusterDetailsPageContent', () => {
         })}
       />,
     );
-    expect(screen.queryByText('WorkersJoining')).not.toBeInTheDocument();
+    expect(screen.queryByText('Provisioning - WorkersJoining')).not.toBeInTheDocument();
     expect(screen.getByText('Ready')).toBeInTheDocument();
   });
 

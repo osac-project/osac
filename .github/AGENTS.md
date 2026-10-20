@@ -18,10 +18,10 @@ plus a native approval on the head commit, and the merge queue.
   pull request and keeps the single `E2E` check up to date (plus one line per suite that runs, named by its `check` in `e2e-policy.yml`, such as `E2E / VMaaS Full Install`). The lines are check runs of the OSAC CI app (a token minted from the organization secrets `OSAC_CI_APP_ID` and `OSAC_CI_APP_PRIVATE_KEY`, with the checks permission), so the page draws them with a spinner; `E2E` is required from that app only: approved on the exact head commit by a person with write
   access or CodeRabbit (only a person with write access for a pull request from a fork), a suite affected (`e2e-policy.yml`), and no cheap check already failed. It does not wait for `CI`: the E2E runs in parallel with it and both are required for the merge. It checks out no pull request code (only the policy and
   filters of the default branch), and the suites it calls test the approved commit. `workflows/e2e-queue.yml` runs the
-  suites for a merge queue entry. `workflows/e2e-review-relay.yml` only finishes, so a review wakes `e2e-pr.yml`. The same run turns on auto-merge for a pull request that has an approval that counts, so it adds no check.
+  suites for a merge queue entry. `workflows/e2e-review-relay.yml` only finishes, so a review wakes `e2e-pr.yml`. `workflows/e2e-comment.yml` posts the placeholder of the control comment when a pull request opens (its finished run is deleted by `e2e-pr.yml`). The same run turns on auto-merge for a pull request that has an approval that counts, so it adds no check.
 - The `e2e-<suite>-full-install.yml` workflows hold one job each, no gating; they run on a schedule (every 5 hours), by hand
   and when called.
-- `workflow_run` lists workflows by exact name (`CI`, `E2E review relay` in `e2e-pr.yml`): keep the list in step when one is
+- `workflow_run` lists workflows by exact name (`CI`, `E2E review relay`, `E2E comment` in `e2e-pr.yml`): keep the list in step when one is
   renamed.
 - Path filters: `tests/e2e/**` is the full-install suite and must still make the E2E apply (`e2e-suite` filter). Do not fold
   `tests/e2e` back into an ignore list.

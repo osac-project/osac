@@ -117,8 +117,6 @@ spec:
           env:
             - name: METERING_DEPLOYMENT_ID
               value: {{ include "osac-metering.osacDeploymentId" . | quote }}
-            - name: METERING_RULES_NAMESPACE
-              value: {{ .Values.rules.namespace | default .Release.Namespace | quote }}
             - name: DB_URL_FILE
               value: /etc/metering/db/url
             - name: HEARTBEAT_INTERVAL

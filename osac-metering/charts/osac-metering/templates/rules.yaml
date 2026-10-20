@@ -8,7 +8,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: osac-metering-rules-0001
-  namespace: {{ .Values.rules.namespace | default .Release.Namespace }}
+  namespace: {{ .Release.Namespace }}
   # Only static labels: the ConfigMap is immutable, so Kubernetes rejects any
   # update, including one that only changes a label or an annotation. Helm's
   # chart label carries the chart version and changes on every upgrade, and a

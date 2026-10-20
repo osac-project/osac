@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -38,13 +39,11 @@ import (
 )
 
 type config struct {
-	healthAddr      string
-	kafka           kafkapkg.ConnectionConfig
-	dbURLFile       string
-	heartbeatTick   time.Duration
-	deploymentID    string
-	rulesNamespace  string
-	rulesConfigMaps string
+	healthAddr    string
+	kafka         kafkapkg.ConnectionConfig
+	dbURLFile     string
+	heartbeatTick time.Duration
+	deploymentID  string
 
 	// topicReplicationFactor and topicRetentionMS configure the heartbeat and
 	// dead-letter topics metering creates for a tenant it serves for the first time.
@@ -79,11 +78,9 @@ func configFromEnv() *config {
 			SASLUser:     os.Getenv("KAFKA_SASL_USERNAME"),
 			SASLPassFile: os.Getenv("KAFKA_SASL_PASSWORD_FILE"),
 		},
-		dbURLFile:       envOrDefault("DB_URL_FILE", "/etc/metering/db/url"),
-		heartbeatTick:   parseDurationOrDefault(os.Getenv("HEARTBEAT_INTERVAL"), time.Minute),
-		deploymentID:    os.Getenv("METERING_DEPLOYMENT_ID"),
-		rulesNamespace:  os.Getenv("METERING_RULES_NAMESPACE"),
-		rulesConfigMaps: envOrDefault("METERING_RULES_CONFIGMAPS_DIR", ""),
+		dbURLFile:     envOrDefault("DB_URL_FILE", "/etc/metering/db/url"),
+		heartbeatTick: parseDurationOrDefault(os.Getenv("HEARTBEAT_INTERVAL"), time.Minute),
+		deploymentID:  os.Getenv("METERING_DEPLOYMENT_ID"),
 
 		topicReplicationFactor: int16OrDefault(os.Getenv("METERING_TOPIC_REPLICATION_FACTOR"), -1),
 		topicRetentionMS:       envOrDefault("METERING_TOPIC_RETENTION_MS", "-1"),
@@ -118,9 +115,6 @@ func (c *config) validate() error {
 	}
 	if c.deploymentID == "" {
 		return fmt.Errorf("METERING_DEPLOYMENT_ID is required")
-	}
-	if c.rulesNamespace == "" && c.rulesConfigMaps == "" {
-		return fmt.Errorf("METERING_RULES_NAMESPACE is required")
 	}
 	if _, err := strconv.ParseInt(c.topicRetentionMS, 10, 64); err != nil {
 		return fmt.Errorf("METERING_TOPIC_RETENTION_MS must be a whole number of milliseconds: %w", err)
@@ -183,7 +177,11 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 		return fmt.Errorf("initializing database schema: %w", err)
 	}
 
-	rulesSource, err := rulesSource(cfg)
+	namespace, err := podNamespace()
+	if err != nil {
+		return err
+	}
+	rulesSource, err := rules.NewConfigMapSource(namespace)
 	if err != nil {
 		return err
 	}
@@ -208,13 +206,19 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 	return metering.Run(ctx)
 }
 
-// rulesSource picks where metering reads rule revisions: ConfigMaps in a namespace, or a
-// directory of ConfigMap manifests for development.
-func rulesSource(cfg *config) (rules.Source, error) {
-	if cfg.rulesConfigMaps != "" {
-		return rules.NewDirectorySource(cfg.rulesConfigMaps), nil
+// podNamespace reads the namespace the pod runs in. Rule revisions are ConfigMaps in the
+// service's own namespace, so no configuration can point the service at a namespace its
+// RBAC does not reach.
+func podNamespace() (string, error) {
+	data, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+	if err != nil {
+		return "", fmt.Errorf("reading the pod namespace: %w", err)
 	}
-	return rules.NewConfigMapSource(cfg.rulesNamespace)
+	namespace := strings.TrimSpace(string(data))
+	if namespace == "" {
+		return "", errors.New("the pod namespace file is empty")
+	}
+	return namespace, nil
 }
 
 func setupLogger() logr.Logger {

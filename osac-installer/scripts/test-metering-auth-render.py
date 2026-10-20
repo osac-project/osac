@@ -72,7 +72,7 @@ def check_profile(profile: str) -> None:
 
     # Metering reads events from Kafka and folds them; it no longer talks to
     # fulfillment, so none of its credentials appear.
-    assert "METERING_RULES_NAMESPACE" in metering, profile
+    assert "METERING_DEPLOYMENT_ID" in metering, profile
     assert "HEARTBEAT_INTERVAL" in metering, profile
     assert "KAFKA_BROKERS" in metering, profile
     assert "FULFILLMENT_" not in metering, profile

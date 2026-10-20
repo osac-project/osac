@@ -26,12 +26,6 @@ database:
 heartbeat:
   interval: "60s"
 
-# Rule revisions live as immutable ConfigMaps in this namespace. The chart
-# ships revision 0001; a new revision is a new ConfigMap with a future
-# effective_at and a metering restart.
-rules:
-  namespace: ""
-
 certs:
   caBundle:
     configMap: ca-bundle

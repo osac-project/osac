@@ -1820,18 +1820,6 @@
           },
           "additionalProperties": false
         },
-        "rules": {
-          "type": "object",
-          "description": "Metering rule revisions configuration",
-          "properties": {
-            "namespace": {
-              "type": "string",
-              "description": "Namespace holding the rule revision ConfigMaps (defaults to the release namespace)",
-              "default": ""
-            }
-          },
-          "additionalProperties": false
-        },
         "topics": {
           "type": "object",
           "description": "Per-tenant heartbeat and dead-letter topics metering creates when it first serves a tenant",

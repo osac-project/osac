@@ -9,8 +9,6 @@ protects it.
 See `values.yaml`. The notable groups:
 
 - `heartbeat.interval` — the round interval, default `60s`.
-- `rules.namespace` — where revision ConfigMaps are read from; defaults to
-  the release namespace.
 - `echoAdapter.enabled`, `m360Adapter.enabled` — the provider adapters.
 - `database.connection` — the projected secret holding the database URL.
 

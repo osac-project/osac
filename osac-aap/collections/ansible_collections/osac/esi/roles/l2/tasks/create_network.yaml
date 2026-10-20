@@ -11,11 +11,11 @@
 - name: Create a new network
   when: (networks.networks | length == 0)
   block:
-  - name: Create network  # noqa:no-changed-when
-    ansible.builtin.command: >-
-      openstack network create {% for tag in l2_network_tags %}--tag "{{ tag }}" {% endfor %}--mtu "{{ l2_network_mtu }}" "{{ network_name }}" -f json
-    register: network_cmd_result
+    - name: Create network # noqa:no-changed-when
+      ansible.builtin.command: >-
+        openstack network create {% for tag in l2_network_tags %}--tag "{{ tag }}" {% endfor %}--mtu "{{ l2_network_mtu }}" "{{ network_name }}" -f json
+      register: network_cmd_result
 
-  - name: Set create_network_result to new network
-    ansible.builtin.set_fact:
-      create_network_result: "{{ (network_cmd_result.stdout | from_json).id }}"
+    - name: Set create_network_result to new network
+      ansible.builtin.set_fact:
+        create_network_result: "{{ (network_cmd_result.stdout | from_json).id }}"

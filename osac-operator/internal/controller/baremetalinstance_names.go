@@ -19,6 +19,15 @@ import (
 
 const (
 	DefaultBareMetalInstanceNamespace string = "osac-baremetalinstance"
+
+	// bareMetalInstanceObjectNamePrefix is the prefix the fulfillment service
+	// applies to every BareMetalInstance hub CR name ("bmi-<id>"). It mirrors
+	// objectPrefix in
+	// fulfillment-service/internal/controllers/baremetalinstance and lets the
+	// feedback controller recover the fulfillment BMI identifier from a
+	// reconcile request after the CR has been physically deleted, when the
+	// identifier label is no longer readable.
+	bareMetalInstanceObjectNamePrefix string = "bmi-"
 )
 
 var (

@@ -52,6 +52,7 @@ type PrivateBareMetalInstanceCatalogItemsServer struct {
 	virtualNetworksDao        *dao.GenericDAO[*privatev1.VirtualNetwork]
 	networkClassesDao         *dao.GenericDAO[*privatev1.NetworkClass]
 	securityGroupsDao         *dao.GenericDAO[*privatev1.SecurityGroup]
+	secretsDao                *dao.GenericDAO[*privatev1.Secret]
 }
 
 func NewPrivateBareMetalInstanceCatalogItemsServer() *PrivateBareMetalInstanceCatalogItemsServerBuilder {
@@ -159,6 +160,15 @@ func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) Build() (result *Pri
 		return
 	}
 
+	secretsDao, err := dao.NewGenericDAO[*privatev1.Secret]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
 	generic, err := NewGenericServer[*privatev1.BareMetalInstanceCatalogItem]().
 		SetLogger(b.logger).
 		SetService(privatev1.BareMetalInstanceCatalogItems_ServiceDesc.ServiceName).
@@ -181,6 +191,7 @@ func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) Build() (result *Pri
 		virtualNetworksDao:        virtualNetworksDao,
 		networkClassesDao:         networkClassesDao,
 		securityGroupsDao:         securityGroupsDao,
+		secretsDao:                secretsDao,
 	}
 	return
 }
@@ -252,7 +263,7 @@ func (s *PrivateBareMetalInstanceCatalogItemsServer) prepareCatalogItemCandidate
 		return nil, err
 	}
 	return validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(ctx, s.generic.logger, candidate, template,
-		s.bareMetalInstanceTypesDao, s.diskImagesDao, s.subnetsDao,
+		s.bareMetalInstanceTypesDao, s.diskImagesDao, s.secretsDao, s.subnetsDao,
 		s.virtualNetworksDao, s.networkClassesDao, s.securityGroupsDao)
 }
 

@@ -428,7 +428,8 @@ def test_compute_instance_deprecated_warning(
                 active_instance_type,
                 default_disk_image,
                 ci_name=unique_name("e2e-ci"),
-            )
+            ),
+            include_stderr=True,
         )
         assert dep_rc == 0, f"create with DEPRECATED type should succeed, got: {dep_output}"
         assert "deprecat" in dep_output.lower() or "warning" in dep_output.lower(), (

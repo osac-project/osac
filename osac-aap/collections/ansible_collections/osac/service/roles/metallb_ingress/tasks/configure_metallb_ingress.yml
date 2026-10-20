@@ -1,4 +1,5 @@
-# this playbook follows the instructions detailed at https://docs.redhat.com/en/documentation/openshift_container_platform/4.19/html/hosted_control_planes/managing-hosted-control-planes#hcp-bm-ingress_hcp-manage-bm
+# This playbook follows the bare-metal ingress guidance:
+# https://docs.redhat.com/en/documentation/openshift_container_platform/4.19/html/hosted_control_planes/managing-hosted-control-planes#hcp-bm-ingress_hcp-manage-bm
 
 - name: Set metallb namespace
   ansible.builtin.set_fact:

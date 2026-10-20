@@ -165,7 +165,7 @@ jobs:
     - name: Build chart dependencies
       working-directory: osac-installer
       run: |
-        make helm-topolvm-deps
+        make helm-infra-deps
         helm dependency build charts/osac/
 
     - name: Test networking values
@@ -193,15 +193,33 @@ jobs:
       working-directory: osac-installer
       run: |
         set -euo pipefail
+        # Some profiles are overlays layered on a base profile by the
+        # Makefile's value selection (bmaas-netbox-ci layers bmaas-ci);
+        # template the same base+overlay combination the installer uses.
+        base_profile() {
+          case "$1" in
+            bmaas-netbox-ci) echo bmaas-ci ;;
+            *) echo "" ;;
+          esac
+        }
         for d in values/*/; do
           profile=$(basename "$d")
+          base=$(base_profile "${profile}")
           echo "--- profile: ${profile} ---"
+          infra_args=()
+          instance_args=()
+          if [ -n "${base}" ]; then
+            infra_args+=(--values "values/${base}/infra.yaml")
+            instance_args+=(--values "values/${base}/instance.yaml")
+          fi
           if [ -f "${d}infra.yaml" ]; then
-            helm template osac-deps charts/osac-deps/ --values "${d}infra.yaml"
-            helm template osac-infra charts/osac-infra/ --values "${d}infra.yaml"
+            infra_args+=(--values "${d}infra.yaml")
+            helm template osac-deps charts/osac-deps/ "${infra_args[@]}"
+            helm template osac-infra charts/osac-infra/ "${infra_args[@]}"
           fi
           if [ -f "${d}instance.yaml" ]; then
-            helm template osac charts/osac/ --values "${d}instance.yaml" \
+            instance_args+=(--values "${d}instance.yaml")
+            helm template osac charts/osac/ "${instance_args[@]}" \
               --set service.externalHostname=fulfillment-api.example.com \
               --set service.internalHostname=fulfillment-internal-api.example.com \
               --set global.clusterDomain=example.com \

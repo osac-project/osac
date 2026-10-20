@@ -26,7 +26,10 @@
   gather_facts: false
 
   environment:
-    K8S_AUTH_KUBECONFIG: "{{ lookup('env', 'K8S_AUTH_KUBECONFIG') | default(lookup('env', 'KUBECONFIG'), true) | default(lookup('env', 'HOME') + '/.kube/config', true) }}"
+    K8S_AUTH_KUBECONFIG: >-
+      {{ lookup('env', 'K8S_AUTH_KUBECONFIG')
+         | default(lookup('env', 'KUBECONFIG'), true)
+         | default(lookup('env', 'HOME') + '/.kube/config', true) }}
 
   vars:
     cluster_order: "{{ osac_job_vars.resource }}"

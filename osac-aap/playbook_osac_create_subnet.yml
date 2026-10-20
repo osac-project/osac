@@ -11,7 +11,6 @@
       {{ osac_job_vars.resource.metadata.annotations
          ['osac.openshift.io/implementation-strategy'] }}
     template_parameters: {}
-
   pre_tasks:
     - name: Show resource metadata
       ansible.builtin.debug:

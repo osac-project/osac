@@ -603,17 +603,26 @@ create_cluster osac-dev config.yaml {shlex.quote(str(kubeconfig))}
         infra.mkdir(parents=True)
         shutil.copy(INSTALLER / "Makefile", installer / "Makefile")
         shutil.copy(INSTALLER / "charts/osac-infra/Chart.yaml", infra / "Chart.yaml")
-        version = next(line.split()[1] for line in (infra / "Chart.yaml").read_text().splitlines()
-                       if line.startswith("    version:"))
-        self.archive = infra / "charts" / f"topolvm-{version}.tgz"
-        self.env["MOCK_TOPOLVM_ARCHIVE"] = str(self.archive)
+        # One pinned archive per dependency declared in Chart.yaml; the Makefile
+        # derives its build targets from the same list.
+        deps = []
+        for line in (infra / "Chart.yaml").read_text().splitlines():
+            if line.startswith("  - name:"):
+                deps.append({"name": line.split()[2]})
+            elif line.startswith("    version:") and deps and "version" not in deps[-1]:
+                deps[-1]["version"] = line.split()[1].strip('"')
+        self.archives = [infra / "charts" / f"{d['name']}-{d['version']}.tgz" for d in deps]
+        self.env["MOCK_HELM_ARCHIVES"] = " ".join(str(a) for a in self.archives)
+        self.archive = self.archives[0]
         self.write_command("helm", """
 if [[ "$*" == 'version --short' ]]; then echo v3.19.0; exit 0; fi
 printf 'helm %s\n' "$*" >> "$MOCK_LOG"
 if [[ "$*" == "${MOCK_HELM_FAILURE:-}" ]]; then exit 1; fi
 if [[ "$*" == 'dependency build charts/osac-infra' ]]; then
-  mkdir -p "$(dirname "$MOCK_TOPOLVM_ARCHIVE")"
-  touch "$MOCK_TOPOLVM_ARCHIVE"
+  for archive in $MOCK_HELM_ARCHIVES; do
+    mkdir -p "$(dirname "$archive")"
+    touch "$archive"
+  done
 fi
 """)
         return installer
@@ -632,9 +641,10 @@ fi
 
     def test_helm_lint_downloads_missing_topolvm_and_reuses_it(self):
         installer = self.prepare_helm_dependencies()
-        # A stale archive must not satisfy the version pinned in Chart.yaml.
+        # Stale archives must not satisfy the versions pinned in Chart.yaml.
         self.archive.parent.mkdir()
-        (self.archive.parent / "topolvm-0.0.0.tgz").touch()
+        for archive in self.archives:
+            (archive.parent / f"{archive.name.rsplit('-', 1)[0]}-0.0.0.tgz").touch()
         for _ in range(2):
             result = subprocess.run(
                 ["make", "--no-print-directory", "-C", str(installer),

@@ -20,7 +20,7 @@
   vars:
     node: "{{ item.metadata.annotations[agent_host_uuid_label] }}"
     networks:
-    - "{{ manage_agents_cluster_network }}"
+      - "{{ manage_agents_cluster_network }}"
   loop: "{{ manage_agents_new }}"
   loop_control:
     label: "Attach agent {{ item.metadata.name }}"

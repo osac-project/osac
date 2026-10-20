@@ -5,8 +5,8 @@ argument_specs:
       external_access_state:
         type: str
         choices:
-        - present
-        - absent
+          - present
+          - absent
       external_access_base_domain:
         type: str
         required: true

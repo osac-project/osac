@@ -26,7 +26,9 @@
   ansible.builtin.set_fact:
     _nmstate_apply_ssh_proxy_args: >-
       {% if nmstate_config_ssh_bastion_host | default('') | length > 0 %}
-      -o 'ProxyCommand=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 -i {{ nmstate_config_ssh_bastion_key }} -W %h:%p {{ nmstate_config_ssh_bastion_user }}@{{ nmstate_config_ssh_bastion_host }}'
+      -o 'ProxyCommand=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+      -o ConnectTimeout=30 -i {{ nmstate_config_ssh_bastion_key }} -W %h:%p
+      {{ nmstate_config_ssh_bastion_user }}@{{ nmstate_config_ssh_bastion_host }}'
       {% endif %}
 
 - name: "Calculate static IP for agent {{ _nmstate_apply_assignment.agent.metadata.name }}"

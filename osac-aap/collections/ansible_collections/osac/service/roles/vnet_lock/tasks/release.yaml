@@ -30,16 +30,19 @@
                 namespace: "{{ vnet_lock_namespace }}"
                 resourceVersion: "{{ _vnet_lock_release_read.resources[0].metadata.resourceVersion }}"
               spec:
-                holderIdentity: null
+                holderIdentity:
                 leaseDurationSeconds: "{{ _vnet_lock_release_read.resources[0].spec.leaseDurationSeconds | default(120) | int }}"
-                acquireTime: null
-                renewTime: null
+                acquireTime:
+                renewTime:
           register: _vnet_lock_release_result
           ignore_errors: true
 
         - name: Display release result
           ansible.builtin.debug:
-            msg: "{{ (_vnet_lock_release_result is succeeded) | ternary('Released', 'Release conflict (will expire naturally)') }} V-Net lock '{{ vnet_lock_name }}'"
+            msg: >-
+              {{ (_vnet_lock_release_result is succeeded)
+                 | ternary('Released', 'Release conflict (will expire naturally)') }}
+              V-Net lock '{{ vnet_lock_name }}'
 
     - name: Warn if held by someone else
       ansible.builtin.debug:

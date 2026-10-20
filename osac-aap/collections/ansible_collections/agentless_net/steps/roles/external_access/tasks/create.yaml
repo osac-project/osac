@@ -57,7 +57,7 @@
 
 # --- agentless_net: allocate public IPs ---
 
-- name: Allocate public IP for API  # noqa: no-changed-when
+- name: Allocate public IP for API # noqa: no-changed-when
   environment:
     ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
     ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
@@ -83,7 +83,7 @@
       {{ (external_access_api_ipam_raw.content | b64decode
       | from_json).public_ips[external_access_state_key + '-api'][0] }}
 
-- name: Allocate public IP for ingress  # noqa: no-changed-when
+- name: Allocate public IP for ingress # noqa: no-changed-when
   environment:
     ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
     ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
@@ -115,7 +115,7 @@
       - "API public IP: {{ external_access_api_public_ip }}"
       - "Ingress public IP: {{ external_access_ingress_public_ip }}"
 
-- name: Store DNAT state for delete resilience  # noqa: no-changed-when
+- name: Store DNAT state for delete resilience # noqa: no-changed-when
   ansible.builtin.raw: |
     python3 - '{{ agentless_net_net_node_ipam_state_file }}' \
               '{{ external_access_state_key }}' \
@@ -140,7 +140,7 @@
 
 # --- agentless_net: create DNAT for API ---
 
-- name: Create DNAT for API endpoint  # noqa: no-changed-when
+- name: Create DNAT for API endpoint # noqa: no-changed-when
   environment:
     ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
     ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
@@ -168,7 +168,7 @@
       | from_json).veth_state[external_access_state_key].ns_ip
       | ansible.utils.ipaddr('address') }}
 
-- name: Announce API PublicIP route  # noqa: no-changed-when
+- name: Announce API PublicIP route # noqa: no-changed-when
   environment:
     ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
     ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
@@ -180,7 +180,7 @@
       -e bgp_next_hop={{ external_access_bgp_next_hop }}
       {{ role_path }}/playbooks/bgp_announce.yaml
 
-- name: Announce ingress PublicIP route  # noqa: no-changed-when
+- name: Announce ingress PublicIP route # noqa: no-changed-when
   environment:
     ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
     ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
@@ -280,7 +280,7 @@
 
 # --- agentless_net: create DNAT for ingress ---
 
-- name: Create DNAT for ingress HTTP  # noqa: no-changed-when
+- name: Create DNAT for ingress HTTP # noqa: no-changed-when
   environment:
     ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
     ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
@@ -296,7 +296,7 @@
       -e dnat_protocol=tcp
       {{ role_path }}/playbooks/l3_create_dnat.yaml
 
-- name: Create DNAT for ingress HTTPS  # noqa: no-changed-when
+- name: Create DNAT for ingress HTTPS # noqa: no-changed-when
   environment:
     ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
     ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"

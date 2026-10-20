@@ -112,13 +112,16 @@
 
     - name: Slice call log to this target's traffic only
       ansible.builtin.set_fact:
-        _call_log: "{{ _mock_calls.json[_call_log_mark | int:] }}"
+        _call_log: "{{ _mock_calls.json[_call_log_mark | int :] }}"
 
     - name: Assert rollback queried VMS resources for cleanup
       ansible.builtin.assert:
         that:
-          - _call_log | selectattr('path', 'search', 'views.*tenant_id=') | selectattr('method', 'equalto', 'GET') | list | length > 0
-            or _call_log | selectattr('path', 'search', 'qospolicies.*tenant_id=') | selectattr('method', 'equalto', 'GET') | list | length > 0
+          - >-
+            _call_log | selectattr('path', 'search', 'views.*tenant_id=')
+            | selectattr('method', 'equalto', 'GET') | list | length > 0
+            or _call_log | selectattr('path', 'search', 'qospolicies.*tenant_id=')
+            | selectattr('method', 'equalto', 'GET') | list | length > 0
         fail_msg: "Rollback did not query VMS resources by tenant_id for cleanup"
         success_msg: "Rollback queried VMS resources by tenant_id"
 

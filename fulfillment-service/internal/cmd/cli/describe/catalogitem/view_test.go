@@ -66,6 +66,7 @@ var _ = Describe("Catalog item views", func() {
 					StorageTier: publicv1.StorageTierReferenceFieldPolicy_builder{Locked: publicv1.StorageTierReference_builder{Name: "local"}.Build()}.Build(),
 				}.Build(),
 				SshKey:                   publicv1.SecretReferenceFieldPolicy_builder{Editable: publicv1.EditableSecretReferenceField_builder{}.Build()}.Build(),
+				UserDataSecret:           publicv1.SecretReferenceFieldPolicy_builder{Locked: publicv1.SecretLocalReference_builder{Name: "cloud-init-secret"}.Build()}.Build(),
 				UserData:                 publicv1.StringFieldPolicy_builder{Locked: new("#cloud-config\nusers:\n  - name: dev")}.Build(),
 				RunStrategy:              publicv1.ComputeInstanceRunStrategyFieldPolicy_builder{Editable: publicv1.EditableComputeInstanceRunStrategyField_builder{DefaultValue: new(publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED)}.Build()}.Build(),
 				AutoExternalIpAttachment: publicv1.BoolFieldPolicy_builder{Locked: new(false)}.Build(),
@@ -84,10 +85,12 @@ var _ = Describe("Catalog item views", func() {
 		output := printView(computeView(item), false)
 		requireContains(output, "PostgreSQL | VM", "Database-ready VM Choose a larger disk.", "Scope:      Shared", "Published:  Yes",
 			"ocp-virt-vm (shared)", "postgresql (shared)", "type-id (project: models)", "default: 80 GiB", "LOCKED    local",
+			"LOCKED    cloud-init-secret",
 			"LOCKED    #cloud-config (3 lines; see get -o yaml)", "default: HALTED", "LOCKED    false", "LOCKED    (empty)",
 			"EDITABLE  default: 1 item", "Subnet: private", `"22/tcp,5432/tcp" (string)`)
 		Expect(output).NotTo(ContainSubstring("users:"))
 		Expect(output).To(MatchRegexp(`SSH key\s+EDITABLE\n`))
+		Expect(output).To(ContainSubstring("User data secret"))
 		requireContains(output, "exposed_ports", "z_optional")
 		Expect(strings.Index(output, "exposed_ports")).To(BeNumerically("<", strings.Index(output, "z_optional")))
 		requireContains(output, "Full catalog item definition: osac get computeinstancecatalogitem postgresql --tenant shared -o yaml")
@@ -146,9 +149,10 @@ var _ = Describe("Catalog item views", func() {
 			Id: "bm-id", Metadata: publicv1.Metadata_builder{Name: "bm", Tenant: "org"}.Build(),
 			Template: publicv1.BareMetalInstanceTemplateReference_builder{Name: "baremetal"}.Build(),
 			Fields: publicv1.BareMetalInstanceCatalogItemFields_builder{
-				SshPublicKey: publicv1.StringFieldPolicy_builder{Locked: new("")}.Build(),
-				UserData:     publicv1.StringFieldPolicy_builder{Editable: publicv1.EditableStringField_builder{DefaultValue: new("#cloud-config\nfoo: bar")}.Build()}.Build(),
-				RunStrategy:  publicv1.BareMetalInstanceRunStrategyFieldPolicy_builder{Locked: new(publicv1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_HALTED)}.Build(),
+				SshPublicKey:   publicv1.StringFieldPolicy_builder{Locked: new("")}.Build(),
+				UserData:       publicv1.StringFieldPolicy_builder{Editable: publicv1.EditableStringField_builder{DefaultValue: new("#cloud-config\nfoo: bar")}.Build()}.Build(),
+				UserDataSecret: publicv1.SecretReferenceFieldPolicy_builder{Editable: publicv1.EditableSecretReferenceField_builder{DefaultValue: publicv1.SecretLocalReference_builder{Name: "bm-cloud-init"}.Build()}.Build()}.Build(),
+				RunStrategy:    publicv1.BareMetalInstanceRunStrategyFieldPolicy_builder{Locked: new(publicv1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_HALTED)}.Build(),
 				NetworkAttachments: publicv1.BareMetalNetworkAttachmentListFieldPolicy_builder{Locked: publicv1.BareMetalNetworkAttachmentList_builder{Items: []*publicv1.BareMetalNetworkAttachment{
 					publicv1.BareMetalNetworkAttachment_builder{Subnet: publicv1.SubnetLocalReference_builder{Name: "bm-subnet"}.Build(), Interface: new("eno1"), Primary: new(false)}.Build(),
 				}}.Build()}.Build(),
@@ -158,9 +162,10 @@ var _ = Describe("Catalog item views", func() {
 			}.Build(),
 		}.Build()
 		output := printView(bareMetalView(item), false)
-		requireContains(output, "LOCKED    \"\"", "default: #cloud-config (2 lines; see get -o yaml)", "LOCKED    HALTED", "bm-subnet; interface: eno1; primary: false", "bm-type-id (shared)", "default: rhel (shared)",
+		requireContains(output, "LOCKED    \"\"", "default: #cloud-config (2 lines; see get -o yaml)", "default: bm-cloud-init", "LOCKED    HALTED", "bm-subnet; interface: eno1; primary: false", "bm-type-id (shared)", "default: rhel (shared)",
 			"Full catalog item definition: osac get baremetalinstancecatalogitem bm -o yaml")
 		Expect(output).NotTo(ContainSubstring("--tenant shared"))
+		Expect(output).To(ContainSubstring("User data secret"))
 	})
 
 	It("sanitizes terminal controls without changing the colored layout", func() {

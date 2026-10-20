@@ -14,7 +14,7 @@
     msg: "CaaS service not available (HTTP {{ cluster_template_check.status }}) — skipping cluster template publishing"
   when: cluster_template_check.status in [404, 503]
 
-- name: Create list of existing cluster template template ids    # noqa: jinja[invalid]
+- name: Create list of existing cluster template template ids # noqa: jinja[invalid]
   ansible.builtin.set_fact:
     cluster_template_ids: >-
       {{

@@ -1,0 +1,22 @@
+# Posts the placeholder of the E2E control comment the moment a pull request opens, so it lands above the comments of
+# the bots that post a few seconds later (a comment cannot be moved). The shared workflow of osac-ci does the work; the
+# decision (e2e-pr.yml) fills the comment in later and deletes the finished run of this workflow, whose row would
+# otherwise stay on the pull request (this workflow is in the workflow_run list of e2e-pr.yml), whatever its result:
+# the decision posts the comment itself a few seconds later, so a failed posting leaves nothing missing.
+#
+# It runs from the default branch with the app secret for any pull request, a fork's included, and checks out nothing of
+# the pull request. Only a pull request of a member of the organization gets a comment.
+name: E2E comment
+
+on:  # zizmor: ignore[dangerous-triggers] -- runs from the default branch and checks out nothing of the pull request
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions: {}
+
+jobs:
+  comment:
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-comment.yml@e49642a92dd8f6f5c6680d09c8adea4e2b11e5ef  # v1.2.6
+    permissions: {}
+    secrets:
+      OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}

@@ -23,44 +23,31 @@ import (
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
-// A definitive rejection is a terminal Create response: the server refused the
-// request and rolled back its transaction, so no BMI can exist for the attempt.
-// Transport-class and unknown outcomes stay conservative.
-var definitiveCreateCodes = []codes.Code{
-	codes.InvalidArgument,
-	codes.NotFound,
-	codes.FailedPrecondition,
-	codes.PermissionDenied,
-	codes.ResourceExhausted,
-	codes.OutOfRange,
-	codes.Unimplemented,
-}
-
-var conservativeCreateCodes = []codes.Code{
-	codes.Unavailable,
-	codes.DeadlineExceeded,
-	codes.Canceled,
-	codes.Unauthenticated,
-	codes.Unknown,
-	codes.Internal,
-	codes.DataLoss,
-}
-
 var _ = Describe("Definitive BMI create rejection classification", func() {
-	for _, code := range definitiveCreateCodes {
-		It(fmt.Sprintf("classifies terminal %s as definitive", code), func() {
-			Expect(isDefinitiveCreateRejection(status.Error(code, "rejected"))).To(BeTrue())
-		})
-		It(fmt.Sprintf("classifies wrapped terminal %s as definitive", code), func() {
-			wrapped := fmt.Errorf("creating BMI slot: %w", status.Error(code, "rejected"))
-			Expect(isDefinitiveCreateRejection(wrapped)).To(BeTrue())
-		})
-	}
-	for _, code := range conservativeCreateCodes {
-		It(fmt.Sprintf("keeps %s conservative", code), func() {
-			Expect(isDefinitiveCreateRejection(status.Error(code, "failure"))).To(BeFalse())
-		})
-	}
+	DescribeTable("classifies terminal codes as definitive, raw or wrapped", func(code codes.Code) {
+		Expect(isDefinitiveCreateRejection(status.Error(code, "rejected"))).To(BeTrue())
+		wrapped := fmt.Errorf("creating BMI slot: %w", status.Error(code, "rejected"))
+		Expect(isDefinitiveCreateRejection(wrapped)).To(BeTrue())
+	},
+		Entry("InvalidArgument", codes.InvalidArgument),
+		Entry("NotFound", codes.NotFound),
+		Entry("FailedPrecondition", codes.FailedPrecondition),
+		Entry("PermissionDenied", codes.PermissionDenied),
+		Entry("ResourceExhausted", codes.ResourceExhausted),
+		Entry("OutOfRange", codes.OutOfRange),
+		Entry("Unimplemented", codes.Unimplemented),
+	)
+	DescribeTable("keeps transport and unknown outcomes conservative", func(code codes.Code) {
+		Expect(isDefinitiveCreateRejection(status.Error(code, "failure"))).To(BeFalse())
+	},
+		Entry("Unavailable", codes.Unavailable),
+		Entry("DeadlineExceeded", codes.DeadlineExceeded),
+		Entry("Canceled", codes.Canceled),
+		Entry("Unauthenticated", codes.Unauthenticated),
+		Entry("Unknown", codes.Unknown),
+		Entry("Internal", codes.Internal),
+		Entry("DataLoss", codes.DataLoss),
+	)
 	It("keeps non-status errors conservative", func() {
 		Expect(isDefinitiveCreateRejection(errors.New("interrupted create"))).To(BeFalse())
 	})
@@ -81,15 +68,21 @@ var _ = Describe("ensureBMI marks definitive Create rejections", func() {
 		_, _, err := r.ensureBMI(context.Background(), co, cluster, co.Spec.NodeRequests[0], "slot", nil, "", "", "")
 		return fc, err
 	}
-	for _, code := range definitiveCreateCodes {
-		It(fmt.Sprintf("wraps terminal %s with the rejection sentinel", code), func() {
-			fc, err := rejectedCreate(code, "targets a deleting cluster")
-			Expect(err).To(HaveOccurred())
-			Expect(errors.Is(err, errBMICreateRejected)).To(BeTrue(), "sentinel missing from %v", err)
-			Expect(status.Code(err)).To(Equal(code), "underlying code lost from %v", err)
-			Expect(fc.names).To(Equal([]string{"slot"}), "create was not issued for the selected slot")
-		})
-	}
+	DescribeTable("wraps terminal codes with the rejection sentinel", func(code codes.Code) {
+		fc, err := rejectedCreate(code, "targets a deleting cluster")
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, errBMICreateRejected)).To(BeTrue(), "sentinel missing from %v", err)
+		Expect(status.Code(err)).To(Equal(code), "underlying code lost from %v", err)
+		Expect(fc.names).To(Equal([]string{"slot"}), "create was not issued for the selected slot")
+	},
+		Entry("InvalidArgument", codes.InvalidArgument),
+		Entry("NotFound", codes.NotFound),
+		Entry("FailedPrecondition", codes.FailedPrecondition),
+		Entry("PermissionDenied", codes.PermissionDenied),
+		Entry("ResourceExhausted", codes.ResourceExhausted),
+		Entry("OutOfRange", codes.OutOfRange),
+		Entry("Unimplemented", codes.Unimplemented),
+	)
 	It("does not wrap transport-class Create failures", func() {
 		_, err := rejectedCreate(codes.Unavailable, "outage")
 		Expect(err).To(HaveOccurred())
@@ -263,24 +256,25 @@ var _ = Describe("recordBMICreateRejection checkpoint", func() {
 		Expect(recorder.Events).To(BeEmpty(), "fenced write emitted an event")
 	})
 
-	for _, prune := range []bool{false, true} {
-		It(fmt.Sprintf("refuses an unverified checkpoint without success accounting (pruned=%t)", prune), func() {
-			r, _, co, prev := rejectionHarness("rejection-unverified")
-			before := co.DeepCopy()
-			failures := workerProvisioningFailures.WithLabelValues(tenantOf(co), workerTypeBareMetal, prev.InstanceType)
-			count := testutil.ToFloat64(failures)
-			wrapped := &rejectionStatusClient{Client: r.Client, stripRejection: prune}
-			if !prune {
-				wrapped.patchErr = errors.New("checkpoint write failed")
-			}
-			r.Client = wrapped
-			Expect(r.recordBMICreateRejection(context.Background(), co, prev, rejectionErr)).To(HaveOccurred())
-			Expect(co).To(Equal(before), "unverified response copied back")
-			Expect(*prev).To(Equal(before.Status.Workers[0]))
-			Expect(r.recorder.(*events.FakeRecorder).Events).To(BeEmpty())
-			Expect(testutil.ToFloat64(failures)).To(Equal(count))
-		})
-	}
+	DescribeTable("refuses an unverified checkpoint without success accounting", func(prune bool) {
+		r, _, co, prev := rejectionHarness("rejection-unverified")
+		before := co.DeepCopy()
+		failures := workerProvisioningFailures.WithLabelValues(tenantOf(co), workerTypeBareMetal, prev.InstanceType)
+		count := testutil.ToFloat64(failures)
+		wrapped := &rejectionStatusClient{Client: r.Client, stripRejection: prune}
+		if !prune {
+			wrapped.patchErr = errors.New("checkpoint write failed")
+		}
+		r.Client = wrapped
+		Expect(r.recordBMICreateRejection(context.Background(), co, prev, rejectionErr)).To(HaveOccurred())
+		Expect(co).To(Equal(before), "unverified response copied back")
+		Expect(*prev).To(Equal(before.Status.Workers[0]))
+		Expect(r.recorder.(*events.FakeRecorder).Events).To(BeEmpty())
+		Expect(testutil.ToFloat64(failures)).To(Equal(count))
+	},
+		Entry("patch failure", false),
+		Entry("pruned response", true),
+	)
 })
 
 var _ = Describe("createSelectedWorker records rejected creates", func() {
@@ -367,34 +361,35 @@ var _ = Describe("createSelectedWorker records rejected creates", func() {
 		Expect(fc.names).To(HaveLen(2), "retry create not issued exactly once: %v", fc.names)
 	})
 
-	for _, legacy := range []bool{false, true} {
-		It(fmt.Sprintf("preserves earlier unknown outcome after a later rejection (legacy=%t)", legacy), func() {
-			r, fc, co := rejectionStageHarness("rejection-unknown")
-			fc.createErr = status.Error(codes.Unavailable, "unknown outcome")
-			_, err := stepStage(r, co) // Reservation.
-			Expect(err).NotTo(HaveOccurred())
-			_, err = stepStage(r, co) // Unknown Create result.
-			Expect(status.Code(err)).To(Equal(codes.Unavailable))
-			Expect(co.Status.Workers[0].BMICreateState).To(Equal(v1alpha1.WorkerBMICreateStateAttempted))
-			if legacy {
-				co.Status.Workers[0].BMICreateState = ""
-				Expect(r.Status().Update(context.Background(), co)).To(Succeed())
-			}
-			before := co.DeepCopy().Status.Workers[0]
-			failures := workerProvisioningFailures.WithLabelValues(tenantOf(co), workerTypeBareMetal, before.InstanceType)
-			count := testutil.ToFloat64(failures)
-			fc.createErr = status.Error(codes.InvalidArgument, "later request rejected")
-			_, err = stepStage(r, co)
-			Expect(err).To(HaveOccurred(), "a later rejection cannot prove earlier absence")
-			Expect(fc.names).To(HaveLen(2))
-			// Legacy journals become Attempted at the existing write-ahead
-			// boundary; the rejection must never re-arm either kind of slot.
-			before.BMICreateState = v1alpha1.WorkerBMICreateStateAttempted
-			Expect(co.Status.Workers[0]).To(Equal(before))
-			Expect(testutil.ToFloat64(failures)).To(Equal(count))
-			Expect(r.recorder.(*events.FakeRecorder).Events).To(BeEmpty())
-		})
-	}
+	DescribeTable("preserves earlier unknown outcome after a later rejection", func(legacy bool) {
+		r, fc, co := rejectionStageHarness("rejection-unknown")
+		fc.createErr = status.Error(codes.Unavailable, "unknown outcome")
+		_, err := stepStage(r, co) // Reservation.
+		Expect(err).NotTo(HaveOccurred())
+		_, err = stepStage(r, co) // Unknown Create result.
+		Expect(status.Code(err)).To(Equal(codes.Unavailable))
+		Expect(co.Status.Workers[0].BMICreateState).To(Equal(v1alpha1.WorkerBMICreateStateAttempted))
+		if legacy {
+			co.Status.Workers[0].BMICreateState = ""
+			Expect(r.Status().Update(context.Background(), co)).To(Succeed())
+		}
+		before := co.DeepCopy().Status.Workers[0]
+		failures := workerProvisioningFailures.WithLabelValues(tenantOf(co), workerTypeBareMetal, before.InstanceType)
+		count := testutil.ToFloat64(failures)
+		fc.createErr = status.Error(codes.InvalidArgument, "later request rejected")
+		_, err = stepStage(r, co)
+		Expect(err).To(HaveOccurred(), "a later rejection cannot prove earlier absence")
+		Expect(fc.names).To(HaveLen(2))
+		// Legacy journals become Attempted at the existing write-ahead
+		// boundary; the rejection must never re-arm either kind of slot.
+		before.BMICreateState = v1alpha1.WorkerBMICreateStateAttempted
+		Expect(co.Status.Workers[0]).To(Equal(before))
+		Expect(testutil.ToFloat64(failures)).To(Equal(count))
+		Expect(r.recorder.(*events.FakeRecorder).Events).To(BeEmpty())
+	},
+		Entry("Attempted journal", false),
+		Entry("legacy omitted journal", true),
+	)
 
 	It("keeps an unavailable create a raw error with the attempt journal intact", func() {
 		r, fc, co := rejectionStageHarness("rejection-unavailable")

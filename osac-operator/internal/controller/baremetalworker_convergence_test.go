@@ -469,99 +469,103 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 	// Exercise the real status subresource at the checkpoint request, after
 	// any client-side read. No timing sleeps or local JSON application can
 	// establish these atomicity guarantees.
-	for _, competing := range []string{"target mutation", "target removal", "worker reordering", "object replacement", "unrelated updates"} {
-		It("atomically checkpoints a rejection against "+competing, func() {
-			latest := getOrder()
-			latest.Spec.NodeRequests[0].NumberOfNodes = 2
-			Expect(k8sClient.Update(ctx, latest)).To(Succeed())
-			ready()
-			step() // Reserve two workers.
-			Expect(getOrder().Status.Workers).To(HaveLen(2))
-			fc.SetCreateError(status.Error(codes.InvalidArgument, "request rejected"))
-			failureCount := func() float64 {
-				families, err := controllermetrics.Registry.Gather()
-				Expect(err).NotTo(HaveOccurred())
-				var total float64
-				for _, family := range families {
-					if family.GetName() == "osac_caas_worker_provisioning_failures_total" {
-						for _, metric := range family.Metric {
-							total += metric.GetCounter().GetValue()
-						}
+	DescribeTable("atomically checkpoints a rejection against concurrent writes", func(competing string) {
+		latest := getOrder()
+		latest.Spec.NodeRequests[0].NumberOfNodes = 2
+		Expect(k8sClient.Update(ctx, latest)).To(Succeed())
+		ready()
+		step() // Reserve two workers.
+		Expect(getOrder().Status.Workers).To(HaveLen(2))
+		fc.SetCreateError(status.Error(codes.InvalidArgument, "request rejected"))
+		failureCount := func() float64 {
+			families, err := controllermetrics.Registry.Gather()
+			Expect(err).NotTo(HaveOccurred())
+			var total float64
+			for _, family := range families {
+				if family.GetName() == "osac_caas_worker_provisioning_failures_total" {
+					for _, metric := range family.Metric {
+						total += metric.GetCounter().GetValue()
 					}
 				}
-				return total
 			}
-			before := failureCount()
-			var raced *api.ClusterOrder
-			fired := false
-			r = buildReconciler(&workerStatusFaultClient{Client: k8sClient, fail: func(submitted *api.ClusterOrder) bool {
-				if fired || len(submitted.Status.Workers) == 0 || submitted.Status.Workers[0].LastFailureReason != "BMICreateRejected" {
-					return false
-				}
-				fired = true
-				raced = getOrder()
-				switch competing {
-				case "target mutation":
-					raced.Status.Workers[0].AttemptCount++
-				case "target removal":
-					raced.Status.Workers = raced.Status.Workers[1:]
-				case "worker reordering":
-					raced.Status.Workers[0], raced.Status.Workers[1] = raced.Status.Workers[1], raced.Status.Workers[0]
-				case "object replacement":
-					oldUID := raced.UID
-					raced.Finalizers = nil
-					Expect(k8sClient.Update(ctx, raced)).To(Succeed())
-					Expect(k8sClient.Delete(ctx, raced)).To(Succeed())
-					raced.ObjectMeta = metav1.ObjectMeta{Name: co.Name, Namespace: co.Namespace, Labels: co.Labels, Annotations: co.Annotations}
-					workers := raced.Status.Workers
-					Expect(k8sClient.Create(ctx, raced)).To(Succeed())
-					Expect(raced.UID).NotTo(Equal(oldUID))
-					raced.Status.Workers = workers
-				case "unrelated updates":
-					raced.Annotations["checkpoint-race"] = "preserved"
-					raced.Spec.NodeRequests[0].NumberOfNodes = 3
-					Expect(k8sClient.Update(ctx, raced)).To(Succeed())
-					raced.Status.Workers[1].AttemptCount = 7
-					raced.SetStatusCondition(api.ConditionWorkersFailed, metav1.ConditionFalse, "competing condition", "RaceFixture")
-				}
-				Expect(k8sClient.Status().Update(ctx, raced)).To(Succeed())
-				raced = getOrder()
+			return total
+		}
+		before := failureCount()
+		var raced *api.ClusterOrder
+		fired := false
+		r = buildReconciler(&workerStatusFaultClient{Client: k8sClient, fail: func(submitted *api.ClusterOrder) bool {
+			if fired || len(submitted.Status.Workers) == 0 || submitted.Status.Workers[0].LastFailureReason != "BMICreateRejected" {
 				return false
-			}})
-			_, err := run()
-			Expect(fired).To(BeTrue(), "checkpoint request never reached race hook")
-			got := getOrder()
-			if competing == "unrelated updates" {
-				Expect(err).NotTo(HaveOccurred())
-				Expect(got.Status.Workers[0].Phase).To(Equal("Failed"))
-				Expect(got.Status.Workers[0].BMICreateState).To(Equal(api.WorkerBMICreateStateReserved))
-				Expect(got.Status.Workers[1:]).To(Equal(raced.Status.Workers[1:]))
-				Expect(got.Status.Conditions).To(Equal(raced.Status.Conditions))
-				Expect(got.Status.DesiredWorkers).To(Equal(raced.Status.DesiredWorkers))
-				Expect(got.Status.CurrentWorkers).To(Equal(raced.Status.CurrentWorkers))
-				Expect(got.Status.ReadyWorkers).To(Equal(raced.Status.ReadyWorkers))
-				Expect(got.Annotations).To(Equal(raced.Annotations))
-				Expect(got.Spec).To(Equal(raced.Spec))
-				Expect(failureCount()).To(Equal(before + 1))
-			} else {
-				Expect(err).To(HaveOccurred())
-				Expect(got.Status).To(Equal(raced.Status), "stale checkpoint must be atomic")
-				Expect(failureCount()).To(Equal(before))
 			}
-			var rejectionEvents int
-			for len(recorder.Events) > 0 {
-				if strings.Contains(<-recorder.Events, "BMICreateRejected") {
-					rejectionEvents++
-				}
+			fired = true
+			raced = getOrder()
+			switch competing {
+			case "target mutation":
+				raced.Status.Workers[0].AttemptCount++
+			case "target removal":
+				raced.Status.Workers = raced.Status.Workers[1:]
+			case "worker reordering":
+				raced.Status.Workers[0], raced.Status.Workers[1] = raced.Status.Workers[1], raced.Status.Workers[0]
+			case "object replacement":
+				oldUID := raced.UID
+				raced.Finalizers = nil
+				Expect(k8sClient.Update(ctx, raced)).To(Succeed())
+				Expect(k8sClient.Delete(ctx, raced)).To(Succeed())
+				raced.ObjectMeta = metav1.ObjectMeta{Name: co.Name, Namespace: co.Namespace, Labels: co.Labels, Annotations: co.Annotations}
+				workers := raced.Status.Workers
+				Expect(k8sClient.Create(ctx, raced)).To(Succeed())
+				Expect(raced.UID).NotTo(Equal(oldUID))
+				raced.Status.Workers = workers
+			case "unrelated updates":
+				raced.Annotations["checkpoint-race"] = "preserved"
+				raced.Spec.NodeRequests[0].NumberOfNodes = 3
+				Expect(k8sClient.Update(ctx, raced)).To(Succeed())
+				raced.Status.Workers[1].AttemptCount = 7
+				raced.SetStatusCondition(api.ConditionWorkersFailed, metav1.ConditionFalse, "competing condition", "RaceFixture")
 			}
-			if competing == "unrelated updates" {
-				Expect(rejectionEvents).To(Equal(1))
-			} else {
-				Expect(rejectionEvents).To(BeZero())
+			Expect(k8sClient.Status().Update(ctx, raced)).To(Succeed())
+			raced = getOrder()
+			return false
+		}})
+		_, err := run()
+		Expect(fired).To(BeTrue(), "checkpoint request never reached race hook")
+		got := getOrder()
+		if competing == "unrelated updates" {
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got.Status.Workers[0].Phase).To(Equal("Failed"))
+			Expect(got.Status.Workers[0].BMICreateState).To(Equal(api.WorkerBMICreateStateReserved))
+			Expect(got.Status.Workers[1:]).To(Equal(raced.Status.Workers[1:]))
+			Expect(got.Status.Conditions).To(Equal(raced.Status.Conditions))
+			Expect(got.Status.DesiredWorkers).To(Equal(raced.Status.DesiredWorkers))
+			Expect(got.Status.CurrentWorkers).To(Equal(raced.Status.CurrentWorkers))
+			Expect(got.Status.ReadyWorkers).To(Equal(raced.Status.ReadyWorkers))
+			Expect(got.Annotations).To(Equal(raced.Annotations))
+			Expect(got.Spec).To(Equal(raced.Spec))
+			Expect(failureCount()).To(Equal(before + 1))
+		} else {
+			Expect(err).To(HaveOccurred())
+			Expect(got.Status).To(Equal(raced.Status), "stale checkpoint must be atomic")
+			Expect(failureCount()).To(Equal(before))
+		}
+		var rejectionEvents int
+		for len(recorder.Events) > 0 {
+			if strings.Contains(<-recorder.Events, "BMICreateRejected") {
+				rejectionEvents++
 			}
-			Expect(fc.CreateCalls()).To(HaveLen(1))
-		})
-	}
+		}
+		if competing == "unrelated updates" {
+			Expect(rejectionEvents).To(Equal(1))
+		} else {
+			Expect(rejectionEvents).To(BeZero())
+		}
+		Expect(fc.CreateCalls()).To(HaveLen(1))
+	},
+		Entry("target mutation", "target mutation"),
+		Entry("target removal", "target removal"),
+		Entry("worker reordering", "worker reordering"),
+		Entry("object replacement", "object replacement"),
+		Entry("unrelated updates", "unrelated updates"),
+	)
 
 	It("fails a rejected create through the standard retry machinery", func() {
 		ready()

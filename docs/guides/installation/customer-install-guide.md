@@ -1162,11 +1162,15 @@ To run CaaS without OSAC managing DNS, install normally and then patch the
 
    ```text
    api.<cluster>.<guest_domain>       -> API endpoint
+   api-int.<cluster>.<guest_domain>   -> API endpoint
    *.apps.<cluster>.<guest_domain>    -> ingress endpoint
    ```
 
-   The records must resolve from the hub, the AAP execution environment, the
-   managed host, and the hosted cluster.
+   The Netris workflow still waits for `api`, `api-int`, and
+   `default-router.apps.<cluster>.<guest_domain>` to resolve after the no-op
+   task. The wildcard apps record covers the default-router name. Ensure the
+   records resolve from the hub, the AAP execution environment, the managed
+   host, and the hosted cluster.
 
 Reapply the patch after any Helm upgrade or infrastructure reinstall that
 recreates this `ConfigMap`; the post-install override is not retained in chart

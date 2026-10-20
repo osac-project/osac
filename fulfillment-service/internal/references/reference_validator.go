@@ -189,6 +189,16 @@ func (v *ReferenceValidator) UnaryServer(ctx context.Context, request any, info 
 	}
 
 	excluded := v.excludedReferencePathsByMethod[info.FullMethod]
+	if strings.HasSuffix(info.FullMethod, "/Update") && isStatusOnlyUpdate(request) {
+		// A status update carries the full object, but its spec is unchanged. Copy the
+		// configured exclusions so concurrent requests cannot modify shared state.
+		statusExcluded := make(map[string]struct{}, len(excluded)+1)
+		for path := range excluded {
+			statusExcluded[path] = struct{}{}
+		}
+		statusExcluded["object.spec"] = struct{}{}
+		excluded = statusExcluded
+	}
 	err = v.validate(ctx, request, excluded)
 	if err != nil {
 		return
@@ -607,6 +617,23 @@ func isMetadataOnlyUpdate(request any) bool {
 	}
 	for _, path := range paths {
 		if path != "metadata" && !strings.HasPrefix(path, "metadata.") {
+			return false
+		}
+	}
+	return true
+}
+
+func isStatusOnlyUpdate(request any) bool {
+	message, ok := request.(proto.Message)
+	if !ok {
+		return false
+	}
+	mask, ok := updateMaskFromMessage(message)
+	if !ok || len(mask.GetPaths()) == 0 {
+		return false
+	}
+	for _, path := range mask.GetPaths() {
+		if path != "status" && !strings.HasPrefix(path, "status.") {
 			return false
 		}
 	}

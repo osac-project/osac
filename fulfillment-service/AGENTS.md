@@ -84,6 +84,13 @@ service and database with the operator disabled, so it does not exercise Netris
 or AAP. The complete provider lifecycle belongs to the BMaaS E2E coverage in
 OSAC-4786.
 
+ComputeInstance reference validation uses `internal/references/reference_validator_test.go`
+for Unit coverage of status-only, spec, mixed, and empty update masks. The
+Fulfillment/database boundary is covered by
+`it/it_compute_instance_update_test.go` with a deleting instance whose Secret
+has disappeared. The deployed VMaaS teardown is in
+`../tests/e2e/vmaas/regression/test_compute_instance_disk_image.py`.
+
 ```bash
 export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
 make -C ../osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac

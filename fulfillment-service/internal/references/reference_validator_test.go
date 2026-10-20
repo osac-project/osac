@@ -337,6 +337,95 @@ var _ = Describe("Reference validator", func() {
 		})
 	})
 
+	Describe("Status-only updates", func() {
+		var (
+			validator     *ReferenceValidator
+			specLookups   int
+			statusLookups int
+			updateMethod  = "/osac.private.v1.ComputeInstances/Update"
+		)
+
+		BeforeEach(func() {
+			var err error
+			validator, err = NewReferenceValidator().SetLogger(logger).Build()
+			Expect(err).NotTo(HaveOccurred())
+			specLookups = 0
+			statusLookups = 0
+			missing := func(ctx context.Context, tenant, project, id, name string) (*ResolvedRef, error) {
+				specLookups++
+				return nil, &errRefNotFound{identifier: id}
+			}
+			validator.Register("osac.private.v1.DiskImageReference", missing)
+			validator.Register("osac.private.v1.SecretLocalReference", missing)
+			validator.Register("osac.private.v1.InstanceTypeReference", func(
+				ctx context.Context, tenant, project, id, name string,
+			) (*ResolvedRef, error) {
+				if id == "status-type" {
+					statusLookups++
+				} else {
+					specLookups++
+				}
+				return nil, &errRefNotFound{identifier: id}
+			})
+		})
+
+		requestWithMask := func(paths ...string) *privatev1.ComputeInstancesUpdateRequest {
+			return privatev1.ComputeInstancesUpdateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Metadata: privatev1.Metadata_builder{Tenant: "tenant-a"}.Build(),
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "missing-image"}.Build(),
+						InstanceType:   privatev1.InstanceTypeReference_builder{Id: "missing-type"}.Build(),
+						UserDataSecret: privatev1.SecretLocalReference_builder{Id: "missing-secret"}.Build(),
+					}.Build(),
+					Status: privatev1.ComputeInstanceStatus_builder{
+						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING,
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: paths},
+			}.Build()
+		}
+
+		DescribeTable("ignores stale spec references only for non-empty status masks", func(paths []string, allowed bool) {
+			request := requestWithMask(paths...)
+			called := false
+			_, err := validator.UnaryServer(context.Background(), request,
+				&grpc.UnaryServerInfo{FullMethod: updateMethod},
+				func(ctx context.Context, req any) (any, error) { called = true; return nil, nil })
+			if allowed {
+				Expect(err).NotTo(HaveOccurred())
+				Expect(called).To(BeTrue())
+				Expect(specLookups).To(BeZero())
+			} else {
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(called).To(BeFalse())
+				Expect(specLookups).To(BeNumerically(">", 0))
+			}
+		},
+			Entry("whole status", []string{"status"}, true),
+			Entry("nested status", []string{"status.state"}, true),
+			Entry("multiple status paths", []string{"status.state", "status.internal_ip_address"}, true),
+			Entry("spec update", []string{"spec.run_strategy"}, false),
+			Entry("mixed update", []string{"status.state", "spec.run_strategy"}, false),
+			Entry("empty mask", []string{}, false),
+		)
+
+		It("still validates references in status", func() {
+			request := requestWithMask("status.instance_type")
+			request.GetObject().GetStatus().SetInstanceType(
+				privatev1.InstanceTypeReference_builder{Id: "status-type"}.Build())
+			called := false
+			_, err := validator.UnaryServer(context.Background(), request,
+				&grpc.UnaryServerInfo{FullMethod: updateMethod},
+				func(ctx context.Context, req any) (any, error) { called = true; return nil, nil })
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err).To(MatchError(ContainSubstring("object.status.instance_type")))
+			Expect(called).To(BeFalse())
+			Expect(specLookups).To(BeZero())
+			Expect(statusLookups).To(Equal(1))
+		})
+	})
+
 	Describe("Field discovery", func() {
 		BeforeEach(func() {
 			var err error

@@ -1385,6 +1385,21 @@
             storage_provider_target_kubeconfig: "{{ _vast_native_csi_target_kubeconfig }}"
             storage_provider_target_kubeconfig_insecure: false
 
+        - name: Read native CSI install Lease after ensuring already-registered drivers
+          kubernetes.core.k8s_info:
+            api_version: coordination.k8s.io/v1
+            kind: Lease
+            name: provider-native-csi-install-lock
+            namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"
+          register: _vast_native_csi_noop_lease
+
+        - name: Assert already-registered drivers do not acquire the install Lease
+          ansible.builtin.assert:
+            that:
+              - _vast_native_csi_noop_lease.resources | length == 0
+            fail_msg: "The native CSI install Lease was acquired even though all required drivers exist"
+            success_msg: "Already-registered native CSI drivers skipped the install Lease"
+
         - name: Read override log after VAST idempotent rerun
           ansible.builtin.slurp:
             path: /tmp/osac_test_overrides.log

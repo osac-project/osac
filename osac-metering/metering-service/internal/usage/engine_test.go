@@ -299,6 +299,25 @@ func TestClusterBillsAgainAfterFailure(t *testing.T) {
 	})
 }
 
+func TestClusterKeepsBillingThroughAnUpgrade(t *testing.T) {
+	// An upgrade takes a READY cluster back into PROGRESSING. The gate opened at the
+	// first READY and never closes, so the whole timeline bills with no gap: an
+	// upgrade must not stop the meter.
+	engine := defaultEngine(t)
+	facts := []database.Fact{
+		created("Cluster", "c-1", at(0)),
+		state("Cluster", "c-1", at(0), "PROGRESSING"),
+		state("Cluster", "c-1", at(time.Minute), "READY"),
+		state("Cluster", "c-1", at(2*time.Minute), "PROGRESSING"),
+		state("Cluster", "c-1", at(3*time.Minute), "READY"),
+	}
+	expectPieces(t, engine, facts, at(4*time.Minute), []string{
+		"Cluster control_plane 10:00:00.000000..10:04:00.000000 rate=1000000 micro=240000000 " +
+			"pending=false dims={\"deployment\":\"us-east\",\"meter_type\":\"second\"," +
+			"\"tenant\":\"acme\"}",
+	})
+}
+
 func TestBareMetalAllocationAndConsumption(t *testing.T) {
 	engine := defaultEngine(t)
 	facts := []database.Fact{

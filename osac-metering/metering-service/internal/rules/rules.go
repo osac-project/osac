@@ -102,7 +102,12 @@ func Parse(name, effectiveAtText, metersYAML string) (Revision, error) {
 	}
 
 	var meters []Meter
-	if err := yaml.Unmarshal([]byte(metersYAML), &meters); err != nil {
+	// Unknown keys reject the revision instead of silently dropping. The gate key was
+	// renamed once: [READY] would now load as no gate at all, and failed-installation
+	// time would bill.
+	decoder := yaml.NewDecoder(strings.NewReader(metersYAML))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&meters); err != nil {
 		return Revision{}, fmt.Errorf("revision %s has invalid meters: %w", number, err)
 	}
 	revision := Revision{
@@ -224,21 +229,17 @@ func (r Revision) validate() error {
 	// A resource type that owns others gates their billing, so every meter of that type
 	// must confirm on the same states: an ambiguous gate is a billing bug, and the
 	// calculator cannot pick one.
-	rootTypes := map[string]bool{}
-	for _, resource := range resources {
-		for _, field := range resource.Fields {
-			if field.OwnerResource != "" {
-				rootTypes[field.OwnerResource] = true
-			}
-		}
-	}
-	for rootType := range rootTypes {
+	// Every meter of a root type must confirm on the same states: an ambiguous gate
+	// is a billing bug, and the calculator cannot pick one.
+	for rootType := range ownedRoots(resources) {
+		seen := false
 		var shared []string
 		for _, meter := range r.Meters {
 			if meter.Resource != rootType {
 				continue
 			}
-			if shared == nil {
+			if !seen {
+				seen = true
 				shared = meter.Billable.TurnsBillableOnce
 				continue
 			}
@@ -251,7 +252,50 @@ func (r Revision) validate() error {
 			}
 		}
 	}
+
+	// A revision that bills an owned resource through inheritance must also define the
+	// gate its root passes down, or the owned resource would bill unconditionally.
+	owned := map[string]string{}
+	for _, resource := range resources {
+		for _, field := range resource.Fields {
+			if field.OwnerResource != "" {
+				owned[shortMessageName(string(resource.Message))] = field.OwnerResource
+			}
+		}
+	}
+	for resourceType, rootType := range owned {
+		if !billsInherited(resourceType, r.Meters) {
+			continue
+		}
+		hasRootMeter := false
+		for _, meter := range r.Meters {
+			if meter.Resource == rootType {
+				hasRootMeter = true
+				break
+			}
+		}
+		if !hasRootMeter {
+			return fmt.Errorf(
+				"revision %s bills %s, which %s owns, but defines no meters for %s to "+
+					"provide the inherited gate",
+				r.Number, resourceType, rootType, rootType,
+			)
+		}
+	}
 	return nil
+}
+
+// ownedRoots returns the resource types that own others.
+func ownedRoots(resources []metering.Resource) map[string]bool {
+	roots := map[string]bool{}
+	for _, resource := range resources {
+		for _, field := range resource.Fields {
+			if field.OwnerResource != "" {
+				roots[field.OwnerResource] = true
+			}
+		}
+	}
+	return roots
 }
 
 // shortMessageName strips the package of a full proto message name.
@@ -338,4 +382,17 @@ func sortedKeys(m map[string]string) []string {
 		}
 	}
 	return keys
+}
+
+// billsInherited reports whether the revision bills the owned resource through the
+// root's gate. A meter that overrides the gate to self does not inherit, so the root
+// needs no gate for it.
+func billsInherited(resourceType string, meters []Meter) bool {
+	for _, meter := range meters {
+		if meter.Resource == resourceType &&
+			meter.Billable.TurnsBillableOnceFrom != "self" {
+			return true
+		}
+	}
+	return false
 }

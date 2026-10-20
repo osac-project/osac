@@ -412,19 +412,43 @@ func (r *Round) scanResources(
 	}
 
 	// Resources with facts the previous round has not used: written after its event
-	// offset, or dated after its time, because a writer's clock can run ahead. A changed
-	// root drags the resources it owns along, transitively, because the root's facts gate
-	// their billing: a worker whose cluster reached a confirming state recomputes in the
-	// same round, retroactively, without a fact of its own.
+	// offset, or dated after its time, because a writer's clock can run ahead.
 	newFacts, err := database.ResourcesWithNewFacts(
 		ctx, tx, tenant, progress.LastRoundEventOffset, *progress.LastRoundTime,
 	)
 	if err != nil {
 		return nil, nil, err
 	}
-	queue := make([]resource, 0, len(newFacts))
+
+	// Resources of types a new revision affects, in the round where the revision takes
+	// effect.
+	affected := map[string]bool{}
+	for _, revision := range r.calculator.Revisions() {
+		if revision.EffectiveAt.After(*progress.LastRoundTime) &&
+			!revision.EffectiveAt.After(roundTime) {
+			for _, meter := range revision.Meters {
+				affected[meter.Resource] = true
+			}
+		}
+	}
+	var affectedResources []resource
+	if len(affected) > 0 {
+		affectedResources, err = tenantResources(ctx, tx, tenant, affected)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	// The drag queue: every resource above, plus the resources a changed root owns,
+	// transitively, because the root's facts gate their billing. A worker whose cluster
+	// reached a confirming state, or whose cluster's meters a new revision redefined,
+	// recomputes in the same round, retroactively, without a fact of its own.
+	queue := make([]resource, 0, len(newFacts)+len(affectedResources))
 	for _, key := range newFacts {
 		queue = append(queue, resource{key.ResourceType, key.ResourceID})
+	}
+	for _, entry := range affectedResources {
+		queue = append(queue, entry)
 	}
 	for len(queue) > 0 {
 		key := queue[0]
@@ -442,27 +466,6 @@ func (r *Round) scanResources(
 			if !seen[resource{entry.ResourceType, entry.ResourceID}] {
 				queue = append(queue, resource{entry.ResourceType, entry.ResourceID})
 			}
-		}
-	}
-
-	// Resources of types a new revision affects, in the round where the revision takes
-	// effect.
-	affected := map[string]bool{}
-	for _, revision := range r.calculator.Revisions() {
-		if revision.EffectiveAt.After(*progress.LastRoundTime) &&
-			!revision.EffectiveAt.After(roundTime) {
-			for _, meter := range revision.Meters {
-				affected[meter.Resource] = true
-			}
-		}
-	}
-	if len(affected) > 0 {
-		all, err := tenantResources(ctx, tx, tenant, affected)
-		if err != nil {
-			return nil, nil, err
-		}
-		for _, entry := range all {
-			add(entry, &full)
 		}
 	}
 

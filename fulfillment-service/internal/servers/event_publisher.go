@@ -28,6 +28,7 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/cenkalti/backoff/v4"
+
 	"github.com/gobuffalo/flect"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -272,6 +273,14 @@ func (b *EventPublisherBuilder) checkSettings() error {
 	}
 	if _, err := strconv.ParseInt(b.topicRetentionMS, 10, 64); err != nil {
 		return fmt.Errorf("topic retention should be a whole number of milliseconds: %w", err)
+	}
+	// Zero is the one value the broker accepts that deletes the event log as it is written,
+	// and any negative other than -1 is rejected per record, forever: both fail here.
+	if retention, _ := strconv.ParseInt(b.topicRetentionMS, 10, 64); retention == 0 || retention < -1 {
+		return fmt.Errorf(
+			"topic retention should be -1 (indefinite) or a positive number of milliseconds, but is %s",
+			b.topicRetentionMS,
+		)
 	}
 	return nil
 }
@@ -890,7 +899,7 @@ func (p *EventPublisher) ensureTopic(ctx context.Context, topic string) error {
 	admin := p.kafkaAdmin
 	done := make(chan error, 1)
 	go func() {
-		done <- prepareTopic(ctx, admin, topic, p.topicRetentionMS)
+		done <- prepareTopic(ctx, admin, topic, p.topicRetentionMS, p.logger)
 	}()
 	select {
 	case <-ctx.Done():
@@ -903,7 +912,14 @@ func (p *EventPublisher) ensureTopic(ctx context.Context, topic string) error {
 	}
 }
 
-func prepareTopic(ctx context.Context, admin sarama.ClusterAdmin, topic, retentionMS string) error {
+// topicAdmin is the slice of the cluster admin the publisher needs. Tests fake it.
+type topicAdmin interface {
+	DescribeTopics(topics []string) ([]*sarama.TopicMetadata, error)
+	CreateTopic(topic string, detail *sarama.TopicDetail, validateOnly bool) error
+	DescribeConfig(resource sarama.ConfigResource) ([]sarama.ConfigEntry, error)
+}
+
+func prepareTopic(ctx context.Context, admin topicAdmin, topic, retentionMS string, logger *slog.Logger) error {
 	descriptions, err := admin.DescribeTopics([]string{topic})
 	if err != nil {
 		return fmt.Errorf("failed to describe topic '%s': %w", topic, err)
@@ -920,7 +936,7 @@ func prepareTopic(ctx context.Context, admin sarama.ClusterAdmin, topic, retenti
 	}
 	switch description.Err {
 	case sarama.ErrNoError:
-		return nil
+		return ensureTopicRetention(admin, topic, retentionMS, logger)
 	case sarama.ErrUnknownTopicOrPartition:
 		retentionBytes := "-1"
 		detail := &sarama.TopicDetail{
@@ -1320,3 +1336,36 @@ const (
 	eventPublisherOpDelete = "DELETE"
 	eventPublisherOpSignal = "SIGNAL"
 )
+
+// ensureTopicRetention checks that a topic the publisher did not create carries the
+// configured retention. A topic created out of band, before the publisher's first
+// publish, gets the broker default, and the recovery window silently shrinks to that
+// default. The publisher refuses when it reads a different retention, because the
+// topic's owner must fix the configuration. When the config cannot be read at all,
+// the publisher logs and continues: an unreachable broker is an outage, not a signal
+// about the topic.
+func ensureTopicRetention(
+	admin topicAdmin, topic, retentionMS string, logger *slog.Logger,
+) error {
+	entries, err := admin.DescribeConfig(sarama.ConfigResource{
+		Type: sarama.TopicResource, Name: topic,
+	})
+	if err != nil {
+		logger.Info("cannot describe config of existing topic, continuing",
+			"topic", topic, "error", err)
+		return nil
+	}
+	for _, entry := range entries {
+		if entry.Name != "retention.ms" {
+			continue
+		}
+		if entry.Value != retentionMS {
+			return fmt.Errorf(
+				"topic '%s' has retention.ms %s, want %s: fix the topic's configuration",
+				topic, entry.Value, retentionMS,
+			)
+		}
+		return nil
+	}
+	return nil
+}

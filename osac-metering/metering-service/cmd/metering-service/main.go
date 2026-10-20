@@ -45,10 +45,10 @@ type config struct {
 	heartbeatTick time.Duration
 	deploymentID  string
 
-	// topicReplicationFactor and topicRetentionMS configure the heartbeat and
-	// dead-letter topics metering creates for a tenant it serves for the first time.
-	topicReplicationFactor int16
-	topicRetentionMS       string
+	// topicRetentionMS configures the heartbeat and dead-letter topics metering creates
+	// for a tenant it serves for the first time. The retention is the recovery window,
+	// because metering rebuilds its database from the topics.
+	topicRetentionMS string
 }
 
 func main() {
@@ -78,30 +78,16 @@ func configFromEnv() *config {
 			SASLUser:     os.Getenv("KAFKA_SASL_USERNAME"),
 			SASLPassFile: os.Getenv("KAFKA_SASL_PASSWORD_FILE"),
 		},
-		dbURLFile:     envOrDefault("DB_URL_FILE", "/etc/metering/db/url"),
-		heartbeatTick: parseDurationOrDefault(os.Getenv("HEARTBEAT_INTERVAL"), time.Minute),
-		deploymentID:  os.Getenv("METERING_DEPLOYMENT_ID"),
-
-		topicReplicationFactor: int16OrDefault(os.Getenv("METERING_TOPIC_REPLICATION_FACTOR"), -1),
-		topicRetentionMS:       envOrDefault("METERING_TOPIC_RETENTION_MS", "-1"),
+		dbURLFile:        envOrDefault("DB_URL_FILE", "/etc/metering/db/url"),
+		heartbeatTick:    parseDurationOrDefault(os.Getenv("HEARTBEAT_INTERVAL"), time.Minute),
+		deploymentID:     os.Getenv("METERING_DEPLOYMENT_ID"),
+		topicRetentionMS: envOrDefault("METERING_TOPIC_RETENTION_MS", "-1"),
 	}
 }
 
 func envOrDefault(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
-	}
-	return fallback
-}
-
-// int16OrDefault reads an int16 environment value, falling back when it is unset or empty.
-func int16OrDefault(key string, fallback int16) int16 {
-	if v := os.Getenv(key); v != "" {
-		parsed, err := strconv.ParseInt(v, 10, 16)
-		if err != nil {
-			return fallback
-		}
-		return int16(parsed)
 	}
 	return fallback
 }
@@ -118,6 +104,14 @@ func (c *config) validate() error {
 	}
 	if _, err := strconv.ParseInt(c.topicRetentionMS, 10, 64); err != nil {
 		return fmt.Errorf("METERING_TOPIC_RETENTION_MS must be a whole number of milliseconds: %w", err)
+	}
+	// Zero deletes the heartbeat topics as they are written, and any negative other than
+	// -1 is rejected per record, forever: both fail here.
+	if retention, _ := strconv.ParseInt(c.topicRetentionMS, 10, 64); retention == 0 || retention < -1 {
+		return fmt.Errorf(
+			"METERING_TOPIC_RETENTION_MS must be -1 (indefinite) or positive, but is %s",
+			c.topicRetentionMS,
+		)
 	}
 	return nil
 }
@@ -186,14 +180,13 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 		return err
 	}
 	metering, err := service.New(ctx, service.Config{
-		Kafka:                  cfg.kafka,
-		Store:                  database.NewStore(dbPool),
-		Rules:                  rulesSource,
-		HeartbeatTick:          cfg.heartbeatTick,
-		DeploymentID:           cfg.deploymentID,
-		Logger:                 logger,
-		TopicReplicationFactor: cfg.topicReplicationFactor,
-		TopicRetentionMS:       cfg.topicRetentionMS,
+		Kafka:            cfg.kafka,
+		Store:            database.NewStore(dbPool),
+		Rules:            rulesSource,
+		HeartbeatTick:    cfg.heartbeatTick,
+		DeploymentID:     cfg.deploymentID,
+		Logger:           logger,
+		TopicRetentionMS: cfg.topicRetentionMS,
 	})
 	if err != nil {
 		return err

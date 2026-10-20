@@ -27,6 +27,9 @@ type ConnectionConfig struct {
 func baseConfig(cfg ConnectionConfig) (*sarama.Config, error) {
 	sc := sarama.NewConfig()
 	sc.Version = sarama.V3_9_0_0
+	// A metadata refresh on a topic that does not exist must not create it: the broker
+	// default retention would apply and the recovery window would silently shrink.
+	sc.Metadata.AllowAutoTopicCreation = false
 	if err := ConfigureTLS(sc, cfg.TLSCACert); err != nil {
 		return nil, err
 	}
@@ -78,13 +81,14 @@ func VerifyTopicExists(cfg ConnectionConfig, topic string) error {
 type topicAdmin interface {
 	DescribeTopics(topics []string) ([]*sarama.TopicMetadata, error)
 	CreateTopic(topic string, detail *sarama.TopicDetail, validateOnly bool) error
+	DescribeConfig(resource sarama.ConfigResource) ([]sarama.ConfigEntry, error)
 }
 
 // EnsureTenantTopics creates the tenant's heartbeat and dead-letter topics when they are
 // missing. Metering owns both, so the discovery pass that first serves a tenant creates
 // them; nothing else does. An existing topic is left untouched, and a topic another pass
 // created in the meantime is not an error.
-func EnsureTenantTopics(cfg ConnectionConfig, tenant string, replicationFactor int16, retentionMS string) error {
+func EnsureTenantTopics(cfg ConnectionConfig, tenant string, retentionMS string) error {
 	brokers := SplitAndTrim(cfg.Brokers, ",")
 	sc, err := baseConfig(cfg)
 	if err != nil {
@@ -97,7 +101,7 @@ func EnsureTenantTopics(cfg ConnectionConfig, tenant string, replicationFactor i
 	defer func() { _ = admin.Close() }()
 
 	for _, topic := range []string{topics.Heartbeat(tenant), topics.DeadLetter(tenant)} {
-		if err := ensureTopic(admin, topic, replicationFactor, retentionMS); err != nil {
+		if err := ensureTopic(admin, topic, retentionMS); err != nil {
 			return err
 		}
 	}
@@ -107,7 +111,7 @@ func EnsureTenantTopics(cfg ConnectionConfig, tenant string, replicationFactor i
 // ensureTopic creates one topic when it is missing. One partition keeps the heartbeat
 // order the relay relies on, and the retention is the installation's recovery window,
 // because metering rebuilds its database from the topics.
-func ensureTopic(admin topicAdmin, topic string, replicationFactor int16, retentionMS string) error {
+func ensureTopic(admin topicAdmin, topic string, retentionMS string) error {
 	descriptions, err := admin.DescribeTopics([]string{topic})
 	if err != nil {
 		return fmt.Errorf("describing topic '%s': %w", topic, err)
@@ -117,7 +121,7 @@ func ensureTopic(admin topicAdmin, topic string, replicationFactor int16, retent
 	}
 	switch descriptions[0].Err {
 	case sarama.ErrNoError:
-		return nil
+		return ensureRetention(admin, topic, retentionMS)
 	case sarama.ErrUnknownTopicOrPartition:
 	default:
 		return fmt.Errorf("describing topic '%s': %w", topic, descriptions[0].Err)
@@ -125,15 +129,11 @@ func ensureTopic(admin topicAdmin, topic string, replicationFactor int16, retent
 	cleanupPolicy := "delete"
 	detail := &sarama.TopicDetail{
 		NumPartitions:     1,
-		ReplicationFactor: replicationFactor,
+		ReplicationFactor: -1, // the broker default, like the event topics
 		ConfigEntries: map[string]*string{
 			"retention.ms":   &retentionMS,
 			"cleanup.policy": &cleanupPolicy,
 		},
-	}
-	if replicationFactor >= 2 {
-		minInSync := "2"
-		detail.ConfigEntries["min.insync.replicas"] = &minInSync
 	}
 	if err := admin.CreateTopic(topic, detail, false); err != nil && !errors.Is(err, sarama.ErrTopicAlreadyExists) {
 		return fmt.Errorf("creating topic '%s': %w", topic, err)
@@ -224,4 +224,31 @@ func SplitAndTrim(s, sep string) []string {
 		}
 	}
 	return result
+}
+
+// ensureRetention checks that a topic the service did not create carries the configured
+// retention. A topic created out of band gets the broker default, and the recovery
+// window silently shrinks to that default. The service refuses when it reads a
+// different retention. When the config cannot be read at all, it continues: the caller
+// decides on failures.
+func ensureRetention(admin topicAdmin, topic, retentionMS string) error {
+	entries, err := admin.DescribeConfig(sarama.ConfigResource{
+		Type: sarama.TopicResource, Name: topic,
+	})
+	if err != nil {
+		return nil
+	}
+	for _, entry := range entries {
+		if entry.Name != "retention.ms" {
+			continue
+		}
+		if entry.Value != retentionMS {
+			return fmt.Errorf(
+				"topic '%s' has retention.ms %s, want %s: fix the topic's configuration",
+				topic, entry.Value, retentionMS,
+			)
+		}
+		return nil
+	}
+	return nil
 }

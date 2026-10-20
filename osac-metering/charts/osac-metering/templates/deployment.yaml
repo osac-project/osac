@@ -123,8 +123,6 @@ spec:
               value: {{ .Values.heartbeat.interval | default "60s" | quote }}
             - name: METERING_TOPIC_RETENTION_MS
               value: {{ .Values.topics.retentionMs | default "-1" | quote }}
-            - name: METERING_TOPIC_REPLICATION_FACTOR
-              value: {{ .Values.topics.replicationFactor | default -1 | quote }}
             - name: KAFKA_BROKERS
               value: {{ include "osac-metering.kafkaBrokers" . | quote }}
             - name: KAFKA_TLS_CA_CERT

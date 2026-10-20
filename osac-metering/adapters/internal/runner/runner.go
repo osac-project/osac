@@ -343,7 +343,7 @@ func (r *Runner) ConsumeClaim(
 
 	for msg := range claim.Messages() {
 		if !r.processMessage(session.Context(), msg, provider) {
-			r.logger.Info("stopping partition claim after DLQ failure, will retry after rebalance",
+			r.logger.Info("stopping partition claim after failure; the failed message is redelivered",
 				"topic", claim.Topic(), "partition", claim.Partition(),
 			)
 			return nil

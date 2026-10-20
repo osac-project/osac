@@ -288,3 +288,70 @@ func state(resource, id string, since time.Time, value string) database.Fact {
 func fact(resource, id, field string, since time.Time, value string) database.Fact {
 	return database.Fact{ResourceType: resource, ResourceID: id, Field: field, Since: since, Value: value}
 }
+
+// TestScanResourcesDragsOwnedThroughRevisionChanges checks the revision drag: a revision
+// that takes effect this round and redefines only the cluster's meters must recompute the
+// cluster's workers too, because their inherited gate changed. A worker with a shut gate
+// has no ledger rows and no new facts, so nothing else would bring it in.
+func TestScanResourcesDragsOwnedThroughRevisionChanges(t *testing.T) {
+	const tenant = "revisiondrag"
+	base := time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC)
+	store := testenv.Database(t)
+	ctx := context.Background()
+	if err := store.EnsureProgress(ctx, tenant); err != nil {
+		t.Fatalf("ensuring progress: %v", err)
+	}
+
+	// A worker folded in the previous round, with no facts since, and its cluster.
+	if err := database.InsertFacts(ctx, store.Pool(), tenant, []database.Fact{
+		created("BareMetalInstance", "bm-1", base),
+		state("BareMetalInstance", "bm-1", base, "STARTING"),
+		fact("BareMetalInstance", "bm-1", "spec.instance_type", base, "m7a"),
+		fact("BareMetalInstance", "bm-1", "status.cluster", base, "c-1"),
+		fact("BareMetalInstance", "bm-1", "status.node_set", base, "workers"),
+		created("Cluster", "c-1", base),
+		state("Cluster", "c-1", base, "PROGRESSING"),
+	}, 1); err != nil {
+		t.Fatalf("writing worker facts: %v", err)
+	}
+
+	lastRound := base.Add(time.Minute)
+	revision := rules.Revision{
+		Name: "synthetic", Number: "0002", EffectiveAt: lastRound.Add(time.Second),
+		Meters: []rules.Meter{
+			{
+				Resource: "Cluster", Meter: "control_plane", Unit: "second",
+				Billable: rules.BillableWhen{
+					States: []string{"PROGRESSING", "READY"}, TurnsBillableOnce: []string{"READY"},
+				},
+			},
+		},
+	}
+	owners, err := usage.RegistryOwners()
+	if err != nil {
+		t.Fatalf("reading owners: %v", err)
+	}
+	calculator, err := usage.NewCalculator([]rules.Revision{revision}, "us-east", owners)
+	if err != nil {
+		t.Fatalf("creating calculator: %v", err)
+	}
+	r, err := New(store, calculator, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard())
+	if err != nil {
+		t.Fatalf("creating round: %v", err)
+	}
+
+	progress := database.Progress{
+		LastRoundTime: &lastRound, LastRoundEventOffset: 1,
+	}
+	full, _, err := r.scanResources(ctx, store.Pool(), tenant, progress, lastRound.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("scanning: %v", err)
+	}
+	found := map[resource]bool{}
+	for _, entry := range full {
+		found[entry] = true
+	}
+	if !found[resource{"BareMetalInstance", "bm-1"}] {
+		t.Fatal("a revision that redefines the cluster's meters must recompute its workers")
+	}
+}

@@ -65,9 +65,8 @@ def check_profile(profile: str) -> None:
         f"metering Deployment for {profile}",
     )
     # Metering creates each tenant's heartbeat and dead-letter topics when it first
-    # serves the tenant, so both knobs must reach it.
+    # serves the tenant, so the retention knob must reach it.
     assert "METERING_TOPIC_RETENTION_MS" in metering, profile
-    assert "METERING_TOPIC_REPLICATION_FACTOR" in metering, profile
 
 
 if __name__ == "__main__":

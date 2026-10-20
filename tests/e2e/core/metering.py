@@ -29,7 +29,7 @@ HEARTBEAT_RESOURCE_TYPES = (
 
 # Every meter sends these dimensions; a meter's own dimensions ride along. Project is an
 # identity field every resource carries.
-COMMON_DIMENSIONS = ("deployment", "tenant", "project", "meter_type")
+COMMON_DIMENSIONS = ("deployment", "tenant", "meter_type")
 
 # Dimensions that legitimately land after RUNNING: the operator reports the running
 # instance type 15-20 s after the state, so a compute heartbeat that predates the fact
@@ -101,12 +101,19 @@ class MeteringCollector:
         self._expectations: list[ExpectedEvent] = []
         self._matched: set[str] = set()
         self._verified: dict[tuple[str, str], dict[str, Any]] = {}
+        self._require_project = True
 
     def start(self) -> None:
         """Initialize collection without comparing clocks across runner and pod."""
 
     def stop(self) -> None:
         """No-op -- no background resources to clean up."""
+
+    def without_project(self) -> "MeteringCollector":
+        """Stop requiring the project dimension: resources created without a project
+        send none, because the engine emits only the facts a resource carries."""
+        self._require_project = False
+        return self
 
     def expect(self, event_type: str, resource_id: str, *, timeout: int = 60) -> None:
         if event_type != HEARTBEAT_TYPE:
@@ -145,7 +152,7 @@ class MeteringCollector:
                 for dimension in LATE_DIMENSIONS.get(event.get("osacresourcetype", ""), ())
                 if dimensions.get(dimension)
             )
-            self._validate_structure(event, expected, late_required=carried)
+            self._validate_structure(event, expected, late_required=carried, require_project=self._require_project)
 
     def verify_event(self, event: dict[str, Any], *, resource_id: str) -> None:
         """Validate one event's envelope and dimension set.
@@ -160,7 +167,7 @@ class MeteringCollector:
         """
         expected = ExpectedEvent(event_type=HEARTBEAT_TYPE, resource_id=resource_id)
         late = LATE_DIMENSIONS.get(event.get("osacresourcetype", ""), ())
-        self._validate_structure(event, expected, late_required=set(late))
+        self._validate_structure(event, expected, late_required=set(late), require_project=self._require_project)
         if event_id := event.get("id", ""):
             self._matched.add(event_id)
         self._verified[(HEARTBEAT_TYPE, resource_id)] = event
@@ -254,7 +261,8 @@ class MeteringCollector:
 
     @staticmethod
     def _validate_structure(
-        event: dict[str, Any], expected: ExpectedEvent, *, late_required: set[str] | None = None
+        event: dict[str, Any], expected: ExpectedEvent, *, late_required: set[str] | None = None,
+        require_project: bool = True,
     ) -> None:
         late_required = late_required or set()
         assert event.get("specversion") == "1.0", f"Wrong specversion: {event.get('specversion')}"
@@ -298,6 +306,8 @@ class MeteringCollector:
         bd = data.get("billing_dimensions", {})
         for dimension in COMMON_DIMENSIONS:
             assert bd.get(dimension), f"Missing {dimension} in billing_dimensions"
+        if require_project:
+            assert bd.get("project"), "Missing project in billing_dimensions"
         for dimension in LATE_DIMENSIONS.get(event["osacresourcetype"], ()):
             if dimension in late_required:
                 assert bd.get(dimension), f"Missing or empty {dimension} in billing_dimensions"

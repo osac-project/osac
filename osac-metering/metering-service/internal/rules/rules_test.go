@@ -318,3 +318,115 @@ func indent(text, prefix string) string {
 	}
 	return strings.Join(out, "\n")
 }
+
+// TestRevisionRejectsAmbiguousRootGate checks the loader guard: a resource whose meters
+// gate owned resources must confirm on the same states in every meter, because the
+// calculator cannot pick one gate for the subtree. Deleting the guard silently picks the
+// first meter's list, so this test pins it.
+func TestRevisionRejectsAmbiguousRootGate(t *testing.T) {
+	effective := time.Unix(0, 0).UTC().Format(time.RFC3339)
+	conflicting := `- resource: Cluster
+  meter: control_plane
+  unit: second
+  billable_when:
+    states: [PROGRESSING, READY]
+    turns_billable_once: [READY]
+  dimensions: [template, version]
+- resource: Cluster
+  meter: installation
+  unit: second
+  billable_when:
+    states: [PROGRESSING]
+    turns_billable_once: [PROGRESSING]
+  dimensions: [template, version]
+`
+	if _, err := rules.Parse(rules.NamePrefix+"0002", effective, conflicting); err == nil ||
+		!strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("expected the ambiguous root gate to be rejected, got %v", err)
+	}
+
+	// Meters that agree on the gate are fine: the subtree inherits one unambiguous list.
+	agreeing := `- resource: Cluster
+  meter: control_plane
+  unit: second
+  billable_when:
+    states: [PROGRESSING, READY]
+    turns_billable_once: [READY]
+  dimensions: [template, version]
+- resource: Cluster
+  meter: installation
+  unit: second
+  billable_when:
+    states: [PROGRESSING, READY]
+    turns_billable_once: [READY]
+  dimensions: [template, version]
+`
+	if _, err := rules.Parse(rules.NamePrefix+"0002", effective, agreeing); err != nil {
+		t.Fatalf("expected agreeing gates to parse: %v", err)
+	}
+}
+
+// TestRevisionRejectsUnknownMeterKeys checks that an unknown key rejects the revision
+// instead of loading with the field silently dropped. The gate key was renamed once:
+// a rule still carrying once: [READY] would load with no gate at all, and
+// failed-installation time would bill.
+func TestRevisionRejectsUnknownMeterKeys(t *testing.T) {
+	effective := time.Unix(0, 0).UTC().Format(time.RFC3339)
+	_, err := rules.Parse(rules.NamePrefix+"0002", effective, `- resource: Cluster
+  meter: control_plane
+  unit: second
+  billable_when:
+    states: [PROGRESSING, READY]
+    once: [READY]
+  dimensions: [template, version]
+`)
+	if err == nil || !strings.Contains(err.Error(), "once") {
+		t.Fatalf("expected the unknown once key to be rejected naming the field, got %v", err)
+	}
+}
+
+// TestRevisionRejectsAmbiguousRootGateInAnyOrder checks the order fix: a root whose
+// meters disagree on the gate must be rejected no matter which meter appears first.
+// A nil gate list on the first meter used to skip the comparison entirely.
+func TestRevisionRejectsAmbiguousRootGateInAnyOrder(t *testing.T) {
+	effective := time.Unix(0, 0).UTC().Format(time.RFC3339)
+	gated := `- resource: Cluster
+  meter: control_plane
+  unit: second
+  billable_when:
+    states: [PROGRESSING, READY]
+    turns_billable_once: [READY]
+  dimensions: [template, version]
+`
+	ungated := `- resource: Cluster
+  meter: installation
+  unit: second
+  billable_when:
+    states: [PROGRESSING]
+  dimensions: [template, version]
+`
+	for _, yaml := range []string{gated + ungated, ungated + gated} {
+		_, err := rules.Parse(rules.NamePrefix+"0002", effective, yaml)
+		if err == nil || !strings.Contains(err.Error(), "ambiguous") {
+			t.Fatalf("expected the ambiguous root gate to be rejected in both orders, got %v", err)
+		}
+	}
+}
+
+// TestRevisionRejectsRootWithoutMeters checks that a revision dropping the meters of a
+// type that owns others is rejected: the owned resources would bill unconditionally,
+// because their inherited gate would be undefined.
+func TestRevisionRejectsRootWithoutMeters(t *testing.T) {
+	effective := time.Unix(0, 0).UTC().Format(time.RFC3339)
+	_, err := rules.Parse(rules.NamePrefix+"0002", effective, `- resource: BareMetalInstance
+  meter: allocation
+  unit: second
+  billable_when:
+    states: [STARTING, RUNNING, STOPPING, STOPPED, DELETING]
+    turns_billable_once: [STARTING, RUNNING]
+  dimensions: [instance_type]
+`)
+	if err == nil || !strings.Contains(err.Error(), "provide the inherited gate") {
+		t.Fatalf("expected the rootless revision to be rejected, got %v", err)
+	}
+}

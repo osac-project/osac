@@ -948,3 +948,21 @@ func TestNestedOwnersGateOnTheTopmostRoot(t *testing.T) {
 			`{"deployment":"us-east","meter_type":"second","tenant":"acme"}`,
 	})
 }
+
+// TestWorkerDeletedAfterGateOpenedBillsUntilDeletion checks the open-gate deletion: the
+// worker bills up to its own deletion, nothing after it, and the deletion does not
+// reverse what the open gate already billed.
+func TestWorkerDeletedAfterGateOpenedBillsUntilDeletion(t *testing.T) {
+	calculator := defaultCalculator(t)
+	root := clusterRoot("c-1",
+		created("Cluster", "c-1", at(-10*time.Minute)),
+		state("Cluster", "c-1", at(-10*time.Minute), "PROGRESSING"),
+		state("Cluster", "c-1", base, "READY"),
+	)
+	facts := workerFacts("bm-1", "c-1", "workers")
+	facts = append(facts, fact("BareMetalInstance", "bm-1", "deleted", at(30*time.Minute), "true"))
+	expectWorkerPieces(t, calculator, facts, root, at(40*time.Minute), []string{
+		"BareMetalInstance allocation 10:00:00.000000..10:30:00.000000 rate=1000000 " +
+			"micro=1800000000 pending=false dims=" + workerDims("c-1", "workers"),
+	})
+}

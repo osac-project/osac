@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -568,10 +569,12 @@ func TestBoundedCatchUp(t *testing.T) {
 	}
 }
 
-// TestCatchUpResumesWhenRetentionDeletedTheStoredOffset checks that a stored heartbeat
-// offset below the topic's log start does not wedge catch-up forever: the round logs the
-// lost range, resumes at the oldest retained record, and keeps billing.
-func TestCatchUpResumesWhenRetentionDeletedTheStoredOffset(t *testing.T) {
+// TestCatchUpRefusesWhenRetentionDeletedTheStoredOffset checks that a stored heartbeat
+// offset below the topic's log start refuses the round instead of resuming at the
+// oldest retained record. The lost heartbeats may already be billed: resuming would
+// rebuild a ledger missing their spans, and the next round would resend them under new
+// heartbeat ids. The customer would pay twice, so the round holds billing and says why.
+func TestCatchUpRefusesWhenRetentionDeletedTheStoredOffset(t *testing.T) {
 	p := newPipeline(t, "belowretention")
 	p.startRelay(t)
 
@@ -594,27 +597,17 @@ func TestCatchUpResumesWhenRetentionDeletedTheStoredOffset(t *testing.T) {
 		t.Fatalf("pushing the stored offset below the log start: %v", err)
 	}
 
-	// The round must not error on the out-of-range offset: catch-up resumes at the
-	// oldest retained record and the round sends its difference. roundAt fails the test
-	// on any error, which is exactly what an unhandled out-of-range offset produces.
-	p.roundAt(t, base.Add(3*time.Minute))
-	p.waitOutboxEmpty(t)
-
-	progress, err := p.store.GetTenantProgress(context.Background(), p.tenant)
-	if err != nil {
-		t.Fatalf("reading progress: %v", err)
-	}
-	if progress.HeartbeatOffset <= 0 {
-		t.Fatalf("catch-up must resume from the oldest retained record, stored offset is %d",
-			progress.HeartbeatOffset)
+	// The round must refuse, naming the retention gap.
+	err := p.round.Once(context.Background(), p.tenant)
+	if err == nil || !strings.Contains(err.Error(), "retention start") {
+		t.Fatalf("expected the round to refuse on the expired history, got %v", err)
 	}
 
-	// Billing stays whole: the heartbeats on the topic cover the run without gaps.
+	// Billing holds: nothing new was sent after the two rounds that succeeded.
 	got := quantities(sentHeartbeats(t, p.tenant))
 	want := []string{
 		"compute 2026-10-05T10:00:00Z..2026-10-05T10:01:00Z 60.000000",
 		"compute 2026-10-05T10:01:00Z..2026-10-05T10:02:00Z 60.000000",
-		"compute 2026-10-05T10:02:00Z..2026-10-05T10:03:00Z 60.000000",
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", join(got), join(want))
@@ -1553,5 +1546,47 @@ func assertLedgerEmpty(t *testing.T, store *database.Store, tenant string) {
 	}
 	if len(pieces) != 0 {
 		t.Fatalf("the ledger must be empty after the reversal, still holds %d rows", len(pieces))
+	}
+}
+
+// TestLateResizeSendsPositiveAndNegativeCorrections checks the other direction of a late
+// event: a resize that happened before a round already billed the old type must split
+// the billed span at the resize time, sending a positive correction on the new type and
+// a negative one on the old, so the total is right without double billing.
+func TestLateResizeSendsPositiveAndNegativeCorrections(t *testing.T) {
+	p := newPipeline(t, "late-resize")
+	p.startRelay(t)
+
+	total := testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
+		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+			base, base, "web", "RUNNING", base, "small", base),
+	})
+	p.foldAll(t, total)
+
+	p.roundAt(t, base.Add(time.Minute))
+	p.roundAt(t, base.Add(2*time.Minute))
+	p.roundAt(t, base.Add(3*time.Minute))
+	p.waitOutboxEmpty(t)
+
+	// The resize happened at 10:02:30 but arrives after the 10:03 round.
+	total += testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
+		testenv.VMEvent("e2", privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+			base.Add(3*time.Minute+10*time.Second), base, "web", "RUNNING",
+			base, "large", base.Add(2*time.Minute+30*time.Second)),
+	})
+	p.foldAll(t, total)
+	p.roundAt(t, base.Add(4*time.Minute))
+	p.waitOutboxEmpty(t)
+
+	got := quantities(sentHeartbeats(t, p.tenant))
+	want := []string{
+		"compute 2026-10-05T10:00:00Z..2026-10-05T10:01:00Z 60.000000",
+		"compute 2026-10-05T10:01:00Z..2026-10-05T10:02:00Z 60.000000",
+		"compute 2026-10-05T10:02:00Z..2026-10-05T10:03:00Z 60.000000",
+		"compute 2026-10-05T10:02:30Z..2026-10-05T10:04:00Z 90.000000",
+		"compute 2026-10-05T10:02:30Z..2026-10-05T10:03:00Z -30.000000",
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", join(got), join(want))
 	}
 }

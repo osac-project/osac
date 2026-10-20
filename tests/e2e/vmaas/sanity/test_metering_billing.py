@@ -275,6 +275,18 @@ def test_metering_stop_ends_billing(
             description=f"{ci_name} VM stopped",
         )
 
+        # Anchor the final interval on the stop time fulfillment recorded, not on the
+        # wall clock of the request: an interval that overruns the actual stop by up to
+        # a round would pass a wall-clock check.
+        instance = poll_until(
+            fn=lambda: grpc.get_compute_instance(ci_id=uuid),
+            until=lambda inst: inst.get("status", {}).get("state") == "COMPUTE_INSTANCE_STATE_STOPPED",
+            retries=30,
+            delay=5,
+            description=f"{ci_name} instance STOPPED in fulfillment",
+        )
+        stopped_at = _parse_time(instance["status"]["stateTransitionTime"])
+
         # The stop reaches metering through several steps: operator feedback, a
         # fulfillment status change, the event topic, the fold, and a round. A round that
         # runs before the stop is folded still sends a full interval, and the real final
@@ -292,6 +304,13 @@ def test_metering_stop_ends_billing(
             description=f"final partial-interval heartbeat of {uuid}",
         )
         _, final_to, _ = _usage_interval(final)
+
+        # The final interval ends at the recorded stop, not at the round that observed
+        # it: a full second of tolerance covers the whole-second CR stamps.
+        overrun = (final_to - stopped_at).total_seconds()
+        assert -1 <= overrun <= 1, (
+            f"final interval ends at {final_to}, but fulfillment recorded the stop at {stopped_at}"
+        )
 
         # Past the final interval nothing more arrives: the meter stopped.
         metering.assert_no_events(HEARTBEAT_TYPE, resource_id=uuid, since=final_to.isoformat(), within=90)

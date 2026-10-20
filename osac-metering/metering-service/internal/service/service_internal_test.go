@@ -49,7 +49,7 @@ func newTestService(t *testing.T) *Service {
 func stubLoops(s *Service, fail bool) (starts *[]string, mu *sync.Mutex) {
 	var count []string
 	var lock sync.Mutex
-	s.runLoops = func(ctx context.Context, tenant string, loops *tenantLoops) {
+	s.runTenant = func(ctx context.Context, tenant string, loops *tenantLoops) {
 		defer close(loops.stopped)
 		if fail {
 			loops.fail()
@@ -65,10 +65,10 @@ func stubLoops(s *Service, fail bool) (starts *[]string, mu *sync.Mutex) {
 	return &count, &lock
 }
 
-// TestDiscoverEnsuresTopicsBeforeLoops checks that a tenant's loops start only after its
+// TestReconcileEnsuresTopicsBeforeLoops checks that a tenant's loops start only after its
 // heartbeat and dead-letter topics exist, and that a tenant whose topics could not be
 // created waits for a later pass instead of starting half-way.
-func TestDiscoverEnsuresTopicsBeforeLoops(t *testing.T) {
+func TestReconcileEnsuresTopicsBeforeLoops(t *testing.T) {
 	const tenant = "acme"
 	s := newTestService(t)
 	starts, mu := stubLoops(s, false)
@@ -85,9 +85,7 @@ func TestDiscoverEnsuresTopicsBeforeLoops(t *testing.T) {
 	}
 
 	fail = true
-	if err := s.discover(context.Background()); err != nil {
-		t.Fatalf("discover: %v", err)
-	}
+	s.reconcile(context.Background())
 	mu.Lock()
 	started := len(*starts)
 	mu.Unlock()
@@ -96,9 +94,7 @@ func TestDiscoverEnsuresTopicsBeforeLoops(t *testing.T) {
 	}
 
 	fail = false
-	if err := s.discover(context.Background()); err != nil {
-		t.Fatalf("discover: %v", err)
-	}
+	s.reconcile(context.Background())
 	waitUntil(t, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
@@ -121,9 +117,9 @@ func waitUntil(t *testing.T, condition func() bool, message string) {
 	}
 }
 
-// TestDiscoverNeedsSeveralMissingPassesToDelete checks that one listing that omits a tenant
+// TestReconcileNeedsSeveralMissingPassesToDelete checks that one listing that omits a tenant
 // does not delete its rows: the topic must stay missing across several passes.
-func TestDiscoverNeedsSeveralMissingPassesToDelete(t *testing.T) {
+func TestReconcileNeedsSeveralMissingPassesToDelete(t *testing.T) {
 	const tenant = "acme"
 	s := newTestService(t)
 	starts, mu := stubLoops(s, false)
@@ -131,17 +127,13 @@ func TestDiscoverNeedsSeveralMissingPassesToDelete(t *testing.T) {
 		t.Fatalf("ensuring progress: %v", err)
 	}
 	s.listTenants = func(context.Context) ([]string, error) { return []string{tenant}, nil }
-	if err := s.discover(context.Background()); err != nil {
-		t.Fatalf("discover: %v", err)
-	}
+	s.reconcile(context.Background())
 
 	// Two passes miss the tenant: its loops stay and its rows stay.
 	empty := func(context.Context) ([]string, error) { return nil, nil }
 	for range DeletionPasses - 1 {
 		s.listTenants = empty
-		if err := s.discover(context.Background()); err != nil {
-			t.Fatalf("discover: %v", err)
-		}
+		s.reconcile(context.Background())
 		s.lock.Lock()
 		_, running := s.tenants[tenant]
 		s.lock.Unlock()
@@ -155,14 +147,10 @@ func TestDiscoverNeedsSeveralMissingPassesToDelete(t *testing.T) {
 
 	// A pass that sees the tenant again resets the count.
 	s.listTenants = func(context.Context) ([]string, error) { return []string{tenant}, nil }
-	if err := s.discover(context.Background()); err != nil {
-		t.Fatalf("discover: %v", err)
-	}
+	s.reconcile(context.Background())
 	s.listTenants = empty
 	for range DeletionPasses - 1 {
-		if err := s.discover(context.Background()); err != nil {
-			t.Fatalf("discover: %v", err)
-		}
+		s.reconcile(context.Background())
 	}
 	s.lock.Lock()
 	_, running := s.tenants[tenant]
@@ -172,9 +160,7 @@ func TestDiscoverNeedsSeveralMissingPassesToDelete(t *testing.T) {
 	}
 
 	// The threshold-th consecutive miss stops the loops, joins them, and deletes the rows.
-	if err := s.discover(context.Background()); err != nil {
-		t.Fatalf("discover: %v", err)
-	}
+	s.reconcile(context.Background())
 	waitUntil(t, func() bool { return !tenantRowsExist(t, s, tenant) },
 		"the tenant's rows must be deleted after the missing threshold")
 	mu.Lock()
@@ -184,17 +170,15 @@ func TestDiscoverNeedsSeveralMissingPassesToDelete(t *testing.T) {
 	}
 }
 
-// TestDiscoverRestartsFailedTenants checks that a tenant whose loops failed is restarted by
+// TestReconcileRestartsFailedTenants checks that a tenant whose loops failed is restarted by
 // a later discovery pass instead of vanishing from the map.
-func TestDiscoverRestartsFailedTenants(t *testing.T) {
+func TestReconcileRestartsFailedTenants(t *testing.T) {
 	const tenant = "acme"
 	s := newTestService(t)
 	starts, mu := stubLoops(s, true)
 	s.listTenants = func(context.Context) ([]string, error) { return []string{tenant}, nil }
 
-	if err := s.discover(context.Background()); err != nil {
-		t.Fatalf("discover: %v", err)
-	}
+	s.reconcile(context.Background())
 	waitUntil(t, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
@@ -202,9 +186,7 @@ func TestDiscoverRestartsFailedTenants(t *testing.T) {
 	}, "the tenant's loops must start once")
 
 	// The failed tenant is still registered until the next pass restarts it.
-	if err := s.discover(context.Background()); err != nil {
-		t.Fatalf("discover: %v", err)
-	}
+	s.reconcile(context.Background())
 	waitUntil(t, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
@@ -212,16 +194,14 @@ func TestDiscoverRestartsFailedTenants(t *testing.T) {
 	}, "a later pass must restart a tenant whose loops failed")
 }
 
-// TestDiscoverSurvivesListingFailures checks that one failed listing neither stops the
+// TestReconcileSurvivesListingFailures checks that one failed listing neither stops the
 // running loops nor fails the service: the next pass lists again.
-func TestDiscoverSurvivesListingFailures(t *testing.T) {
+func TestReconcileSurvivesListingFailures(t *testing.T) {
 	const tenant = "acme"
 	s := newTestService(t)
 	starts, mu := stubLoops(s, false)
 	s.listTenants = func(context.Context) ([]string, error) { return []string{tenant}, nil }
-	if err := s.discover(context.Background()); err != nil {
-		t.Fatalf("discover: %v", err)
-	}
+	s.reconcile(context.Background())
 	waitUntil(t, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
@@ -231,9 +211,7 @@ func TestDiscoverSurvivesListingFailures(t *testing.T) {
 	s.listTenants = func(context.Context) ([]string, error) {
 		return nil, errors.New("broker unavailable")
 	}
-	if err := s.discover(context.Background()); err != nil {
-		t.Fatalf("a failed listing must not fail discovery: %v", err)
-	}
+	s.reconcile(context.Background())
 	s.lock.Lock()
 	loops, running := s.tenants[tenant]
 	s.lock.Unlock()
@@ -247,9 +225,7 @@ func TestDiscoverSurvivesListingFailures(t *testing.T) {
 	}
 
 	s.listTenants = func(context.Context) ([]string, error) { return []string{tenant}, nil }
-	if err := s.discover(context.Background()); err != nil {
-		t.Fatalf("discover: %v", err)
-	}
+	s.reconcile(context.Background())
 	mu.Lock()
 	defer mu.Unlock()
 	if len(*starts) != 1 {
@@ -282,7 +258,7 @@ func TestHealthyReflectsDeadLoops(t *testing.T) {
 
 	// The tenant's loops fail on the first start, then run.
 	var starts atomic.Int32
-	s.runLoops = func(ctx context.Context, _ string, loops *tenantLoops) {
+	s.runTenant = func(ctx context.Context, _ string, loops *tenantLoops) {
 		defer close(loops.stopped)
 		if starts.Add(1) == 1 {
 			loops.fail()
@@ -291,15 +267,11 @@ func TestHealthyReflectsDeadLoops(t *testing.T) {
 		<-ctx.Done()
 	}
 
-	if err := s.discover(context.Background()); err != nil {
-		t.Fatalf("discover: %v", err)
-	}
+	s.reconcile(context.Background())
 	waitUntil(t, func() bool { return !s.Healthy() },
 		"a tenant whose loops died must make the service unhealthy")
 
-	if err := s.discover(context.Background()); err != nil {
-		t.Fatalf("discover: %v", err)
-	}
+	s.reconcile(context.Background())
 	waitUntil(t, func() bool { return s.Healthy() },
 		"a restarted tenant must make the service healthy again")
 }
@@ -309,9 +281,7 @@ func TestHealthyReflectsDeadLoops(t *testing.T) {
 func TestHealthyWithNoTenants(t *testing.T) {
 	s := newTestService(t)
 	s.listTenants = func(context.Context) ([]string, error) { return nil, nil }
-	if err := s.discover(context.Background()); err != nil {
-		t.Fatalf("discover: %v", err)
-	}
+	s.reconcile(context.Background())
 	if !s.Healthy() {
 		t.Fatal("a service with no tenants must be healthy")
 	}
@@ -355,7 +325,7 @@ func TestRunJoinsLoopsBeforeClosingKafkaClients(t *testing.T) {
 	s.consumer = &shutdownConsumer{}
 	s.client = &shutdownClient{}
 	s.listTenants = func(context.Context) ([]string, error) { return []string{tenant}, nil }
-	s.runLoops = func(ctx context.Context, _ string, loops *tenantLoops) {
+	s.runTenant = func(ctx context.Context, _ string, loops *tenantLoops) {
 		defer close(loops.stopped)
 		<-ctx.Done()
 		// A send still in flight while shutdown runs: the producer must still be open.

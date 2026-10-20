@@ -157,29 +157,24 @@ func (r *Round) readHeartbeats(
 		if !errors.Is(err, sarama.ErrOffsetOutOfRange) {
 			return nil, false, fmt.Errorf("consuming %s from %d: %w", topic, offset, err)
 		}
-		// Retention deleted the segments below the stored offset: those heartbeats are
-		// gone and cannot be replayed, which the operator must know. The round resumes
-		// at the oldest retained record; the comparison then corrects whatever usage
-		// the lost heartbeats carried, because the folded history is the source of
-		// truth, and the rounds that already ran in this database are skipped by their
-		// round time.
+		// Retention deleted the segments below the stored offset: the round cannot
+		// know which of the lost heartbeats the provider already billed. Resuming at
+		// the oldest retained record would rebuild a ledger missing those spans, and
+		// the next round would resend them under new heartbeat ids: the customer pays
+		// twice. Refuse instead, loudly, and leave recovery to the operator.
 		oldest, oldestErr := r.client.GetOffset(topic, 0, sarama.OffsetOldest)
 		if oldestErr != nil {
 			return nil, false, fmt.Errorf(
 				"reading the oldest retained heartbeat of %s: %w", topic, oldestErr,
 			)
 		}
-		r.logger.Error(err,
-			"stored heartbeat offset is below the topic's retention start; the heartbeats "+
-				"in between are lost and cannot be replayed; resuming at the oldest retained "+
-				"record and relying on the round comparison to correct the ledger",
-			"tenant", tenant, "topic", topic,
-			"stored_offset", offset, "oldest_retained", oldest,
+		return nil, false, fmt.Errorf(
+			"stored heartbeat offset %d of %s is below the topic's retention start %d: "+
+				"the heartbeats in between cannot be replayed and the provider may have "+
+				"billed them; restore the topic's retention or rebuild from a backup "+
+				"whose offset the topic still covers",
+			offset, topic, oldest,
 		)
-		partition, err = r.consumer.ConsumePartition(topic, 0, sarama.OffsetOldest)
-		if err != nil {
-			return nil, false, fmt.Errorf("consuming %s from the oldest offset: %w", topic, err)
-		}
 	}
 	defer func() { _ = partition.Close() }()
 

@@ -999,3 +999,51 @@ var _ = Describe("Runner session restart", func() {
 		Expect(adapter.closed).To(BeTrue())
 	})
 })
+
+var _ = Describe("Runner interrupt safety", func() {
+	It("stops the claim and keeps the offset when a submit is interrupted", func() {
+		adapter := &mockAdapter{name: "test-provider"}
+		runner := newRunner(adapter)
+		sessionCtx, cancel := context.WithCancel(context.Background())
+		session := &mockSession{ctx: sessionCtx}
+		claim := &mockClaim{
+			topic:     testTopic,
+			partition: 0,
+			messages:  make(chan *sarama.ConsumerMessage, 10),
+		}
+		_ = runner.Setup(session)
+
+		// The provider is down and the session ends mid-backoff: the first submit
+		// fails retryably and cancels the session the way a timeout would.
+		adapter.submitFn = func(_ adapters.MeteringEvent) error {
+			cancel()
+			return errors.New("provider unavailable")
+		}
+		feedMessages(claim,
+			newTestMessage("evt-1", "res-1", 0),
+			newTestMessage("evt-2", "res-2", 1),
+		)
+
+		err := runner.ConsumeClaim(session, claim)
+		Expect(err).NotTo(HaveOccurred())
+
+		// The failed message's offset is not tracked, so the commit cannot skip it
+		// and the next session redelivers it.
+		runner.mu.Lock()
+		tp := topicPartition{Topic: testTopic, Partition: 0}
+		_, tracked := runner.offsets[tp]
+		runner.mu.Unlock()
+		Expect(tracked).To(BeFalse())
+
+		// The message after the failure was never consumed.
+		adapter.mu.Lock()
+		defer adapter.mu.Unlock()
+		Expect(adapter.submitCalls).To(HaveLen(1))
+
+		// The interruption is visible, not silent.
+		val := testutil.ToFloat64(
+			runner.metrics.eventsFailed.WithLabelValues("test-provider", "retries_interrupted"),
+		)
+		Expect(val).To(Equal(float64(1)))
+	})
+})

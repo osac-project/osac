@@ -1127,10 +1127,31 @@ func recordRunningConfig(instance *v1alpha1.ComputeInstance) {
 	if !instance.IsStatusConditionTrue(v1alpha1.ComputeInstanceConditionConfigurationApplied) {
 		return
 	}
-	since := metav1.NewTime(time.Now().UTC())
+	// The config runs from the later of the phase change and the config application:
+	// stamping the observation time instead would leave a 15-20 s window where the type
+	// fact does not exist yet, billed without an instance_type and never corrected.
+	since := configRunningSince(instance)
 	instance.Status.RunningConfigVersion = instance.Status.DesiredConfigVersion
 	instance.Status.RunningInstanceTypeName = label
 	instance.Status.RunningConfigSince = &since
+}
+
+// configRunningSince returns when the recorded config started running: the later of the
+// RUNNING phase's transition and the ConfigurationApplied condition's transition. The
+// phase time covers the first observation, where the config ran from the moment the
+// instance started. The condition time covers a restart-required resize, where the phase
+// may predate the config actually running.
+func configRunningSince(instance *v1alpha1.ComputeInstance) metav1.Time {
+	since := metav1.Now()
+	if !instance.Status.PhaseTransitionTime.IsZero() &&
+		instance.Status.PhaseTransitionTime.Before(&since) {
+		since = *instance.Status.PhaseTransitionTime
+	}
+	condition := instance.GetStatusCondition(v1alpha1.ComputeInstanceConditionConfigurationApplied)
+	if condition != nil && condition.LastTransitionTime.After(since.Time) {
+		since = metav1.NewTime(condition.LastTransitionTime.Time)
+	}
+	return since
 }
 
 // crConfirmsRunningType reports whether the CR confirms that the requested instance type is

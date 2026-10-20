@@ -53,6 +53,9 @@ def test_compute_instance_lifecycle(
         if os.environ.get("OSAC_FULFILLMENT_TRUST_E2E") == "true":
             assert_management_tls(k8s_hub_client)
 
+        # The VM was created without a project, so its heartbeats carry no project
+        # dimension: the engine emits only the facts a resource carries.
+        metering.without_project()
         metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=180)
         metering.verify()
 

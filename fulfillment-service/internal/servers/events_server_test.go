@@ -128,6 +128,24 @@ var _ = Describe("Events server visibility", Ordered, func() {
 		Expect(server).To(BeNil())
 	})
 
+	// ensureTopic creates the tenant's event topic, matching the publisher's contract.
+	ensureTopic := func(tenant string) {
+		admin, err := sarama.NewClusterAdmin([]string{broker.Brokers()}, kafkaConfig)
+		ExpectWithOffset(1, err).ToNot(HaveOccurred())
+		DeferCleanup(admin.Close)
+		retention := "-1"
+		err = admin.CreateTopic(DefaultEventTopicPrefix+tenant, &sarama.TopicDetail{
+			NumPartitions:     1,
+			ReplicationFactor: 1,
+			ConfigEntries: map[string]*string{
+				"retention.ms": &retention,
+			},
+		}, false)
+		if err != nil {
+			ExpectWithOffset(1, err).To(MatchError(sarama.ErrTopicAlreadyExists))
+		}
+	}
+
 	// sendEvent writes an event to the tenant topic selected from its payload metadata.
 	sendEvent := func(event *privatev1.Event) {
 		payloadOneof := event.ProtoReflect().Descriptor().Oneofs().ByName(eventsServerPayloadOneofField)
@@ -140,8 +158,10 @@ var _ = Describe("Events server visibility", Ordered, func() {
 		ExpectWithOffset(1, ok).To(BeTrue())
 		data, err := proto.Marshal(event)
 		Expect(err).ToNot(HaveOccurred())
+		topic := DefaultEventTopicPrefix + metadataGetter.GetMetadata().GetTenant()
+		ensureTopic(metadataGetter.GetMetadata().GetTenant())
 		_, _, err = producer.SendMessage(&sarama.ProducerMessage{
-			Topic: DefaultEventTopicPrefix + metadataGetter.GetMetadata().GetTenant(),
+			Topic: topic,
 			Value: sarama.ByteEncoder(data),
 		})
 		ExpectWithOffset(1, err).ToNot(HaveOccurred())

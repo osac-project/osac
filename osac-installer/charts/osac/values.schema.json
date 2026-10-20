@@ -790,35 +790,6 @@
           ],
           "default": "openshift"
         },
-        "kafkaTopics": {
-          "type": "object",
-          "description": "Kafka topics created for each tenant: the server creates them synchronously at tenant creation and the onboarding controller corrects and heals them",
-          "properties": {
-            "hub": {
-              "type": "string",
-              "description": "Hub hosting the Strimzi Kafka cluster; empty disables topic creation and the operator must create the topics",
-              "default": "hub"
-            },
-            "namespace": {
-              "type": "string",
-              "description": "Namespace of the Strimzi Kafka cluster",
-              "default": "osac-kafka"
-            },
-            "clusterName": {
-              "type": "string",
-              "description": "Name of the Strimzi Kafka cluster",
-              "default": "osac-kafka"
-            },
-            "retentionMs": {
-              "type": "integer",
-              "description": "How long tenant topics keep records, in milliseconds; -1 keeps them indefinitely; 0 is invalid (it evicts records as soon as they land, it does not keep them indefinitely)",
-              "minimum": -1,
-              "not": {"const": 0},
-              "default": -1
-            }
-          },
-          "additionalProperties": false
-        },
         "images": {
           "type": "object",
           "properties": {
@@ -1828,11 +1799,6 @@
               "type": "string",
               "description": "How long the topics keep records, in milliseconds; -1 keeps them indefinitely. The retention is the recovery window, because metering rebuilds its database from the topics",
               "default": "-1"
-            },
-            "replicationFactor": {
-              "type": "integer",
-              "description": "Replication factor of the topics; -1 leaves the broker default in place",
-              "default": -1
             }
           },
           "additionalProperties": false

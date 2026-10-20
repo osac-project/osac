@@ -303,6 +303,22 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Expect(publisher).To(BeNil())
 		})
 
+		It("Can't be created with a retention that destroys or wedges the topic", func() {
+			// Zero is the one value the broker accepts that deletes the event log as
+			// it is written; -2 is rejected per record, forever.
+			for _, retention := range []string{"0", "-2"} {
+				publisher, err := NewEventPublisher().
+					SetLogger(logger).
+					SetDatabasePool(&pgxpool.Pool{}).
+					SetKafkaTopicPrefix("osac.events.").
+					SetTopicRetentionMS(retention).
+					Build()
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("topic retention should be -1"))
+				Expect(publisher).To(BeNil())
+			}
+		})
+
 		It("Can't be created with an empty table", func() {
 			publisher, err := NewEventPublisher().
 				SetLogger(logger).

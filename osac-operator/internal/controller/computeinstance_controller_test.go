@@ -3729,3 +3729,60 @@ var _ = Describe("ComputeInstance Controller", func() {
 	})
 
 })
+
+// runningInstanceWithTimes builds a Running instance whose phase and configuration
+// transitions carry explicit times, so the stamp can be asserted exactly.
+func runningInstanceWithTimes(phaseAt, configAt time.Time) *osacv1alpha1.ComputeInstance {
+	instance := &osacv1alpha1.ComputeInstance{
+		ObjectMeta: metav1.ObjectMeta{
+			Labels: map[string]string{
+				osacComputeInstanceTypeNameLabel: "standard-8-32",
+			},
+		},
+	}
+	instance.Status.Conditions = []metav1.Condition{
+		{
+			Type:               string(osacv1alpha1.ComputeInstanceConditionRestartRequired),
+			Status:             metav1.ConditionFalse,
+			Reason:             "AsExpected",
+			LastTransitionTime: metav1.NewTime(phaseAt),
+		},
+		{
+			Type:               string(osacv1alpha1.ComputeInstanceConditionConfigurationApplied),
+			Status:             metav1.ConditionTrue,
+			Reason:             "AsExpected",
+			LastTransitionTime: metav1.NewTime(configAt),
+		},
+	}
+	instance.Status.Phase = osacv1alpha1.ComputeInstancePhaseRunning
+	phaseTime := metav1.NewTime(phaseAt)
+	instance.Status.PhaseTransitionTime = &phaseTime
+	return instance
+}
+
+var _ = Describe("configRunningSince", func() {
+	It("stamps the phase time when the config ran from the phase change", func() {
+		// The controller observes the config 15 s after the phase change; the type
+		// fact must carry the phase time, not the observation time, so the interval
+		// from the phase change carries the instance_type dimension.
+		phaseAt := time.Now().Add(-15 * time.Second).UTC()
+		configAt := phaseAt.Add(-time.Minute)
+		instance := runningInstanceWithTimes(phaseAt, configAt)
+
+		since := configRunningSince(instance)
+
+		Expect(since.Time).To(BeTemporally("~", phaseAt, time.Second))
+	})
+
+	It("stamps the config time when the config landed after the phase change", func() {
+		// A restart-required resize: the phase predates the config actually running,
+		// so stamping the phase time would backdate the new type.
+		phaseAt := time.Now().Add(-time.Hour).UTC()
+		configAt := time.Now().Add(-time.Minute).UTC()
+		instance := runningInstanceWithTimes(phaseAt, configAt)
+
+		since := configRunningSince(instance)
+
+		Expect(since.Time).To(BeTemporally("~", configAt, time.Second))
+	})
+})

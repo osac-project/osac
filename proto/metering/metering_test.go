@@ -31,6 +31,7 @@ func TestResources(t *testing.T) {
 		{
 			Message: "osac.private.v1.BareMetalInstance",
 			Fields: []Field{
+				{Path: "spec.catalog_item", Kind: KindConstant},
 				{Path: "spec.instance_type", Kind: KindConstant},
 				{Path: "status.cluster", Kind: KindFixedOnceSet, OwnerResource: "Cluster"},
 				{Path: "status.node_set", Kind: KindFixedOnceSet},
@@ -49,6 +50,7 @@ func TestResources(t *testing.T) {
 			Message: "osac.private.v1.ComputeInstance",
 			Fields: []Field{
 				{Path: "spec.boot_disk.size_gib", Kind: KindConstant},
+				{Path: "spec.catalog_item", Kind: KindConstant},
 				{Path: "spec.disk_image", Kind: KindConstant},
 				{Path: "status.instance_type", Kind: KindVaries, TransitionTime: "status.instance_type_transition_time"},
 				{Path: "status.state", Kind: KindVaries, TransitionTime: "status.state_transition_time"},

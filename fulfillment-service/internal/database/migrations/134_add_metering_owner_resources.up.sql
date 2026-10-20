@@ -24,6 +24,7 @@ create or replace function metering_tracked_fields(source_table text) returns js
         {"path": "status.instance_type", "kind": "varies", "transition_time": "status.instance_type_transition_time"},
         {"path": "status.state", "kind": "varies", "transition_time": "status.state_transition_time"},
         {"path": "spec.boot_disk.size_gib", "kind": "constant"},
+        {"path": "spec.catalog_item", "kind": "constant"},
         {"path": "spec.disk_image", "kind": "constant"}
       ]
     $tracked$::jsonb
@@ -37,6 +38,7 @@ create or replace function metering_tracked_fields(source_table text) returns js
     when 'bare_metal_instances' then $tracked$
       [
         {"path": "status.state", "kind": "varies", "transition_time": "status.state_transition_time"},
+        {"path": "spec.catalog_item", "kind": "constant"},
         {"path": "spec.instance_type", "kind": "constant"},
         {"path": "status.cluster", "kind": "fixed_once_set", "owner_resource": "Cluster"},
         {"path": "status.node_set", "kind": "fixed_once_set"}

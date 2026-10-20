@@ -723,7 +723,7 @@
         state: touch
         mode: "0600"
 
-    - name: Set provider action inputs for NetApp, VAST, and LVMS tiers
+    - name: Set provider action inputs for NetApp, VAST, LVMS, and OSAC CSI tiers
       ansible.builtin.set_fact:
         _native_csi_test_tiers:
           - name: fast-block
@@ -741,6 +741,9 @@
           - name: local
             protocol: block
             provider: lvms
+          - name: osac-csi-block
+            protocol: block
+            provider: osac-csi
         _native_csi_test_target_kubeconfig: "{{ lookup('env', 'KUBECONFIG') }}"
         storage_provider_netapp_trident_install_override:
           name: osac.test_overrides.csi_driver_install_hooks

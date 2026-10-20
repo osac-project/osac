@@ -1414,6 +1414,107 @@
               - "'native_csi_driver_install' not in (_vast_native_csi_rerun_log_content.content | b64decode)"
             fail_msg: "A native CSI installer ran even though all required drivers already exist"
             success_msg: "Existing Trident and VAST drivers skipped installation"
+
+        - name: Clear installer log before rejecting an installed unmanaged Subscription
+          ansible.builtin.file:
+            path: /tmp/osac_test_overrides.log
+            state: absent
+
+        - name: Create an empty installer log for the unmanaged Subscription case
+          ansible.builtin.file:
+            path: /tmp/osac_test_overrides.log
+            state: touch
+            mode: "0600"
+
+        - name: Remove VAST block CSIDriver to exercise Subscription reconciliation
+          kubernetes.core.k8s:
+            state: absent
+            api_version: storage.k8s.io/v1
+            kind: CSIDriver
+            name: block.csi.vastdata.com
+
+        - name: Set installedCSV on the existing unmanaged VAST Subscription
+          ansible.builtin.command:
+            argv:
+              - kubectl
+              - --kubeconfig
+              - "{{ _vast_native_csi_target_kubeconfig }}"
+              - patch
+              - subscription
+              - vast-csi-operator
+              - --namespace
+              - vast-csi-system
+              - --subresource=status
+              - --type=merge
+              - --patch
+              - '{"status":{"installedCSV":"vast-csi-operator.v2.5.0"}}'
+          changed_when: true
+
+        - name: Reject an installed unmanaged VAST Subscription
+          block:
+            - name: Attempt to ensure a VAST driver with an unmanaged installed Subscription
+              ansible.builtin.include_role:
+                name: osac.service.storage_provider
+              vars:
+                storage_provider_action: ensure_csi_driver
+                storage_provider_tiers:
+                  - name: fast-block
+                    protocol: block
+                    provider: vast
+                    backend_id: be-vast
+                storage_provider_target_kubeconfig: "{{ _vast_native_csi_target_kubeconfig }}"
+                storage_provider_target_kubeconfig_insecure: false
+
+            - name: Fail if the installed unmanaged Subscription was accepted
+              ansible.builtin.fail:
+                msg: "The native CSI ensure action accepted an installed unmanaged Subscription"
+          rescue:
+            - name: Assert installed unmanaged Subscription was rejected safely
+              ansible.builtin.assert:
+                that:
+                  - >-
+                    'must be pending and match the required stable Manual policy' in
+                    ((ansible_failed_result.msg | default('')) ~ ' ' ~
+                     (ansible_failed_result.results | default([]) | selectattr('msg', 'defined')
+                      | map(attribute='msg') | join(' ')))
+                fail_msg: >-
+                  The installed unmanaged Subscription failed for an unexpected reason:
+                  {{ ansible_failed_result.msg | default('unknown error') }}
+                success_msg: "The installed unmanaged Subscription was rejected without patching it"
+
+        - name: Read the VAST Subscription after rejecting the installed unmanaged object
+          kubernetes.core.k8s_info:
+            api_version: operators.coreos.com/v1alpha1
+            kind: Subscription
+            name: vast-csi-operator
+            namespace: vast-csi-system
+          register: _vast_native_installed_subscription
+
+        - name: Assert the installed unmanaged Subscription remains unchanged
+          ansible.builtin.assert:
+            that:
+              - _vast_native_installed_subscription.resources | length == 1
+              - _vast_native_installed_subscription.resources[0].status.installedCSV == 'vast-csi-operator.v2.5.0'
+              - _vast_native_installed_subscription.resources[0].spec.channel == 'preview'
+              - _vast_native_installed_subscription.resources[0].spec.installPlanApproval == 'Automatic'
+              - _vast_native_installed_subscription.resources[0].spec.name == 'wrong-package'
+              - _vast_native_installed_subscription.resources[0].spec.source == 'community-operators'
+              - _vast_native_installed_subscription.resources[0].spec.sourceNamespace == 'openshift-marketplace'
+              - _vast_native_installed_subscription.resources[0].spec.startingCSV == 'vast-csi-operator.v2.5.0'
+            fail_msg: "The installed unmanaged VAST Subscription was mutated"
+            success_msg: "The installed unmanaged VAST Subscription remained unchanged"
+
+        - name: Assert the failed reconcile did not invoke the installer
+          ansible.builtin.slurp:
+            path: /tmp/osac_test_overrides.log
+          register: _vast_native_installed_subscription_log
+
+        - name: Verify the installed unmanaged Subscription stopped before installation
+          ansible.builtin.assert:
+            that:
+              - "'native_csi_driver_install' not in (_vast_native_installed_subscription_log.content | b64decode)"
+            fail_msg: "A native CSI installer ran for an installed unmanaged Subscription"
+            success_msg: "The installed unmanaged Subscription was rejected before installer invocation"
       always:
         - name: Delete the Trident Subscription fixture
           kubernetes.core.k8s:

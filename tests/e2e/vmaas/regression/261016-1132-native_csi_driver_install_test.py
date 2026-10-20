@@ -243,6 +243,9 @@ def test_stage2_installs_missing_native_csi_operators_and_skips_existing(
                 description="Stage 2 no-op for existing native CSI drivers",
             )
             assert noop_job.get("status") == "successful", f"AAP no-op job {noop_job_id} failed"
+            assert "No install lock or OLM changes are needed." in noop_job.get("result_stdout", ""), (
+                f"AAP no-op job {noop_job_id} did not take the native CSI no-op path"
+            )
 
             for operator in _OPERATORS:
                 subscription = k8s_hub_client.get_json(

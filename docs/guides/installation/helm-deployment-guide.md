@@ -55,7 +55,7 @@ finalize the deployment:
 
 | Hook | Weight | What it does |
 |------|--------|-------------|
-| `osac-publish-templates` | 20 | Publishes cluster templates to the fulfillment service catalog |
+| `osac-publish-templates` | 20 | Publishes cluster templates (CaaS, MaaS), compute instance templates (VMaaS), bare-metal instance templates, and add-on operators (CaaS) to the fulfillment catalog |
 | `seed-cluster-versions` | 30 | Optionally seeds shared DiskImages and ClusterVersions |
 
 **Cluster template publishing** (`osac-publish-templates`): An init
@@ -66,8 +66,13 @@ polls until it completes. Helm blocks until this hook succeeds, so
 templates are available. The underlying Ansible role uses a PATCH/POST
 pattern, making re-publish on upgrade safe and idempotent.
 
-This hook is enabled by default (`aap.instanceGroups.publishTemplates.enabled: true`).
-To disable it (e.g., in environments without CaaS):
+This hook is enabled by default
+(`aap.instanceGroups.publishTemplates.enabled: true`). CaaS and MaaS
+depend on it for cluster templates and add-on operators; VMaaS depends
+on it for compute instance templates. Set `enabled: false` only when
+no enabled service depends on hook-published templates — currently a
+BMaaS-only deployment — or when all required templates are provisioned
+separately:
 
 ```yaml
 aap:

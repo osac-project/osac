@@ -539,7 +539,7 @@ subchart's own `values.yaml` file.
 | `aap.instanceGroups.clusterFulfillment.enabled`, `aap.instanceGroups.clusterFulfillment.config`, `aap.instanceGroups.clusterFulfillment.secret` | The `cluster-fulfillment` instance group for CaaS provisioning. See [Section 6.2](#62-installing-osac-for-caas-with-the-netris-network-backend). |
 | `aap.instanceGroups.networkFulfillment.enabled`, `aap.instanceGroups.networkFulfillment.config`, `aap.instanceGroups.networkFulfillment.secret` | The `network-fulfillment` instance group for Netris. See [Section 6.2](#62-installing-osac-for-caas-with-the-netris-network-backend). |
 | `aap.instanceGroups.storageFulfillment.config.STORAGE_SNAPSHOTS_ENABLED` | Snapshot toggle for the `storage-operations` instance group. |
-| `aap.instanceGroups.publishTemplates.enabled` | Runs the postinstallation `osac-publish-templates` hook. Default `true`. Set it to `false` for VMaaS-only or BMaaS-only installations. |
+| `aap.instanceGroups.publishTemplates.enabled` | Runs the postinstallation `osac-publish-templates` hook, which publishes cluster templates (CaaS, MaaS), compute instance templates (VMaaS), bare-metal instance templates, and add-on operators (CaaS) to the fulfillment catalog. Default `true`. Set to `false` only when no enabled service depends on hook-published templates — currently a BMaaS-only deployment — or when all required templates are provisioned separately. |
 | `aap.instanceGroups.publishTemplates.config.OSAC_TEMPLATE_COLLECTIONS`, `aap.instanceGroups.publishTemplates.config.OSAC_FULFILLMENT_SERVICE_URI` | The Ansible collections to publish and the internal Fulfillment Service URI. |
 
 **Table 5.6. Web console, BMaaS, and other parameters**
@@ -628,8 +628,12 @@ the cluster. Then follow [Section 4](#4-installing-osac).
    aap:
      instanceGroups:
        publishTemplates:
-         enabled: false
+         enabled: true
    ```
+
+   The `publishTemplates` hook publishes the compute instance
+   templates that VMaaS needs. Disable it only if the required
+   templates are provisioned separately.
 
    `lvms: { enabled: true }` runs the `osac` chart's `register-local-storage`
    hook, which creates the `local` `StorageBackend` and `StorageTier` that the
@@ -816,8 +820,10 @@ backend. For the full variable reference, see
          enabled: false
    ```
 
-   Set `bmf.metal3.namespace` to the namespace where your `BareMetalHost`
-   resources live.
+   Setting `publishTemplates.enabled` to `false` is safe here
+   because a BMaaS-only deployment does not consume templates
+   published by this hook. Set `bmf.metal3.namespace` to the
+   namespace where your `BareMetalHost` resources live.
 
 2. Install OSAC. See [Section 4.3](#43-installing-osac).
 
@@ -1343,12 +1349,16 @@ $ oc logs job/osac-publish-templates -n <namespace> -c wait-for-fulfillment
 $ oc logs job/osac-publish-templates -n <namespace> -c publish-templates
 ```
 
-The hook runs by default, mainly for CaaS. The init container polls the
+The hook publishes cluster templates (CaaS, MaaS), compute instance
+templates (VMaaS), bare-metal instance templates, and add-on operators
+(CaaS) to the fulfillment catalog. The init container polls the
 Fulfillment Service REST gateway for up to 600 seconds. The job then
-launches the `osac-publish-templates` AAP job template and requires a valid
-`osac-aap-api-token` Secret. To disable the hook for VMaaS-only or
-BMaaS-only installations, set `aap.instanceGroups.publishTemplates.enabled`
-to `false`.
+launches the `osac-publish-templates` AAP job template and requires a
+valid `osac-aap-api-token` Secret. Set
+`aap.instanceGroups.publishTemplates.enabled` to `false` only when no
+enabled service depends on hook-published templates — currently a
+BMaaS-only deployment — or when all required templates are provisioned
+separately.
 
 ### 11.10 The `fulfillment-*` pods are in `CrashLoopBackOff`
 

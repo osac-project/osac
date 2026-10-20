@@ -371,6 +371,10 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(pool.Close)
 
+			// Clean any leftover changes from migrations or previous tests
+			_, err = pool.Exec(encodeCtx, "DELETE FROM changes")
+			Expect(err).ToNot(HaveOccurred())
+
 			config, err := kafkaBroker.Config()
 			Expect(err).ToNot(HaveOccurred())
 			client, err = sarama.NewClient([]string{kafkaBroker.Brokers()}, config)
@@ -737,6 +741,10 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(pool.Close)
 
+			// Clean any leftover changes from migrations or previous tests
+			_, err = pool.Exec(waitCtx, "DELETE FROM changes")
+			Expect(err).ToNot(HaveOccurred())
+
 			config, err := kafkaBroker.Config()
 			Expect(err).ToNot(HaveOccurred())
 			client, err = sarama.NewClient([]string{kafkaBroker.Brokers()}, config)
@@ -839,6 +847,10 @@ var _ = Describe("Event publisher", Ordered, func() {
 			pool, err = db.Pool(drainCtx)
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(pool.Close)
+
+			// Clean any leftover changes from migrations or previous tests
+			_, err = pool.Exec(drainCtx, "DELETE FROM changes")
+			Expect(err).ToNot(HaveOccurred())
 
 			config, err := kafkaBroker.Config()
 			Expect(err).ToNot(HaveOccurred())

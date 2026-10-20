@@ -748,6 +748,9 @@
         storage_provider_netapp_trident_install_override:
           name: osac.test_overrides.csi_driver_install_hooks
           tasks_from: install.yaml
+        vast_storage_csi_operator_install_override:
+          name: osac.test_overrides.csi_driver_install_hooks
+          tasks_from: install.yaml
 
 - name: "Native CSI Driver Ensure - Install missing NetApp and VAST drivers"
   hosts: localhost

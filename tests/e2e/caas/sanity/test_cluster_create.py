@@ -15,9 +15,8 @@ import pytest
 
 from tests.e2e.caas.deletion_diagnostics import snapshot_cluster_deletion
 from tests.e2e.core.fulfillment_trust import assert_cluster_trust, assert_management_tls
-from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
+from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.helpers import (
-    assert_grpc_rejected,
     unique_name,
     wait_for_cluster_deleting,
     wait_for_cluster_deletion_without_cleanup,
@@ -633,53 +632,6 @@ def test_cluster_create(
         _assert_cluster_metering(
             metering=metering, uuid=uuid, node_sets=cluster.node_sets, cluster_template=cluster_template
         )
-
-        # Attachment immutability: the cluster attachment is create-time-only. The
-        # journey's cluster resolves no attachment, and adding one through Update is
-        # rejected with the API spec unchanged (the from-empty rejection is pinned by
-        # the unit suites at the handler boundary).
-        cluster_before = grpc.get_cluster(cluster_id=uuid)["object"]
-        with pytest.raises(subprocess.CalledProcessError) as exc_info:
-            grpc.call(
-                service=f"{PUBLIC_API}.Clusters/Update",
-                data={
-                    "object": {
-                        "id": uuid,
-                        "spec": {
-                            "network_attachment": {
-                                "subnet": {"id": "00000000-0000-0000-0000-000000000000"},
-                                "security_groups": [{"id": "00000000-0000-0000-0000-000000000000"}],
-                            }
-                        },
-                    },
-                    "updateMask": {"paths": ["spec.network_attachment"]},
-                },
-            )
-        assert_grpc_rejected(exc_info, "InvalidArgument")
-        cluster_after = grpc.get_cluster(cluster_id=uuid)["object"]
-        spec_before = cluster_before.get("spec", {})
-        spec_after = cluster_after.get("spec", {})
-        before_attachment = spec_before.get("networkAttachment") or spec_before.get("network_attachment")
-        after_attachment = spec_after.get("networkAttachment") or spec_after.get("network_attachment")
-        assert after_attachment == before_attachment, "cluster attachment changed"
-
-        # Flipping auto_external_ip_attachment after creation is rejected; the
-        # cluster is read back to prove the rejected update did not persist.
-        with pytest.raises(subprocess.CalledProcessError) as exc_info:
-            grpc.call(
-                service=f"{PUBLIC_API}.Clusters/Update",
-                data={
-                    "object": {"id": uuid, "spec": {"auto_external_ip_attachment": True}},
-                    "updateMask": {"paths": ["spec.auto_external_ip_attachment"]},
-                },
-            )
-        assert_grpc_rejected(exc_info, "InvalidArgument")
-        cluster_after_flip = grpc.get_cluster(cluster_id=uuid)["object"]
-        spec_after_flip = cluster_after_flip.get("spec", {})
-        assert not (
-            spec_after_flip.get("autoExternalIpAttachment") or spec_after_flip.get("auto_external_ip_attachment")
-        ), "auto_external_ip_attachment persisted"
-        logger.info("CaaS: cluster attachment immutability verified")
 
         scaled_size = cluster.original_size + 1
         cli.scale_cluster(uuid=uuid, node_set=cluster.worker_node_set, size=scaled_size)

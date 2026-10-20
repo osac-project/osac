@@ -263,6 +263,7 @@
   ansible.builtin.set_fact:
     _native_csi_driver_install_lock_holder: ""
     _native_csi_driver_install_lock_acquired: false
+    _native_csi_driver_install_needed: false
     _native_csi_driver_unknown_providers: >-
       {{ _unique_providers | difference(storage_provider_csi_driver_matrix.keys() | list) }}
     _native_csi_driver_netapp_protocols: >-
@@ -323,6 +324,51 @@
       loop_control:
         label: "{{ item.name }}"
 
+- name: Build the required native CSI driver names
+  when: storage_provider_action == 'ensure_csi_driver'
+  ansible.builtin.set_fact:
+    _native_csi_driver_required_names: >-
+      {% set names = [] -%}
+      {% if _native_csi_driver_netapp_tiers | length > 0 -%}
+      {% set _ = names.append(storage_provider_csi_driver_matrix.netapp.protocols.block) -%}
+      {% endif -%}
+      {% for protocol in _native_csi_driver_vast_protocols -%}
+      {% set _ = names.append(storage_provider_csi_driver_matrix.vast.protocols[protocol]) -%}
+      {% endfor -%}
+      {{ names | unique | sort | list }}
+
+- name: Check required native CSI drivers before acquiring the install lock
+  when:
+    - storage_provider_action == 'ensure_csi_driver'
+    - _native_csi_driver_required_names | length > 0
+  kubernetes.core.k8s_info:
+    api_version: storage.k8s.io/v1
+    kind: CSIDriver
+    name: "{{ item }}"
+    kubeconfig: "{{ storage_provider_target_kubeconfig | default(omit) }}"
+    validate_certs: "{{ false if (storage_provider_target_kubeconfig_insecure | default(false) | bool) else omit }}"
+  loop: "{{ _native_csi_driver_required_names }}"
+  loop_control:
+    label: "{{ item }}"
+  register: _native_csi_driver_precheck
+
+- name: Determine whether any required native CSI driver is missing
+  when: storage_provider_action == 'ensure_csi_driver'
+  ansible.builtin.set_fact:
+    _native_csi_driver_install_needed: >-
+      {{ (_native_csi_driver_precheck.results | default([])
+          | selectattr('resources', 'equalto', []) | list | length) > 0 }}
+
+- name: Log that all required native CSI drivers are already present
+  when:
+    - storage_provider_action == 'ensure_csi_driver'
+    - _native_csi_driver_required_names | length > 0
+    - not (_native_csi_driver_install_needed | bool)
+  ansible.builtin.debug:
+    msg: >-
+      Required native CSI drivers are already present:
+      {{ _native_csi_driver_required_names | join(', ') }}. No install lock or OLM changes are needed.
+
 # AAP can run Stage 2 and ComputeInstance JIT jobs concurrently against the
 # same VMaaS cluster. Serialize the check-create-install sequence so both jobs
 # cannot observe a missing CSIDriver and reconcile the same OLM Subscription.
@@ -330,9 +376,7 @@
 - name: Set native CSI driver install lock holder identity
   when:
     - storage_provider_action == 'ensure_csi_driver'
-    - >-
-      (_native_csi_driver_netapp_tiers | length > 0)
-      or (_native_csi_driver_vast_protocols | length > 0)
+    - _native_csi_driver_install_needed | bool
   ansible.builtin.set_fact:
     _native_csi_driver_install_lock_holder: >-
       native-csi-driver-install-{{ awx_job_id | default('unknown') }}-{{
@@ -363,6 +407,7 @@
 - name: Ensure native Trident CSI driver on the selected VMaaS cluster
   when:
     - storage_provider_action == 'ensure_csi_driver'
+    - _native_csi_driver_install_needed | bool
     - _native_csi_driver_netapp_tiers | length > 0
   module_defaults:
     kubernetes.core.k8s:
@@ -590,6 +635,7 @@
 - name: Ensure VAST CSI drivers required by the resolved tiers on the selected cluster
   when:
     - storage_provider_action == 'ensure_csi_driver'
+    - _native_csi_driver_install_needed | bool
     - _native_csi_driver_vast_protocols | length > 0
   module_defaults:
     kubernetes.core.k8s:

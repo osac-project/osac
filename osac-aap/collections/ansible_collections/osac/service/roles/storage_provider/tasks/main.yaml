@@ -341,7 +341,9 @@
     _native_csi_driver_install_lock_acquired: false
 
 - name: Acquire native CSI driver install lock
-  when: _native_csi_driver_install_lock_holder | default('') | length > 0
+  when:
+    - storage_provider_action == 'ensure_csi_driver'
+    - _native_csi_driver_install_lock_holder | default('') | length > 0
   ansible.builtin.include_role:
     name: osac.service.lease
   vars:
@@ -352,7 +354,9 @@
     lease_delay: 5
 
 - name: Mark native CSI driver install lock as acquired
-  when: _native_csi_driver_install_lock_holder | default('') | length > 0
+  when:
+    - storage_provider_action == 'ensure_csi_driver'
+    - _native_csi_driver_install_lock_holder | default('') | length > 0
   ansible.builtin.set_fact:
     _native_csi_driver_install_lock_acquired: true
 
@@ -624,7 +628,9 @@
 # On task failure, the lease owner reference lets Kubernetes remove the lock
 # when the AAP job pod exits. Successful runs release it immediately here.
 - name: Release native CSI driver install lock
-  when: _native_csi_driver_install_lock_acquired | default(false)
+  when:
+    - storage_provider_action == 'ensure_csi_driver'
+    - _native_csi_driver_install_lock_acquired | default(false)
   ansible.builtin.include_role:
     name: osac.service.lease
   vars:

@@ -3,6 +3,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { expectRowRemoved } from './general/expect_row_removed';
 import {
   TenantsCreatePage,
   TenantsCredentialsPage,
@@ -190,19 +191,10 @@ export const deleteTenant = async (page: Page, tenantName: string): Promise<void
   // Confirm deletion and wait for the dialog and tenant row to disappear.
   await deleteDialog.getByRole(...TenantsDeletePage.deleteButton).click();
   await expect(deleteDialog).toBeHidden();
-  try {
-    await expect(tenantRow).toHaveCount(0, { timeout: 120_000 });
-  } catch {
-    const remainingRows = await tenantRow.count();
-    const currentStatus =
-      remainingRows === 1
-        ? ((await tenantRow.locator(...TenantsMainPage.tenantStatusCell).textContent())?.trim() ??
-          'unknown')
-        : 'unknown';
-
-    throw new Error(
-      `Tenant "${tenantName}" was not removed from the Tenants table within 120 seconds ` +
-        `after deletion. The row is still present with status "${currentStatus}".`,
-    );
-  }
+  await expectRowRemoved({
+    row: tenantRow,
+    statusCell: tenantRow.locator(...TenantsMainPage.tenantStatusCell),
+    resource: `Tenant "${tenantName}"`,
+    table: 'Tenants',
+  });
 };

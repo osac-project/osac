@@ -195,17 +195,30 @@ export const getLabels = (t: TFunction) => ({
 - `apps/app-frontend/vitest.config.ts` — single runner for app-frontend and ui-components tests (`include` spans both packages)
 - ESLint relaxes type safety rules for test files (no-unsafe-* off)
 - Testing libraries: @testing-library/react 16.x, @testing-library/jest-dom 6.x
-- No persisted E2E test suite in this repo, and no persisted UI-level E2E coverage anywhere: `osac-test-infra`'s CI-tracked E2E suites hit the fulfillment gRPC/REST API and Kubernetes CRs directly — no browser, nothing UI-related
+- No CI-run UI-level E2E suite exists. `osac-test-infra`'s CI-tracked E2E
+  suites hit the fulfillment gRPC/REST API and Kubernetes CRs directly — no
+  browser, nothing UI-related. Tracked browser flow specs under
+  `apps/e2e-tests/src/vmaas/` are manual checks against a live cluster, not CI
+  regression coverage.
 - CI runs typecheck, lint, test, and container build as **separate jobs**; run `pnpm run typecheck`, `pnpm lint`, and `pnpm test` locally before submitting (see [Pre-submit validation](#pre-submit-validation-ci-parity))
+
+## Integration testing
+
+### Touched-area map
+
+| Touched area | Tier | Validation |
+| --- | --- | --- |
+| Storage tier browser create/delete flows | E2E (manual live-cluster verification) | Use the `apps/e2e-tests/src/vmaas/create.storage_tier.spec.ts` and `delete.storage_tier.spec.ts` flows documented in [Playwright README](apps/playwright/README.md). They require `OSAC_UI_BASE_URL`, `OSAC_USERNAME`, `OSAC_PASSWORD`, and an explicit `OSAC_STORAGE_TIER_NAME`. They use a real deployed UI, Keycloak, Fulfillment API/database, and existing backend; no backend is created. These flows are not run in CI. |
 
 ### Manual verification against a live cluster
 
 `apps/playwright` (`@osac/playwright`) is a Playwright harness for manually confirming
 that a change works end-to-end against a **live, already-deployed** cluster —
-not a CI suite and not something that adds to this repo's persisted test count. See
-[apps/playwright/README.md](apps/playwright/README.md).
+not a CI suite. The tracked tenant and Storage tier flow specs live under
+`apps/e2e-tests/src/vmaas/`; ad hoc verification specs live under
+`apps/playwright/scratch/`. See [apps/playwright/README.md](apps/playwright/README.md).
 
-- **This is not a test suite — specs are throwaway**: write ad hoc specs under
+- **Ad hoc scratch specs are throwaway**: write them under
   `apps/playwright/scratch/`, a gitignored directory that only exists locally.
   Nothing there is ever committed, but gitignore doesn't stop it from running —
   `pnpm playwright` reruns every spec still in the directory, so delete a spec

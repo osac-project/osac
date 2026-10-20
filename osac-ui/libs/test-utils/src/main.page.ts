@@ -1,6 +1,7 @@
 import { type Page, expect } from '@playwright/test';
 
 import { MainPage } from '../../locators/main_page';
+import { StorageMainPage } from '../../locators/storage';
 import { TenantsMainPage } from '../../locators/tenants';
 
 export type MainPageOption = Exclude<keyof typeof MainPage, 'navigation'>;
@@ -51,4 +52,13 @@ export const openTenantsPage = async (page: Page): Promise<void> => {
   await openMainPageOption(page, 'tenants');
 
   await expect(page.getByRole(...TenantsMainPage.pageTitle)).toBeVisible();
+};
+
+/** Open Infrastructure > Storage and verify the current page and navigation item. */
+export const openStoragePage = async (page: Page): Promise<void> => {
+  await openMainPageOption(page, 'storage');
+
+  const storageLink = page.getByRole(...StorageMainPage.storageNavigationLink);
+  await expect(storageLink).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByRole(...StorageMainPage.pageTitle)).toBeVisible();
 };

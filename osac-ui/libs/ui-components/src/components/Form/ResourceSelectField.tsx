@@ -145,7 +145,6 @@ export const ResourceSelectField = ({
         isDisabled={controlDisabled}
         labelInfo={labelInfo}
         placeholder={effectivePlaceholder}
-        onClear={() => void setFieldValue(nameFieldName, '', false)}
       />
     </>
   );

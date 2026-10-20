@@ -26,6 +26,8 @@ const renderSelect = ({
   autoSelectSingleOption = false,
   filterItems,
   formatOptionLabel,
+  isRequired = true,
+  isRequired = true,
   initialValue = emptyResourceSelectValue(),
   tenants = [makeTenant('only-1', 'Only tenant')],
   transportOverrides,
@@ -33,6 +35,8 @@ const renderSelect = ({
   autoSelectSingleOption?: boolean;
   filterItems?: (item: { id: string; metadata?: { name?: string } }) => boolean;
   formatOptionLabel?: (item: { id: string; metadata?: { name?: string } }) => string;
+  isRequired?: boolean;
+  isRequired?: boolean;
   initialValue?: ResourceSelectValue;
   tenants?: Tenant[];
   transportOverrides?: MockTransportOverrides;
@@ -56,7 +60,7 @@ const renderSelect = ({
             label="Tenant"
             fieldId="tenant"
             service={Tenants}
-            isRequired
+            isRequired={isRequired}
             autoSelectSingleOption={autoSelectSingleOption}
             filterItems={filterItems}
             formatOptionLabel={formatOptionLabel}
@@ -249,6 +253,7 @@ describe('ResourceSelectField', () => {
 
     it('appears once a value is selected and clears it back to empty when clicked', async () => {
       const { user } = renderSelect({
+        isRequired: false,
         tenants: [makeTenant('t-1', 'acme'), makeTenant('t-2', 'globex')],
       });
 

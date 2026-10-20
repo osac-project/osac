@@ -80,7 +80,7 @@ export const ClusterStatusLabel = ({
   }
 
   if (activityInLabel) {
-    const text = t('Provisioning: {{activity}}', { activity: activityText });
+    const text = t('Provisioning - {{activity}}', { activity: activityText });
     return activityWarning ? (
       <Label
         color="orange"

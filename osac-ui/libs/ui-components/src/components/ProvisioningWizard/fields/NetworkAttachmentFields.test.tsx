@@ -14,38 +14,37 @@ import {
   VirtualNetworkState,
 } from '@osac/types';
 
-import NetworkAttachmentFields from './NetworkAttachmentFields';
-import { provisioningFieldValue } from './provisioningFieldValue';
-import { getResourceSelectInput } from '../../../test-utils/query';
+import NetworkFields from './NetworkFields';
+import type { NetworkAttachmentFormFields } from './networkFields';
+import { type ProvisioningFieldValue, provisioningFieldValue } from './provisioningFieldValue';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
-import { type ResourceSelectValue, emptyResourceSelectValue } from '../../Form/resourceSelectValue';
+import { emptyResourceSelectValue } from '../../Form/resourceSelectValue';
 
 interface TestFormValues {
-  useDefaultNetwork: boolean;
-  autoExternalIp: { value: boolean; locked: boolean };
-  virtualNetwork: ResourceSelectValue;
-  subnet: ResourceSelectValue;
-  securityGroups: ResourceSelectValue[];
+  spec: {
+    networkAttachment: ProvisioningFieldValue<NetworkAttachmentFormFields>;
+    autoExternalIpAttachment: ProvisioningFieldValue<boolean>;
+  };
 }
 
 const emptyTestValues = (useDefaultNetwork = true): TestFormValues => ({
-  useDefaultNetwork,
-  autoExternalIp: provisioningFieldValue(false),
-  virtualNetwork: emptyResourceSelectValue(),
-  subnet: emptyResourceSelectValue(),
-  securityGroups: [],
+  spec: {
+    networkAttachment: provisioningFieldValue({
+      useDefaultNetwork,
+      virtualNetwork: emptyResourceSelectValue(),
+      subnet: emptyResourceSelectValue(),
+      securityGroups: [],
+    }),
+    autoExternalIpAttachment: provisioningFieldValue(false),
+  },
 });
 
 const renderFields = (initialValues?: TestFormValues, isDisabled = false) =>
   renderWithProviders(
     <Formik initialValues={initialValues ?? emptyTestValues()} onSubmit={() => undefined}>
-      <NetworkAttachmentFields
-        useDefaultNetworkName="useDefaultNetwork"
-        virtualNetworkName="virtualNetwork"
-        subnetName="subnet"
-        securityGroupsName="securityGroups"
-        autoExternalIpName="autoExternalIp"
-        fieldIdPrefix="test"
+      <NetworkFields
+        networkAttachmentName="spec.networkAttachment"
+        externalIpAttachmentName="spec.autoExternalIpAttachment"
         isDisabled={isDisabled}
       />
     </Formik>,
@@ -97,13 +96,9 @@ describe('NetworkAttachmentFields', () => {
   it('renders auto external IP helper text when provided', () => {
     renderWithProviders(
       <Formik initialValues={emptyTestValues()} onSubmit={() => undefined}>
-        <NetworkAttachmentFields
-          useDefaultNetworkName="useDefaultNetwork"
-          virtualNetworkName="virtualNetwork"
-          subnetName="subnet"
-          securityGroupsName="securityGroups"
-          autoExternalIpName="autoExternalIp"
-          fieldIdPrefix="test"
+        <NetworkFields
+          networkAttachmentName="spec.networkAttachment"
+          externalIpAttachmentName="spec.autoExternalIpAttachment"
           autoExternalIpHelperText="Provision external IPs automatically."
         />
       </Formik>,
@@ -123,18 +118,21 @@ describe('NetworkAttachmentFields', () => {
     renderFields(emptyTestValues(false), true);
 
     expect(screen.getByRole('checkbox', { name: 'Use tenant default network' })).toBeDisabled();
+    expect(screen.getByLabelText(/^Virtual network/)).toBeDisabled();
+    expect(screen.getByLabelText(/^Subnet/)).toBeDisabled();
     expect(screen.getByLabelText(/^Security groups/).closest('.pf-v6-c-menu-toggle')).toHaveClass(
       'pf-m-disabled',
     );
-    expect(
-      screen.getByRole('checkbox', { name: 'Auto External IP Attachment' }),
-    ).not.toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: 'Auto External IP Attachment' })).toBeDisabled();
   });
 
   it('disables auto external IP from its own catalog policy', () => {
     renderFields({
       ...emptyTestValues(),
-      autoExternalIp: provisioningFieldValue(false, true),
+      spec: {
+        ...emptyTestValues().spec,
+        autoExternalIpAttachment: provisioningFieldValue(false, true),
+      },
     });
 
     expect(screen.getByRole('checkbox', { name: 'Use tenant default network' })).not.toBeDisabled();
@@ -146,18 +144,20 @@ describe('NetworkAttachmentFields', () => {
       <Formik
         initialValues={{
           ...emptyTestValues(false),
-          subnet: { id: 'subnet-1', name: 'subnet-a' },
-          securityGroups: [{ id: 'sg-1', name: 'sg-web' }],
+          spec: {
+            ...emptyTestValues(false).spec,
+            networkAttachment: provisioningFieldValue({
+              ...emptyTestValues(false).spec.networkAttachment.value,
+              subnet: { id: 'subnet-1', name: 'subnet-a' },
+              securityGroups: [{ id: 'sg-1', name: 'sg-web' }],
+            }),
+          },
         }}
         onSubmit={() => undefined}
       >
-        <NetworkAttachmentFields
-          useDefaultNetworkName="useDefaultNetwork"
-          virtualNetworkName="virtualNetwork"
-          subnetName="subnet"
-          securityGroupsName="securityGroups"
-          autoExternalIpName="autoExternalIp"
-          fieldIdPrefix="test"
+        <NetworkFields
+          networkAttachmentName="spec.networkAttachment"
+          externalIpAttachmentName="spec.autoExternalIpAttachment"
         />
       </Formik>,
       {
@@ -196,8 +196,10 @@ describe('NetworkAttachmentFields', () => {
       },
     );
 
-    await waitFor(() => expect(getResourceSelectInput(/^Virtual network/)).toHaveValue('vn-prod'));
-    await waitFor(() => expect(getResourceSelectInput(/^Subnet/)).toHaveValue('subnet-a'));
+    await waitFor(() =>
+      expect(screen.getByLabelText(/^Virtual network/)).toHaveTextContent('vn-prod'),
+    );
+    await waitFor(() => expect(screen.getByLabelText(/^Subnet/)).toHaveTextContent('subnet-a'));
   });
 
   it('shows a load error with retry when catalog subnet lookup fails', async () => {
@@ -205,17 +207,19 @@ describe('NetworkAttachmentFields', () => {
       <Formik
         initialValues={{
           ...emptyTestValues(false),
-          subnet: { id: 'subnet-1', name: 'subnet-a' },
+          spec: {
+            ...emptyTestValues(false).spec,
+            networkAttachment: provisioningFieldValue({
+              ...emptyTestValues(false).spec.networkAttachment.value,
+              subnet: { id: 'subnet-1', name: 'subnet-a' },
+            }),
+          },
         }}
         onSubmit={() => undefined}
       >
-        <NetworkAttachmentFields
-          useDefaultNetworkName="useDefaultNetwork"
-          virtualNetworkName="virtualNetwork"
-          subnetName="subnet"
-          securityGroupsName="securityGroups"
-          autoExternalIpName="autoExternalIp"
-          fieldIdPrefix="test"
+        <NetworkFields
+          networkAttachmentName="spec.networkAttachment"
+          externalIpAttachmentName="spec.autoExternalIpAttachment"
         />
       </Formik>,
       {

@@ -3,9 +3,9 @@ import { Content, Stack, StackItem, Title } from '@patternfly/react-core';
 import { useTranslation } from '../../../../hooks/useTranslation';
 import OsacForm from '../../../Form/OsacForm';
 import { StorageTierSelectField } from '../../../Form/StorageTierSelectField';
-import BootDiskSizeField from '../../../ProvisioningWizard/fields/BootDiskSizeField';
 import ProvisioningFieldGroup from '../../../ProvisioningWizard/fields/ProvisioningFieldGroup';
 import { AdditionalDisksArrayField } from '../../../vm/CreateWizard/AdditionalDisksArrayField';
+import BootDiskSizeField from '../../../vm/CreateWizard/fields/BootDiskSizeField';
 import CatalogField from '../CatalogField';
 
 const ComputeCatalogStorageStep = () => {

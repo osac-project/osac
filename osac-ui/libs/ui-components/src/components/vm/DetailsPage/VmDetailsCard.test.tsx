@@ -14,7 +14,7 @@ import {
 import VmDetailsCard from './VmDetailsCard';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
-const catalogVm: ComputeInstance = {
+const catalogVm = {
   $typeName: 'osac.public.v1.ComputeInstance',
   id: 'vm-1',
   metadata: {
@@ -54,7 +54,7 @@ const catalogVm: ComputeInstance = {
     templateParameters: {},
     autoExternalIpAttachment: false,
   },
-};
+} satisfies ComputeInstance;
 
 const renderCard = (vm: ComputeInstance = catalogVm) =>
   renderWithProviders(<VmDetailsCard vm={vm} />);
@@ -90,6 +90,32 @@ describe('VmDetailsCard', () => {
     expect(screen.getByText('legacy-vm')).toBeInTheDocument();
     expect(screen.getByText('legacy-key')).toBeInTheDocument();
     expect(screen.getByText('SSH public key')).toBeInTheDocument();
+  });
+
+  it('shows the resolved username for a UUID creator', () => {
+    const creatorId = '08c318fc-b83f-4c37-9d2f-2e4854a2db34';
+    renderCard({
+      ...catalogVm,
+      metadata: {
+        ...catalogVm.metadata,
+        creator: creatorId,
+        annotations: { 'osac.openshift.io/creator-username': 'alice' },
+      },
+    });
+
+    expect(screen.getByText('alice')).toBeInTheDocument();
+    expect(screen.queryByText(creatorId)).not.toBeInTheDocument();
+  });
+
+  it('uses a readable fallback when a UUID creator has no matching user', () => {
+    const creatorId = '08c318fc-b83f-4c37-9d2f-2e4854a2db34';
+    renderCard({
+      ...catalogVm,
+      metadata: { ...catalogVm.metadata, creator: creatorId },
+    });
+
+    expect(screen.getByText('Unknown user')).toBeInTheDocument();
+    expect(screen.queryByText(creatorId)).not.toBeInTheDocument();
   });
 
   it('lists each additional disk with its resolved tier and exposes no edit control', () => {

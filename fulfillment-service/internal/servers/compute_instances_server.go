@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -45,8 +46,15 @@ type ComputeInstancesServer struct {
 
 	logger    *slog.Logger
 	delegate  privatev1.ComputeInstancesServer
+	users     privatev1.UsersServer
 	inMapper  *GenericMapper[*publicv1.ComputeInstance, *privatev1.ComputeInstance]
 	outMapper *GenericMapper[*privatev1.ComputeInstance, *publicv1.ComputeInstance]
+}
+
+const creatorUsernameAnnotation = "osac.openshift.io/creator-username"
+
+func stripCreatorUsername(annotations map[string]string) {
+	delete(annotations, creatorUsernameAnnotation)
 }
 
 func NewComputeInstancesServer() *ComputeInstancesServerBuilder {
@@ -130,11 +138,21 @@ func (b *ComputeInstancesServerBuilder) Build() (result *ComputeInstancesServer,
 	if err != nil {
 		return
 	}
+	users, err := NewPrivateUsersServer().
+		SetLogger(b.logger).
+		SetAttributionLogic(b.attributionLogic).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
 
 	// Create and populate the object:
 	result = &ComputeInstancesServer{
 		logger:    b.logger,
 		delegate:  delegate,
+		users:     users,
 		inMapper:  inMapper,
 		outMapper: outMapper,
 	}
@@ -171,6 +189,7 @@ func (s *ComputeInstancesServer) List(ctx context.Context,
 			)
 			return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process compute instances")
 		}
+		stripCreatorUsername(publicItem.GetMetadata().GetAnnotations())
 		publicItems[i] = publicItem
 	}
 
@@ -206,11 +225,55 @@ func (s *ComputeInstancesServer) Get(ctx context.Context,
 		)
 		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process compute instance")
 	}
+	s.projectCreatorUsername(ctx, publicComputeInstance)
 
 	// Create the public response:
 	response = &publicv1.ComputeInstancesGetResponse{}
 	response.SetObject(publicComputeInstance)
 	return
+}
+
+// projectCreatorUsername adds a display-only annotation to a public Get response.
+// Creator remains the stable user identifier, and stored annotations are never trusted.
+func (s *ComputeInstancesServer) projectCreatorUsername(ctx context.Context, instance *publicv1.ComputeInstance) {
+	metadata := instance.GetMetadata()
+	if metadata == nil {
+		return
+	}
+	annotations := metadata.GetAnnotations()
+	stripCreatorUsername(annotations)
+	creator := metadata.GetCreator()
+	if _, err := uuid.Parse(creator); err != nil {
+		return
+	}
+
+	username := s.lookupCreatorUsername(ctx, creator, metadata.GetTenant())
+	if username == "" {
+		return
+	}
+	if annotations == nil {
+		annotations = make(map[string]string)
+		metadata.SetAnnotations(annotations)
+	}
+	annotations[creatorUsernameAnnotation] = username
+}
+
+func (s *ComputeInstancesServer) lookupCreatorUsername(ctx context.Context, creator, tenant string) string {
+	if tenant == "" {
+		return ""
+	}
+	response, err := s.users.Get(ctx, &privatev1.UsersGetRequest{Id: creator})
+	if err != nil || response == nil {
+		return ""
+	}
+	user := response.GetObject()
+	if user == nil {
+		return ""
+	}
+	if user.GetMetadata().GetTenant() != tenant {
+		return ""
+	}
+	return user.GetSpec().GetUsername()
 }
 
 func (s *ComputeInstancesServer) Create(ctx context.Context,
@@ -232,6 +295,7 @@ func (s *ComputeInstancesServer) Create(ctx context.Context,
 		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process compute instance")
 		return
 	}
+	stripCreatorUsername(privateComputeInstance.GetMetadata().GetAnnotations())
 	// The status is output-only: only the system writes it. The metering source contract
 	// is not enforced on inserts, so a caller-supplied status must never reach the
 	// database as a fabricated fact.
@@ -258,6 +322,7 @@ func (s *ComputeInstancesServer) Create(ctx context.Context,
 		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process compute instance")
 		return
 	}
+	stripCreatorUsername(createdPublicComputeInstance.GetMetadata().GetAnnotations())
 
 	// Create the public response:
 	response = &publicv1.ComputeInstancesCreateResponse{}
@@ -332,6 +397,7 @@ func (s *ComputeInstancesServer) Update(ctx context.Context,
 		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process compute instance")
 		return
 	}
+	stripCreatorUsername(privateComputeInstance.GetMetadata().GetAnnotations())
 	// The public API has no writable status, and the mapper copies the fields the request
 	// carries. Always restore the stored status, including when the request supplies one:
 	// a maskless update carrying a status must not change output-only fields, and a
@@ -362,6 +428,7 @@ func (s *ComputeInstancesServer) Update(ctx context.Context,
 		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process compute instance")
 		return
 	}
+	stripCreatorUsername(updatedPublicComputeInstance.GetMetadata().GetAnnotations())
 
 	// Create the public response:
 	response = &publicv1.ComputeInstancesUpdateResponse{}

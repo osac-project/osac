@@ -166,6 +166,15 @@ The `Metadata` message is shared by all object types and contains the following 
 
 The private API adds a `finalizers` field (`repeated string`) that is not exposed in the public API.
 
+Public ComputeInstances `Get` responses may include the response-only
+`osac.openshift.io/creator-username` annotation. The server resolves it from the
+user identified by `metadata.creator` only when that user belongs to the same
+tenant as the ComputeInstance. It removes any stored value for this key before
+resolving, and omits the annotation when the user is missing or outside the
+tenant. Create and Update strip caller-supplied values before persistence;
+List, Create, and Update responses omit the annotation. `metadata.creator`
+remains the stable user identifier.
+
 ### Resource names
 
 Every object must have a `metadata.name`. The name is **mandatory** at creation time, **immutable**

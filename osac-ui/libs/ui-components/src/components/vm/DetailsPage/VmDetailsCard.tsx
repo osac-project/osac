@@ -19,10 +19,17 @@ interface Props {
   vm: ComputeInstance;
 }
 
+const CREATOR_USERNAME_ANNOTATION = 'osac.openshift.io/creator-username';
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const VmDetailsCard = ({ vm }: Props) => {
   const { t } = useTranslation();
   const catalogItem = vm.spec?.catalogItem;
   const instanceType = vm.spec?.instanceType;
+  const creator = vm.metadata?.creator;
+  const creatorName = vm.metadata?.annotations?.[CREATOR_USERNAME_ANNOTATION];
+  const creatorDisplay =
+    creatorName || (creator && UUID_PATTERN.test(creator) ? t('Unknown user') : creator);
 
   return (
     <Card isFullHeight>
@@ -81,9 +88,7 @@ const VmDetailsCard = ({ vm }: Props) => {
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Creator')}</DescriptionListTerm>
-            <DescriptionListDescription>
-              {displayValue(vm.metadata?.creator)}
-            </DescriptionListDescription>
+            <DescriptionListDescription>{displayValue(creatorDisplay)}</DescriptionListDescription>
           </DescriptionListGroup>
         </DescriptionList>
       </CardBody>

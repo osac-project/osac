@@ -80,15 +80,14 @@ message StorageBackendSpec {
   };
 
   // Provider routing key. New StorageBackends may use "vast", "netapp", or
-  // "pure" (Pure FlashArray/FlashBlade). The legacy "ontap" alias remains
-  // accepted, and "lvms" is reserved for deployment-managed local storage.
-  // The "netapp" provider requires cspManaged=true.
+  // "pure" (Pure FlashArray/FlashBlade), or "lvms" for deployment-managed
+  // local storage. The "netapp" provider requires cspManaged=true.
   //
   // This value is immutable once the StorageBackend is created.
   string provider = 1 [
     (buf.validate.field).string = {
       min_len: 1,
-      in: ["vast", "netapp", "pure", "ontap", "lvms"]
+      in: ["vast", "netapp", "pure", "lvms"]
     },
     (storage_backend_provider_options) = {
       choices: { key: "vast" display_name: "VAST Data" }

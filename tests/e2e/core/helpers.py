@@ -69,6 +69,29 @@ _WORKER_INSTALL_DELAY = 10
 _WORKER_AGGREGATE_RETRIES = 120
 _WORKER_AGGREGATE_DELAY = 10
 
+_TRANSIENT_KUBECTL_PATTERNS: tuple[str, ...] = (
+    "was refused",
+    "connection refused",
+    "i/o timeout",
+    "connection timed out",
+    "connection reset by peer",
+    "tls handshake timeout",
+    "client.timeout exceeded",
+    "context deadline exceeded",
+    "server is currently unable to handle the request",
+)
+"""Lowercase substrings that identify transient kubectl / API-server
+connectivity failures safe to retry.  Everything else -- invalid
+namespace, Forbidden, Unauthorized, unknown resource, etc. -- is
+treated as permanent and propagated immediately so the test fails
+fast with the original diagnostic."""
+
+
+def _is_transient_kubectl_error(exc: subprocess.CalledProcessError) -> bool:
+    """Return True only for known transient kubectl connectivity failures."""
+    combined = ((exc.stderr or "") + " " + (exc.stdout or "")).lower()
+    return any(p in combined for p in _TRANSIENT_KUBECTL_PATTERNS)
+
 
 def unique_name(prefix: str) -> str:
     return f"{prefix}-{uuid4().hex[:8]}"
@@ -832,13 +855,26 @@ def _progressing_phase(cluster_order: dict[str, Any]) -> str:
 
 
 def wait_for_worker_aggregates(*, k8s: K8sClient, co_name: str, expected_workers: int) -> None:
-    """Report the ClusterOrder's phase and worker counts while the workers join."""
+    """Report the ClusterOrder's phase and worker counts while the workers join.
+
+    Permanent kubectl failures (invalid namespace, authorization,
+    unknown resource) propagate immediately instead of being hidden
+    behind a ~20-minute poll_until timeout.
+    """
     logger.info("CaaS phase: waiting for workers to join")
     previous = ""
 
     def _check() -> bool:
         nonlocal previous
-        cluster_order = k8s.get_json(resource="clusterorder", name=co_name)
+        try:
+            cluster_order = k8s.get_json(resource="clusterorder", name=co_name)
+        except subprocess.CalledProcessError as exc:
+            if _is_transient_kubectl_error(exc):
+                raise  # poll_until catches and retries
+            raise RuntimeError(
+                f"permanent kubectl failure (rc={exc.returncode}): "
+                f"{(exc.stderr or exc.stdout or '').strip()}"
+            ) from exc
         status = cluster_order.get("status", {})
         counts = tuple(int(status.get(key, -1)) for key in ("desiredWorkers", "currentWorkers", "readyWorkers"))
         observed = f"desired {counts[0]}, current {counts[1]}, ready {counts[2]} ({_progressing_phase(cluster_order)})"

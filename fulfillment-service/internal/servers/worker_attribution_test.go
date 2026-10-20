@@ -21,6 +21,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
@@ -216,10 +217,11 @@ var _ = Describe("Worker attribution", func() {
 
 		update := proto.Clone(worker).(*privatev1.BareMetalInstance)
 		update.GetStatus().SetState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING)
+		update.GetStatus().SetStateTransitionTime(timestamppb.Now())
 		updateResponse, err := privateServer.Update(ctx, privatev1.BareMetalInstancesUpdateRequest_builder{
 			Object: update,
 			UpdateMask: &fieldmaskpb.FieldMask{
-				Paths: []string{"status.state"},
+				Paths: []string{"status.state", "status.state_transition_time"},
 			},
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())

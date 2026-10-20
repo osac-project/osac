@@ -28,6 +28,7 @@ import "osac/private/v1/cluster_type.proto";
 import "osac/private/v1/condition_status_type.proto";
 import "osac/private/v1/disk_image_type.proto";
 import "osac/private/v1/metadata_type.proto";
+import "osac/private/v1/metering_type.proto";
 import "osac/private/v1/secret_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
@@ -42,7 +43,7 @@ message BareMetalInstance {
 
   Metadata metadata = 2;
   BareMetalInstanceSpec spec = 3;
-  BareMetalInstanceStatus status = 4;
+  BareMetalInstanceStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // The spec contains the details of a bare metal instance as desired by the user.
@@ -140,7 +141,7 @@ message BareMetalInstanceSpec {
   // Reference to the BareMetalInstanceType used for hardware placement.
   // If omitted from the create request, a catalog item or template may provide it.
   // The resolved reference is immutable after creation.
-  BareMetalInstanceTypeReference instance_type = 11 [(google.api.field_behavior) = IMMUTABLE];
+  BareMetalInstanceTypeReference instance_type = 11 [(google.api.field_behavior) = IMMUTABLE, (osac.private.v1.metering) = {kind: METERING_FIELD_KIND_CONSTANT}];
 
   // Reference to a DiskImage resource, selected by ID or name. The reference is immutable after creation.
   // Catalog items can provide a default when callers omit it. The reference must resolve to an image in the instance
@@ -158,7 +159,7 @@ message BareMetalInstanceSpec {
 // The status contains the details of the bare metal instance provided by the system.
 message BareMetalInstanceStatus {
   // Indicates the overall state of the bare metal instance.
-  BareMetalInstanceState state = 1;
+  BareMetalInstanceState state = 1 [(osac.private.v1.metering) = {kind: METERING_FIELD_KIND_VARIES transition_time: "status.state_transition_time"}];
 
   // Contains a list of conditions that describe in detail the status of the bare metal instance.
   repeated BareMetalInstanceCondition conditions = 2;
@@ -183,14 +184,14 @@ message BareMetalInstanceStatus {
   // suitable for billing interval calculations.
   //
   // This will be empty if no state transition has been reported yet.
-  optional google.protobuf.Timestamp state_transition_time = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
+  optional google.protobuf.Timestamp state_transition_time = 7;
 
   // The cluster that the system created this bare metal instance for, if any.
   //
   // For a cluster worker this names the cluster the worker serves for its whole life. Empty for
   // standalone instances. The system sets it once, at creation, and it never changes; users can't
   // set or change it.
-  ClusterLocalReference cluster = 8 [(google.api.field_behavior) = OUTPUT_ONLY];
+  ClusterLocalReference cluster = 8 [(osac.private.v1.metering) = {kind: METERING_FIELD_KIND_FIXED_ONCE_SET}];
 
   // The node set that the bare metal instance serves within its cluster. For a cluster worker
   // this is the identifier of the node set in the cluster's spec that the worker belongs to.
@@ -199,7 +200,7 @@ message BareMetalInstanceStatus {
       max_len: 63,
       pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
     },
-    (google.api.field_behavior) = OUTPUT_ONLY
+    (osac.private.v1.metering) = {kind: METERING_FIELD_KIND_FIXED_ONCE_SET}
   ];
 }
 

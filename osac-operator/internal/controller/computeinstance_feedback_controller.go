@@ -17,7 +17,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
+	"github.com/go-logr/logr"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -28,8 +30,6 @@ import (
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
-
-	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 
 	ckv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/internal/controller/feedback"
@@ -98,7 +98,7 @@ func newComputeInstanceFeedbackBridge(hubClient clnt.Client, ciClient privatev1.
 			_, err := ciClient.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
 				Object: remote,
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
-					feedbackStatusConditionsPath, feedbackStatusStatePath,
+					feedbackStatusConditionsPath, feedbackStatusStatePath, feedbackStatusStateTransitionTimePath,
 					"status.external_ip_address", "status.internal_ip_address",
 					"status.compute_network_attachment_statuses", "status.last_restarted_at",
 					"status.instance_type", "status.instance_type_transition_time",
@@ -127,7 +127,28 @@ func syncComputeInstanceUpdate(ctx context.Context, obj *ckv1alpha1.ComputeInsta
 }
 
 func syncComputeInstanceDelete(ctx context.Context, obj *ckv1alpha1.ComputeInstance, remote *privatev1.ComputeInstance) error {
-	return syncComputeInstanceUpdate(ctx, obj, remote)
+	if err := syncComputeInstanceUpdate(ctx, obj, remote); err != nil {
+		return err
+	}
+	// The CR may not have reached Phase=Deleting yet when feedback observes the deletion.
+	// Force the DELETING state so the billing stops and the transition is recorded, dated
+	// at the deletion rather than at the stale phase's transition time.
+	if remote.GetStatus().GetState() != privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING {
+		remote.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING)
+		remote.GetStatus().SetStateTransitionTime(
+			copyPhaseTransitionTime(ctrllog.FromContext(ctx), computeDeletionTransitionTime(obj), remote.GetStatus().GetStateTransitionTime()))
+	}
+	return nil
+}
+
+// computeDeletionTransitionTime returns the time to date a forced DELETING transition at: the CR's
+// deletion timestamp when present, else the observation time.
+func computeDeletionTransitionTime(obj *ckv1alpha1.ComputeInstance) *metav1.Time {
+	if !obj.GetDeletionTimestamp().IsZero() {
+		return &metav1.Time{Time: obj.GetDeletionTimestamp().Time}
+	}
+	now := metav1.Now()
+	return &now
 }
 
 func syncCIConditions(obj *ckv1alpha1.ComputeInstance, remote *privatev1.ComputeInstance) {
@@ -174,26 +195,70 @@ func mapCIConditionStatus(status metav1.ConditionStatus) privatev1.ConditionStat
 	}
 }
 
+// syncCIPhase maps the CR phase to the fulfillment state. The transition time is the CR's
+// recorded phase transition time (PhaseTransitionTime), not the moment feedback observed the
+// change: feedback can run long after the phase moved, and those hours belong to the state that
+// was actually current. The metering source contract rejects a state change whose
+// status.state_transition_time is not later than the stored one, so a CR stamp that is not
+// later than the stored time is bumped by one microsecond (see copyPhaseTransitionTime). An
+// unchanged state keeps the stored time. A CR that predates PhaseTransitionTime carries none;
+// feedback then falls back to its own observation time so the change is still stamped later
+// than the stored one.
 func syncCIPhase(ctx context.Context, obj *ckv1alpha1.ComputeInstance, remote *privatev1.ComputeInstance) {
+	var state privatev1.ComputeInstanceState
 	switch obj.Status.Phase {
 	case ckv1alpha1.ComputeInstancePhaseStarting:
-		remote.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING)
+		state = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING
 	case ckv1alpha1.ComputeInstancePhaseFailed:
-		remote.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED)
+		state = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED
 	case ckv1alpha1.ComputeInstancePhaseRunning:
-		remote.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+		state = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING
 	case ckv1alpha1.ComputeInstancePhaseDeleting:
-		remote.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING)
+		state = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING
 	case ckv1alpha1.ComputeInstancePhaseStopping:
-		remote.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPING)
+		state = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPING
 	case ckv1alpha1.ComputeInstancePhaseStopped:
-		remote.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED)
+		state = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED
 	case ckv1alpha1.ComputeInstancePhasePaused:
-		remote.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_PAUSED)
+		state = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_PAUSED
 	default:
 		log := ctrllog.FromContext(ctx)
 		log.Info("Unknown phase, will ignore it", "phase", obj.Status.Phase)
+		return
 	}
+	if remote.GetStatus().GetState() != state {
+		remote.GetStatus().SetStateTransitionTime(copyPhaseTransitionTime(
+			ctrllog.FromContext(ctx), obj.Status.PhaseTransitionTime, remote.GetStatus().GetStateTransitionTime()))
+	}
+	remote.GetStatus().SetState(state)
+}
+
+// phaseTransitionTime returns the CR's recorded phase transition time, falling back to the
+// current time when the CR carries none (created before the field existed and not yet
+// re-stamped by a phase change).
+func phaseTransitionTime(since *metav1.Time) *timestamppb.Timestamp {
+	if since == nil || since.IsZero() {
+		return timestamppb.Now()
+	}
+	return timestamppb.New(since.Time)
+}
+
+// copyPhaseTransitionTime copies the CR's recorded phase transition time into the fulfillment
+// status. The CR stores whole seconds, so two phase changes within one second carry the same
+// stamp, and the metering source contract rejects a changed value whose time is not later than
+// the stored one: the write would fail and retry forever, because the CR stamp never moves.
+// When the CR stamp is not later than the stored time, the copied time becomes the stored time
+// plus one microsecond instead. A CR stamp earlier than the stored one should not happen (the
+// controller stamps monotonically); the same bump guards it without backdating. The distortion
+// is bounded by one second, unlike the backdating the contract rejects.
+func copyPhaseTransitionTime(log logr.Logger, since *metav1.Time, stored *timestamppb.Timestamp) *timestamppb.Timestamp {
+	copied := phaseTransitionTime(since)
+	if stored == nil || copied.AsTime().After(stored.AsTime()) {
+		return copied
+	}
+	log.Info("phase transition time is not later than the stored one, bumping it by one microsecond",
+		"phaseTransitionTime", copied.AsTime(), "storedTransitionTime", stored.AsTime())
+	return timestamppb.New(stored.AsTime().Add(time.Microsecond))
 }
 
 func findComputeInstanceCondition(remote *privatev1.ComputeInstance, kind privatev1.ComputeInstanceConditionType) *privatev1.ComputeInstanceCondition {
@@ -234,12 +299,10 @@ func syncCILastRestartedAt(obj *ckv1alpha1.ComputeInstance, remote *privatev1.Co
 // it changes as soon as a resize is requested, while the VM keeps running the old type until any
 // restart the resize requires has completed.
 //
-// The CR's osac.openshift.io/instance-type-name label names the type its spec was last reconciled
-// toward; the stamp only moves once that label names the requested type, so a requested resize
-// that the reconciler has not applied yet cannot be billed as running. The CR reports the resize
-// complete when the instance is Running, the provisioning job that applies the new configuration
-// has finished (ConfigurationApplied), and KubeVirt no longer reports a pending restart
-// (RestartRequired). Until then the previous stamp is left untouched.
+// The gate is crConfirmsRunningType, the same predicate recordRunningConfig establishes: the
+// instance-type label names the requested type, the recorded running-config observation names
+// it too, and the RestartRequired condition is explicitly false. Until all three hold, the
+// previous stamp is left untouched.
 //
 // The transition time is the CR's recorded observation of the running configuration changing
 // (RunningConfigSince), not the time of this reconciliation: feedback can run long after the
@@ -249,13 +312,10 @@ func syncCIRunningInstanceType(obj *ckv1alpha1.ComputeInstance, remote *privatev
 	if requested == nil {
 		return
 	}
-	if obj.Labels[osacComputeInstanceTypeNameLabel] != requested.GetName() {
-		return
-	}
 	if sameInstanceTypeRef(remote.GetStatus().GetInstanceType(), requested) {
 		return
 	}
-	if !ciRunningWithAppliedConfig(obj) {
+	if !crConfirmsRunningType(obj, requested.GetName()) {
 		return
 	}
 	since := obj.Status.RunningConfigSince
@@ -280,41 +340,4 @@ func sameInstanceTypeRef(a, b *privatev1.InstanceTypeReference) bool {
 		return a.GetId() == b.GetId()
 	}
 	return a.GetName() != "" && a.GetName() == b.GetName()
-}
-
-// ciRunningWithAppliedConfig reports whether the CR confirms the instance is running with the
-// configuration currently in its spec: the status was computed for that spec, the phase is
-// Running, the configuration has been applied, and no restart is pending that would still be
-// required to realize it.
-//
-// The desiredConfigVersion check is the freshness gate: status.desiredConfigVersion is the hash
-// of the spec the CR controller last reconciled, and the conditions describe that spec. Right
-// after the reconciler patches a resized spec, the stored version still names the old one, so
-// the conditions cannot yet vouch for the new spec and the stamp waits.
-func ciRunningWithAppliedConfig(obj *ckv1alpha1.ComputeInstance) bool {
-	if obj.Status.Phase != ckv1alpha1.ComputeInstancePhaseRunning {
-		return false
-	}
-	version, err := provisioning.ComputeDesiredConfigVersion(obj.Spec)
-	if err != nil || version != obj.Status.DesiredConfigVersion {
-		return false
-	}
-	// The recorded observation must be of this spec as well, so the time sent downstream is
-	// the moment this configuration was observed running.
-	if obj.Status.RunningConfigVersion != version {
-		return false
-	}
-	applied := false
-	for _, condition := range obj.Status.Conditions {
-		switch condition.Type {
-		case string(ckv1alpha1.ComputeInstanceConditionConfigurationApplied):
-			// The condition must exist and be true: a missing condition vouches for nothing.
-			applied = condition.Status == metav1.ConditionTrue
-		case string(ckv1alpha1.ComputeInstanceConditionRestartRequired):
-			if condition.Status == metav1.ConditionTrue {
-				return false
-			}
-		}
-	}
-	return applied
 }

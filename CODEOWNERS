@@ -14,6 +14,7 @@
 # Protects this file from unauthorized modification
 /CODEOWNERS @osac-project/wg-infra
 /osac-ui/ @LiorSoffer @batzionb @rawagner @ElayAharoni
+/bare-metal-fulfillment-operator/ @osac-project/wg-bmaas
 
 # CI pipeline definition
 # A pull request can change the workflows and scripts that produce the checks it is judged by, and then a passing

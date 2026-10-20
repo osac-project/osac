@@ -617,6 +617,7 @@ func (t *tool) checkObjectTable(ctx context.Context, pool *pgxpool.Pool, table s
 	issues += t.checkTableExists(ctx, pool, "archived_"+table)
 	issues += t.checkEnqueueChangeTrigger(ctx, pool, table)
 	issues += t.checkOwnerReferenceTriggers(ctx, pool, table)
+	issues += t.checkMeteringTriggers(ctx, pool, table)
 	return issues
 }
 
@@ -803,6 +804,27 @@ func (t *tool) checkOwnerReferenceTriggers(ctx context.Context, pool *pgxpool.Po
 		}
 	}
 	return issues
+}
+
+// checkMeteringTriggers verifies that the tables of the resources with metering-tracked fields
+// have the source-contract trigger. A table only participates when the proto annotations of its
+// resource track fields, which must be extended together with the table mapping in metering.go
+// and the tracked-field mapping in the migration that installs the trigger; CheckSchema then
+// fails the table until a migration attaches it. Returns the number of issues found.
+func (t *tool) checkMeteringTriggers(ctx context.Context, pool *pgxpool.Pool, table string) int {
+	fields, err := meteringTableFields()
+	if err != nil {
+		t.logger.ErrorContext(
+			ctx,
+			"Failed to load the metering-tracked fields",
+			slog.Any("error", err),
+		)
+		return 1
+	}
+	if _, tracked := fields[table]; !tracked {
+		return 0
+	}
+	return t.checkTriggerExists(ctx, pool, table, meteringTriggerName)
 }
 
 // checkTriggerExists verifies that the given object table has a trigger with the given name.
@@ -995,6 +1017,9 @@ const (
 	ownerReferenceTriggerName         = "check_owner_reference"
 	ownerReferenceNotInUseTriggerName = "check_owner_reference_not_in_use"
 )
+
+// meteringTriggerName is the trigger that enforces the metering source contract.
+const meteringTriggerName = "enforce_metering_fields"
 
 // ownerReferences maps each object table that records an owner reference in its status to the
 // table holding the referenced resource. Extend together with the table and JSON-path mapping

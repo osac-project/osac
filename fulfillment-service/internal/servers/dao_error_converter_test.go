@@ -162,6 +162,24 @@ var _ = Describe("ConvertDAOErrorToGRPC", func() {
 		})
 	})
 
+	Context("with metering source contract errors", func() {
+		It("converts to FailedPrecondition", func() {
+			err := &dao.ErrMetering{
+				Reason: "cannot change spec.disk_image of compute_instances 'abc': it never changes after it is set",
+			}
+			result := ConvertDAOErrorToGRPC(err, "update", "test-id")
+			Expect(grpcstatus.Code(result)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(result.Error()).To(ContainSubstring("never changes"))
+		})
+
+		It("converts an empty reason to the contract description", func() {
+			err := &dao.ErrMetering{}
+			result := ConvertDAOErrorToGRPC(err, "update", "test-id")
+			Expect(grpcstatus.Code(result)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(result.Error()).To(ContainSubstring("metering source contract"))
+		})
+	})
+
 	Context("with Validation errors", func() {
 		It("converts to InvalidArgument", func() {
 			err := &dao.ErrValidation{Reason: "invalid CIDR"}

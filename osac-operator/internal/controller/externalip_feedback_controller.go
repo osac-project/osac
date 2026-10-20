@@ -154,7 +154,10 @@ func syncExternalIPState(ctx context.Context, obj *v1alpha1.ExternalIP, remote *
 }
 
 func syncExternalIPAddress(obj *v1alpha1.ExternalIP, remote *privatev1.ExternalIP) {
-	if obj.Status.Address != "" {
+	// The controller writes a placeholder address when network provisioning is disabled, and
+	// fulfillment's address is set once. Copying the placeholder would block the real address
+	// forever, so fulfillment keeps no address until a real one exists.
+	if obj.Status.Address != "" && obj.Status.Address != externalIPNoProvisioningAddress {
 		remote.GetStatus().SetAddress(obj.Status.Address)
 	}
 }

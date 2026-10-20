@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -183,9 +184,10 @@ var _ = Describe("Public external IPs server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			object := getResp.GetObject()
 			object.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
+			object.GetStatus().SetStateTransitionTime(timestamppb.Now())
 			_, err = privateServer.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
 				Object:     object,
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state", "status.state_transition_time"}},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 

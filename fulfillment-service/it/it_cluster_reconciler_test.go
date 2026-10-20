@@ -25,6 +25,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 	corev1 "k8s.io/api/core/v1"
 	kubeerrors "k8s.io/apimachinery/pkg/api/errors"
@@ -527,6 +528,7 @@ var _ = Describe("Cluster reconciler", func() {
 			Expect(err).ToNot(HaveOccurred())
 			privateCluster := privateClusterResponse.GetObject()
 			privateCluster.GetStatus().SetState(privatev1.ClusterState_CLUSTER_STATE_READY)
+			privateCluster.GetStatus().SetStateTransitionTime(timestamppb.New(time.Now()))
 			_, err = privateClustersClient.Update(ctx, privatev1.ClustersUpdateRequest_builder{
 				Object: privateCluster,
 			}.Build())

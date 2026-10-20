@@ -27,6 +27,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -2313,11 +2314,12 @@ var _ = Describe("Private clusters server", func() {
 					Object: privatev1.Cluster_builder{
 						Id: object.GetId(),
 						Status: privatev1.ClusterStatus_builder{
-							State: state,
+							State:               state,
+							StateTransitionTime: timestamppb.Now(),
 						}.Build(),
 					}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{
-						Paths: []string{"status.state"},
+						Paths: []string{"status.state", "status.state_transition_time"},
 					},
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -2752,11 +2754,12 @@ var _ = Describe("Private clusters server", func() {
 					Object: privatev1.Cluster_builder{
 						Id: object.GetId(),
 						Status: privatev1.ClusterStatus_builder{
-							State: privatev1.ClusterState_CLUSTER_STATE_READY,
+							State:               privatev1.ClusterState_CLUSTER_STATE_READY,
+							StateTransitionTime: timestamppb.Now(),
 						}.Build(),
 					}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{
-						Paths: []string{"status.state"},
+						Paths: []string{"status.state", "status.state_transition_time"},
 					},
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -4503,6 +4506,51 @@ var _ = Describe("Private clusters server", func() {
 				again := updateVersion(updated.GetId(), "4-18-0")
 
 				Expect(again.GetStatus().GetVersionTransitionTime().AsTime()).To(Equal(stamp.AsTime()))
+			})
+
+			// createClusterWithIdOnlyVersion inserts a cluster whose stored version reference
+			// carries the id but not the name, the legacy shape that predates the enrichment
+			// always writing {id, name}. Inserts bypass the metering source contract.
+			createClusterWithIdOnlyVersion := func() *privatev1.Cluster {
+				clustersDao, err := dao.NewGenericDAO[*privatev1.Cluster]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				response, err := clustersDao.Create().SetObject(privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{Name: "test-cluster", Tenant: testTenant}.Build(),
+					Spec: privatev1.ClusterSpec_builder{
+						Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+						Version:  privatev1.ClusterVersionReference_builder{Id: "cv-default"}.Build(),
+					}.Build(),
+					Status: privatev1.ClusterStatus_builder{Hub: "my-hub-id"}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				return response.GetObject()
+			}
+
+			It("Is not stamped when enrichment only fills the name into an id-only stored reference", func() {
+				object := createClusterWithIdOnlyVersion()
+
+				updated := updateVersion(object.GetId(), "4-17-0")
+
+				// The requested version resolves to the same id, so the stored reference is
+				// kept as-is, no transition is stamped, and billing is not split.
+				Expect(updated.GetSpec().GetVersion().GetId()).To(Equal("cv-default"))
+				Expect(updated.GetStatus().GetVersionTransitionTime()).To(BeNil())
+			})
+
+			It("Is stamped when the version really changes after an enrichment-only update", func() {
+				object := createClusterWithIdOnlyVersion()
+				enriched := updateVersion(object.GetId(), "4-17-0")
+				Expect(enriched.GetStatus().GetVersionTransitionTime()).To(BeNil())
+
+				seedNextVersion()
+				changed := updateVersion(enriched.GetId(), "4-18-0")
+
+				Expect(changed.GetSpec().GetVersion().GetName()).To(Equal("4-18-0"))
+				Expect(changed.GetSpec().GetVersion().GetId()).To(Equal("cv-next"))
+				Expect(changed.GetStatus().GetVersionTransitionTime()).ToNot(BeNil())
 			})
 
 			It("Is preserved by updates that do not change the version", func() {

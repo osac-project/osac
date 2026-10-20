@@ -324,6 +324,53 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 			Expect(latestProvisionJob.State).To(Equal(osacv1alpha1.JobStateFailed))
 			Expect(instance.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseFailed))
 		})
+
+		It("stamps the phase transition time once per phase change", func() {
+			instanceName := "test-phase-transition-time"
+			instance := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: testNamespace,
+					Annotations: map[string]string{
+						osacTenantKey: "test-tenant",
+					},
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			DeferCleanup(k8sClient.Delete, ctx, instance)
+
+			// A phase set before PhaseTransitionTime existed carries no stamp.
+			instance.Status.Phase = osacv1alpha1.ComputeInstancePhaseStarting
+			instance.Status.DesiredConfigVersion = testDesiredConfigVersion
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+
+			// Trigger the job, then fail it: the controller moves the phase to Failed and
+			// stamps the transition time.
+			_, err := reconciler.handleProvisioning(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: testNamespace}, instance)).To(Succeed())
+			provider.setProvisionJobState(osacv1alpha1.JobStateFailed, "Provisioning failed")
+
+			_, err = reconciler.handleProvisioning(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: testNamespace}, instance)).To(Succeed())
+			Expect(instance.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseFailed))
+			Expect(instance.Status.PhaseTransitionTime).NotTo(BeNil())
+			stamp := instance.Status.PhaseTransitionTime.Time
+
+			// The phase is unchanged on the next pass, so the stamp is kept.
+			_, err = reconciler.handleProvisioning(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: testNamespace}, instance)).To(Succeed())
+			Expect(instance.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseFailed))
+			Expect(instance.Status.PhaseTransitionTime.Time).To(Equal(stamp))
+		})
 	})
 
 	Context("Deprovisioning workflow", func() {

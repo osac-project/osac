@@ -274,6 +274,16 @@ type ComputeInstanceStatus struct {
 	// +kubebuilder:validation:Enum=Starting;Running;Failed;Deleting;Stopping;Stopped;Paused
 	Phase ComputeInstancePhaseType `json:"phase,omitempty"`
 
+	// PhaseTransitionTime records when the controller last changed Phase. It moves only
+	// when Phase changes, so metering can bill state changes from the moment they happened
+	// rather than from when feedback noticed them: during a fulfillment outage every
+	// transition would otherwise be dated at recovery. It follows the RunningConfigSince
+	// pattern: stamped once per phase change, kept when unchanged.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Format=date-time
+	PhaseTransitionTime *metav1.Time `json:"phaseTransitionTime,omitempty"`
+
 	// Conditions holds an array of metav1.Condition that describe the state of the ComputeInstance
 	// +kubebuilder:validation:Optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
@@ -306,6 +316,14 @@ type ComputeInstanceStatus struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
 	RunningConfigVersion string `json:"runningConfigVersion,omitempty"`
+
+	// RunningInstanceTypeName is the instance type name that was current when
+	// RunningConfigVersion was recorded. It is part of the running-config identity:
+	// the config version hashes the resolved resources, so two types with identical
+	// cores and memory hash to the same version, and a resize between them must still
+	// move RunningConfigSince.
+	// +kubebuilder:validation:Optional
+	RunningInstanceTypeName string `json:"runningInstanceTypeName,omitempty"`
 
 	// RunningConfigSince records when the controller observed the configuration named
 	// by RunningConfigVersion running. It moves only when RunningConfigVersion changes,

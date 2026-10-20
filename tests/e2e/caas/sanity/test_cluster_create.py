@@ -742,9 +742,47 @@ def _assert_two_node_set_requests(
     return expected_replicas
 
 
+_TRANSIENT_KUBECTL_PATTERNS: tuple[str, ...] = (
+    "was refused",
+    "connection refused",
+    "i/o timeout",
+    "connection timed out",
+    "connection reset by peer",
+    "tls handshake timeout",
+    "client.timeout exceeded",
+    "context deadline exceeded",
+    "server is currently unable to handle the request",
+)
+"""Lowercase substrings that identify transient kubectl / API-server
+connectivity failures safe to retry.  Everything else -- invalid
+namespace, Forbidden, Unauthorized, unknown resource, etc. -- is
+treated as permanent and propagated immediately so the test fails
+fast with the original diagnostic."""
+
+
+def _is_transient_kubectl_error(exc: subprocess.CalledProcessError) -> bool:
+    """Return True only for known transient kubectl connectivity failures."""
+    combined = ((exc.stderr or "") + " " + (exc.stdout or "")).lower()
+    return any(p in combined for p in _TRANSIENT_KUBECTL_PATTERNS)
+
+
 def _assert_worker_aggregates(*, k8s: K8sClient, co_name: str, expected_workers: int) -> None:
+    """Poll worker aggregates, retrying only transient API errors.
+
+    Permanent kubectl failures (invalid namespace, authorization,
+    unknown resource) propagate immediately instead of being hidden
+    behind a ~20-minute poll_until timeout.
+    """
+
     def _get_worker_counts() -> tuple[int, int, int]:
-        status = k8s.get_json(resource="clusterorder", name=co_name).get("status", {})
+        try:
+            status = k8s.get_json(resource="clusterorder", name=co_name).get("status", {})
+        except subprocess.CalledProcessError as exc:
+            if _is_transient_kubectl_error(exc):
+                raise  # poll_until catches and retries
+            raise RuntimeError(
+                f"permanent kubectl failure (rc={exc.returncode}): {(exc.stderr or exc.stdout or '').strip()}"
+            ) from exc
         return tuple(int(status.get(key, -1)) for key in ("desiredWorkers", "currentWorkers", "readyWorkers"))
 
     poll_until(
@@ -752,7 +790,7 @@ def _assert_worker_aggregates(*, k8s: K8sClient, co_name: str, expected_workers:
         until=lambda value: value == (expected_workers, expected_workers, expected_workers),
         retries=120,
         delay=10,
-        description=f"{co_name} worker aggregates before NodePool isolation check",
+        description=(f"{co_name} worker aggregates before NodePool isolation check"),
         retry_on_error=True,
     )
 

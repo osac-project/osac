@@ -47,7 +47,7 @@ export const ClustersTable = ({ clusters }: ClustersTableProps) => {
       <Thead>
         <Tr>
           <Th>{t('Name')}</Th>
-          <Th>{t('State')}</Th>
+          <Th>{t('Status')}</Th>
           <Th>{t('Version')}</Th>
           <Th>{t('API URL')}</Th>
           <Th>{t('Created')}</Th>
@@ -71,7 +71,7 @@ export const ClustersTable = ({ clusters }: ClustersTableProps) => {
                   detailsUrl={locked ? undefined : `/clusters/${encodeURIComponent(cluster.id)}`}
                 />
               </Td>
-              <Td dataLabel={t('State')}>
+              <Td dataLabel={t('Status')}>
                 <ClusterStatusLabel status={cluster.status} activityInLabel />
               </Td>
               <Td dataLabel={t('Version')}>

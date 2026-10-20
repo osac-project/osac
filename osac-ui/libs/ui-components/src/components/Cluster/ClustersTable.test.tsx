@@ -78,16 +78,16 @@ const renderTable = (clusters: Cluster[], versions: ClusterVersion[] = clusterVe
   };
 };
 
-describe('ClustersTable State and activity', () => {
-  it('shows State and activity in one table label', () => {
+describe('ClustersTable Status and activity', () => {
+  it('shows Status and activity in one table label', () => {
     renderTable([makeCluster('c-progress', '', progressing('WorkersJoining'))]);
 
-    expect(screen.getByRole('columnheader', { name: 'State' })).toBeInTheDocument();
-    expect(screen.queryByRole('columnheader', { name: 'Status' })).not.toBeInTheDocument();
-    const stateCell = screen
+    expect(screen.getByRole('columnheader', { name: 'Status' })).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'State' })).not.toBeInTheDocument();
+    const statusCell = screen
       .getByText('Provisioning - WorkersJoining')
-      .closest('[data-label="State"]');
-    expect(stateCell?.querySelectorAll('.pf-v6-c-label')).toHaveLength(1);
+      .closest('[data-label="Status"]');
+    expect(statusCell?.querySelectorAll('.pf-v6-c-label')).toHaveLength(1);
   });
 
   it('marks a stalled provisioning stage as a warning', () => {
@@ -97,7 +97,7 @@ describe('ClustersTable State and activity', () => {
     expect(warning).toHaveTextContent('Provisioning - Stalled');
     expect(warning).toHaveClass('pf-m-orange');
     expect(
-      warning.closest('[data-label="State"]')?.querySelectorAll('.pf-v6-c-label'),
+      warning.closest('[data-label="Status"]')?.querySelectorAll('.pf-v6-c-label'),
     ).toHaveLength(1);
   });
 

@@ -90,7 +90,7 @@ describe('ClustersPage version join', () => {
     // Obsolete version resolves from the same single List call.
     expect(await screen.findByText('4.15.0')).toBeInTheDocument();
     expect(screen.getByText('4.17.0')).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: 'State' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Status' })).toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Lifecycle' })).not.toBeInTheDocument();
     expect(screen.queryByText('Obsolete')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Create cluster' })).toHaveAttribute(

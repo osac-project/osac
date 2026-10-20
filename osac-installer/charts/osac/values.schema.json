@@ -790,6 +790,35 @@
           ],
           "default": "openshift"
         },
+        "kafkaTopics": {
+          "type": "object",
+          "description": "Kafka topics created for each tenant: the server creates them synchronously at tenant creation and the onboarding controller corrects and heals them",
+          "properties": {
+            "hub": {
+              "type": "string",
+              "description": "Hub hosting the Strimzi Kafka cluster; empty disables topic creation and the operator must create the topics",
+              "default": "hub"
+            },
+            "namespace": {
+              "type": "string",
+              "description": "Namespace of the Strimzi Kafka cluster",
+              "default": "osac-kafka"
+            },
+            "clusterName": {
+              "type": "string",
+              "description": "Name of the Strimzi Kafka cluster",
+              "default": "osac-kafka"
+            },
+            "retentionMs": {
+              "type": "integer",
+              "description": "How long tenant topics keep records, in milliseconds; -1 keeps them indefinitely; 0 is invalid (it evicts records as soon as they land, it does not keep them indefinitely)",
+              "minimum": -1,
+              "not": {"const": 0},
+              "default": -1
+            }
+          },
+          "additionalProperties": false
+        },
         "images": {
           "type": "object",
           "properties": {
@@ -844,6 +873,11 @@
               "type": "boolean",
               "description": "Deploy the Kafka-backed event publisher (disable for API-only environments)",
               "default": true
+            },
+            "topicRetentionMs": {
+              "type": "string",
+              "description": "How long a tenant's event topic keeps records, in milliseconds; -1 keeps them indefinitely. Only applies to topics the publisher creates",
+              "default": "-1"
             }
           }
         },
@@ -1786,14 +1820,31 @@
           },
           "additionalProperties": false
         },
-        "reconciliation": {
+        "rules": {
           "type": "object",
-          "description": "Metering reconciliation configuration",
+          "description": "Metering rule revisions configuration",
           "properties": {
-            "interval": {
+            "namespace": {
               "type": "string",
-              "description": "Reconciliation interval (Go duration format)",
-              "default": "60m"
+              "description": "Namespace holding the rule revision ConfigMaps (defaults to the release namespace)",
+              "default": ""
+            }
+          },
+          "additionalProperties": false
+        },
+        "topics": {
+          "type": "object",
+          "description": "Per-tenant heartbeat and dead-letter topics metering creates when it first serves a tenant",
+          "properties": {
+            "retentionMs": {
+              "type": "string",
+              "description": "How long the topics keep records, in milliseconds; -1 keeps them indefinitely. The retention is the recovery window, because metering rebuilds its database from the topics",
+              "default": "-1"
+            },
+            "replicationFactor": {
+              "type": "integer",
+              "description": "Replication factor of the topics; -1 leaves the broker default in place",
+              "default": -1
             }
           },
           "additionalProperties": false
@@ -2262,12 +2313,12 @@
     },
     "hubAccess": {
       "type": "object",
-      "description": "Hub access SA, RBAC, and create-hub hook (CI/dev only)",
+      "description": "Hub access SA, RBAC, and create-hub hook: the identity the fulfillment service uses on the local hub, for example to create tenant Kafka topics",
       "properties": {
         "enabled": {
           "type": "boolean",
           "description": "Create hub-access resources and register local cluster as hub",
-          "default": false
+          "default": true
         }
       },
       "additionalProperties": false

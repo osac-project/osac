@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check Keycloak service-account auth wiring in every metering profile."""
+"""Check metering event-log wiring in every metering profile."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ import subprocess
 INSTALLER = pathlib.Path(__file__).resolve().parents[1]
 CHART = INSTALLER / "charts/osac"
 PROFILES = ("vmaas-ci", "caas-ci", "full-ci", "cudn-evpn-netris-test")
-EXPECTED_ISSUER = "https://keycloak-keycloak.example.com/realms/osac"
 
 
 def render(profile: str) -> list[str]:
@@ -54,30 +53,43 @@ def check_profile(profile: str) -> None:
         lambda doc: "# Source: osac/charts/metering/templates/deployment.yaml\n" in doc,
         f"metering Deployment for {profile}",
     )
-    issuer_config = select_one(
+    rules = select_one(
         docs,
         lambda doc: "kind: ConfigMap\n" in doc
-        and "  name: osac-metering-fulfillment-config\n" in doc,
-        f"metering issuer ConfigMap for {profile}",
+        and "  name: osac-metering-rules-0001\n" in doc,
+        f"metering rules ConfigMap for {profile}",
+    )
+    policy = select_one(
+        docs,
+        lambda doc: "kind: ValidatingAdmissionPolicy\n" in doc,
+        f"rules admission policy for {profile}",
+    )
+    binding = select_one(
+        docs,
+        lambda doc: "kind: ValidatingAdmissionPolicyBinding\n" in doc,
+        f"rules admission policy binding for {profile}",
     )
 
-    assert "FULFILLMENT_ISSUER_URL" in metering, profile
-    assert "name: osac-metering-fulfillment-config" in metering, profile
-    assert "key: FULFILLMENT_ISSUER_URL" in metering, profile
-    assert f'FULFILLMENT_ISSUER_URL: "{EXPECTED_ISSUER}"' in issuer_config, profile
+    # Metering reads events from Kafka and folds them; it no longer talks to
+    # fulfillment, so none of its credentials appear.
+    assert "METERING_RULES_NAMESPACE" in metering, profile
+    assert "HEARTBEAT_INTERVAL" in metering, profile
+    assert "KAFKA_BROKERS" in metering, profile
+    assert "FULFILLMENT_" not in metering, profile
+    assert "fulfillment-credentials" not in metering, profile
 
-    assert "secretName: fulfillment-controller-credentials" in metering, profile
-    assert "key: client-id" in metering, profile
-    assert "key: client-secret" in metering, profile
-    assert "mountPath: /etc/fulfillment-credentials" in metering, profile
-    assert "FULFILLMENT_CLIENT_ID_FILE" in metering, profile
-    assert "FULFILLMENT_CLIENT_SECRET_FILE" in metering, profile
-
-    assert "FULFILLMENT_TOKEN_FILE" not in metering, profile
-    assert "/var/run/secrets/kubernetes.io/serviceaccount/token" not in metering, profile
+    # The default meters ship as revision 0001 and are protected.
+    assert 'effective_at: "1970-01-01T00:00:00Z"' in rules, profile
+    assert "meters.yaml:" in rules, profile
+    assert "resource: ComputeInstance" in rules, profile
+    assert "immutable: true" in rules, profile
+    assert "osac-metering-rules-" in policy, profile
+    assert "impossible" not in policy, profile
+    assert "validationActions:" in binding, profile
+    assert 'validationActions: ["Deny"]' in binding, profile
 
 
 if __name__ == "__main__":
     for profile in PROFILES:
         check_profile(profile)
-    print("Metering Keycloak authentication profile render checks passed.")
+    print("Metering event-log profile render checks passed.")

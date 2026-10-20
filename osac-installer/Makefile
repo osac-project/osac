@@ -668,6 +668,10 @@ fulfillment-trust-render-test: helm-deps ## Check verified fulfillment transport
 metering-auth-render-test: helm-deps ## Check metering service-account auth renders in supported profiles
 	python3 scripts/test-metering-auth-render.py
 
+.PHONY: event-publisher-render-test
+event-publisher-render-test: helm-deps ## Check the event publisher and metering topic wiring renders
+	python3 scripts/test-event-publisher-render.py
+
 .PHONY: mce-render-test
 mce-render-test: helm-infra-deps ## Check disabled MCE defaults, explicit enablement, and CaaS inheritance
 	uv run --project .. python scripts/test-mce-render.py

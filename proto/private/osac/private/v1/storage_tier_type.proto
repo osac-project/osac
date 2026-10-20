@@ -17,6 +17,7 @@ package osac.private.v1;
 
 import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
+import "google/api/field_behavior.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/storage_common_type.proto";
 
@@ -69,7 +70,7 @@ message StorageTier {
   StorageTierSpec spec = 3;
 
   // Current operational status of the storage tier.
-  StorageTierStatus status = 4;
+  StorageTierStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Defines the advertised service level of a StorageTier.

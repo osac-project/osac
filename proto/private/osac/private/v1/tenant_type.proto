@@ -17,6 +17,7 @@ package osac.private.v1;
 
 import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
+import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
 import "osac/private/v1/condition_status_type.proto";
 import "osac/private/v1/metadata_type.proto";
@@ -33,7 +34,10 @@ message Tenant {
   string id = 1;
   Metadata metadata = 2;
   TenantSpec spec = 3;
-  TenantStatus status = 4 [(cleanapi.field).private = true];
+  TenantStatus status = 4 [
+    (cleanapi.field).private = true,
+    (google.api.field_behavior) = OUTPUT_ONLY
+  ];
 }
 
 message TenantSpec {

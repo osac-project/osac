@@ -44,7 +44,7 @@ message Cluster {
 
   Metadata metadata = 2;
   ClusterSpec spec = 3;
-  ClusterStatus status = 4;
+  ClusterStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // The spec contains the details of a cluster as desired by the user.

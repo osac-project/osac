@@ -83,21 +83,21 @@ describe('production QueryClient cluster refresh', () => {
     const { unmount, queryClient } = renderClusterView(<ClustersPage />, transport, '/clusters');
 
     try {
-      expect(await screen.findByText('AllocatingWorkers')).toBeInTheDocument();
-      expect(screen.getByText('ImagePulling')).toBeInTheDocument();
+      expect(await screen.findByText('Provisioning: AllocatingWorkers')).toBeInTheDocument();
+      expect(screen.getByText('Provisioning: ImagePulling')).toBeInTheDocument();
       expect(clusterMethods()).toEqual(['List']);
 
       clusters[0] = makeCluster('cluster-a', 'WorkersJoining');
-      expect(screen.queryByText('WorkersJoining')).not.toBeInTheDocument();
+      expect(screen.queryByText('Provisioning: WorkersJoining')).not.toBeInTheDocument();
 
       await act(async () => vi.advanceTimersByTimeAsync(9_999));
       expect(clusterMethods()).toEqual(['List']);
-      expect(screen.queryByText('WorkersJoining')).not.toBeInTheDocument();
+      expect(screen.queryByText('Provisioning: WorkersJoining')).not.toBeInTheDocument();
 
       await act(async () => vi.advanceTimersByTimeAsync(1));
-      expect(await screen.findByText('WorkersJoining')).toBeInTheDocument();
-      expect(screen.queryByText('AllocatingWorkers')).not.toBeInTheDocument();
-      expect(screen.getByText('ImagePulling')).toBeInTheDocument();
+      expect(await screen.findByText('Provisioning: WorkersJoining')).toBeInTheDocument();
+      expect(screen.queryByText('Provisioning: AllocatingWorkers')).not.toBeInTheDocument();
+      expect(screen.getByText('Provisioning: ImagePulling')).toBeInTheDocument();
       expect(clusterMethods()).toEqual(['List', 'List']);
     } finally {
       unmount();

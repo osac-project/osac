@@ -1,7 +1,5 @@
-import React, { type ReactNode, createElement } from 'react';
-import { MemoryRouter } from 'react-router-dom';
+import type { ReactNode } from 'react';
 import { type MessageInitShape, create } from '@bufbuild/protobuf';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
@@ -17,8 +15,8 @@ import {
 } from '@osac/types';
 
 import { ClustersTable } from './ClustersTable';
-import { ApiProvider } from '../../api/api-context';
 import { createMockConnectTransport } from '../../test-utils/createMockConnectTransport';
+import { TestProviders } from '../../test-utils/TestProviders';
 
 const makeCluster = (
   id: string,
@@ -69,19 +67,9 @@ const renderTable = (clusters: Cluster[], versions: ClusterVersion[] = clusterVe
       },
     },
   );
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  const wrapper = ({ children }: { children: ReactNode }) =>
-    createElement(
-      ApiProvider,
-      { transport } as React.ComponentProps<typeof ApiProvider>,
-      createElement(
-        QueryClientProvider,
-        { client: queryClient },
-        createElement(MemoryRouter, null, children),
-      ),
-    );
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <TestProviders transport={transport}>{children}</TestProviders>
+  );
   const result = render(<ClustersTable clusters={clusters} />, { wrapper });
   return {
     ...result,
@@ -91,28 +79,32 @@ const renderTable = (clusters: Cluster[], versions: ClusterVersion[] = clusterVe
 };
 
 describe('ClustersTable State and activity', () => {
-  it('shows the public progressing reason beneath State', () => {
+  it('shows State and activity in one table label', () => {
     renderTable([makeCluster('c-progress', '', progressing('WorkersJoining'))]);
 
     expect(screen.getByRole('columnheader', { name: 'State' })).toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Status' })).not.toBeInTheDocument();
-    const stateCell = screen.getByText('WorkersJoining').closest('[data-label="State"]');
-    expect(stateCell).toHaveTextContent('Provisioning');
+    const stateCell = screen
+      .getByText('Provisioning: WorkersJoining')
+      .closest('[data-label="State"]');
+    expect(stateCell?.querySelectorAll('.pf-v6-c-label')).toHaveLength(1);
   });
 
   it('marks a stalled provisioning stage as a warning', () => {
     renderTable([makeCluster('c-stalled', '', progressing('Stalled'))]);
 
-    const warning = screen.getByLabelText('Warning: Stalled');
-    expect(warning).toHaveTextContent('Stalled');
+    const warning = screen.getByLabelText('Warning: Provisioning stalled');
+    expect(warning).toHaveTextContent('Provisioning: Stalled');
     expect(warning).toHaveClass('pf-m-orange');
-    expect(warning.closest('[data-label="State"]')).toHaveTextContent('Provisioning');
+    expect(
+      warning.closest('[data-label="State"]')?.querySelectorAll('.pf-v6-c-label'),
+    ).toHaveLength(1);
   });
 
   it('uses Stage unknown for the backend StageUnknown reason', () => {
     renderTable([makeCluster('c-unknown', '', progressing('StageUnknown'))]);
 
-    expect(screen.getByText('Stage unknown')).toBeInTheDocument();
+    expect(screen.getByText('Provisioning: Stage unknown')).toBeInTheDocument();
     expect(screen.queryByText('StageUnknown')).not.toBeInTheDocument();
   });
 
@@ -124,14 +116,14 @@ describe('ClustersTable State and activity', () => {
       }),
     ]);
 
-    expect(screen.getByText('Stage unknown')).toBeInTheDocument();
+    expect(screen.getByText('Provisioning: Stage unknown')).toBeInTheDocument();
     expect(screen.queryByText('ReadyCondition')).not.toBeInTheDocument();
   });
 
   it.each(['', '   '])('uses Stage unknown for a blank reason %j', (reason) => {
     renderTable([makeCluster('c-blank', '', progressing(reason))]);
 
-    expect(screen.getByText('Stage unknown')).toBeInTheDocument();
+    expect(screen.getByText('Provisioning: Stage unknown')).toBeInTheDocument();
   });
 
   it.each([
@@ -149,33 +141,33 @@ describe('ClustersTable State and activity', () => {
     ]);
 
     expect(screen.getByText(stateText)).toBeInTheDocument();
-    expect(screen.queryByText('WorkersJoining')).not.toBeInTheDocument();
-    expect(screen.queryByText('Stage unknown')).not.toBeInTheDocument();
+    expect(screen.queryByText('Provisioning: WorkersJoining')).not.toBeInTheDocument();
+    expect(screen.queryByText('Provisioning: Stage unknown')).not.toBeInTheDocument();
   });
 
   it('shows Unknown without activity when public status is absent', () => {
     renderTable([makeCluster('c-no-status', '')]);
 
     expect(screen.getByText('Unknown')).toBeInTheDocument();
-    expect(screen.queryByText('Stage unknown')).not.toBeInTheDocument();
+    expect(screen.queryByText('Provisioning: Stage unknown')).not.toBeInTheDocument();
   });
 
   it('replaces the prior reason when the public cluster prop changes', () => {
     const { rerender } = renderTable([
       makeCluster('c-updating', '', progressing('AllocatingWorkers')),
     ]);
-    expect(screen.getByText('AllocatingWorkers')).toBeInTheDocument();
+    expect(screen.getByText('Provisioning: AllocatingWorkers')).toBeInTheDocument();
 
     rerender(
       <ClustersTable clusters={[makeCluster('c-updating', '', progressing('WorkersJoining'))]} />,
     );
-    expect(screen.queryByText('AllocatingWorkers')).not.toBeInTheDocument();
-    expect(screen.getByText('WorkersJoining')).toBeInTheDocument();
+    expect(screen.queryByText('Provisioning: AllocatingWorkers')).not.toBeInTheDocument();
+    expect(screen.getByText('Provisioning: WorkersJoining')).toBeInTheDocument();
 
     rerender(
       <ClustersTable clusters={[makeCluster('c-updating', '', { state: ClusterState.READY })]} />,
     );
-    expect(screen.queryByText('WorkersJoining')).not.toBeInTheDocument();
+    expect(screen.queryByText('Provisioning: WorkersJoining')).not.toBeInTheDocument();
     expect(screen.getByText('Ready')).toBeInTheDocument();
   });
 });

@@ -64,6 +64,55 @@ func setComputeInstanceTestFinalizer(ctx context.Context, client privatev1.Compu
 }
 
 var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
+	It("persists deletion feedback after a spec Secret disappears", func(ctx context.Context) {
+		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
+		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		secretID := createCatalogItemUserDataSecretFixture(ctx, usersGroup)
+		resource, err := createComputeInstanceFixture(ctx, tool.ExternalView().UserConn(), publicv1.ComputeInstanceSpec_builder{
+			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+			NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
+			UserDataSecret:     publicv1.SecretLocalReference_builder{Id: secretID}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		client := privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn())
+
+		setComputeInstanceTestFinalizer(ctx, client, resource.GetId(), true)
+		DeferCleanup(func(ctx context.Context) { setComputeInstanceTestFinalizer(ctx, client, resource.GetId(), false) })
+		_, err = client.Delete(ctx, privatev1.ComputeInstancesDeleteRequest_builder{Id: resource.GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		stored, err := client.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: resource.GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(stored.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
+
+		secrets := privatev1.NewSecretsClient(tool.InternalView().AdminConn())
+		_, err = secrets.Delete(ctx, privatev1.SecretsDeleteRequest_builder{Id: secretID}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		_, err = secrets.Get(ctx, privatev1.SecretsGetRequest_builder{Id: secretID}.Build())
+		Expect(status.Code(err)).To(Equal(codes.NotFound))
+
+		for _, mask := range []string{"status", "status.internal_ip_address"} {
+			By("writing feedback through the private API with mask " + mask)
+			candidate := proto.Clone(stored.GetObject()).(*privatev1.ComputeInstance)
+			candidate.GetStatus().SetInternalIpAddress("192.0.2.42")
+			updated, err := client.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+				Object: candidate, UpdateMask: catalogItemUpdateMask(mask),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(updated.GetObject().GetStatus().GetInternalIpAddress()).To(Equal("192.0.2.42"))
+			stored, err = client.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: resource.GetId()}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(stored.GetObject().GetStatus().GetInternalIpAddress()).To(Equal("192.0.2.42"))
+		}
+
+		for _, paths := range [][]string{{"spec.run_strategy"}, {"status.internal_ip_address", "spec.run_strategy"}, {}} {
+			candidate := proto.Clone(stored.GetObject()).(*privatev1.ComputeInstance)
+			_, err := client.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+				Object: candidate, UpdateMask: catalogItemUpdateMask(paths...),
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument), "mask %v", paths)
+		}
+	})
+
 	It("rejects public updates that change network attachments", func(ctx context.Context) {
 		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)

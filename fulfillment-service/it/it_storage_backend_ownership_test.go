@@ -15,11 +15,13 @@ package it
 
 import (
 	"context"
+	"os"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
@@ -30,6 +32,40 @@ var _ = Describe("Storage backend ownership API", func() {
 	var client privatev1.StorageBackendsClient
 	BeforeEach(func() {
 		client = privatev1.NewStorageBackendsClient(tool.InternalView().AdminConn())
+	})
+
+	It("creates a credential-free CSP-managed backend through the private CLI", func(ctx context.Context) {
+		homeDir, err := tool.NewCLIHomeDir()
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { Expect(os.RemoveAll(homeDir)).To(Succeed()) })
+		_, stderr, code := tool.RunCLI(ctx, homeDir,
+			"login", "https://"+internalServiceAddr, "--private", "--insecure",
+			"--flow=password", "--user="+adminUsername, "--password="+adminsPassword,
+		)
+		Expect(code).To(Equal(0), "login failed: %s", stderr)
+
+		name := "it-csp-cli-" + uuid.New()
+		DeferCleanup(func(ctx context.Context) {
+			listed, err := client.List(ctx, privatev1.StorageBackendsListRequest_builder{
+				Filter: new(`this.metadata.name == "` + name + `"`),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			for _, backend := range listed.GetItems() {
+				_, err := client.Delete(ctx, privatev1.StorageBackendsDeleteRequest_builder{Id: backend.GetId()}.Build())
+				Expect(err).NotTo(HaveOccurred())
+			}
+		})
+		_, stderr, code = tool.RunCLI(ctx, homeDir,
+			"create", "storagebackend", "--name", name, "--provider", "netapp", "--csp-managed",
+		)
+		Expect(code).To(Equal(0), "create failed: %s", stderr)
+		output, stderr, code := tool.RunCLI(ctx, homeDir, "get", "storagebackend", name, "-o", "json")
+		Expect(code).To(Equal(0), "get failed: %s", stderr)
+		backend := &privatev1.StorageBackend{}
+		Expect((protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal([]byte(output), backend)).To(Succeed())
+		Expect(backend.GetSpec().GetCspManaged()).To(BeTrue())
+		Expect(backend.GetSpec().GetEndpoint()).To(BeEmpty())
+		Expect(backend.GetSpec().GetCredentials()).To(BeNil())
 	})
 
 	It("persists a credential-free CSP-managed backend and enforces immutable ownership", func(ctx context.Context) {

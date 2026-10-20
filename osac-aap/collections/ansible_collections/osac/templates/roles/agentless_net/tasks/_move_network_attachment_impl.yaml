@@ -235,8 +235,8 @@
     that:
       - _agentless_net_attachment_vlan_after.stdout | from_json | length == 1
       - >-
-        _agentless_net_attachment_vlan_after.stdout | from_json
-        | first | attr('ifname') == _agentless_net_attachment_port.port
+        (_agentless_net_attachment_vlan_after.stdout | from_json
+        | first).get('ifname') == _agentless_net_attachment_port.port
       - >-
         'PVID' in (((_agentless_net_attachment_vlan_after.stdout | from_json
         | first).vlans | first).flags | default([]))

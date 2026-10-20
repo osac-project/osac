@@ -1,6 +1,8 @@
+import json
 from pathlib import Path
 
 import yaml
+from jinja2 import Environment
 
 
 PLAYBOOK = Path(__file__).resolve().parents[2] / "playbook_osac_move_network_attachment.yml"
@@ -65,3 +67,27 @@ def test_agentless_net_delegated_switch_tasks_read_port_mapping_from_controller_
     assert mapping in verify["delegate_to"]
     assert mapping in verify["ansible.builtin.raw"]
     assert mapping in verify["vars"]["ansible_host"]
+
+
+def test_access_port_assert_reads_ifname_from_bridge_json_mapping():
+    tasks = yaml.safe_load(AGENTLESS_NET_MOVE_TASKS.read_text(encoding="utf-8"))
+    verify = next(
+        task
+        for task in tasks
+        if task.get("name") == "Verify the moved port is an untagged PVID access port"
+    )
+    conditions = verify["ansible.builtin.assert"]["that"]
+
+    assert any(".get('ifname')" in condition for condition in conditions)
+    assert all("attr('ifname')" not in condition for condition in conditions)
+
+    render = Environment()
+    render.filters["from_json"] = json.loads
+    result = render.compile_expression(conditions[1])(
+        _agentless_net_attachment_vlan_after={
+            "stdout": json.dumps([{"ifname": "swp2", "vlans": []}])
+        },
+        _agentless_net_attachment_port={"port": "swp2"},
+    )
+
+    assert result is True

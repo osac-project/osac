@@ -17,6 +17,7 @@ package osac.private.v1;
 
 import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
+import "google/api/field_behavior.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/secret_type.proto";
 
@@ -45,6 +46,17 @@ message StorageBackend {
 
 // Defines the desired configuration for a StorageBackend.
 message StorageBackendSpec {
+  option (buf.validate.message).cel = {
+    id: "osac_managed_endpoint_required"
+    message: "endpoint is required for OSAC-managed storage backends"
+    expression: "this.csp_managed || this.endpoint != ''"
+  };
+  option (buf.validate.message).cel = {
+    id: "osac_managed_credentials_required"
+    message: "credentials are required for OSAC-managed storage backends"
+    expression: "this.csp_managed || has(this.credentials)"
+  };
+
   // Storage provider identifier. For example: "vast", "ceph", "pure".
   //
   // This value is immutable once the StorageBackend is created.
@@ -54,10 +66,20 @@ message StorageBackendSpec {
   string description = 2;
 
   // Management endpoint for the storage array. Accepts a URL or host:port format.
-  string endpoint = 3 [(buf.validate.field).string.min_len = 1];
+  // Required for OSAC-managed backends; optional for CSP-managed backends.
+  string endpoint = 3;
 
   // Credentials for authenticating with the storage management API.
-  StorageBackendCredentials credentials = 4 [(buf.validate.field).required = true];
+  // Required for OSAC-managed backends; optional for CSP-managed backends.
+  StorageBackendCredentials credentials = 4;
+
+  // When true, storage resources are managed by the Cloud Provider Admin.
+  // OSAC must not use endpoint or credentials to provision CSP-managed storage.
+  // Defaults to false. Immutable after creation.
+  bool csp_managed = 5 [
+    json_name = "cspManaged",
+    (google.api.field_behavior) = IMMUTABLE
+  ];
 }
 
 // Credentials for authenticating with a storage backend's management API.

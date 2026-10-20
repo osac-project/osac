@@ -30,7 +30,7 @@ concurrency:
 jobs:
   sweep:
     if: github.repository == 'osac-project/osac'
-    uses: osac-project/osac-ci/.github/workflows/bot-sweep.yml@639e33f549c91a5c1e8b4ad55256b69f028a42b8  # v1.2.4
+    uses: osac-project/osac-ci/.github/workflows/bot-sweep.yml@e49642a92dd8f6f5c6680d09c8adea4e2b11e5ef  # v1.2.6
     permissions:
       contents: read
       pull-requests: read

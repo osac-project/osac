@@ -16,7 +16,7 @@ aap:
 
 bootstrap:
   enabled: true
-  image: ghcr.io/osac-project/osac-aap:latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+  image: ghcr.io/osac-project/osac-aap:latest # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
   cliImage: quay.io/openshift/origin-cli:4.20.0
   backoffLimit: 15
   readinessConsecutiveSuccesses: 3
@@ -39,7 +39,6 @@ configAsCode:
   manifest:
     create: false
     data: {}
-
 serviceAccounts:
   osacSa: "osac-sa"
   templatePublisher: "template-publisher"

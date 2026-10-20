@@ -104,7 +104,7 @@
       ansible.builtin.set_fact:
         external_access_bgp_next_hop: ""
 
-- name: Withdraw API PublicIP route  # noqa: no-changed-when
+- name: Withdraw API PublicIP route # noqa: no-changed-when
   environment:
     ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
     ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
@@ -117,7 +117,7 @@
       {{ role_path }}/playbooks/bgp_withdraw.yaml
   when: external_access_api_public_ip | length > 0 and external_access_bgp_next_hop | default('') | length > 0
 
-- name: Withdraw ingress PublicIP route  # noqa: no-changed-when
+- name: Withdraw ingress PublicIP route # noqa: no-changed-when
   environment:
     ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
     ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
@@ -132,7 +132,7 @@
 
 # --- agentless_net: delete DNAT rules ---
 
-- name: Delete DNAT for API endpoint  # noqa: no-changed-when
+- name: Delete DNAT for API endpoint # noqa: no-changed-when
   environment:
     ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
     ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
@@ -149,7 +149,7 @@
       {{ role_path }}/playbooks/l3_delete_dnat.yaml
   when: external_access_api_public_ip | length > 0 and external_access_api_internal_ip | default('') | length > 0
 
-- name: Delete DNAT for ingress HTTP  # noqa: no-changed-when
+- name: Delete DNAT for ingress HTTP # noqa: no-changed-when
   environment:
     ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
     ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
@@ -166,7 +166,7 @@
       {{ role_path }}/playbooks/l3_delete_dnat.yaml
   when: external_access_ingress_public_ip | length > 0 and external_access_metallb_ingress_ip is defined
 
-- name: Delete DNAT for ingress HTTPS  # noqa: no-changed-when
+- name: Delete DNAT for ingress HTTPS # noqa: no-changed-when
   environment:
     ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
     ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
@@ -202,7 +202,7 @@
 
 # --- agentless_net: release public IPs ---
 
-- name: Release API public IP  # noqa: no-changed-when
+- name: Release API public IP # noqa: no-changed-when
   environment:
     ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
     ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
@@ -214,7 +214,7 @@
       -e ipam_purpose={{ external_access_state_key }}-api
       {{ role_path }}/playbooks/ipam_release_ip.yaml
 
-- name: Release ingress public IP  # noqa: no-changed-when
+- name: Release ingress public IP # noqa: no-changed-when
   environment:
     ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
     ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
@@ -228,7 +228,7 @@
 
 # --- Clean up DNAT state ---
 
-- name: Remove DNAT state from network state  # noqa: no-changed-when
+- name: Remove DNAT state from network state # noqa: no-changed-when
   ansible.builtin.raw: |
     python3 - '{{ agentless_net_net_node_ipam_state_file }}' \
               '{{ external_access_state_key }}' <<'STATE_PY'

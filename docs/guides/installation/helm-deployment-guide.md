@@ -16,29 +16,31 @@ permissions, before installing the platform chart.
 | Requirement | Details |
 |-------------|---------|
 | OpenShift | 4.17+ with cluster-admin access |
-| CLI tools | `oc`, `helm`, `git` |
-| Network | Outbound access to github.com, ghcr.io, quay.io, registry.redhat.io |
+| CLI tools | `oc`, Helm 4 for Kubernetes versions it supports; Helm 3.17.x or 3.18.x for OpenShift 4.17 (Kubernetes 1.30), `git` |
+| Network | Outbound access to github.com, ghcr.io, quay.io, and registry.redhat.io. Building the `osac-infra` dependency also requires Helm workstation access to topolvm.github.io. |
 | AAP license | Subscription manifest (`license.zip`) from [Red Hat Customer Portal](https://access.redhat.com/) |
 
 ## How It Works
 
-OSAC installs in three phases. Each phase's outputs are the next phase's
-inputs. This is required because Helm validates all templates before applying
-any — a template that references a CRD must have that CRD already registered
-on the cluster.
+OSAC installs through three ordered Helm releases: Phase 1a, Phase 1b, and
+Phase 2. Each release prepares resources required by the next. This order is
+required because Helm validates all templates before applying any — a
+template that references a CRD must have that CRD already registered on the
+cluster.
 
 ### Phase 1a: `osac-deps`
 
-Installs infrastructure in two Helm releases:
+Installs OLM Operator Subscriptions for cert-manager, AAP, LVMS, MetalLB, CNV,
+and MCE. Post-install hooks wait for each operator's CSV to succeed and its
+CRDs to register. Each operator is gated by a values toggle.
 
-1. **osac-deps** — OLM operator Subscriptions (cert-manager, AAP, LVMS, MetalLB,
-   CNV, MCE). Post-install hooks wait for each operator's CSV to succeed and CRDs
-   to register. Each operator is gated by a values toggle.
+### Phase 1b: `osac-infra`
 
-2. **osac-infra** — CRD instances: CertManager CR, ClusterIssuer, CA certificates,
-   trust-manager Bundle, Keycloak, LVMCluster, HyperConverged, MetalLB IPAddressPool,
-   controller credentials, bundled PostgreSQL (development only), and bundled Openbao
-   (development only).
+Creates infrastructure resources and operator operands after the required CRDs
+are available: CertManager CR, ClusterIssuer, CA certificates, trust-manager
+Bundle, Keycloak, LVMCluster, HyperConverged, MetalLB IPAddressPool, controller
+credentials, bundled PostgreSQL (development only), and bundled OpenBao
+(development only).
 
 ### Phase 2: `osac`
 
@@ -95,8 +97,9 @@ clusterVersions:
       architecture: [ARCHITECTURE_AMD64]
 ```
 
-This personal RHCOS artifact is a development/CI example, not a production
-default. Production operators should supply their own compatible artifact.
+This personal RHCOS artifact is a development and evaluation example, not a
+production default. Production operators should supply their own compatible
+artifact.
 `architecture` defaults to `[ARCHITECTURE_AMD64]` when omitted; ARM64 and S390X
 are also supported metadata values. The hook creates a shared Linux registry
 DiskImage first, then references it by name with `shared: true` in the version.
@@ -126,12 +129,71 @@ export AAP_LICENSE_FILE=/path/to/license.zip
 oc create namespace "$NS" --dry-run=client -o yaml | oc apply -f -
 oc create secret generic config-as-code-manifest-ig --from-file=license.zip="$AAP_LICENSE_FILE" -n "$NS" --dry-run=client -o yaml | oc apply --server-side -f -
 oc label secret config-as-code-manifest-ig osac.openshift.io/project=osac-aap -n "$NS" --overwrite
+```
 
-# Phase 1a: prerequisite Operator Subscriptions
+### Prepare values files
+
+From `osac-installer/`, create two deployment-specific values files before
+running Helm:
+
+| Values file | Used by | Configures |
+|---|---|---|
+| `my-infra-values.yaml` | Phase 1a (`osac-deps`) and phase 1b (`osac-infra`) | Operator subscriptions and shared infrastructure resources |
+| `my-values.yaml` | Phase 2 (`osac`) | OSAC services and per-instance settings |
+
+Example profiles under `osac-installer/values/` illustrate chart values and
+feature combinations. Use them as references and adapt settings to your
+deployment and cluster; infrastructure values inform `my-infra-values.yaml`,
+and instance values inform `my-values.yaml`. Many profiles are tailored to
+development or evaluation. Some profiles enable test Keycloak fixtures, bundled
+PostgreSQL, and bundled OpenBao. Set
+`keycloak.devFixtures.enabled: false` outside evaluation environments, change
+the Keycloak bootstrap passwords, and disable `bundledPostgres` and
+`bundledVault` for production deployments. Production deployments must provide
+an external database and Vault-compatible secret store; see the [customer
+install guide](https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md)
+and [secrets management configuration guide](secrets-management-configuration.md).
+The customer install guide also explains how to configure `my-values.yaml` for
+the services you plan to deploy. Check the LVMS device configuration and
+MetalLB address range against your cluster, and set `cnv.enabled: true` if
+your deployment uses VMaaS.
+
+### Storage class
+
+OSAC PVCs use the cluster's default `StorageClass`. If the cluster already has
+a storage provisioner, make the intended `StorageClass` the default before
+installing; the charts do not configure a class per PVC. Check the available
+classes and which one is default with:
+
+```bash
+oc get storageclass
+```
+
+The default class is marked `(default)` in the output.
+
+When using an existing `StorageClass`, leave `lvms.enabled: false` and
+`topolvm.enabled: false` in `my-infra-values.yaml`. Both are disabled by
+default, so OSAC will not install LVMS or the TopoLVM CSI driver. The Phase 2
+validation hook warns when no default class exists, and stateful components
+may fail to provision PVCs.
+
+### Phase 1a: install prerequisite Operators
+
+If LVMS is already installed and the cluster already has the
+`openshift-storage` namespace, set `lvms.enabled: false` in
+`my-infra-values.yaml` before installing `osac-deps`. This prevents Helm from
+rendering resources in that namespace. The same values file is used for
+`osac-infra`, so this also skips its LVMS configuration hook and leaves the
+existing `LVMCluster` in place. Use `--take-ownership` only for existing
+resources that this release is intended to manage. With LVMS disabled, the
+chart does not render resources in `openshift-storage`.
+
+```bash
 helm upgrade --install osac-deps ./charts/osac-deps \
     -n osac-deps --create-namespace \
     -f my-infra-values.yaml \
     --set lvms.channel="stable-$OCP_VERSION" \
+    --take-ownership \
     --wait --timeout 30m
 ```
 
@@ -142,35 +204,64 @@ oc get csv -n openshift-storage lvms-operator.v4.22.0
 oc get sub lvms-operator -n openshift-storage -o jsonpath='channel={.spec.channel} state={.status.state}{"\n"}'
 ```
 
+### Phase 1b: install shared infrastructure
+
+Build the `osac-infra` chart dependency before installing the chart. Run this
+from `osac-installer/`; the dependency is downloaded from the TopoLVM Helm
+repository.
+
 ```bash
-# Phase 1b: CA issuer, trust-manager, Keycloak, and operand CRs
+helm dependency build ./charts/osac-infra
+```
+
+When `keycloak.enabled: true` (the default), the chart renders the
+`osacNamespace` namespace and Keycloak credential resources. This guide creates
+that namespace earlier to store the AAP license secret, so pass
+`--take-ownership` to let `osac-infra` adopt it. If Keycloak is disabled, the
+chart skips this namespace resource, so this particular ownership reason does
+not apply.
+
+```bash
 helm upgrade --install osac-infra ./charts/osac-infra \
     -n osac-infra --create-namespace \
     -f my-infra-values.yaml \
     --set osacNamespace="$NS" \
     --set lvms.channel="stable-$OCP_VERSION" \
     --set keycloak.hostname="https://keycloak-keycloak.$DOMAIN" \
+    --set keycloak.route.publicIngress=true \
     --set keycloak.route.hostname="keycloak-keycloak.$DOMAIN" \
+    --take-ownership \
     --wait-for-jobs --timeout 30m
+```
 
-# Phase 2: the OSAC platform itself
-# Helm 4: --force-conflicts is required because the AAP operator takes
-# field ownership of app.kubernetes.io/managed-by on the osac-aap CR.
+### Phase 2: install the OSAC platform
+
+Use Helm 4 when it supports your cluster's Kubernetes version. Helm 4 is
+incompatible with OpenShift 4.17's Kubernetes 1.30; use Helm 3.17.x or 3.18.x
+for OpenShift 4.17. For other cluster versions, choose a Helm 3 minor that
+supports the cluster's Kubernetes version; see the
+[Helm 3 version-skew documentation](https://helm.sh/docs/v3/topics/version_skew/).
+Helm 3.17.0 is the minimum version required for `--take-ownership`.
+
+```bash
 helm dependency update ./charts/osac
+# --force-conflicts resolves an AAP field ownership conflict (Helm 4 only).
+# Helm 3 users: omit this option; Helm 3 does not support it.
 helm upgrade --install osac ./charts/osac \
     -n "$NS" --create-namespace \
     -f my-values.yaml \
     --set global.clusterDomain="$DOMAIN" \
     --set service.externalHostname="fulfillment-api-$NS.$DOMAIN" \
     --set service.internalHostname="fulfillment-internal-api-$NS.$DOMAIN" \
+    --set-string ui.auth.oidcIssuerURL="https://keycloak-keycloak.$DOMAIN/realms/osac" \
     --force-conflicts \
     --wait --timeout 40m
 ```
 
-`my-infra-values.yaml` configures `osac-deps` and `osac-infra` — see
-[Phase-1 Parameters](#phase-1-parameters) below. For the phase-2
-`my-values.yaml` (per-service configuration, the full parameter reference,
-and verification), see the
+`my-infra-values.yaml` configures `osac-deps` and `osac-infra`; see
+[Phase-1 Parameters](#phase-1-parameters) below. For Phase 2,
+`my-values.yaml` contains per-service configuration, its full parameter
+reference, and verification steps; see the
 [customer install guide](https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md).
 
 ## Phase-1 Parameters
@@ -214,10 +305,10 @@ and `osac-infra`. Keys a chart doesn't recognize are ignored.
 | `keycloak.images.keycloak` | Keycloak image. | `keycloak:26.6.4` |
 | `keycloak.images.postgres` | Keycloak database image. | `postgresql-18-c10s` |
 | `osacNamespace` | Namespace that the `osac` platform release uses. `osac-infra` stamps cross-namespace resources with it. Set it to your namespace. | `osac` |
-| `bundledPostgres.enabled` | Deploys bundled PostgreSQL for development and CI. It is not intended for production. | `false` |
+| `bundledPostgres.enabled` | Deploys bundled PostgreSQL for development and evaluation. It is not intended for production. | `false` |
 | `bundledPostgres.database.name` | Bundled database name. | `service` |
 | `bundledPostgres.database.user` | Bundled database owner. | `service` |
-| `bundledVault.enabled` | Deploys an in-cluster OpenBao secret store for testing and CI. Set it to `false` for production and configure external Vault in the `osac` values file; see the [secrets management configuration guide](secrets-management-configuration.md). | `true` |
+| `bundledVault.enabled` | Deploys an in-cluster OpenBao secret store for development and evaluation. Set it to `false` for production and configure external Vault in the `osac` values file; see the [secrets management configuration guide](secrets-management-configuration.md). | `true` |
 | `bundledVault.podSecurityContext` | Pod-level `securityContext` for the OpenBao deployment. Defaults to `{runAsNonRoot: true}` with no hardcoded UID so OpenShift's restricted-v2 SCC can allocate from the namespace range. Override with a fixed UID (e.g. `runAsUser: 100`) on platforms that require one. | `{runAsNonRoot: true}` |
 | `cliImage` | The `oc` image that the chart hook jobs use. | `origin-cli:4.20.0` |
 
@@ -254,12 +345,12 @@ mce:          { enabled: false }
   `192.168.100.250`. If you already run the Operator, keep the toggle `false`
   and create your own operand. Edit the `IPAddressPool` after installation to
   use an address range that is valid for your network.
-- MCE is disabled by default. Set `mce.enabled: true` when the installation
-  owns standalone MCE; the `caas-ci` infrastructure profile enables it
-  explicitly. Leave it `false` when RHACM or an existing MCE installation owns
-  that lifecycle. The disabled state also suppresses the default Assisted image
-  override `ConfigMap` and its MCE 5.0 compatibility RBAC; the chart does not
-  modify the existing installation.
+- MCE is disabled by default. Set `mce.enabled: true` when this installation
+  owns standalone MCE for CaaS agent-based cluster provisioning. Leave it
+  `false` when RHACM or an existing MCE installation owns that lifecycle. The
+  disabled state also suppresses the default Assisted image override
+  `ConfigMap` and its MCE 5.0 compatibility RBAC; the chart does not modify the
+  existing installation.
 - `caIssuer.enabled: false` requires you to provide a `ClusterIssuer` and set
   `service.certs.issuerRef` in the phase-2 `my-values.yaml`.
 - `keycloak.enabled: false` requires a pre-configured Keycloak with the `osac`
@@ -305,9 +396,9 @@ Disable these for any real deployment.
 
 | Value | Default | What it does |
 |-------|---------|-------------|
-| `bundledPostgres.enabled` | `false` | Deploys bundled PostgreSQL for development and CI. It is not intended for production. |
-| `bundledVault.enabled` | `true` | Deploys an in-cluster OpenBao secret store for testing and CI. Set to `false` for production and follow the [secrets management configuration guide](secrets-management-configuration.md). |
-| `topolvm.enabled` | `false` | Installs the pinned TopoLVM CSI chart for Kind `dev-full`. It uses an external `lvmd` service and disposable `vg1`; the profile exposes the non-default `topolvm-provisioner` StorageClass. |
+| `bundledPostgres.enabled` | `false` | Deploys bundled PostgreSQL for development and evaluation. It is not intended for production. |
+| `bundledVault.enabled` | `true` | Deploys an in-cluster OpenBao secret store for development and evaluation. Set to `false` for production and follow the [secrets management configuration guide](secrets-management-configuration.md). |
+| `topolvm.enabled` | `false` | Installs the pinned TopoLVM CSI chart for Kind `dev-full`. Keep it disabled when using an existing cluster `StorageClass`. It uses an external `lvmd` service and disposable `vg1`; the profile exposes the non-default `topolvm-provisioner` StorageClass. |
 
 The upgrade does not migrate data from the previous bundled PostgreSQL instance.
 Back up any data you need before upgrading.
@@ -322,27 +413,42 @@ Back up any data you need before upgrading.
 
 ### Keycloak Route with Public Ingress Certificates
 
-For clusters with publicly-trusted wildcard ingress certificates (e.g., production OpenShift clusters with Let's Encrypt), you can configure Keycloak's Route to use `reencrypt` termination instead of `passthrough`:
+For clusters with publicly-trusted wildcard ingress certificates (e.g.,
+production OpenShift clusters with Let's Encrypt), you can configure Keycloak's
+Route to use `reencrypt` termination instead of `passthrough`. Set the same
+public hostname in both values:
 
 ```yaml
 # my-infra-values.yaml
 keycloak:
+  hostname: "https://keycloak-keycloak.apps.<cluster-domain>"
   route:
-    publicIngress: true  # Switches Route from passthrough to reencrypt
-    hostname: keycloak.apps.example.com  # Optional: custom hostname
+    publicIngress: true
+    hostname: "keycloak-keycloak.apps.<cluster-domain>"
 ```
 
+Replace `<cluster-domain>` with the cluster's ingress domain. The install command
+above sets the same public hostname and enables `publicIngress`.
+
 **How it works:**
-- `passthrough` (default): Browser connects directly to Keycloak's internal TLS cert (self-signed CA)
-- `reencrypt`: Router presents the cluster's public ingress cert to browsers, then re-encrypts traffic to Keycloak's internal TLS endpoint using the CA cert
+
+- `passthrough` (default): Browser connects directly to Keycloak's internal
+  TLS cert (self-signed CA).
+- `reencrypt`: Router presents the cluster's public ingress cert to browsers,
+  then re-encrypts traffic to Keycloak's internal TLS endpoint using the CA
+  cert.
 
 **Requirements:**
-- `caIssuer.enabled: true` (default) — The hook depends on cert-manager's CA bundle
-- The `osac-infra-patch-keycloak-route` hook Job automatically sets `destinationCACertificate` at install/upgrade time
+
+- `caIssuer.enabled: true` (default) — The hook depends on cert-manager's CA
+  bundle.
+- The `osac-infra-patch-keycloak-route` hook Job automatically sets
+  `destinationCACertificate` at install/upgrade time.
 
 **When to use:**
-- Production clusters where browser cert warnings are unacceptable
-- Environments with corporate CA or Let's Encrypt ingress certs
+
+- Production clusters where browser cert warnings are unacceptable.
+- Environments with corporate CA or Let's Encrypt ingress certs.
 
 ## Updating Hub CSI Fulfillment Configuration
 
@@ -404,6 +510,12 @@ issuer; tenant CSI installs continue to receive those values directly through
 their own Helm configuration.
 
 ## Uninstall
+
+When `keycloak.enabled: true` (the default), the `osac-infra` release owns the
+`osacNamespace` after adopting it. Uninstall the `osac` release first, as shown
+below. Uninstalling `osac-infra` then deletes that namespace and any resources
+still inside it. When Keycloak is disabled, `osac-infra` does not render or own
+that namespace, so uninstalling the release leaves it in place.
 
 ```bash
 helm uninstall osac -n "$NS"
@@ -508,9 +620,16 @@ manual install plan; approve its `InstallPlan` in the `osac-kafka` namespace.
 
 ### `helm dependency build` or an OCI Pull Fails
 
-The `helm` command requires outbound access to `ghcr.io`, and the `file://`
-subcharts require a full checkout — run `helm dependency build` from
-`osac-installer/`, not a subdirectory. A `not found` error on
+Run dependency commands from `osac-installer/` and pass the chart directory.
+For the Phase 1b TopoLVM dependency, use
+`helm dependency build ./charts/osac-infra`. Helm downloads the declared
+dependency from `topolvm.github.io` during this step, even when
+`topolvm.enabled: false`; the disabled dependency is not installed. This
+repository access is needed from the machine running Helm, not from the
+cluster at runtime. The Phase 2 `osac` chart uses `file://` subcharts and
+requires a full monorepo checkout; the install procedure updates those with
+`helm dependency update ./charts/osac`. OCI chart pulls require outbound
+access to `ghcr.io`. A `not found` error on
 `oci://ghcr.io/osac-project/charts/*` usually means an incorrect `--version`.
 To list the tags:
 
@@ -520,7 +639,6 @@ helm show chart oci://ghcr.io/osac-project/charts/osac --version 0.0.17
 
 ---
 
-Looking for the `make` wrapper or the CI reference value profiles
-(`values/vmaas-ci/` and similar)? Those are contributor/CI tooling, not part
-of a real install — see the
+Looking for the `make` wrapper or the contributor value profiles? Those are
+contributor tooling, not part of a real install — see the
 [OSAC CI and Development Reference](https://github.com/osac-project/osac/blob/main/docs/guides/installation/developer-ci-reference.md).

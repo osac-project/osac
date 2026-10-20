@@ -1,4 +1,4 @@
-- name: Check that exactly one router matching the ident exists  # noqa:no-changed-when
+- name: Check that exactly one router matching the ident exists # noqa:no-changed-when
   ansible.builtin.command: >-
     openstack router show {{ router_name }} -f json
   register: router_show_cmd_raw
@@ -7,7 +7,7 @@
   ansible.builtin.set_fact:
     router_show_cmd_result: "{{ router_show_cmd_raw.stdout | from_json }}"
 
-- name: Destroy router  # noqa:no-changed-when
+- name: Destroy router # noqa:no-changed-when
   openstack.cloud.router:
     state: "absent"
     name: "{{ router_show_cmd_result.id }}"

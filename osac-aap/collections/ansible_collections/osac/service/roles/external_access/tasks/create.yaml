@@ -20,5 +20,8 @@
   when:
     - external_access_api_internal_ip is defined
     - external_access_api_internal_ip | length > 0
-    - (external_access_metallb_ingress_ip is defined and external_access_metallb_ingress_ip | length > 0) or
-      (external_access_ingress_ip is defined and external_access_ingress_ip | length > 0)
+    - >-
+      (external_access_metallb_ingress_ip is defined
+       and external_access_metallb_ingress_ip | length > 0)
+      or (external_access_ingress_ip is defined
+          and external_access_ingress_ip | length > 0)

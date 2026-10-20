@@ -3,10 +3,10 @@ name: config_as_code
 version: 1.0.0
 readme: README.md
 authors:
-- Adrien Gentil @adriengentil
+  - Adrien Gentil @adriengentil
 description: OSAC's AAP configuration as code
 license:
-- Apache-2.0
+  - Apache-2.0
 tags:
   - infrastructure
 repository: https://github.com/osac-project/osac

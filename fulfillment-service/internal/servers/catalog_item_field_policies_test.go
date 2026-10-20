@@ -93,6 +93,111 @@ var _ = Describe("Shared typed-policy helper", func() {
 		Expect(applyPolicy(&privatev1.StringFieldPolicy{}, false, set, decodeStringPolicy, identity[string])).To(MatchError(ContainSubstring("string policy has no behavior")))
 	})
 
+	Describe("user_data_secret policy application", func() {
+		It("applies locked user_data_secret to compute spec", func() {
+			lockedSecret := privatev1.SecretLocalReference_builder{
+				Id: "secret-id", Name: "user-data-secret",
+			}.Build()
+			fields := privatev1.ComputeInstanceCatalogItemFields_builder{
+				UserDataSecret: privatev1.SecretReferenceFieldPolicy_builder{
+					Locked: lockedSecret,
+				}.Build(),
+			}.Build()
+			spec := &privatev1.ComputeInstanceSpec{}
+			Expect(applyComputeInstanceCatalogItemPolicies(spec, fields)).To(Succeed())
+			Expect(spec.GetUserDataSecret()).NotTo(BeNil())
+			Expect(spec.GetUserDataSecret().GetId()).To(Equal("secret-id"))
+			Expect(spec.GetUserDataSecret().GetName()).To(Equal("user-data-secret"))
+		})
+
+		It("applies editable default user_data_secret to compute spec", func() {
+			defaultSecret := privatev1.SecretLocalReference_builder{
+				Id: "default-id", Name: "default-name",
+			}.Build()
+			fields := privatev1.ComputeInstanceCatalogItemFields_builder{
+				UserDataSecret: privatev1.SecretReferenceFieldPolicy_builder{
+					Editable: privatev1.EditableSecretReferenceField_builder{
+						DefaultValue: defaultSecret,
+					}.Build(),
+				}.Build(),
+			}.Build()
+			omitted := &privatev1.ComputeInstanceSpec{}
+			Expect(applyComputeInstanceCatalogItemPolicies(omitted, fields)).To(Succeed())
+			Expect(omitted.GetUserDataSecret().GetId()).To(Equal("default-id"))
+
+			supplied := privatev1.ComputeInstanceSpec_builder{
+				UserDataSecret: privatev1.SecretLocalReference_builder{
+					Id: "caller-id",
+				}.Build(),
+			}.Build()
+			Expect(applyComputeInstanceCatalogItemPolicies(supplied, fields)).To(Succeed())
+			Expect(supplied.GetUserDataSecret().GetId()).To(Equal("caller-id"))
+		})
+
+		It("rejects caller value for locked user_data_secret on compute", func() {
+			fields := privatev1.ComputeInstanceCatalogItemFields_builder{
+				UserDataSecret: privatev1.SecretReferenceFieldPolicy_builder{
+					Locked: privatev1.SecretLocalReference_builder{Id: "locked-id"}.Build(),
+				}.Build(),
+			}.Build()
+			spec := privatev1.ComputeInstanceSpec_builder{
+				UserDataSecret: privatev1.SecretLocalReference_builder{Id: "caller-id"}.Build(),
+			}.Build()
+			Expect(applyComputeInstanceCatalogItemPolicies(spec, fields)).To(MatchError(ContainSubstring("not editable")))
+		})
+
+		It("applies locked user_data_secret to bare metal spec", func() {
+			lockedSecret := privatev1.SecretLocalReference_builder{
+				Id: "bm-secret-id", Name: "bm-user-data",
+			}.Build()
+			fields := privatev1.BareMetalInstanceCatalogItemFields_builder{
+				UserDataSecret: privatev1.SecretReferenceFieldPolicy_builder{
+					Locked: lockedSecret,
+				}.Build(),
+			}.Build()
+			spec := &privatev1.BareMetalInstanceSpec{}
+			Expect(applyBareMetalInstanceCatalogItemPolicies(spec, fields)).To(Succeed())
+			Expect(spec.GetUserDataSecret()).NotTo(BeNil())
+			Expect(spec.GetUserDataSecret().GetId()).To(Equal("bm-secret-id"))
+		})
+
+		It("applies editable default user_data_secret to bare metal spec", func() {
+			defaultSecret := privatev1.SecretLocalReference_builder{
+				Id: "bm-default-id",
+			}.Build()
+			fields := privatev1.BareMetalInstanceCatalogItemFields_builder{
+				UserDataSecret: privatev1.SecretReferenceFieldPolicy_builder{
+					Editable: privatev1.EditableSecretReferenceField_builder{
+						DefaultValue: defaultSecret,
+					}.Build(),
+				}.Build(),
+			}.Build()
+			omitted := &privatev1.BareMetalInstanceSpec{}
+			Expect(applyBareMetalInstanceCatalogItemPolicies(omitted, fields)).To(Succeed())
+			Expect(omitted.GetUserDataSecret().GetId()).To(Equal("bm-default-id"))
+
+			supplied := privatev1.BareMetalInstanceSpec_builder{
+				UserDataSecret: privatev1.SecretLocalReference_builder{
+					Id: "bm-caller-id",
+				}.Build(),
+			}.Build()
+			Expect(applyBareMetalInstanceCatalogItemPolicies(supplied, fields)).To(Succeed())
+			Expect(supplied.GetUserDataSecret().GetId()).To(Equal("bm-caller-id"))
+		})
+
+		It("rejects caller value for locked user_data_secret on bare metal", func() {
+			fields := privatev1.BareMetalInstanceCatalogItemFields_builder{
+				UserDataSecret: privatev1.SecretReferenceFieldPolicy_builder{
+					Locked: privatev1.SecretLocalReference_builder{Id: "locked-id"}.Build(),
+				}.Build(),
+			}.Build()
+			spec := privatev1.BareMetalInstanceSpec_builder{
+				UserDataSecret: privatev1.SecretLocalReference_builder{Id: "caller-id"}.Build(),
+			}.Build()
+			Expect(applyBareMetalInstanceCatalogItemPolicies(spec, fields)).To(MatchError(ContainSubstring("not editable")))
+		})
+	})
+
 	It("leaves specs unchanged when no typed policies are present", func() {
 		empty := "existing"
 		spec := privatev1.ComputeInstanceSpec_builder{UserData: &empty}.Build()

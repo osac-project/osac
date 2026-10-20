@@ -73,6 +73,10 @@ message ComputeInstanceCatalogItemFields {
   // Optional SSH public key Secret reference for VM access. A caller may provide a tenant-scoped key;
   // a tenant catalog may also configure a default key.
   SecretReferenceFieldPolicy ssh_key = 10;
+
+  // Optional user data Secret reference. Governs or defaults the secret containing cloud-init
+  // user data for instances created from this catalog item.
+  SecretReferenceFieldPolicy user_data_secret = 11;
 }
 
 // Groups policies for governable compute instance boot disk fields.

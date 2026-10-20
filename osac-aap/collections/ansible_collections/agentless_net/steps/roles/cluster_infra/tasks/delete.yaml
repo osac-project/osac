@@ -88,7 +88,7 @@
     cluster_infra_snat_veth_ns: "v{{ cluster_infra_name | hash('md5') | truncate(11, True, '') }}i"
   when: cluster_infra_vlan_id | string | length > 0
 
-- name: Delete SNAT rules  # noqa: no-changed-when
+- name: Delete SNAT rules # noqa: no-changed-when
   environment:
     ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
     ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
@@ -106,7 +106,7 @@
 
 # --- agentless_net: delete L3 router namespace ---
 
-- name: Delete L3 router namespace  # noqa: no-changed-when
+- name: Delete L3 router namespace # noqa: no-changed-when
   environment:
     ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
     ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
@@ -140,7 +140,7 @@
     label: "{{ item.switch }}:{{ item.key }} -> {{ item.value }}"
   when: cluster_infra_vlan_id | string | length > 0 and cluster_infra_allocated_host_ids | length > 0
 
-- name: Reset access ports for this cluster's hosts  # noqa: no-changed-when
+- name: Reset access ports for this cluster's hosts # noqa: no-changed-when
   environment:
     ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
     ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
@@ -161,7 +161,7 @@
 
 # --- agentless_net: delete VLAN from switches ---
 
-- name: Delete VLAN from switches  # noqa: no-changed-when
+- name: Delete VLAN from switches # noqa: no-changed-when
   environment:
     ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
     ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
@@ -175,7 +175,7 @@
 
 # --- agentless_net: release VLAN allocation ---
 
-- name: Release VLAN allocation  # noqa: no-changed-when
+- name: Release VLAN allocation # noqa: no-changed-when
   environment:
     ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
     ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
@@ -190,7 +190,7 @@
 
 # --- Clean up cluster state ---
 
-- name: Remove cluster state from network state  # noqa: no-changed-when
+- name: Remove cluster state from network state # noqa: no-changed-when
   ansible.builtin.raw: |
     python3 - '{{ agentless_net_net_node_ipam_state_file }}' \
               '{{ cluster_infra_state_key }}' <<'STATE_PY'

@@ -31,4 +31,6 @@
 
 - name: Log BGP configuration summary
   ansible.builtin.debug:
-    msg: "Created BGPAdvertisement and {{ worker_bgp_params | length }} BGPPeer resources for workers: {{ worker_bgp_params | map(attribute='hostname') | list }}"
+    msg: >-
+      Created BGPAdvertisement and {{ worker_bgp_params | length }} BGPPeer resources
+      for workers: {{ worker_bgp_params | map(attribute='hostname') | list }}

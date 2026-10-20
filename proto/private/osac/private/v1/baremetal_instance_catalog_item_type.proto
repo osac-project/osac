@@ -74,6 +74,10 @@ message BareMetalInstanceCatalogItemFields {
   BareMetalInstanceTypeReferenceFieldPolicy instance_type = 7;
   // Policy for the DiskImage used to provision the instance.
   DiskImageReferenceFieldPolicy disk_image = 8;
+
+  // Optional user data Secret reference. Governs or defaults the secret containing cloud-init
+  // user data for instances created from this catalog item.
+  SecretReferenceFieldPolicy user_data_secret = 9;
 }
 
 // Reference to a BareMetalInstanceCatalogItem resource.

@@ -5,7 +5,7 @@
       - storage_provider_olm_operator_subscription == storage_provider_olm_operator_package
       - >-
         (storage_provider_olm_operator_package == 'trident-operator'
-         and storage_provider_olm_operator_namespace == 'openshift-operators')
+         and storage_provider_olm_operator_namespace == 'trident-operator')
         or
         (storage_provider_olm_operator_package == 'vast-csi-operator'
          and storage_provider_olm_operator_namespace == 'vast-csi-system')

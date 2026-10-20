@@ -25,7 +25,10 @@ storage_provider_csi_driver_matrix:
       method: olm
       package: trident-operator
       channel: stable
-      namespace: openshift-operators
+      # The certified Trident CSV supports AllNamespaces only. Keep its
+      # Subscription isolated from unrelated Manual InstallPlans.
+      namespace: trident-operator
+      operator_group: trident-operator-group
       install_plan_approval: Manual
       catalog_source: certified-operators
       catalog_namespace: openshift-marketplace

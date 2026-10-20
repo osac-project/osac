@@ -36,7 +36,7 @@ _OPERATORS: tuple[dict[str, Any], ...] = (
     {
         "package": "trident-operator",
         "subscription": "trident-operator",
-        "namespace": "openshift-operators",
+        "namespace": "trident-operator",
         "drivers": ("csi.trident.netapp.io",),
     },
     {
@@ -226,7 +226,7 @@ def test_stage2_installs_missing_native_csi_operators_and_skips_existing(
                 )
 
             trident_orchestrator = k8s_hub_client.get_json(
-                resource="tridentorchestrators.trident.netapp.io", name="trident", namespace="openshift-operators"
+                resource="tridentorchestrators.trident.netapp.io", name="trident", namespace="trident-operator"
             )
             assert trident_orchestrator.get("spec", {}).get("silenceAutosupport") is True, (
                 "Trident AutoSupport must remain disabled unless explicitly opted into"

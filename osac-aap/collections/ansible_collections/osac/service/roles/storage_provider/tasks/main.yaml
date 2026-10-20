@@ -165,7 +165,8 @@
           'method': 'olm',
           'package': 'trident-operator',
           'channel': 'stable',
-          'namespace': 'openshift-operators',
+          'namespace': 'trident-operator',
+          'operator_group': 'trident-operator-group',
           'install_plan_approval': 'Manual',
           'catalog_source': 'certified-operators',
           'catalog_namespace': 'openshift-marketplace',
@@ -459,6 +460,29 @@
           {{ lookup('env', 'OSAC_AAP_ENABLE_TEST_INSTALL_OVERRIDES', default='false') | bool
              and storage_provider_netapp_trident_install_override is defined }}
       block:
+        - name: Ensure the Trident OLM namespace exists
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: "{{ storage_provider_csi_driver_matrix.netapp.installer.namespace }}"
+
+        # The certified Trident CSV supports AllNamespaces only. Isolate its
+        # Subscription from unrelated Manual InstallPlans in openshift-operators.
+        - name: Ensure the Trident AllNamespaces OperatorGroup exists
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: operators.coreos.com/v1
+              kind: OperatorGroup
+              metadata:
+                name: "{{ storage_provider_csi_driver_matrix.netapp.installer.operator_group }}"
+                namespace: "{{ storage_provider_csi_driver_matrix.netapp.installer.namespace }}"
+              spec:
+                targetNamespaces: []
+
         - name: Ensure the Trident operand namespace exists
           kubernetes.core.k8s:
             state: present

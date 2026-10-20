@@ -87,18 +87,29 @@
         name: tridentbackendconfigs.trident.netapp.io
       register: _native_csi_fixture_trident_crd
 
+    - name: Read existing Trident OperatorGroups
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1
+        kind: OperatorGroup
+      register: _native_csi_fixture_operator_groups
+
     - name: Require clean OLM and Trident fixtures before mutation
       ansible.builtin.assert:
         that:
           - >-
             _native_csi_fixture_subscriptions.resources
             | selectattr('metadata.name', 'equalto', 'trident-operator')
-            | selectattr('metadata.namespace', 'equalto', 'openshift-operators')
+            | selectattr('metadata.namespace', 'equalto', 'trident-operator')
             | list | length == 0
           - >-
             _native_csi_fixture_subscriptions.resources
             | selectattr('metadata.name', 'equalto', 'vast-csi-operator')
             | selectattr('metadata.namespace', 'equalto', 'vast-csi-system')
+            | list | length == 0
+          - >-
+            _native_csi_fixture_operator_groups.resources
+            | selectattr('metadata.name', 'equalto', 'trident-operator-group')
+            | selectattr('metadata.namespace', 'equalto', 'trident-operator')
             | list | length == 0
           - _native_csi_fixture_trident_crd.resources | length == 0
           - _native_csi_fixture_trident_driver.resources | length == 0
@@ -667,7 +678,7 @@
           metadata:
             name: "{{ item }}"
       loop:
-        - openshift-operators
+        - trident-operator
         - vast-csi-system
 
     - name: Delete provider Subscription fixtures
@@ -678,7 +689,7 @@
         name: "{{ item.name }}"
         namespace: "{{ item.namespace }}"
       loop:
-        - {name: trident-operator, namespace: openshift-operators}
+        - {name: trident-operator, namespace: trident-operator}
         - {name: vast-csi-operator, namespace: vast-csi-system}
       failed_when: false
 
@@ -820,6 +831,22 @@
         kind: CSIDriver
         name: csi.trident.netapp.io
       register: _native_csi_trident_driver
+
+    - name: Read the Trident AllNamespaces OperatorGroup
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1
+        kind: OperatorGroup
+        name: trident-operator-group
+        namespace: trident-operator
+      register: _native_csi_trident_operator_group
+
+    - name: Assert Trident uses an isolated AllNamespaces OperatorGroup
+      ansible.builtin.assert:
+        that:
+          - _native_csi_trident_operator_group.resources | length == 1
+          - _native_csi_trident_operator_group.resources[0].spec.targetNamespaces | default([]) | length == 0
+        fail_msg: "Trident must use an AllNamespaces OperatorGroup in its dedicated namespace"
+        success_msg: "Trident uses an isolated AllNamespaces OperatorGroup"
 
     - name: Read Trident operand namespace
       kubernetes.core.k8s_info:
@@ -1039,8 +1066,17 @@
         name: "{{ item.name }}"
         namespace: "{{ item.namespace }}"
       loop:
-        - {name: trident-operator, namespace: openshift-operators}
+        - {name: trident-operator, namespace: trident-operator}
         - {name: vast-csi-operator, namespace: vast-csi-system}
+      failed_when: false
+
+    - name: Delete the Trident OperatorGroup fixture
+      kubernetes.core.k8s:
+        state: absent
+        api_version: operators.coreos.com/v1
+        kind: OperatorGroup
+        name: trident-operator-group
+        namespace: trident-operator
       failed_when: false
 
     - name: Delete Trident CSIDriver fixture
@@ -1080,6 +1116,15 @@
         wait: true
       failed_when: false
 
+    - name: Delete Trident operator namespace fixture
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: trident-operator
+        wait: true
+      failed_when: false
+
     - name: Delete native driver override log
       ansible.builtin.file:
         path: /tmp/osac_test_overrides.log
@@ -1109,7 +1154,7 @@
           apiVersion: v1
           kind: Namespace
           metadata:
-            name: openshift-operators
+            name: trident-operator
 
     - name: Create the Trident operand namespace fixture
       kubernetes.core.k8s:
@@ -1139,7 +1184,7 @@
           kind: Subscription
           metadata:
             name: trident-operator
-            namespace: openshift-operators
+            namespace: trident-operator
           spec:
             channel: preview
             installPlanApproval: Automatic
@@ -1253,7 +1298,7 @@
             api_version: operators.coreos.com/v1alpha1
             kind: Subscription
             name: trident-operator
-            namespace: openshift-operators
+            namespace: trident-operator
           failed_when: false
 
         - name: Delete the VAST Subscription after a failed initial reconcile
@@ -1286,6 +1331,15 @@
             wait: true
           failed_when: false
 
+        - name: Delete the Trident OperatorGroup after a failed initial reconcile
+          kubernetes.core.k8s:
+            state: absent
+            api_version: operators.coreos.com/v1
+            kind: OperatorGroup
+            name: trident-operator-group
+            namespace: trident-operator
+          failed_when: false
+
         - name: Delete operator namespaces after a failed initial reconcile
           kubernetes.core.k8s:
             state: absent
@@ -1295,6 +1349,7 @@
             wait: true
           loop:
             - trident
+            - trident-operator
             - vast-csi-system
           failed_when: false
 
@@ -1348,7 +1403,7 @@
             api_version: operators.coreos.com/v1alpha1
             kind: Subscription
             name: trident-operator
-            namespace: openshift-operators
+            namespace: trident-operator
           register: _trident_native_csi_subscription
 
         - name: Assert existing provider Subscriptions are unchanged
@@ -1549,7 +1604,16 @@
             api_version: operators.coreos.com/v1alpha1
             kind: Subscription
             name: trident-operator
-            namespace: openshift-operators
+            namespace: trident-operator
+          failed_when: false
+
+        - name: Delete the Trident OperatorGroup fixture
+          kubernetes.core.k8s:
+            state: absent
+            api_version: operators.coreos.com/v1
+            kind: OperatorGroup
+            name: trident-operator-group
+            namespace: trident-operator
           failed_when: false
 
         - name: Delete the Trident CSIDriver fixture
@@ -1575,6 +1639,15 @@
             api_version: v1
             kind: Namespace
             name: trident
+            wait: true
+          failed_when: false
+
+        - name: Delete the Trident operator namespace fixture
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Namespace
+            name: trident-operator
             wait: true
           failed_when: false
 

@@ -92,7 +92,7 @@
                   method: olm
                   package: trident-operator
                   channel: preview
-                  namespace: openshift-operators
+                  namespace: trident-operator
                   install_plan_approval: Manual
                   catalog_source: certified-operators
                   catalog_namespace: openshift-marketplace

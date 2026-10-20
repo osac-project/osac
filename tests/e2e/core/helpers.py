@@ -560,13 +560,19 @@ def wait_for_cluster_ready(*, k8s: K8sClient, name: str) -> None:
     # budget (60 min) plus earlier steps in the same AAP job (create hosted
     # cluster, retrieve kubeconfig, etc.), or this times out first with a
     # less useful error while the ClusterOrder is still legitimately Progressing.
-    def _check() -> str:
-        phase = k8s.get_cluster_order_phase(name=name, checked=False)
-        if phase == "Failed":
-            raise AssertionError(f"{name} entered Failed phase before becoming Ready")
-        return phase
-
-    poll_until(fn=_check, until=lambda v: v == "Ready", retries=480, delay=15, description=f"{name} ClusterOrder Ready")
+    #
+    # The operator retries provision with backoff after a failed AAP job
+    # (e.g. "container not found in pod", "0 agents available").  The phase
+    # goes Failed -> Progressing -> Ready on retry.  Treating Failed as
+    # terminal kills the test before the retry can land; let the timeout be
+    # the safety net instead (same approach as osac-test-infra PR #62).
+    poll_until(
+        fn=lambda: k8s.get_cluster_order_phase(name=name, checked=False),
+        until=lambda v: v == "Ready",
+        retries=480,
+        delay=15,
+        description=f"{name} ClusterOrder Ready",
+    )
 
 
 def wait_for_hosted_cluster_kubeconfig(

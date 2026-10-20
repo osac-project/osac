@@ -678,6 +678,7 @@ def _assert_worker_aggregates(*, k8s: K8sClient, co_name: str, expected_workers:
         retries=120,
         delay=10,
         description=f"{co_name} worker aggregates before NodePool isolation check",
+        retry_on_error=True,
     )
 
 

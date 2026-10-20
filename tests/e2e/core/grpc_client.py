@@ -13,10 +13,12 @@ PUBLIC_API: str = "osac.public.v1"
 PRIVATE_API: str = "osac.private.v1"
 
 
-def _metadata(*, name: str, tenant: str | None = None) -> dict[str, str]:
+def _metadata(*, name: str, tenant: str | None = None, project: str | None = None) -> dict[str, str]:
     meta: dict[str, str] = {"name": name}
     if tenant:
         meta["tenant"] = tenant
+    if project:
+        meta["project"] = project
     return meta
 
 
@@ -325,12 +327,12 @@ class GRPCClient:
 
     # ExternalIP operations (public API)
 
-    def create_external_ip(self, *, name: str, pool: str, tenant: str | None = None) -> str:
+    def create_external_ip(self, *, name: str, pool: str, tenant: str | None = None, project: str | None = None) -> str:
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.ExternalIPs/Create",
             data={
                 "object": {
-                    "metadata": _metadata(name=name, tenant=tenant),
+                    "metadata": _metadata(name=name, tenant=tenant, project=project),
                     "spec": {"pool": {"id": pool}},
                 }
             },

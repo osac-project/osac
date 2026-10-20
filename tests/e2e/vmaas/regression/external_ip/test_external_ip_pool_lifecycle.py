@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from collections.abc import Callable
+from datetime import datetime
 from uuid import uuid4
 
 import pytest
@@ -18,10 +19,59 @@ from tests.e2e.core.helpers import (
     wait_for_external_ip_pool_deletion,
 )
 from tests.e2e.core.k8s_client import K8sClient
-from tests.e2e.core.metering import MeteringCollector
+from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector
 from tests.e2e.core.runner import poll_until
 
 pytestmark = pytest.mark.regression
+
+
+def _heartbeat_with_dimensions(
+    metering: MeteringCollector, resource_id: str, wanted: dict[str, str], *, after: datetime | None = None
+) -> dict[str, object] | None:
+    """Return the first heartbeat of the resource whose dimensions match, waiting for one.
+
+    ``after`` bounds the search: only heartbeats whose usage interval starts at or after
+    that moment match, so a check that follows an event cannot be satisfied by a
+    heartbeat from before it.
+    """
+
+    def find() -> bool:
+        return _heartbeat_with_dimensions_once(metering, resource_id, wanted, after=after) is not None
+
+    poll_until(
+        fn=find,
+        until=lambda found: found is True,
+        retries=60,
+        delay=5,
+        description=f"heartbeat of {resource_id} with dimensions {wanted}",
+    )
+    return _heartbeat_with_dimensions_once(metering, resource_id, wanted, after=after)
+
+
+def _heartbeat_with_dimensions_once(
+    metering: MeteringCollector, resource_id: str, wanted: dict[str, str], *, after: datetime | None = None
+) -> dict[str, object] | None:
+    for event in metering.get_all_events(HEARTBEAT_TYPE, resource_id):
+        dimensions = event.get("data", {}).get("billing_dimensions", {})
+        if not all(dimensions.get(key) == value for key, value in wanted.items()):
+            continue
+        if after is not None:
+            usage_from = _parse_time(event["data"]["usage"]["from"])
+            if usage_from < after:
+                continue
+        return event
+    return None
+
+
+def _parse_time(value: str) -> datetime:
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    return datetime.fromisoformat(value)
+
+
+def _attribution_dimension(resource_type: str, ref: str) -> str:
+    """The encoded attribution dimension: kind/id-or-name/endpoint, not a bare UUID."""
+    return f"{resource_type}/{ref}/API"
 
 
 class TestExternalIPPoolLifecycle:
@@ -43,12 +93,12 @@ class TestExternalIPPoolLifecycle:
         assert pool_id in private_grpc.list_external_ip_pool_ids()
         assert ip_id in grpc.list_external_ip_ids()
         wait_for_external_ip_allocated(k8s=k8s_hub_client, name=ip_cr_name)
-        metering.expect("osac.resource.started.v1", resource_id=ip_id)
+        metering.expect(HEARTBEAT_TYPE, resource_id=ip_id, timeout=180)
         metering.verify()
-        started = metering.get_event("osac.resource.started.v1", resource_id=ip_id)
-        assert started["data"]["billing_dimensions"]["pool"] == pool_id
-        assert started["data"]["billing_dimensions"]["ip_family"] == "ipv4"
-        assert started["data"]["billing_dimensions"]["attached"] is False
+        allocated = metering.get_event(HEARTBEAT_TYPE, resource_id=ip_id)
+        assert allocated["data"]["billing_dimensions"]["pool"] == pool_id
+        assert allocated["data"]["billing_dimensions"]["ip_family"] == "ipv4"
+        assert allocated["data"]["billing_dimensions"]["attached"] == "false"
 
         # --- Attach ExternalIP to ComputeInstance 1 ---
         att_id: str = grpc.create_external_ip_attachment(
@@ -73,12 +123,13 @@ class TestExternalIPPoolLifecycle:
         assert attached_ip_address, "ExternalIP should have an allocated address"
         assert private_ip_obj["status"]["attribution"]["computeInstance"]["id"] == ci1_uuid
         assert private_ip_obj["status"].get("attachmentTransitionTime")
-        metering.expect("osac.resource.updated.v1", resource_id=ip_id)
-        metering.verify()
-        # The update closes the old unattached slice; the settled attached
-        # dimensions apply to the next heartbeat and slice.
-        attached_event = metering.get_event("osac.resource.updated.v1", resource_id=ip_id)
-        assert attached_event["data"]["billing_dimensions"]["attached"] is False
+        # The settled attachment is a dimension change, so the attached meter
+        # starts billing: a heartbeat arrives with the attached dimensions. The
+        # attribution is the encoded reference, not the bare UUID.
+        attached_event = _heartbeat_with_dimensions(
+            metering, ip_id, {"attached": "true", "attribution": _attribution_dimension("compute_instance", ci1_uuid)}
+        )
+        assert attached_event is not None, "no heartbeat with the attached dimensions arrived"
 
         # --- Detach (delete attachment) ---
         grpc.delete_external_ip_attachment(attachment_id=att_id)
@@ -91,12 +142,13 @@ class TestExternalIPPoolLifecycle:
             delay=5,
             description=f"ExternalIP {ip_id} detached",
         )
-        metering.expect("osac.resource.updated.v1", resource_id=ip_id)
-        metering.verify()
-        detached_event = metering.get_event("osac.resource.updated.v1", resource_id=ip_id)
-        detached_dimensions = detached_event["data"]["billing_dimensions"]
-        assert detached_dimensions["attached"] is True
-        assert detached_dimensions["attribution_id"] == ci1_uuid
+        # Detaching is another dimension change: the unattached meter bills again. The
+        # window starts at the attached heartbeat's interval end, so the check cannot be
+        # satisfied by the unattached heartbeats from before the attachment.
+        assert attached_event is not None
+        attached_to = _parse_time(str(attached_event["data"]["usage"]["to"]))
+        detached_event = _heartbeat_with_dimensions(metering, ip_id, {"attached": "false"}, after=attached_to)
+        assert detached_event is not None, "no heartbeat with the detached dimensions arrived"
 
         # --- Re-attach same IP to ComputeInstance 2 ---
         att2_id: str = grpc.create_external_ip_attachment(
@@ -115,10 +167,13 @@ class TestExternalIPPoolLifecycle:
             description="reattached ExternalIP attribution settlement",
         )
         assert second_private_ip["status"]["attribution"]["computeInstance"]["id"] == ci2_uuid
-        metering.expect("osac.resource.updated.v1", resource_id=ip_id)
-        metering.verify()
-        reattached_event = metering.get_event("osac.resource.updated.v1", resource_id=ip_id)
-        assert reattached_event["data"]["billing_dimensions"]["attached"] is False
+        reattached_event = _heartbeat_with_dimensions(
+            metering,
+            ip_id,
+            {"attached": "true", "attribution": _attribution_dimension("compute_instance", ci2_uuid)},
+            after=attached_to,
+        )
+        assert reattached_event is not None, "no heartbeat with the reattached dimensions arrived"
 
         ip_obj = grpc.get_external_ip(external_ip_id=ip_id)
         assert ip_obj["object"]["status"]["address"] == attached_ip_address, (
@@ -129,9 +184,7 @@ class TestExternalIPPoolLifecycle:
         grpc.delete_external_ip_attachment(attachment_id=att2_id)
         wait_for_external_ip_attachment_deletion(k8s=k8s_hub_client, name=att2_cr_name)
 
-        metering.expect("osac.resource.suspended.v1", resource_id=ip_id)
         grpc.delete_external_ip(external_ip_id=ip_id)
-        metering.verify()
         wait_for_external_ip_deletion(k8s=k8s_hub_client, name=ip_cr_name)
         poll_until(
             fn=lambda: ip_id not in grpc.list_external_ip_ids(),

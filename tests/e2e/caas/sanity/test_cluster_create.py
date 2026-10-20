@@ -29,7 +29,7 @@ from tests.e2e.core.helpers import (
     wait_for_hosted_cluster_kubeconfig,
 )
 from tests.e2e.core.k8s_client import K8sClient
-from tests.e2e.core.metering import MeteringCollector
+from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import env, poll_until, run
 
@@ -414,9 +414,13 @@ def assert_cluster_available(
     assert uuid in grpc.list_cluster_ids()
     cluster_tenant, candidate_bmis = _assert_worker_provisioning(grpc=grpc, k8s=k8s, uuid=uuid, co_name=co_name)
 
-    metering.expect("osac.resource.started.v1", resource_id=uuid)
-    metering.verify()
     wait_for_cluster_order_condition(k8s=k8s, name=co_name, condition_type="ClusterAvailable")
+
+    # The control-plane meter has once: [READY] semantics: a cluster bills its
+    # installation time only when it reaches READY, so the heartbeat expectation can
+    # start only after the cluster is available.
+    metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=180)
+    metering.verify()
 
     cluster = grpc.get_cluster(cluster_id=uuid)
     cluster_order_spec = k8s.get_cluster_order_spec(name=co_name)
@@ -457,42 +461,19 @@ def assert_cluster_available(
 def _assert_cluster_metering(
     *, metering: MeteringCollector, uuid: str, node_sets: dict[str, Any], cluster_template: str
 ) -> None:
-    """Verify N+1 heartbeat decomposition and the started event's billing dimensions."""
-    expected_components = 1 + len(node_sets)
-    metering.expect("osac.resource.heartbeat.v1", resource_id=uuid, timeout=180)
-    metering.verify()
+    """Verify the cluster's control plane bills and carries its template dimension.
 
-    heartbeats = metering.get_all_events("osac.resource.heartbeat.v1", resource_id=uuid)
-    hb_components = [ev.get("data", {}).get("billing_dimensions", {}).get("component") for ev in heartbeats]
-    cp_count = sum(1 for c in hb_components if c == "control_plane")
-    worker_count = sum(1 for c in hb_components if c == "worker")
-    assert cp_count >= 1, f"Expected at least 1 control_plane heartbeat, got {cp_count}"
-    assert worker_count >= len(node_sets), f"Expected at least {len(node_sets)} worker heartbeat(s), got {worker_count}"
-    assert len(heartbeats) >= expected_components, (
-        f"Expected at least {expected_components} heartbeat events (1 cp + {len(node_sets)} workers), "
-        f"got {len(heartbeats)}"
-    )
-
-    started = metering.get_event("osac.resource.started.v1", resource_id=uuid)
-    assert started.get("osacresourcetype") == "cluster_order"
-    started_bd = started.get("data", {}).get("billing_dimensions", {})
-    assert started_bd.get("cluster_template") == cluster_template, (
-        f"cluster_template mismatch: {started_bd.get('cluster_template')!r} != {cluster_template!r}"
-    )
-
-
-def _assert_worker_scale_metering(
-    *, metering: MeteringCollector, uuid: str, worker_node_set: str, scaled_size: int
-) -> None:
-    metering.expect("osac.resource.updated.v1", resource_id=uuid, timeout=120)
-    metering.verify()
-    updated = metering.get_event("osac.resource.updated.v1", resource_id=uuid)
-    updated_bd = updated.get("data", {}).get("billing_dimensions", {})
-    assert updated_bd.get("node_set") == worker_node_set, (
-        f"updated.v1 node_set mismatch: {updated_bd.get('node_set')!r} != {worker_node_set!r}"
-    )
-    assert updated_bd.get("node_count") == scaled_size, (
-        f"updated.v1 node_count should be {scaled_size}, got {updated_bd.get('node_count')}"
+    Worker nodes no longer bill through the cluster: they bill as the bare-metal
+    instances they are, so the cluster sends only its control_plane meter.
+    """
+    del node_sets  # kept in the signature for the journey's shape
+    heartbeat = metering.get_event(HEARTBEAT_TYPE, resource_id=uuid, timeout=180)
+    assert heartbeat.get("osacresourcetype") == "cluster_order"
+    data = heartbeat.get("data", {})
+    assert data.get("meter") == "control_plane", f"Wrong cluster meter: {data.get('meter')!r}"
+    heartbeat_bd = data.get("billing_dimensions", {})
+    assert heartbeat_bd.get("template") == cluster_template, (
+        f"template mismatch: {heartbeat_bd.get('template')!r} != {cluster_template!r}"
     )
 
 
@@ -501,7 +482,6 @@ def _assert_cluster_deleted(
 ) -> None:
     """Observe natural worker/parent teardown and dependent GC without forced cleanup."""
     co_name = cluster.co_name
-    metering.expect("osac.resource.deleted.v1", resource_id=uuid)
     wait_for_cluster_deleting(k8s=k8s, name=co_name)
     wait_for_cluster_grpc_deleting_or_archived(grpc=grpc, uuid=uuid)
     bmi_filter = f'this.metadata.labels["osac.openshift.io/cluster-order"] == "{co_name}"'
@@ -543,7 +523,6 @@ def _assert_cluster_deleted(
     )
     assert not k8s.is_present(resource="clusterorder", name=co_name)
     wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
-    metering.verify()
 
 
 def _assert_catalog_created_cluster(
@@ -573,8 +552,8 @@ def test_cluster_create(
 ) -> None:
     """Verify the full CaaS cluster lifecycle through a catalog item: author a published
     ClusterCatalogItem, create a cluster from it, provision to Ready, version and
-    releaseImage propagation to the HostedCluster, N+1 metering heartbeat decomposition,
-    worker scale-up reflected in updated.v1 metering, and deletion."""
+    releaseImage propagation to the HostedCluster, control-plane metering
+    heartbeats, worker scale-up, and deletion."""
 
     worker_instance_type_id = private_grpc.ensure_bare_metal_instance_type(
         name="ci-worker-bm", host_label_selector={"osac.openshift.io/host-type": "default"}
@@ -614,7 +593,6 @@ def test_cluster_create(
             catalog_item=catalog_item_id, name=name, pull_secret=pull_secret_name
         )
         logger.info("CaaS: cluster created")
-        metering.expect("osac.resource.created.v1", resource_id=uuid)
 
         _assert_catalog_created_cluster(
             grpc=grpc,
@@ -635,9 +613,6 @@ def test_cluster_create(
 
         scaled_size = cluster.original_size + 1
         cli.scale_cluster(uuid=uuid, node_set=cluster.worker_node_set, size=scaled_size)
-        _assert_worker_scale_metering(
-            metering=metering, uuid=uuid, worker_node_set=cluster.worker_node_set, scaled_size=scaled_size
-        )
 
         # Scale back before deletion.
         cli.scale_cluster(uuid=uuid, node_set=cluster.worker_node_set, size=cluster.original_size)
@@ -792,8 +767,6 @@ def assert_cluster_with_two_node_sets_available(
     co_name = wait_for_cluster_order_cr(k8s=k8s, uuid=uuid)
     assert uuid in grpc.list_cluster_ids()
     wait_for_cluster_progressing(k8s=k8s, name=co_name)
-    metering.expect("osac.resource.started.v1", resource_id=uuid)
-    metering.verify()
 
     cluster_order = k8s.get_json(resource="clusterorder", name=co_name)
     cluster = grpc.get_cluster(cluster_id=uuid)["object"]
@@ -812,6 +785,12 @@ def assert_cluster_with_two_node_sets_available(
         expected_replicas=expected_replicas,
         instance_types=instance_types,
     )
+
+    # The control-plane meter has once: [READY] semantics: a cluster bills its
+    # installation time only when it reaches READY, so the heartbeat expectation can
+    # start only after the worker and agent readiness checks above.
+    metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=180)
+    metering.verify()
 
     cluster_tenant = cluster["metadata"]["tenant"]
     assert cluster_order["metadata"]["annotations"]["osac.openshift.io/tenant"] == cluster_tenant

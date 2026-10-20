@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import urllib.error
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -14,11 +15,57 @@ from tests.e2e.core.runner import poll_until
 
 logger = logging.getLogger(__name__)
 
+HEARTBEAT_TYPE = "osac.resource.heartbeat.v1"
+
+# The resource types the metering engine bills, in the shape heartbeats carry.
+HEARTBEAT_RESOURCE_TYPES = (
+    "compute_instance",
+    "cluster_order",
+    "bare_metal_instance",
+    "external_ip",
+    "nat_gateway",
+    "volume",
+)
+
+# Every meter sends these dimensions; a meter's own dimensions ride along. Project is an
+# identity field every resource carries.
+COMMON_DIMENSIONS = ("deployment", "tenant", "project", "meter_type")
+
+# Dimensions that legitimately land after RUNNING: the operator reports the running
+# instance type 15-20 s after the state, so a compute heartbeat that predates the fact
+# bills on a dimensionless meter and a later heartbeat corrects it onto the typed one.
+# Such a dimension is required only from the first heartbeat that carries it:
+# heartbeats before that pass validation; heartbeats after it must carry it.
+LATE_DIMENSIONS: dict[str, tuple[str, ...]] = {"compute_instance": ("instance_type",)}
+
+_QUANTITY_RE = re.compile(r"^-?\d+\.\d{6}$")
+
 
 def _parse_time(s: str) -> datetime:
     if s.endswith("Z"):
         s = s[:-1] + "+00:00"
     return datetime.fromisoformat(s)
+
+
+def _matches(event: dict[str, Any], expected: ExpectedEvent) -> bool:
+    return event.get("type") == expected.event_type and (
+        event.get("resource_id") == expected.resource_id
+        or event.get("osacresourceid") == expected.resource_id
+        or event.get("data", {}).get("resource_id") == expected.resource_id
+    )
+
+
+def _interval_start(event: dict[str, Any]) -> datetime:
+    """The start of a heartbeat's usage interval, for ordering a sequence.
+
+    A heartbeat whose interval start is missing or unparsable sorts last; the
+    structure validation that follows fails it with the specific assert.
+    """
+    text = event.get("data", {}).get("usage", {}).get("from") or ""
+    try:
+        return _parse_time(text)
+    except ValueError:
+        return datetime.max.replace(tzinfo=UTC)
 
 
 @dataclass
@@ -29,15 +76,22 @@ class ExpectedEvent:
 
 
 class MeteringCollector:
-    """Collects CloudEvents from the metering test adapter HTTP API and verifies expectations.
+    """Collects heartbeat CloudEvents from the metering test adapter HTTP API and verifies
+    expectations.
 
-    The test adapter runs inside the Kubernetes cluster and exposes
+    The test adapter runs inside the Kubernetes cluster, reads every tenant's
+    heartbeat topic, and exposes
     ``GET /events?type={event_type}&resource_id={resource_id}&since={RFC3339}``
     which returns a JSON array of CloudEvents.
 
+    Metering sends one event type, ``osac.resource.heartbeat.v1``: a quantity of
+    usage over an interval, positive or negative, on the resource's heartbeat
+    topic. Lifecycle and correction events do not exist; a state change shows up
+    as the next heartbeat's dimensions or as a negative correction.
+
     Usage in tests::
 
-        metering.expect("osac.resource.created.v1", resource_id=uuid)
+        metering.expect("osac.resource.heartbeat.v1", resource_id=uuid)
         # ... test actions ...
         # metering.verify() runs automatically on fixture teardown
     """
@@ -55,6 +109,11 @@ class MeteringCollector:
         """No-op -- no background resources to clean up."""
 
     def expect(self, event_type: str, resource_id: str, *, timeout: int = 60) -> None:
+        if event_type != HEARTBEAT_TYPE:
+            raise ValueError(
+                f"metering sends only {HEARTBEAT_TYPE}; lifecycle and correction "
+                f"events do not exist, got {event_type!r}"
+            )
         self._expectations.append(ExpectedEvent(event_type=event_type, resource_id=resource_id, timeout=timeout))
 
     def verify(self) -> None:
@@ -64,9 +123,47 @@ class MeteringCollector:
             return
         for exp in self._expectations:
             event = self._poll_for_event(exp)
-            self._validate_structure(event, exp)
+            self._validate_resource_events(exp)
             self._verified[(exp.event_type, exp.resource_id)] = event
         self._expectations.clear()
+
+    def _validate_resource_events(self, expected: ExpectedEvent) -> None:
+        """Validate every captured heartbeat of the resource, in interval order.
+
+        verify() runs at teardown over everything captured, which includes the
+        early heartbeats of a resource whose late dimensions have not landed
+        yet; a late dimension is required only from the first heartbeat that
+        carries it (see LATE_DIMENSIONS).
+        """
+        events = [ev for ev in self._fetch_events(expected.event_type, expected.resource_id) if _matches(ev, expected)]
+        events.sort(key=_interval_start)
+        carried: set[str] = set()
+        for event in events:
+            dimensions = event.get("data", {}).get("billing_dimensions", {})
+            carried.update(
+                dimension
+                for dimension in LATE_DIMENSIONS.get(event.get("osacresourcetype", ""), ())
+                if dimensions.get(dimension)
+            )
+            self._validate_structure(event, expected, late_required=carried)
+
+    def verify_event(self, event: dict[str, Any], *, resource_id: str) -> None:
+        """Validate one event's envelope and dimension set.
+
+        Use where the first heartbeat of a resource legitimately lacks a
+        dimension that lands later, such as the running instance type, which
+        the operator reports 15-20 s after RUNNING: wait for the event that
+        carries the dimension, then verify that one, instead of verify(),
+        which polls for and validates the first match. The event given here is
+        validated with every late dimension required, so passing it an early
+        heartbeat that predates the fact fails.
+        """
+        expected = ExpectedEvent(event_type=HEARTBEAT_TYPE, resource_id=resource_id)
+        late = LATE_DIMENSIONS.get(event.get("osacresourcetype", ""), ())
+        self._validate_structure(event, expected, late_required=set(late))
+        if event_id := event.get("id", ""):
+            self._matched.add(event_id)
+        self._verified[(HEARTBEAT_TYPE, resource_id)] = event
 
     def get_event(self, event_type: str, resource_id: str, *, timeout: int = 60) -> dict[str, Any]:
         """Return a verified event, or poll for one if not yet verified."""
@@ -77,7 +174,12 @@ class MeteringCollector:
         return self._poll_for_event(exp)
 
     def assert_no_events(self, event_type: str, resource_id: str, *, since: str, within: int = 60) -> None:
-        """Assert that no events of the given type appear for the resource within a time window."""
+        """Assert that no events of the given type bill past ``since`` for the resource.
+
+        The CloudEvent time is the start of the usage interval, so filtering on it would
+        miss a heartbeat whose interval started before ``since`` but continued after it:
+        an event bills past the halt exactly when its interval's end does.
+        """
         time.sleep(within)
         events = self._fetch_events(event_type, resource_id)
         since_dt = datetime.fromisoformat(since)
@@ -90,12 +192,14 @@ class MeteringCollector:
                 or ev.get("osacresourceid") == resource_id
                 or ev.get("data", {}).get("resource_id") == resource_id
             )
-            and ev.get("time")
-            and _parse_time(ev["time"]) >= since_dt
+            and (usage := ev.get("data", {}).get("usage", {}))
+            and usage.get("to")
+            and _parse_time(usage["to"]) > since_dt
         ]
         assert not matching, (
-            f"Expected no {event_type} events for {resource_id} after {since}, "
-            f"but found {len(matching)}: {[{'id': e.get('id'), 'time': e.get('time')} for e in matching]}"
+            f"Expected no {event_type} events for {resource_id} billing past {since}, "
+            f"but found {len(matching)}: "
+            f"{[{'id': e.get('id'), 'to': e.get('data', {}).get('usage', {}).get('to')} for e in matching]}"
         )
 
     def get_all_events(self, event_type: str, resource_id: str) -> list[dict[str, Any]]:
@@ -132,11 +236,7 @@ class MeteringCollector:
                 ev_id = ev.get("id", "")
                 if ev_id and ev_id in self._matched:
                     continue
-                if ev.get("type") == expected.event_type and (
-                    ev.get("resource_id") == expected.resource_id
-                    or ev.get("osacresourceid") == expected.resource_id
-                    or ev.get("data", {}).get("resource_id") == expected.resource_id
-                ):
+                if _matches(ev, expected):
                     if ev_id:
                         self._matched.add(ev_id)
                     result.append(ev)
@@ -153,114 +253,100 @@ class MeteringCollector:
         return result[0]
 
     @staticmethod
-    def _validate_structure(event: dict[str, Any], expected: ExpectedEvent) -> None:
+    def _validate_structure(
+        event: dict[str, Any], expected: ExpectedEvent, *, late_required: set[str] | None = None
+    ) -> None:
+        late_required = late_required or set()
         assert event.get("specversion") == "1.0", f"Wrong specversion: {event.get('specversion')}"
-        assert event.get("source") in ("osac-metering", "osac-metering/reconciler"), (
-            f"Wrong source: {event.get('source')}"
-        )
+        assert event.get("type") == HEARTBEAT_TYPE, f"Wrong type: {event.get('type')}"
+        assert event.get("source") == "osac-metering", f"Wrong source: {event.get('source')}"
         assert event.get("id"), "Missing event id"
         assert event.get("time"), "Missing event time"
         assert event.get("osacresourceid") == expected.resource_id, (
             f"Wrong osacresourceid: {event.get('osacresourceid')}"
         )
-        assert event.get("osacresourcetype") in ("compute_instance", "cluster_order", "external_ip", "nat_gateway"), (
+        assert event.get("osacresourcetype") in HEARTBEAT_RESOURCE_TYPES, (
             f"Wrong osacresourcetype: {event.get('osacresourcetype')}"
         )
         assert event.get("osactenant"), "Missing osactenant"
 
         data = event.get("data", {})
         assert data.get("resource_id") == expected.resource_id, f"Wrong resource_id in data: {data.get('resource_id')}"
-        assert data.get("resource_type"), "Missing resource_type in data"
-        assert data["resource_type"] == event.get("osacresourcetype"), (
-            f"Mismatched resource types: {data['resource_type']!r} != {event.get('osacresourcetype')!r}"
+        assert data.get("resource_type") == event.get("osacresourcetype"), (
+            f"Mismatched resource types: {data.get('resource_type')!r} != {event.get('osacresourcetype')!r}"
         )
         assert data.get("tenant_id"), "Missing tenant_id in data"
-        assert data.get("schema_version") == "v1", f"Wrong schema_version: {data.get('schema_version')}"
-        assert "project_id" in data, "Missing project_id in data"
-        assert "billing_dimensions" in data, "Missing billing_dimensions in data"
+        assert data.get("meter"), "Missing meter in data"
+        assert data.get("component"), "Missing component in data"
+        assert data.get("heartbeat_time"), "Missing heartbeat_time in data"
+        assert data.get("rules_revision"), "Missing rules_revision in data"
+        _parse_time(data["heartbeat_time"])
 
-        if expected.event_type != "osac.resource.heartbeat.v1":
-            assert data.get("transition_time"), "Missing transition_time in data"
-            try:
-                datetime.fromisoformat(data["transition_time"])
-            except (ValueError, TypeError) as exc:
-                raise AssertionError(f"Invalid RFC3339 transition_time: {data.get('transition_time')}") from exc
+        usage = data.get("usage", {})
+        assert usage.get("semantics") == "interval", f"Wrong usage semantics: {usage.get('semantics')}"
+        assert usage.get("unit"), "Missing usage unit"
+        assert usage.get("precision") == "microsecond", f"Wrong usage precision: {usage.get('precision')}"
+        assert usage.get("from") and usage.get("to"), "Missing usage interval"
+        from_dt = _parse_time(usage["from"])
+        to_dt = _parse_time(usage["to"])
+        assert from_dt < to_dt, f"Usage interval is not forward: {usage['from']}..{usage['to']}"
+        assert _parse_time(event["time"]) == from_dt, "CloudEvent time must be the interval's start"
+        assert _QUANTITY_RE.match(usage.get("quantity", "")), (
+            f"Quantity is not exact fixed-point text: {usage.get('quantity')!r}"
+        )
 
-        resource_type = event.get("osacresourcetype")
-        transition_types = {"osac.resource.started.v1", "osac.resource.suspended.v1", "osac.resource.resumed.v1"}
-        if expected.event_type in transition_types:
-            assert "previous_state" in data, f"Missing previous_state in {expected.event_type}"
-            assert "duration_seconds" in data, f"Missing duration_seconds in {expected.event_type}"
-
-        if expected.event_type == "osac.resource.suspended.v1":
-            valid_previous_states = {
-                "compute_instance": ("RUNNING", "STOPPING", "STARTING", "PROGRESSING", "READY"),
-                "cluster_order": ("RUNNING", "STOPPING", "STARTING", "PROGRESSING", "READY"),
-                "external_ip": ("ALLOCATED",),
-                "nat_gateway": ("READY",),
-            }
-            valid = valid_previous_states[resource_type]
-            assert data.get("previous_state") in valid, (
-                f"suspended.v1 previous_state should be one of {valid}, got {data.get('previous_state')!r}"
-            )
-
-        if expected.event_type == "osac.resource.resumed.v1":
-            valid = ("STOPPED", "PAUSED", "FAILED", "DELETE_FAILED")
-            assert data.get("previous_state") in valid, (
-                f"resumed.v1 previous_state should be one of {valid}, got {data.get('previous_state')!r}"
-            )
-
-        if resource_type == "compute_instance":
-            _validate_vmaas_billing(event)
-        elif resource_type == "cluster_order":
-            _validate_caas_billing(event, expected.event_type)
-        elif resource_type == "external_ip":
-            _validate_external_ip_billing(event)
-        elif resource_type == "nat_gateway":
-            _validate_nat_gateway_billing(event)
+        bd = data.get("billing_dimensions", {})
+        for dimension in COMMON_DIMENSIONS:
+            assert bd.get(dimension), f"Missing {dimension} in billing_dimensions"
+        for dimension in LATE_DIMENSIONS.get(event["osacresourcetype"], ()):
+            if dimension in late_required:
+                assert bd.get(dimension), f"Missing or empty {dimension} in billing_dimensions"
+        validator = _DIMENSION_VALIDATORS.get(event["osacresourcetype"])
+        if validator is not None:
+            validator(bd)
 
 
-def _validate_vmaas_billing(event: dict[str, Any]) -> None:
-    bd = event.get("data", {}).get("billing_dimensions", {})
+def _validate_compute_dimensions(bd: dict[str, Any]) -> None:
+    # instance_type is not checked here: it lands 15-20 s after RUNNING, so the
+    # collector enforces it as a late dimension, from the first heartbeat that
+    # carries it onward.
+    assert bd.get("image"), "Missing or empty image in billing_dimensions"
+    assert bd.get("boot_disk_size_gib"), "Missing or empty boot_disk_size_gib in billing_dimensions"
+
+
+def _validate_cluster_dimensions(bd: dict[str, Any]) -> None:
+    assert bd.get("template"), "Missing or empty template in billing_dimensions"
+    assert bd.get("version"), "Missing or empty version in billing_dimensions"
+
+
+def _validate_bare_metal_dimensions(bd: dict[str, Any]) -> None:
     assert bd.get("instance_type"), "Missing or empty instance_type in billing_dimensions"
-    assert bd.get("image_ref"), "Missing or empty image_ref in billing_dimensions"
-    assert "boot_disk_size_gib" in bd, "Missing boot_disk_size_gib in billing_dimensions"
-    assert isinstance(bd["boot_disk_size_gib"], (int, float)), (
-        f"boot_disk_size_gib should be numeric, got {type(bd['boot_disk_size_gib']).__name__}"
+
+
+def _validate_volume_dimensions(bd: dict[str, Any]) -> None:
+    assert bd.get("storage_tier"), "Missing or empty storage_tier in billing_dimensions"
+
+
+def _validate_external_ip_dimensions(bd: dict[str, Any]) -> None:
+    assert bd.get("pool"), "Missing or empty pool in billing_dimensions"
+    assert bd.get("ip_family") in ("ipv4", "ipv6"), f"Wrong ip_family: {bd.get('ip_family')!r}"
+    assert isinstance(bd.get("attached"), bool) or bd.get("attached") in ("true", "false"), (
+        f"attached should be boolean, got {bd.get('attached')!r}"
     )
+    if bd.get("attached") in (True, "true"):
+        assert bd.get("attribution"), "Missing attribution for an attached ExternalIP"
 
 
-def _validate_caas_billing(event: dict[str, Any], event_type: str) -> None:
-    bd = event.get("data", {}).get("billing_dimensions", {})
-    assert bd.get("cluster_template"), "Missing cluster_template in billing_dimensions"
-    # created.v1 and deleted.v1 use topLevelDims (cluster_template +
-    # release_image only, no per-component decomposition)
-    if event_type in ("osac.resource.created.v1", "osac.resource.deleted.v1"):
-        assert bd.get("release_image"), "Missing release_image in billing_dimensions"
-        return
-    assert bd.get("component") in ("control_plane", "worker"), (
-        f"component should be control_plane or worker, got {bd.get('component')!r}"
-    )
-    assert bd.get("node_set"), "Missing node_set in billing_dimensions"
-    assert bd.get("baremetal_instance_type"), "Missing baremetal_instance_type in billing_dimensions"
-    assert isinstance(bd.get("node_count"), (int, float)) and bd["node_count"] > 0, (
-        f"node_count should be positive number, got {bd.get('node_count')!r}"
-    )
+def _validate_nat_gateway_dimensions(bd: dict[str, Any]) -> None:
+    assert bd.get("virtual_network"), "Missing or empty virtual_network in billing_dimensions"
+    assert bd.get("external_ip"), "Missing or empty external_ip in billing_dimensions"
 
 
-def _validate_external_ip_billing(event: dict[str, Any]) -> None:
-    bd = event.get("data", {}).get("billing_dimensions", {})
-    assert bd.get("deployment"), "Missing deployment in billing_dimensions"
-    assert bd.get("pool"), "Missing pool in billing_dimensions"
-    assert isinstance(bd.get("attached"), bool), "attached should be boolean"
-    if bd["attached"]:
-        assert bd.get("attribution_type"), "Missing attribution_type for attached ExternalIP"
-        assert bd.get("attribution_id"), "Missing attribution_id for attached ExternalIP"
-
-
-def _validate_nat_gateway_billing(event: dict[str, Any]) -> None:
-    bd = event.get("data", {}).get("billing_dimensions", {})
-    for key in ("deployment", "virtual_network", "external_ip"):
-        assert bd.get(key), f"Missing {key} in billing_dimensions"
-    assert "attribution_type" not in bd
-    assert "attribution_id" not in bd
+_DIMENSION_VALIDATORS = {
+    "compute_instance": _validate_compute_dimensions,
+    "cluster_order": _validate_cluster_dimensions,
+    "bare_metal_instance": _validate_bare_metal_dimensions,
+    "volume": _validate_volume_dimensions,
+    "external_ip": _validate_external_ip_dimensions,
+    "nat_gateway": _validate_nat_gateway_dimensions,
+}

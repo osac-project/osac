@@ -15,10 +15,17 @@ from tests.e2e.core.helpers import (
     wait_for_running,
 )
 from tests.e2e.core.k8s_client import K8sClient
-from tests.e2e.core.metering import MeteringCollector
+from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector
 from tests.e2e.core.osac_cli import OsacCLI
+from tests.e2e.core.runner import poll_until
 
 pytestmark = pytest.mark.regression
+
+
+def _parse_time(value: str) -> datetime:
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    return datetime.fromisoformat(value)
 
 
 @pytest.mark.metering
@@ -35,14 +42,13 @@ def test_compute_instance_restart(
     uuid: str = cli.create_compute_instance(
         name=name, template=vm_template, network_attachments=[default_network_attachment]
     )
-    metering.expect("osac.resource.created.v1", resource_id=uuid)
-
     ci_name: str = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
 
     try:
         wait_for_running(k8s=k8s_hub_client, name=ci_name)
 
-        metering.expect("osac.resource.started.v1", resource_id=uuid)
+        metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=180)
+        metering.verify()
 
         vmi_ns: str = k8s_hub_client.get_compute_instance_vm_namespace(name=ci_name)
         original_vmi_ts: str = k8s_virt_client.get_vmi_creation_timestamp(
@@ -57,9 +63,22 @@ def test_compute_instance_restart(
         new_vmi_ts: str = wait_for_new_vmi(
             k8s=k8s_virt_client, vmi_namespace=vmi_ns, compute_instance_name=ci_name, initial_timestamp=original_vmi_ts
         )
+        running_again_at = datetime.now(tz=UTC)
 
-        metering.expect("osac.resource.suspended.v1", resource_id=uuid)
-        metering.expect("osac.resource.resumed.v1", resource_id=uuid)
+        # The restart puts the VM back in a billable state, so billing resumes after it:
+        # a heartbeat must arrive whose usage interval starts at or after the VM was
+        # RUNNING again, which heartbeats from before the restart cannot satisfy.
+        poll_until(
+            fn=lambda: [
+                event
+                for event in metering.get_all_events(HEARTBEAT_TYPE, uuid)
+                if _parse_time(event["data"]["usage"]["from"]) >= running_again_at
+            ],
+            until=lambda events: len(events) > 0,
+            retries=30,
+            delay=10,
+            description=f"heartbeat of {uuid} billed after the restart",
+        )
 
         final_last_restarted: str = k8s_hub_client.get_compute_instance_last_restarted_at(name=ci_name)
         assert final_last_restarted != ""

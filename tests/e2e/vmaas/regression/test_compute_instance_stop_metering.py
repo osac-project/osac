@@ -15,7 +15,7 @@ from tests.e2e.core.helpers import (
     wait_for_running,
 )
 from tests.e2e.core.k8s_client import K8sClient
-from tests.e2e.core.metering import MeteringCollector
+from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
 
@@ -32,9 +32,10 @@ def test_compute_instance_stop_metering(
     default_network_attachment: dict[str, object],
     metering: MeteringCollector,
 ) -> None:
-    """Verify metering captures suspended.v1 when a running VM is stopped.
+    """Verify heartbeats arrive while a VM is billable and stop when it is stopped.
 
-    Also verifies that heartbeats stop after the VM becomes non-billable.
+    A RUNNING VM bills per heartbeat round; a stopped VM bills nothing, so no
+    further heartbeats may arrive for it.
     """
     name = unique_name("e2e-ci")
     uuid: str = cli.create_compute_instance(
@@ -45,8 +46,7 @@ def test_compute_instance_stop_metering(
     wait_for_provision(k8s=k8s_hub_client, name=ci_name)
     wait_for_running(k8s=k8s_hub_client, name=ci_name)
 
-    metering.expect("osac.resource.created.v1", resource_id=uuid)
-    metering.expect("osac.resource.started.v1", resource_id=uuid)
+    metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=180)
     metering.verify()
 
     grpc.update_compute_instance_run_strategy(ci_id=uuid, run_strategy="Halted")
@@ -60,30 +60,15 @@ def test_compute_instance_stop_metering(
         description=f"{ci_name} VM stopped",
     )
 
-    metering.expect("osac.resource.suspended.v1", resource_id=uuid, timeout=120)
-    metering.verify()
-
-    # The VM was explicitly stopped from RUNNING — verify the suspended event
-    # closed the billing interval with a positive duration.
-    suspended_event = metering.get_event("osac.resource.suspended.v1", resource_id=uuid)
-    suspended_data = suspended_event.get("data", {})
-    assert suspended_data.get("previous_state") == "RUNNING", (
-        f"Stop from RUNNING should have previous_state=RUNNING, got {suspended_data.get('previous_state')!r}"
-    )
-    ds = suspended_data.get("duration_seconds")
-    assert isinstance(ds, (int, float)) and ds > 0, f"Stop from RUNNING should have positive duration_seconds, got {ds}"
-
-    # Verify heartbeats stop after VM becomes non-billable.
-    # The heartbeat generator queries the projection DB, which is updated
-    # after the Kafka publish (publishAndUpsert). One more heartbeat sweep
-    # may fire against the stale projection. Wait past one full heartbeat
-    # interval so in-flight heartbeats drain, then assert silence.
+    # Verify heartbeats stop after the VM becomes non-billable. A round that ran
+    # before the stop became visible may still send one more heartbeat; wait
+    # past a full round interval so in-flight heartbeats drain, then assert
+    # silence.
     time.sleep(90)
     no_more_after = datetime.now(UTC).isoformat()
-    metering.assert_no_events("osac.resource.heartbeat.v1", resource_id=uuid, since=no_more_after, within=90)
+    metering.assert_no_events(HEARTBEAT_TYPE, resource_id=uuid, since=no_more_after, within=90)
 
     cli.delete_compute_instance(uuid=uuid)
-    metering.expect("osac.resource.deleted.v1", resource_id=uuid)
 
     wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
     wait_for_grpc_removal(grpc=grpc, uuid=uuid)

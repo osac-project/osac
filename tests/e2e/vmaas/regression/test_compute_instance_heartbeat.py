@@ -12,7 +12,7 @@ from tests.e2e.core.helpers import (
     wait_for_running,
 )
 from tests.e2e.core.k8s_client import K8sClient
-from tests.e2e.core.metering import MeteringCollector
+from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector
 from tests.e2e.core.osac_cli import OsacCLI
 
 pytestmark = pytest.mark.regression
@@ -30,10 +30,10 @@ def test_compute_instance_heartbeat(
 ) -> None:
     """Verify heartbeat events appear for a billable RUNNING VM.
 
-    The metering system emits periodic heartbeat events (default interval 60s)
+    Metering sends heartbeat differences every round (default interval 60s)
     for every VM in the RUNNING state. This test creates a VM, waits for it to
-    reach RUNNING, then verifies that at least one heartbeat event is emitted
-    within 180s.
+    reach RUNNING, then verifies that at least one heartbeat arrives within
+    180s.
     """
     name = unique_name("e2e-ci")
     uuid: str = cli.create_compute_instance(
@@ -44,7 +44,7 @@ def test_compute_instance_heartbeat(
     wait_for_provision(k8s=k8s_hub_client, name=ci_name)
     wait_for_running(k8s=k8s_hub_client, name=ci_name)
 
-    metering.expect("osac.resource.heartbeat.v1", resource_id=uuid, timeout=180)
+    metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=180)
     metering.verify()  # verify heartbeat arrived BEFORE deleting
 
     cli.delete_compute_instance(uuid=uuid)

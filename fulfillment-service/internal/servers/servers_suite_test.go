@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
@@ -43,6 +44,7 @@ var (
 	ctrl        *gomock.Controller
 	logger      *slog.Logger
 	server      *database.Container
+	testPool    *pgxpool.Pool
 	tm          database.TxManager
 	suiteTx     database.Tx
 	attribution *auth.MockAttributionLogic
@@ -108,14 +110,17 @@ var _ = BeforeEach(func() {
 	db, err := server.NewInstance().Build()
 	Expect(err).ToNot(HaveOccurred())
 	DeferCleanup(db.Close)
-	pool, err := db.Pool(ctx)
+	testPool, err = db.Pool(ctx)
 	Expect(err).ToNot(HaveOccurred())
-	DeferCleanup(pool.Close)
+	DeferCleanup(func() {
+		testPool.Close()
+		testPool = nil
+	})
 
 	// Create the transaction manager:
 	tm, err = database.NewTxManager().
 		SetLogger(logger).
-		SetPool(pool).
+		SetPool(testPool).
 		Build()
 	Expect(err).ToNot(HaveOccurred())
 

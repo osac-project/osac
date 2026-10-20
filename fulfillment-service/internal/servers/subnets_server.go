@@ -221,7 +221,7 @@ func (s *SubnetsServer) Create(ctx context.Context,
 			"Failed to map public subnet to private",
 			slog.Any("error", err),
 		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process subnet")
+		err = publicInputMappingError(err, "failed to process subnet")
 		return
 	}
 

@@ -1869,5 +1869,53 @@ var _ = Describe("Private virtual networks server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(getResp.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("osac.openshift.io/default", "true"))
 		})
+
+		// Regression: OSAC-6544 — VN cleanup times out when a controller
+		// finalizer prevents archival after Delete.
+		It("remains retrievable after Delete when a finalizer is present and archives on finalizer removal", func() {
+			vn := createVirtualNetwork()
+			id := vn.GetId()
+
+			// Simulate the controller adding its finalizer.
+			tx, err := database.TxFromContext(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = tx.Exec(ctx,
+				`update virtual_networks set finalizers = '{"fulfillment-controller"}' where id = $1`, id)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Delete sets deletion_timestamp but does not archive.
+			_, err = vnServer.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			// Get still succeeds — the VN is soft-deleted.
+			getResp, err := vnServer.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResp.GetObject().GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
+			Expect(getResp.GetObject().GetMetadata().GetFinalizers()).To(
+				ContainElement("fulfillment-controller"))
+
+			// Signal succeeds on the soft-deleted object.
+			_, err = vnServer.Signal(ctx,
+				privatev1.VirtualNetworksSignalRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			// Simulate the reconciler clearing the finalizer.
+			vn = getResp.GetObject()
+			vn.GetMetadata().SetFinalizers(nil)
+			_, err = vnServer.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
+				Object: vn,
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"metadata.finalizers"},
+				},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			// After the finalizer is removed the object is archived;
+			// Get now returns NotFound.
+			_, err = vnServer.Get(ctx,
+				privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
+			Expect(err).To(HaveOccurred())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+		})
 	})
 })

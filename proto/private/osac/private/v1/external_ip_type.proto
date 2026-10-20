@@ -21,6 +21,7 @@ import "google/protobuf/timestamp.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/external_ip_pool_type.proto";
 import "osac/private/v1/external_ip_attribution_type.proto";
+import "osac/private/v1/metering_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
 
@@ -48,7 +49,7 @@ message ExternalIP {
   ExternalIPSpec spec = 3;
 
   // Current state of the external IP (system-provided, read-only).
-  ExternalIPStatus status = 4;
+  ExternalIPStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Defines the desired configuration for an ExternalIP.
@@ -62,7 +63,8 @@ message ExternalIPSpec {
   // available IP address from this pool's CIDR ranges during provisioning.
   ExternalIPPoolReference pool = 1 [
     (google.api.field_behavior) = REQUIRED,
-    (google.api.field_behavior) = IMMUTABLE
+    (google.api.field_behavior) = IMMUTABLE,
+    (osac.private.v1.metering) = {kind: METERING_FIELD_KIND_CONSTANT}
   ];
 }
 
@@ -72,54 +74,52 @@ message ExternalIPSpec {
 // updates them based on reconciliation of the spec and feedback from the cluster controller.
 message ExternalIPStatus {
   // Current lifecycle state of the external IP.
-  ExternalIPState state = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
+  ExternalIPState state = 1 [(osac.private.v1.metering) = {kind: METERING_FIELD_KIND_VARIES transition_time: "status.state_transition_time"}];
 
   // Human-readable message providing additional details about the current state.
   //
   // For PENDING state, may contain progress information like "Waiting for IP allocation".
   // Typically empty for ALLOCATED state.
-  optional string message = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
+  optional string message = 2;
 
   // Allocated IP address from the parent pool's CIDR range.
   //
   // Populated once the IP transitions to ALLOCATED state. Remains stable for the lifetime of
   // the ExternalIP. Cleared only when the IP is deallocated.
-  string address = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string address = 3 [(osac.private.v1.metering) = {kind: METERING_FIELD_KIND_FIXED_ONCE_SET}];
 
   // Parent ExternalIPPool ID that this IP was allocated from.
   //
   // Mirrors spec.pool for convenience in status queries. Populated when the IP is allocated.
-  string pool = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string pool = 4;
 
   // Whether this ExternalIP is currently attached to a target resource via an ExternalIPAttachment.
   //
   // Set to true when an ExternalIPAttachment referencing this ExternalIP reaches READY state.
   // Set to false when the ExternalIPAttachment is deleted. An ExternalIP with attached = true
   // cannot be deleted; the ExternalIPAttachment must be deleted first.
-  bool attached = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+  bool attached = 5 [(osac.private.v1.metering) = {kind: METERING_FIELD_KIND_VARIES transition_time: "status.attachment_transition_time"}];
 
   // Identifier of the hub cluster that this external IP is deployed to.
   //
   // Set by the fulfillment-service controller when reconciling the external IP to a Kubernetes CR
   // on the target hub cluster. Used for tracking which cluster the IP resources reside on.
-  string hub = 6 [(cleanapi.field).private = true, (google.api.field_behavior) = OUTPUT_ONLY];
+  string hub = 6 [(cleanapi.field).private = true];
 
   // Settled target attribution reported by the operator.
   ExternalIPAttribution attribution = 7 [
     (cleanapi.field).private = true,
-    (google.api.field_behavior) = OUTPUT_ONLY
+    (osac.private.v1.metering) = {kind: METERING_FIELD_KIND_VARIES transition_time: "status.attachment_transition_time"}
   ];
 
   // Time at which the settled attachment attribution changed, as reported by the operator.
   optional google.protobuf.Timestamp attachment_transition_time = 8 [
-    (cleanapi.field).private = true,
-    (google.api.field_behavior) = OUTPUT_ONLY
+    (cleanapi.field).private = true
   ];
 
   // Time at which the ExternalIP entered its current state, as reported by the operator.
   optional google.protobuf.Timestamp state_transition_time = 9 [
-    (cleanapi.field).private = true,
-    (google.api.field_behavior) = OUTPUT_ONLY
+    (cleanapi.field).private = true
   ];
 }
 

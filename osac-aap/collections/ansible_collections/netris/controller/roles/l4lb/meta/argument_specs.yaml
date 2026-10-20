@@ -51,7 +51,7 @@ argument_specs:
         description: "Backend list: [{ip, port, maintenance}]."
       l4lb_health_check:
         type: str
-        default: 'None'
+        default: "None"
         description: "Health check type (None, TCP, HTTP)."
       l4lb_status:
         type: str

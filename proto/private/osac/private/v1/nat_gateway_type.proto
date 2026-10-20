@@ -20,6 +20,7 @@ import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/external_ip_type.proto";
+import "osac/private/v1/metering_type.proto";
 import "osac/private/v1/virtual_network_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
@@ -51,7 +52,7 @@ message NATGateway {
   NATGatewaySpec spec = 3;
 
   // Current state of the NAT gateway (system-provided, read-only).
-  NATGatewayStatus status = 4;
+  NATGatewayStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Defines the desired configuration for a NATGateway.
@@ -67,7 +68,8 @@ message NATGatewaySpec {
   // NATGateway is allowed per VirtualNetwork.
   VirtualNetworkLocalReference virtual_network = 1 [
     (google.api.field_behavior) = REQUIRED,
-    (google.api.field_behavior) = IMMUTABLE
+    (google.api.field_behavior) = IMMUTABLE,
+    (osac.private.v1.metering) = {kind: METERING_FIELD_KIND_CONSTANT}
   ];
 
   // ExternalIP reference to use as the SNAT source address. Required and immutable after creation.
@@ -77,7 +79,8 @@ message NATGatewaySpec {
   // ExternalIP becomes the source IP for all egress traffic from the VirtualNetwork.
   ExternalIPLocalReference external_ip = 2 [
     (google.api.field_behavior) = REQUIRED,
-    (google.api.field_behavior) = IMMUTABLE
+    (google.api.field_behavior) = IMMUTABLE,
+    (osac.private.v1.metering) = {kind: METERING_FIELD_KIND_CONSTANT}
   ];
 }
 
@@ -87,24 +90,23 @@ message NATGatewaySpec {
 // updates them based on reconciliation of the spec and feedback from the cluster controller.
 message NATGatewayStatus {
   // Current lifecycle state of the NAT gateway.
-  NATGatewayState state = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
+  NATGatewayState state = 1 [(osac.private.v1.metering) = {kind: METERING_FIELD_KIND_VARIES transition_time: "status.state_transition_time"}];
 
   // Human-readable message providing additional details about the current state.
   //
   // For PENDING state, may contain progress information like "Configuring SNAT rule".
   // For FAILED state, contains the error details. Typically empty for READY state.
-  optional string message = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
+  optional string message = 2;
 
   // Identifier of the hub cluster that this NAT gateway is deployed to.
   //
   // Set by the fulfillment-service controller when reconciling the NAT gateway to a Kubernetes CR
   // on the target hub cluster. Used for tracking which cluster the networking resources reside on.
-  string hub = 3 [(cleanapi.field).private = true, (google.api.field_behavior) = OUTPUT_ONLY];
+  string hub = 3 [(cleanapi.field).private = true];
 
   // Time at which the NAT gateway entered its current state, as reported by the operator.
   optional google.protobuf.Timestamp state_transition_time = 4 [
-    (cleanapi.field).private = true,
-    (google.api.field_behavior) = OUTPUT_ONLY
+    (cleanapi.field).private = true
   ];
 }
 

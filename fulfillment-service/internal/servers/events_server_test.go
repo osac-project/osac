@@ -415,6 +415,42 @@ var _ = Describe("Events server visibility", Ordered, func() {
 		Consistently(collector.Events, time.Second).Should(BeEmpty())
 	})
 
+	It("evaluates filters against the public metadata projection", func() {
+		server, client := startServer(makeTenancy("tenant-a"))
+		watchCtx, cancel := context.WithCancel(context.Background())
+		DeferCleanup(cancel)
+		stream, err := client.Watch(watchCtx, publicv1.EventsWatchRequest_builder{
+			Filter: new("!('admin.osac.openshift.io/managed' in event.cluster.metadata.labels)"),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		collector := &eventsCollector{}
+		collector.Collect(stream)
+		Eventually(server.Subscriptions, 10*time.Second).Should(BeNumerically(">=", 1))
+
+		privateEvent := privatev1.Event_builder{
+			Id:   uuid.New(),
+			Type: privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+			Cluster: privatev1.Cluster_builder{
+				Id: uuid.New(),
+				Metadata: privatev1.Metadata_builder{
+					Tenant: "tenant-a",
+					Labels: map[string]string{
+						"admin.osac.openshift.io/managed": "system",
+						"ordinary":                        "visible",
+					},
+				}.Build(),
+			}.Build(),
+		}.Build()
+		sendEvent(privateEvent)
+
+		Eventually(collector.Events, time.Second).Should(HaveLen(1))
+		publicLabels := collector.Events()[0].GetCluster().GetMetadata().GetLabels()
+		Expect(publicLabels).To(Equal(map[string]string{"ordinary": "visible"}))
+		Expect(privateEvent.GetCluster().GetMetadata().GetLabels()).To(HaveKeyWithValue(
+			"admin.osac.openshift.io/managed", "system",
+		))
+	})
+
 	It("Delivers event with cluster payload", func() {
 		// Send an event with cluster payload:
 		server, client := startServer(makeTenancy("tenant-a"))

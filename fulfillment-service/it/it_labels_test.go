@@ -30,18 +30,22 @@ import (
 
 var _ = Describe("Labels", func() {
 	var (
-		ctx                 context.Context
-		clustersClient      publicv1.ClustersClient
-		instanceTypesClient privatev1.BareMetalInstanceTypesClient
-		templatesClient     privatev1.ClusterTemplatesClient
-		bmitName            string
-		templateId          string
+		ctx                       context.Context
+		clustersClient            publicv1.ClustersClient
+		publicAdminClustersClient publicv1.ClustersClient
+		adminClustersClient       privatev1.ClustersClient
+		instanceTypesClient       privatev1.BareMetalInstanceTypesClient
+		templatesClient           privatev1.ClusterTemplatesClient
+		bmitName                  string
+		templateId                string
 	)
 
 	BeforeEach(func() {
 		ctx = context.Background()
 		getOrCreateTenantDefaultNetworkClassFixture(ctx)
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
+		publicAdminClustersClient = publicv1.NewClustersClient(tool.ExternalView().AdminConn())
+		adminClustersClient = privatev1.NewClustersClient(tool.InternalView().AdminConn())
 		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
 		templatesClient = privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
 
@@ -190,6 +194,99 @@ var _ = Describe("Labels", func() {
 		Expect(metadata.GetLabels()).To(HaveKeyWithValue("another", "second"))
 	})
 
+	It("preserves the latest stored reserved labels during public replacement updates", func() {
+		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
+			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("labels-reserved-test-%s", uuid.New()[24:32]),
+				}.Build(),
+				Spec: publicv1.ClusterSpec_builder{
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets: testClusterNodeSets(bmitName, 3),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		object := createResponse.GetObject()
+		DeferCleanup(func() {
+			_, err := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: object.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		_, err = adminClustersClient.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+			Object: privatev1.Cluster_builder{
+				Id: object.GetId(),
+				Metadata: privatev1.Metadata_builder{
+					Labels: map[string]string{
+						"admin.osac.openshift.io/managed":         "old-system-value",
+						"operator.admin.osac.openshift.io/remove": "removed-by-writer",
+						"ordinary": "stored-before-public-update",
+					},
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		_, err = adminClustersClient.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+			Object: privatev1.Cluster_builder{
+				Id: object.GetId(),
+				Metadata: privatev1.Metadata_builder{
+					Labels: map[string]string{
+						"admin.osac.openshift.io/managed":        "latest-system-value",
+						"operator.admin.osac.openshift.io/added": "added-by-writer",
+						"ordinary":                               "stored-before-public-update",
+					},
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		latestPublicResponse, err := clustersClient.Get(ctx, publicv1.ClustersGetRequest_builder{Id: object.GetId()}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		stalePublicObject := latestPublicResponse.GetObject()
+
+		// The cluster controller can advance the version between Get and Update. Keep this replacement unlocked so the
+		// test exercises metadata merging; the stale-object update below verifies Lock=true behavior.
+		updateResponse, err := clustersClient.Update(ctx, publicv1.ClustersUpdateRequest_builder{
+			Object: publicv1.Cluster_builder{
+				Id: object.GetId(),
+				Metadata: publicv1.Metadata_builder{
+					Name:    object.GetMetadata().GetName(),
+					Version: stalePublicObject.GetMetadata().GetVersion(),
+					Labels:  map[string]string{"public": "replacement"},
+				}.Build(),
+				Spec: publicv1.ClusterSpec_builder{
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(updateResponse.GetObject().GetMetadata().GetLabels()).To(Equal(map[string]string{
+			"public": "replacement",
+		}))
+		stalePublicObject.GetMetadata().SetLabels(map[string]string{"stale": "value"})
+		_, err = clustersClient.Update(ctx, publicv1.ClustersUpdateRequest_builder{
+			Object:     stalePublicObject,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+			Lock:       true,
+		}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.Aborted))
+
+		privateResponse, err := adminClustersClient.Get(ctx, privatev1.ClustersGetRequest_builder{Id: object.GetId()}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(privateResponse.GetObject().GetMetadata().GetLabels()).To(Equal(map[string]string{
+			"admin.osac.openshift.io/managed":        "latest-system-value",
+			"operator.admin.osac.openshift.io/added": "added-by-writer",
+			"public":                                 "replacement",
+		}))
+		adminPublicResponse, err := publicAdminClustersClient.Get(ctx, publicv1.ClustersGetRequest_builder{Id: object.GetId()}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(adminPublicResponse.GetObject().GetMetadata().GetLabels()).To(Equal(map[string]string{
+			"public": "replacement",
+		}))
+	})
+
 	DescribeTable(
 		"Rejects invalid labels on create and update",
 		func(key string, value string, expected string) {
@@ -266,6 +363,12 @@ var _ = Describe("Labels", func() {
 			"value",
 			"field 'metadata.labels' key 'bad_prefix/name' prefix segment must only contain lowercase "+
 				"letters (a-z), digits (0-9) and hyphens (-), but contains '_' at position 3",
+		),
+		Entry(
+			"Reserved administrator namespace",
+			"operator.admin.osac.openshift.io/managed",
+			"system",
+			"Label or annotation is reserved for use by the system.",
 		),
 	)
 })

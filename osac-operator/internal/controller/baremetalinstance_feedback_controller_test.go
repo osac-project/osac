@@ -20,10 +20,16 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -37,6 +43,10 @@ type mockBareMetalInstancesClient struct {
 	signalCount  int
 	signalID     string
 	signalError  error
+	// onSignal, when set, is invoked at the moment Signal is called. Tests use it
+	// to observe hub state (e.g. whether the CR still exists) at signal time so
+	// ordering between finalizer removal and signaling is directly asserted.
+	onSignal func()
 }
 
 func (m *mockBareMetalInstancesClient) List(_ context.Context, _ *privatev1.BareMetalInstancesListRequest, _ ...grpc.CallOption) (*privatev1.BareMetalInstancesListResponse, error) {
@@ -63,6 +73,9 @@ func (m *mockBareMetalInstancesClient) Signal(_ context.Context, in *privatev1.B
 	m.signalCalled = true
 	m.signalCount++
 	m.signalID = in.GetId()
+	if m.onSignal != nil {
+		m.onSignal()
+	}
 	if m.signalError != nil {
 		return nil, m.signalError
 	}
@@ -388,23 +401,37 @@ var _ = Describe("BareMetalInstanceFeedbackReconciler", func() {
 			}
 		})
 
-		It("should remove finalizer and call Signal", func() {
+		It("removes the finalizer first, then signals after the CR is gone", func() {
+			// Observe hub state at signal time: the CR must already be absent,
+			// proving the finalizer removal (which physically deletes the last
+			// finalizer's object) happened before the signal. Fulfillment releases
+			// its record only when the hub CR is gone.
+			var crPresentAtSignal bool
+			var getErrAtSignal error
+			mockClient.onSignal = func() {
+				probe := &bmfov1alpha1.BareMetalInstance{}
+				getErrAtSignal = k8sClient.Get(ctx, typeNamespacedName, probe)
+				crPresentAtSignal = getErrAtSignal == nil
+			}
+
 			request := reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			}
 			result, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.IsZero()).To(BeTrue())
-			Expect(mockClient.signalCalled).To(BeTrue())
+			Expect(mockClient.signalCount).To(Equal(1))
 			Expect(mockClient.signalID).To(Equal(bmiID))
+			Expect(crPresentAtSignal).To(BeFalse())
+			Expect(apierrors.IsNotFound(getErrAtSignal)).To(BeTrue())
 
 			updated := &bmfov1alpha1.BareMetalInstance{}
 			err = k8sClient.Get(ctx, typeNamespacedName, updated)
 			Expect(apierrors.IsNotFound(err)).To(BeTrue())
 		})
 
-		It("should still remove finalizer when Signal fails", func() {
-			mockClient.signalError = errors.New("already archived")
+		It("treats a gRPC NotFound signal as already archived and removes the finalizer", func() {
+			mockClient.signalError = grpcstatus.Error(grpccodes.NotFound, "already archived")
 
 			request := reconcile.Request{
 				NamespacedName: typeNamespacedName,
@@ -417,6 +444,25 @@ var _ = Describe("BareMetalInstanceFeedbackReconciler", func() {
 			updated := &bmfov1alpha1.BareMetalInstance{}
 			err = k8sClient.Get(ctx, typeNamespacedName, updated)
 			Expect(apierrors.IsNotFound(err)).To(BeTrue())
+		})
+
+		It("returns a non-NotFound signal error to retry after removing the finalizer", func() {
+			mockClient.signalError = grpcstatus.Error(grpccodes.Unavailable, "fulfillment down")
+
+			request := reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			}
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).To(HaveOccurred())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.Unavailable))
+			Expect(mockClient.signalCalled).To(BeTrue())
+
+			// The finalizer was already removed (CR physically deleted); the
+			// returned error drives the retry, and the follow-up reconcile
+			// re-signals through the NotFound path.
+			updated := &bmfov1alpha1.BareMetalInstance{}
+			getErr := k8sClient.Get(ctx, typeNamespacedName, updated)
+			Expect(apierrors.IsNotFound(getErr)).To(BeTrue())
 		})
 	})
 
@@ -475,6 +521,180 @@ var _ = Describe("BareMetalInstanceFeedbackReconciler", func() {
 			updated := &bmfov1alpha1.BareMetalInstance{}
 			Expect(k8sClient.Get(ctx, deletingNamespacedName, updated)).To(Succeed())
 			Expect(controllerutil.ContainsFinalizer(updated, osacBareMetalInstanceFeedbackFinalizer)).To(BeTrue())
+		})
+	})
+
+	// Regression: a BMI created and deleted in quick succession can be torn down
+	// before the feedback finalizer is ever durably added (the AddFinalizer update
+	// keeps conflicting with the delete). Earlier the deletion path returned
+	// without signaling whenever the feedback finalizer was absent, so the
+	// fulfillment service was never told the CR was gone and its record (and the
+	// gRPC BareMetalInstances listing) was orphaned forever.
+	Context("When reconciling a resource being deleted without the feedback finalizer", func() {
+		const raceResourceName = "test-bmi-race"
+
+		var raceNamespacedName types.NamespacedName
+
+		BeforeEach(func() {
+			raceNamespacedName = types.NamespacedName{
+				Name:      raceResourceName,
+				Namespace: bmiNS,
+			}
+
+			// The CR carries the BMI ID label and is being deleted, but the feedback
+			// finalizer was never added. A foreign finalizer keeps it observable so
+			// the reconcile can run against a deleting object.
+			bmi := &bmfov1alpha1.BareMetalInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      raceResourceName,
+					Namespace: bmiNS,
+					Labels: map[string]string{
+						osacBareMetalInstanceIDLabel: bmiID,
+					},
+					Finalizers: []string{"other-finalizer"},
+				},
+				Spec: bmfov1alpha1.BareMetalInstanceSpec{
+					Selector: bmfov1alpha1.HostSelectorSpec{
+						HostSelector: map[string]string{"osac.openshift.io/host-type": "default"},
+					},
+					ExternalHostID: "ext-789",
+					TemplateID:     "test_template",
+				},
+			}
+			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
+
+			Expect(k8sClient.Get(ctx, raceNamespacedName, bmi)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, bmi)).To(Succeed())
+		})
+
+		AfterEach(func() {
+			bmi := &bmfov1alpha1.BareMetalInstance{}
+			err := k8sClient.Get(ctx, raceNamespacedName, bmi)
+			if err == nil {
+				bmi.Finalizers = nil
+				Expect(k8sClient.Update(ctx, bmi)).To(Succeed())
+			}
+		})
+
+		It("should still signal the fulfillment service", func() {
+			request := reconcile.Request{
+				NamespacedName: raceNamespacedName,
+			}
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.IsZero()).To(BeTrue())
+			Expect(mockClient.signalCalled).To(BeTrue())
+			Expect(mockClient.signalID).To(Equal(bmiID))
+		})
+
+		It("returns a non-NotFound signal error to retry while the CR is retained", func() {
+			mockClient.signalError = grpcstatus.Error(grpccodes.Unavailable, "fulfillment down")
+
+			request := reconcile.Request{
+				NamespacedName: raceNamespacedName,
+			}
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).To(HaveOccurred())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.Unavailable))
+			Expect(mockClient.signalCalled).To(BeTrue())
+		})
+	})
+
+	// Regression: fulfillment releases its record only when the hub CR is
+	// physically absent, so the feedback controller must still signal after the
+	// CR is gone. The identifier label is unreadable then, so the ID is recovered
+	// from the request name ("bmi-<id>"). A name without that prefix is ignored.
+	Context("When the CR is already gone (NotFound path)", func() {
+		var goneNamespacedName types.NamespacedName
+
+		BeforeEach(func() {
+			goneNamespacedName = types.NamespacedName{
+				Name:      bareMetalInstanceObjectNamePrefix + bmiID,
+				Namespace: bmiNS,
+			}
+		})
+
+		It("recovers the BMI ID from the request name and signals", func() {
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: goneNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.signalCalled).To(BeTrue())
+			Expect(mockClient.signalID).To(Equal(bmiID))
+		})
+
+		It("treats a gRPC NotFound signal as already archived", func() {
+			mockClient.signalError = grpcstatus.Error(grpccodes.NotFound, "already archived")
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: goneNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.signalCalled).To(BeTrue())
+		})
+
+		It("returns a non-NotFound signal error to retry", func() {
+			mockClient.signalError = grpcstatus.Error(grpccodes.Unavailable, "fulfillment down")
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: goneNamespacedName})
+			Expect(err).To(HaveOccurred())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.Unavailable))
+			Expect(mockClient.signalCalled).To(BeTrue())
+		})
+
+		It("ignores a request whose name lacks the bmi- prefix", func() {
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: "other-object", Namespace: bmiNS},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.signalCalled).To(BeFalse())
+		})
+	})
+
+	// Regression: with remove-before-signal ordering, a conflict on the
+	// finalizer-removal update must requeue WITHOUT signaling. Signaling only
+	// after the removal is persisted keeps fulfillment from releasing its record
+	// while the hub CR still exists. Uses a fake client that injects a conflict on
+	// Update.
+	Context("When removing the feedback finalizer conflicts on a deletion", func() {
+		It("returns the conflict to retry and does not signal before removal is persisted", func() {
+			now := metav1.Now()
+			bmi := &bmfov1alpha1.BareMetalInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              resourceName,
+					Namespace:         bmiNS,
+					Labels:            map[string]string{osacBareMetalInstanceIDLabel: bmiID},
+					Finalizers:        []string{osacBareMetalInstanceFeedbackFinalizer},
+					DeletionTimestamp: &now,
+				},
+				Spec: bmfov1alpha1.BareMetalInstanceSpec{
+					Selector: bmfov1alpha1.HostSelectorSpec{
+						HostSelector: map[string]string{"osac.openshift.io/host-type": "default"},
+					},
+					ExternalHostID: "ext-123",
+					TemplateID:     "test_template",
+				},
+			}
+
+			baseClient := fake.NewClientBuilder().
+				WithScheme(k8sClient.Scheme()).
+				WithObjects(bmi).
+				Build()
+			conflictClient := interceptor.NewClient(baseClient, interceptor.Funcs{
+				Update: func(_ context.Context, _ client.WithWatch, _ client.Object, _ ...client.UpdateOption) error {
+					return apierrors.NewConflict(
+						schema.GroupResource{Group: "osac.openshift.io", Resource: "baremetalinstances"},
+						resourceName, errors.New("injected conflict"),
+					)
+				},
+			})
+
+			conflictReconciler := &BareMetalInstanceFeedbackReconciler{
+				hubClient:                  conflictClient,
+				bareMetalInstancesClient:   mockClient,
+				bareMetalInstanceNamespace: bmiNS,
+			}
+
+			request := reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			}
+			_, err := conflictReconciler.Reconcile(ctx, request)
+			Expect(apierrors.IsConflict(err)).To(BeTrue())
+			Expect(mockClient.signalCalled).To(BeFalse())
 		})
 	})
 })

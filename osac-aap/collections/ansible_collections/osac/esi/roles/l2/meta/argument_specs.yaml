@@ -10,8 +10,8 @@ argument_specs:
         type: "str"
         default: present
         choices:
-        - present
-        - absent
+          - present
+          - absent
       network_name:
         description: |
           Name of the network when state is `present`.

@@ -504,6 +504,15 @@ spec:
                 - Ready
                 - Deleting
                 type: string
+              phaseTransitionTime:
+                description: |-
+                  PhaseTransitionTime records when the controller last changed Phase. It moves only
+                  when Phase changes, so metering can bill state changes from the moment they happened
+                  rather than from when feedback noticed them: during a fulfillment outage every
+                  transition would otherwise be dated at recovery. It follows the RunningConfigSince
+                  pattern: stamped once per phase change, kept when unchanged.
+                format: date-time
+                type: string
               provisioningJobs:
                 description: |-
                   ProvisioningJobs tracks the history of provision and deprovision operations

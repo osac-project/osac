@@ -163,6 +163,14 @@ func formatParameter(value *anypb.Any) string {
 	return "(unavailable; see get -o yaml)"
 }
 
+func addSecretRef(rows *[]row, label string, p *publicv1.SecretReferenceFieldPolicy) {
+	if p == nil {
+		return
+	}
+	appendPolicyRow(rows, label, p.HasLocked(), p.GetEditable().GetDefaultValue() != nil,
+		formatRef(p.GetLocked()), formatRef(p.GetEditable().GetDefaultValue()))
+}
+
 func addCollection(rows *[]row, label string, locked, hasDefault bool, lockedItems, defaultItems []string) {
 	items := defaultItems
 	if locked {

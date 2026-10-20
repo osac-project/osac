@@ -24,7 +24,7 @@
       established: "{{ acl_established | default(1) }}"
       reverse: "{{ acl_reverse | default('yes') }}"
       comment: "{{ acl_comment | default('') }}"
-      valid_until: null
+      valid_until:
 
 - name: Display ACL rule body
   ansible.builtin.debug:
@@ -81,7 +81,9 @@
   ansible.builtin.fail:
     msg: >-
       Failed to create ACL rule '{{ acl_name }}'.
-      Netris responded with status {{ _acl_create_resp.status }}: {{ _acl_create_resp.json.message | default(_acl_create_resp.content | default('unknown error')) }}
+      Netris responded with status {{ _acl_create_resp.status }}:
+      {{ _acl_create_resp.json.message
+         | default(_acl_create_resp.content | default('unknown error')) }}
 
 - name: Set ACL facts from create response
   ansible.builtin.set_fact:

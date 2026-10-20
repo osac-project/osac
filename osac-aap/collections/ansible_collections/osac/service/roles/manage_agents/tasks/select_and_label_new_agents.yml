@@ -80,7 +80,9 @@
 
     - name: Fail if not all agents were added
       ansible.builtin.fail:
-        msg: "{{ manage_agents_added | length }} agents were added to the cluster instead of {{ manage_agents_selected_count }}. Please check agents availability."
+        msg: >-
+          {{ manage_agents_added | length }} agents were added to the cluster instead of
+          {{ manage_agents_selected_count }}. Please check agents availability.
       when: manage_agents_added | length != manage_agents_selected_count | int
 
   always:

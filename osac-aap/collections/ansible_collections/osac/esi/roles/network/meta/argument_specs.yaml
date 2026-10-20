@@ -4,8 +4,8 @@ argument_specs:
       network_state:
         type: "str"
         choices:
-        - present
-        - absent
+          - present
+          - absent
         required: true
       network_suffix:
         description: |

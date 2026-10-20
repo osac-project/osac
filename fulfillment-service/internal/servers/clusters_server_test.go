@@ -16,6 +16,7 @@ package servers
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -350,6 +351,34 @@ var _ = Describe("Clusters server", func() {
 			seedAddOnOperator(ctx, "unpublished-operator-id", "unpublished-operator", false)
 		})
 
+		It("rejects reserved metadata on public create", func() {
+			response, err := server.ClustersServer.Create(ctx, publicv1.ClustersCreateRequest_builder{
+				Object: publicv1.Cluster_builder{
+					Metadata: publicv1.Metadata_builder{
+						Labels: map[string]string{"admin.osac.openshift.io/managed": "true"},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(response).To(BeNil())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(grpcstatus.Convert(err).Message()).To(Equal(reservedMetadataError))
+		})
+
+		It("rejects reserved metadata outside the public update mask", func() {
+			response, err := server.ClustersServer.Update(ctx, publicv1.ClustersUpdateRequest_builder{
+				Object: publicv1.Cluster_builder{
+					Id: "cluster-with-reserved-metadata",
+					Metadata: publicv1.Metadata_builder{
+						Labels: map[string]string{"admin.osac.openshift.io/managed": "true"},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.description"}},
+			}.Build())
+			Expect(response).To(BeNil())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(grpcstatus.Convert(err).Message()).To(Equal(reservedMetadataError))
+		})
+
 		It("resolves a published add-on operator reference during public create", func() {
 			response, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
@@ -456,6 +485,32 @@ var _ = Describe("Clusters server", func() {
 			object := response.GetObject()
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).ToNot(BeEmpty())
+		})
+
+		It("Drops a caller-supplied status on create", func() {
+			// The insert is not checked by the metering source contract, so a spoofed state
+			// with a future transition time must never reach the stored object as a
+			// fabricated fact.
+			response, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
+				Object: publicv1.Cluster_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: publicv1.ClusterSpec_builder{
+						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
+					}.Build(),
+					Status: publicv1.ClusterStatus_builder{
+						State: publicv1.ClusterState_CLUSTER_STATE_READY,
+						StateTransitionTime: timestamppb.New(
+							time.Now().Add(24 * time.Hour)),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			object := response.GetObject()
+			Expect(object.GetStatus().GetState()).To(
+				Equal(publicv1.ClusterState_CLUSTER_STATE_UNSPECIFIED))
+			Expect(object.GetStatus().GetStateTransitionTime()).To(BeNil())
 		})
 
 		It("Doesn't create object without template", func() {

@@ -19,7 +19,7 @@
 
 - name: Clear previous L4LB lookup result
   ansible.builtin.set_fact:
-    _existing_l4lb: null
+    _existing_l4lb:
 
 - name: Find L4LB by name
   ansible.builtin.set_fact:

@@ -2,11 +2,10 @@ import { useCallback, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Button,
-  Content,
   EmptyState,
   EmptyStateBody,
-  Flex,
-  FlexItem,
+  Gallery,
+  GalleryItem,
   SearchInput,
   Stack,
   StackItem,
@@ -19,19 +18,19 @@ import type { TFunction } from 'i18next';
 
 import { ServiceTier } from '@osac/types';
 import { type CatalogListFilterCriteria } from '@osac/ui-components/api/v1/catalog-item-list-filter';
+import CatalogItemCard from '@osac/ui-components/components/catalog/CatalogItemCard';
 import {
   CatalogItemKind,
   isCatalogPublishedFilter,
 } from '@osac/ui-components/components/catalog/catalogItemDisplay';
-import {
-  CATALOG_ITEMS_VIEW_KEY,
-  CatalogItemListSection,
-} from '@osac/ui-components/components/catalog/CatalogItemListSection';
+import { useCatalogItemResourceLookups } from '@osac/ui-components/components/catalog/catalogItemResourceLookups';
+import CatalogItemTable from '@osac/ui-components/components/catalog/CatalogItemTable';
 import CatalogPublishedStatusFilter from '@osac/ui-components/components/catalog/CatalogPublishedStatusFilter';
 import CatalogServiceTierFilter from '@osac/ui-components/components/catalog/CatalogServiceTierFilter';
 import CatalogTenantFilter from '@osac/ui-components/components/catalog/CatalogTenantFilter';
 import ListPage from '@osac/ui-components/components/Page/ListPage';
-import FieldSeparator from '@osac/ui-components/components/Primitives/FieldSeparator';
+import ListPageBody from '@osac/ui-components/components/Page/ListPageBody';
+import ListPageToolbar from '@osac/ui-components/components/Page/ListPageToolbar';
 import ViewSwitcher from '@osac/ui-components/components/Primitives/ViewSwitcher';
 import { useCatalogItems } from '@osac/ui-components/hooks/use-catalog-items';
 import {
@@ -40,8 +39,11 @@ import {
   usePageFilter,
 } from '@osac/ui-components/hooks/use-page-filter';
 import { useSession } from '@osac/ui-components/hooks/use-session';
+import { useViewType } from '@osac/ui-components/hooks/use-view-type';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 import { UserRole } from '@osac/ui-components/shellTypes';
+
+export const CATALOG_ITEMS_VIEW_KEY = 'catalog-items';
 
 const getPageDescription = (t: TFunction, enabledServices: ServiceTier[], role: UserRole) => {
   const hasBareMetal = enabledServices.includes(ServiceTier.BMAAS);
@@ -180,8 +182,9 @@ const CatalogPage = () => {
   const publishedFilter = isCatalogPublishedFilter(publishedFilterParam)
     ? publishedFilterParam
     : undefined;
-  const isFiltered = publishedFilter || typeFilter?.length || tenantFilter || searchFilter;
+  const isFiltered = Boolean(publishedFilter || typeFilter?.length || tenantFilter || searchFilter);
   const [typeFilterChanged, setTypeFilterChanged] = useState<boolean>(false);
+  const [viewType] = useViewType(CATALOG_ITEMS_VIEW_KEY);
 
   const filterCriteria = useMemo<CatalogListFilterCriteria>(
     () => ({
@@ -217,10 +220,9 @@ const CatalogPage = () => {
 
   const data = [...vms, ...clusters, ...bms];
 
-  const showFullCatalogCount =
-    data.length === unfilteredTotalItems && !isFiltered && typeFilter.length === 0;
-
-  const showEmptyState = !isLoading && !error && data.length === 0;
+  const resourceLookups = useCatalogItemResourceLookups({
+    enabled: data.length > 0 && !isLoading && !error,
+  });
 
   const pageDescription = getPageDescription(t, enabledServices, role);
 
@@ -242,30 +244,6 @@ const CatalogPage = () => {
     setTypeFilterChanged(false);
   };
 
-  const renderEmptyState = () => {
-    if (unfilteredTotalItems === 0) {
-      return (
-        <EmptyState titleText={t('No catalog items found')} headingLevel="h2">
-          {enabledServices.length === 0 ? (
-            <EmptyStateBody>{t('No catalog services are enabled.')}</EmptyStateBody>
-          ) : (
-            <EmptyStateBody>{t('No catalog items are available yet.')}</EmptyStateBody>
-          )}
-        </EmptyState>
-      );
-    }
-
-    return (
-      <EmptyState titleText={t('No catalog items match your filters')} headingLevel="h2">
-        <EmptyStateBody>
-          {t('Try a different service, publish status, tenant, or search term.')}{' '}
-          <Button variant="link" isInline onClick={clearAllFilters}>
-            {t('Clear all filters')}
-          </Button>
-        </EmptyStateBody>
-      </EmptyState>
-    );
-  };
   const selectedTypeOptions: ServiceTier[] = useMemo(() => {
     if (typeFilter?.length || typeFilterChanged) {
       return typeFilter
@@ -275,6 +253,14 @@ const CatalogPage = () => {
 
     return CATALOG_SERVICE_TIERS.filter((tier) => typeCounts[tier] > 0);
   }, [typeCounts, typeFilter, typeFilterChanged]);
+
+  const filteredText =
+    data.length === unfilteredTotalItems
+      ? t('{{count}} catalog item', { count: unfilteredTotalItems })
+      : t('{{shown}} of {{count}} catalog item', {
+          shown: data.length,
+          count: unfilteredTotalItems,
+        });
 
   const toggleTypeFilter = useCallback(
     (serviceTier: ServiceTier) => {
@@ -297,87 +283,92 @@ const CatalogPage = () => {
   );
 
   return (
-    <ListPage title={t('Catalog')} description={pageDescription}>
+    <ListPage title={t('Catalog')} description={pageDescription} error={error}>
       <Stack hasGutter>
         <StackItem>
-          <Toolbar>
-            <ToolbarContent>
-              <ToolbarItem>
-                <CatalogServiceTierFilter
-                  selectedTypeOptions={selectedTypeOptions}
-                  typeCounts={typeCounts}
-                  toggleTypeFilter={toggleTypeFilter}
-                />
-              </ToolbarItem>
-              {role === 'admin' || role === 'tenant-admin' ? (
+          <ListPageToolbar
+            filteredText={data.length === 0 || error || isLoading ? undefined : filteredText}
+            isFiltered={isFiltered}
+            onClearAllFilters={clearAllFilters}
+          >
+            <Toolbar>
+              <ToolbarContent>
                 <ToolbarItem>
-                  <CatalogPublishedStatusFilter
-                    selected={publishedFilter}
-                    onChange={(value) => setPublishedFilterParam(value ?? '')}
+                  <CatalogServiceTierFilter
+                    selectedTypeOptions={selectedTypeOptions}
+                    typeCounts={typeCounts}
+                    toggleTypeFilter={toggleTypeFilter}
                   />
                 </ToolbarItem>
-              ) : null}
-              {role === 'admin' ? (
-                <ToolbarItem>
-                  <CatalogTenantFilter
-                    selected={tenantFilter}
-                    onChange={(value) => setTenantFilter(value ?? '')}
-                  />
-                </ToolbarItem>
-              ) : null}
-              <ToolbarItem>
-                <SearchInput
-                  placeholder={t('Search catalog items')}
-                  value={searchFilter}
-                  onChange={(_event, value) => setSearchFilter(value)}
-                  onClear={() => setSearchFilter('')}
-                  aria-label={t('Filter catalog by keyword')}
-                  isDisabled={!hasSuccessfulQuery}
-                />
-              </ToolbarItem>
-              <ToolbarGroup align={{ default: 'alignEnd' }}>
-                <ToolbarItem>
-                  <ViewSwitcher pageKey={CATALOG_ITEMS_VIEW_KEY} />
-                </ToolbarItem>
-              </ToolbarGroup>
-            </ToolbarContent>
-          </Toolbar>
-        </StackItem>
-        {showEmptyState ? (
-          <StackItem>{renderEmptyState()}</StackItem>
-        ) : (
-          <>
-            <StackItem>
-              <Flex gap={{ default: 'gapXs' }}>
-                <FlexItem>
-                  <Content className="pf-v6-u-font-weight-bold">
-                    {showFullCatalogCount
-                      ? t('{{count}} catalog item', { count: unfilteredTotalItems })
-                      : t('{{shown}} of {{count}} catalog item', {
-                          shown: data.length,
-                          count: unfilteredTotalItems,
-                        })}
-                  </Content>
-                </FlexItem>
-                {isFiltered ? (
-                  <>
-                    <FlexItem>
-                      <FieldSeparator />
-                    </FlexItem>
-                    <FlexItem>
-                      <Button variant="link" isInline onClick={clearAllFilters}>
-                        {t('Clear all filters')}
-                      </Button>
-                    </FlexItem>
-                  </>
+                {role === 'admin' || role === 'tenant-admin' ? (
+                  <ToolbarItem>
+                    <CatalogPublishedStatusFilter
+                      selected={publishedFilter}
+                      onChange={(value) => setPublishedFilterParam(value ?? '')}
+                    />
+                  </ToolbarItem>
                 ) : null}
-              </Flex>
-            </StackItem>
-            <StackItem>
-              <CatalogItemListSection items={data} isLoading={isLoading} error={error} />
-            </StackItem>
-          </>
-        )}
+                {role === 'admin' ? (
+                  <ToolbarItem>
+                    <CatalogTenantFilter
+                      selected={tenantFilter}
+                      onChange={(value) => setTenantFilter(value ?? '')}
+                    />
+                  </ToolbarItem>
+                ) : null}
+                <ToolbarItem>
+                  <SearchInput
+                    placeholder={t('Search catalog items')}
+                    value={searchFilter}
+                    onChange={(_event, value) => setSearchFilter(value)}
+                    onClear={() => setSearchFilter('')}
+                    aria-label={t('Filter catalog by keyword')}
+                    isDisabled={isLoading || !hasSuccessfulQuery}
+                  />
+                </ToolbarItem>
+                <ToolbarGroup align={{ default: 'alignEnd' }}>
+                  <ToolbarItem>
+                    <ViewSwitcher pageKey={CATALOG_ITEMS_VIEW_KEY} />
+                  </ToolbarItem>
+                </ToolbarGroup>
+              </ToolbarContent>
+            </Toolbar>
+          </ListPageToolbar>
+        </StackItem>
+        <StackItem>
+          <ListPageBody isLoading={isLoading} error={error}>
+            {!data.length ? (
+              unfilteredTotalItems === 0 ? (
+                <EmptyState titleText={t('No catalog items found')} headingLevel="h2">
+                  {enabledServices.length === 0 ? (
+                    <EmptyStateBody>{t('No catalog services are enabled.')}</EmptyStateBody>
+                  ) : (
+                    <EmptyStateBody>{t('No catalog items are available yet.')}</EmptyStateBody>
+                  )}
+                </EmptyState>
+              ) : (
+                <EmptyState titleText={t('No catalog items match your filters')} headingLevel="h2">
+                  <EmptyStateBody>
+                    {t('Try a different service, publish status, tenant, or search term.')}{' '}
+                    <Button variant="link" isInline onClick={clearAllFilters}>
+                      {t('Clear all filters')}
+                    </Button>
+                  </EmptyStateBody>
+                </EmptyState>
+              )
+            ) : viewType === 'cards' ? (
+              <Gallery hasGutter minWidths={{ default: '400px' }} maxWidths={{ default: '400px' }}>
+                {data.map((item) => (
+                  <GalleryItem key={item.id}>
+                    <CatalogItemCard item={item} resourceLookups={resourceLookups} />
+                  </GalleryItem>
+                ))}
+              </Gallery>
+            ) : (
+              <CatalogItemTable items={data} resourceLookups={resourceLookups} />
+            )}
+          </ListPageBody>
+        </StackItem>
       </Stack>
     </ListPage>
   );

@@ -21,6 +21,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -261,9 +262,13 @@ func (s *VolumesServer) Create(ctx context.Context,
 			"Failed to map public volume to private",
 			slog.Any("error", err),
 		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process volume")
+		err = publicInputMappingError(err, "failed to process volume")
 		return
 	}
+	// The status is output-only: only the system writes it. The metering source contract
+	// is not enforced on inserts, so a caller-supplied status must never reach the
+	// database as a fabricated fact.
+	privateVolume.ClearStatus()
 
 	// Delegate to the private server:
 	privateRequest := &privatev1.VolumesCreateRequest{}
@@ -299,6 +304,11 @@ func (s *VolumesServer) Create(ctx context.Context,
 // the private server regardless of state.
 func (s *VolumesServer) Update(ctx context.Context,
 	request *publicv1.VolumesUpdateRequest) (response *publicv1.VolumesUpdateResponse, err error) {
+	ctx = withPublicAPIView(ctx)
+	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
+		return nil, err
+	}
+
 	// Validate the request:
 	publicVolume := request.GetObject()
 	if publicVolume == nil {
@@ -338,6 +348,13 @@ func (s *VolumesServer) Update(ctx context.Context,
 		// Without mask: use the existing private object as base for the merge.
 		privateVolume = existing
 	}
+	// The public API has no writable status: clone the stored status before the mapper can
+	// touch it, and restore it unconditionally after, so a caller-supplied status never
+	// reaches the database.
+	var storedStatus *privatev1.VolumeStatus
+	if existing.HasStatus() {
+		storedStatus = proto.Clone(existing.GetStatus()).(*privatev1.VolumeStatus)
+	}
 	err = s.inMapper.Copy(ctx, publicVolume, privateVolume)
 	if err != nil {
 		s.logger.ErrorContext(
@@ -345,9 +362,10 @@ func (s *VolumesServer) Update(ctx context.Context,
 			"Failed to map public volume to private",
 			slog.Any("error", err),
 		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process volume")
+		err = publicInputMappingError(err, "failed to process volume")
 		return
 	}
+	privateVolume.SetStatus(storedStatus)
 
 	// Delegate to the private server:
 	privateRequest := &privatev1.VolumesUpdateRequest{}

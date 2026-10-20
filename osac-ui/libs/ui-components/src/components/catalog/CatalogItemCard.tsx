@@ -90,7 +90,7 @@ const CatalogItemCard = ({ item, selection, resourceLookups }: CatalogItemCardPr
             : undefined
         }
       >
-        <CatalogItemIcon kind={item.$typeName} />
+        <CatalogItemIcon kind={item.$typeName} isActive />
       </CardHeader>
       <CardTitle id={titleId}>
         <ResourceNameField

@@ -98,7 +98,14 @@ func (b *ComputeInstancesServerBuilder) Build() (result *ComputeInstancesServer,
 	inMapper, err := NewGenericMapper[*publicv1.ComputeInstance, *privatev1.ComputeInstance]().
 		SetLogger(b.logger).
 		SetStrict(true).
-		AddIgnoredFields("compute_network_attachment_statuses").
+		AddIgnoredFields(
+			"compute_network_attachment_statuses",
+			// The system sets the running instance type fields when it observes the instance
+			// running; users can read them but never supply them. Full names are required so
+			// the spec's instance_type reference keeps flowing through.
+			"osac.public.v1.ComputeInstanceStatus.instance_type",
+			"osac.public.v1.ComputeInstanceStatus.instance_type_transition_time",
+		).
 		Build()
 	if err != nil {
 		return
@@ -222,9 +229,13 @@ func (s *ComputeInstancesServer) Create(ctx context.Context,
 			"Failed to map public compute instance to private",
 			slog.Any("error", err),
 		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process compute instance")
+		err = publicInputMappingError(err, "failed to process compute instance")
 		return
 	}
+	// The status is output-only: only the system writes it. The metering source contract
+	// is not enforced on inserts, so a caller-supplied status must never reach the
+	// database as a fabricated fact.
+	privateComputeInstance.ClearStatus()
 
 	// Delegate to the private server:
 	privateRequest := &privatev1.ComputeInstancesCreateRequest{}
@@ -259,6 +270,11 @@ func (s *ComputeInstancesServer) Create(ctx context.Context,
 
 func (s *ComputeInstancesServer) Update(ctx context.Context,
 	request *publicv1.ComputeInstancesUpdateRequest) (response *publicv1.ComputeInstancesUpdateResponse, err error) {
+	ctx = withPublicAPIView(ctx)
+	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
+		return nil, err
+	}
+
 	// Validate the request:
 	publicComputeInstance := request.GetObject()
 	if publicComputeInstance == nil {
@@ -271,8 +287,19 @@ func (s *ComputeInstancesServer) Update(ctx context.Context,
 		return
 	}
 	const networkAttachmentStatusFieldPath = "status.compute_network_attachment_statuses"
+	const instanceTypeFieldPath = "status.instance_type"
+	const instanceTypeTransitionTimeFieldPath = "status.instance_type_transition_time"
 	for _, path := range request.GetUpdateMask().GetPaths() {
 		path = normalizeFieldMaskPath(path)
+		// The system sets the running instance type fields when it observes the instance
+		// running; users can read them but never supply them. Subpaths are rejected too,
+		// otherwise a mask like status.instance_type.name would slip past the guard.
+		if path == instanceTypeFieldPath || path == instanceTypeTransitionTimeFieldPath ||
+			strings.HasPrefix(path, instanceTypeFieldPath+".") ||
+			strings.HasPrefix(path, instanceTypeTransitionTimeFieldPath+".") {
+			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "%s is output-only", path)
+			return
+		}
 		if path == "status" || path == networkAttachmentStatusFieldPath || strings.HasPrefix(path, networkAttachmentStatusFieldPath+".") {
 			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "%s is output-only", networkAttachmentStatusFieldPath)
 			return
@@ -307,12 +334,15 @@ func (s *ComputeInstancesServer) Update(ctx context.Context,
 			"Failed to map public compute instance to private",
 			slog.Any("error", err),
 		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process compute instance")
+		err = publicInputMappingError(err, "failed to process compute instance")
 		return
 	}
-	if publicComputeInstance.GetStatus() == nil && preservedStatus != nil {
-		privateComputeInstance.SetStatus(preservedStatus)
-	}
+	// The public API has no writable status, and the mapper copies the fields the request
+	// carries. Always restore the stored status, including when the request supplies one:
+	// a maskless update carrying a status must not change output-only fields, and a
+	// fabricated state change with a later transition time would pass the metering source
+	// contract and reach the event log.
+	privateComputeInstance.SetStatus(preservedStatus)
 
 	// Delegate to the private server:
 	privateRequest := &privatev1.ComputeInstancesUpdateRequest{}

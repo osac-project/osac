@@ -80,7 +80,7 @@
   ansible.builtin.copy:
     content: "{{ nico_admin_kubeconfig | to_nice_yaml if nico_admin_kubeconfig is mapping else nico_admin_kubeconfig }}"
     dest: "/tmp/metallb-bgp-kubeconfig-{{ cluster_order.metadata.name }}.yaml"
-    mode: '0600'
+    mode: "0600"
   register: bgp_kubeconfig_file
 
 - name: Discover peer ASN from NICo metadata service

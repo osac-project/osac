@@ -30,12 +30,14 @@ import (
 
 var _ = Describe("Annotations", func() {
 	var (
-		ctx                 context.Context
-		clustersClient      publicv1.ClustersClient
-		instanceTypesClient privatev1.BareMetalInstanceTypesClient
-		templatesClient     privatev1.ClusterTemplatesClient
-		bmitName            string
-		templateId          string
+		ctx                       context.Context
+		clustersClient            publicv1.ClustersClient
+		publicAdminClustersClient publicv1.ClustersClient
+		adminClustersClient       privatev1.ClustersClient
+		instanceTypesClient       privatev1.BareMetalInstanceTypesClient
+		templatesClient           privatev1.ClusterTemplatesClient
+		bmitName                  string
+		templateId                string
 	)
 
 	BeforeEach(func() {
@@ -45,6 +47,8 @@ var _ = Describe("Annotations", func() {
 		getOrCreateTenantDefaultNetworkClassFixture(ctx)
 
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
+		publicAdminClustersClient = publicv1.NewClustersClient(tool.ExternalView().AdminConn())
+		adminClustersClient = privatev1.NewClustersClient(tool.InternalView().AdminConn())
 		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
 		templatesClient = privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
 
@@ -192,6 +196,88 @@ var _ = Describe("Annotations", func() {
 		Expect(annotations).To(HaveKeyWithValue("another", "second"))
 	})
 
+	It("preserves the latest stored reserved annotations during public replacement updates", func() {
+		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
+			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("annotations-reserved-test-%s", uuid.New()[24:32]),
+				}.Build(),
+				Spec: publicv1.ClusterSpec_builder{
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets: testClusterNodeSets(bmitName, 3),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		object := createResponse.GetObject()
+		DeferCleanup(func() {
+			_, err := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: object.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		_, err = adminClustersClient.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+			Object: privatev1.Cluster_builder{
+				Id: object.GetId(),
+				Metadata: privatev1.Metadata_builder{
+					Annotations: map[string]string{
+						"admin.osac.openshift.io/provider":        "old-system-value",
+						"operator.admin.osac.openshift.io/remove": "removed-by-writer",
+						"ordinary": "stored-before-public-update",
+					},
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.annotations"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		_, err = adminClustersClient.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+			Object: privatev1.Cluster_builder{
+				Id: object.GetId(),
+				Metadata: privatev1.Metadata_builder{
+					Annotations: map[string]string{
+						"admin.osac.openshift.io/provider":       "latest-system-value",
+						"operator.admin.osac.openshift.io/added": "added-by-writer",
+						"ordinary":                               "stored-before-public-update",
+					},
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.annotations"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		updateResponse, err := clustersClient.Update(ctx, publicv1.ClustersUpdateRequest_builder{
+			Object: publicv1.Cluster_builder{
+				Id: object.GetId(),
+				Metadata: publicv1.Metadata_builder{
+					Name: object.GetMetadata().GetName(),
+					Annotations: map[string]string{
+						"public": "replacement",
+					},
+				}.Build(),
+				Spec: publicv1.ClusterSpec_builder{
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.annotations"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(updateResponse.GetObject().GetMetadata().GetAnnotations()).To(Equal(map[string]string{
+			"public": "replacement",
+		}))
+
+		privateResponse, err := adminClustersClient.Get(ctx, privatev1.ClustersGetRequest_builder{Id: object.GetId()}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(privateResponse.GetObject().GetMetadata().GetAnnotations()).To(Equal(map[string]string{
+			"admin.osac.openshift.io/provider":       "latest-system-value",
+			"operator.admin.osac.openshift.io/added": "added-by-writer",
+			"public":                                 "replacement",
+		}))
+		adminPublicResponse, err := publicAdminClustersClient.Get(ctx, publicv1.ClustersGetRequest_builder{Id: object.GetId()}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(adminPublicResponse.GetObject().GetMetadata().GetAnnotations()).To(Equal(map[string]string{
+			"public": "replacement",
+		}))
+	})
+
 	DescribeTable(
 		"Rejects invalid annotations on create and update",
 		func(key string, expected string) {
@@ -216,7 +302,7 @@ var _ = Describe("Annotations", func() {
 				Expect(status.Message()).To(Equal(expected))
 			})
 
-			By("Updating a cluster with a valid annotation key", func() {
+			By("Updating a cluster with the same invalid annotation key", func() {
 				createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 					Object: publicv1.Cluster_builder{
 						Metadata: publicv1.Metadata_builder{
@@ -269,6 +355,11 @@ var _ = Describe("Annotations", func() {
 			"bad_prefix/annotation",
 			"field 'metadata.annotations' key 'bad_prefix/annotation' prefix segment must only contain "+
 				"lowercase letters (a-z), digits (0-9) and hyphens (-), but contains '_' at position 3",
+		),
+		Entry(
+			"Reserved administrator namespace",
+			"provider.admin.osac.openshift.io/id",
+			"Label or annotation is reserved for use by the system.",
 		),
 	)
 })

@@ -343,6 +343,52 @@ var _ = Describe("ExternalIPFeedbackController", func() {
 			Expect(mockServer.updates[0].GetStatus().GetAddress()).To(Equal(testAddress))
 		})
 
+		It("should not sync the placeholder address to database address field", func() {
+			publicIP := &privatev1.ExternalIP{
+				Id: publicIPID,
+				Metadata: &privatev1.Metadata{
+					Name: publicIPName,
+				},
+				Spec: &privatev1.ExternalIPSpec{
+					Pool: testPoolRef,
+				},
+				Status: &privatev1.ExternalIPStatus{
+					State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING,
+				},
+			}
+			mockServer.addExternalIP(publicIP)
+
+			cr := &v1alpha1.ExternalIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      publicIPName,
+					Namespace: publicIPNamespace,
+					Labels: map[string]string{
+						osacExternalIPIDLabel: publicIPID,
+					},
+				},
+				Spec: v1alpha1.ExternalIPSpec{
+					Pool: testPool,
+				},
+				Status: v1alpha1.ExternalIPStatus{
+					Phase:   v1alpha1.ExternalIPPhaseReady,
+					State:   v1alpha1.ExternalIPStateAllocated,
+					Address: externalIPNoProvisioningAddress,
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      publicIPName,
+					Namespace: publicIPNamespace,
+				},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(mockServer.updates).To(HaveLen(1))
+			Expect(mockServer.updates[0].GetStatus().GetAddress()).To(BeEmpty())
+		})
+
 		It("should skip CRs without externalip-uuid label", func() {
 			cr := &v1alpha1.ExternalIP{
 				ObjectMeta: metav1.ObjectMeta{

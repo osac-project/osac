@@ -337,7 +337,7 @@ jobs:
         if: inputs.kind == 'it-osac-installer'
         working-directory: osac-installer
         run: |
-          make helm-topolvm-deps
+          make helm-infra-deps
           helm dependency build charts/osac/
           helm lint charts/osac-deps/
           helm lint charts/osac-infra/ --values values/dev/infra.yaml

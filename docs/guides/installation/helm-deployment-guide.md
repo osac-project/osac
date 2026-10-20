@@ -58,11 +58,11 @@ finalize the deployment:
 | `osac-publish-templates` | 20 | Publishes cluster templates (CaaS, MaaS), compute instance templates (VMaaS), bare-metal instance templates, and add-on operators (CaaS) to the fulfillment catalog |
 | `seed-cluster-versions` | 30 | Optionally seeds shared DiskImages and ClusterVersions |
 
-**Cluster template publishing** (`osac-publish-templates`): An init
-container waits for the fulfillment REST gateway to be healthy (up to
-600s), then launches the `osac-publish-templates` AAP job template and
-polls until it completes. Helm blocks until this hook succeeds, so
-`helm install` and `helm upgrade` will not report success until cluster
+**Template publishing** (`osac-publish-templates`): An init container
+waits for the fulfillment REST gateway to be healthy (up to 600s),
+then launches the `osac-publish-templates` AAP job template and polls
+until it completes. Helm blocks until this hook succeeds, so
+`helm install` and `helm upgrade` will not report success until
 templates are available. The underlying Ansible role uses a PATCH/POST
 pattern, making re-publish on upgrade safe and idempotent.
 

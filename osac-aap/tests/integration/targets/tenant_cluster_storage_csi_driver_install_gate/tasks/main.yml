@@ -1198,25 +1198,90 @@
     tenant_namespace: osac-system
 
   tasks:
-    - name: Ensure NetApp and VAST CSI drivers from the resolved protocol tiers
-      ansible.builtin.include_role:
-        name: osac.service.storage_provider
-      vars:
-        storage_provider_action: ensure_csi_driver
-        storage_provider_tiers:
-          - name: trident-block
-            protocol: block
-            provider: netapp
-          - name: shared-files
-            protocol: nfs
-            provider: vast
-            backend_id: be-vast
-          - name: fast-block
-            protocol: block
-            provider: vast
-            backend_id: be-vast
-        storage_provider_target_kubeconfig: "{{ _vast_native_csi_target_kubeconfig }}"
-        storage_provider_target_kubeconfig_insecure: false
+    - name: Ensure NetApp and VAST CSI drivers and clean fixtures on failure
+      block:
+        - name: Ensure NetApp and VAST CSI drivers from the resolved protocol tiers
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: ensure_csi_driver
+            storage_provider_tiers:
+              - name: trident-block
+                protocol: block
+                provider: netapp
+              - name: shared-files
+                protocol: nfs
+                provider: vast
+                backend_id: be-vast
+              - name: fast-block
+                protocol: block
+                provider: vast
+                backend_id: be-vast
+            storage_provider_target_kubeconfig: "{{ _vast_native_csi_target_kubeconfig }}"
+            storage_provider_target_kubeconfig_insecure: false
+      rescue:
+        - name: Delete the Trident Subscription after a failed initial reconcile
+          kubernetes.core.k8s:
+            state: absent
+            api_version: operators.coreos.com/v1alpha1
+            kind: Subscription
+            name: trident-operator
+            namespace: openshift-operators
+          failed_when: false
+
+        - name: Delete the VAST Subscription after a failed initial reconcile
+          kubernetes.core.k8s:
+            state: absent
+            api_version: operators.coreos.com/v1alpha1
+            kind: Subscription
+            name: vast-csi-operator
+            namespace: vast-csi-system
+          failed_when: false
+
+        - name: Delete CSI driver fixtures after a failed initial reconcile
+          kubernetes.core.k8s:
+            state: absent
+            api_version: storage.k8s.io/v1
+            kind: CSIDriver
+            name: "{{ item }}"
+          loop:
+            - csi.trident.netapp.io
+            - csi.vastdata.com
+            - block.csi.vastdata.com
+          failed_when: false
+
+        - name: Delete TridentBackendConfig CRD after a failed initial reconcile
+          kubernetes.core.k8s:
+            state: absent
+            api_version: apiextensions.k8s.io/v1
+            kind: CustomResourceDefinition
+            name: tridentbackendconfigs.trident.netapp.io
+            wait: true
+          failed_when: false
+
+        - name: Delete operator namespaces after a failed initial reconcile
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Namespace
+            name: "{{ item }}"
+            wait: true
+          loop:
+            - trident
+            - vast-csi-system
+          failed_when: false
+
+        - name: Delete native driver override log after a failed initial reconcile
+          ansible.builtin.file:
+            path: /tmp/osac_test_overrides.log
+            state: absent
+          failed_when: false
+
+        - name: Fail after cleaning fixtures for the failed native CSI reconcile
+          ansible.builtin.fail:
+            msg: >-
+              Native CSI driver ensure failed. Test fixtures were cleaned up;
+              see the original task output above.
 
 - name: "Native CSI Driver Ensure - Verify installed drivers skip OLM install"
   hosts: native_csi_reconcile

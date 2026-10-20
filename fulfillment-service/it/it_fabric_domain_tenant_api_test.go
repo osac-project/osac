@@ -129,16 +129,7 @@ var _ = Describe("FabricDomain tenant API component integration", Label("network
 
 		DeferCleanup(func(cleanupCtx context.Context) {
 			for i := len(createdVirtualNetIDs) - 1; i >= 0; i-- {
-				id := createdVirtualNetIDs[i]
-				_, deleteErr := virtualNetworks.Delete(cleanupCtx, privatev1.VirtualNetworksDeleteRequest_builder{Id: id}.Build())
-				if deleteErr != nil && !isGRPCCode(deleteErr, grpccodes.NotFound) {
-					Expect(deleteErr).ToNot(HaveOccurred(), "deleting test VirtualNetwork %s", id)
-				}
-				Eventually(func(g Gomega) {
-					_, getErr := virtualNetworks.Get(cleanupCtx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
-					g.Expect(getErr).To(HaveOccurred())
-					g.Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
-				}, time.Minute, time.Second).Should(Succeed())
+				deleteAndWaitForVirtualNetwork(cleanupCtx, virtualNetworks, createdVirtualNetIDs[i])
 			}
 		})
 
@@ -340,6 +331,34 @@ func deleteAndWaitForFabricDomain(ctx context.Context, domains publicv1.FabricDo
 		g.Expect(getErr).To(HaveOccurred())
 		g.Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
 	}, time.Minute, time.Second).Should(Succeed())
+}
+
+// deleteAndWaitForVirtualNetwork deletes a VirtualNetwork and polls
+// until the resource reaches NotFound. On each iteration it calls
+// Signal to wake the reconciler so any controller finalizer is removed
+// promptly instead of waiting for the next watch/sync cycle. This
+// matches the pattern used by deleteTenantUsers and deleteTenant.
+func deleteAndWaitForVirtualNetwork(ctx context.Context, client privatev1.VirtualNetworksClient, id string) {
+	GinkgoHelper()
+	_, err := client.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{Id: id}.Build())
+	if err != nil && !isGRPCCode(err, grpccodes.NotFound) {
+		Expect(err).ToNot(HaveOccurred(), "deleting test VirtualNetwork %s", id)
+	}
+	Eventually(func(g Gomega) bool {
+		_, getErr := client.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
+		if isGRPCCode(getErr, grpccodes.NotFound) {
+			return true
+		}
+		g.Expect(getErr).ToNot(HaveOccurred())
+		// Wake the reconciler so it processes the deletion and
+		// removes the controller finalizer without delay.
+		_, signalErr := client.Signal(ctx, privatev1.VirtualNetworksSignalRequest_builder{Id: id}.Build())
+		if isGRPCCode(signalErr, grpccodes.NotFound) {
+			return true
+		}
+		g.Expect(signalErr).ToNot(HaveOccurred())
+		return false
+	}, time.Minute, time.Second).Should(BeTrue())
 }
 
 func fabricDomainIDs(items []*publicv1.FabricDomain) []string {

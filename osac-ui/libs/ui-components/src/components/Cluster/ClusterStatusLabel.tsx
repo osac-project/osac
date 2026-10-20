@@ -1,39 +1,100 @@
-import { ClusterState } from '@osac/types';
+import { Content, Label, Stack, StackItem } from '@patternfly/react-core';
+import ExclamationTriangleIcon from '@patternfly/react-icons/dist/esm/icons/exclamation-triangle-icon';
+import type { TFunction } from 'i18next';
 
+import { ClusterConditionType, ClusterState, type ClusterStatus } from '@osac/types';
+
+import { useTranslation } from '../../hooks/useTranslation';
 import { ResourceStatusLabel, type StatusKind } from '../Resource/ResourceStatusLabel';
 
 interface ClusterStatusLabelProps {
+  status?: ClusterStatus;
   state?: ClusterState;
 }
 
-const CLUSTER_STATUS_MAP: Record<ClusterState, { status: StatusKind; text: string }> = {
-  [ClusterState.UNSPECIFIED]: { status: 'unspecified', text: 'Unknown' },
-  [ClusterState.PROGRESSING]: { status: 'progressing', text: 'Provisioning' },
-  [ClusterState.READY]: { status: 'ready', text: 'Ready' },
-  [ClusterState.FAILED]: { status: 'failed', text: 'Failed' },
-  [ClusterState.DELETING]: { status: 'progressing', text: 'Deleting' },
-  [ClusterState.DELETE_FAILED]: { status: 'failed', text: 'Delete failed' },
-};
+interface ClusterStateActivity {
+  stateKind: StatusKind;
+  stateText: string;
+  activityText?: string;
+  activityWarning: boolean;
+}
 
-const resolveClusterStatus = (state?: ClusterState): { status: StatusKind; text: string } => {
+const resolveClusterState = (
+  state: ClusterState | undefined,
+  t: TFunction,
+): Pick<ClusterStateActivity, 'stateKind' | 'stateText'> => {
   switch (state) {
     case ClusterState.PROGRESSING:
-      return CLUSTER_STATUS_MAP[ClusterState.PROGRESSING];
+      return { stateKind: 'progressing', stateText: t('Provisioning') };
     case ClusterState.READY:
-      return CLUSTER_STATUS_MAP[ClusterState.READY];
+      return { stateKind: 'ready', stateText: t('Ready') };
     case ClusterState.FAILED:
-      return CLUSTER_STATUS_MAP[ClusterState.FAILED];
+      return { stateKind: 'failed', stateText: t('Failed') };
     case ClusterState.DELETING:
-      return CLUSTER_STATUS_MAP[ClusterState.DELETING];
+      return { stateKind: 'progressing', stateText: t('Deleting') };
     case ClusterState.DELETE_FAILED:
-      return CLUSTER_STATUS_MAP[ClusterState.DELETE_FAILED];
+      return { stateKind: 'failed', stateText: t('Delete failed') };
     default:
-      return CLUSTER_STATUS_MAP[ClusterState.UNSPECIFIED];
+      return { stateKind: 'unspecified', stateText: t('Unknown') };
   }
 };
 
-export const ClusterStatusLabel = ({ state }: ClusterStatusLabelProps) => {
-  const { status, text } = resolveClusterStatus(state);
+const formatClusterStateActivity = (
+  status: ClusterStatus | undefined,
+  fallbackState: ClusterState | undefined,
+  t: TFunction,
+): ClusterStateActivity => {
+  const state = status?.state ?? fallbackState;
+  const stateInfo = resolveClusterState(state, t);
+  if (status?.state !== ClusterState.PROGRESSING) {
+    return { ...stateInfo, activityWarning: false };
+  }
 
-  return <ResourceStatusLabel status={status} text={text} />;
+  const reason = status.conditions.find(
+    (condition) => condition.type === ClusterConditionType.PROGRESSING,
+  )?.reason;
+  return {
+    ...stateInfo,
+    activityText:
+      !reason?.trim() || reason === 'StageUnknown'
+        ? t('Stage unknown')
+        : reason === 'Stalled'
+          ? t('Stalled')
+          : reason,
+    activityWarning: reason === 'Stalled',
+  };
+};
+
+export const ClusterStatusLabel = ({ status, state }: ClusterStatusLabelProps) => {
+  const { t } = useTranslation();
+  const { stateKind, stateText, activityText, activityWarning } = formatClusterStateActivity(
+    status,
+    state,
+    t,
+  );
+  const stateLabel = <ResourceStatusLabel status={stateKind} text={stateText} />;
+
+  if (!activityText) {
+    return stateLabel;
+  }
+
+  return (
+    <Stack>
+      <StackItem>{stateLabel}</StackItem>
+      <StackItem>
+        {activityWarning ? (
+          <Label
+            color="orange"
+            icon={<ExclamationTriangleIcon aria-hidden />}
+            aria-label={t('Warning: Stalled')}
+            isCompact
+          >
+            {activityText}
+          </Label>
+        ) : (
+          <Content component="small">{activityText}</Content>
+        )}
+      </StackItem>
+    </Stack>
+  );
 };

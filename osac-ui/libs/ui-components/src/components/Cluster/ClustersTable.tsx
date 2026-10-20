@@ -7,7 +7,6 @@ import ResourceNameField from '@osac/ui-components/components/Resource/ResourceN
 
 import ClusterActionsMenu from './ClusterActionsMenu';
 import { ClusterStatusLabel } from './ClusterStatusLabel';
-import ClusterVersionLifecycleLabel from './ClusterVersionLifecycleLabel';
 import { clusterVersionNamesFilter, useClusterVersions } from '../../api/v1/cluster-versions';
 import { useTranslation } from '../../hooks/useTranslation';
 import ExternalLink from '../Primitives/ExternalLink';
@@ -48,9 +47,8 @@ export const ClustersTable = ({ clusters }: ClustersTableProps) => {
       <Thead>
         <Tr>
           <Th>{t('Name')}</Th>
-          <Th>{t('Status')}</Th>
+          <Th>{t('State')}</Th>
           <Th>{t('Version')}</Th>
-          <Th>{t('Lifecycle')}</Th>
           <Th>{t('API URL')}</Th>
           <Th>{t('Created')}</Th>
           <Th aria-label={t('Actions')} />
@@ -73,8 +71,8 @@ export const ClustersTable = ({ clusters }: ClustersTableProps) => {
                   detailsUrl={locked ? undefined : `/clusters/${encodeURIComponent(cluster.id)}`}
                 />
               </Td>
-              <Td dataLabel={t('Status')}>
-                <ClusterStatusLabel state={cluster.status?.state} />
+              <Td dataLabel={t('State')}>
+                <ClusterStatusLabel status={cluster.status} />
               </Td>
               <Td dataLabel={t('Version')}>
                 {isClusterVersionsLoading ? (
@@ -82,13 +80,6 @@ export const ClustersTable = ({ clusters }: ClustersTableProps) => {
                 ) : (
                   clusterVersion?.spec?.version || versionRef?.name || '—'
                 )}
-              </Td>
-              <Td dataLabel={t('Lifecycle')}>
-                {isClusterVersionsLoading ? (
-                  <Skeleton width="80px" />
-                ) : clusterVersion ? (
-                  <ClusterVersionLifecycleLabel clusterVersion={clusterVersion} />
-                ) : null}
               </Td>
               <Td dataLabel={t('API URL')}>
                 {locked ? '—' : <ExternalLink href={apiUrl} showUnsafeAsText />}

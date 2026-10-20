@@ -1,13 +1,16 @@
 import React, { type ReactNode, createElement } from 'react';
 import { MemoryRouter } from 'react-router-dom';
-import { create } from '@bufbuild/protobuf';
+import { type MessageInitShape, create } from '@bufbuild/protobuf';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import {
   type Cluster,
+  ClusterConditionType,
   ClusterSchema,
+  ClusterState,
+  ClusterStatusSchema,
   type ClusterVersion,
   ClusterVersionSchema,
   ClusterVersionState,
@@ -17,12 +20,22 @@ import { ClustersTable } from './ClustersTable';
 import { ApiProvider } from '../../api/api-context';
 import { createMockConnectTransport } from '../../test-utils/createMockConnectTransport';
 
-const makeCluster = (id: string, versionName: string): Cluster =>
+const makeCluster = (
+  id: string,
+  versionName: string,
+  status?: MessageInitShape<typeof ClusterStatusSchema>,
+): Cluster =>
   create(ClusterSchema, {
     id,
     metadata: { name: id },
     spec: { version: { name: versionName } },
+    status,
   });
+
+const progressing = (reason?: string) => ({
+  state: ClusterState.PROGRESSING,
+  conditions: [{ type: ClusterConditionType.PROGRESSING, reason }],
+});
 
 const makeClusterVersion = (
   name: string,
@@ -77,8 +90,98 @@ const renderTable = (clusters: Cluster[], versions: ClusterVersion[] = clusterVe
   };
 };
 
+describe('ClustersTable State and activity', () => {
+  it('shows the public progressing reason beneath State', () => {
+    renderTable([makeCluster('c-progress', '', progressing('WorkersJoining'))]);
+
+    expect(screen.getByRole('columnheader', { name: 'State' })).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Status' })).not.toBeInTheDocument();
+    const stateCell = screen.getByText('WorkersJoining').closest('[data-label="State"]');
+    expect(stateCell).toHaveTextContent('Provisioning');
+  });
+
+  it('marks a stalled provisioning stage as a warning', () => {
+    renderTable([makeCluster('c-stalled', '', progressing('Stalled'))]);
+
+    const warning = screen.getByLabelText('Warning: Stalled');
+    expect(warning).toHaveTextContent('Stalled');
+    expect(warning).toHaveClass('pf-m-orange');
+    expect(warning.closest('[data-label="State"]')).toHaveTextContent('Provisioning');
+  });
+
+  it('uses Stage unknown for the backend StageUnknown reason', () => {
+    renderTable([makeCluster('c-unknown', '', progressing('StageUnknown'))]);
+
+    expect(screen.getByText('Stage unknown')).toBeInTheDocument();
+    expect(screen.queryByText('StageUnknown')).not.toBeInTheDocument();
+  });
+
+  it('uses Stage unknown when no progressing condition is returned', () => {
+    renderTable([
+      makeCluster('c-no-condition', '', {
+        state: ClusterState.PROGRESSING,
+        conditions: [{ type: ClusterConditionType.READY, reason: 'ReadyCondition' }],
+      }),
+    ]);
+
+    expect(screen.getByText('Stage unknown')).toBeInTheDocument();
+    expect(screen.queryByText('ReadyCondition')).not.toBeInTheDocument();
+  });
+
+  it.each(['', '   '])('uses Stage unknown for a blank reason %j', (reason) => {
+    renderTable([makeCluster('c-blank', '', progressing(reason))]);
+
+    expect(screen.getByText('Stage unknown')).toBeInTheDocument();
+  });
+
+  it.each([
+    [ClusterState.READY, 'Ready'],
+    [ClusterState.FAILED, 'Failed'],
+    [ClusterState.DELETING, 'Deleting'],
+    [ClusterState.DELETE_FAILED, 'Delete failed'],
+    [ClusterState.UNSPECIFIED, 'Unknown'],
+  ])('shows %s without an old provisioning stage', (state, stateText) => {
+    renderTable([
+      makeCluster('c-other-state', '', {
+        state,
+        conditions: [{ type: ClusterConditionType.PROGRESSING, reason: 'WorkersJoining' }],
+      }),
+    ]);
+
+    expect(screen.getByText(stateText)).toBeInTheDocument();
+    expect(screen.queryByText('WorkersJoining')).not.toBeInTheDocument();
+    expect(screen.queryByText('Stage unknown')).not.toBeInTheDocument();
+  });
+
+  it('shows Unknown without activity when public status is absent', () => {
+    renderTable([makeCluster('c-no-status', '')]);
+
+    expect(screen.getByText('Unknown')).toBeInTheDocument();
+    expect(screen.queryByText('Stage unknown')).not.toBeInTheDocument();
+  });
+
+  it('replaces the prior reason when the public cluster prop changes', () => {
+    const { rerender } = renderTable([
+      makeCluster('c-updating', '', progressing('AllocatingWorkers')),
+    ]);
+    expect(screen.getByText('AllocatingWorkers')).toBeInTheDocument();
+
+    rerender(
+      <ClustersTable clusters={[makeCluster('c-updating', '', progressing('WorkersJoining'))]} />,
+    );
+    expect(screen.queryByText('AllocatingWorkers')).not.toBeInTheDocument();
+    expect(screen.getByText('WorkersJoining')).toBeInTheDocument();
+
+    rerender(
+      <ClustersTable clusters={[makeCluster('c-updating', '', { state: ClusterState.READY })]} />,
+    );
+    expect(screen.queryByText('WorkersJoining')).not.toBeInTheDocument();
+    expect(screen.getByText('Ready')).toBeInTheDocument();
+  });
+});
+
 describe('ClustersTable version join', () => {
-  it('renders the resolved version string and lifecycle label for every state', async () => {
+  it('keeps resolved version strings without a Lifecycle column', async () => {
     renderTable([
       makeCluster('c-active', 'v4.17'),
       makeCluster('c-deprecated', 'v4.16'),
@@ -90,11 +193,10 @@ describe('ClustersTable version join', () => {
     expect(screen.getByText('4.16.0')).toBeInTheDocument();
     expect(screen.getByText('4.15.0')).toBeInTheDocument();
     expect(screen.getByText('4.14.0')).toBeInTheDocument();
-
-    // Both the active and the disabled-but-active version render an Active label.
-    expect(screen.getAllByText('Active')).toHaveLength(2);
-    expect(screen.getByText('Deprecated')).toBeInTheDocument();
-    expect(screen.getByText('Obsolete')).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Version' })).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Lifecycle' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Deprecated')).not.toBeInTheDocument();
+    expect(screen.queryByText('Obsolete')).not.toBeInTheDocument();
   });
 
   it('issues a single scoped List referencing the version names plus all states', async () => {
@@ -122,18 +224,14 @@ describe('ClustersTable version join', () => {
     await waitFor(() => expect(getCallCount()).toBe(0));
   });
 
-  it('falls back to the raw reference name with a blank lifecycle when unresolved', async () => {
+  it('falls back to the raw reference name when a version is unresolved', async () => {
     renderTable([makeCluster('c-missing', 'v-deleted')], []);
 
     expect(await screen.findByText('v-deleted')).toBeInTheDocument();
-    const lifecycleCell = screen
-      .getByText('v-deleted')
-      .closest('tr')
-      ?.querySelector('[data-label="Lifecycle"]');
-    expect(lifecycleCell?.querySelector('.pf-v6-c-label')).toBeNull();
+    expect(screen.queryByRole('columnheader', { name: 'Lifecycle' })).not.toBeInTheDocument();
   });
 
-  it('shows skeletons while cluster versions are loading', () => {
+  it('shows a skeleton while cluster versions are loading', () => {
     const { container } = renderTable([makeCluster('c-active', 'v4.17')]);
 
     expect(container.querySelectorAll('.pf-v6-c-skeleton').length).toBeGreaterThan(0);

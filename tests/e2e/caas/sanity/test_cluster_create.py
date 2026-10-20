@@ -691,12 +691,37 @@ def _is_transient_kubectl_error(exc: subprocess.CalledProcessError) -> bool:
     return any(p in combined for p in _TRANSIENT_KUBECTL_PATTERNS)
 
 
+_PERMANENT_ERROR_CATEGORIES: dict[str, str] = {
+    "not found": "not-found",
+    "forbidden": "forbidden",
+    "unauthorized": "unauthorized",
+    "doesn't have a resource type": "unknown-resource",
+}
+"""Safe category labels for permanent kubectl errors.
+
+Raw stderr/stdout may contain internal hostnames, namespace names,
+or other operational data that must not appear in exception messages
+(see runner.py's suppression policy).  This mapping classifies the
+error for diagnostics without leaking raw command output."""
+
+
+def _permanent_error_category(exc: subprocess.CalledProcessError) -> str:
+    """Classify a permanent kubectl error without leaking raw output."""
+    combined = ((exc.stderr or "") + " " + (exc.stdout or "")).lower()
+    for pattern, category in _PERMANENT_ERROR_CATEGORIES.items():
+        if pattern in combined:
+            return category
+    return "unclassified"
+
+
 def _assert_worker_aggregates(*, k8s: K8sClient, co_name: str, expected_workers: int) -> None:
     """Poll worker aggregates, retrying only transient API errors.
 
     Permanent kubectl failures (invalid namespace, authorization,
     unknown resource) propagate immediately instead of being hidden
-    behind a ~20-minute poll_until timeout.
+    behind a ~20-minute poll_until timeout.  The raised RuntimeError
+    carries the return code and a safe error category but never raw
+    command output (runner.py suppression policy).
     """
 
     def _get_worker_counts() -> tuple[int, int, int]:
@@ -705,9 +730,11 @@ def _assert_worker_aggregates(*, k8s: K8sClient, co_name: str, expected_workers:
         except subprocess.CalledProcessError as exc:
             if _is_transient_kubectl_error(exc):
                 raise  # poll_until catches and retries
+            # Suppress the chained CalledProcessError: its command
+            # and output may contain secrets (runner.py convention).
             raise RuntimeError(
-                f"permanent kubectl failure (rc={exc.returncode}): {(exc.stderr or exc.stdout or '').strip()}"
-            ) from exc
+                f"permanent kubectl failure (rc={exc.returncode}, category={_permanent_error_category(exc)})"
+            ) from None
         return tuple(int(status.get(key, -1)) for key in ("desiredWorkers", "currentWorkers", "readyWorkers"))
 
     poll_until(

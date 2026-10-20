@@ -172,7 +172,6 @@ def test_stage2_installs_missing_native_csi_operators_and_skips_existing(
                 )
                 version = csv.get("spec", {}).get("version", "")
                 assert version, f"Installed CSV {installed_csv} has no version"
-                _LOGGER.info("OLM installed %s CSV %s, version %s", operator["package"], installed_csv, version)
                 installed_csvs[operator["package"]] = csv
 
                 install_plans = k8s_hub_client.list_json(resource="installplans", namespace=operator["namespace"]).get(

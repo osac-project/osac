@@ -88,16 +88,20 @@ func newPipelineWithRevisions(
 	t *testing.T, tenant string, store *database.Store, revisions []rules.Revision,
 ) *pipeline {
 	t.Helper()
-	engine, err := usage.NewEngine(revisions, "us-east")
+	owners, err := usage.RegistryOwners()
 	if err != nil {
-		t.Fatalf("creating engine: %v", err)
+		t.Fatalf("reading owners: %v", err)
+	}
+	calculator, err := usage.NewCalculator(revisions, "us-east", owners)
+	if err != nil {
+		t.Fatalf("creating calculator: %v", err)
 	}
 	foldLoop, err := fold.New(store, testenv.NewConsumer(t), logr.Discard())
 	if err != nil {
 		t.Fatalf("creating fold: %v", err)
 	}
 	roundLoop, err := round.New(
-		store, engine, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(),
+		store, calculator, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(),
 	)
 	if err != nil {
 		t.Fatalf("creating round: %v", err)
@@ -343,9 +347,13 @@ func TestTwoPodsCatchUpApplyEachHeartbeatOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parsing default revision: %v", err)
 	}
-	engine, err := usage.NewEngine([]rules.Revision{revision}, "us-east")
+	owners, err := usage.RegistryOwners()
 	if err != nil {
-		t.Fatalf("creating engine: %v", err)
+		t.Fatalf("reading owners: %v", err)
+	}
+	calculator, err := usage.NewCalculator([]rules.Revision{revision}, "us-east", owners)
+	if err != nil {
+		t.Fatalf("creating calculator: %v", err)
 	}
 
 	// Two pods run a round at the same time on the restored database.
@@ -354,7 +362,7 @@ func TestTwoPodsCatchUpApplyEachHeartbeatOnce(t *testing.T) {
 	done := make(chan struct{})
 	for i := range 2 {
 		pod, err := round.New(
-			restoredStore, engine, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(),
+			restoredStore, calculator, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(),
 		)
 		if err != nil {
 			t.Fatalf("creating round: %v", err)

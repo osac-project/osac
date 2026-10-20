@@ -224,12 +224,16 @@ func runRoundAt(t *testing.T, store *database.Store, tenant string, moment time.
 	if err != nil {
 		t.Fatalf("parsing default revision: %v", err)
 	}
-	engine, err := usage.NewEngine([]rules.Revision{revision}, "us-east")
+	owners, err := usage.RegistryOwners()
 	if err != nil {
-		t.Fatalf("creating engine: %v", err)
+		t.Fatalf("reading owners: %v", err)
+	}
+	calculator, err := usage.NewCalculator([]rules.Revision{revision}, "us-east", owners)
+	if err != nil {
+		t.Fatalf("creating calculator: %v", err)
 	}
 	roundLoop, err := round.New(
-		store, engine, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(),
+		store, calculator, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(),
 	)
 	if err != nil {
 		t.Fatalf("creating round: %v", err)

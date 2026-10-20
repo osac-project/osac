@@ -28,6 +28,8 @@ var dimensionFields = map[string]map[string]string{
 	},
 	"BareMetalInstance": {
 		"instance_type": "spec.instance_type",
+		"cluster":        "status.cluster",
+		"node_set":       "status.node_set",
 	},
 	"Volume": {
 		"storage_tier":         "spec.storage_tier",

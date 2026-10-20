@@ -33,7 +33,7 @@ const DefaultMetersYAML = `- resource: ComputeInstance
   unit: second
   billable_when:
     states: [PROGRESSING, READY]
-    once: [READY]
+    turns_billable_once: [READY]
   dimensions: [template, version]
 
 - resource: BareMetalInstance
@@ -41,22 +41,22 @@ const DefaultMetersYAML = `- resource: ComputeInstance
   unit: second
   billable_when:
     states: [STARTING, RUNNING, STOPPING, STOPPED, DELETING]
-    once: [STARTING, RUNNING]
-  dimensions: [instance_type]
+    turns_billable_once: [STARTING, RUNNING]
+  dimensions: [instance_type, cluster, node_set]
 
 - resource: BareMetalInstance
   meter: consumption
   unit: second
   billable_when:
     states: [RUNNING]
-  dimensions: [instance_type]
+  dimensions: [instance_type, cluster, node_set]
 
 - resource: Volume
   meter: capacity
   unit: gibibyte_second
   billable_when:
     states: [AVAILABLE, DELETING]
-    once: [AVAILABLE]
+    turns_billable_once: [AVAILABLE]
     fields:
       protocol: BLOCK
       vendor_volume_id: set
@@ -68,7 +68,7 @@ const DefaultMetersYAML = `- resource: ComputeInstance
   unit: second
   billable_when:
     states: [ALLOCATED, DELETING]
-    once: [ALLOCATED]
+    turns_billable_once: [ALLOCATED]
   dimensions: [pool, ip_family, attribution, attached]
 
 - resource: NATGateway
@@ -76,7 +76,7 @@ const DefaultMetersYAML = `- resource: ComputeInstance
   unit: second
   billable_when:
     states: [READY, DELETING]
-    once: [READY]
+    turns_billable_once: [READY]
   dimensions: [virtual_network, external_ip]
 `
 

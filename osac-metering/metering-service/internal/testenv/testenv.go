@@ -342,7 +342,10 @@ func BMIEvent(
 		StateTransitionTime: timestamppb.New(stateSince),
 	}
 	if cluster != "" {
-		status.Cluster = &privatev1.ClusterLocalReference{Id: cluster, Name: cluster}
+		// The name diverges from the id on purpose: the owner reference renders by its id,
+		// which never changes, so the cluster dimension and the root resolution stay stable
+		// even when a name differs.
+		status.Cluster = &privatev1.ClusterLocalReference{Id: cluster, Name: cluster + "-display"}
 	}
 	if nodeSet != "" {
 		status.NodeSet = &nodeSet

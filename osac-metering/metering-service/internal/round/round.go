@@ -54,11 +54,11 @@ func roundAlreadyRan(roundTime time.Time, lastRound *time.Time) bool {
 
 // Round runs a tenant's heartbeat rounds.
 type Round struct {
-	store    *database.Store
-	engine   *usage.Engine
-	client   sarama.Client
-	consumer sarama.Consumer
-	logger   logr.Logger
+	store      *database.Store
+	calculator *usage.Calculator
+	client     sarama.Client
+	consumer   sarama.Consumer
+	logger     logr.Logger
 
 	// eventTarget is the event-topic watermark the round waits for the fold to reach,
 	// per tenant. Measured at check time the watermark always moves ahead of the fold
@@ -81,13 +81,13 @@ type Round struct {
 // heartbeat topic during catch-up.
 func New(
 	store *database.Store,
-	engine *usage.Engine,
+	calculator *usage.Calculator,
 	client sarama.Client,
 	consumer sarama.Consumer,
 	logger logr.Logger,
 ) (*Round, error) {
 	return &Round{
-		store: store, engine: engine, client: client, consumer: consumer, logger: logger,
+		store: store, calculator: calculator, client: client, consumer: consumer, logger: logger,
 		eventTarget: map[string]int64{}, catchUpBatch: CatchUpBatch,
 	}, nil
 }
@@ -243,6 +243,50 @@ type resource struct {
 	resourceID   string
 }
 
+// rootOf resolves and loads the resource's ownership root, following owner references to the
+// topmost owner: the gate every resource below it inherits. A standalone resource returns
+// nil. A root whose history is missing returns a root with empty facts: the calculator then
+// holds the resource's billing shut, and the miss is logged here, because a worker billed as
+// standalone would ignore the gate its cluster controls.
+func (r *Round) rootOf(
+	ctx context.Context, tx database.Querier, tenant, resourceType string,
+	facts []database.Fact,
+) (*usage.Root, error) {
+	originalType, originalID := resourceType, ""
+	if len(facts) > 0 {
+		originalID = facts[0].ResourceID
+	}
+	var root *usage.Root
+	for range ownerChainLimit {
+		ownerType, ownerID, ok := r.calculator.OwnerOf(resourceType, facts)
+		if !ok {
+			return root, nil
+		}
+		ownerFacts, err := database.ResourceFacts(ctx, tx, tenant, ownerType, ownerID)
+		if err != nil {
+			return nil, err
+		}
+		if len(ownerFacts) == 0 {
+			r.logger.Error(
+				nil, "ownership root has no history; holding its resources' billing",
+				"tenant", tenant, "root_type", ownerType, "root_id", ownerID,
+				"resource_type", originalType, "resource_id", originalID,
+			)
+			return &usage.Root{Type: ownerType, ID: ownerID}, nil
+		}
+		root = &usage.Root{Type: ownerType, ID: ownerID, Facts: ownerFacts}
+		resourceType, facts = ownerType, ownerFacts
+	}
+	return nil, fmt.Errorf(
+		"ownership chain of %s %s exceeds %d hops; billing held",
+		originalType, originalID, ownerChainLimit,
+	)
+}
+
+// ownerChainLimit bounds the ownership walk. Ownership is set at creation by the owner, so a
+// cycle cannot occur; the limit turns corrupt data into a loud failure instead of a loop.
+const ownerChainLimit = 8
+
 // compare recomputes the meters that can have changed and writes the differences. Resources
 // with new facts or a newly effective revision are recomputed from history; meters billable at
 // the previous round only extend their ledger tail.
@@ -262,8 +306,12 @@ func (r *Round) compare(
 		if err != nil {
 			return err
 		}
-		pieces, err := r.engine.Expected(
-			tenant, resource.resourceType, resource.resourceID, facts, roundTime,
+		root, err := r.rootOf(ctx, tx, tenant, resource.resourceType, facts)
+		if err != nil {
+			return err
+		}
+		pieces, err := r.calculator.Expected(
+			tenant, resource.resourceType, resource.resourceID, facts, root, roundTime,
 		)
 		if err != nil {
 			return fmt.Errorf(
@@ -289,6 +337,10 @@ func (r *Round) compare(
 		if err != nil {
 			return err
 		}
+		root, err := r.rootOf(ctx, tx, tenant, resource.resourceType, facts)
+		if err != nil {
+			return err
+		}
 		ledger, err := database.LedgerPiecesWhere(
 			ctx, tx, tenant, "resource_type = $2 AND resource_id = $3",
 			resource.resourceType, resource.resourceID,
@@ -296,8 +348,8 @@ func (r *Round) compare(
 		if err != nil {
 			return err
 		}
-		pieces, err := r.engine.Tail(
-			tenant, resource.resourceType, resource.resourceID, facts,
+		pieces, err := r.calculator.Since(
+			tenant, resource.resourceType, resource.resourceID, facts, root,
 			*progress.LastRoundTime, roundTime, ledger,
 		)
 		if err != nil {
@@ -306,12 +358,12 @@ func (r *Round) compare(
 			)
 		}
 		if len(pieces) == 0 || !openKeysJustified(pieces, ledger, *progress.LastRoundTime) {
-			// The engine cannot justify every meter that was billable at the previous
+			// The calculator cannot justify every meter that was billable at the previous
 			// round, for example a ledger rebuilt by catch-up from heartbeats whose
 			// events were never folded. The resource's rows are compared whole, so
 			// unjustified usage is reversed.
-			pieces, err = r.engine.Expected(
-				tenant, resource.resourceType, resource.resourceID, facts, roundTime,
+			pieces, err = r.calculator.Expected(
+				tenant, resource.resourceType, resource.resourceID, facts, root, roundTime,
 			)
 			if err != nil {
 				return fmt.Errorf(
@@ -360,21 +412,43 @@ func (r *Round) scanResources(
 	}
 
 	// Resources with facts the previous round has not used: written after its event
-	// offset, or dated after its time, because a writer's clock can run ahead.
+	// offset, or dated after its time, because a writer's clock can run ahead. A changed
+	// root drags the resources it owns along, transitively, because the root's facts gate
+	// their billing: a worker whose cluster reached a confirming state recomputes in the
+	// same round, retroactively, without a fact of its own.
 	newFacts, err := database.ResourcesWithNewFacts(
 		ctx, tx, tenant, progress.LastRoundEventOffset, *progress.LastRoundTime,
 	)
 	if err != nil {
 		return nil, nil, err
 	}
+	queue := make([]resource, 0, len(newFacts))
 	for _, key := range newFacts {
-		add(resource{key.ResourceType, key.ResourceID}, &full)
+		queue = append(queue, resource{key.ResourceType, key.ResourceID})
+	}
+	for len(queue) > 0 {
+		key := queue[0]
+		queue = queue[1:]
+		add(key, &full)
+		field, known := r.calculator.OwnedFieldOf(key.resourceType)
+		if !known {
+			continue
+		}
+		owned, err := database.ResourcesOwnedBy(ctx, tx, tenant, field, key.resourceID)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, entry := range owned {
+			if !seen[resource{entry.ResourceType, entry.ResourceID}] {
+				queue = append(queue, resource{entry.ResourceType, entry.ResourceID})
+			}
+		}
 	}
 
 	// Resources of types a new revision affects, in the round where the revision takes
 	// effect.
 	affected := map[string]bool{}
-	for _, revision := range r.engine.Revisions() {
+	for _, revision := range r.calculator.Revisions() {
 		if revision.EffectiveAt.After(*progress.LastRoundTime) &&
 			!revision.EffectiveAt.After(roundTime) {
 			for _, meter := range revision.Meters {
@@ -486,7 +560,7 @@ func (r *Round) diffAndCommit(
 	})
 
 	var revisionTimes []time.Time
-	for _, revision := range r.engine.Revisions() {
+	for _, revision := range r.calculator.Revisions() {
 		revisionTimes = append(revisionTimes, revision.EffectiveAt)
 	}
 
@@ -500,7 +574,7 @@ func (r *Round) diffAndCommit(
 			// The unit and revision come from the meter definition and the revision that
 			// billed the pieces, not from the expected pieces: a correction for a meter
 			// with no expected usage at all still carries them.
-			meter, revision, ok := r.engine.MeterAt(key.ResourceType, key.Meter, difference.start)
+			meter, revision, ok := r.calculator.MeterAt(key.ResourceType, key.Meter, difference.start)
 			if !ok {
 				return fmt.Errorf(
 					"no revision defines meter %s of %s, which has ledger rows",

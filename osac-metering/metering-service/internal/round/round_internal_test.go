@@ -16,7 +16,10 @@ import (
 
 	"github.com/go-logr/logr"
 
+	"github.com/osac-project/osac-metering/internal/database"
+	"github.com/osac-project/osac-metering/internal/rules"
 	"github.com/osac-project/osac-metering/internal/testenv"
+	"github.com/osac-project/osac-metering/internal/usage"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -129,4 +132,159 @@ func TestRoundAlreadyRan(t *testing.T) {
 	if !roundAlreadyRan(roundTime, &future) {
 		t.Fatal("a round before the last round's time must wait")
 	}
+}
+
+// TestRootOfWalksToTheTopmostOwner checks the ownership walk: the gate a resource inherits
+// comes from the topmost owner, so a component of a component resolves past its immediate
+// owner, and a missing root returns empty facts so billing stays shut.
+func TestRootOfWalksToTheTopmostOwner(t *testing.T) {
+	const tenant = "rootwalk"
+	base := time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC)
+	store := testenv.Database(t)
+	ctx := context.Background()
+	if err := store.EnsureProgress(ctx, tenant); err != nil {
+		t.Fatalf("ensuring progress: %v", err)
+	}
+
+	revision := rules.Revision{
+		Name: "synthetic", Number: "0001", EffectiveAt: time.Unix(0, 0).UTC(),
+		Meters: []rules.Meter{
+			{Resource: "WaaS2", Meter: "platform", Unit: "second",
+				Billable: rules.BillableWhen{States: []string{"ACTIVE"}, TurnsBillableOnce: []string{"ACTIVE"}}},
+			{Resource: "WaaS", Meter: "service", Unit: "second",
+				Billable: rules.BillableWhen{States: []string{"ON"}}},
+		},
+	}
+	owners := map[string]usage.OwnerSpec{
+		"WaaS": {Field: "status.owner", Resource: "WaaS2"},
+	}
+	calculator, err := usage.NewCalculator([]rules.Revision{revision}, "us-east", owners)
+	if err != nil {
+		t.Fatalf("creating calculator: %v", err)
+	}
+	r, err := New(store, calculator, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard())
+	if err != nil {
+		t.Fatalf("creating round: %v", err)
+	}
+
+	waasFacts := []database.Fact{
+		created("WaaS", "waas-1", base),
+		state("WaaS", "waas-1", base, "ON"),
+		fact("WaaS", "waas-1", "status.owner", base, "top-1"),
+	}
+	waas2Facts := []database.Fact{
+		created("WaaS2", "top-1", base),
+		state("WaaS2", "top-1", base, "ACTIVE"),
+	}
+	if err := database.InsertFacts(ctx, store.Pool(), tenant, waasFacts, 1); err != nil {
+		t.Fatalf("writing WaaS facts: %v", err)
+	}
+	if err := database.InsertFacts(ctx, store.Pool(), tenant, waas2Facts, 2); err != nil {
+		t.Fatalf("writing WaaS2 facts: %v", err)
+	}
+
+	root, err := r.rootOf(ctx, store.Pool(), tenant, "WaaS", waasFacts)
+	if err != nil {
+		t.Fatalf("resolving root: %v", err)
+	}
+	if root == nil || root.Type != "WaaS2" || root.ID != "top-1" || len(root.Facts) == 0 {
+		t.Fatalf("root is %+v, want WaaS2 top-1 with facts", root)
+	}
+
+	// A missing root holds billing shut: empty facts, never a silent fallback.
+	if err := database.InsertFacts(ctx, store.Pool(), tenant, []database.Fact{
+		fact("WaaS", "waas-2", "status.owner", base, "gone-1"),
+	}, 3); err != nil {
+		t.Fatalf("writing orphan facts: %v", err)
+	}
+	root, err = r.rootOf(ctx, store.Pool(), tenant, "WaaS", []database.Fact{
+		created("WaaS", "waas-2", base),
+		fact("WaaS", "waas-2", "status.owner", base, "gone-1"),
+	})
+	if err != nil {
+		t.Fatalf("resolving missing root: %v", err)
+	}
+	if root == nil || root.Type != "WaaS2" || root.ID != "gone-1" || len(root.Facts) != 0 {
+		t.Fatalf("missing root is %+v, want WaaS2 gone-1 with no facts", root)
+	}
+}
+
+// TestScanResourcesDragsOwnedResourcesAlong checks the round's dirtying: a changed cluster
+// pulls its workers into the recompute set, so the round after the cluster reaches READY
+// bills the workers retroactively, without a fact of their own.
+func TestScanResourcesDragsOwnedResourcesAlong(t *testing.T) {
+	const tenant = "dirtying"
+	base := time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC)
+	store := testenv.Database(t)
+	ctx := context.Background()
+	if err := store.EnsureProgress(ctx, tenant); err != nil {
+		t.Fatalf("ensuring progress: %v", err)
+	}
+
+	revision, err := rules.DefaultRevision()
+	if err != nil {
+		t.Fatalf("parsing default revision: %v", err)
+	}
+	owners, err := usage.RegistryOwners()
+	if err != nil {
+		t.Fatalf("reading owners: %v", err)
+	}
+	calculator, err := usage.NewCalculator([]rules.Revision{revision}, "us-east", owners)
+	if err != nil {
+		t.Fatalf("creating calculator: %v", err)
+	}
+	r, err := New(store, calculator, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard())
+	if err != nil {
+		t.Fatalf("creating round: %v", err)
+	}
+
+	// A worker folded in the previous round, and a cluster fact written after it.
+	if err := database.InsertFacts(ctx, store.Pool(), tenant, []database.Fact{
+		created("BareMetalInstance", "bm-1", base),
+		state("BareMetalInstance", "bm-1", base, "STARTING"),
+		fact("BareMetalInstance", "bm-1", "spec.instance_type", base, "m7a"),
+		fact("BareMetalInstance", "bm-1", "status.cluster", base, "c-1"),
+		fact("BareMetalInstance", "bm-1", "status.node_set", base, "workers"),
+	}, 1); err != nil {
+		t.Fatalf("writing worker facts: %v", err)
+	}
+	lastRound := base.Add(time.Minute)
+	if err := database.InsertFacts(ctx, store.Pool(), tenant, []database.Fact{
+		created("Cluster", "c-1", base),
+		state("Cluster", "c-1", base, "PROGRESSING"),
+		state("Cluster", "c-1", lastRound.Add(time.Second), "READY"),
+	}, 2); err != nil {
+		t.Fatalf("writing cluster facts: %v", err)
+	}
+
+	progress := database.Progress{
+		LastRoundTime: &lastRound, LastRoundEventOffset: 1,
+	}
+	full, _, err := r.scanResources(ctx, store.Pool(), tenant, progress, lastRound.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("scanning: %v", err)
+	}
+	found := map[resource]bool{}
+	for _, entry := range full {
+		found[entry] = true
+	}
+	if !found[resource{"Cluster", "c-1"}] {
+		t.Fatal("the changed cluster must be recomputed")
+	}
+	if !found[resource{"BareMetalInstance", "bm-1"}] {
+		t.Fatal("the worker of a changed cluster must be recomputed with it")
+	}
+}
+
+// created, state, and fact build history rows in round tests.
+func created(resource, id string, at time.Time) database.Fact {
+	return database.Fact{ResourceType: resource, ResourceID: id, Field: "created", Since: at, Value: "true"}
+}
+
+func state(resource, id string, since time.Time, value string) database.Fact {
+	return database.Fact{ResourceType: resource, ResourceID: id, Field: "status.state", Since: since, Value: value}
+}
+
+func fact(resource, id, field string, since time.Time, value string) database.Fact {
+	return database.Fact{ResourceType: resource, ResourceID: id, Field: field, Since: since, Value: value}
 }

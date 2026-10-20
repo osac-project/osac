@@ -18,10 +18,12 @@ import (
 	"math/big"
 	"net/netip"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/osac-project/osac-metering/internal/database"
 	"github.com/osac-project/osac-metering/internal/rules"
+	"github.com/osac-project/osac/proto/metering"
 )
 
 // MinBillableRun is the shortest run that bills. A shorter run bills nothing.
@@ -77,24 +79,109 @@ func RationalToMicro(quantity *big.Rat) int64 {
 	return sign * quotient.Int64()
 }
 
-// Engine evaluates rule revisions against history.
-type Engine struct {
-	revisions    []rules.Revision
-	deploymentID string
+// OwnerSpec names the field that carries a resource's ownership root, and the type of that
+// root.
+type OwnerSpec struct {
+	// Field is the history field that holds the owner reference, for example
+	// "status.cluster".
+	Field string
+
+	// Resource is the root's resource type, for example "Cluster".
+	Resource string
 }
 
-// NewEngine creates an engine over revisions sorted by effective time. The deployment ID is a
-// dimension every meter sends; it is configured per installation and never changes.
-func NewEngine(revisions []rules.Revision, deploymentID string) (*Engine, error) {
+// RegistryOwners returns the ownership specs of every tracked resource, from the annotations
+// on the private protos. Resources without an owner reference are absent.
+func RegistryOwners() (map[string]OwnerSpec, error) {
+	resources, err := metering.Resources()
+	if err != nil {
+		return nil, fmt.Errorf("reading the field registry: %w", err)
+	}
+	owners := map[string]OwnerSpec{}
+	for _, resource := range resources {
+		for _, field := range resource.Fields {
+			if field.OwnerResource == "" {
+				continue
+			}
+			owners[shortOwnerName(string(resource.Message))] = OwnerSpec{
+				Field:    field.Path,
+				Resource: field.OwnerResource,
+			}
+		}
+	}
+	return owners, nil
+}
+
+func shortOwnerName(full string) string {
+	if index := strings.LastIndex(full, "."); index >= 0 {
+		return full[index+1:]
+	}
+	return full
+}
+
+// Root is the ownership root of a resource whose gate the root controls. Facts is empty when
+// the root's history is missing: the gate then stays shut, because the data says the resource
+// is owned and billing it as standalone would ignore the gate.
+type Root struct {
+	// Type is the root's resource type.
+	Type string
+
+	// ID is the root's resource identifier.
+	ID string
+
+	// Facts are the root's history rows.
+	Facts []database.Fact
+}
+
+// Calculator evaluates rule revisions against history.
+type Calculator struct {
+	revisions    []rules.Revision
+	deploymentID string
+	owners       map[string]OwnerSpec
+}
+
+// NewCalculator creates a calculator over revisions sorted by effective time. The deployment
+// ID is a dimension every meter sends; it is configured per installation and never changes.
+// The owners map says which field of each resource carries its ownership root; pass
+// RegistryOwners() for the real one.
+func NewCalculator(
+	revisions []rules.Revision, deploymentID string, owners map[string]OwnerSpec,
+) (*Calculator, error) {
 	sorted := append([]rules.Revision(nil), revisions...)
 	sort.Slice(sorted, func(i, j int) bool {
 		return sorted[i].EffectiveAt.Before(sorted[j].EffectiveAt)
 	})
-	return &Engine{revisions: sorted, deploymentID: deploymentID}, nil
+	return &Calculator{revisions: sorted, deploymentID: deploymentID, owners: owners}, nil
 }
 
-// Revisions returns the revisions the engine evaluates, in effect order.
-func (e *Engine) Revisions() []rules.Revision { return e.revisions }
+// Revisions returns the revisions the calculator evaluates, in effect order.
+func (c *Calculator) Revisions() []rules.Revision { return c.revisions }
+
+// OwnerOf returns the resource's ownership root, read from the owner fact in its history.
+// ok is false when the resource type has no owner field or the fact is unset.
+func (c *Calculator) OwnerOf(resourceType string, facts []database.Fact) (string, string, bool) {
+	spec, known := c.owners[resourceType]
+	if !known {
+		return "", "", false
+	}
+	for _, entry := range facts {
+		if entry.Field == spec.Field && entry.Value != "" {
+			return spec.Resource, entry.Value, true
+		}
+	}
+	return "", "", false
+}
+
+// OwnedFieldOf returns the history field that carries the owner reference of the resources a
+// root of the given type owns. The round uses it to find the resources a changed root owns.
+func (c *Calculator) OwnedFieldOf(rootType string) (string, bool) {
+	for _, spec := range c.owners {
+		if spec.Resource == rootType {
+			return spec.Field, true
+		}
+	}
+	return "", false
+}
 
 // fact is a dated value of one field.
 type fact struct {
@@ -120,21 +207,22 @@ func (t timeline) valueAt(moment time.Time) (string, bool) {
 }
 
 // Expected computes the resource's expected usage pieces up to the round time. Usage splits
-// wherever the state, a dimension, or the rules change, and at every UTC midnight.
-func (e *Engine) Expected(
-	tenant, resourceType, resourceID string, facts []database.Fact, upTo time.Time,
+// wherever the state, a dimension, or the rules change, and at every UTC midnight. The root,
+// when the resource has one, gates the resource's deferred spans on the root's states.
+func (c *Calculator) Expected(
+	tenant, resourceType, resourceID string, facts []database.Fact, root *Root, upTo time.Time,
 ) ([]Piece, error) {
-	return e.compute(tenant, resourceType, resourceID, facts, upTo, nil)
+	return c.compute(tenant, resourceType, resourceID, facts, root, upTo, nil)
 }
 
-// Tail computes only the pieces a round needs to extend a resource's ledger tail: the pieces
+// Since computes only the pieces a round needs to extend a resource's ledger: the pieces
 // Expected would produce, restricted to those that end after `from`, plus every piece that
 // overlaps a zero-quantity ledger row of the same meter, so a pending run that crosses the
 // billable threshold between the two rounds is still billed from its start. A round whose
 // resource has no new facts and no rule change needs nothing else: its earlier pieces equal
 // the ledger rows the previous round wrote.
-func (e *Engine) Tail(
-	tenant, resourceType, resourceID string, facts []database.Fact,
+func (c *Calculator) Since(
+	tenant, resourceType, resourceID string, facts []database.Fact, root *Root,
 	from, upTo time.Time, ledger []database.LedgerPiece,
 ) ([]Piece, error) {
 	keep := func(piece Piece) bool {
@@ -152,16 +240,16 @@ func (e *Engine) Tail(
 		}
 		return false
 	}
-	return e.compute(tenant, resourceType, resourceID, facts, upTo, keep)
+	return c.compute(tenant, resourceType, resourceID, facts, root, upTo, keep)
 }
 
 // MeterAt returns the meter definition for the resource type and meter name, and the number of
 // the revision in effect at the moment: the revision that billed the pieces over an interval
 // starting there. It searches back through the revisions that define the meter, so a meter a
 // later revision dropped still resolves to the revision that billed it.
-func (e *Engine) MeterAt(resourceType, meter string, at time.Time) (rules.Meter, string, bool) {
-	for index := len(e.revisions) - 1; index >= 0; index-- {
-		revision := e.revisions[index]
+func (c *Calculator) MeterAt(resourceType, meter string, at time.Time) (rules.Meter, string, bool) {
+	for index := len(c.revisions) - 1; index >= 0; index-- {
+		revision := c.revisions[index]
 		if revision.EffectiveAt.After(at) {
 			continue
 		}
@@ -176,9 +264,9 @@ func (e *Engine) MeterAt(resourceType, meter string, at time.Time) (rules.Meter,
 
 // compute evaluates the resource's meters. keep, when set, filters the pieces to materialize,
 // so a tail extension computes only the latest interval instead of the whole history.
-func (e *Engine) compute(
-	tenant, resourceType, resourceID string, facts []database.Fact, upTo time.Time,
-	keep func(Piece) bool,
+func (c *Calculator) compute(
+	tenant, resourceType, resourceID string, facts []database.Fact, root *Root,
+	upTo time.Time, keep func(Piece) bool,
 ) ([]Piece, error) {
 	timelines := make(map[string]timeline)
 	var creation, deletion time.Time
@@ -196,6 +284,22 @@ func (e *Engine) compute(
 	for field := range timelines {
 		sort.Slice(timelines[field], func(i, j int) bool {
 			return timelines[field][i].since.Before(timelines[field][j].since)
+		})
+	}
+	var rootStates timeline
+	var rootDeletion time.Time
+	if root != nil {
+		for _, entry := range root.Facts {
+			if entry.Field == "deleted" {
+				rootDeletion = entry.Since
+				continue
+			}
+			if entry.Field == "status.state" {
+				rootStates = append(rootStates, fact{entry.Since, entry.Value})
+			}
+		}
+		sort.Slice(rootStates, func(i, j int) bool {
+			return rootStates[i].since.Before(rootStates[j].since)
 		})
 	}
 	if creation.IsZero() {
@@ -218,14 +322,14 @@ func (e *Engine) compute(
 	}
 
 	var pieces []Piece
-	for index, revision := range e.revisions {
+	for index, revision := range c.revisions {
 		wStart := revision.EffectiveAt
 		if wStart.Before(creation) {
 			wStart = creation
 		}
 		wEnd := end
-		if index+1 < len(e.revisions) && e.revisions[index+1].EffectiveAt.Before(wEnd) {
-			wEnd = e.revisions[index+1].EffectiveAt
+		if index+1 < len(c.revisions) && c.revisions[index+1].EffectiveAt.Before(wEnd) {
+			wEnd = c.revisions[index+1].EffectiveAt
 		}
 		if !wStart.Before(wEnd) {
 			continue
@@ -234,9 +338,9 @@ func (e *Engine) compute(
 			if meter.Resource != resourceType {
 				continue
 			}
-			runPieces, err := e.meterPieces(
+			runPieces, err := c.meterPieces(
 				meter, tenant, resourceType, resourceID, revision.Number, timelines,
-				wStart, wEnd, end, upTo, deletion, keep,
+				rootStates, rootDeletion, root, wStart, wEnd, end, upTo, deletion, keep,
 			)
 			if err != nil {
 				return nil, err
@@ -251,10 +355,11 @@ func (e *Engine) compute(
 // the resource's whole life under the meter's own rules, so a run that spans a revision
 // boundary bills its earlier part under the revision that was in effect then. keep, when set,
 // filters which pieces are materialized.
-func (e *Engine) meterPieces(
+func (c *Calculator) meterPieces(
 	meter rules.Meter,
 	tenant, resourceType, resourceID, revisionNumber string,
 	timelines map[string]timeline,
+	rootStates timeline, rootDeletion time.Time, root *Root,
 	wStart, wEnd, end, upTo time.Time,
 	deletion time.Time,
 	keep func(Piece) bool,
@@ -267,7 +372,8 @@ func (e *Engine) meterPieces(
 		}
 	}
 	for _, r := range runs {
-		if len(meter.Billable.Once) > 0 && !onceReached(meter, timelines, r) {
+		if !c.gateOpen(meter, resourceType, revisionNumber, timelines, deletion,
+			rootStates, rootDeletion, root, r) {
 			continue
 		}
 		start := r.start
@@ -287,7 +393,7 @@ func (e *Engine) meterPieces(
 			if !pending {
 				continue
 			}
-			piece, err := e.piece(
+			piece, err := c.piece(
 				meter, tenant, resourceType, resourceID, revisionNumber, timelines,
 				start, stop, true,
 			)
@@ -298,7 +404,7 @@ func (e *Engine) meterPieces(
 			continue
 		}
 		for _, span := range splitByDimensionsAndMidnights(meter, resourceType, timelines, start, stop) {
-			piece, err := e.piece(
+			piece, err := c.piece(
 				meter, tenant, resourceType, resourceID, revisionNumber, timelines,
 				span[0], span[1], false,
 			)
@@ -393,26 +499,62 @@ func stateAt(states timeline, moment time.Time) (string, bool) {
 	return result, known
 }
 
-// onceReached reports whether the resource reached one of the meter's once states during the
-// run. A billable span that never reaches one bills nothing. The run can start while already
-// in a once state, when a condition change rather than a state change opened it.
-func onceReached(meter rules.Meter, timelines map[string]timeline, r run) bool {
-	onceStates := make(map[string]bool, len(meter.Billable.Once))
-	for _, state := range meter.Billable.Once {
-		onceStates[state] = true
+// gateOpen reports whether the run's gate is open: a state that confirms the run appeared on
+// the gate's timeline strictly before the run ends. There is no lower bound, so a run that
+// began before the gate opened bills retroactively once it opens, and a run that closed before
+// the gate opened never bills. Whose timeline the gate reads depends on the meter: a resource
+// with an ownership root inherits the root's gate, which the root's own meters define in the
+// same revision, unless the meter says self. A root with an empty gate list, or a revision
+// that defines no meters for the root, bills without a gate.
+func (c *Calculator) gateOpen(
+	meter rules.Meter, resourceType, revisionNumber string,
+	timelines map[string]timeline, deletion time.Time,
+	rootStates timeline, rootDeletion time.Time, root *Root,
+	r run,
+) bool {
+	list := meter.Billable.TurnsBillableOnce
+	states := timelines["status.state"]
+	clamp := deletion
+	if root != nil && meter.Billable.TurnsBillableOnceFrom != "self" {
+		list = c.rootGate(revisionNumber, root.Type)
+		states = rootStates
+		clamp = rootDeletion
 	}
-	if state, known := stateAt(timelines["status.state"], r.start); known && onceStates[state] {
+	if len(list) == 0 {
 		return true
 	}
-	for _, state := range timelines["status.state"] {
-		if state.since.Before(r.start) || !state.since.Before(r.end) {
-			continue
+	for _, entry := range states {
+		if !entry.since.Before(r.end) {
+			break
 		}
-		if onceStates[state.value] {
-			return true
+		if !clamp.IsZero() && !entry.since.Before(clamp) {
+			break
+		}
+		for _, state := range list {
+			if entry.value == state {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// rootGate returns the gate the root passes to the resources it owns: the states the root's
+// own meters confirm on, in the revision that bills the owned resource. The rules loader has
+// already rejected a root whose meters disagree.
+func (c *Calculator) rootGate(revisionNumber, rootType string) []string {
+	for _, revision := range c.revisions {
+		if revision.Number != revisionNumber {
+			continue
+		}
+		for _, meter := range revision.Meters {
+			if meter.Resource == rootType {
+				return meter.Billable.TurnsBillableOnce
+			}
+		}
+		return nil
+	}
+	return nil
 }
 
 // conditionsHold evaluates the meter's field conditions at a moment.
@@ -485,7 +627,7 @@ func NextMidnight(moment time.Time) time.Time {
 }
 
 // piece builds one usage piece with its dimensions and multiplier at the interval's start.
-func (e *Engine) piece(
+func (c *Calculator) piece(
 	meter rules.Meter,
 	tenant, resourceType, resourceID, revisionNumber string,
 	timelines map[string]timeline,
@@ -493,7 +635,7 @@ func (e *Engine) piece(
 	pending bool,
 ) (Piece, error) {
 	dimensions := map[string]string{
-		"deployment": e.deploymentID,
+		"deployment": c.deploymentID,
 		"tenant":     tenant,
 		"meter_type": meter.Unit,
 	}

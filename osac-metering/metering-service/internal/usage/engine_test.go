@@ -22,17 +22,21 @@ import (
 
 var base = time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC)
 
-func defaultEngine(t *testing.T) *usage.Engine {
+func defaultCalculator(t *testing.T) *usage.Calculator {
 	t.Helper()
 	revision, err := rules.DefaultRevision()
 	if err != nil {
 		t.Fatalf("parsing default revision: %v", err)
 	}
-	engine, err := usage.NewEngine([]rules.Revision{revision}, "us-east")
+	owners, err := usage.RegistryOwners()
 	if err != nil {
-		t.Fatalf("creating engine: %v", err)
+		t.Fatalf("reading owners: %v", err)
 	}
-	return engine
+	calculator, err := usage.NewCalculator([]rules.Revision{revision}, "us-east", owners)
+	if err != nil {
+		t.Fatalf("creating calculator: %v", err)
+	}
+	return calculator
 }
 
 func fact(resource, id, field string, since time.Time, value string) database.Fact {
@@ -64,10 +68,10 @@ func summarize(pieces []usage.Piece) []string {
 }
 
 func expectPieces(
-	t *testing.T, engine *usage.Engine, facts []database.Fact, upTo time.Time, want []string,
+	t *testing.T, calculator *usage.Calculator, facts []database.Fact, upTo time.Time, want []string,
 ) {
 	t.Helper()
-	pieces, err := engine.Expected("acme", facts[0].ResourceType, facts[0].ResourceID, facts, upTo)
+	pieces, err := calculator.Expected("acme", facts[0].ResourceType, facts[0].ResourceID, facts, nil, upTo)
 	if err != nil {
 		t.Fatalf("computing usage: %v", err)
 	}
@@ -92,7 +96,7 @@ func TestRationalToMicroLeavesItsArgumentAlone(t *testing.T) {
 // TestVolumeCapacityRejectsBadMultipliers checks that a negative or out-of-range multiplier
 // fails the evaluation instead of wrapping into a wrong rate.
 func TestVolumeCapacityRejectsBadMultipliers(t *testing.T) {
-	engine := defaultEngine(t)
+	calculator := defaultCalculator(t)
 	volume := []database.Fact{
 		created("Volume", "vol-1", at(0)),
 		state("Volume", "vol-1", at(0), "AVAILABLE"),
@@ -103,7 +107,7 @@ func TestVolumeCapacityRejectsBadMultipliers(t *testing.T) {
 		facts := append(append([]database.Fact(nil), volume...),
 			fact("Volume", "vol-1", "status.provisioned_size_gib", at(0), value),
 		)
-		if _, err := engine.Expected("acme", "Volume", "vol-1", facts, at(time.Minute)); err == nil {
+		if _, err := calculator.Expected("acme", "Volume", "vol-1", facts, nil, at(time.Minute)); err == nil {
 			t.Errorf("a multiplier of %s must fail the evaluation", value)
 		}
 	}
@@ -120,7 +124,7 @@ func join(lines []string) string {
 func at(offset time.Duration) time.Time { return base.Add(offset) }
 
 func TestComputeInstanceBillsOnlyRunning(t *testing.T) {
-	engine := defaultEngine(t)
+	calculator := defaultCalculator(t)
 	facts := []database.Fact{
 		created("ComputeInstance", "vm-7", at(0)),
 		state("ComputeInstance", "vm-7", at(0), "STARTING"),
@@ -128,7 +132,7 @@ func TestComputeInstanceBillsOnlyRunning(t *testing.T) {
 		fact("ComputeInstance", "vm-7", "status.instance_type", at(0), "small"),
 		fact("ComputeInstance", "vm-7", "metadata.project", at(0), "web"),
 	}
-	expectPieces(t, engine, facts, at(70*time.Second), []string{
+	expectPieces(t, calculator, facts, at(70*time.Second), []string{
 		"ComputeInstance compute 10:00:10.000000..10:01:10.000000 rate=1000000 micro=60000000 " +
 			"pending=false dims={\"deployment\":\"us-east\",\"instance_type\":\"small\"," +
 			"\"meter_type\":\"second\",\"project\":\"web\",\"tenant\":\"acme\"}",
@@ -136,14 +140,14 @@ func TestComputeInstanceBillsOnlyRunning(t *testing.T) {
 }
 
 func TestComputeInstanceStopsAtNonRunningStates(t *testing.T) {
-	engine := defaultEngine(t)
+	calculator := defaultCalculator(t)
 	for _, terminal := range []string{"STOPPED", "PAUSED", "FAILED", "DELETING"} {
 		facts := []database.Fact{
 			created("ComputeInstance", "vm-7", at(0)),
 			state("ComputeInstance", "vm-7", at(0), "RUNNING"),
 			state("ComputeInstance", "vm-7", at(30*time.Second), terminal),
 		}
-		expectPieces(t, engine, facts, at(time.Minute), []string{
+		expectPieces(t, calculator, facts, at(time.Minute), []string{
 			"ComputeInstance compute 10:00:00.000000..10:00:30.000000 rate=1000000 micro=30000000 " +
 				"pending=false dims={\"deployment\":\"us-east\",\"meter_type\":\"second\"," +
 				"\"tenant\":\"acme\"}",
@@ -152,30 +156,30 @@ func TestComputeInstanceStopsAtNonRunningStates(t *testing.T) {
 }
 
 func TestRunUnderOneSecondBillsNothing(t *testing.T) {
-	engine := defaultEngine(t)
+	calculator := defaultCalculator(t)
 	facts := []database.Fact{
 		created("ComputeInstance", "vm-7", at(0)),
 		state("ComputeInstance", "vm-7", at(200*time.Millisecond), "RUNNING"),
 		state("ComputeInstance", "vm-7", at(600*time.Millisecond), "STOPPED"),
 	}
-	expectPieces(t, engine, facts, at(time.Minute), nil)
+	expectPieces(t, calculator, facts, at(time.Minute), nil)
 }
 
 func TestOpenRunUnderOneSecondStaysPending(t *testing.T) {
-	engine := defaultEngine(t)
+	calculator := defaultCalculator(t)
 	facts := []database.Fact{
 		created("ComputeInstance", "vm-7", at(0)),
 		state("ComputeInstance", "vm-7", at(200*time.Millisecond), "RUNNING"),
 	}
 	// The run is open and 400 ms long at the round time: nothing is billable yet, and the
 	// piece is pending so the next round keeps watching it.
-	expectPieces(t, engine, facts, at(600*time.Millisecond), []string{
+	expectPieces(t, calculator, facts, at(600*time.Millisecond), []string{
 		"ComputeInstance compute 10:00:00.200000..10:00:00.600000 rate=1000000 micro=0 " +
 			"pending=true dims={\"deployment\":\"us-east\",\"meter_type\":\"second\"," +
 			"\"tenant\":\"acme\"}",
 	})
 	// Once the run crosses one second it bills from its start.
-	expectPieces(t, engine, facts, at(2*time.Second), []string{
+	expectPieces(t, calculator, facts, at(2*time.Second), []string{
 		"ComputeInstance compute 10:00:00.200000..10:00:02.000000 rate=1000000 micro=1800000 " +
 			"pending=false dims={\"deployment\":\"us-east\",\"meter_type\":\"second\"," +
 			"\"tenant\":\"acme\"}",
@@ -183,13 +187,13 @@ func TestOpenRunUnderOneSecondStaysPending(t *testing.T) {
 }
 
 func TestDurationIsExactToTheMicrosecond(t *testing.T) {
-	engine := defaultEngine(t)
+	calculator := defaultCalculator(t)
 	facts := []database.Fact{
 		created("ComputeInstance", "vm-7", at(0)),
 		state("ComputeInstance", "vm-7", at(200*time.Millisecond), "RUNNING"),
 		state("ComputeInstance", "vm-7", at(2800*time.Millisecond), "STOPPED"),
 	}
-	expectPieces(t, engine, facts, at(time.Minute), []string{
+	expectPieces(t, calculator, facts, at(time.Minute), []string{
 		"ComputeInstance compute 10:00:00.200000..10:00:02.800000 rate=1000000 micro=2600000 " +
 			"pending=false dims={\"deployment\":\"us-east\",\"meter_type\":\"second\"," +
 			"\"tenant\":\"acme\"}",
@@ -197,7 +201,7 @@ func TestDurationIsExactToTheMicrosecond(t *testing.T) {
 }
 
 func TestDimensionChangeSplitsTheRun(t *testing.T) {
-	engine := defaultEngine(t)
+	calculator := defaultCalculator(t)
 	facts := []database.Fact{
 		created("ComputeInstance", "vm-7", at(0)),
 		state("ComputeInstance", "vm-7", at(200*time.Millisecond), "RUNNING"),
@@ -205,7 +209,7 @@ func TestDimensionChangeSplitsTheRun(t *testing.T) {
 		fact("ComputeInstance", "vm-7", "status.instance_type", at(200*time.Millisecond), "small"),
 		fact("ComputeInstance", "vm-7", "status.instance_type", at(1500*time.Millisecond), "large"),
 	}
-	expectPieces(t, engine, facts, at(time.Minute), []string{
+	expectPieces(t, calculator, facts, at(time.Minute), []string{
 		"ComputeInstance compute 10:00:00.200000..10:00:01.500000 rate=1000000 micro=1300000 " +
 			"pending=false dims={\"deployment\":\"us-east\",\"instance_type\":\"small\"," +
 			"\"meter_type\":\"second\",\"tenant\":\"acme\"}",
@@ -216,13 +220,13 @@ func TestDimensionChangeSplitsTheRun(t *testing.T) {
 }
 
 func TestMidnightSplitsThePiece(t *testing.T) {
-	engine := defaultEngine(t)
+	calculator := defaultCalculator(t)
 	midnight := time.Date(2026, 10, 6, 0, 0, 0, 0, time.UTC)
 	facts := []database.Fact{
 		created("ComputeInstance", "vm-7", midnight.Add(-time.Minute)),
 		state("ComputeInstance", "vm-7", midnight.Add(-time.Minute), "RUNNING"),
 	}
-	expectPieces(t, engine, facts, midnight.Add(time.Minute), []string{
+	expectPieces(t, calculator, facts, midnight.Add(time.Minute), []string{
 		"ComputeInstance compute 23:59:00.000000..00:00:00.000000 rate=1000000 micro=60000000 " +
 			"pending=false dims={\"deployment\":\"us-east\",\"meter_type\":\"second\"," +
 			"\"tenant\":\"acme\"}",
@@ -233,7 +237,7 @@ func TestMidnightSplitsThePiece(t *testing.T) {
 }
 
 func TestNothingBillsAfterDeletion(t *testing.T) {
-	engine := defaultEngine(t)
+	calculator := defaultCalculator(t)
 	facts := []database.Fact{
 		created("ComputeInstance", "vm-7", at(0)),
 		state("ComputeInstance", "vm-7", at(0), "RUNNING"),
@@ -241,7 +245,7 @@ func TestNothingBillsAfterDeletion(t *testing.T) {
 		state("ComputeInstance", "vm-7", at(2*time.Minute), "RUNNING"),
 		fact("ComputeInstance", "vm-7", "deleted", at(time.Minute), "true"),
 	}
-	expectPieces(t, engine, facts, at(5*time.Minute), []string{
+	expectPieces(t, calculator, facts, at(5*time.Minute), []string{
 		"ComputeInstance compute 10:00:00.000000..10:01:00.000000 rate=1000000 micro=60000000 " +
 			"pending=false dims={\"deployment\":\"us-east\",\"meter_type\":\"second\"," +
 			"\"tenant\":\"acme\"}",
@@ -249,14 +253,14 @@ func TestNothingBillsAfterDeletion(t *testing.T) {
 }
 
 func TestClusterBillsInstallationRetroactivelyOnReady(t *testing.T) {
-	engine := defaultEngine(t)
+	calculator := defaultCalculator(t)
 	facts := []database.Fact{
 		created("Cluster", "c-1", at(0)),
 		state("Cluster", "c-1", at(0), "PROGRESSING"),
 		state("Cluster", "c-1", at(5*time.Minute), "READY"),
 		fact("Cluster", "c-1", "spec.version", at(0), "4.18"),
 	}
-	expectPieces(t, engine, facts, at(10*time.Minute), []string{
+	expectPieces(t, calculator, facts, at(10*time.Minute), []string{
 		"Cluster control_plane 10:00:00.000000..10:10:00.000000 rate=1000000 micro=600000000 " +
 			"pending=false dims={\"deployment\":\"us-east\",\"meter_type\":\"second\"," +
 			"\"tenant\":\"acme\",\"version\":\"4.18\"}",
@@ -264,14 +268,14 @@ func TestClusterBillsInstallationRetroactivelyOnReady(t *testing.T) {
 }
 
 func TestClusterThatNeverReachesReadyBillsNothing(t *testing.T) {
-	engine := defaultEngine(t)
+	calculator := defaultCalculator(t)
 	for _, terminal := range []string{"FAILED", "DELETING"} {
 		facts := []database.Fact{
 			created("Cluster", "c-1", at(0)),
 			state("Cluster", "c-1", at(0), "PROGRESSING"),
 			state("Cluster", "c-1", at(5*time.Minute), terminal),
 		}
-		expectPieces(t, engine, facts, at(10*time.Minute), nil)
+		expectPieces(t, calculator, facts, at(10*time.Minute), nil)
 	}
 	// Deletion during provisioning also bills nothing.
 	facts := []database.Fact{
@@ -279,11 +283,11 @@ func TestClusterThatNeverReachesReadyBillsNothing(t *testing.T) {
 		state("Cluster", "c-1", at(0), "PROGRESSING"),
 		fact("Cluster", "c-1", "deleted", at(2*time.Minute), "true"),
 	}
-	expectPieces(t, engine, facts, at(10*time.Minute), nil)
+	expectPieces(t, calculator, facts, at(10*time.Minute), nil)
 }
 
 func TestClusterBillsAgainAfterFailure(t *testing.T) {
-	engine := defaultEngine(t)
+	calculator := defaultCalculator(t)
 	facts := []database.Fact{
 		created("Cluster", "c-1", at(0)),
 		state("Cluster", "c-1", at(0), "PROGRESSING"),
@@ -291,7 +295,7 @@ func TestClusterBillsAgainAfterFailure(t *testing.T) {
 		state("Cluster", "c-1", at(2*time.Minute), "PROGRESSING"),
 		state("Cluster", "c-1", at(3*time.Minute), "READY"),
 	}
-	expectPieces(t, engine, facts, at(4*time.Minute), []string{
+	expectPieces(t, calculator, facts, at(4*time.Minute), []string{
 		// The first PROGRESSING minute is never billed; the second span is, retroactively.
 		"Cluster control_plane 10:02:00.000000..10:04:00.000000 rate=1000000 micro=120000000 " +
 			"pending=false dims={\"deployment\":\"us-east\",\"meter_type\":\"second\"," +
@@ -303,7 +307,7 @@ func TestClusterKeepsBillingThroughAnUpgrade(t *testing.T) {
 	// An upgrade takes a READY cluster back into PROGRESSING. The gate opened at the
 	// first READY and never closes, so the whole timeline bills with no gap: an
 	// upgrade must not stop the meter.
-	engine := defaultEngine(t)
+	calculator := defaultCalculator(t)
 	facts := []database.Fact{
 		created("Cluster", "c-1", at(0)),
 		state("Cluster", "c-1", at(0), "PROGRESSING"),
@@ -311,7 +315,7 @@ func TestClusterKeepsBillingThroughAnUpgrade(t *testing.T) {
 		state("Cluster", "c-1", at(2*time.Minute), "PROGRESSING"),
 		state("Cluster", "c-1", at(3*time.Minute), "READY"),
 	}
-	expectPieces(t, engine, facts, at(4*time.Minute), []string{
+	expectPieces(t, calculator, facts, at(4*time.Minute), []string{
 		"Cluster control_plane 10:00:00.000000..10:04:00.000000 rate=1000000 micro=240000000 " +
 			"pending=false dims={\"deployment\":\"us-east\",\"meter_type\":\"second\"," +
 			"\"tenant\":\"acme\"}",
@@ -319,7 +323,7 @@ func TestClusterKeepsBillingThroughAnUpgrade(t *testing.T) {
 }
 
 func TestBareMetalAllocationAndConsumption(t *testing.T) {
-	engine := defaultEngine(t)
+	calculator := defaultCalculator(t)
 	facts := []database.Fact{
 		created("BareMetalInstance", "bm-1", at(0)),
 		state("BareMetalInstance", "bm-1", at(0), "PROVISIONING"),
@@ -329,7 +333,7 @@ func TestBareMetalAllocationAndConsumption(t *testing.T) {
 		state("BareMetalInstance", "bm-1", at(4*time.Minute), "DELETING"),
 		fact("BareMetalInstance", "bm-1", "spec.instance_type", at(0), "m7a"),
 	}
-	expectPieces(t, engine, facts, at(5*time.Minute), []string{
+	expectPieces(t, calculator, facts, at(5*time.Minute), []string{
 		"BareMetalInstance allocation 10:01:00.000000..10:05:00.000000 rate=1000000 " +
 			"micro=240000000 pending=false dims={\"deployment\":\"us-east\"," +
 			"\"instance_type\":\"m7a\",\"meter_type\":\"second\",\"tenant\":\"acme\"}",
@@ -340,7 +344,7 @@ func TestBareMetalAllocationAndConsumption(t *testing.T) {
 }
 
 func TestVolumeCapacityMultipliesByProvisionedGib(t *testing.T) {
-	engine := defaultEngine(t)
+	calculator := defaultCalculator(t)
 	facts := []database.Fact{
 		created("Volume", "vol-1", at(0)),
 		state("Volume", "vol-1", at(0), "CREATING"),
@@ -351,7 +355,7 @@ func TestVolumeCapacityMultipliesByProvisionedGib(t *testing.T) {
 		fact("Volume", "vol-1", "status.provisioned_size_gib", at(0), "100"),
 		fact("Volume", "vol-1", "spec.storage_tier", at(0), "gold"),
 	}
-	expectPieces(t, engine, facts, at(4*time.Minute), []string{
+	expectPieces(t, calculator, facts, at(4*time.Minute), []string{
 		"Volume capacity 10:01:00.000000..10:04:00.000000 rate=100000000 micro=18000000000 " +
 			"pending=false dims={\"deployment\":\"us-east\",\"meter_type\":\"gibibyte_second\"," +
 			"\"storage_tier\":\"gold\",\"tenant\":\"acme\"}",
@@ -359,7 +363,7 @@ func TestVolumeCapacityMultipliesByProvisionedGib(t *testing.T) {
 }
 
 func TestVolumeWithoutVendorIDOrBlockProtocolBillsNothing(t *testing.T) {
-	engine := defaultEngine(t)
+	calculator := defaultCalculator(t)
 	base := []database.Fact{
 		created("Volume", "vol-1", at(0)),
 		state("Volume", "vol-1", at(time.Minute), "AVAILABLE"),
@@ -367,15 +371,15 @@ func TestVolumeWithoutVendorIDOrBlockProtocolBillsNothing(t *testing.T) {
 	}
 	noVendor := append(append([]database.Fact{}, base...),
 		fact("Volume", "vol-1", "status.protocol", at(0), "BLOCK"))
-	expectPieces(t, engine, noVendor, at(3*time.Minute), nil)
+	expectPieces(t, calculator, noVendor, at(3*time.Minute), nil)
 	nfs := append(append([]database.Fact{}, base...),
 		fact("Volume", "vol-1", "status.vendor_volume_id", at(0), "vend-9"),
 		fact("Volume", "vol-1", "status.protocol", at(0), "NFS"))
-	expectPieces(t, engine, nfs, at(3*time.Minute), nil)
+	expectPieces(t, calculator, nfs, at(3*time.Minute), nil)
 }
 
 func TestVolumeDeletedBeforeAvailableBillsNothing(t *testing.T) {
-	engine := defaultEngine(t)
+	calculator := defaultCalculator(t)
 	facts := []database.Fact{
 		created("Volume", "vol-1", at(0)),
 		state("Volume", "vol-1", at(0), "PENDING"),
@@ -384,11 +388,11 @@ func TestVolumeDeletedBeforeAvailableBillsNothing(t *testing.T) {
 		fact("Volume", "vol-1", "status.protocol", at(0), "BLOCK"),
 		fact("Volume", "vol-1", "status.provisioned_size_gib", at(0), "100"),
 	}
-	expectPieces(t, engine, facts, at(3*time.Minute), nil)
+	expectPieces(t, calculator, facts, at(3*time.Minute), nil)
 }
 
 func TestExternalIPAllocationDimensions(t *testing.T) {
-	engine := defaultEngine(t)
+	calculator := defaultCalculator(t)
 	facts := []database.Fact{
 		created("ExternalIP", "ip-1", at(0)),
 		state("ExternalIP", "ip-1", at(0), "PENDING"),
@@ -399,7 +403,7 @@ func TestExternalIPAllocationDimensions(t *testing.T) {
 		fact("ExternalIP", "ip-1", "status.attached", at(time.Minute), "true"),
 		fact("ExternalIP", "ip-1", "status.attribution", at(time.Minute), "compute_instance/vm-7/API"),
 	}
-	expectPieces(t, engine, facts, at(2*time.Minute), []string{
+	expectPieces(t, calculator, facts, at(2*time.Minute), []string{
 		"ExternalIP allocation 10:01:00.000000..10:02:00.000000 rate=1000000 micro=60000000 " +
 			"pending=false dims={\"attached\":\"true\",\"attribution\":" +
 			"\"compute_instance/vm-7/API\",\"deployment\":\"us-east\",\"ip_family\":\"ipv6\"," +
@@ -408,7 +412,7 @@ func TestExternalIPAllocationDimensions(t *testing.T) {
 }
 
 func TestNATGatewayAllocation(t *testing.T) {
-	engine := defaultEngine(t)
+	calculator := defaultCalculator(t)
 	facts := []database.Fact{
 		created("NATGateway", "nat-1", at(0)),
 		state("NATGateway", "nat-1", at(0), "PENDING"),
@@ -417,7 +421,7 @@ func TestNATGatewayAllocation(t *testing.T) {
 		fact("NATGateway", "nat-1", "spec.virtual_network", at(0), "vn-1"),
 		fact("NATGateway", "nat-1", "spec.external_ip", at(0), "ip-1"),
 	}
-	expectPieces(t, engine, facts, at(3*time.Minute), []string{
+	expectPieces(t, calculator, facts, at(3*time.Minute), []string{
 		"NATGateway allocation 10:01:00.000000..10:03:00.000000 rate=1000000 micro=120000000 " +
 			"pending=false dims={\"deployment\":\"us-east\",\"external_ip\":\"ip-1\"," +
 			"\"meter_type\":\"second\",\"tenant\":\"acme\",\"virtual_network\":\"vn-1\"}",
@@ -433,7 +437,7 @@ func TestOnceReachedWhenRunStartsInOnceState(t *testing.T) {
   unit: second
   billable_when:
     states: [ALLOCATED]
-    once: [ALLOCATED]
+    turns_billable_once: [ALLOCATED]
     fields: {attached: "true"}
   dimensions: [pool]
 `
@@ -443,9 +447,13 @@ func TestOnceReachedWhenRunStartsInOnceState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parsing revision: %v", err)
 	}
-	engine, err := usage.NewEngine([]rules.Revision{revision}, "us-east")
+	owners, err := usage.RegistryOwners()
 	if err != nil {
-		t.Fatalf("creating engine: %v", err)
+		t.Fatalf("reading owners: %v", err)
+	}
+	calculator, err := usage.NewCalculator([]rules.Revision{revision}, "us-east", owners)
+	if err != nil {
+		t.Fatalf("creating calculator: %v", err)
 	}
 
 	facts := []database.Fact{
@@ -457,7 +465,7 @@ func TestOnceReachedWhenRunStartsInOnceState(t *testing.T) {
 		fact("ExternalIP", "ip-1", "status.attached", at(2*time.Minute), "true"),
 		fact("ExternalIP", "ip-1", "spec.pool", at(0), "pool-a"),
 	}
-	expectPieces(t, engine, facts, at(3*time.Minute), []string{
+	expectPieces(t, calculator, facts, at(3*time.Minute), []string{
 		"ExternalIP attached_allocation 10:02:00.000000..10:03:00.000000 rate=1000000 " +
 			"micro=60000000 pending=false dims={\"deployment\":\"us-east\"," +
 			"\"meter_type\":\"second\",\"pool\":\"pool-a\",\"tenant\":\"acme\"}",
@@ -493,13 +501,13 @@ func TestQuantityMicroRoundsToNearestMicro(t *testing.T) {
 
 // TestEveryMeterSendsTheCatalogDimension checks the dimension name the design specifies.
 func TestEveryMeterSendsTheCatalogDimension(t *testing.T) {
-	engine := defaultEngine(t)
+	calculator := defaultCalculator(t)
 	facts := []database.Fact{
 		created("ComputeInstance", "vm-7", at(0)),
 		state("ComputeInstance", "vm-7", at(0), "RUNNING"),
 		fact("ComputeInstance", "vm-7", "spec.catalog_item", at(0), "ci-rhel10-gpu"),
 	}
-	expectPieces(t, engine, facts, at(time.Minute), []string{
+	expectPieces(t, calculator, facts, at(time.Minute), []string{
 		"ComputeInstance compute 10:00:00.000000..10:01:00.000000 rate=1000000 " +
 			"micro=60000000 pending=false dims={\"catalog\":\"ci-rhel10-gpu\"," +
 			"\"deployment\":\"us-east\",\"meter_type\":\"second\",\"tenant\":\"acme\"}",
@@ -525,9 +533,13 @@ func TestRevisionChangeSplitsUsage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parsing second revision: %v", err)
 	}
-	engine, err := usage.NewEngine([]rules.Revision{first, second}, "us-east")
+	owners, err := usage.RegistryOwners()
 	if err != nil {
-		t.Fatalf("creating engine: %v", err)
+		t.Fatalf("reading owners: %v", err)
+	}
+	calculator, err := usage.NewCalculator([]rules.Revision{first, second}, "us-east", owners)
+	if err != nil {
+		t.Fatalf("creating calculator: %v", err)
 	}
 
 	facts := []database.Fact{
@@ -535,7 +547,7 @@ func TestRevisionChangeSplitsUsage(t *testing.T) {
 		state("ComputeInstance", "vm-7", at(0), "RUNNING"),
 		state("ComputeInstance", "vm-7", at(3*time.Minute), "PAUSED"),
 	}
-	expectPieces(t, engine, facts, at(4*time.Minute), []string{
+	expectPieces(t, calculator, facts, at(4*time.Minute), []string{
 		// RUNNING bills under both revisions, PAUSED only under the second.
 		"ComputeInstance compute 10:00:00.000000..10:02:00.000000 rate=1000000 micro=120000000 " +
 			"pending=false dims={\"deployment\":\"us-east\",\"meter_type\":\"second\"," +
@@ -550,7 +562,7 @@ func TestRevisionChangeSplitsUsage(t *testing.T) {
 // pieces that end after the previous round, plus a pending piece a zero-quantity ledger row
 // watches: the whole history is never rebuilt just to move a tail forward.
 func TestTailComputesOnlyTheLatestInterval(t *testing.T) {
-	engine := defaultEngine(t)
+	calculator := defaultCalculator(t)
 	// A VM running across three UTC midnights.
 	facts := []database.Fact{
 		created("ComputeInstance", "vm-7", base),
@@ -559,11 +571,11 @@ func TestTailComputesOnlyTheLatestInterval(t *testing.T) {
 	from := base.Add(36 * time.Hour)
 	upTo := base.Add(60 * time.Hour)
 
-	all, err := engine.Expected("acme", "ComputeInstance", "vm-7", facts, upTo)
+	all, err := calculator.Expected("acme", "ComputeInstance", "vm-7", facts, nil, upTo)
 	if err != nil {
 		t.Fatalf("computing usage: %v", err)
 	}
-	tail, err := engine.Tail("acme", "ComputeInstance", "vm-7", facts, from, upTo, nil)
+	tail, err := calculator.Since("acme", "ComputeInstance", "vm-7", facts, nil, from, upTo, nil)
 	if err != nil {
 		t.Fatalf("computing tail: %v", err)
 	}
@@ -586,7 +598,7 @@ func TestTailComputesOnlyTheLatestInterval(t *testing.T) {
 // still computed when it overlaps a zero-quantity ledger row: a pending run that crosses the
 // billable threshold between two rounds bills from its start.
 func TestTailKeepsPiecesAWatchedRowOverlaps(t *testing.T) {
-	engine := defaultEngine(t)
+	calculator := defaultCalculator(t)
 	// The run starts at 10:00:00.4 and is 0.4 s long at the previous round.
 	runStart := base.Add(400 * time.Millisecond)
 	facts := []database.Fact{
@@ -596,7 +608,7 @@ func TestTailKeepsPiecesAWatchedRowOverlaps(t *testing.T) {
 	from := base.Add(800 * time.Millisecond)
 	upTo := base.Add(2 * time.Second)
 
-	pieces, err := engine.Tail("acme", "ComputeInstance", "vm-7", facts, from, upTo, []database.LedgerPiece{{
+	pieces, err := calculator.Since("acme", "ComputeInstance", "vm-7", facts, nil, from, upTo, []database.LedgerPiece{{
 		Key: database.LedgerKey{
 			ResourceType: "ComputeInstance", ResourceID: "vm-7", Meter: "compute",
 			Component:  "compute",
@@ -627,7 +639,7 @@ func TestMeterAtResolvesTheBillingRevision(t *testing.T) {
   unit: second
   billable_when:
     states: [PROGRESSING, READY]
-    once: [READY]
+    turns_billable_once: [READY]
   dimensions: [template, version]
 `
 	second, err := rules.Parse(
@@ -636,25 +648,303 @@ func TestMeterAtResolvesTheBillingRevision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parsing second revision: %v", err)
 	}
-	engine, err := usage.NewEngine([]rules.Revision{first, second}, "us-east")
+	owners, err := usage.RegistryOwners()
 	if err != nil {
-		t.Fatalf("creating engine: %v", err)
+		t.Fatalf("reading owners: %v", err)
+	}
+	calculator, err := usage.NewCalculator([]rules.Revision{first, second}, "us-east", owners)
+	if err != nil {
+		t.Fatalf("creating calculator: %v", err)
 	}
 
-	meter, revision, ok := engine.MeterAt("Cluster", "control_plane", at(time.Minute))
+	meter, revision, ok := calculator.MeterAt("Cluster", "control_plane", at(time.Minute))
 	if !ok || meter.Unit != "second" || revision != "0001" {
 		t.Fatalf("before the boundary: got unit %q revision %q ok %v", meter.Unit, revision, ok)
 	}
-	meter, revision, ok = engine.MeterAt("Cluster", "control_plane", at(3*time.Minute))
+	meter, revision, ok = calculator.MeterAt("Cluster", "control_plane", at(3*time.Minute))
 	if !ok || meter.Unit != "second" || revision != "0002" {
 		t.Fatalf("after the boundary: got unit %q revision %q ok %v", meter.Unit, revision, ok)
 	}
 	// The compute meter is gone from revision 0002, but its ledger rows were billed under
 	// the revision in effect when they started.
-	if _, _, ok := engine.MeterAt("ComputeInstance", "compute", at(3*time.Minute)); !ok {
+	if _, _, ok := calculator.MeterAt("ComputeInstance", "compute", at(3*time.Minute)); !ok {
 		t.Fatal("a dropped meter must still resolve to the revision that billed it")
 	}
-	if _, _, ok := engine.MeterAt("ComputeInstance", "nonexistent", at(time.Minute)); ok {
+	if _, _, ok := calculator.MeterAt("ComputeInstance", "nonexistent", at(time.Minute)); ok {
 		t.Fatal("an unknown meter must not resolve")
 	}
+}
+
+// clusterRoot builds the ownership root of a cluster from its facts.
+func clusterRoot(id string, facts ...database.Fact) *usage.Root {
+	return &usage.Root{Type: "Cluster", ID: id, Facts: facts}
+}
+
+// workerFacts builds an allocated worker's facts: created, STARTING, its type, and its
+// cluster and node set references.
+func workerFacts(id, cluster, nodeSet string) []database.Fact {
+	at := base
+	return []database.Fact{
+		created("BareMetalInstance", id, at),
+		state("BareMetalInstance", id, at, "STARTING"),
+		fact("BareMetalInstance", id, "spec.instance_type", at, "m7a"),
+		fact("BareMetalInstance", id, "status.cluster", at, cluster),
+		fact("BareMetalInstance", id, "status.node_set", at, nodeSet),
+	}
+}
+
+// workerDims are the dimensions every worker heartbeat carries: the identity dimensions,
+// the instance type, and the ownership references rendered by id.
+func workerDims(cluster, nodeSet string) string {
+	return fmt.Sprintf(
+		`{"cluster":"%s","deployment":"us-east","instance_type":"m7a",`+
+			`"meter_type":"second","node_set":"%s","tenant":"acme"}`,
+		cluster, nodeSet,
+	)
+}
+
+// expectWorkerPieces computes the worker's pieces under the given root and compares them
+// with the wanted lines.
+func expectWorkerPieces(
+	t *testing.T, calculator *usage.Calculator, facts []database.Fact, root *usage.Root,
+	upTo time.Time, want []string,
+) {
+	t.Helper()
+	pieces, err := calculator.Expected(
+		"acme", facts[0].ResourceType, facts[0].ResourceID, facts, root, upTo,
+	)
+	if err != nil {
+		t.Fatalf("computing usage: %v", err)
+	}
+	got := summarize(pieces)
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("pieces mismatch:\ngot:\n%s\nwant:\n%s", join(got), join(want))
+	}
+}
+
+// TestWorkerBillsRetroactivelyWhenClusterReachesReady is the model's core promise: the
+// worker's allocation is deferred while the cluster installs, and the round after READY
+// bills the whole span from the worker's own start.
+func TestWorkerBillsRetroactivelyWhenClusterReachesReady(t *testing.T) {
+	calculator := defaultCalculator(t)
+	root := clusterRoot("c-1",
+		created("Cluster", "c-1", base),
+		state("Cluster", "c-1", base, "PROGRESSING"),
+		state("Cluster", "c-1", at(30*time.Minute), "READY"),
+	)
+	expectWorkerPieces(t, calculator, workerFacts("bm-1", "c-1", "workers"), root,
+		at(40*time.Minute), []string{
+			"BareMetalInstance allocation 10:00:00.000000..10:40:00.000000 rate=1000000 " +
+				"micro=2400000000 pending=false dims=" + workerDims("c-1", "workers"),
+		})
+}
+
+// TestWorkerOfFailedClusterBillsNothing checks the forgiveness the owner chose: a cluster
+// that fails or is deleted before READY bills no control plane time and no worker
+// hardware, including hardware that was physically allocated for the whole install.
+func TestWorkerOfFailedClusterBillsNothing(t *testing.T) {
+	calculator := defaultCalculator(t)
+	for _, terminal := range []string{"FAILED", "DELETING"} {
+		root := clusterRoot("c-1",
+			created("Cluster", "c-1", base),
+			state("Cluster", "c-1", base, "PROGRESSING"),
+			state("Cluster", "c-1", at(20*time.Minute), terminal),
+		)
+		expectWorkerPieces(t, calculator, workerFacts("bm-1", "c-1", "workers"), root,
+			at(40*time.Minute), nil)
+	}
+}
+
+// TestWorkerAddedAfterClusterReadyBillsFromItsOwnStart checks scale-up: the gate is
+// already open, so a worker created later bills from its own start with no special case.
+func TestWorkerAddedAfterClusterReadyBillsFromItsOwnStart(t *testing.T) {
+	calculator := defaultCalculator(t)
+	root := clusterRoot("c-1",
+		created("Cluster", "c-1", at(-10*time.Minute)),
+		state("Cluster", "c-1", at(-10*time.Minute), "PROGRESSING"),
+		state("Cluster", "c-1", base, "READY"),
+	)
+	expectWorkerPieces(t, calculator, workerFacts("bm-1", "c-1", "workers"), root,
+		at(30*time.Minute), []string{
+			"BareMetalInstance allocation 10:00:00.000000..10:30:00.000000 rate=1000000 " +
+				"micro=1800000000 pending=false dims=" + workerDims("c-1", "workers"),
+		})
+}
+
+// TestWorkerDeletedBeforeClusterReadyNeverBills checks the confirmed default: a span that
+// closed before the gate opened stays unbilled forever, even after the cluster succeeds.
+func TestWorkerDeletedBeforeClusterReadyNeverBills(t *testing.T) {
+	calculator := defaultCalculator(t)
+	root := clusterRoot("c-1",
+		created("Cluster", "c-1", base),
+		state("Cluster", "c-1", base, "PROGRESSING"),
+		state("Cluster", "c-1", at(20*time.Minute), "READY"),
+	)
+	facts := workerFacts("bm-1", "c-1", "workers")
+	facts = append(facts, fact("BareMetalInstance", "bm-1", "deleted", at(10*time.Minute), "true"))
+	expectWorkerPieces(t, calculator, facts, root, at(40*time.Minute), nil)
+}
+
+// TestWorkerKeepsBillingThroughRootUpgrade checks the latch on the root's timeline: an
+// upgrade takes the cluster out of READY and back, and the worker's billing never stops.
+func TestWorkerKeepsBillingThroughRootUpgrade(t *testing.T) {
+	calculator := defaultCalculator(t)
+	root := clusterRoot("c-1",
+		created("Cluster", "c-1", base),
+		state("Cluster", "c-1", base, "PROGRESSING"),
+		state("Cluster", "c-1", at(10*time.Minute), "READY"),
+		state("Cluster", "c-1", at(20*time.Minute), "PROGRESSING"),
+		state("Cluster", "c-1", at(30*time.Minute), "READY"),
+	)
+	expectWorkerPieces(t, calculator, workerFacts("bm-1", "c-1", "workers"), root,
+		at(40*time.Minute), []string{
+			"BareMetalInstance allocation 10:00:00.000000..10:40:00.000000 rate=1000000 " +
+				"micro=2400000000 pending=false dims=" + workerDims("c-1", "workers"),
+		})
+}
+
+// TestReadyStampedAfterRootDeletionDoesNotOpenGate checks the deletion clamp: a
+// confirming state dated after the root's deletion is a fact about a dead resource and
+// must not open the gate, by the same rule that nothing bills after deletion.
+func TestReadyStampedAfterRootDeletionDoesNotOpenGate(t *testing.T) {
+	calculator := defaultCalculator(t)
+	root := clusterRoot("c-1",
+		created("Cluster", "c-1", base),
+		state("Cluster", "c-1", base, "PROGRESSING"),
+		fact("Cluster", "c-1", "deleted", at(10*time.Minute), "true"),
+		state("Cluster", "c-1", at(15*time.Minute), "READY"),
+	)
+	expectWorkerPieces(t, calculator, workerFacts("bm-1", "c-1", "workers"), root,
+		at(40*time.Minute), nil)
+}
+
+// TestMissingRootHistoryHoldsWorkerBilling checks the loud case's billing half: a worker
+// whose owner fact names a cluster with no history bills nothing, never standalone. The
+// round logs the miss.
+func TestMissingRootHistoryHoldsWorkerBilling(t *testing.T) {
+	calculator := defaultCalculator(t)
+	root := clusterRoot("c-1")
+	expectWorkerPieces(t, calculator, workerFacts("bm-1", "c-1", "workers"), root,
+		at(40*time.Minute), nil)
+}
+
+// TestStandaloneWorkerBillsOnItsOwnGate checks that a worker without an owner fact reads
+// nothing but its own gate: the BMI meters' own confirming states apply.
+func TestStandaloneWorkerBillsOnItsOwnGate(t *testing.T) {
+	calculator := defaultCalculator(t)
+	facts := []database.Fact{
+		created("BareMetalInstance", "bm-1", base),
+		state("BareMetalInstance", "bm-1", base, "STARTING"),
+		fact("BareMetalInstance", "bm-1", "spec.instance_type", base, "m7a"),
+	}
+	expectWorkerPieces(t, calculator, facts, nil, at(30*time.Minute), []string{
+		"BareMetalInstance allocation 10:00:00.000000..10:30:00.000000 rate=1000000 " +
+			"micro=1800000000 pending=false dims=" +
+			`{"deployment":"us-east","instance_type":"m7a","meter_type":"second","tenant":"acme"}`,
+	})
+}
+
+// TestSelfGateOverrideBillsTheWorkerRegardlessOfCluster checks the CSP's escape hatch: a
+// revision that turns the meter's gate to self bills the worker on its own confirming
+// states, so allocated hardware bills even when the cluster fails completely.
+func TestSelfGateOverrideBillsTheWorkerRegardlessOfCluster(t *testing.T) {
+	revision, err := rules.Parse(
+		rules.NamePrefix+"0002", at(0).Format(time.RFC3339), `- resource: BareMetalInstance
+  meter: allocation
+  unit: second
+  billable_when:
+    states: [STARTING, RUNNING, STOPPING, STOPPED, DELETING]
+    turns_billable_once: [STARTING, RUNNING]
+    turns_billable_once_from: self
+  dimensions: [instance_type, cluster, node_set]
+`)
+	if err != nil {
+		t.Fatalf("parsing revision: %v", err)
+	}
+	owners, err := usage.RegistryOwners()
+	if err != nil {
+		t.Fatalf("reading owners: %v", err)
+	}
+	calculator, err := usage.NewCalculator([]rules.Revision{revision}, "us-east", owners)
+	if err != nil {
+		t.Fatalf("creating calculator: %v", err)
+	}
+	root := clusterRoot("c-1",
+		created("Cluster", "c-1", base),
+		state("Cluster", "c-1", base, "PROGRESSING"),
+		state("Cluster", "c-1", at(20*time.Minute), "FAILED"),
+	)
+	expectWorkerPieces(t, calculator, workerFacts("bm-1", "c-1", "workers"), root,
+		at(40*time.Minute), []string{
+			"BareMetalInstance allocation 10:00:00.000000..10:40:00.000000 rate=1000000 " +
+				"micro=2400000000 pending=false dims=" + workerDims("c-1", "workers"),
+		})
+}
+
+// TestNestedOwnersGateOnTheTopmostRoot checks the chain walk's engine half: the gate a
+// resource inherits comes from the topmost owner, not the immediate one. The synthetic
+// owners and the hand-rolled revision stand in for a future offering whose resources are
+// components of components.
+func TestNestedOwnersGateOnTheTopmostRoot(t *testing.T) {
+	revision := rules.Revision{
+		Name: "synthetic", Number: "0001", EffectiveAt: time.Unix(0, 0).UTC(),
+		Meters: []rules.Meter{
+			{
+				Resource: "WaaS2", Meter: "platform", Unit: "second",
+				Billable: rules.BillableWhen{
+					States: []string{"INACTIVE", "ACTIVE"}, TurnsBillableOnce: []string{"ACTIVE"},
+				},
+			},
+			{
+				Resource: "WaaS", Meter: "service", Unit: "second",
+				Billable: rules.BillableWhen{States: []string{"ON"}},
+			},
+			{
+				Resource: "Worker", Meter: "allocation", Unit: "second",
+				Billable: rules.BillableWhen{States: []string{"ON"}},
+			},
+		},
+	}
+	owners := map[string]usage.OwnerSpec{
+		"WaaS":   {Field: "status.owner", Resource: "WaaS2"},
+		"Worker": {Field: "status.owner", Resource: "WaaS"},
+	}
+	calculator, err := usage.NewCalculator([]rules.Revision{revision}, "us-east", owners)
+	if err != nil {
+		t.Fatalf("creating calculator: %v", err)
+	}
+	workerFacts := []database.Fact{
+		created("Worker", "w-1", base),
+		state("Worker", "w-1", base, "ON"),
+		fact("Worker", "w-1", "status.owner", base, "waas-1"),
+	}
+	waasFacts := []database.Fact{
+		created("WaaS", "waas-1", base),
+		state("WaaS", "waas-1", base, "ON"),
+		fact("WaaS", "waas-1", "status.owner", base, "top-1"),
+	}
+	waas2Facts := []database.Fact{
+		created("WaaS2", "top-1", base),
+		state("WaaS2", "top-1", base, "INACTIVE"),
+		state("WaaS2", "top-1", at(30*time.Minute), "ACTIVE"),
+	}
+
+	// The topmost root gates the worker: WaaS2 reached ACTIVE at 10:30, so the worker's
+	// span bills retroactively from its start.
+	root := &usage.Root{Type: "WaaS2", ID: "top-1", Facts: waas2Facts}
+	expectWorkerPieces(t, calculator, workerFacts, root, at(40*time.Minute), []string{
+		"Worker allocation 10:00:00.000000..10:40:00.000000 rate=1000000 " +
+			"micro=2400000000 pending=false dims=" +
+			`{"deployment":"us-east","meter_type":"second","tenant":"acme"}`,
+	})
+
+	// A direct owner in between never re-gates: the walk must resolve the topmost root,
+	// because the immediate owner's meters define no confirming states and would bill
+	// without a gate.
+	directRoot := &usage.Root{Type: "WaaS", ID: "waas-1", Facts: waasFacts}
+	expectWorkerPieces(t, calculator, workerFacts, directRoot, at(5*time.Minute), []string{
+		"Worker allocation 10:00:00.000000..10:05:00.000000 rate=1000000 " +
+			"micro=300000000 pending=false dims=" +
+			`{"deployment":"us-east","meter_type":"second","tenant":"acme"}`,
+	})
 }

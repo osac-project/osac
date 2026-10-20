@@ -60,10 +60,10 @@ type Config struct {
 type Service struct {
 	cfg Config
 
-	client   sarama.Client
-	consumer sarama.Consumer
-	producer sarama.SyncProducer
-	engine   *usage.Engine
+	client     sarama.Client
+	consumer   sarama.Consumer
+	producer   sarama.SyncProducer
+	calculator *usage.Calculator
 
 	lock     sync.Mutex
 	tenants  map[string]*tenantLoops
@@ -132,7 +132,11 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 			return nil, err
 		}
 	}
-	engine, err := usage.NewEngine(approved, cfg.DeploymentID)
+	owners, err := usage.RegistryOwners()
+	if err != nil {
+		return nil, err
+	}
+	calculator, err := usage.NewCalculator(approved, cfg.DeploymentID, owners)
 	if err != nil {
 		return nil, err
 	}
@@ -157,13 +161,13 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 		return nil, fmt.Errorf("creating kafka producer: %w", err)
 	}
 	service := &Service{
-		cfg:      cfg,
-		client:   client,
-		consumer: consumer,
-		producer: producer,
-		engine:   engine,
-		tenants:  map[string]*tenantLoops{},
-		missing:  map[string]int{},
+		cfg:        cfg,
+		client:     client,
+		consumer:   consumer,
+		producer:   producer,
+		calculator: calculator,
+		tenants:    map[string]*tenantLoops{},
+		missing:    map[string]int{},
 	}
 	service.listTenants = func(ctx context.Context) ([]string, error) {
 		return kafkaconn.ListEventTenants(ctx, cfg.Kafka)
@@ -293,7 +297,7 @@ func (s *Service) runTenant(ctx context.Context, tenant string, loops *tenantLoo
 		return
 	}
 	roundLoop, err := round.New(
-		s.cfg.Store, s.engine, s.client, s.consumer,
+		s.cfg.Store, s.calculator, s.client, s.consumer,
 		s.cfg.Logger.WithValues("loop", "round"),
 	)
 	if err != nil {

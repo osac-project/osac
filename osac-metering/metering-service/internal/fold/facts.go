@@ -112,6 +112,10 @@ func (e *Extractor) Facts(tenant string, event *privatev1.Event) ([]database.Fac
 		if !ok {
 			continue
 		}
+		render := formatValue
+		if field.OwnerResource != "" {
+			render = formatOwnerReference
+		}
 		switch field.Kind {
 		case metering.KindVaries:
 			since := timestampAt(payload, field.TransitionTime)
@@ -121,12 +125,12 @@ func (e *Extractor) Facts(tenant string, event *privatev1.Event) ([]database.Fac
 				}
 				since = creation
 			}
-			add(field.Path, since, formatValue(value, descriptor))
+			add(field.Path, since, render(value, descriptor))
 		case metering.KindConstant, metering.KindFixedOnceSet:
 			if !nonZero(value, descriptor) {
 				continue
 			}
-			add(field.Path, creation, formatValue(value, descriptor))
+			add(field.Path, creation, render(value, descriptor))
 		}
 	}
 
@@ -247,6 +251,20 @@ func formatReference(message protoreflect.Message) string {
 		}
 	}
 	return ""
+}
+
+// formatOwnerReference renders an owner reference by its id. The id is the stable key the
+// calculator resolves roots by: a name can change, and the reference the controller sets
+// carries only the id anyway.
+func formatOwnerReference(value protoreflect.Value, descriptor protoreflect.FieldDescriptor) string {
+	if descriptor.Kind() != protoreflect.MessageKind || !value.Message().IsValid() {
+		return ""
+	}
+	id := value.Message().Descriptor().Fields().ByName("id")
+	if id == nil || id.Kind() != protoreflect.StringKind {
+		return ""
+	}
+	return value.Message().Get(id).String()
 }
 
 // nonZero reports whether a value carries information. Boolean false does: a detached external

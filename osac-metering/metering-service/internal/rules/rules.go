@@ -45,9 +45,15 @@ type BillableWhen struct {
 	// States lists the states the resource bills in.
 	States []string `yaml:"states"`
 
-	// Once lists the states that confirm a deferred billable span. A span that never
-	// reaches one of them bills nothing.
-	Once []string `yaml:"once"`
+	// TurnsBillableOnce lists the states that confirm a deferred billable span: a span
+	// bills once the resource reached one of them, retroactively, and a span that closed
+	// before the resource reached one never bills.
+	TurnsBillableOnce []string `yaml:"turns_billable_once"`
+
+	// TurnsBillableOnceFrom says whose confirmation gates the meter: "root" (the default)
+	// reads the states of the resource's ownership root, "self" reads the resource's own.
+	// A resource with no owner always reads its own.
+	TurnsBillableOnceFrom string `yaml:"turns_billable_once_from"`
 
 	// Fields holds conditions on fields that are fixed at creation or set once later.
 	// The value is the expected text, or "set" for presence.
@@ -163,7 +169,7 @@ func (r Revision) validate() error {
 		for _, name := range meter.Billable.States {
 			billable[name] = true
 		}
-		for _, list := range [][]string{meter.Billable.States, meter.Billable.Once} {
+		for _, list := range [][]string{meter.Billable.States, meter.Billable.TurnsBillableOnce} {
 			for _, name := range list {
 				if !knownStates[name] {
 					return fmt.Errorf(
@@ -172,14 +178,22 @@ func (r Revision) validate() error {
 				}
 			}
 		}
-		for _, name := range meter.Billable.Once {
-			// A once state outside the billable states can never confirm a span, so a
-			// rule author error here would silently bill nothing.
+		for _, name := range meter.Billable.TurnsBillableOnce {
+			// A confirming state outside the billable states can never confirm a span, so
+			// a rule author error here would silently bill nothing.
 			if !billable[name] {
 				return fmt.Errorf(
 					"%s confirms state %q, which it does not bill in", where, name,
 				)
 			}
+		}
+		switch meter.Billable.TurnsBillableOnceFrom {
+		case "", "root", "self":
+		default:
+			return fmt.Errorf(
+				"%s turns billable once from %q, want root or self",
+				where, meter.Billable.TurnsBillableOnceFrom,
+			)
 		}
 		for _, condition := range sortedKeys(meter.Billable.Fields) {
 			path, known := DimensionPath(meter.Resource, condition)
@@ -202,6 +216,37 @@ func (r Revision) validate() error {
 			if !known || !tracked[path] {
 				return fmt.Errorf(
 					"%s dimensions by %q, which metering does not track", where, dimension,
+				)
+			}
+		}
+	}
+
+	// A resource type that owns others gates their billing, so every meter of that type
+	// must confirm on the same states: an ambiguous gate is a billing bug, and the
+	// calculator cannot pick one.
+	rootTypes := map[string]bool{}
+	for _, resource := range resources {
+		for _, field := range resource.Fields {
+			if field.OwnerResource != "" {
+				rootTypes[field.OwnerResource] = true
+			}
+		}
+	}
+	for rootType := range rootTypes {
+		var shared []string
+		for _, meter := range r.Meters {
+			if meter.Resource != rootType {
+				continue
+			}
+			if shared == nil {
+				shared = meter.Billable.TurnsBillableOnce
+				continue
+			}
+			if fmt.Sprint(shared) != fmt.Sprint(meter.Billable.TurnsBillableOnce) {
+				return fmt.Errorf(
+					"revision %s: meters of %s confirm on different states, so the gate it "+
+						"passes to owned resources is ambiguous",
+					r.Number, rootType,
 				)
 			}
 		}

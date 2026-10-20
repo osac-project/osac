@@ -76,16 +76,20 @@ func newPipeline(t *testing.T, tenant string) *pipeline {
 	if err != nil {
 		t.Fatalf("parsing default revision: %v", err)
 	}
-	engine, err := usage.NewEngine([]rules.Revision{revision}, deploymentID)
+	owners, err := usage.RegistryOwners()
 	if err != nil {
-		t.Fatalf("creating engine: %v", err)
+		t.Fatalf("reading owners: %v", err)
+	}
+	calculator, err := usage.NewCalculator([]rules.Revision{revision}, deploymentID, owners)
+	if err != nil {
+		t.Fatalf("creating calculator: %v", err)
 	}
 	foldLoop, err := fold.New(store, testenv.NewConsumer(t), logr.Discard())
 	if err != nil {
 		t.Fatalf("creating fold: %v", err)
 	}
 	roundLoop, err := round.New(
-		store, engine, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(),
+		store, calculator, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(),
 	)
 	if err != nil {
 		t.Fatalf("creating round: %v", err)
@@ -585,48 +589,51 @@ func TestVolumeBillsWithItsOwnDimensions(t *testing.T) {
 	}
 }
 
-// TestClusterWorkersBillThemselves checks the design's cluster attribution end to end: the
-// cluster bills only its control plane, a worker BMI bills its own allocation and
-// consumption, and the cluster reference the worker gains mid-round is a fact no default
-// meter uses, so it splits no span, adds no dimension, and re-bills nothing.
-func TestClusterWorkersBillThemselves(t *testing.T) {
+// TestClusterWorkersBillUnderTheRootGate checks the attribution model end to end: while the
+// cluster installs, nothing bills, the worker's hardware included. The round after the
+// cluster reaches READY bills the control plane retroactively and the worker's allocation
+// retroactively from its own start, all under the cluster's gate, and every worker
+// heartbeat carries the cluster and node set as dimensions, keyed by the reference's id.
+func TestClusterWorkersBillUnderTheRootGate(t *testing.T) {
 	p := newPipeline(t, "cluster-workers")
 	p.startRelay(t)
 
-	joined := base.Add(20 * time.Second)
-	events := []*privatev1.Event{
+	// The cluster installs and the worker is allocated; the gate is shut.
+	installing := []*privatev1.Event{
 		testenv.ClusterEvent("c1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
-			base, base, "web", "READY", base, "openshift-4-19", "4.19.0", base),
-		// The worker starts unassigned; a second snapshot carries its cluster.
+			base, base, "web", "PROGRESSING", base, "openshift-4-19", "4.19.0", base),
 		testenv.BMIEvent("b1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
-			base, base, "web", "STARTING", base, "medium", "", ""),
-		testenv.BMIEvent("b2", privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
-			joined, base, "web", "RUNNING", joined, "medium", "cluster-1", "workers"),
+			base, base, "web", "STARTING", base, "medium", "cluster-1", "workers"),
 	}
-	total := testenv.ProduceEvents(t, p.tenant, events)
+	total := testenv.ProduceEvents(t, p.tenant, installing)
 	p.foldAll(t, total)
 
 	p.roundAt(t, base.Add(time.Minute))
+	p.waitOutboxEmpty(t)
+	if beats := p.sentHeartbeats(t); len(beats) != 0 {
+		t.Fatalf("nothing bills while the cluster installs, got %d heartbeats", len(beats))
+	}
+
+	// The cluster reaches READY; the worker has no fact of its own, and the next round
+	// must still bill it, retroactively, because the changed cluster drags its workers
+	// into the recompute set.
+	ready := base.Add(30 * time.Second)
+	readyEvents := []*privatev1.Event{
+		testenv.ClusterEvent("c2", privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+			ready, base, "web", "READY", ready, "openshift-4-19", "4.19.0", base),
+	}
+	total += testenv.ProduceEvents(t, p.tenant, readyEvents)
+	p.foldAll(t, total)
+
 	p.roundAt(t, base.Add(2*time.Minute))
 	p.waitOutboxEmpty(t)
 
 	beats := p.sentHeartbeats(t)
-	// The cluster's control plane and the worker's allocation each bill one contiguous
-	// span per round — the state change and the cluster reference split nothing — and
-	// consumption starts when the worker reaches RUNNING.
 	assertBeats(t, beats, wantLines(
-		"allocation 2026-10-05T10:00:00Z..2026-10-05T10:01:00Z 60.000000",
-		"allocation 2026-10-05T10:01:00Z..2026-10-05T10:02:00Z 60.000000",
-		"consumption 2026-10-05T10:00:20Z..2026-10-05T10:01:00Z 40.000000",
-		"consumption 2026-10-05T10:01:00Z..2026-10-05T10:02:00Z 60.000000",
-		"control_plane 2026-10-05T10:00:00Z..2026-10-05T10:01:00Z 60.000000",
-		"control_plane 2026-10-05T10:01:00Z..2026-10-05T10:02:00Z 60.000000",
+		"allocation 2026-10-05T10:00:00Z..2026-10-05T10:02:00Z 120.000000",
+		"control_plane 2026-10-05T10:00:00Z..2026-10-05T10:02:00Z 120.000000",
 	))
 	for _, beat := range beats {
-		if _, ok := beat.data.BillingDimensions["cluster"]; ok {
-			t.Fatalf("no default meter uses the cluster fact, but a heartbeat carries it: %v",
-				beat.data.BillingDimensions)
-		}
 		switch beat.data.Meter {
 		case "control_plane":
 			checkEnvelope(t, beat, p.tenant, "cluster-1", schema.ResourceTypeClusterOrder,
@@ -638,12 +645,20 @@ func TestClusterWorkersBillThemselves(t *testing.T) {
 			if beat.data.BillingDimensions["version"] != "4.19.0" {
 				t.Fatalf("version dimension is %q", beat.data.BillingDimensions["version"])
 			}
-		case "allocation", "consumption":
+		case "allocation":
 			checkEnvelope(t, beat, p.tenant, "bmi-1", schema.ResourceTypeBareMetalInstance,
-				beat.data.Meter, "second")
+				"allocation", "second")
 			checkQuantity(t, beat, 1)
 			if beat.data.BillingDimensions["instance_type"] != "medium" {
 				t.Fatalf("instance_type dimension is %q", beat.data.BillingDimensions["instance_type"])
+			}
+			// The dimension is the reference's id, never its display name.
+			if beat.data.BillingDimensions["cluster"] != "cluster-1" {
+				t.Fatalf("cluster dimension is %q, want the id cluster-1",
+					beat.data.BillingDimensions["cluster"])
+			}
+			if beat.data.BillingDimensions["node_set"] != "workers" {
+				t.Fatalf("node_set dimension is %q", beat.data.BillingDimensions["node_set"])
 			}
 		default:
 			t.Fatalf("unexpected meter %q", beat.data.Meter)

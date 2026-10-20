@@ -562,3 +562,30 @@ func (s *Store) DeleteTenantRows(ctx context.Context, tenant string) error {
 	}
 	return nil
 }
+
+// ResourcesOwnedBy returns the tenant's resources whose owner fact names the given root. The
+// round uses it to recompute a changed root's workers in the same round.
+func ResourcesOwnedBy(
+	ctx context.Context, q Querier, tenant, field, rootID string,
+) ([]LedgerKey, error) {
+	rows, err := q.Query(
+		ctx,
+		`SELECT DISTINCT resource_type, resource_id
+		 FROM history
+		 WHERE tenant = $1 AND field = $2 AND value = $3`,
+		tenant, field, rootID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("finding resources owned by %s: %w", rootID, err)
+	}
+	defer rows.Close()
+	var resources []LedgerKey
+	for rows.Next() {
+		var key LedgerKey
+		if err := rows.Scan(&key.ResourceType, &key.ResourceID); err != nil {
+			return nil, fmt.Errorf("scanning resource owned by %s: %w", rootID, err)
+		}
+		resources = append(resources, key)
+	}
+	return resources, rows.Err()
+}

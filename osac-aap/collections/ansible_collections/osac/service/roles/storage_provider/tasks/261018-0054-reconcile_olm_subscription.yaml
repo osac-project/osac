@@ -54,15 +54,15 @@
          and (_storage_provider_existing_olm_subscription.resources[0].metadata.labels | default({}))
          .get('osac.openshift.io/native-csi-provider', '') == storage_provider_olm_subscription_provider }}
 
-- name: Require an unmanaged pending provider Subscription to already match the installer policy
+- name: Require an unmanaged provider Subscription to be pending and match the installer policy
   when:
     - _storage_provider_existing_olm_subscription.resources | length > 0
-    - >-
-      _storage_provider_existing_olm_subscription.resources[0].status.installedCSV
-      | default('', true) | length == 0
     - not (_storage_provider_existing_olm_subscription_owned | default(false) | bool)
   ansible.builtin.assert:
     that:
+      - >-
+        _storage_provider_existing_olm_subscription.resources[0].status.installedCSV
+        | default('', true) | length == 0
       - >-
         _storage_provider_existing_olm_subscription.resources[0].spec.channel | default('')
         == storage_provider_olm_subscription_installer.channel
@@ -81,8 +81,8 @@
       - >-
         'startingCSV' not in _storage_provider_existing_olm_subscription.resources[0].spec
     fail_msg: >-
-      Existing pending Subscription '{{ storage_provider_olm_subscription_namespace }}/{{ storage_provider_olm_subscription_name }}'
-      is not managed by OSAC and does not match the required stable Manual policy. It was left unchanged.
+      Existing provider Subscription '{{ storage_provider_olm_subscription_namespace }}/{{ storage_provider_olm_subscription_name }}'
+      must be pending and match the required stable Manual policy. It was left unchanged.
 
 - name: Set an existing provider Subscription to the initial-install policy
   when:

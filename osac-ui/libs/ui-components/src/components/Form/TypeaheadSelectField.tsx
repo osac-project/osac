@@ -7,6 +7,8 @@ import { getVisibleFieldError } from './fieldError';
 import { useShowFieldValidationErrors } from './FieldValidationContext';
 import { FormFieldHelper } from './FormFieldHelper';
 
+import './TypeaheadSelectField.css';
+
 interface TypeaheadSelectFieldProps {
   name: string;
   label: string;
@@ -45,7 +47,13 @@ export const TypeaheadSelectField = ({
   );
 
   return (
-    <FormGroup label={label} fieldId={fieldId} isRequired={isRequired} labelInfo={labelInfo}>
+    <FormGroup
+      className={isRequired ? 'osac-typeahead-select--required' : undefined}
+      label={label}
+      fieldId={fieldId}
+      isRequired={isRequired}
+      labelInfo={labelInfo}
+    >
       <TypeaheadSelect
         id={fieldId}
         initialOptions={selectableOptions}

@@ -1,6 +1,4 @@
-import { MemoryRouter } from 'react-router-dom';
-import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { SecurityGroup, VirtualNetwork } from '@osac/types';
@@ -9,6 +7,7 @@ import { Protocol, SecurityGroupState, VirtualNetworkState } from '@osac/types';
 import { SecurityGroupsListPage } from './SecurityGroupsListPage';
 import * as networkingApi from '../../api/v1/networking';
 import { mockMutationResult, mockQueryResult } from '../../test-utils/query';
+import { renderWithProviders } from '../../test-utils/TestProviders';
 
 vi.mock('../../api/v1/networking', async (importOriginal) => {
   const actual = await importOriginal<typeof networkingApi>();
@@ -19,6 +18,8 @@ vi.mock('../../api/v1/networking', async (importOriginal) => {
     useCreateSecurityGroup: vi.fn(),
   };
 });
+
+const renderPage = () => renderWithProviders(<SecurityGroupsListPage />);
 
 describe('SecurityGroupsListPage', () => {
   const mockVirtualNetworks = [
@@ -68,22 +69,14 @@ describe('SecurityGroupsListPage', () => {
   });
 
   it('renders page title and create button', () => {
-    render(
-      <MemoryRouter>
-        <SecurityGroupsListPage />
-      </MemoryRouter>,
-    );
+    renderPage();
 
     expect(screen.getByText('Security groups')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Create security group/i })).toBeInTheDocument();
   });
 
   it('renders table with Name, VN, Inbound/Outbound Rules, Status columns', () => {
-    render(
-      <MemoryRouter>
-        <SecurityGroupsListPage />
-      </MemoryRouter>,
-    );
+    renderPage();
 
     expect(screen.getByText('Name')).toBeInTheDocument();
     expect(screen.getByText('Virtual Network')).toBeInTheDocument();
@@ -93,11 +86,7 @@ describe('SecurityGroupsListPage', () => {
   });
 
   it('displays security groups with rule counts', () => {
-    render(
-      <MemoryRouter>
-        <SecurityGroupsListPage />
-      </MemoryRouter>,
-    );
+    renderPage();
 
     expect(screen.getByRole('link', { name: 'sg-web' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'sg-db' })).toBeInTheDocument();
@@ -115,22 +104,13 @@ describe('SecurityGroupsListPage', () => {
   it('shows empty state when no security groups exist', () => {
     vi.mocked(networkingApi.useSecurityGroups).mockReturnValue(mockQueryResult<SecurityGroup[]>());
 
-    render(
-      <MemoryRouter>
-        <SecurityGroupsListPage />
-      </MemoryRouter>,
-    );
+    renderPage();
 
     expect(screen.getByText(/No security groups yet/i)).toBeInTheDocument();
   });
 
   it('filters security groups by search term', async () => {
-    const user = userEvent.setup();
-    render(
-      <MemoryRouter>
-        <SecurityGroupsListPage />
-      </MemoryRouter>,
-    );
+    const { user } = renderPage();
 
     const searchInput = screen.getByPlaceholderText(/Search security groups/i);
     await user.type(searchInput, 'web');
@@ -140,12 +120,7 @@ describe('SecurityGroupsListPage', () => {
   });
 
   it('opens create modal when Create button is clicked', async () => {
-    const user = userEvent.setup();
-    render(
-      <MemoryRouter>
-        <SecurityGroupsListPage />
-      </MemoryRouter>,
-    );
+    const { user } = renderPage();
 
     await user.click(screen.getByRole('button', { name: /Create security group/i }));
     expect(screen.getByRole('heading', { name: 'Create security group' })).toBeInTheDocument();

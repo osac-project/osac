@@ -2,7 +2,6 @@ import { screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { ServiceTier } from '@osac/types';
-import { SessionProvider } from '@osac/ui-components/hooks/use-session';
 import type { UserRole } from '@osac/ui-components/shellTypes';
 import { renderWithProviders } from '@osac/ui-components/test-utils/TestProviders';
 
@@ -21,19 +20,15 @@ const renderAppShell = (
   role: UserRole = 'admin',
   enabledServices: ServiceTier[] = [ServiceTier.CAAS, ServiceTier.VMAAS, ServiceTier.BMAAS],
 ) =>
-  renderWithProviders(
-    <SessionProvider role={role} username="test-user" tenantId="tenant-1">
-      <AppShell logout={vi.fn().mockResolvedValue(undefined)} />
-    </SessionProvider>,
-    {
-      apiFixtures: {
-        enabledServices,
-        privateInstanceTypes: [],
-        privateBaremetalInstanceTypes: [],
-      },
-      routerEntries: [entry],
+  renderWithProviders(<AppShell logout={vi.fn().mockResolvedValue(undefined)} />, {
+    apiFixtures: {
+      enabledServices,
+      privateInstanceTypes: [],
+      privateBaremetalInstanceTypes: [],
     },
-  );
+    routerEntries: [entry],
+    session: { role, tenantId: 'tenant-1' },
+  });
 
 describe('AppShell', () => {
   it('renders the storage route through the admin shell', async () => {

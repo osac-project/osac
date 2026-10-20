@@ -22,38 +22,16 @@ import { renderWithProviders } from '@osac/ui-components/test-utils/TestProvider
 
 import { BareMetalListPage } from './BareMetalListPage';
 
-vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
-  callback(0);
-  return 1;
-});
+vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) =>
+  window.setTimeout(() => callback(0), 0),
+);
 
 const myProject = create(ProjectSchema, {
   id: 'project-my-project',
   metadata: { name: 'my-project' },
 });
 
-let sessionProjects: string[] = [];
-const setProjects = vi.fn((next: string[]) => {
-  sessionProjects = next;
-});
-
-vi.mock('@osac/ui-components/hooks/use-session.tsx', () => ({
-  useSession: vi.fn(() => ({
-    role: 'tenant-user',
-    username: 'test-user',
-    tenantId: 'test-tenant',
-    projects: sessionProjects,
-    setProjects,
-    userTheme: 'system',
-    resolvedTheme: 'light',
-    setUserTheme: vi.fn(),
-    userContrast: 'system',
-    resolvedContrast: 'normal',
-    setUserContrast: vi.fn(),
-  })),
-  PROJECT_FILTER_PARAM: 'project',
-  getProjectFilterStorageKey: (username: string) => `osac/project-filter/${username}`,
-}));
+const tenantSession = { role: 'tenant-user' as const };
 
 const instance = {
   id: 'bmi-1',
@@ -148,13 +126,11 @@ const createTransport = (items = [instance, fedoraInstance]) => {
 describe('BareMetalListPage', () => {
   beforeEach(() => {
     localStorage.clear();
-    sessionProjects = [];
-    setProjects.mockClear();
   });
 
   it('renders instance type from spec.instance_type', async () => {
     const { transport } = createTransport([instance]);
-    renderWithProviders(<BareMetalListPage />, { transport });
+    renderWithProviders(<BareMetalListPage />, { transport, session: tenantSession });
 
     await waitFor(() => {
       expect(screen.getByRole('link', { name: 'worker-01' })).toBeInTheDocument();
@@ -164,7 +140,10 @@ describe('BareMetalListPage', () => {
 
   it('sends a CEL filter when filtering bare metal instances by disk image', async () => {
     const { transport, getInstanceListFilter } = createTransport();
-    const { user } = renderWithProviders(<BareMetalListPage />, { transport });
+    const { user } = renderWithProviders(<BareMetalListPage />, {
+      transport,
+      session: tenantSession,
+    });
 
     await waitFor(() => {
       expect(screen.getByRole('link', { name: 'worker-01' })).toBeInTheDocument();
@@ -182,7 +161,10 @@ describe('BareMetalListPage', () => {
 
   it('sends a CEL filter when filtering bare metal instances by instance type', async () => {
     const { transport, getInstanceListFilter } = createTransport();
-    const { user } = renderWithProviders(<BareMetalListPage />, { transport });
+    const { user } = renderWithProviders(<BareMetalListPage />, {
+      transport,
+      session: tenantSession,
+    });
 
     await waitFor(() => {
       expect(screen.getByRole('link', { name: 'worker-01' })).toBeInTheDocument();
@@ -200,7 +182,10 @@ describe('BareMetalListPage', () => {
 
   it('sends a CEL filter when filtering bare metal instances by power state', async () => {
     const { transport, getInstanceListFilter } = createTransport([instance]);
-    const { user } = renderWithProviders(<BareMetalListPage />, { transport });
+    const { user } = renderWithProviders(<BareMetalListPage />, {
+      transport,
+      session: tenantSession,
+    });
 
     await waitFor(() => {
       expect(screen.getByRole('link', { name: 'worker-01' })).toBeInTheDocument();
@@ -218,7 +203,10 @@ describe('BareMetalListPage', () => {
 
   it('sends a CEL filter when filtering bare metal instances by search', async () => {
     const { transport, getInstanceListFilter } = createTransport();
-    const { user } = renderWithProviders(<BareMetalListPage />, { transport });
+    const { user } = renderWithProviders(<BareMetalListPage />, {
+      transport,
+      session: tenantSession,
+    });
 
     await waitFor(() => {
       expect(screen.getByRole('link', { name: 'worker-01' })).toBeInTheDocument();
@@ -237,17 +225,18 @@ describe('BareMetalListPage', () => {
   });
 
   it('clears search and project filters together', async () => {
-    sessionProjects = ['my-project'];
     const { transport, getInstanceListFilter } = createTransport([instance]);
     const { user } = renderWithProviders(<BareMetalListPage />, {
       transport,
       routerEntries: ['/?project=my-project&search=no-such-instance'],
+      session: tenantSession,
     });
 
     await waitFor(() => {
       expect(
         screen.getByRole('textbox', { name: 'Filter bare metal instances by name' }),
       ).toHaveValue('no-such-instance');
+      expect(screen.getByRole('button', { name: 'my-project' })).toBeInTheDocument();
     });
 
     const clearFiltersButtons = await screen.findAllByRole('button', { name: 'Clear all filters' });
@@ -262,6 +251,6 @@ describe('BareMetalListPage', () => {
       expect(getInstanceListFilter()).toBeUndefined();
     });
 
-    expect(setProjects).toHaveBeenCalledWith([]);
+    expect(screen.getByRole('button', { name: 'All projects' })).toBeInTheDocument();
   });
 });

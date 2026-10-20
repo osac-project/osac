@@ -56,7 +56,7 @@ const IdentityProviderListPage = () => {
       description={t('Manage identity providers for your tenant.')}
       error={error}
       actions={
-        <CreateButton to="/tenant/identity-provider/create">
+        <CreateButton service={IdentityProviders} to="/tenant/identity-provider/create">
           {t('Create identity provider')}
         </CreateButton>
       }

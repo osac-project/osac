@@ -2,7 +2,7 @@ import { Route, Routes } from 'react-router-dom';
 import { create } from '@bufbuild/protobuf';
 import { Code, ConnectError, createRouterTransport } from '@connectrpc/connect';
 import { screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   BareMetalInstanceCatalogItem,
@@ -25,31 +25,12 @@ import {
   catalogItemMatchesListFilter,
 } from '../../api/v1/catalog-item-list-filter';
 import { CatalogItemDetailPage } from '../../components/catalog/details/CatalogItemDetailPage.tsx';
-import type { UserRole } from '../../shellTypes';
 import { wrapWithAuthInterceptor } from '../../test-utils/createMockConnectTransport';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
 const catalogItemsViewPrefKey = getViewTypePrefKey(CATALOG_ITEMS_VIEW_KEY);
 
-vi.mock('@osac/ui-components/hooks/use-session.tsx', () => ({
-  useSession: vi.fn(),
-}));
-
-const { useSession } = await import('@osac/ui-components/hooks/use-session');
-
 const allCatalogServiceTiers = [ServiceTier.CAAS, ServiceTier.VMAAS, ServiceTier.BMAAS];
-
-const setMockSession = (
-  enabledServices: ServiceTier[] = allCatalogServiceTiers,
-  role: UserRole = 'admin',
-) => {
-  vi.mocked(useSession).mockReturnValue({
-    role,
-    username: 'test-user',
-    tenantId: 'test-tenant',
-    enabledServices,
-  } as ReturnType<typeof useSession>);
-};
 
 const vmCatalogMetaData: Metadata = {
   $typeName: 'osac.public.v1.Metadata',
@@ -276,8 +257,16 @@ const createRequestCounts = (): CatalogRequestCounts => ({
   bm: 0,
 });
 
-const renderCatalogPage = (transport = unauthorizedTransport, routerEntries = ['/catalog']) =>
-  renderWithProviders(<CatalogPage />, { transport, routerEntries });
+const renderCatalogPage = (
+  transport = unauthorizedTransport,
+  enabledServices: ServiceTier[] = allCatalogServiceTiers,
+  routerEntries = ['/catalog'],
+) =>
+  renderWithProviders(<CatalogPage />, {
+    transport,
+    routerEntries,
+    apiFixtures: { enabledServices },
+  });
 
 const renderVmCatalogItemList = (viewType: 'cards' | 'list') => {
   if (viewType === 'list') {
@@ -306,7 +295,6 @@ const renderCatalogPageWithDetailRoutes = (transport = createCatalogPageTranspor
 describe('CatalogPage', () => {
   beforeEach(() => {
     localStorage.clear();
-    setMockSession();
   });
 
   it('keeps type filter toggles in the DOM when catalog queries return 401', async () => {
@@ -457,13 +445,13 @@ describe('CatalogPage', () => {
   ])(
     'renders only the $service service surface and queries its catalog',
     async ({ service, title, enabledRequest, disabledRequests, disabledFilters }) => {
-      setMockSession([service]);
       const requestCounts = createRequestCounts();
       renderCatalogPage(
         createCatalogPageTransport({
           bmItems: [bareMetalCatalogItem],
           requestCounts,
         }),
+        [service],
       );
 
       await waitFor(() => {
@@ -484,9 +472,8 @@ describe('CatalogPage', () => {
   );
 
   it('loads without service catalog requests when enabled services are MASS', async () => {
-    setMockSession([ServiceTier.MAAS]);
     const requestCounts = createRequestCounts();
-    renderCatalogPage(createCatalogPageTransport({ requestCounts }));
+    renderCatalogPage(createCatalogPageTransport({ requestCounts }), [ServiceTier.MAAS]);
 
     expect(
       await screen.findByRole('heading', { name: 'No catalog items found' }),
@@ -510,9 +497,8 @@ describe('CatalogPage', () => {
   });
 
   it('loads without service catalog requests when enabled services are empty', async () => {
-    setMockSession([]);
     const requestCounts = createRequestCounts();
-    renderCatalogPage(createCatalogPageTransport({ requestCounts }));
+    renderCatalogPage(createCatalogPageTransport({ requestCounts }), []);
 
     expect(
       await screen.findByRole('heading', { name: 'No catalog items found' }),
@@ -537,8 +523,7 @@ describe('CatalogPage', () => {
   });
 
   it('ignores a disabled type in the URL filter', async () => {
-    setMockSession([ServiceTier.CAAS]);
-    renderCatalogPage(createCatalogPageTransport(), ['/catalog?types=vm']);
+    renderCatalogPage(createCatalogPageTransport(), [ServiceTier.CAAS], ['/catalog?types=vm']);
 
     await waitFor(() => {
       expect(screen.getByText(clusterCatalogItem.metadata?.name ?? '')).toBeInTheDocument();

@@ -89,3 +89,6 @@ export * from './osac/public/v1/compute_instance_common_type_pb.js'
 export * from './osac/public/v1/baremetal_instance_type_type_pb.js';
 export * from './osac/public/v1/baremetal_instance_types_service_pb.js';
 export * from './osac/public/v1/baremetal_instance_common_type_pb.js';
+
+export * from './osac/public/v1/self_subject_access_review_type_pb.js';
+export * from './osac/public/v1/self_subject_access_review_service_pb.js';

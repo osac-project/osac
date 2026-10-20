@@ -19,7 +19,7 @@ import {
 } from '@patternfly/react-core';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
-import { type NATGateway, VirtualNetworkState } from '@osac/types';
+import { type NATGateway, SecurityGroups, Subnets, VirtualNetworkState } from '@osac/types';
 import CreateButton from '@osac/ui-components/components/Primitives/CreateButton.tsx';
 import ResourceNameField from '@osac/ui-components/components/Resource/ResourceNameField.tsx';
 
@@ -139,6 +139,7 @@ export const VirtualNetworkDetailPage = () => {
                     actions={{
                       actions: (
                         <CreateButton
+                          service={Subnets}
                           variant="secondary"
                           onClick={() => setIsSubnetModalOpen(true)}
                         >
@@ -192,6 +193,7 @@ export const VirtualNetworkDetailPage = () => {
                     actions={{
                       actions: (
                         <CreateButton
+                          service={SecurityGroups}
                           variant="secondary"
                           onClick={() => setIsSecurityGroupModalOpen(true)}
                         >

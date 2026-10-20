@@ -9,6 +9,7 @@ import {
 } from '@patternfly/react-core';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
+import { VirtualNetworks } from '@osac/types';
 import CreateButton from '@osac/ui-components/components/Primitives/CreateButton.tsx';
 import ResourceNameField from '@osac/ui-components/components/Resource/ResourceNameField.tsx';
 import { SEARCH_PARAM, usePageFilter } from '@osac/ui-components/hooks/use-page-filter.ts';
@@ -57,7 +58,7 @@ export const VirtualNetworksListPage = () => {
         title={t('Virtual networks')}
         description={t('Manage virtual networks for your compute instances.')}
         actions={
-          <CreateButton onClick={() => setIsCreateModalOpen(true)}>
+          <CreateButton service={VirtualNetworks} onClick={() => setIsCreateModalOpen(true)}>
             {t('Create virtual network')}
           </CreateButton>
         }

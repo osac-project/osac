@@ -6,7 +6,7 @@ import {
   ToolbarItem,
 } from '@patternfly/react-core';
 
-import { type ExternalIP } from '@osac/types';
+import { type ExternalIP, ExternalIPs } from '@osac/types';
 import { cel } from '@osac/ui-components/api/cel';
 import { useExternalIpsData } from '@osac/ui-components/api/v1/external-ip-data';
 import { SEARCH_PARAM, usePageFilter } from '@osac/ui-components/hooks/use-page-filter';
@@ -48,7 +48,7 @@ const ExternalIpListPage = () => {
       )}
       error={error}
       actions={
-        <CreateButton to={`${EXTERNAL_IPS_LIST_PATH}/create`}>
+        <CreateButton service={ExternalIPs} to={`${EXTERNAL_IPS_LIST_PATH}/create`}>
           {t('Create external IP')}
         </CreateButton>
       }

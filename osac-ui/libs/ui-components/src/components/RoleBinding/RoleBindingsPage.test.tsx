@@ -1,22 +1,11 @@
 import { screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import type { Role, RoleBinding, User } from '@osac/types';
-import { RoleBindingState, ServiceTier } from '@osac/types';
+import { RoleBindingState } from '@osac/types';
 
 import RoleBindingsPage from './RoleBindingsPage';
 import { renderWithProviders } from '../../test-utils/TestProviders';
-
-vi.mock('../../hooks/use-session', () => ({
-  useSession: vi.fn(() => ({
-    role: 'tenant-admin',
-    username: 'testuser',
-    tenantId: 'tenant-1',
-    enabledServices: [ServiceTier.CAAS, ServiceTier.VMAAS, ServiceTier.BMAAS],
-  })),
-}));
-
-const { useSession } = await import('../../hooks/use-session');
 
 const makeRole = (id: string, title: string, description = ''): Role =>
   ({
@@ -84,26 +73,10 @@ const renderPage = ({
 } = {}) =>
   renderWithProviders(<RoleBindingsPage />, {
     apiFixtures: { roles, roleBindings, users },
+    session: { role: 'tenant-admin', username: 'testuser', tenantId: 'tenant-1' },
   });
 
 describe('RoleBindingsPage', () => {
-  beforeEach(() => {
-    vi.mocked(useSession).mockReturnValue({
-      role: 'tenant-admin',
-      username: 'testuser',
-      tenantId: 'tenant-1',
-      enabledServices: [ServiceTier.CAAS, ServiceTier.VMAAS, ServiceTier.BMAAS],
-      userTheme: 'system',
-      resolvedTheme: 'light',
-      setUserTheme: vi.fn(),
-      userContrast: 'system',
-      resolvedContrast: 'glass',
-      setUserContrast: vi.fn(),
-      projects: [],
-      setProjects: vi.fn(),
-    });
-  });
-
   it('renders the page title', async () => {
     renderPage();
 

@@ -8,6 +8,8 @@ import type { UserEvent } from '@testing-library/user-event';
 import userEvent from '@testing-library/user-event';
 import i18n from 'i18next';
 
+import { Capabilities, ServiceTier } from '@osac/types';
+
 import {
   type MockApiFixtures,
   type MockTransportOverrides,
@@ -16,6 +18,8 @@ import {
 import en from '../../../i18n/locales/en/translation.json';
 import { ApiProvider } from '../api/api-context';
 import ToastProvider from '../components/Toast/ToastProvider';
+import { SessionProvider } from '../hooks/use-session';
+import type { UserRole } from '../shellTypes';
 
 const createTestI18n = () => {
   const instance = i18n.createInstance();
@@ -29,12 +33,19 @@ const createTestI18n = () => {
   return instance;
 };
 
+type TestSession = {
+  role?: UserRole;
+  username?: string;
+  tenantId?: string;
+};
+
 export type TestProvidersProps = {
   children: ReactNode;
   apiFixtures?: MockApiFixtures;
   transport?: Transport;
   transportOverrides?: MockTransportOverrides;
   routerEntries?: string[];
+  session?: TestSession;
 };
 
 export const TestProviders = ({
@@ -43,6 +54,7 @@ export const TestProviders = ({
   transport: transportOverride,
   transportOverrides,
   routerEntries,
+  session = {},
 }: TestProvidersProps) => {
   const i18nInstance = createTestI18n();
   const transport =
@@ -52,11 +64,33 @@ export const TestProviders = ({
       queries: { retry: false, refetchOnWindowFocus: false, refetchInterval: false },
     },
   });
+  // Keep the session's capabilities ready on the first render.
+  queryClient.setQueryData([Capabilities.typeName, 'get', {}], {
+    enabledServices: apiFixtures?.enabledServices ?? [
+      ServiceTier.CAAS,
+      ServiceTier.VMAAS,
+      ServiceTier.BMAAS,
+    ],
+  });
   // A data router (rather than a plain <MemoryRouter>) is required so that
   // data-router-only hooks like useBlocker (used by LeaveFormConfirmation) work in tests.
-  const router = createMemoryRouter([{ path: '*', element: children }], {
-    initialEntries: routerEntries,
-  });
+  const router = createMemoryRouter(
+    [
+      {
+        path: '*',
+        element: (
+          <SessionProvider
+            role={session.role ?? 'admin'}
+            username={session.username ?? 'test-user'}
+            tenantId={session.tenantId ?? 'test-tenant'}
+          >
+            {children}
+          </SessionProvider>
+        ),
+      },
+    ],
+    { initialEntries: routerEntries },
+  );
 
   return (
     <I18nextProvider i18n={i18nInstance}>
@@ -76,6 +110,7 @@ export type RenderWithProvidersOptions = Omit<RenderOptions, 'wrapper'> & {
   transport?: Transport;
   transportOverrides?: MockTransportOverrides;
   routerEntries?: string[];
+  session?: TestSession;
 };
 
 export type RenderWithProvidersResult = RenderResult & {
@@ -86,7 +121,8 @@ export const renderWithProviders = (
   ui: ReactElement,
   options: RenderWithProvidersOptions = {},
 ): RenderWithProvidersResult => {
-  const { apiFixtures, transport, transportOverrides, routerEntries, ...renderOptions } = options;
+  const { apiFixtures, transport, transportOverrides, routerEntries, session, ...renderOptions } =
+    options;
 
   const view = render(ui, {
     wrapper: ({ children }) => (
@@ -95,6 +131,7 @@ export const renderWithProviders = (
         transport={transport}
         transportOverrides={transportOverrides}
         routerEntries={routerEntries}
+        session={session}
       >
         {children}
       </TestProviders>

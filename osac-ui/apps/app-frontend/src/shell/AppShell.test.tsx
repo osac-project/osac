@@ -1,9 +1,10 @@
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { ServiceTier } from '@osac/types';
+import { Clusters, ServiceTier } from '@osac/types';
 import { SessionProvider } from '@osac/ui-components/hooks/use-session';
 import type { UserRole } from '@osac/ui-components/shellTypes';
+import { createMockConnectTransport } from '@osac/ui-components/test-utils/createMockConnectTransport';
 import { renderWithProviders } from '@osac/ui-components/test-utils/TestProviders';
 
 vi.mock('./StorageRoutes', () => ({
@@ -20,6 +21,7 @@ const renderAppShell = (
   entry: string,
   role: UserRole = 'admin',
   enabledServices: ServiceTier[] = [ServiceTier.CAAS, ServiceTier.VMAAS, ServiceTier.BMAAS],
+  transport?: ReturnType<typeof createMockConnectTransport>,
 ) =>
   renderWithProviders(
     <SessionProvider role={role} username="test-user" tenantId="tenant-1">
@@ -32,6 +34,7 @@ const renderAppShell = (
         privateBaremetalInstanceTypes: [],
       },
       routerEntries: [entry],
+      transport,
     },
   );
 
@@ -77,11 +80,43 @@ describe('AppShell', () => {
     expect(await screen.findByRole('heading', { name: 'Tenants' })).toBeInTheDocument();
   });
 
-  it('does not render cluster routes for admin — falls through to default', async () => {
-    renderAppShell('/clusters', 'admin');
+  it.each(['/clusters', '/clusters/cluster-1'])(
+    'hides cluster navigation and makes no cluster RPC for admin at %s',
+    async (path) => {
+      const enabledServices = [ServiceTier.CAAS, ServiceTier.VMAAS, ServiceTier.BMAAS];
+      const transport = createMockConnectTransport({ enabledServices });
+      const unary = vi.spyOn(transport, 'unary');
 
-    expect(screen.queryByRole('heading', { name: /clusters/i })).toBeNull();
-    expect(await screen.findByRole('heading', { name: 'Tenants' })).toBeInTheDocument();
+      renderAppShell(path, 'admin', enabledServices, transport);
+
+      expect(await screen.findByRole('heading', { name: 'Tenants' })).toBeInTheDocument();
+      const navigation = screen.getByRole('navigation', {
+        name: 'Primary navigation',
+        hidden: true,
+      });
+      expect(within(navigation).queryByText('Clusters')).not.toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: /clusters/i })).not.toBeInTheDocument();
+      expect(
+        unary.mock.calls.filter(([method]) => method.parent.typeName === Clusters.typeName),
+      ).toHaveLength(0);
+    },
+  );
+
+  it('queries the public cluster service for an allowed tenant route', async () => {
+    const enabledServices = [ServiceTier.CAAS];
+    const transport = createMockConnectTransport({ enabledServices, clusters: [] });
+    const unary = vi.spyOn(transport, 'unary');
+
+    renderAppShell('/clusters', 'tenant-user', enabledServices, transport);
+
+    expect(await screen.findByRole('heading', { name: 'Clusters' })).toBeInTheDocument();
+    const navigation = screen.getByRole('navigation', { name: 'Primary navigation', hidden: true });
+    expect(within(navigation).getByText('Clusters')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        unary.mock.calls.filter(([method]) => method.parent.typeName === Clusters.typeName),
+      ).toHaveLength(1);
+    });
   });
 
   it('does not render bare metal routes for admin — falls through to default', async () => {

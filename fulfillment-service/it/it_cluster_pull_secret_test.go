@@ -150,7 +150,6 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 
 	BeforeEach(func() {
 		ctx = context.Background()
-		ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
 
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
 		network = createCatalogItemNetworkFixture(ctx, usersGroup, "")

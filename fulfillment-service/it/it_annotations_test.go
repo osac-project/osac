@@ -43,9 +43,6 @@ var _ = Describe("Annotations", func() {
 
 	BeforeEach(func() {
 		ctx = context.Background()
-		// Cluster creates without a network attachment use the tenant's default
-		// networking, which must be READY. No operator runs in this suite.
-		ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
 
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
 		publicAdminClustersClient = publicv1.NewClustersClient(tool.ExternalView().AdminConn())

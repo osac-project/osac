@@ -46,7 +46,7 @@ var _ = Describe("Public clusters", func() {
 		ctx = context.Background()
 		// Public cluster requests validate the canonical networking Hub even when
 		// the request does not specify a subnet or SecurityGroup.
-		networkClassID = ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "").networkClassID
+		networkClassID = createCatalogItemNetworkClassFixture(ctx)
 
 		// Create the clients:
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())

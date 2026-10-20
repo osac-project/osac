@@ -43,7 +43,6 @@ var _ = Describe("Labels", func() {
 
 	BeforeEach(func() {
 		ctx = context.Background()
-		ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
 		publicAdminClustersClient = publicv1.NewClustersClient(tool.ExternalView().AdminConn())
 		adminClustersClient = privatev1.NewClustersClient(tool.InternalView().AdminConn())

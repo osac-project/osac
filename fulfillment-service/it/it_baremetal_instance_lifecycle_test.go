@@ -57,11 +57,19 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		defaultDiskImageId                  string
 		defaultDiskImageName                string
 		defaultNetworkingFixture            catalogItemNetworkFixture
+		tenantName                          string
 	)
 
 	BeforeEach(func(ctx context.Context) {
+		// NetworkClass is a deployment singleton. Create it before the temporary
+		// tenant so cleanup removes that tenant's defaults before deleting the class.
+		_, networkClassCreated := getOrCreateTenantDefaultNetworkClassFixture(ctx)
+		tenantName, tenantConn := createCatalogItemTenantAdminFixture(ctx)
+		defaultNetworkingFixture = ensureTenantDefaultNetworkingFixture(ctx, tenantName, "")
+		defaultNetworkingFixture.networkClassCreated = networkClassCreated
+
 		// Create clients
-		bareMetalInstancesClient = publicv1.NewBareMetalInstancesClient(tool.ExternalView().UserConn())
+		bareMetalInstancesClient = publicv1.NewBareMetalInstancesClient(tenantConn)
 		privateBareMetalInstancesClient = privatev1.NewBareMetalInstancesClient(tool.InternalView().AdminConn())
 		bareMetalInstanceTemplatesClient = privatev1.NewBareMetalInstanceTemplatesClient(tool.InternalView().AdminConn())
 		bareMetalInstanceCatalogItemsClient = privatev1.NewBareMetalInstanceCatalogItemsClient(tool.InternalView().AdminConn())
@@ -112,10 +120,6 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 		})
-
-		// Lifecycle Creates omit network_attachments and use shared catalog items without
-		// network field policies; hard-fail defaulting needs a tenant-default Subnet/SG.
-		defaultNetworkingFixture = ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
 
 		// Create BareMetalInstanceTemplate with an explicit ID that matches the BMFO CRD
 		// validation pattern (^[a-zA-Z_][a-zA-Z0-9._]*$). Auto-generated UUIDs start with
@@ -469,7 +473,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 	It("rejects public updates that change network attachments", func(ctx context.Context) {
 		// NetworkClass is a deployment singleton. Reuse the tenant-default subnet
 		// and security group instead of creating a second NetworkClass.
-		network := getTenantDefaultNetworkFixture(ctx, usersGroup, "")
+		network := getTenantDefaultNetworkFixture(ctx, tenantName, "")
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
 				Metadata: publicv1.Metadata_builder{

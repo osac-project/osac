@@ -68,7 +68,6 @@ var _ = Describe("Cluster reconciler", func() {
 	BeforeEach(func() {
 		// Create a context:
 		ctx = context.Background()
-		ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
 
 		// Create the clients:
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())

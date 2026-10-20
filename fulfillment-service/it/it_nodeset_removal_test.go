@@ -42,9 +42,6 @@ var _ = Describe("Node set removal", func() {
 
 	BeforeEach(func() {
 		ctx = context.Background()
-		// A persisted tenant-default subnet can be injected into Cluster creates;
-		// keep a ready NetworkClass available for its canonical Hub validation.
-		ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
 
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
 		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())

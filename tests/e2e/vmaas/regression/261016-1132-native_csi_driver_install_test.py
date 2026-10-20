@@ -173,8 +173,6 @@ def test_stage2_installs_missing_native_csi_operators_and_skips_existing(
                 )
                 version = csv.get("spec", {}).get("version", "")
                 assert version, f"Installed CSV {installed_csv} has no version"
-                # The AAP task logs the CSV/version; avoid duplicating raw API values
-                # from the generic Kubernetes client, which is also used to read Secrets.
                 installed_csvs[operator["package"]] = csv
 
                 install_plans = k8s_hub_client.list_json(resource="installplans", namespace=operator["namespace"]).get(
@@ -207,6 +205,19 @@ def test_stage2_installs_missing_native_csi_operators_and_skips_existing(
                         f"AAP job succeeded but CSIDriver {driver} was not registered"
                     )
                 before_noop[operator["subscription"]] = {"spec": spec, "installedCSV": installed_csv}
+
+            initial_stdout = _controller_request(
+                controller_url=controller_url, token=token, path=f"jobs/{initial_job_id}/stdout/?format=json"
+            ).get("content", "")
+            assert isinstance(initial_stdout, str) and initial_stdout, (
+                f"AAP install job {initial_job_id} returned no JSON stdout content"
+            )
+            for operator in _OPERATORS:
+                installed_csv = before_noop[operator["subscription"]]["installedCSV"]
+                installed_version = installed_csvs[operator["package"]]["spec"]["version"]
+                assert installed_csv in initial_stdout and installed_version in initial_stdout, (
+                    f"AAP install output did not record the selected CSV and version for {operator['package']}"
+                )
 
             trident_orchestrator = k8s_hub_client.get_json(
                 resource="tridentorchestrators.trident.netapp.io", name="trident", namespace="openshift-operators"

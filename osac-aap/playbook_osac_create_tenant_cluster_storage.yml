@@ -143,10 +143,23 @@
           vars:
             csi_driver_install_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
 
-        - name: Install the selected OSAC CSI driver role
+        - name: Install the test-only CSI driver override
+          when:
+            - lookup('env', 'OSAC_AAP_ENABLE_TEST_INSTALL_OVERRIDES', default='false') | bool
+            - csi_driver_install_override is defined
           ansible.builtin.include_role:
-            name: "{{ _csi_driver_install_selected_role }}"
-            tasks_from: "{{ _csi_driver_install_selected_tasks_from }}"
+            name: "{{ csi_driver_install_override.name }}"
+            tasks_from: "{{ csi_driver_install_override.tasks_from }}"
+          vars:
+            csi_driver_install_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
+
+        - name: Install the production OSAC CSI driver role
+          when: >-
+            not (lookup('env', 'OSAC_AAP_ENABLE_TEST_INSTALL_OVERRIDES', default='false') | bool
+                 and csi_driver_install_override is defined)
+          ansible.builtin.include_role:
+            name: osac.service.csi_driver_install
+            tasks_from: main.yaml
           vars:
             csi_driver_install_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
 

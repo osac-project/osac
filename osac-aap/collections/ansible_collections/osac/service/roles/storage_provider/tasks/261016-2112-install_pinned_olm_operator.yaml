@@ -26,7 +26,11 @@
     _storage_provider_olm_subscription.resources | length > 0
     and (
       (_storage_provider_olm_subscription.resources[0].status.installedCSV | default('') | length > 0)
-      or _storage_provider_olm_subscription.resources[0].status.installPlanRef.name is defined
+      or (
+        _storage_provider_olm_subscription.resources[0].status.installPlanRef.name is defined
+        and _storage_provider_olm_subscription.resources[0].status.currentCSV | default('', true) | length > 0
+        and _storage_provider_olm_subscription.resources[0].status.bundleLookups | default([], true) | length > 0
+      )
     )
 
 - name: Determine whether the provider operator already has an installed CSV
@@ -48,37 +52,49 @@
   delay: 10
   until: _storage_provider_olm_install_plan.resources | length > 0
 
-- name: Select the current operator CSV from the Subscription's InstallPlan
+- name: Resolve the current operator CSV from the stable-channel Subscription status
   when: _storage_provider_olm_installed_csv | length == 0
   ansible.builtin.set_fact:
-    _storage_provider_olm_target_csvs: >-
-      {{ _storage_provider_olm_install_plan.resources[0].spec.clusterServiceVersionNames
-         | select('match', '^' ~ storage_provider_olm_operator_package ~ '\.') | list }}
+    _storage_provider_olm_target_csv: >-
+      {{ _storage_provider_olm_subscription.resources[0].status.currentCSV }}
 
-- name: Validate the initial InstallPlan belongs to this Subscription and package
+- name: Validate the initial InstallPlan matches the current stable-channel resolution
   when: _storage_provider_olm_installed_csv | length == 0
   ansible.builtin.assert:
     that:
+      - _storage_provider_olm_target_csv is match('^' ~ storage_provider_olm_operator_package ~ '\.')
       - >-
         _storage_provider_olm_install_plan.resources[0].spec.clusterServiceVersionNames
-        | default([]) | length == 1
-      - _storage_provider_olm_target_csvs | length == 1
+        | default([]) == [_storage_provider_olm_target_csv]
+      - >-
+        _storage_provider_olm_subscription.resources[0].status.currentCSV
+        == _storage_provider_olm_target_csv
       - >-
         (_storage_provider_olm_install_plan.resources[0].metadata.ownerReferences | default([])
          | selectattr('kind', 'equalto', 'Subscription')
          | selectattr('name', 'equalto', storage_provider_olm_operator_subscription)
          | selectattr('uid', 'equalto', _storage_provider_olm_subscription.resources[0].metadata.uid)
          | list | length) == 1
+      - >-
+        _storage_provider_olm_subscription.resources[0].status.bundleLookups
+        | default([], true) | rejectattr('catalogSourceRef.name', 'equalto', storage_provider_olm_subscription_installer.catalog_source)
+        | list | length == 0
+      - >-
+        _storage_provider_olm_subscription.resources[0].status.bundleLookups
+        | default([], true) | rejectattr('catalogSourceRef.namespace', 'equalto', storage_provider_olm_subscription_installer.catalog_namespace)
+        | list | length == 0
     fail_msg: >-
-      The initial InstallPlan for '{{ storage_provider_olm_operator_subscription }}' must belong to its
-      current Subscription and contain only the provider's CSV.
+      The initial InstallPlan for '{{ storage_provider_olm_operator_subscription }}' must match the
+      Subscription's current stable-channel CSV, belong to the current Subscription, and resolve
+      from '{{ storage_provider_olm_subscription_installer.catalog_source }}' in
+      '{{ storage_provider_olm_subscription_installer.catalog_namespace }}'.
 
 - name: Set the CSV selected by the current stable channel
   ansible.builtin.set_fact:
     _storage_provider_olm_target_csv: >-
       {{ _storage_provider_olm_installed_csv
          if _storage_provider_olm_installed_csv | length > 0
-         else _storage_provider_olm_target_csvs[0] }}
+         else _storage_provider_olm_subscription.resources[0].status.currentCSV }}
 
 - name: Approve the initial InstallPlan selected by OLM
   when:

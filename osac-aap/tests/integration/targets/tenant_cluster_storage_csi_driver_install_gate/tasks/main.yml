@@ -933,7 +933,7 @@
         fail_msg: "The native Trident installer ran even though the CSIDriver already exists"
         success_msg: "The existing Trident CSIDriver skipped installation"
 
-- name: "Native CSI Driver Ensure - Reject unsupported providers and NetApp NFS"
+- name: "Native CSI Driver Ensure - Skip unsupported providers and reject NetApp NFS"
   hosts: localhost
   gather_facts: false
 
@@ -942,26 +942,20 @@
     tenant_namespace: osac-system
 
   tasks:
-    - name: Reject an unsupported provider
-      block:
-        - name: Call driver ensure for an unsupported provider
-          ansible.builtin.include_role:
-            name: osac.service.storage_provider
-          vars:
-            storage_provider_action: ensure_csi_driver
-            storage_provider_tiers:
-              - name: unsupported
-                protocol: block
-                provider: pure
+    - name: Skip provider without a native CSI handler
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: ensure_csi_driver
+        storage_provider_tiers:
+          - name: unsupported
+            protocol: block
+            provider: pure
 
-        - name: Fail if the unsupported provider was accepted
-          ansible.builtin.fail:
-            msg: "The driver ensure action accepted an unsupported provider"
-      rescue:
-        - name: Assert unsupported provider failure is actionable
-          ansible.builtin.assert:
-            that:
-              - ansible_failed_result.msg is search('Unsupported provider')
+    - name: Assert provider without a native CSI handler was skipped
+      ansible.builtin.assert:
+        that:
+          - _native_csi_driver_unknown_providers == ['pure']
 
     - name: Reject NetApp NFS
       block:

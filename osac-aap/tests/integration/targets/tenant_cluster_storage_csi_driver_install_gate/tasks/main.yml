@@ -1396,8 +1396,11 @@
         - name: Assert already-registered drivers do not acquire the install Lease
           ansible.builtin.assert:
             that:
+              - not (_native_csi_driver_install_lock_acquired | bool)
               - _vast_native_csi_noop_lease.resources | length == 0
-            fail_msg: "The native CSI install Lease was acquired even though all required drivers exist"
+            fail_msg: >-
+              The native CSI install Lease was acquired or remains present even
+              though all required drivers exist
             success_msg: "Already-registered native CSI drivers skipped the install Lease"
 
         - name: Read override log after VAST idempotent rerun

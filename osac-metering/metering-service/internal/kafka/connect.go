@@ -1,13 +1,17 @@
 package kafka
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/IBM/sarama"
+
+	"github.com/osac-project/osac-metering/internal/topics"
 )
 
 type ConnectionConfig struct {
@@ -19,7 +23,9 @@ type ConnectionConfig struct {
 
 func NewSyncProducer(cfg ConnectionConfig) (sarama.SyncProducer, error) {
 	brokers := SplitAndTrim(cfg.Brokers, ",")
-	sc := NewProducerConfig()
+	sc := sarama.NewConfig()
+	sc.Version = sarama.V3_9_0_0
+	sc.Producer.Return.Successes = true
 	if err := ConfigureTLS(sc, cfg.TLSCACert); err != nil {
 		return nil, err
 	}
@@ -30,31 +36,48 @@ func NewSyncProducer(cfg ConnectionConfig) (sarama.SyncProducer, error) {
 }
 
 func VerifyTopicExists(cfg ConnectionConfig, topic string) error {
+	tenants, err := ListEventTenants(context.Background(), cfg)
+	if err != nil {
+		return err
+	}
+	for _, t := range tenants {
+		if topics.Events(t) == topic {
+			return nil
+		}
+	}
+	return fmt.Errorf("topic %q does not exist on cluster (%d tenants available)", topic, len(tenants))
+}
+
+// ListEventTenants returns the tenants that have an event topic, sorted by name. Metering
+// discovers tenants this way: a tenant exists for metering when its event topic does.
+func ListEventTenants(ctx context.Context, cfg ConnectionConfig) ([]string, error) {
 	brokers := SplitAndTrim(cfg.Brokers, ",")
 	sc := sarama.NewConfig()
 	sc.Version = sarama.V3_9_0_0
 	if err := ConfigureTLS(sc, cfg.TLSCACert); err != nil {
-		return err
+		return nil, err
 	}
 	if err := ConfigureSASL(sc, cfg.SASLUser, cfg.SASLPassFile); err != nil {
-		return err
+		return nil, err
 	}
 	client, err := sarama.NewClient(brokers, sc)
 	if err != nil {
-		return fmt.Errorf("connecting to kafka: %w", err)
+		return nil, fmt.Errorf("connecting to kafka: %w", err)
 	}
 	defer func() { _ = client.Close() }()
 
-	topics, err := client.Topics()
+	names, err := client.Topics()
 	if err != nil {
-		return fmt.Errorf("listing topics: %w", err)
+		return nil, fmt.Errorf("listing topics: %w", err)
 	}
-	for _, t := range topics {
-		if t == topic {
-			return nil
+	var tenants []string
+	for _, name := range names {
+		if tenant, ok := topics.TenantOfEvents(name); ok {
+			tenants = append(tenants, tenant)
 		}
 	}
-	return fmt.Errorf("topic %q does not exist on cluster (%d topics available)", topic, len(topics))
+	sort.Strings(tenants)
+	return tenants, nil
 }
 
 func ConfigureTLS(sc *sarama.Config, caCertPath string) error {

@@ -19,24 +19,32 @@ interface ClusterStateActivity {
   activityWarning: boolean;
 }
 
+interface ClusterStatusInfo {
+  status: StatusKind;
+  text: (t: TFunction) => string;
+}
+
+const UNKNOWN_CLUSTER_STATUS: ClusterStatusInfo = {
+  status: 'unspecified',
+  text: (t) => t('Unknown'),
+};
+
+const CLUSTER_STATUS_MAP = new Map<ClusterState, ClusterStatusInfo>([
+  [ClusterState.UNSPECIFIED, UNKNOWN_CLUSTER_STATUS],
+  [ClusterState.PROGRESSING, { status: 'progressing', text: (t) => t('Provisioning') }],
+  [ClusterState.READY, { status: 'ready', text: (t) => t('Ready') }],
+  [ClusterState.FAILED, { status: 'failed', text: (t) => t('Failed') }],
+  [ClusterState.DELETING, { status: 'progressing', text: (t) => t('Deleting') }],
+  [ClusterState.DELETE_FAILED, { status: 'failed', text: (t) => t('Delete failed') }],
+]);
+
 const resolveClusterState = (
   state: ClusterState | undefined,
   t: TFunction,
 ): Pick<ClusterStateActivity, 'stateKind' | 'stateText'> => {
-  switch (state) {
-    case ClusterState.PROGRESSING:
-      return { stateKind: 'progressing', stateText: t('Provisioning') };
-    case ClusterState.READY:
-      return { stateKind: 'ready', stateText: t('Ready') };
-    case ClusterState.FAILED:
-      return { stateKind: 'failed', stateText: t('Failed') };
-    case ClusterState.DELETING:
-      return { stateKind: 'progressing', stateText: t('Deleting') };
-    case ClusterState.DELETE_FAILED:
-      return { stateKind: 'failed', stateText: t('Delete failed') };
-    default:
-      return { stateKind: 'unspecified', stateText: t('Unknown') };
-  }
+  const { status, text } =
+    CLUSTER_STATUS_MAP.get(state ?? ClusterState.UNSPECIFIED) ?? UNKNOWN_CLUSTER_STATUS;
+  return { stateKind: status, stateText: text(t) };
 };
 
 const formatClusterStateActivity = (
@@ -45,21 +53,24 @@ const formatClusterStateActivity = (
 ): ClusterStateActivity => {
   const state = status?.state;
   const stateInfo = resolveClusterState(state, t);
-  if (status?.state !== ClusterState.PROGRESSING) {
+  if (!status || state !== ClusterState.PROGRESSING) {
     return { ...stateInfo, activityWarning: false };
   }
 
   const reason = status.conditions.find(
     (condition) => condition.type === ClusterConditionType.PROGRESSING,
   )?.reason;
+  let activityText: string;
+  if (!reason?.trim() || reason === 'StageUnknown') {
+    activityText = t('Stage unknown');
+  } else if (reason === 'Stalled') {
+    activityText = t('Stalled');
+  } else {
+    activityText = reason;
+  }
   return {
     ...stateInfo,
-    activityText:
-      !reason?.trim() || reason === 'StageUnknown'
-        ? t('Stage unknown')
-        : reason === 'Stalled'
-          ? t('Stalled')
-          : reason,
+    activityText,
     activityWarning: reason === 'Stalled',
   };
 };

@@ -478,7 +478,7 @@
               delay: 10
               until: >-
                 _netapp_trident_orchestrator.resources | length > 0
-                and _netapp_trident_orchestrator.resources[0].status.status == 'Installed'
+                and _netapp_trident_orchestrator.resources[0].status.status | default('') == 'Installed'
 
     - name: Wait for native Trident CSI registration
       when:

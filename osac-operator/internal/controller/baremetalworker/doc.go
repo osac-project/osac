@@ -32,17 +32,20 @@
 // A lost Create acknowledgement keeps the same reservation. A fresh invocation
 // recovers by owned name or same-scope AlreadyExists; List omission is not absence.
 // A definitively rejected Create — a terminal gRPC status whose transaction the
-// server rolled back — is instead recorded in the same invocation that receives
-// it: the selected slot is checkpointed to Failed with its journal re-armed to
-// Reserved, so cluster-deletion teardown cancels the reservation and the
-// standard failed-worker machinery arms the retry backoff (the WorkersFailed
-// condition and counts converge with that arming write, one boundary later). The
-// checkpoint re-reads the authoritative order and fences on worker-journal drift
-// only, because the deletion race that produces definitive rejections also
-// invalidates the invocation's resourceVersion; a concurrent deletion is
-// expected and tolerated. Transport-class failures (Unavailable,
-// DeadlineExceeded, canceled) and unknown outcomes keep the Attempted journal
-// and never authorize reservation cancellation.
+// server rolled back — checkpoints the selected slot to Failed/Reserved only
+// when this invocation entered with Reserved and persisted its Attempted intent.
+// A later rejection cannot erase an earlier unknown outcome or legacy uncertainty.
+// Teardown can cancel that re-armed reservation; the standard failed-worker
+// machinery owns attempt counting and backoff (WorkersFailed and counts converge
+// with its arming write, one boundary later). The checkpoint issues one atomic
+// conditional JSON Patch with tests for the observed ClusterOrder UID and complete
+// selected worker entry, then replaces only that entry. It performs no post-Create
+// Get, resourceVersion test or local retry. Target drift/removal/reordering and
+// object replacement fail closed; deletion and unrelated metadata, spec, condition
+// or other-worker writes do not invalidate the completed RPC's evidence. Success
+// accounting follows verified response retention. Transport-class failures
+// (Unavailable, DeadlineExceeded, canceled) and unknown outcomes keep the
+// Attempted journal and never authorize reservation cancellation.
 // Name-based creation recovery rejects ambiguous, foreign and deleting candidates.
 // Recorded deleting IDs and finalization recovery still remain observable.
 // Finalization takes the identity-only recovery path in worker_teardown.go.

@@ -114,12 +114,21 @@ var _ = Describe("ensureBMI marks definitive Create rejections", func() {
 	})
 })
 
-// rejectionStatusClient models an apiserver using a schema that prunes the
-// checkpoint's failure fields from the rejection patch and its response,
-// without adding production fault hooks.
+// rejectionStatusClient corrupts only the returned checkpoint response,
+// without adding production fault hooks or altering pre-encoded RawPatch bytes.
 type rejectionStatusClient struct {
 	client.Client
 	stripRejection bool
+	patches        int
+	gets           int
+	patchErr       error
+}
+
+func (c *rejectionStatusClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*v1alpha1.ClusterOrder); ok {
+		c.gets++
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
 }
 
 func (c *rejectionStatusClient) Status() client.SubResourceWriter {
@@ -132,15 +141,34 @@ type rejectionStatusWriter struct {
 }
 
 func (w *rejectionStatusWriter) Patch(ctx context.Context, obj client.Object, p client.Patch, opts ...client.SubResourcePatchOption) error {
+	w.c.patches++
+	if w.c.patchErr != nil {
+		return w.c.patchErr
+	}
+	if err := w.SubResourceWriter.Patch(ctx, obj, p, opts...); err != nil {
+		return err
+	}
 	if co, ok := obj.(*v1alpha1.ClusterOrder); ok && w.c.stripRejection {
-		// Model an apiserver using a schema that prunes the failure fields.
+		// Model a response that does not retain the required checkpoint fields.
 		for i := range co.Status.Workers {
 			if co.Status.Workers[i].LastFailureReason == eventReasonBMICreateRejected {
 				co.Status.Workers[i].LastFailureReason = ""
 			}
 		}
 	}
-	return w.SubResourceWriter.Patch(ctx, obj, p, opts...)
+	return nil
+}
+
+type rejectionCountingReader struct {
+	client.Reader
+	gets int
+}
+
+func (r *rejectionCountingReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*v1alpha1.ClusterOrder); ok {
+		r.gets++
+	}
+	return r.Reader.Get(ctx, key, obj, opts...)
 }
 
 var _ = Describe("recordBMICreateRejection checkpoint", func() {
@@ -159,9 +187,28 @@ var _ = Describe("recordBMICreateRejection checkpoint", func() {
 	}
 	rejectionErr := status.Error(codes.InvalidArgument, "the owner reference of bare_metal_instances targets a deleting cluster")
 
+	It("uses one status patch without an additional ClusterOrder Get", func() {
+		r, _, co, prev := rejectionHarness("rejection-no-refetch")
+		reader := &rejectionCountingReader{Reader: r.apiReader}
+		r.apiReader = reader
+		wrapped := &rejectionStatusClient{Client: r.Client}
+		r.Client = wrapped
+		Expect(r.recordBMICreateRejection(context.Background(), co, prev, rejectionErr)).To(Succeed())
+		Expect(reader.gets).To(BeZero())
+		Expect(wrapped.patches).To(Equal(1))
+		Expect(wrapped.gets).To(BeZero())
+	})
+
 	It("persists the rejection checkpoint with event and metric", func() {
 		r, _, co, prev := rejectionHarness("rejection-record")
 		ctx := context.Background()
+		prev.AttemptCount = 3
+		stamp := metav1.NewTime(time.Now().Add(-time.Minute))
+		prev.NextRetryTime = &stamp
+		prev.ReadySince = &stamp
+		Expect(r.Status().Update(ctx, co)).To(Succeed())
+		prev = &co.Status.Workers[0] // Update replaces the response's worker slice.
+		origin := prev.AttemptStartedAt.DeepCopy()
 		failures := workerProvisioningFailures.WithLabelValues(tenantOf(co), workerTypeBareMetal, prev.InstanceType)
 		before := testutil.ToFloat64(failures)
 		Expect(r.recordBMICreateRejection(ctx, co, prev, rejectionErr)).To(Succeed())
@@ -174,8 +221,8 @@ var _ = Describe("recordBMICreateRejection checkpoint", func() {
 		Expect(got.LastFailureTime).NotTo(BeNil(), "checkpoint: %+v", got)
 		Expect(got.NextRetryTime).To(BeNil(), "handleFailedWorkers owns backoff re-arming: %+v", got)
 		Expect(got.ReadySince).To(BeNil(), "checkpoint: %+v", got)
-		Expect(got.AttemptCount).To(Equal(int32(0)), "handleFailedWorkers owns attempt counting: %+v", got)
-		Expect(got.AttemptStartedAt).NotTo(BeNil(), "cleanup checkpoint owns clearing the origin: %+v", got)
+		Expect(got.AttemptCount).To(Equal(int32(3)), "handleFailedWorkers owns attempt counting: %+v", got)
+		Expect(got.AttemptStartedAt).To(Equal(origin), "cleanup checkpoint owns clearing the origin: %+v", got)
 		// The invocation's copies reflect the persisted response.
 		Expect(prev.Phase).To(Equal(workerPhaseFailed), "copy-back: %+v", prev)
 		Expect(prev.BMICreateState).To(Equal(v1alpha1.WorkerBMICreateStateReserved), "copy-back: %+v", prev)
@@ -190,8 +237,8 @@ var _ = Describe("recordBMICreateRejection checkpoint", func() {
 	It("records the rejection when cluster deletion raced the create", func() {
 		r, _, co, prev := rejectionHarness("rejection-delete-race")
 		ctx := context.Background()
-		// The invocation's snapshot predates the deletion; only the
-		// authoritative read the checkpoint performs sees it.
+		// The invocation's resourceVersion predates deletion. Only the
+		// selected worker and UID, not that version, fence the checkpoint.
 		Expect(r.Delete(ctx, co)).To(Succeed())
 		Expect(r.recordBMICreateRejection(ctx, co, prev, rejectionErr)).To(Succeed())
 		Expect(r.apiReader.Get(ctx, client.ObjectKeyFromObject(co), co)).To(Succeed())
@@ -207,7 +254,7 @@ var _ = Describe("recordBMICreateRejection checkpoint", func() {
 		Expect(r.apiReader.Get(ctx, client.ObjectKeyFromObject(co), latest)).To(Succeed())
 		latest.Status.Workers[0].Phase = workerPhaseUnbinding
 		Expect(r.Status().Update(ctx, latest)).To(Succeed())
-		Expect(r.recordBMICreateRejection(ctx, co, prev, rejectionErr)).To(MatchError(errWorkerObservationChanged))
+		Expect(r.recordBMICreateRejection(ctx, co, prev, rejectionErr)).To(HaveOccurred())
 		Expect(r.apiReader.Get(ctx, client.ObjectKeyFromObject(co), latest)).To(Succeed())
 		Expect(latest.Status.Workers[0].Phase).To(Equal(workerPhaseUnbinding), "competing write was overwritten")
 		Expect(latest.Status.Workers[0].LastFailureReason).NotTo(Equal(eventReasonBMICreateRejected), "rejection recorded past the fence")
@@ -216,18 +263,24 @@ var _ = Describe("recordBMICreateRejection checkpoint", func() {
 		Expect(recorder.Events).To(BeEmpty(), "fenced write emitted an event")
 	})
 
-	It("rejects a pruned checkpoint response", func() {
-		r, _, co, prev := rejectionHarness("rejection-prune")
-		ctx := context.Background()
-		wrapped := &rejectionStatusClient{Client: r.Client, stripRejection: true}
-		r.Client = wrapped
-		err := r.recordBMICreateRejection(ctx, co, prev, rejectionErr)
-		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("was not persisted"), "pruned response accepted: %v", err)
-		recorder, ok := r.recorder.(*events.FakeRecorder)
-		Expect(ok).To(BeTrue())
-		Expect(recorder.Events).To(BeEmpty(), "unverified write emitted an event")
-	})
+	for _, prune := range []bool{false, true} {
+		It(fmt.Sprintf("refuses an unverified checkpoint without success accounting (pruned=%t)", prune), func() {
+			r, _, co, prev := rejectionHarness("rejection-unverified")
+			before := co.DeepCopy()
+			failures := workerProvisioningFailures.WithLabelValues(tenantOf(co), workerTypeBareMetal, prev.InstanceType)
+			count := testutil.ToFloat64(failures)
+			wrapped := &rejectionStatusClient{Client: r.Client, stripRejection: prune}
+			if !prune {
+				wrapped.patchErr = errors.New("checkpoint write failed")
+			}
+			r.Client = wrapped
+			Expect(r.recordBMICreateRejection(context.Background(), co, prev, rejectionErr)).To(HaveOccurred())
+			Expect(co).To(Equal(before), "unverified response copied back")
+			Expect(*prev).To(Equal(before.Status.Workers[0]))
+			Expect(r.recorder.(*events.FakeRecorder).Events).To(BeEmpty())
+			Expect(testutil.ToFloat64(failures)).To(Equal(count))
+		})
+	}
 })
 
 var _ = Describe("createSelectedWorker records rejected creates", func() {
@@ -314,6 +367,35 @@ var _ = Describe("createSelectedWorker records rejected creates", func() {
 		Expect(fc.names).To(HaveLen(2), "retry create not issued exactly once: %v", fc.names)
 	})
 
+	for _, legacy := range []bool{false, true} {
+		It(fmt.Sprintf("preserves earlier unknown outcome after a later rejection (legacy=%t)", legacy), func() {
+			r, fc, co := rejectionStageHarness("rejection-unknown")
+			fc.createErr = status.Error(codes.Unavailable, "unknown outcome")
+			_, err := stepStage(r, co) // Reservation.
+			Expect(err).NotTo(HaveOccurred())
+			_, err = stepStage(r, co) // Unknown Create result.
+			Expect(status.Code(err)).To(Equal(codes.Unavailable))
+			Expect(co.Status.Workers[0].BMICreateState).To(Equal(v1alpha1.WorkerBMICreateStateAttempted))
+			if legacy {
+				co.Status.Workers[0].BMICreateState = ""
+				Expect(r.Status().Update(context.Background(), co)).To(Succeed())
+			}
+			before := co.DeepCopy().Status.Workers[0]
+			failures := workerProvisioningFailures.WithLabelValues(tenantOf(co), workerTypeBareMetal, before.InstanceType)
+			count := testutil.ToFloat64(failures)
+			fc.createErr = status.Error(codes.InvalidArgument, "later request rejected")
+			_, err = stepStage(r, co)
+			Expect(err).To(HaveOccurred(), "a later rejection cannot prove earlier absence")
+			Expect(fc.names).To(HaveLen(2))
+			// Legacy journals become Attempted at the existing write-ahead
+			// boundary; the rejection must never re-arm either kind of slot.
+			before.BMICreateState = v1alpha1.WorkerBMICreateStateAttempted
+			Expect(co.Status.Workers[0]).To(Equal(before))
+			Expect(testutil.ToFloat64(failures)).To(Equal(count))
+			Expect(r.recorder.(*events.FakeRecorder).Events).To(BeEmpty())
+		})
+	}
+
 	It("keeps an unavailable create a raw error with the attempt journal intact", func() {
 		r, fc, co := rejectionStageHarness("rejection-unavailable")
 		fc.createErr = status.Error(codes.Unavailable, "outage")
@@ -363,16 +445,15 @@ var _ = Describe("createSelectedWorker records rejected creates", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(added).To(BeTrue())
 		Expect(r.apiReader.Get(ctx, client.ObjectKeyFromObject(co), co)).To(Succeed())
-		co.Status.Workers[0].BMICreateState = v1alpha1.WorkerBMICreateStateAttempted
-		Expect(r.Status().Update(ctx, co)).To(Succeed())
-		// The apiserver prunes the failure fields from the checkpoint patch.
+		// The current invocation must enter with a cancellable reservation.
+		Expect(co.Status.Workers[0].BMICreateState).To(Equal(v1alpha1.WorkerBMICreateStateReserved))
+		// Corrupt the returned checkpoint after the status patch succeeds.
 		r.Client = &rejectionStatusClient{Client: r.Client, stripRejection: true}
 		prev := co.Status.Workers[0]
 		_, err = r.createSelectedWorker(ctx, co, authoritativeTestCluster(ctx, r, co),
 			&co.Spec.NodeRequests[0], &prev, workerCreationInputs{}, indexWorkerBMIs(nil))
 		Expect(err).To(HaveOccurred(), "recording failure swallowed into the boundary requeue")
-		Expect(err.Error()).To(ContainSubstring("was not persisted"), "recording failure lost: %v", err)
-		Expect(r.apiReader.Get(ctx, client.ObjectKeyFromObject(co), co)).To(Succeed())
-		Expect(co.Status.Workers[0].LastFailureReason).NotTo(Equal(eventReasonBMICreateRejected), "unverified checkpoint kept: %+v", co.Status.Workers[0])
+		Expect(co.Status.Workers[0].BMICreateState).To(Equal(v1alpha1.WorkerBMICreateStateAttempted), "unverified response copied back")
+		Expect(r.recorder.(*events.FakeRecorder).Events).To(BeEmpty())
 	})
 })

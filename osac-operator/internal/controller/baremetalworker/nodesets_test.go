@@ -26,8 +26,10 @@ import (
 
 	"time"
 
+	"github.com/google/uuid"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -93,6 +95,7 @@ func nodeSetHarness(name string, requests ...v1alpha1.NodeRequest) (*Reconciler,
 	Expect(v1alpha1.AddToScheme(scheme)).To(Succeed())
 	co := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{
 		Name:      name,
+		UID:       types.UID(uuid.NewString()),
 		Namespace: "test",
 		Labels:    map[string]string{clusterOrderIDLabel: name + "-cluster"},
 	}, Spec: v1alpha1.ClusterOrderSpec{NodeRequests: requests}}

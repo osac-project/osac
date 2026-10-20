@@ -5,6 +5,7 @@ package baremetalworker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -14,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
@@ -294,6 +296,10 @@ func (r *Reconciler) createSelectedWorker(
 		}
 		return workerBoundaryRequeue(), nil
 	}
+	// Only this invocation's Reserved -> Attempted transition can be undone
+	// by its rejected RPC. A later rejection says nothing about an earlier
+	// unknown outcome (including a legacy slot without an explicit journal).
+	wasReserved := prev.BMICreateState == v1alpha1.WorkerBMICreateStateReserved
 	if err := r.recordBMICreateAttempt(ctx, co, prev); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -310,7 +316,7 @@ func (r *Reconciler) createSelectedWorker(
 	// A definitive rejection is not an invocation error: record it as the
 	// worker's failure checkpoint so teardown and the retry machinery converge
 	// from durable state instead of an unknown-outcome journal.
-	if err != nil && errors.Is(err, errBMICreateRejected) {
+	if wasReserved && errors.Is(err, errBMICreateRejected) {
 		if recErr := r.recordBMICreateRejection(ctx, co, prev, err); recErr != nil {
 			return ctrl.Result{}, recErr
 		}
@@ -360,23 +366,26 @@ func (r *Reconciler) recordBMICreateAttempt(ctx context.Context, co *v1alpha1.Cl
 // selected worker's failure checkpoint: Phase=Failed with the journal re-armed
 // to Reserved — re-arming cleanupWorker's cancellable-reservation proof — and
 // NextRetryTime cleared, because handleFailedWorkers owns backoff re-arming.
-// Unlike the write-ahead attempt journal, this checkpoint follows an external
-// response: the authoritative order is re-read first and the patch fences on
-// worker-journal drift only, because the deletion race that produces definitive
-// rejections also invalidates the invocation's resourceVersion. The warning
-// event and failure metric are emitted only after the verified write.
+// One conditional JSON Patch tests the observed UID and complete worker entry
+// before replacing only that worker. Unrelated updates and deletion tolerate a
+// stale resourceVersion; target drift or object replacement fails atomically.
+// No post-Create read or local retry rebases the completed RPC's evidence.
+// The warning event and failure metric follow only a verified response.
 func (r *Reconciler) recordBMICreateRejection(
 	ctx context.Context, co *v1alpha1.ClusterOrder, worker *v1alpha1.WorkerStatus, createErr error,
 ) error {
-	latest := &v1alpha1.ClusterOrder{}
-	if err := r.apiReader.Get(ctx, client.ObjectKeyFromObject(co), latest); err != nil {
-		return err
+	latest := co.DeepCopy()
+	index := -1
+	for i := range latest.Status.Workers {
+		if latest.Status.Workers[i].Name == worker.Name {
+			index = i
+			break
+		}
 	}
-	recorded := workerByName(latest.Status.Workers, worker.Name)
-	if latest.UID != co.UID || recorded == nil || !reflect.DeepEqual(*recorded, *worker) {
+	if co.UID == "" || index < 0 || !reflect.DeepEqual(latest.Status.Workers[index], *worker) {
 		return errWorkerObservationChanged
 	}
-	base := latest.DeepCopy()
+	recorded := &latest.Status.Workers[index]
 	now := metav1.Now()
 	recorded.Phase = workerPhaseFailed
 	recorded.BMICreateState = v1alpha1.WorkerBMICreateStateReserved
@@ -385,7 +394,21 @@ func (r *Reconciler) recordBMICreateRejection(
 	recorded.LastFailureReason = eventReasonBMICreateRejected
 	recorded.LastFailureMessage = createErr.Error()
 	recorded.LastFailureTime = &now
-	if err := r.patchStatusFromBase(ctx, base, latest); err != nil {
+	type operation struct {
+		Op    string `json:"op"`
+		Path  string `json:"path"`
+		Value any    `json:"value"`
+	}
+	path := fmt.Sprintf("/status/workers/%d", index)
+	payload, err := json.Marshal([]operation{
+		{Op: "test", Path: "/metadata/uid", Value: co.UID},
+		{Op: "test", Path: path, Value: worker},
+		{Op: "replace", Path: path, Value: recorded},
+	})
+	if err != nil {
+		return err
+	}
+	if err := r.Status().Patch(ctx, latest, client.RawPatch(types.JSONPatchType, payload)); err != nil {
 		return err
 	}
 	// Require the API response to retain the checkpoint: an older CRD may

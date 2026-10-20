@@ -414,7 +414,9 @@ var _ = Describe("Private external IP attachments server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 
-			readyTime := timestamppb.New(time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC))
+			// The first attachment time must be after the parent's creation: the source
+			// contract clamps a first time on or before it.
+			readyTime := timestamppb.New(time.Now())
 			ready := createResponse.GetObject()
 			ready.GetStatus().SetState(privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_READY)
 			ready.GetStatus().SetStateTransitionTime(readyTime)

@@ -743,6 +743,10 @@ func (t *task) setFailed(err error) {
 	if !t.cluster.HasStatus() {
 		t.cluster.SetStatus(&privatev1.ClusterStatus{})
 	}
+	if t.cluster.GetStatus().GetState() != privatev1.ClusterState_CLUSTER_STATE_FAILED ||
+		t.cluster.GetStatus().GetStateTransitionTime() == nil {
+		t.cluster.GetStatus().SetStateTransitionTime(timestamppb.Now())
+	}
 	t.cluster.GetStatus().SetState(privatev1.ClusterState_CLUSTER_STATE_FAILED)
 	t.updateCondition(
 		privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_PROGRESSING,

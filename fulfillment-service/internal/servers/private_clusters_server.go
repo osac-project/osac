@@ -445,11 +445,13 @@ func (s *PrivateClustersServer) Update(ctx context.Context,
 			return err
 		}
 		if updateIncludesField(mask, "spec.version") &&
-			current.GetSpec().GetVersion().GetName() != candidate.GetSpec().GetVersion().GetName() {
+			!sameClusterVersionReference(current.GetSpec().GetVersion(), candidate.GetSpec().GetVersion()) {
 			populateUnsetNodeSetVersions(candidate.GetSpec().GetNodeSets(), current.GetSpec().GetVersion())
 			// Metering splits version-dimensioned usage at the acceptance time, so stamp it in
 			// the same transaction that applies the new version. Same-version updates never
-			// re-stamp: validateVersionUpdate already normalized them to the stored reference.
+			// re-stamp: validateVersionUpdate already normalized them to the stored reference,
+			// and enrichment that only fills the stored name into an id-only stored reference
+			// is not a version change either (see sameClusterVersionReference).
 			if !candidate.HasStatus() {
 				candidate.SetStatus(privatev1.ClusterStatus_builder{}.Build())
 			}
@@ -501,6 +503,18 @@ func populateUnsetNodeSetVersions(nodeSets map[string]*privatev1.ClusterNodeSet,
 			nodeSet.SetVersion(cloneMessage(version))
 		}
 	}
+}
+
+// sameClusterVersionReference reports whether two version references identify the same
+// version. Ids decide when both references carry one: an update whose stored reference is
+// id-only gets its stored name filled in by enrichment (validateVersionUpdate resolves the
+// reference), and that fill must not count as a version change or metering would split
+// billing on nothing. When either reference carries no id, the names decide.
+func sameClusterVersionReference(current, candidate *privatev1.ClusterVersionReference) bool {
+	if current.GetId() != "" && candidate.GetId() != "" {
+		return current.GetId() == candidate.GetId()
+	}
+	return current.GetName() == candidate.GetName()
 }
 
 // prepareUpdatedClusterNodeSets retains resolved metadata for unchanged NodeSets and
@@ -994,6 +1008,10 @@ func (s *PrivateClustersServer) validateAddOnOperatorImmutability(
 // validateVersionUpdate ensures version stays valid on update. Absent
 // version is normalized to the existing value (cannot be cleared once set).
 // Changed values are validated the same way as Create via ensureClusterVersion.
+// An update that resolves to the same version the cluster already carries (same id)
+// keeps the stored reference: persisting the enriched {id, name} shape over an id-only
+// stored reference would differ by the name, and the metering source contract counts
+// that as a version change, splitting billing on nothing.
 func (s *PrivateClustersServer) validateVersionUpdate(ctx context.Context,
 	request *privatev1.ClustersUpdateRequest) error {
 	if !updateIncludesField(request.GetUpdateMask(), "spec.version") {
@@ -1023,7 +1041,13 @@ func (s *PrivateClustersServer) validateVersionUpdate(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	return validateResolvedClusterVersion(version, version.GetMetadata().GetName(), "")
+	if err := validateResolvedClusterVersion(version, version.GetMetadata().GetName(), ""); err != nil {
+		return err
+	}
+	if sameClusterVersionReference(existingRef, newRef) {
+		newSpec.SetVersion(cloneMessage(existingRef))
+	}
+	return nil
 }
 
 // validateClusterNetworkAttachmentImmutability rejects changes to the complete

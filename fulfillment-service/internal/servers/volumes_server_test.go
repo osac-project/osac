@@ -265,6 +265,34 @@ var _ = Describe("Public volumes server", func() {
 				publicv1.VolumeState_VOLUME_STATE_CREATING))
 		})
 
+		// TC-C1a: Create carrying a spoofed status stores no fabricated fact.
+		It("Drops a caller-supplied status on create", func() {
+			// The insert is not checked by the metering source contract, so a caller-supplied
+			// status must never reach the stored object: the stored state is the
+			// system-written CREATING one, and the spoofed message is dropped.
+			response, err := server.Create(ctx, publicv1.VolumesCreateRequest_builder{
+				Object: publicv1.Volume_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "spoofed-status-volume",
+					}.Build(),
+					Spec: publicv1.VolumeSpec_builder{
+						StorageTier: "standard-block",
+						SizeGib:     100,
+						AccessMode:  publicv1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+					}.Build(),
+					Status: publicv1.VolumeStatus_builder{
+						State:   publicv1.VolumeState_VOLUME_STATE_AVAILABLE,
+						Message: new("spoofed message"),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			object := response.GetObject()
+			Expect(object.GetStatus().GetState()).To(Equal(
+				publicv1.VolumeState_VOLUME_STATE_CREATING))
+			Expect(object.GetStatus().GetMessage()).To(BeEmpty())
+		})
+
 		// TC-C2: Create with missing metadata.name returns InvalidArgument.
 		It("Returns InvalidArgument for create without name", func() {
 			_, err := server.Create(ctx, publicv1.VolumesCreateRequest_builder{
@@ -422,6 +450,27 @@ var _ = Describe("Public volumes server", func() {
 			Expect(response.GetObject().GetId()).To(Equal(created.GetId()))
 			Expect(response.GetObject().GetMetadata().GetName()).To(Equal("pub-vol-update"))
 			Expect(response.GetObject().GetSpec().GetStorageTier()).To(Equal("standard-block"))
+		})
+
+		It("Keeps the stored status on a maskless update carrying a spoofed status", func() {
+			created := createVolumeViaPublic("pub-vol-spoof")
+
+			response, err := server.Update(ctx, publicv1.VolumesUpdateRequest_builder{
+				Object: publicv1.Volume_builder{
+					Id: created.GetId(),
+					Metadata: publicv1.Metadata_builder{
+						Name: "pub-vol-spoof",
+					}.Build(),
+					Spec: created.GetSpec(),
+					Status: publicv1.VolumeStatus_builder{
+						State: publicv1.VolumeState_VOLUME_STATE_AVAILABLE,
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			// The spoofed status never reached the database: the state is the system-written
+			// CREATING, not the caller's AVAILABLE.
+			Expect(response.GetObject().GetStatus().GetState()).To(Equal(publicv1.VolumeState_VOLUME_STATE_CREATING))
 		})
 
 		// TC-U2: Update that changes spec.storage_tier returns InvalidArgument.

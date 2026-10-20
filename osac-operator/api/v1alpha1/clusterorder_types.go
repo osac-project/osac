@@ -260,6 +260,16 @@ type ClusterOrderStatus struct {
 	// +kubebuilder:validation:Enum=Progressing;Failed;Ready;Deleting
 	Phase ClusterOrderPhaseType `json:"phase,omitempty"`
 
+	// PhaseTransitionTime records when the controller last changed Phase. It moves only
+	// when Phase changes, so metering can bill state changes from the moment they happened
+	// rather than from when feedback noticed them: during a fulfillment outage every
+	// transition would otherwise be dated at recovery. It follows the RunningConfigSince
+	// pattern: stamped once per phase change, kept when unchanged.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Format=date-time
+	PhaseTransitionTime *metav1.Time `json:"phaseTransitionTime,omitempty"`
+
 	// Conditions holds an array of metav1.Condition that describe the state of the ClusterOrder
 	// +kubebuilder:validation:Optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`

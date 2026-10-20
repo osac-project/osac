@@ -228,6 +228,10 @@ func (s *ClustersServer) Create(ctx context.Context,
 		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process cluster")
 		return
 	}
+	// The status is output-only: only the system writes it. The metering source contract
+	// is not enforced on inserts, so a caller-supplied status must never reach the
+	// database as a fabricated fact.
+	privateCluster.ClearStatus()
 
 	// Delegate to the private server:
 	privateRequest := &privatev1.ClustersCreateRequest{}

@@ -424,11 +424,14 @@ var _ = Describe("Private ExternalIPPool CRUD", func() {
 			}
 			ip := ipGetResp.GetObject()
 			ip.SetStatus(privatev1.ExternalIPStatus_builder{
-				State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
+				State:               privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
+				StateTransitionTime: timestamppb.New(time.Now()),
 			}.Build())
 			_, _ = privateIPsClient.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
-				Object:     ip,
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+				Object: ip,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+					"status.state", "status.state_transition_time",
+				}},
 			}.Build())
 			_, _ = externalIPsClient.Delete(ctx, publicv1.ExternalIPsDeleteRequest_builder{
 				Id: ipId,
@@ -631,11 +634,14 @@ var _ = Describe("ExternalIP lifecycle", func() {
 		Expect(err).ToNot(HaveOccurred())
 		ip := ipGetResp.GetObject()
 		ip.SetStatus(privatev1.ExternalIPStatus_builder{
-			State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
+			State:               privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
+			StateTransitionTime: timestamppb.New(time.Now()),
 		}.Build())
 		_, err = privateExternalIPsClient.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
-			Object:     ip,
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+			Object: ip,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+				"status.state", "status.state_transition_time",
+			}},
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 
@@ -931,11 +937,14 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		Expect(err).ToNot(HaveOccurred())
 		ip := ipGetResp.GetObject()
 		ip.SetStatus(privatev1.ExternalIPStatus_builder{
-			State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
+			State:               privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
+			StateTransitionTime: timestamppb.New(time.Now()),
 		}.Build())
 		_, err = privateExternalIPsClient.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
-			Object:     ip,
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+			Object: ip,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+				"status.state", "status.state_transition_time",
+			}},
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 

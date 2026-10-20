@@ -191,6 +191,22 @@ func (e *ErrInUse) Error() string {
 	return e.Reason
 }
 
+// ErrMetering indicates that an update was rejected by the metering source contract: a
+// changed tracked field must carry a later change time, and fixed or already-set
+// set-once fields never change. Only buggy writers or direct SQL can produce it.
+type ErrMetering struct {
+	// Reason is the message of the trigger that rejected the write.
+	Reason string
+}
+
+// Error returns the error message.
+func (e *ErrMetering) Error() string {
+	if e.Reason == "" {
+		return "write violates the metering source contract"
+	}
+	return e.Reason
+}
+
 // ErrNotUnique is an error type that indicates that a value that must be globally unique is already in use. For
 // example, this is returned when a tenant e-mail domain is already assigned to another tenant.
 type ErrNotUnique struct {
@@ -246,4 +262,9 @@ const (
 	// write violates the owner-reference attribution contract: changing an existing reference, or setting one
 	// that targets a missing, deleting or cross-project resource.
 	errOwnerReferenceCode = "Z0005"
+
+	// errMeteringCode is the SQLSTATE error code returned by the 'enforce_metering_fields' trigger when an
+	// update violates the metering source contract: a changed tracked field without a later change time, or
+	// a change of a fixed or already-set set-once field.
+	errMeteringCode = "Z0006"
 )

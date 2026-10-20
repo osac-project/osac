@@ -26,6 +26,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
@@ -227,11 +228,14 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		Expect(err).ToNot(HaveOccurred())
 		bmi := bmiGetResp.GetObject()
 		bmi.SetStatus(privatev1.BareMetalInstanceStatus_builder{
-			State: privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING,
+			State:               privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING,
+			StateTransitionTime: timestamppb.New(time.Now()),
 		}.Build())
 		_, err = privateBareMetalInstancesClient.Update(ctx, privatev1.BareMetalInstancesUpdateRequest_builder{
-			Object:     bmi,
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+			Object: bmi,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+				"status.state", "status.state_transition_time",
+			}},
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 

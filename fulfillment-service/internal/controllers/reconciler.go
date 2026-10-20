@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"sync"
 	"time"
 
 	"github.com/spf13/pflag"
@@ -46,6 +47,7 @@ type ReconcilerBuilder[O dao.Object] struct {
 	name           string
 	flags          *pflag.FlagSet
 	function       ReconcilerFunction[O]
+	requeueAfter   func(O) time.Duration
 	eventFilter    string
 	objectFilter   string
 	sync           bool
@@ -60,6 +62,7 @@ type Reconciler[O dao.Object] struct {
 	logger         *slog.Logger
 	name           string
 	function       ReconcilerFunction[O]
+	requeueAfter   func(O) time.Duration
 	eventFilter    string
 	objectFilter   string
 	syncLoop       *work.Loop
@@ -76,6 +79,9 @@ type Reconciler[O dao.Object] struct {
 	getResponse    proto.Message
 	objectChannel  chan O
 	eventsClient   privatev1.EventsClient
+	requeueMu      sync.Mutex
+	requeues       map[string]uint64
+	nextRequeueID  uint64
 }
 
 // NewReconciler creates a builder that can then be used to configure and create a controller.
@@ -110,6 +116,13 @@ func (b *ReconcilerBuilder[O]) SetClient(value *grpc.ClientConn) *ReconcilerBuil
 // SetFunction sets the function that does the actual reconciliation. This is mandatory.
 func (b *ReconcilerBuilder[O]) SetFunction(value ReconcilerFunction[O]) *ReconcilerBuilder[O] {
 	b.function = value
+	return b
+}
+
+// SetRequeueAfter sets an optional callback that can request reconciliation again after a delay. Returning zero or a
+// negative duration skips the requeue. At most one delayed requeue per object is scheduled at a time.
+func (b *ReconcilerBuilder[O]) SetRequeueAfter(value func(O) time.Duration) *ReconcilerBuilder[O] {
+	b.requeueAfter = value
 	return b
 }
 
@@ -240,6 +253,7 @@ func (b *ReconcilerBuilder[O]) Build() (result *Reconciler[O], err error) {
 	reconciler := &Reconciler[O]{
 		logger:         b.logger,
 		function:       b.function,
+		requeueAfter:   b.requeueAfter,
 		name:           b.name,
 		eventFilter:    eventFilter,
 		objectFilter:   b.objectFilter,
@@ -255,6 +269,7 @@ func (b *ReconcilerBuilder[O]) Build() (result *Reconciler[O], err error) {
 		getResponse:    getResponse,
 		objectChannel:  make(chan O),
 		eventsClient:   eventsClient,
+		requeues:       make(map[string]uint64),
 	}
 
 	// Create the sync loop if enabled:
@@ -490,6 +505,10 @@ func (c *Reconciler[O]) Start(ctx context.Context) error {
 			c.logger.DebugContext(ctx, "Reconciling object",
 				slog.String("id", fresh.GetId()),
 			)
+			var requeueDelay time.Duration
+			if c.requeueAfter != nil {
+				requeueDelay = c.requeueAfter(fresh)
+			}
 			err = c.function(ctx, fresh)
 			if err != nil {
 				c.logger.ErrorContext(
@@ -498,8 +517,43 @@ func (c *Reconciler[O]) Start(ctx context.Context) error {
 					slog.Any("error", err),
 				)
 			}
+			if requeueDelay > 0 {
+				c.scheduleRequeue(ctx, fresh, requeueDelay)
+			}
 		}
 	}
+}
+
+func (c *Reconciler[O]) scheduleRequeue(ctx context.Context, object O, delay time.Duration) {
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
+
+	id := object.GetId()
+	c.requeueMu.Lock()
+	if _, exists := c.requeues[id]; exists {
+		c.requeueMu.Unlock()
+		return
+	}
+	c.nextRequeueID++
+	requeueID := c.nextRequeueID
+	c.requeues[id] = requeueID
+	c.requeueMu.Unlock()
+
+	time.AfterFunc(delay, func() {
+		c.requeueMu.Lock()
+		if c.requeues[id] == requeueID {
+			delete(c.requeues, id)
+		}
+		c.requeueMu.Unlock()
+
+		select {
+		case <-ctx.Done():
+		case c.objectChannel <- object:
+		}
+	})
 }
 
 func (c *Reconciler[O]) watchEvents(ctx context.Context) error {

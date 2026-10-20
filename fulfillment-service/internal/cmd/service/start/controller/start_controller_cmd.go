@@ -651,6 +651,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		SetName("virtual-network").
 		SetClient(r.client).
 		SetFunction(virtualNetworkReconcilerFunction).
+		SetRequeueAfter(virtualnetwork.DeletionRequeueAfter).
 		SetEventFilter("has(event.virtual_network) || has(event.network_class) || has(event.hub)").
 		SetHealthReporter(healthAggregator).
 		Build()

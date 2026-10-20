@@ -17,11 +17,13 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -136,6 +138,31 @@ var _ = Describe("buildSpec", func() {
 		Expect(spec.NetworkClass).To(Equal(networkClass))
 		Expect(spec.IPv4CIDR).To(Equal(ipv4))
 	})
+})
+
+var _ = Describe("DeletionRequeueAfter", func() {
+	It("requeues a deleting virtual network while the controller finalizer remains", func() {
+		virtualNetwork := privatev1.VirtualNetwork_builder{
+			Metadata: privatev1.Metadata_builder{
+				DeletionTimestamp: timestamppb.Now(),
+				Finalizers:        []string{finalizers.Controller},
+			}.Build(),
+		}.Build()
+
+		Expect(DeletionRequeueAfter(virtualNetwork)).To(Equal(time.Second))
+	})
+
+	DescribeTable("does not requeue when deletion can make no progress", func(metadata *privatev1.Metadata) {
+		virtualNetwork := privatev1.VirtualNetwork_builder{Metadata: metadata}.Build()
+
+		Expect(DeletionRequeueAfter(virtualNetwork)).To(BeZero())
+	},
+		Entry("not deleting", privatev1.Metadata_builder{Finalizers: []string{finalizers.Controller}}.Build()),
+		Entry("controller finalizer is gone", privatev1.Metadata_builder{
+			DeletionTimestamp: timestamppb.Now(),
+			Finalizers:        []string{"another-controller"},
+		}.Build()),
+	)
 })
 
 // newVirtualNetworkCR creates a typed VirtualNetwork CR for use with the fake client.

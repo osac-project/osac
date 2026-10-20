@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -39,6 +40,21 @@ import (
 
 // objectPrefix is the prefix that will be used in the `generateName` field of the resources created in the hub.
 const objectPrefix = "virtualnetwork-"
+
+const deletionRequeueInterval = time.Second
+
+// DeletionRequeueAfter requests another reconciliation while a VirtualNetwork is deleting and still has the
+// fulfillment controller finalizer. The backing Kubernetes object can finish deleting without producing a database
+// event, so this retry is needed when periodic full synchronization is disabled.
+func DeletionRequeueAfter(virtualNetwork *privatev1.VirtualNetwork) time.Duration {
+	if !virtualNetwork.HasMetadata() || !virtualNetwork.GetMetadata().HasDeletionTimestamp() {
+		return 0
+	}
+	if !slices.Contains(virtualNetwork.GetMetadata().GetFinalizers(), finalizers.Controller) {
+		return 0
+	}
+	return deletionRequeueInterval
+}
 
 // FunctionBuilder contains the data and logic needed to build a function that reconciles virtual networks.
 type FunctionBuilder struct {

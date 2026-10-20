@@ -109,6 +109,27 @@ var _ = Describe("Reconciler", func() {
 		Consistently(service.listCalls.Load, 100*time.Millisecond).Should(BeZero())
 	})
 
+	It("Requeues selected objects after a delay when full synchronization is disabled", func() {
+		builder.SetSync(false)
+		var requeueOnce atomic.Bool
+		builder.SetRequeueAfter(func(tenant *privatev1.Tenant) time.Duration {
+			if tenant.GetId() == "retry-tenant" && requeueOnce.CompareAndSwap(false, true) {
+				return 10 * time.Millisecond
+			}
+			return 0
+		})
+
+		start()
+		service.events <- privatev1.Event_builder{
+			Tenant: privatev1.Tenant_builder{Id: "retry-tenant"}.Build(),
+		}.Build()
+
+		Eventually(reconciled).Should(Receive(Equal("retry-tenant")))
+		Eventually(reconciled).Should(Receive(Equal("retry-tenant")))
+		Consistently(reconciled, 100*time.Millisecond).ShouldNot(Receive())
+		Consistently(service.listCalls.Load, 100*time.Millisecond).Should(BeZero())
+	})
+
 	DescribeTable("Reconciles dependencies from events when sync is disabled", func(event *privatev1.Event) {
 		service.items = []*privatev1.Tenant{privatev1.Tenant_builder{Id: "dependent-tenant"}.Build()}
 		builder.SetSync(false)

@@ -137,6 +137,12 @@ relist will eventually re-deliver the same state. Here it means the interesting 
 "lost update" (the periodic sync heals that) but "stale until the next sync", bounded by
 `syncInterval` when synchronization is enabled.
 
+Reconcilers may also opt into a delayed per-object retry with `SetRequeueAfter` when progress depends
+on an external asynchronous action that does not publish a database event. Delayed retries are
+coalesced per object and remain active when full synchronization is disabled. The VirtualNetwork
+reconciler uses this while its backing Kubernetes object is deleting, so it can remove the database
+finalizer as soon as that object disappears.
+
 ## End-to-end flow: `Create` for a `BareMetalInstance`
 
 ```text

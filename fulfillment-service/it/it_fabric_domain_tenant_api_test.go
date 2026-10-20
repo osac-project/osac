@@ -345,9 +345,20 @@ func deleteAndWaitForVirtualNetwork(ctx context.Context, client privatev1.Virtua
 		Expect(err).ToNot(HaveOccurred(), "deleting test VirtualNetwork %s", id)
 	}
 	Eventually(func(g Gomega) bool {
-		_, getErr := client.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
+		response, getErr := client.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
 		if isGRPCCode(getErr, grpccodes.NotFound) {
 			return true
+		}
+		if getErr == nil {
+			object := response.GetObject()
+			g.Expect(getErr).To(HaveOccurred(),
+				"VirtualNetwork %s still exists: finalizers=%v deletion_timestamp=%v hub=%q",
+				id,
+				object.GetMetadata().GetFinalizers(),
+				object.GetMetadata().GetDeletionTimestamp(),
+				object.GetStatus().GetHub(),
+			)
+			return false
 		}
 		g.Expect(getErr).ToNot(HaveOccurred())
 		// Wake the reconciler so it processes the deletion and

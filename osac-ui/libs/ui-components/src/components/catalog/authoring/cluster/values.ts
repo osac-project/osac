@@ -5,14 +5,14 @@ import {
   createEmptyNodeSetRow,
 } from '../../../Cluster/CreateWizard/fields';
 import {
+  type ProvisioningFieldValue,
+  provisioningFieldValue,
+} from '../../../ProvisioningWizard/fields/provisioningFieldValue';
+import {
   type CatalogGeneralValues,
   catalogGeneralValues,
   catalogGeneralValuesFromItem,
 } from '../CatalogGeneralStep';
-import {
-  type ProvisioningFieldValue,
-  provisioningFieldValue,
-} from '../../../ProvisioningWizard/fields/provisioningFieldValue';
 import { catalogValueFromPolicy } from '../catalogItemPolicy';
 
 export interface ClusterCatalogItemValues extends CatalogGeneralValues {

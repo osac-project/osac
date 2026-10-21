@@ -4,12 +4,12 @@ import { screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  ClusterCatalogItemSchema,
-  ClusterVersionState,
+  type BareMetalInstanceType,
   type ClusterCatalogItem,
+  ClusterCatalogItemSchema,
   type ClusterTemplate,
   type ClusterVersion,
-  type BareMetalInstanceType,
+  ClusterVersionState,
 } from '@osac/types';
 
 import ClusterCatalogItemWizard from './ClusterCatalogItemWizard';
@@ -131,6 +131,40 @@ describe('ClusterCatalogItemWizard', () => {
     expect(screen.queryByText(/external IP/i)).not.toBeInTheDocument();
   });
 
+  it('allows removing the initial node set from catalog authoring', async () => {
+    const existingItem = create(ClusterCatalogItemSchema, {
+      id: 'catalog-item-1',
+      metadata: { name: 'existing-item', tenant: 'test-tenant' },
+      template: { id: TEMPLATE.id },
+      fields: {
+        nodeSets: {
+          behavior: {
+            case: 'editable',
+            value: {
+              defaultValue: {
+                items: {
+                  workers: {
+                    size: 2,
+                    baremetalInstanceType: { id: HOST_TYPE.id },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    const { user } = renderWizard(existingItem);
+
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+
+    expect(await screen.findByText('Node set 1')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Remove node set' }));
+
+    expect(screen.queryByText('Node set 1')).not.toBeInTheDocument();
+    expect(screen.getByText('No node sets added yet.')).toBeInTheDocument();
+  });
+
   it('ends review with the tenant-admin unpublished alert', async () => {
     const { user } = renderWizard();
 
@@ -144,21 +178,16 @@ describe('ClusterCatalogItemWizard', () => {
     ).toBeInTheDocument();
   });
 
-  it('blocks Next when a locked node-set field is empty', async () => {
+  it('adds a required node set and prevents removing the last locked node set', async () => {
     const { user } = renderWizard();
 
     await fillGeneralStep(user, 'my-item');
     await user.click(screen.getByRole('button', { name: 'Next' }));
     const switches = await screen.findAllByRole('switch');
     await user.click(switches[1]);
-    await user.click(screen.getByRole('button', { name: 'Next' }));
 
-    expect(
-      await screen.findByText('Fix the highlighted errors before continuing.'),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText('At least one node set is required when this field is locked'),
-    ).toBeInTheDocument();
+    expect(await screen.findByText('Node set 1')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remove node set' })).toBeDisabled();
   });
 
   it('creates an unpublished item and omits empty editable fields', async () => {

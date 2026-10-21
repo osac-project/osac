@@ -1,8 +1,8 @@
 import { Content, Stack, StackItem, Title } from '@patternfly/react-core';
 
+import { useTranslation } from '../../../../hooks/useTranslation';
 import ClusterNodeSetsArrayField from '../../../Cluster/CreateWizard/ClusterNodeSetsArrayField';
 import ClusterVersionField from '../../../Cluster/CreateWizard/fields/ClusterVersionField';
-import { useTranslation } from '../../../../hooks/useTranslation';
 import OsacForm from '../../../Form/OsacForm';
 import ProvisioningFieldGroup from '../../../ProvisioningWizard/fields/ProvisioningFieldGroup';
 import CatalogField from '../CatalogField';
@@ -38,13 +38,18 @@ const ClusterCatalogConfigurationStep = () => {
             )}
           </CatalogField>
           <CatalogField name="nodeSets">
-            {({ valueName, isDisabled, labelInfo }) => (
+            {({ valueName, isDisabled, isRequired, labelInfo }) => (
               <ProvisioningFieldGroup
                 title={t('Node sets')}
                 titleId="cluster-catalog-node-sets"
                 actions={labelInfo}
               >
-                <ClusterNodeSetsArrayField name={valueName} isDisabled={isDisabled} />
+                <ClusterNodeSetsArrayField
+                  name={valueName}
+                  isDisabled={isDisabled}
+                  isRequired={isRequired}
+                  allowEmpty
+                />
               </ProvisioningFieldGroup>
             )}
           </CatalogField>

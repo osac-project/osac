@@ -176,6 +176,11 @@ jobs:
       working-directory: osac-installer
       run: uv run --project .. make mce-render-test
 
+    - name: Test BMF NetBox rendering
+      if: steps.should-run.outputs.run
+      working-directory: osac-installer
+      run: uv run --project .. make bmf-netbox-render-test
+
     - name: Run chart-testing lint
       working-directory: osac-installer
       run: ct lint --all --config ct.yaml

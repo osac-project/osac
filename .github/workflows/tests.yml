@@ -225,6 +225,10 @@ jobs:
           ref: ${{ inputs.commit }}
           persist-credentials: false
 
+      - name: Set up Python
+        if: inputs.kind == 'it-bare-metal-fulfillment-operator'
+        uses: ./.github/actions/setup-python
+
       - name: Set up Go
         if: inputs.kind == 'it-bare-metal-fulfillment-operator'
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6
@@ -252,6 +256,12 @@ jobs:
         env:
           CONTAINER_TOOL: docker
         run: make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
+
+      - name: Test BMF NetBox Secret lookup
+        if: inputs.kind == 'it-bare-metal-fulfillment-operator'
+        run: |
+          export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
+          uv run --project . python osac-installer/scripts/test-bmf-netbox-render.py --live-lookup-only
 
       - name: Run integration tests
         if: inputs.kind == 'it-bare-metal-fulfillment-operator'

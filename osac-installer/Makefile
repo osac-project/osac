@@ -421,6 +421,7 @@ endif
 		--namespace $(NS) --create-namespace \
 		--set osacNamespace=$(NS) \
 		--set kindClusterName=$(KIND_CLUSTER_NAME) \
+		--set ui.enabled=true \
 		--post-renderer $(DEV_FULL_HELM_POST_RENDERER) \
 		$(DEVSTACK_HELM_APPLY_ARGS) \
 		--wait --timeout 30m
@@ -478,7 +479,8 @@ ifeq ($(PROFILE),dev-full)
 	helm template osac-devstack charts/osac-devstack \
 		--namespace $(NS) \
 		--set osacNamespace=$(NS) \
-		--set kindClusterName=$(KIND_CLUSTER_NAME)
+		--set kindClusterName=$(KIND_CLUSTER_NAME) \
+		--set ui.enabled=true
 endif
 
 .PHONY: uninstall
@@ -686,8 +688,12 @@ openbao-security-context-test: helm-infra-deps ## Check OpenBao securityContext 
 kind-runtime-test: ## Check Kind runtime, sudo, image loading, and cluster cleanup with command stubs
 	python3 scripts/test-kind-runtime.py
 
+.PHONY: bmf-netbox-render-test
+bmf-netbox-render-test: helm-deps ## Check NetBox, Metal3 management, and Secret API Helm wiring
+	uv run --project .. python scripts/test-bmf-netbox-render.py
+
 .PHONY: helm-validate
-helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test mce-render-test dev-full-render-test openbao-security-context-test ## Validate all charts (lint + template)
+helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test mce-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test ## Validate all charts (lint + template)
 	@# bmaas-netbox-ci layers bmaas-ci as its base (see the profile-selection
 	@# block); validate the same combination the installer deploys.
 	@for d in values/*/; do \

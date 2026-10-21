@@ -339,7 +339,7 @@ aap:
     clusterFulfillment:
       enabled: false
       config:
-        DNS_CLASS: ""
+        DNS_CLASS: "dns.route53.dns"
         DNS_ZONE: ""
         SERVER_SSH_BASTION_HOST: ""
         SERVER_SSH_BASTION_USER: ""
@@ -411,22 +411,55 @@ bmf:
 # ---------------------
 # Bare Metal Fulfillment Operator — Metal3 Backend
 # ---------------------
-# Metal3 inventory and management backend configuration for the BMF operator.
+# Metal3 inventory and management configuration for the BMF operator.
 # When enabled, the chart creates osac-inventory-config and osac-management-config
 # Secrets with Metal3 backend type. The BMF operator mounts these at
 # /etc/osac/inventory/inventory.yaml and /etc/osac/management/management.yaml.
-# NOTE: metal3 nests under the same top-level bmf: key as bcm above — bcm and
-# metal3 are mutually exclusive backends, not separate bmf: blocks.
   metal3:
     # Set to true to create Metal3 config secrets via Helm.
-    # When false (default), secrets must be created manually.
+    # When false (default), the Metal3 inventory config is not created.
     enabled: false
-    # [REQUIRED when enabled] Namespace where BareMetalHost CRs are located.
-    # This is the namespace Metal3 uses for bare metal host management.
+    # [REQUIRED when metal3.enabled] Namespace where BareMetalHost CRs are located.
     # Example: "hardware-inventory"
     namespace: ""
     # Host class identifier written to the inventory config.
     hostClass: "metal3"
+
+# ---------------------
+# Bare Metal Fulfillment Operator — NetBox Backend
+# ---------------------
+# NetBox-backed BMF uses Metal3 for BMH management. Keep metal3.enabled false
+# and set bmf.netbox.bmhNamespace to the BMH namespace.
+# BMF creates a namespaced Role there that can get/create/update/delete Secrets
+# for per-host BMC credentials. Use a dedicated namespace.
+# Override bmf.secrets.netboxToken/netboxCA if custom Secret names are needed.
+  netbox:
+    enabled: false
+    # [REQUIRED when enabled] Namespace containing Metal3 BareMetalHosts and BMC Secrets.
+    bmhNamespace: ""
+    # [REQUIRED when enabled] NetBox API endpoint.
+    url: ""
+    # Secret data key containing the NetBox API token (default: "token").
+    tokenSecretKey: "token"
+    # Used only if bmf.secrets.netboxToken is absent from the BMF release namespace.
+    tokenValue: ""
+    # [OPTIONAL] PEM CA certificate stored in a dedicated Secret and mounted read-only.
+    caCert: ""
+    # HTTP endpoints are disabled unless this explicit opt-in is true.
+    allowInsecureHTTP: false
+
+# ---------------------
+# BMF Secret API client
+# ---------------------
+  secretAPI:
+    # Secret API gRPC endpoint.
+    url: "https://fulfillment-internal-api:8001"
+    # Must match service.auth.issuerUrl.
+    issuerUrl: "https://keycloak.keycloak.svc.cluster.local/realms/osac"
+    caBundle:
+      # Cluster trust-manager ConfigMap. Set empty to omit this CA mount.
+      configMap: "ca-bundle"
+      key: "bundle.pem"
 
 # ---------------------
 # Bundled PostgreSQL (dev/test)

@@ -99,7 +99,6 @@ var _ = Describe("MCP server", func() {
 	)
 
 	BeforeEach(func() {
-		Skip("OSAC-6371: quarantined – MCP fixture VirtualNetwork READY→PENDING race")
 		ctx = context.Background()
 		catalogItemID, computeInstanceID, otherComputeInstanceID = "", "", ""
 		templateID, diskImageID, instanceTypeID = "", "", ""
@@ -236,6 +235,7 @@ var _ = Describe("MCP server", func() {
 			}
 			Expect(cleanupNetworkClassFixture(cleanupCtx, networkClassesClient, networkClassID)).To(Succeed())
 		})
+		waitForNetworkClassReady(ctx, networkClassesClient, networkClassID)
 
 		err = updateNetworkClassStatusWithRetry(ctx, networkClassesClient, networkClassID, privatev1.NetworkClassStatus_builder{
 			State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,

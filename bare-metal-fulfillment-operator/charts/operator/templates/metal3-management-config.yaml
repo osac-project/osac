@@ -1,9 +1,9 @@
+{{- if or .Values.metal3.enabled .Values.netbox.enabled }}
+{{- $managementNamespace := "" }}
 {{- if .Values.metal3.enabled }}
-{{- if and .Values.bcm.enabled .Values.metal3.enabled }}
-{{- fail "bcm.enabled and metal3.enabled are mutually exclusive" }}
-{{- end }}
-{{- if not .Values.metal3.namespace }}
-{{- fail "metal3.enabled is true but metal3.namespace is not set" }}
+{{- $managementNamespace = .Values.metal3.namespace }}
+{{- else if .Values.netbox.enabled }}
+{{- $managementNamespace = .Values.netbox.bmhNamespace }}
 {{- end }}
 apiVersion: v1
 kind: Secret
@@ -19,5 +19,5 @@ stringData:
     type: metal3
     options:
       metal3:
-        namespace: {{ .Values.metal3.namespace | quote }}
+        namespace: {{ $managementNamespace | quote }}
 {{- end }}

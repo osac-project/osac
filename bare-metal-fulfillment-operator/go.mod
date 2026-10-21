@@ -4,16 +4,16 @@ go 1.26.3
 
 require (
 	github.com/go-logr/logr v1.4.4
-	github.com/gophercloud/gophercloud/v2 v2.14.0
+	github.com/gophercloud/gophercloud/v2 v2.15.0
 	github.com/gophercloud/utils/v2 v2.0.0-20260824073324-42b9474d09d4
-	github.com/metal3-io/baremetal-operator/apis v0.13.3
+	github.com/metal3-io/baremetal-operator/apis v0.14.2
 	github.com/netbox-community/go-netbox/v4 v4.3.0
 	github.com/onsi/ginkgo/v2 v2.33.1
 	github.com/onsi/gomega v1.44.0
 	github.com/osac-project/osac/osac-operator v0.0.14
 	github.com/osac-project/osac/osac-operator/api v0.0.7
 	github.com/prometheus/client_golang v1.25.0
-	github.com/stmcginnis/gofish v0.24.0
+	github.com/stmcginnis/gofish v0.27.0
 	go.uber.org/mock v0.6.0
 	k8s.io/api v0.37.1
 	k8s.io/apimachinery v0.37.1
@@ -90,7 +90,7 @@ require (
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/exp v0.0.0-20260908205506-85c1c2202aba // indirect
 	golang.org/x/mod v0.41.0 // indirect
-	golang.org/x/net v0.59.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/oauth2 v0.37.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect

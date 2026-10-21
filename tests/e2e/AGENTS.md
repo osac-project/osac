@@ -70,6 +70,10 @@ installer hook check in `enablement/test_installer_trust.py` against a full
 OSAC Helm release. Dev and CI profile values disable trust by default; enable
 trust explicitly when deploying the release E2E environment.
 
+Run `../osac-installer/scripts/test-ui-gateway.sh` against a deployed dev-full
+environment to verify the OSAC UI is reachable through its shared Gateway
+route. Set `OSAC_UI_URL` when the listener uses a non-default host or port.
+
 Run `enablement/test_ca_rotation_gate.py` with
 `OSAC_TRUST_ROTATION_PHASE=overlap` and the candidate
 `OSAC_TRUST_ROTATION_EXPECTED_HASH` before selecting the new leaf certificate.

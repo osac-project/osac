@@ -693,6 +693,7 @@ fi
                     self.assertEqual(args[3], release)
                     if release == "osac-devstack":
                         self.assertNotIn("--force-conflicts", args)
+                        self.assertIn("ui.enabled=true", args)
                         if version.startswith("v4."):
                             self.assertIn("--server-side=false", args)
                             self.assertEqual(args[args.index("--post-renderer") + 1], "osac-dev-full-awx-image")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -93,14 +94,31 @@ def test_agent_is_installing_uses_assisted_service_debug_state(state: str, expec
 
 
 def test_primary_caas_scenario_reports_each_stage_without_logging_secret_values(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, tmp_path: Path
 ) -> None:
+    key_file = tmp_path / "id.pub"
+    key_file.write_text("ssh-ed25519 unit-test-key\n")
     cli, grpc, private, k8s, metering = (Mock() for _ in range(5))
     private.ensure_disk_image.return_value = "disk-id"
-    private.ensure_cluster_version.return_value = {"name": "version-name"}
+    private.ensure_cluster_version.return_value = {"id": "version-id", "name": "version-name"}
     cli.create_cluster.return_value = "cluster-id"
+    cli.create_cluster_with_catalog_item.return_value = "cluster-id"
     grpc.list_cluster_ids.return_value = ["cluster-id"]
-    grpc.get_cluster.return_value = {"object": {"metadata": {"tenant": "tenant1"}}}
+    catalog_item_id = Mock(name="catalog-item-id")
+    private.create_cluster_catalog_item.return_value = catalog_item_id
+    grpc.get_cluster.return_value = {
+        "object": {
+            "metadata": {"tenant": "tenant1"},
+            "spec": {
+                "version": {"name": "version-name"},
+                "nodeSets": {"workers": {"size": 1, "baremetalInstanceType": {"name": "ci-worker-bm"}}},
+                "catalogItem": {"id": catalog_item_id},
+                "template": {"id": "template-id"},
+                "sshKey": {"id": "secret-id", "name": "test-ssh-key-secret"},
+                "pullSecretSecret": {"name": "sensitive-token"},
+            },
+        }
+    }
     grpc.list_baremetal_instance_ids.return_value = ["bmi-id"]
     grpc.get_baremetal_instance.return_value = {
         "object": {
@@ -108,12 +126,23 @@ def test_primary_caas_scenario_reports_each_stage_without_logging_secret_values(
                 "tenant": "tenant1",
                 "labels": {"osac.openshift.io/cluster-order": "order-a"},
                 "annotations": {"osac.openshift.io/owner-reference": "ClusterOrder/order-a"},
-            }
+            },
+            "spec": {
+                "template": {"id": "osac.templates.bm_host_provisioning", "shared": True},
+                "instanceType": {"name": "ci-worker-bm", "shared": True},
+                "sshKey": {"id": "secret-id"},
+            },
         }
     }
     k8s.namespace = "osac"
+    k8s.get_cluster_order_spec.return_value = {
+        "releaseImage": "release-image",
+        "nodeRequests": [{"bareMetal": {"instanceType": "ci-worker-bm"}, "numberOfNodes": 1}],
+        "sshKey": {"id": "secret-id"},
+    }
     k8s.get_json.return_value = {
-        "metadata": {"namespace": "osac", "annotations": {"osac.openshift.io/tenant": "tenant1"}}
+        "metadata": {"namespace": "osac", "annotations": {"osac.openshift.io/tenant": "tenant1"}},
+        "spec": {"sshAuthorizedKey": "ssh-ed25519 unit-test-key"},
     }
     k8s.list_json.return_value = {
         "items": [
@@ -153,7 +182,8 @@ def test_primary_caas_scenario_reports_each_stage_without_logging_secret_values(
             k8s_hub_client=k8s,
             cluster_template="template",
             pull_secret_name="sensitive-token",
-            ssh_public_key_path="/tmp/key.pub",
+            ssh_key_secret="test-ssh-key-secret",
+            ssh_public_key_path=str(key_file),
             metering=metering,
         )
 
@@ -162,7 +192,9 @@ def test_primary_caas_scenario_reports_each_stage_without_logging_secret_values(
     assert stages == [
         "CaaS: ensuring DiskImage and ClusterVersion",
         "CaaS: ClusterVersion available",
-        "CaaS: creating cluster",
+        "CaaS: creating ClusterCatalogItem",
+        "CaaS: ClusterCatalogItem created",
+        "CaaS: creating cluster from catalog item",
         "CaaS: cluster created",
         "CaaS: waiting for ClusterOrder",
         "CaaS: waiting for ClusterOrder to progress",

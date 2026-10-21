@@ -453,7 +453,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 				"tenant": %q,
 				"project": "web",
 				"data": {
-					"spec": {"ssh_public_key": "ssh-ed25519 AAAA"},
+					"spec": {"ssh_key": {"id": "w-1-key"}},
 					"status": {"cluster": {"id": "c-1"}, "node_set": "compute"}
 				}
 			}`, tenant))

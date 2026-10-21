@@ -55,6 +55,10 @@ func validateAndCanonicalizeClusterCatalogItemPolicies(
 		return err
 	}
 
+	if err := validateClusterCatalogItemSSHKeyPolicy(ctx, scope, fields.GetSshKey(), secretsDao); err != nil {
+		return err
+	}
+
 	if err := validateClusterCatalogItemNetworkCIDRPolicies(fields.GetNetwork()); err != nil {
 		return err
 	}
@@ -81,8 +85,8 @@ func applyClusterCatalogItemPolicies(spec *privatev1.ClusterSpec, fields *privat
 	if err := applyPolicy(fields.GetVersion(), spec.GetVersion() != nil, spec.SetVersion, decodeClusterVersionReferencePolicy, cloneMessage[*privatev1.ClusterVersionReference]); err != nil {
 		return fmt.Errorf("version: %w", err)
 	}
-	if err := applyPolicy(fields.GetSshPublicKey(), spec.HasSshPublicKey(), spec.SetSshPublicKey, decodeStringPolicy, identity[string]); err != nil {
-		return fmt.Errorf("ssh_public_key: %w", err)
+	if err := applyPolicy(fields.GetSshKey(), spec.GetSshKey() != nil, spec.SetSshKey, decodeFullSecretReferencePolicy, cloneMessage[*privatev1.SecretReference]); err != nil {
+		return fmt.Errorf("ssh_key: %w", err)
 	}
 	if err := applyPolicy(fields.GetPullSecretSecret(), spec.GetPullSecretSecret() != nil, spec.SetPullSecretSecret, decodeSecretReferencePolicy, cloneMessage[*privatev1.SecretLocalReference]); err != nil {
 		return fmt.Errorf("pull_secret_secret: %w", err)
@@ -219,6 +223,29 @@ func validateClusterCatalogItemPullSecretPolicy(
 	return nil
 }
 
+// validateClusterCatalogItemSSHKeyPolicy checks a locked/default Cluster SSH-key
+// reference. A shared offering cannot fix a tenant-owned key, so it may only
+// leave the field editable; everything else defers to the shared
+// validateCatalogItemSSHKeyPolicy used by VMaaS and BMaaS.
+func validateClusterCatalogItemSSHKeyPolicy(
+	ctx context.Context,
+	scope referenceScope,
+	policy *privatev1.FullSecretReferenceFieldPolicy,
+	secretsDao *dao.GenericDAO[*privatev1.Secret],
+) error {
+	if policy == nil {
+		return nil
+	}
+	state, err := decodeFullSecretReferencePolicy(policy)
+	if err != nil {
+		return catalogItemPolicyError("fields.ssh_key", err.Error())
+	}
+	if err := validateSharedCatalogItemLocalReferencePolicy(scope, "fields.ssh_key", state.hasLocked, state.hasDefault); err != nil {
+		return err
+	}
+	return validateCatalogItemSSHKeyPolicy(ctx, scope, policy, secretsDao)
+}
+
 // validateClusterCatalogItemNetworkCIDRPolicies validates and canonicalizes configured pod and service CIDRs.
 func validateClusterCatalogItemNetworkCIDRPolicies(network *privatev1.ClusterNetworkFieldPolicies) error {
 	if network == nil {
@@ -230,11 +257,8 @@ func validateClusterCatalogItemNetworkCIDRPolicies(network *privatev1.ClusterNet
 	return canonicalizeCatalogItemCIDRPolicy(network.GetServiceCidr(), "fields.network.service_cidr")
 }
 
-// validateClusterCatalogItemScalarPolicies checks SSH-key and automatic-external-IP policies without changing them.
+// validateClusterCatalogItemScalarPolicies checks automatic-external-IP policies without changing them.
 func validateClusterCatalogItemScalarPolicies(fields *privatev1.ClusterCatalogItemFields) error {
-	if err := validateCatalogItemStringPolicy(fields.GetSshPublicKey(), "fields.ssh_public_key", validateOpenSSHPublicKey); err != nil {
-		return err
-	}
 	if err := validateCatalogItemBoolPolicy(fields.GetAutoExternalIpAttachment(), "fields.auto_external_ip_attachment"); err != nil {
 		return err
 	}

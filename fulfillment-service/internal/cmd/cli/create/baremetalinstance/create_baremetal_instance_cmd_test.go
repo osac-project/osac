@@ -296,7 +296,6 @@ var _ = Describe("buildSpec", func() {
 		spec, err := c.buildSpec("catalog-item-id", false)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(spec.GetSshKey().GetName()).To(Equal("tenant-login"))
-		Expect(spec.GetSshPublicKey()).To(BeEmpty())
 	})
 
 	It("parses a qualified --ssh-key with a project", func() {

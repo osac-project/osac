@@ -57,8 +57,11 @@ func bareMetalView(item *publicv1.BareMetalInstanceCatalogItem) view {
 		published: item.GetPublished(), template: formatFullRef(item.GetTemplate()), kind: "baremetalinstancecatalogitem",
 	}
 	fields := item.GetFields()
-	addString(&v.fields, "SSH public key", fields.GetSshPublicKey())
 	addUserDataSource(&v.fields, fields.GetUserDataSource())
+	if p := fields.GetSshKey(); p != nil {
+		appendPolicyRow(&v.fields, "SSH key", p.HasLocked(), p.GetEditable().GetDefaultValue() != nil,
+			formatFullRef(p.GetLocked()), formatFullRef(p.GetEditable().GetDefaultValue()))
+	}
 	if p := fields.GetRunStrategy(); p != nil {
 		format := func(value publicv1.BareMetalInstanceRunStrategy) string {
 			return strings.TrimPrefix(value.String(), "BARE_METAL_INSTANCE_RUN_STRATEGY_")

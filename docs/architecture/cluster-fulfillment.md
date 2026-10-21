@@ -125,7 +125,10 @@ The ClusterOrder CRD spec defines:
 - `nodeRequests`: Array of node request objects, each with `bareMetal.instanceType` (selected
   BareMetalInstanceType name) and `numberOfNodes` (count)
 - `pullSecret`: Credentials for container image repositories (optional, defaults to provider's)
-- `sshPublicKey`: SSH public key installed on worker nodes (optional, defaults to provider's)
+- `sshKey.id`: Canonical fulfillment Secret ID of the cluster's registered SSH
+  public key (optional, defaults to provider's). Key material is resolved by
+  the operator only when launching provisioning jobs and creating bare-metal
+  workers; it is never persisted in the ClusterOrder.
 - `releaseImage`: OCP release image URL controlling the OpenShift version (optional, defaults to template's)
 - `network`: Cluster networking configuration with `podCIDR` and `serviceCIDR` (optional)
 

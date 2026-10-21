@@ -280,7 +280,7 @@ fields; in YAML, write them as nested mappings.
 | Field | CLI flag | Description |
 |-------|----------|-------------|
 | `pull_secret_secret` | `--pull-secret` | Local Secret reference containing container registry credentials |
-| `ssh_public_key` | `--ssh-public-key` | SSH public key installed on worker nodes |
+| `ssh_key` | `--ssh-key` | Reference to a registered SSH public-key Secret for worker access; a shared catalog may only leave it editable |
 | `version` | `--version` | ClusterVersion reference for the OpenShift release |
 | `network.pod_cidr` | `--pod-cidr` | Pod network CIDR (system default: `10.128.0.0/14`) |
 | `network.service_cidr` | `--service-cidr` | Service network CIDR (system default: `172.30.0.0/16`) |
@@ -309,8 +309,8 @@ fields; in YAML, write them as nested mappings.
 |-------|-------------|
 | `instance_type` | Local BareMetalInstanceType reference for host placement; separate from compute InstanceType |
 | `disk_image` | DiskImage reference |
-| `ssh_public_key` | SSH public key |
-| `user_data_source` | Inline provisioning user data or a user data Secret reference |
+| `ssh_key` | Reference to a registered SSH public-key Secret |
+| `user_data` | Provisioning user data |
 | `run_strategy` | Bare metal run strategy |
 | `network_attachments` | Policy for the complete list of network attachments |
 | `auto_external_ip_attachment` | Whether to provision an external IP attachment automatically |
@@ -416,7 +416,7 @@ osac create computeinstance --catalog-item <standard-vm-id> \
   --name my-vm \
   --boot-disk-size 100 \
   --boot-disk-storage-tier <active-tier-name> \
-  --ssh-public-key "$(cat ~/.ssh/id_ed25519.pub)"
+  --ssh-key my-login-key
 ```
 
 The VM uses the locked Fedora image and the default `u1-small` instance type. The user-supplied disk
@@ -435,16 +435,20 @@ osac create computeinstance --catalog-item <standard-vm-id> \
 # Error includes: disk_image: field is not editable
 ```
 
-For the cluster example, supply a pull secret and SSH key and optionally override the pod CIDR:
+For the cluster example, supply a pull secret and a registered SSH key and
+optionally override the pod CIDR:
 
 ```bash
 osac create secret --name cluster-pull-secret --type=pull-secret \
   --from-file=.dockerconfigjson=pull-secret.json
 
+osac create secret --name cluster-login-key --type=ssh-public-key \
+  --from-file=public_key=~/.ssh/id_ed25519.pub
+
 osac create cluster --catalog-item sandbox \
   --name my-cluster \
   --pull-secret cluster-pull-secret \
-  --ssh-public-key "$(cat ~/.ssh/id_ed25519.pub)" \
+  --ssh-key cluster-login-key \
   --pod-cidr "10.128.0.0/14"
 ```
 

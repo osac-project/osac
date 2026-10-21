@@ -99,6 +99,8 @@ var _ = Describe("Catalog Item CLI", Label("catalog-items", "cli"), func() {
 		_, stderr, code := tool.LoginCLI(ctx, home, userUsername, usersPassword)
 		Expect(code).To(Equal(0), stderr)
 
+		sshKeySecretName := createCatalogItemSSHKeySecretNameFixture(ctx, usersGroup)
+
 		bmit := createCatalogItemBareMetalInstanceTypeFixture(ctx, "shared")
 		version := createCatalogItemClusterVersionFixture(ctx, "4.20.0")
 		template := createCatalogItemClusterTemplateFixture(ctx, privatev1.ClusterTemplateSpecDefaults_builder{
@@ -121,7 +123,13 @@ var _ = Describe("Catalog Item CLI", Label("catalog-items", "cli"), func() {
 			}.Build(),
 		}.Build())
 		name := catalogItemFixtureName()
-		_, stderr, code = tool.RunCLI(ctx, home, "create", "cluster", "--catalog-item", item.GetId(), "--name", name)
+		_, stderr, code = tool.RunCLI(ctx, home, "create", "cluster", "--catalog-item", item.GetId(), "--name", name,
+			"--ssh-key", "no-such-ssh-key")
+		Expect(code).ToNot(Equal(0), "unregistered Secret name must fail: %s", stderr)
+		Expect(stderr).To(ContainSubstring("no-such-ssh-key"))
+
+		_, stderr, code = tool.RunCLI(ctx, home, "create", "cluster", "--catalog-item", item.GetId(), "--name", name,
+			"--ssh-key", sshKeySecretName)
 		Expect(code).To(Equal(0), stderr)
 
 		client := publicv1.NewClustersClient(tool.ExternalView().UserConn())
@@ -132,6 +140,10 @@ var _ = Describe("Catalog Item CLI", Label("catalog-items", "cli"), func() {
 		deferClusterDeletion(created.GetId(), tool.ExternalView().UserConn())
 		Expect(created.GetSpec().GetCatalogItem().GetId()).To(Equal(item.GetId()))
 		Expect(created.GetSpec().GetTemplate().GetId()).To(Equal(template))
+		Expect(created.GetSpec().GetSshKey().GetName()).To(Equal(sshKeySecretName),
+			"the CLI --ssh-key flag must send a registered Secret reference")
+		Expect(created.GetSpec().GetSshKey().GetId()).NotTo(BeEmpty(),
+			"the reference must be canonicalized to the Secret ID")
 		Eventually(func(g Gomega) {
 			orders := &osacv1alpha1.ClusterOrderList{}
 			g.Expect(tool.KubeClient().List(ctx, orders, crclient.MatchingLabels{labels.ClusterOrderUuid: created.GetId()})).To(Succeed())

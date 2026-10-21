@@ -359,6 +359,12 @@ func isHandlerOwnedReferenceUse(use referenceUse) bool {
 		if slices.Contains(bareMetalInstanceSSHKeyMethods(), use.method) && use.path == "object.spec.ssh_key" {
 			return true
 		}
+		if slices.Contains(clusterSshKeyMethods(), use.method) && use.path == "object.spec.ssh_key" {
+			return true
+		}
+		if slices.Contains(clusterTemplateSshKeyMethods(), use.method) && use.path == "object.spec_defaults.ssh_key" {
+			return true
+		}
 		return slices.Contains(catalogAuthoringMethods(), use.method) &&
 			(use.path == "object.fields" || strings.HasPrefix(use.path, "object.fields."))
 	default:

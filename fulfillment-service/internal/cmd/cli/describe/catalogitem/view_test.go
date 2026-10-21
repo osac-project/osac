@@ -100,7 +100,7 @@ var _ = Describe("Catalog item views", func() {
 			Template: publicv1.ClusterTemplateReference_builder{Id: "template-id", Shared: true, Project: "infra"}.Build(),
 			Fields: publicv1.ClusterCatalogItemFields_builder{
 				Version:          publicv1.ClusterVersionReferenceFieldPolicy_builder{Editable: publicv1.EditableClusterVersionReferenceField_builder{DefaultValue: publicv1.ClusterVersionReference_builder{Name: "4-20", Shared: true}.Build()}.Build()}.Build(),
-				SshPublicKey:     publicv1.StringFieldPolicy_builder{Editable: publicv1.EditableStringField_builder{}.Build()}.Build(),
+				SshKey:           publicv1.FullSecretReferenceFieldPolicy_builder{Editable: publicv1.EditableFullSecretReferenceField_builder{}.Build()}.Build(),
 				PullSecretSecret: publicv1.SecretReferenceFieldPolicy_builder{Locked: publicv1.SecretLocalReference_builder{Name: "pull"}.Build()}.Build(),
 				Network: publicv1.ClusterNetworkFieldPolicies_builder{
 					PodCidr:     publicv1.StringFieldPolicy_builder{Locked: new("10.0.0.0/16")}.Build(),
@@ -147,8 +147,8 @@ var _ = Describe("Catalog item views", func() {
 			Id: "bm-id", Metadata: publicv1.Metadata_builder{Name: "bm", Tenant: "org"}.Build(),
 			Template: publicv1.BareMetalInstanceTemplateReference_builder{Name: "baremetal"}.Build(),
 			Fields: publicv1.BareMetalInstanceCatalogItemFields_builder{
-				SshPublicKey:   publicv1.StringFieldPolicy_builder{Locked: new("")}.Build(),
-				UserDataSource: publicv1.UserDataSourceFieldPolicy_builder{Editable: publicv1.EditableUserDataSourceField_builder{DefaultValue: publicv1.UserDataSource_builder{Secret: publicv1.SecretLocalReference_builder{Name: "bm-cloud-init"}.Build()}.Build()}.Build()}.Build(),
+				UserDataSource: publicv1.UserDataSourceFieldPolicy_builder{Editable: publicv1.EditableUserDataSourceField_builder{DefaultValue: publicv1.UserDataSource_builder{Inline: new("#cloud-config\nfoo: bar")}.Build()}.Build()}.Build(),
+				SshKey:         publicv1.FullSecretReferenceFieldPolicy_builder{Locked: publicv1.SecretReference_builder{Name: "bm-key"}.Build()}.Build(),
 				RunStrategy:    publicv1.BareMetalInstanceRunStrategyFieldPolicy_builder{Locked: new(publicv1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_HALTED)}.Build(),
 				NetworkAttachments: publicv1.BareMetalNetworkAttachmentListFieldPolicy_builder{Locked: publicv1.BareMetalNetworkAttachmentList_builder{Items: []*publicv1.BareMetalNetworkAttachment{
 					publicv1.BareMetalNetworkAttachment_builder{Subnet: publicv1.SubnetLocalReference_builder{Name: "bm-subnet"}.Build(), Interface: new("eno1"), Primary: new(false)}.Build(),
@@ -159,7 +159,7 @@ var _ = Describe("Catalog item views", func() {
 			}.Build(),
 		}.Build()
 		output := printView(bareMetalView(item), false)
-		requireContains(output, "LOCKED    \"\"", "default: Secret: bm-cloud-init", "LOCKED    HALTED", "bm-subnet; interface: eno1; primary: false", "bm-type-id (shared)", "default: rhel (shared)",
+		requireContains(output, "SSH key", "bm-key", "default: #cloud-config (2 lines; see get -o yaml)", "LOCKED    HALTED", "bm-subnet; interface: eno1; primary: false", "bm-type-id (shared)", "default: rhel (shared)",
 			"Full catalog item definition: osac get baremetalinstancecatalogitem bm -o yaml")
 		Expect(output).NotTo(ContainSubstring("--tenant shared"))
 		Expect(output).To(ContainSubstring("User data source"))
@@ -167,7 +167,7 @@ var _ = Describe("Catalog item views", func() {
 
 	It("sanitizes terminal controls without changing the colored layout", func() {
 		v := view{name: "a\x1b[31m\tname\u202e", id: "id", title: "title\x1b[31m", description: "hello\rworld", kind: "clustercatalogitem",
-			fields: []row{{label: "Disk image", state: "LOCKED", value: "image"}, {label: "SSH public key", state: "EDITABLE"}}}
+			fields: []row{{label: "Disk image", state: "LOCKED", value: "image"}, {label: "SSH key", state: "EDITABLE"}}}
 		plain := printView(v, false)
 		for _, control := range []string{"\x1b", "\t", "\r", "\u202e"} {
 			Expect(plain).NotTo(ContainSubstring(control))

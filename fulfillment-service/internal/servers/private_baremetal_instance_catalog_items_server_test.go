@@ -341,7 +341,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 					Published: true,
 					Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{
-						SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
+						UserDataSource: privatev1.UserDataSourceFieldPolicy_builder{Editable: privatev1.EditableUserDataSourceField_builder{}.Build()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -506,16 +506,16 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			Entry("missing id and name pair", privatev1.SecretReference_builder{Id: "missing-id", Name: "different-name"}.Build(), grpccodes.NotFound),
 		)
 
-		DescribeTable("validates SSH public key policy on Create", func(policy *privatev1.StringFieldPolicy, invalid bool) {
+		DescribeTable("validates user-data policy on Create", func(policy *privatev1.UserDataSourceFieldPolicy, invalid bool) {
 			response, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
-					Title:    "SSH key policy",
+					Title:    "User data policy",
 					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 					Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{
-						SshPublicKey: policy,
+						UserDataSource: policy,
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -524,7 +524,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(status.Message()).To(ContainSubstring("ssh_public_key"))
+				Expect(status.Message()).To(ContainSubstring("user_data"))
 				Expect(status.Message()).To(ContainSubstring("no behavior"))
 				return
 			}
@@ -538,9 +538,9 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 				Expect(err).ToNot(HaveOccurred())
 			})
 		},
-			Entry("rejects a policy without behavior", privatev1.StringFieldPolicy_builder{}.Build(), true),
-			Entry("accepts a locked value", privatev1.StringFieldPolicy_builder{Locked: proto.String(testSSHPublicKey)}.Build(), false),
-			Entry("accepts editable input without a default", privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(), false),
+			Entry("rejects a policy without behavior", privatev1.UserDataSourceFieldPolicy_builder{}.Build(), true),
+			Entry("accepts a locked value", privatev1.UserDataSourceFieldPolicy_builder{Locked: privatev1.UserDataSource_builder{Inline: proto.String("#cloud-config")}.Build()}.Build(), false),
+			Entry("accepts editable input without a default", privatev1.UserDataSourceFieldPolicy_builder{Editable: privatev1.EditableUserDataSourceField_builder{}.Build()}.Build(), false),
 		)
 
 		It("Rejects update that introduces non-editable field without default", func() {
@@ -566,7 +566,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Id: id,
 					Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{
-						SshPublicKey: privatev1.StringFieldPolicy_builder{}.Build(),
+						UserDataSource: privatev1.UserDataSourceFieldPolicy_builder{}.Build(),
 					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{
@@ -577,7 +577,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("ssh_public_key"))
+			Expect(status.Message()).To(ContainSubstring("user_data"))
 			Expect(status.Message()).To(ContainSubstring("oneof"))
 		})
 
@@ -592,15 +592,15 @@ var _ = Describe("Bare Metal Instance Catalog Item policy application", func() {
 			Subnet:         policyTestSubnet("bare-metal-subnet"),
 			SecurityGroups: []*privatev1.SecurityGroupLocalReference{policyTestSecurityGroup("bare-metal-security-group")},
 		}.Build()
-		sshKey := "ssh-ed25519 bare-metal"
 		userData := "bare-metal-user-data"
 		runStrategy := privatev1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS
 		autoExternalIP := false
 
 		fields := privatev1.BareMetalInstanceCatalogItemFields_builder{
-			SshPublicKey:   privatev1.StringFieldPolicy_builder{Locked: &sshKey}.Build(),
-			UserDataSource: privatev1.UserDataSourceFieldPolicy_builder{Locked: privatev1.UserDataSource_builder{Inline: &userData}.Build()}.Build(),
-			RunStrategy:    privatev1.BareMetalInstanceRunStrategyFieldPolicy_builder{Locked: &runStrategy}.Build(),
+			UserDataSource: privatev1.UserDataSourceFieldPolicy_builder{
+				Locked: privatev1.UserDataSource_builder{Inline: &userData}.Build(),
+			}.Build(),
+			RunStrategy: privatev1.BareMetalInstanceRunStrategyFieldPolicy_builder{Locked: &runStrategy}.Build(),
 			NetworkAttachments: privatev1.BareMetalNetworkAttachmentListFieldPolicy_builder{
 				Locked: privatev1.BareMetalNetworkAttachmentList_builder{Items: []*privatev1.BareMetalNetworkAttachment{nil, attachment}}.Build(),
 			}.Build(),
@@ -612,7 +612,6 @@ var _ = Describe("Bare Metal Instance Catalog Item policy application", func() {
 		spec := &privatev1.BareMetalInstanceSpec{}
 
 		Expect(applyBareMetalInstanceCatalogItemPolicies(spec, item.GetFields())).To(Succeed())
-		Expect(spec.GetSshPublicKey()).To(Equal(sshKey))
 		Expect(spec.GetUserDataSource().GetInline()).To(Equal(userData))
 		Expect(spec.GetRunStrategy()).To(Equal(runStrategy))
 		Expect(spec.GetNetworkAttachments()).To(HaveLen(2))

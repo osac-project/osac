@@ -443,13 +443,17 @@ func setupClusterControllers(
 	if err != nil {
 		return err
 	}
-	if err := baremetalworker.NewReconciler(
+	baremetalworkerReconciler := baremetalworker.NewReconciler(
 		localMgr.GetClient(), localMgr.GetAPIReader(), localMgr.GetScheme(),
 		bmwFulfillment,
 		ignitionFetcher,
 		localMgr.GetEventRecorder("baremetalworker"),
 		os.Getenv(envClusterOrderNamespace),
-	).SetupWithManager(mgr); err != nil {
+	)
+	if grpcConn != nil {
+		baremetalworkerReconciler.SetSecretsClient(privatev1.NewSecretsClient(grpcConn))
+	}
+	if err := baremetalworkerReconciler.SetupWithManager(mgr); err != nil {
 		return err
 	}
 
@@ -476,6 +480,7 @@ func setupClusterControllers(
 			if grpcConn != nil {
 				reconciler.ClustersClient = privatev1.NewClustersClient(grpcConn)
 				reconciler.ExternalIPAttachmentsClient = privatev1.NewExternalIPAttachmentsClient(grpcConn)
+				reconciler.SecretsClient = privatev1.NewSecretsClient(grpcConn)
 			}
 			if err := reconciler.SetupWithManager(mgr); err != nil {
 				return err

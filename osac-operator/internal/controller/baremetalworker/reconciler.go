@@ -33,6 +33,7 @@ import (
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	sharedsshkey "github.com/osac-project/osac/proto/sshkey"
 )
 
 const (
@@ -56,6 +57,7 @@ type Reconciler struct {
 	recorder              events.EventRecorder
 	clusterOrderNamespace string
 	macResolver           MACResolver
+	secrets               sharedsshkey.SecretsGetter
 }
 
 // NewReconciler builds the bare-metal worker reconciler.
@@ -85,6 +87,15 @@ func NewReconciler(
 // reconcile-local BMI observation; tests can inject a stub resolver before use.
 func (r *Reconciler) SetMACResolver(resolver MACResolver) {
 	r.macResolver = resolver
+}
+
+// SetSecretsClient sets the client used to resolve the Cluster's registered
+// SSH-key Secret through the fulfillment private API. The resolved material
+// feeds only the InfraEnv's authorized key; child BMIs receive the Secret
+// reference, never the bytes. When nil, a referenced key holds InfraEnv
+// creation with an SSHKeyResolutionPending condition.
+func (r *Reconciler) SetSecretsClient(client sharedsshkey.SecretsGetter) {
+	r.secrets = client
 }
 
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders,verbs=get;list;watch

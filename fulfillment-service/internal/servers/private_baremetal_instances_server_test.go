@@ -258,9 +258,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Tenant: auth.SystemTenant,
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -285,8 +285,8 @@ var _ = Describe("Private bare metal instances server", func() {
 					Object: privatev1.BareMetalInstance_builder{
 						Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
 						Spec: privatev1.BareMetalInstanceSpec_builder{
-							CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogResponse.GetObject().GetId()}.Build(),
-							SshPublicKey: new(testSSHPublicKey),
+							CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogResponse.GetObject().GetId()}.Build(),
+							UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -305,9 +305,9 @@ var _ = Describe("Private bare metal instances server", func() {
 					Object: privatev1.BareMetalInstance_builder{
 						Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
 						Spec: privatev1.BareMetalInstanceSpec_builder{
-							Template:     privatev1.BareMetalInstanceTemplateReference_builder{Id: templateID}.Build(),
-							DiskImage:    &privatev1.DiskImageReference{},
-							SshPublicKey: new(testSSHPublicKey),
+							Template:       privatev1.BareMetalInstanceTemplateReference_builder{Id: templateID}.Build(),
+							DiskImage:      &privatev1.DiskImageReference{},
+							UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -326,8 +326,8 @@ var _ = Describe("Private bare metal instances server", func() {
 					Object: privatev1.BareMetalInstance_builder{
 						Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
 						Spec: privatev1.BareMetalInstanceSpec_builder{
-							Template:     privatev1.BareMetalInstanceTemplateReference_builder{Id: templateID}.Build(),
-							SshPublicKey: new(testSSHPublicKey),
+							Template:       privatev1.BareMetalInstanceTemplateReference_builder{Id: templateID}.Build(),
+							UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -346,9 +346,9 @@ var _ = Describe("Private bare metal instances server", func() {
 					Object: privatev1.BareMetalInstance_builder{
 						Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
 						Spec: privatev1.BareMetalInstanceSpec_builder{
-							CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-							DiskImage:    privatev1.DiskImageReference_builder{Id: "obsolete-bmi-disk-image"}.Build(),
-							SshPublicKey: new(testSSHPublicKey),
+							CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+							DiskImage:      privatev1.DiskImageReference_builder{Id: "obsolete-bmi-disk-image"}.Build(),
+							UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -382,9 +382,9 @@ var _ = Describe("Private bare metal instances server", func() {
 					Object: privatev1.BareMetalInstance_builder{
 						Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
 						Spec: privatev1.BareMetalInstanceSpec_builder{
-							CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-							DiskImage:    privatev1.DiskImageReference_builder{Id: "other-tenant-bmi-disk-image"}.Build(),
-							SshPublicKey: new(testSSHPublicKey),
+							CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+							DiskImage:      privatev1.DiskImageReference_builder{Id: "other-tenant-bmi-disk-image"}.Build(),
+							UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -408,9 +408,6 @@ var _ = Describe("Private bare metal instances server", func() {
 									DefaultValue: privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
 								}.Build(),
 							}.Build(),
-							SshPublicKey: privatev1.StringFieldPolicy_builder{
-								Editable: privatev1.EditableStringField_builder{}.Build(),
-							}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -420,8 +417,8 @@ var _ = Describe("Private bare metal instances server", func() {
 					Object: privatev1.BareMetalInstance_builder{
 						Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
 						Spec: privatev1.BareMetalInstanceSpec_builder{
-							CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogResponse.GetObject().GetId()}.Build(),
-							SshPublicKey: new(testSSHPublicKey),
+							CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogResponse.GetObject().GetId()}.Build(),
+							UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -437,10 +434,10 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						InstanceType:   privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -456,14 +453,13 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(response.GetObject().GetSpec().GetSshPublicKey()).To(Equal(testSSHPublicKey))
 			Expect(response.GetObject().GetSpec().GetInstanceType().GetId()).To(Equal("default-type"))
 		})
 
@@ -475,9 +471,9 @@ var _ = Describe("Private bare metal instances server", func() {
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						Template:     privatev1.BareMetalInstanceTemplateReference_builder{Id: templateID}.Build(),
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						Template:       privatev1.BareMetalInstanceTemplateReference_builder{Id: templateID}.Build(),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -509,9 +505,9 @@ var _ = Describe("Private bare metal instances server", func() {
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogResponse.GetObject().GetId()}.Build(),
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogResponse.GetObject().GetId()}.Build(),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -528,9 +524,9 @@ var _ = Describe("Private bare metal instances server", func() {
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -568,10 +564,10 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Name: "default-type", Shared: true}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						InstanceType:   privatev1.BareMetalInstanceTypeReference_builder{Name: "default-type", Shared: true}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -587,10 +583,10 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "does-not-exist", Shared: true}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						InstanceType:   privatev1.BareMetalInstanceTypeReference_builder{Id: "does-not-exist", Shared: true}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -610,10 +606,10 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type"}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						InstanceType:   privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type"}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -632,10 +628,10 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Project: "some-project", Shared: true}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						InstanceType:   privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Project: "some-project", Shared: true}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -677,9 +673,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: namedID}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: namedID}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -703,9 +699,9 @@ var _ = Describe("Private bare metal instances server", func() {
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						Template:     privatev1.BareMetalInstanceTemplateReference_builder{Id: templateID}.Build(),
-						DiskImage:    &privatev1.DiskImageReference{Name: "bmi-disk-image"},
-						SshPublicKey: new(testSSHPublicKey),
+						Template:       privatev1.BareMetalInstanceTemplateReference_builder{Id: templateID}.Build(),
+						DiskImage:      &privatev1.DiskImageReference{Name: "bmi-disk-image"},
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -726,9 +722,9 @@ var _ = Describe("Private bare metal instances server", func() {
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						Template:     privatev1.BareMetalInstanceTemplateReference_builder{Id: templateID}.Build(),
-						DiskImage:    privatev1.DiskImageReference_builder{Id: diskImageID}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						Template:       privatev1.BareMetalInstanceTemplateReference_builder{Id: templateID}.Build(),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: diskImageID}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -745,9 +741,9 @@ var _ = Describe("Private bare metal instances server", func() {
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						Template:     privatev1.BareMetalInstanceTemplateReference_builder{Id: templateID}.Build(),
-						DiskImage:    &privatev1.DiskImageReference{Name: "missing-bmi-disk-image"},
-						SshPublicKey: new(testSSHPublicKey),
+						Template:       privatev1.BareMetalInstanceTemplateReference_builder{Id: templateID}.Build(),
+						DiskImage:      &privatev1.DiskImageReference{Name: "missing-bmi-disk-image"},
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -768,9 +764,9 @@ var _ = Describe("Private bare metal instances server", func() {
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						Template:     privatev1.BareMetalInstanceTemplateReference_builder{Id: templateID}.Build(),
-						DiskImage:    privatev1.DiskImageReference_builder{Id: diskImageID}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						Template:       privatev1.BareMetalInstanceTemplateReference_builder{Id: templateID}.Build(),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: diskImageID}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -884,9 +880,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -894,27 +890,6 @@ var _ = Describe("Private bare metal instances server", func() {
 			// The catalog item's template reference should be materialized into spec.template.
 			Expect(response.GetObject().GetSpec().GetTemplate()).ToNot(BeNil())
 			Expect(response.GetObject().GetSpec().GetTemplate().GetId()).To(Equal("test-template"))
-		})
-
-		// validateSpec runs before catalog item lookup, so invalid SSH key/user data
-		// fail with InvalidArgument before the catalog item is checked.
-		It("Rejects invalid SSH key at create time", func() {
-			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
-				Object: privatev1.BareMetalInstance_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						SshPublicKey: new("not-a-valid-ssh-key"),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("spec.ssh_public_key"))
 		})
 
 		It("Rejects user data exceeding 64 KB at create time", func() {
@@ -1230,33 +1205,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			Entry("empty public key", privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY, nil),
 		)
 
-		It("Rejects create when both ssh_public_key and ssh_key are set", func() {
-			secret, err := server.secretsDao.Create().SetObject(privatev1.Secret_builder{
-				Metadata: privatev1.Metadata_builder{
-					Name:   fmt.Sprintf("bmaas-both-keys-%s", uuid.NewString()[:8]),
-					Tenant: testTenant,
-				}.Build(),
-				Type: privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
-				Data: map[string][]byte{"public_key": []byte(testSSHPublicKey)},
-			}.Build()).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-
-			_, err = server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
-				Object: privatev1.BareMetalInstance_builder{
-					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
-					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
-						SshKey:       privatev1.SecretReference_builder{Id: secret.GetObject().GetId()}.Build(),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("spec.ssh_public_key and spec.ssh_key are mutually exclusive"))
-		})
-
-		It("Rejects create when no SSH key or user_data_source is provided", func() {
+		It("Rejects create when neither ssh_public_key nor user_data is provided", func() {
 			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -1281,10 +1230,10 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: "test-baremetal-instance",
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						InstanceType:   privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -1332,9 +1281,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						Template:     privatev1.BareMetalInstanceTemplateReference_builder{Id: templateID}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						Template:       privatev1.BareMetalInstanceTemplateReference_builder{Id: templateID}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -1381,9 +1330,9 @@ var _ = Describe("Private bare metal instances server", func() {
 					Object: privatev1.BareMetalInstance_builder{
 						Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("locked-bmi-%s", uuid.NewString()[:8])}.Build(),
 						Spec: privatev1.BareMetalInstanceSpec_builder{
-							CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogResponse.GetObject().GetId()}.Build(),
-							DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-							SshPublicKey: new(testSSHPublicKey),
+							CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogResponse.GetObject().GetId()}.Build(),
+							DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+							UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -1432,9 +1381,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: "test-baremetal-instance",
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -1463,9 +1412,9 @@ var _ = Describe("Private bare metal instances server", func() {
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{Name: "test-baremetal-instance"}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -1488,42 +1437,6 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(status.Message()).To(ContainSubstring("disk image is immutable"))
-		})
-
-		It("Rejects PATCH that changes ssh_public_key", func() {
-			createResponse, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
-				Object: privatev1.BareMetalInstance_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: "test-baremetal-instance",
-					}.Build(),
-					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			object := createResponse.GetObject()
-
-			otherKey := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBe5EVW4cHjAFNa8jMJQqLGBJENvJRfH+Q2lOjFr93vd other@example.com"
-			_, err = server.Update(ctx, privatev1.BareMetalInstancesUpdateRequest_builder{
-				Object: privatev1.BareMetalInstance_builder{
-					Id: object.GetId(),
-					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						SshPublicKey: new(otherKey),
-					}.Build(),
-				}.Build(),
-				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"spec.ssh_public_key"},
-				},
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("ssh_public_key is immutable"))
 		})
 
 		It("Rejects PATCH that changes the registered SSH-key Secret", func() {
@@ -1609,11 +1522,11 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: "test-baremetal-instance",
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
-						RunStrategy:  new(privatev1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						InstanceType:   privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
+						RunStrategy:    new(privatev1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -1641,10 +1554,10 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: "test-baremetal-instance",
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						InstanceType:   privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -1661,7 +1574,7 @@ var _ = Describe("Private bare metal instances server", func() {
 						Template:           privatev1.BareMetalInstanceTemplateReference_builder{Id: "test-template"}.Build(),
 						InstanceType:       object.GetSpec().GetInstanceType(),
 						DiskImage:          object.GetSpec().GetDiskImage(),
-						SshPublicKey:       new(testSSHPublicKey),
+						UserDataSource:     privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: object.GetSpec().GetNetworkAttachments(),
 					}.Build(),
 				}.Build(),
@@ -1676,9 +1589,9 @@ var _ = Describe("Private bare metal instances server", func() {
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{Name: "test-baremetal-instance"}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -1690,11 +1603,11 @@ var _ = Describe("Private bare metal instances server", func() {
 					Id:       object.GetId(),
 					Metadata: privatev1.Metadata_builder{Name: object.GetMetadata().GetName()}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:  object.GetSpec().GetCatalogItem(),
-						Template:     object.GetSpec().GetTemplate(),
-						InstanceType: object.GetSpec().GetInstanceType(),
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "replacement-bmi-disk-image"}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						CatalogItem:    object.GetSpec().GetCatalogItem(),
+						Template:       object.GetSpec().GetTemplate(),
+						InstanceType:   object.GetSpec().GetInstanceType(),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "replacement-bmi-disk-image"}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -1712,10 +1625,10 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						InstanceType:   privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -1748,7 +1661,7 @@ var _ = Describe("Private bare metal instances server", func() {
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						DiskImage:          privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
 						CatalogItem:        privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
-						SshPublicKey:       new(testSSHPublicKey),
+						UserDataSource:     privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						TemplateParameters: map[string]*anypb.Any{"os_version": osParam},
 					}.Build(),
 				}.Build(),
@@ -1778,7 +1691,7 @@ var _ = Describe("Private bare metal instances server", func() {
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						DiskImage:          privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
 						CatalogItem:        privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
-						SshPublicKey:       new(testSSHPublicKey),
+						UserDataSource:     privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						TemplateParameters: map[string]*anypb.Any{"os_version": osParam},
 					}.Build(),
 				}.Build(),
@@ -1894,7 +1807,7 @@ var _ = Describe("Private bare metal instances server", func() {
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						DiskImage:          privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
 						CatalogItem:        privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
-						SshPublicKey:       new(testSSHPublicKey),
+						UserDataSource:     privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						TemplateParameters: map[string]*anypb.Any{"os_version": osParam},
 					}.Build(),
 				}.Build(),
@@ -1942,7 +1855,7 @@ var _ = Describe("Private bare metal instances server", func() {
 						DiskImage:          privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
 						CatalogItem:        privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
 						InstanceType:       privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
-						SshPublicKey:       new(testSSHPublicKey),
+						UserDataSource:     privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						TemplateParameters: map[string]*anypb.Any{"os_version": osParam},
 						RunStrategy:        new(privatev1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS),
 					}.Build(),
@@ -1982,7 +1895,6 @@ var _ = Describe("Private bare metal instances server", func() {
 						DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{
 							Locked: privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
 						}.Build(),
-						SshPublicKey: privatev1.StringFieldPolicy_builder{Locked: proto.String(testSSHPublicKey)}.Build(),
 					}.Build(),
 					TemplateParameters: map[string]*privatev1.TemplateParameterPolicy{
 						"os_version": privatev1.TemplateParameterPolicy_builder{Editable: &privatev1.EditableTemplateParameter{}}.Build(),
@@ -2002,12 +1914,12 @@ var _ = Describe("Private bare metal instances server", func() {
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						CatalogItem:        privatev1.BareMetalInstanceCatalogItemReference_builder{Id: comboCatID}.Build(),
+						UserDataSource:     privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						TemplateParameters: map[string]*anypb.Any{"os_version": osParam},
 					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(response.GetObject().GetSpec().GetSshPublicKey()).To(Equal(testSSHPublicKey))
 			Expect(response.GetObject().GetSpec().GetTemplateParameters()).To(HaveKey("os_version"))
 		})
 
@@ -2024,7 +1936,11 @@ var _ = Describe("Private bare metal instances server", func() {
 					Title:     "Override + template params",
 					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "override-combo-template"}.Build(),
 					Published: true,
-					Fields:    privatev1.BareMetalInstanceCatalogItemFields_builder{SshPublicKey: privatev1.StringFieldPolicy_builder{Locked: proto.String(testSSHPublicKey)}.Build()}.Build(), TemplateParameters: map[string]*privatev1.TemplateParameterPolicy{"os_version": privatev1.TemplateParameterPolicy_builder{Editable: &privatev1.EditableTemplateParameter{}}.Build()},
+					Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{
+						DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{
+							Locked: privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						}.Build(),
+					}.Build(), TemplateParameters: map[string]*privatev1.TemplateParameterPolicy{"os_version": privatev1.TemplateParameterPolicy_builder{Editable: &privatev1.EditableTemplateParameter{}}.Build()},
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -2033,7 +1949,6 @@ var _ = Describe("Private bare metal instances server", func() {
 			osParam, err := anypb.New(wrapperspb.String("rhel9.4"))
 			Expect(err).ToNot(HaveOccurred())
 
-			userKey := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIUserProvidedKeyThatShouldBeOverridden user@test"
 			_, err = server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -2041,7 +1956,7 @@ var _ = Describe("Private bare metal instances server", func() {
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						CatalogItem:        privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
-						SshPublicKey:       &userKey,
+						DiskImage:          privatev1.DiskImageReference_builder{Id: "user-disk-image"}.Build(),
 						TemplateParameters: map[string]*anypb.Any{"os_version": osParam},
 					}.Build(),
 				}.Build(),
@@ -2051,58 +1966,6 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(ok).To(BeTrue())
 			Expect(st.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(st.Message()).To(ContainSubstring("not editable"))
-		})
-
-		It("Rejects a raw ssh_public_key combined with a catalog ssh_key default", func() {
-			createTemplate("raw-plus-registered-template", nil)
-			secret, err := server.secretsDao.Create().SetObject(privatev1.Secret_builder{
-				Metadata: privatev1.Metadata_builder{
-					Name:   fmt.Sprintf("bmaas-catalog-default-key-%s", uuid.NewString()[:8]),
-					Tenant: testTenant,
-				}.Build(),
-				Type: privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
-				Data: map[string][]byte{"public_key": []byte(testSSHPublicKey)},
-			}.Build()).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-
-			catResp, err := catalogServer.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
-				Object: privatev1.BareMetalInstanceCatalogItem_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Title:     "Raw key plus registered default",
-					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "raw-plus-registered-template"}.Build(),
-					Published: true,
-					Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{
-						DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{
-							Locked: privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						}.Build(),
-						SshKey: privatev1.FullSecretReferenceFieldPolicy_builder{
-							Editable: privatev1.EditableFullSecretReferenceField_builder{
-								DefaultValue: privatev1.SecretReference_builder{
-									Id: secret.GetObject().GetId(),
-								}.Build(),
-							}.Build(),
-						}.Build(),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			catID := catResp.GetObject().GetId()
-
-			_, err = server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
-				Object: privatev1.BareMetalInstance_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("spec.ssh_public_key and spec.ssh_key are mutually exclusive"))
 		})
 
 		It("Accepts editable field policy alongside template_parameters", func() {
@@ -2123,7 +1986,6 @@ var _ = Describe("Private bare metal instances server", func() {
 						DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{
 							Locked: privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
 						}.Build(),
-						SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
 					}.Build(),
 					TemplateParameters: map[string]*privatev1.TemplateParameterPolicy{
 						"os_version": privatev1.TemplateParameterPolicy_builder{Editable: &privatev1.EditableTemplateParameter{}}.Build(),
@@ -2143,13 +2005,12 @@ var _ = Describe("Private bare metal instances server", func() {
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						CatalogItem:        privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
-						SshPublicKey:       new(testSSHPublicKey),
+						UserDataSource:     privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						TemplateParameters: map[string]*anypb.Any{"os_version": osParam},
 					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(response.GetObject().GetSpec().GetSshPublicKey()).To(Equal(testSSHPublicKey))
 			Expect(response.GetObject().GetSpec().GetTemplateParameters()).To(HaveKey("os_version"))
 		})
 
@@ -2166,7 +2027,7 @@ var _ = Describe("Private bare metal instances server", func() {
 					Title:     "FD fail + valid TP",
 					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "fd-fail-template"}.Build(),
 					Published: true,
-					Fields:    privatev1.BareMetalInstanceCatalogItemFields_builder{SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build()}.Build(), TemplateParameters: map[string]*privatev1.TemplateParameterPolicy{"os_version": privatev1.TemplateParameterPolicy_builder{Editable: &privatev1.EditableTemplateParameter{}}.Build()},
+					Fields:    privatev1.BareMetalInstanceCatalogItemFields_builder{DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{Editable: privatev1.EditableDiskImageReferenceField_builder{}.Build()}.Build()}.Build(), TemplateParameters: map[string]*privatev1.TemplateParameterPolicy{"os_version": privatev1.TemplateParameterPolicy_builder{Editable: &privatev1.EditableTemplateParameter{}}.Build()},
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -2190,7 +2051,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("ssh_public_key"))
+			Expect(status.Message()).To(ContainSubstring("at least one authentication method"))
 		})
 
 		It("Rejects missing required template_parameter even with valid fields", func() {
@@ -2206,7 +2067,7 @@ var _ = Describe("Private bare metal instances server", func() {
 					Title:     "Valid FD + TP fail",
 					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "tp-fail-template"}.Build(),
 					Published: true,
-					Fields:    privatev1.BareMetalInstanceCatalogItemFields_builder{SshPublicKey: privatev1.StringFieldPolicy_builder{Locked: proto.String(testSSHPublicKey)}.Build()}.Build(),
+					Fields:    privatev1.BareMetalInstanceCatalogItemFields_builder{DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{Locked: privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build()}.Build()}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -2239,7 +2100,7 @@ var _ = Describe("Private bare metal instances server", func() {
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						DiskImage:                privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
 						CatalogItem:              privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						SshPublicKey:             new(testSSHPublicKey),
+						UserDataSource:           privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						AutoExternalIpAttachment: proto.Bool(true),
 					}.Build(),
 				}.Build(),
@@ -2263,7 +2124,7 @@ var _ = Describe("Private bare metal instances server", func() {
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						DiskImage:                privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
 						CatalogItem:              privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						SshPublicKey:             new(testSSHPublicKey),
+						UserDataSource:           privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						AutoExternalIpAttachment: proto.Bool(true),
 					}.Build(),
 				}.Build(),
@@ -2302,7 +2163,7 @@ var _ = Describe("Private bare metal instances server", func() {
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						DiskImage:                privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
 						CatalogItem:              privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						SshPublicKey:             new(testSSHPublicKey),
+						UserDataSource:           privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						AutoExternalIpAttachment: proto.Bool(true),
 					}.Build(),
 				}.Build(),
@@ -2343,7 +2204,7 @@ var _ = Describe("Private bare metal instances server", func() {
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						DiskImage:                privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
 						CatalogItem:              privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						SshPublicKey:             new(testSSHPublicKey),
+						UserDataSource:           privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						AutoExternalIpAttachment: proto.Bool(true),
 					}.Build(),
 				}.Build(),
@@ -2623,9 +2484,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet: privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
@@ -2648,9 +2509,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
@@ -2674,9 +2535,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
@@ -2705,9 +2566,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
@@ -2732,8 +2593,8 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
@@ -2758,8 +2619,8 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
@@ -2784,10 +2645,10 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDNoType}.Build(),
-						InstanceType: bareMetalInstanceTypeReference("default-type"),
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDNoType}.Build(),
+						InstanceType:   bareMetalInstanceTypeReference("default-type"),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
@@ -2812,9 +2673,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDNoType}.Build(),
-						InstanceType: bareMetalInstanceTypeReference("default-type"),
-						SshPublicKey: new(testSSHPublicKey),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDNoType}.Build(),
+						InstanceType:   bareMetalInstanceTypeReference("default-type"),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
@@ -2843,9 +2704,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -2859,10 +2720,10 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: "baremetal-instance-1",
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
-						InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						InstanceType:   privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
@@ -2911,10 +2772,10 @@ var _ = Describe("Private bare metal instances server", func() {
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{Name: "baremetal-instance-1"}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
-						InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						InstanceType:   privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
@@ -2961,10 +2822,10 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: "baremetal-instance-1",
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
-						InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						InstanceType:   privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
@@ -3001,9 +2862,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
@@ -3050,9 +2911,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
@@ -3099,9 +2960,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
@@ -3148,9 +3009,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
@@ -3198,9 +3059,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
@@ -3251,9 +3112,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
@@ -3304,9 +3165,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
@@ -3600,8 +3461,8 @@ var _ = Describe("Private bare metal instances server", func() {
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{Name: "missing-fabric-manager"}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet: privatev1.SubnetLocalReference_builder{Id: subnetID}.Build(),
@@ -3626,9 +3487,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet: privatev1.SubnetLocalReference_builder{Id: subnetID}.Build(),
@@ -3663,8 +3524,8 @@ var _ = Describe("Private bare metal instances server", func() {
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID}.Build(),
@@ -3750,8 +3611,8 @@ var _ = Describe("Private bare metal instances server", func() {
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{Name: "dependency-validation"}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{privatev1.BareMetalNetworkAttachment_builder{
 							Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID}.Build(),
 							SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: group.GetObject().GetId()}.Build()},
@@ -3775,9 +3636,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -3997,9 +3858,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -4022,7 +3883,7 @@ var _ = Describe("Private bare metal instances server", func() {
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						DiskImage:          privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
 						CatalogItem:        privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
-						SshPublicKey:       new(testSSHPublicKey),
+						UserDataSource:     privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{},
 					}.Build(),
 				}.Build(),
@@ -4043,9 +3904,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{}.Build(),
 						},
@@ -4069,9 +3930,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet: privatev1.SubnetLocalReference_builder{Id: customSubnetID}.Build(),
@@ -4097,9 +3958,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet:    privatev1.SubnetLocalReference_builder{Id: customSubnetID}.Build(),
@@ -4129,9 +3990,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet: privatev1.SubnetLocalReference_builder{Id: otherSubnetID}.Build(),
@@ -4154,9 +4015,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet: privatev1.SubnetLocalReference_builder{Id: otherSubnetID}.Build(),
@@ -4182,10 +4043,10 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDNoType}.Build(),
-						InstanceType: bareMetalInstanceTypeReference("default-type"),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDNoType}.Build(),
+						InstanceType:   bareMetalInstanceTypeReference("default-type"),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -4226,9 +4087,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -4254,9 +4115,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -4307,8 +4168,8 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catResp.GetObject().GetId()}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catResp.GetObject().GetId()}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())

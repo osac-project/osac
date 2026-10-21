@@ -53,6 +53,7 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-ope
 | Automatic ExternalIP cleanup for ClusterOrder, ComputeInstance, and BareMetalInstance (NET-CLEAN-07) | Kind component integration — DEV | Isolated installer run and coverage boundary: [NET-CLEAN-07](../docs/INTEGRATION-TESTING.md#net-clean-07-deployed-osac-cleanup) |
 | AAP, dispatcher, provisioning-provider, KubeVirt, or fulfillment boundary | Qualifying Contract or E2E | Use a boundary-specific suite; follow [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) when coverage is missing |
 | Generated CRDs or manifests | Envtest plus applicable Kind suite | `make manifests generate helm-crds check-helm-crds`, then the required test command |
+| SSH-key Secret resolution (the shared `proto/sshkey` package, consumed by the ClusterOrder and baremetal-worker reconcilers) | Unit/Envtest with injected doubles today; deployed contract boundary open | `make test` and `go test ./sshkey/ -C ../proto`; the real `Secrets.Get` consumption against a deployed fulfillment endpoint is an [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) gap — see [coverage gaps](../docs/INTEGRATION-TESTING.md#osac-operator) |
 
 Envtest runs via `make test`; Kind tests require the current operator deployment.
 The existing Controller Suite (`internal/controller/suite_test.go`) owns all

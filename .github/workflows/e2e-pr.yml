@@ -21,17 +21,21 @@
 # pull request, so a fork pull request is handled like any other. The suites it calls run the pull request's code, on the
 # commit that was approved and nothing else.
 name: E2E for pull requests
-# The decision cancels the E2E of older commits by reading run titles: keep this exact format.
+# The title is for people: the decision does not read it (it finds the run of an older commit by that commit's E2E line).
 run-name: >-
   ${{ github.event_name == 'workflow_dispatch' && format('E2E #{0} (started by hand)', inputs.number) ||
   github.event_name == 'issue_comment' && format('E2E #{0} (suites asked for in a comment)', github.event.issue.number) ||
-  format('E2E {0}:{1} @ {2}', github.event.workflow_run.head_repository.full_name, github.event.workflow_run.head_branch,
-  github.event.workflow_run.head_sha) }}
+  github.event.workflow_run.pull_requests[0].number && format('E2E #{0} · {1}',
+  github.event.workflow_run.pull_requests[0].number, github.event.workflow_run.head_branch) ||
+  format('E2E · {0}:{1}', github.event.workflow_run.head_repository.owner.login, github.event.workflow_run.head_branch) }}
 
 on:  # zizmor: ignore[dangerous-triggers] -- no pull request code is checked out; the suites run the approved commit
   workflow_run:
     workflows: ["CI", "E2E review relay", "E2E comment"]  # keep in step with the workflow names the decision takes as inputs
     types: [requested, completed]
+    # The CI run of a merge queue entry is on a branch GitHub names gh-readonly-queue/...: it is no pull request, the
+    # decision ignores it, and it only added a run with a long title for every entry.
+    branches-ignore: ["gh-readonly-queue/**"]
   issue_comment:
     types: [edited, created]  # the checkboxes of the control comment, and a /test comment (any other comment is skipped)
   workflow_dispatch:
@@ -44,7 +48,9 @@ permissions: {}
 
 jobs:
   decide:
-    uses: osac-project/osac-ci/.github/workflows/e2e-pr-decide.yml@e49642a92dd8f6f5c6680d09c8adea4e2b11e5ef  # v1.2.6
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-decide.yml@71f7996599155532e657c1da2eb9c8cad1dddea8  # v1.2.11
+    with:
+      lines-kind: statuses
     permissions:
       contents: read
       pull-requests: read
@@ -56,10 +62,11 @@ jobs:
   track:
     needs: decide
     if: needs.decide.outputs.start == 'true'
-    uses: osac-project/osac-ci/.github/workflows/e2e-pr-track.yml@e49642a92dd8f6f5c6680d09c8adea4e2b11e5ef  # v1.2.6
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-track.yml@71f7996599155532e657c1da2eb9c8cad1dddea8  # v1.2.11
     permissions:
       contents: read
     with:
+      lines-kind: statuses
       sha: ${{ needs.decide.outputs.sha }}
       suite-checks: ${{ needs.decide.outputs.suite-checks }}
     secrets:
@@ -127,10 +134,11 @@ jobs:
   finish:
     needs: [decide, track, vmaas, caas, bmaas, netris]
     if: always() && needs.decide.outputs.start == 'true'
-    uses: osac-project/osac-ci/.github/workflows/e2e-pr-finish.yml@e49642a92dd8f6f5c6680d09c8adea4e2b11e5ef  # v1.2.6
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-finish.yml@71f7996599155532e657c1da2eb9c8cad1dddea8  # v1.2.11
     permissions:
       contents: read
     with:
+      lines-kind: statuses
       sha: ${{ needs.decide.outputs.sha }}
       suites: ${{ needs.decide.outputs.suites }}
       suite-checks: ${{ needs.decide.outputs.suite-checks }}

@@ -74,10 +74,21 @@ def _parse_vlan_range(value: Any, context: str) -> tuple[int, int]:
     return first, last
 
 
+def _parse_switchd_internal_vlan_range(value: Any) -> tuple[int, int]:
+    if not isinstance(value, str) or not value.strip():
+        raise SubnetProviderError("Cumulus switchd internal reserved VLAN range is missing")
+    match = re.fullmatch(r"resv_vlan_range\s*=\s*([0-9]+-[0-9]+)", value.strip())
+    if match is None:
+        raise SubnetProviderError("Cumulus switchd internal reserved VLAN range is malformed")
+    return _parse_vlan_range(match.group(1), "internal reserved VLAN")
+
+
 def parse_switch_vlan_exclusions(
-    bridge_vlan_output: str, reserved_vlan_output: str
+    bridge_vlan_output: str,
+    reserved_vlan_output: str,
+    switchd_reserved_vlan_output: str | None = None,
 ) -> set[int]:
-    """Parse one switch's active VLAN memberships and NVUE reserved ranges."""
+    """Parse VLAN memberships and reserved ranges from Cumulus switch output."""
     try:
         interfaces = json.loads(bridge_vlan_output)
         reserved = json.loads(reserved_vlan_output)
@@ -115,15 +126,26 @@ def parse_switch_vlan_exclusions(
 
     if not isinstance(reserved, dict):
         raise SubnetProviderError("Cumulus reserved VLAN JSON is malformed")
-    internal = reserved.get("internal")
+    internal = reserved.get("internal", {})
     l3_vni = reserved.get("l3-vni-vlan")
-    if not isinstance(internal, dict) or "range" not in internal:
-        raise SubnetProviderError("Cumulus internal reserved VLAN range is missing")
+    if not isinstance(internal, dict):
+        raise SubnetProviderError("Cumulus internal reserved VLAN JSON is malformed")
     if not isinstance(l3_vni, dict) or "begin" not in l3_vni or "end" not in l3_vni:
         raise SubnetProviderError("Cumulus L3-VNI reserved VLAN range is missing")
 
-    for value in _nvue_variants(internal["range"], "internal reserved VLAN").values():
-        first, last = _parse_vlan_range(value, "internal reserved VLAN")
+    if "range" in internal:
+        internal_ranges = _nvue_variants(internal["range"], "internal reserved VLAN").values()
+        parsed_ranges = [
+            _parse_vlan_range(value, "internal reserved VLAN") for value in internal_ranges
+        ]
+    else:
+        if switchd_reserved_vlan_output is None:
+            raise SubnetProviderError(
+                "Cumulus internal reserved VLAN range is missing from NVUE and switchd.conf"
+            )
+        parsed_ranges = [_parse_switchd_internal_vlan_range(switchd_reserved_vlan_output)]
+
+    for first, last in parsed_ranges:
         excluded.update(range(first, last + 1))
 
     begins = _nvue_variants(l3_vni["begin"], "L3-VNI reserved VLAN begin")
@@ -389,6 +411,11 @@ def _state_paths(uid: str) -> dict[str, Path]:
     }
 
 
+def dhcp_lease_path(virtual_network_uid: str) -> Path:
+    """Return the lease file path for a validated VirtualNetwork UID."""
+    return _state_paths(virtual_network_uid)["leases"]
+
+
 def _owned_service_file(path: Path) -> bool:
     try:
         info = path.lstat()
@@ -559,6 +586,55 @@ def _ensure_lease_file(paths: dict[str, Path]) -> bytes:
     return contents
 
 
+def read_lease_file_read_only(path: Path) -> bytes:
+    """Read an initialized DHCP lease file without creating or changing it."""
+    directory = path.parent
+    try:
+        directory_info = directory.lstat()
+    except OSError as error:
+        raise SubnetProviderError("could not inspect AgentlessNet DHCP lease directory") from error
+    if (
+        not stat.S_ISDIR(directory_info.st_mode)
+        or directory_info.st_uid != os.geteuid()
+        or directory_info.st_mode & 0o077
+    ):
+        raise SubnetProviderError("AgentlessNet DHCP lease directory has unsafe type, owner, or mode")
+
+    marker_path = directory / ".initialized"
+    try:
+        marker_info = marker_path.lstat()
+    except OSError as error:
+        raise SubnetProviderError("AgentlessNet DHCP lease file is not initialized") from error
+    if (
+        not stat.S_ISREG(marker_info.st_mode)
+        or marker_info.st_uid != os.geteuid()
+        or marker_info.st_mode & 0o077
+    ):
+        raise SubnetProviderError("AgentlessNet DHCP initialization marker has unsafe type, owner, or mode")
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise SubnetProviderError("could not safely open AgentlessNet DHCP lease file") from error
+    try:
+        lease_info = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(lease_info.st_mode)
+            or lease_info.st_uid != os.geteuid()
+            or lease_info.st_mode & 0o077
+        ):
+            raise SubnetProviderError("AgentlessNet DHCP lease file has unsafe type, owner, or mode")
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            contents = stream.read()
+    except OSError as error:
+        raise SubnetProviderError("could not read AgentlessNet DHCP lease file") from error
+    finally:
+        os.close(descriptor)
+    _validate_lease_file(contents)
+    return contents
+
+
 def _validate_lease_file(contents: bytes) -> None:
     try:
         text = contents.decode("ascii")
@@ -583,6 +659,40 @@ def _validate_lease_file(contents: bytes) -> None:
             raise SubnetProviderError(
                 "AgentlessNet DHCP lease file is malformed; preserve and repair it before retrying"
             )
+
+
+def find_active_dhcp_lease(
+    contents: bytes,
+    subnet: dict[str, Any],
+    mac_address: str,
+    *,
+    now: int | None = None,
+) -> dict[str, str] | None:
+    """Find one active lease for a NIC MAC inside a saved Subnet DHCP range."""
+    _validate_subnet(subnet)
+    if not isinstance(mac_address, str) or not DHCP_MAC_RE.fullmatch(mac_address):
+        raise SubnetProviderError("DHCP lease query requires a valid NIC MAC address")
+    _validate_lease_file(contents)
+    current_time = int(time.time()) if now is None else now
+    if isinstance(current_time, bool) or not isinstance(current_time, int) or current_time < 0:
+        raise SubnetProviderError("DHCP lease query time is invalid")
+
+    expected_mac = mac_address.lower()
+    range_start = ipaddress.IPv4Address(subnet["dhcp_range_start"])
+    range_end = ipaddress.IPv4Address(subnet["dhcp_range_end"])
+    matches: list[dict[str, str]] = []
+    for line in contents.decode("ascii").splitlines():
+        expiry_text, lease_mac, address_text, _hostname, _client_id = line.split()
+        expiry = int(expiry_text, 10)
+        lease_mac = lease_mac.lower()
+        address = ipaddress.IPv4Address(address_text)
+        if lease_mac != expected_mac or (expiry != 0 and expiry <= current_time):
+            continue
+        if range_start <= address <= range_end:
+            matches.append({"ip_address": str(address), "mac_address": lease_mac})
+    if len(matches) > 1:
+        raise SubnetProviderError("multiple active DHCP leases match the requested NIC MAC and Subnet")
+    return matches[0] if matches else None
 
 
 def _retain_active_subnet_leases(contents: bytes, entries: list[dict[str, Any]]) -> bytes:

@@ -45,3 +45,19 @@
 # - Accidental security regressions
 .github/workflows/fullsend.yaml @osac-project/wg-infra
 .fullsend/ @osac-project/wg-infra
+
+# CaaS (Cluster-as-a-Service) working group
+# Tests
+/tests/e2e/caas/ @osac-project/wg-caas
+/tests/unit/test_caas_*.py @osac-project/wg-caas
+/osac-aap/tests/integration/targets/cluster_create_caas/ @osac-project/wg-caas
+/osac-aap/tests/integration/targets/cluster_delete_caas/ @osac-project/wg-caas
+# CaaS CI installer values
+/osac-installer/values/caas-ci/ @osac-project/wg-caas
+# CaaS cluster templates (HyperShift hosted-cluster provisioning)
+/osac-aap/collections/ansible_collections/osac/templates/roles/ocp_small/ @osac-project/wg-caas
+/osac-aap/collections/ansible_collections/osac/templates/roles/ocp_ci_small/ @osac-project/wg-caas
+/osac-aap/collections/ansible_collections/osac/templates/roles/ocp_4_20_small_nico/ @osac-project/wg-caas
+# CaaS hosted-cluster service role and workflow
+/osac-aap/collections/ansible_collections/osac/service/roles/hosted_cluster/ @osac-project/wg-caas
+/osac-aap/collections/ansible_collections/osac/workflows/playbooks/cluster/ @osac-project/wg-caas

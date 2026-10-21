@@ -353,15 +353,21 @@ aap:
         HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: ""
         HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: ""
       secret:
-        NETRIS_PASSWORD: ""
         AWS_ACCESS_KEY_ID: ""
         AWS_SECRET_ACCESS_KEY: ""
         SERVER_SSH_KEY: ""
         SERVER_SSH_BASTION_KEY: ""
     networkFulfillment:
       enabled: false
-      config: {}
+      # Expert overrides only. Normal installations should use
+      # global.networking.netris so shared values cannot drift.
+      config:
+        NETRIS_USERNAME: ""
+        NETRIS_SITE_ID: ""
+        NETRIS_TENANT_ID: ""
+        NETRIS_TENANT_NAME: ""
       secret:
+        # Prefer global.networking.netris.credentials.externalSecret.
         NETRIS_PASSWORD: ""
     publishTemplates:
       enabled: true

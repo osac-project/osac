@@ -1428,18 +1428,6 @@
                       "type": "string",
                       "description": "Name of the parking V-Net where idle CaaS agents sit before cluster assignment (effective default: idle-agents-network)"
                     },
-                    "NETRIS_CONTROLLER_URL": {
-                      "type": "string",
-                      "description": "Netris controller API endpoint URL"
-                    },
-                    "NETRIS_VALIDATE_CERTS": {
-                      "type": "string",
-                      "enum": [
-                        "true",
-                        "false"
-                      ],
-                      "description": "Verify Netris HTTPS certificates; defaults to enabled"
-                    },
                     "NETRIS_SITE_ID": {
                       "type": "string",
                       "description": "Netris site identifier"
@@ -1465,7 +1453,7 @@
                   "properties": {
                     "NETRIS_PASSWORD": {
                       "type": "string",
-                      "description": "Netris controller password. Must be set identically on clusterFulfillment.secret and networkFulfillment.secret; there is no shared Netris config block."
+                      "description": "Expert override for the Netris controller password. Normal deployments should use global.networking.netris.credentials."
                     },
                     "AWS_ACCESS_KEY_ID": {
                       "type": "string",
@@ -1513,7 +1501,7 @@
                   "properties": {
                     "NETRIS_PASSWORD": {
                       "type": "string",
-                      "description": "Netris controller password. Must be set identically on clusterFulfillment.secret and networkFulfillment.secret; there is no shared Netris config block."
+                      "description": "Expert override for the Netris controller password. Normal deployments should use global.networking.netris.credentials."
                     }
                   },
                   "additionalProperties": false
@@ -2890,18 +2878,8 @@
     },
     "aapNetrisConfig": {
       "type": "object",
-      "description": "Shared Netris properties composed into AAP instance group config objects via allOf. Do not set additionalProperties here — the consuming schema controls that.",
+      "description": "Shared expert-overridable Netris identity properties composed into AAP instance group config objects via allOf. Installation-owned URL, TLS validation, and CA path settings are intentionally excluded. Do not set additionalProperties here; the consuming schema controls that.",
       "properties": {
-        "NETRIS_CONTROLLER_URL": {
-          "type": "string",
-          "pattern": "^$|^https://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$",
-          "description": "Netris controller API URL. Must match between AAP instance groups."
-        },
-        "NETRIS_VALIDATE_CERTS": {
-          "type": "string",
-          "enum": ["true", "false"],
-          "description": "Verify Netris HTTPS certificates; defaults to enabled."
-        },
         "NETRIS_USERNAME": {
           "type": "string",
           "description": "Netris controller username. Must match between AAP instance groups."

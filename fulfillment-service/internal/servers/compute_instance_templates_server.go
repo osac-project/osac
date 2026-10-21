@@ -211,7 +211,7 @@ func (s *ComputeInstanceTemplatesServer) Create(ctx context.Context,
 			"Failed to map public compute instance template to private",
 			slog.Any("error", err),
 		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process compute instance template")
+		err = publicInputMappingError(err, "failed to process compute instance template")
 		return
 	}
 
@@ -246,6 +246,11 @@ func (s *ComputeInstanceTemplatesServer) Create(ctx context.Context,
 
 func (s *ComputeInstanceTemplatesServer) Update(ctx context.Context,
 	request *publicv1.ComputeInstanceTemplatesUpdateRequest) (response *publicv1.ComputeInstanceTemplatesUpdateResponse, err error) {
+	ctx = withPublicAPIView(ctx)
+	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
+		return nil, err
+	}
+
 	// Validate the request:
 	publicComputeInstanceTemplate := request.GetObject()
 	if publicComputeInstanceTemplate == nil {
@@ -275,7 +280,7 @@ func (s *ComputeInstanceTemplatesServer) Update(ctx context.Context,
 			"Failed to map public compute instance template to private",
 			slog.Any("error", err),
 		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process compute instance template")
+		err = publicInputMappingError(err, "failed to process compute instance template")
 		return
 	}
 

@@ -114,6 +114,7 @@ def run_role(tmp_path, url, tasks_from, role_name="netris.controller.server_clus
         "gather_facts": False,
         "vars": {
             "netris_controller_url": url,
+            "netris_validate_certs": False,
             "netris_session_cookie": "test-cookie",
             "server_cluster_name": "shared-name",
             "server_cluster_site_id": 1,
@@ -148,6 +149,8 @@ def run_role(tmp_path, url, tasks_from, role_name="netris.controller.server_clus
     env["ANSIBLE_CONFIG"] = str(PROJECT_ROOT / "ansible.cfg")
     env["ANSIBLE_LOCAL_TEMP"] = str(tmp_path / "ansible-tmp")
     env["ANSIBLE_REMOTE_TEMP"] = str(tmp_path / "ansible-remote-tmp")
+    env["NETRIS_CONTROLLER_URL"] = url
+    env["NETRIS_VALIDATE_CERTS"] = "false"
     return subprocess.run(
         ["ansible-playbook", str(playbook_file)],
         cwd=PROJECT_ROOT,

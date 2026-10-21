@@ -16,6 +16,29 @@ ConfigMaps and Secrets. Network-fulfillment receives the shared Netris
 connection fields; cluster-fulfillment also receives cluster-specific Netris
 fields and hosted-cluster settings.
 
+## Protected Netris settings
+
+The installer owns the Netris controller URL, certificate-validation mode, and
+CA path. Managed workers always receive the canonical environment names
+`NETRIS_CONTROLLER_URL`, `NETRIS_VALIDATE_CERTS`, and `NETRIS_CA_PATH`; the CA
+path is `/etc/netris/ca/bundle.pem` when a CA ConfigMap is configured and is an
+explicit empty value otherwise.
+
+The following launch keys are protected, including case and separator variants:
+`controller_url`, `netris_controller_url`, `validate_certs`,
+`netris_validate_certs`, `ca_path`, `netris_ca_path`, and the three canonical
+environment names. They may not be supplied through AAP `extra_vars` or the
+managed instance-group ConfigMap/Secret, even when the value matches the
+installation. Ordinary resource variables remain launchable because
+`ask_variables_on_launch` stays enabled.
+
+Netris jobs use the managed cluster-fulfillment or networking-operations
+instance group with fallback disabled. Their protected strategy validates the
+original Ansible Runner `extra_vars` before the first task. A direct AAP launch
+that includes a protected key fails before an HTTP request, even when the value
+would otherwise be ignored. Use the global networking facade to change these
+settings, then reconcile the Helm release.
+
 ## How It Works
 
 Instance group ConfigMaps and Secrets are managed by the osac-aap subchart

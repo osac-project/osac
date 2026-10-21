@@ -1,0 +1,67 @@
+{
+  "ca_path": "/etc/netris/ca/bundle.pem",
+  "conformance_vectors": {
+    "accepted": [
+      {
+        "empty": "",
+        "osac_job_vars": {
+          "items": [
+            "a",
+            3,
+            null
+          ],
+          "resource": {
+            "enabled": false,
+            "name": "network-1"
+          }
+        }
+      }
+    ],
+    "rejected_keys": [
+      "controller_url",
+      "netris_controller_url",
+      "NETRIS_CONTROLLER_URL",
+      "validate_certs",
+      "netris_validate_certs",
+      "NETRIS_VALIDATE_CERTS",
+      "ca_path",
+      "netris_ca_path",
+      "NETRIS_CA_PATH",
+      "NetrisControllerURL",
+      "NETRIS.controller_url",
+      "netris-controller-url",
+      "ValidateCerts",
+      "Netris_CA_Path"
+    ]
+  },
+  "policy_version": "v1",
+  "protected_inputs": [
+    {
+      "aliases": [
+        "controller_url",
+        "netris_controller_url",
+        "NETRIS_CONTROLLER_URL"
+      ],
+      "canonical_environment": "NETRIS_CONTROLLER_URL",
+      "name": "controller_url"
+    },
+    {
+      "aliases": [
+        "validate_certs",
+        "netris_validate_certs",
+        "NETRIS_VALIDATE_CERTS"
+      ],
+      "canonical_environment": "NETRIS_VALIDATE_CERTS",
+      "name": "validate_certs"
+    },
+    {
+      "aliases": [
+        "ca_path",
+        "netris_ca_path",
+        "NETRIS_CA_PATH"
+      ],
+      "canonical_environment": "NETRIS_CA_PATH",
+      "name": "ca_path"
+    }
+  ]
+}

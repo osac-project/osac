@@ -48,7 +48,7 @@
   when:
     - server_cluster_servers | length > 0
     - server_cluster_servers[0] is string
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/hw?type=server"
     method: GET
     headers:
@@ -101,7 +101,7 @@
   when: _existing_server_cluster is defined and _existing_server_cluster is not none
 
 - name: Update existing server cluster
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/server-cluster/{{ _existing_server_cluster.id }}"
     method: PUT
     headers:
@@ -149,7 +149,7 @@
     - server_cluster_admin_name is defined
 
 - name: Create new server cluster
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/server-cluster"
     method: POST
     headers:
@@ -177,7 +177,7 @@
     server_cluster_created: "{{ _existing_server_cluster is not defined or _existing_server_cluster is none }}"
 
 - name: Wait for server cluster to be active
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/server-cluster/{{ server_cluster_id }}"
     method: GET
     headers:

@@ -646,6 +646,9 @@ func (r *ComputeInstanceReconciler) handleDelete(ctx context.Context, _ reconcil
 	log := ctrllog.FromContext(ctx)
 	log.Info("deleting compute instance")
 
+	// The outer Reconcile persists status after handleDelete returns. Keep the
+	// base finalizer until a later reconcile observes that status in the API.
+	oldStatus := instance.Status.DeepCopy()
 	setComputeInstancePhase(&instance.Status, v1alpha1.ComputeInstancePhaseDeleting)
 
 	// Base finalizer has already been removed, cleanup complete
@@ -663,6 +666,10 @@ func (r *ComputeInstanceReconciler) handleDelete(ctx context.Context, _ reconcil
 	// If we need to requeue (jobs still running or provider needs time), do so
 	if result.RequeueAfter > 0 {
 		return result, nil
+	}
+
+	if !equality.Semantic.DeepEqual(instance.Status, *oldStatus) {
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
 	// Deprovisioning complete or skipped, remove base finalizer

@@ -5,7 +5,7 @@
   when: netris_session_cookie is not defined
 
 - name: Query existing IPAM subnets
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/ipam/subnets"
     method: GET
     headers:
@@ -27,7 +27,7 @@
 
 - name: Delete IPAM subnet
   when: _existing_ipam_subnet is defined and _existing_ipam_subnet is mapping
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/ipam/subnet/{{ _existing_ipam_subnet.id }}"
     method: DELETE
     headers:

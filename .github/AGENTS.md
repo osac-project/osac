@@ -31,6 +31,7 @@ plus a native approval on the head commit, and the merge queue.
   `e2e-pr.yml` through the shared decision for members of the organization. The old slash-command workflow (`/test <workflow>`,
   `/retest`, `/cancel`, `optional-workflows.yml`) is gone: re-run a check from its page, and start Netris with `/test netris`.
   A pull request from someone outside the organization needs the `ok-to-test` label added by a person with triage access.
+- Flake detection: run `python3 -m unittest discover -s .github/scripts -p test_flake_report.py` and applicable pre-commit and actionlint checks.
 
 ## Dependency updates and who may change the pipeline
 

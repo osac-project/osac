@@ -1,0 +1,132 @@
+name: Flake report
+
+# Summarize a finished Flake detection run in GitHub, with Slack for osac-project/osac.
+# A separate workflow allows failed and cancelled test runs to receive reports.
+on:
+  workflow_run:
+    workflows: [Flake detection]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  report:
+    # Report manual campaigns in this repository, including forks.
+    # Scheduled campaigns are accepted only in osac-project/osac.
+    if: >-
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      (github.event.workflow_run.event == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'schedule' && github.repository == 'osac-project/osac'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      slack_payload: ${{ steps.generate.outputs.slack_payload }}
+    steps:
+      # Check out the default branch's reporting code; the campaign supplies data.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      # Read the expected suites, repetitions and tested commit saved by the campaign.
+      - name: Download campaign plan
+        continue-on-error: true  # The report marks missing metadata as incomplete.
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: flake-plan-${{ github.event.workflow_run.run_attempt }}
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          path: flake-input
+      # Read every page of jobs from the completed attempt, keeping reruns separate.
+      - name: Fetch component jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CAMPAIGN_ID: ${{ github.event.workflow_run.id }}
+          ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        run: |
+          set -euo pipefail
+          mkdir -p flake-input
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${CAMPAIGN_ID}/attempts/${ATTEMPT}/jobs?per_page=100" \
+            > flake-input/jobs.json
+      # List saved logs for links. The reporter filters expired files and other attempts.
+      # Job results determine success or failure; the report leaves log contents unread.
+      - name: Fetch diagnostic artifacts
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CAMPAIGN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          mkdir -p flake-input
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${CAMPAIGN_ID}/artifacts?per_page=100" \
+            > flake-input/artifacts.json
+      # Produce a report even if a download failed. SOURCE_SHA identifies the
+      # campaign's workflow commit; its tested commit comes from the saved plan.
+      - name: Generate report
+        id: generate
+        if: always()
+        env:
+          CAMPAIGN_ID: ${{ github.event.workflow_run.id }}
+          ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          CAMPAIGN_URL: ${{ github.event.workflow_run.html_url }}
+          # Date the message from the campaign start, even if reporting is delayed.
+          STARTED_AT: ${{ github.event.workflow_run.run_started_at }}
+        run: |
+          python3 .github/scripts/flake_report.py \
+            --plan flake-input/flake-plan.json --jobs flake-input/jobs.json \
+            --artifacts flake-input/artifacts.json \
+            --run-id "$CAMPAIGN_ID" --attempt "$ATTEMPT" --sha "$SOURCE_SHA" \
+            --conclusion "$CONCLUSION" --run-url "$CAMPAIGN_URL" --started-at "$STARTED_AT" \
+            --report-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --output flake-report \
+            --github-output "$GITHUB_OUTPUT"
+      # Keep the summary and complete JSON results even if the reporter
+      # returns an error to flag incomplete results.
+      - name: Publish report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: flake-report-${{ github.run_attempt }}
+          path: flake-report
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish job summary
+        if: always()
+        run: |
+          if [[ -f flake-report/summary.md ]]; then
+            cat flake-report/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # Only osac-project/osac sends Slack; forks keep their GitHub reports.
+  # Send bounded Slack summaries even when the reporting job marked them incomplete.
+  # The osac-ci runner has access to Vault, which stores the shared Slack webhook.
+  notify:
+    needs: report
+    if: >-
+      always() &&
+      github.repository == 'osac-project/osac' &&
+      needs.report.outputs.slack_payload != ''
+    runs-on: osac-ci
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Retrieve Slack webhook
+        id: vault
+        uses: ./.github/actions/vault-slack-webhook
+      - name: Notify Slack
+        env:
+          SLACK_WEBHOOK_URL: ${{ steps.vault.outputs.webhook-url }}
+          SLACK_PAYLOAD: ${{ needs.report.outputs.slack_payload }}
+        run: |
+          printf '%s' "$SLACK_PAYLOAD" |
+            curl -fsS --max-time 15 -X POST "$SLACK_WEBHOOK_URL" \
+              -H 'Content-Type: application/json' --data-binary @-

@@ -232,6 +232,11 @@ func (s *IdentityProvidersServer) Get(ctx context.Context,
 
 func (s *IdentityProvidersServer) Update(ctx context.Context,
 	request *publicv1.IdentityProvidersUpdateRequest) (response *publicv1.IdentityProvidersUpdateResponse, err error) {
+	ctx = withPublicAPIView(ctx)
+	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
+		return nil, err
+	}
+
 	// Map public request to private format:
 	privateObject := &privatev1.IdentityProvider{}
 	err = s.inMapper.Copy(ctx, request.GetObject(), privateObject)

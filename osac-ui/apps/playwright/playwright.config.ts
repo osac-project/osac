@@ -94,6 +94,26 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
     {
+      name: 'vmaas-instance-type',
+      testDir: vmaasDir,
+      testMatch: /create\.instance_type\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      teardown: 'vmaas-instance-type-delete',
+    },
+    {
+      name: 'vmaas-instance-type-lifecycle',
+      testDir: vmaasDir,
+      testMatch: /lifecycle\.instance_type\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      dependencies: ['vmaas-instance-type'],
+    },
+    {
+      name: 'vmaas-instance-type-delete',
+      testDir: vmaasDir,
+      testMatch: /delete\.instance_type\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+    },
+    {
       name: 'vmaas-delete',
       testDir: vmaasDir,
       testMatch: /delete\.tenant\.spec\.ts/,

@@ -21,9 +21,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/baremetalhost"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/netboxclient"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
 )
 
 const netBoxHostClass = "metal3"
@@ -117,8 +119,62 @@ func NewNetBoxClient(api NetBoxAPI, bmhManager baremetalhost.BMHLifecycleManager
 	}
 }
 
-func (*NetBoxClient) FindFreeHost(_ context.Context, _ map[string]string) (*Host, error) {
-	return nil, errNetBoxClientNotImplemented
+func (c *NetBoxClient) FindFreeHost(ctx context.Context, selector map[string]string) (*Host, error) {
+	return c.findFreeHost(ctx, buildFreeHostQuery(selector))
+}
+
+func (c *NetBoxClient) findFreeHost(ctx context.Context, query netboxclient.DeviceQuery) (*Host, error) {
+	namespace, err := c.metal3Namespace()
+	if err != nil {
+		return nil, err
+	}
+
+	var foundHost *Host
+	err = c.api.ForEachDevice(ctx, query, func(device netboxclient.Device) (bool, error) {
+		foundHost = netboxHostFromDevice(namespace, c.hostClass, device)
+		return false, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to search NetBox for a free host: %w", err)
+	}
+	return foundHost, nil
+}
+
+func (c *NetBoxClient) metal3Namespace() (string, error) {
+	if c.bmhManager != nil {
+		if namespace := c.bmhManager.Namespace(); namespace != "" {
+			return namespace, nil
+		}
+	}
+	return "", errors.New("NetBox inventory requires a Metal3 namespace")
+}
+
+func netboxHostFromDevice(namespace, hostClass string, device netboxclient.Device) *Host {
+	name := "netbox-" + device.ID
+	return &Host{
+		InventoryHostID: fmt.Sprintf("%s/%s", namespace, name),
+		Name:            name,
+		HostClass:       hostClass,
+		ProvisionState:  shared.OsacDefaultProvisionStateValue,
+		ManagedBy:       shared.OsacDefaultManagedByValue,
+		Ready:           true,
+	}
+}
+
+func buildFreeHostQuery(selector map[string]string) netboxclient.DeviceQuery {
+	capabilityFilters := make(netboxclient.DeviceQuery, len(selector))
+	for key, value := range selector {
+		capabilityFilters["cf_"+key] = value
+	}
+	commonSelectors := netboxclient.DeviceQuery{
+		"status":                     "staged",
+		"cf_osac_managed":            "true",
+		"cf_osac_instance_id__empty": "true",
+	}
+	query := make(netboxclient.DeviceQuery, len(capabilityFilters)+len(commonSelectors))
+	maps.Copy(query, capabilityFilters)
+	maps.Copy(query, commonSelectors)
+	return query
 }
 
 func (*NetBoxClient) AssignHost(_ context.Context, _ string, _ string, _ map[string]string) (*Host, error) {

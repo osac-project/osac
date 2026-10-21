@@ -204,7 +204,7 @@ func (s *BareMetalInstancesServer) Create(ctx context.Context,
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to map public bare metal instance to private",
 			slog.Any("error", err))
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process bare metal instance")
+		err = publicInputMappingError(err, "failed to process bare metal instance")
 		return
 	}
 	// The status is output-only: only the system writes it. The metering source contract
@@ -236,6 +236,11 @@ func (s *BareMetalInstancesServer) Create(ctx context.Context,
 
 func (s *BareMetalInstancesServer) Update(ctx context.Context,
 	request *publicv1.BareMetalInstancesUpdateRequest) (response *publicv1.BareMetalInstancesUpdateResponse, err error) {
+	ctx = withPublicAPIView(ctx)
+	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
+		return nil, err
+	}
+
 	publicBMI := request.GetObject()
 	if publicBMI == nil {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
@@ -280,7 +285,7 @@ func (s *BareMetalInstancesServer) Update(ctx context.Context,
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to map public bare metal instance to private",
 			slog.Any("error", err))
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process bare metal instance")
+		err = publicInputMappingError(err, "failed to process bare metal instance")
 		return
 	}
 	// The public API has no writable status, and the mapper copies the fields the request

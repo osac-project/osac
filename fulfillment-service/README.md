@@ -86,6 +86,32 @@ To build the `osac` binary:
 $ go build ./cmd/osac
 ```
 
+## CSP-managed storage backends
+
+Cloud Provider Admins can register a backend with `spec.cspManaged: true` when they manage its
+storage resources. This applies to any provider. Endpoint and credentials can be omitted:
+
+```json
+{
+  "metadata": {"name": "netapp-prod"},
+  "spec": {"provider": "netapp", "cspManaged": true}
+}
+```
+
+After logging in to the private API, the equivalent CLI command is:
+
+```bash
+osac create storagebackend --name netapp-prod --provider netapp --csp-managed
+```
+
+Omitting `cspManaged` defaults to `false` and preserves the requirement for an endpoint, username,
+and exactly one password source (inline password or an OSAC Secret reference). Supplied
+credentials are validated in either mode. Ownership is immutable after creation; partial updates
+to other fields preserve it. No VMaaS cluster or TridentBackendConfig reference is required.
+
+This API change records ownership only. Operator provisioning and readiness behavior for
+CSP-managed backends will be implemented separately.
+
 ## Running unit tests
 
 To run the unit tests of the internal packages:

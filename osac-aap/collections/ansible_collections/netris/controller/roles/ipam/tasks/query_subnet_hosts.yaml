@@ -1,6 +1,6 @@
 ---
 - name: "Query hosts in subnet {{ _ipam_current_subnet.prefix }}"
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/ipam/hosts/{{ _ipam_current_subnet.id }}"
     method: GET
     headers:

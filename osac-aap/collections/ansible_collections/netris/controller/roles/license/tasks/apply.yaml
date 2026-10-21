@@ -5,7 +5,7 @@
   when: netris_session_cookie is not defined
 
 - name: Check current license
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/license"
     method: GET
     headers:
@@ -26,7 +26,7 @@
 
 - name: Apply license key
   when: not (_license_check.json.isSuccess | default(false))
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/license"
     method: PUT
     headers:

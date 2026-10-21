@@ -173,7 +173,15 @@ jobs:
       id-token: write
     uses: ./.github/workflows/build-bmf-image.yaml
 
-  # osac-ui: lint (the UI and its Go proxy) and typecheck. The unit tests of osac-ui are a leg of the matrix below.
+  # osac-ui: generated types, lint (the UI and its Go proxy), and typecheck. The unit tests of osac-ui are a leg of the matrix below.
+  osac-ui-generated-types:
+    name: osac-ui generated types
+    needs: plan
+    if: contains(needs.plan.outputs.changed, '|ui|')
+    permissions:
+      contents: read
+    uses: ./.github/workflows/osac-ui-generated-types.yaml
+
   osac-ui-lint:
     name: osac-ui lint
     needs: plan
@@ -225,6 +233,7 @@ jobs:
       - helm-lint
       - build-osac-operator
       - build-bare-metal-fulfillment-operator
+      - osac-ui-generated-types
       - osac-ui-lint
       - osac-ui-typecheck
       - tests

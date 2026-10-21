@@ -233,7 +233,7 @@ func (s *InstanceTypesServer) Create(ctx context.Context,
 			"Failed to map public instance type to private",
 			slog.Any("error", err),
 		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process instance type")
+		err = publicInputMappingError(err, "failed to process instance type")
 		return
 	}
 
@@ -267,6 +267,11 @@ func (s *InstanceTypesServer) Create(ctx context.Context,
 
 func (s *InstanceTypesServer) Update(ctx context.Context,
 	request *publicv1.InstanceTypesUpdateRequest) (response *publicv1.InstanceTypesUpdateResponse, err error) {
+	ctx = withPublicAPIView(ctx)
+	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
+		return nil, err
+	}
+
 	// Validate the request:
 	publicInstanceType := request.GetObject()
 	if publicInstanceType == nil {
@@ -296,7 +301,7 @@ func (s *InstanceTypesServer) Update(ctx context.Context,
 			"Failed to map public instance type to private",
 			slog.Any("error", err),
 		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process instance type")
+		err = publicInputMappingError(err, "failed to process instance type")
 		return
 	}
 

@@ -1,16 +1,15 @@
 ---
 - name: Resolve Netris TLS settings from the worker environment
   ansible.builtin.set_fact:
+    netris_controller_url: "{{ lookup('ansible.builtin.env', 'NETRIS_CONTROLLER_URL', default='') }}"
     netris_validate_certs: >-
-      {{ netris_validate_certs
-         | default((lookup('ansible.builtin.env', 'NETRIS_VALIDATE_CERTS')
-                    | default('true', true) | lower | trim) != 'false') }}
+      {{ (lookup('ansible.builtin.env', 'NETRIS_VALIDATE_CERTS')
+          | default('true', true) | lower | trim) != 'false' }}
     netris_ca_path: >-
-      {{ netris_ca_path
-         | default(lookup('ansible.builtin.env', 'NETRIS_CA_PATH', default=''), true) }}
+      {{ lookup('ansible.builtin.env', 'NETRIS_CA_PATH', default='') }}
 
 - name: Login to Netris controller
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/auth"
     method: POST
     body_format: json

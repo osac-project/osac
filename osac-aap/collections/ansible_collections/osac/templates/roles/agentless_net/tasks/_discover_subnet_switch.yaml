@@ -27,12 +27,29 @@
   changed_when: false
   no_log: true
 
+- name: Read switchd internal reserved VLAN range on the configured switch
+  ansible.builtin.raw: >-
+    awk '/^[[:space:]]*resv_vlan_range[[:space:]]*=/ { print }'
+    /etc/cumulus/switchd.conf
+  delegate_to: "{{ _agentless_net_switch_name }}"
+  become: true
+  vars:
+    ansible_connection: ssh
+    ansible_host: "{{ hostvars[_agentless_net_switch_name].ansible_host }}"
+    ansible_user: "{{ hostvars[_agentless_net_switch_name].ansible_user }}"
+    ansible_port: "{{ hostvars[_agentless_net_switch_name].ansible_port }}"
+    ansible_network_os: cumulus
+  register: _agentless_net_switchd_vlan_reservation
+  changed_when: false
+  no_log: true
+
 - name: Save raw provider VLAN discovery output for the state module
   ansible.builtin.set_fact:
     _agentless_net_subnet_switch_vlan_state: >-
       {{ _agentless_net_subnet_switch_vlan_state | default([])
          + [{
            'bridge_vlan_output': _agentless_net_switch_vlan_memberships.stdout,
-           'reserved_vlan_output': _agentless_net_switch_vlan_reservations.stdout
+           'reserved_vlan_output': _agentless_net_switch_vlan_reservations.stdout,
+           'switchd_reserved_vlan_output': _agentless_net_switchd_vlan_reservation.stdout
          }] }}
   no_log: true

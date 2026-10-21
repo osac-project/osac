@@ -210,7 +210,7 @@ func (s *DiskImagesServer) Create(ctx context.Context,
 			"Failed to map public disk image to private",
 			slog.Any("error", err),
 		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process disk image")
+		err = publicInputMappingError(err, "failed to process disk image")
 		return
 	}
 
@@ -241,6 +241,11 @@ func (s *DiskImagesServer) Create(ctx context.Context,
 
 func (s *DiskImagesServer) Update(ctx context.Context,
 	request *publicv1.DiskImagesUpdateRequest) (response *publicv1.DiskImagesUpdateResponse, err error) {
+	ctx = withPublicAPIView(ctx)
+	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
+		return nil, err
+	}
+
 	publicDiskImage := request.GetObject()
 	if publicDiskImage == nil {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
@@ -273,7 +278,7 @@ func (s *DiskImagesServer) Update(ctx context.Context,
 			"Failed to map public disk image to private",
 			slog.Any("error", err),
 		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process disk image")
+		err = publicInputMappingError(err, "failed to process disk image")
 		return
 	}
 

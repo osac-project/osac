@@ -286,6 +286,20 @@ its two instance-group manifests.
 {{- $derived | toYaml -}}
 {{- end }}
 
+{{/* Return true when a top-level AAP config source attempts a protected key. */}}
+{{- define "osac.isProtectedNetrisKey" -}}
+{{- $normalized := .key | lower | replace "_" "" | replace "-" "" | replace "." "" -}}
+{{- $contract := .root.Files.Get "files/netris-protected-inputs.json" | fromJson -}}
+{{- $matched := false -}}
+{{- range $input := $contract.protected_inputs -}}
+  {{- range $alias := $input.aliases -}}
+    {{- if eq $normalized ($alias | lower | replace "_" "" | replace "-" "" | replace "." "") }}{{- $matched = true -}}{{ end -}}
+  {{- end -}}
+  {{- if eq $normalized ($input.canonical_environment | lower | replace "_" "" | replace "-" "" | replace "." "") }}{{- $matched = true -}}{{ end -}}
+{{- end -}}
+{{- if $matched }}true{{ end -}}
+{{- end }}
+
 {{/*
 Fail helm template when networking values are inconsistent. Schema validates
 individual fields; this enforces cross-field invariants that JSON Schema
@@ -309,6 +323,26 @@ facade vs low-level surface mismatches).
 {{- $nfCfg := $nf.config | default dict -}}
 {{- $cfSec := $cf.secret | default dict -}}
 {{- $nfSec := $nf.secret | default dict -}}
+{{- range $key, $value := $cfCfg -}}
+{{- if eq (include "osac.isProtectedNetrisKey" (dict "root" $ "key" $key)) "true" -}}
+{{- fail (printf "aap.instanceGroups.clusterFulfillment.config.%s is managed by global.networking.netris" $key) -}}
+{{- end -}}
+{{- end -}}
+{{- range $key, $value := $nfCfg -}}
+{{- if eq (include "osac.isProtectedNetrisKey" (dict "root" $ "key" $key)) "true" -}}
+{{- fail (printf "aap.instanceGroups.networkFulfillment.config.%s is managed by global.networking.netris" $key) -}}
+{{- end -}}
+{{- end -}}
+{{- range $key, $value := $cfSec -}}
+{{- if eq (include "osac.isProtectedNetrisKey" (dict "root" $ "key" $key)) "true" -}}
+{{- fail (printf "aap.instanceGroups.clusterFulfillment.secret.%s is managed by global.networking.netris" $key) -}}
+{{- end -}}
+{{- end -}}
+{{- range $key, $value := $nfSec -}}
+{{- if eq (include "osac.isProtectedNetrisKey" (dict "root" $ "key" $key)) "true" -}}
+{{- fail (printf "aap.instanceGroups.networkFulfillment.secret.%s is managed by global.networking.netris" $key) -}}
+{{- end -}}
+{{- end -}}
 {{- if not $netExpertAap -}}
 {{- if $netrisEnabled -}}
 {{- $creds := $netris.credentials | default dict -}}

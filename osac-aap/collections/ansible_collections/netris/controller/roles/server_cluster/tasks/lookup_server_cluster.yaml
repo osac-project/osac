@@ -25,7 +25,7 @@
              server_cluster_backend_id | string | length > 0 else '') }}
 
 - name: Get the exact ServerCluster or the collection for name lookup
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ _server_cluster_lookup_url }}"
     method: GET
     headers:

@@ -14,10 +14,10 @@ import {
 import type { MockTransportOverrides } from '../../test-utils/createMockConnectTransport';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
-const makeTenant = (id: string, name: string): Tenant =>
+const makeTenant = (id: string, name: string, description?: string): Tenant =>
   ({
     id,
-    metadata: { name },
+    metadata: { name, description },
     spec: { domains: [`${name}.example.com`] },
     status: { state: TenantState.SYNCED },
   }) as Tenant;
@@ -115,6 +115,20 @@ describe('ResourceSelectField', () => {
       );
     });
     expect(screen.getByRole('combobox')).toHaveValue('globex');
+  });
+
+  it('shows each resource description in its option', async () => {
+    const { user } = renderSelect({
+      tenants: [
+        makeTenant('t-1', 'acme', 'Production tenant'),
+        makeTenant('t-2', 'globex', 'Development tenant'),
+      ],
+    });
+
+    await user.click(await screen.findByRole('combobox'));
+
+    expect(screen.getByRole('option', { name: /acme/ })).toHaveTextContent('Production tenant');
+    expect(screen.getByRole('option', { name: /globex/ })).toHaveTextContent('Development tenant');
   });
 
   it('auto-selects a single listed resource as id and name', async () => {

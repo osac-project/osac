@@ -15,12 +15,13 @@ const renderCatalogField = (initial: ProvisioningFieldValue<string>) =>
   renderWithProviders(
     <Formik<Values> initialValues={{ userData: initial }} onSubmit={() => {}}>
       <CatalogField name="userData">
-        {({ valueName, isDisabled, labelInfo }) => (
+        {({ valueName, isDisabled, isRequired, labelInfo }) => (
           <InputField
             name={valueName}
             label="User data"
             fieldId="user-data"
             isDisabled={isDisabled}
+            isRequired={isRequired}
             labelInfo={labelInfo}
           />
         )}
@@ -35,6 +36,7 @@ describe('CatalogField', () => {
     const toggle = screen.getByRole('switch');
     expect(toggle).toBeChecked();
     expect(toggle).toHaveAccessibleName('Editable');
+    expect(screen.queryByText('*')).not.toBeInTheDocument();
   });
 
   it('renders unchecked and labeled Locked when the field starts locked', () => {
@@ -43,6 +45,7 @@ describe('CatalogField', () => {
     const toggle = screen.getByRole('switch');
     expect(toggle).not.toBeChecked();
     expect(toggle).toHaveAccessibleName('Locked');
+    expect(screen.getByText('*')).toBeInTheDocument();
   });
 
   it('keeps the wrapped control enabled while locked', () => {

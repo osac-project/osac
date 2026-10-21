@@ -25,13 +25,22 @@ const catalogLockedStringField = (valueSchema: yup.StringSchema, requiredMessage
   });
 
 const catalogLockedResourceField = (requiredMessage: string) =>
-  yup.object({
-    locked: yup.boolean(),
-    value: yup.object({ id: yup.string(), name: yup.string() }).when('locked', {
-      is: true,
-      then: () => requiredResourceSelectValue(requiredMessage),
-    }),
-  });
+  yup
+    .object({
+      locked: yup.boolean(),
+      value: yup.object({ id: yup.string(), name: yup.string() }),
+    })
+    .test(
+      'resource-select-required-when-locked',
+      requiredMessage,
+      function requiredWhenLocked(field) {
+        const id = field?.value?.id;
+        if (!field?.locked || (typeof id === 'string' && id.trim())) {
+          return true;
+        }
+        return this.createError({ path: `${this.path}.value.id`, message: requiredMessage });
+      },
+    );
 
 const diskSizeNumberTest = (t: TFunction) =>
   ({

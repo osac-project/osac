@@ -27,23 +27,23 @@ const ComputeCatalogConfigurationStep = () => {
       <StackItem>
         <OsacForm>
           <CatalogField name="diskImage">
-            {({ valueName, isDisabled, labelInfo }) => (
+            {({ valueName, isDisabled, isRequired, labelInfo }) => (
               <DiskImageField
                 name={valueName}
                 fieldId="compute-catalog-disk-image"
                 isDisabled={isDisabled}
-                isRequired={false}
+                isRequired={isRequired}
                 labelInfo={labelInfo}
               />
             )}
           </CatalogField>
           <CatalogField name="instanceType">
-            {({ valueName, isDisabled, labelInfo }) => (
+            {({ valueName, isDisabled, isRequired, labelInfo }) => (
               <ComputeInstanceTypeField
                 name={`${valueName}.id`}
                 fieldId="compute-catalog-instance-type"
                 isDisabled={isDisabled}
-                isRequired={false}
+                isRequired={isRequired}
                 labelInfo={labelInfo}
               />
             )}

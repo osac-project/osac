@@ -8,6 +8,7 @@ import type { ProvisioningFieldValue } from '../../ProvisioningWizard/fields/pro
 interface CatalogFieldRenderProps {
   valueName: string;
   isDisabled: boolean;
+  isRequired: boolean;
   labelInfo: ReactNode;
 }
 
@@ -37,6 +38,7 @@ const CatalogField = ({ name, children }: CatalogFieldProps) => {
     // The author must still be able to enter a value for a locked field, so the
     // wrapped control stays enabled regardless of the Editable/Locked switch.
     isDisabled: false,
+    isRequired: Boolean(field.value?.locked),
     labelInfo,
   });
 };

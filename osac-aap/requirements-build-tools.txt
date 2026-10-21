@@ -11,6 +11,15 @@ bindep==2.14.0
 PyYAML==6.0.3
 packaging==26.3
 dumb-init==1.2.5
+# bindep's own transitive dependencies -- Cachi2 didn't auto-resolve these
+# for a build-requirements entry the way it did for ansible-core/
+# ansible-runner's own transitive deps (confirmed live: distro>=1.7 missing
+# from the prefetch, even though bindep==2.14.0 itself was present), so
+# list them explicitly. Resolved via `pip install bindep==2.14.0 --dry-run
+# --report` against a clean environment.
+distro==1.9.0
+pbr==7.1.3
+Parsley==1.3
 # ansible-core ships no wheel, only an sdist, so pip must build it -- which
 # needs its own build-system requirement (setuptools<=82.0.0,>=66.1.0, per
 # ansible-core's own pyproject.toml) prefetched too. Without this explicit

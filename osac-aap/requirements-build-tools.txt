@@ -36,14 +36,22 @@ setuptools==82.0.0
 # live: "Could not find a version that satisfies the requirement wheel
 # (from versions: none)".
 wheel==0.48.0
-# python-esiclient (git-sourced, no static PyPI metadata) ends up needing
-# "pytz" once Hermeto builds its real metadata during prefetch -- not
-# reproducible via a plain local `pip install --no-index
-# --find-links=<mirror of every pinned package>` using the committed
-# requirements.txt (tried this exact simulation locally: resolves clean,
-# no pytz anywhere in python-esiclient's or any pinned package's real
-# PyPI metadata), so the exact mechanism inside Hermeto's own build
-# environment isn't confirmed -- but the live failure is unambiguous:
-# "Could not find a version that satisfies the requirement pytz (from
-# versions: none)", right after python-esiclient's wheel build succeeds.
+# ansible-builder's introspect step merges every vendored collection's own
+# bindep.txt/requirements.txt into the final combined pip requirements
+# file at BUILD TIME (inside the Containerfile's builder stage, after
+# collections are copied in) -- these entries never appear anywhere in
+# osac-aap's own execution-environment/requirements.txt, so Cachi2 has no
+# visibility into them from that file alone. Confirmed via a local
+# `ansible-builder create` + introspect.py run against this component's
+# actual collections/vendor tree (same merge the real build performs):
+# pytz/python-dateutil/awxkit come from ansible.controller's own
+# bindep.txt/requirements.txt; textfsm/ttp/xmltodict come from
+# ansible.utils's -- all real, requested collections, not stale vendor
+# (unlike the now-removed orphaned ansible.eda, which contributed a much
+# bigger and genuinely unneeded set of these -- see its vendor removal
+# commit).
 pytz==2026.5
+awxkit==24.6.1
+textfsm==2.1.0
+ttp==0.10.1
+xmltodict==1.0.4

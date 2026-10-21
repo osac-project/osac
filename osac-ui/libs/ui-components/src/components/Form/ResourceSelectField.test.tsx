@@ -26,7 +26,7 @@ const renderSelect = ({
   autoSelectSingleOption = false,
   filterItems,
   formatOptionLabel,
-  isRequired = true,
+  description,
   isRequired = true,
   initialValue = emptyResourceSelectValue(),
   tenants = [makeTenant('only-1', 'Only tenant')],
@@ -35,7 +35,7 @@ const renderSelect = ({
   autoSelectSingleOption?: boolean;
   filterItems?: (item: { id: string; metadata?: { name?: string } }) => boolean;
   formatOptionLabel?: (item: { id: string; metadata?: { name?: string } }) => string;
-  isRequired?: boolean;
+  description?: string;
   isRequired?: boolean;
   initialValue?: ResourceSelectValue;
   tenants?: Tenant[];
@@ -64,6 +64,7 @@ const renderSelect = ({
             autoSelectSingleOption={autoSelectSingleOption}
             filterItems={filterItems}
             formatOptionLabel={formatOptionLabel}
+            description={description}
             placeholder="Select a tenant"
             loadErrorTitle="Failed to fetch tenants"
             emptyTitle="No registered tenants"
@@ -93,6 +94,12 @@ const renderSelect = ({
 };
 
 describe('ResourceSelectField', () => {
+  it('shows helper text below the form control', async () => {
+    renderSelect({ description: 'Choose the tenant for this resource.' });
+
+    expect(await screen.findByText('Choose the tenant for this resource.')).toBeInTheDocument();
+  });
+
   it('shows the placeholder on the toggle when no value is selected', async () => {
     renderSelect({
       autoSelectSingleOption: false,
@@ -290,6 +297,28 @@ describe('ResourceSelectField', () => {
       expect(
         screen.getByRole('button', { name: 'Clear input value', hidden: true }),
       ).not.toBeVisible();
+    });
+
+    it('is hidden for a required field after a value is selected', async () => {
+      const { user } = renderSelect({
+        tenants: [makeTenant('t-1', 'acme'), makeTenant('t-2', 'globex')],
+      });
+
+      await waitFor(() => {
+        expect(screen.getByRole('combobox')).toHaveAttribute('placeholder', 'Select a tenant');
+      });
+      await user.click(screen.getByRole('combobox'));
+      await user.click(screen.getByRole('option', { name: 'globex' }));
+
+      await waitFor(() => {
+        expect(screen.getByRole('combobox')).toHaveValue('globex');
+      });
+      expect(
+        screen.getByRole('button', { name: 'Clear input value', hidden: true }),
+      ).not.toBeVisible();
+      expect(screen.getByLabelText('formik-value')).toHaveTextContent(
+        '{"id":"t-2","name":"globex"}',
+      );
     });
   });
 });

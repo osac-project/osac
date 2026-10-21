@@ -28,6 +28,7 @@ export interface ResourceSelectFieldProps {
   isRequired?: boolean;
   isDisabled?: boolean;
   labelInfo?: ReactNode;
+  description?: string;
   placeholder?: string;
   loadingPlaceholder?: string;
   autoSelectSingleOption?: boolean;
@@ -53,6 +54,7 @@ export const ResourceSelectField = ({
   isRequired = false,
   isDisabled = false,
   labelInfo,
+  description,
   placeholder = '',
   loadingPlaceholder = 'Loading...',
   autoSelectSingleOption = false,
@@ -149,6 +151,7 @@ export const ResourceSelectField = ({
         isRequired={isRequired}
         isDisabled={controlDisabled}
         labelInfo={labelInfo}
+        description={description}
         placeholder={effectivePlaceholder}
       />
     </>

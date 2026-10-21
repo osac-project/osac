@@ -179,14 +179,16 @@ const CatalogGeneralStep = ({
             isDisabled={isEdit}
             placeholder={t('Select a provisioning template')}
             loadErrorTitle={t('Failed to fetch provisioning templates')}
+            description={
+              isEdit
+                ? t(
+                    'The provisioning template cannot be changed after the catalog item is created.',
+                  )
+                : t(
+                    'The selected template is the provisioning template used to create resources from this catalog item.',
+                  )
+            }
           />
-          <Content component="p">
-            {isEdit
-              ? t('The provisioning template cannot be changed after the catalog item is created.')
-              : t(
-                  'The selected template is the provisioning template used to create resources from this catalog item.',
-                )}
-          </Content>
         </OsacForm>
       </StackItem>
     </Stack>

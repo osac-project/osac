@@ -35,6 +35,9 @@ func (t *task) projectStorageOnboardingCondition(sources []*metav1.Condition, in
 			"StorageOnboardingPending", "Waiting for the operator to report storage onboarding completion")
 		return
 	case len(sources) > 1:
+		// Dev Preview expects one reporting hub per tenant, even when other hubs
+		// are registered. Multi-hub aggregation is deferred until after preview,
+		// so multiple reported conditions remain Unknown.
 		t.updateCondition(conditionType, privatev1.ConditionStatus_CONDITION_STATUS_UNSPECIFIED,
 			"StorageOnboardingStatusAmbiguous", "Multiple hubs report storage onboarding status for this tenant")
 		return

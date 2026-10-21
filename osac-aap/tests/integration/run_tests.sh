@@ -65,6 +65,7 @@ ROLE_TESTS=(
   "agentless_net_stub"
   "agentless_net_external_ip_pool"
   "agentless_net_external_ip"
+  "agentless_net_external_ip_attachment"
   "agentless_net_subnet"
   "agentless_net_attachment"
   "metallb_l2_detach_annotation"

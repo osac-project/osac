@@ -860,7 +860,7 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 				}, nil
 			}
 
-			_, err := reconciler.handleProvisioning(testCtx, attachment, publicIP, ci)
+			_, err := reconciler.handleProvisioning(testCtx, attachment, publicIP, ci, provisioning.ExternalIPAttachmentContext{})
 			Expect(err).NotTo(HaveOccurred())
 
 			cond := apimeta.FindStatusCondition(attachment.Status.Conditions, osacv1alpha1.ConditionReady)
@@ -887,7 +887,7 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 				}, nil
 			}
 
-			_, err := reconciler.handleProvisioning(testCtx, attachment, publicIP, ci)
+			_, err := reconciler.handleProvisioning(testCtx, attachment, publicIP, ci, provisioning.ExternalIPAttachmentContext{})
 			Expect(err).NotTo(HaveOccurred())
 
 			cond := apimeta.FindStatusCondition(attachment.Status.Conditions, osacv1alpha1.ConditionReady)
@@ -922,7 +922,7 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 				}, nil
 			}
 
-			_, err := reconciler.handleProvisioning(testCtx, attachment, publicIP, ci)
+			_, err := reconciler.handleProvisioning(testCtx, attachment, publicIP, ci, provisioning.ExternalIPAttachmentContext{})
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(attachment.Status.Phase).To(Equal(osacv1alpha1.ExternalIPAttachmentPhaseReady))

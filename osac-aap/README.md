@@ -46,25 +46,34 @@ pluggable backends:
 The `agentless_net` unified-resource path provisions and removes the
 VirtualNetwork namespace, transit uplink, forwarding baseline, and child
 Subnet VLAN/gateway/DHCP state. Subnet VLANs are added to configured Cumulus
-trunks; the role never moves a host access port. AgentlessNet also registers
-and removes ExternalIPPools in SQLite. Registration stores the pool's
-Kubernetes UID, Fulfillment UUID, tenant, IPv4 family, and single canonical IPv4
-CIDR; ExternalIP allocation reserves a UID-owned address in the same state file.
-The operator waits for child ExternalIP CRs to be removed before dispatching
-pool deprovisioning. AgentlessNet returns the allocated address in the AAP job
-result; the operator validates it and writes `ExternalIP.status.address`.
-ExternalIP deletion releases the UID-owned reservation.
-ExternalIPAttachment, SecurityGroup, NATGateway, workload attachment, and
-external traffic remain unsupported. A Ready Subnet means its VLAN,
-namespace gateway interface, and per-VirtualNetwork DHCP service were verified;
-it does not claim external reachability or workload attachment.
+trunks; the role never moves a host access port. AgentlessNet registers and
+removes ExternalIPPools in SQLite. Registration stores the pool's Kubernetes
+UID, Fulfillment UUID, tenant, IPv4 family, and single canonical IPv4 CIDR.
+ExternalIP allocation reserves a UID-owned address in the same state file. The
+operator validates the AAP allocation artifact and writes
+`ExternalIP.status.address`; release removes the provider reservation.
+
+For contract v1, ExternalIPAttachment AAP jobs consume the controller-supplied
+ExternalIP, BareMetalInstance, Subnet, and VirtualNetwork identity/address
+snapshot. AAP does not query or patch Kubernetes. It stores attachment state
+by attachment UID, installs all-protocol whole-address DNAT and narrowly scoped
+host forwarding, then adds the ExternalIP `/32` through local FRR using the
+saved VirtualNetwork transit next hop. Detach withdraws that route before
+removing forwarding, DNAT, and matching conntrack entries. The operator accepts
+the `osac_result` artifact before marking the attachment Ready or releasing its
+finalizers. BMaaS is the first supported consumer; VMaaS and CaaS target wiring
+remain follow-up work. Provider BGP peers are configured outside these jobs.
+SecurityGroups and NATGateway SNAT remain unsupported.
 
 All AgentlessNet provider state uses schema version 1 in a SQLite database at
 `AGENTLESS_NET_STATE_FILE` (default `/etc/osac/agentless_network_state.sqlite3`).
 The current schema is created directly at v1 with `virtual_networks`,
-`subnets`, `external_ip_pools`, and `external_ips`. The first three tables
-store VirtualNetwork, Subnet, and immutable ExternalIPPool state. `external_ips`
-reserves one provider IPv4 address per ExternalIP Kubernetes UID and pool. The
+`subnets`, `external_ip_pools`, `external_ips`, and `attachments`. These tables
+store VirtualNetwork, Subnet, immutable ExternalIPPool and ExternalIP state,
+and attachment-owned cleanup snapshots. `external_ips` reserves one provider
+IPv4 address per ExternalIP Kubernetes UID and pool. `attachments` retains the
+ExternalIP, target, Subnet, VirtualNetwork and exact route/rule inputs until
+provider cleanup succeeds. The
 `virtual_networks` table stores each VirtualNetwork's immutable CR CIDR and one UID-keyed `/31` transit
 link carved from that CIDR. The `subnets` table stores each Kubernetes Subnet
 UID, its parent Kubernetes UID and tenant, the global VLAN ID, and saved
@@ -180,8 +189,9 @@ conflicting service-manager state fails before switch changes. No DHCP manager
 selector is required in the ConfigMap. The role enables IPv4 forwarding and a
 permit-all `FORWARD` policy inside the namespace. It does not change the host
 forwarding sysctl; interface-scoped host drops keep traffic isolated between
-VirtualNetworks. NAT, SecurityGroups, workload attachment, BGP, and full
-external connectivity remain unsupported. A VirtualNetwork without a Ready
+VirtualNetworks. NAT, SecurityGroups, and VMaaS/CaaS workload attachment remain
+unsupported. The backend adds a local `/32` route but does not configure
+upstream BGP peers. A VirtualNetwork without a Ready
 Subnet cannot make `DefaultNetworkingReady` true. Replacing a networking
 manager requires draining and replacing its resources; changing an existing
 VN's backend is unsupported.
@@ -193,9 +203,10 @@ allocator. The legacy CaaS pool and transit-address settings remain in their
 existing workflows and do not set unified Subnet VLAN bounds. The SQLite state
 path remains available as an advanced `AGENTLESS_NET_STATE_FILE` override.
 
-The older `AGENTLESS_NET_IPAM_STATE_FILE` and
-`AGENTLESS_NET_EXTERNAL_INTERFACE` settings remain separate for embedded CaaS
-step workflows; they do not configure VirtualNetwork transit links.
+`AGENTLESS_NET_IPAM_STATE_FILE` remains the separate legacy CaaS IPAM state
+override. `AGENTLESS_NET_EXTERNAL_INTERFACE` selects the uplink for AgentlessNet
+ExternalIPAttachment and embedded CaaS step workflows; it does not configure
+VirtualNetwork transit links.
 
 Plus MetalLB-based ExternalIPPool / ExternalIP management (`metallb_l2`).
 

@@ -1186,6 +1186,58 @@ var _ = Describe("AAPProvider", func() {
 			Expect(err).NotTo(HaveOccurred())
 		})
 
+		It("includes the controller-resolved ExternalIPAttachment context", func() {
+			attachmentContext := provisioning.ExternalIPAttachmentContext{
+				ExternalIP: provisioning.ExternalIPAttachmentExternalIPContext{
+					Name: "public-ip", Namespace: "networking", FulfillmentID: "eip-id",
+					KubernetesUID: "eip-uid", TenantID: "tenant-a", Address: "198.51.100.10",
+					State: "Allocated", Phase: "Ready",
+				},
+				Target: provisioning.ExternalIPAttachmentTargetContext{
+					Kind: "BareMetalInstance", Name: "machine", Namespace: "bmaas",
+					FulfillmentID: "bmi-id", KubernetesUID: "bmi-uid", TenantID: "tenant-a",
+					IPAddress: "10.0.0.10", Ready: true,
+				},
+				Subnet: provisioning.ExternalIPAttachmentSubnetContext{
+					Name: "subnet", Namespace: "networking", FulfillmentID: "subnet-id",
+					KubernetesUID: "subnet-uid", TenantID: "tenant-a", IPv4CIDR: "10.0.0.0/24",
+					VirtualNetworkID: "vn-id", Phase: "Ready",
+				},
+				VirtualNetwork: provisioning.ExternalIPAttachmentVirtualNetworkContext{
+					Name: "network", Namespace: "networking", FulfillmentID: "vn-id",
+					KubernetesUID: "vn-uid", TenantID: "tenant-a", Phase: "Ready",
+				},
+			}
+			ctx = provisioning.WithExternalIPAttachmentContext(ctx, attachmentContext)
+			aapClient.launchJobTemplateFunc = func(_ context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				jobVars := req.ExtraVars["osac_job_vars"].(map[string]any)
+				Expect(jobVars["external_ip_attachment_context"]).To(Equal(map[string]any{
+					"external_ip": map[string]any{
+						"name": "public-ip", "namespace": "networking", "fulfillment_id": "eip-id",
+						"kubernetes_uid": "eip-uid", "tenant_id": "tenant-a", "address": "198.51.100.10",
+						"state": "Allocated", "phase": "Ready",
+					},
+					"target": map[string]any{
+						"kind": "BareMetalInstance", "name": "machine", "namespace": "bmaas",
+						"fulfillment_id": "bmi-id", "kubernetes_uid": "bmi-uid", "tenant_id": "tenant-a",
+						"ip_address": "10.0.0.10", "ready": true,
+					},
+					"subnet": map[string]any{
+						"name": "subnet", "namespace": "networking", "fulfillment_id": "subnet-id",
+						"kubernetes_uid": "subnet-uid", "tenant_id": "tenant-a", "ipv4_cidr": "10.0.0.0/24",
+						"virtual_network_id": "vn-id", "phase": "Ready",
+					},
+					"virtual_network": map[string]any{
+						"name": "network", "namespace": "networking", "fulfillment_id": "vn-id",
+						"kubernetes_uid": "vn-uid", "tenant_id": "tenant-a", "phase": "Ready",
+					},
+				}))
+				return &aap.LaunchJobTemplateResponse{JobID: 104}, nil
+			}
+			_, err := provider.TriggerProvision(ctx, &v1alpha1.ExternalIPAttachment{})
+			Expect(err).NotTo(HaveOccurred())
+		})
+
 		It("should omit the parent identity when it is not set in context", func() {
 			aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
 				jobVars := req.ExtraVars["osac_job_vars"].(map[string]any)

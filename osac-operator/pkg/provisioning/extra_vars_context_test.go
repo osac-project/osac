@@ -55,6 +55,38 @@ var _ = Describe("ExtraVarsContext", func() {
 		})
 	})
 
+	Describe("ExternalIPAttachmentContext", func() {
+		It("round-trips the controller-resolved dependency snapshot", func() {
+			value := provisioning.ExternalIPAttachmentContext{
+				ExternalIP: provisioning.ExternalIPAttachmentExternalIPContext{
+					Name: "public-ip", Namespace: "networking", FulfillmentID: "eip-id",
+					KubernetesUID: "eip-uid", TenantID: "tenant-a", Address: "198.51.100.10",
+					State: "Allocated", Phase: "Ready",
+				},
+				Target: provisioning.ExternalIPAttachmentTargetContext{
+					Kind: "BareMetalInstance", Name: "machine", Namespace: "bmaas",
+					FulfillmentID: "bmi-id", KubernetesUID: "bmi-uid", TenantID: "tenant-a",
+					IPAddress: "10.0.0.10", Ready: true,
+				},
+				Subnet: provisioning.ExternalIPAttachmentSubnetContext{
+					Name: "subnet", Namespace: "networking", FulfillmentID: "subnet-id",
+					KubernetesUID: "subnet-uid", TenantID: "tenant-a", IPv4CIDR: "10.0.0.0/24",
+					VirtualNetworkID: "vn-id", Phase: "Ready",
+				},
+				VirtualNetwork: provisioning.ExternalIPAttachmentVirtualNetworkContext{
+					Name: "network", Namespace: "networking", FulfillmentID: "vn-id",
+					KubernetesUID: "vn-uid", TenantID: "tenant-a", Phase: "Ready",
+				},
+			}
+			ctx := provisioning.WithExternalIPAttachmentContext(context.Background(), value)
+			Expect(provisioning.ExternalIPAttachmentContextFromContext(ctx)).To(Equal(value))
+		})
+
+		It("returns a zero value when attachment context is absent", func() {
+			Expect(provisioning.ExternalIPAttachmentContextFromContext(context.Background())).To(BeZero())
+		})
+	})
+
 	Describe("AdminKubeconfig", func() {
 		It("should round-trip a kubeconfig value", func() {
 			ctx := context.Background()

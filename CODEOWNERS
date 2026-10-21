@@ -85,3 +85,32 @@
 /fulfillment-service/internal/servers/compute_instances_server.go @osac-project/wg-vmaas
 ## VMaaS CI installer values
 /osac-installer/values/vmaas-ci/ @osac-project/wg-vmaas
+
+# Dependency file ownership — osac-ci bot-sweep
+#
+# bot-approve.yml approves Dependabot and Konflux PRs as
+# osac-ci[bot] when only dependency files changed (see
+# osac-ci policy/flow.yml). These entries let that approval
+# satisfy the CODEOWNERS requirement. Workflow, script and
+# source-file changes are never approved without a person.
+go.mod @osac-ci[bot]
+go.sum @osac-ci[bot]
+package.json @osac-ci[bot]
+package-lock.json @osac-ci[bot]
+pnpm-lock.yaml @osac-ci[bot]
+yarn.lock @osac-ci[bot]
+uv.lock @osac-ci[bot]
+poetry.lock @osac-ci[bot]
+Pipfile.lock @osac-ci[bot]
+pyproject.toml @osac-ci[bot]
+Containerfile* @osac-ci[bot]
+Dockerfile* @osac-ci[bot]
+requirements*.txt @osac-ci[bot]
+# Keep team ownership for dependency files in owned
+# components (last match wins).
+/bare-metal-fulfillment-operator/go.mod @osac-project/wg-bmaas @osac-ci[bot]
+/bare-metal-fulfillment-operator/go.sum @osac-project/wg-bmaas @osac-ci[bot]
+/bare-metal-fulfillment-operator/Containerfile* @osac-project/wg-bmaas @osac-ci[bot]
+/osac-ui/package.json @LiorSoffer @batzionb @rawagner @ElayAharoni @osac-ci[bot]
+/osac-ui/pnpm-lock.yaml @LiorSoffer @batzionb @rawagner @ElayAharoni @osac-ci[bot]
+/osac-ui/Containerfile* @LiorSoffer @batzionb @rawagner @ElayAharoni @osac-ci[bot]

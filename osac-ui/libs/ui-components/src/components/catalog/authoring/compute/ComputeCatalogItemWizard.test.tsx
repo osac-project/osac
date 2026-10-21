@@ -191,6 +191,13 @@ describe('ComputeCatalogItemWizard', () => {
     expect(
       await screen.findByText('Fix the highlighted errors before continuing.'),
     ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Optionally set instance type defaults for this catalog item. Leave fields Not set if tenants should choose when creating a virtual machine.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Disk image is required when locked')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Next' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'User data' })).toBeInTheDocument();
   });
 

@@ -16,7 +16,7 @@ export { emptyResourceSelectValue } from './resourceSelectValue';
 
 export interface ResourceListItem {
   id: string;
-  metadata?: { name?: string };
+  metadata?: { name?: string; description?: string };
 }
 
 export interface ResourceSelectFieldProps {
@@ -120,7 +120,12 @@ export const ResourceSelectField = ({
   ]);
 
   const options = useMemo(
-    () => items.map((item) => ({ value: item.id, content: formatOptionLabel(item) })),
+    () =>
+      items.map((item) => ({
+        value: item.id,
+        content: formatOptionLabel(item),
+        description: item.metadata?.description,
+      })),
     [formatOptionLabel, items],
   );
 

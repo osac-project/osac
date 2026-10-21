@@ -14,6 +14,8 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"strings"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/protobuf/proto"
@@ -24,29 +26,23 @@ import (
 )
 
 var _ = Describe("Catalog Item typed field policies", func() {
-	DescribeTable("validates concrete SSH policy values",
+	DescribeTable("validates concrete user-data policy values",
 		func(validate func(*privatev1.StringFieldPolicy) error) {
-			empty := ""
-			malformed := "not-an-openssh-key"
-			valid := testSSHPublicKey
+			oversized := strings.Repeat("x", 64*1024+1)
+			valid := "#cloud-config\n"
 
-			Expect(validate(privatev1.StringFieldPolicy_builder{Locked: &empty}.Build())).To(HaveOccurred())
+			Expect(validate(privatev1.StringFieldPolicy_builder{Locked: &oversized}.Build())).To(HaveOccurred())
 			Expect(validate(privatev1.StringFieldPolicy_builder{
-				Editable: privatev1.EditableStringField_builder{DefaultValue: &empty}.Build(),
+				Editable: privatev1.EditableStringField_builder{DefaultValue: &oversized}.Build(),
 			}.Build())).To(HaveOccurred())
-			Expect(validate(privatev1.StringFieldPolicy_builder{Locked: &malformed}.Build())).To(HaveOccurred())
 			Expect(validate(privatev1.StringFieldPolicy_builder{Locked: &valid}.Build())).To(Succeed())
 			Expect(validate(privatev1.StringFieldPolicy_builder{
 				Editable: privatev1.EditableStringField_builder{}.Build(),
 			}.Build())).To(Succeed())
 		},
-		Entry("for Cluster Catalog Items", func(policy *privatev1.StringFieldPolicy) error {
-			return validateClusterCatalogItemScalarPolicies(
-				privatev1.ClusterCatalogItemFields_builder{SshPublicKey: policy}.Build())
-		}),
 		Entry("for BareMetalInstance Catalog Items", func(policy *privatev1.StringFieldPolicy) error {
 			return validateBareMetalInstanceCatalogItemScalarPolicies(
-				privatev1.BareMetalInstanceCatalogItemFields_builder{SshPublicKey: policy}.Build())
+				privatev1.BareMetalInstanceCatalogItemFields_builder{UserData: policy}.Build())
 		}),
 	)
 
@@ -158,6 +154,12 @@ var _ = Describe("Catalog Item typed field policies", func() {
 		Expect(validateSharedCatalogItemLocalReferencePolicy(scope, "fields.pull_secret_secret", false, false)).To(Succeed())
 		Expect(validateSharedCatalogItemLocalReferencePolicy(scope, "fields.pull_secret_secret", true, false)).To(MatchError(ContainSubstring("field 'fields.pull_secret_secret': shared catalog items cannot define a locked or default tenant-local reference")))
 		Expect(validateSharedCatalogItemLocalReferencePolicy(scope, "fields.pull_secret_secret", false, true)).To(MatchError(ContainSubstring("field 'fields.pull_secret_secret': shared catalog items cannot define a locked or default tenant-local reference")))
+	})
+
+	It("rejects Cluster SSH-key policies without behavior", func() {
+		policy := privatev1.GlobalSecretReferenceFieldPolicy_builder{}.Build()
+		_, err := decodeGlobalSecretReferencePolicy(policy)
+		Expect(err).To(MatchError(ContainSubstring("global secret policy has no behavior")))
 	})
 
 	It("materializes the resolved full-reference scope", func() {

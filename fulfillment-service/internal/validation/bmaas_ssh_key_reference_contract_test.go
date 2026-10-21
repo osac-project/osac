@@ -15,7 +15,6 @@ package validation
 
 import (
 	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/types/descriptorpb"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -41,17 +40,79 @@ var _ = Describe("BMaaS SSH-key reference contracts", func() {
 		Expect(localPolicy.Fields().ByName("locked").Message().FullName()).To(Equal(protoreflect.FullName("osac.private.v1.SecretLocalReference")))
 	})
 
-	It("deprecates the raw ssh_public_key in favor of the registered ssh_key", func() {
-		rawKey := (&privatev1.BareMetalInstanceSpec{}).ProtoReflect().Descriptor().Fields().ByName("ssh_public_key")
-		Expect(rawKey).ToNot(BeNil())
-		rawOptions, ok := rawKey.Options().(*descriptorpb.FieldOptions)
-		Expect(ok).To(BeTrue())
-		Expect(rawOptions.GetDeprecated()).To(BeTrue(), "spec.ssh_public_key must be marked deprecated")
+	It("uses registered Secret references for Cluster SSH keys", func() {
+		clusterSSHKey := (&privatev1.ClusterSpec{}).ProtoReflect().Descriptor().Fields().ByName("ssh_key")
+		Expect(clusterSSHKey).ToNot(BeNil())
+		Expect(clusterSSHKey.Number()).To(Equal(protoreflect.FieldNumber(13)))
+		Expect(clusterSSHKey.Message().FullName()).To(Equal(protoreflect.FullName("osac.private.v1.SecretReference")))
 
-		registeredKey := (&privatev1.BareMetalInstanceSpec{}).ProtoReflect().Descriptor().Fields().ByName("ssh_key")
-		Expect(registeredKey).ToNot(BeNil())
-		registeredOptions, ok := registeredKey.Options().(*descriptorpb.FieldOptions)
-		Expect(ok).To(BeTrue())
-		Expect(registeredOptions.GetDeprecated()).To(BeFalse())
+		templateSSHKey := (&privatev1.ClusterTemplateSpecDefaults{}).ProtoReflect().Descriptor().Fields().ByName("ssh_key")
+		Expect(templateSSHKey).ToNot(BeNil())
+		Expect(templateSSHKey.Number()).To(Equal(protoreflect.FieldNumber(7)))
+		Expect(templateSSHKey.Message().FullName()).To(Equal(protoreflect.FullName("osac.private.v1.SecretReference")))
+
+		catalogSSHKey := (&privatev1.ClusterCatalogItemFields{}).ProtoReflect().Descriptor().Fields().ByName("ssh_key")
+		Expect(catalogSSHKey).ToNot(BeNil())
+		Expect(catalogSSHKey.Number()).To(Equal(protoreflect.FieldNumber(8)))
+		Expect(catalogSSHKey.Message().FullName()).To(Equal(protoreflect.FullName("osac.private.v1.GlobalSecretReferenceFieldPolicy")))
+	})
+
+	It("removes and reserves every deprecated inline ssh_public_key field", func() {
+		expectRemovedAndReserved := func(message protoreflect.MessageDescriptor, fieldName string, number protoreflect.FieldNumber) {
+			GinkgoHelper()
+			fields := message.Fields()
+			Expect(fields.ByName(protoreflect.Name(fieldName))).To(BeNil(),
+				"%s.%s must be removed", message.FullName(), fieldName)
+			Expect(fields.ByNumber(number)).To(BeNil(),
+				"%s field number %d must not be reused", message.FullName(), number)
+			names := message.ReservedNames()
+			foundName := false
+			for i := 0; i < names.Len(); i++ {
+				if names.Get(i) == protoreflect.Name(fieldName) {
+					foundName = true
+				}
+			}
+			Expect(foundName).To(BeTrue(),
+				"%s must reserve the name %s", message.FullName(), fieldName)
+			found := false
+			ranges := message.ReservedRanges()
+			for i := 0; i < ranges.Len(); i++ {
+				rn := ranges.Get(i)
+				if rn[0] <= number && number < rn[1] {
+					found = true
+				}
+			}
+			Expect(found).To(BeTrue(),
+				"%s must reserve field number %d", message.FullName(), number)
+		}
+
+		expectRemovedAndReserved(
+			(&privatev1.BareMetalInstanceSpec{}).ProtoReflect().Descriptor(), "ssh_public_key", 2)
+		expectRemovedAndReserved(
+			(&privatev1.BareMetalInstanceCatalogItemFields{}).ProtoReflect().Descriptor(), "ssh_public_key", 1)
+		expectRemovedAndReserved(
+			(&privatev1.ClusterSpec{}).ProtoReflect().Descriptor(), "ssh_public_key", 5)
+		expectRemovedAndReserved(
+			(&privatev1.ClusterTemplateSpecDefaults{}).ProtoReflect().Descriptor(), "ssh_public_key", 2)
+		expectRemovedAndReserved(
+			(&privatev1.ClusterCatalogItemFields{}).ProtoReflect().Descriptor(), "ssh_public_key", 2)
+	})
+
+	It("keeps every registered ssh_key replacement field", func() {
+		clusterSSHKey := (&privatev1.ClusterSpec{}).ProtoReflect().Descriptor().Fields().ByName("ssh_key")
+		Expect(clusterSSHKey).ToNot(BeNil())
+		Expect(clusterSSHKey.Number()).To(Equal(protoreflect.FieldNumber(13)))
+
+		templateSSHKey := (&privatev1.ClusterTemplateSpecDefaults{}).ProtoReflect().Descriptor().Fields().ByName("ssh_key")
+		Expect(templateSSHKey).ToNot(BeNil())
+		Expect(templateSSHKey.Number()).To(Equal(protoreflect.FieldNumber(7)))
+
+		catalogSSHKey := (&privatev1.ClusterCatalogItemFields{}).ProtoReflect().Descriptor().Fields().ByName("ssh_key")
+		Expect(catalogSSHKey).ToNot(BeNil())
+		Expect(catalogSSHKey.Number()).To(Equal(protoreflect.FieldNumber(8)))
+
+		bmiSSHKey := (&privatev1.BareMetalInstanceSpec{}).ProtoReflect().Descriptor().Fields().ByName("ssh_key")
+		Expect(bmiSSHKey).ToNot(BeNil())
+		Expect(bmiSSHKey.Number()).To(Equal(protoreflect.FieldNumber(14)))
 	})
 })

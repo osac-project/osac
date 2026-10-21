@@ -73,8 +73,8 @@ var _ = Describe("CLI Catalog Item descriptions", Label("cli", "catalog-items"),
 			Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
 			Template: publicv1.BareMetalInstanceTemplateReference_builder{Id: bareTemplate}.Build(),
 			Fields: publicv1.BareMetalInstanceCatalogItemFields_builder{
-				SshPublicKey: publicv1.StringFieldPolicy_builder{Editable: publicv1.EditableStringField_builder{}.Build()}.Build(),
-				UserData:     publicv1.StringFieldPolicy_builder{Locked: new("#cloud-config\nusers: []")}.Build(),
+				SshKey:   publicv1.GlobalSecretReferenceFieldPolicy_builder{Editable: publicv1.EditableGlobalSecretReferenceField_builder{}.Build()}.Build(),
+				UserData: publicv1.StringFieldPolicy_builder{Locked: new("#cloud-config\nusers: []")}.Build(),
 			}.Build(),
 		}.Build())
 		output, stderr, code = tool.RunCLI(ctx, homeDir, "describe", "baremetalinstancecatalogitem", bare.GetMetadata().GetName())

@@ -138,31 +138,31 @@ func applyComputeInstanceCatalogItemPolicies(spec *privatev1.ComputeInstanceSpec
 	if spec == nil || fields == nil {
 		return nil
 	}
-	if err := applyPolicy(fields.GetDiskImage(), spec.HasDiskImage(), spec.SetDiskImage, decodeDiskImageReferencePolicy, cloneMessage[*privatev1.DiskImageReference]); err != nil {
+	if err := applyPolicy(fields.GetDiskImage(), spec.HasDiskImage(), false, spec.SetDiskImage, decodeDiskImageReferencePolicy, cloneMessage[*privatev1.DiskImageReference]); err != nil {
 		return fmt.Errorf("disk_image: %w", err)
 	}
-	if err := applyPolicy(fields.GetSshKey(), spec.GetSshKey() != nil, spec.SetSshKey, decodeSecretReferencePolicy, cloneMessage[*privatev1.SecretLocalReference]); err != nil {
+	if err := applyPolicy(fields.GetSshKey(), spec.GetSshKey() != nil, false, spec.SetSshKey, decodeSecretReferencePolicy, cloneMessage[*privatev1.SecretLocalReference]); err != nil {
 		return fmt.Errorf("ssh_key: %w", err)
 	}
-	if err := applyPolicy(fields.GetUserDataSecret(), spec.GetUserDataSecret() != nil, spec.SetUserDataSecret, decodeSecretReferencePolicy, cloneMessage[*privatev1.SecretLocalReference]); err != nil {
+	if err := applyPolicy(fields.GetUserDataSecret(), spec.GetUserDataSecret() != nil, false, spec.SetUserDataSecret, decodeSecretReferencePolicy, cloneMessage[*privatev1.SecretLocalReference]); err != nil {
 		return fmt.Errorf("user_data_secret: %w", err)
 	}
-	if err := applyPolicy(fields.GetInstanceType(), spec.HasInstanceType(), spec.SetInstanceType, decodeInstanceTypeReferencePolicy, cloneMessage[*privatev1.InstanceTypeReference]); err != nil {
+	if err := applyPolicy(fields.GetInstanceType(), spec.HasInstanceType(), false, spec.SetInstanceType, decodeInstanceTypeReferencePolicy, cloneMessage[*privatev1.InstanceTypeReference]); err != nil {
 		return fmt.Errorf("instance_type: %w", err)
 	}
-	if err := applyPolicy(fields.GetRunStrategy(), spec.HasRunStrategy(), spec.SetRunStrategy, decodeComputeInstanceRunStrategyPolicy, identity[privatev1.ComputeInstanceRunStrategy]); err != nil {
+	if err := applyPolicy(fields.GetRunStrategy(), spec.HasRunStrategy(), false, spec.SetRunStrategy, decodeComputeInstanceRunStrategyPolicy, identity[privatev1.ComputeInstanceRunStrategy]); err != nil {
 		return fmt.Errorf("run_strategy: %w", err)
 	}
-	if err := applyPolicy(fields.GetUserData(), spec.HasUserData(), spec.SetUserData, decodeStringPolicy, identity[string]); err != nil {
+	if err := applyPolicy(fields.GetUserData(), spec.HasUserData(), false, spec.SetUserData, decodeStringPolicy, identity[string]); err != nil {
 		return fmt.Errorf("user_data: %w", err)
 	}
-	if err := applyPolicy(fields.GetAutoExternalIpAttachment(), spec.HasAutoExternalIpAttachment(), spec.SetAutoExternalIpAttachment, decodeBoolPolicy, identity[bool]); err != nil {
+	if err := applyPolicy(fields.GetAutoExternalIpAttachment(), spec.HasAutoExternalIpAttachment(), false, spec.SetAutoExternalIpAttachment, decodeBoolPolicy, identity[bool]); err != nil {
 		return fmt.Errorf("auto_external_ip_attachment: %w", err)
 	}
-	if err := applyPolicy(fields.GetNetworkAttachments(), len(spec.GetNetworkAttachments()) > 0, spec.SetNetworkAttachments, decodeComputeInstanceNetworkAttachmentListPolicy, cloneComputeInstanceNetworkAttachments); err != nil {
+	if err := applyPolicy(fields.GetNetworkAttachments(), len(spec.GetNetworkAttachments()) > 0, false, spec.SetNetworkAttachments, decodeComputeInstanceNetworkAttachmentListPolicy, cloneComputeInstanceNetworkAttachments); err != nil {
 		return fmt.Errorf("network_attachments: %w", err)
 	}
-	if err := applyPolicy(fields.GetAdditionalDisks(), spec.GetAdditionalDisks() != nil, spec.SetAdditionalDisks, decodeComputeInstanceDiskListPolicy, cloneComputeInstanceDiskList); err != nil {
+	if err := applyPolicy(fields.GetAdditionalDisks(), spec.GetAdditionalDisks() != nil, false, spec.SetAdditionalDisks, decodeComputeInstanceDiskListPolicy, cloneComputeInstanceDiskList); err != nil {
 		return fmt.Errorf("additional_disks: %w", err)
 	}
 	return applyComputeInstanceCatalogItemBootDiskPolicies(spec, fields.GetBootDisk())
@@ -176,7 +176,7 @@ func applyComputeInstanceCatalogItemBootDiskPolicies(
 ) error {
 	bootDisk := spec.GetBootDisk()
 	if bootFields != nil {
-		if err := applyPolicy(bootFields.GetSizeGib(), bootDisk != nil && bootDisk.HasSizeGib(), func(value int32) {
+		if err := applyPolicy(bootFields.GetSizeGib(), bootDisk != nil && bootDisk.HasSizeGib(), false, func(value int32) {
 			if spec.GetBootDisk() == nil {
 				spec.SetBootDisk(&privatev1.ComputeInstanceDisk{})
 			}
@@ -184,7 +184,7 @@ func applyComputeInstanceCatalogItemBootDiskPolicies(
 		}, decodeInt32Policy, identity[int32]); err != nil {
 			return fmt.Errorf("size_gib: %w", err)
 		}
-		if err := applyPolicy(bootFields.GetStorageTier(), bootDisk != nil && bootDisk.GetStorageTier() != nil, func(value *privatev1.StorageTierReference) {
+		if err := applyPolicy(bootFields.GetStorageTier(), bootDisk != nil && bootDisk.GetStorageTier() != nil, false, func(value *privatev1.StorageTierReference) {
 			if spec.GetBootDisk() == nil {
 				spec.SetBootDisk(&privatev1.ComputeInstanceDisk{})
 			}

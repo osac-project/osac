@@ -122,9 +122,8 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", Label("baremetalwor
 				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test",
-				PullSecret:   "{\"auths\":{}}",
-				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
+				TemplateID: "test",
+				PullSecret: "{\"auths\":{}}",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
 					NumberOfNodes: 1,
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
@@ -564,9 +563,8 @@ var _ = Describe("BareMetalWorkerReconciler resolveDiskImage", Label("baremetalw
 				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test",
-				PullSecret:   "{\"auths\":{}}",
-				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
+				TemplateID: "test",
+				PullSecret: "{\"auths\":{}}",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
 					NumberOfNodes: 1,
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
@@ -820,9 +818,8 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test",
-				PullSecret:   "{\"auths\":{}}",
-				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
+				TemplateID: "test",
+				PullSecret: "{\"auths\":{}}",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
 					NumberOfNodes: numWorkers,
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
@@ -1314,9 +1311,8 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test",
-				PullSecret:   "{\"auths\":{}}",
-				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
+				TemplateID: "test",
+				PullSecret: "{\"auths\":{}}",
 				NodeRequests: []osacv1alpha1.NodeRequest{
 					{NodeSet: "bm-standard",
 						NumberOfNodes: 1,
@@ -1355,9 +1351,8 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test",
-				PullSecret:   "{\"auths\":{}}",
-				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
+				TemplateID: "test",
+				PullSecret: "{\"auths\":{}}",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
 					NumberOfNodes: 1,
 					BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "bm-standard"},
@@ -1440,9 +1435,8 @@ var _ = Describe("BareMetalWorkerReconciler reconcileAgent", Label("baremetalwor
 				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test",
-				PullSecret:   "{\"auths\":{}}",
-				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
+				TemplateID: "test",
+				PullSecret: "{\"auths\":{}}",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
 					NumberOfNodes: numWorkers,
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
@@ -2129,9 +2123,8 @@ var _ = Describe("BareMetalWorkerReconciler workerRetry", Label("baremetalworker
 				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test",
-				PullSecret:   "{\"auths\":{}}",
-				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
+				TemplateID: "test",
+				PullSecret: "{\"auths\":{}}",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
 					NumberOfNodes: 1,
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
@@ -2419,9 +2412,8 @@ var _ = Describe("BareMetalWorkerReconciler scale-up", Label("baremetalworker"),
 				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test",
-				PullSecret:   "{\"auths\":{}}",
-				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
+				TemplateID: "test",
+				PullSecret: "{\"auths\":{}}",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
 					NumberOfNodes: numWorkers,
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
@@ -2729,9 +2721,8 @@ var _ = Describe("BareMetalWorkerReconciler stale ignition", Label("baremetalwor
 				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test",
-				PullSecret:   "{\"auths\":{}}",
-				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
+				TemplateID: "test",
+				PullSecret: "{\"auths\":{}}",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
 					NumberOfNodes: 1,
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
@@ -3025,9 +3016,8 @@ var _ = Describe("BareMetalWorkerReconciler scale-down", Label("baremetalworker"
 				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test",
-				PullSecret:   "{\"auths\":{}}",
-				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
+				TemplateID: "test",
+				PullSecret: "{\"auths\":{}}",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
 					NumberOfNodes: numWorkers,
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
@@ -3455,9 +3445,8 @@ var _ = Describe("BareMetalWorkerReconciler cluster deletion", Label("baremetalw
 				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test",
-				PullSecret:   "{\"auths\":{}}",
-				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
+				TemplateID: "test",
+				PullSecret: "{\"auths\":{}}",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
 					NumberOfNodes: numWorkers,
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{

@@ -48,7 +48,7 @@ def test_caas_cluster_storage_lifecycle(
     private_grpc: GRPCClient,
     cluster_template: str,
     pull_secret_name: str,
-    ssh_public_key_path: str,
+    ssh_key_secret: str,
 ) -> None:
     """Verify the CaaS cluster storage provisioning and teardown lifecycle.
 
@@ -81,7 +81,7 @@ def test_caas_cluster_storage_lifecycle(
             template=cluster_template,
             node_sets={"workers": {"size": 1, "baremetal_instance_type": {"name": "ci-worker-bm"}}},
             pull_secret=pull_secret_name,
-            ssh_public_key_file=ssh_public_key_path,
+            ssh_key=ssh_key_secret,
         )
         co_name = wait_for_cluster_order_cr(k8s=k8s_hub_client, uuid=cluster_uuid)
 

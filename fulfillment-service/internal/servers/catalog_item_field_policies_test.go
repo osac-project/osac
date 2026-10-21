@@ -87,10 +87,10 @@ var _ = Describe("Shared typed-policy helper", func() {
 		locked := "locked"
 		got := ""
 		set := func(value string) { got = value }
-		Expect(applyPolicy(privatev1.StringFieldPolicy_builder{Locked: &locked}.Build(), false, set, decodeStringPolicy, identity[string])).To(Succeed())
+		Expect(applyPolicy(privatev1.StringFieldPolicy_builder{Locked: &locked}.Build(), false, false, set, decodeStringPolicy, identity[string])).To(Succeed())
 		Expect(got).To(Equal(locked))
-		Expect(applyPolicy(privatev1.StringFieldPolicy_builder{Locked: &locked}.Build(), true, set, decodeStringPolicy, identity[string])).To(MatchError(ContainSubstring("field is not editable")))
-		Expect(applyPolicy(&privatev1.StringFieldPolicy{}, false, set, decodeStringPolicy, identity[string])).To(MatchError(ContainSubstring("string policy has no behavior")))
+		Expect(applyPolicy(privatev1.StringFieldPolicy_builder{Locked: &locked}.Build(), true, false, set, decodeStringPolicy, identity[string])).To(MatchError(ContainSubstring("field is not editable")))
+		Expect(applyPolicy(&privatev1.StringFieldPolicy{}, false, false, set, decodeStringPolicy, identity[string])).To(MatchError(ContainSubstring("string policy has no behavior")))
 	})
 
 	Describe("user_data_secret policy application", func() {

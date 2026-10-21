@@ -30,7 +30,7 @@ def test_cluster_create_with_two_node_sets(
     k8s_hub_client: K8sClient,
     cluster_template: str,
     pull_secret_name: str,
-    ssh_public_key_path: str,
+    ssh_key_secret: str,
     metering: MeteringCollector,
 ) -> None:
     """Verify NodePool replicas stay isolated when a cluster has two BMaaS node sets."""
@@ -56,7 +56,7 @@ def test_cluster_create_with_two_node_sets(
             for node_set, instance_type in instance_types.items()
         },
         pull_secret=pull_secret_name,
-        ssh_public_key_file=ssh_public_key_path,
+        ssh_key=ssh_key_secret,
     )
     metering.expect("osac.resource.created.v1", resource_id=uuid)
 

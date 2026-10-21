@@ -903,8 +903,6 @@ func (t *task) mutateBMI(ctx context.Context, object *bmfov1alpha1.BareMetalInst
 
 	if t.sshPublicKey != "" {
 		params["sshPublicKey"] = t.sshPublicKey
-	} else if t.bareMetalInstance.GetSpec().HasSshPublicKey() {
-		params["sshPublicKey"] = t.bareMetalInstance.GetSpec().GetSshPublicKey()
 	}
 	if t.userDataSecretName != "" {
 		params["userDataSecret"] = t.userDataSecretName

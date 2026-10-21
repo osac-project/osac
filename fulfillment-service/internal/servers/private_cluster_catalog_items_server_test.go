@@ -523,6 +523,111 @@ var _ = Describe("Private cluster catalog items server", func() {
 			Expect(fetched.GetFields().GetNetwork().GetPodCidr().GetEditable()).ToNot(BeNil())
 		})
 
+		Describe("Cluster SSH-key field policy", func() {
+			seedSSHKeyPolicySecret := func(name string) *privatev1.Secret {
+				GinkgoHelper()
+				secretsDao, err := dao.NewGenericDAO[*privatev1.Secret]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				created, err := secretsDao.Create().SetObject(privatev1.Secret_builder{
+					Id:       name,
+					Metadata: privatev1.Metadata_builder{Name: name, Tenant: testTenant}.Build(),
+					Type:     privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					Data:     map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				return created.GetObject()
+			}
+
+			It("resolves a locked policy reference by name and stores the canonical ID", func() {
+				secret := seedSSHKeyPolicySecret(fmt.Sprintf("cluster-locked-key-%s", uuid.New()[24:32]))
+
+				response, err := server.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
+					Object: privatev1.ClusterCatalogItem_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
+						}.Build(),
+						Title:    "SSH locked policy item",
+						Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+						Fields: privatev1.ClusterCatalogItemFields_builder{
+							SshKey: privatev1.GlobalSecretReferenceFieldPolicy_builder{
+								Locked: privatev1.SecretReference_builder{Name: secret.GetMetadata().GetName()}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				object := response.GetObject()
+				DeferCleanup(func() {
+					_, err := server.Delete(ctx, privatev1.ClusterCatalogItemsDeleteRequest_builder{
+						Id: object.GetId(),
+					}.Build())
+					Expect(err).ToNot(HaveOccurred())
+				})
+				Expect(object.GetFields().GetSshKey().GetLocked().GetId()).To(Equal(secret.GetId()))
+				Expect(object.GetFields().GetSshKey().GetLocked().GetName()).To(Equal(secret.GetMetadata().GetName()))
+			})
+
+			It("rejects a locked policy reference to a shared Secret", func() {
+				_, err := server.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
+					Object: privatev1.ClusterCatalogItem_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
+						}.Build(),
+						Title:    "Shared key policy item",
+						Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+						Fields: privatev1.ClusterCatalogItemFields_builder{
+							SshKey: privatev1.GlobalSecretReferenceFieldPolicy_builder{
+								Locked: privatev1.SecretReference_builder{Name: "shared-key-name", Shared: true}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("fields.ssh_key"))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("must not reference a shared secret"))
+			})
+
+			DescribeTable("rejects a shared catalog item that fixes a tenant-owned SSH key",
+				func(policy *privatev1.GlobalSecretReferenceFieldPolicy) {
+					secret := seedSSHKeyPolicySecret(fmt.Sprintf("cluster-shared-item-key-%s", uuid.New()[24:32]))
+					if locked := policy.GetLocked(); locked != nil {
+						locked.SetId(secret.GetId())
+					}
+					if editable := policy.GetEditable(); editable != nil && editable.GetDefaultValue() != nil {
+						editable.GetDefaultValue().SetId(secret.GetId())
+					}
+
+					_, err := server.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
+						Object: privatev1.ClusterCatalogItem_builder{
+							Metadata: privatev1.Metadata_builder{
+								Name:   fmt.Sprintf("test-%s", uuid.New()[24:32]),
+								Tenant: auth.SharedTenant,
+							}.Build(),
+							Title:    "Shared SSH key policy item",
+							Template: privatev1.ClusterTemplateReference_builder{Id: "my-shared-template-id"}.Build(),
+							Fields: privatev1.ClusterCatalogItemFields_builder{
+								SshKey: policy,
+							}.Build(),
+						}.Build(),
+					}.Build())
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+					Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("fields.ssh_key"))
+					Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("shared catalog items cannot define a locked or default tenant-local reference"))
+				},
+				Entry("locked reference", privatev1.GlobalSecretReferenceFieldPolicy_builder{
+					Locked: privatev1.SecretReference_builder{}.Build(),
+				}.Build()),
+				Entry("editable default", privatev1.GlobalSecretReferenceFieldPolicy_builder{
+					Editable: privatev1.EditableGlobalSecretReferenceField_builder{
+						DefaultValue: privatev1.SecretReference_builder{}.Build(),
+					}.Build(),
+				}.Build()),
+			)
+		})
+
 		DescribeTable("Rejects a non-pull Secret in a pull-secret policy", func(locked bool) {
 			secretsDao, err := dao.NewGenericDAO[*privatev1.Secret]().
 				SetLogger(logger).
@@ -722,16 +827,18 @@ var _ = Describe("Private cluster catalog items server", func() {
 			Expect(err.Error()).To(ContainSubstring("immutable"))
 		})
 
-		DescribeTable("validates SSH public key policy on Create", func(policy *privatev1.StringFieldPolicy, invalid bool) {
+		DescribeTable("validates the network pod CIDR policy on Create", func(policy *privatev1.StringFieldPolicy, invalid bool) {
 			response, err := server.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
 				Object: privatev1.ClusterCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
 					}.Build(),
-					Title:    "SSH key policy",
+					Title:    "Pod CIDR policy",
 					Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 					Fields: privatev1.ClusterCatalogItemFields_builder{
-						SshPublicKey: policy,
+						Network: privatev1.ClusterNetworkFieldPolicies_builder{
+							PodCidr: policy,
+						}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -740,7 +847,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(status.Message()).To(ContainSubstring("ssh_public_key"))
+				Expect(status.Message()).To(ContainSubstring("pod_cidr"))
 				Expect(status.Message()).To(ContainSubstring("no behavior"))
 				return
 			}
@@ -755,7 +862,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 			})
 		},
 			Entry("rejects a policy without behavior", privatev1.StringFieldPolicy_builder{}.Build(), true),
-			Entry("accepts a locked value", privatev1.StringFieldPolicy_builder{Locked: proto.String(testSSHPublicKey)}.Build(), false),
+			Entry("accepts a locked value", privatev1.StringFieldPolicy_builder{Locked: proto.String("10.128.0.0/14")}.Build(), false),
 			Entry("accepts editable input without a default", privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(), false),
 		)
 
@@ -784,7 +891,9 @@ var _ = Describe("Private cluster catalog items server", func() {
 					Id:       id,
 					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 					Fields: privatev1.ClusterCatalogItemFields_builder{
-						SshPublicKey: privatev1.StringFieldPolicy_builder{}.Build(),
+						Network: privatev1.ClusterNetworkFieldPolicies_builder{
+							PodCidr: privatev1.StringFieldPolicy_builder{}.Build(),
+						}.Build(),
 					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{
@@ -795,7 +904,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("ssh_public_key"))
+			Expect(status.Message()).To(ContainSubstring("pod_cidr"))
 			Expect(status.Message()).To(ContainSubstring("oneof"))
 		})
 
@@ -824,7 +933,6 @@ var _ = Describe("Private cluster catalog items server", func() {
 					Id:       id,
 					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 					Fields: privatev1.ClusterCatalogItemFields_builder{
-						SshPublicKey: privatev1.StringFieldPolicy_builder{Locked: proto.String(testSSHPublicKey)}.Build(),
 						Network: privatev1.ClusterNetworkFieldPolicies_builder{
 							PodCidr: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
 						}.Build(),
@@ -1001,14 +1109,12 @@ var _ = Describe("Cluster Catalog Item policy application", func() {
 				"empty":   nil,
 			},
 		}.Build()
-		sshKey := "ssh-ed25519 cluster"
 		podCIDR := "10.0.0.0/16"
 		serviceCIDR := "172.30.0.0/16"
 		autoExternalIP := false
 
 		fields := privatev1.ClusterCatalogItemFields_builder{
 			Version:                  privatev1.ClusterVersionReferenceFieldPolicy_builder{Locked: version}.Build(),
-			SshPublicKey:             privatev1.StringFieldPolicy_builder{Locked: &sshKey}.Build(),
 			PullSecretSecret:         privatev1.SecretReferenceFieldPolicy_builder{Locked: pullSecret}.Build(),
 			Network:                  privatev1.ClusterNetworkFieldPolicies_builder{PodCidr: privatev1.StringFieldPolicy_builder{Locked: &podCIDR}.Build(), ServiceCidr: privatev1.StringFieldPolicy_builder{Locked: &serviceCIDR}.Build()}.Build(),
 			NodeSets:                 privatev1.ClusterNodeSetMapPolicy_builder{Locked: nodeMap}.Build(),
@@ -1021,7 +1127,6 @@ var _ = Describe("Cluster Catalog Item policy application", func() {
 		Expect(applyClusterCatalogItemPolicies(spec, item.GetFields())).To(Succeed())
 		Expect(spec.GetVersion()).NotTo(BeIdenticalTo(version))
 		Expect(spec.GetVersion().GetName()).To(Equal("version"))
-		Expect(spec.GetSshPublicKey()).To(Equal(sshKey))
 		Expect(spec.GetPullSecretSecret().GetName()).To(Equal("pull-secret"))
 		Expect(spec.GetNetwork().GetPodCidr()).To(Equal(podCIDR))
 		Expect(spec.GetNetwork().GetServiceCidr()).To(Equal(serviceCIDR))
@@ -1038,5 +1143,54 @@ var _ = Describe("Cluster Catalog Item policy application", func() {
 		Expect(version.GetName()).To(Equal("version"))
 		Expect(clusterAttachment.GetSubnet().GetName()).To(Equal("cluster-subnet"))
 		Expect(nodeMap.GetItems()["workers"].GetSize()).To(Equal(workerSize))
+	})
+
+	It("applies an ssh_key Secret reference policy without aliasing", func() {
+		sshKeyRef := privatev1.SecretReference_builder{Id: "policy-key-id", Name: "policy-key"}.Build()
+		fields := privatev1.ClusterCatalogItemFields_builder{
+			SshKey: privatev1.GlobalSecretReferenceFieldPolicy_builder{
+				Locked: sshKeyRef,
+			}.Build(),
+		}.Build()
+		item := privatev1.ClusterCatalogItem_builder{Fields: fields}.Build()
+		spec := &privatev1.ClusterSpec{}
+
+		Expect(applyClusterCatalogItemPolicies(spec, item.GetFields())).To(Succeed())
+		Expect(spec.GetSshKey()).NotTo(BeIdenticalTo(sshKeyRef))
+		Expect(spec.GetSshKey().GetId()).To(Equal("policy-key-id"))
+		Expect(spec.GetSshKey().GetName()).To(Equal("policy-key"))
+
+		spec.GetSshKey().SetId("changed")
+		Expect(sshKeyRef.GetId()).To(Equal("policy-key-id"))
+	})
+
+	It("keeps a caller-supplied ssh_key reference under an editable policy", func() {
+		fields := privatev1.ClusterCatalogItemFields_builder{
+			SshKey: privatev1.GlobalSecretReferenceFieldPolicy_builder{
+				Editable: privatev1.EditableGlobalSecretReferenceField_builder{}.Build(),
+			}.Build(),
+		}.Build()
+		item := privatev1.ClusterCatalogItem_builder{Fields: fields}.Build()
+		spec := privatev1.ClusterSpec_builder{
+			SshKey: privatev1.SecretReference_builder{Id: "caller-key-id"}.Build(),
+		}.Build()
+
+		Expect(applyClusterCatalogItemPolicies(spec, item.GetFields())).To(Succeed())
+		Expect(spec.GetSshKey().GetId()).To(Equal("caller-key-id"))
+	})
+
+	It("requires a caller-supplied ssh_key under an editable policy without default", func() {
+		fields := privatev1.ClusterCatalogItemFields_builder{
+			SshKey: privatev1.GlobalSecretReferenceFieldPolicy_builder{
+				Editable: privatev1.EditableGlobalSecretReferenceField_builder{}.Build(),
+			}.Build(),
+		}.Build()
+		item := privatev1.ClusterCatalogItem_builder{Fields: fields}.Build()
+		spec := &privatev1.ClusterSpec{}
+
+		err := applyClusterCatalogItemPolicies(spec, item.GetFields())
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("ssh_key"))
+		Expect(err.Error()).To(ContainSubstring("required"))
 	})
 })

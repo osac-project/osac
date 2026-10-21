@@ -269,7 +269,34 @@ func RunProvisioningLifecycle(
 	checkAPIServer func() bool,
 	statusFlush func() error,
 ) (ctrl.Result, error) {
-	result, triggered, err := runLifecycleCore(ctx, provider, resource, provState, "", maxHistory, pollInterval, callbacks, checkAPIServer, nil)
+	return RunProvisioningLifecycleWithPrepareTrigger(ctx, provider, resource, provState,
+		maxHistory, pollInterval, callbacks, checkAPIServer, statusFlush, nil)
+}
+
+// PrepareTriggerFunc prepares launch-only extra variables immediately before a
+// new provision job is triggered. It runs whenever a new job is launched —
+// the Trigger action and backoff-expired retries — but never for Skip or
+// Poll. Returning ready=false requeues after the given delay without
+// launching, so callers can hold provisioning while a value they must not
+// persist (for example resolved Secret material) is unavailable.
+type PrepareTriggerFunc func() (map[string]any, bool, time.Duration)
+
+// RunProvisioningLifecycleWithPrepareTrigger is RunProvisioningLifecycle with
+// an optional PrepareTriggerFunc hook. A nil hook behaves exactly like
+// RunProvisioningLifecycle.
+func RunProvisioningLifecycleWithPrepareTrigger(
+	ctx context.Context,
+	provider ProvisioningProvider,
+	resource client.Object,
+	provState *State,
+	maxHistory int,
+	pollInterval time.Duration,
+	callbacks *PollCallbacks,
+	checkAPIServer func() bool,
+	statusFlush func() error,
+	prepareTrigger PrepareTriggerFunc,
+) (ctrl.Result, error) {
+	result, triggered, err := runLifecycleCore(ctx, provider, resource, provState, "", maxHistory, pollInterval, callbacks, checkAPIServer, prepareTrigger)
 	if err != nil {
 		return result, err
 	}

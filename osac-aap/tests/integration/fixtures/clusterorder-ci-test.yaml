@@ -8,8 +8,7 @@ spec:
   templateID: osac.templates.ocp_ci_small
   templateParameters: |
     {
-      "pull_secret": "test-pull-secret-content",
-      "ssh_public_key": "ssh-rsa test-key test@example.com"
+      "pull_secret": "test-pull-secret-content"
     }
   nodeRequests:
     - nodeSet: workers

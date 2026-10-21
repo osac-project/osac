@@ -199,7 +199,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
-					SshPublicKey: new(bmiTestSSHPublicKey),
+					UserData:     new("#cloud-config"),
 					DiskImage:    publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
 				}.Build(),
 			}.Build(),
@@ -274,7 +274,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: "non-existent-catalog-item"}.Build(),
 					InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
-					SshPublicKey: new(bmiTestSSHPublicKey),
+					UserData:     new("#cloud-config"),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -296,7 +296,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:        publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					InstanceType:       publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
-					SshPublicKey:       new(bmiTestSSHPublicKey),
+					UserData:           new("#cloud-config\nssh_pwauth: true"),
 					DiskImage:          publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
 					NetworkAttachments: []*publicv1.BareMetalNetworkAttachment{network.bareMetalInstanceAttachment()},
 				}.Build(),
@@ -494,7 +494,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
-					SshPublicKey: new(bmiTestSSHPublicKey),
+					UserData:     new("#cloud-config"),
 					NetworkAttachments: []*publicv1.BareMetalNetworkAttachment{
 						publicv1.BareMetalNetworkAttachment_builder{
 							Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),
@@ -543,7 +543,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
-					SshPublicKey: new(bmiTestSSHPublicKey),
+					UserData:     new("#cloud-config"),
 					DiskImage:    publicv1.DiskImageReference_builder{Id: diskImageId}.Build(),
 				}.Build(),
 			}.Build(),
@@ -627,7 +627,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
-					SshPublicKey: new(bmiTestSSHPublicKey),
+					UserData:     new("#cloud-config"),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -644,7 +644,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
-					SshPublicKey: new(bmiTestSSHPublicKey),
+					UserData:     new("#cloud-config"),
 					DiskImage:    publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
 				}.Build(),
 			}.Build(),
@@ -758,9 +758,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
-					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
-					SshPublicKey: new(bmiTestSSHPublicKey),
-					DiskImage:    publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
+					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
+					UserData:    new("#cloud-config"),
+					DiskImage:   publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -869,8 +869,8 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 							Name:   catName,
 							Shared: true,
 						}.Build(),
-						SshPublicKey: new(bmiTestSSHPublicKey),
-						DiskImage:    publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
+						UserData:  new("#cloud-config"),
+						DiskImage: publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -966,7 +966,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					Spec: publicv1.BareMetalInstanceSpec_builder{
 						Template:     publicv1.BareMetalInstanceTemplateReference_builder{Id: directTemplateId}.Build(),
 						InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
-						SshPublicKey: new(bmiTestSSHPublicKey),
+						UserData:     new("#cloud-config"),
 						DiskImage:    publicv1.DiskImageReference_builder{Id: diskImageId}.Build(),
 					}.Build(),
 				}.Build(),
@@ -1088,7 +1088,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				replacementRef = &publicv1.SecretReference{Id: replacement.GetId()}
 			})
 
-			createInstance := func(ctx context.Context, sshKey *publicv1.SecretReference, rawKey *string) (*publicv1.BareMetalInstancesCreateResponse, error) {
+			createInstance := func(ctx context.Context, sshKey *publicv1.SecretReference) (*publicv1.BareMetalInstancesCreateResponse, error) {
 				return bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 					Object: publicv1.BareMetalInstance_builder{
 						Metadata: publicv1.Metadata_builder{
@@ -1099,14 +1099,13 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 							InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
 							DiskImage:    publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
 							SshKey:       sshKey,
-							SshPublicKey: rawKey,
 						}.Build(),
 					}.Build(),
 				}.Build())
 			}
 
 			It("canonicalizes a registered SSH-key Secret name at create", func(ctx context.Context) {
-				response, err := createInstance(ctx, &publicv1.SecretReference{Name: secretName}, nil)
+				response, err := createInstance(ctx, &publicv1.SecretReference{Name: secretName})
 				Expect(err).ToNot(HaveOccurred())
 				DeferCleanup(func(ctx context.Context) {
 					_, err := privateBareMetalInstancesClient.Delete(ctx, privatev1.BareMetalInstancesDeleteRequest_builder{
@@ -1121,12 +1120,10 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Expect(sshKey.GetName()).To(Equal(secretName))
 				Expect(sshKey.GetProject()).To(BeEmpty())
 				Expect(sshKey.GetShared()).To(BeFalse())
-				Expect(response.GetObject().GetSpec().GetSshPublicKey()).To(BeEmpty(),
-					"resolved public-key material must not be persisted")
 			})
 
 			It("rejects an unregistered SSH-key Secret name", func(ctx context.Context) {
-				_, err := createInstance(ctx, &publicv1.SecretReference{Name: "no-such-ssh-key"}, nil)
+				_, err := createInstance(ctx, &publicv1.SecretReference{Name: "no-such-ssh-key"})
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.NotFound))
@@ -1153,23 +1150,15 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					}
 				})
 
-				_, err = createInstance(ctx, &publicv1.SecretReference{Name: foreignName}, nil)
+				_, err = createInstance(ctx, &publicv1.SecretReference{Name: foreignName})
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.NotFound),
 					"Secret-name resolution must stay scoped to the caller's tenant")
 			})
 
-			It("rejects create when both ssh_public_key and ssh_key are set", func(ctx context.Context) {
-				_, err := createInstance(ctx, &publicv1.SecretReference{Name: secretName}, new(bmiTestSSHPublicKey))
-				status, ok := grpcstatus.FromError(err)
-				Expect(ok).To(BeTrue())
-				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(status.Message()).To(ContainSubstring("mutually exclusive"))
-			})
-
 			It("rejects updates that change the registered SSH-key Secret", func(ctx context.Context) {
-				response, err := createInstance(ctx, &publicv1.SecretReference{Name: secretName}, nil)
+				response, err := createInstance(ctx, &publicv1.SecretReference{Name: secretName})
 				Expect(err).ToNot(HaveOccurred())
 				DeferCleanup(func(ctx context.Context) {
 					_, err := privateBareMetalInstancesClient.Delete(ctx, privatev1.BareMetalInstancesDeleteRequest_builder{
@@ -1227,7 +1216,6 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				})
 				Expect(created.GetSpec().GetSshKey().GetId()).To(Equal(secretID),
 					"the CLI --ssh-key flag must send a registered Secret reference")
-				Expect(created.GetSpec().GetSshPublicKey()).To(BeEmpty())
 
 				output, stderr, exitCode = tool.RunCLI(ctx, homeDir,
 					"create", "baremetalinstance",

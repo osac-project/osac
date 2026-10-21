@@ -11,7 +11,13 @@ import pytest
 
 from tests.e2e.core.caas_versions import ensure_caas_disk_image_version
 from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
-from tests.e2e.core.helpers import assert_grpc_field_violation, bmi_instance_type_for_tests, wait_for_bmi_grpc_removal
+from tests.e2e.core.helpers import (
+    assert_grpc_field_violation,
+    bmi_instance_type_for_tests,
+    registered_ssh_key_secret,
+    wait_for_bmi_grpc_removal,
+)
+from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import env
 
 logger = logging.getLogger(__name__)
@@ -19,7 +25,7 @@ logger = logging.getLogger(__name__)
 _ENV_SKIP_PATTERNS = [re.compile(r"no host type"), re.compile(r"no instance type")]
 _FABRIC_MANAGER_SKIP_PATTERN = re.compile(r"require a fabric manager")
 
-# A BareMetalInstance requires at least one authentication method (ssh_public_key or
+# A BareMetalInstance requires at least one authentication method (ssh_key or
 # user_data) at create time, otherwise the resulting host would be inaccessible.
 _TEST_SSH_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8K1ZuSC7tmzxD5LJJXwkCfStVEjzXWYCFhJaLBxWAn test@example.com"
@@ -172,6 +178,7 @@ class TestClusterBareMetalReferences:
         self,
         private_grpc: GRPCClient,
         grpc: GRPCClient,
+        jwt_cli_user: OsacCLI,
         bmi_template: str,
         bmi_instance_type: str,
         ref_bmi_disk_image: str,
@@ -183,42 +190,46 @@ class TestClusterBareMetalReferences:
             name=cat_name, title=cat_name, description="Reference test", template=bmi_template, api=PRIVATE_API
         )
         bmi_id: str | None = None
-        try:
-            cat_response: dict[str, Any] = private_grpc.call(
-                service=f"{PRIVATE_API}.BareMetalInstanceCatalogItems/Get", data={"id": cat_id}
-            )
-            tmpl_ref = cat_response["object"]["template"]
-            assert tmpl_ref.get("name") == bmi_template
-            assert tmpl_ref.get("id"), "template.id should be auto-populated in BMI catalog item"
+        with registered_ssh_key_secret(jwt_cli_user, _TEST_SSH_PUBLIC_KEY, f"e2e-ref-bmi-key-{tag}") as key_name:
+            try:
+                cat_response: dict[str, Any] = private_grpc.call(
+                    service=f"{PRIVATE_API}.BareMetalInstanceCatalogItems/Get", data={"id": cat_id}
+                )
+                tmpl_ref = cat_response["object"]["template"]
+                assert tmpl_ref.get("name") == bmi_template
+                assert tmpl_ref.get("id"), "template.id should be auto-populated in BMI catalog item"
 
-            bmi_response: dict[str, Any] = _create_bmi_or_skip(
-                grpc,
-                data={
-                    "object": {
-                        "metadata": {"name": f"ref-bmi-{tag}"},
-                        "spec": {
-                            "catalog_item": {"name": cat_name, "shared": True},
-                            "instance_type": {"name": bmi_instance_type, "shared": True},
-                            "disk_image": {"name": ref_bmi_disk_image},
-                            "ssh_public_key": _TEST_SSH_PUBLIC_KEY,
-                        },
-                    }
-                },
-            )
-            bmi_id = bmi_response["object"]["id"]
-            spec = bmi_response["object"]["spec"]
-            cat_ref = spec.get("catalog_item", spec.get("catalogItem", {}))
-            assert cat_ref.get("name") == cat_name
-            assert cat_ref.get("id") == cat_id
-            instance_type_ref = spec.get("instance_type", spec.get("instanceType", {}))
-            assert instance_type_ref.get("name") == bmi_instance_type
-        finally:
-            if bmi_id:
-                try:
-                    grpc.delete_baremetal_instance(bmi_id=bmi_id)
-                    wait_for_bmi_grpc_removal(grpc=grpc, uuid=bmi_id)
-                except subprocess.CalledProcessError:
-                    logger.warning("Failed to cleanup BMI %s", bmi_id)
+                bmi_response: dict[str, Any] = _create_bmi_or_skip(
+                    grpc,
+                    data={
+                        "object": {
+                            "metadata": {"name": f"ref-bmi-{tag}"},
+                            "spec": {
+                                "catalog_item": {"name": cat_name, "shared": True},
+                                "instance_type": {"name": bmi_instance_type, "shared": True},
+                                "disk_image": {"name": ref_bmi_disk_image},
+                                "ssh_key": {"name": key_name},
+                            },
+                        }
+                    },
+                )
+                bmi_id = bmi_response["object"]["id"]
+                spec = bmi_response["object"]["spec"]
+                cat_ref = spec.get("catalog_item", spec.get("catalogItem", {}))
+                assert cat_ref.get("name") == cat_name
+                assert cat_ref.get("id") == cat_id
+                instance_type_ref = spec.get("instance_type", spec.get("instanceType", {}))
+                assert instance_type_ref.get("name") == bmi_instance_type
+                ssh_key_ref = spec.get("ssh_key", spec.get("sshKey", {}))
+                assert ssh_key_ref.get("name") == key_name
+                assert ssh_key_ref.get("id"), "the reference must be canonicalized to the Secret ID"
+            finally:
+                if bmi_id:
+                    try:
+                        grpc.delete_baremetal_instance(bmi_id=bmi_id)
+                        wait_for_bmi_grpc_removal(grpc=grpc, uuid=bmi_id)
+                    except subprocess.CalledProcessError:
+                        logger.warning("Failed to cleanup BMI %s", bmi_id)
             try:
                 private_grpc.delete_baremetal_instance_catalog_item(item_id=cat_id, api=PRIVATE_API)
             except subprocess.CalledProcessError:

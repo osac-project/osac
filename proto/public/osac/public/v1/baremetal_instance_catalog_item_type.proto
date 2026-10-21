@@ -59,7 +59,10 @@ message BareMetalInstanceCatalogItem {
 
 // Groups the policies for governable bare metal instance fields.
 message BareMetalInstanceCatalogItemFields {
-  StringFieldPolicy ssh_public_key = 1;
+  // Reserved field number and name for the removed inline SSH-key policy.
+  // Callers must use `ssh_key` with a Secret-reference policy instead.
+  reserved 1;
+  reserved "ssh_public_key";
   StringFieldPolicy user_data = 2;
   BareMetalInstanceRunStrategyFieldPolicy run_strategy = 3;
   // Reserved field numbers for removed fields (do not reuse).

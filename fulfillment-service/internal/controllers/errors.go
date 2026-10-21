@@ -16,12 +16,13 @@ package controllers
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+
+	"github.com/osac-project/osac/proto/sshkey"
 )
 
 var (
@@ -31,27 +32,13 @@ var (
 	ErrHubNotFound = errors.New("hub not found")
 )
 
-// SSHKeyResolutionError classifies a failure while resolving the Secret referenced
-// by a registered SSH-key field. Permanent failures surface as terminal
-// provisioning conditions; transient ones are retried by the reconciler.
-type SSHKeyResolutionError struct {
-	// Permanent marks failures that retrying cannot fix, such as a deleted
-	// Secret or unusable key material.
-	Permanent bool
-	// Reason is the tenant-facing condition reason for permanent failures,
-	// for example "SecretNotFound" or "SecretInvalid".
-	Reason string
-	// Err is the underlying resolution failure.
-	Err error
-}
-
-func (e *SSHKeyResolutionError) Error() string {
-	return fmt.Sprintf("failed to resolve registered SSH-key Secret: %v", e.Err)
-}
-
-func (e *SSHKeyResolutionError) Unwrap() error {
-	return e.Err
-}
+// SSHKeyResolutionError classifies a failure while resolving the Secret
+// referenced by a registered SSH-key field. Permanent failures surface as
+// terminal provisioning conditions; transient ones are retried by the
+// reconciler. It is the shared proto-module shape, produced by
+// sshkey.Fetch, so the fulfillment and operator resolution paths share one
+// classification.
+type SSHKeyResolutionError = sshkey.Error
 
 // ClassifyHubError determines if a hub access error is permanent (not found) or transient.
 //

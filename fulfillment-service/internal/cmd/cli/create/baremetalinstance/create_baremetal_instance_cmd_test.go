@@ -296,7 +296,6 @@ var _ = Describe("buildSpec", func() {
 		spec, err := c.buildSpec("catalog-item-id", false)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(spec.GetSshKey().GetName()).To(Equal("tenant-login"))
-		Expect(spec.GetSshPublicKey()).To(BeEmpty())
 	})
 
 	It("should set disk_image from the disk-image flag", func() {

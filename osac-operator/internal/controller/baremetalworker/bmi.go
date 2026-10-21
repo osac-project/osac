@@ -9,6 +9,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	ctrl "sigs.k8s.io/controller-runtime"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -34,7 +35,14 @@ func (r *Reconciler) ensureBMI(
 	workerName string, image *privatev1.DiskImageReference, ignitionRaw, filter, fabricInterface string,
 ) (*privatev1.BareMetalInstance, ctrl.Result, error) {
 	// The worker lives in its cluster's project and records its cluster in status.cluster.
-	req := r.buildBMICreateRequest(co, cluster.GetMetadata().GetTenant(), cluster, nodeSet, workerName, image, ignitionRaw, fabricInterface)
+	req, reqErr := r.buildBMICreateRequest(co, cluster.GetMetadata().GetTenant(), cluster, nodeSet, workerName, image, ignitionRaw, fabricInterface)
+	if reqErr != nil {
+		// A Cluster/ClusterOrder reference mismatch resolves when the order
+		// catches up; hold this Create without touching existing workers.
+		ctrllog.FromContext(ctx).Info("holding BMI create: cluster SSH key reference",
+			"worker", workerName, "reason", reqErr.Error())
+		return nil, ctrl.Result{RequeueAfter: sshKeyResolutionRetry}, nil
+	}
 	created, err := r.fulfillment.CreateBareMetalInstance(ctx, req)
 	if err == nil {
 		return created, ctrl.Result{}, nil
@@ -86,7 +94,7 @@ func (r *Reconciler) findBMIByName(ctx context.Context, co *v1alpha1.ClusterOrde
 func (r *Reconciler) buildBMICreateRequest(
 	co *v1alpha1.ClusterOrder, tenant string, cluster *privatev1.Cluster, nodeSet v1alpha1.NodeRequest,
 	workerName string, image *privatev1.DiskImageReference, ignitionRaw, fabricInterface string,
-) *privatev1.BareMetalInstance {
+) (*privatev1.BareMetalInstance, error) {
 	labels := map[string]string{clusterOrderLabel: co.Name}
 	annotations := map[string]string{ownerReferenceAnnotation: fmt.Sprintf("ClusterOrder/%s", co.Name)}
 
@@ -123,8 +131,17 @@ func (r *Reconciler) buildBMICreateRequest(
 		InstanceType:       instanceType,
 		NetworkAttachments: netAttachments,
 	}
-	if sshKey := r.resolveSSHPublicKey(co); sshKey != "" {
-		specBuilder.SshPublicKey = &sshKey
+	// The child BMI carries the Cluster's canonical Secret reference, never
+	// key bytes. The ID is checked against the ClusterOrder so a mid-flight
+	// Cluster key change cannot hand a worker a reference the order does not
+	// carry; cloning preserves a non-default project selector.
+	if clusterKey := cluster.GetSpec().GetSshKey(); clusterKey.GetId() != "" {
+		if co.Spec.SSHKey == nil || co.Spec.SSHKey.ID != clusterKey.GetId() {
+			return nil, fmt.Errorf(
+				"cluster ssh key secret '%s' does not match the ClusterOrder reference; update the cluster and retry",
+				clusterKey.GetId())
+		}
+		specBuilder.SshKey = proto.Clone(clusterKey).(*privatev1.SecretReference)
 	}
 
 	return privatev1.BareMetalInstance_builder{
@@ -142,7 +159,7 @@ func (r *Reconciler) buildBMICreateRequest(
 			}.Build(),
 			NodeSet: &nodeSet.NodeSet,
 		}.Build(),
-	}.Build()
+	}.Build(), nil
 }
 
 func (r *Reconciler) resolveNodeSetInstanceType(

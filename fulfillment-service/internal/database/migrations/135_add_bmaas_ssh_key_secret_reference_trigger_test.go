@@ -43,6 +43,27 @@ var _ = DescribeMigration("Add BMaaS SSH-key Secret reference trigger", func() {
 		Expect(pgErr.Code).To(Equal("Z0002"))
 	})
 
+	It("rejects a reference to another tenant's Secret", func(ctx context.Context) {
+		_, err := conn.Exec(ctx, `
+			insert into tenants (id, name, tenant, creator, data)
+			values ('bmaas-other-tenant', 'bmaas-other-tenant', 'bmaas-other-tenant', 'system', '{}')
+			on conflict do nothing`)
+		Expect(err).ToNot(HaveOccurred())
+		_, err = conn.Exec(ctx, `
+			insert into secrets (id, name, tenant, data)
+			values ('bmaas-foreign-secret', 'bmaas-foreign-secret', 'bmaas-other-tenant', '{}')`)
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = conn.Exec(ctx, `
+			insert into bare_metal_instances (id, name, tenant, data)
+			values ('bmaas-foreign-ref-instance', 'bmaas-foreign-ref-instance', 'bmaas-test-tenant',
+			        '{"spec":{"ssh_key":{"id":"bmaas-foreign-secret"}}}')`)
+		Expect(err).To(HaveOccurred())
+		var pgErr *pgconn.PgError
+		Expect(errors.As(err, &pgErr)).To(BeTrue())
+		Expect(pgErr.Code).To(Equal("Z0002"))
+	})
+
 	It("allows deleting a Secret referenced by an active BMaaS instance", func(ctx context.Context) {
 		_, err := conn.Exec(ctx, `
 			insert into secrets (id, name, tenant, data)

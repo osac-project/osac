@@ -37,6 +37,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			By("authoring a tenant offering with network and node-set policies")
 			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 			secret := createCatalogItemPullSecretFixture(ctx, usersGroup)
+			sshKeySecret := createCatalogItemSSHKeySecretFixture(ctx, usersGroup)
 			bmit := createCatalogItemBareMetalInstanceTypeFixture(ctx, "shared")
 			extraBmit := createCatalogItemBareMetalInstanceTypeFixture(ctx, "shared")
 			version := createCatalogItemClusterVersionFixture(ctx, "4.20.0")
@@ -50,8 +51,10 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 						DefaultValue: publicv1.ClusterVersionReference_builder{Id: version}.Build(),
 					}.Build(),
 				}.Build(),
-				SshPublicKey: publicv1.StringFieldPolicy_builder{
-					Editable: publicv1.EditableStringField_builder{DefaultValue: new(catalogItemFixtureSSHPublicKey)}.Build(),
+				SshKey: publicv1.GlobalSecretReferenceFieldPolicy_builder{
+					Editable: publicv1.EditableGlobalSecretReferenceField_builder{
+						DefaultValue: publicv1.SecretReference_builder{Id: sshKeySecret}.Build(),
+					}.Build(),
 				}.Build(),
 				PullSecretSecret: publicv1.SecretReferenceFieldPolicy_builder{
 					Locked: publicv1.SecretLocalReference_builder{Id: secret}.Build(),
@@ -114,7 +117,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 
 			Expect(spec.GetNetwork().GetPodCidr()).To(Equal("10.132.0.0/14"))
 			Expect(spec.GetNetwork().GetServiceCidr()).To(Equal("172.32.0.0/16"))
-			Expect(spec.GetSshPublicKey()).To(Equal(catalogItemFixtureSSHPublicKey))
+			Expect(spec.GetSshKey().GetId()).To(Equal(sshKeySecret))
 			Expect(spec.GetPullSecretSecret().GetId()).To(Equal(secret))
 			Expect(spec.GetNetworkAttachment().GetSubnet().GetId()).To(Equal(network.subnetID))
 			Expect(spec.GetNetworkAttachment().GetSecurityGroups()[0].GetId()).To(Equal(network.securityGroupID))
@@ -305,9 +308,10 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			By("authoring a shared offering with Template and catalog defaults")
 			bmit := createCatalogItemBareMetalInstanceTypeFixture(ctx, "shared")
 			version := createCatalogItemClusterVersionFixture(ctx, "4.20.0")
+			sshKeySecret := createCatalogItemSSHKeySecretFixture(ctx, usersGroup)
 			template := createCatalogItemClusterTemplateFixture(ctx, privatev1.ClusterTemplateSpecDefaults_builder{
-				Version:      privatev1.ClusterVersionReference_builder{Id: version}.Build(),
-				SshPublicKey: new(catalogItemFixtureSSHPublicKey),
+				Version: privatev1.ClusterVersionReference_builder{Id: version}.Build(),
+				SshKey:  privatev1.SecretReference_builder{Id: sshKeySecret}.Build(),
 			}.Build(), nil)
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
 				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
@@ -350,7 +354,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			}.Build())
 			Expect(e).NotTo(HaveOccurred())
 			Expect(result.GetObject().GetSpec().GetVersion().GetId()).To(Equal(version))
-			Expect(result.GetObject().GetSpec().GetSshPublicKey()).To(Equal(catalogItemFixtureSSHPublicKey))
+			Expect(result.GetObject().GetSpec().GetSshKey().GetId()).To(Equal(sshKeySecret))
 			Expect(result.GetObject().GetSpec().GetPullSecretSecret().GetId()).To(Equal(secret))
 			Expect(result.GetObject().GetSpec().GetNodeSets()["workers"].GetBaremetalInstanceType().GetId()).To(Equal(bmit))
 			listed, e := client.List(ctx, publicv1.ClustersListRequest_builder{Filter: new("this.metadata.name == '" + name + "'")}.Build())
@@ -541,10 +545,11 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			By("publishing governed fields for members of the tenant")
 			memberConn := createCatalogItemMemberFixture(ctx, tenant)
 			memberItems := publicv1.NewClusterCatalogItemsClient(memberConn)
+			tenantSSHKeySecret := createCatalogItemSSHKeySecretFixture(ctx, tenant)
 			_, err := items.Update(ctx, publicv1.ClusterCatalogItemsUpdateRequest_builder{
 				Object: publicv1.ClusterCatalogItem_builder{Id: owned.GetId(), Published: true,
 					Fields: publicv1.ClusterCatalogItemFields_builder{
-						SshPublicKey:             publicv1.StringFieldPolicy_builder{Editable: publicv1.EditableStringField_builder{DefaultValue: new(catalogItemFixtureSSHPublicKey)}.Build()}.Build(),
+						SshKey:                   publicv1.GlobalSecretReferenceFieldPolicy_builder{Editable: publicv1.EditableGlobalSecretReferenceField_builder{DefaultValue: publicv1.SecretReference_builder{Id: tenantSSHKeySecret}.Build()}.Build()}.Build(),
 						AutoExternalIpAttachment: publicv1.BoolFieldPolicy_builder{Locked: new(false)}.Build(),
 					}.Build(),
 				}.Build(), UpdateMask: catalogItemUpdateMask("published", "fields"),
@@ -552,15 +557,16 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			Expect(err).NotTo(HaveOccurred())
 			visible, err := memberItems.Get(ctx, publicv1.ClusterCatalogItemsGetRequest_builder{Id: owned.GetId()}.Build())
 			Expect(err).NotTo(HaveOccurred())
-			Expect(visible.GetObject().GetFields().GetSshPublicKey().GetEditable().GetDefaultValue()).To(Equal(catalogItemFixtureSSHPublicKey))
+			Expect(visible.GetObject().GetFields().GetSshKey().GetEditable().GetDefaultValue().GetId()).To(Equal(tenantSSHKeySecret))
 			Expect(visible.GetObject().GetFields().GetAutoExternalIpAttachment().HasLocked()).To(BeTrue())
 			Expect(visible.GetObject().GetFields().GetAutoExternalIpAttachment().GetLocked()).To(BeFalse())
 
 			By("provisioning a cluster as a member with an editable override")
 			network := createCatalogItemNetworkFixture(ctx, tenant, "")
+			memberSSHKeySecret := createCatalogItemSSHKeySecretFixture(ctx, tenant)
 			spec := publicv1.ClusterSpec_builder{
 				CatalogItem:       publicv1.ClusterCatalogItemReference_builder{Id: owned.GetId()}.Build(),
-				SshPublicKey:      new(catalogItemFixtureSSHPublicKey + " member"),
+				SshKey:            publicv1.SecretReference_builder{Id: memberSSHKeySecret}.Build(),
 				NetworkAttachment: network.clusterAttachment(),
 				NodeSets: map[string]*publicv1.ClusterNodeSet{"workers": publicv1.ClusterNodeSet_builder{
 					Size: new(int32(2)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Shared: true}.Build(),
@@ -572,7 +578,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			stored, err := objects.Get(ctx, publicv1.ClustersGetRequest_builder{Id: created.GetId()}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			Expect(stored.GetObject().GetMetadata().GetTenant()).To(Equal(tenant))
-			Expect(stored.GetObject().GetSpec().GetSshPublicKey()).To(Equal(catalogItemFixtureSSHPublicKey + " member"))
+			Expect(stored.GetObject().GetSpec().GetSshKey().GetId()).To(Equal(memberSSHKeySecret))
 			Expect(stored.GetObject().GetSpec().HasAutoExternalIpAttachment()).To(BeTrue())
 			Expect(stored.GetObject().GetSpec().GetAutoExternalIpAttachment()).To(BeFalse())
 
@@ -679,12 +685,14 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 		It("keeps unmasked policies and atomically rejects invalid merged candidates", func(ctx context.Context) {
 			By("authoring an offering with two field policies")
 			template := createCatalogItemClusterTemplateFixture(ctx, nil, nil)
+			sshKeySecret := createCatalogItemSSHKeySecretFixture(ctx, usersGroup)
+			replacementSSHKeySecret := createCatalogItemSSHKeySecretFixture(ctx, usersGroup)
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
 				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
 				Template:  publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
 				Published: true,
 				Fields: publicv1.ClusterCatalogItemFields_builder{
-					SshPublicKey:             publicv1.StringFieldPolicy_builder{Locked: new(catalogItemFixtureSSHPublicKey)}.Build(),
+					SshKey:                   publicv1.GlobalSecretReferenceFieldPolicy_builder{Locked: publicv1.SecretReference_builder{Id: sshKeySecret}.Build()}.Build(),
 					AutoExternalIpAttachment: publicv1.BoolFieldPolicy_builder{Locked: new(false)}.Build(),
 				}.Build(),
 			}.Build())
@@ -695,20 +703,22 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 				Object: publicv1.ClusterCatalogItem_builder{
 					Id: item.GetId(),
 					Fields: publicv1.ClusterCatalogItemFields_builder{
-						SshPublicKey: publicv1.StringFieldPolicy_builder{
-							Editable: publicv1.EditableStringField_builder{DefaultValue: new(catalogItemFixtureSSHPublicKey + " edited")}.Build(),
+						SshKey: publicv1.GlobalSecretReferenceFieldPolicy_builder{
+							Editable: publicv1.EditableGlobalSecretReferenceField_builder{
+								DefaultValue: publicv1.SecretReference_builder{Id: replacementSSHKeySecret}.Build(),
+							}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build(),
-				UpdateMask: catalogItemUpdateMask("fields.ssh_public_key"),
+				UpdateMask: catalogItemUpdateMask("fields.ssh_key"),
 			}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			before, err := client.Get(ctx, publicv1.ClusterCatalogItemsGetRequest_builder{Id: item.GetId()}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			Expect(before.GetObject().GetFields().GetAutoExternalIpAttachment().HasLocked()).To(BeTrue())
 			Expect(before.GetObject().GetFields().GetAutoExternalIpAttachment().GetLocked()).To(BeFalse())
-			Expect(before.GetObject().GetFields().GetSshPublicKey().HasLocked()).To(BeFalse())
-			Expect(before.GetObject().GetFields().GetSshPublicKey().GetEditable().GetDefaultValue()).To(Equal(catalogItemFixtureSSHPublicKey + " edited"))
+			Expect(before.GetObject().GetFields().GetSshKey().HasLocked()).To(BeFalse())
+			Expect(before.GetObject().GetFields().GetSshKey().GetEditable().GetDefaultValue().GetId()).To(Equal(replacementSSHKeySecret))
 
 			By("rejecting an invalid policy without changing the catalog item title")
 			_, err = client.Update(ctx, publicv1.ClusterCatalogItemsUpdateRequest_builder{
@@ -716,11 +726,11 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 					Id:    item.GetId(),
 					Title: "must not persist",
 					Fields: publicv1.ClusterCatalogItemFields_builder{
-						SshPublicKey: publicv1.StringFieldPolicy_builder{}.Build(),
+						SshKey: publicv1.GlobalSecretReferenceFieldPolicy_builder{}.Build(),
 					}.Build(),
 				}.Build(),
 				UpdateMask: catalogItemUpdateMask("title",
-					"fields.ssh_public_key"),
+					"fields.ssh_key"),
 			}.Build())
 			expectCatalogItemStatusCode(err, codes.InvalidArgument)
 			after, err := client.Get(ctx, publicv1.ClusterCatalogItemsGetRequest_builder{Id: item.GetId()}.Build())
@@ -738,7 +748,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			Expect(err).NotTo(HaveOccurred())
 			after, err = client.Get(ctx, publicv1.ClusterCatalogItemsGetRequest_builder{Id: item.GetId()}.Build())
 			Expect(err).NotTo(HaveOccurred())
-			Expect(after.GetObject().GetFields().GetSshPublicKey()).To(BeNil())
+			Expect(after.GetObject().GetFields().GetSshKey()).To(BeNil())
 			Expect(after.GetObject().GetFields().GetAutoExternalIpAttachment()).To(BeNil())
 		})
 		DescribeTable("rejects invalid governed node maps without changing the stored catalog item", func(ctx context.Context, invalidPolicy func(context.Context) *publicv1.ClusterNodeSetMapPolicy) {

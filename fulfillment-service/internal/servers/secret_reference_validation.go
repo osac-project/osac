@@ -20,6 +20,7 @@ import (
 
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/references"
@@ -139,4 +140,34 @@ func validateSecretType(secret *privatev1.Secret, identifier, field string, expe
 			identifier, field, secret.GetType(), expected)
 	}
 	return nil
+}
+
+// sshKeyReference is the shared shape of an immutable SSH-key Secret reference,
+// satisfied by both the full SecretReference (BareMetalInstance) and the local
+// SecretLocalReference (ComputeInstance).
+type sshKeyReference interface {
+	proto.Message
+	GetId() string
+	GetName() string
+}
+
+// sameImmutableSSHKeyReference reports whether an immutable SSH-key Secret
+// reference is unchanged across an update. An exact proto-equal reference is
+// unchanged, as is a replacement that selects the same Secret by canonical ID
+// or by name. sameQualifiers, when set, adds type-specific name-branch checks
+// (the full reference also compares project and shared selectors); a nil
+// sameQualifiers accepts any name-only match, which is the local-reference
+// behavior.
+func sameImmutableSSHKeyReference[T sshKeyReference](
+	existing, new T, sameQualifiers func(existing, new T) bool,
+) bool {
+	if !existing.ProtoReflect().IsValid() || !new.ProtoReflect().IsValid() {
+		// Covers both-absent (unchanged) and one-absent (a change) references.
+		return proto.Equal(existing, new)
+	}
+	if new.GetId() != "" {
+		return existing.GetId() == new.GetId()
+	}
+	return existing.GetName() == new.GetName() &&
+		(sameQualifiers == nil || sameQualifiers(existing, new))
 }

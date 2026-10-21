@@ -100,16 +100,10 @@ func Cmd() *cobra.Command {
 		pullSecretFlagHelp,
 	)
 	flags.StringVar(
-		&runner.args.sshPublicKey,
-		"ssh-public-key",
+		&runner.args.sshKey,
+		"ssh-key",
 		"",
-		sshPublicKeyFlagHelp,
-	)
-	flags.StringVar(
-		&runner.args.sshPublicKeyFile,
-		"ssh-public-key-file",
-		"",
-		sshPublicKeyFileFlagHelp,
+		sshKeyFlagHelp,
 	)
 	flags.StringVar(
 		&runner.args.version,
@@ -167,8 +161,7 @@ type runnerContext struct {
 		templateParameterFiles  []string
 		setFields               []string
 		pullSecret              string
-		sshPublicKey            string
-		sshPublicKeyFile        string
+		sshKey                  string
 		version                 string
 		podCIDR                 string
 		serviceCIDR             string
@@ -252,12 +245,6 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	c.clustersClient = publicv1.NewClustersClient(conn)
 	c.clusterVersionsClient = publicv1.NewClusterVersionsClient(conn)
 
-	// Resolve the SSH public key before branching (used in both catalog-item and template paths):
-	sshPublicKey, err := c.resolveSSHPublicKey()
-	if err != nil {
-		return err
-	}
-
 	// Resolve the version reference to a ClusterVersion metadata.name:
 	if c.args.version != "" {
 		version, err := c.findVersion(ctx)
@@ -286,7 +273,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		specBuilder := publicv1.ClusterSpec_builder{
 			CatalogItem: &publicv1.ClusterCatalogItemReference{Id: catalogItem.GetId()},
 		}
-		if err := c.applyOptionalSpecFields(&specBuilder, sshPublicKey); err != nil {
+		if err := c.applyOptionalSpecFields(&specBuilder); err != nil {
 			return err
 		}
 		if cmd.Flags().Changed("external-ip-attachment") {
@@ -330,7 +317,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		Template:           &publicv1.ClusterTemplateReference{Id: template.GetId()},
 		TemplateParameters: templateParameterValues,
 	}
-	if err := c.applyOptionalSpecFields(&specBuilder, sshPublicKey); err != nil {
+	if err := c.applyOptionalSpecFields(&specBuilder); err != nil {
 		return err
 	}
 	if cmd.Flags().Changed("external-ip-attachment") {
@@ -342,32 +329,20 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	return c.createCluster(ctx, specBuilder.Build())
 }
 
-// resolveSSHPublicKey reads the SSH public key from a file when specified.
-func (c *runnerContext) resolveSSHPublicKey() (sshPublicKey string, err error) {
-	sshPublicKey = c.args.sshPublicKey
-	if c.args.sshPublicKeyFile != "" {
-		data, readErr := os.ReadFile(c.args.sshPublicKeyFile)
-		if readErr != nil {
-			err = fmt.Errorf("failed to read SSH public key file '%s': %w", c.args.sshPublicKeyFile, readErr)
-			return
-		}
-		sshPublicKey = strings.TrimSpace(string(data))
-	}
-	return
-}
-
-// applyOptionalSpecFields sets pull secret, SSH public key, version, network CIDRs, and node sets
+// applyOptionalSpecFields sets pull secret, SSH key, version, network CIDRs, and node sets
 // on the spec builder when their corresponding flags are provided.
 func (c *runnerContext) applyOptionalSpecFields(
-	specBuilder *publicv1.ClusterSpec_builder, sshPublicKey string,
+	specBuilder *publicv1.ClusterSpec_builder,
 ) error {
 	if c.args.pullSecret != "" {
 		specBuilder.PullSecretSecret = publicv1.SecretLocalReference_builder{
 			Name: c.args.pullSecret,
 		}.Build()
 	}
-	if sshPublicKey != "" {
-		specBuilder.SshPublicKey = &sshPublicKey
+	if c.args.sshKey != "" {
+		specBuilder.SshKey = publicv1.SecretReference_builder{
+			Name: strings.TrimSpace(c.args.sshKey),
+		}.Build()
 	}
 	if c.args.version != "" {
 		specBuilder.Version = &publicv1.ClusterVersionReference{Name: c.args.version}
@@ -1057,13 +1032,10 @@ The secret must exist in the same tenant. See also
 {{ bt }}osac create secret{{ bt }}.
 `
 
-const sshPublicKeyFlagHelp = `
-_KEY_ - SSH public key to install on cluster worker nodes, provided as an
-inline value. See also {{ bt }}--ssh-public-key-file{{ bt }}.
-`
-
-const sshPublicKeyFileFlagHelp = `
-_FILE_ - Path to a file containing the SSH public key.
+const sshKeyFlagHelp = `
+_NAME_ - Name of a registered SSH public-key Secret to install on cluster
+worker nodes. Register one with {{ bt }}osac create secret --type
+ssh-public-key{{ bt }}.
 `
 
 const versionFlagHelp = `

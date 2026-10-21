@@ -31,12 +31,17 @@ effects, and follow the instructions for every affected component.
 The `test_cluster_create` and `test_cluster_create_with_two_node_sets` scenarios
 share natural teardown assertions without the legacy helper's forced cleanup.
 `test_cluster_create` authors a published shared ClusterCatalogItem that locks the
-version, node sets, and SSH key, and creates its cluster from that item with only a
-tenant-local pull secret supplied at create time. The two-node-set scenario still
+version and node sets, and creates its cluster from that item with a tenant-local
+pull secret and a registered SSH-key Secret reference (`--ssh-key`) supplied at
+create time. The two-node-set scenario still
 creates its cluster directly with two node sets and verifies ready worker aggregates,
 installed Agents, and per-NodeSet NodePool isolation before deleting; it uses the same
 source-pinned environment prerequisites as the focused lifecycle. Run it with
 `uv run pytest -n 0 tests/e2e/caas/regression/test_cluster_node_sets.py::test_cluster_create_with_two_node_sets`.
+The scenario also asserts the Cluster carries the canonical SSH-key Secret
+reference, the ClusterOrder carries only the Secret ID (never key material),
+InfraEnv receives the resolved public key, and every child worker BMI references
+the same Secret ID with no inline key.
 CaaS sanity contains only the single-nodepool lifecycle and the fast deletion
 feedback test. Two-node-set isolation and explicit/invalid version cases belong
 in CaaS regression; version cases are consolidated in

@@ -344,7 +344,13 @@ def _assert_guest_workers_ready(
 
 
 def _assert_worker_bmi_resources(
-    *, k8s: K8sClient, co_name: str, tenant: str, candidate_bmis: dict[str, dict[str, Any]], instance_types: set[str]
+    *,
+    k8s: K8sClient,
+    co_name: str,
+    tenant: str,
+    candidate_bmis: dict[str, dict[str, Any]],
+    instance_types: set[str],
+    ssh_key_id: str,
 ) -> set[str]:
     """Return only verified test-owned IDs for use in deletion assertions."""
     owned_bmi_ids: set[str] = set()
@@ -356,6 +362,12 @@ def _assert_worker_bmi_resources(
         instance_type = spec.get("instanceType", spec.get("instance_type", {}))
         assert instance_type["name"] in instance_types
         assert instance_type["shared"] is True
+        ssh_key_ref = spec.get("sshKey", spec.get("ssh_key", {}))
+        if ssh_key_id:
+            assert ssh_key_ref.get("id") == ssh_key_id, "child BMI must reference the registered Secret"
+        else:
+            assert not ssh_key_ref.get("id"), "child BMI must not carry a key the cluster does not select"
+        assert not spec.get("sshPublicKey") and not spec.get("ssh_public_key"), "inline keys are removed"
         cr_name = poll_until(
             fn=lambda bmi_id=bmi_id: k8s.get_baremetal_instance_name(uuid=bmi_id, checked=False),
             until=bool,
@@ -407,7 +419,13 @@ def _assert_worker_provisioning(
 
 
 def assert_cluster_available(
-    *, grpc: GRPCClient, k8s: K8sClient, metering: MeteringCollector, uuid: str, version_name: str
+    *,
+    grpc: GRPCClient,
+    k8s: K8sClient,
+    metering: MeteringCollector,
+    uuid: str,
+    version_name: str,
+    expected_ssh_key: str = "",
 ) -> _AvailableCluster:
     """Verify provisioning, version propagation, guest readiness, and worker ownership."""
     logger.info("CaaS: waiting for ClusterOrder")
@@ -421,6 +439,12 @@ def assert_cluster_available(
 
     cluster = grpc.get_cluster(cluster_id=uuid)
     cluster_order_spec = k8s.get_cluster_order_spec(name=co_name)
+    # The ClusterOrder carries only the canonical Secret ID; key material never
+    # crosses the Fulfillment boundary.
+    ssh_key_id = cluster.get("object", {}).get("spec", {}).get("sshKey", {}).get("id", "")
+    if ssh_key_id:
+        assert cluster_order_spec.get("sshKey", {}).get("id") == ssh_key_id
+        assert "sshPublicKey" not in cluster_order_spec and "ssh_public_key" not in cluster_order_spec
     hosted_cluster_name, hosted_cluster_ns = _assert_cluster_version_propagated(
         k8s=k8s, co_name=co_name, cluster=cluster, cluster_order_spec=cluster_order_spec, version_name=version_name
     )
@@ -443,8 +467,17 @@ def assert_cluster_available(
         tenant=cluster_tenant,
         candidate_bmis=candidate_bmis,
         instance_types={worker_instance_type},
+        ssh_key_id=ssh_key_id,
     )
     infra_env_name = _wait_for_cluster_infra_env_name(k8s=k8s, co_name=co_name)
+    if expected_ssh_key:
+        # The operator materializes the registered Secret's public key into the
+        # InfraEnv at creation; the CR is the only deployed place key bytes
+        # appear, and it must match the key the suite registered.
+        infra_env = k8s.get_json(resource="infraenvs.agent-install.openshift.io", name=infra_env_name)
+        assert infra_env["spec"]["sshAuthorizedKey"] == expected_ssh_key, (
+            "InfraEnv must carry the resolved registered SSH public key"
+        )
     return _AvailableCluster(
         co_name=co_name,
         node_sets=node_sets,
@@ -548,7 +581,7 @@ def _assert_cluster_deleted(
 
 
 def _assert_catalog_created_cluster(
-    *, grpc: GRPCClient, uuid: str, catalog_item_id: str, pull_secret_name: str, ssh_public_key: str
+    *, grpc: GRPCClient, uuid: str, catalog_item_id: str, pull_secret_name: str, ssh_key_secret: str
 ) -> None:
     """Check that the catalog offering, not caller input, materialized the cluster spec."""
     spec = grpc.get_cluster(cluster_id=uuid)["object"]["spec"]
@@ -556,7 +589,9 @@ def _assert_catalog_created_cluster(
     assert catalog_ref.get("id") == catalog_item_id
     template_ref = spec.get("template", {})
     assert template_ref.get("id"), "Catalog-created cluster must materialize its template reference"
-    assert spec.get("ssh_public_key", spec.get("sshPublicKey")) == ssh_public_key
+    ssh_key_ref = spec.get("ssh_key", spec.get("sshKey", {}))
+    assert ssh_key_ref.get("name") == ssh_key_secret, "the cluster must carry the registered Secret reference"
+    assert ssh_key_ref.get("id"), "the reference must be canonicalized to the Secret ID"
     pull_secret_ref = spec.get("pull_secret_secret", spec.get("pullSecretSecret", {}))
     assert pull_secret_ref.get("name") == pull_secret_name
 
@@ -569,6 +604,7 @@ def test_cluster_create(
     k8s_hub_client: K8sClient,
     cluster_template: str,
     pull_secret_name: str,
+    ssh_key_secret: str,
     ssh_public_key_path: str,
     metering: MeteringCollector,
 ) -> None:
@@ -586,17 +622,16 @@ def test_cluster_create(
         version="4.22.0-rhcos", image=TEST_RELEASE_IMAGE, disk_image=disk_image_id
     )
     logger.info("CaaS: ClusterVersion available")
-    ssh_public_key = Path(ssh_public_key_path).read_text().strip()
     logger.info("CaaS: creating ClusterCatalogItem")
-    # The shared offering locks every tenant-independent input (version, node sets, SSH
-    # key); the pull secret stays caller-supplied because a shared catalog item cannot
-    # fix a tenant-local secret for every tenant.
+    # The shared offering locks every tenant-independent input (version, node sets);
+    # the pull secret and the registered SSH-key Secret stay caller-supplied because
+    # a shared catalog item cannot fix tenant-local secrets for every tenant.
     catalog_item_id = private_grpc.create_cluster_catalog_item(
         name=unique_name("e2e-caas-catalog"),
         template=cluster_template,
         fields={
             "version": {"locked": {"id": version["id"]}},
-            "ssh_public_key": {"locked": ssh_public_key},
+            "ssh_key": {"editable": {}},
             "pull_secret_secret": {"editable": {}},
             "node_sets": {
                 "locked": {
@@ -612,7 +647,7 @@ def test_cluster_create(
     try:
         logger.info("CaaS: creating cluster from catalog item")
         uuid = cli.create_cluster_with_catalog_item(
-            catalog_item=catalog_item_id, name=name, pull_secret=pull_secret_name
+            catalog_item=catalog_item_id, name=name, pull_secret=pull_secret_name, ssh_key=ssh_key_secret
         )
         logger.info("CaaS: cluster created")
         metering.expect("osac.resource.created.v1", resource_id=uuid)
@@ -622,10 +657,15 @@ def test_cluster_create(
             uuid=uuid,
             catalog_item_id=catalog_item_id,
             pull_secret_name=pull_secret_name,
-            ssh_public_key=ssh_public_key,
+            ssh_key_secret=ssh_key_secret,
         )
         cluster = assert_cluster_available(
-            grpc=grpc, k8s=k8s_hub_client, metering=metering, uuid=uuid, version_name=version["name"]
+            grpc=grpc,
+            k8s=k8s_hub_client,
+            metering=metering,
+            uuid=uuid,
+            version_name=version["name"],
+            expected_ssh_key=Path(ssh_public_key_path).read_text().strip(),
         )
         if os.environ.get("OSAC_FULFILLMENT_TRUST_E2E") == "true":
             assert_management_tls(k8s_hub_client, require_metering=True)
@@ -820,6 +860,7 @@ def _assert_owned_workers_for_node_sets(
     tenant: str,
     expected_replicas: dict[str, int],
     instance_types: set[str],
+    cluster: dict[str, Any],
 ) -> set[str]:
     candidate_bmis = poll_until(
         fn=lambda: _list_owned_worker_bmis(grpc=grpc, co_name=co_name, tenant=tenant),
@@ -828,8 +869,14 @@ def _assert_owned_workers_for_node_sets(
         delay=5,
         description=f"{co_name} tenant-visible child BareMetalInstances",
     )
+    ssh_key_id = cluster.get("spec", {}).get("sshKey", {}).get("id", "")
     return _assert_worker_bmi_resources(
-        k8s=k8s, co_name=co_name, tenant=tenant, candidate_bmis=candidate_bmis, instance_types=instance_types
+        k8s=k8s,
+        co_name=co_name,
+        tenant=tenant,
+        candidate_bmis=candidate_bmis,
+        instance_types=instance_types,
+        ssh_key_id=ssh_key_id,
     )
 
 
@@ -871,6 +918,7 @@ def assert_cluster_with_two_node_sets_available(
         tenant=cluster_tenant,
         expected_replicas=expected_replicas,
         instance_types=set(instance_types.values()),
+        cluster=cluster,
     )
     infra_env_name = _wait_for_cluster_infra_env_name(k8s=k8s, co_name=co_name)
     return _ClusterResources(co_name=co_name, owned_bmi_ids=owned_bmi_ids, infra_env_name=infra_env_name)

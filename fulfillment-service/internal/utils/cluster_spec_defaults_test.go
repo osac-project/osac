@@ -22,29 +22,26 @@ import (
 
 var _ = Describe("ApplyClusterSpecDefaults", func() {
 	It("Does nothing when defaults are nil", func() {
-		sshKey := "my-key"
 		spec := privatev1.ClusterSpec_builder{
-			SshPublicKey: &sshKey,
+			SshKey: privatev1.SecretReference_builder{Id: "my-key-id"}.Build(),
 		}.Build()
 		ApplyClusterSpecDefaults(spec, nil)
-		Expect(spec.GetSshPublicKey()).To(Equal("my-key"))
+		Expect(spec.GetSshKey().GetId()).To(Equal("my-key-id"))
 	})
 
 	It("Does nothing when spec is nil", func() {
-		sshKey := "default-key"
 		defaults := privatev1.ClusterTemplateSpecDefaults_builder{
-			SshPublicKey: &sshKey,
+			SshKey: privatev1.SecretReference_builder{Id: "default-key-id"}.Build(),
 		}.Build()
 		ApplyClusterSpecDefaults(nil, defaults)
 	})
 
 	It("Applies all defaults to empty spec", func() {
-		sshKey := "ssh-rsa AAAA..."
 		podCidr := "10.128.0.0/14"
 		serviceCidr := "172.30.0.0/16"
 		defaults := privatev1.ClusterTemplateSpecDefaults_builder{
 			PullSecretSecret: privatev1.SecretLocalReference_builder{Id: "secret-id"}.Build(),
-			SshPublicKey:     &sshKey,
+			SshKey:           privatev1.SecretReference_builder{Id: "key-id"}.Build(),
 			Version:          &privatev1.ClusterVersionReference{Name: "4-22-0"},
 			Network: privatev1.ClusterNetwork_builder{
 				PodCidr:     &podCidr,
@@ -56,30 +53,28 @@ var _ = Describe("ApplyClusterSpecDefaults", func() {
 		ApplyClusterSpecDefaults(spec, defaults)
 
 		Expect(spec.GetPullSecretSecret().GetId()).To(Equal("secret-id"))
-		Expect(spec.GetSshPublicKey()).To(Equal("ssh-rsa AAAA..."))
+		Expect(spec.GetSshKey().GetId()).To(Equal("key-id"))
 		Expect(spec.GetVersion().GetName()).To(Equal("4-22-0"))
 		Expect(spec.GetNetwork().GetPodCidr()).To(Equal("10.128.0.0/14"))
 		Expect(spec.GetNetwork().GetServiceCidr()).To(Equal("172.30.0.0/16"))
 	})
 
 	It("User values override defaults", func() {
-		userSshKey := "ssh-ed25519 user-key"
-		defaultSshKey := "ssh-rsa default-key"
 		defaults := privatev1.ClusterTemplateSpecDefaults_builder{
 			PullSecretSecret: privatev1.SecretLocalReference_builder{Id: "default-secret-id"}.Build(),
-			SshPublicKey:     &defaultSshKey,
+			SshKey:           privatev1.SecretReference_builder{Id: "default-key-id"}.Build(),
 			Version:          &privatev1.ClusterVersionReference{Name: "4-22-0"},
 		}.Build()
 
 		spec := privatev1.ClusterSpec_builder{
 			PullSecretSecret: privatev1.SecretLocalReference_builder{Id: "user-secret-id"}.Build(),
-			SshPublicKey:     &userSshKey,
+			SshKey:           privatev1.SecretReference_builder{Id: "user-key-id"}.Build(),
 			Version:          &privatev1.ClusterVersionReference{Name: "4-22-1"},
 		}.Build()
 		ApplyClusterSpecDefaults(spec, defaults)
 
 		Expect(spec.GetPullSecretSecret().GetId()).To(Equal("user-secret-id"))
-		Expect(spec.GetSshPublicKey()).To(Equal("ssh-ed25519 user-key"))
+		Expect(spec.GetSshKey().GetId()).To(Equal("user-key-id"))
 		Expect(spec.GetVersion().GetName()).To(Equal("4-22-1"))
 	})
 
@@ -119,6 +114,40 @@ var _ = Describe("ApplyClusterSpecDefaults", func() {
 		Expect(spec.GetPullSecretSecret()).ToNot(BeNil())
 		Expect(spec.GetPullSecretSecret().GetId()).To(Equal("secret-id"))
 		Expect(spec.GetPullSecretSecret().GetName()).To(Equal("secret-name"))
+	})
+
+	It("Applies a detached ssh_key Secret reference default", func() {
+		defaults := privatev1.ClusterTemplateSpecDefaults_builder{
+			SshKey: privatev1.SecretReference_builder{
+				Id:   "key-id",
+				Name: "key-name",
+			}.Build(),
+		}.Build()
+
+		spec := privatev1.ClusterSpec_builder{}.Build()
+		ApplyClusterSpecDefaults(spec, defaults)
+
+		Expect(spec.GetSshKey()).ToNot(BeNil())
+		Expect(spec.GetSshKey().GetId()).To(Equal("key-id"))
+		Expect(spec.GetSshKey().GetName()).To(Equal("key-name"))
+
+		// The default must be detached: mutating the spec copy must not
+		// change the template default.
+		spec.GetSshKey().SetId("mutated-id")
+		Expect(defaults.GetSshKey().GetId()).To(Equal("key-id"))
+	})
+
+	It("Does not apply the ssh_key default when the user sets a reference", func() {
+		defaults := privatev1.ClusterTemplateSpecDefaults_builder{
+			SshKey: privatev1.SecretReference_builder{Id: "default-key-id"}.Build(),
+		}.Build()
+
+		spec := privatev1.ClusterSpec_builder{
+			SshKey: privatev1.SecretReference_builder{Id: "user-key-id"}.Build(),
+		}.Build()
+		ApplyClusterSpecDefaults(spec, defaults)
+
+		Expect(spec.GetSshKey().GetId()).To(Equal("user-key-id"))
 	})
 
 	It("Does not apply pull_secret_secret default when user sets pull_secret_secret", func() {

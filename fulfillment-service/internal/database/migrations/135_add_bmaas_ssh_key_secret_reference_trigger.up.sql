@@ -32,13 +32,14 @@ begin
   select id into found_id
   from secrets
   where id = secret_id
+    and tenant = new.tenant
     and deletion_timestamp = 'epoch'
   for share;
 
   if found_id is null then
     raise exception using
       errcode = 'Z0002',
-      message = format('Secret ''%s'' does not exist or has been deleted', secret_id);
+      message = format('Secret ''%s'' does not exist, does not belong to the tenant, or has been deleted', secret_id);
   end if;
 
   return new;

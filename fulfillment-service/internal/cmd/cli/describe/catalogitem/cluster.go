@@ -62,7 +62,10 @@ func clusterView(item *publicv1.ClusterCatalogItem) view {
 		appendPolicyRow(&v.fields, "Cluster version", p.HasLocked(), p.GetEditable().GetDefaultValue() != nil,
 			formatFullRef(p.GetLocked()), formatFullRef(p.GetEditable().GetDefaultValue()))
 	}
-	addString(&v.fields, "SSH public key", fields.GetSshPublicKey(), false)
+	if p := fields.GetSshKey(); p != nil {
+		appendPolicyRow(&v.fields, "SSH key", p.HasLocked(), p.GetEditable().GetDefaultValue() != nil,
+			formatFullRef(p.GetLocked()), formatFullRef(p.GetEditable().GetDefaultValue()))
+	}
 	if p := fields.GetPullSecretSecret(); p != nil {
 		appendPolicyRow(&v.fields, "Pull secret", p.HasLocked(), p.GetEditable().GetDefaultValue() != nil,
 			formatRef(p.GetLocked()), formatRef(p.GetEditable().GetDefaultValue()))

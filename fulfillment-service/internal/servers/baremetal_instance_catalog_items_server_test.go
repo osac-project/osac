@@ -423,7 +423,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
 						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 						InstanceType: bareMetalInstanceTypeReference("referenced-type"),
-						SshPublicKey: new(testSSHPublicKey),
+						UserData:     new("#cloud-config"),
 					}.Build(),
 				}.Build(),
 			}.Build())

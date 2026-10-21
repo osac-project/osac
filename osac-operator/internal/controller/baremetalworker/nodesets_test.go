@@ -45,12 +45,16 @@ type nodeSetClient struct {
 	failCreate         bool
 	names              []string
 	reservationMissing bool
+	cluster            *privatev1.Cluster
 }
 
 func (f *nodeSetClient) ListBareMetalInstances(context.Context, string) ([]*privatev1.BareMetalInstance, error) {
 	return f.bmis, nil
 }
 func (f *nodeSetClient) GetCluster(_ context.Context, id string) (*privatev1.Cluster, error) {
+	if f.cluster != nil {
+		return f.cluster, nil
+	}
 	return privatev1.Cluster_builder{
 		Id:       id,
 		Metadata: privatev1.Metadata_builder{Tenant: "tenant"}.Build(),

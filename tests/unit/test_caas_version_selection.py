@@ -51,7 +51,7 @@ def test_light_deletion_create_supplies_backed_version(monkeypatch: pytest.Monke
         k8s_hub_client=Mock(),
         cluster_template="template",
         pull_secret_name="test-pull-secret",
-        ssh_public_key_path="/tmp/id.pub",
+        ssh_key_secret="test-ssh-key-secret",
     )
     scenario = deletion.test_cluster_delete_reports_deleting_state_without_provisioning
     if "caas_disk_image_version" in inspect.signature(scenario).parameters:
@@ -60,7 +60,7 @@ def test_light_deletion_create_supplies_backed_version(monkeypatch: pytest.Monke
         deletion.test_cluster_delete_reports_deleting_state_without_provisioning(**params)
     assert cli.create_cluster.call_args.kwargs["version"] == "4-22-0-e2e-references"
     assert cli.create_cluster.call_args.kwargs["pull_secret"] == "test-pull-secret"
-    assert cli.create_cluster.call_args.kwargs["ssh_public_key_file"] == "/tmp/id.pub"
+    assert cli.create_cluster.call_args.kwargs["ssh_key"] == "test-ssh-key-secret"
 
 
 def test_configured_version_without_disk_image_fails_early(monkeypatch: pytest.MonkeyPatch) -> None:

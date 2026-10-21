@@ -303,6 +303,145 @@ var _ = ginkgo.Describe("RunProvisioningLifecycle", func() {
 	})
 })
 
+var _ = ginkgo.Describe("RunProvisioningLifecycleWithPrepareTrigger", func() {
+	noAPIServerJob := func() bool { return false }
+
+	ginkgo.It("passes prepared variables to TriggerProvisionWithExtraVars on a new trigger", func() {
+		var received map[string]any
+		provider := &mockProviderWithExtraVars{
+			mockProvider: &mockProvider{},
+			triggerProvisionWithExtraVarsFunc: func(_ context.Context, _ client.Object, extraVars map[string]any) (*ProvisionResult, error) {
+				received = extraVars
+				return &ProvisionResult{JobID: "mock-job", InitialState: v1alpha1.JobStatePending}, nil
+			},
+		}
+		resource := &v1alpha1.ComputeInstance{}
+		jobs := []v1alpha1.JobStatus{}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+
+		prepare := func() (map[string]any, bool, time.Duration) {
+			return map[string]any{"ssh_public_key": "ssh-ed25519 resolved"}, true, 0
+		}
+
+		result, err := RunProvisioningLifecycleWithPrepareTrigger(ctx, provider, resource, provState,
+			5, 30*time.Second, nil, noAPIServerJob, nil, prepare)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+		Expect(received).To(HaveKeyWithValue("ssh_public_key", "ssh-ed25519 resolved"))
+		Expect(*provState.Jobs).To(HaveLen(1))
+	})
+
+	ginkgo.It("requeues without launching when preparation is not ready", func() {
+		launched := false
+		provider := &mockProviderWithExtraVars{
+			mockProvider: &mockProvider{},
+			triggerProvisionWithExtraVarsFunc: func(context.Context, client.Object, map[string]any) (*ProvisionResult, error) {
+				launched = true
+				return &ProvisionResult{JobID: "mock-job", InitialState: v1alpha1.JobStatePending}, nil
+			},
+		}
+		resource := &v1alpha1.ComputeInstance{}
+		jobs := []v1alpha1.JobStatus{}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+
+		prepare := func() (map[string]any, bool, time.Duration) {
+			return nil, false, 2 * time.Minute
+		}
+
+		result, err := RunProvisioningLifecycleWithPrepareTrigger(ctx, provider, resource, provState,
+			5, 30*time.Second, nil, noAPIServerJob, nil, prepare)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(2 * time.Minute))
+		Expect(launched).To(BeFalse())
+		Expect(*provState.Jobs).To(BeEmpty())
+	})
+
+	ginkgo.It("does not run preparation for Skip", func() {
+		provider := &mockProvider{}
+		resource := &v1alpha1.ComputeInstance{}
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "j1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded, ConfigVersion: "v1",
+				Timestamp: metav1.NewTime(time.Now().UTC())},
+		}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+
+		prepareRan := false
+		prepare := func() (map[string]any, bool, time.Duration) {
+			prepareRan = true
+			return nil, true, 0
+		}
+
+		_, err := RunProvisioningLifecycleWithPrepareTrigger(ctx, provider, resource, provState,
+			5, 30*time.Second, nil, noAPIServerJob, nil, prepare)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(prepareRan).To(BeFalse())
+	})
+
+	ginkgo.It("does not run preparation for Poll", func() {
+		provider := &mockProvider{}
+		resource := &v1alpha1.ComputeInstance{}
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "j1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateRunning,
+				Timestamp: metav1.NewTime(time.Now().UTC())},
+		}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+
+		prepareRan := false
+		prepare := func() (map[string]any, bool, time.Duration) {
+			prepareRan = true
+			return nil, true, 0
+		}
+
+		_, err := RunProvisioningLifecycleWithPrepareTrigger(ctx, provider, resource, provState,
+			5, 30*time.Second, nil, noAPIServerJob, nil, prepare)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(prepareRan).To(BeFalse())
+	})
+
+	ginkgo.It("does not run preparation while Backoff is still active", func() {
+		provider := &mockProvider{}
+		resource := &v1alpha1.ComputeInstance{}
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "j1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateFailed, ConfigVersion: "v1",
+				Timestamp: metav1.NewTime(time.Now().UTC())},
+		}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+
+		prepareRan := false
+		prepare := func() (map[string]any, bool, time.Duration) {
+			prepareRan = true
+			return nil, true, 0
+		}
+
+		result, err := RunProvisioningLifecycleWithPrepareTrigger(ctx, provider, resource, provState,
+			5, 30*time.Second, nil, noAPIServerJob, nil, prepare)
+		Expect(err).NotTo(HaveOccurred())
+		// The remaining backoff delay, not the poll interval.
+		Expect(result.RequeueAfter).To(BeNumerically(">", time.Minute))
+		Expect(prepareRan).To(BeFalse())
+	})
+
+	ginkgo.It("launches without preparation variables when the hook is nil", func() {
+		var received map[string]any
+		provider := &mockProviderWithExtraVars{
+			mockProvider: &mockProvider{},
+			triggerProvisionWithExtraVarsFunc: func(_ context.Context, _ client.Object, extraVars map[string]any) (*ProvisionResult, error) {
+				received = extraVars
+				return &ProvisionResult{JobID: "mock-job", InitialState: v1alpha1.JobStatePending}, nil
+			},
+		}
+		resource := &v1alpha1.ComputeInstance{}
+		jobs := []v1alpha1.JobStatus{}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+
+		result, err := RunProvisioningLifecycleWithPrepareTrigger(ctx, provider, resource, provState,
+			5, 30*time.Second, nil, noAPIServerJob, nil, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+		Expect(received).To(BeEmpty())
+	})
+})
+
 var _ = ginkgo.Describe("PollJob output callbacks", func() {
 	ginkgo.It("passes successful AAP artifact outputs to the output callback", func() {
 		provider := &mockProviderWithExtraVars{

@@ -1066,14 +1066,7 @@ func validateComputeTemplateImmutability(
 	if updatingSshKey {
 		existingKey := existingSpec.GetSshKey()
 		newKey := newSpec.GetSshKey()
-		sameKey := proto.Equal(existingKey, newKey)
-		if existingKey != nil && newKey != nil {
-			if newKey.GetId() != "" {
-				sameKey = existingKey.GetId() == newKey.GetId()
-			} else {
-				sameKey = existingKey.GetName() == newKey.GetName()
-			}
-		}
+		sameKey := sameImmutableSSHKeyReference(existingKey, newKey, nil)
 		if !sameKey {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"cannot change spec.ssh_key: ssh_key is immutable after creation")

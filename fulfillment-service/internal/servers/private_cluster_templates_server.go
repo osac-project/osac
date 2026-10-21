@@ -25,6 +25,8 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 type PrivateClusterTemplatesServerBuilder struct {
@@ -153,6 +155,9 @@ func (s *PrivateClusterTemplatesServer) Create(ctx context.Context,
 		if err = s.validateSpecDefaultsPullSecret(ctx, object); err != nil {
 			return
 		}
+		if err = s.validateSpecDefaultsSSHKey(ctx, object); err != nil {
+			return
+		}
 		if object.GetMetadata().GetName() == "" && object.GetId() != "" {
 			if object.GetMetadata() == nil {
 				object.SetMetadata(&privatev1.Metadata{})
@@ -172,6 +177,9 @@ func (s *PrivateClusterTemplatesServer) Update(ctx context.Context,
 				return
 			}
 			if err = s.validateSpecDefaultsPullSecret(ctx, object); err != nil {
+				return
+			}
+			if err = s.validateSpecDefaultsSSHKey(ctx, object); err != nil {
 				return
 			}
 		}
@@ -195,6 +203,39 @@ func (s *PrivateClusterTemplatesServer) validateSpecDefaultsPullSecret(
 	resolvedRef.SetId(resolved.ID)
 	resolvedRef.SetName(resolved.Name)
 	template.GetSpecDefaults().SetPullSecretSecret(resolvedRef)
+	return nil
+}
+
+// validateSpecDefaultsSSHKey resolves the template's registered SSH-key
+// default at authoring time, mirroring the pull-secret default: the Secret
+// must exist in the template's scope, be a live SECRET_TYPE_SSH_PUBLIC_KEY
+// entry, and not be shared. The canonical reference is stored so a dangling
+// or wrong-type default fails at template save instead of at every consuming
+// Cluster create. Key material is deliberately not loaded here; the operator
+// resolves it at launch time.
+func (s *PrivateClusterTemplatesServer) validateSpecDefaultsSSHKey(
+	ctx context.Context, template *privatev1.ClusterTemplate) error {
+	ref := template.GetSpecDefaults().GetSshKey()
+	if ref == nil {
+		return nil
+	}
+	if ref.GetShared() {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"spec_defaults.ssh_key must not reference a shared secret")
+	}
+	local := &privatev1.SecretLocalReference{}
+	local.SetId(ref.GetId())
+	local.SetName(ref.GetName())
+	resolved, err := resolveSecretReferenceOfType(ctx, s.logger, s.secretsDao, local,
+		"spec_defaults.ssh_key", privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY)
+	if err != nil {
+		return err
+	}
+	canonical := &privatev1.SecretReference{}
+	canonical.SetId(resolved.ID)
+	canonical.SetName(resolved.Name)
+	canonical.SetProject(ref.GetProject())
+	template.GetSpecDefaults().SetSshKey(canonical)
 	return nil
 }
 

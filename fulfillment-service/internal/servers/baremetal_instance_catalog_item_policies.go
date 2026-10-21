@@ -58,7 +58,22 @@ func validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(
 	if err := validateBareMetalInstanceCatalogItemInstanceTypePolicy(ctx, fields.GetInstanceType(), bareMetalInstanceTypesDao); err != nil {
 		return nil, err
 	}
-	if err := validateBareMetalInstanceCatalogItemSSHKeyPolicy(ctx, scope, fields.GetSshKey(), secretsDao); err != nil {
+	// The BMaaS SSH-key policy uses the full Secret reference scope: unlike
+	// ComputeInstance's local-reference policy, an empty project selects the
+	// referenced tenant's default project and an explicit project selector is
+	// retained. Like every sibling tenant-local Secret policy, a shared
+	// offering cannot fix a locked or default key: consuming tenants could
+	// never resolve it.
+	if fields.GetSshKey() != nil {
+		state, stateErr := decodeGlobalSecretReferencePolicy(fields.GetSshKey())
+		if stateErr != nil {
+			return nil, catalogItemPolicyError("fields.ssh_key", stateErr.Error())
+		}
+		if err := validateSharedCatalogItemLocalReferencePolicy(scope, "fields.ssh_key", state.hasLocked, state.hasDefault); err != nil {
+			return nil, err
+		}
+	}
+	if err := validateAndCanonicalizeGlobalSecretReferencePolicy(ctx, scope, "fields.ssh_key", fields.GetSshKey(), secretsDao); err != nil {
 		return nil, err
 	}
 
@@ -77,70 +92,6 @@ func validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(
 	return warnings, nil
 }
 
-// validateBareMetalInstanceCatalogItemSSHKeyPolicy checks a BMaaS SSH-key
-// policy using the full Secret reference scope. Unlike ComputeInstance's
-// local-reference policy, an empty project selects the referenced tenant's
-// default project and an explicit project selector is retained. Shared
-// references are rejected to match instance-level validation: a shared locked
-// or default key could never be consumed by an instance.
-func validateBareMetalInstanceCatalogItemSSHKeyPolicy(
-	ctx context.Context,
-	scope referenceScope,
-	policy *privatev1.GlobalSecretReferenceFieldPolicy,
-	secretsDao *dao.GenericDAO[*privatev1.Secret],
-) error {
-	if policy == nil {
-		return nil
-	}
-	state, err := decodeGlobalSecretReferencePolicy(policy)
-	if err != nil {
-		return catalogItemPolicyError("fields.ssh_key", err.Error())
-	}
-	resolve := func(ref *privatev1.SecretReference) (*privatev1.SecretReference, error) {
-		if ref == nil {
-			return nil, nil
-		}
-		if ref.GetShared() {
-			return nil, grpcstatus.Error(grpccodes.InvalidArgument,
-				"fields.ssh_key must not reference a shared secret")
-		}
-		// Unlike sibling policy validators, this resolution deliberately takes no
-		// row lock: BMaaS SSH-key Secrets opt out of delete protection (see
-		// migration 134), so a Secret deleted between validation and persistence
-		// leaves a dangling reference that fails closed at instance create.
-		resolved, resolveErr := resolveFullResourceReference(ctx, secretsDao, scope, ref,
-			"secret", " in fields.ssh_key", grpccodes.InvalidArgument)
-		if resolveErr != nil {
-			return nil, resolveErr
-		}
-		if err := validateResolvedSecretLifecycleAndType(resolved, refKey(ref), "fields.ssh_key",
-			privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY); err != nil {
-			return nil, err
-		}
-		canonical := canonicalSecretReference(resolved)
-		if canonical.GetShared() {
-			return nil, grpcstatus.Error(grpccodes.InvalidArgument,
-				"fields.ssh_key must not reference a shared secret")
-		}
-		return canonical, nil
-	}
-	if state.hasLocked {
-		canonical, resolveErr := resolve(state.lockedValue)
-		if resolveErr != nil {
-			return resolveErr
-		}
-		policy.SetLocked(canonical)
-	}
-	if state.hasDefault {
-		canonical, resolveErr := resolve(state.defaultValue)
-		if resolveErr != nil {
-			return resolveErr
-		}
-		policy.GetEditable().SetDefaultValue(canonical)
-	}
-	return nil
-}
-
 // applyBareMetalInstanceCatalogItemPolicies merges the offering's field rules into a new bare
 // metal instance spec. It rejects caller values for locked fields, keeps caller values for
 // editable fields, and copies locked/default values into omitted fields. Explicit zero, false,
@@ -153,31 +104,28 @@ func applyBareMetalInstanceCatalogItemPolicies(
 	if spec == nil || fields == nil {
 		return nil
 	}
-	if err := applyPolicy(fields.GetSshPublicKey(), spec.HasSshPublicKey(), spec.SetSshPublicKey, decodeStringPolicy, identity[string]); err != nil {
-		return fmt.Errorf("ssh_public_key: %w", err)
-	}
-	if err := applyPolicy(fields.GetUserData(), spec.HasUserData(), spec.SetUserData, decodeStringPolicy, identity[string]); err != nil {
+	if err := applyPolicy(fields.GetUserData(), spec.HasUserData(), false, spec.SetUserData, decodeStringPolicy, identity[string]); err != nil {
 		return fmt.Errorf("user_data: %w", err)
 	}
-	if err := applyPolicy(fields.GetUserDataSecret(), spec.GetUserDataSecret() != nil, spec.SetUserDataSecret, decodeSecretReferencePolicy, cloneMessage[*privatev1.SecretLocalReference]); err != nil {
+	if err := applyPolicy(fields.GetUserDataSecret(), spec.GetUserDataSecret() != nil, false, spec.SetUserDataSecret, decodeSecretReferencePolicy, cloneMessage[*privatev1.SecretLocalReference]); err != nil {
 		return fmt.Errorf("user_data_secret: %w", err)
 	}
-	if err := applyPolicy(fields.GetRunStrategy(), spec.HasRunStrategy(), spec.SetRunStrategy, decodeBareMetalInstanceRunStrategyPolicy, identity[privatev1.BareMetalInstanceRunStrategy]); err != nil {
+	if err := applyPolicy(fields.GetRunStrategy(), spec.HasRunStrategy(), false, spec.SetRunStrategy, decodeBareMetalInstanceRunStrategyPolicy, identity[privatev1.BareMetalInstanceRunStrategy]); err != nil {
 		return fmt.Errorf("run_strategy: %w", err)
 	}
-	if err := applyPolicy(fields.GetNetworkAttachments(), len(spec.GetNetworkAttachments()) > 0, spec.SetNetworkAttachments, decodeBareMetalInstanceNetworkAttachmentListPolicy, cloneBareMetalInstanceNetworkAttachments); err != nil {
+	if err := applyPolicy(fields.GetNetworkAttachments(), len(spec.GetNetworkAttachments()) > 0, false, spec.SetNetworkAttachments, decodeBareMetalInstanceNetworkAttachmentListPolicy, cloneBareMetalInstanceNetworkAttachments); err != nil {
 		return fmt.Errorf("network_attachments: %w", err)
 	}
-	if err := applyPolicy(fields.GetAutoExternalIpAttachment(), spec.HasAutoExternalIpAttachment(), spec.SetAutoExternalIpAttachment, decodeBoolPolicy, identity[bool]); err != nil {
+	if err := applyPolicy(fields.GetAutoExternalIpAttachment(), spec.HasAutoExternalIpAttachment(), false, spec.SetAutoExternalIpAttachment, decodeBoolPolicy, identity[bool]); err != nil {
 		return fmt.Errorf("auto_external_ip_attachment: %w", err)
 	}
-	if err := applyPolicy(fields.GetInstanceType(), spec.GetInstanceType() != nil, spec.SetInstanceType, decodeBareMetalInstanceTypeReferencePolicy, cloneMessage[*privatev1.BareMetalInstanceTypeReference]); err != nil {
+	if err := applyPolicy(fields.GetInstanceType(), spec.GetInstanceType() != nil, false, spec.SetInstanceType, decodeBareMetalInstanceTypeReferencePolicy, cloneMessage[*privatev1.BareMetalInstanceTypeReference]); err != nil {
 		return fmt.Errorf("instance_type: %w", err)
 	}
-	if err := applyPolicy(fields.GetDiskImage(), spec.GetDiskImage() != nil, spec.SetDiskImage, decodeDiskImageReferencePolicy, cloneMessage[*privatev1.DiskImageReference]); err != nil {
+	if err := applyPolicy(fields.GetDiskImage(), spec.GetDiskImage() != nil, false, spec.SetDiskImage, decodeDiskImageReferencePolicy, cloneMessage[*privatev1.DiskImageReference]); err != nil {
 		return fmt.Errorf("disk_image: %w", err)
 	}
-	if err := applyPolicy(fields.GetSshKey(), spec.GetSshKey() != nil, spec.SetSshKey, decodeGlobalSecretReferencePolicy, cloneMessage[*privatev1.SecretReference]); err != nil {
+	if err := applyPolicy(fields.GetSshKey(), spec.GetSshKey() != nil, false, spec.SetSshKey, decodeGlobalSecretReferencePolicy, cloneMessage[*privatev1.SecretReference]); err != nil {
 		return fmt.Errorf("ssh_key: %w", err)
 	}
 	return nil
@@ -209,9 +157,6 @@ func decodeGlobalSecretReferencePolicy(policy *privatev1.GlobalSecretReferenceFi
 
 // validateBareMetalInstanceCatalogItemScalarPolicies checks supported scalar values and returns the first invalid policy.
 func validateBareMetalInstanceCatalogItemScalarPolicies(fields *privatev1.BareMetalInstanceCatalogItemFields) error {
-	if err := validateCatalogItemStringPolicy(fields.GetSshPublicKey(), "fields.ssh_public_key", validateOpenSSHPublicKey); err != nil {
-		return err
-	}
 	if err := validateCatalogItemStringPolicy(fields.GetUserData(), "fields.user_data", func(value string) error {
 		return validateBareMetalUserData([]byte(value))
 	}); err != nil {

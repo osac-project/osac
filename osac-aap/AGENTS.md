@@ -44,6 +44,8 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-aap
 | Touched area | Required validation | Command / follow-up |
 |---|---|---|
 | Filters, variable transforms, and isolated plugin logic | Unit | `uv run pytest tests/unit` |
+| `cluster_settings` SSH-key resolution (launch variable, legacy-value ignored, provider-default fallback) | Isolated role transform | `uv run --group development ansible-playbook collections/ansible_collections/osac/service/roles/cluster_settings/tests/test.yml`; Kind launch-variable path covered by the `cluster_create_caas` overrides target below |
+| CaaS `ssh_public_key` launch variable through the create workflow | Focused component integration | `tests/integration/targets/cluster_create_caas/tasks/overrides.yml`; included by `make test`; no deployed AAP, operator, or fulfillment |
 | Keycloak token lookup, cache refresh, and error handling | Unit | `uv run pytest tests/unit/plugins/lookup/test_fulfillment_token.py` |
 | AAP publish-templates credential and Kubernetes token wiring | Unit | `uv run pytest tests/unit/test_publish_templates_auth_config.py` |
 | Template publishing certificate validation | Local protocol integration | Run the `test_cert_validation` play in `collections/ansible_collections/osac/service/roles/publish_templates/tests/test.yml` with `uv run ansible-playbook`; the mock HTTPS server tests the client transport only |

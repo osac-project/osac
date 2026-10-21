@@ -128,9 +128,8 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test",
-				PullSecret:   "{\"auths\":{}}",
-				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
+				TemplateID: "test",
+				PullSecret: "{\"auths\":{}}",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
 					NumberOfNodes: 2,
 					BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "bm-standard"},
@@ -320,9 +319,8 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 				Finalizers:  []string{"baremetalworker.osac.openshift.io/finalizer"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test",
-				PullSecret:   "{\"auths\":{}}",
-				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
+				TemplateID: "test",
+				PullSecret: "{\"auths\":{}}",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
 					NumberOfNodes: 2,
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{

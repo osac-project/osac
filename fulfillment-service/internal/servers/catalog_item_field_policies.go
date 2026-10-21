@@ -37,11 +37,77 @@ type policyState[T any] struct {
 	defaultValue T
 }
 
+// validateAndCanonicalizeGlobalSecretReferencePolicy validates a locked/default
+// full Secret reference in the offering's exact tenant/project, verifies its
+// type, and stores the canonical reference on the policy. Shared references are
+// rejected so the locked or default key can always be consumed by a resource in
+// the referencing tenant. Resolution deliberately takes no row lock: SSH-key
+// Secrets opt out of delete protection, and a Secret deleted between
+// validation and persistence leaves a reference that fails closed at resource
+// creation.
+func validateAndCanonicalizeGlobalSecretReferencePolicy(
+	ctx context.Context,
+	scope referenceScope,
+	field string,
+	policy *privatev1.GlobalSecretReferenceFieldPolicy,
+	secretsDao *dao.GenericDAO[*privatev1.Secret],
+) error {
+	if policy == nil {
+		return nil
+	}
+	state, err := decodeGlobalSecretReferencePolicy(policy)
+	if err != nil {
+		return catalogItemPolicyError(field, err.Error())
+	}
+	resolve := func(ref *privatev1.SecretReference) (*privatev1.SecretReference, error) {
+		if ref == nil {
+			return nil, nil
+		}
+		if ref.GetShared() {
+			return nil, grpcstatus.Error(grpccodes.InvalidArgument,
+				field+" must not reference a shared secret")
+		}
+		resolved, resolveErr := resolveFullResourceReference(ctx, secretsDao, scope, ref,
+			"secret", " in "+field, grpccodes.InvalidArgument)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		if err := validateResolvedSecretLifecycleAndType(resolved, refKey(ref), field,
+			privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY); err != nil {
+			return nil, err
+		}
+		canonical := canonicalSecretReference(resolved)
+		if canonical.GetShared() {
+			return nil, grpcstatus.Error(grpccodes.InvalidArgument,
+				field+" must not reference a shared secret")
+		}
+		return canonical, nil
+	}
+	if state.hasLocked {
+		canonical, resolveErr := resolve(state.lockedValue)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		policy.SetLocked(canonical)
+	}
+	if state.hasDefault {
+		canonical, resolveErr := resolve(state.defaultValue)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		policy.GetEditable().SetDefaultValue(canonical)
+	}
+	return nil
+}
+
 // applyPolicy applies one Catalog Item field rule to an object being created. A locked value
 // rejects any caller-supplied value, even an equal one. An editable value keeps caller input or
-// fills an omitted field from the policy default. The caller supplies the presence check and
-// copy function; reference lookup and other defaulting happen outside this helper.
-func applyPolicy[T any, P any](policy *P, present bool, set func(T), decode func(*P) (policyState[T], error), clone func(T) T) error {
+// fills an omitted field from the policy default. With required set, an editable policy without
+// a default makes the field caller-required: omitting it is an error. Shared offerings use that
+// to force each tenant to supply its own value for a field that cannot carry tenant data in
+// the offering itself. The caller supplies the presence check and copy function; reference
+// lookup and other defaulting happen outside this helper.
+func applyPolicy[T any, P any](policy *P, present, required bool, set func(T), decode func(*P) (policyState[T], error), clone func(T) T) error {
 	if policy == nil {
 		return nil
 	}
@@ -59,6 +125,8 @@ func applyPolicy[T any, P any](policy *P, present bool, set func(T), decode func
 		set(clone(state.lockedValue))
 	} else if state.hasDefault {
 		set(clone(state.defaultValue))
+	} else if required {
+		return fmt.Errorf("field is required")
 	}
 	return nil
 }

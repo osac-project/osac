@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
@@ -34,8 +35,8 @@ const (
 	reasonInfrastructureNotProvisioned = "InfrastructureNotProvisioned"
 )
 
-// checkComputeInfrastructureReadiness updates the tenant condition from hub Tenant CRs.
-func (t *task) checkComputeInfrastructureReadiness(ctx context.Context) {
+// checkInfrastructureConditions observes hub Tenant CRs once for both conditions.
+func (t *task) checkInfrastructureConditions(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	const conditionType = privatev1.TenantConditionType_TENANT_CONDITION_TYPE_COMPUTE_INFRASTRUCTURE_READY
@@ -45,6 +46,7 @@ func (t *task) checkComputeInfrastructureReadiness(ctx context.Context) {
 	tenantID := t.tenant.GetId()
 	tenantName := t.tenant.GetMetadata().GetName()
 	var observed, incomplete, pending, failed, deleting bool
+	var storageConditions []*metav1.Condition
 	reportError := func(_ error) {
 		incomplete = true
 		t.r.logger.ErrorContext(ctx, "Failed to observe tenant compute infrastructure")
@@ -69,6 +71,9 @@ func (t *task) checkComputeInfrastructureReadiness(ctx context.Context) {
 					continue
 				}
 				observed = true
+				if condition := object.GetStatusCondition("StorageOnboardingComplete"); condition != nil {
+					storageConditions = append(storageConditions, condition)
+				}
 				if !object.DeletionTimestamp.IsZero() {
 					deleting = true
 					continue
@@ -117,6 +122,7 @@ func (t *task) checkComputeInfrastructureReadiness(ctx context.Context) {
 		reason, message = reasonInfrastructureNotProvisioned, "Tenant compute infrastructure has not been provisioned"
 	}
 	t.updateCondition(conditionType, conditionStatus, reason, message)
+	t.projectStorageOnboardingCondition(storageConditions, incomplete)
 }
 
 // readTenantInfrastructure finds the Tenant CR for a fulfillment tenant on one hub.

@@ -94,6 +94,10 @@ const (
 	ReasonProvisioningFailed = "ProvisioningFailed"
 	// ReasonNoManagerConfigured indicates no network manager is configured.
 	ReasonNoManagerConfigured = "NoManagerConfigured"
+	// ReasonNoOp indicates the resource was accepted but has no real
+	// backend effect (e.g. the provisioning backend returned a no-op
+	// signal).
+	ReasonNoOp = "NoOp"
 	// ReasonPreparingInfrastructure indicates infrastructure preparation is in progress.
 	ReasonPreparingInfrastructure = "PreparingInfrastructure"
 	// ReasonControlPlaneStarting indicates the hosted control plane is starting up.

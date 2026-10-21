@@ -1,4 +1,22 @@
 ---
-- name: Report unimplemented AgentlessNet operation
-  ansible.builtin.fail:
-    msg: "NotImplemented: agentless_net resource operations are not implemented."
+# AgentlessNet does not support security-group policy enforcement.
+# The SecurityGroup is accepted as a no-op placeholder so that
+# BareMetalInstance validation can reference it without error.
+# The job succeeds immediately and returns osac_noop artifacts so the
+# generic SecurityGroup controller can write a descriptive Ready
+# condition without any Agentless-specific logic.
+
+- name: Log no-op SecurityGroup for AgentlessNet
+  ansible.builtin.debug:
+    msg: >-
+      SecurityGroup {{ security_group_name | default('unknown') }}
+      is a no-op for the AgentlessNet network class:
+      no policy is applied.
+
+- name: Return no-op artifacts
+  ansible.builtin.set_stats:
+    data:
+      osac_noop: true
+      osac_noop_message: >-
+        SecurityGroup is a no-op: the Agentless network class
+        does not enforce security-group policies.

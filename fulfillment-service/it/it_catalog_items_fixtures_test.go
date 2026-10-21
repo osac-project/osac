@@ -15,7 +15,6 @@ package it
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -272,7 +271,20 @@ func getOrCreateTenantDefaultNetworkClassFixture(ctx context.Context) (string, b
 	Expect(err).NotTo(HaveOccurred())
 	if items := listed.GetItems(); len(items) > 0 {
 		Expect(items[0].GetFabricManager()).NotTo(BeEmpty(), "tenant default networking requires a fabric-backed NetworkClass")
-		return items[0].GetId(), false
+		classID := items[0].GetId()
+		waitForNetworkClassReady(ctx, classes, classID)
+		if items[0].GetStatus().GetHub() != hubId {
+			setNetworkClassCanonicalHub(ctx, classes, classID, hubId)
+		}
+		expectNetworkClassStatus(
+			ctx,
+			classes,
+			classID,
+			privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+			hubId,
+			"",
+		)
+		return classID, false
 	}
 
 	classID := createCatalogItemNetworkClassFixtureWithoutCleanup(ctx)
@@ -565,28 +577,6 @@ func catalogItemParameterPolicies() map[string]*publicv1.TemplateParameterPolicy
 	}
 }
 
-func grantTenantAdminRealmRole(ctx context.Context, userID string) {
-	GinkgoHelper()
-
-	roleStatus, body, err := tool.KeycloakAdminRequest(ctx, http.MethodGet, "/roles/tenant-admin", nil)
-	Expect(err).NotTo(HaveOccurred())
-	if roleStatus == http.StatusNotFound {
-		code, _, createErr := tool.KeycloakAdminRequest(ctx, http.MethodPost, "/roles", map[string]any{"name": "tenant-admin"})
-		Expect(createErr).NotTo(HaveOccurred())
-		Expect(code).To(Or(Equal(http.StatusCreated), Equal(http.StatusConflict)))
-		roleStatus, body, err = tool.KeycloakAdminRequest(ctx, http.MethodGet, "/roles/tenant-admin", nil)
-		Expect(err).NotTo(HaveOccurred())
-	}
-	Expect(roleStatus).To(Equal(http.StatusOK))
-
-	var role map[string]any
-	Expect(json.Unmarshal(body, &role)).To(Succeed())
-	code, _, err := tool.KeycloakAdminRequest(ctx, http.MethodPost,
-		"/users/"+userID+"/role-mappings/realm", []map[string]any{role})
-	Expect(err).NotTo(HaveOccurred())
-	Expect(code).To(Equal(http.StatusNoContent))
-}
-
 // Keycloak break-glass administration does not imply OSAC tenant-admin permissions.
 // Grant that realm role before logging in so the public API exercises genuine tenant scope.
 func createCatalogItemTenantAdminFixture(ctx context.Context) (string, *grpc.ClientConn) {
@@ -614,7 +604,8 @@ func createCatalogItemTenantAdminIdentityFixture(ctx context.Context) metadataTe
 	tenant, err := tenants.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
 	Expect(err).NotTo(HaveOccurred())
 
-	grantTenantAdminRealmRole(ctx, tenant.GetObject().GetStatus().GetBreakGlassUserId())
+	role := getOrCreateKeycloakTenantAdminRole(ctx)
+	assignKeycloakRealmRole(ctx, tenant.GetObject().GetStatus().GetBreakGlassUserId(), role)
 
 	_, token := loginAsBreakGlass(ctx, tenants, name, id)
 	publicConn, err := tool.makeGrpcConn(externalServiceAddr, token)

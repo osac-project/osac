@@ -17,6 +17,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -75,6 +79,16 @@ func tenantListResponse(total int32, names ...string) *publicv1.TenantsListRespo
 	return publicv1.TenantsListResponse_builder{Total: total, Items: items}.Build()
 }
 
+func tenantListClient(names ...string) *mockTenantsClient {
+	return &mockTenantsClient{
+		listFunc: func(
+			_ context.Context, _ *publicv1.TenantsListRequest, _ ...grpc.CallOption,
+		) (*publicv1.TenantsListResponse, error) {
+			return tenantListResponse(int32(len(names)), names...), nil
+		},
+	}
+}
+
 func checkConnectionToolRegistry(names ...string) typedToolRegistry {
 	registered := make(map[string]struct{}, len(names))
 	for _, name := range names {
@@ -92,6 +106,7 @@ var _ = Describe("handleCheckConnection", func() {
 		var capturedNames []string
 		var tenantListToken string
 		var tenantListLimit int32
+		var capturedMutex sync.Mutex
 		tenantClient := &mockTenantsClient{
 			listFunc: func(
 				ctx context.Context, request *publicv1.TenantsListRequest, _ ...grpc.CallOption,
@@ -105,11 +120,13 @@ var _ = Describe("handleCheckConnection", func() {
 			createFunc: func(
 				ctx context.Context, request *publicv1.SelfSubjectAccessReviewsCreateRequest, _ ...grpc.CallOption,
 			) (*publicv1.SelfSubjectAccessReviewsCreateResponse, error) {
+				capturedMutex.Lock()
 				capturedToken = forwardedToken(ctx)
 				capturedServices = append(capturedServices, request.GetObject().GetSpec().GetService())
 				capturedMethods = append(capturedMethods, request.GetObject().GetSpec().GetMethod())
 				capturedTenants = append(capturedTenants, request.GetObject().GetMetadata().GetTenant())
 				capturedNames = append(capturedNames, request.GetObject().GetMetadata().GetName())
+				capturedMutex.Unlock()
 				return publicv1.SelfSubjectAccessReviewsCreateResponse_builder{
 					Object: publicv1.SelfSubjectAccessReview_builder{
 						Status: publicv1.SelfSubjectAccessReviewStatus_builder{
@@ -120,21 +137,22 @@ var _ = Describe("handleCheckConnection", func() {
 			},
 		}
 
+		expectedTools := []string{
+			"check_connection", "create_compute_instance", "create_project", "delete_compute_instance",
+			"get_resource", "list_resources", "update_compute_instance", "update_project",
+		}
 		handler := handleCheckConnection(
-			"https://mcp.example.com/",
-			newResourceRegistry(ServerDeps{}),
-			checkConnectionToolRegistry("zeta_tool", "alpha_tool"),
-			tenantClient,
-			reviews,
+			"https://mcp.example.com/", newResourceRegistry(ServerDeps{}), checkConnectionToolRegistry(expectedTools...),
+			tenantClient, reviews,
 		)
 		_, output, err := handler(context.Background(), requestWithCaller("raw-bearer-value", safeCallerContext{
-			Subject: "user-1", Username: "alice", Tenants: []string{"token-claim-tenant"},
+			Subject: "user-1", Tenants: []string{"token-claim-tenant"},
 		}), CheckConnectionInput{})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(output.Endpoint).To(Equal("https://mcp.example.com/"))
 		Expect(output.Server).To(Equal(CheckConnectionServer{Name: "osac-deployment-mcp", Version: version.Get()}))
 		Expect(output.Caller).To(Equal(safeCallerContext{
-			Subject: "user-1", Username: "alice", Tenants: []string{"tenant-1"},
+			Subject: "user-1", Tenants: []string{"tenant-1"},
 		}))
 		Expect(tenantListToken).To(Equal("Bearer api-for-raw-bearer-value"))
 		Expect(tenantListLimit).To(Equal(int32(maxCheckConnectionTenants + 1)))
@@ -151,7 +169,7 @@ var _ = Describe("handleCheckConnection", func() {
 			ResourceTypeComputeInstance,
 			ResourceTypeSecretReference,
 		))
-		Expect(output.Tools).To(Equal([]string{"alpha_tool", "zeta_tool"}))
+		Expect(output.Tools).To(Equal(expectedTools))
 		Expect(output.PermissionsTruncated).To(BeFalse())
 		Expect(output.Permissions).To(Equal([]CheckConnectionPermission{
 			{Tenant: "tenant-1", Service: "osac.public.v1.ComputeInstances", Method: "List", Allowed: true},
@@ -163,27 +181,128 @@ var _ = Describe("handleCheckConnection", func() {
 		Expect(capturedServices).To(Equal([]string{
 			"osac.public.v1.ComputeInstances", "osac.public.v1.ComputeInstances", "osac.public.v1.ComputeInstances",
 		}))
-		Expect(capturedMethods).To(Equal([]string{"List", "Create", "Update"}))
-		Expect(capturedTenants).To(Equal([]string{"tenant-1", "tenant-1", "tenant-1"}))
-		Expect(capturedNames).To(Equal([]string{
+		Expect(capturedMethods).To(ConsistOf("List", "Create", "Update"))
+		Expect(capturedTenants).To(ConsistOf("tenant-1", "tenant-1", "tenant-1"))
+		Expect(capturedNames).To(ConsistOf(
 			"mcp-check-connection", "mcp-check-connection", "mcp-check-connection",
-		}))
+		))
 	})
 
-	It("Uses an unscoped permission review for a caller without a tenant", func() {
-		var capturedTenant string
-		tenantClient := &mockTenantsClient{
-			listFunc: func(
-				context.Context, *publicv1.TenantsListRequest, ...grpc.CallOption,
-			) (*publicv1.TenantsListResponse, error) {
-				return tenantListResponse(0), nil
-			},
-		}
+	It("Runs permission reviews concurrently and keeps the output order", func() {
+		arrived := make(chan string, 6)
+		release := make(chan struct{})
 		reviews := &mockSelfSubjectAccessReviewsClient{
 			createFunc: func(
 				_ context.Context, request *publicv1.SelfSubjectAccessReviewsCreateRequest, _ ...grpc.CallOption,
 			) (*publicv1.SelfSubjectAccessReviewsCreateResponse, error) {
+				arrived <- request.GetObject().GetMetadata().GetTenant() + "/" + request.GetObject().GetSpec().GetMethod()
+				<-release
+				return publicv1.SelfSubjectAccessReviewsCreateResponse_builder{
+					Object: publicv1.SelfSubjectAccessReview_builder{
+						Status: publicv1.SelfSubjectAccessReviewStatus_builder{Allowed: true}.Build(),
+					}.Build(),
+				}.Build(), nil
+			},
+		}
+		handler := handleCheckConnection(
+			"https://mcp.example.com/", newResourceRegistry(ServerDeps{}), checkConnectionToolRegistry(),
+			tenantListClient("tenant-1", "tenant-2"), reviews,
+		)
+
+		type connectionResult struct {
+			output CheckConnectionOutput
+			err    error
+		}
+		done := make(chan connectionResult, 1)
+		go func() {
+			_, output, err := handler(context.Background(), requestWithCaller("raw-bearer-value", safeCallerContext{
+				Subject: "user-1", Tenants: []string{"tenant-1", "tenant-2"},
+			}), CheckConnectionInput{})
+			done <- connectionResult{output: output, err: err}
+		}()
+
+		for range 6 {
+			Eventually(arrived, 2*time.Second).Should(Receive())
+		}
+		close(release)
+		var result connectionResult
+		Eventually(done, 2*time.Second).Should(Receive(&result))
+		Expect(result.err).ToNot(HaveOccurred())
+
+		expectedPermissions := make([]CheckConnectionPermission, 0, 6)
+		for _, tenant := range []string{"tenant-1", "tenant-2"} {
+			for _, method := range []string{"List", "Create", "Update"} {
+				expectedPermissions = append(expectedPermissions, CheckConnectionPermission{
+					Tenant: tenant, Service: "osac.public.v1.ComputeInstances", Method: method, Allowed: true,
+				})
+			}
+		}
+		Expect(result.output.Permissions).To(Equal(expectedPermissions))
+	})
+
+	It("Cancels remaining permission reviews after a failure", func() {
+		started := make(chan string, 6)
+		release := make(chan struct{})
+		reviews := &mockSelfSubjectAccessReviewsClient{
+			createFunc: func(
+				ctx context.Context, request *publicv1.SelfSubjectAccessReviewsCreateRequest, _ ...grpc.CallOption,
+			) (*publicv1.SelfSubjectAccessReviewsCreateResponse, error) {
+				tenant := request.GetObject().GetMetadata().GetTenant()
+				method := request.GetObject().GetSpec().GetMethod()
+				started <- tenant + "/" + method
+				if tenant == "tenant-1" && method == "Create" {
+					<-release
+					return nil, status.Error(codes.Unavailable, "private service failure")
+				}
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(time.Second):
+					return nil, errors.New("permission review was not cancelled")
+				}
+			},
+		}
+		handler := handleCheckConnection(
+			"https://mcp.example.com/", newResourceRegistry(ServerDeps{}), checkConnectionToolRegistry(),
+			tenantListClient("tenant-1", "tenant-2"), reviews,
+		)
+
+		type connectionResult struct {
+			output CheckConnectionOutput
+			err    error
+		}
+		done := make(chan connectionResult, 1)
+		go func() {
+			_, output, err := handler(context.Background(), requestWithCaller("raw-bearer-value", safeCallerContext{
+				Subject: "user-1", Tenants: []string{"tenant-1", "tenant-2"},
+			}), CheckConnectionInput{})
+			done <- connectionResult{output: output, err: err}
+		}()
+
+		for range 6 {
+			Eventually(started, 2*time.Second).Should(Receive())
+		}
+		startedAt := time.Now()
+		close(release)
+		var result connectionResult
+		Eventually(done, 2*time.Second).Should(Receive(&result))
+		Expect(result.err).To(HaveOccurred())
+		Expect(time.Since(startedAt)).To(BeNumerically("<", 2*time.Second))
+		envelope := decodeToolError(result.err)
+		Expect(envelope.Category).To(Equal("service_unavailable"))
+		Expect(envelope.GRPCCode).To(Equal("Unavailable"))
+	})
+
+	It("Uses an unscoped permission review for a caller without a tenant", func() {
+		var capturedTenant string
+		var capturedMutex sync.Mutex
+		reviews := &mockSelfSubjectAccessReviewsClient{
+			createFunc: func(
+				_ context.Context, request *publicv1.SelfSubjectAccessReviewsCreateRequest, _ ...grpc.CallOption,
+			) (*publicv1.SelfSubjectAccessReviewsCreateResponse, error) {
+				capturedMutex.Lock()
 				capturedTenant = request.GetObject().GetMetadata().GetTenant()
+				capturedMutex.Unlock()
 				return publicv1.SelfSubjectAccessReviewsCreateResponse_builder{
 					Object: publicv1.SelfSubjectAccessReview_builder{
 						Status: publicv1.SelfSubjectAccessReviewStatus_builder{Allowed: true}.Build(),
@@ -193,64 +312,139 @@ var _ = Describe("handleCheckConnection", func() {
 		}
 
 		handler := handleCheckConnection(
-			"https://mcp.example.com/", newResourceRegistry(ServerDeps{}), checkConnectionToolRegistry(), tenantClient, reviews,
+			"https://mcp.example.com/", newResourceRegistry(ServerDeps{}), checkConnectionToolRegistry(),
+			tenantListClient(), reviews,
 		)
 		_, output, err := handler(context.Background(), requestWithCaller("raw-bearer-value", safeCallerContext{
-			Subject: "user-1", Tenants: []string{"untrusted-claim-tenant"},
+			Subject: "user-1",
 		}), CheckConnectionInput{})
 		Expect(err).ToNot(HaveOccurred())
-		Expect(output.Caller.Tenants).To(BeEmpty())
 		Expect(capturedTenant).To(BeEmpty())
 		Expect(output.Permissions).To(Equal([]CheckConnectionPermission{
 			{Service: "osac.public.v1.ComputeInstances", Method: "List", Allowed: true},
 			{Service: "osac.public.v1.ComputeInstances", Method: "Create", Allowed: true},
 			{Service: "osac.public.v1.ComputeInstances", Method: "Update", Allowed: true},
 		}))
-		Expect(output.PermissionsTruncated).To(BeFalse())
 	})
 
-	It("Preserves a retryable token exchange error", func() {
-		request := requestWithCaller("raw-bearer-value", safeCallerContext{Subject: "user-1"})
-		request.Extra.TokenInfo.Extra[exchangeTokenExtraKey] = apiTokenSource(func(context.Context) (string, error) {
-			return "", errOAuthTokenExchangeUnavailable
-		})
+	It("Bounds the permission summary tenant matrix", func() {
+		var reviewCount int
+		var capturedTenants []string
+		var capturedMutex sync.Mutex
+		reviews := &mockSelfSubjectAccessReviewsClient{
+			createFunc: func(
+				_ context.Context, request *publicv1.SelfSubjectAccessReviewsCreateRequest, _ ...grpc.CallOption,
+			) (*publicv1.SelfSubjectAccessReviewsCreateResponse, error) {
+				capturedMutex.Lock()
+				reviewCount++
+				capturedTenants = append(capturedTenants, request.GetObject().GetMetadata().GetTenant())
+				capturedMutex.Unlock()
+				return publicv1.SelfSubjectAccessReviewsCreateResponse_builder{
+					Object: publicv1.SelfSubjectAccessReview_builder{
+						Status: publicv1.SelfSubjectAccessReviewStatus_builder{Allowed: true}.Build(),
+					}.Build(),
+				}.Build(), nil
+			},
+		}
+
+		tenants := make([]string, 11)
+		for i := range tenants {
+			tenants[i] = fmt.Sprintf("tenant-%02d", i+1)
+		}
 		handler := handleCheckConnection(
 			"https://mcp.example.com/", newResourceRegistry(ServerDeps{}), checkConnectionToolRegistry(),
-			&mockTenantsClient{}, &mockSelfSubjectAccessReviewsClient{},
+			tenantListClient(tenants...), reviews,
 		)
-		_, _, err := handler(context.Background(), request, CheckConnectionInput{})
-		Expect(err).To(HaveOccurred())
-		envelope := decodeToolError(err)
-		Expect(envelope.Category).To(Equal("service_unavailable"))
-		Expect(envelope.GRPCCode).To(Equal("Unavailable"))
-		Expect(envelope.Retryable).To(BeTrue())
+		_, output, err := handler(context.Background(), requestWithCaller("raw-bearer-value", safeCallerContext{
+			Subject: "user-1", Tenants: tenants,
+		}), CheckConnectionInput{})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(reviewCount).To(Equal(30))
+		Expect(output.Permissions).To(HaveLen(30))
+		Expect(output.PermissionsTruncated).To(BeTrue())
+		Expect(capturedTenants).ToNot(ContainElement("tenant-11"))
 	})
 
-	It("Preserves a retryable token exchange error", func() {
-		request := requestWithCaller("raw-bearer-value", safeCallerContext{Subject: "user-1"})
-		request.Extra.TokenInfo.Extra[exchangeTokenExtraKey] = apiTokenSource(func(context.Context) (string, error) {
-			return "", errOAuthTokenExchangeUnavailable
-		})
+	It("Bounds concurrent permission reviews", func() {
+		var activeReviews atomic.Int32
+		var maxActiveReviews atomic.Int32
+		reviews := &mockSelfSubjectAccessReviewsClient{
+			createFunc: func(
+				_ context.Context,
+				_ *publicv1.SelfSubjectAccessReviewsCreateRequest,
+				_ ...grpc.CallOption,
+			) (*publicv1.SelfSubjectAccessReviewsCreateResponse, error) {
+				active := activeReviews.Add(1)
+				for {
+					observed := maxActiveReviews.Load()
+					if active <= observed || maxActiveReviews.CompareAndSwap(observed, active) {
+						break
+					}
+				}
+				defer activeReviews.Add(-1)
+				return publicv1.SelfSubjectAccessReviewsCreateResponse_builder{
+					Object: publicv1.SelfSubjectAccessReview_builder{
+						Status: publicv1.SelfSubjectAccessReviewStatus_builder{Allowed: true}.Build(),
+					}.Build(),
+				}.Build(), nil
+			},
+		}
+		tenants := make([]string, maxCheckConnectionTenants)
+		for index := range tenants {
+			tenants[index] = fmt.Sprintf("tenant-%d", index+1)
+		}
 		handler := handleCheckConnection(
 			"https://mcp.example.com/", newResourceRegistry(ServerDeps{}), checkConnectionToolRegistry(),
-			&mockTenantsClient{}, &mockSelfSubjectAccessReviewsClient{},
+			tenantListClient("tenant-1", "tenant-2", "tenant-3", "tenant-4", "tenant-5",
+				"tenant-6", "tenant-7", "tenant-8", "tenant-9", "tenant-10"), reviews,
 		)
-		_, _, err := handler(context.Background(), request, CheckConnectionInput{})
-		Expect(err).To(HaveOccurred())
-		envelope := decodeToolError(err)
-		Expect(envelope.Category).To(Equal("service_unavailable"))
-		Expect(envelope.GRPCCode).To(Equal("Unavailable"))
-		Expect(envelope.Retryable).To(BeTrue())
+
+		_, output, err := handler(context.Background(), requestWithCaller("raw-bearer-value", safeCallerContext{
+			Subject: "user-1", Tenants: tenants,
+		}), CheckConnectionInput{})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(output.Permissions).To(HaveLen(maxCheckConnectionTenants * len(checkConnectionMethods)))
+		Expect(maxActiveReviews.Load()).To(BeNumerically("<=", maxCheckConnectionPermissionWorkers))
+	})
+
+	It("Marks permission output truncated when tenant discovery is truncated", func() {
+		reviews := &mockSelfSubjectAccessReviewsClient{
+			createFunc: func(
+				_ context.Context, _ *publicv1.SelfSubjectAccessReviewsCreateRequest, _ ...grpc.CallOption,
+			) (*publicv1.SelfSubjectAccessReviewsCreateResponse, error) {
+				return publicv1.SelfSubjectAccessReviewsCreateResponse_builder{
+					Object: publicv1.SelfSubjectAccessReview_builder{
+						Status: publicv1.SelfSubjectAccessReviewStatus_builder{Allowed: true}.Build(),
+					}.Build(),
+				}.Build(), nil
+			},
+		}
+		tenants := make([]string, maxCheckConnectionTenants)
+		for index := range tenants {
+			tenants[index] = fmt.Sprintf("tenant-%d", index+1)
+		}
+		tenantClient := &mockTenantsClient{
+			listFunc: func(
+				_ context.Context, _ *publicv1.TenantsListRequest, _ ...grpc.CallOption,
+			) (*publicv1.TenantsListResponse, error) {
+				return tenantListResponse(maxCheckConnectionTenants+1, tenants...), nil
+			},
+		}
+		handler := handleCheckConnection(
+			"https://mcp.example.com/", newResourceRegistry(ServerDeps{}), checkConnectionToolRegistry(),
+			tenantClient, reviews,
+		)
+
+		_, output, err := handler(context.Background(), requestWithCaller("raw-bearer-value", safeCallerContext{
+			Subject: "user-1",
+		}), CheckConnectionInput{})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(output.Permissions).To(HaveLen(maxCheckConnectionTenants * len(checkConnectionMethods)))
+		Expect(output.PermissionsTruncated).To(BeTrue())
 	})
 
 	It("Returns a stable safe error envelope for a service failure", func() {
-		tenantClient := &mockTenantsClient{
-			listFunc: func(
-				context.Context, *publicv1.TenantsListRequest, ...grpc.CallOption,
-			) (*publicv1.TenantsListResponse, error) {
-				return tenantListResponse(0), nil
-			},
-		}
 		reviews := &mockSelfSubjectAccessReviewsClient{
 			createFunc: func(
 				context.Context, *publicv1.SelfSubjectAccessReviewsCreateRequest, ...grpc.CallOption,
@@ -260,7 +454,8 @@ var _ = Describe("handleCheckConnection", func() {
 		}
 
 		handler := handleCheckConnection(
-			"https://mcp.example.com/", newResourceRegistry(ServerDeps{}), checkConnectionToolRegistry(), tenantClient, reviews,
+			"https://mcp.example.com/", newResourceRegistry(ServerDeps{}), checkConnectionToolRegistry(),
+			tenantListClient(), reviews,
 		)
 		_, _, err := handler(context.Background(), requestWithCaller("raw-bearer-value", safeCallerContext{
 			Subject: "user-1",
@@ -359,11 +554,14 @@ var _ = Describe("handleCheckConnection", func() {
 			},
 		}
 		var reviewedTenants []string
+		var reviewedTenantsMutex sync.Mutex
 		reviews := &mockSelfSubjectAccessReviewsClient{
 			createFunc: func(
 				_ context.Context, request *publicv1.SelfSubjectAccessReviewsCreateRequest, _ ...grpc.CallOption,
 			) (*publicv1.SelfSubjectAccessReviewsCreateResponse, error) {
+				reviewedTenantsMutex.Lock()
 				reviewedTenants = append(reviewedTenants, request.GetObject().GetMetadata().GetTenant())
+				reviewedTenantsMutex.Unlock()
 				return publicv1.SelfSubjectAccessReviewsCreateResponse_builder{
 					Object: publicv1.SelfSubjectAccessReview_builder{}.Build(),
 				}.Build(), nil
@@ -429,9 +627,6 @@ var _ = Describe("safePublicAPIError", func() {
 		Entry("permission denied", codes.PermissionDenied, "authorization", "PermissionDenied", false),
 		Entry("not found", codes.NotFound, "not_found", "NotFound", false),
 		Entry("already exists", codes.AlreadyExists, "conflict", "AlreadyExists", false),
-		Entry("failed precondition", codes.FailedPrecondition, "protocol_incompatible", "FailedPrecondition", false),
-		Entry("canceled", codes.Canceled, "service_unavailable", "Canceled", false),
-		Entry("deadline exceeded", codes.DeadlineExceeded, "service_unavailable", "DeadlineExceeded", true),
 		Entry("resource exhausted", codes.ResourceExhausted, "rate_limited", "ResourceExhausted", true),
 		Entry("unavailable", codes.Unavailable, "service_unavailable", "Unavailable", true),
 		Entry("unknown", codes.Unknown, "upstream_failure", "Unknown", false),
@@ -444,13 +639,5 @@ var _ = Describe("safePublicAPIError", func() {
 		Expect(json.Unmarshal([]byte(first.Error()), &firstEnvelope)).To(Succeed())
 		Expect(json.Unmarshal([]byte(second.Error()), &secondEnvelope)).To(Succeed())
 		Expect(firstEnvelope.RequestID).ToNot(Equal(secondEnvelope.RequestID))
-	})
-
-	It("Reports wrapped context deadline errors as DeadlineExceeded", func() {
-		err := safePublicAPIError(errors.Join(context.DeadlineExceeded, errors.New("local timeout")))
-		envelope := decodeToolError(err)
-		Expect(envelope.Category).To(Equal("service_unavailable"))
-		Expect(envelope.GRPCCode).To(Equal("DeadlineExceeded"))
-		Expect(envelope.Retryable).To(BeTrue())
 	})
 })

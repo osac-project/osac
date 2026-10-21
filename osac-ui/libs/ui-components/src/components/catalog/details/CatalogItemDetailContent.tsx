@@ -8,9 +8,9 @@ import {
   DescriptionListTerm,
   Flex,
   FlexItem,
+  Grid,
+  GridItem,
   Label,
-  Stack,
-  StackItem,
 } from '@patternfly/react-core';
 
 import { useTranslation } from '../../../hooks/useTranslation.ts';
@@ -33,12 +33,14 @@ export const CatalogItemDetailContent = ({ item }: CatalogItemDetailContentProps
   const metadataLabels = catalogItemMetadataLabelEntries(item);
   const description = item.description?.trim() || item.metadata?.description?.trim();
   const tenant = item.metadata?.tenant?.trim();
+  const detailsTitleId = 'catalog-item-details-card-title';
+  const configurationTitleId = 'catalog-item-configuration-card-title';
 
   return (
-    <Stack hasGutter>
-      <StackItem>
-        <Card>
-          <CardTitle>{t('Details')}</CardTitle>
+    <Grid hasGutter>
+      <GridItem md={8}>
+        <Card component="section" aria-labelledby={detailsTitleId}>
+          <CardTitle id={detailsTitleId}>{t('Details')}</CardTitle>
           <CardBody>
             <DescriptionList isHorizontal>
               <DescriptionListGroup>
@@ -102,16 +104,16 @@ export const CatalogItemDetailContent = ({ item }: CatalogItemDetailContentProps
             </DescriptionList>
           </CardBody>
         </Card>
-      </StackItem>
+      </GridItem>
 
-      <StackItem>
-        <Card>
-          <CardTitle>{t('Configuration')}</CardTitle>
+      <GridItem md={4}>
+        <Card component="section" isFullHeight aria-labelledby={configurationTitleId}>
+          <CardTitle id={configurationTitleId}>{t('Configuration')}</CardTitle>
           <CardBody>
             <CatalogItemConfiguration item={item} resourceLookups={resourceLookups} />
           </CardBody>
         </Card>
-      </StackItem>
-    </Stack>
+      </GridItem>
+    </Grid>
   );
 };

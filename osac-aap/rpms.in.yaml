@@ -1,0 +1,36 @@
+---
+# Input for konflux-ci/rpm-lockfile-prototype -- resolves to rpms.lock.yaml,
+# which Cachi2/Hermeto prefetches so the hermetic build's dnf install/update
+# steps (baked into execution-environment.yaml's additional_build_steps and
+# dependencies.system) never need live network access. Regenerate with:
+#
+#   podman run --rm -v "${PWD}:/work:Z" \
+#     localhost/rpm-lockfile-prototype:latest \
+#     --image registry.access.redhat.com/ubi10:10.2 \
+#     --outfile=rpms.lock.yaml rpms.in.yaml
+#
+# (build localhost/rpm-lockfile-prototype from
+# https://github.com/konflux-ci/rpm-lockfile-prototype first.)
+contentOrigin:
+  repofiles:
+    - osac-aap/ubi.repo
+packages:
+  # From execution-environment.yaml's additional_build_steps: glibc/
+  # glibc-minimal-langpack updated before system packages are installed
+  # (UBI base image glibc lags behind glibc-devel), git needed to pull
+  # non-versioned git collections, python3.12 is the EE's own interpreter.
+  - glibc
+  - glibc-minimal-langpack
+  - python3.12
+  - git
+  # From execution-environment.yaml's dependencies.system (same list,
+  # kept in sync manually -- update both if that list changes).
+  - systemd-libs
+  - systemd-devel
+  - gcc
+  - python3.12-devel
+  - git-core
+  - bind-utils
+  - krb5-devel
+arches:
+  - x86_64

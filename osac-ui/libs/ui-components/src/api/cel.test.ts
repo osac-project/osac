@@ -31,11 +31,6 @@ describe('cel', () => {
     expect(cel<ExampleResource>((filter) => filter.field('metadata.name').contains('a"b\\c'))).toBe(
       'this.metadata.name.contains("a\\"b\\\\c")',
     );
-    expect(
-      cel<ExampleResource>((filter) =>
-        filter.field('spec.tags').someEqualsAny(['control-plane', 'gpu']),
-      ),
-    ).toBe('this.spec.tags.exists(item, item == "control-plane" || item == "gpu")');
     expect(cel<ExampleResource>((filter) => filter.field('spec.guestOsFamily').equals(1))).toBe(
       'this.spec.guest_os_family == 1',
     );
@@ -84,9 +79,6 @@ describe('cel', () => {
     expect(cel<ExampleResource>((filter) => filter.and())).toBeUndefined();
     expect(cel<ExampleResource>((filter) => filter.or())).toBe('false');
     expect(cel<ExampleResource>((filter) => filter.field('spec.tags').includesAny([]))).toBe(
-      'false',
-    );
-    expect(cel<ExampleResource>((filter) => filter.field('spec.tags').someEqualsAny([]))).toBe(
       'false',
     );
   });

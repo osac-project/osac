@@ -123,45 +123,6 @@ class CelField<Resource, Value> {
       `(${values.map((value) => `${toCelLiteral(value)} in ${this.path}`).join(' || ')})`,
     );
   };
-
-  /**
-   * Matches when at least one element in an array field equals `value`.
-   * Emits CEL such as `this.spec.tags.exists(item, item == "gpu")`.
-   *
-   * @deprecated Use {@link includes} instead — the `exists()` macro produces
-   * comprehension AST nodes that some backends (including fulfillment-service)
-   * do not support.
-   */
-  public someEquals = (
-    value: Value extends readonly (infer Item)[] ? Extract<Item, CelLiteral> : never,
-    variableName = 'item',
-  ): CelFilter<Resource> =>
-    asFilter<Resource>(
-      `${this.path}.exists(${variableName}, ${variableName} == ${toCelLiteral(value)})`,
-    );
-
-  /**
-   * Matches when at least one element in an array field equals any supplied value.
-   * Emits CEL such as `this.spec.tags.exists(item, item == "gpu" || item == "fast")`.
-   * Returns `false` when no values are supplied.
-   *
-   * @deprecated Use {@link includesAny} instead — the `exists()` macro produces
-   * comprehension AST nodes that some backends (including fulfillment-service)
-   * do not support.
-   */
-  public someEqualsAny = (
-    values: Value extends readonly (infer Item)[] ? readonly Extract<Item, CelLiteral>[] : never,
-    variableName = 'item',
-  ): CelFilter<Resource> => {
-    if (values.length === 0) {
-      return asFilter<Resource>('false');
-    }
-    return asFilter<Resource>(
-      `${this.path}.exists(${variableName}, ${values
-        .map((value) => `${variableName} == ${toCelLiteral(value)}`)
-        .join(' || ')})`,
-    );
-  };
 }
 
 /**

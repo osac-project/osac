@@ -202,6 +202,25 @@ var _ = Describe("SelfSubjectAccessReviews Server", func() {
 				Expect(response.GetObject().GetMetadata().GetName()).To(Equal("test-review"))
 				Expect(response.GetObject().GetMetadata().GetAnnotations()).To(HaveKeyWithValue("osac.openshift.io/tenant", "my-tenant"))
 			})
+
+			It("Rejects reserved metadata before evaluating the request", func() {
+				request := publicv1.SelfSubjectAccessReviewsCreateRequest_builder{
+					Object: publicv1.SelfSubjectAccessReview_builder{
+						Metadata: publicv1.Metadata_builder{
+							Annotations: map[string]string{"admin.osac.openshift.io/review": "private"},
+						}.Build(),
+						Spec: publicv1.SelfSubjectAccessReviewSpec_builder{
+							Service: "osac.public.v1.Clusters",
+							Method:  "List",
+						}.Build(),
+					}.Build(),
+				}.Build()
+
+				response, err := publicServer.Create(testCtx, request)
+				Expect(response).To(BeNil())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(grpcstatus.Convert(err).Message()).To(Equal(reservedMetadataError))
+			})
 		})
 	})
 

@@ -17,6 +17,8 @@ OSAC's API.
 - [Step 2: Create a VirtualNetwork](#step-2-create-a-virtualnetwork)
 - [Step 3: Create a Subnet](#step-3-create-a-subnet)
 - [Step 4: Create a SecurityGroup (optional)](#step-4-create-a-securitygroup-optional)
+- [Resource lifecycle and updates](#resource-lifecycle-and-updates)
+- [Troubleshooting](#troubleshooting)
 - [Next steps](#next-steps)
 
 ---
@@ -549,6 +551,98 @@ curl -fsS $CURL_FLAGS -H "Authorization: Bearer $TOKEN" \
 ```
 
 This displays the security group's state and all ingress and egress rules.
+
+---
+
+## Resource lifecycle and updates
+
+Networking resources are immutable after creation. Read means `List` and `Get`;
+there is no `Update`/`Patch` operation for a networking resource's specification
+or metadata, except for the SecurityGroup rule replacement described below. To
+change a VirtualNetwork, Subnet, NATGateway, ExternalIP, or
+ExternalIPAttachment, delete it and create a replacement:
+
+- **Deletion is guarded.** A resource can only be deleted when no other active
+  resource references it. If a Subnet is attached to compute instances, for
+  example, the delete request is rejected with a precondition error until the
+  dependents are removed.
+- **Replacements observe the same gates.** A replacement can only be created
+  when every referenced resource is in its terminal ready state. Remove the
+  dependents, delete the old resource, create the replacement, and wait for it
+  to reach `READY`, then re-create the dependent workloads with attachments to
+  the replacement (attachments are set at workload creation and cannot be
+  changed in place). Always preserve tenant
+  attribution, and never bypass finalizers or guards.
+
+The one scoped exception is SecurityGroup rules: `SecurityGroups.Update`
+replaces the complete ingress and egress rule lists of an existing group. The
+group's identity, name, parent VirtualNetwork, metadata, and status are not
+changed by this operation
+([OSAC-5679](https://redhat.atlassian.net/browse/OSAC-5679)).
+
+**gRPC:**
+
+```bash
+grpcurl $GRPCURL_FLAGS -H "Authorization: Bearer $TOKEN" -d '{
+  "object": {
+    "id": "<securitygroup-id>",
+    "spec": {
+      "ingress": [
+        {"protocol": "PROTOCOL_TCP", "port_from": 22, "port_to": 22, "ipv4_cidr": "10.0.0.0/8"}
+      ],
+      "egress": [
+        {"protocol": "PROTOCOL_ALL", "ipv4_cidr": "10.0.0.0/8"}
+      ]
+    }
+  }
+}' $OSAC_API osac.public.v1.SecurityGroups/Update
+```
+
+**REST:**
+
+```bash
+curl -fsS $CURL_FLAGS -X PATCH -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d '{
+  "id": "<securitygroup-id>",
+  "spec": {
+    "ingress": [
+      {"protocol": "PROTOCOL_TCP", "port_from": 22, "port_to": 22, "ipv4_cidr": "10.0.0.0/8"}
+    ],
+    "egress": [
+      {"protocol": "PROTOCOL_ALL", "ipv4_cidr": "10.0.0.0/8"}
+    ]
+  }
+}' "https://$OSAC_API/api/fulfillment/v1/security_groups/<securitygroup-id>"
+```
+
+> **Note:** The complete rule lists are applied as supplied — send every rule
+> you want to keep, not only the changed ones. The server applies only the
+> ingress and egress paths, so no field mask is needed. The CLI `edit`
+> command supports only SecurityGroups for the same reason; `osac edit` on any
+> other networking resource is refused before any write.
+
+Storing a rule change does not guarantee the fabric manager has reprogrammed
+backend ACLs — that reconciliation gap is tracked separately
+([OSAC-4888](https://redhat.atlassian.net/browse/OSAC-4888)). Broader selective
+updates to other networking resources or fields are future scope
+([OSAC-5281](https://redhat.atlassian.net/browse/OSAC-5281)).
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause | What to do |
+|---------|-------|------------|
+| `osac edit` fails with `object type "osac.public.v1.<Type>" is immutable; updates are not supported` | The CLI refuses to edit immutable networking resources before any write | Delete the resource and create a replacement |
+| gRPC `Update` on a networking service reports `Unimplemented` | All networking services except SecurityGroups have no Update RPC | Use delete and recreate |
+| `SecurityGroups/Update` rejects with `InvalidArgument` (`object is mandatory`, `object identifier is mandatory`, or `object spec is mandatory`) | The scoped rule update requires the object, its ID, and a spec | Send the object with the group ID and the complete ingress and egress lists |
+| Delete rejected with a precondition error naming a blocking resource type | Active dependents still reference the resource | Remove the dependents first, then delete |
+| Create rejected with a precondition error | A referenced resource is not ready | Wait for the referenced resource to reach its terminal ready state, then retry |
+| Create rejected with an invalid-argument error naming a dependency that has been deleted | A referenced resource has been deleted | Recreate the deleted dependency, wait for it to become `READY`, then retry |
+
+The CLI messages and gRPC codes above reflect implemented behavior. For
+operations exposed through REST, REST responses surface the corresponding
+rejections with different status codes.
 
 ---
 

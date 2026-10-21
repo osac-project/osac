@@ -1,0 +1,70 @@
+---
+- name: Load the AgentlessNet network node and switch inventory
+  ansible.builtin.include_tasks: _load_network_node_inventory.yaml
+  vars:
+    agentless_net_require_switches: true
+
+- name: Read AgentlessNet BMI attachment configuration
+  ansible.builtin.set_fact:
+    _agentless_net_provisioning_network: >-
+      {{ _agentless_net_inventory_vars.get('agentless_net_provisioning_network', {}) }}
+    _agentless_net_host_ports: >-
+      {{ _agentless_net_inventory_vars.get('agentless_net_host_ports', {}) }}
+  no_log: true
+
+- name: Validate AgentlessNet provisioning network and host-port inventory
+  ansible.builtin.assert:
+    that:
+      - _agentless_net_provisioning_network is mapping
+      - _agentless_net_provisioning_network.get('name', '') is string
+      - _agentless_net_provisioning_network.get('name', '') | trim | length > 0
+      - _agentless_net_provisioning_network.get('vlan_id') is integer
+      - _agentless_net_provisioning_network.vlan_id | int >= 1
+      - _agentless_net_provisioning_network.vlan_id | int <= 4094
+      - _agentless_net_host_ports is mapping
+      - _agentless_net_host_ports | length > 0
+      - host_name in _agentless_net_host_ports
+      - _agentless_net_host_ports[host_name] is mapping
+      - network_attachment.logical_interface_name in _agentless_net_host_ports[host_name]
+    fail_msg: >-
+      AgentlessNet attachment requires a configured provisioning segment and an
+      exact host/interface to Cumulus port mapping.
+  no_log: true
+
+- name: Validate all configured host/interface port mappings
+  block:
+    - name: Initialize claimed switch ports
+      ansible.builtin.set_fact:
+        _agentless_net_attachment_port_claims: []
+      no_log: true
+
+    - name: Validate each mapped host
+      ansible.builtin.include_tasks: _validate_attachment_host_mapping.yaml
+      loop: "{{ _agentless_net_host_ports | dict2items }}"
+      loop_control:
+        loop_var: _agentless_net_host_mapping
+        label: "{{ _agentless_net_host_mapping.key }}"
+
+    - name: Reject duplicate host/interface switch-port mappings
+      ansible.builtin.assert:
+        that:
+          - _agentless_net_attachment_port_claims | length == (_agentless_net_attachment_port_claims | unique | length)
+        fail_msg: An AgentlessNet Cumulus access port is assigned to more than one host interface.
+      no_log: true
+
+- name: Resolve the requested AgentlessNet Cumulus access port
+  ansible.builtin.set_fact:
+    _agentless_net_attachment_port: >-
+      {{ _agentless_net_host_ports[host_name][network_attachment.logical_interface_name] }}
+  no_log: true
+
+- name: Validate the resolved port is not a declared Subnet trunk
+  ansible.builtin.assert:
+    that:
+      - _agentless_net_attachment_port.switch in groups['agentless_net_subnet_switches']
+      - _agentless_net_attachment_port.port not in
+        hostvars[_agentless_net_attachment_port.switch].trunk_ports
+    fail_msg: >-
+      AgentlessNet BareMetalInstance attachments require a mapped Cumulus access
+      port that is separate from every declared Subnet trunk.
+  no_log: true

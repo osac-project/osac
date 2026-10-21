@@ -34,6 +34,7 @@ options:
       - ensure_virtual_network
       - delete_virtual_network
       - get_subnet
+      - query_dhcp_lease
       - preflight_dhcp_supervisor
       - reserve_subnet
       - ensure_subnet
@@ -134,6 +135,10 @@ subnet:
   description: Validated Subnet provider state when found.
   returned: for Subnet actions when found
   type: dict
+lease:
+  description: Active DHCP lease matching the requested Subnet and NIC MAC.
+  returned: when a matching active lease is found
+  type: dict
 pool:
   description: Validated ExternalIPPool provider identity.
   returned: for ExternalIPPool actions when the pool exists or would be registered
@@ -161,6 +166,7 @@ def main() -> None:
                     "ensure_virtual_network",
                     "delete_virtual_network",
                     "get_subnet",
+                    "query_dhcp_lease",
                     "preflight_dhcp_supervisor",
                     "reserve_subnet",
                     "ensure_subnet",
@@ -192,6 +198,7 @@ def main() -> None:
                 "default": [],
             },
             "vip_cidr": {"type": "str", "default": ""},
+            "mac_address": {"type": "str"},
         },
         required_if=[
             (
@@ -209,6 +216,7 @@ def main() -> None:
                     "observed_switch_vlan_state",
                 ],
             ),
+            ("action", "query_dhcp_lease", ["mac_address"]),
             (
                 "action",
                 "ensure_external_ip_pool",
@@ -318,6 +326,18 @@ def main() -> None:
             )
             module.exit_json(changed=False, found=subnet is not None, subnet=subnet)
 
+        if params["action"] == "query_dhcp_lease":
+            lease = store.query_dhcp_lease(
+                params["uid"],
+                params["tenant_id"],
+                params["mac_address"],
+            )
+            module.exit_json(
+                changed=False,
+                found=lease is not None,
+                **({"lease": lease} if lease is not None else {}),
+            )
+
         if params["action"] == "preflight_dhcp_supervisor":
             module.exit_json(
                 changed=False,
@@ -340,6 +360,7 @@ def main() -> None:
                         parse_switch_vlan_exclusions(
                             switch.get("bridge_vlan_output"),
                             switch.get("reserved_vlan_output"),
+                            switch.get("switchd_reserved_vlan_output"),
                         )
                     )
             except SubnetProviderError as error:
@@ -411,6 +432,7 @@ def main() -> None:
             return
         if params["action"] in {
             "get_subnet",
+            "query_dhcp_lease",
             "preflight_dhcp_supervisor",
             "reserve_subnet",
             "ensure_subnet",

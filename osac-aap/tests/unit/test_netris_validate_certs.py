@@ -14,7 +14,7 @@ AAP_ROOT = Path(__file__).parents[2]
 def iter_uri_tasks(node):
     if isinstance(node, dict):
         for name, value in node.items():
-            if name in {"ansible.builtin.uri", "uri"} and isinstance(value, dict):
+            if name in {"netris.controller.protected_uri", "uri"} and isinstance(value, dict):
                 yield value
             yield from iter_uri_tasks(value)
     elif isinstance(node, list):

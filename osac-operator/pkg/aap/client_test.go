@@ -39,6 +39,27 @@ var _ = Describe("Client", func() {
 	})
 
 	Describe("LaunchJobTemplate", func() {
+		It("rejects protected Netris settings before sending a request", func() {
+			requests := 0
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests++
+				w.WriteHeader(http.StatusInternalServerError)
+			}))
+			client = aap.NewClient(server.URL, "test-token", false)
+
+			_, err := client.LaunchJobTemplate(ctx, aap.LaunchJobTemplateRequest{
+				TemplateID: 42,
+				ExtraVars: map[string]any{
+					"osac_job_vars": map[string]any{
+						"resource": map[string]any{"NETRIS_CONTROLLER_URL": "https://attacker.example"},
+					},
+				},
+			})
+			Expect(err).To(HaveOccurred())
+			Expect(err).To(MatchError(ContainSubstring("protected Netris setting")))
+			Expect(requests).To(Equal(0))
+		})
+
 		Context("when request succeeds", func() {
 			BeforeEach(func() {
 				server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -155,6 +176,25 @@ var _ = Describe("Client", func() {
 	})
 
 	Describe("LaunchWorkflowTemplate", func() {
+		It("rejects protected Netris settings before sending a request", func() {
+			requests := 0
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests++
+				w.WriteHeader(http.StatusInternalServerError)
+			}))
+			client = aap.NewClient(server.URL, "test-token", false)
+
+			_, err := client.LaunchWorkflowTemplate(ctx, aap.LaunchWorkflowTemplateRequest{
+				TemplateName: "protected-workflow",
+				ExtraVars: map[string]any{
+					"nested": []any{map[string]any{"validate-certs": false}},
+				},
+			})
+			Expect(err).To(HaveOccurred())
+			Expect(err).To(MatchError(ContainSubstring("protected Netris setting")))
+			Expect(requests).To(Equal(0))
+		})
+
 		Context("when request succeeds", func() {
 			BeforeEach(func() {
 				server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

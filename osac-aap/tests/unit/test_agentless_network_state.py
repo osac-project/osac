@@ -29,6 +29,7 @@ sys.path.insert(0, str(MODULE_UTILS))
 sys.path.insert(0, str(MODULE_UTILS.parents[4]))
 
 import agentless_net_network  # noqa: E402
+import agentless_net_subnet  # noqa: E402
 import agentless_net_state  # noqa: E402
 from agentless_net_state import StateCorrupt, StateError, StateStore  # noqa: E402
 
@@ -133,6 +134,20 @@ def reserve_subnet(
         vip,
         check_mode=check_mode,
     )
+
+
+def mark_subnet_ready(store, subnet):
+    ready = {**subnet, "phase": "ready"}
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            "UPDATE subnets SET phase = ?, payload = ? WHERE uid = ?",
+            (
+                "ready",
+                json.dumps(ready, sort_keys=True, separators=(",", ":")),
+                subnet["uid"],
+            ),
+        )
+    return ready
 
 
 def assert_store_lock_is_free(store):
@@ -1294,6 +1309,78 @@ def test_subnet_lifecycle_stays_functional_at_schema_v1(tmp_path, monkeypatch):
         delete_virtual_network(store, UID_ONE)
 
 
+def test_query_dhcp_lease_returns_matching_ready_subnet_lease_without_writes(
+    tmp_path, monkeypatch
+):
+    store = store_for(tmp_path)
+    ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    subnet, _ = reserve_subnet(store, uid=UID_TWO, cidr="10.0.1.0/24")
+    subnet = mark_subnet_ready(store, subnet)
+    lease_root = tmp_path / "dhcp"
+    lease_dir = lease_root / UID_ONE
+    lease_dir.mkdir(parents=True, mode=0o700)
+    lease_dir.chmod(0o700)
+    marker = lease_dir / ".initialized"
+    marker.write_text("initialized\n")
+    marker.chmod(0o600)
+    lease_file = lease_dir / "dnsmasq.leases"
+    lease_file.write_bytes(
+        b"200 aa:bb:cc:dd:ee:ff 10.0.1.22 client-a *\n"
+        b"200 02:00:00:00:00:02 10.0.2.22 client-b *\n"
+    )
+    lease_file.chmod(0o600)
+    monkeypatch.setattr(
+        agentless_net_state,
+        "dhcp_lease_path",
+        lambda uid: lease_root / uid / "dnsmasq.leases",
+    )
+    database_before = store.path.read_bytes()
+    lease_before = lease_file.read_bytes()
+
+    result = store.query_dhcp_lease(
+        UID_TWO, TENANT_ONE, "AA:BB:CC:DD:EE:FF", now=100
+    )
+
+    assert result == {
+        "ip_address": "10.0.1.22",
+        "mac_address": "aa:bb:cc:dd:ee:ff",
+    }
+    assert store.path.read_bytes() == database_before
+    assert lease_file.read_bytes() == lease_before
+
+
+def test_query_dhcp_lease_returns_none_for_missing_subnet_or_match(tmp_path):
+    store = store_for(tmp_path)
+
+    assert store.query_dhcp_lease(UID_TWO, TENANT_ONE, "aa:bb:cc:dd:ee:ff") is None
+
+
+def test_query_dhcp_lease_rejects_wrong_tenant_and_non_ready_subnet(tmp_path):
+    store = store_for(tmp_path)
+    ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    reserve_subnet(store, uid=UID_TWO, cidr="10.0.1.0/24")
+
+    with pytest.raises(StateError, match="tenant"):
+        store.query_dhcp_lease(UID_TWO, TENANT_TWO, "aa:bb:cc:dd:ee:ff")
+    with pytest.raises(StateError, match="ready Subnet"):
+        store.query_dhcp_lease(UID_TWO, TENANT_ONE, "aa:bb:cc:dd:ee:ff")
+
+
+def test_query_dhcp_lease_rejects_missing_initialized_lease_file(tmp_path, monkeypatch):
+    store = store_for(tmp_path)
+    ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    subnet, _ = reserve_subnet(store, uid=UID_TWO, cidr="10.0.1.0/24")
+    mark_subnet_ready(store, subnet)
+    monkeypatch.setattr(
+        agentless_net_state,
+        "dhcp_lease_path",
+        lambda uid: tmp_path / "dhcp" / uid / "dnsmasq.leases",
+    )
+
+    with pytest.raises(agentless_net_state.SubnetProviderError, match="lease directory"):
+        store.query_dhcp_lease(UID_TWO, TENANT_ONE, "aa:bb:cc:dd:ee:ff")
+
+
 def test_check_mode_subnet_reservation_does_not_create_a_row(tmp_path):
     store = store_for(tmp_path)
     parent = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
@@ -1939,6 +2026,63 @@ def test_external_ip_pool_cannot_be_deleted_while_addresses_are_reserved(tmp_pat
     )
     assert deleted == pool
     assert changed is True
+
+
+@pytest.mark.parametrize(
+    ("lease", "expected"),
+    [
+        (
+            {"ip_address": "10.0.1.22", "mac_address": "aa:bb:cc:dd:ee:ff"},
+            {
+                "changed": False,
+                "found": True,
+                "lease": {"ip_address": "10.0.1.22", "mac_address": "aa:bb:cc:dd:ee:ff"},
+            },
+        ),
+        (None, {"changed": False, "found": False}),
+    ],
+)
+def test_query_dhcp_lease_module_dispatches_read_only_lookup(
+    monkeypatch, lease, expected
+):
+    module = importlib.import_module(
+        "ansible_collections.osac.templates.plugins.modules.agentless_net_state"
+    )
+
+    class ModuleExit(Exception):
+        pass
+
+    calls = {}
+    module_object = SimpleNamespace(
+        params={
+            "action": "query_dhcp_lease",
+            "state_file": "/unused/state.sqlite3",
+            "uid": UID_TWO,
+            "tenant_id": TENANT_ONE,
+            "mac_address": "AA:BB:CC:DD:EE:FF",
+        },
+        check_mode=True,
+        exit_json=lambda **kwargs: (_ for _ in ()).throw(ModuleExit(kwargs)),
+        fail_json=lambda **kwargs: pytest.fail(f"unexpected module error: {kwargs}"),
+    )
+    monkeypatch.setattr(
+        module,
+        "AnsibleModule",
+        lambda **kwargs: calls.update(kwargs) or module_object,
+    )
+    store = Mock()
+    store.query_dhcp_lease.return_value = lease
+    monkeypatch.setattr(module, "StateStore", lambda path: store)
+
+    with pytest.raises(ModuleExit) as result:
+        module.main()
+
+    assert result.value.args[0] == expected
+    store.query_dhcp_lease.assert_called_once_with(
+        UID_TWO, TENANT_ONE, "AA:BB:CC:DD:EE:FF"
+    )
+    assert ("action", "query_dhcp_lease", ["mac_address"]) in calls["required_if"]
+    assert calls["supports_check_mode"] is True
 
 
 @pytest.mark.parametrize(

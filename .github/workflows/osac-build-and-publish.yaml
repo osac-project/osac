@@ -1059,6 +1059,8 @@ jobs:
           bare-metal-fulfillment-operator) IMAGES=(ghcr.io/osac-project/bare-metal-fulfillment-operator) ;;
           osac-metering) IMAGES=(ghcr.io/osac-project/metering-service ghcr.io/osac-project/metering-m360-adapter ghcr.io/osac-project/metering-echo-adapter) ;;
           osac-csi-driver) IMAGES=(ghcr.io/osac-project/osac-csi-driver) ;;
+          # osac-ui uses the same bare SemVer target as every other component.
+          # Historical v* tags came from the archived standalone publish job.
           osac-ui) IMAGES=(ghcr.io/osac-project/osac-ui) ;;
         esac
 

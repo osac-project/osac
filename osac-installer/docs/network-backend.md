@@ -73,6 +73,13 @@ provisioning. Cluster fulfillment receives `NETWORK_CLASS` /
 `NETWORK_STEPS_COLLECTION` plus cluster-specific Netris fields; network
 fulfillment receives the shared Netris connection fields only.
 
+The generated Netris connection fields are installation-owned. Do not set
+`NETRIS_CONTROLLER_URL`, `NETRIS_VALIDATE_CERTS`, or `NETRIS_CA_PATH` in the
+low-level `aap.instanceGroups.*.config` or `secret` maps; Helm rejects those
+keys and their supported aliases. Managed execution pods export all three
+canonical names explicitly and reject protected `extra_vars` before a Netris
+request. Keep ordinary launch variables enabled for OSAC resource payloads.
+
 ## Netris example
 
 ```yaml
@@ -246,10 +253,12 @@ Prefer the facade above. When not using it, set variables on
 
 ### ConfigMap variables
 
+The installation-owned controller URL, certificate-validation mode, and CA
+path are not expert-overridable here. Configure them with
+`global.networking.netris`.
+
 | Variable | Description |
 |----------|-------------|
-| `NETRIS_CONTROLLER_URL` | Netris controller API URL |
-| `NETRIS_VALIDATE_CERTS` | Whether Netris TLS certificates are verified |
 | `NETRIS_USERNAME` | Netris API username |
 | `NETRIS_SITE_ID` | Netris site ID (integer) |
 | `NETRIS_TENANT_ID` | Netris tenant ID (integer) |
@@ -315,7 +324,6 @@ aap:
       config:
         NETWORK_CLASS: "netris"
         NETWORK_STEPS_COLLECTION: "netris.steps"
-        NETRIS_CONTROLLER_URL: "https://redhat-ctl.netris.io"
         NETRIS_USERNAME: "netris"
         NETRIS_SITE_ID: "5"
         NETRIS_TENANT_ID: "1"
@@ -328,7 +336,6 @@ aap:
     networkFulfillment:
       enabled: true
       config:
-        NETRIS_CONTROLLER_URL: "https://redhat-ctl.netris.io"
         NETRIS_USERNAME: "netris"
         NETRIS_SITE_ID: "5"
         NETRIS_TENANT_ID: "1"

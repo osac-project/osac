@@ -212,6 +212,11 @@ func (s *ProjectsServer) Create(ctx context.Context,
 
 func (s *ProjectsServer) Update(ctx context.Context,
 	request *publicv1.ProjectsUpdateRequest) (response *publicv1.ProjectsUpdateResponse, err error) {
+	ctx = withPublicAPIView(ctx)
+	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
+		return nil, err
+	}
+
 	privateObject := &privatev1.Project{}
 	err = s.inMapper.Copy(ctx, request.GetObject(), privateObject)
 	if err != nil {

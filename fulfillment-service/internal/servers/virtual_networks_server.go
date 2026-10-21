@@ -212,7 +212,7 @@ func (s *VirtualNetworksServer) Create(ctx context.Context,
 			"Failed to map public virtual network to private",
 			slog.Any("error", err),
 		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process virtual network")
+		err = publicInputMappingError(err, "failed to process virtual network")
 		return
 	}
 

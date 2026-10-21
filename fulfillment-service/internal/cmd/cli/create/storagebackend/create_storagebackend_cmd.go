@@ -73,6 +73,7 @@ func Cmd() *cobra.Command {
 		"",
 		descriptionFlagHelp,
 	)
+	flags.BoolVar(&runner.cspManaged, "csp-managed", false, cspManagedFlagHelp)
 	return result
 }
 
@@ -84,6 +85,7 @@ type runnerContext struct {
 	username    string
 	password    string
 	description string
+	cspManaged  bool
 }
 
 func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
@@ -101,14 +103,21 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	if c.provider == "" {
 		return fmt.Errorf("provider is required")
 	}
-	if c.endpoint == "" {
+	if !c.cspManaged && c.endpoint == "" {
 		return fmt.Errorf("endpoint is required")
 	}
-	if c.username == "" {
-		return fmt.Errorf("username is required")
-	}
-	if c.password == "" {
-		return fmt.Errorf("password is required")
+	var credentials *privatev1.StorageBackendCredentials
+	if !c.cspManaged || c.username != "" || c.password != "" {
+		if c.username == "" {
+			return fmt.Errorf("username is required")
+		}
+		if c.password == "" {
+			return fmt.Errorf("password is required")
+		}
+		credentials = privatev1.StorageBackendCredentials_builder{
+			Username: c.username,
+			Password: c.password,
+		}.Build()
 	}
 
 	conn, err := cfg.Connect(ctx, cmd.Flags())
@@ -127,10 +136,8 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 			Provider:    c.provider,
 			Description: c.description,
 			Endpoint:    c.endpoint,
-			Credentials: privatev1.StorageBackendCredentials_builder{
-				Username: c.username,
-				Password: c.password,
-			}.Build(),
+			Credentials: credentials,
+			CspManaged:  c.cspManaged,
 		}.Build(),
 	}.Build()
 
@@ -155,6 +162,9 @@ A storage backend represents a registered storage array (e.g., VAST, Ceph, Pure)
 endpoint and credentials. Storage backends are managed by Cloud Provider Admins via the private API.
 Tenants interact with storage indirectly through storage tiers.
 
+Use {{ bt }}--csp-managed{{ bt }} when the Cloud Provider Admin manages the storage resources.
+Endpoint and credentials are optional in this mode. Ownership cannot be changed after creation.
+
 To create a storage backend:
 
 {{ bt 3 }}shell
@@ -163,6 +173,12 @@ To create a storage backend:
   --endpoint https://storage.example.com:8443 \
   --username admin \
   --password secret
+{{ bt 3 }}
+
+To register CSP-managed storage without management credentials:
+
+{{ bt 3 }}shell
+{{ binary }} create storagebackend --name netapp-prod --provider netapp --csp-managed
 {{ bt 3 }}
 `
 
@@ -178,16 +194,24 @@ _PROVIDER_ - Storage provider identifier (e.g., {{ bt }}vast{{ bt }}, {{ bt }}ce
 
 const endpointFlagHelp = `
 _URL_ - Management endpoint for the storage array (e.g., {{ bt }}https://storage.example.com:8443{{ bt }}).
+Optional with {{ bt }}--csp-managed{{ bt }}.
 `
 
 const usernameFlagHelp = `
 _USERNAME_ - Username for storage management API authentication.
+Optional with {{ bt }}--csp-managed{{ bt }}. If supplied, password is required.
 `
 
 const passwordFlagHelp = `
 _PASSWORD_ - Password for storage management API authentication.
+Optional with {{ bt }}--csp-managed{{ bt }}. If supplied, username is required.
 `
 
 const descriptionFlagHelp = `
 _DESCRIPTION_ - Human-readable description of the storage backend.
+`
+
+const cspManagedFlagHelp = `
+_BOOLEAN_ - Storage resources are managed by the Cloud Provider Admin. Defaults to false.
+Immutable after creation. Endpoint and credentials are optional when true.
 `

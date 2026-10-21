@@ -155,9 +155,10 @@
   gather_facts: false
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    netris_controller_url: https://managed.example
     netris_ca_config_map_name: ""
     netris_validate_certs: true
-    netris_ca_path: /etc/netris/ca/bundle.pem
+    netris_ca_path: ""
     remote_cluster_kubeconfig_secret_name: ""
     _template_path: >-
       {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/templates/networking-operations-ig.j2
@@ -176,13 +177,29 @@
         that:
           - >-
             _networking_pod.spec.containers[0].env
+            | selectattr('name', 'equalto', 'NETRIS_CONTROLLER_URL')
+            | selectattr('value', 'equalto', 'https://managed.example')
+            | list | length == 1
+          - >-
+            _networking_pod.spec.containers[0].env
             | selectattr('name', 'equalto', 'NETRIS_VALIDATE_CERTS')
             | selectattr('value', 'equalto', 'true')
             | list | length == 1
           - >-
             _networking_pod.spec.containers[0].env
             | selectattr('name', 'equalto', 'NETRIS_CA_PATH')
-            | list | length == 0
+            | selectattr('value', 'equalto', '')
+            | list | length == 1
+          - >-
+            _networking_pod.spec.containers[0].env
+            | selectattr('name', 'equalto', 'ANSIBLE_STRATEGY')
+            | selectattr('value', 'equalto', 'netris.controller.protected_linear')
+            | list | length == 1
+          - >-
+            _networking_pod.spec.containers[0].env
+            | selectattr('name', 'equalto', 'OSAC_LAUNCH_EXTRA_VARS_PATH')
+            | selectattr('value', 'equalto', '/runner/env/extravars')
+            | list | length == 1
           - >-
             _networking_pod.spec.volumes
             | selectattr('name', 'equalto', 'netris-ca-bundle')
@@ -196,6 +213,7 @@
   gather_facts: false
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    netris_controller_url: https://managed.example
     netris_ca_config_map_name: customer-netris-ca
     netris_validate_certs: true
     netris_ca_path: /etc/netris/ca/bundle.pem
@@ -234,6 +252,11 @@
           - _netris_ca_volume.configMap['items'][0].path == 'bundle.pem'
           - >-
             _networking_pod_with_ca.spec.containers[0].env
+            | selectattr('name', 'equalto', 'NETRIS_CONTROLLER_URL')
+            | selectattr('value', 'equalto', 'https://managed.example')
+            | list | length == 1
+          - >-
+            _networking_pod_with_ca.spec.containers[0].env
             | selectattr('name', 'equalto', 'NETRIS_CA_PATH')
             | selectattr('value', 'equalto', '/etc/netris/ca/bundle.pem')
             | list | length == 1
@@ -251,6 +274,7 @@
   gather_facts: false
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    netris_controller_url: https://managed.example
     netris_ca_config_map_name: customer-netris-ca
     netris_validate_certs: true
     netris_ca_path: /etc/netris/ca/bundle.pem
@@ -293,6 +317,11 @@
              | list | first).configMap.optional == false
           - >-
             _cluster_pod_with_ca.spec.containers[0].env
+            | selectattr('name', 'equalto', 'NETRIS_CONTROLLER_URL')
+            | selectattr('value', 'equalto', 'https://managed.example')
+            | list | length == 1
+          - >-
+            _cluster_pod_with_ca.spec.containers[0].env
             | selectattr('name', 'equalto', 'NETRIS_VALIDATE_CERTS')
             | selectattr('value', 'equalto', 'true')
             | list | length == 1
@@ -300,6 +329,16 @@
             _cluster_pod_with_ca.spec.containers[0].env
             | selectattr('name', 'equalto', 'NETRIS_CA_PATH')
             | selectattr('value', 'equalto', '/etc/netris/ca/bundle.pem')
+            | list | length == 1
+          - >-
+            _cluster_pod_with_ca.spec.containers[0].env
+            | selectattr('name', 'equalto', 'ANSIBLE_STRATEGY')
+            | selectattr('value', 'equalto', 'netris.controller.protected_linear')
+            | list | length == 1
+          - >-
+            _cluster_pod_with_ca.spec.containers[0].env
+            | selectattr('name', 'equalto', 'OSAC_LAUNCH_EXTRA_VARS_PATH')
+            | selectattr('value', 'equalto', '/runner/env/extravars')
             | list | length == 1
         fail_msg: >-
           Cluster fulfillment must receive the same Netris CA and validation
@@ -310,6 +349,7 @@
   gather_facts: false
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    netris_controller_url: https://managed.example
     netris_ca_config_map_name: customer-netris-ca
     netris_validate_certs: false
     netris_ca_path: /etc/netris/ca/bundle.pem
@@ -337,6 +377,11 @@
     - name: Assert disabled validation is propagated without dropping the CA
       ansible.builtin.assert:
         that:
+          - >-
+            item.pod.spec.containers[0].env
+            | selectattr('name', 'equalto', 'NETRIS_CONTROLLER_URL')
+            | selectattr('value', 'equalto', 'https://managed.example')
+            | list | length == 1
           - >-
             item.pod.spec.containers[0].env
             | selectattr('name', 'equalto', 'NETRIS_VALIDATE_CERTS')

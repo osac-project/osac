@@ -250,7 +250,7 @@ pnpm build  # Builds frontend + proxy binary
 
 **Type generation**:
 - libs/types uses @bufbuild/buf to generate TS types and Connect service descriptors from protobuf
-- Run `pnpm gen-types` only when deliberately advancing the UI's selected API baseline; do not regenerate merely because monorepo proto sources changed
+- AI agents must not advance the UI API baseline unless the user explicitly asks for a UI API-version bump; dedicated API-release automation may also perform the bump. When authorized, change `libs/types/.buf-api-version`, run `pnpm gen-types`, and commit the generated files together
 - Never edit libs/types/src/*.ts manually
 
 **i18n build**:
@@ -287,10 +287,6 @@ pnpm build  # Builds frontend + proxy binary
 - i18next-cli extracts to `libs/i18n/locales/en/translation.json` (generated, not hand-edited)
 - Runtime: i18next-http-backend loads from `/locales/{{lng}}/{{ns}}.json`
 - CI enforces sync: `pnpm run i18n --ci` (fails if out of date)
-
-**Type generation**:
-- Protobuf → TypeScript + service descriptors via @bufbuild/buf
-- Never edit libs/types/src/*.ts manually — regenerate with `pnpm gen-types` only when deliberately advancing the UI's selected API baseline
 
 **Component organization** (libs/ui-components/src):
 - `components/`: catalog, catalogProvision, Cluster, dashboard, Form, Page, Primitives, Resource, vm, shared

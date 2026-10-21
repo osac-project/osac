@@ -15,11 +15,14 @@ package validation
 
 import (
 	"buf.build/go/protovalidate"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 var _ = Describe("BareMetalHardwareSpec contract validation", func() {
@@ -31,6 +34,43 @@ var _ = Describe("BareMetalHardwareSpec contract validation", func() {
 		Expect(err).ToNot(HaveOccurred())
 	})
 
+	DescribeTable("accepts only exact canonical architectures in both API schemas",
+		func(architecture string, accepted bool) {
+			for _, cpu := range []proto.Message{
+				privatev1.BareMetalCPUSpec_builder{Cores: 4, ThreadsPerCore: 2, Architecture: architecture}.Build(),
+				publicv1.BareMetalCPUSpec_builder{Cores: 4, ThreadsPerCore: 2, Architecture: architecture}.Build(),
+			} {
+				field := cpu.ProtoReflect().Descriptor().Fields().ByName("architecture")
+				Expect(field.Number()).To(Equal(protoreflect.FieldNumber(2)))
+				Expect(field.Kind()).To(Equal(protoreflect.StringKind))
+				err := validator.Validate(cpu)
+				if accepted {
+					Expect(err).ToNot(HaveOccurred())
+				} else {
+					Expect(err).To(HaveOccurred())
+					Expect(err.Error()).To(And(ContainSubstring("architecture"), ContainSubstring("amd64"),
+						ContainSubstring("arm64"), ContainSubstring("s390x")))
+				}
+			}
+		},
+		Entry("amd64", "amd64", true),
+		Entry("arm64", "arm64", true),
+		Entry("s390x", "s390x", true),
+		Entry("x86 alias", "x86_64", false),
+		Entry("arm alias", "aarch64", false),
+		Entry("uppercase x86", "AMD64", false),
+		Entry("uppercase arm", "ARM64", false),
+		Entry("uppercase s390x", "S390X", false),
+		Entry("mixed case", "Amd64", false),
+		Entry("leading space", " amd64", false),
+		Entry("trailing space", "amd64 ", false),
+		Entry("arm whitespace", " arm64 ", false),
+		Entry("s390x whitespace", " s390x ", false),
+		Entry("newline", "amd64\n", false),
+		Entry("empty", "", false),
+		Entry("unknown", "ppc64le", false),
+	)
+
 	Describe("Fabric port requirement", func() {
 		DescribeTable("accepts hardware spec with at least one fabric port",
 			func(spec *privatev1.BareMetalHardwareSpec) {
@@ -39,7 +79,7 @@ var _ = Describe("BareMetalHardwareSpec contract validation", func() {
 			Entry("single fabric port", privatev1.BareMetalHardwareSpec_builder{
 				Cpu: privatev1.BareMetalCPUSpec_builder{
 					Cores:          32,
-					Architecture:   "x86_64",
+					Architecture:   "amd64",
 					ThreadsPerCore: 2,
 				}.Build(),
 				Memory: privatev1.BareMetalMemorySpec_builder{
@@ -57,7 +97,7 @@ var _ = Describe("BareMetalHardwareSpec contract validation", func() {
 			Entry("fabric port among other roles", privatev1.BareMetalHardwareSpec_builder{
 				Cpu: privatev1.BareMetalCPUSpec_builder{
 					Cores:          16,
-					Architecture:   "x86_64",
+					Architecture:   "amd64",
 					ThreadsPerCore: 2,
 				}.Build(),
 				Memory: privatev1.BareMetalMemorySpec_builder{
@@ -87,7 +127,7 @@ var _ = Describe("BareMetalHardwareSpec contract validation", func() {
 			Entry("multiple fabric ports", privatev1.BareMetalHardwareSpec_builder{
 				Cpu: privatev1.BareMetalCPUSpec_builder{
 					Cores:          64,
-					Architecture:   "aarch64",
+					Architecture:   "arm64",
 					ThreadsPerCore: 1,
 				}.Build(),
 				Memory: privatev1.BareMetalMemorySpec_builder{
@@ -119,7 +159,7 @@ var _ = Describe("BareMetalHardwareSpec contract validation", func() {
 			Entry("no network ports", privatev1.BareMetalHardwareSpec_builder{
 				Cpu: privatev1.BareMetalCPUSpec_builder{
 					Cores:          32,
-					Architecture:   "x86_64",
+					Architecture:   "amd64",
 					ThreadsPerCore: 2,
 				}.Build(),
 				Memory: privatev1.BareMetalMemorySpec_builder{
@@ -129,7 +169,7 @@ var _ = Describe("BareMetalHardwareSpec contract validation", func() {
 			Entry("only management ports", privatev1.BareMetalHardwareSpec_builder{
 				Cpu: privatev1.BareMetalCPUSpec_builder{
 					Cores:          16,
-					Architecture:   "x86_64",
+					Architecture:   "amd64",
 					ThreadsPerCore: 2,
 				}.Build(),
 				Memory: privatev1.BareMetalMemorySpec_builder{
@@ -147,7 +187,7 @@ var _ = Describe("BareMetalHardwareSpec contract validation", func() {
 			Entry("storage and lifecycle ports but no fabric", privatev1.BareMetalHardwareSpec_builder{
 				Cpu: privatev1.BareMetalCPUSpec_builder{
 					Cores:          8,
-					Architecture:   "x86_64",
+					Architecture:   "amd64",
 					ThreadsPerCore: 2,
 				}.Build(),
 				Memory: privatev1.BareMetalMemorySpec_builder{
@@ -176,7 +216,7 @@ var _ = Describe("BareMetalHardwareSpec contract validation", func() {
 			spec := privatev1.BareMetalHardwareSpec_builder{
 				Cpu: privatev1.BareMetalCPUSpec_builder{
 					Cores:          16,
-					Architecture:   "x86_64",
+					Architecture:   "amd64",
 					ThreadsPerCore: 2,
 				}.Build(),
 				Memory: privatev1.BareMetalMemorySpec_builder{

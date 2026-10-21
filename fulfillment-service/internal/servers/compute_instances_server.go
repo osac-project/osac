@@ -229,7 +229,7 @@ func (s *ComputeInstancesServer) Create(ctx context.Context,
 			"Failed to map public compute instance to private",
 			slog.Any("error", err),
 		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process compute instance")
+		err = publicInputMappingError(err, "failed to process compute instance")
 		return
 	}
 	// The status is output-only: only the system writes it. The metering source contract
@@ -270,6 +270,11 @@ func (s *ComputeInstancesServer) Create(ctx context.Context,
 
 func (s *ComputeInstancesServer) Update(ctx context.Context,
 	request *publicv1.ComputeInstancesUpdateRequest) (response *publicv1.ComputeInstancesUpdateResponse, err error) {
+	ctx = withPublicAPIView(ctx)
+	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
+		return nil, err
+	}
+
 	// Validate the request:
 	publicComputeInstance := request.GetObject()
 	if publicComputeInstance == nil {
@@ -329,7 +334,7 @@ func (s *ComputeInstancesServer) Update(ctx context.Context,
 			"Failed to map public compute instance to private",
 			slog.Any("error", err),
 		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process compute instance")
+		err = publicInputMappingError(err, "failed to process compute instance")
 		return
 	}
 	// The public API has no writable status, and the mapper copies the fields the request

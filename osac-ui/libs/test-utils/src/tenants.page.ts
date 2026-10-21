@@ -4,6 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  confirmRowDeletion,
+  expectRowNotToExist,
+  getTableRowByCellText,
+} from './general/row_assertions';
+import {
   TenantsCreatePage,
   TenantsCredentialsPage,
   TenantsDeletePage,
@@ -18,13 +23,12 @@ const exactText = (value: string): RegExp =>
   new RegExp(`^\\s*${escapeRegExp(value.normalize('NFC'))}\\s*$`);
 
 const getTenantRow = (page: Page, tenantName: string): Locator => {
-  const tenantRows = page
-    .getByRole(...TenantsMainPage.tenantsTable)
-    .locator(...TenantsMainPage.tenantRows);
-  const tenantNameCell = tenantRows
-    .locator(...TenantsMainPage.tenantNameCell)
-    .filter({ hasText: exactText(tenantName) });
-  return tenantNameCell.locator('..');
+  return getTableRowByCellText(
+    page.getByRole(...TenantsMainPage.tenantsTable),
+    TenantsMainPage.tenantRows,
+    TenantsMainPage.tenantNameCell,
+    exactText(tenantName),
+  );
 };
 
 const getTenantNames = async (page: Page): Promise<string[]> =>
@@ -60,16 +64,10 @@ export const expectTenantToExist = async (
 
 /** Verify that the requested tenant is not already present on the Tenants page. */
 export const expectTenantNotToExist = async (page: Page, tenantName: string): Promise<void> => {
-  const tenantRow = getTenantRow(page, tenantName);
-  try {
-    await expectTenantToExist(page, tenantName, 3_000);
-  } catch {
-    if ((await tenantRow.count()) === 0) {
-      return;
-    }
-  }
-
-  throw new Error(`Cannot create tenant "${tenantName}": a tenant with this name already exists.`);
+  await expectRowNotToExist(
+    getTenantRow(page, tenantName),
+    `Cannot create tenant "${tenantName}": a tenant with this name already exists.`,
+  );
 };
 
 /** Fill and submit the tenant creation form. */
@@ -179,30 +177,17 @@ export const deleteTenant = async (page: Page, tenantName: string): Promise<void
   await tenantRow.locator(...TenantsMainPage.tenantActionsToggle).click();
   await page.getByRole(...TenantsDeletePage.deleteMenuItem).click();
 
-  // Verify the delete dialog, tenant-specific title, and warning text.
+  // Verify the delete dialog, tenant-specific title, warning text, and row removal.
   const deleteDialog = page.locator(...TenantsDeletePage.deleteDialog);
-  await expect(deleteDialog).toBeVisible();
-  await expect(deleteDialog.locator(...TenantsDeletePage.deleteTitle)).toContainText(
-    `Delete ${tenantName}?`,
+  await confirmRowDeletion(
+    tenantRow,
+    deleteDialog,
+    deleteDialog.locator(...TenantsDeletePage.deleteTitle),
+    deleteDialog.getByText(...TenantsDeletePage.deleteWarning),
+    deleteDialog.getByRole(...TenantsDeletePage.deleteButton),
+    tenantName,
+    'Tenant',
+    120_000,
+    tenantRow.locator(...TenantsMainPage.tenantStatusCell),
   );
-  await expect(deleteDialog.getByText(...TenantsDeletePage.deleteWarning)).toBeVisible();
-
-  // Confirm deletion and wait for the dialog and tenant row to disappear.
-  await deleteDialog.getByRole(...TenantsDeletePage.deleteButton).click();
-  await expect(deleteDialog).toBeHidden();
-  try {
-    await expect(tenantRow).toHaveCount(0, { timeout: 120_000 });
-  } catch {
-    const remainingRows = await tenantRow.count();
-    const currentStatus =
-      remainingRows === 1
-        ? ((await tenantRow.locator(...TenantsMainPage.tenantStatusCell).textContent())?.trim() ??
-          'unknown')
-        : 'unknown';
-
-    throw new Error(
-      `Tenant "${tenantName}" was not removed from the Tenants table within 120 seconds ` +
-        `after deletion. The row is still present with status "${currentStatus}".`,
-    );
-  }
 };

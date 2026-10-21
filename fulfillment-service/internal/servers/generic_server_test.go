@@ -15,12 +15,14 @@ package servers
 
 import (
 	"context"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc/codes"
 	grpcmetadata "google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
@@ -29,6 +31,269 @@ import (
 )
 
 var _ = Describe("Generic server", func() {
+	It("preserves reserved metadata from the locked object on public updates", func() {
+		server, err := NewGenericServer[*privatev1.BareMetalInstanceTemplate]().
+			SetLogger(logger).
+			SetService(privatev1.BareMetalInstanceTemplates_ServiceDesc.ServiceName).
+			SetAttributionLogic(attribution).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		createResponse := &privatev1.BareMetalInstanceTemplatesCreateResponse{}
+		err = server.Create(ctx, privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceTemplate_builder{
+				Id: "public_reserved_metadata_update",
+				Metadata: privatev1.Metadata_builder{
+					Name: "public-reserved-metadata-update",
+					Labels: map[string]string{
+						"admin.osac.openshift.io/managed": "system",
+						"ordinary":                        "before",
+					},
+					Annotations: map[string]string{
+						"provider.admin.osac.openshift.io/id": "provider",
+						"ordinary":                            "before",
+					},
+				}.Build(),
+				Description: "before",
+			}.Build(),
+		}.Build(), &createResponse)
+		Expect(err).ToNot(HaveOccurred())
+
+		updateResponse := &privatev1.BareMetalInstanceTemplatesUpdateResponse{}
+		err = server.UpdateWithCandidatePreparation(withPublicAPIView(ctx), privatev1.BareMetalInstanceTemplatesUpdateRequest_builder{
+			Object: privatev1.BareMetalInstanceTemplate_builder{
+				Id: createResponse.GetObject().GetId(),
+				Metadata: privatev1.Metadata_builder{
+					Name:   createResponse.GetObject().GetMetadata().GetName(),
+					Labels: map[string]string{"ordinary": "after"},
+				}.Build(),
+				Description: "after",
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels", "description"}},
+		}.Build(), &updateResponse, func(_ context.Context, current, candidate *privatev1.BareMetalInstanceTemplate) error {
+			Expect(current.GetMetadata().GetLabels()).To(HaveKeyWithValue("admin.osac.openshift.io/managed", "system"))
+			Expect(current.GetMetadata().GetAnnotations()).To(HaveKeyWithValue("provider.admin.osac.openshift.io/id", "provider"))
+			candidate.GetMetadata().GetLabels()["admin.osac.openshift.io/managed"] = "callback-value"
+			delete(candidate.GetMetadata().GetAnnotations(), "provider.admin.osac.openshift.io/id")
+			return nil
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(updateResponse.GetObject().GetMetadata().GetLabels()).To(Equal(map[string]string{
+			"admin.osac.openshift.io/managed": "system",
+			"ordinary":                        "after",
+		}))
+		Expect(updateResponse.GetObject().GetMetadata().GetAnnotations()).To(Equal(map[string]string{
+			"provider.admin.osac.openshift.io/id": "provider",
+			"ordinary":                            "before",
+		}))
+
+		clearResponse := &privatev1.BareMetalInstanceTemplatesUpdateResponse{}
+		err = server.Update(withPublicAPIView(ctx), privatev1.BareMetalInstanceTemplatesUpdateRequest_builder{
+			Object: privatev1.BareMetalInstanceTemplate_builder{
+				Id: createResponse.GetObject().GetId(),
+				Metadata: privatev1.Metadata_builder{
+					Labels: map[string]string{},
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+		}.Build(), &clearResponse)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(clearResponse.GetObject().GetMetadata().GetLabels()).To(Equal(map[string]string{
+			"admin.osac.openshift.io/managed": "system",
+		}))
+
+		privateUpdateResponse := &privatev1.BareMetalInstanceTemplatesUpdateResponse{}
+		err = server.Update(ctx, privatev1.BareMetalInstanceTemplatesUpdateRequest_builder{
+			Object: privatev1.BareMetalInstanceTemplate_builder{
+				Id: createResponse.GetObject().GetId(),
+				Metadata: privatev1.Metadata_builder{
+					Name:   createResponse.GetObject().GetMetadata().GetName(),
+					Labels: map[string]string{"ordinary": "private"},
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+		}.Build(), &privateUpdateResponse)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(privateUpdateResponse.GetObject().GetMetadata().GetLabels()).To(Equal(map[string]string{"ordinary": "private"}))
+	})
+
+	It("rejects a stale version when public update locking is requested", func() {
+		server, err := NewGenericServer[*privatev1.BareMetalInstanceTemplate]().
+			SetLogger(logger).
+			SetService(privatev1.BareMetalInstanceTemplates_ServiceDesc.ServiceName).
+			SetAttributionLogic(attribution).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		createResponse := &privatev1.BareMetalInstanceTemplatesCreateResponse{}
+		err = server.Create(ctx, privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceTemplate_builder{
+				Id:          "public_stale_lock",
+				Metadata:    privatev1.Metadata_builder{Name: "public-stale-lock"}.Build(),
+				Description: "before",
+			}.Build(),
+		}.Build(), &createResponse)
+		Expect(err).ToNot(HaveOccurred())
+		stale := proto.Clone(createResponse.GetObject()).(*privatev1.BareMetalInstanceTemplate)
+
+		updated := &privatev1.BareMetalInstanceTemplatesUpdateResponse{}
+		err = server.Update(withPublicAPIView(ctx), privatev1.BareMetalInstanceTemplatesUpdateRequest_builder{
+			Object: privatev1.BareMetalInstanceTemplate_builder{
+				Id:          createResponse.GetObject().GetId(),
+				Description: "after",
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"description"}},
+		}.Build(), &updated)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(updated.GetObject().GetMetadata().GetVersion()).To(BeNumerically(">", stale.GetMetadata().GetVersion()))
+
+		stale.SetDescription("stale update")
+		var staleResponse privatev1.BareMetalInstanceTemplatesUpdateResponse
+		err = server.Update(withPublicAPIView(ctx), privatev1.BareMetalInstanceTemplatesUpdateRequest_builder{
+			Object:     stale,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"description"}},
+			Lock:       true,
+		}.Build(), &staleResponse)
+		Expect(status.Code(err)).To(Equal(codes.Aborted))
+	})
+
+	It("preserves the latest reserved metadata after waiting for a concurrent update", func() {
+		server, err := NewGenericServer[*privatev1.BareMetalInstanceTemplate]().
+			SetLogger(logger).
+			SetService(privatev1.BareMetalInstanceTemplates_ServiceDesc.ServiceName).
+			SetAttributionLogic(attribution).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		createResponse := &privatev1.BareMetalInstanceTemplatesCreateResponse{}
+		err = server.Create(ctx, privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceTemplate_builder{
+				Id: "concurrent_reserved_metadata",
+				Metadata: privatev1.Metadata_builder{
+					Name: "concurrent-reserved-metadata",
+					Labels: map[string]string{
+						"admin.osac.openshift.io/managed":         "original",
+						"operator.admin.osac.openshift.io/remove": "remove-me",
+						"ordinary": "original",
+					},
+					Annotations: map[string]string{
+						"admin.osac.openshift.io/provider": "original",
+						"ordinary":                         "original",
+					},
+				}.Build(),
+				Description: "retained through the public update",
+			}.Build(),
+		}.Build(), &createResponse)
+		Expect(err).ToNot(HaveOccurred())
+
+		// Commit the fixture so two independent database transactions can update it.
+		Expect(suiteTx.End(ctx)).To(Succeed())
+		suiteTx = nil
+
+		var publicTx database.Tx
+		var updateDone chan error
+		writerTx, err := tm.Begin(context.Background())
+		Expect(err).ToNot(HaveOccurred())
+		writerCtx := database.TxIntoContext(context.Background(), writerTx)
+		DeferCleanup(func() {
+			if writerTx != nil {
+				_ = writerTx.End(context.Background())
+				writerTx = nil
+			}
+			if updateDone != nil {
+				select {
+				case <-updateDone:
+				case <-time.After(10 * time.Second):
+				}
+			}
+			if publicTx != nil {
+				_ = publicTx.End(context.Background())
+				publicTx = nil
+			}
+		})
+		writerResponse := &privatev1.BareMetalInstanceTemplatesUpdateResponse{}
+		err = server.Update(writerCtx, privatev1.BareMetalInstanceTemplatesUpdateRequest_builder{
+			Object: privatev1.BareMetalInstanceTemplate_builder{
+				Id: createResponse.GetObject().GetId(),
+				Metadata: privatev1.Metadata_builder{
+					Labels: map[string]string{
+						"admin.osac.openshift.io/managed":        "updated-by-writer",
+						"operator.admin.osac.openshift.io/added": "added-by-writer",
+						"ordinary":                               "updated-by-writer",
+					},
+					Annotations: map[string]string{
+						"admin.osac.openshift.io/provider": "updated-by-writer",
+					},
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels", "metadata.annotations"}},
+		}.Build(), &writerResponse)
+		Expect(err).ToNot(HaveOccurred())
+
+		publicTx, err = tm.Begin(context.Background())
+		Expect(err).ToNot(HaveOccurred())
+		publicCtx, cancel := context.WithTimeout(
+			database.TxIntoContext(context.Background(), publicTx),
+			10*time.Second,
+		)
+		defer cancel()
+		publicResponse := &privatev1.BareMetalInstanceTemplatesUpdateResponse{}
+		updateDone = make(chan error, 1)
+		go func() {
+			updateDone <- server.Update(withPublicAPIView(publicCtx), privatev1.BareMetalInstanceTemplatesUpdateRequest_builder{
+				Object: privatev1.BareMetalInstanceTemplate_builder{
+					Id: createResponse.GetObject().GetId(),
+					Metadata: privatev1.Metadata_builder{
+						Labels:      map[string]string{"ordinary": "public-update"},
+						Annotations: map[string]string{"ordinary": "public-update"},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels", "metadata.annotations"}},
+			}.Build(), &publicResponse)
+		}()
+
+		// Wait until PostgreSQL reports that the public update is blocked by writerTx.
+		Eventually(func() (bool, error) {
+			var waiting bool
+			err := testPool.QueryRow(context.Background(), `
+				select exists (
+					select 1
+					from pg_stat_activity
+					where datname = current_database()
+					  and pid <> pg_backend_pid()
+					  and state = 'active'
+					  and wait_event_type = 'Lock'
+					  and cardinality(pg_blocking_pids(pid)) > 0
+					  and query ilike '%bare_metal_instance_templates%'
+				)
+			`).Scan(&waiting)
+			return waiting, err
+		}, 5*time.Second, 10*time.Millisecond).Should(BeTrue())
+		Expect(writerTx.End(context.Background())).To(Succeed())
+		writerTx = nil
+
+		updateErr := <-updateDone
+		updateDone = nil
+		Expect(updateErr).To(Succeed())
+		Expect(publicTx.End(publicCtx)).To(Succeed())
+		publicTx = nil
+		expected := proto.Clone(writerResponse.GetObject()).(*privatev1.BareMetalInstanceTemplate)
+		expected.GetMetadata().SetVersion(2)
+		expected.GetMetadata().SetLabels(map[string]string{
+			"admin.osac.openshift.io/managed":        "updated-by-writer",
+			"operator.admin.osac.openshift.io/added": "added-by-writer",
+			"ordinary":                               "public-update",
+		})
+		expected.GetMetadata().SetAnnotations(map[string]string{
+			"admin.osac.openshift.io/provider": "updated-by-writer",
+			"ordinary":                         "public-update",
+		})
+		Expect(proto.Equal(publicResponse.GetObject(), expected)).To(BeTrue())
+	})
+
 	It("signals objects through a flagged no-op update", func() {
 		server, err := NewGenericServer[*privatev1.BareMetalInstanceTemplate]().
 			SetLogger(logger).

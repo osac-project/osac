@@ -79,12 +79,6 @@ const VmDetailsCard = ({ vm }: Props) => {
               <Timestamp value={vm.metadata?.creationTimestamp} />
             </DescriptionListDescription>
           </DescriptionListGroup>
-          <DescriptionListGroup>
-            <DescriptionListTerm>{t('Creator')}</DescriptionListTerm>
-            <DescriptionListDescription>
-              {displayValue(vm.metadata?.creator)}
-            </DescriptionListDescription>
-          </DescriptionListGroup>
         </DescriptionList>
       </CardBody>
     </Card>

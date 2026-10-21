@@ -213,7 +213,7 @@ func (s *SecurityGroupsServer) Create(ctx context.Context,
 			"Failed to map public security group to private",
 			slog.Any("error", err),
 		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process security group")
+		err = publicInputMappingError(err, "failed to process security group")
 		return
 	}
 
@@ -247,6 +247,11 @@ func (s *SecurityGroupsServer) Create(ctx context.Context,
 
 func (s *SecurityGroupsServer) Update(ctx context.Context,
 	request *publicv1.SecurityGroupsUpdateRequest) (response *publicv1.SecurityGroupsUpdateResponse, err error) {
+	ctx = withPublicAPIView(ctx)
+	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
+		return nil, err
+	}
+
 	publicSecurityGroup := request.GetObject()
 	if publicSecurityGroup == nil {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
@@ -269,7 +274,7 @@ func (s *SecurityGroupsServer) Update(ctx context.Context,
 			"Failed to map public security group update to private",
 			slog.Any("error", err),
 		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process security group")
+		err = publicInputMappingError(err, "failed to process security group")
 		return
 	}
 	// Public callers may update only the rule lists. Keep the identifier needed

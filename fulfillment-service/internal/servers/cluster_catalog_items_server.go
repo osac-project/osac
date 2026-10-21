@@ -181,7 +181,7 @@ func (s *ClusterCatalogItemsServer) Create(ctx context.Context,
 	err = s.inMapper.Copy(ctx, publicCatalogItem, privateCatalogItem)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to map public cluster catalog item to private", slog.Any("error", err))
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process cluster catalog item")
+		err = publicInputMappingError(err, "failed to process cluster catalog item")
 		return
 	}
 
@@ -207,6 +207,11 @@ func (s *ClusterCatalogItemsServer) Create(ctx context.Context,
 
 func (s *ClusterCatalogItemsServer) Update(ctx context.Context,
 	request *publicv1.ClusterCatalogItemsUpdateRequest) (response *publicv1.ClusterCatalogItemsUpdateResponse, err error) {
+	ctx = withPublicAPIView(ctx)
+	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
+		return nil, err
+	}
+
 	publicCatalogItem := request.GetObject()
 	if publicCatalogItem == nil {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
@@ -225,7 +230,7 @@ func (s *ClusterCatalogItemsServer) Update(ctx context.Context,
 	err = s.inMapper.Copy(ctx, publicCatalogItem, privateCatalogItem)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to map public cluster catalog item to private", slog.Any("error", err))
-		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process cluster catalog item")
+		return nil, publicInputMappingError(err, "failed to process cluster catalog item")
 	}
 
 	if request.GetUpdateMask() == nil {

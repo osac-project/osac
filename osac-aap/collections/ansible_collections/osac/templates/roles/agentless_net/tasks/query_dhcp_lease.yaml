@@ -1,0 +1,87 @@
+---
+- name: Query one AgentlessNet DHCP lease
+  block:
+    - name: Load the AgentlessNet network node inventory
+      ansible.builtin.include_tasks: _load_network_node_inventory.yaml
+      vars:
+        agentless_net_require_switches: false
+
+    - name: Resolve the expected NIC MAC for the requested Subnet
+      ansible.builtin.set_fact:
+        _agentless_net_query_subnet_ref: "{{ network_attachment.subnet_ref | default('') }}"
+        _agentless_net_query_interface: "{{ network_attachment.logical_interface_name | default('') }}"
+        _agentless_net_query_mac: >-
+          {{ (osac_job_vars.network_attachment_macs | default({}))
+             .get(network_attachment.subnet_ref | default(''), '') | lower }}
+        _agentless_net_query_tenant: >-
+          {{ resource.metadata.annotations.get('osac.openshift.io/tenant', '') }}
+      no_log: true
+
+    - name: Validate AgentlessNet DHCP query identity
+      ansible.builtin.assert:
+        that:
+          - _agentless_net_query_subnet_ref is match('^[0-9a-f-]{36}$')
+          - _agentless_net_query_interface is string
+          - _agentless_net_query_interface | length > 0
+          - _agentless_net_query_tenant is string
+          - _agentless_net_query_tenant | length > 0
+          - _agentless_net_query_mac is match('^([0-9a-f]{2}:){5}[0-9a-f]{2}$')
+        fail_msg: >-
+          AgentlessNet DHCP discovery requires a Subnet reference, logical
+          interface, tenant, and NIC MAC supplied by the BMaaS attachment.
+      no_log: true
+
+    - name: Resolve the Subnet CR for the requested Fulfillment reference
+      kubernetes.core.k8s_info:
+        api_version: osac.openshift.io/v1alpha1
+        kind: Subnet
+        namespace: "{{ resource.metadata.namespace }}"
+        label_selectors:
+          - "osac.openshift.io/subnet-uuid={{ _agentless_net_query_subnet_ref }}"
+      register: _agentless_net_query_subnet_lookup
+      no_log: true
+
+    - name: Require exactly one ready tenant-owned Subnet
+      ansible.builtin.assert:
+        that:
+          - _agentless_net_query_subnet_lookup.resources | length == 1
+          - _agentless_net_query_subnet_lookup.resources[0].metadata.annotations.get('osac.openshift.io/tenant', '') == _agentless_net_query_tenant
+          - _agentless_net_query_subnet_lookup.resources[0].status.phase == 'Ready'
+          - _agentless_net_query_subnet_lookup.resources[0].metadata.deletionTimestamp is not defined
+        fail_msg: >-
+          AgentlessNet DHCP discovery requires exactly one ready Subnet owned
+          by the BareMetalInstance tenant.
+      no_log: true
+
+    - name: Query the read-only provider DHCP lease state
+      osac.templates.agentless_net_state:
+        action: query_dhcp_lease
+        state_file: "{{ agentless_net_network_state_file }}"
+        uid: "{{ _agentless_net_query_subnet_lookup.resources[0].metadata.uid }}"
+        tenant_id: "{{ _agentless_net_query_tenant }}"
+        mac_address: "{{ _agentless_net_query_mac }}"
+      delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
+      become: true
+      register: _agentless_net_query_lease
+      no_log: true
+
+    - name: Fail while the requested NIC lease is not available
+      ansible.builtin.fail:
+        msg: >-
+          AgentlessNet has no active DHCP lease for the requested NIC in the
+          requested Subnet; retry discovery after DHCP completes.
+      when: not _agentless_net_query_lease.found | bool
+
+    - name: Add the discovered lease to the shared BMI artifact list
+      ansible.builtin.set_fact:
+        _dhcp_leases: >-
+          {{ (_dhcp_leases | default([])) + [{
+               'subnet_ref': _agentless_net_query_subnet_ref,
+               'interface': _agentless_net_query_interface,
+               'ip_address': _agentless_net_query_lease.lease.ip_address,
+               'mac_address': _agentless_net_query_lease.lease.mac_address
+             }] }}
+      no_log: true
+  always:
+    - name: Remove temporary AgentlessNet SSH key file
+      ansible.builtin.include_tasks: _cleanup_network_node_inventory.yaml

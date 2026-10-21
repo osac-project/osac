@@ -181,7 +181,7 @@ func (s *ComputeInstanceCatalogItemsServer) Create(ctx context.Context,
 	err = s.inMapper.Copy(ctx, publicCatalogItem, privateCatalogItem)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to map public compute instance catalog item to private", slog.Any("error", err))
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process compute instance catalog item")
+		err = publicInputMappingError(err, "failed to process compute instance catalog item")
 		return
 	}
 
@@ -208,6 +208,11 @@ func (s *ComputeInstanceCatalogItemsServer) Create(ctx context.Context,
 
 func (s *ComputeInstanceCatalogItemsServer) Update(ctx context.Context,
 	request *publicv1.ComputeInstanceCatalogItemsUpdateRequest) (response *publicv1.ComputeInstanceCatalogItemsUpdateResponse, err error) {
+	ctx = withPublicAPIView(ctx)
+	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
+		return nil, err
+	}
+
 	publicCatalogItem := request.GetObject()
 	if publicCatalogItem == nil {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
@@ -226,7 +231,7 @@ func (s *ComputeInstanceCatalogItemsServer) Update(ctx context.Context,
 	err = s.inMapper.Copy(ctx, publicCatalogItem, privateCatalogItem)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to map public compute instance catalog item to private", slog.Any("error", err))
-		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process compute instance catalog item")
+		return nil, publicInputMappingError(err, "failed to process compute instance catalog item")
 	}
 
 	if request.GetUpdateMask() == nil {

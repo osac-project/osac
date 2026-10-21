@@ -5,7 +5,7 @@
   when: netris_session_cookie is not defined
 
 - name: Query IPAM tree filtered by VPC
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     force: true
     url: >-
       {{ netris_controller_url }}/api/v2/ipam{{
@@ -34,7 +34,7 @@
 
 - name: Delete IPAM allocation
   when: _existing_ipam_alloc is defined and _existing_ipam_alloc is mapping
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/ipam/allocation/{{ _existing_ipam_alloc.id }}"
     method: DELETE
     headers:

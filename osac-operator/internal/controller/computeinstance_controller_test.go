@@ -191,6 +191,76 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 	})
 
+	Context("deletion status persistence", func() {
+		It("persists terminal job status before removing the base finalizer", func() {
+			ctx := context.Background()
+			instance := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "test-deletion-status-order",
+					Namespace:  "default",
+					Finalizers: []string{osacComputeInstanceFinalizer, osacComputeInstanceFeedbackFinalizer},
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+			key := client.ObjectKeyFromObject(instance)
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			DeferCleanup(func() {
+				remaining := &osacv1alpha1.ComputeInstance{}
+				if k8sClient.Get(ctx, key, remaining) == nil {
+					remaining.Finalizers = nil
+					Expect(k8sClient.Update(ctx, remaining)).To(Succeed())
+				}
+			})
+
+			instance.Status.Phase = osacv1alpha1.ComputeInstancePhaseRunning
+			instance.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
+				JobID:                  "deprovision-job",
+				Type:                   osacv1alpha1.JobTypeDeprovision,
+				Timestamp:              metav1.Now(),
+				State:                  osacv1alpha1.JobStateRunning,
+				BlockDeletionOnFailure: true,
+			}}
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
+
+			reconciler := NewComputeInstanceReconciler(
+				testMcManager, "", "", "", &mockProvisioningProvider{name: "aap"},
+				100*time.Millisecond, 0, mcmanager.LocalCluster,
+			)
+			Eventually(func(g Gomega) {
+				cached := &osacv1alpha1.ComputeInstance{}
+				g.Expect(reconciler.Get(ctx, key, cached)).To(Succeed())
+				g.Expect(cached.DeletionTimestamp.IsZero()).To(BeFalse())
+				g.Expect(cached.Status.ProvisioningJobs).To(HaveLen(1))
+				g.Expect(cached.Status.ProvisioningJobs[0].State).To(Equal(osacv1alpha1.JobStateRunning))
+			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+
+			request := mcreconcile.Request{Request: reconcile.Request{NamespacedName: key}}
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(100 * time.Millisecond))
+
+			persisted := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, key, persisted)).To(Succeed())
+			Expect(persisted.Finalizers).To(ContainElement(osacComputeInstanceFinalizer))
+			Expect(persisted.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseDeleting))
+			Expect(persisted.Status.ProvisioningJobs[0].State).To(Equal(osacv1alpha1.JobStateSucceeded))
+
+			Eventually(func(g Gomega) {
+				cached := &osacv1alpha1.ComputeInstance{}
+				g.Expect(reconciler.Get(ctx, key, cached)).To(Succeed())
+				g.Expect(cached.Status.ProvisioningJobs[0].State).To(Equal(osacv1alpha1.JobStateSucceeded))
+			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+
+			result, err = reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
+			Expect(k8sClient.Get(ctx, key, persisted)).To(Succeed())
+			Expect(persisted.Finalizers).NotTo(ContainElement(osacComputeInstanceFinalizer))
+			Expect(persisted.Finalizers).To(ContainElement(osacComputeInstanceFeedbackFinalizer))
+		})
+	})
+
 	Context("management-state unmanaged with deletion", func() {
 		const namespaceName = "default"
 		const tenantName = "test-tenant-unmanaged"
@@ -238,6 +308,18 @@ var _ = Describe("ComputeInstance Controller", func() {
 			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
 
 			_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: key,
+			}})
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func(g Gomega) {
+				ci := &osacv1alpha1.ComputeInstance{}
+				g.Expect(controllerReconciler.Get(ctx, key, ci)).To(Succeed())
+				g.Expect(ci.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseDeleting))
+				g.Expect(ci.Finalizers).To(ContainElement(osacComputeInstanceFinalizer))
+			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+
+			_, err = controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
 				NamespacedName: key,
 			}})
 			Expect(err).NotTo(HaveOccurred())

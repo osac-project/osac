@@ -747,6 +747,83 @@ var _ = Describe("Compute instances server", func() {
 			Expect(attachments).To(HaveLen(1))
 			Expect(attachments[0].GetSubnet().GetId()).To(Equal("test-subnet"))
 		})
+		It("preserves reserved metadata while merging nonempty unmasked labels", func() {
+			createTemplate("general.small")
+
+			createResponse, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
+				Object: publicv1.ComputeInstance_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name:   "compute-instance-metadata-merge",
+						Labels: map[string]string{"retained": "before"},
+						Annotations: map[string]string{
+							"ordinary": "before",
+						},
+					}.Build(),
+					Spec: publicv1.ComputeInstanceSpec_builder{
+						Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
+						NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+							publicv1.ComputeNetworkAttachment_builder{
+								Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := createResponse.GetObject().GetId()
+
+			instancesDao, err := dao.NewGenericDAO[*privatev1.ComputeInstance]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			storedResponse, err := instancesDao.Get().SetId(id).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			stored := storedResponse.GetObject()
+			stored.GetMetadata().GetLabels()["admin.osac.openshift.io/managed"] = "system"
+			stored.GetMetadata().GetAnnotations()["provider.admin.osac.openshift.io/id"] = "provider"
+			_, err = instancesDao.Update().SetObject(stored).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			updateObject := proto.Clone(createResponse.GetObject()).(*publicv1.ComputeInstance)
+			updateObject.GetMetadata().SetLabels(map[string]string{"added": "after"})
+			updateResponse, err := server.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+				Object: updateObject,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updateResponse.GetObject().GetMetadata().GetLabels()).To(Equal(map[string]string{
+				"retained": "before",
+				"added":    "after",
+			}))
+			Expect(updateResponse.GetObject().GetMetadata().GetAnnotations()).To(Equal(map[string]string{
+				"ordinary": "before",
+			}))
+
+			storedResponse, err = instancesDao.Get().SetId(id).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(storedResponse.GetObject().GetMetadata().GetLabels()).To(Equal(map[string]string{
+				"admin.osac.openshift.io/managed": "system",
+				"retained":                        "before",
+				"added":                           "after",
+			}))
+			Expect(storedResponse.GetObject().GetMetadata().GetAnnotations()).To(Equal(map[string]string{
+				"provider.admin.osac.openshift.io/id": "provider",
+				"ordinary":                            "before",
+			}))
+
+			clearObject := proto.Clone(updateResponse.GetObject()).(*publicv1.ComputeInstance)
+			clearObject.GetMetadata().SetLabels(map[string]string{})
+			clearResponse, err := server.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+				Object: clearObject,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(clearResponse.GetObject().GetMetadata().GetLabels()).To(BeEmpty())
+			storedResponse, err = instancesDao.Get().SetId(id).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(storedResponse.GetObject().GetMetadata().GetLabels()).To(Equal(map[string]string{
+				"admin.osac.openshift.io/managed": "system",
+			}))
+		})
 
 		It("Deletes object", func() {
 			// Create a template first

@@ -27,13 +27,15 @@ import {
 } from '@patternfly/react-core';
 import { UserIcon } from '@patternfly/react-icons/dist/esm/icons/user-icon';
 
-import osacIcon from '@osac/ui-components/assets/RH-OSAC.svg';
+import redHatLogoIcon from '@osac/ui-components/assets/Logo-Red_Hat-A-Standard-RGB.svg';
 import { SubtleContent } from '@osac/ui-components/components/SubtleContent/SubtleContent';
 import UserPreferencesModal from '@osac/ui-components/components/UserPreferences/UserPreferencesModal';
 import { useSession } from '@osac/ui-components/hooks/use-session';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 import { userRoleLabels } from '@osac/ui-components/shellTypes';
 import { getErrorMessage } from '@osac/ui-components/utils/error';
+
+import './ShellMasthead.css';
 
 interface ShellMastheadProps {
   onLogout: () => Promise<void>;
@@ -69,21 +71,17 @@ export const ShellMasthead = ({ onLogout }: ShellMastheadProps) => {
           <MastheadToggle>
             <PageToggleButton isHamburgerButton aria-label={t('Global navigation')} />
           </MastheadToggle>
-          <div>
-            <MastheadBrand>
-              <MastheadLogo
-                aria-label={t('Red Hat OSAC')}
-                component={(props) => <a {...props} href="#" />}
-              >
-                <ReactSVG src={osacIcon} aria-hidden className="pf-v6-c-brand" />
-              </MastheadLogo>
-            </MastheadBrand>
+          <MastheadBrand className="osac-masthead-brand">
+            <MastheadLogo
+              aria-label={t('Red Hat')}
+              component={(props) => <a {...props} href="#" />}
+            >
+              <ReactSVG src={redHatLogoIcon} aria-hidden className="pf-v6-c-brand" />
+            </MastheadLogo>
             {tenantId ? (
-              <SubtleContent className="pf-v6-u-mt-sm">
-                {t('Tenant: {{ tenantId }}', { tenantId })}
-              </SubtleContent>
+              <SubtleContent>{t('Tenant: {{ tenantId }}', { tenantId })}</SubtleContent>
             ) : null}
-          </div>
+          </MastheadBrand>
         </MastheadMain>
 
         <MastheadContent>

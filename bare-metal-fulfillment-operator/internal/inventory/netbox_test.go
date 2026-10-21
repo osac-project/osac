@@ -21,11 +21,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/baremetalhost"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/netboxclient"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
 )
 
 var _ = Describe("NetBox inventory client", func() {
@@ -130,11 +133,7 @@ var _ = Describe("NetBox inventory client", func() {
 			client := &NetBoxClient{}
 			ctx := context.Background()
 
-			host, err := client.FindFreeHost(ctx, map[string]string{"region": "lab"})
-			Expect(host).To(BeNil())
-			Expect(errors.Is(err, errNetBoxClientNotImplemented)).To(BeTrue())
-
-			host, err = client.AssignHost(ctx, "baremetal/netbox-42", "provider-42", map[string]string{"region": "lab"})
+			host, err := client.AssignHost(ctx, "baremetal/netbox-42", "provider-42", map[string]string{"region": "lab"})
 			Expect(host).To(BeNil())
 			Expect(errors.Is(err, errNetBoxClientNotImplemented)).To(BeTrue())
 
@@ -147,3 +146,190 @@ var _ = Describe("NetBox inventory client", func() {
 		})
 	})
 })
+
+type selectorQueryTestAPI struct {
+	deviceQueries    int
+	deviceQuery      netboxclient.DeviceQuery
+	devices          []netboxclient.Device
+	deviceErr        error
+	deviceVisits     int
+	customFieldReads int
+}
+
+func (a *selectorQueryTestAPI) ForEachDevice(
+	_ context.Context,
+	query netboxclient.DeviceQuery,
+	visit func(netboxclient.Device) (bool, error),
+) error {
+	a.deviceQueries++
+	a.deviceQuery = make(netboxclient.DeviceQuery, len(query))
+	for key, value := range query {
+		a.deviceQuery[key] = value
+	}
+	if a.deviceErr != nil {
+		return a.deviceErr
+	}
+	for _, device := range a.devices {
+		a.deviceVisits++
+		keepGoing, err := visit(device)
+		if err != nil {
+			return err
+		}
+		if !keepGoing {
+			return nil
+		}
+	}
+	return nil
+}
+
+func (a *selectorQueryTestAPI) ForEachDeviceCustomField(
+	context.Context,
+	func(netboxclient.CustomField) (bool, error),
+) error {
+	a.customFieldReads++
+	return errors.New("unexpected custom-field metadata lookup")
+}
+
+func (*selectorQueryTestAPI) GetDevice(context.Context, string) (netboxclient.DeviceSnapshot, error) {
+	return netboxclient.DeviceSnapshot{}, nil
+}
+
+func (*selectorQueryTestAPI) PatchDevice(
+	context.Context,
+	string,
+	netboxclient.DevicePatch,
+	string,
+) (netboxclient.DeviceSnapshot, error) {
+	return netboxclient.DeviceSnapshot{}, nil
+}
+
+var _ = Describe("NetBox selector query", func() {
+	Describe("FindFreeHost", func() {
+		It("returns an error when the Metal3 namespace is missing without querying NetBox", func() {
+			api := &selectorQueryTestAPI{}
+			client := NewNetBoxClient(api, baremetalhost.NewManager(nil, nil, ""), netBoxHostClass)
+
+			host, err := client.FindFreeHost(context.Background(), nil)
+
+			Expect(host).To(BeNil())
+			Expect(err).To(MatchError("NetBox inventory requires a Metal3 namespace"))
+			Expect(api.deviceQueries).To(BeZero())
+		})
+
+		It("queries with required free-host filters and selector fields", func() {
+			api := &selectorQueryTestAPI{
+				devices: []netboxclient.Device{
+					{ID: "46", Name: "netbox-device-46"},
+					{ID: "47", Name: "netbox-device-47"},
+				},
+			}
+			client := NewNetBoxClient(api, testNetBoxSelectorBMHManager(), netBoxHostClass)
+			selector := map[string]string{
+				"cpu_cores":      "9007199254740993",
+				"accelerated":    "true",
+				"placement_zone": "Lab A",
+				"accelerator":    "a100",
+			}
+
+			host, err := client.FindFreeHost(context.Background(), selector)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(host).To(Equal(&Host{
+				InventoryHostID: "metal3-system/netbox-46",
+				Name:            "netbox-46",
+				HostClass:       netBoxHostClass,
+				ProvisionState:  shared.OsacDefaultProvisionStateValue,
+				ManagedBy:       shared.OsacDefaultManagedByValue,
+				Ready:           true,
+			}))
+			Expect(api.customFieldReads).To(BeZero())
+			Expect(api.deviceQueries).To(Equal(1))
+			Expect(api.deviceVisits).To(Equal(1))
+			Expect(api.deviceQuery).To(Equal(netboxclient.DeviceQuery{
+				"status":                     "staged",
+				"cf_osac_managed":            "true",
+				"cf_osac_instance_id__empty": "true",
+				"cf_cpu_cores":               "9007199254740993",
+				"cf_accelerated":             "true",
+				"cf_placement_zone":          "Lab A",
+				"cf_accelerator":             "a100",
+			}))
+		})
+
+		It("keeps the required managed filter when the selector requests another value", func() {
+			api := &selectorQueryTestAPI{}
+			client := NewNetBoxClient(api, testNetBoxSelectorBMHManager(), netBoxHostClass)
+
+			_, err := client.FindFreeHost(context.Background(), map[string]string{"osac_managed": "false"})
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(api.deviceQueries).To(Equal(1))
+			Expect(api.deviceQuery["cf_osac_managed"]).To(Equal("true"))
+		})
+
+		It("queries the fixed free-host filters when the selector is empty", func() {
+			api := &selectorQueryTestAPI{}
+			client := NewNetBoxClient(api, testNetBoxSelectorBMHManager(), netBoxHostClass)
+
+			host, err := client.FindFreeHost(context.Background(), nil)
+
+			Expect(host).To(BeNil())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(api.customFieldReads).To(BeZero())
+			Expect(api.deviceQueries).To(Equal(1))
+			Expect(api.deviceQuery).To(Equal(netboxclient.DeviceQuery{
+				"status":                     "staged",
+				"cf_osac_managed":            "true",
+				"cf_osac_instance_id__empty": "true",
+			}))
+		})
+
+		It("returns device-list errors", func() {
+			apiError := errors.New("device endpoint unavailable")
+			api := &selectorQueryTestAPI{deviceErr: apiError}
+			client := NewNetBoxClient(api, testNetBoxSelectorBMHManager(), netBoxHostClass)
+
+			host, err := client.FindFreeHost(context.Background(), map[string]string{"placement_zone": "west"})
+
+			Expect(host).To(BeNil())
+			Expect(err).To(MatchError(ContainSubstring("failed to search NetBox for a free host")))
+			Expect(errors.Is(err, apiError)).To(BeTrue())
+			Expect(api.customFieldReads).To(BeZero())
+			Expect(api.deviceQueries).To(Equal(1))
+		})
+	})
+
+	Describe("Capability selector filters", func() {
+		DescribeTable("prefixes selector fields as NetBox custom-field filters",
+			func(key string) {
+				query := buildFreeHostQuery(map[string]string{key: "a100"})
+
+				Expect(query["cf_"+key]).To(Equal("a100"))
+			},
+			Entry("hyphenated name", "gpu-model"),
+			Entry("name longer than 50 characters", strings.Repeat("x", 51)),
+			Entry("name beginning with the query prefix", "cf_gpu_cores"),
+		)
+
+		DescribeTable("passes selector values unchanged",
+			func(value string) {
+				query := buildFreeHostQuery(map[string]string{"capability": value})
+
+				Expect(query["cf_capability"]).To(Equal(value))
+			},
+			Entry("integer value", "16"),
+			Entry("integer formatting", "016"),
+			Entry("Boolean value", "false"),
+			Entry("Boolean casing", "TRUE"),
+			Entry("empty text", ""),
+			Entry("text null string", "null"),
+			Entry("text whitespace", " a100 "),
+			Entry("select stored value", "a100"),
+		)
+
+	})
+})
+
+func testNetBoxSelectorBMHManager() *baremetalhost.Manager {
+	return baremetalhost.NewManager(nil, nil, "metal3-system")
+}

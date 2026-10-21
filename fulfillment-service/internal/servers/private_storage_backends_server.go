@@ -166,22 +166,7 @@ func (s *PrivateStorageBackendsServer) Update(ctx context.Context,
 		return
 	}
 
-	getRequest := &privatev1.StorageBackendsGetRequest{}
-	getRequest.SetId(id)
-	var getResponse *privatev1.StorageBackendsGetResponse
-	err = s.generic.Get(ctx, getRequest, &getResponse)
-	if err != nil {
-		return
-	}
-
-	existingSB := getResponse.GetObject()
-
-	err = s.validateStorageBackendUpdate(ctx, request, existingSB)
-	if err != nil {
-		return
-	}
-
-	err = s.generic.Update(ctx, request, &response)
+	err = s.generic.UpdateWithValidation(ctx, request, &response, s.validateStorageBackendUpdate)
 	return
 }
 
@@ -191,11 +176,7 @@ func (s *PrivateStorageBackendsServer) Delete(ctx context.Context,
 	return
 }
 
-const (
-	passwordField       = "spec.credentials.password"
-	passwordSecretField = "spec.credentials.password_secret"
-	passwordExclusive   = "password and password_secret are mutually exclusive"
-)
+const passwordExclusive = "password and password_secret are mutually exclusive"
 
 func (s *PrivateStorageBackendsServer) validateStorageBackendCreate(ctx context.Context,
 	sb *privatev1.StorageBackend) error {
@@ -206,25 +187,32 @@ func (s *PrivateStorageBackendsServer) validateStorageBackendCreate(ctx context.
 	if sb.GetMetadata() == nil || sb.GetMetadata().GetName() == "" {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'metadata.name' is required")
 	}
-	if err := s.validatePasswordExactlyOne(sb.GetSpec().GetCredentials()); err != nil {
-		return err
-	}
-	return s.validatePasswordSecret(ctx, sb.GetSpec().GetCredentials())
+	return s.validateStorageBackendCredentials(ctx, sb.GetSpec())
 }
 
 func (s *PrivateStorageBackendsServer) validateStorageBackendUpdate(ctx context.Context,
-	request *privatev1.StorageBackendsUpdateRequest, existingSB *privatev1.StorageBackend) error {
-
-	newSB := request.GetObject()
-	if newSB.GetSpec().GetProvider() != "" && newSB.GetSpec().GetProvider() != existingSB.GetSpec().GetProvider() {
+	candidate, current *privatev1.StorageBackend) error {
+	if candidate.GetSpec().GetProvider() != "" && candidate.GetSpec().GetProvider() != current.GetSpec().GetProvider() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.provider' is immutable and cannot be changed from '%s' to '%s'",
-			existingSB.GetSpec().GetProvider(), newSB.GetSpec().GetProvider())
+			current.GetSpec().GetProvider(), candidate.GetSpec().GetProvider())
 	}
-	if err := s.validatePasswordMutualExclusionForUpdate(request, existingSB); err != nil {
-		return err
+	if candidate.GetSpec().GetCspManaged() != current.GetSpec().GetCspManaged() {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.csp_managed' is immutable and cannot be changed")
 	}
-	return s.validatePasswordSecret(ctx, newSB.GetSpec().GetCredentials())
+	return s.validateStorageBackendCredentials(ctx, candidate.GetSpec())
+}
+
+func (s *PrivateStorageBackendsServer) validateStorageBackendCredentials(ctx context.Context,
+	spec *privatev1.StorageBackendSpec) error {
+	creds := spec.GetCredentials()
+	if !spec.GetCspManaged() || creds != nil {
+		if err := s.validatePasswordExactlyOne(creds); err != nil {
+			return err
+		}
+	}
+	return s.validatePasswordSecret(ctx, creds)
 }
 
 func credentialsPasswordSet(creds *privatev1.StorageBackendCredentials) bool {
@@ -242,40 +230,6 @@ func (s *PrivateStorageBackendsServer) validatePasswordExactlyOne(
 	}
 	hasPassword := credentialsPasswordSet(creds)
 	hasSecret := credentialsPasswordSecretSet(creds)
-	if hasPassword && hasSecret {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, passwordExclusive)
-	}
-	if !hasPassword && !hasSecret {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"exactly one of password or password_secret must be set")
-	}
-	return nil
-}
-
-func (s *PrivateStorageBackendsServer) validatePasswordMutualExclusionForUpdate(
-	request *privatev1.StorageBackendsUpdateRequest, existingSB *privatev1.StorageBackend) error {
-	creds := request.GetObject().GetSpec().GetCredentials()
-	if credentialsPasswordSet(creds) && credentialsPasswordSecretSet(creds) {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, passwordExclusive)
-	}
-
-	mask := request.GetUpdateMask()
-	if mask == nil || len(mask.GetPaths()) == 0 {
-		return s.validatePasswordExactlyOne(creds)
-	}
-
-	existingCreds := existingSB.GetSpec().GetCredentials()
-
-	// Simulate post-merge state: masked fields come from request, others from existing.
-	hasPassword := credentialsPasswordSet(creds)
-	if !updateIncludesField(mask, passwordField) {
-		hasPassword = credentialsPasswordSet(existingCreds)
-	}
-	hasSecret := credentialsPasswordSecretSet(creds)
-	if !updateIncludesField(mask, passwordSecretField) {
-		hasSecret = credentialsPasswordSecretSet(existingCreds)
-	}
-
 	if hasPassword && hasSecret {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, passwordExclusive)
 	}

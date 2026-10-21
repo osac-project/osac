@@ -19,6 +19,8 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -382,4 +384,181 @@ var _ = Describe("Generic mapper", func() {
 			}.Build(),
 		),
 	)
+
+	It("omits reserved keys only from public Metadata without mutating the source", func() {
+		labels := map[string]string{
+			"admin.osac.openshift.io/managed":       "system",
+			"provider.admin.osac.openshift.io/id":   "provider",
+			"fakeadmin.osac.openshift.io/ordinary":  "ordinary",
+			"admin.osac.openshift.io.example/value": "ordinary",
+			"admin.osac.openshift.io":               "slashless",
+			"Admin.osac.openshift.io/managed":       "mixed-case",
+			"osac.openshift.io/tenant":              "tenant-a",
+		}
+		annotations := map[string]string{
+			"admin.osac.openshift.io/managed":      "system",
+			"provider.admin.osac.openshift.io/id":  "provider",
+			"fakeadmin.osac.openshift.io/ordinary": "ordinary",
+		}
+		privateObject := privatev1.Cluster_builder{
+			Metadata: privatev1.Metadata_builder{
+				Labels:      labels,
+				Annotations: annotations,
+			}.Build(),
+			Spec: privatev1.ClusterSpec_builder{
+				NodeSets: map[string]*privatev1.ClusterNodeSet{
+					"admin.osac.openshift.io/ordinary-map": privatev1.ClusterNodeSet_builder{
+						Size: proto.Int32(1),
+					}.Build(),
+				},
+			}.Build(),
+		}.Build()
+		original := proto.Clone(privateObject)
+
+		mapper, err := NewGenericMapper[*privatev1.Cluster, *publicv1.Cluster]().
+			SetLogger(logger).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		publicObject := &publicv1.Cluster{}
+		Expect(mapper.Copy(ctx, privateObject, publicObject)).To(Succeed())
+		Expect(publicObject.GetMetadata().GetLabels()).To(Equal(map[string]string{
+			"fakeadmin.osac.openshift.io/ordinary":  "ordinary",
+			"admin.osac.openshift.io.example/value": "ordinary",
+			"admin.osac.openshift.io":               "slashless",
+			"Admin.osac.openshift.io/managed":       "mixed-case",
+			"osac.openshift.io/tenant":              "tenant-a",
+		}))
+		Expect(publicObject.GetMetadata().GetAnnotations()).To(Equal(map[string]string{
+			"fakeadmin.osac.openshift.io/ordinary": "ordinary",
+		}))
+		Expect(publicObject.GetSpec().GetNodeSets()).To(HaveKey("admin.osac.openshift.io/ordinary-map"))
+		Expect(proto.Equal(privateObject, original)).To(BeTrue())
+	})
+
+	It("restores reserved metadata from the current object", func() {
+		current := privatev1.Cluster_builder{
+			Metadata: privatev1.Metadata_builder{
+				Labels: map[string]string{
+					"admin.osac.openshift.io/managed":          "system-current",
+					"operator.admin.osac.openshift.io/managed": "operator-current",
+					"ordinary": "old",
+				},
+				Annotations: map[string]string{
+					"admin.osac.openshift.io/owner": "system-current",
+					"ordinary":                      "old",
+				},
+			}.Build(),
+		}.Build()
+		candidate := privatev1.Cluster_builder{
+			Metadata: privatev1.Metadata_builder{
+				Labels: map[string]string{
+					"admin.osac.openshift.io/managed":          "stale-request-value",
+					"operator.admin.osac.openshift.io/managed": "stale-operator-value",
+					"ordinary": "updated",
+					"new":      "added",
+				},
+				Annotations: map[string]string{"ordinary": "updated"},
+			}.Build(),
+		}.Build()
+		originalCurrent := proto.Clone(current)
+
+		restoreReservedMetadata(current, candidate)
+
+		Expect(candidate.GetMetadata().GetLabels()).To(Equal(map[string]string{
+			"admin.osac.openshift.io/managed":          "system-current",
+			"operator.admin.osac.openshift.io/managed": "operator-current",
+			"ordinary": "updated",
+			"new":      "added",
+		}))
+		Expect(candidate.GetMetadata().GetAnnotations()).To(Equal(map[string]string{
+			"admin.osac.openshift.io/owner": "system-current",
+			"ordinary":                      "updated",
+		}))
+		Expect(proto.Equal(current, originalCurrent)).To(BeTrue())
+
+		metadataOmittedCandidate := privatev1.Cluster_builder{}.Build()
+		restoreReservedMetadata(current, metadataOmittedCandidate)
+		Expect(metadataOmittedCandidate.GetMetadata().GetLabels()).To(Equal(map[string]string{
+			"admin.osac.openshift.io/managed":          "system-current",
+			"operator.admin.osac.openshift.io/managed": "operator-current",
+		}))
+		Expect(metadataOmittedCandidate.GetMetadata().GetAnnotations()).To(Equal(map[string]string{
+			"admin.osac.openshift.io/owner": "system-current",
+		}))
+	})
+
+	It("does not add omitted metadata when there are no reserved values to restore", func() {
+		current := privatev1.Cluster_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name:        "stored-cluster",
+				Labels:      map[string]string{"ordinary": "stored"},
+				Annotations: map[string]string{"ordinary": "stored"},
+			}.Build(),
+		}.Build()
+		candidate := privatev1.Cluster_builder{}.Build()
+
+		restoreReservedMetadata(current, candidate)
+
+		Expect(candidate.GetMetadata()).To(BeNil())
+	})
+
+	It("rejects reserved metadata on public input before copying", func() {
+		publicObject := publicv1.Cluster_builder{
+			Id: "input-cluster",
+			Metadata: publicv1.Metadata_builder{
+				Name: "public-name",
+				Labels: map[string]string{
+					"admin.osac.openshift.io/managed":     "true",
+					"provider.admin.osac.openshift.io/id": "provider-id",
+				},
+				Annotations: map[string]string{
+					"admin.osac.openshift.io/owner": "system",
+				},
+			}.Build(),
+		}.Build()
+		privateObject := privatev1.Cluster_builder{
+			Id: "unchanged-id",
+			Metadata: privatev1.Metadata_builder{
+				Name: "unchanged-name",
+				Labels: map[string]string{
+					"existing": "unchanged",
+				},
+			}.Build(),
+		}.Build()
+		originalSource := proto.Clone(publicObject)
+		originalDestination := proto.Clone(privateObject)
+
+		mapper, err := NewGenericMapper[*publicv1.Cluster, *privatev1.Cluster]().
+			SetLogger(logger).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		err = mapper.Copy(ctx, publicObject, privateObject)
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(grpcstatus.Convert(err).Message()).To(Equal(reservedMetadataError))
+		Expect(proto.Equal(publicObject, originalSource)).To(BeTrue())
+		Expect(proto.Equal(privateObject, originalDestination)).To(BeTrue())
+	})
+
+	It("omits reserved metadata from public SelfSubjectAccessReview projections", func() {
+		privateObject := privatev1.SelfSubjectAccessReview_builder{
+			Metadata: privatev1.Metadata_builder{
+				Labels: map[string]string{
+					"admin.osac.openshift.io/review": "private",
+					"ordinary":                       "visible",
+				},
+			}.Build(),
+		}.Build()
+
+		mapper, err := NewGenericMapper[*privatev1.SelfSubjectAccessReview, *publicv1.SelfSubjectAccessReview]().
+			SetLogger(logger).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		publicObject := &publicv1.SelfSubjectAccessReview{}
+		Expect(mapper.Copy(ctx, privateObject, publicObject)).To(Succeed())
+		Expect(publicObject.GetMetadata().GetLabels()).To(Equal(map[string]string{"ordinary": "visible"}))
+		Expect(privateObject.GetMetadata().GetLabels()).To(HaveKeyWithValue("admin.osac.openshift.io/review", "private"))
+	})
 })

@@ -52,7 +52,7 @@ func newInstanceType(name string, fabricPort string, extraPorts ...*privatev1.Ba
 		Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 		Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 			Hardware: privatev1.BareMetalHardwareSpec_builder{
-				Cpu:          privatev1.BareMetalCPUSpec_builder{Cores: 64, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
+				Cpu:          privatev1.BareMetalCPUSpec_builder{Cores: 64, Architecture: "amd64", ThreadsPerCore: 2}.Build(),
 				Memory:       privatev1.BareMetalMemorySpec_builder{TotalGb: 256}.Build(),
 				NetworkPorts: ports,
 			}.Build(),

@@ -1,0 +1,8 @@
+---
+- name: Move a BMI port between AgentlessNet Subnet and provisioning access VLANs
+  block:
+    - name: Run the AgentlessNet attachment implementation
+      ansible.builtin.include_tasks: _move_network_attachment_impl.yaml
+  always:
+    - name: Remove temporary AgentlessNet SSH key file
+      ansible.builtin.include_tasks: _cleanup_network_node_inventory.yaml

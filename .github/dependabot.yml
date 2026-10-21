@@ -36,6 +36,7 @@ updates:
   directories:
     - "/osac-operator"
     - "/osac-operator/api"
+    - "/bare-metal-fulfillment-operator"
   schedule:
     # Check for updates to Go modules every week
     interval: "weekly"

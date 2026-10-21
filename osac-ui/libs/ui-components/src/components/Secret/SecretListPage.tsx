@@ -14,18 +14,12 @@ import { Secret, Secrets } from '@osac/types';
 import { cel } from '@osac/ui-components/api/cel';
 import { useListResource } from '@osac/ui-components/api/use-resource';
 import {
-  DEFAULT_VIEW_TYPE,
-  ViewType,
-  getViewTypePrefKey,
-  isViewType,
-} from '@osac/ui-components/components/Primitives/ViewSwitcher';
-import {
   SEARCH_PARAM,
   useArrayPageFilter,
   usePageFilter,
 } from '@osac/ui-components/hooks/use-page-filter';
 import { useProjectFilterQuery } from '@osac/ui-components/hooks/use-project-filter-query';
-import { useUserPreferences } from '@osac/ui-components/hooks/use-user-preferences';
+import { useViewType } from '@osac/ui-components/hooks/use-view-type';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
 import SecretCard from './SecretCard.tsx';
@@ -57,8 +51,7 @@ const SecretListPage = () => {
     isTypeFilterValue,
   );
   const projectFilter = useProjectFilterQuery<Secret>();
-  const [viewTypePref] = useUserPreferences(getViewTypePrefKey(SECRETS_VIEW_KEY));
-  const viewType: ViewType = isViewType(viewTypePref) ? viewTypePref : DEFAULT_VIEW_TYPE;
+  const [viewType] = useViewType(SECRETS_VIEW_KEY);
 
   const typeFilter = type.map((t) => TYPE_FILTER_TO_ENUM[t]);
 

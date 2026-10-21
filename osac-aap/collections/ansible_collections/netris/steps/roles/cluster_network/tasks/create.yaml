@@ -122,7 +122,7 @@
   when: netris_session_cookie is not defined
 
 - name: Look up existing SNAT rule
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/nat"
     method: GET
     headers:

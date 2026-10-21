@@ -38,6 +38,9 @@ const (
 )
 
 // Metadata common to all kinds of objects.
+//
+// On public Create and Update, reserved keys in labels or annotations are rejected with InvalidArgument and the message
+// `Label or annotation is reserved for use by the system.`
 type Metadata struct {
 	state                        protoimpl.MessageState `protogen:"opaque.v1"`
 	xxx_hidden_CreationTimestamp *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=creation_timestamp,json=creationTimestamp,proto3"`
@@ -244,6 +247,11 @@ type Metadata_builder struct {
 	Name string
 	// Labels contains key-value pairs for organizing and selecting objects.
 	//
+	// Keys whose prefix before '/' is `admin.osac.openshift.io` or a dot-delimited subdomain of it are reserved for
+	// system use. Matching is case-sensitive. The public API rejects reserved keys on Create and Update and preserves
+	// stored reserved keys during Update. When selected by an update_mask, the map is replaced as a whole; an empty map
+	// clears user-controlled entries. An unmasked Update follows that method's existing map behavior.
+	//
 	// Keys consist of an optional prefix and a name separated by '/':
 	//
 	//   - Prefix is a DNS subdomain (RFC 1035) and must be between 1 and 253 characters long.
@@ -257,10 +265,18 @@ type Metadata_builder struct {
 	Labels map[string]string
 	// Annotations contains arbitrary metadata for objects.
 	//
+	// Keys use the same reserved namespace and public API behavior as labels: `admin.osac.openshift.io` and its
+	// dot-delimited subdomains, matched case-sensitively, are reserved for system use. The public API rejects these keys
+	// on Create and Update and preserves stored reserved keys during Update. When selected by an update_mask, the map is
+	// replaced as a whole; an empty map clears user-controlled entries. An unmasked Update follows that method's
+	// existing map behavior.
+	//
 	// Keys follow the same rules as label keys, including the optional DNS subdomain prefix and the 1-63 character name
 	// restrictions. Values can be any string.
 	Annotations map[string]string
-	// Version is a numeric field that is automatically incremented with every change to the object.
+	// Version is a numeric field that is automatically incremented with every change to the object. Set `lock` to true
+	// on an Update request to require this version to match the stored version; a stale version is rejected with
+	// Aborted. If `lock` is omitted or false, the Update proceeds without an optimistic version check.
 	Version int32
 	// Full name of the project that the object is assigned to. It can be empty, which means the object belongs to
 	// the default project of the tenant.

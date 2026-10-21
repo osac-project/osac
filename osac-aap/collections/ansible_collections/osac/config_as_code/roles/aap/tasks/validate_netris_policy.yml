@@ -1,0 +1,32 @@
+---
+- name: Validate managed Netris job-template bindings
+  ansible.builtin.assert:
+    that:
+      - item.prevent_instance_group_fallback | default(false) | bool
+      - item.execution_environment == aap_prefix + '-ee'
+      - item.inventory in [aap_prefix + '-cluster-fulfillment', aap_prefix + '-networking-operations']
+      - item.ask_variables_on_launch | default(false) | bool
+    fail_msg: >-
+      Managed Netris template {{ item.name }} must use the pinned execution
+      environment, approved inventory, launch prompts, and no instance-group fallback.
+  loop: "{{ controller_templates }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: >-
+    item.instance_groups | default([])
+    | select('search', '(cluster|networking)-fulfillment-ig|networking-operations-ig')
+    | list | length > 0
+
+- name: Validate managed Netris workflow bindings
+  ansible.builtin.assert:
+    that:
+      - item.inventory == aap_prefix + '-cluster-fulfillment'
+      - item.ask_variables_on_launch | default(false) | bool
+      - item.workflow_nodes | default([]) | length > 0
+    fail_msg: >-
+      Managed Netris workflow {{ item.name }} must retain its approved inventory,
+      launch prompts, and explicit child nodes.
+  loop: "{{ controller_workflows }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.inventory == aap_prefix + '-cluster-fulfillment'

@@ -2,6 +2,24 @@
 - name: "cumulus: add vlan to trunk port using nvue"
   raw: |
     flock /tmp/nvue.lock -c '
+      set -e
       nv set interface {{ port_name }} bridge domain br_default vlan {{ _vlan_id }}
-      nv config diff --quiet 2>/dev/null && nv config apply -y
+      if diff="$(nv config diff --output commands)"; then
+        diff_status=0
+      else
+        diff_status=$?
+      fi
+      if [ "$diff_status" -gt 1 ]; then
+        exit "$diff_status"
+      fi
+      if [ "$diff_status" -eq 1 ] && [ -z "$diff" ]; then
+        exit "$diff_status"
+      fi
+      if [ -n "$diff" ]; then
+        case "$diff" in
+          "nv set "*|"nv unset "*) ;;
+          *) exit 1 ;;
+        esac
+        nv config apply -y
+      fi
     '

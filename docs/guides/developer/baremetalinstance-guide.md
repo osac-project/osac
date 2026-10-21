@@ -46,6 +46,9 @@ updated.
 
 ## 2. Register and discover the DiskImage
 
+BareMetalInstanceType CPU architecture accepts exactly `amd64`, `arm64`, and
+`s390x`; aliases such as `x86_64` and `aarch64` are rejected.
+
 Create a named OSAC DiskImage. The CLI defaults `--source-type` to `registry`
 and `--guest-os-family` to `linux`; `--architecture` is required and may be
 repeated for a multi-architecture artifact.

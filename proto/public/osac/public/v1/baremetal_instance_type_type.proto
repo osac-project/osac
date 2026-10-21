@@ -86,8 +86,8 @@ message BareMetalCPUSpec {
   // Number of CPU cores.
   int32 cores = 1 [(buf.validate.field).int32.gt = 0];
 
-  // CPU architecture (e.g. x86_64, aarch64).
-  string architecture = 2 [(buf.validate.field).string.min_len = 1];
+  // CPU architecture. Accepted values are exactly amd64, arm64, and s390x.
+  string architecture = 2 [(buf.validate.field).string = {in: ["amd64", "arm64", "s390x"]}];
 
   // CPU model. Optional — may be unknown.
   string model = 3;

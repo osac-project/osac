@@ -200,7 +200,7 @@ func (s *ExternalIPAttachmentsServer) Create(ctx context.Context,
 			"Failed to map public external IP attachment to private",
 			slog.Any("error", err),
 		)
-		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process external IP attachment")
+		return nil, publicInputMappingError(err, "failed to process external IP attachment")
 	}
 
 	privateRequest := &privatev1.ExternalIPAttachmentsCreateRequest{}

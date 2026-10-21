@@ -3,6 +3,7 @@
 # in .github/ci-tests.yml that the change touches and calls this workflow once per leg, so a component that is not needed
 # has no job at all (no skipped row on the pull request). unit-tests.yml and integration-tests.yml call it for every leg
 # of their group on a schedule, by hand and from the nightly build.
+# Flake detection repeats these same tests with a fixed commit and separate saved-log names.
 #
 # Only the steps of the chosen kind run; the others are steps of the same job, never separate jobs.
 name: Tests
@@ -10,6 +11,11 @@ name: Tests
 on:  # yamllint disable-line rule:truthy
   workflow_call:
     inputs:
+      # Every checkout uses this commit; empty keeps the caller's default.
+      commit:
+        description: Commit to check out; empty uses the triggering commit
+        type: string
+        default: ""
       kind:
         description: >-
           Which tests: go-unit, ui-unit, it-fulfillment-service, it-osac-operator, it-bare-metal-fulfillment-operator,
@@ -26,6 +32,12 @@ on:  # yamllint disable-line rule:truthy
         required: false
         type: string
         default: ""
+      # Append this label to saved log names to separate repetitions and rerun attempts.
+      artifact_suffix:
+        description: Suffix for diagnostic artifacts when repeating tests
+        required: false
+        type: string
+        default: ""
       timeout:
         description: Minutes before the job is cancelled
         required: false
@@ -37,7 +49,7 @@ permissions:
 
 jobs:
   run:
-    name: Run
+    name: ${{ inputs.dir || inputs.kind }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout }}
     steps:
@@ -45,6 +57,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: inputs.kind == 'go-unit'
         with:
+          ref: ${{ inputs.commit }}
           persist-credentials: false
       - uses: ./.github/actions/setup-go
         if: inputs.kind == 'go-unit'
@@ -68,6 +81,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: inputs.kind == 'ui-unit'
         with:
+          ref: ${{ inputs.commit }}
           persist-credentials: false
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1  # v4.3.0
         if: inputs.kind == 'ui-unit'
@@ -90,6 +104,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: inputs.kind == 'it-fulfillment-service'
         with:
+          ref: ${{ inputs.commit }}
           persist-credentials: false
       - uses: ./.github/actions/setup-go
         if: inputs.kind == 'it-fulfillment-service'
@@ -145,7 +160,7 @@ jobs:
       - if: inputs.kind == 'it-fulfillment-service' && always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
-          name: logs
+          name: logs${{ inputs.artifact_suffix }}
           path: fulfillment-service/logs
           retention-days: 7
       # --- integration test: osac-operator
@@ -153,6 +168,7 @@ jobs:
         if: inputs.kind == 'it-osac-operator'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          ref: ${{ inputs.commit }}
           persist-credentials: false
 
       - name: Set up Go
@@ -206,6 +222,7 @@ jobs:
         if: inputs.kind == 'it-bare-metal-fulfillment-operator'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          ref: ${{ inputs.commit }}
           persist-credentials: false
 
       - name: Set up Go
@@ -265,6 +282,7 @@ jobs:
         if: inputs.kind == 'it-osac-aap'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          ref: ${{ inputs.commit }}
           persist-credentials: false
 
       - name: Install uv
@@ -319,6 +337,7 @@ jobs:
         if: inputs.kind == 'it-osac-installer'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          ref: ${{ inputs.commit }}
           persist-credentials: false
 
       - name: Set up Helm
@@ -433,7 +452,7 @@ jobs:
       - if: inputs.kind == 'it-osac-installer' && always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
-          name: osac-installer-logs
+          name: osac-installer-logs${{ inputs.artifact_suffix }}
           path: osac-installer/logs
           retention-days: 1
 

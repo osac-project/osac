@@ -15,6 +15,7 @@ import { InstanceTypes } from '@osac/types/private';
 import { useCreateResource } from '@osac/ui-components/api/use-resource';
 
 import { getInstanceTypeCreateSchema } from './validation';
+import { instanceTypeFieldIds } from '../fieldIds';
 import { InstanceTypeCreateFormValues, instanceTypeCreateValues } from './values';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { getErrorMessage } from '../../../utils/error';
@@ -72,24 +73,24 @@ const InstanceTypeCreateForm = () => {
           <Stack hasGutter>
             <StackItem>
               <OsacForm>
-                <NameField />
+                <NameField fieldId={instanceTypeFieldIds.name} />
                 <InputField
                   name="spec.description"
                   label={t('Description')}
-                  fieldId="instance-type-description"
+                  fieldId={instanceTypeFieldIds.description}
                   multiline
                 />
                 <InputField
                   name="spec.vcpus"
                   label={t('vCPUs')}
-                  fieldId="instance-type-vcpus"
+                  fieldId={instanceTypeFieldIds.vcpus}
                   type="number"
                   isRequired
                 />
                 <InputField
                   name="spec.memoryGib"
                   label={t('Memory (GiB)')}
-                  fieldId="instance-type-memory-gib"
+                  fieldId={instanceTypeFieldIds.memoryGib}
                   type="number"
                   isRequired
                 />
@@ -97,21 +98,21 @@ const InstanceTypeCreateForm = () => {
                   <InputField
                     name="spec.gpu.count"
                     label={t('GPU count')}
-                    fieldId="instance-type-gpu-count"
+                    fieldId={instanceTypeFieldIds.gpuCount}
                     type="number"
                     helperText={t('Number of GPU devices of this type.')}
                   />
                   <InputField
                     name="spec.gpu.resourceName"
                     label={t('Resource name')}
-                    fieldId="instance-type-gpu-resource-name"
+                    fieldId={instanceTypeFieldIds.gpuResourceName}
                     placeholder={t('e.g. nvidia.com/A100')}
                     helperText={t('Kubernetes device plugin resource name.')}
                   />
                   <InputField
                     name="spec.gpu.pciDeviceSelector"
                     label={t('PCI device selector')}
-                    fieldId="instance-type-gpu-pci-device-selector"
+                    fieldId={instanceTypeFieldIds.gpuPciDeviceSelector}
                     placeholder={t('e.g. 10DE:20B0')}
                     helperText={t('PCI device selector identifying the GPU hardware.')}
                   />

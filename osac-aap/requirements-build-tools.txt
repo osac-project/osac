@@ -5,9 +5,12 @@
 # execution-environment.yaml's ansible_core/ansible_runner versions change,
 # or if ansible-builder's own template (base/builder/final stage pip
 # installs) changes in a future ansible-builder upgrade.
+#
+# Packages here are routed through Red Hat's trusted-libraries PyPI proxy
+# (prefetch-dependencies-oci-ta's pip-index-url param) -- see
+# requirements-build-tools-pypi.txt for the handful that 404 there and
+# need public PyPI instead.
 ansible-core==2.20.3
-ansible-runner==2.4.3
-bindep==2.14.0
 PyYAML==6.0.3
 packaging==26.3
 dumb-init==1.2.5
@@ -49,9 +52,8 @@ wheel==0.48.0
 # ansible.utils's -- all real, requested collections, not stale vendor
 # (unlike the now-removed orphaned ansible.eda, which contributed a much
 # bigger and genuinely unneeded set of these -- see its vendor removal
-# commit).
+# commit). awxkit/bindep/ttp moved to requirements-build-tools-pypi.txt
+# (404 on the trusted proxy); pytz/textfsm/xmltodict stay here.
 pytz==2026.5
-awxkit==24.6.1
 textfsm==2.1.0
-ttp==0.10.1
 xmltodict==1.0.4

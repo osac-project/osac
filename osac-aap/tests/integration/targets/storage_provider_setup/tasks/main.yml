@@ -36,7 +36,7 @@
     storage_provider_action: setup
     storage_provider_provisioning_target: vmaas
     # Deliberately omit vast_storage_validate_certs to exercise the worker's
-    # ENABLE_CERTIFICATE_VALIDATION environment setting.
+    # VAST_VALIDATE_CERTS environment setting.
 
   tasks:
     - name: Run storage provider setup

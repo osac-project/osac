@@ -13,20 +13,10 @@ ROLE_ROOT = (
 )
 
 
-def resolve_certificate_validation():
-    """Render the storage role's shared TLS policy from the environment."""
+def resolve_storage_role_validation():
+    """Render the storage role's VAST TLS policy from the environment."""
     defaults = yaml.safe_load((ROLE_ROOT / "defaults/main.yaml").read_text())
     templar = Templar(loader=DataLoader(), variables={})
-    return templar.template(defaults["enable_certificate_validation"])
-
-
-def resolve_storage_role_validation():
-    """Render the role alias consumed by its VAST HTTP clients."""
-    defaults = yaml.safe_load((ROLE_ROOT / "defaults/main.yaml").read_text())
-    templar = Templar(
-        loader=DataLoader(),
-        variables={"enable_certificate_validation": resolve_certificate_validation()},
-    )
     return templar.template(defaults["vast_storage_validate_certs"])
 
 
@@ -43,47 +33,36 @@ def iter_validation_values(node):
 
 
 def test_certificate_validation_defaults_to_enabled(monkeypatch):
-    """Keep TLS verification enabled when neither environment setting is present."""
-    monkeypatch.delenv("ENABLE_CERTIFICATE_VALIDATION", raising=False)
+    """Keep TLS verification enabled when the VAST setting is absent."""
     monkeypatch.delenv("VAST_VALIDATE_CERTS", raising=False)
 
-    assert resolve_certificate_validation() is True
     assert resolve_storage_role_validation() is True
 
 
 def test_certificate_validation_uses_runtime_environment(monkeypatch):
-    """Allow the storage worker environment to disable TLS verification."""
-    monkeypatch.setenv("ENABLE_CERTIFICATE_VALIDATION", "false")
+    """Allow VAST's worker environment setting to disable TLS verification."""
+    monkeypatch.setenv("VAST_VALIDATE_CERTS", "false")
 
-    assert resolve_certificate_validation() is False
     assert resolve_storage_role_validation() is False
 
 
 def test_unrecognized_certificate_validation_value_keeps_secure_default(monkeypatch):
     """Treat unrecognized setting values as enabled to preserve the secure default."""
-    monkeypatch.setenv("ENABLE_CERTIFICATE_VALIDATION", "unexpected")
+    monkeypatch.setenv("VAST_VALIDATE_CERTS", "unexpected")
 
-    assert resolve_certificate_validation() is True
     assert resolve_storage_role_validation() is True
 
 
-def test_legacy_vast_setting_is_a_fallback(monkeypatch):
-    """Preserve the legacy override for manually managed storage groups."""
-    monkeypatch.delenv("ENABLE_CERTIFICATE_VALIDATION", raising=False)
-    monkeypatch.setenv("VAST_VALIDATE_CERTS", "false")
+def test_generic_setting_is_not_consumed(monkeypatch):
+    """Keep the storage worker contract provider-scoped to VAST."""
+    monkeypatch.delenv("VAST_VALIDATE_CERTS", raising=False)
+    monkeypatch.setenv("ENABLE_CERTIFICATE_VALIDATION", "false")
 
-    assert resolve_certificate_validation() is False
-
-
-def test_storage_role_alias_uses_the_shared_setting():
-    """Keep the VAST-specific role variable aliased to the shared TLS policy."""
-    defaults = yaml.safe_load((ROLE_ROOT / "defaults/main.yaml").read_text())
-
-    assert defaults["vast_storage_validate_certs"] == "{{ enable_certificate_validation }}"
+    assert resolve_storage_role_validation() is True
 
 
 def test_storage_http_clients_use_the_shared_validation_setting():
-    """Ensure every storage task wires HTTP certificate checks to one policy."""
+    """Ensure every storage task wires HTTP certificate checks to the VAST policy."""
     tasks_dir = ROLE_ROOT / "tasks"
     paths = sorted((*tasks_dir.glob("*.yaml"), *tasks_dir.glob("*.yml")))
     validation_values = []

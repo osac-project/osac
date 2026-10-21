@@ -13,7 +13,8 @@ data:
   # is installed on the target cluster and creates VolumeSnapshotClasses only if so.
 
   # TLS certificate validation is managed by the installer value
-  # aap.instanceGroups.storageFulfillment.enable_certificate_validation.
+  # aap.instanceGroups.storageFulfillment.enable_certificate_validation and
+  # mapped to the VAST_VALIDATE_CERTS worker environment variable.
 
   # Per-tenant VIP pool (osac-<tenant>-vippool). OSAC reuses the pool if it already
   # exists (pre-created by the cloud admin). To let OSAC self-create a dedicated pool

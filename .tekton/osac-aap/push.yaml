@@ -219,7 +219,8 @@ spec:
     # ansible-builder (the one in the general tektoncd/catalog is marked
     # deprecated and lives outside Konflux's own trusted task bundle list,
     # so it wouldn't pass the trusted_task.trusted EC check anyway).
-    # Restores clone-repository's source, runs `ansible-builder create`
+    # Restores prefetch-dependencies's source (its Hermeto-rewritten pip
+    # requirements files, in particular), runs `ansible-builder create`
     # (pure local file generation against this component's own already-
     # vendored Galaxy collections -- no network fetch), and re-packages the
     # result -- now including osac-aap/context/{Containerfile,_build/} --
@@ -228,13 +229,23 @@ spec:
     - name: generate-ee-context
       params:
       - name: SOURCE_ARTIFACT
-        value: $(tasks.clone-repository.results.SOURCE_ARTIFACT)
+        # Must run after prefetch-dependencies, not clone-repository --
+        # Hermeto's inject-files step rewrites osac-aap/execution-
+        # environment/requirements.txt's VCS pip deps (git+https:// ->
+        # local file://) in place, and ansible-builder's `create` call
+        # (this task's generate-context step) copies that file into
+        # context/_build/requirements.txt verbatim. Generating the
+        # context before the rewrite bakes in the original git+https://
+        # line, which then fails hermetic network isolation at build
+        # time -- confirmed via a real build failure ("Could not resolve
+        # host: github.com" cloning the VCS dep during `pip install`).
+        value: $(tasks.prefetch-dependencies.results.SOURCE_ARTIFACT)
       - name: ociStorage
         value: $(params.output-image).ee-context
       - name: ociArtifactExpiresAfter
         value: $(params.image-expires-after)
       runAfter:
-      - clone-repository
+      - prefetch-dependencies
       taskSpec:
         params:
         - name: SOURCE_ARTIFACT
@@ -363,13 +374,13 @@ spec:
       - name: enable-package-registry-proxy
         value: $(params.enable-package-registry-proxy)
       - name: SOURCE_ARTIFACT
-        value: $(tasks.generate-ee-context.results.SOURCE_ARTIFACT)
+        value: $(tasks.clone-repository.results.SOURCE_ARTIFACT)
       - name: ociStorage
         value: $(params.output-image).prefetch
       - name: ociArtifactExpiresAfter
         value: $(params.image-expires-after)
       runAfter:
-      - generate-ee-context
+      - clone-repository
       taskRef:
         params:
         - name: name
@@ -422,10 +433,11 @@ spec:
       - name: OMIT_HISTORY
         value: $(params.omit-history)
       - name: SOURCE_ARTIFACT
-        value: $(tasks.prefetch-dependencies.results.SOURCE_ARTIFACT)
+        value: $(tasks.generate-ee-context.results.SOURCE_ARTIFACT)
       - name: CACHI2_ARTIFACT
         value: $(tasks.prefetch-dependencies.results.CACHI2_ARTIFACT)
       runAfter:
+      - generate-ee-context
       - prefetch-dependencies
       taskRef:
         params:

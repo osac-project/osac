@@ -51,7 +51,7 @@ message Subnet {
   SubnetSpec spec = 3;
 
   // Current state of the subnet (system-provided, read-only).
-  SubnetStatus status = 4;
+  SubnetStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Defines the desired configuration for a Subnet.

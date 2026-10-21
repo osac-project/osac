@@ -15,6 +15,7 @@ syntax = "proto3";
 
 package osac.public.v1;
 
+import "google/api/field_behavior.proto";
 import "osac/public/v1/metadata_type.proto";
 import "osac/public/v1/role_type.proto";
 import "osac/public/v1/user_type.proto";
@@ -35,7 +36,7 @@ message RoleBinding {
   RoleBindingSpec spec = 3;
 
   // Current observed state of the role binding.
-  RoleBindingStatus status = 4;
+  RoleBindingStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Desired state of a role binding.

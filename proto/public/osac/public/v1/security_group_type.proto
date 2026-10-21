@@ -50,7 +50,7 @@ message SecurityGroup {
   SecurityGroupSpec spec = 3 [(google.api.field_behavior) = IMMUTABLE];
 
   // Current state of the security group (system-provided, read-only).
-  SecurityGroupStatus status = 4;
+  SecurityGroupStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Defines the desired configuration for a SecurityGroup.

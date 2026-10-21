@@ -15,6 +15,7 @@ syntax = "proto3";
 
 package osac.public.v1;
 
+import "google/api/field_behavior.proto";
 import "osac/public/v1/metadata_type.proto";
 import "osac/public/v1/user_type.proto";
 
@@ -30,7 +31,7 @@ message ProjectMembership {
   ProjectMembershipSpec spec = 3;
 
   // Observed state of the project membership.
-  ProjectMembershipStatus status = 4;
+  ProjectMembershipStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Describes the members of a project.

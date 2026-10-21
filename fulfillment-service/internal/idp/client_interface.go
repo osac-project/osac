@@ -21,6 +21,9 @@ import "context"
 // This interface exists primarily to enable mocking in tests.
 // Production code uses the concrete *Client type.
 type ClientInterface interface {
+	CreateServiceAccountClient(ctx context.Context, clientID, tenantID string) (clientUUID, clientSecret string, err error)
+	DisableServiceAccountClient(ctx context.Context, clientUUID string) error
+	DeleteServiceAccountClient(ctx context.Context, clientUUID string) error
 	CreateTenant(ctx context.Context, tenant *Tenant) (*Tenant, error)
 	GetTenant(ctx context.Context, name string) (*Tenant, error)
 	UpdateTenant(ctx context.Context, tenant *Tenant) (*Tenant, error)

@@ -694,6 +694,18 @@ var _ = Describe("TenantManager", func() {
 
 // Stub methods to satisfy ClientInterface (not used in manager tests)
 
+func (m *mockClient) CreateServiceAccountClient(ctx context.Context, clientID, tenantID string) (string, string, error) {
+	return "", "", fmt.Errorf("not implemented in test mock")
+}
+
+func (m *mockClient) DisableServiceAccountClient(ctx context.Context, clientUUID string) error {
+	return fmt.Errorf("not implemented in test mock")
+}
+
+func (m *mockClient) DeleteServiceAccountClient(ctx context.Context, clientUUID string) error {
+	return fmt.Errorf("not implemented in test mock")
+}
+
 func (m *mockClient) AddUserToOrganization(ctx context.Context, tenantName string, userID string) error {
 	return fmt.Errorf("not implemented in test mock")
 }

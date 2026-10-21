@@ -1,10 +1,10 @@
 import { test } from '@playwright/test';
 
+import { diskImageTestData } from './test_data';
 import {
   createDiskImage,
   expectDiskImageListed,
   openCreateDiskImagePage,
-  vmReadyDiskImage,
 } from '../../../../libs/test-utils/src/disk_images.page';
 import { openAndLoginWithEnvironment } from '../../../../libs/test-utils/src/general/open_and_login';
 import { openDiskImagesPage } from '../../../../libs/test-utils/src/main.page';
@@ -18,10 +18,7 @@ test('creates a VM-ready disk image from Infrastructure', async ({ page }) => {
     return;
   }
 
-  const diskImage = {
-    ...vmReadyDiskImage,
-    name: diskImageName,
-  };
+  const diskImage = { ...diskImageTestData, name: diskImageName };
 
   // 1. Open the browser and log in.
   await openAndLoginWithEnvironment(page, '/');
@@ -32,7 +29,7 @@ test('creates a VM-ready disk image from Infrastructure', async ({ page }) => {
   // 3. Open the creation form and verify its required fields.
   await openCreateDiskImagePage(page);
 
-  // 4. Create a Global Linux AMD64 Fedora image for follow-up VM provisioning.
+  // 4. Create the VM-ready image configured in extravars.yaml.
   await createDiskImage(page, diskImage);
 
   // 5. Return to the Disk images list and verify the new image is listed.

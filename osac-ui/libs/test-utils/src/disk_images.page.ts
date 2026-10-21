@@ -18,16 +18,6 @@ export interface DiskImageCreateParams {
 export type DiskImageLifecycleState = 'Available' | 'Deprecated' | 'Obsolete';
 export type DiskImageLifecycleAction = 'Deprecate' | 'Obsolete' | 'Reactivate';
 
-/** A global Fedora image suitable for Linux AMD64 VM provisioning. */
-export const vmReadyDiskImage: DiskImageCreateParams = {
-  name: 'fedora-e2e',
-  sourceType: 'Registry',
-  sourceRef: 'quay.io/containerdisks/fedora:41',
-  guestOsFamily: 'Linux',
-  architectures: ['amd64'],
-  scope: 'Global',
-};
-
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // Match the definition paired with an exact <dt> label so an unrelated value

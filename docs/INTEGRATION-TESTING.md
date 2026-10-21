@@ -660,11 +660,13 @@ Touched-area requirements: [component guide](../osac-ui/AGENTS.md#tracked-ui-e2e
 
 | Tier | Location / command | Exercises for real | Faked or omitted |
 |---|---|---|---|
-| E2E (manual UI flow) | `apps/e2e-tests/src/vmaas/`; from `osac-ui/`, run `pnpm --filter @osac/playwright exec playwright test --project=vmaas-disk-image-delete` | A real browser against deployed `osac-ui`, Keycloak login, and the Fulfillment API/database; disk image creation, lifecycle changes, and deletion | Provider provisioning and VM creation are not exercised; this flow validates the UI and persisted disk image metadata only. |
+| E2E (manual UI flow) | `apps/e2e-tests/src/vmaas/`; from `osac-ui/`, run `pnpm --filter @osac/playwright exec playwright test --project=vmaas-disk-image-lifecycle` | A real browser against deployed `osac-ui`, Keycloak login, and the Fulfillment API/database; disk image creation, lifecycle changes, and deletion | Provider provisioning and VM creation are not exercised; this flow validates the UI and persisted disk image metadata only. |
 
-The chained disk image project runs create, lifecycle, then delete. It requires
+The lifecycle project runs create, lifecycle, then teardown deletion. It requires
 `OSAC_UI_BASE_URL`, `OSAC_USERNAME`, `OSAC_PASSWORD`, and a unique
-`OSAC_DISK_IMAGE_NAME`; create skips when the name is unset. Set
+`OSAC_DISK_IMAGE_NAME`; all disk image projects skip when the name is unset.
+The create project's teardown deletes the image even when lifecycle checks
+fail. Set
 `IGNORE_HTTPS_ERRORS=true` only for a trusted lab deployment with a
 self-signed or cluster-internal certificate. These tests are manually run
 against a live deployment and are not a CI suite. See the

@@ -18,3 +18,17 @@ instance_type:
     - 'Deprecate'
     - 'Obsolete'
     - 'Reactivate'
+
+disk_image:
+  source_type: 'Registry'
+  source_ref: 'quay.io/containerdisks/fedora:41'
+  guest_os_family: 'Linux'
+  architectures:
+    - 'amd64'
+  scope: 'Global'
+  lifecycle_actions:
+    - 'Obsolete'
+    - 'Reactivate'
+    - 'Deprecate'
+    - 'Reactivate'
+    - 'Obsolete'

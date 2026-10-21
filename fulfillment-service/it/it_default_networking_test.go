@@ -526,7 +526,6 @@ var _ = Describe("Default networking provisioning", func() {
 	})
 
 	It("rejects Delete and default-label removal for system-managed VN/Subnet/SG", func(ctx context.Context) {
-		Skip("OSAC-6370: quarantined – default-network READY→PENDING fixture race")
 		tenantName := fmt.Sprintf("test-defnet-protect-%s", uuid.New())
 
 		By("Creating tenant and waiting for SYNCED")
@@ -552,6 +551,15 @@ var _ = Describe("Default networking provisioning", func() {
 			vnId = vnResp.GetItems()[0].GetId()
 		}, time.Minute, time.Second).Should(Succeed())
 
+		By("Waiting for the VirtualNetwork CR after controller status initialization")
+		waitForNetworkingCR(ctx, listNetworkingCR(
+			tool.KubeClient(),
+			labels.VirtualNetworkUuid,
+			vnId,
+			&osacv1alpha1.VirtualNetworkList{},
+			func(objects *osacv1alpha1.VirtualNetworkList) int { return len(objects.Items) },
+		))
+
 		By("Setting default VirtualNetwork to READY (no osac-operator in IT)")
 		vnResp, err := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: vnId}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -568,6 +576,11 @@ var _ = Describe("Default networking provisioning", func() {
 		By("Waiting for default Subnet and SecurityGroup to reach PENDING")
 		var subnetId, sgId string
 		Eventually(func(g Gomega) {
+			vnResp, err := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: vnId}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(vnResp.GetObject().GetStatus().GetState()).To(
+				Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY))
+
 			subnetResp, err := subnetsClient.List(ctx, privatev1.SubnetsListRequest_builder{
 				Filter: &defaultLabelFilter,
 			}.Build())

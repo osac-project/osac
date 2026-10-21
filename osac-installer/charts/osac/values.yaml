@@ -310,7 +310,7 @@ aap:
       config:
         NETWORK_CLASS: ""
         NETWORK_STEPS_COLLECTION: ""
-        DNS_CLASS: ""
+        DNS_CLASS: "dns.route53.dns"
         DNS_ZONE: ""
         SERVER_SSH_BASTION_HOST: ""
         SERVER_SSH_BASTION_USER: ""

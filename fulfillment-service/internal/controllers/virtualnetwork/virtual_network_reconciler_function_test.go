@@ -23,6 +23,7 @@ import (
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -753,7 +754,7 @@ var _ = Describe("hub persistence", func() {
 		Expect(list.Items[0].Namespace).To(Equal(hubNamespace))
 	})
 
-	It("should create CR on second reconcile after hub is persisted", func() {
+	DescribeTable("creates the CR only after status initialization and preserves subsequent READY feedback", func(initialStatus *privatev1.VirtualNetworkStatus, expectedMask string) {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
 
@@ -768,8 +769,14 @@ var _ = Describe("hub persistence", func() {
 		vnClient.EXPECT().
 			Update(gomock.Any(), gomock.Any(), gomock.Any()).
 			DoAndReturn(func(ctx context.Context, req *privatev1.VirtualNetworksUpdateRequest, opts ...grpc.CallOption) (*privatev1.VirtualNetworksUpdateResponse, error) {
+				Expect(req.GetUpdateMask().GetPaths()).To(Equal([]string{expectedMask}))
+				Expect(req.GetObject().GetStatus().GetState()).To(Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING))
+				Expect(req.GetObject().GetStatus().GetHub()).To(Equal(hubID))
+				objects := &osacv1alpha1.VirtualNetworkList{}
+				Expect(fakeClient.List(ctx, objects)).To(Succeed())
+				Expect(objects.Items).To(BeEmpty())
 				return &privatev1.VirtualNetworksUpdateResponse{Object: req.GetObject()}, nil
-			}).AnyTimes()
+			}).Times(1)
 
 		vn := privatev1.VirtualNetwork_builder{
 			Id: virtualNetworkID,
@@ -781,10 +788,7 @@ var _ = Describe("hub persistence", func() {
 				Region:       "us-east-1",
 				NetworkClass: privatev1.NetworkClassReference_builder{Name: "cudn-net"}.Build(),
 			}.Build(),
-			Status: privatev1.VirtualNetworkStatus_builder{
-				State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING,
-				Hub:   "",
-			}.Build(),
+			Status: proto.CloneOf(initialStatus),
 		}.Build()
 
 		f := &function{
@@ -804,8 +808,6 @@ var _ = Describe("hub persistence", func() {
 		Expect(list.Items).To(BeEmpty())
 
 		// Second reconcile: hub already set, should create CR
-		vn.GetStatus().SetHub(hubID)
-
 		err = f.run(ctx, vn)
 		Expect(err).ToNot(HaveOccurred())
 
@@ -813,7 +815,16 @@ var _ = Describe("hub persistence", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(list.Items).To(HaveLen(1))
 		Expect(list.Items[0].Namespace).To(Equal(hubNamespace))
-	})
+
+		vn.GetStatus().SetState(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY)
+		Expect(f.run(ctx, vn)).To(Succeed())
+		Expect(vn.GetStatus().GetState()).To(Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY))
+	},
+		Entry("missing status requires a whole-status initialization write", nil, "status"),
+		Entry("existing PENDING status requires only a Hub write", privatev1.VirtualNetworkStatus_builder{
+			State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING,
+		}.Build(), "status.hub"),
+	)
 })
 
 var _ = Describe("canonical networking Hub resolution", func() {

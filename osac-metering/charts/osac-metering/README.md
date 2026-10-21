@@ -48,3 +48,22 @@ can remove it:
 Use this only for a revision metering has never billed under: a revision
 that already produced heartbeats must never be removed, or past usage can
 no longer be reproduced exactly.
+
+## Uninstalling
+
+The chart never deletes rule revisions automatically: they are the record of
+what was billed under which rules, and `helm uninstall` removing them by
+routine would destroy that record. The delete-protection admission policy
+enforces this, which also means a plain `helm uninstall` cannot remove the
+revision ConfigMaps it owns. To remove an installation, delete the protection
+first, explicitly, using the names helm rendered for this release (by default
+`<release>-osac-metering-protect-rules`):
+
+```sh
+kubectl delete validatingadmissionpolicybinding <release>-osac-metering-protect-rules
+kubectl delete validatingadmissionpolicy <release>-osac-metering-protect-rules
+helm uninstall <release>
+```
+
+Deleting the namespace works the same way: remove the policy and binding
+before the namespace's resources can be garbage collected.

@@ -43,6 +43,12 @@ metadata:
 spec:
   failurePolicy: Fail
   matchConstraints:
+    # The policy is cluster-scoped: without a namespace constraint one release
+    # would block deletion of every release's rule ConfigMaps. Every namespace
+    # carries its own name as a label since Kubernetes 1.22.
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Release.Namespace }}
     resourceRules:
       - apiGroups: [""]
         apiVersions: ["v1"]

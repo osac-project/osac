@@ -848,6 +848,7 @@
             "topicRetentionMs": {
               "type": "string",
               "description": "How long a tenant's event topic keeps records, in milliseconds; -1 keeps them indefinitely. Only applies to topics the publisher creates",
+              "pattern": "^(-1|[1-9][0-9]*)$",
               "default": "-1"
             }
           }
@@ -1798,6 +1799,7 @@
             "retentionMs": {
               "type": "string",
               "description": "How long the topics keep records, in milliseconds; -1 keeps them indefinitely. The retention is the recovery window, because metering rebuilds its database from the topics",
+              "pattern": "^(-1|[1-9][0-9]*)$",
               "default": "-1"
             }
           },

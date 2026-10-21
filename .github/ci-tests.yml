@@ -21,7 +21,7 @@
   group: unit
   kind: go-unit
   dir: osac-metering/metering-service
-  cmd: ginkgo run -r internal
+  cmd: ginkgo run -r internal ./cmd
   filters: [code, unit-tests-osac-metering]
 - id: Unit tests (osac-metering/adapters)
   group: unit

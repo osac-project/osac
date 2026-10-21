@@ -15,17 +15,11 @@ from tests.e2e.core.helpers import (
     wait_for_running,
 )
 from tests.e2e.core.k8s_client import K8sClient
-from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector
+from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector, parse_time
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
 
 pytestmark = pytest.mark.regression
-
-
-def _parse_time(value: str) -> datetime:
-    if value.endswith("Z"):
-        value = value[:-1] + "+00:00"
-    return datetime.fromisoformat(value)
 
 
 @pytest.mark.metering
@@ -47,6 +41,9 @@ def test_compute_instance_restart(
     try:
         wait_for_running(k8s=k8s_hub_client, name=ci_name)
 
+        # The VM was created without a project, so its heartbeats carry no project
+        # dimension: the engine emits only the facts a resource carries.
+        metering.without_project()
         metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=180)
         metering.verify()
 
@@ -72,7 +69,7 @@ def test_compute_instance_restart(
             fn=lambda: [
                 event
                 for event in metering.get_all_events(HEARTBEAT_TYPE, uuid)
-                if _parse_time(event["data"]["usage"]["from"]) >= running_again_at
+                if parse_time(event["data"]["usage"]["from"]) >= running_again_at
             ],
             until=lambda events: len(events) > 0,
             retries=30,

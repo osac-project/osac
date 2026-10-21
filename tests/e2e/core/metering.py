@@ -7,6 +7,7 @@ import time
 import urllib.error
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -40,8 +41,13 @@ LATE_DIMENSIONS: dict[str, tuple[str, ...]] = {"compute_instance": ("instance_ty
 
 _QUANTITY_RE = re.compile(r"^-?\d+\.\d{6}$")
 
+# Net usage may differ from zero by one microsecond, the heartbeat precision,
+# without being real billing.
+_NET_USAGE_TOLERANCE = Decimal("0.000001")
 
-def _parse_time(s: str) -> datetime:
+
+def parse_time(s: str) -> datetime:
+    """Parse an RFC3339 timestamp, accepting the ``Z`` suffix event payloads use."""
     if s.endswith("Z"):
         s = s[:-1] + "+00:00"
     return datetime.fromisoformat(s)
@@ -63,9 +69,79 @@ def _interval_start(event: dict[str, Any]) -> datetime:
     """
     text = event.get("data", {}).get("usage", {}).get("from") or ""
     try:
-        return _parse_time(text)
+        return parse_time(text)
     except ValueError:
         return datetime.max.replace(tzinfo=UTC)
+
+
+def _exact_seconds(start: datetime, end: datetime) -> Decimal:
+    """The exact interval length in seconds, without a float round-trip.
+
+    Heartbeat precision is microsecond and partial intervals carry quantities
+    like ``37.123456``; ``total_seconds()`` goes via a binary float and can
+    differ from the exact decimal.
+    """
+    delta = end - start
+    micros = (delta.days * 86400 + delta.seconds) * 1_000_000 + delta.microseconds
+    return Decimal(micros) / Decimal(1_000_000)
+
+
+def _dimension_key(event: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+    """The dimension set a heartbeat bills on, as a comparable key.
+
+    A negative correction reverses the same set it cancels, so the set groups
+    a heartbeat with its corrections.
+    """
+    dimensions = event.get("data", {}).get("billing_dimensions", {})
+    return tuple(sorted((name, str(value)) for name, value in dimensions.items()))
+
+
+def _net_usage_by_dimension(events: list[dict[str, Any]]) -> dict[tuple[tuple[str, str], ...], Decimal]:
+    """Net signed usage per dimension set: each meter's quantities summed.
+
+    A meter whose net is zero is reversed history: it was billed and taken
+    back, as when a dimensionless early heartbeat is reversed onto the typed
+    meter that replaces it. Events whose quantity does not parse are skipped;
+    structure validation reports them with its specific assert.
+    """
+    nets: dict[tuple[tuple[str, str], ...], Decimal] = {}
+    for event in events:
+        try:
+            quantity = Decimal(event["data"]["usage"]["quantity"])
+        except (KeyError, ValueError, ArithmeticError):
+            continue
+        key = _dimension_key(event)
+        nets[key] = nets.get(key, Decimal(0)) + quantity
+    return nets
+
+
+def net_usage_past_by_dimension(
+    events: list[dict[str, Any]], *, past: datetime
+) -> dict[tuple[tuple[str, str], ...], Decimal]:
+    """Net billed usage past a moment, per dimension set.
+
+    Each heartbeat bills its quantity over its usage interval, and a negative
+    correction cancels the part of an earlier heartbeat past the moment, so
+    the net collapses corrections and reversals: a full interval that
+    overruns a stop followed by its negative correction nets to zero.
+    """
+    nets: dict[tuple[tuple[str, str], ...], Decimal] = {}
+    for event in events:
+        try:
+            start = parse_time(event["data"]["usage"]["from"])
+            end = parse_time(event["data"]["usage"]["to"])
+            quantity = Decimal(event["data"]["usage"]["quantity"])
+        except (KeyError, ValueError, ArithmeticError):
+            continue
+        if end <= past:
+            continue
+        # The quantity accrues over the interval, so the part past the moment
+        # counts in the interval's proportion.
+        overlap = _exact_seconds(max(start, past), end)
+        length = _exact_seconds(start, end)
+        key = _dimension_key(event)
+        nets[key] = nets.get(key, Decimal(0)) + quantity * overlap / length
+    return nets
 
 
 @dataclass
@@ -109,7 +185,7 @@ class MeteringCollector:
     def stop(self) -> None:
         """No-op -- no background resources to clean up."""
 
-    def without_project(self) -> "MeteringCollector":
+    def without_project(self) -> MeteringCollector:
         """Stop requiring the project dimension: resources created without a project
         send none, because the engine emits only the facts a resource carries."""
         self._require_project = False
@@ -144,6 +220,11 @@ class MeteringCollector:
         """
         events = [ev for ev in self._fetch_events(expected.event_type, expected.resource_id) if _matches(ev, expected)]
         events.sort(key=_interval_start)
+        # Reversed history: a meter whose quantities net to zero was billed and
+        # taken back, so no late dimension is demanded of it. Tied interval
+        # starts order events by fetch order, and a typed replacement can be
+        # returned before the untyped history it reverses.
+        reversed_meters = {key for key, net in _net_usage_by_dimension(events).items() if net == 0}
         carried: set[str] = set()
         for event in events:
             dimensions = event.get("data", {}).get("billing_dimensions", {})
@@ -152,7 +233,12 @@ class MeteringCollector:
                 for dimension in LATE_DIMENSIONS.get(event.get("osacresourcetype", ""), ())
                 if dimensions.get(dimension)
             )
-            self._validate_structure(event, expected, late_required=carried, require_project=self._require_project)
+            late_required = carried
+            if _dimension_key(event) in reversed_meters:
+                late_required = set()
+            self._validate_structure(
+                event, expected, late_required=late_required, require_project=self._require_project
+            )
 
     def verify_event(self, event: dict[str, Any], *, resource_id: str) -> None:
         """Validate one event's envelope and dimension set.
@@ -181,37 +267,61 @@ class MeteringCollector:
         return self._poll_for_event(exp)
 
     def assert_no_events(self, event_type: str, resource_id: str, *, since: str, within: int = 60) -> None:
-        """Assert that no events of the given type bill past ``since`` for the resource.
+        """Assert that no net usage of the given type bills past ``since`` for the resource.
 
-        The CloudEvent time is the start of the usage interval, so filtering on it would
-        miss a heartbeat whose interval started before ``since`` but continued after it:
-        an event bills past the halt exactly when its interval's end does.
+        A round that runs before a halt is folded still sends a full interval
+        past the halt, and the negative correction that follows cancels it, so
+        the check is on net usage per dimension set: the resource bills past
+        the halt exactly when a meter's net usage past it is not zero.
         """
         time.sleep(within)
         events = self._fetch_events(event_type, resource_id)
-        since_dt = datetime.fromisoformat(since)
-        matching = [
-            ev
-            for ev in events
-            if ev.get("type") == event_type
-            and (
-                ev.get("resource_id") == resource_id
-                or ev.get("osacresourceid") == resource_id
-                or ev.get("data", {}).get("resource_id") == resource_id
-            )
-            and (usage := ev.get("data", {}).get("usage", {}))
-            and usage.get("to")
-            and _parse_time(usage["to"]) > since_dt
-        ]
-        assert not matching, (
-            f"Expected no {event_type} events for {resource_id} billing past {since}, "
-            f"but found {len(matching)}: "
-            f"{[{'id': e.get('id'), 'to': e.get('data', {}).get('usage', {}).get('to')} for e in matching]}"
+        since_dt = parse_time(since)
+        expected = ExpectedEvent(event_type=event_type, resource_id=resource_id)
+        matching = [ev for ev in events if _matches(ev, expected)]
+        nets = net_usage_past_by_dimension(matching, past=since_dt)
+        assert all(abs(net) <= _NET_USAGE_TOLERANCE for net in nets.values()), (
+            f"Expected no {event_type} events for {resource_id} billing past {since}, but net usage past it is {nets}"
         )
 
     def get_all_events(self, event_type: str, resource_id: str) -> list[dict[str, Any]]:
         """Return all events matching type and resource_id (for N+1 count assertions)."""
         return self._fetch_events(event_type, resource_id)
+
+    def heartbeat_with_dimensions(
+        self,
+        resource_id: str,
+        wanted: dict[str, str],
+        *,
+        after: datetime | None = None,
+        timeout: int = 300,
+        delay: int = 10,
+    ) -> dict[str, Any]:
+        """Return the first heartbeat of the resource whose dimensions match, waiting for one.
+
+        ``wanted`` maps billing-dimension names to the values the heartbeat must
+        carry. ``after`` bounds the search: only heartbeats whose usage interval
+        starts at or after that moment match, so a check that follows an event
+        cannot be satisfied by a heartbeat from before it.
+        """
+
+        def find() -> dict[str, Any] | None:
+            for event in self.get_all_events(HEARTBEAT_TYPE, resource_id):
+                dimensions = event.get("data", {}).get("billing_dimensions", {})
+                if not all(dimensions.get(key) == value for key, value in wanted.items()):
+                    continue
+                if after is not None and parse_time(event["data"]["usage"]["from"]) < after:
+                    continue
+                return event
+            return None
+
+        return poll_until(
+            fn=find,
+            until=lambda event: event is not None,
+            retries=timeout // delay,
+            delay=delay,
+            description=f"heartbeat of {resource_id} with dimensions {wanted}",
+        )
 
     def _fetch_events(self, event_type: str, resource_id: str) -> list[dict[str, Any]]:
         # Resource IDs are unique per test resource. Avoid filtering by a
@@ -261,7 +371,10 @@ class MeteringCollector:
 
     @staticmethod
     def _validate_structure(
-        event: dict[str, Any], expected: ExpectedEvent, *, late_required: set[str] | None = None,
+        event: dict[str, Any],
+        expected: ExpectedEvent,
+        *,
+        late_required: set[str] | None = None,
         require_project: bool = True,
     ) -> None:
         late_required = late_required or set()
@@ -288,17 +401,17 @@ class MeteringCollector:
         assert data.get("component"), "Missing component in data"
         assert data.get("heartbeat_time"), "Missing heartbeat_time in data"
         assert data.get("rules_revision"), "Missing rules_revision in data"
-        _parse_time(data["heartbeat_time"])
+        parse_time(data["heartbeat_time"])
 
         usage = data.get("usage", {})
         assert usage.get("semantics") == "interval", f"Wrong usage semantics: {usage.get('semantics')}"
         assert usage.get("unit"), "Missing usage unit"
         assert usage.get("precision") == "microsecond", f"Wrong usage precision: {usage.get('precision')}"
         assert usage.get("from") and usage.get("to"), "Missing usage interval"
-        from_dt = _parse_time(usage["from"])
-        to_dt = _parse_time(usage["to"])
+        from_dt = parse_time(usage["from"])
+        to_dt = parse_time(usage["to"])
         assert from_dt < to_dt, f"Usage interval is not forward: {usage['from']}..{usage['to']}"
-        assert _parse_time(event["time"]) == from_dt, "CloudEvent time must be the interval's start"
+        assert parse_time(event["time"]) == from_dt, "CloudEvent time must be the interval's start"
         assert _QUANTITY_RE.match(usage.get("quantity", "")), (
             f"Quantity is not exact fixed-point text: {usage.get('quantity')!r}"
         )

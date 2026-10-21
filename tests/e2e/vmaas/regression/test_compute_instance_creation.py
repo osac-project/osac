@@ -60,8 +60,13 @@ def test_compute_instance_lifecycle(
         metering.verify()
 
         # Verify billing dimensions match the running resource: the heartbeat's
-        # dimensions name the instance type actually running.
-        heartbeat_event = metering.get_event(HEARTBEAT_TYPE, resource_id=uuid)
+        # dimensions name the instance type actually running. The first cached
+        # heartbeat can predate the running-type fact and stay cached after its
+        # reversal and the typed replacement arrive, so wait for the heartbeat
+        # that carries the type instead of inspecting the cached one.
+        heartbeat_event = metering.heartbeat_with_dimensions(
+            uuid, {"instance_type": cli.default_instance_type}, timeout=180
+        )
         bd = heartbeat_event.get("data", {}).get("billing_dimensions", {})
         assert bd.get("instance_type") == cli.default_instance_type, (
             f"billing_dimensions.instance_type mismatch: {bd.get('instance_type')!r} != {cli.default_instance_type!r}"

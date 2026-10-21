@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import subprocess
 from collections.abc import Callable
-from datetime import datetime
 from uuid import uuid4
 
 import pytest
@@ -19,54 +18,10 @@ from tests.e2e.core.helpers import (
     wait_for_external_ip_pool_deletion,
 )
 from tests.e2e.core.k8s_client import K8sClient
-from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector
+from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector, parse_time
 from tests.e2e.core.runner import poll_until
 
 pytestmark = pytest.mark.regression
-
-
-def _heartbeat_with_dimensions(
-    metering: MeteringCollector, resource_id: str, wanted: dict[str, str], *, after: datetime | None = None
-) -> dict[str, object] | None:
-    """Return the first heartbeat of the resource whose dimensions match, waiting for one.
-
-    ``after`` bounds the search: only heartbeats whose usage interval starts at or after
-    that moment match, so a check that follows an event cannot be satisfied by a
-    heartbeat from before it.
-    """
-
-    def find() -> bool:
-        return _heartbeat_with_dimensions_once(metering, resource_id, wanted, after=after) is not None
-
-    poll_until(
-        fn=find,
-        until=lambda found: found is True,
-        retries=60,
-        delay=5,
-        description=f"heartbeat of {resource_id} with dimensions {wanted}",
-    )
-    return _heartbeat_with_dimensions_once(metering, resource_id, wanted, after=after)
-
-
-def _heartbeat_with_dimensions_once(
-    metering: MeteringCollector, resource_id: str, wanted: dict[str, str], *, after: datetime | None = None
-) -> dict[str, object] | None:
-    for event in metering.get_all_events(HEARTBEAT_TYPE, resource_id):
-        dimensions = event.get("data", {}).get("billing_dimensions", {})
-        if not all(dimensions.get(key) == value for key, value in wanted.items()):
-            continue
-        if after is not None:
-            usage_from = _parse_time(event["data"]["usage"]["from"])
-            if usage_from < after:
-                continue
-        return event
-    return None
-
-
-def _parse_time(value: str) -> datetime:
-    if value.endswith("Z"):
-        value = value[:-1] + "+00:00"
-    return datetime.fromisoformat(value)
 
 
 def _attribution_dimension(resource_type: str, ref: str) -> str:
@@ -93,6 +48,9 @@ class TestExternalIPPoolLifecycle:
         assert pool_id in private_grpc.list_external_ip_pool_ids()
         assert ip_id in grpc.list_external_ip_ids()
         wait_for_external_ip_allocated(k8s=k8s_hub_client, name=ip_cr_name)
+        # The IP was created without a project, so its heartbeats carry no
+        # project dimension: the engine emits only the facts a resource carries.
+        metering.without_project()
         metering.expect(HEARTBEAT_TYPE, resource_id=ip_id, timeout=180)
         metering.verify()
         allocated = metering.get_event(HEARTBEAT_TYPE, resource_id=ip_id)
@@ -126,8 +84,8 @@ class TestExternalIPPoolLifecycle:
         # The settled attachment is a dimension change, so the attached meter
         # starts billing: a heartbeat arrives with the attached dimensions. The
         # attribution is the encoded reference, not the bare UUID.
-        attached_event = _heartbeat_with_dimensions(
-            metering, ip_id, {"attached": "true", "attribution": _attribution_dimension("compute_instance", ci1_uuid)}
+        attached_event = metering.heartbeat_with_dimensions(
+            ip_id, {"attached": "true", "attribution": _attribution_dimension("compute_instance", ci1_uuid)}, delay=5
         )
         assert attached_event is not None, "no heartbeat with the attached dimensions arrived"
 
@@ -146,8 +104,8 @@ class TestExternalIPPoolLifecycle:
         # window starts at the attached heartbeat's interval end, so the check cannot be
         # satisfied by the unattached heartbeats from before the attachment.
         assert attached_event is not None
-        attached_to = _parse_time(str(attached_event["data"]["usage"]["to"]))
-        detached_event = _heartbeat_with_dimensions(metering, ip_id, {"attached": "false"}, after=attached_to)
+        attached_to = parse_time(str(attached_event["data"]["usage"]["to"]))
+        detached_event = metering.heartbeat_with_dimensions(ip_id, {"attached": "false"}, after=attached_to, delay=5)
         assert detached_event is not None, "no heartbeat with the detached dimensions arrived"
 
         # --- Re-attach same IP to ComputeInstance 2 ---
@@ -167,11 +125,11 @@ class TestExternalIPPoolLifecycle:
             description="reattached ExternalIP attribution settlement",
         )
         assert second_private_ip["status"]["attribution"]["computeInstance"]["id"] == ci2_uuid
-        reattached_event = _heartbeat_with_dimensions(
-            metering,
+        reattached_event = metering.heartbeat_with_dimensions(
             ip_id,
             {"attached": "true", "attribution": _attribution_dimension("compute_instance", ci2_uuid)},
             after=attached_to,
+            delay=5,
         )
         assert reattached_event is not None, "no heartbeat with the reattached dimensions arrived"
 

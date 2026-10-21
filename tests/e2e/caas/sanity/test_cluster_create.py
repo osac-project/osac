@@ -416,6 +416,9 @@ def assert_cluster_available(
 
     wait_for_cluster_order_condition(k8s=k8s, name=co_name, condition_type="ClusterAvailable")
 
+    # The cluster was created without a project, so its heartbeats carry no
+    # project dimension: the engine emits only the facts a resource carries.
+    metering.without_project()
     # The control-plane meter has once: [READY] semantics: a cluster bills its
     # installation time only when it reaches READY, so the heartbeat expectation can
     # start only after the cluster is available.
@@ -458,15 +461,12 @@ def assert_cluster_available(
     )
 
 
-def _assert_cluster_metering(
-    *, metering: MeteringCollector, uuid: str, node_sets: dict[str, Any], cluster_template: str
-) -> None:
+def _assert_cluster_metering(*, metering: MeteringCollector, uuid: str, cluster_template: str) -> None:
     """Verify the cluster's control plane bills and carries its template dimension.
 
     Worker nodes no longer bill through the cluster: they bill as the bare-metal
     instances they are, so the cluster sends only its control_plane meter.
     """
-    del node_sets  # kept in the signature for the journey's shape
     heartbeat = metering.get_event(HEARTBEAT_TYPE, resource_id=uuid, timeout=180)
     assert heartbeat.get("osacresourcetype") == "cluster_order"
     data = heartbeat.get("data", {})
@@ -607,9 +607,7 @@ def test_cluster_create(
         if os.environ.get("OSAC_FULFILLMENT_TRUST_E2E") == "true":
             assert_management_tls(k8s_hub_client, require_metering=True)
             assert_cluster_trust(k8s_hub_client, cluster.co_name)
-        _assert_cluster_metering(
-            metering=metering, uuid=uuid, node_sets=cluster.node_sets, cluster_template=cluster_template
-        )
+        _assert_cluster_metering(metering=metering, uuid=uuid, cluster_template=cluster_template)
 
         scaled_size = cluster.original_size + 1
         cli.scale_cluster(uuid=uuid, node_set=cluster.worker_node_set, size=scaled_size)
@@ -786,6 +784,9 @@ def assert_cluster_with_two_node_sets_available(
         instance_types=instance_types,
     )
 
+    # The cluster was created without a project, so its heartbeats carry no
+    # project dimension: the engine emits only the facts a resource carries.
+    metering.without_project()
     # The control-plane meter has once: [READY] semantics: a cluster bills its
     # installation time only when it reaches READY, so the heartbeat expectation can
     # start only after the worker and agent readiness checks above.

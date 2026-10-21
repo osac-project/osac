@@ -44,6 +44,9 @@ def test_compute_instance_heartbeat(
     wait_for_provision(k8s=k8s_hub_client, name=ci_name)
     wait_for_running(k8s=k8s_hub_client, name=ci_name)
 
+    # The VM was created without a project, so its heartbeats carry no project
+    # dimension: the engine emits only the facts a resource carries.
+    metering.without_project()
     metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=180)
     metering.verify()  # verify heartbeat arrived BEFORE deleting
 

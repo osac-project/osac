@@ -312,11 +312,12 @@ installer command in the tier table remains the component-integration check.
 - **VMaaS ComputeInstance public update contracts ([OSAC-6617](https://redhat.atlassian.net/browse/OSAC-6617), DEV):** `fulfillment-service/it/it_compute_instance_network_attachment_status_test.go` extends the attachment-feedback case with a real metadata edit, asserts attachment status in the update response and a subsequent public Get, and rejects explicit `status.state` and attachment-status masks alongside their normalized spellings without persistence. `internal/servers/compute_instances_server_test.go` covers status-path rejection, omitted-mask inference, explicit-mask clearing, targeted map replacement, and a real two-transaction reproduction in which concurrent private status feedback survives a maskless public update. The servers suite uses real PostgreSQL row locks and the metering trigger, while suite tenancy and attribution are doubles; the deployed case uses real Fulfillment gRPC APIs, PostgreSQL, and test identities. Run `ginkgo run --timeout 10m internal/servers` from `fulfillment-service/` and the documented Fulfillment installer target above; against an already deployed compatible Kind environment, run `ginkgo run --timeout 20m --focus 'Compute instance network attachment status' it` from `fulfillment-service/`. Neither suite provisions a real VM; provider feedback remains E2E coverage.
 - **MCP server:** `fulfillment-service/it/it_mcp_server_test.go` uses a real MCP
   SDK client and an in-process MCP handler; its exchanger forwards a caller API
-  token to deployed Fulfillment and PostgreSQL. It covers five-tool discovery,
-  connection summaries, tenant visibility, creator attribution, asynchronous
-  create acceptance with the resource ID and version, rejected arbitrary
-  service/method/payload arguments, and rejected writes without persisted
-  mutations. `it_mcp_discovery_test.go` creates
+  token to deployed Fulfillment and PostgreSQL. It covers six-tool discovery,
+  connection summaries, tenant visibility, Project and image prerequisite
+  selection, creator attribution, asynchronous create and update acceptance
+  with resource IDs and versions, optimistic-conflict rejection, rejected
+  arbitrary service/method/payload arguments, and rejected writes without
+  persisted mutations. `it_mcp_discovery_test.go` creates
   Projects and Secret references for two tenants, verifies caller-scoped
   Project and Secret-reference listing, confirms Secret-reference results
   contain only reference metadata, and checks list-only Secret Get rejection
@@ -330,8 +331,8 @@ installer command in the tier table remains the component-integration check.
   covers expired and untrusted-issuer tokens; MCP ingress tests cover wrong
   resource audiences. `mcpserver` unit tests cover 4xx/429/5xx and transport
   exchange failures, typed registration, caller/permission mismatch, safe
-  errors, and connection checks. Helm lint and rendering cover opt-in templates
-  and schema; ordinary
+  errors, prerequisite checks, and connection checks. Helm lint and rendering
+  cover opt-in templates and schema; ordinary
   profile renders exercise the disabled default. Provider provisioning, VM
   readiness, and external MCP-host interoperability remain outside these tests.
 - **ComputeInstance deletion feedback with stale references ([OSAC-6513](https://redhat.atlassian.net/browse/OSAC-6513), DEV):** `internal/references/reference_validator_test.go` covers status-only, spec, mixed, and empty masks at Unit tier. `it/it_compute_instance_update_test.go` holds a deleting ComputeInstance, removes its referenced user-data Secret, then checks that status feedback persists through the deployed private Fulfillment API and PostgreSQL while spec, mixed, and empty-mask updates still reject the missing reference. Run it with the Fulfillment installer target above; against an already deployed compatible Kind environment, run `ginkgo run --timeout 20m --focus 'persists deletion feedback after a referenced Secret disappears' it` from `fulfillment-service/`. The suite omits the operator, AAP, and VM provider, so it does not prove dependent network teardown.

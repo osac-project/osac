@@ -305,7 +305,10 @@ func (t *task) delete(ctx context.Context) (err error) {
 		)
 	}
 
-	return
+	// The Kubernetes deletion may finish asynchronously and Kubernetes changes
+	// are not delivered through the Fulfillment event stream. Retry until the
+	// CR is gone so the controller finalizer can be removed.
+	return controllers.RequeueAfterKubernetesDeletion("volume")
 }
 
 // selectHub assigns a hub to the volume. Unlike resources that inherit their

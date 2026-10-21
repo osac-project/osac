@@ -51,7 +51,7 @@ func validateAndCanonicalizeComputeInstanceCatalogItemPolicies(
 	if err != nil {
 		return nil, err
 	}
-	imageWarnings, err := validateCatalogItemDiskImagePolicy(ctx, scope, fields.GetDiskImage(), diskImagesDao)
+	diskImage, imageWarnings, err := validateCatalogItemDiskImagePolicy(ctx, scope, fields.GetDiskImage(), diskImagesDao)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +59,11 @@ func validateAndCanonicalizeComputeInstanceCatalogItemPolicies(
 	if err := validateComputeInstanceCatalogItemSSHKeyPolicy(ctx, scope, fields.GetSshKey(), secretsDao); err != nil {
 		return nil, err
 	}
-	if err := validateCatalogItemUserDataSourcePolicy(ctx, scope, fields.GetUserDataSource(), secretsDao); err != nil {
+	var validateInline func([]byte) error
+	if fields.GetDiskImage().HasLocked() && diskImage.GetSpec().GetGuestOsFamily() == privatev1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS {
+		validateInline = isPureXMLNoDTD
+	}
+	if err := validateCatalogItemUserDataSourcePolicy(ctx, scope, fields.GetUserDataSource(), secretsDao, validateInline); err != nil {
 		return nil, err
 	}
 

@@ -93,6 +93,42 @@ var _ = Describe("Shared typed-policy helper", func() {
 		Expect(applyPolicy(&privatev1.StringFieldPolicy{}, false, set, decodeStringPolicy, identity[string])).To(MatchError(ContainSubstring("string policy has no behavior")))
 	})
 
+	DescribeTable("validates inline source policy content", func(locked bool, content string, validate, invalid bool) {
+		source := privatev1.UserDataSource_builder{Inline: &content}.Build()
+		policy := privatev1.UserDataSourceFieldPolicy_builder{Locked: source}.Build()
+		if !locked {
+			policy = privatev1.UserDataSourceFieldPolicy_builder{
+				Editable: privatev1.EditableUserDataSourceField_builder{DefaultValue: source}.Build(),
+			}.Build()
+		}
+		var validator func([]byte) error
+		if validate {
+			validator = isPureXMLNoDTD
+		}
+		err := validateCatalogItemUserDataSourcePolicy(ctx, referenceScope{}, policy, nil, validator)
+		if invalid {
+			Expect(err).To(MatchError(ContainSubstring("fields.user_data_source.inline")))
+		} else {
+			Expect(err).NotTo(HaveOccurred())
+		}
+	},
+		Entry("validates a locked inline source", true, "<unattend/>", true, false),
+		Entry("validates an inline default", false, "<unattend/>", true, false),
+		Entry("rejects an invalid locked source", true, "not XML", true, true),
+		Entry("rejects an invalid default", false, "not XML", true, true),
+		Entry("validates explicitly empty inline content", true, "", true, true),
+		Entry("defers validation without a validator", false, "not XML", false, false),
+	)
+
+	It("skips inline validation when no source value is configured", func() {
+		for _, policy := range []*privatev1.UserDataSourceFieldPolicy{
+			nil,
+			privatev1.UserDataSourceFieldPolicy_builder{Editable: privatev1.EditableUserDataSourceField_builder{}.Build()}.Build(),
+		} {
+			Expect(validateCatalogItemUserDataSourcePolicy(ctx, referenceScope{}, policy, nil, isPureXMLNoDTD)).To(Succeed())
+		}
+	})
+
 	Describe("user_data_source.secret policy application", func() {
 		It("applies locked user_data_source.secret to compute spec", func() {
 			lockedSecret := privatev1.SecretLocalReference_builder{

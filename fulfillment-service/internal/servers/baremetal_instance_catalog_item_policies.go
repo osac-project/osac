@@ -59,11 +59,11 @@ func validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(
 		return nil, err
 	}
 
-	warnings, err := validateCatalogItemDiskImagePolicy(ctx, scope, fields.GetDiskImage(), diskImagesDao)
+	_, warnings, err := validateCatalogItemDiskImagePolicy(ctx, scope, fields.GetDiskImage(), diskImagesDao)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateCatalogItemUserDataSourcePolicy(ctx, scope, fields.GetUserDataSource(), secretsDao); err != nil {
+	if err := validateCatalogItemUserDataSourcePolicy(ctx, scope, fields.GetUserDataSource(), secretsDao, validateBareMetalUserData); err != nil {
 		return nil, err
 	}
 
@@ -114,17 +114,6 @@ func applyBareMetalInstanceCatalogItemPolicies(
 func validateBareMetalInstanceCatalogItemScalarPolicies(fields *privatev1.BareMetalInstanceCatalogItemFields) error {
 	if err := validateCatalogItemStringPolicy(fields.GetSshPublicKey(), "fields.ssh_public_key", validateOpenSSHPublicKey); err != nil {
 		return err
-	}
-	state, err := decodeUserDataSourcePolicy(fields.GetUserDataSource())
-	if err != nil {
-		return catalogItemPolicyError("fields.user_data_source", err.Error())
-	}
-	for _, source := range []*privatev1.UserDataSource{state.lockedValue, state.defaultValue} {
-		if source.HasInline() {
-			if err := validateBareMetalUserData([]byte(source.GetInline())); err != nil {
-				return catalogItemPolicyError("fields.user_data_source.inline", err.Error())
-			}
-		}
 	}
 	if _, err := decodeBareMetalInstanceRunStrategyPolicy(fields.GetRunStrategy()); err != nil {
 		return catalogItemPolicyError("fields.run_strategy", err.Error())

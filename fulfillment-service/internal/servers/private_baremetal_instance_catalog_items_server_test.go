@@ -15,6 +15,7 @@ package servers
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -387,6 +388,36 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetObject().GetFields().GetRunStrategy()).ToNot(BeNil())
 		})
+
+		DescribeTable("validates inline user data policy size on Create", func(locked bool, size int, invalid bool) {
+			content := strings.Repeat("a", size)
+			source := privatev1.UserDataSource_builder{Inline: &content}.Build()
+			policy := privatev1.UserDataSourceFieldPolicy_builder{Locked: source}.Build()
+			if !locked {
+				policy = privatev1.UserDataSourceFieldPolicy_builder{
+					Editable: privatev1.EditableUserDataSourceField_builder{DefaultValue: source}.Build(),
+				}.Build()
+			}
+			_, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
+				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{Name: "user-data-offering", Tenant: testTenant}.Build(),
+					Title:    "User data offering",
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
+					Fields:   privatev1.BareMetalInstanceCatalogItemFields_builder{UserDataSource: policy}.Build(),
+				}.Build(),
+			}.Build())
+			if invalid {
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(err.Error()).To(ContainSubstring("fields.user_data_source.inline"))
+			} else {
+				Expect(err).NotTo(HaveOccurred())
+			}
+		},
+			Entry("accepts a locked source at the limit", true, 64*1024, false),
+			Entry("rejects a locked source over the limit", true, 64*1024+1, true),
+			Entry("accepts a default at the limit", false, 64*1024, false),
+			Entry("rejects a default over the limit", false, 64*1024+1, true),
+		)
 
 		DescribeTable("validates SSH public key policy on Create", func(policy *privatev1.StringFieldPolicy, invalid bool) {
 			response, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{

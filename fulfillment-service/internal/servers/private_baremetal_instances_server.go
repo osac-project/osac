@@ -430,14 +430,14 @@ func (s *PrivateBareMetalInstancesServer) resolveCreationSource(ctx context.Cont
 func (s *PrivateBareMetalInstancesServer) Update(ctx context.Context,
 	request *privatev1.BareMetalInstancesUpdateRequest) (response *privatev1.BareMetalInstancesUpdateResponse, err error) {
 	err = s.generic.UpdateWithCandidatePreparation(ctx, request, &response, func(ctx context.Context, current, candidate *privatev1.BareMetalInstance) error {
-		if err := validateBareMetalImmutability(current, candidate, request.GetUpdateMask()); err != nil {
-			return err
-		}
 		if err := s.validateAndResolveUserDataSecret(
 			ctx,
 			candidate.GetSpec(),
 			updateIncludesField(request.GetUpdateMask(), "spec.user_data_source"),
 		); err != nil {
+			return err
+		}
+		if err := validateBareMetalImmutability(current, candidate, request.GetUpdateMask()); err != nil {
 			return err
 		}
 		return nil
@@ -905,7 +905,7 @@ func validateBareMetalUserDataImmutability(
 			"cannot change spec.user_data_source.inline: user_data_source.inline is immutable after creation")
 	}
 	if updatingUserDataSource && existingSpec.GetUserDataSource().GetSecret() != nil &&
-		!proto.Equal(existingSpec.GetUserDataSource().GetSecret(), newSpec.GetUserDataSource().GetSecret()) {
+		!sameSecretReference(existingSpec.GetUserDataSource().GetSecret(), newSpec.GetUserDataSource().GetSecret()) {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"cannot change spec.user_data_source.secret: user_data_source.secret is immutable after creation")
 	}

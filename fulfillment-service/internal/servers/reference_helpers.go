@@ -16,6 +16,8 @@ package servers
 import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // resourceRef is the common interface for typed resource reference messages.
@@ -31,6 +33,16 @@ func refKey(ref resourceRef) string {
 		return id
 	}
 	return ref.GetName()
+}
+
+func sameSecretReference(existing, updated *privatev1.SecretLocalReference) bool {
+	if existing == nil || updated == nil {
+		return existing == updated
+	}
+	if updated.GetId() != "" {
+		return existing.GetId() == updated.GetId()
+	}
+	return existing.GetName() == updated.GetName()
 }
 
 func validateImmutableSecurityGroups[T resourceRef](existing, updated []T, fieldPath string) error {

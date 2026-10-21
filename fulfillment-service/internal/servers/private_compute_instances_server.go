@@ -585,14 +585,14 @@ func (s *PrivateComputeInstancesServer) Update(ctx context.Context,
 			candidate.GetSpec().SetInstanceType(current.GetSpec().GetInstanceType())
 			return nil
 		}
-		if err := validateComputeInstanceImmutability(current, candidate, request.GetUpdateMask()); err != nil {
-			return err
-		}
 		if err := s.validateAndResolveUserDataSecret(
 			ctx,
 			candidate.GetSpec(),
 			updateIncludesField(request.GetUpdateMask(), "spec.user_data_source"),
 		); err != nil {
+			return err
+		}
+		if err := validateComputeInstanceImmutability(current, candidate, request.GetUpdateMask()); err != nil {
 			return err
 		}
 		if updateIncludesField(request.GetUpdateMask(), "spec.user_data_source") {
@@ -1005,15 +1005,7 @@ func validateComputeTemplateImmutability(
 	if updatingSshKey {
 		existingKey := existingSpec.GetSshKey()
 		newKey := newSpec.GetSshKey()
-		sameKey := proto.Equal(existingKey, newKey)
-		if existingKey != nil && newKey != nil {
-			if newKey.GetId() != "" {
-				sameKey = existingKey.GetId() == newKey.GetId()
-			} else {
-				sameKey = existingKey.GetName() == newKey.GetName()
-			}
-		}
-		if !sameKey {
+		if !sameSecretReference(existingKey, newKey) {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"cannot change spec.ssh_key: ssh_key is immutable after creation")
 		}
@@ -1032,7 +1024,7 @@ func validateComputeTemplateImmutability(
 
 	// A Secret source is immutable once set. Inline content may be migrated to a Secret.
 	if updatingUserDataSource && existingSpec.GetUserDataSource().GetSecret() != nil &&
-		!proto.Equal(existingSpec.GetUserDataSource().GetSecret(), newSpec.GetUserDataSource().GetSecret()) {
+		!sameSecretReference(existingSpec.GetUserDataSource().GetSecret(), newSpec.GetUserDataSource().GetSecret()) {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"cannot change spec.user_data_source.secret: user_data_source.secret is immutable after creation")
 	}

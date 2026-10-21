@@ -265,20 +265,20 @@ func validateCatalogItemNetworkAttachmentsNotEmpty[T any](field string, state po
 
 // validateCatalogItemDiskImagePolicy checks a locked image or editable image default when an
 // offering is saved. A name-only reference prefers the item's tenant image, then a shared image;
-// explicit project/shared selectors choose their scope. It stores the image's ID/name/scope in
-// the policy and holds a dependency lock through the request transaction.
+// explicit project/shared selectors choose their scope. It returns the resolved image, stores
+// its ID/name/scope in the policy, and holds a dependency lock through the request transaction.
 func validateCatalogItemDiskImagePolicy(
 	ctx context.Context,
 	scope referenceScope,
 	policy *privatev1.DiskImageReferenceFieldPolicy,
 	resourceDao *dao.GenericDAO[*privatev1.DiskImage],
-) ([]string, error) {
+) (*privatev1.DiskImage, []string, error) {
 	state, err := decodeDiskImageReferencePolicy(policy)
 	if err != nil {
-		return nil, catalogItemPolicyError("fields.disk_image", err.Error())
+		return nil, nil, catalogItemPolicyError("fields.disk_image", err.Error())
 	}
 	if !state.hasLocked && !state.hasDefault {
-		return nil, nil
+		return nil, nil, nil
 	}
 	ref := state.defaultValue
 	if state.hasLocked {
@@ -286,18 +286,18 @@ func validateCatalogItemDiskImagePolicy(
 	}
 	resolved, err := resolveLockedDiskImageReference(ctx, resourceDao, scope, ref, " in fields.disk_image")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	warnings, err := validateResolvedDiskImage(resolved, refKey(ref), " in fields.disk_image")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if state.hasLocked {
 		policy.SetLocked(canonicalDiskImageReference(resolved))
 	} else {
 		policy.GetEditable().SetDefaultValue(canonicalDiskImageReference(resolved))
 	}
-	return warnings, nil
+	return resolved, warnings, nil
 }
 
 // decodeUserDataSourcePolicy retains the complete selected source for atomic policy application.
@@ -317,20 +317,29 @@ func decodeUserDataSourcePolicy(policy *privatev1.UserDataSourceFieldPolicy) (po
 	return policyState[*privatev1.UserDataSource]{}, fmt.Errorf("user data source policy has no behavior")
 }
 
-// validateCatalogItemUserDataSourcePolicy resolves Secret sources in the Catalog Item's exact
-// tenant/project and stores their canonical ID and name. Shared offerings may provide inline
-// content or leave the source editable for each tenant to supply its own Secret.
+// validateCatalogItemUserDataSourcePolicy checks inline content with the supplied validator
+// and resolves Secret sources in the Catalog Item's exact tenant/project, storing their canonical
+// ID and name. Shared offerings may provide inline content or leave the source editable.
 func validateCatalogItemUserDataSourcePolicy(
 	ctx context.Context,
 	scope referenceScope,
 	policy *privatev1.UserDataSourceFieldPolicy,
 	secretsDao *dao.GenericDAO[*privatev1.Secret],
+	validateInline func([]byte) error,
 ) error {
 	state, err := decodeUserDataSourcePolicy(policy)
 	if err != nil {
 		return catalogItemPolicyError("fields.user_data_source", err.Error())
 	}
 	for _, source := range []*privatev1.UserDataSource{state.lockedValue, state.defaultValue} {
+		if source.HasInline() {
+			if validateInline != nil {
+				if err := validateInline([]byte(source.GetInline())); err != nil {
+					return catalogItemPolicyError("fields.user_data_source.inline", err.Error())
+				}
+			}
+			continue
+		}
 		ref := source.GetSecret()
 		if ref == nil {
 			continue

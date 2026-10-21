@@ -36,7 +36,6 @@ import type { CatalogItem } from '../catalogItemDisplay';
 import type { CatalogItemResourceLookups } from '../catalogItemResourceLookups';
 import {
   clusterCatalogItemFields,
-  clusterNodeSetItemsFromPolicy,
   clusterNodeSetMapPolicy,
   clusterVersionReference,
   findClusterVersionForReference,
@@ -48,6 +47,7 @@ import {
   findComputeInstanceTypeForReference,
   formatComputeCatalogDiskImage,
 } from '../computeCatalogItemResourceDisplay';
+import CatalogNodeSets from './CatalogNodeSets';
 
 interface CatalogConfigurationRowProps {
   label: string;
@@ -134,26 +134,6 @@ const formatDiskList = (value: unknown): string | undefined => {
     .join(', ');
 };
 
-const formatNodeSets = (value: unknown): string | undefined => {
-  if (!value || typeof value !== 'object') {
-    return undefined;
-  }
-  const valueRecord = value as Record<string, unknown>;
-  const items = (valueRecord.items ?? valueRecord) as Record<
-    string,
-    { size?: number; baremetalInstanceType?: unknown }
-  >;
-  if (!items) {
-    return undefined;
-  }
-  const rows = Object.entries(items).map(([name, nodeSet]) => {
-    const size = nodeSet.size === undefined ? '—' : nodeSet.size;
-    const hostType = referenceLabel(nodeSet.baremetalInstanceType);
-    return `${name}: ${size}${hostType ? ` (${hostType})` : ''}`;
-  });
-  return rows.length > 0 ? rows.join(', ') : undefined;
-};
-
 const computeConfiguration = (
   item: ComputeInstanceCatalogItem,
   resourceLookups: CatalogItemResourceLookups,
@@ -231,7 +211,6 @@ const clusterConfiguration = (
     versionReference,
   );
   const nodeSetsPolicy = clusterNodeSetMapPolicy(fields);
-  const nodeSets = formatNodeSets(clusterNodeSetItemsFromPolicy(nodeSetsPolicy));
   const network = fields?.network;
 
   return {
@@ -246,7 +225,7 @@ const clusterConfiguration = (
           }
           policy={versionPolicy}
         />
-        <CatalogConfigurationRow label={t('Node sets')} value={nodeSets} policy={nodeSetsPolicy} />
+        <CatalogNodeSets policy={nodeSetsPolicy} resourceLookups={resourceLookups} />
         <CatalogConfigurationRow
           label={t('Pod CIDR')}
           value={policyValue(network?.podCidr)}
@@ -335,9 +314,7 @@ const CatalogItemConfiguration = ({
   }
 
   return configuration?.hasConfiguredField ? (
-    <DescriptionList isHorizontal isCompact>
-      {configuration.rows}
-    </DescriptionList>
+    <DescriptionList isCompact>{configuration.rows}</DescriptionList>
   ) : (
     <Content component="p">{t('No governed configuration')}</Content>
   );

@@ -278,7 +278,7 @@ func (t *task) update(ctx context.Context) error {
 	}
 
 	// Set the user data Secret name if user data is provided (no K8s call yet):
-	if t.computeInstance.GetSpec().HasUserData() || t.computeInstance.GetSpec().GetUserDataSecret() != nil {
+	if t.computeInstance.GetSpec().GetUserDataSource() != nil {
 		t.userDataSecretName = fmt.Sprintf("%s%s", t.computeInstance.GetId(), userDataSecretSuffix)
 	}
 
@@ -1228,19 +1228,19 @@ func (t *task) ensureUserDataSecret(ctx context.Context, owner *osacv1alpha1.Com
 }
 
 func (t *task) resolveUserData(ctx context.Context) (string, error) {
-	ref := t.computeInstance.GetSpec().GetUserDataSecret()
+	ref := t.computeInstance.GetSpec().GetUserDataSource().GetSecret()
 	if ref == nil {
-		return t.computeInstance.GetSpec().GetUserData(), nil
+		return t.computeInstance.GetSpec().GetUserDataSource().GetInline(), nil
 	}
 	if t.r.secretsClient == nil {
-		return "", errors.New("secrets client is required to resolve user_data_secret")
+		return "", errors.New("secrets client is required to resolve user_data_source.secret")
 	}
 	if ref.GetId() == "" {
-		return "", errors.New("user_data_secret must have an id")
+		return "", errors.New("user_data_source.secret must have an id")
 	}
 	response, err := t.r.secretsClient.Get(ctx, privatev1.SecretsGetRequest_builder{Id: ref.GetId()}.Build())
 	if err != nil {
-		return "", fmt.Errorf("failed to fetch user_data_secret: %w", err)
+		return "", fmt.Errorf("failed to fetch user_data_source.secret: %w", err)
 	}
 	value, ok := response.GetObject().GetData()[userDataSecretKey]
 	if !ok || len(value) == 0 {

@@ -789,10 +789,10 @@ func (c *runnerContext) buildSpec(templateID string,
 		spec.RunStrategy = &rs
 	}
 	if c.args.userData != "" {
-		spec.UserData = proto.String(c.args.userData)
+		spec.UserDataSource = publicv1.UserDataSource_builder{Inline: proto.String(c.args.userData)}.Build()
 	}
 	if c.args.userDataSecret != "" {
-		spec.UserDataSecret = publicv1.SecretLocalReference_builder{Name: c.args.userDataSecret}.Build()
+		spec.UserDataSource = publicv1.UserDataSource_builder{Secret: publicv1.SecretLocalReference_builder{Name: c.args.userDataSecret}.Build()}.Build()
 	}
 	if err := c.applyNetworkingFlags(&spec); err != nil {
 		return nil, err
@@ -939,10 +939,10 @@ func (c *runnerContext) buildSpecFromCatalogItem(catalogItemID string) (*publicv
 		spec.RunStrategy = &rs
 	}
 	if c.args.userData != "" {
-		spec.UserData = proto.String(c.args.userData)
+		spec.UserDataSource = publicv1.UserDataSource_builder{Inline: proto.String(c.args.userData)}.Build()
 	}
 	if c.args.userDataSecret != "" {
-		spec.UserDataSecret = publicv1.SecretLocalReference_builder{Name: c.args.userDataSecret}.Build()
+		spec.UserDataSource = publicv1.UserDataSource_builder{Secret: publicv1.SecretLocalReference_builder{Name: c.args.userDataSecret}.Build()}.Build()
 	}
 	if err := c.applyNetworkingFlags(&spec); err != nil {
 		return nil, err

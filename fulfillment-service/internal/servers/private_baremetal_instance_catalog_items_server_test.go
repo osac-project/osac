@@ -480,9 +480,9 @@ var _ = Describe("Bare Metal Instance Catalog Item policy application", func() {
 		autoExternalIP := false
 
 		fields := privatev1.BareMetalInstanceCatalogItemFields_builder{
-			SshPublicKey: privatev1.StringFieldPolicy_builder{Locked: &sshKey}.Build(),
-			UserData:     privatev1.StringFieldPolicy_builder{Locked: &userData}.Build(),
-			RunStrategy:  privatev1.BareMetalInstanceRunStrategyFieldPolicy_builder{Locked: &runStrategy}.Build(),
+			SshPublicKey:   privatev1.StringFieldPolicy_builder{Locked: &sshKey}.Build(),
+			UserDataSource: privatev1.UserDataSourceFieldPolicy_builder{Locked: privatev1.UserDataSource_builder{Inline: &userData}.Build()}.Build(),
+			RunStrategy:    privatev1.BareMetalInstanceRunStrategyFieldPolicy_builder{Locked: &runStrategy}.Build(),
 			NetworkAttachments: privatev1.BareMetalNetworkAttachmentListFieldPolicy_builder{
 				Locked: privatev1.BareMetalNetworkAttachmentList_builder{Items: []*privatev1.BareMetalNetworkAttachment{nil, attachment}}.Build(),
 			}.Build(),
@@ -495,7 +495,7 @@ var _ = Describe("Bare Metal Instance Catalog Item policy application", func() {
 
 		Expect(applyBareMetalInstanceCatalogItemPolicies(spec, item.GetFields())).To(Succeed())
 		Expect(spec.GetSshPublicKey()).To(Equal(sshKey))
-		Expect(spec.GetUserData()).To(Equal(userData))
+		Expect(spec.GetUserDataSource().GetInline()).To(Equal(userData))
 		Expect(spec.GetRunStrategy()).To(Equal(runStrategy))
 		Expect(spec.GetNetworkAttachments()).To(HaveLen(2))
 		Expect(spec.GetNetworkAttachments()[0]).To(BeNil())

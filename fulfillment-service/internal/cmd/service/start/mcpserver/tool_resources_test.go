@@ -383,6 +383,7 @@ var _ = Describe("handleListResources", func() {
 var _ = Describe("handleGetResource", func() {
 	It("Gets a compute instance catalog item and returns its API representation", func() {
 		var capturedToken string
+		policy := &publicv1.UserDataSourceFieldPolicy{}
 		catalogItems := &mockComputeInstanceCatalogItemsClient{
 			getFunc: func(
 				ctx context.Context, request *publicv1.ComputeInstanceCatalogItemsGetRequest, options ...grpc.CallOption,
@@ -394,7 +395,7 @@ var _ = Describe("handleGetResource", func() {
 						Id:    "catalog-item-1",
 						Title: "Small Fedora VM",
 						Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
-							UserData: publicv1.StringFieldPolicy_builder{Locked: proto.String("sensitive-cloud-init")}.Build(),
+							UserDataSource: policy,
 						}.Build(),
 					}.Build(),
 				}.Build(), nil
@@ -402,21 +403,35 @@ var _ = Describe("handleGetResource", func() {
 		}
 
 		handler := handleGetResource(newResourceRegistry(ServerDeps{ComputeInstanceCatalogItemsClient: catalogItems}))
-		_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), GetResourceInput{
-			ResourceType: ResourceTypeComputeInstanceCatalogItem,
-			ID:           "catalog-item-1",
-		})
-		Expect(err).ToNot(HaveOccurred())
-		Expect(output.Resource).To(HaveKeyWithValue("id", "catalog-item-1"))
-		Expect(output.Resource).To(HaveKeyWithValue("title", "Small Fedora VM"))
-		fields, ok := output.Resource["fields"].(map[string]any)
-		Expect(ok).To(BeTrue())
-		Expect(fields).ToNot(HaveKey("userData"))
-		Expect(capturedToken).To(Equal("Bearer api-for-raw-bearer-value"))
+		for _, editable := range []bool{false, true} {
+			for _, inline := range []bool{true, false} {
+				source := publicv1.UserDataSource_builder{Inline: proto.String("sensitive-cloud-init")}.Build()
+				if !inline {
+					source.SetSecret(publicv1.SecretLocalReference_builder{Id: "user-data-secret"}.Build())
+				}
+				policy.SetLocked(source)
+				if editable {
+					policy.SetEditable(publicv1.EditableUserDataSourceField_builder{DefaultValue: source}.Build())
+				}
+				_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), GetResourceInput{
+					ResourceType: ResourceTypeComputeInstanceCatalogItem,
+					ID:           "catalog-item-1",
+				})
+				Expect(err).ToNot(HaveOccurred())
+				Expect(output.Resource).To(HaveKeyWithValue("id", "catalog-item-1"))
+				Expect(output.Resource).To(HaveKeyWithValue("title", "Small Fedora VM"))
+				fields, ok := output.Resource["fields"].(map[string]any)
+				Expect(ok).To(BeTrue())
+				_, visible := fields["userDataSource"]
+				Expect(visible).To(Equal(!inline))
+				Expect(capturedToken).To(Equal("Bearer api-for-raw-bearer-value"))
+			}
+		}
 	})
 
 	It("Gets a compute instance and returns its API representation", func() {
 		var capturedToken string
+		source := publicv1.UserDataSource_builder{Inline: proto.String("sensitive-cloud-init")}.Build()
 		instances := &mockComputeInstancesClient{
 			getFunc: func(
 				ctx context.Context, request *publicv1.ComputeInstancesGetRequest, options ...grpc.CallOption,
@@ -428,8 +443,8 @@ var _ = Describe("handleGetResource", func() {
 						Id:       "instance-1",
 						Metadata: publicv1.Metadata_builder{Name: "demo-vm"}.Build(),
 						Spec: publicv1.ComputeInstanceSpec_builder{
-							UserData:     proto.String("sensitive-cloud-init"),
-							InstanceType: publicv1.InstanceTypeReference_builder{Id: "small"}.Build(),
+							UserDataSource: source,
+							InstanceType:   publicv1.InstanceTypeReference_builder{Id: "small"}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build(), nil
@@ -448,9 +463,19 @@ var _ = Describe("handleGetResource", func() {
 		Expect(metadata).To(HaveKeyWithValue("name", "demo-vm"))
 		spec, ok := output.Resource["spec"].(map[string]any)
 		Expect(ok).To(BeTrue())
-		Expect(spec).ToNot(HaveKey("userData"))
+		Expect(spec).ToNot(HaveKey("userDataSource"))
 		Expect(spec).To(HaveKey("instanceType"))
 		Expect(capturedToken).To(Equal("Bearer api-for-raw-bearer-value"))
+
+		source.SetSecret(publicv1.SecretLocalReference_builder{Id: "user-data-secret"}.Build())
+		_, output, err = handler(context.Background(), requestWithToken("raw-bearer-value"), GetResourceInput{
+			ResourceType: ResourceTypeComputeInstance,
+			ID:           "instance-1",
+		})
+		Expect(err).ToNot(HaveOccurred())
+		spec, ok = output.Resource["spec"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(spec["userDataSource"]).To(HaveKeyWithValue("secret", HaveKeyWithValue("id", "user-data-secret")))
 	})
 
 	It("Gets a compute instance template including the boot disk storage tier", func() {

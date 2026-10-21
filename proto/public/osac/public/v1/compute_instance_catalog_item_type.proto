@@ -65,7 +65,8 @@ message ComputeInstanceCatalogItemFields {
   reserved "ssh_public_key";
   ComputeInstanceBootDiskFieldPolicies boot_disk = 4;
   ComputeInstanceRunStrategyFieldPolicy run_strategy = 5;
-  StringFieldPolicy user_data = 6;
+  reserved 6;
+  reserved "user_data";
   ComputeNetworkAttachmentListFieldPolicy network_attachments = 7;
   BoolFieldPolicy auto_external_ip_attachment = 8;
   ComputeInstanceDiskListFieldPolicy additional_disks = 9;
@@ -74,9 +75,11 @@ message ComputeInstanceCatalogItemFields {
   // a tenant catalog may also configure a default key.
   SecretReferenceFieldPolicy ssh_key = 10;
 
-  // Optional user data Secret reference. Governs or defaults the secret containing cloud-init
-  // user data for instances created from this catalog item.
-  SecretReferenceFieldPolicy user_data_secret = 11;
+  reserved 11;
+  reserved "user_data_secret";
+
+  // Governs the complete user data source, including selection of inline content or a Secret.
+  UserDataSourceFieldPolicy user_data_source = 12;
 }
 
 // Groups policies for governable compute instance boot disk fields.

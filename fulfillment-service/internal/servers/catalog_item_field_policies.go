@@ -300,54 +300,54 @@ func validateCatalogItemDiskImagePolicy(
 	return warnings, nil
 }
 
-// validateCatalogItemUserDataSecretPolicy checks a locked user data secret or
-// editable default in the Catalog Item's exact tenant/project, verifies its
-// type, and stores its ID and name. Shared offerings may leave the secret
-// editable but cannot choose a tenant-local secret.
-func validateCatalogItemUserDataSecretPolicy(
+// decodeUserDataSourcePolicy retains the complete selected source for atomic policy application.
+func decodeUserDataSourcePolicy(policy *privatev1.UserDataSourceFieldPolicy) (policyState[*privatev1.UserDataSource], error) {
+	if policy == nil {
+		return policyState[*privatev1.UserDataSource]{}, nil
+	}
+	if policy.HasLocked() {
+		return policyState[*privatev1.UserDataSource]{hasLocked: true, lockedValue: policy.GetLocked()}, nil
+	}
+	if policy.HasEditable() {
+		return policyState[*privatev1.UserDataSource]{
+			hasDefault:   policy.GetEditable().GetDefaultValue() != nil,
+			defaultValue: policy.GetEditable().GetDefaultValue(),
+		}, nil
+	}
+	return policyState[*privatev1.UserDataSource]{}, fmt.Errorf("user data source policy has no behavior")
+}
+
+// validateCatalogItemUserDataSourcePolicy resolves Secret sources in the Catalog Item's exact
+// tenant/project and stores their canonical ID and name. Shared offerings may provide inline
+// content or leave the source editable for each tenant to supply its own Secret.
+func validateCatalogItemUserDataSourcePolicy(
 	ctx context.Context,
 	scope referenceScope,
-	policy *privatev1.SecretReferenceFieldPolicy,
+	policy *privatev1.UserDataSourceFieldPolicy,
 	secretsDao *dao.GenericDAO[*privatev1.Secret],
 ) error {
-	if policy == nil {
-		return nil
-	}
-	state, err := decodeSecretReferencePolicy(policy)
+	state, err := decodeUserDataSourcePolicy(policy)
 	if err != nil {
-		return catalogItemPolicyError("fields.user_data_secret", err.Error())
+		return catalogItemPolicyError("fields.user_data_source", err.Error())
 	}
-	if err := validateSharedCatalogItemLocalReferencePolicy(scope, "fields.user_data_secret", state.hasLocked, state.hasDefault); err != nil {
-		return err
-	}
-	resolve := func(ref *privatev1.SecretLocalReference) (*privatev1.SecretLocalReference, error) {
+	for _, source := range []*privatev1.UserDataSource{state.lockedValue, state.defaultValue} {
+		ref := source.GetSecret()
 		if ref == nil {
-			return nil, nil
+			continue
 		}
-		resolved, resolveErr := resolveLockedResourceInScope(ctx, secretsDao, scope, ref.GetId(), ref.GetName(),
-			"secret", " in fields.user_data_secret", grpccodes.InvalidArgument)
-		if resolveErr != nil {
-			return nil, resolveErr
+		if err := validateSharedCatalogItemLocalReferencePolicy(scope, "fields.user_data_source.secret", state.hasLocked, state.hasDefault); err != nil {
+			return err
 		}
-		if err := validateResolvedSecretLifecycleAndType(resolved, refKey(ref), "fields.user_data_secret",
+		resolved, err := resolveLockedResourceInScope(ctx, secretsDao, scope, ref.GetId(), ref.GetName(),
+			"secret", " in fields.user_data_source.secret", grpccodes.InvalidArgument)
+		if err != nil {
+			return err
+		}
+		if err := validateResolvedSecretLifecycleAndType(resolved, refKey(ref), "fields.user_data_source.secret",
 			privatev1.SecretType_SECRET_TYPE_USER_DATA); err != nil {
-			return nil, err
+			return err
 		}
-		return canonicalSecretLocalReference(resolved), nil
-	}
-	if state.hasLocked {
-		canonical, resolveErr := resolve(state.lockedValue)
-		if resolveErr != nil {
-			return resolveErr
-		}
-		policy.SetLocked(canonical)
-	}
-	if state.hasDefault {
-		canonical, resolveErr := resolve(state.defaultValue)
-		if resolveErr != nil {
-			return resolveErr
-		}
-		policy.GetEditable().SetDefaultValue(canonical)
+		source.SetSecret(canonicalSecretLocalReference(resolved))
 	}
 	return nil
 }

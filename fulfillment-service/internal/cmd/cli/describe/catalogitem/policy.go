@@ -38,12 +38,26 @@ func appendPolicyRow(rows *[]row, label string, locked, hasDefault bool, lockedV
 	*rows = append(*rows, r)
 }
 
-func addString(rows *[]row, label string, p *publicv1.StringFieldPolicy, userData bool) {
+func addString(rows *[]row, label string, p *publicv1.StringFieldPolicy) {
 	if p == nil {
 		return
 	}
 	appendPolicyRow(rows, label, p.HasLocked(), p.GetEditable().HasDefaultValue(),
-		formatText(p.GetLocked(), userData), formatText(p.GetEditable().GetDefaultValue(), userData))
+		formatText(p.GetLocked(), false), formatText(p.GetEditable().GetDefaultValue(), false))
+}
+
+func addUserDataSource(rows *[]row, p *publicv1.UserDataSourceFieldPolicy) {
+	if p == nil {
+		return
+	}
+	format := func(source *publicv1.UserDataSource) string {
+		if source.HasInline() {
+			return formatText(source.GetInline(), true)
+		}
+		return "Secret: " + formatRef(source.GetSecret())
+	}
+	appendPolicyRow(rows, "User data source", p.HasLocked(), p.GetEditable().GetDefaultValue() != nil,
+		format(p.GetLocked()), format(p.GetEditable().GetDefaultValue()))
 }
 
 func addBool(rows *[]row, label string, p *publicv1.BoolFieldPolicy) {
@@ -161,14 +175,6 @@ func formatParameter(value *anypb.Any) string {
 		}
 	}
 	return "(unavailable; see get -o yaml)"
-}
-
-func addSecretRef(rows *[]row, label string, p *publicv1.SecretReferenceFieldPolicy) {
-	if p == nil {
-		return
-	}
-	appendPolicyRow(rows, label, p.HasLocked(), p.GetEditable().GetDefaultValue() != nil,
-		formatRef(p.GetLocked()), formatRef(p.GetEditable().GetDefaultValue()))
 }
 
 func addCollection(rows *[]row, label string, locked, hasDefault bool, lockedItems, defaultItems []string) {

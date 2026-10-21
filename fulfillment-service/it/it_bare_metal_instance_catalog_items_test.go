@@ -86,7 +86,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 				SshPublicKey: publicv1.StringFieldPolicy_builder{
 					Editable: publicv1.EditableStringField_builder{DefaultValue: new(catalogItemFixtureSSHPublicKey)}.Build(),
 				}.Build(),
-				UserData: publicv1.StringFieldPolicy_builder{Locked: new("")}.Build(),
+				UserDataSource: publicv1.UserDataSourceFieldPolicy_builder{Locked: publicv1.UserDataSource_builder{Inline: new("")}.Build()}.Build(),
 				RunStrategy: publicv1.BareMetalInstanceRunStrategyFieldPolicy_builder{
 					Editable: publicv1.EditableBareMetalInstanceRunStrategyField_builder{DefaultValue: new(publicv1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_HALTED)}.Build(),
 				}.Build(),
@@ -126,8 +126,8 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			Expect(spec.GetDiskImage().GetId()).To(Equal(image.GetId()))
 			Expect(spec.GetDiskImage().GetShared()).To(BeTrue())
 			Expect(spec.GetSshPublicKey()).To(Equal(catalogItemFixtureSSHPublicKey))
-			Expect(spec.HasUserData()).To(BeTrue())
-			Expect(spec.GetUserData()).To(BeEmpty())
+			Expect(spec.GetUserDataSource().HasInline()).To(BeTrue())
+			Expect(spec.GetUserDataSource().GetInline()).To(BeEmpty())
 			Expect(spec.GetRunStrategy()).To(Equal(publicv1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_HALTED))
 			Expect(spec.HasAutoExternalIpAttachment()).To(BeTrue())
 			Expect(spec.GetAutoExternalIpAttachment()).To(BeFalse())
@@ -160,7 +160,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 				{
 					name: "empty user data",
 					set: func(s *publicv1.BareMetalInstanceSpec) {
-						s.SetUserData("")
+						s.SetUserDataSource(publicv1.UserDataSource_builder{Inline: new("")}.Build())
 					},
 				},
 				{
@@ -400,7 +400,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			Entry("caller override: security group belongs to a different virtual network", true, codes.InvalidArgument),
 			Entry("catalog item default: subnet is no longer ready", false, codes.FailedPrecondition),
 		)
-		It("checks user-data Secret conflicts after defaults and releases the conflict when the policy is cleared", func(ctx context.Context) {
+		It("allows a Secret source to replace an inline catalog default", func(ctx context.Context) {
 			ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
 			secret := createCatalogItemUserDataSecretFixture(ctx, usersGroup)
 			image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
@@ -410,8 +410,8 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 				Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: template}.Build(),
 				Published: true,
 				Fields: publicv1.BareMetalInstanceCatalogItemFields_builder{
-					UserData: publicv1.StringFieldPolicy_builder{
-						Editable: publicv1.EditableStringField_builder{DefaultValue: new("#cloud-config\n")}.Build(),
+					UserDataSource: publicv1.UserDataSourceFieldPolicy_builder{
+						Editable: publicv1.EditableUserDataSourceField_builder{DefaultValue: publicv1.UserDataSource_builder{Inline: new("#cloud-config\n")}.Build()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -422,32 +422,16 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 					Spec: publicv1.BareMetalInstanceSpec_builder{
 						CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
 						DiskImage:      publicv1.DiskImageReference_builder{Id: image.GetId()}.Build(),
-						UserDataSecret: publicv1.SecretLocalReference_builder{Id: secret}.Build(),
+						UserDataSource: publicv1.UserDataSource_builder{Secret: publicv1.SecretLocalReference_builder{Id: secret}.Build()}.Build(),
 						InstanceType:   publicv1.BareMetalInstanceTypeReference_builder{Id: createCatalogItemBareMetalInstanceTypeFixture(ctx, usersGroup), Shared: true}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build()
 			dry := metadata.AppendToOutgoingContext(ctx, "x-dry-run", "true")
-			_, err := client.Create(dry, request)
-			expectCatalogItemStatusCode(err, codes.InvalidArgument)
-			By("treating an explicit empty string as present for mutual exclusivity")
-			request.GetObject().GetSpec().SetUserData("")
-			_, err = client.Create(dry, request)
-			expectCatalogItemStatusCode(err, codes.InvalidArgument)
-			By("clearing the catalog item policy before using the Secret on its own")
-			_, err = publicv1.NewBareMetalInstanceCatalogItemsClient(tool.ExternalView().AdminConn()).Update(ctx, publicv1.BareMetalInstanceCatalogItemsUpdateRequest_builder{
-				Object: publicv1.BareMetalInstanceCatalogItem_builder{
-					Id:     item.GetId(),
-					Fields: publicv1.BareMetalInstanceCatalogItemFields_builder{}.Build(),
-				}.Build(),
-				UpdateMask: catalogItemUpdateMask("fields.user_data"),
-			}.Build())
-			Expect(err).NotTo(HaveOccurred())
-			request.GetObject().GetSpec().ClearUserData()
 			response, err := client.Create(dry, request)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(response.GetObject().GetSpec().GetUserDataSecret().GetId()).To(Equal(secret))
-			Expect(response.GetObject().GetSpec().HasUserData()).To(BeFalse())
+			Expect(response.GetObject().GetSpec().GetUserDataSource().GetSecret().GetId()).To(Equal(secret))
+			Expect(response.GetObject().GetSpec().GetUserDataSource().HasInline()).To(BeFalse())
 		})
 	})
 	Context("Template parameters", func() {
@@ -544,7 +528,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			_, err := items.Update(ctx, publicv1.BareMetalInstanceCatalogItemsUpdateRequest_builder{
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{Id: owned.GetId(), Published: true,
 					Fields: publicv1.BareMetalInstanceCatalogItemFields_builder{
-						UserData:                 publicv1.StringFieldPolicy_builder{Editable: publicv1.EditableStringField_builder{DefaultValue: new("#cloud-config\n# tenant")}.Build()}.Build(),
+						UserDataSource:           publicv1.UserDataSourceFieldPolicy_builder{Editable: publicv1.EditableUserDataSourceField_builder{DefaultValue: publicv1.UserDataSource_builder{Inline: new("#cloud-config\n# tenant")}.Build()}.Build()}.Build(),
 						AutoExternalIpAttachment: publicv1.BoolFieldPolicy_builder{Locked: new(false)}.Build(),
 					}.Build(),
 				}.Build(), UpdateMask: catalogItemUpdateMask("published", "fields"),
@@ -552,7 +536,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			Expect(err).NotTo(HaveOccurred())
 			visible, err := memberItems.Get(ctx, publicv1.BareMetalInstanceCatalogItemsGetRequest_builder{Id: owned.GetId()}.Build())
 			Expect(err).NotTo(HaveOccurred())
-			Expect(visible.GetObject().GetFields().GetUserData().GetEditable().GetDefaultValue()).To(Equal("#cloud-config\n# tenant"))
+			Expect(visible.GetObject().GetFields().GetUserDataSource().GetEditable().GetDefaultValue().GetInline()).To(Equal("#cloud-config\n# tenant"))
 			Expect(visible.GetObject().GetFields().GetAutoExternalIpAttachment().HasLocked()).To(BeTrue())
 			Expect(visible.GetObject().GetFields().GetAutoExternalIpAttachment().GetLocked()).To(BeFalse())
 
@@ -561,7 +545,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			spec := publicv1.BareMetalInstanceSpec_builder{
 				CatalogItem:        publicv1.BareMetalInstanceCatalogItemReference_builder{Id: owned.GetId()}.Build(),
 				DiskImage:          publicv1.DiskImageReference_builder{Id: image.GetId()}.Build(),
-				UserData:           new("#cloud-config\n# member"),
+				UserDataSource:     publicv1.UserDataSource_builder{Inline: new("#cloud-config\n# member")}.Build(),
 				NetworkAttachments: []*publicv1.BareMetalNetworkAttachment{network.bareMetalInstanceAttachment()},
 				InstanceType:       publicv1.BareMetalInstanceTypeReference_builder{Id: createCatalogItemBareMetalInstanceTypeFixture(ctx, tenant), Shared: true}.Build(),
 			}.Build()
@@ -571,7 +555,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			stored, err := objects.Get(ctx, publicv1.BareMetalInstancesGetRequest_builder{Id: created.GetId()}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			Expect(stored.GetObject().GetMetadata().GetTenant()).To(Equal(tenant))
-			Expect(stored.GetObject().GetSpec().GetUserData()).To(Equal("#cloud-config\n# member"))
+			Expect(stored.GetObject().GetSpec().GetUserDataSource().GetInline()).To(Equal("#cloud-config\n# member"))
 			Expect(stored.GetObject().GetSpec().HasAutoExternalIpAttachment()).To(BeTrue())
 			Expect(stored.GetObject().GetSpec().GetAutoExternalIpAttachment()).To(BeFalse())
 
@@ -639,7 +623,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 				Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: template}.Build(),
 				Published: true,
 				Fields: publicv1.BareMetalInstanceCatalogItemFields_builder{
-					UserData:                 publicv1.StringFieldPolicy_builder{Locked: new("initial")}.Build(),
+					UserDataSource:           publicv1.UserDataSourceFieldPolicy_builder{Locked: publicv1.UserDataSource_builder{Inline: new("initial")}.Build()}.Build(),
 					AutoExternalIpAttachment: publicv1.BoolFieldPolicy_builder{Locked: new(false)}.Build(),
 				}.Build(),
 			}.Build())
@@ -650,20 +634,20 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Id: item.GetId(),
 					Fields: publicv1.BareMetalInstanceCatalogItemFields_builder{
-						UserData: publicv1.StringFieldPolicy_builder{
-							Editable: publicv1.EditableStringField_builder{DefaultValue: new("edited")}.Build(),
+						UserDataSource: publicv1.UserDataSourceFieldPolicy_builder{
+							Editable: publicv1.EditableUserDataSourceField_builder{DefaultValue: publicv1.UserDataSource_builder{Inline: new("edited")}.Build()}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build(),
-				UpdateMask: catalogItemUpdateMask("fields.user_data"),
+				UpdateMask: catalogItemUpdateMask("fields.user_data_source"),
 			}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			before, err := client.Get(ctx, publicv1.BareMetalInstanceCatalogItemsGetRequest_builder{Id: item.GetId()}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			Expect(before.GetObject().GetFields().GetAutoExternalIpAttachment().HasLocked()).To(BeTrue())
 			Expect(before.GetObject().GetFields().GetAutoExternalIpAttachment().GetLocked()).To(BeFalse())
-			Expect(before.GetObject().GetFields().GetUserData().HasLocked()).To(BeFalse())
-			Expect(before.GetObject().GetFields().GetUserData().GetEditable().GetDefaultValue()).To(Equal("edited"))
+			Expect(before.GetObject().GetFields().GetUserDataSource().HasLocked()).To(BeFalse())
+			Expect(before.GetObject().GetFields().GetUserDataSource().GetEditable().GetDefaultValue().GetInline()).To(Equal("edited"))
 
 			By("rejecting an invalid policy without changing the catalog item title")
 			_, err = client.Update(ctx, publicv1.BareMetalInstanceCatalogItemsUpdateRequest_builder{
@@ -671,10 +655,10 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 					Id:    item.GetId(),
 					Title: "must not persist",
 					Fields: publicv1.BareMetalInstanceCatalogItemFields_builder{
-						UserData: publicv1.StringFieldPolicy_builder{}.Build(),
+						UserDataSource: publicv1.UserDataSourceFieldPolicy_builder{}.Build(),
 					}.Build(),
 				}.Build(),
-				UpdateMask: catalogItemUpdateMask("title", "fields.user_data"),
+				UpdateMask: catalogItemUpdateMask("title", "fields.user_data_source"),
 			}.Build())
 			expectCatalogItemStatusCode(err, codes.InvalidArgument)
 			after, err := client.Get(ctx, publicv1.BareMetalInstanceCatalogItemsGetRequest_builder{Id: item.GetId()}.Build())
@@ -692,7 +676,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			Expect(err).NotTo(HaveOccurred())
 			after, err = client.Get(ctx, publicv1.BareMetalInstanceCatalogItemsGetRequest_builder{Id: item.GetId()}.Build())
 			Expect(err).NotTo(HaveOccurred())
-			Expect(after.GetObject().GetFields().GetUserData()).To(BeNil())
+			Expect(after.GetObject().GetFields().GetUserDataSource()).To(BeNil())
 			Expect(after.GetObject().GetFields().GetAutoExternalIpAttachment()).To(BeNil())
 		})
 		DescribeTable("rejects catalog items that specify an empty network list", func(ctx context.Context, policy func() *publicv1.BareMetalNetworkAttachmentListFieldPolicy) {
@@ -805,8 +789,8 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 				Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: template}.Build(),
 				Published: true,
 				Fields: publicv1.BareMetalInstanceCatalogItemFields_builder{
-					UserData: publicv1.StringFieldPolicy_builder{
-						Editable: publicv1.EditableStringField_builder{DefaultValue: new("#cloud-config\n# first")}.Build(),
+					UserDataSource: publicv1.UserDataSourceFieldPolicy_builder{
+						Editable: publicv1.EditableUserDataSourceField_builder{DefaultValue: publicv1.UserDataSource_builder{Inline: new("#cloud-config\n# first")}.Build()}.Build(),
 					}.Build(),
 					RunStrategy: publicv1.BareMetalInstanceRunStrategyFieldPolicy_builder{Locked: new(publicv1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_HALTED)}.Build(),
 				}.Build(),
@@ -823,10 +807,10 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Id: item.GetId(),
 					Fields: publicv1.BareMetalInstanceCatalogItemFields_builder{
-						UserData: publicv1.StringFieldPolicy_builder{Locked: new("#cloud-config\n# second")}.Build(),
+						UserDataSource: publicv1.UserDataSourceFieldPolicy_builder{Locked: publicv1.UserDataSource_builder{Inline: new("#cloud-config\n# second")}.Build()}.Build(),
 					}.Build(),
 				}.Build(),
-				UpdateMask: catalogItemUpdateMask("fields.user_data"),
+				UpdateMask: catalogItemUpdateMask("fields.user_data_source"),
 			}.Build())
 			Expect(e).NotTo(HaveOccurred())
 			second, e := createBareMetalInstanceFixture(ctx, tool.ExternalView().UserConn(), request)
@@ -835,10 +819,10 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			persistedSecond, e := client.Get(ctx, publicv1.BareMetalInstancesGetRequest_builder{Id: second.GetId()}.Build())
 			Expect(e).NotTo(HaveOccurred())
 			second = persistedSecond.GetObject()
-			Expect(second.GetSpec().GetUserData()).To(Equal("#cloud-config\n# second"))
+			Expect(second.GetSpec().GetUserDataSource().GetInline()).To(Equal("#cloud-config\n# second"))
 			stored, e := client.Get(ctx, publicv1.BareMetalInstancesGetRequest_builder{Id: first.GetId()}.Build())
 			Expect(e).NotTo(HaveOccurred())
-			Expect(stored.GetObject().GetSpec().GetUserData()).To(Equal("#cloud-config\n# first"))
+			Expect(stored.GetObject().GetSpec().GetUserDataSource().GetInline()).To(Equal("#cloud-config\n# first"))
 			By("updating the original instance without reapplying the catalog policy")
 			_, e = client.Update(ctx, publicv1.BareMetalInstancesUpdateRequest_builder{
 				Object:     publicv1.BareMetalInstance_builder{Id: first.GetId(), Spec: publicv1.BareMetalInstanceSpec_builder{RunStrategy: new(publicv1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS)}.Build()}.Build(),

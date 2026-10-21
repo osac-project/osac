@@ -26,8 +26,8 @@ import (
 const (
 	infraEnvNameSuffix   = "-infraenv"
 	pullSecretNameSuffix = "-pull-secret"
-	// ignitionSizeWarningThreshold is 75% of the 64KB user_data limit; above it the controller
-	// warns that discovery ignition is approaching the BMI user_data ceiling.
+	// ignitionSizeWarningThreshold is 75% of the 64 KiB BMI user data limit; above it the controller
+	// warns that discovery ignition is approaching that ceiling.
 	ignitionSizeWarningThreshold     = 48 * 1024
 	infraEnvRequeueInterval          = 30 * time.Second
 	eventReasonIgnitionSizeWarning   = "DiscoveryIgnitionSizeWarning"

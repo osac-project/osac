@@ -295,7 +295,7 @@ fields; in YAML, write them as nested mappings.
 | `ssh_key` | Optional reference to an SSH public key Secret |
 | `instance_type` | InstanceType reference defining CPU cores, memory, and optional GPUs |
 | `run_strategy` | VM run strategy (`COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS`, `COMPUTE_INSTANCE_RUN_STRATEGY_HALTED`) |
-| `user_data` | Cloud-init or ignition user data |
+| `user_data_source` | Inline cloud-init/ignition content or a user data Secret reference |
 | `disk_image` | DiskImage reference |
 | `boot_disk.size_gib` | Boot disk size in GiB |
 | `boot_disk.storage_tier` | StorageTier reference for the boot disk |
@@ -310,7 +310,7 @@ fields; in YAML, write them as nested mappings.
 | `instance_type` | Local BareMetalInstanceType reference for host placement; separate from compute InstanceType |
 | `disk_image` | DiskImage reference |
 | `ssh_public_key` | SSH public key |
-| `user_data` | Provisioning user data |
+| `user_data_source` | Inline provisioning user data or a user data Secret reference |
 | `run_strategy` | Bare metal run strategy |
 | `network_attachments` | Policy for the complete list of network attachments |
 | `auto_external_ip_attachment` | Whether to provision an external IP attachment automatically |

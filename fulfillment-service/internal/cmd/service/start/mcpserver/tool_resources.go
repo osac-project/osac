@@ -123,16 +123,26 @@ func handleGetResource(resources resourceRegistry) mcp.ToolHandlerFor[GetResourc
 		}
 		switch input.ResourceType {
 		case ResourceTypeComputeInstance:
-			if spec, ok := resource["spec"].(map[string]any); ok {
-				delete(spec, "userData")
+			if spec, ok := resource["spec"].(map[string]any); ok && hasInlineUserDataSource(spec["userDataSource"]) {
+				delete(spec, "userDataSource")
 			}
 		case ResourceTypeComputeInstanceCatalogItem:
 			if fields, ok := resource["fields"].(map[string]any); ok {
-				delete(fields, "userData")
+				policy, _ := fields["userDataSource"].(map[string]any)
+				editable, _ := policy["editable"].(map[string]any)
+				if hasInlineUserDataSource(policy["locked"]) || hasInlineUserDataSource(editable["defaultValue"]) {
+					delete(fields, "userDataSource")
+				}
 			}
 		}
 		return nil, GetResourceOutput{Resource: resource}, nil
 	}
+}
+
+func hasInlineUserDataSource(value any) bool {
+	source, _ := value.(map[string]any)
+	_, inline := source["inline"]
+	return inline
 }
 
 const (

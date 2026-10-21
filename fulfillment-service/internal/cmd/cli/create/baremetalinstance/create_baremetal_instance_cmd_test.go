@@ -284,7 +284,7 @@ var _ = Describe("applyUserDataFlags", func() {
 
 		c.applyUserDataFlags(&spec)
 
-		Expect(spec.Build().GetUserDataSecret().GetName()).To(Equal("cloud-init"))
+		Expect(spec.Build().GetUserDataSource().GetSecret().GetName()).To(Equal("cloud-init"))
 	})
 })
 

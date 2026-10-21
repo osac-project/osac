@@ -63,7 +63,7 @@ func validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(
 	if err != nil {
 		return nil, err
 	}
-	if err := validateCatalogItemUserDataSecretPolicy(ctx, scope, fields.GetUserDataSecret(), secretsDao); err != nil {
+	if err := validateCatalogItemUserDataSourcePolicy(ctx, scope, fields.GetUserDataSource(), secretsDao); err != nil {
 		return nil, err
 	}
 
@@ -89,11 +89,8 @@ func applyBareMetalInstanceCatalogItemPolicies(
 	if err := applyPolicy(fields.GetSshPublicKey(), spec.HasSshPublicKey(), spec.SetSshPublicKey, decodeStringPolicy, identity[string]); err != nil {
 		return fmt.Errorf("ssh_public_key: %w", err)
 	}
-	if err := applyPolicy(fields.GetUserData(), spec.HasUserData(), spec.SetUserData, decodeStringPolicy, identity[string]); err != nil {
-		return fmt.Errorf("user_data: %w", err)
-	}
-	if err := applyPolicy(fields.GetUserDataSecret(), spec.GetUserDataSecret() != nil, spec.SetUserDataSecret, decodeSecretReferencePolicy, cloneMessage[*privatev1.SecretLocalReference]); err != nil {
-		return fmt.Errorf("user_data_secret: %w", err)
+	if err := applyPolicy(fields.GetUserDataSource(), spec.GetUserDataSource() != nil, spec.SetUserDataSource, decodeUserDataSourcePolicy, cloneMessage[*privatev1.UserDataSource]); err != nil {
+		return fmt.Errorf("user_data_source: %w", err)
 	}
 	if err := applyPolicy(fields.GetRunStrategy(), spec.HasRunStrategy(), spec.SetRunStrategy, decodeBareMetalInstanceRunStrategyPolicy, identity[privatev1.BareMetalInstanceRunStrategy]); err != nil {
 		return fmt.Errorf("run_strategy: %w", err)
@@ -118,10 +115,16 @@ func validateBareMetalInstanceCatalogItemScalarPolicies(fields *privatev1.BareMe
 	if err := validateCatalogItemStringPolicy(fields.GetSshPublicKey(), "fields.ssh_public_key", validateOpenSSHPublicKey); err != nil {
 		return err
 	}
-	if err := validateCatalogItemStringPolicy(fields.GetUserData(), "fields.user_data", func(value string) error {
-		return validateBareMetalUserData([]byte(value))
-	}); err != nil {
-		return err
+	state, err := decodeUserDataSourcePolicy(fields.GetUserDataSource())
+	if err != nil {
+		return catalogItemPolicyError("fields.user_data_source", err.Error())
+	}
+	for _, source := range []*privatev1.UserDataSource{state.lockedValue, state.defaultValue} {
+		if source.HasInline() {
+			if err := validateBareMetalUserData([]byte(source.GetInline())); err != nil {
+				return catalogItemPolicyError("fields.user_data_source.inline", err.Error())
+			}
+		}
 	}
 	if _, err := decodeBareMetalInstanceRunStrategyPolicy(fields.GetRunStrategy()); err != nil {
 		return catalogItemPolicyError("fields.run_strategy", err.Error())

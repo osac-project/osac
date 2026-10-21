@@ -4,9 +4,9 @@ import { type ClusterCatalogItem, ClusterCatalogItemSchema } from '@osac/types';
 
 import type { ClusterCatalogItemValues } from './values';
 import type { ClusterNodeSetRow } from '../../../Cluster/CreateWizard/fields';
+import type { ProvisioningFieldValue } from '../../../ProvisioningWizard/fields/provisioningFieldValue';
 import { catalogGeneralItemPayload } from '../CatalogGeneralStep';
 import { policyFromCatalogValue } from '../catalogItemPolicy';
-import type { ProvisioningFieldValue } from '../../../ProvisioningWizard/fields/provisioningFieldValue';
 
 type CatalogItemFieldsInit = NonNullable<
   MessageInitShape<typeof ClusterCatalogItemSchema>['fields']
@@ -18,7 +18,10 @@ const isEmptyString = (value: unknown) => typeof value !== 'string' || !value.tr
 const isEmptyNodeSetList = (value: unknown) => !(value as ClusterNodeSetRow[] | undefined)?.length;
 
 const toTrimmedString = (value: unknown) => (value as string).trim();
-const toVersionReference = (value: unknown) => ({ name: toTrimmedString(value) });
+const toVersionReference = (value: unknown) => ({
+  name: toTrimmedString(value),
+  shared: true,
+});
 
 const toNodeSetMap = (value: unknown) => {
   const items = Object.create(null) as Record<

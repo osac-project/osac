@@ -138,7 +138,7 @@ configure_awx() {
   # Local AWX workers may lack a service-account namespace file. Use the
   # release namespace for storage config Secrets through the supported override.
   local settings_payload
-  settings_payload=$(ENABLE_CERTIFICATE_VALIDATION="${ENABLE_CERTIFICATE_VALIDATION:-true}" python3 -c '
+  settings_payload=$(VAST_VALIDATE_CERTS="${VAST_VALIDATE_CERTS:-true}" python3 -c '
 import json
 import os
 import sys
@@ -149,7 +149,7 @@ print(json.dumps({
     "AWX_TASK_ENV": {
         "ANSIBLE_JINJA2_NATIVE": "true",
         "OSAC_STORAGE_CONFIG_NAMESPACE": sys.argv[1],
-        "ENABLE_CERTIFICATE_VALIDATION": os.environ["ENABLE_CERTIFICATE_VALIDATION"],
+        "VAST_VALIDATE_CERTS": os.environ["VAST_VALIDATE_CERTS"],
     },
 }))
 ' "${NS}")

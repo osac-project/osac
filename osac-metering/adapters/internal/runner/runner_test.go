@@ -203,9 +203,9 @@ func newTestMessageWithoutTransitionTime(id, resourceID string, offset int64) *s
 
 func newRunner(adapter adapters.ProviderAdapter) *Runner {
 	return NewRunner(adapter, RunnerConfig{
-		Brokers:       "localhost:9092",
-		ConsumerGroup: "test-group",
-		Topics:        []string{testTopic},
+		TopicsProvider: func(context.Context) ([]string, error) {
+			return []string{testTopic}, nil
+		},
 		FlushInterval: 10 * time.Second,
 		DedupTTL:      10 * time.Minute,
 		MaxRetries:    3,
@@ -214,9 +214,9 @@ func newRunner(adapter adapters.ProviderAdapter) *Runner {
 
 func newRunnerWithDLQ(adapter adapters.ProviderAdapter, dlq DLQSender) *Runner {
 	return NewRunner(adapter, RunnerConfig{
-		Brokers:       "localhost:9092",
-		ConsumerGroup: "test-group",
-		Topics:        []string{testTopic},
+		TopicsProvider: func(context.Context) ([]string, error) {
+			return []string{testTopic}, nil
+		},
 		FlushInterval: 10 * time.Second,
 		DedupTTL:      10 * time.Minute,
 		MaxRetries:    3,
@@ -882,9 +882,9 @@ var _ = Describe("Runner DLQ occupancy metrics", func() {
 		adapter = &mockAdapter{name: "test-provider"}
 		occ = &mockDLQOccupier{occupancy: 42}
 		runner = NewRunner(adapter, RunnerConfig{
-			Brokers:       "localhost:9092",
-			ConsumerGroup: "test-group",
-			Topics:        []string{testTopic},
+			TopicsProvider: func(context.Context) ([]string, error) {
+				return []string{testTopic}, nil
+			},
 		}, logr.Discard(), WithDLQ(occ))
 	})
 
@@ -968,21 +968,16 @@ var _ = Describe("Runner session restart", func() {
 		group := &mockConsumerGroup{}
 		adapter := &mockAdapter{name: "test-provider"}
 		r := NewRunner(adapter, RunnerConfig{
-			Brokers:         "localhost:9092",
-			ConsumerGroup:   "test-group",
 			TopicsProvider:  provider,
 			SessionInterval: 50 * time.Millisecond,
 			FlushInterval:   time.Hour,
 			DedupTTL:        time.Hour,
 			MaxRetries:      1,
 		}, logr.Discard())
-		r.newGroup = func([]string, *sarama.Config) (sarama.ConsumerGroup, error) {
-			return group, nil
-		}
 
 		ctx, cancel := context.WithCancel(context.Background())
 		runDone := make(chan error, 1)
-		go func() { runDone <- r.Run(ctx) }()
+		go func() { runDone <- r.Run(ctx, group) }()
 
 		Eventually(func() int {
 			return len(group.sessionTopics())

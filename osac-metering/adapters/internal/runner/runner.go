@@ -14,14 +14,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/IBM/sarama"
 	"github.com/go-logr/logr"
 	"github.com/osac-project/osac-metering/adapters"
-	"github.com/osac-project/osac-metering/adapters/internal/kafka"
 )
 
 const (
@@ -41,11 +40,9 @@ const (
 
 // RunnerConfig configures the adapter Runner.
 type RunnerConfig struct {
-	Brokers       string
-	ConsumerGroup string
-	Topics        []string
-	// TopicsProvider discovers the topics to consume on every subscription. When set it
-	// replaces Topics, so the runner follows tenants as they come and go.
+	// TopicsProvider discovers the topics to consume on every subscription, so the runner
+	// follows tenants as they come and go. Both adapter mains always set it; without it
+	// the runner has no topics and consumes nothing.
 	TopicsProvider func(ctx context.Context) ([]string, error)
 	// SessionInterval bounds one consume session, so topics created after the session
 	// started are picked up on the next one. Defaults to one minute; zero means the
@@ -54,7 +51,6 @@ type RunnerConfig struct {
 	FlushInterval   time.Duration // default 10s
 	DedupTTL        time.Duration // default 10m
 	MaxRetries      int           // default 10
-	Kafka           kafka.KafkaConfig
 }
 
 type topicPartition struct {
@@ -78,14 +74,12 @@ type Runner struct {
 	metrics *adapterMetrics
 	dedup   *dedupCache
 	order   *orderTracker
+	retries *retryCache
 	dlq     DLQSender
 
 	mu      sync.Mutex
 	offsets map[topicPartition]int64
 	session sarama.ConsumerGroupSession
-
-	// newGroup creates the consumer group. Tests replace it; production uses sarama.
-	newGroup func(brokers []string, config *sarama.Config) (sarama.ConsumerGroup, error)
 }
 
 // NewRunner creates a Runner for the given adapter.
@@ -110,10 +104,8 @@ func NewRunner(adapter adapters.ProviderAdapter, cfg RunnerConfig, logger logr.L
 		metrics: newAdapterMetrics(),
 		dedup:   newDedupCache(cfg.DedupTTL),
 		order:   newOrderTracker(cfg.DedupTTL),
+		retries: newRetryCache(cfg.DedupTTL),
 		offsets: make(map[topicPartition]int64),
-	}
-	r.newGroup = func(brokers []string, config *sarama.Config) (sarama.ConsumerGroup, error) {
-		return sarama.NewConsumerGroup(brokers, cfg.ConsumerGroup, config)
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -126,22 +118,15 @@ func (r *Runner) MetricsHandler() http.Handler {
 	return r.metrics.handler()
 }
 
-// Run starts the Kafka consumer group and blocks until ctx is cancelled.
-func (r *Runner) Run(ctx context.Context) error {
-	sc, err := kafka.NewConsumerConfig(r.cfg.Kafka)
-	if err != nil {
-		return fmt.Errorf("creating consumer config: %w", err)
-	}
-
-	brokers := kafka.SplitAndTrimBrokers(r.cfg.Brokers, ",")
-	group, err := r.newGroup(brokers, sc)
-	if err != nil {
-		return fmt.Errorf("creating consumer group: %w", err)
-	}
+// Run consumes with the group until ctx is cancelled, then closes the group. The caller
+// creates the group with the brokers and credentials of its environment; Run owns the
+// group's shutdown.
+func (r *Runner) Run(ctx context.Context, group sarama.ConsumerGroup) error {
 	defer func() { _ = group.Close() }()
 
 	go r.dedup.startEviction(ctx)
 	go r.order.startEviction(ctx)
+	go r.retries.startEviction(ctx)
 
 	flushDone := make(chan struct{})
 	go r.flushLoop(ctx, flushDone)
@@ -150,8 +135,8 @@ func (r *Runner) Run(ctx context.Context) error {
 		go r.dlqDepthMetricsLoop(ctx, occ)
 	}
 
-	topics := r.cfg.Topics
-	r.logger.Info("starting consumer group", "topics", topics)
+	var topics []string
+	r.logger.Info("starting consumer group")
 
 	for {
 		if r.cfg.TopicsProvider != nil {
@@ -299,19 +284,11 @@ func (r *Runner) flush(ctx context.Context) error {
 
 // sameTopics reports whether two topic sets are equal, ignoring order.
 func sameTopics(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	sorted := append([]string(nil), a...)
-	sort.Strings(sorted)
-	other := append([]string(nil), b...)
-	sort.Strings(other)
-	for i := range sorted {
-		if sorted[i] != other[i] {
-			return false
-		}
-	}
-	return true
+	sortedA := slices.Clone(a)
+	sortedB := slices.Clone(b)
+	slices.Sort(sortedA)
+	slices.Sort(sortedB)
+	return slices.Equal(sortedA, sortedB)
 }
 
 // --- sarama.ConsumerGroupHandler ---

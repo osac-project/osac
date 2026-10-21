@@ -12,21 +12,21 @@ package kafka
 import (
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/IBM/sarama"
+	"github.com/osac-project/osac-metering/schema"
 )
 
-// Each tenant owns a heartbeat topic and a dead-letter topic. The names match the ones
-// fulfillment's tenant onboarding creates.
+// Each tenant owns a heartbeat topic and a dead-letter topic. The shared names come from
+// the schema module; they match the ones fulfillment's tenant onboarding creates.
 const (
 	// HeartbeatPrefix is prepended to the tenant name to form the topic that carries the
 	// tenant's metering heartbeats.
-	HeartbeatPrefix = "osac.metering.heartbeat."
+	HeartbeatPrefix = schema.HeartbeatPrefix
 
 	// DeadLetterPrefix is prepended to the tenant name to form the topic that carries the
 	// tenant's heartbeats rejected by the billing provider.
-	DeadLetterPrefix = "osac.metering.dlq."
+	DeadLetterPrefix = schema.DeadLetterPrefix
 
 	// TopicInference is the shared topic that carries MaaS inference usage. The design
 	// keeps MaaS metered separately from the per-tenant heartbeat pipeline, so this one
@@ -74,15 +74,6 @@ func ConsumeTopics(client sarama.Client) ([]string, error) {
 	return append(topics, TopicInference), nil
 }
 
-// builtinTenants are the tenants whose topics exist but whose usage is never billed: the
-// system and shared tenants fulfillment creates for platform use. The names match
-// fulfillment's auth.SystemTenant and auth.SharedTenant constants and metering's own topic
-// discovery.
-var builtinTenants = map[string]bool{
-	"system": true,
-	"shared": true,
-}
-
 // topicsWithPrefix lists every topic with the prefix after refreshing the client's metadata
 // cache, so a topic created a moment ago is not missed. The built-in tenants' topics are
 // skipped: they are never billed.
@@ -96,10 +87,8 @@ func topicsWithPrefix(client sarama.Client, prefix string) ([]string, error) {
 	}
 	var topics []string
 	for _, name := range names {
-		if !strings.HasPrefix(name, prefix) {
-			continue
-		}
-		if builtinTenants[name[len(prefix):]] {
+		tenant, ok := schema.TenantOfTopic(name, prefix)
+		if !ok || schema.BuiltinTenant(tenant) {
 			continue
 		}
 		topics = append(topics, name)
@@ -113,8 +102,8 @@ func topicsWithPrefix(client sarama.Client, prefix string) ([]string, error) {
 // maps to its own dead-letter topic. It returns the input unchanged only for topics that
 // are neither, which the runner never consumes.
 func DeadLetterTopicOf(source string) string {
-	if strings.HasPrefix(source, HeartbeatPrefix) {
-		return DeadLetterPrefix + source[len(HeartbeatPrefix):]
+	if tenant, ok := schema.TenantOfTopic(source, HeartbeatPrefix); ok {
+		return DeadLetterPrefix + tenant
 	}
 	if source == TopicInference {
 		return InferenceDeadLetter

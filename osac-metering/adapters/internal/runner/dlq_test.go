@@ -273,13 +273,6 @@ var _ = Describe("DLQProducer", func() {
 	})
 })
 
-var _ = Describe("DLQOptionFromEnv", func() {
-	It("fails when the Kafka cluster is unreachable: the DLQ is mandatory", func() {
-		_, _, err := DLQOptionFromEnv("localhost:1", kafka.KafkaConfig{})
-		Expect(err).To(HaveOccurred())
-	})
-})
-
 type fakeOffsets struct {
 	partitions    []int32
 	newest        map[int32]int64

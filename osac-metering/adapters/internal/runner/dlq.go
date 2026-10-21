@@ -51,29 +51,6 @@ type DLQProducer struct {
 	perTenant bool
 }
 
-// NewDLQProducer creates a DLQ producer connected to the given brokers, sending every failed
-// record to one fixed topic.
-func NewDLQProducer(brokers string, topic string, kafkaCfg kafka.KafkaConfig) (*DLQProducer, error) {
-	sc, err := kafka.NewProducerConfig(kafkaCfg)
-	if err != nil {
-		return nil, fmt.Errorf("creating DLQ producer config: %w", err)
-	}
-
-	addrs := kafka.SplitAndTrimBrokers(brokers, ",")
-	client, err := sarama.NewClient(addrs, sc)
-	if err != nil {
-		return nil, fmt.Errorf("creating DLQ Kafka client: %w", err)
-	}
-
-	producer, err := sarama.NewSyncProducerFromClient(client)
-	if err != nil {
-		_ = client.Close()
-		return nil, fmt.Errorf("creating DLQ sync producer: %w", err)
-	}
-
-	return &DLQProducer{producer: producer, client: client, offsets: client, topic: topic}, nil
-}
-
 // NewPerTenantDLQProducer creates a DLQ producer that routes each failed record to the
 // dead-letter topic of the tenant whose heartbeat topic the record came from.
 func NewPerTenantDLQProducer(brokers string, kafkaCfg kafka.KafkaConfig) (*DLQProducer, error) {
@@ -96,6 +73,10 @@ func NewPerTenantDLQProducer(brokers string, kafkaCfg kafka.KafkaConfig) (*DLQPr
 
 	return &DLQProducer{
 		producer: producer, client: client, offsets: client, perTenant: true,
+		// The depth metric labels its series by topic; per-tenant mode aggregates
+		// every tenant's dead-letter topic into one series, so the label says that
+		// instead of sitting empty.
+		topic: "all-tenants",
 	}, nil
 }
 
@@ -207,16 +188,4 @@ func (d *DLQProducer) Close() error {
 		errs = append(errs, d.client.Close())
 	}
 	return errors.Join(errs...)
-}
-
-// DLQOptionFromEnv creates the per-tenant DLQ RunnerOption from the Kafka connection the
-// runner uses. The DLQ is mandatory: the adapter refuses to start without one, so a rejected
-// heartbeat is never dropped. The caller must defer the returned close function.
-func DLQOptionFromEnv(brokers string, kafkaCfg kafka.KafkaConfig) (RunnerOption, func() error, error) {
-	noop := func() error { return nil }
-	dlq, err := NewPerTenantDLQProducer(brokers, kafkaCfg)
-	if err != nil {
-		return nil, noop, fmt.Errorf("creating DLQ producer: %w", err)
-	}
-	return WithDLQ(dlq), dlq.Close, nil
 }

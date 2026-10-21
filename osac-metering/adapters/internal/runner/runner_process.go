@@ -59,7 +59,7 @@ func (r *Runner) processMessage(
 		Offset:     msg.Offset,
 	}
 
-	result := submitWithRetry(ctx, r.adapter, event, r.cfg.MaxRetries, r.logger)
+	result := submitWithRetry(ctx, r.adapter, event, r.cfg.MaxRetries, r.logger, r.retries)
 
 	if result.TotalDuration > 0 && result.Attempts > 1 {
 		r.metrics.retryDuration.WithLabelValues(provider).Observe(result.TotalDuration.Seconds())

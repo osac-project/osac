@@ -37,22 +37,6 @@ import (
 	"github.com/osac-project/osac-metering/adapters/m360"
 )
 
-// consumeTopics lists every topic the adapter consumes: each metered tenant's heartbeat
-// topic and the shared MaaS inference topic.
-func consumeTopics(brokers string, kafkaCfg kafka.KafkaConfig) func(context.Context) ([]string, error) {
-	sc, err := kafka.NewConsumerConfig(kafkaCfg)
-	if err != nil {
-		log.Fatalf("creating kafka client config: %v", err)
-	}
-	client, err := sarama.NewClient(kafka.SplitAndTrimBrokers(brokers, ","), sc)
-	if err != nil {
-		log.Fatalf("creating kafka client for topic discovery: %v", err)
-	}
-	return func(ctx context.Context) ([]string, error) {
-		return kafka.ConsumeTopics(client)
-	}
-}
-
 func main() {
 	brokers := envutil.RequireEnv("KAFKA_BROKERS")
 	m360URL := envutil.RequireEnv("M360_API_URL")
@@ -84,26 +68,40 @@ func main() {
 	// The DLQ is mandatory: the adapter refuses to start without one, so a rejected
 	// heartbeat is never dropped. Each rejection goes to the tenant's dead-letter
 	// topic.
-	dlqOpt, dlqClose, err := runner.DLQOptionFromEnv(brokers, kafkaCfg)
+	dlq, err := runner.NewPerTenantDLQProducer(brokers, kafkaCfg)
 	if err != nil {
-		log.Fatalf("setting up DLQ: %v", err)
+		log.Fatalf("creating DLQ producer: %v", err)
 	}
 	defer func() {
-		if err := dlqClose(); err != nil {
+		if err := dlq.Close(); err != nil {
 			log.Printf("DLQ producer close failed: %v", err)
 		}
 	}()
 
+	// Every metered tenant's heartbeat topic plus the shared MaaS inference topic,
+	// rediscovered as tenants come and go. The consumer group shares this client: the
+	// runner closes only the group, so the client stays open for the defer below to close.
+	discoveryConfig, err := kafka.NewConsumerConfig(kafkaCfg)
+	if err != nil {
+		log.Fatalf("creating kafka client config: %v", err)
+	}
+	discoveryClient, err := sarama.NewClient(kafka.SplitAndTrimBrokers(brokers, ","), discoveryConfig)
+	if err != nil {
+		log.Fatalf("creating kafka client: %v", err)
+	}
+	defer func() { _ = discoveryClient.Close() }()
+	consumerGroup, err := sarama.NewConsumerGroupFromClient(group, discoveryClient)
+	if err != nil {
+		log.Fatalf("creating consumer group: %v", err)
+	}
+
 	adapter := m360.NewAdapter(m360URL, apiVersion, apiKey, logger)
 	r := runner.NewRunner(adapter, runner.RunnerConfig{
-		Brokers:       brokers,
-		ConsumerGroup: group,
 		FlushInterval: flushInterval,
-		Kafka:         kafkaCfg,
-		// Every metered tenant's heartbeat topic plus the shared MaaS inference topic,
-		// rediscovered as tenants come and go.
-		TopicsProvider: consumeTopics(brokers, kafkaCfg),
-	}, logger, dlqOpt)
+		TopicsProvider: func(ctx context.Context) ([]string, error) {
+			return kafka.ConsumeTopics(discoveryClient)
+		},
+	}, logger, runner.WithDLQ(dlq))
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", r.MetricsHandler())
@@ -139,7 +137,7 @@ func main() {
 	log.Printf("starting m360 adapter: group=%s api_version=%s flush=%s",
 		group, apiVersion, flushInterval)
 
-	runErr := r.Run(ctx)
+	runErr := r.Run(ctx, consumerGroup)
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()

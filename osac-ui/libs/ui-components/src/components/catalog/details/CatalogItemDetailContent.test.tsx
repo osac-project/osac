@@ -1,8 +1,12 @@
 import { create } from '@bufbuild/protobuf';
-import { screen, waitFor } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import {
+  BareMetalInstanceCatalogItemSchema,
+  BareMetalInstanceTypeReferenceSchema,
+  ClusterCatalogItemSchema,
+  ClusterVersionReferenceSchema,
   ComputeInstanceCatalogItemSchema,
   DiskImageSchema,
   GuestOSFamily,
@@ -50,11 +54,85 @@ const vmItem = create(ComputeInstanceCatalogItemSchema, {
     diskImage: {
       behavior: { case: 'editable', value: {} },
     },
+    userData: {
+      behavior: { case: 'locked', value: '#cloud-config' },
+    },
+    bootDisk: {
+      sizeGib: { behavior: { case: 'locked', value: 64 } },
+      storageTier: {
+        behavior: {
+          case: 'editable',
+          value: { defaultValue: { id: 'tier-fast', name: 'fast' } },
+        },
+      },
+    },
+    additionalDisks: {
+      behavior: {
+        case: 'locked',
+        value: { items: [{ sizeGib: 100, storageTier: { id: 'tier-fast', name: 'fast' } }] },
+      },
+    },
+    runStrategy: { behavior: { case: 'locked', value: 1 } },
+    sshKey: { behavior: { case: 'locked', value: { name: 'ssh-key' } } },
+  },
+});
+
+const clusterItem = create(ClusterCatalogItemSchema, {
+  id: 'catalog-cluster',
+  metadata: { name: 'catalog-cluster', tenant: 'tenant-1' },
+  fields: {
+    version: {
+      behavior: {
+        case: 'locked',
+        value: create(ClusterVersionReferenceSchema, { name: '4.16' }),
+      },
+    },
+    nodeSets: {
+      behavior: {
+        case: 'editable',
+        value: {
+          defaultValue: {
+            items: { workers: { size: 3, baremetalInstanceType: { name: 'bm.large' } } },
+          },
+        },
+      },
+    },
+    network: {
+      podCidr: { behavior: { case: 'locked', value: '10.128.0.0/14' } },
+      serviceCidr: { behavior: { case: 'editable', value: { defaultValue: '172.30.0.0/16' } } },
+    },
+    sshPublicKey: { behavior: { case: 'locked', value: 'ssh-rsa hidden' } },
+    pullSecretSecret: { behavior: { case: 'locked', value: { name: 'pull-secret' } } },
+    autoExternalIpAttachment: { behavior: { case: 'locked', value: true } },
+    networkAttachment: { behavior: { case: 'locked', value: {} } },
+  },
+});
+
+const bareMetalItem = create(BareMetalInstanceCatalogItemSchema, {
+  id: 'catalog-bm',
+  metadata: { name: 'catalog-bm', tenant: 'tenant-1' },
+  fields: {
+    instanceType: {
+      behavior: {
+        case: 'locked',
+        value: create(BareMetalInstanceTypeReferenceSchema, { name: 'bm.large' }),
+      },
+    },
+    diskImage: {
+      behavior: {
+        case: 'editable',
+        value: { defaultValue: { id: 'di-rhel-10', name: 'RHEL 10' } },
+      },
+    },
+    userData: { behavior: { case: 'editable', value: { defaultValue: 'echo ready' } } },
+    runStrategy: { behavior: { case: 'locked', value: 1 } },
+    networkAttachments: { behavior: { case: 'locked', value: {} } },
+    autoExternalIpAttachment: { behavior: { case: 'locked', value: true } },
   },
 });
 
 describe('CatalogItemDetailContent', () => {
-  it('shows catalog details, labels, and governed configuration', async () => {
+  it('shows configured compute fields with governance and omits excluded policies', () => {
     renderWithProviders(<CatalogItemDetailContent item={vmItem} />, {
       apiFixtures: catalogApiFixtures,
     });
@@ -63,10 +141,64 @@ describe('CatalogItemDetailContent', () => {
     expect(screen.getByText('RHEL 9 base image')).toBeInTheDocument();
     expect(screen.getByText('run-strategy')).toBeInTheDocument();
 
-    await waitFor(() => {
-      expect(screen.getByText('4 vCPU')).toBeInTheDocument();
-    });
+    expect(screen.getByText('Instance type')).toBeInTheDocument();
+    expect(screen.getByText('standard-4-8')).toBeInTheDocument();
+    expect(screen.getByText('Disk image')).toBeInTheDocument();
+    expect(screen.getByText('User data')).toBeInTheDocument();
+    expect(screen.getByText('#cloud-config')).toBeInTheDocument();
+    expect(screen.getByText('64 GiB')).toBeInTheDocument();
+    expect(screen.getByText('fast')).toBeInTheDocument();
+    expect(screen.getByText('100 GiB (fast)')).toBeInTheDocument();
     expect(screen.getAllByText('Locked').length).toBeGreaterThan(0);
-    expect(screen.getByText('Editable')).toBeInTheDocument();
+    expect(screen.getAllByText('Editable').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Run strategy')).not.toBeInTheDocument();
+    expect(screen.queryByText('SSH key')).not.toBeInTheDocument();
+    expect(screen.queryByText('Network attachments')).not.toBeInTheDocument();
+    expect(screen.queryByText('Auto external IP')).not.toBeInTheDocument();
+  });
+
+  it('shows configured cluster fields and excludes unsupported policies', () => {
+    renderWithProviders(<CatalogItemDetailContent item={clusterItem} />, {
+      apiFixtures: catalogApiFixtures,
+    });
+
+    expect(screen.getByText('Cluster version')).toBeInTheDocument();
+    expect(screen.getByText('OpenShift 4.16')).toBeInTheDocument();
+    expect(screen.getByText('Node sets')).toBeInTheDocument();
+    expect(screen.getByText('workers: 3 (bm.large)')).toBeInTheDocument();
+    expect(screen.getByText('Pod CIDR')).toBeInTheDocument();
+    expect(screen.getByText('10.128.0.0/14')).toBeInTheDocument();
+    expect(screen.getByText('Service CIDR')).toBeInTheDocument();
+    expect(screen.getByText('172.30.0.0/16')).toBeInTheDocument();
+    expect(screen.queryByText('SSH public key')).not.toBeInTheDocument();
+    expect(screen.queryByText('Pull secret')).not.toBeInTheDocument();
+    expect(screen.queryByText('Network attachment')).not.toBeInTheDocument();
+    expect(screen.queryByText('Automatic external IP')).not.toBeInTheDocument();
+  });
+
+  it('shows configured bare metal fields and excludes run strategy', () => {
+    renderWithProviders(<CatalogItemDetailContent item={bareMetalItem} />, {
+      apiFixtures: catalogApiFixtures,
+    });
+
+    expect(screen.getByText('Instance type')).toBeInTheDocument();
+    expect(screen.getByText('bm.large')).toBeInTheDocument();
+    expect(screen.getByText('RHEL 10')).toBeInTheDocument();
+    expect(screen.getByText('echo ready')).toBeInTheDocument();
+    expect(screen.queryByText('Run strategy')).not.toBeInTheDocument();
+  });
+
+  it('shows an empty state when no supported fields are governed', () => {
+    const item = create(ComputeInstanceCatalogItemSchema, {
+      id: 'catalog-empty',
+      metadata: { name: 'catalog-empty', tenant: 'tenant-1' },
+      fields: {},
+    });
+
+    renderWithProviders(<CatalogItemDetailContent item={item} />, {
+      apiFixtures: catalogApiFixtures,
+    });
+
+    expect(screen.getByText('No governed configuration')).toBeInTheDocument();
   });
 });

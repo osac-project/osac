@@ -18,12 +18,10 @@ const renderCreatePage = (routerEntries: string[]) =>
   );
 
 describe('CatalogItemCreatePage', () => {
-  it('renders a placeholder for the bm catalog item kind', () => {
+  it('renders the bare metal catalog item wizard for the bm kind', () => {
     renderCreatePage(['/catalog/bm/create']);
 
-    expect(
-      screen.getByRole('heading', { name: 'Catalog item authoring is coming soon' }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Create catalog item' })).toBeInTheDocument();
   });
 
   it('renders the cluster catalog item wizard for the cluster kind', () => {

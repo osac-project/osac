@@ -16,9 +16,15 @@ OSAC has four service-tier switches:
 | Service | Value | Default | Scope |
 | --- | --- | --- | --- |
 | CaaS | `global.services.caas.enabled` | true | Cluster orders, templates, catalog items, and versions |
-| VMaaS | `global.services.vmaas.enabled` | true | Compute instances, disk images, instance types, volumes, and console sessions |
+| VMaaS | `global.services.vmaas.enabled` | true | Compute instances, instance types, volumes, and console sessions |
 | BMaaS | `global.services.bmaas.enabled` | true | Bare-metal instances and bare-metal instance types |
 | MaaS | `global.services.maas.enabled` | true | MaaS enablement signal; no MaaS gRPC services or operator controller currently exist |
+
+The DiskImages API is shared by the VMaaS and BMaaS tiers instead of belonging
+to one of them. It is enabled when either VMaaS or BMaaS is enabled, and it is
+disabled only when both are disabled. CaaS requires at least one of VMaaS or
+BMaaS, so every CaaS deployment has the DiskImages API available for the
+ClusterVersion disk image reference.
 
 The default values keep all service tiers enabled. A service is disabled by
 setting its enabled value to false in the umbrella chart values:
@@ -279,8 +285,10 @@ the VMaaS service is not enabled on this server
 ```
 
 The current service group names in this message are CaaS, VMaaS, and BMaaS.
-Calls to a genuinely unknown gRPC method retain the default
-`codes.Unimplemented` response.
+The shared DiskImages API is not a service tier, but it has its own group
+name: when both VMaaS and BMaaS are disabled, its requests are rejected with
+the DiskImages group name. Calls to a genuinely unknown gRPC method retain
+the default `codes.Unimplemented` response.
 
 Disabled service implementations are not registered with the gRPC server, so
 they do not appear in gRPC reflection. For example:

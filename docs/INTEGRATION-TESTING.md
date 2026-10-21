@@ -507,9 +507,10 @@ to the profile's configured CA and enabled services.
 
 The `make certificate-validation-render-test` Helm contract verifies the secure
 default and development overrides through the AAP storage instance-group
-ConfigMap and the dev-full AWX configuration hook. It checks rendered
-configuration only; the storage role's unit and local mock-HTTPS integration
-tests cover Ansible client behavior, not a deployed controller.
+ConfigMap and the dev-full AWX configuration hook, and exercises the hook's
+`AWX_TASK_ENV` merge with fixture input. It checks rendered configuration
+only; the storage role's unit and local mock-HTTPS integration tests cover
+Ansible client behavior, not a deployed controller.
 
 ### Install preflight (OSAC-6561)
 

@@ -50,7 +50,7 @@ def _render_frr_configuration(overrides: dict | None = None) -> dict:
         "worker_remote_vtep_ranges": ["10.2.0.0/16"],
         "worker_ebgp_multihop": True,
         "worker_graceful_restart": True,
-        "fabric_bgp_frr_namespace": "metallb-system",
+        "fabric_bgp_config_frr_namespace": "metallb-system",
     }
     if overrides:
         context.update(overrides)

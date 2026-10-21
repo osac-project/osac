@@ -25,7 +25,7 @@ argument_specs:
         description: >-
           Path to the remote cluster kubeconfig. When omitted, the
           role uses the current kubeconfig context.
-      fabric_bgp_frr_namespace:
+      fabric_bgp_config_frr_namespace:
         type: str
         required: false
         default: metallb-system
@@ -47,7 +47,7 @@ argument_specs:
         required: false
         description: >-
           Path to the remote cluster kubeconfig.
-      fabric_bgp_frr_namespace:
+      fabric_bgp_config_frr_namespace:
         type: str
         required: false
         default: metallb-system

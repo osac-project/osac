@@ -8,7 +8,7 @@
     api_version: frrk8s.metallb.io/v1beta1
     kind: FRRConfiguration
     name: "fabric-bgp-{{ _fabric_bgp_worker.nodeName }}"
-    namespace: "{{ fabric_bgp_frr_namespace }}"
+    namespace: "{{ fabric_bgp_config_frr_namespace }}"
   loop: "{{ fabric_bgp_workers }}"
   loop_control:
     loop_var: _fabric_bgp_worker

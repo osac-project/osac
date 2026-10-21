@@ -57,7 +57,7 @@
   ansible.builtin.assert:
     that:
       - >-
-        range | ansible.utils.ipaddr('network/prefix') != false
+        vtep_range | ansible.utils.ipaddr('network/prefix') != false
     fail_msg: >-
       Remote VTEP range at index {{ ansible_loop.index0 }} is not
       a valid CIDR. No Kubernetes resources were changed.
@@ -67,7 +67,7 @@
     label: "range {{ ansible_loop.index0 }}"
     extended: true
   vars:
-    range: "{{ item.1 }}"
+    vtep_range: "{{ item.1 }}"
 
 - name: Check FRRConfiguration CRD availability
   kubernetes.core.k8s_info:

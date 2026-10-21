@@ -2,7 +2,7 @@ apiVersion: frrk8s.metallb.io/v1beta1
 kind: FRRConfiguration
 metadata:
   name: "fabric-bgp-{{ worker_node_name }}"
-  namespace: "{{ fabric_bgp_frr_namespace }}"
+  namespace: "{{ fabric_bgp_config_frr_namespace }}"
   labels:
     osac.openshift.io/managed-by: fabric-bgp-config
     osac.openshift.io/worker: "{{ worker_node_name }}"

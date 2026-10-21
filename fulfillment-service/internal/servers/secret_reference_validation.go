@@ -23,8 +23,36 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/references"
+	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
+
+// fetchSecretData returns the Secret's data, loading Vault-backed Secrets from
+// the secret store when the database row carries no inline data. The field
+// label names the referencing spec field for logs and error messages.
+func fetchSecretData(
+	ctx context.Context,
+	logger *slog.Logger,
+	secretStore vault.SecretStore,
+	secret *privatev1.Secret,
+	field string,
+) (map[string][]byte, error) {
+	data := secret.GetData()
+	if len(data) == 0 && secret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
+		if secretStore == nil {
+			logger.ErrorContext(ctx, "Failed to load "+field+" Secret: secret store isn't configured")
+			return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to resolve %s reference", field)
+		}
+		metadata := secret.GetMetadata()
+		fetched, err := secretStore.Fetch(ctx, metadata.GetTenant(), metadata.GetProject(), metadata.GetName())
+		if err != nil {
+			logger.ErrorContext(ctx, "Failed to load "+field+" Secret from store", "error", err)
+			return nil, vault.ToGrpcError(err)
+		}
+		return fetched, nil
+	}
+	return data, nil
+}
 
 // resolveSecretReferenceOfType resolves a local Secret reference and verifies the
 // semantic type required by the consuming API. It only loads Secret metadata and

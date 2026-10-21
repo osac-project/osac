@@ -75,8 +75,10 @@ message BareMetalInstanceCatalogItemFields {
   // Optional user data Secret reference. Governs or defaults the secret containing cloud-init
   // user data for instances created from this catalog item.
   SecretReferenceFieldPolicy user_data_secret = 9;
-}
 
+  // Policy for the SecretReference used to configure bare metal access.
+  GlobalSecretReferenceFieldPolicy ssh_key = 10;
+}
 // Reference to a BareMetalInstanceCatalogItem resource.
 message BareMetalInstanceCatalogItemReference {
   string id = 1;

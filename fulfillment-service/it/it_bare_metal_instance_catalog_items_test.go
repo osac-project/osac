@@ -15,12 +15,14 @@ package it
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	bmfv1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
+	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 	"google.golang.org/grpc/codes"
@@ -448,6 +450,56 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			Expect(err).NotTo(HaveOccurred())
 			Expect(response.GetObject().GetSpec().GetUserDataSecret().GetId()).To(Equal(secret))
 			Expect(response.GetObject().GetSpec().HasUserData()).To(BeFalse())
+		})
+
+		It("canonicalizes a registered ssh_key policy and locks it into created instances", func(ctx context.Context) {
+			ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
+			instanceType := createCatalogItemBareMetalInstanceTypeFixture(ctx, usersGroup)
+			image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
+			template := createCatalogItemBareMetalInstanceTemplateFixture(ctx, nil, nil)
+
+			secretName := fmt.Sprintf("it-bmi-cat-ssh-key-%s", uuid.New()[24:32])
+			secrets := privatev1.NewSecretsClient(tool.InternalView().AdminConn())
+			secretResp, err := secrets.Create(ctx, privatev1.SecretsCreateRequest_builder{
+				Object: privatev1.Secret_builder{
+					Metadata: privatev1.Metadata_builder{Name: secretName, Tenant: usersGroup}.Build(),
+					Type:     privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					Data:     map[string][]byte{"public_key": []byte(catalogItemFixtureSSHPublicKey)},
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			secret := secretResp.GetObject()
+			DeferCleanup(func(ctx context.Context) {
+				_, err := secrets.Delete(ctx, privatev1.SecretsDeleteRequest_builder{Id: secret.GetId()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			item := createBareMetalInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.BareMetalInstanceCatalogItem_builder{
+				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
+				Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: template}.Build(),
+				Published: true,
+				Fields: publicv1.BareMetalInstanceCatalogItemFields_builder{
+					DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{
+						Locked: publicv1.DiskImageReference_builder{Id: image.GetId()}.Build(),
+					}.Build(),
+					SshKey: publicv1.GlobalSecretReferenceFieldPolicy_builder{
+						Locked: publicv1.SecretReference_builder{Name: secretName}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			locked := item.GetFields().GetSshKey().GetLocked()
+			Expect(locked).ToNot(BeNil())
+			Expect(locked.GetId()).To(Equal(secret.GetId()), "the locked policy must store the canonical Secret ID")
+			Expect(locked.GetName()).To(Equal(secretName))
+
+			created, err := createBareMetalInstanceFixture(ctx, tool.ExternalView().UserConn(), publicv1.BareMetalInstanceSpec_builder{
+				CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
+				InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceType, Shared: true}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(created.GetSpec().GetSshKey().GetId()).To(Equal(secret.GetId()),
+				"the locked registered key must be applied without caller input")
+			Expect(created.GetSpec().GetSshPublicKey()).To(BeEmpty())
 		})
 	})
 	Context("Template parameters", func() {

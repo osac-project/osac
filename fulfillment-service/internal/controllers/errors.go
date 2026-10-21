@@ -16,6 +16,7 @@ package controllers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"google.golang.org/grpc/codes"
@@ -29,6 +30,28 @@ var (
 	// and allow the resource to be archived, as the hub is permanently unavailable.
 	ErrHubNotFound = errors.New("hub not found")
 )
+
+// SSHKeyResolutionError classifies a failure while resolving the Secret referenced
+// by a registered SSH-key field. Permanent failures surface as terminal
+// provisioning conditions; transient ones are retried by the reconciler.
+type SSHKeyResolutionError struct {
+	// Permanent marks failures that retrying cannot fix, such as a deleted
+	// Secret or unusable key material.
+	Permanent bool
+	// Reason is the tenant-facing condition reason for permanent failures,
+	// for example "SecretNotFound" or "SecretInvalid".
+	Reason string
+	// Err is the underlying resolution failure.
+	Err error
+}
+
+func (e *SSHKeyResolutionError) Error() string {
+	return fmt.Sprintf("failed to resolve registered SSH-key Secret: %v", e.Err)
+}
+
+func (e *SSHKeyResolutionError) Unwrap() error {
+	return e.Err
+}
 
 // ClassifyHubError determines if a hub access error is permanent (not found) or transient.
 //

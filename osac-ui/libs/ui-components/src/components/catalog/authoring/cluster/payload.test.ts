@@ -1,4 +1,7 @@
+import { create } from '@bufbuild/protobuf';
 import { describe, expect, it } from 'vitest';
+
+import { ClusterCatalogItemSchema } from '@osac/types';
 
 import {
   buildClusterCatalogItemCreatePayload,
@@ -33,10 +36,24 @@ describe('buildClusterCatalogItemCreatePayload', () => {
     const payload = buildClusterCatalogItemCreatePayload(values);
 
     expect(payload.fields?.version).toEqual({
-      behavior: { case: 'locked', value: { name: '4-17-0' } },
+      behavior: { case: 'locked', value: { name: '4-17-0', shared: true } },
     });
     expect(payload.fields?.network).toEqual({
       podCidr: { behavior: { case: 'editable', value: { defaultValue: '10.128.0.0/14' } } },
+    });
+  });
+
+  it('marks an editable cluster version default as shared', () => {
+    const values = emptyClusterCatalogItemValues();
+    values.version = { value: '4-20-0', locked: false };
+
+    const payload = buildClusterCatalogItemCreatePayload(values);
+
+    expect(payload.fields?.version).toEqual({
+      behavior: {
+        case: 'editable',
+        value: { defaultValue: { name: '4-20-0', shared: true } },
+      },
     });
   });
 
@@ -98,7 +115,10 @@ describe('buildClusterCatalogItemUpdatePayload', () => {
     values.template = { id: 'template-1', name: '' };
     values.podCidr = { value: '10.128.0.0/14', locked: true };
 
-    const payload = buildClusterCatalogItemUpdatePayload({ id: 'item-1' }, values);
+    const payload = buildClusterCatalogItemUpdatePayload(
+      create(ClusterCatalogItemSchema, { id: 'item-1' }),
+      values,
+    );
 
     expect(payload.metadata).toEqual({ description: 'updated description' });
     expect(payload.template).toBeUndefined();

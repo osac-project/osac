@@ -1,8 +1,8 @@
 import { Content, Stack, StackItem, Title } from '@patternfly/react-core';
 
+import { useTranslation } from '../../../../hooks/useTranslation';
 import ClusterPodCidrField from '../../../Cluster/CreateWizard/fields/ClusterPodCidrField';
 import ClusterServiceCidrField from '../../../Cluster/CreateWizard/fields/ClusterServiceCidrField';
-import { useTranslation } from '../../../../hooks/useTranslation';
 import OsacForm from '../../../Form/OsacForm';
 import CatalogField from '../CatalogField';
 

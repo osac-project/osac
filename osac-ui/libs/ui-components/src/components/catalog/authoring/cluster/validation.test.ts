@@ -13,15 +13,15 @@ describe('buildClusterCatalogStepSchema', () => {
       schema?.validate({
         version: { locked: true, value: '' },
         nodeSets: { locked: false, value: [] },
-      }),
-    ).rejects.toMatchObject({ message: expect.stringContaining('Version is required') });
+      }) as Promise<unknown>,
+    ).rejects.toThrow('Version is required');
 
     await expect(
       schema?.validate({
         version: { locked: false, value: '' },
         nodeSets: { locked: true, value: [] },
-      }),
-    ).rejects.toMatchObject({ message: expect.stringContaining('At least one node set') });
+      }) as Promise<unknown>,
+    ).rejects.toThrow('At least one node set');
   });
 
   it('allows empty editable fields but rejects overlapping CIDRs', async () => {

@@ -1,0 +1,13 @@
+# Cachi2/Hermeto pip build-requirements for the EE's generated Containerfile's
+# own tooling installs -- NOT this component's own python dependencies (see
+# execution-environment/requirements.txt for those). Pinned so Cachi2 can
+# prefetch them for the hermetic build; update these pins if
+# execution-environment.yaml's ansible_core/ansible_runner versions change,
+# or if ansible-builder's own template (base/builder/final stage pip
+# installs) changes in a future ansible-builder upgrade.
+ansible-core==2.20.3
+ansible-runner==2.4.3
+bindep==2.14.0
+PyYAML==6.0.3
+packaging==26.3
+dumb-init==1.2.5

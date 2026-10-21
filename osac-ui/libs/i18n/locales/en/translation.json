@@ -717,7 +717,6 @@
   "Provision a bare metal instance from a catalog item.": "Provision a bare metal instance from a catalog item.",
   "Provision bare metal": "Provision bare metal",
   "Provisioning": "Provisioning",
-  "Provisioning - {{activity}}": "Provisioning - {{activity}}",
   "Provisioning failed": "Provisioning failed",
   "Provisioning progress steps": "Provisioning progress steps",
   "Published": "Published",

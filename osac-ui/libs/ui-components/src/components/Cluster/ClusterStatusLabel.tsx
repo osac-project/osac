@@ -9,7 +9,6 @@ import { ResourceStatusLabel, type StatusKind } from '../Resource/ResourceStatus
 
 interface ClusterStatusLabelProps {
   status?: ClusterStatus;
-  activityInLabel?: boolean;
 }
 
 interface ClusterStateActivity {
@@ -75,22 +74,12 @@ const formatClusterStateActivity = (
   };
 };
 
-export const ClusterStatusLabel = ({
-  status,
-  activityInLabel = false,
-}: ClusterStatusLabelProps) => {
+export const ClusterStatusLabel = ({ status }: ClusterStatusLabelProps) => {
   const { t } = useTranslation();
   const { stateKind, stateText, activityText, activityWarning } = formatClusterStateActivity(
     status,
     t,
   );
-  if (!activityText) {
-    return <ResourceStatusLabel status={stateKind} text={stateText} />;
-  }
-
-  const labelText = activityInLabel
-    ? t('Provisioning - {{activity}}', { activity: activityText })
-    : stateText;
   const statusLabel = activityWarning ? (
     <Label
       color="orange"
@@ -98,13 +87,13 @@ export const ClusterStatusLabel = ({
       aria-label={t('Warning: Provisioning stalled')}
       isCompact
     >
-      {labelText}
+      {stateText}
     </Label>
   ) : (
-    <ResourceStatusLabel status={stateKind} text={labelText} />
+    <ResourceStatusLabel status={stateKind} text={stateText} />
   );
 
-  if (activityInLabel) {
+  if (!activityText) {
     return statusLabel;
   }
 

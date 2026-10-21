@@ -73,7 +73,8 @@ describe('ClusterDetailsPageContent', () => {
     );
 
     const titleRow = screen.getByRole('heading', { name: 'cluster-one' }).closest('.pf-v6-l-flex');
-    expect(titleRow).toHaveTextContent('Provisioning - WorkersJoining');
+    expect(titleRow?.querySelector('.pf-v6-c-label')).toHaveTextContent('Provisioning');
+    expect(titleRow?.querySelector('small')).toHaveTextContent('WorkersJoining');
     expect(titleRow?.querySelectorAll('.pf-v6-c-label')).toHaveLength(1);
 
     const conditions = screen.getByRole('grid', { name: 'Cluster conditions' });
@@ -91,8 +92,11 @@ describe('ClusterDetailsPageContent', () => {
     renderWithProviders(<ClusterDetailsPageContent cluster={makeProgressingCluster('Stalled')} />);
 
     const warning = screen.getByLabelText('Warning: Provisioning stalled');
-    expect(warning).toHaveTextContent('Provisioning - Stalled');
+    expect(warning).toHaveTextContent('Provisioning');
     expect(warning).toHaveClass('pf-m-orange');
+    const titleRow = screen.getByRole('heading', { name: 'cluster-one' }).closest('.pf-v6-l-flex');
+    expect(titleRow?.querySelector('small')).toHaveTextContent('Stalled');
+    expect(titleRow?.querySelectorAll('.pf-v6-c-label')).toHaveLength(1);
   });
 
   it.each(['StageUnknown', undefined])(
@@ -103,7 +107,8 @@ describe('ClusterDetailsPageContent', () => {
       const titleRow = screen
         .getByRole('heading', { name: 'cluster-one' })
         .closest('.pf-v6-l-flex');
-      expect(titleRow).toHaveTextContent('Provisioning - Stage unknown');
+      expect(titleRow?.querySelector('.pf-v6-c-label')).toHaveTextContent('Provisioning');
+      expect(titleRow?.querySelector('small')).toHaveTextContent('Stage unknown');
     },
   );
 
@@ -111,15 +116,12 @@ describe('ClusterDetailsPageContent', () => {
     const { rerender } = renderWithProviders(
       <ClusterDetailsPageContent cluster={makeProgressingCluster('AllocatingWorkers')} />,
     );
-    expect(
-      screen.getByRole('heading', { name: 'cluster-one' }).closest('.pf-v6-l-flex'),
-    ).toHaveTextContent('Provisioning - AllocatingWorkers');
+    const titleRow = () =>
+      screen.getByRole('heading', { name: 'cluster-one' }).closest('.pf-v6-l-flex');
+    expect(titleRow()?.querySelector('small')).toHaveTextContent('AllocatingWorkers');
 
     rerender(<ClusterDetailsPageContent cluster={makeProgressingCluster('WorkersJoining')} />);
-    expect(screen.queryByText('Provisioning - AllocatingWorkers')).not.toBeInTheDocument();
-    expect(
-      screen.getByRole('heading', { name: 'cluster-one' }).closest('.pf-v6-l-flex'),
-    ).toHaveTextContent('Provisioning - WorkersJoining');
+    expect(titleRow()?.querySelector('small')).toHaveTextContent('WorkersJoining');
 
     rerender(
       <ClusterDetailsPageContent
@@ -130,8 +132,8 @@ describe('ClusterDetailsPageContent', () => {
         })}
       />,
     );
-    expect(screen.queryByText('Provisioning - WorkersJoining')).not.toBeInTheDocument();
-    expect(screen.getByText('Ready')).toBeInTheDocument();
+    expect(titleRow()?.querySelector('small')).not.toBeInTheDocument();
+    expect(titleRow()?.querySelector('.pf-v6-c-label')).toHaveTextContent('Ready');
   });
 
   it('shows conditions only on Overview and External IP endpoints in the Networking side card', async () => {

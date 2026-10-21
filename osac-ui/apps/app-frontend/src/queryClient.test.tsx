@@ -122,19 +122,21 @@ describe('production QueryClient cluster refresh', () => {
 
     try {
       expect(await screen.findByRole('heading', { name: 'cluster-a' })).toBeInTheDocument();
-      expect(header()).toHaveTextContent('Provisioning - AllocatingWorkers');
+      expect(header()?.querySelector('small')).toHaveTextContent('AllocatingWorkers');
       expect(clusterMethods()).toEqual(['Get']);
 
       clusters[0] = makeCluster('cluster-a', 'WorkersJoining');
-      expect(header()).not.toHaveTextContent('Provisioning - WorkersJoining');
+      expect(header()?.querySelector('small')).not.toHaveTextContent('WorkersJoining');
 
       await act(async () => vi.advanceTimersByTimeAsync(9_999));
       expect(clusterMethods()).toEqual(['Get']);
-      expect(header()).toHaveTextContent('Provisioning - AllocatingWorkers');
+      expect(header()?.querySelector('small')).toHaveTextContent('AllocatingWorkers');
 
       await act(async () => vi.advanceTimersByTimeAsync(1));
-      await waitFor(() => expect(header()).toHaveTextContent('Provisioning - WorkersJoining'));
-      expect(header()).not.toHaveTextContent('Provisioning - AllocatingWorkers');
+      await waitFor(() =>
+        expect(header()?.querySelector('small')).toHaveTextContent('WorkersJoining'),
+      );
+      expect(header()?.querySelector('small')).not.toHaveTextContent('AllocatingWorkers');
       expect(clusterMethods()).toEqual(['Get', 'Get']);
     } finally {
       unmount();

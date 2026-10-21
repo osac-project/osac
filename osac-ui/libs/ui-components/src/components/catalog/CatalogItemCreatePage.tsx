@@ -1,6 +1,7 @@
 import { useParams } from 'react-router-dom';
 import { Bullseye, EmptyState, EmptyStateBody, PageSection } from '@patternfly/react-core';
 
+import BareMetalCatalogItemWizard from './authoring/baremetal/BareMetalCatalogItemWizard';
 import ClusterCatalogItemWizard from './authoring/cluster/ClusterCatalogItemWizard';
 import ComputeCatalogItemWizard from './authoring/compute/ComputeCatalogItemWizard';
 import { isCatalogItemKind } from './catalogItemDisplay';
@@ -28,6 +29,10 @@ export const CatalogItemCreatePage = () => {
 
   if (kindParam === 'cluster') {
     return <ClusterCatalogItemWizard />;
+  }
+
+  if (kindParam === 'bm') {
+    return <BareMetalCatalogItemWizard />;
   }
 
   return (

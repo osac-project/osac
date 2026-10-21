@@ -305,21 +305,59 @@ var _ = Describe("handleListResources", func() {
 		Expect(capturedStorageToken).To(Equal("Bearer api-for-raw-bearer-value"))
 	})
 
-	It("Rejects an unsupported resource type without calling a downstream client", func() {
-		handler := handleListResources(resourceRegistry{})
-		_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), ListResourcesInput{
-			ResourceType: "cluster",
-		})
-		Expect(err).To(MatchError(ContainSubstring("unsupported resource type")))
-	})
+	It("Returns structured errors for invalid list arguments without calling a public client", func() {
+		var listCalls int
+		registry := resourceRegistry{
+			ResourceTypeComputeInstance: {
+				list: func(context.Context, string, resourcePageRequest) (ListResourcesOutput, error) {
+					listCalls++
+					return ListResourcesOutput{}, nil
+				},
+			},
+		}
+		cases := []struct {
+			name   string
+			input  ListResourcesInput
+			detail string
+		}{
+			{
+				name: "unsupported resource type",
+				input: ListResourcesInput{
+					ResourceType: "cluster",
+				},
+				detail: "unsupported resource type",
+			},
+			{
+				name: "negative offset",
+				input: ListResourcesInput{
+					ResourceType: ResourceTypeComputeInstance,
+					Offset:       -1,
+				},
+				detail: "offset must not be negative",
+			},
+			{
+				name: "page size above maximum",
+				input: ListResourcesInput{
+					ResourceType: ResourceTypeComputeInstance,
+					PageSize:     maxResourcePageSize + 1,
+				},
+				detail: "page_size",
+			},
+		}
 
-	It("Rejects an invalid page before calling a downstream client", func() {
-		handler := handleListResources(resourceRegistry{})
-		_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), ListResourcesInput{
-			ResourceType: ResourceTypeComputeInstance,
-			PageSize:     101,
-		})
-		Expect(err).To(MatchError(ContainSubstring("page_size")))
+		for _, testCase := range cases {
+			By(testCase.name)
+			handler := handleListResources(registry)
+			_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), testCase.input)
+			Expect(err).To(HaveOccurred())
+			envelope := decodeToolError(err)
+			Expect(envelope.Category).To(Equal("invalid_request"))
+			Expect(envelope.GRPCCode).To(Equal("InvalidArgument"))
+			Expect(envelope.Retryable).To(BeFalse())
+			Expect(envelope.RequestID).ToNot(BeEmpty())
+			Expect(err.Error()).To(ContainSubstring(testCase.detail))
+		}
+		Expect(listCalls).To(BeZero())
 	})
 
 	It("Hides a catalog item list error description", func() {
@@ -335,7 +373,10 @@ var _ = Describe("handleListResources", func() {
 		_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), ListResourcesInput{
 			ResourceType: ResourceTypeComputeInstanceCatalogItem,
 		})
-		Expect(err).To(MatchError("public API request failed"))
+		envelope := decodeToolError(err)
+		Expect(envelope.Category).To(Equal("upstream_failure"))
+		Expect(envelope.GRPCCode).To(Equal("Unknown"))
+		Expect(err.Error()).ToNot(ContainSubstring("private SQL host"))
 	})
 })
 
@@ -452,13 +493,51 @@ var _ = Describe("handleGetResource", func() {
 		Expect(capturedToken).To(Equal("Bearer api-for-raw-bearer-value"))
 	})
 
-	It("Rejects an unsupported resource type", func() {
-		handler := handleGetResource(resourceRegistry{})
-		_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), GetResourceInput{
-			ResourceType: "cluster",
-			ID:           "cluster-1",
-		})
-		Expect(err).To(MatchError(ContainSubstring("unsupported resource type")))
+	It("Returns structured errors for invalid get arguments without calling a public client", func() {
+		var getCalls int
+		registry := resourceRegistry{
+			ResourceTypeComputeInstance: {
+				get: func(context.Context, string) (proto.Message, error) {
+					getCalls++
+					return nil, nil
+				},
+			},
+		}
+		cases := []struct {
+			name   string
+			input  GetResourceInput
+			detail string
+		}{
+			{
+				name: "unsupported resource type",
+				input: GetResourceInput{
+					ResourceType: "cluster",
+					ID:           "cluster-1",
+				},
+				detail: "unsupported resource type",
+			},
+			{
+				name: "empty resource ID",
+				input: GetResourceInput{
+					ResourceType: ResourceTypeComputeInstance,
+				},
+				detail: "id must not be empty",
+			},
+		}
+
+		for _, testCase := range cases {
+			By(testCase.name)
+			handler := handleGetResource(registry)
+			_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), testCase.input)
+			Expect(err).To(HaveOccurred())
+			envelope := decodeToolError(err)
+			Expect(envelope.Category).To(Equal("invalid_request"))
+			Expect(envelope.GRPCCode).To(Equal("InvalidArgument"))
+			Expect(envelope.Retryable).To(BeFalse())
+			Expect(envelope.RequestID).ToNot(BeEmpty())
+			Expect(err.Error()).To(ContainSubstring(testCase.detail))
+		}
+		Expect(getCalls).To(BeZero())
 	})
 
 	It("Preserves a safe Get error category without its description", func() {
@@ -475,7 +554,10 @@ var _ = Describe("handleGetResource", func() {
 			ResourceType: ResourceTypeComputeInstance,
 			ID:           "instance-1",
 		})
-		Expect(err).To(MatchError("resource not found"))
+		envelope := decodeToolError(err)
+		Expect(envelope.Category).To(Equal("not_found"))
+		Expect(envelope.GRPCCode).To(Equal("NotFound"))
+		Expect(err.Error()).ToNot(ContainSubstring("private SQL host"))
 	})
 })
 

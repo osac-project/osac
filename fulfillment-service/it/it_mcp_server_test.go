@@ -15,6 +15,7 @@ package it
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -39,6 +40,31 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
+
+func keycloakIssuer(ctx context.Context) string {
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		fmt.Sprintf("https://%s/realms/osac/.well-known/openid-configuration", keycloakAddr),
+		nil,
+	)
+	Expect(err).ToNot(HaveOccurred())
+	transport := &http.Transport{TLSClientConfig: &tls.Config{
+		RootCAs: tool.CaPool().Pool(), MinVersion: tls.VersionTLS12,
+	}}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport}
+	response, err := client.Do(request)
+	Expect(err).ToNot(HaveOccurred())
+	defer response.Body.Close()
+	Expect(response.StatusCode).To(Equal(http.StatusOK))
+	var metadata struct {
+		Issuer string `json:"issuer"`
+	}
+	Expect(json.NewDecoder(response.Body).Decode(&metadata)).To(Succeed())
+	Expect(metadata.Issuer).ToNot(BeEmpty())
+	return metadata.Issuer
+}
 
 var _ = Describe("MCP server", func() {
 	var (
@@ -340,14 +366,16 @@ var _ = Describe("MCP server", func() {
 		jwksCache, err := auth.NewJwksCache().
 			SetLogger(logger).
 			SetCaPool(tool.CaPool()).
-			AddIssuers(fmt.Sprintf("https://%s/realms/osac", keycloakAddr)).
+			AddIssuers(keycloakIssuer(ctx)).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
+		// The password-flow fixture returns Keycloak's account audience. Audience
+		// enforcement is covered by the NewHandler unit tests and the deployed
+		// wrong-audience integration test.
 		jwtValidator, err := auth.NewJwtValidator().
 			SetLogger(logger).
 			SetJwksCache(jwksCache).
 			SetExpirationLeeway(5 * time.Second).
-			AddAudience(auth.Audience).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
@@ -390,11 +418,46 @@ var _ = Describe("MCP server", func() {
 		defer func() { Expect(session.Close()).To(Succeed()) }()
 		listedTools, err := session.ListTools(ctx, nil)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(listedTools.Tools).To(HaveLen(4))
+		Expect(listedTools.Tools).To(HaveLen(5))
 		Expect([]string{
 			listedTools.Tools[0].Name, listedTools.Tools[1].Name,
-			listedTools.Tools[2].Name, listedTools.Tools[3].Name,
-		}).To(ConsistOf("list_resources", "get_resource", "create_compute_instance", "delete_compute_instance"))
+			listedTools.Tools[2].Name, listedTools.Tools[3].Name, listedTools.Tools[4].Name,
+		}).To(ConsistOf(
+			"check_connection", "list_resources", "get_resource", "create_compute_instance", "delete_compute_instance",
+		))
+
+		instancesBefore, err := computeInstancesClient.List(ctx, publicv1.ComputeInstancesListRequest_builder{
+			Limit: proto.Int32(1),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		connection, err := callMCPTool[mcpserver.CheckConnectionOutput](
+			ctx, session, "check_connection", mcpserver.CheckConnectionInput{},
+		)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(connection.Server.Name).To(Equal("osac-deployment-mcp"))
+		Expect(connection.Server.Version).ToNot(BeEmpty())
+		Expect(connection.Caller.Subject).ToNot(BeEmpty())
+		Expect(connection.Caller.Tenants).To(ContainElement(usersGroup))
+		Expect(connection.ResourceFamilies).To(HaveLen(9))
+		Expect(connection.Tools).To(ConsistOf(
+			"check_connection", "list_resources", "get_resource", "create_compute_instance", "delete_compute_instance",
+		))
+		Expect(connection.Permissions).To(ConsistOf(
+			mcpserver.CheckConnectionPermission{
+				Tenant: usersGroup, Service: "osac.public.v1.ComputeInstances", Method: "List", Allowed: true,
+			},
+			mcpserver.CheckConnectionPermission{
+				Tenant: usersGroup, Service: "osac.public.v1.ComputeInstances", Method: "Create", Allowed: true,
+			},
+		))
+		encodedConnection, err := json.Marshal(connection)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(encodedConnection).ToNot(MatchRegexp(`(?i)"(status|conditions?)"`))
+		instancesAfter, err := computeInstancesClient.List(ctx, publicv1.ComputeInstancesListRequest_builder{
+			Limit: proto.Int32(1),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(instancesAfter.GetTotal()).To(Equal(instancesBefore.GetTotal()))
 
 		assertDiscoverable := func(resourceType mcpserver.ResourceType, id string) map[string]any {
 			listOutput, err := callMCPTool[mcpserver.ListResourcesOutput](ctx, session, "list_resources", mcpserver.ListResourcesInput{
@@ -555,7 +618,9 @@ var _ = Describe("MCP server", func() {
 				}},
 			},
 		)
-		Expect(err).To(MatchError(ContainSubstring("public API rejected the request")))
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring(`"category":"invalid_request"`))
+		Expect(err.Error()).To(ContainSubstring(`"grpc_code":"InvalidArgument"`))
 		adminInstances := privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn())
 		for _, name := range []string{invalidName, deniedName} {
 			invalidList, e := adminInstances.List(ctx, privatev1.ComputeInstancesListRequest_builder{

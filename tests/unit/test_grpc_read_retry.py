@@ -12,6 +12,7 @@ from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
 
 @pytest.fixture
 def rpc_stub(monkeypatch: pytest.MonkeyPatch) -> tuple[GRPCClient, Mock, Mock]:
+    """Replace command execution and backoff with mocks while exercising the real client."""
     test_token = "test-private-token"
     client = GRPCClient(address="fulfillment-api.example.test:443", token=test_token, retry_read_connections=True)
     run = Mock(return_value='{"items": []}')
@@ -22,6 +23,7 @@ def rpc_stub(monkeypatch: pytest.MonkeyPatch) -> tuple[GRPCClient, Mock, Mock]:
 
 
 def _dial_timeout(client: GRPCClient) -> subprocess.CalledProcessError:
+    """Match the pre-connection failure text that is eligible for safe read retries."""
     return subprocess.CalledProcessError(
         1,
         ["grpcurl", "-H", f"Authorization: Bearer {client.token}"],
@@ -39,6 +41,7 @@ def test_read_retries_only_dial_timeout(
     method: str,
     failed_attempts: int,
 ) -> None:
+    """Require identical requests, bounded backoff and credential-free retry logging."""
     client, run, sleep = rpc_stub
     response = {"object": {"id": "private-resource-id"}}
     run.side_effect = [_dial_timeout(client) for _ in range(failed_attempts)] + [json.dumps(response)]
@@ -58,6 +61,7 @@ def test_read_retries_only_dial_timeout(
 
 @pytest.mark.parametrize("method", ["Get", "List"])
 def test_read_dial_timeout_budget_exhaustion_fails(rpc_stub: tuple[GRPCClient, Mock, Mock], method: str) -> None:
+    """Propagate the final transport error after exactly three command attempts."""
     client, run, sleep = rpc_stub
     errors = [_dial_timeout(client) for _ in range(3)]
     run.side_effect = errors
@@ -90,6 +94,7 @@ def test_read_dial_timeout_budget_exhaustion_fails(rpc_stub: tuple[GRPCClient, M
 def test_other_read_errors_fail_immediately(
     rpc_stub: tuple[GRPCClient, Mock, Mock], returncode: int, stderr: str
 ) -> None:
+    """Keep RPC statuses, reflection failures and nonmatching dial errors outside retries."""
     client, run, sleep = rpc_stub
     error = subprocess.CalledProcessError(returncode, ["grpcurl"], stderr=stderr)
     run.side_effect = error
@@ -104,6 +109,7 @@ def test_other_read_errors_fail_immediately(
 
 @pytest.mark.parametrize("method", ["Create", "Update", "Delete", "Restart", "ListExtra", "GetExtra"])
 def test_other_methods_do_not_retry_dial_timeout(rpc_stub: tuple[GRPCClient, Mock, Mock], method: str) -> None:
+    """Protect writes and similarly named methods from the Get/List retry policy."""
     client, run, sleep = rpc_stub
     run.side_effect = _dial_timeout(client)
 
@@ -118,6 +124,7 @@ def test_other_methods_do_not_retry_dial_timeout(rpc_stub: tuple[GRPCClient, Moc
     "error", [subprocess.TimeoutExpired(["grpcurl"], 300), json.JSONDecodeError("invalid JSON", "bad", 0)]
 )
 def test_other_exception_types_do_not_retry(rpc_stub: tuple[GRPCClient, Mock, Mock], error: Exception) -> None:
+    """Leave subprocess timeouts and invalid response JSON visible to the caller."""
     client, run, sleep = rpc_stub
     run.side_effect = error
 
@@ -130,6 +137,7 @@ def test_other_exception_types_do_not_retry(rpc_stub: tuple[GRPCClient, Mock, Mo
 
 
 def test_successful_read_is_called_once(rpc_stub: tuple[GRPCClient, Mock, Mock]) -> None:
+    """Avoid extra requests or backoff when the first response succeeds."""
     client, run, sleep = rpc_stub
 
     assert client.call(service=f"{PUBLIC_API}.ComputeInstances/List") == {"items": []}
@@ -138,6 +146,7 @@ def test_successful_read_is_called_once(rpc_stub: tuple[GRPCClient, Mock, Mock])
 
 
 def test_token_failure_does_not_retry_rpc(rpc_stub: tuple[GRPCClient, Mock, Mock]) -> None:
+    """Do not start a command when obtaining its credentials fails."""
     _, run, sleep = rpc_stub
     token_factory = Mock(side_effect=RuntimeError("authentication failed"))
     client = GRPCClient(
@@ -153,6 +162,7 @@ def test_token_failure_does_not_retry_rpc(rpc_stub: tuple[GRPCClient, Mock, Mock
 
 
 def test_token_subprocess_failure_is_outside_retry_policy(rpc_stub: tuple[GRPCClient, Mock, Mock]) -> None:
+    """Keep authentication failures outside retries even when their text resembles dial errors."""
     original, run, sleep = rpc_stub
     token_factory = Mock(side_effect=_dial_timeout(original))
     client = GRPCClient(address=original.address, token_factory=token_factory, retry_read_connections=True)
@@ -167,6 +177,7 @@ def test_token_subprocess_failure_is_outside_retry_policy(rpc_stub: tuple[GRPCCl
 
 @pytest.mark.parametrize("method", ["Get", "List"])
 def test_default_client_preserves_fail_fast_behavior(rpc_stub: tuple[GRPCClient, Mock, Mock], method: str) -> None:
+    """Require explicit opt-in before retrying either public read method."""
     enabled, run, sleep = rpc_stub
     client = GRPCClient(address=enabled.address, token=enabled.token)
     error = _dial_timeout(client)
@@ -183,6 +194,7 @@ def test_default_client_preserves_fail_fast_behavior(rpc_stub: tuple[GRPCClient,
 def test_retry_client_keeps_original_token_refresh_and_does_not_change_original(
     rpc_stub: tuple[GRPCClient, Mock, Mock], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Refresh credentials between attempts without enabling retries on the original client."""
     enabled, run, sleep = rpc_stub
     token_factory = Mock(side_effect=["first-token", "refreshed-token", "original-refreshed-token"])
     original = GRPCClient(address=enabled.address, token_factory=token_factory)
@@ -210,6 +222,7 @@ def test_retry_client_keeps_original_token_refresh_and_does_not_change_original(
 def test_retry_client_preserves_existing_token_cache_age(
     rpc_stub: tuple[GRPCClient, Mock, Mock], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Copy cached credentials with their original age so cloning cannot extend their TTL."""
     enabled, _, _ = rpc_stub
     clock = Mock(return_value=0.0)
     monkeypatch.setattr(grpc_client.time, "monotonic", clock)
@@ -232,6 +245,7 @@ def test_retry_client_preserves_existing_token_cache_age(
 def test_unchecked_call_preserves_error_without_retry(
     rpc_stub: tuple[GRPCClient, Mock, Mock], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Return unchecked command results verbatim without invoking checked retry logic."""
     client, run, sleep = rpc_stub
     error = _dial_timeout(client)
     unchecked = Mock(return_value=(error.stderr, error.returncode))

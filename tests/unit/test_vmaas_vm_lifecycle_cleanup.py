@@ -80,6 +80,7 @@ def failed_create(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
 
 
 def run_scenario(state: SimpleNamespace) -> None:
+    """Exercise the actual lifecycle body through mocked clients and readiness helpers."""
     scenario.test_vmaas_vm_lifecycle_demo(
         cli=state.cli,
         private_cli=state.private_cli,
@@ -124,6 +125,7 @@ def test_accepted_create_is_cleaned_when_cli_does_not_return_uuid(failed_create:
 
 
 def test_rejected_create_does_not_delete_another_vm(failed_create: SimpleNamespace) -> None:
+    """Exhaust the name-lookup budget before cleaning dependents without deleting a VM."""
     failed_create.grpc.list_with_filter.return_value = []
     with pytest.raises(AssertionError, match="cannot parse UUID"):
         run_scenario(failed_create)
@@ -136,6 +138,7 @@ def test_rejected_create_does_not_delete_another_vm(failed_create: SimpleNamespa
 
 @pytest.mark.parametrize("empty_results", [1, 3])
 def test_delayed_create_visibility_is_cleaned(failed_create: SimpleNamespace, empty_results: int) -> None:
+    """Find a later API result and finish VM deletion before network cleanup."""
     failed_create.grpc.list_with_filter.side_effect = [
         *[[] for _ in range(empty_results)],
         [{"id": "ci-id", "metadata": {"name": "created-vm"}}],
@@ -156,6 +159,7 @@ def test_delayed_create_visibility_is_cleaned(failed_create: SimpleNamespace, em
     ],
 )
 def test_ambiguous_or_wrong_name_is_never_deleted(failed_create: SimpleNamespace, matches: list[dict]) -> None:
+    """Preserve the primary failure and refuse potentially unrelated VM deletion."""
     failed_create.grpc.list_with_filter.return_value = matches
     with pytest.raises(BaseExceptionGroup) as caught:
         run_scenario(failed_create)
@@ -165,6 +169,7 @@ def test_ambiguous_or_wrong_name_is_never_deleted(failed_create: SimpleNamespace
 
 
 def test_failed_cr_lookup_still_deletes_recovered_api_id(failed_create: SimpleNamespace) -> None:
+    """Use a recovered API ID for deletion even when its Kubernetes CR cannot be observed."""
     failed_create.resolve_cr.side_effect = TimeoutError("CR was not observed")
     with pytest.raises(BaseExceptionGroup) as caught:
         run_scenario(failed_create)
@@ -174,6 +179,7 @@ def test_failed_cr_lookup_still_deletes_recovered_api_id(failed_create: SimpleNa
 
 
 def test_failure_before_vm_create_needs_no_name_lookup(failed_create: SimpleNamespace) -> None:
+    """Avoid searching or deleting VMs when execution never reached their creation."""
     failed_create.private_cli.create_instance_type.side_effect = AssertionError("InstanceType create failed")
     with pytest.raises(AssertionError, match="InstanceType create failed"):
         run_scenario(failed_create)
@@ -182,6 +188,7 @@ def test_failure_before_vm_create_needs_no_name_lookup(failed_create: SimpleName
 
 
 def test_known_uuid_uses_existing_cleanup_without_name_lookup(failed_create: SimpleNamespace) -> None:
+    """Use the retained UUID directly instead of adding a name-based API request."""
     failed_create.cli.create_compute_instance_with_catalog_item.side_effect = None
     failed_create.cli.create_compute_instance_with_catalog_item.return_value = "ci-id"
     failed_create.grpc.get_compute_instance.side_effect = AssertionError("failed after create")
@@ -192,12 +199,14 @@ def test_known_uuid_uses_existing_cleanup_without_name_lookup(failed_create: Sim
 
 
 def test_lookup_failure_preserves_primary_error_and_redacts_credentials(failed_create: SimpleNamespace) -> None:
+    """Keep the original scenario error while sanitizing credentials in the lookup failure."""
+    test_secret = "unit-test-secret"
     failed_create.grpc.list_with_filter.side_effect = subprocess.CalledProcessError(
-        7, ["grpcurl", "-H", "Authorization: Bearer unit-test-secret"], stderr="unit-test-secret"
+        7, ["grpcurl", "-H", f"Authorization: Bearer {test_secret}"], stderr=test_secret
     )
     with pytest.raises(BaseExceptionGroup) as caught:
         run_scenario(failed_create)
     assert isinstance(caught.value.exceptions[0], AssertionError)
-    assert "unit-test-secret" not in str(caught.value.exceptions[1])
+    assert test_secret not in str(caught.value.exceptions[1])
     failed_create.cli.delete_compute_instance.assert_not_called()
     assert failed_create.events == ["delete SG", "delete Subnet", "delete VN", "delete catalog", "delete InstanceType"]

@@ -36,6 +36,7 @@ class GRPCClient:
         token_factory: Callable[[], str] | None = None,
         retry_read_connections: bool = False,
     ) -> None:
+        """Keep transport retries opt-in and maintain a separate token cache per client."""
         self.address: str = address
         self._static_token: str = token
         self._token_factory: Callable[[], str] | None = token_factory

@@ -59,11 +59,13 @@ _SCRATCH_OWNER_PATH = "/metadata/annotations/osac.openshift.io~1e2e-scratch-owne
 
 
 def _k8s_manager(item: dict[str, Any]) -> str:
+    """Accept both protobuf JSON spellings for the provider manager."""
     value = item.get("k8s_manager") or item.get("k8sManager") or ""
     return str(value)
 
 
 def _attachment_refs(instance: dict[str, Any]) -> tuple[str, list[str]]:
+    """Require exactly one attachment before checking its subnet and groups."""
     spec = instance.get("spec") or {}
     attachments = spec.get("network_attachments") or spec.get("networkAttachments") or []
     assert len(attachments) == 1, f"expected one network attachment, got {len(attachments)}"
@@ -76,6 +78,7 @@ def _attachment_refs(instance: dict[str, Any]) -> tuple[str, list[str]]:
 def _wait_for_api_ready(get_resource: Callable[[], dict[str, Any]], ready_state: str) -> dict[str, Any]:
     # Kubernetes readiness can precede Fulfillment's feedback update. Dependent
     # Create requests validate the API state, so wait for that state as well.
+    """Wait for API feedback before creating a resource that references this one."""
     return poll_until(
         fn=get_resource,
         until=lambda response: response.get("object", {}).get("status", {}).get("state", "") == ready_state,
@@ -86,11 +89,13 @@ def _wait_for_api_ready(get_resource: Callable[[], dict[str, Any]], ready_state:
 
 
 def _cli_objects(cli: OsacCLI, resource: str) -> list[dict[str, Any]]:
+    """Normalize singleton and list JSON output without changing object contents."""
     objects = json.loads(cli.get(resource, output="json"))
     return [objects] if isinstance(objects, dict) else objects
 
 
 def _wait_for_cli_state(cli: OsacCLI, instance_id: str, expected_state: str) -> None:
+    """Select the exact instance ID so another running VM cannot satisfy the wait."""
     poll_until(
         fn=lambda: _cli_objects(cli, "computeinstance"),
         until=lambda items: any(
@@ -103,6 +108,7 @@ def _wait_for_cli_state(cli: OsacCLI, instance_id: str, expected_state: str) -> 
 
 
 def _rule_signature(rule: dict[str, Any]) -> tuple[str, int, int, str]:
+    """Ignore default port fields on protocols that do not use TCP ports."""
     protocol = rule["protocol"]
     return (
         protocol,
@@ -113,6 +119,7 @@ def _rule_signature(rule: dict[str, Any]) -> tuple[str, int, int, str]:
 
 
 def _delete_instance_type_if_present(grpc: GRPCClient, name: str) -> None:
+    """Treat only explicit NotFound as absence; propagate all other failures."""
     try:
         grpc.delete_instance_type(name=name)
     except subprocess.CalledProcessError as error:
@@ -142,6 +149,7 @@ def edit_lifecycle(
     editor.chmod(0o700)
 
     def edit(instance_id: str, fields: dict[str, str]) -> None:
+        """Restore the editor environment immediately after each CLI invocation."""
         with monkeypatch.context() as context:
             context.setenv("EDITOR", str(editor))
             context.setenv("OSAC_E2E_LIFECYCLE_SPEC", json.dumps(fields))
@@ -157,6 +165,7 @@ class _ScratchRestoreError(RuntimeError):
 def _safe_command_error(error: BaseException, action: str) -> RuntimeError:
     # Subprocess exceptions embed argv, including gRPC bearer tokens. Keep the
     # action, exception type, and exit/timeout information without raw output.
+    """Expose whitelisted failure details without raw argv or captured output."""
     detail = type(error).__name__
     if isinstance(error, subprocess.CalledProcessError):
         detail += f" (exit {error.returncode})"
@@ -220,10 +229,12 @@ def _scratch_api(k8s: K8sClient) -> tuple[str, bool]:
 
 
 def _patch_scratch_storage(k8s: K8sClient, resource: str, name: str, operations: list[dict[str, Any]]) -> None:
+    """Keep JSON Patch preconditions and mutations in one atomic request."""
     k8s._get("patch", resource, name, "-n", k8s.namespace, "--type=json", "-p", json.dumps(operations))
 
 
 def _wait_for_scratch_storage(k8s: K8sClient, expected: str | None) -> None:
+    """Observe the effective CDI class rather than only the requested HCO value."""
     poll_until(
         fn=lambda: (
             k8s.get_json(resource="cdiconfigs.cdi.kubevirt.io", name="config")
@@ -600,6 +611,7 @@ def test_vmaas_vm_lifecycle_demo(
         cleanup_errors: list[Exception] = []
 
         def cleanup(label: str, action: Callable[[], None]) -> None:
+            """Accumulate safe errors while allowing remaining resource cleanup to run."""
             try:
                 action()
             except Exception as error:
@@ -608,6 +620,7 @@ def test_vmaas_vm_lifecycle_demo(
         if ci_uuid is None and ci_create_name is not None:
 
             def resolve_ci() -> None:
+                """Allow delayed VM visibility while refusing nonunique or mismatched names."""
                 nonlocal ci_uuid, ci_name
                 try:
                     items = poll_until(

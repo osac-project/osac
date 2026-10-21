@@ -317,6 +317,7 @@ class OsacCLI:
         subnet: str | None = None,
         security_groups: list[str] | None = None,
     ) -> str:
+        """Keep catalog defaults while optionally supplying one explicit subnet/group attachment."""
         args: list[str] = ["create", "computeinstance", "--catalog-item", catalog_item]
         if name is not None:
             args.extend(["--name", name])

@@ -19,6 +19,7 @@ class ScratchCluster:
     as_system_admin = True
 
     def __init__(self, version: str, spec: dict[str, Any]) -> None:
+        """Keep independent HCO state and record patches for restoration assertions."""
         self.version = version
         self.hco = {
             "metadata": {"name": "test-hco", "namespace": self.namespace, "uid": "original-uid"},
@@ -31,6 +32,7 @@ class ScratchCluster:
 
     @staticmethod
     def schema(version: str) -> dict[str, Any]:
+        """Model the nested v1 field and the flat v1beta1 field as served schemas."""
         fields = {"scratchSpaceStorageClass": {"type": "string"}}
         if version == "v1":
             fields = {"storage": {"properties": fields}}
@@ -41,10 +43,12 @@ class ScratchCluster:
         }
 
     def storage(self) -> dict[str, Any]:
+        """Expose the version-specific subtree used for scratch configuration."""
         spec = self.hco["spec"]
         return spec.get("storage", {}) if self.version == "v1" else spec
 
     def get_json(self, *, resource: str, name: str) -> dict[str, Any]:
+        """Project scratch changes immediately into CDI status without real cluster access."""
         if resource.startswith("customresourcedefinitions."):
             return {"spec": {"versions": self.versions}}
         if resource.startswith("storageclasses."):
@@ -56,6 +60,7 @@ class ScratchCluster:
         return copy.deepcopy(self.hco)
 
     def _get(self, *args: str) -> tuple[str, int]:
+        """Enforce JSON Patch tests before committing a copied HCO state."""
         self.resources.append(args[1])
         assert args[1] == f"hyperconvergeds.{self.version}.hco.kubevirt.io"
         if args[0] == "get":
@@ -85,11 +90,13 @@ class ScratchCluster:
 
 @pytest.fixture
 def scratch_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Enable preparation in a serial test process with a nonproduction class name."""
     monkeypatch.setenv("OSAC_E2E_SCRATCH_STORAGE_CLASS", "scratch-class")
     monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
 
 
 def prepare(cluster: ScratchCluster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Generator[None, None, None]:
+    """Run the actual fixture generator against the in-memory Kubernetes client."""
     monkeypatch.setattr(lifecycle, "K8sClient", lambda **kwargs: cluster)
     return lifecycle.temporary_scratch_storage.__wrapped__(cluster, tmp_path)
 
@@ -100,6 +107,7 @@ def prepare(cluster: ScratchCluster, monkeypatch: pytest.MonkeyPatch, tmp_path: 
 def test_prepare_and_restore(
     version: str, previous: str | None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """Preserve field absence, empty values and existing annotations across both API versions."""
     fields = {} if previous is None else {"scratchSpaceStorageClass": previous}
     spec = {"storage": fields, "unrelated": "preserved"} if version == "v1" else {**fields, "unrelated": "preserved"}
     cluster = ScratchCluster(version, spec)
@@ -123,6 +131,7 @@ def test_prepare_and_restore(
 def test_absent_storage_parent_restored_without_losing_concurrent_fields(
     add_other_field: bool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """Remove a newly created storage parent only when no external fields need preserving."""
     cluster = ScratchCluster("v1", {})
     fixture = prepare(cluster, monkeypatch, tmp_path)
     next(fixture)
@@ -137,6 +146,7 @@ def test_absent_storage_parent_restored_without_losing_concurrent_fields(
 @pytest.mark.usefixtures("scratch_env")
 @pytest.mark.parametrize("change", ["uid", "owner", "value"])
 def test_restore_refuses_external_changes(change: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Refuse to overwrite replacement resources, foreign ownership or external scratch values."""
     cluster = ScratchCluster("v1", {"storage": {}})
     fixture = prepare(cluster, monkeypatch, tmp_path)
     next(fixture)
@@ -154,6 +164,7 @@ def test_restore_refuses_external_changes(change: str, monkeypatch: pytest.Monke
 
 
 def test_schema_selection_prefers_v1_and_checks_served_fields() -> None:
+    """Fall back only when the preferred version is unserved or lacks the required field."""
     cluster = ScratchCluster("v1", {})
     cluster.versions = [cluster.schema("v1beta1"), cluster.schema("v1")]
     assert lifecycle._scratch_api(cluster) == ("hyperconvergeds.v1.hco.kubevirt.io", True)
@@ -166,6 +177,7 @@ def test_schema_selection_prefers_v1_and_checks_served_fields() -> None:
 
 @pytest.mark.usefixtures("scratch_env")
 def test_unknown_schema_fails_before_writes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Require a known scratch-field schema before attempting any patch."""
     cluster = ScratchCluster("v2", {})
     fixture = prepare(cluster, monkeypatch, tmp_path)
     with pytest.raises(RuntimeError, match="No supported HyperConverged"):
@@ -176,6 +188,7 @@ def test_unknown_schema_fails_before_writes(monkeypatch: pytest.MonkeyPatch, tmp
 @pytest.mark.usefixtures("scratch_env")
 @pytest.mark.parametrize("version", ["v1", "v1beta1"])
 def test_test_failure_still_restores_setting(version: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Preserve the scenario failure while restoring scratch state and releasing ownership."""
     fields = {"scratchSpaceStorageClass": "original-class"}
     cluster = ScratchCluster(version, {"storage": fields} if version == "v1" else fields)
     fixture = prepare(cluster, monkeypatch, tmp_path)
@@ -188,6 +201,7 @@ def test_test_failure_still_restores_setting(version: str, monkeypatch: pytest.M
 
 @pytest.mark.usefixtures("scratch_env")
 def test_parallel_preparation_refused_before_cluster_calls(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Reject xdist execution before reading or changing shared cluster configuration."""
     monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw0")
     cluster = ScratchCluster("v1", {})
     fixture = prepare(cluster, monkeypatch, tmp_path)
@@ -199,6 +213,7 @@ def test_parallel_preparation_refused_before_cluster_calls(monkeypatch: pytest.M
 
 @pytest.mark.usefixtures("scratch_env")
 def test_existing_owner_refused_before_writes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Keep another active preparation owner and its scratch setting untouched."""
     cluster = ScratchCluster("v1", {})
     cluster.hco["metadata"]["annotations"] = {lifecycle._SCRATCH_OWNER: "other-owner"}
     fixture = prepare(cluster, monkeypatch, tmp_path)
@@ -212,6 +227,7 @@ def test_existing_owner_refused_before_writes(monkeypatch: pytest.MonkeyPatch, t
 def test_pruned_setting_fails_fast_and_removes_ownership(
     version: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """Detect a discarded scratch field and still restore the original empty spec."""
     cluster = ScratchCluster(version, {})
     cluster.prune_scratch = True
     fixture = prepare(cluster, monkeypatch, tmp_path)
@@ -223,6 +239,7 @@ def test_pruned_setting_fails_fast_and_removes_ownership(
 
 
 def test_disabled_preparation_has_no_cluster_calls(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Leave configuration completely untouched when scratch preparation is not requested."""
     monkeypatch.delenv("OSAC_E2E_SCRATCH_STORAGE_CLASS", raising=False)
     cluster = ScratchCluster("v1", {})
     fixture = prepare(cluster, monkeypatch, tmp_path)

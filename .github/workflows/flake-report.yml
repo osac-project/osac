@@ -110,7 +110,8 @@ jobs:
     if: >-
       always() &&
       github.repository == 'osac-project/osac' &&
-      needs.report.outputs.slack_payload != ''
+      needs.report.outputs.slack_payload != '' &&
+      github.event.workflow_run.conclusion != 'cancelled'
     runs-on: osac-ci
     timeout-minutes: 10
     permissions:

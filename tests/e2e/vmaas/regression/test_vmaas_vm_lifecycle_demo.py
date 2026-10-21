@@ -24,7 +24,7 @@ from uuid import uuid4
 
 import pytest
 
-from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
+from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
 from tests.e2e.core.helpers import (
     allocate_worker_subnet,
     unique_name,
@@ -412,6 +412,7 @@ def test_vmaas_vm_lifecycle_demo(
     sg_cr_name: str | None = None
     ci_uuid: str | None = None
     ci_name: str | None = None
+    ci_create_name: str | None = None
 
     try:
         classes = [
@@ -495,8 +496,9 @@ def test_vmaas_vm_lifecycle_demo(
         assert [_rule_signature(rule) for rule in group_spec.get("egress", [])] == [("PROTOCOL_ALL", 0, 0, "0.0.0.0/0")]
         assert sg_id in grpc.list_security_group_ids()
 
+        ci_create_name = unique_name("e2e-vm")
         ci_uuid = cli.create_compute_instance_with_catalog_item(
-            catalog_item=catalog_id, name=unique_name("e2e-vm"), subnet=subnet_id, security_groups=[sg_id]
+            catalog_item=catalog_id, name=ci_create_name, subnet=subnet_id, security_groups=[sg_id]
         )
         attached_subnet, attached_groups = _attachment_refs(grpc.get_compute_instance(ci_id=ci_uuid)["object"])
         assert attached_subnet == subnet_id
@@ -580,6 +582,7 @@ def test_vmaas_vm_lifecycle_demo(
         wait_for_grpc_removal(grpc=grpc, uuid=ci_uuid)
         ci_uuid = None
         ci_name = None
+        ci_create_name = None
         delete_and_wait_for_security_group(grpc, k8s_hub_client, sg_id, sg_cr_name)
         sg_id = None
         delete_and_wait_for_subnet(grpc, k8s_hub_client, subnet_id, subnet_cr_name)
@@ -602,6 +605,22 @@ def test_vmaas_vm_lifecycle_demo(
             except Exception as error:
                 cleanup_errors.append(_safe_command_error(error, label))
 
+        if ci_uuid is None and ci_create_name is not None:
+
+            def resolve_ci() -> None:
+                nonlocal ci_uuid, ci_name
+                items = grpc.list_with_filter(
+                    service=f"{PUBLIC_API}.ComputeInstances/List",
+                    filter_expr=f"this.metadata.name == {json.dumps(ci_create_name)}",
+                )
+                if not items:
+                    return
+                if len(items) != 1 or items[0].get("metadata", {}).get("name") != ci_create_name:
+                    raise RuntimeError("ComputeInstance name lookup was not unique; refusing ambiguous cleanup")
+                ci_uuid = items[0]["id"]
+                ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=ci_uuid)
+
+            cleanup("find ComputeInstance after incomplete CLI create", resolve_ci)
         if ci_uuid is not None:
             cleanup("delete ComputeInstance", lambda: cli.delete_compute_instance(uuid=ci_uuid))
             if ci_name is not None:

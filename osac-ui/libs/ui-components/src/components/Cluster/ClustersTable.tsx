@@ -72,7 +72,7 @@ export const ClustersTable = ({ clusters }: ClustersTableProps) => {
                 />
               </Td>
               <Td dataLabel={t('Status')}>
-                <ClusterStatusLabel status={cluster.status} activityInLabel />
+                <ClusterStatusLabel status={cluster.status} />
               </Td>
               <Td dataLabel={t('Version')}>
                 {isClusterVersionsLoading ? (

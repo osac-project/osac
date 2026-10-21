@@ -79,14 +79,14 @@ const renderTable = (clusters: Cluster[], versions: ClusterVersion[] = clusterVe
 };
 
 describe('ClustersTable Status and activity', () => {
-  it('shows Status and activity in one table label', () => {
+  it('shows one status label above the current activity', () => {
     renderTable([makeCluster('c-progress', '', progressing('WorkersJoining'))]);
 
     expect(screen.getByRole('columnheader', { name: 'Status' })).toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'State' })).not.toBeInTheDocument();
-    const statusCell = screen
-      .getByText('Provisioning - WorkersJoining')
-      .closest('[data-label="Status"]');
+    const statusCell = screen.getByText('WorkersJoining').closest('[data-label="Status"]');
+    expect(statusCell?.querySelector('.pf-v6-c-label')).toHaveTextContent('Provisioning');
+    expect(statusCell?.querySelector('small')).toHaveTextContent('WorkersJoining');
     expect(statusCell?.querySelectorAll('.pf-v6-c-label')).toHaveLength(1);
   });
 
@@ -94,17 +94,17 @@ describe('ClustersTable Status and activity', () => {
     renderTable([makeCluster('c-stalled', '', progressing('Stalled'))]);
 
     const warning = screen.getByLabelText('Warning: Provisioning stalled');
-    expect(warning).toHaveTextContent('Provisioning - Stalled');
+    expect(warning).toHaveTextContent('Provisioning');
     expect(warning).toHaveClass('pf-m-orange');
-    expect(
-      warning.closest('[data-label="Status"]')?.querySelectorAll('.pf-v6-c-label'),
-    ).toHaveLength(1);
+    const statusCell = warning.closest('[data-label="Status"]');
+    expect(statusCell?.querySelector('small')).toHaveTextContent('Stalled');
+    expect(statusCell?.querySelectorAll('.pf-v6-c-label')).toHaveLength(1);
   });
 
   it('uses Stage unknown for the backend StageUnknown reason', () => {
     renderTable([makeCluster('c-unknown', '', progressing('StageUnknown'))]);
 
-    expect(screen.getByText('Provisioning - Stage unknown')).toBeInTheDocument();
+    expect(screen.getByText('Stage unknown')).toBeInTheDocument();
     expect(screen.queryByText('StageUnknown')).not.toBeInTheDocument();
   });
 
@@ -116,14 +116,14 @@ describe('ClustersTable Status and activity', () => {
       }),
     ]);
 
-    expect(screen.getByText('Provisioning - Stage unknown')).toBeInTheDocument();
+    expect(screen.getByText('Stage unknown')).toBeInTheDocument();
     expect(screen.queryByText('ReadyCondition')).not.toBeInTheDocument();
   });
 
   it.each(['', '   '])('uses Stage unknown for a blank reason %j', (reason) => {
     renderTable([makeCluster('c-blank', '', progressing(reason))]);
 
-    expect(screen.getByText('Provisioning - Stage unknown')).toBeInTheDocument();
+    expect(screen.getByText('Stage unknown')).toBeInTheDocument();
   });
 
   it.each([
@@ -141,33 +141,33 @@ describe('ClustersTable Status and activity', () => {
     ]);
 
     expect(screen.getByText(stateText)).toBeInTheDocument();
-    expect(screen.queryByText('Provisioning - WorkersJoining')).not.toBeInTheDocument();
-    expect(screen.queryByText('Provisioning - Stage unknown')).not.toBeInTheDocument();
+    expect(screen.queryByText('WorkersJoining')).not.toBeInTheDocument();
+    expect(screen.queryByText('Stage unknown')).not.toBeInTheDocument();
   });
 
   it('shows Unknown without activity when public status is absent', () => {
     renderTable([makeCluster('c-no-status', '')]);
 
     expect(screen.getByText('Unknown')).toBeInTheDocument();
-    expect(screen.queryByText('Provisioning - Stage unknown')).not.toBeInTheDocument();
+    expect(screen.queryByText('Stage unknown')).not.toBeInTheDocument();
   });
 
   it('replaces the prior reason when the public cluster prop changes', () => {
     const { rerender } = renderTable([
       makeCluster('c-updating', '', progressing('AllocatingWorkers')),
     ]);
-    expect(screen.getByText('Provisioning - AllocatingWorkers')).toBeInTheDocument();
+    expect(screen.getByText('AllocatingWorkers')).toBeInTheDocument();
 
     rerender(
       <ClustersTable clusters={[makeCluster('c-updating', '', progressing('WorkersJoining'))]} />,
     );
-    expect(screen.queryByText('Provisioning - AllocatingWorkers')).not.toBeInTheDocument();
-    expect(screen.getByText('Provisioning - WorkersJoining')).toBeInTheDocument();
+    expect(screen.queryByText('AllocatingWorkers')).not.toBeInTheDocument();
+    expect(screen.getByText('WorkersJoining')).toBeInTheDocument();
 
     rerender(
       <ClustersTable clusters={[makeCluster('c-updating', '', { state: ClusterState.READY })]} />,
     );
-    expect(screen.queryByText('Provisioning - WorkersJoining')).not.toBeInTheDocument();
+    expect(screen.queryByText('WorkersJoining')).not.toBeInTheDocument();
     expect(screen.getByText('Ready')).toBeInTheDocument();
   });
 });

@@ -84,44 +84,35 @@ export const ClusterStatusLabel = ({
     status,
     t,
   );
-  const stateLabel = <ResourceStatusLabel status={stateKind} text={stateText} />;
-
   if (!activityText) {
-    return stateLabel;
+    return <ResourceStatusLabel status={stateKind} text={stateText} />;
   }
 
+  const labelText = activityInLabel
+    ? t('Provisioning - {{activity}}', { activity: activityText })
+    : stateText;
+  const statusLabel = activityWarning ? (
+    <Label
+      color="orange"
+      icon={<ExclamationTriangleIcon aria-hidden />}
+      aria-label={t('Warning: Provisioning stalled')}
+      isCompact
+    >
+      {labelText}
+    </Label>
+  ) : (
+    <ResourceStatusLabel status={stateKind} text={labelText} />
+  );
+
   if (activityInLabel) {
-    const text = t('Provisioning - {{activity}}', { activity: activityText });
-    return activityWarning ? (
-      <Label
-        color="orange"
-        icon={<ExclamationTriangleIcon aria-hidden />}
-        aria-label={t('Warning: Provisioning stalled')}
-        isCompact
-      >
-        {text}
-      </Label>
-    ) : (
-      <ResourceStatusLabel status={stateKind} text={text} />
-    );
+    return statusLabel;
   }
 
   return (
     <Stack>
-      <StackItem>{stateLabel}</StackItem>
+      <StackItem>{statusLabel}</StackItem>
       <StackItem>
-        {activityWarning ? (
-          <Label
-            color="orange"
-            icon={<ExclamationTriangleIcon aria-hidden />}
-            aria-label={t('Warning: Stalled')}
-            isCompact
-          >
-            {activityText}
-          </Label>
-        ) : (
-          <Content component="small">{activityText}</Content>
-        )}
+        <Content component="small">{activityText}</Content>
       </StackItem>
     </Stack>
   );

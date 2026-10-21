@@ -14,6 +14,7 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -34,6 +35,23 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
+
+type computeInstancesServerWithGetHook struct {
+	privatev1.ComputeInstancesServer
+	afterGet func() error
+}
+
+func (s *computeInstancesServerWithGetHook) Get(ctx context.Context,
+	request *privatev1.ComputeInstancesGetRequest) (*privatev1.ComputeInstancesGetResponse, error) {
+	response, err := s.ComputeInstancesServer.Get(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.afterGet(); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
 
 var _ = Describe("Compute instances server", func() {
 	Describe("Builder", func() {
@@ -597,7 +615,7 @@ var _ = Describe("Compute instances server", func() {
 			Expect(fetched.GetSpec().GetRestartRequestedAt()).ToNot(BeNil())
 		})
 
-		It("Keeps the stored status across a maskless update carrying a status", func() {
+		It("Keeps the stored status across maskless updates", func() {
 			createTemplate("general.small")
 
 			// Create an object:
@@ -640,6 +658,12 @@ var _ = Describe("Compute instances server", func() {
 			storedObject.SetStatus(privatev1.ComputeInstanceStatus_builder{
 				State:               privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
 				StateTransitionTime: storedTime,
+				ComputeNetworkAttachmentStatuses: []*privatev1.ComputeNetworkAttachmentStatus{
+					privatev1.ComputeNetworkAttachmentStatus_builder{
+						SubnetRef: "test-subnet",
+						IpAddress: "192.0.2.42",
+					}.Build(),
+				},
 			}.Build())
 			_, err = ciDao.Update().SetObject(storedObject).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
@@ -673,6 +697,40 @@ var _ = Describe("Compute instances server", func() {
 				Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING))
 			Expect(after.GetObject().GetStatus().GetStateTransitionTime().AsTime()).To(
 				Equal(storedTime.AsTime()))
+
+			// A system update after the public wrapper reads status must win over the
+			// wrapper's stale copy. The hook makes that interleaving deterministic.
+			privateServer := server.delegate
+			laterTime := timestamppb.New(storedTime.AsTime().Add(time.Minute))
+			server.delegate = &computeInstancesServerWithGetHook{
+				ComputeInstancesServer: privateServer,
+				afterGet: func() error {
+					_, err := privateServer.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+						Object: privatev1.ComputeInstance_builder{
+							Id: id,
+							Status: privatev1.ComputeInstanceStatus_builder{
+								State:               privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+								StateTransitionTime: laterTime,
+							}.Build(),
+						}.Build(),
+						UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state", "status.state_transition_time"}},
+					}.Build())
+					return err
+				},
+			}
+			withoutStatus := after.GetObject()
+			withoutStatus.SetStatus(nil)
+			updateResponse, err = server.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+				Object: withoutStatus,
+			}.Build())
+			server.delegate = privateServer
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updateResponse.GetObject().GetStatus().GetState()).To(
+				Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING))
+			Expect(updateResponse.GetObject().GetStatus().GetStateTransitionTime().AsTime()).To(
+				Equal(laterTime.AsTime()))
+			Expect(updateResponse.GetObject().GetStatus().GetComputeNetworkAttachmentStatuses()[0].GetIpAddress()).To(
+				Equal("192.0.2.42"))
 		})
 
 		It("Rejects changing network attachments via the public update path", func() {

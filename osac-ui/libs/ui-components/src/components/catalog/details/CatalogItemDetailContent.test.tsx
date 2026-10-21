@@ -140,6 +140,8 @@ describe('CatalogItemDetailContent', () => {
     expect(screen.getByText('catalog-rhel-9')).toBeInTheDocument();
     expect(screen.getByText('RHEL 9 base image')).toBeInTheDocument();
     expect(screen.getByText('run-strategy')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Details' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Configuration' })).toBeInTheDocument();
 
     expect(screen.getByText('Instance type')).toBeInTheDocument();
     expect(screen.getByText('standard-4-8')).toBeInTheDocument();

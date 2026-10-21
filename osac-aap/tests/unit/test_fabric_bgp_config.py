@@ -326,7 +326,7 @@ def test_input_validation_precedes_kubernetes_writes() -> None:
     tasks = _create_tasks()
     task_names = [task.get("name") for task in tasks]
     validation_index = task_names.index(
-        "Validate fabric BGP worker list is nonempty"
+        "Require at least one worker entry"
     )
     k8s_write_indices = [
         i for i, task in enumerate(tasks) if "kubernetes.core.k8s" in task
@@ -341,7 +341,7 @@ def test_strict_nodename_regex_validation() -> None:
     validation = next(
         task
         for task in tasks
-        if task.get("name") == "Validate each worker entry"
+        if task.get("name") == "Validate worker peering parameters"
     )
     conditions = validation["ansible.builtin.assert"]["that"]
     nodename_condition = next(c for c in conditions if "nodeName" in c)
@@ -355,7 +355,7 @@ def test_strict_interface_regex_validation() -> None:
     validation = next(
         task
         for task in tasks
-        if task.get("name") == "Validate each worker entry"
+        if task.get("name") == "Validate worker peering parameters"
     )
     conditions = validation["ansible.builtin.assert"]["that"]
     interface_condition = next(c for c in conditions if "interface" in c)
@@ -369,7 +369,7 @@ def test_ipv4_validation_uses_falseness_not_length() -> None:
     validation = next(
         task
         for task in tasks
-        if task.get("name") == "Validate each worker entry"
+        if task.get("name") == "Validate worker peering parameters"
     )
     conditions = validation["ansible.builtin.assert"]["that"]
     address_conditions = [
@@ -387,7 +387,7 @@ def test_each_worker_entry_is_validated() -> None:
     validation = next(
         task
         for task in tasks
-        if task.get("name") == "Validate each worker entry"
+        if task.get("name") == "Validate worker peering parameters"
     )
     conditions = validation["ansible.builtin.assert"]["that"]
     assert any("nodeName" in c for c in conditions)
@@ -409,7 +409,7 @@ def test_validation_fail_msg_uses_index_not_names() -> None:
     validation = next(
         task
         for task in tasks
-        if task.get("name") == "Validate each worker entry"
+        if task.get("name") == "Validate worker peering parameters"
     )
     fail_msg = validation["ansible.builtin.assert"]["fail_msg"]
     assert "index" in fail_msg
@@ -433,7 +433,7 @@ def test_debug_summary_uses_count_not_names() -> None:
     log_task = next(
         task
         for task in tasks
-        if task.get("name") == "Log fabric BGP configuration result"
+        if task.get("name") == "Report fabric BGP apply result"
     )
     msg = log_task["ansible.builtin.debug"]["msg"]
     assert "length" in msg or "| length" in msg or "worker(s)" in msg
@@ -458,13 +458,13 @@ def test_frr_crd_capability_check_before_apply() -> None:
     tasks = _create_tasks()
     task_names = [task.get("name") for task in tasks]
     crd_check_index = task_names.index(
-        "Check FRRConfiguration CRD availability"
+        "Look up FRRConfiguration CRD"
     )
     crd_validate_index = task_names.index(
-        "Validate FRRConfiguration CRD is installed"
+        "Require FRRConfiguration CRD on the target cluster"
     )
     apply_frr_index = task_names.index(
-        "Apply FRRConfiguration for each worker"
+        "Apply FRR-K8s BGP/EVPN configuration per worker"
     )
     assert crd_check_index < crd_validate_index < apply_frr_index
 
@@ -475,7 +475,7 @@ def test_frr_crd_schema_fields_validated() -> None:
     task = next(
         task
         for task in tasks
-        if task.get("name") == "Validate FRR-K8s CRD supports required fields"
+        if task.get("name") == "Require allowAsIn and addressFamilies in served schema"
     )
     conditions = task["ansible.builtin.assert"]["that"]
     assert any("allowAsIn" in c for c in conditions)
@@ -490,10 +490,10 @@ def test_frr_schema_check_precedes_frr_apply() -> None:
     tasks = _create_tasks()
     task_names = [task.get("name") for task in tasks]
     schema_check_index = task_names.index(
-        "Validate FRR-K8s CRD supports required fields"
+        "Require allowAsIn and addressFamilies in served schema"
     )
     apply_frr_index = task_names.index(
-        "Apply FRRConfiguration for each worker"
+        "Apply FRR-K8s BGP/EVPN configuration per worker"
     )
     assert schema_check_index < apply_frr_index
 
@@ -503,10 +503,10 @@ def test_nncp_crd_capability_check_before_apply() -> None:
     tasks = _create_tasks()
     task_names = [task.get("name") for task in tasks]
     crd_check_index = task_names.index(
-        "Check NodeNetworkConfigurationPolicy CRD availability"
+        "Look up NodeNetworkConfigurationPolicy CRD"
     )
     apply_nncp_index = task_names.index(
-        "Apply NMState policy for each worker"
+        "Apply dedicated physical NIC policy per worker"
     )
     assert crd_check_index < apply_nncp_index
 
@@ -516,10 +516,10 @@ def test_nncp_available_wait_before_frr_apply() -> None:
     tasks = _create_tasks()
     task_names = [task.get("name") for task in tasks]
     wait_index = task_names.index(
-        "Wait for NNCP Available on each worker"
+        "Wait for NIC policy to reach Available on each worker"
     )
     apply_frr_index = task_names.index(
-        "Apply FRRConfiguration for each worker"
+        "Apply FRR-K8s BGP/EVPN configuration per worker"
     )
     assert wait_index < apply_frr_index
 
@@ -534,8 +534,8 @@ def test_nncp_applied_before_frr_configuration() -> None:
     """Verify NNCP resources are applied before FRR resources."""
     tasks = _create_tasks()
     task_names = [task.get("name") for task in tasks]
-    nncp_index = task_names.index("Apply NMState policy for each worker")
-    frr_index = task_names.index("Apply FRRConfiguration for each worker")
+    nncp_index = task_names.index("Apply dedicated physical NIC policy per worker")
+    frr_index = task_names.index("Apply FRR-K8s BGP/EVPN configuration per worker")
     assert nncp_index < frr_index
 
 
@@ -544,20 +544,20 @@ def test_delete_tasks_exist() -> None:
     delete_path = _role_path() / "tasks" / "delete.yaml"
     tasks = yaml.safe_load(delete_path.read_text(encoding="utf-8"))
     task_names = [task.get("name") for task in tasks]
-    assert "Delete FRRConfiguration for each worker" in task_names
-    assert "Delete NMState policy for each worker" in task_names
+    assert "Remove FRR-K8s BGP/EVPN configuration per worker" in task_names
+    assert "Remove dedicated NIC policy per worker" in task_names
 
     frr_delete = next(
         task
         for task in tasks
-        if task.get("name") == "Delete FRRConfiguration for each worker"
+        if task.get("name") == "Remove FRR-K8s BGP/EVPN configuration per worker"
     )
     assert frr_delete["kubernetes.core.k8s"]["state"] == "absent"
 
     nncp_delete = next(
         task
         for task in tasks
-        if task.get("name") == "Delete NMState policy for each worker"
+        if task.get("name") == "Remove dedicated NIC policy per worker"
     )
     assert nncp_delete["kubernetes.core.k8s"]["state"] == "absent"
 

@@ -491,8 +491,8 @@ def test_stale_owner_is_cleared_when_only_skipped_siblings_remain() -> None:
 def test_fabric_bgp_teardown_guarded_by_no_live_siblings() -> None:
     tasks = _delete_tasks()
     task_names = [task.get("name") for task in tasks]
-    resolve_index = task_names.index("Resolve fabric BGP configuration for teardown")
-    teardown_index = task_names.index("Remove fabric BGP resources when no sibling CUDN remains")
+    resolve_index = task_names.index("Resolve fabric BGP settings for teardown")
+    teardown_index = task_names.index("Remove worker-to-fabric BGP/EVPN resources after final sibling")
     clear_owner_index = task_names.index("Clear persisted CUDN owner after the final Subnet is removed")
 
     assert clear_owner_index < resolve_index < teardown_index

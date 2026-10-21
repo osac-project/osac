@@ -1,7 +1,9 @@
 ---
-# Idempotent removal of worker-to-fabric BGP/EVPN resources.
+# Idempotent removal of per-worker BGP/EVPN and NIC resources.
+# FRR is removed before NIC so the BGP session drops cleanly
+# before the source address disappears.
 
-- name: Delete FRRConfiguration for each worker
+- name: Remove FRR-K8s BGP/EVPN configuration per worker
   kubernetes.core.k8s:
     kubeconfig: "{{ fabric_bgp_remote_kubeconfig | default(omit) }}"
     state: absent
@@ -15,7 +17,7 @@
     label: "worker {{ ansible_loop.index0 }}"
     extended: true
 
-- name: Delete NMState policy for each worker
+- name: Remove dedicated NIC policy per worker
   kubernetes.core.k8s:
     kubeconfig: "{{ fabric_bgp_remote_kubeconfig | default(omit) }}"
     state: absent
@@ -28,7 +30,7 @@
     label: "worker {{ ansible_loop.index0 }}"
     extended: true
 
-- name: Log fabric BGP deletion result
+- name: Report fabric BGP removal result
   ansible.builtin.debug:
     msg: >-
       Removed fabric BGP configuration for

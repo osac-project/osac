@@ -542,26 +542,29 @@
               osac.openshift.io/cudn-owner-subnet: null
       when: not cudn_evpn_has_live_siblings
 
-    - name: Resolve fabric BGP configuration for teardown
+    # Fabric BGP teardown runs only when the final sibling is
+    # removed — shared per-worker FRR and NIC resources must
+    # persist while any CUDN Subnet still uses them.
+    - name: Resolve fabric BGP settings for teardown
       ansible.builtin.set_fact:
-        _cudn_fabric_bgp: >-
+        _cudn_evpn_fabric_bgp: >-
           {{ template_parameters.fabricBGP
              | default(
                  lookup('env', 'OSAC_FABRIC_BGP_CONFIG')
                  | default('{}', true) | from_json,
                true) }}
 
-    - name: Remove fabric BGP resources when no sibling CUDN remains
+    - name: Remove worker-to-fabric BGP/EVPN resources after final sibling
       ansible.builtin.include_role:
         name: osac.service.fabric_bgp_config
         tasks_from: delete
       vars:
-        fabric_bgp_workers: "{{ _cudn_fabric_bgp.workers }}"
+        fabric_bgp_workers: "{{ _cudn_evpn_fabric_bgp.workers }}"
         fabric_bgp_remote_kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
       when:
         - not cudn_evpn_has_live_siblings
-        - _cudn_fabric_bgp.enabled | default(false) | bool
-        - _cudn_fabric_bgp.workers | default([]) | length > 0
+        - _cudn_evpn_fabric_bgp.enabled | default(false) | bool
+        - _cudn_evpn_fabric_bgp.workers | default([]) | length > 0
   always:
     - name: Release shared CUDN teardown Lease
       ansible.builtin.include_role:

@@ -1,8 +1,12 @@
 ---
-# Validate and apply direct worker-to-fabric BGP/EVPN configuration.
-# Uses only FRR-K8s typed API fields; no raw FRR config.
+# Apply direct worker-to-fabric BGP/EVPN peering using only the
+# FRR-K8s typed API.  Every validation step runs before any
+# Kubernetes write so a misconfigured request never leaves
+# partial state (fail-closed).
 
-- name: Validate fabric BGP worker list is nonempty
+# ── Input validation ───────────────────────────────────────────
+
+- name: Require at least one worker entry
   ansible.builtin.assert:
     that:
       - fabric_bgp_workers is defined
@@ -11,7 +15,7 @@
       fabricBGP.workers must be a nonempty list. No resources were
       changed.
 
-- name: Validate each worker entry
+- name: Validate worker peering parameters
   ansible.builtin.assert:
     that:
       - >-
@@ -69,31 +73,34 @@
   vars:
     vtep_range: "{{ item.1 }}"
 
-- name: Check FRRConfiguration CRD availability
+# ── CRD capability gates ──────────────────────────────────────
+# Older FRR-K8s versions lack allowAsIn and addressFamilies.
+# A v1 CRD silently prunes unknown fields, so checking CRD
+# existence alone is insufficient — the served schema must
+# contain these fields or the rendered FRRConfiguration would
+# lose its EVPN activation and AS-path safety.
+
+- name: Look up FRRConfiguration CRD
   kubernetes.core.k8s_info:
     kubeconfig: "{{ fabric_bgp_remote_kubeconfig | default(omit) }}"
     api_version: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     name: frrconfigurations.frrk8s.metallb.io
-  register: _fabric_bgp_frr_crd
+  register: fabric_bgp_config_frr_crd
 
-- name: Validate FRRConfiguration CRD is installed
+- name: Require FRRConfiguration CRD on the target cluster
   ansible.builtin.assert:
     that:
-      - _fabric_bgp_frr_crd.resources | length == 1
+      - fabric_bgp_config_frr_crd.resources | length == 1
     fail_msg: >-
       FRRConfiguration CRD (frrk8s.metallb.io) is not installed on
       the target cluster. The MetalLB operator with FRR mode is
       required. No Kubernetes resources were changed.
 
-- name: Extract served FRRConfiguration schema version
+- name: Extract neighbor fields from the served FRR-K8s schema
   ansible.builtin.set_fact:
-    _fabric_bgp_frr_served_version: >-
-      {{ _fabric_bgp_frr_crd.resources[0].spec.versions
-         | selectattr('served', 'equalto', true)
-         | map(attribute='name') | first | default('') }}
-    _fabric_bgp_frr_schema_properties: >-
-      {{ (_fabric_bgp_frr_crd.resources[0].spec.versions
+    fabric_bgp_config_served_neighbor_fields: >-
+      {{ (fabric_bgp_config_frr_crd.resources[0].spec.versions
           | selectattr('served', 'equalto', true) | first
           | default({}))
          .get('schema', {})
@@ -110,11 +117,11 @@
          .get('items', {})
          .get('properties', {}) }}
 
-- name: Validate FRR-K8s CRD supports required fields
+- name: Require allowAsIn and addressFamilies in served schema
   ansible.builtin.assert:
     that:
-      - "'allowAsIn' in _fabric_bgp_frr_schema_properties"
-      - "'addressFamilies' in _fabric_bgp_frr_schema_properties"
+      - "'allowAsIn' in fabric_bgp_config_served_neighbor_fields"
+      - "'addressFamilies' in fabric_bgp_config_served_neighbor_fields"
     fail_msg: >-
       The served FRRConfiguration CRD schema does not include
       allowAsIn and addressFamilies fields (added in FRR-K8s
@@ -122,24 +129,26 @@
       Upgrade the MetalLB/FRR-K8s operator before enabling
       fabric BGP. No Kubernetes resources were changed.
 
-- name: Check NodeNetworkConfigurationPolicy CRD availability
+- name: Look up NodeNetworkConfigurationPolicy CRD
   kubernetes.core.k8s_info:
     kubeconfig: "{{ fabric_bgp_remote_kubeconfig | default(omit) }}"
     api_version: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     name: nodenetworkconfigurationpolicies.nmstate.io
-  register: _fabric_bgp_nncp_crd
+  register: fabric_bgp_config_nncp_crd
 
-- name: Validate NNCP CRD is installed
+- name: Require NNCP CRD on the target cluster
   ansible.builtin.assert:
     that:
-      - _fabric_bgp_nncp_crd.resources | length == 1
+      - fabric_bgp_config_nncp_crd.resources | length == 1
     fail_msg: >-
       NodeNetworkConfigurationPolicy CRD (nmstate.io) is not
       installed on the target cluster. The NMState operator is
       required. No Kubernetes resources were changed.
 
-- name: Apply NMState policy for each worker
+# ── Network interface configuration ───────────────────────────
+
+- name: Apply dedicated physical NIC policy per worker
   kubernetes.core.k8s:
     kubeconfig: "{{ fabric_bgp_remote_kubeconfig | default(omit) }}"
     state: present
@@ -154,16 +163,20 @@
     worker_interface: "{{ _fabric_bgp_worker.interface }}"
     worker_local_address: "{{ _fabric_bgp_worker.localAddress }}"
 
-- name: Wait for NNCP Available on each worker
+# NIC must be ready before FRR can bind its BGP session to the
+# configured source address; without this gate the
+# FRRConfiguration would render but the session would never
+# establish.
+- name: Wait for NIC policy to reach Available on each worker
   kubernetes.core.k8s_info:
     kubeconfig: "{{ fabric_bgp_remote_kubeconfig | default(omit) }}"
     api_version: nmstate.io/v1
     kind: NodeNetworkConfigurationPolicy
     name: "fabric-bgp-{{ _fabric_bgp_worker.nodeName }}"
-  register: _fabric_bgp_nncp_status
+  register: fabric_bgp_config_nncp_status
   until: >-
-    _fabric_bgp_nncp_status.resources | default([]) | length > 0 and
-    (_fabric_bgp_nncp_status.resources[0].status.conditions | default([])
+    fabric_bgp_config_nncp_status.resources | default([]) | length > 0 and
+    (fabric_bgp_config_nncp_status.resources[0].status.conditions | default([])
     | selectattr('type', 'equalto', 'Available')
     | selectattr('status', 'equalto', 'True')
     | list | length > 0)
@@ -175,7 +188,13 @@
     label: "worker {{ ansible_loop.index0 }}"
     extended: true
 
-- name: Apply FRRConfiguration for each worker
+# ── BGP/EVPN session configuration ───────────────────────────
+# The FRRConfiguration template enforces fail-closed route
+# policy: outbound advertises exactly the local VTEP /32;
+# inbound accepts only /32 prefixes within approved ranges
+# (ge: 32, le: 32).  IPv6 is never activated.
+
+- name: Apply FRR-K8s BGP/EVPN configuration per worker
   kubernetes.core.k8s:
     kubeconfig: "{{ fabric_bgp_remote_kubeconfig | default(omit) }}"
     state: present
@@ -196,7 +215,7 @@
     worker_ebgp_multihop: "{{ _fabric_bgp_worker.ebgpMultihop | default(true) }}"
     worker_graceful_restart: "{{ _fabric_bgp_worker.gracefulRestart | default(true) }}"
 
-- name: Log fabric BGP configuration result
+- name: Report fabric BGP apply result
   ansible.builtin.debug:
     msg: >-
       Applied fabric BGP configuration for

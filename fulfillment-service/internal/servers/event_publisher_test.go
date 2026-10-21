@@ -998,9 +998,10 @@ var _ = Describe("Event publisher", Ordered, func() {
 							for name, detail := range request.TopicDetails {
 								Expect(detail.NumPartitions).To(Equal(int32(1)))
 								Expect(detail.ReplicationFactor).To(Equal(int16(-1)))
-								Expect(detail.ConfigEntries).To(HaveLen(2))
+								Expect(detail.ConfigEntries).To(HaveLen(3))
 								Expect(*detail.ConfigEntries["retention.ms"]).To(Equal("-1"))
 								Expect(*detail.ConfigEntries["retention.bytes"]).To(Equal("-1"))
+								Expect(*detail.ConfigEntries["cleanup.policy"]).To(Equal("delete"))
 								topics = append(topics, name)
 							}
 						}

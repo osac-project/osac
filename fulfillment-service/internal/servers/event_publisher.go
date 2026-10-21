@@ -936,15 +936,31 @@ func prepareTopic(ctx context.Context, admin topicAdmin, topic, retentionMS stri
 	}
 	switch description.Err {
 	case sarama.ErrNoError:
+		// The outbox and the publisher assume one partition per topic, ordered by
+		// offset; a topic with more partitions silently breaks that model.
+		if len(description.Partitions) != 1 {
+			return fmt.Errorf(
+				"topic '%s' has %d partitions, want 1: the publisher writes a single partition; "+
+					"recreate the topic with one partition",
+				topic, len(description.Partitions),
+			)
+		}
 		return ensureTopicRetention(admin, topic, retentionMS, logger)
 	case sarama.ErrUnknownTopicOrPartition:
 		retentionBytes := "-1"
+		cleanupPolicy := "delete"
+		// The records are the recovery source, so the entries pin the whole
+		// retention contract: cleanup.policy=delete keeps earlier snapshots a
+		// compacting broker default would discard (messages are keyed by
+		// resource ID), and retention.bytes=-1 keeps a broker size limit from
+		// cutting the configured window short.
 		detail := &sarama.TopicDetail{
 			NumPartitions:     1,
 			ReplicationFactor: -1,
 			ConfigEntries: map[string]*string{
 				"retention.ms":    &retentionMS,
 				"retention.bytes": &retentionBytes,
+				"cleanup.policy":  &cleanupPolicy,
 			},
 		}
 		err = admin.CreateTopic(topic, detail, false)
@@ -1340,9 +1356,10 @@ const (
 // ensureTopicRetention checks that a topic the publisher did not create carries the
 // configured retention. A topic created out of band, before the publisher's first
 // publish, gets the broker default, and the recovery window silently shrinks to that
-// default. The publisher refuses when it reads a different retention, because the
-// topic's owner must fix the configuration. When the config cannot be read at all,
-// the publisher logs and continues: an unreachable broker is an outage, not a signal
+// default. The publisher refuses when it reads a different retention, and when the
+// broker denies the read: without the DescribeConfigs permission the check can never
+// run, and a denied read is a deployment misconfiguration someone must fix. Other
+// read failures log and continue: an unreachable broker is an outage, not a signal
 // about the topic.
 func ensureTopicRetention(
 	admin topicAdmin, topic, retentionMS string, logger *slog.Logger,
@@ -1351,6 +1368,12 @@ func ensureTopicRetention(
 		Type: sarama.TopicResource, Name: topic,
 	})
 	if err != nil {
+		if errors.Is(err, sarama.ErrTopicAuthorizationFailed) {
+			return fmt.Errorf(
+				"cannot verify the retention of topic '%s': %w: grant DescribeConfigs on topics to this service's Kafka user",
+				topic, err,
+			)
+		}
 		logger.Info("cannot describe config of existing topic, continuing",
 			"topic", topic, "error", err)
 		return nil

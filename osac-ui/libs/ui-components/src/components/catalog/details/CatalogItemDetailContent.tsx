@@ -14,9 +14,14 @@ import {
 } from '@patternfly/react-core';
 
 import { useTranslation } from '../../../hooks/useTranslation.ts';
-import { type CatalogItem, catalogItemMetadataLabelEntries } from '../catalogItemDisplay.ts';
+import {
+  type CatalogItem,
+  GLOBAL_TENANT_VALUE,
+  catalogItemMetadataLabelEntries,
+} from '../catalogItemDisplay.ts';
 import { useCatalogItemResourceLookups } from '../catalogItemResourceLookups.ts';
-import CatalogItemResources from '../CatalogItemResources.tsx';
+import CatalogItemConfiguration from './CatalogItemConfiguration';
+import { Timestamp } from '../../Primitives/Timestamp';
 
 interface CatalogItemDetailContentProps {
   item: CatalogItem;
@@ -26,7 +31,8 @@ export const CatalogItemDetailContent = ({ item }: CatalogItemDetailContentProps
   const { t } = useTranslation();
   const resourceLookups = useCatalogItemResourceLookups();
   const metadataLabels = catalogItemMetadataLabelEntries(item);
-  const description = item.description?.trim();
+  const description = item.description?.trim() || item.metadata?.description?.trim();
+  const tenant = item.metadata?.tenant?.trim();
 
   return (
     <Stack hasGutter>
@@ -67,6 +73,32 @@ export const CatalogItemDetailContent = ({ item }: CatalogItemDetailContentProps
                   </DescriptionListDescription>
                 </DescriptionListGroup>
               ) : null}
+              <DescriptionListGroup>
+                <DescriptionListTerm>{t('Status')}</DescriptionListTerm>
+                <DescriptionListDescription>
+                  <Label color={item.published ? 'green' : undefined}>
+                    {item.published ? t('Live') : t('Unpublished')}
+                  </Label>
+                </DescriptionListDescription>
+              </DescriptionListGroup>
+              <DescriptionListGroup>
+                <DescriptionListTerm>{t('Created')}</DescriptionListTerm>
+                <DescriptionListDescription>
+                  <Timestamp value={item.metadata?.creationTimestamp} />
+                </DescriptionListDescription>
+              </DescriptionListGroup>
+              <DescriptionListGroup>
+                <DescriptionListTerm>{t('Tenant')}</DescriptionListTerm>
+                <DescriptionListDescription>
+                  {tenant === GLOBAL_TENANT_VALUE ? t('Global public') : tenant || '—'}
+                </DescriptionListDescription>
+              </DescriptionListGroup>
+              {item.metadata?.project ? (
+                <DescriptionListGroup>
+                  <DescriptionListTerm>{t('Project')}</DescriptionListTerm>
+                  <DescriptionListDescription>{item.metadata.project}</DescriptionListDescription>
+                </DescriptionListGroup>
+              ) : null}
             </DescriptionList>
           </CardBody>
         </Card>
@@ -76,7 +108,7 @@ export const CatalogItemDetailContent = ({ item }: CatalogItemDetailContentProps
         <Card>
           <CardTitle>{t('Configuration')}</CardTitle>
           <CardBody>
-            <CatalogItemResources catalogItem={item} resourceLookups={resourceLookups} />
+            <CatalogItemConfiguration item={item} resourceLookups={resourceLookups} />
           </CardBody>
         </Card>
       </StackItem>

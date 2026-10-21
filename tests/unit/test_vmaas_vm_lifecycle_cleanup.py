@@ -8,6 +8,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from tests.e2e.core import runner
 from tests.e2e.core.grpc_client import PUBLIC_API
 from tests.e2e.vmaas.regression import test_vmaas_vm_lifecycle_demo as scenario
 
@@ -52,6 +53,7 @@ def failed_create(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     monkeypatch.setattr(scenario, "uuid4", lambda: SimpleNamespace(hex="12345678"))
     monkeypatch.setattr(scenario, "unique_name", lambda prefix: "created-vm")
     monkeypatch.setattr(scenario, "allocate_worker_subnet", lambda: ipaddress.ip_network("172.27.0.0/24"))
+    monkeypatch.setattr(runner.time, "sleep", Mock())
     for function in (
         "wait_for_virtual_network_cr",
         "wait_for_virtual_network_ready",
@@ -126,7 +128,24 @@ def test_rejected_create_does_not_delete_another_vm(failed_create: SimpleNamespa
     with pytest.raises(AssertionError, match="cannot parse UUID"):
         run_scenario(failed_create)
     failed_create.cli.delete_compute_instance.assert_not_called()
+    assert failed_create.grpc.list_with_filter.call_count == 60
+    assert runner.time.sleep.call_count == 59
+    runner.time.sleep.assert_called_with(2)
     assert failed_create.events == ["delete SG", "delete Subnet", "delete VN", "delete catalog", "delete InstanceType"]
+
+
+@pytest.mark.parametrize("empty_results", [1, 3])
+def test_delayed_create_visibility_is_cleaned(failed_create: SimpleNamespace, empty_results: int) -> None:
+    failed_create.grpc.list_with_filter.side_effect = [
+        *[[] for _ in range(empty_results)],
+        [{"id": "ci-id", "metadata": {"name": "created-vm"}}],
+    ]
+    with pytest.raises(AssertionError, match="cannot parse UUID"):
+        run_scenario(failed_create)
+    assert failed_create.grpc.list_with_filter.call_count == empty_results + 1
+    assert runner.time.sleep.call_count == empty_results
+    failed_create.cli.delete_compute_instance.assert_called_once_with(uuid="ci-id")
+    assert failed_create.events[:4] == ["delete VM", "wait CR", "wait API", "delete SG"]
 
 
 @pytest.mark.parametrize(

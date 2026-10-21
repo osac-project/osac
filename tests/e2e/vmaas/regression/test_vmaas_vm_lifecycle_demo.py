@@ -609,11 +609,18 @@ def test_vmaas_vm_lifecycle_demo(
 
             def resolve_ci() -> None:
                 nonlocal ci_uuid, ci_name
-                items = grpc.list_with_filter(
-                    service=f"{PUBLIC_API}.ComputeInstances/List",
-                    filter_expr=f"this.metadata.name == {json.dumps(ci_create_name)}",
-                )
-                if not items:
+                try:
+                    items = poll_until(
+                        fn=lambda: grpc.list_with_filter(
+                            service=f"{PUBLIC_API}.ComputeInstances/List",
+                            filter_expr=f"this.metadata.name == {json.dumps(ci_create_name)}",
+                        ),
+                        until=bool,
+                        retries=60,
+                        delay=2,
+                        description="ComputeInstance after incomplete CLI create",
+                    )
+                except TimeoutError:
                     return
                 if len(items) != 1 or items[0].get("metadata", {}).get("name") != ci_create_name:
                     raise RuntimeError("ComputeInstance name lookup was not unique; refusing ambiguous cleanup")

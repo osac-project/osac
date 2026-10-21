@@ -3,8 +3,11 @@ import { Code, ConnectError, type Transport, createRouterTransport } from '@conn
 
 import {
   BareMetalInstanceCatalogItem,
+  BareMetalInstanceCatalogItemsCreateRequest,
+  BareMetalInstanceCatalogItemsCreateResponse,
   type BareMetalInstanceCatalogItemsDeleteRequest,
   type BareMetalInstanceCatalogItemsUpdateRequest,
+  BareMetalInstanceTemplate,
   BareMetalInstancesCreateRequest,
   BareMetalInstancesCreateResponse,
   Cluster,
@@ -85,6 +88,7 @@ import {
   BareMetalInstanceCatalogItems,
   BareMetalInstanceCatalogItemsDeleteResponseSchema,
   BareMetalInstanceCatalogItemsUpdateResponseSchema,
+  BareMetalInstanceTemplates,
   BareMetalInstances,
   Capabilities,
   ClusterCatalogItems,
@@ -202,6 +206,7 @@ export type MockApiFixtures = {
   clusters?: Cluster[];
   clusterCatalogItems?: ClusterCatalogItem[];
   bareMetalCatalogItems?: BareMetalInstanceCatalogItem[];
+  bareMetalInstanceTemplates?: BareMetalInstanceTemplate[];
   clusterTemplates?: ClusterTemplate[];
   computeInstanceTemplates?: ComputeInstanceTemplate[];
   clusterVersions?: ClusterVersion[];
@@ -424,6 +429,11 @@ export type MockTransportOverrides = {
   ) =>
     | MessageInitShape<typeof ClusterCatalogItemsDeleteResponseSchema>
     | Promise<MessageInitShape<typeof ClusterCatalogItemsDeleteResponseSchema>>;
+  onBareMetalInstanceCatalogItemCreate?: (
+    req: BareMetalInstanceCatalogItemsCreateRequest,
+  ) =>
+    | BareMetalInstanceCatalogItemsCreateResponse
+    | Promise<BareMetalInstanceCatalogItemsCreateResponse>;
   onBareMetalInstanceCatalogItemUpdate?: (
     req: BareMetalInstanceCatalogItemsUpdateRequest,
   ) =>
@@ -570,6 +580,7 @@ export const createMockConnectTransport = (
   const clusters = fixtures.clusters ?? [];
   const clusterCatalogItems = fixtures.clusterCatalogItems ?? [];
   const bareMetalCatalogItems = fixtures.bareMetalCatalogItems ?? [];
+  const bareMetalInstanceTemplates = fixtures.bareMetalInstanceTemplates ?? [];
   const clusterTemplates = fixtures.clusterTemplates ?? [];
   const computeInstanceTemplates = fixtures.computeInstanceTemplates ?? [];
   const clusterVersions = fixtures.clusterVersions ?? [];
@@ -687,6 +698,12 @@ export const createMockConnectTransport = (
         get: (req) => ({
           object: bareMetalCatalogItems.find((i) => i.id === req.id),
         }),
+        create: (req) => {
+          if (overrides.onBareMetalInstanceCatalogItemCreate) {
+            return overrides.onBareMetalInstanceCatalogItemCreate(req);
+          }
+          return { object: req.object };
+        },
         update: (req) => {
           if (overrides.onBareMetalInstanceCatalogItemUpdate) {
             return overrides.onBareMetalInstanceCatalogItemUpdate(req);
@@ -699,6 +716,13 @@ export const createMockConnectTransport = (
           }
           return {};
         },
+      });
+
+      router.service(BareMetalInstanceTemplates, {
+        list: () => ({ items: bareMetalInstanceTemplates }),
+        get: (req) => ({
+          object: bareMetalInstanceTemplates.find((i) => i.id === req.id),
+        }),
       });
 
       router.service(BareMetalInstances, {

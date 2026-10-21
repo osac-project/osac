@@ -207,7 +207,9 @@ project. These tests use a real browser, the deployed `osac-ui`, Keycloak, and
 Fulfillment API/database; they do not run in CI and do not exercise provider
 provisioning unless a flow explicitly does so. For the disk image chain,
 `OSAC_DISK_IMAGE_NAME` must be set to a unique name; the create test skips when
-it is unset so it cannot leave an unpaired image behind. See the
+it is unset. The create project owns deletion as teardown, so the image is
+cleaned after lifecycle checks even if one fails. Disk image seed values live
+in `apps/e2e-tests/extravars.yaml`. See the
 [Playwright README](apps/playwright/README.md) for commands and environment
 variables.
 

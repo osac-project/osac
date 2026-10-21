@@ -125,6 +125,7 @@ export default defineConfig({
       testDir: vmaasDir,
       testMatch: /create\.disk_images\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      teardown: 'vmaas-disk-image-delete',
     },
     {
       name: 'vmaas-disk-image-lifecycle',
@@ -138,7 +139,6 @@ export default defineConfig({
       testDir: vmaasDir,
       testMatch: /delete\.disk_images\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
-      dependencies: ['vmaas-disk-image-lifecycle'],
     },
   ],
 });

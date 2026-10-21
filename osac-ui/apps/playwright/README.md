@@ -45,7 +45,8 @@ run playwright`.) None of these have defaults — each is required, so a missing
 value fails immediately with a clear error instead of silently pointing at the
 wrong environment. `pnpm playwright` logs in, runs the [smoke
 test](#smoke-test), and runs every spec under `scratch/` — see [Writing a
-test](#writing-a-test).
+test](#writing-a-test). Tracked UI flows are excluded from this default
+command; select a project explicitly in the [flow instructions](#tenant-and-disk-image-flow-tests).
 
 For iterating on a `scratch/` spec, logging in on every run is slow and adds a
 real Keycloak request each time. Log in once, then re-run just the spec as
@@ -73,9 +74,10 @@ combined run, set each name to a resource that does not already exist:
 Tenant tests are skipped when `OSAC_TENANT_NAME` is unset. Disk image tests
 are skipped when `OSAC_DISK_IMAGE_NAME` is unset. Set a unique
 `OSAC_DISK_IMAGE_NAME` to run the disk image create, lifecycle, and delete
-flows together. The lifecycle flow leaves the image Obsolete; the separate
-delete flow only deletes it. Disk image source and configuration values are
-read from `apps/e2e-tests/extravars.yaml`.
+flows together. Disk image source, architecture, scope, and lifecycle actions
+are read from `apps/e2e-tests/extravars.yaml`. The create project owns the
+delete project as teardown, so cleanup runs after the lifecycle project even
+if a lifecycle assertion fails.
 
 Set the variables before running the flows:
 
@@ -94,7 +96,7 @@ depends on `vmaas`, so creation runs before deletion:
 pnpm --filter @osac/playwright exec playwright test --project=vmaas-delete
 ```
 
-Run the flows separately:
+Run the tenant and disk image flows:
 
 ```bash
 pnpm --filter @osac/playwright exec playwright test \
@@ -104,21 +106,14 @@ pnpm --filter @osac/playwright exec playwright test \
   delete.tenant.spec.ts --project=vmaas-delete --no-deps
 
 pnpm --filter @osac/playwright exec playwright test \
-  create.disk_images.spec.ts --project=vmaas-disk-image
-
-pnpm --filter @osac/playwright exec playwright test \
-  lifecycle.disk_images.spec.ts --project=vmaas-disk-image-lifecycle --no-deps
-
-pnpm --filter @osac/playwright exec playwright test \
-  delete.disk_images.spec.ts --project=vmaas-disk-image-delete --no-deps
-
-pnpm --filter @osac/playwright exec playwright test --project=vmaas-disk-image-delete
+  --project=vmaas-disk-image-lifecycle
 ```
 
-The `vmaas-disk-image-delete` project depends on `vmaas-disk-image-lifecycle`,
-which depends on `vmaas-disk-image`; running it executes create, lifecycle,
-then delete. The separate lifecycle and delete commands use `--no-deps` and
-expect the explicitly named image to already be in the required state.
+The `vmaas-disk-image-lifecycle` project depends on `vmaas-disk-image`. The
+create project's teardown deletes the image after the lifecycle project
+finishes, including when the lifecycle test fails. To run only the cleanup
+against an existing obsolete image, use
+`--project=vmaas-disk-image-delete --no-deps`; this deletes the named image.
 
 Use `--headed` when a graphical display is available. Run these commands from
 the repository root; pass only the spec filename because the Playwright

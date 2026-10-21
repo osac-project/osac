@@ -1,5 +1,6 @@
 import { test } from '@playwright/test';
 
+import { diskImageTestData } from './test_data';
 import {
   expectDiskImageLifecycle,
   openDiskImageDetails,
@@ -7,6 +8,12 @@ import {
 } from '../../../../libs/test-utils/src/disk_images.page';
 import { openAndLoginWithEnvironment } from '../../../../libs/test-utils/src/general/open_and_login';
 import { openDiskImagesPage } from '../../../../libs/test-utils/src/main.page';
+
+const lifecycleByAction = {
+  Deprecate: 'Deprecated',
+  Obsolete: 'Obsolete',
+  Reactivate: 'Available',
+} as const;
 
 test('exercises disk image lifecycle transitions and leaves it obsolete for deletion', async ({
   page,
@@ -27,15 +34,10 @@ test('exercises disk image lifecycle transitions and leaves it obsolete for dele
   await openDiskImagesPage(page);
   await openDiskImageDetails(page, diskImageName);
 
-  // 3. Verify lifecycle text after each transition. Button-state assertions are paused for
-  // OSAC-6385; each call still clicks the requested action and checks the resulting lifecycle.
+  // 3. Verify lifecycle text after each configured transition. Button-state assertions are
+  // paused for OSAC-6385; each call clicks the action and checks the resulting lifecycle.
   await expectDiskImageLifecycle(page, 'Available');
-  // Exercise Available -> Obsolete -> Available.
-  await transitionDiskImageLifecycle(page, 'Obsolete', 'Obsolete');
-  await transitionDiskImageLifecycle(page, 'Reactivate', 'Available');
-  // Exercise Available -> Deprecated -> Available.
-  await transitionDiskImageLifecycle(page, 'Deprecate', 'Deprecated');
-  await transitionDiskImageLifecycle(page, 'Reactivate', 'Available');
-  // Leave the image Obsolete so the separate delete flow can remove it.
-  await transitionDiskImageLifecycle(page, 'Obsolete', 'Obsolete');
+  for (const action of diskImageTestData.lifecycleActions) {
+    await transitionDiskImageLifecycle(page, action, lifecycleByAction[action]);
+  }
 });

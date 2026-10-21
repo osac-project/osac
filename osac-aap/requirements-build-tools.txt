@@ -36,3 +36,14 @@ setuptools==82.0.0
 # live: "Could not find a version that satisfies the requirement wheel
 # (from versions: none)".
 wheel==0.48.0
+# python-esiclient (git-sourced, no static PyPI metadata) ends up needing
+# "pytz" once Hermeto builds its real metadata during prefetch -- not
+# reproducible via a plain local `pip install --no-index
+# --find-links=<mirror of every pinned package>` using the committed
+# requirements.txt (tried this exact simulation locally: resolves clean,
+# no pytz anywhere in python-esiclient's or any pinned package's real
+# PyPI metadata), so the exact mechanism inside Hermeto's own build
+# environment isn't confirmed -- but the live failure is unambiguous:
+# "Could not find a version that satisfies the requirement pytz (from
+# versions: none)", right after python-esiclient's wheel build succeeds.
+pytz==2026.5

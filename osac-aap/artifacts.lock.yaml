@@ -1,0 +1,14 @@
+# Cachi2/Hermeto generic-fetch lockfile for the Helm binary the EE's
+# generated Containerfile downloads directly via curl (execution-
+# environment.yaml's additional_build_steps.append_final). Checksums match
+# the ones already hardcoded in that same step -- update both together if
+# the Helm version there is ever bumped.
+metadata:
+  version: "1.0"
+artifacts:
+  - download_url: "https://get.helm.sh/helm-v3.21.4-linux-amd64.tar.gz"
+    checksum: "sha256:61f88ab166748cb19604d7884cb100ae9ccb13804ddeb98e08af167eacbb6a14"
+    filename: "helm-v3.21.4-linux-amd64.tar.gz"
+  - download_url: "https://get.helm.sh/helm-v3.21.4-linux-arm64.tar.gz"
+    checksum: "sha256:b54c04b4e0b2540bbdc08c17a121dab70e9a2ed0de5705528fec68a5fd3b85a7"
+    filename: "helm-v3.21.4-linux-arm64.tar.gz"

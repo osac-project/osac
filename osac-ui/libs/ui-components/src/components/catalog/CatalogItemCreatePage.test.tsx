@@ -18,12 +18,18 @@ const renderCreatePage = (routerEntries: string[]) =>
   );
 
 describe('CatalogItemCreatePage', () => {
-  it.each(['bm', 'cluster'])('renders a placeholder for the %s catalog item kind', (kind) => {
-    renderCreatePage([`/catalog/${kind}/create`]);
+  it('renders a placeholder for the bm catalog item kind', () => {
+    renderCreatePage(['/catalog/bm/create']);
 
     expect(
       screen.getByRole('heading', { name: 'Catalog item authoring is coming soon' }),
     ).toBeInTheDocument();
+  });
+
+  it('renders the cluster catalog item wizard for the cluster kind', () => {
+    renderCreatePage(['/catalog/cluster/create']);
+
+    expect(screen.getByRole('heading', { name: 'Create catalog item' })).toBeInTheDocument();
   });
 
   it('renders the compute catalog item wizard for the vm kind', () => {

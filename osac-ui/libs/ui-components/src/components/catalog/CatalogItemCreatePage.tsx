@@ -1,6 +1,7 @@
 import { useParams } from 'react-router-dom';
 import { Bullseye, EmptyState, EmptyStateBody, PageSection } from '@patternfly/react-core';
 
+import ClusterCatalogItemWizard from './authoring/cluster/ClusterCatalogItemWizard';
 import ComputeCatalogItemWizard from './authoring/compute/ComputeCatalogItemWizard';
 import { isCatalogItemKind } from './catalogItemDisplay';
 import { useTranslation } from '../../hooks/useTranslation';
@@ -23,6 +24,10 @@ export const CatalogItemCreatePage = () => {
 
   if (kindParam === 'vm') {
     return <ComputeCatalogItemWizard />;
+  }
+
+  if (kindParam === 'cluster') {
+    return <ClusterCatalogItemWizard />;
   }
 
   return (

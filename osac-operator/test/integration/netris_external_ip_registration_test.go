@@ -174,7 +174,7 @@ var _ = Describe("Netris ExternalIP registration", func() {
 				"-n", operatorNamespace, "-o", "json")
 			output, err := utils.Run(cmd)
 			if err != nil {
-				Skip(fmt.Sprintf("operator namespace is not deployed: %v", err))
+				Fail(fmt.Sprintf("kubectl get configmaps failed: %v", err))
 			}
 
 			var configMapList struct {

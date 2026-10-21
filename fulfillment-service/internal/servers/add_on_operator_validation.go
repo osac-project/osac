@@ -16,6 +16,7 @@ package servers
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
@@ -31,6 +32,8 @@ const maxClusterAddOnOperators = 32
 
 const maxAddOnOperatorRelationshipEdges = 1024
 
+// addOnOperatorFieldError returns an invalid-argument error attached to a
+// cluster add-on operator field.
 func addOnOperatorFieldError(field, message string) error {
 	status, err := grpcstatus.New(grpccodes.InvalidArgument, message).WithDetails(&errdetails.BadRequest{
 		FieldViolations: []*errdetails.BadRequest_FieldViolation{{
@@ -93,6 +96,8 @@ func (r *addOnOperatorReferenceResolver) resolve(
 	return resolved, nil
 }
 
+// newScopedAddOnOperatorResourceResolver creates an operator resolver using
+// the visibility scope of the requesting cluster owner.
 func newScopedAddOnOperatorResourceResolver(
 	operatorDAO *dao.GenericDAO[*privatev1.AddOnOperator],
 ) *addOnOperatorResourceResolver {
@@ -102,6 +107,8 @@ func newScopedAddOnOperatorResourceResolver(
 	}
 }
 
+// newPublishedScopedAddOnOperatorResourceResolver creates a resolver limited
+// to published operators.
 func newPublishedScopedAddOnOperatorResourceResolver(
 	operatorDAO *dao.GenericDAO[*privatev1.AddOnOperator],
 ) *addOnOperatorResourceResolver {
@@ -111,6 +118,7 @@ func newPublishedScopedAddOnOperatorResourceResolver(
 	}
 }
 
+// getPublishedAddOnOperator resolves a published operator by reference.
 func getPublishedAddOnOperator(
 	ctx context.Context,
 	operatorDAO *dao.GenericDAO[*privatev1.AddOnOperator],
@@ -224,12 +232,52 @@ func (s *PrivateClustersServer) resolveAndExpandAddOnOperators(
 	cluster *privatev1.Cluster,
 	requested []*privatev1.AddOnOperatorReference,
 ) (map[string]*privatev1.AddOnOperator, map[string]string, []string, error) {
+	if len(requested) == 0 {
+		return nil, nil, nil, nil
+	}
+	if len(requested) > maxClusterAddOnOperators {
+		return nil, nil, nil, addOnOperatorFieldError("spec.add_on_operators",
+			fmt.Sprintf("requested add-on operator set exceeds maximum of %d operators", maxClusterAddOnOperators))
+	}
 	resolver := &addOnOperatorReferenceResolver{
 		resource: s.addOnOperators,
 		cache:    make(map[addOnOperatorReferenceCacheKey]*privatev1.AddOnOperator),
 	}
+	selected := make(map[string]*privatev1.AddOnOperator)
+	selectedFields := make(map[string]string)
+	rootFields := make(map[string]string)
+	for index, reference := range requested {
+		field := fmt.Sprintf("spec.add_on_operators[%d]", index)
+		operator, err := resolver.resolve(ctx, reference, cluster.GetMetadata(), field)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if !operator.GetPublished() {
+			return nil, nil, nil, addOnOperatorFieldError(field,
+				fmt.Sprintf("add-on operator %q is not published", operator.GetMetadata().GetName()))
+		}
+		rootFields[operator.GetId()] = field
+	}
+
 	graph := newAddOnOperatorGraph(resolver.resolve)
-	return graph.resolveAndExpand(ctx, cluster.GetMetadata(), requested)
+	expanded, expandedFields, err := graph.resolveAndExpand(ctx, cluster.GetMetadata(), requested)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	for operatorID, operator := range expanded {
+		selected[operatorID] = operator
+		selectedFields[operatorID] = expandedFields[operatorID]
+	}
+	for operatorID, field := range rootFields {
+		selectedFields[operatorID] = field
+	}
+
+	selectedOrder := make([]string, 0, len(selected))
+	for operatorID := range selected {
+		selectedOrder = append(selectedOrder, operatorID)
+	}
+	slices.Sort(selectedOrder)
+	return selected, selectedFields, selectedOrder, nil
 }
 
 type addOnOperatorReferenceResolverFunc func(
@@ -243,12 +291,12 @@ type addOnOperatorGraph struct {
 	resolveReference  addOnOperatorReferenceResolverFunc
 	selected          map[string]*privatev1.AddOnOperator
 	selectedFields    map[string]string
-	selectedOrder     []string
 	visiting          map[string]int
 	stack             []string
 	relationshipEdges int
 }
 
+// newAddOnOperatorGraph creates a dependency graph validator.
 func newAddOnOperatorGraph(resolveReference addOnOperatorReferenceResolverFunc) *addOnOperatorGraph {
 	return &addOnOperatorGraph{
 		resolveReference: resolveReference,
@@ -259,13 +307,11 @@ func (g *addOnOperatorGraph) resolveAndExpand(
 	ctx context.Context,
 	ownerMetadata *privatev1.Metadata,
 	requested []*privatev1.AddOnOperatorReference,
-) (map[string]*privatev1.AddOnOperator, map[string]string, []string, error) {
+) (map[string]*privatev1.AddOnOperator, map[string]string, error) {
 	// selected contains the unique operators already expanded, keyed by ID.
 	g.selected = make(map[string]*privatev1.AddOnOperator)
 	// selectedFields preserves the originating request field for validation errors.
 	g.selectedFields = make(map[string]string)
-	// selectedOrder is dependency-first because operators are appended after their dependencies.
-	g.selectedOrder = make([]string, 0, len(requested))
 	// visiting and stack track the active DFS path used to report dependency cycles.
 	g.visiting = make(map[string]int)
 	g.stack = make([]string, 0, len(requested))
@@ -276,13 +322,13 @@ func (g *addOnOperatorGraph) resolveAndExpand(
 		field := fmt.Sprintf("spec.add_on_operators[%d]", index)
 		operator, err := g.resolveReference(ctx, reference, ownerMetadata, field)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, err
 		}
 		if err := g.visit(ctx, operator, field); err != nil {
-			return nil, nil, nil, err
+			return nil, nil, err
 		}
 	}
-	return g.selected, g.selectedFields, g.selectedOrder, nil
+	return g.selected, g.selectedFields, nil
 }
 
 func (g *addOnOperatorGraph) visit(
@@ -312,7 +358,6 @@ func (g *addOnOperatorGraph) visit(
 		g.stack = g.stack[:len(g.stack)-1]
 	}()
 
-	// Post-order DFS selects dependencies before their parent operator.
 	for _, dependency := range operator.GetDependencies() {
 		g.relationshipEdges++
 		if g.relationshipEdges > maxAddOnOperatorRelationshipEdges {
@@ -330,7 +375,6 @@ func (g *addOnOperatorGraph) visit(
 
 	g.selected[operatorID] = operator
 	g.selectedFields[operatorID] = field
-	g.selectedOrder = append(g.selectedOrder, operatorID)
 	return nil
 }
 

@@ -844,7 +844,7 @@ var _ = Describe("IPv4-only controller endpoint gRPC contract", Label("ipv4-netw
 			for _, value := range invalidCreateValues {
 				object := privatev1.Cluster_builder{
 					Id:       uuid.New(),
-					Metadata: privatev1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
+					Metadata: privatev1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
 					Spec: privatev1.ClusterSpec_builder{
 						Template: privatev1.ClusterTemplateReference_builder{Id: "missing-template"}.Build(),
 					}.Build(),

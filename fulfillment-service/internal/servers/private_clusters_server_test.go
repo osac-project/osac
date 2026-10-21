@@ -614,6 +614,168 @@ var _ = Describe("Private clusters server", func() {
 			seedAddOnOperator(ctx, "operator-2", "operator-two", true)
 		})
 
+		Describe("Tenant placement", func() {
+			var tenantServer *PrivateClustersServer
+
+			BeforeEach(func() {
+				// Model an administrator explicitly: unlike the suite double, its
+				// default tenant is shared, not testTenant.
+				ctx = auth.ContextWithSubject(ctx, &auth.Subject{User: "admin", Tenants: auth.AllTenants})
+				adminTenancy, err := auth.NewDefaultTenancyLogic().SetLogger(logger).Build()
+				Expect(err).ToNot(HaveOccurred())
+				tenantServer, err = NewPrivateClustersServer().
+					SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(adminTenancy).Build()
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = tenantServer.templatesDao.Create().SetObject(privatev1.ClusterTemplate_builder{
+					Metadata: privatev1.Metadata_builder{Name: "shared-template", Tenant: auth.SharedTenant}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				seedClusterVersion(ctx, privatev1.ClusterVersion_builder{
+					Id:       "shared-version-id",
+					Metadata: privatev1.Metadata_builder{Name: "shared-version", Tenant: auth.SharedTenant}.Build(),
+					Spec: privatev1.ClusterVersionSpec_builder{
+						Version: "4.18.0", Image: "quay.io/openshift-release-dev/ocp-release:4.18.0-multi",
+						Enabled: proto.Bool(true), State: privatev1.ClusterVersionState_CLUSTER_VERSION_STATE_ACTIVE,
+					}.Build(),
+				}.Build())
+				_, err = tenantServer.catalogItemsDao.Create().SetObject(privatev1.ClusterCatalogItem_builder{
+					Metadata:  privatev1.Metadata_builder{Name: "shared-offering", Tenant: auth.SharedTenant}.Build(),
+					Published: true,
+					Template:  privatev1.ClusterTemplateReference_builder{Name: "shared-template", Shared: true}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			newRequest := func(tenant string, catalog bool) *privatev1.ClustersCreateRequest {
+				request := newCaaSNodeSetCreateRequest(fmt.Sprintf("tenant-placement-%s", uuid.New()[24:32]),
+					map[string]*privatev1.ClusterNodeSet{
+						"workers": privatev1.ClusterNodeSet_builder{
+							Size: proto.Int32(1),
+							BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{
+								Id: "acme-bmit-id", Name: "acme-bmit-name", Shared: true,
+							}.Build(),
+						}.Build(),
+					}, nil)
+				request.GetObject().GetMetadata().SetTenant(tenant)
+				spec := request.GetObject().GetSpec()
+				spec.SetVersion(privatev1.ClusterVersionReference_builder{Id: "shared-version-id", Shared: true}.Build())
+				if catalog {
+					spec.ClearTemplate()
+					spec.SetCatalogItem(privatev1.ClusterCatalogItemReference_builder{Name: "shared-offering", Shared: true}.Build())
+				} else {
+					spec.SetTemplate(privatev1.ClusterTemplateReference_builder{Name: "shared-template", Shared: true}.Build())
+				}
+				return request
+			}
+
+			DescribeTable("rejects reserved tenant creation without persistence or request mutation",
+				func(tenant string, catalog bool) {
+					request := newRequest(tenant, catalog)
+					original := proto.Clone(request)
+					response, err := tenantServer.Create(ctx, request)
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
+					reserved := tenant
+					if reserved == "" {
+						reserved = auth.SharedTenant
+					}
+					Expect(grpcstatus.Convert(err).Message()).To(Equal(fmt.Sprintf("objects cannot be placed in the '%s' tenant", reserved)))
+					Expect(response).To(BeNil())
+					Expect(proto.Equal(request, original)).To(BeTrue())
+
+					stored, err := tenantServer.generic.dao.List().
+						SetFilter(fmt.Sprintf("this.metadata.name == %q", request.GetObject().GetMetadata().GetName())).Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(stored.GetTotal()).To(BeZero())
+					ips, err := tenantServer.externalIPDao.List().Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(ips.GetTotal()).To(BeZero())
+					attachments, err := tenantServer.externalIPAttachmentDao.List().Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(attachments.GetTotal()).To(BeZero())
+					workersDAO, err := dao.NewGenericDAO[*privatev1.BareMetalInstance]().
+						SetLogger(logger).SetTenancyLogic(tenancy).Build()
+					Expect(err).ToNot(HaveOccurred())
+					workers, err := workersDAO.List().Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(workers.GetTotal()).To(BeZero())
+				},
+				Entry("explicit shared tenant with a template", auth.SharedTenant, false),
+				Entry("explicit shared tenant with a catalog item", auth.SharedTenant, true),
+				Entry("admin default shared tenant with a template", "", false),
+				Entry("admin default shared tenant with a catalog item", "", true),
+				Entry("system tenant", auth.SystemTenant, false),
+			)
+
+			DescribeTable("creates a tenant-owned cluster from shared catalog resources",
+				func(catalog bool) {
+					request := newRequest(testTenant, catalog)
+					original := proto.Clone(request)
+					response, err := tenantServer.Create(ctx, request)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(response.GetObject().GetMetadata().GetTenant()).To(Equal(testTenant))
+					Expect(response.GetObject().GetSpec().GetTemplate().GetName()).To(Equal("shared-template"))
+					Expect(response.GetObject().GetSpec().GetVersion().GetId()).To(Equal("shared-version-id"))
+					Expect(proto.Equal(request, original)).To(BeTrue())
+					stored, err := tenantServer.Get(ctx, privatev1.ClustersGetRequest_builder{Id: response.GetObject().GetId()}.Build())
+					Expect(err).ToNot(HaveOccurred())
+					Expect(stored.GetObject().GetMetadata().GetTenant()).To(Equal(testTenant))
+				},
+				Entry("direct template", false),
+				Entry("catalog item", true),
+			)
+
+			It("rejects moving a cluster into shared without changing the stored tenant", func() {
+				created, err := tenantServer.Create(ctx, newRequest(testTenant, false))
+				Expect(err).ToNot(HaveOccurred())
+				object := created.GetObject()
+				request := privatev1.ClustersUpdateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Id: object.GetId(), Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.tenant"}},
+				}.Build()
+				original := proto.Clone(request)
+				response, err := tenantServer.Update(ctx, request)
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
+				Expect(grpcstatus.Convert(err).Message()).To(Equal("objects cannot be placed in the 'shared' tenant"))
+				Expect(response).To(BeNil())
+				Expect(proto.Equal(request, original)).To(BeTrue())
+				stored, err := tenantServer.Get(ctx, privatev1.ClustersGetRequest_builder{Id: object.GetId()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(proto.Equal(stored.GetObject(), object)).To(BeTrue())
+			})
+
+			It("allows reading, status feedback and deletion of a legacy shared cluster", func() {
+				// Bypass Create to model data persisted before shared placement was rejected.
+				created, err := tenantServer.generic.dao.Create().SetObject(newRequest(auth.SharedTenant, false).GetObject()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				id := created.GetObject().GetId()
+				stored, err := tenantServer.Get(ctx, privatev1.ClustersGetRequest_builder{Id: id}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(stored.GetObject().GetMetadata().GetTenant()).To(Equal(auth.SharedTenant))
+				updated, err := tenantServer.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Id: id,
+						Status: privatev1.ClusterStatus_builder{
+							State:               privatev1.ClusterState_CLUSTER_STATE_READY,
+							StateTransitionTime: timestamppb.Now(),
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state", "status.state_transition_time"}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(updated.GetObject().GetMetadata().GetTenant()).To(Equal(auth.SharedTenant))
+				stored, err = tenantServer.Get(ctx, privatev1.ClustersGetRequest_builder{Id: id}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(stored.GetObject().GetStatus().GetState()).To(Equal(privatev1.ClusterState_CLUSTER_STATE_READY))
+				_, err = tenantServer.Delete(ctx, privatev1.ClustersDeleteRequest_builder{Id: id}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				_, err = tenantServer.Get(ctx, privatev1.ClustersGetRequest_builder{Id: id}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+			})
+		})
+
 		It("Creates object", func() {
 			response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 				Object: privatev1.Cluster_builder{

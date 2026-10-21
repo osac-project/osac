@@ -10,12 +10,10 @@ from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import env
 
 
-# TODO(OSAC-1060): Remove this override once the osac-operator storage controller
-# handles CaaS cluster deletion independently of tenant-level storage provisioning.
-# With JWT auth the cluster lands in tenant1, which triggers cluster storage provisioning
-# via AAP. When that job fails (no storage backends configured), the cluster-storage
-# finalizer blocks ClusterOrder deletion indefinitely. Using SA auth places the cluster
-# in the shared tenant, which the storage controller skips.
+# Default to the tenant-admin JWT so Clusters and their workers are tenant-owned.
+# The optional service-account path must also use a tenant-scoped identity:
+# administrator identities default to shared, where Cluster creation is rejected.
+# Switching authentication is not a workaround for tenant storage teardown failures.
 @pytest.fixture(scope="session")
 def cli(namespace: str, fulfillment_address: str, service_account: str, jwt_cli_admin: OsacCLI) -> Iterator[OsacCLI]:
     if env("OSAC_CAAS_USE_JWT", "true").lower() == "true":

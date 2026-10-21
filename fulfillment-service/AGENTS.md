@@ -76,6 +76,12 @@ Integration tests run in a local Kind Kubernetes cluster; the installer builds a
 
 See the [fulfillment-service test tiers and coverage notes](../docs/INTEGRATION-TESTING.md#fulfillment-service).
 
+Cluster tenant-placement changes require the `internal/servers` PostgreSQL suite
+and the authenticated public Cluster cases in `it/it_public_clusters_test.go` via
+`SUITE=fulfillment`. These cover reserved-tenant rejection, real-tenant creation,
+and legacy shared-object cleanup, not deployed worker provisioning or teardown;
+that boundary belongs to the existing tenant-owned CaaS E2E journey.
+
 FabricDomain API authorization, tenant filtering, CRUD persistence, and cleanup
 are component-integration coverage in
 [`it/it_fabric_domain_tenant_api_test.go`](it/it_fabric_domain_tenant_api_test.go).

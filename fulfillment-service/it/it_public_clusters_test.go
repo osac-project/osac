@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -175,6 +176,45 @@ var _ = Describe("Public clusters", func() {
 		Expect(items).ToNot(BeNil())
 	})
 
+	DescribeTable("rejects shared tenant creation by an administrator without persisting a cluster",
+		func(tenant string) {
+			// Use an administrator so assignable-tenant authorization cannot mask
+			// the resource type's reserved-tenant restriction. An omitted tenant
+			// must also be rejected: administrators default to shared.
+			adminClient := publicv1.NewClustersClient(tool.ExternalView().AdminConn())
+			name := fmt.Sprintf("shared-cluster-%s", uuid.New()[24:32])
+			request := publicv1.ClustersCreateRequest_builder{
+				Object: publicv1.Cluster_builder{
+					Metadata: publicv1.Metadata_builder{Name: name, Tenant: tenant}.Build(),
+					Spec: publicv1.ClusterSpec_builder{
+						Template: publicv1.ClusterTemplateReference_builder{Id: templateId, Shared: true}.Build(),
+						NodeSets: testClusterNodeSets(bmitName, 1),
+					}.Build(),
+				}.Build(),
+			}.Build()
+			original := proto.Clone(request)
+			response, err := adminClient.Create(ctx, request)
+			if response.GetObject().GetId() != "" {
+				DeferCleanup(func() {
+					_, err := adminClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: response.GetObject().GetId()}.Build())
+					Expect(err).ToNot(HaveOccurred())
+				})
+			}
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
+			Expect(grpcstatus.Convert(err).Message()).To(Equal("objects cannot be placed in the 'shared' tenant"))
+			Expect(response).To(BeNil())
+			Expect(proto.Equal(request, original)).To(BeTrue())
+			listed, err := adminClient.List(ctx, publicv1.ClustersListRequest_builder{
+				Filter: new(fmt.Sprintf("this.metadata.name == %q", name)),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(listed.GetItems()).To(BeEmpty())
+			Expect(listed.GetTotal()).To(BeZero())
+		},
+		Entry("explicit shared tenant", "shared"),
+		Entry("omitted tenant defaults to shared", ""),
+	)
+
 	It("Can create a cluster", func() {
 		// Create the cluster:
 		response, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
@@ -202,6 +242,7 @@ var _ = Describe("Public clusters", func() {
 		Expect(object).ToNot(BeNil())
 		metadata := object.GetMetadata()
 		Expect(metadata).ToNot(BeNil())
+		Expect(metadata.GetTenant()).To(Equal(usersGroup))
 		Expect(metadata.HasCreationTimestamp()).To(BeTrue())
 		Expect(metadata.HasDeletionTimestamp()).To(BeFalse())
 		spec := object.GetSpec()

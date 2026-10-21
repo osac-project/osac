@@ -469,6 +469,55 @@ var _ = Describe("Clusters server", func() {
 			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("not found"))
 		})
 
+		DescribeTable("rejects shared tenant creation through the public wrapper",
+			func(tenant string) {
+				adminTenancy, err := auth.NewDefaultTenancyLogic().SetLogger(logger).Build()
+				Expect(err).ToNot(HaveOccurred())
+				publicServer, err := NewClustersServer().SetLogger(logger).
+					SetAttributionLogic(attribution).SetTenancyLogic(adminTenancy).Build()
+				Expect(err).ToNot(HaveOccurred())
+				seedClusterVersion(ctx, privatev1.ClusterVersion_builder{
+					Id:       "shared-version-id",
+					Metadata: privatev1.Metadata_builder{Name: "shared-version", Tenant: auth.SharedTenant}.Build(),
+					Spec: privatev1.ClusterVersionSpec_builder{
+						Version: "4.18.0", Image: "quay.io/openshift-release-dev/ocp-release:4.18.0-multi",
+						Enabled: proto.Bool(true), State: privatev1.ClusterVersionState_CLUSTER_VERSION_STATE_ACTIVE,
+					}.Build(),
+				}.Build())
+				name := fmt.Sprintf("shared-cluster-%s", uuid.NewString()[:8])
+				request := publicv1.ClustersCreateRequest_builder{
+					Object: publicv1.Cluster_builder{
+						Metadata: publicv1.Metadata_builder{Name: name, Tenant: tenant}.Build(),
+						Spec: publicv1.ClusterSpec_builder{
+							Template: publicv1.ClusterTemplateReference_builder{Id: "my_bmit_template", Shared: true}.Build(),
+							Version:  publicv1.ClusterVersionReference_builder{Id: "shared-version-id", Shared: true}.Build(),
+							NodeSets: map[string]*publicv1.ClusterNodeSet{
+								"workers": publicv1.ClusterNodeSet_builder{
+									Size: proto.Int32(1),
+									BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{
+										Id: "bmit_standard", Name: "test-bmit-standard", Shared: true,
+									}.Build(),
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build()
+				original := proto.Clone(request)
+				response, err := publicServer.Create(ctx, request)
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
+				Expect(grpcstatus.Convert(err).Message()).To(Equal("objects cannot be placed in the 'shared' tenant"))
+				Expect(response).To(BeNil())
+				Expect(proto.Equal(request, original)).To(BeTrue())
+				listed, err := publicServer.List(ctx, publicv1.ClustersListRequest_builder{
+					Filter: new(fmt.Sprintf("this.metadata.name == %q", name)),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(listed.GetTotal()).To(BeZero())
+			},
+			Entry("explicit shared tenant", auth.SharedTenant),
+			Entry("administrator default shared tenant", ""),
+		)
+
 		It("Creates object", func() {
 			response, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{

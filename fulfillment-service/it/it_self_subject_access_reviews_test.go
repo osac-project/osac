@@ -136,7 +136,8 @@ var _ = Describe("SelfSubjectAccessReview", func() {
 				createResp, err := systemAdminClustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 					Object: publicv1.Cluster_builder{
 						Metadata: publicv1.Metadata_builder{
-							Name: clusterName,
+							Name:   clusterName,
+							Tenant: tenantName,
 						}.Build(),
 						Spec: publicv1.ClusterSpec_builder{
 							Template: publicv1.ClusterTemplateReference_builder{Id: templateID}.Build(),

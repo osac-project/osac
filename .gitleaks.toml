@@ -25,3 +25,39 @@
   regexes = [
     '''service123''',
   ]
+
+[[allowlists]]
+  description = """
+Placeholder FlashBlade API tokens in the vendored purestorage.flashblade
+collection (OSAC-5016). Upstream ships these fake values in the EXAMPLES block
+of its modules, alongside an equally fake fb_url of 10.10.10.2; they are
+documentation samples in third-party code pinned at v1.26.0, not credentials
+for any OSAC system.
+
+Scoped by both path and exact value, with condition = "AND" so a finding is
+only suppressed when it is one of these values AND it sits under the vendored
+collection. The same value elsewhere in the repository is still reported, as
+is any other secret under the vendor path -- so a real credential appearing in
+a future re-vendor is not silently allowed through.
+
+condition = "AND" requires a gitleaks that honours the key; both the
+pre-commit hook and the CI secret gate pin v8.30.1 (.pre-commit-config.yaml
+and the image digest in .github/workflows/pre-commit.yaml).
+"""
+  condition = "AND"
+  paths = [
+    '''^osac-aap/vendor/ansible_collections/purestorage/flashblade/''',
+  ]
+  regexes = [
+    '''^T-55a68eb5-c785-4720-a2ca-8b03903bf641$''',  # x85
+    '''^T-9f276a18-50ab-446e-8a0c-666a3529a1b6$''',  # x67
+    '''^T-68618f31-0c9e-4e57-aa44-5306a2cf10e3$''',  # x32
+    '''^e31060a7-21fc-e277-6240-25983c6c4592$''',  # x22
+    '''^T-b3275b1c-8958-4190-9052-eb46b0bd09f8$''',  # x3
+    '''^T-91528421-fe42-47ee-bcb1-47eefb0a9220$''',  # x3
+    '''^T-89faa581-c668-483d-b77d-23c5d88ba35c$''',  # x2
+    '''^c6033033-fe69-2515-a9e8-966bb7fe4b40$''',  # x2
+    '''^3794fb12c6204e19195f$''',  # x1
+    '''^BAG61F63105e0d3669/e066\+5C5DFBE2c127d395LBGG$''',  # x1
+    '''^9c0b56bc-f941-f7a6-9f85-dcc3e9a8f7d6$''',  # x1
+  ]

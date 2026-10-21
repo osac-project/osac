@@ -9,6 +9,8 @@ import {
   BareMetalInstancesCreateResponse,
   Cluster,
   ClusterCatalogItem,
+  type ClusterCatalogItemsCreateRequest,
+  type ClusterCatalogItemsCreateResponse,
   type ClusterCatalogItemsDeleteRequest,
   type ClusterCatalogItemsUpdateRequest,
   ClusterTemplate,
@@ -420,6 +422,9 @@ export type MockTransportOverrides = {
   ) =>
     | MessageInitShape<typeof ComputeInstanceCatalogItemsDeleteResponseSchema>
     | Promise<MessageInitShape<typeof ComputeInstanceCatalogItemsDeleteResponseSchema>>;
+  onClusterCatalogItemCreate?: (
+    req: ClusterCatalogItemsCreateRequest,
+  ) => ClusterCatalogItemsCreateResponse | Promise<ClusterCatalogItemsCreateResponse>;
   onClusterCatalogItemUpdate?: (
     req: ClusterCatalogItemsUpdateRequest,
   ) =>
@@ -668,6 +673,12 @@ export const createMockConnectTransport = (
         get: (req) => ({
           object: clusterCatalogItems.find((i) => i.id === req.id),
         }),
+        create: (req) => {
+          if (overrides.onClusterCatalogItemCreate) {
+            return overrides.onClusterCatalogItemCreate(req);
+          }
+          return { object: req.object };
+        },
         update: (req) => {
           if (overrides.onClusterCatalogItemUpdate) {
             return overrides.onClusterCatalogItemUpdate(req);
@@ -718,6 +729,7 @@ export const createMockConnectTransport = (
       });
 
       router.service(ClusterTemplates, {
+        list: () => ({ items: clusterTemplates }),
         get: (req) => {
           const template = clusterTemplates.find((i) => i.id === req.id);
           if (!template) {

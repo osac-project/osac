@@ -415,11 +415,15 @@ def test_vmaas_vm_lifecycle_demo(
     it_name = f"e2e-it-{tag}"
     it_cleanup_needed = False
     catalog_id: str | None = None
+    catalog_create_name: str | None = None
     vn_id: str | None = None
+    vn_create_name: str | None = None
     vn_cr_name: str | None = None
     subnet_id: str | None = None
+    subnet_create_name: str | None = None
     subnet_cr_name: str | None = None
     sg_id: str | None = None
+    sg_create_name: str | None = None
     sg_cr_name: str | None = None
     ci_uuid: str | None = None
     ci_name: str | None = None
@@ -444,8 +448,9 @@ def test_vmaas_vm_lifecycle_demo(
         assert re.search(r"vCPUs:\s+1\b", described)
         assert re.search(r"Memory \(GiB\):\s+2\b", described)
 
+        catalog_create_name = f"e2e-catalog-{tag}"
         catalog_id = grpc.create_compute_instance_catalog_item(
-            name=f"e2e-catalog-{tag}",
+            name=catalog_create_name,
             template=vm_template,
             fields={
                 "boot_disk": {
@@ -460,7 +465,8 @@ def test_vmaas_vm_lifecycle_demo(
         )
         assert any(item["id"] == catalog_id for item in _cli_objects(cli, "computeinstancecatalogitem"))
 
-        vn_id = grpc.create_virtual_network(name=f"e2e-vnet-{tag}", ipv4_cidr=str(subnet_net))
+        vn_create_name = f"e2e-vnet-{tag}"
+        vn_id = grpc.create_virtual_network(name=vn_create_name, ipv4_cidr=str(subnet_net))
         vn_cr_name = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)
         wait_for_virtual_network_ready(k8s=k8s_hub_client, name=vn_cr_name)
         _wait_for_api_ready(lambda: grpc.get_virtual_network(vn_id=vn_id), "VIRTUAL_NETWORK_STATE_READY")
@@ -470,7 +476,8 @@ def test_vmaas_vm_lifecycle_demo(
         assert selected_class.get("id") == network_class["id"]
         assert vn_id in grpc.list_virtual_network_ids()
 
-        subnet_id = grpc.create_subnet(name=f"e2e-subnet-{tag}", virtual_network=vn_id, ipv4_cidr=str(subnet_net))
+        subnet_create_name = f"e2e-subnet-{tag}"
+        subnet_id = grpc.create_subnet(name=subnet_create_name, virtual_network=vn_id, ipv4_cidr=str(subnet_net))
         subnet_cr_name = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_id)
         assert subnet_id in grpc.list_subnet_ids()
         subnet = grpc.get_subnet(subnet_id=subnet_id)
@@ -482,9 +489,9 @@ def test_vmaas_vm_lifecycle_demo(
         assert subnet_parent.get("id") == vn_id
         assert ipaddress.ip_network(subnet_spec.get("ipv4_cidr") or subnet_spec.get("ipv4Cidr") or "") == subnet_net
 
-        sg_name = f"e2e-sg-{tag}"
+        sg_create_name = f"e2e-sg-{tag}"
         sg_id = grpc.create_security_group_with_rules(
-            name=sg_name,
+            name=sg_create_name,
             virtual_network=vn_id,
             ingress=[
                 {"protocol": "PROTOCOL_TCP", "port_from": 22, "port_to": 22, "ipv4_cidr": "0.0.0.0/0"},
@@ -596,10 +603,13 @@ def test_vmaas_vm_lifecycle_demo(
         ci_create_name = None
         delete_and_wait_for_security_group(grpc, k8s_hub_client, sg_id, sg_cr_name)
         sg_id = None
+        sg_create_name = None
         delete_and_wait_for_subnet(grpc, k8s_hub_client, subnet_id, subnet_cr_name)
         subnet_id = None
+        subnet_create_name = None
         delete_and_wait_for_virtual_network(grpc, k8s_hub_client, vn_id, vn_cr_name)
         vn_id = None
+        vn_create_name = None
         assert removed_ci not in grpc.list_compute_instance_ids()
         assert removed_sg not in grpc.list_security_group_ids()
         assert removed_subnet not in grpc.list_subnet_ids()
@@ -616,6 +626,30 @@ def test_vmaas_vm_lifecycle_demo(
                 action()
             except Exception as error:
                 cleanup_errors.append(_safe_command_error(error, label))
+
+        def recover_id(resource_id: str | None, creation_name: str | None, collection: str) -> str | None:
+            """Recover an attempted create by exact name without retrying the write."""
+            if resource_id is not None or creation_name is None:
+                return resource_id
+            try:
+                items = poll_until(
+                    fn=lambda: grpc.list_with_filter(
+                        service=f"{PUBLIC_API}.{collection}/List",
+                        filter_expr=f"this.metadata.name == {json.dumps(creation_name)}",
+                    ),
+                    until=bool,
+                    retries=60,
+                    delay=2,
+                    description="Resource after incomplete gRPC create",
+                )
+                if len(items) != 1 or items[0].get("metadata", {}).get("name") != creation_name:
+                    raise RuntimeError("Resource name lookup was not unique; refusing ambiguous cleanup")
+                return items[0]["id"]
+            except TimeoutError:
+                return None
+            except Exception as error:
+                cleanup_errors.append(_safe_command_error(error, f"find {collection} after incomplete gRPC create"))
+                return None
 
         if ci_uuid is None and ci_create_name is not None:
 
@@ -648,6 +682,10 @@ def test_vmaas_vm_lifecycle_demo(
                     "wait for ComputeInstance CR deletion", lambda: wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
                 )
             cleanup("wait for ComputeInstance API deletion", lambda: wait_for_grpc_removal(grpc=grpc, uuid=ci_uuid))
+        sg_id = recover_id(sg_id, sg_create_name, "SecurityGroups")
+        subnet_id = recover_id(subnet_id, subnet_create_name, "Subnets")
+        vn_id = recover_id(vn_id, vn_create_name, "VirtualNetworks")
+        catalog_id = recover_id(catalog_id, catalog_create_name, "ComputeInstanceCatalogItems")
         if sg_id is not None:
             cleanup(
                 "delete SecurityGroup",

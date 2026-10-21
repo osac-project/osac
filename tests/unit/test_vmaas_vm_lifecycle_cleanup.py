@@ -210,3 +210,131 @@ def test_lookup_failure_preserves_primary_error_and_redacts_credentials(failed_c
     assert test_secret not in str(caught.value.exceptions[1])
     failed_create.cli.delete_compute_instance.assert_not_called()
     assert failed_create.events == ["delete SG", "delete Subnet", "delete VN", "delete catalog", "delete InstanceType"]
+
+
+@pytest.mark.parametrize("failure", ["timeout", "decode"])
+@pytest.mark.parametrize(
+    ("create_method", "collection", "creation_name", "delete_helper", "expected_events"),
+    [
+        (
+            "create_compute_instance_catalog_item",
+            "ComputeInstanceCatalogItems",
+            "e2e-catalog-12345678",
+            None,
+            ["delete catalog", "delete InstanceType"],
+        ),
+        (
+            "create_virtual_network",
+            "VirtualNetworks",
+            "e2e-vnet-12345678",
+            "delete_and_wait_for_virtual_network",
+            ["delete VN", "delete catalog", "delete InstanceType"],
+        ),
+        (
+            "create_subnet",
+            "Subnets",
+            "e2e-subnet-12345678",
+            "delete_and_wait_for_subnet",
+            ["delete Subnet", "delete VN", "delete catalog", "delete InstanceType"],
+        ),
+        (
+            "create_security_group_with_rules",
+            "SecurityGroups",
+            "e2e-sg-12345678",
+            "delete_and_wait_for_security_group",
+            ["delete SG", "delete Subnet", "delete VN", "delete catalog", "delete InstanceType"],
+        ),
+    ],
+)
+def test_incomplete_rpc_create_recovers_delayed_id_before_cleanup(
+    failed_create: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    create_method: str,
+    collection: str,
+    creation_name: str,
+    delete_helper: str | None,
+    expected_events: list[str],
+) -> None:
+    """A lost or invalid create response must preserve reverse dependency deletion."""
+    error = (
+        subprocess.TimeoutExpired("grpcurl", 300)
+        if failure == "timeout"
+        else json.JSONDecodeError("invalid response", "", 0)
+    )
+    getattr(failed_create.grpc, create_method).side_effect = error
+    failed_create.grpc.list_with_filter.side_effect = [
+        [],
+        [],
+        [{"id": "recovered-id", "metadata": {"name": creation_name}}],
+    ]
+    delete = Mock(side_effect=lambda *args: failed_create.events.append(expected_events[0]))
+    if delete_helper:
+        monkeypatch.setattr(scenario, delete_helper, delete)
+
+    with pytest.raises(RuntimeError if failure == "timeout" else json.JSONDecodeError):
+        run_scenario(failed_create)
+
+    assert failed_create.grpc.list_with_filter.call_count == 3
+    assert all(
+        call.kwargs
+        == {"service": f"{PUBLIC_API}.{collection}/List", "filter_expr": f'this.metadata.name == "{creation_name}"'}
+        for call in failed_create.grpc.list_with_filter.call_args_list
+    )
+    assert getattr(failed_create.grpc, create_method).call_args.kwargs["name"] == creation_name
+    assert failed_create.events == expected_events
+    if delete_helper:
+        assert delete.call_args.args[2:] == ("recovered-id", None)
+    else:
+        failed_create.grpc.delete_compute_instance_catalog_item.assert_called_once_with(catalog_item_id="recovered-id")
+    failed_create.cli.create_compute_instance_with_catalog_item.assert_not_called()
+    failed_create.cli.delete_compute_instance.assert_not_called()
+
+
+def test_rejected_rpc_create_exhausts_lookup_without_deleting(failed_create: SimpleNamespace) -> None:
+    """An absent catalog item consumes the bounded lookup budget without inventing an ID."""
+    failed_create.grpc.create_compute_instance_catalog_item.side_effect = subprocess.TimeoutExpired("grpcurl", 300)
+    failed_create.grpc.list_with_filter.return_value = []
+    with pytest.raises(RuntimeError, match="lifecycle command failed"):
+        run_scenario(failed_create)
+    assert failed_create.grpc.list_with_filter.call_count == 60
+    assert runner.time.sleep.call_count == 59
+    failed_create.grpc.delete_compute_instance_catalog_item.assert_not_called()
+    assert failed_create.events == ["delete InstanceType"]
+
+
+@pytest.mark.parametrize(
+    "matches",
+    [
+        [{"id": "other-id", "metadata": {"name": "other-item"}}],
+        [
+            {"id": "first-id", "metadata": {"name": "e2e-catalog-12345678"}},
+            {"id": "second-id", "metadata": {"name": "e2e-catalog-12345678"}},
+        ],
+    ],
+)
+def test_rpc_recovery_refuses_ambiguous_or_wrong_name(failed_create: SimpleNamespace, matches: list[dict]) -> None:
+    """Retain the primary timeout while refusing to delete a mismatched or nonunique result."""
+    failed_create.grpc.create_compute_instance_catalog_item.side_effect = subprocess.TimeoutExpired("grpcurl", 300)
+    failed_create.grpc.list_with_filter.return_value = matches
+    with pytest.raises(BaseExceptionGroup) as caught:
+        run_scenario(failed_create)
+    assert isinstance(caught.value.exceptions[0], RuntimeError)
+    assert "find ComputeInstanceCatalogItems after incomplete gRPC create" in str(caught.value.exceptions[1])
+    failed_create.grpc.delete_compute_instance_catalog_item.assert_not_called()
+    assert failed_create.events == ["delete InstanceType"]
+
+
+def test_rpc_recovery_reports_safe_lookup_error_and_continues_cleanup(failed_create: SimpleNamespace) -> None:
+    """Keep lookup credentials out of diagnostics while cleaning earlier known resources."""
+    test_secret = "unit-test-secret"
+    failed_create.grpc.create_compute_instance_catalog_item.side_effect = subprocess.TimeoutExpired("grpcurl", 300)
+    failed_create.grpc.list_with_filter.side_effect = subprocess.CalledProcessError(
+        7, ["grpcurl", "-H", f"Authorization: Bearer {test_secret}"], stderr=test_secret
+    )
+    with pytest.raises(BaseExceptionGroup) as caught:
+        run_scenario(failed_create)
+    assert isinstance(caught.value.exceptions[0], RuntimeError)
+    assert test_secret not in str(caught.value.exceptions[1])
+    failed_create.grpc.delete_compute_instance_catalog_item.assert_not_called()
+    assert failed_create.events == ["delete InstanceType"]

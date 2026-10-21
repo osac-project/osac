@@ -62,6 +62,10 @@ on:
 
 jobs:
   e2e-caas-full-install:
+    # Successful runs take 107–135 min (10 schedule runs,
+    # Oct 17–21 2026). 180 min gives 33 % headroom for slow runs
+    # while catching hangs that otherwise burn the 360-min default.
+    timeout-minutes: 180
     permissions:
       contents: read
       # See e2e-vmaas-full-install.yml's identical grant for why this is needed.

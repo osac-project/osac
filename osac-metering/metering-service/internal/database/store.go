@@ -41,6 +41,16 @@ func NewStore(pool *pgxpool.Pool) *Store {
 // Pool returns the underlying connection pool.
 func (s *Store) Pool() *pgxpool.Pool { return s.pool }
 
+// Clock returns the database's current time. Rounds read it so every pod agrees on
+// the round time regardless of the pod clocks.
+func (s *Store) Clock(ctx context.Context) (time.Time, error) {
+	var now time.Time
+	if err := s.pool.QueryRow(ctx, "SELECT now()").Scan(&now); err != nil {
+		return time.Time{}, fmt.Errorf("reading the database clock: %w", err)
+	}
+	return now.UTC(), nil
+}
+
 // Begin starts a transaction.
 func (s *Store) Begin(ctx context.Context) (pgx.Tx, error) {
 	return s.pool.Begin(ctx)
@@ -90,6 +100,55 @@ type OutboxRow struct {
 	ID        string
 	Payload   []byte
 	RoundTime time.Time
+}
+
+// ReplayedHeartbeatIDs returns the ids catch-up applied during the recovery in
+// progress, so a resent copy counts once even after a crash mid-replay.
+func ReplayedHeartbeatIDs(ctx context.Context, q Querier, tenant string) (map[string]bool, error) {
+	rows, err := q.Query(
+		ctx, `SELECT id FROM replayed_heartbeats WHERE tenant = $1`, tenant,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("reading replayed heartbeat ids of tenant %s: %w", tenant, err)
+	}
+	defer rows.Close()
+	ids := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning replayed heartbeat id of tenant %s: %w", tenant, err)
+		}
+		ids[id] = true
+	}
+	return ids, rows.Err()
+}
+
+// RecordReplayedHeartbeats stores the ids catch-up just applied, in the group's own
+// transaction: a crash mid-replay keeps the memory of what already counted.
+func RecordReplayedHeartbeats(ctx context.Context, q Querier, tenant string, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := q.Exec(
+		ctx, `INSERT INTO replayed_heartbeats (tenant, id)
+		      SELECT $1, id FROM unnest($2::text[]) AS id
+		      ON CONFLICT DO NOTHING`, tenant, ids,
+	)
+	if err != nil {
+		return fmt.Errorf("recording replayed heartbeats of tenant %s: %w", tenant, err)
+	}
+	return nil
+}
+
+// PruneReplayedHeartbeats forgets the replay's id memory. The round's own commit makes
+// it redundant: every heartbeat on the topic is now from a round at or before the last
+// round, which the replay skips on its own.
+func PruneReplayedHeartbeats(ctx context.Context, q Querier, tenant string) error {
+	_, err := q.Exec(ctx, `DELETE FROM replayed_heartbeats WHERE tenant = $1`, tenant)
+	if err != nil {
+		return fmt.Errorf("pruning replayed heartbeats of tenant %s: %w", tenant, err)
+	}
+	return nil
 }
 
 // RuleRevisionRow is a revision metering has used.
@@ -247,6 +306,24 @@ func SetLastRound(
 	return nil
 }
 
+// LastRoundTime returns the database's billing position: the latest last_round_time
+// across tenants, the zero time when no tenant has rounded. Startup passes it to the
+// rule-revision check, because a revision may not change spans this database already
+// billed, and the last round is what already billed means. A tenant whose round is
+// still NULL has billed nothing and does not count.
+func (s *Store) LastRoundTime(ctx context.Context) (time.Time, error) {
+	var lastRound *time.Time
+	if err := s.pool.QueryRow(
+		ctx, `SELECT max(last_round_time) FROM progress`,
+	).Scan(&lastRound); err != nil {
+		return time.Time{}, fmt.Errorf("reading the last round time: %w", err)
+	}
+	if lastRound == nil {
+		return time.Time{}, nil
+	}
+	return *lastRound, nil
+}
+
 // ResourceFacts returns one resource's facts ordered by field and time.
 func ResourceFacts(
 	ctx context.Context, q Querier, tenant, resourceType, resourceID string,
@@ -280,9 +357,27 @@ func ResourceFacts(
 
 // TenantResources returns the tenant's resources that have facts.
 func TenantResources(ctx context.Context, q Querier, tenant string) ([]LedgerKey, error) {
+	return resourcesWhere(ctx, q, tenant,
+		`SELECT DISTINCT resource_type, resource_id FROM history WHERE tenant = $1`)
+}
+
+// AllTenantResources returns the tenant's resources that have facts or ledger rows. The
+// first round of a recovery scans these: a ledger rebuilt from heartbeats can hold a
+// resource whose events are gone, and that resource must still be compared, so its
+// unjustified usage is reversed.
+func AllTenantResources(ctx context.Context, q Querier, tenant string) ([]LedgerKey, error) {
+	return resourcesWhere(ctx, q, tenant,
+		`SELECT resource_type, resource_id FROM history WHERE tenant = $1
+		 UNION
+		 SELECT resource_type, resource_id FROM ledger WHERE tenant = $1`)
+}
+
+func resourcesWhere(
+	ctx context.Context, q Querier, tenant, query string,
+) ([]LedgerKey, error) {
 	rows, err := q.Query(
 		ctx,
-		`SELECT DISTINCT resource_type, resource_id FROM history WHERE tenant = $1`,
+		query,
 		tenant,
 	)
 	if err != nil {
@@ -300,9 +395,12 @@ func TenantResources(ctx context.Context, q Querier, tenant string) ([]LedgerKey
 	return resources, rows.Err()
 }
 
-// ResourcesWithNewFacts returns the tenant's resources with a fact written after the given event
-// offset or dated after the given time. Only those resources can have changed usage since the
-// previous round.
+// ResourcesWithNewFacts returns the tenant's resources with a fact written at or after the
+// given event offset or dated at or after the given time. Only those resources can have
+// changed usage since the previous round. Both bounds are inclusive: a round bills the
+// half-open window [last round, now), so a fact dated exactly at the last round time
+// belongs to the next window, and its resource must reach the round after the boundary
+// even though the boundary round consumed the fact and wrote no ledger row for it.
 func ResourcesWithNewFacts(
 	ctx context.Context, q Querier, tenant string, afterOffset int64, afterTime time.Time,
 ) ([]LedgerKey, error) {
@@ -310,7 +408,7 @@ func ResourcesWithNewFacts(
 		ctx,
 		`SELECT DISTINCT resource_type, resource_id
 		 FROM history
-		 WHERE tenant = $1 AND (event_offset > $2 OR since > $3)`,
+		 WHERE tenant = $1 AND (event_offset >= $2 OR since >= $3)`,
 		tenant, afterOffset, afterTime,
 	)
 	if err != nil {
@@ -326,11 +424,6 @@ func ResourcesWithNewFacts(
 		resources = append(resources, key)
 	}
 	return resources, rows.Err()
-}
-
-// LedgerPieces returns the tenant's ledger pieces.
-func (s *Store) LedgerPieces(ctx context.Context, tenant string) ([]LedgerPiece, error) {
-	return LedgerPiecesWhere(ctx, s.pool, tenant, "")
 }
 
 // LedgerPiecesWhere returns the tenant's ledger pieces filtered by an extra SQL condition over
@@ -366,47 +459,12 @@ func LedgerPiecesWhere(
 	return pieces, rows.Err()
 }
 
-// ReplaceLedger replaces the ledger pieces of one meter with the given pieces. A round commits
-// its ledger and its heartbeats together, so the meter it recomputes is written whole.
-func ReplaceLedger(
-	ctx context.Context, q Querier, tenant string, key LedgerKey, pieces []LedgerPiece,
-) error {
-	_, err := q.Exec(
-		ctx,
-		`DELETE FROM ledger
-		 WHERE tenant = $1 AND resource_type = $2 AND resource_id = $3
-		   AND meter = $4 AND component = $5 AND dimensions = $6`,
-		tenant, key.ResourceType, key.ResourceID, key.Meter, key.Component, key.Dimensions,
-	)
-	if err != nil {
-		return fmt.Errorf("clearing ledger of meter %s: %w", key.Meter, err)
-	}
-	if len(pieces) == 0 {
-		return nil
-	}
-	batch := &pgx.Batch{}
-	for _, piece := range pieces {
-		batch.Queue(
-			`INSERT INTO ledger
-			     (tenant, resource_type, resource_id, meter, component, dimensions,
-			      start_time, end_time, quantity_micro)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-			tenant, key.ResourceType, key.ResourceID, key.Meter, key.Component, key.Dimensions,
-			piece.StartTime, piece.EndTime, piece.QuantityMicro,
-		)
-	}
-	if err := q.SendBatch(ctx, batch).Close(); err != nil {
-		return fmt.Errorf("writing ledger of meter %s: %w", key.Meter, err)
-	}
-	return nil
-}
-
 // SyncLedger makes the ledger pieces of one meter equal to the given pieces while touching
 // only the rows that change: a round that extends a meter's tail updates or appends the tail
 // piece instead of rewriting every row the meter already has. Rows that end at or before
 // tailFrom are never deleted: a tail extension owns only the rows after that moment, so the
 // pieces it carries are a tail of the meter's history, not all of it. With a zero tailFrom
-// every row is owned, and the final state is the same as ReplaceLedger's.
+// every row is owned: the pieces replace the meter's whole history.
 func SyncLedger(
 	ctx context.Context, q Querier, tenant string, key LedgerKey, pieces []LedgerPiece,
 	tailFrom time.Time,
@@ -430,7 +488,7 @@ func SyncLedger(
 		)
 	}
 	// Rows whose start no longer appears among the pieces are gone; an empty piece set
-	// removes every owned row, like ReplaceLedger does.
+	// removes every owned row.
 	batch.Queue(
 		`DELETE FROM ledger
 		 WHERE tenant = $1 AND resource_type = $2 AND resource_id = $3

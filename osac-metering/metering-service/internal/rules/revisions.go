@@ -142,13 +142,44 @@ func sortRevisions(revisions []Revision) {
 	})
 }
 
-// CheckStartup validates the revisions the source holds against the revisions metering has
-// used. It fails when metering would silently change past usage: when a revision it has used
-// is missing, when a used revision changed, or when a new revision would take effect in the
-// past while metering already used another revision. It returns every present revision, so the
-// caller records the ones it has not used yet.
+// CheckStartup validates the revisions the source holds against the revisions metering
+// has used. It fails when metering would silently change usage this database already
+// billed: when a revision it has used is missing, when a used revision changed, or
+// when a present revision metering has not used takes effect at or before lastRound.
+// It returns every present revision, so the caller records the ones it has not used
+// yet.
+//
+// lastRound is the database's billing position: the time of the latest round any
+// tenant completed, the zero time when nothing has billed. A revision must not
+// retroactively change spans this database already billed, and already billed is the
+// billing position, not the wall clock. The two move independently: a backup restored
+// after a revision activated has a billing position before the revision, so recording
+// the revision changes no billed span, and catch-up needs it recorded, because the
+// heartbeats on the topic show the backup gap's spans were already billed under it.
+// A revision effective at or before the billing position would reprice spans the
+// database billed under the revision active then, so it refuses.
+//
+// The ConfigMap protections do not make this redundant. Immutable data and denied
+// deletion cover only the ConfigMaps:
+//
+//   - New revisions are freely creatable and nothing else validates them. A new
+//     revision can take effect before its predecessor or change a meter's unit
+//     mid-stream; the ordering and meter-shape checks below reject both.
+//
+//   - The database moves independently of the ConfigMaps. A backup restored after a
+//     revision activated leaves the revision unused with an effective time before
+//     the wall clock; only the billing position says whether recording it is safe,
+//     which is the lastRound rule above.
+//
+//   - The protections themselves can be absent. The admission policy is a deletable
+//     resource, and clusters older than Kubernetes 1.30 have no
+//     ValidatingAdmissionPolicy at all. A recreated ConfigMap with different YAML
+//     would silently change the rules past usage was billed under; the
+//     used-revision checks make that drift loud.
 func CheckStartup(
-	used []database.RuleRevisionRow, present []Revision, now func() time.Time,
+	used []database.RuleRevisionRow,
+	present []Revision,
+	lastRound time.Time,
 ) ([]Revision, error) {
 	if len(present) == 0 {
 		return nil, fmt.Errorf("no rule revisions found; create %s0001 first", NamePrefix)
@@ -183,15 +214,20 @@ func CheckStartup(
 			return nil, fmt.Errorf("revision %s changed after metering used it", number)
 		}
 	}
+	// A revision metering has not used must not reach behind the billing position:
+	// recording it would reprice spans the database already billed. A fresh
+	// database's zero billing position accepts any first revision, because the epoch
+	// is after the zero time, so no used-revision guard is needed here.
 	for _, revision := range present {
 		if _, isUsed := usedSet[revision.Number]; isUsed {
 			continue
 		}
-		if len(used) > 0 && !revision.EffectiveAt.After(now()) {
+		if !revision.EffectiveAt.After(lastRound) {
 			return nil, fmt.Errorf(
-				"revision %s takes effect at %s, which is in the past; "+
-					"recording it now would change past usage",
-				revision.Number, revision.EffectiveAt,
+				"revision %s takes effect at %s, which is not after this database's "+
+					"last round %s: recording it would change usage this database "+
+					"already billed",
+				revision.Number, revision.EffectiveAt, lastRound,
 			)
 		}
 	}

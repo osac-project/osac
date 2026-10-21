@@ -16,7 +16,12 @@ import (
 )
 
 type ConnectionConfig struct {
-	Brokers      string
+	Brokers string
+	// TLSEnabled turns TLS on, like the adapters' KAFKA_TLS_ENABLED: the deployment
+	// defaults it to true, and a plaintext broker needs an explicit false. An empty
+	// TLSCACert with TLS on trusts the system root store, for brokers whose
+	// certificate a public authority signed.
+	TLSEnabled   bool
 	TLSCACert    string
 	SASLUser     string
 	SASLPassFile string
@@ -30,7 +35,7 @@ func baseConfig(cfg ConnectionConfig) (*sarama.Config, error) {
 	// A metadata refresh on a topic that does not exist must not create it: the broker
 	// default retention would apply and the recovery window would silently shrink.
 	sc.Metadata.AllowAutoTopicCreation = false
-	if err := ConfigureTLS(sc, cfg.TLSCACert); err != nil {
+	if err := ConfigureTLS(sc, cfg.TLSEnabled, cfg.TLSCACert); err != nil {
 		return nil, err
 	}
 	if err := ConfigureSASL(sc, cfg.SASLUser, cfg.SASLPassFile); err != nil {
@@ -121,18 +126,33 @@ func ensureTopic(admin topicAdmin, topic string, retentionMS string) error {
 	}
 	switch descriptions[0].Err {
 	case sarama.ErrNoError:
+		// Catch-up and the relay track one offset on partition 0, so a topic with
+		// more partitions silently breaks the billing model. Refuse it, loudly.
+		if len(descriptions[0].Partitions) != 1 {
+			return fmt.Errorf(
+				"topic '%s' has %d partitions, want 1: metering reads a single partition; "+
+					"recreate the topic with one partition",
+				topic, len(descriptions[0].Partitions),
+			)
+		}
 		return ensureRetention(admin, topic, retentionMS)
 	case sarama.ErrUnknownTopicOrPartition:
 	default:
 		return fmt.Errorf("describing topic '%s': %w", topic, descriptions[0].Err)
 	}
 	cleanupPolicy := "delete"
+	retentionBytes := "-1"
+	// The topic is the recovery source, so the entries pin the whole retention
+	// contract: cleanup.policy=delete keeps records a compacting broker default
+	// would discard, and retention.bytes=-1 keeps a broker size limit from
+	// cutting the configured window short.
 	detail := &sarama.TopicDetail{
 		NumPartitions:     1,
 		ReplicationFactor: -1, // the broker default, like the event topics
 		ConfigEntries: map[string]*string{
-			"retention.ms":   &retentionMS,
-			"cleanup.policy": &cleanupPolicy,
+			"retention.ms":    &retentionMS,
+			"retention.bytes": &retentionBytes,
+			"cleanup.policy":  &cleanupPolicy,
 		},
 	}
 	if err := admin.CreateTopic(topic, detail, false); err != nil && !errors.Is(err, sarama.ErrTopicAlreadyExists) {
@@ -178,7 +198,12 @@ func EventTenantsOf(names []string) []string {
 	return tenants
 }
 
-func ConfigureTLS(sc *sarama.Config, caCertPath string) error {
+// ConfigureTLS enables TLS when enabled is set. An empty CA path trusts the system
+// root store; a path loads a private authority's certificate.
+func ConfigureTLS(sc *sarama.Config, enabled bool, caCertPath string) error {
+	if !enabled {
+		return nil
+	}
 	sc.Net.TLS.Enable = true
 	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
 	if caCertPath != "" {
@@ -196,7 +221,12 @@ func ConfigureTLS(sc *sarama.Config, caCertPath string) error {
 	return nil
 }
 
+// ConfigureSASL enables SCRAM-SHA-512 SASL with the password read from the file. Empty
+// user and file leave SASL off, for brokers that take plaintext connections.
 func ConfigureSASL(sc *sarama.Config, user, passFile string) error {
+	if user == "" && passFile == "" {
+		return nil
+	}
 	password, err := os.ReadFile(passFile)
 	if err != nil {
 		return fmt.Errorf("reading SASL password file %s: %w", passFile, err)
@@ -229,13 +259,21 @@ func SplitAndTrim(s, sep string) []string {
 // ensureRetention checks that a topic the service did not create carries the configured
 // retention. A topic created out of band gets the broker default, and the recovery
 // window silently shrinks to that default. The service refuses when it reads a
-// different retention. When the config cannot be read at all, it continues: the caller
-// decides on failures.
+// different retention, and when the broker denies the read: without the
+// DescribeConfigs permission the check can never run, and a denied read is a
+// deployment misconfiguration someone must fix. Other read failures continue:
+// an unreachable broker is an outage, not a signal about the topic.
 func ensureRetention(admin topicAdmin, topic, retentionMS string) error {
 	entries, err := admin.DescribeConfig(sarama.ConfigResource{
 		Type: sarama.TopicResource, Name: topic,
 	})
 	if err != nil {
+		if errors.Is(err, sarama.ErrTopicAuthorizationFailed) {
+			return fmt.Errorf(
+				"cannot verify the retention of topic '%s': %w: grant DescribeConfigs on topics to this service's Kafka user",
+				topic, err,
+			)
+		}
 		return nil
 	}
 	for _, entry := range entries {

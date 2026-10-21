@@ -11,6 +11,7 @@ package fold
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -149,7 +150,9 @@ func TestOutOfRangeOffsetLogsTheSkippedRange(t *testing.T) {
 	cancel()
 	select {
 	case err := <-done:
-		if err != nil && err != context.Canceled {
+		// Cancellation can land mid-query, so the fold may return the context
+		// error wrapped by the query it interrupted.
+		if err != nil && !errors.Is(err, context.Canceled) {
 			t.Fatalf("fold run: %v", err)
 		}
 	case <-time.After(10 * time.Second):

@@ -53,6 +53,10 @@ CREATE INDEX IF NOT EXISTS history_by_offset
 -- run slightly ahead of the round clock.
 CREATE INDEX IF NOT EXISTS history_by_since
     ON history (tenant, since);
+-- Finds the resources a changed root owns; without it every root change scans the tenant's
+-- whole history.
+CREATE INDEX IF NOT EXISTS history_by_owner
+    ON history (tenant, field, value);
 
 -- What metering has already billed. One row per committed usage piece: the round compares
 -- the usage it expects against this table and sends only the difference. Rebuildable from
@@ -114,13 +118,26 @@ CREATE TABLE IF NOT EXISTS progress (
                                                              -- round had folded
 );
 
--- Which rule revisions metering has billed under, so a revision that first loads after
--- its effective time refuses to start rather than bill a partial past.
+-- Which rule revisions metering has billed under, so a revision that would reprice
+-- spans this database already billed refuses to start rather than change them.
 --
 -- Example: revision 0001, effective since the epoch, with its meters as YAML.
 CREATE TABLE IF NOT EXISTS rule_revisions (
     revision     TEXT        PRIMARY KEY,
     effective_at TIMESTAMPTZ NOT NULL,
     meters_yaml  TEXT        NOT NULL
+);
+
+-- The heartbeat ids catch-up applied during the recovery in progress, so a copy the
+-- relay resent after a crash mid-replay counts once. The comparison clears the table
+-- when its round commits: from then on the last round time alone separates copies,
+-- because every heartbeat on the topic is from a round at or before it.
+--
+-- Example: during acme's rebuild, the heartbeat 'osac-heartbeat-abc123' was applied;
+-- a resent copy of it is skipped wherever it appears.
+CREATE TABLE IF NOT EXISTS replayed_heartbeats (
+    tenant TEXT NOT NULL,
+    id     TEXT NOT NULL,
+    PRIMARY KEY (tenant, id)
 );
 `

@@ -74,6 +74,7 @@ func configFromEnv() *config {
 		healthAddr: envOrDefault("HEALTH_ADDR", ":8080"),
 		kafka: kafkapkg.ConnectionConfig{
 			Brokers:      os.Getenv("KAFKA_BROKERS"),
+			TLSEnabled:   os.Getenv("KAFKA_TLS_ENABLED") != "false",
 			TLSCACert:    os.Getenv("KAFKA_TLS_CA_CERT"),
 			SASLUser:     os.Getenv("KAFKA_SASL_USERNAME"),
 			SASLPassFile: os.Getenv("KAFKA_SASL_PASSWORD_FILE"),

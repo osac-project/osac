@@ -13,6 +13,9 @@ package testenv
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -24,6 +27,7 @@ import (
 
 	"github.com/osac-project/osac-metering/internal/database"
 	"github.com/osac-project/osac-metering/internal/kafkatest"
+	"github.com/osac-project/osac-metering/internal/rules"
 	"github.com/osac-project/osac-metering/internal/topics"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -130,6 +134,37 @@ func NewProducer(t *testing.T) sarama.SyncProducer {
 	return producer
 }
 
+// DefaultMetersYAML returns the default meters exactly as the chart ships them, so
+// tests bill under what an installation gets and the two can never drift.
+func DefaultMetersYAML(t *testing.T) string {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate the testenv source file")
+	}
+	chartPath := filepath.Join(
+		filepath.Dir(thisFile), "..", "..", "..", "charts", "osac-metering", "rules", "0001-meters.yaml",
+	)
+	content, err := os.ReadFile(chartPath)
+	if err != nil {
+		t.Fatalf("reading the chart's default meters: %v", err)
+	}
+	return string(content)
+}
+
+// DefaultRevision parses the chart's default meters as revision 0001, effective from
+// the epoch.
+func DefaultRevision(t *testing.T) rules.Revision {
+	t.Helper()
+	revision, err := rules.Parse(
+		rules.NamePrefix+"0001", "1970-01-01T00:00:00Z", DefaultMetersYAML(t),
+	)
+	if err != nil {
+		t.Fatalf("parsing the chart's default meters: %v", err)
+	}
+	return revision
+}
+
 // ProduceEvents writes events to the tenant's event topic and returns the record count.
 func ProduceEvents(t *testing.T, tenant string, events []*privatev1.Event) int {
 	t.Helper()
@@ -198,13 +233,30 @@ func VMEvent(
 	runningType string,
 	typeSince time.Time,
 ) *privatev1.Event {
+	return VMEventOf("vm-7", id, typ, timestamp, creation, project, state, stateSince, runningType, typeSince)
+}
+
+// VMEventOf builds a compute event like VMEvent for the given compute instance, so a
+// test can bill several VMs of one tenant side by side.
+func VMEventOf(
+	vmID string,
+	id string,
+	typ privatev1.EventType,
+	timestamp time.Time,
+	creation time.Time,
+	project string,
+	state string,
+	stateSince time.Time,
+	runningType string,
+	typeSince time.Time,
+) *privatev1.Event {
 	return &privatev1.Event{
 		Id:        id,
 		Type:      typ,
 		Timestamp: timestamppb.New(timestamp),
 		Payload: &privatev1.Event_ComputeInstance{
 			ComputeInstance: &privatev1.ComputeInstance{
-				Id: "vm-7",
+				Id: vmID,
 				Metadata: &privatev1.Metadata{
 					Tenant:            "acme",
 					Project:           project,

@@ -35,22 +35,18 @@ const PollWait = 200 * time.Millisecond
 // tenant's stored event offset and never creates topics.
 type Fold struct {
 	store     *database.Store
-	extractor *Extractor
+	extractor *FactExtractor
 	consumer  sarama.Consumer
 	logger    logr.Logger
 }
 
 // New creates a fold on an open sarama consumer.
-func New(
-	store *database.Store, consumer sarama.Consumer, logger logr.Logger,
-) (*Fold, error) {
-	extractor, err := NewExtractor()
+func New(store *database.Store, consumer sarama.Consumer, logger logr.Logger) (*Fold, error) {
+	extractor, err := NewFactExtractor()
 	if err != nil {
 		return nil, err
 	}
-	return &Fold{
-		store: store, extractor: extractor, consumer: consumer, logger: logger,
-	}, nil
+	return &Fold{store: store, extractor: extractor, consumer: consumer, logger: logger}, nil
 }
 
 // RunTenant folds the tenant's events until the context ends. Each transaction takes the
@@ -60,7 +56,7 @@ func (f *Fold) RunTenant(ctx context.Context, tenant string) error {
 	if err := f.store.EnsureProgress(ctx, tenant); err != nil {
 		return err
 	}
-	topic := eventsTopic(tenant)
+	topic := topics.Events(tenant)
 
 	for {
 		if ctx.Err() != nil {
@@ -216,10 +212,8 @@ func (f *Fold) logSkipped(tenant string, skippedFrom, oldest int64) {
 	f.logger.Error(nil,
 		"Kafka retention deleted events before the stored offset; they are gone from history "+
 			"and their usage cannot be billed",
-		"tenant", tenant, "topic", eventsTopic(tenant),
+		"tenant", tenant, "topic", topics.Events(tenant),
 		"skippedFromOffset", skippedFrom, "oldestRetainedOffset", oldest,
 		"skippedEvents", oldest-skippedFrom,
 	)
 }
-
-func eventsTopic(tenant string) string { return topics.Events(tenant) }

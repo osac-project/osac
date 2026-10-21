@@ -50,7 +50,7 @@
   billable_when:
     states: [ALLOCATED, DELETING]
     turns_billable_once: [ALLOCATED]
-  dimensions: [pool, ip_family, attribution, attached]
+  dimensions: [pool, ip_family, attached]
 
 - resource: NATGateway
   meter: allocation

@@ -15,9 +15,9 @@ specific language governing permissions and limitations under the License.
 //
 // The flow, top to bottom:
 //
-//	Run          lists tenants every 30 seconds and reconciles them.
-//	reconcile    starts loops for new tenants, stops loops for gone ones.
-//	runTenant    runs the fold, the round, and the relay until the tenant is stopped.
+//	Run            lists tenants every 30 seconds and syncs the running set.
+//	syncTenants    starts loops for new tenants, stops loops for gone ones.
+//	runTenantLoops runs the fold, the round, and the relay until the tenant stops.
 package service
 
 import (
@@ -74,15 +74,19 @@ type Service struct {
 	lock    sync.Mutex
 	tenants map[string]*tenantLoops
 
+	// draining holds the loops a restart evicted but that have not stopped yet:
+	// they still use the shared Kafka clients, so shutdown joins them before
+	// closing the clients. Guarded by lock.
+	draining []*tenantLoops
+
+	// startFailed holds listed tenants whose loops could not start, so readiness
+	// fails while they have no billing loops. Guarded by lock.
+	startFailed map[string]bool
+
 	// missing counts the passes a gone tenant has been gone. Guarded by lock.
 	missing map[string]int
 
 	stopping bool
-
-	// The three hooks below are replaced by tests.
-	listTenants  func(ctx context.Context) ([]string, error)
-	ensureTopics func(ctx context.Context, tenant string) error
-	runTenant    func(ctx context.Context, tenant string, loops *tenantLoops)
 }
 
 // tenantLoops is one tenant's running loops.
@@ -96,7 +100,8 @@ func (l *tenantLoops) fail()           { l.failed.Store(true) }
 func (l *tenantLoops) hasFailed() bool { return l.failed.Load() }
 
 // Healthy reports whether every tenant's loops are running. A tenant whose loops exited
-// with an error makes the pod not ready until a later pass restarts it.
+// with an error makes the pod not ready until a later pass restarts it, and so does a
+// discovered tenant that could not start: it has no billing loops at all.
 func (s *Service) Healthy() bool {
 	s.lock.Lock()
 	defer s.lock.Unlock()
@@ -105,7 +110,7 @@ func (s *Service) Healthy() bool {
 			return false
 		}
 	}
-	return true
+	return len(s.startFailed) == 0
 }
 
 // New loads the rule revisions, records the ones metering will bill under, and connects to
@@ -119,7 +124,14 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading recorded rule revisions: %w", err)
 	}
-	approved, err := rules.CheckStartup(used, present, time.Now)
+	// The billing position decides which revisions metering may record, not the wall
+	// clock: a database restored from a backup older than a revision must record it,
+	// because the rounds after the backup were billed under it.
+	lastRound, err := cfg.Store.LastRoundTime(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("reading the database's last round: %w", err)
+	}
+	approved, err := rules.CheckStartup(used, present, lastRound)
 	if err != nil {
 		return nil, fmt.Errorf("checking rule revisions: %w", err)
 	}
@@ -163,33 +175,33 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 		return nil, fmt.Errorf("creating kafka producer: %w", err)
 	}
 
-	service := &Service{
-		cfg:        cfg,
-		client:     client,
-		consumer:   consumer,
-		producer:   producer,
-		calculator: calculator,
-		tenants:    map[string]*tenantLoops{},
-		missing:    map[string]int{},
-	}
-	service.listTenants = func(ctx context.Context) ([]string, error) {
-		return kafkaconn.ListEventTenants(ctx, cfg.Kafka)
-	}
-	service.ensureTopics = func(ctx context.Context, tenant string) error {
-		return kafkaconn.EnsureTenantTopics(cfg.Kafka, tenant, cfg.TopicRetentionMS)
-	}
-	service.runTenant = service.runTenantLoops
-	return service, nil
+	return &Service{
+		cfg:         cfg,
+		client:      client,
+		consumer:    consumer,
+		producer:    producer,
+		calculator:  calculator,
+		tenants:     map[string]*tenantLoops{},
+		startFailed: map[string]bool{},
+		missing:     map[string]int{},
+	}, nil
 }
 
-// Run reconciles tenants until the context ends.
+// Run lists the tenants every 30 seconds and syncs the running set with the list
+// until the context ends. A tenant that onboards appears on the next pass.
 func (s *Service) Run(ctx context.Context) error {
 	defer s.stopAll()
 
 	ticker := time.NewTicker(DiscoverInterval)
 	defer ticker.Stop()
 	for {
-		s.reconcile(ctx)
+		tenants, err := kafkaconn.ListEventTenants(ctx, s.cfg.Kafka)
+		if err != nil {
+			// A failed listing must not stop the service: the next pass lists again.
+			s.cfg.Logger.Error(err, "listing tenant event topics; retrying on the next pass")
+		} else {
+			s.syncTenants(ctx, tenants)
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -198,13 +210,23 @@ func (s *Service) Run(ctx context.Context) error {
 	}
 }
 
-// stopAll cancels every tenant's loops and waits for them, then closes the Kafka clients.
+// stopAll cancels every tenant's loops and waits for them, then closes the Kafka
+// clients. The waiting covers the loops a restart evicted but that are still
+// stopping, so no loop is using a client when it closes. A second call does
+// nothing, so shutdown never closes the clients twice.
 func (s *Service) stopAll() {
 	s.lock.Lock()
+	if s.stopping {
+		s.lock.Unlock()
+		return
+	}
 	s.stopping = true
-	stopped := make([]chan struct{}, 0, len(s.tenants))
+	stopped := make([]chan struct{}, 0, len(s.tenants)+len(s.draining))
 	for _, loops := range s.tenants {
 		loops.cancel()
+		stopped = append(stopped, loops.stopped)
+	}
+	for _, loops := range s.draining {
 		stopped = append(stopped, loops.stopped)
 	}
 	s.lock.Unlock()
@@ -216,15 +238,9 @@ func (s *Service) stopAll() {
 	_ = s.client.Close()
 }
 
-// reconcile lists the tenants and brings the running set in line with the list: new
-// tenants get loops, gone tenants lose them, failed tenants get fresh ones.
-func (s *Service) reconcile(ctx context.Context) {
-	tenants, err := s.listTenants(ctx)
-	if err != nil {
-		// A failed listing must not stop the service: the next pass lists again.
-		s.cfg.Logger.Error(err, "listing tenant event topics; retrying on the next pass")
-		return
-	}
+// syncTenants brings the running set in line with the listed tenants: new tenants
+// get loops, gone tenants lose them, failed tenants get fresh ones.
+func (s *Service) syncTenants(ctx context.Context, tenants []string) {
 	live := map[string]bool{}
 	for _, tenant := range tenants {
 		live[tenant] = true
@@ -238,35 +254,65 @@ func (s *Service) reconcile(ctx context.Context) {
 // startNew starts loops for every listed tenant that has none.
 func (s *Service) startNew(ctx context.Context, live map[string]bool) {
 	for tenant := range live {
-		s.lock.Lock()
-		_, running := s.tenants[tenant]
-		s.lock.Unlock()
-		if running {
-			continue
-		}
 		// The heartbeat and dead-letter topics are metering's own infrastructure:
 		// without them the loops cannot produce or deliver, so the tenant waits for
 		// the next pass instead of starting half-way.
-		if err := s.ensureTopics(ctx, tenant); err != nil {
+		if err := kafkaconn.EnsureTenantTopics(s.cfg.Kafka, tenant, s.cfg.TopicRetentionMS); err != nil {
 			s.cfg.Logger.Error(err, "ensuring tenant topics; retrying on the next pass", "tenant", tenant)
+			// Readiness must fail while a discovered tenant has no loops at all.
+			s.lock.Lock()
+			s.startFailed[tenant] = true
+			s.lock.Unlock()
 			continue
 		}
-		s.start(ctx, tenant)
+		tenantCtx, cancel := context.WithCancel(ctx)
+		loops := &tenantLoops{cancel: cancel, stopped: make(chan struct{})}
+		s.lock.Lock()
+		_, running := s.tenants[tenant]
+		if !running {
+			s.tenants[tenant] = loops
+		}
+		delete(s.startFailed, tenant)
+		s.lock.Unlock()
+		if running {
+			cancel()
+			continue
+		}
+		go s.runTenantLoops(tenantCtx, tenant, loops)
+		s.cfg.Logger.Info("tenant started", "tenant", tenant)
 	}
 }
 
 // restartFailed stops the loops of a listed tenant whose loops failed, so startNew starts
-// fresh ones on the same pass.
+// fresh ones on the same pass. The evicted loops may still be finishing in-flight work on
+// the shared Kafka clients, so they move to draining, which shutdown joins before closing
+// the clients.
 func (s *Service) restartFailed(live map[string]bool) {
+	s.lock.Lock()
+	s.pruneDrained()
 	for tenant := range live {
-		s.lock.Lock()
 		loops, running := s.tenants[tenant]
 		if running && loops.hasFailed() {
 			loops.cancel()
 			delete(s.tenants, tenant)
+			s.draining = append(s.draining, loops)
 		}
-		s.lock.Unlock()
 	}
+	s.lock.Unlock()
+}
+
+// pruneDrained drops the evicted loops that have stopped, so draining cannot grow without
+// bound. Callers hold the lock.
+func (s *Service) pruneDrained() {
+	kept := s.draining[:0]
+	for _, loops := range s.draining {
+		select {
+		case <-loops.stopped:
+		default:
+			kept = append(kept, loops)
+		}
+	}
+	s.draining = kept
 }
 
 // stopGone stops the loops of a tenant whose event topic is gone and deletes its rows.
@@ -274,7 +320,6 @@ func (s *Service) restartFailed(live map[string]bool) {
 // a pass that sees the tenant again resets its count.
 func (s *Service) stopGone(live map[string]bool) {
 	s.lock.Lock()
-	var gone []string
 	for tenant, loops := range s.tenants {
 		if s.stopping {
 			continue
@@ -289,9 +334,15 @@ func (s *Service) stopGone(live map[string]bool) {
 		}
 		delete(s.tenants, tenant)
 		delete(s.missing, tenant)
-		gone = append(gone, tenant)
 		loops.cancel()
 		go s.deleteRows(tenant, loops)
+	}
+	// A listed tenant that could not start and then left the listing no longer holds
+	// readiness down: it is gone, not broken.
+	for tenant := range s.startFailed {
+		if !live[tenant] {
+			delete(s.startFailed, tenant)
+		}
 	}
 	s.lock.Unlock()
 }
@@ -301,19 +352,9 @@ func (s *Service) deleteRows(tenant string, loops *tenantLoops) {
 	<-loops.stopped
 	if err := s.cfg.Store.DeleteTenantRows(context.Background(), tenant); err != nil {
 		s.cfg.Logger.Error(err, "deleting rows of a tenant whose topics are gone", "tenant", tenant)
+		return
 	}
 	s.cfg.Logger.Info("tenant stopped; rows deleted", "tenant", tenant)
-}
-
-// start registers a tenant's loops and runs them in the background.
-func (s *Service) start(ctx context.Context, tenant string) {
-	tenantCtx, cancel := context.WithCancel(ctx)
-	loops := &tenantLoops{cancel: cancel, stopped: make(chan struct{})}
-	s.lock.Lock()
-	s.tenants[tenant] = loops
-	s.lock.Unlock()
-	go s.runTenant(tenantCtx, tenant, loops)
-	s.cfg.Logger.Info("tenant started", "tenant", tenant)
 }
 
 // runTenantLoops runs one tenant's fold, round, and relay until one of them fails or the

@@ -13,7 +13,11 @@ compliance with the License. You may obtain a copy of the License at
 package rules
 
 import (
+	"errors"
 	"fmt"
+	"io"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -110,6 +114,14 @@ func Parse(name, effectiveAtText, metersYAML string) (Revision, error) {
 	if err := decoder.Decode(&meters); err != nil {
 		return Revision{}, fmt.Errorf("revision %s has invalid meters: %w", number, err)
 	}
+	// A second document would load as the first alone and silently drop its meters, so
+	// a revision must hold exactly one document.
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return Revision{}, fmt.Errorf(
+			"revision %s has a second YAML document; only one meters document is allowed", number,
+		)
+	}
 	revision := Revision{
 		Name: name, Number: number, EffectiveAt: effectiveAt.UTC(),
 		Meters: meters, MetersYAML: metersYAML,
@@ -129,7 +141,7 @@ func (r Revision) validate() error {
 	}
 	byName := make(map[string]metering.Resource, len(resources))
 	for _, resource := range resources {
-		short := shortMessageName(string(resource.Message))
+		short := metering.ShortName(string(resource.Message))
 		byName[short] = resource
 	}
 
@@ -158,9 +170,6 @@ func (r Revision) validate() error {
 		tracked := map[string]bool{}
 		for _, field := range resource.Fields {
 			tracked[field.Path] = true
-		}
-		for _, extra := range extraFields[meter.Resource] {
-			tracked[extra] = true
 		}
 
 		if len(meter.Billable.States) == 0 {
@@ -200,7 +209,13 @@ func (r Revision) validate() error {
 				where, meter.Billable.TurnsBillableOnceFrom,
 			)
 		}
-		for _, condition := range sortedKeys(meter.Billable.Fields) {
+		for _, condition := range slices.Sorted(maps.Keys(meter.Billable.Fields)) {
+			if computedDimensions[condition] {
+				return fmt.Errorf(
+					"%s conditions on field %q, which is computed and cannot be a condition",
+					where, condition,
+				)
+			}
 			path, known := DimensionPath(meter.Resource, condition)
 			if !known || !tracked[path] {
 				return fmt.Errorf(
@@ -226,12 +241,18 @@ func (r Revision) validate() error {
 		}
 	}
 
+	// The registry's ownership edges: which resource type owns which, read through which
+	// field.
+	owners := metering.Owners(resources)
+
 	// A resource type that owns others gates their billing, so every meter of that type
 	// must confirm on the same states: an ambiguous gate is a billing bug, and the
 	// calculator cannot pick one.
-	// Every meter of a root type must confirm on the same states: an ambiguous gate
-	// is a billing bug, and the calculator cannot pick one.
-	for rootType := range ownedRoots(resources) {
+	roots := map[string]bool{}
+	for _, spec := range owners {
+		roots[spec.Resource] = true
+	}
+	for rootType := range roots {
 		seen := false
 		var shared []string
 		for _, meter := range r.Meters {
@@ -255,21 +276,13 @@ func (r Revision) validate() error {
 
 	// A revision that bills an owned resource through inheritance must also define the
 	// gate its root passes down, or the owned resource would bill unconditionally.
-	owned := map[string]string{}
-	for _, resource := range resources {
-		for _, field := range resource.Fields {
-			if field.OwnerResource != "" {
-				owned[shortMessageName(string(resource.Message))] = field.OwnerResource
-			}
-		}
-	}
-	for resourceType, rootType := range owned {
+	for resourceType, spec := range owners {
 		if !billsInherited(resourceType, r.Meters) {
 			continue
 		}
 		hasRootMeter := false
 		for _, meter := range r.Meters {
-			if meter.Resource == rootType {
+			if meter.Resource == spec.Resource {
 				hasRootMeter = true
 				break
 			}
@@ -278,32 +291,11 @@ func (r Revision) validate() error {
 			return fmt.Errorf(
 				"revision %s bills %s, which %s owns, but defines no meters for %s to "+
 					"provide the inherited gate",
-				r.Number, resourceType, rootType, rootType,
+				r.Number, resourceType, spec.Resource, spec.Resource,
 			)
 		}
 	}
 	return nil
-}
-
-// ownedRoots returns the resource types that own others.
-func ownedRoots(resources []metering.Resource) map[string]bool {
-	roots := map[string]bool{}
-	for _, resource := range resources {
-		for _, field := range resource.Fields {
-			if field.OwnerResource != "" {
-				roots[field.OwnerResource] = true
-			}
-		}
-	}
-	return roots
-}
-
-// shortMessageName strips the package of a full proto message name.
-func shortMessageName(full string) string {
-	if index := strings.LastIndex(full, "."); index >= 0 {
-		return full[index+1:]
-	}
-	return full
 }
 
 // stateNames returns the state names a resource can have, in the short form rules and history
@@ -324,7 +316,7 @@ func stateNames(resource metering.Resource) (map[string]bool, error) {
 	if stateField.Kind() != protoreflect.EnumKind {
 		return nil, fmt.Errorf("status.state of %s is not an enum", resource.Message)
 	}
-	prefix := enumValuePrefix(stateField.Enum())
+	prefix := metering.EnumValuePrefix(stateField.Enum())
 	names := map[string]bool{}
 	values := stateField.Enum().Values()
 	for i := range values.Len() {
@@ -353,35 +345,6 @@ func walkTo(
 		current = field.Message()
 	}
 	return nil, nil, fmt.Errorf("empty field path")
-}
-
-// enumValuePrefix returns the longest prefix ending in an underscore that every value of the
-// enum starts with, or an empty string when the values share none.
-func enumValuePrefix(descriptor protoreflect.EnumDescriptor) string {
-	values := descriptor.Values()
-	prefix := string(values.Get(0).Name())
-	for i := 1; i < values.Len(); i++ {
-		for !strings.HasPrefix(string(values.Get(i).Name()), prefix) {
-			prefix = prefix[:len(prefix)-1]
-		}
-	}
-	if index := strings.LastIndex(prefix, "_"); index >= 0 {
-		return prefix[:index+1]
-	}
-	return ""
-}
-
-func sortedKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for key := range m {
-		keys = append(keys, key)
-	}
-	for i := 1; i < len(keys); i++ {
-		for j := i; j > 0 && keys[j] < keys[j-1]; j-- {
-			keys[j], keys[j-1] = keys[j-1], keys[j]
-		}
-	}
-	return keys
 }
 
 // billsInherited reports whether the revision bills the owned resource through the

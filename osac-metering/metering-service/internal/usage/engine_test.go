@@ -11,12 +11,15 @@ package usage_test
 
 import (
 	"fmt"
+	"math"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/osac-project/osac-metering/internal/database"
 	"github.com/osac-project/osac-metering/internal/rules"
+	"github.com/osac-project/osac-metering/internal/testenv"
 	"github.com/osac-project/osac-metering/internal/usage"
 )
 
@@ -24,10 +27,7 @@ var base = time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC)
 
 func defaultCalculator(t *testing.T) *usage.Calculator {
 	t.Helper()
-	revision, err := rules.DefaultRevision()
-	if err != nil {
-		t.Fatalf("parsing default revision: %v", err)
-	}
+	revision := testenv.DefaultRevision(t)
 	owners, err := usage.RegistryOwners()
 	if err != nil {
 		t.Fatalf("reading owners: %v", err)
@@ -57,11 +57,21 @@ func state(resource, id string, since time.Time, value string) database.Fact {
 func summarize(pieces []usage.Piece) []string {
 	var lines []string
 	for _, piece := range pieces {
+		quantity, err := piece.QuantityMicro()
+		if err != nil {
+			lines = append(lines, fmt.Sprintf(
+				"%s %s %s..%s rate=%d micro=ERROR(%v) pending=%v dims=%s",
+				piece.Key.ResourceType, piece.Key.Meter,
+				piece.StartTime.Format("15:04:05.000000"), piece.EndTime.Format("15:04:05.000000"),
+				piece.RateMicro, err, piece.Pending, piece.Key.Dimensions,
+			))
+			continue
+		}
 		lines = append(lines, fmt.Sprintf(
 			"%s %s %s..%s rate=%d micro=%d pending=%v dims=%s",
 			piece.Key.ResourceType, piece.Key.Meter,
 			piece.StartTime.Format("15:04:05.000000"), piece.EndTime.Format("15:04:05.000000"),
-			piece.RateMicro, piece.QuantityMicro(), piece.Pending, piece.Key.Dimensions,
+			piece.RateMicro, quantity, piece.Pending, piece.Key.Dimensions,
 		))
 	}
 	return lines
@@ -85,11 +95,42 @@ func expectPieces(
 // copy: a caller that reuses the quantity must not see its sign flip.
 func TestRationalToMicroLeavesItsArgumentAlone(t *testing.T) {
 	quantity := big.NewRat(-3, 2)
-	if got := usage.RationalToMicro(quantity); got != -2 {
+	got, err := usage.RationalToMicro(quantity)
+	if err != nil {
+		t.Fatalf("rounding -1.5 micro units: %v", err)
+	}
+	if got != -2 {
 		t.Errorf("-1.5 micro units must round to -2, got %d", got)
 	}
 	if quantity.Cmp(big.NewRat(-3, 2)) != 0 {
 		t.Errorf("RationalToMicro mutated its argument to %s", quantity.RatString())
+	}
+}
+
+// TestRationalToMicroRejectsUnrepresentableQuantities checks the overflow guard: a value
+// beyond int64 micro units must return an error, because big.Int.Int64 is undefined there
+// and converting anyway wraps, which bills negative usage for a positive allocation.
+func TestRationalToMicroRejectsUnrepresentableQuantities(t *testing.T) {
+	// 200,000,000 GiB-seconds over one day, in micro units.
+	for _, text := range []string{
+		"10080000000000000000", // 1.008e19, past math.MaxInt64
+		"-10080000000000000000",
+		"9223372036854775808", // math.MaxInt64 + 1
+	} {
+		quantity, ok := new(big.Rat).SetString(text)
+		if !ok {
+			t.Fatalf("%q is not a number", text)
+		}
+		if got, err := usage.RationalToMicro(quantity); err == nil {
+			t.Errorf("RationalToMicro(%s) = %d, want an error: the value overflows micro units",
+				text, got)
+		}
+	}
+	// The largest representable magnitude still rounds.
+	quantity, _ := new(big.Rat).SetString("9223372036854775807")
+	if got, err := usage.RationalToMicro(quantity); err != nil || got != math.MaxInt64 {
+		t.Errorf("RationalToMicro(MaxInt64 micro units) = %d, %v; want %d, no error",
+			got, err, int64(math.MaxInt64))
 	}
 }
 
@@ -119,6 +160,16 @@ func join(lines []string) string {
 		out += line + "\n"
 	}
 	return out
+}
+
+// quantityMicro reads a piece's quantity, failing the test on an unrepresentable value.
+func quantityMicro(t *testing.T, piece usage.Piece) int64 {
+	t.Helper()
+	quantity, err := piece.QuantityMicro()
+	if err != nil {
+		t.Fatalf("reading quantity: %v", err)
+	}
+	return quantity
 }
 
 func at(offset time.Duration) time.Time { return base.Add(offset) }
@@ -401,13 +452,49 @@ func TestExternalIPAllocationDimensions(t *testing.T) {
 		// The tracked address, from which the family derives.
 		fact("ExternalIP", "ip-1", "status.address", at(time.Minute), "2001:db8::1"),
 		fact("ExternalIP", "ip-1", "status.attached", at(time.Minute), "true"),
-		fact("ExternalIP", "ip-1", "status.attribution", at(time.Minute), "compute_instance/vm-7/API"),
 	}
 	expectPieces(t, calculator, facts, at(2*time.Minute), []string{
 		"ExternalIP allocation 10:01:00.000000..10:02:00.000000 rate=1000000 micro=60000000 " +
-			"pending=false dims={\"attached\":\"true\",\"attribution\":" +
-			"\"compute_instance/vm-7/API\",\"deployment\":\"us-east\",\"ip_family\":\"ipv6\"," +
-			"\"meter_type\":\"second\",\"pool\":\"pool-a\",\"tenant\":\"acme\"}",
+			"pending=false dims={\"attached\":\"true\",\"deployment\":\"us-east\"," +
+			"\"ip_family\":\"ipv6\",\"meter_type\":\"second\",\"pool\":\"pool-a\"," +
+			"\"tenant\":\"acme\"}",
+	})
+}
+
+// TestExternalIPsAttachedToSameNamedTargetsBillStandalone checks the decision that attached
+// resources bill under their own identity: two external IPs attached to two different
+// instances that share a name bill as two ordinary resources, each with its own dimensions,
+// and no attribution dimension records the attachment.
+func TestExternalIPsAttachedToSameNamedTargetsBillStandalone(t *testing.T) {
+	calculator := defaultCalculator(t)
+	ip := func(id, pool, address string) []database.Fact {
+		return []database.Fact{
+			created("ExternalIP", id, at(0)),
+			state("ExternalIP", id, at(0), "PENDING"),
+			state("ExternalIP", id, at(time.Minute), "ALLOCATED"),
+			fact("ExternalIP", id, "spec.pool", at(0), pool),
+			fact("ExternalIP", id, "status.address", at(time.Minute), address),
+			fact("ExternalIP", id, "status.attached", at(time.Minute), "true"),
+		}
+	}
+	// Both IPs are attached to instances named web; the attribution values differ only in
+	// the target's id, which the old dimension collapsed into one name-first string.
+	ip1 := append(ip("ip-1", "pool-a", "192.0.2.10"),
+		fact("ExternalIP", "ip-1", "status.attribution", at(time.Minute), "compute_instance/vm-original/API"))
+	ip2 := append(ip("ip-2", "pool-b", "2001:db8::1"),
+		fact("ExternalIP", "ip-2", "status.attribution", at(time.Minute), "compute_instance/vm-replacement/API"))
+
+	expectPieces(t, calculator, ip1, at(2*time.Minute), []string{
+		"ExternalIP allocation 10:01:00.000000..10:02:00.000000 rate=1000000 micro=60000000 " +
+			"pending=false dims={\"attached\":\"true\",\"deployment\":\"us-east\"," +
+			"\"ip_family\":\"ipv4\",\"meter_type\":\"second\",\"pool\":\"pool-a\"," +
+			"\"tenant\":\"acme\"}",
+	})
+	expectPieces(t, calculator, ip2, at(2*time.Minute), []string{
+		"ExternalIP allocation 10:01:00.000000..10:02:00.000000 rate=1000000 micro=60000000 " +
+			"pending=false dims={\"attached\":\"true\",\"deployment\":\"us-east\"," +
+			"\"ip_family\":\"ipv6\",\"meter_type\":\"second\",\"pool\":\"pool-b\"," +
+			"\"tenant\":\"acme\"}",
 	})
 }
 
@@ -426,6 +513,289 @@ func TestNATGatewayAllocation(t *testing.T) {
 			"pending=false dims={\"deployment\":\"us-east\",\"external_ip\":\"ip-1\"," +
 			"\"meter_type\":\"second\",\"tenant\":\"acme\",\"virtual_network\":\"vn-1\"}",
 	})
+}
+
+// revisionsCalculator builds a calculator over the default revision plus the given later
+// revisions, in effect order.
+func revisionsCalculator(t *testing.T, revisions ...rules.Revision) *usage.Calculator {
+	t.Helper()
+	all := append([]rules.Revision{testenv.DefaultRevision(t)}, revisions...)
+	owners, err := usage.RegistryOwners()
+	if err != nil {
+		t.Fatalf("reading owners: %v", err)
+	}
+	calculator, err := usage.NewCalculator(all, "us-east", owners)
+	if err != nil {
+		t.Fatalf("creating calculator: %v", err)
+	}
+	return calculator
+}
+
+// laterRevision parses a revision numbered 0002 effective at the given time.
+func laterRevision(t *testing.T, effective time.Time, meters string) rules.Revision {
+	t.Helper()
+	revision, err := rules.Parse(
+		rules.NamePrefix+"0002", effective.Format(time.RFC3339), meters,
+	)
+	if err != nil {
+		t.Fatalf("parsing revision: %v", err)
+	}
+	return revision
+}
+
+// TestRuleActivationDoesNotCountPreviouslyNonBillableTime checks the threshold against
+// the quantity a revision actually emits: a revision that starts billing PAUSED must not
+// count the PAUSED time that passed before it took effect. The newly billable run is 400 ms,
+// and it must bill nothing even though the whole run under the new rules is over a second.
+func TestRuleActivationDoesNotCountPreviouslyNonBillableTime(t *testing.T) {
+	calculator := revisionsCalculator(t, laterRevision(t, at(time.Minute), `- resource: ComputeInstance
+  meter: compute
+  unit: second
+  billable_when:
+    states: [RUNNING, PAUSED]
+  dimensions: [instance_type]
+`))
+	facts := []database.Fact{
+		created("ComputeInstance", "vm-1", at(-2*time.Minute)),
+		state("ComputeInstance", "vm-1", at(-2*time.Minute), "STARTING"),
+		state("ComputeInstance", "vm-1", at(-time.Minute), "RUNNING"),
+		state("ComputeInstance", "vm-1", at(0), "PAUSED"),
+		state("ComputeInstance", "vm-1", at(time.Minute+400*time.Millisecond), "STOPPED"),
+	}
+	pieces, err := calculator.Expected("acme", "ComputeInstance", "vm-1", facts, nil, at(2*time.Minute))
+	if err != nil {
+		t.Fatalf("computing usage: %v", err)
+	}
+	for _, piece := range pieces {
+		if piece.Revision == "0002" && quantityMicro(t, piece) != 0 {
+			t.Fatalf(
+				"the newly billable run is 400 ms after the revision, want zero under 0002; got %s",
+				join(summarize(pieces)),
+			)
+		}
+	}
+}
+
+// TestRuleRemovalEndsTheBillableRun checks the threshold when a revision removes a
+// meter mid-run: the meter existed for only 400 ms of RUNNING, so it must bill nothing even
+// though the physical run continues past the removal.
+func TestRuleRemovalEndsTheBillableRun(t *testing.T) {
+	calculator := revisionsCalculator(t, laterRevision(t, at(time.Minute), `- resource: Cluster
+  meter: control_plane
+  unit: second
+  billable_when:
+    states: [PROGRESSING, READY]
+    turns_billable_once: [READY]
+`))
+	facts := []database.Fact{
+		created("ComputeInstance", "vm-1", at(0)),
+		state("ComputeInstance", "vm-1", at(0), "STARTING"),
+		state("ComputeInstance", "vm-1", at(time.Minute-400*time.Millisecond), "RUNNING"),
+	}
+	pieces, err := calculator.Expected("acme", "ComputeInstance", "vm-1", facts, nil, at(2*time.Minute))
+	if err != nil {
+		t.Fatalf("computing usage: %v", err)
+	}
+	for _, piece := range pieces {
+		if quantityMicro(t, piece) != 0 {
+			t.Fatalf(
+				"the compute meter existed for only 400 ms of RUNNING, want zero; got %s",
+				join(summarize(pieces)),
+			)
+		}
+	}
+}
+
+// TestBillableRunCrossingRevisionBoundaryBillsItsFullSum checks the continuity the threshold
+// must keep: a run billable under both revisions sums its pieces on both sides of the
+// boundary, and the sum passes the threshold once, so the sub-second head before the boundary
+// bills together with the tail after it.
+func TestBillableRunCrossingRevisionBoundaryBillsItsFullSum(t *testing.T) {
+	calculator := revisionsCalculator(t, laterRevision(t, at(time.Minute), `- resource: ComputeInstance
+  meter: compute
+  unit: second
+  billable_when:
+    states: [RUNNING, PAUSED]
+  dimensions: [instance_type]
+`))
+	facts := []database.Fact{
+		created("ComputeInstance", "vm-1", at(0)),
+		state("ComputeInstance", "vm-1", at(0), "STARTING"),
+		state("ComputeInstance", "vm-1", at(time.Minute-400*time.Millisecond), "RUNNING"),
+	}
+	expectPieces(t, calculator, facts, at(2*time.Minute), []string{
+		"ComputeInstance compute 10:00:59.600000..10:01:00.000000 rate=1000000 micro=400000 " +
+			"pending=false dims={\"deployment\":\"us-east\",\"meter_type\":\"second\"," +
+			"\"tenant\":\"acme\"}",
+		"ComputeInstance compute 10:01:00.000000..10:02:00.000000 rate=1000000 micro=60000000 " +
+			"pending=false dims={\"deployment\":\"us-east\",\"meter_type\":\"second\"," +
+			"\"tenant\":\"acme\"}",
+	})
+}
+
+// customCalculator builds a calculator over one revision parsed from meters text.
+func customCalculator(t *testing.T, meters string) *usage.Calculator {
+	t.Helper()
+	revision, err := rules.Parse(
+		rules.NamePrefix+"0001", time.Unix(0, 0).UTC().Format(time.RFC3339), meters,
+	)
+	if err != nil {
+		t.Fatalf("parsing revision: %v", err)
+	}
+	owners, err := usage.RegistryOwners()
+	if err != nil {
+		t.Fatalf("reading owners: %v", err)
+	}
+	calculator, err := usage.NewCalculator([]rules.Revision{revision}, "us-east", owners)
+	if err != nil {
+		t.Fatalf("creating calculator: %v", err)
+	}
+	return calculator
+}
+
+// TestBillingFieldChangesSplitTheMeter is the split-point matrix: a change mid-run in any
+// billing-relevant field kind, the state, a condition field, a dimension, or the multiplier,
+// closes the meter's piece at the change and opens a new one, so no time bills under a stale
+// rate or identity. The multiplier case: a multiplier of 1 then 2
+// over a minute each bills 60 + 120 = 180 seconds, not 120 at the starting rate.
+func TestBillingFieldChangesSplitTheMeter(t *testing.T) {
+	baseDims := `{"deployment":"us-east","meter_type":"second","tenant":"acme"}`
+	t.Run("state change", func(t *testing.T) {
+		calculator := customCalculator(t, `- resource: ComputeInstance
+  meter: compute
+  unit: second
+  billable_when:
+    states: [RUNNING]
+`)
+		facts := []database.Fact{
+			created("ComputeInstance", "vm-1", at(0)),
+			state("ComputeInstance", "vm-1", at(0), "RUNNING"),
+			state("ComputeInstance", "vm-1", at(30*time.Second), "PAUSED"),
+			state("ComputeInstance", "vm-1", at(time.Minute), "RUNNING"),
+		}
+		expectPieces(t, calculator, facts, at(90*time.Second), []string{
+			"ComputeInstance compute 10:00:00.000000..10:00:30.000000 rate=1000000 micro=30000000 " +
+				"pending=false dims=" + baseDims,
+			"ComputeInstance compute 10:01:00.000000..10:01:30.000000 rate=1000000 micro=30000000 " +
+				"pending=false dims=" + baseDims,
+		})
+	})
+	t.Run("condition field change", func(t *testing.T) {
+		calculator := customCalculator(t, `- resource: ExternalIP
+  meter: attached_allocation
+  unit: second
+  billable_when:
+    states: [ALLOCATED]
+    fields: {attached: "true"}
+`)
+		facts := []database.Fact{
+			created("ExternalIP", "ip-1", at(0)),
+			state("ExternalIP", "ip-1", at(0), "ALLOCATED"),
+			fact("ExternalIP", "ip-1", "status.attached", at(0), "true"),
+			fact("ExternalIP", "ip-1", "status.attached", at(30*time.Second), "false"),
+			fact("ExternalIP", "ip-1", "status.attached", at(time.Minute), "true"),
+		}
+		expectPieces(t, calculator, facts, at(90*time.Second), []string{
+			"ExternalIP attached_allocation 10:00:00.000000..10:00:30.000000 rate=1000000 " +
+				"micro=30000000 pending=false dims=" + baseDims,
+			"ExternalIP attached_allocation 10:01:00.000000..10:01:30.000000 rate=1000000 " +
+				"micro=30000000 pending=false dims=" + baseDims,
+		})
+	})
+	t.Run("dimension change", func(t *testing.T) {
+		calculator := customCalculator(t, `- resource: ComputeInstance
+  meter: compute
+  unit: second
+  billable_when:
+    states: [RUNNING]
+  dimensions: [instance_type]
+`)
+		facts := []database.Fact{
+			created("ComputeInstance", "vm-1", at(0)),
+			state("ComputeInstance", "vm-1", at(0), "RUNNING"),
+			fact("ComputeInstance", "vm-1", "status.instance_type", at(0), "small"),
+			fact("ComputeInstance", "vm-1", "status.instance_type", at(time.Minute), "large"),
+		}
+		expectPieces(t, calculator, facts, at(2*time.Minute), []string{
+			"ComputeInstance compute 10:00:00.000000..10:01:00.000000 rate=1000000 micro=60000000 " +
+				"pending=false dims=" +
+				`{"deployment":"us-east","instance_type":"small","meter_type":"second","tenant":"acme"}`,
+			"ComputeInstance compute 10:01:00.000000..10:02:00.000000 rate=1000000 micro=60000000 " +
+				"pending=false dims=" +
+				`{"deployment":"us-east","instance_type":"large","meter_type":"second","tenant":"acme"}`,
+		})
+	})
+	t.Run("multiplier change", func(t *testing.T) {
+		calculator := customCalculator(t, `- resource: ComputeInstance
+  meter: weighted
+  unit: second
+  billable_when:
+    states: [RUNNING]
+  multiplier: instance_type
+`)
+		facts := []database.Fact{
+			created("ComputeInstance", "vm-1", at(0)),
+			state("ComputeInstance", "vm-1", at(0), "RUNNING"),
+			fact("ComputeInstance", "vm-1", "status.instance_type", at(0), "1"),
+			fact("ComputeInstance", "vm-1", "status.instance_type", at(time.Minute), "2"),
+		}
+		expectPieces(t, calculator, facts, at(2*time.Minute), []string{
+			"ComputeInstance weighted 10:00:00.000000..10:01:00.000000 rate=1000000 micro=60000000 " +
+				"pending=false dims=" + baseDims,
+			"ComputeInstance weighted 10:01:00.000000..10:02:00.000000 rate=2000000 micro=120000000 " +
+				"pending=false dims=" + baseDims,
+		})
+	})
+}
+
+// TestVolumeResizeSplitsTheRate checks the shipped volume rule: a capacity resized from 100
+// to 200 GiB mid-run splits the rate at the resize, so each stretch bills at its own size.
+func TestVolumeResizeSplitsTheRate(t *testing.T) {
+	calculator := defaultCalculator(t)
+	facts := []database.Fact{
+		created("Volume", "vol-1", at(0)),
+		state("Volume", "vol-1", at(0), "AVAILABLE"),
+		fact("Volume", "vol-1", "status.protocol", at(0), "BLOCK"),
+		fact("Volume", "vol-1", "status.vendor_volume_id", at(0), "vend-9"),
+		fact("Volume", "vol-1", "status.provisioned_size_gib", at(0), "100"),
+		fact("Volume", "vol-1", "status.provisioned_size_gib", at(time.Minute), "200"),
+		fact("Volume", "vol-1", "spec.storage_tier", at(0), "gold"),
+	}
+	expectPieces(t, calculator, facts, at(2*time.Minute), []string{
+		"Volume capacity 10:00:00.000000..10:01:00.000000 rate=100000000 micro=6000000000 " +
+			"pending=false dims={\"deployment\":\"us-east\",\"meter_type\":\"gibibyte_second\"," +
+			"\"storage_tier\":\"gold\",\"tenant\":\"acme\"}",
+		"Volume capacity 10:01:00.000000..10:02:00.000000 rate=200000000 micro=12000000000 " +
+			"pending=false dims={\"deployment\":\"us-east\",\"meter_type\":\"gibibyte_second\"," +
+			"\"storage_tier\":\"gold\",\"tenant\":\"acme\"}",
+	})
+}
+
+// TestVolumeQuantityOverflowsLoudly checks the overflow under the default
+// volume rule, 200,000,000 GiB for one day is a micro quantity beyond int64, and reading
+// the piece's quantity must fail instead of wrapping into a negative bill.
+func TestVolumeQuantityOverflowsLoudly(t *testing.T) {
+	calculator := defaultCalculator(t)
+	facts := []database.Fact{
+		created("Volume", "vol-1", at(0)),
+		state("Volume", "vol-1", at(0), "AVAILABLE"),
+		fact("Volume", "vol-1", "status.protocol", at(0), "BLOCK"),
+		fact("Volume", "vol-1", "status.vendor_volume_id", at(0), "vend-9"),
+		fact("Volume", "vol-1", "status.provisioned_size_gib", at(0), "200000000"),
+	}
+	pieces, err := calculator.Expected("acme", "Volume", "vol-1", facts, nil, at(14*time.Hour))
+	if err != nil {
+		t.Fatalf("computing usage: %v", err)
+	}
+	for _, piece := range pieces {
+		quantity, err := piece.QuantityMicro()
+		if err == nil {
+			t.Fatalf("200,000,000 GiB over 14 h overflows micro units, got %d", quantity)
+		}
+		if !strings.Contains(err.Error(), "vol-1") {
+			t.Errorf("the failure must name the resource, got %q", err.Error())
+		}
+	}
 }
 
 // TestOnceReachedWhenRunStartsInOnceState checks that a run opened by a condition change,
@@ -481,20 +851,36 @@ func TestQuantityMicroRoundsToNearestMicro(t *testing.T) {
 		// A rate of one micro unit per second over 1.5 s is 1.5 micro units.
 		RateMicro: 1,
 	}
-	if got := piece.QuantityMicro(); got != 2 {
+	got, err := piece.QuantityMicro()
+	if err != nil {
+		t.Fatalf("rounding 1.5 micro units: %v", err)
+	}
+	if got != 2 {
 		t.Errorf("1.5 micro units must round to 2, got %d", got)
 	}
 	piece.EndTime = at(1400 * time.Millisecond)
-	if got := piece.QuantityMicro(); got != 1 {
+	got, err = piece.QuantityMicro()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 1 {
 		t.Errorf("1.4 micro units must round to 1, got %d", got)
 	}
 	piece.EndTime = at(500 * time.Millisecond)
-	if got := piece.QuantityMicro(); got != 1 {
+	got, err = piece.QuantityMicro()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 1 {
 		t.Errorf("0.5 micro units must round to 1, got %d", got)
 	}
 	piece.RateMicro = 1_000_000
 	piece.EndTime = at(time.Second)
-	if got := piece.QuantityMicro(); got != 1_000_000 {
+	got, err = piece.QuantityMicro()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 1_000_000 {
 		t.Errorf("60 whole micro units must stay exact, got %d", got)
 	}
 }
@@ -515,10 +901,7 @@ func TestEveryMeterSendsTheCatalogDimension(t *testing.T) {
 }
 
 func TestRevisionChangeSplitsUsage(t *testing.T) {
-	first, err := rules.DefaultRevision()
-	if err != nil {
-		t.Fatalf("parsing default revision: %v", err)
-	}
+	first := testenv.DefaultRevision(t)
 	secondYAML := `- resource: ComputeInstance
   meter: compute
   unit: second
@@ -619,7 +1002,7 @@ func TestTailKeepsPiecesAWatchedRowOverlaps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("computing tail: %v", err)
 	}
-	if len(pieces) != 1 || !pieces[0].StartTime.Equal(runStart) || pieces[0].QuantityMicro() == 0 {
+	if len(pieces) != 1 || !pieces[0].StartTime.Equal(runStart) || quantityMicro(t, pieces[0]) == 0 {
 		t.Fatalf(
 			"the crossing run must bill from its start, got %s",
 			fmt.Sprint(summarize(pieces)),
@@ -630,10 +1013,7 @@ func TestTailKeepsPiecesAWatchedRowOverlaps(t *testing.T) {
 // TestMeterAtResolvesTheBillingRevision checks that the meter definition and the revision that
 // billed an interval resolve from the rules, including for a meter a later revision dropped.
 func TestMeterAtResolvesTheBillingRevision(t *testing.T) {
-	first, err := rules.DefaultRevision()
-	if err != nil {
-		t.Fatalf("parsing default revision: %v", err)
-	}
+	first := testenv.DefaultRevision(t)
 	droppedYAML := `- resource: Cluster
   meter: control_plane
   unit: second

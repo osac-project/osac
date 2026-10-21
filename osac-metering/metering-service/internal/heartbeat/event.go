@@ -75,13 +75,17 @@ func New(
 	lastAppliedOffset int64,
 	rulesRevision string,
 ) (cloudevents.Event, error) {
+	dimensions, err := decodeDimensions(key.Dimensions)
+	if err != nil {
+		return cloudevents.Event{}, err
+	}
 	data := schema.HeartbeatData{
 		TenantID:          tenant,
 		ResourceType:      schema.ProtoResourceTypeToSchema(key.ResourceType),
 		ResourceID:        key.ResourceID,
 		Meter:             key.Meter,
 		Component:         key.Component,
-		BillingDimensions: decodeDimensions(key.Dimensions),
+		BillingDimensions: dimensions,
 		Usage: schema.Usage{
 			Semantics: schema.UsageSemanticsInterval,
 			From:      formatTime(from),
@@ -165,8 +169,12 @@ func formatTime(moment time.Time) string {
 	return moment.UTC().Format("2006-01-02T15:04:05.999999Z07:00")
 }
 
-func decodeDimensions(encoded string) map[string]string {
+// decodeDimensions reads the key's dimension text. Corrupted text fails the heartbeat: the
+// dimensions are the billing identity, and an empty set would re-key every piece.
+func decodeDimensions(encoded string) (map[string]string, error) {
 	dimensions := map[string]string{}
-	_ = json.Unmarshal([]byte(encoded), &dimensions)
-	return dimensions
+	if err := json.Unmarshal([]byte(encoded), &dimensions); err != nil {
+		return nil, fmt.Errorf("decoding dimensions: %w", err)
+	}
+	return dimensions, nil
 }

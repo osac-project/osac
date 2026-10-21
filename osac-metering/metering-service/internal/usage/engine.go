@@ -18,7 +18,6 @@ import (
 	"math/big"
 	"net/netip"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/osac-project/osac-metering/internal/database"
@@ -48,22 +47,33 @@ type Piece struct {
 
 // QuantityMicro returns the piece's quantity in micro units of the meter's unit: the rate
 // multiplied by the duration, rounded to the nearest micro unit. A fractional multiplier
-// would otherwise re-bill the rounding remainder every round under new IDs.
-func (p Piece) QuantityMicro() int64 {
+// would otherwise re-bill the rounding remainder every round under new IDs. It fails when
+// the quantity does not fit in micro units rather than wrap: a wrapped negative bill is the
+// worst silent failure.
+func (p Piece) QuantityMicro() (int64, error) {
 	if p.Pending {
-		return 0
+		return 0, nil
 	}
 	durationMicro := p.EndTime.Sub(p.StartTime).Microseconds()
 	quantity := new(big.Rat).Mul(
 		big.NewRat(p.RateMicro, 1_000_000), big.NewRat(durationMicro, 1),
 	)
-	return RationalToMicro(quantity)
+	micro, err := RationalToMicro(quantity)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"meter %s of %s %s over %s..%s: %w",
+			p.Key.Meter, p.Key.ResourceType, p.Key.ResourceID,
+			p.StartTime.Format(time.RFC3339), p.EndTime.Format(time.RFC3339), err,
+		)
+	}
+	return micro, nil
 }
 
 // RationalToMicro rounds a rational quantity in micro units to the nearest whole micro unit,
-// halves away from zero. The rounds use the same policy for the differences they send. The
-// argument is left untouched.
-func RationalToMicro(quantity *big.Rat) int64 {
+// halves away from zero. The rounds use the same policy for the differences they send. It
+// fails when the rounded value does not fit in an int64: big.Int.Int64 is undefined for
+// out-of-range values, so converting anyway would wrap. The argument is left untouched.
+func RationalToMicro(quantity *big.Rat) (int64, error) {
 	sign := int64(1)
 	value := quantity
 	if quantity.Sign() < 0 {
@@ -76,47 +86,64 @@ func RationalToMicro(quantity *big.Rat) int64 {
 	doubledNum.Add(doubledNum, den)
 	doubledDen := new(big.Int).Lsh(den, 1)
 	quotient := new(big.Int).Quo(doubledNum, doubledDen)
-	return sign * quotient.Int64()
+	if !quotient.IsInt64() {
+		return 0, fmt.Errorf("quantity %s does not fit in micro units", value.RatString())
+	}
+	return sign * quotient.Int64(), nil
 }
 
 // OwnerSpec names the field that carries a resource's ownership root, and the type of that
-// root.
-type OwnerSpec struct {
-	// Field is the history field that holds the owner reference, for example
-	// "status.cluster".
-	Field string
-
-	// Resource is the root's resource type, for example "Cluster".
-	Resource string
-}
+// root. The registry owns the definition; the alias keeps it addressable as usage.OwnerSpec.
+type OwnerSpec = metering.OwnerSpec
 
 // RegistryOwners returns the ownership specs of every tracked resource, from the annotations
-// on the private protos. Resources without an owner reference are absent.
+// on the private protos. Resources without an owner reference are absent. It refuses an
+// ambiguous registry: a resource with two owner fields, or a root that different resources
+// reference through different fields, would resolve silently to one of them.
 func RegistryOwners() (map[string]OwnerSpec, error) {
 	resources, err := metering.Resources()
 	if err != nil {
 		return nil, fmt.Errorf("reading the field registry: %w", err)
 	}
+	return ownersOf(resources)
+}
+
+// ownersOf builds the ownership map over the registry. A resource with two owner fields would
+// keep only the last one, because the map keys by owned resource; a root that owns through two
+// different fields would make OwnedFieldOf pick one over map iteration. Both are refused.
+func ownersOf(resources []metering.Resource) (map[string]OwnerSpec, error) {
 	owners := map[string]OwnerSpec{}
+	// rootFields remembers the field each root type is referenced through so far.
+	rootFields := map[string]string{}
 	for _, resource := range resources {
+		name := metering.ShortName(string(resource.Message))
+		var ownerFields []metering.Field
 		for _, field := range resource.Fields {
-			if field.OwnerResource == "" {
-				continue
+			if field.OwnerResource != "" {
+				ownerFields = append(ownerFields, field)
 			}
-			owners[shortOwnerName(string(resource.Message))] = OwnerSpec{
-				Field:    field.Path,
-				Resource: field.OwnerResource,
+		}
+		if len(ownerFields) > 1 {
+			return nil, fmt.Errorf(
+				"%s has two owner fields, %s and %s; a resource has exactly one ownership root",
+				name, ownerFields[0].Path, ownerFields[1].Path,
+			)
+		}
+		for _, field := range ownerFields {
+			if previous, seen := rootFields[field.OwnerResource]; seen && previous != field.Path {
+				return nil, fmt.Errorf(
+					"%s is owned through both %s and %s; every resource it owns must reference it "+
+						"through one field",
+					field.OwnerResource, previous, field.Path,
+				)
 			}
+			rootFields[field.OwnerResource] = field.Path
+		}
+		if len(ownerFields) == 1 {
+			owners[name] = OwnerSpec{Field: ownerFields[0].Path, Resource: ownerFields[0].OwnerResource}
 		}
 	}
 	return owners, nil
-}
-
-func shortOwnerName(full string) string {
-	if index := strings.LastIndex(full, "."); index >= 0 {
-		return full[index+1:]
-	}
-	return full
 }
 
 // Root is the ownership root of a resource whose gate the root controls. Facts is empty when
@@ -340,7 +367,7 @@ func (c *Calculator) compute(
 			}
 			runPieces, err := c.meterPieces(
 				meter, tenant, resourceType, resourceID, revision.Number, timelines,
-				rootStates, rootDeletion, root, wStart, wEnd, end, upTo, deletion, keep,
+				rootStates, rootDeletion, root, wStart, wEnd, end, upTo, deletion,
 			)
 			if err != nil {
 				return nil, err
@@ -348,13 +375,25 @@ func (c *Calculator) compute(
 			pieces = append(pieces, runPieces...)
 		}
 	}
-	return pieces, nil
+	pieces = applyRunThreshold(pieces, upTo)
+	if keep == nil {
+		return pieces, nil
+	}
+	kept := pieces[:0]
+	for _, piece := range pieces {
+		if keep(piece) {
+			kept = append(kept, piece)
+		}
+	}
+	return kept, nil
 }
 
 // meterPieces computes one meter's pieces inside its revision's window. Runs are computed over
 // the resource's whole life under the meter's own rules, so a run that spans a revision
-// boundary bills its earlier part under the revision that was in effect then. keep, when set,
-// filters which pieces are materialized.
+// boundary bills its earlier part under the revision that was in effect then. Every piece of
+// a run still open at upTo carries Pending as a carrier for applyRunThreshold, which applies
+// the billable-run threshold: only the pieces clipped to each revision's window are ever
+// emitted, so the run's unclipped length must not decide billability.
 func (c *Calculator) meterPieces(
 	meter rules.Meter,
 	tenant, resourceType, resourceID, revisionNumber string,
@@ -362,15 +401,9 @@ func (c *Calculator) meterPieces(
 	rootStates timeline, rootDeletion time.Time, root *Root,
 	wStart, wEnd, end, upTo time.Time,
 	deletion time.Time,
-	keep func(Piece) bool,
 ) ([]Piece, error) {
 	runs := billableRuns(meter, timelines, end, deletion)
 	var pieces []Piece
-	add := func(piece Piece) {
-		if keep == nil || keep(piece) {
-			pieces = append(pieces, piece)
-		}
-	}
 	for _, r := range runs {
 		if !c.gateOpen(meter, resourceType, revisionNumber, timelines, deletion,
 			rootStates, rootDeletion, root, r) {
@@ -387,34 +420,75 @@ func (c *Calculator) meterPieces(
 		if !start.Before(stop) {
 			continue
 		}
-		runLength := r.end.Sub(r.start)
-		pending := !r.closed && r.end.Equal(upTo)
-		if runLength < MinBillableRun {
-			if !pending {
-				continue
-			}
+		// A run that reaches upTo without closing can still grow in a later round.
+		runOpen := !r.closed && r.end.Equal(upTo)
+		for _, span := range splitByFieldChangesAndMidnights(meter, resourceType, timelines, start, stop) {
 			piece, err := c.piece(
 				meter, tenant, resourceType, resourceID, revisionNumber, timelines,
-				start, stop, true,
+				span[0], span[1], runOpen,
 			)
 			if err != nil {
 				return nil, err
 			}
-			add(piece)
-			continue
-		}
-		for _, span := range splitByDimensionsAndMidnights(meter, resourceType, timelines, start, stop) {
-			piece, err := c.piece(
-				meter, tenant, resourceType, resourceID, revisionNumber, timelines,
-				span[0], span[1], false,
-			)
-			if err != nil {
-				return nil, err
-			}
-			add(piece)
+			pieces = append(pieces, piece)
 		}
 	}
 	return pieces, nil
+}
+
+// applyRunThreshold enforces MinBillableRun on the quantity each meter will actually emit.
+// The pieces of one meter stitch into a stretch wherever they are contiguous, including
+// across a revision boundary: a run billable under consecutive revisions is one stretch, and
+// its pieces on both sides of the boundary count once toward the threshold. A stretch
+// shorter than the minimum bills nothing. A short stretch that is still open at the round
+// time collapses into one pending piece, so the round keeps watching it and bills it from
+// its start once it crosses the threshold.
+// applyRunThreshold enforces MinBillableRun on the quantity each meter will actually
+// emit. The pieces of one meter stitch into a stretch wherever they are contiguous,
+// including across a revision boundary: a run billable under consecutive revisions is
+// one stretch, and its pieces on both sides of the boundary count once toward the
+// threshold. A stretch shorter than the minimum bills nothing. A short stretch that is
+// still open at the round time collapses into one pending piece, so the round keeps
+// watching it and bills it from its start once it crosses the threshold.
+func applyRunThreshold(pieces []Piece, upTo time.Time) []Piece {
+	// Group the pieces into contiguous stretches of one meter.
+	var stretches [][]Piece
+	for _, piece := range pieces {
+		last := len(stretches) - 1
+		if last >= 0 && stretches[last][0].Key.Meter == piece.Key.Meter &&
+			stretches[last][len(stretches[last])-1].EndTime.Equal(piece.StartTime) {
+			stretches[last] = append(stretches[last], piece)
+			continue
+		}
+		stretches = append(stretches, []Piece{piece})
+	}
+
+	var result []Piece
+	for _, stretch := range stretches {
+		var length time.Duration
+		for _, piece := range stretch {
+			length += piece.EndTime.Sub(piece.StartTime)
+		}
+		last := stretch[len(stretch)-1]
+		switch {
+		case length >= MinBillableRun:
+			// The carrier flag only marked the run open; a committed piece of a
+			// stretch that passed the threshold bills usage.
+			for _, piece := range stretch {
+				piece.Pending = false
+				result = append(result, piece)
+			}
+		case last.Pending && last.EndTime.Equal(upTo):
+			// Still open and still short: one pending piece keeps the run watched.
+			first := stretch[0]
+			result = append(result, Piece{
+				Key: first.Key, StartTime: first.StartTime, EndTime: upTo,
+				RateMicro: first.RateMicro, Pending: true,
+				Unit: first.Unit, Revision: first.Revision,
+			})
+		}
+	}
+	return result
 }
 
 // run is a maximal stretch during which the meter is continuously billable.
@@ -468,9 +542,9 @@ func billableRuns(
 	for i := 1; i < len(points); i++ {
 		start := points[i-1]
 		stop := points[i]
-		state, known := stateAt(states, start)
+		state, known := states.valueAt(start)
 		billable := known && billableStates[state] &&
-			conditionsHold(meter, resourceTypeOf(meter), timelines, start)
+			conditionsHold(meter, meter.Resource, timelines, start)
 		if !billable {
 			continue
 		}
@@ -483,20 +557,6 @@ func billableRuns(
 			(!deletion.IsZero() && stop.Equal(deletion))
 	}
 	return runs
-}
-
-// stateAt returns the state value at a moment, and whether one is known.
-func stateAt(states timeline, moment time.Time) (string, bool) {
-	result := ""
-	known := false
-	for _, state := range states {
-		if state.since.After(moment) {
-			break
-		}
-		result = state.value
-		known = true
-	}
-	return result, known
 }
 
 // gateOpen reports whether the run's gate is open: a state that confirms the run appeared on
@@ -587,17 +647,21 @@ func conditionPaths(meter rules.Meter) []string {
 	return paths
 }
 
-func resourceTypeOf(meter rules.Meter) string { return meter.Resource }
-
-// splitByDimensionsAndMidnights splits a billable interval wherever a dimension field changes
-// and at every UTC midnight, because the billing provider dates each heartbeat by a single
-// timestamp.
-func splitByDimensionsAndMidnights(
+// splitByFieldChangesAndMidnights splits a billable interval wherever a dimension or
+// multiplier field changes and at every UTC midnight, because the billing provider dates
+// each heartbeat by a single timestamp, and a piece's identity and rate are read at its
+// start: a change left unsplit would bill the rest of the run at the stale value.
+func splitByFieldChangesAndMidnights(
 	meter rules.Meter, resourceType string, timelines map[string]timeline, start, stop time.Time,
 ) [][2]time.Time {
+	fields := make([]string, 0, len(meter.Dimensions)+1)
+	fields = append(fields, meter.Dimensions...)
+	if meter.Multiplier != "" {
+		fields = append(fields, meter.Multiplier)
+	}
 	points := []time.Time{start, stop}
-	for _, dimension := range meter.Dimensions {
-		path, _ := rules.DimensionPath(resourceType, dimension)
+	for _, name := range fields {
+		path, _ := rules.DimensionPath(resourceType, name)
 		for _, entry := range timelines[path] {
 			if entry.since.After(start) && entry.since.Before(stop) {
 				points = append(points, entry.since)

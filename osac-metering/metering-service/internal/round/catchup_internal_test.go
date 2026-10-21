@@ -54,7 +54,10 @@ func TestMergeIntoLedgerChecksOverlap(t *testing.T) {
 	}}
 
 	// A correction over the same interval adds its quantity to the stretch.
-	merged := mergeIntoLedger(existing, caughtOver(mergeBase, mergeBase.Add(time.Minute), 30_000_000))
+	merged, err := mergeIntoLedger(existing, caughtOver(mergeBase, mergeBase.Add(time.Minute), 30_000_000))
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := []string{"10:00:00..10:01:00 90000000"}
 	if fmt.Sprint(renderPieces(merged)) != fmt.Sprint(want) {
 		t.Fatalf("same-interval correction must merge into one summed stretch:\ngot:\n%s\nwant:\n%s",
@@ -62,9 +65,12 @@ func TestMergeIntoLedgerChecksOverlap(t *testing.T) {
 	}
 
 	// A correction crossing a stretch boundary splits and sums on both sides.
-	merged = mergeIntoLedger(existing, caughtOver(
+	merged, err = mergeIntoLedger(existing, caughtOver(
 		mergeBase.Add(30*time.Second), mergeBase.Add(90*time.Second), 30_000_000,
 	))
+	if err != nil {
+		t.Fatal(err)
+	}
 	want = []string{
 		"10:00:00..10:00:30 30000000",
 		"10:00:30..10:01:00 45000000",
@@ -80,9 +86,12 @@ func TestMergeIntoLedgerChecksOverlap(t *testing.T) {
 		{Key: key, StartTime: mergeBase, EndTime: mergeBase.Add(time.Minute),
 			QuantityMicro: 60_000_000},
 	}
-	merged = mergeIntoLedger(existing, caughtOver(
+	merged, err = mergeIntoLedger(existing, caughtOver(
 		mergeBase.Add(time.Minute), mergeBase.Add(2*time.Minute), 60_000_000,
 	))
+	if err != nil {
+		t.Fatal(err)
+	}
 	want = []string{"10:00:00..10:02:00 120000000"}
 	if fmt.Sprint(renderPieces(merged)) != fmt.Sprint(want) {
 		t.Fatalf("adjacent same-rate stretches must rejoin:\ngot:\n%s\nwant:\n%s",

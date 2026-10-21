@@ -11,6 +11,7 @@ package round
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -134,6 +135,134 @@ func TestRoundAlreadyRan(t *testing.T) {
 	}
 }
 
+// TestOverflowingQuantityFailsTheRoundNamingTheResource checks that a quantity no int64 can
+// hold fails the whole round naming the resource it belongs to: a wrapped value would
+// silently bill negative usage.
+func TestOverflowingQuantityFailsTheRoundNamingTheResource(t *testing.T) {
+	const tenant = "overflow"
+	base := time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC)
+	store := testenv.Database(t)
+	ctx := context.Background()
+	if err := store.EnsureProgress(ctx, tenant); err != nil {
+		t.Fatal(err)
+	}
+	facts := []database.Fact{
+		created("Volume", "vol-1", base),
+		state("Volume", "vol-1", base, "AVAILABLE"),
+		fact("Volume", "vol-1", "status.protocol", base, "BLOCK"),
+		fact("Volume", "vol-1", "status.vendor_volume_id", base, "vend-9"),
+		fact("Volume", "vol-1", "status.provisioned_size_gib", base, "200000000"),
+	}
+	if err := database.InsertFacts(ctx, store.Pool(), tenant, facts, 1); err != nil {
+		t.Fatal(err)
+	}
+	owners, err := usage.RegistryOwners()
+	if err != nil {
+		t.Fatal(err)
+	}
+	calculator, err := usage.NewCalculator([]rules.Revision{testenv.DefaultRevision(t)}, "us-east", owners)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := New(store, calculator, nil, nil, logr.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	progress := database.Progress{EventOffset: 1}
+	err = r.compare(ctx, store.Pool(), tenant, progress, base.Add(14*time.Hour))
+	if err == nil {
+		ledger, ledgerErr := database.LedgerPiecesWhere(ctx, store.Pool(), tenant, "")
+		if ledgerErr != nil {
+			t.Fatal(ledgerErr)
+		}
+		for _, row := range ledger {
+			if row.QuantityMicro < 0 {
+				t.Fatalf("the round committed a wrapped negative quantity %d", row.QuantityMicro)
+			}
+		}
+		t.Fatal("the round must fail on a quantity no int64 can hold")
+	}
+	if !strings.Contains(err.Error(), "vol-1") {
+		t.Fatalf("the failure must name the resource, got %q", err.Error())
+	}
+}
+
+// TestFractionalRoundsConserveTheCommittedQuantity checks that a fractional rate cannot make
+// the sent total disagree with the committed ledger: the quantity a difference publishes and
+// the row the ledger commits must come from one rounding, so rounds at 1.5 and 2.5 seconds
+// publish 2 then 1 micro units and commit 3. "1e-6" is a valid DNS-label instance type name
+// whose numeric value the multiplier parser accepts.
+func TestFractionalRoundsConserveTheCommittedQuantity(t *testing.T) {
+	base := time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC)
+	revision, err := rules.Parse(rules.NamePrefix+"0001", "1970-01-01T00:00:00Z", `- resource: ComputeInstance
+  meter: weighted
+  unit: second
+  billable_when:
+    states: [RUNNING]
+  multiplier: instance_type
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calculator, err := usage.NewCalculator([]rules.Revision{revision}, "us-east", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts := []database.Fact{
+		created("ComputeInstance", "vm-1", base.Add(-time.Minute)),
+		state("ComputeInstance", "vm-1", base.Add(-time.Minute), "STARTING"),
+		state("ComputeInstance", "vm-1", base, "RUNNING"),
+		fact("ComputeInstance", "vm-1", "status.instance_type", base, "1e-6"),
+	}
+	first, err := calculator.Expected(
+		"acme", "ComputeInstance", "vm-1", facts, nil, base.Add(1500*time.Millisecond),
+	)
+	if err != nil || len(first) != 1 {
+		t.Fatalf("first pieces=%+v error=%v", first, err)
+	}
+	key := first[0].Key
+
+	var sent int64
+	differences, err := diff(key, first, nil, nil, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, difference := range differences {
+		sent += difference.quantityMicro
+	}
+	ledger, err := expectedRows(first, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := calculator.Expected(
+		"acme", "ComputeInstance", "vm-1", facts, nil, base.Add(2500*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	differences, err = diff(key, second, ledger, nil, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, difference := range differences {
+		sent += difference.quantityMicro
+	}
+	committed, err := expectedRows(second, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(committed) != 1 {
+		t.Fatalf("expected one committed row, got %+v", committed)
+	}
+	if sent != committed[0].QuantityMicro {
+		t.Fatalf(
+			"the two successful rounds publish %d micro units but commit %d; round(2.5)=3",
+			sent, committed[0].QuantityMicro,
+		)
+	}
+}
+
 // TestRootOfWalksToTheTopmostOwner checks the ownership walk: the gate a resource inherits
 // comes from the topmost owner, so a component of a component resolves past its immediate
 // owner, and a missing root returns empty facts so billing stays shut.
@@ -221,10 +350,7 @@ func TestScanResourcesDragsOwnedResourcesAlong(t *testing.T) {
 		t.Fatalf("ensuring progress: %v", err)
 	}
 
-	revision, err := rules.DefaultRevision()
-	if err != nil {
-		t.Fatalf("parsing default revision: %v", err)
-	}
+	revision := testenv.DefaultRevision(t)
 	owners, err := usage.RegistryOwners()
 	if err != nil {
 		t.Fatalf("reading owners: %v", err)

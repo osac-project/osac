@@ -33,9 +33,7 @@ type caughtHeartbeat struct {
 	id            string
 	offset        int64
 	roundTime     time.Time
-	eventOffset   int64
 	key           database.LedgerKey
-	tenant        string
 	start, end    time.Time
 	quantityMicro int64
 }
@@ -46,12 +44,19 @@ var ErrCrashed = errors.New("round crashed mid-catch-up")
 
 // catchUp reads the heartbeat topic from the tenant's stored heartbeat offset and adds each
 // heartbeat's quantity to the ledger, so a database restored from a backup re-sends nothing
-// and an empty database replays everything from offset 0. Every round group applies and moves
+// and an empty database replays everything from offset 0. Replay rebuilds the ledger only:
+// the topic holds what was sent, not what a round computed, so the comparison's position
+// stays what the database itself says, and the first comparison after recovery recomputes
+// the gap, emitting whatever replay could not rebuild. Every round group applies and moves
 // the heartbeat offset past itself in one committed transaction, so a crash mid-catch-up
 // resumes at the next group instead of repeating the identical pass. It returns false when it
 // hit its batch bound, meaning there is more to read and the round must skip its comparison.
 func (r *Round) catchUp(ctx context.Context, tenant string) (bool, error) {
 	progress, err := r.store.GetTenantProgress(ctx, tenant)
+	if err != nil {
+		return false, err
+	}
+	known, err := database.ReplayedHeartbeatIDs(ctx, r.store.Pool(), tenant)
 	if err != nil {
 		return false, err
 	}
@@ -62,7 +67,7 @@ func (r *Round) catchUp(ctx context.Context, tenant string) (bool, error) {
 	committed := 0
 	for first := 0; first < len(caught); {
 		last := groupEnd(caught, first)
-		if err := r.applyGroup(ctx, tenant, caught[first:last]); err != nil {
+		if err := r.applyGroup(ctx, tenant, known, caught[first:last]); err != nil {
 			return false, err
 		}
 		committed++
@@ -76,16 +81,23 @@ func (r *Round) catchUp(ctx context.Context, tenant string) (bool, error) {
 }
 
 // applyGroup applies one round group of heartbeats in a transaction that also moves the
-// heartbeat offset past the group: the ledger and the offset advance together or not at all,
-// so a crash mid-catch-up resumes at the next group, and a database restored to any earlier
-// snapshot replays the same groups to the same ledger, because the merge is a pure function
-// of the ledger it reads and the heartbeat's interval and quantity. The round lock serializes
-// overlapping pods, so a record another pod already applied is skipped; a heartbeat whose
-// round time is not after the stored last round was already folded into this database's own
-// rounds, and a duplicate ID within the group is a resend the relay made after a crash. Read
-// records move the offset either way: without that, a resend after a crash would wedge the
-// stored offset behind them forever.
-func (r *Round) applyGroup(ctx context.Context, tenant string, group []caughtHeartbeat) error {
+// heartbeat offset past the group and records the applied ids: the ledger, the offset,
+// and the id memory advance together or not at all, so a crash mid-catch-up resumes at
+// the next group, and a database restored to any earlier snapshot replays the same
+// groups to the same ledger, because the merge is a pure function of the ledger it
+// reads and the heartbeat's interval and quantity.
+//
+// The group's starting round comes from the stored last round, read fresh under the
+// lock, and catch-up never moves it. A heartbeat whose round time is not after it was
+// computed by this database's own comparison and is already in the ledger, and so is
+// every copy of it. A heartbeat after it came from a database this one is recovering
+// from: it is applied, and its id joins the memory, so a copy the relay resent, in a
+// later group or a later pass after a crash, counts once. Read records move the offset
+// either way: without that, a resend after a crash would wedge the stored offset behind
+// them forever.
+func (r *Round) applyGroup(
+	ctx context.Context, tenant string, known map[string]bool, group []caughtHeartbeat,
+) error {
 	tx, err := r.store.Begin(ctx)
 	if err != nil {
 		return err
@@ -103,35 +115,30 @@ func (r *Round) applyGroup(ctx context.Context, tenant string, group []caughtHea
 		start = *progress.LastRoundTime
 	}
 
-	seen := map[string]bool{}
+	var applied []string
 	last := progress.HeartbeatOffset
-	var lastRound *caughtHeartbeat
 	for index := range group {
 		entry := &group[index]
 		if entry.offset < progress.HeartbeatOffset {
 			continue
 		}
 		last = entry.offset + 1
-		if !entry.roundTime.After(start) || seen[entry.id] {
+		if !entry.roundTime.After(start) || known[entry.id] {
 			continue
 		}
-		seen[entry.id] = true
+		known[entry.id] = true
 		if err := r.applyHeartbeat(ctx, tx, tenant, entry); err != nil {
 			return err
 		}
-		lastRound = entry
+		applied = append(applied, entry.id)
 	}
 	if last > progress.HeartbeatOffset {
 		if err := database.AdvanceHeartbeatOffset(ctx, tx, tenant, last); err != nil {
 			return err
 		}
 	}
-	if lastRound != nil {
-		if err := database.SetLastRound(
-			ctx, tx, tenant, lastRound.roundTime, lastRound.eventOffset,
-		); err != nil {
-			return err
-		}
+	if err := database.RecordReplayedHeartbeats(ctx, tx, tenant, applied); err != nil {
+		return err
 	}
 	return tx.Commit(ctx)
 }
@@ -275,16 +282,24 @@ func (r *Round) applyHeartbeat(
 	if err != nil {
 		return err
 	}
-	return database.ReplaceLedger(ctx, tx, tenant, caught.key, mergeIntoLedger(existing, caught))
+	// The merge read the meter's every piece, so its result owns the whole history:
+	// a zero tailFrom makes SyncLedger replace it outright.
+	merged, err := mergeIntoLedger(existing, caught)
+	if err != nil {
+		return err
+	}
+	return database.SyncLedger(ctx, tx, tenant, caught.key, merged, time.Time{})
 }
 
 // mergeIntoLedger adds one caught heartbeat's quantity, spread evenly over its interval, to
 // the ledger's stretches. The caught interval's boundaries split the stretches they cross,
 // the quantities add, and adjacent stretches of the same summed rate rejoin into one piece.
-func mergeIntoLedger(existing []database.LedgerPiece, caught *caughtHeartbeat) []database.LedgerPiece {
+func mergeIntoLedger(
+	existing []database.LedgerPiece, caught *caughtHeartbeat,
+) ([]database.LedgerPiece, error) {
 	caughtDuration := caught.end.Sub(caught.start).Microseconds()
 	if caughtDuration <= 0 {
-		return existing
+		return existing, nil
 	}
 	stretches := append([]database.LedgerPiece(nil), existing...)
 	sort.Slice(stretches, func(i, j int) bool {
@@ -303,18 +318,6 @@ func mergeIntoLedger(existing []database.LedgerPiece, caught *caughtHeartbeat) [
 	}
 	sort.Slice(boundaries, func(i, j int) bool { return boundaries[i].Before(boundaries[j]) })
 
-	rateAt := func(moment time.Time) *big.Rat {
-		for _, piece := range stretches {
-			if !moment.Before(piece.StartTime) && moment.Before(piece.EndTime) {
-				duration := piece.EndTime.Sub(piece.StartTime).Microseconds()
-				if duration <= 0 {
-					continue
-				}
-				return new(big.Rat).SetFrac(big.NewInt(piece.QuantityMicro), big.NewInt(duration))
-			}
-		}
-		return new(big.Rat)
-	}
 	inCaught := func(moment time.Time) bool {
 		return !moment.Before(caught.start) && moment.Before(caught.end)
 	}
@@ -325,13 +328,16 @@ func mergeIntoLedger(existing []database.LedgerPiece, caught *caughtHeartbeat) [
 		if !start.Before(end) {
 			continue
 		}
-		rate := rateAt(start)
+		rate := actualRateAt(stretches, start)
 		if inCaught(start) {
 			rate = new(big.Rat).Add(rate, caughtRate)
 		}
-		quantity := usage.RationalToMicro(
+		quantity, err := usage.RationalToMicro(
 			new(big.Rat).Mul(rate, big.NewRat(end.Sub(start).Microseconds(), 1)),
 		)
+		if err != nil {
+			return nil, fmt.Errorf("applying heartbeat %s: %w", caught.id, err)
+		}
 		// Adjacent stretches of the same summed rate are one piece of usage.
 		if last := len(merged) - 1; last >= 0 && merged[last].EndTime.Equal(start) &&
 			pieceRate(merged[last]).Cmp(rate) == 0 {
@@ -343,7 +349,7 @@ func mergeIntoLedger(existing []database.LedgerPiece, caught *caughtHeartbeat) [
 			Key: caught.key, StartTime: start, EndTime: end, QuantityMicro: quantity,
 		})
 	}
-	return merged
+	return merged, nil
 }
 
 // pieceRate returns a piece's committed rate in micro units per microsecond.
@@ -382,9 +388,8 @@ func decodeHeartbeat(value []byte) (caughtHeartbeat, error) {
 		return caughtHeartbeat{}, fmt.Errorf("encoding dimensions: %w", err)
 	}
 	return caughtHeartbeat{
-		id:          event.ID(),
-		roundTime:   roundTime,
-		eventOffset: data.LastAppliedOffset,
+		id:        event.ID(),
+		roundTime: roundTime,
 		key: database.LedgerKey{
 			ResourceType: schema.SchemaResourceTypeToProto(data.ResourceType),
 			ResourceID:   data.ResourceID,
@@ -392,7 +397,6 @@ func decodeHeartbeat(value []byte) (caughtHeartbeat, error) {
 			Component:    data.Component,
 			Dimensions:   string(dimensions),
 		},
-		tenant:        data.TenantID,
 		start:         from,
 		end:           to,
 		quantityMicro: quantity,

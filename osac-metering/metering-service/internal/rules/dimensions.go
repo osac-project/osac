@@ -9,10 +9,6 @@ compliance with the License. You may obtain a copy of the License at
 
 package rules
 
-import (
-	"sort"
-)
-
 // dimensionFields maps a dimension name to the history field that carries its value, per
 // resource type. The names are the billing contract with the provider; the paths are the
 // fields the fold records. A revision can only use names listed here.
@@ -38,10 +34,9 @@ var dimensionFields = map[string]map[string]string{
 		"provisioned_size_gib": "status.provisioned_size_gib",
 	},
 	"ExternalIP": {
-		"pool":        "spec.pool",
-		"ip_family":   "status.address",
-		"attribution": "status.attribution",
-		"attached":    "status.attached",
+		"pool":      "spec.pool",
+		"ip_family": "status.address",
+		"attached":  "status.attached",
 	},
 	"NATGateway": {
 		"virtual_network": "spec.virtual_network",
@@ -49,10 +44,14 @@ var dimensionFields = map[string]map[string]string{
 	},
 }
 
-// extraFields lists fields the fold records that the tracked-field registry does not carry
-// yet, per resource type. It is empty: the registry now tracks every field the default meters
-// need.
-var extraFields = map[string][]string{}
+// computedDimensions names the dimensions whose value the calculator derives from another
+// tracked field instead of reading it from history. Conditions evaluate raw stored fields,
+// so a condition on one of them compares the underlying value and never matches. Keep this
+// list in sync with the derivation in internal/usage: ip_family parses the tracked address
+// (ipFamilyOf in engine.go).
+var computedDimensions = map[string]bool{
+	"ip_family": true,
+}
 
 // DimensionPath resolves a dimension name to its history field for a resource.
 func DimensionPath(resource, name string) (string, bool) {
@@ -62,16 +61,6 @@ func DimensionPath(resource, name string) (string, bool) {
 	}
 	path, known := paths[name]
 	return path, known
-}
-
-// DimensionNames returns the supported dimension names of a resource, sorted.
-func DimensionNames(resource string) []string {
-	var names []string
-	for name := range dimensionFields[resource] {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
 }
 
 // IdentityFields are the identity facts the fold records for every resource. Every meter sends

@@ -220,10 +220,7 @@ func (failingProducer) AddMessageToTxnWithGroupMetadata(
 // runRoundAt runs one heartbeat round at a fixed time.
 func runRoundAt(t *testing.T, store *database.Store, tenant string, moment time.Time) {
 	t.Helper()
-	revision, err := rules.DefaultRevision()
-	if err != nil {
-		t.Fatalf("parsing default revision: %v", err)
-	}
+	revision := testenv.DefaultRevision(t)
 	owners, err := usage.RegistryOwners()
 	if err != nil {
 		t.Fatalf("reading owners: %v", err)
@@ -238,8 +235,7 @@ func runRoundAt(t *testing.T, store *database.Store, tenant string, moment time.
 	if err != nil {
 		t.Fatalf("creating round: %v", err)
 	}
-	roundLoop.SetClock(func() time.Time { return moment })
-	if err := roundLoop.Once(context.Background(), tenant); err != nil {
+	if err := roundLoop.Once(context.Background(), tenant, moment); err != nil {
 		t.Fatalf("round at %s: %v", moment, err)
 	}
 }

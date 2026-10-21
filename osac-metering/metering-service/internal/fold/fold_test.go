@@ -423,6 +423,73 @@ func TestFoldRecordsCreationValueWithoutTransitionTime(t *testing.T) {
 	}
 }
 
+// TestFoldTreatsAllZeroTimestampsAsAbsent checks that a present-but-zero timestamp field
+// (seconds 0, nanos 0) follows exactly the path of an absent one: the creation value. A
+// zero timestamp is an unset field rendered as Unix epoch, not a real 1970 date, so dating
+// a fact at it would place the value decades before the resource existed.
+func TestFoldTreatsAllZeroTimestampsAsAbsent(t *testing.T) {
+	extractor, err := fold.NewFactExtractor()
+	if err != nil {
+		t.Fatalf("creating extractor: %v", err)
+	}
+	creation := base.Add(3 * time.Hour)
+	newCluster := func(transition *timestamppb.Timestamp) *privatev1.Event {
+		return &privatev1.Event{
+			Id:        "c1",
+			Type:      privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+			Timestamp: timestamppb.New(creation),
+			Payload: &privatev1.Event_Cluster{
+				Cluster: &privatev1.Cluster{
+					Id: "c-9",
+					Metadata: &privatev1.Metadata{
+						Tenant: "acme", Project: "web",
+						CreationTimestamp: timestamppb.New(creation),
+					},
+					Spec: &privatev1.ClusterSpec{
+						Version: &privatev1.ClusterVersionReference{Id: "9", Name: "4.18"},
+					},
+					Status: &privatev1.ClusterStatus{
+						State:               privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
+						StateTransitionTime: timestamppb.New(creation),
+						// The version's transition time: absent in one event, all zero in
+						// the other.
+						VersionTransitionTime: transition,
+					},
+				},
+			},
+		}
+	}
+	absent, err := extractor.Facts("acme", newCluster(nil))
+	if err != nil {
+		t.Fatalf("folding the absent-transition event: %v", err)
+	}
+	zero, err := extractor.Facts("acme", newCluster(timestamppb.New(time.Unix(0, 0))))
+	if err != nil {
+		t.Fatalf("folding the zero-transition event: %v", err)
+	}
+	if fmt.Sprint(absent) != fmt.Sprint(zero) {
+		t.Fatalf(
+			"an all-zero transition time must behave like an absent one:\nabsent:\n%s\nzero:\n%s",
+			fmt.Sprint(absent), fmt.Sprint(zero),
+		)
+	}
+	// The absent path records the creation value, so the zero case must too: the version
+	// is a fact of the creation, not of 1970.
+	found := false
+	for _, fact := range zero {
+		if fact.Field != "spec.version" {
+			continue
+		}
+		found = true
+		if !fact.Since.Equal(creation) {
+			t.Errorf("spec.version is dated %s, want the creation %s", fact.Since, creation)
+		}
+	}
+	if !found {
+		t.Error("the version fact is missing")
+	}
+}
+
 func stringsJoin(lines []string) string {
 	sort.Strings(lines)
 	out := ""
@@ -468,14 +535,14 @@ func TestFoldWritesTheDesignExampleHistory(t *testing.T) {
 		"Volume vol-1 status.vendor_volume_id " +
 			base.Add(time.Minute).Format(time.RFC3339Nano) + " vend-9",
 		// The external IP: the address is a tracked set-once field, and the IP
-		// family derives from it at evaluation time.
+		// family derives from it at evaluation time. The event carries an
+		// attribution, but attachments are ignored for billing, so no
+		// attribution fact is derived.
 		"ExternalIP ip-1 created " + base.Add(2*time.Minute).Format(time.RFC3339Nano) + " true",
 		"ExternalIP ip-1 metadata.project " + base.Add(2*time.Minute).Format(time.RFC3339Nano) + " web",
 		"ExternalIP ip-1 spec.pool " + base.Add(2*time.Minute).Format(time.RFC3339Nano) + " pool-a",
 		"ExternalIP ip-1 status.address " +
 			base.Add(2*time.Minute).Format(time.RFC3339Nano) + " 192.0.2.10",
-		"ExternalIP ip-1 status.attribution " +
-			base.Add(2*time.Minute).Format(time.RFC3339Nano) + " compute_instance/vm-7/API",
 		"ExternalIP ip-1 status.attached " + base.Add(2*time.Minute).Format(time.RFC3339Nano) + " true",
 		"ExternalIP ip-1 status.state " +
 			base.Add(2*time.Minute).Format(time.RFC3339Nano) + " ALLOCATED",

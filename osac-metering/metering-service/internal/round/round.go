@@ -65,10 +65,6 @@ type Round struct {
 	// on a tenant with a steady event stream, and the tenant would never bill.
 	eventTarget map[string]int64
 
-	// nowOverride pins the round clock in tests. The production round time comes from
-	// PostgreSQL's clock.
-	nowOverride func() time.Time
-
 	// catchUpBatch bounds one catch-up pass; tests shrink it.
 	catchUpBatch int
 
@@ -90,11 +86,6 @@ func New(
 		store: store, calculator: calculator, client: client, consumer: consumer, logger: logger,
 		eventTarget: map[string]int64{}, catchUpBatch: CatchUpBatch,
 	}, nil
-}
-
-// SetClock pins the round clock and disables the clock-skew check. For tests only.
-func (r *Round) SetClock(clock func() time.Time) {
-	r.nowOverride = clock
 }
 
 // SetCatchUpBatch shrinks the catch-up bound. For tests only.
@@ -121,19 +112,40 @@ func (r *Round) RunTenant(ctx context.Context, tenant string, interval time.Dura
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			if err := r.Once(ctx, tenant); err != nil && !errors.Is(err, context.Canceled) {
+			// The round time comes from PostgreSQL's clock, so all pods agree on it.
+			// A pod whose clock is too far from the database's skips its round rather
+			// than compute at a time the database cannot confirm.
+			roundTime, err := r.store.Clock(ctx)
+			if err != nil {
+				r.logger.Error(err, "reading the round clock", "tenant", tenant)
+				continue
+			}
+			if clockSkewTooLarge(time.Now(), roundTime) {
+				r.logger.Error(
+					nil, "pod clock is too far from the database clock; skipping round",
+					"tenant", tenant, "delta", time.Since(roundTime).String(),
+				)
+				// Catch-up replays committed heartbeats and needs no trustworthy
+				// clock, so a skewed pod still repairs its ledger; only the
+				// comparison waits for the clock.
+				if _, err := r.catchUp(ctx, tenant); err != nil {
+					r.logger.Error(err, "catch-up failed", "tenant", tenant)
+				}
+				continue
+			}
+			if err := r.Once(ctx, tenant, roundTime); err != nil && !errors.Is(err, context.Canceled) {
 				r.logger.Error(err, "round failed", "tenant", tenant)
 			}
 		}
 	}
 }
 
-// Once runs one round. Catch-up runs first, one round group per committed transaction, so a
-// crash mid-catch-up leaves the groups that committed applied and the next pass resumes at
-// the next group. The comparison runs only when catch-up reached the topic's end in one pass;
-// it skips when the fold is behind, when PostgreSQL's clock has not passed the last round
-// time, or when the pod's clock is too far from PostgreSQL's.
-func (r *Round) Once(ctx context.Context, tenant string) error {
+// Once runs one round at roundTime. Catch-up runs first, one round group per committed
+// transaction, so a crash mid-catch-up leaves the groups that committed applied and the
+// next pass resumes at the next group. The comparison runs only when catch-up reached the
+// topic's end in one pass; it skips when the fold is behind or when roundTime has not
+// passed the last round time. RunTenant reads roundTime from PostgreSQL's clock.
+func (r *Round) Once(ctx context.Context, tenant string, roundTime time.Time) error {
 	if err := r.store.EnsureProgress(ctx, tenant); err != nil {
 		return err
 	}
@@ -154,24 +166,6 @@ func (r *Round) Once(ctx context.Context, tenant string) error {
 	defer func() { _ = tx.Rollback(ctx) }()
 	if err := database.TakeTenantLock(ctx, tx, database.LockRound, tenant); err != nil {
 		return err
-	}
-
-	// The round time comes from PostgreSQL's clock, so all pods agree on it.
-	var roundTime time.Time
-	if r.nowOverride != nil {
-		roundTime = r.nowOverride().UTC()
-	} else {
-		if err := tx.QueryRow(ctx, "SELECT now()").Scan(&roundTime); err != nil {
-			return fmt.Errorf("reading the round clock: %w", err)
-		}
-		roundTime = roundTime.UTC()
-		if clockSkewTooLarge(time.Now(), roundTime) {
-			r.logger.Error(
-				nil, "pod clock is too far from the database clock; skipping round",
-				"tenant", tenant, "delta", time.Since(roundTime).String(),
-			)
-			return nil
-		}
 	}
 
 	progress, err := database.GetProgress(ctx, tx, tenant)
@@ -197,6 +191,12 @@ func (r *Round) Once(ctx context.Context, tenant string) error {
 		return err
 	}
 	if err := database.SetLastRound(ctx, tx, tenant, roundTime, progress.EventOffset); err != nil {
+		return err
+	}
+	// The round's own commit supersedes the replay's id memory: every heartbeat on
+	// the topic is now from a round at or before the last round, which the replay
+	// skips on its own.
+	if err := database.PruneReplayedHeartbeats(ctx, tx, tenant); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -302,49 +302,18 @@ func (r *Round) compare(
 		return err
 	}
 	for _, resource := range full {
-		facts, err := database.ResourceFacts(ctx, tx, tenant, resource.resourceType, resource.resourceID)
+		facts, root, ledger, err := r.resourceSnapshot(ctx, tx, tenant, resource)
 		if err != nil {
 			return err
 		}
-		root, err := r.rootOf(ctx, tx, tenant, resource.resourceType, facts)
-		if err != nil {
-			return err
-		}
-		pieces, err := r.calculator.Expected(
-			tenant, resource.resourceType, resource.resourceID, facts, root, roundTime,
-		)
-		if err != nil {
-			return fmt.Errorf(
-				"computing usage of %s %s: %w", resource.resourceType, resource.resourceID, err,
-			)
-		}
-		ledger, err := database.LedgerPiecesWhere(
-			ctx, tx, tenant, "resource_type = $2 AND resource_id = $3",
-			resource.resourceType, resource.resourceID,
-		)
-		if err != nil {
-			return err
-		}
-		// Every key with a ledger row takes part: a late event can remove a meter entirely.
-		if err := r.diffAndCommit(
-			ctx, tx, tenant, progress, roundTime, pieces, ledger, true, time.Time{},
+		if err := r.recomputeWhole(
+			ctx, tx, tenant, progress, roundTime, resource, facts, root, ledger,
 		); err != nil {
 			return err
 		}
 	}
 	for _, resource := range tail {
-		facts, err := database.ResourceFacts(ctx, tx, tenant, resource.resourceType, resource.resourceID)
-		if err != nil {
-			return err
-		}
-		root, err := r.rootOf(ctx, tx, tenant, resource.resourceType, facts)
-		if err != nil {
-			return err
-		}
-		ledger, err := database.LedgerPiecesWhere(
-			ctx, tx, tenant, "resource_type = $2 AND resource_id = $3",
-			resource.resourceType, resource.resourceID,
-		)
+		facts, root, ledger, err := r.resourceSnapshot(ctx, tx, tenant, resource)
 		if err != nil {
 			return err
 		}
@@ -362,17 +331,8 @@ func (r *Round) compare(
 			// round, for example a ledger rebuilt by catch-up from heartbeats whose
 			// events were never folded. The resource's rows are compared whole, so
 			// unjustified usage is reversed.
-			pieces, err = r.calculator.Expected(
-				tenant, resource.resourceType, resource.resourceID, facts, root, roundTime,
-			)
-			if err != nil {
-				return fmt.Errorf(
-					"computing usage of %s %s: %w", resource.resourceType, resource.resourceID,
-					err,
-				)
-			}
-			if err := r.diffAndCommit(
-				ctx, tx, tenant, progress, roundTime, pieces, ledger, true, time.Time{},
+			if err := r.recomputeWhole(
+				ctx, tx, tenant, progress, roundTime, resource, facts, root, ledger,
 			); err != nil {
 				return err
 			}
@@ -389,18 +349,68 @@ func (r *Round) compare(
 	return nil
 }
 
+// resourceSnapshot loads one resource's facts, ownership root, and current ledger
+// rows: the inputs both comparison loops share.
+func (r *Round) resourceSnapshot(
+	ctx context.Context, tx database.Querier, tenant string, res resource,
+) (facts []database.Fact, root *usage.Root, ledger []database.LedgerPiece, err error) {
+	facts, err = database.ResourceFacts(ctx, tx, tenant, res.resourceType, res.resourceID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	root, err = r.rootOf(ctx, tx, tenant, res.resourceType, facts)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	ledger, err = database.LedgerPiecesWhere(
+		ctx, tx, tenant, "resource_type = $2 AND resource_id = $3",
+		res.resourceType, res.resourceID,
+	)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return facts, root, ledger, nil
+}
+
+// recomputeWhole compares one resource's entire history against its ledger. The full
+// loop runs it for every changed resource; the tail loop falls back to it when the
+// calculator cannot justify the meters the previous round left open.
+func (r *Round) recomputeWhole(
+	ctx context.Context, tx database.Querier, tenant string,
+	progress database.Progress, roundTime time.Time,
+	res resource, facts []database.Fact, root *usage.Root, ledger []database.LedgerPiece,
+) error {
+	pieces, err := r.calculator.Expected(
+		tenant, res.resourceType, res.resourceID, facts, root, roundTime,
+	)
+	if err != nil {
+		return fmt.Errorf("computing usage of %s %s: %w", res.resourceType, res.resourceID, err)
+	}
+	// Every key with a ledger row takes part: a late event can remove a meter entirely.
+	return r.diffAndCommit(ctx, tx, tenant, progress, roundTime, pieces, ledger, true, time.Time{})
+}
+
 // scanResources returns the resources whose meters the round must recompute from history, and
 // those whose ledger tail it only extends. A recompute is due for resources with new facts and
 // for resources of types a newly effective revision affects; a tail extension is due for
 // meters billable at the previous round, whose ledger rows end at its time. The first round
-// recomputes everything, so a round's work stays proportional to the heartbeats it sends.
+// recomputes everything the database holds, facts and ledger rows alike, so a ledger
+// rebuilt from heartbeats is compared even for a resource whose events are gone, and a
+// round's work stays proportional to the heartbeats it sends.
 func (r *Round) scanResources(
 	ctx context.Context, tx database.Querier, tenant string,
 	progress database.Progress, roundTime time.Time,
 ) (full []resource, tail []resource, err error) {
 	if progress.LastRoundTime == nil {
-		resources, err := tenantResources(ctx, tx, tenant, nil)
-		return resources, nil, err
+		keys, err := database.AllTenantResources(ctx, tx, tenant)
+		if err != nil {
+			return nil, nil, err
+		}
+		var resources []resource
+		for _, key := range keys {
+			resources = append(resources, resource{key.ResourceType, key.ResourceID})
+		}
+		return resources, nil, nil
 	}
 
 	seen := map[resource]bool{}
@@ -447,9 +457,7 @@ func (r *Round) scanResources(
 	for _, key := range newFacts {
 		queue = append(queue, resource{key.ResourceType, key.ResourceID})
 	}
-	for _, entry := range affectedResources {
-		queue = append(queue, entry)
-	}
+	queue = append(queue, affectedResources...)
 	for len(queue) > 0 {
 		key := queue[0]
 		queue = queue[1:]
@@ -568,10 +576,15 @@ func (r *Round) diffAndCommit(
 	}
 
 	for _, key := range ordered {
-		differences := diff(
+		differences, err := diff(
 			key, expectedPiecesOf(expected, key), ledgerPiecesOf(ledger, key), revisionTimes,
 			tailFrom,
 		)
+		if err != nil {
+			return fmt.Errorf(
+				"comparing meter %s of %s %s: %w", key.Meter, key.ResourceType, key.ResourceID, err,
+			)
+		}
 		rows := make([]database.OutboxRow, 0, len(differences))
 		for _, difference := range differences {
 			// The unit and revision come from the meter definition and the revision that
@@ -602,9 +615,11 @@ func (r *Round) diffAndCommit(
 		if err := database.EnqueueHeartbeats(ctx, tx, tenant, rows); err != nil {
 			return err
 		}
-		if err := database.SyncLedger(
-			ctx, tx, tenant, key, expectedRows(expected, key), tailFrom,
-		); err != nil {
+		expected, err := expectedRows(expected, key)
+		if err != nil {
+			return err
+		}
+		if err := database.SyncLedger(ctx, tx, tenant, key, expected, tailFrom); err != nil {
 			return err
 		}
 	}
@@ -631,20 +646,24 @@ func ledgerPiecesOf(pieces []database.LedgerPiece, key database.LedgerKey) []dat
 	return result
 }
 
-func expectedRows(pieces []usage.Piece, key database.LedgerKey) []database.LedgerPiece {
+func expectedRows(pieces []usage.Piece, key database.LedgerKey) ([]database.LedgerPiece, error) {
 	var rows []database.LedgerPiece
 	for _, piece := range pieces {
 		if piece.Key != key {
 			continue
 		}
+		quantity, err := piece.QuantityMicro()
+		if err != nil {
+			return nil, err
+		}
 		rows = append(rows, database.LedgerPiece{
 			Key:           piece.Key,
 			StartTime:     piece.StartTime,
 			EndTime:       piece.EndTime,
-			QuantityMicro: piece.QuantityMicro(),
+			QuantityMicro: quantity,
 		})
 	}
-	return rows
+	return rows, nil
 }
 
 // difference is one heartbeat to send: a quantity over an interval.
@@ -668,7 +687,7 @@ type difference struct {
 func diff(
 	key database.LedgerKey, expected []usage.Piece, actual []database.LedgerPiece,
 	revisionTimes []time.Time, clamp time.Time,
-) []difference {
+) ([]difference, error) {
 	points := map[time.Time]bool{}
 	for _, piece := range expected {
 		points[piece.StartTime] = true
@@ -679,7 +698,7 @@ func diff(
 		points[piece.EndTime] = true
 	}
 	if len(points) == 0 {
-		return nil
+		return nil, nil
 	}
 	sorted := make([]time.Time, 0, len(points))
 	for point := range points {
@@ -718,14 +737,26 @@ func diff(
 		if !end.After(clamp) && !pieceOverlaps(expected, start, end) {
 			continue
 		}
-		// Rates are micro units per microsecond; the difference over an interval is a
-		// quantity in micro units.
+		// Rates are micro units per microsecond. Equal rates need no correction, and the
+		// rate difference decides whether adjacent intervals merge into one heartbeat.
 		delta := new(big.Rat).Sub(rateAt(expected, start), actualRateAt(actual, start))
 		if delta.Sign() == 0 {
 			continue
 		}
-		quantity := new(big.Rat).Mul(delta, big.NewRat(end.Sub(start).Microseconds(), 1))
-		micro := usage.RationalToMicro(quantity)
+		// The quantity is what the ledger would commit over the interval minus what it
+		// committed. Both sides round once, cumulatively from the covering piece's and
+		// row's start, exactly the way expectedRows commits a piece: rounding each
+		// interval on its own would not conserve, and the sent total would disagree with
+		// the stored one under a fractional rate.
+		expectedQty, err := roundedQuantity(expected, start, end)
+		if err != nil {
+			return nil, err
+		}
+		committedQty, err := committedQuantity(actual, start, end)
+		if err != nil {
+			return nil, err
+		}
+		micro := expectedQty - committedQty
 		if micro == 0 {
 			continue
 		}
@@ -743,7 +774,7 @@ func diff(
 			key: key, start: start, end: end, quantityMicro: micro, deltaRate: delta,
 		})
 	}
-	return differences
+	return differences, nil
 }
 
 // sameBillingDay reports whether two moments fall on the same UTC day.
@@ -777,6 +808,67 @@ func rateAt(pieces []usage.Piece, moment time.Time) *big.Rat {
 		}
 	}
 	return new(big.Rat)
+}
+
+// roundedQuantity returns the quantity the expected pieces commit over [start, end]: the
+// covering piece's rate applied from the piece's own start and rounded once, differenced
+// between the two moments. expectedRows commits round(rate x piece length) the same way, so
+// a heartbeat computed here can never disagree with the row it lands next to.
+func roundedQuantity(pieces []usage.Piece, start, end time.Time) (int64, error) {
+	for _, piece := range pieces {
+		// Diff intervals never cross a piece boundary, so the piece covering start also
+		// covers end.
+		if piece.StartTime.After(start) || !start.Before(piece.EndTime) {
+			continue
+		}
+		if piece.Pending {
+			return 0, nil
+		}
+		rate := big.NewRat(piece.RateMicro, 1_000_000)
+		from := new(big.Rat).Mul(rate, big.NewRat(start.Sub(piece.StartTime).Microseconds(), 1))
+		to := new(big.Rat).Mul(rate, big.NewRat(end.Sub(piece.StartTime).Microseconds(), 1))
+		fromMicro, err := usage.RationalToMicro(from)
+		if err != nil {
+			return 0, err
+		}
+		toMicro, err := usage.RationalToMicro(to)
+		if err != nil {
+			return 0, err
+		}
+		return toMicro - fromMicro, nil
+	}
+	return 0, nil
+}
+
+// committedQuantity returns the quantity the ledger rows committed over [start, end]: the
+// covering row's rate applied from the row's own start and rounded once, differenced between
+// the two moments. Over a row's whole extent this equals the row's committed quantity
+// exactly, so corrections computed against it conserve what was sent.
+func committedQuantity(rows []database.LedgerPiece, start, end time.Time) (int64, error) {
+	for _, row := range rows {
+		// Diff intervals never cross a row boundary, so the row covering start also
+		// covers end.
+		if row.StartTime.After(start) || !start.Before(row.EndTime) {
+			continue
+		}
+		duration := row.EndTime.Sub(row.StartTime).Microseconds()
+		if duration <= 0 {
+			return 0, nil
+		}
+		rate := new(big.Rat).SetFrac(big.NewInt(row.QuantityMicro), big.NewInt(duration))
+		from := new(big.Rat).Mul(rate, big.NewRat(start.Sub(row.StartTime).Microseconds(), 1))
+		to := new(big.Rat).Mul(rate, big.NewRat(end.Sub(row.StartTime).Microseconds(), 1))
+		fromMicro, err := usage.RationalToMicro(from)
+		if err != nil {
+			return 0, err
+		}
+		toMicro, err := usage.RationalToMicro(to)
+		if err != nil {
+			return 0, err
+		}
+		return toMicro - fromMicro, nil
+	}
+	return 0, nil
 }
 
 // actualRateAt returns the ledger's committed rate at a moment, in micro units per

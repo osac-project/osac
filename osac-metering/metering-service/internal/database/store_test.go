@@ -76,6 +76,63 @@ func TestStoreFactsAndProgressAreIdempotent(t *testing.T) {
 	}
 }
 
+// TestStoreLastRoundTime pins the query startup uses as the billing position: the
+// latest round any tenant completed, and the zero time when no tenant has rounded.
+func TestStoreLastRoundTime(t *testing.T) {
+	ctx := context.Background()
+	_, pool := startDatabase(t)
+
+	store := database.NewStore(pool)
+
+	lastRound, err := store.LastRoundTime(ctx)
+	if err != nil {
+		t.Fatalf("reading the last round time: %v", err)
+	}
+	if !lastRound.IsZero() {
+		t.Fatalf("expected the zero time with no progress rows, got %s", lastRound)
+	}
+
+	// A tenant that never rounded does not count.
+	if err := store.EnsureProgress(ctx, "acme"); err != nil {
+		t.Fatalf("ensure progress: %v", err)
+	}
+	lastRound, err = store.LastRoundTime(ctx)
+	if err != nil {
+		t.Fatalf("reading the last round time: %v", err)
+	}
+	if !lastRound.IsZero() {
+		t.Fatalf("expected the zero time with no round recorded, got %s", lastRound)
+	}
+
+	// The maximum across tenants wins.
+	earlier := time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC)
+	later := earlier.Add(time.Hour)
+	if err := store.EnsureProgress(ctx, "globex"); err != nil {
+		t.Fatalf("ensure progress: %v", err)
+	}
+	tx, err := store.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := database.SetLastRound(ctx, tx, "acme", earlier, 4); err != nil {
+		t.Fatalf("setting acme's last round: %v", err)
+	}
+	if err := database.SetLastRound(ctx, tx, "globex", later, 7); err != nil {
+		t.Fatalf("setting globex's last round: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	lastRound, err = store.LastRoundTime(ctx)
+	if err != nil {
+		t.Fatalf("reading the last round time: %v", err)
+	}
+	if !lastRound.Equal(later) {
+		t.Fatalf("expected the latest round %s, got %s", later, lastRound)
+	}
+}
+
 func TestStoreLedgerReplaceAndScan(t *testing.T) {
 	ctx := context.Background()
 	_, pool := startDatabase(t)
@@ -99,10 +156,10 @@ func TestStoreLedgerReplaceAndScan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	if err := database.ReplaceLedger(ctx, tx, "acme", key, pieces); err != nil {
+	if err := database.SyncLedger(ctx, tx, "acme", key, pieces, time.Time{}); err != nil {
 		t.Fatalf("replace ledger: %v", err)
 	}
-	if err := database.ReplaceLedger(ctx, tx, "acme", key, pieces); err != nil {
+	if err := database.SyncLedger(ctx, tx, "acme", key, pieces, time.Time{}); err != nil {
 		t.Fatalf("replace ledger again: %v", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -208,9 +265,9 @@ func TestDeleteTenantRowsRollsBackOnFailure(t *testing.T) {
 		ResourceType: "ComputeInstance", ResourceID: "vm-7",
 		Meter: "compute", Component: "compute", Dimensions: `{"tenant":"acme"}`,
 	}
-	if err := database.ReplaceLedger(ctx, tx, "acme", key, []database.LedgerPiece{
+	if err := database.SyncLedger(ctx, tx, "acme", key, []database.LedgerPiece{
 		{Key: key, StartTime: base, EndTime: base.Add(time.Minute), QuantityMicro: 60_000_000},
-	}); err != nil {
+	}, time.Time{}); err != nil {
 		t.Fatalf("replace ledger: %v", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -283,8 +340,29 @@ func TestStoreResourcesWithNewFacts(t *testing.T) {
 		t.Fatalf("expected vm-7 to have new facts, got %+v", resources)
 	}
 
+	// The bounds are inclusive: a fact written at exactly the last round's event
+	// offset, or dated exactly at its time, opens a span inside the next window, so
+	// the scan must still select it.
 	resources, err = database.ResourcesWithNewFacts(
 		ctx, pool, "acme", 10, base.Add(time.Hour),
+	)
+	if err != nil {
+		t.Fatalf("scan new facts: %v", err)
+	}
+	if len(resources) != 1 || resources[0].ResourceID != "vm-7" {
+		t.Fatalf("expected vm-7 with a fact at the offset boundary, got %+v", resources)
+	}
+	resources, err = database.ResourcesWithNewFacts(
+		ctx, pool, "acme", 11, base,
+	)
+	if err != nil {
+		t.Fatalf("scan new facts: %v", err)
+	}
+	if len(resources) != 1 || resources[0].ResourceID != "vm-7" {
+		t.Fatalf("expected vm-7 with a fact at the time boundary, got %+v", resources)
+	}
+	resources, err = database.ResourcesWithNewFacts(
+		ctx, pool, "acme", 11, base.Add(time.Hour),
 	)
 	if err != nil {
 		t.Fatalf("scan new facts: %v", err)

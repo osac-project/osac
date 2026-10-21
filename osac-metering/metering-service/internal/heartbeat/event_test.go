@@ -52,6 +52,24 @@ func TestParseMicroAcceptsBoundaryQuantities(t *testing.T) {
 	}
 }
 
+// TestNewRejectsCorruptedDimensions checks that dimension text that is not JSON fails the
+// heartbeat instead of billing an empty dimension set: the key's dimensions are the billing
+// identity, and silently dropping them would re-key every piece.
+func TestNewRejectsCorruptedDimensions(t *testing.T) {
+	key := database.LedgerKey{
+		ResourceType: "compute_instance", ResourceID: "vm-1",
+		Meter: "compute", Component: "compute", Dimensions: `{"tenant":`,
+	}
+	from := time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC)
+	_, err := heartbeat.New(
+		"acme", key, from, from.Add(time.Minute), 60_000_000, "second",
+		from.Add(2*time.Minute), 1, "0001",
+	)
+	if err == nil {
+		t.Fatal("corrupted dimension JSON must fail the heartbeat")
+	}
+}
+
 // TestIDIsStableAcrossQuantitiesAndUniqueAcrossRounds pins the once-semantics key's inputs.
 // The ID hashes the identity, the interval, and the round time, and deliberately not the
 // quantity: a heartbeat the relay resends within one round keeps its ID, so the provider

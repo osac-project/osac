@@ -54,3 +54,38 @@ var _ = Describe("producer config", func() {
 		Expect(sc.Version).To(Equal(sarama.V3_9_0_0))
 	})
 })
+
+var _ = Describe("SASL config", func() {
+	It("leaves SASL off when no user and password file are set", func() {
+		sc, err := kafka.ProducerConfig(kafka.ConnectionConfig{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sc.Net.SASL.Enable).To(BeFalse())
+	})
+
+	It("refuses a user without a password file", func() {
+		_, err := kafka.ProducerConfig(kafka.ConnectionConfig{SASLUser: "metering"})
+		Expect(err).To(MatchError(ContainSubstring("reading SASL password file")))
+	})
+})
+
+var _ = Describe("TLS config", func() {
+	It("leaves TLS off when disabled", func() {
+		sc, err := kafka.ProducerConfig(kafka.ConnectionConfig{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sc.Net.TLS.Enable).To(BeFalse())
+	})
+
+	It("trusts the system roots when enabled without a CA cert", func() {
+		sc, err := kafka.ProducerConfig(kafka.ConnectionConfig{TLSEnabled: true})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sc.Net.TLS.Enable).To(BeTrue())
+		Expect(sc.Net.TLS.Config.RootCAs).To(BeNil())
+	})
+
+	It("enables TLS with the CA cert", func() {
+		certFile := filepath.Join(GinkgoT().TempDir(), "ca.crt")
+		Expect(os.WriteFile(certFile, []byte("not a cert"), 0o600)).To(Succeed())
+		_, err := kafka.ProducerConfig(kafka.ConnectionConfig{TLSEnabled: true, TLSCACert: certFile})
+		Expect(err).To(MatchError(ContainSubstring("failed to parse Kafka CA cert")))
+	})
+})

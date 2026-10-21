@@ -5,6 +5,10 @@ Licensed under the Apache License, Version 2.0 (the "License"); you may not use 
 compliance with the License. You may obtain a copy of the License at
 
   http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
 */
 
 package service
@@ -13,6 +17,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -21,7 +27,12 @@ import (
 	"github.com/IBM/sarama"
 	"github.com/go-logr/logr"
 
+	"github.com/osac-project/osac-metering/internal/database"
+	"github.com/osac-project/osac-metering/internal/heartbeat"
+	"github.com/osac-project/osac-metering/internal/kafka"
+	"github.com/osac-project/osac-metering/internal/rules"
 	"github.com/osac-project/osac-metering/internal/testenv"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 func TestMain(m *testing.M) {
@@ -30,79 +41,77 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// newTestService builds a Service whose listing and loops the test controls.
+// deadKafka is an address nothing listens on, so connecting to it fails without a
+// timeout. Tests use it to make topic listing and creation fail for real.
+const deadKafka = "127.0.0.1:1"
+
+// newTestService builds a service on the real test broker and database. The Kafka
+// clients come from the same configuration the service builds in production, which
+// refuses to create topics implicitly, so a tenant whose event topic is missing fails
+// for real: the fold cannot consume a topic that does not exist. A tenant whose event
+// topic exists keeps running.
 func newTestService(t *testing.T) *Service {
 	t.Helper()
-	store := testenv.Database(t)
-	s := &Service{
-		cfg:     Config{Store: store, Logger: logr.Discard()},
-		tenants: map[string]*tenantLoops{},
-		missing: map[string]int{},
+	brokers := []string{testenv.Broker(t)}
+	saramaConfig, err := kafka.ProducerConfig(kafka.ConnectionConfig{Brokers: testenv.Broker(t)})
+	if err != nil {
+		t.Fatalf("building the kafka config: %v", err)
 	}
-	s.ensureTopics = func(context.Context, string) error { return nil }
+	client, err := sarama.NewClient(brokers, saramaConfig)
+	if err != nil {
+		t.Fatalf("creating kafka client: %v", err)
+	}
+	consumer, err := sarama.NewConsumerFromClient(client)
+	if err != nil {
+		t.Fatalf("creating kafka consumer: %v", err)
+	}
+	producer, err := sarama.NewSyncProducer(brokers, saramaConfig)
+	if err != nil {
+		t.Fatalf("creating kafka producer: %v", err)
+	}
+	s := &Service{
+		cfg: Config{
+			Store:  testenv.Database(t),
+			Kafka:  kafka.ConnectionConfig{Brokers: testenv.Broker(t)},
+			Logger: logr.Discard(),
+			// The round loop never fires during a test.
+			HeartbeatTick:    time.Hour,
+			TopicRetentionMS: "-1",
+		},
+		client:      client,
+		consumer:    consumer,
+		producer:    producer,
+		tenants:     map[string]*tenantLoops{},
+		startFailed: map[string]bool{},
+		missing:     map[string]int{},
+	}
+	// stopAll stops whatever loops the test started and closes the clients once, even
+	// for tests that never call Run.
+	t.Cleanup(s.stopAll)
 	return s
 }
 
-// stubLoops replaces runLoops: it optionally fails the tenant before recording the start,
-// and closes stopped when the context ends. Failing before the start is recorded matters:
-// a test that waits for the start and immediately re-discovers must see the tenant failed.
-func stubLoops(s *Service, fail bool) (starts *[]string, mu *sync.Mutex) {
-	var count []string
-	var lock sync.Mutex
-	s.runTenant = func(ctx context.Context, tenant string, loops *tenantLoops) {
-		defer close(loops.stopped)
-		if fail {
-			loops.fail()
-		}
-		lock.Lock()
-		count = append(count, tenant)
-		lock.Unlock()
-		if fail {
-			return
-		}
-		<-ctx.Done()
-	}
-	return &count, &lock
+// createEventTopic creates the tenant's event topic with one event, so the tenant's
+// fold has a topic to consume and its loops stay running.
+func createEventTopic(t *testing.T, tenant string) {
+	t.Helper()
+	testenv.ProduceEvents(t, tenant, []*privatev1.Event{
+		testenv.VMEvent("seed", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+			time.Now().UTC(), time.Now().UTC(), "seed", "RUNNING",
+			time.Now().UTC(), "small", time.Now().UTC()),
+	})
 }
 
-// TestReconcileEnsuresTopicsBeforeLoops checks that a tenant's loops start only after its
-// heartbeat and dead-letter topics exist, and that a tenant whose topics could not be
-// created waits for a later pass instead of starting half-way.
-func TestReconcileEnsuresTopicsBeforeLoops(t *testing.T) {
-	const tenant = "acme"
-	s := newTestService(t)
-	starts, mu := stubLoops(s, false)
-
-	var ensured []string
-	var fail bool
-	s.listTenants = func(context.Context) ([]string, error) { return []string{tenant}, nil }
-	s.ensureTopics = func(_ context.Context, name string) error {
-		if fail {
-			return errors.New("kafka unavailable")
-		}
-		ensured = append(ensured, name)
-		return nil
+// runningLoops returns the tenant's current loops, failing when it has none.
+func runningLoops(t *testing.T, s *Service, tenant string) *tenantLoops {
+	t.Helper()
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	loops, running := s.tenants[tenant]
+	if !running {
+		t.Fatalf("tenant %s has no running loops", tenant)
 	}
-
-	fail = true
-	s.reconcile(context.Background())
-	mu.Lock()
-	started := len(*starts)
-	mu.Unlock()
-	if started != 0 {
-		t.Fatal("a tenant whose topics could not be ensured must not start")
-	}
-
-	fail = false
-	s.reconcile(context.Background())
-	waitUntil(t, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return len(*starts) == 1
-	}, "the tenant's loops must start once its topics exist")
-	if len(ensured) != 1 || ensured[0] != tenant {
-		t.Fatalf("expected the tenant's topics to be ensured once, ensured %v", ensured)
-	}
+	return loops
 }
 
 // waitUntil polls the condition until it holds or the deadline passes.
@@ -117,23 +126,162 @@ func waitUntil(t *testing.T, condition func() bool, message string) {
 	}
 }
 
+// writeRevisionManifest writes one revision ConfigMap manifest into the directory, in
+// the shape the chart ships and DirectorySource reads.
+func writeRevisionManifest(t *testing.T, dir, number, effectiveAt, meters string) {
+	t.Helper()
+	manifest := `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ` + rules.NamePrefix + number + `
+immutable: true
+data:
+  effective_at: "` + effectiveAt + `"
+  meters.yaml: |
+` + indentBlock(meters, "    ")
+	if err := os.WriteFile(
+		filepath.Join(dir, number+".yaml"), []byte(manifest), 0o600,
+	); err != nil {
+		t.Fatalf("writing manifest %s: %v", number, err)
+	}
+}
+
+// indentBlock prefixes every line, for embedding a meters document in a manifest.
+func indentBlock(text, prefix string) string {
+	var out []string
+	for _, line := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+		out = append(out, prefix+line)
+	}
+	return strings.Join(out, "\n")
+}
+
+// TestNewStartsAfterRestoreBeforeFutureRevisionWasLoaded runs the restore scenario
+// end to end. A backup taken while revision 0001 was used has its last round at T0;
+// revision 0002 activated at T1 after T0 and spans were billed under it; the backup is
+// then restored while both ConfigMaps stay. Startup must not refuse: the billing
+// position is T0, 0002 is effective after it, and catch-up needs 0002 recorded to
+// bill the T1..T2 spans the heartbeats on the topic already billed.
+func TestNewStartsAfterRestoreBeforeFutureRevisionWasLoaded(t *testing.T) {
+	ctx := context.Background()
+	store := testenv.Database(t)
+
+	// The rules the restore finds: 0001 since the epoch, and 0002 effective an hour
+	// ago, which is after the backup's last round but before the wall clock.
+	secondMeters := strings.Replace(
+		testenv.DefaultMetersYAML(t), "states: [RUNNING]", "states: [RUNNING, PAUSED]", 1,
+	)
+	dir := t.TempDir()
+	writeRevisionManifest(
+		t, dir, "0001", "1970-01-01T00:00:00Z", testenv.DefaultMetersYAML(t),
+	)
+	writeRevisionManifest(
+		t, dir, "0002", time.Now().UTC().Add(-time.Hour).Format(time.RFC3339), secondMeters,
+	)
+	source := rules.NewDirectorySource(dir)
+	present, err := source.List(ctx)
+	if err != nil {
+		t.Fatalf("listing revisions: %v", err)
+	}
+
+	// The restored backup: 0001 recorded as used, and a tenant whose last round ran
+	// two days ago, before 0002 took effect.
+	if err := store.RecordRuleRevision(ctx, database.RuleRevisionRow{
+		Revision:    present[0].Number,
+		EffectiveAt: present[0].EffectiveAt,
+		MetersYAML:  present[0].MetersYAML,
+	}); err != nil {
+		t.Fatalf("recording revision 0001: %v", err)
+	}
+	tenant := strings.ToLower(t.Name())
+	if err := store.EnsureProgress(ctx, tenant); err != nil {
+		t.Fatalf("ensuring progress: %v", err)
+	}
+	tx, err := store.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := database.SetLastRound(
+		ctx, tx, tenant, time.Now().UTC().Add(-48*time.Hour), 0,
+	); err != nil {
+		t.Fatalf("setting the last round: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	svc, err := New(ctx, Config{
+		Store:  store,
+		Rules:  source,
+		Kafka:  kafka.ConnectionConfig{Brokers: testenv.Broker(t)},
+		Logger: logr.Discard(),
+	})
+	if err != nil {
+		t.Fatalf("startup after a restore must not refuse: %v", err)
+	}
+	t.Cleanup(svc.stopAll)
+
+	// Startup records both revisions, so catch-up can bill the backup gap under the
+	// revision its heartbeats were already billed under.
+	used, err := store.ListRuleRevisions(ctx)
+	if err != nil {
+		t.Fatalf("listing recorded revisions: %v", err)
+	}
+	recorded := map[string]bool{}
+	for _, row := range used {
+		recorded[row.Revision] = true
+	}
+	if !recorded["0001"] || !recorded["0002"] {
+		t.Fatalf("startup must record revisions 0001 and 0002, got %+v", used)
+	}
+}
+
+// TestReconcileEnsuresTopicsBeforeLoops checks that a tenant's loops start only after its
+// heartbeat and dead-letter topics exist, and that a tenant whose topics could not be
+// created waits for a later pass instead of starting half-way.
+func TestReconcileEnsuresTopicsBeforeLoops(t *testing.T) {
+	tenant := strings.ToLower(t.Name())
+	s := newTestService(t)
+	ctx := context.Background()
+
+	// Kafka is unreachable, so ensuring the tenant's topics fails.
+	s.cfg.Kafka = kafka.ConnectionConfig{Brokers: deadKafka}
+	s.syncTenants(ctx, []string{tenant})
+	s.lock.Lock()
+	_, running := s.tenants[tenant]
+	s.lock.Unlock()
+	if running {
+		t.Fatal("a tenant whose topics could not be ensured must not start")
+	}
+
+	// Kafka is back: the next pass ensures the topics and starts the tenant.
+	s.cfg.Kafka = kafka.ConnectionConfig{Brokers: testenv.Broker(t)}
+	s.syncTenants(ctx, []string{tenant})
+	waitUntil(t, func() bool {
+		s.lock.Lock()
+		defer s.lock.Unlock()
+		_, running := s.tenants[tenant]
+		return running
+	}, "the tenant's loops must start once its topics exist")
+}
+
 // TestReconcileNeedsSeveralMissingPassesToDelete checks that one listing that omits a tenant
 // does not delete its rows: the topic must stay missing across several passes.
 func TestReconcileNeedsSeveralMissingPassesToDelete(t *testing.T) {
-	const tenant = "acme"
+	tenant := strings.ToLower(t.Name())
 	s := newTestService(t)
-	starts, mu := stubLoops(s, false)
-	if err := s.cfg.Store.EnsureProgress(context.Background(), tenant); err != nil {
+	ctx := context.Background()
+	if err := s.cfg.Store.EnsureProgress(ctx, tenant); err != nil {
 		t.Fatalf("ensuring progress: %v", err)
 	}
-	s.listTenants = func(context.Context) ([]string, error) { return []string{tenant}, nil }
-	s.reconcile(context.Background())
+	// The event topic exists, so the started loops keep running for the whole test.
+	createEventTopic(t, tenant)
+
+	s.syncTenants(ctx, []string{tenant})
+	loops := runningLoops(t, s, tenant)
 
 	// Two passes miss the tenant: its loops stay and its rows stay.
-	empty := func(context.Context) ([]string, error) { return nil, nil }
 	for range DeletionPasses - 1 {
-		s.listTenants = empty
-		s.reconcile(context.Background())
+		s.syncTenants(ctx, nil)
 		s.lock.Lock()
 		_, running := s.tenants[tenant]
 		s.lock.Unlock()
@@ -146,91 +294,76 @@ func TestReconcileNeedsSeveralMissingPassesToDelete(t *testing.T) {
 	}
 
 	// A pass that sees the tenant again resets the count.
-	s.listTenants = func(context.Context) ([]string, error) { return []string{tenant}, nil }
-	s.reconcile(context.Background())
-	s.listTenants = empty
+	s.syncTenants(ctx, []string{tenant})
 	for range DeletionPasses - 1 {
-		s.reconcile(context.Background())
+		s.syncTenants(ctx, nil)
 	}
-	s.lock.Lock()
-	_, running := s.tenants[tenant]
-	s.lock.Unlock()
-	if !running || !tenantRowsExist(t, s, tenant) {
+	if runningLoops(t, s, tenant) != loops {
+		t.Fatal("a healthy tenant must keep its original loops across the missing passes")
+	}
+	if !tenantRowsExist(t, s, tenant) {
 		t.Fatal("a listing that saw the tenant again must reset the missing count")
 	}
 
 	// The threshold-th consecutive miss stops the loops, joins them, and deletes the rows.
-	s.reconcile(context.Background())
+	s.syncTenants(ctx, nil)
 	waitUntil(t, func() bool { return !tenantRowsExist(t, s, tenant) },
 		"the tenant's rows must be deleted after the missing threshold")
-	mu.Lock()
-	defer mu.Unlock()
-	if len(*starts) != 1 {
-		t.Fatalf("the tenant's loops started %d times, want 1", len(*starts))
-	}
 }
 
 // TestReconcileRestartsFailedTenants checks that a tenant whose loops failed is restarted by
-// a later discovery pass instead of vanishing from the map.
+// a later discovery pass instead of vanishing from the map. The tenant has no event topic,
+// so its fold fails for real and fails the loops.
 func TestReconcileRestartsFailedTenants(t *testing.T) {
-	const tenant = "acme"
+	tenant := strings.ToLower(t.Name())
 	s := newTestService(t)
-	starts, mu := stubLoops(s, true)
-	s.listTenants = func(context.Context) ([]string, error) { return []string{tenant}, nil }
+	ctx := context.Background()
 
-	s.reconcile(context.Background())
-	waitUntil(t, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return len(*starts) == 1
-	}, "the tenant's loops must start once")
+	s.syncTenants(ctx, []string{tenant})
+	failed := runningLoops(t, s, tenant)
+	waitUntil(t, func() bool { return !s.Healthy() },
+		"a tenant whose event topic is missing must fail its loops")
 
 	// The failed tenant is still registered until the next pass restarts it.
-	s.reconcile(context.Background())
+	s.syncTenants(ctx, []string{tenant})
 	waitUntil(t, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return len(*starts) == 2
+		s.lock.Lock()
+		defer s.lock.Unlock()
+		current, running := s.tenants[tenant]
+		return running && current != failed
 	}, "a later pass must restart a tenant whose loops failed")
 }
 
 // TestReconcileSurvivesListingFailures checks that one failed listing neither stops the
 // running loops nor fails the service: the next pass lists again.
 func TestReconcileSurvivesListingFailures(t *testing.T) {
-	const tenant = "acme"
+	tenant := strings.ToLower(t.Name())
 	s := newTestService(t)
-	starts, mu := stubLoops(s, false)
-	s.listTenants = func(context.Context) ([]string, error) { return []string{tenant}, nil }
-	s.reconcile(context.Background())
-	waitUntil(t, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return len(*starts) == 1
-	}, "the tenant's loops must start once")
+	createEventTopic(t, tenant)
 
-	s.listTenants = func(context.Context) ([]string, error) {
-		return nil, errors.New("broker unavailable")
-	}
-	s.reconcile(context.Background())
-	s.lock.Lock()
-	loops, running := s.tenants[tenant]
-	s.lock.Unlock()
-	if !running {
-		t.Fatal("a failed listing must not stop the running loops")
-	}
+	// The tenant is already running when listing breaks.
+	s.syncTenants(context.Background(), []string{tenant})
+	loops := runningLoops(t, s, tenant)
+
+	// Kafka is unreachable, so every listing fails. The running loops must survive.
+	s.cfg.Kafka = kafka.ConnectionConfig{Brokers: deadKafka}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	// Run lists once, immediately; the listing fails on the unreachable broker.
+	time.Sleep(500 * time.Millisecond)
 	select {
 	case <-loops.stopped:
 		t.Fatal("a failed listing must not stop the running loops")
 	default:
 	}
+	if runningLoops(t, s, tenant) != loops {
+		t.Fatal("a failed listing must not replace the running loops")
+	}
 
-	s.listTenants = func(context.Context) ([]string, error) { return []string{tenant}, nil }
-	s.reconcile(context.Background())
-	mu.Lock()
-	defer mu.Unlock()
-	if len(*starts) != 1 {
-		t.Fatalf("a healthy pass after a failed listing must not restart the loops, got %d starts",
-			len(*starts))
+	cancel()
+	if err := <-done; err != context.Canceled {
+		t.Fatalf("Run must return the context error, got %v", err)
 	}
 }
 
@@ -252,26 +385,18 @@ func tenantRowsExist(t *testing.T, s *Service, tenant string) bool {
 // an error makes the service unhealthy, and a later discovery pass that restarts the tenant
 // makes it healthy again.
 func TestHealthyReflectsDeadLoops(t *testing.T) {
-	const tenant = "acme"
+	tenant := strings.ToLower(t.Name())
 	s := newTestService(t)
-	s.listTenants = func(context.Context) ([]string, error) { return []string{tenant}, nil }
+	ctx := context.Background()
 
-	// The tenant's loops fail on the first start, then run.
-	var starts atomic.Int32
-	s.runTenant = func(ctx context.Context, _ string, loops *tenantLoops) {
-		defer close(loops.stopped)
-		if starts.Add(1) == 1 {
-			loops.fail()
-			return
-		}
-		<-ctx.Done()
-	}
-
-	s.reconcile(context.Background())
+	// The tenant has no event topic: its loops fail on the first start.
+	s.syncTenants(ctx, []string{tenant})
 	waitUntil(t, func() bool { return !s.Healthy() },
 		"a tenant whose loops died must make the service unhealthy")
 
-	s.reconcile(context.Background())
+	// The event topic appears; the next pass restarts the tenant, whose loops now run.
+	createEventTopic(t, tenant)
+	s.syncTenants(ctx, []string{tenant})
 	waitUntil(t, func() bool { return s.Healthy() },
 		"a restarted tenant must make the service healthy again")
 }
@@ -280,61 +405,96 @@ func TestHealthyReflectsDeadLoops(t *testing.T) {
 // loops exist only for tenants with topics.
 func TestHealthyWithNoTenants(t *testing.T) {
 	s := newTestService(t)
-	s.listTenants = func(context.Context) ([]string, error) { return nil, nil }
-	s.reconcile(context.Background())
+	s.syncTenants(context.Background(), nil)
 	if !s.Healthy() {
 		t.Fatal("a service with no tenants must be healthy")
 	}
 }
 
-// shutdownProducer stands in for the relay's producer and records when it closes.
-type shutdownProducer struct {
+// TestReadinessIncludesDiscoveredTenantsThatCouldNotStart checks that readiness
+// covers a tenant discovery listed but whose loops could not start: the pod must not
+// report ready while a discovered tenant has no billing loops.
+func TestReadinessIncludesDiscoveredTenantsThatCouldNotStart(t *testing.T) {
+	tenant := strings.ToLower(t.Name())
+	s := newTestService(t)
+	ctx := context.Background()
+
+	// The tenant is listed, but Kafka is unreachable: its heartbeat and dead-letter
+	// topics cannot be ensured, so its loops never start.
+	s.cfg.Kafka = kafka.ConnectionConfig{Brokers: deadKafka}
+	s.syncTenants(ctx, []string{tenant})
+	s.lock.Lock()
+	_, running := s.tenants[tenant]
+	s.lock.Unlock()
+	if running {
+		t.Fatal("a tenant whose topics could not be ensured must not start")
+	}
+	if s.Healthy() {
+		t.Fatal("readiness must fail while a discovered tenant could not start")
+	}
+
+	// Kafka is back and the event topic exists: the next pass starts the tenant and
+	// readiness recovers.
+	createEventTopic(t, tenant)
+	s.cfg.Kafka = kafka.ConnectionConfig{Brokers: testenv.Broker(t)}
+	s.syncTenants(ctx, []string{tenant})
+	waitUntil(t, func() bool {
+		s.lock.Lock()
+		defer s.lock.Unlock()
+		_, running := s.tenants[tenant]
+		return running
+	}, "the tenant's loops must start once its topics exist")
+	waitUntil(t, func() bool { return s.Healthy() },
+		"a tenant that finally started must make the service healthy again")
+
+	// A tenant that cannot start and then leaves the listing no longer holds readiness
+	// down: it is gone, not broken.
+	gone := strings.ToLower(t.Name()) + "-gone"
+	s.cfg.Kafka = kafka.ConnectionConfig{Brokers: deadKafka}
+	s.syncTenants(ctx, []string{gone})
+	if s.Healthy() {
+		t.Fatal("readiness must fail while a discovered tenant could not start")
+	}
+	s.syncTenants(ctx, nil)
+	if !s.Healthy() {
+		t.Fatal("a tenant that left the listing must not hold readiness down")
+	}
+}
+
+// closeRecordingProducer fails the test if the service closes the producer before the
+// tenant's loops stopped, and delegates every call to the real producer it wraps. The
+// check runs inside Close, on the goroutine that waited for the loops, so no second
+// observer races the shutdown.
+type closeRecordingProducer struct {
 	sarama.SyncProducer
-	events chan string
+	service *Service
+	tenant  string
+	t       *testing.T
 }
 
-func (p *shutdownProducer) SendMessage(*sarama.ProducerMessage) (int32, int64, error) {
-	return 0, 0, nil
+func (p *closeRecordingProducer) Close() error {
+	p.service.lock.Lock()
+	loops, running := p.service.tenants[p.tenant]
+	p.service.lock.Unlock()
+	if running {
+		select {
+		case <-loops.stopped:
+		default:
+			p.t.Error("the producer must close only after the tenant loops stopped")
+		}
+	}
+	return p.SyncProducer.Close()
 }
-
-func (p *shutdownProducer) SendMessages([]*sarama.ProducerMessage) error { return nil }
-
-func (p *shutdownProducer) Close() error {
-	p.events <- "producer-closed"
-	return nil
-}
-
-// shutdownConsumer and shutdownClient stand in for the service's other Kafka clients; only
-// their Close is called during shutdown.
-type shutdownConsumer struct{ sarama.Consumer }
-
-func (c *shutdownConsumer) Close() error { return nil }
-
-type shutdownClient struct{ sarama.Client }
-
-func (c *shutdownClient) Close() error { return nil }
 
 // TestRunJoinsLoopsBeforeClosingKafkaClients checks shutdown ordering: the tenant loops
 // stop before the Kafka clients close, so a loop whose send is still in flight when the
 // context ends does not hit a closed client.
 func TestRunJoinsLoopsBeforeClosingKafkaClients(t *testing.T) {
-	const tenant = "acme"
+	tenant := strings.ToLower(t.Name())
 	s := newTestService(t)
-	order := make(chan string, 4)
-	s.producer = &shutdownProducer{events: order}
-	s.consumer = &shutdownConsumer{}
-	s.client = &shutdownClient{}
-	s.listTenants = func(context.Context) ([]string, error) { return []string{tenant}, nil }
-	s.runTenant = func(ctx context.Context, _ string, loops *tenantLoops) {
-		defer close(loops.stopped)
-		<-ctx.Done()
-		// A send still in flight while shutdown runs: the producer must still be open.
-		if _, _, err := s.producer.SendMessage(&sarama.ProducerMessage{
-			Topic: "osac.metering.heartbeat.acme",
-		}); err != nil {
-			t.Errorf("in-flight send after cancellation failed: %v", err)
-		}
-		order <- "loop-stopped"
+	createEventTopic(t, tenant)
+	s.producer = &closeRecordingProducer{
+		SyncProducer: s.producer, service: s, tenant: tenant, t: t,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -343,19 +503,226 @@ func TestRunJoinsLoopsBeforeClosingKafkaClients(t *testing.T) {
 	waitUntil(t, func() bool {
 		s.lock.Lock()
 		defer s.lock.Unlock()
-		_, running := s.tenants[tenant]
-		return running
+		return s.tenants[tenant] != nil
 	}, "the tenant's loops never started")
+	// The loops must be alive at shutdown, so the ordering check cannot pass vacuously.
+	waitUntil(t, func() bool { return s.Healthy() }, "the tenant's loops must run before shutdown")
 
 	cancel()
-	if err := <-done; !errors.Is(err, context.Canceled) {
+	if err := <-done; err != context.Canceled {
 		t.Fatalf("Run must return the context error, got %v", err)
 	}
+}
 
-	// Run has returned, so the deferred shutdown finished and both events are recorded.
-	first, second := <-order, <-order
-	if first != "loop-stopped" || second != "producer-closed" {
-		t.Fatalf("shutdown must join the loops before closing the Kafka clients, "+
-			"got %q then %q", first, second)
+// blockedSendProducer blocks every send until the test releases it, and records how many
+// sends were still active when the service closed the producer. A send released after the
+// close fails instead of using the closed producer, the way a real in-flight send fails
+// when shutdown closes the client under it.
+type blockedSendProducer struct {
+	sarama.SyncProducer
+	entered       chan struct{}
+	release       chan struct{}
+	active        atomic.Int64
+	closed        atomic.Bool
+	activeAtClose atomic.Int64
+}
+
+func (p *blockedSendProducer) SendMessage(message *sarama.ProducerMessage) (int32, int64, error) {
+	p.active.Add(1)
+	defer p.active.Add(-1)
+	select {
+	case p.entered <- struct{}{}:
+	default:
+	}
+	<-p.release
+	if p.closed.Load() {
+		return 0, 0, errors.New("the service closed the producer during the send")
+	}
+	return p.SyncProducer.SendMessage(message)
+}
+
+func (p *blockedSendProducer) Close() error {
+	p.activeAtClose.Store(p.active.Load())
+	p.closed.Store(true)
+	return p.SyncProducer.Close()
+}
+
+// TestRestartKeepsStoppingLoopsInShutdownJoin checks the restart race: a tenant's
+// loops fail while their relay send is still in flight, the next pass restarts
+// the tenant, and shutdown then closes the Kafka clients. The old loops' send is still
+// active, so shutdown must join the evicted loops before closing the clients, not only
+// the replacement loops. The failure is injected for real: a database trigger fails the
+// fold's next history write, the way a transient PostgreSQL outage would.
+func TestRestartKeepsStoppingLoopsInShutdownJoin(t *testing.T) {
+	const tenant = "restart-stopping-loops"
+	s := newTestService(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	creation := now.Add(-2 * time.Minute)
+	initial := testenv.VMEvent("seed-created", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+		creation, creation, "web", "STARTING", creation, "small", creation)
+	initial.GetComputeInstance().GetStatus().ClearInstanceType()
+	initial.GetComputeInstance().GetStatus().ClearInstanceTypeTransitionTime()
+	running := testenv.VMEvent("seed-running", privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+		now.Add(-time.Minute), creation, "web", "RUNNING", now.Add(-time.Minute),
+		"small", now.Add(-time.Minute))
+	initial.GetComputeInstance().GetMetadata().SetTenant(tenant)
+	running.GetComputeInstance().GetMetadata().SetTenant(tenant)
+	testenv.ProduceEvents(t, tenant, []*privatev1.Event{initial, running})
+	if err := s.cfg.Store.EnsureProgress(ctx, tenant); err != nil {
+		t.Fatalf("ensuring progress: %v", err)
+	}
+	key := database.LedgerKey{
+		ResourceType: "ComputeInstance", ResourceID: "vm-7", Meter: "compute", Component: "compute",
+		Dimensions: `{"tenant":"` + tenant + `"}`,
+	}
+	event, err := heartbeat.New(tenant, key, now.Add(-time.Minute), now, 60_000_000,
+		"second", now, 2, "0001")
+	if err != nil {
+		t.Fatalf("building the heartbeat: %v", err)
+	}
+	payload, err := event.MarshalJSON()
+	if err != nil {
+		t.Fatalf("marshaling the heartbeat: %v", err)
+	}
+	producer := &blockedSendProducer{
+		SyncProducer: s.producer, entered: make(chan struct{}, 1), release: make(chan struct{}),
+	}
+	s.producer = producer
+	var old *tenantLoops
+	// shutdownDone closes once the stopAll call below returns; nil until then.
+	var shutdownDone chan struct{}
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(producer.release) }) }
+	t.Cleanup(func() {
+		if old != nil {
+			old.cancel()
+		}
+		release()
+		if old != nil {
+			select {
+			case <-old.stopped:
+			case <-time.After(10 * time.Second):
+				t.Error("the old loops never stopped after their in-flight send was released")
+			}
+		}
+		if shutdownDone != nil {
+			select {
+			case <-shutdownDone:
+			case <-time.After(10 * time.Second):
+			}
+		}
+	})
+	s.syncTenants(ctx, []string{tenant})
+	old = runningLoops(t, s, tenant)
+	waitUntil(t, func() bool {
+		progress, err := s.cfg.Store.GetTenantProgress(ctx, tenant)
+		return err == nil && progress.EventOffset == 2
+	}, "the initial VM history must fold before the round and injected database error")
+
+	// A round has billed one minute and left its heartbeat in the outbox, the state a
+	// restart can interrupt mid-delivery.
+	tx, err := s.cfg.Store.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := database.SyncLedger(ctx, tx, tenant, key, []database.LedgerPiece{
+		{Key: key, StartTime: now.Add(-time.Minute), EndTime: now, QuantityMicro: 60_000_000},
+	}, time.Time{}); err != nil {
+		t.Fatalf("writing the ledger: %v", err)
+	}
+	if err := database.EnqueueHeartbeats(ctx, tx, tenant, []database.OutboxRow{
+		{ID: event.ID(), Payload: payload, RoundTime: now},
+	}); err != nil {
+		t.Fatalf("enqueueing the heartbeat: %v", err)
+	}
+	if err := database.SetLastRound(ctx, tx, tenant, now, 2); err != nil {
+		t.Fatalf("setting the last round: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	select {
+	case <-producer.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the old relay never started its send")
+	}
+
+	// The fold's next history write fails once, while the relay send waits.
+	if _, err := s.cfg.Store.Pool().Exec(ctx, `
+		CREATE SEQUENCE review_history_failures;
+		CREATE FUNCTION review_fail_first_history_write() RETURNS trigger AS $$
+		BEGIN
+			IF nextval('review_history_failures') = 1 THEN
+				RAISE EXCEPTION 'review transient database error';
+			END IF;
+			RETURN NEW;
+		END $$ LANGUAGE plpgsql;
+		CREATE TRIGGER review_fail_first_history_write BEFORE INSERT ON history
+		FOR EACH ROW EXECUTE FUNCTION review_fail_first_history_write();
+	`); err != nil {
+		t.Fatalf("installing the transient failure: %v", err)
+	}
+	stopped := testenv.VMEvent("stop", privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+		now.Add(time.Second), creation, "web", "STOPPED", now.Add(time.Second),
+		"small", now.Add(-time.Minute))
+	stopped.GetComputeInstance().GetMetadata().SetTenant(tenant)
+	testenv.ProduceEvents(t, tenant, []*privatev1.Event{stopped})
+	waitUntil(t, old.hasFailed, "the injected fold error must mark the old loops failed")
+	select {
+	case <-old.stopped:
+		t.Fatal("the old loops must still be waiting for their blocked relay send")
+	default:
+	}
+
+	// The next pass restarts the tenant: the failed loops are evicted while their relay
+	// is still blocked in its send, and replacement loops start at once.
+	s.syncTenants(ctx, []string{tenant})
+	current := runningLoops(t, s, tenant)
+	if current == old {
+		// Keeping the old loops registered until they stop is also a valid fix.
+		return
+	}
+
+	// Shutdown joins the replacement loops first. It must then keep waiting for the
+	// evicted loops: their send is still in flight, and the producer may close only
+	// after it finishes.
+	shutdownDone = make(chan struct{})
+	done := shutdownDone
+	go func() {
+		s.stopAll()
+		close(done)
+	}()
+	waitUntil(t, func() bool {
+		select {
+		case <-current.stopped:
+			return true
+		default:
+			return false
+		}
+	}, "the replacement loops must stop at shutdown")
+	select {
+	case <-done:
+		// Shutdown finished while the evicted loops' send was still blocked, so it
+		// closed the producer under an in-flight send of loops it dropped.
+		t.Fatalf("shutdown finished without joining the evicted loops: the producer " +
+			"closed while their send was still in flight")
+	case <-time.After(2 * time.Second):
+		// Shutdown is still waiting, held by the evicted loops' join.
+	}
+
+	release()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("shutdown must finish once the in-flight send was released")
+	}
+	select {
+	case <-old.stopped:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the old loops never finished after the send was released")
+	}
+	if got := producer.activeAtClose.Load(); got != 0 {
+		t.Fatalf("shutdown closed the producer with %d in-flight sends of the evicted loops", got)
 	}
 }

@@ -16,36 +16,25 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/IBM/sarama"
 	cloudevents "github.com/cloudevents/sdk-go/v2"
-	"github.com/go-logr/logr"
 
 	"github.com/osac-project/osac-metering/internal/database"
-	"github.com/osac-project/osac-metering/internal/fold"
 	"github.com/osac-project/osac-metering/internal/heartbeat"
-	"github.com/osac-project/osac-metering/internal/relay"
+	"github.com/osac-project/osac-metering/internal/pipelinetest"
 	"github.com/osac-project/osac-metering/internal/round"
 	"github.com/osac-project/osac-metering/internal/rules"
 	"github.com/osac-project/osac-metering/internal/testenv"
 	"github.com/osac-project/osac-metering/internal/topics"
-	"github.com/osac-project/osac-metering/internal/usage"
 	"github.com/osac-project/osac-metering/schema"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
-
-// sentBeat is a heartbeat read from a topic, with its ID.
-type sentBeat struct {
-	id   string
-	data schema.HeartbeatData
-}
 
 func TestMain(m *testing.M) {
 	code := m.Run()
@@ -55,562 +44,48 @@ func TestMain(m *testing.M) {
 
 var base = time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC)
 
-// pipeline bundles a fold, a round, and a relay against one database, with a clock the test
-// controls.
-type pipeline struct {
-	tenant string
-	store  *database.Store
-	fold   *fold.Fold
-	round  *round.Round
-	relay  *relay.Relay
-}
-
-func newPipeline(t *testing.T, tenant string) *pipeline {
-	t.Helper()
-	return newPipelineOnStore(t, tenant, testenv.Database(t))
-}
-
-func newPipelineOnStore(t *testing.T, tenant string, store *database.Store) *pipeline {
-	t.Helper()
-	return newPipelineWithRevisions(t, tenant, store, defaultRevisions(t))
-}
-
-// defaultRevisions returns the shipped revision 0001.
-func defaultRevisions(t *testing.T) []rules.Revision {
-	t.Helper()
-	revision, err := rules.DefaultRevision()
-	if err != nil {
-		t.Fatalf("parsing default revision: %v", err)
-	}
-	return []rules.Revision{revision}
-}
-
-func newPipelineWithRevisions(
-	t *testing.T, tenant string, store *database.Store, revisions []rules.Revision,
-) *pipeline {
-	t.Helper()
-	owners, err := usage.RegistryOwners()
-	if err != nil {
-		t.Fatalf("reading owners: %v", err)
-	}
-	calculator, err := usage.NewCalculator(revisions, "us-east", owners)
-	if err != nil {
-		t.Fatalf("creating calculator: %v", err)
-	}
-	foldLoop, err := fold.New(store, testenv.NewConsumer(t), logr.Discard())
-	if err != nil {
-		t.Fatalf("creating fold: %v", err)
-	}
-	roundLoop, err := round.New(
-		store, calculator, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(),
-	)
-	if err != nil {
-		t.Fatalf("creating round: %v", err)
-	}
-	relayLoop, err := relay.New(store, testenv.NewProducer(t), logr.Discard())
-	if err != nil {
-		t.Fatalf("creating relay: %v", err)
-	}
-	return &pipeline{tenant: tenant, store: store, fold: foldLoop, round: roundLoop, relay: relayLoop}
-}
-
-// startRelay runs the relay in the background for the rest of the test.
-func (p *pipeline) startRelay(t *testing.T) {
-	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go func() { _ = p.relay.RunTenant(ctx, p.tenant) }()
-}
-
-// foldAll folds until the tenant's stored offset reaches total.
-func (p *pipeline) foldAll(t *testing.T, total int) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	go func() { _ = p.fold.RunTenant(ctx, p.tenant) }()
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		progress, err := p.store.GetTenantProgress(context.Background(), p.tenant)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			t.Fatalf("reading progress: %v", err)
-		}
-		if progress.EventOffset >= int64(total) {
-			cancel()
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("fold did not reach offset %d, stopped at %d", total, progress.EventOffset)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-}
-
-// roundAt runs one round at a fixed time.
-func (p *pipeline) roundAt(t *testing.T, moment time.Time) {
-	t.Helper()
-	p.round.SetClock(func() time.Time { return moment })
-	if err := p.round.Once(context.Background(), p.tenant); err != nil {
-		t.Fatalf("round at %s: %v", moment, err)
-	}
-}
-
-// waitOutboxEmpty waits until the relay has sent every heartbeat the rounds wrote.
-func (p *pipeline) waitOutboxEmpty(t *testing.T) {
-	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		rows, err := database.NextOutbox(context.Background(), p.store.Pool(), p.tenant, 1)
-		if err != nil {
-			t.Fatalf("reading outbox: %v", err)
-		}
-		if len(rows) == 0 {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("relay did not drain the outbox")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-}
-
-// sentHeartbeats reads every heartbeat the relay put on the tenant's heartbeat topic.
-func sentHeartbeats(t *testing.T, tenant string) []sentBeat {
-	t.Helper()
-	var result []sentBeat
-	for _, value := range testenv.ConsumeAll(t, topics.Heartbeat(tenant)) {
-		event := cloudevents.Event{}
-		if err := event.UnmarshalJSON(value); err != nil {
-			t.Fatalf("unmarshaling heartbeat: %v", err)
-		}
-		data, err := heartbeat.Data(event)
-		if err != nil {
-			t.Fatalf("decoding heartbeat: %v", err)
-		}
-		result = append(result, sentBeat{id: event.ID(), data: data})
-	}
-	return result
-}
-
-// quantities renders the heartbeats as comparable text.
-func quantities(beats []sentBeat) []string {
-	var lines []string
-	for _, beat := range beats {
-		lines = append(lines, fmt.Sprintf(
-			"%s %s..%s %s", beat.data.Meter, beat.data.Usage.From, beat.data.Usage.To,
-			beat.data.Usage.Quantity,
-		))
-	}
-	return lines
-}
-
-// TestLateEventSendsTheCorrection replays the design's example: a VM that stops, but the
-// update reaches fulfillment late.
-func TestLateEventSendsTheCorrection(t *testing.T) {
-	p := newPipeline(t, "late")
-	p.startRelay(t)
-
-	total := testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
-		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
-			base, base, "web", "STARTING", base, "small", base),
-		testenv.VMEvent("e2", privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
-			base.Add(40*time.Second), base, "web", "RUNNING",
-			base.Add(40*time.Second), "small", base),
-	})
-	p.foldAll(t, total)
-
-	p.roundAt(t, base.Add(time.Minute))
-	p.roundAt(t, base.Add(2*time.Minute))
-	p.roundAt(t, base.Add(3*time.Minute))
-	p.waitOutboxEmpty(t)
-
-	// The stop reaches fulfillment late: it happened at 10:02:30 but arrives after the
-	// 10:03 round.
-	total += testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
-		testenv.VMEvent("e4", privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
-			base.Add(3*time.Minute+10*time.Second), base, "web", "STOPPED",
-			base.Add(2*time.Minute+30*time.Second), "small", base),
-	})
-	p.foldAll(t, total)
-	p.roundAt(t, base.Add(4*time.Minute))
-	p.waitOutboxEmpty(t)
-
-	got := quantities(sentHeartbeats(t, p.tenant))
-	want := []string{
-		"compute 2026-10-05T10:00:40Z..2026-10-05T10:01:00Z 20.000000",
-		"compute 2026-10-05T10:01:00Z..2026-10-05T10:02:00Z 60.000000",
-		"compute 2026-10-05T10:02:00Z..2026-10-05T10:03:00Z 60.000000",
-		"compute 2026-10-05T10:02:30Z..2026-10-05T10:03:00Z -30.000000",
-	}
-	if fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", join(got), join(want))
-	}
-}
-
-// TestRoundLevelSubSecondRun checks the round-level behavior: a run still under one second
-// at the first round sends nothing, and the next round bills the whole run from its start,
-// including the part the first round watched as pending.
-func TestRoundLevelSubSecondRun(t *testing.T) {
-	p := newPipeline(t, "subsecond")
-	p.startRelay(t)
-
-	total := testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
-		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
-			base, base, "web", "RUNNING", base, "small", base),
-	})
-	p.foldAll(t, total)
-
-	// The run is 0.4 s long at the first round: nothing is billable yet.
-	p.roundAt(t, base.Add(400*time.Millisecond))
-	if outboxCount(t, p.store, p.tenant) != 0 {
-		t.Fatal("a run under one second must not send a heartbeat")
-	}
-
-	// 1.4 s later the run is 1.8 s long: the round bills 1.8 s from the run's start.
-	p.roundAt(t, base.Add(1800*time.Millisecond))
-	p.waitOutboxEmpty(t)
-
-	got := quantities(sentHeartbeats(t, p.tenant))
-	want := []string{
-		"compute 2026-10-05T10:00:00Z..2026-10-05T10:00:01.8Z 1.800000",
-	}
-	if fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", join(got), join(want))
-	}
-}
-
-// TestRestoreSendsNothingTwice simulates a database restored from a backup: the restored
-// ledger is behind the heartbeat topic, and catch-up brings it up to date before the round
-// compares.
-func TestRestoreSendsNothingTwice(t *testing.T) {
-	const tenant = "restore"
-	p := newPipeline(t, tenant)
-	p.startRelay(t)
-
-	total := testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
-		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
-			base, base, "web", "RUNNING", base, "small", base),
-	})
-	p.foldAll(t, total)
-
-	// Backup point: after the 10:01 round and its relay.
-	p.roundAt(t, base.Add(time.Minute))
-	p.waitOutboxEmpty(t)
-	backup := snapshot(t, p.store, p.tenant)
-
-	// The live system continues without the backup.
-	p.roundAt(t, base.Add(2*time.Minute))
-	p.roundAt(t, base.Add(3*time.Minute))
-	p.waitOutboxEmpty(t)
-
-	// The restored database knows only the backup. Catch-up reads the heartbeats sent
-	// after the backup, and the round sends only the difference.
-	restored := newPipelineOnStore(t, p.tenant, restore(t, backup, p.tenant))
-	restored.startRelay(t)
-	restored.roundAt(t, base.Add(4*time.Minute))
-	restored.waitOutboxEmpty(t)
-
-	got := quantities(sentHeartbeats(t, p.tenant))
-	want := []string{
-		// Before the restore.
-		"compute 2026-10-05T10:00:00Z..2026-10-05T10:01:00Z 60.000000",
-		"compute 2026-10-05T10:01:00Z..2026-10-05T10:02:00Z 60.000000",
-		"compute 2026-10-05T10:02:00Z..2026-10-05T10:03:00Z 60.000000",
-		// After the restore: only 10:03 to 10:04.
-		"compute 2026-10-05T10:03:00Z..2026-10-05T10:04:00Z 60.000000",
-	}
-	if fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", join(got), join(want))
-	}
-}
-
-// TestTwoPodsCatchUpApplyEachHeartbeatOnce runs two rounds concurrently on a restored
-// database; the round lock and the ID checks keep each heartbeat applied once.
-func TestTwoPodsCatchUpApplyEachHeartbeatOnce(t *testing.T) {
-	const tenant = "twopods"
-	p := newPipeline(t, tenant)
-	p.startRelay(t)
-
-	total := testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
-		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
-			base, base, "web", "RUNNING", base, "small", base),
-	})
-	p.foldAll(t, total)
-
-	p.roundAt(t, base.Add(time.Minute))
-	p.waitOutboxEmpty(t)
-	backup := snapshot(t, p.store, p.tenant)
-	p.roundAt(t, base.Add(2*time.Minute))
-	p.roundAt(t, base.Add(3*time.Minute))
-	p.waitOutboxEmpty(t)
-
-	restoredStore := restore(t, backup, p.tenant)
-	revision, err := rules.DefaultRevision()
-	if err != nil {
-		t.Fatalf("parsing default revision: %v", err)
-	}
-	owners, err := usage.RegistryOwners()
-	if err != nil {
-		t.Fatalf("reading owners: %v", err)
-	}
-	calculator, err := usage.NewCalculator([]rules.Revision{revision}, "us-east", owners)
-	if err != nil {
-		t.Fatalf("creating calculator: %v", err)
-	}
-
-	// Two pods run a round at the same time on the restored database.
-	var failuresMu sync.Mutex
-	var failures []error
-	done := make(chan struct{})
-	for i := range 2 {
-		pod, err := round.New(
-			restoredStore, calculator, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(),
-		)
-		if err != nil {
-			t.Fatalf("creating round: %v", err)
-		}
-		pod.SetClock(func() time.Time { return base.Add(4 * time.Minute) })
-		go func() {
-			if err := pod.Once(context.Background(), tenant); err != nil {
-				failuresMu.Lock()
-				failures = append(failures, err)
-				failuresMu.Unlock()
-			}
-			done <- struct{}{}
-		}()
-		_ = i
-	}
-	for range 2 {
-		<-done
-	}
-	failuresMu.Lock()
-	defer failuresMu.Unlock()
-	if len(failures) > 0 {
-		t.Fatalf("rounds failed: %v", failures)
-	}
-
-	// Relay the restored database's outbox with a second relay loop, so both pods' work
-	// reaches the topic.
-	restoredRelay, err := relay.New(restoredStore, testenv.NewProducer(t), logr.Discard())
-	if err != nil {
-		t.Fatalf("creating relay: %v", err)
-	}
-	relayCtx, relayCancel := context.WithCancel(context.Background())
-	go func() { _ = restoredRelay.RunTenant(relayCtx, tenant) }()
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		rows, err := database.NextOutbox(context.Background(), restoredStore.Pool(), tenant, 1)
-		if err != nil {
-			t.Fatalf("reading outbox: %v", err)
-		}
-		if len(rows) == 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("relay did not drain the restored outbox")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	relayCancel()
-
-	got := quantities(sentHeartbeats(t, p.tenant))
-	want := []string{
-		"compute 2026-10-05T10:00:00Z..2026-10-05T10:01:00Z 60.000000",
-		"compute 2026-10-05T10:01:00Z..2026-10-05T10:02:00Z 60.000000",
-		"compute 2026-10-05T10:02:00Z..2026-10-05T10:03:00Z 60.000000",
-		"compute 2026-10-05T10:03:00Z..2026-10-05T10:04:00Z 60.000000",
-	}
-	if fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", join(got), join(want))
-	}
-}
-
-// TestRelayResendKeepsIDs simulates a crash between the Kafka send and the outbox delete: the
-// same rows are sent again with the same IDs, and catch-up on a fresh database applies each
-// once.
-func TestRelayResendKeepsIDs(t *testing.T) {
-	p := newPipeline(t, "resend")
-
-	total := testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
-		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
-			base, base, "web", "RUNNING", base, "small", base),
-	})
-	p.foldAll(t, total)
-
-	// The round writes its heartbeat. The relay is not running yet.
-	p.roundAt(t, base.Add(time.Minute))
-	rows, err := database.NextOutbox(context.Background(), p.store.Pool(), p.tenant, 10)
-	if err != nil {
-		t.Fatalf("reading outbox: %v", err)
-	}
-	if len(rows) != 1 {
-		t.Fatalf("expected one outbox row, got %d", len(rows))
-	}
-
-	// The crash: the rows reach the topic but the delete never commits. The relay then
-	// starts, sends them again with the same IDs, and deletes them.
-	producer := testenv.NewProducer(t)
-	for _, row := range rows {
-		message := &sarama.ProducerMessage{
-			Topic: topics.Heartbeat(p.tenant),
-			Key:   sarama.StringEncoder(row.ID),
-			Value: sarama.ByteEncoder(row.Payload),
-		}
-		if _, _, err := producer.SendMessage(message); err != nil {
-			t.Fatalf("resending: %v", err)
-		}
-	}
-	p.startRelay(t)
-	p.waitOutboxEmpty(t)
-
-	// A fresh database replays everything from offset 0. The duplicate on the topic
-	// carries the same ID, so catch-up counts it once.
-	fresh := newPipelineOnStore(t, p.tenant, testenv.Database(t))
-	fresh.startRelay(t)
-	fresh.foldAll(t, total)
-	fresh.roundAt(t, base.Add(2*time.Minute))
-	fresh.waitOutboxEmpty(t)
-
-	got := quantities(sentHeartbeats(t, p.tenant))
-	want := []string{
-		"compute 2026-10-05T10:00:00Z..2026-10-05T10:01:00Z 60.000000",
-		"compute 2026-10-05T10:00:00Z..2026-10-05T10:01:00Z 60.000000",
-		"compute 2026-10-05T10:01:00Z..2026-10-05T10:02:00Z 60.000000",
-	}
-	if fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", join(got), join(want))
-	}
-
-	// The duplicate on the topic carries the same ID.
-	beats := sentHeartbeats(t, p.tenant)
-	if beats[0].id != beats[1].id {
-		t.Fatalf("resent heartbeats must keep their IDs: %s vs %s", beats[0].id, beats[1].id)
-	}
-}
-
-// TestBoundedCatchUp checks that a long backlog applies in bounded steps, that the round
-// skips its comparison until catch-up finishes, and that a round group split across the batch
-// boundary is applied whole: no heartbeat twice, none skipped.
-func TestBoundedCatchUp(t *testing.T) {
-	p := newPipeline(t, "bounded")
-	p.startRelay(t)
-
-	total := testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
-		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
-			base, base, "web", "RUNNING", base, "small", base),
-	})
-	p.foldAll(t, total)
-
-	// The backup knows the first round. After it, the VM is resized mid-minute, so the
-	// 10:03 round sends a group of two heartbeats: small until the resize, large after.
-	p.roundAt(t, base.Add(time.Minute))
-	p.waitOutboxEmpty(t)
-	backup := snapshot(t, p.store, p.tenant)
-	total += testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
-		testenv.VMEvent("e2", privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
-			base.Add(3*time.Minute), base, "web", "RUNNING", base, "large",
-			base.Add(2*time.Minute+30*time.Second)),
-	})
-	p.foldAll(t, total)
-	p.roundAt(t, base.Add(2*time.Minute))
-	p.roundAt(t, base.Add(3*time.Minute))
-	p.waitOutboxEmpty(t)
-
-	restored := newPipelineOnStore(t, p.tenant, restore(t, backup, p.tenant))
-	restored.foldAll(t, total)
-	// The batch bounds groups per pass, so with a batch of one the 10:03 group of two
-	// is larger than the batch: it must still be read whole on the second pass.
-	restored.round.SetCatchUpBatch(1)
-
-	// The first restored round reads the 10:02 heartbeat and the first half of the
-	// 10:03 group. The group is split at the batch bound, so only the complete 10:02
-	// group applies and nothing is half-applied.
-	restored.roundAt(t, base.Add(4*time.Minute))
-	if outboxCount(t, restored.store, p.tenant) != 0 {
-		t.Fatal("a round with unfinished catch-up must not write heartbeats")
-	}
-	small, err := database.LedgerPiecesWhere(
-		context.Background(), restored.store.Pool(), p.tenant, "meter = $2", "compute",
-	)
-	if err != nil {
-		t.Fatalf("reading restored ledger: %v", err)
-	}
-	for _, piece := range small {
-		if piece.EndTime.After(base.Add(2 * time.Minute)) {
-			t.Fatalf(
-				"a group split at the batch bound must stay unread, got a piece ending at %s",
-				piece.EndTime,
-			)
-		}
-	}
-
-	// The second pass reads the whole 10:03 group, applies it, and the round sends only
-	// the new interval.
-	restored.roundAt(t, base.Add(5*time.Minute))
-	if outboxCount(t, restored.store, p.tenant) == 0 {
-		t.Fatal("a finished catch-up must let the round send its difference")
-	}
-	restored.startRelay(t)
-	restored.waitOutboxEmpty(t)
-
-	// Nothing twice, nothing skipped: the small meter sums to 10:00 to 10:02:30 and the
-	// large meter to 10:02:30 to 10:05.
-	got := quantities(sentHeartbeats(t, p.tenant))
-	// Within the 10:03 group the meters arrive in the round's deterministic key order,
-	// which sorts the large dimension set before the small one.
-	want := []string{
-		"compute 2026-10-05T10:00:00Z..2026-10-05T10:01:00Z 60.000000",
-		"compute 2026-10-05T10:01:00Z..2026-10-05T10:02:00Z 60.000000",
-		"compute 2026-10-05T10:02:30Z..2026-10-05T10:03:00Z 30.000000",
-		"compute 2026-10-05T10:02:00Z..2026-10-05T10:02:30Z 30.000000",
-		"compute 2026-10-05T10:03:00Z..2026-10-05T10:05:00Z 120.000000",
-	}
-	if fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", join(got), join(want))
-	}
-}
-
 // TestCatchUpRefusesWhenRetentionDeletedTheStoredOffset checks that a stored heartbeat
 // offset below the topic's log start refuses the round instead of resuming at the
 // oldest retained record. The lost heartbeats may already be billed: resuming would
 // rebuild a ledger missing their spans, and the next round would resend them under new
 // heartbeat ids. The customer would pay twice, so the round holds billing and says why.
 func TestCatchUpRefusesWhenRetentionDeletedTheStoredOffset(t *testing.T) {
-	p := newPipeline(t, "belowretention")
-	p.startRelay(t)
+	p := pipelinetest.NewPipeline(t, "belowretention")
+	p.StartRelay(t)
 
-	total := testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
+	total := testenv.ProduceEvents(t, p.Tenant, []*privatev1.Event{
 		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
 			base, base, "web", "RUNNING", base, "small", base),
 	})
-	p.foldAll(t, total)
-	p.roundAt(t, base.Add(time.Minute))
-	p.roundAt(t, base.Add(2*time.Minute))
-	p.waitOutboxEmpty(t)
+	p.FoldAll(t, total)
+	p.RoundAt(t, base.Add(time.Minute))
+	p.RoundAt(t, base.Add(2*time.Minute))
+	p.WaitOutboxEmpty(t)
 
 	// Retention has deleted every segment below the stored offset, the way a topic with
 	// finite retention does after a long database restore: the stored offset now points
 	// below the topic's log start.
-	if _, err := p.store.Pool().Exec(
+	if _, err := p.Store.Pool().Exec(
 		context.Background(),
-		`UPDATE progress SET heartbeat_offset = -5 WHERE tenant = $1`, p.tenant,
+		`UPDATE progress SET heartbeat_offset = -5 WHERE tenant = $1`, p.Tenant,
 	); err != nil {
 		t.Fatalf("pushing the stored offset below the log start: %v", err)
 	}
 
 	// The round must refuse, naming the retention gap.
-	err := p.round.Once(context.Background(), p.tenant)
+	err := p.Round.Once(context.Background(), p.Tenant, time.Now())
 	if err == nil || !strings.Contains(err.Error(), "retention start") {
 		t.Fatalf("expected the round to refuse on the expired history, got %v", err)
 	}
 
 	// Billing holds: nothing new was sent after the two rounds that succeeded.
-	got := quantities(sentHeartbeats(t, p.tenant))
+	got := pipelinetest.BeatLines(pipelinetest.SentHeartbeats(t, p.Tenant))
 	want := []string{
 		"compute 2026-10-05T10:00:00Z..2026-10-05T10:01:00Z 60.000000",
 		"compute 2026-10-05T10:01:00Z..2026-10-05T10:02:00Z 60.000000",
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", join(got), join(want))
+		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", pipelinetest.Join(got), pipelinetest.Join(want))
 	}
 }
 
@@ -619,19 +94,19 @@ func TestCatchUpRefusesWhenRetentionDeletedTheStoredOffset(t *testing.T) {
 // waiting, so a steady stream still gets rounds instead of chasing a watermark that always
 // moves.
 func TestRoundWithSteadyEventStream(t *testing.T) {
-	p := newPipeline(t, "steady")
-	p.startRelay(t)
+	p := pipelinetest.NewPipeline(t, "steady")
+	p.StartRelay(t)
 
-	total := testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
+	total := testenv.ProduceEvents(t, p.Tenant, []*privatev1.Event{
 		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
 			base, base, "web", "RUNNING", base, "small", base),
 	})
-	p.foldAll(t, total)
+	p.FoldAll(t, total)
 
 	// The fold keeps running and events keep arriving while the rounds tick.
 	foldCtx, cancelFold := context.WithCancel(context.Background())
 	defer cancelFold()
-	go func() { _ = p.fold.RunTenant(foldCtx, p.tenant) }()
+	go func() { _ = p.Fold.RunTenant(foldCtx, p.Tenant) }()
 
 	producer := testenv.NewProducer(t)
 	streamCtx, stopStream := context.WithCancel(context.Background())
@@ -649,7 +124,7 @@ func TestRoundWithSteadyEventStream(t *testing.T) {
 				return
 			}
 			if _, _, err := producer.SendMessage(&sarama.ProducerMessage{
-				Topic: topics.Events(p.tenant),
+				Topic: topics.Events(p.Tenant),
 				Key:   sarama.StringEncoder(event.Id),
 				Value: sarama.ByteEncoder(value),
 			}); err != nil {
@@ -661,8 +136,8 @@ func TestRoundWithSteadyEventStream(t *testing.T) {
 
 	billed := false
 	for i := 1; i <= 40 && !billed; i++ {
-		p.roundAt(t, base.Add(time.Duration(i)*time.Minute))
-		if outboxCount(t, p.store, p.tenant) > 0 {
+		p.RoundAt(t, base.Add(time.Duration(i)*time.Minute))
+		if outboxCount(t, p.Store, p.Tenant) > 0 {
 			billed = true
 		}
 		// Give the fold time to reach the round's captured watermark; a real
@@ -674,8 +149,8 @@ func TestRoundWithSteadyEventStream(t *testing.T) {
 	if !billed {
 		t.Fatal("a tenant with a steady event stream never got a round")
 	}
-	p.waitOutboxEmpty(t)
-	if beats := sentHeartbeats(t, p.tenant); len(beats) == 0 {
+	p.WaitOutboxEmpty(t)
+	if beats := pipelinetest.SentHeartbeats(t, p.Tenant); len(beats) == 0 {
 		t.Fatal("the steady-stream tenant sent no heartbeats")
 	}
 }
@@ -685,22 +160,22 @@ func TestRoundWithSteadyEventStream(t *testing.T) {
 // the bound limits groups per pass, and nothing is applied twice or skipped.
 func TestCatchUpReadsOversizedGroupsWhole(t *testing.T) {
 	const tenant = "oversized"
-	p := newPipeline(t, tenant)
-	p.startRelay(t)
+	p := pipelinetest.NewPipeline(t, tenant)
+	p.StartRelay(t)
 
-	total := testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
+	total := testenv.ProduceEvents(t, p.Tenant, []*privatev1.Event{
 		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
 			base, base, "web", "RUNNING", base, "small", base),
 	})
-	p.foldAll(t, total)
+	p.FoldAll(t, total)
 
 	// Backup after the first round.
-	p.roundAt(t, base.Add(time.Minute))
-	p.waitOutboxEmpty(t)
-	backup := snapshot(t, p.store, tenant)
+	p.RoundAt(t, base.Add(time.Minute))
+	p.WaitOutboxEmpty(t)
+	backup := snapshot(t, p.Store, tenant)
 
 	// Two resizes within one minute: the 10:03 round sends a group of three.
-	total += testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
+	total += testenv.ProduceEvents(t, p.Tenant, []*privatev1.Event{
 		testenv.VMEvent("e2", privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
 			base.Add(3*time.Minute), base, "web", "RUNNING", base, "medium",
 			base.Add(2*time.Minute+20*time.Second)),
@@ -708,26 +183,26 @@ func TestCatchUpReadsOversizedGroupsWhole(t *testing.T) {
 			base.Add(3*time.Minute+30*time.Second), base, "web", "RUNNING", base, "large",
 			base.Add(2*time.Minute+40*time.Second)),
 	})
-	p.foldAll(t, total)
-	p.roundAt(t, base.Add(2*time.Minute))
-	p.roundAt(t, base.Add(3*time.Minute))
-	p.roundAt(t, base.Add(4*time.Minute))
-	p.roundAt(t, base.Add(5*time.Minute))
-	p.waitOutboxEmpty(t)
+	p.FoldAll(t, total)
+	p.RoundAt(t, base.Add(2*time.Minute))
+	p.RoundAt(t, base.Add(3*time.Minute))
+	p.RoundAt(t, base.Add(4*time.Minute))
+	p.RoundAt(t, base.Add(5*time.Minute))
+	p.WaitOutboxEmpty(t)
 
-	restored := newPipelineOnStore(t, tenant, restore(t, backup, tenant))
-	restored.foldAll(t, total)
-	restored.round.SetCatchUpBatch(2)
+	restored := pipelinetest.NewPipelineOnStore(t, tenant, restore(t, backup, tenant))
+	restored.FoldAll(t, total)
+	restored.Round.SetCatchUpBatch(2)
 
 	// The topic holds five groups after the backup point: 10:02 (one), 10:03 (three),
 	// 10:04 (one), 10:05 (one). With a batch of two groups, the first pass applies the
 	// 10:02 group and the whole oversized 10:03 group, and stops at the 10:04 witness.
-	restored.roundAt(t, base.Add(6*time.Minute))
-	if outboxCount(t, restored.store, tenant) != 0 {
+	restored.RoundAt(t, base.Add(6*time.Minute))
+	if outboxCount(t, restored.Store, tenant) != 0 {
 		t.Fatal("a round with unfinished catch-up must not write heartbeats")
 	}
 	pieces, err := database.LedgerPiecesWhere(
-		context.Background(), restored.store.Pool(), tenant, "meter = $2", "compute",
+		context.Background(), restored.Store.Pool(), tenant, "meter = $2", "compute",
 	)
 	if err != nil {
 		t.Fatalf("reading restored ledger: %v", err)
@@ -748,17 +223,17 @@ func TestCatchUpReadsOversizedGroupsWhole(t *testing.T) {
 	}
 
 	// The second pass reads the remaining groups and the round bills the difference.
-	restored.roundAt(t, base.Add(7*time.Minute))
-	if outboxCount(t, restored.store, tenant) != 1 {
+	restored.RoundAt(t, base.Add(7*time.Minute))
+	if outboxCount(t, restored.Store, tenant) != 1 {
 		t.Fatalf("expected exactly one difference heartbeat, got %d",
-			outboxCount(t, restored.store, tenant))
+			outboxCount(t, restored.Store, tenant))
 	}
-	restored.startRelay(t)
-	restored.waitOutboxEmpty(t)
+	restored.StartRelay(t)
+	restored.WaitOutboxEmpty(t)
 
 	// Nothing twice, nothing skipped: the live heartbeats plus one difference for
 	// 10:05 to 10:07. Within the 10:03 group the meters arrive in the round's key order.
-	got := quantities(sentHeartbeats(t, tenant))
+	got := pipelinetest.BeatLines(pipelinetest.SentHeartbeats(t, tenant))
 	wantBeats := []string{
 		"compute 2026-10-05T10:00:00Z..2026-10-05T10:01:00Z 60.000000",
 		"compute 2026-10-05T10:01:00Z..2026-10-05T10:02:00Z 60.000000",
@@ -770,7 +245,7 @@ func TestCatchUpReadsOversizedGroupsWhole(t *testing.T) {
 		"compute 2026-10-05T10:05:00Z..2026-10-05T10:07:00Z 120.000000",
 	}
 	if fmt.Sprint(got) != fmt.Sprint(wantBeats) {
-		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", join(got), join(wantBeats))
+		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", pipelinetest.Join(got), pipelinetest.Join(wantBeats))
 	}
 }
 
@@ -780,44 +255,44 @@ func TestCatchUpReadsOversizedGroupsWhole(t *testing.T) {
 // instead of repeating the identical pass.
 func TestCatchUpCommitsPerGroup(t *testing.T) {
 	const tenant = "pergroup"
-	p := newPipeline(t, tenant)
-	p.startRelay(t)
+	p := pipelinetest.NewPipeline(t, tenant)
+	p.StartRelay(t)
 
-	total := testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
+	total := testenv.ProduceEvents(t, p.Tenant, []*privatev1.Event{
 		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
 			base, base, "web", "RUNNING", base, "small", base),
 	})
-	p.foldAll(t, total)
+	p.FoldAll(t, total)
 
 	// The backup knows the first round. After it the VM is resized mid-minute, so the
 	// 10:03 round sends a group of two heartbeats and the 10:02 and 10:04 rounds one each:
 	// three groups on the topic.
-	p.roundAt(t, base.Add(time.Minute))
-	p.waitOutboxEmpty(t)
-	backup := snapshot(t, p.store, tenant)
-	total += testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
+	p.RoundAt(t, base.Add(time.Minute))
+	p.WaitOutboxEmpty(t)
+	backup := snapshot(t, p.Store, tenant)
+	total += testenv.ProduceEvents(t, p.Tenant, []*privatev1.Event{
 		testenv.VMEvent("e2", privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
 			base.Add(3*time.Minute), base, "web", "RUNNING", base, "large",
 			base.Add(2*time.Minute+30*time.Second)),
 	})
-	p.foldAll(t, total)
-	p.roundAt(t, base.Add(2*time.Minute))
-	p.roundAt(t, base.Add(3*time.Minute))
-	p.roundAt(t, base.Add(4*time.Minute))
-	p.waitOutboxEmpty(t)
+	p.FoldAll(t, total)
+	p.RoundAt(t, base.Add(2*time.Minute))
+	p.RoundAt(t, base.Add(3*time.Minute))
+	p.RoundAt(t, base.Add(4*time.Minute))
+	p.WaitOutboxEmpty(t)
 
 	// The pod dies mid-catch-up: two of the three groups committed, the third never ran.
-	restored := newPipelineOnStore(t, tenant, restore(t, backup, tenant))
-	restored.foldAll(t, total)
-	restored.round.SetCrashAfterGroups(2)
-	if err := restored.round.Once(context.Background(), tenant); !errors.Is(err, round.ErrCrashed) {
+	restored := pipelinetest.NewPipelineOnStore(t, tenant, restore(t, backup, tenant))
+	restored.FoldAll(t, total)
+	restored.Round.SetCrashAfterGroups(2)
+	if err := restored.Round.Once(context.Background(), tenant, time.Now()); !errors.Is(err, round.ErrCrashed) {
 		t.Fatalf("catch-up must report the simulated crash, got %v", err)
 	}
 
 	// The first two groups stayed committed. The topic holds the 10:02 heartbeat at offset
 	// 1, the 10:03 pair at offsets 2 and 3, and the 10:04 heartbeat at offset 4; two
 	// committed groups move the offset to 4, past everything but the last group.
-	progress, err := restored.store.GetTenantProgress(context.Background(), tenant)
+	progress, err := restored.Store.GetTenantProgress(context.Background(), tenant)
 	if err != nil {
 		t.Fatalf("reading progress: %v", err)
 	}
@@ -826,7 +301,7 @@ func TestCatchUpCommitsPerGroup(t *testing.T) {
 			progress.HeartbeatOffset)
 	}
 	pieces, err := database.LedgerPiecesWhere(
-		context.Background(), restored.store.Pool(), tenant, "meter = $2", "compute",
+		context.Background(), restored.Store.Pool(), tenant, "meter = $2", "compute",
 	)
 	if err != nil {
 		t.Fatalf("reading restored ledger: %v", err)
@@ -846,20 +321,20 @@ func TestCatchUpCommitsPerGroup(t *testing.T) {
 		"10:02:30..10:03:00 30000000",
 	}
 	if fmt.Sprint(lines) != fmt.Sprint(want) {
-		t.Fatalf("the committed groups must stay applied:\ngot:\n%s\nwant:\n%s", join(lines), join(want))
+		t.Fatalf("the committed groups must stay applied:\ngot:\n%s\nwant:\n%s", pipelinetest.Join(lines), pipelinetest.Join(want))
 	}
 
 	// The restart resumes at the next group: a round without the crash finishes catch-up
 	// and bills the difference, and nothing is applied twice or skipped.
-	restored.round.SetCrashAfterGroups(0)
-	restored.roundAt(t, base.Add(5*time.Minute))
-	if outboxCount(t, restored.store, tenant) == 0 {
+	restored.Round.SetCrashAfterGroups(0)
+	restored.RoundAt(t, base.Add(5*time.Minute))
+	if outboxCount(t, restored.Store, tenant) == 0 {
 		t.Fatal("a finished catch-up must let the round send its difference")
 	}
-	restored.startRelay(t)
-	restored.waitOutboxEmpty(t)
+	restored.StartRelay(t)
+	restored.WaitOutboxEmpty(t)
 
-	got := quantities(sentHeartbeats(t, tenant))
+	got := pipelinetest.BeatLines(pipelinetest.SentHeartbeats(t, tenant))
 	wantBeats := []string{
 		"compute 2026-10-05T10:00:00Z..2026-10-05T10:01:00Z 60.000000",
 		"compute 2026-10-05T10:01:00Z..2026-10-05T10:02:00Z 60.000000",
@@ -869,7 +344,7 @@ func TestCatchUpCommitsPerGroup(t *testing.T) {
 		"compute 2026-10-05T10:04:00Z..2026-10-05T10:05:00Z 60.000000",
 	}
 	if fmt.Sprint(got) != fmt.Sprint(wantBeats) {
-		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", join(got), join(wantBeats))
+		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", pipelinetest.Join(got), pipelinetest.Join(wantBeats))
 	}
 }
 
@@ -881,61 +356,61 @@ func TestCatchUpCommitsPerGroup(t *testing.T) {
 // and quantity.
 func TestCrashMidCatchUpRestoreReplaysSameLedger(t *testing.T) {
 	const tenant = "crash-restore"
-	p := newPipeline(t, tenant)
-	p.startRelay(t)
+	p := pipelinetest.NewPipeline(t, tenant)
+	p.StartRelay(t)
 
-	total := testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
+	total := testenv.ProduceEvents(t, p.Tenant, []*privatev1.Event{
 		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
 			base, base, "web", "RUNNING", base, "small", base),
 	})
-	p.foldAll(t, total)
+	p.FoldAll(t, total)
 
 	// The same backlog as the per-group test: a backup after the first round, then a
 	// mid-minute resize, so the topic holds three round groups after the backup point.
-	p.roundAt(t, base.Add(time.Minute))
-	p.waitOutboxEmpty(t)
-	backup := snapshot(t, p.store, tenant)
-	total += testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
+	p.RoundAt(t, base.Add(time.Minute))
+	p.WaitOutboxEmpty(t)
+	backup := snapshot(t, p.Store, tenant)
+	total += testenv.ProduceEvents(t, p.Tenant, []*privatev1.Event{
 		testenv.VMEvent("e2", privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
 			base.Add(3*time.Minute), base, "web", "RUNNING", base, "large",
 			base.Add(2*time.Minute+30*time.Second)),
 	})
-	p.foldAll(t, total)
-	p.roundAt(t, base.Add(2*time.Minute))
-	p.roundAt(t, base.Add(3*time.Minute))
-	p.roundAt(t, base.Add(4*time.Minute))
-	p.waitOutboxEmpty(t)
+	p.FoldAll(t, total)
+	p.RoundAt(t, base.Add(2*time.Minute))
+	p.RoundAt(t, base.Add(3*time.Minute))
+	p.RoundAt(t, base.Add(4*time.Minute))
+	p.WaitOutboxEmpty(t)
 
 	// The crash: a restored database dies mid-catch-up, after two of the three groups
 	// committed.
-	crashed := newPipelineOnStore(t, tenant, restoreForCatchUpOnly(t, backup, tenant))
-	crashed.round.SetCrashAfterGroups(2)
-	if err := crashed.round.Once(context.Background(), tenant); !errors.Is(err, round.ErrCrashed) {
+	crashed := pipelinetest.NewPipelineOnStore(t, tenant, restoreForCatchUpOnly(t, backup, tenant))
+	crashed.Round.SetCrashAfterGroups(2)
+	if err := crashed.Round.Once(context.Background(), tenant, time.Now()); !errors.Is(err, round.ErrCrashed) {
 		t.Fatalf("catch-up must report the simulated crash, got %v", err)
 	}
 
 	// The one-pass result: a database restored from the same snapshot catches up in one
 	// uninterrupted pass. The comparison stays out of the way, so the ledger is exactly
 	// what catch-up produced.
-	reference := newPipelineOnStore(t, tenant, restoreForCatchUpOnly(t, backup, tenant))
-	reference.roundAt(t, base.Add(5*time.Minute))
+	reference := pipelinetest.NewPipelineOnStore(t, tenant, restoreForCatchUpOnly(t, backup, tenant))
+	reference.RoundAt(t, base.Add(5*time.Minute))
 
 	// The database is restored from the snapshot taken before the crash and replays the
 	// same groups. The final ledger must equal the one-pass result.
-	replayed := newPipelineOnStore(t, tenant, restoreForCatchUpOnly(t, backup, tenant))
-	replayed.roundAt(t, base.Add(5*time.Minute))
+	replayed := pipelinetest.NewPipelineOnStore(t, tenant, restoreForCatchUpOnly(t, backup, tenant))
+	replayed.RoundAt(t, base.Add(5*time.Minute))
 
-	got := ledgerLines(t, replayed.store, tenant)
-	want := ledgerLines(t, reference.store, tenant)
+	got := ledgerLines(t, replayed.Store, tenant)
+	want := ledgerLines(t, reference.Store, tenant)
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("a restore to the pre-crash snapshot must replay the same groups to the same ledger:\ngot:\n%s\nwant:\n%s",
-			join(got), join(want))
+			pipelinetest.Join(got), pipelinetest.Join(want))
 	}
-	replayedProgress, err := replayed.store.GetTenantProgress(context.Background(), tenant)
+	replayedProgress, err := replayed.Store.GetTenantProgress(context.Background(), tenant)
 	if err != nil {
 		t.Fatalf("reading replayed progress: %v", err)
 	}
-	referenceProgress, err := reference.store.GetTenantProgress(context.Background(), tenant)
+	referenceProgress, err := reference.Store.GetTenantProgress(context.Background(), tenant)
 	if err != nil {
 		t.Fatalf("reading reference progress: %v", err)
 	}
@@ -949,7 +424,7 @@ func TestCrashMidCatchUpRestoreReplaysSameLedger(t *testing.T) {
 
 	// The crash left the ledger mid-catch-up, so the replay above was not a no-op: the
 	// crashed database holds two groups, the replay and the reference all three.
-	if fmt.Sprint(ledgerLines(t, crashed.store, tenant)) == fmt.Sprint(want) {
+	if fmt.Sprint(ledgerLines(t, crashed.Store, tenant)) == fmt.Sprint(want) {
 		t.Fatal("the crashed database must hold less than the one-pass result")
 	}
 }
@@ -971,7 +446,7 @@ func restoreForCatchUpOnly(t *testing.T, snap tenantSnapshot, tenant string) *da
 // ledgerLines renders a tenant's ledger in a deterministic comparable form.
 func ledgerLines(t *testing.T, store *database.Store, tenant string) []string {
 	t.Helper()
-	pieces, err := store.LedgerPieces(context.Background(), tenant)
+	pieces, err := database.LedgerPiecesWhere(context.Background(), store.Pool(), tenant, "")
 	if err != nil {
 		t.Fatalf("reading ledger: %v", err)
 	}
@@ -994,9 +469,18 @@ func ledgerLines(t *testing.T, store *database.Store, tenant string) []string {
 
 // snapshot copies a tenant's rows, as a backup would.
 type tenantSnapshot struct {
-	history  []database.Fact
+	history  []historyFact
 	ledger   []database.LedgerPiece
+	outbox   []database.OutboxRow
 	progress database.Progress
+}
+
+// historyFact is one history row with the event offset the fold wrote it at. A backup
+// must restore both: the offset decides which facts a later round's comparison still
+// sees as new.
+type historyFact struct {
+	fact   database.Fact
+	offset int64
 }
 
 func snapshot(t *testing.T, store *database.Store, tenant string) tenantSnapshot {
@@ -1006,26 +490,56 @@ func snapshot(t *testing.T, store *database.Store, tenant string) tenantSnapshot
 	if err != nil {
 		t.Fatalf("reading progress: %v", err)
 	}
-	resources, err := database.TenantResources(ctx, store.Pool(), tenant)
-	if err != nil {
-		t.Fatalf("listing resources: %v", err)
-	}
 	var snap tenantSnapshot
 	snap.progress = progress
-	for _, resource := range resources {
-		facts, err := database.ResourceFacts(
-			ctx, store.Pool(), tenant, resource.ResourceType, resource.ResourceID,
-		)
-		if err != nil {
-			t.Fatalf("reading facts: %v", err)
-		}
-		snap.history = append(snap.history, facts...)
+	historyRows, err := store.Pool().Query(
+		ctx,
+		`SELECT resource_type, resource_id, field, since, value, event_offset
+		 FROM history WHERE tenant = $1
+		 ORDER BY resource_type, resource_id, field, since`, tenant,
+	)
+	if err != nil {
+		t.Fatalf("reading history: %v", err)
 	}
-	ledger, err := store.LedgerPieces(ctx, tenant)
+	defer historyRows.Close()
+	for historyRows.Next() {
+		var entry historyFact
+		if err := historyRows.Scan(
+			&entry.fact.ResourceType, &entry.fact.ResourceID, &entry.fact.Field,
+			&entry.fact.Since, &entry.fact.Value, &entry.offset,
+		); err != nil {
+			t.Fatalf("scanning history: %v", err)
+		}
+		snap.history = append(snap.history, entry)
+	}
+	if err := historyRows.Err(); err != nil {
+		t.Fatalf("reading history: %v", err)
+	}
+	ledger, err := database.LedgerPiecesWhere(ctx, store.Pool(), tenant, "")
 	if err != nil {
 		t.Fatalf("reading ledger: %v", err)
 	}
 	snap.ledger = ledger
+	// The outbox is part of the backup: a restore must resend what the relay had not
+	// sent yet. The rows copy in seq order, the order the relay sends in.
+	outboxRows, err := store.Pool().Query(
+		ctx,
+		`SELECT seq, id, payload, round_time FROM outbox WHERE tenant = $1 ORDER BY seq`, tenant,
+	)
+	if err != nil {
+		t.Fatalf("reading outbox: %v", err)
+	}
+	defer outboxRows.Close()
+	for outboxRows.Next() {
+		var row database.OutboxRow
+		if err := outboxRows.Scan(&row.Seq, &row.ID, &row.Payload, &row.RoundTime); err != nil {
+			t.Fatalf("scanning outbox: %v", err)
+		}
+		snap.outbox = append(snap.outbox, row)
+	}
+	if err := outboxRows.Err(); err != nil {
+		t.Fatalf("reading outbox: %v", err)
+	}
 	return snap
 }
 
@@ -1041,22 +555,43 @@ func restore(t *testing.T, snap tenantSnapshot, tenant string) *database.Store {
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	if err := database.InsertFacts(ctx, tx, tenant, snap.history, snap.progress.EventOffset); err != nil {
-		t.Fatalf("restoring history: %v", err)
+	// Facts restore at the event offset the backup folded them at. Facts of one event
+	// share an offset and InsertFacts writes a whole call at one offset, so the
+	// restore groups the facts by theirs.
+	groups := map[int64][]database.Fact{}
+	for _, entry := range snap.history {
+		groups[entry.offset] = append(groups[entry.offset], entry.fact)
 	}
+	offsets := make([]int64, 0, len(groups))
+	for offset := range groups {
+		offsets = append(offsets, offset)
+	}
+	sort.Slice(offsets, func(i, j int) bool { return offsets[i] < offsets[j] })
+	for _, offset := range offsets {
+		if err := database.InsertFacts(ctx, tx, tenant, groups[offset], offset); err != nil {
+			t.Fatalf("restoring history: %v", err)
+		}
+	}
+	// Every piece of a key restores together: SyncLedger replaces a key's whole
+	// history, so restoring piece by piece would keep only the last one.
+	byKey := map[database.LedgerKey][]database.LedgerPiece{}
 	for _, piece := range snap.ledger {
-		if err := database.ReplaceLedger(
-			ctx, tx, tenant, piece.Key, []database.LedgerPiece{piece},
-		); err != nil {
+		byKey[piece.Key] = append(byKey[piece.Key], piece)
+	}
+	for key, pieces := range byKey {
+		if err := database.SyncLedger(ctx, tx, tenant, key, pieces, time.Time{}); err != nil {
 			t.Fatalf("restoring ledger: %v", err)
 		}
 	}
+	if err := database.EnqueueHeartbeats(ctx, tx, tenant, snap.outbox); err != nil {
+		t.Fatalf("restoring outbox: %v", err)
+	}
 	if _, err := tx.Exec(
 		ctx,
-		`UPDATE progress SET heartbeat_offset = $2, last_round_time = $3,
-		 last_round_event_offset = $4 WHERE tenant = $1`,
-		tenant, snap.progress.HeartbeatOffset, snap.progress.LastRoundTime,
-		snap.progress.LastRoundEventOffset,
+		`UPDATE progress SET event_offset = $2, heartbeat_offset = $3, last_round_time = $4,
+		 last_round_event_offset = $5 WHERE tenant = $1`,
+		tenant, snap.progress.EventOffset, snap.progress.HeartbeatOffset,
+		snap.progress.LastRoundTime, snap.progress.LastRoundEventOffset,
 	); err != nil {
 		t.Fatalf("restoring progress: %v", err)
 	}
@@ -1064,6 +599,58 @@ func restore(t *testing.T, snap tenantSnapshot, tenant string) *database.Store {
 		t.Fatalf("commit: %v", err)
 	}
 	return store
+}
+
+// TestBackupFixturePreservesAllLedgerPiecesAndPendingOutbox checks the backup
+// fixture itself: snapshot and restore must copy every ledger piece of a key and the
+// outbox rows the relay had not sent yet, not just the last piece of each key.
+func TestBackupFixturePreservesAllLedgerPiecesAndPendingOutbox(t *testing.T) {
+	const tenant = "backup-fixture"
+	ctx := context.Background()
+	store := testenv.Database(t)
+	if err := store.EnsureProgress(ctx, tenant); err != nil {
+		t.Fatalf("ensuring progress: %v", err)
+	}
+	key := database.LedgerKey{
+		ResourceType: "ComputeInstance", ResourceID: "vm-7", Meter: "compute", Component: "compute",
+		Dimensions: `{"deployment":"review","tenant":"` + tenant +
+			`","meter_type":"second","instance_type":"small"}`,
+	}
+	pieces := []database.LedgerPiece{
+		{Key: key, StartTime: base, EndTime: base.Add(time.Minute), QuantityMicro: 60_000_000},
+		{Key: key, StartTime: base.Add(2 * time.Minute), EndTime: base.Add(3 * time.Minute), QuantityMicro: 60_000_000},
+	}
+	if err := database.SyncLedger(ctx, store.Pool(), tenant, key, pieces, time.Time{}); err != nil {
+		t.Fatalf("writing the ledger: %v", err)
+	}
+	event, err := heartbeat.New(tenant, key, pieces[1].StartTime, pieces[1].EndTime,
+		pieces[1].QuantityMicro, "second", pieces[1].EndTime, 3, "0001")
+	if err != nil {
+		t.Fatalf("building the heartbeat: %v", err)
+	}
+	payload, err := event.MarshalJSON()
+	if err != nil {
+		t.Fatalf("marshaling the heartbeat: %v", err)
+	}
+	if err := database.EnqueueHeartbeats(ctx, store.Pool(), tenant, []database.OutboxRow{
+		{ID: event.ID(), Payload: payload, RoundTime: pieces[1].EndTime},
+	}); err != nil {
+		t.Fatalf("enqueueing the heartbeat: %v", err)
+	}
+	restored := restore(t, snapshot(t, store, tenant), tenant)
+	actualPieces, err := database.LedgerPiecesWhere(ctx, restored.Pool(), tenant, "")
+	if err != nil {
+		t.Fatalf("reading the restored ledger: %v", err)
+	}
+	actualOutbox, err := database.NextOutbox(ctx, restored.Pool(), tenant, 10)
+	if err != nil {
+		t.Fatalf("reading the restored outbox: %v", err)
+	}
+	if len(actualPieces) != 2 || len(actualOutbox) != 1 {
+		t.Fatalf("the backup fixture must keep every piece and the pending outbox: "+
+			"ledger pieces=%d, want 2; pending outbox=%d, want 1",
+			len(actualPieces), len(actualOutbox))
+	}
 }
 
 func outboxCount(t *testing.T, store *database.Store, tenant string) int {
@@ -1075,57 +662,49 @@ func outboxCount(t *testing.T, store *database.Store, tenant string) int {
 	return len(rows)
 }
 
-func join(lines []string) string {
-	out := ""
-	for _, line := range lines {
-		out += line + "\n"
-	}
-	return out
-}
-
 // TestMidnightSplitsHeartbeatsAcrossDays checks that the round's difference merge never
 // rejoins what the engine split at UTC midnight: rounds at 23:59:30 and 00:00:30 across a
 // month boundary send two heartbeats, each dated inside its own billing day.
 func TestMidnightSplitsHeartbeatsAcrossDays(t *testing.T) {
 	const tenant = "midnight"
 	evening := time.Date(2026, 9, 30, 23, 58, 0, 0, time.UTC)
-	p := newPipeline(t, tenant)
-	p.startRelay(t)
+	p := pipelinetest.NewPipeline(t, tenant)
+	p.StartRelay(t)
 
-	total := testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
+	total := testenv.ProduceEvents(t, p.Tenant, []*privatev1.Event{
 		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
 			evening, evening, "web", "RUNNING", evening, "small", evening),
 	})
-	p.foldAll(t, total)
+	p.FoldAll(t, total)
 
-	p.roundAt(t, evening.Add(90*time.Second))  // 23:59:30
-	p.roundAt(t, evening.Add(150*time.Second)) // 00:00:30 the next month
-	p.waitOutboxEmpty(t)
+	p.RoundAt(t, evening.Add(90*time.Second))  // 23:59:30
+	p.RoundAt(t, evening.Add(150*time.Second)) // 00:00:30 the next month
+	p.WaitOutboxEmpty(t)
 
-	got := quantities(sentHeartbeats(t, p.tenant))
+	got := pipelinetest.BeatLines(pipelinetest.SentHeartbeats(t, p.Tenant))
 	want := []string{
 		"compute 2026-09-30T23:58:00Z..2026-09-30T23:59:30Z 90.000000",
 		"compute 2026-09-30T23:59:30Z..2026-10-01T00:00:00Z 30.000000",
 		"compute 2026-10-01T00:00:00Z..2026-10-01T00:00:30Z 30.000000",
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", join(got), join(want))
+		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", pipelinetest.Join(got), pipelinetest.Join(want))
 	}
 	// Each heartbeat is dated inside its own day: the CloudEvent time is the interval's
 	// start, and a piece crossing midnight at month end would otherwise fall entirely
 	// into one month.
-	for _, beat := range sentHeartbeats(t, p.tenant) {
-		from, err := time.Parse(time.RFC3339Nano, beat.data.Usage.From)
+	for _, beat := range pipelinetest.SentHeartbeats(t, p.Tenant) {
+		from, err := time.Parse(time.RFC3339Nano, beat.Data.Usage.From)
 		if err != nil {
 			t.Fatalf("parsing usage from: %v", err)
 		}
-		to, err := time.Parse(time.RFC3339Nano, beat.data.Usage.To)
+		to, err := time.Parse(time.RFC3339Nano, beat.Data.Usage.To)
 		if err != nil {
 			t.Fatalf("parsing usage to: %v", err)
 		}
 		if from.UTC().YearDay() != to.Add(-time.Nanosecond).UTC().YearDay() {
-			t.Fatalf("a heartbeat crossed midnight: %s..%s", beat.data.Usage.From,
-				beat.data.Usage.To)
+			t.Fatalf("a heartbeat crossed midnight: %s..%s", beat.Data.Usage.From,
+				beat.Data.Usage.To)
 		}
 	}
 }
@@ -1135,7 +714,7 @@ func TestMidnightSplitsHeartbeatsAcrossDays(t *testing.T) {
 // carrying the revision that billed it.
 func TestRevisionBoundarySplitsHeartbeats(t *testing.T) {
 	const tenant = "revsplit"
-	first := defaultRevisions(t)
+	first := []rules.Revision{testenv.DefaultRevision(t)}
 	second, err := rules.Parse(
 		rules.NamePrefix+"0002", base.Add(90*time.Second).Format(time.RFC3339),
 		first[0].MetersYAML,
@@ -1143,33 +722,33 @@ func TestRevisionBoundarySplitsHeartbeats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parsing second revision: %v", err)
 	}
-	p := newPipelineWithRevisions(t, tenant, testenv.Database(t), []rules.Revision{first[0], second})
-	p.startRelay(t)
+	p := pipelinetest.NewPipelineWithRevisions(t, tenant, testenv.Database(t), []rules.Revision{first[0], second})
+	p.StartRelay(t)
 
-	total := testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
+	total := testenv.ProduceEvents(t, p.Tenant, []*privatev1.Event{
 		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
 			base, base, "web", "RUNNING", base, "small", base),
 	})
-	p.foldAll(t, total)
+	p.FoldAll(t, total)
 
-	p.roundAt(t, base.Add(time.Minute))
-	p.roundAt(t, base.Add(2*time.Minute))
-	p.waitOutboxEmpty(t)
+	p.RoundAt(t, base.Add(time.Minute))
+	p.RoundAt(t, base.Add(2*time.Minute))
+	p.WaitOutboxEmpty(t)
 
-	beats := sentHeartbeats(t, p.tenant)
-	got := quantities(beats)
+	beats := pipelinetest.SentHeartbeats(t, p.Tenant)
+	got := pipelinetest.BeatLines(beats)
 	want := []string{
 		"compute 2026-10-05T10:00:00Z..2026-10-05T10:01:00Z 60.000000",
 		"compute 2026-10-05T10:01:00Z..2026-10-05T10:01:30Z 30.000000",
 		"compute 2026-10-05T10:01:30Z..2026-10-05T10:02:00Z 30.000000",
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", join(got), join(want))
+		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", pipelinetest.Join(got), pipelinetest.Join(want))
 	}
-	if beats[1].data.RulesRevision != "0001" || beats[2].data.RulesRevision != "0002" {
+	if beats[1].Data.RulesRevision != "0001" || beats[2].Data.RulesRevision != "0002" {
 		t.Fatalf(
 			"heartbeats across a revision boundary must carry their billing revision: %s then %s",
-			beats[1].data.RulesRevision, beats[2].data.RulesRevision,
+			beats[1].Data.RulesRevision, beats[2].Data.RulesRevision,
 		)
 	}
 }
@@ -1179,24 +758,24 @@ func TestRevisionBoundarySplitsHeartbeats(t *testing.T) {
 // rewriting the rows beneath it.
 func TestLedgerGrowsOneRowPerDay(t *testing.T) {
 	const tenant = "growth"
-	p := newPipeline(t, tenant)
-	p.startRelay(t)
+	p := pipelinetest.NewPipeline(t, tenant)
+	p.StartRelay(t)
 
-	total := testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
+	total := testenv.ProduceEvents(t, p.Tenant, []*privatev1.Event{
 		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
 			base, base, "web", "RUNNING", base, "small", base),
 	})
-	p.foldAll(t, total)
+	p.FoldAll(t, total)
 
 	// One round per day, late in each day so every day's midnight falls between rounds.
 	// Each round after the first crosses one midnight, so the ledger holds one row per
 	// day spanned: five rows for the four midnights the first four rounds crossed.
 	for day := 1; day <= 4; day++ {
-		p.roundAt(t, base.Add(time.Duration(day)*24*time.Hour-time.Hour))
+		p.RoundAt(t, base.Add(time.Duration(day)*24*time.Hour-time.Hour))
 	}
-	p.waitOutboxEmpty(t)
+	p.WaitOutboxEmpty(t)
 
-	rowsBefore := ledgerRowVersions(t, p.store, tenant)
+	rowsBefore := ledgerRowVersions(t, p.Store, tenant)
 	if len(rowsBefore) != 5 {
 		t.Fatalf("a meter billed across five days must have one row per day, got %d",
 			len(rowsBefore))
@@ -1204,10 +783,10 @@ func TestLedgerGrowsOneRowPerDay(t *testing.T) {
 
 	// The next round extends only the tail row: the rows beneath it keep their row
 	// versions, so they were not rewritten.
-	p.roundAt(t, base.Add(5*24*time.Hour-time.Hour))
-	p.waitOutboxEmpty(t)
+	p.RoundAt(t, base.Add(5*24*time.Hour-time.Hour))
+	p.WaitOutboxEmpty(t)
 
-	rowsAfter := ledgerRowVersions(t, p.store, tenant)
+	rowsAfter := ledgerRowVersions(t, p.Store, tenant)
 	if len(rowsAfter) != 6 {
 		t.Fatalf("the ledger must grow by one row per day, got %d rows after six days",
 			len(rowsAfter))
@@ -1226,8 +805,8 @@ func TestLedgerGrowsOneRowPerDay(t *testing.T) {
 
 	// Nothing was lost or billed twice: the heartbeats sum to the whole billed time.
 	var totalMicro int64
-	for _, beat := range sentHeartbeats(t, p.tenant) {
-		quantity, err := heartbeat.ParseMicro(beat.data.Usage.Quantity)
+	for _, beat := range pipelinetest.SentHeartbeats(t, p.Tenant) {
+		quantity, err := heartbeat.ParseMicro(beat.Data.Usage.Quantity)
 		if err != nil {
 			t.Fatalf("parsing quantity: %v", err)
 		}
@@ -1280,10 +859,10 @@ func ledgerRowVersions(
 // billed the pieces, although the meter has no expected usage at all.
 func TestRemovedMeterCorrectionCarriesUnitAndRevision(t *testing.T) {
 	const tenant = "resize"
-	p := newPipeline(t, tenant)
-	p.startRelay(t)
+	p := pipelinetest.NewPipeline(t, tenant)
+	p.StartRelay(t)
 
-	total := testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
+	total := testenv.ProduceEvents(t, p.Tenant, []*privatev1.Event{
 		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
 			base, base, "web", "RUNNING", base, "small", base),
 		// The operator reports a resize to large, effective 10:30.
@@ -1291,31 +870,31 @@ func TestRemovedMeterCorrectionCarriesUnitAndRevision(t *testing.T) {
 			base.Add(30*time.Minute), base, "web", "RUNNING", base, "large",
 			base.Add(30*time.Minute)),
 	})
-	p.foldAll(t, total)
+	p.FoldAll(t, total)
 
-	p.roundAt(t, base.Add(31*time.Minute))
-	p.roundAt(t, base.Add(32*time.Minute))
-	p.roundAt(t, base.Add(33*time.Minute))
-	p.waitOutboxEmpty(t)
+	p.RoundAt(t, base.Add(31*time.Minute))
+	p.RoundAt(t, base.Add(32*time.Minute))
+	p.RoundAt(t, base.Add(33*time.Minute))
+	p.WaitOutboxEmpty(t)
 
 	// The late event: the VM had stopped at 10:29:30, before the resize took effect.
-	total += testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
+	total += testenv.ProduceEvents(t, p.Tenant, []*privatev1.Event{
 		testenv.VMEvent("e3", privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
 			base.Add(34*time.Minute), base, "web", "STOPPED",
 			base.Add(29*time.Minute+30*time.Second), "large", base.Add(30*time.Minute)),
 	})
-	p.foldAll(t, total)
-	p.roundAt(t, base.Add(34*time.Minute))
-	p.waitOutboxEmpty(t)
+	p.FoldAll(t, total)
+	p.RoundAt(t, base.Add(34*time.Minute))
+	p.WaitOutboxEmpty(t)
 
-	beats := sentHeartbeats(t, p.tenant)
+	beats := pipelinetest.SentHeartbeats(t, p.Tenant)
 	var small, large []schema.HeartbeatData
 	for _, beat := range beats {
-		switch beat.data.BillingDimensions["instance_type"] {
+		switch beat.Data.BillingDimensions["instance_type"] {
 		case "small":
-			small = append(small, beat.data)
+			small = append(small, beat.Data)
 		case "large":
-			large = append(large, beat.data)
+			large = append(large, beat.Data)
 		}
 	}
 	if len(small) == 0 || len(large) == 0 {
@@ -1368,73 +947,74 @@ func TestRemovedMeterCorrectionCarriesUnitAndRevision(t *testing.T) {
 // compare the ledger whole and reverse exactly the committed usage.
 func TestUnjustifiedLedgerIsReversed(t *testing.T) {
 	const tenant = "unjustified"
-	p := newPipeline(t, tenant)
-	p.startRelay(t)
+	p := pipelinetest.NewPipeline(t, tenant)
+	p.StartRelay(t)
 
-	total := testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
+	total := testenv.ProduceEvents(t, p.Tenant, []*privatev1.Event{
 		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
 			base, base, "web", "RUNNING", base, "small", base),
 	})
-	p.foldAll(t, total)
-	p.roundAt(t, base.Add(time.Minute))
-	p.waitOutboxEmpty(t)
+	p.FoldAll(t, total)
+	p.RoundAt(t, base.Add(time.Minute))
+	p.WaitOutboxEmpty(t)
 
 	// A fresh database that never folded the events: its event offset claims everything
 	// is folded, but history is empty, as a restore whose backup had already consumed
 	// events that retention has since deleted would leave it. Catch-up rebuilds the
 	// ledger from the heartbeat alone.
-	q := newPipeline(t, tenant)
-	if err := q.store.EnsureProgress(context.Background(), tenant); err != nil {
+	q := pipelinetest.NewPipeline(t, tenant)
+	if err := q.Store.EnsureProgress(context.Background(), tenant); err != nil {
 		t.Fatalf("ensuring progress: %v", err)
 	}
-	if _, err := q.store.Pool().Exec(
+	if _, err := q.Store.Pool().Exec(
 		context.Background(), `UPDATE progress SET event_offset = $2 WHERE tenant = $1`,
 		tenant, int64(total),
 	); err != nil {
 		t.Fatalf("advancing the event offset: %v", err)
 	}
-	q.startRelay(t)
-	q.roundAt(t, base.Add(2*time.Minute))
-	q.waitOutboxEmpty(t)
+	q.StartRelay(t)
+	q.RoundAt(t, base.Add(2*time.Minute))
+	q.WaitOutboxEmpty(t)
 
-	got := quantities(sentHeartbeats(t, tenant))
+	got := pipelinetest.BeatLines(pipelinetest.SentHeartbeats(t, tenant))
 	want := []string{
 		"compute 2026-10-05T10:00:00Z..2026-10-05T10:01:00Z 60.000000",
 		"compute 2026-10-05T10:00:00Z..2026-10-05T10:01:00Z -60.000000",
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", join(got), join(want))
+		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", pipelinetest.Join(got), pipelinetest.Join(want))
 	}
-	assertLedgerEmpty(t, q.store, tenant)
+	assertLedgerEmpty(t, q.Store, tenant)
 }
 
-// TestStateChangeAtRoundTimeIsNotANewFact pins the boundary the tail path relies on: a state
-// change dated exactly at the previous round time is not a new fact, because
-// ResourcesWithNewFacts compares with a strict "after". The resource reaches the round only
-// through its open ledger row, and the row is reconciled by the tail path's fallback, which
-// sends the reversal.
+// TestStateChangeAtRoundTimeIsNotANewFact pins the calculator's half-open boundary: a
+// state change dated exactly at the previous round time changes nothing inside the window
+// that round billed, because the stop at 10:01 closes the run at that moment and leaves
+// nothing billable after it. The restored database has no last round of its own, so its
+// first comparison reaches the resource through the recompute path, scanning facts and
+// ledger rows alike, and reverses the usage the replayed heartbeat rebuilt.
 func TestStateChangeAtRoundTimeIsNotANewFact(t *testing.T) {
 	const tenant = "boundary"
-	p := newPipeline(t, tenant)
-	p.startRelay(t)
+	p := pipelinetest.NewPipeline(t, tenant)
+	p.StartRelay(t)
 
-	total := testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
+	total := testenv.ProduceEvents(t, p.Tenant, []*privatev1.Event{
 		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
 			base, base, "web", "RUNNING", base, "small", base),
 	})
-	p.foldAll(t, total)
+	p.FoldAll(t, total)
 	previous := base.Add(time.Minute)
-	p.roundAt(t, previous)
-	p.waitOutboxEmpty(t)
+	p.RoundAt(t, previous)
+	p.WaitOutboxEmpty(t)
 
 	// The restored database knows the creation and a stop dated exactly at the previous
 	// round's time, but not the RUNNING stretch the heartbeat billed: the facts predate
 	// the round's event offset and none is dated after its time, so none is new.
-	q := newPipeline(t, tenant)
-	if err := q.store.EnsureProgress(context.Background(), tenant); err != nil {
+	q := pipelinetest.NewPipeline(t, tenant)
+	if err := q.Store.EnsureProgress(context.Background(), tenant); err != nil {
 		t.Fatalf("ensuring progress: %v", err)
 	}
-	tx, err := q.store.Begin(context.Background())
+	tx, err := q.Store.Begin(context.Background())
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -1450,21 +1030,165 @@ func TestStateChangeAtRoundTimeIsNotANewFact(t *testing.T) {
 	if err := tx.Commit(context.Background()); err != nil {
 		t.Fatalf("commit: %v", err)
 	}
-	q.startRelay(t)
-	q.roundAt(t, base.Add(2*time.Minute))
-	q.waitOutboxEmpty(t)
+	q.StartRelay(t)
+	q.RoundAt(t, base.Add(2*time.Minute))
+	q.WaitOutboxEmpty(t)
 
 	// The open row catch-up rebuilt is unjustified — the engine never saw a billable
 	// state — and only the tail path's fallback compares it, reversing the usage.
-	got := quantities(sentHeartbeats(t, tenant))
+	got := pipelinetest.BeatLines(pipelinetest.SentHeartbeats(t, tenant))
 	want := []string{
 		"compute 2026-10-05T10:00:00Z..2026-10-05T10:01:00Z 60.000000",
 		"compute 2026-10-05T10:00:00Z..2026-10-05T10:01:00Z -60.000000",
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", join(got), join(want))
+		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", pipelinetest.Join(got), pipelinetest.Join(want))
 	}
-	assertLedgerEmpty(t, q.store, tenant)
+	assertLedgerEmpty(t, q.Store, tenant)
+}
+
+// TestRunningAtRoundBoundaryIsNotLost pins the scan's inclusive bound. A VM whose RUNNING
+// fact is dated exactly at the last round time opens its span inside the window the next
+// round bills, so the scan must still select it: the boundary round consumed the fact but
+// wrote no ledger row for it, because the span inside its own window was empty, so the
+// tail path cannot find the resource either.
+func TestRunningAtRoundBoundaryIsNotLost(t *testing.T) {
+	const tenant = "boundary-running"
+	p := pipelinetest.NewPipeline(t, tenant)
+	p.StartRelay(t)
+
+	// The VM boots from 10:00 and starts RUNNING exactly at 10:01, the moment of the
+	// next round.
+	total := testenv.ProduceEvents(t, p.Tenant, []*privatev1.Event{
+		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+			base, base, "web", "STARTING", base, "small", base),
+	})
+	p.FoldAll(t, total)
+	p.RoundAt(t, base)
+
+	boundary := base.Add(time.Minute)
+	total += testenv.ProduceEvents(t, p.Tenant, []*privatev1.Event{
+		testenv.VMEvent("e2", privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+			boundary, base, "web", "RUNNING", boundary, "small", base),
+	})
+	p.FoldAll(t, total)
+
+	// The round at the boundary reaches the RUNNING fact through its event offset, but
+	// its window ends where the run starts: the span is empty and nothing bills.
+	p.RoundAt(t, boundary)
+	p.WaitOutboxEmpty(t)
+	if beats := pipelinetest.SentHeartbeats(t, tenant); len(beats) != 0 {
+		t.Fatalf("the round at the boundary must bill nothing, got %d heartbeats", len(beats))
+	}
+
+	// The next round must find the VM through the scan and bill the minute that
+	// follows the boundary.
+	p.RoundAt(t, base.Add(2*time.Minute))
+	p.WaitOutboxEmpty(t)
+	got := pipelinetest.BeatLines(pipelinetest.SentHeartbeats(t, tenant))
+	want := []string{
+		"compute 2026-10-05T10:01:00Z..2026-10-05T10:02:00Z 60.000000",
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", pipelinetest.Join(got), pipelinetest.Join(want))
+	}
+}
+
+// TestRunningAtRoundBoundaryBillsEachMinuteOnce runs the same boundary over more rounds:
+// after the boundary the VM's fact sits at the last round's event offset, so every round
+// scans it into the recompute list while its open ledger row would also select it for the
+// tail. The scan dedups the two lists and the recompute is idempotent against the ledger,
+// so each minute after the boundary bills exactly once.
+func TestRunningAtRoundBoundaryBillsEachMinuteOnce(t *testing.T) {
+	const tenant = "boundary-running-long"
+	p := pipelinetest.NewPipeline(t, tenant)
+	p.StartRelay(t)
+
+	total := testenv.ProduceEvents(t, p.Tenant, []*privatev1.Event{
+		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+			base, base, "web", "STARTING", base, "small", base),
+	})
+	p.FoldAll(t, total)
+	p.RoundAt(t, base)
+
+	boundary := base.Add(time.Minute)
+	total += testenv.ProduceEvents(t, p.Tenant, []*privatev1.Event{
+		testenv.VMEvent("e2", privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+			boundary, base, "web", "RUNNING", boundary, "small", base),
+	})
+	p.FoldAll(t, total)
+
+	p.RoundAt(t, boundary)
+	p.RoundAt(t, base.Add(2*time.Minute))
+	p.RoundAt(t, base.Add(3*time.Minute))
+	p.RoundAt(t, base.Add(4*time.Minute))
+	p.WaitOutboxEmpty(t)
+
+	got := pipelinetest.BeatLines(pipelinetest.SentHeartbeats(t, tenant))
+	want := []string{
+		"compute 2026-10-05T10:01:00Z..2026-10-05T10:02:00Z 60.000000",
+		"compute 2026-10-05T10:02:00Z..2026-10-05T10:03:00Z 60.000000",
+		"compute 2026-10-05T10:03:00Z..2026-10-05T10:04:00Z 60.000000",
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", pipelinetest.Join(got), pipelinetest.Join(want))
+	}
+}
+
+// TestRootReadyAtRoundBoundaryIsNotLost pins the same boundary on an ownership root: a
+// cluster whose READY fact is dated exactly at the last round time must reach the next
+// round through the scan and drag its workers with it, because the gate that opened at
+// the boundary bills their runs retroactively from their start. When the cluster is lost,
+// the workers' gate never opens: they have no new fact of their own and no ledger row.
+func TestRootReadyAtRoundBoundaryIsNotLost(t *testing.T) {
+	const tenant = "boundary-root"
+	p := pipelinetest.NewPipeline(t, tenant)
+	p.StartRelay(t)
+
+	// The cluster exists from 10:00 in an unspecified state and the worker is
+	// allocated while the gate is shut: control_plane bills only from READY, so
+	// nothing before it is billable.
+	total := testenv.ProduceEvents(t, p.Tenant, []*privatev1.Event{
+		testenv.ClusterEvent("c1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+			base, base, "web", "UNSPECIFIED", base, "openshift-4-19", "4.19.0", base),
+		testenv.BMIEvent("b1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+			base, base, "web", "STARTING", base, "medium", "cluster-1", "workers"),
+	})
+	p.FoldAll(t, total)
+	p.RoundAt(t, base)
+
+	// The cluster reaches READY exactly at 10:01, the moment of the next round.
+	boundary := base.Add(time.Minute)
+	total += testenv.ProduceEvents(t, p.Tenant, []*privatev1.Event{
+		testenv.ClusterEvent("c2", privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+			boundary, base, "web", "READY", boundary, "openshift-4-19", "4.19.0", base),
+	})
+	p.FoldAll(t, total)
+
+	// The round at the boundary consumes the READY fact, but a gate opens only
+	// strictly inside a run, and every run it can see ends at the boundary: nothing
+	// bills.
+	p.RoundAt(t, boundary)
+	p.WaitOutboxEmpty(t)
+	if beats := pipelinetest.SentHeartbeats(t, tenant); len(beats) != 0 {
+		t.Fatalf("the round at the boundary must bill nothing, got %d heartbeats", len(beats))
+	}
+
+	// The next round must bill the cluster from the boundary and the worker from its
+	// own start under the opened gate. The two heartbeats come from different
+	// resources, whose recompute order the scan does not fix, so the lines compare
+	// sorted.
+	p.RoundAt(t, base.Add(2*time.Minute))
+	p.WaitOutboxEmpty(t)
+	got := pipelinetest.BeatLines(pipelinetest.SentHeartbeats(t, tenant))
+	sort.Strings(got)
+	want := []string{
+		"allocation 2026-10-05T10:00:00Z..2026-10-05T10:02:00Z 120.000000",
+		"control_plane 2026-10-05T10:01:00Z..2026-10-05T10:02:00Z 60.000000",
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", pipelinetest.Join(got), pipelinetest.Join(want))
+	}
 }
 
 // TestNegativeCorrectionSplitsAtMidnight covers a negative difference that would merge across
@@ -1473,31 +1197,31 @@ func TestStateChangeAtRoundTimeIsNotANewFact(t *testing.T) {
 func TestNegativeCorrectionSplitsAtMidnight(t *testing.T) {
 	const tenant = "neg-midnight"
 	evening := time.Date(2026, 9, 30, 23, 58, 0, 0, time.UTC)
-	p := newPipeline(t, tenant)
-	p.startRelay(t)
+	p := pipelinetest.NewPipeline(t, tenant)
+	p.StartRelay(t)
 
-	total := testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
+	total := testenv.ProduceEvents(t, p.Tenant, []*privatev1.Event{
 		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
 			evening, evening, "web", "RUNNING", evening, "small", evening),
 	})
-	p.foldAll(t, total)
+	p.FoldAll(t, total)
 
-	p.roundAt(t, evening.Add(90*time.Second))  // 23:59:30
-	p.roundAt(t, evening.Add(150*time.Second)) // 00:00:30 the next month
-	p.waitOutboxEmpty(t)
+	p.RoundAt(t, evening.Add(90*time.Second))  // 23:59:30
+	p.RoundAt(t, evening.Add(150*time.Second)) // 00:00:30 the next month
+	p.WaitOutboxEmpty(t)
 
 	// The late event: the VM stopped at 23:59:00, before both rounds billed it.
-	total += testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
+	total += testenv.ProduceEvents(t, p.Tenant, []*privatev1.Event{
 		testenv.VMEvent("e2", privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
 			evening.Add(3*time.Minute), evening, "web", "STOPPED",
 			evening.Add(time.Minute), "small", evening),
 	})
-	p.foldAll(t, total)
-	p.roundAt(t, evening.Add(4*time.Minute))
-	p.waitOutboxEmpty(t)
+	p.FoldAll(t, total)
+	p.RoundAt(t, evening.Add(4*time.Minute))
+	p.WaitOutboxEmpty(t)
 
-	beats := sentHeartbeats(t, tenant)
-	got := quantities(beats)
+	beats := pipelinetest.SentHeartbeats(t, tenant)
+	got := pipelinetest.BeatLines(beats)
 	want := []string{
 		"compute 2026-09-30T23:58:00Z..2026-09-30T23:59:30Z 90.000000",
 		"compute 2026-09-30T23:59:30Z..2026-10-01T00:00:00Z 30.000000",
@@ -1506,13 +1230,13 @@ func TestNegativeCorrectionSplitsAtMidnight(t *testing.T) {
 		"compute 2026-10-01T00:00:00Z..2026-10-01T00:00:30Z -30.000000",
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", join(got), join(want))
+		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", pipelinetest.Join(got), pipelinetest.Join(want))
 	}
 
 	// The corrections net to exactly the true running time: one minute.
 	var totalMicro int64
 	for _, beat := range beats {
-		quantity, err := heartbeat.ParseMicro(beat.data.Usage.Quantity)
+		quantity, err := heartbeat.ParseMicro(beat.Data.Usage.Quantity)
 		if err != nil {
 			t.Fatalf("parsing quantity: %v", err)
 		}
@@ -1522,17 +1246,17 @@ func TestNegativeCorrectionSplitsAtMidnight(t *testing.T) {
 		t.Fatalf("heartbeats sum to %d micro, want one minute", totalMicro)
 	}
 	for _, beat := range beats {
-		from, err := time.Parse(time.RFC3339Nano, beat.data.Usage.From)
+		from, err := time.Parse(time.RFC3339Nano, beat.Data.Usage.From)
 		if err != nil {
 			t.Fatalf("parsing usage from: %v", err)
 		}
-		to, err := time.Parse(time.RFC3339Nano, beat.data.Usage.To)
+		to, err := time.Parse(time.RFC3339Nano, beat.Data.Usage.To)
 		if err != nil {
 			t.Fatalf("parsing usage to: %v", err)
 		}
 		if from.UTC().YearDay() != to.Add(-time.Nanosecond).UTC().YearDay() {
-			t.Fatalf("a heartbeat crossed midnight: %s..%s", beat.data.Usage.From,
-				beat.data.Usage.To)
+			t.Fatalf("a heartbeat crossed midnight: %s..%s", beat.Data.Usage.From,
+				beat.Data.Usage.To)
 		}
 	}
 }
@@ -1554,31 +1278,31 @@ func assertLedgerEmpty(t *testing.T, store *database.Store, tenant string) {
 // the billed span at the resize time, sending a positive correction on the new type and
 // a negative one on the old, so the total is right without double billing.
 func TestLateResizeSendsPositiveAndNegativeCorrections(t *testing.T) {
-	p := newPipeline(t, "late-resize")
-	p.startRelay(t)
+	p := pipelinetest.NewPipeline(t, "late-resize")
+	p.StartRelay(t)
 
-	total := testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
+	total := testenv.ProduceEvents(t, p.Tenant, []*privatev1.Event{
 		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
 			base, base, "web", "RUNNING", base, "small", base),
 	})
-	p.foldAll(t, total)
+	p.FoldAll(t, total)
 
-	p.roundAt(t, base.Add(time.Minute))
-	p.roundAt(t, base.Add(2*time.Minute))
-	p.roundAt(t, base.Add(3*time.Minute))
-	p.waitOutboxEmpty(t)
+	p.RoundAt(t, base.Add(time.Minute))
+	p.RoundAt(t, base.Add(2*time.Minute))
+	p.RoundAt(t, base.Add(3*time.Minute))
+	p.WaitOutboxEmpty(t)
 
 	// The resize happened at 10:02:30 but arrives after the 10:03 round.
-	total += testenv.ProduceEvents(t, p.tenant, []*privatev1.Event{
+	total += testenv.ProduceEvents(t, p.Tenant, []*privatev1.Event{
 		testenv.VMEvent("e2", privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
 			base.Add(3*time.Minute+10*time.Second), base, "web", "RUNNING",
 			base, "large", base.Add(2*time.Minute+30*time.Second)),
 	})
-	p.foldAll(t, total)
-	p.roundAt(t, base.Add(4*time.Minute))
-	p.waitOutboxEmpty(t)
+	p.FoldAll(t, total)
+	p.RoundAt(t, base.Add(4*time.Minute))
+	p.WaitOutboxEmpty(t)
 
-	got := quantities(sentHeartbeats(t, p.tenant))
+	got := pipelinetest.BeatLines(pipelinetest.SentHeartbeats(t, p.Tenant))
 	want := []string{
 		"compute 2026-10-05T10:00:00Z..2026-10-05T10:01:00Z 60.000000",
 		"compute 2026-10-05T10:01:00Z..2026-10-05T10:02:00Z 60.000000",
@@ -1587,6 +1311,271 @@ func TestLateResizeSendsPositiveAndNegativeCorrections(t *testing.T) {
 		"compute 2026-10-05T10:02:30Z..2026-10-05T10:03:00Z -30.000000",
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", join(got), join(want))
+		t.Fatalf("heartbeats mismatch:\ngot:\n%s\nwant:\n%s", pipelinetest.Join(got), pipelinetest.Join(want))
+	}
+}
+
+// pendingHeartbeats returns the outbox rows waiting for delivery.
+func pendingHeartbeats(t *testing.T, store *database.Store, tenant string) []database.OutboxRow {
+	t.Helper()
+	rows, err := database.NextOutbox(context.Background(), store.Pool(), tenant, 1000)
+	if err != nil {
+		t.Fatalf("reading the outbox: %v", err)
+	}
+	return rows
+}
+
+// rowResource returns the resource a pending heartbeat bills.
+func rowResource(t *testing.T, row database.OutboxRow) string {
+	t.Helper()
+	event := cloudevents.Event{}
+	if err := event.UnmarshalJSON(row.Payload); err != nil {
+		t.Fatalf("unmarshaling the pending heartbeat: %v", err)
+	}
+	data, err := heartbeat.Data(event)
+	if err != nil {
+		t.Fatalf("decoding the pending heartbeat: %v", err)
+	}
+	return data.ResourceID
+}
+
+// rowOf returns the pending heartbeat billing the given resource at the given round.
+func rowOf(t *testing.T, rows []database.OutboxRow, resource string, round time.Time) database.OutboxRow {
+	t.Helper()
+	for _, row := range rows {
+		if rowResource(t, row) == resource && row.RoundTime.Equal(round) {
+			return row
+		}
+	}
+	t.Fatalf("no pending heartbeat for %s at %s", resource, round)
+	return database.OutboxRow{}
+}
+
+// deliver publishes outbox rows to the heartbeat topic, standing in for the relay.
+// Delivering the same row twice reproduces a retry's copy: the same heartbeat id lands
+// on the topic at two offsets.
+func deliver(t *testing.T, tenant string, rows ...database.OutboxRow) {
+	t.Helper()
+	producer := testenv.NewProducer(t)
+	for _, row := range rows {
+		_, _, err := producer.SendMessage(&sarama.ProducerMessage{
+			Topic: topics.Heartbeat(tenant),
+			Key:   sarama.StringEncoder(row.ID),
+			Value: sarama.ByteEncoder(row.Payload),
+		})
+		if err != nil {
+			t.Fatalf("delivering heartbeat %s: %v", row.ID, err)
+		}
+	}
+}
+
+// billedMicro sums the heartbeats the topic holds for one resource, counting each
+// heartbeat id once: the provider drops copies by id, so a retry's copy does not bill.
+func billedMicro(t *testing.T, tenant, resource string) int64 {
+	t.Helper()
+	seen := map[string]bool{}
+	var total int64
+	for _, beat := range pipelinetest.SentHeartbeats(t, tenant) {
+		if beat.Data.ResourceID != resource || seen[beat.Event.ID()] {
+			continue
+		}
+		seen[beat.Event.ID()] = true
+		quantity, err := heartbeat.ParseMicro(beat.Data.Usage.Quantity)
+		if err != nil {
+			t.Fatalf("parsing the quantity of heartbeat %s: %v", beat.Event.ID(), err)
+		}
+		total += quantity
+	}
+	return total
+}
+
+// TestRebuildRecoversAPartiallyDeliveredRound checks the recovery of a round the relay
+// half delivered: one VM's bill reached the topic, the other's lived only in the
+// database, and the database was lost. The rebuild must still bill both runs.
+func TestRebuildRecoversAPartiallyDeliveredRound(t *testing.T) {
+	tenant := "partial-round"
+	p := pipelinetest.NewPipeline(t, tenant)
+
+	// Two VMs each run for 20 seconds.
+	total := testenv.ProduceEvents(t, tenant, []*privatev1.Event{
+		testenv.VMEventOf("vm-web", "w1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+			base, base, "web", "RUNNING", base, "small", base),
+		testenv.VMEventOf("vm-web", "w2", privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+			base.Add(20*time.Second), base, "web", "STOPPED", base.Add(20*time.Second), "small", base),
+		testenv.VMEventOf("vm-db", "d1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+			base, base, "web", "RUNNING", base, "small", base),
+		testenv.VMEventOf("vm-db", "d2", privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+			base.Add(20*time.Second), base, "web", "STOPPED", base.Add(20*time.Second), "small", base),
+	})
+	p.FoldAll(t, total)
+	backup := snapshot(t, p.Store, tenant)
+
+	// The round bills both runs. Only vm-web's heartbeat is delivered before the
+	// database is lost.
+	p.RoundAt(t, base.Add(time.Minute))
+	rows := pendingHeartbeats(t, p.Store, tenant)
+	if len(rows) != 2 {
+		t.Fatalf("the round must bill both VMs, got %d heartbeats", len(rows))
+	}
+	deliver(t, tenant, rowOf(t, rows, "vm-web", base.Add(time.Minute)))
+
+	// The database is restored from before the round; two later rounds must recover
+	// the undelivered bill exactly once.
+	restored := pipelinetest.NewPipelineOnStore(t, tenant, restore(t, backup, tenant))
+	restored.StartRelay(t)
+	restored.RoundAt(t, base.Add(2*time.Minute))
+	restored.RoundAt(t, base.Add(3*time.Minute))
+	restored.WaitOutboxEmpty(t)
+
+	if got := billedMicro(t, tenant, "vm-web"); got != 20_000_000 {
+		t.Fatalf("vm-web billed %d micro, want 20000000", got)
+	}
+	if got := billedMicro(t, tenant, "vm-db"); got != 20_000_000 {
+		t.Fatalf("a round the relay half delivered must still bill the lost half "+
+			"exactly once: vm-db billed %d micro, want 20000000", got)
+	}
+}
+
+// TestRebuildKeepsAPendingOpenRun checks that a rebuild recreates the open-run marker of
+// a VM whose run was too short to emit a heartbeat: the marker lived only in the lost
+// database, and without it a running VM with no new facts bills nothing ever again.
+func TestRebuildKeepsAPendingOpenRun(t *testing.T) {
+	tenant := "pending-run"
+	p := pipelinetest.NewPipeline(t, tenant)
+
+	// vm-mature has run two minutes; vm-young started half a second before the round,
+	// too short to emit a heartbeat of its own.
+	young := base.Add(2*time.Minute - 500*time.Millisecond)
+	total := testenv.ProduceEvents(t, tenant, []*privatev1.Event{
+		testenv.VMEventOf("vm-mature", "m1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+			base, base, "web", "RUNNING", base, "small", base),
+		testenv.VMEventOf("vm-young", "y1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+			young, young, "web", "RUNNING", young, "small", young),
+	})
+	p.FoldAll(t, total)
+	backup := snapshot(t, p.Store, tenant)
+
+	// The round bills vm-mature and leaves vm-young pending. The round is fully
+	// delivered, then the database is lost.
+	p.RoundAt(t, base.Add(2*time.Minute))
+	rows := pendingHeartbeats(t, p.Store, tenant)
+	if len(rows) != 1 {
+		t.Fatalf("a 500 ms run must emit no heartbeat, got %d", len(rows))
+	}
+	deliver(t, tenant, rows...)
+
+	restored := pipelinetest.NewPipelineOnStore(t, tenant, restore(t, backup, tenant))
+	restored.StartRelay(t)
+	restored.RoundAt(t, base.Add(3*time.Minute))
+	restored.RoundAt(t, base.Add(4*time.Minute))
+	restored.WaitOutboxEmpty(t)
+
+	if got := billedMicro(t, tenant, "vm-mature"); got != 240_000_000 {
+		t.Fatalf("vm-mature billed %d micro, want 240000000", got)
+	}
+	if got := billedMicro(t, tenant, "vm-young"); got != 120_500_000 {
+		t.Fatalf("a pending open run the rebuild must recreate: vm-young billed "+
+			"%d micro, want 120500000", got)
+	}
+}
+
+// TestRebuildAppliesEveryHeartbeatOfARound checks that a relay retry cannot make the
+// rebuild drop a bill: the retry lands copies between the heartbeats of two rounds, and
+// the replay must apply every distinct bill while counting each copy once.
+func TestRebuildAppliesEveryHeartbeatOfARound(t *testing.T) {
+	tenant := "retried-batch"
+	p := pipelinetest.NewPipeline(t, tenant)
+
+	// vm-web runs from 10:00; vm-db starts at 10:01:30, so the first round bills
+	// only vm-web.
+	total := testenv.ProduceEvents(t, tenant, []*privatev1.Event{
+		testenv.VMEventOf("vm-web", "w1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+			base, base, "web", "RUNNING", base, "small", base),
+		testenv.VMEventOf("vm-db", "d1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+			base.Add(90*time.Second), base.Add(90*time.Second), "web", "RUNNING",
+			base.Add(90*time.Second), "small", base.Add(90*time.Second)),
+	})
+	p.FoldAll(t, total)
+	backup := snapshot(t, p.Store, tenant)
+
+	// Round 10:01 bills vm-web; round 10:02 bills both. A failed batch and its retry
+	// leave the topic reading web-1, web-2, web-1-copy, web-2-copy, db-2: vm-db's bill
+	// arrives after copies of the earlier ones.
+	p.RoundAt(t, base.Add(time.Minute))
+	p.RoundAt(t, base.Add(2*time.Minute))
+	rows := pendingHeartbeats(t, p.Store, tenant)
+	if len(rows) != 3 {
+		t.Fatalf("the two rounds must bill three heartbeats, got %d", len(rows))
+	}
+	webOne := rowOf(t, rows, "vm-web", base.Add(time.Minute))
+	webTwo := rowOf(t, rows, "vm-web", base.Add(2*time.Minute))
+	dbTwo := rowOf(t, rows, "vm-db", base.Add(2*time.Minute))
+	deliver(t, tenant, webOne, webTwo, webOne, webTwo, dbTwo)
+
+	// vm-db stops 20 seconds into the third minute, after 110 seconds of running;
+	// the last round settles both VMs.
+	total += testenv.ProduceEvents(t, tenant, []*privatev1.Event{
+		testenv.VMEventOf("vm-db", "d2", privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+			base.Add(3*time.Minute+20*time.Second), base.Add(90*time.Second), "web", "STOPPED",
+			base.Add(3*time.Minute+20*time.Second), "small", base.Add(90*time.Second)),
+	})
+
+	restored := pipelinetest.NewPipelineOnStore(t, tenant, restore(t, backup, tenant))
+	restored.FoldAll(t, total)
+	restored.StartRelay(t)
+	restored.RoundAt(t, base.Add(3*time.Minute))
+	restored.RoundAt(t, base.Add(4*time.Minute))
+	restored.WaitOutboxEmpty(t)
+
+	if got := billedMicro(t, tenant, "vm-web"); got != 240_000_000 {
+		t.Fatalf("vm-web billed %d micro, want 240000000", got)
+	}
+	if got := billedMicro(t, tenant, "vm-db"); got != 110_000_000 {
+		t.Fatalf("vm-db ran 110 seconds and must bill exactly that once, billed "+
+			"%d micro", got)
+	}
+}
+
+// TestRebuildCountsAResentCopyOnceAcrossACrash checks the id memory's survival of a crash
+// mid-replay: a heartbeat the relay resent after the crash must not merge into the ledger a
+// second time, even though the resumed pass reads it with a fresh in-memory view.
+func TestRebuildCountsAResentCopyOnceAcrossACrash(t *testing.T) {
+	tenant := "crashed-replay"
+	p := pipelinetest.NewPipeline(t, tenant)
+
+	total := testenv.ProduceEvents(t, tenant, []*privatev1.Event{
+		testenv.VMEventOf("vm-web", "w1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+			base, base, "web", "RUNNING", base, "small", base),
+	})
+	p.FoldAll(t, total)
+	backup := snapshot(t, p.Store, tenant)
+
+	// Two rounds bill vm-web once a minute; the relay's first bill is also resent as
+	// a copy that lands after the second bill.
+	p.RoundAt(t, base.Add(time.Minute))
+	p.RoundAt(t, base.Add(2*time.Minute))
+	rows := pendingHeartbeats(t, p.Store, tenant)
+	if len(rows) != 2 {
+		t.Fatalf("the two rounds must bill two heartbeats, got %d", len(rows))
+	}
+	webOne := rowOf(t, rows, "vm-web", base.Add(time.Minute))
+	webTwo := rowOf(t, rows, "vm-web", base.Add(2*time.Minute))
+	deliver(t, tenant, webOne, webTwo, webOne)
+
+	// The rebuild crashes after applying the two bills; the resumed pass reads the
+	// copy, which the id memory must skip.
+	restored := pipelinetest.NewPipelineOnStore(t, tenant, restore(t, backup, tenant))
+	restored.StartRelay(t)
+	restored.Round.SetCrashAfterGroups(2)
+	if err := restored.Round.Once(context.Background(), tenant, base.Add(3*time.Minute)); !errors.Is(err, round.ErrCrashed) {
+		t.Fatalf("catch-up must report the simulated crash, got %v", err)
+	}
+	restored.Round.SetCrashAfterGroups(0)
+	restored.RoundAt(t, base.Add(3*time.Minute))
+	restored.WaitOutboxEmpty(t)
+
+	if got := billedMicro(t, tenant, "vm-web"); got != 180_000_000 {
+		t.Fatalf("a copy resent after a crash mid-replay must count once: vm-web "+
+			"billed %d micro, want 180000000", got)
 	}
 }

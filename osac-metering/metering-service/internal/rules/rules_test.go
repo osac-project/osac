@@ -19,6 +19,7 @@ import (
 
 	"github.com/osac-project/osac-metering/internal/database"
 	"github.com/osac-project/osac-metering/internal/rules"
+	"github.com/osac-project/osac-metering/internal/testenv"
 )
 
 func revision(t *testing.T, number, effectiveAt, meters string) rules.Revision {
@@ -36,19 +37,15 @@ func usedRow(revision rules.Revision) database.RuleRevisionRow {
 	}
 }
 
-var defaultMeters = func() string {
-	revision, err := rules.DefaultRevision()
-	if err != nil {
-		panic(err)
-	}
-	return revision.MetersYAML
-}()
+// defaultMeters returns the chart's default meters; variants build on them with
+// strings.Replace.
+func defaultMeters(t *testing.T) string {
+	t.Helper()
+	return testenv.DefaultMetersYAML(t)
+}
 
 func TestDefaultRevisionParses(t *testing.T) {
-	revision, err := rules.DefaultRevision()
-	if err != nil {
-		t.Fatalf("default revision does not parse: %v", err)
-	}
+	revision := testenv.DefaultRevision(t)
 	if revision.Number != "0001" {
 		t.Errorf("default revision is %s, want 0001", revision.Number)
 	}
@@ -72,10 +69,10 @@ func TestDefaultRevisionParses(t *testing.T) {
 }
 
 func TestParseRejectsBadNamesAndTimes(t *testing.T) {
-	if _, err := rules.Parse("wrong-name", time.Time{}.Format(time.RFC3339), defaultMeters); err == nil {
+	if _, err := rules.Parse("wrong-name", time.Time{}.Format(time.RFC3339), defaultMeters(t)); err == nil {
 		t.Error("a ConfigMap without the revision prefix must not parse")
 	}
-	if _, err := rules.Parse(rules.NamePrefix+"0001", "not-a-time", defaultMeters); err == nil {
+	if _, err := rules.Parse(rules.NamePrefix+"0001", "not-a-time", defaultMeters(t)); err == nil {
 		t.Error("an invalid effective_at must not parse")
 	}
 	if _, err := rules.Parse(
@@ -85,14 +82,14 @@ func TestParseRejectsBadNamesAndTimes(t *testing.T) {
 	}
 	if _, err := rules.Parse(
 		rules.NamePrefix+"0001", time.Unix(0, 0).Format(time.RFC3339),
-		strings.Replace(defaultMeters, "states: [RUNNING]", "states: [WARP9]", 1),
+		strings.Replace(defaultMeters(t), "states: [RUNNING]", "states: [WARP9]", 1),
 	); err == nil {
 		t.Error("a revision naming a state the resource never has must not parse")
 	}
 	// A once state outside the billable states can never confirm a span, so the rule
 	// would silently bill nothing.
 	onceOutside := strings.Replace(
-		strings.Replace(defaultMeters, "states: [PROGRESSING, READY]", "states: [PROGRESSING]", 1),
+		strings.Replace(defaultMeters(t), "states: [PROGRESSING, READY]", "states: [PROGRESSING]", 1),
 		"once: [READY]", "once: [READY, FAILED]", 1,
 	)
 	if _, err := rules.Parse(
@@ -104,7 +101,7 @@ func TestParseRejectsBadNamesAndTimes(t *testing.T) {
 	// and Atoi would happily accept "+3".
 	for _, number := range []string{"2", "+3", "10", "001", "00001"} {
 		if _, err := rules.Parse(
-			rules.NamePrefix+number, time.Unix(0, 0).Format(time.RFC3339), defaultMeters,
+			rules.NamePrefix+number, time.Unix(0, 0).Format(time.RFC3339), defaultMeters(t),
 		); err == nil {
 			t.Errorf("revision number %q must not parse: it is not exactly four digits", number)
 		}
@@ -127,19 +124,67 @@ func TestParseRejectsUnsupportedFields(t *testing.T) {
 	}
 }
 
-func TestCheckStartup(t *testing.T) {
-	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
-	future := now.Add(24 * time.Hour)
-	past := now.Add(-24 * time.Hour)
+// TestParseRejectsSecondMetersDocument checks that a meters document followed by a second
+// YAML document refuses to load: the first document alone would silently drop the second's
+// meters and remove billing while startup succeeds.
+func TestParseRejectsSecondMetersDocument(t *testing.T) {
+	twoDocuments := `- resource: ComputeInstance
+  meter: compute
+  unit: second
+  billable_when:
+    states: [RUNNING]
+---
+- resource: Volume
+  meter: capacity
+  unit: gibibyte_second
+  billable_when:
+    states: [AVAILABLE]
+  multiplier: provisioned_size_gib
+`
+	if _, err := rules.Parse(
+		rules.NamePrefix+"0001", time.Unix(0, 0).Format(time.RFC3339), twoDocuments,
+	); err == nil {
+		t.Error("a second YAML document must be rejected, not silently discarded")
+	}
+}
 
-	first := revision(t, "0001", time.Unix(0, 0).Format(time.RFC3339), defaultMeters)
-	secondMeters := strings.Replace(defaultMeters, "states: [RUNNING]", "states: [RUNNING, PAUSED]", 1)
+// TestParseRejectsConditionsOnComputedFields checks that a condition naming a computed
+// dimension refuses to load: conditions compare the raw stored field, so `ip_family: ipv4`
+// would compare the tracked address against "ipv4" and silently bill nothing.
+func TestParseRejectsConditionsOnComputedFields(t *testing.T) {
+	bad := `- resource: ExternalIP
+  meter: allocation
+  unit: second
+  billable_when:
+    states: [ALLOCATED]
+    fields: {ip_family: ipv4}
+  dimensions: [ip_family]
+`
+	_, err := rules.Parse(rules.NamePrefix+"0001", time.Unix(0, 0).Format(time.RFC3339), bad)
+	if err == nil {
+		t.Fatal("a condition on a computed field must not parse")
+	}
+	if !strings.Contains(err.Error(), "computed") {
+		t.Fatalf("the rejection must say the field is computed, got %q", err.Error())
+	}
+}
+
+func TestCheckStartup(t *testing.T) {
+	// lastRound stands for the database's billing position: the time of the latest
+	// round any tenant completed. A fresh database has billed nothing and passes the
+	// zero time.
+	lastRound := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+	future := lastRound.Add(24 * time.Hour)
+	past := lastRound.Add(-24 * time.Hour)
+
+	first := revision(t, "0001", time.Unix(0, 0).Format(time.RFC3339), defaultMeters(t))
+	secondMeters := strings.Replace(defaultMeters(t), "states: [RUNNING]", "states: [RUNNING, PAUSED]", 1)
 	second := revision(t, "0002", future.Format(time.RFC3339), secondMeters)
 
 	t.Run("fresh database accepts the default revision", func(t *testing.T) {
-		present, err := rules.CheckStartup(nil, []rules.Revision{first}, func() time.Time {
-			return now
-		})
+		// Nothing has billed, so the billing position is the zero time. The epoch
+		// is after the zero time, so the default revision still passes.
+		present, err := rules.CheckStartup(nil, []rules.Revision{first}, time.Time{})
 		if err != nil {
 			t.Fatalf("fresh startup refused: %v", err)
 		}
@@ -148,26 +193,53 @@ func TestCheckStartup(t *testing.T) {
 		}
 	})
 
-	t.Run("accepts a future revision", func(t *testing.T) {
-		_, err := rules.CheckStartup(
+	t.Run("accepts a revision effective after the billing position", func(t *testing.T) {
+		present, err := rules.CheckStartup(
 			[]database.RuleRevisionRow{usedRow(first)},
 			[]rules.Revision{first, second},
-			func() time.Time { return now },
+			lastRound,
 		)
 		if err != nil {
-			t.Fatalf("future revision refused: %v", err)
+			t.Fatalf("revision effective after the billing position refused: %v", err)
+		}
+		if len(present) != 2 {
+			t.Fatalf("expected both revisions, got %+v", present)
 		}
 	})
 
-	t.Run("refuses a revision first loaded after its effective time", func(t *testing.T) {
+	t.Run("refuses a revision effective before the billing position", func(t *testing.T) {
 		late := revision(t, "0002", past.Format(time.RFC3339), secondMeters)
 		_, err := rules.CheckStartup(
 			[]database.RuleRevisionRow{usedRow(first)},
 			[]rules.Revision{first, late},
-			func() time.Time { return now },
+			lastRound,
 		)
 		if err == nil {
-			t.Fatal("a new revision effective in the past must refuse to start")
+			t.Fatal("a revision effective before the billing position must refuse to start")
+		}
+	})
+
+	t.Run("refuses a revision effective exactly at the billing position", func(t *testing.T) {
+		// "Not after" includes "at": a revision taking effect at the last round
+		// would reprice the spans that round billed.
+		atRound := revision(t, "0002", lastRound.Format(time.RFC3339), secondMeters)
+		_, err := rules.CheckStartup(
+			[]database.RuleRevisionRow{usedRow(first)},
+			[]rules.Revision{first, atRound},
+			lastRound,
+		)
+		if err == nil {
+			t.Fatal("a revision effective at the billing position must refuse to start")
+		}
+	})
+
+	t.Run("refuses a backdated revision even when none is recorded", func(t *testing.T) {
+		// The billing position alone guards past usage: whether any revision is
+		// recorded does not soften it.
+		late := revision(t, "0002", past.Format(time.RFC3339), secondMeters)
+		_, err := rules.CheckStartup(nil, []rules.Revision{late}, lastRound)
+		if err == nil {
+			t.Fatal("a revision effective before the billing position must refuse to start")
 		}
 	})
 
@@ -175,7 +247,7 @@ func TestCheckStartup(t *testing.T) {
 		_, err := rules.CheckStartup(
 			[]database.RuleRevisionRow{usedRow(first), usedRow(second)},
 			[]rules.Revision{first},
-			func() time.Time { return now },
+			lastRound,
 		)
 		if err == nil {
 			t.Fatal("a used revision that went missing must refuse to start")
@@ -187,7 +259,7 @@ func TestCheckStartup(t *testing.T) {
 		_, err := rules.CheckStartup(
 			[]database.RuleRevisionRow{usedRow(first)},
 			[]rules.Revision{changed},
-			func() time.Time { return now },
+			lastRound,
 		)
 		if err == nil {
 			t.Fatal("a used revision whose content changed must refuse to start")
@@ -200,7 +272,7 @@ func TestCheckStartup(t *testing.T) {
 		_, err := rules.CheckStartup(
 			[]database.RuleRevisionRow{usedRow(first)},
 			[]rules.Revision{first, unitRevision},
-			func() time.Time { return now },
+			lastRound,
 		)
 		if err == nil {
 			t.Fatal("a revision that changes a meter's unit must refuse to start")
@@ -213,7 +285,7 @@ func TestCheckStartup(t *testing.T) {
 		_, err = rules.CheckStartup(
 			[]database.RuleRevisionRow{usedRow(first)},
 			[]rules.Revision{first, componentRevision},
-			func() time.Time { return now },
+			lastRound,
 		)
 		if err == nil {
 			t.Fatal("a revision that changes a meter's component must refuse to start")
@@ -227,7 +299,7 @@ func TestCheckStartup(t *testing.T) {
 		_, err = rules.CheckStartup(
 			[]database.RuleRevisionRow{usedRow(first)},
 			[]rules.Revision{first, sameRevision},
-			func() time.Time { return now },
+			lastRound,
 		)
 		if err != nil {
 			t.Fatalf("an unchanged shape must start: %v", err)
@@ -235,7 +307,7 @@ func TestCheckStartup(t *testing.T) {
 	})
 
 	t.Run("refuses an empty source", func(t *testing.T) {
-		_, err := rules.CheckStartup(nil, nil, func() time.Time { return now })
+		_, err := rules.CheckStartup(nil, nil, lastRound)
 		if err == nil {
 			t.Fatal("no revisions at all must refuse to start")
 		}
@@ -245,12 +317,41 @@ func TestCheckStartup(t *testing.T) {
 		lateFirst := revision(t, "0002", future.Format(time.RFC3339), secondMeters)
 		earlySecond := revision(t, "0003", past.Format(time.RFC3339), secondMeters)
 		_, err := rules.CheckStartup(
-			nil, []rules.Revision{first, lateFirst, earlySecond}, func() time.Time { return now },
+			nil, []rules.Revision{first, lateFirst, earlySecond}, time.Time{},
 		)
 		if err == nil {
 			t.Fatal("revisions with out-of-order effective times must refuse to start")
 		}
 	})
+}
+
+// TestRestoreBeforeFutureRevisionWasLoadedCanStart pins the restore scenario.
+// A backup was taken while revision 0001 was used, its last round at T0.
+// Revision 0002 activated at T1 after T0, spans were billed under 0002 until T2, and
+// then the backup was restored while both ConfigMaps stayed. At restore time the wall
+// clock is past T2, well past 0002's effective time, but the database's billing
+// position is T0: 0002 is effective after T0, so recording it changes no billed span,
+// and catch-up needs it recorded to bill the T1..T2 spans the heartbeats on the topic
+// already billed. CheckStartup takes no wall clock for exactly this reason.
+func TestRestoreBeforeFutureRevisionWasLoadedCanStart(t *testing.T) {
+	t0 := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	t1 := t0.Add(24 * time.Hour)
+
+	first := revision(t, "0001", time.Unix(0, 0).Format(time.RFC3339), defaultMeters(t))
+	secondMeters := strings.Replace(defaultMeters(t), "states: [RUNNING]", "states: [RUNNING, PAUSED]", 1)
+	second := revision(t, "0002", t1.Format(time.RFC3339), secondMeters)
+
+	present, err := rules.CheckStartup(
+		[]database.RuleRevisionRow{usedRow(first)},
+		[]rules.Revision{first, second},
+		t0,
+	)
+	if err != nil {
+		t.Fatalf("a restore whose backup predates a revision must start: %v", err)
+	}
+	if len(present) != 2 || present[0].Number != "0001" || present[1].Number != "0002" {
+		t.Fatalf("startup must return both revisions, got %+v", present)
+	}
 }
 
 func TestDirectorySource(t *testing.T) {
@@ -263,7 +364,7 @@ immutable: true
 data:
   effective_at: "1970-01-01T00:00:00Z"
   meters.yaml: |
-` + indent(defaultMeters, "    ")
+` + indent(defaultMeters(t), "    ")
 	if err := os.WriteFile(filepath.Join(dir, "0001.yaml"), []byte(manifest), 0o600); err != nil {
 		t.Fatalf("writing manifest: %v", err)
 	}
@@ -292,7 +393,7 @@ immutable: true
 data:
   effective_at: "1970-01-01T00:00:00Z"
   meters.yaml: |
-` + indent(defaultMeters, "    ")
+` + indent(defaultMeters(t), "    ")
 		if err := os.WriteFile(filepath.Join(dir, file), []byte(manifest), 0o600); err != nil {
 			t.Fatalf("writing manifest %s: %v", file, err)
 		}
@@ -386,8 +487,8 @@ func TestRevisionRejectsUnknownMeterKeys(t *testing.T) {
 }
 
 // TestRevisionRejectsAmbiguousRootGateInAnyOrder checks the order fix: a root whose
-// meters disagree on the gate must be rejected no matter which meter appears first.
-// A nil gate list on the first meter used to skip the comparison entirely.
+// meters disagree on the gate must be rejected no matter which meter appears first,
+// including when the first meter's gate list is nil.
 func TestRevisionRejectsAmbiguousRootGateInAnyOrder(t *testing.T) {
 	effective := time.Unix(0, 0).UTC().Format(time.RFC3339)
 	gated := `- resource: Cluster

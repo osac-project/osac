@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -26,14 +25,15 @@ import (
 	"github.com/osac-project/osac-metering/internal/database"
 )
 
-// Extractor derives history facts from events, using the shared registry of tracked fields so
-// fulfillment's triggers and this fold can't drift apart.
-type Extractor struct {
+// FactExtractor pulls the billable facts out of events: for each event it walks the
+// payload message against the shared registry of tracked fields, so fulfillment's
+// triggers and this fold cannot drift apart.
+type FactExtractor struct {
 	resources map[protoreflect.FullName]metering.Resource
 }
 
-// NewExtractor creates an extractor from the tracked-field registry.
-func NewExtractor() (*Extractor, error) {
+// NewFactExtractor creates the fact extractor from the tracked-field registry.
+func NewFactExtractor() (*FactExtractor, error) {
 	resources, err := metering.Resources()
 	if err != nil {
 		return nil, fmt.Errorf("reading the metering field registry: %w", err)
@@ -42,22 +42,13 @@ func NewExtractor() (*Extractor, error) {
 	for _, resource := range resources {
 		byName[resource.Message] = resource
 	}
-	return &Extractor{resources: byName}, nil
-}
-
-// shortNameOf returns the message name without its package, which rules and history use.
-func shortNameOf(full protoreflect.FullName) string {
-	name := full.Name()
-	if index := strings.LastIndex(string(name), "."); index >= 0 {
-		return string(name[index+1:])
-	}
-	return string(name)
+	return &FactExtractor{resources: byName}, nil
 }
 
 // Facts returns the facts the event carries for the tenant. Events whose payload is not a
 // billable resource carry none. Each fact is derived from the event alone, so the same set of
 // events always produces the same facts, whatever their order or how often each is applied.
-func (e *Extractor) Facts(tenant string, event *privatev1.Event) ([]database.Fact, error) {
+func (e *FactExtractor) Facts(tenant string, event *privatev1.Event) ([]database.Fact, error) {
 	if tenant == "" {
 		return nil, fmt.Errorf("event %s has no tenant", event.GetId())
 	}
@@ -73,7 +64,7 @@ func (e *Extractor) Facts(tenant string, event *privatev1.Event) ([]database.Fac
 	if resourceID == "" {
 		return nil, nil
 	}
-	typeName := shortNameOf(resourceType)
+	typeName := metering.ShortName(string(resourceType))
 
 	var facts []database.Fact
 	add := func(field string, since time.Time, value string) {
@@ -125,7 +116,14 @@ func (e *Extractor) Facts(tenant string, event *privatev1.Event) ([]database.Fac
 				}
 				since = creation
 			}
-			add(field.Path, since, render(value, descriptor))
+			rendered := render(value, descriptor)
+			// A value that renders to nothing carries no fact: attached resources bill
+			// standalone under their own identity, so the attribution field, whose value
+			// is no longer rendered, records nothing.
+			if rendered == "" {
+				continue
+			}
+			add(field.Path, since, rendered)
 		case metering.KindConstant, metering.KindFixedOnceSet:
 			if !nonZero(value, descriptor) {
 				continue
@@ -134,24 +132,10 @@ func (e *Extractor) Facts(tenant string, event *privatev1.Event) ([]database.Fac
 		}
 	}
 
-	facts = append(facts, e.extraFacts(payload, resourceType, resourceID, event)...)
-
 	if event.GetType() == privatev1.EventType_EVENT_TYPE_OBJECT_DELETED && event.GetTimestamp() != nil {
 		add("deleted", event.GetTimestamp().AsTime(), "true")
 	}
 	return facts, nil
-}
-
-// extraFacts derives facts the tracked-field registry does not carry yet. It is empty: the
-// registry now tracks every field the default meters need. It stays so the next field the
-// meters need before the contract annotates it has one place to land.
-func (e *Extractor) extraFacts(
-	payload protoreflect.Message,
-	resourceType protoreflect.FullName,
-	resourceID string,
-	event *privatev1.Event,
-) []database.Fact {
-	return nil
 }
 
 // payloadOf returns the event's payload message and its type name.
@@ -216,7 +200,9 @@ func stringOf(message protoreflect.Message, path string) string {
 }
 
 // timestampAt reads a timestamp field at a path. It returns the zero time when the field is
-// unset.
+// unset, and when it is present but all zero: proto3 renders an unset timestamp as seconds 0
+// and nanos 0, which is not a real 1970 date, so the fold must treat it exactly like an
+// absent field.
 func timestampAt(message protoreflect.Message, path string) time.Time {
 	value, ok := valueAt(message, path)
 	if !ok || !value.Message().IsValid() {
@@ -228,6 +214,9 @@ func timestampAt(message protoreflect.Message, path string) time.Time {
 		return time.Time{}
 	}
 	nanos, _ := valueAt(ts, "nanos")
+	if seconds.Int() == 0 && nanos.Int() == 0 {
+		return time.Time{}
+	}
 	return time.Unix(seconds.Int(), nanos.Int()).UTC()
 }
 
@@ -303,10 +292,10 @@ func formatValue(value protoreflect.Value, descriptor protoreflect.FieldDescript
 		if !value.Message().IsValid() {
 			return ""
 		}
-		if reference := formatReference(value.Message()); reference != "" {
-			return reference
-		}
-		return formatAttribution(value.Message())
+		// References render by name or id. A message that is not a reference, today only
+		// the external IP attribution, renders to nothing: attachments are ignored for
+		// billing, so no fact is derived from them.
+		return formatReference(value.Message())
 	default:
 		return ""
 	}
@@ -319,64 +308,5 @@ func enumShortName(number protoreflect.EnumNumber, descriptor protoreflect.EnumD
 	if value == nil {
 		return strconv.FormatInt(int64(number), 10)
 	}
-	return strings.TrimPrefix(string(value.Name()), enumValuePrefix(descriptor))
-}
-
-// enumPrefixCache remembers, per enum descriptor, the prefix its values share.
-var (
-	enumPrefixLock  sync.Mutex
-	enumPrefixCache = map[protoreflect.FullName]string{}
-)
-
-// enumValuePrefix returns the longest prefix ending in an underscore that every value of the
-// enum starts with, or an empty string when the values share none.
-func enumValuePrefix(descriptor protoreflect.EnumDescriptor) string {
-	name := descriptor.FullName()
-	enumPrefixLock.Lock()
-	defer enumPrefixLock.Unlock()
-	if prefix, cached := enumPrefixCache[name]; cached {
-		return prefix
-	}
-	values := descriptor.Values()
-	prefix := string(values.Get(0).Name())
-	for i := 1; i < values.Len(); i++ {
-		for !strings.HasPrefix(string(values.Get(i).Name()), prefix) {
-			prefix = prefix[:len(prefix)-1]
-		}
-	}
-	if index := strings.LastIndex(prefix, "_"); index >= 0 {
-		prefix = prefix[:index+1]
-	} else {
-		prefix = ""
-	}
-	enumPrefixCache[name] = prefix
-	return prefix
-}
-
-// formatAttribution renders an external IP attribution as kind/id/endpoint. It returns an empty
-// string for messages that are not attributions.
-func formatAttribution(message protoreflect.Message) string {
-	if message.Descriptor().FullName() != "osac.private.v1.ExternalIPAttribution" {
-		return ""
-	}
-	fields := message.Descriptor().Fields()
-	for i := range fields.Len() {
-		field := fields.Get(i)
-		if field.ContainingOneof() == nil {
-			continue
-		}
-		value := message.Get(field)
-		if !value.Message().IsValid() {
-			continue
-		}
-		target := formatReference(value.Message())
-		endpoint := ""
-		if endpointField := fields.ByName("endpoint"); endpointField != nil {
-			endpoint = enumShortName(
-				message.Get(endpointField).Enum(), endpointField.Enum(),
-			)
-		}
-		return string(field.Name()) + "/" + target + "/" + endpoint
-	}
-	return ""
+	return strings.TrimPrefix(string(value.Name()), metering.EnumValuePrefix(descriptor))
 }

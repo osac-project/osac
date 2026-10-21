@@ -67,13 +67,16 @@ func TestEnsureTopicCreatesMissingTopic(t *testing.T) {
 	if got := configValue(t, detail, "retention.ms"); got == nil || *got != "-1" {
 		t.Fatalf("expected retention.ms -1, got %v", got)
 	}
+	if got := configValue(t, detail, "retention.bytes"); got == nil || *got != "-1" {
+		t.Fatalf("expected retention.bytes -1, got %v", got)
+	}
 	if got := configValue(t, detail, "cleanup.policy"); got == nil || *got != "delete" {
 		t.Fatalf("expected cleanup.policy delete, got %v", got)
 	}
 }
 
 func TestEnsureTopicLeavesExistingTopicUntouched(t *testing.T) {
-	admin := &fakeAdmin{description: &sarama.TopicMetadata{Err: sarama.ErrNoError}}
+	admin := &fakeAdmin{description: &sarama.TopicMetadata{Err: sarama.ErrNoError, Partitions: []*sarama.PartitionMetadata{{}}}}
 
 	err := ensureTopic(admin, "osac.metering.heartbeat.acme", "-1")
 
@@ -148,7 +151,7 @@ func (f *fakeAdmin) DescribeConfig(resource sarama.ConfigResource) ([]sarama.Con
 // accepted with a silently shrunken recovery window.
 func TestEnsureTopicRejectsWrongRetentionOnExistingTopic(t *testing.T) {
 	admin := &fakeAdmin{
-		description: &sarama.TopicMetadata{Err: sarama.ErrNoError},
+		description: &sarama.TopicMetadata{Err: sarama.ErrNoError, Partitions: []*sarama.PartitionMetadata{{}}},
 		configEntries: []sarama.ConfigEntry{
 			{Name: "retention.ms", Value: "604800000"},
 		},
@@ -164,7 +167,7 @@ func TestEnsureTopicRejectsWrongRetentionOnExistingTopic(t *testing.T) {
 // TestEnsureTopicAcceptsMatchingRetentionOnExistingTopic checks the matching case.
 func TestEnsureTopicAcceptsMatchingRetentionOnExistingTopic(t *testing.T) {
 	admin := &fakeAdmin{
-		description: &sarama.TopicMetadata{Err: sarama.ErrNoError},
+		description: &sarama.TopicMetadata{Err: sarama.ErrNoError, Partitions: []*sarama.PartitionMetadata{{}}},
 		configEntries: []sarama.ConfigEntry{
 			{Name: "retention.ms", Value: "-1"},
 		},
@@ -177,5 +180,57 @@ func TestEnsureTopicAcceptsMatchingRetentionOnExistingTopic(t *testing.T) {
 	}
 	if len(admin.created) != 0 {
 		t.Fatalf("an existing topic must not be recreated, created %v", admin.created)
+	}
+}
+
+// TestEnsureTopicRefusesUnverifiableRetention pins the fail-closed branch: without
+// the DescribeConfigs permission the retention check can never run, so every
+// existing topic would be accepted without verification. A denied read is a
+// deployment misconfiguration someone must fix, not an outage to retry through.
+// The error is the resource-level shape sarama's cluster admin returns.
+func TestEnsureTopicRefusesUnverifiableRetention(t *testing.T) {
+	admin := &fakeAdmin{
+		description: &sarama.TopicMetadata{Err: sarama.ErrNoError, Partitions: []*sarama.PartitionMetadata{{}}},
+		describeConfigErr: &sarama.DescribeConfigError{
+			Err: sarama.ErrTopicAuthorizationFailed,
+		},
+	}
+
+	err := ensureTopic(admin, "osac.metering.heartbeat.acme", "-1")
+
+	if err == nil || !strings.Contains(err.Error(), "DescribeConfigs") {
+		t.Fatalf("expected the denied config read to be refused, got %v", err)
+	}
+}
+
+// TestEnsureTopicContinuesWhenRetentionConfigUnreadable checks the other branch:
+// a read that fails for a non-authorization reason is an outage, not a signal
+// about the topic, and the topic is accepted like today.
+func TestEnsureTopicContinuesWhenRetentionConfigUnreadable(t *testing.T) {
+	admin := &fakeAdmin{
+		description:       &sarama.TopicMetadata{Err: sarama.ErrNoError, Partitions: []*sarama.PartitionMetadata{{}}},
+		describeConfigErr: sarama.ErrOutOfBrokers,
+	}
+
+	err := ensureTopic(admin, "osac.metering.heartbeat.acme", "-1")
+
+	if err != nil {
+		t.Fatalf("an unreadable config must be an outage, not a topic problem, got %v", err)
+	}
+}
+
+// TestEnsureTopicRefusesAMultiPartitionTopic checks that an existing topic with more
+// than one partition is refused: catch-up and the relay track a single offset on
+// partition 0, so a topic with more partitions silently breaks the billing model.
+func TestEnsureTopicRefusesAMultiPartitionTopic(t *testing.T) {
+	admin := &fakeAdmin{description: &sarama.TopicMetadata{
+		Err:        sarama.ErrNoError,
+		Partitions: []*sarama.PartitionMetadata{{}, {}},
+	}}
+
+	err := ensureTopic(admin, "osac.metering.heartbeat.acme", "-1")
+
+	if err == nil || !strings.Contains(err.Error(), "2 partitions, want 1") {
+		t.Fatalf("a multi-partition topic must be refused, got %v", err)
 	}
 }

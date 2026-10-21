@@ -1,7 +1,6 @@
 ---
-# Asks e2e-pr.yml to look at a pull request again as soon as a review is submitted or dismissed, the pull request
-# changes between draft and ready, it enters or leaves the merge queue, or auto-merge is turned on or off (none of
-# them starts CI, so nothing else would wake the decision, which keeps the status of the control comment).
+# Asks e2e-pr.yml to look at a pull request again as soon as a review is submitted or dismissed, or the pull request
+# changes between draft and ready (neither starts CI, so nothing else would wake the decision).
 #
 # A review on a pull request from a fork cannot start anything with a token that can write: its token is read-only and
 # the workflow file is the pull request's own. So this workflow does nothing at all. It only has to finish. When it does,
@@ -16,7 +15,7 @@ on:
   pull_request_review:
     types: [submitted, dismissed]
   pull_request:
-    types: [ready_for_review, converted_to_draft, enqueued, dequeued, auto_merge_enabled, auto_merge_disabled]
+    types: [ready_for_review, converted_to_draft]
 
 permissions: {}
 

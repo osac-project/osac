@@ -439,6 +439,7 @@ var _ = Describe("handleUpdateComputeInstance", func() {
 	}
 
 	It("Applies supported fields with an exact mask, current version, and lock", func() {
+		bootDiskSize := int32(50)
 		instances := instancesWithCurrent(7)
 		instances.updateFunc = func(
 			_ context.Context, request *publicv1.ComputeInstancesUpdateRequest, _ ...grpc.CallOption,
@@ -446,9 +447,10 @@ var _ = Describe("handleUpdateComputeInstance", func() {
 			Expect(request.GetLock()).To(BeTrue())
 			Expect(request.GetObject().GetMetadata().GetVersion()).To(Equal(int32(7)))
 			Expect(request.GetUpdateMask().GetPaths()).To(ConsistOf(
-				"spec.instance_type", "spec.run_strategy",
+				"spec.instance_type", "spec.boot_disk.size_gib", "spec.run_strategy",
 			))
 			Expect(request.GetObject().GetSpec().GetInstanceType().GetId()).To(Equal("u1-large"))
+			Expect(request.GetObject().GetSpec().GetBootDisk().GetSizeGib()).To(Equal(int32(50)))
 			Expect(request.GetObject().GetSpec().GetRunStrategy()).To(Equal(
 				publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED,
 			))
@@ -473,6 +475,7 @@ var _ = Describe("handleUpdateComputeInstance", func() {
 		handler := handleUpdateComputeInstance(clients)
 		_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), UpdateComputeInstanceInput{
 			ID: "instance-1", Version: 7, InstanceTypeID: "u1-large",
+			BootDisk:    &ComputeInstanceBootDiskInput{SizeGiB: &bootDiskSize},
 			RunStrategy: "HALTED",
 		})
 		Expect(err).ToNot(HaveOccurred())
@@ -507,6 +510,31 @@ var _ = Describe("handleUpdateComputeInstance", func() {
 			ID: "instance-1", Version: 8, State: "COMPUTE_INSTANCE_STATE_RUNNING", Warnings: []string{
 				"Instance type 'u1-large' is deprecated",
 			},
+		}))
+	})
+
+	It("Uses the requested ID when the public update response omits it", func() {
+		instances := instancesWithCurrent(7)
+		instances.updateFunc = func(
+			_ context.Context, _ *publicv1.ComputeInstancesUpdateRequest, _ ...grpc.CallOption,
+		) (*publicv1.ComputeInstancesUpdateResponse, error) {
+			return publicv1.ComputeInstancesUpdateResponse_builder{
+				Object: publicv1.ComputeInstance_builder{
+					Metadata: publicv1.Metadata_builder{Version: 8}.Build(),
+					Status: publicv1.ComputeInstanceStatus_builder{
+						State: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+					}.Build(),
+				}.Build(),
+			}.Build(), nil
+		}
+
+		handler := handleUpdateComputeInstance(createPrerequisiteClients(instances))
+		_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), UpdateComputeInstanceInput{
+			ID: "instance-1", Version: 7, RunStrategy: "HALTED",
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(output).To(Equal(UpdateComputeInstanceOutput{
+			ID: "instance-1", Version: 8, State: "COMPUTE_INSTANCE_STATE_RUNNING",
 		}))
 	})
 

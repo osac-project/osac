@@ -87,10 +87,11 @@ type CreateComputeInstanceOutput struct {
 }
 
 type UpdateComputeInstanceInput struct {
-	ID             string `json:"id" jsonschema:"compute instance ID from get_resource"`
-	Version        int32  `json:"version" jsonschema:"current metadata.version from get_resource; must be greater than zero"`
-	InstanceTypeID string `json:"instance_type_id,omitempty" jsonschema:"optional ID from list_resources(instance_type); the catalog item must permit the update"`
-	RunStrategy    string `json:"run_strategy,omitempty" jsonschema:"optional run strategy: ALWAYS or HALTED"`
+	ID             string                        `json:"id" jsonschema:"compute instance ID from get_resource"`
+	Version        int32                         `json:"version" jsonschema:"current metadata.version from get_resource; must be greater than zero"`
+	InstanceTypeID string                        `json:"instance_type_id,omitempty" jsonschema:"optional ID from list_resources(instance_type); the catalog item must permit the update"`
+	BootDisk       *ComputeInstanceBootDiskInput `json:"boot_disk,omitempty" jsonschema:"optional object with size_gib and/or storage_tier_id; each supplied field is updated and must be permitted by the catalog item"`
+	RunStrategy    string                        `json:"run_strategy,omitempty" jsonschema:"optional run strategy: ALWAYS or HALTED"`
 }
 
 type UpdateComputeInstanceOutput struct {
@@ -441,12 +442,35 @@ func handleUpdateComputeInstance(
 				)
 			}
 		}
-		paths := make([]string, 0, 2)
+		paths := make([]string, 0, 3)
 		metadata := publicv1.Metadata_builder{Version: input.Version}
 		spec := publicv1.ComputeInstanceSpec_builder{}
 		if input.InstanceTypeID != "" {
 			paths = append(paths, "spec.instance_type")
 			spec.InstanceType = publicv1.InstanceTypeReference_builder{Id: input.InstanceTypeID}.Build()
+		}
+		if input.BootDisk != nil {
+			bootDisk, bootDiskErr := computeInstanceBootDiskFromInput(*input.BootDisk)
+			if bootDiskErr != nil {
+				return nil, UpdateComputeInstanceOutput{}, safeInvalidRequestError(bootDiskErr)
+			}
+			if input.BootDisk.StorageTierID != "" {
+				_, storageTierErr := clients.storageTiers.Get(ctx, publicv1.StorageTiersGetRequest_builder{
+					Id: input.BootDisk.StorageTierID,
+				}.Build())
+				if storageTierErr != nil {
+					return nil, UpdateComputeInstanceOutput{}, safePrerequisiteError(
+						"storage tier", input.BootDisk.StorageTierID, storageTierErr,
+					)
+				}
+			}
+			spec.BootDisk = bootDisk
+			if input.BootDisk.SizeGiB != nil {
+				paths = append(paths, "spec.boot_disk.size_gib")
+			}
+			if input.BootDisk.StorageTierID != "" {
+				paths = append(paths, "spec.boot_disk.storage_tier")
+			}
 		}
 		if input.RunStrategy != "" {
 			paths = append(paths, "spec.run_strategy")
@@ -471,8 +495,12 @@ func handleUpdateComputeInstance(
 			return nil, UpdateComputeInstanceOutput{}, safePublicAPIError(err)
 		}
 		updated := response.GetObject()
+		updatedID := updated.GetId()
+		if updatedID == "" {
+			updatedID = input.ID
+		}
 		return nil, UpdateComputeInstanceOutput{
-			ID:       input.ID,
+			ID:       updatedID,
 			Version:  updated.GetMetadata().GetVersion(),
 			State:    updated.GetStatus().GetState().String(),
 			Warnings: response.GetWarnings(),
@@ -503,7 +531,7 @@ func normalizeUpdateComputeInstanceInput(input UpdateComputeInstanceInput) (Upda
 	if input.Version < 1 {
 		return UpdateComputeInstanceInput{}, fmt.Errorf("version must be greater than zero")
 	}
-	if input.InstanceTypeID == "" && input.RunStrategy == "" {
+	if input.InstanceTypeID == "" && input.BootDisk == nil && input.RunStrategy == "" {
 		return UpdateComputeInstanceInput{}, fmt.Errorf("at least one supported update field is required")
 	}
 	if input.RunStrategy != "" && parseComputeInstanceRunStrategy(input.RunStrategy) ==
@@ -511,6 +539,12 @@ func normalizeUpdateComputeInstanceInput(input UpdateComputeInstanceInput) (Upda
 		return UpdateComputeInstanceInput{}, fmt.Errorf(
 			"run_strategy must be ALWAYS or HALTED",
 		)
+	}
+	if input.BootDisk != nil {
+		input.BootDisk = &ComputeInstanceBootDiskInput{
+			SizeGiB:       input.BootDisk.SizeGiB,
+			StorageTierID: strings.TrimSpace(input.BootDisk.StorageTierID),
+		}
 	}
 	return input, nil
 }
@@ -537,6 +571,16 @@ func validateUpdateAgainstCatalogItem(
 	}
 	if input.RunStrategy != "" && fields.GetRunStrategy().HasLocked() {
 		return safeInvalidRequestError(fmt.Errorf("run_strategy is locked by the selected catalog item"))
+	}
+	if input.BootDisk != nil {
+		if input.BootDisk.SizeGiB != nil && fields.GetBootDisk().GetSizeGib().HasLocked() {
+			return safeInvalidRequestError(fmt.Errorf("boot_disk.size_gib is locked by the selected catalog item"))
+		}
+		if input.BootDisk.StorageTierID != "" && fields.GetBootDisk().GetStorageTier().HasLocked() {
+			return safeInvalidRequestError(fmt.Errorf(
+				"boot_disk.storage_tier_id is locked by the selected catalog item",
+			))
+		}
 	}
 	return nil
 }

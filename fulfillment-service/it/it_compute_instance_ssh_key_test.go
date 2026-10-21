@@ -181,7 +181,8 @@ func computeInstanceSSHKeyProjectAdminConn(ctx context.Context) *grpc.ClientConn
 		keycloakUserID = userResponse.GetObject().GetStatus().GetKeycloakUserId()
 		g.Expect(keycloakUserID).NotTo(BeEmpty())
 	}, 2*time.Minute, time.Second).Should(Succeed())
-	grantTenantAdminRealmRole(ctx, keycloakUserID)
+	role := getOrCreateKeycloakTenantAdminRole(ctx)
+	assignKeycloakRealmRole(ctx, keycloakUserID, role)
 
 	// Mint a fresh token after the realm role is assigned.
 	return computeInstanceSSHKeyProjectUserConn(ctx, sshKeyProjectOwnerUsername)

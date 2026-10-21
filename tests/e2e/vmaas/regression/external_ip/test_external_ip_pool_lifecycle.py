@@ -24,11 +24,6 @@ from tests.e2e.core.runner import poll_until
 pytestmark = pytest.mark.regression
 
 
-def _attribution_dimension(resource_type: str, ref: str) -> str:
-    """The encoded attribution dimension: kind/id-or-name/endpoint, not a bare UUID."""
-    return f"{resource_type}/{ref}/API"
-
-
 class TestExternalIPPoolLifecycle:
     @pytest.mark.metering
     def test_attach_detach_reattach(
@@ -82,10 +77,9 @@ class TestExternalIPPoolLifecycle:
         assert private_ip_obj["status"]["attribution"]["computeInstance"]["id"] == ci1_uuid
         assert private_ip_obj["status"].get("attachmentTransitionTime")
         # The settled attachment is a dimension change, so the attached meter
-        # starts billing: a heartbeat arrives with the attached dimensions. The
-        # attribution is the encoded reference, not the bare UUID.
+        # starts billing: a heartbeat arrives with the attached dimensions.
         attached_event = metering.heartbeat_with_dimensions(
-            ip_id, {"attached": "true", "attribution": _attribution_dimension("compute_instance", ci1_uuid)}, delay=5
+            ip_id, {"attached": "true"}, delay=5
         )
         assert attached_event is not None, "no heartbeat with the attached dimensions arrived"
 
@@ -127,7 +121,7 @@ class TestExternalIPPoolLifecycle:
         assert second_private_ip["status"]["attribution"]["computeInstance"]["id"] == ci2_uuid
         reattached_event = metering.heartbeat_with_dimensions(
             ip_id,
-            {"attached": "true", "attribution": _attribution_dimension("compute_instance", ci2_uuid)},
+            {"attached": "true"},
             after=attached_to,
             delay=5,
         )

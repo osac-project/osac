@@ -13,7 +13,7 @@
 # https://github.com/konflux-ci/rpm-lockfile-prototype first.)
 contentOrigin:
   repofiles:
-    - osac-aap/ubi.repo
+    - ubi.repo
 packages:
   # From execution-environment.yaml's additional_build_steps: glibc/
   # glibc-minimal-langpack updated before system packages are installed
@@ -32,5 +32,13 @@ packages:
   - git-core
   - bind-utils
   - krb5-devel
+  # Not in execution-environment.yaml's own dependencies.system list --
+  # pulled in by bindep's default compile profile (aggregated from the
+  # vendored collections'/roles' own bindep.txt files during
+  # ansible-builder's introspect step), confirmed via a real build
+  # failure: "No match for argument: rsync". pkg-config (bindep's other
+  # compile-profile entry) is already satisfied transitively via
+  # pkgconf-pkg-config, so it needs no explicit entry here.
+  - rsync
 arches:
   - x86_64

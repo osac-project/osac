@@ -774,5 +774,12 @@ arches:
     name: protobuf-c
     evr: 1.5.0-6.el10
     sourcerpm: protobuf-c-1.5.0-6.el10.src.rpm
+  - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi10/10/x86_64/baseos/os/Packages/r/rsync-3.5.0-3.el10_2.x86_64.rpm
+    repoid: ubi-10-for-x86_64-baseos-rpms
+    size: 485287
+    checksum: sha256:819e954c8b453406f638a446f0c074938d73d1a3b5d2e9d22b22ca6bfc46e2cb
+    name: rsync
+    evr: 3.5.0-3.el10_2
+    sourcerpm: rsync-3.5.0-3.el10_2.src.rpm
   source: []
   module_metadata: []

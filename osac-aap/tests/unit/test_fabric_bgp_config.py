@@ -50,7 +50,7 @@ def _render_frr_configuration(overrides: dict | None = None) -> dict:
         "worker_remote_vtep_ranges": ["10.2.0.0/16"],
         "worker_ebgp_multihop": True,
         "worker_graceful_restart": True,
-        "fabric_bgp_config_frr_namespace": "metallb-system",
+        "fabric_bgp_config_frr_namespace": "openshift-frr-k8s",
     }
     if overrides:
         context.update(overrides)
@@ -121,9 +121,22 @@ def test_frr_configuration_naming_and_labels() -> None:
     """Verify naming convention and management labels."""
     frr = _render_frr_configuration()
     assert frr["metadata"]["name"] == "fabric-bgp-worker-0"
-    assert frr["metadata"]["namespace"] == "metallb-system"
+    assert frr["metadata"]["namespace"] == "openshift-frr-k8s"
     assert frr["metadata"]["labels"]["osac.openshift.io/managed-by"] == "fabric-bgp-config"
     assert frr["metadata"]["labels"]["osac.openshift.io/worker"] == "worker-0"
+
+
+def test_frr_namespace_default_is_openshift_frr_k8s() -> None:
+    """Verify FRR namespace defaults to openshift-frr-k8s for OCP CNO."""
+    defaults_path = _role_path() / "defaults" / "main.yaml"
+    defaults = yaml.safe_load(defaults_path.read_text(encoding="utf-8"))
+    assert defaults["fabric_bgp_config_frr_namespace"] == "openshift-frr-k8s"
+
+    argspec_path = _role_path() / "meta" / "argument_specs.yaml"
+    argspec = yaml.safe_load(argspec_path.read_text(encoding="utf-8"))
+    for entry in ("create", "delete"):
+        ns_spec = argspec["argument_specs"][entry]["options"]["fabric_bgp_config_frr_namespace"]
+        assert ns_spec["default"] == "openshift-frr-k8s"
 
 
 def test_frr_configuration_node_selector() -> None:

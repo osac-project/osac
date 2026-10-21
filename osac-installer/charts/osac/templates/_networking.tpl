@@ -147,12 +147,14 @@ Returns a dict with:
   {{- fail "global.networking.netris.controllerUrl is required when fabricManager=netris" -}}
 {{- end -}}
 
+{{- $fabricBGP := $networking.fabricBGP | default dict -}}
 {{- dict
       "fabricManager" $fabricManager
       "k8sManager" $k8sManager
       "aapNetrisEnabled" $aapNetrisEnabled
       "aapAgentlessEnabled" $aapAgentlessEnabled
       "netris" $netris
+      "fabricBGP" $fabricBGP
       "networkClass" $effectiveNetworkClass
       "aap" (dict "networkClass" $aapNetworkClass "networkStepsCollection" $aapNetworkSteps)
     | toYaml -}}

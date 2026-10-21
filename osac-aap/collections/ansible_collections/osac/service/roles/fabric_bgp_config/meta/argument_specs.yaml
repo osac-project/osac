@@ -28,7 +28,7 @@ argument_specs:
       fabric_bgp_config_frr_namespace:
         type: str
         required: false
-        default: metallb-system
+        default: openshift-frr-k8s
         description: >-
           Namespace for FRRConfiguration resources (must match the
           FRR-K8s operator's watch namespace).
@@ -50,6 +50,6 @@ argument_specs:
       fabric_bgp_config_frr_namespace:
         type: str
         required: false
-        default: metallb-system
+        default: openshift-frr-k8s
         description: >-
           Namespace for FRRConfiguration resources.

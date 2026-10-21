@@ -15,12 +15,13 @@ For general AAP configuration see [AAP Configuration](aap-configuration.md).
 | `dns.noop.dns` | `dns.noop` | No-op — skips DNS record management |
 
 The **noop** backend performs no DNS create or delete operations. It
-logs the record that would have been managed and returns success.
-Use it in lab or CI environments where DNS is handled externally or
-where cluster domains are resolved through other means (e.g.,
-wildcard records, `/etc/hosts`, or a local DNS server). Clusters
-provisioned with the noop backend are not reachable by domain name
-unless the required records are created out of band.
+logs a generic guidance message without exposing record names or
+values, and returns success. Use it in lab or CI environments where
+DNS is handled externally or where cluster domains are resolved
+through other means (e.g., wildcard records, `/etc/hosts`, or a
+local DNS server). Clusters provisioned with the noop backend are
+not reachable by domain name unless the required records are created
+out of band.
 
 ## ConfigMap Variables
 

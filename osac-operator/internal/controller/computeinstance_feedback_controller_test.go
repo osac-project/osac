@@ -411,6 +411,60 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(remote.GetStatus().GetInstanceTypeTransitionTime().AsTime()).To(Equal(cr.Status.RunningConfigSince.Time))
 		})
 
+		It("NameOnlyResizeDoesNotBackdateTheNewType", func() {
+			// A name-only resize between types with identical resources: the
+			// config hash is unchanged, the label moves, and the
+			// ConfigurationApplied condition never flips, so its transition
+			// time stays at the original provisioning an hour earlier. The
+			// stamp recorded for the new type, and carried through feedback to
+			// the fulfillment service, must be the controller's observation of
+			// the resize: backdating it would move the preceding hour of usage
+			// to the new pricing dimension.
+			phaseAt := time.Now().Add(-time.Hour).UTC()
+			configAt := phaseAt.Add(20 * time.Second)
+			cr := runningInstanceWithTimes(phaseAt, configAt)
+			version, err := provisioning.ComputeDesiredConfigVersion(cr.Spec)
+			Expect(err).ToNot(HaveOccurred())
+			// Identical resources: the recorded config hash survives the resize.
+			cr.Status.DesiredConfigVersion = version
+			cr.Status.RunningConfigVersion = version
+			cr.Status.RunningInstanceTypeName = "standard-8-32"
+			oldSince := metav1.NewTime(configAt)
+			cr.Status.RunningConfigSince = &oldSince
+			// The reconciler applied the new type: only the label moved.
+			cr.Labels[osacComputeInstanceTypeNameLabel] = "standard-8-32-compatible"
+
+			// The CR controller records the resize...
+			recordRunningConfig(cr)
+
+			Expect(cr.Status.RunningInstanceTypeName).To(Equal("standard-8-32-compatible"))
+			Expect(cr.Status.RunningConfigSince.Time).To(BeTemporally(">", configAt))
+
+			// ...and feedback carries that stamp to the fulfillment service,
+			// which already ran the previous type since the original
+			// provisioning.
+			remote := privatev1.ComputeInstance_builder{
+				Spec: privatev1.ComputeInstanceSpec_builder{
+					InstanceType: typeRef("standard-8-32-compatible", "standard-8-32-compatible"),
+				}.Build(),
+				Status: privatev1.ComputeInstanceStatus_builder{
+					InstanceType:               typeRef("standard-8-32", "standard-8-32"),
+					InstanceTypeTransitionTime: timestamppb.New(configAt),
+				}.Build(),
+			}.Build()
+
+			syncCIRunningInstanceType(cr, remote)
+
+			Expect(remote.GetStatus().GetInstanceType().GetId()).To(Equal("standard-8-32-compatible"))
+			// The transition time is the recorded observation of the resize,
+			// not the stale condition time the previous type was stamped with.
+			// The stamp is compared as an instant: the recorded metav1.Now()
+			// carries a monotonic reading and local zone that the proto
+			// round-trip strips.
+			Expect(remote.GetStatus().GetInstanceTypeTransitionTime().AsTime()).To(BeTemporally("==", cr.Status.RunningConfigSince.Time))
+			Expect(remote.GetStatus().GetInstanceTypeTransitionTime().AsTime()).To(BeTemporally(">", configAt))
+		})
+
 		It("does not stamp while the CR label still names the previous type", func() {
 			oldStamp := timestamppb.New(time.Now().Add(-time.Hour))
 			remote := remoteWithRequestedType(typeRef("standard-4-16", "standard-4-16"), oldStamp)

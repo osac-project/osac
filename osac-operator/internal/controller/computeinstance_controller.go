@@ -1090,12 +1090,14 @@ func (r *ComputeInstanceReconciler) handleDesiredConfigVersion(ctx context.Conte
 	return nil
 }
 
-// recordRunningConfig records the desired config version that is actually running, with the
-// time of that observation, so the running instance type can be billed from when it started
-// running rather than from when the change was reported downstream. The version is recorded
-// once per configuration: while it is unchanged the recorded time stays put. The instance
-// type name is part of the recorded identity: two types with identical resources hash to the
-// same config version, and a resize between them must still move the stamp.
+// recordRunningConfig records the desired config version that is actually running, so the
+// running instance type can be billed from when it started running rather than from when
+// the change was reported downstream. The stamp follows configRunningSince: the first
+// record dates from the phase change, a change of the recorded version or type name from
+// the observation. The version is recorded once per configuration: while it is unchanged
+// the recorded time stays put. The instance type name is part of the recorded identity:
+// two types with identical resources hash to the same config version, and a resize
+// between them must still move the stamp.
 //
 // The record is the CR-side half of crConfirmsRunningType: recording establishes the name and
 // time that the predicate later vouches with. A pending restart invalidates any earlier
@@ -1127,31 +1129,41 @@ func recordRunningConfig(instance *v1alpha1.ComputeInstance) {
 	if !instance.IsStatusConditionTrue(v1alpha1.ComputeInstanceConditionConfigurationApplied) {
 		return
 	}
-	// The config runs from the later of the phase change and the config application:
-	// stamping the observation time instead would leave a 15-20 s window where the type
-	// fact does not exist yet, billed without an instance_type and never corrected.
+	// The stamp depends on what is being recorded: the first record of the
+	// resource dates from the phase change, a change of the recorded version or
+	// type name from this observation. See configRunningSince.
 	since := configRunningSince(instance)
 	instance.Status.RunningConfigVersion = instance.Status.DesiredConfigVersion
 	instance.Status.RunningInstanceTypeName = label
 	instance.Status.RunningConfigSince = &since
 }
 
-// configRunningSince returns when the recorded config started running: the later of the
-// RUNNING phase's transition and the ConfigurationApplied condition's transition. The
-// phase time covers the first observation, where the config ran from the moment the
-// instance started. The condition time covers a restart-required resize, where the phase
-// may predate the config actually running.
+// configRunningSince returns when the recorded config started running.
+//
+// The first record of a resource, when no version was recorded before, stamps the
+// RUNNING phase transition: the type is known from the spec at admission and is
+// what the VM booted with, so the record must date from the moment the instance
+// started running rather than from when the provisioning job completed and the
+// ConfigurationApplied condition turned true, up to tens of seconds later. A VM
+// stopped in that window would otherwise keep the gap permanently unbilled under
+// the instance_type dimension. A missing phase time falls back to the observation
+// time.
+//
+// A change of the recorded version or type name stamps the observation time. The
+// condition time cannot be reused: a name-only resize between types with
+// identical resources leaves the condition untouched, so its transition time is
+// arbitrarily stale and would backdate the new type, moving the usage between the
+// two pricing dimensions. The observation time cannot backdate and lags the
+// change by at most one reconcile, a bound the condition-time rule also had since
+// the condition was itself set at observation.
 func configRunningSince(instance *v1alpha1.ComputeInstance) metav1.Time {
-	since := metav1.Now()
-	if !instance.Status.PhaseTransitionTime.IsZero() &&
-		instance.Status.PhaseTransitionTime.Before(&since) {
-		since = *instance.Status.PhaseTransitionTime
+	if instance.Status.RunningConfigVersion == "" {
+		if !instance.Status.PhaseTransitionTime.IsZero() {
+			return *instance.Status.PhaseTransitionTime
+		}
+		return metav1.Now()
 	}
-	condition := instance.GetStatusCondition(v1alpha1.ComputeInstanceConditionConfigurationApplied)
-	if condition != nil && condition.LastTransitionTime.After(since.Time) {
-		since = metav1.NewTime(condition.LastTransitionTime.Time)
-	}
-	return since
+	return metav1.Now()
 }
 
 // crConfirmsRunningType reports whether the CR confirms that the requested instance type is

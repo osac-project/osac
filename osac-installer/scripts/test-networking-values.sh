@@ -5,6 +5,7 @@ set -euo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 CHART_DIR=$(cd -- "${SCRIPT_DIR}/../charts/osac" && pwd)
 OPERATOR_CHART_DIR=$(cd -- "${SCRIPT_DIR}/../../osac-operator/charts/operator" && pwd)
+AAP_CHART_DIR=$(cd -- "${SCRIPT_DIR}/../../osac-aap/charts/aap" && pwd)
 HELM_BIN=${HELM_BIN:-helm}
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "${TMP_DIR}"' EXIT
@@ -264,6 +265,95 @@ if [[ $(grep -Fc 'NETRIS_VALIDATE_CERTS: "false"' "${TMP_DIR}/netris-full-ci-val
   echo "ERROR: full CI certificate validation opt-out was not rendered to config-as-code and both AAP instance groups" >&2
   exit 1
 fi
+
+# Storage TLS policy is exposed in the AAP storage instance-group environment.
+# Keep this contract alongside the existing AAP provider-certificate render checks.
+assert_storage_validate_certs() {
+  local name="$1" rendered="$2" expected="$3"
+  echo "checking ${name} storage AAP TLS validation=${expected}"
+  python3 - "${rendered}" "${expected}" <<'PY'
+import sys
+
+import yaml
+
+with open(sys.argv[1], encoding="utf-8") as rendered_file:
+    resources = [item for item in yaml.safe_load_all(rendered_file) if isinstance(item, dict)]
+matches = [
+    item for item in resources
+    if item.get("kind") == "ConfigMap"
+    and item.get("metadata", {}).get("name") == "storage-operations-ig"
+]
+assert len(matches) == 1, (
+    f"expected one storage-operations-ig ConfigMap, found {len(matches)}"
+)
+data = matches[0].get("data", {})
+assert data.get("VAST_VALIDATE_CERTS") == sys.argv[2], (
+    f"expected VAST_VALIDATE_CERTS={sys.argv[2]!r}, got {data.get('VAST_VALIDATE_CERTS')!r}"
+)
+assert "ENABLE_CERTIFICATE_VALIDATION" not in data, "generic worker variable must not be rendered"
+PY
+  if [[ $(grep -Fc 'VAST_VALIDATE_CERTS:' "${rendered}") -ne 1 ]]; then
+    echo "ERROR: expected exactly one VAST_VALIDATE_CERTS setting in the AAP render" >&2
+    exit 1
+  fi
+}
+
+render_storage_validate_certs() {
+  local name="$1" expected="$2"
+  shift 2
+  local rendered="${TMP_DIR}/${name}.yaml"
+  "${HELM_BIN}" "${COMMON_ARGS[@]}" "$@" >"${rendered}"
+  assert_storage_validate_certs "${name}" "${rendered}" "${expected}"
+}
+
+render_storage_validate_certs \
+  storage-validate-certs-default true \
+  --set aap.instanceGroups.storageFulfillment.enabled=true
+
+# The storage policy owns this worker variable; a low-level config value cannot
+# override the explicit Helm setting.
+storage_override_render="${TMP_DIR}/storage-validate-certs-override.yaml"
+"${HELM_BIN}" template osac-aap "${AAP_CHART_DIR}" \
+  --set instanceGroups.storageFulfillment.enabled=true \
+  --set instanceGroups.storageFulfillment.enable_certificate_validation=false \
+  --set instanceGroups.storageFulfillment.config.VAST_VALIDATE_CERTS=true \
+  >"${storage_override_render}"
+assert_storage_validate_certs override "${storage_override_render}" false
+
+render_storage_validate_certs \
+  storage-validate-certs-dev-profile false \
+  --values "${SCRIPT_DIR}/../values/dev/instance.yaml" \
+  --set-string service.externalHostname=fulfillment-api.test.example.com \
+  --set-string service.internalHostname=fulfillment-internal-api.test.example.com \
+  --set aap.instanceGroups.storageFulfillment.enabled=true
+
+render_storage_validate_certs \
+  storage-validate-certs-vmaas-ci-profile false \
+  --values "${SCRIPT_DIR}/../values/vmaas-ci/instance.yaml" \
+  --set-string service.externalHostname=fulfillment-api.test.example.com \
+  --set-string service.internalHostname=fulfillment-internal-api.test.example.com \
+  --set aap.instanceGroups.storageFulfillment.enabled=true
+
+python3 - "${CHART_DIR}/values.yaml" "${CHART_DIR}/values.schema.json" <<'PY'
+import json
+import sys
+
+import yaml
+
+with open(sys.argv[1], encoding="utf-8") as values_file:
+    values = yaml.safe_load(values_file)
+storage_tls = values["aap"]["instanceGroups"]["storageFulfillment"]["enable_certificate_validation"]
+assert storage_tls is True
+
+with open(sys.argv[2], encoding="utf-8") as schema_file:
+    schema = json.load(schema_file)
+setting = (
+    schema["properties"]["aap"]["properties"]["instanceGroups"]["properties"][
+        "storageFulfillment"
+    ]["properties"]["enable_certificate_validation"]
+)
+assert setting["type"] == "boolean" and setting["default"] is True
+PY
 
 # Protected connection settings cannot be supplied through low-level AAP maps,
 # including when unrelated expert overrides are enabled.

@@ -1,6 +1,11 @@
 # OSAC dev-full local development stack
 osacNamespace: osac
 kindClusterName: osac-dev
+aap:
+  instanceGroups:
+    storageFulfillment:
+      # Applies to TLS validation in storage-workflow AWX jobs only.
+      enable_certificate_validation: true
 # CLI image for hook Jobs. On Apple Silicon, the installer builds an arm64
 # replacement with the same tag before installing the chart. The AWX
 # configuration hook uses Python's standard JSON library, so it does not

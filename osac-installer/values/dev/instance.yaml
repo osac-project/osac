@@ -141,6 +141,8 @@ aap:
     image: ghcr.io/osac-project/osac-aap:latest
     backoffLimit: 15
   instanceGroups:
+    storageFulfillment:
+      enable_certificate_validation: false
     clusterFulfillment:
       enabled: true
       config:

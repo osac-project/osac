@@ -132,6 +132,8 @@ aap:
   bootstrap:
     enabled: false
   instanceGroups:
+    storageFulfillment:
+      enable_certificate_validation: false
     publishTemplates:
       enabled: false
 

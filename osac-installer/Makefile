@@ -713,5 +713,5 @@ helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-
 	@echo "Validation passed."
 
 .PHONY: helm-networking-test
-helm-networking-test: helm-deps helm-infra-deps ## Test networking fabricManager/k8sManager validation and derivation
+helm-networking-test: helm-deps helm-infra-deps ## Test networking values and AAP provider TLS validation rendering
 	./scripts/test-networking-values.sh

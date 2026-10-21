@@ -15,6 +15,8 @@
       - external_ip_attachment.metadata.annotations is defined
       - "'osac.openshift.io/externalippool-name' in external_ip_attachment.metadata.annotations"
       - external_ip_attachment.metadata.annotations['osac.openshift.io/externalippool-name'] | length > 0
+      - "'osac.openshift.io/externalip-uid' in external_ip_attachment.metadata.annotations"
+      - external_ip_attachment.metadata.annotations['osac.openshift.io/externalip-uid'] | length > 0
       - "'osac.openshift.io/externalip-target-namespace' in external_ip_attachment.metadata.annotations"
       - external_ip_attachment.metadata.annotations['osac.openshift.io/externalip-target-namespace'] | length > 0
       - external_ip_attachment.spec is defined
@@ -23,14 +25,23 @@
     fail_msg: >-
       ExternalIPAttachment is missing required fields/annotations:
       metadata.name, metadata.namespace, and spec.computeInstance must be set,
-      and annotations osac.openshift.io/externalippool-name and
-      osac.openshift.io/externalip-target-namespace must both be present.
+      and annotations osac.openshift.io/externalippool-name,
+      osac.openshift.io/externalip-uid, and
+      osac.openshift.io/externalip-target-namespace must be present.
 
 - name: Extract ExternalIPAttachment configuration
   ansible.builtin.set_fact:
     external_ip_name: >-
       {{ external_ip_attachment.metadata.annotations['osac.openshift.io/externalip-name']
          | default(external_ip_attachment.metadata.name) }}
+    external_ip_uid: "{{ external_ip_attachment.metadata.annotations['osac.openshift.io/externalip-uid'] }}"
+    parking_service_name: "osac-eip-{{ external_ip_attachment.metadata.annotations['osac.openshift.io/externalip-uid'] }}"
+    external_ip_tenant: >-
+      {{ (external_ip_attachment.metadata.annotations | default({})).get(
+           'osac.openshift.io/tenant', 'shared') }}
+    external_ip_owner_reference: >-
+      {{ 'ExternalIP/' ~ (external_ip_attachment.metadata.annotations.get(
+           'osac.openshift.io/externalip-name', external_ip_attachment.metadata.name)) }}
     attach_vm_namespace: >-
       {{ external_ip_attachment.metadata.annotations['osac.openshift.io/externalip-target-namespace'] }}
     attach_pool_name: >-
@@ -88,27 +99,53 @@
     attach_already_done: false
   when: attach_already_done is not defined
 
-# Read the reserved IP directly from the parking Service status.
-- name: Read reserved IP from parking Service
+# Read the reserved IP directly from the UID-owned parking Service status.
+- name: Read reserved IP from UID-owned parking Service
   kubernetes.core.k8s_info:
     kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     api_version: v1
     kind: Service
-    name: "osac-eip-{{ external_ip_name }}"
+    name: "{{ parking_service_name }}"
     namespace: metallb-system
   register: parking_service_info
   when: not attach_already_done
 
-- name: Fail if parking Service not found or IP not yet assigned
+- name: Fail if UID-owned parking Service is not found
   ansible.builtin.fail:
     msg: >-
-      Parking Service 'osac-eip-{{ external_ip_name }}' not found in metallb-system
-      or MetalLB has not yet assigned an IP. Run create_external_ip first.
+      UID-owned parking Service '{{ parking_service_name }}' for ExternalIP
+      '{{ external_ip_name }}' was not found in metallb-system. Run
+      create_external_ip first; legacy name-based Services are not adopted.
   when:
     - not attach_already_done
-    - >-
-      parking_service_info.resources | length == 0 or
-      parking_service_info.resources[0].status.loadBalancer.ingress | default([]) | length == 0
+    - parking_service_info.resources | length == 0
+
+- name: Verify parking Service is owned by the ExternalIP UID
+  ansible.builtin.assert:
+    that:
+      - >-
+        (parking_service_info.resources[0].metadata.labels | default({})).get(
+          'osac.openshift.io/externalip-uid', '') == external_ip_uid
+      - >-
+        (parking_service_info.resources[0].metadata.annotations | default({})).get(
+          'osac.openshift.io/tenant', '') == external_ip_tenant
+      - >-
+        (parking_service_info.resources[0].metadata.annotations | default({})).get(
+          'osac.openshift.io/owner-reference', '') == external_ip_owner_reference
+    fail_msg: >-
+      MetalLB parking Service '{{ parking_service_name }}' does not prove
+      ownership by ExternalIP UID '{{ external_ip_uid }}' and tenant
+      '{{ external_ip_tenant }}'; refusing to attach it.
+  when: not attach_already_done
+
+- name: Fail if MetalLB has not yet assigned an IP
+  ansible.builtin.fail:
+    msg: >-
+      UID-owned parking Service '{{ parking_service_name }}' exists, but MetalLB
+      has not yet assigned an IP. Wait for ExternalIP allocation to complete.
+  when:
+    - not attach_already_done
+    - parking_service_info.resources[0].status.loadBalancer.ingress | default([]) | length == 0
 
 - name: Extract allocated IP from parking Service status
   ansible.builtin.set_fact:
@@ -124,19 +161,19 @@
       - "VM namespace: {{ attach_vm_namespace }}"
       - "ComputeInstance: {{ attach_compute_instance_name }} ({{ external_ip_attachment.metadata.namespace }})"
 
-# Delete the parking Service and create the VM-namespace LB Service atomically.
+# Delete the UID-owned parking Service and create the VM-namespace LB Service atomically.
 # The rescue restores the parking Service if LB Service creation fails so the IP
 # is never left unparked without a reservation in metallb-system.
 - name: Attach ExternalIP - delete parking Service and create LB Service
   when: not attach_already_done
   block:
-    - name: Delete parking Service from metallb-system
+    - name: Delete UID-owned parking Service from metallb-system
       kubernetes.core.k8s:
         kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
         state: absent
         api_version: v1
         kind: Service
-        name: "osac-eip-{{ external_ip_name }}"
+        name: "{{ parking_service_name }}"
         namespace: metallb-system
         wait: true
         wait_timeout: 60
@@ -151,7 +188,7 @@
     - name: Display parking Service deletion result
       ansible.builtin.debug:
         msg:
-          - "Parking Service 'osac-eip-{{ external_ip_name }}' deleted"
+          - "Parking Service '{{ parking_service_name }}' deleted"
           - "Changed: {{ reservation_delete_result.changed | default(false) }}"
 
     # Create a LoadBalancer Service in the VM namespace.
@@ -168,10 +205,13 @@
             namespace: "{{ attach_vm_namespace }}"
             labels:
               osac.openshift.io/externalip: "{{ external_ip_name }}"
+              osac.openshift.io/externalip-uid: "{{ external_ip_uid }}"
               osac.openshift.io/managed-by: osac-fulfillment
             annotations:
               metallb.universe.tf/address-pool: "{{ attach_pool_name }}"
               metallb.universe.tf/loadBalancerIPs: "{{ attach_ip_address }}"
+              osac.openshift.io/tenant: "{{ external_ip_tenant }}"
+              osac.openshift.io/owner-reference: "{{ external_ip_owner_reference }}"
           spec:
             type: LoadBalancer
             selector:
@@ -195,7 +235,7 @@
           - "Changed: {{ lb_service_result.changed | default(false) }}"
 
   rescue:
-    - name: Restore parking Service in metallb-system after failed LB Service creation
+    - name: Restore UID-owned parking Service after failed LB Service creation
       kubernetes.core.k8s:
         kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
         state: present
@@ -204,14 +244,17 @@
           apiVersion: v1
           kind: Service
           metadata:
-            name: "osac-eip-{{ external_ip_name }}"
+            name: "{{ parking_service_name }}"
             namespace: metallb-system
             labels:
               osac.openshift.io/externalip: "{{ external_ip_name }}"
+              osac.openshift.io/externalip-uid: "{{ external_ip_uid }}"
               osac.openshift.io/managed-by: osac-fulfillment
             annotations:
               metallb.universe.tf/address-pool: "{{ attach_pool_name }}"
               metallb.universe.tf/loadBalancerIPs: "{{ attach_ip_address }}"
+              osac.openshift.io/tenant: "{{ external_ip_tenant }}"
+              osac.openshift.io/owner-reference: "{{ external_ip_owner_reference }}"
           spec:
             type: LoadBalancer
             selector: {}
@@ -230,7 +273,7 @@
       ansible.builtin.fail:
         msg: >-
           Attach of ExternalIP '{{ external_ip_name }}' failed; the parking Service
-          'osac-eip-{{ external_ip_name }}' in metallb-system has been restored
+          '{{ parking_service_name }}' in metallb-system has been restored
           if it had been deleted. Check the preceding error for details.
 
 # Workaround for upstream OVN-Kubernetes bug: the EndpointSlice mirror

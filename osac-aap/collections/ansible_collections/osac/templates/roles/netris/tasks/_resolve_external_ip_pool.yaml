@@ -1,0 +1,79 @@
+---
+- name: Read the ExternalIP contract version
+  ansible.builtin.set_fact:
+    eip_contract_version: >-
+      {{ (external_ip.metadata.annotations | default({})).get(
+           'osac.openshift.io/externalip-contract-version', '') }}
+
+- name: Validate the submitted pool snapshot for ExternalIP v1
+  ansible.builtin.include_role:
+    name: osac.service.common
+    tasks_from: validate_external_ip_pool_context
+  vars:
+    osac_external_ip_pool_action: "{{ _eip_pool_action }}"
+  when: eip_contract_version == 'v1'
+
+- name: Require the provider pool name for Netris ExternalIP reservations
+  ansible.builtin.assert:
+    that:
+      - external_ip.metadata.annotations is defined
+      - "'osac.openshift.io/externalippool-name' in external_ip.metadata.annotations"
+    fail_msg: ExternalIP must include its ExternalIPPool name for Netris allocation.
+  when: eip_contract_version == 'v1'
+
+- name: Build the supplied ExternalIPPool snapshot for v1
+  ansible.builtin.set_fact:
+    _eip_pool:
+      metadata:
+        name: "{{ external_ip.metadata.annotations['osac.openshift.io/externalippool-name'] }}"
+        namespace: "{{ external_ip.metadata.namespace }}"
+        uid: "{{ osac_external_ip_pool_uid }}"
+        labels:
+          osac.openshift.io/externalippool-uuid: "{{ osac_external_ip_pool_fulfillment_id }}"
+        annotations:
+          osac.openshift.io/tenant: "{{ osac_external_ip_pool_tenant_id }}"
+      spec:
+        ipFamily: IPv4
+        cidrs:
+          - "{{ osac_external_ip_pool_cidr }}"
+      status:
+        phase: "{{ osac_external_ip_pool_phase }}"
+  when: eip_contract_version == 'v1'
+
+- name: Resolve the referenced ExternalIPPool
+  kubernetes.core.k8s_info:
+    api_version: osac.openshift.io/v1alpha1
+    kind: ExternalIPPool
+    namespace: "{{ external_ip.metadata.namespace }}"
+    label_selectors:
+      - "osac.openshift.io/externalippool-uuid={{ external_ip.spec.pool }}"
+  register: _eip_pool_lookup
+  when:
+    - eip_contract_version != 'v1'
+    - external_ip_pool is not defined
+
+- name: Use the supplied ExternalIPPool
+  ansible.builtin.set_fact:
+    _eip_pool: "{{ external_ip_pool }}"
+  when:
+    - eip_contract_version != 'v1'
+    - external_ip_pool is defined
+
+- name: Use the resolved ExternalIPPool
+  ansible.builtin.set_fact:
+    _eip_pool: "{{ _eip_pool_lookup.resources[0] }}"
+  when:
+    - eip_contract_version != 'v1'
+    - external_ip_pool is not defined
+    - _eip_pool_lookup.resources | length == 1
+
+- name: Verify the ExternalIPPool reference resolved uniquely
+  ansible.builtin.assert:
+    that:
+      - _eip_pool is defined
+      - _eip_pool.metadata.uid is defined
+      - _eip_pool.metadata.namespace == external_ip.metadata.namespace
+      - _eip_pool.metadata.labels['osac.openshift.io/externalippool-uuid'] == external_ip.spec.pool
+    fail_msg: >-
+      Could not resolve exactly the ExternalIPPool referenced by UUID
+      '{{ external_ip.spec.pool }}' in namespace '{{ external_ip.metadata.namespace }}'.

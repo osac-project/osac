@@ -15,19 +15,30 @@
       - external_ip_attachment.metadata.annotations is defined
       - "'osac.openshift.io/externalippool-name' in external_ip_attachment.metadata.annotations"
       - external_ip_attachment.metadata.annotations['osac.openshift.io/externalippool-name'] | length > 0
+      - "'osac.openshift.io/externalip-uid' in external_ip_attachment.metadata.annotations"
+      - external_ip_attachment.metadata.annotations['osac.openshift.io/externalip-uid'] | length > 0
       - "'osac.openshift.io/externalip-target-namespace' in external_ip_attachment.metadata.annotations"
       - external_ip_attachment.metadata.annotations['osac.openshift.io/externalip-target-namespace'] | length > 0
     fail_msg: >-
       ExternalIPAttachment is missing required fields/annotations:
       metadata.name and metadata.namespace must be set,
-      and annotations osac.openshift.io/externalippool-name and
-      osac.openshift.io/externalip-target-namespace must both be present and non-empty.
+      and annotations osac.openshift.io/externalippool-name,
+      osac.openshift.io/externalip-uid, and
+      osac.openshift.io/externalip-target-namespace must be present and non-empty.
 
 - name: Extract ExternalIPAttachment detach configuration
   ansible.builtin.set_fact:
     external_ip_name: >-
       {{ external_ip_attachment.metadata.annotations['osac.openshift.io/externalip-name']
          | default(external_ip_attachment.metadata.name) }}
+    external_ip_uid: "{{ external_ip_attachment.metadata.annotations['osac.openshift.io/externalip-uid'] }}"
+    parking_service_name: "osac-eip-{{ external_ip_attachment.metadata.annotations['osac.openshift.io/externalip-uid'] }}"
+    detach_tenant: >-
+      {{ (external_ip_attachment.metadata.annotations | default({})).get(
+           'osac.openshift.io/tenant', 'shared') }}
+    external_ip_owner_reference: >-
+      {{ 'ExternalIP/' ~ (external_ip_attachment.metadata.annotations.get(
+           'osac.openshift.io/externalip-name', external_ip_attachment.metadata.name)) }}
     detach_vm_namespace: >-
       {{ external_ip_attachment.metadata.annotations['osac.openshift.io/externalip-target-namespace'] }}
     detach_pool_name: >-
@@ -99,6 +110,35 @@
       {{ (lb_service_info.resources[0].spec.selector | default({}))['vm.kubevirt.io/name'] | default('') }}
   when: not detach_already_done
 
+- name: Read any existing UID-owned parking Service
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: v1
+    kind: Service
+    name: "{{ parking_service_name }}"
+    namespace: metallb-system
+  register: detach_parking_service_info
+  when: not detach_already_done
+
+- name: Refuse to overwrite a parking Service owned by another ExternalIP UID
+  ansible.builtin.assert:
+    that:
+      - >-
+        detach_parking_service_info.resources | length == 0 or
+        (
+          (detach_parking_service_info.resources[0].metadata.labels | default({})).get(
+            'osac.openshift.io/externalip-uid', '') == external_ip_uid and
+          (detach_parking_service_info.resources[0].metadata.annotations | default({})).get(
+            'osac.openshift.io/tenant', '') == detach_tenant and
+          (detach_parking_service_info.resources[0].metadata.annotations | default({})).get(
+            'osac.openshift.io/owner-reference', '') == external_ip_owner_reference
+        )
+    fail_msg: >-
+      MetalLB Service '{{ parking_service_name }}' exists but does not prove
+      ownership by ExternalIP UID '{{ external_ip_uid }}' and tenant
+      '{{ detach_tenant }}'; refusing to restore it.
+  when: not detach_already_done
+
 - name: Set ComputeInstance name from LB Service selector if not already known
   ansible.builtin.set_fact:
     detach_compute_instance_name: "{{ detach_vm_name_from_svc }}"
@@ -147,7 +187,7 @@
           - "LoadBalancer Service 'osac-eip-{{ external_ip_name }}-ingress' deleted from '{{ detach_vm_namespace }}'"
           - "Changed: {{ lb_service_delete_result.changed | default(false) }}"
 
-    - name: Re-create placeholder Service in metallb-system
+    - name: Re-create UID-owned placeholder Service in metallb-system
       kubernetes.core.k8s:
         kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
         state: present
@@ -156,14 +196,17 @@
           apiVersion: v1
           kind: Service
           metadata:
-            name: "osac-eip-{{ external_ip_name }}"
+            name: "{{ parking_service_name }}"
             namespace: metallb-system
             labels:
               osac.openshift.io/externalip: "{{ external_ip_name }}"
+              osac.openshift.io/externalip-uid: "{{ external_ip_uid }}"
               osac.openshift.io/managed-by: osac-fulfillment
             annotations:
               metallb.universe.tf/address-pool: "{{ detach_pool_name }}"
               metallb.universe.tf/loadBalancerIPs: "{{ detach_ip_address }}"
+              osac.openshift.io/tenant: "{{ detach_tenant }}"
+              osac.openshift.io/owner-reference: "{{ external_ip_owner_reference }}"
           spec:
             type: LoadBalancer
             selector: {}
@@ -180,7 +223,7 @@
     - name: Display placeholder Service creation result
       ansible.builtin.debug:
         msg:
-          - "Placeholder Service 'osac-eip-{{ external_ip_name }}' re-created in metallb-system"
+          - "Placeholder Service '{{ parking_service_name }}' re-created in metallb-system"
           - "IP preserved: {{ detach_ip_address }}"
           - "Changed: {{ placeholder_service_result.changed | default(false) }}"
 
@@ -198,10 +241,13 @@
             namespace: "{{ detach_vm_namespace }}"
             labels:
               osac.openshift.io/externalip: "{{ external_ip_name }}"
+              osac.openshift.io/externalip-uid: "{{ external_ip_uid }}"
               osac.openshift.io/managed-by: osac-fulfillment
             annotations:
               metallb.universe.tf/address-pool: "{{ detach_pool_name }}"
               metallb.universe.tf/loadBalancerIPs: "{{ detach_ip_address }}"
+              osac.openshift.io/tenant: "{{ detach_tenant }}"
+              osac.openshift.io/owner-reference: "{{ external_ip_owner_reference }}"
           spec:
             type: LoadBalancer
             selector:

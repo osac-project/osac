@@ -152,6 +152,7 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      testExternalIPName,
 				Namespace: testNetworkingNamespace,
+				UID:       "test-externalip-uid",
 				Labels: map[string]string{
 					osacExternalIPIDLabel: testExternalIPUUID,
 				},
@@ -436,7 +437,7 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 			Expect(updated.Annotations).NotTo(HaveKey(osacExternalIPTargetIPAnnotation))
 		})
 
-		It("should set implementation-strategy, pool-name, and target-namespace annotations", func() {
+		It("should set the ExternalIP identity and attachment annotations", func() {
 			fakeClient = buildClient(attachment, publicIP, pool, ci)
 			setupReconciler(fakeClient)
 
@@ -456,6 +457,7 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("netris"))
 			Expect(updated.Annotations[osacExternalIPPoolNameAnnotation]).To(Equal("test-pool"))
 			Expect(updated.Annotations[osacExternalIPNameAnnotation]).To(Equal(testExternalIPName))
+			Expect(updated.Annotations[osacExternalIPUIDAnnotation]).To(Equal(string(publicIP.UID)))
 			Expect(updated.Annotations[osacExternalIPTargetNamespaceAnnotation]).To(Equal(testVMNamespace))
 		})
 

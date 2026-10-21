@@ -1,0 +1,22 @@
+---
+- name: Ensure the pool allocation Lease exists
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    server_side_apply:
+      field_manager: osac-externalip-allocation-lock
+    definition:
+      apiVersion: coordination.k8s.io/v1
+      kind: Lease
+      metadata:
+        name: "{{ eip_lock_name }}"
+        namespace: "{{ eip_lock_namespace }}"
+        annotations:
+          osac.openshift.io/tenant: >-
+            {{ (external_ip.metadata.annotations | default({})).get(
+                 'osac.openshift.io/tenant',
+                 (_eip_pool.metadata.annotations | default({})).get(
+                   'osac.openshift.io/tenant', 'shared')) }}
+          osac.openshift.io/owner-reference: "ExternalIPPool/{{ _eip_pool.metadata.name }}"
+      spec:
+        leaseDurationSeconds: 1200

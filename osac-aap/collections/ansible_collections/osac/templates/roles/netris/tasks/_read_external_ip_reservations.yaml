@@ -1,0 +1,34 @@
+---
+- name: Read current Netris IPAM reservations
+  ansible.builtin.include_role:
+    name: netris.controller.ipam
+    tasks_from: read_subnets
+
+- name: Find a legacy name-keyed reservation for this ExternalIP
+  ansible.builtin.set_fact:
+    _eip_legacy_subnets: >-
+      {{ netris_ipam_subnets
+         | selectattr('name', 'equalto', eip_name)
+         | rejectattr('name', 'equalto', 'osac-eip-' ~ eip_uid)
+         | list }}
+
+- name: Refuse an ambiguous legacy Netris reservation
+  ansible.builtin.assert:
+    that:
+      - _eip_legacy_subnets | length == 0
+    fail_msg: >-
+      Netris has a legacy reservation named '{{ eip_name }}' without an
+      ExternalIP UID. Its owner cannot be proven, so
+      {{ _eip_reservation_operation }} is blocked until an administrator safely
+      migrates or removes that reservation.
+
+- name: Find the reservation owned by this ExternalIP UID
+  ansible.builtin.set_fact:
+    _eip_existing_subnets: >-
+      {{ netris_ipam_subnets
+         | selectattr('name', 'equalto', 'osac-eip-' ~ eip_uid)
+         | list }}
+    _eip_owned_subnet: >-
+      {{ (netris_ipam_subnets
+          | selectattr('name', 'equalto', 'osac-eip-' ~ eip_uid)
+          | list | first | default(none)) }}

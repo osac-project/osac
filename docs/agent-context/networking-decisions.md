@@ -115,19 +115,25 @@ by the unified design. Manually created external resources and tenant-shared
 default networking persist when a workload is deleted. Follow the full design's
 reverse-reference guards when deleting shared resources or replacing NetworkClass.
 
-## AgentlessNet ExternalIP implementation status
+## ExternalIP v1 implementation status
 
-The OSAC-6307 AgentlessNet v1 implementation supplies the resolved ExternalIP
-pool context to AAP. AAP reserves the UID-owned address and returns it in the
-successful `external_ip.allocate` job artifact at `osac_result.data.address`.
-The operator validates the current job result and pool, then publishes the
-address in `ExternalIP.status.address`; AAP does not query the ExternalIPPool
-or write the allocated-address annotation for this v1 flow. For both allocation
-and release, it validates the result against the resource and pool snapshots in
-the same AAP job's submitted `extra_vars`. Release continues to use the v1
-identity envelope with empty `data`.
+AgentlessNet, Netris, and the `k8s_only` MetalLB manager use the versioned
+ExternalIP job-result contract. The ExternalIP controller resolves the pool
+and passes its Fulfillment ID, Kubernetes UID, tenant, IPv4 CIDR, and phase in
+`osac_job_vars.external_ip_pool`. AAP reserves the UID-owned address and
+returns it in the successful `external_ip.allocate` artifact at
+`osac_result.data.address`. It validates against the submitted resource and
+pool snapshots without querying the ExternalIPPool or writing the
+allocated-address annotation. For release, AAP returns the same identity
+envelope with `operation: external_ip.release` and empty `data`.
 
-This implementation updates the allocation handoff in the accepted unified
-networking design. The contract amendment is to follow the deployed AgentlessNet
-ExternalIP E2E validation tracked with OSAC-6307. Unversioned Netris continues
-using its existing annotation handoff until its contract-adoption work is done.
+The operator verifies that the job, submitted snapshots, current ExternalIP,
+and current pool still match, then publishes the address in
+`ExternalIP.status.address`. Netris and `k8s_only` manager registrations in
+the operator chart declare v1. Custom managers with an empty contract version
+retain the unversioned annotation handoff.
+
+This extends the manager-adoption status in the accepted OSAC-1433 unified
+networking design, which records Netris as unversioned pending OSAC-6376.
+OSAC-5977 adopts v1 for Netris and MetalLB; the design's Netris status should
+be updated alongside that adoption.

@@ -129,6 +129,7 @@ networkManagers:
   fabricManagers:
     netris:
       enabled: false
+      externalIPContractVersion: v1
       description: >-
         Netris SDN controller for physical fabric management.
         Manages VLAN/VxLAN segments, ACLs, public IP allocation, and NAT gateways.
@@ -159,6 +160,7 @@ networkManagers:
   k8sManagers:
     k8s_only:
       enabled: false
+      externalIPContractVersion: v1
       description: >-
         Composite k8s-native networking (CUDN, Kubernetes NetworkPolicy, MetalLB
         L2) with no separate physical fabric. Delegates each resource type to an

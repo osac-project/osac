@@ -535,6 +535,19 @@ render_operator_success \
   --set networkManagers.k8sManagers.k8s_only.enabled=true \
   --set-string networkManagers.k8sManagers.k8s_only.capabilities=ipv4
 
+# Built-in managers that provision ExternalIPs advertise the v1 job-result contract.
+render_operator_success \
+  netris-eip-contract \
+  'externalIPContractVersion: "v1"' \
+  --set networkManagers.enabled=true \
+  --set networkManagers.fabricManagers.netris.enabled=true
+
+render_operator_success \
+  k8s-only-eip-contract \
+  'externalIPContractVersion: "v1"' \
+  --set networkManagers.enabled=true \
+  --set networkManagers.k8sManagers.k8s_only.enabled=true
+
 # Facade on the operator chart auto-enables k8s_only when k8sManager is k8s_only.
 render_operator_success \
   facade-auto-enable-k8s-only \

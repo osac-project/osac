@@ -14,6 +14,10 @@
 
 - name: Allocate ingress IP with retry
   block:
+    - name: Reset pool exhaustion state
+      ansible.builtin.set_fact:
+        nico_ip_allocation_exhausted: false
+
     - name: Read IP registry ConfigMap
       kubernetes.core.k8s_info:
         api_version: v1
@@ -58,10 +62,15 @@
         nico_ingress_ip: "{{ ingress_cidr_range | osac.service.next_available_ip(allocated_ips) }}"
       when: nico_ingress_ip is none or nico_ingress_ip | length == 0
 
+    - name: Record whether the ingress range is exhausted
+      ansible.builtin.set_fact:
+        nico_ip_allocation_exhausted: "{{ nico_ingress_ip is none }}"
+
     - name: Validate allocated IP
       ansible.builtin.assert:
         that:
           - nico_ingress_ip is defined
+          - nico_ingress_ip is not none
           - nico_ingress_ip | ansible.utils.ipaddr | length > 0
         fail_msg: "IP allocation failed for {{ ingress_cidr_range }}. Got: {{ nico_ingress_ip | default('undefined') }}"
 
@@ -106,6 +115,13 @@
         success_msg: "IP allocation validated: {{ nico_ingress_ip }} -> {{ cluster_name }}"
 
   rescue:
+    - name: Stop retries when the ingress range has no free address
+      ansible.builtin.fail:
+        msg: >-
+          IP allocation failed for {{ ingress_cidr_range }} because no free
+          host addresses remain.
+      when: nico_ip_allocation_exhausted | default(false) | bool
+
     - name: Log allocation conflict and retry
       ansible.builtin.debug:
         msg: "IP allocation conflict for {{ nico_ingress_ip | default('unknown') }}, retrying..."

@@ -1,0 +1,113 @@
+---
+- name: Build the ExternalIP AAP job variables
+  ansible.builtin.set_fact:
+    eip_contract_job_vars: >-
+      {{ {'resource': eip_contract_resource}
+         | combine({'external_ip_pool': eip_contract_pool_context}
+                   if eip_contract_pool_context is defined and
+                   (eip_contract_resource.metadata.annotations | default({})).get(
+                     'osac.openshift.io/externalip-contract-version', '') == 'v1'
+                   else {}) }}
+
+- name: Write the ExternalIP playbook input
+  ansible.builtin.copy:
+    dest: "{{ eip_contract_vars_file }}"
+    mode: "0600"
+    content: >-
+      {{ {'osac_job_vars': eip_contract_job_vars,
+          'netris_controller_url': eip_contract_netris_url,
+          'netris_session_cookie': 'integration-test-cookie',
+          'netris_site_id': 1,
+          'netris_tenant_id': 1,
+          'netris_validate_certs': false,
+          'ansible_connection': 'local',
+          'ansible_become': false,
+          'ansible_python_interpreter': ansible_playbook_python} | to_json }}
+
+- name: Run the top-level ExternalIP playbook
+  ansible.builtin.command:
+    argv:
+      - uv
+      - run
+      - ansible-playbook
+      - -i
+      - localhost,
+      - "{{ playbook_dir }}/../../../../../playbook_osac_{{ eip_contract_operation }}_external_ip.yml"
+      - -e
+      - "@{{ eip_contract_vars_file }}"
+  args:
+    chdir: "{{ playbook_dir }}/../../../../../"
+  environment:
+    ANSIBLE_STDOUT_CALLBACK: ansible.posix.json
+    ANSIBLE_SHOW_CUSTOM_STATS: "true"
+    KUBECONFIG: "{{ lookup('env', 'KUBECONFIG') }}"
+    K8S_AUTH_KUBECONFIG: "{{ lookup('env', 'K8S_AUTH_KUBECONFIG') }}"
+    NETRIS_CONTROLLER_URL: "{{ eip_contract_netris_url }}"
+    NETRIS_VALIDATE_CERTS: "false"
+    NETRIS_CA_PATH: ""
+  register: eip_contract_playbook_result
+  changed_when: false
+  failed_when: false
+
+- name: Remove the temporary ExternalIP input file
+  ansible.builtin.file:
+    path: "{{ eip_contract_vars_file }}"
+    state: absent
+
+- name: Check the top-level ExternalIP playbook result
+  ansible.builtin.assert:
+    that:
+      - (eip_contract_playbook_result.rc == 0) == (eip_contract_should_succeed | bool)
+      - >-
+        eip_contract_should_succeed | bool or
+        (eip_contract_expected_failure | default('')) in (
+          (eip_contract_playbook_result.stdout | default('')) ~
+          (eip_contract_playbook_result.stderr | default('')))
+    fail_msg: >-
+      The {{ eip_contract_operation }} ExternalIP playbook returned
+      {{ eip_contract_playbook_result.rc }}; expected success is
+      {{ eip_contract_should_succeed }}.
+      Expected failure text={{ eip_contract_expected_failure | default('not supplied') }}.
+      stdout={{ eip_contract_playbook_result.stdout | default('') }}
+      stderr={{ eip_contract_playbook_result.stderr | default('') }}
+
+- name: Read the ExternalIP job result artifact
+  ansible.builtin.set_fact:
+    eip_contract_result: >-
+      {{ ((eip_contract_playbook_result.stdout | from_json).global_custom_stats
+          | default({})).osac_result | default({}) }}
+
+- name: Verify the v1 operation result artifact
+  ansible.builtin.assert:
+    that:
+      - eip_contract_result.schemaVersion == 'v1'
+      - >-
+        eip_contract_result.operation ==
+        ('external_ip.allocate' if eip_contract_operation == 'create'
+         else 'external_ip.release')
+      - eip_contract_result.resourceUID == eip_contract_resource.metadata.uid
+      - eip_contract_result.observedGeneration | int == eip_contract_resource.metadata.generation | int
+      - >-
+        eip_contract_operation != 'delete' or eip_contract_result.data == {}
+      - >-
+        eip_contract_operation != 'create' or
+        eip_contract_result.data.address is defined
+  when:
+    - eip_contract_should_succeed | bool
+    - (eip_contract_resource.metadata.annotations | default({})).get(
+        'osac.openshift.io/externalip-contract-version', '') == 'v1'
+
+- name: Verify an unversioned manager does not publish a v1 result
+  ansible.builtin.assert:
+    that:
+      - eip_contract_result == {}
+  when:
+    - eip_contract_should_succeed | bool
+    - (eip_contract_resource.metadata.annotations | default({})).get(
+        'osac.openshift.io/externalip-contract-version', '') != 'v1'
+
+- name: Verify a rejected ExternalIP operation publishes no success result
+  ansible.builtin.assert:
+    that:
+      - eip_contract_result == {}
+  when: not (eip_contract_should_succeed | bool)

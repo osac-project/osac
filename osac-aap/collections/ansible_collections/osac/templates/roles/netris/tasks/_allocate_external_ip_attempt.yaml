@@ -1,0 +1,81 @@
+---
+- name: Read and validate this ExternalIP's Netris reservations
+  ansible.builtin.include_tasks: _read_external_ip_reservations.yaml
+  vars:
+    _eip_reservation_operation: allocation
+
+- name: Accept the existing UID-owned reservation
+  ansible.builtin.set_fact:
+    eip_allocated_address: "{{ _eip_owned_subnet.prefix | ansible.utils.ipaddr('address') }}"
+    _eip_allocation_complete: true
+  when: _eip_owned_subnet is not none
+
+- name: Collect all existing IPv4 host reservations
+  ansible.builtin.set_fact:
+    _eip_allocated_addrs: >-
+      {{ netris_ipam_subnets
+         | selectattr('prefix', 'defined')
+         | selectattr('prefix', 'match', '.*/32$')
+         | map(attribute='prefix')
+         | map('ansible.utils.ipaddr', 'address')
+         | list }}
+  when: not _eip_allocation_complete
+
+- name: Select a free host address from the resolved pool CIDRs
+  ansible.builtin.set_fact:
+    _eip_candidate_address: >-
+      {{ eip_pool_cidr
+         | osac.service.next_available_ip(_eip_allocated_addrs)
+         | default('', true) }}
+  when: not _eip_allocation_complete
+
+- name: Require a candidate address in the pool
+  ansible.builtin.assert:
+    that:
+      - _eip_candidate_address | length > 0
+    fail_msg: >-
+      No free IPv4 host address remains in ExternalIPPool '{{ eip_pool_name }}'
+      ({{ eip_pool_cidr }}).
+  when: not _eip_allocation_complete
+
+- name: Try to reserve the selected address in Netris
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/ipam/subnet"
+    method: POST
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      name: "osac-eip-{{ eip_uid }}"
+      prefix: "{{ _eip_candidate_address }}/32"
+      purpose: nat
+      sites:
+        - id: "{{ netris_site_id | int }}"
+      tenant:
+        id: "{{ netris_tenant_id | int }}"
+    return_content: true
+    status_code: [200, 201, 409]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _eip_reservation_response
+  no_log: true
+  when: not _eip_allocation_complete
+
+- name: Record a successful Netris reservation
+  ansible.builtin.set_fact:
+    eip_allocated_address: "{{ _eip_candidate_address }}"
+    _eip_allocation_complete: true
+  when:
+    - not _eip_allocation_complete
+    - _eip_reservation_response.status | int in [200, 201]
+
+- name: Retry after another Netris client reserved the candidate
+  ansible.builtin.debug:
+    msg: >-
+      Netris rejected candidate {{ _eip_candidate_address }} for ExternalIP
+      UID {{ eip_uid }} because it was already claimed; the next attempt will
+      refresh IPAM and choose another free address.
+  when:
+    - not _eip_allocation_complete
+    - _eip_reservation_response.status | int == 409

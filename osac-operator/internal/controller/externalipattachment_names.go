@@ -18,7 +18,10 @@ import (
 )
 
 var (
-	osacExternalIPNameAnnotation              string = fmt.Sprintf("%s/externalip-name", osacPrefix)
+	osacExternalIPNameAnnotation string = fmt.Sprintf("%s/externalip-name", osacPrefix)
+	// osacExternalIPUIDAnnotation carries the parent Kubernetes UID to AAP so
+	// attachment jobs address the UID-owned MetalLB reservation.
+	osacExternalIPUIDAnnotation               string = fmt.Sprintf("%s/externalip-uid", osacPrefix)
 	osacExternalIPAttachmentIDLabel           string = fmt.Sprintf("%s/externalipattachment-uuid", osacPrefix)
 	osacExternalIPAttachmentFeedbackFinalizer string = fmt.Sprintf("%s/externalipattachment-feedback", osacPrefix)
 	osacExternalIPTargetIPAnnotation          string = fmt.Sprintf("%s/target-ip", osacPrefix)

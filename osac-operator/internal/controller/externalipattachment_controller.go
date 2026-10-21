@@ -397,6 +397,10 @@ func (r *ExternalIPAttachmentReconciler) syncAnnotations(
 		attachment.Annotations[osacExternalIPNameAnnotation] = externalIP.Name
 		needsUpdate = true
 	}
+	if attachment.Annotations[osacExternalIPUIDAnnotation] != string(externalIP.UID) {
+		attachment.Annotations[osacExternalIPUIDAnnotation] = string(externalIP.UID)
+		needsUpdate = true
+	}
 	if ci != nil {
 		if ci.Status.VirtualMachineReference != nil {
 			targetNamespace := ci.Status.VirtualMachineReference.Namespace

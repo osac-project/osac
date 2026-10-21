@@ -1,0 +1,45 @@
+---
+- name: Validate the v1 ExternalIP and pool snapshot
+  ansible.builtin.assert:
+    that:
+      - external_ip.metadata.uid is defined
+      - external_ip.metadata.uid | length > 0
+      - external_ip.metadata.generation is number
+      - >-
+        (external_ip.metadata.labels | default({}, true)).get(
+        'osac.openshift.io/externalip-uuid', '') | default('', true) | length > 0
+      - >-
+        (external_ip.metadata.annotations | default({}, true)).get(
+        'osac.openshift.io/tenant', '') | default('', true) | length > 0
+      - >-
+        (external_ip.metadata.annotations | default({}, true)).get(
+        'osac.openshift.io/externalip-contract-version', '') == 'v1'
+      - osac_job_vars.external_ip_pool.fulfillment_id == external_ip.spec.pool
+      - osac_job_vars.external_ip_pool.kubernetes_uid is defined
+      - osac_job_vars.external_ip_pool.kubernetes_uid | length > 0
+      - osac_job_vars.external_ip_pool.tenant_id is defined
+      - >-
+        osac_job_vars.external_ip_pool.tenant_id ==
+        (external_ip.metadata.annotations | default({}, true)).get(
+        'osac.openshift.io/tenant', '') or
+        osac_job_vars.external_ip_pool.tenant_id == 'shared'
+      - osac_job_vars.external_ip_pool.cidr is defined
+      - osac_job_vars.external_ip_pool.phase is defined
+      - osac_job_vars.external_ip_pool.phase | length > 0
+      - >-
+        osac_external_ip_pool_action != 'allocate' or
+        osac_job_vars.external_ip_pool.phase == 'Ready'
+    fail_msg: >-
+      ExternalIP v1 operations require the current resource identity and its
+      matching pool snapshot; allocations also require a ready pool.
+
+- name: Normalize the submitted ExternalIPPool snapshot
+  ansible.builtin.set_fact:
+    osac_external_ip_pool_fulfillment_id: "{{ osac_job_vars.external_ip_pool.fulfillment_id }}"
+    osac_external_ip_pool_uid: "{{ osac_job_vars.external_ip_pool.kubernetes_uid }}"
+    osac_external_ip_pool_tenant_id: "{{ osac_job_vars.external_ip_pool.tenant_id }}"
+    osac_external_ip_pool_phase: "{{ osac_job_vars.external_ip_pool.phase }}"
+    osac_external_ip_pool_cidr: >-
+      {{ [osac_job_vars.external_ip_pool.cidr]
+         | osac.service.validate_single_ipv4_cidr }}
+  no_log: true

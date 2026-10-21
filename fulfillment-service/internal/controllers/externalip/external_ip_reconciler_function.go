@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -54,6 +55,7 @@ type function struct {
 	externalIPsClient   privatev1.ExternalIPsClient
 	networkingHubReader controllers.NetworkingHubReader
 	maskCalculator      *masks.Calculator
+	deleteRetry         *controllers.ReconcileSignalScheduler
 }
 
 type task struct {
@@ -118,6 +120,7 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 		networkingHubReader: networkingHubReader,
 		hubCache:            b.hubCache,
 		maskCalculator:      masks.NewCalculator().Build(),
+		deleteRetry:         controllers.NewReconcileSignalScheduler(b.logger, 5*time.Second),
 	}
 	result = object.run
 	return
@@ -315,9 +318,22 @@ func (t *task) delete(ctx context.Context) (err error) {
 			slog.String("name", object.GetName()),
 		)
 	}
+	t.scheduleDeleteRetry(ctx)
 
 	// Don't remove finalizer: K8s object still exists with finalizers being processed.
 	return
+}
+
+func (t *task) scheduleDeleteRetry(ctx context.Context) {
+	if t.r.deleteRetry == nil {
+		return
+	}
+	id := t.externalIP.GetId()
+	client := t.r.externalIPsClient
+	t.r.deleteRetry.Schedule(ctx, id, func(signalCtx context.Context, id string) error {
+		_, err := client.Signal(signalCtx, privatev1.ExternalIPsSignalRequest_builder{Id: id}.Build())
+		return err
+	})
 }
 
 func (t *task) selectHub(ctx context.Context) error {

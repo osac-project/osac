@@ -23,7 +23,6 @@
 
     - name: Set lease facts
       ansible.builtin.set_fact:
-        _vnet_lock_resource_version: "{{ _vnet_lock_read.resources[0].metadata.resourceVersion }}"
         _vnet_lock_holder_current: "{{ _vnet_lock_read.resources[0].spec.holderIdentity | default('', true) }}"
         _vnet_lock_renew_time: "{{ _vnet_lock_read.resources[0].spec.renewTime | default('', true) }}"
         _vnet_lock_duration: "{{ _vnet_lock_read.resources[0].spec.leaseDurationSeconds | default(120) }}"
@@ -52,20 +51,34 @@
             - (now(utc=true) - (_vnet_lock_renew_time | to_datetime('%Y-%m-%dT%H:%M:%S.%fZ'))).total_seconds() < (_vnet_lock_duration | int)
 
         - name: CAS update to acquire
-          kubernetes.core.k8s:
-            state: present
-            definition:
-              apiVersion: coordination.k8s.io/v1
-              kind: Lease
-              metadata:
-                name: "{{ vnet_lock_name }}"
-                namespace: "{{ vnet_lock_namespace }}"
-                resourceVersion: "{{ _vnet_lock_resource_version }}"
-              spec:
-                holderIdentity: "{{ vnet_lock_holder }}"
-                leaseDurationSeconds: "{{ _vnet_lock_duration | int }}"
-                acquireTime: "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%S.000000Z') }}"
-                renewTime: "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%S.000000Z') }}"
+          kubernetes.core.k8s_json_patch:
+            api_version: coordination.k8s.io/v1
+            kind: Lease
+            name: "{{ vnet_lock_name }}"
+            namespace: "{{ vnet_lock_namespace }}"
+            # Build the entire patch as a typed value so native Jinja does not
+            # turn the numeric-looking resourceVersion string into an integer.
+            patch: >-
+              {{
+                [
+                  {
+                    'op': 'test',
+                    'path': '/metadata/resourceVersion',
+                    'value': _vnet_lock_read.resources[0].metadata.resourceVersion
+                  },
+                  {'op': 'add', 'path': '/spec/holderIdentity', 'value': vnet_lock_holder},
+                  {
+                    'op': 'add',
+                    'path': '/spec/acquireTime',
+                    'value': now(utc=true).strftime('%Y-%m-%dT%H:%M:%S.000000Z')
+                  },
+                  {
+                    'op': 'add',
+                    'path': '/spec/renewTime',
+                    'value': now(utc=true).strftime('%Y-%m-%dT%H:%M:%S.000000Z')
+                  }
+                ]
+              }}
 
         - name: Set acquired
           ansible.builtin.set_fact:

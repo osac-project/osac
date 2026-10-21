@@ -1,148 +1,159 @@
 ---
-# ExternalIP maps to a Netris IPAM /32 subnet (purpose=nat) inside the
-# pool's allocation.  Finds an available IP by collecting allocated /32
-# subnets and picking the first unused host address from the pool CIDRs.
-
-- name: Validate ExternalIP annotations
+# Reserve a Netris /32 for an ExternalIP. Reservations are named by Kubernetes
+# UID, and a pool-scoped Lease protects the read/choose/create sequence.
+- name: Validate ExternalIP identity and pool reference
   ansible.builtin.assert:
     that:
-      - external_ip.metadata is defined
+      - external_ip.metadata.uid is defined
+      - external_ip.metadata.uid | length > 0
+      - external_ip.metadata.generation is defined
+      - external_ip.metadata.namespace is defined
+      - external_ip.spec.pool is defined
       - external_ip.metadata.annotations is defined
       - "'osac.openshift.io/externalippool-name' in external_ip.metadata.annotations"
-    fail_msg: "ExternalIP metadata.annotations['osac.openshift.io/externalippool-name'] is required"
+    fail_msg: >-
+      ExternalIP UID, generation, namespace, pool reference, and pool-name
+      annotation are required to allocate an address.
 
-- name: Extract ExternalIP configuration
+- name: Select the Netris pool validation operation
+  ansible.builtin.set_fact:
+    _eip_pool_action: allocate
+
+- name: Resolve and validate the ExternalIPPool
+  ansible.builtin.include_tasks: _resolve_external_ip_pool.yaml
+
+- name: Verify the ExternalIPPool reference resolved uniquely
+  ansible.builtin.assert:
+    that:
+      - _eip_pool is defined
+      - _eip_pool.metadata.uid is defined
+      - _eip_pool.spec.cidrs is defined
+    fail_msg: >-
+      ExternalIPPool '{{ external_ip.spec.pool }}' must define its CIDR list.
+
+- name: Validate the single canonical IPv4 ExternalIPPool CIDR
+  ansible.builtin.set_fact:
+    eip_pool_cidr: >-
+      {{ _eip_pool.spec.cidrs | osac.service.validate_single_ipv4_cidr }}
+
+- name: Extract ExternalIP allocation identity
   ansible.builtin.set_fact:
     eip_name: "{{ external_ip.metadata.name }}"
-    eip_pool_name: >-
-      {{ external_ip.metadata.annotations['osac.openshift.io/externalippool-name'] }}
+    eip_uid: "{{ external_ip.metadata.uid }}"
+    eip_pool_name: "{{ external_ip.metadata.annotations['osac.openshift.io/externalippool-name'] }}"
+    eip_lock_name: "external-ip-{{ _eip_pool.metadata.uid | hash('sha1') }}"
+    eip_lock_namespace: "{{ external_ip.metadata.namespace }}"
+    eip_lock_holder: >-
+      {{ lookup('env', 'AWX_JOB_ID')
+         | default(lookup('password', '/dev/null length=32'), true) }}
+    _eip_allocation_complete: false
 
-- name: Display ExternalIP information
-  ansible.builtin.debug:
-    msg:
-      - "Allocating Netris IPAM IP for ExternalIP '{{ eip_name }}'"
-      - "Pool name (ExternalIPPool): {{ eip_pool_name }}"
-
-- name: Query IPAM allocations
-  ansible.builtin.include_role:
-    name: netris.controller.ipam
-    tasks_from: read_tree
-
-- name: Query IPAM subnets
-  ansible.builtin.include_role:
-    name: netris.controller.ipam
-    tasks_from: read_subnets
-  vars:
-    ipam_subnet_name: "{{ eip_name }}"
-
-- name: Set existing subnet reference
-  ansible.builtin.set_fact:
-    _eip_existing_subnet: "{{ netris_ipam_subnet }}"
-
-- name: Use existing subnet address (idempotent)
-  when: _eip_existing_subnet is defined and _eip_existing_subnet is not none
-  block:
-    - name: Set allocated address from existing IPAM subnet
-      ansible.builtin.set_fact:
-        eip_allocated_address: "{{ _eip_existing_subnet.prefix | ansible.utils.ipaddr('address') }}"
-
-    - name: Display existing subnet
-      ansible.builtin.debug:
-        msg: "ExternalIP '{{ eip_name }}' already has IPAM subnet: {{ eip_allocated_address }}"
-
-- name: Allocate new IP from pool
-  when: _eip_existing_subnet is not defined or _eip_existing_subnet is none
-  block:
-    - name: Find pool allocations in IPAM tree
-      ansible.builtin.set_fact:
-        _eip_pool_allocs: >-
-          {{ netris_ipam_tree
-             | selectattr('name', 'match', '^' + (eip_pool_name | regex_escape) + '(-[0-9]+)?$')
-             | list }}
-
-    - name: Fail if no pool allocations found
-      ansible.builtin.fail:
-        msg: >-
-          ExternalIPPool allocations for '{{ eip_pool_name }}' not found in Netris IPAM.
-          Ensure the ExternalIPPool has been created before allocating ExternalIPs.
-      when: (_eip_pool_allocs | default([])) | length == 0
-
-    - name: Collect all allocated /32 addresses from IPAM
-      ansible.builtin.set_fact:
-        _eip_allocated_addrs: >-
-          {{ netris_ipam_subnets
-             | selectattr('prefix', 'defined')
-             | selectattr('prefix', 'match', '.*\/32$')
-             | map(attribute='prefix')
-             | map('ansible.utils.ipaddr', 'address')
-             | list }}
-
-    # Pool allocations are assumed /30 or wider — /31 (RFC 3021) would
-    # produce an empty candidate range and is not supported.
-    - name: Find first available IP in pool
-      ansible.builtin.set_fact:
-        eip_allocated_address: >-
-          {%- set ns = namespace(found='') -%}
-          {%- for alloc in _eip_pool_allocs -%}
-          {%-   if not ns.found -%}
-          {%-     set cidr = alloc.prefix -%}
-          {%-     set net = cidr | ansible.utils.ipaddr('network') -%}
-          {%-     set prefix_len = cidr | ansible.utils.ipaddr('prefix') | int -%}
-          {%-     for i in range(1, 2 ** (32 - prefix_len) - 1) -%}
-          {%-       if not ns.found -%}
-          {%-         set candidate = net | ansible.utils.ipmath(i) -%}
-          {%-         if candidate not in _eip_allocated_addrs -%}
-          {%-           set ns.found = candidate -%}
-          {%-         endif -%}
-          {%-       endif -%}
-          {%-     endfor -%}
-          {%-   endif -%}
-          {%- endfor -%}
-          {{ ns.found }}
-
-    - name: Fail if no IPs available in pool
-      ansible.builtin.fail:
-        msg: >-
-          No available IPs in ExternalIPPool '{{ eip_pool_name }}'.
-          All addresses in {{ _eip_pool_allocs | map(attribute='prefix') | list }} are allocated.
-      when: eip_allocated_address | length == 0
-
-    - name: Display allocated IP
-      ansible.builtin.debug:
-        msg: "Allocated IP {{ eip_allocated_address }} for ExternalIP '{{ eip_name }}' from pool '{{ eip_pool_name }}'"
-
-    - name: Create /32 IPAM subnet to reserve the IP
-      ansible.builtin.include_role:
-        name: netris.controller.ipam
-        tasks_from: create_subnet
-      vars:
-        ipam_name: "{{ eip_name }}"
-        ipam_cidr: "{{ eip_allocated_address }}/32"
-        ipam_purpose: "nat"
-        ipam_site_id: "{{ netris_site_id }}"
-        ipam_tenant_id: "{{ netris_tenant_id }}"
-
-    - name: Display IPAM subnet result
-      ansible.builtin.debug:
-        msg: >-
-          IPAM subnet '{{ eip_name }}'
-          {{ (ipam_already_existed | default(false)) | ternary('already exists', 'created successfully') }}
-          for {{ eip_allocated_address }}/32
-          (ID: {{ ipam_subnet_id | default('unknown') }})
-
-- name: Write allocated address to ExternalIP CR annotation
-  kubernetes.core.k8s_json_patch:
+- name: Read the current ExternalIP before allocating provider state
+  kubernetes.core.k8s_info:
     api_version: osac.openshift.io/v1alpha1
     kind: ExternalIP
     name: "{{ eip_name }}"
     namespace: "{{ external_ip.metadata.namespace }}"
-    patch:
-      - op: add
-        path: /metadata/annotations/osac.openshift.io~1allocated-address
-        value: "{{ eip_allocated_address }}"
+  register: _eip_current_resource
 
-- name: Display ExternalIP creation result
-  ansible.builtin.debug:
-    msg:
-      - "ExternalIP '{{ eip_name }}' allocated address: {{ eip_allocated_address }}"
-      - "IPAM subnet created and address written to CR annotation"
+- name: Reject an allocation request for a stale ExternalIP UID
+  ansible.builtin.assert:
+    that:
+      - _eip_current_resource.resources | length == 1
+      - _eip_current_resource.resources[0].metadata.uid == eip_uid
+      - _eip_current_resource.resources[0].metadata.generation | int == external_ip.metadata.generation | int
+    fail_msg: >-
+      ExternalIP '{{ eip_name }}' no longer matches UID '{{ eip_uid }}' and
+      generation '{{ external_ip.metadata.generation }}'; refusing to create
+      a provider reservation for a stale resource.
+
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Ensure the pool allocation Lease exists
+  ansible.builtin.include_tasks: _ensure_external_ip_allocation_lease.yaml
+
+- name: Allocate and publish the Netris reservation while holding the pool Lease
+  block:
+    - name: Acquire the pool allocation Lease
+      ansible.builtin.include_role:
+        name: osac.service.vnet_lock
+        tasks_from: acquire
+      vars:
+        vnet_lock_name: "{{ eip_lock_name }}"
+        vnet_lock_namespace: "{{ eip_lock_namespace }}"
+        vnet_lock_holder: "{{ eip_lock_holder }}"
+        _vnet_lock_max_retries: 24
+        _vnet_lock_retry_delay: 5
+
+    - name: Try to allocate an address, refreshing provider state after conflicts
+      ansible.builtin.include_tasks: _allocate_external_ip_attempt.yaml
+      loop: "{{ range(1, 6) | list }}"
+      loop_control:
+        loop_var: _eip_attempt
+        label: "attempt {{ _eip_attempt }}"
+      when: not _eip_allocation_complete
+
+    - name: Require a durable UID-owned reservation
+      ansible.builtin.assert:
+        that:
+          - _eip_allocation_complete | bool
+          - eip_allocated_address is defined
+          - eip_allocated_address | length > 0
+        fail_msg: >-
+          Could not reserve an address for ExternalIP UID '{{ eip_uid }}' after
+          five attempts. The pool may be exhausted or Netris may still be
+          rejecting reservations.
+
+    - name: Write the allocated address with UID and generation preconditions
+      kubernetes.core.k8s_json_patch:
+        api_version: osac.openshift.io/v1alpha1
+        kind: ExternalIP
+        name: "{{ eip_name }}"
+        namespace: "{{ external_ip.metadata.namespace }}"
+        # Render the complete typed patch so generation remains a JSON number
+        # under both native and non-native Jinja configurations.
+        patch: >-
+          {{
+            [
+              {'op': 'test', 'path': '/metadata/uid', 'value': eip_uid},
+              {
+                'op': 'test',
+                'path': '/metadata/generation',
+                'value': (external_ip.metadata.generation | int)
+              },
+              {
+                'op': 'add',
+                'path': '/metadata/annotations/osac.openshift.io~1allocated-address',
+                'value': eip_allocated_address
+              }
+            ]
+          }}
+      when: eip_contract_version != 'v1'
+
+    - name: Publish the v1 allocation result
+      ansible.builtin.include_role:
+        name: osac.service.common
+        tasks_from: publish_external_ip_result
+      vars:
+        osac_external_ip_operation: external_ip.allocate
+        osac_external_ip_result_data:
+          address: "{{ eip_allocated_address }}"
+      when: eip_contract_version == 'v1'
+
+    - name: Display ExternalIP creation result
+      ansible.builtin.debug:
+        msg:
+          - "ExternalIP '{{ eip_name }}' allocated address: {{ eip_allocated_address }}"
+          - "Netris reservation name: osac-eip-{{ eip_uid }}"
+  always:
+    - name: Release the pool allocation Lease
+      ansible.builtin.include_role:
+        name: osac.service.vnet_lock
+        tasks_from: release
+      vars:
+        vnet_lock_name: "{{ eip_lock_name }}"
+        vnet_lock_namespace: "{{ eip_lock_namespace }}"
+        vnet_lock_holder: "{{ eip_lock_holder }}"

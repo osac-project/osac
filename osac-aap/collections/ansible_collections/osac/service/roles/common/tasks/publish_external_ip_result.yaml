@@ -1,0 +1,14 @@
+---
+- name: Publish the v1 ExternalIP job result
+  ansible.builtin.set_stats:
+    data:
+      osac_result:
+        schemaVersion: v1
+        operation: "{{ osac_external_ip_operation }}"
+        resourceUID: "{{ external_ip.metadata.uid }}"
+        observedGeneration: "{{ external_ip.metadata.generation | int }}"
+        data: >-
+          {{ osac_external_ip_result_data | default({}) }}
+    per_host: false
+    aggregate: false
+  when: not ansible_check_mode

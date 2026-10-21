@@ -20,6 +20,8 @@ const ClusterVersionField = ({
   name,
   fieldId = 'cluster-version',
   isDisabled = false,
+  isRequired = true,
+  labelInfo,
 }: ClusterVersionFieldProps) => {
   const { t } = useTranslation();
   const {
@@ -68,11 +70,12 @@ const ClusterVersionField = ({
           name={name}
           label={t('Version')}
           fieldId={fieldId}
-          isRequired
+          isRequired={isRequired}
           isDisabled={isDisabled}
           isLoading={versionsLoading}
           placeholder={t('Select a version')}
           options={versionOptions}
+          labelInfo={labelInfo}
         />
         {isSelectedDeprecated ? (
           <Alert

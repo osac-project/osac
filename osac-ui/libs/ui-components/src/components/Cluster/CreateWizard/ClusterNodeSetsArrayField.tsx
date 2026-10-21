@@ -10,6 +10,9 @@ import { useListResource } from '@osac/ui-components/api/use-resource';
 import { type ClusterNodeSetRow, createEmptyNodeSetRow } from './fields';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { getErrorMessage } from '../../../utils/error';
+import { getVisibleFieldError } from '../../Form/fieldError';
+import { useShowFieldValidationErrors } from '../../Form/FieldValidationContext';
+import { FormFieldHelper } from '../../Form/FormFieldHelper';
 import ClusterPoolSizeField from '../../Form/ClusterPoolSizeField';
 import NameField from '../../Form/NameField';
 import { SelectField } from '../../Form/SelectField';
@@ -22,7 +25,9 @@ const ClusterNodeSetsArrayField = ({
 }: ProvisioningFieldControlProps) => {
   const { t } = useTranslation();
   const { setFieldValue } = useFormikContext();
-  const [field, , helpers] = useField<ClusterNodeSetRow[]>(name);
+  const [field, meta, helpers] = useField<ClusterNodeSetRow[]>(name);
+  const showValidationErrors = useShowFieldValidationErrors();
+  const error = getVisibleFieldError(meta, showValidationErrors);
   const rows = useMemo(() => field.value ?? [], [field.value]);
   const {
     data: hostTypes,
@@ -79,6 +84,11 @@ const ClusterNodeSetsArrayField = ({
               {t('catalogProvision.actions.retry')}
             </Button>
           </Alert>
+        </StackItem>
+      ) : null}
+      {error ? (
+        <StackItem>
+          <FormFieldHelper error={error} fieldId={`${name}-error`} />
         </StackItem>
       ) : null}
       {rows.length === 0 ? <StackItem>{t('No node sets added yet.')}</StackItem> : null}

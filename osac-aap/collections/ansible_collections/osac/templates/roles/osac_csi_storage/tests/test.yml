@@ -225,7 +225,9 @@
           ansible.builtin.set_fact:
             osac_csi_driver_vendor_node_socket_paths:
               vast: /var/lib/kubelet/plugins/vast.csi.com
-              pure: /var/lib/kubelet/plugins/pure.csi.com/csi.sock
+              netapp: /var/lib/kubelet/plugins/trident.csi.com
+              pure-flashblade: /var/lib/kubelet/plugins/pure.csi.com/csi.sock
+              pure-flasharray: /var/lib/kubelet/plugins/pure.csi.com/csi.sock
             _derived_sockets: >-
               {% set _pairs = [] -%}
               {% for _k, _v in osac_csi_driver_vendor_node_socket_paths.items() -%}
@@ -237,5 +239,10 @@
         - name: Assert vendor sockets derived correctly
           ansible.builtin.assert:
             that:
-              - "_derived_sockets == 'pure=/var/lib/kubelet/plugins/pure.csi.com/csi.sock,vast=/var/lib/kubelet/plugins/vast.csi.com/csi.sock'"
+              - >-
+                _derived_sockets ==
+                'netapp=/var/lib/kubelet/plugins/trident.csi.com/csi.sock,' ~
+                'pure-flasharray=/var/lib/kubelet/plugins/pure.csi.com/csi.sock,' ~
+                'pure-flashblade=/var/lib/kubelet/plugins/pure.csi.com/csi.sock,' ~
+                'vast=/var/lib/kubelet/plugins/vast.csi.com/csi.sock'
             success_msg: "Vendor sockets derived correctly"

@@ -1250,3 +1250,62 @@
               Null backend_id was not caught by validation (OSAC-4956 regression):
               {{ ansible_failed_result.msg | default('unknown error') }}
             success_msg: "Null backend_id correctly rejected by validation"
+
+# ──────────────────────────────────────────────────────────────
+# Test 29: Product routing keys resolve to their CSI backend vendors
+# Expected: NetApp maps to Trident and Pure maps to Pure.
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- product routing aliases resolve to CSI backend vendors
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Set provider keys for routing alias test
+      ansible.builtin.set_fact:
+        _unique_providers:
+          - vast
+          - netapp
+          - pure
+          - lvms
+          - unknown
+
+    - name: Resolve CSI backend vendors from product keys
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+        tasks_from: resolve_csi_backend_vendors.yaml
+
+    - name: Assert product keys map to supported vendor controller names
+      ansible.builtin.assert:
+        that:
+          - _this_tenant_vendors == ['vast', 'trident', 'pure']
+        fail_msg: "Unexpected CSI backend vendor mapping: {{ _this_tenant_vendors }}"
+        success_msg: "Product routing keys resolve to their CSI backend vendor names"
+
+- name: Test storage_provider -- CSI products dispatch to the shared CSI storage role
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _storage_provider_tiers:
+      - name: netapp-tier
+        provider: netapp
+      - name: pure-tier
+        provider: pure
+    storage_provider_backend_connections: {}
+    tenant_name: provider-routing-test
+    _all_tenant_configs: {}
+    _dispatch_action: setup
+
+  tasks:
+    - name: Dispatch CSI-managed providers through their shared storage role
+      ansible.builtin.include_tasks: ../tasks/_dispatch_provider.yaml
+      loop:
+        - netapp
+        - pure
+      loop_control:
+        loop_var: _current_provider
+
+    - name: Verify the shared CSI role preserves each provider identity
+      ansible.builtin.assert:
+        that:
+          - _all_tenant_configs['netapp'].provider == 'netapp'
+          - _all_tenant_configs['pure'].provider == 'pure'

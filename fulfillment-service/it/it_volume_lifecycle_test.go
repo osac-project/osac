@@ -75,7 +75,7 @@ var _ = Describe("Volume lifecycle", func() {
 						Name: backendName,
 					}.Build(),
 					Spec: privatev1.StorageBackendSpec_builder{
-						Provider: "test-provider",
+						Provider: "vast",
 						Endpoint: "https://test-storage:8443",
 						Credentials: privatev1.StorageBackendCredentials_builder{
 							Username: "admin",
@@ -186,7 +186,7 @@ var _ = Describe("Volume lifecycle", func() {
 		Expect(err).ToNot(HaveOccurred())
 		vol := getResp.GetObject()
 		Expect(vol.GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_CREATING))
-		Expect(vol.GetStatus().GetProvider()).To(Equal("test-provider"))
+		Expect(vol.GetStatus().GetProvider()).To(Equal("vast"))
 		Expect(vol.GetStatus().ProtoReflect().Descriptor().Fields().ByName("backend")).To(BeNil())
 		Expect(vol.GetStatus().GetProtocol()).To(Equal(privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK))
 		Expect(vol.GetMetadata().GetProject()).To(Equal(project))
@@ -321,7 +321,7 @@ var _ = Describe("Volume lifecycle", func() {
 							Name: backend2Name,
 						}.Build(),
 						Spec: privatev1.StorageBackendSpec_builder{
-							Provider: "test-provider-nfs",
+							Provider: "netapp",
 							Endpoint: "https://test-nfs:2049",
 							Credentials: privatev1.StorageBackendCredentials_builder{
 								Username: "admin",
@@ -392,7 +392,7 @@ var _ = Describe("Volume lifecycle", func() {
 			vol2Get, err := volumesClient.Get(ctx,
 				privatev1.VolumesGetRequest_builder{Id: vol2Id}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(vol2Get.GetObject().GetStatus().GetProvider()).To(Equal("test-provider-nfs"))
+			Expect(vol2Get.GetObject().GetStatus().GetProvider()).To(Equal("netapp"))
 			Expect(vol2Get.GetObject().GetStatus().GetProtocol()).To(Equal(privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS))
 
 			// Create volume with original BLOCK tier → should resolve to original backend
@@ -423,7 +423,7 @@ var _ = Describe("Volume lifecycle", func() {
 			vol1Get, err := volumesClient.Get(ctx,
 				privatev1.VolumesGetRequest_builder{Id: vol1Id}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(vol1Get.GetObject().GetStatus().GetProvider()).To(Equal("test-provider"))
+			Expect(vol1Get.GetObject().GetStatus().GetProvider()).To(Equal("vast"))
 			Expect(vol1Get.GetObject().GetStatus().GetProtocol()).To(Equal(privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK))
 		})
 	})

@@ -1,0 +1,23 @@
+apiVersion: nmstate.io/v1
+kind: NodeNetworkConfigurationPolicy
+metadata:
+  name: "fabric-bgp-{{ worker_node_name }}"
+  labels:
+    osac.openshift.io/managed-by: fabric-bgp-config
+    osac.openshift.io/worker: "{{ worker_node_name }}"
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: "{{ worker_node_name }}"
+  desiredState:
+    interfaces:
+      - name: "{{ worker_interface }}"
+        type: ethernet
+        state: up
+        ipv4:
+          enabled: true
+          dhcp: false
+          address:
+            - ip: "{{ worker_local_address | ansible.utils.ipaddr('address') }}"
+              prefix-length: {{ worker_local_address | ansible.utils.ipaddr('prefix') }}
+        ipv6:
+          enabled: false

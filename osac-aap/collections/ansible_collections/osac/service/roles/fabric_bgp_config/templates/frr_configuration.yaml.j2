@@ -1,0 +1,41 @@
+apiVersion: frrk8s.metallb.io/v1beta1
+kind: FRRConfiguration
+metadata:
+  name: "fabric-bgp-{{ worker_node_name }}"
+  namespace: "{{ fabric_bgp_frr_namespace }}"
+  labels:
+    osac.openshift.io/managed-by: fabric-bgp-config
+    osac.openshift.io/worker: "{{ worker_node_name }}"
+spec:
+  nodeSelector:
+    matchLabels:
+      kubernetes.io/hostname: "{{ worker_node_name }}"
+  bgp:
+    routers:
+      - asn: {{ worker_local_asn | int }}
+        prefixes:
+          - "{{ worker_local_vtep }}"
+        neighbors:
+          - address: "{{ worker_peer_address }}"
+            asn: {{ worker_peer_asn | int }}
+            sourceaddress: "{{ worker_local_address | ansible.utils.ipaddr('address') }}"
+            ebgpMultiHop: {{ 'true' if worker_ebgp_multihop else 'false' }}
+            enableGracefulRestart: {{ 'true' if worker_graceful_restart else 'false' }}
+            allowAsIn: "origin"
+            addressFamilies:
+              - unicast
+              - evpn
+            toAdvertise:
+              allowed:
+                mode: filtered
+                prefixes:
+                  - "{{ worker_local_vtep }}"
+            toReceive:
+              allowed:
+                mode: filtered
+                prefixes:
+{% for range in worker_remote_vtep_ranges %}
+                  - prefix: "{{ range }}"
+                    ge: 32
+                    le: 32
+{% endfor %}

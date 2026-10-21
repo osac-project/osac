@@ -14,7 +14,9 @@ argument_specs:
         type: dict
         required: false
         default: {}
-        description: Template-specific parameters
+        description: >-
+          Template-specific parameters. May include a fabricBGP block
+          with enabled, workers list for post-CUDN BGP/EVPN config.
       l2_vni:
         type: str
         required: true

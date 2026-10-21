@@ -1,0 +1,140 @@
+---
+# Validate and apply direct worker-to-fabric BGP/EVPN configuration.
+# Uses only FRR-K8s typed API fields; no raw FRR config.
+
+- name: Validate fabric BGP worker list is nonempty
+  ansible.builtin.assert:
+    that:
+      - fabric_bgp_workers is defined
+      - fabric_bgp_workers | length > 0
+    fail_msg: >-
+      fabricBGP.workers must be a nonempty list. No resources were
+      changed.
+
+- name: Validate each worker entry
+  ansible.builtin.assert:
+    that:
+      - item.nodeName is defined and item.nodeName | trim | length > 0
+      - item.interface is defined and item.interface | trim | length > 0
+      - >-
+        item.localAddress is defined and
+        item.localAddress | ansible.utils.ipaddr('address') | length > 0
+      - >-
+        item.peerAddress is defined and
+        item.peerAddress | ansible.utils.ipv4 | length > 0
+      - >-
+        item.localASN is defined and
+        item.localASN | int >= 1 and
+        item.localASN | int <= 4294967295
+      - >-
+        item.peerASN is defined and
+        item.peerASN | int >= 1 and
+        item.peerASN | int <= 4294967295
+      - >-
+        item.localVTEP is defined and
+        item.localVTEP is match('^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/32$')
+      - >-
+        item.remoteVTEPRanges is defined and
+        item.remoteVTEPRanges | length > 0
+    fail_msg: >-
+      Worker '{{ item.nodeName | default("unknown") }}' has invalid
+      fabric BGP configuration. Each worker requires nodeName,
+      interface, localAddress (CIDR), peerAddress (IPv4),
+      localASN (1-4294967295), peerASN (1-4294967295),
+      localVTEP (/32 CIDR), and a nonempty remoteVTEPRanges list.
+      No Kubernetes resources were changed.
+  loop: "{{ fabric_bgp_workers }}"
+  loop_control:
+    label: "{{ item.nodeName | default('unknown') }}"
+
+- name: Validate remote VTEP ranges are valid CIDRs
+  ansible.builtin.assert:
+    that:
+      - >-
+        range | ansible.utils.ipaddr('network/prefix') | length > 0
+    fail_msg: >-
+      Remote VTEP range '{{ range }}' for worker
+      '{{ worker.nodeName }}' is not a valid CIDR. No Kubernetes
+      resources were changed.
+  loop: >-
+    {{ fabric_bgp_workers | subelements('remoteVTEPRanges') }}
+  loop_control:
+    label: "{{ worker.nodeName }}: {{ range }}"
+  vars:
+    worker: "{{ item.0 }}"
+    range: "{{ item.1 }}"
+
+- name: Check FRRConfiguration CRD availability
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ fabric_bgp_remote_kubeconfig | default(omit) }}"
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: frrconfigurations.frrk8s.metallb.io
+  register: _fabric_bgp_frr_crd
+
+- name: Validate FRRConfiguration CRD is installed
+  ansible.builtin.assert:
+    that:
+      - _fabric_bgp_frr_crd.resources | length == 1
+    fail_msg: >-
+      FRRConfiguration CRD (frrk8s.metallb.io) is not installed on
+      the target cluster. The MetalLB operator with FRR mode is
+      required. No Kubernetes resources were changed.
+
+- name: Check NodeNetworkConfigurationPolicy CRD availability
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ fabric_bgp_remote_kubeconfig | default(omit) }}"
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: nodenetworkconfigurationpolicies.nmstate.io
+  register: _fabric_bgp_nncp_crd
+
+- name: Validate NNCP CRD is installed
+  ansible.builtin.assert:
+    that:
+      - _fabric_bgp_nncp_crd.resources | length == 1
+    fail_msg: >-
+      NodeNetworkConfigurationPolicy CRD (nmstate.io) is not
+      installed on the target cluster. The NMState operator is
+      required. No Kubernetes resources were changed.
+
+- name: Apply NMState policy for each worker
+  kubernetes.core.k8s:
+    kubeconfig: "{{ fabric_bgp_remote_kubeconfig | default(omit) }}"
+    state: present
+    definition: "{{ lookup('template', 'nncp.yaml.j2') }}"
+  loop: "{{ fabric_bgp_workers }}"
+  loop_control:
+    loop_var: _fabric_bgp_worker
+    label: "{{ _fabric_bgp_worker.nodeName }}"
+  vars:
+    worker_node_name: "{{ _fabric_bgp_worker.nodeName }}"
+    worker_interface: "{{ _fabric_bgp_worker.interface }}"
+    worker_local_address: "{{ _fabric_bgp_worker.localAddress }}"
+
+- name: Apply FRRConfiguration for each worker
+  kubernetes.core.k8s:
+    kubeconfig: "{{ fabric_bgp_remote_kubeconfig | default(omit) }}"
+    state: present
+    definition: "{{ lookup('template', 'frr_configuration.yaml.j2') }}"
+  loop: "{{ fabric_bgp_workers }}"
+  loop_control:
+    loop_var: _fabric_bgp_worker
+    label: "{{ _fabric_bgp_worker.nodeName }}"
+  vars:
+    worker_node_name: "{{ _fabric_bgp_worker.nodeName }}"
+    worker_local_asn: "{{ _fabric_bgp_worker.localASN }}"
+    worker_peer_address: "{{ _fabric_bgp_worker.peerAddress }}"
+    worker_peer_asn: "{{ _fabric_bgp_worker.peerASN }}"
+    worker_local_address: "{{ _fabric_bgp_worker.localAddress }}"
+    worker_local_vtep: "{{ _fabric_bgp_worker.localVTEP }}"
+    worker_remote_vtep_ranges: "{{ _fabric_bgp_worker.remoteVTEPRanges }}"
+    worker_ebgp_multihop: "{{ _fabric_bgp_worker.ebgpMultihop | default(true) }}"
+    worker_graceful_restart: "{{ _fabric_bgp_worker.gracefulRestart | default(true) }}"
+
+- name: Log fabric BGP configuration summary
+  ansible.builtin.debug:
+    msg: >-
+      Applied fabric BGP configuration for
+      {{ fabric_bgp_workers | length }} worker(s):
+      {{ fabric_bgp_workers | map(attribute='nodeName') | list }}

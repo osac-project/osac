@@ -2649,6 +2649,9 @@
         "netris": {
           "$ref": "#/$defs/networkingNetris"
         },
+        "fabricBGP": {
+          "$ref": "#/$defs/networkingFabricBGP"
+        },
         "networkClass": {
           "$ref": "#/$defs/networkingNetworkClass"
         }
@@ -2983,6 +2986,95 @@
         "NETRIS_TENANT_NAME": {
           "type": "string",
           "description": "Netris tenant name. Must match between AAP instance groups."
+        }
+      }
+    },
+    "networkingFabricBGP": {
+      "type": "object",
+      "description": "Direct worker-to-fabric BGP/EVPN peering applied after the CUDN is Ready. Each worker entry configures a dedicated physical NIC with numbered P2P eBGP and strict VTEP /32 route filtering.",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable post-cluster-ready fabric BGP/EVPN configuration",
+          "default": false
+        },
+        "workers": {
+          "type": "array",
+          "description": "Per-worker BGP peering entries",
+          "default": [],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "nodeName",
+              "interface",
+              "localAddress",
+              "peerAddress",
+              "localASN",
+              "peerASN",
+              "localVTEP",
+              "remoteVTEPRanges"
+            ],
+            "properties": {
+              "nodeName": {
+                "type": "string",
+                "description": "Kubernetes node name of the worker",
+                "minLength": 1
+              },
+              "interface": {
+                "type": "string",
+                "description": "Dedicated physical NIC name (not br-ex)",
+                "minLength": 1
+              },
+              "localAddress": {
+                "type": "string",
+                "description": "Local P2P address in CIDR notation (e.g. 10.1.0.1/30)",
+                "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+/[0-9]+$"
+              },
+              "peerAddress": {
+                "type": "string",
+                "description": "Fabric switch peer IPv4 address",
+                "format": "ipv4"
+              },
+              "localASN": {
+                "type": "integer",
+                "description": "Worker-side BGP autonomous system number",
+                "minimum": 1,
+                "maximum": 4294967295
+              },
+              "peerASN": {
+                "type": "integer",
+                "description": "Fabric-side BGP autonomous system number",
+                "minimum": 1,
+                "maximum": 4294967295
+              },
+              "localVTEP": {
+                "type": "string",
+                "description": "Local VTEP address as /32 CIDR (e.g. 10.1.0.1/32)",
+                "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+/32$"
+              },
+              "remoteVTEPRanges": {
+                "type": "array",
+                "description": "Approved remote VTEP ranges; only /32 routes within these ranges are accepted",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+/[0-9]+$"
+                }
+              },
+              "ebgpMultihop": {
+                "type": "boolean",
+                "description": "Enable eBGP multihop",
+                "default": true
+              },
+              "gracefulRestart": {
+                "type": "boolean",
+                "description": "Enable BGP graceful restart",
+                "default": true
+              }
+            }
+          }
         }
       }
     },

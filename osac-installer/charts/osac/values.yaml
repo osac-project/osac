@@ -67,6 +67,26 @@ global:
       mgmtVpcId: ""
       mgmtVpcName: ""
       resourceClassMap: ""
+    # Direct worker-to-fabric BGP/EVPN peering applied after the CUDN
+    # is Ready. Each worker entry configures a dedicated physical NIC
+    # (no br-ex, VLAN, macVNI, or ipVNI) with numbered P2P eBGP and
+    # strict VTEP /32 route filtering. Requires the MetalLB/FRR-K8s
+    # and NMState operators on the target cluster.
+    fabricBGP:
+      enabled: false
+      workers: []
+      # workers:
+      #   - nodeName: "worker-0"
+      #     interface: "ens5f0"
+      #     localAddress: "10.1.0.1/30"
+      #     peerAddress: "10.1.0.2"
+      #     localASN: 64512
+      #     peerASN: 65000
+      #     localVTEP: "10.1.0.1/32"
+      #     remoteVTEPRanges:
+      #       - "10.2.0.0/16"
+      #     ebgpMultihop: true
+      #     gracefulRestart: true
     # An empty block causes Helm to generate the default NetworkClass from
     # fabricManager/k8sManager. Explicit fields override generated values.
     networkClass: {}

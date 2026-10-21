@@ -1,0 +1,55 @@
+---
+argument_specs:
+  main:
+    options:
+      fabric_bgp_state:
+        type: str
+        choices: [present, absent]
+        required: true
+        description: Whether to create or delete fabric BGP resources.
+
+  create:
+    options:
+      fabric_bgp_workers:
+        type: list
+        elements: dict
+        required: true
+        description: >-
+          Per-worker BGP peering configuration. Each entry must include
+          nodeName, interface, localAddress (CIDR), peerAddress,
+          localASN, peerASN, localVTEP (/32 CIDR), and a nonempty
+          remoteVTEPRanges list.
+      fabric_bgp_remote_kubeconfig:
+        type: str
+        required: false
+        description: >-
+          Path to the remote cluster kubeconfig. When omitted, the
+          role uses the current kubeconfig context.
+      fabric_bgp_frr_namespace:
+        type: str
+        required: false
+        default: metallb-system
+        description: >-
+          Namespace for FRRConfiguration resources (must match the
+          FRR-K8s operator's watch namespace).
+
+  delete:
+    options:
+      fabric_bgp_workers:
+        type: list
+        elements: dict
+        required: true
+        description: >-
+          Per-worker entries whose fabric BGP resources should be
+          removed. Only nodeName is required for deletion.
+      fabric_bgp_remote_kubeconfig:
+        type: str
+        required: false
+        description: >-
+          Path to the remote cluster kubeconfig.
+      fabric_bgp_frr_namespace:
+        type: str
+        required: false
+        default: metallb-system
+        description: >-
+          Namespace for FRRConfiguration resources.

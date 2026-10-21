@@ -1,0 +1,34 @@
+---
+# Idempotent removal of worker-to-fabric BGP/EVPN resources.
+
+- name: Delete FRRConfiguration for each worker
+  kubernetes.core.k8s:
+    kubeconfig: "{{ fabric_bgp_remote_kubeconfig | default(omit) }}"
+    state: absent
+    api_version: frrk8s.metallb.io/v1beta1
+    kind: FRRConfiguration
+    name: "fabric-bgp-{{ _fabric_bgp_worker.nodeName }}"
+    namespace: "{{ fabric_bgp_frr_namespace }}"
+  loop: "{{ fabric_bgp_workers }}"
+  loop_control:
+    loop_var: _fabric_bgp_worker
+    label: "{{ _fabric_bgp_worker.nodeName }}"
+
+- name: Delete NMState policy for each worker
+  kubernetes.core.k8s:
+    kubeconfig: "{{ fabric_bgp_remote_kubeconfig | default(omit) }}"
+    state: absent
+    api_version: nmstate.io/v1
+    kind: NodeNetworkConfigurationPolicy
+    name: "fabric-bgp-{{ _fabric_bgp_worker.nodeName }}"
+  loop: "{{ fabric_bgp_workers }}"
+  loop_control:
+    loop_var: _fabric_bgp_worker
+    label: "{{ _fabric_bgp_worker.nodeName }}"
+
+- name: Log fabric BGP deletion summary
+  ansible.builtin.debug:
+    msg: >-
+      Removed fabric BGP configuration for
+      {{ fabric_bgp_workers | length }} worker(s):
+      {{ fabric_bgp_workers | map(attribute='nodeName') | list }}

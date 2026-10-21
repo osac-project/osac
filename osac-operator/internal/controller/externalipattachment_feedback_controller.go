@@ -159,11 +159,12 @@ func syncExternalIPAttachmentDelete(_ context.Context, obj *v1alpha1.ExternalIPA
 }
 
 func syncExternalIPAttachmentStateTransitionTime(obj *v1alpha1.ExternalIPAttachment, remote *privatev1.ExternalIPAttachment) {
-	if obj.Status.StateTransitionTime == nil {
+	at := stateTransitionTimeOf(obj.Status.StateTransitionTime, obj.DeletionTimestamp)
+	if at == nil {
 		remote.GetStatus().ClearStateTransitionTime()
 		return
 	}
-	remote.GetStatus().SetStateTransitionTime(timestamppb.New(obj.Status.StateTransitionTime.Time))
+	remote.GetStatus().SetStateTransitionTime(at)
 }
 
 func syncExternalIPAttachmentState(ctx context.Context, obj *v1alpha1.ExternalIPAttachment, remote *privatev1.ExternalIPAttachment) {

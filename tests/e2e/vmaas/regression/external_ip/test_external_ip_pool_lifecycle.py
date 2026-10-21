@@ -37,6 +37,7 @@ class TestExternalIPPoolLifecycle:
         metering: MeteringCollector,
     ) -> None:
         pool_id, pool_cr_name = external_ip_pool
+        pool_name = private_grpc.get_external_ip_pool(pool_id=pool_id)["object"]["metadata"]["name"]
         ip_id, ip_cr_name = external_ip
         (ci1_uuid, _ci1_name), (ci2_uuid, _ci2_name) = make_compute_instances(2)
 
@@ -49,7 +50,9 @@ class TestExternalIPPoolLifecycle:
         metering.expect(HEARTBEAT_TYPE, resource_id=ip_id, timeout=180)
         metering.verify()
         allocated = metering.get_event(HEARTBEAT_TYPE, resource_id=ip_id)
-        assert allocated["data"]["billing_dimensions"]["pool"] == pool_id
+        # References render by name in heartbeats: the pool dimension is the pool's
+        # name, the same contract as the instance_type dimension.
+        assert allocated["data"]["billing_dimensions"]["pool"] == pool_name
         assert allocated["data"]["billing_dimensions"]["ip_family"] == "ipv4"
         assert allocated["data"]["billing_dimensions"]["attached"] == "false"
 
@@ -78,9 +81,7 @@ class TestExternalIPPoolLifecycle:
         assert private_ip_obj["status"].get("attachmentTransitionTime")
         # The settled attachment is a dimension change, so the attached meter
         # starts billing: a heartbeat arrives with the attached dimensions.
-        attached_event = metering.heartbeat_with_dimensions(
-            ip_id, {"attached": "true"}, delay=5
-        )
+        attached_event = metering.heartbeat_with_dimensions(ip_id, {"attached": "true"}, delay=5)
         assert attached_event is not None, "no heartbeat with the attached dimensions arrived"
 
         # --- Detach (delete attachment) ---
@@ -119,12 +120,7 @@ class TestExternalIPPoolLifecycle:
             description="reattached ExternalIP attribution settlement",
         )
         assert second_private_ip["status"]["attribution"]["computeInstance"]["id"] == ci2_uuid
-        reattached_event = metering.heartbeat_with_dimensions(
-            ip_id,
-            {"attached": "true"},
-            after=attached_to,
-            delay=5,
-        )
+        reattached_event = metering.heartbeat_with_dimensions(ip_id, {"attached": "true"}, after=attached_to, delay=5)
         assert reattached_event is not None, "no heartbeat with the reattached dimensions arrived"
 
         ip_obj = grpc.get_external_ip(external_ip_id=ip_id)

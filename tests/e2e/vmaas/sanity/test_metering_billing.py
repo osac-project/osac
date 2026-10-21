@@ -29,6 +29,14 @@ from tests.e2e.core.helpers import (
     wait_for_provision,
     wait_for_restart,
     wait_for_running,
+    wait_for_security_group_cr,
+    wait_for_security_group_deletion,
+    wait_for_subnet_cr,
+    wait_for_subnet_deletion,
+    wait_for_subnet_ready,
+    wait_for_virtual_network_cr,
+    wait_for_virtual_network_deletion,
+    wait_for_virtual_network_ready,
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector, net_usage_past_by_dimension, parse_time
@@ -57,6 +65,64 @@ def metering_project(grpc: GRPCClient) -> Iterator[str]:
     yield name
     with contextlib.suppress(Exception):
         grpc.delete_project(project_id=project_id)
+
+
+@pytest.fixture
+def metering_network_attachment(
+    grpc: GRPCClient, k8s_hub_client: K8sClient, metering_project: str
+) -> Iterator[dict[str, object]]:
+    """A network attachment inside the metering project.
+
+    A compute instance's subnet reference resolves within the instance's
+    project, so a VM created in the metering project needs networking from
+    that project: the shared default networking lives outside it.
+    """
+    vn_id: str | None = None
+    vn_cr_name: str | None = None
+    subnet_id: str | None = None
+    subnet_cr_name: str | None = None
+    sg_id: str | None = None
+    sg_cr_name: str | None = None
+    try:
+        vn_id = grpc.create_virtual_network(
+            name=unique_name("e2e-metering-vn"), ipv4_cidr="10.215.0.0/16", project=metering_project
+        )
+        vn_cr_name = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)
+        wait_for_virtual_network_ready(k8s=k8s_hub_client, name=vn_cr_name)
+
+        subnet_id = grpc.create_subnet(
+            name=unique_name("e2e-metering-subnet"),
+            virtual_network=vn_id,
+            ipv4_cidr="10.215.100.0/24",
+            project=metering_project,
+        )
+        subnet_cr_name = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_id)
+        wait_for_subnet_ready(k8s=k8s_hub_client, name=subnet_cr_name)
+
+        sg_id = grpc.create_security_group_with_rules(
+            name=unique_name("e2e-metering-sg"),
+            virtual_network=vn_id,
+            ingress=[{"protocol": "PROTOCOL_ALL", "ipv4_cidr": "0.0.0.0/0"}],
+            egress=[{"protocol": "PROTOCOL_ALL", "ipv4_cidr": "0.0.0.0/0"}],
+            project=metering_project,
+        )
+        sg_cr_name = wait_for_security_group_cr(k8s=k8s_hub_client, uuid=sg_id)
+        yield {"subnet": subnet_id, "security_groups": [sg_id]}
+    finally:
+        with contextlib.suppress(Exception):
+            if sg_id is not None:
+                grpc.delete_security_group(sg_id=sg_id)
+                wait_for_security_group_deletion(k8s=k8s_hub_client, name=sg_cr_name)
+        with contextlib.suppress(Exception):
+            if subnet_id is not None:
+                grpc.delete_subnet(subnet_id=subnet_id)
+                if subnet_cr_name is not None:
+                    wait_for_subnet_deletion(k8s=k8s_hub_client, name=subnet_cr_name)
+        with contextlib.suppress(Exception):
+            if vn_id is not None:
+                grpc.delete_virtual_network(vn_id=vn_id)
+                if vn_cr_name is not None:
+                    wait_for_virtual_network_deletion(k8s=k8s_hub_client, name=vn_cr_name)
 
 
 def _create_vm(
@@ -145,13 +211,13 @@ def test_metering_heartbeat_envelope(
     grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     vm_template: str,
-    default_network_attachment: dict[str, object],
+    metering_network_attachment: dict[str, object],
     metering: MeteringCollector,
     metering_project: str,
 ) -> None:
     """A RUNNING VM bills: heartbeats arrive well-formed and name the running instance type."""
     uuid = _create_vm(
-        cli, vm_template=vm_template, network_attachment=default_network_attachment, project=metering_project
+        cli, vm_template=vm_template, network_attachment=metering_network_attachment, project=metering_project
     )
     ci_name: str | None = None
     try:
@@ -189,7 +255,7 @@ def test_metering_per_interval_continuation(
     grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     vm_template: str,
-    default_network_attachment: dict[str, object],
+    metering_network_attachment: dict[str, object],
     metering: MeteringCollector,
     metering_project: str,
 ) -> None:
@@ -199,7 +265,7 @@ def test_metering_per_interval_continuation(
     its interval's length in seconds.
     """
     uuid = _create_vm(
-        cli, vm_template=vm_template, network_attachment=default_network_attachment, project=metering_project
+        cli, vm_template=vm_template, network_attachment=metering_network_attachment, project=metering_project
     )
     ci_name: str | None = None
     try:
@@ -251,13 +317,13 @@ def test_metering_stop_ends_billing(
     k8s_hub_client: K8sClient,
     k8s_virt_client: K8sClient,
     vm_template: str,
-    default_network_attachment: dict[str, object],
+    metering_network_attachment: dict[str, object],
     metering: MeteringCollector,
     metering_project: str,
 ) -> None:
     """Stopping the VM ends its billing: a final partial interval arrives, then silence."""
     uuid = _create_vm(
-        cli, vm_template=vm_template, network_attachment=default_network_attachment, project=metering_project
+        cli, vm_template=vm_template, network_attachment=metering_network_attachment, project=metering_project
     )
     ci_name: str | None = None
     try:
@@ -348,7 +414,7 @@ def test_metering_resize_splits_dimensions(
     private_grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     vm_template: str,
-    default_network_attachment: dict[str, object],
+    metering_network_attachment: dict[str, object],
     metering: MeteringCollector,
     metering_project: str,
 ) -> None:
@@ -367,7 +433,7 @@ def test_metering_resize_splits_dimensions(
     ci_name: str | None = None
     try:
         uuid = _create_vm(
-            cli, vm_template=vm_template, network_attachment=default_network_attachment, project=metering_project
+            cli, vm_template=vm_template, network_attachment=metering_network_attachment, project=metering_project
         )
         ci_name = _wait_for_running_vm(k8s_hub_client, uuid=uuid)
         metering.heartbeat_with_dimensions(uuid, {"instance_type": old_type}, timeout=HEARTBEAT_TIMEOUT)
@@ -494,13 +560,13 @@ def test_metering_delete_ends_billing(
     grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     vm_template: str,
-    default_network_attachment: dict[str, object],
+    metering_network_attachment: dict[str, object],
     metering: MeteringCollector,
     metering_project: str,
 ) -> None:
     """Deleting the VM ends its billing: no heartbeats arrive after the deletion."""
     uuid = _create_vm(
-        cli, vm_template=vm_template, network_attachment=default_network_attachment, project=metering_project
+        cli, vm_template=vm_template, network_attachment=metering_network_attachment, project=metering_project
     )
     ci_name: str | None = None
     try:
@@ -568,7 +634,9 @@ def test_metering_external_ip_bills(
         assert data["usage"]["unit"] == "second", f"unit is {data['usage']['unit']!r}"
         assert heartbeat["osacresourcetype"] == "external_ip", f"resource type is {heartbeat['osacresourcetype']!r}"
         dimensions = data["billing_dimensions"]
-        assert dimensions["pool"] == pool_id, f"pool dimension is {dimensions.get('pool')!r}"
+        # References render by name in heartbeats: the pool dimension is the pool's
+        # name, the same contract as the instance_type dimension.
+        assert dimensions["pool"] == pool_name, f"pool dimension is {dimensions.get('pool')!r}"
         assert dimensions["ip_family"] == "ipv4", f"ip_family dimension is {dimensions.get('ip_family')!r}"
         assert dimensions["project"] == metering_project, (
             f"project dimension is {dimensions.get('project')!r}, want {metering_project!r}"

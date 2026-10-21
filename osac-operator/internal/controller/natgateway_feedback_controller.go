@@ -20,7 +20,6 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
@@ -122,11 +121,12 @@ func syncNATGatewayDelete(_ context.Context, obj *v1alpha1.NATGateway, remote *p
 }
 
 func syncNATGatewayStateTransitionTime(obj *v1alpha1.NATGateway, remote *privatev1.NATGateway) {
-	if obj.Status.StateTransitionTime == nil {
+	at := stateTransitionTimeOf(obj.Status.StateTransitionTime, obj.DeletionTimestamp)
+	if at == nil {
 		remote.GetStatus().ClearStateTransitionTime()
 		return
 	}
-	remote.GetStatus().SetStateTransitionTime(timestamppb.New(obj.Status.StateTransitionTime.Time))
+	remote.GetStatus().SetStateTransitionTime(at)
 }
 
 func syncNATGatewayPhase(ctx context.Context, obj *v1alpha1.NATGateway, remote *privatev1.NATGateway) {

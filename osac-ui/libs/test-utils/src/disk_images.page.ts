@@ -182,7 +182,15 @@ export const includeObsoleteDiskImages = async (page: Page): Promise<void> => {
 
 /** Confirm deletion and verify the disk image is absent, including obsolete rows. */
 export const deleteDiskImage = async (page: Page, diskImageName: string): Promise<void> => {
-  await page.getByRole('button', { name: 'Delete', exact: true }).click();
+  const obsoleteAction = page.getByRole('button', { name: 'Obsolete', exact: true });
+  const deleteAction = page.getByRole('button', { name: 'Delete', exact: true });
+  await expect(obsoleteAction.or(deleteAction)).toBeVisible();
+
+  if (await obsoleteAction.isVisible()) {
+    await transitionDiskImageLifecycle(page, 'Obsolete', 'Obsolete');
+  }
+
+  await deleteAction.click();
 
   const deleteDialog = page.locator(...DiskImageDetailPage.deleteDialog);
   await expect(deleteDialog).toBeVisible();

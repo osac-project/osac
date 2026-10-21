@@ -282,22 +282,29 @@ spec:
             ansible-builder create --output-filename Containerfile \
               -f execution-environment/execution-environment.yaml
 
-            # The generated Containerfile carries no version label at all
-            # (ansible-builder doesn't add one). Every other component
-            # gets its real version baked in via a LABEL that
+            # The generated Containerfile carries none of the required Red
+            # Hat product labels at all (ansible-builder doesn't add any).
+            # Every other component's committed Containerfile hand-sets
+            # three: name, cpe, and org.opencontainers.image.version (the
+            # latter sed-stamped to the real release version by
             # osac-build-and-publish.yaml's "Stamp charts and values" step
-            # sed's into its COMMITTED Containerfile on the release
-            # stamping commit -- not possible here since this Containerfile
-            # doesn't exist until this step generates it. Resolve the same
-            # real version a different way instead: by tag NAME (not git
-            # ancestry/revision -- see the chart-side rewrite-registry-
-            # image-refs task for the identical reasoning: per-release
-            # stamping commits are never merged into main, so neither
-            # --exact-match nor an ancestor-walking git describe can find
-            # an unbumped component's tag). Only done on the release
-            # trigger -- push/pull-request builds have no meaningful
-            # "real version" to stamp and are left unlabeled, same as
-            # every other component's un-stamped dev default effectively is.
+            # on the release stamping commit) -- not possible here since
+            # this Containerfile doesn't exist until this step generates
+            # it. Confirmed live this isn't optional: a real staging
+            # Release (osac-release-v0-0-42-attempt1) failed at the
+            # rh-advisories pipeline's check-labels task specifically
+            # because this component's image was missing name/cpe, after
+            # its own build/EC validation had already passed cleanly.
+            #
+            # Resolve the real version by tag NAME (not git ancestry/
+            # revision -- see the chart-side rewrite-registry-image-refs
+            # task for the identical reasoning: per-release stamping
+            # commits are never merged into main, so neither --exact-match
+            # nor an ancestor-walking git describe can find an unbumped
+            # component's tag). Only done on the release trigger --
+            # push/pull-request builds have no meaningful "real version"
+            # to stamp and are left unlabeled, same as every other
+            # component's un-stamped dev default effectively is.
             echo "Resolving real image version from osac-aap/v*..."
             git clone --filter=blob:none --no-checkout "$(params.git-url)" /tmp/repo
             cd /tmp/repo
@@ -308,8 +315,11 @@ spec:
               exit 1
             fi
             echo "Real image version: ${REAL_VERSION}"
-            echo "LABEL org.opencontainers.image.version=\"${REAL_VERSION}\"" \
-              >>/var/workdir/source/osac-aap/context/Containerfile
+            {
+              echo 'LABEL name="cloud-extensions/osac-aap-rhel10"'
+              echo 'LABEL cpe="cpe:/a:redhat:cloud_extensions:0.1::el10"'
+              echo "LABEL org.opencontainers.image.version=\"${REAL_VERSION}\""
+            } >>/var/workdir/source/osac-aap/context/Containerfile
         - name: create-trusted-artifact
           image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:6fdd8890c52acb20ffc5f2d2a6cab2a11b7a2e431bf175bf5577ae4b9849a434
           args:

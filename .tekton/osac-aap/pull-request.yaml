@@ -379,21 +379,6 @@ spec:
         value: $(params.prefetch-input)
       - name: enable-package-registry-proxy
         value: $(params.enable-package-registry-proxy)
-      - name: pip-index-url
-        # Red Hat's own trusted/rebuilt PyPI mirror. Fetching pip wheels
-        # through it instead of public PyPI is what the shared Enterprise
-        # Contract policy-data's hermeto:pip:package:binary except_when
-        # clause actually checks for (a repository_url purl qualifier
-        # matching this exact prefix) -- confirmed by pulling the real
-        # policy data and Hermeto's own purl-building source
-        # (PyPIPackage._make_purl stamps repository_url with whatever
-        # index was actually used). Without this, enabling "binary": {}
-        # prefetching (needed so sdist-only packages like ansible-core
-        # install as wheels instead of requiring a hermetic from-source
-        # build) unconditionally trips sbom_spdx.disallowed_package_
-        # attributes for every wheel -- confirmed via a real release's EC
-        # failure, 111 violations, one per prefetched wheel.
-        value: https://packages.redhat.com/trusted-libraries/python/
       - name: SOURCE_ARTIFACT
         value: $(tasks.clone-repository.results.SOURCE_ARTIFACT)
       - name: ociStorage

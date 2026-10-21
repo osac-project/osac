@@ -615,11 +615,11 @@ func (r *Round) diffAndCommit(
 		if err := database.EnqueueHeartbeats(ctx, tx, tenant, rows); err != nil {
 			return err
 		}
-		expected, err := expectedRows(expected, key)
+		rowsForLedger, err := expectedRows(expected, key)
 		if err != nil {
 			return err
 		}
-		if err := database.SyncLedger(ctx, tx, tenant, key, expected, tailFrom); err != nil {
+		if err := database.SyncLedger(ctx, tx, tenant, key, rowsForLedger, tailFrom); err != nil {
 			return err
 		}
 	}

@@ -77,6 +77,17 @@ func (r *Round) catchUp(ctx context.Context, tenant string) (bool, error) {
 			return false, ErrCrashed
 		}
 	}
+	if !finished && committed == 0 {
+		// The read collected records but every group was truncated by the idle
+		// timeout, so nothing was applied and the offset did not move. The next
+		// pass would read the identical records and truncate them again, silently
+		// stopping the tenant's billing. Refuse instead.
+		return false, fmt.Errorf(
+			"catch-up of %s read records above the stored offset %d but applied "+
+				"no complete round group; the tenant cannot progress",
+			tenant, progress.HeartbeatOffset,
+		)
+	}
 	return finished, nil
 }
 

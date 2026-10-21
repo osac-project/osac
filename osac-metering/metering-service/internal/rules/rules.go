@@ -264,7 +264,7 @@ func (r Revision) validate() error {
 				shared = meter.Billable.TurnsBillableOnce
 				continue
 			}
-			if fmt.Sprint(shared) != fmt.Sprint(meter.Billable.TurnsBillableOnce) {
+			if !slices.Equal(shared, meter.Billable.TurnsBillableOnce) {
 				return fmt.Errorf(
 					"revision %s: meters of %s confirm on different states, so the gate it "+
 						"passes to owned resources is ambiguous",

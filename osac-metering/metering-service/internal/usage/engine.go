@@ -375,6 +375,15 @@ func (c *Calculator) compute(
 			pieces = append(pieces, runPieces...)
 		}
 	}
+	// The loop above emits revision-major, meter-minor. applyRunThreshold stitches
+	// contiguous pieces of one meter, so a meter's pieces must be adjacent: sort by
+	// meter, then by start time.
+	sort.SliceStable(pieces, func(i, j int) bool {
+		if pieces[i].Key.Meter != pieces[j].Key.Meter {
+			return pieces[i].Key.Meter < pieces[j].Key.Meter
+		}
+		return pieces[i].StartTime.Before(pieces[j].StartTime)
+	})
 	pieces = applyRunThreshold(pieces, upTo)
 	if keep == nil {
 		return pieces, nil
@@ -443,12 +452,6 @@ func (c *Calculator) meterPieces(
 // shorter than the minimum bills nothing. A short stretch that is still open at the round
 // time collapses into one pending piece, so the round keeps watching it and bills it from
 // its start once it crosses the threshold.
-// applyRunThreshold enforces MinBillableRun on the quantity each meter will actually
-// emit. The pieces of one meter stitch into a stretch wherever they are contiguous,
-// including across a revision boundary: a run billable under consecutive revisions is
-// one stretch, and its pieces on both sides of the boundary count once toward the
-// threshold. A stretch shorter than the minimum bills nothing. A short stretch that is
-// still open at the round time collapses into one pending piece, so the round keeps
 // watching it and bills it from its start once it crosses the threshold.
 func applyRunThreshold(pieces []Piece, upTo time.Time) []Piece {
 	// Group the pieces into contiguous stretches of one meter.

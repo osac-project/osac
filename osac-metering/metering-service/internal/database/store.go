@@ -607,7 +607,7 @@ func (s *Store) DeleteTenantRows(ctx context.Context, tenant string) error {
 		return fmt.Errorf("deleting tenant %s: %w", tenant, err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	tables := []string{"history", "ledger", "outbox", "progress"}
+	tables := []string{"history", "ledger", "outbox", "progress", "replayed_heartbeats"}
 	for _, table := range tables {
 		if _, err := tx.Exec(
 			ctx, fmt.Sprintf("DELETE FROM %s WHERE tenant = $1", table), tenant,

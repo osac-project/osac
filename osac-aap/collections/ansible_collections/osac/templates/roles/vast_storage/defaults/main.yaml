@@ -22,14 +22,11 @@ vast_storage_config_namespace: >-
   {{ lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE')
      | default(lookup('file', '/var/run/secrets/kubernetes.io/serviceaccount/namespace', errors='ignore'), true) }}
 
-# TLS certificate validation for storage-workflow Ansible clients. The legacy
-# VAST_VALIDATE_CERTS variable remains a fallback for manually managed groups;
-# installer-managed groups set ENABLE_CERTIFICATE_VALIDATION.
-enable_certificate_validation: >-
-  {{ (lookup('env', 'ENABLE_CERTIFICATE_VALIDATION',
-             default=lookup('env', 'VAST_VALIDATE_CERTS', default='true')) | lower)
+# TLS certificate validation for VAST API clients. Keep the worker environment
+# provider-scoped; installer-managed groups set this from the storage TLS value.
+vast_storage_validate_certs: >-
+  {{ (lookup('env', 'VAST_VALIDATE_CERTS', default='true') | lower)
      not in ['false', '0', 'no', 'off'] }}
-vast_storage_validate_certs: "{{ enable_certificate_validation }}"
 
 # API timeout (seconds) passed to the vastdata.vms modules via the vms: connection dict.
 vast_storage_api_timeout: 30

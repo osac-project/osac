@@ -359,6 +359,12 @@ facade vs low-level surface mismatches).
 {{- $derived := dict "NETWORK_CLASS" "agentless_net" "NETWORK_STEPS_COLLECTION" "agentless_net.steps" -}}
 {{- $cfCfg = merge $derived $cfCfg -}}
 {{- end }}
+{{- $fabricBGP := $networking.fabricBGP | default dict -}}
+{{- if $fabricBGP.enabled -}}
+{{- $fbgpJSON := $fabricBGP | toJson -}}
+{{- $cfCfg = merge (dict "OSAC_FABRIC_BGP_CONFIG" $fbgpJSON) $cfCfg -}}
+{{- $nfCfg = merge (dict "OSAC_FABRIC_BGP_CONFIG" $fbgpJSON) $nfCfg -}}
+{{- end }}
 {{- end }}
 {{- $netrisConfigFields := list
   "NETRIS_CONTROLLER_URL"

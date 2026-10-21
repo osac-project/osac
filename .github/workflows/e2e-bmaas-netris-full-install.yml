@@ -41,10 +41,6 @@ on:
 
 jobs:
   e2e-bmaas-netris:
-    # Netris runs on an AWS lab and is described as taking hours.
-    # No recent schedule data (manual_only suite); 240 min is a
-    # conservative upper bound that catches indefinite hangs.
-    timeout-minutes: 240
     permissions:
       contents: read
       id-token: write

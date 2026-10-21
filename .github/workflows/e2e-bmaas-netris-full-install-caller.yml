@@ -137,8 +137,6 @@ jobs:
 
   e2e-bmaas-netris:
     needs: pr
-    # Match the timeout in e2e-bmaas-netris-full-install.yml.
-    timeout-minutes: 240
     permissions:
       contents: read
       id-token: write

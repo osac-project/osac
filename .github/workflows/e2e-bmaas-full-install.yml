@@ -62,10 +62,6 @@ on:
 
 jobs:
   e2e-bmaas-full-install:
-    # Successful runs take 54–84 min (20 schedule runs, Oct 17–21
-    # 2026). 120 min gives 43 % headroom for slow runs while
-    # catching hangs that otherwise burn the 360-min default.
-    timeout-minutes: 120
     permissions:
       contents: read
       # See e2e-vmaas-full-install.yml's identical grant for why this is needed.

@@ -1,0 +1,14 @@
+# Packages from requirements-build-tools.txt's own list that 404 on Red
+# Hat's trusted-libraries PyPI proxy (confirmed live against
+# https://packages.redhat.com/trusted-libraries/python/<name>/), so routed
+# to public PyPI instead via this file's own --index-url line, which
+# overrides prefetch-dependencies-oci-ta's pip-index-url fallback for this
+# file only (Hermeto resolves --index-url per requirements file, not per
+# package). All pure-Python, no C extensions, so sdist-only (no "binary"
+# allow-listing) is fine -- see the prefetch-input binary.packages
+# allow-list in the pipeline YAML, which intentionally excludes these.
+--index-url https://pypi.org/simple
+ansible-runner==2.4.3
+awxkit==24.6.1
+bindep==2.14.0
+ttp==0.10.1

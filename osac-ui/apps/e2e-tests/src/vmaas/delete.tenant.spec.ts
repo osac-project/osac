@@ -1,5 +1,6 @@
 import { test } from '@playwright/test';
 
+import { tenantName } from './test_data';
 import { openAndLoginWithEnvironment } from '../../../../libs/test-utils/src/general/open_and_login';
 import { openTenantsPage } from '../../../../libs/test-utils/src/main.page';
 import { deleteTenant } from '../../../../libs/test-utils/src/tenants.page';
@@ -7,12 +8,6 @@ import { deleteTenant } from '../../../../libs/test-utils/src/tenants.page';
 test('deletes the requested tenant', async ({ page }) => {
   // Allow the 120-second backend deletion wait plus login and UI actions to complete.
   test.setTimeout(180_000);
-
-  const tenantName = process.env.OSAC_TENANT_NAME;
-  if (!tenantName) {
-    test.skip(true, 'OSAC_TENANT_NAME is not set.');
-    return;
-  }
 
   // 1. Open the browser and log in.
   await openAndLoginWithEnvironment(page, '/');

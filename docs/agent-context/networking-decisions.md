@@ -128,16 +128,41 @@ the same AAP job's submitted `extra_vars`. Release continues to use the v1
 identity envelope with empty `data`.
 
 This implementation updates the allocation handoff in the accepted unified
-networking design. The contract amendment is to follow the deployed AgentlessNet
-ExternalIP E2E validation tracked with OSAC-6307. Netris ExternalIP adoption
-follows the same contract: the OSAC-6376 Netris v1 implementation dispatches by
-the `osac.openshift.io/externalip-contract-version` annotation. v1 resources
-run the `osac.templates.netris_external_ip` module, which reserves a UID-owned
-canonical IPv4 /32 nat reservation by Kubernetes UID and returns the exact
-`osac_result` v1 artifact at `data.address`; release removes that reservation
-and reports success only after confirmed absence. Netris v1 jobs do not query
-Kubernetes or mutate ExternalIP annotations or status; the operator owns
-status, finalizers, and capacity. Unversioned Netris resources retain the
-legacy name-owned annotation handoff until its removal (OSAC-6384), and the
-operator chart defaults the netris manager registration to the v1 contract
-while the manager itself stays disabled until an operator enables it.
+networking design, which now documents the same-job artifact and pool snapshot
+contract. Deployed AgentlessNet ExternalIP E2E validation is tracked with
+OSAC-6308. Netris ExternalIP adoption follows the same contract: the OSAC-6376
+Netris v1 implementation dispatches by the
+`osac.openshift.io/externalip-contract-version` annotation. v1 resources run the
+`osac.templates.netris_external_ip` module, which reserves a UID-owned canonical
+IPv4 /32 nat reservation by Kubernetes UID and returns the exact `osac_result`
+v1 artifact at `data.address`; release removes that reservation and reports
+success only after confirmed absence. Netris v1 jobs do not query Kubernetes or
+mutate ExternalIP annotations or status; the operator owns status, finalizers,
+and capacity. Unversioned Netris resources retain the legacy name-owned
+annotation handoff until its removal (OSAC-6384), and the operator chart
+defaults the netris manager registration to the v1 contract while the manager
+itself stays disabled until an operator enables it.
+
+## AgentlessNet ExternalIPAttachment implementation status
+
+The OSAC-6308 AgentlessNet v1 attachment flow is independently versioned by
+`externalIPAttachmentContractVersion`; it does not inherit the ExternalIP
+contract version. The ExternalIPAttachment controller resolves the ready
+ExternalIP, BareMetalInstance, primary Subnet, and VirtualNetwork, then sends
+their resource identities, tenant ownership, addresses, and readiness in the
+same AAP job input as the attachment CR. AAP does not query Kubernetes or write
+CR status. It reserves attachment state in the existing AgentlessNet SQLite
+schema-v1 database, installs inbound whole-address DNAT and scoped forwarding,
+and announces the ExternalIP `/32` through local FRR. The controller validates
+the returned artifact against the submitted input and current resource snapshot
+before marking the attachment Ready; detach uses saved provider state and keeps
+finalizers until its artifact is accepted.
+
+This first delivery supports BMaaS BareMetalInstance targets. It does not add
+SecurityGroup policy, NATGateway SNAT, IPv6, or an upstream-router/BGP-peer
+configuration API. The OSAC-1433 design's AAP input and attachment result
+contract specifies the controller-supplied dependency snapshot and
+same-job-result validation. AgentlessNet implements it under OSAC-6308. Netris
+must adopt the attachment v1 contract before advertising it; that work is
+tracked by OSAC-6638. The OSAC-6308 deployed E2E coverage uses a test-only static
+route and does not validate upstream BGP advertisement.

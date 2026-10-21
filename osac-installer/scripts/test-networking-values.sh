@@ -599,6 +599,17 @@ render_operator_success \
   --set global.networking.fabricManager=agentless_net \
   --set global.networking.k8sManager=
 
+render_operator_success \
+  agentless-net-attachment-contract \
+  'externalIPAttachmentContractVersion: "v1"' \
+  --set networkManagers.enabled=true \
+  --set global.networking.fabricManager=agentless_net \
+  --set global.networking.k8sManager=
+
+render_failure \
+  agentless-net-unsupported-attachment-contract \
+  --set operator.networkManagers.fabricManagers.agentless_net.externalIPAttachmentContractVersion=v2
+
 render_failure \
   agentless-net-unsupported-external-ip-contract \
   --set operator.networkManagers.fabricManagers.agentless_net.externalIPContractVersion=v2

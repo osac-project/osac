@@ -37,6 +37,7 @@ const (
 	aapExtraVarsKey
 	addOnOperatorNameKey
 	externalIPPoolKey
+	externalIPAttachmentContextKey
 )
 
 // TierDefinition is the flat, AAP-schema-shaped representation of a storage tier
@@ -98,6 +99,70 @@ type ExternalIPPoolContext struct {
 	TenantID      string
 	CIDR          string
 	Phase         string
+}
+
+// ExternalIPAttachmentContext is the controller-resolved dependency snapshot
+// supplied to v1 attachment jobs. AAP consumes it without querying Kubernetes.
+type ExternalIPAttachmentContext struct {
+	ExternalIP     ExternalIPAttachmentExternalIPContext     `json:"external_ip"`
+	Target         ExternalIPAttachmentTargetContext         `json:"target"`
+	Subnet         ExternalIPAttachmentSubnetContext         `json:"subnet"`
+	VirtualNetwork ExternalIPAttachmentVirtualNetworkContext `json:"virtual_network"`
+}
+
+type ExternalIPAttachmentExternalIPContext struct {
+	Name          string `json:"name"`
+	Namespace     string `json:"namespace"`
+	FulfillmentID string `json:"fulfillment_id"`
+	KubernetesUID string `json:"kubernetes_uid"`
+	TenantID      string `json:"tenant_id"`
+	Address       string `json:"address"`
+	State         string `json:"state"`
+	Phase         string `json:"phase"`
+}
+
+type ExternalIPAttachmentTargetContext struct {
+	Kind          string `json:"kind"`
+	Name          string `json:"name"`
+	Namespace     string `json:"namespace"`
+	FulfillmentID string `json:"fulfillment_id"`
+	KubernetesUID string `json:"kubernetes_uid"`
+	TenantID      string `json:"tenant_id"`
+	IPAddress     string `json:"ip_address"`
+	Ready         bool   `json:"ready"`
+}
+
+type ExternalIPAttachmentSubnetContext struct {
+	Name             string `json:"name"`
+	Namespace        string `json:"namespace"`
+	FulfillmentID    string `json:"fulfillment_id"`
+	KubernetesUID    string `json:"kubernetes_uid"`
+	TenantID         string `json:"tenant_id"`
+	IPv4CIDR         string `json:"ipv4_cidr"`
+	VirtualNetworkID string `json:"virtual_network_id"`
+	Phase            string `json:"phase"`
+}
+
+type ExternalIPAttachmentVirtualNetworkContext struct {
+	Name          string `json:"name"`
+	Namespace     string `json:"namespace"`
+	FulfillmentID string `json:"fulfillment_id"`
+	KubernetesUID string `json:"kubernetes_uid"`
+	TenantID      string `json:"tenant_id"`
+	Phase         string `json:"phase"`
+}
+
+// WithExternalIPAttachmentContext returns a context carrying the current
+// attachment dependency snapshot for AAP extra_vars.
+func WithExternalIPAttachmentContext(ctx context.Context, value ExternalIPAttachmentContext) context.Context {
+	return context.WithValue(ctx, externalIPAttachmentContextKey, value)
+}
+
+// ExternalIPAttachmentContextFromContext retrieves the controller-supplied
+// snapshot, or its zero value when the job is not an attachment job.
+func ExternalIPAttachmentContextFromContext(ctx context.Context) ExternalIPAttachmentContext {
+	value, _ := ctx.Value(externalIPAttachmentContextKey).(ExternalIPAttachmentContext)
+	return value
 }
 
 // WithExternalIPPool returns a context carrying the selected ExternalIPPool.

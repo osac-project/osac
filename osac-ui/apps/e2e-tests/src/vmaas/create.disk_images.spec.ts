@@ -12,13 +12,7 @@ import { openDiskImagesPage } from '../../../../libs/test-utils/src/main.page';
 test('creates a VM-ready disk image from Infrastructure', async ({ page }) => {
   // Allow remote login, navigation, and disk image creation to complete.
   test.setTimeout(120_000);
-  const diskImageName = process.env.OSAC_DISK_IMAGE_NAME;
-  if (!diskImageName) {
-    test.skip(true, 'Set OSAC_DISK_IMAGE_NAME to pair creation with lifecycle and deletion.');
-    return;
-  }
-
-  const diskImage = { ...diskImageTestData, name: diskImageName };
+  const diskImage = diskImageTestData;
 
   // 1. Open the browser and log in.
   await openAndLoginWithEnvironment(page, '/');

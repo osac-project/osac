@@ -63,30 +63,24 @@ or the session has expired, re-run `pnpm playwright:setup` first.
 
 ### Tenant and disk image flow tests
 
-The create, lifecycle, and delete specs use these resource names. For a
-combined run, set each name to a resource that does not already exist:
+The create, lifecycle, and delete specs read resource names and disk image
+values from `apps/e2e-tests/extravars.yaml`. Before running, set `tenant_name`
+to a tenant that does not already exist and set `disk_image.name` to a unique
+name for the target cluster.
 
-| Variable               | Description                                                                                                                                        |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OSAC_TENANT_NAME`     | Tenant name used by the create and delete flows. The create flow requires that it does not already exist; the delete flow requires that it exists. |
-| `OSAC_DISK_IMAGE_NAME` | Unique DNS-label name used by the disk image create, lifecycle, and delete flows.                                                                  |
+The tenant create flow requires that the configured tenant does not already
+exist; the delete flow requires that it exists. The disk image create, lifecycle,
+and delete flows use the configured disk image values and lifecycle actions.
+The create project owns the delete project as teardown, so cleanup runs after
+the lifecycle project even if a lifecycle assertion fails.
 
-Tenant tests are skipped when `OSAC_TENANT_NAME` is unset. Disk image tests
-are skipped when `OSAC_DISK_IMAGE_NAME` is unset. Set a unique
-`OSAC_DISK_IMAGE_NAME` to run the disk image create, lifecycle, and delete
-flows together. Disk image source, architecture, scope, and lifecycle actions
-are read from `apps/e2e-tests/extravars.yaml`. The create project owns the
-delete project as teardown, so cleanup runs after the lifecycle project even
-if a lifecycle assertion fails.
-
-Set the variables before running the flows:
+Set the deployment and login variables from the [Running](#running) section,
+then run the flows:
 
 ```bash
 export OSAC_UI_BASE_URL=https://osac-ui-<namespace>.<cluster-domain>
 export OSAC_USERNAME=<keycloak-user>
 read -rs OSAC_PASSWORD && export OSAC_PASSWORD
-export OSAC_TENANT_NAME=tenant1
-export OSAC_DISK_IMAGE_NAME=fedora-e2e-unique
 ```
 
 Run the tenant create and delete flows together. The `vmaas-delete` project

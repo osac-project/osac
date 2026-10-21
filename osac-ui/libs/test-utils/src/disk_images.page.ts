@@ -16,7 +16,6 @@ export interface DiskImageCreateParams {
 }
 
 export type DiskImageLifecycleState = 'Available' | 'Deprecated' | 'Obsolete';
-export type DiskImageLifecycleAction = 'Deprecate' | 'Obsolete' | 'Reactivate';
 
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -101,7 +100,7 @@ export const expectDiskImageLifecycle = async (
 /** Click a lifecycle action and verify the resulting lifecycle text. */
 export const transitionDiskImageLifecycle = async (
   page: Page,
-  action: DiskImageLifecycleAction,
+  action: string,
   expectedLifecycle: DiskImageLifecycleState,
 ): Promise<void> => {
   await page.getByRole('button', { name: action, exact: true }).click();

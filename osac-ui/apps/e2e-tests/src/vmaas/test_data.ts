@@ -3,10 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
 
-import type {
-  DiskImageCreateParams,
-  DiskImageLifecycleAction,
-} from '../../../../libs/test-utils/src/disk_images.page';
+import type { DiskImageCreateParams } from '../../../../libs/test-utils/src/disk_images.page';
 import type {
   InstanceTypeGpu,
   InstanceTypeLifecycleAction,
@@ -24,21 +21,22 @@ interface RawInstanceType {
   vcpus: number;
   memory_gib: number;
   gpu?: RawInstanceTypeGpu;
-  lifecycle_actions: InstanceTypeLifecycleAction[];
 }
 
 interface RawDiskImage {
+  name: string;
   source_type: string;
   source_ref: string;
   guest_os_family: string;
   architectures: [string, ...string[]];
   scope: string;
-  lifecycle_actions: DiskImageLifecycleAction[];
 }
 
 interface RawExtravars {
   instance_type: RawInstanceType;
   disk_image: RawDiskImage;
+  lifecycle_actions: InstanceTypeLifecycleAction[];
+  tenant_name: string;
 }
 
 export interface InstanceTypeTestData {
@@ -50,8 +48,8 @@ export interface InstanceTypeTestData {
   lifecycleActions: InstanceTypeLifecycleAction[];
 }
 
-export interface DiskImageTestData extends Omit<DiskImageCreateParams, 'name'> {
-  lifecycleActions: DiskImageLifecycleAction[];
+export interface DiskImageTestData extends DiskImageCreateParams {
+  lifecycleActions: string[];
 }
 
 const extravarsPath = path.resolve(
@@ -59,9 +57,14 @@ const extravarsPath = path.resolve(
   '../../extravars.yaml',
 );
 
-const { instance_type: rawInstanceType, disk_image: rawDiskImage } = parse(
-  readFileSync(extravarsPath, 'utf8'),
-) as RawExtravars;
+const {
+  instance_type: rawInstanceType,
+  disk_image: rawDiskImage,
+  lifecycle_actions: rawLifecycleActions,
+  tenant_name: rawTenantName,
+} = parse(readFileSync(extravarsPath, 'utf8')) as RawExtravars;
+
+export const tenantName = rawTenantName;
 
 export const instanceTypeTestData: InstanceTypeTestData = {
   name: rawInstanceType.name,
@@ -75,14 +78,15 @@ export const instanceTypeTestData: InstanceTypeTestData = {
         pciDeviceSelector: rawInstanceType.gpu.pci_device_selector,
       }
     : undefined,
-  lifecycleActions: rawInstanceType.lifecycle_actions,
+  lifecycleActions: rawLifecycleActions,
 };
 
 export const diskImageTestData: DiskImageTestData = {
+  name: rawDiskImage.name,
   sourceType: rawDiskImage.source_type,
   sourceRef: rawDiskImage.source_ref,
   guestOsFamily: rawDiskImage.guest_os_family,
   architectures: rawDiskImage.architectures,
   scope: rawDiskImage.scope,
-  lifecycleActions: rawDiskImage.lifecycle_actions,
+  lifecycleActions: rawLifecycleActions,
 };

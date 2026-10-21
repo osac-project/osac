@@ -5,15 +5,17 @@
   vars:
     expected_error: "NotImplemented: agentless_net resource operations are not implemented."
     agentless_operations:
-      - create_security_group
-      - delete_security_group
       - create_nat_gateway
       - delete_nat_gateway
+    noop_operations:
+      - create_security_group
+      - delete_security_group
     resource_playbooks:
-      - playbook_osac_create_security_group.yml
-      - playbook_osac_delete_security_group.yml
       - playbook_osac_create_nat_gateway.yml
       - playbook_osac_delete_nat_gateway.yml
+    noop_playbooks:
+      - playbook_osac_create_security_group.yml
+      - playbook_osac_delete_security_group.yml
     subnet_playbooks:
       - playbook_osac_create_subnet.yml
       - playbook_osac_delete_subnet.yml
@@ -252,9 +254,15 @@
       loop: "{{ vn_password_inventory_result.results }}"
       no_log: true
 
-    - name: Invoke every AgentlessNet resource-operation entrypoint
+    - name: Invoke every unimplemented AgentlessNet operation
       ansible.builtin.include_tasks: ../expect_failure.yaml
       loop: "{{ agentless_operations }}"
+      loop_control:
+        loop_var: operation_name
+
+    - name: Invoke every AgentlessNet no-op operation
+      ansible.builtin.include_tasks: ../expect_noop.yaml
+      loop: "{{ noop_operations }}"
       loop_control:
         loop_var: operation_name
 
@@ -289,15 +297,40 @@
       loop_control:
         label: "{{ item }}"
 
-    - name: Verify every generic playbook fails with the AgentlessNet stub error
+    - name: Verify unimplemented playbooks fail with the stub error
       ansible.builtin.assert:
         that:
           - item.rc != 0
           - expected_error in (item.stdout + item.stderr)
         fail_msg: >-
-          {{ item.item }} did not fail with the expected AgentlessNet error:
+          {{ item.item }} did not fail with the expected error:
           {{ item.stdout + item.stderr }}
       loop: "{{ playbook_result.results }}"
+
+    - name: Execute every no-op SecurityGroup playbook in check mode
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - --check
+          - "{{ playbook_dir }}/../../../../../{{ item }}"
+          - -e
+          - "{{ resource_extra_vars | to_json }}"
+        chdir: "{{ playbook_dir }}/../../../../../"
+      register: noop_check_result
+      changed_when: false
+      loop: "{{ noop_playbooks }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Verify no-op SecurityGroup playbooks succeed
+      ansible.builtin.assert:
+        that:
+          - item.rc == 0
+          - "'no-op' in (item.stdout + item.stderr)"
+        fail_msg: >-
+          {{ item.item }} did not succeed as a no-op:
+          rc={{ item.rc }}, output={{ item.stdout + item.stderr }}
+      loop: "{{ noop_check_result.results }}"
 
     - name: Execute every generic AgentlessNet resource playbook in normal mode
       ansible.builtin.command:
@@ -314,12 +347,36 @@
       loop_control:
         label: "{{ item }}"
 
-    - name: Verify normal-mode playbooks fail with the AgentlessNet stub error
+    - name: Verify normal-mode unimplemented playbooks fail with stub error
       ansible.builtin.assert:
         that:
           - item.rc != 0
           - expected_error in (item.stdout + item.stderr)
         fail_msg: >-
-          {{ item.item }} did not fail with the expected AgentlessNet error:
+          {{ item.item }} did not fail with the expected error:
           {{ item.stdout + item.stderr }}
       loop: "{{ normal_playbook_result.results }}"
+
+    - name: Execute no-op SecurityGroup playbooks in normal mode
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - "{{ playbook_dir }}/../../../../../{{ item }}"
+          - -e
+          - "{{ resource_extra_vars | to_json }}"
+        chdir: "{{ playbook_dir }}/../../../../../"
+      register: normal_noop_result
+      changed_when: false
+      loop: "{{ noop_playbooks }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Verify normal-mode no-op playbooks succeed with artifacts
+      ansible.builtin.assert:
+        that:
+          - item.rc == 0
+          - "'no-op' in (item.stdout + item.stderr)"
+        fail_msg: >-
+          {{ item.item }} did not succeed as a no-op:
+          rc={{ item.rc }}, output={{ item.stdout + item.stderr }}
+      loop: "{{ normal_noop_result.results }}"

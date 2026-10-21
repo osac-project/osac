@@ -1,0 +1,5 @@
+---
+- name: Verify no-op succeeds for {{ operation_name }}
+  ansible.builtin.include_role:
+    name: osac.templates.agentless_net
+    tasks_from: "{{ operation_name }}"

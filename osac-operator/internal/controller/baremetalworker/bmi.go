@@ -10,6 +10,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	ctrl "sigs.k8s.io/controller-runtime"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -161,8 +162,10 @@ func (r *Reconciler) buildBMICreateRequest(
 		InstanceType:       instanceType,
 		NetworkAttachments: netAttachments,
 	}
-	if sshKey := r.resolveSSHPublicKey(co); sshKey != "" {
-		specBuilder.SshPublicKey = &sshKey
+	// The child BMI carries the Cluster's canonical Secret reference, never
+	// key bytes. Cloning preserves a non-default project selector.
+	if clusterKey := cluster.GetSpec().GetSshKey(); clusterKey.GetId() != "" {
+		specBuilder.SshKey = proto.Clone(clusterKey).(*privatev1.SecretReference)
 	}
 
 	return privatev1.BareMetalInstance_builder{

@@ -25,6 +25,7 @@ import (
 	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -3448,7 +3449,7 @@ var _ = Describe("Private clusters server", func() {
 			})
 
 			It("Rejects user value for non-editable field", func() {
-				createCatalogItem("cat-noneditable", true, privatev1.ClusterCatalogItemFields_builder{SshPublicKey: privatev1.StringFieldPolicy_builder{Locked: proto.String("forced-key")}.Build()}.Build())
+				createCatalogItem("cat-noneditable", true, privatev1.ClusterCatalogItemFields_builder{Network: privatev1.ClusterNetworkFieldPolicies_builder{PodCidr: privatev1.StringFieldPolicy_builder{Locked: proto.String("10.132.0.0/14")}.Build()}.Build()}.Build())
 
 				_, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
@@ -3456,8 +3457,8 @@ var _ = Describe("Private clusters server", func() {
 							Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
 						}.Build(),
 						Spec: privatev1.ClusterSpec_builder{
-							CatalogItem:  privatev1.ClusterCatalogItemReference_builder{Id: "cat-noneditable"}.Build(),
-							SshPublicKey: new("user-key"),
+							CatalogItem: privatev1.ClusterCatalogItemReference_builder{Id: "cat-noneditable"}.Build(),
+							Network:     privatev1.ClusterNetwork_builder{PodCidr: new("10.200.0.0/14")}.Build(),
 						}.Build(),
 						Status: privatev1.ClusterStatus_builder{
 							Hub: "my-hub-id",
@@ -3471,9 +3472,9 @@ var _ = Describe("Private clusters server", func() {
 				Expect(status.Message()).To(ContainSubstring("not editable"))
 			})
 
-			DescribeTable("validates editable SSH public keys",
+			DescribeTable("validates editable pod CIDRs",
 				func(catID string, value string, expectError bool) {
-					createCatalogItem(catID, true, privatev1.ClusterCatalogItemFields_builder{SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build()}.Build())
+					createCatalogItem(catID, true, privatev1.ClusterCatalogItemFields_builder{Network: privatev1.ClusterNetworkFieldPolicies_builder{PodCidr: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build()}.Build()}.Build())
 
 					response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 						Object: privatev1.Cluster_builder{
@@ -3481,8 +3482,8 @@ var _ = Describe("Private clusters server", func() {
 								Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
 							}.Build(),
 							Spec: privatev1.ClusterSpec_builder{
-								CatalogItem:  privatev1.ClusterCatalogItemReference_builder{Id: catID}.Build(),
-								SshPublicKey: new(value),
+								CatalogItem: privatev1.ClusterCatalogItemReference_builder{Id: catID}.Build(),
+								Network:     privatev1.ClusterNetwork_builder{PodCidr: new(value)}.Build(),
 							}.Build(),
 							Status: privatev1.ClusterStatus_builder{
 								Hub: "my-hub-id",
@@ -3494,19 +3495,18 @@ var _ = Describe("Private clusters server", func() {
 						status, ok := grpcstatus.FromError(err)
 						Expect(ok).To(BeTrue())
 						Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-						Expect(status.Message()).To(ContainSubstring("spec.ssh_public_key"))
-						Expect(status.Message()).To(ContainSubstring("invalid OpenSSH public key"))
+						Expect(status.Message()).To(ContainSubstring("pod_cidr"))
 					} else {
 						Expect(err).ToNot(HaveOccurred())
-						Expect(response.GetObject().GetSpec().GetSshPublicKey()).To(Equal(value))
+						Expect(response.GetObject().GetSpec().GetNetwork().GetPodCidr()).To(Equal(value))
 					}
 				},
-				Entry("rejects malformed value", "cat-ssh-invalid", "short-val", true),
-				Entry("accepts an OpenSSH public key", "cat-ssh-valid", testSSHPublicKey, false),
+				Entry("rejects malformed value", "cat-cidr-invalid", "300.0.0.0/8", true),
+				Entry("accepts a valid CIDR", "cat-cidr-valid", "10.128.0.0/14", false),
 			)
 
 			It("Applies default for editable field when not provided", func() {
-				createCatalogItem("cat-default", true, privatev1.ClusterCatalogItemFields_builder{SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{DefaultValue: proto.String(testSSHPublicKey)}.Build()}.Build()}.Build())
+				createCatalogItem("cat-default", true, privatev1.ClusterCatalogItemFields_builder{Network: privatev1.ClusterNetworkFieldPolicies_builder{PodCidr: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{DefaultValue: proto.String("10.132.0.0/14")}.Build()}.Build()}.Build()}.Build())
 
 				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
@@ -3523,7 +3523,7 @@ var _ = Describe("Private clusters server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				object := response.GetObject()
-				Expect(object.GetSpec().GetSshPublicKey()).To(Equal(testSSHPublicKey))
+				Expect(object.GetSpec().GetNetwork().GetPodCidr()).To(Equal("10.132.0.0/14"))
 			})
 
 			It("Applies spec defaults from template when created via catalog item", func() {
@@ -3544,7 +3544,7 @@ var _ = Describe("Private clusters server", func() {
 							Title:       "Template with defaults",
 							Description: "Template with spec defaults",
 							SpecDefaults: privatev1.ClusterTemplateSpecDefaults_builder{
-								SshPublicKey: proto.String(testSSHPublicKey),
+								Network: privatev1.ClusterNetwork_builder{PodCidr: proto.String("10.132.0.0/14")}.Build(),
 							}.Build(),
 						}.Build(),
 					).
@@ -3566,7 +3566,7 @@ var _ = Describe("Private clusters server", func() {
 				).Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
 
-				// Create a cluster via catalog item without specifying ssh_public_key:
+				// Create a cluster via catalog item without specifying a pod CIDR:
 				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
 						Metadata: privatev1.Metadata_builder{
@@ -3587,7 +3587,7 @@ var _ = Describe("Private clusters server", func() {
 				object := response.GetObject()
 
 				// Verify spec defaults from template are applied:
-				Expect(object.GetSpec().GetSshPublicKey()).To(Equal(testSSHPublicKey))
+				Expect(object.GetSpec().GetNetwork().GetPodCidr()).To(Equal("10.132.0.0/14"))
 
 				// Verify the explicit Cluster node sets remain populated:
 				nodeSets := object.GetSpec().GetNodeSets()
@@ -6320,6 +6320,249 @@ var _ = Describe("Private clusters server", func() {
 				}
 
 			})
+		})
+
+		Describe("Cluster SSH key reference", func() {
+			seedSSHKeySecretInProject := func(name string, tenant string, project string, secretType privatev1.SecretType, data map[string][]byte) *privatev1.Secret {
+				GinkgoHelper()
+				secretsDao, err := dao.NewGenericDAO[*privatev1.Secret]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				created, err := secretsDao.Create().SetObject(privatev1.Secret_builder{
+					Metadata: privatev1.Metadata_builder{Name: name, Tenant: tenant, Project: project}.Build(),
+					Type:     secretType,
+					Data:     data,
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				return created.GetObject()
+			}
+
+			seedSSHKeySecret := func(name string, tenant string, secretType privatev1.SecretType, data map[string][]byte) *privatev1.Secret {
+				GinkgoHelper()
+				return seedSSHKeySecretInProject(name, tenant, "", secretType, data)
+			}
+
+			createCluster := func(sshKey *privatev1.SecretReference) (*privatev1.Cluster, error) {
+				GinkgoHelper()
+				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
+						}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+							SshKey:   sshKey,
+						}.Build(),
+						Status: privatev1.ClusterStatus_builder{Hub: "my-hub-id"}.Build(),
+					}.Build(),
+				}.Build())
+				if err != nil {
+					return nil, err
+				}
+				return response.GetObject(), nil
+			}
+
+			updateClusterSSHKey := func(id string, sshKey *privatev1.SecretReference, paths ...string) (*privatev1.Cluster, error) {
+				GinkgoHelper()
+				if len(paths) == 0 {
+					paths = []string{"spec.ssh_key"}
+				}
+				response, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Id:   id,
+						Spec: privatev1.ClusterSpec_builder{SshKey: sshKey}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: paths},
+				}.Build())
+				if err != nil {
+					return nil, err
+				}
+				return response.GetObject(), nil
+			}
+
+			It("canonicalizes a named SSH key Secret and stores no key material", func() {
+				secret := seedSSHKeySecret(
+					fmt.Sprintf("cluster-key-%s", uuid.New()[24:32]),
+					testTenant,
+					privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+				)
+
+				object, err := createCluster(privatev1.SecretReference_builder{Name: secret.GetMetadata().GetName()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(object.GetSpec().GetSshKey().GetId()).To(Equal(secret.GetId()))
+				Expect(object.GetSpec().GetSshKey().GetName()).To(Equal(secret.GetMetadata().GetName()))
+				Expect(object.GetSpec().GetSshKey().GetShared()).To(BeFalse())
+
+				encoded, err := protojson.Marshal(object)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(string(encoded)).NotTo(ContainSubstring(testSSHPublicKey))
+			})
+
+			It("canonicalizes an SSH key Secret selected by ID", func() {
+				secret := seedSSHKeySecret(
+					fmt.Sprintf("cluster-key-id-%s", uuid.New()[24:32]),
+					testTenant,
+					privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+				)
+
+				object, err := createCluster(privatev1.SecretReference_builder{Id: secret.GetId()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(object.GetSpec().GetSshKey().GetId()).To(Equal(secret.GetId()))
+			})
+
+			It("resolves Cluster SSH-key references from any tenant project", func() {
+				projects, err := dao.NewGenericDAO[*privatev1.Project]().
+					SetLogger(logger).SetTenancyLogic(tenancy).Build()
+				Expect(err).ToNot(HaveOccurred())
+				for _, project := range []string{"cluster-key-project", "cluster-key-other-project"} {
+					_, err = projects.Create().SetObject(privatev1.Project_builder{
+						Id:       project,
+						Metadata: privatev1.Metadata_builder{Name: project, Tenant: testTenant}.Build(),
+					}.Build()).Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+				}
+
+				keyName := fmt.Sprintf("cluster-cross-project-key-%s", uuid.New()[24:32])
+				rootSecret := seedSSHKeySecret(keyName, testTenant,
+					privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					map[string][]byte{"public_key": []byte(testSSHPublicKey)})
+				projectSecret := seedSSHKeySecretInProject(keyName, testTenant, "cluster-key-project",
+					privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					map[string][]byte{"public_key": []byte(testSSHPublicKey)})
+				otherSecret := seedSSHKeySecretInProject(keyName, testTenant, "cluster-key-other-project",
+					privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					map[string][]byte{"public_key": []byte(testSSHPublicKey)})
+				Expect(rootSecret.GetId()).NotTo(Equal(projectSecret.GetId()))
+				Expect(projectSecret.GetId()).NotTo(Equal(otherSecret.GetId()))
+
+				By("selecting the named key from the tenant's default project")
+				object, err := createCluster(privatev1.SecretReference_builder{Name: keyName}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(object.GetSpec().GetSshKey().GetId()).To(Equal(rootSecret.GetId()))
+
+				By("selecting the named key from an explicit project of the tenant")
+				object, err = createCluster(privatev1.SecretReference_builder{
+					Name: keyName, Project: "cluster-key-other-project",
+				}.Build())
+				Expect(err).ToNot(HaveOccurred(),
+					"an explicit project may differ from the cluster's own project")
+				Expect(object.GetSpec().GetSshKey().GetId()).To(Equal(otherSecret.GetId()))
+				Expect(object.GetSpec().GetSshKey().GetProject()).To(Equal("cluster-key-other-project"))
+				Expect(projectSecret.GetId()).NotTo(Equal(otherSecret.GetId()),
+					"the explicit project selector must win over the default project's same-name key")
+			})
+
+			It("rejects an SSH key reference without id or name", func() {
+				_, err := createCluster(privatev1.SecretReference_builder{}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("must specify id or name"))
+			})
+
+			It("rejects a shared SSH key Secret reference", func() {
+				secret := seedSSHKeySecret(
+					fmt.Sprintf("cluster-shared-key-%s", uuid.New()[24:32]),
+					auth.SharedTenant,
+					privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+				)
+
+				_, err := createCluster(privatev1.SecretReference_builder{Id: secret.GetId(), Shared: true}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("must be tenant-scoped"))
+			})
+
+			It("rejects a cross-tenant SSH key Secret reference", func() {
+				tenantsDao, err := dao.NewGenericDAO[*privatev1.Tenant]().
+					SetLogger(logger).SetTenancyLogic(tenancy).Build()
+				Expect(err).ToNot(HaveOccurred())
+				_, err = tenantsDao.Create().SetObject(privatev1.Tenant_builder{
+					Id:       "other-tenant",
+					Metadata: privatev1.Metadata_builder{Name: "other-tenant", Tenant: "other-tenant"}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				secret := seedSSHKeySecret(
+					fmt.Sprintf("cluster-other-key-%s", uuid.New()[24:32]),
+					"other-tenant",
+					privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+				)
+
+				_, err = createCluster(privatev1.SecretReference_builder{Id: secret.GetId()}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("not found or is not visible"))
+			})
+
+			It("rejects a missing SSH key Secret reference", func() {
+				_, err := createCluster(privatev1.SecretReference_builder{Name: "no-such-key"}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("not found or is not visible"))
+			})
+
+			DescribeTable("rejects unusable SSH key Secrets without exposing material",
+				func(secretType privatev1.SecretType, data map[string][]byte, messagePart string) {
+					secret := seedSSHKeySecret(
+						fmt.Sprintf("cluster-bad-key-%s", uuid.New()[24:32]),
+						testTenant,
+						secretType,
+						data,
+					)
+
+					_, err := createCluster(privatev1.SecretReference_builder{Id: secret.GetId()}.Build())
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+					Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring(messagePart))
+					Expect(err.Error()).NotTo(ContainSubstring(testSSHPublicKey))
+				},
+				Entry("wrong type", privatev1.SecretType_SECRET_TYPE_USER_DATA, map[string][]byte{"userdata": []byte("#cloud-config")}, "type"),
+				Entry("missing public key entry", privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY, nil, "public_key"),
+				Entry("malformed OpenSSH data", privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY, map[string][]byte{"public_key": []byte("not-a-key")}, "invalid OpenSSH public key"),
+			)
+
+			It("rejects changing the SSH key reference", func() {
+				secretA := seedSSHKeySecret(
+					fmt.Sprintf("cluster-ready-a-%s", uuid.New()[24:32]),
+					testTenant, privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+				)
+				secretB := seedSSHKeySecret(
+					fmt.Sprintf("cluster-ready-b-%s", uuid.New()[24:32]),
+					testTenant, privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+				)
+
+				object, err := createCluster(privatev1.SecretReference_builder{Id: secretA.GetId()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = updateClusterSSHKey(object.GetId(), privatev1.SecretReference_builder{Id: secretB.GetId()}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("ssh_key is immutable"))
+			})
+
+			It("keeps a stale reference on unrelated updates after the Secret was deleted", func() {
+				secret := seedSSHKeySecret(
+					fmt.Sprintf("cluster-stale-%s", uuid.New()[24:32]),
+					testTenant, privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					map[string][]byte{"public_key": []byte(testSSHPublicKey)})
+
+				object, err := createCluster(privatev1.SecretReference_builder{Id: secret.GetId()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				secretsDao, err := dao.NewGenericDAO[*privatev1.Secret]().
+					SetLogger(logger).SetTenancyLogic(tenancy).Build()
+				Expect(err).ToNot(HaveOccurred())
+				_, err = secretsDao.Delete().SetId(secret.GetId()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				updated, err := updateClusterSSHKey(object.GetId(), nil, "spec.version")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(updated.GetSpec().GetSshKey()).NotTo(BeNil())
+				Expect(updated.GetSpec().GetSshKey().GetId()).To(Equal(secret.GetId()))
+			})
+
 		})
 	})
 })

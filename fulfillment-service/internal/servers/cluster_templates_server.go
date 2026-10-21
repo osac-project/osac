@@ -23,6 +23,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -32,6 +33,7 @@ type ClusterTemplatesServerBuilder struct {
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
+	secretStore       vault.SecretStore
 }
 
 var _ publicv1.ClusterTemplatesServer = (*ClusterTemplatesServer)(nil)
@@ -64,6 +66,12 @@ func (b *ClusterTemplatesServerBuilder) SetAttributionLogic(value auth.Attributi
 // SetTenancyLogic sets the tenancy logic to use. This is mandatory.
 func (b *ClusterTemplatesServerBuilder) SetTenancyLogic(value auth.TenancyLogic) *ClusterTemplatesServerBuilder {
 	b.tenancyLogic = value
+	return b
+}
+
+// SetSecretStore sets the store used to validate Vault-backed SSH-key Secret defaults.
+func (b *ClusterTemplatesServerBuilder) SetSecretStore(value vault.SecretStore) *ClusterTemplatesServerBuilder {
+	b.secretStore = value
 	return b
 }
 
@@ -108,6 +116,7 @@ func (b *ClusterTemplatesServerBuilder) Build() (result *ClusterTemplatesServer,
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
 		SetFilterDesc((*publicv1.ClusterTemplate)(nil).ProtoReflect().Descriptor()).
+		SetSecretStore(b.secretStore).
 		Build()
 	if err != nil {
 		return

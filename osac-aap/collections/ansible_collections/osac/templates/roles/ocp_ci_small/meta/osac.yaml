@@ -18,10 +18,3 @@ parameters:
       when not provided as a template parameter.
     type: string
     required: false
-  - name: ssh_public_key
-    title: SSH Public Key
-    description: >
-      A public ssh key that will be installed into the `authorized_keys` file
-      of the `core` user on cluster worker nodes.
-    type: string
-    required: false

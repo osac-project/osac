@@ -64,7 +64,7 @@ def test_pull_secret_fixture_creates_typed_secret_before_use_and_deletes_after(m
     assert commands[-1] == ("delete", "secret", name)
 
 
-def test_create_cluster_uses_secret_name_and_ssh_key_file(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_create_cluster_uses_secret_name_and_ssh_key(monkeypatch: pytest.MonkeyPatch) -> None:
     commands: list[tuple[str, ...]] = []
 
     def record_command(_self: OsacCLI, *command: str) -> str:
@@ -73,19 +73,7 @@ def test_create_cluster_uses_secret_name_and_ssh_key_file(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(OsacCLI, "_run", record_command)
     cli = object.__new__(OsacCLI)
-    assert (
-        cli.create_cluster(template="sandbox", pull_secret="secret-name", ssh_public_key_file="/tmp/key.pub")
-        == "cluster-id"
-    )
+    assert cli.create_cluster(template="sandbox", pull_secret="secret-name", ssh_key="tenant-login") == "cluster-id"
     assert commands == [
-        (
-            "create",
-            "cluster",
-            "--template",
-            "sandbox",
-            "--pull-secret",
-            "secret-name",
-            "--ssh-public-key-file",
-            "/tmp/key.pub",
-        )
+        ("create", "cluster", "--template", "sandbox", "--pull-secret", "secret-name", "--ssh-key", "tenant-login")
     ]

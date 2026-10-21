@@ -54,7 +54,7 @@ def test_bmi_and_compute_instance_reach_each_other_on_shared_subnet(
     bmi_instance_type: str,
     bmi_network_interface: str,
     bmi_disk_image: str,
-    net_ssh_public_key: str,
+    net_ssh_key_secret: str,
     bmh_ssh_hosts: dict[str, str],
     net_test_run_id: str,
     tmp_path: Path,
@@ -123,7 +123,7 @@ def test_bmi_and_compute_instance_reach_each_other_on_shared_subnet(
             name=bmi_name,
             catalog_item=catalog_item_name,
             instance_type=bmi_instance_type or None,
-            ssh_key=net_ssh_public_key,
+            ssh_key=net_ssh_key_secret,
             disk_image=bmi_disk_image,
             network_attachments=[
                 f"subnet={subnet_id},interface={bmi_network_interface},primary,security-groups={security_group_id}"

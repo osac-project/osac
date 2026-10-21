@@ -25,6 +25,9 @@ import (
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -37,6 +40,7 @@ import (
 
 	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 func readyClusterOrderNodePool(instanceType string, replicas int32) hypershiftv1beta1.NodePool {
@@ -2365,6 +2369,114 @@ var _ = Describe("ClusterOrder Controller", func() {
 		})
 	})
 
+	Context("SSH key resolution for AAP launches", func() {
+		newSSHKeyTestOrder := func(sshKey *v1alpha1.FulfillmentSecretReference) *v1alpha1.ClusterOrder {
+			return &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "ssh-key-launch",
+					Namespace: "default",
+					Annotations: map[string]string{
+						"osac.openshift.io/tenant": "tenant1",
+					},
+				},
+				Spec: v1alpha1.ClusterOrderSpec{
+					TemplateID: "test",
+					SSHKey:     sshKey,
+				},
+			}
+		}
+
+		newSSHKeyTestReconciler := func(provider *extraVarsCaptureProvider, secrets SecretsClient) *ClusterOrderReconciler {
+			fakeReader := fake.NewClientBuilder().WithScheme(k8sClient.Scheme()).Build()
+			return &ClusterOrderReconciler{
+				Client:               fakeReader,
+				apiReader:            fakeReader,
+				Scheme:               k8sClient.Scheme(),
+				ProvisioningProvider: provider,
+				StatusPollInterval:   time.Minute,
+				MaxJobHistory:        provisioning.DefaultMaxJobHistory,
+				SecretsClient:        secrets,
+			}
+		}
+
+		It("launches with the resolved key as a top-level ssh_public_key variable", func() {
+			provider := &extraVarsCaptureProvider{JobID: "job-1"}
+			instance := newSSHKeyTestOrder(&v1alpha1.FulfillmentSecretReference{ID: "key-id"})
+
+			reconciler := newSSHKeyTestReconciler(provider, &stubSSHKeyClient{key: launchTestKey})
+
+			result, err := reconciler.handleProvisioning(context.Background(), instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(provider.launched).To(BeTrue())
+			Expect(provider.extraVars).To(HaveKeyWithValue("ssh_public_key", launchTestKey))
+			Expect(result.RequeueAfter).To(Equal(time.Minute))
+		})
+
+		It("launches without the ssh_public_key variable when no reference is set", func() {
+			provider := &extraVarsCaptureProvider{JobID: "job-2"}
+			instance := newSSHKeyTestOrder(nil)
+
+			reconciler := newSSHKeyTestReconciler(provider, &stubSSHKeyClient{})
+
+			_, err := reconciler.handleProvisioning(context.Background(), instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(provider.launched).To(BeTrue())
+			Expect(provider.extraVars).NotTo(HaveKey("ssh_public_key"))
+		})
+
+		It("holds provisioning when the Secret cannot be resolved", func() {
+			provider := &extraVarsCaptureProvider{JobID: "job-3"}
+			instance := newSSHKeyTestOrder(&v1alpha1.FulfillmentSecretReference{ID: "missing-key"})
+
+			reconciler := newSSHKeyTestReconciler(provider,
+				&stubSSHKeyClient{err: stderrors.New("ssh key secret 'missing-key' not found")})
+
+			result, err := reconciler.handleProvisioning(context.Background(), instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(provider.launched).To(BeFalse())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+			progressing := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
+			Expect(progressing).NotTo(BeNil())
+			Expect(progressing.Status).To(Equal(metav1.ConditionTrue))
+			Expect(progressing.Reason).To(Equal(v1alpha1.ReasonSSHKeyResolutionPending))
+			Expect(progressing.Message).To(ContainSubstring("missing-key"))
+		})
+
+		It("holds provisioning when the resolved Secret has no public key", func() {
+			provider := &extraVarsCaptureProvider{JobID: "job-empty-key"}
+			instance := newSSHKeyTestOrder(&v1alpha1.FulfillmentSecretReference{ID: "empty-key"})
+			reconciler := newSSHKeyTestReconciler(provider, &stubSSHKeyClient{})
+
+			result, err := reconciler.handleProvisioning(context.Background(), instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(provider.launched).To(BeFalse())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+			progressing := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
+			Expect(progressing).NotTo(BeNil())
+			Expect(progressing.Reason).To(Equal(v1alpha1.ReasonSSHKeyResolutionPending))
+			Expect(progressing.Message).To(ContainSubstring("empty-key"))
+		})
+
+		It("does not resolve the Secret while an existing job is polled", func() {
+			provider := &extraVarsCaptureProvider{JobID: "job-4"}
+			instance := newSSHKeyTestOrder(&v1alpha1.FulfillmentSecretReference{ID: "key-id"})
+			instance.Status.ProvisioningJobs = []v1alpha1.JobStatus{{
+				JobID:         "existing-job",
+				Type:          v1alpha1.JobTypeProvision,
+				State:         v1alpha1.JobStateRunning,
+				ConfigVersion: "",
+			}}
+
+			keyClient := &countingSSHKeyClient{inner: &stubSSHKeyClient{key: launchTestKey}}
+			reconciler := newSSHKeyTestReconciler(provider, keyClient)
+
+			_, err := reconciler.handleProvisioning(context.Background(), instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(provider.launched).To(BeFalse(), "polling an existing job must not launch")
+			Expect(keyClient.calls).To(BeZero(), "the Secret must not be read while polling")
+		})
+	})
 })
 
 var _ = Describe("ClusterOrder phase transition time", func() {
@@ -2400,3 +2512,62 @@ var _ = Describe("ClusterOrder phase transition time", func() {
 		Expect(instance.Status.PhaseTransitionTime.Time).To(Equal(stamped.Time))
 	})
 })
+
+// extraVarsCaptureProvider records the extra variables supplied at launch.
+type extraVarsCaptureProvider struct {
+	noopProvisioningProvider
+	JobID     string
+	extraVars map[string]any
+	launched  bool
+}
+
+func (p *extraVarsCaptureProvider) TriggerProvision(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+	return p.TriggerProvisionWithExtraVars(ctx, resource, nil)
+}
+
+func (p *extraVarsCaptureProvider) TriggerProvisionWithExtraVars(_ context.Context, _ client.Object, extraVars map[string]any) (*provisioning.ProvisionResult, error) {
+	p.launched = true
+	p.extraVars = extraVars
+	return &provisioning.ProvisionResult{JobID: p.JobID, InitialState: v1alpha1.JobStatePending}, nil
+}
+
+func (p *extraVarsCaptureProvider) GetProvisionStatusWithExtraVars(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {
+	return provisioning.ProvisionStatusWithExtraVars{
+		ProvisionStatus: provisioning.ProvisionStatus{JobID: jobID, State: v1alpha1.JobStateRunning},
+	}, nil
+}
+
+// launchTestKey represents the already-validated material returned by
+// Fulfillment for transient AAP launch input.
+const launchTestKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEdFQ1JFREVSQURMSUZLRUExMjM0NTY3ODkwYWJjZGVm test@example.com"
+
+// stubSSHKeyClient resolves any requested ID to a fixed key or error.
+type stubSSHKeyClient struct {
+	key string
+	err error
+}
+
+func (s *stubSSHKeyClient) Get(_ context.Context, in *privatev1.SecretsGetRequest, _ ...grpc.CallOption) (*privatev1.SecretsGetResponse, error) {
+	if s.err != nil {
+		return nil, status.Error(codes.NotFound, s.err.Error())
+	}
+	return privatev1.SecretsGetResponse_builder{
+		Object: privatev1.Secret_builder{
+			Id:       in.GetId(),
+			Metadata: privatev1.Metadata_builder{Name: "key", Tenant: "tenant1"}.Build(),
+			Type:     privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+			Data:     map[string][]byte{"public_key": []byte(s.key)},
+		}.Build(),
+	}.Build(), nil
+}
+
+// countingSSHKeyClient counts Secret reads.
+type countingSSHKeyClient struct {
+	inner SecretsClient
+	calls int
+}
+
+func (c *countingSSHKeyClient) Get(ctx context.Context, in *privatev1.SecretsGetRequest, opts ...grpc.CallOption) (*privatev1.SecretsGetResponse, error) {
+	c.calls++
+	return c.inner.Get(ctx, in, opts...)
+}

@@ -55,6 +55,10 @@ func validateAndCanonicalizeClusterCatalogItemPolicies(
 		return err
 	}
 
+	if err := validateCatalogItemSSHKeyPolicy(ctx, scope, fields.GetSshKey(), secretsDao); err != nil {
+		return err
+	}
+
 	if err := validateClusterCatalogItemNetworkCIDRPolicies(fields.GetNetwork()); err != nil {
 		return err
 	}
@@ -81,8 +85,8 @@ func applyClusterCatalogItemPolicies(spec *privatev1.ClusterSpec, fields *privat
 	if err := applyPolicy(fields.GetVersion(), spec.GetVersion() != nil, spec.SetVersion, decodeClusterVersionReferencePolicy, cloneMessage[*privatev1.ClusterVersionReference]); err != nil {
 		return fmt.Errorf("version: %w", err)
 	}
-	if err := applyPolicy(fields.GetSshPublicKey(), spec.HasSshPublicKey(), spec.SetSshPublicKey, decodeStringPolicy, identity[string]); err != nil {
-		return fmt.Errorf("ssh_public_key: %w", err)
+	if err := applyPolicy(fields.GetSshKey(), spec.GetSshKey() != nil, spec.SetSshKey, decodeFullSecretReferencePolicy, cloneMessage[*privatev1.SecretReference]); err != nil {
+		return fmt.Errorf("ssh_key: %w", err)
 	}
 	if err := applyPolicy(fields.GetPullSecretSecret(), spec.GetPullSecretSecret() != nil, spec.SetPullSecretSecret, decodeSecretReferencePolicy, cloneMessage[*privatev1.SecretLocalReference]); err != nil {
 		return fmt.Errorf("pull_secret_secret: %w", err)
@@ -230,11 +234,8 @@ func validateClusterCatalogItemNetworkCIDRPolicies(network *privatev1.ClusterNet
 	return canonicalizeCatalogItemCIDRPolicy(network.GetServiceCidr(), "fields.network.service_cidr")
 }
 
-// validateClusterCatalogItemScalarPolicies checks SSH-key and automatic-external-IP policies without changing them.
+// validateClusterCatalogItemScalarPolicies checks automatic-external-IP policies without changing them.
 func validateClusterCatalogItemScalarPolicies(fields *privatev1.ClusterCatalogItemFields) error {
-	if err := validateCatalogItemStringPolicy(fields.GetSshPublicKey(), "fields.ssh_public_key", validateOpenSSHPublicKey); err != nil {
-		return err
-	}
 	if err := validateCatalogItemBoolPolicy(fields.GetAutoExternalIpAttachment(), "fields.auto_external_ip_attachment"); err != nil {
 		return err
 	}

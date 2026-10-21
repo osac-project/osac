@@ -76,14 +76,14 @@ def test_baremetal_instance_bills_allocation_and_consumption(
     catalog_item: str,
     bmi_instance_type: str,
     bmi_disk_image: str,
-    ssh_public_key: str,
+    ssh_key_secret: str,
     test_run_id: str,
 ) -> None:
     """Both meters bill a running instance and stop after its deletion, each
     ending at the recorded deletion with its final partial interval billed."""
     name = f"e2e-bmi-metering-{test_run_id}"
     bmi_id, _ = jwt_cli_user.create_baremetal_instance(
-        name=name, catalog_item=catalog_item, ssh_key=ssh_public_key, disk_image=bmi_disk_image
+        name=name, catalog_item=catalog_item, ssh_key=ssh_key_secret, disk_image=bmi_disk_image
     )
     bmi_cr_name: str | None = None
 

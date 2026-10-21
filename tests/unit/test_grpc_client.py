@@ -129,3 +129,27 @@ def test_create_and_delete_shared_baremetal_instance_type(monkeypatch: pytest.Mo
         },
         {"service": f"{PRIVATE_API}.BareMetalInstanceTypes/Delete", "data": {"id": "bmit-123"}},
     ]
+
+
+def test_create_baremetal_instance_sends_registered_ssh_key_reference(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = GRPCClient(address="fulfillment-api.example.test:443", token="test-token")
+    calls: list[dict[str, Any]] = []
+
+    def capture_call(*, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+        calls.append({"service": service, "data": data})
+        return {"object": {"id": "baremetal-instance-id"}}
+
+    monkeypatch.setattr(client, "call", capture_call)
+
+    result = client.create_baremetal_instance(
+        name="test-bmi",
+        catalog_item="test-catalog",
+        subnet_id="subnet-id",
+        security_group_id="security-group-id",
+        ssh_key="registered-key",
+        tenant="tenant1",
+    )
+
+    assert result == "baremetal-instance-id"
+    assert calls[0]["data"]["object"]["spec"]["ssh_key"] == {"name": "registered-key"}
+    assert "ssh_public_key" not in calls[0]["data"]["object"]["spec"]

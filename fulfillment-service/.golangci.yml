@@ -95,8 +95,3 @@ linters:
       - linters:
           - staticcheck
         text: HostType.*deprecated
-      # ssh_public_key is proto-deprecated in favour of the registered ssh_key
-      # Secret reference but remains the served compatibility input on create.
-      - linters:
-          - staticcheck
-        text: SshPublicKey.*deprecated

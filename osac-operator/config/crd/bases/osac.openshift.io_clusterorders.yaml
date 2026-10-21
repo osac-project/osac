@@ -169,12 +169,21 @@ spec:
                 maxLength: 512
                 pattern: ^(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\[[A-Fa-f0-9:]+\])(?::[0-9]+)?(?:/[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*)+(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}(?:@sha256:[A-Fa-f0-9]{64})?|@sha256:[A-Fa-f0-9]{64})$
                 type: string
-              sshPublicKey:
+              sshKey:
                 description: |-
-                  SSHPublicKey is an SSH public key installed on cluster worker nodes.
-                  If not provided, the provider's default SSH key is used.
-                maxLength: 16384
-                type: string
+                  SSHKey references the fulfillment Secret holding the cluster's registered
+                  SSH public key. Only the canonical Secret ID is stored here; key material
+                  is resolved by the operator when launching provisioning jobs and creating
+                  bare-metal worker instances.
+                properties:
+                  id:
+                    description: ID is the canonical fulfillment Secret identifier.
+                    maxLength: 64
+                    minLength: 1
+                    type: string
+                required:
+                - id
+                type: object
               templateID:
                 description: TemplateID is the unique identigier of the cluster template
                   to use when creating this cluster
@@ -198,6 +207,9 @@ spec:
             - message: networkAttachment is immutable after creation
               rule: has(self.networkAttachment) == has(oldSelf.networkAttachment)
                 && (!has(self.networkAttachment) || self.networkAttachment == oldSelf.networkAttachment)
+            - message: sshKey is immutable after creation
+              rule: has(self.sshKey) == has(oldSelf.sshKey) && (!has(self.sshKey)
+                || self.sshKey == oldSelf.sshKey)
           status:
             description: ClusterOrderStatus defines the observed state of ClusterOrder
             properties:

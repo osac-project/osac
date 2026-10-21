@@ -101,6 +101,57 @@ var _ = Describe("Private cluster templates server", func() {
 			Expect(object.GetId()).ToNot(BeEmpty())
 		})
 
+		It("resolves an SSH key default from the selected tenant project", func() {
+			const (
+				keyName    = "cluster-template-project-key"
+				keyProject = "cluster-template-key-project"
+			)
+			projects, err := dao.NewGenericDAO[*privatev1.Project]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = projects.Create().SetObject(privatev1.Project_builder{
+				Id:       keyProject,
+				Metadata: privatev1.Metadata_builder{Name: keyProject, Tenant: testTenant}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			secrets, err := dao.NewGenericDAO[*privatev1.Secret]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			root, err := secrets.Create().SetObject(privatev1.Secret_builder{
+				Metadata: privatev1.Metadata_builder{Name: keyName, Tenant: testTenant}.Build(),
+				Type:     privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+				Data:     map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			project, err := secrets.Create().SetObject(privatev1.Secret_builder{
+				Metadata: privatev1.Metadata_builder{Name: keyName, Tenant: testTenant, Project: keyProject}.Build(),
+				Type:     privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+				Data:     map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(project.GetObject().GetId()).NotTo(Equal(root.GetObject().GetId()))
+
+			response, err := server.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
+				Object: privatev1.ClusterTemplate_builder{
+					Metadata: privatev1.Metadata_builder{Name: "template-with-project-key"}.Build(),
+					Title:    "Template with project key",
+					SpecDefaults: privatev1.ClusterTemplateSpecDefaults_builder{
+						SshKey: privatev1.SecretReference_builder{Name: keyName, Project: keyProject}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			stored := response.GetObject().GetSpecDefaults().GetSshKey()
+			Expect(stored.GetId()).To(Equal(project.GetObject().GetId()))
+			Expect(stored.GetName()).To(Equal(keyName))
+			Expect(stored.GetProject()).To(Equal(keyProject))
+		})
+
 		It("List objects", func() {
 			// Create a few objects:
 			const count = 10

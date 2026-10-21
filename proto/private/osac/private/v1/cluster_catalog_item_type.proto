@@ -64,13 +64,20 @@ message ClusterCatalogItem {
 // Groups the policies for governable cluster fields.
 message ClusterCatalogItemFields {
   ClusterVersionReferenceFieldPolicy version = 1;
-  StringFieldPolicy ssh_public_key = 2;
+  // Reserved field number and name for the removed inline SSH-key policy.
+  // Callers must use `ssh_key` with a Secret-reference policy instead.
+  reserved 2;
+  reserved "ssh_public_key";
   SecretReferenceFieldPolicy pull_secret_secret = 3;
   ClusterNetworkFieldPolicies network = 4;
   ClusterNodeSetMapPolicy node_sets = 5;
   BoolFieldPolicy auto_external_ip_attachment = 6;
   // Policy for the cluster's subnet and security-group attachment.
   ClusterNetworkAttachmentFieldPolicy network_attachment = 7;
+  // Policy for the SecretReference selecting the cluster's registered SSH
+  // public key. A shared catalog item may leave the field editable (making it
+  // caller-supplied) but cannot lock or default a tenant-owned reference.
+  FullSecretReferenceFieldPolicy ssh_key = 8;
 }
 
 // Defines whether the complete cluster node-set map is locked or editable.

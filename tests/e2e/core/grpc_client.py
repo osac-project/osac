@@ -674,7 +674,7 @@ class GRPCClient:
         catalog_item: str,
         subnet_id: str,
         security_group_id: str,
-        ssh_public_key: str,
+        ssh_key: str,
         tenant: str,
         disk_image: str | None = None,
         instance_type: str | None = None,
@@ -685,7 +685,7 @@ class GRPCClient:
     ) -> str:
         spec: dict[str, Any] = {
             "catalog_item": {"name": catalog_item, "shared": True},
-            "ssh_public_key": ssh_public_key,
+            "ssh_key": {"name": ssh_key},
             "run_strategy": "BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS",
             "network_attachments": [
                 {

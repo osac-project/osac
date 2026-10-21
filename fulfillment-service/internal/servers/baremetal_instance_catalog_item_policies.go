@@ -135,9 +135,6 @@ func applyBareMetalInstanceCatalogItemPolicies(
 	if spec == nil || fields == nil {
 		return nil
 	}
-	if err := applyPolicy(fields.GetSshPublicKey(), spec.HasSshPublicKey(), spec.SetSshPublicKey, decodeStringPolicy, identity[string]); err != nil {
-		return fmt.Errorf("ssh_public_key: %w", err)
-	}
 	if err := applyPolicy(fields.GetUserDataSource(), spec.GetUserDataSource() != nil, spec.SetUserDataSource, decodeUserDataSourcePolicy, cloneMessage[*privatev1.UserDataSource]); err != nil {
 		return fmt.Errorf("user_data_source: %w", err)
 	}
@@ -164,9 +161,6 @@ func applyBareMetalInstanceCatalogItemPolicies(
 
 // validateBareMetalInstanceCatalogItemScalarPolicies checks supported scalar values and returns the first invalid policy.
 func validateBareMetalInstanceCatalogItemScalarPolicies(fields *privatev1.BareMetalInstanceCatalogItemFields) error {
-	if err := validateCatalogItemStringPolicy(fields.GetSshPublicKey(), "fields.ssh_public_key", validateOpenSSHPublicKey); err != nil {
-		return err
-	}
 	if _, err := decodeBareMetalInstanceRunStrategyPolicy(fields.GetRunStrategy()); err != nil {
 		return catalogItemPolicyError("fields.run_strategy", err.Error())
 	}

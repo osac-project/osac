@@ -40,6 +40,7 @@ type ClusterOrderUpgradeAttemptIDs struct {
 // ClusterOrderSpec defines the desired state of ClusterOrder
 // +kubebuilder:validation:XValidation:rule="has(self.addOnOperators) == has(oldSelf.addOnOperators) && (!has(self.addOnOperators) || self.addOnOperators == oldSelf.addOnOperators)",message="addOnOperators is immutable"
 // +kubebuilder:validation:XValidation:rule="has(self.networkAttachment) == has(oldSelf.networkAttachment) && (!has(self.networkAttachment) || self.networkAttachment == oldSelf.networkAttachment)",message="networkAttachment is immutable after creation"
+// +kubebuilder:validation:XValidation:rule="has(self.sshKey) == has(oldSelf.sshKey) && (!has(self.sshKey) || self.sshKey == oldSelf.sshKey)",message="sshKey is immutable after creation"
 type ClusterOrderSpec struct {
 	// TemplateID is the unique identigier of the cluster template to use when creating this cluster
 	// +kubebuilder:validation:Required
@@ -68,11 +69,12 @@ type ClusterOrderSpec struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MaxLength=262144
 	PullSecret string `json:"pullSecret,omitempty"`
-	// SSHPublicKey is an SSH public key installed on cluster worker nodes.
-	// If not provided, the provider's default SSH key is used.
+	// SSHKey references the fulfillment Secret holding the cluster's registered
+	// SSH public key. Only the canonical Secret ID is stored here; key material
+	// is resolved by the operator when launching provisioning jobs and creating
+	// bare-metal worker instances.
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:MaxLength=16384
-	SSHPublicKey string `json:"sshPublicKey,omitempty"`
+	SSHKey *FulfillmentSecretReference `json:"sshKey,omitempty"`
 	// ReleaseImage is the OCP release image URL that controls the OpenShift version.
 	// If not provided, the template's default release image is used.
 	// +kubebuilder:validation:Optional
@@ -376,6 +378,17 @@ type BareMetalInstanceReference struct {
 	Name string `json:"name,omitempty"`
 	// +kubebuilder:validation:Optional
 	ID string `json:"id,omitempty"`
+}
+
+// FulfillmentSecretReference identifies a Secret stored by the fulfillment
+// service. Only the canonical Secret ID is carried; key material is resolved
+// through the fulfillment API at the point of use.
+type FulfillmentSecretReference struct {
+	// ID is the canonical fulfillment Secret identifier.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=64
+	ID string `json:"id"`
 }
 
 const (

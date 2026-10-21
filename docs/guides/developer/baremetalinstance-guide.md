@@ -95,10 +95,9 @@ osac create secret \
 An unqualified `--ssh-key` value (a bare Secret name) resolves in the tenant's
 default (root) project. A qualified value, `--ssh-key
 'name=<secret-name>,project=<project-name>'`, selects any project of the
-instance's tenant, including projects other than the instance's own; shared
-SSH-key Secrets are rejected. The deprecated `spec.ssh_public_key` raw key
-remains accepted
-for compatibility but is mutually exclusive with `spec.ssh_key`.
+instance's tenant, including projects other than the instance's own. Shared
+SSH-key Secrets are rejected. The removed inline `spec.ssh_public_key`
+raw-key field is reserved; requests that still send it are rejected.
 
 ```bash
 osac create baremetalinstance \

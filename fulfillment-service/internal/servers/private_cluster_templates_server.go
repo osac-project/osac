@@ -24,6 +24,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -33,6 +34,7 @@ type PrivateClusterTemplatesServerBuilder struct {
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
 	filterDesc        protoreflect.MessageDescriptor
+	secretStore       vault.SecretStore
 }
 
 var _ privatev1.ClusterTemplatesServer = (*PrivateClusterTemplatesServer)(nil)
@@ -42,6 +44,7 @@ type PrivateClusterTemplatesServer struct {
 	logger             *slog.Logger
 	clusterVersionsDao *dao.GenericDAO[*privatev1.ClusterVersion]
 	secretsDao         *dao.GenericDAO[*privatev1.Secret]
+	secretStore        vault.SecretStore
 	generic            *GenericServer[*privatev1.ClusterTemplate]
 }
 
@@ -61,6 +64,12 @@ func (b *PrivateClusterTemplatesServerBuilder) SetAttributionLogic(value auth.At
 
 func (b *PrivateClusterTemplatesServerBuilder) SetTenancyLogic(value auth.TenancyLogic) *PrivateClusterTemplatesServerBuilder {
 	b.tenancyLogic = value
+	return b
+}
+
+// SetSecretStore sets the store used to validate Vault-backed SSH-key Secret defaults.
+func (b *PrivateClusterTemplatesServerBuilder) SetSecretStore(value vault.SecretStore) *PrivateClusterTemplatesServerBuilder {
+	b.secretStore = value
 	return b
 }
 
@@ -127,6 +136,7 @@ func (b *PrivateClusterTemplatesServerBuilder) Build() (result *PrivateClusterTe
 		logger:             b.logger,
 		clusterVersionsDao: clusterVersionsDao,
 		secretsDao:         secretsDao,
+		secretStore:        b.secretStore,
 		generic:            generic,
 	}
 	return
@@ -146,38 +156,41 @@ func (s *PrivateClusterTemplatesServer) Get(ctx context.Context,
 
 func (s *PrivateClusterTemplatesServer) Create(ctx context.Context,
 	request *privatev1.ClusterTemplatesCreateRequest) (response *privatev1.ClusterTemplatesCreateResponse, err error) {
-	if object := request.GetObject(); object != nil {
-		if err = s.validateSpecDefaultsVersion(ctx, object); err != nil {
-			return
-		}
-		if err = s.validateSpecDefaultsPullSecret(ctx, object); err != nil {
-			return
-		}
-		if object.GetMetadata().GetName() == "" && object.GetId() != "" {
-			if object.GetMetadata() == nil {
-				object.SetMetadata(&privatev1.Metadata{})
+	err = s.generic.CreateWithCandidatePreparation(ctx, request, &response,
+		func(ctx context.Context, _ *privatev1.ClusterTemplate, candidate *privatev1.ClusterTemplate) error {
+			if err := s.validateSpecDefaults(ctx, candidate); err != nil {
+				return err
 			}
-			object.GetMetadata().SetName(templateNameFromID(object.GetId()))
-		}
-	}
-	err = s.generic.Create(ctx, request, &response)
+			if candidate.GetMetadata().GetName() == "" && candidate.GetId() != "" {
+				candidate.GetMetadata().SetName(templateNameFromID(candidate.GetId()))
+			}
+			return nil
+		})
 	return
 }
 
 func (s *PrivateClusterTemplatesServer) Update(ctx context.Context,
 	request *privatev1.ClusterTemplatesUpdateRequest) (response *privatev1.ClusterTemplatesUpdateResponse, err error) {
-	if object := request.GetObject(); object != nil {
-		if updateIncludesField(request.GetUpdateMask(), "spec_defaults") {
-			if err = s.validateSpecDefaultsVersion(ctx, object); err != nil {
-				return
+	err = s.generic.UpdateWithCandidatePreparation(ctx, request, &response,
+		func(ctx context.Context, _ *privatev1.ClusterTemplate, candidate *privatev1.ClusterTemplate) error {
+			if !updateIncludesField(request.GetUpdateMask(), "spec_defaults") {
+				return nil
 			}
-			if err = s.validateSpecDefaultsPullSecret(ctx, object); err != nil {
-				return
-			}
-		}
-	}
-	err = s.generic.Update(ctx, request, &response)
+			return s.validateSpecDefaults(ctx, candidate)
+		})
 	return
+}
+
+func (s *PrivateClusterTemplatesServer) validateSpecDefaults(
+	ctx context.Context, template *privatev1.ClusterTemplate,
+) error {
+	if err := s.validateSpecDefaultsVersion(ctx, template); err != nil {
+		return err
+	}
+	if err := s.validateSpecDefaultsPullSecret(ctx, template); err != nil {
+		return err
+	}
+	return s.validateSpecDefaultsSSHKey(ctx, template)
 }
 
 func (s *PrivateClusterTemplatesServer) validateSpecDefaultsPullSecret(
@@ -195,6 +208,23 @@ func (s *PrivateClusterTemplatesServer) validateSpecDefaultsPullSecret(
 	resolvedRef.SetId(resolved.ID)
 	resolvedRef.SetName(resolved.Name)
 	template.GetSpecDefaults().SetPullSecretSecret(resolvedRef)
+	return nil
+}
+
+// validateSpecDefaultsSSHKey resolves the template's registered SSH-key
+// default with the same tenant/project rules used by VMaaS and BMaaS.
+func (s *PrivateClusterTemplatesServer) validateSpecDefaultsSSHKey(
+	ctx context.Context, template *privatev1.ClusterTemplate) error {
+	ref := template.GetSpecDefaults().GetSshKey()
+	if ref == nil {
+		return nil
+	}
+	resolved, err := resolveTenantScopedSSHKey(ctx, s.logger, s.secretsDao, s.secretStore,
+		template.GetMetadata().GetTenant(), ref, "spec_defaults.ssh_key")
+	if err != nil {
+		return err
+	}
+	template.GetSpecDefaults().SetSshKey(resolved.reference)
 	return nil
 }
 

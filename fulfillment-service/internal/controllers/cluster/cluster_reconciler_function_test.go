@@ -16,6 +16,7 @@ package cluster
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -520,7 +521,6 @@ var _ = Describe("update tenant annotation", func() {
 				Client:    fakeClient,
 			}, nil)
 
-		sshKey := "ssh-ed25519 AAAA..."
 		versionName := "4-17-0"
 		resolvedImage := "quay.io/openshift-release-dev/ocp-release:4.17.0-multi"
 		podCIDR := "10.128.0.0/14"
@@ -548,9 +548,9 @@ var _ = Describe("update tenant annotation", func() {
 				Tenant:     tenantName,
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
-				Template:     &privatev1.ClusterTemplateReference{Name: "test-template"},
-				SshPublicKey: &sshKey,
-				Version:      &privatev1.ClusterVersionReference{Name: versionName},
+				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
+				SshKey:   privatev1.SecretReference_builder{Id: "canonical-key-id"}.Build(),
+				Version:  &privatev1.ClusterVersionReference{Name: versionName},
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"workers": privatev1.ClusterNodeSet_builder{
 						BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "bm.large"},
@@ -589,7 +589,8 @@ var _ = Describe("update tenant annotation", func() {
 		Expect(list.Items).To(HaveLen(1))
 
 		createdCR := list.Items[0]
-		Expect(createdCR.Spec.SSHPublicKey).To(Equal(sshKey))
+		Expect(createdCR.Spec.SSHKey).NotTo(BeNil())
+		Expect(createdCR.Spec.SSHKey.ID).To(Equal("canonical-key-id"))
 		Expect(createdCR.Spec.ReleaseImage).To(Equal(resolvedImage))
 		Expect(createdCR.Spec.NodeRequests).To(HaveLen(1))
 		Expect(createdCR.Spec.NodeRequests[0].ReleaseImage).To(Equal(resolvedImage))
@@ -834,6 +835,114 @@ var _ = Describe("update tenant annotation", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(list.Items).To(HaveLen(1))
 		Expect(list.Items[0].Spec.PullSecret).To(Equal(resolvedPullSecret))
+	})
+
+	It("should project the ssh_key Secret ID into ClusterOrder spec.sshKey", func() {
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), hubID).
+			Return(&controllers.HubEntry{
+				Namespace: hubNamespace,
+				Client:    fakeClient,
+			}, nil)
+
+		cluster := privatev1.Cluster_builder{
+			Id: clusterID,
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     tenantName,
+			}.Build(),
+			Spec: privatev1.ClusterSpec_builder{
+				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
+				SshKey:   privatev1.SecretReference_builder{Id: "canonical-key-id"}.Build(),
+			}.Build(),
+			Status: privatev1.ClusterStatus_builder{
+				State: privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
+				Hub:   hubID,
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			r: &function{
+				logger:         logger,
+				hubCache:       hubCache,
+				maskCalculator: nil,
+			},
+			cluster: cluster,
+		}
+
+		err := t.update(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		list := &osacv1alpha1.ClusterOrderList{}
+		err = fakeClient.List(ctx, list)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(list.Items).To(HaveLen(1))
+		Expect(list.Items[0].Spec.SSHKey).NotTo(BeNil())
+		Expect(list.Items[0].Spec.SSHKey.ID).To(Equal("canonical-key-id"))
+
+		// The serialized ClusterOrder must never contain key material, only
+		// the canonical Secret ID.
+		encoded, err := json.Marshal(list.Items[0].Spec)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(string(encoded)).To(ContainSubstring(`"sshKey":{"id":"canonical-key-id"}`))
+	})
+
+	It("should omit ClusterOrder spec.sshKey when the Cluster has no reference", func() {
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), hubID).
+			Return(&controllers.HubEntry{
+				Namespace: hubNamespace,
+				Client:    fakeClient,
+			}, nil)
+
+		cluster := privatev1.Cluster_builder{
+			Id: clusterID,
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     tenantName,
+			}.Build(),
+			Spec: privatev1.ClusterSpec_builder{
+				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
+			}.Build(),
+			Status: privatev1.ClusterStatus_builder{
+				State: privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
+				Hub:   hubID,
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			r: &function{
+				logger:         logger,
+				hubCache:       hubCache,
+				maskCalculator: nil,
+			},
+			cluster: cluster,
+		}
+
+		err := t.update(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		list := &osacv1alpha1.ClusterOrderList{}
+		err = fakeClient.List(ctx, list)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(list.Items).To(HaveLen(1))
+		Expect(list.Items[0].Spec.SSHKey).To(BeNil())
 	})
 
 	It("should resolve ReleaseImage via ClusterVersion on every reconcile", func() {

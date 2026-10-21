@@ -104,6 +104,10 @@ const (
 	ReasonControlPlaneStarting = "ControlPlaneStarting"
 	// ReasonWorkersJoining indicates worker nodes are joining the cluster.
 	ReasonWorkersJoining = "WorkersJoining"
+	// ReasonSSHKeyResolutionPending indicates the cluster's registered SSH-key
+	// Secret could not be resolved. Provisioning remains held while the
+	// referenced Secret or Fulfillment endpoint is unavailable.
+	ReasonSSHKeyResolutionPending = "SSHKeyResolutionPending"
 	// ReasonStageUnknown indicates the provisioning stage could not be determined.
 	ReasonStageUnknown = "StageUnknown"
 	// ReasonStalled indicates the resource has not progressed within the expected threshold.

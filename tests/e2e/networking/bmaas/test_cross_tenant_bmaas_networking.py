@@ -21,6 +21,7 @@ single-tenant networking job avoids duplicating Flow 11/12 cost on every run.
 
 from __future__ import annotations
 
+import base64
 import os
 import subprocess
 from collections.abc import Iterator
@@ -117,7 +118,7 @@ def _create_bmi(
     catalog: str,
     subnet_id: str,
     security_group_id: str,
-    ssh_public_key: str,
+    ssh_key: str,
     tenant: str,
     disk_image: str | None,
     user_data: str,
@@ -130,7 +131,7 @@ def _create_bmi(
         "catalog_item": catalog,
         "subnet_id": subnet_id,
         "security_group_id": security_group_id,
-        "ssh_public_key": ssh_public_key,
+        "ssh_key": ssh_key,
         "tenant": tenant,
         "disk_image": disk_image,
         "user_data": user_data,
@@ -321,6 +322,13 @@ def _teardown_owned_resources(
                 wait_for_bmh_available(k8s=k8s, name=target["bmh"], bmh_namespace=bmh_namespace)
 
         _phase(_wait_bmi)
+
+    for secret in state.get("ssh_keys") or []:
+        _phase(
+            lambda item=secret: grpc.call(
+                service=f"{PRIVATE_API}.Secrets/Delete", data={"id": item["id"]}
+            )
+        )
 
     stacks = [net for net in (state.get("t1_net"), state.get("t2_net")) if net]
     for net in stacks:
@@ -557,6 +565,26 @@ class TestCrossTenantBmaasNetworking:
             ),
         ]
         disk_image = _lab_disk_image_name(private_grpc, catalog_item_name, auto_eip_catalog_item_name)
+        ssh_keys_by_tenant: dict[str, str] = {}
+        ssh_keys: list[dict[str, str]] = list(self.__class__.state.get("ssh_keys") or [])
+        for index, tenant in enumerate(dict.fromkeys((t1["tenant"], t2["tenant"])), start=1):
+            existing = next((item for item in ssh_keys if item["tenant"] == tenant), None)
+            if existing is None:
+                secret_name = f"cross-tenant-bmi-key-{net_test_run_id}-{index}"
+                response = private_grpc.call(
+                    service=f"{PRIVATE_API}.Secrets/Create",
+                    data={
+                        "object": {
+                            "metadata": {"name": secret_name, "tenant": tenant},
+                            "type": "SECRET_TYPE_SSH_PUBLIC_KEY",
+                            "data": {"public_key": base64.b64encode(net_ssh_public_key.encode()).decode()},
+                        }
+                    },
+                )
+                existing = {"id": response["object"]["id"], "name": secret_name, "tenant": tenant}
+                ssh_keys.append(existing)
+                self.__class__.state["ssh_keys"] = ssh_keys
+            ssh_keys_by_tenant[tenant] = existing["name"]
         bmis: list[dict[str, Any]] = list(self.__class__.state.get("bmis") or [])
         for key, name_prefix, tenant, catalog, subnet, sg, auto_eip, ip_prefix in specs:
             name = f"{name_prefix}-{net_test_run_id}"
@@ -566,7 +594,7 @@ class TestCrossTenantBmaasNetworking:
                 catalog=catalog,
                 subnet_id=subnet,
                 security_group_id=sg,
-                ssh_public_key=net_ssh_public_key,
+                ssh_key=ssh_keys_by_tenant[tenant],
                 tenant=tenant,
                 disk_image=disk_image,
                 user_data=bmi_user_data,

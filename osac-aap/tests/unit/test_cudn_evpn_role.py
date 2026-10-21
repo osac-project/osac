@@ -625,13 +625,19 @@ def test_shared_cudn_create_is_serialized_and_lock_is_released_on_failure() -> N
     assert provision["always"][0]["ansible.builtin.include_role"]["tasks_from"] == "release"
 
 
-def test_fabric_bgp_config_included_after_cudn_export() -> None:
+def test_fabric_bgp_config_resolves_from_env_and_template_parameters() -> None:
     tasks = _create_tasks()
     task_names = [task.get("name") for task in tasks]
+    resolve_index = task_names.index("Resolve fabric BGP configuration")
     export_index = task_names.index("Export CUDN status")
     fabric_bgp_index = task_names.index("Apply fabric BGP configuration when enabled")
 
-    assert export_index < fabric_bgp_index
+    assert export_index < resolve_index < fabric_bgp_index
+
+    resolve_task = tasks[resolve_index]
+    fact_value = resolve_task["ansible.builtin.set_fact"]["_cudn_fabric_bgp"]
+    assert "template_parameters.fabricBGP" in fact_value
+    assert "OSAC_FABRIC_BGP_CONFIG" in fact_value
 
     fabric_bgp_task = tasks[fabric_bgp_index]
     include_role = fabric_bgp_task["ansible.builtin.include_role"]
@@ -639,7 +645,7 @@ def test_fabric_bgp_config_included_after_cudn_export() -> None:
     assert include_role["tasks_from"] == "create"
 
     conditions = fabric_bgp_task["when"]
-    assert any("fabricBGP" in c for c in conditions)
+    assert any("_cudn_fabric_bgp" in c for c in conditions)
     assert any("enabled" in c for c in conditions)
     assert any("workers" in c for c in conditions)
 

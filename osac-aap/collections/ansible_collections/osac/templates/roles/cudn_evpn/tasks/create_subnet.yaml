@@ -311,17 +311,25 @@
               cudn_namespace: "{{ subnet_name }}"
               vrf_name: "{{ cudn_status.resources[0].status.vrfName }}"
 
+        - name: Resolve fabric BGP configuration
+          ansible.builtin.set_fact:
+            _cudn_fabric_bgp: >-
+              {{ template_parameters.fabricBGP
+                 | default(
+                     lookup('env', 'OSAC_FABRIC_BGP_CONFIG')
+                     | default('{}', true) | from_json,
+                   true) }}
+
         - name: Apply fabric BGP configuration when enabled
           ansible.builtin.include_role:
             name: osac.service.fabric_bgp_config
             tasks_from: create
           vars:
-            fabric_bgp_workers: "{{ template_parameters.fabricBGP.workers }}"
+            fabric_bgp_workers: "{{ _cudn_fabric_bgp.workers }}"
             fabric_bgp_remote_kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
           when:
-            - template_parameters.fabricBGP is defined
-            - template_parameters.fabricBGP.enabled | default(false) | bool
-            - template_parameters.fabricBGP.workers | default([]) | length > 0
+            - _cudn_fabric_bgp.enabled | default(false) | bool
+            - _cudn_fabric_bgp.workers | default([]) | length > 0
       when:
         - _cudn_owner_subnet_name == subnet_name
         - (subnet.metadata.annotations | default({})).get('osac.openshift.io/skip-k8s-manager', '') != 'true'

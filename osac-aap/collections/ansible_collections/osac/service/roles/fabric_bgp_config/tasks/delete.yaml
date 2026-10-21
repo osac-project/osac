@@ -12,7 +12,8 @@
   loop: "{{ fabric_bgp_workers }}"
   loop_control:
     loop_var: _fabric_bgp_worker
-    label: "{{ _fabric_bgp_worker.nodeName }}"
+    label: "worker {{ ansible_loop.index0 }}"
+    extended: true
 
 - name: Delete NMState policy for each worker
   kubernetes.core.k8s:
@@ -24,11 +25,11 @@
   loop: "{{ fabric_bgp_workers }}"
   loop_control:
     loop_var: _fabric_bgp_worker
-    label: "{{ _fabric_bgp_worker.nodeName }}"
+    label: "worker {{ ansible_loop.index0 }}"
+    extended: true
 
-- name: Log fabric BGP deletion summary
+- name: Log fabric BGP deletion result
   ansible.builtin.debug:
     msg: >-
       Removed fabric BGP configuration for
-      {{ fabric_bgp_workers | length }} worker(s):
-      {{ fabric_bgp_workers | map(attribute='nodeName') | list }}
+      {{ fabric_bgp_workers | length }} worker(s).

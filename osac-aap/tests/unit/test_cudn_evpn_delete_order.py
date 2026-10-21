@@ -488,6 +488,26 @@ def test_stale_owner_is_cleared_when_only_skipped_siblings_remain() -> None:
     assert not all(condition(**{**retained, "cudn_evpn_has_live_siblings": False}) for condition in retained_conditions)
 
 
+def test_fabric_bgp_teardown_guarded_by_no_live_siblings() -> None:
+    tasks = _delete_tasks()
+    task_names = [task.get("name") for task in tasks]
+    resolve_index = task_names.index("Resolve fabric BGP configuration for teardown")
+    teardown_index = task_names.index("Remove fabric BGP resources when no sibling CUDN remains")
+    clear_owner_index = task_names.index("Clear persisted CUDN owner after the final Subnet is removed")
+
+    assert clear_owner_index < resolve_index < teardown_index
+
+    teardown_task = tasks[teardown_index]
+    include_role = teardown_task["ansible.builtin.include_role"]
+    assert include_role["name"] == "osac.service.fabric_bgp_config"
+    assert include_role["tasks_from"] == "delete"
+
+    conditions = teardown_task["when"]
+    assert any("not cudn_evpn_has_live_siblings" in c for c in conditions)
+    assert any("enabled" in c for c in conditions)
+    assert any("workers" in c for c in conditions)
+
+
 def test_delete_entrypoint_is_declared_for_manager_dispatch() -> None:
     argspec_path = _role_path() / "meta" / "argument_specs.yaml"
     argspec = yaml.safe_load(argspec_path.read_text(encoding="utf-8"))["argument_specs"]["delete_subnet"]["options"]

@@ -2993,6 +2993,14 @@
       "type": "object",
       "description": "Direct worker-to-fabric BGP/EVPN peering applied after the CUDN is Ready. Each worker entry configures a dedicated physical NIC with numbered P2P eBGP and strict VTEP /32 route filtering.",
       "additionalProperties": false,
+      "if": {
+        "properties": { "enabled": { "const": true } },
+        "required": ["enabled"]
+      },
+      "then": {
+        "required": ["workers"],
+        "properties": { "workers": { "minItems": 1 } }
+      },
       "properties": {
         "enabled": {
           "type": "boolean",

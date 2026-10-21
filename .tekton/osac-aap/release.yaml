@@ -46,7 +46,7 @@ spec:
     value: "true"
   - name: prefetch-input
     value: |-
-      [{"type": "rpm", "path": "osac-aap"}, {"type": "pip", "path": "osac-aap", "requirements_files": ["execution-environment/requirements.txt"], "requirements_build_files": ["requirements-build-tools.txt"]}, {"type": "generic", "path": "osac-aap"}]
+      [{"type": "rpm", "path": "osac-aap"}, {"type": "pip", "path": "osac-aap", "requirements_files": ["execution-environment/requirements.txt"], "requirements_build_files": ["requirements-build-tools.txt"], "binary": {}}, {"type": "generic", "path": "osac-aap"}]
   # ansible-builder's Containerfile template hardcodes this ARG's default
   # to the unpinned "ansible-core ansible-runner" -- pin it to match
   # execution-environment.yaml's own resolved versions (both for

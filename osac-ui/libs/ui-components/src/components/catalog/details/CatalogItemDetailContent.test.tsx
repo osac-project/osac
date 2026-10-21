@@ -92,7 +92,20 @@ const clusterItem = create(ClusterCatalogItemSchema, {
         case: 'editable',
         value: {
           defaultValue: {
-            items: { workers: { size: 3, baremetalInstanceType: { name: 'bm.large' } } },
+            items: {
+              'control-plane': {
+                size: 3,
+                baremetalInstanceType: { name: 'bm-cpu-64c' },
+              },
+              workers: {
+                size: 5,
+                baremetalInstanceType: { name: 'bm-cpu-32c' },
+              },
+              'gpu-workers': {
+                size: 2,
+                baremetalInstanceType: { name: 'bm-gpu-h100' },
+              },
+            },
           },
         },
       },
@@ -137,11 +150,18 @@ describe('CatalogItemDetailContent', () => {
       apiFixtures: catalogApiFixtures,
     });
 
-    expect(screen.getByText('catalog-rhel-9')).toBeInTheDocument();
-    expect(screen.getByText('RHEL 9 base image')).toBeInTheDocument();
-    expect(screen.getByText('run-strategy')).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Details' })).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Configuration' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Overview' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Publishing' })).toBeInTheDocument();
+    expect(screen.getByText('Virtual Machine')).toBeInTheDocument();
+    expect(screen.getByText('foo')).toBeInTheDocument();
+    const detailsCard = screen.getByRole('region', { name: 'Details' });
+    const configurationCard = screen.getByRole('region', { name: 'Configuration' });
+    expect(detailsCard).toHaveClass('pf-m-full-height');
+    expect(detailsCard.querySelector('dl')).toHaveClass('pf-m-compact');
+    expect(detailsCard.querySelector('dl')).not.toHaveClass('pf-m-horizontal');
+    expect(configurationCard).toHaveClass('pf-m-secondary');
+    expect(configurationCard.querySelector('dl')).toHaveClass('pf-m-compact');
+    expect(configurationCard.querySelector('dl')).not.toHaveClass('pf-m-horizontal');
 
     expect(screen.getByText('Instance type')).toBeInTheDocument();
     expect(screen.getByText('standard-4-8')).toBeInTheDocument();
@@ -160,14 +180,24 @@ describe('CatalogItemDetailContent', () => {
   });
 
   it('shows configured cluster fields and excludes unsupported policies', () => {
-    renderWithProviders(<CatalogItemDetailContent item={clusterItem} />, {
+    const { container } = renderWithProviders(<CatalogItemDetailContent item={clusterItem} />, {
       apiFixtures: catalogApiFixtures,
     });
 
     expect(screen.getByText('Cluster version')).toBeInTheDocument();
     expect(screen.getByText('OpenShift 4.16')).toBeInTheDocument();
     expect(screen.getByText('Node sets')).toBeInTheDocument();
-    expect(screen.getByText('workers: 3 (bm.large)')).toBeInTheDocument();
+    expect(screen.getByText('control-plane')).toBeInTheDocument();
+    expect(screen.getByText('bm-cpu-64c · 3 nodes')).toBeInTheDocument();
+    expect(screen.getByText('workers')).toBeInTheDocument();
+    expect(screen.getByText('bm-cpu-32c · 5 nodes')).toBeInTheDocument();
+    expect(screen.getByText('gpu-workers')).toBeInTheDocument();
+    expect(screen.getByText('bm-gpu-h100 · 2 nodes')).toBeInTheDocument();
+    expect(screen.getAllByText('Editable').length).toBeGreaterThan(0);
+    expect(container.querySelector('dl[aria-label="Node sets"]')).toHaveClass(
+      'catalog-node-sets__list',
+    );
+    expect(screen.queryByText(/vCPU|GB RAM/)).not.toBeInTheDocument();
     expect(screen.getByText('Pod CIDR')).toBeInTheDocument();
     expect(screen.getByText('10.128.0.0/14')).toBeInTheDocument();
     expect(screen.getByText('Service CIDR')).toBeInTheDocument();

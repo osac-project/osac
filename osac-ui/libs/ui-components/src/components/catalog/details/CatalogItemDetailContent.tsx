@@ -6,18 +6,19 @@ import {
   DescriptionListDescription,
   DescriptionListGroup,
   DescriptionListTerm,
-  Flex,
-  FlexItem,
   Grid,
   GridItem,
   Label,
+  Stack,
+  StackItem,
+  Title,
 } from '@patternfly/react-core';
 
 import { useTranslation } from '../../../hooks/useTranslation.ts';
 import {
   type CatalogItem,
   GLOBAL_TENANT_VALUE,
-  catalogItemMetadataLabelEntries,
+  catalogItemTypeBadgeLabel,
 } from '../catalogItemDisplay.ts';
 import { useCatalogItemResourceLookups } from '../catalogItemResourceLookups.ts';
 import CatalogItemConfiguration from './CatalogItemConfiguration';
@@ -30,84 +31,82 @@ interface CatalogItemDetailContentProps {
 export const CatalogItemDetailContent = ({ item }: CatalogItemDetailContentProps) => {
   const { t } = useTranslation();
   const resourceLookups = useCatalogItemResourceLookups();
-  const metadataLabels = catalogItemMetadataLabelEntries(item);
-  const description = item.description?.trim() || item.metadata?.description?.trim();
   const tenant = item.metadata?.tenant?.trim();
   const detailsTitleId = 'catalog-item-details-card-title';
   const configurationTitleId = 'catalog-item-configuration-card-title';
 
   return (
     <Grid hasGutter>
-      <GridItem md={8}>
-        <Card component="section" aria-labelledby={detailsTitleId}>
+      <GridItem md={6} lg={8}>
+        <Card component="section" isFullHeight aria-labelledby={detailsTitleId}>
           <CardTitle id={detailsTitleId}>{t('Details')}</CardTitle>
           <CardBody>
-            <DescriptionList isHorizontal>
-              <DescriptionListGroup>
-                <DescriptionListTerm>{t('Catalog name')}</DescriptionListTerm>
-                <DescriptionListDescription>
-                  {item.metadata?.name ?? '—'}
-                </DescriptionListDescription>
-              </DescriptionListGroup>
-
-              {description ? (
-                <DescriptionListGroup>
-                  <DescriptionListTerm>{t('Description')}</DescriptionListTerm>
-                  <DescriptionListDescription>{description}</DescriptionListDescription>
-                </DescriptionListGroup>
-              ) : null}
-
-              {metadataLabels.length > 0 ? (
-                <DescriptionListGroup>
-                  <DescriptionListTerm>{t('Labels')}</DescriptionListTerm>
-                  <DescriptionListDescription>
-                    <Flex flexWrap={{ default: 'wrap' }} gap={{ default: 'gapSm' }}>
-                      {metadataLabels.map(({ key, value }) => (
-                        <FlexItem key={`${item.id}-detail-label-${key}`}>
-                          <Label variant="outline" color="grey" isCompact>
-                            <b>{key}</b>
-                            {': '}
-                            {value}
+            <Grid hasGutter>
+              <GridItem md={6}>
+                <Stack hasGutter>
+                  <StackItem>
+                    <Title headingLevel="h2" size="lg">
+                      {t('Overview')}
+                    </Title>
+                  </StackItem>
+                  <StackItem>
+                    <DescriptionList isCompact>
+                      <DescriptionListGroup>
+                        <DescriptionListTerm>{t('Service')}</DescriptionListTerm>
+                        <DescriptionListDescription>
+                          {catalogItemTypeBadgeLabel(item, t)}
+                        </DescriptionListDescription>
+                      </DescriptionListGroup>
+                      <DescriptionListGroup>
+                        <DescriptionListTerm>{t('Status')}</DescriptionListTerm>
+                        <DescriptionListDescription>
+                          <Label color={item.published ? 'green' : undefined} isCompact>
+                            {item.published ? t('Live') : t('Unpublished')}
                           </Label>
-                        </FlexItem>
-                      ))}
-                    </Flex>
-                  </DescriptionListDescription>
-                </DescriptionListGroup>
-              ) : null}
-              <DescriptionListGroup>
-                <DescriptionListTerm>{t('Status')}</DescriptionListTerm>
-                <DescriptionListDescription>
-                  <Label color={item.published ? 'green' : undefined}>
-                    {item.published ? t('Live') : t('Unpublished')}
-                  </Label>
-                </DescriptionListDescription>
-              </DescriptionListGroup>
-              <DescriptionListGroup>
-                <DescriptionListTerm>{t('Created')}</DescriptionListTerm>
-                <DescriptionListDescription>
-                  <Timestamp value={item.metadata?.creationTimestamp} />
-                </DescriptionListDescription>
-              </DescriptionListGroup>
-              <DescriptionListGroup>
-                <DescriptionListTerm>{t('Tenant')}</DescriptionListTerm>
-                <DescriptionListDescription>
-                  {tenant === GLOBAL_TENANT_VALUE ? t('Global public') : tenant || '—'}
-                </DescriptionListDescription>
-              </DescriptionListGroup>
-              {item.metadata?.project ? (
-                <DescriptionListGroup>
-                  <DescriptionListTerm>{t('Project')}</DescriptionListTerm>
-                  <DescriptionListDescription>{item.metadata.project}</DescriptionListDescription>
-                </DescriptionListGroup>
-              ) : null}
-            </DescriptionList>
+                        </DescriptionListDescription>
+                      </DescriptionListGroup>
+                    </DescriptionList>
+                  </StackItem>
+                </Stack>
+              </GridItem>
+
+              <GridItem md={6}>
+                <Stack hasGutter>
+                  <StackItem>
+                    <Title headingLevel="h2" size="lg">
+                      {t('Publishing')}
+                    </Title>
+                  </StackItem>
+                  <StackItem>
+                    <DescriptionList isCompact>
+                      <DescriptionListGroup>
+                        <DescriptionListTerm>{t('Visibility')}</DescriptionListTerm>
+                        <DescriptionListDescription>
+                          {tenant === GLOBAL_TENANT_VALUE ? t('Global public') : tenant || '—'}
+                        </DescriptionListDescription>
+                      </DescriptionListGroup>
+                      <DescriptionListGroup>
+                        <DescriptionListTerm>{t('Created')}</DescriptionListTerm>
+                        <DescriptionListDescription>
+                          <Timestamp value={item.metadata?.creationTimestamp} />
+                        </DescriptionListDescription>
+                      </DescriptionListGroup>
+                    </DescriptionList>
+                  </StackItem>
+                </Stack>
+              </GridItem>
+            </Grid>
           </CardBody>
         </Card>
       </GridItem>
 
-      <GridItem md={4}>
-        <Card component="section" isFullHeight aria-labelledby={configurationTitleId}>
+      <GridItem md={6} lg={4}>
+        <Card
+          component="section"
+          variant="secondary"
+          isFullHeight
+          aria-labelledby={configurationTitleId}
+        >
           <CardTitle id={configurationTitleId}>{t('Configuration')}</CardTitle>
           <CardBody>
             <CatalogItemConfiguration item={item} resourceLookups={resourceLookups} />

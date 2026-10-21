@@ -83,3 +83,45 @@ var Project = fmt.Sprintf("%s/%s", group, "project")
 
 // SecretType is the label used to indicate the type of a system-created secret.
 var SecretType = fmt.Sprintf("%s/%s", group, "secret-type")
+
+const (
+	autoCreatedLabel            = "osac.openshift.io/auto-created"
+	autoCreatedForLabel         = "osac.openshift.io/auto-created-for"
+	autoProvisionedLabel        = "osac.openshift.io/auto-provisioned"
+	autoProvisionedForLabel     = "osac.openshift.io/auto-provisioned-for"
+	autoAttachmentDeferredLabel = "osac.openshift.io/auto-attachment-deferred"
+	autoCreatedKindLabel        = "osac.openshift.io/auto-created-kind"
+	autoCreatedEndpointLabel    = "osac.openshift.io/auto-created-endpoint"
+)
+
+var externalIPLifecycleLabels = []string{
+	autoCreatedLabel,
+	autoCreatedForLabel,
+	autoProvisionedLabel,
+	autoProvisionedForLabel,
+	autoAttachmentDeferredLabel,
+	autoCreatedKindLabel,
+	autoCreatedEndpointLabel,
+}
+
+// MergeTrustedExternalIPLifecycleLabels updates only the recognized auto-network lifecycle labels.
+// It preserves unrelated labels already placed on the Kubernetes object, but never copies arbitrary
+// fulfillment metadata labels. The caller must set trusted only for server-created resources.
+func MergeTrustedExternalIPLifecycleLabels(current, metadataLabels map[string]string, trusted bool) map[string]string {
+	merged := make(map[string]string, len(current)+len(externalIPLifecycleLabels))
+	for key, value := range current {
+		merged[key] = value
+	}
+	for _, key := range externalIPLifecycleLabels {
+		delete(merged, key)
+	}
+	if !trusted {
+		return merged
+	}
+	for _, key := range externalIPLifecycleLabels {
+		if value, ok := metadataLabels[key]; ok {
+			merged[key] = value
+		}
+	}
+	return merged
+}

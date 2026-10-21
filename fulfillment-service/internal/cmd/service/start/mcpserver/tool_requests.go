@@ -15,9 +15,11 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
+	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -30,34 +32,88 @@ func toolCallContext(ctx context.Context) (context.Context, context.CancelFunc) 
 	return context.WithTimeout(ctx, toolCallTimeout)
 }
 
-// The downstream status message can contain internal hostnames or customer data.
-// Give MCP clients only the status category, never the downstream description.
+type toolError struct {
+	RequestID string   `json:"request_id"`
+	Category  string   `json:"category"`
+	GRPCCode  string   `json:"grpc_code"`
+	Message   string   `json:"message"`
+	Retryable bool     `json:"retryable"`
+	Details   []string `json:"details"`
+}
+
+func (e *toolError) Error() string {
+	encoded, err := json.Marshal(e)
+	if err != nil {
+		return `{"category":"upstream_failure","grpc_code":"Unknown","message":"The OSAC request failed.","retryable":false,"details":[]}`
+	}
+	return string(encoded)
+}
+
+func newToolError(category, grpcCode, message string, retryable bool) *toolError {
+	return &toolError{
+		RequestID: uuid.NewString(),
+		Category:  category,
+		GRPCCode:  grpcCode,
+		Message:   message,
+		Retryable: retryable,
+		Details:   []string{},
+	}
+}
+
+func safeTokenExchangeError(err error) error {
+	if errors.Is(err, errOAuthTokenExchangeUnavailable) {
+		return newToolError(
+			"service_unavailable",
+			"Unavailable",
+			"The authentication service is currently unavailable. Retry after checking service status.",
+			true,
+		)
+	}
+	return newToolError(
+		"authentication",
+		"Unauthenticated",
+		"MCP authentication failed. Sign in again and retry.",
+		false,
+	)
+}
+
+func safeInvalidRequestError(err error) error {
+	envelope := newToolError(
+		"invalid_request",
+		"InvalidArgument",
+		"The request arguments were rejected. Correct the request and try again.",
+		false,
+	)
+	envelope.Details = []string{err.Error()}
+	return envelope
+}
+
 func safePublicAPIError(err error) error {
 	switch status.Code(err) {
 	case codes.InvalidArgument:
-		return errors.New("public API rejected the request")
+		return newToolError("invalid_request", "InvalidArgument", "The request arguments were rejected. Correct the request and try again.", false)
 	case codes.Unauthenticated:
-		return errors.New("public API authentication failed")
+		return newToolError("authentication", "Unauthenticated", "OSAC authentication failed. Sign in again and retry.", false)
 	case codes.PermissionDenied:
-		return errors.New("permission denied")
+		return newToolError("authorization", "PermissionDenied", "The caller is not authorized for this operation. Request the needed access.", false)
 	case codes.NotFound:
-		return errors.New("resource not found")
+		return newToolError("not_found", "NotFound", "The requested OSAC resource was not found.", false)
 	case codes.AlreadyExists:
-		return errors.New("resource already exists")
+		return newToolError("conflict", "AlreadyExists", "The resource already exists or conflicts with current state. Resolve the conflict and retry.", false)
 	case codes.FailedPrecondition:
-		return errors.New("public API precondition failed")
+		return newToolError("protocol_incompatible", "FailedPrecondition", "The request is incompatible with the current OSAC service. Update the client and retry.", false)
 	case codes.ResourceExhausted:
-		return errors.New("public API is busy")
+		return newToolError("rate_limited", "ResourceExhausted", "The OSAC service is busy. Wait and retry.", true)
 	case codes.Canceled:
-		return errors.New("public API request was canceled")
+		return newToolError("service_unavailable", "Canceled", "The OSAC request was canceled before completion.", false)
 	case codes.DeadlineExceeded:
-		return errors.New("public API request timed out")
+		return newToolError("service_unavailable", "DeadlineExceeded", "The OSAC request timed out. Retry after checking service status.", true)
 	case codes.Unavailable:
-		return errors.New("public API is unavailable")
+		return newToolError("service_unavailable", "Unavailable", "The OSAC service is currently unavailable. Retry after checking service status.", true)
 	default:
 		if errors.Is(err, context.DeadlineExceeded) {
-			return errors.New("public API request timed out")
+			return newToolError("service_unavailable", "DeadlineExceeded", "The OSAC request timed out. Retry after checking service status.", true)
 		}
-		return errors.New("public API request failed")
+		return newToolError("upstream_failure", "Unknown", "The OSAC request failed. Use the request ID when reporting the issue.", false)
 	}
 }

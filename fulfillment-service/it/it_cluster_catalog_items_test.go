@@ -300,7 +300,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 		It("falls through to Template and system values and supports dry-run and direct creation", func(ctx context.Context) {
 			// This spec creates clusters without network attachments before creating its
 			// explicit network fixture, so ensure the deployment Hub is resolvable first.
-			networkClassID := getOrCreateTenantDefaultNetworkClassFixture(ctx)
+			networkClassID, _ := getOrCreateTenantDefaultNetworkClassFixture(ctx)
 
 			By("authoring a shared offering with Template and catalog defaults")
 			bmit := createCatalogItemBareMetalInstanceTypeFixture(ctx, "shared")

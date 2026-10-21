@@ -22,20 +22,21 @@ import (
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
-	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
-// cidrCounter provides a process-wide monotonic sequence so uniqueCIDR never returns
-// the same CIDR twice within a test run, avoiding pool CIDR collisions between specs.
+// cidrCounter and cidrOffset provide a process-wide sequence with a different starting
+// subnet on each run, avoiding pool CIDR collisions within and across repeated test runs.
 var cidrCounter atomic.Int64
+var cidrOffset = time.Now().UnixNano() % (200 * 256)
 
 const externalIPTestFinalizer = "integration-test-external-ip-capacity"
 
@@ -169,8 +170,8 @@ func deleteExternalIPAttachmentFixtureAndWait(
 }
 
 func uniqueCIDR() string {
-	n := cidrCounter.Add(1)
-	return fmt.Sprintf("10.%d.%d.0/28", 20+(n/256)%200, n%256)
+	subnet := (cidrOffset + cidrCounter.Add(1) - 1) % (200 * 256)
+	return fmt.Sprintf("10.%d.%d.0/28", 20+subnet/256, subnet%256)
 }
 
 func createReadyExternalIPNetworkClass(ctx context.Context, client privatev1.NetworkClassesClient) string {
@@ -183,15 +184,8 @@ func createReadyExternalIPNetworkClass(ctx context.Context, client privatev1.Net
 		"10.230.0.0/20",
 	)
 	DeferCleanup(func(cleanupCtx context.Context) {
-		deleteAndWaitForComputeInstanceFixtureResource(cleanupCtx,
-			func(deleteCtx context.Context) error {
-				_, err := client.Delete(deleteCtx, privatev1.NetworkClassesDeleteRequest_builder{Id: id}.Build())
-				return err
-			},
-			func(getCtx context.Context) error {
-				_, err := client.Get(getCtx, privatev1.NetworkClassesGetRequest_builder{Id: id}.Build())
-				return err
-			})
+		Expect(cleanupDefaultNetworkingForAllTenants(cleanupCtx, id)).To(Succeed())
+		Expect(cleanupNetworkClassFixture(cleanupCtx, client, id)).To(Succeed())
 	})
 
 	Eventually(func(g Gomega) {
@@ -403,7 +397,8 @@ var _ = Describe("Private ExternalIPPool CRUD", func() {
 			Object: privatev1.ExternalIPPool_builder{
 				Id: poolId,
 				Metadata: privatev1.Metadata_builder{
-					Name: fmt.Sprintf("test-pool-%s", uuid.New()[24:32]),
+					Name:   fmt.Sprintf("test-pool-%s", uuid.New()[24:32]),
+					Tenant: usersGroup,
 				}.Build(),
 				Spec: privatev1.ExternalIPPoolSpec_builder{
 					Cidrs:    []string{uniqueCIDR()},
@@ -818,16 +813,23 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		instanceTypesClient      privatev1.BareMetalInstanceTypesClient
 		clusterTemplatesClient   privatev1.ClusterTemplatesClient
 
-		poolId            string
-		externalIPId      string
-		clusterId         string
-		bmitName          string
-		templateId        string
-		networkClassHubID string
+		poolId                  string
+		externalIPId            string
+		clusterId               string
+		racingClusterID         string
+		subnetID                string
+		bmitName                string
+		templateId              string
+		attachmentIDs           []string
+		additionalExternalIPIDs []string
+		networkClassHubID       string
 	)
 
 	BeforeEach(func() {
 		ctx = context.Background()
+		attachmentIDs = nil
+		additionalExternalIPIDs = nil
+		racingClusterID = ""
 		networkClassesClient = privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
 		poolsClient = privatev1.NewExternalIPPoolsClient(tool.InternalView().AdminConn())
 		virtualNetworksClient = privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn())
@@ -1028,13 +1030,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func(cleanupCtx context.Context) {
-			deleteComputeInstanceFixtureResource(cleanupCtx,
-				func(deleteCtx context.Context) error {
-					_, deleteErr := virtualNetworksClient.Delete(deleteCtx, privatev1.VirtualNetworksDeleteRequest_builder{
-						Id: virtualNetworkID,
-					}.Build())
-					return deleteErr
-				})
+			Expect(cleanupVirtualNetworkFixture(cleanupCtx, virtualNetworksClient, virtualNetworkID)).To(Succeed())
 		})
 		expectNetworkingResourceHub(ctx, networkClassHubID, func(getCtx context.Context) (string, error) {
 			resp, getErr := virtualNetworksClient.Get(getCtx, privatev1.VirtualNetworksGetRequest_builder{
@@ -1047,7 +1043,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		})
 		setRoutingVirtualNetworkReady(ctx, virtualNetworksClient, virtualNetworkID)
 
-		subnetID := fmt.Sprintf("test-subnet-%s", uuid.New())
+		subnetID = fmt.Sprintf("test-subnet-%s", uuid.New())
 		_, err = subnetsClient.Create(ctx, privatev1.SubnetsCreateRequest_builder{
 			Object: privatev1.Subnet_builder{
 				Id: subnetID,
@@ -1063,13 +1059,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func(cleanupCtx context.Context) {
-			deleteComputeInstanceFixtureResource(cleanupCtx,
-				func(deleteCtx context.Context) error {
-					_, deleteErr := subnetsClient.Delete(deleteCtx, privatev1.SubnetsDeleteRequest_builder{
-						Id: subnetID,
-					}.Build())
-					return deleteErr
-				})
+			Expect(cleanupSubnetFixture(cleanupCtx, subnetsClient, subnetID)).To(Succeed())
 		})
 		expectNetworkingResourceHub(ctx, networkClassHubID, func(getCtx context.Context) (string, error) {
 			resp, getErr := subnetsClient.Get(getCtx, privatev1.SubnetsGetRequest_builder{
@@ -1100,22 +1090,73 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		clusterId = createClusterResp.GetObject().GetId()
-		DeferCleanup(func(cleanupCtx context.Context) {
-			deleteComputeInstanceFixtureResource(cleanupCtx,
-				func(deleteCtx context.Context) error {
-					_, deleteErr := clustersClient.Delete(deleteCtx, publicv1.ClustersDeleteRequest_builder{Id: clusterId}.Build())
-					return deleteErr
-				})
-		})
+		Expect(setClusterFixtureReadiness(ctx, privateClustersClient, clusterId, true)).To(Succeed())
 		expectNetworkingResourceHub(ctx, networkClassHubID, func(getCtx context.Context) (string, error) {
-			resp, getErr := privateClustersClient.Get(getCtx, privatev1.ClustersGetRequest_builder{
-				Id: clusterId,
-			}.Build())
+			response, getErr := privateClustersClient.Get(getCtx, privatev1.ClustersGetRequest_builder{Id: clusterId}.Build())
 			if getErr != nil {
 				return "", getErr
 			}
-			return resp.GetObject().GetStatus().GetHub(), nil
+			return response.GetObject().GetStatus().GetHub(), nil
 		})
+	})
+
+	AfterEach(func() {
+		if clusterId != "" {
+			Expect(setClusterFixtureReadiness(ctx, privateClustersClient, clusterId, false)).To(Succeed())
+		}
+		for _, id := range attachmentIDs {
+			Expect(cleanupExternalIPAttachmentFixture(ctx, privateAttachmentsClient, id)).To(Succeed())
+		}
+		for _, id := range additionalExternalIPIDs {
+			filter := fmt.Sprintf("this.spec.external_ip.id == %q && !has(this.metadata.deletion_timestamp)", id)
+			response, err := privateAttachmentsClient.List(ctx, privatev1.ExternalIPAttachmentsListRequest_builder{
+				Filter: &filter,
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			for _, attachment := range response.GetItems() {
+				Expect(cleanupExternalIPAttachmentFixture(ctx, privateAttachmentsClient, attachment.GetId())).To(Succeed())
+			}
+		}
+		if racingClusterID != "" {
+			ownerFilter := fmt.Sprintf("this.metadata.labels['osac.openshift.io/auto-created-for'] == %q", racingClusterID)
+			attachments, err := privateAttachmentsClient.List(ctx, privatev1.ExternalIPAttachmentsListRequest_builder{
+				Filter: &ownerFilter,
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			for _, attachment := range attachments.GetItems() {
+				Expect(cleanupExternalIPAttachmentFixture(ctx, privateAttachmentsClient, attachment.GetId())).To(Succeed())
+			}
+			Expect(cleanupClusterFixture(ctx, clustersClient, privateClustersClient, racingClusterID)).To(Succeed())
+			externalIPs, err := privateExternalIPsClient.List(ctx, privatev1.ExternalIPsListRequest_builder{
+				Filter: &ownerFilter,
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			for _, externalIP := range externalIPs.GetItems() {
+				Expect(cleanupExternalIPFixture(ctx, privateExternalIPsClient, externalIP.GetId())).To(Succeed())
+			}
+		}
+		if clusterId != "" {
+			Expect(cleanupClusterFixture(ctx, clustersClient, privateClustersClient, clusterId)).To(Succeed())
+		}
+		for _, id := range additionalExternalIPIDs {
+			Expect(cleanupExternalIPFixture(ctx, privateExternalIPsClient, id)).To(Succeed())
+		}
+		if externalIPId != "" {
+			Expect(cleanupExternalIPFixture(ctx, privateExternalIPsClient, externalIPId)).To(Succeed())
+		}
+		if poolId != "" {
+			Expect(cleanupExternalIPPoolFixture(ctx, poolsClient, poolId)).To(Succeed())
+		}
+		if templateId != "" {
+			clusterTemplatesClient.Delete(ctx, privatev1.ClusterTemplatesDeleteRequest_builder{
+				Id: templateId,
+			}.Build())
+		}
+		if bmitName != "" {
+			instanceTypesClient.Delete(ctx, privatev1.BareMetalInstanceTypesDeleteRequest_builder{
+				Id: bmitName,
+			}.Build())
+		}
 	})
 
 	It("Can create, get, and list an ExternalIPAttachment with cluster target", func() {
@@ -1134,6 +1175,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		attachmentIDs = append(attachmentIDs, attachmentId)
 		Expect(response).ToNot(BeNil())
 		DeferCleanup(func(cleanupCtx context.Context) {
 			deleteExternalIPAttachmentFixtureAndWait(cleanupCtx, attachmentsClient, privateAttachmentsClient, attachmentId)
@@ -1166,6 +1208,522 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		Expect(listResponse.GetItems()).ToNot(BeEmpty())
 	})
 
+	It("creates one deferred automatic attachment after its ExternalIP and Cluster endpoint are ready", func() {
+		clusterResponse, err := privateClustersClient.Get(ctx, privatev1.ClustersGetRequest_builder{Id: clusterId}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		cluster := clusterResponse.GetObject()
+		tenant := cluster.GetMetadata().GetTenant()
+		Expect(setClusterFixtureReadiness(ctx, privateClustersClient, clusterId, false)).To(Succeed())
+		deferredIPID := fmt.Sprintf("deferred-auto-ip-%s", uuid.New())
+		deferredAttachmentFilter := fmt.Sprintf("this.spec.external_ip.id == %q && !has(this.metadata.deletion_timestamp)", deferredIPID)
+		listAttachments := func() []*privatev1.ExternalIPAttachment {
+			limit := int32(10)
+			response, listErr := privateAttachmentsClient.List(ctx, privatev1.ExternalIPAttachmentsListRequest_builder{
+				Filter: &deferredAttachmentFilter,
+				Limit:  &limit,
+			}.Build())
+			Expect(listErr).NotTo(HaveOccurred())
+			return response.GetItems()
+		}
+
+		additionalExternalIPIDs = append(additionalExternalIPIDs, deferredIPID)
+		_, err = privateExternalIPsClient.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{
+			Object: privatev1.ExternalIP_builder{
+				Id: deferredIPID,
+				Metadata: privatev1.Metadata_builder{
+					Name:    deferredIPID,
+					Tenant:  tenant,
+					Creator: "system",
+					Labels: map[string]string{
+						"osac.openshift.io/auto-created":             "true",
+						"osac.openshift.io/auto-created-for":         clusterId,
+						"osac.openshift.io/auto-attachment-deferred": "true",
+						"osac.openshift.io/auto-created-kind":        "cluster",
+						"osac.openshift.io/auto-created-endpoint":    "api",
+					},
+					Annotations: map[string]string{
+						"osac.openshift.io/tenant":          tenant,
+						"osac.openshift.io/owner-reference": clusterId,
+					},
+				}.Build(),
+				Spec: privatev1.ExternalIPSpec_builder{
+					Pool: privatev1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Consistently(listAttachments, 2*time.Second, 100*time.Millisecond).Should(BeEmpty(),
+			"a deferred EIA must not be created while its ExternalIP is pending")
+
+		Expect(setExternalIPFixtureState(ctx, privateExternalIPsClient, deferredIPID,
+			privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)).To(Succeed())
+		Consistently(listAttachments, 2*time.Second, 100*time.Millisecond).Should(BeEmpty(),
+			"an allocated ExternalIP must wait for the Cluster endpoint")
+
+		Expect(setClusterFixtureReadiness(ctx, privateClustersClient, clusterId, true)).To(Succeed())
+
+		var created []*privatev1.ExternalIPAttachment
+		Eventually(func(g Gomega) {
+			created = listAttachments()
+			g.Expect(created).To(HaveLen(1))
+		}, time.Minute, time.Second).Should(Succeed())
+		Expect(created[0].GetMetadata().GetLabels()["osac.openshift.io/auto-created"]).To(Equal("true"))
+		Expect(created[0].GetMetadata().GetAnnotations()["osac.openshift.io/owner-reference"]).To(Equal(clusterId))
+		Expect(created[0].GetSpec().GetCluster().GetId()).To(Equal(clusterId))
+		Expect(created[0].GetSpec().GetTargetEndpoint()).To(Equal(privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API))
+		attachmentIDs = append(attachmentIDs, created[0].GetId())
+
+		Consistently(listAttachments, 2*time.Second, 100*time.Millisecond).Should(HaveLen(1),
+			"reconciliation must keep exactly one automatic attachment for this ExternalIP")
+	})
+
+	It("does not recreate a deferred attachment when Cluster deletion races readiness", func() {
+		autoAttach := true
+		createdCluster, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
+			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("test-race-cluster-%s", uuid.New()[24:32])}.Build(),
+				Spec: publicv1.ClusterSpec_builder{
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets: map[string]*publicv1.ClusterNodeSet{"workers": publicv1.ClusterNodeSet_builder{
+						Size: new(int32(1)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
+					}.Build()},
+					NetworkAttachment: publicv1.ClusterNetworkAttachment_builder{
+						Subnet: publicv1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+					}.Build(),
+					AutoExternalIpAttachment: &autoAttach,
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		racingClusterID = createdCluster.GetObject().GetId()
+		Expect(setClusterFixtureReadiness(ctx, privateClustersClient, racingClusterID, false)).To(Succeed())
+		clusterResponse, err := privateClustersClient.Get(ctx,
+			privatev1.ClustersGetRequest_builder{Id: racingClusterID}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		tenant := clusterResponse.GetObject().GetMetadata().GetTenant()
+
+		deferredIPID := fmt.Sprintf("deferred-race-ip-%s", uuid.New())
+		additionalExternalIPIDs = append(additionalExternalIPIDs, deferredIPID)
+		_, err = privateExternalIPsClient.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{
+			Object: privatev1.ExternalIP_builder{
+				Id: deferredIPID,
+				Metadata: privatev1.Metadata_builder{
+					Name:    deferredIPID,
+					Tenant:  tenant,
+					Creator: "system",
+					Labels: map[string]string{
+						"osac.openshift.io/auto-created":             "true",
+						"osac.openshift.io/auto-created-for":         racingClusterID,
+						"osac.openshift.io/auto-attachment-deferred": "true",
+						"osac.openshift.io/auto-created-kind":        "cluster",
+						"osac.openshift.io/auto-created-endpoint":    "api",
+					},
+					Annotations: map[string]string{
+						"osac.openshift.io/tenant":          tenant,
+						"osac.openshift.io/owner-reference": racingClusterID,
+					},
+				}.Build(),
+				Spec: privatev1.ExternalIPSpec_builder{
+					Pool: privatev1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		getRaceIP := func() (*privatev1.ExternalIP, error) {
+			response, getErr := privateExternalIPsClient.Get(ctx,
+				privatev1.ExternalIPsGetRequest_builder{Id: deferredIPID}.Build())
+			if getErr != nil {
+				return nil, getErr
+			}
+			return response.GetObject(), nil
+		}
+		Eventually(func(g Gomega) {
+			ip, getErr := getRaceIP()
+			g.Expect(getErr).NotTo(HaveOccurred())
+			g.Expect(ip.GetStatus().GetHub()).To(Equal(networkClassHubID))
+		}, time.Minute, time.Second).Should(Succeed())
+		Expect(setExternalIPFixtureState(ctx, privateExternalIPsClient, deferredIPID,
+			privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)).To(Succeed())
+
+		ownerFilter := fmt.Sprintf("this.metadata.labels['osac.openshift.io/auto-created-for'] == %q", racingClusterID)
+		listOwnedAttachments := func() []*privatev1.ExternalIPAttachment {
+			response, listErr := privateAttachmentsClient.List(ctx, privatev1.ExternalIPAttachmentsListRequest_builder{
+				Filter: &ownerFilter,
+			}.Build())
+			Expect(listErr).NotTo(HaveOccurred())
+			return response.GetItems()
+		}
+		Consistently(listOwnedAttachments, 500*time.Millisecond, 100*time.Millisecond).Should(BeEmpty())
+
+		// The deferred reconciler and the public workload delete share a start gate.
+		// Whichever acquires the target/IP lifecycle locks first must leave cleanup
+		// resumable and prevent a retry from creating a late attachment.
+		start := make(chan struct{})
+		ready := make(chan struct{}, 2)
+		readinessResult := make(chan error, 1)
+		deletionResult := make(chan error, 1)
+		go func() {
+			ready <- struct{}{}
+			<-start
+			readinessResult <- setClusterFixtureReadiness(ctx, privateClustersClient, racingClusterID, true)
+		}()
+		go func() {
+			ready <- struct{}{}
+			<-start
+			_, deleteErr := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: racingClusterID}.Build())
+			deletionResult <- deleteErr
+		}()
+		<-ready
+		<-ready
+		close(start)
+		readyErr := <-readinessResult
+		deleteErr := <-deletionResult
+		if grpcstatus.Code(deleteErr) == grpccodes.Aborted {
+			_, deleteErr = clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: racingClusterID}.Build())
+		}
+		Expect(deleteErr).NotTo(HaveOccurred())
+		if readyErr != nil {
+			Expect(grpcstatus.Code(readyErr)).To(Or(Equal(grpccodes.NotFound), Equal(grpccodes.FailedPrecondition)))
+		}
+
+		Eventually(func(g Gomega) {
+			cluster, getErr := privateClustersClient.Get(ctx,
+				privatev1.ClustersGetRequest_builder{Id: racingClusterID}.Build())
+			if grpcstatus.Code(getErr) == grpccodes.NotFound {
+				return
+			}
+			g.Expect(getErr).NotTo(HaveOccurred())
+			g.Expect(cluster.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
+		}, time.Minute, time.Second).Should(Succeed())
+		Consistently(func(g Gomega) {
+			for _, attachment := range listOwnedAttachments() {
+				g.Expect(attachment.GetMetadata().HasDeletionTimestamp()).To(BeTrue(),
+					"a deferred attachment must not remain active after its Cluster is deleting")
+			}
+		}, 2*time.Second, 100*time.Millisecond).Should(Succeed())
+
+		for _, attachment := range listOwnedAttachments() {
+			attachmentIDs = append(attachmentIDs, attachment.GetId())
+			Expect(cleanupExternalIPAttachmentFixture(ctx, privateAttachmentsClient, attachment.GetId())).To(Succeed())
+		}
+		ownedIPs, err := privateExternalIPsClient.List(ctx, privatev1.ExternalIPsListRequest_builder{
+			Filter: &ownerFilter,
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		for _, externalIP := range ownedIPs.GetItems() {
+			Expect(cleanupExternalIPFixture(ctx, privateExternalIPsClient, externalIP.GetId())).To(Succeed())
+		}
+		Eventually(func(g Gomega) {
+			g.Expect(listOwnedAttachments()).To(BeEmpty())
+			response, listErr := privateExternalIPsClient.List(ctx, privatev1.ExternalIPsListRequest_builder{
+				Filter: &ownerFilter,
+			}.Build())
+			g.Expect(listErr).NotTo(HaveOccurred())
+			g.Expect(response.GetItems()).To(BeEmpty())
+		}, time.Minute, time.Second).Should(Succeed())
+	})
+
+	It("does not release a deferred attachment IP while that attachment is terminating", func() {
+		autoAttach := true
+		createdCluster, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
+			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("test-held-cluster-%s", uuid.New()[24:32])}.Build(),
+				Spec: publicv1.ClusterSpec_builder{
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets: map[string]*publicv1.ClusterNodeSet{"workers": publicv1.ClusterNodeSet_builder{
+						Size: new(int32(1)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
+					}.Build()},
+					NetworkAttachment: publicv1.ClusterNetworkAttachment_builder{
+						Subnet: publicv1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+					}.Build(),
+					AutoExternalIpAttachment: &autoAttach,
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		racingClusterID = createdCluster.GetObject().GetId()
+		Expect(setClusterFixtureReadiness(ctx, privateClustersClient, racingClusterID, false)).To(Succeed())
+		clusterResponse, err := privateClustersClient.Get(ctx,
+			privatev1.ClustersGetRequest_builder{Id: racingClusterID}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		tenant := clusterResponse.GetObject().GetMetadata().GetTenant()
+
+		deferredIPID := fmt.Sprintf("deferred-held-ip-%s", uuid.New())
+		additionalExternalIPIDs = append(additionalExternalIPIDs, deferredIPID)
+		_, err = privateExternalIPsClient.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{
+			Object: privatev1.ExternalIP_builder{
+				Id: deferredIPID,
+				Metadata: privatev1.Metadata_builder{
+					Name:    deferredIPID,
+					Tenant:  tenant,
+					Creator: "system",
+					Labels: map[string]string{
+						"osac.openshift.io/auto-created":             "true",
+						"osac.openshift.io/auto-created-for":         racingClusterID,
+						"osac.openshift.io/auto-attachment-deferred": "true",
+						"osac.openshift.io/auto-created-kind":        "cluster",
+						"osac.openshift.io/auto-created-endpoint":    "api",
+					},
+					Annotations: map[string]string{
+						"osac.openshift.io/tenant":          tenant,
+						"osac.openshift.io/owner-reference": racingClusterID,
+					},
+				}.Build(),
+				Spec: privatev1.ExternalIPSpec_builder{
+					Pool: privatev1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(setExternalIPFixtureState(ctx, privateExternalIPsClient, deferredIPID,
+			privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)).To(Succeed())
+		Expect(setClusterFixtureReadiness(ctx, privateClustersClient, racingClusterID, true)).To(Succeed())
+
+		attachmentFilter := fmt.Sprintf("this.spec.external_ip.id == %q", deferredIPID)
+		listDeferredAttachments := func() []*privatev1.ExternalIPAttachment {
+			response, listErr := privateAttachmentsClient.List(ctx, privatev1.ExternalIPAttachmentsListRequest_builder{
+				Filter: &attachmentFilter,
+			}.Build())
+			Expect(listErr).NotTo(HaveOccurred())
+			return response.GetItems()
+		}
+		var deferredAttachment *privatev1.ExternalIPAttachment
+		Eventually(func(g Gomega) {
+			items := listDeferredAttachments()
+			g.Expect(items).To(HaveLen(1))
+			deferredAttachment = items[0]
+		}, time.Minute, time.Second).Should(Succeed())
+		attachmentIDs = append(attachmentIDs, deferredAttachment.GetId())
+
+		Expect(addExternalIPAttachmentFinalizerWithRetry(ctx, privateAttachmentsClient,
+			deferredAttachment.GetId(), "integration-test/hold-deferred-detach")).To(Succeed())
+		_, err = attachmentsClient.Delete(ctx,
+			publicv1.ExternalIPAttachmentsDeleteRequest_builder{Id: deferredAttachment.GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(func(g Gomega) {
+			response, getErr := privateAttachmentsClient.Get(ctx,
+				privatev1.ExternalIPAttachmentsGetRequest_builder{Id: deferredAttachment.GetId()}.Build())
+			g.Expect(getErr).NotTo(HaveOccurred())
+			g.Expect(response.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
+		}, time.Minute, time.Second).Should(Succeed())
+
+		_, err = clustersClient.Delete(ctx,
+			publicv1.ClustersDeleteRequest_builder{Id: racingClusterID}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		clusterResponse, err = privateClustersClient.Get(ctx,
+			privatev1.ClustersGetRequest_builder{Id: racingClusterID}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(clusterResponse.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
+		ipResponse, err := privateExternalIPsClient.Get(ctx,
+			privatev1.ExternalIPsGetRequest_builder{Id: deferredIPID}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ipResponse.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeFalse(),
+			"a terminating attachment must retain its ExternalIP until detach completes")
+		Consistently(func(g Gomega) {
+			currentCluster, getClusterErr := privateClustersClient.Get(ctx,
+				privatev1.ClustersGetRequest_builder{Id: racingClusterID}.Build())
+			g.Expect(getClusterErr).NotTo(HaveOccurred(),
+				"the Cluster must remain available to attachment lifecycle updates while detach is pending")
+			g.Expect(currentCluster.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
+			g.Expect(listDeferredAttachments()).To(HaveLen(1),
+				"the deferred reconciler must not replace an attachment that is already terminating")
+		}, time.Second, 100*time.Millisecond).Should(Succeed())
+
+		err = removeExternalIPAttachmentFinalizerWithRetry(ctx, privateAttachmentsClient,
+			deferredAttachment.GetId(), "integration-test/hold-deferred-detach")
+		// Removing the last finalizer can delete the terminating attachment in
+		// the same transaction, in which case the update reports NotFound. Let the
+		// assertions below verify that workload cleanup also removes its IPs.
+		if grpcstatus.Code(err) == grpccodes.NotFound {
+			_, attachmentGetErr := privateAttachmentsClient.Get(ctx,
+				privatev1.ExternalIPAttachmentsGetRequest_builder{Id: deferredAttachment.GetId()}.Build())
+			Expect(grpcstatus.Code(attachmentGetErr)).To(Equal(grpccodes.NotFound),
+				"NotFound while releasing the finalizer must mean the attachment is gone, not that its target disappeared")
+		} else {
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cleanupExternalIPAttachmentFixture(ctx, privateAttachmentsClient, deferredAttachment.GetId())).To(Succeed())
+		}
+		ownerFilter := fmt.Sprintf("this.metadata.labels['osac.openshift.io/auto-created-for'] == %q", racingClusterID)
+		Eventually(func(g Gomega) {
+			_, clusterErr := privateClustersClient.Get(ctx,
+				privatev1.ClustersGetRequest_builder{Id: racingClusterID}.Build())
+			g.Expect(grpcstatus.Code(clusterErr)).To(Equal(grpccodes.NotFound),
+				"the Cluster should finish deletion after its terminating attachment is released")
+			g.Expect(listDeferredAttachments()).To(BeEmpty())
+			ips, listErr := privateExternalIPsClient.List(ctx, privatev1.ExternalIPsListRequest_builder{
+				Filter: &ownerFilter,
+			}.Build())
+			g.Expect(listErr).NotTo(HaveOccurred())
+			g.Expect(ips.GetItems()).To(BeEmpty())
+		}, time.Minute, time.Second).Should(Succeed())
+	})
+
+	It("serializes ExternalIPAttachment creation against ExternalIP deletion", func() {
+		raceIPID := fmt.Sprintf("test-race-ip-%s", uuid.New())
+		additionalExternalIPIDs = append(additionalExternalIPIDs, raceIPID)
+		_, err := externalIPsClient.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
+			Object: publicv1.ExternalIP_builder{
+				Id:       raceIPID,
+				Metadata: publicv1.Metadata_builder{Name: raceIPID}.Build(),
+				Spec: publicv1.ExternalIPSpec_builder{
+					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		getRaceIP := func() (*privatev1.ExternalIP, error) {
+			response, getErr := privateExternalIPsClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{Id: raceIPID}.Build())
+			if getErr != nil {
+				return nil, getErr
+			}
+			return response.GetObject(), nil
+		}
+		Eventually(func(g Gomega) {
+			ip, getErr := getRaceIP()
+			g.Expect(getErr).NotTo(HaveOccurred())
+			g.Expect(ip.GetStatus().GetHub()).To(Equal(networkClassHubID))
+		}, time.Minute, time.Second).Should(Succeed())
+		Expect(setExternalIPFixtureState(ctx, privateExternalIPsClient, raceIPID,
+			privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)).To(Succeed())
+
+		attachmentID := fmt.Sprintf("test-race-attachment-%s", uuid.New())
+		attachmentRequest := publicv1.ExternalIPAttachmentsCreateRequest_builder{
+			Object: publicv1.ExternalIPAttachment_builder{
+				Id:       attachmentID,
+				Metadata: publicv1.Metadata_builder{Name: attachmentID}.Build(),
+				Spec: publicv1.ExternalIPAttachmentSpec_builder{
+					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: raceIPID}.Build(),
+					Cluster:        publicv1.ClusterLocalReference_builder{Id: clusterId}.Build(),
+					TargetEndpoint: publicv1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API,
+				}.Build(),
+			}.Build(),
+		}.Build()
+
+		raceCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		start := make(chan struct{})
+		ready := make(chan struct{}, 2)
+		type operationResult struct{ err error }
+		createResult := make(chan operationResult, 1)
+		deleteResult := make(chan operationResult, 1)
+		go func() {
+			ready <- struct{}{}
+			<-start
+			_, createErr := attachmentsClient.Create(raceCtx, attachmentRequest)
+			createResult <- operationResult{err: createErr}
+		}()
+		go func() {
+			ready <- struct{}{}
+			<-start
+			_, deleteErr := externalIPsClient.Delete(raceCtx, publicv1.ExternalIPsDeleteRequest_builder{Id: raceIPID}.Build())
+			deleteResult <- operationResult{err: deleteErr}
+		}()
+		<-ready
+		<-ready
+		close(start)
+		created := <-createResult
+		deleted := <-deleteResult
+
+		// A database deadlock is surfaced as Aborted. Retry that operation once so
+		// the assertion checks the settled resource state after the concurrent race.
+		if grpcstatus.Code(created.err) == grpccodes.Aborted {
+			_, created.err = attachmentsClient.Create(ctx, attachmentRequest)
+		}
+		if grpcstatus.Code(deleted.err) == grpccodes.Aborted {
+			_, deleted.err = externalIPsClient.Delete(ctx, publicv1.ExternalIPsDeleteRequest_builder{Id: raceIPID}.Build())
+		}
+
+		attachmentResponse, attachmentErr := privateAttachmentsClient.Get(ctx,
+			privatev1.ExternalIPAttachmentsGetRequest_builder{Id: attachmentID}.Build())
+		ipResponse, ipErr := privateExternalIPsClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{Id: raceIPID}.Build())
+		if attachmentErr == nil {
+			attachmentIDs = append(attachmentIDs, attachmentID)
+			Expect(ipErr).NotTo(HaveOccurred(), "a committed attachment must retain its ExternalIP")
+			Expect(ipResponse.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeFalse(),
+				"ExternalIP deletion must not pass an attachment created in the same race")
+			Expect(deleted.err).To(HaveOccurred())
+			Expect(attachmentResponse.GetObject().GetSpec().GetExternalIp().GetId()).To(Equal(raceIPID))
+		} else {
+			Expect(grpcstatus.Code(attachmentErr)).To(Equal(grpccodes.NotFound))
+			Expect(deleted.err).NotTo(HaveOccurred(), "when no attachment commits, ExternalIP deletion must win")
+			if ipErr == nil {
+				Expect(ipResponse.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue(),
+					"a deleted ExternalIP may remain until its finalizer completes")
+			} else {
+				Expect(grpcstatus.Code(ipErr)).To(Equal(grpccodes.NotFound))
+			}
+		}
+	})
+
+	It("keeps an ExternalIP in use while its attachment is deleting behind a finalizer", func() {
+		const heldFinalizer = "integration-test/hold-detach"
+		attachmentID := fmt.Sprintf("test-held-attachment-%s", uuid.New())
+		_, err := attachmentsClient.Create(ctx, publicv1.ExternalIPAttachmentsCreateRequest_builder{
+			Object: publicv1.ExternalIPAttachment_builder{
+				Id:       attachmentID,
+				Metadata: publicv1.Metadata_builder{Name: attachmentID}.Build(),
+				Spec: publicv1.ExternalIPAttachmentSpec_builder{
+					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: externalIPId}.Build(),
+					Cluster:        publicv1.ClusterLocalReference_builder{Id: clusterId}.Build(),
+					TargetEndpoint: publicv1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API,
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		attachmentIDs = append(attachmentIDs, attachmentID)
+
+		// The event-driven Fulfillment controller adds its own finalizer after
+		// Create. Wait for that first reconcile to finish before adding the test
+		// finalizer, otherwise its stale update can replace our marker.
+		Eventually(func(g Gomega) {
+			response, getErr := privateAttachmentsClient.Get(ctx,
+				privatev1.ExternalIPAttachmentsGetRequest_builder{Id: attachmentID}.Build())
+			g.Expect(getErr).NotTo(HaveOccurred())
+			metadata := response.GetObject().GetMetadata()
+			g.Expect(metadata.GetFinalizers()).To(ContainElement(finalizers.Controller))
+			g.Expect(response.GetObject().GetStatus().GetHub()).NotTo(BeEmpty())
+		}, time.Minute, time.Second).Should(Succeed())
+
+		Expect(addExternalIPAttachmentFinalizerWithRetry(ctx, privateAttachmentsClient,
+			attachmentID, heldFinalizer)).To(Succeed())
+		attachmentBeforeDelete, err := privateAttachmentsClient.Get(ctx,
+			privatev1.ExternalIPAttachmentsGetRequest_builder{Id: attachmentID}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(attachmentBeforeDelete.GetObject().GetMetadata().GetFinalizers()).To(ContainElement(heldFinalizer),
+			"the test finalizer must be persisted before requesting deletion")
+		_, err = attachmentsClient.Delete(ctx, publicv1.ExternalIPAttachmentsDeleteRequest_builder{Id: attachmentID}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		attachmentAfterDelete, err := privateAttachmentsClient.Get(ctx,
+			privatev1.ExternalIPAttachmentsGetRequest_builder{Id: attachmentID}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		metadata := attachmentAfterDelete.GetObject().GetMetadata()
+		Expect(metadata.HasDeletionTimestamp()).To(BeTrue(),
+			"a finalizer must keep the attachment available after the synchronous delete request")
+		Expect(metadata.GetFinalizers()).To(ContainElement(heldFinalizer),
+			"the test finalizer must remain until the delete guard is checked")
+
+		_, err = externalIPsClient.Delete(ctx, publicv1.ExternalIPsDeleteRequest_builder{Id: externalIPId}.Build())
+		Expect(err).To(HaveOccurred())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+		ipResponse, err := privateExternalIPsClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{Id: externalIPId}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ipResponse.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeFalse())
+
+		err = removeExternalIPAttachmentFinalizerWithRetry(ctx, privateAttachmentsClient, attachmentID, heldFinalizer)
+		if grpcstatus.Code(err) == grpccodes.NotFound {
+			_, attachmentGetErr := privateAttachmentsClient.Get(ctx,
+				privatev1.ExternalIPAttachmentsGetRequest_builder{Id: attachmentID}.Build())
+			Expect(grpcstatus.Code(attachmentGetErr)).To(Equal(grpccodes.NotFound),
+				"NotFound while releasing the finalizer must mean the attachment is gone, not that another resource disappeared")
+		} else {
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cleanupExternalIPAttachmentFixture(ctx, privateAttachmentsClient, attachmentID)).To(Succeed())
+		}
+
+		_, err = externalIPsClient.Delete(ctx, publicv1.ExternalIPsDeleteRequest_builder{Id: externalIPId}.Build())
+		Expect(err).NotTo(HaveOccurred())
+	})
+
 	It("Rejects duplicate attachment for same ExternalIP", func() {
 		attachmentId1 := fmt.Sprintf("test-att-%s", uuid.New())
 		_, err := attachmentsClient.Create(ctx, publicv1.ExternalIPAttachmentsCreateRequest_builder{
@@ -1182,6 +1740,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		attachmentIDs = append(attachmentIDs, attachmentId1)
 		DeferCleanup(func(cleanupCtx context.Context) {
 			deleteExternalIPAttachmentFixtureAndWait(cleanupCtx, attachmentsClient, privateAttachmentsClient, attachmentId1)
 		})
@@ -1224,6 +1783,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 
 	It("Rejects attachment with non-ALLOCATED ExternalIP", func() {
 		pendingIPId := fmt.Sprintf("test-ip-%s", uuid.New())
+		additionalExternalIPIDs = append(additionalExternalIPIDs, pendingIPId)
 		_, err := externalIPsClient.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
 			Object: publicv1.ExternalIP_builder{
 				Id: pendingIPId,
@@ -1316,6 +1876,10 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		attachmentIDs = append(attachmentIDs, attachmentId)
+		DeferCleanup(func() {
+			Expect(cleanupExternalIPAttachmentFixture(ctx, privateAttachmentsClient, attachmentId)).To(Succeed())
+		})
 		attachmentResponse, err := privateAttachmentsClient.Get(ctx, privatev1.ExternalIPAttachmentsGetRequest_builder{Id: attachmentId}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		attachment := attachmentResponse.GetObject()

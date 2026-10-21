@@ -142,6 +142,21 @@ func ComputeDeprovisionBackoff(jobs []v1alpha1.JobStatus) time.Duration {
 	return computeDeprovisionBackoffForTarget(jobs, "")
 }
 
+// DeprovisionJobLaunchNeeded reports whether the lifecycle would launch a new
+// deprovision job at the supplied time. Controllers use this before claiming
+// a provider launch slot so ordinary status polling does not hold a launch
+// claim across provider read failures.
+func DeprovisionJobLaunchNeeded(jobs []v1alpha1.JobStatus, now time.Time) bool {
+	latest := FindLatestJobByType(jobs, v1alpha1.JobTypeDeprovision)
+	if !HasJobID(latest) {
+		return true
+	}
+	if !latest.State.IsTerminal() || latest.State.IsSuccessful() || !latest.BlockDeletionOnFailure {
+		return false
+	}
+	return now.Sub(latest.Timestamp.Time) >= computeDeprovisionBackoffForTarget(jobs, "")
+}
+
 // computeDeprovisionBackoffForTarget is ComputeDeprovisionBackoff scoped to a
 // single job target.
 func computeDeprovisionBackoffForTarget(jobs []v1alpha1.JobStatus, target string) time.Duration {

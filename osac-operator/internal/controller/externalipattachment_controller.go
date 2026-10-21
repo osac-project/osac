@@ -1145,10 +1145,57 @@ func (r *ExternalIPAttachmentReconciler) handleDeprovisioning(ctx context.Contex
 		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping deprovisioning")
 		return ctrl.Result{}, nil
 	}
-	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, attachment,
+	var claim *providerJobLaunchClaim
+	runCtx := ctx
+	if provisioning.DeprovisionJobLaunchNeeded(attachment.Status.ProvisioningJobs, time.Now()) {
+		var acquired, resumed bool
+		var err error
+		claim, acquired, resumed, err = acquireProviderJobLaunchClaim(
+			ctx, r.Client, r.APIReader, attachment, v1alpha1.JobTypeDeprovision, "",
+		)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !acquired {
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+		}
+		if resumed {
+			found, err := recoverProviderJobFromClaim(
+				ctx, r.ProvisioningProvider, attachment, claim, &attachment.Status.ProvisioningJobs, r.MaxJobHistory,
+			)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			if found {
+				if err := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(attachment), attachment.Status); err != nil {
+					return ctrl.Result{}, err
+				}
+				if err := releaseProviderJobLaunchClaim(ctx, r.Client, r.APIReader, attachment, claim.ID); err != nil {
+					return ctrl.Result{}, err
+				}
+				return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+			}
+		}
+		runCtx = provisioning.WithAAPJobLaunchID(ctx, claim.ID)
+	}
+	beforeStatus := attachment.Status.DeepCopy()
+	result, done, err := provisioning.RunDeprovisioningLifecycle(runCtx, r.ProvisioningProvider, attachment,
 		&attachment.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
-	if err != nil || !done {
+	if err != nil {
 		return result, err
+	}
+	if !equality.Semantic.DeepEqual(attachment.Status, *beforeStatus) {
+		if err := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(attachment), attachment.Status); err != nil {
+			return result, err
+		}
+	}
+	if claim != nil {
+		if err := releaseProviderJobLaunchClaim(ctx, r.Client, r.APIReader, attachment, claim.ID); err != nil {
+			return result, err
+		}
+	}
+	if !done {
+		return result, nil
 	}
 	return ctrl.Result{}, nil
 }
@@ -1156,7 +1203,11 @@ func (r *ExternalIPAttachmentReconciler) handleDeprovisioning(ctx context.Contex
 func (r *ExternalIPAttachmentReconciler) updateStatusWithRetry(ctx context.Context, key client.ObjectKey, newStatus v1alpha1.ExternalIPAttachmentStatus) error {
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		latest := &v1alpha1.ExternalIPAttachment{}
-		if err := r.Get(ctx, key, latest); err != nil {
+		reader := r.APIReader
+		if reader == nil {
+			reader = r.Client
+		}
+		if err := reader.Get(ctx, key, latest); err != nil {
 			return err
 		}
 		latest.Status = newStatus

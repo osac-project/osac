@@ -56,6 +56,7 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 		Expect(hubANamespace).ToNot(BeEmpty())
 
 		hubBID, hubBNamespace := createValidRoutingHub(ctx, hubsClient, hubANamespace)
+		By("synchronizing existing tenants to the alternate Hub")
 		tenantsClient := privatev1.NewTenantsClient(tool.InternalView().AdminConn())
 		expectTenantSyncedToHubNamespace(ctx, tenantsClient, hubBNamespace)
 
@@ -70,8 +71,8 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 		privateAttachmentsClient := privatev1.NewExternalIPAttachmentsClient(tool.InternalView().AdminConn())
 		natGatewaysClient := publicv1.NewNATGatewaysClient(tool.ExternalView().UserConn())
 		clusterTemplatesClient := privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
-		clustersClient := publicv1.NewClustersClient(tool.ExternalView().UserConn())
 		privateClustersClient := privatev1.NewClustersClient(tool.InternalView().AdminConn())
+		clustersClient := publicv1.NewClustersClient(tool.ExternalView().UserConn())
 
 		networkClassName := fmt.Sprintf("test-hub-routing-nc-%s", uuid.New())
 		networkClassResponse, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
@@ -79,26 +80,12 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 				Metadata:      privatev1.Metadata_builder{Name: networkClassName, Tenant: usersGroup}.Build(),
 				Title:         "Hub canonical placement test",
 				FabricManager: new("netris"),
-				Spec: privatev1.NetworkClassSpec_builder{
-					Defaults: privatev1.NetworkDefaults_builder{
-						VirtualNetworkIpv4Cidr: "10.230.0.0/16",
-						SubnetIpv4Cidr:         "10.230.0.0/20",
-					}.Build(),
-				}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		networkClassID := networkClassResponse.GetObject().GetId()
 		DeferCleanup(func(cleanupCtx context.Context) {
-			deleteAndWaitForComputeInstanceFixtureResource(cleanupCtx,
-				func(deleteCtx context.Context) error {
-					_, deleteErr := networkClassesClient.Delete(deleteCtx, privatev1.NetworkClassesDeleteRequest_builder{Id: networkClassID}.Build())
-					return deleteErr
-				},
-				func(getCtx context.Context) error {
-					_, getErr := networkClassesClient.Get(getCtx, privatev1.NetworkClassesGetRequest_builder{Id: networkClassID}.Build())
-					return getErr
-				})
+			Expect(cleanupNetworkClassFixture(cleanupCtx, networkClassesClient, networkClassID)).To(Succeed())
 		})
 		setNetworkClassCanonicalHub(ctx, networkClassesClient, networkClassID, hubId)
 		expectNetworkClassStatus(
@@ -125,7 +112,11 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func(cleanupCtx context.Context) {
-			_, _ = virtualNetworksClient.Delete(cleanupCtx, privatev1.VirtualNetworksDeleteRequest_builder{Id: virtualNetworkID}.Build())
+			Expect(cleanupVirtualNetworkFixture(cleanupCtx, virtualNetworksClient, virtualNetworkID)).To(Succeed())
+			waitForNotFound(func() error {
+				_, getErr := virtualNetworksClient.Get(cleanupCtx, privatev1.VirtualNetworksGetRequest_builder{Id: virtualNetworkID}.Build())
+				return getErr
+			})
 		})
 		expectNetworkingResourceHub(ctx, hubId, func(getCtx context.Context) (string, error) {
 			response, getErr := virtualNetworksClient.Get(getCtx, privatev1.VirtualNetworksGetRequest_builder{Id: virtualNetworkID}.Build())
@@ -154,7 +145,11 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func(cleanupCtx context.Context) {
-			_, _ = subnetsClient.Delete(cleanupCtx, privatev1.SubnetsDeleteRequest_builder{Id: subnetID}.Build())
+			Expect(cleanupSubnetFixture(cleanupCtx, subnetsClient, subnetID)).To(Succeed())
+			waitForNotFound(func() error {
+				_, getErr := subnetsClient.Get(cleanupCtx, privatev1.SubnetsGetRequest_builder{Id: subnetID}.Build())
+				return getErr
+			})
 		})
 		expectNetworkingResourceHub(ctx, hubId, func(getCtx context.Context) (string, error) {
 			response, getErr := subnetsClient.Get(getCtx, privatev1.SubnetsGetRequest_builder{Id: subnetID}.Build())
@@ -182,7 +177,7 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func(cleanupCtx context.Context) {
-			_, _ = securityGroupsClient.Delete(cleanupCtx, privatev1.SecurityGroupsDeleteRequest_builder{Id: securityGroupID}.Build())
+			Expect(cleanupSecurityGroupFixture(cleanupCtx, securityGroupsClient, securityGroupID)).To(Succeed())
 		})
 		expectNetworkingResourceHub(ctx, hubId, func(getCtx context.Context) (string, error) {
 			response, getErr := securityGroupsClient.Get(getCtx, privatev1.SecurityGroupsGetRequest_builder{Id: securityGroupID}.Build())
@@ -211,7 +206,7 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func(cleanupCtx context.Context) {
-			_, _ = poolsClient.Delete(cleanupCtx, privatev1.ExternalIPPoolsDeleteRequest_builder{Id: poolID}.Build())
+			Expect(cleanupExternalIPPoolFixture(cleanupCtx, poolsClient, poolID)).To(Succeed())
 		})
 		expectNetworkingResourceHub(ctx, hubId, func(getCtx context.Context) (string, error) {
 			response, getErr := poolsClient.Get(getCtx, privatev1.ExternalIPPoolsGetRequest_builder{Id: poolID}.Build())
@@ -240,7 +235,7 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 			}.Build())
 			Expect(createErr).ToNot(HaveOccurred())
 			DeferCleanup(func(cleanupCtx context.Context) {
-				_, _ = externalIPsClient.Delete(cleanupCtx, publicv1.ExternalIPsDeleteRequest_builder{Id: ipID}.Build())
+				Expect(cleanupExternalIPFixture(cleanupCtx, privateExternalIPsClient, ipID)).To(Succeed())
 			})
 			expectNetworkingResourceHub(ctx, hubId, func(getCtx context.Context) (string, error) {
 				response, getErr := privateExternalIPsClient.Get(getCtx, privatev1.ExternalIPsGetRequest_builder{Id: ipID}.Build())
@@ -273,7 +268,8 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func(cleanupCtx context.Context) {
-			_, _ = clusterTemplatesClient.Delete(cleanupCtx, privatev1.ClusterTemplatesDeleteRequest_builder{Id: clusterTemplateID}.Build())
+			_, cleanupErr := clusterTemplatesClient.Delete(cleanupCtx, privatev1.ClusterTemplatesDeleteRequest_builder{Id: clusterTemplateID}.Build())
+			Expect(cleanupErr).To(Succeed())
 		})
 
 		clusterResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
@@ -291,15 +287,7 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 		Expect(err).ToNot(HaveOccurred())
 		clusterID := clusterResponse.GetObject().GetId()
 		DeferCleanup(func(cleanupCtx context.Context) {
-			deleteAndWaitForComputeInstanceFixtureResource(cleanupCtx,
-				func(deleteCtx context.Context) error {
-					_, deleteErr := clustersClient.Delete(deleteCtx, publicv1.ClustersDeleteRequest_builder{Id: clusterID}.Build())
-					return deleteErr
-				},
-				func(getCtx context.Context) error {
-					_, getErr := privateClustersClient.Get(getCtx, privatev1.ClustersGetRequest_builder{Id: clusterID}.Build())
-					return getErr
-				})
+			Expect(cleanupClusterFixture(cleanupCtx, clustersClient, privateClustersClient, clusterID)).To(Succeed())
 		})
 
 		By("creating a second networked Cluster target on the same networking Hub")
@@ -318,15 +306,7 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 		Expect(err).ToNot(HaveOccurred())
 		secondClusterID := secondClusterResponse.GetObject().GetId()
 		DeferCleanup(func(cleanupCtx context.Context) {
-			deleteAndWaitForComputeInstanceFixtureResource(cleanupCtx,
-				func(deleteCtx context.Context) error {
-					_, deleteErr := clustersClient.Delete(deleteCtx, publicv1.ClustersDeleteRequest_builder{Id: secondClusterID}.Build())
-					return deleteErr
-				},
-				func(getCtx context.Context) error {
-					_, getErr := privateClustersClient.Get(getCtx, privatev1.ClustersGetRequest_builder{Id: secondClusterID}.Build())
-					return getErr
-				})
+			Expect(cleanupClusterFixture(cleanupCtx, clustersClient, privateClustersClient, secondClusterID)).To(Succeed())
 		})
 
 		for _, targetClusterID := range []string{clusterID, secondClusterID} {
@@ -367,6 +347,13 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 			listErr := tool.KubeClient().List(ctx, list, crclient.InNamespace(namespace), crclient.MatchingLabels{labels.ClusterOrderUuid: clusterID})
 			return len(list.Items), listErr
 		})
+		Expect(setClusterFixtureReadiness(ctx, privateClustersClient, clusterID, true)).To(Succeed())
+		Eventually(func(g Gomega) {
+			response, getErr := privateClustersClient.Get(ctx, privatev1.ClustersGetRequest_builder{Id: clusterID}.Build())
+			g.Expect(getErr).NotTo(HaveOccurred())
+			g.Expect(response.GetObject().GetStatus().GetState()).To(Equal(privatev1.ClusterState_CLUSTER_STATE_READY))
+			g.Expect(response.GetObject().GetStatus().GetApiEndpoint()).NotTo(BeEmpty())
+		}, time.Minute, time.Second).Should(Succeed())
 
 		attachmentID := fmt.Sprintf("test-hub-a-attachment-%s", uuid.New())
 		_, err = attachmentsClient.Create(ctx, publicv1.ExternalIPAttachmentsCreateRequest_builder{
@@ -382,15 +369,7 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func(cleanupCtx context.Context) {
-			deleteAndWaitForComputeInstanceFixtureResource(cleanupCtx,
-				func(deleteCtx context.Context) error {
-					_, deleteErr := attachmentsClient.Delete(deleteCtx, publicv1.ExternalIPAttachmentsDeleteRequest_builder{Id: attachmentID}.Build())
-					return deleteErr
-				},
-				func(getCtx context.Context) error {
-					_, getErr := privateAttachmentsClient.Get(getCtx, privatev1.ExternalIPAttachmentsGetRequest_builder{Id: attachmentID}.Build())
-					return getErr
-				})
+			Expect(cleanupExternalIPAttachmentFixture(cleanupCtx, privateAttachmentsClient, attachmentID)).To(Succeed())
 		})
 		expectNetworkingResourceHub(ctx, hubId, func(getCtx context.Context) (string, error) {
 			response, getErr := privateAttachmentsClient.Get(getCtx, privatev1.ExternalIPAttachmentsGetRequest_builder{Id: attachmentID}.Build())
@@ -419,7 +398,8 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func(cleanupCtx context.Context) {
-			_, _ = natGatewaysClient.Delete(cleanupCtx, publicv1.NATGatewaysDeleteRequest_builder{Id: natGatewayID}.Build())
+			privateNATGatewaysClient := privatev1.NewNATGatewaysClient(tool.InternalView().AdminConn())
+			Expect(cleanupNATGatewayFixture(cleanupCtx, natGatewaysClient, privateNATGatewaysClient, natGatewayID)).To(Succeed())
 		})
 		expectNetworkingCRInHub(ctx, hubANamespace, hubBNamespace, labels.NATGatewayUuid, natGatewayID, func(namespace string) (int, error) {
 			list := &osacv1alpha1.NATGatewayList{}
@@ -528,6 +508,7 @@ func createValidRoutingHub(ctx context.Context, hubsClient privatev1.HubsClient,
 		Rules: []rbacv1.PolicyRule{{
 			APIGroups: []string{osacv1alpha1.GroupVersion.Group},
 			Resources: []string{
+				"tenants",
 				"virtualnetworks",
 				"subnets",
 				"securitygroups",

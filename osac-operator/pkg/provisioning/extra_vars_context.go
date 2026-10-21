@@ -22,6 +22,9 @@ import (
 	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
+// AAPJobLaunchIDExtraVar is the correlation variable carried in AAP job input.
+const AAPJobLaunchIDExtraVar = "osac_job_launch_id"
+
 type contextKey int
 
 const (
@@ -198,4 +201,20 @@ func WithAAPExtraVars(ctx context.Context, extraVars map[string]any) context.Con
 func AAPExtraVarsFromContext(ctx context.Context) map[string]any {
 	extraVars, _ := ctx.Value(aapExtraVarsKey).(map[string]any)
 	return extraVars
+}
+
+// WithAAPJobLaunchID adds a stable launch identifier to AAP extra vars.
+func WithAAPJobLaunchID(ctx context.Context, launchID string) context.Context {
+	extraVars := make(map[string]any, len(AAPExtraVarsFromContext(ctx))+1)
+	for key, value := range AAPExtraVarsFromContext(ctx) {
+		extraVars[key] = value
+	}
+	extraVars[AAPJobLaunchIDExtraVar] = launchID
+	return WithAAPExtraVars(ctx, extraVars)
+}
+
+// AAPJobLaunchIDFromContext returns the AAP launch identifier from context.
+func AAPJobLaunchIDFromContext(ctx context.Context) string {
+	launchID, _ := AAPExtraVarsFromContext(ctx)[AAPJobLaunchIDExtraVar].(string)
+	return launchID
 }

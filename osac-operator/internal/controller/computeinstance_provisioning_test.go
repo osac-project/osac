@@ -41,6 +41,7 @@ type mockProvisioningProvider struct {
 	triggerDeprovisionFunc                func(ctx context.Context, resource client.Object, provisionJobs []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error)
 	getDeprovisionStatusFunc              func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error)
 	getDeprovisionStatusWithExtraVarsFunc func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error)
+	findJobByLaunchIDFunc                 func(ctx context.Context, resource client.Object, jobType osacv1alpha1.JobType, launchID string) (provisioning.ProvisionStatus, bool, error)
 }
 
 func (m *mockProvisioningProvider) TriggerProvision(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
@@ -105,6 +106,18 @@ func (m *mockProvisioningProvider) GetDeprovisionStatusWithExtraVars(
 	}
 	status, err := m.GetDeprovisionStatus(ctx, resource, jobID)
 	return provisioning.ProvisionStatusWithExtraVars{ProvisionStatus: status}, err
+}
+
+func (m *mockProvisioningProvider) FindJobByLaunchID(
+	ctx context.Context,
+	resource client.Object,
+	jobType osacv1alpha1.JobType,
+	launchID string,
+) (provisioning.ProvisionStatus, bool, error) {
+	if m.findJobByLaunchIDFunc != nil {
+		return m.findJobByLaunchIDFunc(ctx, resource, jobType, launchID)
+	}
+	return provisioning.ProvisionStatus{}, false, nil
 }
 
 func (m *mockProvisioningProvider) Name() string {

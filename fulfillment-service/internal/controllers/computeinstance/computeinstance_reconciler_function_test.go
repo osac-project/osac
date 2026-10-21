@@ -636,14 +636,28 @@ func newTaskForDelete(ciID, hubID string, hubCache controllers.HubCache) *task {
 	}.Build()
 
 	f := &function{
-		logger:   logger,
-		hubCache: hubCache,
+		logger:            logger,
+		hubCache:          hubCache,
+		networkingCleanup: &fakeWorkloadNetworkingCleanup{complete: true},
 	}
 
 	return &task{
 		r:               f,
 		computeInstance: ci,
 	}
+}
+
+type fakeWorkloadNetworkingCleanup struct {
+	complete   bool
+	calls      int
+	workloadID string
+	err        error
+}
+
+func (f *fakeWorkloadNetworkingCleanup) Cleanup(_ context.Context, workloadID string) (bool, error) {
+	f.calls++
+	f.workloadID = workloadID
+	return f.complete, f.err
 }
 
 var _ = Describe("delete", func() {
@@ -687,6 +701,24 @@ var _ = Describe("delete", func() {
 		err := t.delete(ctx)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(hasFinalizer(t.computeInstance)).To(BeFalse())
+	})
+
+	It("should retain the finalizer while automatic networking resources are terminating", func() {
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().Get(gomock.Any(), hubID).Return(&controllers.HubEntry{
+			Namespace: hubNamespace, Client: fake.NewClientBuilder().WithScheme(scheme).Build(),
+		}, nil)
+		t := newTaskForDelete(ciID, hubID, hubCache)
+		cleanup := &fakeWorkloadNetworkingCleanup{}
+		t.r.networkingCleanup = cleanup
+
+		Expect(t.delete(ctx)).To(MatchError(ContainSubstring("automatic workload networking resources are still terminating")))
+		Expect(cleanup.calls).To(Equal(1))
+		Expect(cleanup.workloadID).To(Equal(ciID))
+		Expect(hasFinalizer(t.computeInstance)).To(BeTrue())
 	})
 
 	It("should call hubClient.Delete when K8s object exists without DeletionTimestamp", func() {
@@ -807,7 +839,8 @@ var _ = Describe("delete", func() {
 		}.Build()
 
 		f := &function{
-			logger: logger,
+			logger:            logger,
+			networkingCleanup: &fakeWorkloadNetworkingCleanup{complete: true},
 		}
 
 		t := &task{

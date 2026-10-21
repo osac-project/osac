@@ -16,6 +16,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -102,6 +103,70 @@ var _ = Describe("OAuth token exchange", func() {
 		Expect(err).ToNot(HaveOccurred())
 		_, err = exchanger.Exchange(context.Background(), "mcp-token", incoming)
 		Expect(err).To(MatchError("OAuth token exchange failed with HTTP 403"))
+	})
+
+	It("classifies retryable authorization-server responses separately from authentication failures", func() {
+		cases := []struct {
+			name         string
+			statusCode   int
+			transportErr error
+			category     string
+			grpcCode     string
+			retryable    bool
+		}{
+			{
+				name: "server failure", statusCode: http.StatusServiceUnavailable,
+				category: "service_unavailable", grpcCode: "Unavailable", retryable: true,
+			},
+			{
+				name: "rate limit", statusCode: http.StatusTooManyRequests,
+				category: "service_unavailable", grpcCode: "Unavailable", retryable: true,
+			},
+			{
+				name: "invalid credentials", statusCode: http.StatusUnauthorized,
+				category: "authentication", grpcCode: "Unauthenticated", retryable: false,
+			},
+			{
+				name: "authorization server is unreachable", transportErr: errors.New("connection refused"),
+				category: "service_unavailable", grpcCode: "Unavailable", retryable: true,
+			},
+		}
+
+		for _, testCase := range cases {
+			By(testCase.name)
+			client := &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+				if testCase.transportErr != nil {
+					return nil, testCase.transportErr
+				}
+				return &http.Response{
+					StatusCode: testCase.statusCode,
+					Body:       io.NopCloser(strings.NewReader("authorization-server response")),
+				}, nil
+			})}
+			exchanger, err := newOAuthTokenExchanger(
+				"https://issuer.example.com/token", "https://mcp.example.com/", "fixture-secret", client, validator,
+			)
+			Expect(err).ToNot(HaveOccurred())
+
+			var exchangeErr error
+			request := requestWithCaller("raw-bearer-value", safeCallerContext{Subject: "user-1"})
+			request.Extra.TokenInfo.Extra[exchangeTokenExtraKey] = apiTokenSource(func(ctx context.Context) (string, error) {
+				apiToken, err := exchanger.Exchange(ctx, "mcp-token", incoming)
+				exchangeErr = err
+				return apiToken, err
+			})
+			handler := handleCheckConnection(
+				"https://mcp.example.com/", newResourceRegistry(ServerDeps{}), &mockSelfSubjectAccessReviewsClient{},
+			)
+			_, _, err = handler(context.Background(), request, CheckConnectionInput{})
+			Expect(err).To(HaveOccurred())
+			Expect(errors.Is(exchangeErr, errOAuthTokenExchangeUnavailable)).To(Equal(testCase.retryable))
+
+			envelope := decodeToolError(err)
+			Expect(envelope.Category).To(Equal(testCase.category))
+			Expect(envelope.GRPCCode).To(Equal(testCase.grpcCode))
+			Expect(envelope.Retryable).To(Equal(testCase.retryable))
+		}
 	})
 
 	It("rejects an exchange response that reuses the MCP token", func() {

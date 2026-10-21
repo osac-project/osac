@@ -27,6 +27,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -68,8 +69,9 @@ var _ privatev1.NetworkClassesServer = (*PrivateNetworkClassesServer)(nil)
 type PrivateNetworkClassesServer struct {
 	privatev1.UnimplementedNetworkClassesServer
 
-	logger  *slog.Logger
-	generic *GenericServer[*privatev1.NetworkClass]
+	logger            *slog.Logger
+	generic           *GenericServer[*privatev1.NetworkClass]
+	virtualNetworkDao *dao.GenericDAO[*privatev1.VirtualNetwork]
 }
 
 func NewPrivateNetworkClassesServer() *PrivateNetworkClassesServerBuilder {
@@ -115,6 +117,14 @@ func (b *PrivateNetworkClassesServerBuilder) Build() (result *PrivateNetworkClas
 		err = errors.New("tenancy logic is mandatory")
 		return
 	}
+	virtualNetworkDao, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
 
 	// Create the generic server:
 	generic, err := NewGenericServer[*privatev1.NetworkClass]().
@@ -132,8 +142,9 @@ func (b *PrivateNetworkClassesServerBuilder) Build() (result *PrivateNetworkClas
 
 	// Create and populate the object:
 	result = &PrivateNetworkClassesServer{
-		logger:  b.logger,
-		generic: generic,
+		logger:            b.logger,
+		generic:           generic,
+		virtualNetworkDao: virtualNetworkDao,
 	}
 	return
 }
@@ -228,6 +239,16 @@ func (s *PrivateNetworkClassesServer) Update(ctx context.Context,
 
 func (s *PrivateNetworkClassesServer) Delete(ctx context.Context,
 	request *privatev1.NetworkClassesDeleteRequest) (response *privatev1.NetworkClassesDeleteResponse, err error) {
+	networkClass, err := lockLifecycleResource(ctx, s.generic.dao, request.GetId(), "NetworkClass")
+	if err != nil {
+		return
+	}
+	if err = rejectDeleteIfReferenced(ctx, s.logger, s.virtualNetworkDao, "VirtualNetwork", "NetworkClass",
+		networkClass.GetId(), networkClass.GetMetadata(), func(vn *privatev1.VirtualNetwork) bool {
+			return referenceMatches(vn.GetSpec().GetNetworkClass(), networkClass.GetId(), networkClass.GetMetadata())
+		}); err != nil {
+		return
+	}
 	err = s.generic.Delete(ctx, request, &response)
 	return
 }

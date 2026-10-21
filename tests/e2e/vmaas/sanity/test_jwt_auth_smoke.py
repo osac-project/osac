@@ -6,6 +6,15 @@ from uuid import uuid4
 import pytest
 
 from tests.e2e.core.grpc_client import GRPCClient
+from tests.e2e.core.helpers import (
+    wait_for_security_group_cr,
+    wait_for_security_group_deletion,
+    wait_for_subnet_cr,
+    wait_for_subnet_deletion,
+    wait_for_virtual_network_cr,
+    wait_for_virtual_network_deletion,
+)
+from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import run_unchecked
 
@@ -81,9 +90,10 @@ def test_jwt_virtual_network_lifecycle(jwt_grpc_tenant1: GRPCClient) -> None:
     jwt_grpc_tenant1.delete_virtual_network(vn_id=vn_id)
 
 
-def test_jwt_security_group_lifecycle(jwt_grpc_tenant1: GRPCClient) -> None:
+def test_jwt_security_group_lifecycle(jwt_grpc_tenant1: GRPCClient, k8s_hub_client: K8sClient) -> None:
     vn_name: str = f"jwt-sg-vnet-{uuid4().hex[:8]}"
     vn_id: str = jwt_grpc_tenant1.create_virtual_network(name=vn_name, ipv4_cidr="10.202.0.0/16")
+    vn_cr_name = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)
 
     for _ in range(90):
         vn = jwt_grpc_tenant1.get_virtual_network(vn_id=vn_id)
@@ -95,6 +105,7 @@ def test_jwt_security_group_lifecycle(jwt_grpc_tenant1: GRPCClient) -> None:
 
     subnet_name: str = f"jwt-sg-subnet-{uuid4().hex[:8]}"
     subnet_id: str = jwt_grpc_tenant1.create_subnet(name=subnet_name, virtual_network=vn_id, ipv4_cidr="10.202.1.0/24")
+    subnet_cr_name = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_id)
     for _ in range(90):
         sn = jwt_grpc_tenant1.get_subnet(subnet_id=subnet_id)
         if sn["object"].get("status", {}).get("state") == "SUBNET_STATE_READY":
@@ -106,10 +117,14 @@ def test_jwt_security_group_lifecycle(jwt_grpc_tenant1: GRPCClient) -> None:
     sg_name: str = f"jwt-sg-{uuid4().hex[:8]}"
     sg_id: str = jwt_grpc_tenant1.create_security_group(name=sg_name, virtual_network=vn_id)
     assert sg_id in jwt_grpc_tenant1.list_security_group_ids()
+    sg_cr_name = wait_for_security_group_cr(k8s=k8s_hub_client, uuid=sg_id)
 
     jwt_grpc_tenant1.delete_security_group(sg_id=sg_id)
+    wait_for_security_group_deletion(k8s=k8s_hub_client, name=sg_cr_name)
     jwt_grpc_tenant1.delete_subnet(subnet_id=subnet_id)
+    wait_for_subnet_deletion(k8s=k8s_hub_client, name=subnet_cr_name)
     jwt_grpc_tenant1.delete_virtual_network(vn_id=vn_id)
+    wait_for_virtual_network_deletion(k8s=k8s_hub_client, name=vn_cr_name)
 
 
 # Multi-tenant isolation

@@ -39,6 +39,16 @@ rules:
   - get
 {{- end }}
 - apiGroups:
+  - agent-install.openshift.io
+  resources:
+  - agents
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - ""
   resources:
   - services

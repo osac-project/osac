@@ -4255,10 +4255,12 @@ var _ = Describe("Private compute instances server", func() {
 			eip := eipList.GetItems()[0]
 			Expect(eip.GetMetadata().GetLabels()[autoCreatedLabel]).To(Equal("true"))
 			Expect(eip.GetMetadata().GetLabels()[autoCreatedForLabel]).To(Equal(ciID))
+			Expect(eip.GetMetadata().GetLabels()[autoAttachmentDeferredLabel]).To(Equal("true"))
+			Expect(eip.GetMetadata().GetLabels()[autoCreatedKindLabel]).To(Equal("compute_instance"))
 			Expect(eip.GetSpec().GetPool().GetId()).To(Equal("pool-1"))
 			Expect(eip.GetStatus().GetAttached()).To(BeFalse())
 
-			// Attachment creation waits for the ExternalIP allocation and ComputeInstance readiness gates.
+			// The workload is still provisioning, so the attachment must be deferred.
 			eiaList, err := externalIPAttachmentDao.List().
 				SetFilter(fmt.Sprintf("this.metadata.labels['%s'] == '%s'", autoCreatedForLabel, ciID)).
 				Do(ctx)
@@ -4271,6 +4273,34 @@ var _ = Describe("Private compute instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(poolResp.GetObject().GetStatus().GetAvailable()).To(Equal(int64(4)))
 			Expect(poolResp.GetObject().GetStatus().GetAllocated()).To(Equal(int64(1)))
+
+		})
+
+		It("Defers the automatic attachment until the ComputeInstance is ready", func() {
+			createPool("pool-1", 5)
+
+			response, err := server.Create(ctx, createRequest(true))
+			Expect(err).ToNot(HaveOccurred())
+			ciID := response.GetObject().GetId()
+
+			eipList, err := externalIPDao.List().
+				SetFilter(fmt.Sprintf("this.metadata.labels['%s'] == '%s'", autoCreatedForLabel, ciID)).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(eipList.GetItems()).To(HaveLen(1))
+			eip := eipList.GetItems()[0]
+			Expect(eip.GetMetadata().GetLabels()[autoCreatedLabel]).To(Equal("true"))
+			Expect(eip.GetMetadata().GetLabels()[autoAttachmentDeferredLabel]).To(Equal("true"))
+			Expect(eip.GetMetadata().GetLabels()[autoCreatedKindLabel]).To(Equal("compute_instance"))
+			Expect(eip.GetMetadata().GetAnnotations()[ownerReferenceAnnotation]).To(Equal(ciID))
+			Expect(eip.GetMetadata().GetAnnotations()["osac.openshift.io/tenant"]).To(Equal(testTenant))
+			Expect(eip.GetStatus().GetState()).To(Equal(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING))
+
+			eiaList, err := externalIPAttachmentDao.List().
+				SetFilter(fmt.Sprintf("this.metadata.labels['%s'] == '%s'", autoCreatedForLabel, ciID)).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(eiaList.GetItems()).To(BeEmpty())
 
 		})
 

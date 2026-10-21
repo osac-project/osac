@@ -54,24 +54,23 @@ var _ privatev1.ComputeInstancesServer = (*PrivateComputeInstancesServer)(nil)
 type PrivateComputeInstancesServer struct {
 	privatev1.UnimplementedComputeInstancesServer
 
-	logger                  *slog.Logger
-	tenancyLogic            auth.TenancyLogic
-	generic                 *GenericServer[*privatev1.ComputeInstance]
-	templatesDao            *dao.GenericDAO[*privatev1.ComputeInstanceTemplate]
-	catalogItemsDao         *dao.GenericDAO[*privatev1.ComputeInstanceCatalogItem]
-	networkClassesDao       *dao.GenericDAO[*privatev1.NetworkClass]
-	subnetsDao              *dao.GenericDAO[*privatev1.Subnet]
-	virtualNetworksDao      *dao.GenericDAO[*privatev1.VirtualNetwork]
-	securityGroupsDao       *dao.GenericDAO[*privatev1.SecurityGroup]
-	instanceTypesDao        *dao.GenericDAO[*privatev1.InstanceType]
-	diskImagesDao           *dao.GenericDAO[*privatev1.DiskImage]
-	externalIPPoolDao       *dao.GenericDAO[*privatev1.ExternalIPPool]
-	externalIPDao           *dao.GenericDAO[*privatev1.ExternalIP]
-	externalIPAttachmentDao *dao.GenericDAO[*privatev1.ExternalIPAttachment]
-	lifecycle               *externalIPLifecycle
-	secretsDao              *dao.GenericDAO[*privatev1.Secret]
-	secretStore             vault.SecretStore
-	storageTiersDao         *dao.GenericDAO[*privatev1.StorageTier]
+	logger             *slog.Logger
+	tenancyLogic       auth.TenancyLogic
+	generic            *GenericServer[*privatev1.ComputeInstance]
+	templatesDao       *dao.GenericDAO[*privatev1.ComputeInstanceTemplate]
+	catalogItemsDao    *dao.GenericDAO[*privatev1.ComputeInstanceCatalogItem]
+	networkClassesDao  *dao.GenericDAO[*privatev1.NetworkClass]
+	subnetsDao         *dao.GenericDAO[*privatev1.Subnet]
+	virtualNetworksDao *dao.GenericDAO[*privatev1.VirtualNetwork]
+	securityGroupsDao  *dao.GenericDAO[*privatev1.SecurityGroup]
+	instanceTypesDao   *dao.GenericDAO[*privatev1.InstanceType]
+	diskImagesDao      *dao.GenericDAO[*privatev1.DiskImage]
+	externalIPPoolDao  *dao.GenericDAO[*privatev1.ExternalIPPool]
+	externalIPDao      *dao.GenericDAO[*privatev1.ExternalIP]
+	lifecycle          *externalIPLifecycle
+	secretsDao         *dao.GenericDAO[*privatev1.Secret]
+	secretStore        vault.SecretStore
+	storageTiersDao    *dao.GenericDAO[*privatev1.StorageTier]
 }
 
 func NewPrivateComputeInstancesServer() *PrivateComputeInstancesServerBuilder {
@@ -250,23 +249,22 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 		return
 	}
 	result = &PrivateComputeInstancesServer{
-		storageTiersDao:         storageTiersDao,
-		logger:                  b.logger,
-		tenancyLogic:            b.tenancyLogic,
-		generic:                 generic,
-		templatesDao:            templatesDao,
-		catalogItemsDao:         catalogItemsDao,
-		networkClassesDao:       networkClassesDao,
-		subnetsDao:              subnetsDao,
-		virtualNetworksDao:      virtualNetworksDao,
-		securityGroupsDao:       securityGroupsDao,
-		instanceTypesDao:        instanceTypesDao,
-		diskImagesDao:           diskImagesDao,
-		externalIPPoolDao:       externalIPPoolDao,
-		externalIPDao:           externalIPDao,
-		externalIPAttachmentDao: externalIPAttachmentDao,
-		secretsDao:              secretsDao,
-		secretStore:             b.secretStore,
+		storageTiersDao:    storageTiersDao,
+		logger:             b.logger,
+		tenancyLogic:       b.tenancyLogic,
+		generic:            generic,
+		templatesDao:       templatesDao,
+		catalogItemsDao:    catalogItemsDao,
+		networkClassesDao:  networkClassesDao,
+		subnetsDao:         subnetsDao,
+		virtualNetworksDao: virtualNetworksDao,
+		securityGroupsDao:  securityGroupsDao,
+		instanceTypesDao:   instanceTypesDao,
+		diskImagesDao:      diskImagesDao,
+		externalIPPoolDao:  externalIPPoolDao,
+		externalIPDao:      externalIPDao,
+		secretsDao:         secretsDao,
+		secretStore:        b.secretStore,
 	}
 	result.lifecycle = newExternalIPLifecycle(
 		externalIPDao,
@@ -667,61 +665,18 @@ func (s *PrivateComputeInstancesServer) validateAndResolveUserDataSecret(
 func (s *PrivateComputeInstancesServer) Delete(ctx context.Context,
 	request *privatev1.ComputeInstancesDeleteRequest) (response *privatev1.ComputeInstancesDeleteResponse, err error) {
 	id := request.GetId()
-	if id != "" {
-		getResponse, getErr := s.generic.dao.Get().SetId(id).SetLock(true).Do(ctx)
-		if getErr != nil {
-			var notFoundErr *dao.ErrNotFound
-			if !errors.As(getErr, &notFoundErr) {
-				err = getErr
-				return
-			}
-		} else {
-			ci := getResponse.GetObject()
-			if err = s.rejectManualExternalIPAttachments(ctx, ci); err != nil {
-				return
-			}
-			if ci.GetSpec().GetAutoExternalIpAttachment() && !hasComputeInstanceFinalizer(ci, finalizers.Controller) {
-				ensureComputeInstanceFinalizer(ci, finalizers.Controller)
-				if _, err = s.generic.dao.Update().SetObject(ci).Do(ctx); err != nil {
-					return
-				}
-			}
-		}
+	if id == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "identifier is mandatory")
+	}
+	instance, err := lockLifecycleResource(ctx, s.generic.dao, id, "ComputeInstance")
+	if err != nil {
+		return
+	}
+	if err = s.lifecycle.rejectManualAttachmentDelete(ctx, "ComputeInstance", id, instance.GetMetadata()); err != nil {
+		return
 	}
 	err = s.generic.Delete(ctx, request, &response)
 	return
-}
-
-func (s *PrivateComputeInstancesServer) rejectManualExternalIPAttachments(
-	ctx context.Context,
-	ci *privatev1.ComputeInstance,
-) error {
-	if ci == nil || ci.GetId() == "" {
-		return nil
-	}
-	ciName := ci.GetMetadata().GetName()
-	filter := fmt.Sprintf(
-		"this.metadata.tenant == %q && (this.spec.compute_instance.id == %q || this.spec.compute_instance.name == %q)",
-		ci.GetMetadata().GetTenant(), ci.GetId(), ciName,
-	)
-	response, err := s.externalIPAttachmentDao.List().SetFilter(filter).SetLimit(1000).Do(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to check ComputeInstance ExternalIPAttachments: %w", err)
-	}
-	if response.GetTotal() > 1000 {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
-			"ComputeInstance '%s' has too many ExternalIPAttachments to safely delete", ci.GetId())
-	}
-	for _, attachment := range response.GetItems() {
-		if attachment.GetMetadata().GetLabels()[autoCreatedLabel] == "true" &&
-			attachment.GetMetadata().GetAnnotations()[ownerReferenceAnnotation] == ci.GetId() {
-			continue
-		}
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
-			"ComputeInstance '%s' has manually created ExternalIPAttachment '%s'; delete it before deleting the ComputeInstance",
-			ci.GetId(), attachment.GetId())
-	}
-	return nil
 }
 
 func ensureComputeInstanceFinalizer(ci *privatev1.ComputeInstance, finalizer string) {
@@ -737,18 +692,6 @@ func ensureComputeInstanceFinalizer(ci *privatev1.ComputeInstance, finalizer str
 		}
 	}
 	ci.GetMetadata().SetFinalizers(append(ci.GetMetadata().GetFinalizers(), finalizer))
-}
-
-func hasComputeInstanceFinalizer(ci *privatev1.ComputeInstance, finalizer string) bool {
-	if ci == nil || !ci.HasMetadata() {
-		return false
-	}
-	for _, current := range ci.GetMetadata().GetFinalizers() {
-		if current == finalizer {
-			return true
-		}
-	}
-	return false
 }
 
 func (s *PrivateComputeInstancesServer) Signal(ctx context.Context,
@@ -1363,7 +1306,7 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesState(
 		securityGroupRefs := att.GetSecurityGroups()
 
 		subnetKey := refKey(subnetRef)
-		subnet, err := resolveAndCanonicalizeReference(ctx, s.subnetsDao, vm.GetMetadata(), subnetRef,
+		subnet, err := resolveAndCanonicalizeLockedReference(ctx, s.subnetsDao, vm.GetMetadata(), subnetRef,
 			"subnet", grpccodes.NotFound)
 		if err != nil {
 			if grpcstatus.Code(err) == grpccodes.NotFound {
@@ -1396,7 +1339,7 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesState(
 			}
 			sgKey := refKey(sgRef)
 
-			sg, err := resolveAndCanonicalizeReference(ctx, s.securityGroupsDao, vm.GetMetadata(), sgRef,
+			sg, err := resolveAndCanonicalizeLockedReference(ctx, s.securityGroupsDao, vm.GetMetadata(), sgRef,
 				"security group", grpccodes.NotFound)
 			if err != nil {
 				if grpcstatus.Code(err) == grpccodes.NotFound {
@@ -1507,11 +1450,6 @@ func (s *PrivateComputeInstancesServer) resolveCatalogItem(
 	return resolvedTemplate, nil
 }
 
-const (
-	autoCreatedLabel    = "osac.openshift.io/auto-created"
-	autoCreatedForLabel = "osac.openshift.io/auto-created-for"
-)
-
 func (s *PrivateComputeInstancesServer) autoProvisionExternalIP(
 	ctx context.Context, ci *privatev1.ComputeInstance,
 ) error {
@@ -1527,18 +1465,22 @@ func (s *PrivateComputeInstancesServer) autoProvisionExternalIP(
 		shortID = shortID[:8]
 	}
 
+	eipLabels := map[string]string{
+		autoCreatedLabel:            "true",
+		autoCreatedForLabel:         ciID,
+		autoAttachmentDeferredLabel: "true",
+		autoCreatedKindLabel:        "compute_instance",
+	}
 	eip := privatev1.ExternalIP_builder{
 		Metadata: privatev1.Metadata_builder{
 			Name:   fmt.Sprintf("auto-eip-%s", shortID),
 			Tenant: tenant,
-			Labels: map[string]string{
-				autoCreatedLabel:    "true",
-				autoCreatedForLabel: ciID,
-			},
+			Labels: eipLabels,
 			Annotations: map[string]string{
+				tenantAnnotation:         tenant,
 				ownerReferenceAnnotation: ciID,
 			},
-			Creator: "system",
+			Creator: systemCreator,
 		}.Build(),
 		Spec: privatev1.ExternalIPSpec_builder{
 			Pool: privatev1.ExternalIPPoolReference_builder{Id: pool.GetId()}.Build(),
@@ -1548,20 +1490,15 @@ func (s *PrivateComputeInstancesServer) autoProvisionExternalIP(
 		}.Build(),
 	}.Build()
 
-	eipResp, err := s.externalIPDao.Create().SetObject(eip).Do(ctx)
+	_, err = s.externalIPDao.Create().SetObject(eip).Do(ctx)
 	if err != nil {
 		return fmt.Errorf("auto_external_ip_attachment: failed to create ExternalIP: %w", err)
-	}
-	eipID := eipResp.GetObject().GetId()
-
-	err = s.lifecycle.lockNewAttachmentReferences(ctx, eipID, ciID, s.generic.dao)
-	if err != nil {
-		return fmt.Errorf("auto_external_ip_attachment: failed to lock attachment references: %w", err)
 	}
 
 	err = UpdatePoolCapacity(ctx, s.externalIPPoolDao, pool.GetId(), 1)
 	if err != nil {
 		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "auto_external_ip_attachment: %s", err)
 	}
+
 	return nil
 }

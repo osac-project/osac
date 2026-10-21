@@ -19,6 +19,7 @@ import (
 // AAPClient is the interface for AAP operations used by the provider.
 type AAPClient interface {
 	GetTemplate(ctx context.Context, templateName string) (*aap.Template, error)
+	ListJobs(ctx context.Context, templateID int) ([]aap.Job, error)
 	LaunchJobTemplate(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error)
 	LaunchWorkflowTemplate(ctx context.Context, req aap.LaunchWorkflowTemplateRequest) (*aap.LaunchWorkflowTemplateResponse, error)
 	GetJob(ctx context.Context, jobID string) (*aap.Job, error)
@@ -134,6 +135,43 @@ func (p *AAPProvider) CancelJob(ctx context.Context, jobID string) error {
 	return p.cancelProvisionJob(ctx, jobID)
 }
 
+func (p *AAPProvider) FindJobByLaunchID(
+	ctx context.Context,
+	resource client.Object,
+	jobType v1alpha1.JobType,
+	launchID string,
+) (ProvisionStatus, bool, error) {
+	if launchID == "" {
+		return ProvisionStatus{}, false, fmt.Errorf("provider job launch ID must not be empty")
+	}
+	action := ""
+	switch jobType {
+	case v1alpha1.JobTypeProvision:
+		action = "create"
+	case v1alpha1.JobTypeDeprovision:
+		action = "delete"
+	default:
+		return ProvisionStatus{}, false, fmt.Errorf("unsupported provider job type %q", jobType)
+	}
+	templateName, err := p.resolveTemplateName(action, resource)
+	if err != nil {
+		return ProvisionStatus{}, false, err
+	}
+	template, err := p.client.GetTemplate(ctx, templateName)
+	if err != nil {
+		return ProvisionStatus{}, false, fmt.Errorf("failed to get template: %w", err)
+	}
+	jobID, found, err := p.findJobByLaunchID(ctx, template.ID, launchID)
+	if err != nil || !found {
+		return ProvisionStatus{}, found, err
+	}
+	status, err := p.getJobStatus(ctx, jobID)
+	if err != nil {
+		return ProvisionStatus{}, false, err
+	}
+	return status, true, nil
+}
+
 // GetProvisionStatusWithExtraVars checks provisioning job status and returns its submitted inputs
 // and output artifacts from the same AAP job response.
 func (p *AAPProvider) GetProvisionStatusWithExtraVars(ctx context.Context, resource client.Object, jobID string) (ProvisionStatusWithExtraVars, error) {
@@ -234,9 +272,23 @@ func (p *AAPProvider) isReadyForDeprovision(ctx context.Context, resource client
 		if !errors.As(err, &methodNotAllowedErr) {
 			return false, &status, fmt.Errorf("failed to cancel provision job: %w", err)
 		}
-		// 405 means already terminal, proceed
-		log.Info("job cancel returned 405 (already terminal), ready to deprovision", "jobID", latestProvisionJob.JobID)
-		return true, &status, nil
+		// The job may have completed after the status read above. Confirm its
+		// current state before allowing cleanup to overlap a still-running job.
+		status, err = p.GetProvisionStatus(ctx, resource, latestProvisionJob.JobID)
+		if err != nil {
+			var notFoundErr *aap.NotFoundError
+			if errors.As(err, &notFoundErr) {
+				log.Info("AAP job disappeared after cancel returned 405, ready to deprovision", "jobID", latestProvisionJob.JobID)
+				return true, nil, nil
+			}
+			return false, nil, fmt.Errorf("failed to confirm provision job status after cancel: %w", err)
+		}
+		if status.State.IsTerminal() {
+			log.Info("job cancel returned 405 and job is terminal, ready to deprovision", "jobID", latestProvisionJob.JobID, "state", status.State)
+			return true, &status, nil
+		}
+		log.Info("job cancel returned 405 but job remains active, waiting before deprovision", "jobID", latestProvisionJob.JobID, "state", status.State)
+		return false, &status, nil
 	}
 
 	// Cancellation initiated - need to wait, return current status for CR update
@@ -280,6 +332,15 @@ func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, r
 	if err != nil {
 		return "", fmt.Errorf("failed to get template: %w", err)
 	}
+	if launchID := AAPJobLaunchIDFromContext(ctx); launchID != "" {
+		jobID, found, err := p.findJobByLaunchID(ctx, template.ID, launchID)
+		if err != nil {
+			return "", err
+		}
+		if found {
+			return jobID, nil
+		}
+	}
 
 	extraVars, err := p.extractExtraVars(ctx, resource)
 	if err != nil {
@@ -317,6 +378,26 @@ func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, r
 	}
 
 	return strconv.Itoa(jobID), nil
+}
+
+func (p *AAPProvider) findJobByLaunchID(ctx context.Context, templateID int, launchID string) (string, bool, error) {
+	jobs, err := p.client.ListJobs(ctx, templateID)
+	if err != nil {
+		return "", false, fmt.Errorf("failed to list jobs for launch claim: %w", err)
+	}
+	for _, job := range jobs {
+		if job.ID <= 0 || strings.TrimSpace(job.ExtraVars) == "" {
+			continue
+		}
+		var extraVars map[string]any
+		if err := json.Unmarshal([]byte(job.ExtraVars), &extraVars); err != nil {
+			continue
+		}
+		if extraVars[AAPJobLaunchIDExtraVar] == launchID {
+			return strconv.Itoa(job.ID), true, nil
+		}
+	}
+	return "", false, nil
 }
 
 func adminKubeconfigInExtraVars(extraVars map[string]any) bool {

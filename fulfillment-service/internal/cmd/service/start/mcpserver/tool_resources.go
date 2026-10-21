@@ -16,6 +16,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -75,11 +76,11 @@ func handleListResources(resources resourceRegistry) mcp.ToolHandlerFor[ListReso
 	) (*mcp.CallToolResult, ListResourcesOutput, error) {
 		page, err := resourcePage(input)
 		if err != nil {
-			return nil, ListResourcesOutput{}, err
+			return nil, ListResourcesOutput{}, safeInvalidRequestError(err)
 		}
 		operations, ok := resources[input.ResourceType]
 		if !ok {
-			return nil, ListResourcesOutput{}, unsupportedResourceTypeError(input.ResourceType)
+			return nil, ListResourcesOutput{}, safeInvalidRequestError(unsupportedResourceTypeError(input.ResourceType))
 		}
 		ctx, cancel := toolCallContext(ctx)
 		defer cancel()
@@ -101,7 +102,10 @@ func handleGetResource(resources resourceRegistry) mcp.ToolHandlerFor[GetResourc
 	) (*mcp.CallToolResult, GetResourceOutput, error) {
 		operations, ok := resources[input.ResourceType]
 		if !ok {
-			return nil, GetResourceOutput{}, unsupportedResourceTypeError(input.ResourceType)
+			return nil, GetResourceOutput{}, safeInvalidRequestError(unsupportedResourceTypeError(input.ResourceType))
+		}
+		if strings.TrimSpace(input.ID) == "" {
+			return nil, GetResourceOutput{}, safeInvalidRequestError(errors.New("id must not be empty"))
 		}
 		ctx, cancel := toolCallContext(ctx)
 		defer cancel()

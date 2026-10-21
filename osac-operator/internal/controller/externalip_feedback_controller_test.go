@@ -151,6 +151,49 @@ var _ = Describe("ExternalIPFeedbackController", func() {
 			Expect(controllerutil.ContainsFinalizer(updated, osacExternalIPFeedbackFinalizer)).To(BeTrue())
 		})
 
+		It("should not move a deleting Fulfillment ExternalIP back to Pending", func() {
+			publicIP := &privatev1.ExternalIP{
+				Id: publicIPID,
+				Metadata: &privatev1.Metadata{
+					Name: publicIPName,
+				},
+				Spec: &privatev1.ExternalIPSpec{
+					Pool: testPoolRef,
+				},
+				Status: &privatev1.ExternalIPStatus{
+					State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_DELETING,
+				},
+			}
+			mockServer.addExternalIP(publicIP)
+
+			cr := &v1alpha1.ExternalIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      publicIPName,
+					Namespace: publicIPNamespace,
+					Labels: map[string]string{
+						osacExternalIPIDLabel: publicIPID,
+					},
+				},
+				Spec: v1alpha1.ExternalIPSpec{
+					Pool: testPool,
+				},
+				Status: v1alpha1.ExternalIPStatus{
+					Phase: v1alpha1.ExternalIPPhaseProgressing,
+					State: v1alpha1.ExternalIPStatePending,
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      publicIPName,
+					Namespace: publicIPNamespace,
+				},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockServer.updates).To(BeEmpty())
+		})
+
 		It("should sync State=Allocated to database state=ALLOCATED", func() {
 			publicIP := &privatev1.ExternalIP{
 				Id: publicIPID,

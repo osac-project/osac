@@ -468,7 +468,7 @@ var _ = Describe("Private virtual networks server", func() {
 			})
 		})
 
-		Context("NetworkClass readiness is controller-owned", func() {
+		Context("NetworkClass readiness", func() {
 			It("accepts NetworkClass in READY state", func() {
 				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
 
@@ -484,7 +484,7 @@ var _ = Describe("Private virtual networks server", func() {
 				Expect(err).ToNot(HaveOccurred())
 			})
 
-			It("accepts NetworkClass in PENDING state and leaves readiness to reconciliation", func() {
+			It("rejects NetworkClass in PENDING state", func() {
 				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING)
 
 				vn := privatev1.VirtualNetwork_builder{
@@ -496,10 +496,12 @@ var _ = Describe("Private virtual networks server", func() {
 				}.Build()
 
 				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).ToNot(HaveOccurred())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				Expect(err.Error()).To(ContainSubstring("NetworkClass"))
+				Expect(err.Error()).To(ContainSubstring("PENDING"))
 			})
 
-			It("accepts NetworkClass in FAILED state and leaves recovery to reconciliation", func() {
+			It("rejects NetworkClass in FAILED state", func() {
 				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED)
 
 				vn := privatev1.VirtualNetwork_builder{
@@ -511,7 +513,9 @@ var _ = Describe("Private virtual networks server", func() {
 				}.Build()
 
 				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).ToNot(HaveOccurred())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				Expect(err.Error()).To(ContainSubstring("NetworkClass"))
+				Expect(err.Error()).To(ContainSubstring("FAILED"))
 			})
 		})
 
@@ -1428,7 +1432,7 @@ var _ = Describe("Private virtual networks server", func() {
 			Expect(createResponse.GetObject().GetSpec().GetNetworkClass().GetId()).To(Equal(networkClass.GetId()))
 		})
 
-		It("does not require NetworkClass readiness during API admission", func() {
+		It("requires the singleton NetworkClass to be Ready before admitting a VirtualNetwork", func() {
 			createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING)
 
 			_, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
@@ -1442,7 +1446,29 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build(),
 			}.Build())
-			Expect(err).ToNot(HaveOccurred())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(err.Error()).To(ContainSubstring("NetworkClass"))
+			Expect(err.Error()).To(ContainSubstring("must be READY"))
+		})
+
+		It("requires an explicitly referenced NetworkClass to be Ready before admitting a VirtualNetwork", func() {
+			networkClass := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING)
+
+			_, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
+				Object: privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.VirtualNetworkSpec_builder{
+						Ipv4Cidr:     new("10.0.0.0/16"),
+						Region:       "us-west-1",
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClass.GetId()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(err.Error()).To(ContainSubstring("NetworkClass"))
+			Expect(err.Error()).To(ContainSubstring("must be READY"))
 		})
 
 		It("Default NC capability mismatch is rejected", func() {
@@ -1791,7 +1817,7 @@ var _ = Describe("Private virtual networks server", func() {
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
-			Expect(err.Error()).To(ContainSubstring("3 Subnet"))
+			Expect(err.Error()).To(ContainSubstring("3 active Subnet"))
 		})
 
 		It("blocks deletion of default-labeled VirtualNetwork", func() {

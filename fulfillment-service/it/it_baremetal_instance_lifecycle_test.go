@@ -26,13 +26,13 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
+	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -54,6 +54,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		catalogItemId                       string
 		instanceTypeId                      string
 		defaultDiskImageId                  string
+		defaultNetworkingFixture            catalogItemNetworkFixture
 	)
 
 	BeforeEach(func(ctx context.Context) {
@@ -112,7 +113,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 
 		// Lifecycle Creates omit network_attachments and use shared catalog items without
 		// network field policies; hard-fail defaulting needs a tenant-default Subnet/SG.
-		ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
+		defaultNetworkingFixture = ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
 
 		// Create BareMetalInstanceTemplate with an explicit ID that matches the BMFO CRD
 		// validation pattern (^[a-zA-Z_][a-zA-Z0-9._]*$). Auto-generated UUIDs start with
@@ -221,24 +222,6 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			}, 2*time.Minute, time.Second).Should(Succeed())
 		})
 
-		// Set BareMetalInstance to RUNNING state via private Update API
-		bmiGetResp, err := privateBareMetalInstancesClient.Get(ctx, privatev1.BareMetalInstancesGetRequest_builder{
-			Id: bareMetalInstanceId,
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		bmi := bmiGetResp.GetObject()
-		bmi.SetStatus(privatev1.BareMetalInstanceStatus_builder{
-			State:               privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING,
-			StateTransitionTime: timestamppb.New(time.Now()),
-		}.Build())
-		_, err = privateBareMetalInstancesClient.Update(ctx, privatev1.BareMetalInstancesUpdateRequest_builder{
-			Object: bmi,
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
-				"status.state", "status.state_transition_time",
-			}},
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-
 		// Verify the BareMetalInstance fields via public Get
 		getResp, err := bareMetalInstancesClient.Get(ctx, publicv1.BareMetalInstancesGetRequest_builder{
 			Id: bareMetalInstanceId,
@@ -257,9 +240,177 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			"materialized template should reference the template from the catalog item")
 		Expect(object.GetSpec().GetDiskImage().GetId()).To(Equal(defaultDiskImageId),
 			"BareMetalInstance should persist the requested disk image")
-		Expect(object.GetStatus().GetState()).To(
-			Equal(publicv1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING),
-			"BareMetalInstance should be in RUNNING state after status override")
+	})
+
+	It("waits for automatic ExternalIP cleanup before deleting the BMFO CR", func(ctx context.Context) {
+		// Keep an automatically created ExternalIP terminating so this test can
+		// observe whether the workload CR is deleted before its child is gone.
+		Expect(defaultNetworkingFixture.networkClassID).NotTo(BeEmpty(),
+			"the BMI lifecycle fixture should provide a ready NetworkClass on its Hub")
+
+		poolsClient := privatev1.NewExternalIPPoolsClient(tool.InternalView().AdminConn())
+		externalIPsClient := privatev1.NewExternalIPsClient(tool.InternalView().AdminConn())
+		poolID := fmt.Sprintf("test-pool-%s", uuid.New())
+		_, err := poolsClient.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
+			Object: privatev1.ExternalIPPool_builder{
+				Id:       poolID,
+				Metadata: privatev1.Metadata_builder{Name: poolID}.Build(),
+				Spec: privatev1.ExternalIPPoolSpec_builder{
+					Cidrs:    []string{uniqueCIDR()},
+					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func(cleanupCtx context.Context) {
+			Expect(cleanupExternalIPPoolFixture(cleanupCtx, poolsClient, poolID)).To(Succeed())
+		})
+
+		Eventually(func(g Gomega) {
+			response, getErr := poolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: poolID}.Build())
+			g.Expect(getErr).NotTo(HaveOccurred())
+			g.Expect(response.GetObject().GetStatus().GetState()).To(
+				Equal(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_PENDING))
+		}).WithTimeout(time.Minute).WithPolling(time.Second).Should(Succeed())
+		poolResponse, err := poolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: poolID}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		pool := poolResponse.GetObject()
+		pool.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY)
+		_, err = poolsClient.Update(ctx, privatev1.ExternalIPPoolsUpdateRequest_builder{
+			Object:     pool,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(func(g Gomega) {
+			response, getErr := poolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: poolID}.Build())
+			g.Expect(getErr).NotTo(HaveOccurred())
+			g.Expect(response.GetObject().GetStatus().GetState()).To(
+				Equal(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY))
+		}, time.Minute, time.Second).Should(Succeed())
+
+		createResponse, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
+			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-bmi-auto-eip-%s", uuid.New()[24:32]),
+				}.Build(),
+				Spec: publicv1.BareMetalInstanceSpec_builder{
+					CatalogItem:              publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
+					InstanceType:             publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
+					SshPublicKey:             new(bmiTestSSHPublicKey),
+					DiskImage:                publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
+					AutoExternalIpAttachment: new(true),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		bmiID := createResponse.GetObject().GetId()
+		externalIPHeld := false
+		externalIPID := ""
+		DeferCleanup(func(cleanupCtx context.Context) {
+			if bmiID != "" {
+				_, deleteErr := privateBareMetalInstancesClient.Delete(cleanupCtx,
+					privatev1.BareMetalInstancesDeleteRequest_builder{Id: bmiID}.Build())
+				if grpcstatus.Code(deleteErr) != grpccodes.NotFound {
+					Expect(deleteErr).NotTo(HaveOccurred())
+				}
+			}
+			if externalIPHeld && externalIPID != "" {
+				setExternalIPTestFinalizer(cleanupCtx, externalIPsClient, externalIPID, false)
+			}
+			if bmiID != "" {
+				Eventually(func(g Gomega) {
+					_, getErr := privateBareMetalInstancesClient.Get(cleanupCtx,
+						privatev1.BareMetalInstancesGetRequest_builder{Id: bmiID}.Build())
+					g.Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
+				}, 2*time.Minute, time.Second).Should(Succeed())
+			}
+		})
+
+		filter := fmt.Sprintf(
+			"this.metadata.labels['osac.openshift.io/auto-created-for'] == %q && this.metadata.labels['osac.openshift.io/auto-created'] == 'true'",
+			bmiID,
+		)
+		limit := int32(2)
+		var externalIP *privatev1.ExternalIP
+		Eventually(func(g Gomega) {
+			response, listErr := externalIPsClient.List(ctx, privatev1.ExternalIPsListRequest_builder{
+				Filter: &filter,
+				Limit:  &limit,
+			}.Build())
+			g.Expect(listErr).NotTo(HaveOccurred())
+			g.Expect(response.GetItems()).To(HaveLen(1))
+			externalIP = response.GetItems()[0]
+		}, time.Minute, time.Second).Should(Succeed())
+		externalIPID = externalIP.GetId()
+		setExternalIPTestFinalizer(ctx, externalIPsClient, externalIPID, true)
+		externalIPHeld = true
+
+		kubeClient := tool.KubeClient()
+		bmiList := &bmfov1alpha1.BareMetalInstanceList{}
+		eipList := &osacv1alpha1.ExternalIPList{}
+		Eventually(func(g Gomega) {
+			g.Expect(kubeClient.List(ctx, eipList, crclient.InNamespace(hubNamespace),
+				crclient.MatchingLabels{labels.ExternalIPUuid: externalIPID})).To(Succeed())
+			g.Expect(eipList.Items).To(HaveLen(1))
+		}, time.Minute, time.Second).Should(Succeed())
+		Eventually(func(g Gomega) {
+			g.Expect(kubeClient.List(ctx, bmiList, crclient.InNamespace(hubNamespace),
+				crclient.MatchingLabels{labels.BareMetalInstanceUuid: bmiID})).To(Succeed())
+			g.Expect(bmiList.Items).To(HaveLen(1))
+		}, time.Minute, time.Second).Should(Succeed())
+
+		_, err = privateBareMetalInstancesClient.Delete(ctx,
+			privatev1.BareMetalInstancesDeleteRequest_builder{Id: bmiID}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(func(g Gomega) {
+			response, getErr := privateBareMetalInstancesClient.Get(ctx,
+				privatev1.BareMetalInstancesGetRequest_builder{Id: bmiID}.Build())
+			g.Expect(getErr).NotTo(HaveOccurred())
+			g.Expect(response.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
+			ipResponse, ipErr := externalIPsClient.Get(ctx,
+				privatev1.ExternalIPsGetRequest_builder{Id: externalIPID}.Build())
+			g.Expect(ipErr).NotTo(HaveOccurred())
+			g.Expect(ipResponse.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
+			g.Expect(ipResponse.GetObject().GetMetadata().GetFinalizers()).To(ContainElement(externalIPTestFinalizer))
+		}, time.Minute, time.Second).Should(Succeed())
+
+		// Wait until the child Kubernetes object reflects deletion, then verify
+		// the BMFO CR remains active while its Fulfillment IP is held by a finalizer.
+		Eventually(func(g Gomega) {
+			g.Expect(kubeClient.List(ctx, eipList, crclient.InNamespace(hubNamespace),
+				crclient.MatchingLabels{labels.ExternalIPUuid: externalIPID})).To(Succeed())
+			g.Expect(eipList.Items).To(BeEmpty())
+		}, time.Minute, time.Second).Should(Succeed())
+		Eventually(func(g Gomega) {
+			ipResponse, ipErr := externalIPsClient.Get(ctx,
+				privatev1.ExternalIPsGetRequest_builder{Id: externalIPID}.Build())
+			g.Expect(ipErr).NotTo(HaveOccurred())
+			g.Expect(ipResponse.GetObject().GetMetadata().GetFinalizers()).To(ContainElement(externalIPTestFinalizer))
+		}, time.Minute, time.Second).Should(Succeed())
+
+		Eventually(func(g Gomega) {
+			g.Expect(kubeClient.List(ctx, bmiList, crclient.InNamespace(hubNamespace),
+				crclient.MatchingLabels{labels.BareMetalInstanceUuid: bmiID})).To(Succeed())
+			g.Expect(bmiList.Items).To(HaveLen(1))
+			g.Expect(bmiList.Items[0].GetDeletionTimestamp()).To(BeNil())
+		}, time.Minute, time.Second).Should(Succeed())
+
+		setExternalIPTestFinalizer(ctx, externalIPsClient, externalIPID, false)
+		externalIPHeld = false
+		Eventually(func(g Gomega) {
+			_, getErr := externalIPsClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{Id: externalIPID}.Build())
+			g.Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
+		}, 2*time.Minute, time.Second).Should(Succeed())
+		Eventually(func(g Gomega) {
+			g.Expect(kubeClient.List(ctx, bmiList, crclient.InNamespace(hubNamespace),
+				crclient.MatchingLabels{labels.BareMetalInstanceUuid: bmiID})).To(Succeed())
+			g.Expect(bmiList.Items).To(BeEmpty())
+		}, time.Minute, time.Second).Should(Succeed())
+		Eventually(func(g Gomega) {
+			_, getErr := privateBareMetalInstancesClient.Get(ctx,
+				privatev1.BareMetalInstancesGetRequest_builder{Id: bmiID}.Build())
+			g.Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
+		}, 2*time.Minute, time.Second).Should(Succeed())
 	})
 
 	It("Rejects BareMetalInstance with non-existent catalog item", func(ctx context.Context) {
@@ -343,18 +494,19 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		virtualNetworksClient := privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn())
 		subnetsClient := privatev1.NewSubnetsClient(tool.InternalView().AdminConn())
 		securityGroupsClient := privatev1.NewSecurityGroupsClient(tool.InternalView().AdminConn())
-		// NetworkClass is a deployment singleton. Remove the fabric-backed default
-		// class created by BeforeEach before creating the k8s-only class needed by
-		// this validation case. The next spec will recreate the default fixture.
+		// The default fixture is system-managed. Remove it through the controller's
+		// default-networking lifecycle before replacing its singleton NetworkClass.
+		defaultNetworkingManager, err := newTestDefaultNetworkingManager()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(deleteTenantDefaultNetworkingFixture(ctx, defaultNetworkingManager, usersGroup)).To(Succeed())
+		Expect(defaultNetworkingFixture.networkClassCreated).To(BeTrue(),
+			"the k8s-only validation fixture must own the deployment's singleton NetworkClass")
+		Expect(cleanupNetworkClassFixture(ctx, networkClassesClient, defaultNetworkingFixture.networkClassID)).To(Succeed())
 		listedClasses, err := networkClassesClient.List(ctx, privatev1.NetworkClassesListRequest_builder{
 			Filter: new("!has(this.metadata.deletion_timestamp)"),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(listedClasses.GetItems()).To(HaveLen(1))
-		_, err = networkClassesClient.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
-			Id: listedClasses.GetItems()[0].GetId(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
+		Expect(listedClasses.GetItems()).To(BeEmpty(), "default fixture cleanup must remove its NetworkClass before replacement")
 
 		// Create a k8s-only NetworkClass (no fabric_manager):
 		ncResp, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
@@ -366,10 +518,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		Expect(err).ToNot(HaveOccurred())
 		networkClassId := ncResp.GetObject().GetId()
 		DeferCleanup(func(ctx context.Context) {
-			_, err := networkClassesClient.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
-				Id: networkClassId,
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
+			Expect(cleanupNetworkClassFixture(ctx, networkClassesClient, networkClassId)).To(Succeed())
 		})
 		waitForNetworkClassReady(ctx, networkClassesClient, networkClassId)
 
@@ -390,10 +539,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func(ctx context.Context) {
-			_, err := virtualNetworksClient.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
-				Id: virtualNetworkId,
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
+			Expect(cleanupVirtualNetworkFixture(ctx, virtualNetworksClient, virtualNetworkId)).To(Succeed())
 		})
 
 		// Wait for the VN reconciler to finish initial processing before
@@ -439,10 +585,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func(ctx context.Context) {
-			_, err := subnetsClient.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{
-				Id: subnetId,
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
+			Expect(cleanupSubnetFixture(ctx, subnetsClient, subnetId)).To(Succeed())
 		})
 
 		securityGroupID := fmt.Sprintf("test-security-group-%s", uuid.New())
@@ -460,8 +603,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func(ctx context.Context) {
-			_, err := securityGroupsClient.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{Id: securityGroupID}.Build())
-			Expect(err).ToNot(HaveOccurred())
+			Expect(cleanupSecurityGroupFixture(ctx, securityGroupsClient, securityGroupID)).To(Succeed())
 		})
 		Eventually(func(g Gomega) {
 			resp, err := securityGroupsClient.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: securityGroupID}.Build())

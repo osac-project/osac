@@ -157,6 +157,18 @@ var _ = Describe("FabricDomain tenant API component integration", Label("network
 		Expect(err).ToNot(HaveOccurred())
 		id := response.GetObject().GetId()
 		createdVirtualNetIDs = append(createdVirtualNetIDs, id)
+		virtualNetworkResponse, err := virtualNetworks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		virtualNetwork := virtualNetworkResponse.GetObject()
+		if !virtualNetwork.HasStatus() {
+			virtualNetwork.SetStatus(&privatev1.VirtualNetworkStatus{})
+		}
+		virtualNetwork.GetStatus().SetState(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY)
+		_, err = virtualNetworks.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
+			Object:     virtualNetwork,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
 		return id
 	}
 

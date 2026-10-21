@@ -35,6 +35,7 @@ var _ = Describe("NATGateway lifecycle", func() {
 		ctx context.Context
 
 		natGatewaysClient        publicv1.NATGatewaysClient
+		privateNATGatewaysClient privatev1.NATGatewaysClient
 		privateExternalIPsClient privatev1.ExternalIPsClient
 		externalIPsClient        publicv1.ExternalIPsClient
 		poolsClient              privatev1.ExternalIPPoolsClient
@@ -46,12 +47,23 @@ var _ = Describe("NATGateway lifecycle", func() {
 		virtualNetworkId  string
 		poolId            string
 		externalIPId      string
+		natGatewayIDs     []string
+		networkClassIDs   []string
+		virtualNetworkIDs []string
+		poolIDs           []string
+		externalIPIDs     []string
 	)
 
 	BeforeEach(func() {
 		ctx = context.Background()
+		natGatewayIDs = nil
+		networkClassIDs = nil
+		virtualNetworkIDs = nil
+		poolIDs = nil
+		externalIPIDs = nil
 
 		natGatewaysClient = publicv1.NewNATGatewaysClient(tool.ExternalView().UserConn())
+		privateNATGatewaysClient = privatev1.NewNATGatewaysClient(tool.InternalView().AdminConn())
 		privateExternalIPsClient = privatev1.NewExternalIPsClient(tool.InternalView().AdminConn())
 		externalIPsClient = publicv1.NewExternalIPsClient(tool.ExternalView().UserConn())
 		poolsClient = privatev1.NewExternalIPPoolsClient(tool.InternalView().AdminConn())
@@ -69,6 +81,7 @@ var _ = Describe("NATGateway lifecycle", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		networkClassId = ncResp.GetObject().GetId()
+		networkClassIDs = append(networkClassIDs, networkClassId)
 		waitForNetworkClassReady(ctx, networkClassesClient, networkClassId)
 		setNetworkClassCanonicalHub(ctx, networkClassesClient, networkClassId, hubId)
 		expectNetworkClassStatus(
@@ -103,6 +116,7 @@ var _ = Describe("NATGateway lifecycle", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		virtualNetworkIDs = append(virtualNetworkIDs, virtualNetworkId)
 
 		Eventually(func(g Gomega) {
 			resp, err := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{
@@ -143,6 +157,7 @@ var _ = Describe("NATGateway lifecycle", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		poolIDs = append(poolIDs, poolId)
 
 		Eventually(func(g Gomega) {
 			resp, err := poolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{
@@ -184,6 +199,7 @@ var _ = Describe("NATGateway lifecycle", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		externalIPIDs = append(externalIPIDs, externalIPId)
 		Eventually(func(g Gomega) {
 			resp, err := privateExternalIPsClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{
 				Id: externalIPId,
@@ -212,25 +228,126 @@ var _ = Describe("NATGateway lifecycle", func() {
 	})
 
 	AfterEach(func() {
-		if externalIPId != "" {
-			_, _ = externalIPsClient.Delete(ctx, publicv1.ExternalIPsDeleteRequest_builder{
-				Id: externalIPId,
-			}.Build())
+		for _, id := range natGatewayIDs {
+			cleanupErr := cleanupNetworkFixtureResource(ctx,
+				func(cleanupCtx context.Context) error {
+					_, err := natGatewaysClient.Delete(cleanupCtx, publicv1.NATGatewaysDeleteRequest_builder{Id: id}.Build())
+					return err
+				},
+				func(ctx context.Context) (*privatev1.Metadata, error) {
+					response, err := privateNATGatewaysClient.Get(ctx, privatev1.NATGatewaysGetRequest_builder{Id: id}.Build())
+					if err != nil {
+						return nil, err
+					}
+					return response.GetObject().GetMetadata(), nil
+				},
+				func(ctx context.Context) error {
+					response, err := privateNATGatewaysClient.Get(ctx, privatev1.NATGatewaysGetRequest_builder{Id: id}.Build())
+					if err != nil {
+						return err
+					}
+					gateway := response.GetObject()
+					gateway.GetMetadata().SetFinalizers(nil)
+					_, err = privateNATGatewaysClient.Update(ctx, privatev1.NATGatewaysUpdateRequest_builder{
+						Object: gateway,
+						UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+							"metadata.finalizers",
+						}},
+						Lock: true,
+					}.Build())
+					return err
+				},
+			)
+			Expect(cleanupErr).To(Succeed())
 		}
-		if poolId != "" {
-			_, _ = poolsClient.Delete(ctx, privatev1.ExternalIPPoolsDeleteRequest_builder{
-				Id: poolId,
-			}.Build())
+		for _, id := range externalIPIDs {
+			cleanupErr := cleanupNetworkFixtureResource(ctx,
+				func(cleanupCtx context.Context) error {
+					_, err := privateExternalIPsClient.Get(cleanupCtx, privatev1.ExternalIPsGetRequest_builder{Id: id}.Build())
+					if grpcstatus.Code(err) == grpccodes.NotFound {
+						return nil
+					}
+					if err != nil {
+						return err
+					}
+					if err := setExternalIPFixtureState(cleanupCtx, privateExternalIPsClient, id,
+						privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED); err != nil {
+						return err
+					}
+					_, err = externalIPsClient.Delete(cleanupCtx, publicv1.ExternalIPsDeleteRequest_builder{Id: id}.Build())
+					return err
+				},
+				func(cleanupCtx context.Context) (*privatev1.Metadata, error) {
+					response, err := privateExternalIPsClient.Get(cleanupCtx, privatev1.ExternalIPsGetRequest_builder{Id: id}.Build())
+					if err != nil {
+						return nil, err
+					}
+					return response.GetObject().GetMetadata(), nil
+				},
+				func(cleanupCtx context.Context) error {
+					response, err := privateExternalIPsClient.Get(cleanupCtx, privatev1.ExternalIPsGetRequest_builder{Id: id}.Build())
+					if err != nil {
+						return err
+					}
+					ip := response.GetObject()
+					ip.GetMetadata().SetFinalizers(nil)
+					_, err = privateExternalIPsClient.Update(cleanupCtx, privatev1.ExternalIPsUpdateRequest_builder{
+						Object: ip,
+						UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+							"metadata.finalizers",
+						}},
+						Lock: true,
+					}.Build())
+					return err
+				},
+			)
+			Expect(cleanupErr).To(Succeed())
 		}
-		if virtualNetworkId != "" {
-			_, _ = virtualNetworksClient.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
-				Id: virtualNetworkId,
-			}.Build())
+		for _, id := range poolIDs {
+			cleanupErr := cleanupNetworkFixtureResource(ctx,
+				func(cleanupCtx context.Context) error {
+					_, err := poolsClient.Delete(cleanupCtx, privatev1.ExternalIPPoolsDeleteRequest_builder{Id: id}.Build())
+					return err
+				},
+				func(cleanupCtx context.Context) (*privatev1.Metadata, error) {
+					response, err := poolsClient.Get(cleanupCtx, privatev1.ExternalIPPoolsGetRequest_builder{Id: id}.Build())
+					if err != nil {
+						return nil, err
+					}
+					return response.GetObject().GetMetadata(), nil
+				},
+				func(cleanupCtx context.Context) error {
+					response, err := poolsClient.Get(cleanupCtx, privatev1.ExternalIPPoolsGetRequest_builder{Id: id}.Build())
+					if err != nil {
+						return err
+					}
+					pool := response.GetObject()
+					pool.GetMetadata().SetFinalizers(nil)
+					_, err = poolsClient.Update(cleanupCtx, privatev1.ExternalIPPoolsUpdateRequest_builder{
+						Object: pool,
+						UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+							"metadata.finalizers",
+						}},
+						Lock: true,
+					}.Build())
+					return err
+				},
+			)
+			Expect(cleanupErr).To(Succeed())
 		}
-		if networkClassId != "" {
-			_, _ = networkClassesClient.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
-				Id: networkClassId,
-			}.Build())
+		for _, id := range virtualNetworkIDs {
+			Expect(cleanupVirtualNetworkFixture(ctx, virtualNetworksClient, id)).To(Succeed())
+			waitForNotFound(func() error {
+				_, err := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
+				return err
+			})
+		}
+		for _, id := range networkClassIDs {
+			Expect(cleanupNetworkClassFixture(ctx, networkClassesClient, id)).To(Succeed())
+			waitForNotFound(func() error {
+				_, err := networkClassesClient.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: id}.Build())
+				return err
+			})
 		}
 	})
 
@@ -250,11 +367,7 @@ var _ = Describe("NATGateway lifecycle", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(response).ToNot(BeNil())
-		DeferCleanup(func() {
-			natGatewaysClient.Delete(ctx, publicv1.NATGatewaysDeleteRequest_builder{
-				Id: ngId,
-			}.Build())
-		})
+		natGatewayIDs = append(natGatewayIDs, ngId)
 
 		ng := response.GetObject()
 		Expect(ng.GetId()).To(Equal(ngId))
@@ -325,28 +438,7 @@ var _ = Describe("NATGateway lifecycle", func() {
 			}
 			return resp.GetObject().GetStatus().GetHub(), nil
 		})
-		DeferCleanup(func() {
-			// Promote to ALLOCATED so delete succeeds
-			ipGetResp, err := privateExternalIPsClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{
-				Id: pendingIPId,
-			}.Build())
-			if err == nil {
-				ip := ipGetResp.GetObject()
-				ip.SetStatus(privatev1.ExternalIPStatus_builder{
-					State:               privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
-					StateTransitionTime: timestamppb.New(time.Now()),
-				}.Build())
-				_, _ = privateExternalIPsClient.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
-					Object: ip,
-					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
-						"status.state", "status.state_transition_time",
-					}},
-				}.Build())
-			}
-			_, _ = externalIPsClient.Delete(ctx, publicv1.ExternalIPsDeleteRequest_builder{
-				Id: pendingIPId,
-			}.Build())
-		})
+		externalIPIDs = append(externalIPIDs, pendingIPId)
 
 		ngId := fmt.Sprintf("test-ng-%s", uuid.New())
 		_, err = natGatewaysClient.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
@@ -380,11 +472,7 @@ var _ = Describe("NATGateway lifecycle", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(func() {
-			natGatewaysClient.Delete(ctx, publicv1.NATGatewaysDeleteRequest_builder{
-				Id: ngId1,
-			}.Build())
-		})
+		natGatewayIDs = append(natGatewayIDs, ngId1)
 
 		// Create a second VirtualNetwork for the second NATGateway attempt
 		vn2Id := fmt.Sprintf("test-vnet-%s", uuid.New())
@@ -403,11 +491,7 @@ var _ = Describe("NATGateway lifecycle", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(func() {
-			virtualNetworksClient.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
-				Id: vn2Id,
-			}.Build())
-		})
+		virtualNetworkIDs = append(virtualNetworkIDs, vn2Id)
 
 		ngId2 := fmt.Sprintf("test-ng-%s", uuid.New())
 		_, err = natGatewaysClient.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
@@ -429,16 +513,17 @@ var _ = Describe("NATGateway lifecycle", func() {
 	It("Rejects create when the VirtualNetwork's NetworkClass has no fabric_manager", func() {
 		// Only one NetworkClass may exist per deployment (OSAC-4073), so the fabric-manager
 		// NetworkClass and VirtualNetwork created by the outer BeforeEach must be torn down
-		// before creating the k8s-only NetworkClass this test needs. The outer AfterEach's
-		// cleanup of the same IDs is a no-op (errors ignored) once these are already deleted.
-		_, err := virtualNetworksClient.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
-			Id: virtualNetworkId,
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		_, err = networkClassesClient.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
-			Id: networkClassId,
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
+		// before creating the k8s-only NetworkClass this test needs.
+		Expect(cleanupVirtualNetworkFixture(ctx, virtualNetworksClient, virtualNetworkId)).To(Succeed())
+		waitForNotFound(func() error {
+			_, err := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: virtualNetworkId}.Build())
+			return err
+		})
+		Expect(cleanupNetworkClassFixture(ctx, networkClassesClient, networkClassId)).To(Succeed())
+		waitForNotFound(func() error {
+			_, err := networkClassesClient.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: networkClassId}.Build())
+			return err
+		})
 
 		// Create a k8s-only NetworkClass (no fabric_manager):
 		k8sOnlyNC, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
@@ -448,12 +533,7 @@ var _ = Describe("NATGateway lifecycle", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(func() {
-			_, err := networkClassesClient.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
-				Id: k8sOnlyNC.GetObject().GetId(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		})
+		networkClassIDs = append(networkClassIDs, k8sOnlyNC.GetObject().GetId())
 		waitForNetworkClassReady(ctx, networkClassesClient, k8sOnlyNC.GetObject().GetId())
 
 		k8sOnlyVNId := fmt.Sprintf("test-vnet-%s", uuid.New())
@@ -472,12 +552,7 @@ var _ = Describe("NATGateway lifecycle", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(func() {
-			_, err := virtualNetworksClient.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
-				Id: k8sOnlyVNId,
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		})
+		virtualNetworkIDs = append(virtualNetworkIDs, k8sOnlyVNId)
 
 		ngId := fmt.Sprintf("test-ng-%s", uuid.New())
 		_, err = natGatewaysClient.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
@@ -508,6 +583,7 @@ var _ = Describe("NATGateway lifecycle", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		natGatewayIDs = append(natGatewayIDs, ngId)
 
 		ipResp, err := privateExternalIPsClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{
 			Id: externalIPId,
@@ -528,3 +604,26 @@ var _ = Describe("NATGateway lifecycle", func() {
 	})
 
 })
+
+func deleteAndWaitForNotFound(deleteResource, getResource func() error) {
+	deleteAndWaitForNotFoundWithTimeout(deleteResource, getResource, time.Minute)
+}
+
+func deleteAndWaitForNotFoundWithTimeout(deleteResource, getResource func() error, timeout time.Duration) {
+	GinkgoHelper()
+	err := deleteResource()
+	Expect(err == nil || grpcstatus.Code(err) == grpccodes.NotFound).To(BeTrue(), "delete failed: %v", err)
+	waitForNotFoundWithTimeout(getResource, timeout)
+}
+
+func waitForNotFound(getResource func() error) {
+	waitForNotFoundWithTimeout(getResource, time.Minute)
+}
+
+func waitForNotFoundWithTimeout(getResource func() error, timeout time.Duration) {
+	GinkgoHelper()
+	Eventually(func(g Gomega) {
+		err := getResource()
+		g.Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound), "expected resource to be deleted, got: %v", err)
+	}, timeout, time.Second).Should(Succeed())
+}

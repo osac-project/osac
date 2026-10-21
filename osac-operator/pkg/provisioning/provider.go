@@ -105,6 +105,16 @@ type ProvisioningJobCanceler interface {
 	CancelJob(ctx context.Context, jobID string) error
 }
 
+// ProvisioningJobLaunchRecoverer finds a provider job whose launch response was not persisted.
+type ProvisioningJobLaunchRecoverer interface {
+	FindJobByLaunchID(
+		ctx context.Context,
+		resource client.Object,
+		jobType v1alpha1.JobType,
+		launchID string,
+	) (ProvisionStatus, bool, error)
+}
+
 // ProvisionStatus represents the current state of a provisioning or deprovisioning job.
 type ProvisionStatus struct {
 	// JobID is the unique identifier for this job.

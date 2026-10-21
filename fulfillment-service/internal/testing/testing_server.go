@@ -75,7 +75,7 @@ func (s *Server) Start() {
 	go func() {
 		defer GinkgoRecover()
 		err := s.server.Serve(s.listener)
-		if !errors.Is(err, grpc.ErrServerStopped) {
+		if err != nil && !errors.Is(err, grpc.ErrServerStopped) {
 			Expect(err).ToNot(HaveOccurred())
 		}
 	}()

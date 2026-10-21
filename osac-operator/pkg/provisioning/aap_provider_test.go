@@ -22,6 +22,7 @@ type mockAAPClient struct {
 	launchJobTemplateFunc      func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error)
 	launchWorkflowTemplateFunc func(ctx context.Context, req aap.LaunchWorkflowTemplateRequest) (*aap.LaunchWorkflowTemplateResponse, error)
 	getJobFunc                 func(ctx context.Context, jobID string) (*aap.Job, error)
+	listJobsFunc               func(ctx context.Context, templateID int) ([]aap.Job, error)
 	cancelJobFunc              func(ctx context.Context, jobID string) error
 }
 
@@ -61,6 +62,13 @@ func (m *mockAAPClient) GetJob(ctx context.Context, jobID string) (*aap.Job, err
 		Started:  time.Now().UTC(),
 		Finished: time.Now().UTC().Add(time.Minute),
 	}, nil
+}
+
+func (m *mockAAPClient) ListJobs(ctx context.Context, templateID int) ([]aap.Job, error) {
+	if m.listJobsFunc != nil {
+		return m.listJobsFunc(ctx, templateID)
+	}
+	return nil, nil
 }
 
 func (m *mockAAPClient) CancelJob(ctx context.Context, jobID string) error {
@@ -694,6 +702,9 @@ var _ = Describe("AAPProvider", func() {
 
 	Describe("TriggerDeprovision", func() {
 		var instance *v1alpha1.ComputeInstance
+		var statusAfterCancel string
+		var provisionJobStatusCalls int
+		var deprovisionLaunchCalls int
 
 		BeforeEach(func() {
 			instance = &v1alpha1.ComputeInstance{
@@ -702,6 +713,35 @@ var _ = Describe("AAPProvider", func() {
 					Namespace: "default",
 				},
 			}
+		})
+
+		It("reuses the AAP job associated with a persisted launch claim", func() {
+			provider = provisioning.NewAAPProvider(aapClient, "provision-job", "deprovision-job")
+			launchCalls := 0
+			aapClient.getTemplateFunc = func(_ context.Context, templateName string) (*aap.Template, error) {
+				return &aap.Template{ID: 11, Name: templateName, Type: aap.TemplateTypeJob}, nil
+			}
+			aapClient.listJobsFunc = func(_ context.Context, templateID int) ([]aap.Job, error) {
+				Expect(templateID).To(Equal(11))
+				return []aap.Job{{
+					ID:        876,
+					Status:    "running",
+					ExtraVars: `{"osac_job_launch_id":"claim-deprovision-1"}`,
+				}}, nil
+			}
+			aapClient.launchJobTemplateFunc = func(_ context.Context, _ aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				launchCalls++
+				return &aap.LaunchJobTemplateResponse{JobID: 999}, nil
+			}
+
+			resource := &v1alpha1.ExternalIPAttachment{ObjectMeta: metav1.ObjectMeta{Name: "attachment", Namespace: "default"}}
+			claimCtx := provisioning.WithAAPJobLaunchID(ctx, "claim-deprovision-1")
+			result, err := provider.TriggerDeprovision(claimCtx, resource, nil)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Action).To(Equal(provisioning.DeprovisionTriggered))
+			Expect(result.JobID).To(Equal("876"))
+			Expect(launchCalls).To(BeZero())
 		})
 
 		Context("with job template", func() {
@@ -740,8 +780,14 @@ var _ = Describe("AAPProvider", func() {
 		Context("when running AAP provision job must be cancelled first", func() {
 			BeforeEach(func() {
 				provider = provisioning.NewAAPProvider(aapClient, "provision-job", "deprovision-job")
+				deprovisionLaunchCalls = 0
+				provisionJobStatus := "running"
 				aapClient.getTemplateFunc = func(ctx context.Context, templateName string) (*aap.Template, error) {
 					return &aap.Template{ID: 1, Name: templateName, Type: aap.TemplateTypeJob}, nil
+				}
+				aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+					deprovisionLaunchCalls++
+					return &aap.LaunchJobTemplateResponse{JobID: 999}, nil
 				}
 				instance.Status.Phase = v1alpha1.ComputeInstancePhaseStarting
 				instance.Status.ProvisioningJobs = []v1alpha1.JobStatus{
@@ -753,14 +799,19 @@ var _ = Describe("AAPProvider", func() {
 					},
 				}
 				aapClient.getJobFunc = func(ctx context.Context, jobID string) (*aap.Job, error) {
+					finished := time.Time{}
+					if v1alpha1.JobState(provisionJobStatus).IsTerminal() {
+						finished = time.Now().UTC()
+					}
 					return &aap.Job{
 						ID:       9876,
-						Status:   "running",
+						Status:   provisionJobStatus,
 						Started:  time.Now().UTC().Add(-5 * time.Minute),
-						Finished: time.Time{},
+						Finished: finished,
 					}, nil
 				}
 				aapClient.cancelJobFunc = func(ctx context.Context, jobID string) error {
+					provisionJobStatus = "canceled"
 					return nil
 				}
 			})
@@ -771,16 +822,27 @@ var _ = Describe("AAPProvider", func() {
 				Expect(result.Action).To(Equal(provisioning.DeprovisionWaiting))
 				Expect(result.ProvisionJobStatus).NotTo(BeNil())
 				Expect(result.ProvisionJobStatus.State).To(Equal(v1alpha1.JobStateRunning))
+				Expect(deprovisionLaunchCalls).To(BeZero())
+
+				result, err = provider.TriggerDeprovision(ctx, instance, instance.Status.ProvisioningJobs)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.Action).To(Equal(provisioning.DeprovisionTriggered))
+				Expect(result.JobID).To(Equal("999"))
+				Expect(deprovisionLaunchCalls).To(Equal(1))
 			})
 		})
 
 		Context("when cancel returns 405 because job already became terminal", func() {
 			BeforeEach(func() {
 				provider = provisioning.NewAAPProvider(aapClient, "provision-job", "deprovision-job")
+				statusAfterCancel = "successful"
+				provisionJobStatusCalls = 0
+				deprovisionLaunchCalls = 0
 				aapClient.getTemplateFunc = func(ctx context.Context, templateName string) (*aap.Template, error) {
 					return &aap.Template{ID: 1, Name: templateName, Type: aap.TemplateTypeJob}, nil
 				}
 				aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+					deprovisionLaunchCalls++
 					Expect(req.TemplateName).To(Equal("deprovision-job"))
 					return &aap.LaunchJobTemplateResponse{JobID: 999}, nil
 				}
@@ -794,11 +856,20 @@ var _ = Describe("AAPProvider", func() {
 					},
 				}
 				aapClient.getJobFunc = func(ctx context.Context, jobID string) (*aap.Job, error) {
+					provisionJobStatusCalls++
+					status := "running"
+					if provisionJobStatusCalls > 1 {
+						status = statusAfterCancel
+					}
+					finished := time.Time{}
+					if status == "successful" {
+						finished = time.Now().UTC()
+					}
 					return &aap.Job{
 						ID:       9876,
-						Status:   "running",
+						Status:   status,
 						Started:  time.Now().UTC().Add(-5 * time.Minute),
-						Finished: time.Time{},
+						Finished: finished,
 					}, nil
 				}
 				aapClient.cancelJobFunc = func(ctx context.Context, jobID string) error {
@@ -811,6 +882,20 @@ var _ = Describe("AAPProvider", func() {
 				Expect(err).NotTo(HaveOccurred())
 				Expect(result.Action).To(Equal(provisioning.DeprovisionTriggered))
 				Expect(result.JobID).To(Equal("999"))
+				Expect(provisionJobStatusCalls).To(Equal(2))
+				Expect(deprovisionLaunchCalls).To(Equal(1))
+			})
+
+			It("waits when cancel returns 405 but the fresh provider status is still running", func() {
+				statusAfterCancel = "running"
+
+				result, err := provider.TriggerDeprovision(ctx, instance, instance.Status.ProvisioningJobs)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.Action).To(Equal(provisioning.DeprovisionWaiting))
+				Expect(result.ProvisionJobStatus).NotTo(BeNil())
+				Expect(result.ProvisionJobStatus.State).To(Equal(v1alpha1.JobStateRunning))
+				Expect(provisionJobStatusCalls).To(Equal(2))
+				Expect(deprovisionLaunchCalls).To(BeZero())
 			})
 		})
 	})

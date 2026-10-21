@@ -27,6 +27,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
@@ -150,6 +151,23 @@ func (p *controllableProvider) setDeprovisionJobState(state osacv1alpha1.JobStat
 	p.deprovisionJobMsg = message
 }
 
+type gatedControllableProvider struct {
+	*controllableProvider
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (p *gatedControllableProvider) TriggerProvision(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+	p.once.Do(func() { close(p.started) })
+	select {
+	case <-p.release:
+		return p.controllableProvider.TriggerProvision(ctx, resource)
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 var _ = Describe("ComputeInstance Integration Tests", func() {
 	const (
 		testNamespace            = "default"
@@ -169,6 +187,73 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 	})
 
 	Context("Provisioning workflow", func() {
+		It("keeps deletion phase when an in-flight provider trigger flushes stale Ready status", func() {
+			const instanceName = "test-delete-during-provider-trigger"
+			gate := &gatedControllableProvider{
+				controllableProvider: provider,
+				started:              make(chan struct{}),
+				release:              make(chan struct{}),
+			}
+			reconciler = NewComputeInstanceReconciler(testMcManager, testNamespace, testNamespace, "", gate,
+				100*time.Millisecond, provisioning.DefaultMaxJobHistory, mcmanager.LocalCluster)
+			instance := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       instanceName,
+					Namespace:  testNamespace,
+					Finalizers: []string{osacComputeInstanceFinalizer},
+					Annotations: map[string]string{
+						osacTenantKey: "test-tenant",
+					},
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			DeferCleanup(func() {
+				latest := &osacv1alpha1.ComputeInstance{}
+				if k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), latest) == nil {
+					latest.Finalizers = nil
+					_ = k8sClient.Update(ctx, latest)
+					_ = k8sClient.Delete(ctx, latest)
+				}
+			})
+
+			instance.Status.DesiredConfigVersion = testDesiredConfigVersion
+			instance.Status.Phase = osacv1alpha1.ComputeInstancePhaseRunning
+			instance.SetStatusCondition(osacv1alpha1.ComputeInstanceConditionReady, metav1.ConditionTrue, "", osacv1alpha1.ReasonReady)
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+
+			type reconcileOutcome struct {
+				result ctrl.Result
+				err    error
+			}
+			outcome := make(chan reconcileOutcome, 1)
+			go func() {
+				result, err := reconciler.handleProvisioning(ctx, instance)
+				outcome <- reconcileOutcome{result: result, err: err}
+			}()
+			select {
+			case <-gate.started:
+			case <-time.After(5 * time.Second):
+				Fail("provisioning provider was not called")
+			}
+
+			By("accepting delete while provider create is still in flight")
+			Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
+			close(gate.release)
+			result := <-outcome
+			Expect(result.err).NotTo(HaveOccurred())
+			Expect(result.result.RequeueAfter).To(Equal(100 * time.Millisecond))
+
+			latest := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), latest)).To(Succeed())
+			Expect(latest.GetDeletionTimestamp()).NotTo(BeNil())
+			Expect(latest.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseDeleting))
+			ready := latest.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionReady)
+			Expect(ready).NotTo(BeNil())
+			Expect(ready.Status).To(Equal(metav1.ConditionFalse))
+			Expect(latest.Status.ProvisioningJobs).To(HaveLen(1))
+		})
+
 		It("does not submit another VM job after an attachment update is rejected and continues polling status", func() {
 			const instanceName = "test-immutable-network-attachment"
 			instance := &osacv1alpha1.ComputeInstance{

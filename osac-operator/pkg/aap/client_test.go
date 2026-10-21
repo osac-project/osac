@@ -280,6 +280,38 @@ var _ = Describe("Client", func() {
 		})
 	})
 
+	Describe("ListJobs", func() {
+		It("filters jobs by template and follows AAP pagination", func() {
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.URL.Path).To(Equal(fmt.Sprintf("/%s/jobs/", aap.APIVersion)))
+				Expect(r.URL.Query().Get("job_template")).To(Equal("77"))
+				Expect(r.URL.Query().Get("page_size")).To(Equal("200"))
+				Expect(r.URL.Query().Get("order_by")).To(Equal("-id"))
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Query().Get("page") == "1" {
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"next":    "/api/v2/jobs/?page=2",
+						"results": []map[string]any{{"id": 20, "status": "running", "extra_vars": `{"a":1}`}},
+					})
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"next":    nil,
+					"results": []map[string]any{{"id": 19, "status": "successful", "extra_vars": `{"a":2}`}},
+				})
+			}))
+			defer server.Close()
+			client = aap.NewClient(server.URL, "test-token", false)
+
+			jobs, err := client.ListJobs(ctx, 77)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(jobs).To(HaveLen(2))
+			Expect(jobs[0].ID).To(Equal(20))
+			Expect(jobs[1].ID).To(Equal(19))
+		})
+	})
+
 	Describe("GetTemplateByName", func() {
 		Context("when template is a job_template", func() {
 			BeforeEach(func() {

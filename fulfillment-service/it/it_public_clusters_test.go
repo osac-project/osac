@@ -44,7 +44,7 @@ var _ = Describe("Public clusters", func() {
 		ctx = context.Background()
 		// Public cluster requests validate the canonical networking Hub even when
 		// the request does not specify a subnet or SecurityGroup.
-		networkClassID = getOrCreateTenantDefaultNetworkClassFixture(ctx)
+		networkClassID, _ = getOrCreateTenantDefaultNetworkClassFixture(ctx)
 
 		// Create the clients:
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
@@ -284,9 +284,34 @@ var _ = Describe("Public clusters", func() {
 		}.Build())
 		Expect(err).NotTo(HaveOccurred())
 		object := createResponse.GetObject()
-		DeferCleanup(func() {
-			_, err := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: object.GetId()}.Build())
-			Expect(err).NotTo(HaveOccurred())
+		privateClustersClient := privatev1.NewClustersClient(tool.InternalView().AdminConn())
+		DeferCleanup(func(cleanupCtx context.Context) {
+			cleanupErr := cleanupNetworkFixtureResource(cleanupCtx,
+				func(ctx context.Context) error {
+					_, err := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: object.GetId()}.Build())
+					return err
+				},
+				func(ctx context.Context) (*privatev1.Metadata, error) {
+					response, err := privateClustersClient.Get(ctx, privatev1.ClustersGetRequest_builder{Id: object.GetId()}.Build())
+					if err != nil {
+						return nil, err
+					}
+					return response.GetObject().GetMetadata(), nil
+				},
+				func(ctx context.Context) error {
+					response, err := privateClustersClient.Get(ctx, privatev1.ClustersGetRequest_builder{Id: object.GetId()}.Build())
+					if err != nil {
+						return err
+					}
+					cluster := response.GetObject()
+					cluster.GetMetadata().SetFinalizers(nil)
+					_, err = privateClustersClient.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+						Object: cluster, UpdateMask: catalogItemUpdateMask("metadata.finalizers"), Lock: true,
+					}.Build())
+					return err
+				},
+			)
+			Expect(cleanupErr).NotTo(HaveOccurred())
 		})
 
 		originalAttachment := proto.Clone(object.GetSpec().GetNetworkAttachment()).(*publicv1.ClusterNetworkAttachment)
@@ -468,11 +493,33 @@ var _ = Describe("Public clusters", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		object := createResponse.GetObject()
-		DeferCleanup(func() {
-			_, err := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{
-				Id: object.GetId(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
+		privateClustersClient := privatev1.NewClustersClient(tool.InternalView().AdminConn())
+		DeferCleanup(func(cleanupCtx context.Context) {
+			cleanupErr := cleanupNetworkFixtureResource(cleanupCtx,
+				func(ctx context.Context) error {
+					_, err := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: object.GetId()}.Build())
+					return err
+				},
+				func(ctx context.Context) (*privatev1.Metadata, error) {
+					response, err := privateClustersClient.Get(ctx, privatev1.ClustersGetRequest_builder{Id: object.GetId()}.Build())
+					if err != nil {
+						return nil, err
+					}
+					return response.GetObject().GetMetadata(), nil
+				},
+				func(ctx context.Context) error {
+					response, err := privateClustersClient.Get(ctx, privatev1.ClustersGetRequest_builder{Id: object.GetId()}.Build())
+					if err != nil {
+						return err
+					}
+					cluster := response.GetObject()
+					cluster.GetMetadata().SetFinalizers(nil)
+					_, err = privateClustersClient.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+						Object: cluster, UpdateMask: catalogItemUpdateMask("metadata.finalizers"), Lock: true,
+					}.Build())
+					return err
+				})
+			Expect(cleanupErr).NotTo(HaveOccurred())
 		})
 
 		// Verify the cluster has the correct version:

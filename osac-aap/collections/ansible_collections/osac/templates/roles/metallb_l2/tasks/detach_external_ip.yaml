@@ -226,44 +226,9 @@
           'osac-eip-{{ external_ip_name }}-ingress' in '{{ detach_vm_namespace }}' has been restored
           if it had been deleted. Check the preceding error for details.
 
-# Remove the external-ip-address annotation from the ComputeInstance CR.
-- name: Fetch ComputeInstance to inspect annotations
-  kubernetes.core.k8s_info:
-    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
-    api_version: osac.openshift.io/v1alpha1
-    kind: ComputeInstance
-    name: "{{ detach_compute_instance_name }}"
-    namespace: "{{ external_ip_attachment.metadata.namespace }}"
-  register: ci_info
+- name: Remove the ComputeInstance ExternalIP annotation
+  ansible.builtin.include_tasks: remove_external_ip_annotation.yaml
   when: detach_compute_instance_name is defined
-
-- name: Remove external-ip-address annotation from ComputeInstance CR
-  kubernetes.core.k8s_json_patch:
-    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
-    api_version: osac.openshift.io/v1alpha1
-    kind: ComputeInstance
-    name: "{{ detach_compute_instance_name }}"
-    namespace: "{{ external_ip_attachment.metadata.namespace }}"
-    patch:
-      - op: remove
-        path: /metadata/annotations/osac.openshift.io~1external-ip-address
-  register: ci_patch_result
-  when:
-    - detach_compute_instance_name is defined
-    - ci_info is not skipped
-    - ci_info.resources | length > 0
-    - (ci_info.resources[0].metadata.annotations | default({}))
-      ['osac.openshift.io/external-ip-address'] is defined
-
-- name: Display ComputeInstance annotation removal result
-  ansible.builtin.debug:
-    msg:
-      - "ComputeInstance '{{ detach_compute_instance_name }}': external-ip-address annotation removed"
-      - "Changed: {{ ci_patch_result.changed | default(false) }}"
-  when:
-    - detach_compute_instance_name is defined
-    - ci_patch_result is defined
-    - ci_patch_result is not skipped
 
 - name: Display ComputeInstance annotation cleanup skipped
   ansible.builtin.debug:

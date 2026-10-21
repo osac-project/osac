@@ -38,6 +38,7 @@ class TestIPManagementReferences:
         eip_id = response["object"]["id"]
         eip_cr_name = wait_for_external_ip_cr(k8s=k8s_hub_client, uuid=eip_id)
         try:
+            wait_for_external_ip_allocated(k8s=k8s_hub_client, name=eip_cr_name)
             pool_ref = response["object"]["spec"]["pool"]
             assert pool_ref.get("name") == ref_eip_pool["name"]
             assert pool_ref.get("id") == ref_eip_pool["id"]
@@ -117,6 +118,7 @@ class TestIPManagementReferences:
         eip_id = eip_response["object"]["id"]
         eip_cr_name = wait_for_external_ip_cr(k8s=k8s_hub_client, uuid=eip_id)
         try:
+            wait_for_external_ip_allocated(k8s=k8s_hub_client, name=eip_cr_name)
             with pytest.raises(subprocess.CalledProcessError) as exc_info:
                 grpc.call(
                     service=f"{PUBLIC_API}.ExternalIPAttachments/Create",
@@ -147,6 +149,7 @@ class TestIPManagementReferences:
         eip_id = response["object"]["id"]
         eip_cr_name = wait_for_external_ip_cr(k8s=k8s_hub_client, uuid=eip_id)
         try:
+            wait_for_external_ip_allocated(k8s=k8s_hub_client, name=eip_cr_name)
             pool_ref = response["object"]["spec"]["pool"]
             assert pool_ref.get("name") == ref_eip_pool["name"]
             assert pool_ref.get("id") == ref_eip_pool["id"]

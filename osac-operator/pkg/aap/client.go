@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -110,6 +111,11 @@ type Job struct {
 	Artifacts       json.RawMessage `json:"artifacts,omitempty"`
 }
 
+type jobsPage struct {
+	Next    *string `json:"next"`
+	Results []Job   `json:"results"`
+}
+
 // TemplateType represents the type of AAP template.
 type TemplateType string
 
@@ -206,6 +212,37 @@ func (c *Client) GetJob(ctx context.Context, jobID string) (*Job, error) {
 	}
 
 	return &job, nil
+}
+
+func (c *Client) ListJobs(ctx context.Context, templateID int) ([]Job, error) {
+	if templateID <= 0 {
+		return nil, fmt.Errorf("job template ID must be positive")
+	}
+	const pageSize = 200
+	const maxPages = 100
+	jobs := make([]Job, 0)
+	for page := 1; page <= maxPages; page++ {
+		query := url.Values{
+			"job_template": {fmt.Sprintf("%d", templateID)},
+			"order_by":     {"-id"},
+			"page":         {fmt.Sprintf("%d", page)},
+			"page_size":    {fmt.Sprintf("%d", pageSize)},
+		}
+		endpoint := fmt.Sprintf("%s/%s/jobs/?%s", c.baseURL, APIVersion, query.Encode())
+		resp, err := c.doRequestWithRedaction(ctx, http.MethodGet, endpoint, nil, true)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list jobs for template %d: %w", templateID, err)
+		}
+		var result jobsPage
+		if err := json.Unmarshal(resp, &result); err != nil {
+			return nil, fmt.Errorf("failed to parse job list for template %d: %w", templateID, err)
+		}
+		jobs = append(jobs, result.Results...)
+		if result.Next == nil || *result.Next == "" {
+			return jobs, nil
+		}
+	}
+	return nil, fmt.Errorf("job list for template %d exceeded %d pages", templateID, maxPages)
 }
 
 // CanCancelJobResponse contains the response from checking if a job can be canceled.

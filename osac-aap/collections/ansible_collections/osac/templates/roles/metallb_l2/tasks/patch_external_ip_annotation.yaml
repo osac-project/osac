@@ -1,0 +1,55 @@
+- name: Remove ExternalIP address annotation
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    state: patched
+    merge_type:
+      - merge
+    definition:
+      apiVersion: osac.openshift.io/v1alpha1
+      kind: ComputeInstance
+      metadata:
+        name: "{{ detach_compute_instance_name }}"
+        namespace: "{{ external_ip_attachment.metadata.namespace }}"
+        annotations:
+          osac.openshift.io/external-ip-address: null
+  register: ci_patch_result
+  ignore_errors: true
+  when: ci_info.resources | length > 0
+
+- name: Confirm ComputeInstance is absent after annotation patch error
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: osac.openshift.io/v1alpha1
+    kind: ComputeInstance
+    name: "{{ detach_compute_instance_name }}"
+    namespace: "{{ external_ip_attachment.metadata.namespace }}"
+  register: ci_after_patch
+  when:
+    - ci_patch_result is defined
+    - ci_patch_result is failed
+
+- name: Fail when the ComputeInstance annotation patch failed
+  ansible.builtin.fail:
+    msg: >-
+      Could not remove the ExternalIP address annotation from ComputeInstance
+      '{{ detach_compute_instance_name }}'.
+  when:
+    - ci_patch_result is defined
+    - ci_patch_result is failed
+    - ci_after_patch.resources | length > 0
+
+- name: Display ComputeInstance annotation removal result
+  ansible.builtin.debug:
+    msg:
+      - "ComputeInstance '{{ detach_compute_instance_name }}': external-ip-address annotation removed"
+      - "Changed: {{ ci_patch_result.changed | default(false) }}"
+  when:
+    - ci_patch_result is defined
+    - ci_patch_result is not skipped
+
+- name: Display ComputeInstance annotation cleanup skipped
+  ansible.builtin.debug:
+    msg: >-
+      ComputeInstance '{{ detach_compute_instance_name }}' does not exist;
+      skipping annotation cleanup.
+  when: ci_info.resources | length == 0

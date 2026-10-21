@@ -195,6 +195,12 @@ func (r *ExternalIPReconciler) updateStatusWithRetry(
 				return fmt.Errorf("ExternalIP allocation job changed before status was written")
 			}
 		}
+		if latest.Status.Phase == v1alpha1.ExternalIPPhaseDeleting && computed.Phase != v1alpha1.ExternalIPPhaseDeleting {
+			computed.Phase = latest.Status.Phase
+			computed.State = latest.Status.State
+			computed.Address = latest.Status.Address
+			computed.Conditions = latest.Status.Conditions
+		}
 		computed.Attached = latest.Status.Attached
 		computed.AttachmentTransitionTime = latest.Status.AttachmentTransitionTime
 		latest.Status = computed
@@ -476,6 +482,7 @@ func (r *ExternalIPReconciler) handleDelete(ctx context.Context, externalIP *v1a
 		return ctrl.Result{}, nil
 	}
 	if statusChanged {
+		groupVersionKind := externalIP.GetObjectKind().GroupVersionKind()
 		if err := r.Status().Update(ctx, externalIP); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -484,6 +491,13 @@ func (r *ExternalIPReconciler) handleDelete(ctx context.Context, externalIP *v1a
 			return ctrl.Result{}, err
 		}
 		*externalIP = *latest
+		if groupVersionKind.Kind != "" {
+			externalIP.SetGroupVersionKind(groupVersionKind)
+		}
+	}
+	result, waitingForProvision, err := r.waitForExternalIPProvisionLaunch(ctx, externalIP)
+	if err != nil || waitingForProvision {
+		return result, err
 	}
 
 	// Gate: wait for all child resources referencing this ExternalIP to be fully removed.
@@ -558,6 +572,51 @@ func (r *ExternalIPReconciler) handleDelete(ctx context.Context, externalIP *v1a
 	return ctrl.Result{}, nil
 }
 
+func (r *ExternalIPReconciler) waitForExternalIPProvisionLaunch(
+	ctx context.Context,
+	externalIP *v1alpha1.ExternalIP,
+) (ctrl.Result, bool, error) {
+	claim, err := providerJobLaunchClaimFromObject(externalIP)
+	if err != nil || claim == nil || claim.JobType != v1alpha1.JobTypeProvision {
+		return ctrl.Result{}, false, err
+	}
+	if providerJobLaunchClaimIsFresh(claim, time.Now()) {
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, true, nil
+	}
+	claim, acquired, resumed, err := acquireProviderJobLaunchClaim(
+		ctx, r.Client, r.APIReader, externalIP, v1alpha1.JobTypeProvision, claim.ConfigVersion,
+	)
+	if err != nil {
+		return ctrl.Result{}, false, err
+	}
+	if !acquired {
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, true, nil
+	}
+	if !resumed {
+		if err := releaseProviderJobLaunchClaim(ctx, r.Client, r.APIReader, externalIP, claim.ID); err != nil {
+			return ctrl.Result{}, false, err
+		}
+		return ctrl.Result{}, false, nil
+	}
+	found, err := recoverProviderJobFromClaim(
+		ctx, r.ProvisioningProvider, externalIP, claim, &externalIP.Status.ProvisioningJobs, r.MaxJobHistory,
+	)
+	if err != nil {
+		return ctrl.Result{}, false, err
+	}
+	if found {
+		if err := r.updateStatusWithRetry(
+			ctx, client.ObjectKeyFromObject(externalIP), externalIP.UID, externalIP.Generation, externalIP.Status,
+		); err != nil {
+			return ctrl.Result{}, false, err
+		}
+	}
+	if err := releaseProviderJobLaunchClaim(ctx, r.Client, r.APIReader, externalIP, claim.ID); err != nil {
+		return ctrl.Result{}, false, err
+	}
+	return ctrl.Result{}, false, nil
+}
+
 // handleProvisioning delegates ExternalIP provisioning to the shared job lifecycle.
 func (r *ExternalIPReconciler) handleProvisioning(ctx context.Context, externalIP *v1alpha1.ExternalIP) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
@@ -625,20 +684,89 @@ func (r *ExternalIPReconciler) handleProvisioning(ctx context.Context, externalI
 		}
 	}
 
-	return provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, externalIP,
-		&provisioning.State{Jobs: &externalIP.Status.ProvisioningJobs, DesiredConfigVersion: externalIP.Status.DesiredConfigVersion},
+	checkAPIServer := func() bool {
+		return provisioning.CheckAPIServerForNonTerminalProvisionJob(
+			ctx, r.APIReader, client.ObjectKeyFromObject(externalIP), &v1alpha1.ExternalIP{}, func(obj client.Object) []v1alpha1.JobStatus {
+				return obj.(*v1alpha1.ExternalIP).Status.ProvisioningJobs
+			})
+	}
+	state := &provisioning.State{Jobs: &externalIP.Status.ProvisioningJobs, DesiredConfigVersion: externalIP.Status.DesiredConfigVersion}
+	runCtx, claim, previousProvisionJobID, result, done, err := r.prepareExternalIPProvisionLaunch(ctx, externalIP, state, checkAPIServer)
+	if err != nil || done {
+		return result, err
+	}
+
+	result, err = provisioning.RunProvisioningLifecycle(runCtx, r.ProvisioningProvider, externalIP,
+		state,
 		r.MaxJobHistory, r.StatusPollInterval,
 		callbacks,
-		func() bool {
-			return provisioning.CheckAPIServerForNonTerminalProvisionJob(
-				ctx, r.APIReader, client.ObjectKeyFromObject(externalIP), &v1alpha1.ExternalIP{}, func(obj client.Object) []v1alpha1.JobStatus {
-					return obj.(*v1alpha1.ExternalIP).Status.ProvisioningJobs
-				})
-		},
+		checkAPIServer,
 		func() error {
-			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(externalIP), externalIP.UID, externalIP.Generation, externalIP.Status)
+			return r.updateStatusWithRetry(runCtx, client.ObjectKeyFromObject(externalIP), externalIP.UID, externalIP.Generation, externalIP.Status)
 		},
 	)
+	if err != nil || claim == nil {
+		return result, err
+	}
+	latestProvisionJob := provisioning.FindLatestJobByType(externalIP.Status.ProvisioningJobs, v1alpha1.JobTypeProvision)
+	triggered := latestProvisionJob != nil && latestProvisionJob.JobID != previousProvisionJobID
+	if triggered {
+		if err := r.updateStatusWithRetry(
+			ctx, client.ObjectKeyFromObject(externalIP), externalIP.UID, externalIP.Generation, externalIP.Status,
+		); err != nil {
+			return result, err
+		}
+	}
+	if err := releaseProviderJobLaunchClaim(ctx, r.Client, r.APIReader, externalIP, claim.ID); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+func (r *ExternalIPReconciler) prepareExternalIPProvisionLaunch(
+	ctx context.Context,
+	externalIP *v1alpha1.ExternalIP,
+	state *provisioning.State,
+	checkAPIServer func() bool,
+) (context.Context, *providerJobLaunchClaim, string, ctrl.Result, bool, error) {
+	action, _ := provisioning.EvaluateAction(state, checkAPIServer)
+	if action != provisioning.Trigger && action != provisioning.Backoff {
+		return ctx, nil, "", ctrl.Result{}, false, nil
+	}
+	latest := provisioning.FindLatestJobByType(externalIP.Status.ProvisioningJobs, v1alpha1.JobTypeProvision)
+	previousJobID := ""
+	if latest != nil {
+		previousJobID = latest.JobID
+	}
+	claim, acquired, resumed, err := acquireProviderJobLaunchClaim(
+		ctx, r.Client, r.APIReader, externalIP, v1alpha1.JobTypeProvision, externalIP.Status.DesiredConfigVersion,
+	)
+	if err != nil {
+		return ctx, nil, "", ctrl.Result{}, true, err
+	}
+	if !acquired {
+		return ctx, nil, "", ctrl.Result{RequeueAfter: r.StatusPollInterval}, true, nil
+	}
+	if resumed {
+		found, err := recoverProviderJobFromClaim(
+			ctx, r.ProvisioningProvider, externalIP, claim, &externalIP.Status.ProvisioningJobs, r.MaxJobHistory,
+		)
+		if err != nil {
+			return ctx, nil, "", ctrl.Result{}, true, err
+		}
+		if found {
+			if err := r.updateStatusWithRetry(
+				ctx, client.ObjectKeyFromObject(externalIP), externalIP.UID, externalIP.Generation, externalIP.Status,
+			); err != nil {
+				return ctx, nil, "", ctrl.Result{}, true, err
+			}
+			if err := releaseProviderJobLaunchClaim(ctx, r.Client, r.APIReader, externalIP, claim.ID); err != nil {
+				return ctx, nil, "", ctrl.Result{}, true, err
+			}
+			return ctx, nil, "", ctrl.Result{RequeueAfter: r.StatusPollInterval}, true, nil
+		}
+	}
+	return provisioning.WithAAPJobLaunchID(ctx, claim.ID), claim, previousJobID, ctrl.Result{}, false, nil
 }
 
 func (r *ExternalIPReconciler) failExternalIPProvisionAttempt(externalIP *v1alpha1.ExternalIP, message string) {
@@ -665,10 +793,58 @@ func (r *ExternalIPReconciler) handleDeprovisioning(ctx context.Context, externa
 			}
 		}
 	}
-	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, externalIP,
+	var claim *providerJobLaunchClaim
+	runCtx := ctx
+	if provisioning.DeprovisionJobLaunchNeeded(externalIP.Status.ProvisioningJobs, time.Now()) {
+		var acquired, resumed bool
+		var err error
+		claim, acquired, resumed, err = acquireProviderJobLaunchClaim(
+			ctx, r.Client, r.APIReader, externalIP, v1alpha1.JobTypeDeprovision, "",
+		)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !acquired {
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+		}
+		if resumed {
+			found, err := recoverProviderJobFromClaim(
+				ctx, r.ProvisioningProvider, externalIP, claim, &externalIP.Status.ProvisioningJobs, r.MaxJobHistory,
+			)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			if found {
+				if err := r.updateStatusWithRetry(
+					ctx, client.ObjectKeyFromObject(externalIP), externalIP.UID, externalIP.Generation, externalIP.Status,
+				); err != nil {
+					return ctrl.Result{}, err
+				}
+				if err := releaseProviderJobLaunchClaim(ctx, r.Client, r.APIReader, externalIP, claim.ID); err != nil {
+					return ctrl.Result{}, err
+				}
+				return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+			}
+		}
+		runCtx = provisioning.WithAAPJobLaunchID(ctx, claim.ID)
+	}
+	beforeStatus := externalIP.Status.DeepCopy()
+	result, done, err := provisioning.RunDeprovisioningLifecycle(runCtx, r.ProvisioningProvider, externalIP,
 		&externalIP.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
 	if err != nil {
 		return result, err
+	}
+	if !equality.Semantic.DeepEqual(externalIP.Status, *beforeStatus) {
+		if err := r.updateStatusWithRetry(
+			ctx, client.ObjectKeyFromObject(externalIP), externalIP.UID, externalIP.Generation, externalIP.Status,
+		); err != nil {
+			return result, err
+		}
+	}
+	if claim != nil {
+		if err := releaseProviderJobLaunchClaim(ctx, r.Client, r.APIReader, externalIP, claim.ID); err != nil {
+			return result, err
+		}
 	}
 	if !done {
 		if contracted && result.RequeueAfter == 0 {

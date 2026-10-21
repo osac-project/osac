@@ -109,6 +109,7 @@ type ToolView struct {
 	anonymousConn   *grpc.ClientConn
 	emergencyConn   *grpc.ClientConn
 	adminConn       *grpc.ClientConn
+	controllerConn  *grpc.ClientConn
 	userConn        *grpc.ClientConn
 	anonymousClient *http.Client
 	emergencyClient *http.Client
@@ -590,6 +591,10 @@ func (t *Tool) createClients(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	controllerTokenSource, err := t.makeControllerTokenSource()
+	if err != nil {
+		return err
+	}
 	userTokenSource, err := t.makeKeycloakTokenSource(ctx, userUsername, usersPassword)
 	if err != nil {
 		return err
@@ -607,6 +612,10 @@ func (t *Tool) createClients(ctx context.Context) error {
 		return err
 	}
 	t.internalView.adminConn, err = t.makeGrpcConn(internalServiceAddr, adminTokenSource)
+	if err != nil {
+		return err
+	}
+	t.internalView.controllerConn, err = t.makeGrpcConn(internalServiceAddr, controllerTokenSource)
 	if err != nil {
 		return err
 	}
@@ -1239,6 +1248,23 @@ func (t *Tool) makeKeycloakTokenSource(ctx context.Context, username, password s
 	return
 }
 
+func (t *Tool) makeControllerTokenSource() (result auth.TokenSource, err error) {
+	store, err := auth.NewMemoryTokenStore().SetLogger(t.logger).Build()
+	if err != nil {
+		return nil, err
+	}
+	return oauth.NewTokenSource().
+		SetLogger(t.logger).
+		SetStore(store).
+		SetCaPool(t.caPool).
+		SetIssuer(fmt.Sprintf("https://%s/realms/osac", keycloakAddr)).
+		SetFlow(oauth.CredentialsFlow).
+		SetClientId(controllerClientId).
+		SetClientSecret(t.Secret()).
+		SetScopes("openid", "organization").
+		Build()
+}
+
 // KeycloakAdminRequest makes an authenticated request to the Keycloak admin API for the 'osac' realm.
 // The path is relative to /admin/realms/osac (e.g., "/organizations", "/users/{id}").
 func (t *Tool) KeycloakAdminRequest(ctx context.Context, method, path string, input any) (
@@ -1813,6 +1839,11 @@ func (v *ToolView) AdminConn() *grpc.ClientConn {
 	return v.adminConn
 }
 
+// ControllerConn returns the gRPC connection authenticated as the controller service account.
+func (v *ToolView) ControllerConn() *grpc.ClientConn {
+	return v.controllerConn
+}
+
 // UserConn returns the gRPC connection for the regular user.
 func (v *ToolView) UserConn() *grpc.ClientConn {
 	return v.userConn
@@ -1853,6 +1884,7 @@ func (v *ToolView) Close() error {
 		closeConn(v.anonymousConn),
 		closeConn(v.emergencyConn),
 		closeConn(v.adminConn),
+		closeConn(v.controllerConn),
 		closeConn(v.userConn),
 		closeClient(v.anonymousClient),
 		closeClient(v.emergencyClient),
@@ -1886,12 +1918,25 @@ var hubNamespace = "osac"
 // userAgent is the user agent string for the integration test tool.
 const userAgent = "fulfillment-it-tool"
 
-// Service host name and address (host-side, via Kind port mapping):
-const (
-	keycloakAddr        = "keycloak.keycloak.svc.cluster.local:8443"
-	externalServiceAddr = "fulfillment-api.osac.svc.cluster.local:8443"
-	internalServiceAddr = "fulfillment-internal-api.osac.svc.cluster.local:8443"
+// Service addresses route through the host-side Kind ingress port. A dedicated
+// port lets concurrent integration runs use separate clusters on the same host.
+// Keycloak's in-cluster broker calls must use the Service port even when the
+// test runner uses a different host-side ingress port.
+const keycloakInternalAddr = "keycloak.keycloak.svc.cluster.local:8443"
+
+var (
+	keycloakAddr        = integrationServiceAddress("keycloak.keycloak.svc.cluster.local")
+	externalServiceAddr = integrationServiceAddress("fulfillment-api.osac.svc.cluster.local")
+	internalServiceAddr = integrationServiceAddress("fulfillment-internal-api.osac.svc.cluster.local")
 )
+
+func integrationServiceAddress(host string) string {
+	port := os.Getenv("IT_HTTPS_PORT")
+	if port == "" {
+		port = "8443"
+	}
+	return net.JoinHostPort(host, port)
+}
 
 // Namespace, name and key of the Kubernetes secret that contains the random secret used for passwords and credentials.
 const (

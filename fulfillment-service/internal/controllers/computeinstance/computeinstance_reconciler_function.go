@@ -95,6 +95,7 @@ type function struct {
 	logger                      *slog.Logger
 	hubCache                    controllers.HubCache
 	networkingHubReader         controllers.NetworkingHubReader
+	networkingCleanup           controllers.WorkloadNetworkingCleanup
 	computeInstancesClient      privatev1.ComputeInstancesClient
 	externalIPsClient           privatev1.ExternalIPsClient
 	externalIPAttachmentsClient privatev1.ExternalIPAttachmentsClient
@@ -156,6 +157,7 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 	// Create and populate the object:
 	object := &function{
 		logger:                      b.logger,
+		networkingCleanup:           controllers.NewWorkloadNetworkingCleanup(b.connection),
 		computeInstancesClient:      privatev1.NewComputeInstancesClient(b.connection),
 		externalIPsClient:           privatev1.NewExternalIPsClient(b.connection),
 		externalIPAttachmentsClient: privatev1.NewExternalIPAttachmentsClient(b.connection),
@@ -211,7 +213,7 @@ func (r *function) run(ctx context.Context, computeInstance *privatev1.ComputeIn
 				proto.Reset(computeInstance)
 				proto.Merge(computeInstance, oldComputeInstance)
 			}
-		} else if !errors.Is(reconcileErr, errTransientK8sError) {
+		} else if !errors.Is(reconcileErr, errTransientK8sError) && !controllers.IsRequeueable(reconcileErr) {
 			t.setReconciliationFailed(reconcileErr)
 		}
 	}
@@ -417,6 +419,9 @@ func (t *task) delete(ctx context.Context) (err error) {
 	t.hubId = t.computeInstance.GetStatus().GetHub()
 	if t.hubId == "" {
 		// No hub assigned, nothing to clean up on K8s side.
+		if err = controllers.ReconcileWorkloadNetworkingCleanup(ctx, t.r.networkingCleanup, t.computeInstance.GetId()); err != nil {
+			return err
+		}
 		t.removeFinalizer()
 		return nil
 	}
@@ -424,6 +429,9 @@ func (t *task) delete(ctx context.Context) (err error) {
 	if err != nil {
 		// Check if the hub has been decommissioned (deleted from database)
 		if errors.Is(err, controllers.ErrHubNotFound) {
+			if err = controllers.ReconcileWorkloadNetworkingCleanup(ctx, t.r.networkingCleanup, t.computeInstance.GetId()); err != nil {
+				return err
+			}
 			controllers.RemoveFinalizerOnDecommissionedHub(ctx, t.r.logger, t.hubId, "compute_instance_id", t.computeInstance.GetId(), t.removeFinalizer)
 			return nil
 		}
@@ -444,6 +452,9 @@ func (t *task) delete(ctx context.Context) (err error) {
 			"Compute instance doesn't exist",
 			slog.String("id", t.computeInstance.GetId()),
 		)
+		if err = controllers.ReconcileWorkloadNetworkingCleanup(ctx, t.r.networkingCleanup, t.computeInstance.GetId()); err != nil {
+			return err
+		}
 		t.removeFinalizer()
 		return
 	}

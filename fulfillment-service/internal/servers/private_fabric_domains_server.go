@@ -235,15 +235,28 @@ func (s *PrivateFabricDomainsServer) validateFabricDomain(ctx context.Context, o
 	if vn.GetMetadata().HasDeletionTimestamp() {
 		return grpcstatus.Error(grpccodes.FailedPrecondition, "VirtualNetwork is being deleted")
 	}
+	if vn.GetStatus().GetState() != privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"VirtualNetwork '%s' must be READY (current state: %s)",
+			spec.GetVirtualNetwork(), vn.GetStatus().GetState().String())
+	}
 	networkClassID := vn.GetSpec().GetNetworkClass().GetId()
 	if networkClassID == "" {
 		return grpcstatus.Error(grpccodes.FailedPrecondition, "VirtualNetwork has no NetworkClass")
 	}
-	ncResponse, err := s.networkClassDao.Get().SetId(networkClassID).Do(ctx)
+	ncResponse, err := s.networkClassDao.Get().SetId(networkClassID).SetLock(true).Do(ctx)
 	if err != nil {
-		return err
+		return translateLifecycleError(err)
 	}
 	nc := ncResponse.GetObject()
+	if nc.GetMetadata().HasDeletionTimestamp() {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"NetworkClass '%s' is being deleted", networkClassID)
+	}
+	if nc.GetStatus().GetState() != privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"NetworkClass '%s' must be READY (current state: %s)", networkClassID, nc.GetStatus().GetState().String())
+	}
 	if !nc.GetCapabilities().GetSupportsEastWestEthernet() {
 		return grpcstatus.Error(grpccodes.InvalidArgument, "type does not match NetworkClass capability")
 	}

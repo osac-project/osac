@@ -114,6 +114,10 @@ func (r *ExternalIPFeedbackReconciler) Reconcile(ctx context.Context, request ct
 }
 
 func syncExternalIPUpdate(ctx context.Context, obj *v1alpha1.ExternalIP, remote *privatev1.ExternalIP) error {
+	if remote.GetStatus().GetState() == privatev1.ExternalIPState_EXTERNAL_IP_STATE_DELETING {
+		ctrllog.FromContext(ctx).Info("ExternalIP is already deleting in Fulfillment, ignoring stale status update")
+		return nil
+	}
 	syncExternalIPState(ctx, obj, remote)
 	syncExternalIPAddress(obj, remote)
 	return nil

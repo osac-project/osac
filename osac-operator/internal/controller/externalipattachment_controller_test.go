@@ -15,6 +15,8 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"sync/atomic"
 	"time"
 
@@ -280,6 +282,163 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
 			Expect(updated.Finalizers).To(BeEmpty())
 			Expect(updated.Status.Phase).To(BeEmpty())
+		})
+	})
+
+	Context("deprovision launch coordination", func() {
+		It("recovers an interrupted detach launch after controller restart", func() {
+			attachment.Finalizers = []string{osacExternalIPAttachmentFinalizer}
+			attachment.Annotations = map[string]string{
+				osacImplementationStrategyAnnotation: "metallb-l2",
+			}
+			claim := &providerJobLaunchClaim{
+				ID:        "interrupted-detach-launch",
+				JobType:   osacv1alpha1.JobTypeDeprovision,
+				ClaimedAt: metav1.NewTime(time.Now().Add(-providerJobLaunchClaimTimeout - time.Second)),
+			}
+			encodedClaim, err := json.Marshal(claim)
+			Expect(err).NotTo(HaveOccurred())
+			attachment.Annotations[providerJobLaunchClaimAnnotation] = string(encodedClaim)
+			fakeClient = buildClient(attachment, publicIP, pool, ci)
+			setupReconciler(fakeClient)
+
+			var deprovisionCalls atomic.Int32
+			mockProvider.triggerDeprovisionFunc = func(
+				ctx context.Context, resource client.Object, jobs []osacv1alpha1.JobStatus,
+			) (*provisioning.DeprovisionResult, error) {
+				deprovisionCalls.Add(1)
+				return &provisioning.DeprovisionResult{
+					Action:                 provisioning.DeprovisionTriggered,
+					JobID:                  "duplicate-detach-job",
+					BlockDeletionOnFailure: true,
+				}, nil
+			}
+			mockProvider.findJobByLaunchIDFunc = func(
+				_ context.Context, _ client.Object, jobType osacv1alpha1.JobType, launchID string,
+			) (provisioning.ProvisionStatus, bool, error) {
+				Expect(jobType).To(Equal(osacv1alpha1.JobTypeDeprovision))
+				Expect(launchID).To(Equal("interrupted-detach-launch"))
+				return provisioning.ProvisionStatus{
+					JobID:   "recovered-detach-job",
+					State:   osacv1alpha1.JobStateRunning,
+					Message: "Detach is still running",
+				}, true, nil
+			}
+			mockProvider.getDeprovisionStatusFunc = func(
+				_ context.Context, _ client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{JobID: jobID, State: osacv1alpha1.JobStateRunning}, nil
+			}
+
+			result, err := reconciler.handleDeprovisioning(testCtx, attachment)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+			Expect(deprovisionCalls.Load()).To(BeZero())
+			job := provisioning.FindLatestJobByType(attachment.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision)
+			Expect(job).NotTo(BeNil())
+			Expect(job.JobID).To(Equal("recovered-detach-job"))
+			Expect(attachment.Annotations).NotTo(HaveKey(providerJobLaunchClaimAnnotation))
+
+			_, err = reconciler.handleDeprovisioning(testCtx, attachment)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(deprovisionCalls.Load()).To(BeZero())
+		})
+
+		It("launches only one detach job when reconciles overlap before status is saved", func() {
+			attachment.Finalizers = []string{osacExternalIPAttachmentFinalizer}
+			attachment.Annotations = map[string]string{
+				osacImplementationStrategyAnnotation: "metallb-l2",
+			}
+			fakeClient = buildClient(attachment, publicIP, pool, ci)
+			setupReconciler(fakeClient)
+
+			launchStarted := make(chan struct{})
+			finishLaunch := make(chan struct{})
+			var deprovisionCalls atomic.Int32
+			mockProvider.triggerDeprovisionFunc = func(
+				ctx context.Context, resource client.Object, jobs []osacv1alpha1.JobStatus,
+			) (*provisioning.DeprovisionResult, error) {
+				deprovisionCalls.Add(1)
+				close(launchStarted)
+				<-finishLaunch
+				return &provisioning.DeprovisionResult{
+					Action:                 provisioning.DeprovisionTriggered,
+					JobID:                  "one-detach-job",
+					BlockDeletionOnFailure: true,
+				}, nil
+			}
+			first := attachment.DeepCopy()
+			firstResult := make(chan error, 1)
+			go func() {
+				_, err := reconciler.handleDeprovisioning(testCtx, first)
+				firstResult <- err
+			}()
+			<-launchStarted
+
+			second := &osacv1alpha1.ExternalIPAttachment{}
+			Expect(fakeClient.Get(testCtx, key, second)).To(Succeed())
+			result, err := reconciler.handleDeprovisioning(testCtx, second)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+			Expect(deprovisionCalls.Load()).To(Equal(int32(1)))
+
+			close(finishLaunch)
+			Expect(<-firstResult).NotTo(HaveOccurred())
+
+			persisted := &osacv1alpha1.ExternalIPAttachment{}
+			Expect(fakeClient.Get(testCtx, key, persisted)).To(Succeed())
+			job := provisioning.FindLatestJobByType(persisted.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision)
+			Expect(job).NotTo(BeNil())
+			Expect(job.JobID).To(Equal("one-detach-job"))
+			Expect(persisted.Annotations).NotTo(HaveKey(providerJobLaunchClaimAnnotation))
+
+			mockProvider.getDeprovisionStatusFunc = func(
+				ctx context.Context, resource client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{JobID: jobID, State: osacv1alpha1.JobStateRunning}, nil
+			}
+			_, err = reconciler.handleDeprovisioning(testCtx, persisted)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(deprovisionCalls.Load()).To(Equal(int32(1)))
+		})
+
+		It("does not retain a launch claim when polling an existing detach job fails", func() {
+			attachment.Finalizers = []string{osacExternalIPAttachmentFinalizer}
+			attachment.Annotations = map[string]string{
+				osacImplementationStrategyAnnotation: "metallb-l2",
+			}
+			attachment.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
+				JobID: "existing-detach", Type: osacv1alpha1.JobTypeDeprovision,
+				State: osacv1alpha1.JobStateRunning, Timestamp: metav1.Now(),
+			}}
+			fakeClient = buildClient(attachment, publicIP, pool, ci)
+			setupReconciler(fakeClient)
+
+			var launchCalls atomic.Int32
+			mockProvider.triggerDeprovisionFunc = func(
+				context.Context, client.Object, []osacv1alpha1.JobStatus,
+			) (*provisioning.DeprovisionResult, error) {
+				launchCalls.Add(1)
+				return nil, errors.New("unexpected detach launch")
+			}
+			mockProvider.getDeprovisionStatusFunc = func(
+				context.Context, client.Object, string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{}, errors.New("AAP status endpoint unavailable")
+			}
+
+			result, err := reconciler.handleDeprovisioning(testCtx, attachment)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(reconciler.StatusPollInterval))
+			Expect(launchCalls.Load()).To(BeZero())
+
+			persisted := &osacv1alpha1.ExternalIPAttachment{}
+			Expect(fakeClient.Get(testCtx, key, persisted)).To(Succeed())
+			Expect(persisted.Annotations).NotTo(HaveKey(providerJobLaunchClaimAnnotation))
+			job := provisioning.FindLatestJobByType(persisted.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision)
+			Expect(job).NotTo(BeNil())
+			Expect(job.JobID).To(Equal("existing-detach"))
+			Expect(job.Message).To(ContainSubstring("AAP status endpoint unavailable"))
 		})
 	})
 

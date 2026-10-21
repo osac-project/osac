@@ -35,6 +35,23 @@ func TestManagerHelmClusterRoleGrantsLogicalVolumeLifecycle(t *testing.T) {
 	assertLogicalVolumeLifecycleVerbs(t, role, rolePath)
 }
 
+func TestManagerHelmClusterRoleGrantsAgentCleanup(t *testing.T) {
+	rolePath := filepath.Join(repoRoot(), "osac-operator/charts/operator/templates/clusterrole.yaml")
+	role := loadHelmClusterRoleTemplate(t, rolePath)
+	got, found := clusterRoleRuleVerbs(role, "agent-install.openshift.io", []string{"agents"})
+	if !found {
+		t.Fatalf("ClusterRole at %s has no rule for apiGroup=%q resources=%v",
+			rolePath, "agent-install.openshift.io", []string{"agents"})
+	}
+	want := []string{"get", "list", "patch", "update", "watch"}
+	sort.Strings(got)
+	sort.Strings(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ClusterRole at %s rule for apiGroup=%q resources=%v has verbs %v, want exactly %v",
+			rolePath, "agent-install.openshift.io", []string{"agents"}, got, want)
+	}
+}
+
 func assertLogicalVolumeLifecycleVerbs(t *testing.T, role clusterRole, rolePath string) {
 	t.Helper()
 	got, found := clusterRoleRuleVerbs(role, "topolvm.io", []string{"logicalvolumes"})

@@ -155,7 +155,10 @@ var _ = Describe("handleCreateComputeInstance", func() {
 			Name:        "demo-vm",
 			CatalogItem: "catalog-item-1",
 		})
-		Expect(err).To(MatchError("public API rejected the request"))
+		envelope := decodeToolError(err)
+		Expect(envelope.Category).To(Equal("invalid_request"))
+		Expect(envelope.GRPCCode).To(Equal("InvalidArgument"))
+		Expect(err.Error()).ToNot(ContainSubstring("private SQL host"))
 	})
 })
 
@@ -194,6 +197,10 @@ var _ = Describe("handleDeleteComputeInstance", func() {
 
 		handler := handleDeleteComputeInstance(instances)
 		_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), DeleteComputeInstanceInput{ID: "instance-1"})
-		Expect(err).To(MatchError("public API is unavailable"))
+		envelope := decodeToolError(err)
+		Expect(envelope.Category).To(Equal("service_unavailable"))
+		Expect(envelope.GRPCCode).To(Equal("Unavailable"))
+		Expect(envelope.Retryable).To(BeTrue())
+		Expect(err.Error()).ToNot(ContainSubstring("private SQL host"))
 	})
 })

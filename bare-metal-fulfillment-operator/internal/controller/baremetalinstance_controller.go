@@ -66,8 +66,6 @@ type BareMetalInstanceReconciler struct {
 
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=subnets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=networkclasses,verbs=get;list;watch
-// +kubebuilder:rbac:groups=osac.openshift.io,resources=externalips,verbs=get;list;watch;delete
-// +kubebuilder:rbac:groups=osac.openshift.io,resources=externalipattachments,verbs=get;list;watch;delete
 
 func NewBareMetalInstanceReconciler(
 	client client.Client,
@@ -194,7 +192,14 @@ func (r *BareMetalInstanceReconciler) updateStatusWithRetry(ctx context.Context,
 		if err := r.Get(ctx, key, latest); err != nil {
 			return err
 		}
-		latest.Status = newStatus
+		status := newStatus
+		if !latest.DeletionTimestamp.IsZero() {
+			// A provision reconcile may finish after Kubernetes has accepted a
+			// delete. Keep its job history so deletion can cancel or clean up the
+			// provider operation, but never publish its stale Ready/Progressing phase.
+			status.Phase = v1alpha1.BareMetalInstancePhaseDeleting
+		}
+		latest.Status = status
 		return r.Status().Update(ctx, latest)
 	})
 }
@@ -392,11 +397,6 @@ func (r *BareMetalInstanceReconciler) reconcileManagement(ctx context.Context, b
 		}
 		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
 		return ctrl.Result{}, nil
-	}
-
-	// Add cleanup finalizer if auto-provisioned ExternalIP resources exist for this BMI
-	if err := r.addCleanupFinalizerIfNeeded(ctx, bareMetalInstance); err != nil {
-		return ctrl.Result{}, err
 	}
 
 	if result, err := r.reconcileNetworkProvisionAndDiscovery(ctx, bareMetalInstance); err != nil || !result.IsZero() {
@@ -1022,16 +1022,19 @@ func (r *BareMetalInstanceReconciler) triggerRestart(ctx context.Context, bareMe
 func (r *BareMetalInstanceReconciler) handleDeletion(ctx context.Context, bareMetalInstance *v1alpha1.BareMetalInstance) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	log.Info("Deleting BareMetalInstance")
-
-	// Auto-cleanup: delete auto-provisioned ExternalIP resources first
-	result, done, err := r.reconcileAutoCleanup(ctx, bareMetalInstance)
-	if err != nil {
-		return result, err
-	}
-	if !done {
+	if controllerutil.ContainsFinalizer(bareMetalInstance, bareMetalInstanceOSACNetworkingFinalizer) {
 		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseDeleting
-		return result, nil
+		log.Info("Waiting for osac-operator ExternalIP cleanup before host teardown")
+		pollInterval := r.ManagementRecheckIntervalDuration
+		if pollInterval <= 0 {
+			pollInterval = DefaultManagementRecheckIntervalDuration
+		}
+		return ctrl.Result{RequeueAfter: pollInterval}, nil
 	}
+
+	var result ctrl.Result
+	var done bool
+	var err error
 
 	// Power off BEFORE moving the port back to the provisioning network — ensures tenant
 	// workloads never run on the provisioning network. Only needed when networking

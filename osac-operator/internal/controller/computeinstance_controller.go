@@ -188,6 +188,14 @@ func (r *ComputeInstanceReconciler) updateStatusWithRetry(ctx context.Context, k
 		}
 		// Copy status updates to the latest version
 		latest.Status = newStatus
+		if !latest.DeletionTimestamp.IsZero() {
+			// Provisioning can finish after the API has accepted deletion. Keep
+			// the provider job history for cleanup, but don't publish stale
+			// Running/Ready state over the deletion state.
+			latest.Status.Phase = v1alpha1.ComputeInstancePhaseDeleting
+			latest.SetStatusCondition(v1alpha1.ComputeInstanceConditionReady, metav1.ConditionFalse,
+				"ComputeInstance is being deleted", v1alpha1.ReasonDeleting)
+		}
 		// Attempt to update with fresh resourceVersion
 		return r.Status().Update(ctx, latest)
 	})
@@ -650,15 +658,23 @@ func (r *ComputeInstanceReconciler) handleDelete(ctx context.Context, _ reconcil
 	// base finalizer until a later reconcile observes that status in the API.
 	oldStatus := instance.Status.DeepCopy()
 	setComputeInstancePhase(&instance.Status, v1alpha1.ComputeInstancePhaseDeleting)
+	instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionReady, metav1.ConditionFalse,
+		"ComputeInstance is being deleted", v1alpha1.ReasonDeleting)
 
 	// Base finalizer has already been removed, cleanup complete
 	if !controllerutil.ContainsFinalizer(instance, osacComputeInstanceFinalizer) {
 		return ctrl.Result{}, nil
 	}
 
+	done, result, err := reconcileAutoExternalIPCleanup(ctx, r.Client, r.NetworkingNamespace,
+		autoExternalIPOwner{kind: computeInstanceOwner, id: instance.Labels[osacComputeInstanceIDLabel]}, r.StatusPollInterval)
+	if err != nil || !done {
+		return result, err
+	}
+
 	// Handle deprovisioning - provider decides internally if needed
 	log.Info("handling deletion")
-	result, err := r.handleDeprovisioning(ctx, instance)
+	result, err = r.handleDeprovisioning(ctx, instance)
 	if err != nil {
 		return result, err
 	}

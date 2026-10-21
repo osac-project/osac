@@ -18,6 +18,8 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
+	"sync/atomic"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
@@ -26,6 +28,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/utils/ptr"
@@ -33,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	runtimecluster "sigs.k8s.io/controller-runtime/pkg/cluster"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	mc "sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
@@ -61,6 +65,23 @@ type mockExternalIPCluster struct {
 
 func (c *mockExternalIPCluster) GetClient() client.Client {
 	return c.client
+}
+
+type externalIPReaderWithoutKind struct {
+	client.Reader
+}
+
+func (r externalIPReaderWithoutKind) Get(
+	ctx context.Context,
+	key client.ObjectKey,
+	object client.Object,
+	opts ...client.GetOption,
+) error {
+	if err := r.Reader.Get(ctx, key, object, opts...); err != nil {
+		return err
+	}
+	object.GetObjectKind().SetGroupVersionKind(schema.GroupVersionKind{})
+	return nil
 }
 
 // Tests for the ExternalIP provisioning controller.
@@ -455,10 +476,12 @@ var _ = Describe("ExternalIPReconciler", func() {
 			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
 
 			deprovisionCalled := false
+			var deprovisionKind string
 			mockProvider.triggerDeprovisionFunc = func(
 				ctx context.Context, resource client.Object, _ []osacv1alpha1.JobStatus,
 			) (*provisioning.DeprovisionResult, error) {
 				deprovisionCalled = true
+				deprovisionKind = resource.GetObjectKind().GroupVersionKind().Kind
 				return &provisioning.DeprovisionResult{
 					Action:                 provisioning.DeprovisionTriggered,
 					JobID:                  "deprovision-job-123",
@@ -473,18 +496,191 @@ var _ = Describe("ExternalIPReconciler", func() {
 			// Simulate K8s delete by setting DeletionTimestamp in memory
 			toDelete := &osacv1alpha1.ExternalIP{}
 			Expect(fakeClient.Get(testCtx, key, toDelete)).To(Succeed())
+			toDelete.SetGroupVersionKind(osacv1alpha1.GroupVersion.WithKind("ExternalIP"))
 			now := metav1.Now()
 			toDelete.DeletionTimestamp = &now
+			reconciler.APIReader = externalIPReaderWithoutKind{Reader: fakeClient}
 
 			_, err = reconciler.handleDelete(testCtx, toDelete)
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(deprovisionCalled).To(BeTrue())
+			Expect(deprovisionKind).To(Equal("ExternalIP"))
 			Expect(toDelete.Status.Phase).To(Equal(osacv1alpha1.ExternalIPPhaseDeleting))
 
 			latestJob := provisioning.FindLatestJobByType(toDelete.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision)
 			Expect(latestJob).NotTo(BeNil())
 			Expect(latestJob.JobID).To(Equal("deprovision-job-123"))
+		})
+
+		It("waits for a provision launch claim before starting ExternalIP cleanup", func() {
+			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
+			controllerutil.AddFinalizer(publicIP, osacExternalIPFinalizer)
+			publicIP.Annotations = map[string]string{
+				osacImplementationStrategyAnnotation: "metallb-l2",
+			}
+			Expect(fakeClient.Update(testCtx, publicIP)).To(Succeed())
+
+			launchStarted := make(chan struct{})
+			finishLaunch := make(chan struct{})
+			mockProvider.triggerProvisionFunc = func(
+				ctx context.Context, resource client.Object,
+			) (*provisioning.ProvisionResult, error) {
+				close(launchStarted)
+				<-finishLaunch
+				return &provisioning.ProvisionResult{
+					JobID:        "create-job-while-deleting",
+					InitialState: osacv1alpha1.JobStatePending,
+					Message:      "Create launched",
+				}, nil
+			}
+
+			provisionResult := make(chan error, 1)
+			go func() {
+				_, err := reconciler.handleProvisioning(testCtx, publicIP)
+				provisionResult <- err
+			}()
+			<-launchStarted
+
+			deleting := &osacv1alpha1.ExternalIP{}
+			Expect(fakeClient.Get(testCtx, key, deleting)).To(Succeed())
+			claim, exists := deleting.Annotations[providerJobLaunchClaimAnnotation]
+			Expect(exists).To(BeTrue())
+			Expect(claim).NotTo(BeEmpty())
+			now := metav1.Now()
+			deleting.DeletionTimestamp = &now
+			deprovisionCalls := 0
+			mockProvider.triggerDeprovisionFunc = func(
+				ctx context.Context, resource client.Object, jobs []osacv1alpha1.JobStatus,
+			) (*provisioning.DeprovisionResult, error) {
+				deprovisionCalls++
+				provisionJob := provisioning.FindLatestJobByType(jobs, osacv1alpha1.JobTypeProvision)
+				Expect(provisionJob).NotTo(BeNil())
+				Expect(provisionJob.JobID).To(Equal("create-job-while-deleting"))
+				return &provisioning.DeprovisionResult{
+					Action: provisioning.DeprovisionWaiting,
+					ProvisionJobStatus: &provisioning.ProvisionStatus{
+						JobID:   "create-job-while-deleting",
+						State:   osacv1alpha1.JobStateRunning,
+						Message: "Create is still running",
+					},
+				}, nil
+			}
+
+			result, err := reconciler.handleDelete(testCtx, deleting)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+			Expect(deprovisionCalls).To(BeZero())
+
+			close(finishLaunch)
+			Expect(<-provisionResult).NotTo(HaveOccurred())
+
+			persisted := &osacv1alpha1.ExternalIP{}
+			Expect(fakeClient.Get(testCtx, key, persisted)).To(Succeed())
+			Expect(provisioning.FindLatestJobByType(persisted.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision).JobID).
+				To(Equal("create-job-while-deleting"))
+			Expect(persisted.Status.Phase).To(Equal(osacv1alpha1.ExternalIPPhaseDeleting))
+			Expect(persisted.Annotations).NotTo(HaveKey(providerJobLaunchClaimAnnotation))
+
+			deleting = persisted.DeepCopy()
+			deleting.DeletionTimestamp = &now
+			result, err = reconciler.handleDelete(testCtx, deleting)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+			Expect(deprovisionCalls).To(Equal(1))
+			Expect(provisioning.FindLatestJobByType(deleting.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision).JobID).
+				To(Equal("create-job-while-deleting"))
+		})
+
+		It("does not launch provisioning from a stale reconcile after deletion starts", func() {
+			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
+			latest := &osacv1alpha1.ExternalIP{}
+			Expect(fakeClient.Get(testCtx, key, latest)).To(Succeed())
+			controllerutil.AddFinalizer(latest, osacExternalIPFinalizer)
+			latest.Annotations = map[string]string{
+				osacImplementationStrategyAnnotation: "metallb-l2",
+			}
+			Expect(fakeClient.Update(testCtx, latest)).To(Succeed())
+			stale := latest.DeepCopy()
+			Expect(fakeClient.Delete(testCtx, latest)).To(Succeed())
+
+			deleting := &osacv1alpha1.ExternalIP{}
+			Expect(fakeClient.Get(testCtx, key, deleting)).To(Succeed())
+			Expect(deleting.DeletionTimestamp.IsZero()).To(BeFalse())
+
+			var launchCalls atomic.Int32
+			mockProvider.triggerProvisionFunc = func(
+				context.Context, client.Object,
+			) (*provisioning.ProvisionResult, error) {
+				launchCalls.Add(1)
+				return &provisioning.ProvisionResult{JobID: "late-create"}, nil
+			}
+
+			result, err := reconciler.handleProvisioning(testCtx, stale)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+			Expect(launchCalls.Load()).To(BeZero())
+
+			persisted := &osacv1alpha1.ExternalIP{}
+			Expect(fakeClient.Get(testCtx, key, persisted)).To(Succeed())
+			Expect(persisted.Annotations).NotTo(HaveKey(providerJobLaunchClaimAnnotation))
+		})
+
+		It("recovers a Create job from a stale launch claim before releasing the ExternalIP", func() {
+			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
+			controllerutil.AddFinalizer(publicIP, osacExternalIPFinalizer)
+			claim := &providerJobLaunchClaim{
+				ID:            "interrupted-create-launch",
+				JobType:       osacv1alpha1.JobTypeProvision,
+				ClaimedAt:     metav1.NewTime(time.Now().Add(-providerJobLaunchClaimTimeout - time.Second)),
+				ConfigVersion: "config-before-restart",
+			}
+			encodedClaim, err := json.Marshal(claim)
+			Expect(err).NotTo(HaveOccurred())
+			publicIP.Annotations = map[string]string{
+				osacImplementationStrategyAnnotation: "metallb-l2",
+				providerJobLaunchClaimAnnotation:     string(encodedClaim),
+			}
+			Expect(fakeClient.Update(testCtx, publicIP)).To(Succeed())
+
+			mockProvider.findJobByLaunchIDFunc = func(
+				_ context.Context, _ client.Object, jobType osacv1alpha1.JobType, launchID string,
+			) (provisioning.ProvisionStatus, bool, error) {
+				Expect(jobType).To(Equal(osacv1alpha1.JobTypeProvision))
+				Expect(launchID).To(Equal("interrupted-create-launch"))
+				return provisioning.ProvisionStatus{
+					JobID:   "recovered-create-job",
+					State:   osacv1alpha1.JobStateRunning,
+					Message: "Create is still running",
+				}, true, nil
+			}
+			var receivedProvisionJobs []osacv1alpha1.JobStatus
+			mockProvider.triggerDeprovisionFunc = func(
+				_ context.Context, _ client.Object, jobs []osacv1alpha1.JobStatus,
+			) (*provisioning.DeprovisionResult, error) {
+				receivedProvisionJobs = append([]osacv1alpha1.JobStatus(nil), jobs...)
+				return &provisioning.DeprovisionResult{
+					Action: provisioning.DeprovisionWaiting,
+					ProvisionJobStatus: &provisioning.ProvisionStatus{
+						JobID:   "recovered-create-job",
+						State:   osacv1alpha1.JobStateRunning,
+						Message: "Create is still running",
+					},
+				}, nil
+			}
+
+			deleting := &osacv1alpha1.ExternalIP{}
+			Expect(fakeClient.Get(testCtx, key, deleting)).To(Succeed())
+			now := metav1.Now()
+			deleting.DeletionTimestamp = &now
+			result, err := reconciler.handleDelete(testCtx, deleting)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+			Expect(receivedProvisionJobs).To(HaveLen(1))
+			Expect(receivedProvisionJobs[0].JobID).To(Equal("recovered-create-job"))
+			Expect(receivedProvisionJobs[0].ConfigVersion).To(Equal("config-before-restart"))
+			Expect(deleting.Annotations).NotTo(HaveKey(providerJobLaunchClaimAnnotation))
 		})
 
 		It("should remove finalizer after successful deprovision", func() {

@@ -263,16 +263,18 @@ var _ = Describe("DiskImage lifecycle", func() {
 			}.Build()); err != nil {
 				GinkgoT().Logf("cleanup: failed to delete ComputeInstance %s: %v", computeInstanceId, err)
 			}
+			waitForNotFound(func() error {
+				_, err := computeInstancesClient.Get(delCtx, publicv1.ComputeInstancesGetRequest_builder{
+					Id: computeInstanceId,
+				}.Build())
+				return err
+			})
 			computeInstanceId = ""
 		}
 		if securityGroupId != "" {
 			delCtx, delCancel := context.WithTimeout(context.Background(), time.Minute)
 			defer delCancel()
-			if _, err := securityGroupsClient.Delete(delCtx, privatev1.SecurityGroupsDeleteRequest_builder{
-				Id: securityGroupId,
-			}.Build()); err != nil {
-				GinkgoT().Logf("cleanup: failed to delete SecurityGroup %s: %v", securityGroupId, err)
-			}
+			Expect(cleanupSecurityGroupFixture(delCtx, securityGroupsClient, securityGroupId)).To(Succeed())
 			securityGroupId = ""
 		}
 		if diskImageId != "" {
@@ -288,31 +290,31 @@ var _ = Describe("DiskImage lifecycle", func() {
 		if subnetId != "" {
 			delCtx, delCancel := context.WithTimeout(context.Background(), time.Minute)
 			defer delCancel()
-			if _, err := subnetsClient.Delete(delCtx, privatev1.SubnetsDeleteRequest_builder{
-				Id: subnetId,
-			}.Build()); err != nil {
-				GinkgoT().Logf("cleanup: failed to delete Subnet %s: %v", subnetId, err)
-			}
+			Expect(cleanupSubnetFixture(delCtx, subnetsClient, subnetId)).To(Succeed())
+			waitForNotFound(func() error {
+				_, err := subnetsClient.Get(delCtx, privatev1.SubnetsGetRequest_builder{Id: subnetId}.Build())
+				return err
+			})
 			subnetId = ""
 		}
 		if virtualNetworkId != "" {
 			delCtx, delCancel := context.WithTimeout(context.Background(), time.Minute)
 			defer delCancel()
-			if _, err := virtualNetworksClient.Delete(delCtx, privatev1.VirtualNetworksDeleteRequest_builder{
-				Id: virtualNetworkId,
-			}.Build()); err != nil {
-				GinkgoT().Logf("cleanup: failed to delete VirtualNetwork %s: %v", virtualNetworkId, err)
-			}
+			Expect(cleanupVirtualNetworkFixture(delCtx, virtualNetworksClient, virtualNetworkId)).To(Succeed())
+			waitForNotFound(func() error {
+				_, err := virtualNetworksClient.Get(delCtx, privatev1.VirtualNetworksGetRequest_builder{Id: virtualNetworkId}.Build())
+				return err
+			})
 			virtualNetworkId = ""
 		}
 		if networkClassId != "" {
 			delCtx, delCancel := context.WithTimeout(context.Background(), time.Minute)
 			defer delCancel()
-			if _, err := networkClassesClient.Delete(delCtx, privatev1.NetworkClassesDeleteRequest_builder{
-				Id: networkClassId,
-			}.Build()); err != nil {
-				GinkgoT().Logf("cleanup: failed to delete NetworkClass %s: %v", networkClassId, err)
-			}
+			Expect(cleanupNetworkClassFixture(delCtx, networkClassesClient, networkClassId)).To(Succeed())
+			waitForNotFound(func() error {
+				_, err := networkClassesClient.Get(delCtx, privatev1.NetworkClassesGetRequest_builder{Id: networkClassId}.Build())
+				return err
+			})
 			networkClassId = ""
 		}
 		if computeInstanceTemplateId != "" {

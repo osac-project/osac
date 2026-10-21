@@ -83,14 +83,28 @@ func newTaskForDelete(bmiID, hubID string, hubCache controllers.HubCache) *task 
 	}.Build()
 
 	f := &function{
-		logger:   logger,
-		hubCache: hubCache,
+		logger:            logger,
+		hubCache:          hubCache,
+		networkingCleanup: &fakeWorkloadNetworkingCleanup{complete: true},
 	}
 
 	return &task{
 		r:                 f,
 		bareMetalInstance: bmi,
 	}
+}
+
+type fakeWorkloadNetworkingCleanup struct {
+	complete   bool
+	calls      int
+	workloadID string
+	err        error
+}
+
+func (f *fakeWorkloadNetworkingCleanup) Cleanup(_ context.Context, workloadID string) (bool, error) {
+	f.calls++
+	f.workloadID = workloadID
+	return f.complete, f.err
 }
 
 func newFakeScheme() *runtime.Scheme {
@@ -1211,6 +1225,54 @@ var _ = Describe("delete", func() {
 		Expect(hasFinalizer(t.bareMetalInstance)).To(BeFalse())
 	})
 
+	It("should retain the finalizer while automatic networking resources are terminating", func() {
+		scheme := newFakeScheme()
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().Get(gomock.Any(), hubID).Return(&controllers.HubEntry{
+			Namespace: hubNamespace, Client: fake.NewClientBuilder().WithScheme(scheme).Build(),
+		}, nil)
+		t := newTaskForDelete(bmiID, hubID, hubCache)
+		cleanup := &fakeWorkloadNetworkingCleanup{}
+		t.r.networkingCleanup = cleanup
+
+		Expect(t.delete(ctx)).To(MatchError(ContainSubstring("automatic workload networking resources are still terminating")))
+		Expect(cleanup.calls).To(Equal(1))
+		Expect(cleanup.workloadID).To(Equal(bmiID))
+		Expect(hasFinalizer(t.bareMetalInstance)).To(BeTrue())
+	})
+
+	It("should wait for automatic networking cleanup before deleting the workload CR", func() {
+		cr := newBareMetalInstanceCR(bmiID, hubNamespace, crName, nil)
+		scheme := newFakeScheme()
+		deleteCalled := false
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(cr).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Delete: func(ctx context.Context, client clnt.WithWatch, obj clnt.Object, opts ...clnt.DeleteOption) error {
+					deleteCalled = true
+					return nil
+				},
+			}).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().Get(gomock.Any(), hubID).Return(&controllers.HubEntry{
+			Namespace: hubNamespace, Client: fakeClient,
+		}, nil)
+
+		t := newTaskForDelete(bmiID, hubID, hubCache)
+		cleanup := &fakeWorkloadNetworkingCleanup{}
+		t.r.networkingCleanup = cleanup
+
+		err := t.delete(ctx)
+		Expect(err).To(MatchError(ContainSubstring("automatic workload networking resources are still terminating")))
+		Expect(cleanup.calls).To(Equal(1))
+		Expect(cleanup.workloadID).To(Equal(bmiID))
+		Expect(deleteCalled).To(BeFalse())
+		Expect(hasFinalizer(t.bareMetalInstance)).To(BeTrue())
+	})
+
 	It("should call hubClient.Delete when K8s object exists without DeletionTimestamp", func() {
 		cr := newBareMetalInstanceCR(bmiID, hubNamespace, crName, nil)
 
@@ -1239,7 +1301,10 @@ var _ = Describe("delete", func() {
 		t := newTaskForDelete(bmiID, hubID, hubCache)
 
 		err := t.delete(ctx)
-		Expect(err).ToNot(HaveOccurred())
+		Expect(err).To(MatchError("kubernetes bare metal instance deletion is still in progress"))
+		var retryable interface{ RequeueAfter() time.Duration }
+		Expect(errors.As(err, &retryable)).To(BeTrue())
+		Expect(retryable.RequeueAfter()).To(Equal(time.Second))
 		Expect(deleteCalled).To(BeTrue())
 		Expect(hasFinalizer(t.bareMetalInstance)).To(BeTrue())
 	})
@@ -1273,7 +1338,10 @@ var _ = Describe("delete", func() {
 		t := newTaskForDelete(bmiID, hubID, hubCache)
 
 		err := t.delete(ctx)
-		Expect(err).ToNot(HaveOccurred())
+		Expect(err).To(MatchError("kubernetes bare metal instance deletion is still in progress"))
+		var retryable interface{ RequeueAfter() time.Duration }
+		Expect(errors.As(err, &retryable)).To(BeTrue())
+		Expect(retryable.RequeueAfter()).To(Equal(time.Second))
 		Expect(deleteCalled).To(BeFalse())
 		Expect(hasFinalizer(t.bareMetalInstance)).To(BeTrue())
 	})
@@ -1341,7 +1409,8 @@ var _ = Describe("delete", func() {
 		}.Build()
 
 		f := &function{
-			logger: logger,
+			logger:            logger,
+			networkingCleanup: &fakeWorkloadNetworkingCleanup{complete: true},
 		}
 
 		t := &task{

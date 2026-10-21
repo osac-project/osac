@@ -1337,14 +1337,28 @@ func newTaskForDelete(clusterID, hubID string, hubCache controllers.HubCache) *t
 	}.Build()
 
 	f := &function{
-		logger:   logger,
-		hubCache: hubCache,
+		logger:            logger,
+		hubCache:          hubCache,
+		networkingCleanup: &fakeWorkloadNetworkingCleanup{complete: true},
 	}
 
 	return &task{
 		r:       f,
 		cluster: cluster,
 	}
+}
+
+type fakeWorkloadNetworkingCleanup struct {
+	complete   bool
+	calls      int
+	workloadID string
+	err        error
+}
+
+func (f *fakeWorkloadNetworkingCleanup) Cleanup(_ context.Context, workloadID string) (bool, error) {
+	f.calls++
+	f.workloadID = workloadID
+	return f.complete, f.err
 }
 
 // hasFinalizer checks if the fulfillment-controller finalizer is present on the cluster.
@@ -1484,6 +1498,23 @@ var _ = Describe("delete", func() {
 		Expect(t.delete(ctx)).To(Succeed())
 		Expect(deleted).To(Equal([]string{"kubeconfig-id", "password-id"}))
 		Expect(hasFinalizer(t.cluster)).To(BeFalse())
+	})
+
+	It("should retain the finalizer while automatic networking resources are terminating", func() {
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().Get(gomock.Any(), hubID).Return(&controllers.HubEntry{
+			Namespace: "test-ns", Client: fake.NewClientBuilder().WithScheme(scheme).Build(),
+		}, nil)
+		t := newTaskForDelete(clusterID, hubID, hubCache)
+		cleanup := &fakeWorkloadNetworkingCleanup{}
+		t.r.networkingCleanup = cleanup
+
+		Expect(t.delete(ctx)).To(MatchError(ContainSubstring("automatic workload networking resources are still terminating")))
+		Expect(cleanup.calls).To(Equal(1))
+		Expect(cleanup.workloadID).To(Equal(clusterID))
+		Expect(hasFinalizer(t.cluster)).To(BeTrue())
 	})
 
 	It("should remove finalizer when hub cache returns ErrHubNotFound", func() {

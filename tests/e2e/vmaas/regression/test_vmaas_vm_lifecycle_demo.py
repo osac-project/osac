@@ -54,8 +54,6 @@ from tests.e2e.vmaas.networking_lifecycle_helpers import (
 pytestmark = pytest.mark.regression
 
 _CUDN_MANAGERS = {"k8s_only", "cudn_localnet", "cudn_evpn"}
-_HCO_RESOURCE = "hyperconvergeds.hco.kubevirt.io"
-_SCRATCH_PATH = "/spec/scratchSpaceStorageClass"
 _SCRATCH_OWNER = "osac.openshift.io/e2e-scratch-owner"
 _SCRATCH_OWNER_PATH = "/metadata/annotations/osac.openshift.io~1e2e-scratch-owner"
 
@@ -198,8 +196,31 @@ def _safe_command_error(error: BaseException, action: str) -> RuntimeError:
     return RuntimeError(f"{action}: {detail}")
 
 
-def _patch_scratch_storage(k8s: K8sClient, name: str, operations: list[dict[str, Any]]) -> None:
-    k8s._get("patch", _HCO_RESOURCE, name, "-n", k8s.namespace, "--type=json", "-p", json.dumps(operations))
+def _scratch_api(k8s: K8sClient) -> tuple[str, bool]:
+    """Select a served HCO version whose schema contains the expected field."""
+    crd = k8s.get_json(
+        resource="customresourcedefinitions.apiextensions.k8s.io", name="hyperconvergeds.hco.kubevirt.io"
+    )
+    for version, nested in (("v1", True), ("v1beta1", False)):
+        for candidate in crd["spec"]["versions"]:
+            if candidate["name"] != version or not candidate.get("served"):
+                continue
+            fields = (
+                candidate.get("schema", {})
+                .get("openAPIV3Schema", {})
+                .get("properties", {})
+                .get("spec", {})
+                .get("properties", {})
+            )
+            if nested:
+                fields = fields.get("storage", {}).get("properties", {})
+            if fields.get("scratchSpaceStorageClass", {}).get("type") == "string":
+                return f"hyperconvergeds.{version}.hco.kubevirt.io", nested
+    raise RuntimeError("No supported HyperConverged scratch-storage schema; cluster settings were not changed")
+
+
+def _patch_scratch_storage(k8s: K8sClient, resource: str, name: str, operations: list[dict[str, Any]]) -> None:
+    k8s._get("patch", resource, name, "-n", k8s.namespace, "--type=json", "-p", json.dumps(operations))
 
 
 def _wait_for_scratch_storage(k8s: K8sClient, expected: str | None) -> None:
@@ -228,7 +249,9 @@ def temporary_scratch_storage(k8s_virt_client: K8sClient, tmp_path: Path) -> Ite
 
     # Check the requested class before changing cluster configuration.
     k8s_virt_client.get_json(resource="storageclasses.storage.k8s.io", name=desired)
-    raw, _ = k8s_virt_client._get("get", _HCO_RESOURCE, "--all-namespaces", "-o", "json")
+    resource, nested = _scratch_api(k8s_virt_client)
+    scratch_path = "/spec/storage/scratchSpaceStorageClass" if nested else "/spec/scratchSpaceStorageClass"
+    raw, _ = k8s_virt_client._get("get", resource, "--all-namespaces", "-o", "json")
     hcos = json.loads(raw)["items"]
     if len(hcos) != 1 or hcos[0]["metadata"].get("deletionTimestamp"):
         raise RuntimeError("Temporary scratch preparation requires exactly one active HyperConverged")
@@ -245,8 +268,9 @@ def temporary_scratch_storage(k8s_virt_client: K8sClient, tmp_path: Path) -> Ite
         as_system_admin=k8s_virt_client.as_system_admin,
     )
     spec = original["spec"]
-    was_present = "scratchSpaceStorageClass" in spec
-    previous = spec.get("scratchSpaceStorageClass")
+    storage = spec.get("storage", {}) if nested else spec
+    was_present = "scratchSpaceStorageClass" in storage
+    previous = storage.get("scratchSpaceStorageClass")
     effective = (
         k8s.get_json(resource="cdiconfigs.cdi.kubevirt.io", name="config")
         .get("status", {})
@@ -258,6 +282,9 @@ def temporary_scratch_storage(k8s_virt_client: K8sClient, tmp_path: Path) -> Ite
         json.dumps(
             {
                 "namespace": k8s.namespace,
+                "resource": resource,
+                "scratch_path": scratch_path,
+                "storage_parent_present": "storage" in spec if nested else None,
                 "name": name,
                 "uid": uid,
                 "present": was_present,
@@ -274,6 +301,7 @@ def temporary_scratch_storage(k8s_virt_client: K8sClient, tmp_path: Path) -> Ite
         if changed:
             _patch_scratch_storage(
                 k8s,
+                resource,
                 name,
                 [
                     {"op": "test", "path": "/metadata/uid", "value": uid},
@@ -284,9 +312,17 @@ def temporary_scratch_storage(k8s_virt_client: K8sClient, tmp_path: Path) -> Ite
                         "value": annotations if "annotations" in metadata else metadata,
                     },
                     {"op": "add", "path": "/metadata/annotations", "value": {**annotations, _SCRATCH_OWNER: owner}},
-                    {"op": "add", "path": _SCRATCH_PATH, "value": desired},
+                    (
+                        {"op": "add", "path": "/spec/storage", "value": {"scratchSpaceStorageClass": desired}}
+                        if nested and "storage" not in spec
+                        else {"op": "add", "path": scratch_path, "value": desired}
+                    ),
                 ],
             )
+            applied = k8s.get_json(resource=resource, name=name)["spec"]
+            applied_storage = applied.get("storage", {}) if nested else applied
+            if applied_storage.get("scratchSpaceStorageClass") != desired:
+                raise RuntimeError("HyperConverged did not retain the requested scratch-storage setting")
         _wait_for_scratch_storage(k8s, desired)
         yield
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
@@ -295,13 +331,14 @@ def temporary_scratch_storage(k8s_virt_client: K8sClient, tmp_path: Path) -> Ite
         if changed:
             primary_error = sys.exception()
             try:
-                current = k8s.get_json(resource=_HCO_RESOURCE, name=name)
+                current = k8s.get_json(resource=resource, name=name)
                 if current["metadata"]["uid"] != uid:
                     raise _ScratchRestoreError("HyperConverged was replaced; refusing to restore a different resource")
                 current_spec = current["spec"]
-                already_restored = ("scratchSpaceStorageClass" in current_spec) == was_present and current_spec.get(
-                    "scratchSpaceStorageClass"
-                ) == previous
+                current_storage = current_spec.get("storage", {}) if nested else current_spec
+                already_restored = (
+                    "scratchSpaceStorageClass" in current_storage
+                ) == was_present and current_storage.get("scratchSpaceStorageClass") == previous
                 current_owner = current["metadata"].get("annotations", {}).get(_SCRATCH_OWNER)
                 if current_owner != owner:
                     if current_owner is not None or not already_restored:
@@ -309,21 +346,30 @@ def temporary_scratch_storage(k8s_virt_client: K8sClient, tmp_path: Path) -> Ite
                             "Scratch setting is not owned by this test; refusing to overwrite it"
                         )
                 else:
-                    if current_spec.get("scratchSpaceStorageClass") != desired:
+                    if not already_restored and current_storage.get("scratchSpaceStorageClass") != desired:
                         raise _ScratchRestoreError("Scratch setting changed externally; refusing to overwrite it")
                     restore = (
-                        {"op": "replace", "path": _SCRATCH_PATH, "value": previous}
+                        {"op": "replace", "path": scratch_path, "value": previous}
                         if was_present
-                        else {"op": "remove", "path": _SCRATCH_PATH}
+                        else {"op": "remove", "path": scratch_path}
                     )
+                    restore_operations = [] if already_restored else [restore]
+                    if (
+                        nested
+                        and "storage" not in spec
+                        and "storage" in current_spec
+                        and current_storage in ({}, {"scratchSpaceStorageClass": desired})
+                    ):
+                        restore_operations = [{"op": "remove", "path": "/spec/storage"}]
                     _patch_scratch_storage(
                         k8s,
+                        resource,
                         name,
                         [
                             {"op": "test", "path": "/metadata/uid", "value": uid},
                             {"op": "test", "path": _SCRATCH_OWNER_PATH, "value": owner},
-                            {"op": "test", "path": _SCRATCH_PATH, "value": desired},
-                            restore,
+                            {"op": "test", "path": "/spec", "value": current_spec},
+                            *restore_operations,
                             {"op": "remove", "path": _SCRATCH_OWNER_PATH},
                         ],
                     )

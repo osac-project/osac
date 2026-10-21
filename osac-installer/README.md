@@ -63,7 +63,7 @@ The OSAC platform relies on five core components to deliver governed self-servic
 > and operational:
 >
 > - Red Hat OpenShift Advanced Cluster Management (RHACM)
-> - Red Hat OpenShift Virtualization (OCP-Virt) - **Optional**: Only required for VM as a Service (VMaaS) support
+> - Red Hat OpenShift Virtualization (OCP-Virt) and NMState Operator - **Optional**: Required for VM as a Service (VMaaS) support; installed and readiness-checked by the installer when enabled in an OpenShift profile
 > - Red Hat Ansible Automation Platform (AAP)
 > - A network backend for bare metal provisioning: **Netris** or agentless
 >   (`global.networking` — see [Network Backend Configuration](#network-backend-configuration-caas))
@@ -83,7 +83,7 @@ target Hub cluster.
 | **Category** | **Requirement** | **Notes / Details** |
 | --------------- | ----------------- | ---------------------- |
 | **Platform** | Red Hat OpenShift Container Platform (OCP) 4.17 or later | Must have cluster admin access to the hub cluster. |
-| **Operators** | Red Hat Advanced Cluster Management (RHACM) 2.18+<br>Red Hat OpenShift Virtualization (OCP-Virt) 4.17+<br>Red Hat Ansible Automation Platform (AAP) 2.5+ | These must be installed and running prior to OSAC installation. |
+| **Operators** | Red Hat Advanced Cluster Management (RHACM) 2.18+<br>Red Hat OpenShift Virtualization (OCP-Virt) 4.17+<br>NMState Operator (VMaaS profiles)<br>Red Hat Ansible Automation Platform (AAP) 2.5+ | OCP-Virt and NMState are required for VMaaS. OpenShift installer profiles with VMaaS enabled install NMState automatically and wait for its operator to become ready. |
 | **CLI Tools** | `oc` (OpenShift CLI) v4.17+<br>`helm` v3.x<br>`git` | Ensure all CLIs are available in your `PATH`. |
 | **Container Registry Access** | `registry.redhat.io` and `quay.io` | Verify credentials and pull secrets are valid in the target cluster namespace. |
 | **Network / DNS** | Ingress route configured for OSAC services | Required for external access to fulfillment API and AAP UI. |
@@ -469,10 +469,16 @@ cp values/dev/instance.yaml values/<project-name>/instance.yaml
 # Edit to match your cluster (see values file comments for guidance)
 ```
 
-Prerequisites (cert-manager, AAP, LVMS, MetalLB, CNV, MCE) are installed
+Prerequisites (cert-manager, AAP, LVMS, MetalLB, CNV, NMState, MCE) are installed
 automatically by Phase 1. Each is gated by a values toggle (e.g.,
 `certManager.enabled: true`). See [prerequisites/README.md](prerequisites/README.md)
 for details on what each prerequisite provides.
+
+OpenShift profiles with `global.services.vmaas.enabled` also enable NMState. The
+installer waits for the NMState Subscription, CSV, and operator deployments to
+become ready before proceeding to OSAC resources that depend on it. Profiles without
+VMaaS leave NMState disabled. Kind profiles use their local virtualization setup and
+do not install the OpenShift NMState Operator.
 
 Standalone MCE is disabled by default. Set `mce.enabled: true` in the
 infrastructure values when this installation owns its lifecycle; the `caas-ci`
@@ -619,6 +625,7 @@ make test          PLATFORM=... PROFILE=... NS=... SUITE=...  # Integration test
 make helm-lint                                       # Lint all charts
 make helm-template       # Dry-run render all templates
 make mce-render-test                                  # Verify disabled MCE defaults and CaaS enablement
+make nmstate-render-test                              # Verify NMState subscription and VMaaS profile wiring
 make helm-validate                                   # Lint + template (full validation)
 make sync-charts         # Rebuild chart dependencies (legacy alias; runs helm dependency build)
 ```

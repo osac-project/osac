@@ -19,6 +19,8 @@ metallb:
   enabled: true
 cnv:
   enabled: true
+nmstate:
+  enabled: true
 mce:
   enabled: false
 

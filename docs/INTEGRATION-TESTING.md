@@ -221,6 +221,12 @@ explicit disabled-state suppression, enabled empty-override behavior, and the
 CaaS profile's explicit enablement with inherited defaults. It does not install
 MCE or call an Operator catalog or cluster API.
 
+The `make -C osac-installer nmstate-render-test` Helm contract verifies the
+NMState Subscription, namespace-scoped readiness hook RBAC, CSV/deployment
+readiness script wiring, and agreement between OpenShift VMaaS profiles and
+NMState enablement. It renders manifests only; it does not contact an Operator
+catalog or prove that OLM installs the operator on a live OpenShift cluster.
+
 The `make -C osac-installer kind-runtime-test` unit suite is owned by installer
 implementation work. It uses command stubs to check runtime selection, sudo
 authentication and credential expiry, Makefile/host setup routing, safe

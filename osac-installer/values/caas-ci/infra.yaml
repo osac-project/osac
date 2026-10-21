@@ -15,6 +15,8 @@ metallb:
   enabled: true
 cnv:
   enabled: false
+nmstate:
+  enabled: true
 mce:
   # The CaaS CI profile owns and configures its standalone MCE installation.
   enabled: true

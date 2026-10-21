@@ -23,6 +23,10 @@ cnv:
   enabled: false
   channel: "stable"
 
+nmstate:
+  enabled: false
+  channel: "stable"
+
 mce:
   # Opt in only when this installation owns the multicluster engine lifecycle.
   enabled: false

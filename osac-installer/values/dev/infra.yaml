@@ -13,6 +13,8 @@ metallb:
   enabled: false
 cnv:
   enabled: false
+nmstate:
+  enabled: true
 mce:
   enabled: false
 

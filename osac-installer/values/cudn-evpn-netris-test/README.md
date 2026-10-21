@@ -8,6 +8,7 @@ It is intentionally separate from the base chart and all normal profiles.
 The profile provides:
 
 - the normal VMaaS infrastructure and OSAC instance values;
+- the NMState Operator prerequisite, with installer readiness gating before OSAC deployment;
 - BMaaS with the Metal3 backend enabled for bare-metal inventory;
 - `netris` as the fabric manager and `cudn_evpn` as the k8s manager via the
   operator's nested `networkManagers` registration map;

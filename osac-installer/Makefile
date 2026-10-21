@@ -22,6 +22,7 @@
 # Helm chart management (no parameters required):
 #   make helm-lint
 #   make mce-render-test
+#   make nmstate-render-test
 #   make helm-validate
 
 SHELL := /usr/bin/env bash -o pipefail
@@ -669,6 +670,10 @@ metering-auth-render-test: helm-deps ## Check metering service-account auth rend
 mce-render-test: helm-infra-deps ## Check disabled MCE defaults, explicit enablement, and CaaS inheritance
 	uv run --project .. python scripts/test-mce-render.py
 
+.PHONY: nmstate-render-test
+nmstate-render-test: ## Check NMState OLM resources, readiness hook, and VMaaS profile wiring
+	python3 scripts/test-nmstate-render.py
+
 .PHONY: fulfillment-auth-test
 fulfillment-auth-test: ## Check Fulfillment service-account token exchange behavior
 	./scripts/test-fulfillment-auth.sh
@@ -686,7 +691,7 @@ kind-runtime-test: ## Check Kind runtime, sudo, image loading, and cluster clean
 	python3 scripts/test-kind-runtime.py
 
 .PHONY: helm-validate
-helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test mce-render-test dev-full-render-test openbao-security-context-test ## Validate all charts (lint + template)
+helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test mce-render-test nmstate-render-test dev-full-render-test openbao-security-context-test ## Validate all charts (lint + template)
 	@# bmaas-netbox-ci layers bmaas-ci as its base (see the profile-selection
 	@# block); validate the same combination the installer deploys.
 	@for d in values/*/; do \

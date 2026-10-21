@@ -46,6 +46,7 @@ respective areas.
 | Touched area | Required validation | Command / follow-up |
 |---|---|---|
 | MCE defaults, lifecycle gate, image overrides, or compatibility RBAC | Helm contract | `make mce-render-test` |
+| NMState subscription, readiness gate, or VMaaS profile wiring | Helm contract | `make nmstate-render-test` |
 | Kind runtime selection, sudo authentication, image loading, device-mapper permissions, cluster/storage lifecycle, or devstack Helm apply flags | Unit with command stubs | `make kind-runtime-test` |
 | TopoLVM chart dependency download, cache reuse, build scoping, or install preparation | Unit with command stubs | `make kind-runtime-test` |
 | Fulfillment hook commands, CA mounts, or gate rendering | Helm contract | `make fulfillment-trust-render-test` |

@@ -45,6 +45,7 @@ prerequisites/
 | MetalLB | LoadBalancer service for bare metal | `metallb/` |
 | MCE | Multicluster Engine for CaaS | `mce/` |
 | OpenShift Virtualization | VM as a Service support | `cnv/` |
+| NMState Operator | Network configuration for VMaaS and EVPN | Installed automatically for OpenShift profiles with VMaaS enabled |
 
 **Note:** Red Hat Advanced Cluster Management (ACM) is assumed to be already installed.
 
@@ -113,10 +114,10 @@ oc get csv -n ansible-aap | grep ansible-automation-platform
 
 ### Step 6: Optional Components
 
-LVMS, MetalLB, MCE, and OpenShift Virtualization are installed automatically
-by `make install-infra` when enabled in values. Each is gated
-by a toggle (e.g., `lvms.enabled: true`). The manifests below are reference
-files for manual installation if needed.
+LVMS, MetalLB, MCE, OpenShift Virtualization, and NMState are installed automatically
+by `make install-infra` when enabled in values. Each is gated by a toggle
+(e.g., `lvms.enabled: true`). The manifests below are reference files for manual
+installation where provided; NMState is installed from the Red Hat Operator catalog.
 
 ## Verification
 

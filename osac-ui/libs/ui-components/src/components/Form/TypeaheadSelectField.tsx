@@ -5,7 +5,9 @@ import { useField } from 'formik';
 
 import { getVisibleFieldError } from './fieldError';
 import { useShowFieldValidationErrors } from './FieldValidationContext';
-import { FormFieldHelper } from './FormFieldHelper';
+import { FormFieldHelper, getFormFieldHelperDescribedBy } from './FormFieldHelper';
+
+import './TypeaheadSelectField.css';
 
 interface TypeaheadSelectFieldProps {
   name: string;
@@ -16,6 +18,7 @@ interface TypeaheadSelectFieldProps {
   isDisabled?: boolean;
   labelInfo?: ReactNode;
   placeholder?: string;
+  description?: string;
   noOptionsFoundMessage?: (filter: string) => string;
 }
 
@@ -30,11 +33,13 @@ export const TypeaheadSelectField = ({
   isDisabled = false,
   labelInfo,
   placeholder,
+  description,
   noOptionsFoundMessage,
 }: TypeaheadSelectFieldProps) => {
   const [field, meta, helpers] = useField<string>(name);
   const showValidationErrors = useShowFieldValidationErrors();
   const error = getVisibleFieldError(meta, showValidationErrors);
+  const helperDescribedBy = getFormFieldHelperDescribedBy(fieldId, error, description);
 
   const selectableOptions = useMemo(
     () => options.map((option) => ({ ...option, selected: field.value === option.value })),
@@ -42,7 +47,13 @@ export const TypeaheadSelectField = ({
   );
 
   return (
-    <FormGroup label={label} fieldId={fieldId} isRequired={isRequired} labelInfo={labelInfo}>
+    <FormGroup
+      className={isRequired ? 'osac-typeahead-select--required' : undefined}
+      label={label}
+      fieldId={fieldId}
+      isRequired={isRequired}
+      labelInfo={labelInfo}
+    >
       <TypeaheadSelect
         id={fieldId}
         initialOptions={selectableOptions}
@@ -65,9 +76,10 @@ export const TypeaheadSelectField = ({
           'aria-label': label,
           isFullWidth: true,
           status: error ? 'danger' : undefined,
+          'aria-describedby': helperDescribedBy,
         }}
       />
-      <FormFieldHelper error={error} fieldId={fieldId} />
+      <FormFieldHelper error={error} description={description} fieldId={fieldId} />
     </FormGroup>
   );
 };

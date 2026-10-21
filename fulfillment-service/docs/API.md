@@ -639,6 +639,29 @@ message ThingsSignalRequest {
 message ThingsSignalResponse {}
 ```
 
+### Service accounts
+
+`ServiceAccounts` manages machine identities in the caller's tenant. The account ID and status are
+server-controlled. The name is unique within the tenant and remains
+reserved while deletion is pending. Updates may change labels. Display names and descriptions are
+not supported for service accounts. Projects are not supported.
+
+`Create` returns the account in `PENDING` before its Keycloak client is provisioned. The controller
+provisions the client asynchronously and creates a tenant-scoped Secret containing both `client_id`
+and `client_secret`. `status.client_secret` references that Secret, and `status.state` becomes
+`READY` only after the Secret is available. Clients can read it with `Secrets/Get`; Secret data is
+omitted from list and mutation responses. Dry-run creation creates no account, client, or Secret.
+`status.message` explains a `FAILED` state, including when a Keycloak client exists without
+recoverable registration credentials. Remove that client from Keycloak; the controller then retries
+provisioning or completes deletion.
+
+Role assignments are managed through RoleBindings; service accounts do not accept role references.
+Support for service-account subjects in RoleBindings is tracked by
+[OSAC-6554](https://redhat.atlassian.net/browse/OSAC-6554).
+
+Secret rotation is tracked separately by
+[OSAC-6555](https://redhat.atlassian.net/browse/OSAC-6555).
+
 ## REST transcoding
 
 All methods of all services must have `google.api.http` options that define the REST transcoding.

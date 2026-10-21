@@ -172,6 +172,14 @@ var _ = Describe("Private secrets server", func() {
 			return response.GetObject()
 		}
 
+		It("does not reserve names for service-account Secrets", func() {
+			secret := privatev1.Secret_builder{
+				Metadata: privatev1.Metadata_builder{Name: "robot", Tenant: testTenant}.Build(),
+				Data:     map[string][]byte{"registration_access_token": []byte("not-a-real-token")},
+			}.Build()
+			Expect(server.validateSecretCreate(secret)).To(Succeed())
+		})
+
 		It("Creates and gets a Vault secret", func() {
 			created := createVaultSecret()
 
@@ -974,6 +982,44 @@ var _ = Describe("Private secrets server", func() {
 				Expect(response.GetObject().GetData()).To(HaveKeyWithValue("public_key", publicKey))
 			})
 
+			It("allows a platform administrator to create, retrieve, and update a system Vault Secret", func() {
+				mockStore.EXPECT().
+					Store(gomock.Any(), auth.SystemTenant, "", "system-admin-secret", gomock.Any()).
+					Return(nil)
+				created, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   "system-admin-secret",
+							Tenant: auth.SystemTenant,
+						}.Build(),
+						Data: map[string][]byte{"key": []byte("value")},
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(created.GetObject().GetMetadata().GetTenant()).To(Equal(auth.SystemTenant))
+
+				mockStore.EXPECT().
+					Fetch(gomock.Any(), auth.SystemTenant, "", "system-admin-secret").
+					Return(map[string][]byte{"key": []byte("value")}, nil)
+				response, err := server.Get(ctx, privatev1.SecretsGetRequest_builder{
+					Id: created.GetObject().GetId(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetData()).To(HaveKeyWithValue("key", []byte("value")))
+
+				mockStore.EXPECT().
+					Store(gomock.Any(), auth.SystemTenant, "", "system-admin-secret", gomock.Any()).
+					Return(nil)
+				_, err = server.Update(ctx, privatev1.SecretsUpdateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Id:   created.GetObject().GetId(),
+						Data: map[string][]byte{"key": []byte("updated-value")},
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"data"}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+			})
+
 			It("hides system Secrets from tenant-scoped identities", func() {
 				mockStore.EXPECT().
 					Store(gomock.Any(), auth.SystemTenant, "", "system-protected-secret", gomock.Any()).
@@ -1007,6 +1053,15 @@ var _ = Describe("Private secrets server", func() {
 
 				_, err = restrictedServer.Get(ctx, privatev1.SecretsGetRequest_builder{
 					Id: created.GetObject().GetId(),
+				}.Build())
+				Expect(status.Code(err)).To(Equal(codes.NotFound))
+
+				_, err = restrictedServer.Update(ctx, privatev1.SecretsUpdateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Id:   created.GetObject().GetId(),
+						Data: map[string][]byte{"key": []byte("changed")},
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"data"}},
 				}.Build())
 				Expect(status.Code(err)).To(Equal(codes.NotFound))
 			})

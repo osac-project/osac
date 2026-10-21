@@ -155,13 +155,14 @@ func (mr *MockClientInterfaceMockRecorder) CreateIdentityProvider(ctx, tenantNam
 }
 
 // CreateServiceAccountClient mocks base method.
-func (m *MockClientInterface) CreateServiceAccountClient(ctx context.Context, clientID, tenantID string) (string, string, error) {
+func (m *MockClientInterface) CreateServiceAccountClient(ctx context.Context, clientID, tenantID string) (string, string, string, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CreateServiceAccountClient", ctx, clientID, tenantID)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(string)
-	ret2, _ := ret[2].(error)
-	return ret0, ret1, ret2
+	ret2, _ := ret[2].(string)
+	ret3, _ := ret[3].(error)
+	return ret0, ret1, ret2, ret3
 }
 
 // CreateServiceAccountClient indicates an expected call of CreateServiceAccountClient.
@@ -244,17 +245,17 @@ func (mr *MockClientInterfaceMockRecorder) DeleteIdentityProvider(ctx, tenantNam
 }
 
 // DeleteServiceAccountClient mocks base method.
-func (m *MockClientInterface) DeleteServiceAccountClient(ctx context.Context, clientUUID string) error {
+func (m *MockClientInterface) DeleteServiceAccountClient(ctx context.Context, clientID, clientUUID, registrationAccessToken string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteServiceAccountClient", ctx, clientUUID)
+	ret := m.ctrl.Call(m, "DeleteServiceAccountClient", ctx, clientID, clientUUID, registrationAccessToken)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DeleteServiceAccountClient indicates an expected call of DeleteServiceAccountClient.
-func (mr *MockClientInterfaceMockRecorder) DeleteServiceAccountClient(ctx, clientUUID any) *gomock.Call {
+func (mr *MockClientInterfaceMockRecorder) DeleteServiceAccountClient(ctx, clientID, clientUUID, registrationAccessToken any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteServiceAccountClient", reflect.TypeOf((*MockClientInterface)(nil).DeleteServiceAccountClient), ctx, clientUUID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteServiceAccountClient", reflect.TypeOf((*MockClientInterface)(nil).DeleteServiceAccountClient), ctx, clientID, clientUUID, registrationAccessToken)
 }
 
 // DeleteTenant mocks base method.
@@ -313,18 +314,20 @@ func (mr *MockClientInterfaceMockRecorder) DeleteUserFromRealm(ctx, userID any) 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteUserFromRealm", reflect.TypeOf((*MockClientInterface)(nil).DeleteUserFromRealm), ctx, userID)
 }
 
-// DisableServiceAccountClient mocks base method.
-func (m *MockClientInterface) DisableServiceAccountClient(ctx context.Context, clientUUID string) error {
+// FindServiceAccountClient mocks base method.
+func (m *MockClientInterface) FindServiceAccountClient(ctx context.Context, clientID, tenantID string) (string, bool, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DisableServiceAccountClient", ctx, clientUUID)
-	ret0, _ := ret[0].(error)
-	return ret0
+	ret := m.ctrl.Call(m, "FindServiceAccountClient", ctx, clientID, tenantID)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(bool)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
 }
 
-// DisableServiceAccountClient indicates an expected call of DisableServiceAccountClient.
-func (mr *MockClientInterfaceMockRecorder) DisableServiceAccountClient(ctx, clientUUID any) *gomock.Call {
+// FindServiceAccountClient indicates an expected call of FindServiceAccountClient.
+func (mr *MockClientInterfaceMockRecorder) FindServiceAccountClient(ctx, clientID, tenantID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DisableServiceAccountClient", reflect.TypeOf((*MockClientInterface)(nil).DisableServiceAccountClient), ctx, clientUUID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindServiceAccountClient", reflect.TypeOf((*MockClientInterface)(nil).FindServiceAccountClient), ctx, clientID, tenantID)
 }
 
 // GetGroupIDByPath mocks base method.

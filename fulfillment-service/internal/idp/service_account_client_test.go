@@ -1,18 +1,25 @@
-/*
-Copyright (c) 2026 Red Hat Inc.
-
-Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the
-License. You may obtain a copy of the License at
-
-  http://www.apache.org/licenses/LICENSE-2.0
-*/
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
 
 package idp
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -27,221 +34,291 @@ var _ = Describe("Service-account Keycloak client", func() {
 	const clientUUID = "d3c4e3db-95b8-481d-8b5c-963da477da12"
 	const clientID = "osac-sa-tenant-a-e80e9561-48cc-41c9-89b4-8c9a944b45a5"
 	const credential = "test-only-credential-marker"
+	const registrationToken = "test-registration-token-marker"
+	const registrationPath = "/realms/osac/clients-registrations/default"
+	const adminClientPath = "/admin/realms/osac/clients/" + clientUUID
 	var client *Client
 	var server *httptest.Server
 	var calls []string
 	var created map[string]any
-	var mappers []map[string]any
 	var failure string
 	var failureStatus int
-	var lookup []map[string]string
-	var malformed string
-	var emptyCredential bool
-	var cancelCreate context.CancelFunc
-	var logs bytes.Buffer
+	var existenceFailureStatus int
+	var clientMissing bool
+	var lookupClientFound bool
+	var lookupFailureStatus int
+	var response string
 
 	BeforeEach(func() {
 		calls = nil
 		created = nil
-		mappers = nil
 		failure = ""
 		failureStatus = http.StatusInternalServerError
-		lookup = []map[string]string{{"id": clientUUID, "clientId": clientID}}
-		malformed = ""
-		emptyCredential = false
-		cancelCreate = nil
-		logs.Reset()
+		existenceFailureStatus = 0
+		clientMissing = false
+		lookupClientFound = false
+		lookupFailureStatus = 0
+		response = ""
 		server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			defer GinkgoRecover()
 			call := r.Method + " " + r.URL.Path
 			calls = append(calls, call)
-			Expect(r.Header.Get("Authorization")).To(Equal("Bearer test-token"))
-			if call == malformed {
-				_, _ = fmt.Fprint(w, "invalid JSON "+credential)
-				return
-			}
-			if call == failure {
-				w.WriteHeader(failureStatus)
-				_, _ = fmt.Fprint(w, credential)
-				return
-			}
 			switch call {
-			case "POST /admin/realms/osac/clients":
+			case "POST " + registrationPath:
+				Expect(r.Header.Get("Authorization")).To(Equal("Bearer test-token"))
 				Expect(json.NewDecoder(r.Body).Decode(&created)).To(Succeed())
-				if cancelCreate != nil {
-					cancelCreate()
-					<-r.Context().Done()
+				if call == failure {
+					w.WriteHeader(failureStatus)
+					_, _ = fmt.Fprint(w, credential+" "+registrationToken)
 					return
 				}
-				w.Header().Set("Location", server.URL+"/admin/realms/osac/clients/"+clientUUID)
+				if response != "" {
+					_, _ = fmt.Fprint(w, response)
+					return
+				}
 				w.WriteHeader(http.StatusCreated)
+				_ = json.NewEncoder(w).Encode(map[string]string{
+					"id": clientUUID, "clientId": clientID, "secret": credential,
+					"registrationAccessToken": registrationToken,
+				})
+			case "DELETE " + registrationPath + "/" + clientID:
+				Expect(r.Header.Get("Authorization")).To(Equal("Bearer " + registrationToken))
+				if call == failure {
+					w.WriteHeader(failureStatus)
+					_, _ = fmt.Fprint(w, credential+" "+registrationToken)
+					return
+				}
+				w.WriteHeader(http.StatusNoContent)
+			case "GET " + adminClientPath:
+				Expect(r.Header.Get("Authorization")).To(Equal("Bearer test-token"))
+				if existenceFailureStatus != 0 {
+					w.WriteHeader(existenceFailureStatus)
+					return
+				}
+				if clientMissing {
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				w.WriteHeader(http.StatusOK)
 			case "GET /admin/realms/osac/clients":
+				Expect(r.Header.Get("Authorization")).To(Equal("Bearer test-token"))
 				Expect(r.URL.Query().Get("clientId")).To(Equal(clientID))
-				Expect(json.NewEncoder(w).Encode(lookup)).To(Succeed())
-			case "POST /admin/realms/osac/clients/" + clientUUID + "/protocol-mappers/add-models":
-				Expect(json.NewDecoder(r.Body).Decode(&mappers)).To(Succeed())
-				w.WriteHeader(http.StatusCreated)
-			case "GET /admin/realms/osac/clients/" + clientUUID + "/client-secret":
-				value := credential
-				if emptyCredential {
-					value = ""
+				if lookupFailureStatus != 0 {
+					w.WriteHeader(lookupFailureStatus)
+					return
 				}
-				Expect(json.NewEncoder(w).Encode(map[string]string{"type": "secret", "value": value})).To(Succeed())
-			case "PUT /admin/realms/osac/clients/" + clientUUID:
-				var update map[string]any
-				Expect(json.NewDecoder(r.Body).Decode(&update)).To(Succeed())
-				Expect(update).To(HaveKey("enabled"))
-				if update["enabled"] == true {
-					Expect(created["enabled"]).To(BeFalse())
-					Expect(mappers).To(HaveLen(2))
+				clients := []keycloakClient{}
+				if lookupClientFound {
+					clients = append(clients, keycloakClient{ID: clientUUID, ClientID: clientID})
 				}
-				w.WriteHeader(http.StatusNoContent)
-			case "DELETE /admin/realms/osac/clients/" + clientUUID:
-				w.WriteHeader(http.StatusNoContent)
+				w.WriteHeader(http.StatusOK)
+				Expect(json.NewEncoder(w).Encode(clients)).To(Succeed())
 			default:
 				Fail("unexpected request: " + call)
 			}
 		}))
 		DeferCleanup(server.Close)
 		var err error
-		client, err = NewClient().SetLogger(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))).
-			SetBaseURL(server.URL).SetTokenSource(&staticTokenSource{}).Build()
+		client, err = NewClient().SetLogger(slog.New(slog.NewTextHandler(GinkgoWriter, nil))).
+			SetBaseURL(server.URL).SetHTTPClient(server.Client()).SetTokenSource(&staticTokenSource{}).Build()
 		Expect(err).ToNot(HaveOccurred())
 	})
 
-	It("configures a disabled confidential identity before enabling it and returning its initial secret", func() {
-		id, secret, err := client.CreateServiceAccountClient(context.Background(), clientID, "tenant-a")
+	It("creates a configured confidential client and returns its one-time and scoped credentials", func() {
+		id, secret, scopedToken, err := client.CreateServiceAccountClient(context.Background(), clientID, "tenant-a")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(id).To(Equal(clientUUID))
 		Expect(secret).To(Equal(credential))
+		Expect(scopedToken).To(Equal(registrationToken))
 		Expect(created).To(HaveKeyWithValue("clientId", clientID))
 		Expect(created).To(HaveKeyWithValue("protocol", "openid-connect"))
-		for _, flag := range []string{"enabled", "publicClient", "standardFlowEnabled", "implicitFlowEnabled", "directAccessGrantsEnabled", "fullScopeAllowed"} {
+		Expect(created).To(HaveKeyWithValue("enabled", true))
+		for _, flag := range []string{"publicClient", "standardFlowEnabled", "implicitFlowEnabled", "directAccessGrantsEnabled", "fullScopeAllowed"} {
 			Expect(created).To(HaveKeyWithValue(flag, false))
 		}
 		Expect(created).To(HaveKeyWithValue("serviceAccountsEnabled", true))
 		Expect(created).To(HaveKeyWithValue("clientAuthenticatorType", "client-secret"))
-		Expect(created).To(HaveKeyWithValue("defaultClientScopes", BeEmpty()))
+		Expect(created).To(HaveKeyWithValue("defaultClientScopes", ConsistOf("service_account")))
 		Expect(created).To(HaveKeyWithValue("optionalClientScopes", BeEmpty()))
+		mappers, ok := created["protocolMappers"].([]any)
+		Expect(ok).To(BeTrue())
+		Expect(mappers).To(HaveLen(2))
 		Expect(mappers).To(ConsistOf(
 			HaveKeyWithValue("protocolMapper", "oidc-hardcoded-claim-mapper"),
 			HaveKeyWithValue("protocolMapper", "oidc-audience-mapper"),
 		))
-		for _, mapper := range mappers {
+		for _, value := range mappers {
+			mapper := value.(map[string]any)
 			config := mapper["config"].(map[string]any)
 			Expect(mapper["protocol"]).To(Equal("openid-connect"))
 			Expect(config["access.token.claim"]).To(Equal("true"))
-			switch mapper["protocolMapper"] {
-			case "oidc-hardcoded-claim-mapper":
-				Expect(config["claim.name"]).To(Equal("osac_tenant"))
-				Expect(config["claim.value"]).To(Equal("tenant-a"))
-				Expect(config["jsonType.label"]).To(Equal("String"))
-			case "oidc-audience-mapper":
-				Expect(config["included.custom.audience"]).To(Equal("osac-api"))
+			if mapper["protocolMapper"] == "oidc-hardcoded-claim-mapper" {
+				Expect(config).To(HaveKeyWithValue("claim.name", "osac_tenant"))
+				Expect(config).To(HaveKeyWithValue("claim.value", "tenant-a"))
+				Expect(config).To(HaveKeyWithValue("jsonType.label", "String"))
+			} else {
+				Expect(config).To(HaveKeyWithValue("included.custom.audience", "osac-api"))
 			}
 		}
-		Expect(calls[len(calls)-1]).To(Equal("PUT /admin/realms/osac/clients/" + clientUUID))
-		Expect(strings.Contains(logs.String(), credential)).To(BeFalse(), "logs must omit credential material")
+		Expect(calls).To(Equal([]string{"POST " + registrationPath}))
 	})
-	DescribeTable("returns a cleanup UUID and no secret after partial setup failure", func(step string) {
-		failure = step
-		id, secret, err := client.CreateServiceAccountClient(context.Background(), clientID, "tenant-a")
-		Expect(err).To(HaveOccurred())
-		Expect(id).To(Equal(clientUUID))
-		Expect(secret).To(BeEmpty())
-		Expect(strings.Contains(err.Error(), credential)).To(BeFalse(), "errors must omit upstream response bodies")
-		Expect(strings.Contains(logs.String(), credential)).To(BeFalse(), "logs must omit credential material")
-	},
-		Entry("mapper", "POST /admin/realms/osac/clients/"+clientUUID+"/protocol-mappers/add-models"),
-		Entry("secret retrieval", "GET /admin/realms/osac/clients/"+clientUUID+"/client-secret"),
-		Entry("enable", "PUT /admin/realms/osac/clients/"+clientUUID),
-	)
-	It("never adopts an existing client after a definite conflict", func() {
-		failure = "POST /admin/realms/osac/clients"
+
+	It("does not return credentials when Keycloak rejects registration", func() {
+		failure = "POST " + registrationPath
 		failureStatus = http.StatusConflict
-		id, secret, err := client.CreateServiceAccountClient(context.Background(), clientID, "tenant-a")
+		id, secret, scopedToken, err := client.CreateServiceAccountClient(context.Background(), clientID, "tenant-a")
 		Expect(err).To(HaveOccurred())
 		Expect(id).To(BeEmpty())
 		Expect(secret).To(BeEmpty())
-		Expect(calls).To(Equal([]string{failure}))
+		Expect(scopedToken).To(BeEmpty())
+		Expect(err.Error()).ToNot(ContainSubstring(credential))
+		Expect(err.Error()).ToNot(ContainSubstring(registrationToken))
 	})
-	DescribeTable("rejects malformed responses without returning a secret", func(step string) {
-		malformed = step
-		_, secret, err := client.CreateServiceAccountClient(context.Background(), clientID, "tenant-a")
-		Expect(err).To(HaveOccurred())
-		Expect(secret).To(BeEmpty())
-		Expect(strings.Contains(err.Error(), credential)).To(BeFalse())
-		Expect(calls).ToNot(ContainElement("PUT /admin/realms/osac/clients/" + clientUUID))
-	}, Entry("lookup", "GET /admin/realms/osac/clients"),
-		Entry("credential", "GET /admin/realms/osac/clients/"+clientUUID+"/client-secret"))
-	It("does not enable a client when the initial secret is missing", func() {
-		emptyCredential = true
-		id, secret, err := client.CreateServiceAccountClient(context.Background(), clientID, "tenant-a")
-		Expect(err).To(HaveOccurred())
-		Expect(id).To(Equal(clientUUID))
-		Expect(secret).To(BeEmpty())
-		Expect(calls).ToNot(ContainElement("PUT /admin/realms/osac/clients/" + clientUUID))
-	})
-	It("recovers the cleanup UUID after the creating request is cancelled", func() {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		cancelCreate = cancel
-		id, secret, err := client.CreateServiceAccountClient(ctx, clientID, "tenant-a")
-		Expect(err).To(MatchError(ContainSubstring("context canceled")))
-		Expect(id).To(Equal(clientUUID))
-		Expect(secret).To(BeEmpty())
-		Expect(calls).To(Equal([]string{"POST /admin/realms/osac/clients", "GET /admin/realms/osac/clients"}))
-	})
-	It("resolves an ambiguous create failure only by the exact generated identity", func() {
-		failure = "POST /admin/realms/osac/clients"
-		id, secret, err := client.CreateServiceAccountClient(context.Background(), clientID, "tenant-a")
-		Expect(err).To(HaveOccurred())
-		Expect(id).To(Equal(clientUUID))
-		Expect(secret).To(BeEmpty())
-		Expect(calls).To(Equal([]string{failure, "GET /admin/realms/osac/clients"}))
-	})
-	DescribeTable("never returns an unrelated or ambiguous recovery target", func(results []map[string]string) {
-		failure = "POST /admin/realms/osac/clients"
-		lookup = results
-		id, secret, err := client.CreateServiceAccountClient(context.Background(), clientID, "tenant-a")
-		Expect(err).To(HaveOccurred())
+
+	It("reports an existing client when registration fails after Keycloak created it", func() {
+		failure = "POST " + registrationPath
+		failureStatus = http.StatusConflict
+		lookupClientFound = true
+		id, secret, scopedToken, err := client.CreateServiceAccountClient(context.Background(), clientID, "tenant-a")
+		Expect(errors.Is(err, ErrServiceAccountClientAlreadyExists)).To(BeTrue())
 		Expect(id).To(BeEmpty())
 		Expect(secret).To(BeEmpty())
-	},
-		Entry("missing", []map[string]string{}),
-		Entry("different client ID", []map[string]string{{"id": clientUUID, "clientId": "unrelated"}}),
-		Entry("invalid UUID", []map[string]string{{"id": "../unrelated", "clientId": clientID}}),
-		Entry("duplicate exact matches", []map[string]string{{"id": clientUUID, "clientId": clientID}, {"id": clientUUID, "clientId": clientID}}),
-	)
-	It("disables and deletes only the stored client UUID", func() {
-		Expect(client.DisableServiceAccountClient(context.Background(), clientUUID)).To(Succeed())
-		Expect(client.DeleteServiceAccountClient(context.Background(), clientUUID)).To(Succeed())
-		Expect(calls).To(Equal([]string{"PUT /admin/realms/osac/clients/" + clientUUID, "DELETE /admin/realms/osac/clients/" + clientUUID}))
+		Expect(scopedToken).To(BeEmpty())
+		Expect(calls).To(Equal([]string{
+			"POST " + registrationPath,
+			"GET /admin/realms/osac/clients",
+		}))
 	})
-	DescribeTable("treats absent clients as successfully cleaned up", func(method string) {
-		failure = method + " /admin/realms/osac/clients/" + clientUUID
+
+	It("finds only the exact deterministic client ID", func() {
+		lookupClientFound = true
+		id, found, err := client.FindServiceAccountClient(context.Background(), clientID, "tenant-a")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(found).To(BeTrue())
+		Expect(id).To(Equal(clientUUID))
+
+		lookupClientFound = false
+		id, found, err = client.FindServiceAccountClient(context.Background(), clientID, "tenant-a")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(found).To(BeFalse())
+		Expect(id).To(BeEmpty())
+	})
+
+	It("keeps client lookup errors sanitized", func() {
+		lookupFailureStatus = http.StatusForbidden
+		_, found, err := client.FindServiceAccountClient(context.Background(), clientID, "tenant-a")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("HTTP 403"))
+		Expect(found).To(BeFalse())
+	})
+
+	It("returns a scoped token with a partial response so the caller can compensate", func() {
+		response = `{"id":"` + clientUUID + `","clientId":"` + clientID + `","registrationAccessToken":"` + registrationToken + `"}`
+		id, secret, scopedToken, err := client.CreateServiceAccountClient(context.Background(), clientID, "tenant-a")
+		Expect(err).To(HaveOccurred())
+		Expect(id).To(Equal(clientUUID))
+		Expect(secret).To(BeEmpty())
+		Expect(scopedToken).To(Equal(registrationToken))
+		Expect(err.Error()).ToNot(ContainSubstring(registrationToken))
+	})
+
+	It("retains the scoped token when the returned client UUID is invalid", func() {
+		response = `{"id":"invalid","clientId":"` + clientID + `","secret":"` + credential + `","registrationAccessToken":"` + registrationToken + `"}`
+		id, secret, scopedToken, err := client.CreateServiceAccountClient(context.Background(), clientID, "tenant-a")
+		Expect(err).To(HaveOccurred())
+		Expect(id).To(Equal("invalid"))
+		Expect(secret).To(BeEmpty())
+		Expect(scopedToken).To(Equal(registrationToken))
+		Expect(err.Error()).ToNot(ContainSubstring(registrationToken))
+	})
+
+	It("deletes only the named client with its registration token", func() {
+		Expect(client.DeleteServiceAccountClient(context.Background(), clientID, clientUUID, registrationToken)).To(Succeed())
+		Expect(calls).To(Equal([]string{"DELETE " + registrationPath + "/" + clientID}))
+	})
+
+	It("treats an absent client as already cleaned up", func() {
+		failure = "DELETE " + registrationPath + "/" + clientID
 		failureStatus = http.StatusNotFound
-		if method == "PUT" {
-			Expect(client.DisableServiceAccountClient(context.Background(), clientUUID)).To(Succeed())
-		} else {
-			Expect(client.DeleteServiceAccountClient(context.Background(), clientUUID)).To(Succeed())
-		}
-	}, Entry("disable", "PUT"), Entry("delete", "DELETE"))
-	DescribeTable("reports cleanup failures without exposing server bodies", func(method string) {
-		failure = method + " /admin/realms/osac/clients/" + clientUUID
-		var err error
-		if method == "PUT" {
-			err = client.DisableServiceAccountClient(context.Background(), clientUUID)
-		} else {
-			err = client.DeleteServiceAccountClient(context.Background(), clientUUID)
-		}
+		Expect(client.DeleteServiceAccountClient(context.Background(), clientID, clientUUID, registrationToken)).To(Succeed())
+	})
+
+	It("allows cleanup without a Vault token when the admin lookup confirms absence", func() {
+		clientMissing = true
+		Expect(client.DeleteServiceAccountClient(context.Background(), clientID, clientUUID, "")).To(Succeed())
+		Expect(calls).To(Equal([]string{"GET " + adminClientPath}))
+	})
+
+	It("keeps cleanup retryable without a Vault token when the client still exists", func() {
+		err := client.DeleteServiceAccountClient(context.Background(), clientID, clientUUID, "")
+		Expect(err).To(MatchError("service-account client exists without a registration token"))
+		Expect(calls).To(Equal([]string{"GET " + adminClientPath}))
+	})
+
+	It("treats an unauthorized delete as complete when the admin lookup confirms absence", func() {
+		failure = "DELETE " + registrationPath + "/" + clientID
+		failureStatus = http.StatusUnauthorized
+		clientMissing = true
+		Expect(client.DeleteServiceAccountClient(context.Background(), clientID, clientUUID, registrationToken)).To(Succeed())
+		Expect(calls).To(Equal([]string{
+			"DELETE " + registrationPath + "/" + clientID,
+			"GET " + adminClientPath,
+		}))
+	})
+
+	It("keeps an unauthorized delete retryable when the client still exists", func() {
+		failure = "DELETE " + registrationPath + "/" + clientID
+		failureStatus = http.StatusUnauthorized
+		err := client.DeleteServiceAccountClient(context.Background(), clientID, clientUUID, registrationToken)
 		Expect(err).To(HaveOccurred())
-		Expect(strings.Contains(err.Error(), credential)).To(BeFalse())
-	}, Entry("disable", "PUT"), Entry("delete", "DELETE"))
-	It("rejects invalid cleanup UUIDs before making a request", func() {
-		for _, id := range []string{"", "osac-admin", "../clients", "client/uuid"} {
-			Expect(client.DisableServiceAccountClient(context.Background(), id)).To(HaveOccurred())
-			Expect(client.DeleteServiceAccountClient(context.Background(), id)).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("HTTP 401"))
+		Expect(calls).To(Equal([]string{
+			"DELETE " + registrationPath + "/" + clientID,
+			"GET " + adminClientPath,
+		}))
+	})
+
+	It("keeps forbidden deletes retryable without an absence check", func() {
+		failure = "DELETE " + registrationPath + "/" + clientID
+		failureStatus = http.StatusForbidden
+		err := client.DeleteServiceAccountClient(context.Background(), clientID, clientUUID, registrationToken)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("HTTP 403"))
+		Expect(calls).To(Equal([]string{"DELETE " + registrationPath + "/" + clientID}))
+	})
+
+	It("keeps an unauthorized delete retryable when the absence check is unauthorized", func() {
+		failure = "DELETE " + registrationPath + "/" + clientID
+		failureStatus = http.StatusUnauthorized
+		existenceFailureStatus = http.StatusForbidden
+		err := client.DeleteServiceAccountClient(context.Background(), clientID, clientUUID, registrationToken)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("HTTP 401"))
+		Expect(err.Error()).To(ContainSubstring("HTTP 403"))
+	})
+
+	It("sanitizes registration failures and rejects unsafe client identities", func() {
+		failure = "DELETE " + registrationPath + "/" + clientID
+		Expect(client.DeleteServiceAccountClient(context.Background(), clientID, clientUUID, registrationToken)).To(HaveOccurred())
+		for _, id := range []string{"", "../other", "osac-admin", "client/uuid"} {
+			Expect(client.DeleteServiceAccountClient(context.Background(), id, clientUUID, registrationToken)).To(HaveOccurred())
+		}
+		Expect(strings.Join(calls, " ")).To(Equal(failure))
+		Expect(calls).To(HaveLen(1))
+	})
+
+	It("keeps unauthorized deletes retryable when the stored client UUID is invalid", func() {
+		failure = "DELETE " + registrationPath + "/" + clientID
+		failureStatus = http.StatusUnauthorized
+		err := client.DeleteServiceAccountClient(context.Background(), clientID, "invalid", registrationToken)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("HTTP 401"))
+		Expect(calls).To(Equal([]string{"DELETE " + registrationPath + "/" + clientID}))
+	})
+
+	It("rejects invalid generated identities before registration", func() {
+		for _, id := range []string{"", "osac-sa-tenant-b-" + clientUUID, "osac-sa-tenant-a-not-a-uuid"} {
+			_, _, _, err := client.CreateServiceAccountClient(context.Background(), id, "tenant-a")
+			Expect(err).To(HaveOccurred())
 		}
 		Expect(calls).To(BeEmpty())
 	})

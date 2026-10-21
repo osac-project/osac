@@ -28,11 +28,11 @@ import (
 	"net/url"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/go-querystring/query"
 	"github.com/skratchdot/open-golang/open"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/templating"
@@ -94,7 +94,7 @@ type TokenSource struct {
 	caPool           *trust.CertPool
 	interactive      bool
 	timeout          time.Duration
-	discoverOnce     sync.Once
+	discoveryGroup   singleflight.Group
 	tokenEndpoint    string
 	authEndpoint     string
 	deviceEndpoint   string
@@ -651,6 +651,16 @@ func (s *TokenSource) discover(ctx context.Context) error {
 	return nil
 }
 
+func (s *TokenSource) ensureDiscovered(ctx context.Context) error {
+	_, err, _ := s.discoveryGroup.Do("metadata", func() (any, error) {
+		if s.tokenEndpoint != "" {
+			return nil, nil
+		}
+		return nil, s.discover(ctx)
+	})
+	return err
+}
+
 // isFresh checks if the given token can still be used. Note that if the token expires soon it will not be considered
 // fresh, even if it is still valid. This is to avoid using a token that is about to expire, and may expire in the
 // middle of the operation that it is used for.
@@ -669,9 +679,7 @@ func (s *TokenSource) isExpired(token *auth.Token) bool {
 
 func (s *TokenSource) runRefresh(ctx context.Context, refreshToken string) (result *auth.Token, err error) {
 	// Perform discovery if not already done:
-	s.discoverOnce.Do(func() {
-		err = s.discover(ctx)
-	})
+	err = s.ensureDiscovered(ctx)
 	if err != nil {
 		err = fmt.Errorf("failed to discover metadata: %w", err)
 		return
@@ -711,9 +719,7 @@ func (s *TokenSource) runRefresh(ctx context.Context, refreshToken string) (resu
 
 func (s *TokenSource) runFlow(ctx context.Context) (result *auth.Token, err error) {
 	// Perform discovery if not already done:
-	s.discoverOnce.Do(func() {
-		err = s.discover(ctx)
-	})
+	err = s.ensureDiscovered(ctx)
 	if err != nil {
 		err = fmt.Errorf("failed to discover metadata: %w", err)
 		return

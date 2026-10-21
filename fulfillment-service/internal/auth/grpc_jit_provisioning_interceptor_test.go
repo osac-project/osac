@@ -22,9 +22,11 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
+	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
@@ -176,6 +178,32 @@ var _ = Describe("JIT Provisioning Interceptor", func() {
 			Expect(mockProvisioner.lastTenant).To(Equal("tenant1"))
 			Expect(mockProvisioner.lastClaims["email"]).To(Equal("alice@example.com"))
 			Expect(mockProvisioner.lastClaims["name"]).To(Equal("Alice Smith"))
+		})
+
+		It("Does not create a transaction when only a transaction manager is present", func() {
+			ctrl := gomock.NewController(GinkgoT())
+			manager := database.NewMockTxManager(ctrl)
+
+			token := createKeycloakUserToken("tenant1", "alice", nil)
+			ctx = ContextWithToken(ctx, token)
+			ctx = ContextWithSubject(ctx, &Subject{User: "alice", Tenants: collections.NewSet("tenant1")})
+			ctx = database.TxManagerIntoContext(ctx, manager)
+			mockProvisioner.provisionFunc = func(ctx context.Context, _, _ string, _ jwt.MapClaims) error {
+				_, err := database.TxFromContext(ctx)
+				Expect(err).To(MatchError("failed to get transaction from context"))
+				return nil
+			}
+			handler = func(ctx context.Context, req any) (any, error) {
+				_, err := database.TxFromContext(ctx)
+				Expect(err).To(MatchError("failed to get transaction from context"))
+				handlerCalled = true
+				return nil, nil
+			}
+
+			_, err := interceptor.UnaryServer(ctx, nil, &grpc.UnaryServerInfo{}, handler)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(mockProvisioner.callCount).To(Equal(1))
+			Expect(handlerCalled).To(BeTrue())
 		})
 
 		It("Does not provision when no provisioner is configured", func() {

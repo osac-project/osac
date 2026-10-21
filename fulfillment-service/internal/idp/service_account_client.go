@@ -1,11 +1,18 @@
-/*
-Copyright (c) 2026 Red Hat Inc.
-
-Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the
-License. You may obtain a copy of the License at
-
-  http://www.apache.org/licenses/LICENSE-2.0
-*/
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
 
 package idp
 
@@ -22,63 +29,27 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/osac-project/osac/fulfillment-service/internal/apiclient"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 )
 
-// CreateServiceAccountClient returns a partial UUID on failure so the caller can compensate.
-// The secret is returned only after the client is fully configured and enabled.
-func (c *Client) CreateServiceAccountClient(ctx context.Context, clientID, tenantID string) (clientUUID, clientSecret string, err error) {
+var ErrServiceAccountClientAlreadyExists = errors.New(
+	"service-account client already exists without recoverable registration credentials",
+)
+
+const serviceAccountClientLookupTimeout = 10 * time.Second
+
+func (c *Client) CreateServiceAccountClient(ctx context.Context, clientID, tenantID string) (
+	clientUUID, clientSecret, registrationAccessToken string, err error,
+) {
 	prefix := "osac-sa-" + tenantID + "-"
 	if tenantID == "" || !strings.HasPrefix(clientID, prefix) {
-		return "", "", errors.New("invalid service-account client identity")
+		return "", "", "", errors.New("invalid service-account client identity")
 	}
 	if _, parseErr := uuid.Parse(strings.TrimPrefix(clientID, prefix)); parseErr != nil {
-		return "", "", errors.New("invalid service-account client identity")
+		return "", "", "", errors.New("invalid service-account client identity")
 	}
-	mayHaveCreated := false
-	defer func() {
-		if err == nil {
-			return
-		}
-		clientSecret = ""
-		// Cancellation or a lost POST response can leave a disabled client without a known UUID.
-		if mayHaveCreated && clientUUID == "" {
-			recoveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-			defer cancel()
-			recovered, lookupErr := c.findServiceAccountClient(recoveryCtx, clientID)
-			if lookupErr == nil {
-				clientUUID = recovered
-			}
-		}
-	}()
 
-	path := "/admin/realms/" + url.PathEscape(c.realmName) + "/clients"
-	response, requestErr := c.httpClient.DoRequest(ctx, http.MethodPost, path, map[string]any{
-		"clientId":                  clientID,
-		"protocol":                  "openid-connect",
-		"clientAuthenticatorType":   "client-secret",
-		"enabled":                   false,
-		"publicClient":              false,
-		"serviceAccountsEnabled":    true,
-		"standardFlowEnabled":       false,
-		"implicitFlowEnabled":       false,
-		"directAccessGrantsEnabled": false,
-		"fullScopeAllowed":          false,
-		"defaultClientScopes":       []string{},
-		"optionalClientScopes":      []string{},
-	})
-	if requestErr != nil {
-		var apiErr *apiclient.APIError
-		mayHaveCreated = !errors.As(requestErr, &apiErr) || apiErr.StatusCode >= http.StatusInternalServerError
-		return "", "", serviceAccountClientError("create client", requestErr)
-	}
-	response.Body.Close()
-	mayHaveCreated = true
-	clientUUID, err = c.findServiceAccountClient(ctx, clientID)
-	if err != nil {
-		return
-	}
-	path += "/" + url.PathEscape(clientUUID)
-
+	path := "/realms/" + url.PathEscape(c.realmName) + "/clients-registrations/default"
 	mappers := []map[string]any{
 		{
 			"name":           "osac-tenant",
@@ -104,84 +75,183 @@ func (c *Client) CreateServiceAccountClient(ctx context.Context, clientID, tenan
 			},
 		},
 	}
-	response, err = c.httpClient.DoRequest(ctx, http.MethodPost, path+"/protocol-mappers/add-models", mappers)
+	response, err := c.httpClient.DoRequest(ctx, http.MethodPost, path, map[string]any{
+		"clientId":                  clientID,
+		"protocol":                  "openid-connect",
+		"clientAuthenticatorType":   "client-secret",
+		"enabled":                   true,
+		"publicClient":              false,
+		"serviceAccountsEnabled":    true,
+		"standardFlowEnabled":       false,
+		"implicitFlowEnabled":       false,
+		"directAccessGrantsEnabled": false,
+		"fullScopeAllowed":          false,
+		"defaultClientScopes":       []string{"service_account"},
+		"optionalClientScopes":      []string{},
+		"protocolMappers":           mappers,
+	})
 	if err != nil {
-		err = serviceAccountClientError("configure client mappers", err)
-		return
-	}
-	response.Body.Close()
-
-	response, err = c.httpClient.DoRequest(ctx, http.MethodGet, path+"/client-secret", nil)
-	if err != nil {
-		err = serviceAccountClientError("retrieve initial client credential", err)
-		return
-	}
-	var credential keycloakCred
-	decodeErr := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&credential)
-	response.Body.Close()
-	if decodeErr != nil || credential.Value == "" {
-		err = errors.New("invalid initial client credential response")
-		return
-	}
-	response, err = c.httpClient.DoRequest(ctx, http.MethodPut, path, map[string]bool{"enabled": true})
-	if err != nil {
-		err = serviceAccountClientError("enable client", err)
-		return
-	}
-	response.Body.Close()
-	clientSecret = credential.Value
-	return
-}
-
-func (c *Client) findServiceAccountClient(ctx context.Context, clientID string) (string, error) {
-	query := url.Values{"clientId": {clientID}, "exact": {"true"}}
-	path := "/admin/realms/" + url.PathEscape(c.realmName) + "/clients?" + query.Encode()
-	response, err := c.httpClient.DoRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return "", serviceAccountClientError("resolve created client", err)
+		lookupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), serviceAccountClientLookupTimeout)
+		_, found, lookupErr := c.FindServiceAccountClient(lookupCtx, clientID, tenantID)
+		cancel()
+		if lookupErr == nil && found {
+			return "", "", "", ErrServiceAccountClientAlreadyExists
+		}
+		if lookupErr != nil {
+			return "", "", "", errors.Join(
+				serviceAccountClientError("create client", err),
+				fmt.Errorf("failed to verify service-account client state: %w", lookupErr),
+			)
+		}
+		return "", "", "", serviceAccountClientError("create client", err)
 	}
 	defer response.Body.Close()
+
+	var created struct {
+		ID                      string `json:"id"`
+		ClientID                string `json:"clientId"`
+		Secret                  string `json:"secret"`
+		RegistrationAccessToken string `json:"registrationAccessToken"`
+	}
+	decodeErr := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&created)
+	if created.ClientID == clientID {
+		clientUUID = created.ID
+		registrationAccessToken = created.RegistrationAccessToken
+	}
+	if decodeErr != nil || created.ClientID != clientID {
+		return clientUUID, "", registrationAccessToken, errors.New("invalid service-account client registration response")
+	}
+	if _, parseErr := uuid.Parse(clientUUID); parseErr != nil {
+		return clientUUID, "", registrationAccessToken, errors.New("invalid Keycloak client UUID in registration response")
+	}
+	if created.Secret == "" || registrationAccessToken == "" {
+		return clientUUID, "", registrationAccessToken, errors.New("incomplete service-account client registration response")
+	}
+	return clientUUID, created.Secret, registrationAccessToken, nil
+}
+
+// FindServiceAccountClient looks up the deterministic client ID with the
+// controller's view-clients permission. It never returns client credentials.
+func (c *Client) FindServiceAccountClient(ctx context.Context, clientID, tenantID string) (string, bool, error) {
+	prefix := "osac-sa-" + tenantID + "-"
+	if tenantID == "" || !strings.HasPrefix(clientID, prefix) || !validServiceAccountClientID(clientID) {
+		return "", false, errors.New("invalid service-account client identity")
+	}
+	path := "/admin/realms/" + url.PathEscape(c.realmName) + "/clients?clientId=" + url.QueryEscape(clientID)
+	response, err := c.httpClient.DoRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return "", false, serviceAccountClientError("find client", err)
+	}
+	defer response.Body.Close()
+
 	var clients []keycloakClient
-	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&clients); err != nil {
-		return "", errors.New("invalid client lookup response")
+	if err = json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&clients); err != nil {
+		return "", false, errors.New("invalid service-account client lookup response")
 	}
-	if len(clients) != 1 || clients[0].ClientID != clientID {
-		return "", errors.New("created client was not uniquely identified")
+	var found *keycloakClient
+	for index := range clients {
+		if clients[index].ClientID != clientID {
+			continue
+		}
+		if found != nil {
+			return "", false, errors.New("ambiguous service-account client lookup response")
+		}
+		found = &clients[index]
 	}
-	if _, err := uuid.Parse(clients[0].ID); err != nil {
-		return "", errors.New("invalid client UUID in lookup response")
+	if found == nil {
+		return "", false, nil
 	}
-	return clients[0].ID, nil
+	if _, err = uuid.Parse(found.ID); err != nil {
+		return "", false, errors.New("invalid Keycloak client UUID in lookup response")
+	}
+	return found.ID, true, nil
 }
 
-// DisableServiceAccountClient is idempotent when the client is already absent.
-func (c *Client) DisableServiceAccountClient(ctx context.Context, clientUUID string) error {
-	return c.cleanServiceAccountClient(ctx, http.MethodPut, clientUUID, map[string]bool{"enabled": false})
+func (c *Client) DeleteServiceAccountClient(ctx context.Context, clientID, clientUUID, registrationAccessToken string) error {
+	if !validServiceAccountClientID(clientID) {
+		return errors.New("invalid service-account client cleanup credentials")
+	}
+	if registrationAccessToken == "" {
+		// The token is absent only after Vault cleanup succeeded but the
+		// controller could not persist finalizer removal. Verify Keycloak state
+		// before allowing the controller to finish cleanup.
+		exists, err := c.serviceAccountClientExists(ctx, clientUUID)
+		if err != nil {
+			return serviceAccountClientError("verify client existence", err)
+		}
+		if exists {
+			return errors.New("service-account client exists without a registration token")
+		}
+		return nil
+	}
+	client, err := c.clientWithRegistrationToken(registrationAccessToken)
+	if err != nil {
+		return errors.New("failed to configure service-account client cleanup")
+	}
+	path := "/realms/" + url.PathEscape(c.realmName) + "/clients-registrations/default/" + url.PathEscape(clientID)
+	response, err := client.DoRequest(ctx, http.MethodDelete, path, nil)
+	if err != nil {
+		var apiErr *apiclient.APIError
+		if errors.As(err, &apiErr) {
+			switch apiErr.StatusCode {
+			case http.StatusNotFound:
+				return nil
+			case http.StatusUnauthorized:
+				exists, checkErr := c.serviceAccountClientExists(ctx, clientUUID)
+				if checkErr == nil && !exists {
+					return nil
+				}
+				deleteErr := serviceAccountClientError("delete client", err)
+				if checkErr != nil {
+					return fmt.Errorf("%w; failed to verify client absence: %w", deleteErr,
+						serviceAccountClientError("verify client existence", checkErr))
+				}
+				return deleteErr
+			}
+		}
+		return serviceAccountClientError("delete client", err)
+	}
+	return response.Body.Close()
 }
 
-// DeleteServiceAccountClient is idempotent when the client is already absent.
-func (c *Client) DeleteServiceAccountClient(ctx context.Context, clientUUID string) error {
-	return c.cleanServiceAccountClient(ctx, http.MethodDelete, clientUUID, nil)
-}
-
-func (c *Client) cleanServiceAccountClient(ctx context.Context, method, clientUUID string, body any) error {
+func (c *Client) serviceAccountClientExists(ctx context.Context, clientUUID string) (bool, error) {
 	if _, err := uuid.Parse(clientUUID); err != nil {
-		return errors.New("invalid service-account client UUID")
+		return false, errors.New("invalid service-account client UUID")
 	}
 	path := "/admin/realms/" + url.PathEscape(c.realmName) + "/clients/" + url.PathEscape(clientUUID)
-	response, err := c.httpClient.DoRequest(ctx, method, path, body)
+	response, err := c.httpClient.DoRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		var apiErr *apiclient.APIError
 		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
-			return nil
+			return false, nil
 		}
-		return serviceAccountClientError("clean up client", err)
+		return false, err
 	}
-	response.Body.Close()
-	return nil
+	return true, response.Body.Close()
 }
 
-// Upstream response bodies and transport errors may contain credentials.
+func (c *Client) clientWithRegistrationToken(token string) (*apiclient.Client, error) {
+	tokenSource, err := auth.NewStaticTokenSource().SetLogger(c.logger).
+		SetToken(&auth.Token{Access: token}).Build()
+	if err != nil {
+		return nil, err
+	}
+	return apiclient.NewClient().SetLogger(c.logger).SetBaseURL(c.baseURL).
+		SetTokenSource(tokenSource).SetHTTPClient(c.registrationHTTPClient).Build()
+}
+
+func validServiceAccountClientID(clientID string) bool {
+	if !strings.HasPrefix(clientID, "osac-sa-") || len(clientID) < len("osac-sa-")+1+36 {
+		return false
+	}
+	tenantEnd := len(clientID) - 37
+	if tenantEnd <= len("osac-sa-") || clientID[tenantEnd] != '-' {
+		return false
+	}
+	_, err := uuid.Parse(clientID[len(clientID)-36:])
+	return err == nil && !strings.ContainsAny(clientID, "/\\")
+}
+
 func serviceAccountClientError(operation string, err error) error {
 	var apiErr *apiclient.APIError
 	if errors.As(err, &apiErr) {

@@ -530,6 +530,7 @@ func setupComputeInstanceControllers(
 	mgr mcmanager.Manager,
 	grpcConn grpc.ClientConnInterface,
 	maxJobHistory int,
+	tenantReadinessEvaluator controller.TenantReadinessEvaluator,
 ) error {
 	localMgr := mgr.GetLocalManager()
 	computeInstanceNamespace := os.Getenv(envComputeInstanceNamespace)
@@ -558,6 +559,7 @@ func setupComputeInstanceControllers(
 		statusPollInterval,
 		maxJobHistory,
 		targetCluster,
+		tenantReadinessEvaluator,
 	)
 	if grpcConn != nil {
 		ciReconciler.TiersClient = privatev1.NewStorageTiersClient(grpcConn)
@@ -669,6 +671,8 @@ func setupControllers(
 	mgr mcmanager.Manager, grpcConn grpc.ClientConnInterface,
 	flags *controllerFlags, maxJobHistory int, fulfillmentTrustSourceName string,
 ) error {
+	tenantReadinessEvaluator := controller.NewTenantReadinessEvaluator(flags.Storage)
+
 	if flags.Cluster {
 		if err := setupClusterControllers(mgr, grpcConn, maxJobHistory); err != nil {
 			return fmt.Errorf("cluster controllers: %w", err)
@@ -699,7 +703,7 @@ func setupControllers(
 		}
 	}
 	if flags.ComputeInstance {
-		if err := setupComputeInstanceControllers(mgr, grpcConn, maxJobHistory); err != nil {
+		if err := setupComputeInstanceControllers(mgr, grpcConn, maxJobHistory, tenantReadinessEvaluator); err != nil {
 			return fmt.Errorf("computeinstance controllers: %w", err)
 		}
 	}

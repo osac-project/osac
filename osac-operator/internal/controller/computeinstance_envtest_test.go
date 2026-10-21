@@ -165,7 +165,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 
 	BeforeEach(func() {
 		provider = newControllableProvider()
-		reconciler = NewComputeInstanceReconciler(testMcManager, testNamespace, testNamespace, "", provider, 100*time.Millisecond, provisioning.DefaultMaxJobHistory, mcmanager.LocalCluster)
+		reconciler = newTestComputeInstanceReconciler(testMcManager, testNamespace, testNamespace, "", provider, 100*time.Millisecond, provisioning.DefaultMaxJobHistory, mcmanager.LocalCluster)
 	})
 
 	Context("Provisioning workflow", func() {

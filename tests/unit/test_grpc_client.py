@@ -93,7 +93,7 @@ def test_create_and_delete_shared_baremetal_instance_type(monkeypatch: pytest.Mo
                     "metadata": {"name": "e2e-bmi-type", "tenant": "shared"},
                     "spec": {
                         "hardware": {
-                            "cpu": {"cores": 4, "architecture": "x86_64", "threads_per_core": 2},
+                            "cpu": {"cores": 4, "architecture": "amd64", "threads_per_core": 2},
                             "memory": {"total_gb": 8},
                             "network_ports": [
                                 {"name": "data-0", "role": "fabric", "type": "Ethernet", "speed": "10Gbps"}

@@ -156,6 +156,7 @@ var _ = Describe("DiskImage lifecycle", func() {
 				Metadata:      privatev1.Metadata_builder{Name: fmt.Sprintf("di-nc-%s", uuid.New())}.Build(),
 				Title:         "Test Network Class",
 				FabricManager: new("netris"),
+				K8SManager:    new(testVMK8SManagerName),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())

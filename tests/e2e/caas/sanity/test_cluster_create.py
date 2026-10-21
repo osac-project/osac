@@ -8,13 +8,14 @@ import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from tests.e2e.caas.deletion_diagnostics import snapshot_cluster_deletion
 from tests.e2e.core.fulfillment_trust import assert_cluster_trust, assert_management_tls
-from tests.e2e.core.grpc_client import GRPCClient
+from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.helpers import (
     unique_name,
     wait_for_cluster_deleting,
@@ -545,6 +546,20 @@ def _assert_cluster_deleted(
     metering.verify()
 
 
+def _assert_catalog_created_cluster(
+    *, grpc: GRPCClient, uuid: str, catalog_item_id: str, pull_secret_name: str, ssh_public_key: str
+) -> None:
+    """Check that the catalog offering, not caller input, materialized the cluster spec."""
+    spec = grpc.get_cluster(cluster_id=uuid)["object"]["spec"]
+    catalog_ref = spec.get("catalog_item", spec.get("catalogItem", {}))
+    assert catalog_ref.get("id") == catalog_item_id
+    template_ref = spec.get("template", {})
+    assert template_ref.get("id"), "Catalog-created cluster must materialize its template reference"
+    assert spec.get("ssh_public_key", spec.get("sshPublicKey")) == ssh_public_key
+    pull_secret_ref = spec.get("pull_secret_secret", spec.get("pullSecretSecret", {}))
+    assert pull_secret_ref.get("name") == pull_secret_name
+
+
 @pytest.mark.metering
 def test_cluster_create(
     cli: OsacCLI,
@@ -556,11 +571,12 @@ def test_cluster_create(
     ssh_public_key_path: str,
     metering: MeteringCollector,
 ) -> None:
-    """Verify the full CaaS cluster lifecycle: create, provision to Ready, version and
+    """Verify the full CaaS cluster lifecycle through a catalog item: author a published
+    ClusterCatalogItem, create a cluster from it, provision to Ready, version and
     releaseImage propagation to the HostedCluster, N+1 metering heartbeat decomposition,
     worker scale-up reflected in updated.v1 metering, and deletion."""
 
-    private_grpc.ensure_bare_metal_instance_type(
+    worker_instance_type_id = private_grpc.ensure_bare_metal_instance_type(
         name="ci-worker-bm", host_label_selector={"osac.openshift.io/host-type": "default"}
     )
     logger.info("CaaS: ensuring DiskImage and ClusterVersion")
@@ -569,20 +585,44 @@ def test_cluster_create(
         version="4.22.0-rhcos", image=TEST_RELEASE_IMAGE, disk_image=disk_image_id
     )
     logger.info("CaaS: ClusterVersion available")
-    name = unique_name("e2e-cluster")
-    logger.info("CaaS: creating cluster")
-    uuid = cli.create_cluster(
-        name=name,
+    ssh_public_key = Path(ssh_public_key_path).read_text().strip()
+    logger.info("CaaS: creating ClusterCatalogItem")
+    # The shared offering locks every tenant-independent input (version, node sets, SSH
+    # key); the pull secret stays caller-supplied because a shared catalog item cannot
+    # fix a tenant-local secret for every tenant.
+    catalog_item_id = private_grpc.create_cluster_catalog_item(
+        name=unique_name("e2e-caas-catalog"),
         template=cluster_template,
-        version=version["name"],
-        node_sets={"workers": {"size": 1, "baremetal_instance_type": {"name": "ci-worker-bm"}}},
-        pull_secret=pull_secret_name,
-        ssh_public_key_file=ssh_public_key_path,
+        fields={
+            "version": {"locked": {"id": version["id"]}},
+            "ssh_public_key": {"locked": ssh_public_key},
+            "pull_secret_secret": {"editable": {}},
+            "node_sets": {
+                "locked": {
+                    "items": {"workers": {"size": 1, "baremetal_instance_type": {"id": worker_instance_type_id}}}
+                }
+            },
+        },
+        api=PRIVATE_API,
     )
-    logger.info("CaaS: cluster created")
-    metering.expect("osac.resource.created.v1", resource_id=uuid)
-
+    logger.info("CaaS: ClusterCatalogItem created")
+    name = unique_name("e2e-cluster")
+    uuid = ""
     try:
+        logger.info("CaaS: creating cluster from catalog item")
+        uuid = cli.create_cluster_with_catalog_item(
+            catalog_item=catalog_item_id, name=name, pull_secret=pull_secret_name
+        )
+        logger.info("CaaS: cluster created")
+        metering.expect("osac.resource.created.v1", resource_id=uuid)
+
+        _assert_catalog_created_cluster(
+            grpc=grpc,
+            uuid=uuid,
+            catalog_item_id=catalog_item_id,
+            pull_secret_name=pull_secret_name,
+            ssh_public_key=ssh_public_key,
+        )
         cluster = assert_cluster_available(
             grpc=grpc, k8s=k8s_hub_client, metering=metering, uuid=uuid, version_name=version["name"]
         )
@@ -604,8 +644,11 @@ def test_cluster_create(
         cli.delete_cluster(uuid=uuid)
         _assert_cluster_deleted(grpc=grpc, k8s=k8s_hub_client, metering=metering, uuid=uuid, cluster=cluster)
     finally:
+        if uuid:
+            with contextlib.suppress(subprocess.SubprocessError):
+                cli.delete_cluster(uuid=uuid)
         with contextlib.suppress(subprocess.SubprocessError):
-            cli.delete_cluster(uuid=uuid)
+            private_grpc.delete_cluster_catalog_item(catalog_item_id=catalog_item_id, api=PRIVATE_API)
 
 
 def _assert_two_node_set_requests(

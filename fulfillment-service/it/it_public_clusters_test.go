@@ -60,7 +60,7 @@ var _ = Describe("Public clusters", func() {
 				}.Build(),
 				Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 					Hardware: privatev1.BareMetalHardwareSpec_builder{
-						Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 32, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
+						Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 32, Architecture: "amd64", ThreadsPerCore: 2}.Build(),
 						Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 128}.Build(),
 						NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
 							privatev1.BareMetalNetworkPortSpec_builder{
@@ -426,6 +426,7 @@ var _ = Describe("Public clusters", func() {
 	It("Can create a cluster with explicit version", func() {
 		// Bare-metal workers require the selected version to have a DiskImage.
 		image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
+		network := createCatalogItemNetworkInClassFixture(ctx, usersGroup, "", networkClassID)
 		cvClient := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())
 		version := nextCVVersion()
 		cvResponse, err := cvClient.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
@@ -458,9 +459,10 @@ var _ = Describe("Public clusters", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-					Version:  publicv1.ClusterVersionReference_builder{Name: cvName}.Build(),
-					NodeSets: testClusterNodeSets(bmitName, 3),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Version:           publicv1.ClusterVersionReference_builder{Name: cvName}.Build(),
+					NodeSets:          testClusterNodeSets(bmitName, 3),
+					NetworkAttachment: network.clusterAttachment(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -481,7 +483,11 @@ var _ = Describe("Public clusters", func() {
 			Id: object.GetId(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(getResponse.GetObject().GetSpec().GetVersion().GetName()).To(Equal(cvName))
+		storedSpec := getResponse.GetObject().GetSpec()
+		Expect(storedSpec.GetVersion().GetName()).To(Equal(cvName))
+		Expect(storedSpec.GetNetworkAttachment().GetSubnet().GetId()).To(Equal(network.subnetID))
+		Expect(storedSpec.GetNetworkAttachment().GetSecurityGroups()).To(HaveLen(1))
+		Expect(storedSpec.GetNetworkAttachment().GetSecurityGroups()[0].GetId()).To(Equal(network.securityGroupID))
 	})
 
 	It("Sets creator to the ID of the user when creating a cluster", func() {

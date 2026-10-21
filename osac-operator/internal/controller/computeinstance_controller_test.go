@@ -42,6 +42,15 @@ import (
 
 const testTemplateParams = `{"key": "value"}`
 
+func expectVMIStatusInTargetCache(ctx context.Context, targetClient client.Client, expected *kubevirtv1.VirtualMachineInstance) {
+	Eventually(func(g Gomega) {
+		observed := &kubevirtv1.VirtualMachineInstance{}
+		key := types.NamespacedName{Namespace: expected.Namespace, Name: expected.Name}
+		g.Expect(targetClient.Get(ctx, key, observed)).To(Succeed())
+		g.Expect(observed.Status.Interfaces).To(Equal(expected.Status.Interfaces))
+	}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+}
+
 // createReadyTenant creates a Tenant with the given name in the namespace and sets status to Ready.
 // If the tenant already exists, it is updated to Ready.
 func createReadyTenant(ctx context.Context, namespace, name string) {
@@ -182,6 +191,76 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 	})
 
+	Context("deletion status persistence", func() {
+		It("persists terminal job status before removing the base finalizer", func() {
+			ctx := context.Background()
+			instance := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "test-deletion-status-order",
+					Namespace:  "default",
+					Finalizers: []string{osacComputeInstanceFinalizer, osacComputeInstanceFeedbackFinalizer},
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+			key := client.ObjectKeyFromObject(instance)
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			DeferCleanup(func() {
+				remaining := &osacv1alpha1.ComputeInstance{}
+				if k8sClient.Get(ctx, key, remaining) == nil {
+					remaining.Finalizers = nil
+					Expect(k8sClient.Update(ctx, remaining)).To(Succeed())
+				}
+			})
+
+			instance.Status.Phase = osacv1alpha1.ComputeInstancePhaseRunning
+			instance.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
+				JobID:                  "deprovision-job",
+				Type:                   osacv1alpha1.JobTypeDeprovision,
+				Timestamp:              metav1.Now(),
+				State:                  osacv1alpha1.JobStateRunning,
+				BlockDeletionOnFailure: true,
+			}}
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
+
+			reconciler := NewComputeInstanceReconciler(
+				testMcManager, "", "", "", &mockProvisioningProvider{name: "aap"},
+				100*time.Millisecond, 0, mcmanager.LocalCluster,
+			)
+			Eventually(func(g Gomega) {
+				cached := &osacv1alpha1.ComputeInstance{}
+				g.Expect(reconciler.Get(ctx, key, cached)).To(Succeed())
+				g.Expect(cached.DeletionTimestamp.IsZero()).To(BeFalse())
+				g.Expect(cached.Status.ProvisioningJobs).To(HaveLen(1))
+				g.Expect(cached.Status.ProvisioningJobs[0].State).To(Equal(osacv1alpha1.JobStateRunning))
+			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+
+			request := mcreconcile.Request{Request: reconcile.Request{NamespacedName: key}}
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(100 * time.Millisecond))
+
+			persisted := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, key, persisted)).To(Succeed())
+			Expect(persisted.Finalizers).To(ContainElement(osacComputeInstanceFinalizer))
+			Expect(persisted.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseDeleting))
+			Expect(persisted.Status.ProvisioningJobs[0].State).To(Equal(osacv1alpha1.JobStateSucceeded))
+
+			Eventually(func(g Gomega) {
+				cached := &osacv1alpha1.ComputeInstance{}
+				g.Expect(reconciler.Get(ctx, key, cached)).To(Succeed())
+				g.Expect(cached.Status.ProvisioningJobs[0].State).To(Equal(osacv1alpha1.JobStateSucceeded))
+			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+
+			result, err = reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
+			Expect(k8sClient.Get(ctx, key, persisted)).To(Succeed())
+			Expect(persisted.Finalizers).NotTo(ContainElement(osacComputeInstanceFinalizer))
+			Expect(persisted.Finalizers).To(ContainElement(osacComputeInstanceFeedbackFinalizer))
+		})
+	})
+
 	Context("management-state unmanaged with deletion", func() {
 		const namespaceName = "default"
 		const tenantName = "test-tenant-unmanaged"
@@ -233,11 +312,143 @@ var _ = Describe("ComputeInstance Controller", func() {
 			}})
 			Expect(err).NotTo(HaveOccurred())
 
+			Eventually(func(g Gomega) {
+				ci := &osacv1alpha1.ComputeInstance{}
+				g.Expect(controllerReconciler.Get(ctx, key, ci)).To(Succeed())
+				g.Expect(ci.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseDeleting))
+				g.Expect(ci.Finalizers).To(ContainElement(osacComputeInstanceFinalizer))
+			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+
+			_, err = controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: key,
+			}})
+			Expect(err).NotTo(HaveOccurred())
+
 			Eventually(func() bool {
 				return errors.IsNotFound(k8sClient.Get(ctx, key, &osacv1alpha1.ComputeInstance{}))
 			}, 5*time.Second, 100*time.Millisecond).Should(BeTrue())
 
 			deleteTenantInNamespace(ctx, namespaceName, tenantName)
+		})
+	})
+
+	Context("recordRunningConfig", func() {
+		// runningInstance builds a ComputeInstance whose CR reports the labeled type
+		// running: phase Running, configuration applied, and a RestartRequired
+		// condition the caller controls.
+		runningInstance := func(restart metav1.ConditionStatus, present bool) *osacv1alpha1.ComputeInstance {
+			instance := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						osacComputeInstanceTypeNameLabel: "standard-8-32",
+					},
+				},
+			}
+			if present {
+				instance.Status.Conditions = []metav1.Condition{{
+					Type:               string(osacv1alpha1.ComputeInstanceConditionRestartRequired),
+					Status:             restart,
+					Reason:             "AsExpected",
+					LastTransitionTime: metav1.NewTime(time.Now().UTC()),
+				}}
+			}
+			instance.Status.Conditions = append(instance.Status.Conditions, metav1.Condition{
+				Type:               string(osacv1alpha1.ComputeInstanceConditionConfigurationApplied),
+				Status:             metav1.ConditionTrue,
+				Reason:             "AsExpected",
+				LastTransitionTime: metav1.NewTime(time.Now().UTC()),
+			})
+			instance.Status.Phase = osacv1alpha1.ComputeInstancePhaseRunning
+			return instance
+		}
+
+		steadyState := func(instance *osacv1alpha1.ComputeInstance) *osacv1alpha1.ComputeInstance {
+			version, err := provisioning.ComputeDesiredConfigVersion(instance.Spec)
+			Expect(err).ToNot(HaveOccurred())
+			instance.Status.DesiredConfigVersion = version
+			instance.Status.RunningConfigVersion = version
+			instance.Status.RunningInstanceTypeName = instance.Labels[osacComputeInstanceTypeNameLabel]
+			since := metav1.NewTime(time.Now().Add(-time.Hour).UTC())
+			instance.Status.RunningConfigSince = &since
+			return instance
+		}
+
+		It("records when the restart condition is explicitly false", func() {
+			instance := steadyState(runningInstance(metav1.ConditionFalse, true))
+			instance.Status.RunningConfigVersion = ""
+			instance.Status.RunningInstanceTypeName = ""
+			instance.Status.RunningConfigSince = nil
+
+			recordRunningConfig(instance)
+
+			Expect(instance.Status.RunningConfigVersion).To(Equal(instance.Status.DesiredConfigVersion))
+			Expect(instance.Status.RunningInstanceTypeName).To(Equal("standard-8-32"))
+			Expect(instance.Status.RunningConfigSince).ToNot(BeNil())
+		})
+
+		It("does not record when the restart condition is absent", func() {
+			// KubeVirt reports RestartRequired asynchronously: an absent condition
+			// vouches for nothing, so no observation is recorded yet.
+			instance := runningInstance("", false)
+			instance.Status.RunningConfigVersion = ""
+			instance.Status.RunningInstanceTypeName = ""
+			instance.Status.RunningConfigSince = nil
+
+			recordRunningConfig(instance)
+
+			Expect(instance.Status.RunningConfigVersion).To(BeEmpty())
+			Expect(instance.Status.RunningInstanceTypeName).To(BeEmpty())
+			Expect(instance.Status.RunningConfigSince).To(BeNil())
+		})
+
+		It("does not record when the restart condition is unknown", func() {
+			instance := runningInstance(metav1.ConditionUnknown, true)
+			instance.Status.RunningConfigVersion = ""
+			instance.Status.RunningInstanceTypeName = ""
+			instance.Status.RunningConfigSince = nil
+
+			recordRunningConfig(instance)
+
+			Expect(instance.Status.RunningConfigVersion).To(BeEmpty())
+			Expect(instance.Status.RunningConfigSince).To(BeNil())
+		})
+
+		It("clears the observation when a restart is required", func() {
+			// The observation predates the restart and cannot vouch for the
+			// configuration that runs after it.
+			instance := steadyState(runningInstance(metav1.ConditionTrue, true))
+
+			recordRunningConfig(instance)
+
+			Expect(instance.Status.RunningConfigVersion).To(BeEmpty())
+			Expect(instance.Status.RunningInstanceTypeName).To(BeEmpty())
+			Expect(instance.Status.RunningConfigSince).To(BeNil())
+		})
+
+		It("keeps the recorded time in the steady state", func() {
+			instance := steadyState(runningInstance(metav1.ConditionFalse, true))
+			before := *instance.Status.RunningConfigSince
+
+			recordRunningConfig(instance)
+
+			Expect(instance.Status.RunningConfigSince.Time).To(Equal(before.Time))
+		})
+
+		It("moves the stamp on a name-only resize with identical resources", func() {
+			// Two instance types with identical resources hash to the same config
+			// version: only the recorded name distinguishes them, so a resize
+			// between them must still move the stamp.
+			instance := steadyState(runningInstance(metav1.ConditionFalse, true))
+			oldSince := *instance.Status.RunningConfigSince
+			// The reconciler applied the new type: the label moved.
+			instance.Labels[osacComputeInstanceTypeNameLabel] = "standard-8-32-compatible"
+			// ...but the resources are identical, so the config version is unchanged.
+
+			recordRunningConfig(instance)
+
+			Expect(instance.Status.RunningConfigVersion).To(Equal(instance.Status.DesiredConfigVersion))
+			Expect(instance.Status.RunningInstanceTypeName).To(Equal("standard-8-32-compatible"))
+			Expect(instance.Status.RunningConfigSince.Time).To(BeTemporally(">", oldSince.Time))
 		})
 	})
 
@@ -385,7 +596,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 	})
 
-	Context("getFirstVMIIPAddress", func() {
+	Context("getDefaultVMIIPAddress", func() {
 		var reconciler *ComputeInstanceReconciler
 		ctx := context.Background()
 
@@ -393,7 +604,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			reconciler = NewComputeInstanceReconciler(testMcManager, "", "", "", &mockProvisioningProvider{}, 0, 0, mcmanager.LocalCluster)
 		})
 
-		It("returns the first interface IP from the VMI status", func() {
+		It("returns the default network IP even when another interface appears first", func() {
 			const wantIP = "10.0.0.42"
 			vmi := &kubevirtv1.VirtualMachineInstance{
 				ObjectMeta: metav1.ObjectMeta{
@@ -402,8 +613,8 @@ var _ = Describe("ComputeInstance Controller", func() {
 				},
 				Status: kubevirtv1.VirtualMachineInstanceStatus{
 					Interfaces: []kubevirtv1.VirtualMachineInstanceNetworkInterface{
-						{IP: wantIP, Name: "default"},
 						{IP: "10.0.0.43", Name: "ignored"},
+						{IP: wantIP, Name: "default"},
 					},
 				},
 			}
@@ -414,13 +625,282 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 			targetClient, err := getTargetClient(ctx, reconciler.mgr, reconciler.targetCluster)
 			Expect(err).NotTo(HaveOccurred())
+			expectVMIStatusInTargetCache(ctx, targetClient, vmi)
 
-			ip := reconciler.getFirstVMIIPAddress(ctx, targetClient, vmi.Namespace, vmi.Name)
+			ip := reconciler.getDefaultVMIIPAddress(ctx, targetClient, vmi.Namespace, vmi.Name)
 			Expect(ip).To(Equal(wantIP))
+		})
+
+		It("returns no IP when the default network has no address", func() {
+			vmi := &kubevirtv1.VirtualMachineInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-vmi-ip-without-default",
+					Namespace: "default",
+				},
+				Status: kubevirtv1.VirtualMachineInstanceStatus{
+					Interfaces: []kubevirtv1.VirtualMachineInstanceNetworkInterface{
+						{IP: "192.0.2.7", Name: "unrelated"},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, vmi)).To(Succeed())
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, vmi)
+			})
+
+			targetClient, err := getTargetClient(ctx, reconciler.mgr, reconciler.targetCluster)
+			Expect(err).NotTo(HaveOccurred())
+			expectVMIStatusInTargetCache(ctx, targetClient, vmi)
+
+			ip := reconciler.getDefaultVMIIPAddress(ctx, targetClient, vmi.Namespace, vmi.Name)
+			Expect(ip).To(BeEmpty())
+		})
+	})
+
+	Context("handleKubeVirtVM network attachment status", func() {
+		ctx := context.Background()
+
+		It("reports the default interface IP with the referenced Subnet ID", func() {
+			const (
+				subnetName = "ci-status-subnet"
+				subnetID   = "subnet-id-123"
+				targetNS   = subnetName
+				vmiName    = "ci-status-vmi"
+				wantIP     = "10.0.0.42"
+			)
+			subnet := &osacv1alpha1.Subnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      subnetName,
+					Namespace: "default",
+					Labels:    map[string]string{osacSubnetIDLabel: subnetID},
+				},
+				Spec: osacv1alpha1.SubnetSpec{
+					VirtualNetwork: "ci-status-vnet",
+					IPv4CIDR:       "10.0.0.0/24",
+				},
+			}
+			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, subnet) })
+
+			targetNamespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: targetNS}}
+			Expect(k8sClient.Create(ctx, targetNamespace)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, targetNamespace) })
+
+			reconciler := NewComputeInstanceReconciler(testMcManager, "", "", "", &mockProvisioningProvider{}, 0, 0, mcmanager.LocalCluster)
+			targetClient, err := getTargetClient(ctx, reconciler.mgr, reconciler.targetCluster)
+			Expect(err).NotTo(HaveOccurred())
+
+			vmi := &kubevirtv1.VirtualMachineInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: vmiName, Namespace: targetNS},
+				Status: kubevirtv1.VirtualMachineInstanceStatus{
+					Interfaces: []kubevirtv1.VirtualMachineInstanceNetworkInterface{
+						{IP: "192.0.2.7", Name: "unrelated"},
+						{IP: wantIP, Name: "default"},
+					},
+				},
+			}
+			Expect(targetClient.Create(ctx, vmi)).To(Succeed())
+			DeferCleanup(func() { _ = targetClient.Delete(ctx, vmi) })
+			expectVMIStatusInTargetCache(ctx, targetClient, vmi)
+
+			instance := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: "ci-status-test", Namespace: "default"},
+				Spec: osacv1alpha1.ComputeInstanceSpec{
+					NetworkAttachments: []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: subnetName}},
+				},
+			}
+			vm := &kubevirtv1.VirtualMachine{
+				ObjectMeta: metav1.ObjectMeta{Name: vmiName, Namespace: targetNS},
+				Status: kubevirtv1.VirtualMachineStatus{
+					PrintableStatus: kubevirtv1.VirtualMachineStatusRunning,
+					Conditions: []kubevirtv1.VirtualMachineCondition{{
+						Type: kubevirtv1.VirtualMachineReady, Status: corev1.ConditionTrue,
+					}},
+				},
+			}
+
+			Expect(reconciler.handleKubeVirtVM(ctx, targetClient, instance, vm)).To(Succeed())
+			Expect(instance.Status.IPAddress).To(Equal(wantIP))
+			Expect(instance.Status.ComputeNetworkAttachmentStatuses).To(Equal([]osacv1alpha1.ComputeNetworkAttachmentStatus{{
+				SubnetRef: subnetID,
+				IPAddress: wantIP,
+			}}))
+		})
+
+		It("clears attachment status when the default interface IP is outside the Subnet CIDR", func() {
+			const (
+				subnetName = "ci-status-outside-subnet"
+				targetNS   = subnetName
+				vmiName    = "ci-status-outside-vmi"
+			)
+			subnet := &osacv1alpha1.Subnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      subnetName,
+					Namespace: "default",
+					Labels:    map[string]string{osacSubnetIDLabel: "subnet-id-outside"},
+				},
+				Spec: osacv1alpha1.SubnetSpec{
+					VirtualNetwork: "ci-status-vnet",
+					IPv4CIDR:       "10.0.3.0/24",
+				},
+			}
+			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, subnet) })
+
+			namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: targetNS}}
+			Expect(k8sClient.Create(ctx, namespace)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, namespace) })
+
+			reconciler := NewComputeInstanceReconciler(testMcManager, "", "", "", &mockProvisioningProvider{}, 0, 0, mcmanager.LocalCluster)
+			targetClient, err := getTargetClient(ctx, reconciler.mgr, reconciler.targetCluster)
+			Expect(err).NotTo(HaveOccurred())
+			vmi := &kubevirtv1.VirtualMachineInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: vmiName, Namespace: targetNS},
+				Status: kubevirtv1.VirtualMachineInstanceStatus{
+					Interfaces: []kubevirtv1.VirtualMachineInstanceNetworkInterface{{IP: "192.0.2.42", Name: "default"}},
+				},
+			}
+			Expect(targetClient.Create(ctx, vmi)).To(Succeed())
+			DeferCleanup(func() { _ = targetClient.Delete(ctx, vmi) })
+			expectVMIStatusInTargetCache(ctx, targetClient, vmi)
+
+			instance := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: "ci-status-outside-test", Namespace: "default"},
+				Spec:       osacv1alpha1.ComputeInstanceSpec{NetworkAttachments: []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: subnetName}}},
+				Status: osacv1alpha1.ComputeInstanceStatus{
+					IPAddress: "10.0.3.42",
+					ComputeNetworkAttachmentStatuses: []osacv1alpha1.ComputeNetworkAttachmentStatus{{
+						SubnetRef: "subnet-id-outside",
+						IPAddress: "10.0.3.42",
+					}},
+				},
+			}
+			vm := &kubevirtv1.VirtualMachine{
+				ObjectMeta: metav1.ObjectMeta{Name: vmiName, Namespace: targetNS},
+				Status: kubevirtv1.VirtualMachineStatus{
+					PrintableStatus: kubevirtv1.VirtualMachineStatusRunning,
+					Conditions: []kubevirtv1.VirtualMachineCondition{{
+						Type: kubevirtv1.VirtualMachineReady, Status: corev1.ConditionTrue,
+					}},
+				},
+			}
+
+			Expect(reconciler.handleKubeVirtVM(ctx, targetClient, instance, vm)).To(Succeed())
+			Expect(instance.Status.IPAddress).To(BeEmpty())
+			Expect(instance.Status.ComputeNetworkAttachmentStatuses).To(BeEmpty())
+		})
+
+		It("does not report an attachment status when the Subnet ID is missing", func() {
+			const (
+				subnetName = "ci-status-missing-id-subnet"
+				targetNS   = subnetName
+				vmiName    = "ci-status-missing-id-vmi"
+			)
+			subnet := &osacv1alpha1.Subnet{
+				ObjectMeta: metav1.ObjectMeta{Name: subnetName, Namespace: "default"},
+				Spec:       osacv1alpha1.SubnetSpec{VirtualNetwork: "ci-status-vnet", IPv4CIDR: "10.0.2.0/24"},
+			}
+			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, subnet) })
+
+			namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: targetNS}}
+			Expect(k8sClient.Create(ctx, namespace)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, namespace) })
+
+			reconciler := NewComputeInstanceReconciler(testMcManager, "", "", "", &mockProvisioningProvider{}, 0, 0, mcmanager.LocalCluster)
+			targetClient, err := getTargetClient(ctx, reconciler.mgr, reconciler.targetCluster)
+			Expect(err).NotTo(HaveOccurred())
+			vmi := &kubevirtv1.VirtualMachineInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: vmiName, Namespace: targetNS},
+				Status: kubevirtv1.VirtualMachineInstanceStatus{
+					Interfaces: []kubevirtv1.VirtualMachineInstanceNetworkInterface{{IP: "10.0.2.42", Name: "default"}},
+				},
+			}
+			Expect(targetClient.Create(ctx, vmi)).To(Succeed())
+			DeferCleanup(func() { _ = targetClient.Delete(ctx, vmi) })
+			expectVMIStatusInTargetCache(ctx, targetClient, vmi)
+
+			instance := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: "ci-status-missing-id-test", Namespace: "default"},
+				Spec:       osacv1alpha1.ComputeInstanceSpec{NetworkAttachments: []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: subnetName}}},
+			}
+			vm := &kubevirtv1.VirtualMachine{
+				ObjectMeta: metav1.ObjectMeta{Name: vmiName, Namespace: targetNS},
+				Status: kubevirtv1.VirtualMachineStatus{
+					PrintableStatus: kubevirtv1.VirtualMachineStatusRunning,
+					Conditions:      []kubevirtv1.VirtualMachineCondition{{Type: kubevirtv1.VirtualMachineReady, Status: corev1.ConditionTrue}},
+				},
+			}
+
+			err = reconciler.handleKubeVirtVM(ctx, targetClient, instance, vm)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring(osacSubnetIDLabel))
+			Expect(instance.Status.ComputeNetworkAttachmentStatuses).To(BeEmpty())
+		})
+
+		It("does not report an attachment status without a default interface IP", func() {
+			const (
+				subnetName = "ci-status-empty-subnet"
+				targetNS   = subnetName
+				vmiName    = "ci-status-empty-vmi"
+			)
+			subnet := &osacv1alpha1.Subnet{
+				ObjectMeta: metav1.ObjectMeta{Name: subnetName, Namespace: "default", Labels: map[string]string{osacSubnetIDLabel: "subnet-id-empty"}},
+				Spec:       osacv1alpha1.SubnetSpec{VirtualNetwork: "ci-status-vnet", IPv4CIDR: "10.0.1.0/24"},
+			}
+			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, subnet) })
+
+			namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: targetNS}}
+			Expect(k8sClient.Create(ctx, namespace)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, namespace) })
+
+			reconciler := NewComputeInstanceReconciler(testMcManager, "", "", "", &mockProvisioningProvider{}, 0, 0, mcmanager.LocalCluster)
+			targetClient, err := getTargetClient(ctx, reconciler.mgr, reconciler.targetCluster)
+			Expect(err).NotTo(HaveOccurred())
+			vmi := &kubevirtv1.VirtualMachineInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: vmiName, Namespace: targetNS},
+				Status:     kubevirtv1.VirtualMachineInstanceStatus{Interfaces: []kubevirtv1.VirtualMachineInstanceNetworkInterface{{IP: "192.0.2.8", Name: "unrelated"}}},
+			}
+			Expect(targetClient.Create(ctx, vmi)).To(Succeed())
+			DeferCleanup(func() { _ = targetClient.Delete(ctx, vmi) })
+			expectVMIStatusInTargetCache(ctx, targetClient, vmi)
+
+			instance := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: "ci-status-empty-test", Namespace: "default"},
+				Spec:       osacv1alpha1.ComputeInstanceSpec{NetworkAttachments: []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: subnetName}}},
+				Status: osacv1alpha1.ComputeInstanceStatus{
+					ComputeNetworkAttachmentStatuses: []osacv1alpha1.ComputeNetworkAttachmentStatus{{
+						SubnetRef: "stale-subnet-id",
+						IPAddress: "192.0.2.8",
+					}},
+				},
+			}
+			vm := &kubevirtv1.VirtualMachine{
+				ObjectMeta: metav1.ObjectMeta{Name: vmiName, Namespace: targetNS},
+				Status: kubevirtv1.VirtualMachineStatus{
+					PrintableStatus: kubevirtv1.VirtualMachineStatusRunning,
+					Conditions:      []kubevirtv1.VirtualMachineCondition{{Type: kubevirtv1.VirtualMachineReady, Status: corev1.ConditionTrue}},
+				},
+			}
+
+			Expect(reconciler.handleKubeVirtVM(ctx, targetClient, instance, vm)).To(Succeed())
+			Expect(instance.Status.IPAddress).To(BeEmpty())
+			Expect(instance.Status.ComputeNetworkAttachmentStatuses).To(BeEmpty())
 		})
 	})
 
 	Context("Helper functions", func() {
+		Describe("isCanonicalIPv4AddressInSubnet", func() {
+			It("accepts only canonical IPv4 addresses contained by an IPv4 subnet", func() {
+				Expect(isCanonicalIPv4AddressInSubnet("10.0.3.42", "10.0.3.0/24")).To(BeTrue())
+				Expect(isCanonicalIPv4AddressInSubnet("192.0.2.42", "10.0.3.0/24")).To(BeFalse())
+				Expect(isCanonicalIPv4AddressInSubnet("2001:db8::42", "10.0.3.0/24")).To(BeFalse())
+				Expect(isCanonicalIPv4AddressInSubnet("010.0.3.42", "10.0.3.0/24")).To(BeFalse())
+				Expect(isCanonicalIPv4AddressInSubnet("10.0.3.42", "invalid-cidr")).To(BeFalse())
+			})
+		})
+
 		Describe("computeInstanceTargetNamespace", func() {
 			It("uses the tenant name when status.namespace is unset", func() {
 				tenant := &osacv1alpha1.Tenant{ObjectMeta: metav1.ObjectMeta{Name: "tenant"}}

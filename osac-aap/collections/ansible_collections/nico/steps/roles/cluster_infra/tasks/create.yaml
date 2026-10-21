@@ -187,8 +187,13 @@
           ansible.builtin.set_fact:
             nico_removed_agents: >-
               {{ nico_allocated_agents.resources
-                 | json_query('[?metadata.labels."agent-install.openshift.io/clusterdeployment-namespace"==`null` || metadata.labels."agent-install.openshift.io/clusterdeployment-namespace"==``]')
-                 | json_query('[?contains(`' + (pre_nico_agent_names | default([]) | to_json) + '`, metadata.name)]') }}
+                 | json_query(
+                     '[?metadata.labels."agent-install.openshift.io/clusterdeployment-namespace"==`null` '
+                     ~ '|| metadata.labels."agent-install.openshift.io/clusterdeployment-namespace"==``]'
+                   )
+                 | json_query(
+                     '[?contains(`' ~ (pre_nico_agent_names | default([]) | to_json) ~ '`, metadata.name)]'
+                   ) }}
 
         - name: Extract instance IDs from removed agents
           ansible.builtin.set_fact:

@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/url"
 	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -145,6 +146,9 @@ func (b *PrivateIdentityProvidersServerBuilder) Build() (result *PrivateIdentity
 
 func (s *PrivateIdentityProvidersServer) Create(ctx context.Context,
 	request *privatev1.IdentityProvidersCreateRequest) (response *privatev1.IdentityProvidersCreateResponse, err error) {
+	if err = validateOidcUrls(oidcFrom(request.GetObject())); err != nil {
+		return
+	}
 	if err = s.validateClientSecretSecret(ctx, request.GetObject()); err != nil {
 		return
 	}
@@ -166,18 +170,69 @@ func (s *PrivateIdentityProvidersServer) Get(ctx context.Context,
 
 func (s *PrivateIdentityProvidersServer) Update(ctx context.Context,
 	request *privatev1.IdentityProvidersUpdateRequest) (response *privatev1.IdentityProvidersUpdateResponse, err error) {
-	// Check which fields are being updated.
+	// Single pass through update mask to determine what to validate
+	mask := request.GetUpdateMask()
 	hasClientSecretUpdate := false
 	hasSpecUpdate := false
-	for _, path := range request.GetUpdateMask().GetPaths() {
-		if path == "spec" || path == "spec.oidc" || strings.HasPrefix(path, "spec.oidc.client_secret_secret") {
+	urlFieldsToValidate := []string{} // Start empty
+	validateAllUrls := false
+
+	oidcUrlFields := map[string]bool{
+		"spec.oidc.authorization_url": true,
+		"spec.oidc.token_url":         true,
+		"spec.oidc.issuer":            true,
+		"spec.oidc.user_info_url":     true,
+		"spec.oidc.jwks_url":          true,
+		"spec.oidc.logout_url":        true,
+	}
+
+	for _, path := range mask.GetPaths() {
+		// Check for full spec/oidc replacement
+		if path == "spec" || path == "spec.oidc" {
+			hasClientSecretUpdate = true
+			hasSpecUpdate = true
+			validateAllUrls = true
+			break // No need to continue
+		}
+
+		// Check for client secret update
+		if !hasClientSecretUpdate && strings.HasPrefix(path, "spec.oidc.client_secret_secret") {
 			hasClientSecretUpdate = true
 		}
-		if strings.HasPrefix(path, "spec.") || path == "spec" {
+
+		// Collect URL fields being updated
+		if oidcUrlFields[path] {
+			urlFieldsToValidate = append(urlFieldsToValidate, path)
+		} else {
+			// Check for sub-paths (e.g., "spec.oidc.token_url.something")
+			for field := range oidcUrlFields {
+				if strings.HasPrefix(path, field+".") || strings.HasPrefix(field, path+".") {
+					urlFieldsToValidate = append(urlFieldsToValidate, field)
+					break
+				}
+			}
+		}
+
+		// Check for any spec update
+		if !hasSpecUpdate && (strings.HasPrefix(path, "spec.") || path == "spec") {
 			hasSpecUpdate = true
 		}
 	}
-	// Only validate client secret when the update actually touches it.
+
+	// Validate OIDC URLs if any URL fields are being updated
+	if validateAllUrls || len(urlFieldsToValidate) > 0 {
+		var fieldsToValidate []string
+		if validateAllUrls {
+			fieldsToValidate = nil // nil = validate all
+		} else {
+			fieldsToValidate = urlFieldsToValidate
+		}
+		if err = validateOidcUrlsPartial(oidcFrom(request.GetObject()), fieldsToValidate); err != nil {
+			return
+		}
+	}
+
+	// Validate client secret if needed
 	if hasClientSecretUpdate {
 		if err = s.validateClientSecretSecret(ctx, request.GetObject()); err != nil {
 			return
@@ -218,6 +273,107 @@ func oidcFrom(idp *privatev1.IdentityProvider) *privatev1.OidcConfig {
 		return nil
 	}
 	return idp.GetSpec().GetOidc()
+}
+
+// validateOidcUrls validates all URL fields in an OIDC configuration.
+// Returns an error if any URL is invalid or does not meet security requirements.
+func validateOidcUrls(oidc *privatev1.OidcConfig) error {
+	return validateOidcUrlsPartial(oidc, nil)
+}
+
+// validateOidcUrlsPartial validates OIDC URL fields, optionally limiting validation
+// to specific fields. If fieldsToValidate is nil, all fields are validated (full
+// validation for create or full replacement). If fieldsToValidate is non-nil, only
+// the listed fields are validated (partial update validation).
+func validateOidcUrlsPartial(oidc *privatev1.OidcConfig, fieldsToValidate []string) error {
+	if oidc == nil {
+		return nil
+	}
+
+	// Helper to check if a field should be validated
+	shouldValidate := func(fieldName string) bool {
+		if fieldsToValidate == nil {
+			return true // Validate all fields
+		}
+		for _, f := range fieldsToValidate {
+			if f == fieldName {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Validate required URLs only if they're in the update mask (or validating all)
+	if shouldValidate("spec.oidc.authorization_url") {
+		if err := validateOidcUrl(oidc.GetAuthorizationUrl(), "spec.oidc.authorization_url", true); err != nil {
+			return err
+		}
+	}
+	if shouldValidate("spec.oidc.token_url") {
+		if err := validateOidcUrl(oidc.GetTokenUrl(), "spec.oidc.token_url", true); err != nil {
+			return err
+		}
+	}
+	if shouldValidate("spec.oidc.issuer") {
+		if err := validateOidcUrl(oidc.GetIssuer(), "spec.oidc.issuer", true); err != nil {
+			return err
+		}
+	}
+
+	// Validate optional URLs only if present and in update mask
+	if shouldValidate("spec.oidc.user_info_url") && oidc.HasUserInfoUrl() {
+		if err := validateOidcUrl(oidc.GetUserInfoUrl(), "spec.oidc.user_info_url", false); err != nil {
+			return err
+		}
+	}
+	if shouldValidate("spec.oidc.jwks_url") && oidc.HasJwksUrl() {
+		if err := validateOidcUrl(oidc.GetJwksUrl(), "spec.oidc.jwks_url", false); err != nil {
+			return err
+		}
+	}
+	if shouldValidate("spec.oidc.logout_url") && oidc.HasLogoutUrl() {
+		if err := validateOidcUrl(oidc.GetLogoutUrl(), "spec.oidc.logout_url", false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateOidcUrl validates a single OIDC URL field.
+// It ensures the URL is:
+// - Not empty (if required)
+// - A valid absolute URL
+// - Uses HTTPS scheme (security requirement)
+func validateOidcUrl(urlStr, fieldName string, required bool) error {
+	if urlStr == "" {
+		if required {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument, "%s is required", fieldName)
+		}
+		return nil
+	}
+
+	parsed, err := url.Parse(urlStr)
+	if err != nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "%s must be a valid URL: %v", fieldName, err)
+	}
+
+	if !parsed.IsAbs() {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "%s must be an absolute URL (e.g., https://example.com/path)", fieldName)
+	}
+
+	if parsed.Scheme != "https" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "%s must use HTTPS", fieldName)
+	}
+
+	if parsed.Hostname() == "" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "%s must have a hostname", fieldName)
+	}
+
+	if parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "%s must not contain query or fragment components", fieldName)
+	}
+	return nil
 }
 
 func (s *PrivateIdentityProvidersServer) validateClientSecretSecret(

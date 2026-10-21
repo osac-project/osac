@@ -43,7 +43,13 @@
         that:
           - osac_cluster_templates is defined
           - osac_cluster_templates | length >= 3
-          - osac_cluster_templates | map(attribute='id') | list is superset(['osac.templates.ocp_small', 'osac.templates.ocp_ci_small', 'osac.templates.ocp_4_20_small_nico'])
+          - >-
+            osac_cluster_templates | map(attribute='id') | list
+            is superset([
+              'osac.templates.ocp_small',
+              'osac.templates.ocp_ci_small',
+              'osac.templates.ocp_4_20_small_nico'
+            ])
         fail_msg: >-
           Expected at least 3 cluster templates (ocp_small, ocp_ci_small, ocp_4_20_small_nico).
           Got: {{ osac_cluster_templates | default([]) | map(attribute='id') | list }}

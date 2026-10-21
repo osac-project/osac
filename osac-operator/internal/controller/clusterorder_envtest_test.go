@@ -159,7 +159,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 		Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
 	})
 
-	It("allows zero observed NodePool replicas while requiring a positive desired worker count", func() {
+	It("skips status when observed replicas is zero and rejects zero desired workers", func() {
 		const name = "cluster-order-zero-observed-workers"
 		instance := newTestClusterOrder(name)
 		instance.Spec.NodeRequests = []osacv1alpha1.NodeRequest{{NodeSet: "worker",
@@ -171,12 +171,8 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 
 		pool := readyClusterOrderNodePool("worker", 0)
 		Expect(reconciler.handleNodePool(ctx, instance, &pool)).To(Succeed())
-		Expect(instance.Status.NodeRequests).To(HaveLen(1))
-		Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed(),
-			"a newly created NodePool reports zero observed replicas")
-		stored := getClusterOrder(name)
-		Expect(stored.Spec.NodeRequests[0].NumberOfNodes).To(Equal(1))
-		Expect(stored.Status.NodeRequests[0].NumberOfNodes).To(Equal(0))
+		Expect(instance.Status.NodeRequests).To(BeEmpty(),
+			"zero observed replicas must not create a status entry")
 
 		invalid := newTestClusterOrder("cluster-order-zero-desired-workers")
 		invalid.Spec.NodeRequests = []osacv1alpha1.NodeRequest{{NodeSet: "worker",
@@ -589,6 +585,47 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result2.RequeueAfter).To(BeNumerically(">", result1.RequeueAfter), "second failure should have longer backoff")
 			Expect(result2.RequeueAfter).To(BeNumerically("~", 10*time.Minute, 30*time.Second), "backoff should double the 5-minute gap")
+		})
+	})
+
+	Context("Phase transition time stamping", func() {
+		It("stamps the phase transition time once per phase change", func() {
+			const name = "cluster-order-phase-transition-time"
+			instance := newTestClusterOrder(name)
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			DeferCleanup(func() {
+				Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
+			})
+
+			nn := types.NamespacedName{Name: name, Namespace: clusterOrderTestNamespace}
+			_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+
+			// The first reconcile initializes the empty phase to Progressing and stamps it.
+			instance = getClusterOrder(name)
+			Expect(instance.Status.Phase).To(Equal(osacv1alpha1.ClusterOrderPhaseProgressing))
+			Expect(instance.Status.PhaseTransitionTime).NotTo(BeNil())
+			firstStamp := instance.Status.PhaseTransitionTime.Time
+
+			// A status write that leaves the phase unchanged keeps the stamp.
+			computed := instance.Status.DeepCopy()
+			computed.ApiEndpoint = "192.0.2.10"
+			_, err = reconciler.patchStatusWithRetry(ctx, nn, *computed)
+			Expect(err).NotTo(HaveOccurred())
+			instance = getClusterOrder(name)
+			Expect(instance.Status.ApiEndpoint).To(Equal("192.0.2.10"))
+			Expect(instance.Status.PhaseTransitionTime.Time).To(Equal(firstStamp))
+
+			// A phase change moves it. The CR stores whole seconds, so wait past the
+			// second boundary of the first stamp to make the move observable.
+			time.Sleep(time.Until(firstStamp.Truncate(time.Second).Add(2 * time.Second)))
+			computed = instance.Status.DeepCopy()
+			computed.Phase = osacv1alpha1.ClusterOrderPhaseReady
+			_, err = reconciler.patchStatusWithRetry(ctx, nn, *computed)
+			Expect(err).NotTo(HaveOccurred())
+			instance = getClusterOrder(name)
+			Expect(instance.Status.Phase).To(Equal(osacv1alpha1.ClusterOrderPhaseReady))
+			Expect(instance.Status.PhaseTransitionTime.Time).To(BeTemporally(">", firstStamp))
 		})
 	})
 

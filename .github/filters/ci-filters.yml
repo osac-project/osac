@@ -1,44 +1,25 @@
-# Single source of truth for every dorny/paths-filter pattern used anywhere
-# in this repo's CI. Every consumer keeps its own `dorny/paths-filter` step
-# (GitHub gives no way for one workflow run to read a sibling run's job
-# outputs), but points `filters:` at this file instead of an inline block,
-# and sets `predicate-quantifier: 'every'`.
+# Path filters for CI. This file is the single place that decides which parts
+# of the repository a change touches. The `plan` job of workflows/ci.yml runs
+# dorny/paths-filter over it once per pull request and merge-queue entry, and
+# decides which checks and which E2E suites apply. Workflows that need other
+# questions answered (codeql, component-hooks-smoke, ...) read it the same way.
 #
 # Do not hand-copy a pattern list anywhere else -- add or edit it here once.
-# Phase 0 of the CI-gating rollout plan only adds this file and points
-# jobs-selection.yml at it (still purely informational). Phase 1 migrates
-# the real required-check workflows (check-pull-request.yaml, unit-tests.yml,
-# integration-tests.yml, helm-lint.yaml, build-image.yaml, build-bmf-image.yaml,
-# ansible-lint.yml, darwin-keychain-tests.yml, check-generated-code.yaml) to
-# consume this file too -- NOT done yet, those files still carry their own
-# inline copies today and this file's content must stay byte-for-byte
-# equivalent to them until that migration happens.
 #
-# IMPORTANT for Phase 1: build-image.yaml, build-bmf-image.yaml,
-# ansible-lint.yml, and check-pull-request.yaml currently mix ONE positive
-# pattern with several separate `!component/OWNERS`-style negation ENTRIES,
-# with no `predicate-quantifier: 'every'` set on their own step. Under the
-# default 'someOf' quantifier that's fine (a file matches the filter if it
-# matches ANY entry, so the negations only ever narrow the positive match).
-# But under 'every' (which every consumer of *this* file must set), each
-# negation entry has to be satisfied simultaneously by the SAME candidate
-# file alongside every other entry -- so a positive pattern and its own
-# negations must be combined into ONE brace-alternation entry (as every
-# filter below already is), never left as separate list items. This is
-# exactly the shape of the real, currently-unfixed bug in those four files
-# today (their own separate-entries-under-someOf-default shape means their
-# negations independently OR-match almost every file -- confirmed live,
-# e.g. build-image.yaml's "test" job running on a README-only PR). Fixing
-# it is a real, first-time-ever-correct behavior change for those four
-# files, done together with their Phase 1 migration to this file, not here.
+# Every consumer sets `predicate-quantifier: 'every'`. Under it each list ENTRY
+# of one filter must match the same file, so a positive pattern and its own
+# negations are written as ONE brace-alternation entry plus `!` entries, never
+# as separate alternatives: four disjoint full patterns as separate entries
+# would require a single file to satisfy all of them, which no real file does.
+
+# A change to the CI wiring itself runs everything.
+ci-config:
+  - '{.github/workflows/ci.yml,.github/filters/ci-filters.yml}'
 
 # --- E2E suite classification (vmaas/caas/bmaas) ---------------------------
-# No real per-suite filter exists in e2e-{vmaas,caas,bmaas}-full-install.yml
-# today -- all three currently share one identical, suite-agnostic `code`/
-# `e2e-suite` filter (see the bottom of this file) and always run together.
-# These *-clear filters are the first real per-suite classification, already
-# validated for 5+ days via jobs-selection.yml's informational comment
-# before this file existed. Copied verbatim from that file.
+# The *-clear filters attribute a change to one suite when the path says so
+# (the *-outside-known-safe filters below decide whether a suite is needed at
+# all; see .github/e2e-policy.yml).
 #
 # Each of the three "-clear" filters is ONE brace-alternation pattern, not a
 # flat list of separate alternatives -- with predicate-quantifier: 'every',
@@ -114,7 +95,7 @@ config-yaml-json:
   - '!bare-metal-fulfillment-operator/**'
 
 # Informational only -- CaaS Netris and BMaaS Netris (real EC2/Netris-SDN
-# provisioning, triggered manually via label) aren't wired into any gating
+# provisioning, started by hand or with `/test`) aren't wired into any gating
 # at all. `git grep -il netris` confirms
 # osac-aap/collections/ansible_collections/{netris,agentless_net}/** is the
 # actual Ansible automation those two backends run. tests/e2e/bmaas/regression/
@@ -125,13 +106,10 @@ config-yaml-json:
 netris-relevant:
   - '{osac-aap/collections/ansible_collections/netris/**,osac-aap/collections/ansible_collections/agentless_net/**,tests/e2e/bmaas/regression/networking/**,fulfillment-service/**/*network_class*,proto/**/*network_class*}'
 
-# --- E2E full-install gating (should-run for e2e-{vmaas,caas,bmaas}-full-install.yml) ---
-# Exact copy of e2e-bmaas-full-install.yml's own `code`/`e2e-suite` filters
-# (verified byte-identical across all three e2e-*-full-install.yml files).
-# Deliberately NOT named `code` -- that key above belongs to unit-tests.yml/
-# integration-tests.yml's shorter filter (no test-file exclusions) and has
-# different semantics; reusing the same name here would silently swap in
-# the wrong filter's meaning the moment this file replaced the inline block.
+# --- E2E full-install gating (used by .github/e2e-policy.yml) ---
+# Which changes need an E2E run. Deliberately NOT named `code`: that key
+# belongs to unit-tests.yml/integration-tests.yml and has different semantics
+# (no test-file exclusions).
 e2e-code:
   - '**'
   - '!**/OWNERS'
@@ -164,25 +142,21 @@ e2e-suite:
   - 'tests/e2e/**'
 
 # --- E2E suite "provably irrelevant" allow-lists ---------------------------
-# NEW (not part of jobs-selection.yml's original set). These are the ONLY
-# source that may ever produce a real "skip" decision for an E2E suite (see
-# select-jobs.py's decide()) -- never AI judgment alone, at any confidence.
+# These are the ONLY source that may ever produce a "skip" decision for an E2E
+# suite -- never AI judgment alone, at any confidence.
 #
 # Each raw filter below is named for what it DETECTS: "outside-known-safe"
 # is true when at least one changed file falls OUTSIDE the reviewed set of
 # paths known to be provably irrelevant to that suite. Consumers must INVERT
 # it to get the actual "safe to skip" boolean:
-#   <suite>-exclusive-skip = (filter.outputs.<suite>-outside-known-safe != 'true')
+#   safe to skip = (filter.outputs.<suite>-outside-known-safe != 'true')
 # i.e. "found nothing outside the safe zone" == "safe to skip". This
 # indirection is deliberate: naming the raw filter for what it positively
 # detects (rather than a filter literally called "-exclusive-skip" whose
 # true/false is secretly backwards) avoids exactly the kind of inversion
 # bug that would be catastrophic here -- a flipped sign would turn "skip
 # only when provably safe" into "skip unless provably safe", i.e. skip by
-# default. Get the inversion right at the ONE place it's computed
-# (jobs-selection.yml's `changes` job outputs) and every downstream
-# consumer only ever sees the already-correctly-oriented `exclusive_skip`
-# boolean.
+# default. .github/e2e-policy.yml uses the filters in their positive form.
 #
 # Deliberately conservative -- narrower than it could be, on purpose:
 # - Every e2e-*-full-install.yml suite (vmaas/caas/bmaas) builds and deploys
@@ -254,21 +228,14 @@ bmaas-outside-known-safe:
   - '!tests/e2e/caas/**'
   - '!tools/pr-notify/**'
 
-# --- Every other required-check job category (deterministic-only, no AI) --
-# Mirrors -- as closely as each real workflow's own filter allows -- the
-# actual dorny/paths-filter patterns in unit-tests.yml, integration-tests.yml,
-# helm-lint.yaml, check-generated-code.yaml, check-pull-request.yaml,
-# build-image.yaml, build-bmf-image.yaml, ansible-lint.yml, and
-# darwin-keychain-tests.yml. Where a real filter's own
-# list-of-disjoint-patterns-plus-negations shape would silently break under
-# 'every' (multiple bare positive alternatives requiring the same file to
-# match all of them at once, never true), it's written here as ONE
-# brace-alternation entry instead -- see the Phase 1 note at the top of
-# this file for why the real files themselves aren't fixed yet.
+# --- Every other cheap-check category ------------------------------------
+# One filter (or a few) per check that ci.yml runs: the unit and integration
+# tests (legs of .github/ci-tests.yml, run by tests.yml), helm-lint.yaml, check-generated-code.yaml,
+# check-pull-request.yaml, build-image.yaml, build-bmf-image.yaml,
+# ansible-lint.yml and darwin-keychain-tests.yml.
 
-# Exact copy of unit-tests.yml's/integration-tests.yml's own `code` filter
-# (identical in both real files today) -- the single signal that gates
-# every job in both workflows. Excludes osac-ui/** entirely: unit-tests.yml
+# The `code` filter gates every unit and integration test leg (together with
+# the per-component filters below, which .github/ci-tests.yml names). Excludes osac-ui/** entirely: unit-tests.yml
 # gates its own osac-ui job on the separate `ui` filter below instead, so an
 # osac-ui-only PR runs that job and skips every other job here, rather than
 # falling through to "nothing matched, skip everything".
@@ -290,7 +257,7 @@ code:
 # unit-tests.yml's own `ui` filter -- gates run-osac-ui-tests, which `code`
 # above deliberately excludes.
 ui:
-  - 'osac-ui/**'
+  - '{osac-ui/**,.github/workflows/tests.yml,.github/ci-tests.yml,.github/workflows/osac-ui-lint.yaml,.github/workflows/osac-ui-typecheck.yaml}'
 
 helm-osac-operator:
   - '{osac-operator/api/**,osac-operator/charts/**,osac-operator/config/crd/bases/**,osac-operator/hack/sync-helm-crds.py,osac-operator/Makefile,.github/workflows/helm-lint.yaml}'
@@ -307,11 +274,11 @@ helm-osac-metering:
 helm-osac-installer:
   - '{osac-installer/charts/**,osac-installer/values/**,osac-installer/ct.yaml,osac-installer/Makefile,osac-installer/scripts/test-mce-render.py,.github/workflows/helm-lint.yaml}'
 
-# Exact copy of check-generated-code.yaml's own `proto` filter.
+# Gates check-generated-code.yaml.
 proto-check:
-  - '{proto/**,fulfillment-service/dev/**,fulfillment-service/dev.py,fulfillment-service/cmd/buf-plugin-osac-lint/**}'
+  - '{proto/**,fulfillment-service/dev/**,fulfillment-service/dev.py,fulfillment-service/cmd/buf-plugin-osac-lint/**,.github/workflows/check-generated-code.yaml}'
 
-# Exact copy of check-pull-request.yaml's own `service` filter.
+# Gates check-pull-request.yaml.
 fulfillment-service-checks:
   - '{fulfillment-service/**,.github/workflows/check-pull-request.yaml}'
   - '!fulfillment-service/OWNERS'
@@ -319,7 +286,7 @@ fulfillment-service-checks:
   - '!fulfillment-service/**/*.md'
   - '!fulfillment-service/docs/**'
 
-# Exact copy of build-image.yaml's own `code` filter.
+# Gates build-image.yaml.
 build-osac-operator:
   - '{osac-operator/**,.github/workflows/build-image.yaml}'
   - '!osac-operator/OWNERS'
@@ -327,14 +294,10 @@ build-osac-operator:
   - '!osac-operator/**/*.md'
   - '!osac-operator/docs/**'
 
-# Exact copy of build-bmf-image.yaml's own `code` filter. NOTE: this
-# corrects a gap in jobs-selection.yml's prior mirror of this same filter,
-# which dropped the `.github/workflows/build-bmf-image.yaml` self-reference
-# entirely instead of folding it into the brace-alternation entry (as its
-# own build-osac-operator mirror correctly does above) -- under 'every',
-# leaving it as a second bare positive entry would have made the filter
-# unsatisfiable (no file is both under bare-metal-fulfillment-operator/**
-# AND equal to the workflow file), so it needs the same brace treatment.
+# Gates build-bmf-image.yaml. The workflow file itself is folded into the
+# brace-alternation entry: as a second bare positive entry it would make the
+# filter unsatisfiable under 'every' (no file is both under
+# bare-metal-fulfillment-operator/** and the workflow file).
 build-bare-metal-fulfillment-operator:
   - '{bare-metal-fulfillment-operator/**,.github/workflows/build-bmf-image.yaml}'
   - '!bare-metal-fulfillment-operator/OWNERS'
@@ -342,7 +305,7 @@ build-bare-metal-fulfillment-operator:
   - '!bare-metal-fulfillment-operator/**/*.md'
   - '!bare-metal-fulfillment-operator/docs/**'
 
-# Exact copy of ansible-lint.yml's own `aap` filter.
+# Gates ansible-lint.yml.
 ansible-osac-aap:
   - '{osac-aap/**,.github/workflows/ansible-lint.yml}'
   - '!osac-aap/OWNERS'
@@ -350,16 +313,13 @@ ansible-osac-aap:
   - '!osac-aap/**/*.md'
   - '!osac-aap/docs/**'
 
-# Exact copy of darwin-keychain-tests.yml's own `darwin` filter (a flat
-# list, no negations -- already correct under any quantifier).
+# Gates darwin-keychain-tests.yml (a flat list, no negations).
 darwin-keychain:
   - '{.github/workflows/darwin-keychain-tests.yml,fulfillment-service/internal/config/config_secret_store.go,fulfillment-service/internal/config/config_secret_store_darwin.go,fulfillment-service/internal/config/config_secret_store_darwin_test.go,fulfillment-service/internal/config/config_secret_store_other.go,fulfillment-service/internal/config/config_settings.go,fulfillment-service/internal/config/config_settings_test.go}'
 
 # --- Per-component unit/integration test narrowing -------------------------
-# Sourced verbatim from osac#1054 ("Scope unit/integration test jobs to
-# changed components"), merged 2026-09-16T21:12, reverted ~90min later by
-# #1058 purely to consolidate on jobs-selection.yml first -- not because
-# anything here was wrong. Cross-component edges are real Go module
+# Scopes the unit and integration test jobs to the changed components
+# (osac#1054). Cross-component edges are real Go module
 # dependencies traced from go.work + each component's go.mod
 # require/replace directives, not guesses: fulfillment-service imports
 # bare-metal-fulfillment-operator and osac-operator/api; osac-operator and
@@ -371,17 +331,17 @@ darwin-keychain:
 # graphify ci-select effort: a real dependency silently absent from a
 # filter, causing a false skip.
 #
-# unit-tests.yml consumers:
+# Unit test legs:
 unit-tests-fulfillment-service:
-  - '{fulfillment-service/**,bare-metal-fulfillment-operator/**,osac-operator/api/**,proto/**,go.work,go.work.sum,.github/workflows/unit-tests.yml}'
+  - '{fulfillment-service/**,bare-metal-fulfillment-operator/**,osac-operator/api/**,proto/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
 unit-tests-osac-metering:
-  - '{osac-metering/metering-service/**,osac-metering/schema/**,proto/**,go.work,go.work.sum,.github/workflows/unit-tests.yml}'
+  - '{osac-metering/metering-service/**,osac-metering/schema/**,proto/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
 unit-tests-osac-metering-adapters:
-  - '{osac-metering/adapters/**,osac-metering/schema/**,go.work,go.work.sum,.github/workflows/unit-tests.yml}'
+  - '{osac-metering/adapters/**,osac-metering/schema/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
 unit-tests-osac-metering-schema:
-  - '{osac-metering/schema/**,go.work,go.work.sum,.github/workflows/unit-tests.yml}'
+  - '{osac-metering/schema/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
 
-# integration-tests.yml consumers. osac-installer/** is included on the
+# Integration test legs. osac-installer/** is included on the
 # first three: their jobs all run setup/tests via `make -C osac-installer
 # install-infra`/`make -C osac-installer test`, so an osac-installer-only
 # change (Makefile, infra chart) can break them despite touching none of
@@ -394,13 +354,13 @@ unit-tests-osac-metering-schema:
 # is deliberately left unscoped in the workflow itself -- it deploys the
 # full stack by design -- so no filter for it exists here.
 integration-tests-fulfillment-service:
-  - '{fulfillment-service/**,bare-metal-fulfillment-operator/**,osac-operator/**,proto/**,osac-installer/**,go.work,go.work.sum,.github/workflows/integration-tests.yml}'
+  - '{fulfillment-service/**,bare-metal-fulfillment-operator/**,osac-operator/**,proto/**,osac-installer/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
 integration-tests-osac-operator:
-  - '{osac-operator/**,bare-metal-fulfillment-operator/**,proto/**,osac-installer/**,go.work,go.work.sum,.github/workflows/integration-tests.yml}'
+  - '{osac-operator/**,bare-metal-fulfillment-operator/**,proto/**,osac-installer/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
 integration-tests-bare-metal-fulfillment-operator:
-  - '{bare-metal-fulfillment-operator/**,osac-operator/**,proto/**,osac-installer/**,go.work,go.work.sum,.github/workflows/integration-tests.yml}'
+  - '{bare-metal-fulfillment-operator/**,osac-operator/**,proto/**,osac-installer/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
 integration-tests-osac-aap:
-  - '{osac-aap/**,.github/workflows/integration-tests.yml}'
+  - '{osac-aap/**,.github/workflows/tests.yml,.github/ci-tests.yml}'
 
 # Claude/Codex component-hook smoke coverage. Keep this scoped to the shared
 # component hooks, their registrations, the Codex adapter, and the smoke test

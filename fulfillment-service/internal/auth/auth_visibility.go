@@ -65,6 +65,10 @@ type visibilityRule struct {
 	// granting a parent also grants its descendants, except for the default project (empty string) which only grants
 	// access to itself.
 	projects []string
+
+	// total indicates that the user has access to view all projects in this tenant.
+	// When true, project-level filtering is skipped for this tenant.
+	total bool
 }
 
 // zeroVisibility is a pre-built visibility that grants no access to any tenants or projects.
@@ -148,6 +152,23 @@ func (b *VisibilityBuilder) AddVisibleProjects(tenant string, projects ...string
 	return b
 }
 
+// SetTotal grants access to view all projects in the given tenant.
+// This skips project-level filtering for the specified tenant.
+func (b *VisibilityBuilder) SetTotalProjectVisibility(tenant string) *VisibilityBuilder {
+	for i := range b.rules {
+		if b.rules[i].tenant == tenant {
+			b.rules[i].total = true
+			return b
+		}
+	}
+	b.rules = append(b.rules, visibilityRule{
+		tenant:   tenant,
+		projects: nil,
+		total:    true,
+	})
+	return b
+}
+
 // Build creates a new visibility using the configuration stored in the builder.
 func (b *VisibilityBuilder) Build() (result *Visibility, err error) {
 	// Deep-copy the rules so a reused builder cannot share project backing arrays with the result:
@@ -160,6 +181,7 @@ func (b *VisibilityBuilder) Build() (result *Visibility, err error) {
 		rules[i] = visibilityRule{
 			tenant:   rule.tenant,
 			projects: slices.Clone(rule.projects),
+			total:    rule.total,
 		}
 	}
 	sort.Slice(rules, func(i, j int) bool {
@@ -260,6 +282,9 @@ func (v *Visibility) IsProjectVisible(tenant, project string) bool {
 	if rule == nil {
 		return false
 	}
+	if rule.total {
+		return true
+	}
 	for _, visible := range rule.projects {
 		if project == visible || visibilityCovers(visible, project) {
 			return true
@@ -307,6 +332,23 @@ func (v *Visibility) VisibleProjects(tenant string) []string {
 		}
 	}
 	return nil
+}
+
+// HasTenantAdminAccess reports whether the user has full administrative access to all projects in the given tenant.
+// When true, project-level filtering should be skipped for this tenant.
+func (v *Visibility) HasTenantAdminAccess(tenant string) bool {
+	if v == nil {
+		return false
+	}
+	if v.total {
+		return true
+	}
+	for i := range v.rules {
+		if v.rules[i].tenant == tenant {
+			return v.rules[i].total
+		}
+	}
+	return false
 }
 
 // visibilityCovers reports whether granting visibility of the granted project also implies visibility of the queried

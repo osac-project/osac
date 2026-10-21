@@ -201,7 +201,7 @@ func (s *NATGatewaysServer) Create(ctx context.Context,
 			"Failed to map public NAT gateway to private",
 			slog.Any("error", err),
 		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process NAT gateway")
+		err = publicInputMappingError(err, "failed to process NAT gateway")
 		return
 	}
 

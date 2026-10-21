@@ -107,6 +107,14 @@ class ParentDeletePlaybookTests(unittest.TestCase):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as vars_file:
             json.dump(job_vars, vars_file)
             vars_path = Path(vars_file.name)
+        playbook_env = os.environ.copy()
+        playbook_env.update(
+            {
+                "NETRIS_CONTROLLER_URL": job_vars["netris_controller_url"],
+                "NETRIS_VALIDATE_CERTS": "false",
+                "NETRIS_CA_PATH": "",
+            }
+        )
         try:
             result = subprocess.run(
                 [
@@ -114,7 +122,7 @@ class ParentDeletePlaybookTests(unittest.TestCase):
                     str(OSAC_AAP / playbook), "-e", f"@{vars_path}",
                 ],
                 cwd=OSAC_AAP,
-                env=os.environ.copy(),
+                env=playbook_env,
                 capture_output=True,
                 text=True,
                 timeout=120,

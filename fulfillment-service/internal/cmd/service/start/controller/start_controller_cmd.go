@@ -498,7 +498,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		SetName("compute-instance").
 		SetClient(r.client).
 		SetFunction(computeInstanceReconcilerFunction).
-		SetEventFilter("has(event.compute_instance) || (has(event.hub) && event.type == EVENT_TYPE_OBJECT_CREATED)").
+		SetEventFilter("has(event.compute_instance) || has(event.external_ip) || has(event.external_ip_attachment) || (has(event.hub) && event.type == EVENT_TYPE_OBJECT_CREATED)").
 		SetHealthReporter(healthAggregator).
 		Build()
 	if err != nil {

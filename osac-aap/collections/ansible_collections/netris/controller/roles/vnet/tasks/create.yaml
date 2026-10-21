@@ -5,7 +5,7 @@
   when: netris_session_cookie is not defined
 
 - name: Get existing V-Nets
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/vnet"
     method: GET
     headers:
@@ -20,17 +20,14 @@
 
 - name: Find V-Net by name
   ansible.builtin.set_fact:
-    _existing_vnet: >-
-      {{ (_vnet_list_resp.json.data | default([]))
-         | selectattr('name', 'equalto', vnet_name)
-         | list | first | default(none) }}
+    _existing_vnet: "{{ (_vnet_list_resp.json.data | default([])) | selectattr('name', 'equalto', vnet_name) | list | first | default({}) }}"
   when: _vnet_list_resp.json is mapping
 
 - name: Set V-Net facts from existing V-Net (skip creation)
   ansible.builtin.set_fact:
     vnet_id: "{{ _existing_vnet.id }}"
     vnet_already_existed: true
-  when: _existing_vnet is defined and _existing_vnet is not none
+  when: _existing_vnet | length > 0
 
 - name: Build V-Net body
   ansible.builtin.set_fact:
@@ -44,14 +41,14 @@
       vlan: "{{ vnet_vlan_id | default('auto') }}"
       tenant:
         id: "{{ vnet_tenant_id }}"
-  when: _existing_vnet is not defined or _existing_vnet is none
+  when: _existing_vnet | length == 0
 
 - name: Build gateway entry
   ansible.builtin.set_fact:
     _gw_entry:
       prefix: "{{ vnet_gateway }}"
   when:
-    - _existing_vnet is not defined or _existing_vnet is none
+    - _existing_vnet | length == 0
     - vnet_gateway is defined
 
 - name: Add DHCP to gateway entry
@@ -63,7 +60,7 @@
         'dhcpEndIp': vnet_dhcp_end_ip
       }) }}
   when:
-    - _existing_vnet is not defined or _existing_vnet is none
+    - _existing_vnet | length == 0
     - vnet_gateway is defined
     - vnet_dhcp_enabled | default(false) | bool
     - vnet_dhcp_start_ip is defined
@@ -76,7 +73,7 @@
         'gateways': [_gw_entry]
       }) }}
   when:
-    - _existing_vnet is not defined or _existing_vnet is none
+    - _existing_vnet | length == 0
     - vnet_gateway is defined
 
 - name: Add ports to V-Net body
@@ -86,11 +83,11 @@
         'ports': vnet_ports
       }) }}
   when:
-    - _existing_vnet is not defined or _existing_vnet is none
+    - _existing_vnet | length == 0
     - vnet_ports is defined
 
 - name: Create V-Net
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/vnet"
     method: POST
     headers:
@@ -104,7 +101,7 @@
     validate_certs: "{{ netris_validate_certs | default(true) }}"
     ca_path: "{{ netris_ca_path | default(omit, true) }}"
   register: _vnet_create_resp
-  when: _existing_vnet is not defined or _existing_vnet is none
+  when: _existing_vnet | length == 0
   no_log: true
 
 - name: Set V-Net facts from create response
@@ -112,7 +109,7 @@
     vnet_id: "{{ _vnet_create_resp.json.data.id | default(_vnet_create_resp.json.data) }}"
     vnet_already_existed: false
   when:
-    - _existing_vnet is not defined or _existing_vnet is none
+    - _existing_vnet | length == 0
     - _vnet_create_resp is not skipped
     - _vnet_create_resp is changed or (_vnet_create_resp.status | default(0)) in [200, 201]
     - _vnet_create_resp.json is mapping

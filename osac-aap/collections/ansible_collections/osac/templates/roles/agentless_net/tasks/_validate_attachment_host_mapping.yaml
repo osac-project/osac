@@ -1,0 +1,19 @@
+---
+- name: Validate AgentlessNet host mapping interfaces
+  ansible.builtin.assert:
+    that:
+      - _agentless_net_host_mapping.value is mapping
+      - _agentless_net_host_mapping.value | length > 0
+      - >-
+        (_agentless_net_host_mapping.value | dict2items
+         | selectattr('key', 'match', '^[A-Za-z0-9_.-]{1,15}$') | list | length)
+        == (_agentless_net_host_mapping.value | length)
+    fail_msg: AgentlessNet host-port inventory contains an invalid host or interface mapping.
+  no_log: true
+
+- name: Validate every mapped AgentlessNet interface
+  ansible.builtin.include_tasks: _validate_attachment_interface_mapping.yaml
+  loop: "{{ _agentless_net_host_mapping.value | dict2items }}"
+  loop_control:
+    loop_var: _agentless_net_interface_mapping
+    label: "{{ _agentless_net_host_mapping.key }}/{{ _agentless_net_interface_mapping.key }}"

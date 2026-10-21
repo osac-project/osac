@@ -125,14 +125,14 @@ func (r *Reconciler) resolveWorkerCreationInputs(
 // unrelated event. A prerequisite wait/error is reported without created so the
 // caller can still converge teardown, Agents and NodePool replicas.
 func (r *Reconciler) reconcileWorkerCreation(
-	ctx context.Context, co *v1alpha1.ClusterOrder, tenant string, observed *workerObservation, infra infraEnvEvidence,
+	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster, observed *workerObservation, infra infraEnvEvidence,
 ) (bool, ctrl.Result, error) {
 	if _, prev := selectDueSlot(co, time.Now()); prev == nil && !workerCreationDue(co) {
 		res, err := r.refreshWorkerReadiness(ctx, co, infra)
 		if err != nil || !res.IsZero() {
 			return false, res, err
 		}
-		res, err = r.reconcileDueWorkerCreation(ctx, co, tenant, workerCreationInputs{}, observed)
+		res, err = r.reconcileDueWorkerCreation(ctx, co, cluster, workerCreationInputs{}, observed)
 		return false, res, err
 	}
 	expected := co.DeepCopy()
@@ -148,7 +148,7 @@ func (r *Reconciler) reconcileWorkerCreation(
 	if !sameCapacityPlan(expected, co) {
 		return false, ctrl.Result{}, errWorkerObservationChanged
 	}
-	return r.reconcileDueWorkerCapacity(ctx, co, tenant, inputs, observed)
+	return r.reconcileDueWorkerCapacity(ctx, co, cluster, inputs, observed)
 }
 
 // refreshWorkerReadiness reports current discovery-ignition evidence for an
@@ -188,7 +188,7 @@ func workerCreationDue(co *v1alpha1.ClusterOrder) bool {
 // selected slot using already resolved inputs. A durable reservation is itself a
 // status mutation, so it ends the invocation before any external create.
 func (r *Reconciler) reconcileDueWorkerCapacity(
-	ctx context.Context, co *v1alpha1.ClusterOrder, tenant string,
+	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster,
 	inputs workerCreationInputs, observed *workerObservation,
 ) (bool, ctrl.Result, error) {
 	added, err := r.reserveWorkerSlots(ctx, co)
@@ -200,10 +200,10 @@ func (r *Reconciler) reconcileDueWorkerCapacity(
 	}
 	nr, prev := selectDueSlot(co, time.Now())
 	if prev == nil {
-		res, err := r.reconcileDueWorkerCreation(ctx, co, tenant, inputs, observed)
+		res, err := r.reconcileDueWorkerCreation(ctx, co, cluster, inputs, observed)
 		return false, res, err
 	}
-	res, err := r.createSelectedWorker(ctx, co, tenant, nr, prev, inputs, observed)
+	res, err := r.createSelectedWorker(ctx, co, cluster, nr, prev, inputs, observed)
 	return true, res, err
 }
 
@@ -211,7 +211,7 @@ func (r *Reconciler) reconcileDueWorkerCapacity(
 // resolved inputs. Without a due slot it only revalidates the capacity plan and
 // clears a recovered fulfillment-service condition.
 func (r *Reconciler) reconcileDueWorkerCreation(
-	ctx context.Context, co *v1alpha1.ClusterOrder, tenant string,
+	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster,
 	inputs workerCreationInputs, observed *workerObservation,
 ) (ctrl.Result, error) {
 	nr, prev := selectDueSlot(co, time.Now())
@@ -227,7 +227,7 @@ func (r *Reconciler) reconcileDueWorkerCreation(
 		}
 		return ctrl.Result{}, nil
 	}
-	return r.createSelectedWorker(ctx, co, tenant, nr, prev, inputs, observed)
+	return r.createSelectedWorker(ctx, co, cluster, nr, prev, inputs, observed)
 }
 
 // selectDueSlot returns the first slot that may create or retry a BMI in
@@ -256,7 +256,7 @@ func selectDueSlot(co *v1alpha1.ClusterOrder, now time.Time) (*v1alpha1.NodeRequ
 // selected slot and persists its identity before returning. It is the only stage
 // that consumes image and ignition bytes.
 func (r *Reconciler) createSelectedWorker(
-	ctx context.Context, co *v1alpha1.ClusterOrder, tenant string,
+	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster,
 	nr *v1alpha1.NodeRequest, prev *v1alpha1.WorkerStatus,
 	inputs workerCreationInputs, observed *workerObservation,
 ) (ctrl.Result, error) {
@@ -291,10 +291,10 @@ func (r *Reconciler) createSelectedWorker(
 		return ctrl.Result{}, err
 	}
 	if prev.Phase == workerPhaseFailed {
-		res, err = r.retryFailedWorker(ctx, co, tenant, nr, prev, inputs.image, string(inputs.ignition), filter, fabricInterface)
+		res, err = r.retryFailedWorker(ctx, co, cluster, nr, prev, inputs.image, string(inputs.ignition), filter, fabricInterface)
 	} else {
 		var ws v1alpha1.WorkerStatus
-		ws, res, err = r.ensureWorkerBMI(ctx, co, tenant, nr, prev.BareMetalInstance.Name, observed,
+		ws, res, err = r.ensureWorkerBMI(ctx, co, cluster, nr, prev.BareMetalInstance.Name, observed,
 			inputs.image, string(inputs.ignition), filter, fabricInterface)
 		if err == nil && res.IsZero() {
 			workerCreated(prev, ws.BareMetalInstance.Name, ws.BareMetalInstance.ID)
@@ -405,12 +405,13 @@ func allocateMissingWorkerSlots(co *v1alpha1.ClusterOrder) error {
 // acknowledgement. Ownership and ambiguity checks use the canonical observation
 // index instead of duplicating a second name view.
 func (r *Reconciler) ensureWorkerBMI(
-	ctx context.Context, co *v1alpha1.ClusterOrder, tenant string,
+	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster,
 	nr *v1alpha1.NodeRequest, workerName string,
 	observed *workerObservation,
 	image *privatev1.DiskImageReference, ignitionRaw, filter, fabricInterface string,
 ) (v1alpha1.WorkerStatus, ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
+	tenant := cluster.GetMetadata().GetTenant()
 	bmi, nameErr := observed.exactOwnedName(co, tenant, workerName)
 	if nameErr != nil {
 		return v1alpha1.WorkerStatus{}, ctrl.Result{}, r.rejectWorkerIdentity(co, nameErr.Error())
@@ -422,7 +423,7 @@ func (r *Reconciler) ensureWorkerBMI(
 		log.Info("worker BMI already exists, skipping create", "name", workerName)
 		return newWorkerStatus(nr.NodeSet, nr.BareMetal.InstanceType, workerName, bmi.GetId(), workerPhaseWaitingForAgent), ctrl.Result{}, nil
 	}
-	bmi, res, err := r.ensureBMI(ctx, co, tenant, *nr, workerName, image, ignitionRaw, filter, fabricInterface)
+	bmi, res, err := r.ensureBMI(ctx, co, cluster, *nr, workerName, image, ignitionRaw, filter, fabricInterface)
 	if err != nil || !res.IsZero() {
 		return v1alpha1.WorkerStatus{}, res, err
 	}

@@ -101,6 +101,13 @@ func ConvertDAOErrorToGRPC(err error, operation string, objectID string) error {
 		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "%s", inUseErr.Error())
 	}
 
+	// Metering source contract violations. Only buggy writers or direct SQL can produce
+	// them, but they must not surface as Internal.
+	var meteringErr *dao.ErrMetering
+	if errors.As(err, &meteringErr) {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "%s", meteringErr.Error())
+	}
+
 	// Validation errors
 	var validationErr *dao.ErrValidation
 	if errors.As(err, &validationErr) {

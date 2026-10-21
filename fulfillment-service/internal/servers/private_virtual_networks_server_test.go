@@ -23,6 +23,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
@@ -1087,6 +1088,39 @@ var _ = Describe("Private virtual networks server", func() {
 				Expect(updated.GetSpec().GetIpv4Cidr()).To(Equal("10.0.0.0/16"))
 			})
 		})
+
+		Context("Metadata tenant immutability on Update", func() {
+			It("rejects moving a stored VirtualNetwork into a reserved tenant and preserves the stored object", func() {
+				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
+				createResponse, err := server.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
+					Object: privatev1.VirtualNetwork_builder{
+						Metadata: privatev1.Metadata_builder{Name: "tenant-immutable-vn", Tenant: testTenant}.Build(),
+						Spec: privatev1.VirtualNetworkSpec_builder{
+							NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
+							Region:       "us-west-1",
+							Ipv4Cidr:     new("10.0.0.0/16"),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				id := createResponse.GetObject().GetId()
+
+				_, err = server.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
+					Object: privatev1.VirtualNetwork_builder{
+						Id:       id,
+						Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.tenant"}},
+				}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
+				Expect(err.Error()).To(ContainSubstring("objects cannot be placed in the 'shared' tenant"))
+
+				stored, getErr := server.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
+				Expect(getErr).ToNot(HaveOccurred())
+				Expect(stored.GetObject().GetMetadata().GetTenant()).To(Equal(testTenant))
+				Expect(stored.GetObject().GetSpec().GetIpv4Cidr()).To(Equal("10.0.0.0/16"))
+			})
+		})
 	})
 
 	Describe("GenericDAO VirtualNetwork operations", func() {
@@ -1834,6 +1868,54 @@ var _ = Describe("Private virtual networks server", func() {
 			getResp, err := vnServer.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: object.GetId()}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(getResp.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("osac.openshift.io/default", "true"))
+		})
+
+		// Regression: OSAC-6544 — VN cleanup times out when a controller
+		// finalizer prevents archival after Delete.
+		It("remains retrievable after Delete when a finalizer is present and archives on finalizer removal", func() {
+			vn := createVirtualNetwork()
+			id := vn.GetId()
+
+			// Simulate the controller adding its finalizer.
+			tx, err := database.TxFromContext(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = tx.Exec(ctx,
+				`update virtual_networks set finalizers = '{"fulfillment-controller"}' where id = $1`, id)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Delete sets deletion_timestamp but does not archive.
+			_, err = vnServer.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			// Get still succeeds — the VN is soft-deleted.
+			getResp, err := vnServer.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResp.GetObject().GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
+			Expect(getResp.GetObject().GetMetadata().GetFinalizers()).To(
+				ContainElement("fulfillment-controller"))
+
+			// Signal succeeds on the soft-deleted object.
+			_, err = vnServer.Signal(ctx,
+				privatev1.VirtualNetworksSignalRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			// Simulate the reconciler clearing the finalizer.
+			vn = getResp.GetObject()
+			vn.GetMetadata().SetFinalizers(nil)
+			_, err = vnServer.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
+				Object: vn,
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"metadata.finalizers"},
+				},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			// After the finalizer is removed the object is archived;
+			// Get now returns NotFound.
+			_, err = vnServer.Get(ctx,
+				privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
+			Expect(err).To(HaveOccurred())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
 		})
 	})
 })

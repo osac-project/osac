@@ -32,6 +32,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/computeinstancespec"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/utils"
@@ -378,6 +379,9 @@ func (s *PrivateComputeInstancesServer) Create(ctx context.Context, request *pri
 	var warnings []string
 	err = s.generic.CreateWithCandidatePreparation(ctx, request, &response, func(ctx context.Context, _ *privatev1.ComputeInstance, candidate *privatev1.ComputeInstance) error {
 		warnings, err = s.prepareCreate(ctx, candidate)
+		if err == nil && candidate.GetSpec().GetAutoExternalIpAttachment() {
+			ensureComputeInstanceFinalizer(candidate, finalizers.Controller)
+		}
 		return err
 	})
 	if err != nil {
@@ -664,22 +668,87 @@ func (s *PrivateComputeInstancesServer) Delete(ctx context.Context,
 	request *privatev1.ComputeInstancesDeleteRequest) (response *privatev1.ComputeInstancesDeleteResponse, err error) {
 	id := request.GetId()
 	if id != "" {
-		getResponse, getErr := s.generic.dao.Get().SetId(id).Do(ctx)
+		getResponse, getErr := s.generic.dao.Get().SetId(id).SetLock(true).Do(ctx)
 		if getErr != nil {
 			var notFoundErr *dao.ErrNotFound
 			if !errors.As(getErr, &notFoundErr) {
 				err = getErr
 				return
 			}
-		} else if getResponse.GetObject().GetSpec().GetAutoExternalIpAttachment() {
-			err = s.autoCleanupExternalIP(ctx, id)
-			if err != nil {
+		} else {
+			ci := getResponse.GetObject()
+			if err = s.rejectManualExternalIPAttachments(ctx, ci); err != nil {
 				return
+			}
+			if ci.GetSpec().GetAutoExternalIpAttachment() && !hasComputeInstanceFinalizer(ci, finalizers.Controller) {
+				ensureComputeInstanceFinalizer(ci, finalizers.Controller)
+				if _, err = s.generic.dao.Update().SetObject(ci).Do(ctx); err != nil {
+					return
+				}
 			}
 		}
 	}
 	err = s.generic.Delete(ctx, request, &response)
 	return
+}
+
+func (s *PrivateComputeInstancesServer) rejectManualExternalIPAttachments(
+	ctx context.Context,
+	ci *privatev1.ComputeInstance,
+) error {
+	if ci == nil || ci.GetId() == "" {
+		return nil
+	}
+	ciName := ci.GetMetadata().GetName()
+	filter := fmt.Sprintf(
+		"this.metadata.tenant == %q && (this.spec.compute_instance.id == %q || this.spec.compute_instance.name == %q)",
+		ci.GetMetadata().GetTenant(), ci.GetId(), ciName,
+	)
+	response, err := s.externalIPAttachmentDao.List().SetFilter(filter).SetLimit(1000).Do(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to check ComputeInstance ExternalIPAttachments: %w", err)
+	}
+	if response.GetTotal() > 1000 {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"ComputeInstance '%s' has too many ExternalIPAttachments to safely delete", ci.GetId())
+	}
+	for _, attachment := range response.GetItems() {
+		if attachment.GetMetadata().GetLabels()[autoCreatedLabel] == "true" &&
+			attachment.GetMetadata().GetAnnotations()[ownerReferenceAnnotation] == ci.GetId() {
+			continue
+		}
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"ComputeInstance '%s' has manually created ExternalIPAttachment '%s'; delete it before deleting the ComputeInstance",
+			ci.GetId(), attachment.GetId())
+	}
+	return nil
+}
+
+func ensureComputeInstanceFinalizer(ci *privatev1.ComputeInstance, finalizer string) {
+	if ci == nil {
+		return
+	}
+	if !ci.HasMetadata() {
+		ci.SetMetadata(&privatev1.Metadata{})
+	}
+	for _, current := range ci.GetMetadata().GetFinalizers() {
+		if current == finalizer {
+			return
+		}
+	}
+	ci.GetMetadata().SetFinalizers(append(ci.GetMetadata().GetFinalizers(), finalizer))
+}
+
+func hasComputeInstanceFinalizer(ci *privatev1.ComputeInstance, finalizer string) bool {
+	if ci == nil || !ci.HasMetadata() {
+		return false
+	}
+	for _, current := range ci.GetMetadata().GetFinalizers() {
+		if current == finalizer {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *PrivateComputeInstancesServer) Signal(ctx context.Context,
@@ -1309,6 +1378,9 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesState(
 		if err := validateResolvedSubnetReady(subnet, subnetKey, source); err != nil {
 			return err
 		}
+		if err := s.validateNetworkClassSupportsVM(ctx, vm.GetMetadata(), subnet); err != nil {
+			return err
+		}
 		hubReferences = append(hubReferences, networkingHubReference{
 			resourceType: "Subnet",
 			id:           subnet.GetId(),
@@ -1352,6 +1424,40 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesState(
 		return err
 	}
 	return validateNetworkingHubReferences(canonicalHubID, hubReferences...)
+}
+
+func (s *PrivateComputeInstancesServer) validateNetworkClassSupportsVM(
+	ctx context.Context,
+	metadata *privatev1.Metadata,
+	subnet *privatev1.Subnet,
+) error {
+	virtualNetworkRef := subnet.GetSpec().GetVirtualNetwork()
+	if virtualNetworkRef == nil || refKey(virtualNetworkRef) == "" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"network attachment Subnet '%s' has no VirtualNetwork", subnet.GetId())
+	}
+	virtualNetwork, err := resolveAndCanonicalizeReference(
+		ctx, s.virtualNetworksDao, metadata, virtualNetworkRef, "virtual network", grpccodes.NotFound,
+	)
+	if err != nil {
+		return err
+	}
+	networkClassRef := virtualNetwork.GetSpec().GetNetworkClass()
+	if networkClassRef == nil || refKey(networkClassRef) == "" {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"VirtualNetwork '%s' has no NetworkClass for VM workloads", virtualNetwork.GetId())
+	}
+	networkClass, err := resolveAndCanonicalizeReference(
+		ctx, s.networkClassesDao, virtualNetwork.GetMetadata(), networkClassRef, "network class", grpccodes.NotFound,
+	)
+	if err != nil {
+		return err
+	}
+	if networkClass.GetK8SManager() == "" {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"NetworkClass '%s' has no k8s_manager and does not support VM workloads", networkClass.GetId())
+	}
+	return nil
 }
 
 // resolveCatalogItem finds the VM's published Catalog Item in the VM's selected tenant/project
@@ -1457,61 +1563,5 @@ func (s *PrivateComputeInstancesServer) autoProvisionExternalIP(
 	if err != nil {
 		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "auto_external_ip_attachment: %s", err)
 	}
-
-	attachment := privatev1.ExternalIPAttachment_builder{
-		Metadata: privatev1.Metadata_builder{
-			Name:   fmt.Sprintf("auto-eipa-%s", shortID),
-			Tenant: tenant,
-			Labels: map[string]string{
-				autoCreatedLabel:    "true",
-				autoCreatedForLabel: ciID,
-			},
-			Annotations: map[string]string{
-				ownerReferenceAnnotation: ciID,
-			},
-			Creator: "system",
-		}.Build(),
-		Spec: privatev1.ExternalIPAttachmentSpec_builder{
-			ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eipID}.Build(),
-			ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ciID}.Build(),
-		}.Build(),
-		Status: privatev1.ExternalIPAttachmentStatus_builder{
-			State: privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_PENDING,
-		}.Build(),
-	}.Build()
-
-	_, err = s.externalIPAttachmentDao.Create().SetObject(attachment).Do(ctx)
-	if err != nil {
-		return fmt.Errorf("auto_external_ip_attachment: failed to create ExternalIPAttachment: %w", err)
-	}
-
-	return nil
-}
-
-func (s *PrivateComputeInstancesServer) autoCleanupExternalIP(ctx context.Context, ciID string) error {
-	filter := fmt.Sprintf(
-		"this.metadata.labels['%s'] == '%s'",
-		autoCreatedForLabel, ciID,
-	)
-	listResp, err := s.externalIPAttachmentDao.List().SetFilter(filter).Do(ctx)
-	if err != nil {
-		return fmt.Errorf("auto_external_ip_attachment cleanup: failed to list attachments: %w", err)
-	}
-
-	for _, attachment := range listResp.GetItems() {
-		attachmentID := attachment.GetId()
-		eipRef := attachment.GetSpec().GetExternalIp()
-		eipID := refKey(eipRef)
-
-		if eipID != "" {
-			err = s.lifecycle.deleteAttachmentAndExternalIP(ctx, attachmentID, eipID)
-		} else {
-			err = s.lifecycle.deleteAttachment(ctx, attachmentID)
-		}
-		if err != nil {
-			return fmt.Errorf("auto_external_ip_attachment cleanup: %w", err)
-		}
-	}
-
 	return nil
 }

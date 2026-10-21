@@ -1,0 +1,10 @@
+.pf-v6-c-page__sidebar .osac-navbar-title {
+  padding-inline-start: var(--pf-t--global--spacer--sm);
+  padding-block-start: var(--pf-t--global--spacer--sm);
+  margin-block-end: var(--pf-t--global--spacer--lg);
+}
+
+.pf-v6-theme-glass .pf-v6-c-page__sidebar .osac-navbar-title {
+  padding-block-start: var(--pf-t--global--spacer--md);
+  margin-block-end: var(--pf-t--global--spacer--md);
+}

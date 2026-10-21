@@ -315,6 +315,19 @@ type statusTransition struct {
 	newStatus v1alpha1.ClusterOrderStatus
 }
 
+// setClusterOrderPhase records the phase and, when it changes, the time of the change, so
+// metering can bill the state transition from the moment it happened rather than from when
+// feedback noticed it. The time is stamped once per phase change and kept while the phase is
+// unchanged, the same pattern as ComputeInstance's RunningConfigSince.
+func setClusterOrderPhase(status *v1alpha1.ClusterOrderStatus, phase v1alpha1.ClusterOrderPhaseType) {
+	if status.Phase == phase {
+		return
+	}
+	status.Phase = phase
+	now := metav1.Now()
+	status.PhaseTransitionTime = &now
+}
+
 func (r *ClusterOrderReconciler) patchStatusWithRetry(ctx context.Context, key client.ObjectKey, computed v1alpha1.ClusterOrderStatus) (*statusTransition, error) {
 	var transition *statusTransition
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -331,9 +344,9 @@ func (r *ClusterOrderReconciler) patchStatusWithRetry(ctx context.Context, key c
 		case terminalPhase:
 			// A stale reconcile must not revive a terminal order.
 		case workerPending:
-			latest.Status.Phase = v1alpha1.ClusterOrderPhaseProgressing
+			setClusterOrderPhase(&latest.Status, v1alpha1.ClusterOrderPhaseProgressing)
 		default:
-			latest.Status.Phase = computed.Phase
+			setClusterOrderPhase(&latest.Status, computed.Phase)
 		}
 		latest.Status.ClusterReference = computed.ClusterReference
 		latest.Status.NodeRequests = computed.NodeRequests
@@ -473,7 +486,7 @@ func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ reconcile.R
 
 	r.initializeStatusConditions(instance)
 	if instance.Status.Phase == "" {
-		instance.Status.Phase = v1alpha1.ClusterOrderPhaseProgressing
+		setClusterOrderPhase(&instance.Status, v1alpha1.ClusterOrderPhaseProgressing)
 	}
 	if instance.Status.Phase == v1alpha1.ClusterOrderPhaseProgressing {
 		r.initializeProgressingStage(instance)
@@ -537,7 +550,7 @@ func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ reconcile.R
 		}
 	} else if instance.Status.Phase != v1alpha1.ClusterOrderPhaseFailed &&
 		instance.Status.Phase != v1alpha1.ClusterOrderPhaseDeleting {
-		instance.Status.Phase = v1alpha1.ClusterOrderPhaseProgressing
+		setClusterOrderPhase(&instance.Status, v1alpha1.ClusterOrderPhaseProgressing)
 		r.setProgressingStage(instance, v1alpha1.ReasonControlPlaneStarting)
 	}
 
@@ -642,7 +655,7 @@ func (r *ClusterOrderReconciler) reconcileClusterOrderReadiness(
 		return
 	}
 	if !hostedClusterControlPlaneIsAvailable(hostedCluster) || !hostedClusterIsReady(hostedCluster) {
-		instance.Status.Phase = v1alpha1.ClusterOrderPhaseProgressing
+		setClusterOrderPhase(&instance.Status, v1alpha1.ClusterOrderPhaseProgressing)
 		r.setProgressingStage(instance, deriveProvisioningSubStage(hostedCluster))
 		return
 	}
@@ -650,13 +663,13 @@ func (r *ClusterOrderReconciler) reconcileClusterOrderReadiness(
 	instance.SetStatusCondition(v1alpha1.ConditionClusterAvailable, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
 
 	if instance.HasBareMetalNodeSet() && !bareMetalWorkersReady(instance) {
-		instance.Status.Phase = v1alpha1.ClusterOrderPhaseProgressing
+		setClusterOrderPhase(&instance.Status, v1alpha1.ClusterOrderPhaseProgressing)
 		instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionTrue,
 			humanizeConditionName(v1alpha1.ReasonWorkersJoining), v1alpha1.ReasonWorkersJoining)
 		return
 	}
 
-	instance.Status.Phase = v1alpha1.ClusterOrderPhaseReady
+	setClusterOrderPhase(&instance.Status, v1alpha1.ClusterOrderPhaseReady)
 	instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
 }
 
@@ -816,8 +829,37 @@ func (r *ClusterOrderReconciler) handleNodePool(ctx context.Context, instance *v
 		return nil
 	}
 
-	// Find the matching item inside the `nodeRequests` field of the status, or create a new one if there is no
-	// matching item yet.
+	// Skip the status update while observed replicas is zero.
+	// A newly created NodePool reports Status.Replicas == 0
+	// before any node joins.  Publishing zero would violate the
+	// fulfillment ClusterNodeSet.size > 0 constraint.  An
+	// existing ClusterOrder status entry retains its last
+	// positive value until a new positive observation arrives.
+	//
+	// Spec.Replicas is intentionally not checked: it is nil when
+	// autoscaling is active (HyperShift enforces Replicas XOR
+	// AutoScaling), yet Status.Replicas still reflects the
+	// actual observed count and should be reported.
+	if nodePool.Status.Replicas == 0 {
+		// Remove a pre-existing zero-valued entry so the feedback
+		// controller does not forward it to fulfillment where
+		// ClusterNodeSet.size > 0 would reject it.  Older operator
+		// versions wrote NumberOfNodes = 0 for newly created
+		// NodePools; this cleans them up on upgrade.  Positive
+		// entries are preserved (last-known-value).
+		for i, nr := range instance.Status.NodeRequests {
+			if nr.NodeSet == nodeSet && nr.NumberOfNodes == 0 {
+				instance.Status.NodeRequests = append(
+					instance.Status.NodeRequests[:i],
+					instance.Status.NodeRequests[i+1:]...)
+				break
+			}
+		}
+		return nil
+	}
+
+	// Find the matching item inside the `nodeRequests` field of the
+	// status, or create a new one if there is no matching item yet.
 	var nodeRequestStatus *v1alpha1.NodeRequestStatus
 	for i, nodeRequestsItem := range instance.Status.NodeRequests {
 		if nodeRequestsItem.NodeSet == nodeSet {
@@ -825,14 +867,20 @@ func (r *ClusterOrderReconciler) handleNodePool(ctx context.Context, instance *v
 		}
 	}
 	if nodeRequestStatus == nil {
-		instance.Status.NodeRequests = append(instance.Status.NodeRequests, v1alpha1.NodeRequestStatus{
-			NodeSet:   nodeSet,
-			BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: instanceType},
-		})
+		instance.Status.NodeRequests = append(
+			instance.Status.NodeRequests,
+			v1alpha1.NodeRequestStatus{
+				NodeSet:   nodeSet,
+				BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: instanceType},
+			},
+		)
 		nodeRequestStatus = &instance.Status.NodeRequests[len(instance.Status.NodeRequests)-1]
 	}
 
-	// Update the selected `nodeRequests` item:
+	// Update the selected `nodeRequests` item with the NodePool's
+	// observed replica count.  The zero-guard above ensures this
+	// value is always positive, satisfying the fulfillment proto's
+	// ClusterNodeSet.size > 0 constraint.
 	oldValue := nodeRequestStatus.NumberOfNodes
 	newValue := int(nodePool.Status.Replicas)
 	if newValue != oldValue {
@@ -965,7 +1013,7 @@ func finalizeReadyIfProvisioned(log logr.Logger, instance *v1alpha1.ClusterOrder
 	if !hostedClusterAndNodePoolsAreReady(instance, hc, nodePools) {
 		return false
 	}
-	instance.Status.Phase = v1alpha1.ClusterOrderPhaseReady
+	setClusterOrderPhase(&instance.Status, v1alpha1.ClusterOrderPhaseReady)
 	instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
 	return true
 }
@@ -1032,7 +1080,7 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 	log := ctrllog.FromContext(ctx)
 	log.Info("deleting clusterorder")
 
-	instance.Status.Phase = v1alpha1.ClusterOrderPhaseDeleting
+	setClusterOrderPhase(&instance.Status, v1alpha1.ClusterOrderPhaseDeleting)
 	instance.SetStatusCondition(v1alpha1.ConditionDeleting, metav1.ConditionTrue,
 		"ClusterOrder is being deleted", v1alpha1.ReasonDeleting)
 
@@ -1179,7 +1227,7 @@ func (r *ClusterOrderReconciler) provisioningCallbacks(instance *v1alpha1.Cluste
 			// stays Progressing and the failed job is visible in status.provisioningJobs.
 			if instance.Status.ClusterReference == nil ||
 				instance.Status.ClusterReference.HostedClusterName == "" {
-				instance.Status.Phase = v1alpha1.ClusterOrderPhaseFailed
+				setClusterOrderPhase(&instance.Status, v1alpha1.ClusterOrderPhaseFailed)
 				instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionFalse, message, v1alpha1.ReasonProvisioningFailed)
 			}
 		},

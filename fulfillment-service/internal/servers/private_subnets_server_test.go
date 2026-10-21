@@ -27,6 +27,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/client-go/rest"
 
@@ -1364,6 +1365,38 @@ var _ = Describe("Private subnets server", func() {
 
 				// CIDRs must be preserved from the existing record:
 				Expect(updated.GetSpec().GetIpv4Cidr()).To(Equal("10.0.1.0/24"))
+			})
+		})
+
+		Context("Metadata tenant immutability on Update", func() {
+			It("rejects moving a stored Subnet into a reserved tenant and preserves the stored object", func() {
+				vn := createVirtualNetwork(ctx, "10.0.0.0/16", "")
+				createResponse, err := server.Create(ctx, privatev1.SubnetsCreateRequest_builder{
+					Object: privatev1.Subnet_builder{
+						Metadata: privatev1.Metadata_builder{Name: "tenant-immutable-subnet", Tenant: testTenant}.Build(),
+						Spec: privatev1.SubnetSpec_builder{
+							Ipv4Cidr:       new("10.0.1.0/24"),
+							VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vn.GetId()}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				id := createResponse.GetObject().GetId()
+
+				_, err = server.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
+					Object: privatev1.Subnet_builder{
+						Id:       id,
+						Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.tenant"}},
+				}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
+				Expect(err.Error()).To(ContainSubstring("objects cannot be placed in the 'shared' tenant"))
+
+				stored, getErr := server.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: id}.Build())
+				Expect(getErr).ToNot(HaveOccurred())
+				Expect(stored.GetObject().GetMetadata().GetTenant()).To(Equal(testTenant))
+				Expect(stored.GetObject().GetSpec().GetIpv4Cidr()).To(Equal("10.0.1.0/24"))
 			})
 		})
 

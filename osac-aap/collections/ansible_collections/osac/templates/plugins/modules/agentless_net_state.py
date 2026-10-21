@@ -34,6 +34,7 @@ options:
       - ensure_virtual_network
       - delete_virtual_network
       - get_subnet
+      - query_dhcp_lease
       - preflight_dhcp_supervisor
       - reserve_subnet
       - ensure_subnet
@@ -41,6 +42,8 @@ options:
       - release_subnet
       - ensure_external_ip_pool
       - delete_external_ip_pool
+      - reserve_external_ip
+      - release_external_ip
   state_file:
     description: Path to the AgentlessNet API state file on the managed node.
     type: path
@@ -63,6 +66,18 @@ options:
     description: ExternalIPPool CIDR list; exactly one canonical IPv4 CIDR is supported.
     type: list
     elements: str
+  pool_uid:
+    description: Kubernetes UID of the registered ExternalIPPool.
+    type: str
+  pool_fulfillment_id:
+    description: Fulfillment UUID of the registered ExternalIPPool.
+    type: str
+  pool_tenant_id:
+    description: Tenant owner of the registered ExternalIPPool.
+    type: str
+  pool_cidr:
+    description: Canonical IPv4 CIDR of the registered ExternalIPPool.
+    type: str
   virtual_network_cidr:
     description: VirtualNetwork IPv4 supernet.
     type: str
@@ -120,9 +135,17 @@ subnet:
   description: Validated Subnet provider state when found.
   returned: for Subnet actions when found
   type: dict
+lease:
+  description: Active DHCP lease matching the requested Subnet and NIC MAC.
+  returned: when a matching active lease is found
+  type: dict
 pool:
   description: Validated ExternalIPPool provider identity.
   returned: for ExternalIPPool actions when the pool exists or would be registered
+  type: dict
+external_ip:
+  description: UID-owned ExternalIP reservation.
+  returned: for ExternalIP reservation actions when one exists or would be allocated
   type: dict
 """
 
@@ -130,6 +153,7 @@ EXTERNAL_IP_POOL_ACTIONS = {
     "ensure_external_ip_pool",
     "delete_external_ip_pool",
 }
+EXTERNAL_IP_ACTIONS = {"reserve_external_ip", "release_external_ip"}
 
 
 def main() -> None:
@@ -142,6 +166,7 @@ def main() -> None:
                     "ensure_virtual_network",
                     "delete_virtual_network",
                     "get_subnet",
+                    "query_dhcp_lease",
                     "preflight_dhcp_supervisor",
                     "reserve_subnet",
                     "ensure_subnet",
@@ -149,6 +174,8 @@ def main() -> None:
                     "release_subnet",
                     "ensure_external_ip_pool",
                     "delete_external_ip_pool",
+                    "reserve_external_ip",
+                    "release_external_ip",
                 ],
             },
             "state_file": {"type": "path", "required": True},
@@ -157,6 +184,10 @@ def main() -> None:
             "fulfillment_id": {"type": "str"},
             "ip_family": {"type": "str"},
             "cidrs": {"type": "list", "elements": "str"},
+            "pool_uid": {"type": "str"},
+            "pool_fulfillment_id": {"type": "str"},
+            "pool_tenant_id": {"type": "str"},
+            "pool_cidr": {"type": "str"},
             "virtual_network_cidr": {"type": "str"},
             "virtual_network_uid": {"type": "str"},
             "subnet_cidr": {"type": "str"},
@@ -167,6 +198,7 @@ def main() -> None:
                 "default": [],
             },
             "vip_cidr": {"type": "str", "default": ""},
+            "mac_address": {"type": "str"},
         },
         required_if=[
             (
@@ -184,6 +216,7 @@ def main() -> None:
                     "observed_switch_vlan_state",
                 ],
             ),
+            ("action", "query_dhcp_lease", ["mac_address"]),
             (
                 "action",
                 "ensure_external_ip_pool",
@@ -193,6 +226,16 @@ def main() -> None:
                 "action",
                 "delete_external_ip_pool",
                 ["fulfillment_id", "ip_family", "cidrs"],
+            ),
+            (
+                "action",
+                "reserve_external_ip",
+                ["fulfillment_id", "pool_uid", "pool_fulfillment_id", "pool_tenant_id", "pool_cidr"],
+            ),
+            (
+                "action",
+                "release_external_ip",
+                ["fulfillment_id", "pool_uid"],
             ),
         ],
         supports_check_mode=True,
@@ -229,6 +272,35 @@ def main() -> None:
             module.exit_json(**result)
             return
 
+        if params["action"] in EXTERNAL_IP_ACTIONS:
+            if params["action"] == "reserve_external_ip":
+                external_ip, changed = store.reserve_external_ip(
+                    params["uid"],
+                    params["fulfillment_id"],
+                    params["tenant_id"],
+                    params["pool_uid"],
+                    params["pool_fulfillment_id"],
+                    params["pool_tenant_id"],
+                    params["pool_cidr"],
+                    check_mode=module.check_mode,
+                )
+            else:
+                external_ip, changed = store.release_external_ip(
+                    params["uid"],
+                    params["fulfillment_id"],
+                    params["tenant_id"],
+                    params["pool_uid"],
+                    check_mode=module.check_mode,
+                )
+            result = {
+                "changed": changed,
+                "backend_network_id": params["uid"],
+            }
+            if external_ip is not None:
+                result["external_ip"] = external_ip
+            module.exit_json(**result)
+            return
+
         if params["action"] == "ensure_virtual_network":
             if module.check_mode:
                 existing = store.get_virtual_network(
@@ -254,6 +326,18 @@ def main() -> None:
             )
             module.exit_json(changed=False, found=subnet is not None, subnet=subnet)
 
+        if params["action"] == "query_dhcp_lease":
+            lease = store.query_dhcp_lease(
+                params["uid"],
+                params["tenant_id"],
+                params["mac_address"],
+            )
+            module.exit_json(
+                changed=False,
+                found=lease is not None,
+                **({"lease": lease} if lease is not None else {}),
+            )
+
         if params["action"] == "preflight_dhcp_supervisor":
             module.exit_json(
                 changed=False,
@@ -276,6 +360,7 @@ def main() -> None:
                         parse_switch_vlan_exclusions(
                             switch.get("bridge_vlan_output"),
                             switch.get("reserved_vlan_output"),
+                            switch.get("switchd_reserved_vlan_output"),
                         )
                     )
             except SubnetProviderError as error:
@@ -347,6 +432,7 @@ def main() -> None:
             return
         if params["action"] in {
             "get_subnet",
+            "query_dhcp_lease",
             "preflight_dhcp_supervisor",
             "reserve_subnet",
             "ensure_subnet",

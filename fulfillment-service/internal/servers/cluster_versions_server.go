@@ -220,7 +220,7 @@ func (s *ClusterVersionsServer) Create(ctx context.Context,
 			"Failed to map public cluster version to private",
 			slog.Any("error", err),
 		)
-		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process cluster version")
+		return nil, publicInputMappingError(err, "failed to process cluster version")
 	}
 
 	privateRequest := &privatev1.ClusterVersionsCreateRequest{}
@@ -249,6 +249,11 @@ func (s *ClusterVersionsServer) Create(ctx context.Context,
 
 func (s *ClusterVersionsServer) Update(ctx context.Context,
 	request *publicv1.ClusterVersionsUpdateRequest) (*publicv1.ClusterVersionsUpdateResponse, error) {
+	ctx = withPublicAPIView(ctx)
+	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
+		return nil, err
+	}
+
 	publicClusterVersion := request.GetObject()
 	if publicClusterVersion == nil {
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
@@ -274,7 +279,7 @@ func (s *ClusterVersionsServer) Update(ctx context.Context,
 			"Failed to map public cluster version to private",
 			slog.Any("error", err),
 		)
-		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process cluster version")
+		return nil, publicInputMappingError(err, "failed to process cluster version")
 	}
 
 	privateRequest := &privatev1.ClusterVersionsUpdateRequest{}

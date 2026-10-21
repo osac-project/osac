@@ -497,6 +497,110 @@ var _ = Describe("Generic DAO visibility", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(getResponse.GetObject().GetMyString()).To(BeEmpty())
 		})
+
+		It("Allows tenant admin to see all resources across all projects", func() {
+			// Create projects first
+			createProject := func(tenant, parent, name string) {
+				_, err := pool.Exec(ctx,
+					`
+					insert into projects (
+						id,
+						tenant,
+						project,
+						name,
+						data
+					)
+					values (
+						$1,
+						$2,
+						$3,
+						$4,
+						'{}'
+					)
+					`,
+					fmt.Sprintf("%s-%s", tenant, name), tenant, parent, name,
+				)
+				Expect(err).ToNot(HaveOccurred())
+			}
+			createProject("tenant-a", "", "proj1")
+			createProject("tenant-a", "", "proj2")
+
+			// Create objects in different projects using an unrestricted DAO
+			tenancyAll := auth.NewMockTenancyLogic(ctrl)
+			tenancyAll.EXPECT().DetermineVisibility(gomock.Any()).
+				Return(auth.TotalVisibility(), nil).
+				AnyTimes()
+			daoAll, err := NewGenericDAO[*testsv1.Object]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancyAll).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			// Create objects in various projects
+			defaultObj, err := daoAll.Create().
+				SetObject(testsv1.Object_builder{
+					Metadata: testsv1.Metadata_builder{
+						Tenant:  "tenant-a",
+						Project: "",
+						Name:    "default-obj",
+					}.Build(),
+				}.Build()).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			proj1Obj, err := daoAll.Create().
+				SetObject(testsv1.Object_builder{
+					Metadata: testsv1.Metadata_builder{
+						Tenant:  "tenant-a",
+						Project: "proj1",
+						Name:    "proj1-obj",
+					}.Build(),
+				}.Build()).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			proj2Obj, err := daoAll.Create().
+				SetObject(testsv1.Object_builder{
+					Metadata: testsv1.Metadata_builder{
+						Tenant:  "tenant-a",
+						Project: "proj2",
+						Name:    "proj2-obj",
+					}.Build(),
+				}.Build()).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Create a DAO with tenant admin access
+			tenantAdminVisibility, err := auth.NewVisibility().
+				SetTotalProjectVisibility("tenant-a").
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			tenancyAdmin := auth.NewMockTenancyLogic(ctrl)
+			tenancyAdmin.EXPECT().DetermineVisibility(gomock.Any()).
+				Return(tenantAdminVisibility, nil).
+				AnyTimes()
+			daoAdmin, err := NewGenericDAO[*testsv1.Object]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancyAdmin).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			// Tenant admin should see all objects
+			listResponse, err := daoAdmin.List().Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(listResponse.GetTotal()).To(Equal(int32(3)))
+			Expect(listResponse.GetItems()).To(HaveLen(3))
+
+			// Verify all objects are accessible
+			_, err = daoAdmin.Get().SetId(defaultObj.GetObject().GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = daoAdmin.Get().SetId(proj1Obj.GetObject().GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = daoAdmin.Get().SetId(proj2Obj.GetObject().GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+		})
 	})
 
 	Describe("Project visibility", func() {
@@ -662,6 +766,51 @@ var _ = Describe("Generic DAO visibility", func() {
 			dao := daoWithVisibility(visibility)
 
 			Expect(listedNames(dao)).To(ConsistOf("default-obj", "p1-child-obj"))
+		})
+
+		It("Includes all projects when user has tenant admin access", func() {
+			seed := unrestrictedDAO()
+			createObject(seed, "", "default-obj")
+			p1ID := createObject(seed, "p1", "p1-obj")
+			childID := createObject(seed, "p1.child", "p1-child-obj")
+			grandchildID := createObject(seed, "p1.child.grandchild", "p1-grandchild-obj")
+			p2ID := createObject(seed, "p2", "p2-obj")
+
+			// Create visibility with tenant admin access to tenant-a
+			visibility, err := auth.NewVisibility().
+				SetTotalProjectVisibility("tenant-a").
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			dao := daoWithVisibility(visibility)
+
+			// All objects in tenant-a should be visible, regardless of project
+			Expect(listedNames(dao)).To(ConsistOf("default-obj", "p1-obj", "p1-child-obj", "p1-grandchild-obj", "p2-obj"))
+
+			// All gets should succeed
+			_, err = dao.Get().SetId(p1ID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = dao.Get().SetId(childID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = dao.Get().SetId(grandchildID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = dao.Get().SetId(p2ID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			// All exists checks should return true
+			existsResponse, err := dao.Exists().SetId(p1ID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(existsResponse.GetExists()).To(BeTrue())
+
+			existsResponse, err = dao.Exists().SetId(grandchildID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(existsResponse.GetExists()).To(BeTrue())
+
+			existsResponse, err = dao.Exists().SetId(p2ID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(existsResponse.GetExists()).To(BeTrue())
 		})
 	})
 })

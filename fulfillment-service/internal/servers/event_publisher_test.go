@@ -425,6 +425,32 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Expect(events[0].event.GetProject().GetSpec().GetTitle()).To(Equal("Acme"))
 		})
 
+		It("Publishes a worker's owner-reference attribution on the tenant's topic", func() {
+			tenant := "workers-" + uuid.New()
+			topic := DefaultEventTopicPrefix + tenant
+			changeID := insertChange("bare_metal_instances", tenant, "w-1", fmt.Sprintf(`{
+				"id": "w-1",
+				"name": "w-1",
+				"tenant": %q,
+				"project": "web",
+				"data": {
+					"spec": {"ssh_public_key": "ssh-ed25519 AAAA"},
+					"status": {"cluster": {"id": "c-1"}, "node_set": "compute"}
+				}
+			}`, tenant))
+
+			cancel, done := startPublisher(pub)
+			defer stopPublisher(cancel, done)
+
+			events := collectKafkaEvents(client, topic, 1)
+			Expect(events[0].event.GetId()).To(Equal(changeID))
+			Expect(events[0].event.GetBareMetalInstance()).ToNot(BeNil())
+			Expect(events[0].event.GetBareMetalInstance().GetMetadata().GetTenant()).To(Equal(tenant))
+			Expect(events[0].event.GetBareMetalInstance().GetMetadata().GetProject()).To(Equal("web"))
+			Expect(events[0].event.GetBareMetalInstance().GetStatus().GetCluster().GetId()).To(Equal("c-1"))
+			Expect(events[0].event.GetBareMetalInstance().GetStatus().GetNodeSet()).To(Equal("compute"))
+		})
+
 		It("Publishes a signal change from an object row", func() {
 			tenant := "signal-" + uuid.New()
 			topic := DefaultEventTopicPrefix + tenant

@@ -225,6 +225,11 @@ func (s *SecretsServer) Get(ctx context.Context,
 
 func (s *SecretsServer) Update(ctx context.Context,
 	request *publicv1.SecretsUpdateRequest) (response *publicv1.SecretsUpdateResponse, err error) {
+	ctx = withPublicAPIView(ctx)
+	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
+		return nil, err
+	}
+
 	id := request.GetObject().GetId()
 
 	getRequest := &privatev1.SecretsGetRequest{}

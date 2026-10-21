@@ -16,6 +16,7 @@ package servers
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -25,6 +26,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
@@ -349,6 +351,34 @@ var _ = Describe("Clusters server", func() {
 			seedAddOnOperator(ctx, "unpublished-operator-id", "unpublished-operator", false)
 		})
 
+		It("rejects reserved metadata on public create", func() {
+			response, err := server.ClustersServer.Create(ctx, publicv1.ClustersCreateRequest_builder{
+				Object: publicv1.Cluster_builder{
+					Metadata: publicv1.Metadata_builder{
+						Labels: map[string]string{"admin.osac.openshift.io/managed": "true"},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(response).To(BeNil())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(grpcstatus.Convert(err).Message()).To(Equal(reservedMetadataError))
+		})
+
+		It("rejects reserved metadata outside the public update mask", func() {
+			response, err := server.ClustersServer.Update(ctx, publicv1.ClustersUpdateRequest_builder{
+				Object: publicv1.Cluster_builder{
+					Id: "cluster-with-reserved-metadata",
+					Metadata: publicv1.Metadata_builder{
+						Labels: map[string]string{"admin.osac.openshift.io/managed": "true"},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.description"}},
+			}.Build())
+			Expect(response).To(BeNil())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(grpcstatus.Convert(err).Message()).To(Equal(reservedMetadataError))
+		})
+
 		It("resolves a published add-on operator reference during public create", func() {
 			response, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
@@ -455,6 +485,32 @@ var _ = Describe("Clusters server", func() {
 			object := response.GetObject()
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).ToNot(BeEmpty())
+		})
+
+		It("Drops a caller-supplied status on create", func() {
+			// The insert is not checked by the metering source contract, so a spoofed state
+			// with a future transition time must never reach the stored object as a
+			// fabricated fact.
+			response, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
+				Object: publicv1.Cluster_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: publicv1.ClusterSpec_builder{
+						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
+					}.Build(),
+					Status: publicv1.ClusterStatus_builder{
+						State: publicv1.ClusterState_CLUSTER_STATE_READY,
+						StateTransitionTime: timestamppb.New(
+							time.Now().Add(24 * time.Hour)),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			object := response.GetObject()
+			Expect(object.GetStatus().GetState()).To(
+				Equal(publicv1.ClusterState_CLUSTER_STATE_UNSPECIFIED))
+			Expect(object.GetStatus().GetStateTransitionTime()).To(BeNil())
 		})
 
 		It("Doesn't create object without template", func() {
@@ -1261,7 +1317,63 @@ var _ = Describe("Clusters server", func() {
 			Expect(object.GetStatus().GetApiUrl()).To(Equal("https://my.api"))
 		})
 
-		It("Update object with mask", func() {
+		It("Drops a user-supplied version transition time on public create", func() {
+			// Try to create an object with a forged version transition time:
+			createResponse, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
+				Object: publicv1.Cluster_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: publicv1.ClusterSpec_builder{
+						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
+					}.Build(),
+					Status: publicv1.ClusterStatus_builder{
+						VersionTransitionTime: timestamppb.Now(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			object := createResponse.GetObject()
+
+			// Only the system sets the version transition time; a user-supplied value is dropped.
+			getResponse, err := server.Get(ctx, publicv1.ClustersGetRequest_builder{
+				Id: object.GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResponse.GetObject().GetStatus().GetVersionTransitionTime()).To(BeNil())
+		})
+
+		It("Rejects a public update of the output-only version transition time", func() {
+			// Create the object:
+			createResponse, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
+				Object: publicv1.Cluster_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-cluster",
+					}.Build(),
+					Spec: publicv1.ClusterSpec_builder{
+						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			object := createResponse.GetObject()
+
+			_, err = server.Update(ctx, publicv1.ClustersUpdateRequest_builder{
+				Object: publicv1.Cluster_builder{
+					Id: object.GetId(),
+					Status: publicv1.ClusterStatus_builder{
+						VersionTransitionTime: timestamppb.Now(),
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"status.version_transition_time"},
+				},
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring("status.version_transition_time is output-only"))
+		})
+
+		It("updates node-set size then version in separate masked requests", func() {
 			// Create the object:
 			createResponse, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
@@ -1317,6 +1429,32 @@ var _ = Describe("Clusters server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			object = getResponse.GetObject()
 			verify(object)
+
+			seedClusterVersion(ctx, privatev1.ClusterVersion_builder{
+				Id:       "public-node-target",
+				Metadata: privatev1.Metadata_builder{Name: "4-18-public", Tenant: testTenant}.Build(),
+				Spec: privatev1.ClusterVersionSpec_builder{
+					Image:   "quay.io/openshift-release-dev/ocp-release:4.18.7-multi",
+					Enabled: proto.Bool(true), Version: "4.18.7",
+				}.Build(),
+			}.Build())
+			updated, err := server.Update(ctx, publicv1.ClustersUpdateRequest_builder{
+				Object: publicv1.Cluster_builder{
+					Id: object.GetId(),
+					Spec: publicv1.ClusterSpec_builder{NodeSets: map[string]*publicv1.ClusterNodeSet{
+						"compute": publicv1.ClusterNodeSet_builder{
+							Version: publicv1.ClusterVersionReference_builder{Name: "4-18-public"}.Build(),
+						}.Build(),
+					}}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.node_sets.compute.version"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updated.GetObject().GetSpec().GetNodeSets()["compute"].GetSize()).To(Equal(int32(4)))
+			Expect(updated.GetObject().GetSpec().GetNodeSets()["compute"].GetVersion().GetId()).To(Equal("public-node-target"))
+			Expect(updated.GetObject().GetSpec().GetNodeSets()["gpu"].GetVersion().GetId()).To(Equal(
+				object.GetSpec().GetNodeSets()["gpu"].GetVersion().GetId()))
+			Expect(updated.GetObject().GetSpec().GetVersion().GetId()).To(Equal(object.GetSpec().GetVersion().GetId()))
 		})
 
 		It("Allows removing a node set when multiple exist", func() {

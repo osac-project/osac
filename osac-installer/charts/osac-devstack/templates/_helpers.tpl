@@ -79,7 +79,7 @@ Create the name of the service account to use
 
 {{- define "osac-devstack.fulfillmentAuthEnv" -}}
 {{- $clientID := include "osac-devstack.fulfillmentAuthCredential" (list . "client-id") | fromJson -}}
-{{- $issuerURL := .Values.service.auth.issuerUrl | default .Values.ui.config.oidcIssuerUrl -}}
+{{- $issuerURL := .Values.service.auth.issuerUrl | default .Values.ui.auth.oidcIssuerURL -}}
 - name: FULFILLMENT_ISSUER_URL
   value: {{ tpl $issuerURL . | quote }}
 - name: FULFILLMENT_CLIENT_ID

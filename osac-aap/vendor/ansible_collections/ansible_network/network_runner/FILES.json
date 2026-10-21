@@ -109,28 +109,28 @@
    "name": "roles/switch/providers/cumulus/add_trunk_vlan.yaml",
    "ftype": "file",
    "chksum_type": "sha256",
-   "chksum_sha256": "d9d029975e1929d50f263a9f40053eef4233e3cdf094b6362b02156b21481a43",
+   "chksum_sha256": "a20875583611933608e90acd44c474d388665af5200c1f7234c64062cbd7f501",
    "format": 1
   },
   {
    "name": "roles/switch/providers/cumulus/conf_access_port.yaml",
    "ftype": "file",
    "chksum_type": "sha256",
-   "chksum_sha256": "cb610b32e1effdd85583f47a2231b9c0804b1bb2d66378b2dd0278bee91468ef",
+   "chksum_sha256": "aea0f9d4243c671ee19e4b1dc24e5aaa99a79dcce964be0b7662cbd5232eb1e1",
    "format": 1
   },
   {
    "name": "roles/switch/providers/cumulus/conf_trunk_port.yaml",
    "ftype": "file",
    "chksum_type": "sha256",
-   "chksum_sha256": "265cde54e68f1e056f3d03428925ae019c496a1b97096f77079e1063e8376173",
+   "chksum_sha256": "30b8103d602828a565738c7855ed9f3f66f44605af0fe048272e4728c3ed48d1",
    "format": 1
   },
   {
    "name": "roles/switch/providers/cumulus/create_vlan.yaml",
    "ftype": "file",
    "chksum_type": "sha256",
-   "chksum_sha256": "949abf2ebbfd56760201e903ff1a85d5e1bec3b759ebe05958eac50f460e0959",
+   "chksum_sha256": "e6ab1415dfdca7042b7b1f75cfa13969767aff9abca14b5481d36fe49b644d2a",
    "format": 1
   },
   {
@@ -144,21 +144,21 @@
    "name": "roles/switch/providers/cumulus/delete_port.yaml",
    "ftype": "file",
    "chksum_type": "sha256",
-   "chksum_sha256": "e4f4f9b65a24b8e5808ddba674f176946233148dea091a95cc9e602ffde11b2d",
+   "chksum_sha256": "91b34d5fef0adc60047426f01031bcdbf980dbacb37df4c8c0ce4fd0cd10692a",
    "format": 1
   },
   {
    "name": "roles/switch/providers/cumulus/delete_trunk_vlan.yaml",
    "ftype": "file",
    "chksum_type": "sha256",
-   "chksum_sha256": "9f0299dc7bd8d27a2374473fe41cb8884a40611eb92669697b2615381af4c0c1",
+   "chksum_sha256": "48b22e9f3b3e246fd62bbde4a0d024b5c0e7ef9ed3b25a51a41982e3af57808d",
    "format": 1
   },
   {
    "name": "roles/switch/providers/cumulus/delete_vlan.yaml",
    "ftype": "file",
    "chksum_type": "sha256",
-   "chksum_sha256": "08319f5a2edbe87fb244a26536cc516331295dec9dacba7de6cb3f79f4539f0e",
+   "chksum_sha256": "9d93028b81fbd6c3aead39ae98a3674b1a65ac25d01f30c93b28f864af93cb6c",
    "format": 1
   },
   {

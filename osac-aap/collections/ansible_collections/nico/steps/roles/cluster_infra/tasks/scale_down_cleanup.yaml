@@ -6,7 +6,6 @@
 - name: Scale-down instance cleanup
   when: nico_removed_instance_ids is defined and nico_removed_instance_ids | length > 0
   block:
-
     # Re-exchange credentials for a fresh token.  The token obtained at the
     # start of the run may have expired while waiting for agents to be removed.
     - name: Exchange client credentials for fresh JWT token
@@ -43,7 +42,7 @@
       loop_control:
         loop_var: instance_id
         label: "Deleting instance {{ instance_id }}"
-      ignore_errors: true  # Tolerate already-deleted instances
+      ignore_errors: true # Tolerate already-deleted instances
       register: instance_delete_result
 
     - name: Read current nico-infra ConfigMap

@@ -156,7 +156,8 @@ operator:
   # Network manager ConfigMaps use the nested operator.networkManagers map
   # (fabricManagers / k8sManagers). Defaults live in the osac-operator subchart;
   # override operator.networkManagers here to enable netris/k8s_only or change
-  # capabilitiesSyncInterval.
+  # capabilitiesSyncInterval. Manager registrations can set
+  # externalIPContractVersion to opt into v1.
 
 # --- Fulfillment Service ---
 service:
@@ -311,17 +312,6 @@ aap:
         NETWORK_STEPS_COLLECTION: ""
         DNS_CLASS: ""
         DNS_ZONE: ""
-        # Netris connection fields below must also be set on networkFulfillment
-        # (including NETRIS_PASSWORD); there is no shared Netris config block.
-        NETRIS_CONTROLLER_URL: ""
-        NETRIS_VALIDATE_CERTS: "true"
-        NETRIS_USERNAME: ""
-        NETRIS_SITE_ID: ""
-        NETRIS_TENANT_ID: ""
-        NETRIS_TENANT_NAME: ""
-        NETRIS_MGMT_VPC_ID: ""
-        NETRIS_MGMT_VPC_NAME: ""
-        NETRIS_RESOURCE_CLASS_MAP: ""
         SERVER_SSH_BASTION_HOST: ""
         SERVER_SSH_BASTION_USER: ""
         SERVER_SSH_USER: ""
@@ -335,23 +325,14 @@ aap:
         HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: ""
         PARKING_VNET_NAME: ""
       secret:
-        NETRIS_PASSWORD: ""
         AWS_ACCESS_KEY_ID: ""
         AWS_SECRET_ACCESS_KEY: ""
         SERVER_SSH_KEY: ""
         SERVER_SSH_BASTION_KEY: ""
     networkFulfillment:
       enabled: false
-      config:
-        # Duplicate of clusterFulfillment Netris connection fields — set both.
-        NETRIS_CONTROLLER_URL: ""
-        NETRIS_VALIDATE_CERTS: "true"
-        NETRIS_USERNAME: ""
-        NETRIS_SITE_ID: ""
-        NETRIS_TENANT_ID: ""
-        NETRIS_TENANT_NAME: ""
-      secret:
-        NETRIS_PASSWORD: ""
+      config: {}
+      secret: {}
     storageFulfillment:
       enabled: false
       config:
@@ -366,6 +347,8 @@ aap:
 ui:
   enabled: true
   externalHostname: ""
+  route:
+    enabled: true
   api:
     fulfillment:
       url: https://fulfillment-internal-api:8001
@@ -385,6 +368,7 @@ ui:
     level: info
   images:
     ui: ghcr.io/osac-project/osac-ui:latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+    pullPolicy: auto
 
 # --- Metering ---
 metering:

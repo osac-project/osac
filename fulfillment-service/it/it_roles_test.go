@@ -108,15 +108,13 @@ var _ = Describe("Roles", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(listResponse).ToNot(BeNil())
 			items := listResponse.GetItems()
-			Expect(items).To(HaveLen(5))
+			Expect(items).To(HaveLen(3))
 
 			names := make([]string, len(items))
 			for i, item := range items {
 				names[i] = item.GetMetadata().GetName()
 			}
 			Expect(names).To(ContainElements(
-				"cloud-provider-admin",
-				"cloud-provider-reader",
 				"tenant-admin",
 				"tenant-reader",
 				"tenant-user",

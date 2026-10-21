@@ -616,13 +616,19 @@ var _ = Describe("AAPProvider", func() {
 		It("returns the successful job artifacts as normalized extra vars", func() {
 			aapClient.getJobFunc = func(_ context.Context, jobID string) (*aap.Job, error) {
 				Expect(jobID).To(Equal("789"))
-				return &aap.Job{ID: 789, Status: "successful", Artifacts: []byte(`{"l2_vni":14,"l3_vni":11}`)}, nil
+				return &aap.Job{
+					ID:        789,
+					Status:    "successful",
+					ExtraVars: `{"osac_job_vars":{"resource":{"metadata":{"uid":"eip-uid"}}}}`,
+					Artifacts: []byte(`{"l2_vni":14,"l3_vni":11}`),
+				}, nil
 			}
 
 			status, err := provider.GetProvisionStatusWithExtraVars(ctx, &v1alpha1.Subnet{}, "789")
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(status.State).To(Equal(v1alpha1.JobStateSucceeded))
+			Expect(status.InputExtraVars).To(HaveKey("osac_job_vars"))
 			Expect(status.ExtraVars).To(HaveKeyWithValue("l2_vni", float64(14)))
 			Expect(status.ExtraVars).To(HaveKeyWithValue("l3_vni", float64(11)))
 
@@ -632,15 +638,35 @@ var _ = Describe("AAPProvider", func() {
 			Expect(*vnis.L3VNI).To(Equal(int32(11)))
 		})
 
-		It("returns no output vars when the job has no artifacts", func() {
+		It("returns inputs when the successful job has no artifacts", func() {
 			aapClient.getJobFunc = func(_ context.Context, _ string) (*aap.Job, error) {
-				return &aap.Job{Status: "successful"}, nil
+				return &aap.Job{
+					Status:    "successful",
+					ExtraVars: `{"osac_job_vars":{"external_ip_pool":{"kubernetes_uid":"pool-uid"}}}`,
+				}, nil
 			}
 
 			status, err := provider.GetProvisionStatusWithExtraVars(ctx, &v1alpha1.Subnet{}, "789")
 
 			Expect(err).NotTo(HaveOccurred())
+			Expect(status.InputExtraVars).To(HaveKey("osac_job_vars"))
 			Expect(status.ExtraVars).To(BeNil())
+		})
+
+		It("returns a sanitized error for malformed submitted inputs", func() {
+			aapClient.getJobFunc = func(_ context.Context, _ string) (*aap.Job, error) {
+				return &aap.Job{
+					Status:    "successful",
+					ExtraVars: `{"token":"sensitive-fixture-value"`,
+				}, nil
+			}
+
+			status, err := provider.GetProvisionStatusWithExtraVars(ctx, &v1alpha1.ExternalIP{}, "789")
+
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("job 789"))
+			Expect(err.Error()).NotTo(ContainSubstring("sensitive-fixture-value"))
+			Expect(status.State).To(Equal(v1alpha1.JobStateSucceeded))
 		})
 
 		It("returns an error when the AAP client cannot fetch the job", func() {
@@ -812,6 +838,22 @@ var _ = Describe("AAPProvider", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(status.JobID).To(Equal("888"))
 			Expect(status.State).To(Equal(v1alpha1.JobStateSucceeded))
+		})
+
+		It("returns deprovision job artifacts", func() {
+			aapClient.getJobFunc = func(_ context.Context, jobID string) (*aap.Job, error) {
+				return &aap.Job{
+					ID:        888,
+					Status:    "successful",
+					ExtraVars: `{"osac_job_vars":{"resource":{"metadata":{"uid":"eip-uid"}}}}`,
+					Artifacts: []byte(`{"osac_result":{"schemaVersion":"v1"}}`),
+				}, nil
+			}
+			status, err := provider.GetDeprovisionStatusWithExtraVars(ctx, &v1alpha1.ExternalIP{}, "888")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(status.JobID).To(Equal("888"))
+			Expect(status.InputExtraVars).To(HaveKey("osac_job_vars"))
+			Expect(status.ExtraVars).To(HaveKey("osac_result"))
 		})
 	})
 
@@ -1032,6 +1074,30 @@ var _ = Describe("AAPProvider", func() {
 				ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
 			}
 			_, err := provider.TriggerProvision(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("includes the selected ExternalIPPool identity in the job payload", func() {
+			pool := provisioning.ExternalIPPoolContext{
+				FulfillmentID: "44444444-4444-4444-8444-444444444444",
+				KubernetesUID: "55555555-5555-4555-8555-555555555555",
+				TenantID:      "tenant-a",
+				CIDR:          "198.51.100.0/24",
+				Phase:         "Ready",
+			}
+			ctx = provisioning.WithExternalIPPool(ctx, pool)
+			aapClient.launchJobTemplateFunc = func(_ context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				jobVars := req.ExtraVars["osac_job_vars"].(map[string]any)
+				Expect(jobVars["external_ip_pool"]).To(Equal(map[string]any{
+					"fulfillment_id": pool.FulfillmentID,
+					"kubernetes_uid": pool.KubernetesUID,
+					"tenant_id":      pool.TenantID,
+					"cidr":           pool.CIDR,
+					"phase":          pool.Phase,
+				}))
+				return &aap.LaunchJobTemplateResponse{JobID: 103}, nil
+			}
+			_, err := provider.TriggerProvision(ctx, &v1alpha1.ExternalIP{})
 			Expect(err).NotTo(HaveOccurred())
 		})
 

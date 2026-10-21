@@ -537,6 +537,13 @@ var _ = Describe("update tenant annotation", func() {
 				Template:     &privatev1.ClusterTemplateReference{Name: "test-template"},
 				SshPublicKey: &sshKey,
 				Version:      &privatev1.ClusterVersionReference{Name: versionName},
+				NodeSets: map[string]*privatev1.ClusterNodeSet{
+					"workers": privatev1.ClusterNodeSet_builder{
+						BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "bm.large"},
+						Size:                  proto.Int32(2),
+						Version:               &privatev1.ClusterVersionReference{Name: versionName},
+					}.Build(),
+				},
 				Network: privatev1.ClusterNetwork_builder{
 					PodCidr:     &podCIDR,
 					ServiceCidr: &serviceCIDR,
@@ -570,6 +577,8 @@ var _ = Describe("update tenant annotation", func() {
 		createdCR := list.Items[0]
 		Expect(createdCR.Spec.SSHPublicKey).To(Equal(sshKey))
 		Expect(createdCR.Spec.ReleaseImage).To(Equal(resolvedImage))
+		Expect(createdCR.Spec.NodeRequests).To(HaveLen(1))
+		Expect(createdCR.Spec.NodeRequests[0].ReleaseImage).To(Equal(resolvedImage))
 		Expect(createdCR.Spec.Network).ToNot(BeNil())
 		Expect(createdCR.Spec.Network.PodCIDR).To(Equal(podCIDR))
 		Expect(createdCR.Spec.Network.ServiceCIDR).To(Equal(serviceCIDR))
@@ -917,11 +926,13 @@ var _ = Describe("update tenant annotation", func() {
 		Expect(patchedCR.Spec.ReleaseImage).To(Equal(resolvedImage))
 		Expect(patchedCR.Spec.NodeRequests).To(HaveLen(1))
 		Expect(patchedCR.Spec.NodeRequests[0].NumberOfNodes).To(Equal(5))
+		Expect(patchedCR.Spec.NodeRequests[0].ReleaseImage).To(BeEmpty())
 	})
 
 	It("should update ReleaseImage when version changes", func() {
 		oldImage := "quay.io/openshift-release-dev/ocp-release:4.17.0-multi"
 		newImage := "quay.io/openshift-release-dev/ocp-release:4.18.0-multi"
+		otherImage := "quay.io/openshift-release-dev/ocp-release:4.16.0-multi"
 		newVersionName := "4-18-0"
 
 		// Existing ClusterOrder was created with the old version:
@@ -964,21 +975,29 @@ var _ = Describe("update tenant annotation", func() {
 				Client:    fakeClient,
 			}, nil)
 
-		// Mock returns the new version's image:
+		// Mock resolves each requested version independently:
 		clusterVersionsClient := NewMockClusterVersionsClient(ctrl)
 		clusterVersionsClient.EXPECT().
 			List(gomock.Any(), gomock.Any(), gomock.Any()).
-			Return(privatev1.ClusterVersionsListResponse_builder{
-				Total: 1,
-				Size:  1,
-				Items: []*privatev1.ClusterVersion{
-					privatev1.ClusterVersion_builder{
-						Spec: privatev1.ClusterVersionSpec_builder{
-							Image: newImage,
+			DoAndReturn(func(_ context.Context, req *privatev1.ClusterVersionsListRequest,
+				_ ...grpc.CallOption) (*privatev1.ClusterVersionsListResponse, error) {
+				images := map[string]string{
+					`this.metadata.name == "4-18-0"`: newImage,
+					`this.metadata.name == "4-17-0"`: oldImage,
+					`this.metadata.name == "4-16-0"`: otherImage,
+				}
+				image, ok := images[req.GetFilter()]
+				Expect(ok).To(BeTrue(), "unexpected version filter: %s", req.GetFilter())
+				return privatev1.ClusterVersionsListResponse_builder{
+					Total: 1,
+					Size:  1,
+					Items: []*privatev1.ClusterVersion{
+						privatev1.ClusterVersion_builder{
+							Spec: privatev1.ClusterVersionSpec_builder{Image: image}.Build(),
 						}.Build(),
-					}.Build(),
-				},
-			}.Build(), nil)
+					},
+				}.Build(), nil
+			}).AnyTimes()
 
 		// Cluster spec now references the new version:
 		cluster := privatev1.Cluster_builder{
@@ -994,6 +1013,16 @@ var _ = Describe("update tenant annotation", func() {
 					"gpu-gb200": privatev1.ClusterNodeSet_builder{
 						BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu.gb200"},
 						Size:                  proto.Int32(3),
+						Version:               &privatev1.ClusterVersionReference{Name: "4-17-0"},
+					}.Build(),
+					"batch": privatev1.ClusterNodeSet_builder{
+						BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu.gb200"},
+						Size:                  proto.Int32(2),
+						Version:               &privatev1.ClusterVersionReference{Name: "4-16-0"},
+					}.Build(),
+					"legacy": privatev1.ClusterNodeSet_builder{
+						BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu.gb200"},
+						Size:                  proto.Int32(1),
 					}.Build(),
 				},
 			}.Build(),
@@ -1023,6 +1052,15 @@ var _ = Describe("update tenant annotation", func() {
 
 		patchedCR := list.Items[0]
 		Expect(patchedCR.Spec.ReleaseImage).To(Equal(newImage))
+		images := map[string]string{}
+		for _, request := range patchedCR.Spec.NodeRequests {
+			images[request.NodeSet] = request.ReleaseImage
+		}
+		Expect(images).To(Equal(map[string]string{
+			"gpu-gb200": oldImage,
+			"batch":     otherImage,
+			"legacy":    "",
+		}))
 	})
 })
 

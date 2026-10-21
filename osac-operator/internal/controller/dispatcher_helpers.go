@@ -223,6 +223,18 @@ func (p *dispatchTargetProvider) GetDeprovisionStatus(ctx context.Context, resou
 	return p.base.GetDeprovisionStatus(ctx, resource, jobID)
 }
 
+func (p *dispatchTargetProvider) GetDeprovisionStatusWithExtraVars(
+	ctx context.Context,
+	resource client.Object,
+	jobID string,
+) (provisioning.ProvisionStatusWithExtraVars, error) {
+	provider, ok := p.base.(provisioning.ProvisioningProviderWithDeprovisionOutputs)
+	if !ok {
+		return provisioning.ProvisionStatusWithExtraVars{}, fmt.Errorf("provider %q does not expose deprovision outputs", p.base.Name())
+	}
+	return provider.GetDeprovisionStatusWithExtraVars(ctx, resource, jobID)
+}
+
 func (p *dispatchTargetProvider) Name() string {
 	return p.base.Name()
 }

@@ -21,6 +21,12 @@ import (
 
 var group = osacv1alpha1.GroupVersion.Group
 
+// AutoCreated marks resources created by OSAC as part of another resource's lifecycle.
+const AutoCreated = "osac.openshift.io/auto-created"
+
+// AutoCreatedFor identifies the resource that caused an automatically created resource.
+const AutoCreatedFor = "osac.openshift.io/auto-created-for"
+
 // ClusterOrderUuid is the label where the fulfillment API will write the identifier of the order.
 var ClusterOrderUuid = fmt.Sprintf("%s/%s", group, "clusterorder-uuid")
 

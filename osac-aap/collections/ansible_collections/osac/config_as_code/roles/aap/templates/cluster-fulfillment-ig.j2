@@ -49,12 +49,16 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.uid
+        - name: NETRIS_CONTROLLER_URL
+          value: "{{ netris_controller_url }}"
         - name: NETRIS_VALIDATE_CERTS
           value: "{{ netris_validate_certs | string | lower }}"
-{% if netris_ca_config_map_name %}
         - name: NETRIS_CA_PATH
-          value: {{ netris_ca_path }}
-{% endif %}
+          value: "{{ netris_ca_path }}"
+        - name: ANSIBLE_STRATEGY
+          value: netris.controller.protected_linear
+        - name: OSAC_LAUNCH_EXTRA_VARS_PATH
+          value: /runner/env/extravars
       envFrom:
         - configMapRef:
             name: cluster-fulfillment-ig

@@ -13,6 +13,9 @@ apps/app-backend/public/
 # TypeScript
 *.tsbuildinfo
 
+# Buf generation config is rendered from libs/types/buf.gen.yaml.template.
+libs/types/buf.gen.yaml
+
 # Vite
 .vite/
 

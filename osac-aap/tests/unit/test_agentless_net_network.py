@@ -269,13 +269,30 @@ def test_network_worker_reuses_config_and_secret_environment(remote_secret):
         remote_cluster_kubeconfig_secret_name=remote_secret,
         remote_cluster_kubeconfig_secret_key="kubeconfig",
         netris_ca_config_map_name="",
-        netris_ca_path="/etc/netris/ca/bundle.pem",
+        netris_ca_path="",
+        netris_controller_url="",
         netris_validate_certs=True,
     ))
     worker = pod["spec"]["containers"][0]
+    assert pod["spec"]["serviceAccountName"] == "osac-sa"
+    service_account_mount = next(
+        mount
+        for mount in worker["volumeMounts"]
+        if mount["name"] == "kube-api-access"
+    )
+    assert service_account_mount["mountPath"] == "/var/run/secrets/kubernetes.io/serviceaccount"
+    service_account_volume = next(
+        volume for volume in pod["spec"]["volumes"] if volume["name"] == "kube-api-access"
+    )
+    projected_sources = service_account_volume["projected"]["sources"]
+    assert any("serviceAccountToken" in source for source in projected_sources)
+    assert any(
+        source.get("configMap", {}).get("name") == "kube-root-ca.crt"
+        for source in projected_sources
+    )
     assert {"configMapRef": {"name": "network-fulfillment-ig", "optional": True}} in worker["envFrom"]
     assert {"secretRef": {"name": "network-fulfillment-ig"}} in worker["envFrom"]
     assert {"name": "NETRIS_VALIDATE_CERTS", "value": "true"} in worker["env"]
-    assert all(env["name"] != "NETRIS_CA_PATH" for env in worker["env"])
+    assert {"name": "NETRIS_CA_PATH", "value": ""} in worker["env"]
     assert all(volume["name"] != "agentless-net-inventory" for volume in pod["spec"]["volumes"])
     assert all(mount["name"] != "agentless-net-inventory" for mount in worker["volumeMounts"])

@@ -5,7 +5,7 @@
   when: netris_session_cookie is not defined
 
 - name: Get server cluster template
-  ansible.builtin.uri:
+  netris.controller.protected_uri:
     url: "{{ netris_controller_url }}/api/v2/server-cluster-template/{{ server_cluster_template_id }}"
     method: GET
     headers:

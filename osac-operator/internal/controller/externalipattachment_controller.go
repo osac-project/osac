@@ -397,10 +397,16 @@ func (r *ExternalIPAttachmentReconciler) syncAnnotations(
 		attachment.Annotations[osacExternalIPNameAnnotation] = externalIP.Name
 		needsUpdate = true
 	}
-	if ci != nil && ci.Status.VirtualMachineReference != nil {
-		targetNamespace := ci.Status.VirtualMachineReference.Namespace
-		if attachment.Annotations[osacExternalIPTargetNamespaceAnnotation] != targetNamespace {
-			attachment.Annotations[osacExternalIPTargetNamespaceAnnotation] = targetNamespace
+	if ci != nil {
+		if ci.Status.VirtualMachineReference != nil {
+			targetNamespace := ci.Status.VirtualMachineReference.Namespace
+			if attachment.Annotations[osacExternalIPTargetNamespaceAnnotation] != targetNamespace {
+				attachment.Annotations[osacExternalIPTargetNamespaceAnnotation] = targetNamespace
+				needsUpdate = true
+			}
+		}
+		if targetIP := computeInstanceNetworkAttachmentIP(ci); targetIP != "" && attachment.Annotations[osacExternalIPTargetIPAnnotation] != targetIP {
+			attachment.Annotations[osacExternalIPTargetIPAnnotation] = targetIP
 			needsUpdate = true
 		}
 	}
@@ -498,6 +504,17 @@ func primaryBMISubnetRef(bmi *bmfov1alpha1.BareMetalInstance) string {
 	return ""
 }
 
+func computeInstanceNetworkAttachmentIP(ci *v1alpha1.ComputeInstance) string {
+	if ci == nil || len(ci.Status.ComputeNetworkAttachmentStatuses) != 1 {
+		return ""
+	}
+	status := ci.Status.ComputeNetworkAttachmentStatuses[0]
+	if status.SubnetRef == "" {
+		return ""
+	}
+	return status.IPAddress
+}
+
 // resolveComputeInstance looks up the target ComputeInstance by UUID label, handles
 // auto-detach if the CI is being deleted, and adds the detach finalizer.
 // Returns nil CI (with no requeue) when spec.computeInstance is not set.
@@ -567,6 +584,11 @@ func (r *ExternalIPAttachmentReconciler) resolveComputeInstance(
 
 	if ci.Status.VirtualMachineReference == nil {
 		log.Info("ComputeInstance has no VirtualMachineReference yet, requeueing", "computeInstance", ci.Name)
+		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+
+	if computeInstanceNetworkAttachmentIP(ci) == "" {
+		log.Info("ComputeInstance network attachment IP is not reported yet, requeueing", "computeInstance", ci.Name)
 		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
 

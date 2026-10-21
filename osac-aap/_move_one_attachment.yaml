@@ -23,8 +23,10 @@
         network_attachment:
           host_name: "{{ host_name }}"
           logical_interface_name: "{{ item.interface }}"
+          subnet_ref: "{{ item.subnet_ref }}"
           from_vnet_name: "{{ offboard | ternary(item.tenant_vnet, provisioning_vnet) }}"
           to_vnet_name: "{{ offboard | ternary(provisioning_vnet, item.tenant_vnet) }}"
+        network_attachment_subnet: "{{ item.subnet }}"
   always:
     - name: Release V-Net lock for tenant network
       ansible.builtin.include_role:

@@ -218,10 +218,25 @@ func (r *request[O]) addVisibilityFilter(ctx context.Context) (result bool, err 
 	//
 	// Tenants that are not visible are omitted. If the user can see tenant 'b' but not tenant 'a', the filter will
 	// not mention tenant 'a'.
+	//
+	// If the user has tenant admin access to a tenant, project-level filtering is skipped for that tenant.
 	tenants := r.visibility.VisibleTenants()
 	filters := 0
 	fmt.Fprintf(&r.sql.filter, "(")
 	for _, tenant := range tenants {
+		if filters > 0 {
+			fmt.Fprintf(&r.sql.filter, " or ")
+		}
+		index := len(r.sql.params) + 1
+		r.sql.params = append(r.sql.params, tenant)
+
+		// If the user has tenant admin access, skip project-level filtering for this tenant
+		if r.visibility.HasTenantAdminAccess(tenant) {
+			fmt.Fprintf(&r.sql.filter, "tenant = $%d", index)
+			filters++
+			continue
+		}
+
 		projects := r.visibility.VisibleProjects(tenant)
 		named := make([]string, 0, len(projects))
 		for _, project := range projects {
@@ -229,11 +244,6 @@ func (r *request[O]) addVisibilityFilter(ctx context.Context) (result bool, err 
 				named = append(named, project)
 			}
 		}
-		if filters > 0 {
-			fmt.Fprintf(&r.sql.filter, " or ")
-		}
-		index := len(r.sql.params) + 1
-		r.sql.params = append(r.sql.params, tenant)
 		if len(named) == 0 {
 			// For the Projects table, match the default project by name=''.
 			// For all other tables, match resources in the default project by project=''.

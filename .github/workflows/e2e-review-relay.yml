@@ -1,0 +1,28 @@
+---
+# Asks e2e-pr.yml to look at a pull request again as soon as a review is submitted or dismissed, or the pull request
+# changes between draft and ready (neither starts CI, so nothing else would wake the decision).
+#
+# A review on a pull request from a fork cannot start anything with a token that can write: its token is read-only and
+# the workflow file is the pull request's own. So this workflow does nothing at all. It only has to finish. When it does,
+# e2e-pr.yml runs from the default branch with the repository's token (its workflow_run trigger lists this workflow by
+# name), finds the pull request by the exact head commit this run reports, and decides from the live state. Keep the name
+# below in step with that list.
+#
+# No secret, no permission and no checkout: nothing here can leak or run pull request code.
+name: E2E review relay
+
+on:
+  pull_request_review:
+    types: [submitted, dismissed]
+  pull_request:
+    types: [ready_for_review, converted_to_draft]
+
+permissions: {}
+
+jobs:
+  relay:
+    name: Relay
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - run: echo "The pull request changed; e2e-pr.yml decides again when this run completes."

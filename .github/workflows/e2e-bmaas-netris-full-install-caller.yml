@@ -1,16 +1,16 @@
 ---
 name: E2E BMaaS Netris Full Install
-run-name: "E2E BMaaS Netris Full Install${{ (inputs.pr-number || github.event.pull_request.number) != '' && format(' / PR #{0} @ {1}', inputs.pr-number || github.event.pull_request.number, inputs.pr-sha || github.event.pull_request.head.sha) || '' }}"
+run-name: "E2E BMaaS Netris Full Install${{ inputs.pr-number != '' && format(' / PR #{0} @ {1}', inputs.pr-number, inputs.pr-sha) || '' }}"
 
 permissions:
   contents: read
   checks: write
   pull-requests: read
 
+# Started by hand (Actions, Run workflow, with the pull request's number, repository, branch and commit). On a pull request
+# use the comment `/test netris` instead: it runs the suite through e2e-pr.yml and gives it its line on the pull request.
+# It used to start on the label e2e-bmaas-netris, which put a skipped run on every pull request for every label change.
 on:
-  pull_request_target:
-    types: [labeled]
-    branches: [main]
   workflow_dispatch:
     inputs:
       test-infra-repository:
@@ -26,39 +26,117 @@ on:
         required: false
         default: ""
       pr-number:
-        description: "PR number being tested"
+        description: "PR number being tested; the repository, branch, commit and fork author below are then read from the PR itself"
         required: false
         default: ""
       pr-repository:
-        description: "Repository containing the PR head, including a fork"
+        description: "Ignored when a PR number is given. Otherwise empty or this repository (a fork needs a PR number)"
         required: false
         default: ""
       pr-ref:
-        description: "PR head branch/ref"
+        description: "Ignored when a PR number is given. Otherwise the branch of this repository to test (default: the branch the run is on)"
         required: false
         default: ""
       pr-sha:
-        description: "Expected immutable PR head SHA"
+        description: "Optional: the commit the run is for. With a PR number the run fails if the PR head is a different commit; empty means the current head"
         required: false
         default: ""
       fork-pr-author-association:
-        description: "PR author association used by fork authorization"
+        description: "Ignored: read from the PR"
         required: false
         default: ""
       fork-pr-author:
-        description: "PR author login used by fork authorization"
+        description: "Ignored: read from the PR"
         required: false
         default: ""
 
 concurrency:
-  group: e2e-bmaas-netris-full-install-${{ inputs.pr-repository || github.event.pull_request.head.repo.full_name || github.repository }}-${{ inputs.pr-number || github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ inputs.pr-number != '' || github.event_name == 'pull_request_target' }}
+  group: e2e-bmaas-netris-full-install-${{ github.repository }}-${{ inputs.pr-number || github.run_id }}
+  cancel-in-progress: ${{ inputs.pr-number != '' }}
 
 jobs:
+  # What to test comes from the pull request itself, not from what was typed or sent: its head repository, branch and commit,
+  # and, for a fork, who wrote it and how they relate to the organization (the fork authorization in the called workflow
+  # runs only when that is given, so a dispatch that left it out would skip the check). The code is then fetched by commit,
+  # not by branch, because the run takes hours and a push in between must not change what gets built with the secrets.
+  # Without a pull request number it tests the repository's own branch, and a fork needs a pull request.
+  pr:
+    name: Read the pull request
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      repository: ${{ steps.pr.outputs.repository }}
+      ref: ${{ steps.pr.outputs.ref }}
+      sha: ${{ steps.pr.outputs.sha }}
+      source-ref: ${{ steps.pr.outputs.source-ref }}
+      components: ${{ steps.pr.outputs.components }}
+      fork-author: ${{ steps.pr.outputs.fork-author }}
+      fork-association: ${{ steps.pr.outputs.fork-association }}
+    steps:
+      - name: Read the pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ inputs.pr-number }}
+          TYPED_REPOSITORY: ${{ inputs.pr-repository }}
+          TYPED_REF: ${{ inputs.pr-ref }}
+          TYPED_SHA: ${{ inputs.pr-sha }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          repository="${REPO}"
+          ref="${BRANCH}"
+          sha=""
+          fork_author=""
+          fork_association=""
+          if [[ -n "${NUMBER}" ]]; then
+            [[ "${NUMBER}" =~ ^[0-9]+$ ]] || { echo "::error::The pull request number must be digits only."; exit 1; }
+            pull=$(gh api "repos/${REPO}/pulls/${NUMBER}")
+            repository=$(jq -r '.head.repo.full_name // empty' <<<"${pull}")
+            [[ -n "${repository}" ]] || { echo "::error::The repository of the pull request's branch no longer exists."; exit 1; }
+            ref=$(jq -r '.head.ref' <<<"${pull}")
+            sha=$(jq -r '.head.sha' <<<"${pull}")
+            # A commit that was asked for must still be the head: the run tests that commit or none.
+            if [[ -n "${TYPED_SHA}" && "${TYPED_SHA}" != "${sha}" ]]; then
+              echo "::error::The head of PR #${NUMBER} is ${sha}, not the requested ${TYPED_SHA}; refusing to run."
+              exit 1
+            fi
+            if [[ "${repository}" != "${REPO}" ]]; then
+              fork_author=$(jq -r '.user.login' <<<"${pull}")
+              fork_association=$(jq -r '.author_association' <<<"${pull}")
+            fi
+          else
+            if [[ -n "${TYPED_REPOSITORY}" && "${TYPED_REPOSITORY}" != "${REPO}" ]]; then
+              echo "::error::A repository other than ${REPO} needs a pull request number."
+              exit 1
+            fi
+            if [[ -n "${TYPED_REF}" ]]; then ref="${TYPED_REF}"; fi
+          fi
+          # By commit for a pull request, by branch otherwise.
+          source_ref="${sha:-${ref}}"
+          components=$(jq -cn --arg repo "${repository}" --arg ref "${source_ref}" '[
+            {repo: $repo, ref: $ref, containerfile: "fulfillment-service/Containerfile", context: ".", imageKey: "service.images.service"},
+            {repo: $repo, ref: $ref, containerfile: "osac-operator/Containerfile", context: ".", imageKey: "operator.image.repository"},
+            {repo: $repo, ref: $ref, containerfile: "osac-aap/execution-environment/execution-environment.yaml", context: ".", imageKey: "aap.bootstrap.image", buildType: "ansible-builder"},
+            {repo: $repo, ref: $ref, containerfile: "osac-aap/execution-environment/execution-environment.yaml", context: ".", imageKey: "aap.configAsCode.eeImage", buildType: "ansible-builder"},
+            {repo: $repo, ref: $ref, containerfile: "bare-metal-fulfillment-operator/Containerfile", context: ".", imageKey: "bmf.image.repository"}
+          ]')
+          {
+            echo "repository=${repository}"
+            echo "ref=${ref}"
+            echo "sha=${sha}"
+            echo "source-ref=${source_ref}"
+            echo "components=${components}"
+            echo "fork-author=${fork_author}"
+            echo "fork-association=${fork_association}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Testing ${repository} at ${source_ref}" >> "$GITHUB_STEP_SUMMARY"
+
   e2e-bmaas-netris:
-    if: >-
-      github.event_name != 'pull_request_target'
-      || github.event.label.name == 'e2e-bmaas-netris'
+    needs: pr
     permissions:
       contents: read
       id-token: write
@@ -66,15 +144,15 @@ jobs:
       pull-requests: read
     uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-netris-full-install.yml@main
     with:
-      osac-repo: https://github.com/${{ inputs.pr-repository || github.event.pull_request.head.repo.full_name || github.repository }}.git
-      osac-branch: ${{ inputs.pr-ref || github.event.pull_request.head.ref || github.ref_name }}
-      components: '[{"repo":"${{ inputs.pr-repository || github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ inputs.pr-ref || github.event.pull_request.head.ref || github.ref_name }}","containerfile":"fulfillment-service/Containerfile","context":".","imageKey":"service.images.service"},{"repo":"${{ inputs.pr-repository || github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ inputs.pr-ref || github.event.pull_request.head.ref || github.ref_name }}","containerfile":"osac-operator/Containerfile","context":".","imageKey":"operator.image.repository"},{"repo":"${{ inputs.pr-repository || github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ inputs.pr-ref || github.event.pull_request.head.ref || github.ref_name }}","containerfile":"osac-aap/execution-environment/execution-environment.yaml","context":".","imageKey":"aap.bootstrap.image","buildType":"ansible-builder"},{"repo":"${{ inputs.pr-repository || github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ inputs.pr-ref || github.event.pull_request.head.ref || github.ref_name }}","containerfile":"osac-aap/execution-environment/execution-environment.yaml","context":".","imageKey":"aap.configAsCode.eeImage","buildType":"ansible-builder"},{"repo":"${{ inputs.pr-repository || github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ inputs.pr-ref || github.event.pull_request.head.ref || github.ref_name }}","containerfile":"bare-metal-fulfillment-operator/Containerfile","context":".","imageKey":"bmf.image.repository"}]'
+      osac-repo: https://github.com/${{ needs.pr.outputs.repository }}.git
+      osac-branch: ${{ needs.pr.outputs.source-ref }}
+      components: ${{ needs.pr.outputs.components }}
       test-infra-repository: ${{ inputs.test-infra-repository || 'osac-project/osac-test-infra' }}
       test-infra-ref: ${{ inputs.test-infra-ref || 'main' }}
       test-infra-sha: ${{ inputs.test-infra-sha || '' }}
-      pr-repository: ${{ inputs.pr-repository || github.event.pull_request.head.repo.full_name || '' }}
-      pr-ref: ${{ inputs.pr-ref || github.event.pull_request.head.ref || '' }}
-      pr-sha: ${{ inputs.pr-sha || github.event.pull_request.head.sha || '' }}
-      fork-pr-author-association: ${{ inputs.fork-pr-author-association || (github.event.pull_request.head.repo.full_name != github.repository && github.event.pull_request.author_association) || '' }}
-      fork-pr-author: ${{ inputs.fork-pr-author || (github.event.pull_request.head.repo.full_name != github.repository && github.event.pull_request.user.login) || '' }}
-      pr-number: ${{ inputs.pr-number || github.event.pull_request.number || '' }}
+      pr-repository: ${{ inputs.pr-number != '' && needs.pr.outputs.repository || '' }}
+      pr-ref: ${{ inputs.pr-number != '' && needs.pr.outputs.ref || '' }}
+      pr-sha: ${{ needs.pr.outputs.sha }}
+      fork-pr-author-association: ${{ needs.pr.outputs.fork-association }}
+      fork-pr-author: ${{ needs.pr.outputs.fork-author }}
+      pr-number: ${{ inputs.pr-number }}

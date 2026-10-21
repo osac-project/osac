@@ -19,6 +19,7 @@
                 ansible_user: pool-test
     expected_tables:
       - external_ip_pools
+      - external_ips
       - subnets
       - virtual_networks
   tasks:

@@ -21,6 +21,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -453,5 +454,88 @@ var _ = Describe("BareMetalInstance network/provision ordering", func() {
 		// The key behavior is verified: provisioning runs first,
 		// and networking does NOT run before provisioning completes.
 		// This ensures the tenant never sees a half-built host.
+	})
+})
+
+var _ = Describe("BareMetalInstance networking CRD contract", func() {
+	var ctx context.Context
+
+	BeforeEach(func() {
+		ctx = context.Background()
+	})
+
+	It("rejects network attachment spec changes while keeping the persisted attachment unchanged", func() {
+		bmi := &v1alpha1.BareMetalInstance{
+			ObjectMeta: metav1.ObjectMeta{
+				GenerateName: "bmi-contract-",
+				Namespace:    "default",
+			},
+			Spec: v1alpha1.BareMetalInstanceSpec{
+				ExternalHostID: "host-contract-1",
+				Selector: v1alpha1.HostSelectorSpec{
+					HostSelector: map[string]string{"test": "value"},
+				},
+				TemplateID: "bm_provision",
+				NetworkAttachments: []v1alpha1.BareMetalNetworkAttachment{{
+					SubnetRef:         "subnet-a",
+					Interface:         "eth9",
+					Primary:           true,
+					SecurityGroupRefs: []string{"sg-a"},
+				}},
+			},
+		}
+		Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, bmi) })
+
+		mutate := func(mutateFn func(*v1alpha1.BareMetalInstance)) error {
+			stored := &v1alpha1.BareMetalInstance{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bmi), stored)).To(Succeed())
+			mutateFn(stored)
+			return k8sClient.Update(ctx, stored)
+		}
+
+		By("rejecting a changed subnet")
+		err := mutate(func(object *v1alpha1.BareMetalInstance) {
+			object.Spec.NetworkAttachments[0].SubnetRef = "subnet-b"
+		})
+		Expect(err).To(HaveOccurred())
+		Expect(apierrors.IsInvalid(err)).To(BeTrue())
+
+		By("rejecting a changed interface")
+		err = mutate(func(object *v1alpha1.BareMetalInstance) {
+			object.Spec.NetworkAttachments[0].Interface = "eth8"
+		})
+		Expect(err).To(HaveOccurred())
+		Expect(apierrors.IsInvalid(err)).To(BeTrue())
+
+		By("rejecting a changed primary designation")
+		err = mutate(func(object *v1alpha1.BareMetalInstance) {
+			object.Spec.NetworkAttachments[0].Primary = false
+		})
+		Expect(err).To(HaveOccurred())
+		Expect(apierrors.IsInvalid(err)).To(BeTrue())
+
+		By("rejecting an added attachment")
+		err = mutate(func(object *v1alpha1.BareMetalInstance) {
+			object.Spec.NetworkAttachments = append(object.Spec.NetworkAttachments,
+				v1alpha1.BareMetalNetworkAttachment{SubnetRef: "subnet-c"})
+		})
+		Expect(err).To(HaveOccurred())
+		Expect(apierrors.IsInvalid(err)).To(BeTrue())
+
+		By("keeping the persisted attachment unchanged")
+		stored := &v1alpha1.BareMetalInstance{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bmi), stored)).To(Succeed())
+		Expect(stored.Spec.NetworkAttachments).To(HaveLen(1))
+		Expect(stored.Spec.NetworkAttachments[0].SubnetRef).To(Equal("subnet-a"))
+		Expect(stored.Spec.NetworkAttachments[0].Interface).To(Equal("eth9"))
+		Expect(stored.Spec.NetworkAttachments[0].Primary).To(BeTrue())
+		Expect(stored.Spec.NetworkAttachments[0].SecurityGroupRefs).To(Equal([]string{"sg-a"}))
+
+		By("allowing a metadata update")
+		err = mutate(func(object *v1alpha1.BareMetalInstance) {
+			object.SetLabels(map[string]string{"contract-test": "allowed"})
+		})
+		Expect(err).ToNot(HaveOccurred())
 	})
 })

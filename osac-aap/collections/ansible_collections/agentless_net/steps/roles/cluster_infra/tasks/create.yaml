@@ -84,7 +84,7 @@
 
 # --- agentless_net: allocate VLAN and configure switches ---
 
-- name: Allocate VLAN for cluster  # noqa: no-changed-when
+- name: Allocate VLAN for cluster # noqa: no-changed-when
   environment:
     ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
     ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
@@ -112,7 +112,7 @@
   ansible.builtin.debug:
     msg: "Allocated VLAN {{ cluster_infra_vlan_id }} for cluster {{ cluster_infra_name }}"
 
-- name: Create VLAN on switches  # noqa: no-changed-when
+- name: Create VLAN on switches # noqa: no-changed-when
   environment:
     ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
     ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
@@ -123,7 +123,7 @@
       -e vlan_id={{ cluster_infra_vlan_id }}
       {{ role_path }}/playbooks/l2_create_vlan.yaml
 
-- name: Store allocated host IDs in network state  # noqa: no-changed-when
+- name: Store allocated host IDs in network state # noqa: no-changed-when
   ansible.builtin.raw: |
     python3 - '{{ agentless_net_net_node_ipam_state_file }}' \
               '{{ cluster_infra_state_key }}' \
@@ -171,7 +171,7 @@
   loop: "{{ cluster_infra_allocated_host_ids }}"
   when: item not in cluster_infra_host_port_map
 
-- name: Set access ports for allocated hosts  # noqa: no-changed-when
+- name: Set access ports for allocated hosts # noqa: no-changed-when
   environment:
     ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
     ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
@@ -212,7 +212,7 @@
       - "Subnet: {{ agentless_net_subnet_cidr }}, Gateway: {{ cluster_infra_subnet_gateway }}"
       - "External link: {{ cluster_infra_external_router_ip }} <-> {{ cluster_infra_external_peer_ip }}"
 
-- name: Store veth IPs in network state  # noqa: no-changed-when
+- name: Store veth IPs in network state # noqa: no-changed-when
   ansible.builtin.raw: |
     python3 - '{{ agentless_net_net_node_ipam_state_file }}' \
               '{{ cluster_infra_state_key }}' \
@@ -235,7 +235,7 @@
     STATE_PY
   delegate_to: "{{ groups['net_nodes'][0] }}"
 
-- name: Create L3 router namespace  # noqa: no-changed-when
+- name: Create L3 router namespace # noqa: no-changed-when
   environment:
     ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
     ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
@@ -257,7 +257,7 @@
   ansible.builtin.set_fact:
     cluster_infra_snat_veth_ns: "v{{ cluster_infra_name | hash('md5') | truncate(11, True, '') }}i"
 
-- name: Configure SNAT for outbound internet access  # noqa: no-changed-when
+- name: Configure SNAT for outbound internet access # noqa: no-changed-when
   environment:
     ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
     ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"

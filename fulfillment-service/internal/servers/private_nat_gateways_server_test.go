@@ -23,6 +23,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -418,15 +419,16 @@ var _ = Describe("Private NAT gateways server", func() {
 			object := privatev1.NATGateway_builder{
 				Id: createResponse.GetObject().GetId(),
 				Status: privatev1.NATGatewayStatus_builder{
-					State:   privatev1.NATGatewayState_NAT_GATEWAY_STATE_FAILED,
-					Message: &message,
-					Hub:     "hub-1",
+					State:               privatev1.NATGatewayState_NAT_GATEWAY_STATE_FAILED,
+					StateTransitionTime: timestamppb.Now(),
+					Message:             &message,
+					Hub:                 "hub-1",
 				}.Build(),
 			}.Build()
 			response, err := natGatewaysServer.Update(ctx, privatev1.NATGatewaysUpdateRequest_builder{
 				Object: object,
 				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"status.state", "status.message", "status.hub"},
+					Paths: []string{"status.state", "status.state_transition_time", "status.message", "status.hub"},
 				},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -724,6 +726,36 @@ var _ = Describe("Private NAT gateways server", func() {
 			Expect(err).To(HaveOccurred())
 			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
 			Expect(err.Error()).To(ContainSubstring("immutable"))
+		})
+
+		It("rejects moving a stored NATGateway into a reserved tenant and preserves the stored object", func() {
+			vnID := createVirtualNetwork()
+			eip := createAllocatedExternalIP()
+			createResponse, err := natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
+				Object: privatev1.NATGateway_builder{
+					Metadata: privatev1.Metadata_builder{Name: "tenant-immutable-nat", Tenant: testTenant}.Build(),
+					Spec: privatev1.NATGatewaySpec_builder{
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := createResponse.GetObject().GetId()
+
+			_, err = natGatewaysServer.Update(ctx, privatev1.NATGatewaysUpdateRequest_builder{
+				Object: privatev1.NATGateway_builder{
+					Id:       id,
+					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.tenant"}},
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
+			Expect(err.Error()).To(ContainSubstring("objects cannot be placed in the 'shared' tenant"))
+
+			stored, getErr := natGatewaysServer.Get(ctx, privatev1.NATGatewaysGetRequest_builder{Id: id}.Build())
+			Expect(getErr).ToNot(HaveOccurred())
+			Expect(stored.GetObject().GetMetadata().GetTenant()).To(Equal(testTenant))
 		})
 
 		It("rejects update of spec.external_ip", func() {

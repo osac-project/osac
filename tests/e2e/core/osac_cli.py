@@ -291,10 +291,22 @@ class OsacCLI:
     def get_unchecked(self, resource: str) -> tuple[str, int]:
         return self._run_unchecked("get", resource)
 
-    def create_cluster_with_catalog_item(self, *, catalog_item: str, name: str, version: str | None = None) -> str:
+    def create_cluster_with_catalog_item(
+        self,
+        *,
+        catalog_item: str,
+        name: str,
+        version: str | None = None,
+        pull_secret: str | None = None,
+        ssh_public_key_file: str | None = None,
+    ) -> str:
         args = ["create", "cluster", "--catalog-item", catalog_item, "--name", name]
         if version is not None:
             args.extend(["--version", version])
+        if pull_secret is not None:
+            args.extend(["--pull-secret", pull_secret])
+        if ssh_public_key_file is not None:
+            args.extend(["--ssh-public-key-file", ssh_public_key_file])
         return self._parse_uuid(self._run(*args))
 
     def create_compute_instance_with_catalog_item(

@@ -155,7 +155,7 @@ func (s *FabricDomainsServer) Create(ctx context.Context, request *publicv1.Fabr
 	}
 	privateObject := &privatev1.FabricDomain{}
 	if err := s.inMapper.Copy(ctx, request.GetObject(), privateObject); err != nil {
-		return nil, grpcstatus.Error(grpccodes.Internal, "failed to process fabric domain")
+		return nil, publicInputMappingError(err, "failed to process fabric domain")
 	}
 	privateResponse, err := s.delegate.Create(ctx, privatev1.FabricDomainsCreateRequest_builder{Object: privateObject}.Build())
 	if err != nil {
@@ -169,12 +169,17 @@ func (s *FabricDomainsServer) Create(ctx context.Context, request *publicv1.Fabr
 }
 
 func (s *FabricDomainsServer) Update(ctx context.Context, request *publicv1.FabricDomainsUpdateRequest) (*publicv1.FabricDomainsUpdateResponse, error) {
+	ctx = withPublicAPIView(ctx)
+	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
+		return nil, err
+	}
+
 	if request.GetObject() == nil {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "object is mandatory")
 	}
 	privateObject := &privatev1.FabricDomain{}
 	if err := s.inMapper.Copy(ctx, request.GetObject(), privateObject); err != nil {
-		return nil, grpcstatus.Error(grpccodes.Internal, "failed to process fabric domain")
+		return nil, publicInputMappingError(err, "failed to process fabric domain")
 	}
 	privateRequest := privatev1.FabricDomainsUpdateRequest_builder{Object: privateObject, UpdateMask: request.GetUpdateMask(), Lock: request.GetLock()}.Build()
 	privateResponse, err := s.delegate.Update(ctx, privateRequest)

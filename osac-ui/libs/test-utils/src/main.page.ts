@@ -1,5 +1,6 @@
 import { type Page, expect } from '@playwright/test';
 
+import { InstanceTypesMainPage } from '../../locators/instance_types';
 import { MainPage } from '../../locators/main_page';
 import { TenantsMainPage } from '../../locators/tenants';
 
@@ -51,4 +52,11 @@ export const openTenantsPage = async (page: Page): Promise<void> => {
   await openMainPageOption(page, 'tenants');
 
   await expect(page.getByRole(...TenantsMainPage.pageTitle)).toBeVisible();
+};
+
+/** Open the Instance types page from the Infrastructure section and verify its title. */
+export const openInstanceTypesPage = async (page: Page): Promise<void> => {
+  await openMainPageOption(page, 'instanceTypes');
+
+  await expect(page.getByRole(...InstanceTypesMainPage.pageTitle)).toBeVisible();
 };

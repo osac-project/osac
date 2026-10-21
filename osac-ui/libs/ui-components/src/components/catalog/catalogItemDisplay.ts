@@ -42,6 +42,19 @@ export const catalogItemTypeBadgeLabel = (kind: CatalogItem, t: TFunction): stri
   }
 };
 
+export const getCatalogItemKind = (kind: CatalogItem): CatalogItemKind | undefined => {
+  switch (kind.$typeName) {
+    case 'osac.public.v1.ComputeInstanceCatalogItem':
+      return 'vm';
+    case 'osac.public.v1.BareMetalInstanceCatalogItem':
+      return 'bm';
+    case 'osac.public.v1.ClusterCatalogItem':
+      return 'cluster';
+    default:
+      return undefined;
+  }
+};
+
 export const catalogItemMetadataLabelEntries = (
   item: CatalogItem,
 ): Array<{ key: string; value: string }> => {

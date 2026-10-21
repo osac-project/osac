@@ -222,7 +222,12 @@ func createCatalogItemNetworkClassFixtureWithoutCleanup(ctx context.Context) str
 	GinkgoHelper()
 	classes := privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
 	class, err := classes.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
-		Object: privatev1.NetworkClass_builder{Metadata: catalogItemFixtureMetadata("shared", ""), Title: "Catalog item integration network", FabricManager: new("netris")}.Build(),
+		Object: privatev1.NetworkClass_builder{
+			Metadata:      catalogItemFixtureMetadata("shared", ""),
+			Title:         "Catalog item integration network",
+			FabricManager: new("netris"),
+			K8SManager:    new(testVMK8SManagerName),
+		}.Build(),
 	}.Build())
 	Expect(err).NotTo(HaveOccurred())
 	classID := class.GetObject().GetId()
@@ -676,7 +681,7 @@ func createCatalogItemBareMetalInstanceTypeFixture(ctx context.Context, _ string
 			Metadata: catalogItemFixtureMetadata(auth.SharedTenant, ""),
 			Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 				Hardware: privatev1.BareMetalHardwareSpec_builder{
-					Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 4, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
+					Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 4, Architecture: "amd64", ThreadsPerCore: 2}.Build(),
 					Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 16}.Build(),
 					NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
 						privatev1.BareMetalNetworkPortSpec_builder{

@@ -1,6 +1,9 @@
 import * as React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
+  Content,
+  ContentVariants,
+  Divider,
   Nav,
   NavExpandable,
   NavItem,
@@ -13,6 +16,8 @@ import { useSession } from '@osac/ui-components/hooks/use-session';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
 import { type NavLink, isNavSection, navRowsForRole } from './shellNav';
+
+import './ShellSidebar.css';
 
 const ShellNavItem = ({ item }: { item: NavLink }) => {
   const location = useLocation();
@@ -45,6 +50,10 @@ export const ShellSidebar = () => {
   return (
     <PageSidebar>
       <PageSidebarBody usePageInsets isFilled>
+        <Content className="osac-navbar-title" component={ContentVariants.h2}>
+          {t('Cloud Extensions')}
+        </Content>
+        <Divider />
         <Nav aria-label="Primary navigation">
           <NavList>
             {navRows.map((row) => {

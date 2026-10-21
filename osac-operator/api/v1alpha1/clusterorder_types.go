@@ -139,8 +139,11 @@ type NodeRequest struct {
 	ReleaseImage string `json:"releaseImage,omitempty"`
 }
 
-// NodeRequestStatus records the observed node count for an instance type.
-// Unlike the desired count in NodeRequest, the observed count can be zero.
+// NodeRequestStatus records the observed node count for a node set.
+// The count is not updated while the NodePool has zero observed
+// replicas (e.g. during initial provisioning or node drain), so
+// an existing entry retains its last positive value until a new
+// positive observation arrives.
 type NodeRequestStatus struct {
 	// NodeSet identifies the logical group whose observed count is reported.
 	// +kubebuilder:validation:Required
@@ -256,6 +259,16 @@ type ClusterOrderStatus struct {
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:Enum=Progressing;Failed;Ready;Deleting
 	Phase ClusterOrderPhaseType `json:"phase,omitempty"`
+
+	// PhaseTransitionTime records when the controller last changed Phase. It moves only
+	// when Phase changes, so metering can bill state changes from the moment they happened
+	// rather than from when feedback noticed them: during a fulfillment outage every
+	// transition would otherwise be dated at recovery. It follows the RunningConfigSince
+	// pattern: stamped once per phase change, kept when unchanged.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Format=date-time
+	PhaseTransitionTime *metav1.Time `json:"phaseTransitionTime,omitempty"`
 
 	// Conditions holds an array of metav1.Condition that describe the state of the ClusterOrder
 	// +kubebuilder:validation:Optional

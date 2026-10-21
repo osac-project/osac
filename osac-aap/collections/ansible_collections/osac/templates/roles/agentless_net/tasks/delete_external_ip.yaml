@@ -1,4 +1,6 @@
 ---
-- name: Report unimplemented AgentlessNet operation
-  ansible.builtin.fail:
-    msg: "NotImplemented: agentless_net resource operations are not implemented."
+- name: Release an AgentlessNet ExternalIP
+  ansible.builtin.include_tasks: _external_ip.yaml
+  vars:
+    agentless_net_external_ip_action: release_external_ip
+    agentless_net_external_ip_operation: external_ip.release

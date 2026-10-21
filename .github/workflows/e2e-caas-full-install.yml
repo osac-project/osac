@@ -1,23 +1,46 @@
 ---
+# The CaaS full-install E2E: one job, no gating. Whether it runs is decided elsewhere:
+#   * for a pull request, e2e-pr.yml calls it once the exact commit is approved, no cheap check has failed and the change
+#     touches the suite (it does not wait for CI);
+#   * for a merge queue entry, e2e-queue.yml calls it;
+#   * every 5 hours on main (schedule), and by hand (workflow_dispatch).
+# When called, `repo` and `sha` name the exact commit to test (a fork's commit for a fork pull request).
 name: E2E CaaS Full Install
 
 permissions:
   contents: read
 
 on:
-  pull_request:
-    branches: [main]
-  merge_group:
-  # 10x/day. Offset 38 minutes past the hour, not on the hour -- GitHub
+  workflow_call:
+    inputs:
+      repo:
+        description: Repository that holds the commit to test, owner/name
+        required: true
+        type: string
+      sha:
+        description: The commit to test
+        required: true
+        type: string
+      pr-number:
+        description: The pull request, empty for a merge queue entry
+        required: false
+        type: string
+        default: ""
+      fork-pr-author:
+        description: Login of the author of a fork pull request, empty when the commit is not from a fork
+        required: false
+        type: string
+        default: ""
+      fork-pr-author-association:
+        description: Author association of a fork pull request, empty when the commit is not from a fork
+        required: false
+        type: string
+        default: ""
+  # 5x/day. Offset 38 minutes past the hour, not on the hour -- GitHub
   # Actions' shared cron scheduler queues everyone's on-the-hour
-  # schedules together and can delay/drop them under load (see
-  # osac-test-infra's e2e-caas-netris-caller.yml for the same reasoning).
-  # Staggered from the other periodic workflows in this repo too, so they
-  # don't all land on the same offset simultaneously. 24 doesn't divide
-  # evenly by 10, so this lists 10 explicit hours (roughly every 2-3h)
-  # instead of a bare */N pattern.
+  # schedules together and can delay/drop them under load.
   schedule:
-    - cron: "38 0,2,5,7,10,12,14,17,19,22 * * *"
+    - cron: "38 2,7,12,17,22 * * *"
   workflow_dispatch:
     inputs:
       test-suite:
@@ -37,188 +60,22 @@ on:
         required: false
         default: "main"
 
-concurrency:
-  # pull_request: one run per PR; a newer push cancels the older run.
-  # merge_group: a UNIQUE group per run (github.run_id) -- NEVER a shared one.
-  # GitHub's merge queue tests entries speculatively in parallel (one run per
-  # queue position, re-fired on every reshuffle), so a shared group with
-  # cancel-in-progress makes those concurrent runs cancel each other; the
-  # survivors' required e2e-*-gate never reports and the whole queue deadlocks
-  # with every entry stuck on AWAITING_CHECKS. Stale runs left behind by a
-  # reshuffle are cancelled precisely, per queue entry, by the
-  # cancel-stale-merge-queue job below -- not by collapsing this group.
-  group: e2e-caas-full-install-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
-  # merge_group only: cancel a superseded run for THIS PR's queue entry.
-  #
-  # GitHub tests queue entries speculatively in parallel and re-creates an
-  # entry's gh-readonly-queue branch (new sha) on every reshuffle, but does not
-  # reliably cancel the now-stale run for the entry it replaced -- so the old
-  # run keeps executing against a deleted ref until it hits the ~40-minute helm
-  # timeout. This job kills that stale run (the problem #712 targeted) WITHOUT
-  # cancelling other PRs' concurrent entries. It cannot be done in the
-  # concurrency block above: a per-PR key can't be extracted there (Actions
-  # concurrency expressions have no regex, and merge_group carries no PR number
-  # field), and `concurrency` is not an allowed key on the reusable-workflow
-  # caller job.
-  #
-  # A PR is in the queue at most once, so an OLDER run (lower run id) of THIS
-  # workflow for the same pr-<N> is by definition superseded. Run ids are
-  # monotonic, so cancelling only older runs means the newest run for the entry
-  # always survives -- no mutual-cancel race, even across back-to-back
-  # reshuffles. Every other PR has a different pr-<N> and is left untouched --
-  # that is what preserves parallel queue testing.
-  cancel-stale-merge-queue:
-    if: github.event_name == 'merge_group'
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-    steps:
-      - name: Cancel superseded runs for this queue entry
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          HEAD_REF: ${{ github.event.merge_group.head_ref }}
-          THIS_RUN: ${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          # HEAD_REF: .../gh-readonly-queue/<base>/pr-<N>-<sha> -> take "pr-<N>".
-          entry="${HEAD_REF##*/}"   # pr-<N>-<sha>
-          pr="${entry%-*}"          # pr-<N>
-          case "$pr" in
-            pr-[0-9]*) ;;
-            *) echo "unexpected merge_group head_ref: '${HEAD_REF}'" >&2; exit 1 ;;
-          esac
-          echo "This entry: ${pr} (run ${THIS_RUN}); cancelling any older run for it."
-          # `gh run list` runs without a fallback: a failure here (auth/API) is
-          # real and must surface loudly. Only the per-run cancel tolerates the
-          # benign race where the target run finished between listing and cancel.
-          gh run list --workflow e2e-caas-full-install.yml --event merge_group \
-            --limit 100 --json databaseId,headBranch,status \
-            --jq ".[] | select(.headBranch | contains(\"/${pr}-\"))
-                      | select(.status == \"in_progress\" or .status == \"queued\")
-                      | select(.databaseId < ${THIS_RUN}) | .databaseId" \
-          | while read -r id; do
-              echo "Cancelling superseded run ${id}"
-              gh run cancel "${id}" || echo "run ${id} already finished; nothing to cancel"
-            done
-
-  changes:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: read
-    outputs:
-      # Same ignore list for pull_request and merge_group (OSAC-3879).
-      # schedule / workflow_dispatch always run. Docs-only: e2e-*-gate still
-      # reports success. Unreadiness skips the gate so the required check
-      # stays pending instead of failing.
-      # tests/e2e/** is the full-install suite (OSAC-3593); still run when that
-      # tree changes even though `e2e-code` ignores **/tests/**. Filter
-      # definitions live in the shared ../filters/ci-filters.yml.
-      #
-      # CI_GATING_ENABLED == 'false' is an emergency global override forcing
-      # this suite to run regardless of any filter result below.
-      should-run: ${{ vars.CI_GATING_ENABLED == 'false' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.e2e-code == 'true' || steps.filter.outputs.e2e-suite == 'true' }}
-      # Real skip-gating (Phase 2 of the CI-gating rollout plan): true only
-      # when EVERY changed file falls inside caas's reviewed,
-      # provably-irrelevant allow-list (ci-filters.yml's
-      # caas-outside-known-safe, inverted here -- see that file's own
-      # comment on why the raw filter is named for what it detects, not for
-      # the skip decision itself). Never derived from AI judgment alone, at
-      # any confidence -- mirrors the invariant select-jobs.py's decide()
-      # already enforces on the informational Jobs Selection path. Forced
-      # false on any non-pull_request/merge_group event (the filter step
-      # below never runs then, so its outputs are empty -- fail safe to
-      # "not skippable" rather than skip a scheduled/dispatched run) and by
-      # the CI_GATING_ENABLED kill switch.
-      caas-exclusive-skip: >-
-        ${{
-          vars.CI_GATING_ENABLED != 'false' &&
-          (github.event_name == 'pull_request' || github.event_name == 'merge_group') &&
-          steps.filter.outputs.caas-outside-known-safe != 'true'
-        }}
-    steps:
-      # dorny/paths-filter uses git diff on merge_group (not the PR Files API),
-      # so the repo must be checked out with enough history for base..head.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d  # v4.0.3
-        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-        id: filter
-        with:
-          predicate-quantifier: 'every'
-          filters: .github/filters/ci-filters.yml
-
-  # OSAC-3370: cheap readiness gate before expensive runners.
-  # Allow: lgtm (present or previously applied), e2e-ready by github-actions[bot], or
-  # coderabbitai[bot] APPROVED on exact HEAD (blocked by human CHANGES_REQUESTED).
-  # Human APPROVED does not unlock. Non-PR events skip this job.
-  # Not ready: ready=false (wait). Do not fail this job.
-  e2e-readiness:
-    name: e2e-readiness (caas)
-    needs: changes
-    if: needs.changes.outputs.should-run == 'true' && github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      issues: read
-      pull-requests: read
-    outputs:
-      ready: ${{ steps.check.outputs.ready }}
-      reason: ${{ steps.check.outputs.reason }}
-    steps:
-      - name: Check e2e readiness
-        id: check
-        uses: osac-project/osac-test-infra/.github/actions/check-e2e-readiness@main
-        with:
-          pr-number: ${{ github.event.pull_request.number }}
-          head-sha: ${{ github.event.pull_request.head.sha }}
-
-  # Builds fulfillment-service, osac-operator, osac-aap's execution
-  # environment (twice -- once each for aap.bootstrap.image and
-  # aap.configAsCode.eeImage, see OSAC-3546), and bare-metal-fulfillment-operator
-  # from this PR's current code and installs them together in one cluster --
-  # not one "component under test" plus a stale pinned image for the others.
-  # Runs for any change touching any component (see `changes` above) rather
-  # than being path-scoped per component; splitting this by component to
-  # avoid running both suites when only one changed is deferred to the
-  # future full path-based CI matrix, once its skip-logic pattern is
-  # verified. osac-aap *is* built here (added by OSAC-3546): caas's own
-  # values/caas-ci/values.yaml sets provisioning.provider: "aap" and
-  # controllers.clusterOrder: true, so CaaS's core cluster-provisioning path
-  # runs through AAP just as much as vmaas/bmaas's does -- the prior
-  # exclusion was deferred scope, not a real technical constraint.
-  #
-  # bare-metal-fulfillment-operator's image override (bmf.image.repository)
-  # is currently a no-op in this flow specifically: values/caas-ci/values.yaml
-  # sets global.services.bmaas.enabled: false, so the chart isn't deployed here at all. Still
-  # built from source for consistency with the other components -- revisit
-  # if caas ever needs BMF enabled.
   e2e-caas-full-install:
-    needs: [changes, e2e-readiness]
-    if: >-
-      always()
-      && needs.changes.result == 'success'
-      && needs.changes.outputs.should-run == 'true'
-      && needs.changes.outputs.caas-exclusive-skip != 'true'
-      && (needs.e2e-readiness.result == 'skipped'
-          || needs.e2e-readiness.outputs.ready == 'true')
     permissions:
       contents: read
       # See e2e-vmaas-full-install.yml's identical grant for why this is needed.
       id-token: write
     uses: osac-project/osac-test-infra/.github/workflows/e2e-caas-full-install.yml@main
     with:
-      # PR/merge_group: sanity only. Schedule: sanity + regression and
-      # applicable references. Manual dispatch: honor overrides, else sanity.
+      # test-source=osac prefixes tests/e2e/. PR/merge_group: full caas suite
+      # (sanity + regression). Schedule: regression. workflow_dispatch: honor
+      # input, else sanity (caas for the full suite).
+      # Called for a pull request or a merge queue entry (inputs.sha is set): sanity only. Schedule: sanity + regression
+      # and applicable references. Manual dispatch: honor overrides, else sanity.
       test-suite: >-
         ${{
-          (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 'caas/sanity' ||
+          inputs.sha != '' && 'caas/sanity' ||
           github.event_name == 'schedule' && 'caas' ||
           inputs.test-suite != '' && inputs.test-suite ||
           'caas/sanity'
@@ -226,7 +83,7 @@ jobs:
       test-filter: ${{ inputs.test-filter || '' }}
       test-marker: >-
         ${{
-          (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 'sanity' ||
+          inputs.sha != '' && 'sanity' ||
           inputs.test-marker != '' && inputs.test-marker ||
           'sanity or regression or requires_caas or reference_common'
         }}
@@ -235,8 +92,8 @@ jobs:
       # as ../../../<name> siblings within it), so a PR touching those components
       # must deploy from this PR's own fork/ref, not the reusable workflow's
       # standalone-repo default.
-      installer-repo: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-      installer-ref: ${{ github.event.pull_request.head.ref || github.sha }}
+      installer-repo: ${{ inputs.repo || github.repository }}
+      installer-ref: ${{ inputs.sha || github.sha }}
       # Build all component images from the PR's fork/branch (same monorepo checkout).
       # osac-aap's execution-environment is built twice (aap.bootstrap.image and
       # aap.configAsCode.eeImage): the two are logically the same image but the
@@ -245,149 +102,29 @@ jobs:
       # (which lives in osac-test-infra, not here). See OSAC-3546.
       components: >-
         [
-        { "repo": "${{ github.event.pull_request.head.repo.full_name || github.repository }}", "ref": "${{ github.event.pull_request.head.ref || github.sha }}", "containerfile": "fulfillment-service/Containerfile", "context": ".", "imageKey": "service.images.service.repository" },
-        { "repo": "${{ github.event.pull_request.head.repo.full_name || github.repository }}", "ref": "${{ github.event.pull_request.head.ref || github.sha }}", "containerfile": "osac-operator/Containerfile", "context": ".", "imageKey": "operator.image.repository" },
-        { "repo": "${{ github.event.pull_request.head.repo.full_name || github.repository }}", "ref": "${{ github.event.pull_request.head.ref || github.sha }}", "containerfile": "osac-aap/execution-environment/execution-environment.yaml", "imageKey": "aap.bootstrap.image", "buildType": "ansible-builder" },
-        { "repo": "${{ github.event.pull_request.head.repo.full_name || github.repository }}", "ref": "${{ github.event.pull_request.head.ref || github.sha }}", "containerfile": "osac-aap/execution-environment/execution-environment.yaml", "imageKey": "aap.configAsCode.eeImage", "buildType": "ansible-builder" },
-        { "repo": "${{ github.event.pull_request.head.repo.full_name || github.repository }}", "ref": "${{ github.event.pull_request.head.ref || github.sha }}", "containerfile": "bare-metal-fulfillment-operator/Containerfile", "context": ".", "imageKey": "bmf.image.repository" },
-        { "repo": "${{ github.event.pull_request.head.repo.full_name || github.repository }}", "ref": "${{ github.event.pull_request.head.ref || github.sha }}", "containerfile": "osac-metering/metering-service/Containerfile", "context": ".", "imageKey": "metering.image.repository" },
-        { "repo": "${{ github.event.pull_request.head.repo.full_name || github.repository }}", "ref": "${{ github.event.pull_request.head.ref || github.sha }}", "containerfile": "osac-metering/adapters/Containerfile.echo-adapter", "context": ".", "imageKey": "metering.echoAdapter.image.repository" }
+        { "repo": "${{ inputs.repo || github.repository }}", "ref": "${{ inputs.sha || github.sha }}", "containerfile": "fulfillment-service/Containerfile", "context": ".", "imageKey": "service.images.service.repository" },
+        { "repo": "${{ inputs.repo || github.repository }}", "ref": "${{ inputs.sha || github.sha }}", "containerfile": "osac-operator/Containerfile", "context": ".", "imageKey": "operator.image.repository" },
+        { "repo": "${{ inputs.repo || github.repository }}", "ref": "${{ inputs.sha || github.sha }}", "containerfile": "osac-aap/execution-environment/execution-environment.yaml", "imageKey": "aap.bootstrap.image", "buildType": "ansible-builder" },
+        { "repo": "${{ inputs.repo || github.repository }}", "ref": "${{ inputs.sha || github.sha }}", "containerfile": "osac-aap/execution-environment/execution-environment.yaml", "imageKey": "aap.configAsCode.eeImage", "buildType": "ansible-builder" },
+        { "repo": "${{ inputs.repo || github.repository }}", "ref": "${{ inputs.sha || github.sha }}", "containerfile": "bare-metal-fulfillment-operator/Containerfile", "context": ".", "imageKey": "bmf.image.repository" },
+        { "repo": "${{ inputs.repo || github.repository }}", "ref": "${{ inputs.sha || github.sha }}", "containerfile": "osac-metering/metering-service/Containerfile", "context": ".", "imageKey": "metering.image.repository" },
+        { "repo": "${{ inputs.repo || github.repository }}", "ref": "${{ inputs.sha || github.sha }}", "containerfile": "osac-metering/adapters/Containerfile.echo-adapter", "context": ".", "imageKey": "metering.echoAdapter.image.repository" }
         ]
-      # Pass author_association for fork PR authorization (empty for non-fork PRs)
-      fork-pr-author-association: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.author_association || '' }}
-      fork-pr-author: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.user.login || '' }}
-      pr-number: ${{ github.event.pull_request.number }}
+      pr-number: ${{ inputs.pr-number }}
+      # A fork pull request is authorized by the suite (an org member, or the ok-to-test label) before it gets any
+      # secret. Empty for a commit of this repository.
+      fork-pr-author-association: ${{ inputs.fork-pr-author-association }}
+      fork-pr-author: ${{ inputs.fork-pr-author }}
       # Checkout upstream test-infra, defaulting to the reusable workflow's main branch.
       test-infra-repository: osac-project/osac-test-infra
       test-infra-ref: ${{ inputs.test-infra-ref || 'main' }}
-      test-repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-      test-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      test-repository: ${{ inputs.repo || github.repository }}
+      test-ref: ${{ inputs.sha || github.sha }}
       notify-on-failure: ${{ github.event_name == 'schedule' }}
       # CaaS-specific inputs (cluster-template, caas-domain, flavor-image,
       # flavor-name, namespace, etc.) are left at the reusable workflow's own
       # defaults -- none are required and this caller has no need to override
       # them today.
-      # Gated on ref, not event type: the real constraint is WIF trust
-      # (main branch only), not which event triggered the run. This
-      # correctly covers schedule (always main) AND a manual
-      # workflow_dispatch run against main (same safe WIF context) --
-      # checking event_name == 'schedule' alone would wrongly exclude the
-      # latter, making it impossible to manually validate this feature
-      # through the real caller. pull_request is naturally excluded since
-      # its github.ref is the synthetic PR-merge ref, never
-      # refs/heads/main -- and moot regardless, since every real PR here
-      # is fork-originated and gets no OIDC/WIF access at all by GitHub
-      # Actions policy. merge_group is excluded the same way (its
-      # github.ref is the readonly-queue ref).
-      enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' }}
-
-  # Skip this required check on unreadiness so it stays pending (not red).
-  # workflow_dispatch may green this gate on a PR SHA. Merge requires all
-  # three suite gates on HEAD; unlock accepts them when already success.
-  e2e-caas-gate:
-    if: >-
-      always()
-      && (github.event_name != 'pull_request'
-          || needs.changes.outputs.should-run != 'true'
-          || needs.e2e-readiness.result != 'success'
-          || needs.e2e-readiness.outputs.ready == 'true')
-    needs: [changes, e2e-readiness, e2e-caas-full-install]
-    runs-on: ubuntu-latest
-    steps:
-      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
-        run: |
-          echo "Upstream job results:"
-          echo "  changes: ${{ needs.changes.result }}"
-          echo "  e2e-readiness: ${{ needs.e2e-readiness.result }}"
-          echo "  e2e-caas-full-install: ${{ needs.e2e-caas-full-install.result }}"
-          echo ""
-          echo "One or more upstream jobs failed or were cancelled."
-          exit 1
-      - if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ needs.changes.outputs.should-run }}" != "true" ]; then
-            echo "docs-only, skipped"
-          elif [ "${{ needs.changes.outputs.caas-exclusive-skip }}" = "true" ]; then
-            echo "every changed file is in caas's reviewed allow-list, skipped"
-          else
-            echo "e2e passed"
-          fi
-
-  e2e-caas-complete-stale-gates:
-    if: >-
-      always()
-      && github.event_name == 'pull_request'
-      && needs.changes.outputs.should-run == 'true'
-      && needs.e2e-readiness.result == 'success'
-      && needs.e2e-readiness.outputs.ready == 'true'
-    needs: [changes, e2e-readiness, e2e-caas-full-install, e2e-caas-gate]
-    runs-on: ubuntu-latest
-    permissions:
-      checks: write
-    steps:
-      - name: Complete stale in_progress gate checks
-        uses: osac-project/osac-test-infra/.github/actions/complete-stale-e2e-gates@main
-        with:
-          head-sha: ${{ github.event.pull_request.head.sha }}
-          gate-name: e2e-caas-gate
-
-  # Latest check named e2e-caas-gate after the skipped gate job. Resolve this
-  # workflow run's check_suite_id and attach the pending check so PR UI does not
-  # group it under unrelated pull_request_target workflows. Forks may lack
-  # checks:write; unreported check is still Expected/Waiting.
-  e2e-caas-pending:
-    if: >-
-      always()
-      && github.event_name == 'pull_request'
-      && needs.changes.outputs.should-run == 'true'
-      && needs.e2e-readiness.result == 'success'
-      && needs.e2e-readiness.outputs.ready != 'true'
-    needs: [changes, e2e-readiness, e2e-caas-full-install, e2e-caas-gate]
-    runs-on: ubuntu-latest
-    permissions:
-      checks: write
-    steps:
-      - name: Mark e2e-caas-gate pending
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          RUN_ID: ${{ github.run_id }}
-          CHECK_NAME: e2e-caas-gate
-          DETAILS_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          REASON: ${{ needs.e2e-readiness.outputs.reason }}
-        run: |
-          set -euo pipefail
-          title="${REASON:-waiting for e2e unlock}"
-          summary=$(printf '%s\n\n%s\n\n%s' "${title}" \
-            "Need coderabbitai[bot] APPROVED on this HEAD, lgtm, or /e2e-ready." \
-            "See .github/e2e-readiness.md")
-          check_suite_id=$(gh api "repos/${REPO}/actions/runs/${RUN_ID}" \
-            --jq '.check_suite_id // empty' 2>/dev/null || true)
-          payload=$(jq -n \
-            --arg name "${CHECK_NAME}" \
-            --arg sha "${HEAD_SHA}" \
-            --arg check_suite_id "${check_suite_id}" \
-            --arg started "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --arg title "${title}" \
-            --arg details "${DETAILS_URL}" \
-            --arg summary "${summary}" \
-            '{
-              name: $name,
-              head_sha: $sha,
-              status: "in_progress",
-              details_url: $details,
-              started_at: $started,
-              output: {
-                title: $title,
-                summary: $summary
-              }
-            }
-            | if ($check_suite_id | length) > 0
-              then . + {check_suite_id: ($check_suite_id | tonumber)}
-              else .
-              end')
-          if ! gh api "repos/${REPO}/check-runs" --input - <<<"${payload}"; then
-            echo "Could not post in_progress check ${CHECK_NAME} (fork PRs may lack checks:write)."
-            echo "Required check stays unreported until unlock rerun."
-          fi
+      # Only a run on main (schedule, or a manual run against main): that is where the workload identity trusts this
+      # workflow. A run for a pull request or a queue entry passes inputs.sha and never gets it.
+      enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' && inputs.sha == '' }}

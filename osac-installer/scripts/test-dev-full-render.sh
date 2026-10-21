@@ -16,26 +16,60 @@ profile_values=(
   --values values/dev/kind-instance.yaml
   --values values/dev/kind-instance-devfull.yaml
 )
-chart_render=$(helm template test charts/osac-devstack --namespace osac "${profile_values[@]}")
-ui_render=$(helm template test charts/osac-devstack --namespace osac "${profile_values[@]}" \
-  --set ui.enabled=true --show-only templates/ui.yaml)
-if ! grep -Fq 'FULFILLMENT_TLS_INSECURE: "0"' <<<"$ui_render" \
-  || ! grep -Fq 'OIDC_TLS_INSECURE: "0"' <<<"$ui_render" \
-  || ! grep -Fq 'FULFILLMENT_TLS_CA_FILE: "/etc/ca-bundle/bundle.pem"' <<<"$ui_render" \
-  || ! grep -Fq 'OIDC_TLS_CA_FILE: "/etc/ca-bundle/bundle.pem"' <<<"$ui_render"; then
-  echo "dev-full UI must verify fulfillment and OIDC TLS with the CA bundle" >&2
+chart_render=$(helm template test charts/osac-devstack --namespace osac)
+osac_render=$(helm template osac charts/osac --namespace osac \
+  --values values/dev/kind-instance.yaml \
+  --values values/dev/kind-instance-devfull.yaml \
+  --set-string global.osacDeploymentId=osac/osac)
+if awk 'BEGIN { RS = "---" } /kind: Deployment/ && /name: osac-ui/ { found = 1 } END { exit found ? 0 : 1 }' \
+  <<<"$osac_render"; then
+  echo "dev-full must keep the umbrella chart's UI disabled to avoid a second release owner" >&2
+  exit 1
+fi
+
+if ! grep -Fq 'FULFILLMENT_TLS_CA_FILE: "/etc/osac-ui/tls/api/bundle.pem"' <<<"$chart_render" \
+  || ! grep -Fq 'OIDC_TLS_CA_FILE: "/etc/osac-ui/tls/auth/bundle.pem"' <<<"$chart_render" \
+  || ! grep -Fq 'FULFILLMENT_API_URL: "https://fulfillment-api.osac.localhost:8000"' <<<"$chart_render" \
+  || ! grep -Fq 'OIDC_ISSUER_URL: "https://keycloak.osac.localhost:8443/realms/osac"' <<<"$chart_render" \
+  || ! grep -Fq 'imagePullPolicy: IfNotPresent' <<<"$chart_render" \
+  || ! grep -Fq 'mountPath: /etc/osac-ui/tls/api' <<<"$chart_render" \
+  || ! grep -Fq 'mountPath: /etc/osac-ui/tls/auth' <<<"$chart_render" \
+  || ! grep -Fq 'automountServiceAccountToken: false' <<<"$chart_render"; then
+  echo "dev-full must deploy the shared osac-ui chart with verified TLS and Kind image settings" >&2
+  exit 1
+fi
+
+if ! awk 'BEGIN { RS = "---" } /kind: Deployment/ && /name: osac-ui/ { count++ } END { exit count == 1 ? 0 : 1 }' \
+  <<<"$chart_render"; then
+  echo "osac-devstack must deploy exactly one UI Deployment through its chart dependency" >&2
+  exit 1
+fi
+if awk 'BEGIN { RS = "---" } /kind: Route/ && /name: osac-ui/ { found = 1 } END { exit found ? 0 : 1 }' \
+  <<<"$chart_render"; then
+  echo "dev-full on Kind must disable the OpenShift UI Route" >&2
+  exit 1
+fi
+
+ui_route_enabled_render=$(helm template test charts/osac-devstack --namespace osac \
+  --set ui.route.enabled=true)
+if ! awk 'BEGIN { RS = "---" } /kind: Route/ && /name: osac-ui/ { found = 1 } END { exit !found }' \
+  <<<"$ui_route_enabled_render"; then
+  echo "the shared UI chart must retain its configurable OpenShift Route" >&2
+  exit 1
+fi
+
+ui_route_render=$(helm template test charts/osac-devstack --namespace osac --show-only templates/ui.yaml)
+if ! grep -Fq 'kind: HTTPRoute' <<<"$ui_route_render" \
+  || ! grep -Fq 'ui.osac.localhost' <<<"$ui_route_render" \
+  || ! grep -Fq 'name: osac-ui' <<<"$ui_route_render"; then
+  echo "dev-full must route the shared osac-ui Service through Gateway API" >&2
   exit 1
 fi
 
 for template in \
-  templates/ui.yaml \
   templates/hooks/provision-tenant.yaml \
   templates/hooks/seed-catalog.yaml; do
-  template_values=("${profile_values[@]}")
-  if [[ "$template" == "templates/ui.yaml" ]]; then
-    template_values+=(--set ui.enabled=true)
-  fi
-  rendered=$(helm template test charts/osac-devstack --namespace osac "${template_values[@]}" --show-only "$template")
+  rendered=$(helm template test charts/osac-devstack --namespace osac "${profile_values[@]}" --show-only "$template")
   if ! grep -Fq 'name: ca-bundle' <<<"$rendered" \
     || ! grep -Fq 'key: bundle.pem' <<<"$rendered" \
     || ! grep -Fq 'mountPath: /etc/ca-bundle' <<<"$rendered"; then
@@ -149,4 +183,4 @@ if ! grep -Fq 'image: ghcr.io/kube-rbac-proxy/kube-rbac-proxy:v0.22.1' <<<"$prox
   exit 1
 fi
 
-echo "Dev-full verified TLS and Helm post-render checks passed."
+echo "Dev-full shared UI TLS and Helm post-render checks passed."

@@ -265,7 +265,7 @@ var _ = Describe("Private cluster versions server", func() {
 						Tenant: "system",
 					}.Build(),
 					Spec: privatev1.ClusterSpec_builder{
-						Version: &privatev1.ClusterVersionReference{Name: versionName},
+						Version: buildClusterVersionReference(cv),
 					}.Build(),
 				}.Build(),
 			).Do(ctx)
@@ -309,7 +309,7 @@ var _ = Describe("Private cluster versions server", func() {
 						Tenant: "system",
 					}.Build(),
 					SpecDefaults: privatev1.ClusterTemplateSpecDefaults_builder{
-						Version: &privatev1.ClusterVersionReference{Name: versionName},
+						Version: buildClusterVersionReference(cv),
 					}.Build(),
 				}.Build(),
 			).Do(ctx)
@@ -352,7 +352,7 @@ var _ = Describe("Private cluster versions server", func() {
 						Name:   "ref-catalog-item",
 						Tenant: "system",
 					}.Build(),
-					Fields: privatev1.ClusterCatalogItemFields_builder{Version: privatev1.ClusterVersionReferenceFieldPolicy_builder{Locked: privatev1.ClusterVersionReference_builder{Name: versionName}.Build()}.Build()}.Build(),
+					Fields: privatev1.ClusterCatalogItemFields_builder{Version: privatev1.ClusterVersionReferenceFieldPolicy_builder{Locked: buildClusterVersionReference(cv)}.Build()}.Build(),
 				}.Build(),
 			).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())

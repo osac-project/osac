@@ -23,6 +23,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -198,11 +199,14 @@ var _ = Describe("NATGateway lifecycle", func() {
 		Expect(err).ToNot(HaveOccurred())
 		ip := ipGetResp.GetObject()
 		ip.SetStatus(privatev1.ExternalIPStatus_builder{
-			State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
+			State:               privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
+			StateTransitionTime: timestamppb.New(time.Now()),
 		}.Build())
 		_, err = privateExternalIPsClient.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
-			Object:     ip,
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+			Object: ip,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+				"status.state", "status.state_transition_time",
+			}},
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 	})
@@ -329,11 +333,14 @@ var _ = Describe("NATGateway lifecycle", func() {
 			if err == nil {
 				ip := ipGetResp.GetObject()
 				ip.SetStatus(privatev1.ExternalIPStatus_builder{
-					State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
+					State:               privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
+					StateTransitionTime: timestamppb.New(time.Now()),
 				}.Build())
 				_, _ = privateExternalIPsClient.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
-					Object:     ip,
-					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+					Object: ip,
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+						"status.state", "status.state_transition_time",
+					}},
 				}.Build())
 			}
 			_, _ = externalIPsClient.Delete(ctx, publicv1.ExternalIPsDeleteRequest_builder{

@@ -1,0 +1,141 @@
+name: Flake detection
+
+# Repeat the existing unit and integration suites against one fixed commit
+# to look for tests that fail inconsistently. flake-report.yml collects the
+# results and sends a Slack message when running in osac-project/osac.
+#
+# Controls:
+#   runs               = total repetitions per group
+#   parallel_workflows = maximum concurrent workflow calls, split by group
+#
+# Example: runs=20, parallel_workflows=20
+# Campaign
+# +-- Unit: 20 repetitions, up to 10 calls active
+# |   `-- Each call runs every unit suite as a separate job
+# `-- Integration: 20 repetitions, up to 10 calls active
+#     `-- Each call runs every integration suite as a separate job
+#
+# Each group starts its next repetition when one of its own calls finishes.
+# A call finishes after all its suite jobs finish. Slots stay within each group.
+# Suite jobs can outnumber call slots and may queue for available runners.
+on:
+  schedule:
+    # Saturday at 07:00 UTC.
+    - cron: '0 7 * * 6'
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Commit, branch or tag to test; empty uses the triggering commit
+        type: string
+        default: ""
+      runs:
+        description: Repetitions of each unit and integration suite (1-256)
+        type: number
+        default: 100
+      parallel_workflows:
+        description: Concurrent workflow calls, split between unit and integration (at least 2)
+        type: number
+        default: 20
+
+permissions:
+  contents: read
+
+# Run one campaign at a time and let the active campaign finish.
+concurrency:
+  group: flake-detection
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    # Scheduled campaigns run in osac-project/osac; forks can run them manually.
+    if: github.event_name != 'schedule' || github.repository == 'osac-project/osac'
+    runs-on: ubuntu-latest
+    outputs:
+      test_sha: ${{ steps.source.outputs.commit }}
+      iterations: ${{ steps.plan.outputs.iterations }}
+      unit_parallelism: ${{ steps.plan.outputs.unit_parallelism }}
+      integration_parallelism: ${{ steps.plan.outputs.integration_parallelism }}
+    steps:
+      # Resolve the requested branch or tag to a commit once, so all repetitions
+      # use the same code even if that branch moves while the tests run.
+      # Workflow definitions still use the commit that started this campaign.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        id: source
+        with:
+          ref: ${{ inputs.commit }}
+          persist-credentials: false
+      - name: Plan repetitions
+        id: plan
+        env:
+          TEST_SHA: ${{ steps.source.outputs.commit }}
+          # Scheduled events have no inputs, so apply the same defaults here.
+          RUNS: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.runs) || '100' }}
+          PARALLEL: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.parallel_workflows) || '20' }}
+        run: |
+          set -euo pipefail
+          # Require whole numbers: 1-256 repetitions and at least two concurrent calls.
+          # GitHub limits each matrix (the list of repetition jobs) to 256 entries.
+          jq -en --argjson runs "$RUNS" --argjson parallel "$PARALLEL" '
+            $runs >= 1 and $runs <= 256 and $runs == ($runs | floor) and
+            $parallel >= 2 and $parallel == ($parallel | floor)
+          ' >/dev/null || { echo '::error::runs must be an integer in 1-256; parallel_workflows must be an integer >= 2'; exit 1; }
+
+          # Create repetition numbers [1, 2, ..., runs] for both test groups.
+          # Split parallel_workflows into fixed limits: unit gets half rounded down,
+          # and integration gets half rounded up. Each group keeps its own limit
+          # for the entire campaign, including after the other group finishes.
+          # Write JSON values to $GITHUB_OUTPUT for those jobs to read with fromJSON().
+          jq -cn --argjson runs "$RUNS" --argjson parallel "$PARALLEL" '
+            {
+              iterations: [range(1; $runs + 1)],
+              unit_parallelism: ($parallel / 2 | floor),
+              integration_parallelism: ($parallel / 2 | ceil)
+            } | to_entries[] | "\(.key)=\(.value | tojson)"
+          ' -r >> "$GITHUB_OUTPUT"
+
+          # Save the suite list and expected repetitions for flake-report.yml.
+          # sha identifies the workflow commit; test_sha identifies the tested commit.
+          # run_id and run_attempt tie the plan to this run and its rerun attempt.
+          yq -o=json -I=0 '.' .github/ci-tests.yml | jq \
+            --argjson runs "$RUNS" --argjson run_id "$GITHUB_RUN_ID" \
+            --argjson run_attempt "$GITHUB_RUN_ATTEMPT" --arg sha "$GITHUB_SHA" \
+            --arg test_sha "$TEST_SHA" \
+            '{runs: $runs, run_id: $run_id, run_attempt: $run_attempt, sha: $sha, test_sha: $test_sha,
+              suites: map({id, group})}' > flake-plan.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: flake-plan-${{ github.run_attempt }}
+          path: flake-plan.json
+          retention-days: 30
+
+  unit:
+    # Reports identify the test group and repetition from this name.
+    name: Unit repetition ${{ matrix.iteration }}
+    needs: plan
+    strategy:
+      # Keep the remaining repetitions running after a failure.
+      fail-fast: false
+      max-parallel: ${{ fromJSON(needs.plan.outputs.unit_parallelism) }}
+      matrix:
+        iteration: ${{ fromJSON(needs.plan.outputs.iterations) }}
+    uses: ./.github/workflows/unit-tests.yml
+    with:
+      commit: ${{ needs.plan.outputs.test_sha }}
+      # Identify the group, repetition and rerun attempt in saved log names.
+      artifact_suffix: -unit-${{ matrix.iteration }}-attempt-${{ github.run_attempt }}
+
+  integration:
+    # Reports identify the test group and repetition from this name.
+    name: Integration repetition ${{ matrix.iteration }}
+    needs: plan
+    strategy:
+      # Keep the remaining repetitions running after a failure.
+      fail-fast: false
+      max-parallel: ${{ fromJSON(needs.plan.outputs.integration_parallelism) }}
+      matrix:
+        iteration: ${{ fromJSON(needs.plan.outputs.iterations) }}
+    uses: ./.github/workflows/integration-tests.yml
+    with:
+      commit: ${{ needs.plan.outputs.test_sha }}
+      # Identify the group, repetition and rerun attempt in saved log names.
+      artifact_suffix: -integration-${{ matrix.iteration }}-attempt-${{ github.run_attempt }}

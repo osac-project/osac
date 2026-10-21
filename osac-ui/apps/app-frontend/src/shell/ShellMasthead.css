@@ -1,0 +1,14 @@
+.osac-masthead-brand {
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: var(--pf-t--global--spacer--2xl);
+}
+
+.osac-masthead-brand .pf-v6-c-masthead__logo {
+  width: auto;
+}
+
+.osac-masthead-brand .pf-v6-c-masthead__logo > .pf-v6-c-brand svg {
+  display: block;
+  height: 32px;
+}

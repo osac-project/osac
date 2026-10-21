@@ -24,4 +24,4 @@
   vars:
     node: "{{ host_name }}"
     networks:
-    - "{{ host_network }}"
+      - "{{ host_network }}"

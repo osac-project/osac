@@ -4,8 +4,11 @@ title: AgentlessNet networking backend
 description: >-
   Registers AgentlessNet for unified networking. VirtualNetwork lifecycle
   creates UID-keyed Linux routing namespaces and uplinks; Subnet lifecycle
-  reserves Cumulus trunk VLANs, namespace gateways, and per-VirtualNetwork DHCP.
-  SecurityGroups, NAT, workload attachment, BGP, and external access remain
+  reserves Cumulus trunk VLANs, namespace gateways, per-VirtualNetwork DHCP, and
+  UID-owned IPv4 ExternalIP addresses. BareMetalInstance network attachments
+  move mapped Cumulus access ports between the configured provisioning VLAN and
+  saved Subnet VLANs, and DHCP discovery reports active leases by NIC MAC.
+  ExternalIPAttachment, SecurityGroups, NAT, BGP, and external traffic remain
   unsupported.
 
 template_type: network

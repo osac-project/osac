@@ -61,7 +61,7 @@
               "properties": {
                 "enabled": {
                   "type": "boolean",
-                  "description": "Enable VMaaS tier (ComputeInstances, DiskImages, InstanceTypes, Volumes, ConsoleSessions)",
+                  "description": "Enable VMaaS tier (ComputeInstances, InstanceTypes, Volumes, ConsoleSessions). The shared DiskImages API is enabled when either VMaaS or BMaaS is enabled.",
                   "default": true
                 }
               },
@@ -73,7 +73,7 @@
               "properties": {
                 "enabled": {
                   "type": "boolean",
-                  "description": "Enable BMaaS tier (BareMetalInstances, BareMetalInstanceTypes)",
+                  "description": "Enable BMaaS tier (BareMetalInstances, BareMetalInstanceTypes). The shared DiskImages API is enabled when either VMaaS or BMaaS is enabled.",
                   "default": true
                 }
               },

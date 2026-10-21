@@ -361,14 +361,15 @@ func buildHandlerList() []handlerRegistrar {
 		publicv1.RegisterComputeInstanceTemplatesHandler,
 		publicv1.RegisterComputeInstanceCatalogItemsHandler,
 		publicv1.RegisterComputeInstancesHandler,
-		publicv1.RegisterDiskImagesHandler,
 		publicv1.RegisterConsoleSessionsHandler,
 		publicv1.RegisterInstanceTypesHandler,
 		privatev1.RegisterComputeInstanceTemplatesHandler,
 		privatev1.RegisterComputeInstanceCatalogItemsHandler,
 		privatev1.RegisterComputeInstancesHandler,
-		privatev1.RegisterDiskImagesHandler,
 		privatev1.RegisterInstanceTypesHandler,
+		// Disk images, shared by the VMaaS and BMaaS tiers:
+		publicv1.RegisterDiskImagesHandler,
+		privatev1.RegisterDiskImagesHandler,
 		// BMaaS:
 		publicv1.RegisterBareMetalInstanceTemplatesHandler,
 		publicv1.RegisterBareMetalInstanceCatalogItemsHandler,

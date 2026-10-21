@@ -56,7 +56,7 @@ describe('CatalogItemDetails', () => {
 
     expect(screen.getAllByText('Unpublished').length).toBeGreaterThan(0);
     expect(screen.getByText('Created')).toBeInTheDocument();
-    expect(screen.getByText('Tenant')).toBeInTheDocument();
+    expect(screen.getByText('Visibility')).toBeInTheDocument();
     expect(screen.getByText('tenant-1')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Publish' })).toBeInTheDocument();

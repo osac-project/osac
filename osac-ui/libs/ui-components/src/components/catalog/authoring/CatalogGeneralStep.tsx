@@ -169,6 +169,7 @@ const CatalogGeneralStep = ({
             label={t('Description')}
             fieldId="catalog-item-description"
             multiline
+            rows={4}
           />
           <ResourceSelectField
             name="template"

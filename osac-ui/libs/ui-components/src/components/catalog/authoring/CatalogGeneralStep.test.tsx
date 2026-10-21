@@ -74,6 +74,12 @@ describe('CatalogGeneralStep', () => {
     ).toBeInTheDocument();
   });
 
+  it('uses a compact description field', () => {
+    renderStep(false);
+
+    expect(screen.getByRole('textbox', { name: 'Description' })).toHaveAttribute('rows', '4');
+  });
+
   it('shows the provisioning template helper text', () => {
     renderStep(false);
 

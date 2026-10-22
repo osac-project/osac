@@ -71,6 +71,9 @@ var _ = Describe("Service flags", func() {
 			Entry("VMaaS only is valid",
 				Flags{VMaaS: true}, true, "",
 			),
+			Entry("all disabled is invalid",
+				Flags{}, false, "at least one of CaaS, VMaaS, BMaaS, or MaaS must be enabled",
+			),
 			Entry("BMaaS only is valid",
 				Flags{BMaaS: true}, true, "",
 			),
@@ -131,7 +134,7 @@ var _ = Describe("Service flags", func() {
 			Expect(flags.MaaS).To(BeTrue())
 		})
 
-		It("allows all flags to be explicitly disabled", func() {
+		It("rejects an explicit all-false configuration", func() {
 			fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
 			flags := RegisterFlags(fs)
 
@@ -141,7 +144,8 @@ var _ = Describe("Service flags", func() {
 			})).To(Succeed())
 			flags.EnableAllIfNoneSet(fs)
 			Expect(*flags).To(Equal(Flags{}))
-			Expect(flags.Validate()).ToNot(HaveOccurred())
+			Expect(flags.Validate()).To(MatchError(
+				"at least one of CaaS, VMaaS, BMaaS, or MaaS must be enabled"))
 		})
 	})
 

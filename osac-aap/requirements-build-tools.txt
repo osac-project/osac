@@ -104,3 +104,11 @@ flit_core==3.12.0
 # to packaging+setuptools (already prefetched above) for python3.12 --
 # the tomli/typing-extensions entries are gated to python_version<3.11.
 setuptools-scm==8.1.0
+# PyYAML's build-system.requires includes a bare Cython (python_version
+# < "3.13", which this EE's python3.12 matches) alongside setuptools --
+# confirmed via its real sdist pyproject.toml. Confirmed live: "Could
+# not find a version that satisfies the requirement Cython (from
+# versions: none)". Cython itself ships no pyproject.toml (legacy
+# setuptools.build_meta backend, same as python-esiclient), so it needs
+# only the setuptools/wheel already prefetched above, nothing further.
+Cython==3.3.0

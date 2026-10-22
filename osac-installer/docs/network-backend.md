@@ -150,11 +150,59 @@ an optional text value. It does not upload or store certificate material.
 HTTP is suitable only for an isolated test profile; production Netris
 configuration uses HTTPS and certificate validation.
 
-To rotate the CA, create a new immutable ConfigMap, update the Helm value to
-the new name, and reconcile the release. Verify a new job pod mounts the new
-bundle and completes a Netris operation before deleting the old ConfigMap.
-For rollback, restore the previous ConfigMap name while it remains available,
-reconcile, and verify a new job pod before cleanup.
+The platform administrator group owns this lifecycle: the installer never
+creates, rotates, or deletes the ConfigMap. Deployments where the platform
+administrator is not in `system:masters` must set
+`global.networking.netris.caBundle.adminGroups` to the groups that may manage
+the active object. The default is `["system:masters"]`.
+
+#### Validation and protection
+
+When Netris is selected and `caBundle.configMap` is set, install and upgrade run
+these checks before AAP configuration:
+
+- The pre-install/pre-upgrade hook reads the ConfigMap and fails unless it
+  exists, sets `immutable: true`, and has a non-empty `data.bundle.pem` that
+  OpenSSL can parse as a certificate bundle. Each failure uses a stable
+  `ERROR: NETRIS_CA_*` message.
+- The post-install/post-upgrade hook reads the same object as
+  `system:serviceaccount:<namespace>:osac-sa` and fails unless that identity can
+  `get` the ConfigMap. This hook runs after the CA read Role exists and before
+  the AAP bootstrap job, so the first upgrade cannot fail on missing RBAC.
+
+Both hooks are gated by `validation.enabled`. Set
+`global.networking.netris.caBundle.configMap` to an empty value to keep the
+system-trust path unchanged and render no CA validation resources.
+
+A ValidatingAdmissionPolicy protects only the active ConfigMap name. It denies
+`CREATE`, `UPDATE`, and `DELETE` of that name unless the requester is in
+`adminGroups`, and it fails closed if the policy cannot be evaluated. Other
+ConfigMap names are unaffected, so a new CA version can be created before the
+Helm switch. Any identity that is not in `adminGroups` is denied even if its
+RBAC would otherwise allow ConfigMap writes.
+
+#### Rotation and rollback
+
+Treat each CA version as a separate immutable object:
+
+1. Create a new ConfigMap such as `customer-netris-ca-2026-10` with
+   `immutable: true` and the new `bundle.pem`.
+2. Update `global.networking.netris.caBundle.configMap` to the new name and
+   reconcile the release with `helm upgrade`.
+3. Wait for the release hooks to complete, then confirm a new AAP job pod mounts
+   the new ConfigMap at `/etc/netris/ca/bundle.pem` and completes a real HTTPS
+   Netris operation.
+4. Keep the previous ConfigMap for the rollback window. The window closes only
+   when the administrator no longer needs to roll back.
+
+To roll back, restore the previous ConfigMap name in Helm and reconcile, then
+repeat the job-pod and Netris operation check. A rollback needs the previous
+object to still exist and remain immutable.
+
+Deleting an old version is safe only after a new job has succeeded against the
+replacement and rollback is no longer required. Delete it as a platform
+administrator. Until then, keep it in place: the admission policy blocks
+deletion of the active name, but it does not retain retired versions.
 
 ## AgentlessNet VirtualNetwork and Subnet baseline
 

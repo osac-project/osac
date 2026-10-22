@@ -31,6 +31,16 @@
 // A no-op reservation/status helper is not progress and does not force a requeue.
 // A lost Create acknowledgement keeps the same reservation. A fresh invocation
 // recovers by owned name or same-scope AlreadyExists; List omission is not absence.
+// An authoritative Create refusal decided before any mutation (InvalidArgument,
+// FailedPrecondition, PermissionDenied, Unauthenticated) is journal proof that no
+// BMI was authorized, so it releases the attempt fence back to the reservation and
+// the slot stays cancellable. Two conditions bound that release: only the Create
+// call's own outcome is classified, never an error raised while recovering from
+// AlreadyExists, which carries a List or Get code although a BMI exists; and only
+// a slot this invocation moved out of Reserved may be released, because an
+// already-Attempted slot can hold an earlier lost acknowledgement that a later
+// refusal says nothing about. Transport loss, deadlines, cancellation, resource
+// exhaustion, server faults and AlreadyExists remain unknown outcomes.
 // Name-based creation recovery rejects ambiguous, foreign and deleting candidates.
 // Recorded deleting IDs and finalization recovery still remain observable.
 // Finalization takes the identity-only recovery path in worker_teardown.go.

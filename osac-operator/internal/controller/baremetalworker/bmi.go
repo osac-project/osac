@@ -48,8 +48,17 @@ func (r *Reconciler) ensureBMI(
 		return bmi, ctrl.Result{}, nil
 	}
 
-	return nil, ctrl.Result{}, fmt.Errorf("creating BMI %s: %w", workerName, err)
+	return nil, ctrl.Result{}, &createRefusedError{err: fmt.Errorf("creating BMI %s: %w", workerName, err)}
 }
+
+// createRefusedError marks an error as the Create call's own outcome. Only this
+// marker may be classified as a refusal: an AlreadyExists recovery failure
+// carries the List or Get code, and AlreadyExists itself proves a BMI exists,
+// so a recovery error must never look like evidence that nothing was created.
+type createRefusedError struct{ err error }
+
+func (e *createRefusedError) Error() string { return e.err.Error() }
+func (e *createRefusedError) Unwrap() error { return e.err }
 
 // findBMIByName re-lists BMIs and returns the one matching the given name.
 func (r *Reconciler) findBMIByName(ctx context.Context, co *v1alpha1.ClusterOrder, tenant, filter, name string) (*privatev1.BareMetalInstance, error) {

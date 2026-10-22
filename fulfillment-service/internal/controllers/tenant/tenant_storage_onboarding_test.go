@@ -166,10 +166,32 @@ var _ = Describe("Tenant storage onboarding feedback", func() {
 		c := check(pending)
 		Expect(c.GetReason()).To(Equal("StorageOnboardingPending"))
 	}, Entry("no hubs", "hubs"), Entry("no Tenant CR", "tenant"), Entry("legacy storage condition only", "condition"))
-	It("provides a pending default when hub observation is not configured", func() {
+	DescribeTable("reports unknown when hub observation is not configured", func(missing string) {
+		if missing != "cache" {
+			reconciler.hubsClient = nil
+		}
+		if missing != "client" {
+			reconciler.hubCache = nil
+		}
+		Expect(check(unknown).GetReason()).To(Equal("StorageOnboardingStatusUnknown"))
+	}, Entry("missing hubs client", "client"), Entry("missing hub cache", "cache"), Entry("both missing", "both"))
+	It("reports unavailable observation after a previous completion without claiming pending onboarding", func() {
+		observe(clientWith(object(metav1.ConditionTrue)))
+		check(complete)
+		tenant = proto.Clone(tenants.updates[0].GetObject()).(*privatev1.Tenant)
+		tenants.updates = nil
 		reconciler.hubsClient = nil
 		reconciler.hubCache = nil
-		check(pending)
+		c := check(unknown)
+		Expect(c.GetReason()).To(Equal("StorageOnboardingStatusUnknown"))
+		Expect(c.GetMessage()).To(Equal("Operator storage onboarding status could not be observed"))
+		Expect(c.GetLastTransitionTime().AsTime()).To(BeTemporally(">", transition))
+
+		tenant = proto.Clone(tenants.updates[0].GetObject()).(*privatev1.Tenant)
+		tenants.updates = nil
+		Expect(reconciler.Run(ctx, tenant)).To(Succeed())
+		Expect(tenants.updates).To(BeEmpty())
+		Expect(proto.Equal(condition(tenant).GetLastTransitionTime(), c.GetLastTransitionTime())).To(BeTrue())
 	})
 	It("uses the only reported storage condition across hubs", func() {
 		legacy := object(metav1.ConditionTrue)

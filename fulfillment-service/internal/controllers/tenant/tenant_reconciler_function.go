@@ -220,7 +220,7 @@ func (t *task) update(ctx context.Context) error {
 	if t.r != nil && t.r.hubsClient != nil && t.r.hubCache != nil {
 		t.checkInfrastructureConditions(ctx)
 	} else {
-		t.projectStorageOnboardingCondition(nil, false)
+		t.projectStorageOnboardingCondition(nil, true)
 	}
 	return reconcileErr
 }

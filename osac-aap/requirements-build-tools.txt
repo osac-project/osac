@@ -28,6 +28,14 @@ Parsley==1.3
 # satisfy ansible-core's own upper bound -- confirmed live: "Could not find
 # a version that satisfies the requirement setuptools<=82.0.0,>=66.1.0".
 setuptools==82.0.0
+# ansible-core's build-system.requires also hard-pins wheel == 0.45.1
+# exactly (confirmed via its real sdist pyproject.toml), a different
+# exact version than python-esiclient's own wheel need below -- both
+# coexist fine in the shared prefetch cache since pip resolves each
+# package's isolated build environment independently. Confirmed live:
+# "Could not find a version that satisfies the requirement
+# wheel==0.45.1 (from versions: 0.48.0)".
+wheel==0.45.1
 # execution-environment/requirements.txt's python-esiclient dependency is
 # fetched from git (no pyproject.toml, legacy setup.py-only project), so
 # pip builds its wheel using the default legacy build backend, whose

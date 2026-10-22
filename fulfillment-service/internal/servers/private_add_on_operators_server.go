@@ -176,9 +176,12 @@ func (s *PrivateAddOnOperatorsServer) Create(ctx context.Context,
 
 func (s *PrivateAddOnOperatorsServer) Update(ctx context.Context,
 	request *privatev1.AddOnOperatorsUpdateRequest) (response *privatev1.AddOnOperatorsUpdateResponse, err error) {
+	if isDryRun(ctx) {
+		return nil, grpcstatus.Error(grpccodes.Unimplemented, "dry-run is not supported for add-on operator updates")
+	}
 	graphMutation := request.GetUpdateMask() == nil ||
 		updateIncludesField(request.GetUpdateMask(), "dependencies", "published")
-	if !isDryRun(ctx) && graphMutation {
+	if graphMutation {
 		if err = lockAddOnOperatorDependencyGraph(ctx); err != nil {
 			return
 		}
@@ -218,7 +221,7 @@ func (s *PrivateAddOnOperatorsServer) Update(ctx context.Context,
 	if err != nil {
 		return
 	}
-	if !isDryRun(ctx) && !response.GetObject().GetPublished() && graphMutation {
+	if !response.GetObject().GetPublished() && graphMutation {
 		dependentErr := ensureNoPublishedAddOnOperatorDependents(
 			ctx, response.GetObject().GetId(), "unpublish", response.GetObject().GetMetadata().GetName())
 		if dependentErr != nil {
@@ -229,7 +232,7 @@ func (s *PrivateAddOnOperatorsServer) Update(ctx context.Context,
 			return
 		}
 	}
-	if !isDryRun(ctx) && response.GetObject().GetPublished() && graphMutation {
+	if response.GetObject().GetPublished() && graphMutation {
 		err = s.validatePublishedAddOnOperatorGraph(ctx, response.GetObject())
 	}
 	return
@@ -238,8 +241,7 @@ func (s *PrivateAddOnOperatorsServer) Update(ctx context.Context,
 func (s *PrivateAddOnOperatorsServer) Delete(ctx context.Context,
 	request *privatev1.AddOnOperatorsDeleteRequest) (response *privatev1.AddOnOperatorsDeleteResponse, err error) {
 	if isDryRun(ctx) {
-		err = s.generic.Delete(ctx, request, &response)
-		return
+		return nil, grpcstatus.Error(grpccodes.Unimplemented, "dry-run is not supported for add-on operator deletes")
 	}
 	if err = lockAddOnOperatorDependencyGraph(ctx); err != nil {
 		return

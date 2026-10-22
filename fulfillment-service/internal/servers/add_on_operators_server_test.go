@@ -352,6 +352,43 @@ var _ = Describe("Add-on operators server", func() {
 			Expect(err.Error()).To(ContainSubstring("published dependents"))
 		})
 
+		It("rejects dry-run unpublishing without changing the operator", func() {
+			dependency, err := privateServer.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
+				Object: privatev1.AddOnOperator_builder{
+					Metadata:  privatev1.Metadata_builder{Name: "dry-run-unpublish-dependency"}.Build(),
+					Title:     "dry-run-unpublish-dependency",
+					Published: new(true),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			_, err = privateServer.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
+				Object: privatev1.AddOnOperator_builder{
+					Metadata:  privatev1.Metadata_builder{Name: "dry-run-unpublish-dependent"}.Build(),
+					Title:     "dry-run-unpublish-dependent",
+					Published: new(true),
+					Dependencies: []*privatev1.AddOnOperatorLocalReference{
+						privatev1.AddOnOperatorLocalReference_builder{Id: dependency.GetObject().GetId()}.Build(),
+					},
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = privateServer.Update(dryRunCtx(), privatev1.AddOnOperatorsUpdateRequest_builder{
+				Object: privatev1.AddOnOperator_builder{
+					Id:        dependency.GetObject().GetId(),
+					Published: new(false),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"published"}},
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.Unimplemented))
+
+			stored, err := privateServer.Get(ctx, privatev1.AddOnOperatorsGetRequest_builder{
+				Id: dependency.GetObject().GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(stored.GetObject().GetPublished()).To(BeTrue())
+		})
+
 		It("allows unpublishing an operator without published dependents", func() {
 			leaf, err := privateServer.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
 				Object: privatev1.AddOnOperator_builder{
@@ -411,6 +448,39 @@ var _ = Describe("Add-on operators server", func() {
 			Expect(err).To(HaveOccurred())
 			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
 			Expect(err.Error()).To(ContainSubstring("published dependents"))
+		})
+
+		It("rejects dry-run deleting without removing the operator", func() {
+			dependency, err := privateServer.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
+				Object: privatev1.AddOnOperator_builder{
+					Metadata:  privatev1.Metadata_builder{Name: "dry-run-delete-dependency"}.Build(),
+					Title:     "dry-run-delete-dependency",
+					Published: new(true),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			_, err = privateServer.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
+				Object: privatev1.AddOnOperator_builder{
+					Metadata:  privatev1.Metadata_builder{Name: "dry-run-delete-dependent"}.Build(),
+					Title:     "dry-run-delete-dependent",
+					Published: new(true),
+					Dependencies: []*privatev1.AddOnOperatorLocalReference{
+						privatev1.AddOnOperatorLocalReference_builder{Id: dependency.GetObject().GetId()}.Build(),
+					},
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = privateServer.Delete(dryRunCtx(), privatev1.AddOnOperatorsDeleteRequest_builder{
+				Id: dependency.GetObject().GetId(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.Unimplemented))
+
+			stored, err := privateServer.Get(ctx, privatev1.AddOnOperatorsGetRequest_builder{
+				Id: dependency.GetObject().GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(stored.GetObject().GetId()).To(Equal(dependency.GetObject().GetId()))
 		})
 
 		It("allows deleting an operator without published dependents", func() {

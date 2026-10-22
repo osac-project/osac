@@ -68,8 +68,16 @@ def _ensure_iptables_rule(table: str, chain: str, rule: list[str], *, insert: bo
     return True
 
 
-def _delete_iptables_rule(table: str, chain: str, rule: list[str]) -> bool:
+def _delete_iptables_rule(
+    table: str,
+    chain: str,
+    rule: list[str],
+    *,
+    namespace: str | None = None,
+) -> bool:
     prefix = ["iptables", "-w", "-t", table]
+    if namespace is not None:
+        prefix = ["ip", "netns", "exec", namespace, *prefix]
     changed = False
     deletions = 0
     while _run([*prefix, "-C", chain, *rule], check=False).returncode == 0:
@@ -363,7 +371,9 @@ def delete_external_ip_attachment(attachment: dict[str, Any]) -> bool:
         "-j", "DNAT", "--to-destination", context["target"]["ip_address"],
     ]
     if network.namespace_exists(namespace):
-        changed = _delete_iptables_rule("nat", "PREROUTING", nat_rule) or changed
+        changed = _delete_iptables_rule(
+            "nat", "PREROUTING", nat_rule, namespace=namespace
+        ) or changed
 
     inbound, outbound = _forwarding_rules(attachment)
     changed = _delete_iptables_rule("filter", EXTERNAL_FORWARD_CHAIN, inbound) or changed

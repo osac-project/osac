@@ -22,6 +22,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/updatable"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
@@ -137,17 +138,21 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	}
 
 	// Find the object by identifier or name:
-	object, err := c.helper.FindObject(ctx, ref, c.console)
+	original, err := c.helper.FindObject(ctx, ref, c.console)
 	if err != nil {
 		return err
 	}
 
-	// Apply the annotation operations:
-	metadata := c.helper.GetMetadata(object)
+	// Apply the annotation operations to a copy so the computed update mask
+	// is derived from the original state:
+	edited := proto.Clone(original)
+	metadata := c.helper.GetMetadata(edited)
 	c.applyAnnotationOperations(metadata, operations)
 
-	// Save the result:
-	_, err = c.helper.Update(ctx, object)
+	// Save the result. The explicit diff mask preserves the clear intent of
+	// a removed final annotation, which an omitted mask cannot express
+	// because an empty map is indistinguishable from omission.
+	_, err = c.helper.UpdateWithMask(ctx, original, edited)
 	if err != nil {
 		return err
 	}

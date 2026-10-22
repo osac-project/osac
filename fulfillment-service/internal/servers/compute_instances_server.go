@@ -265,6 +265,11 @@ func (s *ComputeInstancesServer) Create(ctx context.Context,
 	return
 }
 
+// Update applies permitted public changes to a compute instance while
+// preserving system-owned fields. The status is read-only: an omitted mask
+// infers the supplied writable fields, an explicit mask selects only
+// permitted roots, and the changes apply under the generic updater's row
+// lock.
 func (s *ComputeInstancesServer) Update(ctx context.Context,
 	request *publicv1.ComputeInstancesUpdateRequest) (response *publicv1.ComputeInstancesUpdateResponse, err error) {
 	ctx = withPublicAPIView(ctx)
@@ -409,6 +414,9 @@ func computeInstancePublicUpdateMask(
 	return &fieldmaskpb.FieldMask{Paths: paths}, nil
 }
 
+// populatedChild returns the named submessage of a message when it is set,
+// or nil when the field is absent. The result is not recursive: only the
+// direct child message is returned.
 func populatedChild(message protoreflect.Message, name string) protoreflect.Message {
 	field := message.Descriptor().Fields().ByName(protoreflect.Name(name))
 	if field == nil || !message.Has(field) {
@@ -417,6 +425,9 @@ func populatedChild(message protoreflect.Message, name string) protoreflect.Mess
 	return message.Get(field).Message()
 }
 
+// normalizeFieldMaskPath trims whitespace from each dot-separated part of a
+// field-mask path and removes empty parts, so spellings like "status. state"
+// and "status..state" normalize to "status.state".
 func normalizeFieldMaskPath(path string) string {
 	parts := strings.Split(path, ".")
 	normalizedParts := make([]string, 0, len(parts))

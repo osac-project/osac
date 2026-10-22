@@ -573,6 +573,17 @@ class ExternalIPPlaybookTests(unittest.TestCase):
         env["ANSIBLE_SHOW_CUSTOM_STATS"] = "true"
         env["ANSIBLE_INVENTORY_UNPARSED_WARNING"] = "False"
         env["ANSIBLE_LOCALHOST_WARNING"] = "False"
+        # The netris.controller.protected_uri action plugin (OSAC-6331)
+        # enforces installation-owned connection settings from the process
+        # environment; mirror the job's extra-vars there so the legacy path
+        # reaches the fixture.
+        env.update(
+            {
+                "NETRIS_CONTROLLER_URL": self.fixture_url,
+                "NETRIS_VALIDATE_CERTS": "false",
+                "NETRIS_CA_PATH": "",
+            }
+        )
         if isolated:
             # Prove v1 jobs never reach Kubernetes: unusable credentials
             # plus a loopback sentinel for any K8S_AUTH_HOST request.

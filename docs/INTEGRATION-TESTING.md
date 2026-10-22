@@ -275,10 +275,12 @@ KubeVirt/AWX/Keycloak deployments, the profile's published Fulfillment Service
 image, and the profile's TLS bundle; it does not fake service
 responses. The smoke runs nightly and, after the workflow is on the default
 branch, can be requested on a PR by a repository collaborator with
-`/test-kind-dev-full`. The PR introducing the workflow was exercised against a
-fresh local Kind dev-full installation. It covers
-deployment availability, UI routing, and authenticated tenant listing only,
-not VM provisioning or other resource lifecycles.
+`/test-kind-dev-full`. The smoke script passed against a running dev-full
+cluster. A fresh local install was attempted but did not complete because the
+local Kind API server and etcd restarted during AWX startup; scheduled workflow
+runs provide the fresh-install coverage. The smoke covers deployment
+availability, UI routing, and authenticated tenant listing only, not VM
+provisioning or other resource lifecycles.
 
 ### OSAC-5343 deployed enablement coverage
 

@@ -5,10 +5,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib.sh"
 
 url="${OSAC_UI_URL:-http://ui.osac.localhost:8080}"
-status="$(curl --silent --show-error --connect-timeout 5 --max-time 15 --output /dev/null --write-out '%{http_code}' "$url")"
+check_ui_route() {
+  local status
 
-if [[ "$status" != "200" ]]; then
-  echo "OSAC UI Gateway returned HTTP ${status}, expected 200" >&2
+  status="$(curl --silent --connect-timeout 5 --max-time 15 \
+    --output /dev/null --write-out '%{http_code}' "$url")" || return 1
+  [[ "${status}" == "200" ]]
+}
+
+if ! retry_until 60 5 check_ui_route; then
+  echo "OSAC UI Gateway was not reachable at ${url} with HTTP 200." >&2
   exit 1
 fi
 

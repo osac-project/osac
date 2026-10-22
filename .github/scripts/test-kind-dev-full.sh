@@ -42,13 +42,7 @@ wait_for_deployment "${KEYCLOAK_NAMESPACE}" keycloak-service
 wait_for_deployment "${OSAC_NAMESPACE}" osac-ui
 
 printf 'Checking the OSAC UI Gateway route ...\n'
-if ! curl --silent --show-error --fail \
-  --connect-timeout 10 --max-time 30 --retry 5 --retry-connrefused --retry-delay 2 --retry-max-time 60 \
-  --output /dev/null \
-  "${UI_URL}"; then
-  echo "The UI is not reachable through its Kind Gateway route." >&2
-  exit 1
-fi
+OSAC_UI_URL="${UI_URL}" bash "${REPO_ROOT}/osac-installer/scripts/test-ui-gateway.sh"
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "${tmp_dir}"' EXIT

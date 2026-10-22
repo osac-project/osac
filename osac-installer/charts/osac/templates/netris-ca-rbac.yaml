@@ -25,6 +25,6 @@ roleRef:
   name: {{ include "osac.fullname" . }}-netris-ca-read
 subjects:
 - kind: ServiceAccount
-  name: osac-sa
+  name: {{ default "osac-sa" .Values.aap.serviceAccounts.osacSa }}
   namespace: {{ .Release.Namespace }}
 {{- end }}

@@ -15,7 +15,6 @@ package mcpserver
 
 import (
 	"errors"
-	"slices"
 
 	"github.com/golang-jwt/jwt/v5"
 
@@ -45,24 +44,5 @@ func safeCallerContextFromToken(token *jwt.Token) (safeCallerContext, error) {
 	return safeCallerContext{
 		Subject:  subject,
 		Username: authContext.Username,
-		Tenants:  tenantNames(authContext),
 	}, nil
-}
-
-func tenantNames(authContext *auth.AuthContext) []string {
-	var tenants []string
-	switch organization := authContext.Organization.(type) {
-	case map[string]any:
-		for tenant := range organization {
-			tenants = append(tenants, tenant)
-		}
-	case []any:
-		for _, tenant := range organization {
-			if value, ok := tenant.(string); ok {
-				tenants = append(tenants, value)
-			}
-		}
-	}
-	slices.Sort(tenants)
-	return slices.Compact(tenants)
 }

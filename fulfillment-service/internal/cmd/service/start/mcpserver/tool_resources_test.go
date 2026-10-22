@@ -15,6 +15,7 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
@@ -36,6 +37,42 @@ type mockComputeInstanceCatalogItemsClient struct {
 	getFunc  func(context.Context, *publicv1.ComputeInstanceCatalogItemsGetRequest, ...grpc.CallOption) (*publicv1.ComputeInstanceCatalogItemsGetResponse, error)
 }
 
+type mockProjectsClient struct {
+	publicv1.ProjectsClient
+	listFunc func(context.Context, *publicv1.ProjectsListRequest, ...grpc.CallOption) (*publicv1.ProjectsListResponse, error)
+	getFunc  func(context.Context, *publicv1.ProjectsGetRequest, ...grpc.CallOption) (*publicv1.ProjectsGetResponse, error)
+}
+
+func (m *mockProjectsClient) List(
+	ctx context.Context, request *publicv1.ProjectsListRequest, options ...grpc.CallOption,
+) (*publicv1.ProjectsListResponse, error) {
+	return m.listFunc(ctx, request, options...)
+}
+
+func (m *mockProjectsClient) Get(
+	ctx context.Context, request *publicv1.ProjectsGetRequest, options ...grpc.CallOption,
+) (*publicv1.ProjectsGetResponse, error) {
+	return m.getFunc(ctx, request, options...)
+}
+
+type mockSecretsClient struct {
+	publicv1.SecretsClient
+	listFunc func(context.Context, *publicv1.SecretsListRequest, ...grpc.CallOption) (*publicv1.SecretsListResponse, error)
+	getFunc  func(context.Context, *publicv1.SecretsGetRequest, ...grpc.CallOption) (*publicv1.SecretsGetResponse, error)
+}
+
+func (m *mockSecretsClient) List(
+	ctx context.Context, request *publicv1.SecretsListRequest, options ...grpc.CallOption,
+) (*publicv1.SecretsListResponse, error) {
+	return m.listFunc(ctx, request, options...)
+}
+
+func (m *mockSecretsClient) Get(
+	ctx context.Context, request *publicv1.SecretsGetRequest, options ...grpc.CallOption,
+) (*publicv1.SecretsGetResponse, error) {
+	return m.getFunc(ctx, request, options...)
+}
+
 func (m *mockComputeInstanceCatalogItemsClient) List(
 	ctx context.Context, request *publicv1.ComputeInstanceCatalogItemsListRequest, options ...grpc.CallOption,
 ) (*publicv1.ComputeInstanceCatalogItemsListResponse, error) {
@@ -53,6 +90,7 @@ type mockComputeInstancesClient struct {
 	listFunc   func(context.Context, *publicv1.ComputeInstancesListRequest, ...grpc.CallOption) (*publicv1.ComputeInstancesListResponse, error)
 	getFunc    func(context.Context, *publicv1.ComputeInstancesGetRequest, ...grpc.CallOption) (*publicv1.ComputeInstancesGetResponse, error)
 	createFunc func(context.Context, *publicv1.ComputeInstancesCreateRequest, ...grpc.CallOption) (*publicv1.ComputeInstancesCreateResponse, error)
+	updateFunc func(context.Context, *publicv1.ComputeInstancesUpdateRequest, ...grpc.CallOption) (*publicv1.ComputeInstancesUpdateResponse, error)
 	deleteFunc func(context.Context, *publicv1.ComputeInstancesDeleteRequest, ...grpc.CallOption) (*publicv1.ComputeInstancesDeleteResponse, error)
 }
 
@@ -110,10 +148,60 @@ func (m *mockComputeInstancesClient) Create(
 	return m.createFunc(ctx, request, options...)
 }
 
+func (m *mockComputeInstancesClient) Update(
+	ctx context.Context, request *publicv1.ComputeInstancesUpdateRequest, options ...grpc.CallOption,
+) (*publicv1.ComputeInstancesUpdateResponse, error) {
+	return m.updateFunc(ctx, request, options...)
+}
+
 func (m *mockComputeInstancesClient) Delete(
 	ctx context.Context, request *publicv1.ComputeInstancesDeleteRequest, options ...grpc.CallOption,
 ) (*publicv1.ComputeInstancesDeleteResponse, error) {
 	return m.deleteFunc(ctx, request, options...)
+}
+
+type mockDiskImagesClient struct {
+	publicv1.DiskImagesClient
+	getFunc func(context.Context, *publicv1.DiskImagesGetRequest, ...grpc.CallOption) (*publicv1.DiskImagesGetResponse, error)
+}
+
+func (m *mockDiskImagesClient) Get(
+	ctx context.Context, request *publicv1.DiskImagesGetRequest, options ...grpc.CallOption,
+) (*publicv1.DiskImagesGetResponse, error) {
+	return m.getFunc(ctx, request, options...)
+}
+
+type mockInstanceTypesClient struct {
+	publicv1.InstanceTypesClient
+	getFunc func(context.Context, *publicv1.InstanceTypesGetRequest, ...grpc.CallOption) (*publicv1.InstanceTypesGetResponse, error)
+}
+
+func (m *mockInstanceTypesClient) Get(
+	ctx context.Context, request *publicv1.InstanceTypesGetRequest, options ...grpc.CallOption,
+) (*publicv1.InstanceTypesGetResponse, error) {
+	return m.getFunc(ctx, request, options...)
+}
+
+type mockSubnetsClient struct {
+	publicv1.SubnetsClient
+	getFunc func(context.Context, *publicv1.SubnetsGetRequest, ...grpc.CallOption) (*publicv1.SubnetsGetResponse, error)
+}
+
+func (m *mockSubnetsClient) Get(
+	ctx context.Context, request *publicv1.SubnetsGetRequest, options ...grpc.CallOption,
+) (*publicv1.SubnetsGetResponse, error) {
+	return m.getFunc(ctx, request, options...)
+}
+
+type mockSecurityGroupsClient struct {
+	publicv1.SecurityGroupsClient
+	listFunc func(context.Context, *publicv1.SecurityGroupsListRequest, ...grpc.CallOption) (*publicv1.SecurityGroupsListResponse, error)
+}
+
+func (m *mockSecurityGroupsClient) List(
+	ctx context.Context, request *publicv1.SecurityGroupsListRequest, options ...grpc.CallOption,
+) (*publicv1.SecurityGroupsListResponse, error) {
+	return m.listFunc(ctx, request, options...)
 }
 
 func requestWithToken(rawToken string) *mcp.CallToolRequest {
@@ -141,6 +229,119 @@ func forwardedToken(ctx context.Context) string {
 }
 
 var _ = Describe("handleListResources", func() {
+	It("Lists caller-visible projects with bounded pagination and an explicit filter", func() {
+		var capturedToken string
+		var capturedFilter string
+		var capturedOffset, capturedLimit int32
+		projects := &mockProjectsClient{
+			listFunc: func(
+				ctx context.Context, request *publicv1.ProjectsListRequest, _ ...grpc.CallOption,
+			) (*publicv1.ProjectsListResponse, error) {
+				capturedToken = forwardedToken(ctx)
+				capturedFilter = request.GetFilter()
+				capturedOffset = request.GetOffset()
+				capturedLimit = request.GetLimit()
+				return publicv1.ProjectsListResponse_builder{
+					Size:  1,
+					Total: 3,
+					Items: []*publicv1.Project{
+						publicv1.Project_builder{
+							Id:       "project-1",
+							Metadata: publicv1.Metadata_builder{Name: "team.project"}.Build(),
+							Spec: publicv1.ProjectSpec_builder{
+								Title:       "Team project",
+								Description: proto.String("A caller-visible project"),
+							}.Build(),
+							Status: publicv1.ProjectStatus_builder{
+								State: publicv1.ProjectState_PROJECT_STATE_ACTIVE,
+							}.Build(),
+						}.Build(),
+					},
+				}.Build(), nil
+			},
+		}
+
+		handler := handleListResources(newResourceRegistry(ServerDeps{ProjectsClient: projects}))
+		_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), ListResourcesInput{
+			ResourceType: ResourceTypeProject,
+			Filter:       `this.id == "project-1"`,
+			Offset:       4,
+			PageSize:     25,
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(output).To(Equal(ListResourcesOutput{
+			Offset: 4,
+			Size:   1,
+			Total:  3,
+			Items: []ResourceSummary{{
+				ID:          "project-1",
+				Name:        "team.project",
+				Title:       "Team project",
+				Description: "A caller-visible project",
+				State:       "PROJECT_STATE_ACTIVE",
+			}},
+		}))
+		Expect(capturedToken).To(Equal("Bearer api-for-raw-bearer-value"))
+		Expect(capturedFilter).To(Equal(`this.id == "project-1"`))
+		Expect(capturedOffset).To(Equal(int32(4)))
+		Expect(capturedLimit).To(Equal(int32(25)))
+	})
+
+	It("Lists Secret references only and never Secret bytes", func() {
+		var capturedToken string
+		var capturedFilter string
+		var capturedOffset, capturedLimit int32
+		secrets := &mockSecretsClient{
+			listFunc: func(
+				ctx context.Context, request *publicv1.SecretsListRequest, _ ...grpc.CallOption,
+			) (*publicv1.SecretsListResponse, error) {
+				capturedToken = forwardedToken(ctx)
+				capturedFilter = request.GetFilter()
+				capturedOffset = request.GetOffset()
+				capturedLimit = request.GetLimit()
+				return publicv1.SecretsListResponse_builder{
+					Size:  1,
+					Total: 2,
+					Items: []*publicv1.Secret{
+						publicv1.Secret_builder{
+							Id:       "secret-1",
+							Metadata: publicv1.Metadata_builder{Name: "pull-secret"}.Build(),
+							Data:     map[string][]byte{".dockerconfigjson": []byte("sensitive-secret-bytes")},
+							Type:     publicv1.SecretType_SECRET_TYPE_PULL_SECRET,
+						}.Build(),
+					},
+				}.Build(), nil
+			},
+		}
+
+		handler := handleListResources(newResourceRegistry(ServerDeps{SecretsClient: secrets}))
+		_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), ListResourcesInput{
+			ResourceType: ResourceTypeSecretReference,
+			Filter:       `this.type == SECRET_TYPE_PULL_SECRET`,
+			Offset:       1,
+			PageSize:     10,
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(output).To(Equal(ListResourcesOutput{
+			Offset: 1,
+			Size:   1,
+			Total:  2,
+			Items: []ResourceSummary{{
+				ID:   "secret-1",
+				Name: "pull-secret",
+				Type: "pull_secret",
+			}},
+		}))
+		encoded, marshalErr := json.Marshal(output)
+		Expect(marshalErr).To(Succeed())
+		Expect(string(encoded)).ToNot(ContainSubstring("sensitive-secret-bytes"))
+		Expect(string(encoded)).ToNot(ContainSubstring("data"))
+		Expect(capturedToken).To(Equal("Bearer api-for-raw-bearer-value"))
+		Expect(capturedFilter).To(Equal(`this.type == SECRET_TYPE_PULL_SECRET`))
+		Expect(capturedOffset).To(Equal(int32(1)))
+		Expect(capturedLimit).To(Equal(int32(10)))
+	})
+
 	It("Lists compute instance catalog items and uses the exchanged API token", func() {
 		var capturedToken string
 		var capturedOffset, capturedLimit int32
@@ -187,6 +388,53 @@ var _ = Describe("handleListResources", func() {
 		Expect(capturedToken).To(Equal("Bearer api-for-raw-bearer-value"))
 		Expect(capturedOffset).To(Equal(int32(2)))
 		Expect(capturedLimit).To(Equal(int32(20)))
+	})
+
+	It("Rejects invalid page bounds before calling a public List client", func() {
+		var listCalls int
+		registry := resourceRegistry{
+			ResourceTypeComputeInstance: {
+				list: func(context.Context, string, resourcePageRequest) (ListResourcesOutput, error) {
+					listCalls++
+					return ListResourcesOutput{}, nil
+				},
+			},
+		}
+		cases := []struct {
+			name   string
+			input  ListResourcesInput
+			detail string
+		}{
+			{
+				name: "negative offset",
+				input: ListResourcesInput{
+					ResourceType: ResourceTypeComputeInstance,
+					Offset:       -1,
+				},
+				detail: "offset must not be negative",
+			},
+			{
+				name: "page size above maximum",
+				input: ListResourcesInput{
+					ResourceType: ResourceTypeComputeInstance,
+					PageSize:     maxResourcePageSize + 1,
+				},
+				detail: "page_size must be between 1 and 100",
+			},
+		}
+
+		for _, testCase := range cases {
+			By(testCase.name)
+			_, _, err := handleListResources(registry)(
+				context.Background(), requestWithToken("raw-bearer-value"), testCase.input,
+			)
+			envelope := decodeToolError(err)
+			Expect(envelope.Category).To(Equal("invalid_request"))
+			Expect(envelope.GRPCCode).To(Equal("InvalidArgument"))
+			Expect(envelope.Retryable).To(BeFalse())
+			Expect(envelope.Details).To(ContainElement(testCase.detail))
+		}
+		Expect(listCalls).To(BeZero())
 	})
 
 	It("Lists compute instances and forwards an optional filter", func() {
@@ -316,16 +564,16 @@ var _ = Describe("handleListResources", func() {
 			},
 		}
 		cases := []struct {
-			name   string
-			input  ListResourcesInput
-			detail string
+			name           string
+			input          ListResourcesInput
+			expectedDetail string
 		}{
 			{
 				name: "unsupported resource type",
 				input: ListResourcesInput{
 					ResourceType: "cluster",
 				},
-				detail: "unsupported resource type",
+				expectedDetail: `unsupported resource type "cluster"`,
 			},
 			{
 				name: "negative offset",
@@ -333,7 +581,7 @@ var _ = Describe("handleListResources", func() {
 					ResourceType: ResourceTypeComputeInstance,
 					Offset:       -1,
 				},
-				detail: "offset must not be negative",
+				expectedDetail: "offset must not be negative",
 			},
 			{
 				name: "page size above maximum",
@@ -341,7 +589,7 @@ var _ = Describe("handleListResources", func() {
 					ResourceType: ResourceTypeComputeInstance,
 					PageSize:     maxResourcePageSize + 1,
 				},
-				detail: "page_size",
+				expectedDetail: "page_size must be between 1 and 100",
 			},
 		}
 
@@ -355,7 +603,7 @@ var _ = Describe("handleListResources", func() {
 			Expect(envelope.GRPCCode).To(Equal("InvalidArgument"))
 			Expect(envelope.Retryable).To(BeFalse())
 			Expect(envelope.RequestID).ToNot(BeEmpty())
-			Expect(err.Error()).To(ContainSubstring(testCase.detail))
+			Expect(envelope.Details).To(Equal([]string{testCase.expectedDetail}))
 		}
 		Expect(listCalls).To(BeZero())
 	})
@@ -381,6 +629,63 @@ var _ = Describe("handleListResources", func() {
 })
 
 var _ = Describe("handleGetResource", func() {
+	It("Gets a caller-visible project", func() {
+		var capturedToken string
+		projects := &mockProjectsClient{
+			getFunc: func(
+				ctx context.Context, request *publicv1.ProjectsGetRequest, _ ...grpc.CallOption,
+			) (*publicv1.ProjectsGetResponse, error) {
+				capturedToken = forwardedToken(ctx)
+				Expect(request.GetId()).To(Equal("project-1"))
+				return publicv1.ProjectsGetResponse_builder{
+					Object: publicv1.Project_builder{
+						Id:       "project-1",
+						Metadata: publicv1.Metadata_builder{Name: "team.project"}.Build(),
+						Spec:     publicv1.ProjectSpec_builder{Title: "Team project"}.Build(),
+					}.Build(),
+				}.Build(), nil
+			},
+		}
+
+		handler := handleGetResource(newResourceRegistry(ServerDeps{ProjectsClient: projects}))
+		_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), GetResourceInput{
+			ResourceType: ResourceTypeProject,
+			ID:           "project-1",
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(output.Resource).To(HaveKeyWithValue("id", "project-1"))
+		metadata, ok := output.Resource["metadata"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(metadata).To(HaveKeyWithValue("name", "team.project"))
+		spec, ok := output.Resource["spec"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(spec).To(HaveKeyWithValue("title", "Team project"))
+		Expect(capturedToken).To(Equal("Bearer api-for-raw-bearer-value"))
+	})
+
+	It("Rejects Secret-reference Get without calling the public Secrets API", func() {
+		getCalled := false
+		secrets := &mockSecretsClient{
+			getFunc: func(
+				context.Context, *publicv1.SecretsGetRequest, ...grpc.CallOption,
+			) (*publicv1.SecretsGetResponse, error) {
+				getCalled = true
+				return nil, status.Error(codes.Unavailable, "must not be called")
+			},
+		}
+
+		handler := handleGetResource(newResourceRegistry(ServerDeps{SecretsClient: secrets}))
+		_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), GetResourceInput{
+			ResourceType: ResourceTypeSecretReference,
+			ID:           "secret-1",
+		})
+		envelope := decodeToolError(err)
+		Expect(envelope.Category).To(Equal("invalid_request"))
+		Expect(envelope.GRPCCode).To(Equal("InvalidArgument"))
+		Expect(envelope.Details).To(ContainElement("get_resource does not support secret_reference"))
+		Expect(getCalled).To(BeFalse())
+	})
+
 	It("Gets a compute instance catalog item and returns its API representation", func() {
 		var capturedToken string
 		catalogItems := &mockComputeInstanceCatalogItemsClient{
@@ -413,6 +718,71 @@ var _ = Describe("handleGetResource", func() {
 		Expect(ok).To(BeTrue())
 		Expect(fields).ToNot(HaveKey("userData"))
 		Expect(capturedToken).To(Equal("Bearer api-for-raw-bearer-value"))
+	})
+
+	It("Returns a catalog item from the untyped get_resource handler", func() {
+		catalogItems := &mockComputeInstanceCatalogItemsClient{
+			getFunc: func(
+				context.Context, *publicv1.ComputeInstanceCatalogItemsGetRequest, ...grpc.CallOption,
+			) (*publicv1.ComputeInstanceCatalogItemsGetResponse, error) {
+				return publicv1.ComputeInstanceCatalogItemsGetResponse_builder{
+					Object: publicv1.ComputeInstanceCatalogItem_builder{
+						Id:          "catalog-item-1",
+						Metadata:    publicv1.Metadata_builder{Name: "mcp-compute-catalog-item"}.Build(),
+						Title:       "MCP compute instance",
+						Description: "Catalog item for MCP compute instance integration testing",
+						Published:   true,
+						Template: publicv1.ComputeInstanceTemplateReference_builder{
+							Id: "template-1",
+						}.Build(),
+						Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
+							InstanceType: publicv1.InstanceTypeReferenceFieldPolicy_builder{
+								Editable: publicv1.EditableInstanceTypeReferenceField_builder{}.Build(),
+							}.Build(),
+							BootDisk: publicv1.ComputeInstanceBootDiskFieldPolicies_builder{
+								SizeGib: publicv1.Int32FieldPolicy_builder{
+									Editable: publicv1.EditableInt32Field_builder{}.Build(),
+								}.Build(),
+								StorageTier: publicv1.StorageTierReferenceFieldPolicy_builder{
+									Editable: publicv1.EditableStorageTierReferenceField_builder{}.Build(),
+								}.Build(),
+							}.Build(),
+							RunStrategy: publicv1.ComputeInstanceRunStrategyFieldPolicy_builder{
+								Editable: publicv1.EditableComputeInstanceRunStrategyField_builder{}.Build(),
+							}.Build(),
+							NetworkAttachments: publicv1.ComputeNetworkAttachmentListFieldPolicy_builder{
+								Editable: publicv1.EditableComputeNetworkAttachmentList_builder{}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build(), nil
+			},
+		}
+
+		handler := handleGetResourceTool(
+			newResourceRegistry(ServerDeps{ComputeInstanceCatalogItemsClient: catalogItems}),
+		)
+		request := requestWithToken("raw-bearer-value")
+		request.Params = &mcp.CallToolParamsRaw{
+			Arguments: json.RawMessage(`{"resource_type":"compute_instance_catalog_item","id":"catalog-item-1"}`),
+		}
+		result, err := handler(context.Background(), request)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.IsError).To(BeFalse())
+
+		encodedResult, marshalErr := json.Marshal(result)
+		Expect(marshalErr).To(Succeed())
+		var wireResult struct {
+			StructuredContent GetResourceOutput `json:"structuredContent"`
+		}
+		Expect(json.Unmarshal(encodedResult, &wireResult)).To(Succeed())
+		output := wireResult.StructuredContent
+		Expect(output.Resource).To(SatisfyAll(
+			HaveKeyWithValue("id", "catalog-item-1"),
+			HaveKeyWithValue("title", "MCP compute instance"),
+			HaveKeyWithValue("published", true),
+		))
+		Expect(output.Resource).To(HaveKey("fields"))
 	})
 
 	It("Gets a compute instance and returns its API representation", func() {
@@ -504,9 +874,9 @@ var _ = Describe("handleGetResource", func() {
 			},
 		}
 		cases := []struct {
-			name   string
-			input  GetResourceInput
-			detail string
+			name           string
+			input          GetResourceInput
+			expectedDetail string
 		}{
 			{
 				name: "unsupported resource type",
@@ -514,14 +884,14 @@ var _ = Describe("handleGetResource", func() {
 					ResourceType: "cluster",
 					ID:           "cluster-1",
 				},
-				detail: "unsupported resource type",
+				expectedDetail: `unsupported resource type "cluster"`,
 			},
 			{
 				name: "empty resource ID",
 				input: GetResourceInput{
 					ResourceType: ResourceTypeComputeInstance,
 				},
-				detail: "id must not be empty",
+				expectedDetail: "id must not be empty",
 			},
 		}
 
@@ -535,7 +905,7 @@ var _ = Describe("handleGetResource", func() {
 			Expect(envelope.GRPCCode).To(Equal("InvalidArgument"))
 			Expect(envelope.Retryable).To(BeFalse())
 			Expect(envelope.RequestID).ToNot(BeEmpty())
-			Expect(err.Error()).To(ContainSubstring(testCase.detail))
+			Expect(envelope.Details).To(Equal([]string{testCase.expectedDetail}))
 		}
 		Expect(getCalls).To(BeZero())
 	})

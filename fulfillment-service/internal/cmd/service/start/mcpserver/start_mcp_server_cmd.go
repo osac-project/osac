@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -111,11 +112,14 @@ type ServerDeps struct {
 	ComputeInstanceTemplatesClient    publicv1.ComputeInstanceTemplatesClient
 	InstanceTypesClient               publicv1.InstanceTypesClient
 	DiskImagesClient                  publicv1.DiskImagesClient
+	ProjectsClient                    publicv1.ProjectsClient
 	StorageTiersClient                publicv1.StorageTiersClient
 	VirtualNetworksClient             publicv1.VirtualNetworksClient
 	SubnetsClient                     publicv1.SubnetsClient
 	SecurityGroupsClient              publicv1.SecurityGroupsClient
 	ComputeInstancesClient            publicv1.ComputeInstancesClient
+	SecretsClient                     publicv1.SecretsClient
+	TenantsClient                     publicv1.TenantsClient
 	SelfSubjectAccessReviewsClient    publicv1.SelfSubjectAccessReviewsClient
 }
 
@@ -127,11 +131,14 @@ func NewServerDeps(conn grpc.ClientConnInterface) ServerDeps {
 		ComputeInstanceTemplatesClient:    publicv1.NewComputeInstanceTemplatesClient(conn),
 		InstanceTypesClient:               publicv1.NewInstanceTypesClient(conn),
 		DiskImagesClient:                  publicv1.NewDiskImagesClient(conn),
+		ProjectsClient:                    publicv1.NewProjectsClient(conn),
 		StorageTiersClient:                publicv1.NewStorageTiersClient(conn),
 		VirtualNetworksClient:             publicv1.NewVirtualNetworksClient(conn),
 		SubnetsClient:                     publicv1.NewSubnetsClient(conn),
 		SecurityGroupsClient:              publicv1.NewSecurityGroupsClient(conn),
 		ComputeInstancesClient:            publicv1.NewComputeInstancesClient(conn),
+		SecretsClient:                     publicv1.NewSecretsClient(conn),
+		TenantsClient:                     publicv1.NewTenantsClient(conn),
 		SelfSubjectAccessReviewsClient:    publicv1.NewSelfSubjectAccessReviewsClient(conn),
 	}
 }
@@ -331,16 +338,18 @@ func canonicalMCPResourceURL(resourceURL string) (string, error) {
 // newServer creates the MCP server and registers its tools.
 func newServer(deps ServerDeps, endpoint string) *mcp.Server {
 	resources := newResourceRegistry(deps)
-	resourceTypes := resources.resourceTypes()
+	listResourceTypes := resources.listResourceTypes()
+	getResourceTypes := resources.getResourceTypes()
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "osac-deployment-mcp",
 		Version: version.Get(),
 	}, &mcp.ServerOptions{
 		Instructions: serverInstructions,
 	})
-	mcp.AddTool(server, &mcp.Tool{
+	registry := newTypedToolRegistry(server)
+	registerReadTool(registry, &mcp.Tool{
 		Name:        "check_connection",
-		Description: "Use this tool to verify the signed-in caller's MCP and OSAC access without creating or changing a resource.",
+		Description: "Use this tool to report the signed-in caller's identity and ComputeInstances List, Create, and Update permissions. It does not verify Get or Delete permissions.",
 		Annotations: &mcp.ToolAnnotations{
 			Title:           "Check OSAC MCP connection",
 			ReadOnlyHint:    true,
@@ -350,12 +359,12 @@ func newServer(deps ServerDeps, endpoint string) *mcp.Server {
 		},
 		InputSchema:  compatibleToolSchema[CheckConnectionInput](),
 		OutputSchema: compatibleToolSchema[CheckConnectionOutput](),
-	}, handleCheckConnection(endpoint, resources, deps.SelfSubjectAccessReviewsClient))
-	mcp.AddTool(server, &mcp.Tool{
+	}, handleCheckConnection(endpoint, resources, registry, deps.TenantsClient, deps.SelfSubjectAccessReviewsClient))
+	registerReadTool(registry, &mcp.Tool{
 		Name: "list_resources",
 		Description: "Use this tool to discover or compare tenant-visible OSAC deployment options and existing compute instances. " +
 			"resource_type must be one of: " +
-			supportedResourceTypesDescription(resourceTypes) + ".",
+			supportedResourceTypesDescription(listResourceTypes) + ".",
 		Annotations: &mcp.ToolAnnotations{
 			Title:           "List OSAC deployment resources",
 			ReadOnlyHint:    true,
@@ -363,14 +372,14 @@ func newServer(deps ServerDeps, endpoint string) *mcp.Server {
 			IdempotentHint:  true,
 			OpenWorldHint:   toolAnnotationBool(true),
 		},
-		InputSchema:  resourceToolSchema[ListResourcesInput](resourceTypes),
+		InputSchema:  resourceToolSchema[ListResourcesInput](listResourceTypes),
 		OutputSchema: compatibleToolSchema[ListResourcesOutput](),
 	}, handleListResources(resources))
-	mcp.AddTool(server, &mcp.Tool{
+	getResourceTool := &mcp.Tool{
 		Name: "get_resource",
 		Description: "Use this tool to inspect one selected resource, verify catalog or reference details, or report current compute instance state. " +
-			"resource_type must be one of: " +
-			supportedResourceTypesDescription(resourceTypes) + ".",
+			"resource_type must be one of: " + supportedResourceTypesDescription(getResourceTypes) +
+			". Only resource types with Get support are accepted by this tool.",
 		Annotations: &mcp.ToolAnnotations{
 			Title:           "Get OSAC deployment resource",
 			ReadOnlyHint:    true,
@@ -378,13 +387,16 @@ func newServer(deps ServerDeps, endpoint string) *mcp.Server {
 			IdempotentHint:  true,
 			OpenWorldHint:   toolAnnotationBool(true),
 		},
-		InputSchema:  resourceToolSchema[GetResourceInput](resourceTypes),
+		InputSchema:  resourceToolSchema[GetResourceInput](getResourceTypes),
 		OutputSchema: compatibleToolSchema[GetResourceOutput](),
-	}, handleGetResource(resources))
-	mcp.AddTool(server, &mcp.Tool{
+	}
+	registerGetResourceTool(registry, getResourceTool, resources)
+	registerWriteTool(registry, &mcp.Tool{
 		Name: "create_compute_instance",
 		Description: "Use this tool only after the user confirms the requested VM and you have inspected the catalog item and any selected " +
 			"override resources. Use this tool's snake_case fields and resource IDs, not get_resource's camelCase reference objects. " +
+			"Select disk_image_id from list_resources(disk_image) when the catalog or template does not supply an image, and " +
+			"project_id from list_resources(project) when the VM should not use the caller's default Project. " +
 			"For a disk override, boot_disk uses size_gib and/or storage_tier_id (a string ID), not a nested storageTier object. " +
 			"If overriding networking, network_attachments must contain maximum one object with subnet_id and " +
 			"optional security_group_ids, not an array of subnet ID strings. Creates a compute instance asynchronously; " +
@@ -398,8 +410,25 @@ func newServer(deps ServerDeps, endpoint string) *mcp.Server {
 		},
 		InputSchema:  compatibleToolSchema[CreateComputeInstanceInput](),
 		OutputSchema: compatibleToolSchema[CreateComputeInstanceOutput](),
-	}, handleCreateComputeInstance(deps.ComputeInstancesClient))
-	mcp.AddTool(server, &mcp.Tool{
+	}, writeToolContract{Destructive: false, Idempotent: false}, handleCreateComputeInstance(newComputeInstanceClients(deps)))
+	registerWriteTool(registry, &mcp.Tool{
+		Name: "update_compute_instance",
+		Description: "Use this tool only after the user confirms the requested VM changes and you have the current " +
+			"metadata.version from get_resource. Supported fields are " +
+			"instance_type_id and run_strategy; boot disk, display name, description, networking, image, credential, " +
+			"and status fields are rejected. The update is applied asynchronously and acceptance does not mean " +
+			"the VM is ready.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Update OSAC compute instance",
+			ReadOnlyHint:    false,
+			DestructiveHint: toolAnnotationBool(true),
+			IdempotentHint:  false,
+			OpenWorldHint:   toolAnnotationBool(true),
+		},
+		InputSchema:  computeInstanceUpdateToolSchema(),
+		OutputSchema: compatibleToolSchema[UpdateComputeInstanceOutput](),
+	}, writeToolContract{Destructive: true, Idempotent: false}, handleUpdateComputeInstance(newComputeInstanceClients(deps)))
+	registerWriteTool(registry, &mcp.Tool{
 		Name: "delete_compute_instance",
 		Description: "Use this tool only when the user explicitly requests deletion or cleanup. Deletes a compute instance by ID " +
 			"asynchronously.",
@@ -412,8 +441,106 @@ func newServer(deps ServerDeps, endpoint string) *mcp.Server {
 		},
 		InputSchema:  compatibleToolSchema[DeleteComputeInstanceInput](),
 		OutputSchema: compatibleToolSchema[DeleteComputeInstanceOutput](),
-	}, handleDeleteComputeInstance(deps.ComputeInstancesClient))
+	}, writeToolContract{Destructive: true, Idempotent: false}, handleDeleteComputeInstance(deps.ComputeInstancesClient))
 	return server
+}
+
+type typedToolRegistry struct {
+	server     *mcp.Server
+	registered map[string]struct{}
+}
+
+type toolAnnotationContract struct {
+	readOnly    bool
+	destructive bool
+	idempotent  bool
+}
+
+type writeToolContract struct {
+	Destructive bool
+	Idempotent  bool
+}
+
+func newTypedToolRegistry(server *mcp.Server) typedToolRegistry {
+	return typedToolRegistry{server: server, registered: make(map[string]struct{})}
+}
+
+func (r typedToolRegistry) toolNames() []string {
+	names := make([]string, 0, len(r.registered))
+	for name := range r.registered {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
+}
+
+func registerReadTool[In any, Out any](
+	registry typedToolRegistry, tool *mcp.Tool, handler mcp.ToolHandlerFor[In, Out],
+) {
+	registerTypedTool(registry, tool, toolAnnotationContract{readOnly: true, idempotent: true}, handler)
+}
+
+func registerGetResourceTool(registry typedToolRegistry, tool *mcp.Tool, resources resourceRegistry) {
+	registry.validateTool(tool, toolAnnotationContract{readOnly: true, idempotent: true})
+	if _, exists := registry.registered[tool.Name]; exists {
+		panic(fmt.Sprintf("MCP tool %q is already registered", tool.Name))
+	}
+	registry.server.AddTool(tool, handleGetResourceTool(resources))
+	registry.registered[tool.Name] = struct{}{}
+}
+
+func registerWriteTool[In any, Out any](
+	registry typedToolRegistry, tool *mcp.Tool, contract writeToolContract, handler mcp.ToolHandlerFor[In, Out],
+) {
+	registerTypedTool(registry, tool, toolAnnotationContract{
+		destructive: contract.Destructive,
+		idempotent:  contract.Idempotent,
+	}, handler)
+}
+
+func registerTypedTool[In any, Out any](
+	r typedToolRegistry, tool *mcp.Tool, contract toolAnnotationContract, handler mcp.ToolHandlerFor[In, Out],
+) {
+	r.validateTool(tool, contract)
+	if handler == nil {
+		panic("typed MCP tool handler is nil")
+	}
+	if _, exists := r.registered[tool.Name]; exists {
+		panic(fmt.Sprintf("typed MCP tool %q is already registered", tool.Name))
+	}
+	mcp.AddTool(r.server, tool, handler)
+	r.registered[tool.Name] = struct{}{}
+}
+
+func (r typedToolRegistry) validateTool(tool *mcp.Tool, contract toolAnnotationContract) {
+	if r.server == nil {
+		panic("typed MCP tool server is nil")
+	}
+	if tool == nil || tool.Name == "" || tool.Description == "" ||
+		!toolSchemaPresent(tool.InputSchema) || !toolSchemaPresent(tool.OutputSchema) {
+		panic("typed MCP tool metadata is incomplete")
+	}
+	annotations := tool.Annotations
+	if annotations == nil || annotations.Title == "" ||
+		annotations.DestructiveHint == nil || annotations.OpenWorldHint == nil {
+		panic("typed MCP tool annotations are incomplete")
+	}
+	if annotations.ReadOnlyHint != contract.readOnly ||
+		*annotations.DestructiveHint != contract.destructive ||
+		annotations.IdempotentHint != contract.idempotent ||
+		!*annotations.OpenWorldHint {
+		panic("typed MCP tool annotation tuple is unsafe")
+	}
+}
+
+func toolSchemaPresent(schema any) bool {
+	if schema == nil {
+		return false
+	}
+	if rawSchema, ok := schema.(json.RawMessage); ok {
+		return len(rawSchema) != 0
+	}
+	return true
 }
 
 func toolAnnotationBool(value bool) *bool {
@@ -473,6 +600,28 @@ func resourceToolSchema[T any](supportedResourceTypes []ResourceType) json.RawMe
 	encoded, err := json.Marshal(document)
 	if err != nil {
 		panic(fmt.Errorf("encode resource tool schema: %w", err))
+	}
+	return encoded
+}
+
+func computeInstanceUpdateToolSchema() json.RawMessage {
+	schema := compatibleToolSchema[UpdateComputeInstanceInput]()
+	var document map[string]any
+	if err := json.Unmarshal(schema, &document); err != nil {
+		panic(fmt.Errorf("decode compute instance update tool schema: %w", err))
+	}
+	properties, ok := document["properties"].(map[string]any)
+	if !ok {
+		panic("compute instance update tool schema has no properties")
+	}
+	version, ok := properties["version"].(map[string]any)
+	if !ok {
+		panic("compute instance update tool schema has no version property")
+	}
+	version["minimum"] = 1
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		panic(fmt.Errorf("encode compute instance update tool schema: %w", err))
 	}
 	return encoded
 }

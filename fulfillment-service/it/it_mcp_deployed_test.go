@@ -66,7 +66,7 @@ var _ = Describe("deployed MCP server", func() {
 		defer func() { Expect(session.Close()).To(Succeed()) }()
 		tools, err := session.ListTools(ctx, nil)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(tools.Tools).To(HaveLen(5))
+		Expect(tools.Tools).To(HaveLen(6))
 		before, err := callMCPTool[mcpserver.ListResourcesOutput](ctx, session, "list_resources", mcpserver.ListResourcesInput{
 			ResourceType: mcpserver.ResourceTypeComputeInstance,
 		})
@@ -77,7 +77,7 @@ var _ = Describe("deployed MCP server", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(connection.Endpoint).To(Equal(resourceURL))
 		Expect(connection.Caller.Subject).ToNot(BeEmpty())
-		Expect(connection.Tools).To(HaveLen(5))
+		Expect(connection.Tools).To(HaveLen(6))
 		after, err := callMCPTool[mcpserver.ListResourcesOutput](ctx, session, "list_resources", mcpserver.ListResourcesInput{
 			ResourceType: mcpserver.ResourceTypeComputeInstance,
 		})

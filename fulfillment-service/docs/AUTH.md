@@ -609,6 +609,7 @@ The authorization policy allows:
      - Roles: `Get`, `List`
      - Security Groups: `Create`, `Delete`, `Get`, `List`, `Update`
      - Storage Tiers: `Get`, `List`
+     - Tenants: `List` (restricted to visible tenants)
      - Subnets: `Create`, `Delete`, `Get`, `List`, `Update`
      - Virtual Networks: `Create`, `Delete`, `Get`, `List`, `Update`
 

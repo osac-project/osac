@@ -15,16 +15,78 @@ package servers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
-// findDefaultSubnet returns the newest READY subnet labeled as a tenant default
-// with an IPv4 CIDR, scoped to the given tenant and project. Returns nil if none found.
+type ambiguousDefaultResourceError struct {
+	resource string
+	count    int
+}
+
+func (e *ambiguousDefaultResourceError) Error() string {
+	return fmt.Sprintf("expected exactly one READY default %s, found %d", e.resource, e.count)
+}
+
+func defaultResourceLookupFailure(err error, resource string) error {
+	var ambiguous *ambiguousDefaultResourceError
+	if errors.As(err, &ambiguous) {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"tenant default networking is misconfigured: %s", ambiguous)
+	}
+	return grpcstatus.Errorf(grpccodes.Internal, "failed to look up default %s: %v", resource, err)
+}
+
+// findDefaultVirtualNetwork returns the READY virtual network labeled as a tenant
+// default, scoped to the given tenant and project. Returns nil if none exists and
+// an error if more than one matches.
+func findDefaultVirtualNetwork(
+	ctx context.Context,
+	logger *slog.Logger,
+	virtualNetworksDao *dao.GenericDAO[*privatev1.VirtualNetwork],
+	tenant, project string,
+) (*privatev1.VirtualNetwork, error) {
+	filter := fmt.Sprintf(
+		"this.metadata.labels[%q] == \"true\" && this.metadata.tenant == %q && this.metadata.project == %q",
+		defaultLabel, tenant, project,
+	)
+	listResponse, err := virtualNetworksDao.List().
+		SetFilter(filter).
+		Do(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var items []*privatev1.VirtualNetwork
+	for _, virtualNetwork := range listResponse.GetItems() {
+		if virtualNetwork.GetMetadata().HasDeletionTimestamp() {
+			continue
+		}
+		if virtualNetwork.GetStatus().GetState() != privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY {
+			continue
+		}
+		items = append(items, virtualNetwork)
+	}
+	if len(items) == 0 {
+		return nil, nil
+	}
+	if len(items) > 1 {
+		logger.ErrorContext(ctx, "multiple default VirtualNetworks found",
+			slog.Int("count", len(items)),
+		)
+		return nil, &ambiguousDefaultResourceError{resource: "VirtualNetwork", count: len(items)}
+	}
+	return items[0], nil
+}
+
+// findDefaultSubnet returns the READY subnet labeled as a tenant default with an
+// IPv4 CIDR, scoped to the given tenant and project. Returns nil if none exists and
+// an error if more than one matches.
 func findDefaultSubnet(
 	ctx context.Context,
 	logger *slog.Logger,
@@ -55,22 +117,18 @@ func findDefaultSubnet(
 	if len(items) == 0 {
 		return nil, nil
 	}
-	sort.Slice(items, func(i, j int) bool {
-		ti := items[i].GetMetadata().GetCreationTimestamp().AsTime()
-		tj := items[j].GetMetadata().GetCreationTimestamp().AsTime()
-		return ti.After(tj)
-	})
 	if len(items) > 1 {
-		logger.WarnContext(ctx, "multiple default Subnets found, using newest",
+		logger.ErrorContext(ctx, "multiple default Subnets found",
 			slog.Int("count", len(items)),
 		)
+		return nil, &ambiguousDefaultResourceError{resource: "Subnet", count: len(items)}
 	}
 	return items[0], nil
 }
 
-// findDefaultSecurityGroup returns the newest READY security group labeled as a
-// tenant default that belongs to the given virtual network, scoped to the given
-// tenant and project. Returns nil if none found.
+// findDefaultSecurityGroup returns the READY security group labeled as a tenant
+// default that belongs to the given virtual network, scoped to the given tenant
+// and project. Returns nil if none exists and an error if more than one matches.
 func findDefaultSecurityGroup(
 	ctx context.Context,
 	logger *slog.Logger,
@@ -105,15 +163,11 @@ func findDefaultSecurityGroup(
 	if len(items) == 0 {
 		return nil, nil
 	}
-	sort.Slice(items, func(i, j int) bool {
-		ti := items[i].GetMetadata().GetCreationTimestamp().AsTime()
-		tj := items[j].GetMetadata().GetCreationTimestamp().AsTime()
-		return ti.After(tj)
-	})
 	if len(items) > 1 {
-		logger.WarnContext(ctx, "multiple default SecurityGroups found, using newest",
+		logger.ErrorContext(ctx, "multiple default SecurityGroups found",
 			slog.Int("count", len(items)),
 		)
+		return nil, &ambiguousDefaultResourceError{resource: "SecurityGroup", count: len(items)}
 	}
 	return items[0], nil
 }

@@ -310,7 +310,7 @@ func (s *PrivateComputeInstancesServer) completeNetworkAttachmentDefaults(ctx co
 	if attachment.GetSubnet() == nil || refKey(attachment.GetSubnet()) == "" {
 		subnet, err := findDefaultSubnet(ctx, s.logger, s.subnetsDao, tenant, metadata.GetProject())
 		if err != nil {
-			return grpcstatus.Errorf(grpccodes.Internal, "failed to look up default subnet: %v", err)
+			return defaultResourceLookupFailure(err, "subnet")
 		}
 		if subnet == nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
@@ -357,7 +357,7 @@ func (s *PrivateComputeInstancesServer) completeNetworkAttachmentDefaults(ctx co
 	securityGroup, err := findDefaultSecurityGroup(ctx, s.logger, s.securityGroupsDao,
 		virtualNetworkID, tenant, metadata.GetProject())
 	if err != nil {
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to look up default security group: %v", err)
+		return defaultResourceLookupFailure(err, "security group")
 	}
 	if securityGroup == nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,

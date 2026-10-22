@@ -543,15 +543,18 @@ class K8sClient:
         )
         return output if rc == 0 else ""
 
-    def get_tenant_condition_status(self, *, name: str, condition_type: str, checked: bool = True) -> str:
+    def get_tenant_condition(self, *, name: str, condition_type: str, checked: bool = True) -> dict[str, Any]:
         output, rc = self._get("get", "tenant", name, "-n", self.namespace, "-o", "json", checked=checked)
         if rc != 0:
-            return ""
+            return {}
         conditions: list[dict[str, Any]] = json.loads(output).get("status", {}).get("conditions", [])
         for cond in conditions:
             if cond.get("type") == condition_type:
-                return cond.get("status", "")
-        return ""
+                return cond
+        return {}
+
+    def get_tenant_condition_status(self, *, name: str, condition_type: str, checked: bool = True) -> str:
+        return self.get_tenant_condition(name=name, condition_type=condition_type, checked=checked).get("status", "")
 
     def get_tenant_storage_classes(self, *, name: str, checked: bool = True) -> list[dict[str, str]]:
         output, rc = self._get("get", "tenant", name, "-n", self.namespace, "-o", "json", checked=checked)

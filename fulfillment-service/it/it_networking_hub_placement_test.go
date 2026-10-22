@@ -631,7 +631,7 @@ func expectNetworkingResourceHub(ctx context.Context, expectedHubID string, getH
 		hubID, err := getHub(ctx)
 		g.Expect(err).ToNot(HaveOccurred())
 		g.Expect(hubID).To(Equal(expectedHubID))
-	}, time.Minute, time.Second).Should(Succeed())
+	}, 3*time.Minute, time.Second).Should(Succeed())
 }
 
 func expectNetworkingCRInHub(

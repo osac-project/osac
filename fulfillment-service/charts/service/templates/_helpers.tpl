@@ -78,5 +78,5 @@ Returns non-empty string for enabled, empty for disabled (for use in {{- if incl
 {{- end -}}
 {{- end -}}
 {{- end -}}
-{{- if $enabled -}}true{{- end -}}
+{{- $enabled -}}
 {{- end }}

@@ -21,7 +21,7 @@ import OsacForm from '../../components/Form/OsacForm';
 import { SelectField } from '../../components/Form/SelectField';
 import { useTranslation } from '../../hooks/useTranslation';
 import { getErrorMessage } from '../../utils/error';
-import NameField from '../catalogProvision/wizard/fields/NameField';
+import NameField from '../Form/NameField';
 
 interface SecurityGroupCreateModalProps {
   onClose: () => void;

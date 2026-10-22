@@ -29,7 +29,7 @@ import {
   hasSubnetOverlap,
   isSubnetWithinVN,
 } from '../../validation/cidr-validation';
-import NameField from '../catalogProvision/wizard/fields/NameField';
+import NameField from '../Form/NameField';
 
 interface SubnetCreateModalProps {
   onClose: () => void;

@@ -1,6 +1,7 @@
 import { Route, Routes } from 'react-router-dom';
 
-import { BareMetalCreatePage } from './BareMetalCreatePage';
+import BareMetalCreatePage from '@osac/ui-components/components/BareMetalInstance/CreateWizard/BareMetalInstanceCreatePage';
+
 import { BareMetalDetailsPage } from './BareMetalDetailsPage';
 import { BareMetalListPage } from './BareMetalListPage';
 

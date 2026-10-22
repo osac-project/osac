@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
@@ -26,6 +27,10 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
 	k8sfiles "github.com/osac-project/osac/fulfillment-service/internal/kubernetes/files"
+	_ "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	_ "github.com/osac-project/osac/proto/gen/osac/public/v1"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 )
 
 var _ = Describe("OPA Authorization Evaluator", func() {
@@ -508,6 +513,213 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("did not produce a subject_user"))
 			Expect(subject).To(BeNil())
+		})
+	})
+
+	Describe("reader role authorization", func() {
+		var evaluator *OPAAuthorizationEvaluator
+
+		BeforeEach(func() {
+			var err error
+			evaluator, err = NewEvaluator().
+				AddEmergencyServiceAccounts([]string{}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("limits reader roles to reviewed reads and preserves explicit grants", func(ctx context.Context) {
+			makeUser := func(roles []any, groups []any) *AuthContext {
+				return &AuthContext{
+					Username:     "reader-test",
+					Groups:       groups,
+					AuthMethod:   "jwt",
+					Organization: []any{"acme-corp"},
+					RealmAccess:  map[string]any{"roles": roles},
+					Tenant:       "acme-corp",
+				}
+			}
+
+			clientContext := makeUser([]any{"user"}, []any{})
+			readerContexts := map[string]*AuthContext{
+				"tenant-reader":         makeUser([]any{"tenant-reader"}, []any{}),
+				"cloud-provider-reader": makeUser([]any{"cloud-provider-reader"}, []any{}),
+			}
+			tenantAdminReader := makeUser([]any{"tenant-reader", "tenant-admin"}, []any{})
+
+			var methods []string
+			protoregistry.GlobalFiles.RangeFiles(func(file protoreflect.FileDescriptor) bool {
+				services := file.Services()
+				for serviceIndex := 0; serviceIndex < services.Len(); serviceIndex++ {
+					service := services.Get(serviceIndex)
+					serviceName := string(service.FullName())
+					if !strings.HasPrefix(serviceName, "osac.public.v1.") &&
+						!strings.HasPrefix(serviceName, "osac.private.v1.") {
+						continue
+					}
+					for methodIndex := 0; methodIndex < service.Methods().Len(); methodIndex++ {
+						method := service.Methods().Get(methodIndex)
+						methods = append(methods, fmt.Sprintf("/%s/%s", serviceName, method.Name()))
+					}
+				}
+				return true
+			})
+			sort.Strings(methods)
+			Expect(methods).ToNot(BeEmpty())
+
+			// Keep this set explicit so adding a client read grant cannot silently
+			// grant reader access without updating the reviewed reader contract.
+			expectedReaderMethods := map[string]struct{}{
+				"/osac.public.v1.AddOnOperators/Get":                 {},
+				"/osac.public.v1.AddOnOperators/List":                {},
+				"/osac.public.v1.BareMetalInstanceCatalogItems/Get":  {},
+				"/osac.public.v1.BareMetalInstanceCatalogItems/List": {},
+				"/osac.public.v1.BareMetalInstanceTemplates/Get":     {},
+				"/osac.public.v1.BareMetalInstanceTemplates/List":    {},
+				"/osac.public.v1.BareMetalInstanceTypes/Get":         {},
+				"/osac.public.v1.BareMetalInstanceTypes/List":        {},
+				"/osac.public.v1.BareMetalInstances/Get":             {},
+				"/osac.public.v1.BareMetalInstances/List":            {},
+				"/osac.public.v1.ClusterCatalogItems/Get":            {},
+				"/osac.public.v1.ClusterCatalogItems/List":           {},
+				"/osac.public.v1.ClusterTemplates/Get":               {},
+				"/osac.public.v1.ClusterTemplates/List":              {},
+				"/osac.public.v1.ClusterVersions/Get":                {},
+				"/osac.public.v1.ClusterVersions/List":               {},
+				"/osac.public.v1.Clusters/Get":                       {},
+				"/osac.public.v1.Clusters/List":                      {},
+				"/osac.public.v1.ComputeInstanceCatalogItems/Get":    {},
+				"/osac.public.v1.ComputeInstanceCatalogItems/List":   {},
+				"/osac.public.v1.ComputeInstanceTemplates/Get":       {},
+				"/osac.public.v1.ComputeInstanceTemplates/List":      {},
+				"/osac.public.v1.ComputeInstances/Get":               {},
+				"/osac.public.v1.ComputeInstances/List":              {},
+				"/osac.public.v1.DiskImages/Get":                     {},
+				"/osac.public.v1.DiskImages/List":                    {},
+				"/osac.public.v1.Events/Watch":                       {},
+				"/osac.public.v1.ExternalIPAttachments/Get":          {},
+				"/osac.public.v1.ExternalIPAttachments/List":         {},
+				"/osac.public.v1.ExternalIPPools/Get":                {},
+				"/osac.public.v1.ExternalIPPools/List":               {},
+				"/osac.public.v1.ExternalIPs/Get":                    {},
+				"/osac.public.v1.ExternalIPs/List":                   {},
+				"/osac.public.v1.FabricDomains/Get":                  {},
+				"/osac.public.v1.FabricDomains/List":                 {},
+				"/osac.public.v1.InstanceTypes/Get":                  {},
+				"/osac.public.v1.InstanceTypes/List":                 {},
+				"/osac.public.v1.NATGateways/Get":                    {},
+				"/osac.public.v1.NATGateways/List":                   {},
+				"/osac.public.v1.ProjectMemberships/List":            {},
+				"/osac.public.v1.Projects/List":                      {},
+				"/osac.public.v1.RoleBindings/Get":                   {},
+				"/osac.public.v1.RoleBindings/List":                  {},
+				"/osac.public.v1.Roles/Get":                          {},
+				"/osac.public.v1.Roles/List":                         {},
+				"/osac.public.v1.Secrets/Get":                        {},
+				"/osac.public.v1.Secrets/List":                       {},
+				"/osac.public.v1.SecurityGroups/Get":                 {},
+				"/osac.public.v1.SecurityGroups/List":                {},
+				"/osac.public.v1.StorageTiers/Get":                   {},
+				"/osac.public.v1.StorageTiers/List":                  {},
+				"/osac.public.v1.Subnets/Get":                        {},
+				"/osac.public.v1.Subnets/List":                       {},
+				"/osac.public.v1.VirtualNetworks/Get":                {},
+				"/osac.public.v1.VirtualNetworks/List":               {},
+				"/osac.public.v1.Volumes/Get":                        {},
+				"/osac.public.v1.Volumes/List":                       {},
+			}
+			for expectedMethod := range expectedReaderMethods {
+				Expect(methods).To(ContainElement(expectedMethod),
+					"expected reader method %q must be registered", expectedMethod)
+			}
+
+			for _, method := range methods {
+				_, isExpectedReaderMethod := expectedReaderMethods[method]
+				expected := isExpectedReaderMethod || method == "/osac.public.v1.SelfSubjectAccessReviews/Create"
+				for role, authContext := range readerContexts {
+					decision, err := evaluator.Evaluate(ctx, authContext, method)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(decision).ToNot(BeNil())
+					Expect(decision.Allowed).To(Equal(expected),
+						fmt.Sprintf("role %q on %q", role, method))
+				}
+			}
+
+			for role, authContext := range readerContexts {
+				for _, method := range []string{
+					"/osac.public.v1.Clusters/GetByName",
+					"/osac.public.v1.Clusters/ListServices",
+					"/osac.public.v1.Events/WatchSomething",
+					"/metadata.v1.Metadata/Get",
+					"/grpc.reflection.v1.ServerReflection/ServerReflectionInfo",
+					"/grpc.health.v1.Health/Check",
+				} {
+					decision, err := evaluator.Evaluate(ctx, authContext, method)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(decision.Allowed).To(BeFalse(), "role %q on %q", role, method)
+				}
+			}
+
+			for _, method := range []string{
+				"/metadata.v1.Metadata/Get",
+				"/grpc.reflection.v1.ServerReflection/ServerReflectionInfo",
+				"/grpc.health.v1.Health/Check",
+			} {
+				decision, err := evaluator.Evaluate(ctx, tenantAdminReader, method)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(decision).ToNot(BeNil())
+				Expect(decision.Allowed).To(BeTrue(), "mixed role on %q", method)
+			}
+
+			for role, authContext := range readerContexts {
+				for _, method := range []string{
+					"/osac.public.v1.Projects/List",
+					"/osac.public.v1.ProjectMemberships/List",
+				} {
+					decision, err := evaluator.Evaluate(ctx, authContext, method)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(decision).ToNot(BeNil())
+					Expect(decision.Allowed).To(BeTrue(), "role %q on %q", role, method)
+					Expect(decision.SubjectTenants).To(ContainElement("acme-corp"),
+						"role %q on %q", role, method)
+				}
+			}
+
+			for _, authContext := range []*AuthContext{
+				readerContexts["tenant-reader"],
+				readerContexts["cloud-provider-reader"],
+				clientContext,
+				makeUser([]any{"tenant-admin"}, []any{}),
+				makeUser([]any{"tenant-reader"}, []any{"admins"}),
+			} {
+				decision, err := evaluator.Evaluate(ctx, authContext, "/osac.public.v1.SelfSubjectAccessReviews/Create")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(decision.Allowed).To(BeTrue())
+			}
+
+			for _, method := range []string{
+				"/osac.public.v1.Clusters/Create",
+				"/osac.public.v1.Clusters/Update",
+				"/osac.public.v1.Clusters/Delete",
+			} {
+				for role, authContext := range readerContexts {
+					decision, err := evaluator.Evaluate(ctx, authContext, method)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(decision.Allowed).To(BeFalse(), "role %q on %q", role, method)
+				}
+
+				decision, err := evaluator.Evaluate(ctx, tenantAdminReader, method)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(decision.Allowed).To(BeTrue(), "mixed role on %q", method)
+			}
+
+			clientCreate, err := evaluator.Evaluate(ctx, clientContext, "/osac.public.v1.Clusters/Create")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(clientCreate.Allowed).To(BeTrue())
+
+			adminReader := makeUser([]any{"tenant-reader"}, []any{"admins"})
+			adminCreate, err := evaluator.Evaluate(ctx, adminReader, "/osac.private.v1.Hubs/Create")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(adminCreate.Allowed).To(BeTrue())
 		})
 	})
 })

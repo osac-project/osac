@@ -78,6 +78,7 @@ ROLE_SCENARIO_TESTS=(
   "cluster_working_namespace:test_not_found"
   "cluster_working_namespace:test_predefined"
   "cluster_working_namespace:test_found"
+  "compute_instance_create:sysprep_secret_copy"
 )
 
 echo "=== Running Workflow Integration Tests ==="
@@ -180,6 +181,21 @@ for entry in "${ROLE_SCENARIO_TESTS[@]}"; do
 
   echo ""
 done
+
+echo "=== Running VM Routing Regression Tests ==="
+echo ""
+
+OCP_VIRT_VM_TEST="${SCRIPT_DIR}/../../collections/ansible_collections/osac/templates/roles/ocp_virt_vm/tests/test.yml"
+
+for scenario in test_windows_userdata_sysprep test_windows_no_userdata test_linux_userdata_cloudinit; do
+  echo "Testing ocp_virt_vm: ${scenario}"
+  if run_ansible_playbook "${OCP_VIRT_VM_TEST}" -e "${scenario}=true"; then
+    PASSED+=("ocp_virt_vm:${scenario}")
+  else
+    FAILED+=("ocp_virt_vm:${scenario}")
+  fi
+done
+echo ""
 
 echo "=== Running Config-as-Code Role Tests ==="
 echo ""

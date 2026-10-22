@@ -970,6 +970,279 @@ var _ = Describe("SecurityGroupReconciler", func() {
 		})
 	})
 
+	Context("Agentless no-op SecurityGroup via AAP", func() {
+		var (
+			agentlessReconciler *SecurityGroupReconciler
+			agentlessFakeClient client.Client
+			agentlessVnet       *osacv1alpha1.VirtualNetwork
+			agentlessSG         *osacv1alpha1.SecurityGroup
+			agentlessSubnet     *osacv1alpha1.Subnet
+		)
+
+		BeforeEach(func() {
+			testScheme := runtime.NewScheme()
+			Expect(osacv1alpha1.AddToScheme(testScheme)).To(Succeed())
+			Expect(scheme.AddToScheme(testScheme)).To(Succeed())
+
+			agentlessVnet = &osacv1alpha1.VirtualNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "agentless-vnet",
+					Namespace: "test-namespace",
+					Labels: map[string]string{
+						osacVirtualNetworkIDLabel: "agentless-vnet-uuid",
+					},
+				},
+				Spec: osacv1alpha1.VirtualNetworkSpec{
+					Region:       "us-west-1",
+					NetworkClass: "nc-agentless",
+				},
+			}
+
+			agentlessSG = &osacv1alpha1.SecurityGroup{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "agentless-sg",
+					Namespace: "test-namespace",
+				},
+				Spec: osacv1alpha1.SecurityGroupSpec{
+					VirtualNetwork: "agentless-vnet-uuid",
+				},
+			}
+
+			agentlessSubnet = &osacv1alpha1.Subnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "agentless-subnet",
+					Namespace: "test-namespace",
+				},
+				Spec: osacv1alpha1.SubnetSpec{
+					VirtualNetwork: "agentless-vnet-uuid",
+				},
+			}
+
+			agentlessFakeClient = fake.NewClientBuilder().
+				WithScheme(testScheme).
+				WithObjects(
+					agentlessVnet, agentlessSG, agentlessSubnet,
+					newFabricManagerConfigMap(
+						"fm-agentless",
+						"test-namespace",
+						"agentless_net"),
+				).
+				WithStatusSubresource(
+					&osacv1alpha1.SecurityGroup{},
+					&osacv1alpha1.Subnet{}).
+				Build()
+
+			agentlessSubnet.Status.Phase = osacv1alpha1.SubnetPhaseReady
+			Expect(agentlessFakeClient.Status().Update(
+				ctx, agentlessSubnet)).To(Succeed())
+
+			disc, discErr := networkmanager.NewDiscovery(
+				agentlessFakeClient, "test-namespace")
+			Expect(discErr).NotTo(HaveOccurred())
+			resolver := dispatcher.NewResolver(
+				dispatcheradapter.NewNetworkClassAdapter(
+					newListingNetworkClassClient(
+						[]*privatev1.NetworkClass{{
+							Id:            "nc-agentless",
+							FabricManager: ptr.To("agentless_net"),
+						}},
+						&[]*privatev1.NetworkClass{},
+					)), disc)
+
+			agentlessReconciler = &SecurityGroupReconciler{
+				Client:                     agentlessFakeClient,
+				APIReader:                  agentlessFakeClient,
+				Scheme:                     testScheme,
+				NetworkingNamespace:        "test-namespace",
+				ProvisioningProvider:       mockProvider,
+				StatusPollInterval:         1 * time.Second,
+				MaxJobHistory:              10,
+				NetworkProvisioningEnabled: true,
+				Resolver:                   resolver,
+			}
+		})
+
+		It("should provision via AAP and set NoOp when outputs signal it", func() {
+			key := types.NamespacedName{
+				Name:      agentlessSG.Name,
+				Namespace: agentlessSG.Namespace,
+			}
+
+			// Mock the AAP provider: trigger returns a job,
+			// then poll returns succeeded with no-op outputs.
+			mockProvider.triggerProvisionFunc = func(
+				_ context.Context,
+				_ client.Object,
+			) (*provisioning.ProvisionResult, error) {
+				return &provisioning.ProvisionResult{
+					JobID:        "agentless-sg-job",
+					InitialState: osacv1alpha1.JobStatePending,
+				}, nil
+			}
+			mockProvider.getProvisionStatusFunc = func(
+				_ context.Context,
+				_ client.Object,
+				jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID:   jobID,
+					State:   osacv1alpha1.JobStateSucceeded,
+					Message: "successful",
+					Outputs: map[string]any{
+						"osac_noop": true,
+						"osac_noop_message": "SecurityGroup " +
+							"is a no-op: the Agentless " +
+							"network class does not enforce " +
+							"security-group policies.",
+					},
+				}, nil
+			}
+
+			// First reconcile: adds finalizer
+			_, err := agentlessReconciler.Reconcile(ctx,
+				mcreconcile.Request{Request: ctrl.Request{
+					NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile: dispatches, triggers AAP job
+			_, err = agentlessReconciler.Reconcile(ctx,
+				mcreconcile.Request{Request: ctrl.Request{
+					NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Third reconcile: polls AAP job, sees success + noop
+			_, err = agentlessReconciler.Reconcile(ctx,
+				mcreconcile.Request{Request: ctrl.Request{
+					NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.SecurityGroup{}
+			Expect(agentlessFakeClient.Get(
+				ctx, key, updated)).To(Succeed())
+
+			Expect(updated.Status.Phase).To(
+				Equal(osacv1alpha1.SecurityGroupPhaseReady))
+
+			cond := apimeta.FindStatusCondition(
+				updated.Status.Conditions,
+				osacv1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(cond.Reason).To(
+				Equal(osacv1alpha1.ReasonNoOp))
+			Expect(cond.Message).To(
+				ContainSubstring("no-op"))
+		})
+
+		It("should still set implementation-strategy annotation", func() {
+			key := types.NamespacedName{
+				Name:      agentlessSG.Name,
+				Namespace: agentlessSG.Namespace,
+			}
+
+			mockProvider.triggerProvisionFunc = func(
+				_ context.Context,
+				_ client.Object,
+			) (*provisioning.ProvisionResult, error) {
+				return &provisioning.ProvisionResult{
+					JobID:        "agl-sg-annot",
+					InitialState: osacv1alpha1.JobStatePending,
+				}, nil
+			}
+
+			// Reconcile until annotation is set
+			for i := 0; i < 3; i++ {
+				_, _ = agentlessReconciler.Reconcile(ctx,
+					mcreconcile.Request{Request: ctrl.Request{
+						NamespacedName: key}})
+			}
+
+			updated := &osacv1alpha1.SecurityGroup{}
+			Expect(agentlessFakeClient.Get(
+				ctx, key, updated)).To(Succeed())
+			Expect(updated.Annotations).To(
+				HaveKeyWithValue(
+					osacImplementationStrategyAnnotation,
+					"agentless_net"))
+		})
+
+		It("should delete cleanly via normal deprovisioning path", func() {
+			key := types.NamespacedName{
+				Name:      agentlessSG.Name,
+				Namespace: agentlessSG.Namespace,
+			}
+
+			mockProvider.triggerProvisionFunc = func(
+				_ context.Context,
+				_ client.Object,
+			) (*provisioning.ProvisionResult, error) {
+				return &provisioning.ProvisionResult{
+					JobID:        "agl-del-prov",
+					InitialState: osacv1alpha1.JobStatePending,
+				}, nil
+			}
+			mockProvider.getProvisionStatusFunc = func(
+				_ context.Context,
+				_ client.Object,
+				jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID:   jobID,
+					State:   osacv1alpha1.JobStateSucceeded,
+					Outputs: map[string]any{"osac_noop": true},
+				}, nil
+			}
+
+			// Provision to Ready
+			for i := 0; i < 4; i++ {
+				_, _ = agentlessReconciler.Reconcile(ctx,
+					mcreconcile.Request{Request: ctrl.Request{
+						NamespacedName: key}})
+			}
+
+			// Simulate deletion
+			toDelete := &osacv1alpha1.SecurityGroup{}
+			Expect(agentlessFakeClient.Get(
+				ctx, key, toDelete)).To(Succeed())
+			now := metav1.Now()
+			toDelete.DeletionTimestamp = &now
+
+			mockProvider.triggerDeprovisionFunc = func(
+				_ context.Context,
+				_ client.Object,
+				_ []osacv1alpha1.JobStatus,
+			) (*provisioning.DeprovisionResult, error) {
+				return &provisioning.DeprovisionResult{
+					Action: provisioning.DeprovisionTriggered,
+					JobID:  "agl-del-deprov",
+				}, nil
+			}
+			mockProvider.getDeprovisionStatusFunc = func(
+				_ context.Context,
+				_ client.Object,
+				jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID: jobID,
+					State: osacv1alpha1.JobStateSucceeded,
+				}, nil
+			}
+
+			// First handleDelete triggers the deprovision job
+			_, _ = agentlessReconciler.handleDelete(
+				ctx, toDelete)
+
+			// Second handleDelete polls the completed job and
+			// removes the finalizer.
+			_, _ = agentlessReconciler.handleDelete(
+				ctx, toDelete)
+
+			// Finalizer should be removed
+			Expect(toDelete.Finalizers).NotTo(
+				ContainElement(osacSecurityGroupFinalizer))
+		})
+	})
+
 	Context("provisioning condition updates", func() {
 		It("should set Ready=False condition with error message when job fails", func() {
 			sg.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
@@ -1022,6 +1295,118 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			cond := apimeta.FindStatusCondition(sg.Status.Conditions, osacv1alpha1.ConditionReady)
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonAsExpected))
+		})
+
+		It("should set Ready condition with NoOp reason when job outputs signal no-op", func() {
+			sg.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
+				{
+					JobID:     "noop-job",
+					Type:      osacv1alpha1.JobTypeProvision,
+					Timestamp: metav1.NewTime(time.Now().UTC()),
+					State:     osacv1alpha1.JobStateRunning,
+				},
+			}
+
+			mockProvider.getProvisionStatusFunc = func(
+				_ context.Context,
+				_ client.Object,
+				jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID:   jobID,
+					State:   osacv1alpha1.JobStateSucceeded,
+					Message: "successful",
+					Outputs: map[string]any{
+						"osac_noop": true,
+						"osac_noop_message": "SecurityGroup is a " +
+							"no-op: the Agentless network class " +
+							"does not enforce security-group " +
+							"policies.",
+					},
+				}, nil
+			}
+
+			_, err := reconciler.handleProvisioning(ctx, sg)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(sg.Status.Phase).To(
+				Equal(osacv1alpha1.SecurityGroupPhaseReady))
+
+			cond := apimeta.FindStatusCondition(
+				sg.Status.Conditions,
+				osacv1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonNoOp))
+			Expect(cond.Message).To(ContainSubstring("no-op"))
+			Expect(cond.Message).To(
+				ContainSubstring("does not enforce"))
+		})
+
+		It("should use default no-op message when osac_noop_message is absent", func() {
+			sg.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
+				{
+					JobID:     "noop-no-msg",
+					Type:      osacv1alpha1.JobTypeProvision,
+					Timestamp: metav1.NewTime(time.Now().UTC()),
+					State:     osacv1alpha1.JobStateRunning,
+				},
+			}
+
+			mockProvider.getProvisionStatusFunc = func(
+				_ context.Context,
+				_ client.Object,
+				jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID:   jobID,
+					State:   osacv1alpha1.JobStateSucceeded,
+					Outputs: map[string]any{"osac_noop": true},
+				}, nil
+			}
+
+			_, err := reconciler.handleProvisioning(ctx, sg)
+			Expect(err).NotTo(HaveOccurred())
+
+			cond := apimeta.FindStatusCondition(
+				sg.Status.Conditions,
+				osacv1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonNoOp))
+			Expect(cond.Message).To(
+				ContainSubstring("no-op"))
+		})
+
+		It("should use AsExpected when job succeeds without no-op signal", func() {
+			sg.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
+				{
+					JobID:     "normal-job",
+					Type:      osacv1alpha1.JobTypeProvision,
+					Timestamp: metav1.NewTime(time.Now().UTC()),
+					State:     osacv1alpha1.JobStateRunning,
+				},
+			}
+
+			mockProvider.getProvisionStatusFunc = func(
+				_ context.Context,
+				_ client.Object,
+				jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID:   jobID,
+					State:   osacv1alpha1.JobStateSucceeded,
+					Outputs: map[string]any{"some_key": "value"},
+				}, nil
+			}
+
+			_, err := reconciler.handleProvisioning(ctx, sg)
+			Expect(err).NotTo(HaveOccurred())
+
+			cond := apimeta.FindStatusCondition(
+				sg.Status.Conditions,
+				osacv1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
 			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonAsExpected))
 		})
 

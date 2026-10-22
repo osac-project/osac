@@ -1,8 +1,8 @@
 import { Stack, StackItem, Title } from '@patternfly/react-core';
 
 import { useTranslation } from '../../hooks/useTranslation';
-import NameField from '../catalogProvision/wizard/fields/NameField';
 import { InputField } from '../Form/InputField';
+import NameField from '../Form/NameField';
 import OsacForm from '../Form/OsacForm';
 
 const GeneralStep = () => {

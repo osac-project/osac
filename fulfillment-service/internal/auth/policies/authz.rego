@@ -94,6 +94,17 @@ subject_realm_roles = input.auth.identity.realm_access.roles if {
   input.auth.identity.realm_access.roles
 }
 
+# Reader roles receive a restricted subset of the public API.
+reader_roles := {
+  "tenant-reader",
+  "cloud-provider-reader",
+}
+default is_reader = false
+is_reader if {
+  some role in subject_realm_roles
+  role in reader_roles
+}
+
 # Organization dictionary extraction
 default subject_org_groups = {}
 
@@ -163,6 +174,16 @@ is_csi if {
   role in csi_client_roles
 }
 
+# Reader restrictions apply only when no other role grants access.
+default is_reader_only = false
+is_reader_only if {
+  is_reader
+  not is_admin
+  not is_tenant_admin
+  not is_tenant_idp_manager
+  not is_csi
+}
+
 # Check if an account is a regular client (no admin, tenant management, or CSI roles):
 default is_client = false
 is_client if {
@@ -170,6 +191,7 @@ is_client if {
   not is_tenant_admin
   not is_tenant_idp_manager
   not is_csi
+  not is_reader
 }
 
 # Check if account has client-level permissions (clients, tenant admins, or IdP managers):
@@ -184,21 +206,22 @@ has_client_permissions if {
   is_tenant_idp_manager
 }
 
-# Allow metadata, reflection and health to everyone:
+# Allow metadata, reflection, and health except to reader-only users:
 allow if {
+  not is_reader_only
   startswith(grpc_method, "/metadata.")
 }
 allow if {
+  not is_reader_only
   startswith(grpc_method, "/grpc.reflection.")
 }
 allow if {
+  not is_reader_only
   startswith(grpc_method, "/grpc.health.")
 }
 
 # Allow specific methods to clients (and tenant admins/IdP managers who inherit client permissions):
-allow if {
-  has_client_permissions
-  grpc_method in {
+client_permission_methods := {
     "/osac.public.v1.AddOnOperators/Get",
     "/osac.public.v1.AddOnOperators/List",
     "/osac.public.v1.BareMetalInstanceCatalogItems/Get",
@@ -289,7 +312,33 @@ allow if {
     "/osac.public.v1.Volumes/Get",
     "/osac.public.v1.Volumes/List",
     "/osac.public.v1.Volumes/Update",
-  }
+}
+allow if {
+  has_client_permissions
+  grpc_method in client_permission_methods
+}
+
+# Reader access is the reviewed read-only subset of existing client grants.
+reader_client_methods := {method |
+  some method in client_permission_methods
+  parts := split(method, "/")
+  count(parts) == 3
+  startswith(parts[1], "osac.public.v1.")
+  parts[2] in {"Get", "List", "Watch"}
+}
+reader_scoped_list_methods := {
+  # These client list grants are declared separately for scoped filtering.
+  "/osac.public.v1.Projects/List",
+  "/osac.public.v1.ProjectMemberships/List",
+}
+reader_permission_methods := reader_client_methods | reader_scoped_list_methods
+allow if {
+  is_reader
+  grpc_method in reader_permission_methods
+}
+allow if {
+  is_reader
+  grpc_method == "/osac.public.v1.SelfSubjectAccessReviews/Create"
 }
 
 # Tenant admins can manage catalog items, users, identity providers,

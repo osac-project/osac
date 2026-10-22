@@ -275,3 +275,53 @@
             kind: ConfigMap
             namespace: default
             name: finalizer-test-noop
+
+# ── Test 5: Missing targets are left untouched ──
+- name: "Finalizer - Skip missing targets"
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Skip adding a finalizer to a missing resource
+      ansible.builtin.include_role:
+        name: osac.service.finalizer
+      vars:
+        finalizer_state: present
+        finalizer_name: "osac.openshift.io/test-finalizer"
+        finalizer_target:
+          api_version: v1
+          kind: ConfigMap
+          namespace: default
+          name: finalizer-test-missing-add
+
+    - name: Skip removing a finalizer from a missing resource
+      ansible.builtin.include_role:
+        name: osac.service.finalizer
+      vars:
+        finalizer_state: absent
+        finalizer_name: "osac.openshift.io/test-finalizer"
+        finalizer_target:
+          api_version: v1
+          kind: ConfigMap
+          namespace: default
+          name: finalizer-test-missing-remove
+
+    - name: Verify missing resources were not created
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ConfigMap
+        namespace: default
+        name: "{{ item }}"
+      loop:
+        - finalizer-test-missing-add
+        - finalizer-test-missing-remove
+      register: missing_resources
+
+    - name: Assert missing targets remain absent
+      ansible.builtin.assert:
+        that:
+          - missing_resources.results | map(attribute='resources') | map('length') | sum == 0
+        fail_msg: "Finalizer operations created a missing target resource"
+        success_msg: "Missing targets are left untouched"

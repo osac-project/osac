@@ -26,8 +26,10 @@ import (
 
 	"time"
 
+	"github.com/google/uuid"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -43,6 +45,7 @@ type nodeSetClient struct {
 	order              client.ObjectKey
 	bmis               []*privatev1.BareMetalInstance
 	failCreate         bool
+	createErr          error
 	names              []string
 	reservationMissing bool
 }
@@ -78,6 +81,9 @@ func (f *nodeSetClient) CreateBareMetalInstance(ctx context.Context, bmi *privat
 	if f.failCreate {
 		return nil, fmt.Errorf("interrupted create")
 	}
+	if f.createErr != nil {
+		return nil, f.createErr
+	}
 	bmi.SetId(fmt.Sprintf("id-%d", len(f.bmis)))
 	f.bmis = append(f.bmis, bmi)
 	return bmi, nil
@@ -89,6 +95,7 @@ func nodeSetHarness(name string, requests ...v1alpha1.NodeRequest) (*Reconciler,
 	Expect(v1alpha1.AddToScheme(scheme)).To(Succeed())
 	co := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{
 		Name:      name,
+		UID:       types.UID(uuid.NewString()),
 		Namespace: "test",
 		Labels:    map[string]string{clusterOrderIDLabel: name + "-cluster"},
 	}, Spec: v1alpha1.ClusterOrderSpec{NodeRequests: requests}}

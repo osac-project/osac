@@ -6,7 +6,7 @@ import { SecretType } from '@osac/types';
 import { resourceNameSchema } from '@osac/ui-components/validation/resource-name';
 
 import { SECRET_FILE_MAX_BYTES, type SecretValues, decodeSecretValue } from './values';
-import { isValidSshPublicKey } from '../../catalogProvision/wizard/fields/credentialValidation';
+import { isValidSshPublicKey } from '../../ProvisioningWizard/credentialValidation';
 
 const getByteLength = (value: unknown): number | undefined => {
   if (!value || typeof value !== 'object') {

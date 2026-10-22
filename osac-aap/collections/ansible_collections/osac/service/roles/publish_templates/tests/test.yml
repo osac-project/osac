@@ -44,9 +44,10 @@
     test_mock_port: 18081
 
   tasks:
-    - name: Kill any stale server on port
-      ansible.builtin.shell: "fuser -k {{ test_mock_port }}/tcp 2>/dev/null || true"
-      changed_when: false
+    - name: Stop any stale mock API server
+      ansible.builtin.include_tasks: stop_mock_api_server.yml
+      vars:
+        test_mock_url: "http://127.0.0.1:{{ test_mock_port }}"
       when: test_empty | default(false) | bool
 
     - name: Start mock API server (empty scenario)
@@ -163,9 +164,10 @@
         success_msg: "Empty scenario passed: AddOnOperator was created with the expected payload"
       when: test_empty | default(false) | bool
 
-    - name: Stop mock server
-      ansible.builtin.shell: "fuser -k {{ test_mock_port }}/tcp 2>/dev/null || true"
-      changed_when: false
+    - name: Stop mock API server
+      ansible.builtin.include_tasks: stop_mock_api_server.yml
+      vars:
+        test_mock_url: "http://127.0.0.1:{{ test_mock_port }}"
       when: test_empty | default(false) | bool
 
 # ──────────────────────────────────────────────────────────────
@@ -180,9 +182,10 @@
     test_mock_port: 18081
 
   tasks:
-    - name: Kill any stale server on port
-      ansible.builtin.shell: "fuser -k {{ test_mock_port }}/tcp 2>/dev/null || true"
-      changed_when: false
+    - name: Stop any stale mock API server
+      ansible.builtin.include_tasks: stop_mock_api_server.yml
+      vars:
+        test_mock_url: "http://127.0.0.1:{{ test_mock_port }}"
       when: test_populated | default(false) | bool
 
     - name: Start mock API server (populated scenario)
@@ -305,9 +308,10 @@
         success_msg: "Populated scenario passed: AddOnOperator was updated with the expected payload"
       when: test_populated | default(false) | bool
 
-    - name: Stop mock server
-      ansible.builtin.shell: "fuser -k {{ test_mock_port }}/tcp 2>/dev/null || true"
-      changed_when: false
+    - name: Stop mock API server
+      ansible.builtin.include_tasks: stop_mock_api_server.yml
+      vars:
+        test_mock_url: "http://127.0.0.1:{{ test_mock_port }}"
       when: test_populated | default(false) | bool
 
 # ──────────────────────────────────────────────────────────────
@@ -322,9 +326,10 @@
     test_mock_port: 18081
 
   tasks:
-    - name: Kill any stale server on port
-      ansible.builtin.shell: "fuser -k {{ test_mock_port }}/tcp 2>/dev/null || true"
-      changed_when: false
+    - name: Stop any stale mock API server
+      ansible.builtin.include_tasks: stop_mock_api_server.yml
+      vars:
+        test_mock_url: "http://127.0.0.1:{{ test_mock_port }}"
       when: test_no_items_key | default(false) | bool
 
     - name: Start mock API server (no_items_key scenario)
@@ -388,9 +393,10 @@
         success_msg: "No-items-key edge case passed: all 4 resource types created via POST"
       when: test_no_items_key | default(false) | bool
 
-    - name: Stop mock server
-      ansible.builtin.shell: "fuser -k {{ test_mock_port }}/tcp 2>/dev/null || true"
-      changed_when: false
+    - name: Stop mock API server
+      ansible.builtin.include_tasks: stop_mock_api_server.yml
+      vars:
+        test_mock_url: "http://127.0.0.1:{{ test_mock_port }}"
       when: test_no_items_key | default(false) | bool
 
 # ──────────────────────────────────────────────────────────────
@@ -448,9 +454,10 @@
     test_mock_port: 18081
 
   tasks:
-    - name: Kill any stale server on port
-      ansible.builtin.shell: "fuser -k {{ test_mock_port }}/tcp 2>/dev/null || true"
-      changed_when: false
+    - name: Stop any stale mock API server
+      ansible.builtin.include_tasks: stop_mock_api_server.yml
+      vars:
+        test_mock_url: "http://127.0.0.1:{{ test_mock_port }}"
       when: test_loopback_allowed | default(false) | bool
 
     - name: Start mock API server (empty scenario for loopback test)
@@ -499,9 +506,10 @@
         success_msg: "OSAC-5383 loopback test passed: http://127.0.0.1 accepted correctly"
       when: test_loopback_allowed | default(false) | bool
 
-    - name: Stop mock server
-      ansible.builtin.shell: "fuser -k {{ test_mock_port }}/tcp 2>/dev/null || true"
-      changed_when: false
+    - name: Stop mock API server
+      ansible.builtin.include_tasks: stop_mock_api_server.yml
+      vars:
+        test_mock_url: "http://127.0.0.1:{{ test_mock_port }}"
       when: test_loopback_allowed | default(false) | bool
 
 # ---------------------------------------------------------------------------
@@ -522,9 +530,10 @@
       when: test_not_found | default(false) | bool
 
   tasks:
-    - name: Kill any stale server on port
-      ansible.builtin.shell: "fuser -k {{ test_mock_port }}/tcp 2>/dev/null || true"
-      changed_when: false
+    - name: Stop any stale mock API server
+      ansible.builtin.include_tasks: stop_mock_api_server.yml
+      vars:
+        test_mock_url: "http://127.0.0.1:{{ test_mock_port }}"
       when: test_disabled | default(false) | bool
 
     - name: Start mock API server (disabled scenario)
@@ -595,9 +604,10 @@
         success_msg: "Disabled service skipped AddOnOperator writes"
       when: test_disabled | default(false) | bool
 
-    - name: Stop mock server
-      ansible.builtin.shell: "fuser -k {{ test_mock_port }}/tcp 2>/dev/null || true"
-      changed_when: false
+    - name: Stop mock API server
+      ansible.builtin.include_tasks: stop_mock_api_server.yml
+      vars:
+        test_mock_url: "http://127.0.0.1:{{ test_mock_port }}"
       when: test_disabled | default(false) | bool
 
 - name: "Test publish_templates -- reject an untrusted HTTPS certificate"
@@ -636,6 +646,12 @@
               - "1"
           changed_when: false
           no_log: true
+
+        - name: Stop any stale HTTPS mock API server
+          ansible.builtin.include_tasks: stop_mock_api_server.yml
+          vars:
+            test_mock_url: "https://127.0.0.1:{{ test_mock_port }}"
+            test_mock_validate_certs: false
 
         - name: Start HTTPS mock API server
           ansible.builtin.command:
@@ -691,8 +707,10 @@
               - tls_call_log.json | length == 0
       always:
         - name: Stop HTTPS mock API server
-          ansible.builtin.shell: "fuser -k {{ test_mock_port }}/tcp 2>/dev/null || true"
-          changed_when: false
+          ansible.builtin.include_tasks: stop_mock_api_server.yml
+          vars:
+            test_mock_url: "https://127.0.0.1:{{ test_mock_port }}"
+            test_mock_validate_certs: false
 
         - name: Remove temporary TLS fixture
           ansible.builtin.file:

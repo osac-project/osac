@@ -8,7 +8,7 @@ import type {
 } from './AttachNatGatewayWizard.types';
 import { useTranslation } from '../../hooks/useTranslation';
 import { getErrorMessage } from '../../utils/error';
-import NameField from '../catalogProvision/wizard/fields/NameField';
+import NameField from '../Form/NameField';
 import OsacForm from '../Form/OsacForm';
 import { SelectField } from '../Form/SelectField';
 

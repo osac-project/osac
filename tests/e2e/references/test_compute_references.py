@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
 import subprocess
 from collections.abc import Generator
 from typing import Any
@@ -10,15 +11,9 @@ from uuid import uuid4
 import pytest
 
 from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
-from tests.e2e.core.helpers import (
-    assert_grpc_field_violation,
-    wait_for_cr,
-    wait_for_deletion,
-    wait_for_provision,
-    wait_for_running,
-)
+from tests.e2e.core.helpers import assert_grpc_field_violation, wait_for_cr, wait_for_provision, wait_for_running
 from tests.e2e.core.k8s_client import K8sClient
-from tests.e2e.core.runner import env
+from tests.e2e.core.runner import env, poll_until
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +84,54 @@ def _ci_create_data(
     }
 
 
+def _delete_compute_instance_and_wait(grpc: GRPCClient, k8s: K8sClient, ci_id: str, cr_name: str | None = None) -> None:
+    """Keep references alive until both Kubernetes and Fulfillment finish deletion."""
+
+    def is_not_found(exc: subprocess.CalledProcessError) -> bool:
+        return re.search(r"(?m)^\s*Code:\s*NotFound\s*$", (exc.stderr or "") + "\n" + (exc.stdout or "")) is not None
+
+    def api_is_absent() -> bool:
+        try:
+            grpc.get_compute_instance(ci_id=ci_id)
+        except subprocess.CalledProcessError as exc:
+            if is_not_found(exc):
+                return True
+            raise
+        return False
+
+    try:
+        try:
+            # Resolve before Delete so a fast deletion cannot hide the CR name.
+            if cr_name is None:
+                cr_name = wait_for_cr(k8s=k8s, uuid=ci_id)
+        finally:
+            try:
+                grpc.delete_compute_instance(ci_id=ci_id)
+            except subprocess.CalledProcessError as exc:
+                if not is_not_found(exc):
+                    raise
+        poll_until(
+            fn=lambda: k8s.is_absent(resource="computeinstances.osac.openshift.io", name=cr_name),
+            until=lambda gone: gone is True,
+            retries=120,
+            delay=5,
+            description=f"ComputeInstance {ci_id} CR deletion",
+        )
+        poll_until(
+            fn=api_is_absent,
+            until=lambda gone: gone is True,
+            retries=30,
+            delay=2,
+            description=f"ComputeInstance {ci_id} API deletion",
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        # grpcurl exceptions contain the bearer token in their command arguments.
+        pending = exc.__context__
+        if isinstance(pending, subprocess.SubprocessError):
+            pending = None
+        raise RuntimeError(f"ComputeInstance {ci_id} cleanup request failed") from pending
+
+
 @pytest.mark.requires_vmaas
 class TestComputeReferences:
     """OSAC-3100: Compute resource reference tests."""
@@ -137,12 +180,7 @@ class TestComputeReferences:
             assert sg_ref.get("name") == ref_security_group["name"]
             assert sg_ref.get("id") == ref_security_group["id"]
         finally:
-            grpc.delete_compute_instance(ci_id=ci_id)
-            try:
-                cr_name = wait_for_cr(k8s=k8s_hub_client, uuid=ci_id)
-                wait_for_deletion(k8s=k8s_hub_client, name=cr_name)
-            except (subprocess.CalledProcessError, AssertionError, TimeoutError):
-                logger.warning("Cleanup wait failed for compute instance %s", ci_id)
+            _delete_compute_instance_and_wait(grpc, k8s_hub_client, ci_id)
 
     def test_compute_instance_reaches_running_with_name_refs(
         self,
@@ -182,12 +220,7 @@ class TestComputeReferences:
             phase = k8s_hub_client.get_compute_instance_phase(name=cr_name)
             assert phase == "Running"
         finally:
-            grpc.delete_compute_instance(ci_id=ci_id)
-            if cr_name:
-                try:
-                    wait_for_deletion(k8s=k8s_hub_client, name=cr_name)
-                except (subprocess.CalledProcessError, AssertionError, TimeoutError):
-                    logger.warning("Cleanup wait failed for compute instance %s", ci_id)
+            _delete_compute_instance_and_wait(grpc, k8s_hub_client, ci_id, cr_name)
 
     def test_invalid_subnet_name_returns_array_indexed_field_path(
         self,
@@ -229,6 +262,7 @@ class TestComputeReferences:
         self,
         jwt_grpc_tenant1: GRPCClient,
         private_grpc: GRPCClient,
+        k8s_hub_client: K8sClient,
         compute_template: str,
         ref_subnet: dict[str, str],
         ref_security_group: dict[str, str],
@@ -262,10 +296,7 @@ class TestComputeReferences:
             assert cat_ref.get("id") == cat_id
         finally:
             if ci_id:
-                try:
-                    jwt_grpc_tenant1.delete_compute_instance(ci_id=ci_id)
-                except subprocess.CalledProcessError:
-                    logger.warning("Failed to cleanup compute instance %s", ci_id)
+                _delete_compute_instance_and_wait(jwt_grpc_tenant1, k8s_hub_client, ci_id)
             try:
                 private_grpc.delete_compute_instance_catalog_item(catalog_item_id=cat_id, api=PRIVATE_API)
             except subprocess.CalledProcessError:
@@ -356,10 +387,7 @@ class TestComputeReferences:
             assert secret_ref.get("id") == secret_id
         finally:
             if ci_id:
-                try:
-                    grpc.delete_compute_instance(ci_id=ci_id)
-                except subprocess.CalledProcessError:
-                    logger.warning("Failed to cleanup compute instance %s", ci_id)
+                _delete_compute_instance_and_wait(grpc, k8s_hub_client, ci_id)
             try:
                 grpc.call(service=f"{PUBLIC_API}.Secrets/Delete", data={"id": secret_id})
             except subprocess.CalledProcessError:

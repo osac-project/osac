@@ -13,16 +13,10 @@ import {
   StackItem,
 } from '@patternfly/react-core';
 
-import { CatalogFieldEditabilityLabel } from './CatalogFieldEditabilityLabel.tsx';
 import { useTranslation } from '../../../hooks/useTranslation.ts';
-import { SubtleContent } from '../../SubtleContent/SubtleContent.tsx';
-import {
-  type CatalogItem,
-  catalogItemConfigurationFieldDefinitions,
-  catalogItemMetadataLabelEntries,
-  catalogItemResourceParts,
-  formatCatalogFieldDefault,
-} from '../catalogItemDisplay.ts';
+import { type CatalogItem, catalogItemMetadataLabelEntries } from '../catalogItemDisplay.ts';
+import { useCatalogItemResourceLookups } from '../catalogItemResourceLookups.ts';
+import CatalogItemResources from '../CatalogItemResources.tsx';
 
 interface CatalogItemDetailContentProps {
   item: CatalogItem;
@@ -30,9 +24,8 @@ interface CatalogItemDetailContentProps {
 
 export const CatalogItemDetailContent = ({ item }: CatalogItemDetailContentProps) => {
   const { t } = useTranslation();
-  const resources = catalogItemResourceParts(item);
+  const resourceLookups = useCatalogItemResourceLookups();
   const metadataLabels = catalogItemMetadataLabelEntries(item);
-  const configurationFields = catalogItemConfigurationFieldDefinitions(item);
   const description = item.description?.trim();
 
   return (
@@ -53,23 +46,6 @@ export const CatalogItemDetailContent = ({ item }: CatalogItemDetailContentProps
                 <DescriptionListGroup>
                   <DescriptionListTerm>{t('Description')}</DescriptionListTerm>
                   <DescriptionListDescription>{description}</DescriptionListDescription>
-                </DescriptionListGroup>
-              ) : null}
-
-              {resources.length > 0 ? (
-                <DescriptionListGroup>
-                  <DescriptionListTerm>{t('Default resources')}</DescriptionListTerm>
-                  <DescriptionListDescription>
-                    <Flex flexWrap={{ default: 'wrap' }} gap={{ default: 'gapSm' }}>
-                      {resources.map((resource, index) => (
-                        <FlexItem key={`${item.id}-detail-resource-${index}`}>
-                          <Label variant="outline" color="blue" isCompact>
-                            {resource}
-                          </Label>
-                        </FlexItem>
-                      ))}
-                    </Flex>
-                  </DescriptionListDescription>
                 </DescriptionListGroup>
               ) : null}
 
@@ -96,38 +72,14 @@ export const CatalogItemDetailContent = ({ item }: CatalogItemDetailContentProps
         </Card>
       </StackItem>
 
-      {configurationFields.length > 0 ? (
-        <StackItem>
-          <Card>
-            <CardTitle>{t('Configuration defaults')}</CardTitle>
-            <CardBody>
-              <Stack hasGutter>
-                <StackItem>
-                  <SubtleContent component="p">
-                    {t(
-                      'Editable fields can be changed when creating from this catalog item. Fixed fields use the default value shown.',
-                    )}
-                  </SubtleContent>
-                </StackItem>
-                <StackItem>
-                  <DescriptionList isHorizontal>
-                    {configurationFields.map((def) => (
-                      <DescriptionListGroup key={def.path}>
-                        <DescriptionListTerm>
-                          {def.displayName} <CatalogFieldEditabilityLabel editable={def.editable} />
-                        </DescriptionListTerm>
-                        <DescriptionListDescription>
-                          {formatCatalogFieldDefault(def)}
-                        </DescriptionListDescription>
-                      </DescriptionListGroup>
-                    ))}
-                  </DescriptionList>
-                </StackItem>
-              </Stack>
-            </CardBody>
-          </Card>
-        </StackItem>
-      ) : null}
+      <StackItem>
+        <Card>
+          <CardTitle>{t('Configuration')}</CardTitle>
+          <CardBody>
+            <CatalogItemResources catalogItem={item} resourceLookups={resourceLookups} />
+          </CardBody>
+        </Card>
+      </StackItem>
     </Stack>
   );
 };

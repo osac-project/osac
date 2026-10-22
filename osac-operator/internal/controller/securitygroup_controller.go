@@ -305,9 +305,15 @@ func (r *SecurityGroupReconciler) handleProvisioning(ctx context.Context, sg *v1
 				sg.Status.Phase = v1alpha1.SecurityGroupPhaseFailed
 				setReadyConditionFailed(&sg.Status.Conditions, message)
 			},
-			OnSuccess: func(_ provisioning.ProvisionStatus) {
+			OnSuccess: func(status provisioning.ProvisionStatus) {
 				sg.Status.Phase = v1alpha1.SecurityGroupPhaseReady
-				setReadyConditionTrue(&sg.Status.Conditions)
+				if noopMsg := noopMessageFromOutputs(
+					status.Outputs); noopMsg != "" {
+					setReadyConditionNoOp(
+						&sg.Status.Conditions, noopMsg)
+				} else {
+					setReadyConditionTrue(&sg.Status.Conditions)
+				}
 			},
 		},
 		func() bool {

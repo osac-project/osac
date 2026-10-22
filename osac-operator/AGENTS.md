@@ -74,6 +74,12 @@ Worker coverage is owned by **osac-operator [DEV]**:
   intent-derived counts. `reservation_cleanup_test.go` covers explicit Reserved
   cancellation, both optimistic Create-intent race orderings, attempted/legacy
   empty-List retention, lost acknowledgement recovery and retry-state reset.
+  `bmi_rejection_test.go` covers terminal-code classification, exact rejected-create
+  checkpoint fields and verified response accounting, one status patch without
+  a post-Create ClusterOrder Get, retry-path re-rejection backoff, transport and
+  prior unknown/legacy-outcome conservatism, and AlreadyExists-recovery exclusion.
+  Only an invocation entering with explicit Reserved intent may re-arm its own
+  definitively rejected Create; a later rejection cannot clear earlier uncertainty.
   `metrics_test.go` checks the exact two-instance-type
   desired/zero-ready series before reservations without creating missing series
   through metric accessors.
@@ -81,7 +87,14 @@ Worker coverage is owned by **osac-operator [DEV]**:
   drive public Reconcile through InfraEnv ownership/artifact changes, BMI
   creation/recovery, Agent binding/demotion/handoff, scale-up/down and finalization.
 - `baremetalworker_convergence_test.go` preserves R01–R10 persistence and
-  fault traces: interrupted/lost Create acknowledgement, delayed List/NotFound/
+  fault traces: interrupted/lost Create acknowledgement, definitively rejected
+  creates racing deletion to finalizer removal and minimal Failed/retry/condition
+  convergence. Rejection checkpoint cases exercise real atomic JSON Patch tests
+  on UID and the complete selected worker: target mutation/removal/reordering
+  and same-name object replacement fail without partial writes or success
+  accounting; unrelated other-worker, condition, spec and metadata updates survive
+  a successful checkpoint without a resourceVersion fence. Other traces include
+  delayed List/NotFound/
   outage evidence, conflicts and restart recovery, prerequisite-free progress,
   delayed cleanup and real Agent Delete UID-precondition rejection, selector
   union/ambiguity, stale-ignition classification before UID recording, separate

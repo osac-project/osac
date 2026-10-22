@@ -12,7 +12,7 @@ import type { UseMutationOptions, UseQueryOptions } from '@tanstack/react-query'
 import { useApiFetch } from './api-context';
 import { buildUpdateMaskPaths } from './v1/update-mask';
 
-type ResourceService<
+export type ResourceService<
   Operation extends string,
   Input extends DescMessage,
   Output extends DescMessage,
@@ -20,8 +20,8 @@ type ResourceService<
   method: Record<Operation, DescMethodUnary<Input, Output>>;
 };
 
-type ResourceQueryOptions<Data extends DescMessage> = Omit<
-  UseQueryOptions<MessageShape<Data>, unknown, MessageShape<Data>>,
+type ResourceQueryOptions<Data extends DescMessage, SelectedData = MessageShape<Data>> = Omit<
+  UseQueryOptions<MessageShape<Data>, unknown, SelectedData>,
   'queryFn' | 'queryKey' | 'select' | 'placeholderData'
 >;
 
@@ -55,10 +55,15 @@ const buildUpdateRequest = <Input extends DescMessage, Output extends DescMessag
   };
 };
 
-export const useListResource = <Input extends DescMessage, Output extends DescMessage>(
+export const useListResource = <
+  Input extends DescMessage,
+  Output extends DescMessage,
+  SelectedData = MessageShape<Output>,
+>(
   service: ResourceService<'list', Input, Output>,
   request: MessageInitShape<Input> = create(service.method.list.input),
-  options: ResourceQueryOptions<Output> = {},
+  options: ResourceQueryOptions<Output, SelectedData> = {},
+  select?: (data: MessageShape<Output> & { items: SelectedData }) => SelectedData,
 ) => {
   const client = useApiFetch(service);
   const listRequest = create(service.method.list.input, request);
@@ -67,6 +72,7 @@ export const useListResource = <Input extends DescMessage, Output extends DescMe
     ...options,
     queryKey: [service.typeName, 'list', request],
     queryFn: () => client.list(listRequest),
+    select: select as ((data: MessageShape<Output>) => SelectedData) | undefined,
     placeholderData: keepPreviousData,
   });
 };

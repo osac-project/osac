@@ -11,6 +11,7 @@ interface SecretSelectionFieldProps {
   name: string;
   label: string;
   filter: string | undefined;
+  fieldId?: string;
   isRequired?: boolean;
   isDisabled?: boolean;
   placeholder?: string;
@@ -21,6 +22,7 @@ const SecretSelectionField = ({
   name,
   label,
   filter,
+  fieldId = name.replace(/\./g, '-'),
   isRequired,
   isDisabled,
   placeholder,
@@ -34,7 +36,7 @@ const SecretSelectionField = ({
       <SelectField
         name={name}
         label={label}
-        fieldId="secret-selection"
+        fieldId={fieldId}
         isRequired={isRequired}
         isLoading={isLoading}
         isDisabled={isDisabled || !!error}

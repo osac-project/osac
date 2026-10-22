@@ -8,8 +8,253 @@ import pytest
 
 from tests.e2e.core import helpers
 from tests.e2e.core.grpc_client import GRPCClient
+from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.references import conftest as references_conftest
+from tests.e2e.references import test_compute_references as compute_references
 from tests.e2e.references import test_ip_management_references as ip_management_references
+
+
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+@pytest.mark.parametrize(
+    "test_name",
+    [
+        "test_compute_instance_full_chain_by_name",
+        "test_compute_instance_reaches_running_with_name_refs",
+        "test_cross_tenant_template_reference",
+        "test_compute_instance_user_data_secret_by_name",
+    ],
+)
+def test_compute_references_wait_for_deletion_before_releasing_dependencies(
+    monkeypatch: pytest.MonkeyPatch, test_name: str, cleanup_fails: bool
+) -> None:
+    events: list[str] = []
+    grpc = Mock(spec=GRPCClient)
+    private_grpc = Mock(spec=GRPCClient)
+    k8s = Mock(spec=K8sClient)
+    grpc.get_compute_instance_catalog_item.return_value = {"object": {"metadata": {"name": "catalog"}}}
+    private_grpc.create_compute_instance_catalog_item.return_value = "catalog-id"
+    private_grpc.delete_compute_instance_catalog_item.side_effect = lambda **_: events.append("catalog-deleted")
+
+    def api_call(*, service: str, data: dict) -> dict:
+        if service.endswith("Secrets/Create"):
+            return {"object": {"id": "secret-id"}}
+        if service.endswith("Secrets/Delete"):
+            events.append("secret-deleted")
+            return {}
+        spec = data["object"]["spec"]
+        return {
+            "object": {
+                "id": "ci-id",
+                "spec": {
+                    **spec,
+                    "catalog_item": {**spec["catalog_item"], "id": "catalog-id"},
+                    "network_attachments": [
+                        {
+                            "subnet": {"name": "subnet", "id": "subnet-id"},
+                            "security_groups": [{"name": "sg", "id": "sg-id"}],
+                        }
+                    ],
+                    "user_data_secret": {"name": "ref-user-data-test-tag", "id": "secret-id"},
+                },
+            }
+        }
+
+    grpc.call.side_effect = api_call
+    grpc.delete_compute_instance.side_effect = lambda **_: events.append("delete-requested")
+    api_results = iter([{}, subprocess.CalledProcessError(1, ["grpcurl"], stderr="ERROR:\n  Code: NotFound\n")])
+
+    def get_instance(**_: object) -> dict:
+        events.append("api-checked")
+        result = next(api_results)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    grpc.get_compute_instance.side_effect = get_instance
+    cr_results = iter([False, True])
+    k8s.is_absent.side_effect = lambda **_: events.append("cr-checked") or next(cr_results)
+    k8s.get_compute_instance_phase.return_value = "Running"
+    monkeypatch.setattr(compute_references, "uuid4", lambda: Mock(hex="test-tag"))
+    monkeypatch.setattr(compute_references, "wait_for_cr", lambda **_: events.append("cr-resolved") or "vm-test")
+    monkeypatch.setattr(compute_references, "wait_for_provision", lambda **_: None)
+    monkeypatch.setattr(compute_references, "wait_for_running", lambda **_: None)
+    monkeypatch.setattr("tests.e2e.core.runner.time.sleep", lambda _: None)
+    kwargs = {
+        "k8s_hub_client": k8s,
+        "ref_subnet": {"id": "subnet-id", "name": "subnet"},
+        "ref_security_group": {"id": "sg-id", "name": "sg"},
+        "ref_instance_type": "instance-type",
+        "ref_disk_image": "disk-image",
+        "default_storage_tier": "local",
+    }
+    if test_name == "test_cross_tenant_template_reference":
+        kwargs.update(jwt_grpc_tenant1=grpc, private_grpc=private_grpc, compute_template="template")
+    else:
+        kwargs.update(grpc=grpc, ref_ci_catalog_item="catalog-id")
+
+    if cleanup_fails:
+        k8s.is_absent.side_effect = subprocess.CalledProcessError(1, ["kubectl"], stderr="Forbidden")
+        with pytest.raises(RuntimeError, match="cleanup request failed"):
+            getattr(compute_references.TestComputeReferences(), test_name)(**kwargs)
+        assert "secret-deleted" not in events
+        assert "catalog-deleted" not in events
+        grpc.get_compute_instance.assert_not_called()
+        return
+
+    getattr(compute_references.TestComputeReferences(), test_name)(**kwargs)
+
+    expected = ["cr-resolved", "delete-requested", "cr-checked", "cr-checked", "api-checked", "api-checked"]
+    expected.extend(
+        {
+            "test_cross_tenant_template_reference": ["catalog-deleted"],
+            "test_compute_instance_user_data_secret_by_name": ["secret-deleted"],
+        }.get(test_name, [])
+    )
+    assert events == expected
+    assert k8s.is_absent.call_args_list == [call(resource="computeinstances.osac.openshift.io", name="vm-test")] * 2
+
+
+@pytest.fixture
+def compute_cleanup_clients(monkeypatch: pytest.MonkeyPatch) -> tuple[Mock, Mock]:
+    grpc = Mock(spec=GRPCClient)
+    grpc.get_compute_instance.side_effect = subprocess.CalledProcessError(
+        1, ["grpcurl"], stderr="ERROR:\n  Code: NotFound\n  Message: instance gone"
+    )
+    k8s = Mock(spec=K8sClient)
+    k8s.is_absent.return_value = True
+    monkeypatch.setattr("tests.e2e.core.runner.time.sleep", lambda _: None)
+    return grpc, k8s
+
+
+def test_compute_cleanup_still_requests_delete_when_cr_discovery_times_out(
+    monkeypatch: pytest.MonkeyPatch, compute_cleanup_clients: tuple[Mock, Mock]
+) -> None:
+    grpc, k8s = compute_cleanup_clients
+    monkeypatch.setattr(compute_references, "wait_for_cr", Mock(side_effect=TimeoutError("CR discovery timed out")))
+
+    with pytest.raises(TimeoutError, match="CR discovery timed out"):
+        compute_references._delete_compute_instance_and_wait(grpc, k8s, "ci-id")
+
+    grpc.delete_compute_instance.assert_called_once_with(ci_id="ci-id")
+    k8s.is_absent.assert_not_called()
+
+
+def test_compute_cleanup_tolerates_already_requested_deletion(compute_cleanup_clients: tuple[Mock, Mock]) -> None:
+    grpc, k8s = compute_cleanup_clients
+    grpc.delete_compute_instance.side_effect = subprocess.CalledProcessError(
+        1, ["grpcurl"], stderr="ERROR:\n  Code: NotFound\n"
+    )
+
+    compute_references._delete_compute_instance_and_wait(grpc, k8s, "ci-id", "vm-test")
+
+    k8s.is_absent.assert_called_once_with(resource="computeinstances.osac.openshift.io", name="vm-test")
+    grpc.get_compute_instance.assert_called_once_with(ci_id="ci-id")
+
+
+@pytest.mark.parametrize("stage", ["delete", "cr", "api"])
+def test_compute_cleanup_propagates_command_errors_without_credentials(
+    compute_cleanup_clients: tuple[Mock, Mock], stage: str
+) -> None:
+    grpc, k8s = compute_cleanup_clients
+    error = subprocess.CalledProcessError(
+        1, ["grpcurl", "-H", "Authorization: Bearer test-token"], stderr="ERROR:\n  Code: PermissionDenied\n"
+    )
+    if stage == "delete":
+        grpc.delete_compute_instance.side_effect = error
+    elif stage == "cr":
+        k8s.is_absent.side_effect = error
+    else:
+        grpc.get_compute_instance.side_effect = error
+
+    with pytest.raises(RuntimeError, match="ci-id cleanup request failed") as exc_info:
+        compute_references._delete_compute_instance_and_wait(grpc, k8s, "ci-id", "vm-test")
+
+    assert "test-token" not in str(exc_info.value)
+    assert not isinstance(exc_info.value.__cause__, subprocess.CalledProcessError)
+
+
+def test_compute_cleanup_preserves_pending_non_subprocess_context(
+    monkeypatch: pytest.MonkeyPatch, compute_cleanup_clients: tuple[Mock, Mock]
+) -> None:
+    grpc, k8s = compute_cleanup_clients
+    pending = AssertionError("original test failure")
+    grpc.delete_compute_instance.side_effect = subprocess.CalledProcessError(
+        1, ["grpcurl", "-H", "Authorization: Bearer test-token"]
+    )
+    monkeypatch.setattr(compute_references, "wait_for_cr", Mock(side_effect=pending))
+
+    with pytest.raises(RuntimeError, match="ci-id cleanup request failed") as exc_info:
+        compute_references._delete_compute_instance_and_wait(grpc, k8s, "ci-id")
+
+    assert exc_info.value.__cause__ is pending
+    assert "test-token" not in str(exc_info.value)
+
+
+def test_compute_cleanup_suppresses_pending_subprocess_context(
+    monkeypatch: pytest.MonkeyPatch, compute_cleanup_clients: tuple[Mock, Mock]
+) -> None:
+    grpc, k8s = compute_cleanup_clients
+    pending = subprocess.CalledProcessError(1, ["grpcurl", "-H", "Authorization: Bearer test-token"])
+    grpc.delete_compute_instance.side_effect = subprocess.CalledProcessError(
+        1, ["grpcurl", "-H", "Authorization: Bearer test-token"]
+    )
+    monkeypatch.setattr(compute_references, "wait_for_cr", Mock(side_effect=pending))
+
+    with pytest.raises(RuntimeError, match="ci-id cleanup request failed") as exc_info:
+        compute_references._delete_compute_instance_and_wait(grpc, k8s, "ci-id")
+
+    assert exc_info.value.__cause__ is None
+    assert "test-token" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("stage", ["cr", "api"])
+def test_compute_cleanup_keeps_existing_polling_budgets(
+    monkeypatch: pytest.MonkeyPatch, compute_cleanup_clients: tuple[Mock, Mock], stage: str
+) -> None:
+    grpc, k8s = compute_cleanup_clients
+    sleep = Mock()
+    monkeypatch.setattr("tests.e2e.core.runner.time.sleep", sleep)
+    if stage == "cr":
+        k8s.is_absent.return_value = False
+    else:
+        grpc.get_compute_instance.side_effect = None
+        grpc.get_compute_instance.return_value = {"object": {"id": "ci-id"}}
+
+    with pytest.raises(TimeoutError):
+        compute_references._delete_compute_instance_and_wait(grpc, k8s, "ci-id", "vm-test")
+
+    if stage == "cr":
+        assert k8s.is_absent.call_count == 120
+        grpc.get_compute_instance.assert_not_called()
+        assert sleep.call_args_list == [call(5)] * 119
+    else:
+        assert grpc.get_compute_instance.call_count == 30
+        assert sleep.call_args_list == [call(2)] * 29
+
+
+@pytest.mark.parametrize(
+    "output,absent",
+    [
+        ('Error from server (NotFound): computeinstances.osac.openshift.io "vm-test" not found', True),
+        ('Error from server (NotFound): computeinstances.osac.openshift.io "another-vm" not found', False),
+        ('Error from server (NotFound): secrets "vm-test" not found', False),
+        ('Error from server (Forbidden): computeinstances.osac.openshift.io "vm-test" is forbidden', False),
+        ("Unable to connect to the server: TLS handshake timeout", False),
+    ],
+)
+def test_compute_cleanup_requires_exact_kubernetes_notfound(
+    monkeypatch: pytest.MonkeyPatch, compute_cleanup_clients: tuple[Mock, Mock], output: str, absent: bool
+) -> None:
+    grpc, _ = compute_cleanup_clients
+    k8s = K8sClient(namespace="test-namespace")
+    monkeypatch.setattr("tests.e2e.core.k8s_client.run_unchecked", lambda *_: (output, 1))
+
+    if absent:
+        compute_references._delete_compute_instance_and_wait(grpc, k8s, "ci-id", "vm-test")
+    else:
+        with pytest.raises(RuntimeError, match="cleanup request failed"):
+            compute_references._delete_compute_instance_and_wait(grpc, k8s, "ci-id", "vm-test")
+        grpc.get_compute_instance.assert_not_called()
 
 
 def test_allocate_worker_subnet_keeps_prefix_ranges_disjoint(monkeypatch: pytest.MonkeyPatch) -> None:

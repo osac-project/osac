@@ -16,22 +16,21 @@ const STORAGE_TIER_ACTIVE_BLOCK_LIST_FILTER = cel<StorageTier>((filter) =>
 );
 
 interface StorageTierSelectFieldProps {
-  name: string;
+  name?: string;
   label: string;
   fieldId: string;
   isRequired?: boolean;
   protocol?: StorageProtocol;
-  /** Renders the picker read-only with a lock badge — the catalog item does not allow editing this field. */
-  isLocked?: boolean;
+  isDisabled?: boolean;
 }
 
 export const StorageTierSelectField = ({
-  name,
+  name = '',
   label,
   fieldId,
   isRequired = false,
   protocol,
-  isLocked = false,
+  isDisabled = false,
 }: StorageTierSelectFieldProps) => {
   const { t } = useTranslation();
 
@@ -48,9 +47,9 @@ export const StorageTierSelectField = ({
             : STORAGE_TIER_ACTIVE_LIST_FILTER,
       }}
       isRequired={isRequired}
-      isDisabled={isLocked}
+      isDisabled={isDisabled}
       labelInfo={
-        isLocked ? (
+        isDisabled ? (
           <Label color="grey" icon={<LockIcon aria-hidden />}>
             {t('Locked by catalog')}
           </Label>

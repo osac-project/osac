@@ -122,6 +122,7 @@
                   - kubevirt.io/foregroundDeleteVirtualMachine
               spec:
                 domain:
+                  devices: {}
                   resources:
                     requests:
                       memory: 128Mi
@@ -271,6 +272,7 @@
                   - kubevirt.io/foregroundDeleteVirtualMachine
               spec:
                 domain:
+                  devices: {}
                   resources:
                     requests:
                       memory: 128Mi
@@ -388,6 +390,7 @@
                   - kubevirt.io/foregroundDeleteVirtualMachine
               spec:
                 domain:
+                  devices: {}
                   resources:
                     requests:
                       memory: 128Mi
@@ -500,6 +503,53 @@
               VMI preserved.
 
       always:
+        # Remove the foreground-delete finalizer so the
+        # subsequent grace-period-0 delete completes
+        # instead of leaving a terminating VMI that
+        # blocks reruns.
+        - name: "S4: Read VMI for finalizer removal"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s4_cleanup_vmi
+          failed_when: false
+
+        - name: >-
+            S4: Remove foreground-delete finalizer
+            for cleanup
+          vars:
+            _s4_fins: >-
+              {{ _s4_cleanup_vmi.resources[0]
+                 .metadata.finalizers
+                 | default([]) }}
+            _s4_target: >-
+              kubevirt.io/foregroundDeleteVirtualMachine
+          kubernetes.core.k8s_json_patch:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            patch:
+              - op: test
+                path: /metadata/finalizers
+                value: "{{ _s4_fins }}"
+              - op: replace
+                path: /metadata/finalizers
+                value: >-
+                  {{ _s4_fins
+                     | difference([_s4_target]) }}
+          when: >-
+            _s4_cleanup_vmi.resources | length > 0
+            and
+            'kubevirt.io/foregroundDeleteVirtualMachine'
+            in (_s4_cleanup_vmi.resources[0]
+                .metadata.finalizers | default([]))
+          failed_when: false
+
         - name: "S4: Cleanup"
           kubernetes.core.k8s:
             state: absent
@@ -582,6 +632,7 @@
                     kubevirt.io/foregroundDeleteVirtualMachine
               spec:
                 domain:
+                  devices: {}
                   resources:
                     requests:
                       memory: 128Mi
@@ -738,6 +789,53 @@
               (Failed + Running), VMI preserved.
 
       always:
+        # Remove the foreground-delete finalizer so the
+        # subsequent grace-period-0 delete completes
+        # instead of leaving a terminating VMI that
+        # blocks reruns.
+        - name: "S5: Read VMI for finalizer removal"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: _s5_cleanup_vmi
+          failed_when: false
+
+        - name: >-
+            S5: Remove foreground-delete finalizer
+            for cleanup
+          vars:
+            _s5_fins: >-
+              {{ _s5_cleanup_vmi.resources[0]
+                 .metadata.finalizers
+                 | default([]) }}
+            _s5_target: >-
+              kubevirt.io/foregroundDeleteVirtualMachine
+          kubernetes.core.k8s_json_patch:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            patch:
+              - op: test
+                path: /metadata/finalizers
+                value: "{{ _s5_fins }}"
+              - op: replace
+                path: /metadata/finalizers
+                value: >-
+                  {{ _s5_fins
+                     | difference([_s5_target]) }}
+          when: >-
+            _s5_cleanup_vmi.resources | length > 0
+            and
+            'kubevirt.io/foregroundDeleteVirtualMachine'
+            in (_s5_cleanup_vmi.resources[0]
+                .metadata.finalizers | default([]))
+          failed_when: false
+
         - name: "S5: Cleanup"
           kubernetes.core.k8s:
             state: absent

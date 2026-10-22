@@ -1,0 +1,8 @@
+---
+- name: Include create tasks
+  ansible.builtin.include_tasks: create.yaml
+  when: fabric_bgp_state == "present"
+
+- name: Include delete tasks
+  ansible.builtin.include_tasks: delete.yaml
+  when: fabric_bgp_state == "absent"

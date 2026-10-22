@@ -310,6 +310,29 @@
               cudn_name: "{{ vnet_name }}"
               cudn_namespace: "{{ subnet_name }}"
               vrf_name: "{{ cudn_status.resources[0].status.vrfName }}"
+
+        # Fabric BGP is optional post-CUDN config sourced from
+        # template_parameters (future operator path) or the AAP
+        # instance-group environment (current installer path).
+        - name: Resolve fabric BGP settings from parameters or environment
+          ansible.builtin.set_fact:
+            _cudn_evpn_fabric_bgp: >-
+              {{ template_parameters.fabricBGP
+                 | default(
+                     lookup('env', 'OSAC_FABRIC_BGP_CONFIG')
+                     | default('{}', true) | from_json,
+                   true) }}
+
+        - name: Apply worker-to-fabric BGP/EVPN peering when enabled
+          ansible.builtin.include_role:
+            name: osac.service.fabric_bgp_config
+            tasks_from: create
+          vars:
+            fabric_bgp_workers: "{{ _cudn_evpn_fabric_bgp.workers }}"
+            fabric_bgp_remote_kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+          when:
+            - _cudn_evpn_fabric_bgp.enabled | default(false) | bool
+            - _cudn_evpn_fabric_bgp.workers | default([]) | length > 0
       when:
         - _cudn_owner_subnet_name == subnet_name
         - (subnet.metadata.annotations | default({})).get('osac.openshift.io/skip-k8s-manager', '') != 'true'

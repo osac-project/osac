@@ -488,6 +488,81 @@ def test_stale_owner_is_cleared_when_only_skipped_siblings_remain() -> None:
     assert not all(condition(**{**retained, "cudn_evpn_has_live_siblings": False}) for condition in retained_conditions)
 
 
+def test_fabric_bgp_teardown_checks_cross_vn_consumers() -> None:
+    """Teardown counts cudn_evpn Subnets across ALL VirtualNetworks, not just same-VN."""
+    tasks = _delete_tasks()
+    task_names = [task.get("name") for task in tasks]
+    count_index = task_names.index("Count remaining cudn_evpn Subnets across all VirtualNetworks")
+    clear_owner_index = task_names.index("Clear persisted CUDN owner after the final Subnet is removed")
+
+    assert clear_owner_index < count_index
+
+    count_task = tasks[count_index]
+    fact_value = count_task["ansible.builtin.set_fact"]["_cudn_evpn_remaining_consumers"]
+    # Must reference _subnet_lookup (all Subnets), not cudn_evpn_sibling_subnets (same-VN only)
+    assert "_subnet_lookup" in fact_value
+    # Must filter by cudn_evpn annotations, not by vnet_uuid
+    assert "cudn_evpn" in fact_value
+    assert "k8s-cleanup-strategy" in fact_value or "k8s-implementation-strategy" in fact_value
+    # Must exclude the deleting Subnet
+    assert "_deleting_subnet_name" in fact_value
+
+
+def test_fabric_bgp_teardown_discovers_applied_resources_by_label() -> None:
+    """Teardown discovers what was applied by label, not current config."""
+    tasks = _delete_tasks()
+    task_names = [task.get("name") for task in tasks]
+    discover_frr_index = task_names.index("Discover applied fabric BGP FRRConfigurations on remote cluster")
+    discover_nncp_index = task_names.index("Discover applied fabric BGP NNCPs on remote cluster")
+    build_index = task_names.index("Build discovered worker list for cleanup")
+    delete_index = task_names.index("Remove discovered fabric BGP resources after final consumer")
+
+    assert discover_frr_index < discover_nncp_index < build_index < delete_index
+
+    # Verify label selector is used for discovery
+    frr_task = tasks[discover_frr_index]
+    assert "osac.openshift.io/managed-by=fabric-bgp-config" in frr_task["kubernetes.core.k8s_info"]["label_selectors"]
+    nncp_task = tasks[discover_nncp_index]
+    assert "osac.openshift.io/managed-by=fabric-bgp-config" in nncp_task["kubernetes.core.k8s_info"]["label_selectors"]
+
+    # Verify delete uses discovered workers, not config workers
+    delete_task = tasks[delete_index]
+    assert delete_task["vars"]["fabric_bgp_workers"] == "{{ _cudn_evpn_discovered_workers }}"
+
+    # Verify delete is guarded by remaining consumers, not same-VN siblings
+    conditions = delete_task["when"]
+    assert any("_cudn_evpn_remaining_consumers" in str(c) for c in conditions)
+    assert any("_cudn_evpn_discovered_workers" in str(c) for c in conditions)
+    # Must NOT depend on current fabricBGP config being enabled
+    assert not any("enabled" in str(c) for c in conditions)
+    assert not any("_cudn_evpn_fabric_bgp" in str(c) for c in conditions)
+
+
+def test_fabric_bgp_discovery_handles_absent_crds_idempotently() -> None:
+    """Discovery tasks use failed_when: false for idempotent handling."""
+    tasks = _delete_tasks()
+    frr_task = next(t for t in tasks if t.get("name") == "Discover applied fabric BGP FRRConfigurations on remote cluster")
+    nncp_task = next(t for t in tasks if t.get("name") == "Discover applied fabric BGP NNCPs on remote cluster")
+    assert frr_task.get("failed_when") is False
+    assert nncp_task.get("failed_when") is False
+
+
+def test_fabric_bgp_delete_uses_include_role_not_direct_k8s() -> None:
+    """Teardown delegates to fabric_bgp_config role for consistent resource handling."""
+    tasks = _delete_tasks()
+    delete_task = next(t for t in tasks if t.get("name") == "Remove discovered fabric BGP resources after final consumer")
+    include_role = delete_task["ansible.builtin.include_role"]
+    assert include_role["name"] == "osac.service.fabric_bgp_config"
+    assert include_role["tasks_from"] == "delete"
+
+
+def test_fabric_bgp_frr_discovery_uses_correct_namespace() -> None:
+    """FRR discovery queries the openshift-frr-k8s namespace."""
+    tasks = _delete_tasks()
+    frr_task = next(t for t in tasks if t.get("name") == "Discover applied fabric BGP FRRConfigurations on remote cluster")
+    assert frr_task["kubernetes.core.k8s_info"]["namespace"] == "openshift-frr-k8s"
+
+
 def test_delete_entrypoint_is_declared_for_manager_dispatch() -> None:
     argspec_path = _role_path() / "meta" / "argument_specs.yaml"
     argspec = yaml.safe_load(argspec_path.read_text(encoding="utf-8"))["argument_specs"]["delete_subnet"]["options"]

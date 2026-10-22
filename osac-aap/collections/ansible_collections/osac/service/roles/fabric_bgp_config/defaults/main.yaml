@@ -1,0 +1,2 @@
+---
+fabric_bgp_config_frr_namespace: openshift-frr-k8s

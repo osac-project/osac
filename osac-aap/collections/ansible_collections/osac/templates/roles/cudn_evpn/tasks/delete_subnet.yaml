@@ -541,6 +541,69 @@
             annotations:
               osac.openshift.io/cudn-owner-subnet: null
       when: not cudn_evpn_has_live_siblings
+
+    # Fabric BGP resources are per-worker and shared across all
+    # VirtualNetworks.  Teardown must check ALL cudn_evpn Subnets
+    # (not just same-VN siblings) and discover what was applied by
+    # label rather than relying on the current fabricBGP config,
+    # which may have been disabled or changed since creation.
+    - name: Count remaining cudn_evpn Subnets across all VirtualNetworks
+      ansible.builtin.set_fact:
+        _cudn_evpn_remaining_consumers: >-
+          {{ _subnet_lookup.resources | default([])
+             | rejectattr('metadata.name', 'equalto', _deleting_subnet_name)
+             | rejectattr('metadata.deletionTimestamp', 'defined')
+             | selectattr('metadata.annotations', 'defined')
+             | list
+             | json_query('[?metadata.annotations."osac.openshift.io/k8s-cleanup-strategy"==`cudn_evpn`
+                           || metadata.annotations."osac.openshift.io/k8s-implementation-strategy"==`cudn_evpn`]') }}
+
+    - name: Discover applied fabric BGP FRRConfigurations on remote cluster
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+        api_version: frrk8s.metallb.io/v1beta1
+        kind: FRRConfiguration
+        namespace: "openshift-frr-k8s"
+        label_selectors:
+          - "osac.openshift.io/managed-by=fabric-bgp-config"
+      register: _cudn_evpn_applied_frr
+      failed_when: false
+
+    - name: Discover applied fabric BGP NNCPs on remote cluster
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+        api_version: nmstate.io/v1
+        kind: NodeNetworkConfigurationPolicy
+        label_selectors:
+          - "osac.openshift.io/managed-by=fabric-bgp-config"
+      register: _cudn_evpn_applied_nncp
+      failed_when: false
+
+    - name: Build discovered worker list for cleanup
+      ansible.builtin.set_fact:
+        _cudn_evpn_discovered_workers: >-
+          {%- set workers = [] -%}
+          {%- for r in (_cudn_evpn_applied_frr.resources | default([])) +
+                       (_cudn_evpn_applied_nncp.resources | default([])) -%}
+            {%- set w = (r.metadata.labels | default({}))
+                        .get('osac.openshift.io/worker', '') -%}
+            {%- if w and w not in workers -%}
+              {%- set _ = workers.append(w) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ workers | map('regex_replace', '^(.*)$', '{"nodeName": "\\1"}')
+             | map('from_json') | list }}
+
+    - name: Remove discovered fabric BGP resources after final consumer
+      ansible.builtin.include_role:
+        name: osac.service.fabric_bgp_config
+        tasks_from: delete
+      vars:
+        fabric_bgp_workers: "{{ _cudn_evpn_discovered_workers }}"
+        fabric_bgp_remote_kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+      when:
+        - _cudn_evpn_remaining_consumers | length == 0
+        - _cudn_evpn_discovered_workers | length > 0
   always:
     - name: Release shared CUDN teardown Lease
       ansible.builtin.include_role:

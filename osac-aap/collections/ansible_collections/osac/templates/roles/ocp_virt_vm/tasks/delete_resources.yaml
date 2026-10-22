@@ -151,7 +151,7 @@
     - name: Log recovery diagnostics
       ansible.builtin.debug:
         msg:
-          - "VMI recovery: {{ compute_instance_name }}"
+          - "VMI recovery: entering stuck-VMI handler"
           - "VMI phase: {{ _vmi_phase }}"
           - "VMI deletionTimestamp: {{ _vmi_has_deletion_ts }}"
           - >-
@@ -170,8 +170,8 @@
         Fail — launcher still running, cannot force-delete
       ansible.builtin.fail:
         msg: >-
-          VMI {{ compute_instance_name }} stuck after graceful
-          timeout but virt-launcher is still in phase
+          VMI stuck after graceful timeout but
+          virt-launcher is still in phase
           '{{ _launcher_phase }}'. Recovery requires the
           launcher to be terminal (Succeeded/Failed) or
           absent. Retaining finalizer for operator retry.
@@ -184,7 +184,7 @@
         force-delete
       ansible.builtin.fail:
         msg: >-
-          VMI {{ compute_instance_name }} exists but has no
+          VMI exists (phase={{ _vmi_phase }}) but has no
           deletionTimestamp. Graceful shutdown may not have
           been requested. Retaining finalizer for operator
           retry.

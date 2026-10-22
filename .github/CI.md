@@ -26,6 +26,19 @@ checking its box in the E2E comment of the pull request; the suite has its own l
 ("E2E BMaaS Netris Full Install", Run workflow, with the pull request's number, repository, branch and commit). A label no longer
 starts it. A new commit does not cancel a run that is already going.
 
+## A merge queue entry that fails
+
+The merge queue runs `CI` and the E2E suites on the same commit. When something that is required fails there, everything
+that still runs for the entry is stopped at once, instead of the entry holding its place in the queue until the slowest
+suite has ended (about 100 minutes). The job `result` of `e2e-queue.yml` (a shared workflow of osac-ci) watches the E2E
+suites and the other required checks of the commit (`CI`, `jira-reference`; the unit and integration tests of every
+component are jobs of the `CI` run). On the first failure it writes the required `E2E` check at once, `Failed: bmaas`
+for a suite or `Cancelled: stopped, CI / <job> failed` when another workflow caused it, and cancels every run of the
+commit that has not ended. GitHub then removes the entry. The jobs that were cancelled shut their clusters down after
+that, which can take a few minutes, without holding the queue. Only the first failure is shown: the legs that were still
+running are cancelled, so a second failure shows on the next attempt. Workflows that provide no required check (CodeQL,
+dependency review) do not stop an entry. When every suite passed, `result` writes `E2E` as passed.
+
 ## Optional: CaaS regression tests on a pull request
 
 A pull request gets the CaaS sanity tests (`tests/e2e/caas/sanity`); the regression tests (`tests/e2e/caas/regression`) run

@@ -12,7 +12,7 @@ permissions: {}
 
 jobs:
   plan:
-    uses: osac-project/osac-ci/.github/workflows/e2e-queue-plan.yml@188618f70e65c38f46fb252cfb87e20714c63bd6  # v1.2.13
+    uses: osac-project/osac-ci/.github/workflows/e2e-queue-plan.yml@357d79f679cdb42bbf2aa0cde8a36c23477a934b  # v1.2.14
     permissions:
       contents: read
       actions: write
@@ -50,14 +50,21 @@ jobs:
       repo: ${{ github.repository }}
       sha: ${{ github.event.merge_group.head_sha }}
 
-  finish:
-    needs: [plan, vmaas, caas, bmaas]
+  # One job that looks after the queue entry: it watches the suites and the other required checks of the commit (the
+  # unit and integration tests of CI, the Jira check), writes the required E2E check at once when one of them fails, and
+  # stops everything that still runs for the commit, so the entry leaves the queue instead of holding its place until
+  # every suite has ended. It also writes E2E when everything passed. See osac-ci's docs/CALLERS.md.
+  result:
+    needs: plan
     if: always()
-    uses: osac-project/osac-ci/.github/workflows/e2e-queue-finish.yml@188618f70e65c38f46fb252cfb87e20714c63bd6  # v1.2.13
+    uses: osac-project/osac-ci/.github/workflows/e2e-queue-result.yml@357d79f679cdb42bbf2aa0cde8a36c23477a934b  # v1.2.14
     permissions:
+      actions: write
       contents: read
     with:
       sha: ${{ github.event.merge_group.head_sha }}
-      results: ${{ toJSON(needs) }}
+      branch: ${{ github.event.merge_group.base_ref }}
+      plan-result: ${{ needs.plan.result }}
+      suites: ${{ needs.plan.outputs.suites }}
     secrets:
       OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}

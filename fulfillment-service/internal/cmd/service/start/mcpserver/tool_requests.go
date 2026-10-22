@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -86,6 +87,60 @@ func safeInvalidRequestError(err error) error {
 	)
 	envelope.Details = []string{err.Error()}
 	return envelope
+}
+
+func safeMissingPrerequisiteError(kind, id string) error {
+	envelope := newToolError(
+		"not_found",
+		"NotFound",
+		"A required prerequisite is missing. The dependent operation was not performed.",
+		false,
+	)
+	envelope.Details = []string{fmt.Sprintf("%s %s is missing", kind, id)}
+	return envelope
+}
+
+func safeMissingReferenceError() error {
+	envelope := newToolError(
+		"not_found",
+		"NotFound",
+		"A required reference was not found. The dependent operation was not performed.",
+		false,
+	)
+	return envelope
+}
+
+func safeUnauthorizedPrerequisiteError(kind, id string) error {
+	envelope := newToolError(
+		"authorization",
+		"PermissionDenied",
+		"The caller is not authorized for a required prerequisite. No identity escalation was attempted.",
+		false,
+	)
+	envelope.Details = []string{
+		fmt.Sprintf("The caller cannot access or create %s %s with the caller's existing permissions", kind, id),
+	}
+	return envelope
+}
+
+func safeStaleVersionError() error {
+	return newToolError(
+		"conflict",
+		"Aborted",
+		"The resource version is stale. Retrieve the current version and retry.",
+		false,
+	)
+}
+
+func safePrerequisiteError(kind, id string, err error) error {
+	switch status.Code(err) {
+	case codes.NotFound:
+		return safeMissingPrerequisiteError(kind, id)
+	case codes.PermissionDenied:
+		return safeUnauthorizedPrerequisiteError(kind, id)
+	default:
+		return safePublicAPIError(err)
+	}
 }
 
 func safePublicAPIError(err error) error {

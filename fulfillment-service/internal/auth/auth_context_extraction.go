@@ -69,6 +69,27 @@ func ExtractAuthContext(token *jwt.Token) (*AuthContext, error) {
 	return authContext, nil
 }
 
+func OrganizationNames(organizationClaim any) ([]string, error) {
+	switch organization := organizationClaim.(type) {
+	case []any:
+		names := make([]string, 0, len(organization))
+		for _, name := range organization {
+			if value, ok := name.(string); ok {
+				names = append(names, value)
+			}
+		}
+		return names, nil
+	case map[string]any:
+		names := make([]string, 0, len(organization))
+		for name := range organization {
+			names = append(names, name)
+		}
+		return names, nil
+	default:
+		return nil, fmt.Errorf("organization claim should be an array or object, got %T", organizationClaim)
+	}
+}
+
 // claimAsAnySlice extracts a JWT claim as a slice of any. Returns nil if the claim doesn't exist or isn't a slice.
 func claimAsAnySlice(claims jwt.MapClaims, name string) []any {
 	value, ok := claims[name]

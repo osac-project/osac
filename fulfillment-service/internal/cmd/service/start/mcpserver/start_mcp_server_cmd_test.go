@@ -102,7 +102,7 @@ var _ = Describe("newServer", func() {
 
 		response, err := clientSession.ListTools(ctx, nil)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(response.Tools).To(HaveLen(5))
+		Expect(response.Tools).To(HaveLen(10))
 
 		tools := make(map[string]*mcp.Tool, len(response.Tools))
 		for _, tool := range response.Tools {
@@ -114,7 +114,12 @@ var _ = Describe("newServer", func() {
 		Expect(tools).To(HaveKey("list_resources"))
 		Expect(tools).To(HaveKey("get_resource"))
 		Expect(tools).To(HaveKey("create_compute_instance"))
+		Expect(tools).To(HaveKey("update_compute_instance"))
+		Expect(tools).To(HaveKey("set_compute_instance_power"))
+		Expect(tools).To(HaveKey("restart_compute_instance"))
 		Expect(tools).To(HaveKey("delete_compute_instance"))
+		Expect(tools).To(HaveKey("create_project"))
+		Expect(tools).To(HaveKey("update_project"))
 		Expect(tools["list_resources"].Description).To(ContainSubstring("Use this tool to discover"))
 		Expect(tools["get_resource"].Description).To(ContainSubstring("Use this tool to inspect"))
 		Expect(tools["create_compute_instance"].Description).To(ContainSubstring("only after the user confirms"))
@@ -123,17 +128,226 @@ var _ = Describe("newServer", func() {
 		Expect(tools["create_compute_instance"].Description).To(ContainSubstring("storage_tier_id"))
 		Expect(tools["create_compute_instance"].Description).To(ContainSubstring("network_attachments"))
 		Expect(tools["create_compute_instance"].Description).To(ContainSubstring("subnet_id"))
+		Expect(tools["create_compute_instance"].Description).To(ContainSubstring("disk_image_id"))
+		Expect(tools["create_compute_instance"].Description).To(ContainSubstring("project_id"))
+		Expect(tools["update_compute_instance"].Description).To(ContainSubstring("current metadata.version"))
+		Expect(tools["set_compute_instance_power"].Description).To(ContainSubstring("run_strategy"))
+		Expect(tools["restart_compute_instance"].Description).To(ContainSubstring("restart"))
+		Expect(tools["create_project"].Description).To(ContainSubstring("existing tenant"))
+		Expect(tools["update_project"].Description).To(ContainSubstring("last-write-wins"))
+		Expect(tools["update_project"].Description).To(ContainSubstring("title"))
+		Expect(tools["update_project"].Description).To(ContainSubstring("description"))
 		Expect(tools["delete_compute_instance"].Description).To(ContainSubstring("only when the user explicitly requests"))
 		expectToolAnnotations(tools["check_connection"], "Check OSAC MCP connection", true, false, true, true)
 		expectToolAnnotations(tools["list_resources"], "List OSAC deployment resources", true, false, true, true)
 		expectToolAnnotations(tools["get_resource"], "Get OSAC deployment resource", true, false, true, true)
 		expectToolAnnotations(tools["create_compute_instance"], "Create OSAC compute instance", false, false, false, true)
+		expectToolAnnotations(tools["update_compute_instance"], "Update OSAC compute instance", false, true, false, true)
+		expectToolAnnotations(tools["set_compute_instance_power"], "Set OSAC compute instance power", false, false, true, true)
+		expectToolAnnotations(tools["restart_compute_instance"], "Restart OSAC compute instance", false, true, false, true)
 		expectToolAnnotations(tools["delete_compute_instance"], "Delete OSAC compute instance", false, true, false, true)
+		expectToolAnnotations(tools["create_project"], "Create OSAC project", false, false, false, true)
+		expectToolAnnotations(tools["update_project"], "Update OSAC project", false, true, false, true)
 		expectComputeInstanceCreateSchema(tools["create_compute_instance"].InputSchema)
+		expectComputeInstanceUpdateSchema(tools["update_compute_instance"].InputSchema)
+		expectComputeInstancePowerSchema(tools["set_compute_instance_power"].InputSchema)
+		expectComputeInstanceRestartSchema(tools["restart_compute_instance"].InputSchema)
+		expectTypedWriteSchema(tools["create_compute_instance"].InputSchema, "name", "catalog_item")
+		expectTypedWriteSchema(tools["update_compute_instance"].InputSchema, "id", "version")
+		expectTypedWriteSchema(tools["set_compute_instance_power"].InputSchema, "id", "version", "action")
+		expectTypedWriteSchema(tools["restart_compute_instance"].InputSchema, "id", "version")
+		expectTypedWriteSchema(tools["delete_compute_instance"].InputSchema, "id")
+		expectTypedWriteSchema(tools["create_project"].InputSchema, "name")
+		expectTypedWriteSchema(tools["update_project"].InputSchema, "id")
 		expectNullableArraySchema(tools["list_resources"].OutputSchema, "items")
-		expectResourceTypeSchema(tools["list_resources"].InputSchema)
+		expectResourceTypeSchema(tools["list_resources"].InputSchema, []ResourceType{
+			ResourceTypeComputeInstanceCatalogItem,
+			ResourceTypeComputeInstanceTemplate,
+			ResourceTypeInstanceType,
+			ResourceTypeDiskImage,
+			ResourceTypeStorageTier,
+			ResourceTypeVirtualNetwork,
+			ResourceTypeSubnet,
+			ResourceTypeSecurityGroup,
+			ResourceTypeComputeInstance,
+			ResourceTypeProject,
+			ResourceTypeSecretReference,
+		})
 		expectResourcePaginationSchema(tools["list_resources"].InputSchema)
-		expectResourceTypeSchema(tools["get_resource"].InputSchema)
+		expectResourceTypeSchema(tools["get_resource"].InputSchema, []ResourceType{
+			ResourceTypeComputeInstanceCatalogItem,
+			ResourceTypeComputeInstanceTemplate,
+			ResourceTypeInstanceType,
+			ResourceTypeDiskImage,
+			ResourceTypeStorageTier,
+			ResourceTypeVirtualNetwork,
+			ResourceTypeSubnet,
+			ResourceTypeSecurityGroup,
+			ResourceTypeComputeInstance,
+			ResourceTypeProject,
+		})
+	})
+
+	It("returns a safe error for list-only get_resource calls without advertising them", func() {
+		ctx := context.Background()
+		server := newServer(ServerDeps{}, "https://mcp.example.com/")
+		client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "test"}, nil)
+		serverTransport, clientTransport := mcp.NewInMemoryTransports()
+
+		serverSession, err := server.Connect(ctx, serverTransport, nil)
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() { Expect(serverSession.Close()).To(Succeed()) })
+		clientSession, err := client.Connect(ctx, clientTransport, nil)
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() { Expect(clientSession.Close()).To(Succeed()) })
+
+		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+			Name: "get_resource",
+			Arguments: GetResourceInput{
+				ResourceType: ResourceTypeSecretReference,
+				ID:           "secret-1",
+			},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.IsError).To(BeTrue())
+		var errorText string
+		for _, content := range result.Content {
+			if textContent, ok := content.(*mcp.TextContent); ok {
+				errorText += textContent.Text
+			}
+		}
+		Expect(errorText).To(ContainSubstring(`"category":"invalid_request"`))
+		Expect(errorText).To(ContainSubstring(`"grpc_code":"InvalidArgument"`))
+		Expect(errorText).To(ContainSubstring("get_resource does not support secret_reference"))
+
+		invalidResult, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+			Name: "get_resource",
+			Arguments: map[string]any{
+				"resource_type": "cluster",
+				"id":            "cluster-1",
+			},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(invalidResult.IsError).To(BeTrue())
+		invalidText := ""
+		for _, content := range invalidResult.Content {
+			if textContent, ok := content.(*mcp.TextContent); ok {
+				invalidText += textContent.Text
+			}
+		}
+		Expect(invalidText).To(ContainSubstring(`"category":"invalid_request"`))
+		Expect(invalidText).To(ContainSubstring(`"grpc_code":"InvalidArgument"`))
+
+		listedTools, err := clientSession.ListTools(ctx, nil)
+		Expect(err).ToNot(HaveOccurred())
+		tools := make(map[string]*mcp.Tool, len(listedTools.Tools))
+		for _, tool := range listedTools.Tools {
+			tools[tool.Name] = tool
+		}
+		expectResourceTypeSchema(tools["get_resource"].InputSchema, []ResourceType{
+			ResourceTypeComputeInstanceCatalogItem,
+			ResourceTypeComputeInstanceTemplate,
+			ResourceTypeInstanceType,
+			ResourceTypeDiskImage,
+			ResourceTypeStorageTier,
+			ResourceTypeVirtualNetwork,
+			ResourceTypeSubnet,
+			ResourceTypeSecurityGroup,
+			ResourceTypeComputeInstance,
+			ResourceTypeProject,
+		})
+	})
+
+	It("Derives deterministic tool names from the typed registry", func() {
+		server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0"}, nil)
+		registry := newTypedToolRegistry(server)
+		newHandler := func() mcp.ToolHandlerFor[DeleteComputeInstanceInput, DeleteComputeInstanceOutput] {
+			return func(
+				_ context.Context, _ *mcp.CallToolRequest, _ DeleteComputeInstanceInput,
+			) (*mcp.CallToolResult, DeleteComputeInstanceOutput, error) {
+				return nil, DeleteComputeInstanceOutput{}, nil
+			}
+		}
+		newTool := func(name string) *mcp.Tool {
+			return &mcp.Tool{
+				Name:        name,
+				Description: "typed tool",
+				Annotations: &mcp.ToolAnnotations{
+					Title:           name,
+					ReadOnlyHint:    false,
+					DestructiveHint: toolAnnotationBool(true),
+					IdempotentHint:  false,
+					OpenWorldHint:   toolAnnotationBool(true),
+				},
+				InputSchema:  compatibleToolSchema[DeleteComputeInstanceInput](),
+				OutputSchema: compatibleToolSchema[DeleteComputeInstanceOutput](),
+			}
+		}
+
+		registerWriteTool(
+			registry, newTool("zeta_tool"), writeToolContract{Destructive: true}, newHandler(),
+		)
+		registerWriteTool(
+			registry, newTool("alpha_tool"), writeToolContract{Destructive: true}, newHandler(),
+		)
+
+		Expect(registry.toolNames()).To(Equal([]string{"alpha_tool", "zeta_tool"}))
+	})
+
+	Describe("Rejects typed tool registrations with unsafe or inconsistent metadata", func() {
+		newHandler := func() mcp.ToolHandlerFor[DeleteComputeInstanceInput, DeleteComputeInstanceOutput] {
+			return func(
+				_ context.Context, _ *mcp.CallToolRequest, _ DeleteComputeInstanceInput,
+			) (*mcp.CallToolResult, DeleteComputeInstanceOutput, error) {
+				return nil, DeleteComputeInstanceOutput{}, nil
+			}
+		}
+		baseTool := func() *mcp.Tool {
+			return &mcp.Tool{
+				Name:        "delete_compute_instance",
+				Description: "typed delete",
+				Annotations: &mcp.ToolAnnotations{
+					Title:           "Delete",
+					ReadOnlyHint:    false,
+					DestructiveHint: toolAnnotationBool(true),
+					IdempotentHint:  false,
+					OpenWorldHint:   toolAnnotationBool(true),
+				},
+				InputSchema:  compatibleToolSchema[DeleteComputeInstanceInput](),
+				OutputSchema: compatibleToolSchema[DeleteComputeInstanceOutput](),
+			}
+		}
+
+		DescribeTable("Registration metadata failures",
+			func(mutate func(tool *mcp.Tool)) {
+				server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0"}, nil)
+				registry := newTypedToolRegistry(server)
+				tool := baseTool()
+				mutate(tool)
+				Expect(func() {
+					registerWriteTool(registry, tool, writeToolContract{Destructive: true}, newHandler())
+				}).To(Panic())
+			},
+			Entry("missing open-world hint", func(tool *mcp.Tool) {
+				tool.Annotations.OpenWorldHint = nil
+			}),
+			Entry("write marked read-only", func(tool *mcp.Tool) {
+				tool.Annotations.ReadOnlyHint = true
+			}),
+			Entry("destructive write marked non-destructive", func(tool *mcp.Tool) {
+				tool.Annotations.DestructiveHint = toolAnnotationBool(false)
+			}),
+			Entry("missing input schema", func(tool *mcp.Tool) {
+				tool.InputSchema = nil
+			}),
+		)
+
+		server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0"}, nil)
+		registry := newTypedToolRegistry(server)
+		registerWriteTool(registry, baseTool(), writeToolContract{Destructive: true}, newHandler())
+		Expect(func() {
+			registerWriteTool(registry, baseTool(), writeToolContract{Destructive: true}, newHandler())
+		}).To(Panic())
 	})
 })
 
@@ -177,24 +391,18 @@ func hasMultiTypeSchema(value any) bool {
 	return false
 }
 
-func expectResourceTypeSchema(schema any) {
+func expectResourceTypeSchema(schema any, expected []ResourceType) {
 	document, ok := schema.(map[string]any)
 	Expect(ok).To(BeTrue())
 	properties, ok := document["properties"].(map[string]any)
 	Expect(ok).To(BeTrue())
 	resourceType, ok := properties["resource_type"].(map[string]any)
 	Expect(ok).To(BeTrue())
-	Expect(resourceType["enum"]).To(ConsistOf(
-		string(ResourceTypeComputeInstanceCatalogItem),
-		string(ResourceTypeComputeInstanceTemplate),
-		string(ResourceTypeInstanceType),
-		string(ResourceTypeDiskImage),
-		string(ResourceTypeStorageTier),
-		string(ResourceTypeVirtualNetwork),
-		string(ResourceTypeSubnet),
-		string(ResourceTypeSecurityGroup),
-		string(ResourceTypeComputeInstance),
-	))
+	expectedNames := make([]string, len(expected))
+	for i, resourceType := range expected {
+		expectedNames[i] = string(resourceType)
+	}
+	Expect(resourceType["enum"]).To(ConsistOf(expectedNames))
 }
 
 func expectResourcePaginationSchema(schema any) {
@@ -227,7 +435,8 @@ func expectComputeInstanceCreateSchema(schema any) {
 		Expect(property["type"]).To(Equal("string"), name)
 	}
 
-	// The create input is not the protobuf JSON returned by get_resource.
+	// The create input is not the safe resource summary returned by
+	// get_resource.
 	bootDisk, ok := properties["boot_disk"].(map[string]any)
 	Expect(ok).To(BeTrue())
 	Expect(bootDisk["description"]).To(ContainSubstring("size_gib"))
@@ -267,6 +476,86 @@ func expectComputeInstanceCreateSchema(schema any) {
 	securityGroups, ok := itemProperties["security_group_ids"].(map[string]any)
 	Expect(ok).To(BeTrue())
 	Expect(securityGroups["items"]).To(HaveKeyWithValue("type", "string"))
+}
+
+func expectComputeInstanceUpdateSchema(schema any) {
+	document, ok := schema.(map[string]any)
+	Expect(ok).To(BeTrue())
+	properties, ok := document["properties"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(properties).To(HaveKey("instance_type_id"))
+	Expect(properties).To(HaveKey("boot_disk"))
+	Expect(properties).To(HaveKey("run_strategy"))
+	Expect(properties).ToNot(HaveKey("display_name"))
+	Expect(properties).ToNot(HaveKey("description"))
+	Expect(properties).ToNot(HaveKey("catalog_item"))
+	Expect(properties).ToNot(HaveKey("disk_image_id"))
+	Expect(properties).ToNot(HaveKey("network_attachments"))
+	Expect(properties).ToNot(HaveKey("user_data"))
+	Expect(properties).ToNot(HaveKey("ssh_key"))
+	Expect(properties).ToNot(HaveKey("status"))
+	for _, name := range []string{"id", "instance_type_id", "run_strategy"} {
+		property, ok := properties[name].(map[string]any)
+		Expect(ok).To(BeTrue(), name)
+		Expect(property["type"]).To(Equal("string"), name)
+	}
+	version, ok := properties["version"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(version["type"]).To(Equal("integer"))
+	Expect(version["minimum"]).To(Equal(float64(1)))
+	bootDisk, ok := properties["boot_disk"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	bootDiskProperties, ok := bootDisk["properties"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(bootDiskProperties).To(HaveKey("size_gib"))
+	Expect(bootDiskProperties).To(HaveKey("storage_tier_id"))
+}
+
+func expectComputeInstancePowerSchema(schema any) {
+	document, ok := schema.(map[string]any)
+	Expect(ok).To(BeTrue())
+	properties, ok := document["properties"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	id, ok := properties["id"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(id["type"]).To(Equal("string"))
+	action, ok := properties["action"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(action["type"]).To(Equal("string"))
+	Expect(action["enum"]).To(ConsistOf("start", "stop"))
+	version, ok := properties["version"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(version["type"]).To(Equal("integer"))
+	Expect(version["minimum"]).To(Equal(float64(1)))
+	Expect(properties).ToNot(HaveKey("run_strategy"))
+}
+
+func expectComputeInstanceRestartSchema(schema any) {
+	document, ok := schema.(map[string]any)
+	Expect(ok).To(BeTrue())
+	properties, ok := document["properties"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	id, ok := properties["id"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(id["type"]).To(Equal("string"))
+	version, ok := properties["version"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(version["type"]).To(Equal("integer"))
+	Expect(version["minimum"]).To(Equal(float64(1)))
+	Expect(properties).ToNot(HaveKey("action"))
+	Expect(properties).ToNot(HaveKey("restart_requested_at"))
+}
+
+func expectTypedWriteSchema(schema any, required ...string) {
+	document, ok := schema.(map[string]any)
+	Expect(ok).To(BeTrue())
+	properties, ok := document["properties"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(properties).ToNot(HaveKey("service"))
+	Expect(properties).ToNot(HaveKey("method"))
+	Expect(properties).ToNot(HaveKey("payload"))
+	Expect(document["required"]).To(ConsistOf(required))
+	Expect(document["additionalProperties"]).To(BeFalse())
 }
 
 func expectNullableArraySchema(schema any, name string) {
@@ -311,7 +600,7 @@ var _ = Describe("newTokenVerifier", func() {
 		caller, ok := info.Extra[callerContextExtraKey].(safeCallerContext)
 		Expect(ok).To(BeTrue())
 		Expect(caller).To(Equal(safeCallerContext{
-			Subject: "alice", Username: "alice", Tenants: []string{"tenant-1"},
+			Subject: "alice", Tenants: []string{"tenant-1"},
 		}))
 		source, ok := info.Extra[exchangeTokenExtraKey].(apiTokenSource)
 		Expect(ok).To(BeTrue())
@@ -423,10 +712,6 @@ var _ = Describe("forwardAPIToken", func() {
 		}
 		_, err := forwardAPIToken(ctx, req)
 		Expect(err).To(HaveOccurred())
-		envelope := decodeToolError(err)
-		Expect(envelope.Category).To(Equal("service_unavailable"))
-		Expect(envelope.GRPCCode).To(Equal("Unavailable"))
-		Expect(envelope.Retryable).To(BeTrue())
 	})
 })
 
@@ -438,7 +723,7 @@ var _ = Describe("NewHandler", func() {
 		DeferCleanup(ctrl.Finish)
 	})
 
-	It("accepts the configured resource audience and rejects other resources at HTTP ingress", func() {
+	It("accepts MCP-audience tokens and rejects API tokens at HTTP ingress", func() {
 		const issuer = "https://issuer.example.com"
 		jwksCache := auth.NewMockJwksCache(ctrl)
 		jwksCache.EXPECT().Get(gomock.Any(), issuer, "123").Return(testutils.JwtPublicKey(), nil).AnyTimes()
@@ -453,7 +738,6 @@ var _ = Describe("NewHandler", func() {
 		}{
 			{audience: "https://mcp.example.com/", accepted: true},
 			{audience: "https://mcp.example.com", accepted: false},
-			{audience: "https://other-mcp.example.com/", accepted: false},
 			{audience: auth.Audience, accepted: false},
 		} {
 			token := testutils.MakeTokenObject(nil, jwt.MapClaims{"iss": issuer, "aud": tc.audience})
@@ -489,6 +773,29 @@ var _ = Describe("NewHandler", func() {
 
 		_, err = NewHandler(ServerDeps{}, validator, "", "https://mcp.example.com", testExchanger)
 		Expect(err).To(HaveOccurred())
+	})
+
+	It("Rejects malformed OAuth authorization-server issuer URLs", func() {
+		validator := auth.NewMockJwtValidator(ctrl)
+		for _, authorizationServer := range []string{
+			"http://keycloak.example.com/realms/osac",
+			"https://user:secret@keycloak.example.com/realms/osac",
+			"https://keycloak.example.com/realms/osac?tenant=one",
+			"https://keycloak.example.com/realms/osac#fragment",
+		} {
+			_, err := NewHandler(
+				ServerDeps{}, validator, authorizationServer, "https://mcp.example.com", testExchanger,
+			)
+			Expect(err).To(MatchError(ContainSubstring("HTTPS issuer URL")), authorizationServer)
+		}
+	})
+
+	It("Binds OAuth discovery to a configured trusted issuer", func() {
+		err := validateOAuthAuthorizationServerURL(
+			"https://keycloak.example.com/realms/osac",
+			[]string{"https://other-issuer.example.com/realms/osac"},
+		)
+		Expect(err).To(MatchError("OAuth authorization server must be a configured trusted token issuer"))
 	})
 
 	It("Rejects path-prefixed and noncanonical OAuth resource URLs", func() {

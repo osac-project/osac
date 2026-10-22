@@ -1,14 +1,17 @@
 import { Content, Stack, StackItem, Title } from '@patternfly/react-core';
+import { useFormikContext } from 'formik';
 
+import type { ComputeCatalogItemValues } from './values';
 import { useTranslation } from '../../../../hooks/useTranslation';
-import { InputField } from '../../../Form/InputField';
 import OsacForm from '../../../Form/OsacForm';
+import UserDataField from '../../../Form/UserDataField';
 import DiskImageField from '../../../ProvisioningWizard/fields/DiskImageField';
 import ComputeInstanceTypeField from '../../../vm/CreateWizard/fields/ComputeInstanceTypeField';
 import CatalogField from '../CatalogField';
 
 const ComputeCatalogConfigurationStep = () => {
   const { t } = useTranslation();
+  const { values } = useFormikContext<ComputeCatalogItemValues>();
 
   return (
     <Stack hasGutter>
@@ -49,13 +52,14 @@ const ComputeCatalogConfigurationStep = () => {
             )}
           </CatalogField>
           <CatalogField name="userData">
-            {({ valueName, isDisabled, labelInfo }) => (
-              <InputField
-                name={valueName}
-                label={t('User data')}
-                fieldId="compute-catalog-user-data"
-                multiline
+            {({ valueName, isDisabled, isRequired, labelInfo }) => (
+              <UserDataField
+                sourceName="userDataSource.value"
+                secretRefName="userDataSecret.value"
+                inlineName={valueName}
+                projectName={values.metadata.project}
                 isDisabled={isDisabled}
+                isRequired={isRequired}
                 labelInfo={labelInfo}
               />
             )}

@@ -286,22 +286,13 @@ func (s *ComputeInstancesServer) Update(ctx context.Context,
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
 		return
 	}
-	const networkAttachmentStatusFieldPath = "status.compute_network_attachment_statuses"
-	const instanceTypeFieldPath = "status.instance_type"
-	const instanceTypeTransitionTimeFieldPath = "status.instance_type_transition_time"
 	for _, path := range request.GetUpdateMask().GetPaths() {
 		path = normalizeFieldMaskPath(path)
-		// The system sets the running instance type fields when it observes the instance
-		// running; users can read them but never supply them. Subpaths are rejected too,
-		// otherwise a mask like status.instance_type.name would slip past the guard.
-		if path == instanceTypeFieldPath || path == instanceTypeTransitionTimeFieldPath ||
-			strings.HasPrefix(path, instanceTypeFieldPath+".") ||
-			strings.HasPrefix(path, instanceTypeTransitionTimeFieldPath+".") {
+		// The status is output-only: only the system writes it. The whole status and every
+		// descendant are rejected, otherwise a mask like status.instance_type.name would
+		// slip past the guard.
+		if path == "status" || strings.HasPrefix(path, "status.") {
 			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "%s is output-only", path)
-			return
-		}
-		if path == "status" || path == networkAttachmentStatusFieldPath || strings.HasPrefix(path, networkAttachmentStatusFieldPath+".") {
-			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "%s is output-only", networkAttachmentStatusFieldPath)
 			return
 		}
 	}

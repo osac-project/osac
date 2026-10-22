@@ -675,6 +675,241 @@ var _ = Describe("Compute instances server", func() {
 				Equal(storedTime.AsTime()))
 		})
 
+		DescribeTable("Rejects every public status mask path",
+			func(path, message string) {
+				createTemplate("general.small")
+
+				// Create an object:
+				createResponse, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
+					Object: publicv1.ComputeInstance_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: "test-compute-instance",
+						}.Build(),
+						Spec: publicv1.ComputeInstanceSpec_builder{
+							Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
+							NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+								publicv1.ComputeNetworkAttachment_builder{
+									Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				id := createResponse.GetObject().GetId()
+
+				// Store a state with its transition time and attachment feedback, as the
+				// operator feedback would. The time must be after creation: the source
+				// contract clamps a first time on or before it.
+				storedTime := timestamppb.New(time.Now())
+				ciDao, err := dao.NewGenericDAO[*privatev1.ComputeInstance]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				stored, err := ciDao.Get().SetId(id).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				storedObject := stored.GetObject()
+				storedObject.SetStatus(privatev1.ComputeInstanceStatus_builder{
+					State:               privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
+					StateTransitionTime: storedTime,
+					ComputeNetworkAttachmentStatuses: []*privatev1.ComputeNetworkAttachmentStatus{
+						privatev1.ComputeNetworkAttachmentStatus_builder{
+							SubnetRef: "test-subnet",
+							IpAddress: "192.0.2.10",
+						}.Build(),
+					},
+				}.Build())
+				_, err = ciDao.Update().SetObject(storedObject).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				// A public update whose mask selects a status path is rejected, even though
+				// the object carries a fabricated state with a later transition time:
+				updateResponse, err := server.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+					Object: publicv1.ComputeInstance_builder{
+						Id: id,
+						Status: publicv1.ComputeInstanceStatus_builder{
+							State:               publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+							StateTransitionTime: timestamppb.New(time.Now()),
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{path},
+					},
+				}.Build())
+				Expect(updateResponse).To(BeNil())
+				grpcStatus, ok := status.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(grpcStatus.Code()).To(Equal(codes.InvalidArgument))
+				Expect(grpcStatus.Message()).To(ContainSubstring(message))
+
+				// The stored status, its transition time, and the attachment feedback are
+				// unchanged:
+				after, err := server.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
+					Id: id,
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				statusObject := after.GetObject().GetStatus()
+				Expect(statusObject.GetState()).To(
+					Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING))
+				Expect(statusObject.GetStateTransitionTime().AsTime()).To(Equal(storedTime.AsTime()))
+				Expect(statusObject.GetComputeNetworkAttachmentStatuses()).To(HaveLen(1))
+				Expect(statusObject.GetComputeNetworkAttachmentStatuses()[0].GetSubnetRef()).To(Equal("test-subnet"))
+				Expect(statusObject.GetComputeNetworkAttachmentStatuses()[0].GetIpAddress()).To(Equal("192.0.2.10"))
+			},
+			Entry("Rejects the whole status", "status", "status is output-only"),
+			Entry("Rejects the state", "status.state", "status.state is output-only"),
+			Entry("Rejects the state transition time", "status.state_transition_time", "status.state_transition_time is output-only"),
+			Entry("Rejects the conditions", "status.conditions", "status.conditions is output-only"),
+			Entry("Rejects the running instance type", "status.instance_type", "status.instance_type is output-only"),
+			Entry("Rejects a running instance type subpath", "status.instance_type.name", "status.instance_type.name is output-only"),
+			Entry("Rejects the running instance type transition time", "status.instance_type_transition_time", "status.instance_type_transition_time is output-only"),
+			Entry("Rejects a running instance type transition time subpath", "status.instance_type_transition_time.seconds", "status.instance_type_transition_time.seconds is output-only"),
+			Entry("Rejects the attachment statuses", "status.compute_network_attachment_statuses", "status.compute_network_attachment_statuses is output-only"),
+			Entry("Rejects an attachment status subpath", "status.compute_network_attachment_statuses.ip_address", "status.compute_network_attachment_statuses.ip_address is output-only"),
+			Entry("Rejects a normalized whitespace and double-dot spelling", " status .. state ", "status.state is output-only"),
+		)
+
+		It("Keeps the stored status across a masked update echoing a status", func() {
+			createTemplate("general.small")
+
+			// Create an object:
+			createResponse, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
+				Object: publicv1.ComputeInstance_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-compute-instance",
+					}.Build(),
+					Spec: publicv1.ComputeInstanceSpec_builder{
+						Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
+						NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+							publicv1.ComputeNetworkAttachment_builder{
+								Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := createResponse.GetObject().GetId()
+
+			// Store a state with its transition time, as the operator feedback would:
+			storedTime := timestamppb.New(time.Now())
+			ciDao, err := dao.NewGenericDAO[*privatev1.ComputeInstance]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			stored, err := ciDao.Get().SetId(id).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			storedObject := stored.GetObject()
+			storedObject.SetStatus(privatev1.ComputeInstanceStatus_builder{
+				State:               privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
+				StateTransitionTime: storedTime,
+			}.Build())
+			_, err = ciDao.Update().SetObject(storedObject).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Update restart_requested_at with an explicit mask while the object echoes
+			// the fetched status unchanged:
+			getResponse, err := server.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
+				Id: id,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			echoed := getResponse.GetObject()
+			restartTime := timestamppb.New(time.Now())
+			echoed.GetSpec().SetRestartRequestedAt(restartTime)
+			updateResponse, err := server.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+				Object: echoed,
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"spec.restart_requested_at"},
+				},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updateResponse.GetObject().GetSpec().GetRestartRequestedAt().AsTime()).To(
+				BeTemporally("~", restartTime.AsTime()))
+
+			// The echoed status did not change the stored status or its transition time:
+			after, err := server.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
+				Id: id,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(after.GetObject().GetSpec().GetRestartRequestedAt()).ToNot(BeNil())
+			Expect(after.GetObject().GetStatus().GetState()).To(
+				Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING))
+			Expect(after.GetObject().GetStatus().GetStateTransitionTime().AsTime()).To(
+				Equal(storedTime.AsTime()))
+		})
+
+		It("Exposes private status feedback through the public API", func() {
+			// Create the private server that controllers use:
+			privateServer, err := NewPrivateComputeInstancesServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			createTemplate("general.small")
+
+			// Create an object through the public API:
+			createResponse, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
+				Object: publicv1.ComputeInstance_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-compute-instance",
+					}.Build(),
+					Spec: publicv1.ComputeInstanceSpec_builder{
+						Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
+						NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+							publicv1.ComputeNetworkAttachment_builder{
+								Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := createResponse.GetObject().GetId()
+
+			// Report a state transition and attachment feedback through the private API.
+			// The time must be after creation: the source contract clamps a first time on
+			// or before it.
+			feedbackTime := timestamppb.New(time.Now())
+			updateResponse, err := privateServer.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Id: id,
+					Status: privatev1.ComputeInstanceStatus_builder{
+						State:               privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+						StateTransitionTime: feedbackTime,
+						ComputeNetworkAttachmentStatuses: []*privatev1.ComputeNetworkAttachmentStatus{
+							privatev1.ComputeNetworkAttachmentStatus_builder{
+								SubnetRef: "test-subnet",
+								IpAddress: "192.0.2.11",
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"status.state", "status.state_transition_time", "status.compute_network_attachment_statuses"},
+				},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updateResponse.GetObject().GetStatus().GetState()).To(
+				Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING))
+
+			// The feedback is visible through the public API:
+			getResponse, err := server.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
+				Id: id,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			statusObject := getResponse.GetObject().GetStatus()
+			Expect(statusObject.GetState()).To(
+				Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING))
+			Expect(statusObject.GetStateTransitionTime().AsTime()).To(Equal(feedbackTime.AsTime()))
+			Expect(statusObject.GetComputeNetworkAttachmentStatuses()).To(HaveLen(1))
+			Expect(statusObject.GetComputeNetworkAttachmentStatuses()[0].GetSubnetRef()).To(Equal("test-subnet"))
+			Expect(statusObject.GetComputeNetworkAttachmentStatuses()[0].GetIpAddress()).To(Equal("192.0.2.11"))
+		})
+
 		It("Rejects changing network attachments via the public update path", func() {
 			createTemplate("general.small")
 
@@ -975,50 +1210,6 @@ var _ = Describe("Compute instances server", func() {
 			Expect(getResponse.GetObject().GetStatus().GetInstanceType()).To(BeNil())
 			Expect(getResponse.GetObject().GetStatus().GetInstanceTypeTransitionTime()).To(BeNil())
 		})
-
-		DescribeTable("Rejects a public update of the output-only running instance type fields",
-			func(path string) {
-				createTemplate("running-type-update-template")
-
-				createResponse, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
-					Object: publicv1.ComputeInstance_builder{
-						Metadata: publicv1.Metadata_builder{
-							Name: "test-compute-instance",
-						}.Build(),
-						Spec: publicv1.ComputeInstanceSpec_builder{
-							Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "running-type-update-template"}.Build(),
-							NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
-								publicv1.ComputeNetworkAttachment_builder{
-									Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
-								}.Build(),
-							},
-						}.Build(),
-					}.Build(),
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-
-				_, err = server.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
-					Object: publicv1.ComputeInstance_builder{
-						Id: createResponse.GetObject().GetId(),
-						Status: publicv1.ComputeInstanceStatus_builder{
-							InstanceType: publicv1.InstanceTypeReference_builder{
-								Id: "standard-4-16", Name: "standard-4-16",
-							}.Build(),
-							InstanceTypeTransitionTime: timestamppb.Now(),
-						}.Build(),
-					}.Build(),
-					UpdateMask: &fieldmaskpb.FieldMask{
-						Paths: []string{path},
-					},
-				}.Build())
-				Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
-				Expect(err.Error()).To(ContainSubstring(path + " is output-only"))
-			},
-			Entry("instance type", "status.instance_type"),
-			Entry("instance type transition time", "status.instance_type_transition_time"),
-			Entry("instance type name subpath", "status.instance_type.name"),
-			Entry("instance type transition time subpath", "status.instance_type_transition_time.seconds"),
-		)
 	})
 })
 

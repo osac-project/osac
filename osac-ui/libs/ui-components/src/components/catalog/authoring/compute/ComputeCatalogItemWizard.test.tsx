@@ -94,18 +94,18 @@ describe('ComputeCatalogItemWizard', () => {
     vi.mocked(useSession).mockReturnValue(makeSession('tenant-admin'));
   });
 
-  it('shows General, Configuration, Storage, and Review steps and no Networking step', () => {
+  it('shows General, Compute Configuration, Storage, and Review steps and no Networking step', () => {
     renderWizard();
 
     const nav = screen.getByRole('navigation', { name: 'Create compute catalog item steps' });
     expect(within(nav).getByText('General')).toBeInTheDocument();
-    expect(within(nav).getByText('Configuration')).toBeInTheDocument();
+    expect(within(nav).getByText('Compute Configuration')).toBeInTheDocument();
     expect(within(nav).getByText('Storage')).toBeInTheDocument();
     expect(within(nav).getByText('Review')).toBeInTheDocument();
     expect(within(nav).queryByText('Networking')).not.toBeInTheDocument();
   });
 
-  it('shows the Configuration step description and no run strategy field', async () => {
+  it('shows the Compute Configuration step description and no run strategy field', async () => {
     const { user } = renderWizard();
 
     await fillGeneralStep(user, 'my-item');
@@ -116,6 +116,7 @@ describe('ComputeCatalogItemWizard', () => {
         'Optionally set instance type defaults for this catalog item. Leave fields Not set if tenants should choose when creating a virtual machine.',
       ),
     ).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Compute Configuration' })).toBeInTheDocument();
     expect(screen.queryByText(/run strategy/i)).not.toBeInTheDocument();
   });
 
@@ -177,14 +178,14 @@ describe('ComputeCatalogItemWizard', () => {
     });
   });
 
-  it('blocks Next on Configuration when a locked field is empty', async () => {
+  it('blocks Next on Compute Configuration when a locked field is empty', async () => {
     const { user } = renderWizard();
 
     await fillGeneralStep(user, 'my-item');
     await user.click(screen.getByRole('button', { name: 'Next' }));
 
     const switches = await screen.findAllByRole('switch');
-    // Disk image is the first governed field rendered on Configuration.
+    // Disk image is the first governed field rendered on Compute Configuration.
     await user.click(switches[0]);
     await user.click(screen.getByRole('button', { name: 'Next' }));
 

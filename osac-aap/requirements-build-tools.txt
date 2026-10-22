@@ -224,3 +224,14 @@ build==1.6.1
 # expandvars' own build backend is hatchling (already have, self-hosting
 # -- requires = ["hatchling"]), no further cascade.
 expandvars==1.1.2
+# propcache (an aiohttp/aiosignal transitive dep) uses the same aio-libs
+# in-tree pep517_backend as frozenlist, but its own _backend.py hardcodes
+# a narrower dynamic build requirement -- `c_ext_build_deps = ['Cython
+# ~= 3.1.0']` (confirmed by reading its real sdist's
+# packaging/pep517_backend/_backend.py directly) -- that our existing
+# Cython==3.3.0 pin (for PyYAML, which has no such narrow constraint)
+# doesn't satisfy. Confirmed live: "Could not find a version that
+# satisfies the requirement Cython~=3.1.0 (from versions: 3.3.0)". A
+# SECOND coexisting Cython version, same pattern as setuptools/wheel/
+# setuptools-scm above.
+Cython==3.1.8

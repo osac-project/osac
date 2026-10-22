@@ -66,6 +66,18 @@ osac-new-worktree() {
         return 1
     fi
 
+    # Fetch the CI-published graphify brain so the worktree starts with a
+    # current structural map of main. Fail-open, matching the fetch script's
+    # own design: a missing or failed fetch must never block worktree
+    # creation. Agent-neutral -- covers agents that do not run the Claude
+    # SessionStart hook that normally keeps graphify-out/ fresh.
+    if [[ -f .claude/hooks/fetch-graphify-brain.sh ]]; then
+        echo "Fetching graphify brain..."
+        if ! bash .claude/hooks/fetch-graphify-brain.sh; then
+            echo "Warning: graphify brain fetch failed (non-fatal)." >&2
+        fi
+    fi
+
     local ticket=""
     ticket=$(osac_jira_ticket_from_branch "$branch_name")
     if [[ -n "$ticket" ]]; then

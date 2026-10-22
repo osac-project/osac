@@ -178,6 +178,99 @@ EOF
   chmod +x "${bin}/git"
 }
 
+# Like write_git_worktree_stub, but the fake repo also carries a
+# .claude/hooks/fetch-graphify-brain.sh that the stub copies into the new
+# worktree, mirroring how a real worktree contains every tracked file.
+write_git_worktree_stub_with_hook() {
+  local bin="$1" repo="$2" log="$3"
+  cat > "${bin}/git" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ " \$* " == *" worktree "* && " \$* " == *" add "* ]]; then
+  dest="\${!#}"
+  mkdir -p "\$dest/tools" "\$dest/.claude/hooks"
+  cp "${repo}/tools/bootstrap.sh" "\$dest/tools/bootstrap.sh"
+  cp "${repo}/.claude/hooks/fetch-graphify-brain.sh" \\
+     "\$dest/.claude/hooks/fetch-graphify-brain.sh"
+  echo "worktree-add \$dest" >> "${log}"
+  exit 0
+fi
+exec "${REAL_GIT}" "\$@"
+EOF
+  chmod +x "${bin}/git"
+}
+
+test_fetches_graphify_brain_in_new_worktree() {
+  local parent repo dest bin log hook_log
+  parent="${TMPDIR_ROOT}/wt-graph-parent"
+  repo="${parent}/osac"
+  dest="${parent}/osac-graph-brain"
+  bin="${TMPDIR_ROOT}/wt-graph-bin"
+  log="${TMPDIR_ROOT}/wt-graph.log"
+  hook_log="${TMPDIR_ROOT}/wt-graph-hook.log"
+  mkdir -p "${repo}/tools" "${repo}/.claude/hooks" "$bin"
+  printf '#!/bin/sh\nexit 0\n' > "${repo}/tools/bootstrap.sh"
+  chmod +x "${repo}/tools/bootstrap.sh"
+  # The stub hook records the directory it ran from; the fix must invoke
+  # it from inside the new worktree, not from the original clone.
+  printf '#!/bin/sh\npwd >> "%s"\nexit 0\n' "$hook_log" \
+    > "${repo}/.claude/hooks/fetch-graphify-brain.sh"
+  "$REAL_GIT" init -q "$repo"
+  "$REAL_GIT" -C "$repo" checkout -q -b main
+  "$REAL_GIT" -C "$repo" -c user.email=smoke@test -c user.name=smoke \
+    commit -q --allow-empty -m seed
+  write_git_worktree_stub_with_hook "$bin" "$repo" "$log"
+
+  (
+    cd "$repo"
+    # shellcheck source=../osac-helpers.sh
+    source "$HELPERS"
+    export PATH="${bin}:${PATH}"
+    export OSAC_WORKTREE_PARENT="$parent"
+    osac-new-worktree feat/graph-brain >/dev/null
+  )
+  grep -q "^${dest}$" "$hook_log" \
+    || fail "expected brain fetch to run in ${dest}, got: $(cat "$hook_log" 2>/dev/null)"
+  pass "fetches the graphify brain inside the new worktree"
+}
+
+test_graphify_fetch_failure_is_non_fatal() {
+  local parent repo dest bin log marker out
+  parent="${TMPDIR_ROOT}/wt-graphfail-parent"
+  repo="${parent}/osac"
+  dest="${parent}/osac-graph-fail"
+  bin="${TMPDIR_ROOT}/wt-graphfail-bin"
+  log="${TMPDIR_ROOT}/wt-graphfail.log"
+  marker="${TMPDIR_ROOT}/wt-graphfail-marker"
+  mkdir -p "${repo}/tools" "${repo}/.claude/hooks" "$bin"
+  printf '#!/bin/sh\nexit 0\n' > "${repo}/tools/bootstrap.sh"
+  chmod +x "${repo}/tools/bootstrap.sh"
+  # Failing hook that proves it ran: the marker file must exist even
+  # though osac-new-worktree must still succeed.
+  printf '#!/bin/sh\ntouch "%s"\nexit 1\n' "$marker" \
+    > "${repo}/.claude/hooks/fetch-graphify-brain.sh"
+  "$REAL_GIT" init -q "$repo"
+  "$REAL_GIT" -C "$repo" checkout -q -b main
+  "$REAL_GIT" -C "$repo" -c user.email=smoke@test -c user.name=smoke \
+    commit -q --allow-empty -m seed
+  write_git_worktree_stub_with_hook "$bin" "$repo" "$log"
+
+  out=$(
+    cd "$repo"
+    # shellcheck source=../osac-helpers.sh
+    source "$HELPERS"
+    export PATH="${bin}:${PATH}"
+    export OSAC_WORKTREE_PARENT="$parent"
+    osac-new-worktree feat/graph-fail 2>&1
+  ) || fail "brain fetch failure must not fail worktree creation: $out"
+  [[ -f "$marker" ]] || fail "failing-hook test did not exercise the hook"
+  echo "$out" | grep -q "graphify brain fetch failed" \
+    || fail "expected non-fatal fetch warning: $out"
+  echo "$out" | grep -q "Worktree ready at: ${dest}" \
+    || fail "expected worktree-ready despite fetch failure: $out"
+  pass "graphify brain fetch failure is non-fatal"
+}
+
 test_bootstrap_fail_prints_recovery() {
   local parent repo dest bin log out
   parent="${TMPDIR_ROOT}/wt-fail-parent"
@@ -382,6 +475,8 @@ test_forwards_bootstrap_args() {
 test_dest_basename_and_repo_bootstrap
 test_jira_ticket_from_branch
 test_zsh_nounset_jira_ticket
+test_fetches_graphify_brain_in_new_worktree
+test_graphify_fetch_failure_is_non_fatal
 test_bootstrap_fail_prints_recovery
 test_no_timeout_skips_jira
 test_gtimeout_used_when_timeout_missing

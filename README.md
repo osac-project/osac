@@ -307,7 +307,7 @@ source tools/osac-helpers.sh
 osac-new-worktree feat/OSAC-1234
 ```
 
-Creates `../osac-OSAC-1234` by default (or `$OSAC_WORKTREE_PARENT/osac-OSAC-1234`), checks out the new branch, and runs `tools/bootstrap.sh` (extra args after the branch are forwarded, e.g. `--no-fork` or `--fork-name origin`). Remove with `git worktree remove` on that path from the original clone.
+Creates `../osac-OSAC-1234` by default (or `$OSAC_WORKTREE_PARENT/osac-OSAC-1234`), checks out the new branch, and runs `tools/bootstrap.sh` (extra args after the branch are forwarded, e.g. `--no-fork` or `--fork-name origin`). It also fetches the CI-published graphify brain into the worktree's `graphify-out/`, fail-open: an unavailable graph never blocks worktree creation. Remove with `git worktree remove` on that path from the original clone.
 
 > [!WARNING]
 > Be mindful of the content you commit to this repository. Do not commit any

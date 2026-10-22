@@ -64,14 +64,14 @@ describe('CatalogGeneralStep', () => {
     vi.mocked(useSession).mockReturnValue(makeSession('tenant-admin'));
   });
 
-  it('shows the General step description', () => {
+  it('does not show the General step description', () => {
     renderStep(false);
 
     expect(
-      screen.getByText(
+      screen.queryByText(
         'Define the name, scope, description, and provisioning template for this catalog item.',
       ),
-    ).toBeInTheDocument();
+    ).not.toBeInTheDocument();
   });
 
   it('uses a compact description field', () => {
@@ -126,6 +126,12 @@ describe('CatalogGeneralStep', () => {
         .getByText('Tenant scoped')
         .closest('#catalog-item-scope-tenant');
       expect(tenantScopedCard).toHaveClass('pf-m-selected');
+      expect(screen.getByRole('radio', { name: /Tenant scoped/ })).toHaveClass(
+        'pf-v6-screen-reader',
+      );
+      const selectedLabel = screen.getByText('Selected').closest('.pf-v6-c-label');
+      expect(selectedLabel).toHaveClass('pf-m-filled');
+      expect(selectedLabel).not.toHaveClass('pf-m-blue');
       expect(screen.getByRole('button', { name: 'Tenant' })).toBeInTheDocument();
     });
 

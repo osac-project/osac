@@ -119,13 +119,6 @@ const CatalogGeneralStep = ({
         </Title>
       </StackItem>
       <StackItem>
-        <Content component="p">
-          {t(
-            'Define the name, scope, description, and provisioning template for this catalog item.',
-          )}
-        </Content>
-      </StackItem>
-      <StackItem>
         <OsacForm>
           {isAdmin ? (
             <>

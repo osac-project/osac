@@ -581,7 +581,7 @@ describe('CatalogPage', () => {
     });
   });
 
-  it('shows an error from a failed catalog type alongside items that loaded', async () => {
+  it('shows an error from a failed catalog total query', async () => {
     renderCatalogPage(
       createCatalogPageTransport({
         clusterError: Object.assign(new Error(), { name: 'UnauthorizedError' }),
@@ -592,9 +592,9 @@ describe('CatalogPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Unauthorized')).toBeInTheDocument();
     });
-    // VMs are the selected type and loaded successfully, so they stay visible
-    // next to the error from the cluster totals query.
-    expect(screen.getByText(vmCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
+    // The selected VM query succeeds, but the shared cluster total query fails;
+    // the page renders the error state instead of the catalog items.
+    expect(screen.queryByText(vmCatalogItem.metadata?.name ?? '')).not.toBeInTheDocument();
     expect(screen.queryByText(clusterCatalogItem.metadata?.name ?? '')).not.toBeInTheDocument();
   });
 
@@ -726,6 +726,7 @@ describe('CatalogPage', () => {
   });
 
   it('navigates to cluster create from the catalog item detail page', async () => {
+    setMockSession(allCatalogServiceTiers, 'tenant-admin');
     const { user } = renderCatalogPageWithDetailRoutes(createCatalogPageTransport(), [
       '/catalog?types=cluster',
     ]);
@@ -749,6 +750,7 @@ describe('CatalogPage', () => {
   });
 
   it('navigates to VM create from the catalog item detail page', async () => {
+    setMockSession(allCatalogServiceTiers, 'tenant-admin');
     const { user } = renderCatalogPageWithDetailRoutes(createCatalogPageTransport(), [
       '/catalog?types=vm',
     ]);

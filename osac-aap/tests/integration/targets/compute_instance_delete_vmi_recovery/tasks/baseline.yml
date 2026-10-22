@@ -2,16 +2,20 @@
 # OSAC-6689: Integration tests for stuck VMI recovery during
 # ComputeInstance deletion.
 #
-# Validates four paths in delete_resources.yaml:
+# Validates five paths in delete_resources.yaml:
 #   1. Normal: VMI absent before timeout — no recovery needed.
 #   2. Crashed launcher recovery: VMI stuck with deletion
-#      timestamp, launcher pod Failed — force-delete succeeds.
+#      timestamp, launcher pod Failed — finalizer removed
+#      and VMI deleted.
 #   3. Launcher absent recovery: VMI stuck with deletion
-#      timestamp, launcher pod already gone — force-delete
-#      succeeds.
+#      timestamp, launcher pod already gone — finalizer
+#      removed and VMI deleted.
 #   4. Recovery refusal: VMI stuck but launcher is still
 #      Running — playbook fails to protect data, retaining
 #      the finalizer for operator retry.
+#   5. Mixed launcher pods: one Failed + one Running —
+#      recovery refused because not all launchers are
+#      terminal.
 #
 # The Kind cluster has KubeVirt CRDs (operator scaled to 0),
 # so VMI/Pod resources can be created directly.  No real
@@ -447,18 +451,35 @@
                 name: osac.templates.ocp_virt_vm
                 tasks_from: delete_resources.yaml
 
-            - name: "S4: Fail — should not reach here"
-              ansible.builtin.fail:
-                msg: >-
-                  delete_resources should have failed
-                  when launcher is still Running.
+            - name: "S4: Record unexpected success"
+              ansible.builtin.set_fact:
+                _s4_unexpected_success: true
 
           rescue:
-            - name: "S4: Assert failure was expected"
-              ansible.builtin.debug:
-                msg: >-
-                  delete_resources correctly refused
-                  recovery (launcher still running).
+            - name: >-
+                S4: Assert failure is from launcher
+                guard
+              ansible.builtin.assert:
+                that:
+                  - >-
+                    'virt-launcher is still in phase'
+                    in (ansible_failed_result.msg
+                        | default(''))
+                fail_msg: >-
+                  delete_resources failed for an
+                  unexpected reason:
+                  {{ ansible_failed_result.msg
+                     | default('unknown') }}
+
+        - name: >-
+            S4: Assert delete_resources did not succeed
+          ansible.builtin.assert:
+            that:
+              - >-
+                _s4_unexpected_success is not defined
+            fail_msg: >-
+              delete_resources should have failed when
+              the launcher is still Running.
 
         - name: "S4: Verify VMI still exists"
           kubernetes.core.k8s_info:
@@ -498,4 +519,247 @@
               name: >-
                 virt-launcher-{{
                 compute_instance_name }}
+          failed_when: false
+
+# ============================================================
+# Scenario 5 — Mixed pods: one Failed, one Running
+# ============================================================
+- name: >-
+    Scenario 5: Recovery refused (mixed launcher pods)
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+  vars:
+    compute_instance_name: vmi-recovery-mixed
+    compute_instance_target_namespace: test-subnet
+    guest_os_family: linux
+    compute_instance:
+      spec: {}
+    # Override production default (60) to avoid 5-min wait.
+    ocp_virt_vm_graceful_wait_retries: 2
+  tasks:
+    - name: "S5: Run test with cleanup"
+      block:
+        - name: "S5: Clean up previous resources"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Pod
+              name: >-
+                virt-launcher-{{
+                compute_instance_name }}-failed
+            - api: v1
+              kind: Pod
+              name: >-
+                virt-launcher-{{
+                compute_instance_name }}-running
+          failed_when: false
+
+        - name: "S5: Create stuck VMI"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              metadata:
+                name: "{{ compute_instance_name }}"
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                finalizers:
+                  - >-
+                    kubevirt.io/foregroundDeleteVirtualMachine
+              spec:
+                domain:
+                  resources:
+                    requests:
+                      memory: 128Mi
+
+        - name: "S5: Request VMI deletion"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s5_delete_result
+          failed_when: false
+
+        - name: "S5: Create Failed launcher pod"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                name: >-
+                  virt-launcher-{{
+                  compute_instance_name }}-failed
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                labels:
+                  kubevirt.io/domain: >-
+                    {{ compute_instance_name }}
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: compute
+                    image: >-
+                      registry.k8s.io/pause:3.9
+                    command: ["false"]
+
+        - name: "S5: Wait for Failed pod"
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            name: >-
+              virt-launcher-{{
+              compute_instance_name }}-failed
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s5_failed_wait
+          until: >
+            s5_failed_wait.resources | length > 0
+            and
+            (s5_failed_wait.resources[0].status.phase
+            | default('')) == 'Failed'
+          retries: 30
+          delay: 2
+
+        - name: "S5: Create Running launcher pod"
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                name: >-
+                  virt-launcher-{{
+                  compute_instance_name }}-running
+                namespace: >-
+                  {{
+                  compute_instance_target_namespace
+                  }}
+                labels:
+                  kubevirt.io/domain: >-
+                    {{ compute_instance_name }}
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: compute
+                    image: >-
+                      registry.k8s.io/pause:3.9
+
+        - name: "S5: Wait for Running pod"
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            name: >-
+              virt-launcher-{{
+              compute_instance_name }}-running
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s5_running_wait
+          until: >
+            s5_running_wait.resources | length > 0
+            and
+            (s5_running_wait.resources[0].status.phase
+            | default('')) == 'Running'
+          retries: 30
+          delay: 2
+
+        - name: "S5: Expect delete_resources to fail"
+          block:
+            - name: "S5: Run delete_resources"
+              ansible.builtin.include_role:
+                name: osac.templates.ocp_virt_vm
+                tasks_from: delete_resources.yaml
+
+            - name: "S5: Record unexpected success"
+              ansible.builtin.set_fact:
+                _s5_unexpected_success: true
+
+          rescue:
+            - name: >-
+                S5: Assert failure is from launcher
+                guard
+              ansible.builtin.assert:
+                that:
+                  - >-
+                    'virt-launcher is still in phase'
+                    in (ansible_failed_result.msg
+                        | default(''))
+                fail_msg: >-
+                  delete_resources failed for an
+                  unexpected reason:
+                  {{ ansible_failed_result.msg
+                     | default('unknown') }}
+
+        - name: >-
+            S5: Assert delete_resources did not succeed
+          ansible.builtin.assert:
+            that:
+              - >-
+                _s5_unexpected_success is not defined
+            fail_msg: >-
+              delete_resources should have failed with
+              mixed terminal and running launcher pods.
+
+        - name: "S5: Verify VMI still exists"
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ compute_instance_name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+          register: s5_vmi_after
+          failed_when: >-
+            s5_vmi_after.resources | length == 0
+
+        - name: "S5: Assert data preserved"
+          ansible.builtin.debug:
+            msg: >-
+              Scenario 5 passed: recovery correctly
+              refused with mixed launcher pod states
+              (Failed + Running), VMI preserved.
+
+      always:
+        - name: "S5: Cleanup"
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: >-
+              {{ compute_instance_target_namespace }}
+            delete_options:
+              gracePeriodSeconds: 0
+          loop:
+            - api: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              name: "{{ compute_instance_name }}"
+            - api: v1
+              kind: Pod
+              name: >-
+                virt-launcher-{{
+                compute_instance_name }}-failed
+            - api: v1
+              kind: Pod
+              name: >-
+                virt-launcher-{{
+                compute_instance_name }}-running
           failed_when: false

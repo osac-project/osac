@@ -115,6 +115,12 @@ def _forwarding_rule_signature(rule: list[str]) -> tuple[list[tuple[str, str]], 
                 raise ExternalIPProviderError("ExternalIP forwarding rule has an incomplete selector")
             selectors.append((token, rule[index + 1]))
             index += 2
+        elif token == "--ctstate":
+            if index + 1 >= len(rule):
+                raise ExternalIPProviderError("ExternalIP forwarding rule has incomplete conntrack state")
+            states = rule[index + 1].split(",")
+            remainder.extend((token, ",".join(sorted(states))))
+            index += 2
         else:
             remainder.append(token)
             index += 1

@@ -9,7 +9,9 @@ test('deletes the requested tenant', async ({ page }) => {
   // Allow the 120-second backend deletion wait plus login and UI actions to complete.
   test.setTimeout(180_000);
   const configuredTenantName = tenantNameOrSkip();
-  if (!configuredTenantName) return;
+  if (!configuredTenantName) {
+    return;
+  }
 
   // 1. Open the browser and log in.
   await openAndLoginWithEnvironment(page, '/');

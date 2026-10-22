@@ -14,7 +14,9 @@ test('creates a tenant from the Administration tenants page', async ({ page }) =
   // Allow backend reconciliation and tenant creation waits to complete.
   test.setTimeout(120_000);
   const configuredTenantName = tenantNameOrSkip();
-  if (!configuredTenantName) return;
+  if (!configuredTenantName) {
+    return;
+  }
 
   // 1. Open the browser and log in.
   await openAndLoginWithEnvironment(page, '/');

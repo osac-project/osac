@@ -12,7 +12,9 @@ import { openInstanceTypesPage } from '../../../../libs/test-utils/src/main.page
 test('creates an instance type from Infrastructure', async ({ page }) => {
   // Allow login and page navigation to complete on a remote cluster.
   test.setTimeout(120_000);
-  if (!tenantNameOrSkip()) return;
+  if (!tenantNameOrSkip()) {
+    return;
+  }
 
   // 1. Open the browser and log in.
   await openAndLoginWithEnvironment(page, '/');

@@ -55,5 +55,10 @@ packages:
   - cargo
   - openssl-devel
   - libffi-devel
+  # frozenlist's Cython extension (_frozenlist.pyx) is C++ (not plain
+  # C), confirmed via a real build failure: "error: command 'g++'
+  # failed: No such file or directory" -- gcc alone only provides a C
+  # compiler.
+  - gcc-c++
 arches:
   - x86_64

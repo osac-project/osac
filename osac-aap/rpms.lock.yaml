@@ -53,6 +53,13 @@ arches:
     name: gcc
     evr: 14.3.1-4.4.el10
     sourcerpm: gcc-14.3.1-4.4.el10.src.rpm
+  - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi10/10/x86_64/appstream/os/Packages/g/gcc-c++-14.3.1-4.4.el10.x86_64.rpm
+    repoid: ubi-10-for-x86_64-appstream-rpms
+    size: 15868182
+    checksum: sha256:e3fc0557ea59a1de4f3eeb2533dfd1be44275133ba363c796a6f55c2f81c4cc0
+    name: gcc-c++
+    evr: 14.3.1-4.4.el10
+    sourcerpm: gcc-14.3.1-4.4.el10.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi10/10/x86_64/appstream/os/Packages/g/git-2.52.0-1.el10.x86_64.rpm
     repoid: ubi-10-for-x86_64-appstream-rpms
     size: 47138
@@ -144,6 +151,13 @@ arches:
     name: libsepol-devel
     evr: 3.10-1.el10
     sourcerpm: libsepol-3.10-1.el10.src.rpm
+  - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi10/10/x86_64/appstream/os/Packages/l/libstdc++-devel-14.3.1-4.4.el10.x86_64.rpm
+    repoid: ubi-10-for-x86_64-appstream-rpms
+    size: 2985327
+    checksum: sha256:5614ba091b6beb17d309b2ebd914b50e093b903abcbf121d033a885df6edd3bc
+    name: libstdc++-devel
+    evr: 14.3.1-4.4.el10
+    sourcerpm: gcc-14.3.1-4.4.el10.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi10/10/x86_64/appstream/os/Packages/l/libuv-1.52.1-1.el10_2.x86_64.rpm
     repoid: ubi-10-for-x86_64-appstream-rpms
     size: 278919

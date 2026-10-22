@@ -56,8 +56,12 @@ additional_build_steps:
     # under hermetic network isolation: "httpx.ConnectError: [Errno -2]
     # Name or service not known". openssl-devel/libffi-devel are
     # cryptography's own native build deps (CFFI bindings, linking
-    # against system OpenSSL).
-    - RUN dnf install -y gcc python3.12-devel rust cargo openssl-devel libffi-devel && dnf clean all
+    # against system OpenSSL). gcc-c++ is needed too: frozenlist (a
+    # main requirements.txt dep, built in the builder stage which FROMs
+    # this same base-stage image) has a Cython extension written in
+    # C++, confirmed live: "error: command 'g++' failed: No such file
+    # or directory" -- plain gcc only provides a C compiler.
+    - RUN dnf install -y gcc gcc-c++ python3.12-devel rust cargo openssl-devel libffi-devel && dnf clean all
   prepend_galaxy:
     - COPY _build/collections /usr/share/ansible/collections
     - COPY _build/vendor /usr/share/ansible/collections

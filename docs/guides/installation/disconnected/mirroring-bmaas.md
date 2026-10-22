@@ -12,7 +12,7 @@ post-OSAC-4558 OCI reference approach.
 
 > **Relationship to the main guide**: this document covers BMaaS-specific
 > images that extend the base `ImageSetConfiguration` from
-> [disconnected-install.md](../disconnected-install.md).  The operator
+> [README.md](README.md).  The operator
 > required for BMaaS (`multicluster-engine`) is covered in
 > [mirroring-operators.md](mirroring-operators.md).  The
 > `bare-metal-fulfillment-operator` core image is covered in

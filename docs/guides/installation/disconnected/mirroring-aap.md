@@ -8,8 +8,8 @@ registry.
 
 > **Relationship to the main guide**: this document covers AAP-specific
 > mirroring details that extend the base `ImageSetConfiguration` from
-> [disconnected-install.md](../disconnected-install.md).  The AAP operator
-> itself (`ansible-automation-platform-operator`) is mirrored as part of
+> [README.md](README.md).  The AAP operator itself
+> (`ansible-automation-platform-operator`) is mirrored as part of
 > [mirroring-operators.md](mirroring-operators.md).  The `osac-aap` core
 > image is mirrored as part of
 > [mirroring-core-components.md](mirroring-core-components.md).
@@ -30,7 +30,7 @@ registry.
 | -------- | ------- |
 | Additional disk (mirror registry) | ~3 GiB for AAP operand images |
 | AAP subscription manifest | `license.zip` from Red Hat Subscription Management |
-| Execution environment image(s) | Custom EE images used by OSAC playbooks, default: `osac-aap:0.0.26` |
+| Execution environment image(s) | Custom EE images used by OSAC playbooks, default: `ghcr.io/osac-project/osac-aap@sha256:d72fb98c8b13f44bb63db181c138055e3595796b0229b4d81ed4ca99cd408a7e` |
 
 ## ImageSetConfiguration Section
 
@@ -87,7 +87,8 @@ OSAC automation must be mirrored separately:
     # --- AAP execution environment images ---
     # Mirror any custom EE images used by OSAC playbooks.
     # The origin-cli image is used for building EE images:
-    - name: quay.io/openshift/origin-cli:4.20
+    - name: quay.io/openshift/origin-cli:4.20.0
+    - name: "ghcr.io/osac-project/osac-aap@sha256:d72fb98c8b13f44bb63db181c138055e3595796b0229b4d81ed4ca99cd408a7e"
 ```
 
 ## Execution Steps
@@ -127,27 +128,14 @@ oc get packagemanifest ansible-automation-platform-operator \
 ```bash
 # 1. Verify AAP operator CSV is Succeeded
 oc get csv -n ansible-aap | grep -i ansible
-
-# 2. Verify AAP controller pods are running
-oc get pods -n ansible-aap
-
-# 3. Check AAP operator related images (resolved via IDMS)
+# 2. Check AAP operator related images (resolved via IDMS)
 oc get csv -n ansible-aap -o json | \
   jq -r '.items[].spec.install.spec.deployments[].spec.template.spec.containers[].env[] |
     select(.name | startswith("RELATED_IMAGE")) | "\(.name)=\(.value)"'
-
-# 4. Verify no image-pull failures or back-off in AAP namespace
+# 3. Verify no image-pull failures or back-off in AAP namespace
 oc get events -n "$NS" --field-selector reason=Failed -o wide | grep -i pull
 oc get events -n "$NS" --field-selector reason=BackOff -o wide | grep -i pull
 
-# 5. Check AAP controller route
-oc get route -n ansible-aap -o jsonpath='{.items[0].spec.host}'
-
-# 6. Verify subscription manifest secret exists
-oc get secret config-as-code-manifest-ig -n $NS
-
-# 7. Verify osac-aap integration pod
-oc get pods -n "$NS" -l app.kubernetes.io/name=osac-aap
 ```
 
 ## Troubleshooting

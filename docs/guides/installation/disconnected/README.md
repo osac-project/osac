@@ -10,18 +10,21 @@ uses **`oc-mirror` v2** with an `ImageSetConfiguration` that defines
 operators (via catalog mirroring) and additional images (via the
 `additionalImages` section).
 
-Doc 1 ends after the mirror registry is populated, all generated
+The current document ends after the mirror registry is populated, all generated
 cluster resources are applied, and the handoff checks pass.
-Operator and OSAC installation begin in Doc 2.
+Operator and OSAC installation begin in separate document.
 
 These category-specific guides break down the mirroring process into
 focused, independently verifiable steps.  Each guide covers a specific
 image group with its own prerequisites, execution steps, and verification scenarios.
 
-> **Main guide**: For the unified end-to-end disconnected installation
-> procedure, see [disconnected-install.md](../disconnected-install.md).
-
 ## Three-Phase Architecture
+
+Disconnected OSAC installation is a three-stage process: (1) mirror all
+required images and catalogs into your private registry (this guide),
+(2) install prerequisites and configure the underlying OpenShift cluster
+(see [prereqs.md](prereqs.md)), then (3) install OSAC via Helm using the
+mirrored content (see [installation.md](installation.md)).
 
 OSAC installation follows a strict three-phase deployment order:
 
@@ -38,20 +41,48 @@ Service-specific categories extend the base mirroring:
 | **1C** | VMaaS (Virtual Machine as a Service) | [mirroring-vmaas.md](mirroring-vmaas.md) |
 | **1D** | BMaaS (Bare Metal as a Service) | [mirroring-bmaas.md](mirroring-bmaas.md) |
 
+The files in this directory are read in this order:
+
+1. `README.md` and the five `mirroring-*.md` pages compose and execute
+   the mirroring workflow.
+2. [`prereqs.md`](prereqs.md) validates cluster access to mirrored
+   content and prepares production prerequisites and customer values.
+3. [`installation.md`](installation.md) performs state-changing operator,
+   operand, and OSAC installation.
+
+This guide covers mirroring only; installation begins in separate documents.
+
 ## Category Guides
+
+The category pages contribute inventory to one authoritative
+`imageset-config.yaml`; they do not define independent mirror runs.
+Use the same ISC and `oc mirror` workspace for the dry run, full mirror,
+and incremental updates.
+
+- Category 1A contributes three always-required core operator packages,
+  three VMaaS packages when VMaaS is selected, and MCE when BMaaS is
+  selected.
+- Category 1B owns the single consolidated `additionalImages` list,
+  including both required Envoy references and both required AAP
+  references. BMF is included only for BMaaS.
+- Categories 1C-1E identify VMaaS, BMaaS, and custom AAP images to append
+  before the dry run.
+
+Do not create a separate ISC or workspace for a category. Run the
+canonical mirror commands once after the selected inventory is complete.
 
 ### [Category 1A: Mirroring OLM Operators](mirroring-operators.md)
 
-Mirror the **6 core+VMaaS OLM-managed operators** required by OSAC
-(add `multicluster-engine` only when BMaaS is selected):
+Mirror OLM-managed operators for the selected OSAC profile
+(3 core always; add 3 VMaaS when selected; add `multicluster-engine` for BMaaS):
 
 1. `openshift-cert-manager-operator` — TLS certificate lifecycle
 2. `ansible-automation-platform-operator` — AAP controller/hub
 3. `amq-streams` — Kafka messaging
-4. `kubevirt-hyperconverged` — VM workloads (VMaaS)
-5. `lvms-operator` — Local volume provisioning
-6. `metallb-operator` — Bare-metal load balancing
-7. `multicluster-engine` — Cluster lifecycle and BMaaS *(BMaaS only)*
+4. `kubevirt-hyperconverged` — VM workloads *(VMaaS)*
+5. `lvms-operator` — Local volume provisioning *(VMaaS)*
+6. `metallb-operator` — Bare-metal load balancing *(VMaaS)*
+7. `multicluster-engine` — Cluster lifecycle *(BMaaS only)*
 
 ### [Category 1B: Mirroring Core Components](mirroring-core-components.md)
 
@@ -77,11 +108,7 @@ Mirror VM disk images (containerdisks) for VMaaS:
 
 ### [Category 1D: Mirroring BMaaS Images](mirroring-bmaas.md)
 
-TODO: Placeholder section
-Mirror BMaaS / Metal3 OCI images:
-
-- Metal3 agent images via IDMS
-- BareMetalHost provisioning verification
+TODO: Placeholder section for BMaaS / Metal3 OCI images
 
 ### [Category 1E: Mirroring AAP Images](mirroring-aap.md)
 
@@ -95,70 +122,20 @@ Mirror AAP controller/hub images:
 
 ```mermaid
 flowchart TD
-    classDef catStyle fill:#1565c0,color:#fff,stroke:#0d47a1,stroke-width:2px
-    classDef phaseStyle fill:#2e7d32,color:#fff,stroke:#1b5e20
-    classDef svcStyle fill:#e65100,color:#fff,stroke:#bf360c
-    classDef toolStyle fill:#37474f,color:#e0e0e0,stroke:#263238
-
-    ISC(["Unified ImageSetConfiguration<br/>oc-mirror v2"]):::toolStyle
-
-    ISC --> CAT_1A
-    ISC --> CAT_1B
-
-    subgraph CAT_1A["Category 1A: Operators"]
-        OP1["cert-manager"]:::catStyle
-        OP2["AAP operator"]:::catStyle
-        OP3["amq-streams"]:::catStyle
-        OP4["kubevirt-hyperconverged"]:::catStyle
-        OP5["lvms-operator"]:::catStyle
-        OP6["metallb-operator"]:::catStyle
-        OP7["multicluster-engine<br/>(BMaaS only)"]:::catStyle
-    end
-
-    subgraph CAT_1B["Category 1B: Core Components"]
-        DEP["Dependencies<br/>OpenBao · trust-manager<br/>Keycloak · origin-cli · PostgreSQL"]:::catStyle
-        CORE["Core Images<br/>osac-operator · fulfillment-service<br/>envoy · osac-aap · osac-ui<br/>bare-metal-fulfillment-operator"]:::catStyle
-        COND["Conditional<br/>metering · CSI driver"]:::catStyle
-    end
-
-    CAT_1A ==>|"CRDs registered"| PHASE_1A
-    CAT_1B ==>|"images mirrored"| PHASE_1B
-
-    subgraph PHASE_1A["Phase 1a"]
-        P1A["Install operators<br/>Register CRDs"]:::phaseStyle
-    end
-
-    PHASE_1A ==>|"CRDs available"| PHASE_1B
-
-    subgraph PHASE_1B["Phase 1b"]
-        P1B["Create CRD instances<br/>Deploy shared services"]:::phaseStyle
-    end
-
-    PHASE_1B ==>|"secrets, endpoints"| PHASE_2
-
-    subgraph PHASE_2["Phase 2: osac"]
-        P2["Deploy OSAC platform"]:::phaseStyle
-    end
-
-    ISC -.->|"extend ISC"| CAT_1C
-    ISC -.->|"MCE catalog + additionalImages"| CAT_1D
-    ISC -.->|"via AAP catalog"| CAT_1E
-
-    subgraph CAT_1C["Category 1C: VMaaS"]
-        VM["Containerdisk images<br/>ITMS + CDI config"]:::svcStyle
-    end
-
-    subgraph CAT_1D["Category 1D: BMaaS"]
-        BM["Metal3 agent images<br/>IDMS + OCI refs"]:::svcStyle
-    end
-
-    subgraph CAT_1E["Category 1E: AAP"]
-        AAP["Controller/hub images<br/>EE images + extra_vars"]:::svcStyle
-    end
-
-    CAT_1C -.->|"VMaaS workloads"| PHASE_2
-    CAT_1D -.->|"BMaaS provisioning"| PHASE_2
-    CAT_1E -.->|"Ansible jobs"| PHASE_2
+    C1A[Category 1A: selected operator tiers] --> ISC[One authoritative ISC]
+    C1B[Category 1B: consolidated additionalImages] --> ISC
+    C1C[Category 1C: VMaaS image inventory] --> ISC
+    C1D[Category 1D: BMaaS image inventory] --> ISC
+    C1E[Category 1E: custom AAP EE inventory] --> ISC
+    ISC --> DRY[Dry run]
+    DRY -->|pass| FULL[Full mirror using same workspace]
+    DRY -->|fail| ISC
+    FULL --> APPLY[Apply five generated resources]
+    APPLY --> MCP[Wait for MCP convergence]
+    MCP --> GATE{Doc 1 acceptance gate}
+    GATE -->|pass| PRE[Doc 2a: prerequisites]
+    GATE -->|fail| ISC
+    PRE --> INST[Doc 2b: installation]
 ```
 
 ## Key Principles
@@ -186,9 +163,10 @@ flowchart TD
    values (RFE-8748).  Use an internet-connected workstation to pull
    OSAC's OCI charts from `ghcr.io` and deploy via SSH tunnel.
 
-5. **6 core+VMaaS operators** — Six operators are always required.
-   Add `multicluster-engine` only when BMaaS is selected
-   (`global.services.bmaas.enabled: true`).
+5. **Three-tier operator model** — Three core operators are always
+   required. Add three VMaaS operators when
+   `global.services.vmaas.enabled: true`. Add `multicluster-engine`
+   only when `global.services.bmaas.enabled: true`.
 
 ## Quick Reference
 
@@ -209,19 +187,15 @@ flowchart TD
 Complete this checklist before linking to Doc 2.  **Any failure
 returns ownership to the mirror operator; Doc 2 must not begin.**
 
-- [ ] Dry run passed
-- [ ] Full mirror completed
-- [ ] Default catalog sources disabled (`disableAllDefaultSources`)
-- [ ] Five artifacts applied (IDMS, ITMS, CatalogSource,
-      ClusterCatalog, signature ConfigMap)
-- [ ] MCPs converged
-- [ ] Six packages visible (add `multicluster-engine` for BMaaS)
-- [ ] Mirror pulls work with cluster read-only credentials
-- [ ] ISC and workspace lineage archived
+- [ ] All three core package manifests are visible
+- [ ] If VMaaS is selected, all three VMaaS package manifests are visible
+- [ ] If BMaaS is selected, the MCE package manifest is visible
+- [ ] Representative image pulls succeed with read-only mirror credentials
+- [ ] ISC and workspace metadata are archived for incremental updates
+
+Only after every check passes, continue to
+[Disconnected Prerequisites and Configuration](prereqs.md).
 
 See
 [mirroring-operators.md § Handoff Verification](mirroring-operators.md#handoff-verification-doc-1-gate)
 for the verification commands.
-
-Only then proceed to **Doc 2** (operator and OSAC platform
-installation).

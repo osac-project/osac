@@ -2,19 +2,59 @@
 
 ## Aim
 
-Mirror the six core+VMaaS OLM-managed operators required by OSAC
-into a disconnected mirror registry using `oc-mirror` v2.  Add
-`multicluster-engine` only when BMaaS is selected
-(`global.services.bmaas.enabled: true`).  After mirroring, a
-`CatalogSource` CR is applied so that operator `Subscription`
+Mirror the three always-required core operator packages into a
+disconnected mirror registry using `oc-mirror` v2. Add the VMaaS package
+fragment only when `global.services.vmaas.enabled: true`, and add the
+BMaaS package fragment only when `global.services.bmaas.enabled: true`.
+All selected packages are merged into one catalog entry in the
+authoritative ISC and mirrored with one workspace lineage.
+
+After mirroring, a `CatalogSource` CR is applied so that operator `Subscription`
 resources resolve against the local catalog instead of the
 default `redhat-operators` source.
 
-> **Relationship to the main guide**: this document expands on the operators
-> section of [disconnected-install.md](../disconnected-install.md).  The
-> unified `ImageSetConfiguration` in that guide already includes every
-> operator listed here; this page provides category-specific detail and
-> verification steps.
+> **Relationship to the main guide**: this page is Category 1A of the
+> [OSAC Disconnected Mirroring Guide](README.md). It defines the operator
+> package tiers contributed to the single authoritative
+> `ImageSetConfiguration`. It does not install operators. Operator
+> installation belongs in [installation.md](installation.md).
+
+## Operator Package Tiers
+
+Compose the package set for the selected OSAC profile before the dry run.
+All selected packages are appended to one catalog entry in the same ISC.
+
+### Core tier - always required
+
+1. `openshift-cert-manager-operator` - channel `stable-v1`
+2. `ansible-automation-platform-operator` - channel
+   `stable-2.6-cluster-scoped`
+3. `amq-streams` - channel `stable`
+
+### VMaaS tier - conditional
+
+Include when `global.services.vmaas.enabled: true`:
+
+1. `kubevirt-hyperconverged` - channel `stable`
+2. `lvms-operator` - channel `stable-4.22`
+3. `metallb-operator` - channel `stable`
+
+### BMaaS tier - conditional
+
+Include when `global.services.bmaas.enabled: true`:
+
+1. `multicluster-engine` - channel `stable-2.17`
+
+### Profile package counts
+
+| Profile | Required packages | Count |
+| ------- | ----------------- | ----- |
+| Core | Three core packages | 3 |
+| Core + VMaaS | Three core plus three VMaaS packages | 6 |
+| Full-stack | Three core plus three VMaaS packages plus MCE | 7 |
+
+Do not create separate ISCs or workspaces for VMaaS or BMaaS. The dry
+run validates the complete selected package set atomically.
 
 ## Prerequisites
 
@@ -56,9 +96,11 @@ bastion and the cluster:
 
 ## ImageSetConfiguration Section
 
-The following YAML is the **operators** portion of the unified
-`ImageSetConfiguration`.  It mirrors the catalog index and the seven
-operator packages with their specified channels.
+The following YAML is the `operators` portion of the unified
+`ImageSetConfiguration`. It always includes the three core packages,
+adds the three VMaaS packages when VMaaS is selected, and adds MCE when
+BMaaS is selected. All selected packages use one catalog entry and one
+workspace lineage.
 
 ### Operator Package Reference
 
@@ -70,9 +112,9 @@ constraints are specified in the ImageSetConfiguration below):
 | 1 | `openshift-cert-manager-operator` | TLS certificate lifecycle |
 | 2 | `ansible-automation-platform-operator` | AAP controller and hub |
 | 3 | `amq-streams` | Kafka messaging |
-| 4 | `kubevirt-hyperconverged` | VM workloads (VMaaS) |
-| 5 | `lvms-operator` | Local volume provisioning |
-| 6 | `metallb-operator` | Bare-metal load balancing |
+| 4 | `kubevirt-hyperconverged` | VM workloads *(VMaaS only)* |
+| 5 | `lvms-operator` | Local volume provisioning *(VMaaS only)* |
+| 6 | `metallb-operator` | Bare-metal load balancing *(VMaaS only)* |
 | 7 | `multicluster-engine` | Cluster lifecycle and BMaaS *(BMaaS only)* |
 
 ```yaml
@@ -82,6 +124,7 @@ archiveSize: 8
 mirror:
   operators:
     - catalog: registry.redhat.io/redhat/redhat-operator-index:v4.22
+      targetCatalog: redhat-operators
       packages:
         # --- Core platform operators ---
         - name: openshift-cert-manager-operator
@@ -130,9 +173,9 @@ mirror:
 | 1 | `openshift-cert-manager-operator` | `stable-v1` | TLS certificate lifecycle; provides `Certificate` and `ClusterIssuer` CRDs |
 | 2 | `ansible-automation-platform-operator` | `stable-2.6-cluster-scoped` | AAP controller/hub; provides `AutomationController` CRDs |
 | 3 | `amq-streams` | `stable` | Kafka messaging; provides `Kafka` CRD |
-| 4 | `kubevirt-hyperconverged` | `stable` | VM workloads (VMaaS); provides `HyperConverged` CRD |
-| 5 | `lvms-operator` | `stable-4.22` | Local volume provisioning; provides `LVMCluster` CRD |
-| 6 | `metallb-operator` | `stable` | Bare-metal load balancing; provides `IPAddressPool` and `L2Advertisement` CRDs |
+| 4 | `kubevirt-hyperconverged` | `stable` | VM workloads (VMaaS); provides `HyperConverged` CRD *(VMaaS only)* |
+| 5 | `lvms-operator` | `stable-4.22` | Local volume provisioning; provides `LVMCluster` CRD *(VMaaS only)* |
+| 6 | `metallb-operator` | `stable` | Bare-metal load balancing; provides `IPAddressPool` and `L2Advertisement` CRDs *(VMaaS only)* |
 | 7 | `multicluster-engine` | `stable-2.17` | Cluster lifecycle and BMaaS agent services *(BMaaS only)* |
 
 ## Execution Steps
@@ -174,25 +217,21 @@ oc patch operatorhub cluster --type merge \
   -p '{"spec":{"disableAllDefaultSources":true}}'
 ```
 
-#### 2b. Rename generated CatalogSource to `redhat-operators`
+#### 2b. Verify the generated CatalogSource name
 
-`oc mirror` generates a CatalogSource whose name encodes the
-index (e.g. `cs-redhat-operator-index-v4-22`).  Rename it
-before first apply so that operator Subscriptions resolve
-against the expected `redhat-operators` name:
+The ISC sets `targetCatalog: redhat-operators`. Verify the generated
+CatalogSource name before its first apply:
 
 ```bash
-sed -i 's/name: cs-redhat-operator-index-v4-22/name: redhat-operators/' \
-  oc-mirror-workspace/working-dir/cluster-resources/cs-redhat-operator-index-v4-22.yaml
+grep '^  name:' \
+  oc-mirror-workspace/working-dir/cluster-resources/cs-*.yaml
 ```
 
-> **Why rename?** The documented Subscription manifests specify
-> `source: redhat-operators` and
-> `sourceNamespace: openshift-marketplace` — the same catalog
-> name a connected OpenShift cluster uses by default.  If the
-> connected-environment default `redhat-operators`
-> CatalogSource still exists, delete it first so the mirrored
-> one takes its place.
+Expected: `name: redhat-operators`.
+
+If the installed `oc mirror` version does not honor `targetCatalog`,
+rename the generated resource to `redhat-operators` before its first
+apply. Never apply both the generated name and `redhat-operators`.
 
 #### 2c. Merge read-only pull credentials
 
@@ -217,79 +256,6 @@ node.  Wait for all MachineConfigPools to finish rolling:
 
 ```bash
 oc wait mcp --all --for=condition=Updated --timeout=30m
-```
-
-### Step 4 — Install the operators
-
-Install each operator following the official Red Hat documentation —
-via OperatorHub in the web console, or by applying `Namespace`,
-`OperatorGroup`, and `Subscription` manifests with `oc`.  For the
-documented procedure, see
-[Adding Operators to a cluster](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/operators/user-tasks).
-
-Install them in the namespaces and channels below — these are the
-namespaces the OSAC platform expects the operators in:
-
-| Operator package | Namespace | Channel |
-| ---------------- | --------- | ------- |
-| `openshift-cert-manager-operator` | `cert-manager-operator` | `stable-v1` |
-| `ansible-automation-platform-operator` | `ansible-aap` | `stable-2.6-cluster-scoped` |
-| `amq-streams` | `osac-kafka` | `stable` |
-| `kubevirt-hyperconverged` | `openshift-cnv` | `stable` |
-| `lvms-operator` | `openshift-storage` | `stable-4.22` |
-| `metallb-operator` | `metallb-system` | `stable` |
-| `multicluster-engine` | `multicluster-engine` | `stable-2.17` |
-
-Example manifests for the cert-manager operator (repeat the pattern
-for each operator, adjusting name, namespace, and channel):
-
-```yaml
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: cert-manager-operator
----
-apiVersion: operators.coreos.com/v1
-kind: OperatorGroup
-metadata:
-  name: cert-manager-operator
-  namespace: cert-manager-operator
-spec:
-  targetNamespaces:
-    - cert-manager-operator
----
-apiVersion: operators.coreos.com/v1alpha1
-kind: Subscription
-metadata:
-  name: openshift-cert-manager-operator
-  namespace: cert-manager-operator
-spec:
-  channel: stable-v1
-  name: openshift-cert-manager-operator
-  source: redhat-operators
-  sourceNamespace: openshift-marketplace
-  installPlanApproval: Automatic
-```
-
-> **AAP version pin**: subscribe the
-> `ansible-automation-platform-operator` with
-> `installPlanApproval: Manual` and
-> `startingCSV: aap-operator.v2.6.0-0.1787258256` so it resolves to
-> the version mirrored in Category 1A
-> (`maxVersion: '2.6.0+0.1787258256'`), then approve the generated
-> InstallPlan:
->
-> ```bash
-> oc patch installplan <installplan-name> -n ansible-aap \
->   --type merge -p '{"spec":{"approved":true}}'
-> ```
-
-Wait for every operator CSV to reach `Succeeded` — cert-manager
-first, since the Phase 1b certificates and CA resources depend on it —
-before continuing to [Category 1B](mirroring-core-components.md):
-
-```bash
-oc get csv -A --no-headers | awk '{print $1, $2, $NF}'
 ```
 
 ## Handoff Verification (Doc 1 gate)
@@ -326,16 +292,43 @@ oc get configmap -n openshift-config-managed \
 # 7. MCPs converged
 oc wait mcp --all --for=condition=Updated --timeout=0
 
-# 8. Six package manifests visible (add MCE for BMaaS)
-for pkg in openshift-cert-manager-operator \
-           ansible-automation-platform-operator \
-           amq-streams \
-           kubevirt-hyperconverged \
-           lvms-operator \
-           metallb-operator; do
+# 8. Package Manifests
+# 8a. Core package manifests are always required
+core_packages=(
+  openshift-cert-manager-operator
+  ansible-automation-platform-operator
+  amq-streams
+)
+
+for pkg in "${core_packages[@]}"; do
   oc get packagemanifest "$pkg" -n openshift-marketplace -o name \
-    2>/dev/null && echo "  OK: $pkg" || echo "  MISSING: $pkg"
+    2>/dev/null && echo "OK: core package $pkg" || {
+      echo "MISSING: core package $pkg"
+      exit 1
+    }
 done
+
+# 8b. VMaaS package manifests are required only when VMaaS is selected
+if [ "${ENABLE_VMAAS:-false}" = "true" ]; then
+  vmaas_packages=(kubevirt-hyperconverged lvms-operator metallb-operator)
+  for pkg in "${vmaas_packages[@]}"; do
+    oc get packagemanifest "$pkg" -n openshift-marketplace -o name \
+      2>/dev/null && echo "OK: VMaaS package $pkg" || {
+        echo "MISSING: VMaaS package $pkg"
+        exit 1
+      }
+  done
+fi
+
+# 8c. MCE is required only when BMaaS is selected
+if [ "${ENABLE_BMAAS:-false}" = "true" ]; then
+  oc get packagemanifest multicluster-engine \
+    -n openshift-marketplace -o name 2>/dev/null \
+    && echo "OK: BMaaS package multicluster-engine" || {
+      echo "MISSING: BMaaS package multicluster-engine"
+      exit 1
+    }
+fi
 ```
 
 ## Troubleshooting
@@ -350,9 +343,11 @@ done
 
 ## CatalogSource naming requirement
 
-The documented Subscription manifests for all seven operators specify
-`source: redhat-operators` and `sourceNamespace: openshift-marketplace`
-— the catalog name a connected OpenShift cluster uses by default.
+The Subscription manifests for the three core packages, the three
+VMaaS packages when VMaaS is selected, and MCE when BMaaS is selected
+use `source: redhat-operators` and
+`sourceNamespace: openshift-marketplace`. The mirrored CatalogSource
+must therefore use that exact name and namespace.
 
 | Operator package | Subscription `.spec.source` |
 | ---------------- | ---------------------------- |
@@ -367,8 +362,7 @@ The documented Subscription manifests for all seven operators specify
 **Consequence for disconnected installs**: the mirrored
 `CatalogSource` must be named `redhat-operators` in
 `openshift-marketplace`, or the Subscriptions cannot resolve.
-See [Step 3](#step-3--rename-the-catalogsource-to-redhat-operators)
-above.
+See [Step 2b](#2b-verify-the-generated-catalogsource-name) above.
 
 ## Known Gaps / Limitations
 

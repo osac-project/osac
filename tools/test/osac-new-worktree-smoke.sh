@@ -170,28 +170,11 @@ if [[ " \$* " == *" worktree "* && " \$* " == *" add "* ]]; then
   mkdir -p "\$dest/tools"
   cp "${repo}/tools/bootstrap.sh" "\$dest/tools/bootstrap.sh"
   chmod +x "\$dest/tools/bootstrap.sh"
-  echo "worktree-add \$dest" >> "${log}"
-  exit 0
-fi
-exec "${REAL_GIT}" "\$@"
-EOF
-  chmod +x "${bin}/git"
-}
-
-# Like write_git_worktree_stub, but the fake repo also carries a
-# .claude/hooks/fetch-graphify-brain.sh that the stub copies into the new
-# worktree, mirroring how a real worktree contains every tracked file.
-write_git_worktree_stub_with_hook() {
-  local bin="$1" repo="$2" log="$3"
-  cat > "${bin}/git" <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-if [[ " \$* " == *" worktree "* && " \$* " == *" add "* ]]; then
-  dest="\${!#}"
-  mkdir -p "\$dest/tools" "\$dest/.claude/hooks"
-  cp "${repo}/tools/bootstrap.sh" "\$dest/tools/bootstrap.sh"
-  cp "${repo}/.claude/hooks/fetch-graphify-brain.sh" \\
-     "\$dest/.claude/hooks/fetch-graphify-brain.sh"
+  if [[ -f "${repo}/.claude/hooks/fetch-graphify-brain.sh" ]]; then
+    mkdir -p "\$dest/.claude/hooks"
+    cp "${repo}/.claude/hooks/fetch-graphify-brain.sh" \\
+       "\$dest/.claude/hooks/fetch-graphify-brain.sh"
+  fi
   echo "worktree-add \$dest" >> "${log}"
   exit 0
 fi
@@ -215,11 +198,21 @@ test_fetches_graphify_brain_in_new_worktree() {
   # it from inside the new worktree, not from the original clone.
   printf '#!/bin/sh\npwd >> "%s"\nexit 0\n' "$hook_log" \
     > "${repo}/.claude/hooks/fetch-graphify-brain.sh"
+  # Logging timeout stub: proves the fetch is bounded by a timeout (the
+  # gh release download inside the hook has no internal timeout of its
+  # own), then runs the command it was given.
+  cat > "${bin}/timeout" <<EOF
+#!/bin/sh
+echo "timeout-wrapped \$*" >> "${hook_log}"
+shift
+exec "\$@"
+EOF
+  chmod +x "${bin}/timeout"
   "$REAL_GIT" init -q "$repo"
   "$REAL_GIT" -C "$repo" checkout -q -b main
   "$REAL_GIT" -C "$repo" -c user.email=smoke@test -c user.name=smoke \
     commit -q --allow-empty -m seed
-  write_git_worktree_stub_with_hook "$bin" "$repo" "$log"
+  write_git_worktree_stub "$bin" "$repo" "$log"
 
   (
     cd "$repo"
@@ -231,7 +224,9 @@ test_fetches_graphify_brain_in_new_worktree() {
   )
   grep -q "^${dest}$" "$hook_log" \
     || fail "expected brain fetch to run in ${dest}, got: $(cat "$hook_log" 2>/dev/null)"
-  pass "fetches the graphify brain inside the new worktree"
+  grep -q "timeout-wrapped 60 bash .claude/hooks/fetch-graphify-brain.sh" "$hook_log" \
+    || fail "expected brain fetch to be wrapped in a 60s timeout: $(cat "$hook_log")"
+  pass "fetches the graphify brain inside the new worktree, timeout-bounded"
 }
 
 test_graphify_fetch_failure_is_non_fatal() {
@@ -246,20 +241,24 @@ test_graphify_fetch_failure_is_non_fatal() {
   printf '#!/bin/sh\nexit 0\n' > "${repo}/tools/bootstrap.sh"
   chmod +x "${repo}/tools/bootstrap.sh"
   # Failing hook that proves it ran: the marker file must exist even
-  # though osac-new-worktree must still succeed.
-  printf '#!/bin/sh\ntouch "%s"\nexit 1\n' "$marker" \
+  # though osac-new-worktree must still succeed. `: >` keeps the stub to
+  # shell builtins -- this test runs on an isolated PATH with no `touch`.
+  # The isolated PATH also has no timeout/gtimeout, so this covers the
+  # unbounded fallback: the fetch must still run without a timeout bin.
+  printf '#!/bin/sh\n: > "%s"\nexit 1\n' "$marker" \
     > "${repo}/.claude/hooks/fetch-graphify-brain.sh"
   "$REAL_GIT" init -q "$repo"
   "$REAL_GIT" -C "$repo" checkout -q -b main
   "$REAL_GIT" -C "$repo" -c user.email=smoke@test -c user.name=smoke \
     commit -q --allow-empty -m seed
-  write_git_worktree_stub_with_hook "$bin" "$repo" "$log"
+  write_git_worktree_stub "$bin" "$repo" "$log"
+  isolated_core_path "$bin" >/dev/null
 
   out=$(
     cd "$repo"
     # shellcheck source=../osac-helpers.sh
     source "$HELPERS"
-    export PATH="${bin}:${PATH}"
+    export PATH="$bin"
     export OSAC_WORKTREE_PARENT="$parent"
     osac-new-worktree feat/graph-fail 2>&1
   ) || fail "brain fetch failure must not fail worktree creation: $out"

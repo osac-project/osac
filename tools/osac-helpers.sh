@@ -66,14 +66,33 @@ osac-new-worktree() {
         return 1
     fi
 
+    # timeout/gtimeout detection shared by the graphify brain fetch below
+    # and the Jira fetch after it: both wrap external network calls whose
+    # tools have no internal timeout of their own.
+    local timeout_bin=""
+    if command -v timeout >/dev/null 2>&1; then
+        timeout_bin=timeout
+    elif command -v gtimeout >/dev/null 2>&1; then
+        timeout_bin=gtimeout
+    fi
+
     # Fetch the CI-published graphify brain so the worktree starts with a
     # current structural map of main. Fail-open, matching the fetch script's
     # own design: a missing or failed fetch must never block worktree
     # creation. Agent-neutral -- covers agents that do not run the Claude
-    # SessionStart hook that normally keeps graphify-out/ fresh.
+    # SessionStart hook that normally keeps graphify-out/ fresh. The script
+    # has no internal timeout (its Claude Code hook runner supplies one),
+    # so bound it here -- 60s is generous against the 30s that hook runner
+    # allows for the same script. Without a timeout binary, run unbounded
+    # rather than skip: fail-open, not fail-closed.
     if [[ -f .claude/hooks/fetch-graphify-brain.sh ]]; then
         echo "Fetching graphify brain..."
-        if ! bash .claude/hooks/fetch-graphify-brain.sh; then
+        local -a fetch_cmd
+        fetch_cmd=(bash .claude/hooks/fetch-graphify-brain.sh)
+        if [[ -n "$timeout_bin" ]]; then
+            fetch_cmd=("${timeout_bin}" 60 "${fetch_cmd[@]}")
+        fi
+        if ! "${fetch_cmd[@]}"; then
             echo "Warning: graphify brain fetch failed (non-fatal)." >&2
         fi
     fi
@@ -82,12 +101,7 @@ osac-new-worktree() {
     ticket=$(osac_jira_ticket_from_branch "$branch_name")
     if [[ -n "$ticket" ]]; then
         echo "Fetching Jira ticket ${ticket}..."
-        local timeout_bin="" raw="" summary issue_type
-        if command -v timeout >/dev/null 2>&1; then
-            timeout_bin=timeout
-        elif command -v gtimeout >/dev/null 2>&1; then
-            timeout_bin=gtimeout
-        fi
+        local raw="" summary issue_type
         if [[ -z "$timeout_bin" ]]; then
             echo "Warning: no timeout or gtimeout on PATH; skipping Jira fetch for ${ticket}." >&2
         else

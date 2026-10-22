@@ -212,9 +212,10 @@ be distinct OpenShift clusters with cluster-admin access. The target requires
 the AAP license at
 `values/vmaas-ci/license.zip`. `REMOTE_STORAGE_CLASS` defaults to `lvms-vg1`;
 `REMOTE_KUBECONFIG_SECRET_NAME` and `REMOTE_KUBECONFIG_SECRET_KEY` default to
-`osac-remote-kubeconfig` and `kubeconfig`. Management skips the LVMS and CNV
-installations; those operators are installed on the workload cluster. The
-staged kubeconfig uses the API server from `REMOTE_KUBECONFIG` by default.
+`osac-remote-kubeconfig` and `kubeconfig`. The management cluster keeps its
+LVMS configuration for OSAC Hub needs. The workload cluster gets its own LVMS
+and CNV setup for VM workloads. The staged kubeconfig uses the API server from
+`REMOTE_KUBECONFIG` by default.
 Set `REMOTE_API_ADDRESS` only when management-cluster workloads need a different
 reachable endpoint; the installer verifies the generated kubeconfig can
 authenticate before staging it.
@@ -240,6 +241,14 @@ management kubeconfig. `install-osac` creates the management Secret after
 confirming the target namespace exists; it also sets the operator and AAP chart
 values for remote-cluster mode. The combined `install-multicluster` target runs
 these steps in order.
+
+The staged `osac-remote-access` service-account token requests a 365-day
+lifetime (`--duration=8760h`); the workload API server may cap the issued
+lifetime. The token is not renewed automatically. Before it expires, rerun the
+`make install-osac` command above with the current workload kubeconfig. This
+mints a replacement token and updates the management-cluster Secret. The
+operator watches the mounted kubeconfig and restarts when it changes;
+subsequent AAP jobs use the updated Secret.
 
 The existing `make install ...` command continues to install a single-cluster
 OSAC deployment. `scripts/setup-remote-cluster.sh prepare` prepares only the

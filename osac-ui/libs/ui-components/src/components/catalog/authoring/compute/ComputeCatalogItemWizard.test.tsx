@@ -118,6 +118,8 @@ describe('ComputeCatalogItemWizard', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Compute Configuration' })).toBeInTheDocument();
     expect(screen.queryByText(/run strategy/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Enter value' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Select secret' })).toBeInTheDocument();
   });
 
   it('shows the Storage step description', async () => {

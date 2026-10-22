@@ -19,7 +19,9 @@ import { catalogValueFromPolicy } from '../catalogItemPolicy';
 export interface ComputeCatalogItemValues extends CatalogGeneralValues {
   diskImage: ProvisioningFieldValue<ResourceSelectValue>;
   instanceType: ProvisioningFieldValue<ResourceSelectValue>;
+  userDataSource: ProvisioningFieldValue<'inline' | 'secret'>;
   userData: ProvisioningFieldValue<string>;
+  userDataSecret: ProvisioningFieldValue<string>;
   bootDiskSizeGib: ProvisioningFieldValue<string>;
   bootDiskStorageTier: ProvisioningFieldValue<ResourceSelectValue>;
   additionalDisks: ProvisioningFieldValue<ComputeInstanceDiskValues[]>;
@@ -55,7 +57,9 @@ export const emptyComputeCatalogItemValues = (): ComputeCatalogItemValues => ({
   ...catalogGeneralValues(),
   diskImage: provisioningFieldValue(emptyResourceSelectValue()),
   instanceType: provisioningFieldValue(emptyResourceSelectValue()),
+  userDataSource: provisioningFieldValue('inline'),
   userData: provisioningFieldValue(''),
+  userDataSecret: provisioningFieldValue(''),
   bootDiskSizeGib: provisioningFieldValue(''),
   bootDiskStorageTier: provisioningFieldValue(emptyResourceSelectValue()),
   additionalDisks: provisioningFieldValue([]),
@@ -82,7 +86,11 @@ export const getComputeCatalogItemInitialValues = (
       readResourceReference,
       emptyResourceSelectValue(),
     ),
+    // Gap: catalog-item serialization currently exposes only inline user data,
+    // so the shared UserDataField source and secret reference cannot be restored.
+    userDataSource: provisioningFieldValue('inline'),
     userData: catalogValueFromPolicy(fields?.userData, readStringValue, ''),
+    userDataSecret: provisioningFieldValue(''),
     bootDiskSizeGib: catalogValueFromPolicy(fields?.bootDisk?.sizeGib, readStringValue, ''),
     bootDiskStorageTier: catalogValueFromPolicy(
       fields?.bootDisk?.storageTier,

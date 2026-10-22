@@ -118,7 +118,9 @@ describe('BareMetalCatalogItemWizard', () => {
     ).toBeInTheDocument();
     expect(screen.getByLabelText('Instance type')).toBeInTheDocument();
     expect(screen.getByLabelText('Disk image')).toBeInTheDocument();
-    expect(screen.getByLabelText('User data')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'User data' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Enter value' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Select secret' })).toBeInTheDocument();
     expect(screen.queryByText(/run strategy/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/SSH public key/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/network attachment/i)).not.toBeInTheDocument();

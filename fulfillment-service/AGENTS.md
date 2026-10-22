@@ -75,6 +75,11 @@ ginkgo run --timeout 20m -r internal # All unit suites. Slow, run only when nece
 
 Integration tests run in a local Kind Kubernetes cluster; the installer builds and deploys current images.
 
+The Tenant storage projection fixture `it/it_tenant_storage_onboarding_test.go`
+checks persisted conditions through fresh reads and repeated explicit signals
+([OSAC-6684](https://redhat.atlassian.net/browse/OSAC-6684)). Operator status is
+fixture-controlled; provider workflows are outside its scope.
+
 ```bash
 export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
 make -C ../osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac

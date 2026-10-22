@@ -127,3 +127,65 @@ setuptools-scm==8.1.0
 # setuptools.build_meta backend, same as python-esiclient), so it needs
 # only the setuptools/wheel already prefetched above, nothing further.
 Cython==3.3.0
+# maturin's build-system.requires also lists puccinialin>=0.1,<0.2
+# (confirmed live: "Could not find a version that satisfies the
+# requirement puccinialin>=0.1,<0.2") -- a helper that bootstraps a
+# Rust toolchain into a temp dir if none is found at build time. We
+# already have a real system Rust toolchain via rpms.lock.yaml, so its
+# actual bootstrap logic should never run, but pip still needs the
+# package installed to satisfy maturin's declared requirement. This
+# pulled in a real, multi-layer cascade of further build/runtime deps,
+# traced one real "Could not find"/`pip download --dry-run` style
+# check at a time rather than guessed, each confirmed via its own real
+# sdist pyproject.toml:
+#
+#   puccinialin (flit_core, already have) needs at runtime:
+#     filelock, httpx, platformdirs, tqdm
+#   filelock (hatchling+hatch-vcs) -- NEW build backend family
+#   httpx (hatchling+hatch-fancy-pypi-readme) needs at runtime:
+#     anyio, certifi, httpcore, idna
+#   anyio (setuptools+setuptools_scm, already have) needs:
+#     typing_extensions>=4.16.0 (our existing 4.15.0 pin doesn't
+#     satisfy this -- a second, newer, coexisting version)
+#   httpcore (hatchling+hatch-fancy-pypi-readme) needs at runtime: h11
+#   h11, platformdirs, tqdm, certifi: no pyproject.toml/no extra
+#     runtime deps, legacy setuptools bootstrap already covered
+#   hatchling itself: self-hosting (requires = [], build-backend
+#     "hatchling.ouroboros"), no further need
+#   hatch-vcs needs: hatchling (above) + setuptools-scm>=8.2.0 -- a
+#     THIRD setuptools-scm version (doesn't overlap ansible-runner's
+#     own <=8.1.0 upper bound), same coexisting-pin pattern as
+#     setuptools/wheel above
+#   hatch-fancy-pypi-readme needs: hatchling (above)
+#
+# Resolved via each package's real PyPI metadata/sdist pyproject.toml,
+# same methodology as everything else in this file -- not guessed.
+puccinialin==0.1.14
+filelock==3.32.7
+httpx==0.28.1
+anyio==4.15.1
+certifi==2026.10.19
+httpcore==1.0.9
+idna==3.20
+h11==0.16.0
+typing_extensions==4.16.0
+platformdirs==4.13.5
+tqdm==4.70.1
+hatchling==1.32.4
+hatch-vcs==0.5.0
+hatch-fancy-pypi-readme==25.1.0
+setuptools-scm==8.3.1
+# hatchling's own runtime deps (packaging already prefetched above):
+pathspec==1.1.1
+pluggy==1.7.0
+tomlkit==0.15.2
+trove-classifiers==2026.9.21.13
+# tomlkit's build backend is poetry-core (a THIRD build-backend
+# ecosystem, alongside setuptools/flit_core/hatchling) -- self-hosting
+# (requires = []), confirmed via its real sdist pyproject.toml, no
+# further need.
+poetry-core==2.5.0
+# trove-classifiers' build-system.requires also lists calver
+# (setuptools>=77.0.1, already satisfied by setuptools==82.0.0 above),
+# confirmed via its real sdist pyproject.toml.
+calver==2025.10.20

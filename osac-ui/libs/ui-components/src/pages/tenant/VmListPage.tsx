@@ -78,8 +78,8 @@ export const VmListPage = () => {
     [vms],
   );
 
+  const searchTerm = search.trim().toLowerCase();
   const filteredVms = useMemo(() => {
-    const searchTerm = search.trim().toLowerCase();
     if (statusFilters.length === 0 && !searchTerm) {
       return vms;
     }
@@ -90,9 +90,13 @@ export const VmListPage = () => {
         !statusFilters.length || statusFilters.some((filter) => vmMatchesStatusFilter(vm, filter));
       return matchesSearch && matchesStatus;
     });
-  }, [search, statusFilters, vms]);
+  }, [searchTerm, statusFilters, vms]);
 
   const showEmptyState = !isLoading && !error && filteredVms.length === 0;
+  const hasNameMatch =
+    showEmptyState &&
+    !!searchTerm &&
+    vms.some((vm) => (vm.metadata?.name ?? '').toLowerCase().includes(searchTerm));
 
   return (
     <ListPage
@@ -157,11 +161,13 @@ export const VmListPage = () => {
           <StackItem>
             {showEmptyState ? (
               <SubtleContent component="p">
-                {statusFilters.length === 0
-                  ? t('Choose one or more statuses above to filter virtual machines.')
-                  : vms?.length
-                    ? t('No virtual machines match your filters.')
-                    : t('No virtual machines yet. Create one to get started.')}
+                {searchTerm && !hasNameMatch
+                  ? t('No virtual machines found matching "{{search}}".', { search: search.trim() })
+                  : statusFilters.length === 0
+                    ? t('Choose one or more statuses above to filter virtual machines.')
+                    : vms?.length
+                      ? t('No virtual machines match your filters.')
+                      : t('No virtual machines yet. Create one to get started.')}
               </SubtleContent>
             ) : (
               <VmTable

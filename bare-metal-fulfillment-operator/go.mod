@@ -10,7 +10,7 @@ require (
 	github.com/netbox-community/go-netbox/v4 v4.3.0
 	github.com/onsi/ginkgo/v2 v2.33.1
 	github.com/onsi/gomega v1.44.0
-	github.com/osac-project/osac/osac-operator v0.0.14
+	github.com/osac-project/osac/osac-operator v0.0.32
 	github.com/osac-project/osac/osac-operator/api v0.0.7
 	github.com/prometheus/client_golang v1.25.0
 	github.com/stmcginnis/gofish v0.27.0

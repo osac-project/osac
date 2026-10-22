@@ -70,6 +70,10 @@ func (f *Flags) EnableAllIfNoneSet(flags *pflag.FlagSet) {
 }
 
 func (f *Flags) Validate() error {
+	if !f.CaaS && !f.VMaaS && !f.BMaaS && !f.MaaS {
+		return fmt.Errorf(
+			"at least one of CaaS, VMaaS, BMaaS, or MaaS must be enabled")
+	}
 	if f.CaaS && !f.VMaaS && !f.BMaaS {
 		return fmt.Errorf("CaaS requires at least one of VMaaS or BMaaS")
 	}

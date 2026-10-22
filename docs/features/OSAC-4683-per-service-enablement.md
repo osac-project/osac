@@ -21,10 +21,11 @@ OSAC has four service-tier switches:
 | MaaS | `global.services.maas.enabled` | true | MaaS enablement signal; no MaaS gRPC services or operator controller currently exist |
 
 The DiskImages API is shared by the VMaaS and BMaaS tiers instead of belonging
-to one of them. It is enabled when either VMaaS or BMaaS is enabled, and it is
-disabled only when both are disabled. CaaS requires at least one of VMaaS or
-BMaaS, so every CaaS deployment has the DiskImages API available for the
-ClusterVersion disk image reference.
+to one of them. Every valid configuration enables at least one of VMaaS or
+BMaaS, directly or through the CaaS dependency, so the DiskImages API is
+always available, including for the ClusterVersion disk image reference. As
+defense in depth, the server still rejects DiskImages requests if it is ever
+started with both VMaaS and BMaaS disabled.
 
 The default values keep all service tiers enabled. A service is disabled by
 setting its enabled value to false in the umbrella chart values:
@@ -63,8 +64,8 @@ The chart passes all four enable flags to each container command with the
 configured boolean values, so a disabled tier is passed explicitly as
 `--enable-<service>=false`. If the binary is started without any enable
 flags, the fulfillment-service enables all four services for backward
-compatibility; explicitly provided flags, including all-false combinations,
-are preserved as given.
+compatibility; explicitly provided flags are preserved as given, and an
+all-false combination is rejected at startup.
 
 The REST gateway currently registers its generated handlers for all services.
 Calls for a disabled service are rejected by the fulfillment-service gRPC
@@ -113,11 +114,8 @@ updates workloads:
 
 - CaaS can be enabled only when VMaaS or BMaaS is also enabled.
 - MaaS can be enabled only when CaaS is enabled.
-
-Setting all four service values to false is valid: every service tier is
-disabled and only shared infrastructure remains. Because both VMaaS and
-BMaaS are disabled, the shared DiskImages API is disabled as well (see
-Service tiers).
+- At least one service tier must be enabled; an all-false configuration is
+  rejected.
 
 These rules are expressed in the chart's `values.schema.json`. Helm applies
 them to both `helm install` and `helm upgrade`. An invalid combination fails
@@ -141,6 +139,16 @@ helm template osac osac-installer/charts/osac \
   --set global.services.caas.enabled=false
 ```
 
+This configuration is invalid because no service tier is enabled:
+
+```bash
+helm template osac osac-installer/charts/osac \
+  --set global.services.caas.enabled=false \
+  --set global.services.vmaas.enabled=false \
+  --set global.services.bmaas.enabled=false \
+  --set global.services.maas.enabled=false
+```
+
 The fulfillment-service validates the same service dependencies when it starts
 outside Helm. Its startup sequence first enables all four services when no
 enable flags are set, then validates the resulting flags before creating the
@@ -148,6 +156,8 @@ server. The current error messages are:
 
 - invalid service flags: CaaS requires at least one of VMaaS or BMaaS
 - invalid service flags: MaaS requires CaaS
+- invalid service flags: at least one of CaaS, VMaaS, BMaaS, or MaaS must be
+  enabled
 
 The current osac-operator startup validation checks the CaaS dependency on at
 least one compute controller. MaaS has no operator controller, so the MaaS

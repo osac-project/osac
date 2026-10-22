@@ -41,7 +41,7 @@
         },
         "services": {
           "type": "object",
-          "description": "Service tier enablement flags. Controls which tiers are active across all OSAC components.",
+          "description": "Service tier enablement flags. Controls which tiers are active across all OSAC components. At least one tier must be enabled.",
           "properties": {
             "caas": {
               "type": "object",
@@ -3184,6 +3184,86 @@
           }
         }
       }
+    },
+    {
+      "anyOf": [
+        {
+          "properties": {
+            "global": {
+              "properties": {
+                "services": {
+                  "properties": {
+                    "caas": {
+                      "properties": {
+                        "enabled": {
+                          "const": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "global": {
+              "properties": {
+                "services": {
+                  "properties": {
+                    "vmaas": {
+                      "properties": {
+                        "enabled": {
+                          "const": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "global": {
+              "properties": {
+                "services": {
+                  "properties": {
+                    "bmaas": {
+                      "properties": {
+                        "enabled": {
+                          "const": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "global": {
+              "properties": {
+                "services": {
+                  "properties": {
+                    "maas": {
+                      "properties": {
+                        "enabled": {
+                          "const": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     }
   ],
   "additionalProperties": false

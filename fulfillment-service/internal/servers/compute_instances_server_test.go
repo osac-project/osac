@@ -1145,12 +1145,13 @@ var _ = Describe("Compute instances server", func() {
 			_, err = instancesDao.Update().SetObject(stored).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 
-			// A whole metadata update expands to the permitted child paths:
+			// A whole metadata update expands to the permitted child paths.
+			// The renamed metadata name is not writable and is ignored:
 			updateResponse, err := server.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
 				Object: publicv1.ComputeInstance_builder{
 					Id: id,
 					Metadata: publicv1.Metadata_builder{
-						Name:   "test-compute-instance",
+						Name:   "renamed-instance",
 						Labels: map[string]string{"whole": "update"},
 					}.Build(),
 				}.Build(),
@@ -1161,13 +1162,14 @@ var _ = Describe("Compute instances server", func() {
 				"whole": "update",
 			}))
 
-			// Private finalizers and the system-owned creator survive, and the tenant
-			// is restored by the tenancy logic:
+			// Private finalizers and the system-owned creator survive, the
+			// name is unchanged, and the tenant is set by the tenancy logic:
 			storedResponse, err = instancesDao.Get().SetId(id).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(storedResponse.GetObject().GetMetadata().GetFinalizers()).To(Equal(
 				[]string{"example.finalizer/osac"}))
 			Expect(storedResponse.GetObject().GetMetadata().GetCreator()).To(Equal("system"))
+			Expect(storedResponse.GetObject().GetMetadata().GetName()).To(Equal("test-compute-instance"))
 			Expect(storedResponse.GetObject().GetMetadata().GetTenant()).To(Equal(testTenant))
 			Expect(storedResponse.GetObject().GetMetadata().GetLabels()).To(Equal(map[string]string{
 				"whole": "update",
@@ -1213,6 +1215,9 @@ var _ = Describe("Compute instances server", func() {
 			Entry("Rejects the deletion timestamp", "metadata.deletion_timestamp"),
 			Entry("Rejects the creator", "metadata.creator"),
 			Entry("Rejects private finalizers", "metadata.finalizers"),
+			Entry("Rejects the metadata name", "metadata.name"),
+			Entry("Rejects the metadata tenant", "metadata.tenant"),
+			Entry("Rejects the metadata project", "metadata.project"),
 		)
 
 		It("Rejects a stale version without changing user fields or status", func() {

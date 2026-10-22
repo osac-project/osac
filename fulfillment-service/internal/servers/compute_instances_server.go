@@ -354,9 +354,6 @@ func computeInstancePublicUpdateMask(
 	mask *fieldmaskpb.FieldMask,
 ) (*fieldmaskpb.FieldMask, error) {
 	permittedMetadata := []string{
-		"metadata.name",
-		"metadata.tenant",
-		"metadata.project",
 		"metadata.labels",
 		"metadata.annotations",
 		"metadata.display_name",

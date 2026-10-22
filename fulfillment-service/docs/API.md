@@ -260,10 +260,12 @@ do not necessarily follow them.
   metadata fields. Omitted fields stay unchanged; clearing a scalar or an empty
   map requires an explicit mask path.
 - **Explicit mask selects writable fields only.** Permitted metadata paths are
-  `name`, `tenant`, `project`, `labels`, `annotations`, `display_name`, and
-  `description`; spec paths are accepted and validated by the field-path
-  compiler. Any other root, including private metadata such as `version`,
-  timestamps, and finalizers, is rejected.
+  `labels`, `annotations`, `display_name`, and `description`; spec paths are
+  accepted and validated by the field-path compiler. Any other root — including
+  `name`, `tenant`, and `project`, which are server-assigned and immutable once
+  the object is created, and private metadata such as `version`, timestamps,
+  and finalizers — is rejected. The tenant is determined from the authenticated
+  caller and cannot be moved by an update.
 - **Targeted maps are atomic.** A mask selecting `metadata.labels` or
   `metadata.annotations` replaces that map's ordinary entries, and an explicit
   empty map clears them; reserved system-owned entries are retained. An

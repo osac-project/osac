@@ -271,14 +271,18 @@ func cleanupComputeInstanceFixture(
 		// VirtualNetwork is still counted server-side after the resource's own
 		// deletion completed; retry until the active count clears.
 		Eventually(func() error {
-			_, err := clients.networkClasses.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: networkClassID}.Build())
+			probeCtx, cancel := context.WithTimeout(ctx, computeInstanceFixtureProbeTimeout)
+			defer cancel()
+			_, err := clients.networkClasses.Delete(probeCtx, privatev1.NetworkClassesDeleteRequest_builder{Id: networkClassID}.Build())
 			if grpcstatus.Code(err) == grpccodes.NotFound {
 				return nil
 			}
 			return err
 		}, time.Minute, time.Second).Should(Succeed())
 		waitForNotFound(func() error {
-			_, err := clients.networkClasses.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: networkClassID}.Build())
+			probeCtx, cancel := context.WithTimeout(ctx, computeInstanceFixtureProbeTimeout)
+			defer cancel()
+			_, err := clients.networkClasses.Get(probeCtx, privatev1.NetworkClassesGetRequest_builder{Id: networkClassID}.Build())
 			return err
 		})
 	}

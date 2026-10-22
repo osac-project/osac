@@ -21,7 +21,7 @@ spec:
   - name: activeName
     expression: {{ .Values.global.networking.netris.caBundle.configMap | quote }}
   - name: adminGroups
-    expression: {{ .Values.global.networking.netris.caBundle.adminGroups | toJson }}
+    expression: {{ .Values.global.networking.netris.caBundle.adminGroups | toJson | quote }}
   - name: target
     expression: "request.operation == 'DELETE' ? oldObject : object"
   validations:

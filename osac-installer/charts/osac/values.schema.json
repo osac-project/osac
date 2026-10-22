@@ -2787,6 +2787,7 @@
             "adminGroups": {
               "type": "array",
               "description": "Groups allowed to create, update, or delete the active Netris CA ConfigMap.",
+              "minItems": 1,
               "default": [
                 "system:masters"
               ],

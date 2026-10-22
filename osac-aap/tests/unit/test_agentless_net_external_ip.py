@@ -110,7 +110,14 @@ def test_detach_withdraws_route_before_removing_rules_and_conntrack(monkeypatch)
     events = []
     attachment = attachment_state()
     monkeypatch.setattr(external_ip, "withdraw_external_route", lambda address, hop: events.append(("route", address, hop)) or True)
-    monkeypatch.setattr(external_ip, "_delete_iptables_rule", lambda table, chain, rule: events.append(("rule", table, chain, rule)) or True)
+    monkeypatch.setattr(
+        external_ip,
+        "_delete_iptables_rule",
+        lambda table, chain, rule, *, namespace=None: events.append(
+            ("rule", table, chain, rule, namespace)
+        )
+        or True,
+    )
     monkeypatch.setattr(external_ip, "_delete_external_conntrack", lambda namespace, address: events.append(("conntrack", namespace, address)) or True)
     monkeypatch.setattr(external_ip, "_cleanup_empty_external_chain", lambda: events.append(("chain",)) or True)
     monkeypatch.setattr(network, "namespace_exists", lambda _namespace: True)
@@ -118,6 +125,54 @@ def test_detach_withdraws_route_before_removing_rules_and_conntrack(monkeypatch)
     assert external_ip.delete_external_ip_attachment(attachment) is True
     assert [event[0] for event in events] == ["route", "rule", "rule", "rule", "conntrack", "chain"]
     assert events[0] == ("route", EXTERNAL_IP, NEXT_HOP)
+    assert events[1][1:3] == ("nat", "PREROUTING")
+    assert events[1][4] == attachment["provider"]["namespace_name"]
+    assert events[2][4] is None and events[3][4] is None
+
+
+def test_detach_removes_dnat_from_saved_virtual_network_namespace(monkeypatch):
+    attachment = attachment_state()
+    namespace = attachment["provider"]["namespace_name"]
+    nat_rule = [
+        "-d", f"{EXTERNAL_IP}/32", "-m", "comment", "--comment",
+        f"osac-eia:{ATTACHMENT_UID}:dnat", "-j", "DNAT", "--to-destination", TARGET_IP,
+    ]
+    present = {(namespace, "nat", "PREROUTING", tuple(nat_rule))}
+    commands = []
+
+    def run(command, *, check=True):
+        commands.append(command)
+        if command[:3] == ["ip", "netns", "exec"]:
+            command_namespace = command[3]
+            start = 4
+        else:
+            command_namespace = None
+            start = 0
+        assert command[start] == "iptables"
+        table = command[start + 3]
+        action = command[start + 4]
+        chain = command[start + 5]
+        key = (command_namespace, table, chain, tuple(command[start + 6 :]))
+        if action == "-C":
+            return SimpleNamespace(returncode=int(key not in present), stdout="")
+        if action == "-D":
+            present.remove(key)
+            return SimpleNamespace(returncode=0, stdout="")
+        raise AssertionError(f"unexpected iptables action: {command}")
+
+    monkeypatch.setattr(external_ip, "_run", run)
+    monkeypatch.setattr(external_ip, "withdraw_external_route", lambda *_args: False)
+    monkeypatch.setattr(external_ip, "_delete_external_conntrack", lambda *_args: False)
+    monkeypatch.setattr(external_ip, "_cleanup_empty_external_chain", lambda: False)
+    monkeypatch.setattr(network, "namespace_exists", lambda _namespace: True)
+
+    external_ip.delete_external_ip_attachment(attachment)
+
+    assert not present
+    assert commands[0][:8] == [
+        "ip", "netns", "exec", namespace, "iptables", "-w", "-t", "nat"
+    ]
+    assert commands[1][8:10] == ["-D", "PREROUTING"]
 
 
 def test_route_helper_rejects_a_different_saved_next_hop(monkeypatch):

@@ -80,7 +80,7 @@ RUN [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; pnpm --filter @osac/app-f
 # live network access to download a newer one, which hermetic builds don't
 # have. Confirmed live: 1.25.9 failed with "go.work requires go >= 1.26.3"
 # the moment go.work actually became reachable in this stage.
-FROM registry.access.redhat.com/ubi9/go-toolset:1.26-1791479310 AS proxy-builder
+FROM registry.access.redhat.com/ubi9/go-toolset:9.8-1792671270 AS proxy-builder
 USER root
 WORKDIR /build
 

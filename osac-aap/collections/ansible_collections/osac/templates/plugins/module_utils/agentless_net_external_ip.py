@@ -15,7 +15,6 @@ class ExternalIPProviderError(network.NetworkCommandError):
 
 
 EXTERNAL_FORWARD_CHAIN = "OSAC-EXTERNAL"
-MAX_RULE_DELETIONS = 64
 SAFE_INTERFACE_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,15}$")
 OWNER_COMMENT = re.compile(
     r"^osac-eia:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(in|out)$"
@@ -78,17 +77,13 @@ def _delete_iptables_rule(
     prefix = ["iptables", "-w", "-t", table]
     if namespace is not None:
         prefix = ["ip", "netns", "exec", namespace, *prefix]
-    changed = False
-    deletions = 0
-    while _run([*prefix, "-C", chain, *rule], check=False).returncode == 0:
-        if deletions >= MAX_RULE_DELETIONS:
-            raise ExternalIPProviderError("too many duplicate owned iptables rules")
-        _run([*prefix, "-D", chain, *rule])
-        changed = True
-        deletions += 1
-    if _run([*prefix, "-C", chain, *rule], check=False).returncode == 0:
-        raise ExternalIPProviderError(f"owned iptables rule remains in {chain}")
-    return changed
+    return network.remove_repeated_rule(
+        _run,
+        [*prefix, "-C", chain, *rule],
+        [*prefix, "-D", chain, *rule],
+        error_message="too many duplicate owned iptables rules",
+        error_type=ExternalIPProviderError,
+    )
 
 
 def _chain_rules() -> list[list[str]]:
@@ -241,11 +236,12 @@ def _validate_parent(parent: dict[str, Any], subnet: dict[str, Any], attachment:
 
 def _external_route_lines(address: str) -> list[list[str]]:
     prefix = f"{_ipv4(address, 'ExternalIP address')}/32"
-    output = _run(["vtysh", "-c", "show running-config"]).stdout
+    pattern = f"^ip route {re.escape(prefix)}[[:space:]]"
+    output = _run(["vtysh", "-c", f"show running-config | include {pattern}"]).stdout
     return [
         shlex.split(line.strip())
         for line in output.splitlines()
-        if line.strip().startswith(f"ip route {prefix} ")
+        if line.strip()
     ]
 
 
@@ -263,15 +259,26 @@ def _route_uses_next_hop(address: str, next_hop: str) -> bool:
     return exact_route and any(next_hop in line for line in lines)
 
 
-def ensure_external_route(address: str, next_hop: str) -> bool:
-    address = _ipv4(address, "ExternalIP address")
-    next_hop = _ipv4(next_hop.split("/", 1)[0], "VirtualNetwork transit next hop")
+def _configured_external_route(
+    address: str, next_hop: str, *, mismatch_message: str
+) -> tuple[str, bool]:
     prefix = f"{address}/32"
     configured = _external_route_lines(address)
     if any(len(line) < 4 or line[:3] != ["ip", "route", prefix] for line in configured):
         raise ExternalIPProviderError("ExternalIP route configuration is malformed")
-    if configured and any(line[3] != next_hop for line in configured):
-        raise ExternalIPProviderError("ExternalIP route is configured with a different next hop")
+    if any(line[3] != next_hop for line in configured):
+        raise ExternalIPProviderError(mismatch_message)
+    return prefix, bool(configured)
+
+
+def ensure_external_route(address: str, next_hop: str) -> bool:
+    address = _ipv4(address, "ExternalIP address")
+    next_hop = _ipv4(next_hop.split("/", 1)[0], "VirtualNetwork transit next hop")
+    prefix, configured = _configured_external_route(
+        address,
+        next_hop,
+        mismatch_message="ExternalIP route is configured with a different next hop",
+    )
     changed = False
     if not configured:
         _run(["vtysh", "-c", "configure terminal", "-c", f"ip route {prefix} {next_hop}", "-c", "end"])
@@ -284,13 +291,12 @@ def ensure_external_route(address: str, next_hop: str) -> bool:
 def withdraw_external_route(address: str, next_hop: str) -> bool:
     address = _ipv4(address, "ExternalIP address")
     next_hop = _ipv4(next_hop.split("/", 1)[0], "VirtualNetwork transit next hop")
-    prefix = f"{address}/32"
-    configured = _external_route_lines(address)
-    if any(len(line) < 4 or line[:3] != ["ip", "route", prefix] for line in configured):
-        raise ExternalIPProviderError("ExternalIP route configuration is malformed")
-    if any(line[3] != next_hop for line in configured):
-        raise ExternalIPProviderError("ExternalIP route changed next hop; refusing to remove it")
-    changed = bool(configured)
+    prefix, configured = _configured_external_route(
+        address,
+        next_hop,
+        mismatch_message="ExternalIP route changed next hop; refusing to remove it",
+    )
+    changed = configured
     if configured:
         _run(["vtysh", "-c", "configure terminal", "-c", f"no ip route {prefix} {next_hop}", "-c", "end"])
     if _route_uses_next_hop(address, next_hop):
@@ -302,11 +308,22 @@ def withdraw_external_route(address: str, next_hop: str) -> bool:
 
 
 def _conntrack_matches(namespace: str, address: str) -> list[str]:
-    result = _run(["ip", "netns", "exec", namespace, "conntrack", "-L", "-f", "ipv4"], check=False)
-    if result.returncode != 0:
-        raise ExternalIPProviderError("could not inspect VirtualNetwork conntrack state")
     needle = {f"src={address}", f"dst={address}"}
-    return [line for line in result.stdout.splitlines() if needle.intersection(line.split())]
+    matches: list[str] = []
+    for selector in ("-s", "-d"):
+        result = _run(
+            [
+                "ip", "netns", "exec", namespace, "conntrack", "-L", "-f", "ipv4",
+                selector, address,
+            ],
+            check=False,
+        )
+        if result.returncode != 0:
+            raise ExternalIPProviderError("could not inspect VirtualNetwork conntrack state")
+        matches.extend(
+            line for line in result.stdout.splitlines() if needle.intersection(line.split())
+        )
+    return matches
 
 
 def _delete_external_conntrack(namespace: str, address: str) -> bool:

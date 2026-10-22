@@ -5,7 +5,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import subprocess
-from typing import Any
+from typing import Any, Callable
 
 
 class NetworkCommandError(Exception):
@@ -14,6 +14,7 @@ class NetworkCommandError(Exception):
 
 COMMAND_TIMEOUT_SECONDS = 30
 AGENTLESS_NET_HOST_INTERFACE_PREFIX = "osacvn"
+MAX_RULE_DELETIONS = 64
 
 
 def run_command(command: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -34,6 +35,26 @@ def run_command(command: list[str], check: bool = True) -> subprocess.CompletedP
     if check and result.returncode != 0:
         raise NetworkCommandError(f"{command[0]} failed (exit status {result.returncode})")
     return result
+
+
+def remove_repeated_rule(
+    runner: Callable[..., Any],
+    check_rule: list[str],
+    delete_rule: list[str],
+    *,
+    error_message: str,
+    error_type: type[Exception] = NetworkCommandError,
+) -> bool:
+    """Delete duplicate firewall rules with a shared safety bound."""
+    removed = False
+    deletions = 0
+    while runner(check_rule, check=False).returncode == 0:
+        if deletions >= MAX_RULE_DELETIONS:
+            raise error_type(error_message)
+        runner(delete_rule)
+        deletions += 1
+        removed = True
+    return removed
 
 
 def parse_json_object_list(output: str, *, description: str) -> list[dict[str, Any]]:

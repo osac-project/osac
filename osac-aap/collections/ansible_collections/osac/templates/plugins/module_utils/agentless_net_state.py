@@ -28,6 +28,7 @@ from ansible_collections.osac.templates.plugins.module_utils.agentless_net_netwo
     NetworkCommandError,
     namespace_exists,
     parse_json_object_list,
+    remove_repeated_rule,
     run_command,
 )
 from ansible_collections.osac.templates.plugins.module_utils import agentless_net_external_ip
@@ -56,7 +57,6 @@ SCHEMA_TABLES = {
 }
 LOCK_WAIT_SECONDS = 60
 LOCK_POLL_SECONDS = 0.05
-MAX_RULE_DELETIONS = 64
 RESOURCE_LOCK_SHARDS = 256
 VIRTUAL_NETWORK_KEYS = {
     "uid",
@@ -1137,71 +1137,6 @@ class StateStore:
         if row != self._row_for_subnet_entry(entry) or entry["uid"] != uid:
             raise StateCorrupt("Subnet indexed state does not match its payload")
         return entry
-
-    def _attachment_for_uid(self, connection: sqlite3.Connection, uid: str):
-        row = connection.execute(
-            """SELECT uid, fulfillment_id, tenant_id, external_ip_uid,
-                      virtual_network_uid, subnet_uid, external_address, phase, payload
-               FROM attachments WHERE uid = ?""",
-            (uid,),
-        ).fetchone()
-        if row is None:
-            return None
-        try:
-            entry = json.loads(row[8])
-        except (json.JSONDecodeError, TypeError) as error:
-            raise StateCorrupt("malformed ExternalIPAttachment state payload") from error
-        _validate_external_ip_attachment_entry(entry)
-        if row != self._row_for_attachment_entry(entry) or entry["uid"] != uid:
-            raise StateCorrupt("ExternalIPAttachment indexed state does not match its payload")
-        return entry
-
-    def _validate_attachment_dependencies(
-        self,
-        connection: sqlite3.Connection,
-        entry: dict[str, Any],
-        *,
-        require_ready: bool,
-    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, str]]:
-        context = entry["context"]
-        virtual_network = self._entry_for_uid(connection, entry["virtual_network_uid"])
-        subnet = self._subnet_for_uid(connection, entry["subnet_uid"])
-        external_ip = self._external_ip_for_uid(connection, entry["external_ip_uid"])
-        if virtual_network is None or subnet is None or external_ip is None:
-            raise StateError("ExternalIPAttachment provider dependency state is missing")
-        if any(value["tenant_id"] != entry["tenant_id"] for value in (virtual_network, subnet, external_ip)):
-            raise StateError("ExternalIPAttachment tenant does not match saved dependencies")
-        if subnet["virtual_network_uid"] != virtual_network["uid"]:
-            raise StateError("ExternalIPAttachment Subnet belongs to another VirtualNetwork")
-        if require_ready and subnet["phase"] != "ready":
-            raise StateError("ExternalIPAttachment Subnet provider state is not Ready")
-
-        eip_context = context["external_ip"]
-        subnet_context = context["subnet"]
-        vn_context = context["virtual_network"]
-        if (
-            eip_context["kubernetes_uid"] != external_ip["uid"]
-            or eip_context["fulfillment_id"] != external_ip["fulfillment_id"]
-            or eip_context["tenant_id"] != external_ip["tenant_id"]
-            or eip_context["address"] != external_ip["address"]
-            or subnet_context["kubernetes_uid"] != subnet["uid"]
-            or subnet_context["tenant_id"] != subnet["tenant_id"]
-            or subnet_context["ipv4_cidr"] != subnet["ipv4_cidr"]
-            or subnet_context["virtual_network_id"] != vn_context["fulfillment_id"]
-            or vn_context["kubernetes_uid"] != virtual_network["uid"]
-            or vn_context["tenant_id"] != virtual_network["tenant_id"]
-        ):
-            raise StateError("ExternalIPAttachment context does not match saved provider dependencies")
-        provider = entry["provider"]
-        expected_provider = {
-            "namespace_name": virtual_network["namespace_name"],
-            "namespace_interface": virtual_network["uplink"]["namespace_interface"],
-            "host_interface": virtual_network["uplink"]["host_interface"],
-            "next_hop": virtual_network["transit"]["namespace_ip"],
-        }
-        if any(provider[key] != value for key, value in expected_provider.items()):
-            raise StateError("ExternalIPAttachment provider path does not match saved VirtualNetwork state")
-        return virtual_network, subnet, external_ip
 
     def _attachment_for_uid(self, connection: sqlite3.Connection, uid: str):
         row = connection.execute(
@@ -2746,20 +2681,6 @@ def _valid_host_isolation_prefix(rule: str) -> bool:
     return rule == _external_forwarding_chain_hook() or _is_unconditional_forward_drop(rule)
 
 
-def _remove_repeated_rule(
-    check_rule: list[str], delete_rule: list[str], *, error_message: str
-) -> bool:
-    removed = False
-    deletions = 0
-    while _run(check_rule, check=False).returncode == 0:
-        if deletions >= MAX_RULE_DELETIONS:
-            raise StateError(error_message)
-        _run(delete_rule)
-        deletions += 1
-        removed = True
-    return removed
-
-
 def _verify_host_forwarding_isolation() -> None:
     rules = _host_forwarding_rules()
     hook = _external_forwarding_chain_hook()
@@ -2823,10 +2744,12 @@ def _ensure_host_forwarding_isolation() -> bool:
             ]
             delete_rule = check_rule.copy()
             delete_rule[4] = "-D"
-            _remove_repeated_rule(
+            remove_repeated_rule(
+                _run,
                 check_rule,
                 delete_rule,
                 error_message="too many duplicate host forwarding isolation rules",
+                error_type=StateError,
             )
             insert_index = "2" if hook in rules else "1"
             insert_rule = [
@@ -2885,12 +2808,14 @@ def _remove_host_forwarding_isolation(
         delete_rule = check_rule.copy()
         delete_rule[4] = "-D"
         changed = (
-            _remove_repeated_rule(
+            remove_repeated_rule(
+                _run,
                 check_rule,
                 delete_rule,
                 error_message=(
                     "too many duplicate host forwarding isolation rules during deletion"
                 ),
+                error_type=StateError,
             )
             or changed
         )

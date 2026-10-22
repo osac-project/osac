@@ -1,3 +1,4 @@
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -179,13 +180,92 @@ def test_route_helper_rejects_a_different_saved_next_hop(monkeypatch):
     address = EXTERNAL_IP
 
     def run(command, *, check=True):
-        if command[1:3] == ["-c", "show running-config"]:
+        if command[0:2] == ["vtysh", "-c"] and "show running-config | include" in command[2]:
             return SimpleNamespace(returncode=0, stdout=f"ip route {address}/32 10.0.0.3\n")
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(external_ip, "_run", run)
     with pytest.raises(external_ip.ExternalIPProviderError, match="different next hop"):
         external_ip.ensure_external_route(address, NEXT_HOP)
+
+
+def test_route_withdrawal_refuses_a_different_saved_next_hop(monkeypatch):
+    commands = []
+
+    def run(command, *, check=True):
+        commands.append(command)
+        if command[0:2] == ["vtysh", "-c"] and "show running-config | include" in command[2]:
+            return SimpleNamespace(returncode=0, stdout=f"ip route {EXTERNAL_IP}/32 10.0.0.3\n")
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(external_ip, "_run", run)
+
+    with pytest.raises(external_ip.ExternalIPProviderError, match="changed next hop"):
+        external_ip.withdraw_external_route(EXTERNAL_IP, NEXT_HOP)
+
+    assert len(commands) == 1
+
+
+def test_external_route_lookup_filters_by_exact_prefix(monkeypatch):
+    commands = []
+
+    def run(command, *, check=True):
+        commands.append(command)
+        return SimpleNamespace(
+            returncode=0,
+            stdout=f"ip route {EXTERNAL_IP}/32 10.0.0.3\n",
+        )
+
+    monkeypatch.setattr(external_ip, "_run", run)
+
+    assert external_ip._external_route_lines(EXTERNAL_IP) == [
+        ["ip", "route", f"{EXTERNAL_IP}/32", "10.0.0.3"]
+    ]
+    assert commands == [[
+        "vtysh",
+        "-c",
+        f"show running-config | include ^ip route {re.escape(EXTERNAL_IP + '/32')}[[:space:]]",
+    ]]
+
+
+def test_conntrack_lookup_filters_by_source_and_destination(monkeypatch):
+    commands = []
+
+    def run(command, *, check=True):
+        commands.append(command)
+        return SimpleNamespace(
+            returncode=0,
+            stdout=f"tcp 6 10 ESTABLISHED src={EXTERNAL_IP} dst=203.0.113.5\n",
+        )
+
+    monkeypatch.setattr(external_ip, "_run", run)
+
+    assert external_ip._conntrack_matches("osacvn-test", EXTERNAL_IP)
+    assert [command[-2:] for command in commands] == [["-s", EXTERNAL_IP], ["-d", EXTERNAL_IP]]
+    assert all(command[4:8] == ["conntrack", "-L", "-f", "ipv4"] for command in commands)
+
+
+def test_shared_rule_deletion_helper_enforces_the_bound(monkeypatch):
+    monkeypatch.setattr(network, "MAX_RULE_DELETIONS", 2)
+    check_rule = ["iptables", "-C", "CHAIN", "-j", "DROP"]
+    delete_rule = ["iptables", "-D", "CHAIN", "-j", "DROP"]
+    commands = []
+
+    def run(command, *, check=True):
+        commands.append(command)
+        return SimpleNamespace(returncode=0, stdout="")
+
+    with pytest.raises(external_ip.ExternalIPProviderError, match="too many duplicate"):
+        network.remove_repeated_rule(
+            run,
+            check_rule,
+            delete_rule,
+            error_message="too many duplicate rules",
+            error_type=external_ip.ExternalIPProviderError,
+        )
+
+    assert commands.count(check_rule) == 3
+    assert commands.count(delete_rule) == 2
 
 
 def test_forwarding_chain_rejects_unowned_broad_accept(monkeypatch):

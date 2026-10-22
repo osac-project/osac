@@ -2023,6 +2023,27 @@ def test_external_ip_attachment_creates_schema_v1_state_and_is_idempotent(tmp_pa
     assert retried == attachment
 
 
+def test_external_ip_attachment_rejects_duplicate_fulfillment_id(tmp_path, monkeypatch):
+    store = prepare_attachment_state(tmp_path, monkeypatch)
+    context = external_ip_attachment_context(store)
+    store.ensure_external_ip_attachment(
+        ATTACHMENT_UID,
+        ATTACHMENT_FULFILLMENT_ID,
+        TENANT_ONE,
+        context,
+        "eth0",
+    )
+
+    with pytest.raises(StateError, match="Fulfillment identity is already reserved"):
+        store.ensure_external_ip_attachment(
+            "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+            ATTACHMENT_FULFILLMENT_ID,
+            TENANT_ONE,
+            context,
+            "eth0",
+        )
+
+
 def test_external_ip_attachment_changed_target_cleans_old_path_first(tmp_path, monkeypatch):
     store = prepare_attachment_state(tmp_path, monkeypatch)
     context = external_ip_attachment_context(store)

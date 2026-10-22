@@ -132,6 +132,49 @@ subjects:
   - kind: ServiceAccount
     name: osac-infra-apply-ca-bundle
     namespace: {{ .Release.Namespace }}
+{{- if and .Values.keycloak.enabled .Values.certs.caBundle.configMap }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: osac-infra-apply-ca-bundle
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    "helm.sh/hook-weight": "12"
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get"]
+    resourceNames: [{{ .Values.certs.caBundle.configMap | quote }}]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "patch"]
+    resourceNames: ["keycloak-service"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: osac-infra-apply-ca-bundle
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    "helm.sh/hook-weight": "12"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: osac-infra-apply-ca-bundle
+subjects:
+  - kind: ServiceAccount
+    name: osac-infra-apply-ca-bundle
+    namespace: {{ .Release.Namespace }}
+{{- end }}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -179,6 +222,12 @@ spec:
               value: {{ .Release.Namespace | quote }}
             - name: OSAC_NAMESPACE
               value: {{ .Values.osacNamespace | quote }}
+            {{- if and .Values.keycloak.enabled .Values.certs.caBundle.configMap }}
+            - name: KEYCLOAK_NAMESPACE
+              value: keycloak
+            - name: BUNDLE_SYNC_TOKEN
+              value: {{ .Release.Revision | quote }}
+            {{- end }}
             - name: USE_DEFAULT_CAS
               value: {{ .Values.keycloak.route.publicIngress | quote }}
           volumeMounts:

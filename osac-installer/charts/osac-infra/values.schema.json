@@ -68,6 +68,25 @@
         }
       }
     },
+    "keycloak": {
+      "type": "object",
+      "description": "Keycloak deployment configuration.",
+      "properties": {
+        "oidcIdpTrust": {
+          "type": "object",
+          "description": "CA certificates for external OIDC identity providers. The configured PEM bundle is added to the shared trust-manager bundle.",
+          "properties": {
+            "caPem": {
+              "type": "string",
+              "description": "Optional PEM-encoded CA certificate bundle for external OIDC identity providers. Set with --set-file keycloak.oidcIdpTrust.caPem=/path/to/idp-ca.pem.",
+              "default": ""
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": true
+    },
     "bundledPostgres": {
       "type": "object",
       "description": "Bundled PostgreSQL for dev/CI and testing only; not intended for production.",

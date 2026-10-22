@@ -980,6 +980,77 @@ def test_incomplete_schema_v1_fails_closed_without_modification(tmp_path):
     assert original["uid"] == UID_ONE
 
 
+@pytest.mark.parametrize("check_mode", [False, True], ids=["normal", "check-mode"])
+def test_previous_v1_schema_adds_attachment_table_without_losing_state(
+    tmp_path, check_mode
+):
+    store = store_for(tmp_path)
+    original, _ = store.ensure_external_ip_pool(
+        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+    )
+    with sqlite3.connect(store.path) as connection:
+        connection.execute("DROP TABLE attachments")
+        connection.execute("PRAGMA user_version = 1")
+        assert {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        } == agentless_net_state.PREVIOUS_V1_SCHEMA_TABLES
+
+    migrated, changed = store.ensure_external_ip_pool(
+        POOL_UID,
+        POOL_FULFILLMENT_ID,
+        TENANT_ONE,
+        "IPv4",
+        [POOL_CIDR],
+        check_mode=check_mode,
+    )
+
+    assert migrated == original
+    assert changed is False
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        } == agentless_net_state.SCHEMA_TABLES
+        attachment_indexes = {
+            row[1] for row in connection.execute("PRAGMA index_list(attachments)")
+        }
+        assert {"attachments_by_vn", "attachments_by_subnet"}.issubset(
+            attachment_indexes
+        )
+        assert connection.execute("SELECT count(*) FROM attachments").fetchone() == (0,)
+        assert connection.execute("SELECT count(*) FROM external_ip_pools").fetchone() == (1,)
+
+
+def test_invalid_previous_v1_schema_is_rejected_without_modification(tmp_path):
+    store = store_for(tmp_path)
+    store.ensure_external_ip_pool(
+        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+    )
+    with sqlite3.connect(store.path) as connection:
+        connection.execute("DROP TABLE attachments")
+        connection.execute("ALTER TABLE external_ip_pools ADD COLUMN unexpected TEXT")
+        connection.execute("PRAGMA user_version = 1")
+    original_database = store.path.read_bytes()
+
+    with pytest.raises(StateCorrupt, match="external_ip_pools table has an invalid schema"):
+        store.ensure_external_ip_pool(
+            POOL_UID,
+            POOL_FULFILLMENT_ID,
+            TENANT_ONE,
+            "IPv4",
+            [POOL_CIDR],
+            check_mode=True,
+        )
+
+    assert store.path.read_bytes() == original_database
+
+
 def test_schema_v2_fails_closed_without_downgrade_or_modification(tmp_path):
     store = store_for(tmp_path)
     original = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")

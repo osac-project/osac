@@ -1,6 +1,6 @@
 import { test } from '@playwright/test';
 
-import { diskImageTestData } from './test_data';
+import { diskImageTestData, tenantNameOrSkip } from './test_data';
 import {
   deleteDiskImage,
   includeObsoleteDiskImages,
@@ -12,6 +12,7 @@ import { openDiskImagesPage } from '../../../../libs/test-utils/src/main.page';
 test('deletes the configured disk image', async ({ page }) => {
   // Allow remote login and deletion to complete.
   test.setTimeout(120_000);
+  if (!tenantNameOrSkip()) return;
 
   // 1. Open the browser and log in.
   await openAndLoginWithEnvironment(page, '/');

@@ -1,5 +1,7 @@
 import { type Page, expect } from '@playwright/test';
 
+import { expectRowNotToExist } from './general/row_assertions';
+import type { LifecycleAction } from './lifecycle';
 import {
   DiskImageCreatePage,
   DiskImageDetailPage,
@@ -100,7 +102,7 @@ export const expectDiskImageLifecycle = async (
 /** Click a lifecycle action and verify the resulting lifecycle text. */
 export const transitionDiskImageLifecycle = async (
   page: Page,
-  action: string,
+  action: LifecycleAction,
   expectedLifecycle: DiskImageLifecycleState,
 ): Promise<void> => {
   await page.getByRole('button', { name: action, exact: true }).click();
@@ -114,8 +116,8 @@ export const openCreateDiskImagePage = async (page: Page): Promise<void> => {
   await createDiskImage.click();
 
   await expect(page.getByRole(...DiskImageCreatePage.pageTitle)).toBeVisible();
-  await expect(page.getByLabel(...DiskImageCreatePage.name)).toBeVisible();
-  await expect(page.getByLabel(...DiskImageCreatePage.sourceReference)).toBeVisible();
+  await expect(page.locator(...DiskImageCreatePage.name)).toBeVisible();
+  await expect(page.locator(...DiskImageCreatePage.sourceReference)).toBeVisible();
 };
 
 /** Fill and submit a Linux AMD64 disk image with Global scope. */
@@ -123,18 +125,18 @@ export const createDiskImage = async (
   page: Page,
   diskImage: DiskImageCreateParams,
 ): Promise<void> => {
-  await page.getByLabel(...DiskImageCreatePage.name).fill(diskImage.name);
-  await page.getByLabel(...DiskImageCreatePage.sourceReference).fill(diskImage.sourceRef);
+  await page.locator(...DiskImageCreatePage.name).fill(diskImage.name);
+  await page.locator(...DiskImageCreatePage.sourceReference).fill(diskImage.sourceRef);
 
   // Guest OS family and scope are single-select menus.
-  await page.getByRole(...DiskImageCreatePage.guestOsFamily).click();
+  await page.locator(...DiskImageCreatePage.guestOsFamily).click();
   await page.getByRole('option', { name: diskImage.guestOsFamily, exact: true }).click();
 
-  await page.getByRole(...DiskImageCreatePage.scope).click();
+  await page.locator(...DiskImageCreatePage.scope).click();
   await page.getByRole('option', { name: diskImage.scope, exact: true }).click();
 
   // Architecture is a multi-select typeahead, so select each supplied value.
-  const architectureToggle = page.getByRole(...DiskImageCreatePage.architecture);
+  const architectureToggle = page.locator(...DiskImageCreatePage.architecture);
   for (const architecture of diskImage.architectures) {
     if ((await architectureToggle.getAttribute('aria-expanded')) !== 'true') {
       await architectureToggle.click();
@@ -175,8 +177,21 @@ export const includeObsoleteDiskImages = async (page: Page): Promise<void> => {
   listUrl.searchParams.set('showObsolete', 'true');
   await page.goto(listUrl.toString());
 
-  const showObsolete = page.getByRole('checkbox', { name: 'Show obsolete', exact: true });
+  const showObsolete = page.locator(...DiskImagesMainPage.showObsolete);
   await expect(showObsolete).toBeChecked();
+};
+
+/** Verify that no disk image with this name exists, including obsolete images. */
+export const expectDiskImageNotToExist = async (
+  page: Page,
+  diskImageName: string,
+): Promise<void> => {
+  await includeObsoleteDiskImages(page);
+  await page.getByRole('textbox', { name: 'Search disk images', exact: true }).fill(diskImageName);
+  await expectRowNotToExist(
+    diskImageLink(page, diskImageName),
+    `Cannot create disk image "${diskImageName}": a disk image with this name already exists.`,
+  );
 };
 
 /** Confirm deletion and verify the disk image is absent, including obsolete rows. */

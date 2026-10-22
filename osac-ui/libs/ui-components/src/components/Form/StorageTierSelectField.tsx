@@ -16,7 +16,7 @@ const STORAGE_TIER_ACTIVE_BLOCK_LIST_FILTER = cel<StorageTier>((filter) =>
   ),
 );
 
-interface StorageTierSelectFieldProps {
+export interface StorageTierSelectFieldProps {
   name?: string;
   label: string;
   fieldId: string;

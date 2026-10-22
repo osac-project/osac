@@ -2,10 +2,10 @@ import { Content, Stack, StackItem, Title } from '@patternfly/react-core';
 
 import { useTranslation } from '../../../../hooks/useTranslation';
 import OsacForm from '../../../Form/OsacForm';
-import { StorageTierSelectField } from '../../../Form/StorageTierSelectField';
 import ProvisioningFieldGroup from '../../../ProvisioningWizard/fields/ProvisioningFieldGroup';
 import { AdditionalDisksArrayField } from '../../../vm/CreateWizard/AdditionalDisksArrayField';
 import BootDiskSizeField from '../../../vm/CreateWizard/fields/BootDiskSizeField';
+import BootStorageTierField from '../../../vm/CreateWizard/fields/BootStorageTierField';
 import CatalogField from '../CatalogField';
 
 const ComputeCatalogStorageStep = () => {
@@ -40,10 +40,8 @@ const ComputeCatalogStorageStep = () => {
           </CatalogField>
           <CatalogField name="bootDiskStorageTier">
             {({ valueName, isDisabled, labelInfo }) => (
-              <StorageTierSelectField
+              <BootStorageTierField
                 name={valueName}
-                label={t('Storage tier')}
-                fieldId="compute-catalog-boot-disk-storage-tier"
                 isDisabled={isDisabled}
                 labelInfo={labelInfo}
               />

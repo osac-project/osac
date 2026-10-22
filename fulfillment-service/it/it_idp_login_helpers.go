@@ -332,7 +332,13 @@ func (t *Tool) EnsureKCTrustsClusterCA(ctx context.Context) error {
 	return t.waitForKCRollout(ctx, kcNamespace, kcDeployment)
 }
 
-// waitForKCRollout polls until the named Deployment has fully rolled out all replicas.
+// waitForKCRollout polls until the named Deployment has fully
+// rolled out all replicas and old pods have terminated.
+//
+// In addition to ObservedGeneration, UpdatedReplicas, and
+// ReadyReplicas, this checks AvailableReplicas == desired and
+// UnavailableReplicas == 0 so that old/new pod overlap during a
+// rolling update is not mistaken for completion.
 func (t *Tool) waitForKCRollout(ctx context.Context, namespace, name string) error {
 	deadline := time.Now().Add(3 * time.Minute)
 	for time.Now().Before(deadline) {
@@ -346,7 +352,9 @@ func (t *Tool) waitForKCRollout(ctx context.Context, namespace, name string) err
 		}
 		if dep.Status.ObservedGeneration >= dep.Generation &&
 			dep.Status.UpdatedReplicas == desired &&
-			dep.Status.ReadyReplicas == desired {
+			dep.Status.ReadyReplicas == desired &&
+			dep.Status.AvailableReplicas == desired &&
+			dep.Status.UnavailableReplicas == 0 {
 			t.logger.InfoContext(ctx, "Keycloak rollout complete",
 				"namespace", namespace, "deployment", name)
 			return nil

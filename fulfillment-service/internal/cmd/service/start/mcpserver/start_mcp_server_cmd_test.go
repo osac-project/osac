@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -330,6 +331,24 @@ var _ = Describe("newTokenVerifier", func() {
 		Expect(errors.Is(err, sdkauth.ErrInvalidToken)).To(BeTrue())
 	})
 
+	It("Does not wrap issuer unavailability as ErrInvalidToken", func() {
+		validator := auth.NewMockJwtValidator(ctrl)
+		validator.EXPECT().Validate(gomock.Any(), gomock.Any()).Return(
+			nil,
+			fmt.Errorf(
+				"%w: connection refused",
+				auth.ErrIssuerUnavailable,
+			),
+		)
+
+		verifier := newTokenVerifier(validator, testExchanger)
+		_, err := verifier(context.Background(), "maybe-valid", nil)
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, sdkauth.ErrInvalidToken)).To(BeFalse(),
+			"issuer unavailability must not be treated as invalid token")
+		Expect(err.Error()).To(HavePrefix(errIssuerUnavailableMarker))
+	})
+
 	It("Does not treat generic groups as tenant names", func() {
 		expiration := time.Now().Add(time.Hour)
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
@@ -579,5 +598,95 @@ var _ = Describe("NewHandler", func() {
 		// A valid token clears bearer-token verification, so the request reaches the streamable handler and fails
 		// for a reason specific to that layer (an empty/non-JSON-RPC body), not for lack of authentication.
 		Expect(recorder.Code).ToNot(Equal(http.StatusUnauthorized))
+	})
+
+	It("Returns 503 with Retry-After when the identity provider is temporarily unavailable", func() {
+		validator := auth.NewMockJwtValidator(ctrl)
+		validator.EXPECT().Validate(gomock.Any(), gomock.Any()).Return(
+			nil,
+			fmt.Errorf("%w: connection refused", auth.ErrIssuerUnavailable),
+		)
+		handler, err := NewHandler(ServerDeps{}, validator, "", "", testExchanger)
+		Expect(err).ToNot(HaveOccurred())
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/", nil)
+		request.Header.Set("Authorization", "Bearer some-token")
+		handler.ServeHTTP(recorder, request)
+
+		Expect(recorder.Code).To(Equal(http.StatusServiceUnavailable))
+		Expect(recorder.Header().Get("Retry-After")).To(Equal("5"))
+		Expect(recorder.Body.String()).To(ContainSubstring("temporarily unavailable"))
+	})
+
+	It("Still returns 401 for genuinely invalid tokens when issuer is available", func() {
+		validator := auth.NewMockJwtValidator(ctrl)
+		validator.EXPECT().Validate(gomock.Any(), gomock.Any()).Return(
+			nil,
+			errors.New("token signature is not valid"),
+		)
+		handler, err := NewHandler(ServerDeps{}, validator, "", "", testExchanger)
+		Expect(err).ToNot(HaveOccurred())
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/", nil)
+		request.Header.Set("Authorization", "Bearer bad-token")
+		handler.ServeHTTP(recorder, request)
+
+		Expect(recorder.Code).To(Equal(http.StatusUnauthorized))
+		Expect(recorder.Header().Get("Retry-After")).To(BeEmpty())
+	})
+})
+
+var _ = Describe("authUnavailableMiddleware", func() {
+	It("Commits a deferred 500 when the handler writes no body", func() {
+		inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			// No Write call — the middleware must still send 500.
+		})
+		handler := authUnavailableMiddleware(inner)
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/", nil)
+		handler.ServeHTTP(recorder, request)
+
+		Expect(recorder.Code).To(Equal(http.StatusInternalServerError))
+	})
+
+	It("Upgrades a marker-prefixed 500 body to 503", func() {
+		inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, errIssuerUnavailableMarker+"detail", http.StatusInternalServerError)
+		})
+		handler := authUnavailableMiddleware(inner)
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/", nil)
+		handler.ServeHTTP(recorder, request)
+
+		Expect(recorder.Code).To(Equal(http.StatusServiceUnavailable))
+		Expect(recorder.Header().Get("Retry-After")).To(Equal("5"))
+	})
+
+	It("Passes through a non-marker 500 unchanged", func() {
+		inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "something else broke", http.StatusInternalServerError)
+		})
+		handler := authUnavailableMiddleware(inner)
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/", nil)
+		handler.ServeHTTP(recorder, request)
+
+		Expect(recorder.Code).To(Equal(http.StatusInternalServerError))
+		Expect(recorder.Header().Get("Retry-After")).To(BeEmpty())
+	})
+
+	It("Passes through non-500 status codes unchanged", func() {
+		inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		})
+		handler := authUnavailableMiddleware(inner)
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/", nil)
+		handler.ServeHTTP(recorder, request)
+
+		Expect(recorder.Code).To(Equal(http.StatusNotFound))
 	})
 })

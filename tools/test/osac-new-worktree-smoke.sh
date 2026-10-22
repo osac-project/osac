@@ -194,9 +194,13 @@ test_fetches_graphify_brain_in_new_worktree() {
   mkdir -p "${repo}/tools" "${repo}/.claude/hooks" "$bin"
   printf '#!/bin/sh\nexit 0\n' > "${repo}/tools/bootstrap.sh"
   chmod +x "${repo}/tools/bootstrap.sh"
-  # The stub hook records the directory it ran from; the fix must invoke
-  # it from inside the new worktree, not from the original clone.
-  printf '#!/bin/sh\npwd >> "%s"\nexit 0\n' "$hook_log" \
+  # The stub hook emulates the real fetch script's anchoring: it honors an
+  # ambient CLAUDE_PROJECT_DIR before falling back to the original clone.
+  # The fix must invoke it anchored to the new worktree even when the
+  # caller's environment carries CLAUDE_PROJECT_DIR pointing elsewhere
+  # (e.g. an agent session started in the original clone).
+  printf '#!/bin/sh\ncd "${CLAUDE_PROJECT_DIR:-%s}" || exit 0\npwd >> "%s"\nexit 0\n' \
+    "$repo" "$hook_log" \
     > "${repo}/.claude/hooks/fetch-graphify-brain.sh"
   # Logging timeout stub: proves the fetch is bounded by a timeout (the
   # gh release download inside the hook has no internal timeout of its
@@ -220,13 +224,16 @@ EOF
     source "$HELPERS"
     export PATH="${bin}:${PATH}"
     export OSAC_WORKTREE_PARENT="$parent"
+    # Simulate an agent shell whose CLAUDE_PROJECT_DIR still points at
+    # the original clone when osac-new-worktree runs.
+    export CLAUDE_PROJECT_DIR="$repo"
     osac-new-worktree feat/graph-brain >/dev/null
   )
   grep -q "^${dest}$" "$hook_log" \
-    || fail "expected brain fetch to run in ${dest}, got: $(cat "$hook_log" 2>/dev/null)"
+    || fail "expected brain fetch to anchor to ${dest}, got: $(cat "$hook_log" 2>/dev/null)"
   grep -q "timeout-wrapped 60 bash .claude/hooks/fetch-graphify-brain.sh" "$hook_log" \
     || fail "expected brain fetch to be wrapped in a 60s timeout: $(cat "$hook_log")"
-  pass "fetches the graphify brain inside the new worktree, timeout-bounded"
+  pass "fetches the brain anchored to the new worktree, timeout-bounded"
 }
 
 test_graphify_fetch_failure_is_non_fatal() {
@@ -241,11 +248,47 @@ test_graphify_fetch_failure_is_non_fatal() {
   printf '#!/bin/sh\nexit 0\n' > "${repo}/tools/bootstrap.sh"
   chmod +x "${repo}/tools/bootstrap.sh"
   # Failing hook that proves it ran: the marker file must exist even
-  # though osac-new-worktree must still succeed. `: >` keeps the stub to
-  # shell builtins -- this test runs on an isolated PATH with no `touch`.
-  # The isolated PATH also has no timeout/gtimeout, so this covers the
-  # unbounded fallback: the fetch must still run without a timeout bin.
+  # though osac-new-worktree must still succeed. Real timeout is on PATH
+  # here, so the fetch runs and fails through the bounded path.
   printf '#!/bin/sh\n: > "%s"\nexit 1\n' "$marker" \
+    > "${repo}/.claude/hooks/fetch-graphify-brain.sh"
+  "$REAL_GIT" init -q "$repo"
+  "$REAL_GIT" -C "$repo" checkout -q -b main
+  "$REAL_GIT" -C "$repo" -c user.email=smoke@test -c user.name=smoke \
+    commit -q --allow-empty -m seed
+  write_git_worktree_stub "$bin" "$repo" "$log"
+
+  out=$(
+    cd "$repo"
+    # shellcheck source=../osac-helpers.sh
+    source "$HELPERS"
+    export PATH="${bin}:${PATH}"
+    export OSAC_WORKTREE_PARENT="$parent"
+    osac-new-worktree feat/graph-fail 2>&1
+  ) || fail "brain fetch failure must not fail worktree creation: $out"
+  [[ -f "$marker" ]] || fail "failing-hook test did not exercise the hook"
+  echo "$out" | grep -q "graphify brain fetch failed" \
+    || fail "expected non-fatal fetch warning: $out"
+  echo "$out" | grep -q "Worktree ready at: ${dest}" \
+    || fail "expected worktree-ready despite fetch failure: $out"
+  pass "graphify brain fetch failure is non-fatal"
+}
+
+test_no_timeout_skips_graphify_fetch() {
+  local parent repo dest bin log hook_log out
+  parent="${TMPDIR_ROOT}/wt-gskip-parent"
+  repo="${parent}/osac"
+  dest="${parent}/osac-graph-skip"
+  bin="${TMPDIR_ROOT}/wt-gskip-bin"
+  log="${TMPDIR_ROOT}/wt-gskip.log"
+  hook_log="${TMPDIR_ROOT}/wt-gskip-hook.log"
+  mkdir -p "${repo}/tools" "${repo}/.claude/hooks" "$bin"
+  printf '#!/bin/sh\nexit 0\n' > "${repo}/tools/bootstrap.sh"
+  chmod +x "${repo}/tools/bootstrap.sh"
+  # The hook would log if it ran; with no timeout binary on PATH the
+  # fetch must be skipped entirely (same policy as the Jira fetch), so
+  # the log must stay absent.
+  printf '#!/bin/sh\npwd >> "%s"\nexit 0\n' "$hook_log" \
     > "${repo}/.claude/hooks/fetch-graphify-brain.sh"
   "$REAL_GIT" init -q "$repo"
   "$REAL_GIT" -C "$repo" checkout -q -b main
@@ -260,14 +303,15 @@ test_graphify_fetch_failure_is_non_fatal() {
     source "$HELPERS"
     export PATH="$bin"
     export OSAC_WORKTREE_PARENT="$parent"
-    osac-new-worktree feat/graph-fail 2>&1
-  ) || fail "brain fetch failure must not fail worktree creation: $out"
-  [[ -f "$marker" ]] || fail "failing-hook test did not exercise the hook"
-  echo "$out" | grep -q "graphify brain fetch failed" \
-    || fail "expected non-fatal fetch warning: $out"
+    osac-new-worktree feat/graph-skip 2>&1
+  ) || fail "missing timeout should not fail worktree creation: $out"
+  [[ -f "$hook_log" ]] \
+    && fail "hook must not run without a timeout binary: $(cat "$hook_log")"
+  echo "$out" | grep -q "no timeout or gtimeout on PATH; skipping graphify brain fetch" \
+    || fail "expected skip warning: $out"
   echo "$out" | grep -q "Worktree ready at: ${dest}" \
-    || fail "expected worktree-ready despite fetch failure: $out"
-  pass "graphify brain fetch failure is non-fatal"
+    || fail "expected worktree-ready despite skipped fetch: $out"
+  pass "missing timeout/gtimeout skips the graphify brain fetch"
 }
 
 test_bootstrap_fail_prints_recovery() {
@@ -476,6 +520,7 @@ test_jira_ticket_from_branch
 test_zsh_nounset_jira_ticket
 test_fetches_graphify_brain_in_new_worktree
 test_graphify_fetch_failure_is_non_fatal
+test_no_timeout_skips_graphify_fetch
 test_bootstrap_fail_prints_recovery
 test_no_timeout_skips_jira
 test_gtimeout_used_when_timeout_missing

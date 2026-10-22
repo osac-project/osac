@@ -83,17 +83,21 @@ osac-new-worktree() {
     # SessionStart hook that normally keeps graphify-out/ fresh. The script
     # has no internal timeout (its Claude Code hook runner supplies one),
     # so bound it here -- 60s is generous against the 30s that hook runner
-    # allows for the same script. Without a timeout binary, run unbounded
-    # rather than skip: fail-open, not fail-closed.
+    # allows for the same script. Without a timeout binary, skip the fetch
+    # with a warning, same policy as the Jira fetch below: an unbounded
+    # network call must not be able to hang worktree creation.
     if [[ -f .claude/hooks/fetch-graphify-brain.sh ]]; then
-        echo "Fetching graphify brain..."
-        local -a fetch_cmd
-        fetch_cmd=(bash .claude/hooks/fetch-graphify-brain.sh)
-        if [[ -n "$timeout_bin" ]]; then
-            fetch_cmd=("${timeout_bin}" 60 "${fetch_cmd[@]}")
-        fi
-        if ! "${fetch_cmd[@]}"; then
-            echo "Warning: graphify brain fetch failed (non-fatal)." >&2
+        if [[ -z "$timeout_bin" ]]; then
+            echo "Warning: no timeout or gtimeout on PATH; skipping graphify brain fetch." >&2
+        else
+            echo "Fetching graphify brain..."
+            # Anchor the fetch to this worktree: the script honors an
+            # ambient CLAUDE_PROJECT_DIR first, which in an agent shell
+            # still points at the original clone, not the new worktree.
+            if ! env CLAUDE_PROJECT_DIR="$PWD" "$timeout_bin" 60 \
+                bash .claude/hooks/fetch-graphify-brain.sh; then
+                echo "Warning: graphify brain fetch failed (non-fatal)." >&2
+            fi
         fi
     fi
 

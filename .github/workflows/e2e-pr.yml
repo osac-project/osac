@@ -48,7 +48,7 @@ permissions: {}
 
 jobs:
   decide:
-    uses: osac-project/osac-ci/.github/workflows/e2e-pr-decide.yml@21955730dc96e51e049968b25e9d3529f655f4af  # v1.2.12
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-decide.yml@188618f70e65c38f46fb252cfb87e20714c63bd6  # v1.2.13
     with:
       lines-kind: statuses
     permissions:
@@ -62,7 +62,7 @@ jobs:
   track:
     needs: decide
     if: needs.decide.outputs.start == 'true'
-    uses: osac-project/osac-ci/.github/workflows/e2e-pr-track.yml@21955730dc96e51e049968b25e9d3529f655f4af  # v1.2.12
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-track.yml@188618f70e65c38f46fb252cfb87e20714c63bd6  # v1.2.13
     permissions:
       contents: read
     with:
@@ -94,6 +94,8 @@ jobs:
       id-token: write
     uses: ./.github/workflows/e2e-caas-full-install.yml
     with:
+      # "full" when the box "CaaS Full Install · sanity + regression" started it (a variant of this suite in the policy)
+      tier: ${{ fromJSON(needs.decide.outputs.tiers).caas || '' }}
       repo: ${{ needs.decide.outputs.head-repo }}
       sha: ${{ needs.decide.outputs.sha }}
       pr-number: ${{ needs.decide.outputs.number }}
@@ -134,7 +136,7 @@ jobs:
   finish:
     needs: [decide, track, vmaas, caas, bmaas, netris]
     if: always() && needs.decide.outputs.start == 'true'
-    uses: osac-project/osac-ci/.github/workflows/e2e-pr-finish.yml@21955730dc96e51e049968b25e9d3529f655f4af  # v1.2.12
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-finish.yml@188618f70e65c38f46fb252cfb87e20714c63bd6  # v1.2.13
     permissions:
       contents: read
     with:

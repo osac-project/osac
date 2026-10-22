@@ -36,6 +36,14 @@ on:
         required: false
         type: string
         default: ""
+      tier:
+        description: >-
+          Which tests to run on the commit: empty for the sanity tests (what every pull request gets), or "full" for
+          sanity and regression together, as the scheduled run does (started by hand from a pull request: the box "CaaS
+          Full Install · sanity + regression" of its E2E comment, see e2e-pr.yml)
+        required: false
+        type: string
+        default: ""
   # 5x/day. Offset 38 minutes past the hour, not on the hour -- GitHub
   # Actions' shared cron scheduler queues everyone's on-the-hour
   # schedules together and can delay/drop them under load.
@@ -71,10 +79,12 @@ jobs:
       # test-source=osac prefixes tests/e2e/. PR/merge_group: full caas suite
       # (sanity + regression). Schedule: regression. workflow_dispatch: honor
       # input, else sanity (caas for the full suite).
-      # Called for a pull request or a merge queue entry (inputs.sha is set): sanity only. Schedule: sanity + regression
-      # and applicable references. Manual dispatch: honor overrides, else sanity.
+      # Called for a pull request or a merge queue entry (inputs.sha is set): sanity only, or sanity + regression (what the
+      # schedule runs) when `tier` is "full". Schedule: sanity + regression and applicable references. Manual dispatch:
+      # honor overrides, else sanity.
       test-suite: >-
         ${{
+          inputs.sha != '' && inputs.tier == 'full' && 'caas' ||
           inputs.sha != '' && 'caas/sanity' ||
           github.event_name == 'schedule' && 'caas' ||
           inputs.test-suite != '' && inputs.test-suite ||
@@ -83,6 +93,7 @@ jobs:
       test-filter: ${{ inputs.test-filter || '' }}
       test-marker: >-
         ${{
+          inputs.sha != '' && inputs.tier == 'full' && 'sanity or regression or requires_caas or reference_common' ||
           inputs.sha != '' && 'sanity' ||
           inputs.test-marker != '' && inputs.test-marker ||
           'sanity or regression or requires_caas or reference_common'

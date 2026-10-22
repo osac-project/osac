@@ -26,6 +26,24 @@ checking its box in the E2E comment of the pull request; the suite has its own l
 ("E2E BMaaS Netris Full Install", Run workflow, with the pull request's number, repository, branch and commit). A label no longer
 starts it. A new commit does not cancel a run that is already going.
 
+## Optional: CaaS regression tests on a pull request
+
+A pull request gets the CaaS sanity tests (`tests/e2e/caas/sanity`); the regression tests (`tests/e2e/caas/regression`) run
+every 5 hours on `main`. To try a new or changed regression test before it merges, start CaaS with both: check
+**CaaS Full Install · sanity + regression** in the E2E comment of the pull request (any member of the organization, any
+approval state), or comment `/test caas-full`. It is a second box of the CaaS suite, not a suite of its own: the same job
+and the same line, `E2E / CaaS Full Install` (which then says `· full`), so the required `E2E` check counts it exactly
+like the CaaS suite, and a CaaS run that passed this way satisfies it. It runs the same tests as the schedule (sanity and
+regression, with the CaaS references).
+
+- Asking for the same thing while it runs does nothing. Asking for the other version of CaaS while one runs (the sanity
+  box while the full one runs, or the other way round) stops that run and starts the one asked for.
+- A suite asked for by name runs again whatever it ended with; the bare `/test` only starts what has not passed.
+- The decision never chooses it, so a pull request still gets the CaaS sanity tests alone by default, and the merge queue
+  does not run it. VMaaS and BMaaS already run their regression tests on every pull request that needs their suite.
+- In the policy it is `e2e-caas-full` (`variant_of: caas`, `tier: full`); the `caas` job of `e2e-pr.yml` passes the tier to
+  the wrapper (`e2e-caas-full-install.yml`, input `tier`).
+
 ## Approvals after a rebase, and pull requests from forks
 
 - A clean rebase, or "Update branch", keeps the approval and moves it to the new head. A rebase that needs conflict

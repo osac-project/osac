@@ -196,3 +196,17 @@ def test_forwarding_chain_rejects_unowned_broad_accept(monkeypatch):
     )
     with pytest.raises(external_ip.ExternalIPProviderError, match="owner comment"):
         external_ip.verify_external_forwarding_chain()
+
+
+def test_forwarding_chain_accepts_kernel_reordered_address_selectors(monkeypatch):
+    attachment = attachment_state()
+    inbound, outbound = external_ip._forwarding_rules(attachment)
+    canonical_inbound = [*inbound[4:6], *inbound[:4], *inbound[6:]]
+    canonical_outbound = [*outbound[4:6], *outbound[:4], *outbound[6:]]
+    monkeypatch.setattr(
+        external_ip,
+        "_chain_rules",
+        lambda: [canonical_outbound, canonical_inbound, ["-j", "RETURN"]],
+    )
+
+    external_ip.verify_external_forwarding_chain()

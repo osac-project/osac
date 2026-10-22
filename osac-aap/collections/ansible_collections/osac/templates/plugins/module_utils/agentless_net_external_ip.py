@@ -103,6 +103,24 @@ def _chain_rules() -> list[list[str]]:
     return rules
 
 
+def _forwarding_rule_signature(rule: list[str]) -> tuple[list[tuple[str, str]], list[str]]:
+    """Compare selector semantics without relying on iptables output ordering."""
+    selectors: list[tuple[str, str]] = []
+    remainder: list[str] = []
+    index = 0
+    while index < len(rule):
+        token = rule[index]
+        if token in {"-d", "-i", "-o", "-s"}:
+            if index + 1 >= len(rule):
+                raise ExternalIPProviderError("ExternalIP forwarding rule has an incomplete selector")
+            selectors.append((token, rule[index + 1]))
+            index += 2
+        else:
+            remainder.append(token)
+            index += 1
+    return sorted(selectors), remainder
+
+
 def verify_external_forwarding_chain() -> None:
     """Reject broad rules in the shared chain used before VN host isolation drops."""
     rules = _chain_rules()
@@ -148,7 +166,7 @@ def verify_external_forwarding_chain() -> None:
                 "ESTABLISHED,RELATED", "-m", "comment", "--comment", comment,
                 "-j", "ACCEPT",
             ]
-        if rule != expected:
+        if _forwarding_rule_signature(rule) != _forwarding_rule_signature(expected):
             raise ExternalIPProviderError("ExternalIP forwarding rule is broader than its contract")
 
 

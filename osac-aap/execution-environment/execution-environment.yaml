@@ -45,8 +45,19 @@ additional_build_steps:
     # dependency (a transitive build requirement of ansible-core) needs a
     # C compiler and Python headers to compile its C extensions here,
     # confirmed live: "error: command 'gcc' failed: No such file or
-    # directory".
-    - RUN dnf install -y gcc python3.12-devel && dnf clean all
+    # directory". rust/cargo (prefetched via rpms.in.yaml, but never
+    # actually dnf-installed anywhere until now) are needed here too:
+    # cryptography (an ansible-core transitive dep, same base-stage pip
+    # install) builds via maturin, whose own bootstrap only skips
+    # fetching rustup over the network if `shutil.which("cargo")`
+    # already succeeds -- confirmed via maturin's real bootstrap.py.
+    # Without a real `cargo` on PATH here, it falls through to
+    # puccinialin's network-dependent rustup download, which then fails
+    # under hermetic network isolation: "httpx.ConnectError: [Errno -2]
+    # Name or service not known". openssl-devel/libffi-devel are
+    # cryptography's own native build deps (CFFI bindings, linking
+    # against system OpenSSL).
+    - RUN dnf install -y gcc python3.12-devel rust cargo openssl-devel libffi-devel && dnf clean all
   prepend_galaxy:
     - COPY _build/collections /usr/share/ansible/collections
     - COPY _build/vendor /usr/share/ansible/collections
